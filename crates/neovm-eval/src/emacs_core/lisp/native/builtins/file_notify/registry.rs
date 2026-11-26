@@ -7,6 +7,11 @@
 use super::{WatchId, WatchRegistration};
 use hashbrown::HashMap;
 use neovm_value::value::Value;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+/// Set once any watch is registered in the process so `drain_file_notify_events`
+/// can short-circuit in one atomic load on sessions that never use file-notify.
+pub(super) static FILE_NOTIFY_MAY_BE_ACTIVE: AtomicBool = AtomicBool::new(false);
 
 #[derive(Default)]
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
@@ -17,6 +22,7 @@ pub(crate) struct WatchRegistry {
 impl WatchRegistry {
     #[doc(hidden)]
     pub fn register(&mut self, watch_id: WatchId, callback: Value, file_name: Value) {
+        FILE_NOTIFY_MAY_BE_ACTIVE.store(true, Ordering::Release);
         let registration = WatchRegistration::new(callback, file_name);
         let replaced = self.registrations.insert(watch_id, registration);
         debug_assert!(replaced.is_none(), "native backend reused a live watch id");

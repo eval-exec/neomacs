@@ -11,7 +11,7 @@ fn wait_backend_irrelevant_readiness_returns_to_the_caller_without_spinning() {
     let _hooks = crate::test_utils::unit_harness();
     let backend = ProcessWaitBackend::new();
     let poller = backend.poller.clone().expect("poller");
-    let processes = HashMap::new();
+    let processes = FxHashMap::default();
     let (reader, mut writer) = UnixStream::pair().expect("socket pair");
     // SAFETY: `reader` outlives the registration, which is deleted below.
     unsafe {
@@ -384,4 +384,184 @@ fn poll_registration_real_master_pty_unregisters_before_drop() {
     );
     drop(keep_open);
     drop(pair.slave);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn poll_zero_timeout_linux_handles_idle_and_notify_fallback() {
+    let _hooks = crate::test_utils::unit_harness();
+    let backend = ProcessWaitBackend::new();
+    let poller = backend.poller.clone().expect("poller");
+    let processes = FxHashMap::default();
+
+    let idle = backend
+        .poll_zero_timeout_linux(
+            &poller,
+            &processes,
+            ProcessWaitBackendInterest::NotificationsAndProcesses,
+        )
+        .expect("idle zero-timeout epoll_wait should succeed without fallback");
+    assert!(!idle.has_notification_wakeup());
+    assert!(!idle.has_ready_processes());
+    assert!(!idle.has_writable_processes());
+
+    // Direct `poller.notify()` triggers `NOTIFY_KEY` without setting
+    // `notification_pending`, so the zero-timeout fast path must return `None`
+    // and let `poll_events` drain and rearm `polling`'s internal eventfd.
+    poller.notify().expect("notify poller");
+    assert!(
+        backend
+            .poll_zero_timeout_linux(
+                &poller,
+                &processes,
+                ProcessWaitBackendInterest::NotificationsAndProcesses
+            )
+            .is_none(),
+        "NOTIFY_KEY must fall back to polling::Poller::wait so eventfd is drained"
+    );
+    let drained = backend
+        .poll_events(
+            &poller,
+            &processes,
+            ProcessWaitDeadline::Poll,
+            ProcessWaitBackendInterest::NotificationsAndProcesses,
+        )
+        .expect("fallback poll_events");
+    assert!(!drained.has_ready_processes());
+    // After fallback drained eventfd, zero-timeout fast path succeeds again.
+    let idle_after = backend
+        .poll_zero_timeout_linux(
+            &poller,
+            &processes,
+            ProcessWaitBackendInterest::NotificationsAndProcesses,
+        )
+        .expect("fast path resumes after fallback drained eventfd");
+    assert!(!idle_after.has_notification_wakeup());
+
+    // `WaitNotifier::notify()` sets `notification_pending` AND notifies the
+    // poller's internal eventfd (`NOTIFY_KEY`). Because `NOTIFY_KEY` fires,
+    // `poll_zero_timeout_linux` returns `None` so `poll_events` drains the
+    // eventfd and delivers `notification_wakeup == true`.
+    let notifier = backend.notify_handle().expect("notify handle");
+    notifier.notify();
+    assert!(
+        backend
+            .poll_zero_timeout_linux(
+                &poller,
+                &processes,
+                ProcessWaitBackendInterest::NotificationsAndProcesses
+            )
+            .is_none(),
+        "WaitNotifier::notify wakes NOTIFY_KEY and falls back to poll_events"
+    );
+    let woken = backend
+        .poll_events(
+            &poller,
+            &processes,
+            ProcessWaitDeadline::Poll,
+            ProcessWaitBackendInterest::NotificationsAndProcesses,
+        )
+        .expect("poll_events notification wakeup");
+    assert!(woken.has_notification_wakeup());
+    // Eventfd is drained and notification_pending is cleared; fast path resumes.
+    let idle_final = backend
+        .poll_zero_timeout_linux(
+            &poller,
+            &processes,
+            ProcessWaitBackendInterest::NotificationsAndProcesses,
+        )
+        .expect("fast path resumes after WaitNotifier wakeup");
+    assert!(!idle_final.has_notification_wakeup());
+}
+
+#[test]
+fn process_status_symbol_symid_roundtrip_and_cons_forms() {
+    let _hooks = crate::test_utils::unit_harness();
+    for status in ProcessStatusSymbol::gnu_public_domain() {
+        let val = status.value();
+        assert_eq!(ProcessStatusSymbol::from_symbol_value(val), Some(status));
+        assert_eq!(ProcessStatusSymbol::from_status_value(val), Some(status));
+        let proper_list = Value::list(vec![val, Value::fixnum(0)]);
+        assert_eq!(
+            ProcessStatusSymbol::from_status_value(proper_list),
+            Some(status)
+        );
+        // Improper dotted pair `(exit . 0)` is not a proper status list.
+        let dotted = Value::cons(val, Value::fixnum(0));
+        assert_eq!(ProcessStatusSymbol::from_status_value(dotted), None);
+    }
+    assert_eq!(
+        ProcessStatusSymbol::from_symbol_value(Value::symbol("not-a-status")),
+        None
+    );
+    assert_eq!(ProcessStatusSymbol::from_symbol_value(Value::NIL), None);
+    assert_eq!(
+        ProcessStatusSymbol::from_symbol_value(Value::fixnum(42)),
+        None
+    );
+
+    // Cyclic cons lists must terminate and return `None` (no infinite loop).
+    let self_cycle = Value::cons(ProcessStatusSymbol::Exit.value(), Value::NIL);
+    self_cycle.set_cdr(self_cycle);
+    assert_eq!(ProcessStatusSymbol::from_status_value(self_cycle), None);
+
+    let two_cycle_tail = Value::cons(Value::fixnum(0), Value::NIL);
+    let two_cycle = Value::cons(ProcessStatusSymbol::Exit.value(), two_cycle_tail);
+    two_cycle_tail.set_cdr(two_cycle);
+    assert_eq!(ProcessStatusSymbol::from_status_value(two_cycle), None);
+
+    let lasso_tail = Value::cons(Value::fixnum(0), Value::NIL);
+    lasso_tail.set_cdr(lasso_tail);
+    let lasso = Value::cons(ProcessStatusSymbol::Signal.value(), lasso_tail);
+    assert_eq!(ProcessStatusSymbol::from_status_value(lasso), None);
+}
+
+#[test]
+fn process_manager_update_tick_tracks_unnotified_status_changes() {
+    let _hooks = crate::test_utils::unit_harness();
+    let mut manager = ProcessManager::new();
+    assert!(!manager.has_unnotified_status_change());
+    manager.record_status_change(StatusChangeSite::HandleChildSignal, 1);
+    assert!(manager.has_unnotified_status_change());
+    manager.mark_status_notify_walked();
+    assert!(!manager.has_unnotified_status_change());
+    manager.record_status_change(StatusChangeSite::HandleChildSignal, 1);
+    assert!(manager.has_unnotified_status_change());
+}
+
+#[test]
+fn find_by_buffer_id_and_process_ids_for_buffer_return_newest_first() {
+    let _hooks = crate::test_utils::unit_harness();
+    let mut manager = ProcessManager::new();
+    let buffer_id = neovm_value::value::buffer_vocab::BufferId(42);
+    let buffer = Value::make_buffer(buffer_id);
+    let mut created = Vec::new();
+    for i in 0..16 {
+        let id = manager.create_process_record(
+            neovm_value::heap_types::LispString::from_utf8(&format!("buf-proc-{i}")),
+            buffer,
+            neovm_value::heap_types::LispString::from_utf8("/bin/true"),
+            Vec::new(),
+            ProcessKind::Pipe,
+            None,
+            ProcessCodingSystems {
+                decode: Value::NIL,
+                encode: Value::NIL,
+            },
+        );
+        created.push(id);
+    }
+    let newest = *created.last().expect("newest process id");
+    assert_eq!(
+        manager.find_by_buffer_id(buffer_id),
+        Some(newest),
+        "find_by_buffer_id must match GNU Vprocess_alist newest-first order"
+    );
+    let mut expected_desc = created;
+    expected_desc.reverse();
+    assert_eq!(
+        manager.process_ids_for_buffer(buffer_id),
+        expected_desc,
+        "process_ids_for_buffer must return newest-first (descending ProcessId)"
+    );
 }

@@ -155,6 +155,9 @@ pub(crate) fn prepare_deliveries_for_test<Event: FileNotifyEvent>(
 pub(crate) fn drain_file_notify_events(
     ctx: &mut crate::emacs_core::eval::Context,
 ) -> Result<usize, Flow> {
+    if !registry::FILE_NOTIFY_MAY_BE_ACTIVE.load(std::sync::atomic::Ordering::Acquire) {
+        return Ok(0);
+    }
     let (events, terminated, failure) = FILE_NOTIFY_STATE.with(|slot| {
         let mut state = slot.borrow_mut();
         let batch = state.backend.drain_events()?;
