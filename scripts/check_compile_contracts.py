@@ -33,14 +33,16 @@ EXPECTED = {
     "p0s3_contracts": 1,
     "p1rv_contracts": 3,
     # 19 since rt A3 2c(d) Slice 1 Commit A added
-    # `buffer_manager_view_compile_contracts` (BufferManagerMut/EditRuntimeMut).
-    "thread_safety_contracts": 19,
+    # `buffer_manager_view_compile_contracts` (BufferManagerMut/EditRuntimeMut);
+    # 20 since gcfix E4-P2 Slice 1 (C1) added
+    # `e4p2_slab_lease_contracts::e4p2_slab_lease_compile_contracts` (OwnerSlabLease).
+    "thread_safety_contracts": 20,
     "chartable_write_contracts": 1,
     "mint_seal_contracts": 1,
     "heap_capability_contracts": 1,
     "retained_leaf_contracts": 1,
 }
-EXPECTED_TOTAL = sum(EXPECTED.values())  # 27 nextest test functions
+EXPECTED_TOTAL = sum(EXPECTED.values())  # 28 nextest test functions
 
 ANSI = re.compile(r"\x1b\[[0-9;]*m")
 STATUS = re.compile(
