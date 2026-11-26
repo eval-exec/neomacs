@@ -141,8 +141,41 @@ fn explicit_module_path(module: &ItemMod) -> Option<PathBuf> {
     })
 }
 
+/// One production `include!(...)` whose target could not be resolved, read, or
+/// parsed. Unanalysable input fails closed as a named violation rather than
+/// panicking inside the `syn` visitor with a raw `io::Error`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct UnanalysableInclude {
+    crate_name: String,
+    file: String,
+    macro_call: String,
+    reason: String,
+}
+
+impl std::fmt::Display for UnanalysableInclude {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "crate={} file={} macro={} reason={}",
+            self.crate_name, self.file, self.macro_call, self.reason
+        )
+    }
+}
+
+struct RootScan {
+    sites: BTreeMap<PathBuf, usize>,
+    unanalysable: Vec<UnanalysableInclude>,
+}
+
+struct AllScan {
+    sites: BTreeMap<String, usize>,
+    unanalysable: Vec<UnanalysableInclude>,
+}
+
 /// This is a test-local, single-threaded source walker, with no runtime state.
 struct ProductionWalker {
+    crate_name: String,
+    crate_root: PathBuf,
     symbol: &'static str,
     source: PathBuf,
     module_directory: PathBuf,
@@ -150,14 +183,31 @@ struct ProductionWalker {
     // whereas ordinary children of foo.rs are below foo/.
     path_directory: PathBuf,
     sites: BTreeMap<PathBuf, usize>,
+    unanalysable: Vec<UnanalysableInclude>,
 }
 
 impl ProductionWalker {
-    fn file(&mut self, path: &Path) {
-        let source = std::fs::read_to_string(path)
-            .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
-        let syntax = syn::parse_file(&source)
-            .unwrap_or_else(|error| panic!("parse {}: {error}", path.display()));
+    fn format_source_file(&self) -> String {
+        match self.source.strip_prefix(&self.crate_root) {
+            Ok(relative) => format!(
+                "{}/src/{}",
+                self.crate_name,
+                relative.to_string_lossy().replace('\\', "/")
+            ),
+            Err(_) => self.source.display().to_string(),
+        }
+    }
+
+    fn record_unanalysable(&mut self, macro_call: String, reason: String) {
+        self.unanalysable.push(UnanalysableInclude {
+            crate_name: self.crate_name.clone(),
+            file: self.format_source_file(),
+            macro_call,
+            reason,
+        });
+    }
+
+    fn visit_parsed_file(&mut self, path: &Path, syntax: &syn::File) {
         if test_only(&syntax.attrs) {
             return;
         }
@@ -171,10 +221,42 @@ impl ProductionWalker {
         let previous_source = std::mem::replace(&mut self.source, path.to_path_buf());
         let previous_module = std::mem::replace(&mut self.module_directory, directory);
         let previous_path = std::mem::replace(&mut self.path_directory, parent.to_path_buf());
-        self.visit_file(&syntax);
+        self.visit_file(syntax);
         self.source = previous_source;
         self.module_directory = previous_module;
         self.path_directory = previous_path;
+    }
+
+    fn file(&mut self, path: &Path) {
+        let source = std::fs::read_to_string(path)
+            .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
+        let syntax = syn::parse_file(&source)
+            .unwrap_or_else(|error| panic!("parse {}: {error}", path.display()));
+        self.visit_parsed_file(path, &syntax);
+    }
+
+    fn include_file(&mut self, path: &Path, macro_call: String) {
+        let source = match std::fs::read_to_string(path) {
+            Ok(source) => source,
+            Err(error) => {
+                self.record_unanalysable(
+                    macro_call,
+                    format!("unreadable include! target {}: {error}", path.display()),
+                );
+                return;
+            }
+        };
+        let syntax = match syn::parse_file(&source) {
+            Ok(syntax) => syntax,
+            Err(error) => {
+                self.record_unanalysable(
+                    macro_call,
+                    format!("unparseable include! target {}: {error}", path.display()),
+                );
+                return;
+            }
+        };
+        self.visit_parsed_file(path, &syntax);
     }
 
     fn record(&mut self, count: usize) {
@@ -234,6 +316,19 @@ impl ProductionWalker {
                 }
             }
         }
+    }
+}
+
+fn is_include_macro(path: &syn::Path) -> bool {
+    if path.is_ident("include") {
+        return true;
+    }
+    let mut segments = path.segments.iter();
+    match (segments.next(), segments.next(), segments.next()) {
+        (Some(first), Some(second), None) => {
+            (first.ident == "core" || first.ident == "std") && second.ident == "include"
+        }
+        _ => false,
     }
 }
 
@@ -308,13 +403,27 @@ impl<'ast> Visit<'ast> for ProductionWalker {
     }
 
     fn visit_macro(&mut self, invocation: &'ast syn::Macro) {
-        if invocation.path.is_ident("include") {
-            let expression = syn::parse2::<Expr>(invocation.tokens.clone())
-                .expect("include! must have a source path expression");
-            let path = include_path(&expression)
-                .expect("teach the transmute guard to resolve this include! source path");
+        if is_include_macro(&invocation.path) {
+            let macro_call = format!("include!({})", invocation.tokens);
+            let expression = match syn::parse2::<Expr>(invocation.tokens.clone()) {
+                Ok(expression) => expression,
+                Err(error) => {
+                    self.record_unanalysable(
+                        macro_call,
+                        format!("unparseable include! path expression: {error}"),
+                    );
+                    return;
+                }
+            };
+            let path = match include_path(&expression, &self.crate_name, &self.crate_root) {
+                Ok(path) => path,
+                Err(reason) => {
+                    self.record_unanalysable(macro_call, reason);
+                    return;
+                }
+            };
             let path = self.source.parent().expect("source has parent").join(path);
-            self.file(&path);
+            self.include_file(&path, macro_call);
             return;
         }
         let tokens = syn::buffer::TokenBuffer::new2(invocation.tokens.clone());
@@ -335,14 +444,15 @@ impl<'ast> Visit<'ast> for ProductionWalker {
     }
 }
 
-// Resolve source includes rather than scanning their path string. OUT_DIR is
-// supplied by this crate's build script; unknown forms fail closed so a new
-// include cannot silently hide conversions from the ratchet.
-fn include_path(expression: &Expr) -> Option<String> {
+// Resolve source includes without expanding arbitrary macros. `OUT_DIR` is
+// known only for `neovm-core` itself (this test binary's build script); a
+// foreign crate's `env!("OUT_DIR")` and any unknown macro expression fail
+// closed as named unanalysable violations rather than panicking with io::Error.
+fn include_path(expression: &Expr, crate_name: &str, crate_root: &Path) -> Result<String, String> {
     match expression {
         Expr::Lit(value) => match &value.lit {
-            Lit::Str(path) => Some(path.value()),
-            _ => None,
+            Lit::Str(path) => Ok(path.value()),
+            _ => Err("non-string literal in include! path expression".to_owned()),
         },
         Expr::Macro(value) if value.mac.path.is_ident("concat") => {
             let parts = value
@@ -350,19 +460,83 @@ fn include_path(expression: &Expr) -> Option<String> {
                 .parse_body_with(
                     syn::punctuated::Punctuated::<Expr, syn::Token![,]>::parse_terminated,
                 )
-                .ok()?;
-            parts.iter().map(include_path).collect::<Option<String>>()
+                .map_err(|error| format!("unparseable concat! arguments in include!: {error}"))?;
+            parts
+                .iter()
+                .map(|part| include_path(part, crate_name, crate_root))
+                .collect::<Result<String, String>>()
         }
         Expr::Macro(value) if value.mac.path.is_ident("env") => {
-            let name = value.mac.parse_body::<syn::LitStr>().ok()?;
+            let name = value
+                .mac
+                .parse_body::<syn::LitStr>()
+                .map_err(|error| format!("unparseable env! argument in include!: {error}"))?;
             match name.value().as_str() {
-                "OUT_DIR" => Some(env!("OUT_DIR").to_owned()),
-                "CARGO_MANIFEST_DIR" => Some(env!("CARGO_MANIFEST_DIR").to_owned()),
-                _ => None,
+                "OUT_DIR" => {
+                    if crate_name == "neovm-core" {
+                        Ok(env!("OUT_DIR").to_owned())
+                    } else {
+                        Err(format!(
+                            "env!(\"OUT_DIR\") belongs to {crate_name}'s build script and cannot be resolved from neovm-core's OUT_DIR"
+                        ))
+                    }
+                }
+                "CARGO_MANIFEST_DIR" => {
+                    if crate_name == "neovm-core" {
+                        Ok(env!("CARGO_MANIFEST_DIR").to_owned())
+                    } else {
+                        crate_root
+                            .parent()
+                            .map(|dir| dir.to_string_lossy().into_owned())
+                            .ok_or_else(|| {
+                                format!(
+                                    "cannot derive CARGO_MANIFEST_DIR for {crate_name} from {}",
+                                    crate_root.display()
+                                )
+                            })
+                    }
+                }
+                other => Err(format!("unsupported env!(\"{other}\") in include! path")),
             }
         }
-        _ => None,
+        _ => Err(
+            "unsupported include! path expression (only string literals, concat!, and resolvable env! are analysable without macro expansion)"
+                .to_owned(),
+        ),
     }
+}
+
+fn scan_production_root(crate_name: &str, root: &Path, symbol: &'static str) -> RootScan {
+    let mut walker = ProductionWalker {
+        crate_name: crate_name.to_owned(),
+        crate_root: root.to_path_buf(),
+        symbol,
+        source: PathBuf::new(),
+        module_directory: PathBuf::new(),
+        path_directory: PathBuf::new(),
+        sites: BTreeMap::new(),
+        unanalysable: Vec::new(),
+    };
+    walker.file(&root.join("lib.rs"));
+    RootScan {
+        sites: walker.sites,
+        unanalysable: walker.unanalysable,
+    }
+}
+
+fn assert_no_unanalysable(unanalysable: &[UnanalysableInclude]) {
+    if unanalysable.is_empty() {
+        return;
+    }
+    let details = unanalysable
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join("\n");
+    panic!(
+        "{} unanalysable production include! macro(s) (fail-closed):\n{details}",
+        unanalysable.len()
+    );
 }
 
 fn production_sites(root: &Path) -> BTreeMap<PathBuf, usize> {
@@ -370,15 +544,9 @@ fn production_sites(root: &Path) -> BTreeMap<PathBuf, usize> {
 }
 
 fn production_sites_for(root: &Path, symbol: &'static str) -> BTreeMap<PathBuf, usize> {
-    let mut walker = ProductionWalker {
-        symbol,
-        source: PathBuf::new(),
-        module_directory: PathBuf::new(),
-        path_directory: PathBuf::new(),
-        sites: BTreeMap::new(),
-    };
-    walker.file(&root.join("lib.rs"));
-    walker.sites
+    let scan = scan_production_root("fixture", root, symbol);
+    assert_no_unanalysable(&scan.unanalysable);
+    scan.sites
 }
 
 fn assert_production_ceiling(root: &Path, sites: &BTreeMap<PathBuf, usize>) {
@@ -406,21 +574,28 @@ fn assert_production_ceiling(root: &Path, sites: &BTreeMap<PathBuf, usize>) {
 /// workspace-relative path. The pre-split guard walked the single core module
 /// graph; the split moved most of that graph into the lower crates, so the
 /// ceiling covers all of them or it would silently stop counting.
-fn all_production_sites(symbol: &'static str) -> BTreeMap<String, usize> {
+fn all_production_scan(symbol: &'static str) -> AllScan {
     let mut sites = BTreeMap::new();
+    let mut unanalysable = Vec::new();
     for root in production_source_roots() {
-        for (path, count) in production_sites_for(&root.src, symbol) {
-            let relative = path
-                .strip_prefix(&root.src)
-                .unwrap_or(&path)
-                .to_string_lossy()
-                .replace('\\', "/");
-            *sites
-                .entry(format!("{}/src/{relative}", root.crate_dir))
-                .or_insert(0) += count;
+        let scan = scan_production_root(&root.crate_dir, &root.src, symbol);
+        unanalysable.extend(scan.unanalysable);
+        for (path, count) in scan.sites {
+            let key = match path.strip_prefix(&root.src) {
+                Ok(relative) => format!(
+                    "{}/src/{}",
+                    root.crate_dir,
+                    relative.to_string_lossy().replace('\\', "/")
+                ),
+                Err(_) => format!("{}:{}", root.crate_dir, path.display()),
+            };
+            *sites.entry(key).or_insert(0) += count;
         }
     }
-    sites
+    AllScan {
+        sites,
+        unanalysable,
+    }
 }
 
 fn assert_total_ceiling(sites: &BTreeMap<String, usize>) {
@@ -443,8 +618,12 @@ fn production_transmute_count_can_only_decrease() {
     // it counts against the same ceiling. The one handler conversion
     // (`handler_from_address`) spells it that way to stay generic over the
     // one- and three-argument callback ABIs.
-    let mut sites = all_production_sites("transmute");
-    for (path, count) in all_production_sites("transmute_copy") {
+    let transmute = all_production_scan("transmute");
+    assert_no_unanalysable(&transmute.unanalysable);
+    let transmute_copy = all_production_scan("transmute_copy");
+    assert_no_unanalysable(&transmute_copy.unanalysable);
+    let mut sites = transmute.sites;
+    for (path, count) in transmute_copy.sites {
         *sites.entry(path).or_insert(0) += count;
     }
     assert_total_ceiling(&sites);
@@ -569,9 +748,153 @@ fn transmute_guard_accepts_a_public_same_name_reexport() {
 
 #[test]
 fn production_heap_installers_use_the_allocation_root() {
-    let sites = all_production_sites("set_tagged_heap");
+    let scan = all_production_scan("set_tagged_heap");
+    assert_no_unanalysable(&scan.unanalysable);
     assert!(
-        sites.is_empty(),
-        "production must install TLS from the allocation root: {sites:?}"
+        scan.sites.is_empty(),
+        "production must install TLS from the allocation root: {:?}",
+        scan.sites
     );
+}
+
+#[test]
+fn transmute_guard_reports_foreign_crate_out_dir_include_as_named_violation() {
+    let directory = tempfile::tempdir().expect("create source fixture");
+    let src = directory.path().join("src");
+    std::fs::create_dir(&src).expect("create src dir");
+    std::fs::write(src.join("lib.rs"), "mod window_identity;\n").expect("write lib.rs");
+    std::fs::write(
+        src.join("window_identity.rs"),
+        "#[cfg(target_os = \"linux\")]\n\
+         mod generated {\n\
+             include!(concat!(env!(\"OUT_DIR\"), \"/application_identity.rs\"));\n\
+         }\n",
+    )
+    .expect("write window_identity.rs");
+
+    let scan = scan_production_root("neomacs-display-runtime", &src, "transmute");
+    assert_eq!(
+        scan.unanalysable.len(),
+        1,
+        "foreign crate OUT_DIR include! must record one named violation, not panic: {:?}",
+        scan.unanalysable
+    );
+    let violation = &scan.unanalysable[0];
+    assert_eq!(violation.crate_name, "neomacs-display-runtime");
+    assert_eq!(
+        violation.file,
+        "neomacs-display-runtime/src/window_identity.rs"
+    );
+    assert!(
+        violation.macro_call.contains("include!")
+            && violation.macro_call.contains("OUT_DIR")
+            && violation.macro_call.contains("application_identity.rs"),
+        "macro field must identify the include! invocation: {}",
+        violation.macro_call
+    );
+    assert!(
+        violation.reason.contains("OUT_DIR")
+            && violation.reason.contains("neomacs-display-runtime"),
+        "reason must name the unresolvable foreign OUT_DIR: {}",
+        violation.reason
+    );
+}
+
+#[test]
+fn transmute_guard_reports_unreadable_and_unsupported_includes_as_named_violations() {
+    let directory = tempfile::tempdir().expect("create source fixture");
+    let src = directory.path().join("src");
+    std::fs::create_dir(&src).expect("create src dir");
+    std::fs::write(
+        src.join("lib.rs"),
+        "include!(\"does_not_exist.rs\");\n\
+         include!(\"broken_syntax.rs\");\n\
+         std::include!(custom_generated_path!());\n\
+         include!(1 +);\n",
+    )
+    .expect("write lib.rs");
+    std::fs::write(src.join("broken_syntax.rs"), "fn (\n").expect("write broken_syntax.rs");
+
+    let scan = scan_production_root("synthetic-crate", &src, "transmute");
+    assert_eq!(
+        scan.unanalysable.len(),
+        4,
+        "all four unanalysable includes must be recorded without panicking: {:?}",
+        scan.unanalysable
+    );
+    for violation in &scan.unanalysable {
+        assert_eq!(violation.crate_name, "synthetic-crate");
+        assert_eq!(violation.file, "synthetic-crate/src/lib.rs");
+        assert!(violation.macro_call.starts_with("include!("));
+    }
+    assert!(
+        scan.unanalysable[0]
+            .reason
+            .contains("unreadable include! target"),
+        "{}",
+        scan.unanalysable[0]
+    );
+    assert!(
+        scan.unanalysable[1]
+            .reason
+            .contains("unparseable include! target"),
+        "{}",
+        scan.unanalysable[1]
+    );
+    assert!(
+        scan.unanalysable[2]
+            .reason
+            .contains("unsupported include! path expression"),
+        "{}",
+        scan.unanalysable[2]
+    );
+    assert!(
+        scan.unanalysable[3]
+            .reason
+            .contains("unparseable include! path expression"),
+        "{}",
+        scan.unanalysable[3]
+    );
+}
+
+#[test]
+fn transmute_guard_resolves_foreign_crate_manifest_dir_include_and_counts_sites() {
+    let directory = tempfile::tempdir().expect("create source fixture");
+    let src = directory.path().join("src");
+    std::fs::create_dir(&src).expect("create src dir");
+    std::fs::write(
+        src.join("lib.rs"),
+        "include!(concat!(env!(\"CARGO_MANIFEST_DIR\"), \"/x.rs\"));\n",
+    )
+    .expect("write lib.rs");
+    let included = directory.path().join("x.rs");
+    std::fs::write(
+        &included,
+        "fn foreign_site() { unsafe { core::mem::transmute::<u8, i8>(0); } }\n",
+    )
+    .expect("write x.rs");
+
+    let scan = scan_production_root("foreign-crate", &src, "transmute");
+    assert!(
+        scan.unanalysable.is_empty(),
+        "foreign crate CARGO_MANIFEST_DIR include! must resolve cleanly: {:?}",
+        scan.unanalysable
+    );
+    assert_eq!(scan.sites.values().sum::<usize>(), 1, "{:?}", scan.sites);
+    assert_eq!(scan.sites[&included], 1);
+}
+
+#[test]
+#[should_panic(expected = "unanalysable production include! macro(s) (fail-closed)")]
+fn transmute_guard_fails_closed_when_asserting_unanalysable_include() {
+    let directory = tempfile::tempdir().expect("create source fixture");
+    let src = directory.path().join("src");
+    std::fs::create_dir(&src).expect("create src dir");
+    std::fs::write(
+        src.join("lib.rs"),
+        "include!(concat!(env!(\"OUT_DIR\"), \"/missing.rs\"));\n",
+    )
+    .expect("write lib.rs");
+    let scan = scan_production_root("foreign-crate", &src, "transmute");
+    assert_no_unanalysable(&scan.unanalysable);
 }
