@@ -951,11 +951,13 @@ impl<T: PagedObject> ObjectArena<T> {
         };
         page.next_index = ObjectPage::<T>::SLOTS;
         let base = page.base_addr();
+        let index = self.pages.len();
+        self.pages.reserve(1);
+        self.page_index_by_base.reserve(1);
+        self.chunk_map_set(base, index);
         self.pages.push(page);
-        let index = self.pages.len() - 1;
         let previous = self.page_index_by_base.insert(base, index);
         debug_assert!(previous.is_none(), "numeric page registered twice");
-        self.chunk_map_set(base, index);
         index
     }
 
@@ -1053,11 +1055,13 @@ impl<T: PagedObject> ObjectArena<T> {
             };
         page.next_index = ObjectPage::<T>::SLOTS;
         let actual_base = page.base_addr();
+        let index = self.pages.len();
+        self.pages.reserve(1);
+        self.page_index_by_base.reserve(1);
+        self.chunk_map_set(actual_base, index);
         self.pages.push(page);
-        let index = self.pages.len() - 1;
         let previous = self.page_index_by_base.insert(actual_base, index);
         debug_assert!(previous.is_none(), "retained numeric page registered twice");
-        self.chunk_map_set(actual_base, index);
         index
     }
 
@@ -1292,14 +1296,21 @@ impl<T: PagedObject> ObjectArena<T> {
             }
             None => ObjectPage::<T>::new(),
         };
+        let base = page.base_addr();
+        let page_index = self.pages.len();
+        // Reserve and publish the chunk-map entry BEFORE marking any
+        // uninitialized slot allocated or pushing `page`, so a panic in
+        // `chunk_map_set` (or map/vec growth) unwinds cleanly with zero
+        // alloc bits set (value-gc C7).
+        self.pages.reserve(1);
+        self.page_index_by_base.reserve(1);
+        self.chunk_map_set(base, page_index);
         let index = page.bump().expect("fresh arena page must have space");
         page.set_allocated(index);
         let ptr = page.slot_ptr(index);
-        let base = page.base_addr();
         self.pages.push(page);
-        let prev = self.page_index_by_base.insert(base, self.pages.len() - 1);
+        let prev = self.page_index_by_base.insert(base, page_index);
         debug_assert!(prev.is_none(), "arena page base registered twice");
-        self.chunk_map_set(base, self.pages.len() - 1);
         ptr
     }
 
@@ -1378,15 +1389,21 @@ impl<T: PagedObject> ObjectArena<T> {
             }
             None => ObjectPage::<T>::new(),
         };
+        let base = page.base_addr();
+        let page_index = self.pages.len();
+        // Reserve and publish the chunk-map entry BEFORE marking any
+        // uninitialized slot allocated or pushing `page`, so a panic in
+        // `chunk_map_set` (or map/vec growth) unwinds cleanly with zero
+        // alloc bits set (value-gc C7).
+        self.pages.reserve(1);
+        self.page_index_by_base.reserve(1);
+        self.chunk_map_set(base, page_index);
         let count = want.min(ObjectPage::<T>::SLOTS);
         page.next_index = count;
         page.set_allocated_range(0, count);
-        let base = page.base_addr();
         self.pages.push(page);
-        let page_index = self.pages.len() - 1;
         let prev = self.page_index_by_base.insert(base, page_index);
         debug_assert!(prev.is_none(), "arena page base registered twice");
-        self.chunk_map_set(base, page_index);
         ArenaRun {
             page: page_index,
             first: 0,
@@ -2000,6 +2017,7 @@ impl MappedStringObject {
         }
     }
 }
+
 
 /// Per-kind breakdown of the values the GC thread parked in `deferred` for the
 /// STW termination drain, taken as `join_concurrent_mark` folds the buffer into
@@ -2664,6 +2682,71 @@ mod arena_pages_soundness_tests {
                     value: 2.0,
                 },
             );
+        }
+    }
+
+    /// value-gc C7: if `chunk_map_set` panics while adding a fresh arena page
+    /// in `alloc_slot_new_page` or `reserve_run_in_new_page`, unwinding must
+    /// not leave any uninitialized slot marked allocated (which would run
+    /// `drop_in_place::<VectorObj>` on uninitialized bytes when the page or
+    /// arena drops).
+    #[test]
+    fn c7_chunk_map_set_panic_does_not_drop_uninitialized_arena_slots() {
+        use std::panic::{AssertUnwindSafe, catch_unwind};
+        use std::sync::Arc;
+
+        // 1. `alloc_slot_new_page` unwind path with a Drop-bearing `VectorObj`.
+        {
+            let map = Arc::new(ChunkMap::new());
+            let mut arena = ObjectArena::<VectorObj>::new(Some(Arc::clone(&map)));
+            super::chunk_map::BEFORE_LEAF_INSTALL.with(|slot| {
+                *slot.borrow_mut() = Some(Box::new(|| {
+                    panic!("injected chunk_map_set panic during alloc_slot")
+                }));
+            });
+            let res = catch_unwind(AssertUnwindSafe(|| {
+                // SAFETY: if `alloc_slot` returned normally we would write the
+                // slot immediately; here `chunk_map_set` panics first.
+                let _ = unsafe { arena.alloc_slot() };
+            }));
+            assert!(res.is_err(), "injected chunk_map_set panic must propagate");
+            assert_eq!(
+                arena.pages.len(),
+                0,
+                "failed chunk_map_set must not leave an unmapped page in arena.pages"
+            );
+            assert!(
+                arena.page_index_by_base.is_empty(),
+                "failed chunk_map_set must not register an unmapped page base"
+            );
+            drop(arena);
+        }
+
+        // 2. `reserve_run_in_new_page` unwind path with a Drop-bearing `VectorObj`.
+        {
+            let map = Arc::new(ChunkMap::new());
+            let mut arena = ObjectArena::<VectorObj>::new(Some(Arc::clone(&map)));
+            super::chunk_map::BEFORE_LEAF_INSTALL.with(|slot| {
+                *slot.borrow_mut() = Some(Box::new(|| {
+                    panic!("injected chunk_map_set panic during reserve_run")
+                }));
+            });
+            let res = catch_unwind(AssertUnwindSafe(|| {
+                // SAFETY: if `reserve_run` returned normally we would write
+                // every slot immediately; here `chunk_map_set` panics first.
+                let _ = unsafe { arena.reserve_run(2) };
+            }));
+            assert!(res.is_err(), "injected chunk_map_set panic must propagate");
+            assert_eq!(
+                arena.pages.len(),
+                0,
+                "failed chunk_map_set must not leave an unmapped page in arena.pages"
+            );
+            assert!(
+                arena.page_index_by_base.is_empty(),
+                "failed chunk_map_set must not register an unmapped page base"
+            );
+            drop(arena);
         }
     }
 }
