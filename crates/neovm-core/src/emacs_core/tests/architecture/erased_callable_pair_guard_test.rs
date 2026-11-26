@@ -76,35 +76,74 @@ fn is_untyped_pointer(ty: &Type) -> bool {
             let syn::PathArguments::AngleBracketed(arguments) = &segment.arguments else {
                 return false;
             };
-            matches!(
-                arguments.args.first(),
-                Some(syn::GenericArgument::Type(Type::Tuple(tuple))) if tuple.elems.is_empty()
-            )
+            match arguments.args.first() {
+                // `NonNull<()>`
+                Some(syn::GenericArgument::Type(Type::Tuple(tuple))) => tuple.elems.is_empty(),
+                // `NonNull<c_void>`, spelled bare or path-qualified.
+                Some(syn::GenericArgument::Type(Type::Path(path))) => path
+                    .path
+                    .segments
+                    .last()
+                    .is_some_and(|inner| inner.ident == "c_void"),
+                _ => false,
+            }
         }
         _ => false,
     }
 }
 
 /// Whether `ty` is a function pointer, directly or through an alias declared
-/// in the same file. Aliases resolve transitively; an alias that names itself
-/// stops at the cycle rather than looping.
+/// in the same file.
+///
+/// A wrapper around a function pointer is still a function pointer field, so
+/// `Option<fn()>`, `Box<unsafe fn()>`, `[fn(); N]`, `(u32, fn())` and
+/// `&fn()` all count: a pair spelled that way is the same hazard, and a rule
+/// that missed it would be recognising a spelling instead of the class.
+/// Aliases resolve transitively; an alias that names itself stops at the
+/// cycle rather than looping.
 fn is_function_pointer(ty: &Type, aliases: &[(String, Type)], depth: u8) -> bool {
-    if matches!(ty, Type::FnPtr(_)) {
-        return true;
+    match ty {
+        Type::FnPtr(_) => true,
+        Type::Paren(inner) => is_function_pointer(&inner.elem, aliases, depth),
+        Type::Group(inner) => is_function_pointer(&inner.elem, aliases, depth),
+        Type::Reference(inner) => is_function_pointer(&inner.elem, aliases, depth),
+        Type::Slice(inner) => is_function_pointer(&inner.elem, aliases, depth),
+        Type::Array(inner) => is_function_pointer(&inner.elem, aliases, depth),
+        Type::Tuple(tuple) => tuple
+            .elems
+            .iter()
+            .any(|element| is_function_pointer(element, aliases, depth)),
+        Type::Path(path) => {
+            let Some(segment) = path.path.segments.last() else {
+                return false;
+            };
+            // `PhantomData<fn()>` is a variance marker: zero-sized, it stores
+            // no callable, so it is not a half. It is common in this tree
+            // (`Invariant<'id>` in `parallel_entry/capability.rs`), and a
+            // struct that also holds an erased pointer would otherwise be a
+            // false pair.
+            if segment.ident == "PhantomData" {
+                return false;
+            }
+            if let syn::PathArguments::AngleBracketed(arguments) = &segment.arguments {
+                let wrapped = arguments.args.iter().any(|argument| match argument {
+                    syn::GenericArgument::Type(inner) => is_function_pointer(inner, aliases, depth),
+                    _ => false,
+                });
+                if wrapped {
+                    return true;
+                }
+            }
+            if depth == 0 || !segment.arguments.is_empty() {
+                return false;
+            }
+            aliases
+                .iter()
+                .filter(|(name, _)| *name == segment.ident.to_string())
+                .any(|(_, aliased)| is_function_pointer(aliased, aliases, depth - 1))
+        }
+        _ => false,
     }
-    let Type::Path(path) = ty else {
-        return false;
-    };
-    let Some(segment) = path.path.segments.last() else {
-        return false;
-    };
-    if depth == 0 || !segment.arguments.is_empty() {
-        return false;
-    }
-    aliases
-        .iter()
-        .filter(|(name, _)| *name == segment.ident.to_string())
-        .any(|(_, aliased)| is_function_pointer(aliased, aliases, depth - 1))
 }
 
 /// Whether these fields hold an untyped pointer beside a function pointer.
@@ -224,6 +263,17 @@ fn inline_fn_fields_and_enum_variants_are_pairs() {
             "struct P { d: NonNull<()>, c: usize } struct Q { d: NonNull<()>, c: fn() }",
             "Q",
         ),
+        // A wrapped function pointer is the same hazard, not a new spelling.
+        ("struct P { d: *mut (), c: Option<fn()> }", "P"),
+        (
+            "struct P { d: *mut c_void, c: Box<unsafe fn(*mut ())> }",
+            "P",
+        ),
+        ("struct P { d: NonNull<c_void>, c: [fn(); 2] }", "P"),
+        (
+            "struct P { d: *const (), c: (u32, extern \"C\" fn()) }",
+            "P",
+        ),
     ] {
         assert_eq!(
             erased_callable_pairs(source).expect("parses"),
@@ -243,6 +293,10 @@ fn one_half_alone_is_not_a_pair() {
         "struct P { data: *mut (), n: usize }",
         "struct P { call: fn() }",
         "type Call = fn(); struct P { call: Call }",
+        // A variance marker is zero-sized and stores no callable.
+        "struct P { d: *mut (), m: PhantomData<fn()> }",
+        "type Invariant<'id> = PhantomData<fn(&'id mut ()) -> &'id mut ()>;\
+         struct P { d: *mut (), m: Invariant<'static> }",
     ] {
         assert!(
             erased_callable_pairs(source).expect("parses").is_empty(),
