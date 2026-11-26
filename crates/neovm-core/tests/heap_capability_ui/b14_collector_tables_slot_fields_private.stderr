@@ -1,0 +1,5 @@
+error[E0616]: field `cell` of struct `CollectorTablesSlot` is private
+  --> tests/heap_capability_ui/b14_collector_tables_slot_fields_private.rs:20:10
+   |
+20 |     slot.cell.set(std::ptr::null());
+   |          ^^^^ private field

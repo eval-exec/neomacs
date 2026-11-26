@@ -2489,6 +2489,7 @@ mod pacing;
 pub use concurrent::MarkFinishError;
 #[doc(hidden)]
 pub use concurrent::MarkPhase;
+mod collector_tables_slot;
 mod heap_identity;
 pub use heap_identity::HeapIdentity;
 mod heap_ptr;
