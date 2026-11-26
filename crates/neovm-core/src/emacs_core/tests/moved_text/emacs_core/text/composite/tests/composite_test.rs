@@ -168,35 +168,15 @@ fn find_composition_internal_returns_nil_when_no_composition() {
 }
 
 /// GNU's default `composition-function-table' rule for a combining mark looks
-/// back one character and composes the base plus following marks.  This is the
-/// path used by `string-glyph-split' for decomposed graphemes.
+/// back one character and composes the base plus following marks via
+/// `auto-composition-function'.  This is the path used by `string-glyph-split'
+/// for decomposed graphemes.
 #[test]
 fn find_composition_internal_finds_automatic_combining_sequence_in_string() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::test_utils::new_context();
-    let current_buffer = eval
-        .edit
-        .buffers
-        .current_buffer_id()
-        .expect("current buffer for automatic composition");
-    eval.frame_manager_mut()
-        .create_frame("automatic-composition", 80, 24, current_buffer);
-    let table = eval.visible_variable_value_or_nil("composition-function-table");
-    let combining_rule = Value::vector(vec![
-        Value::string("\\c.\\c^+"),
-        Value::fixnum(1),
-        Value::symbol("compose-gstring-for-graphic"),
-    ]);
-    neovm_text::emacs_core::chartable::builtin_set_char_table_range_with_symbols(
-        vec![
-            table,
-            Value::fixnum(0x0301),
-            Value::list(vec![combining_rule]),
-        ],
-        Some(eval.variables()),
-        eval.symbol_mode(),
-    )
-    .expect("install combining composition rule");
+    let mut eval = crate::test_utils::runtime_startup_context();
+    eval.eval_str("(set-window-buffer (selected-window) (current-buffer))")
+        .expect("display current buffer in selected window");
     let string = Value::string("e\u{0301}");
 
     let found = find_composition_internal(
@@ -210,8 +190,23 @@ fn find_composition_internal_finds_automatic_combining_sequence_in_string() {
     assert_eq!(items[1].as_fixnum(), Some(2));
     assert!(
         items[2].is_vector(),
-        "automatic composition returns a gstring"
+        "automatic composition returns a shaped gstring"
     );
+
+    let saved_acf = eval.visible_variable_value_or_nil("auto-composition-function");
+    eval.obarray_mut()
+        .set_symbol_value("auto-composition-function", Value::NIL);
+    let no_func = find_composition_internal(
+        &mut eval,
+        vec![Value::fixnum(0), Value::fixnum(1), string, Value::NIL],
+    )
+    .expect("nil auto-composition-function lookup");
+    assert!(
+        no_func.is_nil(),
+        "auto-composition-function nil must return nil for automatic string composition (GNU #842)"
+    );
+    eval.obarray_mut()
+        .set_symbol_value("auto-composition-function", saved_acf);
 
     eval.obarray_mut()
         .set_symbol_value("auto-composition-mode", Value::NIL);

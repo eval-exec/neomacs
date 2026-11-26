@@ -166,3 +166,43 @@ fn div_utf8_find_composition_automatic_no_lisp_font_at() {
         expect,
     );
 }
+
+#[test]
+fn div_utf8_find_composition_string_nil_auto_composition_function() {
+    // Issue #842: GNU `Ffind_composition_internal` (`src/composite.c:2071-2081`)
+    // routes both buffer and string arms through `find_automatic_composition`
+    // -> `autocmp_chars` (`src/composite.c:929-984`), which invokes
+    // `safe_calln (Vauto_composition_function, ...)` (line 979). When
+    // `auto-composition-function` is nil (or void / returns nil), both buffer
+    // and string arms return nil; stored string compositions are unaffected.
+    let expect = expect_test::expect![[r#""OK (nil nil nil nil nil nil nil (0 2 t))""#]];
+    crate::common::assert_oracle_parity_expect(
+        r#"
+(with-temp-buffer
+  (insert "cafe\u0301\n")
+  (set-window-buffer (selected-window) (current-buffer))
+  (let ((stored (copy-sequence "ab")))
+    (compose-string stored 0 2)
+    (list (let ((auto-composition-function nil))
+            (find-composition 4 nil nil t))
+          (let ((auto-composition-function nil))
+            (find-composition 3 nil "cafe\u0301" t))
+          (let ((auto-composition-function nil))
+            (find-composition 3 nil "cafe\u0301" nil))
+          (let ((auto-composition-function nil))
+            (find-composition 0 5 "cafe\u0301" t))
+          (let ((auto-composition-function (lambda (&rest _) nil)))
+            (find-composition 3 nil "cafe\u0301" t))
+          (let ((auto-composition-function 'definitely-void-acf-842))
+            (find-composition 3 nil "cafe\u0301" t))
+          (progn
+            ;; Warm automatic composition first, then re-query with nil.
+            (find-composition 3 nil "cafe\u0301" t)
+            (let ((auto-composition-function nil))
+              (find-composition 3 nil "cafe\u0301" t)))
+          (let ((auto-composition-function nil))
+            (find-composition 0 nil stored nil)))))
+"#,
+        expect,
+    );
+}
