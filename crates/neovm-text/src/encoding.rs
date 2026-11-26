@@ -1928,7 +1928,8 @@ fn transformed_region_string_in_context<H: TextHost>(
     source: neovm_value::heap_types::LispString,
     coding: &str,
     direction: CodingDirection,
-) -> Result<Value, neovm_value::error::Flow> {
+    target_multibyte: bool,
+) -> Result<(Value, Option<usize>), neovm_value::error::Flow> {
     // Destination nil => the codec returns the converted string, which
     // `builtin_coding_region` carries back into the region.  The ENTRY is still
     // `code_convert_region`, not `code_convert_string`: GNU's region function
@@ -1936,7 +1937,13 @@ fn transformed_region_string_in_context<H: TextHost>(
     // resolved `CODING_ID_NAME (coding.id)` (:9497), which is why
     // `(decode-coding-region ... 'undecided)` over `"a\nb\n"` reports
     // `undecided-unix' where `decode-coding-string' reports `undecided'.
-    builtin_coding_string_in_context(
+    //
+    // Thread `target_multibyte` onto `CodingRun` (GNU `coding->dst_multibyte`,
+    // src/coding.c:8155-8156) so `:post-read-conversion` hooks run in a unibyte
+    // temp buffer when decoding into a unibyte region destination, and carry
+    // back GNU's post-hook `coding->produced_char` (`:8194`).
+    let mut run = CodingRun::complete_source().with_dst_multibyte(target_multibyte);
+    let result = builtin_coding_string_in_context(
         ctx,
         vec![
             Value::heap_string(source),
@@ -1947,8 +1954,9 @@ fn transformed_region_string_in_context<H: TextHost>(
         direction,
         EncodingBoundary::CompleteText,
         CodingEntry::CodeConvertRegion,
-        &mut CodingRun::complete_source(),
-    )
+        &mut run,
+    )?;
+    Ok((result, run.produced_chars()))
 }
 
 fn insert_coding_result<H: TextHost>(
@@ -2338,6 +2346,12 @@ pub(crate) struct CodingRun<'a> {
     state: Option<&'a mut CodingDecoderState>,
     /// GNU `coding->consumed`, written by whichever decoder ran.
     consumed: Option<SourceConsumed>,
+    /// GNU `coding->dst_multibyte` (src/coding.c:8155-8156): multibyteness of
+    /// the destination buffer for `:post-read-conversion` hooks.
+    dst_multibyte: bool,
+    /// GNU `coding->produced_char` after `:post-read-conversion`
+    /// (`coding->produced_char += Z - prev_Z`, src/coding.c:8194).
+    produced_chars: Option<usize>,
 }
 
 impl<'a> CodingRun<'a> {
@@ -2349,6 +2363,8 @@ impl<'a> CodingRun<'a> {
             block: crate::emacs_core::coding::SourceBlock::Last,
             state: None,
             consumed: None,
+            dst_multibyte: true,
+            produced_chars: None,
         }
     }
 
@@ -2362,7 +2378,22 @@ impl<'a> CodingRun<'a> {
             block,
             state: Some(state),
             consumed: None,
+            dst_multibyte: true,
+            produced_chars: None,
         }
+    }
+
+    fn with_dst_multibyte(mut self, dst_multibyte: bool) -> Self {
+        self.dst_multibyte = dst_multibyte;
+        self
+    }
+
+    fn record_produced_chars(&mut self, produced_chars: usize) {
+        self.produced_chars = Some(produced_chars);
+    }
+
+    fn produced_chars(&self) -> Option<usize> {
+        self.produced_chars
     }
 
     /// Whether the tail no decoder consumed is flushed here or waits for the
@@ -3839,44 +3870,87 @@ fn build_pre_write_form(hook: SymId, src: Value, failure_policy: PreWriteFailure
     Value::list(vec![Value::symbol("save-current-buffer"), let_form])
 }
 
-/// Mirror GNU's `decode_coding_object` post-read protocol: insert the decoded
-/// `text` into a temp buffer, move point to the start, call `(FN LEN)`, and
-/// return the resulting buffer text.
-fn run_post_read_conversion<H: TextHost>(ctx: &mut H, hook: SymId, text: Value) -> EvalResult {
-    // `text` is a heap Value that must survive form-construction allocations.
+/// Mirror GNU's `decode_coding_object` post-read protocol (`src/coding.c:8152-8197`):
+/// when decoding into a unibyte destination buffer (`!target_multibyte`), the
+/// decoder writes internal UTF-8 bytes (and raw single bytes for `CHAR_BYTE8_P`)
+/// into that unibyte buffer and runs `CODING_ATTR_POST_READ` IN that unibyte
+/// buffer so hook-inserted multibyte characters truncate to their low byte,
+/// passing `coding->produced_char` (decoded character count, not byte length)
+/// as `LEN` and updating `coding->produced_char += Z - prev_Z` afterwards.
+fn run_post_read_conversion<H: TextHost>(
+    ctx: &mut H,
+    hook: SymId,
+    text: Value,
+    target_multibyte: bool,
+) -> Result<(Value, usize), neovm_value::error::Flow> {
+    let decoded_ls = ctx.lisp_string(text).ok_or_else(|| {
+        signal(
+            LispCondition::WrongTypeArgument,
+            vec![Value::symbol("stringp"), text],
+        )
+    })?;
+    let decoded_chars = decoded_ls.schars();
+    let (hook_input, initial_units) = if target_multibyte {
+        (text, decoded_chars)
+    } else {
+        let unibyte_ls = coding_result_for_buffer_multibyte(decoded_ls, false);
+        let initial_bytes = unibyte_ls.sbytes();
+        (Value::heap_string(unibyte_ls), initial_bytes)
+    };
+    // `hook_input` is a heap Value that must survive form-construction allocations.
     let root_scope = ctx.save_specpdl_roots();
-    ctx.push_specpdl_root(text);
-    let form = build_post_read_form(hook, text);
+    ctx.push_specpdl_root(hook_input);
+    let form = build_post_read_form(hook, hook_input, decoded_chars, target_multibyte);
     ctx.restore_specpdl_roots(root_scope);
-    ctx.eval_sub(form)
+    let result = ctx.eval_sub(form)?;
+    let result_ls = ctx.lisp_string(result).ok_or_else(|| {
+        signal(
+            LispCondition::WrongTypeArgument,
+            vec![Value::symbol("stringp"), result],
+        )
+    })?;
+    // GNU `coding->produced_char += Z - prev_Z` (src/coding.c:8194): in a
+    // unibyte buffer `Z - BEG` is the byte count (`schars() == sbytes()`); in a
+    // multibyte buffer `Z - BEG` is the char count (`schars()`).
+    let final_units = result_ls.schars();
+    let delta = final_units as isize - initial_units as isize;
+    let produced_chars = (decoded_chars as isize + delta).max(0) as usize;
+    Ok((result, produced_chars))
 }
 
-fn build_post_read_form(hook: SymId, text: Value) -> Value {
+fn build_post_read_form(
+    hook: SymId,
+    text: Value,
+    produced_chars: usize,
+    target_multibyte: bool,
+) -> Value {
     // (with-temp-buffer
+    //   [(set-buffer-multibyte nil)]   ; when !target_multibyte
     //   (insert TEXT)
     //   (goto-char (point-min))
-    //   (funcall 'FN (- (point-max) (point-min)))
+    //   (funcall 'FN PRODUCED_CHARS)
     //   (buffer-string))
-    let len = Value::list(vec![
-        Value::symbol("-"),
-        Value::list(vec![Value::symbol("point-max")]),
-        Value::list(vec![Value::symbol("point-min")]),
-    ]);
     let call = Value::list(vec![
         Value::symbol("funcall"),
         quote_value(Value::symbol(resolve_sym(hook))),
-        len,
+        Value::fixnum(produced_chars as i64),
     ]);
-    Value::list(vec![
-        Value::symbol("with-temp-buffer"),
-        Value::list(vec![Value::symbol("insert"), text]),
-        Value::list(vec![
-            Value::symbol("goto-char"),
-            Value::list(vec![Value::symbol("point-min")]),
-        ]),
-        call,
-        Value::list(vec![Value::symbol("buffer-string")]),
-    ])
+    let mut forms = Vec::with_capacity(if target_multibyte { 5 } else { 6 });
+    forms.push(Value::symbol("with-temp-buffer"));
+    if !target_multibyte {
+        forms.push(Value::list(vec![
+            Value::symbol("set-buffer-multibyte"),
+            Value::NIL,
+        ]));
+    }
+    forms.push(Value::list(vec![Value::symbol("insert"), text]));
+    forms.push(Value::list(vec![
+        Value::symbol("goto-char"),
+        Value::list(vec![Value::symbol("point-min")]),
+    ]));
+    forms.push(call);
+    forms.push(Value::list(vec![Value::symbol("buffer-string")]));
+    Value::list(forms)
 }
 
 /// `'value` -> `(quote value)`.
@@ -3904,6 +3978,7 @@ fn run_coding_with_conversion_hook<H: TextHost>(
     hook: SymId,
     encode: bool,
     eol: EolType,
+    dst_multibyte: bool,
     run: &mut CodingRun<'_>,
 ) -> Result<
     (
@@ -4019,7 +4094,9 @@ fn run_coding_with_conversion_hook<H: TextHost>(
                     ))
                 }
             };
-            let converted = run_post_read_conversion(ctx, hook, converted)?;
+            let (converted, produced_chars) =
+                run_post_read_conversion(ctx, hook, converted, dst_multibyte)?;
+            run.record_produced_chars(produced_chars);
             return Ok((converted, Some(resolution)));
         }
         let consumed = match decode_fallthrough_source(&source_bytes, &body, dos_eol) {
@@ -4064,10 +4141,10 @@ fn run_coding_with_conversion_hook<H: TextHost>(
                 })
             }
         };
-        Ok((
-            run_post_read_conversion(ctx, hook, converted)?,
-            Some(resolution),
-        ))
+        let (converted, produced_chars) =
+            run_post_read_conversion(ctx, hook, converted, dst_multibyte)?;
+        run.record_produced_chars(produced_chars);
+        Ok((converted, Some(resolution)))
     }
 }
 
@@ -5741,8 +5818,19 @@ fn builtin_coding_string_in_context<H: TextHost>(
             } else {
                 HookCodec::Base(&base_type)
             };
-            let (converted, resolution) =
-                run_coding_with_conversion_hook(ctx, &args, codec, hook, encode, eol, run)?;
+            let hook_dst_multibyte = destination
+                .and_then(|buffer_id| ctx.buffers().get(buffer_id).map(|buf| buf.get_multibyte()))
+                .unwrap_or(run.dst_multibyte);
+            let (converted, resolution) = run_coding_with_conversion_hook(
+                ctx,
+                &args,
+                codec,
+                hook,
+                encode,
+                eol,
+                hook_dst_multibyte,
+                run,
+            )?;
             if let Some(resolution) = resolution {
                 // GNU `adjust_coding_eol_type` (src/coding.c:6471) rewrites
                 // `coding->id`, and the id is what every door but the string
@@ -5779,7 +5867,8 @@ fn builtin_coding_string_in_context<H: TextHost>(
             ));
         }
         insert_coding_result(ctx, buffer_id, &result_text, restore_point)?;
-        return Ok(Value::fixnum(result_text.schars() as i64));
+        let produced_chars = run.produced_chars().unwrap_or_else(|| result_text.schars());
+        return Ok(Value::fixnum(produced_chars as i64));
     }
     // The single EOL pass for the codec chain below, mirroring GNU
     // A bypass descriptor never enters GNU's encoding engine. Eligibility is
@@ -6505,9 +6594,28 @@ fn builtin_coding_region<H: TextHost>(
     } else {
         None
     };
-    let conversion = transformed_region_string_in_context(ctx, source, &coding, direction);
-    let result = match conversion {
-        Ok(result) => {
+    let hook_target_multibyte = match destination {
+        None => true,
+        Some(None) => ctx
+            .buffers()
+            .get(current_id)
+            .map(|buf| buf.get_multibyte())
+            .unwrap_or(true),
+        Some(Some(buffer_id)) => ctx
+            .buffers()
+            .get(buffer_id)
+            .map(|buf| buf.get_multibyte())
+            .unwrap_or(true),
+    };
+    let conversion = transformed_region_string_in_context(
+        ctx,
+        source,
+        &coding,
+        direction,
+        hook_target_multibyte,
+    );
+    let (result, hook_produced_chars) = match conversion {
+        Ok((result, hook_produced_chars)) => {
             if let Some(lease) = workspace_lease.as_ref()
                 && let Some(text) = result.as_lisp_string()
             {
@@ -6516,7 +6624,7 @@ fn builtin_coding_region<H: TextHost>(
             if let Some(lease) = workspace_lease {
                 ctx.release_code_conversion_buffer(lease);
             }
-            result
+            (result, hook_produced_chars)
         }
         Err(flow) => {
             if let Some(lease) = workspace_lease {
@@ -6563,7 +6671,7 @@ fn builtin_coding_region<H: TextHost>(
             // while `code_convert_region` returns `coding.produced_char` (decoded/encoded
             // character count, `src/coding.c:9497-9499`).
             let inserted_units = stored.schars();
-            let produced_chars = result_text.schars();
+            let produced_chars = hook_produced_chars.unwrap_or_else(|| result_text.schars());
             // Capture point geometry BEFORE the replacement so we can mirror
             // GNU's in-place point restoration (coding.c
             // `decode_coding_object`/`encode_coding_object`, the `saved_pt >= 0`
@@ -6620,7 +6728,7 @@ fn builtin_coding_region<H: TextHost>(
                     vec![Value::string("Selecting deleted buffer")],
                 ));
             }
-            let produced_chars = result_text.schars();
+            let produced_chars = hook_produced_chars.unwrap_or_else(|| result_text.schars());
             insert_coding_result(ctx, buffer_id, &result_text, restore_point)?;
             Ok(Value::fixnum(produced_chars as i64))
         }

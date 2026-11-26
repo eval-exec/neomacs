@@ -209,3 +209,166 @@ fn coding_string_and_region_symmetric_encode_and_multibyte_destinations_match_gn
         ]],
     );
 }
+
+/// GNU `decode_coding_object` (`src/coding.c:8152-8197`): when decoding into a
+/// unibyte destination buffer with `:post-read-conversion`, the decoder first
+/// writes internal UTF-8 bytes into the unibyte buffer and then runs the hook
+/// IN that unibyte buffer. Characters inserted by the hook (e.g. U+1EC7 from
+/// `viqr-post-read-conversion`) truncate to their low byte (199 = 0xC7), while
+/// decoder-produced non-ASCII chars remain internal UTF-8 bytes (`195 169`).
+#[test]
+fn decode_coding_string_vietnamese_viqr_non_ascii_buffer_destinations() {
+    let form = r#"(progn
+  (defun neomacs-848-cm-run-viqr (nocopy dst)
+    (let ((orig (propertize (unibyte-string ?V ?i ?e ?^ ?. ?t #xc3 #xa9) 'foo 'bar))
+          (last-coding-system-used 'sentinel))
+      (pcase dst
+        ((or 'nil 't)
+         (let ((res (decode-coding-string orig 'vietnamese-viqr nocopy dst)))
+           (list 'ok :eq (eq res orig) :mb (multibyte-string-p res)
+                 :bytes (string-to-list res) :last last-coding-system-used)))
+        ((or 'buf-mb 'buf-uni)
+         (with-temp-buffer
+           (when (eq dst 'buf-uni) (set-buffer-multibyte nil))
+           (let* ((pt-before (point))
+                  (res (decode-coding-string orig 'vietnamese-viqr nocopy (current-buffer)))
+                  (pt-after (point)))
+             (list 'ok :ret res :pt-same (= pt-before pt-after)
+                   :mb enable-multibyte-characters
+                   :bytes (string-to-list (buffer-string))
+                   :last last-coding-system-used)))))))
+  (list (neomacs-848-cm-run-viqr nil nil)
+        (neomacs-848-cm-run-viqr nil t)
+        (neomacs-848-cm-run-viqr nil 'buf-mb)
+        (neomacs-848-cm-run-viqr nil 'buf-uni)
+        (neomacs-848-cm-run-viqr t 'buf-uni)))"#;
+
+    assert_oracle_parity_expect(
+        form,
+        expect![[
+            r#""OK ((ok :eq nil :mb t :bytes (86 105 7879 116 233) :last vietnamese-viqr) (ok :eq nil :mb t :bytes (86 105 7879 116 233) :last vietnamese-viqr) (ok :ret 5 :pt-same t :mb t :bytes (86 105 7879 116 233) :last vietnamese-viqr) (ok :ret 5 :pt-same t :mb nil :bytes (86 105 199 116 195 169) :last vietnamese-viqr) (ok :ret 5 :pt-same t :mb nil :bytes (86 105 199 116 195 169) :last vietnamese-viqr))""#
+        ]],
+    );
+}
+
+/// Mixed decoder output (raw byte `#xff` + UTF-8 `é`) plus hook-inserted
+/// multibyte char (`U+1EC7`): GNU passes `coding->produced_char` (`2`, not
+/// unibyte byte length `3`) as `LEN`, runs the hook in a unibyte buffer so
+/// `U+1EC7` truncates to `199`, and updates `coding->produced_char += Z - prev_Z`
+/// (`2 + (4 - 3) = 3`). Also pins `vietnamese-viqr` narrowing to `LEN = 4`
+/// (decoded chars, not 5 unibyte bytes) on `\xc3\xa9e^.`.
+#[test]
+fn decode_coding_string_post_read_hook_truncates_in_unibyte_buffer_and_tracks_produced_char() {
+    let form = r#"(progn
+  (defvar neomacs-848-hook-obs nil)
+  (defun neomacs-848-mixed-prc (len)
+    (setq neomacs-848-hook-obs
+          (list len (- (point-max) (point-min)) enable-multibyte-characters
+                (string-to-list (buffer-string))))
+    (save-excursion
+      (goto-char (point-max))
+      (insert (string #x1ec7)))
+    len)
+  (define-coding-system 'neomacs-848-mixed-prc-cs "test"
+    :coding-type 'utf-8 :mnemonic ?M
+    :post-read-conversion 'neomacs-848-mixed-prc)
+  (list
+   (with-temp-buffer
+     (set-buffer-multibyte nil)
+     (let ((n (decode-coding-string (unibyte-string #xff #xc3 #xa9)
+                                    'neomacs-848-mixed-prc-cs nil (current-buffer))))
+       (list n (point) neomacs-848-hook-obs (string-to-list (buffer-string)))))
+   (with-temp-buffer
+     (let ((n (decode-coding-string (unibyte-string #xff #xc3 #xa9)
+                                    'neomacs-848-mixed-prc-cs nil (current-buffer))))
+       (list n (point) neomacs-848-hook-obs (string-to-list (buffer-string)))))
+   ;; LEN = coding->produced_char (4), NOT unibyte byte count (5): viqr narrows
+   ;; to bytes 1..5 and converts "e^" -> 234 leaving "." (46) untouched.
+   (with-temp-buffer
+     (set-buffer-multibyte nil)
+     (let ((n (decode-coding-string (unibyte-string #xc3 #xa9 ?e ?^ ?.)
+                                    'vietnamese-viqr nil (current-buffer))))
+       (list n (point) (string-to-list (buffer-string)))))))"#;
+
+    assert_oracle_parity_expect(
+        form,
+        expect![[
+            r#""OK ((3 1 (2 3 nil (255 195 169)) (255 195 169 199)) (3 1 (2 2 t (4194303 233)) (4194303 233 7879)) (3 1 (195 169 234 46)))""#
+        ]],
+    );
+}
+
+/// `decode-coding-region` with `:post-read-conversion` into unibyte buffers
+/// (both in-place and separate buffer) runs the hook in unibyte mode, truncates
+/// hook-inserted multibyte chars, restores in-place point by byte length
+/// (`coding->produced`), and returns `coding->produced_char`.
+#[test]
+fn decode_coding_region_post_read_hook_into_unibyte_buffer() {
+    let form = r#"(progn
+  (defvar neomacs-848-reg-obs nil)
+  (defun neomacs-848-reg-prc (len)
+    (setq neomacs-848-reg-obs
+          (list len (- (point-max) (point-min)) enable-multibyte-characters))
+    (save-excursion
+      (goto-char (point-max))
+      (insert (string #x1ec7)))
+    len)
+  (define-coding-system 'neomacs-848-reg-prc-cs "test"
+    :coding-type 'utf-8 :mnemonic ?R
+    :post-read-conversion 'neomacs-848-reg-prc)
+  (list
+   ;; Pure-ASCII VIQR in-place in unibyte buffer
+   (with-temp-buffer
+     (set-buffer-multibyte nil)
+     (insert "Vie^.t")
+     (let ((n (decode-coding-region (point-min) (point-max) 'vietnamese-viqr)))
+       (list n (point) (string-to-list (buffer-string)))))
+   ;; Pure-ASCII VIQR in-place in multibyte buffer
+   (with-temp-buffer
+     (insert "Vie^.t")
+     (let ((n (decode-coding-region (point-min) (point-max) 'vietnamese-viqr)))
+       (list n (point) (string-to-list (buffer-string)))))
+   ;; Pure-ASCII VIQR into separate unibyte buffer
+   (with-temp-buffer
+     (set-buffer-multibyte nil)
+     (let ((dst (current-buffer)))
+       (with-temp-buffer
+         (set-buffer-multibyte nil)
+         (insert "Vie^.t")
+         (let ((n (decode-coding-region (point-min) (point-max) 'vietnamese-viqr dst)))
+           (with-current-buffer dst
+             (list n (point) (string-to-list (buffer-string))))))))
+   ;; Non-ASCII VIQR in-place in unibyte buffer: ret=5, pt=7, bytes=(86 105 199 116 195 169)
+   (with-temp-buffer
+     (set-buffer-multibyte nil)
+     (insert (unibyte-string ?V ?i ?e ?^ ?. ?t #xc3 #xa9))
+     (let ((n (decode-coding-region (point-min) (point-max) 'vietnamese-viqr)))
+       (list n (point) (string-to-list (buffer-string)))))
+   ;; Non-ASCII VIQR into separate unibyte buffer
+   (with-temp-buffer
+     (set-buffer-multibyte nil)
+     (let ((dst (current-buffer)))
+       (with-temp-buffer
+         (set-buffer-multibyte nil)
+         (insert (unibyte-string ?V ?i ?e ?^ ?. ?t #xc3 #xa9))
+         (let ((n (decode-coding-region (point-min) (point-max) 'vietnamese-viqr dst)))
+           (with-current-buffer dst
+             (list n (point) (string-to-list (buffer-string))))))))
+   ;; Custom UTF-8 + hook-inserted U+1EC7 into separate unibyte buffer
+   (with-temp-buffer
+     (set-buffer-multibyte nil)
+     (let ((dst (current-buffer)))
+       (with-temp-buffer
+         (set-buffer-multibyte nil)
+         (insert (unibyte-string #xc3 #xa9))
+         (let ((n (decode-coding-region (point-min) (point-max) 'neomacs-848-reg-prc-cs dst)))
+           (with-current-buffer dst
+             (list n (point) neomacs-848-reg-obs (string-to-list (buffer-string))))))))))"#;
+
+    assert_oracle_parity_expect(
+        form,
+        expect![[
+            r#""OK ((4 5 (86 105 199 116)) (4 5 (86 105 7879 116)) (4 1 (86 105 199 116)) (5 7 (86 105 199 116 195 169)) (5 1 (86 105 199 116 195 169)) (2 1 (1 2 nil) (195 169 199)))""#
+        ]],
+    );
+}
