@@ -465,3 +465,37 @@ fn compiled_code_and_rust_stores_see_the_same_window() {
     unsafe { heap.set_concurrent_active_for_test(false) };
     same(&heap, "not marking");
 }
+
+/// value-gc C4: TLS helpers `current_collection_dump_window` and
+/// `publish_collection_observation_window` must use raw field projections
+/// (`addr_of!`) instead of creating `&TaggedHeap` from `TAGGED_HEAP`, so they
+/// do not invalidate a live mutable borrow to a disjoint heap field.
+#[test]
+fn c4_tls_barrier_window_queries_do_not_invalidate_disjoint_heap_field_mut_borrow() {
+    use super::aliasable::AliasableBox;
+    use crate::tagged::gc::CompiledObservationGate;
+
+    let heap = AliasableBox::new(TaggedHeap::new());
+    let root = heap.root();
+    // SAFETY: `heap` lives until `clear_tagged_heap_root_if_installed` below.
+    unsafe { set_tagged_heap_root(root) };
+
+    // Borrow a disjoint non-barrier field (`cons_live_count`) mutably across
+    // both TLS barrier-window helpers. Materializing `&*heap` over the whole
+    // `TaggedHeap` retags `cons_live_count` as SharedReadOnly and triggers
+    // Stacked Borrows / Tree Borrows UB when `live_count` is written below.
+    let live_count: &mut usize = unsafe { &mut (*root.as_ptr()).cons_live_count };
+    *live_count += 1;
+    let dump = current_collection_dump_window();
+    assert_eq!(dump, BarrierWindow::NONE);
+    publish_collection_observation_window(CompiledObservationGate::NONE);
+    *live_count += 1;
+    assert_eq!(*live_count, 2);
+
+    // SAFETY: `heap` is still live and no other TLS borrow remains.
+    unsafe {
+        (*root.as_ptr()).detach_store_protocol();
+        clear_tagged_heap_root_if_installed(root);
+    }
+    drop(heap);
+}

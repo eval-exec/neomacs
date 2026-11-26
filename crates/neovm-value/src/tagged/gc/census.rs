@@ -240,6 +240,17 @@ impl GenCensus {
         self.remset_probe
     }
 
+    /// Read `remset_probe` through a raw `*const GenCensus` without creating
+    /// a whole-struct `&TaggedHeap` (value-gc C4).
+    ///
+    /// # Safety
+    /// `ptr` must point to a live, initialized `GenCensus`.
+    #[inline]
+    pub(super) unsafe fn remset_probe_from_raw(ptr: *const Self) -> bool {
+        // SAFETY: caller upholds pointer validity for `ptr`.
+        unsafe { std::ptr::read(std::ptr::addr_of!((*ptr).remset_probe)) }
+    }
+
     /// Drop a released cons block's history (see the `cons` field).
     pub(super) fn forget_cons_block(&mut self, base: usize) {
         if !self.census_disabled {

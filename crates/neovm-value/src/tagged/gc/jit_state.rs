@@ -167,6 +167,24 @@ impl JitHeapState {
         self.barrier_len.set(window.len());
     }
 
+    /// Store `window` through a raw `*const JitHeapState` without creating a
+    /// `&TaggedHeap` over sibling fields (value-gc C4).
+    ///
+    /// # Safety
+    /// `this` must point to a live `JitHeapState` belonging to the executing
+    /// mutator's installed heap, with no concurrent reader/writer of
+    /// `barrier_lo` or `barrier_len`.
+    #[inline]
+    pub(super) unsafe fn set_barrier_window_raw(this: *const Self, window: BarrierWindow) {
+        // SAFETY: caller guarantees `this` points to a live `JitHeapState` on
+        // the executing mutator's thread; projecting only `barrier_lo` and
+        // `barrier_len` avoids retagging sibling fields.
+        unsafe {
+            (*std::ptr::addr_of!((*this).barrier_lo)).set(window.lo());
+            (*std::ptr::addr_of!((*this).barrier_len)).set(window.len());
+        }
+    }
+
     /// Test-only raw cursor injection for `image_tests` open-region refusal checks.
     ///
     /// # Safety
