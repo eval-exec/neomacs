@@ -142,12 +142,21 @@ pub(crate) fn isolate_child_command(command: &mut Command) {
         //     stopped during its job-control init, and wedges a synchronous
         //     `call-process` wait forever (the hang). With no controlling
         //     terminal bash degrades to "no job control" and runs to completion.
-        // `setsid` subsumes `setpgid(0, 0)`. PTY children that *need* a
-        // controlling terminal go through portable_pty instead, not this path.
+        // `setsid` subsumes `setpgid(0, 0)`. PTY children run a chained
+        // `pre_exec` after this (`sys::establish_pty_controlling_terminal`)
+        // to acquire the PTY slave as their controlling terminal.
         //
         // Also reset `CHILD_DEFAULT_SIGNALS` to `SIG_DFL` and clear the child
-        // signal mask, matching GNU `emacs_spawn`'s `vfork`/`fork` child setup
-        // (`src/callproc.c:1624-1645`) and `posix::Attributes::gnu` (`spawn.rs`).
+        // signal mask: GNU's `emacs_spawn` resets the same signals
+        // (`src/callproc.c:1624-1643`) and restores `oldset`
+        // (`unblock_child_signal` at `src/callproc.c:1647` /
+        // `posix_spawnattr_setsigmask` at `src/callproc.c:1413`), where
+        // `oldset` is empty because `init_keyboard` (`src/keyboard.c:13277`)
+        // cleared Emacs's own mask with `pthread_sigmask(SIG_SETMASK, &empty_mask, 0)`
+        // at startup. Because Neomacs does not clear its own inherited process
+        // mask at startup, clearing the child mask explicitly here matches
+        // both GNU's observable child `SigBlk == 0` and Neomacs's Linux-glibc
+        // `posix::Attributes::gnu` (`spawn.rs:851-885`).
         //
         // SAFETY: the closure runs in the forked child before exec and calls
         // only async-signal-safe POSIX functions (`setsid`, `sigemptyset`,

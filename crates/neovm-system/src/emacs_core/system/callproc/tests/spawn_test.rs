@@ -450,11 +450,15 @@ struct SigActionGuard {
 impl SigActionGuard {
     fn ignore(signals: &[libc::c_int]) -> Self {
         let mut saved = Vec::with_capacity(signals.len());
+        // SAFETY: `libc::sigaction` is a C POD struct; zero-init clears `sa_flags`.
         let mut ign: libc::sigaction = unsafe { std::mem::zeroed() };
         ign.sa_sigaction = libc::SIG_IGN;
+        // SAFETY: `ign.sa_mask` is a valid writable `sigset_t`.
         assert_eq!(unsafe { libc::sigemptyset(&mut ign.sa_mask) }, 0);
         for &sig in signals {
+            // SAFETY: `old` is a C POD out-pointer initialized by `sigaction`.
             let mut old: libc::sigaction = unsafe { std::mem::zeroed() };
+            // SAFETY: `sig` is a valid catchable signal; `&ign` and `&mut old` are valid.
             assert_eq!(unsafe { libc::sigaction(sig, &ign, &mut old) }, 0);
             saved.push((sig, old));
         }
@@ -465,6 +469,7 @@ impl SigActionGuard {
 impl Drop for SigActionGuard {
     fn drop(&mut self) {
         for (sig, old) in self.saved.drain(..).rev() {
+            // SAFETY: restoring previously queried `sigaction` for `sig`.
             unsafe {
                 libc::sigaction(sig, &old, std::ptr::null_mut());
             }
@@ -480,13 +485,15 @@ impl SigMaskGuard {
     fn block(signals: &[libc::c_int]) -> Self {
         let mut set = std::mem::MaybeUninit::<libc::sigset_t>::uninit();
         let mut old = std::mem::MaybeUninit::<libc::sigset_t>::uninit();
+        // SAFETY: `set` and `old` are valid stack `sigset_t` buffers;
+        // `pthread_sigmask` is well-defined even in multithreaded processes.
         unsafe {
             assert_eq!(libc::sigemptyset(set.as_mut_ptr()), 0);
             for &sig in signals {
                 assert_eq!(libc::sigaddset(set.as_mut_ptr(), sig), 0);
             }
             assert_eq!(
-                libc::sigprocmask(libc::SIG_BLOCK, set.as_ptr(), old.as_mut_ptr()),
+                libc::pthread_sigmask(libc::SIG_BLOCK, set.as_ptr(), old.as_mut_ptr()),
                 0
             );
             Self {
@@ -498,8 +505,9 @@ impl SigMaskGuard {
 
 impl Drop for SigMaskGuard {
     fn drop(&mut self) {
+        // SAFETY: `self.old` was initialized by `pthread_sigmask` in `block`.
         unsafe {
-            libc::sigprocmask(libc::SIG_SETMASK, &self.old, std::ptr::null_mut());
+            libc::pthread_sigmask(libc::SIG_SETMASK, &self.old, std::ptr::null_mut());
         }
     }
 }
@@ -525,6 +533,7 @@ fn assert_child_dies_from_signal(use_fork: bool, sig: libc::c_int) {
         command.spawn().expect("spawn sleep")
     };
     let pid = child.id() as libc::pid_t;
+    // SAFETY: `pid` is our newly spawned child process.
     assert_eq!(unsafe { libc::kill(pid, sig) }, 0, "kill({pid}, {sig})");
 
     let mut exited = None;
@@ -563,6 +572,19 @@ fn child_resets_ignored_signals_to_default() {
             assert_child_dies_from_signal(use_fork, sig);
         }
     }
+    for sig in signals {
+        // SAFETY: querying current disposition into a zeroed C POD struct.
+        let mut cur: libc::sigaction = unsafe { std::mem::zeroed() };
+        assert_eq!(
+            unsafe { libc::sigaction(sig, std::ptr::null(), &mut cur) },
+            0
+        );
+        assert_eq!(
+            cur.sa_sigaction,
+            libc::SIG_IGN,
+            "spawning child mutated parent disposition for signal {sig}"
+        );
+    }
 }
 
 #[test]
@@ -573,5 +595,22 @@ fn child_unblocks_blocked_signals() {
         for sig in signals {
             assert_child_dies_from_signal(use_fork, sig);
         }
+    }
+    let mut cur = std::mem::MaybeUninit::<libc::sigset_t>::uninit();
+    // SAFETY: querying current thread signal mask into valid `sigset_t`.
+    let cur = unsafe {
+        assert_eq!(
+            libc::pthread_sigmask(libc::SIG_SETMASK, std::ptr::null(), cur.as_mut_ptr()),
+            0
+        );
+        cur.assume_init()
+    };
+    for sig in signals {
+        // SAFETY: `cur` was initialized by `pthread_sigmask`.
+        assert_eq!(
+            unsafe { libc::sigismember(&cur, sig) },
+            1,
+            "spawning child mutated parent signal mask for signal {sig}"
+        );
     }
 }

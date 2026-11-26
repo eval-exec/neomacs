@@ -5186,160 +5186,115 @@ impl SystemProcessExt for ProcessManager {
         let program_os = argv_os[0].clone();
         let mut outcome = ChildSpawnOutcome::Spawned;
 
-        // With a separate stderr pipe-process we cannot use portable_pty's
-        // `spawn_command` (it hardwires the child's stdin/stdout/stderr all to
-        // the PTY slave).  Instead spawn the child ourselves, dup'ing the PTY
-        // slave onto stdin/stdout and leaving stderr on an OS pipe, mirroring
-        // GNU's `emacs_spawn` where `std_err` is the separate `forkerr` fd and
-        // only merges into `std_out` when no stderr pipe-process exists.
-        if stderr_transfer.pipe_id().is_some() {
-            let Some(tty_path) = tty_name_path.clone() else {
-                return Err("PTY has no tty name for :stderr split spawn".to_string());
-            };
-            let mut cmd = crate::emacs_core::callproc::new_child_command(&argv_os[0]);
-            cmd.args(&argv_os[1..]);
+        // Spawn every Unix PTY child (both plain PTY and separate `:stderr`
+        // pipe) via `ChildCommand::into_forking_command` +
+        // `sys::establish_pty_controlling_terminal`, rather than
+        // `portable_pty`'s `spawn_command`: `portable_pty` resets
+        // SIGHUP/SIGTERM/SIGALRM to SIG_DFL, leaves SIGPROF ignored, and
+        // allocates in `close_random_fds` inside `pre_exec`.  Routing both
+        // through `into_forking_command` gives every PTY child GNU's exact
+        // `emacs_spawn` signal dispositions and empty mask
+        // (`src/callproc.c:1624-1647`, `src/keyboard.c:13277`), and merges
+        // stderr onto the PTY slave when no separate `:stderr` pipe exists.
+        let separate_stderr = stderr_transfer.pipe_id().is_some();
+        let Some(tty_path) = tty_name_path.clone() else {
+            return Err("PTY has no tty name for PTY spawn".to_string());
+        };
+        let mut cmd = crate::emacs_core::callproc::new_child_command(&argv_os[0]);
+        cmd.args(&argv_os[1..]);
+        if separate_stderr {
             let child_writer = stderr_transfer
                 .writer()
                 .expect("a transferred stderr pipe id always has its writer")
                 .try_clone()
                 .map_err(|error| format!("Failed to duplicate stderr pipe: {error}"))?;
             cmd.stderr(child_writer);
-            if let Some(dir) = &default_directory {
-                cmd.current_dir(dir);
-            }
-            if let Some(environment) = child_environment {
-                environment.apply_to_child_command(&mut cmd);
-            }
-            for (key, val) in env_overrides {
-                let key_str = lisp_string_to_os_string(key);
-                match val {
-                    Some(v) => {
-                        cmd.env(&key_str, lisp_string_to_os_string(v));
-                    }
-                    None => {
-                        cmd.env_remove(&key_str);
-                    }
+        }
+        if let Some(dir) = &default_directory {
+            cmd.current_dir(dir);
+        }
+        if let Some(environment) = child_environment {
+            environment.apply_to_child_command(&mut cmd);
+        }
+        for (key, val) in env_overrides {
+            let key_str = lisp_string_to_os_string(key);
+            match val {
+                Some(v) => {
+                    cmd.env(&key_str, lisp_string_to_os_string(v));
+                }
+                None => {
+                    cmd.env_remove(&key_str);
                 }
             }
-            // A pty child needs post-fork setup `posix_spawn` cannot express,
-            // so take the forking `Command` (GNU likewise falls back to `vfork`
-            // for pty children).  It already carries the `setsid` `pre_exec`
-            // (own session, no controlling tty).  Chain a second `pre_exec`
-            // that opens the PTY slave by path and makes it the controlling
-            // terminal on fds 0/1, leaving fd 2 (stderr) on the pipe set up
-            // above — exactly GNU's forkin/forkout=pty_tty, forkerr=stderr-pipe
-            // arrangement.
-            let mut cmd = cmd
-                .into_forking_command()
-                .map_err(|error| error.to_string())?;
-            let tty_cstr = match std::ffi::CString::new(tty_path.as_os_str().as_bytes()) {
-                Ok(path) => path,
-                Err(_) => return Err("PTY tty name contains an interior NUL".to_string()),
-            };
-            // SAFETY: `pre_exec` runs in the forked child before exec; the closure
-            // calls only `sys::establish_pty_controlling_terminal`, which is itself
-            // restricted to async-signal-safe syscalls for exactly this context.
-            unsafe {
-                use std::os::unix::process::CommandExt;
-                cmd.pre_exec(move || sys::establish_pty_controlling_terminal(&tty_cstr));
-            }
+        }
+        // A pty child needs post-fork setup `posix_spawn` cannot express, so
+        // take the forking `Command` (GNU likewise falls back to `vfork` for
+        // pty children).  It already carries `isolate_child_command`'s
+        // `pre_exec` (`setsid`, GNU child-default signal dispositions, empty
+        // signal mask).  Chain a second `pre_exec` that opens the PTY slave by
+        // path, makes it the controlling terminal, and dup2s it onto fds 0/1
+        // (plus fd 2 when `merge_stderr` is true; otherwise leaving fd 2 on
+        // the separate stderr pipe).
+        let mut cmd = cmd
+            .into_forking_command()
+            .map_err(|error| error.to_string())?;
+        let tty_cstr = match std::ffi::CString::new(tty_path.as_os_str().as_bytes()) {
+            Ok(path) => path,
+            Err(_) => return Err("PTY tty name contains an interior NUL".to_string()),
+        };
+        let merge_stderr = !separate_stderr;
+        // SAFETY: `pre_exec` runs in the forked child before exec; the closure
+        // calls only `sys::establish_pty_controlling_terminal`, which is itself
+        // restricted to async-signal-safe syscalls for exactly this context.
+        unsafe {
+            use std::os::unix::process::CommandExt;
+            cmd.pre_exec(move || sys::establish_pty_controlling_terminal(&tty_cstr, merge_stderr));
+        }
 
-            let child = match cmd.spawn() {
-                Ok(child) => SpawnedChild::from_std(child),
-                Err(error) => return Err(format!("Failed to spawn PTY child: {error}")),
-            };
-            stderr_transfer.commit();
-            // GNU records the child's real OS pid (create_process sets p->pid).
-            let os_pid = Some(child.id());
-            let child_status_source = os_pid.and_then(ChildStatusSource::open);
-            if let Some(proc) = stderr_transfer.processes.get_mut(id) {
-                proc.os_pid = os_pid;
-                proc.live_io_mut()
-                    .set_child_status_source(child_status_source);
-                proc.live_io_mut()
-                    .set_child(ChildOwnership::of_pipe_child(child));
-            }
-            if let Some(poller) = stderr_transfer.wait_backend.poller_arc()
-                && let Some(status_source) = stderr_transfer
-                    .processes
-                    .get(id)
-                    .and_then(|proc| proc.live_io().child_status_source())
-            {
-                let _ = status_source.register(
-                    &poller,
-                    polling::Event::readable(id as usize),
-                    polling::PollMode::Level,
-                );
-            }
-        } else {
-            let mut cmd = portable_pty::CommandBuilder::from_argv(argv_os);
-            if let Some(dir) = &default_directory {
-                cmd.cwd(dir);
-            }
-            if let Some(environment) = child_environment {
-                environment.apply_to_pty_command(&mut cmd);
-            }
-            for (key, val) in env_overrides {
-                let key_str = lisp_string_to_os_string(key);
-                match val {
-                    Some(v) => {
-                        let v_str = lisp_string_to_os_string(v);
-                        cmd.env(&key_str, &v_str);
-                    }
-                    None => {
-                        cmd.env_remove(&key_str);
-                    }
+        match cmd.spawn() {
+            Ok(child) => {
+                let child = SpawnedChild::from_std(child);
+                if separate_stderr {
+                    stderr_transfer.commit();
+                }
+                // GNU records the child's real OS pid (create_process sets p->pid).
+                let os_pid = Some(child.id());
+                let child_status_source = os_pid.and_then(ChildStatusSource::open);
+                if let Some(proc) = stderr_transfer.processes.get_mut(id) {
+                    proc.os_pid = os_pid;
+                    proc.live_io_mut()
+                        .set_child_status_source(child_status_source);
+                    proc.live_io_mut()
+                        .set_child(ChildOwnership::of_pipe_child(child));
+                }
+                if let Some(poller) = stderr_transfer.wait_backend.poller_arc()
+                    && let Some(status_source) = stderr_transfer
+                        .processes
+                        .get(id)
+                        .and_then(|proc| proc.live_io().child_status_source())
+                {
+                    let _ = status_source.register(
+                        &poller,
+                        polling::Event::readable(id as usize),
+                        polling::PollMode::Level,
+                    );
                 }
             }
-
-            #[cfg(unix)]
-            crate::emacs_core::callproc::retain_child_exit_status()
-                .map_err(|error| error.to_string())?;
-            match pty_pair.slave.spawn_command(cmd) {
-                Ok(pty_child) => {
-                    // GNU records the child's real OS pid; portable_pty exposes
-                    // it via `Child::process_id`.
-                    let os_pid = pty_child.process_id();
-                    let child_status_source = os_pid.and_then(ChildStatusSource::open);
-                    if let Some(proc) = stderr_transfer.processes.get_mut(id) {
-                        proc.os_pid = os_pid;
-                        proc.live_io_mut()
-                            .set_child_status_source(child_status_source);
-                        proc.live_io_mut()
-                            .set_child(ChildOwnership::of_pty_child(pty_child));
-                    }
-                    if let Some(poller) = stderr_transfer.wait_backend.poller_arc()
-                        && let Some(status_source) = stderr_transfer
-                            .processes
-                            .get(id)
-                            .and_then(|proc| proc.live_io().child_status_source())
-                    {
-                        let _ = status_source.register(
-                            &poller,
-                            polling::Event::readable(id as usize),
-                            polling::PollMode::Level,
-                        );
-                    }
+            Err(error) => {
+                if separate_stderr {
+                    return Err(format!("Failed to spawn PTY child: {error}"));
                 }
-                Err(error) => {
-                    // The exec failed.  GNU's forked child is still alive at
-                    // this point and writes `emacs_perror`'s line to its own
-                    // STDERR -- which here IS the pty -- before `_exit`ing
-                    // (src/callproc.c:1206-1216).  There is no child to do it,
-                    // so the parent writes the same bytes to the same tty, and
-                    // the PTY master below is installed exactly as for a
-                    // successful spawn: the reader finds the diagnostic and
-                    // then EOF, and the caller supplies GNU's exit status.
-                    let errno = error
-                        .chain()
-                        .find_map(|cause| cause.downcast_ref::<std::io::Error>())
-                        .and_then(|io| io.raw_os_error())
-                        .unwrap_or(libc::ENOENT);
-                    if let Some(tty_path) = tty_name_path.as_ref() {
-                        write_exec_failure_diagnostic_to_tty(tty_path, &program_os, errno);
-                    }
-                    outcome = ChildSpawnOutcome::ExecFailed(errno);
-                }
+                // The exec failed.  GNU's forked child is still alive at this
+                // point and writes `emacs_perror`'s line to its own STDERR --
+                // which here IS the pty -- before `_exit`ing
+                // (src/callproc.c:1206-1216).  There is no child to do it, so
+                // the parent writes the same bytes to the same tty, and the
+                // PTY master below is installed exactly as for a successful
+                // spawn: the reader finds the diagnostic and then EOF, and the
+                // caller supplies GNU's exit status.
+                let errno = error.raw_os_error().unwrap_or(libc::ENOENT);
+                write_exec_failure_diagnostic_to_tty(&tty_path, &program_os, errno);
+                outcome = ChildSpawnOutcome::ExecFailed(errno);
             }
         }
 

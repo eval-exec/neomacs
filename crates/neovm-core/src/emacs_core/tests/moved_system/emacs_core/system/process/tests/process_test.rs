@@ -21523,3 +21523,194 @@ fn gnutls_boot_nonblocking_handshake_failure_returns_protocol_error_and_send_doe
         "OK (-15 t t \"An unexpected TLS packet was received.\" 8 open (error \"Process fail-boot-send not running: failed with code TLS negotiation failed\n\") failed \"TLS negotiation failed\" 3)"
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn plain_pty_child_matches_gnu_signal_dispositions() {
+    crate::test_utils::init_test_tracing();
+
+    struct SigActionGuard(Vec<(libc::c_int, libc::sigaction)>);
+    impl Drop for SigActionGuard {
+        fn drop(&mut self) {
+            for (sig, old) in self.0.drain(..).rev() {
+                // SAFETY: restoring previously queried `sigaction` for `sig`.
+                unsafe {
+                    libc::sigaction(sig, &old, std::ptr::null_mut());
+                }
+            }
+        }
+    }
+
+    let reset_signals = [libc::SIGINT, libc::SIGQUIT, libc::SIGPROF];
+    let preserved_signals = [libc::SIGHUP, libc::SIGTERM, libc::SIGALRM];
+    let all_signals = [
+        libc::SIGHUP,
+        libc::SIGINT,
+        libc::SIGQUIT,
+        libc::SIGPROF,
+        libc::SIGTERM,
+        libc::SIGALRM,
+    ];
+
+    let _guard = {
+        let mut saved = Vec::with_capacity(all_signals.len());
+        // SAFETY: `libc::sigaction` is a C POD struct; zero-init clears `sa_flags`.
+        let mut ign: libc::sigaction = unsafe { std::mem::zeroed() };
+        ign.sa_sigaction = libc::SIG_IGN;
+        // SAFETY: `ign.sa_mask` is a valid writable `sigset_t`.
+        assert_eq!(unsafe { libc::sigemptyset(&mut ign.sa_mask) }, 0);
+        for sig in all_signals {
+            // SAFETY: `old` is an out-pointer initialized by `sigaction`.
+            let mut old: libc::sigaction = unsafe { std::mem::zeroed() };
+            // SAFETY: `sig` is a valid catchable signal.
+            assert_eq!(unsafe { libc::sigaction(sig, &ign, &mut old) }, 0);
+            saved.push((sig, old));
+        }
+        SigActionGuard(saved)
+    };
+
+    let sleep_bin = find_bin("sleep");
+
+    // 1. GNU resets SIGINT, SIGQUIT, SIGPROF to SIG_DFL in plain PTY children.
+    for sig in reset_signals {
+        let result = eval_one(&format!(
+            r#"(let ((proc (make-process
+                            :name "pty-sig-reset"
+                            :buffer nil
+                            :command '("{sleep_bin}" "60")
+                            :connection-type 'pty
+                            :noquery t)))
+                 (unwind-protect
+                     (progn
+                       (signal-process proc {sig})
+                       (let ((i 0))
+                         (while (and (eq (process-status proc) 'run) (< i 40))
+                           (accept-process-output proc 0.05)
+                           (setq i (1+ i))))
+                       (list (process-status proc) (process-exit-status proc)))
+                   (if (process-live-p proc) (delete-process proc))))"#
+        ));
+        assert_eq!(
+            result,
+            format!("OK (signal {sig})"),
+            "plain PTY child must reset ignored signal {sig} to SIG_DFL (GNU src/callproc.c:1632-1642)"
+        );
+    }
+
+    // 2. GNU preserves non-default ignored signals (SIGHUP, SIGTERM, SIGALRM).
+    for sig in preserved_signals {
+        let result = eval_one(&format!(
+            r#"(let ((proc (make-process
+                            :name "pty-sig-preserve"
+                            :buffer nil
+                            :command '("{sleep_bin}" "60")
+                            :connection-type 'pty
+                            :noquery t)))
+                 (unwind-protect
+                     (progn
+                       (signal-process proc {sig})
+                       (let ((i 0))
+                         (while (and (eq (process-status proc) 'run) (< i 6))
+                           (accept-process-output proc 0.05)
+                           (setq i (1+ i))))
+                       (process-status proc))
+                   (if (process-live-p proc) (delete-process proc))))"#
+        ));
+        assert_eq!(
+            result, "OK run",
+            "plain PTY child must preserve ignored signal {sig} instead of resetting it to SIG_DFL"
+        );
+    }
+
+    // 3. Parent's own dispositions remain untouched.
+    for sig in all_signals {
+        // SAFETY: querying current disposition into zeroed C POD struct.
+        let mut cur: libc::sigaction = unsafe { std::mem::zeroed() };
+        assert_eq!(
+            unsafe { libc::sigaction(sig, std::ptr::null(), &mut cur) },
+            0
+        );
+        assert_eq!(
+            cur.sa_sigaction,
+            libc::SIG_IGN,
+            "spawning plain PTY child mutated parent disposition for signal {sig}"
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn plain_pty_child_unblocks_blocked_signals_without_mutating_parent() {
+    crate::test_utils::init_test_tracing();
+
+    struct SigMaskGuard(libc::sigset_t);
+    impl Drop for SigMaskGuard {
+        fn drop(&mut self) {
+            // SAFETY: restoring previously queried thread signal mask.
+            unsafe {
+                libc::pthread_sigmask(libc::SIG_SETMASK, &self.0, std::ptr::null_mut());
+            }
+        }
+    }
+
+    let blocked = [libc::SIGINT, libc::SIGQUIT];
+    let _guard = {
+        let mut set = std::mem::MaybeUninit::<libc::sigset_t>::uninit();
+        let mut old = std::mem::MaybeUninit::<libc::sigset_t>::uninit();
+        // SAFETY: `set` and `old` are valid stack `sigset_t` buffers; `pthread_sigmask`
+        // is well-defined in multithreaded processes.
+        unsafe {
+            assert_eq!(libc::sigemptyset(set.as_mut_ptr()), 0);
+            for sig in blocked {
+                assert_eq!(libc::sigaddset(set.as_mut_ptr(), sig), 0);
+            }
+            assert_eq!(
+                libc::pthread_sigmask(libc::SIG_BLOCK, set.as_ptr(), old.as_mut_ptr()),
+                0
+            );
+            SigMaskGuard(old.assume_init())
+        }
+    };
+
+    let sleep_bin = find_bin("sleep");
+    let result = eval_one(&format!(
+        r#"(let ((proc (make-process
+                        :name "pty-sig-unblock"
+                        :buffer nil
+                        :command '("{sleep_bin}" "60")
+                        :connection-type 'pty
+                        :noquery t)))
+             (unwind-protect
+                 (progn
+                   (quit-process proc)
+                   (let ((i 0))
+                     (while (and (eq (process-status proc) 'run) (< i 40))
+                       (accept-process-output proc 0.05)
+                       (setq i (1+ i))))
+                   (list (process-status proc) (process-exit-status proc)))
+               (if (process-live-p proc) (delete-process proc))))"#
+    ));
+    assert_eq!(
+        result,
+        format!("OK (signal {})", libc::SIGQUIT),
+        "plain PTY child must clear blocked signal mask"
+    );
+
+    let mut cur = std::mem::MaybeUninit::<libc::sigset_t>::uninit();
+    // SAFETY: querying current thread signal mask into valid `sigset_t`.
+    let cur = unsafe {
+        assert_eq!(
+            libc::pthread_sigmask(libc::SIG_SETMASK, std::ptr::null(), cur.as_mut_ptr()),
+            0
+        );
+        cur.assume_init()
+    };
+    for sig in blocked {
+        // SAFETY: `cur` was initialized by `pthread_sigmask`.
+        assert_eq!(
+            unsafe { libc::sigismember(&cur, sig) },
+            1,
+            "spawning plain PTY child altered parent signal mask for signal {sig}"
+        );
+    }
+}

@@ -73,21 +73,24 @@ pub(crate) fn configure_child_pty_tty(tty_name: &OsStr) -> Result<(), String> {
     err.map_or(Ok(()), Err)
 }
 
-/// Make the PTY slave at `tty` the child's controlling terminal, on fds 0/1.
+/// Make the PTY slave at `tty` the child's controlling terminal, on fds 0/1
+/// (and fd 2 when `merge_stderr` is `true`).
 ///
 /// Runs inside a `Command` `pre_exec` closure -- i.e. in the forked child
 /// between fork and exec -- so it uses only async-signal-safe syscalls and never
 /// allocates. `setsid` is assumed already done (the child is a session leader
 /// with no controlling tty), matching GNU's `child_setup`: open the slave, make
-/// it the controlling terminal (`TIOCSCTTY`), and `dup2` it onto stdin/stdout,
-/// leaving stderr (fd 2) on whatever the parent set up (GNU's
-/// forkin/forkout = pty_tty, forkerr = stderr-pipe arrangement).
+/// it the controlling terminal (`TIOCSCTTY`), and `dup2` it onto stdin/stdout
+/// (plus stderr when `merge_stderr` is `true`; otherwise leaving fd 2 on the
+/// separate stderr pipe, GNU's `forkin`/`forkout` = pty, `forkerr` = stderr-pipe
+/// arrangement).
 ///
 /// # Safety
 /// Must only be called from a `pre_exec` context (post-fork, pre-exec), where
 /// running async-signal-safe syscalls on the child's fds is sound.
 pub(crate) unsafe fn establish_pty_controlling_terminal(
     tty: &std::ffi::CStr,
+    merge_stderr: bool,
 ) -> std::io::Result<()> {
     let slave = unsafe { libc::open(tty.as_ptr(), libc::O_RDWR | libc::O_NOCTTY) };
     if slave < 0 {
@@ -101,6 +104,7 @@ pub(crate) unsafe fn establish_pty_controlling_terminal(
     }
     if unsafe { libc::dup2(slave, libc::STDIN_FILENO) } == -1
         || unsafe { libc::dup2(slave, libc::STDOUT_FILENO) } == -1
+        || (merge_stderr && unsafe { libc::dup2(slave, libc::STDERR_FILENO) } == -1)
     {
         let err = std::io::Error::last_os_error();
         unsafe { libc::close(slave) };
