@@ -24,12 +24,11 @@ fn gc_tls_ownership_heap_registry_new_heap_reset_preserves_old_context_state() {
     let first = crate::test_utils::new_context();
     let slot = HeapRegistrySlot::new(String::from("first"));
     let owned = slot.current();
+    let first_heap = first.tagged_heap().tagged_heap_identity();
+    let _parked_first = first.park_for_test();
     let second = crate::test_utils::new_context();
     slot.reset(String::from("second"));
-    assert_eq!(
-        owned.heap_identity(),
-        first.tagged_heap().tagged_heap_identity()
-    );
+    assert_eq!(owned.heap_identity(), first_heap);
     assert_eq!(
         slot.current().heap_identity(),
         second.tagged_heap().tagged_heap_identity()

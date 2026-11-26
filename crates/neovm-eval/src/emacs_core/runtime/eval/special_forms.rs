@@ -433,7 +433,7 @@ impl Context {
             context.bc_buf.truncate(temps_base);
             return Err(signal(
                 LispCondition::SettingConstant,
-                vec![Value::symbol(name)],
+                vec![Value::from_sym_id(intern((name).as_ref()))],
             ));
         }
 
@@ -585,7 +585,7 @@ impl Context {
                 if let Some(name) = let_constant_error_name(&context.obarray, id, value) {
                     return Err(signal(
                         LispCondition::SettingConstant,
-                        vec![Value::symbol(&name)],
+                        vec![Value::from_sym_id(intern((&name).as_ref()))],
                     ));
                 }
                 if use_lexical
@@ -831,10 +831,26 @@ impl Context {
         let body = tail.cons_cdr();
         let mut iters: u64 = 0;
         loop {
-            if self.eval_sub(test_form)?.is_nil() {
+            let test_value = match self.eval_sub(test_form) {
+                Ok(value) => value,
+                Err(flow) => {
+                    return crate::emacs_core::threads::blocked_while_result(
+                        call_name,
+                        tail,
+                        Err(flow),
+                    );
+                }
+            };
+            if test_value.is_nil() {
                 return Ok(Value::NIL);
             }
-            self.sf_progn_value(body)?;
+            if let Err(flow) = self.sf_progn_value(body) {
+                return crate::emacs_core::threads::blocked_while_result(
+                    call_name,
+                    tail,
+                    Err(flow),
+                );
+            }
             iters += 1;
             if iters == 1_000_000 {
                 let cond_str = super::super::print::print_value(&test_form);
@@ -872,11 +888,10 @@ impl Context {
                 match self.eval_sub(form).kinded() {
                     Ok(value) => last = value,
                     Err(FlowKind::ThreadBlocked(blocked)) => {
-                        let remaining_forms = if blocked.remaining_forms.is_nil() {
-                            rest
-                        } else {
-                            blocked.remaining_forms
-                        };
+                        let remaining_forms = crate::emacs_core::threads::chain_sim_blocked_forms(
+                            blocked.remaining_forms,
+                            rest,
+                        );
                         return Err(Flow::thread_blocked(blocked.blocker, remaining_forms));
                     }
                     Err(flow) => return Err(Flow::from_kind(flow)),
@@ -1433,7 +1448,8 @@ impl Context {
             return Ok(vector);
         }
 
-        crate::emacs_core::builtins::make_byte_code_from_slots(items)
+        let items = items.to_vec();
+        crate::emacs_core::builtins::make_byte_code_from_slots(&items)
     }
 
     #[doc(hidden)]

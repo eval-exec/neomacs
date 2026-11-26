@@ -121,10 +121,12 @@ fn opt_early_on_selects_cold_first_sight_heap_loop_but_requires_heat_at_dispatch
     assert_eq!(selected.selected_tier(), SelectedTier::Opt);
     let pair = Value::cons(Value::make_int(-1), Value::NIL);
     assert_eq!(
-        selected.call(
-            &mut context as *mut Context as *mut u8,
-            &[pair, Value::make_int(4)]
-        ),
+        unsafe {
+            selected.call(
+                &mut context as *mut Context as *mut u8,
+                &[pair, Value::make_int(4)],
+            )
+        },
         NativeRun::Ok(Value::make_int(4).bits())
     );
     assert_eq!(pair.cons_car(), Value::make_int(3));

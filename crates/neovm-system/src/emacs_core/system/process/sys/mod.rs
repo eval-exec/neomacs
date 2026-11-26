@@ -22,27 +22,32 @@ use crate::emacs_core::process::{HostInterfaceEntry, ProcessId};
 
 mod signals;
 #[cfg(unix)]
-pub use signals::signal_number_from_description;
-pub use signals::{
-    errno_description, send_signal, send_signal_to_group, signal_description, signal_name_number,
+pub(crate) use signals::raw_signal_description;
+pub(crate) use signals::send_signal;
+#[cfg(unix)]
+pub(crate) use signals::signal_number_from_description;
+pub(crate) use signals::{
+    errno_description, send_signal_to_group, signal_description, signal_name_number,
 };
 
 mod process_status;
-pub use process_status::process_is_alive;
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) use process_status::process_is_alive;
 
 mod child_exit_event;
-pub use child_exit_event::{ChildExitEvent, ChildExitNotification};
+pub(crate) use child_exit_event::{ChildExitEvent, ChildExitNotification};
 
 mod process_attributes;
-pub use process_attributes::{
-    ProcStatSnapshot, boot_time_secs, clock_ticks_per_second, group_name, list_process_ids,
-    process_cmdline, process_effective_ids, process_stat, total_memory_kb, user_name,
+pub use process_attributes::group_name;
+pub(crate) use process_attributes::{
+    ProcStatSnapshot, boot_time_secs, clock_ticks_per_second, list_process_ids, process_cmdline,
+    process_effective_ids, process_stat, total_memory_kb, user_name,
 };
 
 #[cfg(unix)]
 mod tty;
 #[cfg(unix)]
-pub use tty::{
+pub(crate) use tty::{
     configure_child_pty_tty, establish_pty_controlling_terminal, fd_foreground_pgrp,
     tty_path_foreground_pgrp,
 };
@@ -50,15 +55,19 @@ pub use tty::{
 #[cfg(unix)]
 mod fd;
 #[cfg(unix)]
-pub use fd::{dup_fd, set_fd_nonblocking};
+pub(crate) use fd::dup_fd;
+#[cfg(unix)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) use fd::set_fd_nonblocking;
 
 mod fs;
-pub use fs::executable_path_access;
+pub(crate) use fs::executable_path_access;
 
 pub(crate) mod serial;
-pub use serial::{
+pub use serial::SerialPort;
+pub(crate) use serial::{
     SerialAttributes, SerialByteSize, SerialConfigureFailure, SerialFlowControl, SerialParity,
-    SerialPort, SerialStopBits,
+    SerialStopBits,
 };
 
 /// `serial_open` for a re-homed test. `SerialPortIo` stays `pub(crate)`;
@@ -93,19 +102,23 @@ mod child_wait;
 #[cfg(all(unix, feature = "test-support"))]
 pub mod child_wait;
 #[cfg(unix)]
-pub use child_wait::{ChildWait, poll_child_status};
-// The raw-status decode entry point is currently only exercised by status-decode
-// tests; production reaps through `poll_child_status`.
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) use child_wait::ChildWait;
+#[cfg(unix)]
+pub(crate) use child_wait::poll_child_status;
+// The raw-status decode entry point: `poll_child_status` (the production
+// reaper, child_wait.rs:35) calls it at child_wait.rs:46; the status-decode
+// tests reach it through this re-export.
 #[cfg(all(unix, any(test, feature = "test-support")))]
-pub use child_wait::decode_wait_status;
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) use child_wait::decode_wait_status;
 
 #[cfg(unix)]
 mod socket_options;
-use backend::SourceIo;
 #[cfg(any(target_os = "linux", target_os = "android"))]
-pub use socket_options::set_socket_priority;
+pub(crate) use socket_options::set_socket_priority;
 #[cfg(unix)]
-pub use socket_options::{set_socket_dontroute, set_socket_linger};
+pub(crate) use socket_options::{set_socket_dontroute, set_socket_linger};
 
 cfg_select! {
     target_os = "linux" => {
@@ -122,11 +135,6 @@ pub(crate) trait ChildStatusSourceIo {
     /// Open a status source for `pid`, or `None` when this platform has no
     /// native pollable source (the caller then keeps using the periodic poll).
     fn open(pid: u32) -> Option<ChildStatusSource>;
-    /// Register this source's readable edge with the wait `poller`. A no-op
-    /// when there is no poller or no native source.
-    fn register_with_poller(&self, poller: Option<&polling::Poller>, id: ProcessId);
-    /// Remove this source from the wait `poller`.
-    fn unregister_from_poller(&self, poller: &polling::Poller);
 }
 
 impl ChildStatusSourceIo for ChildStatusSource {
@@ -134,19 +142,6 @@ impl ChildStatusSourceIo for ChildStatusSource {
     /// native pollable source (the caller then keeps using the periodic poll).
     fn open(pid: u32) -> Option<Self> {
         backend::open(pid).map(Self)
-    }
-
-    /// Register this source's readable edge with the wait `poller`. A no-op
-    /// when there is no poller or no native source.
-    fn register_with_poller(&self, poller: Option<&polling::Poller>, id: ProcessId) {
-        if let Some(poller) = poller {
-            self.0.register(poller, id);
-        }
-    }
-
-    /// Remove this source from the wait `poller`.
-    fn unregister_from_poller(&self, poller: &polling::Poller) {
-        self.0.unregister(poller);
     }
 }
 
@@ -158,4 +153,8 @@ pub(super) fn interface_snapshot() -> Option<Vec<HostInterfaceEntry>> {
 }
 
 #[cfg(target_os = "macos")]
-pub use process_attributes::{DarwinCpuTime, darwin_process_snapshot};
+pub(crate) use process_attributes::{DarwinCpuTime, darwin_process_snapshot};
+
+#[cfg(all(test, unix))]
+#[path = "tests/reentrant_libc_test.rs"]
+mod reentrant_libc_test;

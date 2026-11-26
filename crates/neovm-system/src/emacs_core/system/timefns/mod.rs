@@ -86,7 +86,12 @@ impl TimeZoneSymbol {
 // Argument helpers
 // ---------------------------------------------------------------------------
 
-fn expect_min_max_args(name: &str, args: &[Value], min: usize, max: usize) -> Result<(), Flow> {
+fn expect_min_max_args(
+    name: &'static str,
+    args: &[Value],
+    min: usize,
+    max: usize,
+) -> Result<(), Flow> {
     if args.len() < min || args.len() > max {
         Err(signal(
             LispCondition::WrongNumberOfArguments,
@@ -1005,7 +1010,8 @@ fn parse_time_convert_form(
 /// timestamp (such as the one `encode-time` produces from a float SECOND)
 /// converts losslessly instead of overflowing an i64.
 #[doc(hidden)]
-pub fn builtin_float_time(args: Vec<Value>) -> EvalResult {
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn builtin_float_time(args: Vec<Value>) -> EvalResult {
     expect_min_max_args("float-time", &args, 0, 1)?;
     let arg = if args.is_empty() { Value::NIL } else { args[0] };
     if matches!(arg.kind(), ValueKind::Float) {
@@ -1016,13 +1022,15 @@ pub fn builtin_float_time(args: Vec<Value>) -> EvalResult {
 }
 /// `(time-add A B)` -> integer seconds, `(HI LO US PS)`, or `(TICKS . HZ)`.
 #[doc(hidden)]
-pub fn builtin_time_add(args: Vec<Value>) -> EvalResult {
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn builtin_time_add(args: Vec<Value>) -> EvalResult {
     expect_args("time-add", &args, 2)?;
     time_arith(&args[0], &args[1], false)
 }
 /// `(time-subtract A B)` -> integer seconds, `(HI LO US PS)`, or `(TICKS . HZ)`.
 #[doc(hidden)]
-pub fn builtin_time_subtract(args: Vec<Value>) -> EvalResult {
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn builtin_time_subtract(args: Vec<Value>) -> EvalResult {
     expect_args("time-subtract", &args, 2)?;
     // GNU subtracts identical objects to a zero timestamp without validating,
     // so `(time-subtract X X)` never errors (`src/timefns.c:1238`). The guard
@@ -1039,7 +1047,8 @@ pub fn builtin_time_subtract(args: Vec<Value>) -> EvalResult {
 }
 /// `(time-less-p A B)` -> t or nil
 #[doc(hidden)]
-pub fn builtin_time_less_p(args: Vec<Value>) -> EvalResult {
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn builtin_time_less_p(args: Vec<Value>) -> EvalResult {
     expect_args("time-less-p", &args, 2)?;
     // GNU time_cmp short-circuits identical objects (`BASE_EQ`) as equal, so
     // `<` is false (`src/timefns.c:1255`).
@@ -1052,7 +1061,8 @@ pub fn builtin_time_less_p(args: Vec<Value>) -> EvalResult {
 }
 /// `(time-equal-p A B)` -> t or nil
 #[doc(hidden)]
-pub fn builtin_time_equal_p(args: Vec<Value>) -> EvalResult {
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn builtin_time_equal_p(args: Vec<Value>) -> EvalResult {
     expect_args("time-equal-p", &args, 2)?;
     // GNU timefns.c:time_cmp first treats identical Lisp objects (`BASE_EQ`,
     // object identity) as equal, so `(time-equal-p nil nil)' and other `eq'
@@ -1073,7 +1083,8 @@ pub fn builtin_time_equal_p(args: Vec<Value>) -> EvalResult {
 ///
 /// Returns a string like `"Mon Jan  2 15:04:05 2006"`.
 #[doc(hidden)]
-pub fn builtin_current_time_string(args: Vec<Value>) -> EvalResult {
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn builtin_current_time_string(args: Vec<Value>) -> EvalResult {
     expect_min_max_args("current-time-string", &args, 0, 2)?;
     let tm = if args.is_empty() || args[0].is_nil() {
         TimeMicros::now()
@@ -1099,7 +1110,8 @@ pub fn builtin_current_time_string(args: Vec<Value>) -> EvalResult {
 }
 /// `(current-time-zone &optional TIME ZONE)` -> `(OFFSET NAME)`.
 #[doc(hidden)]
-pub fn builtin_current_time_zone(args: Vec<Value>) -> EvalResult {
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn builtin_current_time_zone(args: Vec<Value>) -> EvalResult {
     expect_min_max_args("current-time-zone", &args, 0, 2)?;
     let tm = if args.is_empty() || args[0].is_nil() {
         TimeMicros::now()
@@ -1138,7 +1150,8 @@ fn check_cons(obj: &Value) -> Result<(Value, Value), Flow> {
 }
 /// `(encode-time TIME &rest OBSOLESCENT-ARGUMENTS)` -> `(HIGH LOW)`
 #[doc(hidden)]
-pub fn builtin_encode_time(args: Vec<Value>) -> EvalResult {
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn builtin_encode_time(args: Vec<Value>) -> EvalResult {
     // The SECOND field accepts any Lisp time value (GNU decodes it via
     // `decode_lisp_time'); its sub-second resolution carries into the result.
     let (sec, subsec_ticks, hz, min, hour, day, month, year, zone, isdst) = if args.len() == 1 {
@@ -1246,7 +1259,8 @@ pub fn builtin_encode_time(args: Vec<Value>) -> EvalResult {
 /// `(decode-time &optional TIME ZONE FORM)`
 /// -> `(SECONDS MINUTES HOURS DAY MONTH YEAR DOW DST UTCOFF)`
 #[doc(hidden)]
-pub fn builtin_decode_time(args: Vec<Value>) -> EvalResult {
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn builtin_decode_time(args: Vec<Value>) -> EvalResult {
     expect_min_max_args("decode-time", &args, 0, 3)?;
     // GNU `Fdecode_time` (`src/timefns.c:1542`): with FORM=t it decodes the
     // exact `(TICKS . HZ)` so the broken-down SEC member can carry sub-second
@@ -1308,7 +1322,8 @@ pub(crate) fn builtin_time_convert(args: Vec<Value>) -> EvalResult {
     builtin_time_convert_with_default_output(args, LispTimeOutput::LegacyList)
 }
 #[doc(hidden)]
-pub fn builtin_time_convert_in_context(eval: &mut Context, args: Vec<Value>) -> EvalResult {
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn builtin_time_convert_in_context(eval: &mut Context, args: Vec<Value>) -> EvalResult {
     let default_output = lisp_time_output_from_context(eval)?;
     builtin_time_convert_with_default_output(args, default_output)
 }
@@ -1370,7 +1385,8 @@ fn builtin_time_convert_with_default_output(
 }
 /// `(set-time-zone-rule ZONE)` -> nil.
 #[doc(hidden)]
-pub fn builtin_set_time_zone_rule(args: Vec<Value>) -> EvalResult {
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn builtin_set_time_zone_rule(args: Vec<Value>) -> EvalResult {
     expect_args("set-time-zone-rule", &args, 1)?;
     let rule = parse_zone_rule(&args[0])?;
     TIME_ZONE_RULE.with(|slot| *slot.borrow_mut() = rule);

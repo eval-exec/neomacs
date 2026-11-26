@@ -5,8 +5,10 @@
 //! `emacs_core/runtime/symbol/cell.rs`.  The runtime `put`/`setplist`
 //! primitives, `replace_symbol_plist_id`, construction (`publish_fill`) and
 //! pdump reconstruction (`from_dump`) all route through it, so there is no
-//! exception list to maintain: construction and pdump bumps before an era is
-//! published are harmless because nothing reads the clock yet.
+//! exception list to maintain.  Construction and pdump stores take the seam
+//! and do not bump the clock.  They also skip the SATB note: the pre-image
+//! is nil, which the note treats as a no-op, and the construction arm
+//! debug-asserts that.
 //!
 //! The scan runs over the whole crate source, strips comments and string
 //! data, skips test-only files and `#[cfg(test)]` items, and requires every
@@ -150,6 +152,9 @@ pub(crate) fn code_only(source: &str) -> String {
             }
             State::String | State::Char => {
                 if character == '\\' {
+                    if next == Some('\n') {
+                        out.push('\n');
+                    }
                     index += 2;
                     continue;
                 }
@@ -352,7 +357,7 @@ fn plist_head_stores_have_exactly_one_production_site() {
 #[test]
 fn plist_head_seam_guard_controls_detect_synthetic_bypasses() {
     // The seam itself is the one allowed production site.
-    let seam = "pub(crate) fn store_plist_head(sym: &mut LispSymbol, plist: Value) { \
+    let seam = "pub(crate) fn store_plist_head(sym: &mut LispSymbol, plist: Value, kind: PlistStore) { \
                 symbol.plist.store_atomic(plist); }";
     assert!(
         violations_in(seam).is_empty(),

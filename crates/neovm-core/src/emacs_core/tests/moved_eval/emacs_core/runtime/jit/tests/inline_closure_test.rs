@@ -27,10 +27,10 @@ fn lexical(required: usize, ops: Vec<Op>, constants: Vec<Value>) -> ByteCodeFunc
         optional: Vec::new(),
         rest: None,
     });
-    f.lexical = true;
-    f.ops = ops;
-    f.constants = constants.into();
-    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(32);
+    f.set_lexical(true);
+    f.set_ops(ops);
+    f.set_constants(constants.into());
+    f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(32));
     seal_hand_assembled_ops_for_test(&mut f);
     jit_mark_hot_for_test(&f);
     f
@@ -114,7 +114,7 @@ fn inline_constant_identity_body_requires_context_for_entry_guards() {
         leaf_needs_vmctx_for_test(&leaf),
         "the call-entry guards still read Context"
     );
-    let run = leaf.call(&mut ev as *mut Context as *mut u8, &[Value::make_int(17)]);
+    let run = unsafe { leaf.call(&mut ev as *mut Context as *mut u8, &[Value::make_int(17)]) };
     assert_eq!(
         finish(&mut ev, &f, &leaf, run).unwrap(),
         Value::make_int(17)
@@ -160,10 +160,12 @@ fn inline_closure_reads_the_executing_capture_after_cell_mutation() {
         !leaf_chains_empty_for_test(&leaf),
         "closure body was inlined"
     );
-    let run = leaf.call(
-        &mut ev as *mut Context as *mut u8,
-        &[cell, Value::make_int(4)],
-    );
+    let run = unsafe {
+        leaf.call(
+            &mut ev as *mut Context as *mut u8,
+            &[cell, Value::make_int(4)],
+        )
+    };
     assert_eq!(
         finish(&mut ev, &f, &leaf, run).unwrap(),
         Value::make_int(13)
@@ -210,10 +212,12 @@ fn inline_closure_chain_retains_assigned_argument_and_committed_store_once() {
     let cell = Value::cons(Value::make_int(0), Value::NIL);
     push_scratch_gc_root(cell);
     let leaf = native(&mut ev, &f);
-    let run = leaf.call(
-        &mut ev as *mut Context as *mut u8,
-        &[cell, Value::make_int(8)],
-    );
+    let run = unsafe {
+        leaf.call(
+            &mut ev as *mut Context as *mut u8,
+            &[cell, Value::make_int(8)],
+        )
+    };
     let NativeRun::DeoptAt(resume) = run else {
         panic!("inner guard: {run:?}")
     };
@@ -275,7 +279,7 @@ fn inline_closure_source_guard_returns_to_the_original_call() {
         vec![replacement],
     ));
     ev.set_function("make-closure", maker);
-    let run = leaf.call(&mut ev as *mut Context as *mut u8, &[Value::make_int(3)]);
+    let run = unsafe { leaf.call(&mut ev as *mut Context as *mut u8, &[Value::make_int(3)]) };
     let NativeRun::DeoptAt(resume) = run else {
         panic!("source guard: {run:?}")
     };
@@ -318,7 +322,7 @@ fn inline_closure_entry_attention_and_depth_leave_before_the_body() {
             }
             _ => unreachable!(),
         }
-        let run = leaf.call(&mut ev as *mut Context as *mut u8, &[]);
+        let run = unsafe { leaf.call(&mut ev as *mut Context as *mut u8, &[]) };
         let NativeRun::DeoptAt(resume) = run else {
             panic!("entry guard: {run:?}")
         };
@@ -353,7 +357,7 @@ fn inline_closure_forced_entry_deopt_executes_the_store_once_on_resume() {
     ));
     let f = capturing_caller(proto);
     let leaf = native(&mut ev, &f);
-    let run = leaf.call(&mut ev as *mut Context as *mut u8, &[cell]);
+    let run = unsafe { leaf.call(&mut ev as *mut Context as *mut u8, &[cell]) };
     let NativeRun::DeoptAt(resume) = run else {
         panic!("forced entry guard: {run:?}")
     };
@@ -404,7 +408,7 @@ fn inline_closure_chain_roots_outer_residual_across_resumed_gc() {
     let float = Value::make_float(1.5);
     push_scratch_gc_root(float);
     let leaf = native(&mut ev, &f);
-    let run = leaf.call(&mut ev as *mut Context as *mut u8, &[float]);
+    let run = unsafe { leaf.call(&mut ev as *mut Context as *mut u8, &[float]) };
     let NativeRun::DeoptAt(resume) = run else {
         panic!("float guard: {run:?}")
     };
@@ -449,7 +453,7 @@ fn inline_closure_preserves_capture_cons_and_float_identity_and_off_path() {
             Value::make_float(2.5),
         ] {
             push_scratch_gc_root(capture);
-            let run = leaf.call(&mut ev as *mut Context as *mut u8, &[capture]);
+            let run = unsafe { leaf.call(&mut ev as *mut Context as *mut u8, &[capture]) };
             assert_eq!(
                 finish(&mut ev, &f, &leaf, run).unwrap().bits(),
                 capture.bits(),
@@ -511,7 +515,7 @@ fn inline_closure_wider_same_source_prefix_returns_to_the_original_call() {
         "make-closure",
         Value::make_bytecode(lexical(2, vec![Op::Constant(0), Op::Return], vec![wide])),
     );
-    let run = leaf.call(&mut ev as *mut Context as *mut u8, &[Value::make_int(3)]);
+    let run = unsafe { leaf.call(&mut ev as *mut Context as *mut u8, &[Value::make_int(3)]) };
     let NativeRun::DeoptAt(resume) = run else {
         panic!("prefix bound: {run:?}")
     };

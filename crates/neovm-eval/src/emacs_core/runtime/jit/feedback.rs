@@ -32,6 +32,11 @@
 //! (`jit_layout::BYTECODE_RUNTIME_WORD_OFFSET`). The site keeps a `Weak` of
 //! every source it saw, so no source address is reused while the site
 //! remembers it (no ABA).
+//!
+//! Several owners may record one site at once. A source slot is claimed
+//! once, by compare and swap, and the word moves by compare and swap to its
+//! join with the observation, so no observation is lost and no published
+//! `Weak` is released before the site drops.
 
 use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::jit::FeedbackVecExt;
@@ -49,7 +54,7 @@ use crate::emacs_core::bytecode::Op;
 use neovm_value::intern::SymId;
 use neovm_value::value::Value;
 pub(crate) use neovm_value::value::jit_runtime::feedback::{
-    CallSiteFeedback, CallSites, SiteShape, SourceFeedback,
+    CallSiteFeedback, CallSites, SiteShape, SourceClaim, SourceFeedback,
 };
 pub(crate) use neovm_value::value::jit_runtime::feedback::{POLY, STABLE_WINDOW};
 
@@ -60,7 +65,7 @@ pub(crate) use neovm_value::value::jit_runtime::feedback::{POLY, STABLE_WINDOW};
 /// `NEOVM_JIT_FEEDBACK`: whether call targets are recorded, and whether
 /// compiles may read them.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum FeedbackMode {
+pub(crate) enum FeedbackMode {
     /// Nothing recorded (the default: today's code, CLIF-identical).
     Off,
     /// The interpreter records the call targets of its non-constant call
@@ -112,7 +117,7 @@ impl FeedbackMode {
     /// Use remains false here; its TIER2-on T1 exception is selected by the
     /// lowering's actual leaf emission and stops when that leaf closes.
     #[inline(always)]
-    pub fn records_compiled(self) -> bool {
+    pub(crate) fn records_compiled(self) -> bool {
         matches!(self, FeedbackMode::Record | FeedbackMode::Census)
     }
 
@@ -157,7 +162,7 @@ pub(crate) fn feedback_mode_test_override() -> Option<FeedbackMode> {
 /// `NEOVM_JIT_SPEC_SOURCES=on` raises either to `use` (its consumer needs
 /// its input).
 #[inline]
-pub fn feedback_mode() -> FeedbackMode {
+pub(crate) fn feedback_mode() -> FeedbackMode {
     #[cfg(any(test, feature = "test-support"))]
     if let Some(mode) = feedback_mode_test_override() {
         return mode;
@@ -343,7 +348,7 @@ impl RuntimeFeedbackExt for Runtime {
         callee: Value,
         arg0: Value,
     ) {
-        let sites = self.call_sites_for(func.executable_ops(), &func.constants);
+        let sites = self.call_sites_for(func.executable_ops(), func.constants());
         if let Some(site) = sites.site_at(pc) {
             site.observe(site.target_of(callee, arg0));
         }
@@ -468,30 +473,15 @@ pub(crate) trait CallSiteFeedbackExt {
     /// shims').
     fn observe_counted(&self, target: Value);
     /// The word moves (or a polymorphic site meets one of its sources).
+    /// `state` is the word the caller loaded, possibly stale.
     fn transition(&self, state: u64, key: u64, target: Value);
-    /// Without the JIT a byte-code object has no source identity
-    /// (`ByteCodeFunction::runtime` is JIT-only), so no key names one.
-    #[cfg(not(feature = "jit"))]
-    fn remember_source(&self, _i: usize, _target: Value) -> bool;
-    /// Keep a `Weak` of `target`'s source in slot `i`; false when `target`
-    /// has no source (never: the key said it has one).
-    #[cfg(feature = "jit")]
-    fn remember_source(&self, i: usize, target: Value) -> bool;
-    /// Without the JIT no site holds a source.
-    #[cfg(not(feature = "jit"))]
-    fn holds_source(&self, _n: usize, _target: Value) -> bool;
-    /// Whether `target`'s source is among the first `n` the site holds.
-    #[cfg(feature = "jit")]
-    fn holds_source(&self, n: usize, target: Value) -> bool;
     /// The site's target as a compile reads it (see [`CallTarget`]).
     fn target(&self) -> CallTarget;
 }
 
 impl CallSiteFeedbackExt for CallSiteFeedback {
     fn new(pc: u32, shape: SiteShape) -> Self {
-        // SAFETY: exact sealed initialization site; source-slot exclusion
-        // remains the known post-split FEEDBACK-UAF obligation.
-        unsafe { Self::new_storage(pc, shape, STATE_UNINIT) }
+        Self::new_storage(pc, shape, STATE_UNINIT)
     }
 
     /// The value this site records for a call of `callee` with first
@@ -560,94 +550,34 @@ impl CallSiteFeedbackExt for CallSiteFeedback {
     }
 
     /// The word moves (or a polymorphic site meets one of its sources).
+    /// Recorders on other owners may move it first, so it moves by compare
+    /// and swap to its join with this observation: a recorder whose word
+    /// went stale joins into the word it lost to.
     #[inline(never)]
     fn transition(&self, state: u64, key: u64, target: Value) {
-        let next = if key == STATE_MEGA {
-            STATE_MEGA
-        } else if state == STATE_UNINIT {
-            if key & TAG_BITS == TAG_SOURCE && !self.remember_source(0, target) {
-                STATE_MEGA
-            } else {
-                key
+        let seen = match key & TAG_BITS {
+            TAG_SYM => Seen::Sym(key),
+            // Only a word that counts sources can take one; any other word
+            // joins a source to Mega, so no slot is claimed for it.
+            TAG_SOURCE
+                if state == STATE_UNINIT || matches!(state & TAG_BITS, TAG_SOURCE | TAG_POLY) =>
+            {
+                seat_source(self, key, source_of(target))
             }
-        } else if key & TAG_BITS == TAG_SOURCE && state & TAG_BITS == TAG_SOURCE {
-            if self.remember_source(1, target) {
-                (2 << 3) | TAG_POLY
-            } else {
-                STATE_MEGA
-            }
-        } else if key & TAG_BITS == TAG_SOURCE && state & TAG_BITS == TAG_POLY {
-            let n = (state >> 3) as usize;
-            if self.holds_source(n, target) {
-                return;
-            }
-            if n < POLY && self.remember_source(n, target) {
-                (((n + 1) as u64) << 3) | TAG_POLY
-            } else {
-                STATE_MEGA
-            }
-        } else {
-            // A second symbol, a symbol after a source or the reverse.
-            STATE_MEGA
+            _ => Seen::Mega,
         };
-        if next == state {
-            return;
-        }
-        self.state_word().store(next, Ordering::Relaxed);
-        if self.counter().load(Ordering::Relaxed) >= STABLE_WINDOW {
+        if advance(self, state, seen) && self.counter().load(Ordering::Relaxed) >= STABLE_WINDOW {
             let late = self.late_counter().load(Ordering::Relaxed);
             self.late_counter()
                 .store(late.saturating_add(1), Ordering::Relaxed);
         }
     }
 
-    /// Without the JIT a byte-code object has no source identity
-    /// (`ByteCodeFunction::runtime` is JIT-only), so no key names one.
-    #[cfg(not(feature = "jit"))]
-    fn remember_source(&self, _i: usize, _target: Value) -> bool {
-        false
-    }
-
-    /// Keep a `Weak` of `target`'s source in slot `i`; false when `target`
-    /// has no source (never: the key said it has one).
-    #[cfg(feature = "jit")]
-    fn remember_source(&self, i: usize, target: Value) -> bool {
-        let Some(bc) = target.bytecode_data_if_materialized() else {
-            return false;
-        };
-        let Some(runtime) = bc.runtime().as_ref() else {
-            return false;
-        };
-        let source = Arc::downgrade(runtime.shared());
-        // SAFETY: exact sealed mutator recording site. Exclusion from borrowed
-        // compile reads remains the known post-split FEEDBACK-UAF gap.
-        unsafe { self.install_source(i, source) };
-        true
-    }
-
-    /// Without the JIT no site holds a source.
-    #[cfg(not(feature = "jit"))]
-    fn holds_source(&self, _n: usize, _target: Value) -> bool {
-        false
-    }
-
-    /// Whether `target`'s source is among the first `n` the site holds.
-    #[cfg(feature = "jit")]
-    fn holds_source(&self, n: usize, target: Value) -> bool {
-        let Some(runtime) = target
-            .bytecode_data_if_materialized()
-            .and_then(|bc| bc.runtime().as_ref())
-        else {
-            return false;
-        };
-        // SAFETY: exact sealed borrowed-read site. Exclusion from source
-        // replacement remains the known post-split FEEDBACK-UAF gap.
-        unsafe { self.source_matches(n, runtime.shared()) }
-    }
-
     /// The site's target as a compile reads it (see [`CallTarget`]).
     fn target(&self) -> CallTarget {
-        let state = self.state_word().load(Ordering::Relaxed);
+        // Acquire pairs with `advance`'s Release: every slot the state
+        // counts is visible here.
+        let state = self.state_word().load(Ordering::Acquire);
         let n = match state & TAG_BITS {
             _ if state == STATE_UNINIT => return CallTarget::Uninit,
             // SAFETY: round-trip of an interned id stored in the feedback site (peer seal N8).
@@ -657,11 +587,7 @@ impl CallSiteFeedbackExt for CallSiteFeedback {
             _ => return CallTarget::Mega,
         };
         let live: Vec<Arc<RuntimeState>> = (0..n.min(POLY))
-            .filter_map(|i| {
-                // SAFETY: exact sealed compiler borrowed-read site. Exclusion
-                // from recording remains the known post-split FEEDBACK-UAF gap.
-                unsafe { self.upgrade_source(i) }
-            })
+            .filter_map(|i| self.upgrade_source(i))
             .collect();
         if live.is_empty() {
             CallTarget::Mega
@@ -669,6 +595,92 @@ impl CallSiteFeedbackExt for CallSiteFeedback {
             CallTarget::Sources(live)
         }
     }
+}
+
+/// What one observation adds to a site's word.
+#[derive(Clone, Copy, Debug)]
+enum Seen {
+    /// A symbol: its key.
+    Sym(u64),
+    /// A source: its key and the slot that holds it.
+    Source { key: u64, slot: usize },
+    /// Any other callee, or a source with no slot left.
+    Mega,
+}
+
+/// The least word at or above both `word` and `seen`. A source word counts
+/// slots that were all filled before it was published, so sources join by
+/// count, and the one-source word is slot 0's key.
+fn join(word: u64, seen: Seen) -> u64 {
+    match seen {
+        Seen::Mega => STATE_MEGA,
+        Seen::Sym(key) if word == STATE_UNINIT || word == key => key,
+        Seen::Sym(_) => STATE_MEGA,
+        Seen::Source { key, slot } => {
+            let held = match word & TAG_BITS {
+                _ if word == STATE_UNINIT => 0,
+                TAG_SOURCE => 1,
+                TAG_POLY => (word >> 3) as usize,
+                // A symbol, or Mega.
+                _ => return STATE_MEGA,
+            };
+            match held.max(slot + 1) {
+                1 if held == 1 => word,
+                1 => key,
+                n => ((n as u64) << 3) | TAG_POLY,
+            }
+        }
+    }
+}
+
+/// Move `site`'s word from `state`, possibly stale, to its join with
+/// `seen`; whether this call moved it.
+fn advance(site: &CallSiteFeedback, state: u64, seen: Seen) -> bool {
+    let mut word = state;
+    loop {
+        let next = join(word, seen);
+        if next == word {
+            return false;
+        }
+        // Release orders every slot this recorder saw filled, its own among
+        // them, before the word that counts them, so `target` never sees a
+        // word whose slots are still null.
+        match site.state_word().compare_exchange_weak(
+            word,
+            next,
+            Ordering::Release,
+            Ordering::Relaxed,
+        ) {
+            Ok(_) => return true,
+            Err(current) => word = current,
+        }
+    }
+}
+
+/// Claim a slot of `site` for `source` (see
+/// [`CallSiteFeedback::claim_source`]); no source, or no slot left, is Mega.
+fn seat_source(site: &CallSiteFeedback, key: u64, source: Option<&Arc<RuntimeState>>) -> Seen {
+    match source.map(|source| site.claim_source(source)) {
+        Some(SourceClaim::Published(slot) | SourceClaim::Held(slot)) => Seen::Source { key, slot },
+        Some(SourceClaim::Full) | None => Seen::Mega,
+    }
+}
+
+/// `target`'s source; none when it has none (never: the key said it has
+/// one).
+#[cfg(feature = "jit")]
+fn source_of(target: Value) -> Option<&'static Arc<RuntimeState>> {
+    target
+        .bytecode_data_if_materialized()
+        .and_then(|bc| bc.runtime().as_ref())
+        .map(|runtime| runtime.shared())
+}
+
+/// Without the JIT a byte-code object has no source identity
+/// (`ByteCodeFunction::runtime` is JIT-only), so no key names one.
+#[cfg(not(feature = "jit"))]
+fn source_of(_target: Value) -> Option<&'static Arc<RuntimeState>> {
+    None
 }
 
 /// Upper extension trait for the moved feedback types.

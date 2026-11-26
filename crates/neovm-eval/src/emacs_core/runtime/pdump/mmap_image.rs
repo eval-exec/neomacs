@@ -239,15 +239,27 @@ impl LoadedMmapImage {
         )
     }
 
+    /// Writable address of `kind`.
+    ///
+    /// memmap2 0.9.11 has no inherent `MmapMut::as_ptr`. Calling `as_ptr` on
+    /// the anywhere arm derefs to `<[u8]>::as_ptr`, and `cast_mut` then
+    /// writes through a SharedReadOnly tag. `as_mut_ptr` takes `&mut self`
+    /// and returns the mutable mapping pointer. `MmapRaw::map_raw` is not a
+    /// substitute: it is `MAP_SHARED`, and this image must stay `MAP_PRIVATE`
+    /// so placeholder writes do not persist into the file.
     #[doc(hidden)]
-    pub fn section_mut_ptr(&self, kind: DumpSectionKind) -> Option<(*mut u8, usize)> {
+    pub fn section_mut_ptr(&mut self, kind: DumpSectionKind) -> Option<(*mut u8, usize)> {
         let section = self
             .sections
             .iter()
             .find(|section| section.kind == u32::from(kind))?;
         let start = section.offset as usize;
         let len = section.len as usize;
-        Some((unsafe { self.mmap.as_ptr().cast_mut().add(start) }, len))
+        let base = self.mmap.as_mut_ptr();
+        // SAFETY: `start` is a section offset validated against the mapping
+        // length when the section table was read. The returned pointer is
+        // used after this borrow ends; its provenance is the mutable map.
+        Some((unsafe { base.add(start) }, len))
     }
 
     #[doc(hidden)]

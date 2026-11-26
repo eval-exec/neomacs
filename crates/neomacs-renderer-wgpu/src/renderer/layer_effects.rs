@@ -69,7 +69,7 @@ macro_rules! draw_stateful {
 impl WgpuRenderer {
     pub(super) fn draw_pre_content_background_effects(
         &mut self,
-        render_pass: &mut wgpu::RenderPass<'_>,
+        render_pass: &mut super::frame_pass::FrameRenderPass<'_>,
         ctx: &super::effect_common::EffectCtx<'_>,
         faces: &FrameFaceMap,
         box_spans: &[BoxSpan],
@@ -109,7 +109,7 @@ impl WgpuRenderer {
     /// then the extended decorative effects.
     pub(super) fn draw_pre_content_effects(
         &mut self,
-        render_pass: &mut wgpu::RenderPass<'_>,
+        render_pass: &mut super::frame_pass::FrameRenderPass<'_>,
         ctx: &super::effect_common::EffectCtx<'_>,
     ) {
         self.draw_pre_content_effects_core(render_pass, ctx);
@@ -120,7 +120,7 @@ impl WgpuRenderer {
     /// mode-line accents, and cursor/ambient trails, in fixed z-order.
     fn draw_pre_content_effects_core(
         &mut self,
-        render_pass: &mut wgpu::RenderPass<'_>,
+        render_pass: &mut super::frame_pass::FrameRenderPass<'_>,
         ctx: &super::effect_common::EffectCtx<'_>,
     ) {
         // === Step 1c: Cursor glow ===
@@ -324,7 +324,7 @@ impl WgpuRenderer {
 
     fn draw_window_border_radius_effect(
         &mut self,
-        render_pass: &mut wgpu::RenderPass<'_>,
+        render_pass: &mut super::frame_pass::FrameRenderPass<'_>,
         ctx: &super::effect_common::EffectCtx<'_>,
     ) {
         if !self.effects.window_border_radius.enabled {
@@ -371,7 +371,7 @@ impl WgpuRenderer {
     /// with decorative cursor art, in fixed z-order.
     fn draw_pre_content_effects_extended(
         &mut self,
-        render_pass: &mut wgpu::RenderPass<'_>,
+        render_pass: &mut super::frame_pass::FrameRenderPass<'_>,
         ctx: &super::effect_common::EffectCtx<'_>,
     ) {
         // Aurora/northern lights effect
@@ -1072,7 +1072,7 @@ impl WgpuRenderer {
     /// Draw the post-content effect stacks on top of text and media.
     pub(super) fn draw_post_content_effects(
         &mut self,
-        render_pass: &mut wgpu::RenderPass<'_>,
+        render_pass: &mut super::frame_pass::FrameRenderPass<'_>,
         ctx: &super::effect_common::EffectCtx<'_>,
         faces: &FrameFaceMap,
     ) {
@@ -1086,7 +1086,7 @@ impl WgpuRenderer {
 
     fn draw_post_window_chrome_effects(
         &mut self,
-        render_pass: &mut wgpu::RenderPass<'_>,
+        render_pass: &mut super::frame_pass::FrameRenderPass<'_>,
         ctx: &super::effect_common::EffectCtx<'_>,
     ) {
         // === Draw mode-line separators ===
@@ -1145,7 +1145,7 @@ impl WgpuRenderer {
 
     fn draw_post_focus_and_dimming_effects(
         &mut self,
-        render_pass: &mut wgpu::RenderPass<'_>,
+        render_pass: &mut super::frame_pass::FrameRenderPass<'_>,
         ctx: &super::effect_common::EffectCtx<'_>,
     ) {
         // === Frosted glass effect on mode-lines ===
@@ -1203,7 +1203,7 @@ impl WgpuRenderer {
 
     fn draw_post_highlight_effects(
         &mut self,
-        render_pass: &mut wgpu::RenderPass<'_>,
+        render_pass: &mut super::frame_pass::FrameRenderPass<'_>,
         ctx: &super::effect_common::EffectCtx<'_>,
         faces: &FrameFaceMap,
     ) {
@@ -1258,7 +1258,7 @@ impl WgpuRenderer {
 
     fn draw_post_navigation_effects(
         &mut self,
-        render_pass: &mut wgpu::RenderPass<'_>,
+        render_pass: &mut super::frame_pass::FrameRenderPass<'_>,
         ctx: &super::effect_common::EffectCtx<'_>,
     ) {
         // === Minimap: code overview column on right side of each window ===
@@ -1304,7 +1304,7 @@ impl WgpuRenderer {
 
     fn draw_post_resize_and_input_effects(
         &mut self,
-        render_pass: &mut wgpu::RenderPass<'_>,
+        render_pass: &mut super::frame_pass::FrameRenderPass<'_>,
         ctx: &super::effect_common::EffectCtx<'_>,
     ) {
         // === Resize padding transition overlay ===
@@ -1360,7 +1360,7 @@ impl WgpuRenderer {
 
     fn draw_post_overlay_effects(
         &mut self,
-        render_pass: &mut wgpu::RenderPass<'_>,
+        render_pass: &mut super::frame_pass::FrameRenderPass<'_>,
         ctx: &super::effect_common::EffectCtx<'_>,
     ) {
         // === Line wrap indicator overlay ===

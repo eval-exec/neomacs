@@ -18,7 +18,7 @@ use self::data::xwidget;
 use self::interactive_registry::InteractiveRegistry;
 use self::keymap_lookup::{list_keymap_define, list_keymap_set_parent, make_sparse_list_keymap};
 use self::protocol::tty_host::TtyFrameHostFactory;
-pub use self::protocol::{DisplayHost, FrameFontRequest};
+pub use self::protocol::{DisplayHost, FrameFontRequest, FrameFontSelection};
 pub use self::protocol::{
     FontOpeningSize, FrameFontSize, TerminalCreateRequest, TerminalDisplayTarget,
     TerminalFloatPlacement, TerminalGridSize, TerminalId,
@@ -39,7 +39,8 @@ use crate::emacs_core::eval::data::window_layout_query::{
     take_layout_query_adapter,
 };
 use crate::emacs_core::eval::data::window_state::{
-    BodyRedisplayRevision, ForcedBodyRedisplay, FrameManager,
+    BodyRedisplayRevision, BufferRedisplayRevisions, ForcedBodyRedisplay, FrameManager,
+    RedisplayOptimizationsRevision,
 };
 pub use neomacs_display_protocol::GraphicalFaceAttribute;
 use neovm_edit::buffer::{BufferId, BufferManager, CharPos0, EmacsBytePos, LispCharPos1};
@@ -54,11 +55,14 @@ use neovm_value::display_vocab::{FontSlant, FontWeight, FontWidth, FrameFullscre
 use neovm_value::error::*;
 use neovm_value::gc_trace::GcTrace;
 use neovm_value::intern::{
-    SymId, WellKnown, format_symbol_name_for_diagnostic, intern, intern_uninterned,
-    is_canonical_id, is_keyword_id, resolve_sym, symbol_name_id,
+    SymId, WellKnown, format_symbol_name_for_diagnostic, intern, is_canonical_id, is_keyword_id,
+    make_uninterned_symbol, resolve_sym, symbol_name_id,
 };
 use neovm_value::kmacro::KmacroManager;
 use neovm_value::symbol::{CanonicalAccess, ConstantWrite, Obarray};
+pub(crate) use neovm_value::tagged::gc::condition_snapshots::{
+    ConditionSnapshotAdmission, ConditionSnapshotAdmitError,
+};
 use neovm_value::tagged::header::{CLOSURE_ARGLIST, SubrDispatchKind, SubrInteractivity};
 use neovm_value::value::*;
 
@@ -90,7 +94,7 @@ pub(crate) use world::WorldSlot;
 #[cfg(any(test, feature = "test-support"))]
 #[doc(hidden)]
 pub use world::sole_owner::SoleOwnerDriver;
-pub use world::{ContextShutdownError, ObarrayWriteAccess, OutstandingWorldViews, WorldEra};
+pub use world::{ContextShutdownError, ObarrayWriteAccess, WorldEra};
 pub(crate) use world::{OwnedRootRegistryView, WorldView};
 
 pub(crate) mod subr_abi;
@@ -99,7 +103,8 @@ pub(crate) mod subr_abi;
 // spelling.
 #[cfg(any(test, feature = "test-support"))]
 #[doc(hidden)]
-pub use subr_abi::SubrValueExt;
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) use subr_abi::SubrValueExt;
 #[cfg(not(any(test, feature = "test-support")))]
 use subr_abi::SubrValueExt;
 use subr_abi::{SubrFn, SubrObj};
@@ -107,13 +112,19 @@ use subr_abi::{SubrFn, SubrObj};
 mod callback;
 mod command_error;
 mod context_api;
+pub(crate) mod derived_counters;
 mod edit_host;
 mod lexenv_cache;
 mod lexical_symbols;
+pub mod long_line;
 mod text_host;
 pub(crate) use self::lexenv_cache::LexenvAssqCache;
 pub(crate) use callback::{CheckedNativeCallback, native_callback_cache_enabled};
 pub(crate) mod parallel_entry;
+#[doc(hidden)]
+pub use parallel_entry::source_entry::{
+    SourceModuleObservation, install_source_module_scope_probe, source_module_observation,
+};
 #[allow(dead_code)] // Dormant E4-S0 executor substrate; E4 stage 1 consumes it.
 #[doc(hidden)]
 pub mod parallel_exec;
@@ -175,36 +186,6 @@ const GC_THRESHOLD_FLOOR_BYTES: usize = GC_DEFAULT_THRESHOLD_BYTES / 10;
 #[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
 pub(crate) const GC_STARTUP_THRESHOLD_CEILING_BYTES: usize = 4 * 1024 * 1024;
 const GC_HI_THRESHOLD_BYTES: usize = (i64::MAX as usize) / 2;
-const GC_PERCENT_SCALE: u64 = 1_000_000;
-/// Live-proportional adaptive trigger (`effective_gc_threshold_bytes`): do not
-/// start the next cycle until at least `live_bytes × NUM/DEN` fresh bytes have
-/// been allocated, so the O(live) full-mark cost amortizes as the live heap
-/// grows (total mark work stays O(bytes allocated)) instead of re-marking the
-/// whole heap every fixed `gc-cons-threshold` bytes. The elisp-derived value
-/// (`gc-cons-threshold`/`gc-cons-percentage`) is a FLOOR this term can only
-/// raise, never lower, and `GC_HI_THRESHOLD_BYTES` still caps the result.
-const GC_LIVE_GROWTH_NUM: u128 = 1;
-const GC_LIVE_GROWTH_DEN: u128 = 2;
-
-/// The live-growth term as a percentage of the live heap, overridable for
-/// measurement with `NEOVM_GC_LIVE_GROWTH_PERCENT`.
-///
-/// The default is 50, i.e. the `NUM/DEN` above.  GNU's nearest equivalent is
-/// `gc-cons-percentage`, whose default is 10, so this term is five times GNU's
-/// and dominates whatever the user asked for: because it combines as a strict
-/// max, a `gc-cons-threshold` below it has no effect at all.  That is worth
-/// being able to measure rather than argue about, and `0` disables the term
-/// entirely, leaving GNU's contract exactly.
-fn gc_live_growth_percent() -> u128 {
-    static PERCENT: OnceLock<u128> = OnceLock::new();
-    *PERCENT.get_or_init(|| {
-        std::env::var("NEOVM_GC_LIVE_GROWTH_PERCENT")
-            .ok()
-            .and_then(|value| value.parse::<u128>().ok())
-            .filter(|percent| *percent <= 10_000)
-            .unwrap_or(GC_LIVE_GROWTH_NUM * 100 / GC_LIVE_GROWTH_DEN)
-    })
-}
 pub(crate) const INTERNAL_COMPILER_FUNCTION_OVERRIDES: &str =
     "internal--compiler-function-overrides";
 
@@ -482,8 +463,6 @@ struct RedisplaySignature {
     active_minibuffer_window: Option<u64>,
     minibuffer_selected_window: Option<u64>,
     face_change_count: u64,
-    obarray_function_epoch: u64,
-    symbol_property_revision: neovm_value::symbol::SymbolPropertyRevision,
     redisplay_generation: u64,
     frame: Option<RedisplayFrameSignature>,
 }
@@ -547,8 +526,6 @@ impl RedisplaySignature {
         field!(active_minibuffer_window);
         field!(minibuffer_selected_window);
         field!(face_change_count);
-        field!(obarray_function_epoch);
-        field!(symbol_property_revision);
         field!(redisplay_generation);
         match (&self.frame, &other.frame) {
             (Some(a), Some(b)) => {
@@ -874,6 +851,7 @@ pub(crate) const AUDITED_PURE_PRIMITIVES: &[&str] = &["setcar", "setcdr"];
 /// (buffer-change hooks, `word-boundary-function`, ...). Kept next to the
 /// pure list so both are one registration-time source of truth for the
 /// exhaustiveness test.
+#[cfg(test)]
 pub(crate) const AUDITED_REENTRANT_PRIMITIVES: &[&str] =
     &["insert", "delete-region", "indent-to", "forward-word"];
 
@@ -1415,6 +1393,33 @@ impl SavedRestrictionUnwind {
 }
 
 impl SpecBinding {
+    /// Read a logical frame's function without copying or reading its arguments.
+    /// Keep this exhaustive so a new physical frame cannot disappear from
+    /// profiler samples or caller queries until its function is accounted for.
+    #[inline]
+    #[doc(hidden)]
+    pub fn backtrace_function(&self) -> Option<Value> {
+        match self {
+            Self::Backtrace { function, .. }
+            | Self::Backtrace1 { function, .. }
+            | Self::Backtrace2 { function, .. }
+            | Self::BacktraceNative { function, .. } => Some(*function),
+            Self::Let { .. }
+            | Self::LetLocal { .. }
+            | Self::LetDefault { .. }
+            | Self::LexicalEnv { .. }
+            | Self::GcRoot { .. }
+            | Self::UnwindProtect { .. }
+            | Self::SaveExcursion { .. }
+            | Self::SaveCurrentBuffer { .. }
+            | Self::SaveRestriction { .. }
+            | Self::LoadsInProgress { .. }
+            | Self::RequireStack { .. }
+            | Self::NativeUnwind { .. }
+            | Self::Nop => None,
+        }
+    }
+
     #[doc(hidden)]
     pub fn save_restriction(state: neovm_edit::buffer::SavedRestrictionState) -> Self {
         Self::SaveRestriction {
@@ -1462,7 +1467,7 @@ impl SpecBinding {
 
 /// A dynamic binding owned by one selected keyboard lifetime.
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct KeyboardBinding {
+pub struct KeyboardBinding {
     sym_id: SymId,
     owner: neovm_value::forward::KeyboardBindingOwner,
     old_value: Value,
@@ -1668,6 +1673,24 @@ impl BacktraceArgs {
     #[doc(hidden)]
     pub const BYTECODE_STACK_KIND: usize = 2;
 
+    const _BACKTRACE_ARGS_DISJOINT_FROM_DEAD: () = {
+        let dead = Value::dead_sentinel_bits();
+        let dead_kind = (dead >> Self::KIND_SHIFT) & Self::KIND_MASK;
+        assert!(
+            dead & Self::TAG_MASK != Self::DESCRIPTOR_TAG
+                || (dead_kind != Self::EVALUATED_0_KIND
+                    && dead_kind != Self::EVALUATED_KIND
+                    && dead_kind != Self::BYTECODE_STACK_KIND)
+        );
+        let eval0 = (Self::EVALUATED_0_KIND << Self::KIND_SHIFT) | Self::DESCRIPTOR_TAG;
+        let eval_n = (Self::EVALUATED_KIND << Self::KIND_SHIFT) | Self::DESCRIPTOR_TAG;
+        let bc_span = (Self::BYTECODE_STACK_KIND << Self::KIND_SHIFT) | Self::DESCRIPTOR_TAG;
+        // SAFETY: compile-time bit-pattern disjointness checks only; never dereferenced.
+        assert!(!unsafe { Value::from_bits(eval0) }.is_dead());
+        assert!(!unsafe { Value::from_bits(eval_n) }.is_dead());
+        assert!(!unsafe { Value::from_bits(bc_span) }.is_dead());
+    };
+
     /// Tests push arbitrary values as a frame's argument forms, so this
     /// constructor keeps the reserved-tag check in every build.
     #[cfg(test)]
@@ -1771,6 +1794,12 @@ impl BacktraceArgs {
     pub fn is_unevalled(self) -> bool {
         // `view()`'s first test, and its only Unevalled arm.
         self.0 & Self::TAG_MASK != Self::DESCRIPTOR_TAG
+    }
+
+    #[cfg(test)]
+    #[inline]
+    pub(crate) const fn raw_bits(self) -> usize {
+        self.0
     }
 
     #[inline]
@@ -1916,6 +1945,13 @@ struct ThreadDynamicBindingState {
     lexenv: Value,
     specpdl: Vec<SpecBinding>,
     condition_stack: Vec<ConditionFrame>,
+    /// GNU `lisp_eval_depth` lives in the thread state
+    /// (`src/thread.h` `m_lisp_eval_depth`), so switching `current_thread`
+    /// switches the counter. A new worker's state is zeroed and starts at 0.
+    /// The simulation runs the next worker on this same `Context`, nested
+    /// under the waiter, so the counter has to travel with the suspended
+    /// stack or every parked waiter adds to the caller's depth.
+    lisp_eval_depth: usize,
     /// `Some` is a simulated worker parked across a wait. `None` is the
     /// caller `enter_thread_runtime` suspended. Parked frames share this vec
     /// so a wait does not add a `Context` field.
@@ -2151,12 +2187,12 @@ fn value_from_symbol_id(sym_id: SymId) -> Value {
 
 fn hidden_internal_interpreter_environment_symbol() -> SymId {
     static HIDDEN_SYMBOL: OnceLock<SymId> = OnceLock::new();
-    *HIDDEN_SYMBOL.get_or_init(|| intern_uninterned("internal-interpreter-environment"))
+    *HIDDEN_SYMBOL.get_or_init(|| make_uninterned_symbol("internal-interpreter-environment"))
 }
 
 fn hidden_load_read_stream_token() -> LoadReadStreamToken {
     static HIDDEN_SYMBOL: OnceLock<LoadReadStreamToken> = OnceLock::new();
-    *HIDDEN_SYMBOL.get_or_init(|| LoadReadStreamToken(intern_uninterned("get-file-char")))
+    *HIDDEN_SYMBOL.get_or_init(|| LoadReadStreamToken(make_uninterned_symbol("get-file-char")))
 }
 
 fn default_directory_symbol() -> SymId {
@@ -2226,6 +2262,7 @@ cached_symbol_id!(max_lisp_eval_depth_symbol, "max-lisp-eval-depth");
 // Symbol identity is global and immutable; values remain owned by each Context.
 cached_symbol_id!(lisp_eval_depth_reserve_symbol, "lisp-eval-depth-reserve");
 cached_symbol_id!(frame_alpha_lower_limit_symbol, "frame-alpha-lower-limit");
+cached_symbol_id!(ns_confirm_quit_symbol, "ns-confirm-quit");
 cached_symbol_id!(byte_code_literal_symbol, "byte-code-literal");
 cached_symbol_id!(input_decode_map_symbol, "input-decode-map");
 cached_symbol_id!(local_function_key_map_symbol, "local-function-key-map");
@@ -2237,6 +2274,13 @@ cached_symbol_id!(error_symbol, "error");
 cached_symbol_id!(quit_symbol, "quit");
 cached_symbol_id!(invalid_function_symbol, "invalid-function");
 cached_symbol_id!(error_conditions_symbol, "error-conditions");
+// Signal dispatch reads these on every signal (GNU reads the C variables).
+cached_symbol_id!(signal_hook_function_symbol, "signal-hook-function");
+cached_symbol_id!(inhibit_debugger_symbol, "inhibit-debugger");
+cached_symbol_id!(debug_on_signal_symbol, "debug-on-signal");
+cached_symbol_id!(debug_on_error_symbol, "debug-on-error");
+cached_symbol_id!(debug_on_quit_symbol, "debug-on-quit");
+cached_symbol_id!(debug_ignored_errors_symbol, "debug-ignored-errors");
 
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
 fn is_lambda_like_symbol_id(id: SymId) -> bool {
@@ -2318,6 +2362,7 @@ fn install_core_eval_symbols(obarray: &mut Obarray, reset_runtime_values: bool) 
         max_lisp_eval_depth_symbol(),
         buffer_undo_list_symbol(),
         frame_alpha_lower_limit_symbol(),
+        ns_confirm_quit_symbol(),
     ] {
         obarray.mark_runtime_projected_id(projected);
     }
@@ -2566,6 +2611,7 @@ pub fn restore_scratch_gc_roots(saved_len: usize) {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct GuiFrameHostRequest {
     pub frame_id: neovm_value::display_vocab::FrameId,
+    pub resize_request_id: Option<neovm_value::display_vocab::GuiResizeRequestId>,
     pub width: u32,
     pub height: u32,
     pub title: neovm_value::heap_types::LispString,
@@ -2581,6 +2627,7 @@ impl GuiFrameHostRequest {
     pub fn for_frame(frame: &crate::emacs_core::eval::data::window_state::Frame) -> Self {
         Self {
             frame_id: frame.id,
+            resize_request_id: None,
             width: frame.width,
             height: frame.height,
             title: frame.host_title_lisp_string(),
@@ -2612,6 +2659,9 @@ pub struct FontSpecResolveRequest {
     pub weight: Option<FontWeight>,
     pub slant: Option<FontSlant>,
     pub width: Option<FontWidth>,
+    /// GNU `:otf` requirement. Font matching rejects a font whose
+    /// GSUB/GPOS capability does not satisfy it (`src/font.c:2521-2533`).
+    pub otf: Option<crate::emacs_core::eval::data::fontset_state::StoredOtfSpec>,
 }
 
 /// Listing constraints which must not alter the driver's single-font match
@@ -2790,6 +2840,7 @@ pub(crate) fn test_resolved_opened_font(
             descent_px: metrics.descent as f32,
             space_advance_px: metrics.space_width as f32,
             glyph_advance: Default::default(),
+            spacing: None,
         },
         foundry: foundry.map(neovm_value::heap_types::LispString::from_utf8),
         slant,
@@ -2891,6 +2942,22 @@ pub struct ResolvedFontEntityMetrics {
     pub metrics: FontPxProbeResult,
     pub file: Option<neovm_value::heap_types::LispString>,
     pub capability: Option<FontOtfCapability>,
+}
+
+/// Request to open one exact font entity for `open-font`.
+///
+/// The entity handle is the catalog identity `find-font`/`list-fonts`
+/// published; opening it must reuse that exact face rather than re-resolve
+/// the visible properties (a family can hold several selectable faces).
+#[derive(Clone, Debug, PartialEq)]
+pub struct FontOpenEntityRequest {
+    pub frame_id: neovm_value::display_vocab::FrameId,
+    pub handle: Option<neovm_value::display_vocab::FontEntityHandle>,
+    pub size: FontOpeningSize,
+    /// GNU's `font_open_entity` `pixel_size` argument as Lisp observes it in
+    /// the font object's `:size`. `None` lets the host substitute the pixel
+    /// size it actually opened (used for point sizes).
+    pub reported_size: Option<i64>,
 }
 
 /// One GSUB/GPOS side of an OpenType capability report: per script
@@ -3359,7 +3426,7 @@ pub struct Context {
     interpreted_closure_filter_fn: Option<Value>,
     pub(crate) in_flight_registry: neovm_value::error::InFlightRegistryHandle,
     #[doc(hidden)]
-    pub cached_standard_case_table: Option<Value>,
+    pub(crate) cached_standard_case_table: Option<Value>,
     /// Edit-owned runtime state: the buffer manager and the insdel
     /// change-combining state. Embedded by value so field access stays one
     /// offset; stage-3 inversion keeps the evaluator above the edit domain.
@@ -3576,7 +3643,7 @@ pub struct Context {
     pub(crate) face_table: WorldSlot<FaceTable>,
     pub input_progress: neomacs_display_protocol::input_progress::InputProgress,
     body_redisplay_by_window: FxHashMap<WindowId, u64>,
-    body_redisplay_by_buffer: FxHashMap<BufferId, u64>,
+    body_redisplay_by_buffer: FxHashMap<BufferId, BufferRedisplayRevisions>,
     /// Which windows' chrome (mode/header/tab line) must be re-generated on
     /// the next redisplay. See [`ChromeDirty`].
     chrome_dirty: crate::emacs_core::eval::data::window_state::ChromeDirty,
@@ -3686,13 +3753,12 @@ pub struct Context {
     #[allow(clippy::type_complexity)]
     pub redisplay_prepare_fn:
         Option<Box<dyn FnMut(&mut Self, RedisplayMiniGeometryRequest) -> EvalResult>>,
-    /// Frontend-installed font-shaping driver (GNU `font->driver->shape`).
-    /// The gstring contract lives in src/font.c's `Ffont_shape_gstring`; the
-    /// shaping engine lives in the display layer, so the frontend installs
-    /// this typed seam. `None` means the driver cannot shape (the subr
-    /// answers nil — no composition).
-    #[allow(clippy::type_complexity)]
-    pub font_shape_fn: Option<font_shape::FontShapeFn>,
+    /// Frontend-installed font driver vtable (`N-font-driver-vtable`, GNU
+    /// `struct font_driver`). Holds shaping (`font->driver->shape`), glyph
+    /// text extents (`font->driver->text_extents`), and sealed realized-fontset
+    /// lookup in one 16-byte slot at offset 10648. `None` in batch mode (no
+    /// display font system attached).
+    pub font_driver: Option<Box<dyn font_shape::FontDriver>>,
     /// Optional GUI observer of a complete marker-backed scroll transition.
     #[allow(clippy::type_complexity)]
     pub scroll_preview_fn: Option<
@@ -3706,12 +3772,12 @@ pub struct Context {
         >,
     >,
     /// One bounded, read-only display maintenance step during idle input waits
-    /// or a GUI command boundary when input remains queued. The delay requests
-    /// another idle wakeup; the boolean requests publication after releasing
-    /// the engine borrow. Installing this also enables periodic GUI service.
+    /// or a GUI command boundary when input remains queued. Publication is
+    /// handled natively by the frontend, never by evaluator redisplay. The
+    /// outcome requests only another idle wakeup. Installing this also enables
+    /// periodic GUI service.
     #[allow(clippy::type_complexity)]
-    pub display_idle_maintenance_fn:
-        Option<Box<dyn FnMut(&Self) -> (Option<std::time::Duration>, bool)>>,
+    pub display_idle_maintenance_fn: Option<Box<dyn FnMut(&Self) -> DisplayMaintenanceOutcome>>,
     /// Frontend-installed frame snapshot hook (`neomacs--frame-snapshot`).
     /// Same seam pattern as `redisplay_fn`: neovm-core cannot reach the
     /// layout engine, so the frontend lays out the requested frames on
@@ -3992,6 +4058,32 @@ pub struct Context {
     /// Appended after the pinned layout; only the Context size grows.
     #[doc(hidden)]
     pub frame_and_buffer_state: Option<Value>,
+    /// Frame objects named by bare ids the keyboard still holds: queued
+    /// input, the last event frame, the mouse position, and a presented
+    /// pointer observation. Refreshed before an explicit collection arms
+    /// deleted frames. Appended after the pinned layout so the fields the
+    /// JIT and the bytecode loop load do not move. GNU keeps the same frames
+    /// alive because `recent_keys` stores the frame object
+    /// (`frame.c:2898-2901`).
+    retained_frame_pins: Vec<Value>,
+    /// Serial admission of published condition snapshots. `Dormant` until
+    /// [`Self::admit_condition_snapshots`]. One niche-optimized pointer,
+    /// appended as the trailing field so every earlier offset stays put.
+    /// Startup does not admit. The hot signal pair and `run_loop` do not
+    /// load this field.
+    condition_snapshots: ConditionSnapshotAdmission,
+    /// #776: retired-process records taken from the manager for the in-flight
+    /// AUTOMATIC collection. A concurrent cycle spans several safe-point
+    /// driver calls, so the batch must outlive one call; the explicit
+    /// `garbage-collect` path uses its own stack guard instead. `Some` means
+    /// those records are still out of the manager and armed as ephemerons.
+    /// Appended after the pinned layout; only the Context size grows.
+    automatic_retired_processes: Option<Vec<neovm_value::heap_types::ProcessId>>,
+    /// One frame whose bounded redisplay exhausted without a publishable
+    /// candidate. The transaction consumes the owned request after the
+    /// callback. This does not advance `accepted_serial` and does not publish
+    /// glyphs. Appended last so every earlier offset stays put.
+    no_safe_handled_frame: Option<neovm_value::display_vocab::FrameId>,
 }
 
 // A mutex does not make the host hooks, Rc leases or TLS views transferable.
@@ -4048,7 +4140,7 @@ pub(crate) enum LispExecution {
 #[derive(Clone, Copy, Debug)]
 struct GcRuntimeSettingsCache {
     gc_cons_threshold_bytes: usize,
-    gc_cons_percentage_scaled: Option<std::num::NonZeroU64>,
+    gc_cons_percentage: Option<f64>,
     memory_full: GcMemoryPressure,
     /// The four Lisp variables the threshold formula reads, resolved against
     /// the LIVE interner on every settings refresh (rare) instead of through
@@ -4214,7 +4306,7 @@ impl GcSettingSyms {
 const _: () = {
     assert!(std::mem::size_of::<Option<GcSettingSyms>>() == 16);
     assert!(std::mem::size_of::<GcMemoryPressure>() == 8);
-    assert!(std::mem::size_of::<GcRuntimeSettingsCache>() == 48);
+    assert!(std::mem::size_of::<GcRuntimeSettingsCache>() == 56);
     assert!(std::mem::align_of::<GcRuntimeSettingsCache>() == 8);
 };
 
@@ -4222,7 +4314,7 @@ impl Default for GcRuntimeSettingsCache {
     fn default() -> Self {
         Self {
             gc_cons_threshold_bytes: GC_DEFAULT_THRESHOLD_BYTES,
-            gc_cons_percentage_scaled: std::num::NonZeroU64::new(100_000),
+            gc_cons_percentage: Some(0.1),
             memory_full: GcMemoryPressure::Normal,
             syms: None,
             hash_test_accounting: HashTestGcAccountingSlot::default(),
@@ -4343,7 +4435,7 @@ pub(crate) fn finish_require_in_state(
     loaded_path: Option<&Path>,
 ) -> EvalResult {
     if features.contains(&sym_id) {
-        Ok(Value::symbol(name))
+        Ok(Value::from_sym_id(intern(name)))
     } else {
         let message = if let Some(path) = loaded_path {
             format!(
@@ -4978,7 +5070,8 @@ impl Context {
     }
 
     /// Whether lexical-binding is currently enabled.
-    pub fn lexical_binding(&self) -> bool {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn lexical_binding(&self) -> bool {
         lexenv_is_active(self.lexenv)
     }
 
@@ -5034,6 +5127,13 @@ impl Context {
             let limit = self::data::frame_alpha::lower_limit(value);
             if let Some(host) = self.display_host.as_mut() {
                 host.set_gui_frame_alpha_lower_limit(limit);
+            }
+        } else if sym_id == ns_confirm_quit_symbol() {
+            // AppKit cannot read evaluator-owned Lisp. Publish only the
+            // completed store's scalar truth value, including let/unlet;
+            // pre-store watcher failures never reach this boundary.
+            if let Some(host) = self.display_host.as_mut() {
+                host.set_ns_confirm_quit(value.is_truthy());
             }
         } else if sym_id == max_lisp_eval_depth_symbol()
             && let Some(depth) = value.as_fixnum()
@@ -5462,7 +5562,34 @@ impl Context {
 
     /// Evaluate a Lisp expression string. Convenience for tests.
     /// Reads via the Value-native reader and evaluates via eval_sub.
+    /// GNU's reader interns every symbol token into the current obarray as it
+    /// reads it (`Fintern`, `src/lread.c:4674-4709`). The Value-native reader
+    /// allocates canonical ids only, so callers that read source materialize
+    /// the same obarray side effect here. Without this, a spelling the
+    /// profile does not DEFSYM at startup (`fontsize` on Linux, `access` on
+    /// macOS) answers `intern-soft` nil even though Lisp has just read it.
+    fn intern_read_form_symbols(&mut self, forms: &[Value]) {
+        for form in forms {
+            self.obarray_mut().intern_member_symbols_in(*form);
+        }
+    }
+
+    /// Debug builds assert at entry to an outer door before touching TLS;
+    /// release builds enforce the same refusal inside `setup_thread_locals`
+    /// before the first TLS write. The armed test-fallback heap is not a
+    /// Context.
+    #[inline]
+    fn debug_assert_outer_door_heap(&self) {
+        debug_assert!(
+            !neovm_value::tagged::gc::tagged_heap_is_installed()
+                || neovm_value::tagged::gc::tagged_heap_is_current(&self.tagged_heap)
+                || neovm_value::tagged::gc::installed_slot_is_armed_test_fallback(),
+            "dormant Context: this thread's installed heap is not this Context"
+        );
+    }
+
     pub fn eval_str(&mut self, source: &str) -> Result<Value, EvalError> {
+        self.debug_assert_outer_door_heap();
         self.setup_thread_locals();
         let forms = super::value_reader::read_all(source, self.variables()).map_err(|e| {
             EvalError::signal(
@@ -5481,6 +5608,10 @@ impl Context {
         for form in &forms {
             self.push_specpdl_root(*form);
         }
+        // The reader interns as it reads (GNU `Fintern`); materialize that
+        // membership after the forms are rooted, because interning can
+        // allocate and collect.
+        self.intern_read_form_symbols(&forms);
         let mut result = Value::NIL;
         let mut error = None;
         for form in &forms {
@@ -5508,6 +5639,7 @@ impl Context {
     /// Evaluate a single Value form and return a public EvalError on failure.
     /// Evaluate a single Value form, mapping Flow errors to EvalError.
     pub fn eval_form(&mut self, form: Value) -> Result<Value, EvalError> {
+        self.debug_assert_outer_door_heap();
         self.setup_thread_locals();
         let eval_result = {
             let mut boundary = special_forms::EvalBoundaryRoots::enter(self);
@@ -5531,6 +5663,7 @@ impl Context {
     /// Legacy eval_value: delegates to eval_sub inside one evaluation
     /// boundary (GNU `Feval`: the frame's temp roots die when it returns).
     pub fn eval_value(&mut self, value: &Value) -> EvalResult {
+        self.debug_assert_outer_door_heap();
         if !neovm_value::tagged::gc::tagged_heap_is_current(&self.tagged_heap) {
             self.setup_thread_locals();
         }
@@ -5541,6 +5674,7 @@ impl Context {
     /// Evaluate all forms in a source string and return per-form results.
     /// Uses the Value-native reader.
     pub fn eval_str_each(&mut self, source: &str) -> Vec<Result<Value, EvalError>> {
+        self.debug_assert_outer_door_heap();
         self.setup_thread_locals();
         let forms = match super::value_reader::read_all(source, self.variables()) {
             Ok(f) => f,
@@ -5559,6 +5693,8 @@ impl Context {
         for form in &forms {
             self.push_specpdl_root(*form);
         }
+        // Reader interning happens after rooting: it can allocate and collect.
+        self.intern_read_form_symbols(&forms);
         let mut results = Vec::with_capacity(forms.len());
         for form in &forms {
             // Each form is one top-level evaluation: its root group ends when
@@ -5632,7 +5768,7 @@ impl Context {
     /// If `symbols-with-pos-enabled` and `val` is a symbol-with-pos,
     /// return the bare symbol. Otherwise return `val` unchanged.
     #[inline]
-    pub fn unwrap_symbol(&self, val: Value) -> Value {
+    pub(crate) fn unwrap_symbol(&self, val: Value) -> Value {
         self.symbol_mode().unwrap(val)
     }
 
@@ -5679,7 +5815,7 @@ impl Context {
     /// variable's own value answers instead (`thread_projection`).
     #[inline]
     #[doc(hidden)]
-    pub fn forwarded_buffer_obj_value(
+    pub(crate) fn forwarded_buffer_obj_value(
         &self,
         sym_id: SymId,
         sym: &neovm_value::symbol::LispSymbol,
@@ -5782,7 +5918,10 @@ impl Context {
     /// uninterned symbol identity, like Emacs's EQ-based Fassq on
     /// Vinternal_interpreter_environment).
     #[doc(hidden)]
-    pub fn lookup_symbol_value_by_id(&self, sym_id: SymId) -> Result<SymbolValueLookup, Flow> {
+    pub(crate) fn lookup_symbol_value_by_id(
+        &self,
+        sym_id: SymId,
+    ) -> Result<SymbolValueLookup, Flow> {
         // GNU eval.c checks the lexenv for the ORIGINAL symbol BEFORE
         // resolving variable aliases and does not rescan declared-special
         // flags on ordinary reads. Declared-special affects how bindings are
@@ -5812,7 +5951,7 @@ impl Context {
     }
 
     #[doc(hidden)]
-    pub fn find_symbol_value_by_id(&self, sym_id: SymId) -> Result<SymbolValueLookup, Flow> {
+    pub(crate) fn find_symbol_value_by_id(&self, sym_id: SymId) -> Result<SymbolValueLookup, Flow> {
         // Fast path — GNU `find_symbol_value`'s SYMBOL_PLAINVAL leaf: an
         // ordinary global with a bound plain cell answers from one slot
         // read. Aliases, localized/forwarded symbols, unbound cells (where
@@ -5852,6 +5991,11 @@ impl Context {
                     }
                 }
                 neovm_value::symbol::ValueCell::Forwarded(_) => {
+                    // GNU's `*-consed` DEFVAR_INTs live in the allocation
+                    // accounting; derive them before the generic cell load.
+                    if let Some(value) = self.derived_memory_use_read(sym_id) {
+                        return Ok(SymbolValueLookup::Bound(value));
+                    }
                     if let Some(lookup) = self.forwarded_buffer_obj_value(sym_id, sym) {
                         return Ok(lookup);
                     }
@@ -6852,7 +6996,11 @@ pub(crate) fn check_forwarded_unbind(
 impl Context {
     /// Call a registered subr value directly. Returns None if VALUE is not a
     /// fully registered subr.
-    pub fn dispatch_subr_value(&mut self, function: Value, args: Vec<Value>) -> Option<EvalResult> {
+    pub(crate) fn dispatch_subr_value(
+        &mut self,
+        function: Value,
+        args: Vec<Value>,
+    ) -> Option<EvalResult> {
         let sym_id = function.as_subr_id()?;
         let wrong_arity_callee = Value::from_sym_id(sym_id);
         self.dispatch_subr_value_internal(function, &args, wrong_arity_callee)
@@ -6861,7 +7009,12 @@ impl Context {
     /// Resolve a symbol identity to its canonical subr object and call it.
     /// Returns None if the symbol's canonical name has no registered subr.
     /// Supports uninterned symbols: falls back to canonical SymId via NameId lookup.
-    pub fn dispatch_subr_id(&mut self, sym_id: SymId, args: Vec<Value>) -> Option<EvalResult> {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn dispatch_subr_id(
+        &mut self,
+        sym_id: SymId,
+        args: Vec<Value>,
+    ) -> Option<EvalResult> {
         // Try the sym_id directly first
         let resolved = if lookup_global_subr_entry(sym_id).is_some() {
             sym_id
@@ -6876,7 +7029,7 @@ impl Context {
         self.dispatch_subr_value(function, args)
     }
 
-    pub fn dispatch_subr(&mut self, name: &str, args: Vec<Value>) -> Option<EvalResult> {
+    pub(crate) fn dispatch_subr(&mut self, name: &str, args: Vec<Value>) -> Option<EvalResult> {
         self.dispatch_subr_id(intern(name), args)
     }
 
@@ -7206,6 +7359,9 @@ impl Context {
                     }
                 }
                 SymbolRedirect::Forwarded => {
+                    if let Some(value) = self.derived_memory_use_read(resolved) {
+                        return Some(value);
+                    }
                     if let Some(lookup) = self.forwarded_buffer_obj_value(resolved, sym) {
                         return match lookup {
                             SymbolValueLookup::Bound(value) => Some(value),
@@ -7464,6 +7620,9 @@ mod macroexpand;
 
 mod admission;
 pub(crate) use admission::AdmissionError;
+#[doc(hidden)]
+pub mod activation;
+mod activation_owner;
 mod global_state;
 mod green;
 
@@ -7580,15 +7739,27 @@ pub mod command_loop;
 #[path = "tests/absent_fontset_generation_test.rs"]
 mod absent_fontset_generation_tests;
 
+#[cfg(test)]
+#[path = "tests/derived_counters_test.rs"]
+mod derived_counters_tests;
+
+#[cfg(test)]
+#[path = "tests/gc_rows_test.rs"]
+mod gc_rows_tests;
+
 #[doc(hidden)]
 pub mod redisplay_hooks;
 #[cfg(any(test, feature = "redisplay-test-policy", feature = "test-support"))]
 pub use neovm_edit::emacs_core::redisplay_policy::RedisplayHookPolicyGuard;
 #[doc(hidden)]
 pub use neovm_edit::emacs_core::redisplay_policy::gnu_redisplay_hooks_enabled;
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) use redisplay_hooks::RedisplayMiniGeometrySource;
 pub use redisplay_hooks::{
-    RedisplayMiniGeometryRequest, RedisplayMiniGeometrySource, RedisplayMiniPreparationFailure,
+    AuxiliaryRedisplayRefusal, DisplayMaintenanceOutcome, DisplayMaintenancePublication,
+    GuiBoundaryServiceActivity,
 };
+pub use redisplay_hooks::{RedisplayMiniGeometryRequest, RedisplayMiniPreparationFailure};
 
 mod vm_shared;
 
@@ -7602,6 +7773,7 @@ mod allocation_flow;
 pub(crate) use allocation_flow::AllocationFailureContextExt;
 #[cfg(feature = "test-support")]
 pub use allocation_flow::AllocationFailureContextExt;
+mod condition_admission;
 mod construct;
 mod dispatch_class;
 mod form_head_cache;
@@ -7619,6 +7791,13 @@ mod saved_state_scope_test;
 #[cfg(all(test, not(feature = "gc-memory-telemetry")))]
 #[path = "tests/weak_table_b8.rs"]
 mod weak_table_b8;
+
+/// The stopped major's weak sweep (E3 slice 1) and the serial stop keep the
+/// same weak-table entries. Omitted in telemetry builds: `supported` refuses
+/// the whole heap there, the refusal 0c0469595d pins.
+#[cfg(all(test, not(feature = "gc-memory-telemetry")))]
+#[path = "tests/weak_sweep_pin_test.rs"]
+mod weak_sweep_pin_tests;
 
 #[cfg(test)]
 #[path = "tests/admission_header_test.rs"]
@@ -7681,6 +7860,12 @@ mod var_fast_tests;
 mod watcher_redispatch_tests;
 
 #[cfg(test)]
+#[path = "tests/ephemeron_unwind_guard_test.rs"]
+mod ephemeron_unwind_guard_tests;
+#[cfg(test)]
+#[path = "tests/gc_elapsed_whole_cycle_test.rs"]
+mod gc_elapsed_whole_cycle_tests;
+#[cfg(test)]
 #[path = "tests/gc_sweep_cap_test.rs"]
 mod gc_sweep_cap_tests;
 
@@ -7695,6 +7880,17 @@ mod gc_atomic_slot_tests;
 #[cfg(test)]
 #[path = "tests/gc_tls_ownership_test.rs"]
 mod gc_tls_ownership_tests;
+
+#[cfg(test)]
+#[path = "tests/green_no_thread_census_tls_test.rs"]
+mod green_no_thread_census_tls_tests;
+
+#[cfg(test)]
+#[path = "tests/dormant_context_eval_test.rs"]
+mod dormant_context_eval_tests;
+
+pub mod parked_context;
+pub use parked_context::{ParkResumeError, ParkedContext};
 
 // The debug leaf guard: GC safe points, Lisp entries and binding pushes
 // refuse to run under a leaf builtin, and leaves leave state untouched.

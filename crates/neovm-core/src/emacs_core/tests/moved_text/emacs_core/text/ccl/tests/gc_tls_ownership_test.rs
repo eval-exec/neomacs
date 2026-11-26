@@ -38,7 +38,8 @@ fn gc_tls_ownership_ccl_new_heap_reset_drops_old_values() {
 
 #[test]
 fn gc_tls_ownership_ccl_excludes_another_live_heap() {
-    let mut first = crate::test_utils::new_context();
+    let first = crate::test_utils::new_context();
+    let parked_first = first.park_for_test();
     let mut second = crate::test_utils::new_context();
     let value = populate(&mut second);
     assert!(
@@ -46,6 +47,8 @@ fn gc_tls_ownership_ccl_excludes_another_live_heap() {
             .iter()
             .any(|root| root.bits() == value.bits())
     );
+    let parked_second = second.park_for_test();
+    let mut first = parked_first.resume_for_test().expect("resume first");
     assert!(
         roots(&first)
             .iter()
@@ -54,6 +57,8 @@ fn gc_tls_ownership_ccl_excludes_another_live_heap() {
         "GC roots contain a value belonging to another live Context"
     );
     first.gc_collect_exact();
+    drop(first);
+    let mut second = parked_second.resume_for_test().expect("resume second");
     second.setup_thread_locals();
     second.gc_collect_exact();
     assert!(second.tagged_heap().owns_heap_value_for_test(value));
@@ -78,10 +83,13 @@ fn gc_tls_ownership_ccl_obarray_is_retracted_on_unwind() {
 fn gc_tls_ownership_ccl_registration_follows_context_activation() {
     let mut first = crate::test_utils::new_context();
     let program = populate(&mut first);
+    let parked_first = first.park_for_test();
     let second = crate::test_utils::new_context();
     assert!(!is_registered_ccl_program(neovm_value::intern::intern(
         "gc-tls-owned-ccl"
     )));
+    let _parked_second = second.park_for_test();
+    let mut first = parked_first.resume_for_test().expect("resume first");
     first.setup_thread_locals();
     assert!(
         roots(&first)
@@ -94,7 +102,6 @@ fn gc_tls_ownership_ccl_registration_follows_context_activation() {
         builtin_ccl_program_p_impl(vec![Value::symbol("gc-tls-owned-ccl")]).unwrap(),
         Value::T
     );
-    drop(second);
 }
 
 #[test]

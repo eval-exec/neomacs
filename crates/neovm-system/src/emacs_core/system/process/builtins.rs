@@ -5,7 +5,7 @@
 
 use super::reap::ChildOwnershipIo;
 use super::*;
-use crate::emacs_core::process::SystemProcessExt;
+use crate::emacs_core::process::{ChildPipePollerExt, SystemProcessExt};
 use crate::emacs_core::wait::WaitContextExt;
 use neovm_edit::emacs_core::edit_host::EditHost;
 use neovm_eval::emacs_core::eval::data::process_state::StatusChangeSite;
@@ -26,7 +26,7 @@ fn process_signal_recipient(args: &[Value]) -> ProcessSignalRecipient {
 
 /// (internal-default-interrupt-process &optional PROCESS CURRENT-GROUP) -> process-or-nil
 #[doc(hidden)]
-pub fn builtin_internal_default_interrupt_process(
+pub(crate) fn builtin_internal_default_interrupt_process(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
@@ -61,7 +61,7 @@ pub(crate) fn builtin_internal_default_interrupt_process_impl(
 
 /// (internal-default-signal-process PROCESS SIGNAL &optional CURRENT-GROUP) -> int-or-nil
 #[doc(hidden)]
-pub fn builtin_internal_default_signal_process(
+pub(crate) fn builtin_internal_default_signal_process(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
@@ -89,6 +89,10 @@ pub(crate) fn builtin_internal_default_signal_process_impl(
     let signal_num = parse_signal_number(&args[1])?;
     match resolve_signal_process_target_in_state(processes, buffers, args.first())? {
         SignalProcessTarget::Process(id) => {
+            // Early child status: GNU's async handler has already reaped an
+            // exited child, so `p->alive` is 0 and `process_send_signal`
+            // returns -1 without a kill. Record the same before signalling.
+            processes.reap_observed_child(id);
             // `get_any_mut`, not `get_mut`: GNU's `CHECK_PROCESS` +
             // `XPROCESS (process)->pid` (src/process.c:7379-7382) does not ask
             // whether the process is still in `Vprocess_alist`.
@@ -105,9 +109,17 @@ pub(crate) fn builtin_internal_default_signal_process_impl(
             Ok(Value::fixnum(-1))
         }
         SignalProcessTarget::MissingNamedProcess => Ok(Value::NIL),
-        SignalProcessTarget::Pid(pid) => Ok(Value::fixnum(
-            sys::send_signal(pid, signal_num.into()) as i64,
-        )),
+        SignalProcessTarget::Pid(pid) => {
+            // A numeric pid that names one of this World's live children is
+            // reaped first, matching the handler: after the reap `kill` sees
+            // no process and returns -1, as GNU does.
+            if let Some(id) = processes.process_with_os_pid(pid) {
+                processes.reap_observed_child(id);
+            }
+            Ok(Value::fixnum(
+                sys::send_signal(pid, signal_num.into()) as i64
+            ))
+        }
     }
 }
 
@@ -285,7 +297,8 @@ pub(super) fn insert_default_process_buffer_payload(
 /// buffer at the process mark position (or end of buffer when mark is None).
 /// This matches GNU Emacs's `internal-default-process-filter` behavior.
 #[doc(hidden)]
-pub fn builtin_internal_default_process_filter(
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn builtin_internal_default_process_filter(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
@@ -318,7 +331,8 @@ pub fn builtin_internal_default_process_filter(
 
 /// (internal-default-process-sentinel PROCESS STRING) -> nil
 #[doc(hidden)]
-pub fn builtin_internal_default_process_sentinel(
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn builtin_internal_default_process_sentinel(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
@@ -354,13 +368,105 @@ pub fn builtin_internal_default_process_sentinel(
 /// supplies SNI and certificate hostname validation, while `:trustfiles`
 /// supplies additional PEM trust anchors.
 #[doc(hidden)]
-pub fn builtin_gnutls_boot(
+pub(crate) fn builtin_gnutls_boot(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
     expect_args("gnutls-boot", &args, 3)?;
     let id = resolve_process_object_or_wrong_type_any_in_manager(&eval.processes(), &args[0])?;
     let parameters = parse_gnutls_boot_parameters(args[1], args[2], eval.symbol_mode())?;
+    // GNU `Fgnutls_boot` (`src/gnutls.c:2083`) calls `emacs_gnutls_deinit`
+    // before allocating fresh credentials on any process that already has an
+    // active TLS session (both stage 9 `Ready` and stage 8 non-blocking
+    // `HandshakeTried`).  Never tear down a `BlockingOnStack` handshake so a
+    // recursive `gnutls-boot` from a timer/filter cannot corrupt an outer
+    // synchronous `finish_process_tls_handshake`.
+    if eval.processes().get(id).is_some_and(|proc| {
+        proc.live_io().tls_stream().is_some()
+            && proc.tls_handshake_owner() != TlsHandshakeOwner::BlockingOnStack
+    }) {
+        deinit_process_tls(eval.processes_mut(), id)?;
+    }
+
+    // GNU `emacs_gnutls_handshake` (`src/gnutls.c:634`) runs non-blocking when
+    // the network process was created with `:nowait t` and `gnutls-boot` was
+    // NOT passed a non-nil `:complete-negotiation`.
+    let is_non_blocking = !parameters.complete_negotiation
+        && eval.processes().get(id).is_some_and(|proc| {
+            process_contact_plist_get(proc.childp, ProcessKeyword::Nowait.value()).is_truthy()
+        });
+
+    if is_non_blocking {
+        let has_pending_connect = eval
+            .processes()
+            .get(id)
+            .is_some_and(|proc| proc.live_io().pending_network_connect().is_some());
+        begin_process_tls::<RustlsBackend>(
+            eval.processes_mut(),
+            id,
+            &parameters.client,
+            TlsHandshakeOwner::NonBlockingAsync,
+            "gnutls-boot",
+            signal_gnutls_boot_error,
+        )?;
+        // GNU `src/process.c:5438-5439`: while a `:nowait` TCP connect is still
+        // pending (`NON_BLOCKING_CONNECT_FD`), do not start TLS handshake I/O;
+        // keep writable interest armed and return `gnutls-e-again`.
+        if has_pending_connect {
+            eval.processes()
+                .set_tls_handshake_interest(id, Some(TlsHandshakeInterest::Writable));
+            return Ok(Value::symbol("gnutls-e-again"));
+        }
+        let progress = {
+            let proc = eval
+                .processes_mut()
+                .get_mut(id)
+                .ok_or_else(|| signal("error", vec![Value::string("Process not found")]))?;
+            let stream = proc.live_io_mut().tls_stream_mut().ok_or_else(|| {
+                signal(
+                    "error",
+                    vec![Value::string("TLS connection closed during negotiation")],
+                )
+            })?;
+            stream.advance_handshake()
+        };
+        return match progress {
+            Ok(TlsHandshakeProgress::Ready) => {
+                let accepts_output = {
+                    let proc = eval
+                        .processes_mut()
+                        .get_mut(id)
+                        .ok_or_else(|| signal("error", vec![Value::string("Process not found")]))?;
+                    proc.gnutls_initstage = GnutlsInitStage::Ready;
+                    proc.set_tls_handshake_owner(TlsHandshakeOwner::None);
+                    process_filter_accepts_output(proc)
+                };
+                eval.processes()
+                    .set_process_output_read_interest(id, accepts_output);
+                eval.processes_mut().flush_process_write_queue(id)?;
+                Ok(Value::T)
+            }
+            Ok(TlsHandshakeProgress::Pending(interest)) => {
+                eval.processes()
+                    .set_tls_handshake_interest(id, Some(interest));
+                Ok(Value::symbol("gnutls-e-again"))
+            }
+            Err(err) => {
+                // GNU `Fgnutls_boot` (`src/gnutls.c:2301-2303`) returns the
+                // negative GnuTLS error code directly without closing or
+                // deleting the process, leaving initstage at `HandshakeTried`
+                // (8) so a subsequent `gnutls-deinit` can still unwrap the
+                // underlying socket. Clear ownership and disarm handshake
+                // polling so wait loops do not spin on the failed session.
+                if let Some(proc) = eval.processes_mut().get_mut(id) {
+                    proc.set_tls_handshake_owner(TlsHandshakeOwner::None);
+                }
+                eval.processes().set_tls_handshake_interest(id, None);
+                Ok(Value::fixnum(nonblocking_gnutls_boot_error_code(&err)))
+            }
+        };
+    }
+
     upgrade_process_to_tls::<RustlsBackend>(
         eval,
         id,
@@ -373,7 +479,7 @@ pub fn builtin_gnutls_boot(
 }
 
 #[doc(hidden)]
-pub fn builtin_gnutls_asynchronous_parameters(
+pub(crate) fn builtin_gnutls_asynchronous_parameters(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
@@ -388,7 +494,8 @@ pub fn builtin_gnutls_asynchronous_parameters(
 }
 
 #[doc(hidden)]
-pub fn builtin_gnutls_bye(
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn builtin_gnutls_bye(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
@@ -398,7 +505,7 @@ pub fn builtin_gnutls_bye(
         .processes_mut()
         .get_mut(id)
         .ok_or_else(|| signal("error", vec![Value::string("Process not found")]))?;
-    let Some(tls_stream) = proc.live_io.tls_stream.as_mut() else {
+    let Some(tls_stream) = proc.live_io_mut().tls_stream_mut() else {
         return Ok(Value::NIL);
     };
     match tls_stream.send_close_notify(args[1].is_nil()) {
@@ -407,28 +514,55 @@ pub fn builtin_gnutls_bye(
     }
 }
 
+pub(super) fn deinit_process_tls(processes: &mut ProcessManager, id: ProcessId) -> EvalResult {
+    let proc = processes
+        .get_mut(id)
+        .ok_or_else(|| signal("error", vec![Value::string("Process not found")]))?;
+    // GNU `emacs_gnutls_deinit` (`src/gnutls.c:939-977`) strips only the TLS
+    // session/credentials and lowers the initstage to `GNUTLS_STAGE_CALLBACKS`
+    // when `>= GNUTLS_STAGE_INIT`, leaving the underlying TCP socket open and
+    // monitored without flushing pending writes or clearing
+    // `gnutls_boot_parameters`.
+    //
+    // `take_tls_stream` runs `PollRegistration::into_inner` to unregister the
+    // TLS handle from the poller before unwrapping the `TcpStream`; restoring
+    // `NetworkSocket::TcpStream` and calling `set_process_output_read_interest`
+    // re-registers the plaintext socket through the same `PollRegistration`
+    // discipline.
+    let was_pending_handshake = proc.gnutls_initstage == GnutlsInitStage::HandshakeTried;
+    let Some(tls_stream) = proc.live_io_mut().take_tls_stream() else {
+        return Ok(Value::NIL);
+    };
+    let tcp_stream = tls_stream.into_tcp_stream();
+    proc.live_io_mut()
+        .set_network_socket(Some(NetworkSocket::TcpStream(tcp_stream)));
+    proc.set_tls_polling(TlsPolling::Enabled);
+    // Data queued while an unverified TLS handshake was pending was intended
+    // for encrypted delivery and must never be transmitted in plaintext after
+    // stripping TLS.
+    if was_pending_handshake {
+        proc.write_queue = Value::NIL;
+    }
+    if i64::from(proc.gnutls_initstage) >= i64::from(GnutlsInitStage::Init) {
+        proc.gnutls_initstage = GnutlsInitStage::Callbacks;
+    }
+    let accepts_output = process_filter_accepts_output(proc);
+    processes.set_process_output_read_interest(id, accepts_output);
+    Ok(Value::T)
+}
+
 #[doc(hidden)]
-pub fn builtin_gnutls_deinit(
+pub(crate) fn builtin_gnutls_deinit(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
     expect_args("gnutls-deinit", &args, 1)?;
     let id = resolve_process_object_or_wrong_type_any_in_manager(&eval.processes(), &args[0])?;
-    let proc = eval
-        .processes_mut()
-        .get_mut(id)
-        .ok_or_else(|| signal("error", vec![Value::string("Process not found")]))?;
-    if proc.live_io.tls_stream.take().is_some() {
-        proc.gnutls_initstage = GnutlsInitStage::Callbacks;
-        proc.gnutls_boot_parameters = Value::NIL;
-        Ok(Value::T)
-    } else {
-        Ok(Value::NIL)
-    }
+    deinit_process_tls(eval.processes_mut(), id)
 }
 
 #[doc(hidden)]
-pub fn builtin_gnutls_get_initstage(
+pub(crate) fn builtin_gnutls_get_initstage(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
@@ -436,13 +570,13 @@ pub fn builtin_gnutls_get_initstage(
     let id = resolve_process_object_or_wrong_type_any_in_manager(&eval.processes(), &args[0])?;
     let proc = eval
         .processes()
-        .get(id)
+        .get_any(id)
         .ok_or_else(|| signal("error", vec![Value::string("Process not found")]))?;
     Ok(Value::fixnum(i64::from(proc.gnutls_initstage)))
 }
 
 #[doc(hidden)]
-pub fn builtin_gnutls_peer_status(
+pub(crate) fn builtin_gnutls_peer_status(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
@@ -454,9 +588,8 @@ pub fn builtin_gnutls_peer_status(
         .ok_or_else(|| signal("error", vec![Value::string("Process not found")]))?;
     if proc.gnutls_initstage == GnutlsInitStage::Ready {
         Ok(proc
-            .live_io
-            .tls_stream
-            .as_ref()
+            .live_io()
+            .tls_stream()
             .map(|tls| gnutls_peer_status_to_value(&tls.peer_status()))
             .unwrap_or(Value::NIL))
     } else {
@@ -470,7 +603,7 @@ pub fn builtin_gnutls_peer_status(
 /// native TLS backend. This is intentionally separate from GNU's `gnutls-*`
 /// API: rustls provides TLS transport, not libgnutls semantics.
 #[doc(hidden)]
-pub fn builtin_neomacs_open_tls_stream(
+pub(crate) fn builtin_neomacs_open_tls_stream(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
@@ -508,7 +641,14 @@ pub(super) fn upgrade_process_to_tls<B: TlsClientBackend>(
     operation: &str,
     map_error: fn(TlsBackendError) -> Flow,
 ) -> Result<(), Flow> {
-    begin_process_tls::<B>(eval.processes_mut(), id, parameters, operation, map_error)?;
+    begin_process_tls::<B>(
+        eval.processes_mut(),
+        id,
+        parameters,
+        TlsHandshakeOwner::BlockingOnStack,
+        operation,
+        map_error,
+    )?;
     eval.finish_process_tls_handshake(id, map_error)
 }
 
@@ -516,6 +656,7 @@ pub(super) fn begin_process_tls<B: TlsClientBackend>(
     processes: &mut ProcessManager,
     id: ProcessId,
     parameters: &TlsClientParameters,
+    handshake_owner: TlsHandshakeOwner,
     operation: &str,
     map_error: fn(TlsBackendError) -> Flow,
 ) -> Result<(), Flow> {
@@ -530,43 +671,72 @@ pub(super) fn begin_process_tls<B: TlsClientBackend>(
         ));
     }
 
-    // Take the plain TCP stream; it will be owned by the TLS stream.
-    let tcp_stream = match proc.live_io.network_socket.take() {
-        Some(NetworkSocket::TcpStream(stream)) => stream,
-        Some(other) => {
-            proc.live_io.network_socket = Some(other);
-            return Err(signal(
+    if !matches!(
+        proc.live_io().network_socket().map(|s| &**s),
+        Some(NetworkSocket::TcpStream(_))
+    ) {
+        return match proc.live_io().network_socket() {
+            Some(_) => Err(signal(
                 "error",
                 vec![Value::string(format!(
                     "{operation}: process is not a TCP stream"
                 ))],
-            ));
-        }
-        None => {
-            return Err(signal(
+            )),
+            None => Err(signal(
                 "error",
                 vec![Value::string(format!(
                     "{operation}: no socket (already TLS or closed)"
                 ))],
-            ));
-        }
+            )),
+        };
+    }
+
+    // `take_network_socket` runs `PollRegistration::into_inner`, deleting the
+    // plain TCP socket from its poller before transferring ownership into
+    // `B::start_client` (so an `Err` drops an already-unregistered stream).
+    let Some(NetworkSocket::TcpStream(tcp_stream)) = proc.live_io_mut().take_network_socket()
+    else {
+        return Err(signal(
+            "error",
+            vec![Value::string(format!(
+                "{operation}: process is not a TCP stream"
+            ))],
+        ));
     };
 
     proc.gnutls_initstage = GnutlsInitStage::HandshakeTried;
     let tls_stream = match B::start_client(tcp_stream, parameters) {
         Ok(stream) => stream,
         Err(error) => {
-            // TCP ownership has transferred; a failed configuration cannot
-            // leave an apparently live process without any transport.
+            // TCP ownership has transferred (and was already unregistered from
+            // the poller above); a failed configuration cannot leave an
+            // apparently live process without any transport.
             processes.delete_process(id);
             return Err(map_error(error));
         }
     };
 
-    // Store the TLS stream. The poller still watches the underlying fd
-    // (which is the same fd that was registered for the plain socket).
-    proc.live_io.tls_stream = Some(tls_stream);
+    let has_pending_connect = proc.live_io().pending_network_connect().is_some();
+    proc.live_io_mut().set_tls_stream(Some(tls_stream));
+    proc.set_tls_handshake_owner(handshake_owner);
+    if has_pending_connect {
+        processes.set_tls_handshake_interest(id, Some(TlsHandshakeInterest::Writable));
+    } else {
+        let accepts_output = process_filter_accepts_output(proc);
+        processes.set_process_output_read_interest(id, accepts_output);
+    }
     Ok(())
+}
+
+fn nonblocking_gnutls_boot_error_code(err: &TlsBackendError) -> i64 {
+    match err {
+        TlsBackendError::UnexpectedEof => -9, // GNUTLS_E_UNEXPECTED_PACKET_LENGTH
+        TlsBackendError::Protocol(_) => -15,  // GNUTLS_E_UNEXPECTED_PACKET
+        TlsBackendError::Io(_) => -54,        // GNUTLS_E_PULL_ERROR
+        TlsBackendError::InvalidHostname(_)
+        | TlsBackendError::TrustFile { .. }
+        | TlsBackendError::Connect(_) => -10, // GNUTLS_E_INVALID_SESSION
+    }
 }
 
 pub(super) fn signal_gnutls_boot_error(err: TlsBackendError) -> Flow {
@@ -574,6 +744,13 @@ pub(super) fn signal_gnutls_boot_error(err: TlsBackendError) -> Flow {
         TlsBackendError::InvalidHostname(_)
         | TlsBackendError::TrustFile { .. }
         | TlsBackendError::Connect(_) => signal("error", vec![Value::string(err.to_string())]),
+        TlsBackendError::Protocol(err) => signal(
+            "gnutls-error",
+            vec![
+                Value::fixnum(-15),
+                Value::string(format!("TLS handshake: {err}")),
+            ],
+        ),
         TlsBackendError::UnexpectedEof => signal(
             "gnutls-error",
             vec![
@@ -606,7 +783,8 @@ pub use neovm_eval::emacs_core::print::builtin_print_preprocess;
 /// (window-adjust-process-window-size-smallest PROCESS WINDOW) -> nil
 /// (format-network-address ADDRESS &optional OMIT-PORT) -> string-or-nil
 #[doc(hidden)]
-pub fn builtin_format_network_address(
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn builtin_format_network_address(
     _eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
@@ -658,7 +836,7 @@ pub(crate) fn builtin_format_network_address_impl(args: Vec<Value>) -> EvalResul
 
 /// (network-interface-list &optional FULL FAMILY) -> interface-list
 #[doc(hidden)]
-pub fn builtin_network_interface_list(
+pub(crate) fn builtin_network_interface_list(
     _eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
@@ -723,7 +901,7 @@ pub(crate) fn builtin_network_interface_list_impl(args: Vec<Value>) -> EvalResul
 
 /// (network-interface-info IFNAME) -> interface-info-or-nil
 #[doc(hidden)]
-pub fn builtin_network_interface_info(
+pub(crate) fn builtin_network_interface_info(
     _eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
@@ -787,7 +965,7 @@ pub(crate) fn builtin_network_interface_info_impl(args: Vec<Value>) -> EvalResul
 
 /// (network-lookup-address-info NAME &optional FAMILY HINTS) -> address-list
 #[doc(hidden)]
-pub fn builtin_network_lookup_address_info(
+pub(crate) fn builtin_network_lookup_address_info(
     _eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
@@ -832,7 +1010,7 @@ pub(crate) fn builtin_network_lookup_address_info_impl(args: Vec<Value>) -> Eval
 
 /// (signal-names) -> list-of-signal-name-strings
 #[doc(hidden)]
-pub fn builtin_signal_names(
+pub(crate) fn builtin_signal_names(
     _eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
@@ -857,7 +1035,7 @@ pub(crate) fn builtin_signal_names_impl(args: Vec<Value>) -> EvalResult {
 
 /// (list-system-processes) -> process-id-list
 #[doc(hidden)]
-pub fn builtin_list_system_processes(
+pub(crate) fn builtin_list_system_processes(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
@@ -886,7 +1064,7 @@ pub(crate) fn builtin_list_system_processes_impl(args: Vec<Value>) -> EvalResult
 
 /// (num-processors &optional QUERY) -> integer
 #[doc(hidden)]
-pub fn builtin_num_processors(
+pub(crate) fn builtin_num_processors(
     _eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
@@ -1095,7 +1273,8 @@ pub(super) fn connect_network_process_at_explicit_address(
                         proc.thread = current_thread_handle(threads);
                         proc.plist = plist_val;
                         proc.status = ProcessStatusSymbol::Open.value();
-                        proc.live_io.network_socket = Some(NetworkSocket::UdpSocket(socket));
+                        proc.live_io_mut()
+                            .set_network_socket(Some(NetworkSocket::UdpSocket(socket)));
                         proc.datagram_socket_addr = datagram_socket_addr;
                         proc.datagram_address = datagram_address;
                         if !filter_val.is_nil() {
@@ -1151,7 +1330,8 @@ pub(super) fn connect_network_process_at_explicit_address(
                 let (processes, threads, buffers) = eval.processes_threads_and_buffers_mut();
                 processes.sync_process_mark(buffers, id)?;
                 if let Some(proc) = processes.get_mut(id) {
-                    proc.live_io.network_socket = Some(NetworkSocket::UdpSocket(socket));
+                    proc.live_io_mut()
+                        .set_network_socket(Some(NetworkSocket::UdpSocket(socket)));
                     proc.datagram_socket_addr = Some(addr);
                     proc.datagram_address = socket_addr_to_lisp_value(addr);
                     proc.status = ProcessStatusSymbol::Open.value();
@@ -1226,7 +1406,8 @@ pub(super) fn connect_network_process_at_explicit_address(
                     proc.childp = contact;
                     proc.thread = current_thread_handle(threads);
                     proc.plist = plist_val;
-                    proc.live_io.network_socket = Some(NetworkSocket::TcpListener(listener));
+                    proc.live_io_mut()
+                        .set_network_socket(Some(NetworkSocket::TcpListener(listener)));
                     if !filter_val.is_nil() {
                         proc.filter = filter_val;
                         proc.childp = process_contact_plist_put(
@@ -1300,13 +1481,12 @@ pub(super) fn connect_network_process_at_explicit_address(
                     match start {
                         PendingNetworkConnectStart::Started(started) => {
                             let local_addr = started.stream.local_addr().ok();
-                            proc.live_io.network_socket =
-                                Some(NetworkSocket::TcpStream(started.stream));
-                            proc.live_io.pending_network_connect =
-                                Some(PendingNetworkConnect::Tcp {
-                                    remaining_addrs: started.remaining_addrs,
-                                    socket_options: socket_options.clone(),
-                                });
+                            proc.live_io_mut()
+                                .set_network_socket(Some(NetworkSocket::TcpStream(started.stream)));
+                            proc.set_pending_network_connect(Some(PendingNetworkConnect::Tcp {
+                                remaining_addrs: started.remaining_addrs,
+                                socket_options: socket_options.clone(),
+                            }));
                             ProcessManager::update_tcp_client_contact(
                                 proc,
                                 started.remote_addr,
@@ -1317,7 +1497,7 @@ pub(super) fn connect_network_process_at_explicit_address(
                             proc.status = process_status_failed_value(code);
                         }
                     }
-                    if proc.live_io.pending_network_connect.is_some() {
+                    if proc.live_io().pending_network_connect().is_some() {
                         proc.gnutls_boot_parameters = tls_parameters_value;
                     }
                     apply_connection_process_flags(proc, noquery, stop);
@@ -1325,7 +1505,7 @@ pub(super) fn connect_network_process_at_explicit_address(
                 if eval
                     .processes()
                     .get(id)
-                    .is_some_and(|proc| proc.live_io.pending_network_connect.is_some())
+                    .is_some_and(|proc| proc.live_io().pending_network_connect().is_some())
                 {
                     eval.processes().register_socket_writable_fd(id).ok();
                 }
@@ -1354,7 +1534,8 @@ pub(super) fn connect_network_process_at_explicit_address(
                 )?;
             }
             if let Some(proc) = processes.get_mut(id) {
-                proc.live_io.network_socket = Some(NetworkSocket::TcpStream(stream));
+                proc.live_io_mut()
+                    .set_network_socket(Some(NetworkSocket::TcpStream(stream)));
                 proc.status = process_status_run_value();
                 proc.childp = contact;
                 proc.plist = plist_val;
@@ -1441,7 +1622,8 @@ pub(super) fn connect_network_process_at_explicit_address(
                         proc.thread = current_thread_handle(threads);
                         proc.plist = plist_val;
                         proc.status = ProcessStatusSymbol::Open.value();
-                        proc.live_io.network_socket = Some(NetworkSocket::UnixDatagram(socket));
+                        proc.live_io_mut()
+                            .set_network_socket(Some(NetworkSocket::UnixDatagram(socket)));
                         proc.datagram_address = datagram_address;
                         proc.datagram_unix_path = datagram_unix_path;
                         if !filter_val.is_nil() {
@@ -1490,7 +1672,8 @@ pub(super) fn connect_network_process_at_explicit_address(
                 let (processes, threads, buffers) = eval.processes_threads_and_buffers_mut();
                 processes.sync_process_mark(buffers, id)?;
                 if let Some(proc) = processes.get_mut(id) {
-                    proc.live_io.network_socket = Some(NetworkSocket::UnixDatagram(socket));
+                    proc.live_io_mut()
+                        .set_network_socket(Some(NetworkSocket::UnixDatagram(socket)));
                     proc.status = ProcessStatusSymbol::Open.value();
                     proc.childp = contact;
                     proc.plist = plist_val;
@@ -1549,8 +1732,8 @@ pub(super) fn connect_network_process_at_explicit_address(
                         proc.childp = contact;
                         proc.thread = current_thread_handle(threads);
                         proc.plist = plist_val;
-                        proc.live_io.network_socket =
-                            Some(NetworkSocket::SeqpacketListener(listener));
+                        proc.live_io_mut()
+                            .set_network_socket(Some(NetworkSocket::SeqpacketListener(listener)));
                         if !filter_val.is_nil() {
                             proc.filter = filter_val;
                             proc.childp = process_contact_plist_put(
@@ -1600,7 +1783,8 @@ pub(super) fn connect_network_process_at_explicit_address(
                 let (processes, threads, buffers) = eval.processes_threads_and_buffers_mut();
                 processes.sync_process_mark(buffers, id)?;
                 if let Some(proc) = processes.get_mut(id) {
-                    proc.live_io.network_socket = Some(NetworkSocket::SeqpacketStream(socket));
+                    proc.live_io_mut()
+                        .set_network_socket(Some(NetworkSocket::SeqpacketStream(socket)));
                     proc.status = process_status_run_value();
                     proc.childp = contact;
                     proc.plist = plist_val;
@@ -1652,14 +1836,18 @@ pub(super) fn connect_network_process_at_explicit_address(
                     proc.childp = contact;
                     proc.thread = current_thread_handle(threads);
                     proc.plist = plist_val;
-                    proc.live_io.network_socket = Some(NetworkSocket::UnixListener(listener));
+                    proc.live_io_mut()
+                        .set_network_socket(Some(NetworkSocket::UnixListener(listener)));
                     {
                         use std::os::unix::fs::MetadataExt;
                         let metadata = std::fs::symlink_metadata(&path).map_err(|error| {
                             network_socket_io_error("Cannot identify server socket", error)
                         })?;
-                        proc.live_io.unix_listener_path =
-                            Some((path.clone(), metadata.dev(), metadata.ino()));
+                        proc.set_unix_listener_path(Some((
+                            path.clone(),
+                            metadata.dev(),
+                            metadata.ino(),
+                        )));
                     }
                     if !filter_val.is_nil() {
                         proc.filter = filter_val;
@@ -1735,9 +1923,9 @@ pub(super) fn connect_network_process_at_explicit_address(
                     }
                     match start {
                         Ok(stream) => {
-                            proc.live_io.network_socket = Some(NetworkSocket::UnixStream(stream));
-                            proc.live_io.pending_network_connect =
-                                Some(PendingNetworkConnect::Local);
+                            proc.live_io_mut()
+                                .set_network_socket(Some(NetworkSocket::UnixStream(stream)));
+                            proc.set_pending_network_connect(Some(PendingNetworkConnect::Local));
                         }
                         Err(err) => {
                             proc.status = process_status_failed_value(io_error_status_code(&err));
@@ -1748,7 +1936,7 @@ pub(super) fn connect_network_process_at_explicit_address(
                 if eval
                     .processes()
                     .get(id)
-                    .is_some_and(|proc| proc.live_io.pending_network_connect.is_some())
+                    .is_some_and(|proc| proc.live_io().pending_network_connect().is_some())
                 {
                     eval.processes().register_socket_writable_fd(id).ok();
                 }
@@ -1761,7 +1949,8 @@ pub(super) fn connect_network_process_at_explicit_address(
             let (processes, threads, buffers) = eval.processes_threads_and_buffers_mut();
             processes.sync_process_mark(buffers, id)?;
             if let Some(proc) = processes.get_mut(id) {
-                proc.live_io.network_socket = Some(NetworkSocket::UnixStream(stream));
+                proc.live_io_mut()
+                    .set_network_socket(Some(NetworkSocket::UnixStream(stream)));
                 proc.status = process_status_run_value();
                 proc.childp = contact;
                 proc.plist = plist_val;
@@ -1820,16 +2009,16 @@ pub(super) fn connect_datagram_network_process(
     server: bool,
     noquery: bool,
     stop: bool,
-    socket_type: NetworkSocketType,
     socket_options: Vec<NetworkSocketOptionSpec>,
 ) -> EvalResult {
-    let port = parse_network_service_port(&service, server, socket_type)?;
+    let service_str = network_service_to_addrinfo_string(&service)?;
     let host_str = host
         .clone()
         .unwrap_or_else(|| family.loopback_host().to_string());
     if server {
         let effective_options = tcp_server_socket_options(&socket_options);
-        let socket = bind_udp_socket_host(host_str.as_str(), port, family, &effective_options)?;
+        let socket =
+            bind_udp_socket_host(host_str.as_str(), &service_str, family, &effective_options)?;
         let local_addr = socket.local_addr().map_err(|e| {
             signal(
                 LispCondition::FileError,
@@ -1858,7 +2047,8 @@ pub(super) fn connect_datagram_network_process(
             proc.thread = current_thread_handle(threads);
             proc.plist = plist_val;
             proc.status = ProcessStatusSymbol::Open.value();
-            proc.live_io.network_socket = Some(NetworkSocket::UdpSocket(socket));
+            proc.live_io_mut()
+                .set_network_socket(Some(NetworkSocket::UdpSocket(socket)));
             proc.datagram_address = zero_datagram;
             proc.datagram_socket_addr = None;
             if !filter_val.is_nil() {
@@ -1893,7 +2083,7 @@ pub(super) fn connect_datagram_network_process(
     }
 
     let (socket, remote_addr) =
-        connect_udp_socket_host(host_str.as_str(), port, family, &socket_options)?;
+        connect_udp_socket_host(host_str.as_str(), &service_str, family, &socket_options)?;
     contact = process_contact_plist_put(
         contact,
         ProcessKeyword::Remote.value(),
@@ -1909,7 +2099,8 @@ pub(super) fn connect_datagram_network_process(
     let (processes, threads, buffers) = eval.processes_threads_and_buffers_mut();
     processes.sync_process_mark(buffers, id)?;
     if let Some(proc) = processes.get_mut(id) {
-        proc.live_io.network_socket = Some(NetworkSocket::UdpSocket(socket));
+        proc.live_io_mut()
+            .set_network_socket(Some(NetworkSocket::UdpSocket(socket)));
         proc.datagram_socket_addr = Some(remote_addr);
         proc.datagram_address = socket_addr_to_lisp_value(remote_addr);
         proc.status = ProcessStatusSymbol::Open.value();
@@ -1962,17 +2153,16 @@ pub(super) fn listen_stream_network_process(
     noquery: bool,
     stop: bool,
     server_backlog: Option<i32>,
-    socket_type: NetworkSocketType,
     socket_options: Vec<NetworkSocketOptionSpec>,
 ) -> EvalResult {
-    let port = parse_network_service_port(&service, true, socket_type)?;
+    let service_str = network_service_to_addrinfo_string(&service)?;
     let host_str = host
         .clone()
         .unwrap_or_else(|| family.loopback_host().to_string());
     let effective_options = tcp_server_socket_options(&socket_options);
     let listener = bind_tcp_listener_host(
         host_str.as_str(),
-        port,
+        &service_str,
         family,
         server_backlog.unwrap_or(5),
         &effective_options,
@@ -1995,7 +2185,8 @@ pub(super) fn listen_stream_network_process(
         proc.childp = contact;
         proc.thread = current_thread_handle(threads);
         proc.plist = plist_val;
-        proc.live_io.network_socket = Some(NetworkSocket::TcpListener(listener));
+        proc.live_io_mut()
+            .set_network_socket(Some(NetworkSocket::TcpListener(listener)));
         if !filter_val.is_nil() {
             proc.filter = filter_val;
             proc.childp = process_contact_plist_put(
@@ -2129,7 +2320,8 @@ pub(super) fn connect_local_socket_process(
                     proc.thread = current_thread_handle(threads);
                     proc.plist = plist_val;
                     proc.status = ProcessStatusSymbol::Open.value();
-                    proc.live_io.network_socket = Some(NetworkSocket::UnixDatagram(socket));
+                    proc.live_io_mut()
+                        .set_network_socket(Some(NetworkSocket::UnixDatagram(socket)));
                     proc.datagram_address = datagram_address;
                     proc.datagram_unix_path = datagram_unix_path;
                     if !filter_val.is_nil() {
@@ -2181,7 +2373,8 @@ pub(super) fn connect_local_socket_process(
             let (processes, threads, buffers) = eval.processes_threads_and_buffers_mut();
             processes.sync_process_mark(buffers, id)?;
             if let Some(proc) = processes.get_mut(id) {
-                proc.live_io.network_socket = Some(NetworkSocket::UnixDatagram(socket));
+                proc.live_io_mut()
+                    .set_network_socket(Some(NetworkSocket::UnixDatagram(socket)));
                 proc.status = ProcessStatusSymbol::Open.value();
                 proc.childp = contact;
                 proc.plist = plist_val;
@@ -2241,7 +2434,8 @@ pub(super) fn connect_local_socket_process(
                     proc.childp = contact;
                     proc.thread = current_thread_handle(threads);
                     proc.plist = plist_val;
-                    proc.live_io.network_socket = Some(NetworkSocket::SeqpacketListener(listener));
+                    proc.live_io_mut()
+                        .set_network_socket(Some(NetworkSocket::SeqpacketListener(listener)));
                     if !filter_val.is_nil() {
                         proc.filter = filter_val;
                         proc.childp = process_contact_plist_put(
@@ -2293,7 +2487,8 @@ pub(super) fn connect_local_socket_process(
             let (processes, threads, buffers) = eval.processes_threads_and_buffers_mut();
             processes.sync_process_mark(buffers, id)?;
             if let Some(proc) = processes.get_mut(id) {
-                proc.live_io.network_socket = Some(NetworkSocket::SeqpacketStream(socket));
+                proc.live_io_mut()
+                    .set_network_socket(Some(NetworkSocket::SeqpacketStream(socket)));
                 proc.status = process_status_run_value();
                 proc.childp = contact;
                 proc.plist = plist_val;
@@ -2350,14 +2545,18 @@ pub(super) fn connect_local_socket_process(
                 proc.childp = contact;
                 proc.thread = current_thread_handle(threads);
                 proc.plist = plist_val;
-                proc.live_io.network_socket = Some(NetworkSocket::UnixListener(listener));
+                proc.live_io_mut()
+                    .set_network_socket(Some(NetworkSocket::UnixListener(listener)));
                 {
                     use std::os::unix::fs::MetadataExt;
                     let metadata = std::fs::symlink_metadata(&service_path).map_err(|error| {
                         network_socket_io_error("Cannot identify server socket", error)
                     })?;
-                    proc.live_io.unix_listener_path =
-                        Some((service_path.clone(), metadata.dev(), metadata.ino()));
+                    proc.set_unix_listener_path(Some((
+                        service_path.clone(),
+                        metadata.dev(),
+                        metadata.ino(),
+                    )));
                 }
                 if !filter_val.is_nil() {
                     proc.filter = filter_val;
@@ -2451,8 +2650,9 @@ pub(super) fn connect_local_socket_process(
                 }
                 match start {
                     Ok(stream) => {
-                        proc.live_io.network_socket = Some(NetworkSocket::UnixStream(stream));
-                        proc.live_io.pending_network_connect = Some(PendingNetworkConnect::Local);
+                        proc.live_io_mut()
+                            .set_network_socket(Some(NetworkSocket::UnixStream(stream)));
+                        proc.set_pending_network_connect(Some(PendingNetworkConnect::Local));
                     }
                     Err(err) => {
                         proc.status = process_status_failed_value(io_error_status_code(&err));
@@ -2463,7 +2663,7 @@ pub(super) fn connect_local_socket_process(
             if eval
                 .processes()
                 .get(id)
-                .is_some_and(|proc| proc.live_io.pending_network_connect.is_some())
+                .is_some_and(|proc| proc.live_io().pending_network_connect().is_some())
             {
                 eval.processes().register_socket_writable_fd(id).ok();
             }
@@ -2476,7 +2676,8 @@ pub(super) fn connect_local_socket_process(
         let (processes, threads, buffers) = eval.processes_threads_and_buffers_mut();
         processes.sync_process_mark(buffers, id)?;
         if let Some(proc) = processes.get_mut(id) {
-            proc.live_io.network_socket = Some(NetworkSocket::UnixStream(stream));
+            proc.live_io_mut()
+                .set_network_socket(Some(NetworkSocket::UnixStream(stream)));
             proc.status = process_status_run_value();
             proc.childp = contact;
             proc.plist = plist_val;
@@ -2511,7 +2712,8 @@ pub(super) fn connect_local_socket_process(
 }
 
 #[doc(hidden)]
-pub fn builtin_make_network_process(
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn builtin_make_network_process(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
@@ -2738,7 +2940,6 @@ pub fn builtin_make_network_process(
             server,
             noquery,
             stop,
-            socket_type,
             socket_options,
         );
     }
@@ -2768,19 +2969,19 @@ pub fn builtin_make_network_process(
             noquery,
             stop,
             server_backlog,
-            socket_type,
             socket_options,
         );
     }
 
     // ---- Client mode: establish TCP connection ----
     let host_str = host.unwrap_or_else(|| family.loopback_host().to_string());
-    let port = parse_network_service_port(&service, false, socket_type)?;
+    let service_str = network_service_to_addrinfo_string(&service)?;
 
     if nowait {
-        let immediate_start = nowait_tcp_immediate_addrs(host_value, &host_str, port, family)
-            .map(|addrs| start_pending_tcp_stream_connect(addrs, &socket_options))
-            .transpose()?;
+        let immediate_start =
+            nowait_tcp_immediate_addrs(host_value, &host_str, &service_str, family)
+                .map(|addrs| start_pending_tcp_stream_connect(addrs, &socket_options))
+                .transpose()?;
         let (immediate_start, pending_dns) = if immediate_start.is_some() {
             (immediate_start, None)
         } else if crate::emacs_core::platform_facts::ASYNC_GETADDRINFO {
@@ -2788,7 +2989,7 @@ pub fn builtin_make_network_process(
                 None,
                 Some(start_async_network_dns_lookup(
                     host_str.clone(),
-                    port,
+                    service_str.clone(),
                     family,
                     NetworkSocketType::Stream,
                     socket_options.clone(),
@@ -2800,8 +3001,12 @@ pub fn builtin_make_network_process(
             // synchronously and signals a lookup failure before the process
             // exists (src/process.c:4203-4205); a successful lookup still
             // starts the non-blocking connect below.
-            let addrs =
-                resolve_network_socket_addrs(&host_str, port, family, NetworkSocketType::Stream)?;
+            let addrs = resolve_network_socket_addrs(
+                &host_str,
+                &service_str,
+                family,
+                NetworkSocketType::Stream,
+            )?;
             (
                 Some(start_pending_tcp_stream_connect(addrs, &socket_options)?),
                 None,
@@ -2840,12 +3045,12 @@ pub fn builtin_make_network_process(
                 match start {
                     PendingNetworkConnectStart::Started(started) => {
                         let local_addr = started.stream.local_addr().ok();
-                        proc.live_io.network_socket =
-                            Some(NetworkSocket::TcpStream(started.stream));
-                        proc.live_io.pending_network_connect = Some(PendingNetworkConnect::Tcp {
+                        proc.live_io_mut()
+                            .set_network_socket(Some(NetworkSocket::TcpStream(started.stream)));
+                        proc.set_pending_network_connect(Some(PendingNetworkConnect::Tcp {
                             remaining_addrs: started.remaining_addrs,
                             socket_options: socket_options.clone(),
-                        });
+                        }));
                         ProcessManager::update_tcp_client_contact(
                             proc,
                             started.remote_addr,
@@ -2857,24 +3062,29 @@ pub fn builtin_make_network_process(
                     }
                 }
             } else if let Some(pending_dns) = pending_dns {
-                proc.live_io.pending_network_connect =
-                    Some(PendingNetworkConnect::Dns(pending_dns));
+                proc.set_pending_network_connect(Some(PendingNetworkConnect::Dns(pending_dns)));
             }
-            if proc.live_io.pending_network_connect.is_some() {
+            if proc.live_io().pending_network_connect().is_some() {
                 proc.gnutls_boot_parameters = tls_parameters_val;
             }
             apply_connection_process_flags(proc, noquery, stop);
         }
         if eval.processes().get(id).is_some_and(|proc| {
-            proc.live_io.network_socket.is_some() && proc.live_io.pending_network_connect.is_some()
+            proc.live_io().network_socket().is_some()
+                && proc.live_io().pending_network_connect().is_some()
         }) {
             eval.processes().register_socket_writable_fd(id).ok();
         }
         return Ok(Value::make_process(id));
     }
 
-    let stream =
-        connect_tcp_stream_host(host_str.as_str(), port, family, &socket_options, contact)?;
+    let stream = connect_tcp_stream_host(
+        host_str.as_str(),
+        &service_str,
+        family,
+        &socket_options,
+        contact,
+    )?;
     let remote_addr = stream.peer_addr().ok();
     let local_addr = stream.local_addr().ok();
 
@@ -2896,7 +3106,8 @@ pub fn builtin_make_network_process(
         )?;
     }
     if let Some(proc) = processes.get_mut(id) {
-        proc.live_io.network_socket = Some(NetworkSocket::TcpStream(stream));
+        proc.live_io_mut()
+            .set_network_socket(Some(NetworkSocket::TcpStream(stream)));
         proc.status = process_status_run_value();
         proc.childp = contact;
         proc.plist = plist_val;
@@ -2969,7 +3180,7 @@ fn initialize_created_process_output(
 
 /// (make-pipe-process &rest ARGS) -> process-or-nil
 #[doc(hidden)]
-pub fn builtin_make_pipe_process(
+pub(crate) fn builtin_make_pipe_process(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
@@ -3124,21 +3335,26 @@ pub(crate) fn builtin_make_pipe_process_impl(
         proc.coding_explicitly_set = coding_present;
         apply_connection_process_flags(proc, noquery, stop);
     }
-    if processes.get(id).is_some_and(process_filter_accepts_output)
-        && let Some(poller) = processes.wait_backend.poller()
-    {
-        ProcessManager::register_child_stdout_with_poller(poller, &pipe_reader, id);
-    }
     if let Some(proc) = processes.get_mut(id) {
-        proc.live_io.child_stdout = Some(pipe_reader);
-        proc.live_io.module_pipe_writer = Some(pipe_writer);
+        let io = proc.live_io_mut();
+        io.set_child_stdout(Some(pipe_reader));
+        io.set_module_pipe_writer(Some(pipe_writer));
+    }
+    if let Some(proc) = processes.get(id)
+        && process_filter_accepts_output(proc)
+        && let (Some(poller), Some(stdout)) = (
+            processes.wait_backend.poller_arc(),
+            proc.live_io().child_stdout(),
+        )
+    {
+        ProcessManager::register_child_stdout_with_poller(&poller, stdout, id);
     }
     Ok(Value::make_process(id))
 }
 
 /// (make-serial-process &rest ARGS) -> process-or-nil
 #[doc(hidden)]
-pub fn builtin_make_serial_process(
+pub(crate) fn builtin_make_serial_process(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
@@ -3313,7 +3529,7 @@ pub(crate) fn builtin_make_serial_process_impl(
 
 /// (serial-process-configure &rest ARGS) -> nil
 #[doc(hidden)]
-pub fn builtin_serial_process_configure(
+pub(crate) fn builtin_serial_process_configure(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
@@ -3357,7 +3573,7 @@ pub(crate) fn builtin_serial_process_configure_impl(
     // GNU would `tcgetattr` a closed descriptor and report `Failed tcgetattr`,
     // which is what an `EBADF` here produces too.
     let current = proc.childp;
-    let result = match proc.live_io.serial_port.as_ref() {
+    let result = match proc.live_io().serial_port() {
         Some(device) => configure_serial_device(device, current, contact),
         None => Err(signal_file_errno(
             "Failed tcgetattr",
@@ -3371,7 +3587,7 @@ pub(crate) fn builtin_serial_process_configure_impl(
 
 /// (set-network-process-option PROCESS OPTION VALUE &optional NO-ERROR) -> t-or-nil
 #[doc(hidden)]
-pub fn builtin_set_network_process_option(
+pub(crate) fn builtin_set_network_process_option(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
@@ -3461,7 +3677,8 @@ pub(crate) fn builtin_set_network_process_option_impl(
 /// Runs the command synchronously using `std::process::Command`, captures
 /// output.  Returns the exit code as an integer.
 #[doc(hidden)]
-pub fn builtin_call_process(
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn builtin_call_process(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
@@ -3528,7 +3745,8 @@ pub(crate) fn builtin_process_lines_handling_status(
 ///
 /// Pipes buffer region from START to END through PROGRAM.
 #[doc(hidden)]
-pub fn builtin_call_process_region(
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn builtin_call_process_region(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
@@ -3537,7 +3755,8 @@ pub fn builtin_call_process_region(
 
 /// (delete-process PROCESS) -> nil
 #[doc(hidden)]
-pub fn builtin_delete_process(
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn builtin_delete_process(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
@@ -3665,11 +3884,15 @@ pub(crate) fn builtin_continue_process_impl(
     // rejects it at :7087-7089.
     let is_live = processes.get(id).is_some();
     let mut continued = false;
+    let mut resumed_reading = None;
     if let Some(proc) = processes.get_any_mut(id) {
         if matches!(
             proc.kind,
             ProcessKind::Network | ProcessKind::Pipe | ProcessKind::Serial
         ) {
+            if proc.command == Value::T {
+                resumed_reading = Some(process_filter_accepts_output(proc));
+            }
             proc.command = Value::NIL;
             if proc.kind == ProcessKind::Serial {
                 proc.status = ProcessStatusSymbol::Open.value();
@@ -3687,6 +3910,11 @@ pub(crate) fn builtin_continue_process_impl(
             continued = true;
         }
     }
+    if let Some(accepts_output) = resumed_reading {
+        // GNU's `add_process_read_fd (p->infd)` for a stopped connection
+        // (:7301-7305).
+        processes.set_process_output_read_interest(id, accepts_output);
+    }
     if continued {
         // GNU's `p->tick = ++process_tick;` at src/process.c:7178, between the
         // `pset_status (p, Qrun)` above and the `status_notify (NULL, NULL)`
@@ -3699,7 +3927,7 @@ pub(crate) fn builtin_continue_process_impl(
 
 /// (interrupt-process &optional PROCESS CURRENT-GROUP) -> process-or-nil
 #[doc(hidden)]
-pub fn builtin_interrupt_process(
+pub(crate) fn builtin_interrupt_process(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
@@ -3724,7 +3952,7 @@ pub fn builtin_interrupt_process(
 
 /// (kill-process &optional PROCESS CURRENT-GROUP) -> process-or-nil
 #[doc(hidden)]
-pub fn builtin_kill_process(
+pub(crate) fn builtin_kill_process(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
@@ -3757,7 +3985,7 @@ pub(crate) fn builtin_kill_process_impl(
 
 /// (signal-process PROCESS SIGNAL &optional CURRENT-GROUP) -> int-or-nil
 #[doc(hidden)]
-pub fn builtin_signal_process(
+pub(crate) fn builtin_signal_process(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
@@ -3813,6 +4041,9 @@ pub(crate) fn builtin_signal_process_impl(
     let signal_num = parse_signal_number(&args[1])?;
     match resolve_signal_process_target_in_state(processes, buffers, args.first())? {
         SignalProcessTarget::Process(id) => {
+            // Early child status, as in `internal-default-signal-process`:
+            // GNU's async handler has already reaped an exited child.
+            processes.reap_observed_child(id);
             // `get_any_mut`, matching `internal-default-signal-process` above:
             // GNU's `CHECK_PROCESS` + `XPROCESS (process)->pid`
             // (src/process.c:7379-7382) asks the object, not the alist.  This
@@ -3832,15 +4063,23 @@ pub(crate) fn builtin_signal_process_impl(
             Ok(Value::fixnum(-1))
         }
         SignalProcessTarget::MissingNamedProcess => Ok(Value::NIL),
-        SignalProcessTarget::Pid(pid) => Ok(Value::fixnum(
-            sys::send_signal(pid, signal_num.into()) as i64,
-        )),
+        SignalProcessTarget::Pid(pid) => {
+            // A numeric pid that names one of this World's live children is
+            // reaped first, matching the handler: after the reap `kill` sees
+            // no process and returns -1, as GNU does.
+            if let Some(id) = processes.process_with_os_pid(pid) {
+                processes.reap_observed_child(id);
+            }
+            Ok(Value::fixnum(
+                sys::send_signal(pid, signal_num.into()) as i64
+            ))
+        }
     }
 }
 
 /// (stop-process &optional PROCESS CURRENT-GROUP) -> process-or-nil
 #[doc(hidden)]
-pub fn builtin_stop_process(
+pub(crate) fn builtin_stop_process(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
@@ -3870,23 +4109,31 @@ pub(crate) fn builtin_stop_process_impl(
     // `p->command' to t and returns the process, with no liveness test at all.
     let is_live = processes.get(id).is_some();
     let recipient = process_signal_recipient(&args);
+    let mut stopped_reading = false;
     if let Some(proc) = processes.get_any_mut(id) {
         if matches!(
             proc.kind,
             ProcessKind::Network | ProcessKind::Pipe | ProcessKind::Serial
         ) {
+            stopped_reading = proc.command != Value::T;
             proc.command = Value::T;
         } else if is_live {
             #[cfg(unix)]
             let _ = deliver_process_signal(proc, libc::SIGTSTP, recipient);
         }
     }
+    if stopped_reading {
+        // GNU's `delete_read_fd (p->infd)` (:7273-7275).  A level-triggered
+        // descriptor left registered with unread input wakes every wait with
+        // nothing the stopped connection may read.
+        processes.set_process_output_read_interest(id, false);
+    }
     Ok(ret)
 }
 
 /// (quit-process &optional PROCESS CURRENT-GROUP) -> process-or-nil
 #[doc(hidden)]
-pub fn builtin_quit_process(
+pub(crate) fn builtin_quit_process(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
@@ -3923,7 +4170,7 @@ pub(crate) fn builtin_quit_process_impl(
 
 /// (process-attributes PID) -> alist-or-nil
 #[doc(hidden)]
-pub fn builtin_process_attributes(
+pub(crate) fn builtin_process_attributes(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
@@ -3938,6 +4185,13 @@ pub fn builtin_process_attributes(
         if !handler.is_nil() {
             return eval.funcall_general(handler, vec![operation, args[0]]);
         }
+    }
+    // Early child status: GNU's SIGCHLD handler has already reaped its own
+    // child before /proc is read, so a reaped child reports nil. Reap the
+    // matching live child at this observation; a foreign zombie keeps "Z".
+    let pid = cons_to_os_pid(args[0])?;
+    if let Some(id) = eval.processes().process_with_os_pid(pid) {
+        eval.processes_mut().reap_observed_child(id);
     }
     builtin_process_attributes_impl(args)
 }
@@ -4157,7 +4411,8 @@ pub(super) fn process_id_max() -> i64 {
 
 /// (make-process &rest ARGS) -> process-or-nil
 #[doc(hidden)]
-pub fn builtin_make_process(
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn builtin_make_process(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
@@ -4772,7 +5027,7 @@ fn encode_process_send_input_in_context(
 
 /// (process-send-string PROCESS STRING) -> nil
 #[doc(hidden)]
-pub fn builtin_process_send_string(
+pub(crate) fn builtin_process_send_string(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
@@ -4789,6 +5044,11 @@ pub fn builtin_process_send_string(
     let id =
         resolve_get_process_designator_in_state(&eval.processes(), &eval.edit.buffers, &args[0])?;
     eval.wait_while_network_process_connecting(id)?;
+    // GNU `send_process` (`src/process.c:6722`) calls
+    // `wait_for_tls_negotiation (proc)` BEFORE `update_status (p)` and the
+    // `p->status != Qrun` check so a failing async handshake signals instead
+    // of queueing and dropping user data.
+    eval.wait_for_nonblocking_tls_negotiation(id)?;
     // GNU `send_process` runs `update_status` (:6725-6726) before it tests
     // `p->status`, and by then `handle_child_signal` has already recorded a
     // child that exited.  This port makes the recording here.
@@ -4855,7 +5115,7 @@ pub(crate) fn builtin_process_send_string_impl(
 
 /// (process-status PROCESS) -> symbol
 #[doc(hidden)]
-pub fn builtin_process_status(
+pub(crate) fn builtin_process_status(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
@@ -4888,7 +5148,7 @@ pub(crate) fn builtin_process_status_impl(
 
 /// (process-exit-status PROCESS) -> integer
 #[doc(hidden)]
-pub fn builtin_process_exit_status(
+pub(crate) fn builtin_process_exit_status(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
@@ -4911,7 +5171,12 @@ pub(crate) fn builtin_process_exit_status_impl(
     let proc = observed.process();
     match ProcessStatusSymbol::from_status_value(status) {
         Some(ProcessStatusSymbol::Exit) => Ok(Value::fixnum(process_status_code_value(status))),
-        Some(ProcessStatusSymbol::Failed) => Ok(Value::fixnum(process_status_code_value(status))),
+        // GNU `Fprocess_exit_status` (`src/process.c:1214-1216`) returns
+        // `XCAR (XCDR (p->status))` for any cons status, preserving string
+        // failure reasons such as `"TLS negotiation failed"`.
+        Some(ProcessStatusSymbol::Failed) => {
+            Ok(process_status_code_lisp_value(status).unwrap_or_else(|| Value::fixnum(0)))
+        }
         Some(ProcessStatusSymbol::Signal) => {
             if proc.kind == ProcessKind::Real {
                 Ok(Value::fixnum(process_status_code_value(status)))
@@ -4932,7 +5197,7 @@ pub(crate) fn builtin_process_exit_status_impl(
 
 /// (process-list) -> list of process ids
 #[doc(hidden)]
-pub fn builtin_process_list(
+pub(crate) fn builtin_process_list(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
@@ -4951,7 +5216,7 @@ pub(crate) fn builtin_process_list_impl(
 
 /// (process-name PROCESS) -> string
 #[doc(hidden)]
-pub fn builtin_process_name(
+pub(crate) fn builtin_process_name(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
@@ -4973,7 +5238,7 @@ pub(crate) fn builtin_process_name_impl(
 
 /// (process-buffer PROCESS) -> buffer or nil
 #[doc(hidden)]
-pub fn builtin_process_buffer(
+pub(crate) fn builtin_process_buffer(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
@@ -4995,7 +5260,7 @@ pub(crate) fn builtin_process_buffer_impl(
 
 /// (process-coding-system PROCESS) -> (decode . encode)
 #[doc(hidden)]
-pub fn builtin_process_coding_system(
+pub(crate) fn builtin_process_coding_system(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
@@ -5019,7 +5284,7 @@ pub(crate) fn builtin_process_coding_system_impl(
 
 /// (process-datagram-address PROCESS) -> address-or-nil
 #[doc(hidden)]
-pub fn builtin_process_datagram_address(
+pub(crate) fn builtin_process_datagram_address(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
@@ -5052,7 +5317,7 @@ pub(crate) fn builtin_process_datagram_address_impl(
 
 /// (process-inherit-coding-system-flag PROCESS) -> bool
 #[doc(hidden)]
-pub fn builtin_process_inherit_coding_system_flag(
+pub(crate) fn builtin_process_inherit_coding_system_flag(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
@@ -5076,7 +5341,7 @@ pub(crate) fn builtin_process_inherit_coding_system_flag_impl(
 
 /// (set-process-buffer PROCESS BUFFER) -> BUFFER
 #[doc(hidden)]
-pub fn builtin_set_process_buffer(
+pub(crate) fn builtin_set_process_buffer(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
@@ -5132,7 +5397,7 @@ pub(crate) fn builtin_set_process_buffer_impl(
 
 /// (set-process-coding-system PROCESS &optional DECODING ENCODING) -> nil
 #[doc(hidden)]
-pub fn builtin_set_process_coding_system(
+pub(crate) fn builtin_set_process_coding_system(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
@@ -5209,7 +5474,7 @@ pub(crate) fn builtin_set_process_coding_system_impl(
 
 /// (set-process-datagram-address PROCESS ADDRESS) -> nil
 #[doc(hidden)]
-pub fn builtin_set_process_datagram_address(
+pub(crate) fn builtin_set_process_datagram_address(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
@@ -5233,7 +5498,7 @@ pub(crate) fn builtin_set_process_datagram_address_impl(
             vec![Value::symbol("processp"), args[0]],
         ));
     };
-    match proc.live_io.network_socket.as_ref() {
+    match proc.live_io().network_socket().map(|s| &**s) {
         Some(NetworkSocket::UdpSocket(socket)) => {
             let Ok(NetworkAddressSpec::Inet(addr)) = parse_network_address_spec(&args[1]) else {
                 return Ok(Value::NIL);
@@ -5269,7 +5534,7 @@ pub(crate) fn builtin_set_process_datagram_address_impl(
 
 /// (set-process-inherit-coding-system-flag PROCESS FLAG) -> FLAG
 #[doc(hidden)]
-pub fn builtin_set_process_inherit_coding_system_flag(
+pub(crate) fn builtin_set_process_inherit_coding_system_flag(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
@@ -5294,7 +5559,7 @@ pub(crate) fn builtin_set_process_inherit_coding_system_flag_impl(
 
 /// (set-process-thread PROCESS THREAD) -> thread-or-nil
 #[doc(hidden)]
-pub fn builtin_set_process_thread(
+pub(crate) fn builtin_set_process_thread(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
@@ -5328,7 +5593,7 @@ pub(crate) fn builtin_set_process_thread_impl(
 
 /// (set-process-window-size PROCESS HEIGHT WIDTH) -> t-or-nil
 #[doc(hidden)]
-pub fn builtin_set_process_window_size(
+pub(crate) fn builtin_set_process_window_size(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
@@ -5355,7 +5620,7 @@ pub(crate) fn builtin_set_process_window_size_impl(
     if !is_live {
         return Ok(Value::NIL);
     }
-    if let Some(ref pty_master) = proc.live_io.pty_master {
+    if let Some(pty_master) = proc.live_io().pty_master() {
         let pty_size = portable_pty::PtySize {
             rows: height,
             cols: width,
@@ -5373,7 +5638,7 @@ pub(crate) fn builtin_set_process_window_size_impl(
 /// (process-menu-visit-buffer LINE) -> nil
 /// (process-tty-name PROCESS &optional STREAM) -> string-or-nil
 #[doc(hidden)]
-pub fn builtin_process_tty_name(
+pub(crate) fn builtin_process_tty_name(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
@@ -5437,7 +5702,7 @@ pub(crate) fn builtin_process_tty_name_impl(
 
 /// (process-mark PROCESS) -> marker
 #[doc(hidden)]
-pub fn builtin_process_mark(
+pub(crate) fn builtin_process_mark(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
@@ -5463,7 +5728,7 @@ pub(crate) fn builtin_process_mark_impl(
 
 /// (process-type PROCESS) -> symbol
 #[doc(hidden)]
-pub fn builtin_process_type(
+pub(crate) fn builtin_process_type(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
@@ -5489,7 +5754,7 @@ pub(crate) fn builtin_process_type_impl(
 
 /// (process-thread PROCESS) -> object-or-nil
 #[doc(hidden)]
-pub fn builtin_process_thread(
+pub(crate) fn builtin_process_thread(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
@@ -5513,7 +5778,7 @@ pub(crate) fn builtin_process_thread_impl(
 
 /// (process-send-region PROCESS START END) -> nil
 #[doc(hidden)]
-pub fn builtin_process_send_region(
+pub(crate) fn builtin_process_send_region(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
@@ -5533,6 +5798,9 @@ pub fn builtin_process_send_region(
     let id =
         resolve_get_process_designator_in_state(&eval.processes(), &eval.edit.buffers, &args[0])?;
     eval.wait_while_network_process_connecting(id)?;
+    // GNU `send_process` (`src/process.c:6722`): wait for pending async TLS
+    // negotiation before testing `p->status` or sending.
+    eval.wait_for_nonblocking_tls_negotiation(id)?;
     // `process-send-region` reaches GNU's `send_process` too, and therefore
     // the same `update_status` at :6726.
     if eval
@@ -5617,7 +5885,7 @@ pub(crate) fn builtin_process_send_region_impl(
 
 /// (process-send-eof &optional PROCESS) -> process-or-nil
 #[doc(hidden)]
-pub fn builtin_process_send_eof(
+pub(crate) fn builtin_process_send_eof(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
@@ -5641,7 +5909,8 @@ pub fn builtin_process_send_eof(
             .ok();
         if let Some(id) = maybe_id
             && eval.processes().get(id).is_some_and(|proc| {
-                proc.kind == ProcessKind::Network && proc.live_io.pending_network_connect.is_some()
+                proc.kind == ProcessKind::Network
+                    && proc.live_io().pending_network_connect().is_some()
             })
         {
             eval.wait_while_network_process_connecting(id)?;
@@ -5671,6 +5940,8 @@ pub fn builtin_process_send_eof(
     builtin_process_send_eof_impl(processes, buffers, args)
 }
 
+/// Send EOF to a non-PTY process. Any poll-registered pipe `stdin` is wrapped
+/// in `PollRegistration<File>` and automatically unregisters before closing.
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(super) fn send_eof_to_process(proc: &mut Process) -> EvalResult {
     // GNU returns a datagram process untouched before both the liveness gate
@@ -5696,7 +5967,7 @@ pub(super) fn send_eof_to_process(proc: &mut Process) -> EvalResult {
         return Ok(Value::NIL);
     }
 
-    if let Some(tls) = proc.live_io.tls_stream.as_mut() {
+    if let Some(tls) = proc.live_io_mut().tls_stream_mut() {
         tls.send_close_notify(false)
             .map(|_| ())
             .map_err(|err| signal_process_io("Sending EOF to process", None, err))?;
@@ -5704,7 +5975,7 @@ pub(super) fn send_eof_to_process(proc: &mut Process) -> EvalResult {
         return Ok(Value::NIL);
     }
 
-    if let Some(socket) = proc.live_io.network_socket.as_ref() {
+    if let Some(socket) = proc.live_io().network_socket() {
         if let Some(result) = socket.shutdown_write() {
             result.map_err(|err| signal_process_io("Sending EOF to process", None, err))?;
             proc.input_disposition = ProcessInputDisposition::Discard;
@@ -5712,7 +5983,7 @@ pub(super) fn send_eof_to_process(proc: &mut Process) -> EvalResult {
         return Ok(Value::NIL);
     }
 
-    let _ = proc.live_io.child.close_stdin();
+    let _ = proc.live_io_mut().child_mut().close_stdin();
     // GNU opens the null output device even when there was no old descriptor
     // to close. `Discard` models that sink without allocating an OS fd.
     proc.input_disposition = ProcessInputDisposition::Discard;
@@ -5786,7 +6057,7 @@ pub(super) fn process_send_eof_liveness_gate(
 
 /// (process-running-child-p &optional PROCESS) -> bool
 #[doc(hidden)]
-pub fn builtin_process_running_child_p(
+pub(crate) fn builtin_process_running_child_p(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
@@ -5804,11 +6075,10 @@ pub(super) fn process_tty_foreground_group(proc: &Process) -> Option<i32> {
     {
         use std::os::fd::AsRawFd;
         let input_fd = proc
-            .live_io
-            .pty_master
-            .as_ref()
+            .live_io()
+            .pty_master()
             .and_then(|master| master.as_raw_fd())
-            .or_else(|| proc.live_io.child_stdout.as_ref().map(AsRawFd::as_raw_fd));
+            .or_else(|| proc.live_io().child_stdout().map(AsRawFd::as_raw_fd));
         if let Some(gid) = input_fd.and_then(sys::fd_foreground_pgrp) {
             return Some(gid);
         }
@@ -5883,7 +6153,8 @@ pub(crate) fn builtin_process_running_child_p_impl(
 
 /// (accept-process-output &optional PROCESS SECONDS MILLISECS JUST-THIS-ONE) -> bool
 #[doc(hidden)]
-pub fn builtin_accept_process_output(
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn builtin_accept_process_output(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
@@ -5899,7 +6170,7 @@ pub fn builtin_accept_process_output(
 
 /// (get-process NAME) -> process-or-nil
 #[doc(hidden)]
-pub fn builtin_get_process(
+pub(crate) fn builtin_get_process(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
@@ -5922,7 +6193,7 @@ pub(crate) fn builtin_get_process_impl(processes: &ProcessManager, args: Vec<Val
 
 /// (get-buffer-process BUFFER-OR-NAME) -> process-or-nil
 #[doc(hidden)]
-pub fn builtin_get_buffer_process(
+pub(crate) fn builtin_get_buffer_process(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
@@ -5946,7 +6217,7 @@ pub(crate) fn builtin_get_buffer_process_impl(
 
 /// (processp OBJECT) -> bool
 #[doc(hidden)]
-pub fn builtin_processp(
+pub(crate) fn builtin_processp(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
@@ -5986,7 +6257,7 @@ pub(crate) fn builtin_process_live_p_impl(
 
 /// (process-id PROCESS) -> integer
 #[doc(hidden)]
-pub fn builtin_process_id(
+pub(crate) fn builtin_process_id(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
@@ -6015,7 +6286,7 @@ pub(crate) fn builtin_process_id_impl(processes: &ProcessManager, args: Vec<Valu
 
 /// (process-query-on-exit-flag PROCESS) -> bool
 #[doc(hidden)]
-pub fn builtin_process_query_on_exit_flag(
+pub(crate) fn builtin_process_query_on_exit_flag(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
@@ -6039,7 +6310,7 @@ pub(crate) fn builtin_process_query_on_exit_flag_impl(
 
 /// (set-process-query-on-exit-flag PROCESS FLAG) -> FLAG
 #[doc(hidden)]
-pub fn builtin_set_process_query_on_exit_flag(
+pub(crate) fn builtin_set_process_query_on_exit_flag(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
@@ -6065,7 +6336,7 @@ pub(crate) fn builtin_set_process_query_on_exit_flag_impl(
 
 /// (process-command PROCESS) -> list
 #[doc(hidden)]
-pub fn builtin_process_command(
+pub(crate) fn builtin_process_command(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
@@ -6090,7 +6361,8 @@ pub(crate) fn builtin_process_command_impl(
 
 /// (process-contact PROCESS &optional KEY NO-BLOCK) -> value
 #[doc(hidden)]
-pub fn builtin_process_contact(
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn builtin_process_contact(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
@@ -6179,7 +6451,8 @@ pub(crate) fn builtin_process_contact_impl(
 
 /// (process-filter PROCESS) -> function
 #[doc(hidden)]
-pub fn builtin_process_filter(
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn builtin_process_filter(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
@@ -6203,7 +6476,8 @@ pub(crate) fn builtin_process_filter_impl(
 
 /// (set-process-filter PROCESS FILTER) -> FILTER
 #[doc(hidden)]
-pub fn builtin_set_process_filter(
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn builtin_set_process_filter(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
@@ -6255,7 +6529,7 @@ pub(crate) fn builtin_set_process_filter_impl(
 
 /// (process-sentinel PROCESS) -> function
 #[doc(hidden)]
-pub fn builtin_process_sentinel(
+pub(crate) fn builtin_process_sentinel(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
@@ -6279,7 +6553,8 @@ pub(crate) fn builtin_process_sentinel_impl(
 
 /// (set-process-sentinel PROCESS SENTINEL) -> SENTINEL
 #[doc(hidden)]
-pub fn builtin_set_process_sentinel(
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn builtin_set_process_sentinel(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
@@ -6314,7 +6589,7 @@ pub(crate) fn builtin_set_process_sentinel_impl(
 
 /// (process-plist PROCESS) -> plist
 #[doc(hidden)]
-pub fn builtin_process_plist(
+pub(crate) fn builtin_process_plist(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
@@ -6338,7 +6613,7 @@ pub(crate) fn builtin_process_plist_impl(
 
 /// (set-process-plist PROCESS PLIST) -> plist
 #[doc(hidden)]
-pub fn builtin_set_process_plist(
+pub(crate) fn builtin_set_process_plist(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
@@ -6373,7 +6648,8 @@ pub(crate) fn builtin_set_process_plist_impl(
 
 /// (getenv-internal VARIABLE &optional ENV) -> string or nil
 #[doc(hidden)]
-pub fn builtin_getenv_internal(
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn builtin_getenv_internal(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
@@ -6403,7 +6679,7 @@ pub fn builtin_getenv_internal(
 ///
 /// Batch/runtime compatibility path. Accepts stdin/stdout/stderr symbols.
 #[doc(hidden)]
-pub fn builtin_set_binary_mode(args: Vec<Value>) -> EvalResult {
+pub(crate) fn builtin_set_binary_mode(args: Vec<Value>) -> EvalResult {
     expect_args("set-binary-mode", &args, 2)?;
     let stream = args[0].as_bare_symbol_name().ok_or_else(|| {
         signal(

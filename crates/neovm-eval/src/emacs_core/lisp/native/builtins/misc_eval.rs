@@ -807,10 +807,11 @@ fn eval_error_to_flow(e: super::error::EvalError) -> Flow {
 #[doc(hidden)]
 pub fn builtin_garbage_collect(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
     expect_args("garbage-collect", &args, 0)?;
-    if eval.gc_inhibit_depth > 0 && neovm_value::hashtab::hash_test_parity_enabled() {
+    if eval.is_explicit_gc_inhibited() {
         return Ok(Value::NIL);
     }
-    eval.gc_collect_exact();
+    eval.tagged_heap.request_gc_object_counts();
+    eval.gc_collect_exact_flow()?;
     // Return GC stats.
     super::builtins_extra::builtin_garbage_collect_stats()
 }
@@ -1831,7 +1832,7 @@ impl TryFrom<Value> for PrintOverrideKey {
         let parsed = key
             .as_bare_symbol_name()
             .and_then(|name| name.parse::<Self>().ok())
-            .filter(|setting| key == Value::symbol(setting.as_ref()));
+            .filter(|setting| key == Value::from_sym_id(intern(setting.as_ref())));
         parsed.ok_or_else(|| {
             signal(
                 LispCondition::WrongTypeArgument,

@@ -80,17 +80,29 @@ pub(super) fn rasterize_at(
     foreground: [u8; 4],
     px_size: f32,
 ) -> Option<ColorGlyphRaster> {
+    // These legacy geometry helpers return ink-bearing geometry. Contract
+    // tests use the raw Result helper to distinguish empty success from absence.
+    rasterize_at_result(bytes, key, glyph, foreground, px_size)
+        .expect("synthetic source paints successfully")
+        .filter(|raster| raster.width > 0 && raster.height > 0)
+}
+
+pub(super) fn rasterize_at_result(
+    bytes: &[u8],
+    key: &str,
+    glyph: u16,
+    foreground: [u8; 4],
+    px_size: f32,
+) -> Result<Option<ColorGlyphRaster>, ColorGlyphError> {
     let asset = asset(bytes.to_vec(), key);
     let mut rasterizer = ColorGlyphRasterizer::new();
-    rasterizer
-        .rasterize(
-            &asset,
-            &ColorGlyphRequest {
-                glyph_id: glyph,
-                px_size,
-                foreground,
-                ..ColorGlyphRequest::default()
-            },
-        )
-        .expect("synthetic source opens")
+    rasterizer.rasterize(
+        &asset,
+        &ColorGlyphRequest {
+            glyph_id: glyph,
+            px_size,
+            foreground,
+            ..ColorGlyphRequest::default()
+        },
+    )
 }

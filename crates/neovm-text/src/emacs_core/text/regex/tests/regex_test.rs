@@ -1580,6 +1580,565 @@ fn literal_register_reuse_preserves_raw_unibyte_coordinates() {
     }
 }
 
+/// RegExp search must read both gap halves in place, exactly as GNU's
+/// `re_search_2` does: literal and engine patterns alike leave `gap-position`
+/// where the last edit put it, and a match may cross the gap.
+#[test]
+fn regexp_search_reads_both_gap_halves_without_moving_the_gap() {
+    crate::test_utils::init_test_tracing();
+    let saved = neovm_edit::buffer::shared::SavedPointBeforeCommand::new_editor_global();
+    let mut buf = Buffer::new(BufferId(1), Value::string("regexp-gap"), saved);
+    buf.insert_lisp_string(&LispString::from_utf8(&"a".repeat(100)));
+    // The GNU oracle's edit: 100 a's, then an x inserted at char 50 leaves
+    // the gap after it (gap-position 51).
+    buf.goto_emacs_byte_pos(neovm_edit::buffer::EmacsBytePos::new(49));
+    buf.insert_lisp_string(&LispString::from_utf8("x"));
+    let gap = buf.gap_position_lisp();
+    assert_eq!(gap, 51);
+
+    let forward = |buf: &mut Buffer, pattern: &str| {
+        buf.goto_emacs_byte_pos(neovm_edit::buffer::EmacsBytePos::ZERO);
+        super::re_search_forward_with_posix(
+            buf,
+            &LispString::from_utf8(pattern),
+            None,
+            true,
+            false,
+            false,
+        )
+        .expect("noerror forward search does not fail")
+        .map(|found| found.into_parts().1.get())
+    };
+    let backward = |buf: &mut Buffer, pattern: &str| {
+        buf.goto_emacs_byte_pos(buf.total_emacs_byte_end_pos());
+        super::re_search_backward_with_posix(
+            buf,
+            &LispString::from_utf8(pattern),
+            None,
+            true,
+            false,
+            false,
+        )
+        .expect("noerror backward search does not fail")
+        .map(|found| found.into_parts().1.get())
+    };
+
+    // Literal patterns (the literal fast path) and engine patterns alike.
+    for pattern in ["zzz", "z\\{2\\}"] {
+        assert_eq!(forward(&mut buf, pattern), None, "{pattern}");
+        assert_eq!(buf.gap_position_lisp(), gap, "forward {pattern}");
+        assert_eq!(backward(&mut buf, pattern), None, "{pattern}");
+        assert_eq!(buf.gap_position_lisp(), gap, "backward {pattern}");
+    }
+    for (pattern, forward_hit, backward_hit) in [("aaa", 3, 98), ("a\\{2\\}", 2, 99)] {
+        assert_eq!(
+            forward(&mut buf, pattern),
+            Some(forward_hit),
+            "forward {pattern}"
+        );
+        assert_eq!(buf.gap_position_lisp(), gap, "forward {pattern}");
+        assert_eq!(
+            backward(&mut buf, pattern),
+            Some(backward_hit),
+            "backward {pattern}"
+        );
+        assert_eq!(buf.gap_position_lisp(), gap, "backward {pattern}");
+    }
+
+    // A match that crosses the gap: "hello" with the gap after "he".
+    let saved = neovm_edit::buffer::shared::SavedPointBeforeCommand::new_editor_global();
+    let mut buf = Buffer::new(BufferId(2), Value::string("regexp-gap-straddle"), saved);
+    buf.insert_lisp_string(&LispString::from_utf8("hello"));
+    buf.goto_emacs_byte_pos(neovm_edit::buffer::EmacsBytePos::new(2));
+    buf.insert_lisp_string(&LispString::from_utf8("Q"));
+    buf.delete_emacs_byte_range(EmacsByteRange::new(
+        neovm_edit::buffer::EmacsBytePos::new(2),
+        neovm_edit::buffer::EmacsBytePos::new(3),
+    ));
+    let gap = buf.gap_position_lisp();
+    assert_eq!(forward(&mut buf, "l+"), Some(4));
+    assert_eq!(buf.gap_position_lisp(), gap);
+    assert_eq!(backward(&mut buf, "l+"), Some(3));
+    assert_eq!(buf.gap_position_lisp(), gap);
+
+    // Multibyte match crossing the gap: "aééx" with the gap between the two
+    // é characters. The characters themselves never cross the boundary; the
+    // engine's match does, so its char decoding must read both halves.
+    let saved = neovm_edit::buffer::shared::SavedPointBeforeCommand::new_editor_global();
+    let mut buf = Buffer::new(BufferId(4), Value::string("regexp-gap-multibyte"), saved);
+    buf.insert_lisp_string(&LispString::from_utf8("aééx"));
+    buf.goto_emacs_byte_pos(neovm_edit::buffer::EmacsBytePos::new(3));
+    buf.insert_lisp_string(&LispString::from_utf8("Q"));
+    buf.delete_emacs_byte_range(EmacsByteRange::new(
+        neovm_edit::buffer::EmacsBytePos::new(3),
+        neovm_edit::buffer::EmacsBytePos::new(4),
+    ));
+    let gap = buf.gap_position_lisp();
+    assert_eq!(forward(&mut buf, "é\\{2\\}"), Some(5));
+    assert_eq!(buf.gap_position_lisp(), gap);
+    assert_eq!(backward(&mut buf, "é\\{2\\}"), Some(1));
+    assert_eq!(buf.gap_position_lisp(), gap);
+}
+
+/// A complete search window in one gap half must use contiguous engine
+/// storage. Counters cover actual segmented engine entries, while captures
+/// and a straddling control prevent a vacuous fast path or a moved gap.
+#[test]
+fn regexp_one_half_context_uses_contiguous_engine_storage() {
+    crate::test_utils::init_test_tracing();
+    let mut buf = literal_gap_test_buffer("xaabY__xaabY");
+    park_gap_at_keeping_point(&mut buf, 6);
+    let gap = buf.gap_position_lisp();
+    let pattern = regex_emacs::regex_compile(r"\(aa\)b", false, false).unwrap();
+    let accessible = buf.accessible_emacs_byte_region().range();
+    let mut segmented = 0;
+    for (start, limit, forward, expected) in [
+        (1, 4, true, (1, 4)),
+        (4, 1, false, (1, 4)),
+        (8, 11, true, (8, 11)),
+        (11, 8, false, (8, 11)),
+    ] {
+        let before = regex_emacs::segment_engine_entry_count();
+        let (origin, registers) = super::re_search_buffer_regexp(
+            &buf,
+            &pattern,
+            accessible,
+            EmacsBytePos::new(start),
+            EmacsBytePos::new(limit),
+            forward,
+            |_| DefaultSyntaxLookup,
+        )
+        .expect("the one-half regexp matches");
+        segmented += regex_emacs::segment_engine_entry_count() - before;
+        assert_eq!(
+            (
+                origin.get() + registers.start[0] as usize,
+                origin.get() + registers.end[0] as usize
+            ),
+            expected
+        );
+        assert_eq!(
+            (
+                origin.get() + registers.start[1] as usize,
+                origin.get() + registers.end[1] as usize
+            ),
+            (expected.0, expected.0 + 2)
+        );
+        assert_eq!(buf.gap_position_lisp(), gap);
+    }
+    let before = regex_emacs::segment_engine_entry_count();
+    let (origin, registers) =
+        super::re_match_buffer_regexp(&buf, &pattern, accessible, EmacsBytePos::new(8), |_| {
+            DefaultSyntaxLookup
+        })
+        .expect("looking-at uses the right half through the actual buffer end");
+    segmented += regex_emacs::segment_engine_entry_count() - before;
+    assert_eq!(
+        (
+            origin.get() + registers.start[0] as usize,
+            origin.get() + registers.end[0] as usize
+        ),
+        (8, 11)
+    );
+    assert_eq!(buf.gap_position_lisp(), gap);
+
+    let before = regex_emacs::segment_engine_entry_count();
+    let crossing = regex_emacs::regex_compile(r"Y_+x", false, false).unwrap();
+    let (origin, registers) = super::re_search_buffer_regexp(
+        &buf,
+        &crossing,
+        accessible,
+        EmacsBytePos::ZERO,
+        buf.total_emacs_byte_end_pos(),
+        true,
+        |_| DefaultSyntaxLookup,
+    )
+    .expect("the control match crosses the gap");
+    assert_eq!(
+        (
+            origin.get() + registers.start[0] as usize,
+            origin.get() + registers.end[0] as usize
+        ),
+        (4, 8)
+    );
+    assert!(
+        regex_emacs::segment_engine_entry_count() > before,
+        "the straddling control must exercise the real segmented engine"
+    );
+    assert_eq!(buf.gap_position_lisp(), gap);
+    assert_eq!(segmented, 0, "one-half windows paid segmented engine setup");
+}
+
+/// The typed slice entry must perform cached-prefix work without preparing
+/// generic prefix batches. The crossing control keeps those probes live.
+#[test]
+fn regexp_one_half_dense_scan_enters_contiguous_engine_without_batch_setup() {
+    crate::test_utils::init_test_tracing();
+    use regex_emacs::dfa;
+
+    dfa::with_first_step(true, || {
+        dfa::with_cold_path(false, || {
+            dfa::with_dfa_mode(dfa::DfaMode::On, || {
+                let miss = "abcdefx ".repeat(256);
+                let winner = miss.len();
+                let positive = format!("{miss}qa{}Z{}", "b".repeat(32), " ".repeat(64));
+                let crossing =
+                    regex_emacs::regex_compile(r"\([a-z]a\)\([bcdef]*\)Z", false, false).unwrap();
+                assert!(crossing.literal_prefilter().is_none());
+                for _ in 0..2 {
+                    assert!(
+                        regex_emacs::re_search(
+                            &crossing,
+                            miss.as_bytes(),
+                            0,
+                            miss.len() as isize,
+                            &DefaultSyntaxLookup,
+                            0,
+                        )
+                        .is_none()
+                    );
+                }
+                let mut control = literal_gap_test_buffer(&positive);
+                park_gap_at_keeping_point(&mut control, winner + 10);
+                let parked = control.gap_position_lisp();
+                let before = regex_emacs::prefix_storage_probe();
+                let segments_before = regex_emacs::segment_engine_entry_count();
+                let (origin, registers) = super::re_search_buffer_regexp(
+                    &control,
+                    &crossing,
+                    control.accessible_emacs_byte_region().range(),
+                    EmacsBytePos::ZERO,
+                    control.total_emacs_byte_end_pos(),
+                    true,
+                    |_| DefaultSyntaxLookup,
+                )
+                .expect("the control match consumes across the real gap");
+                let work = regex_emacs::prefix_storage_probe().since(before);
+                assert_eq!(
+                    (
+                        origin.get() + registers.start[0] as usize,
+                        origin.get() + registers.end[0] as usize
+                    ),
+                    (winner, winner + 35),
+                );
+                assert_eq!(
+                    (
+                        origin.get() + registers.start[1] as usize,
+                        origin.get() + registers.end[1] as usize
+                    ),
+                    (winner, winner + 2),
+                );
+                assert_eq!(
+                    (
+                        origin.get() + registers.start[2] as usize,
+                        origin.get() + registers.end[2] as usize
+                    ),
+                    (winner + 2, winner + 34),
+                );
+                assert!(regex_emacs::segment_engine_entry_count() > segments_before);
+                assert_eq!(work.contiguous_search_entries, 0, "{work:?}");
+                assert!(
+                    work.calls > 0 && work.batch_prepares > 0 && work.batch_checks > 0,
+                    "crossing must exercise the real generic preparation and probes: {work:?}"
+                );
+                let crossing_skip_with = work.skip_with_entries;
+                let crossing_with_readers = work.with_readers_entries;
+                let crossing_prefix_slice = work.prefix_slice_cache_entries;
+                assert_eq!(control.gap_position_lisp(), parked);
+
+                let text = format!("{miss} ## {miss}");
+                let mut buf = literal_gap_test_buffer(&text);
+                park_gap_at_keeping_point(&mut buf, miss.len() + 2);
+                let parked = buf.gap_position_lisp();
+                let accessible = buf.accessible_emacs_byte_region().range();
+                let pattern = regex_emacs::regex_compile("[a-z][bcdef]*Z", false, false).unwrap();
+                assert!(pattern.literal_prefilter().is_none());
+                assert!(
+                    pattern.fastmap.iter().filter(|&&set| set).count() > 3,
+                    "the fixture must use dense candidate scanning"
+                );
+                for (low, high) in [(8, miss.len() - 8), (miss.len() + 12, text.len() - 8)] {
+                    for forward in [true, false] {
+                        let (start, limit) = if forward { (low, high) } else { (high, low) };
+                        let search = || {
+                            super::re_search_buffer_regexp(
+                                &buf,
+                                &pattern,
+                                accessible,
+                                EmacsBytePos::new(start),
+                                EmacsBytePos::new(limit),
+                                forward,
+                                |_| DefaultSyntaxLookup,
+                            )
+                        };
+                        for _ in 0..2 {
+                            assert!(search().is_none());
+                        }
+                        assert!(matches!(*pattern.dfa.slot(), dfa::DfaSlot::Live(_)));
+                        let before = regex_emacs::prefix_storage_probe();
+                        let segments_before = regex_emacs::segment_engine_entry_count();
+                        assert!(search().is_none());
+                        let work = regex_emacs::prefix_storage_probe().since(before);
+                        assert_eq!(buf.gap_position_lisp(), parked);
+                        assert_eq!(work.contiguous_search_entries, 1, "{work:?}");
+                        assert_eq!(regex_emacs::segment_engine_entry_count(), segments_before);
+                        assert!(
+                            work.contiguous_cache_entries >= 256,
+                            "one-half candidates must hit the contiguous cache: {work:?}"
+                        );
+                        assert_eq!(
+                            work.skip_with_entries, 0,
+                            "a one-half window must not enter skip_with: {work:?}"
+                        );
+                        assert_eq!(
+                            work.with_readers_entries, 0,
+                            "a one-half window must stay on the contiguous cache: {work:?}"
+                        );
+                        assert_eq!(
+                            work.prefix_slice_cache_entries, 0,
+                            "a one-half window must not enter the PrefixSlice cache: {work:?}"
+                        );
+                        assert!(
+                            work.calls >= 256 && work.rejected >= 256,
+                            "the slice must execute warmed prefix rejections: {work:?}"
+                        );
+                        eprintln!("bounded one-half start={start} limit={limit} work={work:?}");
+                        assert_eq!(
+                            (work.batch_prepares, work.batch_checks),
+                            (0, 0),
+                            "a contiguous slice search must not set up generic batches: {work:?}"
+                        );
+                    }
+                }
+                assert_eq!(
+                    crossing_skip_with, 0,
+                    "a real split must reach the haystack without the skip_with closure: {crossing_skip_with}"
+                );
+                assert_eq!(
+                    crossing_with_readers, 0,
+                    "a real split must reach the haystack without the reader closure: {crossing_with_readers}"
+                );
+                assert!(
+                    crossing_prefix_slice > 0,
+                    "a real split must enter the PrefixSlice cache: {crossing_prefix_slice}"
+                );
+            })
+        })
+    });
+}
+
+#[test]
+fn regexp_one_half_context_preserves_gap_edge_assertions() {
+    crate::test_utils::init_test_tracing();
+    for (text, start, bound, line_start, gaps) in [
+        ("xaY", 1, 2, false, vec![0, 1, 2, 3]),
+        ("\naY", 1, 2, true, vec![0, 1, 2, 3]),
+        ("éaY", 2, 3, false, vec![0, 2, 3, 4]),
+    ] {
+        for gap in gaps {
+            let mut buf = literal_gap_test_buffer(text);
+            park_gap_at_keeping_point(&mut buf, gap);
+            let parked = buf.gap_position_lisp();
+            let accessible = buf.accessible_emacs_byte_region().range();
+            for (expression, matches) in [
+                (r"\(a\)\B", true),
+                (r"a\b", false),
+                (r"a\'", false),
+                (r"a$", false),
+                (r"\`a", false),
+                (r"^a", line_start),
+                (r"\=a", true),
+            ] {
+                let pattern = regex_emacs::regex_compile(expression, false, false).unwrap();
+                let found = super::re_search_buffer_regexp(
+                    &buf,
+                    &pattern,
+                    accessible,
+                    EmacsBytePos::new(start),
+                    EmacsBytePos::new(bound),
+                    true,
+                    |_| DefaultSyntaxLookup,
+                );
+                assert_eq!(found.is_some(), matches, "{text:?} {expression} gap={gap}");
+                if let Some((origin, registers)) = found {
+                    assert_eq!(
+                        (
+                            origin.get() + registers.start[0] as usize,
+                            origin.get() + registers.end[0] as usize
+                        ),
+                        (start, bound)
+                    );
+                }
+                assert_eq!(
+                    buf.gap_position_lisp(),
+                    parked,
+                    "{text:?} {expression} gap={gap}"
+                );
+            }
+        }
+    }
+}
+
+/// Font-lock shape: edit, search from before the edit so the gap lies inside
+/// the span, repeat. The literal and engine paths must both read the two gap
+/// halves in place: no bytes copied and the gap stays at the edit.
+#[test]
+fn regexp_search_loop_after_edit_copies_nothing_and_keeps_the_gap() {
+    use std::sync::atomic::Ordering;
+    crate::test_utils::init_test_tracing();
+    let unit = format!("{}(defun marker)\n", "x".repeat(490));
+    let text = unit.repeat(1_000);
+    let saved = neovm_edit::buffer::shared::SavedPointBeforeCommand::new_editor_global();
+    let mut buf = Buffer::new(BufferId(3), Value::string("regexp-gap-loop"), saved);
+    buf.insert_lisp_string(&LispString::from_utf8(&text));
+    let p = text.len() / 10;
+    let copied_before = super::SEARCH_COPIED_BYTES.load(Ordering::Relaxed);
+    for _ in 0..50 {
+        buf.goto_emacs_byte_pos(neovm_edit::buffer::EmacsBytePos::new(p));
+        buf.insert_lisp_string(&LispString::from_utf8("Q"));
+        let gap_after_edit = buf.gap_position_lisp();
+        for pattern in ["zzz", "z[z]z"] {
+            buf.goto_emacs_byte_pos(neovm_edit::buffer::EmacsBytePos::ZERO);
+            let found = super::re_search_forward_with_posix(
+                &mut buf,
+                &LispString::from_utf8(pattern),
+                None,
+                true,
+                false,
+                false,
+            )
+            .expect("noerror regexp search does not fail");
+            assert!(found.is_none(), "{pattern} unexpectedly matched");
+            assert_eq!(
+                buf.gap_position_lisp(),
+                gap_after_edit,
+                "{pattern} moved the gap from the edit"
+            );
+        }
+        buf.delete_emacs_byte_range(EmacsByteRange::new(
+            neovm_edit::buffer::EmacsBytePos::new(p),
+            neovm_edit::buffer::EmacsBytePos::new(p + 1),
+        ));
+    }
+    let copied = super::SEARCH_COPIED_BYTES.load(Ordering::Relaxed) - copied_before;
+    assert_eq!(copied, 0, "bytes copied out of the buffer");
+}
+
+#[test]
+fn literal_search_reads_both_gap_halves_without_moving_the_gap() {
+    crate::test_utils::init_test_tracing();
+    let saved = neovm_edit::buffer::shared::SavedPointBeforeCommand::new_editor_global();
+    let mut buf = Buffer::new(BufferId(1), Value::string("gap-search"), saved);
+    buf.insert_lisp_string(&LispString::from_utf8(&"a".repeat(100)));
+    buf.goto_emacs_byte_pos(neovm_edit::buffer::EmacsBytePos::new(49));
+    buf.insert_lisp_string(&LispString::from_utf8("x"));
+    let gap = buf.gap_position_lisp();
+    assert_eq!(gap, 51);
+    buf.goto_emacs_byte_pos(neovm_edit::buffer::EmacsBytePos::ZERO);
+    let mut regs = SearchRegisters::default();
+    let missing = super::search_forward_into(
+        &mut buf,
+        &LispString::from_utf8("zzz"),
+        None,
+        true,
+        false,
+        &mut regs,
+    )
+    .unwrap();
+    assert!(missing.is_none());
+    assert_eq!(buf.gap_position_lisp(), gap);
+    buf.goto_emacs_byte_pos(buf.total_emacs_byte_end_pos());
+    let missing_back = super::search_backward_into(
+        &mut buf,
+        &LispString::from_utf8("zzz"),
+        None,
+        true,
+        false,
+        &mut regs,
+    )
+    .unwrap();
+    assert!(missing_back.is_none());
+    assert_eq!(buf.gap_position_lisp(), gap);
+
+    let saved = neovm_edit::buffer::shared::SavedPointBeforeCommand::new_editor_global();
+    let mut buf = Buffer::new(BufferId(2), Value::string("gap-straddle"), saved);
+    buf.insert_lisp_string(&LispString::from_utf8("hello"));
+    buf.goto_emacs_byte_pos(neovm_edit::buffer::EmacsBytePos::new(2));
+    buf.insert_lisp_string(&LispString::from_utf8("Q"));
+    buf.delete_emacs_byte_range(EmacsByteRange::new(
+        neovm_edit::buffer::EmacsBytePos::new(2),
+        neovm_edit::buffer::EmacsBytePos::new(3),
+    ));
+    let gap = buf.gap_position_lisp();
+    buf.goto_emacs_byte_pos(neovm_edit::buffer::EmacsBytePos::ZERO);
+    let hit = super::search_forward_into(
+        &mut buf,
+        &LispString::from_utf8("el"),
+        None,
+        true,
+        false,
+        &mut regs,
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(hit.get(), 3);
+    assert_eq!(buf.gap_position_lisp(), gap);
+    buf.goto_emacs_byte_pos(buf.total_emacs_byte_end_pos());
+    let back = super::search_backward_into(
+        &mut buf,
+        &LispString::from_utf8("el"),
+        None,
+        true,
+        false,
+        &mut regs,
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(back.get(), 1);
+    assert_eq!(buf.gap_position_lisp(), gap);
+
+    // The crossing window is counted in characters, not bytes: one character
+    // of an "éé" pattern is two Emacs bytes, so a byte-counted window would
+    // slice the continuation byte and miss the match.
+    let saved = neovm_edit::buffer::shared::SavedPointBeforeCommand::new_editor_global();
+    let mut buf = Buffer::new(BufferId(3), Value::string("gap-straddle-multibyte"), saved);
+    buf.insert_lisp_string(&LispString::from_utf8("aééx"));
+    buf.goto_emacs_byte_pos(neovm_edit::buffer::EmacsBytePos::new(3));
+    buf.insert_lisp_string(&LispString::from_utf8("Q"));
+    buf.delete_emacs_byte_range(EmacsByteRange::new(
+        neovm_edit::buffer::EmacsBytePos::new(3),
+        neovm_edit::buffer::EmacsBytePos::new(4),
+    ));
+    let gap = buf.gap_position_lisp();
+    assert_eq!(gap, 3);
+    buf.goto_emacs_byte_pos(neovm_edit::buffer::EmacsBytePos::ZERO);
+    let hit = super::search_forward_into(
+        &mut buf,
+        &LispString::from_utf8("éé"),
+        None,
+        true,
+        false,
+        &mut regs,
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(hit.get(), 5);
+    assert_eq!(buf.gap_position_lisp(), gap);
+    buf.goto_emacs_byte_pos(buf.total_emacs_byte_end_pos());
+    let back = super::search_backward_into(
+        &mut buf,
+        &LispString::from_utf8("éé"),
+        None,
+        true,
+        false,
+        &mut regs,
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(back.get(), 1);
+    assert_eq!(buf.gap_position_lisp(), gap);
+}
+
 #[test]
 fn composition_match_length_preserves_native_regexp_extent() {
     crate::test_utils::init_test_tracing();
@@ -1794,5 +2353,534 @@ mod literal_search_linear_equivalence {
                 .collect();
             check(&text, &needle);
         }
+    }
+}
+
+fn literal_gap_test_buffer(text: &str) -> Buffer {
+    let mut buf = Buffer::new(
+        BufferId(1),
+        Value::string("literal-gap"),
+        neovm_edit::buffer::shared::SavedPointBeforeCommand::new_editor_global(),
+    );
+    buf.insert(text);
+    buf
+}
+
+/// Park the gap at byte POS the way an edit leaves it: insert a char there
+/// and delete it again.  Point is kept.
+fn park_gap_at_keeping_point(buf: &mut Buffer, pos: usize) {
+    use neovm_edit::buffer::EmacsBytePos;
+    let point = buf.point_emacs_byte_pos();
+    buf.goto_emacs_byte_pos(EmacsBytePos::new(pos));
+    buf.insert("x");
+    buf.delete_emacs_byte_range(EmacsByteRange::new(
+        EmacsBytePos::new(pos),
+        EmacsBytePos::new(pos + 1),
+    ));
+    buf.goto_emacs_byte_pos(point);
+}
+
+#[derive(Clone, Copy, Debug)]
+enum LiteralDirection {
+    Forward,
+    Backward,
+}
+
+/// One literal search from byte START: the point it returns and match group 0.
+fn literal_search_at(
+    buf: &mut Buffer,
+    direction: LiteralDirection,
+    pattern: &LispString,
+    start: usize,
+    bound: Option<usize>,
+    case_fold: bool,
+) -> Option<(usize, MatchGroup)> {
+    buf.goto_emacs_byte_pos(neovm_edit::buffer::EmacsBytePos::new(start));
+    let mut regs = SearchRegisters::default();
+    let found = match direction {
+        LiteralDirection::Forward => {
+            super::search_forward_into(buf, pattern, bound, true, case_fold, &mut regs)
+        }
+        LiteralDirection::Backward => {
+            super::search_backward_into(buf, pattern, bound, true, case_fold, &mut regs)
+        }
+    }
+    .expect("noerror literal search does not fail")?;
+    let mut published = None;
+    regs.publish_buffer_into(buf, &mut published);
+    Some((found.get(), published?.group(0)?))
+}
+
+/// Every hit of a COUNT-style loop (repeated searches continuing from the
+/// last hit, as `search-forward' with COUNT > 1 or COUNT < 0 does), with the
+/// gap re-parked at GAP before each step when GAP is given.
+fn literal_search_hits(
+    buf: &mut Buffer,
+    direction: LiteralDirection,
+    pattern: &LispString,
+    bound: Option<usize>,
+    case_fold: bool,
+    gap: Option<usize>,
+) -> Vec<(usize, MatchGroup)> {
+    let mut point = match direction {
+        LiteralDirection::Forward => 0,
+        LiteralDirection::Backward => buf.accessible_emacs_byte_region().end().get(),
+    };
+    let mut hits = Vec::new();
+    loop {
+        if let Some(gap) = gap {
+            park_gap_at_keeping_point(buf, gap);
+        }
+        let Some(hit) = literal_search_at(buf, direction, pattern, point, bound, case_fold) else {
+            return hits;
+        };
+        if hit.0 == point {
+            // An empty match does not advance; one hit is enough.
+            hits.push(hit);
+            return hits;
+        }
+        point = hit.0;
+        hits.push(hit);
+    }
+}
+
+#[test]
+fn literal_search_results_do_not_depend_on_gap_position() {
+    crate::test_utils::init_test_tracing();
+    let text = "αβγ Éclair défun xyz défun ÉCLAIR tail défundéfun";
+    let char_boundaries: Vec<usize> = text
+        .char_indices()
+        .map(|(i, _)| i)
+        .chain([text.len()])
+        .collect();
+    // (pattern, case-fold): a hit straddling the gap at every offset, a hit
+    // ending exactly at the gap, a case-folded multibyte pattern, and a
+    // pattern longer than either gap half.
+    let cases = [
+        ("défun", false),
+        ("DÉFUN", true),
+        ("éclair", true),
+        ("Éclair", false),
+        ("fun", false),
+        ("missing", false),
+        (text, false),
+    ];
+    let bounds = [None, Some(9), Some(22), Some(40), Some(text.len())];
+    let mut reference = literal_gap_test_buffer(text);
+    let mut buf = literal_gap_test_buffer(text);
+    for (pattern, case_fold) in cases {
+        let pattern = LispString::from_utf8(pattern);
+        for direction in [LiteralDirection::Forward, LiteralDirection::Backward] {
+            for bound in bounds {
+                let expected = literal_search_hits(
+                    &mut reference,
+                    direction,
+                    &pattern,
+                    bound,
+                    case_fold,
+                    None,
+                );
+                for &gap in &char_boundaries {
+                    let got = literal_search_hits(
+                        &mut buf,
+                        direction,
+                        &pattern,
+                        bound,
+                        case_fold,
+                        Some(gap),
+                    );
+                    assert_eq!(
+                        got, expected,
+                        "{direction:?} {pattern:?} bound {bound:?} case-fold {case_fold} gap at {gap}"
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// The gap's byte position in an ASCII buffer.
+fn ascii_gap_byte(buf: &Buffer) -> usize {
+    usize::try_from(buf.gap_position_lisp() - 1).expect("gap position is at least 1")
+}
+
+#[test]
+fn literal_search_loop_with_gap_in_span_copies_nothing() {
+    use std::sync::atomic::Ordering;
+    crate::test_utils::init_test_tracing();
+    // About 1 MB, "defun" once per 505 bytes: 2,000 hits.
+    let unit = format!("{}(defun marker)\n", "x".repeat(490));
+    let text = unit.repeat(2_000);
+    let pattern = LispString::from_utf8("defun");
+    for (direction, parked) in [
+        (LiteralDirection::Forward, text.len() - 10),
+        (LiteralDirection::Backward, 10),
+    ] {
+        let mut buf = literal_gap_test_buffer(&text);
+        park_gap_at_keeping_point(&mut buf, parked);
+        let parked_gap = ascii_gap_byte(&buf);
+        assert_eq!(parked_gap, parked);
+        let copied_before = super::SEARCH_COPIED_BYTES.load(Ordering::Relaxed);
+        let mut point = match direction {
+            LiteralDirection::Forward => 0,
+            LiteralDirection::Backward => text.len(),
+        };
+        let mut hits = 0;
+        while let Some((found, _)) =
+            literal_search_at(&mut buf, direction, &pattern, point, None, false)
+        {
+            point = found;
+            hits += 1;
+        }
+        assert_eq!(hits, 2_000, "{direction:?}");
+        let copied = super::SEARCH_COPIED_BYTES.load(Ordering::Relaxed) - copied_before;
+        assert_eq!(copied, 0, "{direction:?}: bytes copied out of the buffer");
+        // GNU `search_buffer_non_re' reads both gap halves through
+        // BYTE_POS_ADDR (search.c:1298) and never calls move_gap: after the
+        // loop `gap-position' is exactly what the last edit left.
+        assert_eq!(
+            ascii_gap_byte(&buf),
+            parked_gap,
+            "{direction:?}: a literal search must leave the gap where the edit left it"
+        );
+    }
+}
+
+#[test]
+fn literal_search_after_edit_keeps_gap_at_the_edit() {
+    use std::sync::atomic::Ordering;
+    crate::test_utils::init_test_tracing();
+    // The shape of a command hook: insert at P, search forward from P,
+    // delete the char again, 200 times.
+    let unit = format!("{}(defun marker)\n", "x".repeat(490));
+    let text = unit.repeat(2_000);
+    let pattern = LispString::from_utf8("defun");
+    let mut buf = literal_gap_test_buffer(&text);
+    let p = text.len() / 10;
+    let copied_before = super::SEARCH_COPIED_BYTES.load(Ordering::Relaxed);
+    for _ in 0..200 {
+        buf.goto_emacs_byte_pos(neovm_edit::buffer::EmacsBytePos::new(p));
+        buf.insert("x");
+        // The edit parks the gap after the inserted character. GNU's literal
+        // search leaves it there; the search must not move it (search.c:1298).
+        let gap_after_edit = ascii_gap_byte(&buf);
+        assert_eq!(
+            gap_after_edit,
+            p + 1,
+            "insert must park the gap at the edit"
+        );
+        assert!(
+            literal_search_at(
+                &mut buf,
+                LiteralDirection::Forward,
+                &pattern,
+                p,
+                None,
+                false
+            )
+            .is_some()
+        );
+        assert_eq!(
+            ascii_gap_byte(&buf),
+            gap_after_edit,
+            "search moved the gap from the edit"
+        );
+        buf.delete_emacs_byte_range(EmacsByteRange::new(
+            neovm_edit::buffer::EmacsBytePos::new(p),
+            neovm_edit::buffer::EmacsBytePos::new(p + 1),
+        ));
+    }
+    let copied = super::SEARCH_COPIED_BYTES.load(Ordering::Relaxed) - copied_before;
+    assert_eq!(copied, 0, "bytes copied out of the buffer");
+}
+
+fn backward_search_buffer(text: &str) -> Buffer {
+    let mut buf = Buffer::new(
+        BufferId(1),
+        Value::string("backward-search"),
+        neovm_edit::buffer::shared::SavedPointBeforeCommand::new_editor_global(),
+    );
+    buf.insert(text);
+    buf
+}
+
+fn byte_pos(pos: usize) -> neovm_edit::buffer::EmacsBytePos {
+    neovm_edit::buffer::EmacsBytePos::new(pos)
+}
+
+/// Where the gap starts, read through the only view a search has of it: a
+/// range is one piece exactly when the gap does not lie strictly inside it.
+/// A gap at the buffer start reads as the buffer end; both are an edge.
+fn gap_start(buf: &Buffer) -> usize {
+    let (mut lo, mut hi) = (0, buf.total_emacs_byte_end_pos().get());
+    while lo < hi {
+        let mid = lo + (hi - lo).div_ceil(2);
+        if buf.has_contiguous_emacs_byte_range(EmacsByteRange::new(byte_pos(0), byte_pos(mid))) {
+            lo = mid;
+        } else {
+            hi = mid - 1;
+        }
+    }
+    lo
+}
+
+/// Park the gap at POS the way an edit does: insert a character there and
+/// delete it again.
+fn park_gap_at(buf: &mut Buffer, pos: usize) {
+    buf.goto_emacs_byte_pos(byte_pos(pos));
+    buf.insert("Q");
+    buf.delete_emacs_byte_range(EmacsByteRange::new(byte_pos(pos), byte_pos(pos + 1)));
+}
+
+/// Search backward from POINT with each of the three buffer entry points,
+/// assert that they agree, and return the match start.
+fn backward_search_all_entries(
+    buf: &mut Buffer,
+    pattern: &str,
+    point: usize,
+    bound: Option<usize>,
+) -> Option<usize> {
+    let pattern = LispString::from_utf8(pattern);
+    let context = BufferRegexpMatchContext::new(
+        crate::emacs_core::syntax::SyntaxProperties::Ignore,
+        crate::emacs_core::regex_emacs::WordBoundaryLookup::default(),
+    );
+    let mut regs = SearchRegisters::default();
+    buf.goto_emacs_byte_pos(byte_pos(point));
+    let lisp = re_search_backward_lisp_with_posix_into(
+        buf, &pattern, bound, true, false, false, context, &mut regs,
+    )
+    .unwrap()
+    .map(|pos| pos.get());
+    buf.goto_emacs_byte_pos(byte_pos(point));
+    let syntax = buffer_syntax_lookup(buf);
+    let compiled = compile_lisp_pattern_with_posix_translation(
+        &pattern,
+        false,
+        false,
+        buf.get_multibyte(),
+        None,
+        &syntax,
+    )
+    .unwrap();
+    let precompiled =
+        re_search_backward_compiled_into(buf, &compiled, bound, true, context, &mut regs)
+            .unwrap()
+            .map(|pos| pos.get());
+    buf.goto_emacs_byte_pos(byte_pos(point));
+    let raw = re_search_backward(buf, &pattern, bound, true, false)
+        .unwrap()
+        .map(|found| found.into_parts().1.get());
+    buf.goto_emacs_byte_pos(byte_pos(point));
+    assert_eq!(
+        (lisp, precompiled),
+        (raw, raw),
+        "{pattern:?} from {point} bound {bound:?}"
+    );
+    raw
+}
+
+#[test]
+fn re_search_backward_after_an_edit_moves_the_gap_by_a_character_not_the_buffer() {
+    crate::test_utils::init_test_tracing();
+    // What a `looking-back' hook does after each keystroke in a 1 MB buffer:
+    // type a character mid-buffer, then search back to the line start.  The
+    // search reads [line start, point] and the character after point; after
+    // the insert the gap sits at point, so that stretch is one piece but for
+    // one character.  Asking for the whole region instead pushed the gap to
+    // a region edge and the next insert dragged it back: 100 rounds moved
+    // about 100 MB.
+    let line = "abcdefg ijklmno qrstuvw yzabcde ghijklm opqrstu wxyzabc efghijk mnopq\n";
+    let mut buf = backward_search_buffer(&line.repeat(1_000_000 / line.len()));
+    let line_start = (buf.total_emacs_byte_end_pos().get() / 2 / line.len()) * line.len();
+    // The first edit brings the gap from the buffer end to the edit point;
+    // that move is the edit's, so the count starts after it.
+    park_gap_at(&mut buf, line_start + 10);
+    let pattern = LispString::from_utf8("\\(?:^[^\n]*x\\)\\=");
+    let context = BufferRegexpMatchContext::new(
+        crate::emacs_core::syntax::SyntaxProperties::Ignore,
+        crate::emacs_core::regex_emacs::WordBoundaryLookup::default(),
+    );
+    let syntax = buffer_syntax_lookup(&buf);
+    let compiled = compile_lisp_pattern_with_posix_translation(
+        &pattern,
+        false,
+        false,
+        buf.get_multibyte(),
+        None,
+        &syntax,
+    )
+    .unwrap();
+    let mut regs = SearchRegisters::default();
+    let mut gap = gap_start(&buf);
+    let mut travelled = 0;
+    let mut note_gap = |buf: &Buffer| {
+        let now = gap_start(buf);
+        travelled += now.abs_diff(gap);
+        gap = now;
+    };
+    for round in 0..100 {
+        buf.insert("x");
+        note_gap(&buf);
+        let point = buf.point_emacs_byte_pos();
+        let found = match round % 3 {
+            0 => re_search_backward_lisp_with_posix_into(
+                &mut buf,
+                &pattern,
+                Some(line_start),
+                true,
+                false,
+                false,
+                context,
+                &mut regs,
+            )
+            .unwrap(),
+            1 => re_search_backward_compiled_into(
+                &mut buf,
+                &compiled,
+                Some(line_start),
+                true,
+                context,
+                &mut regs,
+            )
+            .unwrap(),
+            _ => re_search_backward(&mut buf, &pattern, Some(line_start), true, false)
+                .unwrap()
+                .map(|found| found.into_parts().1),
+        };
+        assert_eq!(
+            found.map(|pos| pos.get()),
+            Some(line_start),
+            "round {round}"
+        );
+        note_gap(&buf);
+        buf.goto_emacs_byte_pos(point);
+    }
+    assert!(
+        travelled < 10_000,
+        "100 backward searches after an edit moved the gap over {travelled} bytes"
+    );
+}
+
+#[test]
+fn re_search_backward_answers_the_same_with_the_gap_parked_at_point() {
+    crate::test_utils::init_test_tracing();
+    // Every assertion that reads past the match: `\`' (only at the region
+    // start), `^', `\b' and `\B' at BOUND (the character before it), `$',
+    // `\b', `\>' and `\=' at point (the character after it), `\''.  Each
+    // case runs twice, once on a buffer that was never edited (gap at the
+    // end) and once with an edit parking the gap at point.
+    let text = "abc def\nghi jkl\nmno\n";
+    let cases: &[(&str, usize, Option<usize>, Option<usize>)] = &[
+        ("\\`", 12, None, Some(0)),
+        ("\\`", 12, Some(8), None),
+        ("\\`ghi", 12, Some(8), None),
+        ("^g", 12, Some(8), Some(8)),
+        ("^h", 12, Some(9), None),
+        ("\\bh", 12, Some(9), None),
+        ("\\Bh", 12, Some(9), Some(9)),
+        ("f$", 7, Some(4), Some(6)),
+        ("e$", 6, Some(4), None),
+        ("def$", 7, None, Some(4)),
+        ("c\\b", 3, Some(0), Some(2)),
+        ("b\\b", 2, Some(0), None),
+        ("abc\\>", 3, None, Some(0)),
+        ("ab\\>", 2, None, None),
+        ("i \\=", 12, None, Some(10)),
+        ("\\=", 12, Some(8), Some(12)),
+        ("l\\'", 15, None, None),
+        ("o\n\\'", 20, Some(16), Some(18)),
+        ("ghi jkl", 20, None, Some(8)),
+        ("ghi jkl", 14, None, None),
+    ];
+    for &(pattern, point, bound, expected) in cases {
+        let mut buf = backward_search_buffer(text);
+        assert_eq!(
+            backward_search_all_entries(&mut buf, pattern, point, bound),
+            expected,
+            "unedited: {pattern:?} from {point} bound {bound:?}"
+        );
+        park_gap_at(&mut buf, point);
+        assert_eq!(
+            backward_search_all_entries(&mut buf, pattern, point, bound),
+            expected,
+            "gap at point: {pattern:?} from {point} bound {bound:?}"
+        );
+    }
+
+    // A match that begins before the gap and ends after it, BOUND nil.
+    let mut buf = backward_search_buffer(text);
+    park_gap_at(&mut buf, 10);
+    assert_eq!(
+        backward_search_all_entries(&mut buf, "ghi jkl", 20, None),
+        Some(8)
+    );
+
+    // COUNT > 1 repeats the search from each match start.
+    let mut buf = backward_search_buffer(text);
+    park_gap_at(&mut buf, 20);
+    let mut point = 20;
+    let mut starts = Vec::new();
+    for _ in 0..3 {
+        point = backward_search_all_entries(&mut buf, "[a-z]+", point, None).unwrap();
+        starts.push(point);
+    }
+    assert_eq!(starts, [18, 17, 16]);
+
+    // Narrowed: `\`' and `\'' are the region's edges, wherever the gap is.
+    let mut buf = backward_search_buffer(text);
+    buf.narrow_to_emacs_byte_range(EmacsByteRange::new(byte_pos(4), byte_pos(15)));
+    park_gap_at(&mut buf, 12);
+    assert_eq!(
+        backward_search_all_entries(&mut buf, "\\`d", 12, None),
+        Some(4)
+    );
+    assert_eq!(
+        backward_search_all_entries(&mut buf, "\\`", 12, Some(5)),
+        None
+    );
+    assert_eq!(
+        backward_search_all_entries(&mut buf, "^g", 12, Some(8)),
+        Some(8)
+    );
+    park_gap_at(&mut buf, 15);
+    assert_eq!(
+        backward_search_all_entries(&mut buf, "l\\'", 15, None),
+        Some(14)
+    );
+    assert_eq!(
+        backward_search_all_entries(&mut buf, "\\`def", 15, None),
+        Some(4)
+    );
+}
+
+#[test]
+fn re_search_backward_keeps_the_whole_multibyte_character_after_point() {
+    crate::test_utils::init_test_tracing();
+    // Two-byte characters: λ0 μ2 ν4 SPC6 ξ7 ο9 π11 NL13.  Word boundaries at
+    // point read the whole of π, at BOUND the whole of ξ.
+    let text = "λμν ξοπ\n";
+    let cases: &[(&str, usize, Option<usize>, Option<usize>)] = &[
+        ("ο\\b", 11, Some(7), None),
+        ("ο\\B", 11, Some(7), Some(9)),
+        ("ο\\>", 11, Some(7), None),
+        ("π$", 13, Some(7), Some(11)),
+        ("\\bο", 13, Some(9), None),
+        ("\\Bο", 13, Some(9), Some(9)),
+        ("\\bξ", 13, Some(7), Some(7)),
+    ];
+    for &(pattern, point, bound, expected) in cases {
+        let mut buf = backward_search_buffer(text);
+        assert_eq!(
+            backward_search_all_entries(&mut buf, pattern, point, bound),
+            expected,
+            "unedited: {pattern:?} from {point} bound {bound:?}"
+        );
+        park_gap_at(&mut buf, point);
+        assert_eq!(
+            backward_search_all_entries(&mut buf, pattern, point, bound),
+            expected,
+            "gap at point: {pattern:?} from {point} bound {bound:?}"
+        );
     }
 }

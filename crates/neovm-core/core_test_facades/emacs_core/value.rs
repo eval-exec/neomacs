@@ -24,5 +24,8 @@ pub mod switch_plan;
 pub mod text_props;
 
 #[cfg(test)]
+#[path = "../../core_tests/emacs_core/runtime/value/tests/bytecode_capture_test.rs"]
+mod bytecode_capture_tests;
+#[cfg(test)]
 #[path = "../../core_tests/emacs_core/runtime/value/tests/value_test.rs"]
 mod tests;

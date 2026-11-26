@@ -26,6 +26,79 @@ fn oracle_prop_format_integer_specs() {
     crate::common::assert_oracle_parity_expect(form, expect);
 }
 
+#[test]
+fn oracle_prop_format_integer_flag_width_precision_edge_specs() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+
+    // The fixnum integer field is laid out without temporary Strings; these
+    // are the sign, alternate-form, precision-zero-suppression and width
+    // combinations where a layout mistake changes bytes.
+    let form = r#"(list (format "%06d" 42)
+                        (format "%06d" -42)
+                        (format "%-8x" 255)
+                        (format "%+.3d" 7)
+                        (format "%+.3d" -7)
+                        (format "%5s" "ab")
+                        (format "%-5s" "ab")
+                        (format "%#08x" 255)
+                        (format "%#o" 8)
+                        (format "%#.0o" 0)
+                        (format "%.0d" 0)
+                        (format "% d" 5)
+                        (format "%05d" -3)
+                        (format "%+05d" 3)
+                        (format "%b" 10)
+                        (format "%#b" 10)
+                        (format "%#B" 10)
+                        (format "%8.3d" 5)
+                        (format "%-+8.3d" 5)
+                        (format "%x" -255)
+                        (format "%#o" -8)
+                        (format "% 05d" 5)
+                        (format "%+x" 255)
+                        (format "%-05d" 3)
+                        (format "%#05o" 8)
+                        (format "%#.3o" 8)
+                        (format "%#.1o" 8)
+                        (format "%#x" 0)
+                        (format "%#.0x" 0)
+                        (format "%.0b" 0)
+                        (format "%#X" 255)
+                        (format "%b" most-negative-fixnum)
+                        (format "%#x" most-negative-fixnum)
+                        (format "%o" most-positive-fixnum)
+                        (format "%2$-6x|%1$+.2d" 3 255))"#;
+    let expect = expect_test::expect![[
+        r#""OK (\"000042\" \"-00042\" \"ff      \" \"+007\" \"-007\" \"   ab\" \"ab   \" \"0x0000ff\" \"010\" \"0\" \"\" \" 5\" \"-0003\" \"+0003\" \"1010\" \"0b1010\" \"0B1010\" \"     005\" \"+005    \" \"-ff\" \"-010\" \" 0005\" \"+ff\" \"3    \" \"00010\" \"010\" \"010\" \"0\" \"\" \"\" \"0XFF\" \"-10000000000000000000000000000000000000000000000000000000000000\" \"-0x2000000000000000\" \"177777777777777777777\" \"ff    |+03\")""#
+    ]];
+    crate::common::assert_oracle_parity_expect(form, expect);
+}
+
+#[test]
+fn oracle_prop_format_fixnum_fields_copy_property_spans() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+
+    // The direct fixnum field writer records its FormatSourceSpan from the
+    // planned field length. These rows pin the copied property intervals on
+    // a fully propertized control, on a numeric field ahead of a propertized
+    // %s argument, and on a numbered conversion.
+    let form = r#"(list
+ (let ((s (format (propertize "<%05d|%-4x|%+.3d>" 'face 'bold) 42 255 7)))
+   (list s (mapcar (lambda (i) (text-properties-at i s))
+                   (number-sequence 0 (1- (length s))))))
+ (let ((s (format "%5d%s" 3 (propertize "ab" 'face 'bold))))
+   (list s (mapcar (lambda (i) (text-properties-at i s))
+                   (number-sequence 0 (1- (length s))))))
+ (let ((s (format (propertize "%2$05d %1$s" 'face 'italic)
+                  (propertize "x" 'face 'bold) 7)))
+   (list s (mapcar (lambda (i) (text-properties-at i s))
+                   (number-sequence 0 (1- (length s)))))))"#;
+    let expect = expect_test::expect![[
+        r#""OK ((#(\"<00042|ff  |+007>\" 0 17 (face bold)) ((face bold) (face bold) (face bold) (face bold) (face bold) (face bold) (face bold) (face bold) (face bold) (face bold) (face bold) (face bold) (face bold) (face bold) (face bold) (face bold) (face bold))) (#(\"    3ab\" 5 7 (face bold)) (nil nil nil nil nil (face bold) (face bold))) (#(\"00007 x\" 0 6 (face italic) 6 7 (face bold)) ((face italic) (face italic) (face italic) (face italic) (face italic) (face italic) (face bold))))""#
+    ]];
+    crate::common::assert_oracle_parity_expect(form, expect);
+}
+
 // ---------------------------------------------------------------------------
 // Width and padding
 // ---------------------------------------------------------------------------

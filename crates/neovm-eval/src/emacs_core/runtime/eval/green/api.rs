@@ -6,7 +6,7 @@
 use super::{ConditionId, MutexId, ThreadKey, Wait};
 use crate::emacs_core::eval::Context;
 use crate::emacs_core::threads::{
-    CondVarHandle, MutexAcquisition, MutexHandle, MutexRelease, NotificationScope,
+    CondVarHandle, MutexAcquisition, MutexHandle, MutexRelease, NotificationScope, WaitCondvar,
 };
 use neovm_value::error::{EvalResult, expect_args, signal};
 use neovm_value::value::Value;
@@ -24,6 +24,15 @@ impl Context {
     #[doc(hidden)]
     pub fn green_threads_running(&mut self) -> bool {
         self.green_seat().is_some()
+    }
+
+    /// Whether this World has a started `GreenRuntime`, including for unseated
+    /// parallel owners running a serial turn on the same World so waking
+    /// operations (`mutex-unlock`, `condition-notify`, `thread-signal`) wake
+    /// blocked Baton-group waiters (L6.7b r1 §4).
+    #[doc(hidden)]
+    pub fn green_runtime_started(&self) -> bool {
+        self.green_runtime_ref().is_some()
     }
 
     /// The running thread's id in the World's `ThreadManager`.
@@ -57,11 +66,18 @@ impl Context {
         let key = ThreadKey::from_id(id);
         let control = self.green_control();
         if !control.exited(key) {
+            let joiner = self.green_current_id();
+            // GNU `thread_join_callback` (src/thread.c:1110-1115) waits only
+            // while this thread has no pending error, then its
+            // `post_acquire_global_lock` raises one, ahead of the snapshot.
             self.green_blocked_on(args[0], |ctx| {
-                while !control.exited(key) {
-                    ctx.green_wait(Wait::Join(key))?;
-                }
-                Ok(())
+                ctx.green_in_wait_condvar(WaitCondvar::Join, |ctx| {
+                    while !control.exited(key) && !ctx.threads.has_pending_thread_signal(joiner) {
+                        ctx.green_wait(Wait::Join(key))?;
+                    }
+                    Ok(())
+                })?;
+                ctx.green_raise_pending_signal(ThreadKey::from_id(joiner))
             })?;
         }
         self.threads.join_thread_for_value(args[0]);
@@ -103,6 +119,15 @@ impl Context {
         ) {
             control.wake(key);
         }
+        // GNU's `thread_signal_callback` runs for a target with a
+        // `wait_condvar`, also one already woken that has not run yet, and
+        // ends with the sender's own `post_acquire_global_lock`
+        // (src/thread.c:974-982, :1029-1030).
+        if self.threads.in_wait_condvar(id)
+            && let Some(sender) = self.green_key()
+        {
+            self.green_raise_pending_signal(sender)?;
+        }
         Ok(Value::NIL)
     }
 
@@ -130,17 +155,19 @@ impl Context {
         }
         let key = self.green_key().expect("a Green thread");
         self.green_blocked_on(mutex.value(), |ctx| {
-            loop {
-                // GNU `lisp_mutex_lock_for_thread`: a signal ends the wait;
-                // `post_acquire_global_lock` raises it.
-                ctx.green_raise_pending_signal(key)?;
-                ctx.green_wait(Wait::Mutex(MutexId::new(mutex.native_key())))?;
-                match ctx.threads.mutex_lock(mutex) {
-                    MutexAcquisition::Acquired => return Ok(()),
-                    MutexAcquisition::Blocked => {}
-                    MutexAcquisition::DepthExhausted => return Err(mutex_depth_exhausted()),
+            ctx.green_in_wait_condvar(WaitCondvar::Mutex, |ctx| {
+                loop {
+                    // GNU `lisp_mutex_lock_for_thread`: a signal ends the wait;
+                    // `post_acquire_global_lock` raises it.
+                    ctx.green_raise_pending_signal(key)?;
+                    ctx.green_wait(Wait::Mutex(MutexId::new(mutex.native_key())))?;
+                    match ctx.threads.mutex_lock(mutex) {
+                        MutexAcquisition::Acquired => return Ok(()),
+                        MutexAcquisition::Blocked => {}
+                        MutexAcquisition::DepthExhausted => return Err(mutex_depth_exhausted()),
+                    }
                 }
-            }
+            })
         })?;
         Ok(Value::NIL)
     }
@@ -153,6 +180,11 @@ impl Context {
             MutexRelease::Released => {
                 self.green_control()
                     .wake_waiting_for(Wait::Mutex(MutexId::new(mutex.native_key())));
+                // GNU `mutex_unlock_callback` (src/thread.c:372-378) runs
+                // `post_acquire_global_lock` after a release.
+                if let Some(key) = self.green_key() {
+                    self.green_raise_pending_signal(key)?;
+                }
             }
             MutexRelease::NotOwner => {
                 return Err(signal(
@@ -192,6 +224,11 @@ impl Context {
                     condition.native_key(),
                 )));
             }
+        }
+        // GNU `condition_notify_callback` ends with
+        // `post_acquire_global_lock` (src/thread.c:533).
+        if let Some(key) = self.green_key() {
+            self.green_raise_pending_signal(key)?;
         }
         Ok(Value::NIL)
     }
@@ -249,9 +286,30 @@ impl Context {
         result
     }
 
-    /// The runtime's scheduler.
+    /// Run WAIT inside GNU's `wait_condvar` of KIND (src/thread.c:231-236,
+    /// :460-464, :1109-1113): set as this thread enters the wait and cleared
+    /// when this thread leaves it, whichever way. In between, a woken thread
+    /// that has not run yet still counts as waiting.
+    pub(crate) fn green_in_wait_condvar<R>(
+        &mut self,
+        kind: WaitCondvar,
+        wait: impl FnOnce(&mut Self) -> Result<R, neovm_value::error::Flow>,
+    ) -> Result<R, neovm_value::error::Flow> {
+        let id = self.green_current_id();
+        self.threads.set_wait_condvar(id, Some(kind));
+        let result = wait(self);
+        self.threads.set_wait_condvar(id, None);
+        result
+    }
+
+    /// The runtime's scheduler (reachable from both seated Green threads and
+    /// unseated parallel owners running a serial turn on the same Green World).
     pub(crate) fn green_control(&mut self) -> std::sync::Arc<super::scheduler::Control> {
-        std::sync::Arc::clone(&self.green_seat().expect("a Green thread").control)
+        if let Some(seat) = self.green_seat() {
+            std::sync::Arc::clone(&seat.control)
+        } else {
+            self.with_green_runtime(|runtime| std::sync::Arc::clone(&runtime.control))
+        }
     }
 }
 

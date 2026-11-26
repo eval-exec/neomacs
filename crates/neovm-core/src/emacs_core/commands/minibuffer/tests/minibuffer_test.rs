@@ -127,8 +127,7 @@ fn minibuffer_copied_properties_have_only_manager_roots() {
             assert_eq!(
                 unsafe { Value::from_bits(*bits) }
                     .as_vector_data()
-                    .expect("live property vector")
-                    .as_slice(),
+                    .expect("live property vector"),
                 &[Value::fixnum(index as i64)]
             );
         }
@@ -1857,7 +1856,7 @@ fn atom_backed_completion_returns_the_symbols_materialized_name_object() {
     crate::test_utils::init_test_tracing();
     let mut eval = crate::test_utils::new_context();
     eval.obarray_view_mut()
-        .intern("atom-backed-completion-name-identity-probe");
+        .intern_member("atom-backed-completion-name-identity-probe");
 
     let result = eval
         .eval_str(

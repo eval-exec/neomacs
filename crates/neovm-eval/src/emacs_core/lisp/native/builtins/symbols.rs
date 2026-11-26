@@ -1109,7 +1109,7 @@ pub fn builtin_register_code_conversion_map(
         let plist = eval
             .obarray()
             .get_by_id(sym_id)
-            .map(|s| s.plist.get())
+            .map(|s| s.plist())
             .unwrap_or(Value::NIL);
         neovm_value::plist::plist_check(plist)?;
     }
@@ -1837,10 +1837,10 @@ pub(crate) fn is_global_obarray_proxy(eval: &super::eval::Context, value: &Value
         *SYMBOL.get_or_init(|| neovm_value::intern::intern("neovm--obarray-object"))
     }
     eval.builtin_var_value(neovm_obarray_object_sym())
-        .is_some_and(|proxy| proxy == *value)
+        .is_some_and(|proxy| proxy.bits() == value.bits())
 }
 
-fn current_lisp_obarray_value(eval: &super::eval::Context) -> Value {
+pub(crate) fn current_lisp_obarray_value(eval: &super::eval::Context) -> Value {
     // GNU's `Vobarray`; a Lisp `intern` call without an explicit obarray read
     // it by name. The internal fallback name belongs to this port.
     static OBARRAY: WellKnown = WellKnown::Obarray;
@@ -1904,7 +1904,17 @@ pub fn builtin_intern_fn(eval: &mut super::eval::Context, args: Vec<Value>) -> E
 
     // Custom obarray path
     if !is_global_obarray_proxy(eval, &effective_obarray) {
-        let obarray_val = check_obarray_value(effective_obarray)?;
+        let obarray_val = match check_obarray_reader(effective_obarray) {
+            Ok(value) => value,
+            Err(rejected) => {
+                // `Fintern` routes through the same check_obarray_slow.
+                reset_rejected_obarray(eval, rejected);
+                return Err(signal(
+                    LispCondition::WrongTypeArgument,
+                    vec![Value::symbol("obarrayp"), rejected],
+                ));
+            }
+        };
         let vec_len = obarray_len(obarray_val).unwrap_or(0);
         if vec_len == 0 {
             return Err(signal(
@@ -1956,12 +1966,49 @@ pub fn builtin_intern_fn(eval: &mut super::eval::Context, args: Vec<Value>) -> E
     let name_value = rewritten
         .map(|name| Value::heap_string(name.into_lisp_string()))
         .unwrap_or(args[0]);
-    let sym = eval.obarray_mut().intern_lisp_value(name_value);
+    let sym = eval.obarray_mut().intern_member_lisp_value(name_value);
     Ok(Value::from_sym_id(sym))
 }
 
 /// `intern-soft` as registered: fixed arity 2, called straight off the bytecode
 /// stack like GNU `funcall_subr`'s `a2` case (absent optionals arrive as nil).
+/// Publish SYMBOL, a canonical symbol object, into the custom OBARRAY the
+/// GNU reader would have interned it in (lread.c:4673-4706 interns into the
+/// current value of the `obarray` variable). If the spelling is already
+/// present, return that symbol and add nothing; otherwise prepend SYMBOL
+/// itself, so a caller that reads under a custom obarray sees the object it
+/// read, as GNU does.
+pub(crate) fn intern_symbol_value_into_obarray(symbol: Value, obarray_value: Value) -> EvalResult {
+    let name = symbol.as_bare_symbol_name().ok_or_else(|| {
+        signal(
+            LispCondition::WrongTypeArgument,
+            vec![Value::symbol("symbolp"), symbol],
+        )
+    })?;
+    let vec_len = obarray_len(obarray_value).unwrap_or(0);
+    if vec_len == 0 {
+        return Err(signal(
+            LispCondition::WrongTypeArgument,
+            vec![Value::symbol("obarrayp"), obarray_value],
+        ));
+    }
+    let idx = obarray_hash(name, vec_len);
+    let bucket = obarray_bucket(obarray_value, idx).unwrap_or(Value::NIL);
+    let mut cursor = bucket;
+    while cursor.is_cons() {
+        let entry = cursor.cons_car();
+        if entry.as_bare_symbol_name() == Some(name) {
+            return Ok(entry);
+        }
+        cursor = cursor.cons_cdr();
+    }
+    let new_bucket = Value::cons(symbol, bucket);
+    let _ = set_obarray_bucket(obarray_value, idx, new_bucket);
+    note_obarray_symbol_added(obarray_value);
+    grow_obarray_vector_if_needed(obarray_value);
+    Ok(symbol)
+}
+
 #[doc(hidden)]
 pub fn builtin_intern_soft_2(
     eval: &mut super::eval::Context,
@@ -2181,7 +2228,7 @@ fn shorthand_character_count_error(
     signal(LispCondition::Error, vec![Value::string(error.to_string())])
 }
 
-pub(crate) fn intern_soft_impl(eval: &super::eval::Context, args: &[Value]) -> EvalResult {
+pub(crate) fn intern_soft_impl(eval: &mut super::eval::Context, args: &[Value]) -> EvalResult {
     expect_min_args("intern-soft", args, 1)?;
     expect_max_args("intern-soft", args, 2)?;
     let effective_obarray = effective_obarray_arg(eval, args);
@@ -2190,7 +2237,20 @@ pub(crate) fn intern_soft_impl(eval: &super::eval::Context, args: &[Value]) -> E
     let selected = if is_global_obarray_proxy(eval, &effective_obarray) {
         SelectedInternSoftObarray::Global
     } else {
-        SelectedInternSoftObarray::Custom(CheckedInternSoftObarray::try_from(effective_obarray)?)
+        match check_obarray_reader(effective_obarray) {
+            Ok(value) => SelectedInternSoftObarray::Custom(CheckedInternSoftObarray {
+                value,
+                _mutator: std::marker::PhantomData,
+            }),
+            Err(rejected) => {
+                // Fintern_soft shares check_obarray_slow's reset.
+                reset_rejected_obarray(eval, rejected);
+                return Err(signal(
+                    LispCondition::WrongTypeArgument,
+                    vec![Value::symbol("obarrayp"), rejected],
+                ));
+            }
+        }
     };
     let query = if let Some(id) = symbol_id(&args[0], eval.symbol_mode()) {
         InternSoftQuery::Exact {
@@ -2284,19 +2344,24 @@ fn make_compat_obarray() -> Value {
     Value::obarray(1)
 }
 
-#[doc(hidden)]
-pub fn check_obarray_value(value: Value) -> Result<Value, Flow> {
+/// GNU `check_obarray` for callers that cannot build a Lisp `Flow` (the value
+/// reader's symbol-token path). Returns the effective obarray object, or the
+/// rejected value so the caller can signal `(wrong-type-argument obarrayp V)`
+/// with GNU's payload (`lread.c:4644-4666`).
+pub(crate) fn check_obarray_reader(value: Value) -> Result<Value, Value> {
     if is_obarray_value(value) {
         return Ok(value);
     }
 
     if value.is_vector() {
         let slots = value.as_vector_data().unwrap();
-        if let Some(slot0) = slots.first().copied() {
+        if let Some(slot0) = slots.first() {
             if is_obarray_value(slot0) {
                 return Ok(slot0);
             }
             if slot0 == Value::fixnum(0) {
+                // GNU's legacy vector: store a real obarray object in slot 0
+                // and use it for the rest of the read.
                 let obarray = make_compat_obarray();
                 let _ = value.set_vector_slot(0, obarray);
                 return Ok(obarray);
@@ -2304,10 +2369,74 @@ pub fn check_obarray_value(value: Value) -> Result<Value, Flow> {
         }
     }
 
-    Err(signal(
-        LispCondition::WrongTypeArgument,
-        vec![Value::symbol("obarrayp"), value],
-    ))
+    Err(value)
+}
+
+#[doc(hidden)]
+pub fn check_obarray_value(value: Value) -> Result<Value, Flow> {
+    check_obarray_reader(value).map_err(|value| {
+        signal(
+            LispCondition::WrongTypeArgument,
+            vec![Value::symbol("obarrayp"), value],
+        )
+    })
+}
+
+/// GNU `check_obarray_slow` resets `Vobarray` to the initial obarray before
+/// signalling when the rejected value is the current obarray
+/// (`lread.c:4662-4665`). Neomacs's dynamic binding is the `obarray` value
+/// cell, so writing the global proxy reproduces that reset inside the
+/// current `let`; the specpdl unwind restores the outer value as usual.
+pub(crate) fn reset_rejected_obarray(eval: &mut super::eval::Context, rejected: Value) {
+    // GNU compares `Vobarray` with `BASE_EQ`; a distinct but `equal` vector
+    // is not the current obarray.
+    if current_lisp_obarray_value(eval).bits() != rejected.bits() {
+        return;
+    }
+    static OBARRAY: WellKnown = WellKnown::Obarray;
+    static NEOVM_OBARRAY_OBJECT: WellKnown = WellKnown::NeovmObarrayObject;
+    if let Some(global) = eval.builtin_var_value(NEOVM_OBARRAY_OBJECT.id()) {
+        // The ordinary `setq` store, including projected bindings, so the
+        // handler sees the reset exactly as GNU's `SET_SYMBOL_VAL` does.
+        let _ = eval.assign_setq_dynamic_by_id(OBARRAY.id(), global);
+    }
+}
+
+/// GNU's reader interns every symbol token into the current obarray while
+/// reading: `oblookup` finds an existing symbol or `intern_driver` creates a
+/// new one and prepends it to the bucket (`lread.c:4217-4249`). Interning a
+/// spelling into a custom obarray therefore yields a fresh, non-canonical
+/// symbol, not the global one, and a spelling already present yields the
+/// object that obarray holds.
+///
+/// OBARRAY must have passed [`check_obarray_reader`]. Returns the rejected
+/// value when the obarray has no buckets (GNU signals `wrong-type-argument
+/// obarrayp` for that too, as `intern` does).
+pub(crate) fn obarray_intern_reader_name(
+    obarray: Value,
+    name: neovm_value::heap_types::LispString,
+) -> Result<Value, Value> {
+    let len = obarray_len(obarray).unwrap_or(0);
+    if len == 0 {
+        return Err(obarray);
+    }
+    let query = neovm_value::intern::SymbolNameQuery::from(&name);
+    let idx = obarray_hash_name_query(query, len);
+    let bucket = obarray_bucket(obarray, idx).unwrap_or(Value::NIL);
+    if let Some(sym) = obarray_bucket_find_name_query(bucket, query) {
+        return Ok(sym);
+    }
+    // GNU's single creation path shares `Fmake_symbol` for both obarrays
+    // (`intern_driver`, lread.c:4705-4708); the reader's token string becomes
+    // the new symbol's name object.
+    let sym = Value::from_sym_id(neovm_value::intern::make_uninterned_symbol_with_name_value(
+        Value::heap_string(name),
+    ));
+    let new_bucket = Value::cons(sym, bucket);
+    let _ = set_obarray_bucket(obarray, idx, new_bucket);
+    note_obarray_symbol_added(obarray);
+    grow_obarray_vector_if_needed(obarray);
+    Ok(sym)
 }
 
 pub(crate) fn expect_obarray_vector_id(value: &Value) -> Result<Value, Flow> {
@@ -2331,9 +2460,7 @@ pub fn obarray_bucket(value: Value, idx: usize) -> Option<Value> {
             .as_obarray_obj()
             .and_then(|obj| obj.buckets.get(idx).copied());
     }
-    value
-        .as_vector_data()
-        .and_then(|items| items.get(idx).copied())
+    value.as_vector_data().and_then(|items| items.get(idx))
 }
 
 #[doc(hidden)]
@@ -2436,9 +2563,8 @@ pub fn builtin_redisplay(
 }
 
 #[doc(hidden)]
-pub fn builtin_suspend_emacs(args: Vec<Value>) -> EvalResult {
-    expect_args_range("suspend-emacs", &args, 0, 1)?;
-    Ok(Value::NIL)
+pub fn builtin_suspend_emacs(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
+    super::eval::lifecycle::suspend_emacs(eval, args)
 }
 
 #[doc(hidden)]
@@ -2581,6 +2707,13 @@ pub fn builtin_set_buffer_redisplay(
     // even when it is undisplayed. This is SOME, not global ALL.
     if let Some(buffer) = eval.edit.buffers.current_buffer_id() {
         eval.gnu_mark_buffer_mode_line(buffer);
+        // GNU xdisp.c:929 also sets
+        // `current_buffer->prevent_redisplay_optimizations_p`, which makes
+        // `current_matrix_up_to_date_p` false for every window showing the
+        // buffer (src/xdisp.c:20557-20586).  Raise it as the buffer's own
+        // witness: the body-redisplay revision is reserved for an explicit
+        // body invalidation and must not relayout text here.
+        eval.gnu_mark_buffer_prevent_redisplay_optimizations(buffer);
     }
     eval.invalidate_redisplay();
     Ok(Value::NIL)
@@ -2722,25 +2855,246 @@ pub fn builtin_native_comp_available_p(args: Vec<Value>) -> EvalResult {
     Ok(Value::NIL)
 }
 
-#[doc(hidden)]
-pub fn builtin_open_font(args: Vec<Value>, symbol_mode: SymbolMode) -> EvalResult {
-    expect_args_range("open-font", &args, 1, 3)?;
-    let is_font_entity = match args[0].kind() {
-        ValueKind::Veclike(VecLikeType::Vector) => {
-            let items = args[0].as_vector_data().unwrap().clone();
-            items
-                .first()
-                .is_some_and(|v| v.as_symbol_name(symbol_mode) == Some(":font-entity"))
+/// Look up one keyword property on a font entity/spec field vector. Entity
+/// keys are keywords, so the `:` prefix is stripped before matching.
+fn font_entity_field(fields: &[Value], name: &str, symbol_mode: SymbolMode) -> Option<Value> {
+    let mut index = 1;
+    while index + 1 < fields.len() {
+        if fields[index]
+            .as_symbol_name(symbol_mode)
+            .is_some_and(|key| key.trim_start_matches(':') == name)
+        {
+            return Some(fields[index + 1]);
+        }
+        index += 2;
+    }
+    None
+}
+
+fn font_entity_set_field(
+    fields: &mut Vec<Value>,
+    name: &'static str,
+    value: Value,
+    symbol_mode: SymbolMode,
+) {
+    let mut index = 1;
+    while index + 1 < fields.len() {
+        if fields[index]
+            .as_symbol_name(symbol_mode)
+            .is_some_and(|key| key.trim_start_matches(':') == name)
+        {
+            fields[index + 1] = value;
+            return;
+        }
+        index += 2;
+    }
+    fields.push(Value::keyword(name));
+    fields.push(value);
+}
+
+/// `eq`-style comparison for the requested-size cache key. Nil, fixnum, and
+/// float are the only shapes `open-font` accepts here.
+fn opened_font_size_key_matches(candidate: Value, key: Value) -> bool {
+    match (candidate.kind(), key.kind()) {
+        (ValueKind::Nil, ValueKind::Nil) => true,
+        (ValueKind::Fixnum(left), ValueKind::Fixnum(right)) => left == right,
+        (ValueKind::Float, ValueKind::Float) => {
+            candidate.xfloat().to_bits() == key.xfloat().to_bits()
         }
         _ => false,
+    }
+}
+
+fn opened_font_cache_lookup(cache: Value, key: Value) -> Option<Value> {
+    let mut cursor = cache;
+    while cursor.is_cons() {
+        let entry = cursor.cons_car();
+        if entry.is_cons() && opened_font_size_key_matches(entry.cons_car(), key) {
+            return Some(entry.cons_cdr());
+        }
+        cursor = cursor.cons_cdr();
+    }
+    None
+}
+
+#[doc(hidden)]
+pub fn builtin_open_font(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
+    use crate::emacs_core::eval::{FontOpenEntityRequest, FontOpeningSize};
+    use neovm_value::display_vocab::FontEntityHandle;
+
+    expect_args_range("open-font", &args, 1, 3)?;
+    let symbol_mode = eval.symbol_mode();
+    // GNU decodes FRAME before CHECK_FONT_ENTITY and the size operand.
+    let frame_id = match args.get(2) {
+        None => eval
+            .frame_manager()
+            .selected_frame()
+            .map(|frame| frame.id)
+            .ok_or_else(|| signal("error", vec![Value::string("No selected frame")]))?,
+        Some(value) if value.is_nil() => eval
+            .frame_manager()
+            .selected_frame()
+            .map(|frame| frame.id)
+            .ok_or_else(|| signal("error", vec![Value::string("No selected frame")]))?,
+        Some(value) if value.is_frame() => {
+            let frame_id =
+                neovm_value::display_vocab::FrameId(value.as_frame_id().expect("frame value"));
+            if eval.frame_manager().get(frame_id).is_none() {
+                return Err(signal(
+                    LispCondition::WrongTypeArgument,
+                    vec![Value::symbol("frame-live-p"), *value],
+                ));
+            }
+            frame_id
+        }
+        Some(value) => {
+            return Err(signal(
+                LispCondition::WrongTypeArgument,
+                vec![Value::symbol("frame-live-p"), *value],
+            ));
+        }
     };
+
+    let entity = args[0];
+    let mut entity_fields: Vec<Value> = entity
+        .as_vector_data()
+        .map(|fields| fields.to_vec())
+        .unwrap_or_default();
+    let is_font_entity = entity_fields
+        .first()
+        .is_some_and(|tag| tag.as_symbol_name(symbol_mode) == Some(":font-entity"));
     if !is_font_entity {
         return Err(signal(
             LispCondition::WrongTypeArgument,
-            vec![Value::symbol("font-entity"), args[0]],
+            vec![Value::symbol("font-entity"), entity],
         ));
     }
-    Ok(Value::NIL)
+
+    // GNU `Fopen_font`: NIL size forwards the entity's own size operand
+    // (0 for scalable entities); an explicit integer is a pixel operand, an
+    // explicit float is a point size converted through the frame resolution.
+    // Operand 0 becomes 120; a negative operand reaches the driver, which
+    // opens its smallest usable strike unless the +15 probe window cannot
+    // reach a manageable size (then the open returns nil).  The object's
+    // `:size` keeps the operand GNU stored, which can differ from the pixel
+    // size the driver actually opened.
+    #[derive(Clone, Copy)]
+    enum SizeRequest {
+        EntityDefault,
+        Integer(i64),
+        Float(f64),
+    }
+    let size_argument = args.get(1).copied().filter(|value| !value.is_nil());
+    let (size_key, request) = match size_argument {
+        None => (Value::NIL, SizeRequest::EntityDefault),
+        Some(value) if value.is_fixnum() => {
+            let size = value.as_fixnum().expect("fixnum");
+            if !(i64::from(i32::MIN)..=i64::from(i32::MAX)).contains(&size) {
+                return Err(signal(LispCondition::ArgsOutOfRange, vec![entity, value]));
+            }
+            (value, SizeRequest::Integer(size))
+        }
+        Some(value) if value.is_float() => (value, SizeRequest::Float(value.xfloat())),
+        Some(value) => {
+            return Err(signal(
+                LispCondition::WrongTypeArgument,
+                vec![Value::symbol("numberp"), value],
+            ));
+        }
+    };
+
+    let resolve_operand = |operand: i64| -> Result<Option<(FontOpeningSize, i64)>, Flow> {
+        let operand = if operand == 0 { 120 } else { operand };
+        if operand < -15 {
+            // font_open_entity probes psize .. psize+15; none is manageable.
+            return Ok(None);
+        }
+        let opening = if operand > 0 {
+            FontOpeningSize::Pixels(
+                std::num::NonZeroU32::new(operand as u32).expect("positive operand"),
+            )
+        } else {
+            FontOpeningSize::SmallestUsable
+        };
+        Ok(Some((opening, operand)))
+    };
+
+    let mut resolved = match request {
+        SizeRequest::EntityDefault => {
+            let entity_size = font_entity_field(&entity_fields, "size", symbol_mode)
+                .and_then(|value| value.as_fixnum())
+                .unwrap_or(0);
+            // NIL size does not take the explicit-argument 0 -> 120 rule.
+            let opening = u32::try_from(entity_size)
+                .ok()
+                .filter(|size| *size > 0)
+                .and_then(std::num::NonZeroU32::new)
+                .map(FontOpeningSize::Pixels)
+                .unwrap_or(FontOpeningSize::SmallestUsable);
+            Some((opening, entity_size))
+        }
+        SizeRequest::Integer(operand) => resolve_operand(operand)?,
+        SizeRequest::Float(_) => None,
+    };
+    if !matches!(request, SizeRequest::Float(_)) && resolved.is_none() {
+        return Ok(Value::NIL);
+    }
+
+    // GNU reuses the opened font object cached on its entity for the same
+    // pixel size, so `(eq (open-font e 20) (open-font e 20))` is t. Keep the
+    // same per-entity cache in a hidden entity property, which also roots the
+    // Value for the garbage collector exactly as long as the entity lives.
+    let cache = font_entity_field(&entity_fields, "neomacs-opened-fonts", symbol_mode)
+        .unwrap_or(Value::NIL);
+    if let Some(opened) = opened_font_cache_lookup(cache, size_key) {
+        return Ok(opened);
+    }
+
+    let handle = font_entity_field(&entity_fields, "neomacs-entity-handle", symbol_mode)
+        .and_then(|value| value.as_int())
+        .and_then(|value| u32::try_from(value).ok())
+        .and_then(FontEntityHandle::new);
+    let Some(host) = eval.display_host.as_mut() else {
+        return Ok(Value::NIL);
+    };
+    if let SizeRequest::Float(points) = request {
+        let Some(operand) = host
+            .font_open_point_pixels(points)
+            .map_err(|error| signal("error", vec![Value::string(error)]))?
+        else {
+            return Ok(Value::NIL);
+        };
+        if !(i64::from(i32::MIN)..=i64::from(i32::MAX)).contains(&operand) {
+            return Err(signal(LispCondition::ArgsOutOfRange, vec![entity, args[1]]));
+        }
+        resolved = resolve_operand(operand)?;
+        if resolved.is_none() {
+            return Ok(Value::NIL);
+        }
+    }
+    let (opening_size, reported_size) = resolved.expect("open-font operand resolved");
+    let opened = host
+        .open_font_entity(FontOpenEntityRequest {
+            frame_id,
+            handle,
+            size: opening_size,
+            reported_size: Some(reported_size),
+        })
+        .map_err(|error| signal("error", vec![Value::string(error)]))?;
+    let Some(opened) = opened else {
+        return Ok(Value::NIL);
+    };
+
+    let cache_entry = Value::cons(size_key, opened);
+    let cache = Value::cons(cache_entry, cache);
+    font_entity_set_field(
+        &mut entity_fields,
+        "neomacs-opened-fonts",
+        cache,
+        symbol_mode,
+    );
+    let _ = entity.replace_vector_data(entity_fields);
+    Ok(opened)
 }
 
 #[doc(hidden)]
@@ -3044,7 +3398,7 @@ pub fn builtin_set_charset_plist(args: Vec<Value>, symbol_mode: SymbolMode) -> E
             i += 2;
         }
     }
-    super::charset::set_charset_plist_registry(name, plist_pairs);
+    super::charset::set_charset_plist_value(name, plist_pairs, args[1]);
     Ok(args[1])
 }
 
@@ -3156,12 +3510,6 @@ pub fn builtin_set_minibuffer_window(
             vec![Value::symbol("windowp"), args[0]],
         )),
     }
-}
-
-#[doc(hidden)]
-pub fn builtin_sort_charsets(args: Vec<Value>) -> EvalResult {
-    expect_args("sort-charsets", &args, 1)?;
-    Ok(Value::NIL)
 }
 
 #[doc(hidden)]
@@ -3577,7 +3925,7 @@ fn compare_value_sequences(
     };
 
     for (left, right) in left_values.iter().zip(right_values.iter()) {
-        let cmp = compare_value_lt_inner(eval, left, right, maxdepth)?;
+        let cmp = compare_value_lt_inner(eval, &left, &right, maxdepth)?;
         if cmp != Ordering::Equal {
             return Ok(cmp);
         }
@@ -3851,7 +4199,7 @@ pub fn builtin_variable_binding_locus(
                     }
                 }
                 if let Some(blv) = ctx.obarray.blv(resolved)
-                    && blv.found
+                    && blv.found.get()
                     && !blv.where_buf.get().is_nil()
                 {
                     return Ok(blv.where_buf.get());
@@ -3932,7 +4280,7 @@ fn stored_interactive_spec_value(spec: Value) -> Value {
     if let Some(items) = spec.as_vector_data()
         && let Some(first) = items.first()
     {
-        return *first;
+        return first;
     }
     spec
 }
@@ -4025,12 +4373,28 @@ fn interactive_form_from_quoted_lambda(
 }
 
 fn interactive_form_from_bytecode_value(function: Value) -> Option<Value> {
+    // GNU reads CLOSURE_INTERACTIVE from the closure's slot array.  When the
+    // reader stored slots back, that array is the installed GNU slot vector;
+    // read it through the same source `aref` uses.
+    static INTERACTIVE_FORM_SYMBOL: WellKnown = WellKnown::Interactive;
+    if let Some(neovm_value::tagged::header::ClosureSlotSource::Materialized(slots)) =
+        function.bytecode_slot_source()
+        && let Some(items) = slots.as_vector_data()
+    {
+        if items.len() <= 5 {
+            return None;
+        }
+        let spec_val = stored_interactive_spec_value(items.at(5));
+        return Some(Value::list(vec![
+            Value::symbol(&INTERACTIVE_FORM_SYMBOL),
+            spec_val,
+        ]));
+    }
     let probe = function.bytecode_interactive_probe()?;
     if probe.slot_count() <= 5 {
         return None;
     }
     // GNU's `Qinteractive`; this form is reconstructed per command lookup.
-    static INTERACTIVE_FORM_SYMBOL: WellKnown = WellKnown::Interactive;
     let spec_val = stored_interactive_spec_value(probe.interactive().unwrap_or(Value::NIL));
     Some(Value::list(vec![
         Value::symbol(&INTERACTIVE_FORM_SYMBOL),
@@ -4752,6 +5116,13 @@ pub(crate) fn cache_event_symbol_properties_in_obarray(
     obarray: &mut Obarray,
     symbol: SymId,
 ) -> EvalResult {
+    // GNU creates every derived event symbol in `modify_event_symbol` /
+    // `apply_modifiers` with `intern` (src/keyboard.c:7800-7830), so the
+    // event heads a keymap or a Lisp caller observes are obarray members.
+    // The port builds the `C-M-S-kp-up`-style names from strings; publish
+    // membership at this one cache boundary, which both event-symbol startup
+    // seeding and `define-key` go through (PEER 5786 census).
+    obarray.ensure_interned_global_id(symbol);
     let symbol_value = Value::from_sym_id(symbol);
     let name = symbol_value.as_bare_symbol_name().ok_or_else(|| {
         signal(
@@ -4973,7 +5344,7 @@ pub fn init_event_symbol_properties(obarray: &mut Obarray) {
     }
 }
 
-fn init_standard_event_symbol(obarray: &mut Obarray, name: &str, kind: Option<&str>) {
+fn init_standard_event_symbol(obarray: &mut Obarray, name: &str, kind: Option<&'static str>) {
     let sym = intern(name);
     let _ = cache_event_symbol_properties_in_obarray(obarray, sym);
     if let Some(kind) = kind {
@@ -5427,12 +5798,6 @@ pub fn builtin_handler_bind_1(eval: &mut super::eval::Context, args: Vec<Value>)
 }
 
 #[doc(hidden)]
-pub fn builtin_iso_charset(args: Vec<Value>) -> EvalResult {
-    expect_args("iso-charset", &args, 3)?;
-    Ok(Value::NIL)
-}
-
-#[doc(hidden)]
 pub fn builtin_keymap_prompt(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
     expect_args("keymap-prompt", &args, 1)?;
     let map = crate::emacs_core::eval::keymap_lookup::get_keymap_in_obarray(
@@ -5502,18 +5867,24 @@ pub fn builtin_kill_emacs(eval: &mut super::eval::Context, args: Vec<Value>) -> 
     eval.shutdown_with_hooks(request)
 }
 
-/// `(lower-frame &optional FRAME)`
+/// `(lread--substitute-object-in-subtree OBJECT PLACEHOLDER COMPLETED)`
 ///
-/// GNU `Flower_frame` opens with `decode_live_frame (frame)` (`src/frame.c`),
-/// so a window, a symbol, or anything else that is not a live frame is
-/// rejected against `frame-live-p` before any lowering is attempted.  The
-/// lowering itself has no effect without a window system, but the type check
-/// is not conditional on one -- accepting every argument silently is how a
-/// caller passing the wrong object learns nothing.
-
+/// GNU `Flread__substitute_object_in_subtree` (`src/lread.c`): put OBJECT
+/// wherever PLACEHOLDER occurs inside it, in place, and return nil. edebug's
+/// `#N=` reader (`edebug-read-special`) calls it. COMPLETED only names the
+/// nodes GNU remembers against cycles; the shared reader walk remembers every
+/// container instead (`value_reader::substitute_object_in_subtree`).
 #[doc(hidden)]
-pub fn builtin_lread_substitute_object_in_subtree(args: Vec<Value>) -> EvalResult {
+pub fn builtin_lread_substitute_object_in_subtree(
+    eval: &mut super::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
     expect_args("lread--substitute-object-in-subtree", &args, 3)?;
+    crate::emacs_core::value_reader::substitute_object_in_subtree(
+        args[0],
+        args[1],
+        eval.symbol_mode(),
+    )?;
     Ok(Value::NIL)
 }
 
@@ -5547,11 +5918,11 @@ fn adopt_make_byte_code_slot_objects(function: Value, code: Value, constants: Va
     let Some(bc) = function.get_bytecode_data() else {
         return;
     };
-    if bc.gnu_bytecode_bytes.is_some() {
+    if bc.gnu_bytecode_bytes().is_some() {
         install_bytecode_slot_object(function, ByteCodeSlotObject::Code, code);
     }
-    let pool = bc.constants.as_slice();
-    if bc.env.is_none()
+    let pool = bc.constants().as_slice();
+    if bc.env().is_none()
         && constants.as_vector_data().is_some_and(|items| {
             items.len() == pool.len() && items.iter().zip(pool).all(|(a, b)| a.bits() == b.bits())
         })
@@ -5794,7 +6165,7 @@ fn build_byte_code_function(
     // rather than going through as_str() which requires valid UTF-8.
     let raw_bytes =
         neovm_value::tagged::header::LispByteVec::copy_from_slice(slots.code.as_bytes());
-    let _ = bytecode_str.with_lisp_string_mut(|string| string.pin_immovable());
+    let _ = bytecode_str.pin_string_immovable();
 
     // 3. Extract constants from vector
     let mut constants: Vec<Value> = slots.constants.as_slice().to_vec();
@@ -5873,7 +6244,7 @@ fn build_byte_code_function(
     match timing {
         GnuDecodeTiming::Deferred => {
             bc.defer_gnu_decode();
-            if !bc.ops.is_empty() {
+            if !bc.ops().is_empty() {
                 // Eager decode policy kept the instructions resident; prove
                 // them now that every shape field is final. (The lazy path
                 // proves at decode.)
@@ -6083,10 +6454,18 @@ pub fn builtin_make_closure(args: &[Value]) -> EvalResult {
         )
     })?;
 
-    if let Some(env_val) = proto.env {
+    if let Some(env_val) = proto.env() {
         // NeoVM-compiled: replace first N values in env alist
         let mut new_bc = proto.clone();
-        new_bc.env = Some(replace_env_alist_values(env_val, closure_vars));
+        // Ops bytes are unchanged. set_env drops the certificate; restore
+        // the seal and recompute the stack proof for the new alist.
+        let keep_seal = new_bc.ops_sealed();
+        new_bc.set_env(Some(replace_env_alist_values(env_val, closure_vars)));
+        if keep_seal {
+            /* SAFETY: ops bytes are unchanged. seal_ops already succeeded on this function, and clone copied those ops. set_env only cleared the flag. */
+            unsafe { new_bc.mark_ops_sealed() };
+            new_bc.refresh_stack_verification();
+        }
         return Ok(share_prototype_code(
             *prototype,
             Value::make_bytecode(new_bc),
@@ -6099,7 +6478,7 @@ pub fn builtin_make_closure(args: &[Value]) -> EvalResult {
     // GNU .elc: a fresh constant vector (GNU copies it per call too — the
     // captured prefix is per instance), built in one pass: the captured
     // values, then the prototype's tail.
-    let proto_constants = proto.constants.as_slice();
+    let proto_constants = proto.constants().as_slice();
     if closure_vars.len() > proto_constants.len() {
         return Err(signal(
             "error",
@@ -6191,7 +6570,8 @@ fn make_closure_in_place() -> bool {
 /// `make-closure` of a GNU prototype the former way, kept for the
 /// `NEOVM_MAKE_CLOSURE_IN_PLACE=off` A/B: clone the whole prototype (its
 /// constant pool included), patch the captured prefix in the copy, and
-/// move the copy into the heap.
+/// move the copy into the heap. The patch writes values only.
+/// `constants_mut` would drop the seal and replace the shared lazy cell.
 #[inline(never)]
 fn make_closure_by_clone(
     prototype: Value,
@@ -6199,15 +6579,13 @@ fn make_closure_by_clone(
     closure_vars: &[Value],
 ) -> EvalResult {
     let mut new_bc = proto.clone();
-    if closure_vars.len() > new_bc.constants.len() {
+    if closure_vars.len() > new_bc.constants().len() {
         return Err(signal(
             "error",
             vec![Value::string("Closure vars do not fit in constvec")],
         ));
     }
-    for (i, var) in closure_vars.iter().enumerate() {
-        new_bc.constants[i] = *var;
-    }
+    new_bc.overwrite_constant_prefix(closure_vars);
     #[cfg(feature = "jit")]
     if let Some(id) = new_bc.jit_runtime().note_patched_prefix(closure_vars.len()) {
         crate::emacs_core::jit::cache::evict_compiled(id);
@@ -6293,6 +6671,15 @@ pub(crate) fn swap_world_state(slot: &mut dyn std::any::Any) {
     LOSSAGE_SIZE.with(|size| std::mem::swap(&mut *size.borrow_mut(), slot));
 }
 
+/// Hold the lossage slot borrowed so a source-carrier swap refuses.
+#[cfg(test)]
+pub(crate) fn with_source_lossage_reader_for_test<R>(body: impl FnOnce() -> R) -> R {
+    LOSSAGE_SIZE.with(|slot| {
+        let _reader = slot.borrow();
+        body()
+    })
+}
+
 // ---------------------------------------------------------------------------
 // Argument helpers
 // ---------------------------------------------------------------------------
@@ -6311,7 +6698,7 @@ fn is_global_obarray_proxy_in_state(
     value: &Value,
 ) -> bool {
     vars.value_by_name("obarray")
-        .is_some_and(|proxy| proxy == *value)
+        .is_some_and(|proxy| proxy.bits() == value.bits())
 }
 
 /// (mapatoms FUNCTION &optional OBARRAY) — call FUNCTION with each interned symbol.

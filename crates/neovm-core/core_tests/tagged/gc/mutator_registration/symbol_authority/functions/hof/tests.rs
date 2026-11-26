@@ -14,9 +14,7 @@ use crate::test_utils::SubrValueExt;
 use neovm_eval::test_support::authority::{
     SubrEntry, SubrEntryChange, register_global_subr_entry, with_subr_entry_change,
 };
-use neovm_value::test_support::authority::{Deadline, Retry, rendezvous, retry_owned};
 use std::num::{NonZeroU32, NonZeroU64};
-use std::ops::ControlFlow;
 
 fn oracle_selection(row: usize) -> FunctionSelection {
     let rows: [&str; 6] = include_str!("oracle.expected")
@@ -140,16 +138,9 @@ fn fixture(
                 owner
                     .run_access()
                     .and_then(|mut run| run.clear_root_slots())?;
-                retry_owned(
-                    Deadline::contention(),
-                    owner,
-                    |owner| owner.retire_rooted(&[]),
-                    |failure| match rendezvous(&failure.reason) {
-                        Retry::Busy => ControlFlow::Continue(failure.into_owner()),
-                        Retry::Refuse => ControlFlow::Break(failure),
-                    },
-                )
-                .map_err(|_| RegistrationError::Publication)
+                owner
+                    .retire_rooted(&[])
+                    .map_err(|_| RegistrationError::Publication)
             })();
             let mut stopped = era.stop().unwrap();
             era.reconcile_functions(&mut stopped.symbols().unwrap())

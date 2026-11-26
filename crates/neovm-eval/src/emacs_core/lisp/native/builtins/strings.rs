@@ -1236,6 +1236,32 @@ impl FormatOutput {
         self.append(&[byte])
     }
 
+    /// Reserve `additional` bytes fallibly without publishing them.
+    #[inline]
+    fn reserve_additional(
+        &mut self,
+        additional: usize,
+    ) -> Result<(), neovm_value::alloc::AllocationFailure> {
+        self.bytes.try_reserve(additional).map_err(Into::into)
+    }
+
+    /// Append `count` copies of `byte` with one reserve and one fill, so a
+    /// large width or precision does not become a loop of small appends.
+    fn append_fill(
+        &mut self,
+        byte: u8,
+        count: usize,
+    ) -> Result<(), neovm_value::alloc::AllocationFailure> {
+        if count == 0 {
+            return Ok(());
+        }
+        self.reserve_additional(count)?;
+        let len = self.bytes.len();
+        // The reserve above guarantees capacity for the whole fill.
+        self.bytes.resize(len + count, byte);
+        Ok(())
+    }
+
     #[doc(hidden)]
     pub fn push_character(
         &mut self,
@@ -1246,6 +1272,11 @@ impl FormatOutput {
         self.append(&bytes[..length])
     }
 
+    /// Finish the invocation. The working buffer still carries the
+    /// control-bound capacity reserved for an unknown output length; the
+    /// caller's `new_result` check runs first, and `FormatResultStorage::new`
+    /// then copies the finished bytes once into an exact-size payload
+    /// (GNU's `make_specified_string` copy, editfns.c:4285).
     #[doc(hidden)]
     pub fn into_bytes(self) -> Vec<u8> {
         self.bytes
@@ -1542,50 +1573,153 @@ fn push_i64_decimal(
     out.append(&buf[pos..])
 }
 
-/// Format an integer with the given spec.
-fn format_int_spec(
-    n: i64,
-    spec: &FormatSpec,
-    budget: FormatRemainingOutput<'_>,
-) -> Result<String, neovm_value::alloc::AllocationFailure> {
-    // Fast path for a plain `%d`/`%i`: one backward stack-buffer digit
-    // pass and one allocation. The general path below runs 128-bit
-    // `core::fmt` digit rendering plus two more String-building passes
-    // (`format_integer_digits` → `apply_integer_width`) — several hundred
-    // Ir per conversion, all avoidable when no flag/width/precision is set.
-    if matches!(spec.conversion, 'd' | 'i')
-        && spec.width.is_none()
-        && spec.precision.is_none()
-        && spec.flags.is_empty()
-    {
-        // i64::MIN-safe: widen before unsigned_abs; the magnitude fits u64.
-        let mut val = (n as i128).unsigned_abs() as u64;
-        let mut buf = [0u8; 21];
-        let mut pos = buf.len();
-        loop {
-            pos -= 1;
-            buf[pos] = b'0' + (val % 10) as u8;
-            val /= 10;
-            if val == 0 {
-                break;
+/// A fixnum integer conversion laid out without heap traffic, mirroring the
+/// field GNU's printf builds in its stack buffer (editfns.c:3459, 4260,
+/// 4285): sign and prefix rules, precision zero padding, and width padding
+/// are computed into counts, and the digits live in a stack array. `%b` of an
+/// `i64` is at most 64 digits, so the buffer always suffices.
+struct IntegerFieldPlan {
+    buf: [u8; 64],
+    digits_start: usize,
+    digits_len: usize,
+    /// `b'-'`, `b'+'`, `b' '`, or 0 for no sign.
+    sign: u8,
+    prefix: &'static [u8],
+    precision_zeros: usize,
+    width_padding: usize,
+    width_zero_padding: bool,
+    left_align: bool,
+}
+
+impl IntegerFieldPlan {
+    fn new(n: i64, spec: &FormatSpec) -> Self {
+        let magnitude = IntegerMagnitude::from(n.cmp(&0));
+        let negative = magnitude == IntegerMagnitude::Negative;
+        let zero_value = magnitude == IntegerMagnitude::Zero;
+        let mut buf = [0u8; 64];
+        let mut digits_start = buf.len();
+
+        // GNU `%.0d` renders no digits for zero; alternate octal still
+        // produces the "0" that follows from its prefix rule below.
+        let suppress_zero_digits = spec.precision == Some(0) && zero_value;
+        if !suppress_zero_digits {
+            let base: u64 = match spec.conversion {
+                'b' | 'B' => 2,
+                'o' => 8,
+                'x' | 'X' => 16,
+                _ => 10,
+            };
+            // Uppercase digits are GNU's %X rendering only; %B uppercases the
+            // prefix but keeps lower-case digits.
+            let upper = spec.conversion == 'X';
+            let mut val = (n as i128).unsigned_abs() as u64;
+            loop {
+                digits_start -= 1;
+                let digit = (val % base) as u8;
+                buf[digits_start] = if digit < 10 {
+                    b'0' + digit
+                } else if upper {
+                    b'A' + digit - 10
+                } else {
+                    b'a' + digit - 10
+                };
+                val /= base;
+                if val == 0 {
+                    break;
+                }
             }
         }
-        if n < 0 {
-            pos -= 1;
-            buf[pos] = b'-';
+        let alternate_octal = spec.conversion == 'o' && spec.flags.contains(FormatFlag::Alternate);
+        if suppress_zero_digits && alternate_octal {
+            digits_start -= 1;
+            buf[digits_start] = b'0';
         }
-        // SAFETY: the buffer contains ASCII digits and an optional '-'.
-        return Ok(unsafe { std::str::from_utf8_unchecked(&buf[pos..]) }.to_owned());
+        let digits_len = buf.len() - digits_start;
+        let starts_with_zero = digits_len > 0 && buf[digits_start] == b'0';
+
+        let precision_zeros = if let Some(precision) = spec.precision {
+            if alternate_octal && !starts_with_zero {
+                precision.max(digits_len + 1) - digits_len
+            } else {
+                precision.saturating_sub(digits_len)
+            }
+        } else if alternate_octal && !starts_with_zero {
+            // GNU's `%#o` writes the octal prefix as a leading zero.
+            1
+        } else {
+            0
+        };
+
+        let sign = if negative {
+            b'-'
+        } else if spec.flags.contains(FormatFlag::AlwaysSign) {
+            b'+'
+        } else if spec.flags.contains(FormatFlag::SignSpace) {
+            b' '
+        } else {
+            0
+        };
+        let prefix: &'static [u8] = if zero_value {
+            b""
+        } else {
+            match spec.conversion {
+                'b' if spec.flags.contains(FormatFlag::Alternate) => b"0b",
+                'B' if spec.flags.contains(FormatFlag::Alternate) => b"0B",
+                'x' if spec.flags.contains(FormatFlag::Alternate) => b"0x",
+                'X' if spec.flags.contains(FormatFlag::Alternate) => b"0X",
+                _ => b"",
+            }
+        };
+
+        let content = usize::from(sign != 0) + prefix.len() + precision_zeros + digits_len;
+        let width = spec.width.map(FormatWidth::get).unwrap_or(0);
+        let width_padding = width.saturating_sub(content);
+        let width_zero_padding =
+            spec.flags.contains(FormatFlag::ZeroPadding) && spec.precision.is_none();
+        let left_align = spec.flags.contains(FormatFlag::LeftAlign);
+        Self {
+            buf,
+            digits_start,
+            digits_len,
+            sign,
+            prefix,
+            precision_zeros,
+            width_padding,
+            width_zero_padding,
+            left_align,
+        }
     }
-    let abs_val = (n as i128).unsigned_abs();
-    let digits = match spec.conversion {
-        'b' | 'B' => format!("{abs_val:b}"),
-        'o' => format!("{abs_val:o}"),
-        'x' => format!("{abs_val:x}"),
-        'X' => format!("{abs_val:X}"),
-        _ => abs_val.to_string(),
-    };
-    format_integer_digits(digits, IntegerMagnitude::from(n.cmp(&0)), spec, budget)
+
+    /// The field's exact byte extent (ASCII, so bytes equal characters).
+    fn total(&self) -> usize {
+        usize::from(self.sign != 0)
+            + self.prefix.len()
+            + self.precision_zeros
+            + self.digits_len
+            + self.width_padding
+    }
+
+    fn push_into(
+        &self,
+        out: &mut FormatOutput,
+    ) -> Result<(), neovm_value::alloc::AllocationFailure> {
+        if !self.left_align && !self.width_zero_padding {
+            out.append_fill(b' ', self.width_padding)?;
+        }
+        if self.sign != 0 {
+            out.push(self.sign)?;
+        }
+        out.append(self.prefix)?;
+        if !self.left_align && self.width_zero_padding {
+            out.append_fill(b'0', self.width_padding)?;
+        }
+        out.append_fill(b'0', self.precision_zeros)?;
+        out.append(&self.buf[self.digits_start..self.digits_start + self.digits_len])?;
+        if self.left_align {
+            out.append_fill(b' ', self.width_padding)?;
+        }
+        Ok(())
+    }
 }
 
 /// Format a bignum for `%d` / `%o` / `%x` / `%X` specs. Mirrors the
@@ -2189,8 +2323,8 @@ fn format_string_spec_tracked(
 /// (editfns.c:3808-3813, applied at 4380-4396).
 #[derive(Debug)]
 pub(crate) struct FormatPropSpan {
-    pub result_char_start: usize,
-    pub result_char_end: usize,
+    pub(crate) result_char_start: usize,
+    pub(crate) result_char_end: usize,
     /// The STRING the copied properties come from -- not the argument index.
     ///
     /// GNU `styled_format` rewrites `spec_arguments[spec_index]` in place when it
@@ -2199,7 +2333,7 @@ pub(crate) struct FormatPropSpan {
     /// instead re-read the original argument, which made a symbol's propertized
     /// name impossible to express.
     pub source: Value,
-    pub arg_char_len: usize,
+    pub(crate) arg_char_len: usize,
 }
 
 /// How one run of format-string characters becomes one run of result
@@ -2757,9 +2891,34 @@ fn do_format(
                     arg_idx = this_arg_idx + 1;
                     continue;
                 }
+                // A fixnum field is written straight into the result, as GNU's
+                // sprintf writes into its stack buffer (editfns.c:3459,
+                // 4260): no temporary String for the digits, the precision
+                // zeros, or the width padding.
+                if let ValueKind::Fixnum(i) = args[this_arg_idx].kind() {
+                    let plan = IntegerFieldPlan::new(i, &spec);
+                    let budget = FormatRemainingOutput::new(&result);
+                    budget.ascii_field(plan.total())?;
+                    let formatted_chars = plan.total();
+                    plan.push_into(&mut result)?;
+                    arg_idx = this_arg_idx + 1;
+                    if track_props {
+                        if formatted_chars > 0 {
+                            source_spans.try_reserve(1)?;
+                            source_spans.push(FormatSourceSpan {
+                                source_char_start: source_start,
+                                source_char_end: spec_source_end,
+                                result_char_start: result_char_pos,
+                                result_char_end: result_char_pos + formatted_chars,
+                                kind: FormatSpanKind::Conversion,
+                            });
+                        }
+                        result_char_pos += formatted_chars;
+                    }
+                    continue;
+                }
                 let budget = FormatRemainingOutput::new(&result);
                 let formatted = match args[this_arg_idx].kind() {
-                    ValueKind::Fixnum(i) => format_int_spec(i, &spec, budget)?,
                     ValueKind::Float => {
                         format_integer_float_spec(ctx, args[this_arg_idx].xfloat(), &spec, budget)?
                     }
@@ -2874,8 +3033,24 @@ impl FormatResultStorage {
         {
             Self::prepare_cold(&mut bytes, encoding)?;
         }
-        // Keep the Vec owned here across both preflight paths, and construct
-        // the validated witness only after all fallible preparation succeeds.
+        // GNU's `styled_format` fills its stack buffer and copies the finished
+        // bytes once into a string of exactly the result size
+        // (`make_specified_string`, editfns.c:4285). The working buffer is
+        // sized to the control bound, so adopt it only when its capacity is
+        // already exactly `len + 1`; otherwise copy into an exact payload
+        // after the caller's `new_result` check has run.
+        let exact = bytes
+            .len()
+            .checked_add(1)
+            .ok_or_else(neovm_value::error::memory_exhausted_error)?;
+        if bytes.capacity() != exact {
+            let exact = FormatStorageBytes::try_from(exact)?;
+            let mut payload = allocate_format_bytes(exact)?;
+            payload.extend_from_slice(&bytes);
+            bytes = payload;
+        }
+        // Keep the Vec owned here, and construct the validated witness only
+        // after all fallible preparation succeeds.
         Ok(Self::validated(bytes, encoding))
     }
 

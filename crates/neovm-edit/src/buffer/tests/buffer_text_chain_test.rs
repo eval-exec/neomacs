@@ -24,9 +24,9 @@ fn chain_splice_at_head_and_walk() {
     let m2 = alloc_marker_for_test(&mut heap);
     let m3 = alloc_marker_for_test(&mut heap);
 
-    bt.chain_splice_at_head(m1);
-    bt.chain_splice_at_head(m2);
-    bt.chain_splice_at_head(m3);
+    unsafe { bt.chain_splice_at_head(m1) };
+    unsafe { bt.chain_splice_at_head(m2) };
+    unsafe { bt.chain_splice_at_head(m3) };
 
     let walked = bt.chain_walk_collect();
     assert_eq!(walked, vec![m3, m2, m1]);
@@ -41,9 +41,9 @@ fn chain_unlink_front_middle_back() {
     let m1 = alloc_marker_for_test(&mut heap);
     let m2 = alloc_marker_for_test(&mut heap);
     let m3 = alloc_marker_for_test(&mut heap);
-    bt.chain_splice_at_head(m1);
-    bt.chain_splice_at_head(m2);
-    bt.chain_splice_at_head(m3);
+    unsafe { bt.chain_splice_at_head(m1) };
+    unsafe { bt.chain_splice_at_head(m2) };
+    unsafe { bt.chain_splice_at_head(m3) };
 
     bt.chain_unlink(m2);
     assert_eq!(bt.chain_walk_collect(), vec![m3, m1]);
@@ -63,7 +63,7 @@ fn chain_unlink_absent_is_noop() {
     let bt = BufferText::new();
     let m1 = alloc_marker_for_test(&mut heap);
     let absent = alloc_marker_for_test(&mut heap);
-    bt.chain_splice_at_head(m1);
+    unsafe { bt.chain_splice_at_head(m1) };
 
     bt.chain_unlink(absent);
     assert_eq!(bt.chain_walk_collect(), vec![m1]);
@@ -84,7 +84,7 @@ fn chained_flag_tracks_chain_membership_through_splice_and_unlink() {
             let ptr = alloc_marker_for_test(&mut heap);
             // A marker that has never been spliced is not chained.
             assert!(!unsafe { (*ptr).data.chained() });
-            bt.chain_splice_at_head(ptr);
+            unsafe { bt.chain_splice_at_head(ptr) };
             assert!(
                 unsafe { (*ptr).data.chained() },
                 "splicing must flag the marker chained"
@@ -112,6 +112,35 @@ fn chained_flag_tracks_chain_membership_through_splice_and_unlink() {
 
     // And a cleared marker can be spliced again, which is what
     // `chain_splice_at_head`'s debug assertion checks.
-    bt.chain_splice_at_head(tail);
+    unsafe { bt.chain_splice_at_head(tail) };
     assert!(unsafe { (*tail).data.chained() });
+}
+
+/// The remap closure may read the marker it is remapping. The anchor is
+/// copied out before the call and written back after, so that read does not
+/// alias a live `&mut` of the same node.
+#[test]
+fn remap_marker_anchors_lets_the_closure_read_the_marker() {
+    let mut heap = TaggedHeap::new();
+    set_tagged_heap(&mut heap);
+
+    let bt = BufferText::new();
+    let ptr = alloc_marker_for_test(&mut heap);
+    let before = crate::buffer::TextPositionAnchor::from_usize(2, 2);
+    let after = crate::buffer::TextPositionAnchor::from_usize(5, 5);
+    unsafe {
+        super::set_marker_data_anchor(&mut (*ptr).data, before);
+        bt.chain_splice_at_head(ptr);
+    }
+    // SAFETY: `ptr` is the live heap marker this test just allocated. The
+    // heap stays live for the reads below.
+    let marker = unsafe { crate::buffer::MarkerRef::new(ptr) };
+    let mut saw = None;
+    bt.remap_marker_anchors(|old| {
+        saw = marker.anchor();
+        assert_eq!(old, before);
+        after
+    });
+    assert_eq!(saw, Some(before));
+    assert_eq!(marker.anchor(), Some(after));
 }

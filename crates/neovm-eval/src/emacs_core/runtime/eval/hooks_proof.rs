@@ -32,7 +32,7 @@ use std::time::{Duration, Instant};
 /// The slot returns the typed publication status so [`install_eval_hooks`]
 /// propagates a conflict (`HookInstallError::DifferentTable`) instead of
 /// swallowing it in release builds (peer follow-up F1).
-pub type SqliteFinalizerInstaller = fn() -> Result<HookInstallStatus, HookInstallError>;
+pub(crate) type SqliteFinalizerInstaller = fn() -> Result<HookInstallStatus, HookInstallError>;
 
 /// The one core-owned set of eval cold tables.
 ///
@@ -74,10 +74,14 @@ pub struct EvalHookSet {
 #[doc(hidden)]
 pub struct WaitServiceHooks {
     #[doc(hidden)]
-    pub service_input_pending_with_timers: fn(&mut Context) -> Result<(), Flow>,
+    pub service_input_pending_with_timers:
+        fn(&mut Context) -> Result<GuiBoundaryServiceActivity, Flow>,
     #[doc(hidden)]
-    pub service_read_char_preliminary_redisplay:
-        fn(&mut Context, keyboard::IdleTransitionPolicy) -> Result<(), Flow>,
+    pub service_read_char_preliminary_redisplay: fn(
+        &mut Context,
+        keyboard::IdleTransitionPolicy,
+        keyboard::ReadCharRedisplayPhase,
+    ) -> Result<(), Flow>,
     #[doc(hidden)]
     pub service_timers_without_redisplay: fn(&mut Context) -> Result<(), Flow>,
     #[doc(hidden)]
@@ -317,15 +321,22 @@ pub(crate) fn file_notify_host_queries() -> Option<&'static FileNotifyHostQuerie
 pub(crate) mod wait {
     use super::*;
 
-    pub(crate) fn service_input_pending_with_timers(ctx: &mut Context) -> Result<(), Flow> {
+    pub(crate) fn service_input_pending_with_timers(
+        ctx: &mut Context,
+    ) -> Result<GuiBoundaryServiceActivity, Flow> {
         (installed().wait.service_input_pending_with_timers)(ctx)
     }
 
     pub(crate) fn service_read_char_preliminary_redisplay(
         ctx: &mut Context,
         idle_policy: keyboard::IdleTransitionPolicy,
+        redisplay_phase: keyboard::ReadCharRedisplayPhase,
     ) -> Result<(), Flow> {
-        (installed().wait.service_read_char_preliminary_redisplay)(ctx, idle_policy)
+        (installed().wait.service_read_char_preliminary_redisplay)(
+            ctx,
+            idle_policy,
+            redisplay_phase,
+        )
     }
 
     pub(crate) fn service_timers_without_redisplay(ctx: &mut Context) -> Result<(), Flow> {
@@ -413,7 +424,8 @@ impl Context {
     /// An existing `Context` can only have been built with the proof, and
     /// installation is process-permanent, so the value is always available.
     /// These constructors never re-install.
-    pub fn hooks_installed(&self) -> EvalHooksInstalled {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn hooks_installed(&self) -> EvalHooksInstalled {
         assert!(
             HOOKS_INSTALLED.get().is_some(),
             "an existing Context implies a published eval hook set"

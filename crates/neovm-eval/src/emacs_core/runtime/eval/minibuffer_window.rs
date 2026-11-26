@@ -12,7 +12,8 @@ use super::*;
 use crate::emacs_core::eval::data::minibuffer_entry::MinibufferManagerExt;
 
 impl Context {
-    pub fn minibuffer_is_active(&self) -> bool {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn minibuffer_is_active(&self) -> bool {
         self.minibuffers.is_active()
     }
 
@@ -90,7 +91,8 @@ impl Context {
         Some(caller)
     }
 
-    pub fn activate_minibuffer_window_for_buffer(
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn activate_minibuffer_window_for_buffer(
         &mut self,
         minibuf_id: BufferId,
         prompt: neovm_value::heap_types::LispString,

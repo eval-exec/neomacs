@@ -244,6 +244,36 @@ impl FontBackend for FontconfigBackend {
         .collect()
     }
 
+    fn equal_score_sort_ranks(
+        &self,
+        default_family: &str,
+        lang: &str,
+        candidates: &[FontCandidate],
+    ) -> Vec<Option<u32>> {
+        let sorted = crate::font::fontconfig::fc_sorted_families(
+            #[cfg(test)]
+            match &self.source {
+                TestFontconfigSource::System => {
+                    crate::font::fontconfig::test_config::QueryOwner::System
+                }
+                TestFontconfigSource::Fixture(authority) => {
+                    crate::font::fontconfig::test_config::QueryOwner::Fixture(authority.config())
+                }
+            },
+            default_family,
+            lang,
+        );
+        candidates
+            .iter()
+            .map(|candidate| {
+                sorted
+                    .iter()
+                    .position(|family| family.eq_ignore_ascii_case(candidate.matched.family()))
+                    .map(|index| u32::try_from(index).unwrap_or(u32::MAX))
+            })
+            .collect()
+    }
+
     fn finalize_match(&self, matched: PlatformFontCandidate) -> Option<PlatformFontMatch> {
         matched.finalize_fontconfig().into_file_match()
     }
@@ -271,5 +301,9 @@ impl FontBackend for FontconfigBackend {
             }
         }
         self.catalog.poll()
+    }
+
+    fn published_catalog_generation(&self) -> u64 {
+        self.catalog.published_generation()
     }
 }

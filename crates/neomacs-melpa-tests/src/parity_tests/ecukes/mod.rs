@@ -194,7 +194,7 @@ const PRELUDE: &str = r####"
 
 (defun ecukes423-test-read (relative)
   (let ((file (expand-file-name relative ecukes423-test-root)))
-    (unless (file-in-directory-p file ecukes423-test-root)
+    (unless (neomacs-melpa-path-inside-p file ecukes423-test-root)
       (error "Refusing Ecukes read outside owned root: %S" file))
     (when (file-exists-p file)
       (with-temp-buffer
@@ -204,7 +204,7 @@ const PRELUDE: &str = r####"
 (defun ecukes423-test-write (relative contents)
   (let ((file (expand-file-name relative ecukes423-test-root)))
     (unless (and ecukes423-test-root-owned
-                 (file-in-directory-p file ecukes423-test-root))
+                 (neomacs-melpa-path-inside-p file ecukes423-test-root))
       (error "Refusing Ecukes write outside owned root: %S" file))
     (make-directory (file-name-directory file) t)
     (let ((coding-system-for-write 'utf-8-unix)

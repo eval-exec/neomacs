@@ -35,24 +35,24 @@ error[E0599]: the associated function or constant `check` exists for struct `Thr
   |   pub struct NonNull<T: PointeeSized> {
   |   ----------------------------------- doesn't satisfy 7 bounds
   |
+ ::: $RUST/core/src/any.rs
+  |
+  |   pub trait Any: 'static {
+  |   ---------------------- doesn't satisfy `(dyn std::any::Any + 'static): Send`
+  |
  ::: $RUST/alloc/src/rc.rs
   |
   | / pub struct Rc<
   | |     T: ?Sized,
   | |     #[unstable(feature = "allocator_api", issue = "32838")] A: Allocator = Global,
   | | > {
-  | |_- doesn't satisfy 15 bounds
+  | |_- doesn't satisfy 16 bounds
 ...
   | / pub struct Weak<
   | |     T: ?Sized,
   | |     #[unstable(feature = "allocator_api", issue = "32838")] A: Allocator = Global,
   | | > {
   | |_- doesn't satisfy `_: Send`
-  |
- ::: $RUST/core/src/any.rs
-  |
-  |   pub trait Any: 'static {
-  |   ---------------------- doesn't satisfy `(dyn std::any::Any + 'static): Send`
   |
  ::: $RUST/core/src/cell/once.rs
   |
@@ -80,6 +80,10 @@ error[E0599]: the associated function or constant `check` exists for struct `Thr
           `RefCell<Option<std::boxed::Box<eval::green::GreenRuntime>>>: std::marker::Sync`
           which is required by `ParallelHeapEra<'static, Baton>: std::marker::Sync`
           `Cell<Option<ThreadId>>: std::marker::Sync`
+          which is required by `ParallelHeapEra<'static, Baton>: std::marker::Sync`
+          `Cell<Option<neovm_core::emacs_core::eval::activation::ActivationAuthority>>: std::marker::Sync`
+          which is required by `ParallelHeapEra<'static, Baton>: std::marker::Sync`
+          `Cell<bool>: std::marker::Sync`
           which is required by `ParallelHeapEra<'static, Baton>: std::marker::Sync`
           `NonNull<TaggedHeap>: std::marker::Sync`
           which is required by `ParallelHeapEra<'static, Baton>: std::marker::Sync`
@@ -117,7 +121,9 @@ error[E0599]: the associated function or constant `check` exists for struct `Thr
           which is required by `ParallelHeapEra<'static, Baton>: std::marker::Sync`
           `*const (): Send`
           which is required by `ParallelHeapEra<'static, Baton>: std::marker::Sync`
-          `Rc<RefCell<Vec<std::rc::Weak<[TaggedValue]>>>>: Send`
+          `Rc<owned_roots::RootLeases>: Send`
+          which is required by `ParallelHeapEra<'static, Baton>: std::marker::Sync`
+          `Rc<()>: Send`
           which is required by `ParallelHeapEra<'static, Baton>: std::marker::Sync`
           `*mut GcHeader: std::marker::Sync`
           which is required by `ParallelHeapEra<'static, Baton>: std::marker::Sync`
@@ -125,7 +131,7 @@ error[E0599]: the associated function or constant `check` exists for struct `Thr
           which is required by `ParallelHeapEra<'static, Baton>: std::marker::Sync`
           `*mut HashTableObj: Send`
           which is required by `ParallelHeapEra<'static, Baton>: std::marker::Sync`
-          `*mut FinalizerObj: Send`
+          `*mut header::FinalizerObj: Send`
           which is required by `ParallelHeapEra<'static, Baton>: std::marker::Sync`
           `*mut *mut MarkerObj: Send`
           which is required by `ParallelHeapEra<'static, Baton>: std::marker::Sync`
@@ -145,8 +151,6 @@ error[E0599]: the associated function or constant `check` exists for struct `Thr
           which is required by `ParallelHeapEra<'static, Baton>: std::marker::Sync`
           `Cell<CanonicalArm>: std::marker::Sync`
           which is required by `ParallelHeapEra<'static, Baton>: std::marker::Sync`
-          `std::sync::mpsc::Receiver<gc::gc_thread::ConcurrentMarkResult>: std::marker::Sync`
-          which is required by `ParallelHeapEra<'static, Baton>: std::marker::Sync`
           `Cell<usize>: std::marker::Sync`
           which is required by `ParallelHeapEra<'static, Baton>: std::marker::Sync`
           `*mut u8: Send`
@@ -161,6 +165,8 @@ error[E0599]: the associated function or constant `check` exists for struct `Thr
           which is required by `ParallelHeapEra<'static, Baton>: std::marker::Sync`
           `*const u8: Send`
           which is required by `ParallelHeapEra<'static, Baton>: std::marker::Sync`
+          `std::sync::mpsc::Receiver<gc::gc_thread::ConcurrentMarkResult>: std::marker::Sync`
+          which is required by `ParallelHeapEra<'static, Baton>: std::marker::Sync`
           `Rc<Cell<Vec<TaggedValue>>>: Send`
           which is required by `ParallelHeapEra<'static, Baton>: std::marker::Sync`
           `Rc<Cell<*const ()>>: Send`
@@ -169,7 +175,7 @@ error[E0599]: the associated function or constant `check` exists for struct `Thr
           which is required by `ParallelHeapEra<'static, Baton>: std::marker::Sync`
           `*mut HashTableObj: std::marker::Sync`
           which is required by `ParallelHeapEra<'static, Baton>: std::marker::Sync`
-          `*mut FinalizerObj: std::marker::Sync`
+          `*mut header::FinalizerObj: std::marker::Sync`
           which is required by `ParallelHeapEra<'static, Baton>: std::marker::Sync`
           `*mut *mut MarkerObj: std::marker::Sync`
           which is required by `ParallelHeapEra<'static, Baton>: std::marker::Sync`
@@ -189,9 +195,17 @@ error[E0599]: the associated function or constant `check` exists for struct `Thr
           which is required by `ParallelHeapEra<'static, Baton>: std::marker::Sync`
           `*mut MarkerObj: Send`
           which is required by `ParallelHeapEra<'static, Baton>: std::marker::Sync`
-          `*mut BignumObj: Send`
+          `*mut header::BignumObj: Send`
           which is required by `ParallelHeapEra<'static, Baton>: std::marker::Sync`
           `NonNull<[Cell<usize>; 8192]>: Send`
+          which is required by `ParallelHeapEra<'static, Baton>: std::marker::Sync`
+          `*mut UserPtrObj: Send`
+          which is required by `ParallelHeapEra<'static, Baton>: std::marker::Sync`
+          `*mut c_void: Send`
+          which is required by `ParallelHeapEra<'static, Baton>: std::marker::Sync`
+          `*mut ModuleFunctionObj: Send`
+          which is required by `ParallelHeapEra<'static, Baton>: std::marker::Sync`
+          `*mut SqliteObj: Send`
           which is required by `ParallelHeapEra<'static, Baton>: std::marker::Sync`
           `NonNull<LispBufferLocalValue>: Send`
           which is required by `ParallelHeapEra<'static, Baton>: std::marker::Sync`
@@ -210,8 +224,6 @@ error[E0599]: the associated function or constant `check` exists for struct `Thr
           `OnceCell<collection_reads::store_state::ObservationWorld>: std::marker::Sync`
           which is required by `ParallelHeapEra<'static, Baton>: std::marker::Sync`
           `Cell<*mut TaggedHeap>: std::marker::Sync`
-          which is required by `ParallelHeapEra<'static, Baton>: std::marker::Sync`
-          `Rc<()>: Send`
           which is required by `ParallelHeapEra<'static, Baton>: std::marker::Sync`
           `*const c_void: Send`
           which is required by `ParallelHeapEra<'static, Baton>: std::marker::Sync`
@@ -243,8 +255,6 @@ error[E0599]: the associated function or constant `check` exists for struct `Thr
           which is required by `ParallelHeapEra<'static, Baton>: std::marker::Sync`
           `Cell<collection_reads::JournalPolicy>: std::marker::Sync`
           which is required by `ParallelHeapEra<'static, Baton>: std::marker::Sync`
-          `Cell<bool>: std::marker::Sync`
-          which is required by `ParallelHeapEra<'static, Baton>: std::marker::Sync`
           `Cell<neovm_core::tagged::gc::BarrierWindow>: std::marker::Sync`
           which is required by `ParallelHeapEra<'static, Baton>: std::marker::Sync`
           `Rc<collection_reads::store_state::WorldObservations>: Send`
@@ -269,11 +279,19 @@ error[E0599]: the associated function or constant `check` exists for struct `Thr
           which is required by `ParallelHeapEra<'static, Baton>: std::marker::Sync`
           `*mut MarkerObj: std::marker::Sync`
           which is required by `ParallelHeapEra<'static, Baton>: std::marker::Sync`
-          `*mut BignumObj: std::marker::Sync`
+          `*mut header::BignumObj: std::marker::Sync`
           which is required by `ParallelHeapEra<'static, Baton>: std::marker::Sync`
           `*const LispSymbol: std::marker::Sync`
           which is required by `ParallelHeapEra<'static, Baton>: std::marker::Sync`
           `*const Atomic<u32>: std::marker::Sync`
+          which is required by `ParallelHeapEra<'static, Baton>: std::marker::Sync`
+          `*mut UserPtrObj: std::marker::Sync`
+          which is required by `ParallelHeapEra<'static, Baton>: std::marker::Sync`
+          `*mut c_void: std::marker::Sync`
+          which is required by `ParallelHeapEra<'static, Baton>: std::marker::Sync`
+          `*mut ModuleFunctionObj: std::marker::Sync`
+          which is required by `ParallelHeapEra<'static, Baton>: std::marker::Sync`
+          `*mut SqliteObj: std::marker::Sync`
           which is required by `ParallelHeapEra<'static, Baton>: std::marker::Sync`
           `NonNull<MarkerObj>: Send`
           which is required by `ParallelHeapEra<'static, Baton>: std::marker::Sync`

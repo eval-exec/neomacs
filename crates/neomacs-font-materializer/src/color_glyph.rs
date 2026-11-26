@@ -71,14 +71,65 @@ impl Default for ColorGlyphRequest<'_> {
     }
 }
 
-/// Failures that are not per-glyph: the source could not be opened at all.
-/// A well-formed source that simply paints nothing for a glyph is `Ok(None)`.
+/// Source failures and failures to execute a claimed per-glyph paint source.
+/// Successful no-ink painting is represented by `Some`, independently of size.
 #[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
 pub enum ColorGlyphError {
+    #[error("invalid color glyph request for glyph {glyph_id}")]
+    InvalidRequest { glyph_id: u16 },
+    #[error("failed painting glyph {glyph_id} from {paint_source:?}: {reason:?}")]
+    Paint {
+        glyph_id: u16,
+        paint_source: ColorGlyphSource,
+        reason: ColorPaintFailure,
+    },
     #[error("failed reading color font source {path}: {reason}")]
     Read { path: String, reason: String },
     #[error("color font source {path} has no face at index {face_index}")]
     MissingFace { path: String, face_index: u32 },
+}
+
+/// Why a claimed paint source could not be executed. Known specification
+/// no-paint cases are successful empty rasters, rather than these failures.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ColorPaintFailure {
+    Malformed,
+    Unsupported,
+    ResourceLimit,
+    InvalidBounds,
+}
+
+/// Inspect available backing bytes without opening a durable path. `Some(false)`
+/// certifies that this glyph has no layered COLR/SVG record, even if other
+/// glyphs in the face do. `None` means the bytes could not establish a claim,
+/// including optional color tables that the parser could not interpret.
+pub fn layered_color_glyph_claim(data: &[u8], face_index: u32, glyph_id: u16) -> Option<bool> {
+    let face = ttf_parser::Face::parse(data, face_index).ok()?;
+    // Face parsing tolerates broken optional tables. COLR also needs a valid
+    // CPAL table, so a missing parsed COLR cannot certify record absence when
+    // the raw table exists.
+    let raw = face.raw_face();
+    if (raw.table(ttf_parser::Tag::from_bytes(b"COLR")).is_some() && face.tables().colr.is_none())
+        || (raw.table(ttf_parser::Tag::from_bytes(b"SVG ")).is_some()
+            && face.tables().svg.is_none())
+    {
+        return None;
+    }
+    let glyph = ttf_parser::GlyphId(glyph_id);
+    Some(face.is_color_glyph(glyph) || face.glyph_svg_image(glyph).is_some())
+}
+
+impl ColorGlyphRaster {
+    fn empty(source: ColorGlyphSource) -> Self {
+        Self {
+            left: 0,
+            top: 0,
+            width: 0,
+            height: 0,
+            rgba: Vec::new(),
+            source,
+        }
+    }
 }
 
 /// Classify one file face from its table directory, without reading its
@@ -150,9 +201,9 @@ impl ColorFaceBytes {
 /// per-face bytes so a glyph never re-reads a font file.
 #[derive(Debug, Default)]
 pub struct ColorGlyphRasterizer {
-    /// `None` marks a face no source in this module can paint, so a repeated
-    /// miss costs a hash lookup instead of a file read or a table walk.
-    faces: HashMap<ColorFaceKey, Option<ColorFaceBytes>>,
+    /// Retain no-source answers and failures separately. Neither requires a
+    /// repeated file read, and an opening error can never become no-source.
+    faces: HashMap<ColorFaceKey, Result<Option<ColorFaceBytes>, ColorGlyphError>>,
 }
 
 impl ColorGlyphRasterizer {
@@ -175,70 +226,82 @@ impl ColorGlyphRasterizer {
     /// whether a glyph's raster can depend on the text foreground) pays for
     /// the table walk only once.
     pub fn has_color_sources(&mut self, asset: &FontOutlineAsset) -> bool {
-        self.ensure_face(asset).is_some()
+        self.ensure_face(asset).ok().flatten().is_some()
     }
 
     /// Open, classify, and cache one exact source face.
     ///
-    /// `None` means no source in this module can paint the face, including
-    /// the failure cases, which stay cached so a repeated miss costs a hash
-    /// lookup rather than another file read.
-    fn ensure_face(&mut self, asset: &FontOutlineAsset) -> Option<&ColorFaceBytes> {
+    /// No-source results and source errors remain distinct and cached, so
+    /// repeated requests neither reread files nor convert failures to absence.
+    fn ensure_face(
+        &mut self,
+        asset: &FontOutlineAsset,
+    ) -> Result<Option<&ColorFaceBytes>, ColorGlyphError> {
         let key = ColorFaceKey::from_asset(asset);
-        if let std::collections::hash_map::Entry::Vacant(entry) = self.faces.entry(key.clone()) {
-            let opened = match Self::open_color_face(asset) {
-                Ok(face) => face,
-                Err(error) => {
-                    tracing::warn!(
-                        target: "font_boundary",
-                        %error,
-                        "layered color glyph source is unavailable"
-                    );
-                    None
-                }
-            };
-            entry.insert(opened);
+        match self
+            .faces
+            .entry(key)
+            .or_insert_with(|| Self::open_color_face(asset))
+        {
+            Ok(face) => Ok(face.as_ref()),
+            Err(error) => Err(error.clone()),
         }
-        self.faces.get(&key).and_then(Option::as_ref)
     }
 
     /// Rasterize `request` from `asset`.
     ///
     /// Returns `Ok(None)` when the face carries no color source this module
-    /// implements, or when the source paints nothing for this glyph; the
-    /// caller then falls back to monochrome outlines.
+    /// implements for this glyph. A claimed source that successfully paints
+    /// nothing returns `Some` with an empty or transparent raster. Failures
+    /// remain errors so an empty monochrome fallback cannot hide them.
     pub fn rasterize(
         &mut self,
         asset: &FontOutlineAsset,
         request: &ColorGlyphRequest<'_>,
     ) -> Result<Option<ColorGlyphRaster>, ColorGlyphError> {
-        if !request.px_size.is_finite() || request.px_size <= 0.0 {
-            return Ok(None);
+        if !request.px_size.is_finite()
+            || request.px_size <= 0.0
+            || !request.offset.0.is_finite()
+            || !request.offset.1.is_finite()
+        {
+            return Err(ColorGlyphError::InvalidRequest {
+                glyph_id: request.glyph_id,
+            });
         }
-        let Some(face) = self.ensure_face(asset) else {
+        let Some(face) = self.ensure_face(asset)? else {
             return Ok(None);
         };
 
+        let mut failure = None;
         for source in face.sources.color_glyph_sources() {
-            match source {
-                ColorGlyphSource::Colr => {
-                    if let Some(raster) = colr::paint_colr_glyph(face, request) {
-                        return Ok(Some(raster));
-                    }
+            let painted = match source {
+                ColorGlyphSource::Colr => colr::paint_colr_glyph(face, request),
+                ColorGlyphSource::SvgDocuments => face
+                    .face()
+                    .ok_or(ColorPaintFailure::Malformed)
+                    .and_then(|parsed| svg::paint_svg_glyph(&parsed, request)),
+                // Embedded color strikes remain owned by the Swash chain.
+                ColorGlyphSource::EmbeddedColorBitmaps => continue,
+            };
+            match painted {
+                Ok(Some(raster)) => return Ok(Some(raster)),
+                Ok(None) => {}
+                Err(reason) => {
+                    // A later implemented color source may still paint. If
+                    // none succeeds, retain the failure instead of silently
+                    // certifying a blank monochrome fallback.
+                    failure.get_or_insert(ColorGlyphError::Paint {
+                        glyph_id: request.glyph_id,
+                        paint_source: source,
+                        reason,
+                    });
                 }
-                ColorGlyphSource::SvgDocuments => {
-                    if let Some(parsed) = face.face()
-                        && let Some(raster) = svg::paint_svg_glyph(&parsed, request)
-                    {
-                        return Ok(Some(raster));
-                    }
-                }
-                // Embedded color strikes rasterize through Swash's source
-                // chain, which the caller drives.
-                ColorGlyphSource::EmbeddedColorBitmaps => {}
             }
         }
-        Ok(None)
+        match failure {
+            Some(error) => Err(error),
+            None => Ok(None),
+        }
     }
 
     fn open_color_face(

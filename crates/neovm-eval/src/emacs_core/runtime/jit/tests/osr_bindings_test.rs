@@ -15,15 +15,17 @@ fn binding_sum(nested: bool) -> ByteCodeFunction {
         optional: vec![],
         rest: None,
     });
-    f.lexical = true;
-    f.constants = vec![
-        Value::make_int(0),
-        Value::make_int(3),
-        Value::symbol("osr-bound"),
-        Value::make_int(7),
-    ]
-    .into();
-    f.ops = vec![
+    f.set_lexical(true);
+    f.set_constants(
+        vec![
+            Value::make_int(0),
+            Value::make_int(3),
+            Value::symbol("osr-bound"),
+            Value::make_int(7),
+        ]
+        .into(),
+    );
+    f.set_ops(vec![
         Op::Constant(1),
         Op::VarBind(2),
         Op::Constant(0),
@@ -32,14 +34,14 @@ fn binding_sum(nested: bool) -> ByteCodeFunction {
         Op::StackRef(3),
         Op::Lss,
         Op::GotoIfNil(0),
-    ];
+    ]);
     if nested {
-        f.ops.extend([Op::Constant(3), Op::VarBind(2)]);
+        f.ops_mut().extend([Op::Constant(3), Op::VarBind(2)]);
     }
-    f.ops
+    f.ops_mut()
         .extend([Op::StackRef(1), Op::VarRef(2), Op::Add, Op::StackSet(2)]);
     if nested {
-        f.ops.extend([
+        f.ops_mut().extend([
             Op::Unbind(1),
             Op::StackRef(1),
             Op::VarRef(2),
@@ -47,11 +49,12 @@ fn binding_sum(nested: bool) -> ByteCodeFunction {
             Op::StackSet(2),
         ]);
     }
-    f.ops
+    f.ops_mut()
         .extend([Op::StackRef(0), Op::Add1, Op::StackSet(1), Op::Goto(4)]);
-    f.ops[7] = Op::GotoIfNil(f.ops.len() as u32);
-    f.ops.extend([Op::StackRef(1), Op::Unbind(1), Op::Return]);
-    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
+    f.ops_mut()[7] = Op::GotoIfNil(f.ops().len() as u32);
+    f.ops_mut()
+        .extend([Op::StackRef(1), Op::Unbind(1), Op::Return]);
+    f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
     f
 }
 
@@ -136,11 +139,11 @@ fn osr_binding_entry_rejects_wrong_snapshot_without_mutating_either_stack() {
     for save_record in [false, true] {
         let mut ineligible = binding_sum(false);
         if save_record {
-            let at = ineligible.ops.len() - 1;
-            ineligible.ops.insert(at, Op::SaveExcursion);
-            ineligible.ops.insert(at + 1, Op::Unbind(1));
+            let at = ineligible.ops().len() - 1;
+            ineligible.ops_mut().insert(at, Op::SaveExcursion);
+            ineligible.ops_mut().insert(at + 1, Op::Unbind(1));
         } else {
-            ineligible.lexical = false;
+            ineligible.set_lexical(false);
         }
         ineligible.seal_hand_assembled_ops();
         assert!(
@@ -170,16 +173,18 @@ fn osr_binding_deopt_adopts_new_inner_binding_without_replaying_effects() {
             optional: vec![],
             rest: None,
         });
-        f.lexical = true;
-        f.constants = vec![
-            Value::make_int(0),
-            Value::symbol("osr-effects"),
-            Value::symbol("osr-bound"),
-            Value::make_int(3),
-            Value::make_int(7),
-        ]
-        .into();
-        f.ops = vec![
+        f.set_lexical(true);
+        f.set_constants(
+            vec![
+                Value::make_int(0),
+                Value::symbol("osr-effects"),
+                Value::symbol("osr-bound"),
+                Value::make_int(3),
+                Value::make_int(7),
+            ]
+            .into(),
+        );
+        f.set_ops(vec![
             Op::Constant(3),
             Op::VarBind(2),
             Op::Constant(0),
@@ -210,8 +215,8 @@ fn osr_binding_deopt_adopts_new_inner_binding_without_replaying_effects() {
             Op::Add,
             Op::Unbind(1),
             Op::Return,
-        ];
-        f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
+        ]);
+        f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
         f.seal_hand_assembled_ops();
         f
     };
@@ -277,11 +282,12 @@ fn osr_binding_unlet_watchers_collect_and_preserve_cleanup_exit_semantics() {
             ))
             .unwrap();
             let mut f = binding_sum(false);
-            f.ops.truncate(f.ops.len() - 3);
+            let ops_len = f.ops().len();
+            f.ops_mut().truncate(ops_len - 3);
             let make_string = f.add_constant(Value::symbol("make-string"));
             let length = f.add_constant(Value::make_int(40));
             let ch = f.add_constant(Value::make_int(120));
-            f.ops.extend([
+            f.ops_mut().extend([
                 Op::Constant(make_string),
                 Op::Constant(length),
                 Op::Constant(ch),
@@ -353,19 +359,20 @@ fn osr_binding_frame_exit_unwinds_inherited_and_new_binds_for_each_outcome() {
             ctx.jit_bind_stack.push(outer_base);
             let spec_depth = ctx.specpdl.len();
             let mut f = binding_sum(false);
-            f.ops.truncate(f.ops.len() - 3);
-            f.ops.extend([Op::Constant(3), Op::VarBind(2)]);
+            let ops_len = f.ops().len();
+            f.ops_mut().truncate(ops_len - 3);
+            f.ops_mut().extend([Op::Constant(3), Op::VarBind(2)]);
             if exit == "return" {
-                f.ops.push(Op::StackRef(1));
+                f.ops_mut().push(Op::StackRef(1));
             } else {
-                let callee = f.add_constant(Value::symbol(exit));
+                let callee = f.add_constant(Value::from_sym_id(intern(exit)));
                 let tag = f.add_constant(Value::symbol(if exit == "signal" {
                     "error"
                 } else {
                     "osr-exit"
                 }));
                 let payload = f.add_constant(Value::list(vec![Value::string("osr-exit-payload")]));
-                f.ops.extend([
+                f.ops_mut().extend([
                     Op::Constant(callee),
                     Op::Constant(tag),
                     Op::Constant(payload),
@@ -374,7 +381,7 @@ fn osr_binding_frame_exit_unwinds_inherited_and_new_binds_for_each_outcome() {
             }
             // No explicit Unbind: the native exit owns the new inner binding,
             // and the suspended VM still owns the inherited outer binding.
-            f.ops.push(Op::Return);
+            f.ops_mut().push(Op::Return);
             f.seal_hand_assembled_ops();
             f.jit_runtime().set_hot_for_test();
             force_osr_for_test(osr);
@@ -431,15 +438,17 @@ fn osr_binding_transfer_from_iterative_child_preserves_callers_binding() {
         optional: vec![],
         rest: None,
     });
-    caller.lexical = true;
-    caller.constants = vec![
-        child,
-        Value::make_int(2000),
-        Value::symbol("osr-outer"),
-        Value::make_int(99),
-    ]
-    .into();
-    caller.ops = vec![
+    caller.set_lexical(true);
+    caller.set_constants(
+        vec![
+            child,
+            Value::make_int(2000),
+            Value::symbol("osr-outer"),
+            Value::make_int(99),
+        ]
+        .into(),
+    );
+    caller.set_ops(vec![
         Op::Constant(3),
         Op::VarBind(2),
         Op::Constant(0),
@@ -449,8 +458,8 @@ fn osr_binding_transfer_from_iterative_child_preserves_callers_binding() {
         Op::Add,
         Op::Unbind(1),
         Op::Return,
-    ];
-    caller.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(8);
+    ]);
+    caller.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(8));
     caller.seal_hand_assembled_ops();
     force_osr_for_test(true);
     crate::emacs_core::jit::test_support::prepare_osr(

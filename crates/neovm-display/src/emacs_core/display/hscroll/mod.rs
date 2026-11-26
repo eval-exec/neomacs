@@ -83,28 +83,28 @@ impl HscrollStep {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct AutoHscrollInput {
     /// Display column of point on its line (`current-column` at point).
-    pub point_col: i64,
+    pub(crate) point_col: i64,
     /// Window text-area width in columns.
-    pub text_cols: i64,
+    pub(crate) text_cols: i64,
     /// `hscroll-margin` clamped to a sane range, in columns.
-    pub h_margin: i64,
+    pub(crate) h_margin: i64,
     /// The window's current `hscroll` (columns).
-    pub cur_hscroll: i64,
+    pub(crate) cur_hscroll: i64,
     /// Lower bound on auto hscroll (`w->min_hscroll`); usually 0.
     pub min_hscroll: i64,
     /// Whether point's line is *truncated* (does not wrap) in this window —
     /// i.e. the effective wrap mode is Truncate.  GNU only auto-hscrolls
     /// truncated lines; a wrapped line is fully visible by construction.
-    pub line_truncated: bool,
+    pub(crate) line_truncated: bool,
     /// GNU's `hscl` (`hscrolling_current_line_p`, src/xdisp.c:3074): auto
     /// hscroll is not suspended *and* `auto-hscroll-mode` is `current-line`.
     /// Only that mode arms trigger (C) below.
-    pub hscrolling_current_line: bool,
+    pub(crate) hscrolling_current_line: bool,
     /// Whether point sits at the end of its display line (GNU
     /// `ITERATOR_AT_END_OF_LINE_P`).  This is the `C-e` case: GNU then targets
     /// the right end of the window (`text_cols - 4`) instead of the center, so
     /// the maximum amount of preceding text stays visible.
-    pub point_at_eol: bool,
+    pub(crate) point_at_eol: bool,
     /// Decoded `hscroll-step`.
     pub step: HscrollStep,
 }
@@ -368,6 +368,11 @@ fn hscroll_margin_cols(ctx: &Context) -> i64 {
         .clamp(0, 1_000_000)
 }
 
+/// Point-column scans `update_auto_hscroll_before_redisplay` has made. Each
+/// one walks point's line from its beginning; the tests count them.
+#[cfg(test)]
+static POINT_COLUMN_SCANS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
 /// Update each leaf window's `hscroll` to follow point before the layout engine
 /// reads it, mirroring GNU `hscroll_window_tree` (called from
 /// `redisplay_internal` before window layout, src/xdisp.c).
@@ -565,13 +570,34 @@ pub(crate) fn update_auto_hscroll_before_redisplay(ctx: &mut Context) {
             continue;
         }
 
-        let point_col = match neovm_edit::emacs_core::indent::display_column_at_emacs_byte_pos(
-            ctx,
-            snap.buffer_id,
-            snap.point_byte,
-        ) {
-            Ok(col) => col as i64,
-            Err(_) => continue,
+        // STEP 5 scrolls only a truncated line, so a window that wraps lines
+        // never needs point's column. Measuring it walks point's line from
+        // its beginning: on a long line that is the whole cost of the pass.
+        if !snap.line_truncated {
+            continue;
+        }
+
+        // GNU sets the long-line flag while building the frame's matrices
+        // (`xdisp.c:20646`) and runs the hscroll pass afterwards
+        // (`xdisp.c:17942`); Neo's hscroll pass runs before layout, so refresh
+        // the flag here. The scan's fast path (`xdisp.c:16797`) then sees the
+        // same buffer state GNU's pass would see.
+        ctx.refresh_long_line_optimizations(snap.buffer_id);
+
+        #[cfg(test)]
+        POINT_COLUMN_SCANS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let point_col = match long_line_hscroll_point_col(ctx, &snap) {
+            Some(col) => col,
+            None => {
+                match neovm_edit::emacs_core::indent::display_column_at_emacs_byte_pos(
+                    ctx,
+                    snap.buffer_id,
+                    snap.point_byte,
+                ) {
+                    Ok(col) => col as i64,
+                    Err(_) => continue,
+                }
+            }
         };
 
         let input = AutoHscrollInput {
@@ -609,6 +635,35 @@ pub(crate) fn update_auto_hscroll_before_redisplay(ctx: &mut Context) {
             }
         }
     }
+}
+
+/// GNU's long-line shortcut in `hscroll_window_tree` (src/xdisp.c:16797-16807):
+/// when the buffer's long-line flag is set and the cursor is more than
+/// `large-hscroll-threshold` characters past the beginning of its line, GNU
+/// jumps with `fast_move_it_horizontally` (src/xdisp.c:11676) and takes the
+/// column as one per character, ignoring tabs, wide characters and display
+/// vectors.
+///
+/// The approximation belongs at this call site, not in the shared column
+/// primitive: the reader's invalid-read-syntax column also measures a column,
+/// and GNU gates *its* approximation on `long-line-threshold`
+/// (src/indent.c:348), not on the hscroll threshold.
+fn long_line_hscroll_point_col(ctx: &Context, snap: &LeafHscrollSnapshot) -> Option<i64> {
+    let threshold = ctx
+        .builtin_var_value_by_name("large-hscroll-threshold")
+        .and_then(|value| value.as_int())
+        .unwrap_or(10_000);
+    let buf = ctx.edit.buffers.get(snap.buffer_id)?;
+    if !buf.long_line_optimizations_p() {
+        return None;
+    }
+    let begv = buf.point_min_emacs_byte_pos();
+    let bol = buf
+        .prev_newline_emacs_byte(snap.point_byte, begv)
+        .map(|newline| neovm_edit::buffer::EmacsBytePos::new(newline.get() + 1))
+        .unwrap_or(begv);
+    let nchars = snap.point_lisp.as_i64() - buf.emacs_byte_pos_to_lisp_char_pos(bol).as_i64();
+    (nchars > threshold).then_some(nchars)
 }
 
 /// Read a window's `old_point` (`w->old_pointm`) as a Lisp char position.

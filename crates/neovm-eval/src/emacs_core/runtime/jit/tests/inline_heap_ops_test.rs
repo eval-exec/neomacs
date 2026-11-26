@@ -22,10 +22,10 @@ fn lexical_fn(nargs: u32, ops: Vec<Op>, constants: Vec<Value>) -> ByteCodeFuncti
         optional: Vec::new(),
         rest: None,
     });
-    f.lexical = true;
-    f.ops = ops;
-    f.constants = constants.into();
-    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(8);
+    f.set_lexical(true);
+    f.set_ops(ops);
+    f.set_constants(constants.into());
+    f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(8));
     f
 }
 
@@ -58,7 +58,7 @@ fn interpret(eval: &mut Context, f: &ByteCodeFunction, args: Vec<Value>) -> Stri
 }
 
 fn native(ctx_ptr: *mut u8, leaf: &CompiledLeaf, args: &[Value], what: &str) -> String {
-    match leaf.call(ctx_ptr, args) {
+    match unsafe { leaf.call(ctx_ptr, args) } {
         NativeRun::Ok(bits) => print_value(&unsafe {
             /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
             Value::from_bits(bits)
@@ -345,7 +345,7 @@ fn opt_cons_store_proofs_keep_deopt_and_barrier_paths() {
     let lower = |f: &ByteCodeFunction| {
         lower_leaf_full_osr_with_opt(
             f.executable_ops(),
-            &f.constants,
+            f.constants(),
             2,
             f.executable_gnu_byte_offset_map(),
             None,
@@ -423,7 +423,7 @@ fn opt_cons_store_proofs_keep_deopt_and_barrier_paths() {
 
         for bad in [Value::NIL, Value::fixnum(3)] {
             let args = [bad, Value::T];
-            let NativeRun::DeoptAt(frame) = leaf.call(ctx_ptr, &args) else {
+            let NativeRun::DeoptAt(frame) = (unsafe { leaf.call(ctx_ptr, &args) }) else {
                 panic!("{op:?}: non-cons must leave through the explicit guard")
             };
             assert_eq!(frame.pc, 2);
@@ -477,7 +477,7 @@ fn opt_cons_store_proofs_keep_deopt_and_barrier_paths() {
         let args = keep(&mut eval, &["(cons 'old 'old)", "(list 'new)"]);
         let old_cell = print_value(&args[0]);
         let before = shim_calls();
-        let NativeRun::DeoptAt(frame) = forced.call(ctx_ptr, &args) else {
+        let NativeRun::DeoptAt(frame) = (unsafe { forced.call(ctx_ptr, &args) }) else {
             panic!("{op:?}: forced guard must deopt before the store")
         };
         assert_eq!(frame.pc, 2);
@@ -709,7 +709,7 @@ fn a_store_loop_survives_collections_at_every_safe_point() {
     eval.gc_stress = true;
     for round in 0..4 {
         let cell = eval.eval_str("(cons nil nil)").expect("cell");
-        match leaf.call(ctx_ptr, &[cell, Value::make_int(N)]) {
+        match unsafe { leaf.call(ctx_ptr, &[cell, Value::make_int(N)]) } {
             NativeRun::Ok(bits) => {
                 let cell = unsafe {
                     /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
@@ -785,7 +785,7 @@ fn the_owned_storage_probe_answers_on_this_toolchain() {
     assert!(LispValueVec::jit_slice_offsets().is_some());
     let (offset, word) = LispValueVec::jit_owned_probe().expect("the niche is found");
     assert_eq!(offset % std::mem::size_of::<usize>(), 0);
-    let backing = [Value::T; 3];
+    let backing = [const { neovm_value::tagged::header::AtomicTaggedValue::new(Value::T) }; 3];
     let mapped = unsafe { LispValueVec::mapped(backing.as_ptr(), 3) };
     let owned = LispValueVec::owned(vec![Value::NIL; 4]);
     let read = |v: &LispValueVec| unsafe {
@@ -1297,7 +1297,7 @@ fn a_cons_loop_allocates_inline_and_counts_exactly() {
         let interpreted = conses_counted() - before;
 
         let before = conses_counted();
-        let got = match leaf.call(ctx_ptr, &[Value::make_int(N)]) {
+        let got = match unsafe { leaf.call(ctx_ptr, &[Value::make_int(N)]) } {
             NativeRun::Ok(bits) => unsafe {
                 /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
                 Value::from_bits(bits)
@@ -1419,7 +1419,7 @@ fn float_boxes_are_inline_and_counted_once() {
             vec![],
         );
         f.seal_hand_assembled_ops();
-        f.jit_runtime().record_numeric(2, f.ops.len(), NF::Float);
+        f.jit_runtime().record_numeric(2, f.ops().len(), NF::Float);
         force_flonum_mode_for_test(Some(mode));
         let emitted = allocs_emitted();
         let leaf = compile_bytecode_function(&f).expect("compiles");
@@ -1430,7 +1430,7 @@ fn float_boxes_are_inline_and_counted_once() {
         let a = Value::make_float(1.5);
         let b = Value::make_float(2.0);
         let before = floats_counted();
-        let product = match leaf.call(ctx_ptr, &[a, b]) {
+        let product = match unsafe { leaf.call(ctx_ptr, &[a, b]) } {
             NativeRun::Ok(bits) => unsafe {
                 /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
                 Value::from_bits(bits)
@@ -1465,7 +1465,7 @@ fn the_inline_alloc_knob_turns_inline_allocation_off() {
         "no inline allocation under the knob"
     );
     let before = conses_counted();
-    let Some(bits) = (match leaf.call(ctx_ptr, &[Value::make_int(300)]) {
+    let Some(bits) = (match unsafe { leaf.call(ctx_ptr, &[Value::make_int(300)]) } {
         NativeRun::Ok(bits) => Some(bits),
         _ => None,
     }) else {

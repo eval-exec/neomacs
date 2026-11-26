@@ -620,6 +620,25 @@ impl std::error::Error for PresentedHitError {}
 pub trait PresentedTextPositionSource: Send + Sync + std::fmt::Debug {
     fn text_positions(&self) -> Result<Vec<PresentedTextPosition>, PresentedHitError>;
 
+    /// Prove the exact flat admission predicate without building positions.
+    ///
+    /// `Validated` asserts that every position `text_positions` would emit
+    /// has valid geometry, belongs to WINDOW, lies wholly inside BOUNDS
+    /// (without containment tolerance), and that their count is at most
+    /// MAX_POSITIONS. The proof must cover unqueried and clipped source rows
+    /// too. Sources are immutable; this assertion grants neither presentation
+    /// freshness nor authority to extend a viewport. Uncertain or loose
+    /// bounds return `Unsupported`, retaining exact materialized validation.
+    /// This in-process proof is never serialized with the positions.
+    fn validate_region(
+        &self,
+        _window: DisplayWindowId,
+        _bounds: FrameRect,
+        _max_positions: usize,
+    ) -> PresentedTextRegionValidation {
+        PresentedTextRegionValidation::Unsupported
+    }
+
     /// Resolve within one window without flattening the frame, if supported.
     ///
     /// A supported source must validate all of its geometry before resolving,
@@ -643,6 +662,13 @@ pub trait PresentedTextPositionSource: Send + Sync + std::fmt::Debug {
     fn is_empty(&self) -> Option<bool> {
         None
     }
+}
+
+/// An immutable source's proof of the global text-region admission predicate.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PresentedTextRegionValidation {
+    Unsupported,
+    Validated,
 }
 
 /// A direct immutable-source lookup, distinct from an unsupported lookup.
@@ -1286,6 +1312,35 @@ impl PresentedHitIndex {
         &self.text.parts().positions
     }
 
+    /// Validate bounded transport without requiring a row source to flatten.
+    /// Already materialized and unsupported sources keep the exact predicate.
+    pub(crate) fn text_positions_fit_region(
+        &self,
+        window: DisplayWindowId,
+        bounds: FrameRect,
+        max_positions: usize,
+    ) -> bool {
+        if self.text.built.get().is_none()
+            && self.text.source.as_ref().is_some_and(|source| {
+                source.validate_region(window, bounds, max_positions)
+                    == PresentedTextRegionValidation::Validated
+            })
+        {
+            return true;
+        }
+        let positions = self.text_positions();
+        let bounds = bounds.raw();
+        positions.len() <= max_positions
+            && positions.iter().all(|position| {
+                let rect = position.bounds().raw();
+                position.window() == window
+                    && rect.x >= bounds.x
+                    && rect.right() <= bounds.right()
+                    && rect.y >= bounds.y
+                    && rect.bottom() <= bounds.bottom()
+            })
+    }
+
     /// Replace the text positions with ones SOURCE supplies on demand.
     ///
     /// Every frame's index used to carry one position per visible character,
@@ -1497,11 +1552,23 @@ fn contains(bounds: FrameRect, x: f32, y: f32) -> bool {
         && y < bounds.y() + bounds.height()
 }
 
+/// Sub-pixel tolerance for semantic containment.
+///
+/// Position and region geometry is produced independently in logical pixels:
+/// on a fractional-scale output (e.g. 1.75) a 12-physical-pixel glyph is
+/// 6.857142857 logical pixels wide, so a glyph edge that is mathematically on
+/// the region boundary can land a fraction of an f32 ulp past it. Comparing
+/// exactly would reject a coherent frame, and a rejected frame is never
+/// displayed. The tolerance is far below one physical pixel at any supported
+/// scale, so a real placement error still fails. `glyph_matrix` uses the same
+/// epsilon when it validates that every window region fits its window.
+const CONTAINMENT_EPSILON: f32 = 0.01;
+
 fn rect_contains_rect(outer: FrameRect, inner: FrameRect) -> bool {
-    inner.x() >= outer.x()
-        && inner.y() >= outer.y()
-        && inner.x() + inner.width() <= outer.x() + outer.width()
-        && inner.y() + inner.height() <= outer.y() + outer.height()
+    inner.x() + CONTAINMENT_EPSILON >= outer.x()
+        && inner.y() + CONTAINMENT_EPSILON >= outer.y()
+        && inner.x() + inner.width() <= outer.x() + outer.width() + CONTAINMENT_EPSILON
+        && inner.y() + inner.height() <= outer.y() + outer.height() + CONTAINMENT_EPSILON
 }
 
 fn find_presented_pointer_candidate<'a>(

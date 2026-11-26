@@ -8,6 +8,7 @@ use crate::emacs_core::builtins::higher_order_test_support::{
 use crate::emacs_core::eval::{
     Context, EVAL_STACK_RED_ZONE, STACK_GROWTH_PROBE_INTERVAL, STACK_GROWTH_PROBE_START_DEPTH,
 };
+use neovm_value::intern::intern;
 use neovm_value::tagged::collection_reads::capture;
 use neovm_value::tagged::mutate::LispCollectionRevision;
 use neovm_value::value::Value;
@@ -84,7 +85,7 @@ impl NativePredicate {
     #[doc(hidden)]
     pub fn callable(self) -> Value {
         let name: &'static str = self.into();
-        Value::symbol(name)
+        Value::from_sym_id(intern(name))
     }
 
     #[doc(hidden)]
@@ -259,7 +260,7 @@ fn native_sort_batches_at_sampled_depths_on_both_stack_placements() {
                         "{predicate:?} at {sampled:?} on {placement:?} journalled {revisions} moves"
                     );
                     for (ordinal, value) in vector.as_vector_data().unwrap().iter().enumerate() {
-                        predicate.assert_element(*value, ordinal);
+                        predicate.assert_element(value, ordinal);
                     }
                 }
             }

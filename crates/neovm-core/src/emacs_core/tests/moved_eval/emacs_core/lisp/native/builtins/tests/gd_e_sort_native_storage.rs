@@ -48,7 +48,7 @@ fn native_vector_sort_batches_collection_mutations() {
             if strings {
                 assert_eq!(value.as_utf8_str(), Some(format!("{index:04}").as_str()));
             } else {
-                assert_eq!(*value, Value::fixnum(index as i64));
+                assert_eq!(value, Value::fixnum(index as i64));
             }
         }
     }

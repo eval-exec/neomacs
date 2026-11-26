@@ -432,6 +432,10 @@ pub(crate) struct DisplayRowSourceStart {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct InvisibleTextScanCheckpoint {
     invisible_next: i64,
+    /// Character offset into the ellipsis display vector (GNU `dpvec_index`,
+    /// src/xdisp.c:4115-4121) for an already-consumed hidden span whose
+    /// ellipsis clipped on the previous wrapping row. `None` when settled.
+    deferred_ellipsis: Option<usize>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -926,6 +930,27 @@ impl HorizontalScrollSkipState {
         }
     }
 
+    /// GNU's long-line hscroll jump (`fast_move_it_horizontally`,
+    /// src/xdisp.c:25896-25920) stopped exactly at the first visible
+    /// boundary: the next source item is the glyph the left-truncation
+    /// marker replaces, or, with line numbers, the marker is complete.
+    pub(crate) fn complete_at_visible_boundary(&mut self) {
+        self.phase = match self.truncation_target {
+            HorizontalScrollTruncationTarget::FirstVisibleSourceGlyph => {
+                HorizontalScrollSkipPhase::ReplaceNextGlyph
+            }
+            HorizontalScrollTruncationTarget::LineNumberPrefix => {
+                HorizontalScrollSkipPhase::Complete
+            }
+        };
+    }
+
+    /// The line ended before the hscroll boundary, so the jump clamped at the
+    /// newline and no source cell remains to consume on this row.
+    pub(crate) fn complete_hidden_line(&mut self) {
+        self.phase = HorizontalScrollSkipPhase::Complete;
+    }
+
     pub(crate) fn consume_display_item(
         &mut self,
         item: HorizontalScrollDisplayItem,
@@ -1279,6 +1304,7 @@ impl InvisibleTextScanCheckpoint {
     pub(crate) fn new(start_charpos: i64) -> Self {
         Self {
             invisible_next: start_charpos,
+            deferred_ellipsis: None,
         }
     }
 
@@ -1290,8 +1316,18 @@ impl InvisibleTextScanCheckpoint {
         self.invisible_next = charpos;
     }
 
+    pub(crate) fn defer_ellipsis_from(&mut self, char_offset: usize) {
+        self.deferred_ellipsis = Some(char_offset);
+    }
+
+    /// Takes the pending ellipsis resume offset (GNU `dpvec_index`).
+    pub(crate) fn take_deferred_ellipsis(&mut self) -> Option<usize> {
+        self.deferred_ellipsis.take()
+    }
+
     pub(crate) fn rewind_to(&mut self, position: crate::display_source::DisplaySourceTextPosition) {
         self.invisible_next = position.charpos();
+        self.deferred_ellipsis = None;
     }
 }
 

@@ -142,8 +142,7 @@ fn mode_copied_properties_have_only_manager_roots() {
             assert_eq!(
                 unsafe { Value::from_bits(*bits) }
                     .as_vector_data()
-                    .expect("live mode property vector")
-                    .as_slice(),
+                    .expect("live mode property vector"),
                 &[Value::fixnum(index as i64)]
             );
         }
@@ -772,7 +771,7 @@ fn custom_type_nested_list() {
 }
 
 fn mode_symbol(name: &str) -> Value {
-    Value::symbol(name)
+    Value::from_sym_id(intern(name))
 }
 
 fn mode_symbol_opt(name: Option<&str>) -> Option<Value> {

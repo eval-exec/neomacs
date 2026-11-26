@@ -30,14 +30,14 @@ fn capture(ctx: &Context, symbol: Value) -> super::sqrt_snapshot::SqrtCallWitnes
     );
     let cfg = analyze_cfg(
         f.executable_ops(),
-        &f.constants,
+        f.constants(),
         f.executable_gnu_byte_offset_map(),
         1,
     )
     .unwrap();
     let sites = find_spec_sites(
         f.executable_ops(),
-        &f.constants,
+        f.constants(),
         &cfg.leaders,
         &ctx.obarray,
         true,

@@ -2,7 +2,6 @@
 //! variable's default value. These tests use explicit roots and no Lisp code.
 
 use neovm_value::intern::SymId;
-use neovm_value::intern::intern;
 use std::collections::HashMap;
 
 use super::{CustomType, CustomVariable, GcTrace, LispString, ModeRegistry, Value};
@@ -55,7 +54,7 @@ fn nested_custom_type_choices_survive_full_gc() {
     for _ in 0..3 {
         let mut roots = Vec::new();
         registry.trace_roots(&mut roots);
-        heap.collect_exact(roots.iter().copied());
+        heap.collect_rooted(roots.iter().copied());
 
         // Test locals are not explicit roots. Check allocated ownership
         // before any payload read, so this fails safely on the old trace.

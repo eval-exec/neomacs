@@ -548,6 +548,25 @@ pub trait FontBackend: Send {
         }
     }
 
+    /// Native render policy uses the same catalog authority as selection.
+    #[cfg(target_os = "linux")]
+    fn render_options(
+        &self,
+        file: &str,
+        selector: u32,
+        size: f32,
+        weight: Option<f32>,
+    ) -> Option<neomacs_font_materializer::fontconfig::FontRenderOptions> {
+        #[cfg(test)]
+        if let crate::font::metrics::test_catalog::TestFontCatalogSource::Fixture(catalog) =
+            self.test_catalog()
+        {
+            return catalog.render_options(file, selector, size, weight);
+        }
+        neomacs_font_materializer::fontconfig::FontconfigContext::system()?
+            .options_for_file_with_weight(std::path::Path::new(file), selector, size, weight)
+    }
+
     fn match_font_spec(&self, query: &FontCandidateQuery) -> FontDriverMatch {
         FontDriverMatch::Enumerated(self.list_candidates(query))
     }
@@ -577,6 +596,21 @@ pub trait FontBackend: Send {
     /// may filter by coverage but must not score weight/slant/spacing; that is
     /// [`crate::font::resolver::FontResolver`]'s responsibility.
     fn list_candidates(&self, query: &FontCandidateQuery) -> Vec<FontCandidate>;
+
+    /// Rank of each candidate in `FcFontSort` order for the default face and
+    /// a language.
+    ///
+    /// The slice is parallel to `candidates`. An empty return, or a `None`
+    /// rank, leaves that candidate unranked. Unranked equal scores keep the
+    /// driver's list order. Scoring is unchanged; only equal scores use this.
+    fn equal_score_sort_ranks(
+        &self,
+        _default_family: &str,
+        _lang: &str,
+        _candidates: &[FontCandidate],
+    ) -> Vec<Option<u32>> {
+        Vec::new()
+    }
 
     /// Enumerate only an already chosen identity, without selecting a family
     /// substitute. Native adapters can discard unrelated catalog entries
@@ -617,6 +651,13 @@ pub trait FontBackend: Send {
     /// point. Implementations must coalesce OS callbacks or rate-limit native
     /// polling; this method is called from the evaluator redisplay path.
     fn poll_catalog_change(&mut self) -> crate::font::catalog::FontCatalogChange;
+
+    /// Process-wide id of the native catalog publication this backend
+    /// observes. `0` means the backend has no shared counter, so each
+    /// `Changed` poll is its own event.
+    fn published_catalog_generation(&self) -> u64 {
+        0
+    }
 
     /// Advance to a fresh view of the platform font catalog.
     ///

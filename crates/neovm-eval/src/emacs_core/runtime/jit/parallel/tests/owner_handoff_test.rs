@@ -55,7 +55,8 @@ pub(super) fn registration(error: &RegistrationError) -> ExecutionTestRetry {
         | RegistrationError::ResidualSatb
         | RegistrationError::Publication
         | RegistrationError::PendingRoots
-        | RegistrationError::PendingYoung => ExecutionTestRetry::Refuse,
+        | RegistrationError::PendingYoung
+        | RegistrationError::OwnerReserveHeld => ExecutionTestRetry::Refuse,
     }
 }
 pub(super) fn function(error: &FunctionError) -> ExecutionTestRetry {

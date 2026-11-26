@@ -1,4 +1,6 @@
 use neomacs_display_protocol::frame_time::{EventTime, observe_platform_now};
+use std::ffi::c_void;
+use std::ptr::NonNull;
 use std::{collections::VecDeque, fs, path::PathBuf, time::Duration};
 
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle, RawDisplayHandle, RawWindowHandle};
@@ -7,6 +9,7 @@ use wayland_client::globals::{GlobalListContents, registry_queue_init};
 use wayland_client::protocol::{wl_registry, wl_surface};
 use wayland_client::{Connection, Dispatch, EventQueue, Proxy, QueueHandle};
 use wayland_protocols::wp::presentation_time::client::{wp_presentation, wp_presentation_feedback};
+use winit::event_loop::OwnedDisplayHandle;
 use winit::window::Window;
 
 #[derive(Clone, Copy, Debug)]
@@ -206,25 +209,58 @@ impl Dispatch<wp_presentation_feedback::WpPresentationFeedback, Submission> for 
     }
 }
 
-struct Session {
-    connection: Connection,
+struct DisplayScoped<T, D = OwnedDisplayHandle> {
+    // Field order is significant: `inner` (wp_presentation proxy, EventQueue,
+    // and foreign-display Connection) drops before `_display_owner` releases
+    // Winit's `wl_display`.
+    inner: T,
+    _display_owner: D,
+}
+
+impl<T, D> DisplayScoped<T, D> {
+    const fn new(inner: T, display_owner: D) -> Self {
+        Self {
+            inner,
+            _display_owner: display_owner,
+        }
+    }
+}
+
+struct PresentationProtocol {
+    display: NonNull<c_void>,
+    presentation: wp_presentation::WpPresentation,
     queue: EventQueue<Receipts>,
     receipts: Receipts,
-    presentation: wp_presentation::WpPresentation,
+    connection: Connection,
     next_submission: u64,
 }
 
-impl Session {
-    fn connect(window: &dyn Window, path: PathBuf) -> Result<Self, String> {
-        let RawDisplayHandle::Wayland(display) = window
+impl Drop for PresentationProtocol {
+    fn drop(&mut self) {
+        let _ = self.queue.dispatch_pending(&mut self.receipts);
+        self.presentation.destroy();
+        let _ = self.connection.flush();
+    }
+}
+
+type Session = DisplayScoped<PresentationProtocol, OwnedDisplayHandle>;
+
+impl PresentationProtocol {
+    fn connect(display_owner: OwnedDisplayHandle, path: PathBuf) -> Result<Session, String> {
+        // `display_owner` is bound ahead of every Wayland guest object below so
+        // reverse-declaration local drop keeps the `wl_display` alive across
+        // early error returns as well as steady-state teardown.
+        let RawDisplayHandle::Wayland(display) = display_owner
             .display_handle()
             .map_err(|error| error.to_string())?
             .as_raw()
         else {
             return Err("presentation receipts require a Wayland display".into());
         };
-        // SAFETY: borrowed from a live winit Window on the render thread. The
-        // guest never disconnects the display and is shut down before winit.
+        // SAFETY: `display.display` was extracted from `display_owner`, which
+        // keeps Winit's `wl_display` alive until after `PresentationProtocol`
+        // (and any error-path locals) have dropped. The guest never disconnects
+        // the foreign display.
         let backend = unsafe { Backend::from_foreign_display(display.display.as_ptr().cast()) };
         let connection = Connection::from_backend(backend);
         let (globals, queue) =
@@ -232,18 +268,22 @@ impl Session {
         let presentation = globals
             .bind(&queue.handle(), 1..=1, ())
             .map_err(|error| error.to_string())?;
-        Ok(Self {
-            connection,
-            queue,
-            receipts: Receipts {
-                path,
-                latest_presented: 0,
-                clock_id: None,
-                pending: PendingReceipts::default(),
+        Ok(DisplayScoped::new(
+            Self {
+                display: display.display,
+                presentation,
+                queue,
+                receipts: Receipts {
+                    path,
+                    latest_presented: 0,
+                    clock_id: None,
+                    pending: PendingReceipts::default(),
+                },
+                connection,
+                next_submission: 0,
             },
-            presentation,
-            next_submission: 0,
-        })
+            display_owner,
+        ))
     }
 
     fn request(
@@ -255,6 +295,18 @@ impl Session {
         scale: f64,
         projected: &[neomacs_display_protocol::input_latency::InputToken],
     ) -> Result<(), String> {
+        let RawDisplayHandle::Wayland(window_display) = window
+            .display_handle()
+            .map_err(|error| error.to_string())?
+            .as_raw()
+        else {
+            return Err("presentation receipts require a Wayland display".into());
+        };
+        if window_display.display != self.display {
+            return Err(
+                "presentation receipts window display does not match session display".into(),
+            );
+        }
         let RawWindowHandle::Wayland(handle) = window
             .window_handle()
             .map_err(|error| error.to_string())?
@@ -262,8 +314,10 @@ impl Session {
         else {
             return Err("presentation receipts require a Wayland surface".into());
         };
-        // SAFETY: this surface belongs to the same live winit display. Borrow
-        // only to request feedback; never commit, destroy, or dispatch it.
+        // SAFETY: verified above that `window` belongs to the same live
+        // `wl_display` owned by the enclosing `DisplayScoped`'s
+        // `OwnedDisplayHandle`. Borrow only to request feedback; never commit,
+        // destroy, or dispatch it.
         let id = unsafe {
             ObjectId::from_ptr(
                 wl_surface::WlSurface::interface(),
@@ -299,7 +353,10 @@ impl Session {
 
 enum ObserverState {
     Disabled,
-    Uninitialized(PathBuf),
+    Uninitialized {
+        path: PathBuf,
+        display_owner: Option<OwnedDisplayHandle>,
+    },
     Active(Session),
 }
 
@@ -319,8 +376,36 @@ impl PresentationObserver {
                     })
                 })
                 .map_or(ObserverState::Disabled, |path| {
-                    ObserverState::Uninitialized(path.into())
+                    ObserverState::Uninitialized {
+                        path: path.into(),
+                        display_owner: None,
+                    }
                 }),
+        }
+    }
+
+    pub(crate) fn attach_display(&mut self, display: OwnedDisplayHandle) {
+        if let ObserverState::Uninitialized { display_owner, .. } = &mut self.state {
+            *display_owner = Some(display);
+        }
+    }
+
+    fn take_uninitialized_display(&mut self) -> Option<(PathBuf, OwnedDisplayHandle)> {
+        let ObserverState::Uninitialized {
+            path,
+            display_owner,
+        } = std::mem::replace(&mut self.state, ObserverState::Disabled)
+        else {
+            return None;
+        };
+        match display_owner {
+            Some(display_owner) => Some((path, display_owner)),
+            None => {
+                tracing::warn!(
+                    "native presentation feedback requires an attached OwnedDisplayHandle"
+                );
+                None
+            }
         }
     }
 
@@ -333,19 +418,18 @@ impl PresentationObserver {
         scale: f64,
         projected: &[neomacs_display_protocol::input_latency::InputToken],
     ) {
-        if matches!(self.state, ObserverState::Uninitialized(_)) {
-            let ObserverState::Uninitialized(path) =
-                std::mem::replace(&mut self.state, ObserverState::Disabled)
-            else {
-                unreachable!()
-            };
-            match Session::connect(window, path) {
+        if matches!(self.state, ObserverState::Uninitialized { .. })
+            && let Some((path, display_owner)) = self.take_uninitialized_display()
+        {
+            match PresentationProtocol::connect(display_owner, path) {
                 Ok(session) => self.state = ObserverState::Active(session),
                 Err(error) => tracing::warn!(%error, "native presentation feedback unavailable"),
             }
         }
         if let ObserverState::Active(session) = &mut self.state
-            && let Err(error) = session.request(window, frame, layout, size, scale, projected)
+            && let Err(error) = session
+                .inner
+                .request(window, frame, layout, size, scale, projected)
         {
             tracing::warn!(%error, "cannot request native presentation feedback");
         }
@@ -353,7 +437,7 @@ impl PresentationObserver {
 
     pub(crate) fn dispatch_deadline(&mut self, now: EventTime) -> Option<EventTime> {
         match &mut self.state {
-            ObserverState::Active(session) => session.receipts.pending.deadline(now),
+            ObserverState::Active(session) => session.inner.receipts.pending.deadline(now),
             _ => None,
         }
     }
@@ -362,32 +446,18 @@ impl PresentationObserver {
         if let ObserverState::Active(session) = &mut self.state {
             // Winit reads the shared display. Dispatch only our own queue; no
             // roundtrip, blocking read, redraw request, or parent commit here.
-            if let Err(error) = session.queue.dispatch_pending(&mut session.receipts) {
+            if let Err(error) = session
+                .inner
+                .queue
+                .dispatch_pending(&mut session.inner.receipts)
+            {
                 tracing::warn!(%error, "native presentation feedback dispatch failed");
             }
         }
     }
 
     pub(crate) fn shutdown(&mut self) {
-        if let ObserverState::Active(mut session) =
-            std::mem::replace(&mut self.state, ObserverState::Disabled)
-        {
-            let _ = session.queue.dispatch_pending(&mut session.receipts);
-            session.presentation.destroy();
-            let _ = session.connection.flush();
-        }
-    }
-}
-
-impl Drop for PresentationObserver {
-    fn drop(&mut self) {
-        // On abnormal winit teardown the foreign display may already be gone.
-        // Normal shutdown explicitly releases the guest while it is live.
-        if let ObserverState::Active(session) =
-            std::mem::replace(&mut self.state, ObserverState::Disabled)
-        {
-            std::mem::forget(session);
-        }
+        self.state = ObserverState::Disabled;
     }
 }
 

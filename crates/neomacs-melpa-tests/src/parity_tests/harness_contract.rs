@@ -1,7 +1,7 @@
 #[cfg(unix)]
 use std::fs;
 #[cfg(unix)]
-use std::path::Path;
+use std::path::{Path, PathBuf};
 #[cfg(unix)]
 use std::process::Command;
 #[cfg(unix)]
@@ -120,13 +120,418 @@ fn nextest_runs_melpa_infrastructure_preflight_once_before_parity_tests() {
     assert!(nextest.contains(
         "filter = 'package(neomacs-melpa-tests) and not (test(~parity_tests::harness_contract::) or test(~source_lock::tests::))'"
     ));
-    assert!(nextest.contains("setup = 'melpa-infra-preflight'"));
+    assert_eq!(
+        nextest.matches("setup = 'melpa-infra-preflight'").count(),
+        1,
+        "package-TUI scenarios use new_with_short_home and must not take the refusing preflight"
+    );
+    assert!(
+        !nextest.contains(
+            "filter = 'test(~package_tui::)'\nplatform = { host = \"cfg(unix)\" }\nsetup = 'melpa-infra-preflight'"
+        ),
+        "the refusing preflight must not be attached to test(~package_tui::)"
+    );
     assert!(preflight.contains("NEXTEST_WORKSPACE_ROOT"));
     assert!(preflight.contains(r#"mktemp -d "$scratch_parent/preflight.XXXXXX""#));
     assert!(preflight.contains("resolve_executable Git git"));
     assert!(preflight.contains("NEOMACS-MELPA-PREFLIGHT:ready"));
     assert!(!preflight.contains("mktemp -d /tmp"));
     assert!(!preflight.contains("TMPDIR=/tmp"));
+}
+
+/// PEER 5832: a relocated CARGO_TARGET_DIR outside the checkout must fail once,
+/// up front, before either editor is launched. GNU's backup policy
+/// (`normal-backup-enable-predicate`) and the checkout fixtures derive
+/// observable state from the sandbox path, so an out-of-checkout cache root
+/// otherwise surfaces as per-package GNU==Neomacs mismatches (the same skew
+/// `require_checkout_root` refuses inside `MelpaSandbox`).
+
+/// Spawn the MELPA preflight through the package canonical environment.
+///
+/// The script launches GNU Emacs and Neomacs. Spawning it from a raw bash
+/// command would hide those editor spawns from the architecture tripwire.
+/// `env` in the script overrides HOME and the XDG roots for each probe and
+/// inherits the rest, so the probes keep this profile's pins.
+#[cfg(unix)]
+fn pinned_preflight(scratch: &Path, script: &str) -> neomacs_test_env::PinnedCommand {
+    let home = scratch.join("canonical-home");
+    let tmp = scratch.join("canonical-tmp");
+    let runtime = scratch.join("canonical-runtime");
+    for directory in [&home, &tmp, &runtime] {
+        fs::create_dir_all(directory).expect("canonical package roots");
+    }
+    let environment = neomacs_test_env::CanonicalEnvironment::package(
+        &home,
+        &tmp,
+        neomacs_test_env::PackagePaths {
+            scratch_root: scratch.to_path_buf(),
+            workspace_root: workspace_root(),
+            runtime_dir: runtime,
+            melpa_cache_root: scratch.to_path_buf(),
+        },
+    )
+    .expect("MELPA package environment");
+    let mut command = environment.command("bash");
+    command.arg(script);
+    command
+}
+
+#[cfg(unix)]
+#[test]
+fn preflight_refuses_a_cache_root_outside_the_checkout() {
+    fn inside_checkout(mut path: &Path) -> bool {
+        loop {
+            if [".git", ".svn", ".cvs"]
+                .iter()
+                .any(|marker| path.join(marker).exists())
+            {
+                return true;
+            }
+            match path.parent() {
+                Some(parent) if parent != path => path = parent,
+                _ => return false,
+            }
+        }
+    }
+
+    // The probe needs a temporary root with no checkout ancestor. If the host
+    // puts /tmp inside one, the preflight (correctly) accepts it, so there is
+    // no refusal to observe; say so rather than asserting a false negative.
+    if inside_checkout(Path::new("/tmp")) {
+        eprintln!("skipping: /tmp itself is inside a checkout on this host");
+        return;
+    }
+    let workspace = tempfile::Builder::new()
+        .prefix("melpa-preflight-outside-")
+        .tempdir_in("/tmp")
+        .expect("workspace tempdir outside any checkout");
+    let target = workspace.path().join("target");
+    let script = concat!(
+        env!("CARGO_WORKSPACE_DIR"),
+        "/scripts/melpa-infra-preflight.sh"
+    );
+    let output = pinned_preflight(workspace.path(), script)
+        .env("NEXTEST_WORKSPACE_ROOT", workspace.path())
+        .env("CARGO_TARGET_DIR", &target)
+        .env_remove("NEOMACS_BIN")
+        .output()
+        .expect("run the MELPA preflight");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "the out-of-checkout refusal must be the script's early exit; stderr:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("is not inside a checkout"),
+        "the refusal must say what is wrong: {stderr}"
+    );
+    assert!(
+        stderr.contains("CARGO_TARGET_DIR"),
+        "the refusal must name the knob to fix: {stderr}"
+    );
+    assert!(
+        stderr.contains("symlink"),
+        "the refusal must document the target-symlink recipe: {stderr}"
+    );
+    assert!(
+        !stderr.contains("preflight passed") && !stderr.contains("launch"),
+        "the preflight must refuse before launching either editor: {stderr}"
+    );
+}
+
+/// `<worktree>/target` as a symlink, with `CARGO_TARGET_DIR` unset, is the
+/// supported way to keep build output on another volume. The preflight walk
+/// must accept that logical path and name the checkout that owns the link.
+#[cfg(unix)]
+#[test]
+fn preflight_accepts_a_logical_target_symlink_when_cargo_target_dir_is_unset() {
+    fn inside_checkout(mut path: &Path) -> bool {
+        loop {
+            if [".git", ".svn", ".cvs"]
+                .iter()
+                .any(|marker| path.join(marker).exists())
+            {
+                return true;
+            }
+            match path.parent() {
+                Some(parent) if parent != path => path = parent,
+                _ => return false,
+            }
+        }
+    }
+
+    if inside_checkout(Path::new("/tmp")) {
+        eprintln!("skipping: /tmp itself is inside a checkout on this host");
+        return;
+    }
+    let checkout = tempfile::Builder::new()
+        .prefix("melpa-preflight-link-")
+        .tempdir_in("/tmp")
+        .expect("checkout");
+    fs::write(checkout.path().join(".git"), "gitdir: /unused\n").expect("marker");
+    let external = tempfile::Builder::new()
+        .prefix("melpa-preflight-ext-")
+        .tempdir_in("/tmp")
+        .expect("external target");
+    let link = checkout.path().join("target");
+    std::os::unix::fs::symlink(external.path(), &link).expect("symlink target");
+    fs::create_dir_all(link.join("melpa")).expect("logical melpa cache root");
+    let script = concat!(
+        env!("CARGO_WORKSPACE_DIR"),
+        "/scripts/melpa-infra-preflight.sh"
+    );
+    let output = pinned_preflight(checkout.path(), script)
+        .env("NEXTEST_WORKSPACE_ROOT", checkout.path())
+        .env("NEOMACS_MELPA_PREFLIGHT_CHECK_ONLY", "1")
+        .env_remove("CARGO_TARGET_DIR")
+        .env_remove("NEOMACS_BIN")
+        .output()
+        .expect("run the MELPA preflight");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "a logical target symlink must pass the checkout walk; stdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+    let expected = format!(
+        "MELPA infrastructure preflight checkout: {}",
+        checkout.path().display()
+    );
+    let combined = format!("{stdout}{stderr}");
+    assert!(
+        combined.contains(&expected),
+        "the walk must name the checkout that owns the symlink: {combined}"
+    );
+    assert!(
+        !combined.contains("is not inside a checkout"),
+        "the symlink layout is the supported one: {combined}"
+    );
+    let external_checkout = format!("checkout: {}", external.path().display());
+    assert!(
+        !combined.contains(&external_checkout),
+        "the walk must not report the external target directory: {combined}"
+    );
+}
+
+#[cfg(unix)]
+fn ancestor_has_checkout(mut path: &Path) -> bool {
+    loop {
+        if [".git", ".svn", ".cvs"]
+            .iter()
+            .any(|marker| path.join(marker).exists())
+        {
+            return true;
+        }
+        match path.parent() {
+            Some(parent) if parent != path => path = parent,
+            _ => return false,
+        }
+    }
+}
+
+/// Prefer the mnt30 build volume. `/tmp` is the stand-in when that volume is
+/// not mounted, and either way the directory is outside every checkout.
+#[cfg(unix)]
+fn external_build_volume() -> PathBuf {
+    let mounted = Path::new("/home/exec/mnt30/neomacs-targets");
+    if mounted.is_dir() {
+        assert!(
+            !ancestor_has_checkout(mounted),
+            "the mnt30 build volume must sit outside every checkout"
+        );
+        return mounted.to_path_buf();
+    }
+    PathBuf::from("/tmp")
+}
+
+#[cfg(unix)]
+struct PreflightRun {
+    status: Option<i32>,
+    stdout: String,
+    stderr: String,
+}
+
+#[cfg(unix)]
+fn run_melpa_preflight(
+    workspace: &Path,
+    cargo_target_dir: Option<&Path>,
+    check_only: bool,
+) -> PreflightRun {
+    let script = concat!(
+        env!("CARGO_WORKSPACE_DIR"),
+        "/scripts/melpa-infra-preflight.sh"
+    );
+    let mut command = pinned_preflight(workspace, script);
+    command
+        .env("NEXTEST_WORKSPACE_ROOT", workspace)
+        .env_remove("NEOMACS_BIN");
+    match cargo_target_dir {
+        Some(target) => {
+            command.env("CARGO_TARGET_DIR", target);
+        }
+        None => {
+            command.env_remove("CARGO_TARGET_DIR");
+        }
+    }
+    if check_only {
+        command.env("NEOMACS_MELPA_PREFLIGHT_CHECK_ONLY", "1");
+    } else {
+        command.env_remove("NEOMACS_MELPA_PREFLIGHT_CHECK_ONLY");
+    }
+    let output = command.output().expect("run the MELPA preflight");
+    PreflightRun {
+        status: output.status.code(),
+        stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+        stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+    }
+}
+
+#[cfg(unix)]
+fn assert_refused_before_any_editor_launch(run: &PreflightRun) {
+    assert_eq!(
+        run.status,
+        Some(2),
+        "the refusal must be the script's early exit; stdout:\n{}\nstderr:\n{}",
+        run.stdout,
+        run.stderr
+    );
+    assert!(
+        run.stderr.contains("is not inside a checkout"),
+        "the refusal must say what is wrong: {}",
+        run.stderr
+    );
+    assert!(
+        !run.stderr.contains("launch") && !run.stderr.contains("preflight passed"),
+        "the preflight must refuse before launching either editor: {}",
+        run.stderr
+    );
+    assert!(
+        !run.stdout.contains("NEOMACS-MELPA-PREFLIGHT:ready")
+            && !run.stdout.contains("preflight passed")
+            && !run.stdout.contains("preflight checkout"),
+        "no editor probe may run after a refusal; stdout:\n{}",
+        run.stdout
+    );
+}
+
+#[cfg(unix)]
+fn assert_external_is_on_the_build_volume(external: &Path, volume: &Path) {
+    assert!(
+        external.starts_with(volume),
+        "external target {} is not on {}",
+        external.display(),
+        volume.display()
+    );
+    assert!(
+        external.is_absolute(),
+        "the outside target path must be absolute: {}",
+        external.display()
+    );
+    assert!(
+        !ancestor_has_checkout(external),
+        "the outside target {} is inside a checkout",
+        external.display()
+    );
+}
+
+/// PEER 5842 (1): a real checkout plus an absolute `CARGO_TARGET_DIR` on
+/// another volume is the skewing layout. Refuse it before either editor
+/// launches. The checkout marker must not make that absolute target legal.
+#[cfg(unix)]
+#[test]
+fn preflight_refuses_an_absolute_cargo_target_dir_outside_the_checkout() {
+    if ancestor_has_checkout(Path::new("/tmp")) {
+        eprintln!("skipping: /tmp itself is inside a checkout on this host");
+        return;
+    }
+    let volume = external_build_volume();
+    let checkout = tempfile::Builder::new()
+        .prefix("melpa-preflight-checkout-")
+        .tempdir_in("/tmp")
+        .expect("checkout");
+    fs::write(checkout.path().join(".git"), "gitdir: /unused\n").expect("marker");
+    let external = tempfile::Builder::new()
+        .prefix("melpa-preflight-abs-")
+        .tempdir_in(&volume)
+        .expect("absolute target dir");
+    assert_external_is_on_the_build_volume(external.path(), &volume);
+    assert!(!external.path().starts_with(checkout.path()));
+    let run = run_melpa_preflight(checkout.path(), Some(external.path()), false);
+    assert_refused_before_any_editor_launch(&run);
+}
+
+/// PEER 5842 (2): `<worktree>/target` may point at an outside directory, and
+/// that outside directory's own logical path is still refused. Following the
+/// symlink back into the checkout would hide the skew.
+#[cfg(unix)]
+#[test]
+fn preflight_refuses_a_logical_target_path_that_lives_outside_the_checkout() {
+    if ancestor_has_checkout(Path::new("/tmp")) {
+        eprintln!("skipping: /tmp itself is inside a checkout on this host");
+        return;
+    }
+    let volume = external_build_volume();
+    let checkout = tempfile::Builder::new()
+        .prefix("melpa-preflight-checkout-")
+        .tempdir_in("/tmp")
+        .expect("checkout");
+    fs::write(checkout.path().join(".git"), "gitdir: /unused\n").expect("marker");
+    let external = tempfile::Builder::new()
+        .prefix("melpa-preflight-logical-")
+        .tempdir_in(&volume)
+        .expect("outside target dir");
+    assert_external_is_on_the_build_volume(external.path(), &volume);
+    std::os::unix::fs::symlink(external.path(), checkout.path().join("target"))
+        .expect("symlink target");
+    let run = run_melpa_preflight(checkout.path(), Some(external.path()), false);
+    assert_refused_before_any_editor_launch(&run);
+}
+
+/// PEER 5842 (3): the same symlink is accepted when `CARGO_TARGET_DIR` is
+/// unset, because the walk then starts at `<worktree>/target`.
+#[cfg(unix)]
+#[test]
+fn preflight_accepts_a_worktree_target_symlink_onto_the_external_volume() {
+    if ancestor_has_checkout(Path::new("/tmp")) {
+        eprintln!("skipping: /tmp itself is inside a checkout on this host");
+        return;
+    }
+    let volume = external_build_volume();
+    let checkout = tempfile::Builder::new()
+        .prefix("melpa-preflight-checkout-")
+        .tempdir_in("/tmp")
+        .expect("checkout");
+    fs::write(checkout.path().join(".git"), "gitdir: /unused\n").expect("marker");
+    let external = tempfile::Builder::new()
+        .prefix("melpa-preflight-linked-")
+        .tempdir_in(&volume)
+        .expect("external target volume");
+    assert_external_is_on_the_build_volume(external.path(), &volume);
+    let link = checkout.path().join("target");
+    std::os::unix::fs::symlink(external.path(), &link).expect("symlink target");
+    fs::create_dir_all(link.join("melpa")).expect("logical melpa cache root");
+    let run = run_melpa_preflight(checkout.path(), None, true);
+    let combined = format!("{}{}", run.stdout, run.stderr);
+    assert_eq!(
+        run.status,
+        Some(0),
+        "a worktree target symlink onto the external volume must pass; {combined}"
+    );
+    let expected = format!(
+        "MELPA infrastructure preflight checkout: {}",
+        checkout.path().display()
+    );
+    assert!(
+        combined.contains(&expected),
+        "the walk must name the checkout that owns the symlink: {combined}"
+    );
+    let external_checkout = format!("checkout: {}", external.path().display());
+    assert!(
+        !combined.contains(&external_checkout),
+        "the walk must not report the external volume: {combined}"
+    );
 }
 
 #[cfg(unix)]
@@ -761,8 +1166,9 @@ fn every_exact_package_has_a_complete_acyclic_source_plan() {
     // The checked-in lock is the source of truth; this expectation tracks its
     // size and is refreshed with `UPDATE_EXPECT=1` when the lock intentionally
     // gains or loses a package.  It guards against a parser that silently
-    // drops rows, not against deliberate lock changes.
-    expect_test::expect!["799"].assert_eq(&sources.len().to_string());
+    // drops rows, not against deliberate lock changes.  831 is 799 plus the
+    // 32 emacs-taf rows added to the lock in 00f9a747d7.
+    expect_test::expect!["831"].assert_eq(&sources.len().to_string());
 
     for source in sources {
         let package = source.package();

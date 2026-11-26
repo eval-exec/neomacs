@@ -52,15 +52,19 @@ thread_local! {
     /// Previously this stored only the *last* context, which freed
     /// earlier strings and produced use-after-free panics in tests
     /// that compared results across multiple builtin calls.
-    static LAST_TEST_CTX: std::cell::RefCell<Vec<Context>> =
-        const { std::cell::RefCell::new(Vec::new()) };
+    static LAST_TEST_CTX: std::cell::RefCell<
+        Vec<neovm_eval::emacs_core::eval::parked_context::ParkedContext>,
+    > = const { std::cell::RefCell::new(Vec::new()) };
 }
 
 macro_rules! call_fileio_builtin {
     ($builtin:ident, $args:expr) => {{
         let mut eval = crate::emacs_core::eval_hook_installers::new_context();
         let result = $builtin(&mut eval, $args);
-        LAST_TEST_CTX.with(|slot| slot.borrow_mut().push(eval));
+        // The heap must stay allocated so later assertions can read values
+        // from earlier calls. Parking drops the TLS install without freeing
+        // that heap, so the next constructor is not a second active Context.
+        LAST_TEST_CTX.with(|slot| slot.borrow_mut().push(eval.park_for_test()));
         result
     }};
 }
@@ -467,6 +471,7 @@ fn auto_save_failure_time_survives_a_pdump_round_trip() {
     let dir = tempfile::tempdir().expect("tempdir");
     let dump_path = dir.path().join("auto-save-failure-time.pdump");
     crate::emacs_core::pdump::dump_to_file(&eval, &dump_path).expect("dump should succeed");
+    drop(eval);
     let loaded =
         crate::emacs_core::load_boot::load_from_dump(&dump_path).expect("load should succeed");
     assert_eq!(
@@ -949,36 +954,67 @@ fn builtin_file_truename_chases_raw_unibyte_symlink_targets() {
 
 #[test]
 fn test_read_write_file() {
+    // B15-1: drive the production write-region / insert-file-contents path.
+    // The old body asserted two test-support &str/full-String copies instead.
     crate::test_utils::init_test_tracing();
     let dir = std::env::temp_dir().join("neovm_fileio_test");
     let _ = fs::create_dir_all(&dir);
     let path = dir.join("test_rw.txt");
     let path_str = path.to_string_lossy().to_string();
+    let _ = fs::remove_file(&path_str);
 
-    // Write
-    write_string_to_file("hello, world\n", &path_str, false).unwrap();
+    let mut eval = crate::emacs_core::eval_hook_installers::new_context();
 
-    // Read back
-    let contents = read_file_contents(&path_str).unwrap();
-    assert_eq!(contents, "hello, world\n");
+    // Write through `write-region`: the buffer is the region source.
+    eval.eval_str("(insert \"hello, world\\n\")").unwrap();
+    builtin_write_region(
+        &mut eval,
+        vec![Value::NIL, Value::NIL, Value::string(&path_str)],
+    )
+    .expect("write-region should succeed");
 
-    // Append
-    write_string_to_file("second line\n", &path_str, true).unwrap();
-    let contents = read_file_contents(&path_str).unwrap();
-    assert_eq!(contents, "hello, world\nsecond line\n");
+    // Read back through `insert-file-contents` into a fresh buffer.
+    eval.eval_str("(erase-buffer)").unwrap();
+    builtin_insert_file_contents(&mut eval, vec![Value::string(&path_str)])
+        .expect("insert-file-contents should succeed");
+    let buf = eval.edit.buffers.current_buffer().expect("current buffer");
+    assert_eq!(buf.buffer_string(), "hello, world\n");
 
-    // Overwrite
-    write_string_to_file("replaced\n", &path_str, false).unwrap();
-    let contents = read_file_contents(&path_str).unwrap();
-    assert_eq!(contents, "replaced\n");
+    // Append through write-region's APPEND argument.
+    eval.eval_str("(erase-buffer)").unwrap();
+    eval.eval_str("(insert \"second line\\n\")").unwrap();
+    builtin_write_region(
+        &mut eval,
+        vec![Value::NIL, Value::NIL, Value::string(&path_str), Value::T],
+    )
+    .expect("appending write-region should succeed");
+    eval.eval_str("(erase-buffer)").unwrap();
+    builtin_insert_file_contents(&mut eval, vec![Value::string(&path_str)])
+        .expect("insert-file-contents should succeed");
+    let buf = eval.edit.buffers.current_buffer().expect("current buffer");
+    assert_eq!(buf.buffer_string(), "hello, world\nsecond line\n");
 
-    // Predicates on the file we just wrote
+    // Overwrite through the same production write path (APPEND nil).
+    eval.eval_str("(erase-buffer)").unwrap();
+    eval.eval_str("(insert \"replaced\\n\")").unwrap();
+    builtin_write_region(
+        &mut eval,
+        vec![Value::NIL, Value::NIL, Value::string(&path_str)],
+    )
+    .expect("overwriting write-region should succeed");
+    eval.eval_str("(erase-buffer)").unwrap();
+    builtin_insert_file_contents(&mut eval, vec![Value::string(&path_str)])
+        .expect("insert-file-contents should succeed");
+    let buf = eval.edit.buffers.current_buffer().expect("current buffer");
+    assert_eq!(buf.buffer_string(), "replaced\n");
+
+    // Predicates on the file we just wrote.
     assert!(file_exists_p(&path_str));
     assert!(file_regular_p(&path_str));
     assert!(file_readable_p(&path_str));
     assert!(!file_directory_p(&path_str));
 
-    // Clean up
+    // Clean up through the production unlink core.
     delete_file(&path_str).unwrap();
     assert!(!file_exists_p(&path_str));
 
@@ -1312,7 +1348,7 @@ fn test_make_directory_and_directory_files() {
     // Create with parents
     let nested = base.join("a/b/c");
     let nested_str = nested.to_string_lossy().to_string();
-    make_directory(&nested_str, true).unwrap();
+    std::fs::create_dir_all(&nested_str).unwrap();
     assert!(file_directory_p(&nested_str));
 
     // Create files in the base directory
@@ -1410,14 +1446,14 @@ fn test_rename_and_copy_file() {
     let dst_copy_str = dst_copy.to_string_lossy().to_string();
 
     // Create source
-    write_string_to_file("original content", &src_str, false).unwrap();
+    std::fs::write(&src_str, "original content").unwrap();
 
     // Copy
     copy_file(&src_str, &dst_copy_str).unwrap();
     assert!(file_exists_p(&src_str));
     assert!(file_exists_p(&dst_copy_str));
     assert_eq!(
-        read_file_contents(&dst_copy_str).unwrap(),
+        std::fs::read_to_string(&dst_copy_str).unwrap(),
         "original content"
     );
 
@@ -1426,7 +1462,7 @@ fn test_rename_and_copy_file() {
     assert!(!file_exists_p(&src_str));
     assert!(file_exists_p(&dst_rename_str));
     assert_eq!(
-        read_file_contents(&dst_rename_str).unwrap(),
+        std::fs::read_to_string(&dst_rename_str).unwrap(),
         "original content"
     );
 
@@ -1906,7 +1942,7 @@ fn test_file_attributes() {
     let path = dir.join("attrs.txt");
     let path_str = path.to_string_lossy().to_string();
 
-    write_string_to_file("content", &path_str, false).unwrap();
+    std::fs::write(&path_str, "content").unwrap();
 
     let attrs = file_attributes(&path_str).unwrap();
     assert_eq!(attrs.size, 7); // "content" is 7 bytes
@@ -2230,7 +2266,7 @@ fn test_builtin_make_temp_file_core_paths() {
     )
     .unwrap();
     let text_path = with_text.as_utf8_str().unwrap().to_string();
-    assert_eq!(read_file_contents(&text_path).unwrap(), "abc");
+    assert_eq!(std::fs::read_to_string(&text_path).unwrap(), "abc");
     delete_file(&text_path).unwrap();
 }
 
@@ -2805,6 +2841,7 @@ fn test_builtin_set_file_modes_eval_respects_default_directory() {
         vec![Value::string("alpha.txt"), Value::fixnum(0o600)],
     )
     .unwrap();
+    drop(eval);
     assert_eq!(
         call_fileio_builtin!(
             builtin_file_modes,
@@ -3678,6 +3715,9 @@ fn test_file_system_info_eval_respects_default_directory() {
         vec![Value::string(dir.to_string_lossy().as_ref())],
     )
     .expect("absolute file-system-info");
+    // `absolute` is read after the next constructor. Park so that heap stays
+    // allocated and the slot is empty.
+    let _parked_absolute = absolute_eval.park_for_test();
 
     let mut eval = crate::emacs_core::eval_hook_installers::new_context();
     eval.set_variable(
@@ -4010,6 +4050,7 @@ fn test_builtin_substitute_in_file_name() {
     let result =
         builtin_substitute_in_file_name(&mut ev, vec![Value::string("$HOME/foo")]).unwrap();
     assert_eq!(result.as_utf8_str(), Some("$HOME/foo"));
+    drop(ev);
 
     let values = bootstrap_eval(
         r#"
@@ -4059,7 +4100,7 @@ fn test_insert_file_contents_and_write_region() {
     let path_str = path.to_string_lossy().to_string();
 
     // Write a test file to disk
-    write_string_to_file("hello from file", &path_str, false).unwrap();
+    std::fs::write(&path_str, "hello from file").unwrap();
 
     let mut eval = crate::emacs_core::eval_hook_installers::new_context();
 
@@ -4080,7 +4121,7 @@ fn test_insert_file_contents_and_write_region() {
     );
     assert!(result.is_ok());
 
-    let written = read_file_contents(&out_str).unwrap();
+    let written = std::fs::read_to_string(&out_str).unwrap();
     assert_eq!(written, "hello from file");
 
     // Clean up
@@ -4143,7 +4184,7 @@ fn test_insert_file_contents_visit_sets_file_name_and_clears_modified() {
 
     let path = dir.join("visit.txt");
     let path_str = path.to_string_lossy().to_string();
-    write_string_to_file("visited text", &path_str, false).unwrap();
+    std::fs::write(&path_str, "visited text").unwrap();
 
     let mut eval = crate::emacs_core::eval_hook_installers::new_context();
     let result = builtin_insert_file_contents(&mut eval, vec![Value::string(&path_str), Value::T])
@@ -4383,7 +4424,7 @@ fn insert_file_contents_sets_last_coding_before_after_insert_hook() {
 
     let path = dir.join("ascii.txt");
     let path_str = path.to_string_lossy().to_string();
-    write_string_to_file("ascii text\n", &path_str, false).unwrap();
+    std::fs::write(&path_str, "ascii text\n").unwrap();
 
     let mut eval = crate::emacs_core::eval_hook_installers::new_context();
     eval.eval_str(
@@ -5531,7 +5572,7 @@ fn test_insert_file_contents_visit_rejects_partial_and_nonempty_visits() {
 
     let path = dir.join("visit.txt");
     let path_str = path.to_string_lossy().to_string();
-    write_string_to_file("visited text", &path_str, false).unwrap();
+    std::fs::write(&path_str, "visited text").unwrap();
 
     let mut eval_partial = crate::emacs_core::eval_hook_installers::new_context();
     let partial = builtin_insert_file_contents(
@@ -5550,6 +5591,7 @@ fn test_insert_file_contents_visit_rejects_partial_and_nonempty_visits() {
         other => panic!("unexpected flow: {other:?}"),
     }
 
+    drop(eval_partial);
     let mut eval_nonempty = crate::emacs_core::eval_hook_installers::new_context();
     eval_nonempty
         .edit
@@ -5713,7 +5755,7 @@ fn test_insert_file_contents_beg_end_semantics() {
     fs::create_dir_all(&dir).unwrap();
     let path = dir.join("slice.txt");
     let path_str = path.to_string_lossy().to_string();
-    write_string_to_file("abcdef", &path_str, false).unwrap();
+    std::fs::write(&path_str, "abcdef").unwrap();
 
     let mut eval_slice = crate::emacs_core::eval_hook_installers::new_context();
     let inserted = builtin_insert_file_contents(
@@ -5742,6 +5784,7 @@ fn test_insert_file_contents_beg_end_semantics() {
         "slice 2..4 should insert 'cd'"
     );
 
+    drop(eval_slice);
     let mut eval_empty = crate::emacs_core::eval_hook_installers::new_context();
     let inserted_zero = builtin_insert_file_contents(
         &mut eval_empty,
@@ -5764,6 +5807,7 @@ fn test_insert_file_contents_beg_end_semantics() {
         ""
     );
 
+    drop(eval_empty);
     let mut eval_tail = crate::emacs_core::eval_hook_installers::new_context();
     let inserted_tail = builtin_insert_file_contents(
         &mut eval_tail,
@@ -5786,6 +5830,7 @@ fn test_insert_file_contents_beg_end_semantics() {
         "cdef"
     );
 
+    drop(eval_tail);
     let mut eval_bad = crate::emacs_core::eval_hook_installers::new_context();
     let bad_offset = builtin_insert_file_contents(
         &mut eval_bad,
@@ -5822,7 +5867,7 @@ fn test_insert_file_contents_and_write_region_arity_bounds() {
 
     let file_path = dir.join("arity.txt");
     let file_str = file_path.to_string_lossy().to_string();
-    write_string_to_file("", &file_str, false).unwrap();
+    std::fs::write(&file_str, "").unwrap();
 
     let mut eval_insert_ok = crate::emacs_core::eval_hook_installers::new_context();
     let insert_ok = builtin_insert_file_contents(
@@ -5838,6 +5883,7 @@ fn test_insert_file_contents_and_write_region_arity_bounds() {
     .expect("5-arg insert-file-contents should succeed");
     assert_eq!(list_to_vec(&insert_ok).unwrap()[1], Value::fixnum(0));
 
+    drop(eval_insert_ok);
     let mut eval_insert_bad = crate::emacs_core::eval_hook_installers::new_context();
     let insert_bad = builtin_insert_file_contents(
         &mut eval_insert_bad,
@@ -5865,6 +5911,7 @@ fn test_insert_file_contents_and_write_region_arity_bounds() {
     let out_path = dir.join("arity-out.txt");
     let out_str = out_path.to_string_lossy().to_string();
 
+    drop(eval_insert_bad);
     let mut eval_write_ok = crate::emacs_core::eval_hook_installers::new_context();
     eval_write_ok
         .edit
@@ -5886,6 +5933,7 @@ fn test_insert_file_contents_and_write_region_arity_bounds() {
     )
     .expect("7-arg write-region should succeed");
 
+    drop(eval_write_ok);
     let mut eval_write_bad = crate::emacs_core::eval_hook_installers::new_context();
     eval_write_bad
         .edit
@@ -5972,6 +6020,7 @@ fn test_eval_fileio_relative_paths_respect_default_directory() {
     let ibuf = eval_insert.edit.buffers.current_buffer().unwrap();
     assert_eq!(ibuf.buffer_string(), "alpha\n");
 
+    drop(eval_insert);
     let mut eval_write = crate::emacs_core::eval_hook_installers::new_context();
     eval_write.set_variable("default-directory", Value::string(&default_dir));
     eval_write
@@ -5985,7 +6034,8 @@ fn test_eval_fileio_relative_paths_respect_default_directory() {
         vec![Value::NIL, Value::NIL, Value::string("out.txt")],
     )
     .unwrap();
-    assert_eq!(read_file_contents(&out_str).unwrap(), "neo");
+    assert_eq!(std::fs::read_to_string(&out_str).unwrap(), "neo");
+    drop(eval_write);
 
     let mut eval_find = create_bootstrap_evaluator_cached().expect("bootstrap evaluator");
     let rendered = format_eval_result(&eval_find.eval_str(&format!(
@@ -6025,7 +6075,7 @@ fn test_write_region_bounds_and_order_semantics() {
         vec![Value::fixnum(3), Value::fixnum(1), Value::string(&out_str)],
     )
     .expect("write-region should accept reversed in-range bounds");
-    assert_eq!(read_file_contents(&out_str).unwrap(), "ab");
+    assert_eq!(std::fs::read_to_string(&out_str).unwrap(), "ab");
 
     let buffer_id = eval
         .edit
@@ -6047,7 +6097,7 @@ fn test_write_region_bounds_and_order_semantics() {
         vec![marker_start, marker_end, Value::string(&out_str)],
     )
     .expect("write-region should accept marker bounds");
-    assert_eq!(read_file_contents(&out_str).unwrap(), "bc");
+    assert_eq!(std::fs::read_to_string(&out_str).unwrap(), "bc");
 
     for (start, end) in [(-1, 2), (1, -1), (1, 9)] {
         let err = builtin_write_region(
@@ -6107,7 +6157,7 @@ fn test_write_region_mustbenew_excl_semantics() {
         ],
     )
     .expect("excl write-region to a new file should succeed");
-    assert_eq!(read_file_contents(&new_str).unwrap(), "hi");
+    assert_eq!(std::fs::read_to_string(&new_str).unwrap(), "hi");
 
     // --- excl on an EXISTING file: signals file-already-exists. ---
     let err = builtin_write_region(
@@ -6135,7 +6185,7 @@ fn test_write_region_mustbenew_excl_semantics() {
         other => panic!("unexpected flow: {other:?}"),
     }
     // The pre-existing content must be untouched by the failed excl write.
-    assert_eq!(read_file_contents(&new_str).unwrap(), "hi");
+    assert_eq!(std::fs::read_to_string(&new_str).unwrap(), "hi");
 
     let _ = fs::remove_dir_all(&dir);
 }
@@ -6184,7 +6234,7 @@ fn test_write_region_visit_sets_file_name_and_clears_modified() {
             .is_nil()
     );
     assert!(!buf.is_modified());
-    assert_eq!(read_file_contents(&out_str).unwrap(), "neo");
+    assert_eq!(std::fs::read_to_string(&out_str).unwrap(), "neo");
     let expected_message = format!("Wrote {}", out_str);
     assert_eq!(
         eval.current_message_text().as_deref(),
@@ -6210,7 +6260,7 @@ fn write_region_reports_nonvisiting_interactive_operation() {
     ] {
         let out_path = dir.join(format!("{label}.txt"));
         let out_str = out_path.to_string_lossy().to_string();
-        write_string_to_file(initial, &out_str, false).unwrap();
+        std::fs::write(&out_str, initial).unwrap();
 
         let mut eval = crate::emacs_core::eval_hook_installers::new_context();
         eval.set_variable("noninteractive", Value::NIL);
@@ -6421,7 +6471,7 @@ fn test_write_region_string_start_numeric_append_and_visit_string_semantics() {
     let out_str = out_path.to_string_lossy().to_string();
     let visit_path = dir.join("visit.txt");
     let visit_str = visit_path.to_string_lossy().to_string();
-    write_string_to_file("abcde", &out_str, false).unwrap();
+    std::fs::write(&out_str, "abcde").unwrap();
 
     let mut eval = crate::emacs_core::eval_hook_installers::new_context();
     eval.edit
@@ -6443,7 +6493,7 @@ fn test_write_region_string_start_numeric_append_and_visit_string_semantics() {
     )
     .expect("write-region string start with numeric append should succeed");
 
-    assert_eq!(read_file_contents(&out_str).unwrap(), "abXYe");
+    assert_eq!(std::fs::read_to_string(&out_str).unwrap(), "abXYe");
     let buf = eval.edit.buffers.current_buffer().expect("current buffer");
     assert_eq!(
         buf.file_name_runtime_string_owned().as_deref(),
@@ -7088,6 +7138,7 @@ fn do_auto_save_uses_0666_without_an_existing_visited_file() {
     // A buffer visiting a file that has never been saved.
     let new_file = dir.path().join("new.txt");
     let new_auto_save = dir.path().join("#new.txt#");
+    drop(eval);
     let mut eval = crate::test_utils::new_context();
     prepare_buffer_for_auto_save(
         eval.edit
@@ -7109,6 +7160,7 @@ fn do_auto_save_uses_0666_without_an_existing_visited_file() {
     fs::write(&plain_file, "not a directory\n").expect("write regular file");
     let under_file = plain_file.join("new.txt");
     let under_file_auto_save = dir.path().join("#plain.txt!new.txt#");
+    drop(eval);
     let mut eval = crate::test_utils::new_context();
     prepare_buffer_for_auto_save(
         eval.edit
@@ -7858,7 +7910,7 @@ fn directory_files_match_reads_current_buffer_syntax_table() {
         .iter()
         .map(|v| v.as_utf8_str().unwrap().to_string())
         .collect();
-    LAST_TEST_CTX.with(|slot| slot.borrow_mut().push(eval));
+    LAST_TEST_CTX.with(|slot| slot.borrow_mut().push(eval.park_for_test()));
     assert_eq!(
         names,
         vec!["abc"],
@@ -7899,7 +7951,7 @@ fn find_file_name_handler_reads_current_buffer_syntax_table() {
     )
     .unwrap();
     let hit_name = hit.as_bare_symbol_name().map(|name| name.to_string());
-    LAST_TEST_CTX.with(|slot| slot.borrow_mut().push(eval));
+    LAST_TEST_CTX.with(|slot| slot.borrow_mut().push(eval.park_for_test()));
     assert_eq!(
         hit_name.as_deref(),
         Some("my-handler"),
@@ -9170,7 +9222,7 @@ fn assert_recursive_auto_save_handler_native_policy(action: &str, outcome: &str)
     )
     .unwrap();
     eval.obarray_mut()
-        .set_symbol_value("asr-action", Value::symbol(action));
+        .set_symbol_value("asr-action", Value::from_sym_id(intern(action)));
     builtin_do_auto_save(&mut eval, vec![Value::T, Value::T])
         .expect("outer handler resumes after inner native scope");
     eprintln!(
@@ -9181,7 +9233,7 @@ fn assert_recursive_auto_save_handler_native_policy(action: &str, outcome: &str)
     assert_eq!(eval.eval_str("asr-write-count").unwrap(), Value::fixnum(2));
     assert_eq!(
         eval.eval_str("asr-inner-outcome").unwrap(),
-        Value::symbol(outcome)
+        Value::from_sym_id(intern(outcome))
     );
     assert_eq!(fs::read(&target).unwrap(), b"seed\n");
     assert_eq!(
@@ -9235,7 +9287,7 @@ fn assert_auto_save_file_format_policy(
     eprintln!("AUTO_SAVE_FORMAT bytes={expected:?} args={actual_args:?}");
     let expected_args = expected_format.map_or(Value::NIL, |format| {
         Value::list(vec![
-            Value::symbol(format),
+            Value::from_sym_id(intern(format)),
             Value::NIL,
             Value::NIL,
             Value::make_buffer(original),
@@ -9338,7 +9390,7 @@ fn assert_auto_save_write_coding_policy(equal_names: bool, invalid_coding: bool)
     assert_eq!(fs::read(&target).unwrap(), expected_bytes);
     assert_eq!(
         eval.eval_str("last-coding-system-used").unwrap(),
-        Value::symbol(expected_coding)
+        Value::from_sym_id(intern(expected_coding))
     );
 }
 
@@ -9680,4 +9732,45 @@ fn core_lexical_resolver_aliases_share_lower_definition_and_visible_directory() 
     assert_eq!(via_edit_host.as_bytes(), expected.as_bytes());
     assert!(!via_system.is_multibyte());
     assert!(!via_edit_host.is_multibyte());
+}
+
+/// GNU's file-name-* text primitives allocate fresh strings
+/// (`make_specified_string`, src/fileio.c:505/572/671/762): text properties on
+/// the input never reach the result. Neomacs cloned the input on several
+/// no-op branches; the `directory` property company-c-headers attaches to its
+/// candidates therefore leaked into the location it builds with
+/// `file-name-nondirectory` (company_c_headers MELPA divergence).
+#[test]
+fn file_name_primitives_drop_input_text_properties() {
+    let mut context = crate::test_utils::new_context();
+    let observed = context
+        .eval_str(
+            r#"(let ((candidate (propertize "concept.hpp" 'directory "/abs/include/")))
+                 (list
+                  (text-properties-at 0 (file-name-nondirectory candidate))
+                  (text-properties-at 0 (file-name-directory (concat "/tmp/" candidate)))
+                  (text-properties-at 0 (file-name-as-directory (concat "/tmp/" candidate "/")))
+                  (text-properties-at 0 (directory-file-name (concat "/tmp/" candidate "///")))
+                  (text-properties-at 0 (concat "/abs/include/"
+                                                (file-name-nondirectory candidate)))
+                  ;; The input itself still carries the property; only the
+                  ;; fresh file-name-* results are plain.
+                  (text-properties-at 0 candidate)))"#,
+        )
+        .expect("file-name property probe");
+    assert_eq!(
+        observed,
+        Value::list(vec![
+            Value::NIL,
+            Value::NIL,
+            Value::NIL,
+            Value::NIL,
+            Value::NIL,
+            Value::list(vec![
+                Value::symbol("directory"),
+                Value::string("/abs/include/")
+            ]),
+        ]),
+        "file-name primitives must drop input text properties like GNU"
+    );
 }

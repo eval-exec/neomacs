@@ -3,9 +3,8 @@
 use super::super::cold_gc::ConcurrentHashMutatorState;
 use super::super::{TaggedHeap, clear_tagged_heap_if_installed, knobs, set_tagged_heap};
 use super::*;
-use crate::intern::intern_uninterned;
+use crate::intern::make_uninterned_symbol;
 use crate::tagged::header::ImageResident;
-use crate::tagged::header::VecLikeHeader;
 use crate::value::{HashKey, HashTableTest, HashTableWeakness, LispHashTable};
 use std::cell::UnsafeCell;
 use std::sync::{Arc, Barrier};
@@ -23,10 +22,7 @@ fn table_with_entries(count: usize) -> LispHashTable {
 }
 
 fn boxed_table(table: LispHashTable) -> Box<HashTableObj> {
-    Box::new(HashTableObj {
-        header: VecLikeHeader::new(VecLikeType::HashTable),
-        table,
-    })
+    Box::new(HashTableObj::new(table))
 }
 
 /// The Rev R2 nesting count: 0 outside any user test, one per in-flight
@@ -226,7 +222,8 @@ fn tier_h_exact_box_inventory_needs_no_per_mutator_address_registry() {
     assert_eq!(snapshot.len(), 2);
     assert!(snapshot.get(addresses[1]).is_none());
     finish_cycle(&mut heap, &roots);
-    clear_tagged_heap_if_installed(&mut heap);
+    // SAFETY: bare `TaggedHeap` unit-test fixture teardown.
+    unsafe { clear_tagged_heap_if_installed(&mut heap) };
 }
 
 /// The fixture's live payload is accessed only under its captured entry lock.
@@ -722,12 +719,12 @@ fn terminate_cycle(heap: &mut TaggedHeap, roots: &[TaggedValue]) {
         heap.seed_root(root);
     }
     heap.incremental_drain_all();
-    heap.incremental_finish(heap.live_bytes(), std::time::Instant::now());
+    heap.incremental_finish_for_test(heap.live_bytes(), std::time::Instant::now());
 }
 
 fn finish_cycle(heap: &mut TaggedHeap, roots: &[TaggedValue]) {
     terminate_cycle(heap, roots);
-    heap.finish_incremental_sweep_now();
+    heap.finish_incremental_sweep_now_for_test();
 }
 
 #[test]
@@ -825,7 +822,7 @@ fn tier_h_real_wrapper_retraces_done_table_and_releases_any_legacy_retirement_at
             "current-child retrace covers white insertion"
         );
         drop(snapshot);
-        heap.incremental_finish(heap.live_bytes(), std::time::Instant::now());
+        heap.incremental_finish_for_test(heap.live_bytes(), std::time::Instant::now());
         assert!(heap.concurrent_hash_snapshot().is_none());
         assert!(
             heap.current_concurrent_hash_mutator()
@@ -846,14 +843,15 @@ fn tier_h_real_wrapper_retraces_done_table_and_releases_any_legacy_retirement_at
             "snapshot child survives this cycle"
         );
         assert_eq!(weak.as_hash_table().unwrap().data.len(), 1);
-        heap.finish_incremental_sweep_now();
+        heap.finish_incremental_sweep_now_for_test();
         crate::tagged::mutate::with_hash_table_mut(owner, |table| table.data.clear());
         start_cycle(&mut heap, &roots);
         finish_cycle(&mut heap, &roots);
         assert!(!heap.owns_heap_value_for_test(removed));
         assert!(!heap.owns_heap_value_for_test(inserted));
         assert_eq!(weak.as_hash_table().unwrap().data.len(), 0);
-        clear_tagged_heap_if_installed(&heap);
+        // SAFETY: bare `TaggedHeap` unit-test fixture teardown.
+        unsafe { clear_tagged_heap_if_installed(&heap) };
     }
 }
 
@@ -874,7 +872,8 @@ fn tier_h_real_demand_trace_does_not_retain_dead_table_children() {
                 .non_cons_object_addrs
                 .contains(&(dead.as_veclike_ptr().unwrap() as usize))
         );
-        clear_tagged_heap_if_installed(&heap);
+        // SAFETY: bare `TaggedHeap` unit-test fixture teardown.
+        unsafe { clear_tagged_heap_if_installed(&heap) };
     }
 }
 
@@ -931,7 +930,8 @@ fn tier_h_real_weak_and_pending_tables_defer_before_header_claim() {
             assert!(heap.owns_heap_value_for_test(pending_child));
             assert!(!heap.owns_heap_value_for_test(key));
             assert!(!heap.owns_heap_value_for_test(value));
-            clear_tagged_heap_if_installed(&heap);
+            // SAFETY: bare `TaggedHeap` unit-test fixture teardown.
+            unsafe { clear_tagged_heap_if_installed(&heap) };
         }
     }
 }
@@ -965,7 +965,8 @@ fn tier_h_real_whole_replacement_preserves_old_and_new_callback_children() {
         assert!(!heap.owns_heap_value_for_test(old_hash));
         assert!(heap.owns_heap_value_for_test(new_cmp));
         assert!(heap.owns_heap_value_for_test(new_hash));
-        clear_tagged_heap_if_installed(&heap);
+        // SAFETY: bare `TaggedHeap` unit-test fixture teardown.
+        unsafe { clear_tagged_heap_if_installed(&heap) };
     }
 }
 
@@ -979,24 +980,25 @@ fn tier_h_old_table_remembers_young_child_for_next_minor() {
     let child = heap.alloc_record(vec![TaggedValue::fixnum(1401)]);
     insert(owner, TaggedValue::fixnum(2), child);
     assert!(heap.current_mutator_gc().remset.contains(&owner));
-    heap.begin_minor_collection().unwrap();
+    heap.begin_minor_collection_for_test().unwrap();
     heap.seed_root(owner);
-    heap.complete_minor_collection();
-    heap.finish_incremental_sweep_now();
+    heap.complete_minor_collection_for_test();
+    heap.finish_incremental_sweep_now_for_test();
     assert!(heap.owns_heap_value_for_test(child));
     assert!(heap.value_is_old_for_test(child));
     crate::tagged::mutate::with_hash_table_mut(owner, |table| table.data.remove(&HashKey::Int(2)));
     start_cycle(&mut heap, &[owner]);
     finish_cycle(&mut heap, &[owner]);
     assert!(!heap.owns_heap_value_for_test(child));
-    clear_tagged_heap_if_installed(&heap);
+    // SAFETY: bare `TaggedHeap` unit-test fixture teardown.
+    unsafe { clear_tagged_heap_if_installed(&heap) };
 }
 
 #[test]
 fn tier_h_snapshot_symbol_handoff_keeps_only_strongly_held_weak_keys() {
     for generational in [false, true] {
         let mut heap = real_heap(generational);
-        let symbol = TaggedValue::from_sym_id(intern_uninterned("u35-tier-h-weak-symbol"));
+        let symbol = TaggedValue::from_sym_id(make_uninterned_symbol("u35-tier-h-weak-symbol"));
         let id = symbol.as_bare_symbol_id().unwrap();
         let strong = heap.alloc_hash_table(LispHashTable::new(HashTableTest::Eq));
         insert(strong, TaggedValue::fixnum(1), symbol);
@@ -1018,7 +1020,8 @@ fn tier_h_snapshot_symbol_handoff_keeps_only_strongly_held_weak_keys() {
         finish_cycle(&mut heap, &roots);
         assert!(!heap.marked_symbols.contains(id));
         assert_eq!(weak.as_hash_table().unwrap().data.len(), 0);
-        clear_tagged_heap_if_installed(&heap);
+        // SAFETY: bare `TaggedHeap` unit-test fixture teardown.
+        unsafe { clear_tagged_heap_if_installed(&heap) };
     }
 }
 
@@ -1062,7 +1065,8 @@ fn tier_h_strong_to_weak_replacement_registers_current_weakness_and_callbacks() 
             assert!(!heap.owns_heap_value_for_test(old));
         }
         assert!(heap.owns_heap_value_for_test(callback));
-        clear_tagged_heap_if_installed(&heap);
+        // SAFETY: bare `TaggedHeap` unit-test fixture teardown.
+        unsafe { clear_tagged_heap_if_installed(&heap) };
     }
 }
 
@@ -1098,9 +1102,10 @@ fn tier_h_wrapper_unwind_poison_is_observed_and_join_refuses_to_sweep() {
         }));
         assert!(join.is_err());
         // The failed finish retains the active state, so nothing can sweep.
-        assert!(heap.concurrent_mark_running);
+        assert!(heap.concurrent_mark_running());
         assert!(!heap.sweep_in_progress);
-        clear_tagged_heap_if_installed(&heap);
+        // SAFETY: bare `TaggedHeap` unit-test fixture teardown.
+        unsafe { clear_tagged_heap_if_installed(&heap) };
     }
 }
 
@@ -1110,8 +1115,12 @@ fn stalled_claims_mark(
     heap: &mut TaggedHeap,
 ) -> std::sync::mpsc::Sender<super::super::ConcurrentMarkResult> {
     let (tx, rx) = std::sync::mpsc::channel();
-    heap.concurrent_mark_running = true;
-    heap.gc_exited = Some(rx);
+    let heap_id = heap.heap_identity();
+    // SAFETY: synthetic serial fixture, no live worker.
+    unsafe {
+        heap.concurrent_mark_running.set(true);
+        heap.gc_exited.install_for_heap(heap_id, rx);
+    }
     tx
 }
 
@@ -1157,7 +1166,10 @@ fn poisoned_tier_h_protocol_fails_finish_before_state_changes() {
     assert!(snapshot.is_poisoned());
     heap.set_concurrent_hash_snapshot(Some(snapshot));
     let tx = stalled_claims_mark(&mut heap);
-    tx.send(Default::default()).unwrap();
+    tx.send(super::super::ConcurrentMarkResult::empty_for_heap(
+        heap.heap_identity(),
+    ))
+    .unwrap();
     assert!(matches!(
         heap.finish_concurrent_mark(),
         Err(super::super::MarkFinishError::PoisonedCollectorState)
@@ -1179,7 +1191,10 @@ fn poisoned_tier_h_dirty_log_fails_finish_before_state_changes() {
     });
     assert!(poison.is_err());
     let tx = stalled_claims_mark(&mut heap);
-    tx.send(Default::default()).unwrap();
+    tx.send(super::super::ConcurrentMarkResult::empty_for_heap(
+        heap.heap_identity(),
+    ))
+    .unwrap();
     assert!(matches!(
         heap.finish_concurrent_mark(),
         Err(super::super::MarkFinishError::PoisonedCollectorState)
@@ -1193,6 +1208,7 @@ fn poisoned_tier_h_dirty_log_fails_finish_before_state_changes() {
 #[test]
 fn abandoned_marker_retains_retired_tier_h_original() {
     let mut heap = TaggedHeap::new_for_concurrent_hash_test(false);
+    let heap_id = heap.heap_identity();
     let tx = stalled_claims_mark(&mut heap);
     let original = vec![Some(HashTableEntry {
         key: TaggedValue::fixnum(41),
@@ -1213,5 +1229,8 @@ fn abandoned_marker_retains_retired_tier_h_original() {
         retained[0].map(|e| (e.key, e.value)),
         original[0].map(|e| (e.key, e.value))
     );
-    assert!(tx.send(Default::default()).is_err());
+    assert!(
+        tx.send(super::super::ConcurrentMarkResult::empty_for_heap(heap_id))
+            .is_err()
+    );
 }

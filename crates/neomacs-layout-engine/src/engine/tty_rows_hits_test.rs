@@ -244,11 +244,14 @@ fn tty_rows_hit_completed_gc_rejects_original_receipt_before_old_keys() {
 
 #[test]
 fn tty_rows_hit_new_context_owner_cannot_use_old_context_receipt() {
-    let (mut old_context, old_frame, old_window, _, _old_restore) = fixture();
+    let (mut old_context, old_frame, old_window, _, old_restore) = fixture();
     let mut engine = LayoutEngine::new_without_font_metrics();
     seed(&mut old_context, &mut engine, old_frame, old_window);
     let old_owner = old_context.context_instance_id();
-    let (mut context, frame, window, _, _restore) = fixture();
+    // The second fixture installs its own heap. Park the first owner so both
+    // heaps stay allocated and only one Context is active.
+    let parked_old = old_context.park_for_test();
+    let (mut context, frame, window, _, restore) = fixture();
     assert_ne!(old_owner, context.context_instance_id());
     // Do not force numeric-id collisions or move a foreign manager/heap. The
     // existing Core owner tests cover the earlier owner-before-key refusal;
@@ -256,10 +259,13 @@ fn tty_rows_hit_new_context_owner_cannot_use_old_context_receipt() {
     let _ = miss(&mut context, &mut engine, frame, window, rows());
     // Reset each terminal registry while its own heap is still installed.
     // Context teardown clears TLS; restore the first owner before its guard.
-    drop(_restore);
+    drop(restore);
     drop(context);
+    let mut old_context = parked_old
+        .resume_for_test()
+        .expect("old tty context resumes on an empty slot");
     old_context.setup_thread_locals();
-    drop(_old_restore);
+    drop(old_restore);
 }
 
 fn dependency_mutation(install: &str, mutate: &str) {

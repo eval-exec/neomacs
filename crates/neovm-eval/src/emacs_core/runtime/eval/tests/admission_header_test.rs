@@ -287,29 +287,40 @@ fn admission_header_live_boolean_and_callback_argument_survive_collection() {
 fn admission_header_cloned_evaluator_owns_independent_boolean_descriptor() {
     let mut original = runtime();
     let original_cell = debugger_cell(&original);
+    let original_cell_ptr = original_cell as *const _;
     original_cell.set(false);
-    let cloned = clone_active_evaluator(&mut original).expect("clone the active runtime");
+    let parked_clone = clone_active_evaluator(&mut original).expect("clone the active runtime");
     coherent(&original);
-    coherent(&cloned);
-    let clone_cell = debugger_cell(&cloned);
-    assert!(!std::ptr::eq(original_cell, clone_cell));
     original_cell.set(true);
     assert!(
         original
             .dispatch_projection()
             .debug_on_next_call_armed_fast()
     );
+    let parked_original = original.park_for_test();
+    let cloned = parked_clone.resume().expect("resume cloned runtime");
+    coherent(&cloned);
+    let clone_cell = debugger_cell(&cloned);
+    assert!(!std::ptr::eq(original_cell_ptr, clone_cell));
     assert!(!cloned.dispatch_projection().debug_on_next_call_armed_fast());
-    original_cell.set(false);
     clone_cell.set(true);
+    assert!(cloned.dispatch_projection().debug_on_next_call_armed_fast());
+    let parked_clone = cloned.park_for_test();
+    let original = parked_original
+        .resume_for_test()
+        .expect("resume original runtime");
+    let original_cell = debugger_cell(&original);
+    original_cell.set(false);
     assert!(
         !original
             .dispatch_projection()
             .debug_on_next_call_armed_fast()
     );
-    assert!(cloned.dispatch_projection().debug_on_next_call_armed_fast());
-    clone_cell.set(false);
     coherent(&original);
+    drop(original);
+    let cloned = parked_clone.resume().expect("resume cloned runtime");
+    assert!(cloned.dispatch_projection().debug_on_next_call_armed_fast());
+    debugger_cell(&cloned).set(false);
     coherent(&cloned);
 }
 

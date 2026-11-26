@@ -75,8 +75,8 @@ fn transfer(op: &Op, constants: &[Value], tags: &mut Vec<Tag>) {
                 && let Some(proto) = constants
                     .get(*template as usize)
                     .and_then(|v| v.get_bytecode_data())
-                && proto.env.is_none()
-                && n - 1 <= proto.constants.len()
+                && proto.env().is_none()
+                && n - 1 <= proto.constants().len()
             {
                 Tag::Closure {
                     template: *template,
@@ -189,7 +189,7 @@ fn v2_depths(
     if callee.jit_runtime().heat() == 0 {
         return Err("cold".into());
     }
-    if pool_len + callee.constants.len() > u16::MAX as usize + 1 {
+    if pool_len + callee.constants().len() > u16::MAX as usize + 1 {
         return Err("constant-pool".into());
     }
     let feedback = inline::callee_feedback(callee);
@@ -452,7 +452,7 @@ fn fuse_front(
                         } else {
                             template
                         };
-                        pool_len += callee.constants.len() + usize::from(named);
+                        pool_len += callee.constants().len() + usize::from(named);
                         growth += extra;
                         sites.push((pc, template, nargs, depths));
                         kinds.push(kind);
@@ -515,7 +515,7 @@ fn fuse_front(
             Value::from_bits(region.callee_bits as usize)
         }
         .get_bytecode_data()?
-        .constants
+        .constants()
         .len();
     }
     let mut hof_at = BTreeMap::new();
@@ -528,12 +528,12 @@ fn fuse_front(
                 .callback
                 .get_bytecode_data()
                 .expect("admitted callback");
-            if body.constants.len() + callee.constants.len() + 1 > u16::MAX as usize + 1 {
+            if body.constants.len() + callee.constants().len() + 1 > u16::MAX as usize + 1 {
                 crate::emacs_core::jit::stats::record_inline("reject:constant-pool");
                 continue;
             }
             site.const_base = body.constants.len();
-            body.constants.extend_from_slice(&callee.constants);
+            body.constants.extend_from_slice(callee.constants());
             let end = site.const_base.checked_add(site.prefix)?;
             body.constants
                 .get_mut(site.const_base..end)?

@@ -6,8 +6,8 @@
 
 use neovm_eval::emacs_core::eval::data::process_state::Device;
 
-use std::ffi::{CString, OsStr};
 use crate::emacs_core::process::SystemProcessExt;
+use std::ffi::{CString, OsStr};
 use std::io;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::os::unix::ffi::OsStrExt;
@@ -17,8 +17,6 @@ use super::{
     SerialParity, SerialSpeedError, SerialStopBits,
 };
 use crate::emacs_core::process::{ProcessId, ProcessManager};
-
-
 
 #[derive(Debug)]
 pub struct Attributes(libc::termios);
@@ -63,17 +61,6 @@ pub(crate) trait DeviceIo {
     fn read_attributes(&self) -> Result<Attributes, SerialDeviceFailure>;
     /// GNU `tcsetattr (p->outfd, TCSANOW, &attr)`, src/sysdep.c:3303.
     fn write_attributes(&self, attributes: &Attributes) -> Result<(), SerialDeviceFailure>;
-    fn register_readable(
-        &self,
-        poller: &polling::Poller,
-        id: ProcessId,
-    ) -> Result<(), String>;
-    fn modify_interest(
-        &self,
-        poller: &polling::Poller,
-        event: polling::Event,
-    ) -> Result<(), String>;
-    fn unregister(&self, poller: &polling::Poller);
 }
 
 impl DeviceIo for Device {
@@ -113,28 +100,7 @@ impl DeviceIo for Device {
         }
         Ok(())
     }
-
-    fn register_readable(
-        &self,
-        poller: &polling::Poller,
-        id: ProcessId,
-    ) -> Result<(), String> {
-        ProcessManager::register_readable_source(poller, &self.fd, id)
-    }
-
-    fn modify_interest(
-        &self,
-        poller: &polling::Poller,
-        event: polling::Event,
-    ) -> Result<(), String> {
-        ProcessManager::modify_poll_source(poller, &self.fd, event)
-    }
-
-    fn unregister(&self, poller: &polling::Poller) {
-        let _ = poller.delete(&self.fd);
-    }
 }
-
 
 impl Attributes {
     pub fn set_speed(&mut self, speed: i64) -> Result<(), SerialSpeedError> {
@@ -153,7 +119,7 @@ impl Attributes {
         Ok(())
     }
 
-    pub fn set_byte_size(&mut self, size: SerialByteSize) {
+    pub(crate) fn set_byte_size(&mut self, size: SerialByteSize) {
         self.0.c_cflag &= !libc::CSIZE;
         self.0.c_cflag |= match size {
             SerialByteSize::Seven => libc::CS7,
@@ -161,7 +127,7 @@ impl Attributes {
         };
     }
 
-    pub fn set_parity(&mut self, parity: SerialParity) {
+    pub(crate) fn set_parity(&mut self, parity: SerialParity) {
         self.0.c_cflag &= !(libc::PARENB | libc::PARODD);
         self.0.c_iflag &= !(libc::IGNPAR | libc::INPCK);
         match parity {
@@ -177,14 +143,14 @@ impl Attributes {
         }
     }
 
-    pub fn set_stop_bits(&mut self, bits: SerialStopBits) {
+    pub(crate) fn set_stop_bits(&mut self, bits: SerialStopBits) {
         self.0.c_cflag &= !libc::CSTOPB;
         if bits == SerialStopBits::Two {
             self.0.c_cflag |= libc::CSTOPB;
         }
     }
 
-    pub fn set_flow_control(&mut self, flow: SerialFlowControl) {
+    pub(crate) fn set_flow_control(&mut self, flow: SerialFlowControl) {
         self.0.c_cflag &= !libc::CRTSCTS;
         self.0.c_iflag &= !(libc::IXON | libc::IXOFF);
         match flow {

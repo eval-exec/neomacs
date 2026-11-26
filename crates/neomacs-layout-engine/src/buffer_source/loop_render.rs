@@ -3,7 +3,9 @@
 use crate::buffer_source::face_resolution::*;
 use crate::buffer_source::loop_context::BufferSourceLoopRequestContext;
 use crate::buffer_source::loop_state::BufferSourceLoopMutableState;
-use crate::buffer_source::render::BufferSourceRenderRequest;
+use crate::buffer_source::render::{
+    BufferSourceRenderRequest, emit_nested_source_visual_wrap_with_break, emit_word_wrap_rewind,
+};
 use crate::buffer_source::row_lifecycle::{
     BufferSourceHscrollSkipRenderContext, BufferSourceInvisibleTextRenderContext,
     BufferSourceInvisibleTextRenderOutcome,
@@ -66,6 +68,31 @@ impl<'rows, 'emit, 'surface, FS: crate::neovm_bridge::FaceServices>
                 return BufferSourceVisibleLoopOutcome::GlyphMatrixCapacityExhausted;
             }
             self.render_row_prelude(row_prelude_context, params, active_face_state, buffer);
+            if let Some(resume_offset) = self.invisible_text_checkpoint.take_deferred_ellipsis() {
+                if let BufferSourceInvisibleTextRenderOutcome::EllipsisContinuesOnNextRow(
+                    wrap_break,
+                ) = loop_context
+                    .invisible_text_request(
+                        text,
+                        self.surface.append_surface,
+                        active_face_state,
+                        0.0,
+                    )
+                    .place_deferred_ellipsis(buffer, resume_offset, self.reborrow())
+                {
+                    self.row_carryover.line_numbers.mark_continuation_row();
+                    if emit_nested_source_visual_wrap_with_break(
+                        loop_context,
+                        self.reborrow(),
+                        wrap_break,
+                    )
+                    .should_break()
+                    {
+                        break;
+                    }
+                    continue;
+                }
+            }
 
             let invisible_text_outcome = self.render_invisible_text_for_context(
                 loop_context,
@@ -92,6 +119,32 @@ impl<'rows, 'emit, 'surface, FS: crate::neovm_bridge::FaceServices>
                     continue;
                 }
                 BufferSourceInvisibleTextRenderOutcome::HiddenSpanApplied => continue,
+                BufferSourceInvisibleTextRenderOutcome::EllipsisContinuesOnNextRow(wrap_break) => {
+                    self.row_carryover.line_numbers.mark_continuation_row();
+                    if emit_nested_source_visual_wrap_with_break(
+                        loop_context,
+                        self.reborrow(),
+                        wrap_break,
+                    )
+                    .should_break()
+                    {
+                        break;
+                    }
+                    continue;
+                }
+                BufferSourceInvisibleTextRenderOutcome::RewindToWordWrap(break_candidate) => {
+                    if emit_word_wrap_rewind(
+                        loop_context,
+                        self.reborrow(),
+                        source_walk,
+                        break_candidate,
+                    )
+                    .should_break()
+                    {
+                        break;
+                    }
+                    continue;
+                }
             }
 
             if self.row_carryover.hscroll_skip.should_skip() {
@@ -172,7 +225,8 @@ impl<'rows, 'emit, 'surface, FS: crate::neovm_bridge::FaceServices>
         // matrix row. Only a still-visible row with actual source/EOB work is
         // a capacity overflow; an acquisition horizon is a separate outcome.
         let has_row_work = self.progress.byte_idx() < text.len()
-            || (self.progress.charpos() == loop_context.accessible_end()
+            || (self.progress.byte_idx() == text.len()
+                && self.progress.charpos() == loop_context.accessible_end()
                 && text.last() == Some(&b'\n'));
         if has_row_work
             && loop_context.glyph_matrix_capacity_exhausted(&self.row_build.row_geometry)

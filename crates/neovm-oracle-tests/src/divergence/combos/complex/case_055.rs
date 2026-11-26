@@ -7,9 +7,7 @@ use crate::common::return_if_neovm_enable_oracle_proptest_not_set;
 fn div_cx55_superword_kill_upcase_undo_marker_overlay_narrow_textprop_display_evaporate_env_exitcode_timer_mega()
  {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[
-        r#""ERR (error \"`let' bindings can have only one value-form\" accept-process-output p 2)""#
-    ]];
+    let expect = expect_test::expect![[r#""ERR (args-out-of-range 1 1)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (let (timer-fired)
@@ -18,7 +16,7 @@ fn div_cx55_superword_kill_upcase_undo_marker_overlay_narrow_textprop_display_ev
          (let ((process-environment (cons "NEO_CX55=v" process-environment)))
            (string-trim (shell-command-to-string "echo $NEO_CX55"))))
         (exit-code
-         (let ((p (make-process :name "neo-cx55-ec" :command '("sh" "-c" "exit 2")))
+         (let ((p (make-process :name "neo-cx55-ec" :command '("sh" "-c" "exit 2"))))
            (accept-process-output p 2)
            (process-exit-status p))))
     (sit-for 0.01)
@@ -45,7 +43,7 @@ fn div_cx55_superword_kill_upcase_undo_marker_overlay_narrow_textprop_display_ev
                     (marker-position m) (overlayp ov) (overlay-start ov)
                     (text-properties-at 1) (current-column))))
       (error (list env-val exit-code timer-fired :errored)))))
-))"##,
+)"##,
         expect,
     );
 }
@@ -246,7 +244,7 @@ fn div_cx55_regex_casefold_replace_undo_marker_overlay_narrow_display_textprop_e
  {
     return_if_neovm_enable_oracle_proptest_not_set!();
     let expect = expect_test::expect![[
-        r#""ERR (error \"`let' bindings can have only one value-form\" accept-process-output p 2)""#
+        r#""OK (\"v\" 5 (#(\"CAFÉ Συν κόσμο STRASSE 世界 TEST\" 4 7 (display \"XX\")) 12 t 5 nil nil 31) \"\" 1 t nil nil 0)""#
     ]];
     crate::common::assert_oracle_parity_expect(
         r##"
@@ -254,7 +252,7 @@ fn div_cx55_regex_casefold_replace_undo_marker_overlay_narrow_display_textprop_e
        (let ((process-environment (cons "NEO_CX55=v" process-environment)))
          (string-trim (shell-command-to-string "echo $NEO_CX55"))))
       (exit-code
-       (let ((p (make-process :name "neo-cx55-ec" :command '("sh" "-c" "exit 5")))
+       (let ((p (make-process :name "neo-cx55-ec" :command '("sh" "-c" "exit 5"))))
          (accept-process-output p 2)
          (process-exit-status p))))
   (let ((case-fold-search t))
@@ -278,7 +276,7 @@ fn div_cx55_regex_casefold_replace_undo_marker_overlay_narrow_display_textprop_e
           (list env-val exit-code state (buffer-string)
                 (marker-position m) (overlayp ov) (overlay-start ov)
                 (text-properties-at 1) (current-column))))))
-))"##,
+)"##,
         expect,
     );
 }
@@ -317,17 +315,19 @@ fn div_cx55_print_circle_gensym_struct_vector_propertized_escape_length_level_ci
 fn div_cx55_read_eval_backquote_destructuring_lexical_macro_propertized_hash_cl_loop_secure_mega() {
     return_if_neovm_enable_oracle_proptest_not_set!();
     let expect = expect_test::expect![[
-        r#""ERR (error \"`let' bindings can have only one value-form\" let* ((processed (eval (car (read-from-string \"`(:names ,(mapcar #'car (caar ,data))\\n                                     :vals ,(mapcar #'cdr (caar ,data))\\n                                     :sum ,(cl-loop for v in (mapcar #'cdr (caar ,data)) sum v)\\n                                     :max ,(cl-loop for v in (mapcar #'cdr (caar ,data)) maximize v))\")) t)) (ht (make-hash-table :test 'equal))) (cl-loop for n in (plist-get processed :names) for v in (plist-get processed :vals) do (puthash n v ht)) (list (plist-get processed :names) (plist-get processed :vals) (plist-get processed :sum) (plist-get processed :max) (hash-table-count ht) (secure-hash 'sha256 (prin1-to-string processed))))""#
+        r#""OK ((\"café\" \"世界\" \"😀\") (1 2 3) 6 3 3 \"dd641fffe6795c27daac1ea3cc20667e30f7503cedef3e8be771d664a3c7b509\")""#
     ]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (let ((lexical-binding t))
-  (let ((data '((("café" . 1) ("世界" . 2) ("😀" . 3))))
+    (require 'cl-lib)
+  (let ((data '((("café" . 1) ("世界" . 2) ("😀" . 3)))))
     (let* ((processed (eval (car (read-from-string
-                                  "`(:names ,(mapcar #'car (caar ,data))
-                                     :vals ,(mapcar #'cdr (caar ,data))
-                                     :sum ,(cl-loop for v in (mapcar #'cdr (caar ,data)) sum v)
-                                     :max ,(cl-loop for v in (mapcar #'cdr (caar ,data)) maximize v))")) t))
+                                  (format "`(:names ,(mapcar #'car (car '%S))
+                                     :vals ,(mapcar #'cdr (car '%S))
+                                     :sum ,(cl-loop for v in (mapcar #'cdr (car '%S)) sum v)
+                                     :max ,(cl-loop for v in (mapcar #'cdr (car '%S)) maximize v))"
+                                          data data data data))) t))
            (ht (make-hash-table :test 'equal)))
       (cl-loop for n in (plist-get processed :names)
                for v in (plist-get processed :vals)
@@ -337,7 +337,7 @@ fn div_cx55_read_eval_backquote_destructuring_lexical_macro_propertized_hash_cl_
             (plist-get processed :sum) (plist-get processed :max)
             (hash-table-count ht)
             (secure-hash 'sha256 (prin1-to-string processed))))))
-)"##,
+"##,
         expect,
     );
 }

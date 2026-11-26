@@ -25,6 +25,9 @@
 //! together as a [`ValueCell`] and written together by one seam, so the
 //! obarray cannot pair a tag with another arm's payload (see `cell`).
 
+#[cfg(test)]
+#[path = "tests/blv_shared_refresh.rs"]
+mod blv_shared_refresh;
 mod canonical_access;
 mod cell;
 mod fn_stamps;
@@ -57,16 +60,17 @@ pub enum CanonicalWrite {
     /// The cell is a thread projection: the owner-aware caller routes it.
     Projected,
 }
-#[cfg(any(test, feature = "test-support"))]
 pub(crate) use cell::plist_epoch;
-pub(crate) use cell::store_plist_head;
 use cell::{ArmMut, CellWrite, MarkGate, RevealedCell, read_symbol_children};
 #[doc(hidden)]
 pub use cell::{
-    BlvPtr, DumpedCell, DumpedSymbolFlags, LISP_SYMBOL_FLAGS_OFFSET,
+    BlvPtr, DumpedCell, DumpedSymbolFlags, LISP_SYMBOL_FLAGS_OFFSET, LISP_SYMBOL_FUNCTION_OFFSET,
     LISP_SYMBOL_INTERNED_GLOBAL_OFFSET, LISP_SYMBOL_SIZE, LISP_SYMBOL_VAL_OFFSET, ValueCell,
 };
 pub use cell::{LispSymbol, SymbolFlags};
+pub(crate) use cell::{
+    PlistStore, store_construction_plist_head, store_plist_head, store_runtime_plist_head,
+};
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) use fn_stamps::force_fn_stamps_for_test;
 pub use function_cell_observer::FunctionCellObserver;
@@ -156,7 +160,6 @@ impl std::error::Error for ObarrayRestoreError {}
 use crate::heap_types::LispString;
 use crate::tagged::header::AtomicTaggedValue;
 use num_enum::{IntoPrimitive, TryFromPrimitive};
-#[cfg(any(test, feature = "test-support"))]
 use std::cell::Cell;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -340,15 +343,6 @@ impl BufferlessValue {
             Self::PerBufferSlot | Self::Void => None,
         }
     }
-
-    /// Only the arm that agrees with GNU unconditionally.
-    #[must_use]
-    pub fn global_only(self) -> Option<Value> {
-        match self {
-            Self::Global(value) => Some(value),
-            Self::DefaultOfLocalized(_) | Self::PerBufferSlot | Self::Void => None,
-        }
-    }
 }
 
 /// Two-bit `interned` flag. Mirrors GNU `enum symbol_interned`
@@ -389,7 +383,12 @@ pub struct LispBufferLocalValue {
     pub local_if_set: bool,
     /// True if the loaded binding (`valcell`) was actually found in the
     /// buffer's `local_var_alist`, vs. the default. GNU `found`.
-    pub found: bool,
+    ///
+    /// [`Cell`]: a shared [`Obarray::blv`] borrow can outlive
+    /// [`Obarray::read_localized`], which stores this through the record
+    /// pointer. `Cell<bool>` is `repr(transparent)`, so the byte stays the
+    /// one compiled code loads.
+    pub found: Cell<bool>,
     /// Optional forwarder for variables that have BOTH a per-buffer
     /// binding *and* a static C slot (e.g. `case-fold-search`). Must not
     /// be a `BufferObj` or `KboardObj`.
@@ -405,12 +404,16 @@ pub struct LispBufferLocalValue {
     /// where-buffer test as one integer compare. Comparing the object meant
     /// a tag test, a header load and a field load on every read of a
     /// buffer-local variable -- a third of the read.
-    pub where_buf_id: u64,
+    ///
+    /// A [`Cell`], like [`Self::found`]: refreshed through the record pointer
+    /// while [`Obarray::blv`] may still hold the record. The word is the
+    /// `u64` compiled code loads.
+    pub where_buf_id: Cell<u64>,
     /// `(SYMBOL . DEFAULT-VALUE)` cons. GNU `defcell`.
-    pub defcell: AtomicTaggedValue,
+    pub(crate) defcell: AtomicTaggedValue,
     /// `(SYMBOL . CURRENT-VALUE)` cons. Equal to `defcell` when no
     /// per-buffer binding is loaded. GNU `valcell`.
-    pub valcell: AtomicTaggedValue,
+    pub(crate) valcell: AtomicTaggedValue,
     /// [`blv_alist_epoch`] value at the last `where_buf`/`valcell`
     /// refresh. The read fast path trusts `valcell` only while this
     /// matches the global epoch AND `where_buf` is the current buffer —
@@ -418,21 +421,62 @@ pub struct LispBufferLocalValue {
     /// even though some paths edit `local_var_alist` structure without
     /// touching the BLV cache (they bump the epoch instead). Starts 0;
     /// the global epoch starts 1, so a fresh BLV always rescans first.
-    pub alist_epoch: u64,
+    ///
+    /// A [`Cell`], like [`Self::found`].
+    pub alist_epoch: Cell<u64>,
 }
+
+const _: () = {
+    assert!(std::mem::size_of::<Cell<bool>>() == 1);
+    assert!(std::mem::size_of::<Cell<u64>>() == std::mem::size_of::<u64>());
+    assert!(std::mem::align_of::<Cell<u64>>() == std::mem::align_of::<u64>());
+};
 
 /// [`LispBufferLocalValue::where_buf_id`] when `where_buf` is not a buffer.
 #[doc(hidden)]
 pub const NO_WHERE_BUF: u64 = u64::MAX;
 
+/// Byte offset of [`LispBufferLocalValue`]'s `defcell` word for JIT lowering.
+#[doc(hidden)]
+pub const BLV_DEFCELL_OFFSET: usize = std::mem::offset_of!(LispBufferLocalValue, defcell);
+
+/// Byte offset of [`LispBufferLocalValue`]'s `valcell` word for JIT lowering.
+#[doc(hidden)]
+pub const BLV_VALCELL_OFFSET: usize = std::mem::offset_of!(LispBufferLocalValue, valcell);
+
 impl LispBufferLocalValue {
+    /// Read the `(SYMBOL . DEFAULT-VALUE)` cons (GNU `defcell`).
+    #[inline]
+    pub fn defcell(&self) -> Value {
+        self.defcell.get()
+    }
+
+    /// Read the `(SYMBOL . CURRENT-VALUE)` cons (GNU `valcell`).
+    #[inline]
+    pub fn valcell(&self) -> Value {
+        self.valcell.get()
+    }
+
+    /// Atomically load the `(SYMBOL . DEFAULT-VALUE)` cons.
+    #[inline]
+    pub fn defcell_atomic(&self) -> Value {
+        self.defcell.load_atomic()
+    }
+
+    /// Atomically load the `(SYMBOL . CURRENT-VALUE)` cons.
+    #[inline]
+    pub fn valcell_atomic(&self) -> Value {
+        self.valcell.load_atomic()
+    }
+
     /// Point the cache at `buf` (a buffer, or `Value::NIL` for the global
     /// default): the object for the collector and for `eq` tests, its id
     /// for the read fast path. The one writer of both.
     #[inline]
-    pub(crate) fn set_where(&mut self, buf: Value) {
+    pub(crate) fn set_where(&self, buf: Value) {
         self.where_buf.store_atomic(buf);
-        self.where_buf_id = buf.as_buffer_id().map_or(NO_WHERE_BUF, |id| id.0);
+        self.where_buf_id
+            .set(buf.as_buffer_id().map_or(NO_WHERE_BUF, |id| id.0));
     }
 }
 
@@ -559,14 +603,14 @@ fn swap_in_blv(
     let key = Value::from_sym_id(sym_id);
     let found_cell = assq(key, local_var_alist);
     blv.set_where(current_buffer);
-    blv.found = !found_cell.is_nil();
-    let new_valcell = if blv.found {
+    blv.found.set(!found_cell.is_nil());
+    let new_valcell = if blv.found.get() {
         found_cell
     } else {
         blv.defcell.get()
     };
     blv.valcell.store_atomic(new_valcell);
-    blv.alist_epoch = epoch;
+    blv.alist_epoch.set(epoch);
 }
 
 /// Walk an alist looking for the cons whose car is `eq` to `key`.
@@ -649,17 +693,6 @@ impl SetInternalBind {
     }
 }
 
-/// Stub for GNU `let_shadows_buffer_binding_p`
-/// (`src/eval.c:3559-3577`). Returns `true` if the symbol is
-/// currently `let`-bound to a buffer-local binding shadowing the
-/// per-buffer slot.
-///
-/// Phase 5 stub: always `false`. Phase 7 wires this against the
-/// specpdl `LET_LOCAL` records.
-pub fn let_shadows_buffer_binding_p(_sym_id: SymId) -> bool {
-    false
-}
-
 /// Reasons [`Obarray::make_variable_alias`] can fail. Mirrors the
 /// `xsignal` callsites in GNU `Fdefvaralias` (`src/eval.c:631-726`).
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -704,11 +737,15 @@ impl LispSymbol {
     ) -> Option<BlvCacheHit> {
         let blv = self.localized_blv()?;
         // SAFETY: a `Localized` cell names a record `make_symbol_localized`
-        // allocated and the obarray owns for its lifetime; the evaluator
-        // thread is its only writer and nothing is written while this shared
-        // borrow lives.
+        // allocated and the obarray owns until `Obarray::drop`. `LispSymbol`
+        // is `!Clone + !Copy + !Send + !Sync`, no public constructor creates a
+        // `Localized` cell, and no public `Obarray` method returns
+        // `&mut LispSymbol`, so `&self` necessarily borrows a live owning
+        // `Obarray` for the duration of this call. The cache flags are cells,
+        // so a refresh through another borrow of this record is defined. The
+        // evaluator thread is the only writer.
         let blv = unsafe { &*blv.as_ptr() };
-        if blv.alist_epoch != blv_alist_epoch() || blv.where_buf_id != buffer.0 {
+        if blv.alist_epoch.get() != blv_alist_epoch() || blv.where_buf_id.get() != buffer.0 {
             return None;
         }
         debug_assert_eq!(
@@ -716,13 +753,13 @@ impl LispSymbol {
                 .get()
                 .as_buffer_id()
                 .map_or(NO_WHERE_BUF, |b| b.0),
-            blv.where_buf_id,
+            blv.where_buf_id.get(),
             "a BLV writer bypassed set_where"
         );
         Some(BlvCacheHit {
             valcell: blv.valcell.get(),
             defcell: blv.defcell.get(),
-            found: blv.found,
+            found: blv.found.get(),
             local_if_set: blv.local_if_set,
             fwd: blv.fwd,
         })
@@ -918,8 +955,7 @@ impl CanonicalDispatchCells {
     }
 
     #[inline(always)]
-    #[cfg_attr(feature = "test-support", visibility::make(pub))]
-    pub(crate) fn function_epoch(&self) -> u64 {
+    pub fn function_epoch(&self) -> u64 {
         self.function_epoch.load(Ordering::Acquire)
     }
 
@@ -937,15 +973,8 @@ impl CanonicalDispatchCells {
         DebuggerDescriptor(self.debug_on_next_call_cell_ref())
     }
 
-    #[cfg(feature = "jit")]
     #[inline(always)]
-    pub(crate) fn function_epoch_exclusive(&mut self) -> u64 {
-        *self.function_epoch.get_mut()
-    }
-
-    #[inline(always)]
-    #[cfg_attr(feature = "test-support", visibility::make(pub))]
-    pub(crate) fn debug_on_next_call_armed_fast(&self) -> bool {
+    pub fn debug_on_next_call_armed_fast(&self) -> bool {
         self.debug_on_next_call_cell_ref().get()
     }
 
@@ -1273,8 +1302,26 @@ impl Clone for SymbolChunks {
     fn clone(&self) -> Self {
         // A cloned obarray is never concurrently marked, so the seqlocks reset
         // to 0 (even); the function stamps carry over. (The side boxes hold
-        // atomics, which are not `Clone`, hence the manual impl.)
-        let chunks = self.chunks.clone();
+        // atomics and `LispSymbol` is deliberately `!Clone`, so each chunk is
+        // heap-copied via `clone_for_obarray` without building a 256 KiB array
+        // on the stack.)
+        let chunks: Vec<Box<[LispSymbol; OBARRAY_CHUNK]>> = self
+            .chunks
+            .iter()
+            .map(|chunk| {
+                // SAFETY: `SymbolChunks::clone` is called only by
+                // `Obarray::clone`, which immediately re-homes every
+                // `Localized` BLV pointer and stateful `Forwarded` descriptor
+                // before returning the new obarray.
+                chunk
+                    .iter()
+                    .map(|slot| unsafe { slot.clone_for_obarray() })
+                    .collect::<Box<[_]>>()
+                    .try_into()
+                    .ok()
+                    .expect("chunk length matches OBARRAY_CHUNK")
+            })
+            .collect();
         let spine_addr = chunks.as_ptr() as usize;
         Self {
             chunks,
@@ -1430,14 +1477,6 @@ impl SymbolChunks {
         for side in &self.sides {
             side.set_floor(floor);
         }
-    }
-
-    /// Whether slot `idx`'s chunk holds a stamp array (tests).
-    #[cfg(any(test, feature = "test-support"))]
-    fn chunk_has_fn_stamps(&self, idx: usize) -> bool {
-        self.sides
-            .get(idx >> 12)
-            .is_some_and(|side| side.has_stamps())
     }
 
     /// Capture the start-of-cycle scan parts for the Stage 1b concurrent obarray
@@ -1647,13 +1686,26 @@ impl Drop for Obarray {
 
 impl Clone for Obarray {
     fn clone(&self) -> Self {
-        // Deep-copy the BLV pool. Build a `old → new` map so we can
-        // re-home each LOCALIZED symbol's cell to its record's copy.
+        // Deep-copy the BLV pool and each BLV's default-value cons (`defcell`).
+        // Build an `old → new` map so we can re-home each LOCALIZED symbol's
+        // cell to its record's copy. Sharing `defcell` would let `set-default`
+        // in one obarray leak into the other; a non-default `valcell` points
+        // into a buffer's `local_var_alist` cons and stays shared by design.
         let mut blvs: Vec<BlvPtr> = Vec::with_capacity(self.blvs.len());
         let mut blv_map: rustc_hash::FxHashMap<BlvPtr, BlvPtr> = rustc_hash::FxHashMap::default();
         for &orig in &self.blvs {
             // SAFETY: the pool's records are alive for the duration of `&self`.
-            let copy = BlvPtr::leak(Box::new(unsafe { (*orig.as_ptr()).clone() }));
+            let mut cloned_blv = unsafe { (*orig.as_ptr()).clone() };
+            let orig_defcell = cloned_blv.defcell.get();
+            if orig_defcell.is_cons() {
+                let fresh_defcell = Value::cons(orig_defcell.cons_car(), orig_defcell.cons_cdr());
+                let valcell_was_defcell = cloned_blv.valcell.get().bits() == orig_defcell.bits();
+                cloned_blv.defcell = AtomicTaggedValue::new(fresh_defcell);
+                if valcell_was_defcell {
+                    cloned_blv.valcell = AtomicTaggedValue::new(fresh_defcell);
+                }
+            }
+            let copy = BlvPtr::leak(Box::new(cloned_blv));
             blvs.push(copy);
             blv_map.insert(orig, copy);
         }
@@ -1686,9 +1738,10 @@ impl Clone for Obarray {
             };
             match write.arm() {
                 ArmMut::Localized(local) => {
-                    if let Some(&copy) = blv_map.get(&local.blv()) {
-                        local.rehome(copy);
-                    }
+                    let copy = *blv_map
+                        .get(&local.blv())
+                        .expect("localized symbol BLV must exist in Obarray::blvs pool");
+                    local.rehome(copy);
                 }
                 ArmMut::Forwarded(forwarded) => {
                     let orig = forwarded.descriptor();
@@ -1697,7 +1750,9 @@ impl Clone for Obarray {
                         let logical = match projection.arm() {
                             CanonicalArm::Plain => RevealedCell::Plain(projection.plain_value()),
                             CanonicalArm::Localized(blv) => RevealedCell::Localized(
-                                blv_map.get(&blv.blv()).copied().unwrap_or(blv.blv()),
+                                *blv_map.get(&blv.blv()).expect(
+                                    "projected localized symbol BLV must exist in Obarray::blvs pool",
+                                ),
                             ),
                             CanonicalArm::Forwarded(builtin) => {
                                 let builtin = builtin.descriptor();
@@ -2103,6 +2158,24 @@ impl Obarray {
                 self.ensure_global_member_if_canonical(id);
             }
         }
+        // Then the literal `intern_c_string`/`intern` spellings GNU's
+        // `syms_of_*` code interns directly (font tables, Fprovide names,
+        // menu and DND tables, ...), in the generated source order.
+        for (name, gate) in crate::intern::gnu_defsyms_generated::GNU_C_INTERNS {
+            if gate.is_active() {
+                let id = crate::intern::intern(name);
+                self.ensure_global_member_if_canonical(id);
+            }
+        }
+        // Then the DEFUN subr names every compiled GNU object interns through
+        // `defsubr`; the port declines a few of those subrs, and GNU's
+        // obarray still carries their names (members with no function).
+        for (name, gate) in crate::intern::gnu_defsyms_generated::GNU_C_DEFUNS {
+            if gate.is_active() {
+                let id = crate::intern::intern(name);
+                self.ensure_global_member_if_canonical(id);
+            }
+        }
         for symbol in crate::intern::WellKnown::VARIANTS {
             // A fixed id is not membership: GNU's build only interns the
             // spellings its compiled `defsym_name[]` carries, so a spelling
@@ -2115,18 +2188,24 @@ impl Obarray {
         }
     }
 
-    /// Intern a symbol: look up by name, creating if absent.
-    /// Returns the symbol name (which is the key for identity).
-    pub fn intern(&mut self, name: &str) -> String {
+    /// GNU `intern`: the symbol named NAME as a member of this obarray,
+    /// created if absent.
+    ///
+    /// This is the member-producing funnel. The free
+    /// [`crate::intern::intern`] resolves a canonical name id without
+    /// touching any obarray; a symbol created only that way is not
+    /// Lisp-visible and must come through here (or
+    /// `make_uninterned_symbol` where GNU uses `make-symbol`).
+    pub fn intern_member(&mut self, name: &str) -> SymId {
         let id = intern(name);
         self.ensure_symbol_id(id);
         self.mark_global_member(id);
-        name.to_string()
+        id
     }
 
     /// Intern a symbol from an exact Lisp-string name, preserving raw
     /// unibyte and multibyte storage.
-    pub fn intern_lisp_string(&mut self, name: &LispString) -> SymId {
+    pub fn intern_member_lisp_string(&mut self, name: &LispString) -> SymId {
         let id = intern_lisp_string(name);
         self.ensure_symbol_id(id);
         self.mark_global_member(id);
@@ -2135,9 +2214,13 @@ impl Obarray {
 
     /// Intern a symbol from a Lisp string OBJECT, which becomes the symbol's
     /// name when this call creates it -- GNU `intern`. Use this rather than
-    /// [`Self::intern_lisp_string`] whenever the name came from Lisp, so
+    /// [`Self::intern_member_lisp_string`] whenever the name came from Lisp,
+    /// so
     /// `symbol-name` gives that object back with its text properties.
-    pub fn intern_lisp_value(&mut self, name_value: crate::tagged::value::TaggedValue) -> SymId {
+    pub fn intern_member_lisp_value(
+        &mut self,
+        name_value: crate::tagged::value::TaggedValue,
+    ) -> SymId {
         let id = crate::intern::intern_lisp_value(name_value);
         self.ensure_symbol_id(id);
         self.mark_global_member(id);
@@ -2179,11 +2262,17 @@ impl Obarray {
         Some(id)
     }
 
-    /// Get symbol data (mutable). Interns the symbol if needed.
-    pub fn get_or_intern(&mut self, name: &str) -> &mut LispSymbol {
+    /// Intern a symbol in the global obarray and return its identity.
+    ///
+    /// Never hands out `&mut LispSymbol`: cross-crate mutation goes through
+    /// `Obarray`'s atomic/seqlock setters so concurrent GC scans never see a
+    /// non-atomic slot overwrite and a `Localized` symbol cannot be moved out
+    /// of its owning obarray.
+    pub fn get_or_intern(&mut self, name: &str) -> SymId {
         let id = intern(name);
         self.mark_global_member(id);
-        self.ensure_symbol_id(id)
+        let _ = self.ensure_slot(id);
+        id
     }
 
     /// Get symbol data (immutable).
@@ -2192,17 +2281,12 @@ impl Obarray {
         self.slot(id).filter(|sym| sym.interned_global)
     }
 
-    /// Get symbol data (mutable). Crate-private: cross-crate mutation goes
-    /// through the signed narrow routes (AUTHORITY-ITEMS), never a raw
-    /// borrow of the symbol cell.
-    pub(crate) fn get_mut(&mut self, name: &str) -> Option<&mut LispSymbol> {
-        let id = lookup_interned(name)?;
-        self.slot_mut(id).filter(|sym| sym.interned_global)
-    }
-
     /// Ensure symbol storage exists for an arbitrary symbol id.
-    pub fn ensure_symbol_id(&mut self, id: SymId) -> &mut LispSymbol {
-        self.ensure_slot(id)
+    ///
+    /// Never hands out `&mut LispSymbol`: see [`Self::get_or_intern`] and
+    /// [`Self::get_mut_by_id`].
+    pub fn ensure_symbol_id(&mut self, id: SymId) {
+        let _ = self.ensure_slot(id);
     }
 
     /// Test hook: the slot count the compiled-code bounds check reads.
@@ -2225,8 +2309,8 @@ impl Obarray {
     }
 
     /// Restore the dump-carried per-symbol flags without handing out the
-    /// symbol cell. This is the ONE cross-crate route for pdump restore
-    /// (`PROMOTION-LEDGER.tsv`), and it can only set the three flags the image
+    /// symbol cell. This is the ONE cross-crate route for pdump restore, and
+    /// it can only set the three flags the image
     /// carries; the raw by-id accessor stays crate-private.
     #[doc(hidden)]
     pub fn restore_dumped_symbol_flags(
@@ -2256,57 +2340,6 @@ impl Obarray {
     #[inline]
     pub fn canonical_value_by_name(&self, access: CanonicalAccess, name: &str) -> Option<Value> {
         self.canonical_value(access, intern(name))
-    }
-
-    /// GNU's `Vfoo` / `foo` / `BVAR (current_buffer, foo)` -- the one spelling
-    /// for "what the C code reads here", given the buffer that is current.
-    ///
-    /// GNU needs no such helper because it has no choice to make: the swap-in
-    /// has already put `current_buffer`'s binding in the cell the C code
-    /// dereferences (`src/data.c:1573-1603`), and a `DEFVAR_PER_BUFFER` name
-    /// is only ever spelled `BVAR (current_buffer, ...)`. This port keeps the
-    /// two places apart, so a Rust site has to name the buffer -- and the
-    /// sites that could not were ledger 191's class.
-    ///
-    /// A `struct buffer` slot wins over the obarray unconditionally: for an
-    /// always-local slot it *is* the value, and for a conditional slot GNU's
-    /// `set-default` propagation leaves the live default in that same slot, so
-    /// reading it is right in both cases. `set_default_internal`'s
-    /// `BUFFER_OBJFWDP` arm calls `set_per_buffer_default` (`src/buffer.h:1627`)
-    /// and then walks `FOR_EACH_LIVE_BUFFER` writing the new default into every
-    /// buffer whose `PER_BUFFER_VALUE_P` is clear (`src/data.c:2087-2114`).
-    ///
-    /// `indent::dynamic_buffer_or_global_symbol_value` is the older, identical
-    /// reader; it lives in a file ledger 195 owns, so collapsing the two is
-    /// owed rather than done here (ledger 196).
-    pub fn canonical_value_in_buffer<B: BufferLocalView>(
-        &self,
-        access: CanonicalAccess,
-        buf: Option<&B>,
-        name: &str,
-    ) -> Option<Value> {
-        self.canonical_value_in_buffer_id(access, buf, intern(name))
-    }
-
-    /// [`Self::canonical_value_in_buffer`] by identity.
-    ///
-    /// The `local_var_alist` lookup is gated on [`Self::is_localized`]: a
-    /// symbol no buffer has ever localised can have no alist entry (every
-    /// insertion path marks it `Localized` first), so the walk would only ever
-    /// answer `None`. That keeps this reader roughly the cost of
-    /// [`Self::symbol_value_copied`] on the overwhelmingly common global path, which
-    /// matters where a caller reads a dozen names at once -- the `print-*`
-    /// family, for one.
-    pub fn canonical_value_in_buffer_id<B: BufferLocalView>(
-        &self,
-        _access: CanonicalAccess,
-        buf: Option<&B>,
-        id: SymId,
-    ) -> Option<Value> {
-        match self.buffer_value(buf, id) {
-            Some(value) => Some(value),
-            None => self.canonical_value(CanonicalAccess::STORAGE, id),
-        }
     }
 
     /// [`Self::canonical_value_in_buffer_id`]'s read, with PROJECTED
@@ -2342,18 +2375,6 @@ impl Obarray {
             return Some(value);
         }
         self.value_with(id, projected)
-    }
-
-    /// BUF's slot or local binding of ID, if it has one. A plain match, not
-    /// a closure for the global read: LLVM outlined that closure, storing
-    /// its captures on every call.
-    #[inline(always)]
-    fn buffer_value<B: BufferLocalView>(&self, buf: Option<&B>, id: SymId) -> Option<Value> {
-        let buf = buf?;
-        if let Some(value) = Self::buffer_slot_value(buf, id) {
-            return Some(value);
-        }
-        buf.local_binding(id, self.is_localized(id))
     }
 
     /// BUF's `struct buffer` slot of ID, when ID names one.
@@ -2839,15 +2860,15 @@ impl Obarray {
         let defcell = Value::cons(Value::from_sym_id(target), default);
         let blv = Box::new(LispBufferLocalValue {
             local_if_set: false,
-            found: false,
+            found: Cell::new(false),
             fwd: forwarder,
             where_buf: Value::NIL.into(),
-            where_buf_id: NO_WHERE_BUF,
+            where_buf_id: Cell::new(NO_WHERE_BUF),
             defcell: defcell.into(),
             valcell: defcell.into(),
             // 0 < the global epoch's initial 1: a fresh BLV never
             // fast-path-hits before its first swap_in records reality.
-            alist_epoch: 0,
+            alist_epoch: Cell::new(0),
         });
         let record = BlvPtr::leak(blv);
         self.blvs.push(record);
@@ -2893,7 +2914,8 @@ impl Obarray {
     /// (`src/data.c:2112-2140`).  In the localized case GNU's swap-in leaves
     /// the current buffer's value in that same cell, so the cell is still the
     /// right thing to read.
-    pub fn bool_forwarder(&self, id: SymId) -> Option<&'static crate::forward::LispBoolFwd> {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn bool_forwarder(&self, id: SymId) -> Option<&'static crate::forward::LispBoolFwd> {
         match self.slot(id)?.value_cell() {
             ValueCell::Forwarded(fwd) => fwd.as_bool_fwd(),
             ValueCell::Localized(_) => self.blv(id)?.fwd?.as_bool_fwd(),
@@ -2974,8 +2996,7 @@ impl Obarray {
     /// cell is unresolved (the stand-in reads armed), which only sends the
     /// caller to the reference path that resolves it; see the field.
     #[inline(always)]
-    #[cfg_attr(feature = "test-support", visibility::make(pub))]
-    pub(crate) fn debug_on_next_call_armed_fast(&self) -> bool {
+    pub fn debug_on_next_call_armed_fast(&self) -> bool {
         self.debug_on_next_call_cell_ref().get()
     }
 
@@ -3070,6 +3091,20 @@ impl Obarray {
         Some(unsafe { &*blv.as_ptr() })
     }
 
+    /// Test-only: replace a localized symbol's `defcell` (and `valcell` when it
+    /// points at `defcell`) with `owner` under an exclusive `&mut self` borrow.
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn replace_blv_defcell_for_test(&mut self, id: SymId, owner: Value) {
+        let blv = self
+            .blv(id)
+            .expect("replace_blv_defcell_for_test requires a localized symbol");
+        if blv.valcell.get() == blv.defcell.get() {
+            blv.valcell.store_atomic(owner);
+        }
+        blv.defcell.store_atomic(owner);
+    }
+
     /// Look up a LOCALIZED symbol's value in `target_buf` without
     /// mutating the BLV cache. Mirrors the GNU `Flocal_variable_p`
     /// fallback walk at `data.c:2399-2412`:
@@ -3117,20 +3152,28 @@ impl Obarray {
         target_buf_id: crate::value::buffer_vocab::BufferId,
         target_alist: Value,
     ) -> Option<Value> {
+        debug_assert!(
+            self.symbols
+                .get(Self::slot_index(id))
+                .is_some_and(|slot| std::ptr::eq(slot, sym)),
+            "read_localized_symbol_for_buffer called with a LispSymbol that does not belong to this Obarray"
+        );
         let blv_ptr = sym.localized_blv()?.as_ptr();
         let epoch = blv_alist_epoch();
-        // SAFETY: identical to `read_localized` -- the BLV record is reached
-        // only through the symbol's raw pointer and the evaluator thread is
-        // its only writer; no reference is held across a write.
+        // SAFETY: the BLV record is the symbol's localized pointer. The cache
+        // flags are cells, so a shared borrow of the record may be live.
+        // The evaluator thread is the only writer.
         unsafe {
-            if (*blv_ptr).alist_epoch == epoch && (*blv_ptr).where_buf_id == target_buf_id.0 {
+            if (*blv_ptr).alist_epoch.get() == epoch
+                && (*blv_ptr).where_buf_id.get() == target_buf_id.0
+            {
                 debug_assert_eq!(
                     (*blv_ptr)
                         .where_buf
                         .get()
                         .as_buffer_id()
                         .map_or(NO_WHERE_BUF, |b| b.0),
-                    (*blv_ptr).where_buf_id,
+                    (*blv_ptr).where_buf_id.get(),
                     "a BLV writer bypassed set_where"
                 );
                 return Some((*blv_ptr).valcell.get().cons_cdr());
@@ -3181,8 +3224,9 @@ impl Obarray {
     ///
     /// # Safety
     ///
-    /// `blv_ptr` names a live record of this obarray's BLV pool, and no
-    /// reference to it is held across the call.
+    /// `blv_ptr` names a live record of this obarray's BLV pool. The cache
+    /// flags are cells and the value slots are atomics, so a shared
+    /// reference to that record may also be live.
     #[inline(always)]
     pub(super) unsafe fn read_blv_with_lookup(
         blv_ptr: *mut LispBufferLocalValue,
@@ -3191,11 +3235,11 @@ impl Obarray {
     ) -> Value {
         let epoch = blv_alist_epoch();
         // SAFETY: the BLV record is a separate heap allocation reached only
-        // through the symbol's raw pointer; the evaluator thread is its only
-        // writer, and the two `Value` slots the GC thread may read
-        // concurrently are written with release stores -- the same contract
-        // `swap_in_blv` honours through `&mut`.  No `&LispBufferLocalValue`
-        // is held across the writes.
+        // through the symbol's raw pointer. The evaluator thread is its only
+        // writer. The two `Value` slots the GC thread may read concurrently
+        // are written with release stores. `found`, `where_buf_id`, and
+        // `alist_epoch` are cells, so a shared `blv()` borrow may be live
+        // across these stores.
         unsafe {
             // Same-buffer fast path -- the SAME soundness guard as
             // `find_symbol_value_in_buffer`'s GNU `swap_in_symval_forwarding`
@@ -3204,7 +3248,7 @@ impl Obarray {
             // since (`alist_epoch` vs the global epoch).  Every value write
             // updates that shared cons's cdr in place, so an epoch-valid cell
             // carries the identical live value.
-            if (*blv_ptr).alist_epoch == epoch
+            if (*blv_ptr).alist_epoch.get() == epoch
                 && crate::value::eq_value(&(*blv_ptr).where_buf.get(), &target_buf)
             {
                 return (*blv_ptr).valcell.get().cons_cdr();
@@ -3224,9 +3268,9 @@ impl Obarray {
                 (*blv_ptr).defcell.get()
             };
             (*blv_ptr).set_where(target_buf);
-            (*blv_ptr).found = found;
+            (*blv_ptr).found.set(found);
             (*blv_ptr).valcell.store_atomic(valcell);
-            (*blv_ptr).alist_epoch = epoch;
+            (*blv_ptr).alist_epoch.set(epoch);
             valcell.cons_cdr()
         }
     }
@@ -3254,10 +3298,10 @@ impl Obarray {
         // contract `read_localized` trusts).  `specbind` and `unbind_to`
         // asked this right after `find_symbol_value` had swapped the cache
         // in, so every buffer-local `let` paid a second whole-alist assq.
-        if blv.alist_epoch == blv_alist_epoch()
+        if blv.alist_epoch.get() == blv_alist_epoch()
             && crate::value::eq_value(&blv.where_buf.get(), &target_buf)
         {
-            return blv.found;
+            return blv.found.get();
         }
         // Otherwise the alist is authoritative (see `read_localized`).
         let key = Value::from_sym_id(id);
@@ -3272,7 +3316,7 @@ impl Obarray {
     pub fn reset_blv_cache_to_default(&mut self, id: SymId) {
         if let Some(blv) = self.blv_mut(id) {
             blv.set_where(Value::NIL);
-            blv.found = false;
+            blv.found.set(false);
             blv.valcell.store_atomic(blv.defcell.get());
         }
     }
@@ -3284,7 +3328,7 @@ impl Obarray {
             && crate::value::eq_value(&blv.where_buf.get(), &buffer)
         {
             blv.set_where(Value::NIL);
-            blv.found = false;
+            blv.found.set(false);
             blv.valcell.store_atomic(blv.defcell.get());
         }
     }
@@ -3710,7 +3754,7 @@ impl Obarray {
                     // dominates localized VarRef cost (Task 4: 58% of
                     // session VarRefs, 60.8ns -> ~cons_cdr).
                     if let Some(blv) = self.blv(current)
-                        && blv.alist_epoch == blv_alist_epoch()
+                        && blv.alist_epoch.get() == blv_alist_epoch()
                         && crate::value::eq_value(&blv.where_buf.get(), &current_buffer_value)
                     {
                         return Some(blv.valcell.get().cons_cdr());
@@ -3850,10 +3894,10 @@ impl Obarray {
         // loaded for it at the current epoch yields the cell directly (nil
         // when `found` is false, so the auto-create decision below is the
         // same one the scan would reach).
-        let mut cell = if blv.alist_epoch == epoch
+        let mut cell = if blv.alist_epoch.get() == epoch
             && crate::value::eq_value(&blv.where_buf.get(), &target_buf)
         {
-            if blv.found {
+            if blv.found.get() {
                 blv.valcell.get()
             } else {
                 Value::NIL
@@ -3862,8 +3906,8 @@ impl Obarray {
             assq(key, new_alist)
         };
         blv.set_where(target_buf);
-        blv.alist_epoch = epoch;
-        blv.found = true;
+        blv.alist_epoch.set(epoch);
+        blv.found.set(true);
 
         if cell.is_nil() {
             // No existing binding for this buffer.
@@ -3871,7 +3915,7 @@ impl Obarray {
                 bindflag == SetInternalBind::Set && blv.local_if_set && !let_shadows();
             if !auto_create {
                 // Fall through to writing the default.
-                blv.found = false;
+                blv.found.set(false);
                 cell = blv.defcell.get();
             } else {
                 // Cons up `(sym . current-default-cdr)` and prepend it
@@ -4065,7 +4109,7 @@ impl Obarray {
     pub fn set_symbol_function(&mut self, name: &str, function: Value) {
         let id = intern(name);
         self.mark_global_member(id);
-        let sym = self.ensure_symbol_id(id);
+        let sym = self.ensure_slot(id);
         // See `set_symbol_function_id': the same value redefines nothing.
         let unchanged = !sym.function_unbound && sym.function.get().bits() == function.bits();
         let previous = sym.function.get();
@@ -4145,12 +4189,6 @@ impl Obarray {
             && self.symbols.fn_unchanged_since(Self::slot_index(id), since)
     }
 
-    /// Test hook: whether `id`'s chunk has allocated its stamp array.
-    #[cfg(any(test, feature = "test-support"))]
-    pub(crate) fn chunk_has_fn_stamps_for_test(&self, id: SymId) -> bool {
-        self.symbols.chunk_has_fn_stamps(Self::slot_index(id))
-    }
-
     /// A specific function `id` was redefined (cell write / fmakunbound): bump the
     /// epoch (the coarse "any binding may have changed" signal JIT call
     /// speculation re-arms on). When JIT is enabled, also evict the JIT cache
@@ -4198,7 +4236,7 @@ impl Obarray {
         why: FunctionEpochBump,
     ) {
         self.ensure_global_member_if_canonical(id);
-        let sym = self.ensure_symbol_id(id);
+        let sym = self.ensure_slot(id);
         // Storing the value the cell already holds changes no call's
         // behavior, so it redefines nothing: no epoch move, no JIT eviction
         // (a `defalias' re-run while a file reloads, an `fset' in a loop).
@@ -4223,7 +4261,7 @@ impl Obarray {
     /// Remove the function cell by identity.
     pub fn fmakunbound_id(&mut self, id: SymId) {
         self.ensure_global_member_if_canonical(id);
-        let sym = self.ensure_symbol_id(id);
+        let sym = self.ensure_slot(id);
         let was_unbound = sym.function_unbound;
         let was_bound_function = !sym.function.get().is_nil();
         let previous = sym.function.get();
@@ -4317,53 +4355,6 @@ impl Obarray {
         if crate::value::eq_value(&blv.valcell.get(), &blv.defcell.get()) {
             blv.valcell.get().set_cdr(Value::UNBOUND);
         }
-    }
-
-    /// [`Self::makunbound_canonical`] for the owner-aware API: a thread
-    /// projection answers [`CanonicalWrite::Projected`] from the forwarded
-    /// arm, which leaves every forwarder as it is.
-    #[inline(always)]
-    #[doc(hidden)]
-    pub fn makunbound_canonical_routed(&mut self, id: SymId) -> CanonicalWrite {
-        self.ensure_global_member_if_canonical(id);
-        let target = self.resolve_alias_for_write(id);
-        if self
-            .slot(target)
-            .is_none_or(|sym| sym.trapped_write() == SymbolTrappedWrite::NoWrite)
-        {
-            return CanonicalWrite::Done;
-        }
-        let blv = match self.cell_write_ensure(target).arm() {
-            ArmMut::Plain(plain) => {
-                plain.store(Value::UNBOUND);
-                return CanonicalWrite::Done;
-            }
-            // `resolve_alias_for_write` stops on an alias only when the chain
-            // does not end; GNU `Fmakunbound` on an alias undoes it
-            // (`src/data.c:781-784`).
-            ArmMut::Alias(alias) => {
-                alias.unalias(Value::UNBOUND);
-                return CanonicalWrite::Done;
-            }
-            ArmMut::Forwarded(forwarded) => {
-                return if forwarded.descriptor().thread_projection().is_some() {
-                    CanonicalWrite::Projected
-                } else {
-                    CanonicalWrite::Done
-                };
-            }
-            ArmMut::Localized(local) => local.blv(),
-        };
-        // Safety: a `Localized` cell names a record self.blvs owns.
-        let blv = unsafe { &mut *blv.as_ptr() };
-        if blv.fwd.is_some() {
-            return CanonicalWrite::Done;
-        }
-        blv.defcell.get().set_cdr(Value::UNBOUND);
-        if crate::value::eq_value(&blv.valcell.get(), &blv.defcell.get()) {
-            blv.valcell.get().set_cdr(Value::UNBOUND);
-        }
-        CanonicalWrite::Done
     }
 
     /// Check if a symbol is bound (has a value cell).
@@ -4481,10 +4472,8 @@ impl Obarray {
         } else {
             Value::list(flat)
         };
-        let sym = self.ensure_symbol_id(symbol);
-        // SATB: retain the plist cell's pre-image during a concurrent mark.
-        crate::tagged::gc::note_root_overwrite(sym.plist.get());
-        store_plist_head(sym, new_plist);
+        let sym = self.ensure_slot(symbol);
+        store_runtime_plist_head(sym, new_plist);
         SymbolPropertyRevision::changed(symbol);
     }
 
@@ -4493,16 +4482,9 @@ impl Obarray {
     /// value (including NIL).
     pub fn set_symbol_plist_id(&mut self, symbol: SymId, plist: Value) {
         self.ensure_global_member_if_canonical(symbol);
-        let sym = self.ensure_symbol_id(symbol);
-        // SATB: retain the plist cell's pre-image during a concurrent mark.
-        crate::tagged::gc::note_root_overwrite(sym.plist.get());
-        store_plist_head(sym, plist);
+        let sym = self.ensure_slot(symbol);
+        store_runtime_plist_head(sym, plist);
         SymbolPropertyRevision::changed(symbol);
-    }
-
-    /// Get the symbol's full plist as a flat list.
-    pub fn symbol_plist(&self, name: &str) -> Value {
-        self.symbol_plist_id(intern(name))
     }
 
     /// Get the symbol's full plist as a flat list by identity.
@@ -4527,7 +4509,7 @@ impl Obarray {
     pub fn make_special(&mut self, name: &str) {
         let id = intern(name);
         self.mark_global_member(id);
-        self.ensure_symbol_id(id).set_declared_special(true);
+        self.ensure_slot(id).set_declared_special(true);
     }
 
     /// Define a bound special variable in one semantic operation.
@@ -4565,20 +4547,20 @@ impl Obarray {
     /// Mark a symbol as special by identity.
     pub fn make_special_id(&mut self, id: SymId) {
         self.ensure_global_member_if_canonical(id);
-        self.ensure_symbol_id(id).set_declared_special(true);
+        self.ensure_slot(id).set_declared_special(true);
     }
 
     /// Clear the special flag on a symbol.
     pub fn make_non_special(&mut self, name: &str) {
         let id = intern(name);
         self.mark_global_member(id);
-        self.ensure_symbol_id(id).set_declared_special(false);
+        self.ensure_slot(id).set_declared_special(false);
     }
 
     /// Clear the special flag on a symbol by identity.
     pub fn make_non_special_id(&mut self, id: SymId) {
         self.ensure_global_member_if_canonical(id);
-        self.ensure_symbol_id(id).set_declared_special(false);
+        self.ensure_slot(id).set_declared_special(false);
     }
 
     /// Check if a symbol is special.
@@ -4653,7 +4635,7 @@ impl Obarray {
     /// Mark a symbol as a hard constant (like SYMBOL_NOWRITE in GNU Emacs) by identity.
     pub fn set_constant_id(&mut self, id: SymId) {
         self.ensure_global_member_if_canonical(id);
-        self.ensure_symbol_id(id)
+        self.ensure_slot(id)
             .set_trapped_write(SymbolTrappedWrite::NoWrite);
     }
 
@@ -4699,7 +4681,9 @@ impl Obarray {
     }
 
     /// Check whether a symbol is a buffer-local variable in the obarray.
-    pub fn is_buffer_local(&self, name: &str) -> bool {
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn is_buffer_local(&self, name: &str) -> bool {
         self.is_buffer_local_id(intern(name))
     }
 
@@ -4926,10 +4910,6 @@ impl Obarray {
         self.global_member_count
     }
 
-    pub fn is_empty(&self) -> bool {
-        self.global_member_count == 0
-    }
-
     /// All interned symbol names.
     pub fn all_symbols(&self) -> Vec<&str> {
         self.symbols
@@ -5032,18 +5012,6 @@ impl Obarray {
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn dispatch_cells_address_for_test(&self) -> usize {
         std::ptr::from_ref(&self.dispatch_cells).addr()
-    }
-
-    /// Read the publication clock while this obarray is exclusively owned.
-    /// The mutable borrow excludes concurrent clock readers as well as writers;
-    /// independent mutators may own separate obarrays (clones have fresh clocks).
-    /// Shared readers must use `function_epoch` and its Acquire ordering instead.
-    /// Return a copy so no clock borrow survives native re-entry. Keeping this
-    /// load ordinary lets the warmed JIT guard fold it into its comparison.
-    #[cfg(feature = "jit")]
-    #[inline]
-    pub(crate) fn function_epoch_exclusive(&mut self) -> u64 {
-        *self.dispatch_cells.function_epoch.get_mut()
     }
 
     /// Test-only: set `function_epoch` (the wrap-skip tests). Re-gated to
@@ -5350,6 +5318,20 @@ mod copied_value_tests;
 #[path = "tests/plist_epoch_test.rs"]
 mod plist_epoch_tests;
 
+#[cfg(test)]
+#[path = "tests/member_funnel_test.rs"]
+mod member_funnel_tests;
+
+#[cfg(test)]
+#[path = "tests/blv_clone_and_mut_borrow_test.rs"]
+mod blv_clone_and_mut_borrow_tests;
+
+#[cfg(any(test, feature = "test-support"))]
+mod membership_audit;
+
+#[cfg(any(test, feature = "test-support"))]
+pub use membership_audit::VisibilityViolation;
+
 /// The pre-`CanonicalAccess` spellings, for tests, which set up and inspect
 /// canonical storage. Production code names its reason
 /// ([`CanonicalAccess`]) or reads through the owner-aware `Context` API.
@@ -5461,5 +5443,27 @@ impl BlvDefaultCells {
     #[doc(hidden)]
     pub fn fwd(&self) -> Option<crate::forward::FwdRef> {
         self.fwd
+    }
+}
+
+#[cfg(test)]
+pub(crate) mod b13_test_hooks {
+    use super::*;
+    impl Obarray {
+        pub(crate) fn function_epoch_exclusive(&mut self) -> u64 {
+            *self.dispatch_cells.function_epoch.get_mut()
+        }
+
+        pub(crate) fn chunk_has_fn_stamps_for_test(&self, id: SymId) -> bool {
+            self.symbols.chunk_has_fn_stamps(Self::slot_index(id))
+        }
+    }
+    impl CanonicalDispatchCells {}
+    impl SymbolChunks {
+        pub(crate) fn chunk_has_fn_stamps(&self, idx: usize) -> bool {
+            self.sides
+                .get(idx >> 12)
+                .is_some_and(|side| side.has_stamps())
+        }
     }
 }

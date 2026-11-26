@@ -1275,3 +1275,315 @@ fn install_bare_elisp_shims(ev: &mut Context) {
 fn test_ob() -> neovm_value::symbol::Obarray {
     neovm_value::symbol::Obarray::new()
 }
+
+/// Build a buffer with 1000 'a', one TAB, then `rest` 'a', set the buffer's
+/// long-line flag as redisplay would, and leave point at `point` (1-based).
+fn long_line_with_tab(line_len: usize, point: i64) -> (Context, neovm_edit::buffer::BufferId) {
+    let mut ev = crate::test_utils::runtime_startup_context();
+    ev.eval_str("(setq long-line-threshold 50000)")
+        .expect("set the long-line threshold");
+    let buffer_id = ev.edit.buffers.current_buffer_id().expect("current buffer");
+    {
+        let buf = ev.edit.buffers.get_mut(buffer_id).expect("buffer");
+        buf.insert("a".repeat(1000).as_str());
+        buf.insert("\t");
+        buf.insert("a".repeat(line_len).as_str());
+    }
+    assert!(
+        ev.edit
+            .buffers
+            .get_mut(buffer_id)
+            .expect("buffer")
+            .refresh_long_line_optimizations(50_000),
+        "the test line must set long_line_optimizations_p"
+    );
+    ev.eval_str(&format!("(goto-char {point})"))
+        .expect("move point");
+    (ev, buffer_id)
+}
+
+/// GNU `current_column` returns the character distance on a long-line buffer
+/// past `long-line-threshold` (`src/indent.c:348-351`), ignoring the TAB's
+/// width, and does NOT cache that approximation: with the same point and
+/// MODIFF, binding `long-line-threshold` to nil makes GNU recompute the exact
+/// column.
+#[test]
+fn current_column_approximates_a_long_line_without_caching() {
+    crate::test_utils::init_test_tracing();
+    let (mut ev, _buffer) = long_line_with_tab(200_000, 150_001);
+    let approximate = ev
+        .eval_str("(current-column)")
+        .expect("approximate column")
+        .as_int()
+        .expect("fixnum");
+    assert_eq!(
+        approximate, 150_000,
+        "GNU returns the character distance on a long line"
+    );
+    // The TAB at position 1001 expands to column 1008, so the exact column is
+    // 150007.  An implementation that cached the approximation would return
+    // 150000 here.
+    let exact_after_nil_threshold = ev
+        .eval_str("(let ((long-line-threshold nil)) (current-column))")
+        .expect("exact column")
+        .as_int()
+        .expect("fixnum");
+    assert_eq!(
+        exact_after_nil_threshold, 150_007,
+        "the approximation must not enter the last_known_column cache"
+    );
+}
+
+/// The approximation's gates: it needs the buffer flag, a non-nil
+/// `long-line-threshold`, and a distance strictly greater than it.
+#[test]
+fn current_column_long_line_approximation_gates() {
+    crate::test_utils::init_test_tracing();
+    // Distance 40000 <= threshold 50000: exact (TAB counted).
+    let (mut ev, _buffer) = long_line_with_tab(200_000, 40_001);
+    let below = ev
+        .eval_str("(current-column)")
+        .expect("column below threshold")
+        .as_int()
+        .expect("fixnum");
+    assert_eq!(below, 40_007, "below the threshold GNU scans the line");
+    drop(ev);
+
+    // Distance 150000 > threshold, but the variable is nil: exact.
+    let (mut ev, _buffer) = long_line_with_tab(200_000, 150_001);
+    let nil_threshold = ev
+        .eval_str("(let ((long-line-threshold nil)) (current-column))")
+        .expect("column with nil threshold")
+        .as_int()
+        .expect("fixnum");
+    assert_eq!(nil_threshold, 150_007, "nil disables the approximation");
+    drop(ev);
+
+    // Flag clear (line below the threshold): exact even past the distance.
+    let mut ev = crate::test_utils::runtime_startup_context();
+    ev.eval_str("(setq long-line-threshold 50000)")
+        .expect("threshold");
+    let buffer_id = ev.edit.buffers.current_buffer_id().expect("buffer");
+    {
+        let buf = ev.edit.buffers.get_mut(buffer_id).expect("buffer");
+        buf.insert("a".repeat(1000).as_str());
+        buf.insert("\t");
+        buf.insert("a".repeat(20_000).as_str());
+    }
+    ev.eval_str("(goto-char 20001)").expect("point");
+    let flag_clear = ev
+        .eval_str("(current-column)")
+        .expect("column with flag clear")
+        .as_int()
+        .expect("fixnum");
+    assert_eq!(flag_clear, 20_007, "no approximation without the flag");
+}
+
+/// The approximation must be constant work: it must not decode the line.
+#[test]
+fn current_column_long_line_approximation_is_constant_work() {
+    crate::test_utils::init_test_tracing();
+    let mut work = Vec::new();
+    for line_len in [200_000usize, 400_000] {
+        let (mut ev, _buffer) = long_line_with_tab(line_len, line_len as i64 + 1);
+        neovm_edit::test_support::authority::reset_column_scan_characters();
+        let value = ev
+            .eval_str("(current-column)")
+            .expect("approximate column")
+            .as_int()
+            .expect("fixnum");
+        assert_eq!(value, line_len as i64, "character distance");
+        work.push(neovm_edit::test_support::authority::column_scan_characters());
+    }
+    assert_eq!(
+        work[0], work[1],
+        "current-column work must not grow with the line: {work:?}"
+    );
+    assert_eq!(
+        work[0], 0,
+        "the approximation must not decode the line: {work:?}"
+    );
+}
+
+/// One long line: `head` 'a', one TAB, then `rest` 'a' and a newline.
+/// `long-line-threshold` is 50000 and `large-hscroll-threshold` 10000, the GNU
+/// defaults the fast paths compare against.
+fn long_line_scan_buffer(
+    rest: usize,
+    truncate_lines: bool,
+    set_long_line_flag: bool,
+) -> (Context, neovm_edit::buffer::BufferId) {
+    let mut ev = crate::test_utils::runtime_startup_context();
+    ev.eval_str("(setq long-line-threshold 50000 large-hscroll-threshold 10000)")
+        .expect("set the long-line variables");
+    let buffer_id = ev.edit.buffers.current_buffer_id().expect("current buffer");
+    {
+        let buf = ev.edit.buffers.get_mut(buffer_id).expect("buffer");
+        buf.insert("a".repeat(1000).as_str());
+        buf.insert("\t");
+        buf.insert("a".repeat(rest).as_str());
+        buf.insert("\n");
+        if truncate_lines {
+            buf.set_buffer_local("truncate-lines", Value::T);
+        }
+    }
+    if set_long_line_flag {
+        assert!(
+            ev.edit
+                .buffers
+                .get_mut(buffer_id)
+                .expect("buffer")
+                .refresh_long_line_optimizations(50_000),
+            "the test line must set long_line_optimizations_p"
+        );
+    }
+    ev.eval_str("(goto-char 1)").expect("beginning of line");
+    (ev, buffer_id)
+}
+
+/// GNU `scan_for_column`'s long+truncated shortcut (`src/indent.c:629-668`)
+/// replaces the width walk with `BOL + goal` arithmetic once the clamped
+/// column exceeds `large-hscroll-threshold`.  `move-to-column` therefore
+/// returns the goal column and ignores the TAB, at constant work.
+#[test]
+fn move_to_column_long_truncated_fast_path_is_flat() {
+    crate::test_utils::init_test_tracing();
+    let mut work = Vec::new();
+    for line_len in [200_000usize, 400_000] {
+        let (mut ev, _buffer) = long_line_scan_buffer(line_len, true, true);
+        neovm_edit::test_support::authority::reset_column_scan_characters();
+        let reached = ev
+            .eval_str(&format!("(move-to-column {line_len})"))
+            .expect("move to the line's column")
+            .as_int()
+            .expect("fixnum");
+        assert_eq!(
+            reached, line_len as i64,
+            "GNU's approximation returns one column per character"
+        );
+        work.push(neovm_edit::test_support::authority::column_scan_characters());
+    }
+    assert_eq!(
+        work[0], work[1],
+        "move-to-column work must not grow with the line: {work:?}"
+    );
+    assert_eq!(
+        work[0], 0,
+        "the long+truncated shortcut must not decode the line: {work:?}"
+    );
+}
+
+/// The shortcut's gates: it needs the flag, truncated lines, and a clamped
+/// column above `large-hscroll-threshold`.  `move-to-column` RETURNS the goal
+/// column on both paths, so the distinguishing observation is POINT:
+/// the exact walk counts the TAB (149994 for goal 150000; 4994 for goal 5000)
+/// and the fast path treats every character as one column (150001).
+#[test]
+fn move_to_column_long_truncated_fast_path_gates() {
+    crate::test_utils::init_test_tracing();
+
+    // Not truncated: GNU counts the TAB exactly.
+    let (mut ev, _buffer) = long_line_scan_buffer(200_000, false, true);
+    let wrapped_point = ev
+        .eval_str("(progn (move-to-column 150000) (point))")
+        .expect("wrapped move")
+        .as_int()
+        .expect("fixnum");
+    assert_eq!(
+        wrapped_point, 149_994,
+        "untruncated lines take the exact walk"
+    );
+    drop(ev);
+
+    // Truncated but the buffer flag is clear.
+    let (mut ev, _buffer) = long_line_scan_buffer(200_000, true, false);
+    let flag_clear_point = ev
+        .eval_str("(progn (move-to-column 150000) (point))")
+        .expect("move without the flag")
+        .as_int()
+        .expect("fixnum");
+    assert_eq!(
+        flag_clear_point, 149_994,
+        "no shortcut without the long-line flag"
+    );
+    drop(ev);
+
+    // Truncated with the flag, goal at or below large-hscroll-threshold.
+    let (mut ev, _buffer) = long_line_scan_buffer(200_000, true, true);
+    let below_threshold_point = ev
+        .eval_str("(progn (move-to-column 5000) (point))")
+        .expect("move below the hscroll threshold")
+        .as_int()
+        .expect("fixnum");
+    assert_eq!(
+        below_threshold_point, 4_994,
+        "below large-hscroll-threshold GNU walks exactly"
+    );
+}
+
+/// `current-column` reaches `scan_for_column` only through
+/// `current_column_1` (intervals/overlays/multibyte, `src/indent.c:365-370`),
+/// where GNU's long+truncated shortcut then applies when
+/// `long-line-threshold` is nil and the flag is set.  The interval tree is
+/// what `buffer_intervals` reports, so removing the last property still takes
+/// that branch; a buffer that never had a tree takes the simple backward
+/// scan, which counts the TAB.
+#[test]
+fn current_column_1_long_truncated_fast_path_like_gnu() {
+    crate::test_utils::init_test_tracing();
+    // GNU dispatches to `current_column_1` on `buffer_intervals
+    // (current_buffer) != NULL` (src/indent.c:365-370), and the interval
+    // tree outlives `remove-text-properties` (src/textprop.c:1607 validates
+    // with `soft`; only whole-text deletion NULLs the tree,
+    // src/intervals.c:1324-1346).  So the removed-property buffer still
+    // reaches the long+truncated shortcut.
+    let (mut ev, buffer) = long_line_scan_buffer(200_000, true, true);
+    ev.eval_str("(put-text-property 1 2 'p640 t)")
+        .expect("create the interval tree");
+    ev.eval_str("(remove-text-properties 1 2 '(p640 nil))")
+        .expect("remove the property but keep the tree");
+    assert!(
+        ev.edit
+            .buffers
+            .get(buffer)
+            .expect("buffer")
+            .text_props_tree_present(),
+        "GNU's interval tree survives removing the last property"
+    );
+    ev.eval_str("(goto-char 30001)").expect("move point");
+    neovm_edit::test_support::authority::reset_column_scan_characters();
+    let with_removed_property = ev
+        .eval_str("(let ((long-line-threshold nil)) (current-column))")
+        .expect("current-column through current_column_1")
+        .as_int()
+        .expect("fixnum");
+    let work = neovm_edit::test_support::authority::column_scan_characters();
+    assert_eq!(
+        with_removed_property, 30_000,
+        "current_column_1 takes the one-column-per-character shortcut"
+    );
+    assert_eq!(work, 0, "the shortcut must not decode the line");
+    drop(ev);
+
+    // Control: a buffer that never had an interval tree -> current_column's
+    // simple backward scan, which counts the TAB.
+    let (mut ev, control) = long_line_scan_buffer(200_000, true, true);
+    assert!(
+        !ev.edit
+            .buffers
+            .get(control)
+            .expect("buffer")
+            .text_props_tree_present(),
+        "the control buffer must never have had an interval tree"
+    );
+    ev.eval_str("(goto-char 30001)").expect("move point");
+    let no_property = ev
+        .eval_str("(let ((long-line-threshold nil)) (current-column))")
+        .expect("exact current-column")
+        .as_int()
+        .expect("fixnum");
+    assert_eq!(
+        no_property, 30_007,
+        "without intervals GNU's simple scan counts the TAB"
+    );
+}

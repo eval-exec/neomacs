@@ -121,8 +121,8 @@ impl Store {
         match self {
             Self::Car => owner.cons_car(),
             Self::Cdr => owner.cons_cdr(),
-            Self::Vector => owner.as_vector_data().expect("vector")[0],
-            Self::Record => owner.as_record_data().expect("record")[1],
+            Self::Vector => owner.as_vector_data().expect("vector").at(0),
+            Self::Record => owner.as_record_data().expect("record").at(1),
         }
     }
 
@@ -134,7 +134,7 @@ impl Store {
                 vec![owner, Value::make_int(self.slot() as i64), value]
             }
         };
-        match leaf.call(context as *mut Context as *mut u8, &args) {
+        match unsafe { leaf.call(context as *mut Context as *mut u8, &args) } {
             NativeRun::Ok(bits) => assert_eq!(bits, value.bits()),
             other => panic!("tracked setter must complete natively: {other:?}"),
         }

@@ -161,6 +161,8 @@ pub enum LispStringStorageKind {
 // table can hold mutator-local Values. Collector access to the atomic interval
 // pointer word is admitted separately; it never dereferences that table.
 static_assertions::assert_not_impl_any!(LispString: Send, Sync);
+// Plist `Value`s are thread-confined, so the table stays `!Send` and `!Sync`
+// even though its journal mark is a plain enum rather than a `Cell`.
 static_assertions::assert_not_impl_any!(TextPropertyTable: Send, Sync);
 
 /// Whether the declared count has a decoded-payload proof.
@@ -379,6 +381,17 @@ impl Drop for OwnedStringDataGuard<'_> {
     }
 }
 
+struct FixedStringBytesGuard<'a> {
+    string: &'a mut LispString,
+    byte_len: usize,
+}
+
+impl Drop for FixedStringBytesGuard<'_> {
+    fn drop(&mut self) {
+        self.string.recompute_size(self.byte_len);
+    }
+}
+
 // Read only by the JIT's inline string paths.
 #[cfg_attr(not(feature = "jit"), allow(dead_code))]
 impl LispString {
@@ -414,6 +427,26 @@ impl LispString {
     /// `size_byte` of a normally allocated unibyte string (GNU's `-1`).
     #[doc(hidden)]
     pub const JIT_SIZE_BYTE_UNIBYTE: i64 = SIZE_BYTE_UNIBYTE_NORMAL;
+}
+
+/// Mapped pdump bytes whose length is not the length named by the string header.
+#[doc(hidden)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MappedStringLengthError {
+    /// Bytes actually present in the mapping, excluding the trailing NUL.
+    pub mapped_len: usize,
+    /// Byte count `size` / `size_byte` name.
+    pub header_len: usize,
+}
+
+impl std::fmt::Display for MappedStringLengthError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "mapped dump string length {} does not match header length {}",
+            self.mapped_len, self.header_len
+        )
+    }
 }
 
 impl LispString {
@@ -488,7 +521,10 @@ impl LispString {
         let size_byte = Self::normalize_size_byte(size_byte, false);
         Self::assert_valid_size_byte(size_byte);
         Self::assert_unibyte_count_has_no_proof(size, size_byte);
-        debug_assert_eq!(
+        // Release builds must refuse a header that names more bytes than the
+        // allocation. A debug-only check let `from_dump` publish that header,
+        // and the owned destructor then rebuilt the Vec with `len > capacity`.
+        assert_eq!(
             payload.len(),
             Self::payload_len_for(size, size_byte),
             "LispString storage length must match GNU size/size_byte fields"
@@ -565,6 +601,16 @@ impl LispString {
         self.replace_owned_payload(payload);
     }
 
+    /// Materialize borrowed bytes for a published mutation. The caller owns
+    /// allocation accounting; detached builders continue to use ensure_owned.
+    pub(crate) fn materialize_owned_storage(&mut self) -> usize {
+        if self.storage_capacity != 0 {
+            return 0;
+        }
+        self.ensure_owned();
+        self.storage_capacity
+    }
+
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
     fn owned_data_guard(&mut self) -> OwnedStringDataGuard<'_> {
         self.ensure_owned();
@@ -592,9 +638,8 @@ impl LispString {
     /// mutator anyway — harmless floating garbage at worst. No-op (one
     /// thread-local load) unless a concurrent mark is active.
     ///
-    /// The `mutate.rs` wrappers (`with_string_text_props_mut` /
-    /// `with_lisp_string_mut`) remain the required route for PUBLISHED strings:
-    /// they additionally maintain the dump remembered set and dirty-owner
+    /// The typed `mutate.rs` wrappers remain the required route for PUBLISHED
+    /// strings: they additionally maintain the dump remembered set and dirty-owner
     /// tracking for the owner value, which this value-only barrier cannot.
     fn note_interval_preimage_for_satb(&self) {
         if !crate::tagged::gc::concurrent_mark_active() {
@@ -687,8 +732,12 @@ impl LispString {
     }
 
     /// Reconstruct a `LispString` from pdump data with pre-computed fields.
-    /// The caller is responsible for passing consistent `data`, `size`, and
-    /// `size_byte` values (as stored in the dump file).
+    ///
+    /// `data.len()` must be the byte count those fields name
+    /// (`size_byte` when it is non-negative, otherwise the unibyte character
+    /// count in `size`). A mismatch panics before the record is published.
+    /// The character count itself may still disagree with a scan of the
+    /// bytes: GNU image reconstruction stores the dumped count.
     pub fn from_dump(data: Vec<u8>, size: usize, size_byte: i64) -> Self {
         let size = Self::character_count_word_for_image(&data, size, size_byte);
         Self::from_owned_payload(data, size, size_byte)
@@ -696,20 +745,32 @@ impl LispString {
 
     /// Build a Lisp string whose bytes live in a mapped pdump image.
     ///
+    /// A header whose byte count is not `len` is refused before any payload
+    /// read. `sbytes` follows the header, so a release build that skipped
+    /// this check would read past the mapping.
+    ///
     /// # Safety
-    /// `ptr..ptr+len+1` must remain mapped and immutable for the lifetime of
-    /// the returned `LispString`, with `ptr[len] == 0`. Mutation first copies
-    /// these bytes into owned storage.
+    /// On `Ok`, `ptr..ptr+len+1` must remain mapped and immutable for the
+    /// lifetime of the returned `LispString`, with `ptr[len] == 0`. Mutation
+    /// first copies these bytes into owned storage. `Err` does not
+    /// dereference `ptr`.
     #[doc(hidden)]
     pub unsafe fn from_mapped_bytes(
         ptr: *const u8,
         len: usize,
         size: usize,
         size_byte: i64,
-    ) -> Self {
+    ) -> Result<Self, MappedStringLengthError> {
+        let header_len = Self::payload_len_for(size, Self::normalize_size_byte(size_byte, false));
+        if len != header_len {
+            return Err(MappedStringLengthError {
+                mapped_len: len,
+                header_len,
+            });
+        }
         let mut string = unsafe { Self::from_borrowed_bytes(ptr, len, size, size_byte, false) };
         string.size = Self::character_count_word_for_image(string.as_bytes(), size, size_byte);
-        string
+        Ok(string)
     }
 
     /// `from_unibyte` from a borrowed slice, copying with the spare NUL slot
@@ -771,7 +832,8 @@ impl LispString {
         ptr: *const u8,
         len: usize,
     ) -> Result<(), String> {
-        self.validate_storage_install(ptr, len)?;
+        // SAFETY: `lookup_static_rodata` returns a NUL-terminated static slice of `len` bytes.
+        unsafe { self.validate_storage_install(ptr, len)? };
         self.data = ptr;
         self.storage_capacity = 0;
         Ok(())
@@ -794,13 +856,16 @@ impl LispString {
         let ptr = lookup_static_rodata(key, len).ok_or_else(|| {
             format!("static rodata string key {key:#x} length {len} is not registered")
         })?;
-        self.validate_storage_install(ptr, len)?;
+        // SAFETY: `lookup_static_rodata` returns a NUL-terminated static slice of `len` bytes.
+        unsafe { self.validate_storage_install(ptr, len)? };
         self.data = ptr;
         self.storage_capacity = 0;
         Ok(())
     }
 
-    fn validate_storage_install(&self, ptr: *const u8, len: usize) -> Result<(), String> {
+    /// # Safety
+    /// `ptr` must address `len + 1` initialized bytes (including the trailing NUL).
+    unsafe fn validate_storage_install(&self, ptr: *const u8, len: usize) -> Result<(), String> {
         if ptr.is_null() {
             return Err("LispString storage pointer is null".into());
         }
@@ -1003,7 +1068,8 @@ impl LispString {
     }
 
     /// True for GNU's `size_byte == -3`: unibyte bytes that must not move.
-    pub fn is_immovable(&self) -> bool {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn is_immovable(&self) -> bool {
         self.size_byte == SIZE_BYTE_UNIBYTE_IMMOVABLE
     }
 
@@ -1058,7 +1124,8 @@ impl LispString {
         !self.intervals.load(Ordering::Acquire).is_null()
     }
 
-    pub fn clear_intervals(&mut self) {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn clear_intervals(&mut self) {
         // SATB (enforced): log the children being dropped BEFORE unlinking —
         // a concurrently-claimed interval-free string is never re-traced this
         // cycle, so this log is the only thing keeping the dropped children
@@ -1125,10 +1192,17 @@ impl LispString {
     /// Pinned bytecode storage stays in place for this mutation; GNU's unibyte
     /// conversion then demotes its marker. Borrowed dump or static bytes receive
     /// a separate zero payload.
-    /// Published owners must use the `with_lisp_string_mut` mutation wrapper.
+    /// Published owners must use the `clear_string_contents` mutation wrapper.
     #[doc(hidden)]
     pub fn clear_contents_to_unibyte(&mut self) {
+        self.clear_contents_to_unibyte_allocation();
+    }
+
+    /// Return newly allocated storage so a published owner can bill the
+    /// operation without observing backing identities around an in-place edit.
+    pub(crate) fn clear_contents_to_unibyte_allocation(&mut self) -> usize {
         let len = self.sbytes();
+        let mut allocated = 0;
         self.clear_intervals();
         if len != 0 || self.is_multibyte() {
             if self.storage_capacity != 0
@@ -1143,11 +1217,13 @@ impl LispString {
                 replacement.truncate(len);
                 self.erase_owned_payload();
                 self.replace_owned_payload(replacement);
+                allocated = self.storage_capacity;
             }
             self.size = len;
             self.size_byte = SIZE_BYTE_UNIBYTE_NORMAL;
         }
         note_string_bytes_changed();
+        allocated
     }
 
     /// Mutable text-property interval tree attached to this string.
@@ -1155,10 +1231,10 @@ impl LispString {
     /// SATB enforcement lives inside `ensure_intervals` (the pre-mutation
     /// child values are logged), so no caller can drop interval children
     /// unlogged. PUBLISHED strings must still be mutated via the `mutate.rs`
-    /// wrappers (`with_string_text_props_mut` / `with_lisp_string_mut`), which
-    /// also maintain the dump remembered set + dirty-owner tracking for the
-    /// OWNER value; direct calls are only appropriate on strings not yet
-    /// reachable from the Lisp graph (fresh locals under construction).
+    /// typed wrappers, which also maintain the dump remembered set and
+    /// dirty-owner tracking for the OWNER value. Direct calls are only
+    /// appropriate on strings not yet reachable from the Lisp graph (fresh
+    /// locals under construction).
     pub fn intervals_mut(&mut self) -> &mut TextPropertyTable {
         self.ensure_intervals()
     }
@@ -1227,6 +1303,15 @@ impl LispString {
         self.storage_capacity
     }
 
+    /// Copy the identity of a published owned allocation for GC charging.
+    /// Capacity distinguishes in-place resizing; the address distinguishes
+    /// same-capacity replacement, including empty buffers whose byte slice
+    /// uses the shared empty-slice pointer. Borrowed bytes own no allocation.
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) fn owned_storage_identity(&self) -> Option<(usize, usize)> {
+        (self.storage_capacity != 0).then_some((self.data as usize, self.storage_capacity))
+    }
+
     pub(crate) fn has_owned_storage(&self) -> bool {
         self.storage_capacity != 0
     }
@@ -1250,7 +1335,8 @@ impl LispString {
     /// makes. [`Self::mutate_bytes`] would pop and re-push the trailing NUL
     /// and recount a multibyte string's characters (a scan of the whole
     /// string per `aset`).
-    pub fn set_byte_same_char_count(&mut self, byte_pos: usize, byte: u8) {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn set_byte_same_char_count(&mut self, byte_pos: usize, byte: u8) {
         debug_assert!(byte_pos < self.sbytes(), "byte position in range");
         debug_assert!(
             !self.is_multibyte() || (byte < 0x80 && self.as_bytes()[byte_pos] < 0x80),
@@ -1262,6 +1348,25 @@ impl LispString {
         self.ensure_owned();
         // SAFETY: owned storage holds `sbytes() + 1` initialized bytes.
         unsafe { *(self.data as *mut u8).add(byte_pos) = byte };
+    }
+
+    /// Edit an existing byte extent without exposing capacity or its NUL.
+    /// Restore cached character counts even when the caller unwinds.
+    pub(crate) fn mutate_fixed_bytes<R>(&mut self, f: impl FnOnce(&mut [u8]) -> R) -> R {
+        if self.is_rodata() {
+            self.size_byte = SIZE_BYTE_UNIBYTE_NORMAL;
+        }
+        self.ensure_owned();
+        let byte_len = self.sbytes();
+        let guard = FixedStringBytesGuard {
+            string: self,
+            byte_len,
+        };
+        // SAFETY: owned storage has byte_len + 1 initialized bytes, and this
+        // exclusive loan excludes the trailing NUL and cannot grow the backing.
+        let bytes =
+            unsafe { std::slice::from_raw_parts_mut(guard.string.data as *mut u8, byte_len) };
+        f(bytes)
     }
 
     pub fn mutate_bytes<R>(&mut self, f: impl FnOnce(&mut Vec<u8>) -> R) -> R {
@@ -1672,7 +1777,7 @@ pub enum OverlaySerialSource {
 /// is atomic so the World is ready for several mutators; ordering between
 /// distinct serials only needs the atomic read-modify-write, hence `Relaxed`.
 #[derive(Debug, Default)]
-pub struct OverlaySerialCounter(std::sync::atomic::AtomicU64);
+pub(crate) struct OverlaySerialCounter(std::sync::atomic::AtomicU64);
 
 impl OverlaySerialCounter {
     pub const fn new() -> Self {
@@ -1682,7 +1787,7 @@ impl OverlaySerialCounter {
     /// Issue the next creation serial. The counter stores the last issued
     /// value; a `fetch_add` therefore yields the successor.
     #[inline]
-    pub fn mint(&self) -> OverlaySerial {
+    pub(crate) fn mint(&self) -> OverlaySerial {
         let next = self
             .0
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
@@ -1810,7 +1915,7 @@ impl MarkerBuffer {
     }
 
     #[inline]
-    pub const fn is_attached(self) -> bool {
+    pub(crate) const fn is_attached(self) -> bool {
         self.0.is_some()
     }
 
@@ -1842,10 +1947,10 @@ const MARKER_LINK_LAST_POSITION_VALID: usize = 0b010;
 const MARKER_LINK_CHAINED: usize = 0b100;
 
 impl MarkerLink {
-    pub const NONE: Self = Self(0);
+    pub(crate) const NONE: Self = Self(0);
 
     #[inline]
-    pub fn from_ptr(next: *mut crate::tagged::header::MarkerObj) -> Self {
+    pub(crate) fn from_ptr(next: *mut crate::tagged::header::MarkerObj) -> Self {
         debug_assert_eq!(
             next as usize & MARKER_LINK_FLAG_BITS,
             0,
@@ -1855,7 +1960,7 @@ impl MarkerLink {
     }
 
     #[inline]
-    pub const fn next_ptr(self) -> *mut crate::tagged::header::MarkerObj {
+    pub(crate) const fn next_ptr(self) -> *mut crate::tagged::header::MarkerObj {
         (self.0 & !MARKER_LINK_FLAG_BITS) as *mut _
     }
 
@@ -1882,7 +1987,7 @@ impl MarkerLink {
     }
 
     #[inline]
-    pub fn with_next(self, next: *mut crate::tagged::header::MarkerObj) -> Self {
+    pub(crate) fn with_next(self, next: *mut crate::tagged::header::MarkerObj) -> Self {
         debug_assert_eq!(
             next as usize & MARKER_LINK_FLAG_BITS,
             0,
@@ -1892,7 +1997,7 @@ impl MarkerLink {
     }
 
     #[inline]
-    pub const fn with_insertion_type(self, value: bool) -> Self {
+    pub(crate) const fn with_insertion_type(self, value: bool) -> Self {
         if value {
             Self(self.0 | MARKER_LINK_INSERTION_TYPE)
         } else {
@@ -1901,7 +2006,7 @@ impl MarkerLink {
     }
 
     #[inline]
-    pub const fn with_last_position_valid(self, value: bool) -> Self {
+    pub(crate) const fn with_last_position_valid(self, value: bool) -> Self {
         if value {
             Self(self.0 | MARKER_LINK_LAST_POSITION_VALID)
         } else {
@@ -1910,7 +2015,7 @@ impl MarkerLink {
     }
 
     #[inline]
-    pub const fn with_chained(self, value: bool) -> Self {
+    pub(crate) const fn with_chained(self, value: bool) -> Self {
         if value {
             Self(self.0 | MARKER_LINK_CHAINED)
         } else {
@@ -2034,6 +2139,14 @@ mod signed_string_positions_tests;
 #[cfg(test)]
 #[path = "heap_types/tests/character_count_kind.rs"]
 mod character_count_kind_tests;
+
+#[cfg(test)]
+#[path = "heap_types/tests/mapped_dump_len.rs"]
+mod mapped_dump_len_tests;
+
+#[cfg(test)]
+#[path = "heap_types/tests/string_dump_contract.rs"]
+mod string_dump_contract;
 
 /// Unique identifier for a process.
 ///

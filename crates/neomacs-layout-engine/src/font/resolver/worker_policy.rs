@@ -87,8 +87,37 @@ impl FrozenCharacterPolicies {
         })
     }
 
+    #[cfg(test)]
     pub(crate) fn capture(
         requests: &[(&str, char, u16, bool, FontSelectionSize)],
+        max_bytes: usize,
+    ) -> Result<Self, FontPolicyCaptureError> {
+        let stamped: Vec<_> = requests
+            .iter()
+            .copied()
+            .map(|(family, ch, weight, italic, size)| {
+                (
+                    family,
+                    ch,
+                    weight,
+                    italic,
+                    size,
+                    crate::font::fallback_order::FaceFontsetId::default(),
+                )
+            })
+            .collect();
+        Self::capture_for_fontsets(&stamped, max_bytes)
+    }
+
+    pub(crate) fn capture_for_fontsets(
+        requests: &[(
+            &str,
+            char,
+            u16,
+            bool,
+            FontSelectionSize,
+            crate::font::fallback_order::FaceFontsetId,
+        )],
         max_bytes: usize,
     ) -> Result<Self, FontPolicyCaptureError> {
         let generation = FontSelectionRevision::try_from(fontset_generation())
@@ -98,7 +127,7 @@ impl FrozenCharacterPolicies {
             queries: HashMap::default(),
             bytes: std::mem::size_of::<Self>(),
         };
-        for &(family, ch, weight, italic, size) in requests {
+        for &(family, ch, weight, italic, size, fontset) in requests {
             if ch.is_ascii() {
                 continue;
             }
@@ -116,6 +145,7 @@ impl FrozenCharacterPolicies {
                 FontSlant::Normal
             };
             let key = CharCacheKey {
+                fontset,
                 family: family.to_owned(),
                 ch,
                 weight,
@@ -226,6 +256,7 @@ impl CapturedCharacterPolicy {
             slant: style.slant,
             width: style.width,
             size: key.size,
+            otf: None,
         }
         .with_spec(spec.into())
     }
@@ -273,48 +304,83 @@ impl FontResolver {
     pub(super) fn resolve_worker_character(
         &self,
         mut key: CharCacheKey,
-    ) -> Option<PlatformFontMatch> {
-        let state = self.worker_policy.as_ref()?;
+    ) -> super::CharacterResolution {
+        let Some(state) = self.worker_policy.as_ref() else {
+            return super::CharacterResolution::none();
+        };
         key.fontset_generation = state.policies.generation.get();
         let Some(query) = state.policies.queries.get(&key) else {
             state.missing.store(true, Ordering::Relaxed);
-            return None;
+            return super::CharacterResolution::none();
         };
-        if let Ok(cache) = self.char_cache.lock()
-            && let Some(cached) = cache.get(&key)
-        {
-            return cached.clone();
+        let Some(style) = WorkerFontStyle::from_key(&key) else {
+            return super::CharacterResolution::none();
+        };
+        let order_key = crate::font::fallback_order::FallbackOrderKey {
+            fontset: key.fontset,
+            family: key.family.clone(),
+            weight: key.weight,
+            slant: key.slant,
+            width: key.width,
+            size: Some(key.size),
+            fontset_generation: key.fontset_generation,
+        };
+        if let Some(cached) = self.cached_character(&key) {
+            return cached;
         }
-        let style = WorkerFontStyle::from_key(&key)?;
-        let selected = self
-            .resolve_frozen_query(&key, query, &style)
-            .and_then(|matched| self.backend.finalize_match(matched))
-            .map(|matched| self.with_native_metrics(matched));
-        if let Ok(mut cache) = self.char_cache.lock() {
-            cache.insert(key, selected.clone());
+        let (selected, fallback) = self.resolve_frozen_query(&key, query, &style, &order_key);
+        let fallback =
+            fallback.map(
+                |(winner, generation)| crate::font::fallback_order::FallbackAnswerStamp {
+                    order_key,
+                    winner,
+                    generation,
+                },
+            );
+        self.store_character(key, fallback.clone(), selected.clone());
+        super::CharacterResolution {
+            font: selected,
+            fallback,
         }
-        selected
     }
 
+    /// Specific group, then the shared fallback order. A failed open tries the
+    /// next entry and does not move. Only a fallback that finishes moves.
     fn resolve_frozen_query(
         &self,
         key: &CharCacheKey,
         query: &FrozenCharacterQuery,
         style: &WorkerFontStyle,
-    ) -> Option<PlatformFontCandidate> {
+        order_key: &crate::font::fallback_order::FallbackOrderKey,
+    ) -> (
+        Option<PlatformFontMatch>,
+        Option<(FontSpecEntry, crate::font::fallback_order::OrderGeneration)>,
+    ) {
         let prefer_monospace = self.family_prefers_monospace(&key.family);
-        for entry in query.chain.iter() {
+        let (specific, fallback) = query.chain.rendering_groups();
+        for (_, entry) in specific {
             match entry {
-                FontsetRenderingEntry::ExplicitNone => return None,
+                FontsetRenderingEntry::ExplicitNone => return (None, None),
                 FontsetRenderingEntry::Font(spec) => {
-                    let policy = CapturedCharacterPolicy::from_rendering_spec(
-                        key,
-                        &query.inherited,
-                        style,
-                        spec,
-                    );
-                    if let Some(matched) = self.resolve_from_policy(&policy, prefer_monospace) {
-                        return Some(matched);
+                    if let Some(font) =
+                        self.open_rendering_entry(key, query, style, &spec, prefer_monospace)
+                    {
+                        return (Some(font), None);
+                    }
+                }
+            }
+        }
+        let ordered = order_fallback_pairs(order_key, fallback);
+        for (spec, entry) in ordered {
+            match entry {
+                FontsetRenderingEntry::ExplicitNone => return (None, None),
+                FontsetRenderingEntry::Font(rendering) => {
+                    if let Some(font) =
+                        self.open_rendering_entry(key, query, style, &rendering, prefer_monospace)
+                    {
+                        let generation =
+                            crate::font::fallback_order::promote_fallback(order_key, &spec);
+                        return (Some(font), Some((spec, generation)));
                     }
                 }
             }
@@ -326,11 +392,41 @@ impl FontResolver {
             weight: None,
             slant: None,
             width: None,
+            otf: None,
         };
-        let policy =
-            CapturedCharacterPolicy::from_rendering_spec(key, &query.inherited, style, &fallback);
-        self.resolve_from_policy(&policy, prefer_monospace)
+        let font = self.open_rendering_entry(key, query, style, &fallback, prefer_monospace);
+        (font, None)
     }
+
+    fn open_rendering_entry(
+        &self,
+        key: &CharCacheKey,
+        query: &FrozenCharacterQuery,
+        style: &WorkerFontStyle,
+        spec: &FontsetRenderingSpec,
+        prefer_monospace: bool,
+    ) -> Option<PlatformFontMatch> {
+        let policy =
+            CapturedCharacterPolicy::from_rendering_spec(key, &query.inherited, style, spec);
+        self.resolve_spec(policy, prefer_monospace, key.fontset_generation)
+            .and_then(|resolution| self.finish_character_resolution(Some(resolution)))
+    }
+}
+
+fn order_fallback_pairs(
+    key: &crate::font::fallback_order::FallbackOrderKey,
+    pairs: Vec<(FontSpecEntry, FontsetRenderingEntry)>,
+) -> Vec<(FontSpecEntry, FontsetRenderingEntry)> {
+    let specs = pairs.iter().map(|(spec, _)| spec.clone()).collect();
+    let ordered = crate::font::fallback_order::order_fallback_group(key, specs);
+    let mut remaining = pairs;
+    let mut out = Vec::with_capacity(ordered.len());
+    for spec in ordered {
+        if let Some(index) = remaining.iter().position(|(entry, _)| entry == &spec) {
+            out.push(remaining.remove(index));
+        }
+    }
+    out
 }
 
 #[cfg(test)]

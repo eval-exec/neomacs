@@ -19,12 +19,12 @@
 //! agree with the rasterized result.
 
 use std::fs::File;
-use std::io::BufReader;
+use std::io::{BufRead, BufReader};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
 use neomacs_display_protocol::{
-    ImageIntrinsicExtent, ImageLayoutExtent, ImageNativeExtent, ImageRealization, ImageRotation,
-    ImageSizeLimit, ImageSizeSpec, OversizedImage,
+    ImageFrameIndex, ImageIntrinsicExtent, ImageLayoutExtent, ImageNativeExtent, ImageRealization,
+    ImageRotation, ImageSizeLimit, ImageSizeSpec, OversizedImage,
 };
 
 /// Encoded image to measure without decoding it.
@@ -34,6 +34,14 @@ pub enum ImageProbeSource<'a> {
     File(&'a str),
     /// Encoded bytes, as held by an image `:data` spec.
     Data(&'a [u8]),
+}
+
+/// Both TIFF header versions supported by the selected-directory decoder.
+/// `image::guess_format` recognizes classic TIFF only, even though its TIFF
+/// decoder supports BigTIFF too. Admission and decoding must share this gate.
+pub(crate) fn has_tiff_signature(data: &[u8]) -> bool {
+    data.get(..4)
+        .is_some_and(|signature| matches!(signature, b"II*\0" | b"MM\0*" | b"II+\0" | b"MM\0+"))
 }
 
 /// GNU `check_image_size` (`src/image.c:1811-1836`) at the point this port can
@@ -57,7 +65,16 @@ pub enum ImageProbeSource<'a> {
 ///
 /// Returns the measurement that exceeded the limit, as [`OversizedImage`].
 pub fn admit(source: ImageProbeSource<'_>, limit: ImageSizeLimit) -> Result<(), OversizedImage> {
-    let Some(intrinsic) = probe_intrinsic_extent(source) else {
+    admit_frame(source, ImageFrameIndex::new(0), limit)
+}
+
+/// Apply GNU's size bound to the selected TIFF directory before decoding it.
+pub fn admit_frame(
+    source: ImageProbeSource<'_>,
+    frame: ImageFrameIndex,
+    limit: ImageSizeLimit,
+) -> Result<(), OversizedImage> {
+    let Some(intrinsic) = probe_frame_intrinsic_extent(source, frame) else {
         return Ok(());
     };
     let native = intrinsic.native_ceiling();
@@ -83,6 +100,47 @@ pub(crate) fn probe_intrinsic_extent(source: ImageProbeSource<'_>) -> Option<Ima
     .flatten()
 }
 
+fn probe_frame_intrinsic_extent(
+    source: ImageProbeSource<'_>,
+    frame: ImageFrameIndex,
+) -> Option<ImageIntrinsicExtent> {
+    if frame.is_first()
+        && let Some(intrinsic) = probe_intrinsic_extent(source)
+    {
+        return Some(intrinsic);
+    }
+    // A readable TIFF page can have a corrupt next link which the generic
+    // decoder rejects while opening its header. The selected-page adapter
+    // isolates that link, and must still enforce admission before allocation.
+    catch_unwind(AssertUnwindSafe(|| match source {
+        ImageProbeSource::Data(data) => {
+            if has_tiff_signature(data) {
+                crate::image_sequence::probe_tiff_frame(data, frame).map(Into::into)
+            } else {
+                data_intrinsic_extent(data)
+            }
+        }
+        ImageProbeSource::File(path) => {
+            let mut reader = BufReader::new(File::open(path).ok()?);
+            if has_tiff_signature(reader.fill_buf().ok()?) {
+                let data = std::fs::read(path).ok()?;
+                crate::image_sequence::probe_tiff_frame(&data, frame).map(Into::into)
+            } else {
+                let mut decoder = image::ImageReader::new(reader);
+                // Preserve ImageReader::open's extension fallback for formats
+                // without a recognizable magic signature.
+                if let Ok(format) = image::ImageFormat::from_path(path) {
+                    decoder.set_format(format);
+                }
+                let (width, height) = decoder.with_guessed_format().ok()?.into_dimensions().ok()?;
+                Some(ImageNativeExtent::new(width, height).into())
+            }
+        }
+    }))
+    .ok()
+    .flatten()
+}
+
 /// Layout extent for `source` resolved from its encoded header alone.
 ///
 /// The caller may place an image with this before any pixel exists. It must
@@ -96,7 +154,19 @@ pub fn probe_image_layout(
     rotation: ImageRotation,
     realization: ImageRealization,
 ) -> Option<ImageLayoutExtent> {
-    let intrinsic = probe_intrinsic_extent(source)?;
+    probe_image_layout_for_frame(source, ImageFrameIndex::new(0), size, rotation, realization)
+}
+
+/// Provisional geometry follows the same selected TIFF page as its decoder.
+#[must_use]
+pub fn probe_image_layout_for_frame(
+    source: ImageProbeSource<'_>,
+    frame: ImageFrameIndex,
+    size: ImageSizeSpec,
+    rotation: ImageRotation,
+    realization: ImageRealization,
+) -> Option<ImageLayoutExtent> {
+    let intrinsic = probe_frame_intrinsic_extent(source, frame)?;
     Some(
         realization
             .resolve_geometry(size, intrinsic, rotation)

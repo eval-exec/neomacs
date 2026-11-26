@@ -11,6 +11,7 @@ use crate::emacs_core::bytecode::Vm;
 use crate::emacs_core::eval::Context;
 use crate::emacs_core::print::print_value;
 use crate::emacs_core::subr::leaf::{Containment, LEAVES, LeafEntry, LeafExit, LeafId, LeafShape};
+use neovm_value::intern::intern;
 use neovm_value::value::LambdaParams;
 
 fn lexical_fn(nargs: u32, ops: Vec<Op>, constants: Vec<Value>) -> ByteCodeFunction {
@@ -25,10 +26,10 @@ fn lexical_fn(nargs: u32, ops: Vec<Op>, constants: Vec<Value>) -> ByteCodeFuncti
         optional: Vec::new(),
         rest: None,
     });
-    f.lexical = true;
-    f.ops = ops;
-    f.constants = constants.into();
-    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(8);
+    f.set_lexical(true);
+    f.set_ops(ops);
+    f.set_constants(constants.into());
+    f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(8));
     f
 }
 
@@ -62,7 +63,7 @@ fn interpret(eval: &mut Context, f: &ByteCodeFunction, args: Vec<Value>) -> Stri
 }
 
 fn native(ctx_ptr: *mut u8, leaf: &CompiledLeaf, args: &[Value], what: &str) -> String {
-    match leaf.call(ctx_ptr, args) {
+    match unsafe { leaf.call(ctx_ptr, args) } {
         NativeRun::Ok(bits) => print_value(&unsafe {
             /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
             Value::from_bits(bits)
@@ -431,7 +432,7 @@ fn leaf_signals_are_caught_by_a_leaf_local_handler() {
             want.starts_with("(caught (wrong-type-argument"),
             "{op:?}: {want}"
         );
-        match leaf.call(ctx_ptr, &[a, b]) {
+        match unsafe { leaf.call(ctx_ptr, &[a, b]) } {
             NativeRun::Ok(bits) => {
                 assert_eq!(
                     print_value(&unsafe {
@@ -481,7 +482,7 @@ fn leaf_site_signal_edge_keeps_the_residual_alive() {
     let calls0 = leaf_trampoline_calls(LeafId::Nth);
     for _ in 0..3 {
         let l = eval.eval_str("(cons 'a 'b)").expect("improper");
-        match leaf.call(ctx_ptr, &[Value::fixnum(3), l]) {
+        match unsafe { leaf.call(ctx_ptr, &[Value::fixnum(3), l]) } {
             NativeRun::Ok(bits) => {
                 let h = unsafe {
                     /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
@@ -530,8 +531,8 @@ fn bcall_fn(callee: &str, nargs: usize) -> ByteCodeFunction {
     }
     ops.push(Op::Call(nargs as u16));
     ops.push(Op::Return);
-    let mut f = lexical_fn(nargs as u32, ops, vec![Value::symbol(callee)]);
-    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
+    let mut f = lexical_fn(nargs as u32, ops, vec![Value::from_sym_id(intern(callee))]);
+    f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
     f
 }
 
@@ -854,7 +855,7 @@ fn a_bcall_leaf_signal_edge_keeps_the_residual_alive() {
             Value::symbol("gethash"),
         ],
     );
-    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
+    f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
     let leaf = compile_bcall_with_knob(&ev, &f, bcall_knob());
     ev.eval_str(
         "(setq signal-hook-function
@@ -863,7 +864,7 @@ fn a_bcall_leaf_signal_edge_keeps_the_residual_alive() {
     .expect("hook");
     let runs0 = leaf_trampoline_calls(LeafId::Gethash);
     for _ in 0..3 {
-        match leaf.call(ctx_ptr, &[Value::fixnum(1), Value::fixnum(5)]) {
+        match unsafe { leaf.call(ctx_ptr, &[Value::fixnum(1), Value::fixnum(5)]) } {
             NativeRun::Ok(bits) => {
                 let r = unsafe {
                     /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
@@ -1179,4 +1180,165 @@ fn subr_site_slots_keep_their_binding_words() {
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| slot.clear_leaf())).is_err(),
         "clear_leaf refuses a subr site's slot"
     );
+}
+
+#[test]
+fn jit_sentinels_and_backtrace_args_are_not_dead() {
+    use super::leaf_abi::{LEAF_NEED_GENERIC, LEAF_SIGNAL};
+    use crate::emacs_core::eval::{BacktraceArgs, BytecodeBacktraceSpan};
+    // SAFETY: bit-pattern identity checks via `is_dead()` only; never dereferenced.
+    assert!(
+        !unsafe { Value::from_bits(VALUE_SHIM_SIGNAL as usize) }.is_dead(),
+        "VALUE_SHIM_SIGNAL must never satisfy is_dead()"
+    );
+    assert!(
+        !unsafe { Value::from_bits(LEAF_SIGNAL as usize) }.is_dead(),
+        "LEAF_SIGNAL must never satisfy is_dead()"
+    );
+    assert!(
+        !unsafe { Value::from_bits(LEAF_NEED_GENERIC as usize) }.is_dead(),
+        "LEAF_NEED_GENERIC must never satisfy is_dead()"
+    );
+    assert!(
+        !unsafe { Value::from_bits(BacktraceArgs::evaluated0().raw_bits()) }.is_dead(),
+        "BacktraceArgs::evaluated0() must never satisfy is_dead()"
+    );
+    assert!(
+        !unsafe { Value::from_bits(BacktraceArgs::evaluated(0).raw_bits()) }.is_dead(),
+        "BacktraceArgs::evaluated(0) must never satisfy is_dead()"
+    );
+    assert!(
+        !unsafe {
+            Value::from_bits(
+                BacktraceArgs::evaluated_bc_stack(
+                    BytecodeBacktraceSpan::try_new(0, 0).expect("span"),
+                )
+                .raw_bits(),
+            )
+        }
+        .is_dead(),
+        "BacktraceArgs::evaluated_bc_stack(0) must never satisfy is_dead()"
+    );
+}
+
+#[test]
+fn value_shim_return_site_does_not_treat_dead_word_as_signal() {
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
+    let ctx_ptr = &mut ev as *mut Context as *mut u8;
+    // SAFETY: constructing DEAD sentinel bits solely to verify that the
+    // value-shim return check (`lowering.rs` Op::Aref) does not misclassify it
+    // as VALUE_SHIM_SIGNAL; the word is never dereferenced as a heap object.
+    let dead = unsafe { Value::from_bits(Value::dead_sentinel_bits()) };
+    assert!(dead.is_dead());
+    // A char-table bypasses inline vector/record/string aref and always enters
+    // the value shim `neovm_jit_aref`, returning its default slot (`dead`)
+    // directly to the JIT return-word check.
+    let ct = ev
+        .eval_str("(make-char-table 'generic)")
+        .expect("char-table");
+    assert!(
+        ct.with_char_table_mut(|mut t| {
+            t.set_default(dead);
+        })
+        .is_some()
+    );
+    crate::emacs_core::eval::push_scratch_gc_root(ct);
+
+    let f = opcode_fn(Op::Aref, 2);
+    let leaf = compile_with_knob(&f, LeafKnob::OFF);
+    // SAFETY: live Context and rooted args for compiled native entry.
+    let run = unsafe { leaf.call(ctx_ptr, &[ct, Value::fixnum(0)]) };
+    match run {
+        NativeRun::Ok(bits) => {
+            assert_eq!(bits, Value::dead_sentinel_bits());
+            assert!(unsafe { Value::from_bits(bits) }.is_dead());
+        }
+        other => panic!("value shim return site misclassified DEAD word: {other:?}"),
+    }
+}
+
+#[test]
+fn bare_opcode_leaf_return_site_does_not_treat_dead_word_as_signal() {
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
+    let ctx_ptr = &mut ev as *mut Context as *mut u8;
+    // SAFETY: sentinel word only; `nth` copies the car word without deref.
+    let dead = unsafe { Value::from_bits(Value::dead_sentinel_bits()) };
+    let list = Value::cons(dead, Value::NIL);
+    crate::emacs_core::eval::push_scratch_gc_root(list);
+
+    let f = opcode_fn(Op::Nth, 2);
+    let leaf = compile_with_knob(
+        &f,
+        LeafKnob {
+            opcode: true,
+            ..LeafKnob::OFF
+        },
+    );
+    let runs0 = leaf_trampoline_calls(LeafId::Nth);
+    // SAFETY: live Context and rooted args for compiled native entry.
+    let run = unsafe { leaf.call(ctx_ptr, &[Value::fixnum(0), list]) };
+    assert!(
+        leaf_trampoline_calls(LeafId::Nth) > runs0,
+        "Op::Nth must engage the bare opcode leaf trampoline"
+    );
+    match run {
+        NativeRun::Ok(bits) => {
+            assert_eq!(bits, Value::dead_sentinel_bits());
+            assert!(unsafe { Value::from_bits(bits) }.is_dead());
+        }
+        other => panic!("bare opcode leaf return site misclassified DEAD word: {other:?}"),
+    }
+}
+
+#[test]
+fn bcall_leaf_return_site_does_not_treat_dead_word_as_signal_or_generic() {
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
+    let ctx_ptr = &mut ev as *mut Context as *mut u8;
+    // SAFETY: sentinel word only; `gethash` reads the stored value word without deref.
+    let dead = unsafe { Value::from_bits(Value::dead_sentinel_bits()) };
+    let table = ev.eval_str("(make-hash-table)").expect("table");
+    assert!(
+        neovm_value::tagged::mutate::with_hash_table_mut(table, |ht| {
+            ht.insert(neovm_value::value::HashKey::Int(1), Value::fixnum(1), dead);
+        })
+        .is_some()
+    );
+    crate::emacs_core::eval::push_scratch_gc_root(table);
+
+    let f = bcall_fn("gethash", 2);
+    let leaf = compile_bcall_with_knob(&ev, &f, bcall_knob());
+    let runs0 = leaf_trampoline_calls(LeafId::Gethash);
+    let generic0 = LEAF_STATS[LeafId::Gethash.index()]
+        .generic
+        .load(Ordering::Relaxed);
+    let signal0 = LEAF_STATS[LeafId::Gethash.index()]
+        .signal
+        .load(Ordering::Relaxed);
+    // SAFETY: live Context and rooted args for compiled native entry.
+    let run = unsafe { leaf.call(ctx_ptr, &[Value::fixnum(1), table]) };
+    assert!(
+        leaf_trampoline_calls(LeafId::Gethash) > runs0,
+        "gethash must engage the Bcall leaf trampoline"
+    );
+    assert_eq!(
+        LEAF_STATS[LeafId::Gethash.index()]
+            .generic
+            .load(Ordering::Relaxed),
+        generic0,
+        "Bcall leaf must not classify DEAD as LEAF_NEED_GENERIC"
+    );
+    assert_eq!(
+        LEAF_STATS[LeafId::Gethash.index()]
+            .signal
+            .load(Ordering::Relaxed),
+        signal0,
+        "Bcall leaf must not classify DEAD as LEAF_SIGNAL"
+    );
+    match run {
+        NativeRun::Ok(bits) => {
+            assert_eq!(bits, Value::dead_sentinel_bits());
+            assert!(unsafe { Value::from_bits(bits) }.is_dead());
+        }
+        other => panic!("Bcall leaf return site misclassified DEAD word: {other:?}"),
+    }
 }

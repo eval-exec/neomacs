@@ -5,7 +5,8 @@ use crate::emacs_core::eval::Context;
 use neovm_value::value::Value;
 
 fn preflight(sequence: Value) -> i64 {
-    neovm_jit_hof_length(sequence.bits() as i64)
+    // SAFETY: `sequence` is a live Value word the caller owns.
+    unsafe { neovm_jit_hof_length(sequence.bits() as i64) }
 }
 
 fn tail_at(mut sequence: Value, offset: usize) -> Value {

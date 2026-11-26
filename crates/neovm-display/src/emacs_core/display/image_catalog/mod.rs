@@ -143,7 +143,7 @@ impl ImageScaleEnvironment {
 
     /// Attach the frame's resolved `max-image-size` bound.
     #[must_use]
-    pub const fn with_size_limit(mut self, size_limit: ImageSizeLimit) -> Self {
+    pub(crate) const fn with_size_limit(mut self, size_limit: ImageSizeLimit) -> Self {
         self.size_limit = size_limit;
         self
     }
@@ -237,7 +237,7 @@ pub fn image_scale_environment(
 /// redisplay. `DEFVAR_LISP` keeps it out of every buffer, so there is no
 /// buffer-local case to consider.
 #[must_use]
-pub fn image_size_limit(
+pub(crate) fn image_size_limit(
     frame: &Frame,
     vars: neovm_eval::emacs_core::eval::VariableView<'_>,
 ) -> ImageSizeLimit {
@@ -292,10 +292,12 @@ pub fn numeric_image_scale(value: Value) -> Option<ImageScaleFactor> {
         .flatten()
 }
 
+pub use neomacs_display_protocol::{FailedImageExtent, ImageGlyphPresentation};
 pub use neovm_eval::emacs_core::eval::protocol::image_catalog::{
     FailedImage, ImageAnimationInvalidation, ImageBaseUri, ImageCatalog, ImageDataSource,
     ImageFileName, ImageInvalidation, ImageInvalidationResult, ImageLookup, ImagePlacement,
-    ImageResolveRequest, ImageResolveSource, PendingImage, ReadyImage, ResolvedImageMetadata,
+    ImageResolveRequest, ImageResolveSource, ImageSyncResolution, PendingImage, ReadyImage,
+    ResolvedImageMetadata,
 };
 pub use neovm_value::image_identity::ImageSpecIdentity;
 

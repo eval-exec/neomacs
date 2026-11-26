@@ -219,9 +219,7 @@ fn disabled_mode_saves_original_unformatted_content_and_does_not_run_program() -
       (kill-buffer buffer))
     (astyle-test-kill-error-buffer)))
 "##,
-        expect![[
-            r#"OK (nil #("int main(){\nreturn 0;\n}\n/* raw */\n" 0 24 (fontified nil) 24 34 (fontified nil)) "int main(){\nreturn 0;\n}\n/* raw */\n" nil nil)"#
-        ]],
+        expect![[r#"OK (nil "int main(){\nreturn 0;\n}\n/* raw */\n" "int main(){\nreturn 0;\n}\n/* raw */\n" nil nil)"#]],
     )
     .fresh_process()
 }
@@ -281,9 +279,7 @@ fn formatter_failure_during_save_keeps_raw_content_but_save_still_completes() ->
       (kill-buffer buffer))
     (astyle-test-kill-error-buffer)))
 "##,
-        expect![[
-            r#"OK (#("int main(){\nreturn 0;\n}\n/* failure still saves */\n" 0 24 (fontified nil) 24 50 (fontified nil)) "int main(){\nreturn 0;\n}\n/* failure still saves */\n" "--style=google\n--indent=spaces=4\n--pad-oper\n--pad-header\n--break-blocks\n--delete-empty-lines\n--align-pointer=type\n--align-reference=name\n" nil nil "fixture formatter failed\n")"#
-        ]],
+        expect![[r#"OK ("int main(){\nreturn 0;\n}\n/* failure still saves */\n" "int main(){\nreturn 0;\n}\n/* failure still saves */\n" "--style=google\n--indent=spaces=4\n--pad-oper\n--pad-header\n--break-blocks\n--delete-empty-lines\n--align-pointer=type\n--align-reference=name\n" nil nil "fixture formatter failed\n")"#]],
     )
     .fresh_process()
 }

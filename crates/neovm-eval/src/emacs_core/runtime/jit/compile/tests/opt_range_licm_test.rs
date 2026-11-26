@@ -254,7 +254,7 @@ fn opt_range_native_real_interval_guards_prove_add_sub_mul_endpoints() {
             // to the original GNU operation and derives its answer in Tier0.
             let outside = [Value::fixnum(9), Value::fixnum(1)];
             let NativeRun::DeoptAt(base_exit) =
-                baseline.call(&mut ctx as *mut Context as *mut u8, &outside)
+                (unsafe { baseline.call(&mut ctx as *mut Context as *mut u8, &outside) })
             else {
                 panic!("real interval guard is executable")
             };
@@ -277,7 +277,7 @@ fn opt_range_native_real_interval_guards_prove_add_sub_mul_endpoints() {
                 }
             }
             let NativeRun::DeoptAt(exit) =
-                candidate.call(&mut ctx as *mut Context as *mut u8, &outside)
+                (unsafe { candidate.call(&mut ctx as *mut Context as *mut u8, &outside) })
             else {
                 panic!("arithmetic check erasure cannot erase input guard")
             };
@@ -332,7 +332,8 @@ fn opt_range_native_branch_sibling_proof_does_not_leak() {
     let args = [Value::fixnum(Value::MOST_POSITIVE_FIXNUM)];
     let expected = tier0(&mut ctx, &source, &args).unwrap();
     let _expected = Roots::new(&[expected]);
-    let NativeRun::DeoptAt(base_exit) = baseline.call(&mut ctx as *mut Context as *mut u8, &args)
+    let NativeRun::DeoptAt(base_exit) =
+        (unsafe { baseline.call(&mut ctx as *mut Context as *mut u8, &args) })
     else {
         panic!("baseline sibling must preserve the actual fixnum promotion")
     };
@@ -351,7 +352,8 @@ fn opt_range_native_branch_sibling_proof_does_not_leak() {
         &candidate,
         &[Value::fixnum(Value::MOST_POSITIVE_FIXNUM - 1)],
     );
-    let NativeRun::DeoptAt(exit) = candidate.call(&mut ctx as *mut Context as *mut u8, &args)
+    let NativeRun::DeoptAt(exit) =
+        (unsafe { candidate.call(&mut ctx as *mut Context as *mut u8, &args) })
     else {
         panic!("true-edge range proof cannot escape into the unsafe sibling")
     };
@@ -487,7 +489,7 @@ fn opt_range_native_cold_overflow_after_store_and_gc_keeps_full_frame() {
             ctx.obarray
                 .set_symbol_value("t34-o33-effects", Value::fixnum(0));
             let NativeRun::DeoptAt(base_exit) =
-                baseline.call(&mut ctx as *mut Context as *mut u8, &args)
+                (unsafe { baseline.call(&mut ctx as *mut Context as *mut u8, &args) })
             else {
                 panic!("actual baseline promotion exit occurs after store/GC")
             };
@@ -508,7 +510,7 @@ fn opt_range_native_cold_overflow_after_store_and_gc_keeps_full_frame() {
             ctx.obarray
                 .set_symbol_value("t34-o33-effects", Value::fixnum(0));
             let NativeRun::DeoptAt(exit) =
-                candidate.call(&mut ctx as *mut Context as *mut u8, &args)
+                (unsafe { candidate.call(&mut ctx as *mut Context as *mut u8, &args) })
             else {
                 panic!("later overflow remains checked")
             };
@@ -582,7 +584,8 @@ fn opt_range_native_force_deopt_replays_remaining_type_guard() {
     force_deopt_for_test(false);
     for value in [Value::MOST_NEGATIVE_FIXNUM, 0, Value::MOST_POSITIVE_FIXNUM] {
         let args = [Value::fixnum(value)];
-        let NativeRun::DeoptAt(exit) = forced.call(&mut ctx as *mut Context as *mut u8, &args)
+        let NativeRun::DeoptAt(exit) =
+            (unsafe { forced.call(&mut ctx as *mut Context as *mut u8, &args) })
         else {
             panic!("forced remaining real type guard must recover")
         };
@@ -739,7 +742,8 @@ fn opt_licm_native_body_guards_preserve_zero_trip_and_late_effect() {
     let expected_side = ctx.obarray.symbol_value_copied("t34-o335-side").unwrap();
     let _side = Roots::new(&[expected_side]);
     ctx.obarray.set_symbol_value("t34-o335-side", Value::NIL);
-    let NativeRun::DeoptAt(base_exit) = baseline.call(&mut ctx as *mut Context as *mut u8, &args)
+    let NativeRun::DeoptAt(base_exit) =
+        (unsafe { baseline.call(&mut ctx as *mut Context as *mut u8, &args) })
     else {
         panic!("baseline original late type guard must exit after store")
     };
@@ -773,7 +777,8 @@ fn opt_licm_native_body_guards_preserve_zero_trip_and_late_effect() {
         panic!("reference retains original body-only type guard")
     };
     ctx.obarray.set_symbol_value("t34-o335-side", Value::NIL);
-    let NativeRun::DeoptAt(exit) = candidate.call(&mut ctx as *mut Context as *mut u8, &args)
+    let NativeRun::DeoptAt(exit) =
+        (unsafe { candidate.call(&mut ctx as *mut Context as *mut u8, &args) })
     else {
         panic!("candidate cannot execute the invalid body guard early")
     };

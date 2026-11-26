@@ -1,11 +1,14 @@
 #![cfg(unix)]
 //! Exercise the real Unix PTY readers while Lisp is executing, without timing assertions.
 
-use neomacs_tui_tests::{TuiProcessOutcome, TuiSession};
+use neomacs_tui_tests::{TuiProcessOutcome, TuiSession, write_all_nonblocking_pty};
 use std::ffi::CStr;
 use std::fs::File;
-use std::io::{Read, Write};
+use std::io::Read;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 const DEADLOCK_CAP: Duration = Duration::from_secs(30);
@@ -132,14 +135,19 @@ fn busy_lisp_quits_from_raw_cg() {
     finish(editor);
 }
 
-/// Test-local OS state: owns both PTY ends, carries no Lisp values, and is used
-/// only on the fixture thread. Nonblocking mode affects its own master alone.
+/// Test-local OS state: owns both PTY ends, carries no Lisp values, and keeps
+/// its master descriptor continuously drained (like a real terminal emulator)
+/// so macOS/XNU's 1024-byte PTY output buffer cannot deadlock slave redraws or
+/// teardown while the test waits on the primary session.
 #[derive(Debug)]
 struct AuxiliaryTty {
     master: File,
     _slave: OwnedFd,
     name: String,
     output: Vec<u8>,
+    shared_output: Arc<Mutex<Vec<u8>>>,
+    stop: Arc<AtomicBool>,
+    drainer: Option<JoinHandle<()>>,
 }
 
 impl AuxiliaryTty {
@@ -198,25 +206,91 @@ impl AuxiliaryTty {
             .to_str()
             .expect("PTY name UTF-8")
             .to_owned();
+        let master = File::from(master);
+        let mut reader = master
+            .try_clone()
+            .expect("clone auxiliary PTY master for drainer");
+        let shared_output = Arc::new(Mutex::new(Vec::new()));
+        let stop = Arc::new(AtomicBool::new(false));
+        let thread_output = Arc::clone(&shared_output);
+        let thread_stop = Arc::clone(&stop);
+        let drainer = std::thread::Builder::new()
+            .name("tty-relay-aux-drainer".to_string())
+            .spawn(move || {
+                let mut bytes = [0u8; 8192];
+                while !thread_stop.load(Ordering::Acquire) {
+                    let mut pfd = libc::pollfd {
+                        fd: reader.as_raw_fd(),
+                        events: libc::POLLIN,
+                        revents: 0,
+                    };
+                    // SAFETY: `pfd` points to a single valid `pollfd` for the
+                    // live owned `reader` descriptor.
+                    let rc = unsafe { libc::poll(&mut pfd, 1, 20) };
+                    if rc < 0 {
+                        if std::io::Error::last_os_error().kind() == std::io::ErrorKind::Interrupted
+                        {
+                            continue;
+                        }
+                        break;
+                    }
+                    if rc == 0 {
+                        continue;
+                    }
+                    let mut saw_eof = false;
+                    loop {
+                        match reader.read(&mut bytes) {
+                            Ok(0) => {
+                                saw_eof = true;
+                                break;
+                            }
+                            Ok(count) => {
+                                thread_output
+                                    .lock()
+                                    .expect("auxiliary output mutex poisoned")
+                                    .extend_from_slice(&bytes[..count]);
+                            }
+                            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {
+                                continue;
+                            }
+                            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => break,
+                            Err(error) if error.raw_os_error() == Some(libc::EIO) => {
+                                saw_eof = true;
+                                break;
+                            }
+                            Err(error) => panic!("read auxiliary PTY: {error}"),
+                        }
+                    }
+                    if saw_eof
+                        || (pfd.revents & (libc::POLLHUP | libc::POLLERR | libc::POLLNVAL) != 0)
+                    {
+                        break;
+                    }
+                }
+            })
+            .expect("spawn auxiliary PTY drainer");
         Self {
-            master: File::from(master),
+            master,
             _slave: slave,
             name,
             output: Vec::new(),
+            shared_output,
+            stop,
+            drainer: Some(drainer),
         }
     }
 
     fn drain_output(&mut self) {
-        let mut bytes = [0; 8192];
-        loop {
-            match self.master.read(&mut bytes) {
-                Ok(0) => return,
-                Ok(count) => self.output.extend_from_slice(&bytes[..count]),
-                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
-                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => return,
-                Err(error) => panic!("read auxiliary PTY: {error}"),
-            }
-        }
+        let mut shared = self
+            .shared_output
+            .lock()
+            .expect("auxiliary output mutex poisoned");
+        self.output.append(&mut *shared);
+    }
+
+    fn clear_output(&mut self) {
+        self.drain_output();
+        self.output.clear();
     }
 
     /// Resize the terminal the way a terminal emulator does: on its master.
@@ -237,9 +311,20 @@ impl AuxiliaryTty {
     }
 
     fn send(&mut self, bytes: &[u8]) {
-        self.master
-            .write_all(bytes)
+        write_all_nonblocking_pty(&mut self.master, bytes, Instant::now() + DEADLOCK_CAP)
             .expect("write auxiliary key bytes");
+    }
+}
+
+impl Drop for AuxiliaryTty {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Release);
+        if let Some(drainer) = self.drainer.take()
+            && let Err(payload) = drainer.join()
+            && !std::thread::panicking()
+        {
+            std::panic::resume_unwind(payload);
+        }
     }
 }
 
@@ -351,7 +436,7 @@ fn auxiliary_frame_draws_past_its_opening_width_after_resize() {
     // Opened at 80x24. The input reader observes the new size before it reads
     // the key bytes, so the command runs on a frame that is already 120 wide.
     auxiliary.resize(120, 30);
-    auxiliary.output.clear();
+    auxiliary.clear_output();
     auxiliary.send(b"\x03w");
     wait_primary_marker(&mut editor, AUX_RESIZED, Some(&mut auxiliary));
     // A grid left at 80 columns clips the marker at column 100 on every redraw.

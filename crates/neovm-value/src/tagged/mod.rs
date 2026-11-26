@@ -11,10 +11,12 @@ pub mod bytecode;
 pub mod collection_reads;
 pub mod gc;
 pub mod header;
+pub mod heap_ref;
 pub mod mutate;
 #[doc(hidden)]
 pub mod pdump_image;
-pub mod symbol_marks;
+mod slice_view;
+pub(crate) mod symbol_marks;
 pub mod transport;
 pub mod value;
 pub use value::SymbolMode;

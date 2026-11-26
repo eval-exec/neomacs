@@ -81,13 +81,9 @@ fn app_monochrome_dark_supports_a_real_edit_build_and_error_navigation_session()
                   #'shell-quote-argument
                   (list checker source)
                   " "))))
-        (let ((process (get-buffer-process compilation-buffer)))
-          (while
-              (process-live-p process)
-            (accept-process-output process 0.05))
-          (accept-process-output process 0.05))
+        (neomacs-app-monochrome-test-complete-compilation
+         compilation-buffer)
         (with-current-buffer compilation-buffer
-          (font-lock-ensure)
           (setq diagnostics
                 (mapcar
                  (lambda (needle)
@@ -438,6 +434,29 @@ fn app_monochrome_switches_a_real_dired_session_and_restores_the_previous_displa
 "####,
         expect![[
             r##"OK (:file "[ORACLE-SANDBOX]/app-monochrome-theme-lifecycle/" :goto-action (:visited "obsolete.log") :flag-action :flagged :unflag-action :unflagged :baseline ((default :family "default") (default :height 1) (default :background "unspecified-bg") (default :foreground "unspecified-fg") (dired-directory :weight bold) (dired-flagged :foreground "unspecified-fg") (dired-flagged :box nil) (warning :foreground "unspecified-fg") (link :foreground "unspecified-fg")) :dark ((default :family "UbuntuMono Nerd Font") (default :height 98) (default :background "unspecified-bg") (default :foreground "unspecified-fg") (dired-directory :weight bold) (dired-flagged :foreground "Red") (dired-flagged :box (:line-width (2 . 2) :color "Red" :style released-button)) (warning :foreground "gold") (link :foreground "#5cacac")) :light ((default :family "default") (default :height 98) (default :background "white") (default :foreground "grey12") (dired-directory :weight bold) (dired-flagged :foreground "Red") (dired-flagged :box (:line-width (2 . 2) :color "Red" :style released-button)) (warning :foreground "red4") (link :foreground "#3c5c5c")) :revealed-dark ((default :family "UbuntuMono Nerd Font") (default :height 98) (default :background "unspecified-bg") (default :foreground "unspecified-fg") (dired-directory :weight bold) (dired-flagged :foreground "Red") (dired-flagged :box (:line-width (2 . 2) :color "Red" :style released-button)) (warning :foreground "gold") (link :foreground "#5cacac")) :restored ((default :family "default") (default :height 1) (default :background "unspecified-bg") (default :foreground "unspecified-fg") (dired-directory :weight bold) (dired-flagged :foreground "unspecified-fg") (dired-flagged :box nil) (warning :foreground "unspecified-fg") (link :foreground "unspecified-fg")) :flagged ("D" ("obsolete.log" dired-flagged ((:foreground "Red") (:background "unspecified-bg") (:weight bold) (:box (:line-width (2 . 2) :color "Red" :style released-button)))) ("src" dired-directory ((:foreground "unspecified-fg") (:background "unspecified-bg") (:weight bold)))) :unflagged (" " "obsolete.log") :theme-states ((app-monochrome-themes-dark-theme) (app-monochrome-themes-light-theme app-monochrome-themes-dark-theme) (app-monochrome-themes-dark-theme) nil))"##
+        ]],
+    )
+}
+
+pub(super) fn app_monochrome_header_clock_case() -> ParityBatchCase {
+    ParityBatchCase::value(
+        "app_monochrome_header_clock_is_not_a_diagnostic",
+        r####"
+(with-temp-buffer
+  (insert "Compilation started at Wed Nov 20 11:28:21 2026\n")
+  (insert "src/revenue.el:4:8: warning: tax policy needs review\n")
+  (insert "src/revenue.el:8:2: error: production logger is required\n")
+  (insert "Compilation finished at Wed Nov 20 11:28:29 2026\n")
+  (mapcar
+   (lambda (needle)
+     (save-excursion
+       (neomacs-app-monochrome-test-after-compilation-header)
+       (search-forward needle nil t)
+       (neomacs-app-monochrome-test-line)))
+   '("4:8" "8:2")))
+"####,
+        expect![[
+            r#"OK ("src/revenue.el:4:8: warning: tax policy needs review" "src/revenue.el:8:2: error: production logger is required")"#
         ]],
     )
 }

@@ -47,6 +47,7 @@ use crate::display_source::DisplaySourceTextPosition;
 use crate::display_source_resolver::DisplaySourceFaceBasis;
 use crate::frame_face_arena::FrameFaceAttempt;
 use crate::neovm_bridge::{FaceResolver, LayoutBufferSnapshot, OverlayDisplayString, ResolvedFace};
+use crate::string_property_snapshot::StringSourceRootScope;
 use neomacs_display_protocol::types::FaceId;
 use neovm_core::buffer::{BufferId, CharPos0, EmacsByteRange};
 use neovm_core::emacs_core::{Context, Value};
@@ -568,6 +569,7 @@ impl Fixture {
                 Some(HARNESS_WINDOW_ID),
                 0,
                 0,
+                StringSourceRootScope::Rooted(self._eval.owned_root_retainer()),
             ),
             pending: std::collections::VecDeque::new(),
             position: DisplaySourceTextPosition::new(0, 0),
@@ -1137,6 +1139,8 @@ fn c13_fit_split_isolation_resumes_at_the_split_point() {
     let remainder = driver.drain(DRAIN_LIMIT);
     assert_eq!(remainder[0].scan_before, BufferScanPos::new(20, 20));
     assert_eq!(CharObservation::chars(&remainder), "aaaa\n");
+    drop(driver);
+    drop(fixture);
 
     assert_split_transparent(&case, SplitPolicy::FitAt(20));
 }
@@ -1442,10 +1446,9 @@ fn p45_char_granularity_yields_single_characters_and_expires_by_position() {
     // again. Element texts are the observable, pinned explicitly.
     let case = StreamCase::new("P4.5 granularity extent", "abcdefgh\n")
         .with(CaseProperty::face(4, 8, ":weight", "bold"));
-    let fixture = Fixture::new(&case);
-
-    // Baseline: two runs, cut at the face boundary.
+    // Baseline before the live fixture: this helper builds its own context.
     assert_eq!(producer_run_texts(&case), vec!["abcd", "efgh", "\n"]);
+    let fixture = Fixture::new(&case);
 
     // Decline batching for the first run only: it arrives one character at a
     // time, and the run AFTER the hint's end is whole again.

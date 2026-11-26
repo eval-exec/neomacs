@@ -741,34 +741,58 @@ pub fn builtin_emacs_pid(args: Vec<Value>) -> EvalResult {
     Ok(Value::fixnum(std::process::id() as i64))
 }
 
-fn gc_bucket(name: &str, counts: &[i64]) -> Value {
+fn gc_bucket(name: &'static str, counts: &[i64]) -> Value {
     let mut items = Vec::with_capacity(counts.len() + 1);
     items.push(Value::symbol(name));
     items.extend(counts.iter().copied().map(Value::fixnum));
     Value::list(items)
 }
 
+/// Convert one heap count to the row integer.
+#[inline]
+fn gc_count(value: usize) -> i64 {
+    i64::try_from(value).unwrap_or(i64::MAX)
+}
+
 /// Build the GC stats list (shared by eval and vm garbage-collect paths).
+///
+/// GNU's rows carry the last sweep's live (USED) and free (FREE) counts from
+/// `gcstat` (`src/alloc.c:6038-6063`): list4 for objects with a free list,
+/// list3 for `string-bytes`, `vectors`, and `buffers`. USED is a live count,
+/// never the cumulative allocation counter; `vectors` counts vector OBJECTS
+/// and `vector-slots` their cells. The cache excludes mapped/image residents
+/// and was captured before hooks and this return-list allocation.
 pub(crate) fn builtin_garbage_collect_stats() -> EvalResult {
-    let counts = Value::memory_use_counts_snapshot();
-    let conses = Value::cons_live_count_snapshot().max(0);
-    let floats = counts[1].max(0);
-    let vector_cells = counts[2].max(0);
-    let symbols = counts[3].max(0);
-    let string_chars = counts[4].max(0);
-    let intervals = counts[5].max(0);
-    let strings = counts[6].max(0);
+    // SAFETY: reads cached sweep object counts only; never collects, re-enters
+    // `with_tagged_heap`, mints capability tokens, or mutates Lisp payloads.
+    let gc = unsafe { neovm_value::tagged::gc::with_tagged_heap(|heap| heap.gc_object_counts()) };
 
     Ok(Value::list(vec![
-        gc_bucket("conses", &[16, conses, 0]),
-        gc_bucket("symbols", &[48, symbols, 0]),
-        gc_bucket("strings", &[32, strings, 0]),
-        gc_bucket("string-bytes", &[1, string_chars]),
-        gc_bucket("vectors", &[16, vector_cells]),
-        gc_bucket("vector-slots", &[8, vector_cells, 0]),
-        gc_bucket("floats", &[8, floats, 0]),
-        gc_bucket("intervals", &[56, intervals, 0]),
-        gc_bucket("buffers", &[992, 0]),
+        gc_bucket(
+            "conses",
+            &[16, gc_count(gc.conses_used), gc_count(gc.conses_free)],
+        ),
+        gc_bucket("symbols", &[48, gc_count(gc.symbols_used), 0]),
+        gc_bucket(
+            "strings",
+            &[32, gc_count(gc.strings_used), gc_count(gc.strings_free)],
+        ),
+        gc_bucket("string-bytes", &[1, gc_count(gc.string_bytes)]),
+        gc_bucket("vectors", &[16, gc_count(gc.vectors_used)]),
+        gc_bucket(
+            "vector-slots",
+            &[
+                8,
+                gc_count(gc.vector_slots_used),
+                gc_count(gc.vector_slots_free),
+            ],
+        ),
+        gc_bucket(
+            "floats",
+            &[8, gc_count(gc.floats_used), gc_count(gc.floats_free)],
+        ),
+        gc_bucket("intervals", &[56, gc_count(gc.intervals_used), 0]),
+        gc_bucket("buffers", &[992, gc_count(gc.buffers_used)]),
     ]))
 }
 
@@ -783,7 +807,7 @@ pub fn builtin_memory_use_counts(args: Vec<Value>) -> EvalResult {
     ))
 }
 
-fn layout_stat_pair(name: &str, value: usize) -> Value {
+fn layout_stat_pair(name: &'static str, value: usize) -> Value {
     let value = i64::try_from(value).unwrap_or(i64::MAX);
     Value::cons(Value::symbol(name), Value::fixnum(value))
 }
@@ -823,12 +847,17 @@ fn arena_layout_value(stats: &neovm_value::tagged::gc::ArenaLayoutStats) -> Valu
 #[doc(hidden)]
 pub fn builtin_neomacs_heap_layout_stats(args: Vec<Value>) -> EvalResult {
     expect_args("neomacs--heap-layout-stats", &args, 0)?;
-    let stats = neovm_value::tagged::gc::with_tagged_heap(|heap| {
-        // An open allocation region's cells are neither on the free list nor
-        // handed out: give them back so the census is exact.
-        heap.close_alloc_regions();
-        heap.layout_stats()
-    });
+    // SAFETY: closes open allocation regions and computes read-only arena
+    // layout stats; never collects, sweeps, re-enters `with_tagged_heap`,
+    // mints capability tokens, or mutates Lisp object payloads.
+    let stats = unsafe {
+        neovm_value::tagged::gc::with_tagged_heap(|heap| {
+            // An open allocation region's cells are neither on the free list nor
+            // handed out: give them back so the census is exact.
+            heap.close_alloc_regions();
+            heap.layout_stats()
+        })
+    };
 
     let cons = Value::list(vec![
         layout_stat_pair("pages", stats.cons.pages),

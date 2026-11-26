@@ -29,7 +29,12 @@ use std::path::{Path, PathBuf};
 // Argument helpers
 // ---------------------------------------------------------------------------
 
-fn expect_min_max_args(name: &str, args: &[Value], min: usize, max: usize) -> Result<(), Flow> {
+fn expect_min_max_args(
+    name: &'static str,
+    args: &[Value],
+    min: usize,
+    max: usize,
+) -> Result<(), Flow> {
     if args.len() < min || args.len() > max {
         Err(signal(
             LispCondition::WrongNumberOfArguments,
@@ -365,11 +370,13 @@ fn function_doc_or_error(func_val: Value) -> EvalResult {
             Ok(Value::string("Keyboard macro."))
         }
         ValueKind::Veclike(VecLikeType::ByteCode) => {
-            let bc = func_val.get_bytecode_data().unwrap();
-            Ok(bc
-                .docstring
-                .as_ref()
-                .map_or(Value::NIL, |doc| Value::heap_string(doc.clone())))
+            // GNU reads CLOSURE_DOC_STRING from the closure's own slot array,
+            // so a substitution the reader stored back in slot 4 must be what
+            // `documentation` sees.  Only a string slot is a docstring; GNU
+            // ignores a non-string here (an "invalid docstring" is how it
+            // detects OClosures, which this path does not claim to model).
+            let doc = neovm_eval_doc_slot(func_val);
+            Ok(if doc.is_string() { doc } else { Value::NIL })
         }
         _other => Err(signal(LispCondition::InvalidFunction, vec![func_val])),
     }
@@ -1152,3 +1159,14 @@ pub fn builtin_snarf_documentation(
 #[cfg(test)]
 #[path = "tests/lazy_doc_test.rs"]
 mod lazy_doc_tests;
+
+/// GNU `CLOSURE_DOC_STRING` of a byte-code function through the same slot
+/// source `aref` uses, so a reader substitution stored back in slot 4 is
+/// visible to `documentation`.
+fn neovm_eval_doc_slot(function: Value) -> Value {
+    crate::emacs_core::builtins::bytecode_closure_slot(
+        &function,
+        neovm_value::tagged::header::CLOSURE_DOC_STRING,
+    )
+    .unwrap_or(Value::NIL)
+}

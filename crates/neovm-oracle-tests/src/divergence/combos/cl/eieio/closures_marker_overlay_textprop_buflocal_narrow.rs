@@ -89,7 +89,7 @@ fn combo_eieio_closure_capture_slots_edit() {
 fn combo_eieio_closure_overlay_mod_hooks() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (void-variable ov1)""#]];
+    let expect = expect_test::expect![[r#""ERR (void-function on-modify)""#]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (defclass hook-track ()
@@ -123,7 +123,7 @@ fn combo_eieio_closure_overlay_mod_hooks() {
                                 (setf (ht-range tracker) (list beg end))
                                 (push (format "%s:%d-%d" label beg end)
                                       my-ht-log)))))
-                  (list #'on-modify)))))
+                  (list #'on-modify))))
         (overlay-put ov1 'modification-hooks (funcall make-hook "ov1"))
         (overlay-put ov2 'modification-hooks (funcall make-hook "ov2"))
         (setq buffer-undo-list nil)
@@ -151,7 +151,7 @@ fn combo_eieio_closure_overlay_mod_hooks() {
               (marker-position m)
               (overlay-start ov1) (overlay-end ov1)
               (overlay-start ov2) (overlay-end ov2)
-              my-ht-log)))
+              my-ht-log))))
     (kill-buffer buf))"#,
         expect,
     );

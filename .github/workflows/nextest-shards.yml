@@ -44,7 +44,7 @@ jobs:
           case "$SHARD_SUITE" in
             core)
               echo "LINUX_PROFILE=build" >> "$GITHUB_ENV"
-              echo "NEXTEST_FILTER=package(neovm-core)" >> "$GITHUB_ENV"
+              echo "NEXTEST_FILTER=package(neovm-core) | package(neovm-value) | package(neovm-edit) | package(neovm-text) | package(neovm-eval) | package(neovm-display) | package(neovm-system)" >> "$GITHUB_ENV"
               ;;
             oracle)
               echo "LINUX_PROFILE=oracle" >> "$GITHUB_ENV"
@@ -95,6 +95,18 @@ jobs:
           cache-key: ci-${{ inputs.suite }}-shards
           cache-save-if: ${{ github.ref == 'refs/heads/main' }}
           install-nextest: true
+
+      # The core shard filter includes neovm-core's compile-fail contract
+      # targets. trybuild invokes `cargo --offline` on a scratch project that
+      # copies this workspace's Cargo.lock and [patch.crates-io] table; the
+      # git forks in that table (cosmic-text first) must already exist in
+      # CARGO_HOME. The dedicated compile-contracts job fetches them the same
+      # way; without this step mint_seal_contracts failed on every run with
+      # "can't checkout from ... you are in the offline mode". Fetch only for
+      # the core suite: no other shard runs a trybuild target.
+      - name: Fetch locked crates for trybuild's offline builds
+        if: inputs.suite == 'core'
+        run: cargo fetch --locked
 
       - name: Configure libfaketime for oracle tests
         if: inputs.suite == 'oracle'

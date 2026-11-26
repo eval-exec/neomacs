@@ -696,10 +696,7 @@ fn vector_slots(value: &super::Value, mode: SymbolMode) -> Vec<ValueSlot> {
     let Some(data) = value.as_vector_data() else {
         return Vec::new();
     };
-    data.iter()
-        .copied()
-        .map(|word| classify_slot(word, mode))
-        .collect()
+    data.iter().map(|word| classify_slot(word, mode)).collect()
 }
 
 fn classify_slot(value: super::Value, mode: SymbolMode) -> ValueSlot {

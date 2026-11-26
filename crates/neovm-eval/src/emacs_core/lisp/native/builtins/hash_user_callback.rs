@@ -105,25 +105,31 @@ pub(crate) fn with_user_test_guard<T>(
     table: Value,
     callback: impl FnOnce(&mut Context) -> T,
 ) -> T {
-    debug_assert!(table.is_hash_table(), "caller has checked the table type");
+    assert!(
+        table.is_hash_table(),
+        "with_user_test_guard requires a hash-table value"
+    );
     let table_object = table
         .as_veclike_ptr()
         .expect("verified hash table")
         .cast_mut()
         .cast::<HashTableObj>();
-    // SAFETY: the caller verified the table type. This takes the address
-    // through a raw pointer, without creating a payload reference that could
-    // remain live across Lisp. The initialized metadata does not need the
-    // table's pending key hydration.
+    // SAFETY: `assert!(table.is_hash_table())` verified `table` is a live
+    // `HashTableObj`. This takes the address through a raw pointer, without
+    // creating a payload reference that could remain live across Lisp. The
+    // initialized metadata does not need the table's pending key hydration.
     let depth =
-        unsafe { NonNull::new_unchecked(std::ptr::addr_of_mut!((*table_object).table.test_depth)) };
+        unsafe { NonNull::new_unchecked(std::ptr::addr_of_mut!((*table_object).test_depth)) };
     // Every activation counts, atomically (Rev R2): two owners in user tests
-    // on one shared table nest instead of racing one bool byte.
-    let previous = unsafe { (*depth.as_ptr()).fetch_add(1, Ordering::AcqRel) };
-    debug_assert!(
-        previous < u8::MAX,
-        "user test nesting deeper than the count byte"
-    );
+    // on one shared table nest instead of racing one bool byte. Checked add
+    // refuses u8 overflow without wrapping `test_depth` to 0.
+    // SAFETY: `table_object` is a live `HashTableObj` rooted by the caller,
+    // and `test_depth` is an `AtomicU8` designed for shared atomic access.
+    let previous = unsafe { &*depth.as_ptr() }
+        .fetch_update(Ordering::AcqRel, Ordering::Acquire, |cur| {
+            cur.checked_add(1)
+        })
+        .expect("user test nesting deeper than the count byte");
     if previous > 0 {
         // Nested: the original guard still inhibits collection and owns the
         // published accounting; this hold only counts back down, on every
@@ -141,4 +147,51 @@ pub(crate) fn with_user_test_guard<T>(
         .expect("pinned accounting has a non-null address");
     let mut guard = UserTestMutabilityGuard::enter(eval, depth, accounting_pointer);
     callback(guard.context())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::emacs_core::eval::Context;
+    use neovm_value::value::HashTableTest;
+
+    /// RT N3 + N7: `with_user_test_guard` must reject non-hash-table values
+    /// (in release as well as debug) and refuse depth overflow without
+    /// wrapping `test_depth` to 0.
+    #[test]
+    fn with_user_test_guard_rejects_non_hash_table_and_depth_overflow() {
+        crate::test_utils::init_test_tracing();
+        let mut ctx = Context::new(crate::test_utils::unit_runtime());
+        let vector = Value::make_vector(vec![Value::fixnum(1)]);
+        let bad_type = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            with_user_test_guard(&mut ctx, vector, |_| ());
+        }));
+        assert!(
+            bad_type.is_err(),
+            "with_user_test_guard must reject non-hash-table values"
+        );
+
+        let table = Value::hash_table(HashTableTest::Eq);
+        let obj = table
+            .as_veclike_ptr()
+            .expect("hash table ptr")
+            .cast::<HashTableObj>();
+        // SAFETY: `table` is a live `HashTableObj` owned by `ctx`.
+        let depth = unsafe { &(*obj).test_depth };
+        depth.store(u8::MAX, Ordering::Release);
+
+        let overflow = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            with_user_test_guard(&mut ctx, table, |_| ());
+        }));
+        assert!(
+            overflow.is_err(),
+            "with_user_test_guard must panic when test_depth would overflow u8"
+        );
+        assert_eq!(
+            depth.load(Ordering::Acquire),
+            u8::MAX,
+            "test_depth must not wrap to 0 on overflow"
+        );
+        depth.store(0, Ordering::Release);
+    }
 }

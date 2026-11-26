@@ -22,7 +22,9 @@ impl<'era> FunctionCallCache<'era> {
             counts: (0, 0, 0),
         })
     }
-    pub fn observed_epoch(&self) -> Option<u64> {
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn observed_epoch(&self) -> Option<u64> {
         self.observed_epoch
     }
 
@@ -30,13 +32,11 @@ impl<'era> FunctionCallCache<'era> {
     pub fn clear(&mut self, run: &mut RunAccess<'_, 'era>) -> Result<(), FunctionError> {
         check_run(run)?;
         globals::check_home(run, &self.home)?;
-        let dst = run
-            .owner
+        run.owner
             .local
             .as_mut()
-            .and_then(|local| local.root_scratch.get_mut(self.home.index))
+            .and_then(|local| local.set_root_slot_nil(self.home.index))
             .ok_or(RegistrationError::StaleRegistration)?;
-        *dst = MarkWord::of(Value::NIL);
         self.symbol = None;
         self.observed_epoch = None;
         Ok(())
@@ -93,13 +93,11 @@ impl<'era> FunctionActivation<'era> {
     pub fn clear(&mut self, run: &mut RunAccess<'_, 'era>) -> Result<(), FunctionError> {
         check_run(run)?;
         globals::check_home(run, &self.home)?;
-        let dst = run
-            .owner
+        run.owner
             .local
             .as_mut()
-            .and_then(|local| local.root_scratch.get_mut(self.home.index))
+            .and_then(|local| local.set_root_slot_nil(self.home.index))
             .ok_or(RegistrationError::StaleRegistration)?;
-        *dst = MarkWord::of(Value::NIL);
         self.state = ActivationState::Empty;
         Ok(())
     }
@@ -133,7 +131,8 @@ impl<'era> RunAccess<'_, 'era> {
     /// Select only the supported constant-lambda whose identity is expected.
     /// The private activation home retains a successful selection even after
     /// redefinition; every subsequent call performs a fresh guarded selection.
-    pub fn sym_named_call_begin(
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn sym_named_call_begin(
         &mut self,
         symbol: &SymbolHandle,
         expected: &OwnerRootSlot<'era>,
@@ -176,7 +175,9 @@ impl<'era> RunAccess<'_, 'era> {
         Ok(())
     }
 
-    pub fn sym_call_begin(
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn sym_call_begin(
         &mut self,
         symbol: &SymbolHandle,
         cache: &mut FunctionCallCache<'era>,
@@ -208,7 +209,8 @@ impl<'era> RunAccess<'_, 'era> {
     /// At most two finite instructions; one unit validates and yields, the
     /// next returns. No symbol lease, callback, allocation or poll survives a
     /// step. A returned activation cannot silently execute a second time.
-    pub fn sym_call_step(
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn sym_call_step(
         &mut self,
         activation: &mut FunctionActivation<'era>,
         dst: &mut OwnerRootSlot<'era>,
@@ -220,13 +222,15 @@ impl<'era> RunAccess<'_, 'era> {
         if dst.index == activation.home.index {
             return Err(RegistrationError::Publication.into());
         }
-        let definition = self
+        let word = self
             .owner
             .local
             .as_ref()
-            .and_then(|local| local.root_scratch.get(activation.home.index))
-            .ok_or(RegistrationError::StaleRegistration)?
-            .value();
+            .and_then(|local| local.root_slot_word(activation.home.index))
+            .ok_or(RegistrationError::StaleRegistration)?;
+        // SAFETY: `check_home` verified this slot belongs to the active
+        // owning mutator thread's live root bank.
+        let definition = unsafe { word.value() };
         for _ in 0..fuel.get() {
             match activation.state {
                 ActivationState::Empty | ActivationState::Returned { .. } => {
@@ -254,12 +258,19 @@ impl<'era> RunAccess<'_, 'era> {
                                 .local
                                 .as_mut()
                                 .ok_or(RegistrationError::StaleRegistration)?;
-                            let [answer_home, selected_home] = local
-                                .root_scratch
-                                .get_disjoint_mut([dst.index, activation.home.index])
-                                .map_err(|_| RegistrationError::StaleRegistration)?;
-                            *answer_home = MarkWord::of(answer);
-                            *selected_home = MarkWord::of(Value::NIL);
+                            if dst.index == activation.home.index
+                                || dst.index >= local.root_scratch_len()
+                                || activation.home.index >= local.root_scratch_len()
+                            {
+                                return Err(RegistrationError::StaleRegistration.into());
+                            }
+                            // SAFETY: `answer` was decoded from this active
+                            // owner's live rooted function definition.
+                            unsafe { local.set_root_slot(dst.index, answer) }
+                                .ok_or(RegistrationError::StaleRegistration)?;
+                            local
+                                .set_root_slot_nil(activation.home.index)
+                                .ok_or(RegistrationError::StaleRegistration)?;
                             activation.state = ActivationState::Returned { epoch };
                             return Ok(FunctionStep::Returned);
                         }
@@ -335,22 +346,19 @@ impl SymbolRef<'_, '_, '_> {
             .local
             .as_mut()
             .ok_or(RegistrationError::StaleRegistration)?;
-        let expected_value = local
-            .root_scratch
-            .get(usize::from(expected))
-            .ok_or(RegistrationError::StaleRegistration)?
-            .value();
-        if expected_value.bits() != definition.bits() {
+        let expected_bits = local
+            .root_slot_bits(usize::from(expected))
+            .ok_or(RegistrationError::StaleRegistration)?;
+        if expected_bits != definition.bits() {
             return Ok(FunctionSelection::Changed);
         }
         let selected = OwnerRootIndex::from(&activation.home);
-        let selected_home = local
-            .root_scratch
-            .get_mut(usize::from(selected))
-            .ok_or(RegistrationError::StaleRegistration)?;
         // Install the selected census root before releasing this SymbolRef.
         // No fallible operation follows installation or activation mutation.
-        *selected_home = MarkWord::of(definition);
+        // SAFETY: `definition` was read from this active era's retained
+        // backing under `SymbolRef` and is installed into this owner's bank.
+        unsafe { local.set_root_slot(usize::from(selected), definition) }
+            .ok_or(RegistrationError::StaleRegistration)?;
         activation.state = ActivationState::Selected {
             epoch: clock,
             lambda,
@@ -387,13 +395,16 @@ impl SymbolRef<'_, '_, '_> {
             let lambda = unsafe { symbols.functions.lambda_for(self.key.symbol, &token) }
                 .ok_or(RegistrationError::Publication)?;
             let definition = if unchanged {
-                self.run
+                let word = self
+                    .run
                     .owner
                     .local
                     .as_ref()
-                    .and_then(|local| local.root_scratch.get(cache.home.index))
-                    .ok_or(RegistrationError::StaleRegistration)?
-                    .value()
+                    .and_then(|local| local.root_slot_word(cache.home.index))
+                    .ok_or(RegistrationError::StaleRegistration)?;
+                // SAFETY: `self.run` is an active thread-checked run on the
+                // owning mutator; `cache.home` stays live in its root bank.
+                unsafe { word.value() }
             } else {
                 // SAFETY: same live reader, complete cell/state snapshot.
                 match unsafe { symbols.backing.read_function(self.key.symbol, &token) }
@@ -417,14 +428,20 @@ impl SymbolRef<'_, '_, '_> {
             .local
             .as_mut()
             .ok_or(RegistrationError::StaleRegistration)?;
-        let [cache_home, selected_home] = local
-            .root_scratch
-            .get_disjoint_mut([cache.home.index, activation.home.index])
-            .map_err(|_| RegistrationError::StaleRegistration)?;
+        if cache.home.index == activation.home.index
+            || cache.home.index >= local.root_scratch_len()
+            || activation.home.index >= local.root_scratch_len()
+        {
+            return Err(RegistrationError::StaleRegistration.into());
+        }
         // Install BOTH census roots before releasing reader authority. Saved
         // metadata records the original clock, never a later clock reload.
-        *cache_home = MarkWord::of(definition);
-        *selected_home = MarkWord::of(definition);
+        // SAFETY: `definition` belongs to this active era's retained backing /
+        // root bank and stays live under the era protocol.
+        unsafe { local.set_root_slot(cache.home.index, definition) }
+            .ok_or(RegistrationError::StaleRegistration)?;
+        unsafe { local.set_root_slot(activation.home.index, definition) }
+            .ok_or(RegistrationError::StaleRegistration)?;
         #[cfg(any(test, feature = "test-support"))]
         if !unchanged {
             cache.counts.0 = cache.counts.0.saturating_add(1);

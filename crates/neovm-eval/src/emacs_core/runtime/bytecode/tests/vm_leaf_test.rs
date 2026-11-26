@@ -8,10 +8,11 @@ use super::*;
 use crate::emacs_core::eval::Context;
 use crate::emacs_core::print::print_value;
 use neovm_value::error::{FlowKind, FlowResultExt};
+use neovm_value::intern::intern;
 use neovm_value::value::LambdaParams;
 
 /// `(lambda (a1..an) (CALLEE a1..an))` through `Op::Call` (GNU `Bcall`).
-fn bcall_fn(callee: &str, nargs: usize) -> ByteCodeFunction {
+fn bcall_fn(callee: &'static str, nargs: usize) -> ByteCodeFunction {
     let mut f = ByteCodeFunction::new(LambdaParams {
         // SAFETY: test placeholder id, never resolved (peer seal N8).
         required: (1..=nargs as u32)
@@ -20,16 +21,16 @@ fn bcall_fn(callee: &str, nargs: usize) -> ByteCodeFunction {
         optional: Vec::new(),
         rest: None,
     });
-    f.lexical = true;
+    f.set_lexical(true);
     let mut ops = vec![Op::Constant(0)];
     for _ in 0..nargs {
         ops.push(Op::StackRef(nargs as u16));
     }
     ops.push(Op::Call(nargs as u16));
     ops.push(Op::Return);
-    f.ops = ops;
-    f.constants = vec![Value::symbol(callee)].into();
-    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
+    f.set_ops(ops);
+    f.set_constants(vec![Value::from_sym_id(intern(callee))].into());
+    f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
     f
 }
 
@@ -279,7 +280,7 @@ fn a_leaf_signal_is_caught_in_the_calling_body() {
         optional: Vec::new(),
         rest: None,
     });
-    f.lexical = true;
+    f.set_lexical(true);
     let mut ops = vec![
         Op::PushConditionCase(0),
         Op::Constant(1),
@@ -292,9 +293,9 @@ fn a_leaf_signal_is_caught_in_the_calling_body() {
     let handler = ops.len();
     ops[0] = Op::PushConditionCase(handler as u32);
     ops.extend([Op::Constant(0), Op::StackRef(1), Op::List(2), Op::Return]);
-    f.ops = ops;
-    f.constants = vec![Value::symbol("caught"), Value::symbol("gethash")].into();
-    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
+    f.set_ops(ops);
+    f.set_constants(vec![Value::symbol("caught"), Value::symbol("gethash")].into());
+    f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
     set_knob(&mut ev, VmLeafKnob::ALL);
     let runs0 = super::vm_leaf::vm_leaf_calls_for_test();
     assert_eq!(

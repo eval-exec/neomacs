@@ -169,15 +169,18 @@ impl BookmarkManager {
     }
 
     /// Return a sorted list of all bookmark names.
-    pub fn all_names(&self) -> Vec<LispString> {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn all_names(&self) -> Vec<LispString> {
         let mut names: Vec<LispString> =
             self.bookmarks.values().map(|bm| bm.name.clone()).collect();
         names.sort_by_key(bookmark_string_to_runtime);
         names
     }
 
+    #[cfg(feature = "test-support")]
     /// Return the most recently used bookmark names (most recent first).
-    pub fn recent_names(&self) -> &[LispString] {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn recent_names(&self) -> &[LispString] {
         &self.recent
     }
 
@@ -187,7 +190,8 @@ impl BookmarkManager {
     }
 
     /// Mark bookmarks as saved (clear modified flag).
-    pub fn mark_saved(&mut self) {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn mark_saved(&mut self) {
         self.modified = false;
     }
 
@@ -199,7 +203,8 @@ impl BookmarkManager {
     /// NAME\nFILENAME\nPOSITION\nFRONT_CONTEXT\nREAR_CONTEXT\nANNOTATION\nHANDLER
     /// ```
     /// Empty optional fields are represented as the empty string.
-    pub fn save_to_string(&self) -> String {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn save_to_string(&self) -> String {
         let mut out = String::new();
         let mut bookmarks: Vec<&Bookmark> = self.bookmarks.values().collect();
         bookmarks.sort_by_key(|bm| bookmark_string_to_runtime(&bm.name));
@@ -230,7 +235,8 @@ impl BookmarkManager {
 
     /// Deserialize bookmarks from a string produced by `save_to_string`.
     /// Replaces all current bookmarks.
-    pub fn load_from_string(&mut self, data: &str) {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn load_from_string(&mut self, data: &str) {
         self.bookmarks.clear();
         self.recent.clear();
         self.modified = false;

@@ -3,6 +3,7 @@
 use enum_map::EnumMap;
 pub use neovm_value::display_vocab::{FontSlant, FontWeight, FontWidth, LFaceAttr};
 use neovm_value::gc_trace::GcTrace;
+use neovm_value::intern::intern;
 use neovm_value::intern::{SymId, WellKnown, resolve_sym};
 use neovm_value::tagged::transport::SharedRoot;
 use neovm_value::value::Value;
@@ -147,7 +148,8 @@ impl RealizedColor {
     }
 
     /// Convert to "#RRGGBB" hex string.
-    pub fn to_hex(&self) -> String {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn to_hex(&self) -> String {
         format!("#{:02x}{:02x}{:02x}", self.r, self.g, self.b)
     }
 
@@ -570,7 +572,7 @@ impl FaceColorSpecifications {
     /// Content-equal specifications that were parsed into distinct allocations
     /// digest differently; the caller's `PartialEq` check remains the
     /// authority.
-    pub fn hash_shared_identity(&self, state: &mut impl std::hash::Hasher) {
+    pub(crate) fn hash_shared_identity(&self, state: &mut impl std::hash::Hasher) {
         fn hash_arc<T: ?Sized>(
             state: &mut impl std::hash::Hasher,
             spec: &Option<std::sync::Arc<T>>,
@@ -700,7 +702,10 @@ pub fn merge_face_height(
 
 #[doc(hidden)]
 pub fn face_symbol_value(name: &str) -> Value {
-    Value::symbol(name)
+    // The symbol counter is charged by the registry per allocated symbol, so
+    // the spelling path and the fixed WellKnown path agree without extra
+    // accounting here: neither adds a counter when the id already exists.
+    Value::from_sym_id(intern(name))
 }
 
 #[doc(hidden)]
@@ -810,7 +815,8 @@ impl Face {
         })
     }
 
-    pub fn foundry_runtime_string_owned(&self) -> Option<String> {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn foundry_runtime_string_owned(&self) -> Option<String> {
         self.foundry.and_then(|value| {
             value
                 .as_lisp_string()
@@ -822,15 +828,6 @@ impl Face {
     /// realized faces that are copied per frame (see `FaceString`).
     pub fn family_runtime_string_shared(&self) -> Option<std::sync::Arc<str>> {
         self.family.and_then(|value| {
-            value
-                .as_lisp_string()
-                .map(|ls| neovm_value::emacs_char::to_utf8_lossy_arc(ls.as_bytes()))
-        })
-    }
-
-    /// Shared-payload form of [`Self::foundry_runtime_string_owned`].
-    pub fn foundry_runtime_string_shared(&self) -> Option<std::sync::Arc<str>> {
-        self.foundry.and_then(|value| {
             value
                 .as_lisp_string()
                 .map(|ls| neovm_value::emacs_char::to_utf8_lossy_arc(ls.as_bytes()))
@@ -1041,7 +1038,8 @@ impl Face {
     }
 
     /// Effective foreground, accounting for inverse video.
-    pub fn effective_foreground(&self) -> Option<Color> {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn effective_foreground(&self) -> Option<Color> {
         if self.inverse_video == Some(true) {
             self.background
         } else {
@@ -1050,7 +1048,8 @@ impl Face {
     }
 
     /// Effective background, accounting for inverse video.
-    pub fn effective_background(&self) -> Option<Color> {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn effective_background(&self) -> Option<Color> {
         if self.inverse_video == Some(true) {
             self.foreground
         } else {
@@ -1059,7 +1058,8 @@ impl Face {
     }
 
     /// Convert to a Lisp plist.
-    pub fn to_plist(&self) -> Value {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn to_plist(&self) -> Value {
         let mut items = Vec::new();
 
         if let Some(fg) = &self.foreground {
@@ -2248,7 +2248,8 @@ impl FaceTable {
     }
 
     /// List all defined face names.
-    pub fn face_list(&self) -> Vec<String> {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn face_list(&self) -> Vec<String> {
         self.faces
             .map
             .keys()
@@ -2422,6 +2423,11 @@ pub struct FrameFaceRealizationCache {
     /// An unknown writer (no face name) sets `definitions_all_dirty` instead.
     pub dirty_definitions: rustc_hash::FxHashSet<Box<str>>,
     pub definitions_all_dirty: bool,
+    /// Lisp font objects already built for this realization, keyed by the
+    /// opened font's stable identity. GNU stores that object on the realized
+    /// face (`face->font`) and returns it from `internal-char-font`. A new
+    /// realization drops the map, so a face change builds the next object once.
+    pub opened_font_objects: rustc_hash::FxHashMap<String, Value>,
 }
 
 // --- K2: face realization lifecycle flag (stage-4) ---
@@ -2517,5 +2523,6 @@ impl GcTrace for FrameFaceRealizationCache {
                 realized.trace_roots(roots);
             }
         }
+        roots.extend(self.opened_font_objects.values().copied());
     }
 }

@@ -1,4 +1,5 @@
 use super::*;
+use crate::string_property_snapshot::StringSourceRootScope;
 
 fn window_chrome_test_face(face_resolver: &FaceResolver, origin: &DisplayOrigin) -> ResolvedFace {
     let buffer = neovm_core::buffer::Buffer::new_standalone(
@@ -146,8 +147,12 @@ fn window_chrome_display_row_request_renders_measured_lifecycle_row() {
         window_chrome_test_face(&face_resolver, &DisplayOrigin::ModeLine { selected: true });
     let mut font_metrics = None;
     let mut face_ids = FrameFaceAttempt::for_test_with_next_id(1);
-    let mut render_services =
-        ChromeRowRenderServices::new(&mut font_metrics, &face_resolver, &mut face_ids);
+    let mut render_services = ChromeRowRenderServices::new(
+        &mut font_metrics,
+        &face_resolver,
+        &mut face_ids,
+        StringSourceRootScope::Rooted(eval.owned_root_retainer()),
+    );
     let mut symbol_values = std::collections::HashMap::new();
     symbol_values.insert("align-to".to_string(), Value::make_int(12));
 
@@ -200,8 +205,12 @@ fn header_line_fills_the_complete_window_width_with_its_base_face() {
     );
     let mut font_metrics = None;
     let mut face_ids = FrameFaceAttempt::for_test_with_next_id(1);
-    let mut render_services =
-        ChromeRowRenderServices::new(&mut font_metrics, &face_resolver, &mut face_ids);
+    let mut render_services = ChromeRowRenderServices::new(
+        &mut font_metrics,
+        &face_resolver,
+        &mut face_ids,
+        StringSourceRootScope::Rooted(eval.owned_root_retainer()),
+    );
 
     let render = WindowChromeDisplayRowRequest {
         window_id: 42,
@@ -292,8 +301,12 @@ fn window_chrome_gui_tab_and_mode_lines_use_font_backed_glyph_advances() {
         let base_face = proportional_chrome_test_face(&face_resolver, &origin);
         let mut font_metrics = Some(crate::font::metrics::test_catalog::metrics_service());
         let mut face_ids = FrameFaceAttempt::for_test_with_next_id(1);
-        let mut render_services =
-            ChromeRowRenderServices::new(&mut font_metrics, &face_resolver, &mut face_ids);
+        let mut render_services = ChromeRowRenderServices::new(
+            &mut font_metrics,
+            &face_resolver,
+            &mut face_ids,
+            StringSourceRootScope::Rooted(eval.owned_root_retainer()),
+        );
 
         let render = WindowChromeDisplayRowRequest {
             window_id: 42,
@@ -333,8 +346,12 @@ fn frame_tab_bar_gui_uses_font_backed_glyph_advances() {
     let base_face = proportional_chrome_test_face(&face_resolver, &DisplayOrigin::TabBar);
     let mut font_metrics = Some(crate::font::metrics::test_catalog::metrics_service());
     let mut face_ids = FrameFaceAttempt::for_test_with_next_id(1);
-    let mut render_services =
-        ChromeRowRenderServices::new(&mut font_metrics, &face_resolver, &mut face_ids);
+    let mut render_services = ChromeRowRenderServices::new(
+        &mut font_metrics,
+        &face_resolver,
+        &mut face_ids,
+        StringSourceRootScope::Rooted(_eval.owned_root_retainer()),
+    );
 
     let measured = FrameTabBarDisplayRowRequest {
         row_index: 0,
@@ -364,8 +381,12 @@ fn frame_tab_bar_fills_the_complete_frame_width_with_its_base_face() {
     let base_face = window_chrome_test_face(&face_resolver, &DisplayOrigin::TabBar);
     let mut font_metrics = None;
     let mut face_ids = FrameFaceAttempt::for_test_with_next_id(1);
-    let mut render_services =
-        ChromeRowRenderServices::new(&mut font_metrics, &face_resolver, &mut face_ids);
+    let mut render_services = ChromeRowRenderServices::new(
+        &mut font_metrics,
+        &face_resolver,
+        &mut face_ids,
+        StringSourceRootScope::Rooted(_eval.owned_root_retainer()),
+    );
 
     let measured = FrameTabBarDisplayRowRequest {
         row_index: 0,
@@ -560,6 +581,7 @@ fn tab_bar_image_relief_styles_resolve_color_source_per_image_slot() {
             opaque_background: neomacs_display_protocol::ImageOpaqueBackground::new(
                 opaque_background,
             ),
+            presentation: neomacs_display_protocol::ImageGlyphPresentation::Texture,
         };
         glyph
     };
@@ -621,6 +643,7 @@ fn tab_bar_image_relief_uses_glyph_at_visual_column_after_wide_stretch() {
         width_cols: 1,
         margins: image_margins,
         opaque_background: neomacs_display_protocol::ImageOpaqueBackground::default(),
+        presentation: neomacs_display_protocol::ImageGlyphPresentation::Texture,
     };
     row.glyphs[GlyphArea::Text.index()] = vec![Glyph::stretch(3, fallback_face), image_glyph];
 
@@ -706,6 +729,7 @@ fn tab_pointer_test_frame(highlight_face: FaceId) -> FrameGlyphBuffer {
         height: 16.0,
         face_id: FaceId::new(0),
         box_vertical_edges: Default::default(),
+        presentation: neomacs_display_protocol::ImageGlyphPresentation::Texture,
     });
     frame
 }
@@ -726,10 +750,13 @@ fn tab_bar_pointer_counts_compositions_as_one_primitive_not_one_per_source_chara
         let base_face = window_chrome_test_face(&resolver, &DisplayOrigin::TabBar);
         let mut fonts = None;
         let mut faces = FrameFaceAttempt::for_test_with_next_id(1);
-        let mut services = ChromeRowRenderServices::new(&mut fonts, &resolver, &mut faces)
-            .with_automatic_composition(crate::neovm_bridge::current_string_composition_rules(
-                &eval,
-            ));
+        let mut services = ChromeRowRenderServices::new(
+            &mut fonts,
+            &resolver,
+            &mut faces,
+            StringSourceRootScope::Rooted(eval.owned_root_retainer()),
+        )
+        .with_automatic_composition(crate::neovm_bridge::current_string_composition_rules(&eval));
         let measured = FrameTabBarDisplayRowRequest {
             row_index: 0,
             y: 0.0,
@@ -1029,8 +1056,12 @@ fn window_chrome_mode_line_row_grows_for_tall_display_element() {
         window_chrome_test_face(&face_resolver, &DisplayOrigin::ModeLine { selected: true });
     let mut font_metrics = None;
     let mut face_ids = FrameFaceAttempt::for_test_with_next_id(1);
-    let mut render_services =
-        ChromeRowRenderServices::new(&mut font_metrics, &face_resolver, &mut face_ids);
+    let mut render_services = ChromeRowRenderServices::new(
+        &mut font_metrics,
+        &face_resolver,
+        &mut face_ids,
+        StringSourceRootScope::Rooted(eval.owned_root_retainer()),
+    );
 
     // Allocated bounds use a 16px char height (the face estimate).
     let allocated_height = 16.0_f32;

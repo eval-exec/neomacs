@@ -168,35 +168,15 @@ fn find_composition_internal_returns_nil_when_no_composition() {
 }
 
 /// GNU's default `composition-function-table' rule for a combining mark looks
-/// back one character and composes the base plus following marks.  This is the
-/// path used by `string-glyph-split' for decomposed graphemes.
+/// back one character and composes the base plus following marks via
+/// `auto-composition-function'.  This is the path used by `string-glyph-split'
+/// for decomposed graphemes.
 #[test]
 fn find_composition_internal_finds_automatic_combining_sequence_in_string() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::test_utils::new_context();
-    let current_buffer = eval
-        .edit
-        .buffers
-        .current_buffer_id()
-        .expect("current buffer for automatic composition");
-    eval.frame_manager_mut()
-        .create_frame("automatic-composition", 80, 24, current_buffer);
-    let table = eval.visible_variable_value_or_nil("composition-function-table");
-    let combining_rule = Value::vector(vec![
-        Value::string("\\c.\\c^+"),
-        Value::fixnum(1),
-        Value::symbol("compose-gstring-for-graphic"),
-    ]);
-    neovm_text::emacs_core::chartable::builtin_set_char_table_range_with_symbols(
-        vec![
-            table,
-            Value::fixnum(0x0301),
-            Value::list(vec![combining_rule]),
-        ],
-        Some(eval.variables()),
-        eval.symbol_mode(),
-    )
-    .expect("install combining composition rule");
+    let mut eval = crate::test_utils::runtime_startup_context();
+    eval.eval_str("(set-window-buffer (selected-window) (current-buffer))")
+        .expect("display current buffer in selected window");
     let string = Value::string("e\u{0301}");
 
     let found = find_composition_internal(
@@ -210,8 +190,23 @@ fn find_composition_internal_finds_automatic_combining_sequence_in_string() {
     assert_eq!(items[1].as_fixnum(), Some(2));
     assert!(
         items[2].is_vector(),
-        "automatic composition returns a gstring"
+        "automatic composition returns a shaped gstring"
     );
+
+    let saved_acf = eval.visible_variable_value_or_nil("auto-composition-function");
+    eval.obarray_mut()
+        .set_symbol_value("auto-composition-function", Value::NIL);
+    let no_func = find_composition_internal(
+        &mut eval,
+        vec![Value::fixnum(0), Value::fixnum(1), string, Value::NIL],
+    )
+    .expect("nil auto-composition-function lookup");
+    assert!(
+        no_func.is_nil(),
+        "auto-composition-function nil must return nil for automatic string composition (GNU #842)"
+    );
+    eval.obarray_mut()
+        .set_symbol_value("auto-composition-function", saved_acf);
 
     eval.obarray_mut()
         .set_symbol_value("auto-composition-mode", Value::NIL);
@@ -414,7 +409,7 @@ fn automatic_composition_spans_use_loadup_tai_tham_rule() {
         .expect("Tai Tham composition rules");
     let fields = rules[0].as_vector_data().expect("composition rule vector");
     assert!(
-        fields[0].as_utf8_str().is_none(),
+        fields.at(0).as_utf8_str().is_none(),
         "the loadup rule must exercise a valid Lisp regexp that is not UTF-8"
     );
 
@@ -1155,5 +1150,108 @@ fn visible_scan_fast_path_matches_the_full_scan() {
     assert!(
         !arrow_composes(&spans(&eval, true, 0, chars)),
         "the arrow no longer composes"
+    );
+}
+
+#[test]
+fn find_composition_internal_automatic_skips_lisp_font_at_and_passes_tty_frame() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = crate::test_utils::runtime_startup_context();
+    let current_buffer = eval
+        .edit
+        .buffers
+        .current_buffer_id()
+        .expect("current buffer");
+    let frame_id = eval
+        .frame_manager()
+        .selected_frame()
+        .map(|frame| frame.id)
+        .unwrap_or_else(|| {
+            eval.frame_manager_mut().create_frame(
+                "automatic-composition-tty",
+                80,
+                24,
+                current_buffer,
+            )
+        });
+    eval.eval_str("(set-window-buffer (selected-window) (current-buffer))")
+        .expect("display current buffer in selected window");
+    eval.edit
+        .buffers
+        .current_buffer_mut()
+        .expect("current buffer")
+        .insert("cafe\u{0301}\n");
+
+    // Advise `font-at` to count calls and wrap `auto-composition-function` to
+    // observe the exact `font-object` passed by `shape_composition_gstring`.
+    eval.eval_str(
+        r#"(progn
+             (defvar test-font-at-calls 0)
+             (defvar test-seen-acf nil)
+             (advice-add 'font-at :before
+                         (lambda (&rest _args)
+                           (setq test-font-at-calls (1+ test-font-at-calls))))
+             (setq auto-composition-function
+                   (lambda (func from to font-object string direction)
+                     (setq test-seen-acf
+                           (list func from to (framep font-object) font-object string direction))
+                     (auto-compose-chars func from to font-object string direction))))"#,
+    )
+    .expect("install test hooks");
+
+    let found = find_composition_internal(
+        &mut eval,
+        vec![Value::fixnum(4), Value::NIL, Value::NIL, Value::T],
+    )
+    .expect("find-composition-internal");
+
+    let font_at_calls = eval
+        .eval_str("test-font-at-calls")
+        .expect("read test-font-at-calls");
+    assert_eq!(
+        font_at_calls.as_fixnum(),
+        Some(0),
+        "automatic composition must not invoke Lisp font-at"
+    );
+
+    let items = list_to_vec(&found).expect("expected automatic composition (4 6 gstring)");
+    assert_eq!(items.len(), 3);
+    assert_eq!(items[0].as_fixnum(), Some(4));
+    assert_eq!(items[1].as_fixnum(), Some(6));
+    let gstring = items[2]
+        .as_vector_data()
+        .expect("third slot must be a gstring vector");
+    let g0_item = gstring.at(2);
+    let g0 = g0_item
+        .as_vector_data()
+        .expect("first glyph in shaped terminal gstring");
+    let g1_item = gstring.at(3);
+    let g1 = g1_item
+        .as_vector_data()
+        .expect("second glyph in shaped terminal gstring");
+    assert_eq!(
+        (g0.at(0).as_fixnum(), g0.at(1).as_fixnum()),
+        (Some(0), Some(1)),
+        "compose-gstring-for-terminal must merge glyph 0 to [0..1]"
+    );
+    assert_eq!(
+        (g1.at(0).as_fixnum(), g1.at(1).as_fixnum()),
+        (Some(0), Some(1)),
+        "compose-gstring-for-terminal must merge glyph 1 to [0..1]"
+    );
+
+    let seen = eval.eval_str("test-seen-acf").expect("read test-seen-acf");
+    let seen_items = list_to_vec(&seen).expect("auto-composition-function must have been called");
+    assert_eq!(seen_items[1].as_fixnum(), Some(4));
+    assert_eq!(seen_items[2].as_fixnum(), Some(6));
+    assert_eq!(
+        seen_items[3],
+        Value::T,
+        "TTY frame must satisfy (framep ...)"
+    );
+    assert_eq!(
+        seen_items[4],
+        Value::make_frame(frame_id.0),
+        "TTY auto-composition-function must receive win->frame"
     );
 }

@@ -291,3 +291,53 @@ fn undo_list_reads_answer_the_shared_state() {
     ev.unbind_to(count);
     assert_eq!(read(&ev), shared);
 }
+
+#[test]
+fn root_owner_ns_confirm_quit_bindings_publish_and_restore_host_projection() {
+    use crate::emacs_core::eval::{GuiFrameHostRequest, protocol::DisplayHost};
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    struct Host(Rc<RefCell<Vec<bool>>>);
+    impl DisplayHost for Host {
+        fn realize_gui_frame(&mut self, _request: GuiFrameHostRequest) -> Result<(), String> {
+            Ok(())
+        }
+
+        fn resize_gui_frame(&mut self, _request: GuiFrameHostRequest) -> Result<(), String> {
+            Ok(())
+        }
+
+        fn set_ns_confirm_quit(&mut self, enabled: bool) {
+            self.0.borrow_mut().push(enabled);
+        }
+    }
+
+    let mut ev = projected(&[]);
+    // Linux does not seed the NS-only variable. Establish the same initial
+    // value explicitly before projecting its canonical cell on every host.
+    assert_eq!(
+        eval(&mut ev, "(defvar ns-confirm-quit nil)"),
+        "ns-confirm-quit"
+    );
+    let symbol = intern("ns-confirm-quit");
+    ev.project_thread_variable_for_test(symbol)
+        .expect("NS confirmation variable projects");
+    let values = Rc::new(RefCell::new(Vec::new()));
+    ev.set_display_host(Box::new(Host(Rc::clone(&values))));
+    values.borrow_mut().clear();
+    let outer = ev.specpdl.len();
+    ev.try_specbind(symbol, Value::T).expect("root owner bind");
+    assert_eq!(
+        ev.owner.slab().unwrap().records_of(symbol).count(),
+        1,
+        "exercise the root owner's binding slab, not a canonical-cell let"
+    );
+    let inner = ev.specpdl.len();
+    ev.try_specbind(symbol, Value::NIL)
+        .expect("nested owner bind");
+    ev.unbind_to(inner);
+    ev.unbind_to(outer);
+    assert_eq!(&*values.borrow(), &[true, false, true, false]);
+    assert_eq!(eval(&mut ev, "ns-confirm-quit"), "nil");
+}

@@ -7,7 +7,7 @@
 //! its 3000-line ceiling and assertion; only the file path resolves to the
 //! value crate.
 use crate::emacs_core::eval::SubrValueExt;
-use crate::emacs_core::intern::{intern, intern_uninterned};
+use crate::emacs_core::intern::{intern, make_uninterned_symbol};
 use crate::tagged::header::{SubrDispatchKind, VecLikeType};
 use crate::tagged::value::TaggedValue;
 use neovm_eval::test_support::authority::{lookup_global_subr_entry, subr_entry_dispatch_kind};
@@ -63,7 +63,7 @@ fn subr_object_resolves_by_public_name() {
 
     assert_eq!(canonical_subr.as_subr_id(), Some(canonical));
 
-    let uninterned = intern_uninterned("car");
+    let uninterned = make_uninterned_symbol("car");
     let uninterned_subr = TaggedValue::subr(uninterned);
     assert_eq!(uninterned_subr.as_subr_id(), Some(canonical));
     assert_eq!(canonical_subr.bits(), uninterned_subr.bits());
@@ -101,7 +101,7 @@ fn alloc_roundtrip_cost_probe() {
         for _ in 0..1000 {
             alloc_one(&mut heap);
         }
-        heap.collect_exact(std::iter::empty());
+        heap.collect_rooted(std::iter::empty());
 
         let t0 = Instant::now();
         for _ in 0..m {
@@ -111,11 +111,11 @@ fn alloc_roundtrip_cost_probe() {
 
         // Free side: empty-roots collection frees all M objects.
         let t1 = Instant::now();
-        heap.collect_exact(std::iter::empty());
+        heap.collect_rooted(std::iter::empty());
         let free_total = t1.elapsed();
         // Baseline: same collection on the now-empty heap (fixed overhead).
         let t2 = Instant::now();
-        heap.collect_exact(std::iter::empty());
+        heap.collect_rooted(std::iter::empty());
         let baseline = t2.elapsed();
         let free_ns = (free_total.saturating_sub(baseline)).as_nanos() as f64 / m as f64;
 

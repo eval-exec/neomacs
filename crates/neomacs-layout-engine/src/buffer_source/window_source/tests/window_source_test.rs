@@ -45,6 +45,7 @@ fn window_params() -> WindowParams {
         tab_stop_list: vec![],
         default_fg: 0x00ff_ffff,
         frame_foreground: 0x00ff_ffff,
+        frame_background: 0,
         default_bg: 0,
         char_width: 8.0,
         char_height: 16.0,
@@ -90,6 +91,7 @@ fn window_params() -> WindowParams {
         horizontal_scroll_bar: false,
         scroll_bar_pixel_width: 0.0,
         scroll_bar_pixel_height: 0.0,
+        bidi_paragraph_directions: Default::default(),
     }
 }
 
@@ -114,8 +116,10 @@ fn request(
     )
 }
 
-fn byte_at_charpos(text: &'static [u8]) -> impl Fn(i64) -> Option<u8> {
-    move |charpos| text.get(charpos as usize).copied()
+/// `text` as the line searches read it: unibyte ASCII, so character and
+/// byte positions coincide.
+fn byte_at_charpos(text: &'static [u8]) -> &'static [u8] {
+    text
 }
 
 #[test]
@@ -420,4 +424,353 @@ fn source_request_does_not_forward_scroll_degenerate_one_row_window() {
         resolved, 0,
         "a 1-row (degenerate) window must not forward-scroll past its start"
     );
+}
+
+/// A real buffer behind a view that counts every per-position read: the
+/// character/byte conversions and single-byte reads. A newline search counts
+/// as one read, because it is one call however many bytes it scans. Span
+/// reads (`layout_try_for_each_emacs_byte_range_chunk`) are not counted.
+struct PositionReadCounter<'a> {
+    buffer: &'a neovm_core::buffer::Buffer,
+    reads: std::cell::Cell<usize>,
+}
+
+impl PositionReadCounter<'_> {
+    fn count(&self) {
+        self.reads.set(self.reads.get() + 1);
+    }
+}
+
+impl crate::neovm_bridge::LayoutBufferView for PositionReadCounter<'_> {
+    fn layout_is_multibyte(&self) -> bool {
+        self.buffer.layout_is_multibyte()
+    }
+    fn layout_buffer_local_value(&self, var: crate::neovm_bridge::LayoutVar) -> Option<Value> {
+        self.buffer.layout_buffer_local_value(var)
+    }
+    fn layout_point_min_emacs_byte_pos(&self) -> EmacsBytePos {
+        self.buffer.layout_point_min_emacs_byte_pos()
+    }
+    fn layout_point_max_emacs_byte_pos(&self) -> EmacsBytePos {
+        self.buffer.layout_point_max_emacs_byte_pos()
+    }
+    fn layout_point_max_char_pos(&self) -> neovm_core::buffer::CharPos0 {
+        self.buffer.layout_point_max_char_pos()
+    }
+    fn layout_total_emacs_byte_len(&self) -> neovm_core::buffer::EmacsByteLen {
+        self.buffer.layout_total_emacs_byte_len()
+    }
+    fn layout_char_pos_to_emacs_byte_pos(
+        &self,
+        charpos: neovm_core::buffer::CharPos0,
+    ) -> EmacsBytePos {
+        self.count();
+        self.buffer.layout_char_pos_to_emacs_byte_pos(charpos)
+    }
+    fn layout_emacs_byte_pos_to_char_pos(
+        &self,
+        bytepos: EmacsBytePos,
+    ) -> neovm_core::buffer::CharPos0 {
+        self.count();
+        self.buffer.layout_emacs_byte_pos_to_char_pos(bytepos)
+    }
+    fn layout_copy_emacs_byte_range_to(&self, range: EmacsByteRange, out: &mut Vec<u8>) {
+        self.buffer.layout_copy_emacs_byte_range_to(range, out)
+    }
+    fn layout_try_for_each_emacs_byte_range_chunk<E>(
+        &self,
+        range: EmacsByteRange,
+        f: impl FnMut(&[u8]) -> Result<(), E>,
+    ) -> Result<(), E> {
+        self.buffer
+            .layout_try_for_each_emacs_byte_range_chunk(range, f)
+    }
+    fn layout_emacs_byte_at_pos(&self, pos: EmacsBytePos) -> Option<u8> {
+        self.count();
+        self.buffer.layout_emacs_byte_at_pos(pos)
+    }
+    fn layout_indexed_newline_count(&self, range: EmacsByteRange) -> Option<usize> {
+        self.buffer.layout_indexed_newline_count(range)
+    }
+    fn layout_nth_newline_emacs_byte(
+        &self,
+        from: EmacsBytePos,
+        limit: EmacsBytePos,
+        n: usize,
+    ) -> (EmacsBytePos, usize) {
+        self.count();
+        self.buffer.layout_nth_newline_emacs_byte(from, limit, n)
+    }
+    fn layout_prev_newline_emacs_byte(
+        &self,
+        from: EmacsBytePos,
+        floor: EmacsBytePos,
+    ) -> Option<EmacsBytePos> {
+        self.count();
+        self.buffer.layout_prev_newline_emacs_byte(from, floor)
+    }
+    fn layout_text_props_is_empty(&self) -> bool {
+        self.buffer.layout_text_props_is_empty()
+    }
+    fn layout_text_prop_at_emacs_byte_pos(&self, pos: EmacsBytePos, name: Value) -> Option<Value> {
+        self.buffer.layout_text_prop_at_emacs_byte_pos(pos, name)
+    }
+    fn layout_next_text_prop_change_after_emacs_byte_pos(
+        &self,
+        pos: EmacsBytePos,
+    ) -> Option<EmacsBytePos> {
+        self.buffer
+            .layout_next_text_prop_change_after_emacs_byte_pos(pos)
+    }
+    fn layout_next_single_text_prop_change_after_emacs_byte_pos(
+        &self,
+        pos: EmacsBytePos,
+        name: Value,
+    ) -> Option<EmacsBytePos> {
+        self.buffer
+            .layout_next_single_text_prop_change_after_emacs_byte_pos(pos, name)
+    }
+    fn layout_next_single_text_prop_change_after_emacs_byte_pos_bounded(
+        &self,
+        pos: EmacsBytePos,
+        name: Value,
+        limit: EmacsBytePos,
+    ) -> Option<EmacsBytePos> {
+        self.buffer
+            .layout_next_single_text_prop_change_after_emacs_byte_pos_bounded(pos, name, limit)
+    }
+    fn layout_previous_single_text_prop_change_before_emacs_byte_pos(
+        &self,
+        pos: EmacsBytePos,
+        name: Value,
+    ) -> Option<EmacsBytePos> {
+        self.buffer
+            .layout_previous_single_text_prop_change_before_emacs_byte_pos(pos, name)
+    }
+    fn layout_next_watched_text_prop_state_change_after_emacs_byte_pos(
+        &self,
+        pos: EmacsBytePos,
+        keys: &[Value],
+    ) -> Option<EmacsBytePos> {
+        self.buffer
+            .layout_next_watched_text_prop_state_change_after_emacs_byte_pos(pos, keys)
+    }
+    fn layout_previous_watched_text_prop_state_change_before_emacs_byte_pos(
+        &self,
+        pos: EmacsBytePos,
+        keys: &[Value],
+    ) -> Option<EmacsBytePos> {
+        self.buffer
+            .layout_previous_watched_text_prop_state_change_before_emacs_byte_pos(pos, keys)
+    }
+    fn layout_text_prop_present_anywhere(&self, name: Value) -> bool {
+        self.buffer.layout_text_prop_present_anywhere(name)
+    }
+    fn layout_syntax_prop_free_run_end_char_pos(
+        &self,
+        pos: neovm_core::buffer::CharPos0,
+        cap: neovm_core::buffer::CharPos0,
+    ) -> neovm_core::buffer::CharPos0 {
+        self.buffer
+            .layout_syntax_prop_free_run_end_char_pos(pos, cap)
+    }
+    fn layout_previous_syntax_prop_state_run_start_char_pos(
+        &self,
+        pos: neovm_core::buffer::CharPos0,
+    ) -> neovm_core::buffer::CharPos0 {
+        self.buffer
+            .layout_previous_syntax_prop_state_run_start_char_pos(pos)
+    }
+    fn layout_overlays(&self) -> crate::neovm_bridge::LayoutOverlays<'_> {
+        self.buffer.layout_overlays()
+    }
+}
+
+/// GNU finds a line boundary with `find_newline` (src/search.c), a `memchr`
+/// over the buffer text that converts positions only where the search starts
+/// and stops. Scrolling back to point in the middle of a 1 MB line must do the
+/// same: a handful of position reads, not one per character between point and
+/// the line start.
+#[test]
+fn source_request_scrolls_back_on_a_long_line_in_constant_position_reads() {
+    const LINE_CHARS: usize = 1_000_000;
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
+    let buffer_id = eval
+        .buffer_manager()
+        .current_buffer()
+        .expect("current buffer")
+        .id();
+    // Two short lines, then one long line. The last character goes in 1,000
+    // characters before point, which leaves the gap 999 characters before
+    // point: the backward search crosses it, as it does after an edit on the
+    // line.
+    let text = format!("ab\ncd\n{}\n", "x".repeat(LINE_CHARS));
+    let long_line_start = 6;
+    let point = long_line_start + LINE_CHARS as i64 / 2;
+    {
+        let buffer = eval
+            .buffer_manager_mut()
+            .get_mut(buffer_id)
+            .expect("current buffer");
+        let gap = point as usize - 1_000;
+        buffer.insert(&format!("{}{}", &text[..gap], &text[gap + 1..]));
+        buffer.goto_emacs_byte_pos(EmacsBytePos::new(gap));
+        buffer.insert(&text[gap..=gap]);
+    }
+    let buffer = eval
+        .buffer_manager()
+        .get(buffer_id)
+        .expect("current buffer");
+    let view = PositionReadCounter {
+        buffer,
+        reads: std::cell::Cell::new(0),
+    };
+
+    // Point sits above the requested start, so the resolver counts the lines
+    // back to point and then looks for point's line start.
+    let resolved = BufferWindowSourceRequest::new(
+        point + 100_000,
+        None,
+        point,
+        0,
+        text.len() as i64,
+        20,
+        WindowKind::Main,
+        // Minimal scrolling puts point on the top row: zero lines above it.
+        ScrollPolicy::Unlimited,
+        neovm_core::window::ScrollMargin::default(),
+    )
+    .resolve(&RustBufferAccess::new(&view))
+    .get();
+
+    assert_eq!(resolved, long_line_start, "point's line start");
+    assert!(
+        view.reads.get() <= 64,
+        "{} position reads to find a line start {} chars back",
+        view.reads.get(),
+        LINE_CHARS / 2,
+    );
+}
+
+/// The line searches read a real buffer through its newline searches. On
+/// multibyte text, with the gap inside a line and the buffer narrowed, they
+/// must agree with the per-character walk they replaced, which read one byte
+/// per character position.
+#[test]
+fn line_searches_on_a_gapped_narrowed_multibyte_buffer_agree_with_the_per_char_walk() {
+    use crate::scroll_policy::{count_lines_bounded, line_start_above, line_start_below};
+
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
+    let buffer_id = eval
+        .buffer_manager()
+        .current_buffer()
+        .expect("current buffer")
+        .id();
+    let line = "é".repeat(3_000);
+    let text = format!("α\n\nβγ{line}\nδ\n{line}x\n\nend");
+    let gap = text.find('δ').expect("gap position");
+    {
+        let buffer = eval
+            .buffer_manager_mut()
+            .get_mut(buffer_id)
+            .expect("current buffer");
+        // The last insertion leaves the gap inside the text, after `δ`.
+        let split = gap + 'δ'.len_utf8();
+        buffer.insert(&format!("{}{}", &text[..gap], &text[split..]));
+        buffer.goto_emacs_byte_pos(EmacsBytePos::new(gap));
+        buffer.insert("δ");
+        // Narrow away the first character and the last two.
+        let end = text.len() - "nd".len();
+        buffer.narrow_to_emacs_byte_range(EmacsByteRange::new(
+            EmacsBytePos::new('α'.len_utf8()),
+            EmacsBytePos::new(end),
+        ));
+    }
+    let buffer = eval
+        .buffer_manager()
+        .get(buffer_id)
+        .expect("current buffer");
+    let access = RustBufferAccess::new(buffer);
+    let byte_at = |charpos: i64| access.byte_at(access.charpos_to_bytepos(charpos));
+    let begv = 1;
+    let zv = text.chars().count() as i64 - 2;
+
+    let reference_count = |from: i64, to: i64, limit: i64| {
+        let mut lines = 0;
+        for pos in from..to {
+            if byte_at(pos) == Some(b'\n') {
+                lines += 1;
+                if lines > limit {
+                    return (lines, false);
+                }
+            }
+        }
+        (lines, true)
+    };
+    let reference_above = |point: i64, lines_above: i64, start: i64| {
+        let is_line_start = |pos: i64| pos <= start || byte_at(pos - 1) == Some(b'\n');
+        let mut pos = point.max(start);
+        while !is_line_start(pos) {
+            pos -= 1;
+        }
+        let mut moved = 0;
+        while moved < lines_above && pos > start {
+            pos -= 1;
+            while !is_line_start(pos) {
+                pos -= 1;
+            }
+            moved += 1;
+        }
+        pos
+    };
+    let reference_below = |from: i64, lines: i64, end: i64| {
+        let mut pos = from;
+        let mut moved = 0;
+        while moved < lines && pos < end {
+            if byte_at(pos) == Some(b'\n') {
+                moved += 1;
+            }
+            pos += 1;
+        }
+        pos
+    };
+
+    let positions = [
+        begv,
+        2,
+        3,
+        4,
+        5,
+        1_000,
+        3_004,
+        3_005,
+        3_006,
+        3_007,
+        3_008,
+        4_500,
+        zv - 3,
+        zv - 1,
+        zv,
+    ];
+    for &a in &positions {
+        for &b in &positions {
+            for n in [0, 1, 2, 5] {
+                assert_eq!(
+                    count_lines_bounded(a, b, n, &access),
+                    reference_count(a, b, n),
+                    "count_lines_bounded({a}, {b}, {n})"
+                );
+                assert_eq!(
+                    line_start_above(b, n, a, &access),
+                    reference_above(b, n, a),
+                    "line_start_above({b}, {n}, {a})"
+                );
+                assert_eq!(
+                    line_start_below(a, n, b, &access),
+                    reference_below(a, n, b),
+                    "line_start_below({a}, {n}, {b})"
+                );
+            }
+        }
+    }
 }

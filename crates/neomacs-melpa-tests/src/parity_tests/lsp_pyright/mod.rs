@@ -787,7 +787,7 @@ MELPA batch failed under load even though every completed record parsed."
        (dolist (buffer (buffer-list))
          (when (or (and source-buffer (eq buffer source-buffer))
                    (and (buffer-file-name buffer)
-                        (file-in-directory-p (buffer-file-name buffer) root))
+                        (neomacs-melpa-path-inside-p (buffer-file-name buffer) root))
                    (string-prefix-p "*pyright" (buffer-name buffer))
                    (string-prefix-p "*basedpyright" (buffer-name buffer)))
            (ignore-errors (kill-buffer buffer))))
@@ -795,7 +795,7 @@ MELPA batch failed under load even though every completed record parsed."
        (when (buffer-live-p origin-buffer)
          (set-buffer origin-buffer))
        (when (and (file-directory-p root)
-                  (file-in-directory-p
+                  (neomacs-melpa-path-inside-p
                    root
                    (file-name-as-directory
                     (getenv "NEOMACS_TEST_SANDBOX_ROOT"))))
@@ -883,7 +883,7 @@ MELPA batch failed under load even though every completed record parsed."
        (dolist (buffer (buffer-list))
          (when (or (and source-buffer (eq buffer source-buffer))
                    (and (buffer-file-name buffer)
-                        (file-in-directory-p (buffer-file-name buffer) root))
+                        (neomacs-melpa-path-inside-p (buffer-file-name buffer) root))
                    (buffer-local-value 'lsp-installation-buffer-mode buffer)
                    (string-prefix-p "*pyright" (buffer-name buffer))
                    (string-prefix-p "*basedpyright" (buffer-name buffer)))
@@ -892,7 +892,7 @@ MELPA batch failed under load even though every completed record parsed."
        (when (buffer-live-p origin-buffer)
          (set-buffer origin-buffer))
        (when (and (file-directory-p root)
-                  (file-in-directory-p
+                  (neomacs-melpa-path-inside-p
                    root
                    (file-name-as-directory
                     (getenv "NEOMACS_TEST_SANDBOX_ROOT"))))

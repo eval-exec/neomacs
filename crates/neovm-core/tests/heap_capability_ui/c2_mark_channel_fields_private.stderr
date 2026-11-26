@@ -1,0 +1,11 @@
+error[E0616]: field `0` of struct `MarkExitSlot` is private
+  --> tests/heap_capability_ui/c2_mark_channel_fields_private.rs:34:10
+   |
+34 |     slot.0 = Some(rx);
+   |          ^ private field
+
+error[E0616]: field `0` of struct `ConcurrentMarkFlag` is private
+  --> tests/heap_capability_ui/c2_mark_channel_fields_private.rs:36:10
+   |
+36 |     flag.0 = true;
+   |          ^ private field

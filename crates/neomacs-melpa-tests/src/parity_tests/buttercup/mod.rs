@@ -115,7 +115,7 @@ const PRELUDE: &str = r####"
 (defun but413-test-write (relative contents)
   (let ((file (expand-file-name relative but413-test-root)))
     (unless (and but413-test-root-owned
-                 (file-in-directory-p file but413-test-root))
+                 (neomacs-melpa-path-inside-p file but413-test-root))
       (error "Refusing Buttercup write outside owned root: %s" file))
     (make-directory (file-name-directory file) t)
     (let ((coding-system-for-write 'utf-8-unix))

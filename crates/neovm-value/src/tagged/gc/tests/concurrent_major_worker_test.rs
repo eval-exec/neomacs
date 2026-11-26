@@ -2,7 +2,7 @@
 
 use super::*;
 use crate::heap_types::LispString;
-use crate::intern::intern_uninterned;
+use crate::intern::make_uninterned_symbol;
 use crate::tagged::bytecode::chunk::ByteCodeFunction;
 use crate::tagged::header::ImageResident;
 use crate::value::scratch_bridge::{
@@ -127,6 +127,7 @@ fn claim_job(heap: &TestHeap, major: bool) -> ConcurrentClaimJob {
 }
 
 struct WorkerHarness {
+    heap: HeapIdentity,
     job: ConcurrentMarkJob,
     result: std::sync::mpsc::Receiver<ConcurrentMarkResult>,
     satb: Arc<SatbHandoff>,
@@ -136,6 +137,7 @@ impl WorkerHarness {
         let (exited, result) = std::sync::mpsc::channel();
         let satb = Arc::new(SatbHandoff::new());
         Self {
+            heap: heap.heap_identity(),
             job: ConcurrentMarkJob {
                 gray: MarkStack::default(),
                 claims: claim_job(heap, major),
@@ -156,17 +158,21 @@ impl WorkerHarness {
     }
 
     fn run(self) -> (ConcurrentMarkResult, Vec<TaggedValue>) {
-        run_concurrent_mark(self.job);
+        // SAFETY: `self.job` was assembled from this live fixture heap, which
+        // stays alive for this synchronous test run.
+        unsafe { run_concurrent_mark(self.heap, self.job) };
         let result = self.result.recv().expect("worker result missing");
         assert!(
             self.result.try_recv().is_err(),
             "worker must send only once"
         );
         let deferred = result
-            .deferred
+            .deferred_for_test()
             .iter()
             .copied()
-            .map(MarkWord::value)
+            // SAFETY: worker exited and handed deferred words back to the test
+            // harness's stopped heap owner thread before any sweep.
+            .map(|word| unsafe { word.value() })
             .collect();
         (result, deferred)
     }
@@ -185,14 +191,18 @@ fn snapshot(heap: &mut TestHeap, vector: TaggedValue) -> crate::tagged::header::
 }
 
 fn symbol(label: &str) -> TaggedValue {
-    TaggedValue::from_sym_id(intern_uninterned(label))
+    TaggedValue::from_sym_id(make_uninterned_symbol(label))
 }
 
-fn assert_symbol_once(result: &ConcurrentMarkResult, symbol: TaggedValue) {
+fn assert_symbol_slice_once(symbols: &[SymId], symbol: TaggedValue) {
     let crate::tagged::value::ValueKind::Symbol(id) = symbol.kind() else {
         panic!("expected a bare symbol");
     };
-    assert_eq!(result.symbols.iter().filter(|&&seen| seen == id).count(), 1);
+    assert_eq!(symbols.iter().filter(|&&seen| seen == id).count(), 1);
+}
+
+fn assert_symbol_once(result: &ConcurrentMarkResult, symbol: TaggedValue) {
+    assert_symbol_slice_once(result.symbols_for_test(), symbol);
 }
 
 #[test]
@@ -225,22 +235,19 @@ fn generational_worker_major_claims_promote_only_young_headers() {
             } else {
                 vec![]
             };
-            assert_eq!(logs.result.promo, expected, "{kind:?} {age:?}");
+            assert_eq!(logs.promo, expected, "{kind:?} {age:?}");
             if age == Age::Permanent {
                 assert_eq!(unsafe { (*header(value)).raw_mark() }, before);
             } else {
                 assert!(unsafe { (*header(value)).is_marked_at(job.parity) });
             }
-            logs.result.symbols.clear();
+            logs.symbols.clear();
             gray = MarkStack::default();
             assert!(concurrent_try_mark_owned_logged::<true>(
                 value, &job, &mut gray, &mut logs
             ));
             assert_eq!(kind.counter(&job), usize::from(age != Age::Permanent));
-            assert_eq!(
-                logs.result.promo, expected,
-                "rediscovery must not promote twice"
-            );
+            assert_eq!(logs.promo, expected, "rediscovery must not promote twice");
             assert!(gray.is_empty());
         }
     }
@@ -273,8 +280,8 @@ fn generational_worker_legacy_claim_parity_and_tenured_rules_are_unchanged() {
             } else {
                 assert!(unsafe { (*header(value)).is_marked_at(job.parity) });
             }
-            assert!(logs.result.promo.is_empty());
-            assert!(logs.result.symbols.is_empty());
+            assert!(logs.promo.is_empty());
+            assert!(logs.symbols.is_empty());
         }
     }
 }
@@ -295,8 +302,8 @@ fn generational_worker_born_black_claims_have_no_promo_or_child_handoff() {
             value, &job, &mut gray, &mut logs
         ));
         assert_eq!(kind.counter(&job), 0);
-        assert!(logs.result.promo.is_empty());
-        assert!(logs.result.symbols.is_empty());
+        assert!(logs.promo.is_empty());
+        assert!(logs.symbols.is_empty());
         assert!(gray.is_empty());
     }
 }
@@ -309,8 +316,8 @@ fn generational_worker_born_black_bytecode_does_not_read_its_value_children() {
     let child = roots.keep(heap.alloc_cons(TaggedValue::fixnum(1), TaggedValue::fixnum(2)));
     let key = symbol("u34-worker-unpublished-bc-child");
     let mut function = ByteCodeFunction::new(LambdaParams::simple(vec![]));
-    function.constants = vec![child, key].into();
-    function.arglist = key;
+    function.set_constants(vec![child, key].into());
+    function.set_arglist(key);
     let value = roots.keep(heap.alloc_bytecode(function));
     heap.close_alloc_regions();
     let job = claim_job(&heap, true);
@@ -322,8 +329,8 @@ fn generational_worker_born_black_bytecode_does_not_read_its_value_children() {
     ));
     assert_eq!(job.bc_claimed.load(Ordering::Relaxed), 0);
     assert!(gray.is_empty());
-    assert!(logs.result.promo.is_empty());
-    assert!(logs.result.symbols.is_empty());
+    assert!(logs.promo.is_empty());
+    assert!(logs.symbols.is_empty());
 }
 
 #[test]
@@ -350,8 +357,8 @@ fn generational_worker_refuses_interval_strings_and_snapshot_misses_before_claim
         assert_eq!(unsafe { (*header(value)).raw_mark() }, before);
     }
     assert!(gray.is_empty());
-    assert!(logs.result.promo.is_empty());
-    assert!(logs.result.symbols.is_empty());
+    assert!(logs.promo.is_empty());
+    assert!(logs.symbols.is_empty());
     assert_eq!(job.str_claimed.load(Ordering::Relaxed), 0);
     assert_eq!(job.vec_claimed.load(Ordering::Relaxed), 0);
 }
@@ -384,8 +391,8 @@ fn generational_worker_snapshot_misses_never_claim_or_promote_any_header_class()
         assert_eq!(unsafe { (*header(value)).raw_mark() }, before);
     }
     assert!(gray.is_empty());
-    assert!(logs.result.promo.is_empty());
-    assert!(logs.result.symbols.is_empty());
+    assert!(logs.promo.is_empty());
+    assert!(logs.symbols.is_empty());
     for kind in ClaimKind::ALL {
         assert_eq!(kind.counter(&job), 0);
     }
@@ -402,9 +409,9 @@ fn generational_worker_bytecode_routes_each_symbol_field_and_keeps_legacy_heap_f
             .map(|i| symbol(&format!("u34-worker-bc-{i}")))
             .collect();
         let mut function = ByteCodeFunction::new(LambdaParams::simple(vec![]));
-        function.arglist = symbols[0];
-        function.constants = vec![symbols[1], child, TaggedValue::fixnum(7), symbols[0]].into();
-        function.env = Some(symbols[2]);
+        function.set_arglist(symbols[0]);
+        function.set_constants(vec![symbols[1], child, TaggedValue::fixnum(7), symbols[0]].into());
+        function.set_env(Some(symbols[2]));
         function.doc_form = Some(symbols[3]);
         function.interactive = Some(symbols[4]);
         function.extra_slots = vec![symbols[5], symbols[0]];
@@ -419,15 +426,16 @@ fn generational_worker_bytecode_routes_each_symbol_field_and_keeps_legacy_heap_f
             concurrent_try_mark_owned_logged::<false>(value, &job, &mut gray, &mut logs)
         };
         assert!(handled);
-        assert_eq!(gray.into_values(), [child]);
+        // SAFETY: synchronous test helper on the owning thread before sweep.
+        assert_eq!(unsafe { gray.into_values() }, [child]);
         if major {
-            assert_eq!(logs.result.promo, [header(value) as usize]);
+            assert_eq!(logs.promo, [header(value) as usize]);
             for symbol in &symbols {
-                assert_symbol_once(&logs.result, *symbol);
+                assert_symbol_slice_once(&logs.symbols, *symbol);
             }
         } else {
-            assert!(logs.result.promo.is_empty());
-            assert!(logs.result.symbols.is_empty());
+            assert!(logs.promo.is_empty());
+            assert!(logs.symbols.is_empty());
         }
     }
 }
@@ -478,10 +486,12 @@ fn generational_worker_gray_and_satb_symbols_reach_major_result_only() {
         let first = symbol("u34-worker-gray");
         let second = symbol("u34-worker-satb");
         let mut harness = WorkerHarness::new(&heap, major);
-        harness.job.gray.push(first);
+        // SAFETY: bare symbols pushed for this live test harness run.
+        unsafe { harness.job.gray.push(first) };
         let mut buffer = satb::SatbBuffer::new();
         for value in [first, second] {
-            buffer.push(MarkWord::of(value), &harness.satb);
+            // SAFETY: bare symbols pushed into this harness's SATB handoff.
+            unsafe { buffer.push(value, &harness.satb) };
         }
         buffer.retire(&harness.satb).unwrap().acknowledge();
         let (result, deferred) = harness.run();
@@ -561,7 +571,8 @@ fn generational_worker_early_cdr_stop_retains_initial_claims_symbols_and_tail() 
     let vector = roots.keep(heap.alloc_vector(vec![key, float]));
     heap.close_alloc_regions();
     let mut harness = WorkerHarness::new(&heap, true);
-    harness.job.gray.push(spine);
+    // SAFETY: `spine` is rooted on `heap` for this synchronous harness run.
+    unsafe { harness.job.gray.push(spine) };
     harness.job.vectors = Some(snapshot(&mut heap, vector));
     let parity = harness.job.claims.parity;
     let (result, deferred) = harness.run();
@@ -597,10 +608,12 @@ fn generational_worker_outer_stop_preserves_unprocessed_gray_and_owned_logs() {
     heap.close_alloc_regions();
     let mut harness = WorkerHarness::new(&heap, true);
     for _ in 0..2048 {
-        harness.job.gray.push(value);
+        // SAFETY: `value` is rooted on `heap` for this synchronous harness run.
+        unsafe { harness.job.gray.push(value) };
     }
     // Both are visited before the quantum reaches the repeated float tail.
-    harness.job.gray.push(key);
+    // SAFETY: `key` is a bare symbol for this synchronous harness run.
+    unsafe { harness.job.gray.push(key) };
     let (result, deferred) = harness.run();
     assert_eq!(result.promo, [header(value) as usize]);
     assert_symbol_once(&result, key);
@@ -685,7 +698,10 @@ fn concurrent_worker_channel_dispatch_preserves_legacy_and_enabled_symbol_polici
                 });
                 let mut harness = WorkerHarness::new(&heap, major);
                 harness.job.claims.pages = pages;
-                harness.job.gray = MarkStack::from_values(vec![root_cons, owner, position]);
+                // SAFETY: `root_cons`, `owner`, and `position` live on `heap`
+                // until `harness.result.recv()` completes below.
+                harness.job.gray =
+                    unsafe { MarkStack::from_values(vec![root_cons, owner, position]) };
                 let done = harness.job.done.clone();
                 let request = if let Some(claims) = extension {
                     GcRequest::ConcurrentMarkEnabled(Box::new(EnabledConcurrentMarkJob {
@@ -697,7 +713,9 @@ fn concurrent_worker_channel_dispatch_preserves_legacy_and_enabled_symbol_polici
                 };
                 // Exercise the actual shared channel match, not a direct loop
                 // call or a model of its enabled/legacy election.
-                send_to_collector(heap.heap_identity(), request);
+                // SAFETY: `heap` and all snapshot objects remain alive until
+                // `harness.result.recv()` joins the worker below.
+                unsafe { send_to_collector(heap.heap_identity(), request) };
                 let result = harness
                     .result
                     // Keep the heap alive until the actual exit handoff. A
@@ -729,8 +747,8 @@ fn concurrent_worker_channel_dispatch_preserves_legacy_and_enabled_symbol_polici
                     assert_eq!(leaf.load(Ordering::Relaxed), 1);
                     assert_eq!(hash.load(Ordering::Relaxed), 1);
                 } else {
-                    assert!(deferred.contains(&MarkWord::of(owner)));
-                    assert!(deferred.contains(&MarkWord::of(position)));
+                    assert!(deferred.iter().any(|word| word.bits() == owner.bits()));
+                    assert!(deferred.iter().any(|word| word.bits() == position.bits()));
                     assert!(!unsafe { (*header(owner)).is_marked_at(parity) });
                     assert!(!unsafe { (*header(position)).is_marked_at(parity) });
                 }

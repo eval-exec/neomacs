@@ -19,6 +19,7 @@ use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 pub(crate) struct OutputSourceFrameCheckpoint {
     backgrounds_len: usize,
     face_fills_len: usize,
+    fringe_backgrounds_len: usize,
     borders_len: usize,
     cursors_len: usize,
     scroll_bars_len: usize,
@@ -34,6 +35,7 @@ pub(crate) struct OutputSourceFrameCheckpoint {
 pub(crate) struct OutputFrameBuildState {
     backgrounds: Vec<BackgroundItem>,
     face_fills: Vec<FaceFillItem>,
+    fringe_backgrounds: Vec<BackgroundItem>,
     borders: Vec<BorderItem>,
     cursors: Vec<CursorItem>,
     scroll_bars: Vec<ScrollBarItem>,
@@ -64,6 +66,7 @@ impl OutputFrameBuildState {
         Self {
             backgrounds: Vec::new(),
             face_fills: Vec::new(),
+            fringe_backgrounds: Vec::new(),
             borders: Vec::new(),
             cursors: Vec::new(),
             scroll_bars: Vec::new(),
@@ -113,6 +116,7 @@ impl OutputFrameBuildState {
         OutputSourceFrameCheckpoint {
             backgrounds_len: self.backgrounds.len(),
             face_fills_len: self.face_fills.len(),
+            fringe_backgrounds_len: self.fringe_backgrounds.len(),
             borders_len: self.borders.len(),
             cursors_len: self.cursors.len(),
             scroll_bars_len: self.scroll_bars.len(),
@@ -133,9 +137,10 @@ impl OutputFrameBuildState {
         &mut self,
         checkpoint: OutputSourceFrameCheckpoint,
     ) {
-        // Horizon failure returns before install_body/tail/chrome publication.
-        // Do not extend this guard past that boundary: published window info or
-        // geometry must use the existing outer continuation instead.
+        // Both source-horizon and whole-leaf rejection precede window metadata
+        // publication. A leaf may already have closed its speculative row grid;
+        // its separate window checkpoint can discard that grid, but neither
+        // checkpoint can retract accepted window info or presented geometry.
         assert_eq!(
             self.window_infos.len(),
             checkpoint.window_infos_len,
@@ -143,6 +148,8 @@ impl OutputFrameBuildState {
         );
         self.backgrounds.truncate(checkpoint.backgrounds_len);
         self.face_fills.truncate(checkpoint.face_fills_len);
+        self.fringe_backgrounds
+            .truncate(checkpoint.fringe_backgrounds_len);
         self.borders.truncate(checkpoint.borders_len);
         self.cursors.truncate(checkpoint.cursors_len);
         self.scroll_bars.truncate(checkpoint.scroll_bars_len);
@@ -166,6 +173,7 @@ impl OutputFrameBuildState {
     pub(crate) fn reset(&mut self) {
         self.backgrounds.clear();
         self.face_fills.clear();
+        self.fringe_backgrounds.clear();
         self.borders.clear();
         self.cursors.clear();
         self.scroll_bars.clear();
@@ -261,6 +269,10 @@ impl OutputFrameBuildState {
             }
             OutputFrameArtifactInstallRequest::FaceFill(item) => {
                 self.face_fills.push(item);
+            }
+            OutputFrameArtifactInstallRequest::FringeBackground { bounds, color } => {
+                self.fringe_backgrounds
+                    .push(BackgroundItem { bounds, color });
             }
             OutputFrameArtifactInstallRequest::Border {
                 window_id,
@@ -360,6 +372,7 @@ impl OutputFrameBuildState {
         );
         state.backgrounds = self.backgrounds;
         state.face_fills = self.face_fills;
+        state.fringe_backgrounds = self.fringe_backgrounds;
         state.borders = self.borders;
         state.cursors = self.cursors;
         state.scroll_bars = self.scroll_bars;

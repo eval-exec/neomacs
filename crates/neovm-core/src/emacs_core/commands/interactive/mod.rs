@@ -523,9 +523,7 @@ fn interactive_event_is_down_event(event: &Value, symbol_mode: SymbolMode) -> bo
 
 fn interactive_last_key_sequence_event(sequence: &Value) -> Option<Value> {
     match sequence.kind() {
-        ValueKind::Veclike(VecLikeType::Vector) => {
-            sequence.as_vector_data().and_then(|v| v.last().copied())
-        }
+        ValueKind::Veclike(VecLikeType::Vector) => sequence.as_vector_data().and_then(|v| v.last()),
         _ => None,
     }
 }

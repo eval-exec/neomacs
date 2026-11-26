@@ -160,7 +160,7 @@ fn jit_bg_superseded_pending_entry_releases_the_park() {
     let f = add1();
     assert_eq!(run(ctx, &f, 1), None);
     assert!(f.jit_runtime().tier_up_parked());
-    cache::clear();
+    cache::clear_with_serial_receipt().expect("serial jit grace");
     assert_eq!(pending_count(), 0);
     assert!(!f.jit_runtime().tier_up_parked());
     let len = f.executable_ops().len();
@@ -240,7 +240,7 @@ fn jit_bg_first_sight_installs_a_finished_pending_compile() {
     let f = add1();
     assert_eq!(run(ctx, &f, 1), None);
     assert_eq!(kind(&f), "pending");
-    assert!(cache::resolve_compiled_leaf_ptr(ctx, &f).is_some());
+    assert!(unsafe { cache::resolve_compiled_leaf_ptr(ctx, &f) }.is_some());
     assert_eq!(kind(&f), "compiled");
     force_deferred_install_for_test(false);
     force_mode_for_test(None);

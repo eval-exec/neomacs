@@ -63,7 +63,7 @@ impl Captures {
             .callback
             .get_bytecode_data()
             .ok_or(CompileError::BadOperand)?;
-        let constants = mask_dynamic_prefix(&code.constants, site.prefix);
+        let constants = mask_dynamic_prefix(code.constants(), site.prefix);
         let cfg = analyze_cfg(
             code.executable_ops(),
             &constants,

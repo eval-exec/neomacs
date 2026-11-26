@@ -1,0 +1,11 @@
+error[E0432]: unresolved import `neovm_value::tagged::gc::FloatTailRefund`
+ --> tests/heap_capability_ui/a4_owner_region_no_float_tail_refund.rs:3:5
+  |
+3 | use neovm_value::tagged::gc::FloatTailRefund;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ no `FloatTailRefund` in `tagged::gc`
+  |
+help: a similar name exists in the module
+  |
+3 - use neovm_value::tagged::gc::FloatTailRefund;
+3 + use neovm_value::tagged::gc::ConsTailRefund;
+  |

@@ -16,8 +16,6 @@ use crate::emacs_core::error::expect_args_range;
 use crate::heap_types::LispString;
 use neovm_edit::emacs_core::edit_host::EditHost;
 use std::collections::VecDeque;
-#[cfg(unix)]
-use std::ffi::CStr;
 use std::fs;
 
 mod file_identity;
@@ -139,58 +137,12 @@ fn system_time_to_secs_nanos(time: std::time::SystemTime) -> Option<(i64, i64)> 
 
 #[cfg(unix)]
 fn uid_to_name(uid: u32) -> Option<String> {
-    unsafe {
-        let mut pwd: libc::passwd = std::mem::zeroed();
-        let mut result: *mut libc::passwd = std::ptr::null_mut();
-        let mut buf_len = 1024usize;
-
-        loop {
-            let mut buf = vec![0u8; buf_len];
-            let rc = libc::getpwuid_r(uid, &mut pwd, buf.as_mut_ptr().cast(), buf_len, &mut result);
-
-            if rc == 0 {
-                if result.is_null() || pwd.pw_name.is_null() {
-                    return None;
-                }
-                return Some(CStr::from_ptr(pwd.pw_name).to_string_lossy().into_owned());
-            }
-
-            if rc == libc::ERANGE && buf_len < (1 << 20) {
-                buf_len *= 2;
-                continue;
-            }
-
-            return None;
-        }
-    }
+    neovm_value::system_vocab::posix_lookup::lookup_user_name(uid)
 }
 
 #[cfg(unix)]
 fn gid_to_name(gid: u32) -> Option<String> {
-    unsafe {
-        let mut grp: libc::group = std::mem::zeroed();
-        let mut result: *mut libc::group = std::ptr::null_mut();
-        let mut buf_len = 1024usize;
-
-        loop {
-            let mut buf = vec![0u8; buf_len];
-            let rc = libc::getgrgid_r(gid, &mut grp, buf.as_mut_ptr().cast(), buf_len, &mut result);
-
-            if rc == 0 {
-                if result.is_null() || grp.gr_name.is_null() {
-                    return None;
-                }
-                return Some(CStr::from_ptr(grp.gr_name).to_string_lossy().into_owned());
-            }
-
-            if rc == libc::ERANGE && buf_len < (1 << 20) {
-                buf_len *= 2;
-                continue;
-            }
-
-            return None;
-        }
-    }
+    neovm_value::system_vocab::posix_lookup::lookup_group_name(gid)
 }
 
 // ---------------------------------------------------------------------------
@@ -758,7 +710,7 @@ fn dispatch_file_completion_handler(
     directory: &LispString,
     call_args: &[Value],
 ) -> Result<Option<Value>, Flow> {
-    let operation = Value::symbol(operation_name);
+    let operation = Value::from_sym_id(intern(operation_name));
 
     // GNU dired.c first consults the expanded DIRECTORY, then FILE.
     let handler = super::fileio::find_file_name_handler_lisp_for_eval(eval, directory, operation);

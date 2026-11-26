@@ -132,7 +132,7 @@ pub fn string_char_range(start: usize, end: usize) -> CharRange {
 }
 
 #[doc(hidden)]
-pub fn substring_impl(name: &str, args: &[Value], preserve_props: bool) -> EvalResult {
+pub fn substring_impl(name: &'static str, args: &[Value], preserve_props: bool) -> EvalResult {
     expect_min_args(name, args, 1)?;
     expect_max_args(name, args, 3)?;
     match args[0].kind() {
@@ -366,7 +366,7 @@ fn concat_arg_makes_multibyte(value: Value) -> Result<bool, Flow> {
         ValueKind::Veclike(VecLikeType::Vector) => {
             let mut multibyte = false;
             if let Some(items) = value.as_vector_data() {
-                for item in items.iter().copied() {
+                for item in items.iter() {
                     multibyte |= concat_character_makes_multibyte(item)?;
                 }
             }
@@ -745,6 +745,10 @@ pub fn build_decode_table(alphabet: &[u8; 64]) -> [i8; 256] {
 const MIME_LINE_LENGTH: usize = 76;
 
 pub fn base64_encode(input: &[u8], alphabet: &[u8; 64], pad: bool, line_break: bool) -> String {
+    assert!(
+        alphabet.iter().all(|byte| byte.is_ascii()),
+        "base64 alphabet must be ASCII so the encoded text is UTF-8"
+    );
     let mut out = Vec::with_capacity(input.len().div_ceil(3) * 4 + input.len() / 57);
     // Mirror GNU `base64_encode_1` (fns.c): wrap a line every
     // MIME_LINE_LENGTH/4 base64 groups, inserting '\n' *between* lines only.
@@ -785,7 +789,8 @@ pub fn base64_encode(input: &[u8], alphabet: &[u8; 64], pad: bool, line_break: b
         }
     }
 
-    // Safety: we only pushed ASCII bytes
+    // Safety: the alphabet assertion rejected every non-ASCII byte, and the
+    // only other bytes pushed are '\n' and '='.
     unsafe { String::from_utf8_unchecked(out) }
 }
 
@@ -1035,3 +1040,7 @@ fn ensure_decimal_point(mut s: String) -> String {
     }
     s
 }
+
+#[cfg(test)]
+#[path = "strings_core/tests/base64_alphabet.rs"]
+mod base64_alphabet;

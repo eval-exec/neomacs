@@ -147,7 +147,7 @@ fn rejected_body_interprets_without_a_cache_probe_until_the_cache_clears() {
     // Heat still accrues (OSR's `is_hot` is unaffected by the verdict).
     assert!(rt.is_hot());
     // The cache forgets: so must we.
-    super::cache::clear();
+    super::cache::clear_with_serial_receipt().expect("serial jit grace");
     assert!(matches!(rt.dispatch(), Plan::Compiled));
     assert!(matches!(rt.dispatch_sized(1), Plan::Compiled));
     // A grown patched prefix evicts the leaf and the verdict with it.

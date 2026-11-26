@@ -358,11 +358,20 @@ fn check_live_font(backend: GuiBackend, scenario: &str, case: LiveFontCase) {
             GuiRunOptions::with_timeout(Duration::from_secs(60)),
         )
         .unwrap();
-    assert!(!result.timed_out, "{result:#?}");
-    assert_eq!(result.exit_code, Some(0), "{result:#?}");
+    let editor_state = neomacs_gui_tests::last_editor_state_line(&result.artifacts.stderr);
     assert!(
-        fs::read_to_string(result.artifacts.stderr)
+        !result.timed_out,
+        "{result:#?}\nlast editor state: {editor_state}"
+    );
+    assert_eq!(
+        result.exit_code,
+        Some(0),
+        "{result:#?}\nlast editor state: {editor_state}"
+    );
+    assert!(
+        fs::read_to_string(&result.artifacts.stderr)
             .unwrap()
-            .contains("LIVE-FONT-PASS")
+            .contains("LIVE-FONT-PASS"),
+        "missing LIVE-FONT-PASS; last editor state: {editor_state}"
     );
 }

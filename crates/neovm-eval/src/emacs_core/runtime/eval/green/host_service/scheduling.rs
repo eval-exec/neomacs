@@ -1,6 +1,6 @@
 //! Cold native service turns. No Context/World view crosses a native callback.
 
-use super::super::super::world::Baton;
+use super::super::super::world::TurnRight;
 use super::super::scheduler::{
     Control, EndedServiceOwner, NativeRelease, OwnerResumePlan, ReservedServiceSlice,
     ServiceRefusal, ServiceReturn, ServiceTransfer, ServiceTransferPlan, ThreadKey, Wake,
@@ -11,7 +11,10 @@ use super::transport::{
     DispatchPoll, DispatchTicket, HostClient, HostWaiter, NativeDispatch, NativeOutcome,
     NativeSettlement, Publication, ServiceTransport, TerminalRead, TerminalReceipt,
 };
-use super::{HostRequestKey, HostRootError, PreparedHostCall, RootsRetired, SettledHostCall};
+use super::{
+    CompletionTarget, HostRequestKey, HostRequester, HostRootError, PreparedHostCall, RootsRetired,
+    SettledHostCall,
+};
 use crate::host_effect::contracts::OwnedNativeData;
 use crate::host_effect::native_pending::{NativeAdapterStep, PendingNativeOperation};
 use std::collections::BTreeMap;
@@ -405,7 +408,7 @@ impl ServiceRuntime {
     pub(crate) fn take_ended_owner_continuation(
         &mut self,
         control: &Control,
-        baton: &Baton,
+        baton: &TurnRight,
     ) -> Option<(OwnerContinuation, EndedServiceOwner)> {
         let Self::Open(session) = self else {
             return None;
@@ -587,7 +590,7 @@ enum NativeTurn {
 /// The owned Baton is never exposed to the native operation.
 pub(in crate::emacs_core::eval::green) struct MainServiceTurn<'receive> {
     key: HostRequestKey,
-    baton: Baton,
+    baton: TurnRight,
     control: &'receive Control,
     receiver: &'receive Receiver<Wake>,
     turn: NativeTurn,
@@ -596,7 +599,7 @@ pub(in crate::emacs_core::eval::green) struct MainServiceTurn<'receive> {
 impl<'receive> MainServiceTurn<'receive> {
     pub(crate) fn from_main_wake(
         key: HostRequestKey,
-        baton: Baton,
+        baton: TurnRight,
         control: &'receive Control,
         receiver: &'receive Receiver<Wake>,
     ) -> Self {
@@ -657,7 +660,12 @@ impl<'receive> MainServiceTurn<'receive> {
     /// The owned path returns a pending native record, never a borrowed scope.
     pub(crate) fn serve_step(
         self,
-        start: impl FnOnce(HostRequestKey, OwnedNativeData) -> NativeAdapterStep<StepKey>,
+        host: Option<&mut (dyn crate::emacs_core::eval::protocol::DisplayHost + 'static)>,
+        start: impl FnOnce(
+            HostRequestKey,
+            OwnedNativeData,
+            Option<&mut (dyn crate::emacs_core::eval::protocol::DisplayHost + 'static)>,
+        ) -> NativeAdapterStep<StepKey>,
     ) -> ServiceStep {
         let Self {
             key,
@@ -674,7 +682,7 @@ impl<'receive> MainServiceTurn<'receive> {
                 slice,
                 ticket,
                 native,
-            } => advance_native_step(baton, slice, ticket, start(key, native)),
+            } => advance_native_step(baton, slice, ticket, start(key, native, host)),
         }
     }
 }
@@ -682,13 +690,13 @@ impl<'receive> MainServiceTurn<'receive> {
 pub(super) enum ServiceStep {
     Complete(ServedSlice),
     Pending {
-        baton: Baton,
+        baton: TurnRight,
         slice: ReservedServiceSlice,
         ticket: DispatchTicket,
         operation: PendingNativeOperation,
     },
     Owner {
-        baton: Baton,
+        baton: TurnRight,
         continuation: OwnerContinuation,
     },
 }
@@ -696,7 +704,7 @@ pub(super) enum ServiceStep {
 /// One classification for initial dispatch and every physical/owner resume.
 /// Only the Complete arm consumes the dispatch ticket and settles the parent.
 pub(super) fn advance_native_step(
-    baton: Baton,
+    baton: TurnRight,
     slice: ReservedServiceSlice,
     ticket: DispatchTicket,
     step: NativeAdapterStep<StepKey>,
@@ -728,7 +736,7 @@ pub(super) fn advance_native_step(
 }
 
 pub(super) fn complete_native_turn(
-    baton: Baton,
+    baton: TurnRight,
     slice: ReservedServiceSlice,
     ticket: DispatchTicket,
     outcome: NativeOutcome,
@@ -740,7 +748,7 @@ pub(super) fn complete_native_turn(
 /// One settlement rule for live and ended continuations. The consuming receipt
 /// chooses the scheduler return path; neither path can bypass actor completion.
 fn settle_native_dispatch(
-    baton: &Baton,
+    baton: &TurnRight,
     slice: &ReservedServiceSlice,
     ticket: DispatchTicket,
     outcome: NativeOutcome,
@@ -771,13 +779,13 @@ fn settle_native_dispatch(
 /// Dead-owner cleanup has no requester return or acknowledgement. The actual
 /// actor settlement consumes revocation first; roots remain for quiescent drain.
 pub(super) fn complete_ended_native_turn(
-    baton: Baton,
+    baton: TurnRight,
     slice: ReservedServiceSlice,
     ticket: DispatchTicket,
     ended: EndedServiceOwner,
     outcome: NativeOutcome,
     control: &Control,
-) -> Baton {
+) -> TurnRight {
     if ended.key() != slice.key() || ended.requester() != slice.requester() {
         unreachable_service();
     }
@@ -795,7 +803,7 @@ pub(super) fn complete_ended_native_turn(
 /// owner image. Validation borrows end before the scheduler can wait or send.
 pub(in crate::emacs_core::eval::green) fn resume_owner_step(
     parent: HostRequestKey,
-    baton: Baton,
+    baton: TurnRight,
     control: &Control,
     receiver: &Receiver<Wake>,
 ) -> Wake {
@@ -851,7 +859,7 @@ pub(in crate::emacs_core::eval::green) fn resume_owner_step(
 
 fn settle_unstarted_host_call(
     registry: &mut super::WorldRootRegistry,
-    baton: &Baton,
+    baton: &TurnRight,
     unstarted: UnstartedHostCall,
 ) -> SettledHostCall {
     let key = unstarted.key();
@@ -869,7 +877,7 @@ fn settle_unstarted_host_call(
 }
 
 fn finish_unstarted_native_turn(
-    baton: Baton,
+    baton: TurnRight,
     slice: ReservedServiceSlice,
     unstarted: UnstartedHostCall,
 ) -> ServedSlice {
@@ -891,7 +899,7 @@ fn finish_unstarted_native_turn(
 }
 
 pub(in crate::emacs_core::eval::green) struct ServedSlice {
-    baton: Baton,
+    baton: TurnRight,
     slice: ReservedServiceSlice,
 }
 
@@ -918,7 +926,7 @@ enum NativeArguments {
 }
 enum ServiceAuthority {
     Held {
-        baton: Baton,
+        baton: TurnRight,
         slice: ReservedServiceSlice,
     },
     Released {
@@ -945,7 +953,7 @@ impl NativeServiceScope<'_> {
         }
     }
 
-    pub(crate) fn into_authority(self) -> (Baton, ReservedServiceSlice) {
+    pub(crate) fn into_authority(self) -> (TurnRight, ReservedServiceSlice) {
         match self.authority {
             ServiceAuthority::Held { baton, slice } => (baton, slice),
             ServiceAuthority::Released { .. } | ServiceAuthority::Transition => {
@@ -1186,10 +1194,11 @@ impl ServiceRuntime {
 
 pub(in crate::emacs_core::eval::green) fn serve_main_wake(
     key: HostRequestKey,
-    baton: Baton,
+    baton: TurnRight,
     control: &Control,
     receiver: &Receiver<Wake>,
     pump: &mut super::pump::MainNativePump,
+    host: Option<&mut (dyn crate::emacs_core::eval::protocol::DisplayHost + 'static)>,
 ) -> ServiceReturn {
     baton.enter();
     #[cfg(test)]
@@ -1214,7 +1223,7 @@ pub(in crate::emacs_core::eval::green) fn serve_main_wake(
             FixtureDriver::Unavailable => {}
         }
     }
-    pump.serve(key, baton, control, receiver)
+    pump.serve(key, baton, control, receiver, host)
 }
 
 /// Called only after switch.rs publishes the ordinary parked census. All
@@ -1222,7 +1231,7 @@ pub(in crate::emacs_core::eval::green) fn serve_main_wake(
 pub(in crate::emacs_core::eval::green) fn dispatch_host(
     prepared: PreparedHostCall,
     native: OwnedNativeData,
-    baton: Baton,
+    baton: TurnRight,
     control: &Control,
     receiver: &Receiver<Wake>,
 ) -> (Wake, HostResume) {
@@ -1237,9 +1246,13 @@ pub(in crate::emacs_core::eval::green) fn dispatch_host(
             fatal_service(error);
         }
         let reservation = match registry.hosts().registration(key) {
-            Ok(registration) => match registration.owner() {
-                ThreadKey::Main => control.reserve_local_service(registration),
-                ThreadKey::Worker(_) => control.reserve_service(registration),
+            Ok(registration) => match registration.completion_target() {
+                CompletionTarget::Green(ThreadKey::Main) => {
+                    control.reserve_local_service(registration)
+                }
+                CompletionTarget::Green(ThreadKey::Worker(_)) => {
+                    control.reserve_service(registration)
+                }
             },
             Err(error) => fatal_service(error),
         };
@@ -1303,7 +1316,7 @@ pub(in crate::emacs_core::eval::green) fn dispatch_host(
     // The typed plan is consumed after the registry borrow has ended. Main's
     // local route enters the same native receive driver without a self-send.
     match plan.requester() {
-        ThreadKey::Main => {
+        HostRequester::Green(ThreadKey::Main) => {
             return match control.transfer_prepared_local_service(plan, baton) {
                 Ok(wake) => (wake, HostResume::Actor(key)),
                 Err(refusal) => {
@@ -1313,7 +1326,7 @@ pub(in crate::emacs_core::eval::green) fn dispatch_host(
                 }
             };
         }
-        ThreadKey::Worker(_) => {}
+        HostRequester::Green(ThreadKey::Worker(_)) => {}
     }
     let transfer = match control.transfer_prepared_service(plan, baton) {
         Ok(ServiceTransfer::Queued(baton)) => {
@@ -1358,7 +1371,7 @@ pub(in crate::emacs_core::eval::green) fn dispatch_host(
     }
 }
 
-fn suppress_with_baton(baton: &Baton, key: HostRequestKey, control: &Control) {
+fn suppress_with_baton(baton: &TurnRight, key: HostRequestKey, control: &Control) {
     let runtime = baton.green_runtime();
     let Some(runtime) = runtime.as_ref() else {
         unreachable_service()
@@ -1370,7 +1383,7 @@ fn suppress_reserved(
     registry: &mut super::WorldRootRegistry,
     key: HostRequestKey,
     control: &Control,
-    baton: &Baton,
+    baton: &TurnRight,
 ) {
     let slice = match registry.services.suppress_before_transfer(key) {
         Ok(slice) => slice,

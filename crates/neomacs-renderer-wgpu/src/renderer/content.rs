@@ -183,7 +183,7 @@ impl WgpuRenderer {
         content_scale: f32,
         content_pivot: [f32; 2],
     ) {
-        let draw = self.parameters_for(
+        let Ok(draw) = self.parameters_for(
             [
                 surface_width as f32 / self.scale_factor,
                 surface_height as f32 / self.scale_factor,
@@ -192,7 +192,9 @@ impl WgpuRenderer {
             content_alpha,
             content_scale,
             content_pivot,
-        );
+        ) else {
+            return;
+        };
         self.arenas.glyph.begin_frame();
         self.arenas.coverage.begin_frame();
 
@@ -378,15 +380,19 @@ impl WgpuRenderer {
         }
 
         // --- Collect fringe bitmaps (own step: own fringe column, no overlap
-        // with text) — magit section-heading fold arrows. ---
+        // with text): a row's bitmap in its face's colours, overlay arrows as
+        // set bits only. ---
         for glyph in &frame.glyphs {
             if let FrameGlyph::FringeBitmap {
                 x,
                 y,
                 width,
                 height,
+                clip_rect,
                 bitmap_index,
                 face_id,
+                side,
+                kind,
                 ..
             } = glyph
             {
@@ -396,12 +402,19 @@ impl WgpuRenderer {
                 let face = frame.resolved_face(*face_id);
                 self.render_fringe_bitmap(
                     &mut fringe_vertices,
-                    *x + offset_x,
-                    *y + offset_y,
-                    *width,
-                    *height,
-                    &face.fg,
-                    bitmap,
+                    super::fringe_paint::fringe_place(
+                        *x,
+                        *y,
+                        *width,
+                        *height,
+                        *clip_rect,
+                        (offset_x, offset_y),
+                        bitmap,
+                        *side,
+                        *kind,
+                    ),
+                    face.fg,
+                    face.bg,
                 );
             }
         }
@@ -1302,6 +1315,14 @@ impl WgpuRenderer {
             None
         };
 
+        #[cfg(feature = "video")]
+        let mut encoder = self.caches.video.create_command_encoder(
+            &self.device,
+            &wgpu::CommandEncoderDescriptor {
+                label: Some("Frame Content Encoder"),
+            },
+        );
+        #[cfg(not(feature = "video"))]
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -1585,10 +1606,36 @@ impl WgpuRenderer {
                     width,
                     height,
                     clip_rect,
+                    face_id,
+                    presentation,
                     ..
                 } = glyph
-                    && let Some(cached) = self.caches.image.get(*image_id)
                 {
+                    if matches!(
+                        presentation,
+                        neomacs_display_protocol::ImageGlyphPresentation::FailedPlaceholder
+                    ) {
+                        let rf = frame.resolved_face(*face_id);
+                        let shifted_clip = clip_rect.map(|clip| Rect {
+                            x: clip.x + offset_x,
+                            y: clip.y + offset_y,
+                            width: clip.width,
+                            height: clip.height,
+                        });
+                        super::layer_media::append_clipped_hollow_box(
+                            &mut relief_vertices,
+                            *x + offset_x,
+                            *y + offset_y,
+                            *width,
+                            *height,
+                            rf.fg,
+                            shifted_clip.as_ref(),
+                        );
+                        continue;
+                    }
+                    let Some(cached) = self.caches.image.get(*image_id) else {
+                        continue;
+                    };
                     let effective_clip = *clip_rect;
                     let Some(clipped) =
                         clipped_media_rect(*x, *y, *width, *height, effective_clip.as_ref())
@@ -1690,7 +1737,8 @@ impl WgpuRenderer {
                     &frame.glyphs,
                     offset_x,
                     offset_y,
-                ) {
+                ) && !prepared.quads.is_empty()
+                {
                     self.media_budget.touch(
                         crate::media_budget::MediaType::Video,
                         crate::video_cache::VIDEO_GPU_POOL_ACCOUNTING_ID,

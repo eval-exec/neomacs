@@ -216,9 +216,13 @@ fn width_only_gui_resize_keeps_exact_native_height_with_chrome_and_partial_row()
         eval.eval_str("(frame-text-cols)").unwrap().as_int(),
         Some(91)
     );
+    // GNU's Gtk+ build reports the native frame without the external menu bar
+    // and tool bar (src/frame.c:4401-4418).  This fixture stores 688 px
+    // including the 18 px menu bar and 41 px tool bar, so the Lisp value is
+    // 688 - 59 = 629, the same interior the resize preserves.
     assert_eq!(
         eval.eval_str("(frame-native-height)").unwrap().as_int(),
-        Some(688)
+        Some(629)
     );
 }
 

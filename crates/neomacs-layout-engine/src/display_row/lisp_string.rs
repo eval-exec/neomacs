@@ -139,19 +139,27 @@ impl<'row> DisplayRowPrefixAppendContext<'row> {
         params: &WindowParams,
     ) -> DisplayRowPosition {
         match prefix_source.value {
-            DisplayRowPrefixValue::LispString(value) => LispStringRowAppendContext {
-                active_face_context: self.active_face_context,
+            DisplayRowPrefixValue::LispString(value) => {
+                let string_roots = state.string_source_root_scope();
+                LispStringRowAppendContext {
+                    active_face_context: self.active_face_context,
+                }
+                .render_active_face_source_request_to_text_row_and_emit(
+                    state,
+                    face_ids,
+                    LispStringSourceAppendSessionRequest::for_buffer(
+                        buffer,
+                        LispStringSourceAppendRequest::new(
+                            position,
+                            LispStringSourceId::PREFIX,
+                            value,
+                        ),
+                        base_face.face_id(),
+                        base_face.face(),
+                        string_roots,
+                    ),
+                )
             }
-            .render_active_face_source_request_to_text_row_and_emit(
-                state,
-                face_ids,
-                LispStringSourceAppendSessionRequest::for_buffer(
-                    buffer,
-                    LispStringSourceAppendRequest::new(position, LispStringSourceId::PREFIX, value),
-                    base_face.face_id(),
-                    base_face.face(),
-                ),
-            ),
             DisplayRowPrefixValue::Stretch(spec) => {
                 let metrics = self.active_face_context.active_face().metrics();
                 let space = DisplaySpaceGeometry::from_display_space_spec(
@@ -277,7 +285,11 @@ impl LispStringSourceAppendRequest {
         self
     }
 
-    fn into_source(self, base_face_id: FaceId) -> Option<LispStringSourceCursor> {
+    fn into_source(
+        self,
+        base_face_id: FaceId,
+        string_roots: crate::string_property_snapshot::StringSourceRootScope,
+    ) -> Option<LispStringSourceCursor> {
         match self.box_boundaries {
             Some(boundaries) => LispStringSourceCursor::new_with_box_boundaries(
                 self.source_id.raw(),
@@ -285,18 +297,21 @@ impl LispStringSourceAppendRequest {
                 RenderFaceRef::FaceId(base_face_id),
                 self.source_origin,
                 boundaries,
+                string_roots,
             ),
             None => LispStringSourceCursor::new(
                 self.source_id.raw(),
                 self.value,
                 RenderFaceRef::FaceId(base_face_id),
                 self.source_origin,
+                string_roots,
             ),
         }
     }
 }
 
 pub(crate) struct LispStringSourceAppendSessionRequest<'a> {
+    string_roots: crate::string_property_snapshot::StringSourceRootScope,
     append_request: LispStringSourceAppendRequest,
     face_scope: crate::display_source_resolver::DisplaySourceFaceScope,
     base_face_id: FaceId,
@@ -313,8 +328,10 @@ impl<'a> LispStringSourceAppendSessionRequest<'a> {
         append_request: LispStringSourceAppendRequest,
         base_face_id: FaceId,
         base_face: &'a ResolvedFace,
+        string_roots: crate::string_property_snapshot::StringSourceRootScope,
     ) -> Self {
         Self {
+            string_roots,
             append_request,
             face_scope: crate::display_source_resolver::DisplaySourceFaceScope::FrameLocal,
             base_face_id,
@@ -330,8 +347,10 @@ impl<'a> LispStringSourceAppendSessionRequest<'a> {
         append_request: LispStringSourceAppendRequest,
         base_face_id: FaceId,
         base_face: &'a ResolvedFace,
+        string_roots: crate::string_property_snapshot::StringSourceRootScope,
     ) -> Self {
         Self {
+            string_roots,
             append_request,
             face_scope: crate::display_source_resolver::DisplaySourceFaceScope::for_buffer(buffer),
             base_face_id,
@@ -356,7 +375,7 @@ impl<'a> LispStringSourceAppendSession<'a> {
     fn new(request: LispStringSourceAppendSessionRequest<'a>) -> Option<Self> {
         let source = request
             .append_request
-            .into_source(request.base_face_id)?
+            .into_source(request.base_face_id, request.string_roots)?
             .with_display_when(request.display_when);
         Some(Self {
             source,
@@ -673,7 +692,9 @@ impl<'a> BufferLinePrefixRenderRequest<'a> {
             return position;
         }
 
-        let text_props = RustTextPropAccess::new(buffer);
+        // GNU `get_it_property` calls `Fget_char_property (position, prop,
+        // it->window)`, so an overlay bound to another window is skipped.
+        let text_props = RustTextPropAccess::new_for_window(buffer, self.params.window_id as u64);
         let line_property = text_props.get_property(
             anchor_charpos,
             Value::symbol(&crate::fixed_symbols::LINE_PREFIX),
@@ -859,8 +880,12 @@ pub(crate) fn append_lisp_string_to_text_row<FS: crate::neovm_bridge::FaceServic
 ) -> DisplayRowPosition {
     let request =
         LispStringSourceAppendRequest::new(position, LispStringSourceId(source_id), text_value);
-    let session_request =
-        LispStringSourceAppendSessionRequest::frame_local(request, base_face_id, base_face);
+    let session_request = LispStringSourceAppendSessionRequest::frame_local(
+        request,
+        base_face_id,
+        base_face,
+        state.string_source_root_scope(),
+    );
     let Some(mut source_session) = LispStringSourceAppendSession::new(session_request) else {
         return position;
     };

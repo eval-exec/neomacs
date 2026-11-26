@@ -233,7 +233,6 @@ pub mod data {
     // to the compatibility sequence.
     pub use neovm_eval::emacs_core::data::*;
 }
-pub use neovm_eval::emacs_core::debug;
 pub use neovm_eval::emacs_core::debug_on_call;
 pub use neovm_eval::emacs_core::defvar_bool;
 pub use neovm_eval::emacs_core::defvar_object;
@@ -246,7 +245,11 @@ pub use neovm_eval::emacs_core::eval;
 #[cfg(test)]
 #[path = "../../core_test_facades/emacs_core/eval.rs"]
 mod eval_tests;
+#[cfg(not(test))]
 pub use neovm_value::errors;
+#[cfg(test)]
+#[path = "../../core_test_facades/emacs_core/errors.rs"]
+pub mod errors;
 #[cfg(not(test))]
 pub use neovm_value::forward;
 #[cfg(test)]
@@ -301,8 +304,10 @@ pub use neovm_system::emacs_core::filelock;
 pub use neovm_system::emacs_core::host_input;
 #[path = "load_boot.rs"]
 pub mod load_boot;
-pub use neovm_system::emacs_core::network;
 pub(crate) use neovm_system::emacs_core::os_signal;
+// The frontend's one seam into os_signal: GNU's xwidget re-claim of SIGCHLD
+// after WebKit/WPE init. The rest of the module stays crate-private.
+pub use neovm_system::emacs_core::os_signal::reclaim_child_signal;
 pub use neovm_system::emacs_core::path_exec;
 pub use neovm_system::emacs_core::perf_trace;
 pub(crate) use neovm_system::emacs_core::platform_facts;
@@ -368,6 +373,9 @@ mod gnu_defsym_symbols_test;
 #[path = "tests/gnu_surface/defvar_special_test.rs"]
 mod gnu_defvar_special_test;
 #[cfg(test)]
+#[path = "tests/gnu_surface/reader_entry_point_intern_test.rs"]
+mod gnu_reader_entry_point_intern_test;
+#[cfg(test)]
 #[path = "tests/gnu_surface/subr_test.rs"]
 mod gnu_subr_surface_test;
 #[cfg(test)]
@@ -377,22 +385,10 @@ mod gnu_thread_live_p_test;
 #[path = "tests/gnu_thread_release_point_test.rs"]
 mod gnu_thread_release_point_test;
 #[cfg(test)]
-#[path = "tests/architecture/layout_test.rs"]
-mod layout_test;
-#[cfg(test)]
 #[cfg(test)]
 #[path = "tests/moved_system/mod.rs"]
 mod moved_system;
-#[cfg(test)]
-#[path = "tests/architecture/runtime_string_guard_test.rs"]
-mod runtime_string_guard_test;
 
-#[cfg(test)]
-#[path = "tests/architecture/split_cfg_test_guard_test.rs"]
-mod split_cfg_test_guard_test;
-#[cfg(test)]
-#[path = "tests/architecture/split_shared_guards.rs"]
-mod split_shared_guards;
 #[cfg(test)]
 #[path = "tests/architecture/split_test_support_manifest_test.rs"]
 mod split_test_support_manifest_test;
@@ -409,6 +405,10 @@ mod symbol_plist_regression_test;
 #[cfg(test)]
 #[path = "../../core_tests/emacs_core/runtime/symbol/tests/redirect_regression_test.rs"]
 mod symbol_redirect_regression_test;
+
+#[cfg(test)]
+#[path = "../../core_tests/emacs_core/runtime/symbol/tests/membership_census_test.rs"]
+mod symbol_membership_census_test;
 
 #[cfg(test)]
 #[path = "tests/moved_eval/mod.rs"]
@@ -451,28 +451,8 @@ pub fn eval_source(input: &str) -> Result<Value, EvalError> {
 mod architecture_transmute_guard_test;
 
 #[cfg(test)]
-#[path = "tests/architecture/layering_guard_test.rs"]
-mod architecture_layering_guard_test;
-
-#[cfg(test)]
-#[path = "tests/architecture/moving_set.rs"]
-mod architecture_moving_set;
-
-#[cfg(test)]
-#[path = "tests/architecture/plain_pub_surface_guard_test.rs"]
-mod architecture_plain_pub_surface_guard_test;
-
-#[cfg(test)]
 #[path = "tests/architecture/production_source_roots.rs"]
 mod architecture_production_source_roots;
-
-#[cfg(test)]
-#[path = "tests/architecture/vis_ledger_guard_test.rs"]
-mod architecture_vis_ledger_guard_test;
-
-#[cfg(test)]
-#[path = "tests/architecture/test_support_surface_guard_test.rs"]
-mod architecture_test_support_surface_guard_test;
 
 #[cfg(test)]
 #[path = "tests/architecture/gnu_defsyms_generated_test.rs"]
@@ -487,10 +467,6 @@ mod architecture_upper_subrs_generated_test;
 mod architecture_workspace_dependency_features_guard_test;
 
 #[cfg(test)]
-#[path = "tests/architecture/test_profile_codegen_guard_test.rs"]
-mod architecture_test_profile_codegen_guard_test;
-
-#[cfg(test)]
 #[path = "tests/architecture/host_cfg_agreement_guard_test.rs"]
 mod architecture_host_cfg_agreement_guard_test;
 
@@ -499,12 +475,24 @@ mod architecture_host_cfg_agreement_guard_test;
 mod architecture_canonical_registration_trace_test;
 
 #[cfg(test)]
+#[path = "tests/architecture/wreg_stage_trace_test.rs"]
+mod architecture_wreg_stage_trace_test;
+
+#[cfg(test)]
 #[path = "tests/architecture/host_cfg_elisp_regression_test.rs"]
 mod architecture_host_cfg_elisp_regression_test;
 
 #[cfg(test)]
+#[path = "tests/architecture/oracle_form_empty_binding_guard_test.rs"]
+mod architecture_oracle_form_empty_binding_guard_test;
+
+#[cfg(test)]
 #[path = "tests/architecture/value_ref_guard_test.rs"]
 mod architecture_value_ref_guard_test;
+
+#[cfg(test)]
+#[path = "tests/architecture/heap_capability_guard_test.rs"]
+mod architecture_heap_capability_guard_test;
 
 #[cfg(test)]
 #[path = "tests/architecture/inline_boundary_test.rs"]
@@ -535,12 +523,32 @@ mod architecture_host_effect_guard_test;
 mod architecture_unsafe_shim_guard_test;
 
 #[cfg(test)]
+#[path = "tests/architecture/dead_string_tag_guard_test.rs"]
+mod architecture_dead_string_tag_guard_test;
+
+#[cfg(test)]
 #[path = "tests/architecture/debug_assert_side_effect_guard_test.rs"]
 mod architecture_debug_assert_side_effect_guard_test;
 
 #[cfg(test)]
+#[path = "tests/architecture/test_support_evidence_cfg_test.rs"]
+mod architecture_test_support_evidence_cfg_test;
+
+#[cfg(test)]
+#[path = "tests/architecture/test_support_authority_fence_test.rs"]
+mod architecture_test_support_authority_fence_test;
+
+#[cfg(test)]
 #[path = "tests/architecture/leaf_slot_writer_guard_test.rs"]
 mod architecture_leaf_slot_writer_guard_test;
+
+#[cfg(test)]
+#[path = "tests/architecture/obarray_writer_raw_symbol_guard_test.rs"]
+mod architecture_obarray_writer_raw_symbol_guard_test;
+
+#[cfg(test)]
+#[path = "tests/architecture/buffer_manager_view_ratchet_test.rs"]
+mod architecture_buffer_manager_view_ratchet_test;
 
 #[cfg(test)]
 #[path = "tests/architecture/value_display_hook_guard_test.rs"]
@@ -555,18 +563,6 @@ mod architecture_hook_walker_guard_test;
 mod architecture_in_flight_registry_guard_test;
 
 #[cfg(test)]
-#[path = "tests/architecture/tagged_compile_seam_guard_test.rs"]
-mod architecture_tagged_compile_seam_guard_test;
-
-#[cfg(test)]
-#[path = "tests/architecture/coherence_upper_impl_ratchet_test.rs"]
-mod architecture_coherence_upper_impl_ratchet_test;
-
-#[cfg(test)]
-#[path = "tests/architecture/default_value_only_ratchet_test.rs"]
-mod architecture_default_value_only_ratchet_test;
-
-#[cfg(test)]
 #[path = "tests/architecture/mac_x11_subrs_ratchet_test.rs"]
 mod architecture_mac_x11_subrs_ratchet_test;
 
@@ -575,8 +571,19 @@ mod architecture_mac_x11_subrs_ratchet_test;
 mod architecture_plist_head_seam_guard_test;
 
 #[cfg(test)]
+#[path = "tests/architecture/stopped_mark_adapter_guard_test.rs"]
+mod architecture_stopped_mark_adapter_guard_test;
+
+#[cfg(test)]
+#[path = "tests/architecture/condition_snapshot_admission_guard_test.rs"]
+mod architecture_condition_snapshot_admission_guard_test;
+
+#[cfg(test)]
 #[path = "tests/heap_registry_cross_heap_test.rs"]
 mod heap_registry_cross_heap_test;
+#[cfg(test)]
+#[path = "tests/overlay_view_memo_gc_test.rs"]
+mod overlay_view_memo_gc_test;
 #[cfg(test)]
 #[path = "tests/plist_collection_capture_test.rs"]
 mod plist_collection_capture_test;
@@ -600,14 +607,6 @@ mod moved_value;
 mod architecture_parallel_exec_substrate_test;
 
 #[cfg(test)]
-#[path = "tests/architecture/subr_storage_boundary_test.rs"]
-mod architecture_subr_storage_boundary_test;
-
-#[cfg(test)]
-#[path = "tests/architecture/promotion_ledger_guard_test.rs"]
-mod architecture_promotion_ledger_guard_test;
-
-#[cfg(test)]
 #[path = "tests/moved_text/mod.rs"]
 mod moved_text;
 
@@ -618,3 +617,7 @@ mod moved_edit;
 #[cfg(all(test, feature = "jit"))]
 #[path = "tests/architecture/bg_startup_defaults_test.rs"]
 mod architecture_bg_startup_defaults_test;
+
+#[cfg(test)]
+#[path = "tests/architecture/orphan_test_guard_test.rs"]
+mod architecture_orphan_test_guard_test;

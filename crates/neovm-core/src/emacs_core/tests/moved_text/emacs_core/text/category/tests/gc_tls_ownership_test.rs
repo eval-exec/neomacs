@@ -34,7 +34,8 @@ fn gc_tls_ownership_category_new_heap_reset_drops_old_values() {
 
 #[test]
 fn gc_tls_ownership_category_excludes_another_live_heap() {
-    let mut first = crate::test_utils::new_context();
+    let first = crate::test_utils::new_context();
+    let parked_first = first.park_for_test();
     let mut second = crate::test_utils::new_context();
     let value = populate(&mut second);
     assert!(
@@ -42,6 +43,8 @@ fn gc_tls_ownership_category_excludes_another_live_heap() {
             .iter()
             .any(|root| root.bits() == value.bits())
     );
+    let parked_second = second.park_for_test();
+    let mut first = parked_first.resume_for_test().expect("resume first");
     assert!(
         roots(&first)
             .iter()
@@ -50,6 +53,8 @@ fn gc_tls_ownership_category_excludes_another_live_heap() {
         "GC roots contain a value belonging to another live Context"
     );
     first.gc_collect_exact();
+    drop(first);
+    let mut second = parked_second.resume_for_test().expect("resume second");
     second.setup_thread_locals();
     second.gc_collect_exact();
     assert!(second.tagged_heap().owns_heap_value_for_test(value));

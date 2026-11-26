@@ -19,7 +19,7 @@
 pub(crate) mod read_detection;
 
 use super::text_host::{TextHost, TextVariableStore};
-use neovm_edit::buffer::{BufferManager, EmacsByteRange, LispCharPos1};
+use neovm_edit::buffer::{Buffer, BufferManager, EmacsByteRange, LispCharPos1};
 use neovm_edit::emacs_core::edit_host::EditVariableRead;
 use neovm_value::emacs_char::EmacsChar;
 use neovm_value::error::LispCondition;
@@ -139,7 +139,7 @@ pub enum EolType {
 }
 
 impl EolType {
-    pub fn from_specified_symbol_name(name: &str) -> Option<Self> {
+    pub(crate) fn from_specified_symbol_name(name: &str) -> Option<Self> {
         match name.parse().ok()? {
             EolType::Unix => Some(EolType::Unix),
             EolType::Dos => Some(EolType::Dos),
@@ -148,7 +148,7 @@ impl EolType {
         }
     }
 
-    pub fn from_specified_symbol_value(value: &Value, mode: SymbolMode) -> Option<Self> {
+    pub(crate) fn from_specified_symbol_value(value: &Value, mode: SymbolMode) -> Option<Self> {
         Self::from_specified_symbol_name(value.as_symbol_name(mode)?)
     }
 
@@ -156,15 +156,11 @@ impl EolType {
         self.into()
     }
 
-    pub fn to_int(self) -> i64 {
+    pub(crate) fn to_int(self) -> i64 {
         self.specified_index().unwrap_or(0)
     }
 
-    pub fn to_symbol(self) -> Value {
-        Value::symbol(self.name())
-    }
-
-    pub fn specified_index(self) -> Option<i64> {
+    pub(crate) fn specified_index(self) -> Option<i64> {
         match self {
             EolType::Undecided => None,
             specified => Some(i8::from(specified) as i64),
@@ -180,7 +176,7 @@ impl EolType {
         }
     }
 
-    pub fn from_suffix(name: &str) -> Option<EolType> {
+    pub(crate) fn from_suffix(name: &str) -> Option<EolType> {
         if name.ends_with("-unix") {
             Some(EolType::Unix)
         } else if name.ends_with("-dos") {
@@ -705,7 +701,7 @@ fn left_single_quote_display(table: Value, mode: SymbolMode) -> LeftSingleQuoteD
     let Some(elements) = entry.as_vector_data() else {
         return LeftSingleQuoteDisplay::NotAsciiBacktick;
     };
-    if elements.len() == 1 && elements[0].as_fixnum() == Some(i64::from(b'`')) {
+    if elements.len() == 1 && elements.at(0).as_fixnum() == Some(i64::from(b'`')) {
         LeftSingleQuoteDisplay::AsciiBacktick
     } else {
         LeftSingleQuoteDisplay::NotAsciiBacktick
@@ -905,6 +901,14 @@ const UNDECIDED_KEY_INHIBIT_NULL: i64 = i64::MIN + 9;
 const UTF_BOM_KEY_FIRST: i64 = i64::MIN + 10;
 const UTF_BOM_KEY_SECOND: i64 = i64::MIN + 11;
 const UNDECIDED_KEY_PREFER_UTF8: i64 = i64::MIN + 12;
+/// Charset identities marked safe when an ISO-2022 system is defined
+/// (`coding.c:11064-11068`). Missing means live membership.
+const ISO2022_KEY_SAFE_CHARSETS: i64 = i64::MIN + 13;
+/// `t` when the original `:charset-list` argument was the symbol `iso-2022`
+/// (`coding.c:11298-11299`). An explicit one-element list of a charset that
+/// happens to be named `iso-2022` stores nil. Missing on an old dump falls
+/// back to the symbol-name test.
+const ISO2022_KEY_FULL: i64 = i64::MIN + 14;
 
 fn definition_property(info: &CodingSystemInfo, key: SymId) -> Option<Value> {
     let mut plist = *info.int_properties.get(&PLIST_VERBATIM_KEY)?;
@@ -1039,7 +1043,8 @@ pub(crate) fn ccl_coding_spec(info: &CodingSystemInfo) -> Option<CclCodingSpec> 
 #[enumflags2::bitflags]
 #[repr(u32)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum IsoFlag {
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) enum IsoFlag {
     LongForm = 0x0001,
     AsciiAtEol = 0x0002,
     AsciiAtCntl = 0x0004,
@@ -1053,24 +1058,36 @@ pub enum IsoFlag {
     Composition = 0x2000,
     UseRoman = 0x8000,
     UseOldjis = 0x10000,
+    /// `8-bit-level-4` (`mule.el:658-662`, `CODING_ISO_FLAG_LEVEL_4`).
+    /// An 8-bit single-shift accepts a GL lead. The default 8-bit level is
+    /// 4A and accepts a GR lead.
+    Level4 = 0x20000,
 }
 
 /// The ISO-2022 designation state of a coding system: the charset initially
 /// loaded into each graphic register G0-G3 (`initial`), the charset->register
 /// map consulted while encoding (`request`), and the control `flags`.
-pub struct Iso2022Spec {
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+#[derive(Clone)]
+pub(crate) struct Iso2022Spec {
     pub initial: [Option<SymId>; 4],
     pub request: Vec<(SymId, u8)>,
     /// `(reg94, reg96)` — the graphic register that 94- and 96-character sets
     /// are designated to while encoding (GNU `coding_attr_iso_usage`). A value
     /// of 4 means "no fixed register"; such charsets fall back to G0.
-    pub reg_usage: (u8, u8),
+    pub(crate) reg_usage: (u8, u8),
     pub flags: enumflags2::BitFlags<IsoFlag>,
+    /// Identities safe at define time. `None` is live membership: a hand-built
+    /// spec, an old dump, or a preloaded full-support system after loadup.
+    pub(crate) safe_charsets: Option<Vec<SymId>>,
+    /// The original argument was the symbol `iso-2022`, not a one-element
+    /// list of a charset with that name (`coding.c:11020-11024`).
+    pub(crate) full_support: bool,
 }
 
 impl Iso2022Spec {
     /// The graphic register (0-3) a charset is designated to while encoding.
-    pub fn register_of(&self, charset: SymId) -> Option<u8> {
+    pub(crate) fn register_of(&self, charset: SymId) -> Option<u8> {
         self.request
             .iter()
             .find(|(cs, _)| *cs == charset)
@@ -1081,7 +1098,7 @@ impl Iso2022Spec {
     /// following GNU's reg-usage rule (`setup_iso_safe_charsets`): a 96-set
     /// uses `reg96`, any other set uses `reg94`; a register of 4 ("none")
     /// falls back to G0.
-    pub fn encode_register(&self, chars_96: bool) -> usize {
+    pub(crate) fn encode_register(&self, chars_96: bool) -> usize {
         let reg = if chars_96 {
             self.reg_usage.1
         } else {
@@ -1136,7 +1153,144 @@ pub(crate) fn iso2022_spec(info: &CodingSystemInfo, mode: SymbolMode) -> Option<
         request,
         reg_usage,
         flags: enumflags2::BitFlags::from_bits_truncate(flags_bits as u32),
+        safe_charsets: stored_iso2022_safe_charsets(info, mode),
+        full_support: coding_is_iso2022_full_support(info),
     })
+}
+
+/// `None` when the key was never stored. An empty vector is still `Some`:
+/// that coding system listed no charset.
+fn stored_iso2022_safe_charsets(info: &CodingSystemInfo, mode: SymbolMode) -> Option<Vec<SymId>> {
+    let stored = info.int_properties.get(&ISO2022_KEY_SAFE_CHARSETS)?;
+    let names: Vec<SymId> = stored
+        .as_vector_data()
+        .map(|slots| {
+            slots
+                .iter()
+                .filter_map(|elem| elem.as_symbol_id(mode))
+                .collect()
+        })
+        .unwrap_or_default();
+    if coding_is_iso2022_full_support(info) {
+        Some(crate::emacs_core::charset::iso2022_refresh_full_support(
+            info.name, &names,
+        ))
+    } else {
+        Some(names)
+    }
+}
+
+fn iso2022_safe_charset_value(charset_list: &[SymId], full: bool) -> Value {
+    let names = if full {
+        crate::emacs_core::charset::charset_iso2022_members()
+    } else {
+        charset_list.to_vec()
+    };
+    Value::vector(names.into_iter().map(Value::from_sym_id).collect())
+}
+
+/// GNU `error("Can't handle charset `%s'")` routed through `doprnt`, which
+/// translates the C-level backtick/apostrophe pair according to the caller's
+/// `text-quoting-style` (`doprnt.c:493-499`).
+fn cant_handle_charset(name: &str, quoting_style: TextQuotingStyle) -> Flow {
+    let message = requote_c_error_message(&format!("Can't handle charset `{name}'"), quoting_style);
+    signal("error", vec![Value::string(message)])
+}
+
+/// Explicit `:charset-list` entries (`coding.c:11041-11060`).
+///
+/// Each entry must be a defined charset. An iso-2022 list rejects a charset
+/// with no final, and an emacs-mule list rejects a charset with no mule id.
+/// The bare `iso-2022` / `emacs-mule` symbols do not come through here.
+fn explicit_charset_entries(
+    items: &[Value],
+    mode: SymbolMode,
+    coding_type: &str,
+    quoting_style: TextQuotingStyle,
+) -> Result<Vec<SymId>, Flow> {
+    let mut out = Vec::with_capacity(items.len());
+    for item in items {
+        let Some(symbol) = item.as_symbol_id(mode) else {
+            return Err(signal(
+                LispCondition::WrongTypeArgument,
+                vec![Value::symbol("charsetp"), *item],
+            ));
+        };
+        let Some(identity) = crate::emacs_core::charset::charset_defined_identity(symbol) else {
+            return Err(signal(
+                LispCondition::WrongTypeArgument,
+                vec![Value::symbol("charsetp"), Value::from_sym_id(symbol)],
+            ));
+        };
+        if coding_type == "iso-2022" {
+            match crate::emacs_core::charset::charset_iso_final_of(identity) {
+                Some(final_char) if final_char >= 0 => {}
+                _ => return Err(cant_handle_charset(resolve_sym(identity), quoting_style)),
+            }
+        } else if coding_type == "emacs-mule" {
+            match crate::emacs_core::charset::charset_emacs_mule_id_of(identity) {
+                Some(mule_id) if mule_id >= 0 => {}
+                _ => return Err(cant_handle_charset(resolve_sym(identity), quoting_style)),
+            }
+        }
+        out.push(identity);
+    }
+    Ok(out)
+}
+
+/// GNU's shift-jis and big5 charset-list shape checks, run at define time
+/// before registration (`src/coding.c:11341-11392`): shift-jis takes three
+/// or four charsets (dimensions 1, 1, 2[, 2]); big5 takes exactly two
+/// (dimensions 1, 2).  The error data is GNU's formatted `error` string,
+/// e.g. `(error "Dimension of charset X is not one")`.
+fn validate_charset_coding_list(coding_type: &str, charsets: &[SymId]) -> Result<(), Flow> {
+    let dimension_error = |charset: SymId, expected: &str| {
+        signal(
+            "error",
+            vec![Value::string(format!(
+                "Dimension of charset {} is not {}",
+                resolve_sym(charset),
+                expected
+            ))],
+        )
+    };
+    let check_dimension = |charset: SymId, expected: i64| {
+        if super::charset::charset_dimension_by_sym(charset) != Some(expected) {
+            return Err(dimension_error(
+                charset,
+                if expected == 1 { "one" } else { "two" },
+            ));
+        }
+        Ok(())
+    };
+    match coding_type {
+        "shift-jis" => {
+            if charsets.len() != 3 && charsets.len() != 4 {
+                return Err(signal(
+                    "error",
+                    vec![Value::string("There should be three or four charsets")],
+                ));
+            }
+            check_dimension(charsets[0], 1)?;
+            check_dimension(charsets[1], 1)?;
+            check_dimension(charsets[2], 2)?;
+            if let Some(&fourth) = charsets.get(3) {
+                check_dimension(fourth, 2)?;
+            }
+        }
+        "big5" => {
+            if charsets.len() != 2 {
+                return Err(signal(
+                    "error",
+                    vec![Value::string("There should be just two charsets")],
+                ));
+            }
+            check_dimension(charsets[0], 1)?;
+            check_dimension(charsets[1], 2)?;
+        }
+        _ => {}
+    }
+    Ok(())
 }
 
 pub use crate::encoding::CodingSystemInfo;
@@ -1668,6 +1822,25 @@ impl CodingSystemManager {
         self.systems.get(&canonical)
     }
 
+    /// Drop define-time snapshots of preloaded full-support ISO-2022 systems.
+    ///
+    /// GNU's dumped `iso-2022-7bit` refreshes `Viso_2022_charset_list` on
+    /// first use (`coding.c:2868-2874`) because the dumped list is not `eq`
+    /// to the live one. These systems are defined from Lisp during loadup, so
+    /// a snapshot taken then would reject a charset defined before the first
+    /// decode. Removing the key restores live membership when `:charset-list`
+    /// is the symbol `iso-2022`. An explicit list keeps its snapshot. A
+    /// system defined after this call freezes at define time.
+    pub fn release_preloaded_iso2022_safe_sets(&mut self) {
+        self.invalidate_lookup_cache();
+        for info in self.systems.values_mut() {
+            if coding_is_iso2022_full_support(info) {
+                info.int_properties.remove(&ISO2022_KEY_SAFE_CHARSETS);
+                crate::emacs_core::charset::iso2022_forget_full_support(info.name);
+            }
+        }
+    }
+
     /// Look up a coding system mutably by name (resolving aliases).
     pub fn get_mut(&mut self, name: &str) -> Option<&mut CodingSystemInfo> {
         // The caller may change anything the accessors memoize.
@@ -1786,7 +1959,7 @@ impl CodingSystemManager {
     }
 
     /// Get all aliases that point to a given canonical name.
-    pub fn aliases_for(&self, canonical: SymId) -> Vec<SymId> {
+    pub(crate) fn aliases_for(&self, canonical: SymId) -> Vec<SymId> {
         self.alias_order
             .get(&canonical)
             .cloned()
@@ -1794,7 +1967,7 @@ impl CodingSystemManager {
     }
 
     /// List all registered coding system names (canonical only).
-    pub fn list_all(&self) -> Vec<SymId> {
+    pub(crate) fn list_all(&self) -> Vec<SymId> {
         let mut names: Vec<SymId> = self.systems.keys().copied().collect();
         names.sort_by(|left, right| resolve_sym(*left).cmp(resolve_sym(*right)));
         names
@@ -1979,6 +2152,16 @@ fn record_coding_system_name<S: TextVariableStore>(vars: &mut S, name: SymId) {
     cons_coding_system_alist(vars, name);
 }
 
+/// Resolve a runtime coding-system spelling to its canonical symbol value.
+///
+/// Coding-system names reach Lisp only through `record_coding_system_name`,
+/// which publishes membership (GNU interns the `make_subsidiaries` names,
+/// src/coding.c:10968-10984). The query paths below re-resolve those same
+/// canonical ids; they never introduce a fresh Lisp-visible name.
+fn coding_name_value(name: &str) -> Value {
+    Value::from_sym_id(intern(name))
+}
+
 /// Mirror GNU `define-coding-system-internal`'s updates to
 /// `Vcoding_system_list` and `Vcoding_system_alist` in `src/coding.c`.
 /// When EOL is unspecified, GNU records the three subsidiary systems first
@@ -2020,6 +2203,21 @@ pub fn record_lisp_define_coding_system_alias<S: TextVariableStore>(
         return;
     };
     record_coding_system_name(vars, alias_id);
+}
+
+/// Record every name GNU's `define-coding-system-alias` publishes: the
+/// alias's EOL subsidiaries first, then the alias (the order the registry
+/// function returns). `record_coding_system_name` conses each onto
+/// `coding-system-list`/`coding-system-alist` and publishes obarray
+/// membership.
+#[doc(hidden)]
+pub fn record_lisp_define_coding_system_alias_with_subsidiaries<S: TextVariableStore>(
+    vars: &mut S,
+    names: &[SymId],
+) {
+    for name in names {
+        record_coding_system_name(vars, *name);
+    }
 }
 
 impl neovm_value::gc_trace::GcTrace for CodingSystemManager {
@@ -2276,7 +2474,12 @@ pub fn builtin_coding_system_aliases(
     {
         names.push(format!("{canonical}{suffix}"));
     }
-    Ok(Value::list(names.into_iter().map(Value::symbol).collect()))
+    Ok(Value::list(
+        names
+            .into_iter()
+            .map(|name| coding_name_value(&name))
+            .collect(),
+    ))
 }
 
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
@@ -2305,10 +2508,10 @@ pub(crate) fn builtin_coding_system_get(
             return Ok(value);
         }
         return match prop_name {
-            ":name" | "name" => Ok(Value::symbol(display_base_name(strip_eol_suffix(
+            ":name" | "name" => Ok(coding_name_value(&display_base_name(strip_eol_suffix(
                 &resolved_name,
             )))),
-            ":coding-type" | "coding-type" => Ok(Value::symbol(
+            ":coding-type" | "coding-type" => Ok(coding_name_value(
                 coding_type_for_base(strip_eol_suffix(&resolved_name))
                     .unwrap_or(resolve_sym(info.coding_type)),
             )),
@@ -2500,9 +2703,15 @@ fn coding_explicit_ascii_compat(info: &CodingSystemInfo) -> Option<bool> {
         .map(|v| v.is_truthy())
 }
 
-/// Whether `:charset-list` is the FULL_SUPPORT marker symbol `iso-2022`.
+/// Whether the original `:charset-list` argument was the symbol `iso-2022`.
+///
+/// A missing flag keeps the name test so a dump from before the flag, and
+/// the loadup release of `iso-2022-7bit`, still count as full support.
 fn coding_is_iso2022_full_support(info: &CodingSystemInfo) -> bool {
-    info.charset_list.len() == 1 && resolve_sym(info.charset_list[0]) == "iso-2022"
+    match info.int_properties.get(&ISO2022_KEY_FULL) {
+        Some(flag) => flag.is_truthy(),
+        None => info.charset_list.len() == 1 && resolve_sym(info.charset_list[0]) == "iso-2022",
+    }
 }
 
 /// Compute the detector category symbol for a coding system, mirroring GNU's
@@ -2597,22 +2806,72 @@ fn coding_category_of(
     })
 }
 
+/// GNU `Fdefine_coding_system_internal`'s stored CODING_ATTR_ASCII_COMPAT
+/// for the coding types whose rule reads the charset registry.  The
+/// argument (already in `info.ascii_compatible_p`, `src/coding.c:11070`)
+/// is raised by the type's rule at define time:
+///
+/// * `charset`: any ASCII-compatible charset in :charset-list
+///   (`src/coding.c:11119-11129`).
+/// * `big5` and `shift-jis`: only the FIRST charset is tested
+///   (`:11380-11387`, `:11344-11349`).
+/// * `iso-2022`: the G0 initial charset (`:11271-11272`), and the whole
+///   attribute is forced to nil unless the computed category is
+///   iso-8-1/iso-8-2 (`:11325-11329`).
+fn define_time_ascii_compat(info: &CodingSystemInfo, iso_initial: Value, mode: SymbolMode) -> bool {
+    let charset_ascii = |charset: SymId| super::charset::charset_is_ascii_compatible(charset);
+    let first_ascii = || {
+        info.charset_list
+            .first()
+            .is_some_and(|&charset| charset_ascii(charset))
+    };
+    match resolve_sym(info.coding_type) {
+        "charset" => {
+            info.ascii_compatible_p
+                || info
+                    .charset_list
+                    .iter()
+                    .any(|&charset| charset_ascii(charset))
+        }
+        "big5" | "shift-jis" => info.ascii_compatible_p || first_ascii(),
+        "iso-2022" => {
+            if !matches!(
+                compute_coding_category(info, mode),
+                "coding-category-iso-8-1" | "coding-category-iso-8-2"
+            ) {
+                return false;
+            }
+            let g0_ascii = iso_initial
+                .as_vector_data()
+                .and_then(|slots| slots.first())
+                .and_then(|slot| slot.as_symbol_id(mode))
+                .is_some_and(charset_ascii);
+            info.ascii_compatible_p || g0_ascii
+        }
+        _ => info.ascii_compatible_p,
+    }
+}
+
+/// Whether `info` came from `define-coding-system-internal` (it carries the
+/// verbatim definition plist) rather than a static built-in registration.
+fn is_defined_coding(info: &CodingSystemInfo) -> bool {
+    info.int_properties.contains_key(&PLIST_VERBATIM_KEY)
+}
+
 /// Compute `:ascii-compatible-p` for a coding system, mirroring GNU's
 /// per-type overrides (the stored value is the `:ascii-compatible-p` argument).
 fn compute_coding_ascii_compat(info: &CodingSystemInfo, mode: SymbolMode) -> bool {
     let charsets = &info.charset_list;
-    let any_ascii = || {
-        charsets
-            .iter()
-            .any(|&c| super::charset::charset_is_ascii_compatible(c))
-    };
     let first_ascii = || {
         charsets
             .first()
             .is_some_and(|&c| super::charset::charset_is_ascii_compatible(c))
     };
     match resolve_sym(info.coding_type) {
-        "charset" => any_ascii() || info.ascii_compatible_p,
+        // `info.ascii_compatible_p` is the define-time snapshot GNU stores in
+        // CODING_ATTR_ASCII_COMPAT (`src/coding.c:11070`, :11119-11129); the
+        // live charset registry is deliberately not consulted again.
+        "charset" => info.ascii_compatible_p,
         // GNU auto-sets `:ascii-compatible-p t` for a BOM-less utf-8 coding
         // (utf-8-with-signature / utf-8-auto carry a BOM and are not), unless the
         // coding's Lisp definition explicitly overrode it (utf-7, utf-7-imap and
@@ -2620,12 +2879,38 @@ fn compute_coding_ascii_compat(info: &CodingSystemInfo, mode: SymbolMode) -> boo
         // not).
         "utf-8" => coding_explicit_ascii_compat(info).unwrap_or_else(|| !coding_has_bom(info)),
         "utf-16" => false,
-        "iso-2022" => matches!(
-            compute_coding_category(info, mode),
-            "coding-category-iso-8-1" | "coding-category-iso-8-2"
-        ),
+        // An iso-2022 coding defined through define-coding-system-internal
+        // carries the define-time snapshot (see define_time_ascii_compat);
+        // a later charset redefinition must not change it.
+        "iso-2022" if is_defined_coding(info) => info.ascii_compatible_p,
+        // Static built-ins keep the live rule: coding.c:11271-11272 sets
+        // the attribute when initial G0 is ASCII-compatible.
+        // coding.c:11327-11329 clears it unless the category is iso-8-1 or
+        // iso-8-2. A non-ASCII G0 keeps the caller's argument
+        // (coding.c:11070), which is nil when the Lisp definition omits
+        // `:ascii-compatible-p`.
+        "iso-2022" => coding_explicit_ascii_compat(info).unwrap_or_else(|| {
+            // A coding-system-put on a static registration is an explicit
+            // override (GNU coding.c:11570-11572 applies it to every
+            // coding system); otherwise use the live rule above.
+            let category = compute_coding_category(info, mode);
+            if !matches!(
+                category,
+                "coding-category-iso-8-1" | "coding-category-iso-8-2"
+            ) {
+                false
+            } else if iso2022_spec(info, mode)
+                .and_then(|spec| spec.initial[0])
+                .is_some_and(super::charset::charset_is_ascii_compatible)
+            {
+                true
+            } else {
+                info.ascii_compatible_p
+            }
+        }),
         "emacs-mule" | "raw-text" => true,
-        "shift-jis" | "big5" => first_ascii(),
+        "shift-jis" | "big5" if is_defined_coding(info) => info.ascii_compatible_p,
+        "shift-jis" | "big5" => coding_explicit_ascii_compat(info).unwrap_or_else(first_ascii),
         // `undecided` is defined in C with `:ascii-compatible-p t`
         // (src/coding.c `syms_of_coding`), which is what
         // `coding-system-plist` already reports for it here.  Its attribute has
@@ -2791,7 +3076,7 @@ fn builtin_coding_system_plist_uncached(
         coding_category_for_base(base)
     };
     plist_push_key(&mut plist, intern(":category"), Value::symbol(category));
-    plist_push_key(&mut plist, intern(":name"), Value::symbol(display_name));
+    plist_push_key(&mut plist, intern(":name"), coding_name_value(display_name));
     // `:docstring` keeps GNU's position right after `:name`; fall back to the
     // stored property when there is no built-in docstring for this base.
     if let Some(doc) = coding_docstring_for_base(base)
@@ -2803,7 +3088,7 @@ fn builtin_coding_system_plist_uncached(
     plist_push_key(
         &mut plist,
         intern(":coding-type"),
-        Value::symbol(coding_type),
+        coding_name_value(coding_type),
     );
     plist_push_key(&mut plist, intern(":mnemonic"), Value::fixnum(mnemonic));
     if let Some(charset_list) = coding_charset_list_for_base(base).or_else(|| {
@@ -2918,6 +3203,14 @@ pub fn builtin_coding_system_put(
         } else {
             val
         };
+        // GNU `Fcoding_system_put` also moves the typed attribute for the
+        // properties listed in its docstring, including
+        // `:ascii-compatible-p` (src/coding.c:11570-11572).  Keep the stored
+        // attribute in step so the answer is stable after a later charset
+        // redefinition.
+        if matches!(prop_name, ":ascii-compatible-p" | "ascii-compatible-p") {
+            info.ascii_compatible_p = stored_val.is_truthy();
+        }
         info.properties.insert(prop_id, stored_val);
         record_put_override(info, args[1], stored_val, mode);
         return Ok(stored_val);
@@ -2984,7 +3277,7 @@ fn builtin_coding_system_base_uncached(
     let name = coding_symbol_name(&args[0], mode)?;
     let resolved_name = resolve_runtime_name(mgr, &name)
         .ok_or_else(|| signal(LispCondition::CodingSystemError, vec![args[0]]))?;
-    Ok(Value::symbol(display_base_name(strip_eol_suffix(
+    Ok(coding_name_value(&display_base_name(strip_eol_suffix(
         &resolved_name,
     ))))
 }
@@ -3045,9 +3338,9 @@ fn builtin_coding_system_eol_type_uncached(
     // Return [base-unix base-dos base-mac] using Emacs display base names.
     let base = eol_vector_base(strip_eol_suffix(&resolved_name));
     let vec = vec![
-        Value::symbol(format!("{base}-unix")),
-        Value::symbol(format!("{base}-dos")),
-        Value::symbol(format!("{base}-mac")),
+        coding_name_value(&format!("{base}-unix")),
+        coding_name_value(&format!("{base}-dos")),
+        coding_name_value(&format!("{base}-mac")),
     ];
     Ok(Value::vector(vec))
 }
@@ -3316,7 +3609,7 @@ fn eol_vector_ref(vector: Value, request: EolConversionRequest) -> EvalResult {
             vec![vector, Value::fixnum(index)],
         ));
     }
-    Ok(data[index as usize])
+    Ok(data.at(index as usize))
 }
 
 /// `(coding-system-change-eol-conversion CODING-SYSTEM EOL-TYPE)` -- return
@@ -3419,13 +3712,13 @@ pub(crate) fn builtin_coding_system_change_text_conversion(
 
     if let Some(eol) = first_eol {
         if let Some(derived) = derive_coding_for_eol(resolved_text_base, eol) {
-            return Ok(Value::symbol(derived));
+            return Ok(coding_name_value(&derived));
         }
         return Ok(Value::NIL);
     }
 
     if EolType::from_suffix(&text_name).is_some() {
-        return Ok(Value::symbol(display_base_name(strip_eol_suffix(
+        return Ok(coding_name_value(&display_base_name(strip_eol_suffix(
             &text_name,
         ))));
     }
@@ -3433,7 +3726,7 @@ pub(crate) fn builtin_coding_system_change_text_conversion(
     match text_name.as_str() {
         "binary" => Ok(Value::symbol("no-conversion")),
         "emacs-internal" => Ok(Value::symbol("utf-8-emacs")),
-        _ => Ok(Value::symbol(text_name)),
+        _ => Ok(coding_name_value(&text_name)),
     }
 }
 
@@ -3862,6 +4155,51 @@ pub(crate) fn builtin_find_coding_system(
     }
 }
 
+/// GNU `CHECK_CHARSET_GET_CHARSET` (`coding.c:11048`) reads the attribute
+/// vector on this name. Two charsets may share an `:emacs-mule-id`, so the
+/// stored key is that binding, not the first charset found with the id.
+/// An unknown symbol stays as given.
+fn captured_charset_symbol(symbol: SymId) -> SymId {
+    use crate::emacs_core::charset::charset_defined_identity;
+    charset_defined_identity(symbol).unwrap_or(symbol)
+}
+
+fn capture_charset_in_value(value: Value, mode: SymbolMode) -> Value {
+    match value.as_symbol_id(mode) {
+        Some(symbol) => Value::from_sym_id(captured_charset_symbol(symbol)),
+        None => value,
+    }
+}
+
+fn capture_iso2022_initial(value: Value, mode: SymbolMode) -> Value {
+    let Some(slots) = value.as_vector_data() else {
+        return value;
+    };
+    Value::vector(
+        slots
+            .iter()
+            .map(|slot| capture_charset_in_value(slot, mode))
+            .collect(),
+    )
+}
+
+fn capture_iso2022_request(value: Value, mode: SymbolMode) -> Value {
+    let Some(pairs) = neovm_value::value::list_to_vec(&value) else {
+        return value;
+    };
+    Value::list(
+        pairs
+            .into_iter()
+            .map(|pair| {
+                Value::cons(
+                    capture_charset_in_value(pair.cons_car(), mode),
+                    pair.cons_cdr(),
+                )
+            })
+            .collect(),
+    )
+}
+
 /// `(define-coding-system-internal NAME MNEMONIC CODING-TYPE CHARSET-LIST
 ///    ASCII-COMPAT DECODE-TL ENCODE-TL POST-READ PRE-WRITE DEFAULT-CHAR
 ///    FOR-UNIBYTE PLIST EOL-TYPE &rest TYPE-SPECIFIC-ATTRS)`
@@ -3873,6 +4211,24 @@ pub fn builtin_define_coding_system_internal(
     mgr: &mut CodingSystemManager,
     args: Vec<Value>,
     mode: SymbolMode,
+) -> EvalResult {
+    // Direct callers with no variable store use GNU's batch default. The
+    // eval builtin resolves the current `text-quoting-style` and calls the
+    // styled variant below.
+    builtin_define_coding_system_internal_with_quoting_style(
+        mgr,
+        args,
+        mode,
+        TextQuotingStyle::Curve,
+    )
+}
+
+#[doc(hidden)]
+pub fn builtin_define_coding_system_internal_with_quoting_style(
+    mgr: &mut CodingSystemManager,
+    args: Vec<Value>,
+    mode: SymbolMode,
+    quoting_style: TextQuotingStyle,
 ) -> EvalResult {
     expect_min_args("define-coding-system-internal", &args, 13)?;
 
@@ -3895,14 +4251,36 @@ pub fn builtin_define_coding_system_internal(
         )
     })?;
 
-    // arg[3]: charset-list (list of symbols, or special symbol like 'iso-2022)
-    let charset_list = if let Some(id) = args[3].as_symbol_id(mode).filter(|_| !args[3].is_nil()) {
-        vec![id]
-    } else if let Some(items) = neovm_value::value::list_to_vec(&args[3]) {
-        items.iter().filter_map(|v| v.as_symbol_id(mode)).collect()
-    } else {
-        Vec::new()
-    };
+    // arg[3]: charset-list. GNU matches the symbols `iso-2022` and
+    // `emacs-mule` before any charset lookup (`coding.c:11017-11031`), so an
+    // alias of that name cannot swallow the marker. An explicit list stores
+    // each name's own attribute vector (`coding.c:11041-11057`).
+    let (charset_list, iso2022_full) =
+        if let Some(id) = args[3].as_symbol_id(mode).filter(|_| !args[3].is_nil()) {
+            let marker = resolve_sym(id);
+            if marker == "iso-2022" || marker == "emacs-mule" {
+                let coding_name = resolve_sym(coding_type);
+                let marker_matches = (marker == "iso-2022" && coding_name == "iso-2022")
+                    || (marker == "emacs-mule" && coding_name == "emacs-mule");
+                if !marker_matches {
+                    return Err(signal("error", vec![Value::string("Invalid charset-list")]));
+                }
+                (vec![id], marker == "iso-2022")
+            } else {
+                (vec![captured_charset_symbol(id)], false)
+            }
+        } else if let Some(items) = neovm_value::value::list_to_vec(&args[3]) {
+            (
+                explicit_charset_entries(&items, mode, resolve_sym(coding_type), quoting_style)?,
+                false,
+            )
+        } else {
+            (Vec::new(), false)
+        };
+
+    // GNU validates a shift-jis/big5 list's size and dimensions before the
+    // coding system is registered (src/coding.c:11341-11392).
+    validate_charset_coding_list(resolve_sym(coding_type), &charset_list)?;
 
     // arg[4]: ascii-compatible-p
     let ascii_compatible_p = args[4].is_truthy();
@@ -4002,10 +4380,26 @@ pub fn builtin_define_coding_system_internal(
     // request-alist, flags-bitmask].  Stash them so the ISO-2022 codec can read
     // the G0-G3 designations; see `iso2022_spec`.
     if resolve_sym(coding_type) == "iso-2022" && args.len() > 16 {
-        info.int_properties.insert(ISO2022_KEY_INITIAL, args[13]);
+        info.int_properties
+            .insert(ISO2022_KEY_INITIAL, capture_iso2022_initial(args[13], mode));
         info.int_properties.insert(ISO2022_KEY_REG_USAGE, args[14]);
-        info.int_properties.insert(ISO2022_KEY_REQUEST, args[15]);
+        info.int_properties
+            .insert(ISO2022_KEY_REQUEST, capture_iso2022_request(args[15], mode));
         info.int_properties.insert(ISO2022_KEY_FLAGS, args[16]);
+        // coding.c:11020-11024 copies Viso for the symbol `iso-2022`.
+        // coding.c:11064-11068 then marks every listed id safe, including a
+        // 96-set whose reg-usage register is 4. The reg filter inside
+        // `setup_iso_safe_charsets` does not run on this path.
+        info.int_properties.insert(
+            ISO2022_KEY_FULL,
+            if iso2022_full { Value::T } else { Value::NIL },
+        );
+        let safe = iso2022_safe_charset_value(&info.charset_list, iso2022_full);
+        info.int_properties.insert(ISO2022_KEY_SAFE_CHARSETS, safe);
+        if iso2022_full {
+            let members = crate::emacs_core::charset::charset_iso2022_members();
+            crate::emacs_core::charset::iso2022_note_full_support(info.name, &members);
+        }
     }
 
     // arg[13..16] (CCL only): decoder program, encoder program, and the
@@ -4015,6 +4409,23 @@ pub fn builtin_define_coding_system_internal(
         info.int_properties.insert(CCL_KEY_DECODER, args[13]);
         info.int_properties.insert(CCL_KEY_ENCODER, args[14]);
         info.int_properties.insert(CCL_KEY_VALIDS, args[15]);
+    }
+
+    // GNU stores CODING_ATTR_ASCII_COMPAT at define time: the
+    // :ascii-compatible-p argument (`src/coding.c:11070`) is then raised by
+    // each coding type's own rule.  Snapshot the result for the types whose
+    // rule reads the charset registry, so a later charset redefinition
+    // cannot change an existing coding system's answer.
+    if matches!(
+        resolve_sym(coding_type),
+        "charset" | "big5" | "shift-jis" | "iso-2022"
+    ) {
+        let iso_initial = info
+            .int_properties
+            .get(&ISO2022_KEY_INITIAL)
+            .copied()
+            .unwrap_or(Value::NIL);
+        info.ascii_compatible_p = define_time_ascii_compat(&info, iso_initial, mode);
     }
 
     // Register the base coding system.
@@ -4053,6 +4464,24 @@ pub fn builtin_define_coding_system_alias(
     args: Vec<Value>,
     mode: SymbolMode,
 ) -> EvalResult {
+    define_coding_system_alias_with_subsidiaries(mgr, args, mode)?;
+    Ok(Value::NIL)
+}
+
+/// GNU `Fdefine_coding_system_alias` including its subsidiary propagation.
+///
+/// When CODING-SYSTEM's spec carries the subsidiary VECTOR (an undecided
+/// base, the `make_subsidiaries` output stored at define time), GNU creates
+/// `<alias>-unix`/`-dos`/`-mac` and recursively aliases each to the base's
+/// corresponding subsidiary (`src/coding.c:11581-11610`). Returns the names
+/// GNU publishes, in its creation order: the three subsidiaries, then the
+/// alias itself.
+#[doc(hidden)]
+pub fn define_coding_system_alias_with_subsidiaries(
+    mgr: &mut CodingSystemManager,
+    args: Vec<Value>,
+    mode: SymbolMode,
+) -> Result<Vec<SymId>, Flow> {
     expect_args("define-coding-system-alias", &args, 2)?;
 
     let alias = coding_symbol_name(&args[0], mode)?;
@@ -4068,11 +4497,33 @@ pub fn builtin_define_coding_system_alias(
     let canonical = mgr.resolve(&target).ok_or_else(|| {
         signal(
             LispCondition::CodingSystemError,
-            vec![Value::symbol(&target)],
+            vec![coding_name_value(&target)],
         )
     })?;
-    mgr.add_alias(&alias, resolve_sym(canonical));
-    Ok(Value::NIL)
+    let canonical_name = resolve_sym(canonical);
+    // GNU appends ALIAS to the shared spec's alias list before creating the
+    // alias's subsidiaries.
+    mgr.add_alias(&alias, canonical_name);
+
+    let mut names = Vec::with_capacity(4);
+    let has_subsidiaries = mgr
+        .get(canonical_name)
+        .is_some_and(|info| matches!(info.eol_type, EolType::Undecided));
+    if has_subsidiaries {
+        for suffix in ["-unix", "-dos", "-mac"] {
+            let subsidiary_alias = format!("{alias}{suffix}");
+            let subsidiary_target = format!("{canonical_name}{suffix}");
+            // The base's variants are registered at define time. A base whose
+            // own name already carries an EOL suffix deliberately has none,
+            // so it has no subsidiary to alias.
+            if mgr.resolve(&subsidiary_target).is_some() {
+                mgr.add_alias(&subsidiary_alias, &subsidiary_target);
+                names.push(intern(&subsidiary_alias));
+            }
+        }
+    }
+    names.push(intern(&alias));
+    Ok(names)
 }
 
 /// `(set-coding-system-priority &rest CODING-SYSTEMS)` -- assign higher
@@ -5420,7 +5871,7 @@ fn apply_detected_eol(
             return sym;
         }
         match mgr.canonical_name_for_detected_eol(name, eol_suffix) {
-            Some(resolved) => Value::symbol(resolved),
+            Some(resolved) => coding_name_value(&resolved),
             None => sym,
         }
     };
@@ -6196,7 +6647,7 @@ pub fn builtin_coding_system_priority_list(
         // of the highest-priority category when HIGHESTP is non-nil
         // (`return CODING_ATTR_BASE_NAME (attrs)`), not a one-element list.
         if let Some(first) = mgr.priority.first() {
-            Ok(Value::symbol(coding_system_base_name(
+            Ok(coding_name_value(&coding_system_base_name(
                 mgr,
                 resolve_sym(*first),
             )))
@@ -6207,7 +6658,7 @@ pub fn builtin_coding_system_priority_list(
         let items: Vec<Value> = mgr
             .priority
             .iter()
-            .map(|id| Value::symbol(coding_system_base_name(mgr, resolve_sym(*id))))
+            .map(|id| coding_name_value(&coding_system_base_name(mgr, resolve_sym(*id))))
             .collect();
         Ok(Value::list(items))
     }
@@ -6518,7 +6969,7 @@ fn safe_coding_systems_for_text(
     exclude: Option<Value>,
     mode: SymbolMode,
 ) -> Result<Value, Flow> {
-    if !text.is_multibyte() || text.as_bytes().is_ascii() {
+    if !text.is_multibyte() || text.schars() == text.sbytes() {
         return Ok(Value::T);
     }
 
@@ -6542,7 +6993,7 @@ fn safe_coding_systems_for_text(
             continue;
         };
         if chars.iter().all(|&ch| repertoire.encodes(ch)) {
-            safe_codings.push(Value::symbol(coding));
+            safe_codings.push(coding_name_value(&coding));
         }
     }
     safe_codings.push(Value::symbol("raw-text"));
@@ -6587,6 +7038,25 @@ pub fn builtin_find_coding_systems_region_internal<H: TextHost>(
         .buffers()
         .current_buffer()
         .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
+    safe_coding_systems_for_region(
+        eval.coding_systems(),
+        buffer,
+        (start, end),
+        &args,
+        eval.symbol_mode(),
+    )
+}
+
+/// The buffer branch of `find-coding-systems-region-internal`: START and END
+/// are the resolved positions of `args[0]` and `args[1]`, which also form the
+/// `args-out-of-range` data.
+fn safe_coding_systems_for_region(
+    mgr: &CodingSystemManager,
+    buffer: &Buffer,
+    (start, end): (i64, i64),
+    args: &[Value],
+    mode: SymbolMode,
+) -> Result<Value, Flow> {
     if !buffer.get_multibyte() {
         return Ok(Value::T);
     }
@@ -6604,13 +7074,13 @@ pub fn builtin_find_coding_systems_region_internal<H: TextHost>(
         buffer.lisp_pos_to_full_buffer_emacs_byte_pos(LispCharPos1::new(start)),
         buffer.lisp_pos_to_full_buffer_emacs_byte_pos(LispCharPos1::new(end)),
     );
+    // Every non-ASCII character takes at least two bytes, so a region with as
+    // many bytes as characters is ASCII: answer before copying it.
+    if byte_range.len().get() as i64 == end - start {
+        return Ok(Value::T);
+    }
     let text = buffer.buffer_substring_lisp_string_range(byte_range);
-    safe_coding_systems_for_text(
-        eval.coding_systems(),
-        &text,
-        args.get(2).copied(),
-        eval.symbol_mode(),
-    )
+    safe_coding_systems_for_text(mgr, &text, args.get(2).copied(), mode)
 }
 
 // ===========================================================================
@@ -6719,6 +7189,10 @@ pub fn register_bootstrap_vars<S: TextVariableStore>(vars: &mut S) {
 #[cfg(test)]
 #[path = "tests/coding_test.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "tests/allocation_test.rs"]
+mod allocation_tests;
 
 /// VIS write route (lead #1052): the priorities field stays pub(crate) for
 /// this crate; the authority fence delegates here instead of touching it.

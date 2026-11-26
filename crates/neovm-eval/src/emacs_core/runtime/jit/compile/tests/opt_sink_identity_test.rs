@@ -7,6 +7,7 @@ use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::bytecode::function_slots::FunctionParamsExt as _;
 use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
 use crate::emacs_core::jit::compile::opt_census::SelectedTier;
+use neovm_value::intern::intern;
 
 use super::compile_pipeline_tests::function;
 use super::*;
@@ -81,18 +82,17 @@ fn load(ctx: &mut Context, roots: &Roots) {
         let value = named(ctx, spec.name);
         roots.add(&[value]);
         let source = value.get_bytecode_data().unwrap();
-        assert_eq!(source.arglist, Value::make_int(spec.descriptor));
-        assert_eq!(source.max_stack.get(), spec.max_stack as usize);
-        assert_eq!(
-            source.gnu_bytecode_bytes.as_ref().unwrap().as_slice(),
-            spec.bytes
-        );
-        assert_eq!(source.constants.len(), spec.constants.len());
-        for (&actual, &expected) in source.constants.iter().zip(spec.constants) {
+        assert_eq!(source.arglist(), Value::make_int(spec.descriptor));
+        assert_eq!(source.max_stack().get(), spec.max_stack as usize);
+        assert_eq!(source.gnu_bytecode_bytes().unwrap().as_slice(), spec.bytes);
+        assert_eq!(source.constants().len(), spec.constants.len());
+        for (&actual, &expected) in source.constants().iter().zip(spec.constants) {
             match expected {
                 oracle::Constant::Integer(n) => assert_eq!(actual, Value::make_int(n)),
                 oracle::Constant::Float(bits) => assert_eq!(number(actual), Number::Float(bits)),
-                oracle::Constant::Symbol(name) => assert_eq!(actual, Value::symbol(name)),
+                oracle::Constant::Symbol(name) => {
+                    assert_eq!(actual, Value::from_sym_id(intern(name)))
+                }
             }
         }
         assert!(!source.executable_ops().is_empty());
@@ -113,19 +113,19 @@ fn source(value: Value) -> &'static ByteCodeFunction {
 fn original_plan(source: &ByteCodeFunction) -> ir::Func {
     let ops = source.executable_ops();
     let arity = source
-        .params
+        .params()
         .stack_shape()
         .expect("fixture stack parameters")
         .required();
     let cfg = analyze_cfg(
         ops,
-        &source.constants,
+        source.constants(),
         source.executable_gnu_byte_offset_map(),
         arity,
     )
     .unwrap();
     let consts = source
-        .constants
+        .constants()
         .iter()
         .copied()
         .map(ir::ValueBits::from_value)
@@ -168,13 +168,13 @@ fn prepared_with_reps(source: &ByteCodeFunction, sink: bool, reps: bool) -> ir::
     let _snapshot = publish_numeric_feedback(source); // observed Tier-0 types, never fabricated
     let ops = source.executable_ops();
     let arity = source
-        .params
+        .params()
         .stack_shape()
         .expect("fixture stack parameters")
         .required();
     let cfg = analyze_cfg(
         ops,
-        &source.constants,
+        source.constants(),
         source.executable_gnu_byte_offset_map(),
         arity,
     )
@@ -182,7 +182,7 @@ fn prepared_with_reps(source: &ByteCodeFunction, sink: bool, reps: bool) -> ir::
     let build_plan = || {
         opt_backend::build_plan(
             ops,
-            &source.constants,
+            source.constants(),
             &cfg,
             ir::ParamShape {
                 required: arity,
@@ -225,9 +225,9 @@ fn lower(source: &ByteCodeFunction, plan: &ir::Func, roots: &Roots) -> CompiledL
     let _snapshot = publish_numeric_feedback(source);
     let leaf = lower_opt_ir_for_test(
         source.executable_ops(),
-        &source.constants,
+        source.constants(),
         source
-            .params
+            .params()
             .stack_shape()
             .expect("fixture stack parameters")
             .required(),
@@ -271,11 +271,13 @@ fn native(
     leaf: &CompiledLeaf,
     args: &[Value],
 ) -> Value {
-    match leaf.call_consts(
-        ctx as *mut Context as *mut u8,
-        source.jit_constant_base(),
-        args,
-    ) {
+    match unsafe {
+        leaf.call_consts(
+            ctx as *mut Context as *mut u8,
+            source.jit_constant_base(),
+            args,
+        )
+    } {
         NativeRun::Ok(bits) => unsafe {
             /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
             Value::from_bits(bits)
@@ -1005,11 +1007,13 @@ fn opt_sink_native_virtual_full_frame_after_visible_store() {
     let leaf = lower(src, &selected, &roots);
     ctx.obarray
         .set_symbol_value("t34-o36-watch-count", Value::make_int(0));
-    let NativeRun::DeoptAt(resume) = leaf.call_consts(
-        &mut ctx as *mut Context as *mut u8,
-        src.jit_constant_base(),
-        &args,
-    ) else {
+    let NativeRun::DeoptAt(resume) = (unsafe {
+        leaf.call_consts(
+            &mut ctx as *mut Context as *mut u8,
+            src.jit_constant_base(),
+            &args,
+        )
+    }) else {
         panic!("explicit native guard must reconstruct full original frame");
     };
     roots.add(&resume.stack);
@@ -1053,11 +1057,13 @@ fn opt_sink_native_virtual_full_frame_after_visible_store() {
         flow_observation(&reference_error),
         flow_observation(&expected_error)
     );
-    let NativeRun::DeoptAt(resume) = leaf.call_consts(
-        &mut ctx as *mut Context as *mut u8,
-        src.jit_constant_base(),
-        &error_args,
-    ) else {
+    let NativeRun::DeoptAt(resume) = (unsafe {
+        leaf.call_consts(
+            &mut ctx as *mut Context as *mut u8,
+            src.jit_constant_base(),
+            &error_args,
+        )
+    }) else {
         panic!("wrong-type path must retain explicit original frame");
     };
     roots.add(&resume.stack);
@@ -1116,7 +1122,7 @@ fn native_flow(
     args: &[Value],
     roots: &Roots,
 ) -> Flow {
-    match leaf.call(ctx as *mut Context as *mut u8, args) {
+    match unsafe { leaf.call(ctx as *mut Context as *mut u8, args) } {
         NativeRun::Signal => take_pending_flow().expect("native pending quit"),
         NativeRun::DeoptAt(resume) => {
             roots.add(&resume.stack);

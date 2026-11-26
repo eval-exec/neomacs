@@ -1,5 +1,6 @@
 //! Native file-I/O state uses the existing cold owner allocation, not the
 //! World's shared state. These rows execute in core with the real hook set.
+use neovm_value::intern::intern;
 
 use crate::emacs_core::eval::{AutoSaveNativeWritePolicy, Context};
 use crate::emacs_core::load_boot::load_from_dump;
@@ -17,7 +18,7 @@ fn snapshot(context: &mut Context, arguments: Vec<Value>) -> EvalResult {
     };
     Ok(Value::list(vec![
         Value::fixnum(context.tagged_heap().tagged_heap_identity() as i64),
-        Value::symbol(kind),
+        Value::from_sym_id(intern(kind)),
         Value::fixnum(i64::from(mode)),
     ]))
 }
@@ -103,7 +104,7 @@ fn auto_save_native_policy_survives_same_world_green_owner_switch() {
             observed,
             vec![
                 Value::fixnum(heap as i64),
-                Value::symbol(kind),
+                Value::from_sym_id(intern(kind)),
                 Value::fixnum(mode)
             ]
         );
@@ -139,6 +140,7 @@ fn auto_save_native_policy_is_reconstructed_as_ordinary_after_dump() {
     let directory = tempfile::tempdir().expect("dump directory");
     let path = directory.path().join("fileio-owner.pdump");
     dump_to_file(&context, &path).expect("dump while native policy is active");
+    let parked_context = context.park_for_test();
     let mut loaded = load_from_dump(&path).expect("reconstruct fresh Context from actual dump");
     assert_eq!(
         loaded.auto_save_native_write_policy(),
@@ -160,6 +162,10 @@ fn auto_save_native_policy_is_reconstructed_as_ordinary_after_dump() {
         AutoSaveNativeWritePolicy::Ordinary { preserved_mode: 0 },
         "the first reconstructed owner slab must start at C-static zero",
     );
+    drop(loaded);
+    let context = parked_context
+        .resume_for_test()
+        .expect("resume source owner after dump load");
     assert_eq!(
         context.auto_save_native_write_policy(),
         AutoSaveNativeWritePolicy::Active {

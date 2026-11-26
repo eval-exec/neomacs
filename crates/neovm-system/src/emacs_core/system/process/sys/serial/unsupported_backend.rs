@@ -38,17 +38,6 @@ pub fn open(_path: &OsStr) -> Result<Device, SerialOpenFailure> {
 pub(crate) trait DeviceIo {
     fn read_attributes(&self) -> Result<Attributes, SerialDeviceFailure>;
     fn write_attributes(&self, _attributes: &Attributes) -> Result<(), SerialDeviceFailure>;
-    fn register_readable(
-        &self,
-        _poller: &polling::Poller,
-        _id: ProcessId,
-    ) -> Result<(), String>;
-    fn modify_interest(
-        &self,
-        _poller: &polling::Poller,
-        _event: polling::Event,
-    ) -> Result<(), String>;
-    fn unregister(&self, _poller: &polling::Poller);
 }
 
 impl DeviceIo for Device {
@@ -59,26 +48,6 @@ impl DeviceIo for Device {
     fn write_attributes(&self, _attributes: &Attributes) -> Result<(), SerialDeviceFailure> {
         match *self {}
     }
-
-    fn register_readable(
-        &self,
-        _poller: &polling::Poller,
-        _id: ProcessId,
-    ) -> Result<(), String> {
-        match *self {}
-    }
-
-    fn modify_interest(
-        &self,
-        _poller: &polling::Poller,
-        _event: polling::Event,
-    ) -> Result<(), String> {
-        match *self {}
-    }
-
-    fn unregister(&self, _poller: &polling::Poller) {
-        match *self {}
-    }
 }
 
 impl Attributes {
@@ -86,19 +55,19 @@ impl Attributes {
         match *self {}
     }
 
-    pub fn set_byte_size(&mut self, _size: SerialByteSize) {
+    pub(crate) fn set_byte_size(&mut self, _size: SerialByteSize) {
         match *self {}
     }
 
-    pub fn set_parity(&mut self, _parity: SerialParity) {
+    pub(crate) fn set_parity(&mut self, _parity: SerialParity) {
         match *self {}
     }
 
-    pub fn set_stop_bits(&mut self, _bits: SerialStopBits) {
+    pub(crate) fn set_stop_bits(&mut self, _bits: SerialStopBits) {
         match *self {}
     }
 
-    pub fn set_flow_control(&mut self, _flow: SerialFlowControl) {
+    pub(crate) fn set_flow_control(&mut self, _flow: SerialFlowControl) {
         match *self {}
     }
 }

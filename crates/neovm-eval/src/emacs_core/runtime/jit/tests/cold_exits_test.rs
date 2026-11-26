@@ -28,10 +28,10 @@ fn function(ops: Vec<Op>, constants: Vec<Value>, arity: usize) -> ByteCodeFuncti
         optional: Vec::new(),
         rest: None,
     });
-    f.lexical = true;
-    f.ops = ops;
-    f.constants = constants.into();
-    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
+    f.set_lexical(true);
+    f.set_ops(ops);
+    f.set_constants(constants.into());
+    f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
     f.seal_hand_assembled_ops();
     f
 }
@@ -132,9 +132,9 @@ fn compile(ev: &Context, path: Path, f: &ByteCodeFunction) {
     match path {
         Path::Baseline => {
             lower_leaf_full(
-                &f.ops,
-                &f.constants,
-                f.params
+                f.ops(),
+                f.constants(),
+                f.params()
                     .stack_shape()
                     .expect("fixture stack parameters")
                     .required(),
@@ -383,9 +383,9 @@ fn cold_exits_run_the_corpus_unchanged() {
     let run = |ev: &mut Context, mode: ColdExitsMode, f: &ByteCodeFunction, args: &[Value]| {
         force_cold_exits_for_test(Some(mode));
         let leaf = lower_leaf_full(
-            &f.ops,
-            &f.constants,
-            f.params
+            f.ops(),
+            f.constants(),
+            f.params()
                 .stack_shape()
                 .expect("fixture stack parameters")
                 .required(),
@@ -395,7 +395,7 @@ fn cold_exits_run_the_corpus_unchanged() {
         )
         .expect("compiles");
         force_cold_exits_for_test(None);
-        leaf.call(ev as *mut Context as *mut u8, args)
+        unsafe { leaf.call(ev as *mut Context as *mut u8, args) }
     };
     // Fresh objects differ in identity between two runs: compare printed.
     let describe = |run: crate::emacs_core::jit::compile::NativeRun| match run {
@@ -420,7 +420,7 @@ fn cold_exits_run_the_corpus_unchanged() {
             // A float operand deopts at the first guard, in both.
             let args = vec![
                 arg;
-                f.params
+                f.params()
                     .stack_shape()
                     .expect("fixture stack parameters")
                     .required()

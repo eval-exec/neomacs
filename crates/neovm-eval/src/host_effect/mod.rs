@@ -7,6 +7,9 @@
 pub mod contracts;
 
 #[doc(hidden)]
+pub mod selection;
+
+#[doc(hidden)]
 pub mod wake;
 
 pub(crate) mod native_outcome;

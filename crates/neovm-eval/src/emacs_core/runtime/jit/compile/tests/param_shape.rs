@@ -7,7 +7,7 @@ fn stack_function(nonrest: usize, declared_depth: usize) -> ByteCodeFunction {
     let mut function = ByteCodeFunction::new(
         FunctionParams::try_from(Value::fixnum(descriptor)).expect("integer parameter slot"),
     );
-    function.max_stack = StackDepth::for_test(declared_depth);
+    function.set_max_stack(StackDepth::for_test(declared_depth));
     function
 }
 

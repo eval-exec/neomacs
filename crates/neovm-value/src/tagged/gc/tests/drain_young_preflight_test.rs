@@ -79,7 +79,7 @@ impl DrainCollectionSnapshot {
             cycle: heap.generational.cycle,
             major: heap.generational.major_in_progress,
             marking: heap.mark_in_progress,
-            concurrent: heap.concurrent_mark_running,
+            concurrent: heap.concurrent_mark_running(),
             sweeping: heap.sweep_in_progress,
             parity: heap.mark_parity,
             promo: heap
@@ -99,7 +99,7 @@ impl DrainCollectionSnapshot {
                 .cons_blocks
                 .iter()
                 .map(|block| {
-                    (0..cons_mark_words(block.next_index as usize))
+                    (0..cons_mark_words(block.next_index()))
                         .map(|word| block.mark_word(word).load(Ordering::Relaxed))
                         .collect()
                 })
@@ -108,7 +108,7 @@ impl DrainCollectionSnapshot {
                 .cons_blocks
                 .iter()
                 .map(|block| {
-                    (0..cons_mark_words(block.next_index as usize))
+                    (0..cons_mark_words(block.next_index()))
                         .map(|word| block.trailer().old_word(word))
                         .collect()
                 })
@@ -324,9 +324,12 @@ fn drain_young_loan_refusal_precedes_marker_completion_take_or_stop_request() {
             // before producing Disconnected. No channel wait can hang here.
             let (sender, receiver) = std::sync::mpsc::channel();
             drop(sender);
-            heap.gc_exited = Some(receiver);
-            heap.concurrent_mark_running = true;
             let identity = heap.heap_identity();
+            // SAFETY: inert synthetic fixture, no live worker.
+            unsafe {
+                heap.gc_exited.install_for_heap(identity, receiver);
+                heap.concurrent_mark_running.set(true);
+            }
             let callbacks = Cell::new(0);
             // SAFETY: this is the sole stopped owner and there is NO actual
             // worker; only the deterministic receiver sentinel is installed.
@@ -345,13 +348,16 @@ fn drain_young_loan_refusal_precedes_marker_completion_take_or_stop_request() {
                 ) if actual == identity
             ));
             assert_eq!(callbacks.get(), 0);
-            assert!(heap.concurrent_mark_running);
+            assert!(heap.concurrent_mark_running());
             assert!(heap.gc_exited.is_some());
             assert!(!heap.gc_stop.load(Ordering::Relaxed));
             // Remove ONLY the fixture's sentinel, then compare full stopped
             // state. No marker exists or reads any object/transport snapshot.
-            heap.concurrent_mark_running = false;
-            heap.gc_exited = None;
+            // SAFETY: inert synthetic fixture cleanup.
+            unsafe {
+                heap.concurrent_mark_running.set(false);
+                heap.gc_exited.clear_sentinel_for_test(identity);
+            }
             assert_eq!(DrainCollectionSnapshot::capture(&heap, &[root]), before);
             drain_young_return_loan(&mut heap, loan);
             drop(unsafe { heap.drain_to_quiescent(|_| {}) }.unwrap());

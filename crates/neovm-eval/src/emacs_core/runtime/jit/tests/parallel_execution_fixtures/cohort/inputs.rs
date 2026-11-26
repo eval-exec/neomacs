@@ -145,11 +145,12 @@ impl Scenario {
                 // Only registry ids grow here. The World has already seeded ALL
                 // holders; the first live intern must append actual World chunks.
                 let mut gap =
-                    neovm_value::intern::intern_uninterned("nmjit-native-publication-gap");
+                    neovm_value::intern::make_uninterned_symbol("nmjit-native-publication-gap");
                 let chunk_slots = neovm_value::symbol::OBARRAY_CHUNK_SLOTS as u64;
                 let target = (u64::from(gap.to_raw()) / chunk_slots + 2) * chunk_slots + 17;
                 while u64::from(gap.to_raw()) + 1 < target {
-                    gap = neovm_value::intern::intern_uninterned("nmjit-native-publication-gap");
+                    gap =
+                        neovm_value::intern::make_uninterned_symbol("nmjit-native-publication-gap");
                 }
                 ScenarioSeed::Publication(ColdInputs {
                     named,

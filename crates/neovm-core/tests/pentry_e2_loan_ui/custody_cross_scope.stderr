@@ -1,0 +1,15 @@
+error: lifetime may not live long enough
+  --> tests/pentry_e2_loan_ui/custody_cross_scope.rs:11:13
+   |
+ 7 | fn lend<'inner, 'outer: 'inner, 'era>(
+   |         ------  ------ lifetime `'outer` defined here
+   |         |
+   |         lifetime `'inner` defined here
+...
+11 |     let _ = keeper.lend_serial(request);
+   |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^ argument requires that `'inner` must outlive `'outer`
+   |
+   = help: consider adding the following bound: `'inner: 'outer`
+   = note: requirement occurs because of the type `KeeperReadyRequest<'_>`, which makes the generic argument `'_` invariant
+   = note: the struct `KeeperReadyRequest<'s>` is invariant over the parameter `'s`
+   = help: see <https://doc.rust-lang.org/nomicon/subtyping.html> for more information about variance

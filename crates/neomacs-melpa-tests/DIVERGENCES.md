@@ -3129,7 +3129,9 @@ carrying a neomacs-invented or wrong VALUE on top of the missing declaration:
 - `redisplay--inhibit-bidi`: a conflicting nil seed deleted; bootstrap is t
   (xdisp.c:39235), loadup.el flips it off after charprop loads
 - `frame-inhibit-implied-resize`: nil -> `(tab-bar-lines tool-bar-lines)`
-  (frame.c:7636, the own-drawn-tool-bar GUI branch)
+  was the original own-drawn-tool-bar choice. The canonical NS/GTK3 build
+  profiles use `(tab-bar-lines)` instead (frame.c:7684-7692); the bootstrap
+  and its special-variable pin now follow those attested defaults.
 
 Pinned by the five per-subsystem tables in
 `crates/neovm-core/src/emacs_core/gnu_defvar_special_test.rs`, which assert
@@ -36179,6 +36181,16 @@ second guard (`src/xfns.c:10631-10656`):
 | `x-get-page-setup` | `xfns.c:10646` | same |
 | `x-print-frames-dialog` | `xfns.c:10647` | same |
 | `x-gtk-debug` | `xfns.c:10653` | `USE_GTK` + `HAVE_GTK3` + `GTK_CHECK_VERSION (3, 14, 0)` |
+
+`x-select-font` is the one of the six that profiles other than X11 also
+compile: `defsubr (&Sx_select_font)` is in NS (`src/nsfns.m:4301`, DEFUN at
+`:1688`), w32 (`src/w32font.c:3055`, DEFUN at `:2748`), pgtk
+(`src/pgtkfns.c:3855`, DEFUN at `:3676`) and Haiku (`src/haikufont.c:1471`,
+DEFUN at `:1242`).  The reference NS and W32 images therefore have it
+`fboundp` while the four dialogs above stay `xfns.c`-only; the generated
+DEFUN ledger's `linux+macos+windows` gate on this row records the same
+object lists, and `obarray_runtime_surface.rs` pins Neomacs's nil against
+GNU's host-keyed answer.
 
 Entry 179 already settled the rule these fall under: this build's window system
 is `neo` (`lisp/term/neo-win.el`), not `x`, and X's own names are correctly

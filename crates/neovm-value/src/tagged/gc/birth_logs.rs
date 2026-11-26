@@ -76,18 +76,23 @@ impl TaggedHeap {
     /// major skip the cold recording path with one flag branch. The cold
     /// helper checks the concurrent phase because major scope includes sweep.
     #[inline]
-    pub(super) fn note_black_born(&mut self, header: *mut GcHeader) {
+    /// # Safety
+    /// `header` must point to a live, initialized `GcHeader` allocated on this heap.
+    pub(super) unsafe fn note_black_born(&mut self, header: *mut GcHeader) {
         if self.generational.major_in_progress {
-            self.record_black_born_major(header);
+            // SAFETY: caller guarantees `header` points to a newly initialized live heap object.
+            unsafe { self.record_black_born_major(header) };
         }
     }
 
     #[cold]
     #[inline(never)]
-    fn record_black_born_major(&mut self, header: *mut GcHeader) {
+    /// # Safety
+    /// `header` must point to a live, initialized `GcHeader` allocated on this heap.
+    unsafe fn record_black_born_major(&mut self, header: *mut GcHeader) {
         // Keep the concurrent-phase test out of the ordinary allocation
         // path: with GEN0, the major flag alone rejects this cold helper.
-        if !self.concurrent_mark_running {
+        if !self.concurrent_mark_running() {
             return;
         }
         debug_assert!(self.generational.enabled && self.mark_in_progress);
@@ -103,7 +108,7 @@ impl TaggedHeap {
     #[inline(never)]
     pub(super) fn note_black_cons_region_start(&mut self, first: *mut ConsCell) {
         debug_assert!(self.current_mutator_gc().black_cons_region_start.is_none());
-        if self.generational.major_in_progress && self.concurrent_mark_running {
+        if self.generational.major_in_progress && self.concurrent_mark_running() {
             debug_assert!(self.generational.enabled && self.mark_in_progress);
             self.current_mutator_gc_mut().black_cons_region_start = Some(first as usize);
         }
@@ -113,7 +118,7 @@ impl TaggedHeap {
     #[inline(never)]
     pub(super) fn note_black_float_region_start(&mut self, first: *mut FloatObj) {
         debug_assert!(self.current_mutator_gc().black_float_region_start.is_none());
-        if self.generational.major_in_progress && self.concurrent_mark_running {
+        if self.generational.major_in_progress && self.concurrent_mark_running() {
             debug_assert!(self.generational.enabled && self.mark_in_progress);
             self.current_mutator_gc_mut().black_float_region_start = Some(first as usize);
         }
@@ -157,7 +162,10 @@ impl TaggedHeap {
         if !self.is_generational_major_marking() {
             return;
         }
-        assert!(!self.concurrent_mark_running, "the marker must have joined");
+        assert!(
+            !self.has_unfinished_concurrent_mark(),
+            "the marker must have joined"
+        );
         debug_assert!(!self.alloc_regions_open(), "stop-all closes birth regions");
         // These scratch containers hold raw headers/descriptors, not Values.
         // No Lisp allocation or safepoint occurs before they are consumed.

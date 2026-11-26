@@ -10,6 +10,7 @@ mod edit_runtime;
 mod edit_transaction;
 #[cfg(any(test, feature = "test-support"))]
 pub mod edit_transaction;
+mod manager_view;
 #[doc(hidden)]
 pub mod storage_string;
 #[doc(hidden)]
@@ -40,39 +41,52 @@ pub mod undo;
 pub mod visited_file_modtime;
 
 pub use buffer::{
-    Buffer, BufferId, BufferManager, BufferTextSnapshot, InsertionType, LabeledRestriction,
-    LabeledRestrictionLabel, LineIndexBuild, MarkerRef, SavedLabeledRestrictions,
-    SavedRestrictionKind, SavedRestrictionState,
+    Buffer, BufferId, BufferManager, BufferTextSnapshot, InsertionType, LineIndexBuild, MarkerRef,
+    SavedRestrictionState, TextPropertyRoots,
 };
+#[cfg(feature = "test-support")]
+pub use buffer::{LabeledRestriction, SavedLabeledRestrictions};
+pub use buffer::{LabeledRestrictionLabel, SavedRestrictionKind};
 #[cfg(not(any(test, feature = "test-support")))]
 pub(crate) use buffer_text::BufferText;
 #[cfg(any(test, feature = "test-support"))]
 pub use buffer_text::BufferText;
-pub use buffer_text::{BufferContentRevision, BufferSourceAuthority, BufferSourceReadLease};
+pub use buffer_text::{BufferSourceAuthority, BufferSourceReadLease};
 pub use edit_runtime::EditRuntime;
+#[cfg(all(test, not(feature = "test-support")))]
+pub(crate) use edit_transaction::TranspositionAnchorPolicy;
+#[cfg(feature = "test-support")]
 pub use edit_transaction::TranspositionAnchorPolicy;
 #[doc(hidden)]
 pub use edit_transaction::{PreparedBufferEdit, TextMeasurement};
-pub use overlay::{Overlay, OverlayList};
+pub use manager_view::{BufferManagerMut, EditRuntimeMut};
+pub use overlay::{LiveOverlayView, Overlay, OverlayList, OverlayRead};
 #[cfg(not(any(test, feature = "test-support")))]
 pub(crate) use position::BufferLispPos;
 #[cfg(any(test, feature = "test-support"))]
 pub use position::BufferLispPos;
 pub use position::{
     AccessibleCharRange, AccessibleEmacsByteRange, CharLen, CharPos0, CharRange, DisplayColumn,
-    EmacsByteLen, EmacsBytePos, EmacsByteRange, FullBufferLispCharRange, LispBytePos1,
-    LispCharPos1, TextPositionAnchor,
+    EmacsByteLen, EmacsBytePos, EmacsByteRange, LispBytePos1, LispCharPos1, TextPositionAnchor,
 };
 pub use shared::{SavedPointBeforeCommand, SharedUndoState};
-pub use text::{
-    BufferTextBackendKind, TextChange, TextEditRange, TextExtent, TextInsertion, TextMetrics,
-    TextReplacement, TextTransposition,
-};
+pub use text::TextMetrics;
+pub use text::{BufferTextBackendKind, TextChange, TextEditRange, TextExtent};
+#[cfg(not(feature = "test-support"))]
+pub(crate) use text::{TextInsertion, TextReplacement, TextTransposition};
+#[cfg(feature = "test-support")]
+pub use text::{TextInsertion, TextReplacement, TextTransposition};
 pub use text_props::{ObjectIntervalPlistRun, ObjectIntervalRun, TextPropertyTable};
+#[cfg(not(feature = "test-support"))]
+pub(crate) use undo::truncate_undo_list;
+#[cfg(feature = "test-support")]
+pub use undo::truncate_undo_list;
+pub(crate) use undo::undo_first_group_bytes;
 pub use undo::{
-    OuterUndoLimit, UndoLimitBindings, UndoLimits, UndoRecording, truncate_undo_list,
-    undo_first_group_bytes, undo_list_boundary, undo_list_has_trailing_boundary,
-    undo_list_is_disabled, undo_list_record_delete, undo_list_record_first_change,
-    undo_list_record_insert, undo_list_record_point, undo_list_record_property_change,
+    UndoLimitBindings, undo_list_boundary, undo_list_is_disabled, undo_list_record_insert,
 };
-pub use visited_file_modtime::{FirstChangeModtime, VisitedFileModtime, VisitedFileModtimeSlot};
+#[cfg(not(feature = "test-support"))]
+pub(crate) use undo::{UndoLimits, UndoRecording};
+#[cfg(feature = "test-support")]
+pub use undo::{UndoLimits, UndoRecording, undo_list_has_trailing_boundary};
+pub use visited_file_modtime::VisitedFileModtime;

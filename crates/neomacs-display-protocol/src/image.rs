@@ -428,6 +428,15 @@ pub struct ImageColorContext {
     /// face and may carry a `:foreground` of its own, and GNU reads neither for
     /// this (issue #550).
     frame_foreground: ImageRgb,
+    /// GNU's `FRAME_BACKGROUND_PIXEL` (src/image.c:10092-10101): the frame's
+    /// background, equal to the `default` face's background. Used by `gif_load`
+    /// for borders outside frame 0 and for transparent GIF pixels when the
+    /// image spec omits `:background`.
+    frame_background: ImageRgb,
+    /// Explicit `:background` from the image spec (GNU `specified_bg`,
+    /// src/image.c:10124-10133, :10216-10217). Distinct from the displaying
+    /// face's background, which `gif_load` ignores.
+    specified_background: Option<ImageRgb>,
     background_policy: ImageBackgroundPolicy,
 }
 
@@ -435,13 +444,18 @@ pub struct ImageColorContext {
 ///
 /// An absent `frame_foreground` reads as the face foreground -- the default
 /// [`ImageColorContext::from_pixels`] documents -- never as black, which is a
-/// real color here and not an "unset" (issue #556).
+/// real color here and not an "unset" (issue #556). Likewise an absent
+/// `frame_background` reads as the face background.
 #[derive(serde::Deserialize)]
 struct ImageColorContextWire {
     foreground: ImageRgb,
     background: ImageRgb,
     #[serde(default)]
     frame_foreground: Option<ImageRgb>,
+    #[serde(default)]
+    frame_background: Option<ImageRgb>,
+    #[serde(default)]
+    specified_background: Option<ImageRgb>,
     #[serde(default)]
     background_policy: ImageBackgroundPolicy,
 }
@@ -452,6 +466,8 @@ impl From<ImageColorContextWire> for ImageColorContext {
             foreground: wire.foreground,
             background: wire.background,
             frame_foreground: wire.frame_foreground.unwrap_or(wire.foreground),
+            frame_background: wire.frame_background.unwrap_or(wire.background),
+            specified_background: wire.specified_background,
             background_policy: wire.background_policy,
         }
     }
@@ -478,15 +494,17 @@ pub enum ImageBackgroundPolicy {
 }
 
 impl ImageColorContext {
-    /// The face's colors, with the frame foreground defaulted to the face's own:
-    /// callers that know the frame replace it with
-    /// [`Self::with_frame_foreground`].
+    /// The face's colors, with the frame foreground and background defaulted
+    /// to the face's own: callers that know the frame replace them with
+    /// [`Self::with_frame_foreground`] and [`Self::with_frame_background`].
     #[must_use]
     pub const fn from_pixels(foreground: u32, background: u32) -> Self {
         Self {
             foreground: ImageRgb::from_pixel(foreground),
             background: ImageRgb::from_pixel(background),
             frame_foreground: ImageRgb::from_pixel(foreground),
+            frame_background: ImageRgb::from_pixel(background),
+            specified_background: None,
             background_policy: ImageBackgroundPolicy::FaceColor,
         }
     }
@@ -513,6 +531,30 @@ impl ImageColorContext {
         self
     }
 
+    /// GNU's `FRAME_BACKGROUND_PIXEL` for the frame this image belongs to.
+    #[must_use]
+    pub const fn frame_background(self) -> ImageRgb {
+        self.frame_background
+    }
+
+    #[must_use]
+    pub const fn with_frame_background(mut self, frame_background: u32) -> Self {
+        self.frame_background = ImageRgb::from_pixel(frame_background);
+        self
+    }
+
+    /// Explicit `:background` from the image spec, when present and resolvable.
+    #[must_use]
+    pub const fn specified_background(self) -> Option<ImageRgb> {
+        self.specified_background
+    }
+
+    #[must_use]
+    pub const fn with_specified_background(mut self, specified_background: u32) -> Self {
+        self.specified_background = Some(ImageRgb::from_pixel(specified_background));
+        self
+    }
+
     #[must_use]
     pub const fn with_background_policy(mut self, policy: ImageBackgroundPolicy) -> Self {
         self.background_policy = policy;
@@ -526,6 +568,25 @@ impl ImageColorContext {
     pub const fn background_rgba8(self) -> [u8; 4] {
         match self.background_policy {
             ImageBackgroundPolicy::FaceColor => self.background.rgba8(),
+            ImageBackgroundPolicy::Transparent => [0; 4],
+        }
+    }
+
+    /// Border color GNU `gif_load` paints outside frame 0 (`src/image.c:10103-10117`).
+    pub const fn gif_frame_background_rgba8(self) -> [u8; 4] {
+        match self.background_policy {
+            ImageBackgroundPolicy::FaceColor => self.frame_background.rgba8(),
+            ImageBackgroundPolicy::Transparent => [0; 4],
+        }
+    }
+
+    /// Transparent-pixel fill color GNU `gif_load` paints (`src/image.c:10215-10217`).
+    pub const fn gif_transparent_background_rgba8(self) -> [u8; 4] {
+        match self.background_policy {
+            ImageBackgroundPolicy::FaceColor => match self.specified_background {
+                Some(bg) => bg.rgba8(),
+                None => self.frame_background.rgba8(),
+            },
             ImageBackgroundPolicy::Transparent => [0; 4],
         }
     }
@@ -808,9 +869,30 @@ impl ImageFrameDelay {
 pub struct ImageEmbeddedMetadata {
     frame_count: Option<std::num::NonZeroU32>,
     frame_delay: Option<ImageFrameDelay>,
+    #[serde(default)]
+    property_order: ImageMetadataOrder,
+    #[serde(default)]
+    gif_extensions: Option<Vec<ImageExtensionBlock>>,
     /// Neomacs computed sources can have a prefix played only once.
     #[serde(default)]
     introduction: Option<ImageSequenceIntroduction>,
+}
+
+/// Decoder-specific order of the observable Lisp metadata plist.
+#[derive(
+    Clone, Copy, Debug, Default, Eq, Hash, PartialEq, serde::Serialize, serde::Deserialize,
+)]
+pub enum ImageMetadataOrder {
+    #[default]
+    CountThenDelay,
+    DelayThenCount,
+}
+
+/// One GIF extension sub-block, before conversion to an unibyte Lisp string.
+#[derive(Clone, Debug, Eq, Hash, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct ImageExtensionBlock {
+    pub function: u8,
+    pub bytes: Vec<u8>,
 }
 
 /// A prefix and its repeating tail have independently quantized delays.
@@ -826,6 +908,8 @@ impl ImageEmbeddedMetadata {
     pub const EMPTY: Self = Self {
         frame_count: None,
         frame_delay: None,
+        property_order: ImageMetadataOrder::CountThenDelay,
+        gif_extensions: None,
         introduction: None,
     };
 
@@ -834,8 +918,69 @@ impl ImageEmbeddedMetadata {
         Self {
             frame_count: std::num::NonZeroU32::new(frame_count).filter(|count| count.get() > 1),
             frame_delay: Some(frame_delay),
+            property_order: ImageMetadataOrder::CountThenDelay,
+            gif_extensions: None,
             introduction: None,
         }
+    }
+
+    /// TIFF directory count is navigation metadata, without an animation delay.
+    #[must_use]
+    pub fn pages(frame_count: u32) -> Self {
+        Self {
+            frame_count: std::num::NonZeroU32::new(frame_count).filter(|count| count.get() > 1),
+            ..Self::EMPTY
+        }
+    }
+
+    /// WebP prepends delay after count (GNU image.c:10817-10829).
+    #[must_use]
+    pub fn webp(frame_count: u32, frame_delay: ImageFrameDelay) -> Self {
+        Self {
+            frame_count: std::num::NonZeroU32::new(frame_count),
+            property_order: ImageMetadataOrder::DelayThenCount,
+            ..Self::animation(frame_count, frame_delay)
+        }
+    }
+
+    #[must_use]
+    pub const fn property_order(&self) -> ImageMetadataOrder {
+        self.property_order
+    }
+
+    /// GNU image.c keeps selected-frame GIF extensions even for one frame.
+    /// A frame without extensions has no delay property; an extension without
+    /// a nonzero graphics-control delay uses the Lisp default-delay marker.
+    #[must_use]
+    pub fn gif(frame_count: u32, extensions: Vec<ImageExtensionBlock>) -> Self {
+        let delay = extensions.iter().fold(0, |delay, block| {
+            if block.function == 0xf9 && block.bytes.len() == 4 {
+                u16::from_le_bytes([block.bytes[1], block.bytes[2]])
+            } else {
+                delay
+            }
+        });
+        Self {
+            frame_count: std::num::NonZeroU32::new(frame_count).filter(|count| count.get() > 1),
+            frame_delay: (!extensions.is_empty()).then(|| {
+                if delay == 0 {
+                    ImageFrameDelay::UseDefault
+                } else {
+                    ImageFrameDelay::Milliseconds {
+                        numerator: u32::from(delay) * 10,
+                        denominator: std::num::NonZeroU32::MIN,
+                    }
+                }
+            }),
+            property_order: ImageMetadataOrder::CountThenDelay,
+            gif_extensions: Some(extensions),
+            introduction: None,
+        }
+    }
+
+    #[must_use]
+    pub fn gif_extensions(&self) -> Option<&[ImageExtensionBlock]> {
+        self.gif_extensions.as_deref()
     }
 
     /// Set the first repeatable frame, validating it against this sequence.
@@ -1425,6 +1570,105 @@ impl ImageRealization {
             self.resolve_geometry(size, ImageNativeExtent::new(width, height), rotation)
                 .layout(),
         )
+    }
+}
+
+/// GNU `lookup_image` failed-load geometry (`src/image.c:3573-3583`,
+/// `src/dispextern.h:3295-3296`): the first fixnum `:width` / `:height` in the
+/// image spec if present, else `DEFAULT_IMAGE_WIDTH` × `DEFAULT_IMAGE_HEIGHT`
+/// (`30 × 30`). Computed once when constructing an image resolve request and
+/// carried on `FailedImage` so `image-size`, `image_element_extent`, redisplay,
+/// and the hollow-box renderer all read one authoritative size.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct FailedImageExtent {
+    width: i32,
+    height: i32,
+}
+
+impl FailedImageExtent {
+    /// GNU `DEFAULT_IMAGE_WIDTH` (`src/dispextern.h:3295`).
+    pub const DEFAULT_WIDTH: i32 = 30;
+    /// GNU `DEFAULT_IMAGE_HEIGHT` (`src/dispextern.h:3296`).
+    pub const DEFAULT_HEIGHT: i32 = 30;
+
+    #[must_use]
+    pub const fn new(width: i32, height: i32) -> Self {
+        Self { width, height }
+    }
+
+    #[must_use]
+    pub const fn width(self) -> i32 {
+        self.width
+    }
+
+    #[must_use]
+    pub const fn height(self) -> i32 {
+        self.height
+    }
+
+    /// Positive pixel box to lay out and draw as a hollow box, or `None` when
+    /// either axis is `<= 0`.
+    ///
+    /// GNU's `produce_image_glyph` (`src/xdisp.c:32444`) early-returns only on
+    /// `slice.width == 0 || slice.height == 0` and passes negative axes through
+    /// to `clip_to_bounds (-1, it->pixel_width, SHRT_MAX)` (`src/xdisp.c:32529`)
+    /// and `x_draw_rectangle`. Because `ImageLayoutExtent` uses unsigned `u32`
+    /// dimensions, Neomacs deliberately emits no display glyph for negative
+    /// failed axes as well (an explicit divergence for degenerate negative
+    /// `:width`/`:height`, while `image-size` still returns GNU's exact
+    /// negative fixnums).
+    #[must_use]
+    pub const fn drawable_extent(self) -> Option<ImageLayoutExtent> {
+        if self.width <= 0 || self.height <= 0 {
+            None
+        } else {
+            Some(ImageLayoutExtent::new(
+                self.width as u32,
+                self.height as u32,
+            ))
+        }
+    }
+
+    /// Non-zero slot extent for [`ImagePlacement`] when storing a failed image.
+    #[must_use]
+    pub const fn placement_extent(self) -> ImageLayoutExtent {
+        match self.drawable_extent() {
+            Some(extent) => extent,
+            None => ImageLayoutExtent::new(1, 1),
+        }
+    }
+}
+
+impl Default for FailedImageExtent {
+    fn default() -> Self {
+        Self {
+            width: Self::DEFAULT_WIDTH,
+            height: Self::DEFAULT_HEIGHT,
+        }
+    }
+}
+
+/// Visual presentation of an inline image glyph.
+#[derive(
+    Clone, Copy, Debug, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize,
+)]
+pub enum ImageGlyphPresentation {
+    /// Sample the image's GPU texture when resident.
+    #[default]
+    Texture,
+    /// GNU `x_draw_image_foreground` (`src/xterm.c:10283-10286`): the image
+    /// failed to load (`img->load_failed_p`), so draw a 1px hollow rectangle
+    /// in the glyph's face foreground around its placeholder box.
+    FailedPlaceholder,
+}
+
+impl ImageGlyphPresentation {
+    #[must_use]
+    pub const fn packed(self) -> u8 {
+        match self {
+            Self::Texture => 0,
+            Self::FailedPlaceholder => 1,
+        }
     }
 }
 

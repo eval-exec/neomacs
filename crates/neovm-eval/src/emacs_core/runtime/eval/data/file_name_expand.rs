@@ -115,7 +115,7 @@ fn expand_file_name_with_home_inner(
 /// key, which we do not replicate.) Mirror that so `~` expands to a real
 /// directory: a Windows session that sets APPDATA/USERPROFILE but not HOME would
 /// otherwise leave `~` literal and `directory-files "~"` would fail at startup.
-pub fn home_env_bytes() -> Option<Vec<u8>> {
+pub(crate) fn home_env_bytes() -> Option<Vec<u8>> {
     #[cfg(unix)]
     {
         if let Some(home) = std::env::var_os("HOME") {
@@ -139,7 +139,7 @@ fn home_env_string() -> Option<String> {
 }
 
 /// Byte-native twin of `expand_user_home_prefix`.
-pub fn expand_user_home_prefix_bytes(name: &[u8]) -> Option<(Vec<u8>, &[u8])> {
+pub(crate) fn expand_user_home_prefix_bytes(name: &[u8]) -> Option<(Vec<u8>, &[u8])> {
     let rest = name.strip_prefix(b"~")?;
     let sep = rest.iter().position(|&b| b == b'/').unwrap_or(rest.len());
     if sep == 0 {

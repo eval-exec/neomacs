@@ -26,7 +26,7 @@ fn error(error: impl std::fmt::Display) -> neovm_value::error::Flow {
 /// An original-owner test helper; no registry borrow survives the operation.
 fn with_hosts<R>(
     context: &mut Context,
-    operation: impl FnOnce(&mut HostRegistry, &Baton, &TaggedHeap, ThreadKey) -> R,
+    operation: impl FnOnce(&mut HostRegistry, &TurnRight, &TaggedHeap, ThreadKey) -> R,
 ) -> R {
     let owner = context.green_key().unwrap();
     let baton = context

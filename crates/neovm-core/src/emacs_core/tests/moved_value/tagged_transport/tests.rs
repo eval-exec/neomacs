@@ -4,7 +4,7 @@
 use std::sync::{Arc, Barrier, mpsc};
 
 use neovm_value::heap_types::LispString;
-use neovm_value::intern::{intern, intern_uninterned, is_canonical_id, unintern_canonical_id};
+use neovm_value::intern::{intern, is_canonical_id, make_uninterned_symbol, unintern_canonical_id};
 use neovm_value::tagged::gc::TaggedHeap;
 use neovm_value::tagged::transport::cell_census;
 use neovm_value::tagged::transport::{
@@ -16,7 +16,7 @@ use neovm_value::tagged::value::TaggedValue;
 fn collect_with_shared_roots(heap: &mut TaggedHeap) {
     let mut roots = Vec::new();
     collect_shared_root_gc_roots(&heap, &mut roots);
-    heap.collect_exact(roots.into_iter());
+    heap.collect_rooted(roots.into_iter());
 }
 
 /// A root that keeps `heap`'s table alive, so retired cells stay observable:
@@ -28,7 +28,7 @@ fn table_anchor(heap: &TaggedHeap) -> SharedRoot {
     unsafe {
         SharedRoot::new(
             heap,
-            TaggedValue::from_sym_id(intern_uninterned("p73-table-anchor")),
+            TaggedValue::from_sym_id(make_uninterned_symbol("p73-table-anchor")),
         )
     }
 }
@@ -79,7 +79,7 @@ fn immediate_values_reject_heap_objects_and_uninterned_symbols() {
         ImmediateValue::try_from(text),
         Err(NotImmediate::HeapObject)
     );
-    let uninterned = TaggedValue::from_sym_id(intern_uninterned("p73-uninterned"));
+    let uninterned = TaggedValue::from_sym_id(make_uninterned_symbol("p73-uninterned"));
     assert_eq!(
         ImmediateValue::try_from(uninterned),
         Err(NotImmediate::SymbolNeedsRoot)
@@ -210,7 +210,7 @@ fn untraced_values_take_no_root_cell() {
     let uninterned = unsafe {
         SharedRoot::new(
             &heap,
-            TaggedValue::from_sym_id(intern_uninterned("p73-rooted-symbol")),
+            TaggedValue::from_sym_id(make_uninterned_symbol("p73-rooted-symbol")),
         )
     };
     assert_eq!(cell_census(heap.heap_identity()), (2, 0));
@@ -437,6 +437,9 @@ fn batch_child_identity_and_structural_equality_survive_different_batches() {
     assert_eq!(left, right);
     assert!(!std::thread::spawn(move || left == right).join().unwrap());
 
+    // The first batches stay allocated on their heap. Parking clears the
+    // slot so the foreign-heap check runs against a different Context.
+    let _parked_first = context.park_for_test();
     let mut second_context = Box::new(crate::test_utils::new_context());
     second_context.setup_thread_locals();
     assert!(matches!(
@@ -536,6 +539,9 @@ fn coalescing_rejects_foreign_heap_without_replacing_existing_handles() {
         GlyphStringId::new(1),
         root,
     )];
+    // The first batch stays allocated. Parking clears the slot so the
+    // foreign-heap rejection runs against a different Context.
+    let _parked_first = first.park_for_test();
     let mut second = Box::new(crate::test_utils::new_context());
     second.setup_thread_locals();
     assert!(matches!(

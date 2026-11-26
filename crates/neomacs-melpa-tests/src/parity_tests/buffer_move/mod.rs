@@ -448,14 +448,14 @@ const BUFFER_MOVE_TEST_PRELUDE: &str = r####"
       (error "Buffer Move installed source drifted: %S" source))
     (let ((file (symbol-file helper 'defun)))
       (unless (and file
-                   (file-in-directory-p (file-truename file)
+                   (neomacs-melpa-path-inside-p (file-truename file)
                                         (file-truename root))
                    (not (commandp helper)))
         (error "Buffer Move private helper provenance drifted: %S %S" helper file)))
     (dolist (symbol commands)
       (let ((file (symbol-file symbol 'defun)))
         (unless (and file
-                     (file-in-directory-p (file-truename file)
+                     (neomacs-melpa-path-inside-p (file-truename file)
                                           (file-truename root))
                      (commandp symbol))
           (error "Buffer Move public command provenance drifted: %S %S"

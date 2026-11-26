@@ -107,8 +107,15 @@
                  ;; demoted to the echo area and lost with the session, so
                  ;; land any failure in the state file instead.
                  (condition-case err
-                     (neomacs--write-frame-snapshot
-                      (getenv "NEOMACS_GUI_ANIMATION_SNAPSHOT_JSON") t 'json)
+                     ;; Publish atomically: the test parses the snapshot as
+                     ;; soon as the final name appears, so it must never see a
+                     ;; truncated in-place write. Write the pending name, then
+                     ;; rename it onto the final path (atomic on POSIX).
+                     (let* ((snapshot
+                             (getenv "NEOMACS_GUI_ANIMATION_SNAPSHOT_JSON"))
+                            (pending (concat snapshot ".pending")))
+                       (neomacs--write-frame-snapshot pending t 'json)
+                       (rename-file pending snapshot t))
                    (error (child-frame-animation-write
                            (format "snapshot-error %S" err))))))
   ;; Grow the popup mid-life: the size-changing update crossfades the old

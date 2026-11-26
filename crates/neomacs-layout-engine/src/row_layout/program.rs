@@ -391,6 +391,7 @@ enum ResumedRunFonts<'a> {
 pub(crate) struct RowProgram {
     trailing_text_continues: bool,
     buffer_source_start: Option<DisplaySourcePosition>,
+    overlay_string_kinds: Vec<(usize, crate::display_origin::OverlayStringKind)>,
     geometry: RowProgramGeometry,
     fonts: ProgramFonts,
     operations: Vec<(Operation, DisplayTextRunMeasurement)>,
@@ -401,10 +402,14 @@ pub(crate) struct RowProgram {
 
 /// Source consumption at a visual-row boundary. A continuation consumes no
 /// newline and therefore has neither a newline hit cell nor an end-minus-one.
+/// A right-truncated row consumes the complete physical line up to its newline
+/// while keeping `row.end_charpos` at the end of its visible buffer prefix.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ComputedRowEnd {
     Newline,
     Continuation,
+    OverlayContinuation(crate::display_origin::OverlayStringKind),
+    Truncated { visible_end: usize },
 }
 
 pub(crate) struct ComputedRow {
@@ -597,6 +602,7 @@ impl RowProgram {
         Ok(Self {
             trailing_text_continues: false,
             buffer_source_start: None,
+            overlay_string_kinds: Vec::new(),
             geometry,
             fonts: match deferred_fonts {
                 Some(snapshot) => ProgramFonts::Deferred(snapshot),
@@ -611,6 +617,14 @@ impl RowProgram {
 
     pub(crate) fn with_buffer_source_start(mut self, start: DisplaySourcePosition) -> Self {
         self.buffer_source_start = Some(start);
+        self
+    }
+
+    pub(crate) fn with_overlay_string_kinds(
+        mut self,
+        kinds: Vec<(usize, crate::display_origin::OverlayStringKind)>,
+    ) -> Self {
+        self.overlay_string_kinds = kinds;
         self
     }
 
@@ -700,7 +714,7 @@ impl RowProgram {
     ) -> Result<ComputedRow, RowProgramError> {
         let mut rows = self.compute_visual_rows(1, cancelled)?;
         let row = rows.pop().ok_or(RowProgramError::Incomplete)?;
-        if row.end_kind == ComputedRowEnd::Continuation {
+        if row.end_kind != ComputedRowEnd::Newline {
             return Err(RowProgramError::Overflow);
         }
         Ok(row)
@@ -755,6 +769,10 @@ impl RowProgram {
         if row_limit == 0 {
             return Err(RowProgramError::Budget);
         }
+        let measurement_mode = match self.measurements.backend {
+            DisplayGeometryBackend::WindowSystemPixels => DisplayRowMeasurementMode::ConcreteFont,
+            DisplayGeometryBackend::TerminalCells => DisplayRowMeasurementMode::LogicalCells,
+        };
         // Buffer text may wrap around owned strings. A string that itself
         // overflows still needs a resumable string-stack row entry point.
         let can_wrap = self.geometry.character_wrap
@@ -927,7 +945,10 @@ impl RowProgram {
                         value.background,
                         face,
                         crate::display_row::metrics::DisplayRowMeasuredFaceMetrics::new(
-                            face_metrics.char_width_px(self.geometry.metrics.char_width()),
+                            face_metrics.char_width_for_mode(
+                                self.geometry.metrics.char_width(),
+                                measurement_mode,
+                            ),
                             face_height,
                             face_metrics.ascent_px(),
                             0.0,
@@ -945,16 +966,19 @@ impl RowProgram {
             item_layout.ascent_px = row.ascent_px.max(minimum.ascent_px());
             let render_item =
                 crate::display_row::render_item::DisplayRowRenderItem::from_source_item(item);
-            let can_split = can_wrap
-                && matches!(render_item.source_item().kind, DisplayItemKind::TextRun(_))
-                && !preserves_buffer_anchor(&render_item.source_item().span.start);
+            let can_split =
+                can_wrap && matches!(render_item.source_item().kind, DisplayItemKind::TextRun(_));
             let checkpoint = DisplayRowGlyphCheckpoint::capture(&row);
+            let row_height_before_item = row.height_px;
+            let row_ascent_before_item = row.ascent_px;
+            let row_spacing_before_item = row.line_spacing_px;
             let previous_slots = slots.len();
             let insertion = matches!(
                 original.span.start,
                 DisplaySourcePosition::LispString { .. }
             );
             if insertion
+                && operation_offset == 0
                 && operation_index.checked_sub(1).is_none_or(|previous| {
                     !matches!(
                         operations[previous].0.span.start,
@@ -1014,8 +1038,9 @@ impl RowProgram {
                 scalar_operations.insert(operation_index);
                 continue;
             }
+            let anchor_preserving = preserves_buffer_anchor(&render_item.source_item().span.start);
             if word_wrap.is_enabled()
-                && !insertion
+                && !anchor_preserving
                 && let DisplayItemKind::TextRun(run) = &render_item.source_item().kind
             {
                 crate::display_row::word_wrap::record_text_progress(
@@ -1070,6 +1095,7 @@ impl RowProgram {
             {
                 word_wrap.allow_after_current_char(last);
             }
+            let position_before_item = position;
             position = progress.end();
             if let DisplayItemKind::SourceMappedText(mapped) = &render_item.source_item().kind
                 && let Some(measurement_face) = mapped.measurement_face
@@ -1081,8 +1107,9 @@ impl RowProgram {
                     .last()
                     .is_some_and(|slot: &DisplayRowGlyphSlot| slot.source() == source)
                 {
-                    slot_heights.pop();
-                    slots.pop().unwrap().start_position()
+                    slot_heights.pop().ok_or(RowProgramError::Unsupported)?;
+                    let slot = slots.pop().ok_or(RowProgramError::Unsupported)?;
+                    slot.start_position()
                 } else {
                     progress.start()
                 };
@@ -1116,12 +1143,107 @@ impl RowProgram {
                 return Err(RowProgramError::Budget);
             }
             if progress.status() == DisplayRowAppendStatus::Clipped {
+                if !self.geometry.character_wrap {
+                    if !physical_complete
+                        || self.measurements.backend != DisplayGeometryBackend::WindowSystemPixels
+                        || slots.is_empty()
+                        || preserves_buffer_anchor(&render_item.source_item().span.start)
+                    {
+                        return Err(RowProgramError::Overflow);
+                    }
+                    let start = source_start.take().ok_or(RowProgramError::Incomplete)?;
+                    let start_pos = match &start {
+                        DisplaySourcePosition::Buffer { char_pos, .. } => char_pos.get(),
+                        _ => 0,
+                    };
+                    let visible_end = slots
+                        .iter()
+                        .filter_map(|slot| match slot.source() {
+                            DisplaySourcePosition::Buffer { char_pos, .. } => {
+                                Some(char_pos.get() + 1)
+                            }
+                            _ => None,
+                        })
+                        .max()
+                        .unwrap_or(start_pos);
+                    let physical_end = operations
+                        .last()
+                        .ok_or(RowProgramError::Incomplete)?
+                        .0
+                        .span
+                        .end
+                        .clone();
+                    crate::glyph_row_writer::normalize_external_row(&mut row);
+                    rows.push(ComputedRow {
+                        row,
+                        slots: slots
+                            .into_iter()
+                            .map(|slot| slot.into_window_local(self.geometry.text_origin))
+                            .collect(),
+                        slot_heights,
+                        source: SourceSpan::new(start, physical_end),
+                        end: self.geometry.local_position(position),
+                        end_kind: ComputedRowEnd::Truncated { visible_end },
+                        fringe: self.geometry.fringe.clone(),
+                        continuation: false,
+                        terminator_width,
+                        terminator_height,
+                    });
+                    return Ok(rows);
+                }
+                // GNU `display_line` restores the iterator to before the glyph
+                // that drew past the right edge and keeps already-committed
+                // glyphs (src/xdisp.c:26433-26466). Both pushed overlay
+                // `LispString`s and `InvisibleEllipsis` display vectors
+                // (`setup_for_ellipsis`, xdisp.c:5653-5672;
+                // `next_element_from_display_vector`, xdisp.c:9258) produce one
+                // glyph per element and resume mid-item on the continuation row
+                // (xdisp.c:4115-4121) while keeping their unconsumed buffer
+                // anchor. When zero glyphs of the clipped item fit on a
+                // non-empty row, restore the row metrics and move the whole
+                // remainder to the next row; an empty row still overflows.
                 if !can_split || slots.is_empty() {
                     return Err(RowProgramError::Overflow);
                 }
+                if progress.slots().is_empty() {
+                    row.height_px = row_height_before_item;
+                    row.ascent_px = row_ascent_before_item;
+                    row.line_spacing_px = row_spacing_before_item;
+                }
                 let mut wrap_extend = active_extend;
-                let (next_index, next_offset) = if word_wrap.has_candidate() {
+                let break_at_ellipsis_start = anchor_preserving
+                    && !insertion
+                    && previous_slots > 0
+                    && matches!(
+                        &render_item.source_item().kind,
+                        DisplayItemKind::TextRun(run)
+                            if run
+                                .text
+                                .chars()
+                                .next()
+                                .is_some_and(|ch| word_wrap.can_record_candidate(ch))
+                    );
+                let (next_index, next_offset) = if break_at_ellipsis_start {
+                    // Word-wrap break immediately before an invisible
+                    // ellipsis (a break opportunity like space directly
+                    // precedes the hidden span): drop any partial dot(s) from
+                    // row 0, keep row 0's end at the post-skip buffer anchor,
+                    // and resume the whole ellipsis on row 1 (matching GNU's
+                    // `wrap_it.current` after `handle_invisible_prop`).
+                    wrap_extend = predecessor_extend;
+                    checkpoint.restore(&mut row);
+                    row.height_px = row_height_before_item;
+                    row.ascent_px = row_ascent_before_item;
+                    row.line_spacing_px = row_spacing_before_item;
+                    slots.truncate(previous_slots);
+                    slot_heights.truncate(previous_slots);
+                    position = position_before_item;
+                    (operation_index, 0)
+                } else if !insertion && word_wrap.has_candidate() {
                     let candidate = word_wrap.candidate();
+                    if candidate.display_point_count() == 0 {
+                        return Err(RowProgramError::Overflow);
+                    }
                     wrap_extend = candidate.row_extend();
                     let boundary = candidate.source_position().charpos();
                     let replay_insertions = match candidate.source_cursor() {
@@ -1156,9 +1278,6 @@ impl RowProgram {
                                 .then_some((index, (boundary - start.get() as i64) as usize))
                         })
                         .ok_or(RowProgramError::Unsupported)?;
-                    if candidate.display_point_count() == 0 {
-                        return Err(RowProgramError::Overflow);
-                    }
                     candidate.glyph_checkpoint().restore(&mut row);
                     slots.truncate(candidate.display_point_count());
                     slot_heights.truncate(candidate.display_point_count());
@@ -1167,10 +1286,25 @@ impl RowProgram {
                 } else {
                     (operation_index, operation_offset + progress.slots().len())
                 };
-                let next_source = buffer_anchors[next_index].advanced_by(
-                    next_offset,
-                    text_byte_offset(&operations[next_index].0, next_offset)?,
-                );
+                let next_source = if preserves_buffer_anchor(&operations[next_index].0.span.start) {
+                    buffer_anchors[next_index].clone()
+                } else {
+                    buffer_anchors[next_index].advanced_by(
+                        next_offset,
+                        text_byte_offset(&operations[next_index].0, next_offset)?,
+                    )
+                };
+                let end_kind = if insertion {
+                    self.overlay_string_kinds
+                        .iter()
+                        .find_map(|(index, kind)| (*index == operation_index).then_some(*kind))
+                        .map_or(
+                            ComputedRowEnd::Continuation,
+                            ComputedRowEnd::OverlayContinuation,
+                        )
+                } else {
+                    ComputedRowEnd::Continuation
+                };
                 row.continued = true;
                 continuation::extend_background(
                     &mut row,
@@ -1199,7 +1333,7 @@ impl RowProgram {
                         next_source.clone(),
                     ),
                     end: self.geometry.local_position(position),
-                    end_kind: ComputedRowEnd::Continuation,
+                    end_kind,
                     fringe: self.geometry.fringe.clone(),
                     continuation: !rows.is_empty(),
                     terminator_width,
@@ -1233,28 +1367,20 @@ impl RowProgram {
                 {
                     terminator_width = realized
                         .metrics
-                        .char_width_px(self.geometry.metrics.char_width());
+                        .char_width_for_mode(self.geometry.metrics.char_width(), measurement_mode);
                     terminator_height = realized.metrics.line_height_px();
                 }
-                let mode = match self.measurements.backend {
-                    DisplayGeometryBackend::WindowSystemPixels => {
-                        DisplayRowMeasurementMode::ConcreteFont
-                    }
-                    DisplayGeometryBackend::TerminalCells => {
-                        DisplayRowMeasurementMode::LogicalCells
-                    }
-                };
                 let finalizer = DisplayRowLineEndFinalizer::new(
                     value,
                     face,
                     self.geometry.right_edge() - position.x_px(),
                     self.geometry.metrics,
                     self.geometry.background,
-                    mode,
+                    measurement_mode,
                     edges,
                     membership,
                 );
-                let finalizer = if mode.uses_concrete_font_geometry() {
+                let finalizer = if measurement_mode.uses_concrete_font_geometry() {
                     terminator_height = minimum.height_px();
                     finalizer.with_newline_font_metrics(minimum)
                 } else {
@@ -1265,7 +1391,7 @@ impl RowProgram {
                 }
                 // As in the canonical row transition, line spacing contributes
                 // to logical descent after newline fills and hit cells are set.
-                if mode.uses_concrete_font_geometry()
+                if measurement_mode.uses_concrete_font_geometry()
                     && value.line_height != DisplayLineHeightPolicy::ContentOnly
                 {
                     row.line_spacing_px =

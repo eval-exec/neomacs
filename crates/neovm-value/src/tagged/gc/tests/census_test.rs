@@ -31,7 +31,7 @@ fn last(heap: &TaggedHeap) -> CensusRecord {
 
 fn object_bytes(value: TaggedValue) -> usize {
     let addr = TaggedHeap::value_heap_addr(value).expect("a heap object");
-    TaggedHeap::object_bytes_from_header(addr as *const GcHeader)
+    unsafe { TaggedHeap::object_bytes_from_header(addr as *const GcHeader) }
 }
 
 const CELL: usize = size_of::<ConsCell>();
@@ -40,7 +40,7 @@ const CELL: usize = size_of::<ConsCell>();
 fn census_is_off_by_default() {
     let mut heap = census_heap(CensusMode::Off);
     let root = list(&mut heap, 10);
-    heap.collect_exact(std::iter::once(root));
+    heap.collect_rooted(std::iter::once(root));
     assert!(heap.census_state().is_none());
     assert_eq!(heap.last_census_for_test(), None);
 }
@@ -52,7 +52,7 @@ fn census_is_off_by_default() {
 fn census_classifies_conses_across_stw_cycles() {
     let mut heap = census_heap(CensusMode::Survivors);
     let a = list(&mut heap, 100);
-    heap.collect_exact(std::iter::once(a));
+    heap.collect_rooted(std::iter::once(a));
     let first = last(&heap);
     assert_eq!(first.kind, CensusCycleKind::StopTheWorld);
     assert_eq!(first.cycle, heap.gc_collections());
@@ -62,7 +62,7 @@ fn census_classifies_conses_across_stw_cycles() {
 
     let b = list(&mut heap, 50);
     let root = heap.alloc_cons(a, b);
-    heap.collect_exact(std::iter::once(root));
+    heap.collect_rooted(std::iter::once(root));
     let second = last(&heap);
     assert_eq!(second.cycle, first.cycle + 1);
     assert_eq!(
@@ -74,7 +74,7 @@ fn census_classifies_conses_across_stw_cycles() {
     assert_eq!(second.old_survivors.bytes, 100 * CELL);
 
     // Drop B and the root: 51 young survivors of the second cycle die.
-    heap.collect_exact(std::iter::once(a));
+    heap.collect_rooted(std::iter::once(a));
     let third = last(&heap);
     assert_eq!(third.old_survivors.conses, 100);
     assert_eq!(third.young_survivors.conses, 0);
@@ -83,7 +83,7 @@ fn census_classifies_conses_across_stw_cycles() {
 
     // An old object that dies is not promoted-then-dead twice, and a dead
     // old survivor is simply gone from the next census.
-    heap.collect_exact(std::iter::empty());
+    heap.collect_rooted(std::iter::empty());
     let fourth = last(&heap);
     assert_eq!(fourth.old_survivors.conses, 0);
     assert_eq!(fourth.young_survivors.conses, 0);
@@ -101,7 +101,7 @@ fn census_classifies_objects_with_their_bytes() {
     let v = heap.alloc_vector(vec![TaggedValue::fixnum(1); 4]);
     let s = heap.alloc_string(crate::heap_types::LispString::from_utf8("census"));
     let root = heap.alloc_cons(v, s);
-    heap.collect_exact(std::iter::once(root));
+    heap.collect_rooted(std::iter::once(root));
     let first = last(&heap);
     assert_eq!(first.young_survivors.objects, 2);
     assert_eq!(
@@ -111,7 +111,7 @@ fn census_classifies_objects_with_their_bytes() {
 
     let w = heap.alloc_vector(vec![TaggedValue::NIL; 9]);
     let root2 = heap.alloc_cons(w, root);
-    heap.collect_exact(std::iter::once(root2));
+    heap.collect_rooted(std::iter::once(root2));
     let second = last(&heap);
     assert_eq!(second.old_survivors.objects, 2);
     assert_eq!(
@@ -122,7 +122,7 @@ fn census_classifies_objects_with_their_bytes() {
     assert_eq!(second.young_survivors.bytes, CELL + object_bytes(w));
 
     let w_bytes = object_bytes(w);
-    heap.collect_exact(std::iter::once(root));
+    heap.collect_rooted(std::iter::once(root));
     let third = last(&heap);
     assert_eq!(third.promoted_dead.objects, 1);
     assert_eq!(third.promoted_dead.conses, 1);
@@ -138,7 +138,7 @@ fn census_runs_at_the_concurrent_termination() {
     let a = list(&mut heap, 64);
     // The stop-the-world bootstrap enables concurrent cycles on a dump-less
     // heap.
-    heap.collect_exact(std::iter::once(a));
+    heap.collect_rooted(std::iter::once(a));
     assert!(heap.should_run_concurrent());
 
     heap.concurrent_begin();
@@ -154,8 +154,8 @@ fn census_runs_at_the_concurrent_termination() {
     heap.seed_root(mid);
     let bytes_before = heap.live_bytes();
     heap.incremental_drain_all();
-    heap.incremental_finish(bytes_before, std::time::Instant::now());
-    heap.finish_incremental_sweep_now();
+    heap.incremental_finish_for_test(bytes_before, std::time::Instant::now());
+    heap.finish_incremental_sweep_now_for_test();
 
     let record = last(&heap);
     assert_eq!(record.kind, CensusCycleKind::Concurrent);
@@ -177,11 +177,11 @@ fn census_runs_at_the_concurrent_termination() {
 fn census_forgets_a_released_cons_block() {
     let mut heap = census_heap(CensusMode::Survivors);
     let a = list(&mut heap, 100);
-    heap.collect_exact(std::iter::once(a));
+    heap.collect_rooted(std::iter::once(a));
     let base = ConsBlock::block_base_for_ptr(a.as_cons_ptr().unwrap());
     assert!(heap.census_state().unwrap().has_cons_block_history(base));
     // Nothing survives: the only block empties and is released.
-    heap.collect_exact(std::iter::empty());
+    heap.collect_rooted(std::iter::empty());
     assert!(heap.cons_blocks.is_empty(), "the empty block is released");
     assert!(!heap.census_state().unwrap().has_cons_block_history(base));
 }
@@ -197,7 +197,7 @@ fn census_remset_probe_counts_old_owners_once() {
     let old_a = heap.alloc_vector(vec![TaggedValue::NIL; 3]);
     let old_b = heap.alloc_vector(vec![TaggedValue::NIL; 3]);
     let root = heap.alloc_cons(old_a, old_b);
-    heap.collect_exact(std::iter::once(root));
+    heap.collect_rooted(std::iter::once(root));
 
     let young = heap.alloc_vector(vec![TaggedValue::NIL; 2]);
     let child1 = heap.alloc_cons(TaggedValue::fixnum(1), TaggedValue::NIL);
@@ -214,7 +214,7 @@ fn census_remset_probe_counts_old_owners_once() {
     // The old root cons, written with a heap value, counts too.
     assert!(crate::tagged::mutate::set_cons_cdr(root, young));
 
-    heap.collect_exact(std::iter::once(root));
+    heap.collect_rooted(std::iter::once(root));
     let record = last(&heap);
     assert_eq!(
         record.remset_owners, 2,
@@ -224,7 +224,7 @@ fn census_remset_probe_counts_old_owners_once() {
     assert_eq!(record.remset_children, 4);
 
     // The next cycle starts an empty set.
-    heap.collect_exact(std::iter::once(root));
+    heap.collect_rooted(std::iter::once(root));
     assert_eq!(last(&heap).remset_owners, 0);
 }
 
@@ -241,14 +241,15 @@ fn census_changes_nothing_it_measures() {
             let _garbage = list(&mut heap, 20);
             let pair = heap.alloc_cons(v, l);
             keep = heap.alloc_cons(pair, keep);
-            heap.collect_exact(std::iter::once(keep));
+            heap.collect_rooted(std::iter::once(keep));
         }
         let out = (
             heap.live_bytes(),
             heap.memory_use_counts_snapshot(),
             heap.allocated_count(),
         );
-        clear_tagged_heap_if_installed(&heap);
+        // SAFETY: bare `TaggedHeap` unit-test fixture about to drop.
+        unsafe { clear_tagged_heap_if_installed(&heap) };
         out
     }
     assert_eq!(run(CensusMode::Off), run(CensusMode::Survivors));
@@ -268,8 +269,8 @@ fn census_records_go_to_the_census_file() {
     unsafe { std::env::set_var("NEOVM_GC_CENSUS_FILE", &path) };
     let mut heap = census_heap(CensusMode::Survivors);
     let a = list(&mut heap, 5);
-    heap.collect_exact(std::iter::once(a));
-    heap.collect_exact(std::iter::once(a));
+    heap.collect_rooted(std::iter::once(a));
+    heap.collect_rooted(std::iter::once(a));
     let text = std::fs::read_to_string(&path).expect("the census file");
     let lines: Vec<&str> = text.lines().collect();
     assert_eq!(lines.len(), 2, "{text}");

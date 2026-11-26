@@ -2,7 +2,7 @@
 
 use super::*;
 use crate::heap_types::LispString;
-use crate::intern::intern_uninterned;
+use crate::intern::make_uninterned_symbol;
 use crate::value::scratch_bridge::{
     push_scratch_gc_root, restore_scratch_gc_roots, save_scratch_gc_roots,
 };
@@ -44,12 +44,12 @@ fn verified_heap() -> TaggedHeap {
 }
 
 fn minor(heap: &mut TaggedHeap, roots: &[TaggedValue]) {
-    heap.begin_minor_collection().unwrap();
+    heap.begin_minor_collection_for_test().unwrap();
     for &root in roots {
         heap.seed_root(root);
     }
-    heap.complete_minor_collection();
-    heap.finish_incremental_sweep_now();
+    heap.complete_minor_collection_for_test();
+    heap.finish_incremental_sweep_now_for_test();
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -80,7 +80,7 @@ fn missed_barrier_is_detected_before_sweep(class: OwnerClass) {
     }
     let child = heap.alloc_string(LispString::from_utf8("missed-barrier-young-child"));
     let child_ptr = child.as_string_ptr().unwrap().cast();
-    heap.begin_minor_collection().unwrap();
+    heap.begin_minor_collection_for_test().unwrap();
     heap.seed_root(owner);
     assert!(!heap.is_value_marked(child));
     // Inject after begin: the current-child backstop at cycle start must not
@@ -105,8 +105,10 @@ fn missed_barrier_is_detected_before_sweep(class: OwnerClass) {
     }
     assert_eq!(heap.remembered_log_len_for_test(), 0);
     assert!(!heap.partition_dump);
-    let panic = catch_unwind(AssertUnwindSafe(|| heap.complete_minor_collection()))
-        .expect_err("a missed old-to-young barrier must fail at minor termination");
+    let panic = catch_unwind(AssertUnwindSafe(|| {
+        heap.complete_minor_collection_for_test()
+    }))
+    .expect_err("a missed old-to-young barrier must fail at minor termination");
     let message = panic
         .downcast_ref::<String>()
         .map(String::as_str)
@@ -162,7 +164,7 @@ fn generational_verifier_accepts_barriered_old_cons_arena_and_box_edges() {
         cons,
         TaggedValue::fixnum(211)
     ));
-    let symbol = TaggedValue::from_sym_id(intern_uninterned("u34-verifier-old-symbol"));
+    let symbol = TaggedValue::from_sym_id(make_uninterned_symbol("u34-verifier-old-symbol"));
     assert!(crate::tagged::mutate::set_vector_slot(vector, 0, symbol));
     {
         let child = heap.alloc_symbol_with_pos(symbol, TaggedValue::fixnum(223));
@@ -186,10 +188,10 @@ fn generational_verifier_accepts_barriered_old_cons_arena_and_box_edges() {
     assert!(!heap.partition_dump);
     assert!(heap.value_is_old_for_test(cons.cons_car()));
     assert_eq!(cons.cons_cdr(), TaggedValue::fixnum(211));
-    let slots = vector.as_vector_data().unwrap().as_slice();
-    assert_eq!(slots[0], symbol);
-    assert!(heap.value_is_old_for_test(slots[1]));
-    assert_eq!(slots[1].as_symbol_with_pos().unwrap().sym, symbol);
+    let slots = vector.as_vector_data().unwrap();
+    assert_eq!(slots.at(0), symbol);
+    assert!(heap.value_is_old_for_test(slots.at(1)));
+    assert_eq!(slots.at(1).as_symbol_with_pos().unwrap().sym, symbol);
     let table = table.as_hash_table().unwrap();
     let entry = table.data.entries_in_slot_order().next().unwrap();
     assert!(heap.value_is_old_for_test(entry.value));
@@ -209,7 +211,7 @@ fn generational_verifier_accepts_mapped_and_permanent_owners() {
     // Stands in for a loader-reconstructed image row: only image residents
     // become permanent at the first partition promotion.
     assert_eq!(heap.note_image_object(permanent), ImageStamp::Stamped);
-    heap.collect_exact([mapped, permanent].into_iter());
+    heap.collect_rooted([mapped, permanent].into_iter());
     let header = TaggedHeap::value_heap_addr(permanent).unwrap() as *const GcHeader;
     assert!(unsafe { (*header).generation.permanent() });
     assert!(heap.dump_blackened);
@@ -218,7 +220,7 @@ fn generational_verifier_accepts_mapped_and_permanent_owners() {
         let child = heap.alloc_cons(TaggedValue::fixnum(229), TaggedValue::NIL);
         assert!(crate::tagged::mutate::set_vector_slot(mapped, 0, child));
     }
-    let symbol = TaggedValue::from_sym_id(intern_uninterned("u34-verifier-mapped-symbol"));
+    let symbol = TaggedValue::from_sym_id(make_uninterned_symbol("u34-verifier-mapped-symbol"));
     assert!(crate::tagged::mutate::set_vector_slot(mapped, 1, symbol));
     {
         let child = heap.alloc_symbol_with_pos(symbol, TaggedValue::fixnum(233));
@@ -229,14 +231,17 @@ fn generational_verifier_accepts_mapped_and_permanent_owners() {
     // cleared. Neither young child is independently rooted by this test.
     heap.mapped_remembered.clear();
     minor(&mut heap, &[]);
-    let mapped_slots = mapped.as_vector_data().unwrap().as_slice();
-    assert!(heap.value_is_old_for_test(mapped_slots[0]));
-    assert_eq!(mapped_slots[0].cons_car(), TaggedValue::fixnum(229));
-    assert_eq!(mapped_slots[1], symbol);
-    let permanent_slots = permanent.as_vector_data().unwrap().as_slice();
-    assert!(heap.value_is_old_for_test(permanent_slots[0]));
-    assert_eq!(permanent_slots[0].as_symbol_with_pos().unwrap().sym, symbol);
-    assert_eq!(permanent_slots[1], mapped);
+    let mapped_slots = mapped.as_vector_data().unwrap();
+    assert!(heap.value_is_old_for_test(mapped_slots.at(0)));
+    assert_eq!(mapped_slots.at(0).cons_car(), TaggedValue::fixnum(229));
+    assert_eq!(mapped_slots.at(1), symbol);
+    let permanent_slots = permanent.as_vector_data().unwrap();
+    assert!(heap.value_is_old_for_test(permanent_slots.at(0)));
+    assert_eq!(
+        permanent_slots.at(0).as_symbol_with_pos().unwrap().sym,
+        symbol
+    );
+    assert_eq!(permanent_slots.at(1), mapped);
 }
 
 struct RestoreEnvironment(Vec<(&'static str, Option<OsString>)>);

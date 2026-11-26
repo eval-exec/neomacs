@@ -21,7 +21,7 @@ fn private_wayland_compositor_accepts_native_toplevel_icon() {
             let pixels = crate::window_icon::load_window_icon().expect("decode canonical icon");
             let mut service = WaylandToplevelIconService::new();
             service
-                .apply(window.as_ref(), &pixels)
+                .apply(window.as_ref(), event_loop.owned_display_handle(), &pixels)
                 .expect("apply native Wayland toplevel icon");
             assert!(matches!(
                 service.backend,

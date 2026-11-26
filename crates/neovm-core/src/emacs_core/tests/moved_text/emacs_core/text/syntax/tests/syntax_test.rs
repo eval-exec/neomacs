@@ -1,4 +1,5 @@
 use super::*;
+use neovm_value::intern::intern;
 
 use LispSyntaxObjectReuse::{CanonicalBare, Fresh};
 use neovm_edit::buffer::buffer::BUFFER_SLOT_SYNTAX_TABLE;
@@ -1530,22 +1531,8 @@ fn forward_comment_backward_single_line_comments() {
         ));
         // Set up ; as comment start, \n as comment end
         let mut tbl = super::SyntaxTable::isolate_for_buffer(buf);
-        tbl.modify_syntax_entry(
-            ';',
-            SyntaxEntry {
-                class: SyntaxClass::Comment,
-                matching_char: None,
-                flags: SyntaxFlags::empty(),
-            },
-        );
-        tbl.modify_syntax_entry(
-            '\n',
-            SyntaxEntry {
-                class: SyntaxClass::EndComment,
-                matching_char: None,
-                flags: SyntaxFlags::empty(),
-            },
-        );
+        tbl.modify_syntax_entry(';', SyntaxEntry::simple(SyntaxClass::Comment));
+        tbl.modify_syntax_entry('\n', SyntaxEntry::simple(SyntaxClass::EndComment));
         buf.insert("code\n;; c1\n;; c2\n;; c3\n");
         buf.goto_emacs_byte_pos(neovm_edit::buffer::EmacsBytePos::new(
             buf.point_max_emacs_byte_pos().get(),
@@ -1676,22 +1663,8 @@ fn forward_comment_backward_stops_at_non_comment() {
             buf.point_max_emacs_byte_pos().get(),
         ));
         let mut tbl = super::SyntaxTable::isolate_for_buffer(buf);
-        tbl.modify_syntax_entry(
-            ';',
-            SyntaxEntry {
-                class: SyntaxClass::Comment,
-                matching_char: None,
-                flags: SyntaxFlags::empty(),
-            },
-        );
-        tbl.modify_syntax_entry(
-            '\n',
-            SyntaxEntry {
-                class: SyntaxClass::EndComment,
-                matching_char: None,
-                flags: SyntaxFlags::empty(),
-            },
-        );
+        tbl.modify_syntax_entry(';', SyntaxEntry::simple(SyntaxClass::Comment));
+        tbl.modify_syntax_entry('\n', SyntaxEntry::simple(SyntaxClass::EndComment));
         buf.insert("code\n;; c1\n;; c2\n;; c3\n");
         buf.goto_emacs_byte_pos(neovm_edit::buffer::EmacsBytePos::new(
             buf.point_max_emacs_byte_pos().get(),
@@ -3564,7 +3537,7 @@ fn a_resumed_parse_pairs_a_comment_opener_split_at_its_start_like_gnu() {
         let commentstop = match commentstop {
             None => Value::NIL,
             Some("t") => Value::T,
-            Some(sym) => Value::symbol(sym),
+            Some(sym) => Value::from_sym_id(intern(sym)),
         };
         let s2 = builtin_parse_partial_sexp(
             &mut eval,

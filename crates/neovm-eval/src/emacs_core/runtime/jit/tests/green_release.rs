@@ -19,10 +19,10 @@ use neovm_value::value::{LambdaParams, Value};
 
 fn function(ops: Vec<Op>, constants: Vec<Value>) -> ByteCodeFunction {
     let mut source = ByteCodeFunction::new(LambdaParams::simple(Vec::new()));
-    source.lexical = true;
-    source.ops = ops;
-    source.constants = constants.into();
-    source.max_stack = StackDepth::for_test(16);
+    source.set_lexical(true);
+    source.set_ops(ops);
+    source.set_constants(constants.into());
+    source.set_max_stack(StackDepth::for_test(16));
     source.seal_hand_assembled_ops();
     source
         .jit_runtime()
@@ -36,10 +36,10 @@ fn redefine_logand(context: &mut Context) -> EvalResult {
         neovm_value::intern::intern("green-release-a"),
         neovm_value::intern::intern("green-release-b"),
     ]));
-    replacement.lexical = true;
-    replacement.ops = vec![Op::Constant(0), Op::Return];
-    replacement.constants = vec![Value::fixnum(37)].into();
-    replacement.max_stack = StackDepth::for_test(16);
+    replacement.set_lexical(true);
+    replacement.set_ops(vec![Op::Constant(0), Op::Return]);
+    replacement.set_constants(vec![Value::fixnum(37)].into());
+    replacement.set_max_stack(StackDepth::for_test(16));
     replacement.seal_hand_assembled_ops();
     let replacement = Value::make_bytecode(replacement);
     context.with_obarray_mut(|mut obarray| {
@@ -125,7 +125,7 @@ fn run_witness(context: &mut Context) -> (Value, u64) {
     });
     let _root = context.retain_gc_roots([source]);
     let source_data = source.get_bytecode_data().unwrap();
-    cache::prepare_entry_for_test(context, source_data);
+    unsafe { cache::prepare_entry_for_test(context, source_data) };
     let before = cache::native_run_counters().2;
     let result = context
         .apply(Value::symbol("green-release-caller"), Vec::new())
@@ -327,7 +327,7 @@ fn plus_opcode_is_not_a_function_cell_dependent() {
     });
     let _root = context.retain_gc_roots([source]);
     let source_data = source.get_bytecode_data().unwrap();
-    cache::prepare_entry_for_test(&mut context, source_data);
+    unsafe { cache::prepare_entry_for_test(&mut context, source_data) };
     let before = cache::native_run_counters().2;
     let result = context
         .apply(Value::symbol("green-release-plus-caller"), Vec::new())
@@ -365,7 +365,7 @@ fn plus_opcode_is_not_a_function_cell_dependent() {
     });
     let _bare_root = context.retain_gc_roots([bare]);
     let bare_data = bare.get_bytecode_data().unwrap();
-    cache::prepare_entry_for_test(&mut context, bare_data);
+    unsafe { cache::prepare_entry_for_test(&mut context, bare_data) };
     let before_bare = cache::native_run_counters().2;
     let result = context
         .apply(Value::symbol("green-release-plus-bare"), Vec::new())
@@ -447,7 +447,7 @@ fn release_deopt_at_condition_case_landing() {
     });
     let _root = context.retain_gc_roots([source]);
     let source_data = source.get_bytecode_data().unwrap();
-    cache::prepare_entry_for_test(&mut context, source_data);
+    unsafe { cache::prepare_entry_for_test(&mut context, source_data) };
     let before = cache::native_run_counters().2;
     let result = context
         .apply(Value::symbol("green-release-caller"), Vec::new())

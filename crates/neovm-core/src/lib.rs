@@ -11,6 +11,7 @@ pub(crate) use crate::emacs_core::eval::frontend_events;
 #[cfg(any(test, feature = "fuzzing"))]
 #[doc(hidden)]
 pub mod fuzz_support;
+pub use neovm_value::display_vocab;
 pub use neovm_value::gc_trace;
 #[cfg(not(test))]
 pub use neovm_value::heap_types;
@@ -23,6 +24,9 @@ pub use crate::emacs_core::host_input;
 #[cfg(test)]
 pub(crate) use neovm_display::image_identity;
 pub use neovm_eval::host_effect;
+#[cfg(feature = "contract-fixtures")]
+#[doc(hidden)]
+pub use neovm_eval::pentry_e2_custody;
 pub use neovm_value::logging;
 #[cfg(test)]
 #[path = "../core_test_facades/symbol.rs"]

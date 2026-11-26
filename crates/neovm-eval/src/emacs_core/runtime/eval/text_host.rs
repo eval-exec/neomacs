@@ -38,6 +38,48 @@ impl TextHost for Context {
         &mut self.edit.buffers
     }
 
+    #[inline(always)]
+    fn buffers_view_mut(&mut self) -> neovm_edit::buffer::BufferManagerMut<'_> {
+        neovm_edit::buffer::BufferManagerMut::new(&mut self.edit.buffers)
+    }
+
+    fn font_glyph_text_metrics(
+        &mut self,
+        font: Value,
+        ch: u32,
+    ) -> Option<neovm_value::display_vocab::GlyphTextMetrics> {
+        self.font_driver.as_mut()?.glyph_text_metrics(font, ch)
+    }
+
+    fn composition_gstring_cache_lookup(&mut self, header: Value) -> Option<Value> {
+        let key = neovm_value::display_vocab::gstring_cache_key_from_header(&header)?;
+        self.gstring_shape_cache.get(&key).copied()
+    }
+
+    fn composition_gstring_cache_clear(&mut self) -> EvalResult {
+        self.gstring_shape_cache.clear();
+        // GNU `Fclear_composition_cache` returns `(clear-face-cache t)`
+        // (src/composite.c:705).
+        self.eval_sub(Value::list(vec![
+            Value::symbol(neovm_value::intern::intern("clear-face-cache")),
+            Value::T,
+        ]))
+    }
+
+    fn composition_gstring_cache_clear_font(&mut self, font: Value) {
+        self.gstring_shape_cache.retain(|_, gstring| {
+            let font_of = gstring
+                .as_vector_data()
+                .and_then(|slots| slots.first())
+                .and_then(|header| header.as_vector_data()?.first());
+            !font_of.is_some_and(|cached| neovm_value::value::eq_value(&cached, &font))
+        });
+    }
+
+    fn composition_font_or_frame_at(&mut self, pos: i64, string: Value) -> Option<Value> {
+        super::display_query_hooks::composition_font_or_frame_at(self, pos, string)
+    }
+
     fn eval_sub(&mut self, form: Value) -> EvalResult {
         Context::eval_sub(self, form)
     }

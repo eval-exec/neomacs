@@ -7,6 +7,7 @@ use crate::emacs_core::bytecode::chunk::{ByteCodeFunction, GnuByteOffsetMapEntry
 use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
 use crate::emacs_core::jit::RuntimeStateTieringExt;
 use crate::emacs_core::jit::compile::analyze_cfg;
+use neovm_value::intern::intern;
 use neovm_value::value::{HashTableTest, LambdaParams, Value as LispValue};
 
 fn make(ops: &[Op], constants: &[LispValue], params: ParamShape) -> Func {
@@ -569,7 +570,7 @@ fn jump_table() -> LispValue {
     let table = LispValue::hash_table(HashTableTest::Eq);
     let _ = table.with_hash_table_mut(|ht| {
         for (sym, offset) in [("opt-ssa-switch-a", 8), ("opt-ssa-switch-b", 12)] {
-            let value = LispValue::symbol(sym);
+            let value = LispValue::from_sym_id(intern(sym));
             let key = value.to_hash_key(&ht.test);
             ht.insert(key, value, LispValue::fixnum(offset));
         }
@@ -817,9 +818,9 @@ fn opt_ssa_fused_v2_regions_intern_exact_caller_replay_frames() {
         optional: vec![],
         rest: None,
     });
-    callee.lexical = true;
-    callee.ops = vec![Op::Dup, Op::CarSafe, Op::Return];
-    callee.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(8);
+    callee.set_lexical(true);
+    callee.set_ops(vec![Op::Dup, Op::CarSafe, Op::Return]);
+    callee.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(8));
     callee.seal_hand_assembled_ops_for_test();
     callee.jit_runtime().set_hot_for_test();
     let constants = [LispValue::make_bytecode(callee)];

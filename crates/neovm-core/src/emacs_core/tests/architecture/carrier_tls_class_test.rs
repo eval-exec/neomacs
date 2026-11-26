@@ -77,9 +77,12 @@ const TLS_CLASSIFICATION: &[(&str, &str, TlsClass)] = &[
     // carrier_loop accepts the next job only after run_carrier_job returns).
     // switch.rs retires/parks the old job before the NEXT job's deferred reset.
     // Deferred reuse asserts zero before clearing; PARK must preserve depth.
-    // MustReset: cache::reset_carrier_tls asserts zero before its zero store
-    // at deferred reuse. Static and store share cfg(any(test, debug_assertions));
-    // ordinary Green waits retain the live native frame on the same carrier.
+    // MustReset: the counter is compiled for test, debug, and test-support.
+    // A production release image has no `NATIVE_DEPTH` symbol; that mint
+    // reads `CURRENT_LEAF_BASES` instead. reset_carrier_tls mints a serial
+    // receipt before its zero store, under the same cfg as the counter.
+    // A leaked guard refuses that mint and keeps the depth. Ordinary Green
+    // waits retain the live native frame on the same carrier.
     (
         "neovm-eval/src/emacs_core/runtime/jit/cache.rs",
         "NATIVE_DEPTH",
@@ -269,6 +272,17 @@ const TLS_CLASSIFICATION: &[(&str, &str, TlsClass)] = &[
         "neovm-eval/src/emacs_core/runtime/jit/compile/lowering.rs",
         "ACTIVE_REGION",
         TlsClass::MustReset,
+    ),
+    // CarrierIntrinsic: value-free `(ctx_addr, HeapIdentity, context_id)`
+    // active-turn marker (zero Lisp Values, zero TaggedHeap pointers). Paired
+    // 1:1 by `!Send` `SerialTurn` RAII (`SerialHost::enter_turn` .. `leave_turn`
+    // on `end`, `park`, or unwind `Drop`), so the slot is `None` between turns
+    // and intentionally survives `park_carrier_tls` / `reset_carrier_tls`
+    // across a mid-turn keeper collection (L6.7c (c) F3 / Q2 + NIT-1).
+    (
+        "neovm-eval/src/emacs_core/runtime/eval/parallel_entry/serial_detach.rs",
+        "ACTIVE_SERIAL_TURN",
+        TlsClass::CarrierIntrinsic,
     ),
     (
         "neovm-eval/src/emacs_core/runtime/jit/compile/code_placement.rs",
@@ -526,6 +540,11 @@ const TLS_CLASSIFICATION: &[(&str, &str, TlsClass)] = &[
         TlsClass::MustReset,
     ),
     (BINARY_CENSUS, "FOO", TlsClass::CarrierIntrinsic),
+    (
+        "neovm-value/src/tagged/collection_reads.rs",
+        "FORBID_OBSERVED_READS",
+        TlsClass::MustReset,
+    ),
     (
         "neovm-eval/src/emacs_core/lisp/print/error_format.rs",
         "FORMAT_OBJECT_STACK",
@@ -969,9 +988,9 @@ const TLS_CLASSIFICATION: &[(&str, &str, TlsClass)] = &[
         TlsClass::CarrierIntrinsic,
     ),
     (BINARY_CENSUS, "PROFILER", TlsClass::CarrierIntrinsic),
-    // macOS-only menu redirect target (display-runtime
-    // macos_quit_redirect.rs): absent from the shipped Linux census and holds
-    // a retained AppKit object, not Lisp Values.
+    // Retained AppKit redirect target plus the weak frame->NSView registry:
+    // main-thread only, macOS only, absent from the shipped Linux census,
+    // no Lisp Values (display-runtime macos_quit_redirect.rs).
     (
         "neomacs-display-runtime/src/render_thread/macos_quit_redirect.rs",
         "QUIT_REDIRECT",
@@ -1008,7 +1027,7 @@ const TLS_CLASSIFICATION: &[(&str, &str, TlsClass)] = &[
     // owner is built from `bootstrap.seed()` (green/bootstrap.rs:141-174)
     // whose `ExecutionSeed` carries no display hook (construct.rs:44-61), and
     // `Context::assemble` leaves redisplay_fn, redisplay_prepare_fn,
-    // font_shape_fn, display_idle_maintenance_fn and frame_snapshot_fn None
+    // font_driver, display_idle_maintenance_fn and frame_snapshot_fn None
     // and window_layout_query_adapter Unavailable (construct.rs:2231-2239).
     // Every direct frame_layout entry point is reached only from those
     // main-thread startup/redisplay paths (main.rs:4215, 4219, 4239-4240,
@@ -1090,6 +1109,17 @@ const TLS_CLASSIFICATION: &[(&str, &str, TlsClass)] = &[
         "neovm-eval/src/emacs_core/runtime/jit/compile/direct_call/self_only.rs",
         "SELF_SOURCE",
         TlsClass::MustReset,
+    ),
+    // CarrierIntrinsic: value-free lexical RAII collect-bridge hook
+    // (`{ ctx_addr, heap, context_id, inhibit_base, bridge }`, zero Lisp Values,
+    // zero TaggedHeap pointers). Installed by `SerialCollectScopeGuard::install`,
+    // taken out of TLS across `bridge(self)` / `park_carrier_tls`, restored
+    // only on `Ok(report)`, and cleared/restored on normal return or unwind
+    // by `SerialCollectScopeGuard::drop` (L6.7c (c) Q2 / F6.1 + NIT-1).
+    (
+        "neovm-eval/src/emacs_core/runtime/eval/parallel_entry/serial_park.rs",
+        "SERIAL_TURN_COLLECT_SCOPE",
+        TlsClass::CarrierIntrinsic,
     ),
     (
         "neomacs/src/tty_output_windows.rs",
@@ -1311,6 +1341,15 @@ const TLS_CLASSIFICATION: &[(&str, &str, TlsClass)] = &[
         "TEST_HEAP_GRAVEYARD",
         TlsClass::SourceOnly,
     ),
+    // Test-support package harness (tui package_harness.rs): the caught-panic
+    // report annotates where the panic started, which a message-less payload
+    // cannot say for itself.  SourceOnly: instrumentation only, holds no Lisp
+    // Value, and this test-support crate is not part of the shipped binary.
+    (
+        "neomacs-tui-tests/src/package_harness.rs",
+        "PANIC_ORIGIN",
+        TlsClass::SourceOnly,
+    ),
     (BINARY_CENSUS, "TEXT", TlsClass::CarrierIntrinsic),
     (BINARY_CENSUS, "THREAD", TlsClass::CarrierIntrinsic),
     (
@@ -1517,7 +1556,7 @@ const ENCLOSING_TEST_GATES: &[EnclosingTestGate] = &[
     EnclosingTestGate {
         root_file: "neovm-eval/src/lib.rs",
         file: "neovm-eval/src/emacs_core/runtime/jit/aot.rs",
-        line: 5789,
+        line: 5920,
         cfg: "#[cfg(any(test, feature = \"test-support\"))]",
         module: "emacs_core::jit::aot::test_support",
         resolved_files: &[
@@ -4052,7 +4091,7 @@ fn every_must_reset_record_is_covered_by_a_real_carrier_reset() {
     let main_rs = std::fs::read_to_string(crates.join("neomacs/src/main.rs"))
         .expect("read neomacs/src/main.rs");
 
-    let park_steps = reset_steps(&carrier_tls, "pub(crate) fn park_carrier_tls()");
+    let park_steps = reset_steps(&carrier_tls, "pub(crate) unsafe fn park_carrier_tls()");
     let deferred_steps = reset_steps(&carrier_tls, "pub(crate) fn reset_carrier_tls()");
     let park: std::collections::BTreeSet<String> = park_steps
         .iter()

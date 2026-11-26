@@ -37,10 +37,10 @@ fn with_entry(
         neovm_eval::test_support::authority::enter_test_mode_for_test(jit::BgMode::Sync);
     let mut context = crate::test_utils::new_context();
     let mut source = ByteCodeFunction::new(LambdaParams::simple(Vec::new()));
-    source.lexical = true;
-    source.ops = vec![Op::Constant(0), Op::Return];
-    source.constants = vec![Value::fixnum(7)].into();
-    source.max_stack = StackDepth::for_test(1);
+    source.set_lexical(true);
+    source.set_ops(vec![Op::Constant(0), Op::Return]);
+    source.set_constants(vec![Value::fixnum(7)].into());
+    source.set_max_stack(StackDepth::for_test(1));
     source.seal_hand_assembled_ops();
     source.jit_runtime().set_hot_for_test();
     neovm_eval::test_support::authority::prepare_entry_for_test(&mut context, &source);
@@ -150,8 +150,8 @@ fn hub_osr_callback_retains_its_leaf_across_eviction_and_cache_clear() {
             ByteCodeFunction::new(LambdaParams::simple(vec![neovm_value::intern::intern(
                 "hub-osr-counter",
             )]));
-        source.lexical = true;
-        source.ops = vec![
+        source.set_lexical(true);
+        source.set_ops(vec![
             Op::StackRef(0),
             Op::Constant(0),
             Op::Lss,
@@ -161,9 +161,9 @@ fn hub_osr_callback_retains_its_leaf_across_eviction_and_cache_clear() {
             Op::Pop,
             Op::Constant(1),
             Op::Return,
-        ];
-        source.constants = vec![Value::fixnum(1), Value::fixnum(7)].into();
-        source.max_stack = StackDepth::for_test(16);
+        ]);
+        source.set_constants(vec![Value::fixnum(1), Value::fixnum(7)].into());
+        source.set_max_stack(StackDepth::for_test(16));
         source.seal_hand_assembled_ops();
         source.jit_runtime().set_hot_for_test();
         neovm_eval::test_support::authority::prepare_osr_for_test(context, &source, 0);

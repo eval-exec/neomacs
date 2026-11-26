@@ -39,7 +39,11 @@ enum StateEntry {
 }
 
 impl StateEntry {
-    fn matches(self, slots: &[Value], index: &mut usize) -> bool {
+    fn matches(
+        self,
+        slots: &neovm_value::tagged::header::LispValueSlice,
+        index: &mut usize,
+    ) -> bool {
         match self {
             Self::Frame { id, name } => {
                 same(slots, index, Value::make_frame(id.0)) && same(slots, index, name)
@@ -116,7 +120,7 @@ impl FrameBufferState {
         }
     }
 
-    fn matches(&self, slots: &[Value]) -> bool {
+    fn matches(&self, slots: &neovm_value::tagged::header::LispValueSlice) -> bool {
         let mut index = 0;
         for entry in &self.entries {
             if !entry.matches(slots, &mut index) {
@@ -162,7 +166,11 @@ fn lambda() -> Value {
 /// Identity comparison: GNU uses `BASE_EQ` for the frame/buffer objects and
 /// `EQ` for their names and state values. `Value`'s `PartialEq` is structural
 /// (`equal_value`), so the state vector must compare tagged identities.
-fn same(slots: &[Value], index: &mut usize, expected: Value) -> bool {
+fn same(
+    slots: &neovm_value::tagged::header::LispValueSlice,
+    index: &mut usize,
+    expected: Value,
+) -> bool {
     let Some(slot) = slots.get(*index) else {
         return false;
     };

@@ -5,6 +5,13 @@ std::cfg_select! {
     target_os = "linux" => {
         mod linux;
         pub(crate) use linux::LinuxPlatform as CurrentPlatform;
+        #[cfg(feature = "native-validation-fixtures")]
+        pub(crate) use linux::assert_native_dmabuf_plane_validation;
+        #[cfg(test)]
+        pub(crate) use linux::{
+            create_test_foreign_surface_release, open_test_vulkan_foreign_device,
+            require_gpu_video_tests,
+        };
     }
     target_os = "macos" => {
         mod macos;

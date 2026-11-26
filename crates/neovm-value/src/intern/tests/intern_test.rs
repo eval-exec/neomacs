@@ -1,4 +1,5 @@
 use super::*;
+use crate::intern::b13_test_hooks::resolve_sym_name_value;
 
 fn unibyte_name(bytes: &[u8]) -> crate::heap_types::LispString {
     crate::heap_types::LispString::from_unibyte(bytes.to_vec())
@@ -64,6 +65,8 @@ fn atom_only_symbol_names_are_cached_and_rooted_per_heap_identity() {
     assert_eq!(materialize_symbol_name_value(symbol).bits(), first.bits());
 
     let mut second_heap = crate::tagged::gc::TaggedHeap::new();
+    // SAFETY: bare `TaggedHeap` unit test switching heaps on this thread.
+    unsafe { crate::tagged::gc::clear_tagged_heap_if_installed(&first_heap) };
     crate::tagged::gc::set_tagged_heap(&mut second_heap);
     let second_heap_id = crate::tagged::gc::current_tagged_heap_identity().unwrap();
     let second = materialize_symbol_name_value(symbol);
@@ -73,12 +76,16 @@ fn atom_only_symbol_names_are_cached_and_rooted_per_heap_identity() {
         "heap-local Lisp objects must never cross evaluator heaps"
     );
 
+    // SAFETY: bare `TaggedHeap` unit test switching heaps on this thread.
+    unsafe { crate::tagged::gc::clear_tagged_heap_if_installed(&second_heap) };
     crate::tagged::gc::set_tagged_heap(&mut first_heap);
     assert_eq!(materialize_symbol_name_value(symbol).bits(), first.bits());
     let mut first_roots = Vec::new();
     collect_symbol_name_gc_roots(&mut first_roots, first_heap_id);
     assert!(first_roots.iter().any(|root| root.bits() == first.bits()));
 
+    // SAFETY: bare `TaggedHeap` unit test switching heaps on this thread.
+    unsafe { crate::tagged::gc::clear_tagged_heap_if_installed(&first_heap) };
     crate::tagged::gc::set_tagged_heap(&mut second_heap);
     let mut second_roots = Vec::new();
     collect_symbol_name_gc_roots(&mut second_roots, second_heap_id);
@@ -132,7 +139,7 @@ fn visible_symbol_name_reads_follow_materialization_mutation_and_gc() {
         name.set_string_byte_same_char_count(0, replacement as u8);
         let mut roots = Vec::new();
         collect_symbol_name_gc_roots(&mut roots, heap_id);
-        heap.collect_exact(roots.into_iter());
+        heap.collect_rooted(roots.into_iter());
         assert_eq!(
             resolve_lisp_visible_symbol_name(symbol).text().as_bytes()[0],
             replacement as u8
@@ -180,7 +187,7 @@ fn visible_symbol_name_reads_reuse_a_large_working_set() {
     let symbols: Vec<_> = (0..1024)
         .map(|i| {
             let spelling = format!("visible-name-replacement-{i}");
-            let symbol = intern_uninterned(&spelling);
+            let symbol = make_uninterned_symbol(&spelling);
             if i % 2 == 0 {
                 materialize_symbol_name_value(symbol);
             }
@@ -219,6 +226,8 @@ fn visible_symbol_name_reads_follow_heap_switch_and_drop() {
     ));
 
     let mut second_heap = crate::tagged::gc::TaggedHeap::new();
+    // SAFETY: bare `TaggedHeap` unit test switching heaps on this thread.
+    unsafe { crate::tagged::gc::clear_tagged_heap_if_installed(&first_heap) };
     crate::tagged::gc::set_tagged_heap(&mut second_heap);
     assert!(matches!(
         resolve_lisp_visible_symbol_name(symbol),
@@ -231,6 +240,8 @@ fn visible_symbol_name_reads_follow_heap_switch_and_drop() {
         LispVisibleSymbolName::LispObject(value) if value.bits() == second_name.bits()
     ));
 
+    // SAFETY: bare `TaggedHeap` unit test switching heaps on this thread.
+    unsafe { crate::tagged::gc::clear_tagged_heap_if_installed(&second_heap) };
     crate::tagged::gc::set_tagged_heap(&mut first_heap);
     assert!(matches!(
         resolve_lisp_visible_symbol_name(symbol),
@@ -276,7 +287,7 @@ fn visible_symbol_name_reads_survive_thread_cache_destruction() {
     let checked = Arc::new(AtomicBool::new(false));
     let on_thread = Arc::clone(&checked);
     std::thread::spawn(move || {
-        let symbol = intern_uninterned("visible-name-thread-exit-probe");
+        let symbol = make_uninterned_symbol("visible-name-thread-exit-probe");
         // TLS destructors run in reverse initialization order. Register the
         // diagnostic first so its read runs after the name cache is destroyed.
         READ_ON_DROP.with(|slot| {
@@ -525,7 +536,7 @@ fn canonical_id_distinguishes_interned_from_uninterned_duplicates() {
     crate::test_utils::init_test_tracing();
     let mut registry = SymbolRegistry::new();
     let canonical = registry.intern("dup");
-    let uninterned = registry.intern_uninterned("dup");
+    let uninterned = registry.make_uninterned_symbol("dup");
 
     assert!(registry.is_canonical_id(canonical));
     assert!(!registry.is_canonical_id(uninterned));
@@ -621,7 +632,7 @@ fn dump_symbol_table_separates_name_atoms_from_symbol_slots() {
     crate::test_utils::init_test_tracing();
     let mut registry = SymbolRegistry::new();
     let canonical = registry.intern("shared-name");
-    let uninterned = registry.intern_uninterned("shared-name");
+    let uninterned = registry.make_uninterned_symbol("shared-name");
 
     let dumped = registry.dump_symbol_table();
 
@@ -730,7 +741,7 @@ fn symbol_registry_exposes_name_ids_separately() {
     crate::test_utils::init_test_tracing();
     let mut registry = SymbolRegistry::new();
     let canonical = registry.intern("shared-name");
-    let uninterned = registry.intern_uninterned("shared-name");
+    let uninterned = registry.make_uninterned_symbol("shared-name");
 
     let canonical_name = registry.name_id(canonical);
     let uninterned_name = registry.name_id(uninterned);
@@ -756,6 +767,8 @@ fn uninterned_symbol_name_value_roots_are_heap_owned() {
     assert!(roots.contains(&name));
 
     let mut heap2 = crate::tagged::gc::TaggedHeap::new();
+    // SAFETY: bare `TaggedHeap` unit test switching heaps on this thread.
+    unsafe { crate::tagged::gc::clear_tagged_heap_if_installed(&heap1) };
     crate::tagged::gc::set_tagged_heap(&mut heap2);
     let heap2_id = crate::tagged::gc::current_tagged_heap_identity().unwrap();
     let mut roots = Vec::new();
@@ -958,6 +971,8 @@ fn reader_name_materialization_preserves_encoding_identity_mutation_and_heap_own
     assert_eq!(roots.len(), 1);
     assert_eq!(roots[0].bits(), first.bits());
     let mut second_heap = crate::tagged::gc::TaggedHeap::new();
+    // SAFETY: bare `TaggedHeap` unit test switching heaps on this thread.
+    unsafe { crate::tagged::gc::clear_tagged_heap_if_installed(&first_heap) };
     crate::tagged::gc::set_tagged_heap(&mut second_heap);
     let second_heap_id = crate::tagged::gc::current_tagged_heap_identity().unwrap();
     let second = materialize_symbol_name_value(symbol);
@@ -1024,4 +1039,26 @@ fn prepare_thread_symbol_caches_reserves_the_symbol_span_with_headroom() {
             "the SymId cache must be reserved to the symbol span plus headroom"
         );
     });
+}
+
+/// A raw-byte symbol name is cached by `resolve_sym_lisp_string` without a
+/// UTF-8 check. `resolve_sym` must not rebuild those bytes as `&str`. It
+/// returns a lossy spelling, and a second call returns the same one.
+#[test]
+fn resolve_sym_raw_byte_name_is_not_a_str() {
+    crate::test_utils::init_test_tracing();
+    let name = unibyte_name(&[0xFF, 0xFE, 0x80]);
+    let id = intern_lisp_string(&name);
+    assert!(is_canonical_id(id), "the interned name is canonical");
+    let stored = resolve_sym_lisp_string(id);
+    assert!(
+        stored.as_utf8_str().is_none(),
+        "setup must keep a non-UTF-8 name, got {:?}",
+        stored.as_bytes()
+    );
+    let spelled = resolve_sym(id);
+    assert_eq!(spelled, "\u{FFFD}\u{FFFD}\u{FFFD}");
+    assert_ne!(spelled.as_bytes(), stored.as_bytes());
+    assert!(std::ptr::eq(spelled, resolve_sym(id)));
+    assert!(stored.as_utf8_str().is_none());
 }

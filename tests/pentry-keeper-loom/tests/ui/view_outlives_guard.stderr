@@ -1,0 +1,20 @@
+error: lifetime may not live long enough
+ --> tests/ui/view_outlives_guard.rs:8:43
+  |
+8 |     with_world(world, |context, _witness| context.view())
+  |                        -------          - ^^^^^^^^^^^^^^ returning this value requires that `'1` must outlive `'2`
+  |                        |                |
+  |                        |                return type of closure is View<'2>
+  |                        has type `&mut SerialContext<'1>`
+  |
+  = note: requirement occurs because of the type `View<'_>`, which makes the generic argument `'_` invariant
+  = note: the struct `View<'g>` is invariant over the parameter `'g`
+  = help: see <https://doc.rust-lang.org/nomicon/subtyping.html> for more information about variance
+
+error: lifetime may not live long enough
+ --> tests/ui/view_outlives_guard.rs:8:43
+  |
+7 | fn escape<'world>(world: &'world mut ModelWorld) -> View<'world> {
+  |           ------ lifetime `'world` defined here
+8 |     with_world(world, |context, _witness| context.view())
+  |                                           ^^^^^^^^^^^^^^ returning this value requires that `'world` must outlive `'static`

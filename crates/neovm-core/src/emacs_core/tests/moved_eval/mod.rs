@@ -216,6 +216,9 @@ mod emacs_core_runtime_eval_tests_cconv_memo_test_rs;
 #[cfg(test)]
 #[path = "emacs_core/runtime/eval/tests/gc_forced_first_cycle_test.rs"]
 mod emacs_core_runtime_eval_tests_gc_forced_first_cycle_test_rs;
+#[cfg(test)]
+#[path = "emacs_core/runtime/eval/tests/killed_buffer_roots_test.rs"]
+mod emacs_core_runtime_eval_tests_killed_buffer_roots_test_rs;
 #[cfg(all(test, feature = "jit"))]
 #[path = "emacs_core/runtime/jit/tests/spec_frames_test.rs"]
 mod emacs_core_runtime_jit_tests_spec_frames_test_rs;
@@ -687,9 +690,17 @@ mod emacs_core_lisp_native_builtins_tests_gc_tls_window_configuration_class_b_te
 #[path = "emacs_core/lisp/native/builtins/tests/positioned_final_boundaries_class_b_test.rs"]
 mod emacs_core_lisp_native_builtins_tests_positioned_final_boundaries_class_b_test_rs;
 
+#[cfg(all(test, feature = "perf-probes"))]
+#[path = "emacs_core/runtime/eval/tests/baton_pipe_cost_test.rs"]
+mod emacs_core_runtime_eval_tests_baton_pipe_cost_test_rs;
+
 #[cfg(test)]
 #[path = "emacs_core/runtime/eval/tests/green_switch_class_b_test.rs"]
 mod emacs_core_runtime_eval_tests_green_switch_class_b_test_rs;
+
+#[cfg(test)]
+#[path = "emacs_core/runtime/eval/tests/opt_in_creator_test.rs"]
+mod emacs_core_runtime_eval_tests_opt_in_creator_test_rs;
 
 #[cfg(test)]
 #[path = "emacs_core/runtime/eval/tests/green_thread_buffer_test.rs"]
@@ -698,6 +709,10 @@ mod emacs_core_runtime_eval_tests_green_thread_buffer_test_rs;
 #[cfg(test)]
 #[path = "emacs_core/runtime/eval/keyboard/tests/display_service_class_b_test.rs"]
 mod emacs_core_runtime_eval_keyboard_tests_display_service_class_b_test_rs;
+
+#[cfg(test)]
+#[path = "emacs_core/runtime/eval/keyboard/tests/font_rendering_event_test.rs"]
+mod emacs_core_runtime_eval_keyboard_tests_font_rendering_event_test_rs;
 
 #[cfg(test)]
 #[cfg(feature = "jit")]

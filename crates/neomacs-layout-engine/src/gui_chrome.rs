@@ -450,11 +450,26 @@ fn parse_tool_bar_item(
     }
 
     let (mut label, plist) = extract_menu_item_label_and_plist(eval, def)?;
+    // `:filter` replaces the binding (keyboard.c:9980-9986). A keymap
+    // binding is not a button (keyboard.c:9988-9990). A click resolves
+    // that same value again through `get_keyelt` (keymap.c:701-710).
+    let mut binding = menu_item_binding(eval, def);
+    if KeymapMarker::MenuItem.is_value(def.cons_car(), eval.symbol_mode())
+        && let Some(filter) = plist_lookup(&plist, MenuItemProperty::Filter, eval.symbol_mode())
+    {
+        binding = eval
+            .eval_menu_item_property(filter, vec![binding])
+            .unwrap_or(Value::NIL);
+    }
+    if tool_bar_binding_is_keymap(eval, binding) {
+        return None;
+    }
     if let Some(visible) = plist_lookup(&plist, MenuItemProperty::Visible, eval.symbol_mode())
         && !eval_menu_property(eval, visible).is_truthy()
     {
         return None;
     }
+    let caption = label.clone();
     if label.is_empty() {
         label = plist_lookup(&plist, MenuItemProperty::Label, eval.symbol_mode())
             .and_then(|value| value.as_runtime_string_owned())
@@ -462,9 +477,12 @@ fn parse_tool_bar_item(
     }
     let image = plist_lookup(&plist, MenuItemProperty::Image, eval.symbol_mode())
         .and_then(|image| tool_bar_image_source(eval, &image));
-    let help = plist_lookup(&plist, MenuItemProperty::Help, eval.symbol_mode())
-        .and_then(|value| value.as_runtime_string_owned())
-        .unwrap_or_default();
+    let help = tool_bar_help_with_binding(
+        eval,
+        plist_lookup(&plist, MenuItemProperty::Help, eval.symbol_mode()),
+        &caption,
+        binding,
+    );
     let enabled = plist_lookup(&plist, MenuItemProperty::Enable, eval.symbol_mode())
         .map(|value| eval_menu_property(eval, value).is_truthy())
         .unwrap_or(true);
@@ -486,6 +504,67 @@ fn parse_tool_bar_item(
         item_type,
         wrap,
     })
+}
+
+/// Append the binding's key to the tooltip.
+///
+/// GNU calls `where-is-internal` with FIRSTONLY t on the binding after
+/// `:filter`, then `key-description` (`keyboard.c:10001-10015`). A nil
+/// `:help` uses the caption only when that key exists. A lookup failure
+/// leaves the help string unsuffixed so tooltip text cannot drop the item.
+fn tool_bar_help_with_binding(
+    eval: &mut Context,
+    help: Option<Value>,
+    caption: &str,
+    binding: Value,
+) -> String {
+    let explicit = help.and_then(|value| value.as_runtime_string_owned());
+    let Ok(keys) = eval.funcall_general(
+        Value::symbol("where-is-internal"),
+        vec![binding, Value::NIL, Value::T, Value::NIL, Value::NIL],
+    ) else {
+        return explicit.unwrap_or_default();
+    };
+    if keys.is_nil() {
+        return explicit.unwrap_or_default();
+    }
+    let Ok(desc) = eval.funcall_general(Value::symbol("key-description"), vec![keys]) else {
+        return explicit.unwrap_or_default();
+    };
+    let Some(desc) = desc
+        .as_runtime_string_owned()
+        .filter(|text| !text.is_empty())
+    else {
+        return explicit.unwrap_or_default();
+    };
+    let mut text = explicit.unwrap_or_else(|| caption.to_string());
+    text.push_str("  (");
+    text.push_str(&desc);
+    text.push(')');
+    text
+}
+
+fn menu_item_binding(eval: &Context, def: &Value) -> Value {
+    if !KeymapMarker::MenuItem.is_value(def.cons_car(), eval.symbol_mode()) || !def.is_cons() {
+        return Value::NIL;
+    }
+    let named = def.cons_cdr();
+    if !named.is_cons() {
+        return Value::NIL;
+    }
+    let defined = named.cons_cdr();
+    if defined.is_cons() {
+        defined.cons_car()
+    } else {
+        Value::NIL
+    }
+}
+
+/// GNU `get_keymap (binding, 0, 1)` is a cons for a keymap binding.
+fn tool_bar_binding_is_keymap(eval: &mut Context, binding: Value) -> bool {
+    !neovm_core::emacs_core::keymap::maybe_keymap_in_runtime(eval, &binding, true)
+        .unwrap_or(Value::NIL)
+        .is_nil()
 }
 
 fn extract_menu_item_label_and_plist(eval: &mut Context, def: &Value) -> Option<(String, Value)> {
@@ -564,9 +643,7 @@ fn plist_lookup_by_symbol(
 fn tool_bar_image_source(eval: &Context, value: &Value) -> Option<ToolBarImageSource> {
     image_file_from_spec(value)
         .or_else(|| best_image_file_from_expression(value))
-        .map(|path| ToolBarImageSource::File {
-            path: themed_tool_bar_image_path(eval, &path),
-        })
+        .map(|path| themed_tool_bar_image_source(eval, &path))
 }
 
 fn image_file_from_spec(value: &Value) -> Option<String> {
@@ -599,7 +676,7 @@ fn collect_image_file_candidates(value: &Value, files: &mut Vec<String>) {
         collect_image_file_candidates(&value.cons_cdr(), files);
     } else if let Some(values) = value.as_vector_data() {
         for item in values.iter() {
-            collect_image_file_candidates(item, files);
+            collect_image_file_candidates(&item, files);
         }
     }
 }
@@ -639,26 +716,44 @@ fn toolbar_image_type_rank(image_type: ImageType) -> u8 {
     }
 }
 
-fn themed_tool_bar_image_path(eval: &Context, path: &str) -> String {
+/// Resolve one GNU `:image` file to its toolbar realization source.
+///
+/// Only Neomacs-owned SVGs (the selected themed directory, or a custom icon
+/// directory) become [`ToolBarImageSource::ThemedVector`]; every other path is
+/// the GNU image file and keeps GNU's sizing semantics.  The provenance must
+/// survive to the decoder: the same path string cannot say whether the file is
+/// a chrome vector that should rasterize at the slot size or a GNU image whose
+/// native extent is a clamp.
+fn themed_tool_bar_image_source(eval: &Context, path: &str) -> ToolBarImageSource {
     let original_path = resolve_tool_bar_image_path(path);
     let Some(icon_name) =
         tool_bar_icon_name_from_path(path).or_else(|| tool_bar_icon_name_from_path(&original_path))
     else {
-        return original_path;
+        return ToolBarImageSource::GnuRaster {
+            path: original_path,
+        };
     };
 
     if let Some(path) = custom_tool_bar_icon_path(eval, &icon_name) {
-        return path;
+        return ToolBarImageSource::ThemedVector { path };
     }
 
     let theme = current_tool_bar_icon_theme(eval);
     if theme == ToolBarIconTheme::Gnu {
-        return original_path;
+        return ToolBarImageSource::GnuRaster {
+            path: original_path,
+        };
     }
 
-    themed_tool_bar_icon_path(theme, &icon_name)
+    if let Some(path) = themed_tool_bar_icon_path(theme, &icon_name)
         .or_else(|| themed_tool_bar_icon_path(ToolBarIconTheme::Neomacs, &icon_name))
-        .unwrap_or(original_path)
+    {
+        return ToolBarImageSource::ThemedVector { path };
+    }
+
+    ToolBarImageSource::GnuRaster {
+        path: original_path,
+    }
 }
 
 fn current_tool_bar_icon_theme(eval: &Context) -> ToolBarIconTheme {

@@ -106,16 +106,16 @@ fn heap(on: bool) -> TestHeap {
 }
 
 fn minor(heap: &mut TaggedHeap, roots: &[TaggedValue]) {
-    heap.begin_minor_collection().unwrap();
+    heap.begin_minor_collection_for_test().unwrap();
     for &root in roots {
         heap.seed_root(root);
     }
-    heap.complete_minor_collection();
-    heap.finish_incremental_sweep_now();
+    heap.complete_minor_collection_for_test();
+    heap.finish_incremental_sweep_now_for_test();
 }
 
 fn major(heap: &mut TaggedHeap, roots: &[TaggedValue]) {
-    heap.collect_exact(roots.iter().copied());
+    heap.collect_rooted(roots.iter().copied());
     assert!(!heap.mark_in_progress());
     assert!(!heap.sweep_in_progress());
 }
@@ -142,15 +142,15 @@ fn assert_header_at_rest(heap: &TaggedHeap, value: TaggedValue) {
 
 fn bytecode(constants: Vec<TaggedValue>) -> ByteCodeFunction {
     let mut function = ByteCodeFunction::new(LambdaParams::simple(vec![]));
-    function.constants = constants.into();
-    function.ops = vec![Op::Nil];
-    function.gnu_bytecode_bytes = Some(LispByteVec::owned(vec![0xAA; 32]));
+    function.set_constants(constants.into());
+    function.set_ops(vec![Op::Nil]);
+    function.set_gnu_bytecode_bytes(Some(LispByteVec::owned(vec![0xAA; 32])));
     function
 }
 
 fn retained_bytes(value: TaggedValue) -> LispByteVec {
     let object = unsafe { &*(value.as_veclike_ptr().unwrap() as *const ByteCodeObj) };
-    object.data.gnu_bytecode_bytes.as_ref().unwrap().clone()
+    object.data.gnu_bytecode_bytes().unwrap().clone()
 }
 
 fn weak_key_table(heap: &mut TaggedHeap) -> TaggedValue {
@@ -244,7 +244,7 @@ fn major_keeps_permanent_payload_and_its_ordinary_old_child() {
     // inventory includes its page slot plus the old cons.
     assert_eq!(
         heap.generational.old_bytes,
-        size_of::<ConsCell>() + heap.collector_object_bytes(header_ptr(code)),
+        size_of::<ConsCell>() + unsafe { heap.collector_object_bytes(header_ptr(code)) },
     );
 }
 
@@ -363,13 +363,13 @@ fn major_retraces_old_children_when_mark_parity_repeats() {
 }
 
 fn major_retraces_old_uninterned_symbol_owner_without_recent_r() {
-    use crate::intern::{intern_uninterned, is_canonical_id};
+    use crate::intern::{is_canonical_id, make_uninterned_symbol};
 
     for positioned in [false, true] {
         let mut heap = heap(true);
         heap.install();
         let roots = Roots::new();
-        let id = intern_uninterned("u34b-major-old-owner-symbol");
+        let id = make_uninterned_symbol("u34b-major-old-owner-symbol");
         assert!(!is_canonical_id(id));
         let symbol = TaggedValue::from_sym_id(id);
         let value = if positioned {
@@ -477,8 +477,8 @@ fn late_dump_partition_visits_old_objects_and_consumes_stale_r_safely() {
     assert_eq!(
         heap.generational.old_bytes,
         size_of::<ConsCell>()
-            + heap.collector_object_bytes(header_ptr(live))
-            + heap.collector_object_bytes(header_ptr(vector)),
+            + unsafe { heap.collector_object_bytes(header_ptr(live)) }
+            + unsafe { heap.collector_object_bytes(header_ptr(vector)) },
     );
 }
 
@@ -542,7 +542,7 @@ fn concurrent_major_promotes_worker_claims_black_births_before_deferred_sweep() 
     heap.seed_root(owner);
     heap.incremental_drain_all();
     let live_bytes = heap.live_bytes();
-    heap.incremental_finish(live_bytes, std::time::Instant::now());
+    heap.incremental_finish_for_test(live_bytes, std::time::Instant::now());
     assert!(heap.sweep_in_progress());
     for value in [
         owner,
@@ -571,7 +571,7 @@ fn concurrent_major_promotes_worker_claims_black_births_before_deferred_sweep() 
 
     let sweep_born = heap.alloc_float(4.5);
     roots.keep(sweep_born);
-    heap.finish_incremental_sweep_now();
+    heap.finish_incremental_sweep_now_for_test();
     assert!(!heap.value_is_old_for_test(sweep_born));
     for value in [
         target,
@@ -601,7 +601,7 @@ fn concurrent_major_promotes_worker_claims_black_births_before_deferred_sweep() 
             sweep_born,
         ],
     );
-    assert_eq!(target.as_vector_data().unwrap()[0], child);
+    assert_eq!(target.as_vector_data().unwrap().at(0), child);
     assert_eq!(child.cons_car(), TaggedValue::fixnum(139));
     assert!(heap.owns_heap_value_for_test(start_string));
     assert_eq!(owner.cons_cdr(), start_vector);
@@ -672,15 +672,19 @@ impl Drop for FirstPartitionCancelCleanup {
     fn drop(&mut self) {
         // SAFETY: the stack heap was declared before this local guard.
         let heap = unsafe { &mut *self.0 };
-        if heap.concurrent_mark_running {
+        if heap.concurrent_mark_running() {
             heap.join_concurrent_mark();
         }
         heap.close_alloc_regions();
-        heap.concurrent_mark_running = false;
+        // SAFETY: worker (if any) was joined above; fixture cleanup.
+        unsafe { heap.concurrent_mark_running.set(false) };
         heap.mark_in_progress = false;
         heap.generational.major_in_progress = false;
-        set_tagged_heap_root(std::ptr::NonNull::new(self.0).expect("partition cleanup heap"));
-        clear_tagged_heap_if_installed(heap);
+        unsafe {
+            set_tagged_heap_root(std::ptr::NonNull::new(self.0).expect("partition cleanup heap"))
+        };
+        // SAFETY: teardown of bare `TaggedHeap` partition test fixture.
+        unsafe { clear_tagged_heap_if_installed(heap) };
     }
 }
 
@@ -713,8 +717,8 @@ fn major_explicit_first_partition_disarm_drops_completed_black_birth_logs() {
     heap.reseed_runtime_and_remembered_roots();
     heap.incremental_drain_all();
     let bytes_before = heap.live_bytes();
-    heap.incremental_finish(bytes_before, std::time::Instant::now());
-    heap.finish_incremental_sweep_now();
+    heap.incremental_finish_for_test(bytes_before, std::time::Instant::now());
+    heap.finish_incremental_sweep_now_for_test();
     assert!(heap.first_cycle_concurrent);
     assert!(!heap.dump_blackened);
     assert!(!heap.concurrent_mark_running());
@@ -732,12 +736,12 @@ fn major_explicit_first_partition_disarm_drops_completed_black_birth_logs() {
     // Exactly the explicit-entry ordering: finish the prior sweep, then
     // disarm and run a fresh STW first partition. Calling the permanent
     // splice here instead would pin these unreachable births forever.
-    heap.begin_stw_collection();
+    heap.begin_stw_collection_for_test();
     assert!(!heap.first_cycle_concurrent);
     assert!(heap.current_mutator_gc().black_born.is_empty());
     assert!(heap.current_mutator_gc().black_born_regions.is_empty());
     heap.seed_root(mapped);
-    heap.complete_collection();
+    heap.complete_collection_for_test();
     assert!(heap.dump_blackened);
     assert!(!heap.mark_in_progress());
     assert!(!heap.sweep_in_progress());
@@ -765,7 +769,7 @@ impl Drop for SymbolInsertionWorkerGuard {
 }
 
 fn claimed_old_cons_symbol_insertion_case(fresh: bool, table_old: bool, car: bool, jit: bool) {
-    use crate::intern::{intern_uninterned, is_canonical_id};
+    use crate::intern::{is_canonical_id, make_uninterned_symbol};
 
     let mut heap = heap(true);
     heap.install();
@@ -796,12 +800,13 @@ fn claimed_old_cons_symbol_insertion_case(fresh: bool, table_old: bool, car: boo
         weak.user_cmp_function = Some(owner);
     });
     // An unrelated weak key checks that the repair does not retain all IDs.
-    let dead = TaggedValue::from_sym_id(intern_uninterned("u34b-dead-weak-symbol"));
+    let dead = TaggedValue::from_sym_id(make_uninterned_symbol("u34b-dead-weak-symbol"));
     let dead_root = roots.keep(dead);
     insert(table, dead, TaggedValue::fixnum(181));
     roots.clear(dead_root);
     if !fresh {
-        let existing = TaggedValue::from_sym_id(intern_uninterned("u34b-existing-weak-symbol"));
+        let existing =
+            TaggedValue::from_sym_id(make_uninterned_symbol("u34b-existing-weak-symbol"));
         let existing_root = roots.keep(existing);
         insert(table, existing, TaggedValue::fixnum(179));
         roots.clear(existing_root);
@@ -822,7 +827,7 @@ fn claimed_old_cons_symbol_insertion_case(fresh: bool, table_old: bool, car: boo
     );
 
     let symbol = if fresh {
-        TaggedValue::from_sym_id(intern_uninterned("u34b-fresh-inserted-symbol"))
+        TaggedValue::from_sym_id(make_uninterned_symbol("u34b-fresh-inserted-symbol"))
     } else {
         // Obtain an existing ID weakly after claim. No strong start root held it.
         let weak = table.as_hash_table().unwrap();
@@ -886,7 +891,7 @@ fn claimed_old_cons_symbol_insertion_case(fresh: bool, table_old: bool, car: boo
     heap.seed_root(table);
     heap.incremental_drain_all();
     let live_bytes = heap.live_bytes();
-    heap.incremental_finish(live_bytes, std::time::Instant::now());
+    heap.incremental_finish_for_test(live_bytes, std::time::Instant::now());
     assert!(
         heap.marked_symbols.contains(id),
         "fresh={fresh}/old={table_old}/car={car}/jit={jit}"
@@ -900,7 +905,7 @@ fn claimed_old_cons_symbol_insertion_case(fresh: bool, table_old: bool, car: boo
         },
         symbol
     );
-    heap.finish_incremental_sweep_now();
+    heap.finish_incremental_sweep_now_for_test();
     assert_eq!(table.as_hash_table().unwrap().data.len(), 1);
     assert_eq!(
         table
@@ -1129,9 +1134,9 @@ fn claimed_old_cons_heap_insertion_case(
     // This assertion fails before reclamation on the unfixed source. With the
     // repair, weak sweep keeps the inserted key and drops the unrelated control.
     let live_bytes = heap.live_bytes();
-    heap.incremental_finish(live_bytes, std::time::Instant::now());
+    heap.incremental_finish_for_test(live_bytes, std::time::Instant::now());
     assert_eq!(table.as_hash_table().unwrap().data.len(), 1);
-    heap.finish_incremental_sweep_now();
+    heap.finish_incremental_sweep_now_for_test();
     assert!(heap.owns_heap_value_for_test(inserted));
     if let Some((payload, _, child, _)) = cold_graph {
         assert!(heap.owns_heap_value_for_test(child));

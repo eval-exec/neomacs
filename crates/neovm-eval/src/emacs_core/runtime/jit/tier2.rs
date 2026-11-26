@@ -623,3 +623,24 @@ pub(crate) fn carrier_tls_fingerprint(h: &mut u64) {
     neovm_value::tls_fingerprint::mix(h, ACTIVE_BUILD.with(|slot| slot.borrow().is_some() as u64));
     neovm_value::tls_fingerprint::mix_debug(h, T2_STATS.with(|slot| slot.get()));
 }
+
+/// Cold source check. An active tier build still owns its runtime source.
+#[cold]
+pub(crate) fn validate_source_compile_scope()
+-> Result<(), super::source_suspension::SourceScopeRefusal> {
+    use super::source_suspension::{SourceScopeRefusal, SourceScopeSlot};
+    ACTIVE_BUILD.with(|slot| {
+        let build = slot
+            .try_borrow_mut()
+            .map_err(|_| SourceScopeRefusal::Borrowed(SourceScopeSlot::TierBuild))?;
+        if build.is_some() {
+            Err(SourceScopeRefusal::TierBuild)
+        } else {
+            Ok(())
+        }
+    })
+}
+
+#[cfg(test)]
+#[path = "tier2/tests/source_suspension_test.rs"]
+mod source_suspension_tests;

@@ -39,3 +39,19 @@ pub use presentation::{
     WebViewPresentationEffects, WebViewPresentationError, WebViewSceneError,
 };
 pub use system::WebViewSystem;
+
+/// Configure platform WebView environment variables before any threads exist.
+///
+/// On Linux with the `webview` feature enabled, resolves the WPE DRM render
+/// node and exports `WPE_DRM_DEVICE` / `WPE_DRM_RENDER_NODE` so WebKit child
+/// processes inherit the chosen node without mutating the environment after
+/// worker threads start. On other platforms or without `webview`, this is a
+/// no-op.
+///
+/// # Safety
+/// The caller must invoke this before any other thread exists in the process
+/// (`std::env::set_var` precondition).
+pub unsafe fn configure_before_threads() {
+    // SAFETY: caller guarantees this process is single-threaded.
+    unsafe { platform::configure_before_threads() };
+}

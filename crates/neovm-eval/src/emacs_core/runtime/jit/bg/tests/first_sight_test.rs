@@ -29,7 +29,7 @@ fn jit_bg_first_sight_defers_then_installs() {
         1,
     );
     let before = stats_snapshot().enqueued[JobClass::FirstSight as usize];
-    assert!(cache::resolve_compiled_leaf_ptr(ctx, &f).is_none());
+    assert!(unsafe { cache::resolve_compiled_leaf_ptr(ctx, &f) }.is_none());
     let id = f.jit_runtime().compiled_id().expect("id");
     assert_eq!(cache::cache_entry_kind_for_test(id), "pending");
     assert_eq!(
@@ -37,11 +37,11 @@ fn jit_bg_first_sight_defers_then_installs() {
         before + 1
     );
     assert!(
-        cache::resolve_compiled_leaf_ptr(ctx, &f).is_none(),
+        unsafe { cache::resolve_compiled_leaf_ptr(ctx, &f) }.is_none(),
         "still running: the strict path again"
     );
     assert_eq!(publish_held_for_test(), 1);
-    assert!(cache::resolve_compiled_leaf_ptr(ctx, &f).is_some());
+    assert!(unsafe { cache::resolve_compiled_leaf_ptr(ctx, &f) }.is_some());
     assert_eq!(cache::cache_entry_kind_for_test(id), "compiled");
     hold_publish_for_test(false);
     force_deferred_install_for_test(false);

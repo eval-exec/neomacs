@@ -95,8 +95,7 @@ fn autoload_copied_properties_have_only_manager_roots() {
             assert_eq!(
                 unsafe { Value::from_bits(*bits) }
                     .as_vector_data()
-                    .expect("live autoload property vector")
-                    .as_slice(),
+                    .expect("live autoload property vector"),
                 &[Value::fixnum(index as i64)]
             );
         }
@@ -590,7 +589,8 @@ fn is_autoload_value_matches_gnu_first_cell_check() {
 #[test]
 fn is_autoload_value_requires_canonical_autoload_symbol() {
     crate::test_utils::init_test_tracing();
-    let uninterned_autoload = Value::symbol(neovm_value::intern::intern_uninterned("autoload"));
+    let uninterned_autoload =
+        Value::symbol(neovm_value::intern::make_uninterned_symbol("autoload"));
     let val = Value::cons(uninterned_autoload, Value::symbol("not-a-list"));
     assert!(!is_autoload_value(&val, SymbolMode::Bare));
 }

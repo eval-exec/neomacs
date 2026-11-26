@@ -200,7 +200,7 @@ suite observes the font-lock product rather than Dired's parser."
 (defun df449-test-file (name contents &optional modes)
   (let ((file (expand-file-name name df449-test-root)))
     (unless (and df449-test-root-owned
-                 (file-in-directory-p file df449-test-root))
+                 (neomacs-melpa-path-inside-p file df449-test-root))
       (error "Refusing diredfl write outside owned root: %S" file))
     (make-directory (file-name-directory file) t)
     ;; Inhibit file handlers so writing the `.gz' fixture stores the

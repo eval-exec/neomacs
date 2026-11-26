@@ -77,12 +77,10 @@ filter = 'package(neomacs-melpa-tests) and not (test(~parity_tests::harness_cont
 platform = { host = "cfg(unix)" }
 setup = 'melpa-infra-preflight'
 
-# The interactive package-TUI suites (moved out of the MELPA jobs) provision
-# pinned packages and boot editor pairs; give them the same preflight.
-[[profile.default.scripts]]
-filter = 'test(~package_tui::)'
-platform = { host = "cfg(unix)" }
-setup = 'melpa-infra-preflight'
+# Package-TUI scenarios use MelpaSandbox::new_with_short_home. They do not
+# need a checkout-rooted cache, so they do not take melpa-infra-preflight.
+# Attaching that refusing setup here cancels the whole TUI suite when
+# CARGO_TARGET_DIR points outside the checkout.
 
 # Compile-fail contract runners (feature `contract-fixtures`). Each runner
 # drives trybuild, which builds one scratch fixture project behind a single
@@ -181,17 +179,15 @@ slow-timeout = { period = "240s", terminate-after = 1 }
 
 # A handful of subprocess probes are timing sensitive rather than divergent:
 # `process_attributes_running_child` reads `process-running-child-p' while a
-# 0.2s child is alive, `quit_process_sentinel_message' waits (a bounded
-# `accept-process-output' budget) for a SIGQUIT sentinel to fire, and the
-# process-filter/coding probes below read output a child writes immediately
-# after start (`accept-process-output` returns as soon as any bytes arrive, so
-# a starved run can observe a partial or empty buffer). A fully parallel run
-# can steal enough scheduling latency to miss the window. Run them isolated
-# (adequate latency), like the heavy families, rather than reshaping the
-# probes (a longer-lived child would hold the process pipe open and block the
-# eval).
+# 0.2s child is alive, and the process-filter/coding probes below read output a
+# child writes immediately after start (`accept-process-output` returns as soon
+# as any bytes arrive, so a starved run can observe a partial or empty buffer).
+# A fully parallel run can steal enough scheduling latency to miss the window.
+# Run them isolated (adequate latency), like the heavy families, rather than
+# reshaping the probes (a longer-lived child would hold the process pipe open
+# and block the eval).
 [[profile.default.overrides]]
-filter = 'package(neovm-oracle-tests) and (test(process_attributes_running_child) or test(quit_process_sentinel_message) or test(div_cx45_process_env_coding_narrow_output_filter_hash_mega) or test(div_cx428_process_filter_insert) or test(proc_decode_search_replace) or test(div_cx33_process_kill_query_off_then_kill_buffer) or test(div_core_divergence_surface_process_attributes_running_child_combo) or test(divergence_process_output_to_buffer))'
+filter = 'package(neovm-oracle-tests) and (test(process_attributes_running_child) or test(div_cx45_process_env_coding_narrow_output_filter_hash_mega) or test(div_cx428_process_filter_insert) or test(proc_decode_search_replace) or test(div_cx33_process_kill_query_off_then_kill_buffer) or test(div_core_divergence_surface_process_attributes_running_child_combo) or test(divergence_process_output_to_buffer))'
 threads-required = "num-test-threads"
 
 # The generative window-tree property replays whole operation SEQUENCES in both
@@ -203,10 +199,11 @@ filter = 'test(oracle_prop_window_tree_survives_random_operation_sequences)'
 slow-timeout = { period = "1800s", terminate-after = 1 }
 
 # Native grammar cases provision pinned repositories and compile shared
-# libraries before running two editor probes. Match the cold package fixture
-# budget, ahead of the snapshot-oracle timeout below.
+# libraries before running two editor probes. The real JSON node row is the
+# same two-editor probe and measures about 97s, so it shares this budget
+# instead of the 60s single-form slot below.
 [[profile.default.overrides]]
-filter = 'package(neovm-oracle-tests) and test(~treesit_grammar_loading::)'
+filter = 'package(neovm-oracle-tests) and (test(~treesit_grammar_loading::) or test(=oracle_treesit_real_node::real_json_node_keeps_type_and_parser_through_gc_and_deletion))'
 slow-timeout = { period = "960s", terminate-after = 1 }
 
 # Oracle tests compare neomacs against GNU Emacs — single-form hangs
@@ -237,6 +234,21 @@ slow-timeout = { period = "30s", terminate-after = 1, grace-period = "0s" }
 filter = 'package(neomacs-gui-tests) and test(~macos_native_menus::)'
 platform = { host = 'cfg(target_os = "macos")' }
 threads-required = "num-test-threads"
+
+# Input-to-presentation budgets and calibrated raster outputs are measurements
+# of a live compositor.  The CI job runs them in its serial pass; reserve the
+# whole nextest pool here as well so a developer run at the default thread
+# count cannot let a sibling test steal the cores the budget is measured on.
+# The continuous_120hz_ rows are calibrated-host gates and are not included.
+[[profile.default.overrides]]
+filter = 'package(neomacs-gui-tests) and (test(~presents_while_command_is_stalled) or test(~presents_resolved_destination_while_command_is_stalled) or test(~presents_pixels_while_evaluator_is_stalled) or test(~have_confirmed_input_latency) or test(~resize_presentation::) or test(~wayland_font_raster::))'
+threads-required = "num-test-threads"
+
+# A signature-exact GNU ime miss is non-fatal, so its ::warning:: line has to
+# reach the step log on success. GitHub Actions only annotates lines it sees.
+[[profile.default.overrides]]
+filter = 'test(fcitx5_fullwidth_punctuation_is_text_and_f13_stays_a_key)'
+success-output = "immediate-final"
 
 # The Helm Pydoc workflow drives a real Helm session in BOTH editors; the first
 # `M-x helm-pydoc` synchronously collects the module list through a Python

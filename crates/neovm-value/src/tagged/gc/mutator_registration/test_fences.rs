@@ -3,7 +3,7 @@
 //!
 //! The module is `pub(crate)`; `neovm_value::test_support::authority` is the
 //! only public re-export path, so a compile-fail fixture that names an
-//! original item keeps failing. Each item has one AUTHORITY-ITEMS row.
+//! original item keeps failing.
 //! The module also carries two VIS re-exports (the catalog-waits observer fn
 //! and its snapshot type); each public route site has a TEST-SUPPORT-VIS
 //! `use` row, and no second fn definition exists.
@@ -45,6 +45,71 @@ pub fn begin_restore_retry_for_test<'owner, 'era>(
     owner.begin_restore_retry(native)
 }
 
+/// Gate-contention fence: counts the times a gate acquisition found the gate
+/// held and then waited for it (`with_stopped_gate`) or retried it (the
+/// receipt read after a native publication). A fixture that holds the gate
+/// releases it once this count moves, so the row proves the caller met the
+/// held gate instead of racing past a timer.
+#[cfg(any(test, feature = "test-support"))]
+static GATE_CONTENTION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) fn note_gate_contention() {
+    GATE_CONTENTION.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+}
+
+#[cfg(any(test, feature = "test-support"))]
+pub fn gate_contention_for_test() -> u64 {
+    GATE_CONTENTION.load(std::sync::atomic::Ordering::Acquire)
+}
+
+#[cfg(any(test, feature = "test-support"))]
+std::thread_local! {
+    /// One-shot hook for the instant the keeper starts waiting out an owner's
+    /// moment on an entry, outside the gate (the reader scans, and the root
+    /// reader and image entry locks). A row uses it to have an owner hold its
+    /// gate and entry exactly there.
+    static OWNER_MOMENT_HOOK: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Install the hook on the keeper thread. The next owner-moment wait runs it
+/// once, before its first attempt.
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) fn install_owner_moment_hook_for_test(hook: Box<dyn FnOnce()>) {
+    OWNER_MOMENT_HOOK.with(|slot| *slot.borrow_mut() = Some(hook));
+}
+
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) fn take_owner_moment_hook_for_test() -> Option<Box<dyn FnOnce()>> {
+    OWNER_MOMENT_HOOK.with(|slot| slot.borrow_mut().take())
+}
+
+/// One-shot hook for the instant `prepare_restore` holds the registry gate,
+/// before the condvar wait. The `Mutator` field stays cfg(test) inside this
+/// crate so a test-support build does not put `dyn FnOnce` on `Mutator`.
+/// The hook runs as a gate holder: if it blocks on the keeper, a keeper in
+/// `with_stopped_gate` waits for it, so a row must not combine the two.
+#[cfg(any(test, feature = "test-support"))]
+std::thread_local! {
+    static RESTORE_GATE_HOOK: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Install the hook on this thread. The next non-keeper `prepare_restore`
+/// that waits out `Stopping` or `Tracing` runs it while the gate is held.
+#[cfg(any(test, feature = "test-support"))]
+pub fn install_restore_gate_hook_for_test(hook: Box<dyn FnOnce()>) {
+    RESTORE_GATE_HOOK.with(|slot| {
+        *slot.borrow_mut() = Some(hook);
+    });
+}
+
+#[cfg(any(test, feature = "test-support"))]
+pub fn take_restore_gate_hook_for_test() -> Option<Box<dyn FnOnce()>> {
+    RESTORE_GATE_HOOK.with(|slot| slot.borrow_mut().take())
+}
+
 /// Name and public route for the peer-approved MEMQ-TAIL-SHAPES (5) copied
 /// catalog-waits observer. `cons_storage` is a private module, so without this
 /// re-export the A'-widened items have no cross-crate path. Same items and
@@ -59,6 +124,7 @@ pub fn begin_restore_retry_for_test<'owner, 'era>(
 #[cfg(feature = "test-support")]
 pub use super::super::cons_storage::{CatalogWaitsSnapshot, catalog_waits_for_test};
 #[cfg(not(feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) use super::super::cons_storage::{CatalogWaitsSnapshot, catalog_waits_for_test};
 
 /// Peer-signed 18:40Z shape (a): typed scoped seam over the owner-private
@@ -194,10 +260,19 @@ impl<'a, 'era> KeeperTableScope<'a, 'era> {
     }
 
     /// Copied current authority word of the recorded table.
+    ///
+    /// `enter` already validated the object. A fresh keeper lease would CAS
+    /// the word to WRITER and then report that bit, hiding both a quiescent
+    /// word and a probe installed by [`Self::hold_authority_word_for_test`].
     pub fn authority_word(&self) -> u64 {
         let table = self.table.expect("enter a table before reading its word");
-        let lease = super::KeeperTableMut::enter(self.stopped, table).expect("keeper lease");
-        lease.authority_word().load(Ordering::Acquire)
+        let ptr = table
+            .gc_veclike_ptr()
+            .expect("rooted table")
+            .cast::<crate::tagged::header::HashTableObj>();
+        // SAFETY: `enter` validated this rooted hash table. The load does
+        // not admit a lease, so a probe word stays observable.
+        unsafe { (*ptr).authority.load(Ordering::Acquire) }
     }
 
     /// Inspect the recorded table through the installed collector-tables
@@ -234,6 +309,10 @@ impl<'a, 'era> KeeperTableScope<'a, 'era> {
         let table = self.table.expect("enter a table before holding its word");
         let lease = super::KeeperTableMut::enter(self.stopped, table).expect("keeper lease");
         let word: *const AtomicU64 = lease.authority_word();
+        // The lease's own WRITER would make the probe CAS fail. Drop it
+        // first: `writer_exit` restores the quiescent word, then the CAS
+        // installs the probe.
+        drop(lease);
         // SAFETY: the rooted table of the stopped heap outlives the scope;
         // the returned guard is tied to &self, so only further &self reads on
         // this scope (not enter) can run while the probe word is installed.
@@ -291,21 +370,18 @@ pub unsafe fn with_stopped_tables_for_test<'a, 'era, R, K: crate::tagged::gc::Er
     result
 }
 
-/// FENCE (peer-signed A composite; peer #1482 condition 3 audit): wait on
-/// the registry's resume-debt event, then hand the body a run admitted under
-/// the same predicate gate. The Mutator's registry field, the park ticket,
-/// the registry guard, the live phase word and the resume wait never cross;
-/// the caller sees only `RunAccess`. This is a verbatim move of the fixture's
-/// historical `with_run`; every error string and the close/panic ordering are
-/// preserved.
+/// FENCE (peer-signed A composite; peer #1482 condition 3 audit): hand the
+/// body a run admitted by `Mutator::run_access_after_resume_drain`. The
+/// registry field, park ticket, predicate gate and resume wait stay inside
+/// that cold API. The caller sees only `RunAccess`. Body, panic and
+/// cons-region close ordering stay here; a close error is never a reason to
+/// repeat the body.
 pub fn with_registry_admission_gate_for_test<'era, R>(
     owner: &mut super::Mutator<'era>,
     mut body: impl FnMut(
         &mut crate::tagged::gc::mutator_registration::RunAccess<'_, 'era>,
     ) -> Result<R, String>,
 ) -> Result<R, String> {
-    use super::rendezvous::Phase;
-
     fn failure(payload: Box<dyn std::any::Any + Send>) -> String {
         payload
             .downcast_ref::<String>()
@@ -314,47 +390,9 @@ pub fn with_registry_admission_gate_for_test<'era, R>(
             .unwrap_or_else(|| "non-string cohort assertion".into())
     }
 
-    let registry = owner.registry;
-    let _park = registry.park_ticket();
-    let mut gate = registry
-        .lock_blocking()
-        .map_err(|error| format!("cohort admission gate: {error:?}"))?;
-    loop {
-        match gate.rendezvous.phase {
-            Phase::Idle => break,
-            Phase::DrainingResumes => {
-                // Check the specified non-blocking refusal while its actual
-                // predicate is locked. Busy in any other phase is not retried.
-                match owner.run_access() {
-                    Err(crate::tagged::gc::mutator_registration::RegistrationError::Busy) => {}
-                    Err(error) => return Err(format!("cohort drain refusal: {error:?}")),
-                    Ok(run) => {
-                        drop(gate);
-                        drop(run);
-                        return Err("cohort admitted during DrainingResumes".into());
-                    }
-                }
-                // The final ResumeGcImage::try_apply -> finish_debt opens Idle
-                // and notifies this same condvar. wait atomically releases the
-                // predicate mutex, including the product's poison wake path.
-                gate = registry
-                    .wait(gate)
-                    .map_err(|error| format!("cohort resume-debt wait: {error:?}"))?;
-            }
-            Phase::Stopping(_) | Phase::Tracing(_) | Phase::Poisoned => {
-                return Err(format!(
-                    "cohort unexpected admission phase: {:?}",
-                    gate.rendezvous.phase
-                ));
-            }
-        }
-    }
-    // Admit under the predicate gate so another owner cannot start restoring
-    // between the Idle observation and run_access. The body takes no gate.
-    let admitted = owner.run_access();
-    drop(gate);
-    drop(_park);
-    let mut run = admitted.map_err(|error| format!("cohort run admission: {error:?}"))?;
+    let mut run = owner
+        .run_access_after_resume_drain()
+        .map_err(|error| format!("cohort run admission: {error:?}"))?;
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| body(&mut run)));
     // A close error is terminal evidence, never a reason to repeat the body or
     // the close. Normal local-region closure requires no registry mutex.

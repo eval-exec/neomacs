@@ -24,7 +24,7 @@ use crate::display_row::walk_state::{
 use crate::display_status_line::ChromeRowRenderServices;
 use crate::neovm_bridge::{ForwardScrollMeasurement, LayoutBufferView, RustBufferAccess};
 use crate::scroll_policy::{
-    ForwardScroll, ScrollPolicy, count_lines_bounded, last_usable_row, line_start_above,
+    ForwardScroll, LineText, ScrollPolicy, count_lines_bounded, last_usable_row, line_start_above,
     line_start_below,
 };
 use crate::types::WindowParams;
@@ -265,6 +265,8 @@ pub(crate) struct TextWindowBeginRequest {
     selected: bool,
     first_row: DisplayTextRowBegin,
     source_extent: crate::types::WindowSourceExtent,
+    bidi_paragraph_directions: crate::bidi::ParagraphDirections,
+    text_geometry_units: neomacs_display_protocol::glyph_matrix::TextGeometryUnits,
 }
 
 pub(crate) struct TextWindowTailFinalizeRequest<'a> {
@@ -308,8 +310,6 @@ pub(crate) struct TextWindowBodyInstallRenderContext<'a> {
     window_start: i64,
     /// The walk's ZV (layout 0-based), for the truncated-last-row window end.
     accessible_end: i64,
-    text_start_byte: usize,
-    byte_idx: usize,
     reserve_right_special_col: bool,
     reserve_right_border_col: bool,
     display_text_row_base: usize,
@@ -572,7 +572,26 @@ impl TextWindowBeginRequest {
             selected,
             first_row,
             source_extent: crate::types::WindowSourceExtent::Viewport,
+            bidi_paragraph_directions: crate::bidi::ParagraphDirections::default(),
+            text_geometry_units: neomacs_display_protocol::glyph_matrix::TextGeometryUnits::default(
+            ),
         }
+    }
+
+    pub(crate) fn with_bidi_paragraph_directions(
+        mut self,
+        direction: crate::bidi::ParagraphDirections,
+    ) -> Self {
+        self.bidi_paragraph_directions = direction;
+        self
+    }
+
+    pub(crate) fn with_text_geometry_units(
+        mut self,
+        units: neomacs_display_protocol::glyph_matrix::TextGeometryUnits,
+    ) -> Self {
+        self.text_geometry_units = units;
+        self
     }
 
     pub(crate) fn with_source_extent(mut self, extent: crate::types::WindowSourceExtent) -> Self {
@@ -613,6 +632,8 @@ impl TextWindowBeginRequest {
                 text_clip_bounds: self.text_clip_bounds,
                 selected: self.selected,
                 first_row: self.first_row,
+                bidi_paragraph_directions: self.bidi_paragraph_directions,
+                text_geometry_units: self.text_geometry_units,
                 row_capacity: match self.source_extent {
                     crate::types::WindowSourceExtent::Viewport => {
                         crate::output::window_request::OutputWindowRowCapacity::Fixed
@@ -826,8 +847,6 @@ impl<'a> TextWindowBodyInstallRenderContext<'a> {
         window_id: u64,
         window_start: i64,
         accessible_end: i64,
-        text_start_byte: usize,
-        byte_idx: usize,
         reserve_right_special_col: bool,
         reserve_right_border_col: bool,
         display_text_row_base: usize,
@@ -841,8 +860,6 @@ impl<'a> TextWindowBodyInstallRenderContext<'a> {
             window_id,
             window_start,
             accessible_end,
-            text_start_byte,
-            byte_idx,
             reserve_right_special_col,
             reserve_right_border_col,
             display_text_row_base,
@@ -863,6 +880,7 @@ impl<'a> TextWindowBodyInstallRequest<'a> {
     pub(crate) fn install_and_apply(
         self,
         state: TextWindowBodyInstallState<'_, '_, '_>,
+        char_to_byte: impl FnOnce(neovm_core::buffer::CharPos0) -> neovm_core::buffer::EmacsBytePos,
     ) -> TextWindowRedisplayPositions {
         let context = self.context;
         let right_edge_markers = TextWindowRightEdgeMarkers::for_reserved_special_column(
@@ -883,11 +901,10 @@ impl<'a> TextWindowBodyInstallRequest<'a> {
                 window_id: context.window_id,
                 window_start: context.window_start,
                 accessible_end: context.accessible_end,
-                text_start_byte: context.text_start_byte,
-                byte_idx: context.byte_idx,
                 right_edge_markers,
             },
             Some(state.render_services),
+            char_to_byte,
         )
     }
 }
@@ -1039,10 +1056,6 @@ impl<'a, 'buf, B: LayoutBufferView> TextWindowVisibilityRetryRequest<'a, 'buf, B
         visible_end_lisp: Option<LispCharPos1>,
         point_beyond_visible_span: bool,
     ) -> ViewportDecision {
-        let byte_at_charpos = |charpos: i64| {
-            self.buf_access
-                .byte_at(self.buf_access.charpos_to_bytepos(charpos))
-        };
         if let Some(measurement) = self.forward_viewport_measurement {
             return measurement
                 .clone()
@@ -1090,7 +1103,7 @@ impl<'a, 'buf, B: LayoutBufferView> TextWindowVisibilityRetryRequest<'a, 'buf, B
             point_lisp,
             visible_end_lisp,
             point_beyond_visible_span,
-            &byte_at_charpos,
+            self.buf_access,
         )
         .map_or(ViewportDecision::Keep, |window_start| {
             ViewportDecision::Commit {
@@ -1107,7 +1120,7 @@ impl<'a, 'buf, B: LayoutBufferView> TextWindowVisibilityRetryRequest<'a, 'buf, B
         point_lisp: LispCharPos1,
         visible_end_lisp: Option<LispCharPos1>,
         point_beyond_visible_span: bool,
-        byte_at_charpos: &impl Fn(i64) -> Option<u8>,
+        text: &(impl LineText + ?Sized),
     ) -> Option<i64> {
         // GNU measures display height, including rows entirely produced by a
         // string. Buffer anchors say where a later walk can resume; they do
@@ -1132,7 +1145,7 @@ impl<'a, 'buf, B: LayoutBufferView> TextWindowVisibilityRetryRequest<'a, 'buf, B
                     first_hidden,
                     self.point_charpos,
                     self.scroll_policy.search_limit_lines(),
-                    byte_at_charpos,
+                    text,
                 );
                 (laid_out_rows + extra_lines, bounded)
             }
@@ -1153,7 +1166,7 @@ impl<'a, 'buf, B: LayoutBufferView> TextWindowVisibilityRetryRequest<'a, 'buf, B
                 start,
                 unsatisfied,
                 self.accessible_end,
-                byte_at_charpos,
+                text,
             ))
         };
 
@@ -1173,7 +1186,7 @@ impl<'a, 'buf, B: LayoutBufferView> TextWindowVisibilityRetryRequest<'a, 'buf, B
                 self.point_charpos,
                 lines_above_point,
                 self.accessible_start,
-                byte_at_charpos,
+                text,
             ))
             .filter(|start| *start > self.window_start)
             .or_else(|| advance(dy)),

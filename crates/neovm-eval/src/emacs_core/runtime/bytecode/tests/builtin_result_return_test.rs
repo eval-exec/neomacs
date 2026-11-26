@@ -15,6 +15,7 @@ use crate::emacs_core::eval::Context;
 use crate::emacs_core::eval::subr_abi::SubrValueExt;
 use crate::emacs_core::print::print_value;
 use neovm_value::error::{FlowRef, FlowResultExt};
+use neovm_value::intern::intern;
 use neovm_value::value::LambdaParams;
 
 /// Arm a `signal-hook-function` that records whether a backtrace frame for
@@ -74,31 +75,31 @@ fn params(n: usize) -> LambdaParams {
 }
 
 /// `(lambda (a1..an) (CALLEE a1..an))` through `Op::Call` (GNU `Bcall`).
-fn bcall_fn(callee: &str, nargs: usize) -> ByteCodeFunction {
+fn bcall_fn(callee: &'static str, nargs: usize) -> ByteCodeFunction {
     let mut f = ByteCodeFunction::new(params(nargs));
-    f.lexical = true;
+    f.set_lexical(true);
     let mut ops = vec![Op::Constant(0)];
     for _ in 0..nargs {
         ops.push(Op::StackRef(nargs as u16));
     }
     ops.push(Op::Call(nargs as u16));
     ops.push(Op::Return);
-    f.ops = ops;
-    f.constants = vec![Value::symbol(callee)].into();
-    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
+    f.set_ops(ops);
+    f.set_constants(vec![Value::from_sym_id(intern(callee))].into());
+    f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
     f
 }
 
 /// `(lambda (a [b]) (OP a [b]))` for an arithmetic opcode.
 fn arith_fn(op: Op, nargs: usize) -> ByteCodeFunction {
     let mut f = ByteCodeFunction::new(params(nargs));
-    f.lexical = true;
-    f.ops = if nargs == 2 {
+    f.set_lexical(true);
+    f.set_ops(if nargs == 2 {
         vec![Op::StackRef(1), Op::StackRef(1), op, Op::Return]
     } else {
         vec![Op::StackRef(0), op, Op::Return]
-    };
-    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(8);
+    });
+    f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(8));
     f
 }
 
@@ -158,13 +159,13 @@ fn inline_builtin_results_and_frameless_signal() {
     eval.eval_str("(insert \"abc\")").unwrap();
     install_frame_probe(&mut eval, "char-after");
     let mut f = ByteCodeFunction::new(params(1));
-    f.lexical = true;
-    f.ops = vec![
+    f.set_lexical(true);
+    f.set_ops(vec![
         Op::StackRef(0),
         Op::CallBuiltinSym(intern("char-after"), 1),
         Op::Return,
-    ];
-    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(4);
+    ]);
+    f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(4));
     assert_eq!(
         run(&mut eval, &f, vec![Value::fixnum(1)]).unwrap(),
         Value::fixnum(i64::from(b'a'))
@@ -228,9 +229,11 @@ fn spec_subr_stack_results_arity_and_signal_frame() {
         let before = eval.specpdl.len();
         let args_start = eval.bc_buf.len();
         eval.bc_buf.extend_from_slice(args);
-        let result = Vm::from_context(eval)
-            .call_spec_subr_stack(car, subr, args_start, args.len())
-            .map(rooted);
+        // SAFETY: `extend_from_slice` just staged `args` at `args_start`.
+        let result = unsafe {
+            Vm::from_context(eval).call_spec_subr_stack(car, subr, args_start, args.len())
+        }
+        .map(rooted);
         eval.bc_buf.truncate(args_start);
         assert_eq!(eval.specpdl.len(), before, "balanced specpdl");
         result
@@ -313,13 +316,13 @@ fn jit_arith_generic_results_and_frameless_signal() {
     install_frame_probe(&mut eval, "*");
     let f = arith_fn(Op::Mul, 2);
     f.jit_runtime()
-        .record_numeric(2, f.ops.len(), NumericFeedback::Other);
+        .record_numeric(2, f.ops().len(), NumericFeedback::Other);
     let leaf = compile_bytecode_function(&f).expect("compiles");
     let ctx_ptr = &mut eval as *mut Context as *mut u8;
     let big = rooted(eval.eval_str("(expt 7 60)").unwrap());
     crate::emacs_core::eval::push_scratch_gc_root(big);
     let want = rooted(eval.eval_str("(* (expt 7 60) 12)").unwrap());
-    match leaf.call(ctx_ptr, &[big, Value::fixnum(12)]) {
+    match unsafe { leaf.call(ctx_ptr, &[big, Value::fixnum(12)]) } {
         NativeRun::Ok(bits) => {
             assert_eq!(
                 print_value(&unsafe {
@@ -331,7 +334,7 @@ fn jit_arith_generic_results_and_frameless_signal() {
         }
         other => panic!("the generic site must answer natively: {other:?}"),
     }
-    match leaf.call(ctx_ptr, &[Value::symbol("a"), Value::fixnum(2)]) {
+    match unsafe { leaf.call(ctx_ptr, &[Value::symbol("a"), Value::fixnum(2)]) } {
         NativeRun::Signal => {
             let flow = take_pending_flow().expect("flow stashed");
             assert_eq!(signal_name(&Err(flow)), "wrong-type-argument");

@@ -4,9 +4,9 @@ use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 fn admission_function(argdesc: i64, max_stack: usize, bytes: Vec<u8>) -> ByteCodeFunction {
     let params = FunctionParams::try_from(Value::fixnum(argdesc)).unwrap();
     let mut func = ByteCodeFunction::new(params);
-    func.max_stack = StackDepth::for_test(max_stack);
-    func.constants = vec![Value::fixnum(42)].into();
-    func.gnu_bytecode_bytes = Some(neovm_value::tagged::header::LispByteVec::owned(bytes));
+    func.set_max_stack(StackDepth::for_test(max_stack));
+    func.set_constants(vec![Value::fixnum(42)].into());
+    func.set_gnu_bytecode_bytes(Some(neovm_value::tagged::header::LispByteVec::owned(bytes)));
     func.defer_gnu_decode();
     assert!(func.lazy_gnu_code().is_some());
     func
@@ -47,7 +47,7 @@ fn bytecode_lazy_iterative_admission_decodes_real_gnu_code_and_keeps_arity_bound
 fn bytecode_lazy_iterative_admission_checks_each_clones_environment() {
     let proto = admission_function(0, 1, vec![192, 135]);
     let mut captured = proto.clone();
-    captured.env = Some(Value::NIL);
+    captured.set_env(Some(Value::NIL));
     assert!(std::sync::Arc::ptr_eq(
         proto.lazy_gnu_code().as_ref().unwrap(),
         captured.lazy_gnu_code().as_ref().unwrap()
@@ -83,6 +83,101 @@ fn bytecode_lazy_iterative_admission_checks_each_clones_environment() {
     ));
 }
 
+/// `set_max_stack` keeps the shared cell. The cached range was published
+/// against the proof's limit, so a clone with another limit is not admitted.
+/// The run_loop entry check is `executes_verified_ops` on that clone.
+#[test]
+fn bytecode_lazy_iterative_admission_rejects_a_stale_max_stack() {
+    let proto = admission_function(0, 1, vec![192, 135]);
+    assert_eq!(proto.lazy_iterative_admission(0), Some(true));
+    let mut lowered = proto.clone();
+    lowered.set_max_stack(StackDepth::for_test(0));
+    assert!(std::sync::Arc::ptr_eq(
+        proto.lazy_gnu_code().as_ref().unwrap(),
+        lowered.lazy_gnu_code().as_ref().unwrap()
+    ));
+    assert!(!lowered.executes_verified_ops());
+    assert_eq!(
+        lowered.peek_lazy_iterative_admission(0),
+        LazyAdmissionPeek::Known(false)
+    );
+    let mut raised = proto.clone();
+    raised.set_max_stack(StackDepth::for_test(4));
+    assert!(std::sync::Arc::ptr_eq(
+        proto.lazy_gnu_code().as_ref().unwrap(),
+        raised.lazy_gnu_code().as_ref().unwrap()
+    ));
+    assert_eq!(
+        raised.peek_lazy_iterative_admission(0),
+        LazyAdmissionPeek::Known(false)
+    );
+    assert_eq!(
+        proto.peek_lazy_iterative_admission(0),
+        LazyAdmissionPeek::Known(true)
+    );
+}
+
+/// Admission is not published yet. A max_stack clone must return false
+/// without writing a refusal into the shared cell, so the prototype can
+/// still publish acceptance.
+#[test]
+fn bytecode_lazy_stale_max_stack_does_not_publish_an_admission_refusal() {
+    let mut proto = admission_function(0, 1, vec![192, 135]);
+    assert!(proto.executes_verified_ops());
+    assert!(
+        proto
+            .lazy_gnu_code()
+            .as_ref()
+            .unwrap()
+            .iterative_admission()
+            .is_none()
+    );
+    let mut lowered = proto.clone();
+    lowered.set_max_stack(StackDepth::for_test(0));
+    assert!(std::sync::Arc::ptr_eq(
+        proto.lazy_gnu_code().as_ref().unwrap(),
+        lowered.lazy_gnu_code().as_ref().unwrap()
+    ));
+    assert_eq!(lowered.lazy_iterative_admission(0), Some(false));
+    assert!(
+        proto
+            .lazy_gnu_code()
+            .as_ref()
+            .unwrap()
+            .iterative_admission()
+            .is_none(),
+        "a mismatched clone must not publish a refusal"
+    );
+    assert_eq!(proto.lazy_iterative_admission(0), Some(true));
+}
+
+/// A non-lexical named clone gains an entry depth when `set_env` captures
+/// it. The cell stays shared. The proof was computed at depth 0, so the
+/// clone is no longer verified code.
+#[test]
+fn bytecode_lazy_set_env_keeps_the_cell_and_drops_the_stale_entry_proof() {
+    crate::test_utils::init_test_tracing();
+    let mut proto = ByteCodeFunction::new(LambdaParams::simple(vec![neovm_value::intern::intern(
+        "c9-x",
+    )]));
+    proto.set_max_stack(StackDepth::for_test(1));
+    proto.set_gnu_bytecode_bytes(Some(neovm_value::tagged::header::LispByteVec::owned(vec![
+        135,
+    ])));
+    proto.defer_gnu_decode();
+    assert_eq!(proto.verifier_entry_depth(), Some(0));
+    assert!(proto.executes_verified_ops());
+    let mut captured = proto.clone();
+    captured.set_env(Some(Value::NIL));
+    assert!(std::sync::Arc::ptr_eq(
+        proto.lazy_gnu_code().as_ref().unwrap(),
+        captured.lazy_gnu_code().as_ref().unwrap()
+    ));
+    assert_eq!(captured.verifier_entry_depth(), Some(1));
+    assert!(!captured.executes_verified_ops());
+    assert!(proto.executes_verified_ops());
+}
+
 #[test]
 fn bytecode_lazy_iterative_admission_refuses_unverified_oversized_and_rest_code() {
     // An empty Return intentionally returns nil; Pop at entry really underflows.
@@ -115,9 +210,9 @@ fn bytecode_lazy_iterative_admission_restarts_when_decode_is_reinstalled() {
     assert_eq!(func.lazy_iterative_admission(0), Some(true));
     let old = func.lazy_gnu_code().as_ref().unwrap().clone();
     // Shape changes are finalized before reinstalling the GNU decode cell.
-    func.params = FunctionParams::try_from(Value::fixnum((2 << 8) | 1)).unwrap();
-    func.arglist = Value::fixnum((2 << 8) | 1);
-    func.max_stack = StackDepth::for_test(3);
+    func.set_params(FunctionParams::try_from(Value::fixnum((2 << 8) | 1)).unwrap());
+    func.set_arglist(Value::fixnum((2 << 8) | 1));
+    func.set_max_stack(StackDepth::for_test(3));
     func.restore_gnu_decode_policy().unwrap();
     let restored = func.lazy_gnu_code().as_ref().unwrap().clone();
     assert!(!std::sync::Arc::ptr_eq(&old, &restored));
@@ -196,35 +291,39 @@ fn bytecode_lazy_iterative_admission_preserves_shared_layout_and_eager_fallback(
         lazy_gnu_code: Option<std::sync::Arc<LazyGnuCode>>,
     }
     assert_eq!(
-        std::mem::offset_of!(ByteCodeFunction, ops),
+        ByteCodeFunction::offset_of_ops(),
         std::mem::offset_of!(OriginalFunction, ops)
     );
     assert_eq!(
-        std::mem::offset_of!(ByteCodeFunction, constants),
+        ByteCodeFunction::offset_of_constants(),
         std::mem::offset_of!(OriginalFunction, constants)
     );
     assert_eq!(
-        std::mem::offset_of!(ByteCodeFunction, max_stack),
+        ByteCodeFunction::offset_of_max_stack(),
         std::mem::offset_of!(OriginalFunction, max_stack)
     );
     assert_eq!(
-        std::mem::offset_of!(ByteCodeFunction, params),
+        ByteCodeFunction::offset_of_params(),
         std::mem::offset_of!(OriginalFunction, params)
     );
     assert_eq!(
-        std::mem::offset_of!(ByteCodeFunction, arglist),
+        ByteCodeFunction::offset_of_arglist(),
         std::mem::offset_of!(OriginalFunction, arglist)
     );
     assert_eq!(
-        std::mem::offset_of!(ByteCodeFunction, lexical),
+        ByteCodeFunction::offset_of_lexical(),
         std::mem::offset_of!(OriginalFunction, lexical)
     );
     assert_eq!(
-        std::mem::offset_of!(ByteCodeFunction, env),
+        ByteCodeFunction::offset_of_env(),
         std::mem::offset_of!(OriginalFunction, env)
     );
     assert_eq!(
-        std::mem::offset_of!(ByteCodeFunction, gnu_bytecode_bytes),
+        ByteCodeFunction::offset_of_gnu_byte_offset_map(),
+        std::mem::offset_of!(OriginalFunction, gnu_byte_offset_map)
+    );
+    assert_eq!(
+        ByteCodeFunction::offset_of_gnu_bytecode_bytes(),
         std::mem::offset_of!(OriginalFunction, gnu_bytecode_bytes)
     );
     assert_eq!(
@@ -235,4 +334,113 @@ fn bytecode_lazy_iterative_admission_preserves_shared_layout_and_eager_fallback(
     require_shared::<LazyGnuCode>();
     let eager = ByteCodeFunction::new(LambdaParams::simple(vec![]));
     assert_eq!(eager.lazy_iterative_admission(0), None);
+}
+
+/// The peek answers exactly what the probe answers without writing, and
+/// reports `Unknown` only where the probe would initialize the shared cell.
+/// It never decodes, verifies or publishes, so a parallel owner can classify
+/// a call to a function another owner is running.
+#[test]
+fn bytecode_the_admission_peek_answers_like_the_probe_without_writing() {
+    let func = admission_function((2 << 8) | 1, 3, vec![192, 135]);
+    let lazy = func.lazy_gnu_code().as_ref().unwrap();
+    let cold =
+        |lazy: &LazyGnuCode| lazy.decoded().is_none() && lazy.iterative_admission().is_none();
+    // Wrong arity is a pure refusal; an admissible arity needs the cell.
+    assert_eq!(
+        func.peek_lazy_iterative_admission(0),
+        LazyAdmissionPeek::Known(false)
+    );
+    assert_eq!(
+        func.peek_lazy_iterative_admission(3),
+        LazyAdmissionPeek::Known(false)
+    );
+    assert_eq!(
+        func.peek_lazy_iterative_admission(1),
+        LazyAdmissionPeek::Unknown
+    );
+    assert!(cold(lazy), "the peek decoded or published");
+    assert_eq!(
+        crate::emacs_core::bytecode::Vm::iterative_admission_if_known(&func, 1),
+        None
+    );
+    assert!(
+        cold(lazy),
+        "iterative_admission_if_known decoded or published"
+    );
+    // The probe initializes; the peek then reads the published answer.
+    assert_eq!(func.lazy_iterative_admission(1), Some(true));
+    for (nargs, admitted) in [(0, false), (1, true), (2, true), (3, false)] {
+        assert_eq!(
+            func.peek_lazy_iterative_admission(nargs),
+            LazyAdmissionPeek::Known(admitted)
+        );
+        assert_eq!(
+            crate::emacs_core::bytecode::Vm::iterative_admission_if_known(&func, nargs),
+            Some(admitted)
+        );
+        assert_eq!(func.lazy_iterative_admission(nargs), Some(admitted));
+    }
+    // A captured clone is refused without touching the shared cell.
+    let fresh = admission_function(0, 1, vec![192, 135]);
+    let mut captured = fresh.clone();
+    captured.set_env(Some(Value::NIL));
+    assert_eq!(
+        captured.peek_lazy_iterative_admission(0),
+        LazyAdmissionPeek::Known(false)
+    );
+    assert!(cold(fresh.lazy_gnu_code().as_ref().unwrap()));
+}
+
+/// Over the refusal shapes, whatever the peek knows before the probe runs is
+/// what the probe then answers, and its `Unknown` becomes the probe's
+/// published answer.
+#[test]
+fn bytecode_the_admission_peek_agrees_with_the_probe_on_every_shape() {
+    let shapes = [
+        admission_function(0, 1, vec![192, 135]),
+        admission_function((2 << 8) | 1, 3, vec![192, 135]),
+        // Unverified: Pop at entry underflows.
+        admission_function(0, 1, vec![136, 135]),
+        admission_function(
+            0,
+            StackDepth::ITERATIVE_FRAME_LIMIT.get() + 1,
+            vec![192, 135],
+        ),
+        // &rest.
+        admission_function(128, 2, vec![192, 135]),
+    ];
+    for (index, func) in shapes.iter().enumerate() {
+        for nargs in 0..4 {
+            let before = func.peek_lazy_iterative_admission(nargs);
+            let probe = func.lazy_iterative_admission(nargs).expect("lazy code");
+            let after = func.peek_lazy_iterative_admission(nargs);
+            match before {
+                LazyAdmissionPeek::Known(admitted) => {
+                    assert_eq!(admitted, probe, "shape {index} nargs {nargs}")
+                }
+                LazyAdmissionPeek::Unknown => {}
+                LazyAdmissionPeek::Eager => panic!("shape {index} is lazy"),
+            }
+            assert_eq!(
+                after,
+                LazyAdmissionPeek::Known(probe),
+                "shape {index} nargs {nargs}"
+            );
+        }
+    }
+    // Eager code has no lazy contract; the eager predicate decides.
+    let eager = ByteCodeFunction::new(FunctionParams::try_from(Value::fixnum(0)).unwrap());
+    assert_eq!(
+        eager.peek_lazy_iterative_admission(0),
+        LazyAdmissionPeek::Eager
+    );
+    assert_eq!(
+        crate::emacs_core::bytecode::Vm::iterative_admission_if_known(&eager, 0),
+        Some(
+            crate::emacs_core::bytecode::Vm::can_enter_eager_interpreter_frame_iteratively(
+                &eager, 0
+            )
+        )
+    );
 }

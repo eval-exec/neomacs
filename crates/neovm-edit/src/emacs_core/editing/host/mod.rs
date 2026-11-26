@@ -173,6 +173,20 @@ pub trait EditHost {
     /// the forwarding live on the host, where the symbol table is. C2.
     fn inhibit_modification_hooks(&self) -> bool;
 
+    /// The partial-width half of GNU `scan_for_column`'s `lines_truncated`
+    /// (`src/indent.c:629-643`): true when `truncate-lines` is nil but the
+    /// window GNU would pick with `Fget_buffer_window (buffer, nil)` is a
+    /// partial-width window and `truncate-partial-width-windows` truncates
+    /// it. nil ALL-FRAMES means "the selected frame and no others"
+    /// (`src/window.c:3314-3326`), preferring the selected window.
+    ///
+    /// The default `false` is GNU's no-window answer: a host with no window
+    /// information still applies the buffer's `truncate-lines` alone (the
+    /// caller checks that slot), so `None` must not disable the shortcut.
+    fn long_line_partial_width_truncation(&self, _buffer_id: BufferId) -> bool {
+        false
+    }
+
     /// GNU's visible variable read by id in the lexical-then-visible
     /// order (`find_symbol_value` through the lexenv cache): the read
     /// the buffer-access property gate uses for its policy variables.
@@ -206,6 +220,12 @@ pub trait EditHost {
     /// returned borrow across a `&mut self` host call is a compile
     /// error — that is the safety property the API exists for. M3b.
     fn expect_lisp_string<'a>(&'a self, value: Value) -> Result<&'a LispString, Flow>;
+
+    /// Mint a shared heap capability token tied to `&self` (Phase 1c).
+    fn heap_ref(&self) -> neovm_value::tagged::gc::HeapRef<'_>;
+
+    /// Mint an exclusive heap capability token tied to `&mut self` (Phase 1c).
+    fn heap_mut(&mut self) -> neovm_value::tagged::gc::HeapMut<'_>;
 
     /// GNU's native error template path: doprnt translation with
     /// `text-quoting-style` applied (eval.c:2285-2287 through
@@ -378,6 +398,13 @@ pub trait EditHost {
     /// DISJOINT field borrows. Open in the narrowest scope the body
     /// allows.
     fn edit_and_vars(&mut self) -> (&mut EditRuntime, Self::Vars<'_>);
+
+    /// Non-swappable edit-phase capability: an [`EditRuntimeMut`] view and
+    /// its variable-read view, from DISJOINT field borrows.
+    fn edit_view_and_vars(&mut self) -> (crate::buffer::EditRuntimeMut<'_>, Self::Vars<'_>) {
+        let (edit, vars) = self.edit_and_vars();
+        (crate::buffer::EditRuntimeMut::new(edit), vars)
+    }
 
     // -------------------------------------------------------------------------
     // display/system queries (stage-3 display-seam lane: C4b, C5, C15)

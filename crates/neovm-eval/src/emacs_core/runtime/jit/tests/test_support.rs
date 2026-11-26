@@ -18,15 +18,15 @@ pub(crate) fn settle(ctx: *mut Context) {
 }
 
 pub(crate) fn prepare_entry(ctx: *mut Context, f: &ByteCodeFunction) {
-    super::cache::prepare_entry_for_test(ctx, f);
+    unsafe { super::cache::prepare_entry_for_test(ctx, f) };
 }
 
 pub(crate) fn prepare_osr(ctx: *mut Context, f: &ByteCodeFunction, pc: usize) {
-    super::cache::prepare_osr_for_test(ctx, f, pc);
+    unsafe { super::cache::prepare_osr_for_test(ctx, f, pc) };
 }
 
 pub(crate) fn prepare_upgrade(ctx: *mut Context, f: &ByteCodeFunction) {
-    super::cache::prepare_upgrade_for_test(ctx, f);
+    unsafe { super::cache::prepare_upgrade_for_test(ctx, f) };
 }
 
 /// Observe one native entry. Only an unexecuted pending result is awaited;
@@ -93,7 +93,7 @@ pub(crate) fn resolve_leaf(
     ctx: *mut Context,
     f: &ByteCodeFunction,
 ) -> Option<*const super::compile::CompiledLeaf> {
-    let first = super::cache::resolve_compiled_leaf_ptr(ctx, f);
+    let first = unsafe { super::cache::resolve_compiled_leaf_ptr(ctx, f) };
     if first.is_some() {
         return first;
     }
@@ -108,7 +108,7 @@ pub(crate) fn resolve_leaf(
             super::bg::quiesce_for_test(Duration::from_secs(60)),
             "first-sight backend readiness timed out"
         );
-        super::cache::resolve_compiled_leaf_ptr(ctx, f)
+        unsafe { super::cache::resolve_compiled_leaf_ptr(ctx, f) }
     } else {
         first
     }

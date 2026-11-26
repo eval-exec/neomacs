@@ -35,6 +35,7 @@ fn popup_menu_disabled_submenu_dims_its_arrow() {
             .begin_draw(neomacs_renderer_wgpu::renderer::RenderTarget::new(
                 &h.view, surface,
             ))
+            .expect("live device draw parameters")
             .paint_menu(
                 &MenuPanelPaint {
                     panel: &panel,
@@ -101,6 +102,7 @@ fn popup_menu_toggle_and_radio_states_have_distinct_indicator_pixels() {
             .begin_draw(neomacs_renderer_wgpu::renderer::RenderTarget::new(
                 &h.view, surface,
             ))
+            .expect("live device draw parameters")
             .paint_menu(
                 &MenuPanelPaint {
                     panel: &panel,
@@ -196,6 +198,7 @@ fn popup_initial_cjk_spacing_matches_real_font_and_leaves_shortcut_gap() {
         .begin_draw(neomacs_renderer_wgpu::renderer::RenderTarget::new(
             &h.view, surface,
         ))
+        .expect("live device draw parameters")
         .paint_menu(
             &MenuPanelPaint {
                 panel: &panel,
@@ -364,4 +367,168 @@ fn assert_menu_heading_pixels(compact: bool) {
         first == second,
         "repeated CJK heading glyphs must be one real-font advance apart"
     );
+}
+
+fn menu_heading_at(
+    h: &mut Harness,
+    fonts: &mut neomacs_layout_engine::font::metrics::FontMetricsService,
+    x: f32,
+    height: f32,
+    padding: f32,
+) -> neomacs_display_protocol::frame_chrome::PositionedMenuHeading {
+    use neomacs_display_protocol::frame_chrome::{
+        MenuHeadingText, PositionedMenuHeading, ResolvedMenuLabel,
+    };
+    PositionedMenuHeading::measure(
+        neomacs_display_protocol::MenuBarItem {
+            index: 0,
+            key: "file".into(),
+            label: "HHH".into(),
+        },
+        x,
+        height,
+        padding,
+        |text| {
+            let size = h.atlas.default_font_size();
+            let (glyphs, resolved) = fonts
+                .resolved_glyphs_for_cluster(text, "monospace", 400, false, size)
+                .expect("monospace font for chrome menu text");
+            MenuHeadingText::Pixels(ResolvedMenuLabel::new(glyphs, resolved, size))
+        },
+    )
+}
+
+fn paint_heading_band(
+    h: &mut Harness,
+    items: &[neomacs_display_protocol::frame_chrome::PositionedMenuHeading],
+    band_y: f32,
+    band_height: f32,
+) {
+    h.renderer.render_menu_bar(
+        &h.view,
+        items,
+        FrameRect::new(0.0, band_y, 40.0, band_height).expect("menu band"),
+        (1.0, 1.0, 1.0),
+        (0.0, 0.0, 0.0),
+        None,
+        None,
+        &mut h.atlas,
+        W,
+        H,
+    );
+}
+
+/// Menu-bar labels are pre-rasterized textures placed at a fractional logical
+/// origin (centered band + accumulated advances).  They must be placed on the
+/// device-pixel grid like row text, so the label render is pixel-identical to
+/// the same label whose origin was already integral (the reference render,
+/// one whole device pixel down and right); pre-fix the linear sampler
+/// resampled the texture and the two differed.
+#[test]
+fn menu_bar_text_origin_is_device_pixel_aligned_at_fractional_scales() {
+    use neomacs_display_protocol::frame_chrome::MenuHeadingText;
+    use neomacs_renderer_wgpu::renderer::snap_overlay_glyph_origin;
+
+    for scale in [1.0_f32, 1.25, 1.5, 1.7, 2.0] {
+        let mut fixed =
+            try_harness().expect("menu text pixel test requires an offscreen GPU adapter");
+        fixed.renderer.set_scale_factor(scale);
+        fixed.atlas.set_scale_factor(scale);
+        let font_size = fixed.atlas.default_font_size();
+        let band_height = font_size + 5.0;
+        let padding = 4.0;
+        let mut fonts = neomacs_layout_engine::font::metrics::FontMetricsService::new();
+
+        let heading = menu_heading_at(&mut fixed, &mut fonts, 0.0, band_height, padding);
+        let text_x = padding;
+        let text_y = (band_height - font_size) / 2.0;
+        let label = match heading.text() {
+            MenuHeadingText::Pixels(label) => label,
+            _ => unreachable!("pixel menu heading"),
+        };
+        let handles = fixed
+            .atlas
+            .menu_label_atlas(label, fixed.renderer.device(), fixed.renderer.queue())
+            .expect("composed menu label atlas");
+        assert!(!handles.is_empty(), "label must rasterize at scale {scale}");
+        let metrics = handles[0].entry.metrics();
+        let ascent = fixed.atlas.default_font_ascent();
+
+        // Integral device-pixel origin the fix must land on.
+        let (snapped_x, snapped_y) = snap_overlay_glyph_origin(
+            text_x,
+            text_y,
+            metrics.bearing_x,
+            metrics.bearing_y,
+            ascent,
+            scale,
+        );
+        let physical_x = snapped_x * scale;
+        let physical_y = snapped_y * scale;
+        assert!(
+            (physical_x - physical_x.round()).abs() < 1e-3
+                && (physical_y - physical_y.round()).abs() < 1e-3,
+            "menu text origin ({physical_x},{physical_y}) is off the device grid at scale {scale}"
+        );
+
+        // Reference: the same label shifted so its unsnapped origin is an
+        // integral device position.  The correction is sub-pixel and can be
+        // negative, but chrome rects require non-negative origins, so add one
+        // whole device pixel; the reference is then the fixed render shifted
+        // by exactly one physical pixel.
+        let unsnapped_x = text_x + metrics.bearing_x / scale;
+        let unsnapped_y = text_y + ascent - metrics.bearing_y / scale;
+        let device_pixel = 1.0 / scale;
+        let reference_shift_x = snapped_x - unsnapped_x + device_pixel;
+        let reference_shift_y = snapped_y - unsnapped_y + device_pixel;
+        assert!(
+            reference_shift_x >= 0.0 && reference_shift_y >= 0.0,
+            "reference shift must keep chrome rect origins non-negative at scale {scale}: \
+             ({reference_shift_x},{reference_shift_y})"
+        );
+
+        paint_heading_band(&mut fixed, std::slice::from_ref(&heading), 0.0, band_height);
+        let rendered = read_back(&fixed);
+
+        let mut reference = try_harness().expect("reference menu text harness");
+        reference.renderer.set_scale_factor(scale);
+        reference.atlas.set_scale_factor(scale);
+        let mut reference_fonts = neomacs_layout_engine::font::metrics::FontMetricsService::new();
+        let reference_heading = menu_heading_at(
+            &mut reference,
+            &mut reference_fonts,
+            reference_shift_x,
+            band_height,
+            padding,
+        );
+        paint_heading_band(
+            &mut reference,
+            std::slice::from_ref(&reference_heading),
+            reference_shift_y,
+            band_height,
+        );
+        let reference_pixels = read_back(&reference);
+
+        // Compare the painted band in physical pixels; the sub-pixel band
+        // shift can leave the outermost rows unpainted in one of the renders.
+        let width = (heading.local_bounds().raw().width * scale).ceil() as u32;
+        let rows = (band_height * scale).floor() as u32;
+        let mut compared = 0;
+        let mut ink = false;
+        for y in 1..rows.saturating_sub(1).min(H - 2) {
+            for x in 0..width.min(W - 2) {
+                let got = px(&rendered, x, y);
+                // The reference is one whole device pixel down and right.
+                let want = px(&reference_pixels, x + 1, y + 1);
+                assert_eq!(
+                    got, want,
+                    "menu text is resampled at ({x},{y}) scale {scale}: got {got:?}, reference {want:?}"
+                );
+                ink |= got[0] > 32;
+                compared += 1;
+            }
+        }
+        assert!(compared > 0, "the label band must be inspected");
+        assert!(ink, "menu label ink must render at scale {scale}");
+    }
 }

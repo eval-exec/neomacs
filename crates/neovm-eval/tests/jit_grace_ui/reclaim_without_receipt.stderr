@@ -1,0 +1,15 @@
+error[E0061]: this function takes 1 argument but 0 arguments were supplied
+ --> $WORKSPACE/crates/neovm-eval/tests/jit_grace_ui/reclaim_without_receipt.rs
+  |
+  |     neovm_eval::emacs_core::jit::cache::reclaim_with_receipt();
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^-- argument #1 of type `JitGracePeriod` is missing
+  |
+note: function defined here
+ --> $WORKSPACE/crates/neovm-eval/src/emacs_core/runtime/jit/cache.rs
+  |
+  | pub fn reclaim_with_receipt(receipt: JitGracePeriod) {
+  |        ^^^^^^^^^^^^^^^^^^^^
+help: provide the argument
+  |
+3 |     neovm_eval::emacs_core::jit::cache::reclaim_with_receipt(/* JitGracePeriod */);
+  |                                                              ++++++++++++++++++++

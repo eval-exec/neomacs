@@ -4,7 +4,7 @@ use super::*;
 use crate::emacs_core::eval::{
     push_scratch_gc_root, restore_scratch_gc_roots, save_scratch_gc_roots,
 };
-use crate::emacs_core::intern::{intern_uninterned, is_canonical_id};
+use crate::emacs_core::intern::{is_canonical_id, make_uninterned_symbol};
 use crate::emacs_core::value::{HashTableTest, LispHashTable};
 
 struct ScratchRoots(usize);
@@ -41,11 +41,11 @@ fn weak_symbol_key_survives_full_collections(mapped: bool, with_position: bool) 
         heap.alloc_vector(vec![TaggedValue::NIL])
     };
     roots.keep(owner);
-    heap.collect_exact(std::iter::once(owner));
+    heap.collect_rooted(std::iter::once(owner));
     assert!(heap.dump_blackened_for_test());
     assert!(!heap.mapped_remembered_contains_for_test(owner.bits()));
 
-    let id = intern_uninterned("u34-review-weak-symbol-key");
+    let id = make_uninterned_symbol("u34-review-weak-symbol-key");
     assert!(!is_canonical_id(id));
     let symbol = TaggedValue::from_sym_id(id);
     let strong_value = if with_position {
@@ -74,14 +74,14 @@ fn weak_symbol_key_survives_full_collections(mapped: bool, with_position: bool) 
         );
     });
     for _ in 0..3 {
-        heap.collect_exact([owner, table].into_iter());
+        heap.collect_rooted([owner, table].into_iter());
         assert_eq!(
             table.as_hash_table().unwrap().data.len(),
             1,
             "the strong owner must keep its uninterned weak key alive"
         );
         assert!(heap.marked_symbols_contains_for_test(id));
-        assert_eq!(owner.as_vector_data().unwrap().as_slice()[0], strong_value);
+        assert_eq!(owner.as_vector_data().unwrap().at(0), strong_value);
         assert!(heap.current_mutator_remset_empty_for_test());
     }
 }

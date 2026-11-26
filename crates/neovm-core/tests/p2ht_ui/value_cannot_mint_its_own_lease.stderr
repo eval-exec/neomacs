@@ -2,14 +2,14 @@ error[E0308]: mismatched types
  --> tests/p2ht_ui/value_cannot_mint_its_own_lease.rs:9:34
   |
 9 |     let _lease = TableRef::enter(&mut table, table);
-  |                  --------------- ^^^^^^^^^^ expected `&mut RunAccess<'_, '_>`, found `&mut TaggedValue`
+  |                  --------------- ^^^^^^^^^^ expected `&RunAccess<'_, '_>`, found `&mut TaggedValue`
   |                  |
   |                  arguments to this function are incorrect
   |
-  = note: expected mutable reference `&mut RunAccess<'_, '_>`
-             found mutable reference `&mut TaggedValue`
+  = note:      expected reference `&RunAccess<'_, '_>`
+          found mutable reference `&mut TaggedValue`
 note: associated function defined here
  --> $WORKSPACE/crates/neovm-value/src/tagged/gc/mutator_registration/table_authority.rs
   |
-  |     pub fn enter(
+  |     pub fn enter<'a>(
   |            ^^^^^

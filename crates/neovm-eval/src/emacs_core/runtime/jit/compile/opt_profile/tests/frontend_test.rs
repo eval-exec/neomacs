@@ -123,10 +123,12 @@ fn opt_profile_lists20_keeps_numeric_mir_and_selects_hot_mutating_parameter_loop
     let pair = Value::cons(Value::make_int(-1), Value::NIL);
     crate::emacs_core::eval::push_scratch_gc_root(pair);
     assert_eq!(
-        selected.call(
-            &mut context as *mut Context as *mut u8,
-            &[pair, Value::make_int(4)]
-        ),
+        unsafe {
+            selected.call(
+                &mut context as *mut Context as *mut u8,
+                &[pair, Value::make_int(4)],
+            )
+        },
         NativeRun::Ok(Value::make_int(4).bits())
     );
     assert_eq!(pair.cons_car(), Value::make_int(3));

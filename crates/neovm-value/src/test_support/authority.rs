@@ -2,8 +2,7 @@
 //!
 //! This module may be named only from `crates/neovm-core/core_tests/**`; the
 //! architecture TA2 guard rejects every `src/**` or `tests/**` reference.
-//! Each FENCE item here is one row of `AUTHORITY-ITEMS.tsv`, signed before
-//! code. The fence re-exports existing drivers and hooks with their bodies and
+//! The fence re-exports existing drivers and hooks with their bodies and
 //! contracts unchanged, and never widens an original path, so a compile-fail
 //! fixture that names the original item keeps failing. This module also
 //! carries VIS re-exports (the catalog-waits observer fn and its snapshot
@@ -42,8 +41,9 @@ thread_local! {
 /// RAII, `!Send`.
 ///
 /// `install` boxes a fresh `TaggedHeap` and installs its root into the
-/// thread's allocation slot via `set_tagged_heap_root` (the production
-/// root-owning installer). `Drop` restores the previous slot value in LIFO
+/// thread's allocation slot via [`crate::tagged::gc::NestedTaggedHeapInstall`]
+/// (which calls the production root-owning installer). `Drop` restores the
+/// previous slot value in LIFO
 /// order (a panic inside the scope therefore restores it during unwinding)
 /// and RETIRES the scope heap into this thread's graveyard; the graveyard
 /// frees retired heaps only when the thread exits. Freeing at scope end would
@@ -66,12 +66,13 @@ thread_local! {
 /// identities with `RegistrationError::WrongHeap`. A foreign word is safe to
 /// carry, but it never roots the foreign object in this heap.
 ///
-/// The TLS store is the fence's authority: AUTHORITY-ITEMS row
-/// `TestHeapScope::install`. `set_tagged_heap` itself gains no new row.
+/// The TLS store is the fence's authority: `TestHeapScope::install`.
+/// `set_tagged_heap` itself gains no new route.
 pub struct TestHeapScope {
-    /// The slot value before this scope installed; `None` means the thread had
-    /// no heap (the common case in a re-homed test).
-    previous: Option<std::ptr::NonNull<crate::tagged::gc::TaggedHeap>>,
+    /// Saves and restores the previous slot. Ended explicitly in `Drop`
+    /// before the scope heap is retired, so the slot no longer names that
+    /// heap when it leaves the mutator.
+    nest: crate::tagged::gc::NestedTaggedHeapInstall<'static>,
     /// The owned heap. `AliasableBox` gives the stable provenance root the
     /// TLS slot names. `ManuallyDrop` is load-bearing: `Drop` never frees the
     /// heap, it retires it into [`TEST_HEAP_GRAVEYARD`].
@@ -86,11 +87,12 @@ impl TestHeapScope {
     #[doc(hidden)]
     pub fn install() -> Self {
         let heap = crate::tagged::gc::AliasableBox::new(crate::tagged::gc::TaggedHeap::new());
-        let root = heap.root();
-        let previous = crate::tagged::gc::installed_tagged_heap_root_for_test_scope();
-        crate::tagged::gc::set_tagged_heap_root(root);
+        // SAFETY: this scope owns the AliasableBox and ends `nest` in Drop
+        // before retiring `heap`. Any displaced outer root stays live until
+        // this scope drops.
+        let nest = unsafe { crate::tagged::gc::NestedTaggedHeapInstall::install_bare(heap.root()) };
         Self {
-            previous,
+            nest,
             heap: std::mem::ManuallyDrop::new(heap),
             _not_send: std::marker::PhantomData,
         }
@@ -107,15 +109,16 @@ impl TestHeapScope {
 
 impl Drop for TestHeapScope {
     fn drop(&mut self) {
-        match self.previous {
-            // LIFO: the slot goes back to the outer/default installation,
-            // re-deriving the TLS mirrors from that live root.
-            Some(previous) => crate::tagged::gc::set_tagged_heap_root(previous),
-            // No previous heap: uninstall this scope's heap through the
-            // detach-then-pointer-checked-clear path, so the slot and every
-            // hot-path mirror stop naming it. The heap stays allocated.
-            None => crate::tagged::gc::clear_tagged_heap_if_installed(&self.heap),
+        if self.nest.replaced_empty_slot() {
+            // No previous heap: uninstall through the detach-then-pointer
+            // checked clear before the nest's pointer restore. The heap stays
+            // allocated. `end` then sees a slot that no longer names it.
+            // SAFETY: `TestHeapScope::drop` is retiring this standalone test heap.
+            unsafe { crate::tagged::gc::clear_tagged_heap_if_installed(&self.heap) };
         }
+        // LIFO when a previous root was saved: the nest reinstalls it.
+        // Either way the slot must not name this heap before retirement.
+        self.nest.end();
         // SAFETY: `install` initialized the field and this is its only move.
         let heap = unsafe { std::mem::ManuallyDrop::take(&mut self.heap) };
         retire_to_graveyard(heap);
@@ -264,6 +267,20 @@ pub type WeakPolicyCase = crate::tagged::gc::mutator_registration::WeakPolicyCas
 ))]
 pub type WeakPolicyHost<'a, 'heap, K> =
     crate::tagged::gc::mutator_registration::WeakPolicyHost<'a, 'heap, K>;
+
+/// E3 slice 1 stopped-major fixtures: resource handles, explicit-ephemeron
+/// registries, and their post-job drains. The Context, admission, and the
+/// real `AllStopped` job stay in the core shell; these items only prepare the
+/// value-private fixture and assert the stopped major's observable effects.
+#[cfg(all(
+    any(test, feature = "test-support"),
+    not(feature = "gc-memory-telemetry")
+))]
+pub use crate::tagged::gc::mutator_registration::{
+    StoppedAdapterEphemeronFixture, StoppedAdapterResourceFixture,
+    assert_stopped_adapter_ephemerons, assert_stopped_adapter_resources,
+    prepare_stopped_adapter_ephemerons, prepare_stopped_adapter_resources,
+};
 
 /// C5 intern-growth AUTHORITY fence (LEAD 05:3xZ; peer B2 host ruling).
 ///
@@ -431,10 +448,10 @@ pub fn registry_first_chunk_word_for_test<'heap, K: crate::tagged::gc::EraKeeper
     crate::tagged::gc::mutator_registration::test_fences::registry_first_chunk_word_for_test(era)
 }
 
-/// FENCE (peer-signed A composite; peer #1482 condition 3 audit): wait on
-/// the registry's resume-debt event, then run `body` with a run admitted
-/// under the predicate gate. The Mutator registry field, park ticket,
-/// registry guard, live phase word and resume wait never cross.
+/// FENCE (peer-signed A composite; peer #1482 condition 3 audit): run `body`
+/// on a slice admitted by `Mutator::run_access_after_resume_drain`. The
+/// Mutator registry field, park ticket, registry guard, live phase word and
+/// resume wait stay inside that cold API.
 pub fn with_registry_admission_gate_for_test<'era, R>(
     owner: &mut crate::tagged::gc::mutator_registration::Mutator<'era>,
     body: impl FnMut(
@@ -510,8 +527,8 @@ pub fn function(error: &crate::tagged::gc::mutator_registration::FunctionError) 
 /// only public path.
 pub use crate::tagged::gc::mutator_registration::test_fences::{
     AdmissionProbeGuard, AdmissionProbeState, AuthorityProbeGuard, AuthorityProbeState,
-    KeeperTableScope, begin_restore_retry_for_test, poison_registry_for_test,
-    reset_catalog_waits_for_test,
+    KeeperTableScope, begin_restore_retry_for_test, gate_contention_for_test,
+    install_restore_gate_hook_for_test, poison_registry_for_test, reset_catalog_waits_for_test,
 };
 
 /// Peer-signed MEMQ-TAIL-SHAPES (b): closure-scoped stopped-tables install.
@@ -556,7 +573,9 @@ pub unsafe fn hold_admission_for_test<'a>(
     permit: &'a crate::tagged::gc::mutator_registration::MutatorPermit<'_>,
     state: AdmissionProbeState,
 ) -> AdmissionProbeGuard<'a> {
-    permit.hold_admission_for_test(state)
+    // SAFETY: callers of this test-only entry point hold the owner admission
+    // contract required by `MutatorPermit::hold_admission_for_test`.
+    unsafe { permit.hold_admission_for_test(state) }
 }
 
 /// C1 FENCE for the re-homed lifecycle tests: mint this owner's young worker
@@ -888,7 +907,8 @@ pub unsafe fn plant_scalar_root_for_test(
     root: &crate::tagged::gc::mutator_registration::OwnerRootSlot<'_>,
     value: crate::tagged::value::TaggedValue,
 ) {
-    run.plant_scalar_root_for_test(root, value);
+    // SAFETY: upheld by caller contract.
+    unsafe { run.plant_scalar_root_for_test(root, value) };
 }
 
 /// Value-FENCE row (REGWAIT-GAP): retrying activation for the relocated

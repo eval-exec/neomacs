@@ -446,6 +446,55 @@ fn window_close_preserves_frame_id_for_keyboard_owner() {
 }
 
 #[test]
+fn application_quit_preserves_native_nonkey_provenance_and_source_frame() {
+    // GNU -[EmacsApp terminate:] posts NS_NONKEY_EVENT/KEY_NS_POWER_OFF,
+    // with its source frame (nsterm.m:6588-6604). Menu Quit must not be
+    // interpreted through a user's separately configurable Super-Q binding.
+    for frame in [0, 42, 0x1_0000_0000] {
+        let event = convert_display_event(&DisplayEvent::ApplicationQuit {
+            emacs_frame_id: frame,
+        });
+        match event {
+            Some(KbInputEvent::NativeNonKey {
+                kind,
+                emacs_frame_id,
+            }) => {
+                assert_eq!(kind, keyboard::NativeNonKeyKind::PowerOff);
+                assert_eq!(emacs_frame_id, frame);
+            }
+            other => panic!("application Quit lost its non-key event: {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn physical_super_q_remains_distinct_from_application_quit() {
+    let event = convert_display_event(&DisplayEvent::Key {
+        key: keyboard::FrontendKey::Character('q'),
+        modifiers: neomacs_display_protocol::modifier_policy::TransportModifierBit::Super.mask(),
+        pressed: true,
+        emacs_frame_id: 42,
+    });
+    match event {
+        Some(KbInputEvent::KeyPress {
+            key,
+            emacs_frame_id,
+        }) => {
+            assert_eq!(key.key, keyboard::Key::Char('q'));
+            assert_eq!(
+                key.modifiers,
+                keyboard::Modifiers {
+                    super_: true,
+                    ..keyboard::Modifiers::none()
+                }
+            );
+            assert_eq!(emacs_frame_id, 42);
+        }
+        other => panic!("physical Super-Q changed its keyboard identity: {other:?}"),
+    }
+}
+
+#[test]
 fn monitor_changes_convert_to_core_monitor_snapshot() {
     let display_event = DisplayEvent::MonitorsChanged {
         monitors: vec![DisplayMonitorInfo {

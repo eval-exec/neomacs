@@ -373,7 +373,9 @@ define_class!(
             let this = self.retain();
             let completion = RcBlock::new(move |result: *mut AnyObject, error: *mut NSError| {
                 run_objc_callback(|| {
-                    let probe = classify_focus_probe(result, error);
+                    // SAFETY: WebKit passes live Objective-C object pointers (or nil)
+                    // for the duration of the completion handler.
+                    let probe = unsafe { classify_focus_probe(result, error) };
                     let now = this.ivars().host_epoch.get();
                     match route_key(probe, sent, now) {
                         KeyRoute::Emacs => {
@@ -411,7 +413,10 @@ define_class!(
 /// the function and return anything.  WebKit bridges JavaScript Booleans to
 /// `CFBoolean`, which is an `NSNumber` subclass but has a distinct Core
 /// Foundation type ID; ordinary numeric zero and one are not accepted.
-fn classify_focus_probe(result: *mut AnyObject, error: *mut NSError) -> FocusProbe {
+/// # Safety
+/// `result` and `error` must each be null or point to a live Objective-C object
+/// valid for the duration of this call.
+unsafe fn classify_focus_probe(result: *mut AnyObject, error: *mut NSError) -> FocusProbe {
     if !error.is_null() {
         return FocusProbe::Failed;
     }

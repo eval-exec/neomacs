@@ -106,7 +106,7 @@ fn interruption_keeps_claimed_owner_roots(origin: InterruptionOrigin) {
 
     let mut owner =
         Context::new_with_threading(ThreadingMode::Green, crate::test_utils::unit_runtime());
-    let baton = owner.start_green_runtime().unwrap();
+    let baton = TurnRight::from(owner.start_green_runtime().unwrap());
     let (key, claim, access) = owner.with_green_runtime(|runtime| {
         let mut roots = runtime.parked.borrow_mut();
         let prepared = baton.prepare_parked_batch(&owner.tagged_heap, 0).unwrap();
@@ -399,7 +399,7 @@ fn late_actor_observation_cannot_reopen_a_native_settled_parent() {
     use crate::emacs_core::eval::{Context, ThreadingMode};
     let mut owner =
         Context::new_with_threading(ThreadingMode::Green, crate::test_utils::unit_runtime());
-    let baton = owner.start_green_runtime().unwrap();
+    let baton = TurnRight::from(owner.start_green_runtime().unwrap());
     let key = owner.with_green_runtime(|runtime| {
         let mut roots = runtime.parked.borrow_mut();
         let prepared = baton.prepare_parked_batch(&owner.tagged_heap, 0).unwrap();

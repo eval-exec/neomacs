@@ -1,4 +1,5 @@
 use super::*;
+use neovm_value::intern::intern;
 
 use neovm_display::window::DisplayFrameManagerExt;
 use neovm_edit::emacs_core::display_metrics::WindowId;
@@ -74,6 +75,84 @@ fn put_and_get_text_property() {
         }
         other => panic!("Expected Symbol(bold), got {:?}", other),
     }
+}
+
+/// GNU `buffer_intervals` reports tree PRESENCE, not "has a property".
+/// `remove-text-properties` validates with `soft` and never creates the root
+/// (`src/textprop.c:1607`, `:1619`), so removing the last property leaves the
+/// tree in place; only deleting the whole text sets it to NULL
+/// (`src/intervals.c:1324-1346`).  `current-column` dispatches on this state
+/// (`src/indent.c:365-370`), so the lifecycle is observable.
+#[test]
+fn interval_tree_presence_outlives_property_removal_like_gnu() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = eval_with_text("hello");
+    let buffer_id = eval
+        .edit
+        .buffers
+        .current_buffer_id()
+        .expect("current buffer");
+    let present = |eval: &Context| {
+        eval.edit
+            .buffers
+            .get(buffer_id)
+            .expect("buffer")
+            .text_props_tree_present()
+    };
+    assert!(!present(&eval), "a fresh buffer has no interval tree");
+    eval.eval_str("(put-text-property 1 2 'face 'bold)")
+        .expect("create the interval tree");
+    assert!(present(&eval), "the first property store creates the tree");
+    eval.eval_str("(remove-text-properties 1 2 '(face nil))")
+        .expect("remove the property");
+    assert!(
+        present(&eval),
+        "removing the last property must not discard GNU's tree"
+    );
+    eval.eval_str("(erase-buffer)")
+        .expect("delete the whole text");
+    assert!(
+        !present(&eval),
+        "deleting the whole text sets the interval tree to NULL"
+    );
+    eval.eval_str("(insert \"abc\")").expect("insert text");
+    assert!(!present(&eval), "insertion does not create a tree");
+}
+
+/// Inserting text that carries properties grafts its interval runs into the
+/// buffer's table (GNU `copy_intervals`, src/insdel.c).  A buffer whose only
+/// properties arrived with inserted text must therefore report
+/// `buffer_intervals != NULL`, and removing those properties must not discard
+/// the tree.
+#[test]
+fn interval_tree_presence_follows_inserted_propertized_text() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = eval_with_text("");
+    let buffer_id = eval
+        .edit
+        .buffers
+        .current_buffer_id()
+        .expect("current buffer");
+    let present = |eval: &Context| {
+        eval.edit
+            .buffers
+            .get(buffer_id)
+            .expect("buffer")
+            .text_props_tree_present()
+    };
+    assert!(!present(&eval), "an empty buffer has no interval tree");
+    eval.eval_str("(insert (propertize \"abc\" 'invisible t) \"de\")")
+        .expect("insert propertized text");
+    assert!(
+        present(&eval),
+        "grafted property runs must report GNU's interval tree"
+    );
+    eval.eval_str("(remove-text-properties (point-min) (point-max) '(invisible nil))")
+        .expect("remove the grafted property");
+    assert!(
+        present(&eval),
+        "removing the last grafted property must keep GNU's tree"
+    );
 }
 
 #[test]
@@ -1300,6 +1379,7 @@ fn add_face_text_property_basic_and_merge_order() {
         .unwrap();
     assert_eq!(face, Value::symbol("bold"));
 
+    drop(eval);
     let mut eval = eval_with_text("abc");
     builtin_put_text_property(
         &mut eval,
@@ -1329,6 +1409,7 @@ fn add_face_text_property_basic_and_merge_order() {
         Value::list(vec![Value::symbol("italic"), Value::symbol("bold")])
     );
 
+    drop(eval);
     let mut eval = eval_with_text("abc");
     builtin_put_text_property(
         &mut eval,
@@ -1358,6 +1439,7 @@ fn add_face_text_property_basic_and_merge_order() {
         Value::list(vec![Value::symbol("bold"), Value::symbol("italic")])
     );
 
+    drop(eval);
     let mut eval = eval_with_text("abc");
     builtin_add_face_text_property(
         &mut eval,
@@ -1817,7 +1899,12 @@ fn next_single_property_change_coalesces_and_reports_trailing_nil() {
     let put = |eval: &mut _, s, e, k, v| {
         builtin_put_text_property(
             eval,
-            vec![Value::fixnum(s), Value::fixnum(e), Value::symbol(k), v],
+            vec![
+                Value::fixnum(s),
+                Value::fixnum(e),
+                Value::from_sym_id(intern(k)),
+                v,
+            ],
         )
         .unwrap();
     };
@@ -1865,7 +1952,12 @@ fn previous_single_property_change_coalesces_backward_and_reports_point_min() {
     let put = |eval: &mut _, s, e, k, v| {
         builtin_put_text_property(
             eval,
-            vec![Value::fixnum(s), Value::fixnum(e), Value::symbol(k), v],
+            vec![
+                Value::fixnum(s),
+                Value::fixnum(e),
+                Value::from_sym_id(intern(k)),
+                v,
+            ],
         )
         .unwrap();
     };
@@ -3578,6 +3670,176 @@ fn graft_at_boundary_rehomes_predecessor_so_held_plists_survive_undo() {
         )
         .unwrap();
     assert_eq!(got, Value::T);
+}
+
+/// GNU `set_text_properties` returns nil before `modify_text_properties` when
+/// the buffer has no intervals and PROPERTIES is nil (`src/textprop.c`
+/// emacs-31.1, the `!i` branch).
+#[test]
+fn set_text_properties_nil_on_a_propertyless_buffer_is_gnu_nil() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = eval_with_text("hello");
+    let tick = eval
+        .edit
+        .buffers
+        .current_buffer()
+        .expect("buffer")
+        .props_modified_tick();
+    let modified = eval
+        .edit
+        .buffers
+        .current_buffer()
+        .expect("buffer")
+        .modified_tick();
+
+    let result = builtin_set_text_properties(
+        &mut eval,
+        vec![Value::fixnum(1), Value::fixnum(6), Value::NIL],
+    )
+    .expect("set-text-properties");
+
+    assert_eq!(
+        result,
+        Value::NIL,
+        "a propertyless buffer asked for no properties returns nil"
+    );
+    let buf = eval.edit.buffers.current_buffer().expect("buffer");
+    assert_eq!(
+        buf.props_modified_tick(),
+        tick,
+        "the no-op must not record a property modification"
+    );
+    assert_eq!(
+        buf.modified_tick(),
+        modified,
+        "the no-op must not bump the buffer modification tick"
+    );
+}
+
+/// Attested by review on Emacs 31.1 `a360712c9d`: a tree anywhere in the
+/// buffer, even outside the range, makes `set-text-properties` of nil return
+/// t, advance the modified tick by one, and run `after-change-functions`.
+/// GNU `validate_interval_range` (`src/textprop.c`) is null only when the
+/// buffer has no interval tree, the range is empty, or the accessible text
+/// is empty.
+#[test]
+fn set_text_properties_nil_on_a_tree_elsewhere_records_the_change() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = crate::test_utils::new_context();
+    let got = eval
+        .eval_str(
+            r#"(prin1-to-string (progn
+  (insert "hello")
+  (put-text-property 1 2 'face 'bold)
+  (setq hook-log nil)
+  (setq after-change-functions
+        (list (lambda (beg end old-len)
+                (setq hook-log (list (list beg end old-len))))))
+  (let ((tick (buffer-modified-tick)))
+    (list (set-text-properties 3 5 nil)
+          (- (buffer-modified-tick) tick)
+          hook-log))))"#,
+        )
+        .expect("tree-elsewhere set-text-properties");
+    assert_eq!(
+        got.as_utf8_str(),
+        Some("(t 1 ((3 5 2)))"),
+        "a tree outside the range still modifies and runs after-change"
+    );
+}
+
+/// The interval tree stays after its last property is removed. The attested
+/// return is `(t 1)`. After-change uses the same unchanged-extent rule as the
+/// attested `(3 5 2)`, so a 1..5 clear reports `(1 5 4)`.
+#[test]
+fn set_text_properties_nil_on_an_emptied_tree_records_the_change() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = crate::test_utils::new_context();
+    let got = eval
+        .eval_str(
+            r#"(prin1-to-string (progn
+  (insert "hello")
+  (put-text-property 1 2 'face 'bold)
+  (remove-text-properties 1 2 '(face nil))
+  (setq hook-log nil)
+  (setq after-change-functions
+        (list (lambda (beg end old-len)
+                (setq hook-log (list (list beg end old-len))))))
+  (let ((tick (buffer-modified-tick)))
+    (list (set-text-properties 1 5 nil)
+          (- (buffer-modified-tick) tick)
+          hook-log))))"#,
+        )
+        .expect("emptied-tree set-text-properties");
+    assert_eq!(
+        got.as_utf8_str(),
+        Some("(t 1 ((1 5 4)))"),
+        "an emptied interval tree still modifies and runs after-change"
+    );
+}
+
+/// Attested on Emacs 31.1 `a360712c9d`: after the last string property is
+/// removed, GNU keeps `string_intervals`. Whole-string `set-text-properties`
+/// of nil then returns t and clears that tree (`src/textprop.c`).
+#[test]
+fn set_text_properties_nil_on_an_emptied_string_clears_the_kept_tree() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = crate::test_utils::new_context();
+    let got = eval
+        .eval_str(
+            r#"(prin1-to-string
+  (let ((s (copy-sequence "abcd")))
+    (put-text-property 0 4 'face 'bold s)
+    (remove-text-properties 0 4 '(face nil) s)
+    (list (set-text-properties 0 4 nil s) (object-intervals s))))"#,
+        )
+        .expect("string-emptied-whole");
+    assert_eq!(
+        got.as_utf8_str(),
+        Some("(t nil)"),
+        "a kept string interval tree makes a whole-string nil set return t"
+    );
+}
+
+/// The same kept tree, asked to set nil on a subrange, splits into nil
+/// intervals. Attested `(t ((0 1 nil) (1 2 nil) (2 4 nil)))`.
+#[test]
+fn set_text_properties_nil_on_an_emptied_string_subrange_splits_the_tree() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = crate::test_utils::new_context();
+    let got = eval
+        .eval_str(
+            r#"(prin1-to-string
+  (let ((s (copy-sequence "abcd")))
+    (put-text-property 0 4 'face 'bold s)
+    (remove-text-properties 0 4 '(face nil) s)
+    (list (set-text-properties 1 2 nil s) (object-intervals s))))"#,
+        )
+        .expect("string-emptied-sub");
+    assert_eq!(
+        got.as_utf8_str(),
+        Some("(t ((0 1 nil) (1 2 nil) (2 4 nil)))"),
+        "a subrange nil set splits the interval tree the removal kept"
+    );
+}
+
+/// A string that never had an interval tree still returns nil. Attested.
+#[test]
+fn set_text_properties_nil_on_a_string_with_no_tree_stays_nil() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = crate::test_utils::new_context();
+    let got = eval
+        .eval_str(
+            r#"(prin1-to-string
+  (let ((s (copy-sequence "abcd")))
+    (set-text-properties 1 2 nil s)))"#,
+        )
+        .expect("string-none-sub");
+    assert_eq!(
+        got.as_utf8_str(),
+        Some("nil"),
+        "a string that never had intervals returns nil"
+    );
 }
 
 /// Helper: create an evaluator with a buffer containing the given text.

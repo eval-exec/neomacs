@@ -55,7 +55,7 @@ fn opt_profit_primitive_lists_aset_original_source_outside_fragment_is_admitted(
     force_opt_max_ops_for_test(Some(48));
     let source = retained_aset_loop();
     assert_eq!(source.executable_ops().len(), 21);
-    let heavy = super::super::body_is_call_heavy(source.executable_ops(), &source.constants);
+    let heavy = super::super::body_is_call_heavy(source.executable_ops(), source.constants());
     assert!(!heavy, "the j17 gate alone must not exclude this witness");
     // An emission slice can retain the list backedge without the source's
     // Aset suffix. This policy input is not an assertion about OSR slicing.
@@ -63,7 +63,7 @@ fn opt_profit_primitive_lists_aset_original_source_outside_fragment_is_admitted(
     fragment.push(Op::Return);
     assert!(osr_admitted(
         &fragment,
-        &source.constants,
+        source.constants(),
         source.executable_ops().len()
     ));
     assert!(primitive_osr_source_admitted(source.executable_ops()));
@@ -138,7 +138,7 @@ fn opt_profit_primitive_lists_aset_post_fusion_slice_is_admitted_but_original_ca
     let feedback = vec![NumericFeedback::FixnumOnly; source.executable_ops().len()];
     let fused = inline::fuse_calls(
         source.executable_ops(),
-        &source.constants,
+        source.constants(),
         source.executable_gnu_byte_offset_map(),
         4,
         &feedback,
@@ -185,7 +185,7 @@ fn opt_profit_primitive_lists_aset_dead_source_keeps_selected_frontier_and_other
     ops.extend([Op::Nil, Op::Constant(0), Op::Nil, Op::Aset, Op::Pop]);
     let source = function(ops, vec![Value::make_int(0)], 2);
     source.jit_runtime().set_hot_for_test();
-    let heavy = super::super::body_is_call_heavy(source.executable_ops(), &source.constants);
+    let heavy = super::super::body_is_call_heavy(source.executable_ops(), source.constants());
     assert!(!heavy);
     for mode in [
         OptProfitMode::Loops,

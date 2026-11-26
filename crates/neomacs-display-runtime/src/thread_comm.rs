@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 mod command_projection;
-pub use command_projection::RenderCommandSender;
+pub use command_projection::{RenderCommandSender, SendTimeoutOutcome};
 
 mod frame_mailbox;
 mod frame_opacity;
@@ -26,6 +26,7 @@ pub use neomacs_display_protocol::{
 };
 use neomacs_video_model::{PlaybackAction, VideoDiagnostics, VideoOpenRequest};
 use neovm_core::window::GuiFrameGeometryHints;
+use neovm_core::window::GuiResizeRequestId;
 
 /// Selection addressed by a clipboard request.
 ///
@@ -140,6 +141,15 @@ pub enum InputEvent {
         /// Emacs frame_id of the window that produced the key event
         emacs_frame_id: u64,
     },
+    /// Application-menu Quit, independent of a physical keyboard chord.
+    ///
+    /// GNU's NS backend posts KEY_NS_POWER_OFF on the selected frame
+    /// (`nsterm.m:6588-6604`). System termination remains a separate native
+    /// delegate decision, including the `ns-confirm-quit` policy.
+    ApplicationQuit {
+        /// Emacs frame associated with the native application-menu action.
+        emacs_frame_id: u64,
+    },
     PositionedPointer(PositionedPointerInput),
     WindowResize {
         width: u32,
@@ -147,6 +157,12 @@ pub enum InputEvent {
         /// Physical device pixels per logical Emacs pixel.
         scale_factor: f64,
         /// Emacs frame_id of the window that resized
+        emacs_frame_id: u64,
+    },
+    /// A synchronous native request returned its final allocation, which may
+    /// differ from its requested size. Published after the actual resize.
+    WindowResizeRequestCompleted {
+        request_id: GuiResizeRequestId,
         emacs_frame_id: u64,
     },
     WindowClose {
@@ -352,6 +368,10 @@ pub enum LifecycleCommand {
 pub enum WindowCommand {
     /// Wake presentation after a synchronous CPU opacity control operation.
     RefreshFrameOpacity,
+    /// Consume the latest complete auxiliary coverage snapshot for this frame.
+    PublishScrollCoverage {
+        frame: neomacs_display_protocol::DisplayFrameId,
+    },
     /// Paint an evaluator-resolved viewport while canonical layout is pending.
     ScrollPreview(neomacs_display_protocol::scroll_coverage::ResolvedScrollIntent),
     /// Scroll blit pixels within pixel buffer
@@ -401,6 +421,7 @@ pub enum WindowCommand {
         width: u32,
         height: u32,
         geometry_hints: GuiFrameGeometryHints,
+        resize_request_id: Option<GuiResizeRequestId>,
     },
     /// Update geometry hints for a specific GUI frame window.
     /// `frame.raw_id() == 0` also targets the adopted primary window.
@@ -553,6 +574,37 @@ pub enum AssetCommand {
     },
     /// Retire an image after its last render presentation releases it.
     ImageRetire { image: ImageId },
+    /// Free one image's texture now, as GNU's `image-flush` does.
+    ///
+    /// `Fimage_flush` (`src/image.c:2538-2560`) removes the matching images
+    /// from the frame cache via `uncache_image`, which frees their pixmaps
+    /// immediately; `image-cache-size` observes the drop before the next
+    /// redisplay.  This is distinct from [`Self::ImageRetire`], which keeps a
+    /// texture drawable until no accepted or queued presentation references
+    /// it.
+    ImageFlush { image: ImageId },
+    /// Drop every retained image texture and chrome icon residency.
+    ///
+    /// GNU `Fclear_image_cache` (`src/image.c:2436-2478`) frees the selected
+    /// frame's (or every window frame's) image cache before returning; the
+    /// shared catalog is this frontend's analogue of all frames, so editor
+    /// images and tool-bar icons are evicted together.  FILTER nil (selected
+    /// frame) and FILTER t (all frames) therefore have the same effect here.
+    ClearImageCache {
+        /// Admission ticket of the shared decoder at clear time. Decodes
+        /// submitted after it were requested after the clear and survive.
+        through: u64,
+    },
+    /// Recompute the renderer's retained-image usage and publish it, then
+    /// acknowledge.
+    ///
+    /// `image-cache-size` reads the shared snapshot directly.  After an
+    /// invalidation or a synchronous resolve that snapshot is known stale, and
+    /// this round-trip is what makes the next read observe GNU's synchronous
+    /// cache state instead of the previous frame's.
+    PublishImageCacheUsage {
+        ack: std::sync::mpsc::SyncSender<()>,
+    },
     /// Retire CPU-side animation decoder/compositor state independently of
     /// frame textures.
     ImageSequenceRetire {
@@ -687,6 +739,8 @@ pub enum UiCommand {
 // constructors and destructuring code.
 #[allow(clippy::large_enum_variant)]
 pub enum ConfigCommand {
+    /// Desktop font-opening/raster preferences, applied only by Wayland.
+    SetFontRenderOptions(neomacs_display_protocol::DesktopFontRenderOptions),
     /// Replace the complete, already validated visual configuration snapshot.
     SetVisualConfig(VisualConfig),
     /// Replace the compiled NS modifier policy (issue #442).
@@ -1012,6 +1066,16 @@ pub struct ThreadComms {
     pub capabilities: Arc<SharedRenderCapabilities>,
     pub tooltip_context: Arc<neomacs_display_protocol::tooltip::TooltipContext>,
     pub frame_opacity: Arc<Mutex<FrameOpacityState>>,
+    /// Latest complete auxiliary snapshot per logical frame. An occupied
+    /// slot has exactly one queued PublishScrollCoverage wake.
+    pub auxiliary_scroll_coverage: Arc<
+        Mutex<
+            std::collections::HashMap<
+                neomacs_display_protocol::DisplayFrameId,
+                neomacs_display_protocol::scroll_coverage::AuxiliaryScrollCoverage,
+            >,
+        >,
+    >,
     image_decoder: Option<neomacs_renderer_wgpu::ImageDecoder>,
 }
 
@@ -1032,6 +1096,7 @@ impl ThreadComms {
             capabilities,
             tooltip_context: Arc::default(),
             frame_opacity: Arc::default(),
+            auxiliary_scroll_coverage: Arc::default(),
             image_decoder: None,
         }
     }
@@ -1048,6 +1113,7 @@ impl ThreadComms {
         let emacs = EmacsComms {
             tooltip_context: self.tooltip_context.clone(),
             frame_opacity: Arc::clone(&self.frame_opacity),
+            auxiliary_scroll_coverage: Arc::clone(&self.auxiliary_scroll_coverage),
             frame_tx: self.frame_tx,
             cmd_tx: self.cmd_tx,
             input_rx: self.input_rx,
@@ -1059,6 +1125,7 @@ impl ThreadComms {
             image_decoder: self.image_decoder,
             tooltip_context: self.tooltip_context,
             frame_opacity: self.frame_opacity,
+            auxiliary_scroll_coverage: self.auxiliary_scroll_coverage,
             frame_rx: self.frame_rx,
             cmd_rx: self.cmd_rx,
             input_tx: self.input_tx,
@@ -1083,6 +1150,16 @@ pub struct EmacsComms {
     pub capabilities: Arc<SharedRenderCapabilities>,
     pub tooltip_context: Arc<neomacs_display_protocol::tooltip::TooltipContext>,
     pub frame_opacity: Arc<Mutex<FrameOpacityState>>,
+    /// Latest complete auxiliary snapshot per logical frame. An occupied
+    /// slot has exactly one queued PublishScrollCoverage wake.
+    pub auxiliary_scroll_coverage: Arc<
+        Mutex<
+            std::collections::HashMap<
+                neomacs_display_protocol::DisplayFrameId,
+                neomacs_display_protocol::scroll_coverage::AuxiliaryScrollCoverage,
+            >,
+        >,
+    >,
 }
 
 /// Render thread communication handle
@@ -1095,9 +1172,30 @@ pub struct RenderComms {
     pub capabilities: Arc<SharedRenderCapabilities>,
     pub tooltip_context: Arc<neomacs_display_protocol::tooltip::TooltipContext>,
     pub frame_opacity: Arc<Mutex<FrameOpacityState>>,
+    /// Latest complete auxiliary snapshot per logical frame. An occupied
+    /// slot has exactly one queued PublishScrollCoverage wake.
+    pub auxiliary_scroll_coverage: Arc<
+        Mutex<
+            std::collections::HashMap<
+                neomacs_display_protocol::DisplayFrameId,
+                neomacs_display_protocol::scroll_coverage::AuxiliaryScrollCoverage,
+            >,
+        >,
+    >,
 }
 
 impl RenderComms {
+    /// Remove under the slot lock; callers apply after this guard is released.
+    pub fn take_scroll_coverage(
+        &self,
+        frame: neomacs_display_protocol::DisplayFrameId,
+    ) -> Option<neomacs_display_protocol::scroll_coverage::AuxiliaryScrollCoverage> {
+        self.auxiliary_scroll_coverage
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&frame)
+    }
+
     fn observe_scroll_input(event: InputEvent) -> InputEvent {
         #[cfg(target_os = "linux")]
         if neomacs_display_protocol::input_latency::enabled() {
@@ -1164,7 +1262,9 @@ impl RenderComms {
         matches!(
             event,
             InputEvent::WindowResize { .. }
+                | InputEvent::WindowResizeRequestCompleted { .. }
                 | InputEvent::WindowClose { .. }
+                | InputEvent::ApplicationQuit { .. }
                 | InputEvent::WindowFocus { .. }
                 | InputEvent::MonitorsChanged { .. }
                 | InputEvent::DisplayReset
@@ -1178,12 +1278,14 @@ impl RenderComms {
             }
             InputEvent::RawTtyBytes { .. } => "raw-tty-bytes",
             InputEvent::Key { .. } => "key",
+            InputEvent::ApplicationQuit { .. } => "application-quit",
             InputEvent::PositionedPointer(PositionedPointerInput { action, .. }) => match action {
                 PointerAction::Button { .. } => "positioned-pointer-button",
                 PointerAction::Move { .. } => "positioned-pointer-move",
                 PointerAction::Scroll { .. } => "positioned-pointer-scroll",
             },
             InputEvent::WindowResize { .. } => "window-resize",
+            InputEvent::WindowResizeRequestCompleted { .. } => "window-resize-request-completed",
             InputEvent::WindowClose { .. } => "window-close",
             InputEvent::WindowFocus { .. } => "window-focus",
             InputEvent::MonitorsChanged { .. } => "monitors-changed",
@@ -1316,3 +1418,7 @@ mod tests;
 #[cfg(test)]
 #[path = "tests/positioned_input_test.rs"]
 mod positioned_input_test;
+
+#[cfg(test)]
+#[path = "thread_comm/tests/auxiliary_scroll_coverage_test.rs"]
+mod auxiliary_scroll_coverage_tests;

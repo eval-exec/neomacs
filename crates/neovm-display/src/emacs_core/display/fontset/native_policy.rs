@@ -3,7 +3,10 @@
 //! The fontset owner resolves symbol spellings at mutation/restore. Capturing a
 //! character clones two shared slices; it neither copies nor limits the chain.
 
-use super::{DEFAULT_FONTSET_NAME, FontSpecEntry, FontsetData, fontset_name_spelling, registry};
+use super::{
+    DEFAULT_FONTSET_NAME, FontSpecEntry, FontSpecEntryExt, FontsetData, fontset_name_spelling,
+    registry,
+};
 use crate::emacs_core::fontset::StoredFontSpecExt;
 use crate::face::{FontSlant, FontWeight, FontWidth};
 use neovm_value::intern::{SymId, resolve_sym_lisp_string};
@@ -67,6 +70,8 @@ pub struct FontsetRenderingSpec {
     pub weight: Option<FontWeight>,
     pub slant: Option<FontSlant>,
     pub width: Option<FontWidth>,
+    /// GNU `:otf` requirement; a detached worker must reject fonts that fail it.
+    pub otf: Option<super::StoredOtfSpec>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -100,6 +105,7 @@ impl From<FontSpecEntry> for StoredFontsetEntry {
                     weight: spec.weight,
                     slant: spec.slant,
                     width: spec.width,
+                    otf: spec.otf.clone(),
                 })
             }
             FontSpecEntry::ExplicitNone => FontsetRenderingEntry::ExplicitNone,
@@ -194,11 +200,12 @@ impl SharedFontsetEntries {
     /// Japanese language environment a `jisx0208` entry is tried before a
     /// `gb2312` entry listed ahead of it.
     ///
-    /// Only GNU's encoding rule is applied.  Its exemptions for a spec that
-    /// matches the face's ASCII font or has `:otf`, and its `:lang` rule for
-    /// specs without an encoding, are not.  An `ExplicitNone` ends the chain,
-    /// so only the entries before it are reordered.  The result is computed
-    /// once per preference revision and shared by every holder of this chain.
+    /// GNU's `:otf` exemption is applied (a spec with `:otf` takes no
+    /// charset-rank penalty).  Its exemption for a spec that matches the
+    /// face's ASCII font and its `:lang` rule for specs without an encoding
+    /// are not.  An `ExplicitNone` ends the chain, so only the entries before
+    /// it are reordered.  The result is computed once per preference revision
+    /// and shared by every holder of this chain.
     pub(super) fn in_charset_order(&self) -> Self {
         let preference = CHARSET_PREFERENCE
             .read()
@@ -228,6 +235,11 @@ impl SharedFontsetEntries {
         let ranks: Vec<usize> = entries[..end]
             .iter()
             .map(|entry| match entry.original() {
+                // GNU `reorder_font_vector`: a spec with `:otf` is preferable
+                // "regardless of encoding and language", so it takes no
+                // charset-rank penalty (`src/fontset.c:413-416`). It keeps its
+                // definition order ahead of every penalized entry.
+                FontSpecEntry::Font(spec) if spec.otf.is_some() => 0,
                 FontSpecEntry::Font(spec) => spec.definition.as_ref().map_or(0, |definition| {
                     preferred
                         .iter()
@@ -299,6 +311,21 @@ impl CapturedFontsetChain {
         self.revision
     }
 
+    /// Rendering specs in charset order, split so a caller can reorder only
+    /// the fallback group. Each spec is the rendering view (no encoding
+    /// metadata), which is the value the live walk stores.
+    pub fn rendering_groups(
+        &self,
+    ) -> (
+        Vec<(FontSpecEntry, FontsetRenderingEntry)>,
+        Vec<(FontSpecEntry, FontsetRenderingEntry)>,
+    ) {
+        (
+            rendering_view(&self.specific),
+            rendering_view(&self.fallback),
+        )
+    }
+
     /// The terminal ExplicitNone is deliberately visible. Consumers distinguish
     /// that stop from exhaustion before deciding to try generic native fallback.
     pub fn iter(&self) -> impl Iterator<Item = &FontsetRenderingEntry> {
@@ -307,6 +334,18 @@ impl CapturedFontsetChain {
             .chain(self.fallback.iter())
             .map(StoredFontsetEntry::rendering)
     }
+}
+
+fn rendering_view(entries: &SharedFontsetEntries) -> Vec<(FontSpecEntry, FontsetRenderingEntry)> {
+    entries
+        .iter()
+        .filter_map(|entry| {
+            let spec = entry
+                .original()
+                .for_lookup(0, super::FontsetLookupPurpose::Rendering)?;
+            Some((spec, entry.rendering().clone()))
+        })
+        .collect()
 }
 
 static_assertions::assert_impl_all!(CapturedFontsetChain: Send, Sync, Clone, std::fmt::Debug);

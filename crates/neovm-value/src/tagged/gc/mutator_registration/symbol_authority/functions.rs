@@ -27,7 +27,9 @@ use super::*;
 use crate::symbol::FunctionCellSnapshot;
 use crate::tagged::gc::mark_word::MarkWord;
 use crate::tagged::value::TaggedValue as Value;
-pub use call::{FunctionActivation, FunctionCallCache, FunctionSelection, FunctionStep};
+pub use call::FunctionCallCache;
+pub use call::FunctionStep;
+pub use call::{FunctionActivation, FunctionSelection};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FunctionError {
@@ -107,7 +109,7 @@ impl<'era> RunAccess<'_, 'era> {
 
     /// Test the direct function cell without resolving aliases or executing it.
     /// The canonical boolean reaches the resident home before reader release.
-    pub fn sym_fboundp_into(
+    pub(crate) fn sym_fboundp_into(
         &mut self,
         symbol: &SymbolHandle,
         dst: &mut OwnerRootSlot<'era>,
@@ -158,14 +160,14 @@ impl SymbolRef<'_, '_, '_> {
         // No callback, allocation or safepoint can occur after the copy. The
         // SymbolRef still holds its word while installing the canonical home;
         // even an unexpected stale home returns a total error under that lease.
-        let dst = self
-            .run
+        // SAFETY: `answer` was loaded from this active era's retained backing
+        // under `SymbolRef` and is installed into this owner's root bank.
+        self.run
             .owner
             .local
             .as_mut()
-            .and_then(|local| local.root_scratch.get_mut(usize::from(index)))
+            .and_then(|local| unsafe { local.set_root_slot(usize::from(index), answer) })
             .ok_or(RegistrationError::StaleRegistration)?;
-        *dst = MarkWord::of(answer);
         Ok(())
     }
 }

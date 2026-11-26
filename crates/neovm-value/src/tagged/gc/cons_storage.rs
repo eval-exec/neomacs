@@ -1,7 +1,9 @@
 //! Cold cons catalog ownership for admitted mutators.
 //!
 //! The serial heap is an inert shell while this catalog owns its cons spine
-//! and residual-Box list/catalog (the latter admits hash-table shells only).
+//! and residual-Box list/catalog (the latter admits hash-table shells only),
+//! together with the complete float and bignum arenas. Numeric storage stays
+//! behind the catalog gate until its stopped restoration.
 //! Only disjoint raw cell grants leave the gate: neither a heap reference nor
 //! a vector/header reference is retained by a running owner. Collection first
 //! closes every region and restores the spine under stopped authority.
@@ -22,6 +24,15 @@ use std::ptr::NonNull;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
+
+mod numeric_storage;
+pub(crate) use numeric_storage::InitializedNumeric;
+use numeric_storage::NumericStorage;
+pub(in crate::tagged::gc) use numeric_storage::{BignumRun, FloatRun};
+mod numeric_catalog;
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) use numeric_catalog::NumericCatalogSnapshot;
+use numeric_catalog::{NumericEpoch, NumericHistory, NumericInterval};
 
 const MAX_GRANT: usize = 128;
 
@@ -233,6 +244,9 @@ impl Drop for OwnedConsTail {
 static_assertions::assert_not_impl_any!(OwnedConsTail: Send, Sync, Clone, Copy);
 
 struct CatalogState {
+    numeric: NumericStorage,
+    numeric_epoch: NumericEpoch,
+    numeric_interval: NumericInterval,
     allocator: ConsAllocatorOwner,
     blocks: Vec<ConsBlock>,
     by_base: FxHashMap<usize, usize>,
@@ -260,6 +274,11 @@ struct CatalogState {
 // The raw residual-Box list also moves as owned storage; only unpublished
 // headers are changed, under the same gate. No heap/Box reference is retained.
 // Storage is never freed until stopped restoration or is retained on failure.
+// Complete numeric arenas and the cold raw Box owner move as owned storage
+// under this same mutex. Their integer limb buffers have no Lisp children.
+// Only exclusive, confined numeric page runs leave the gate; their direct
+// bitmap/occupancy pointers address disjoint pages in fixed descriptor buffers.
+// Frozen bank operations never borrow those arenas, Vecs or descriptors.
 unsafe impl Send for CatalogState {}
 
 /// Era-local catalog identity. This is not a cloneable heap facade.
@@ -269,6 +288,9 @@ pub(super) struct ConsCatalog {
     heap: HeapIdentity,
     identity: Arc<CatalogIdentity>,
     state: Mutex<Option<CatalogState>>,
+    /// Cold history survives catalog return. Every acquisition follows the
+    /// existing state gate; no owner ID, mailbox, lease or descriptor lives here.
+    numeric_history: Mutex<NumericHistory>,
     /// Installation flag for slice admission, set under the gate at install
     /// and cleared under the gate at restore. A live RunAccess loan excludes
     /// stopped restoration of this catalog, so an acquire load inside a slice
@@ -398,6 +420,7 @@ impl ConsCatalog {
                 abandoned: AtomicBool::new(false),
             }),
             state: Mutex::new(None),
+            numeric_history: Mutex::new(NumericHistory::new()),
             installed: AtomicBool::new(false),
             card_base: AtomicUsize::new(0),
         }
@@ -407,7 +430,8 @@ impl ConsCatalog {
     /// still exclusively owned. No catalog lock and no heap TLS.
     pub(super) fn mark_published_cons_card(&self, owner_addr: usize) {
         let base = self.card_base.load(Ordering::Acquire);
-        super::card_table::mark_published(base, owner_addr);
+        // SAFETY: `base` is the owning live `ConsBlock` containing `owner_addr`.
+        unsafe { super::card_table::mark_published(base, owner_addr) };
     }
 
     fn publish_card_base(&self, heap: &TaggedHeap) {
@@ -481,13 +505,20 @@ impl ConsCatalog {
     /// The caller owns this exact quiescent serial heap, has stopped every
     /// participant with all regions closed, excludes marker launches/reentry,
     /// and suspends the whole-heap loan before any owner runs. While installed
-    /// no other code may read/write the heap's inert cons, boxed-list or
-    /// non-cons address-set placeholder fields.
+    /// no other code may read/write the heap's inert cons, boxed-list,
+    /// non-cons address-set, float-arena or bignum-arena placeholder fields.
     #[cold]
     #[inline(never)]
     pub(super) unsafe fn install(&self, heap: &mut TaggedHeap) -> Result<(), RegistrationError> {
         if heap.heap_identity() != self.heap {
             return Err(RegistrationError::WrongHeap);
+        }
+        // Detaching the allocator below replaces it with an empty heap-side
+        // placeholder. Keep outstanding reserve obligations on the heap until
+        // their books explicitly return every block. A live lease is not a
+        // transient miss: collection or an explicit return is what clears it.
+        if heap.has_owner_cons_reserves() {
+            return Err(RegistrationError::OwnerReserveHeld);
         }
         let mut gate = self.lock()?;
         if gate.is_some() {
@@ -496,13 +527,46 @@ impl ConsCatalog {
         if heap.alloc_regions_open() {
             return Err(RegistrationError::OpenRegion);
         }
-        if heap.concurrent_mark_running
+        if heap.has_unfinished_concurrent_mark()
             || heap.mark_in_progress
             || heap.sweep_in_progress
             || heap.generational.major_in_progress
         {
             return Err(RegistrationError::Busy);
         }
+        // The state gate is always acquired before the cold history lock.
+        // Initial N1 admission with no exhaustion request mints nothing.
+        let mut numeric_history = self.lock_numeric_history()?;
+        let numeric_plan = numeric_history.plan()?;
+        let mut numeric = NumericStorage::detach(heap);
+        let numeric_epoch = if let Some(plan) = &numeric_plan {
+            if let Err(error) = numeric.freeze_new_pool(
+                plan.float_pages,
+                plan.bignum_pages,
+                numeric_history.retained(),
+                Arc::clone(&self.identity),
+                plan.generation,
+                heap.mark_parity,
+            ) {
+                // Freeze's owned refusal preserves Mutable storage. No cons
+                // field has moved yet, so restore the complete original heap
+                // and retain every request for retry under the outer protocol.
+                let restorable = match numeric.take_restorable() {
+                    Ok(restorable) => restorable,
+                    Err(restore_error) => {
+                        // An unexpected phase cannot expose the inert heap as
+                        // usable. Frozen Drop retains its backing on this path.
+                        self.identity.abandoned.store(true, Ordering::Release);
+                        return Err(restore_error);
+                    }
+                };
+                restorable.restore(heap);
+                return Err(error);
+            }
+            plan.epoch()
+        } else {
+            NumericEpoch::Unprepared
+        };
         let placeholder = ConsAllocatorOwner::new(self.heap);
         if !heap.cons_allocator.threads_admitted() {
             // SAFETY: install already verified closed regions and stopped,
@@ -514,6 +578,9 @@ impl ConsCatalog {
         let placeholder =
             (&*heap.cons_allocator as *const super::cons_allocator::ConsAllocator) as usize;
         let state = CatalogState {
+            numeric,
+            numeric_epoch,
+            numeric_interval: NumericInterval::default(),
             allocator,
             blocks: std::mem::take(&mut heap.cons_blocks),
             by_base: std::mem::take(&mut heap.cons_block_index_by_base),
@@ -530,6 +597,11 @@ impl ConsCatalog {
             source_grants: [0; 3],
         };
         *gate = Some(state);
+        if let Some(plan) = numeric_plan {
+            // There is no remaining fallible action. Only committing the
+            // complete installed pool may consume the exhaustion counts.
+            numeric_history.commit_mint(plan);
+        }
         self.installed.store(true, Ordering::Release);
         self.publish_card_base(heap);
         Ok(())
@@ -546,10 +618,17 @@ impl ConsCatalog {
             return Err(RegistrationError::WrongHeap);
         }
         let mut gate = self.lock()?;
-        let state = gate.as_ref().ok_or(RegistrationError::Publication)?;
+        let state = gate.as_mut().ok_or(RegistrationError::Publication)?;
         if state.active_regions != 0 {
             return Err(RegistrationError::OpenRegion);
         }
+        let mut numeric_history = self.lock_numeric_history()?;
+        // SAFETY contract above supplies matching AllStopped. A checked-thaw
+        // refusal retains the bank. A later placeholder refusal may leave it
+        // Mutable in state, preserving ownership for retry or terminal retention.
+        state
+            .numeric
+            .checked_thaw(state.numeric_epoch.generation())?;
         let placeholder =
             (&*heap.cons_allocator as *const super::cons_allocator::ConsAllocator) as usize;
         let same_map = match (&state.chunk_map, &heap.chunk_map) {
@@ -558,6 +637,7 @@ impl ConsCatalog {
             _ => false,
         };
         if placeholder != state.placeholder
+            || !state.numeric.placeholders_intact(heap)
             || !heap.cons_blocks.is_empty()
             || heap.cons_blocks.capacity() != 0
             || !heap.cons_block_index_by_base.is_empty()
@@ -576,8 +656,12 @@ impl ConsCatalog {
         {
             return Err(RegistrationError::Publication);
         }
+        // This is the final fallible action. The typed exit owns only thawed
+        // storage; its restoration cannot inspect or destruct a Frozen bank.
+        let numeric = state.numeric.take_restorable()?;
         let state = gate.take().expect("validated installed catalog");
         self.installed.store(false, Ordering::Release);
+        let retention = numeric.restore(heap);
         heap.cons_allocator = state.allocator;
         heap.cons_blocks = state.blocks;
         heap.cons_block_index_by_base = state.by_base;
@@ -587,6 +671,7 @@ impl ConsCatalog {
         if let Some(cards) = state.cards {
             *heap.card_slots_mut().expect("validated card carrier") = cards;
         }
+        numeric_history.finish_interval(state.numeric_interval, retention);
         Ok(())
     }
 
@@ -779,9 +864,8 @@ impl ConsCatalog {
             let first = unsafe { region.first.as_ptr().add(region.used) };
             let start = ConsBlock::index_of_ptr(first);
             if unused != 0 {
-                ConsBlock::mark_run_at(base, start, unused, false);
-                if region.source != CatalogSource::FreeList
-                    && block.next_index as usize == start + unused
+                unsafe { ConsBlock::mark_run_at(base, start, unused, false) };
+                if region.source != CatalogSource::FreeList && block.next_index() == start + unused
                 {
                     block.rewind_tail(start);
                 } else {
@@ -833,11 +917,12 @@ impl ConsCatalog {
                     .get(&tail.base)
                     .expect("granted block base index");
                 let block = &mut state.blocks[index];
-                debug_assert_eq!(block.next_index as usize, tail.limit as usize);
+                debug_assert_eq!(block.next_index(), tail.limit as usize);
                 // Bits above the rewound top were never set.
                 block.rewind_tail(tail.start as usize);
             } else {
-                ConsBlock::mark_run_at(tail.base, tail.cursor as usize, unused, false);
+                // SAFETY: `tail.base` is an owned `ConsBlock` and `[tail.cursor, tail.cursor + unused)` are unallocated tail cells.
+                unsafe { ConsBlock::mark_run_at(tail.base, tail.cursor as usize, unused, false) };
                 // SAFETY: these exact unhanded cells are absent from every
                 // free list and exclusively owned by this batch.
                 unsafe {
@@ -1055,11 +1140,14 @@ impl ConsCatalog {
                 // still ends at it — a later grant may own the cells above
                 // our limit, and then the suffix returns through the free
                 // list with the defensive mark clear instead.
-                if tail.from_tail && block.next_index as usize == tail.limit as usize {
+                if tail.from_tail && block.next_index() == tail.limit as usize {
                     // Bits above the rewound top were never set.
                     block.rewind_tail(tail.cursor as usize);
                 } else {
-                    ConsBlock::mark_run_at(tail.base, tail.cursor as usize, unused, false);
+                    // SAFETY: `tail.base` is an owned `ConsBlock` and `[tail.cursor, tail.cursor + unused)` are unallocated tail cells.
+                    unsafe {
+                        ConsBlock::mark_run_at(tail.base, tail.cursor as usize, unused, false)
+                    };
                     // SAFETY: the unhanded suffix is exclusively owned here
                     // and absent from every free list until this publication.
                     unsafe {
@@ -1118,9 +1206,9 @@ impl ConsCatalog {
             && state.blocks.iter().enumerate().all(|(index, block)| {
                 let base = block.base_addr();
                 state.by_base.get(&base) == Some(&index)
-                    && free.iter().any(|(key, count)| {
-                        key.addr() == base && *count <= block.next_index as usize
-                    })
+                    && free
+                        .iter()
+                        .any(|(key, count)| key.addr() == base && *count <= block.next_index())
                     && state.chunk_map.as_ref().is_none_or(|map| {
                         let entry = map.get(base);
                         entry.is(ChunkClass::Cons) && entry.index() == index

@@ -271,6 +271,7 @@ fn render_mock_display_area(request: MockDisplayAreaRenderRequest<'_>) {
         face_resolver,
         None,
         face_ids,
+        crate::string_property_snapshot::StringSourceRootScope::CallbackFree,
     );
     executor.render_item_source_fragment_into_row(row_request, row, &mut source, &mut source_state);
 }
@@ -444,6 +445,9 @@ pub(crate) fn layout_mock_frame_content(
                 text_clip_bounds: window.pixel_bounds,
                 selected: window.selected,
                 row_capacity: crate::output::window_request::OutputWindowRowCapacity::Fixed,
+                bidi_paragraph_directions: crate::bidi::ParagraphDirections::default(),
+                text_geometry_units:
+                    neomacs_display_protocol::glyph_matrix::TextGeometryUnits::default(),
             },
         );
         for (row_idx, line) in window.lines.iter().enumerate() {
@@ -504,6 +508,9 @@ pub(crate) fn layout_mock_frame_content(
                 text_clip_bounds: mini.pixel_bounds,
                 selected: mini.selected,
                 row_capacity: crate::output::window_request::OutputWindowRowCapacity::Fixed,
+                bidi_paragraph_directions: crate::bidi::ParagraphDirections::default(),
+                text_geometry_units:
+                    neomacs_display_protocol::glyph_matrix::TextGeometryUnits::default(),
             },
         );
 
@@ -596,6 +603,9 @@ pub(crate) fn layout_mock_frame_content(
                 text_clip_bounds: cf.window.pixel_bounds,
                 selected: false,
                 row_capacity: crate::output::window_request::OutputWindowRowCapacity::Fixed,
+                bidi_paragraph_directions: crate::bidi::ParagraphDirections::default(),
+                text_geometry_units:
+                    neomacs_display_protocol::glyph_matrix::TextGeometryUnits::default(),
             },
         );
         for (ri, line) in cf.window.lines.iter().enumerate() {

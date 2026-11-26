@@ -238,7 +238,7 @@ fn oracle_prop_db_relational_group_by_having() {
                       (setq results (cons agg-row results)))))
                 groups)
                (sort results (lambda (a b) (string< (cdr (assq group-col a))
-                                                     (cdr (assq group-col b)))))))))
+                                                     (cdr (assq group-col b))))))))))
 
     (list
       ;; GROUP BY rep: SUM(amount), COUNT, AVG(amount)
@@ -256,9 +256,9 @@ fn oracle_prop_db_relational_group_by_having() {
       ;; GROUP BY region HAVING COUNT > 4
       (funcall group-by-agg sales 'region
                '((cnt count nil) (total sum amount))
-               (lambda (r) (> (cdr (assq 'cnt r)) 4)))))))"#;
+               (lambda (r) (> (cdr (assq 'cnt r)) 4))))))"#;
     let expect = expect_test::expect![[
-        r#""ERR (error \"`let' bindings can have only one value-form\" list (funcall group-by-agg sales 'rep '((total-sales sum amount) (num-sales count nil) (avg-sale avg amount)) nil) (funcall group-by-agg sales 'rep '((total-sales sum amount) (num-sales count nil)) (lambda (r) (> (cdr (assq 'total-sales r)) 1000))) (funcall group-by-agg sales 'region '((max-sale max amount) (min-sale min amount) (total sum amount)) nil) (funcall group-by-agg sales 'region '((cnt count nil) (total sum amount)) (lambda (r) (> (cdr (assq 'cnt r)) 4))))""#
+        r#""OK ((((rep . \"Alice\") (total-sales . 2150) (num-sales . 4) (avg-sale . 537)) ((rep . \"Bob\") (total-sales . 1350) (num-sales . 3) (avg-sale . 450)) ((rep . \"Carol\") (total-sales . 700) (num-sales . 3) (avg-sale . 233))) (((rep . \"Alice\") (total-sales . 2150) (num-sales . 4)) ((rep . \"Bob\") (total-sales . 1350) (num-sales . 3))) (((region . \"East\") (max-sale . 700) (min-sale . 150) (total . 2400)) ((region . \"West\") (max-sale . 600) (min-sale . 300) (total . 1800))) (((region . \"East\") (cnt . 6) (total . 2400))))""#
     ]];
     crate::common::assert_oracle_parity_expect(form, expect);
 }

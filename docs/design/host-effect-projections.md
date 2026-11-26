@@ -30,6 +30,15 @@ and cold startup/teardown. Ordinary Lisp primitive modules consume projection
 traits and owned protocol data. They must not obtain a raw native sender,
 window/proxy, clipboard backend or native runtime TLS slot.
 
+`neomacs-font-materializer/src/fontconfig.rs` is the Linux Font owner for
+rendering policy shared by layout metrics and glyph rasterization. Its borrowed
+configuration context and RAII patterns keep `FcConfig`/`FcPattern` backing
+private; callers receive owned rendering options. The declaration is one exact
+file in `owner_allows` in `host_effect_guard_test.rs`, not a crate or directory
+permission. Similarly named siblings and descendants remain outside the owner.
+The module and its Fontconfig dependency are Linux-only; this declaration does
+not move native work between threads or change other platform owners.
+
 RenderCommandSender keeps its raw channel private. RenderEventLoop and its wake
 proxy expose owned lifecycle/protocol operations without a raw getter, Deref or
 conversion. The TTY native sender and redisplay runtime TLS slot are private.

@@ -3,10 +3,10 @@
 //! `authority` is the TA2 fence (peer rulings 06:0xZ, S-1/S-2, 07:3xZ
 //! Variant B and 10:1xZ Option B'): the items in it are V1 constructors and
 //! fixture entry points that stay unwidened at their original paths, and the
-//! `split_shared_guards` TA2 scan restricts every reference to
-//! `crates/neovm-core/core_tests/**` (a fully test-gated `src` file may name
-//! a LOWER crate's fence, B2). Nothing here may be called from product code
-//! or from another crate's ungated `src/`.
+//! core `test_support_authority_fence_test` TA2 scan restricts every
+//! reference to `crates/neovm-core/core_tests/**` (a fully test-gated `src`
+//! file may name a LOWER crate's fence, B2). Nothing here may be called from
+//! product code or from another crate's ungated `src/`.
 
 /// Hosted execution-fixture helpers (SHAPE (B), LEAD 10:4xZ): the
 /// Context-free execution home adapter, built only from value primitives.
@@ -32,7 +32,7 @@ fn c5_jit_epoch_total() -> u64 {
     crate::emacs_core::jit::stats::epoch::EpochCounters::snapshot().total()
 }
 
-/// TA2 authority fence. Exactly the signed AUTHORITY-ITEMS rows live here.
+/// TA2 authority fence.
 pub mod authority {
     // PEER5726: private leaf contracts execute with core canonical factories.
     #[cfg(all(feature = "test-support", feature = "vm-profile"))]
@@ -280,13 +280,6 @@ pub mod authority {
     /// A-prime.
     pub fn reset_file_notify_thread_locals_for_test() {
         crate::emacs_core::builtins::file_notify::reset_file_notify_thread_locals();
-    }
-
-    /// CG-1 fence (peer 11-08): GNU `makunbound` on the context's obarray
-    /// through the audited writer proxy.  The adapter method is `pub(crate)`;
-    /// this fence is the only cross-crate test route.
-    pub fn makunbound_for_test(context: &mut Context, name: &str) {
-        context.obarray_mut().makunbound(name);
     }
 
     /// CG-1 fence (peer 11-08): raise the whole-table function clock through
@@ -567,7 +560,9 @@ pub mod authority {
 
     /// Delegate for `WorldView<TaggedHeap>::install_tagged_heap`.
     #[allow(private_interfaces)]
-    pub fn world_view_install_tagged_heap(view: &WorldView<neovm_value::tagged::gc::TaggedHeap>) {
+    pub fn world_view_install_tagged_heap(
+        view: &mut WorldView<neovm_value::tagged::gc::TaggedHeap>,
+    ) {
         view.install_tagged_heap()
     }
 
@@ -1015,7 +1010,7 @@ pub mod authority {
     /// cache.  The raw clear stays pub(crate) with no A-prime.
     #[cfg(feature = "jit")]
     pub fn clear_jit_cache_for_test() {
-        crate::emacs_core::jit::cache::clear();
+        crate::emacs_core::jit::cache::clear_with_serial_receipt().expect("serial jit grace");
     }
 
     /// P2 test-target combo fence (N2 TLS reset): zero this thread's
@@ -1692,7 +1687,7 @@ pub mod authority {
             ctx: *mut u8,
             args: &[neovm_value::value::Value],
         ) -> crate::emacs_core::jit::compile::NativeRun {
-            self.leaf.call(ctx, args)
+            unsafe { self.leaf.call(ctx, args) }
         }
     }
 
@@ -1712,7 +1707,8 @@ pub mod authority {
     ) -> Option<RetainedLeafForTest> {
         use crate::emacs_core::bytecode::ByteCodeFunctionExt as _;
         use crate::emacs_core::jit::RuntimeStateTieringExt as _;
-        let resolved = crate::emacs_core::jit::cache::resolve_compiled_leaf_ptr(context, function)?;
+        let resolved =
+            unsafe { crate::emacs_core::jit::cache::resolve_compiled_leaf_ptr(context, function) }?;
         let retained = retained_current_leaf_for_test(function.jit_runtime().compiled_id()?)?;
         (std::rc::Rc::as_ptr(&retained.leaf) == resolved).then_some(retained)
     }
@@ -1830,6 +1826,9 @@ pub mod authority {
     /// cleanup after capturing the observations stay private to the producer.
     #[cfg(all(feature = "test-support", feature = "jit"))]
     pub fn native_depth_reset_leak_probe_for_test() -> DepthResetProbe {
+        // The evidence scanner keeps an ungated counter only when this file
+        // names it. This read is the direct reference; the probe thread is below.
+        let _ = crate::emacs_core::jit::cache::NATIVE_DEPTH.with(std::cell::Cell::get);
         let observation = crate::emacs_core::jit::cache::native_depth_reset_leak_probe_for_test();
         DepthResetProbe {
             panicked: observation.panicked,
@@ -2191,7 +2190,7 @@ pub mod authority {
         ctx: &mut crate::emacs_core::eval::Context,
         function: &crate::emacs_core::bytecode::ByteCodeFunction,
     ) -> bool {
-        crate::emacs_core::jit::cache::resolve_compiled_leaf_ptr(ctx, function).is_some()
+        unsafe { crate::emacs_core::jit::cache::resolve_compiled_leaf_ptr(ctx, function) }.is_some()
     }
 
     /// Upper bound of the soak's fake-running probes for one finished job.
@@ -3036,7 +3035,7 @@ pub mod authority {
             let function = value
                 .get_bytecode_data()
                 .expect("fixture function bytecompiled");
-            crate::emacs_core::jit::cache::prepare_entry_for_test(ctx, function);
+            unsafe { crate::emacs_core::jit::cache::prepare_entry_for_test(ctx, function) };
         }
     }
 
@@ -3445,7 +3444,7 @@ pub mod authority {
         ctx: &mut crate::emacs_core::eval::Context,
         f: &crate::emacs_core::bytecode::ByteCodeFunction,
     ) {
-        crate::emacs_core::jit::cache::prepare_entry_for_test(ctx as *mut _, f);
+        unsafe { crate::emacs_core::jit::cache::prepare_entry_for_test(ctx as *mut _, f) };
     }
 
     /// FENCE: cold-exit counter. The atomic stays pub(crate).
@@ -3486,16 +3485,18 @@ pub mod authority {
         bt_count: i64,
         out: *mut i64,
     ) -> i64 {
-        crate::emacs_core::jit::compile::direct_call::neovm_jit_direct_framed(
-            ctx,
-            callee_bits,
-            leaf_bits,
-            const_base,
-            args_ptr,
-            nargs,
-            bt_count,
-            out,
-        )
+        unsafe {
+            crate::emacs_core::jit::compile::direct_call::neovm_jit_direct_framed(
+                ctx,
+                callee_bits,
+                leaf_bits,
+                const_base,
+                args_ptr,
+                nargs,
+                bt_count,
+                out,
+            )
+        }
     }
 
     /// FENCE: `direct_consts` register-ABI flag of bytecode spec slot `index`.
@@ -3675,7 +3676,10 @@ pub mod authority {
         let eligible = leaf.direct_call_eligible();
         let slot = SpecSlot::at_epoch(0);
         let consts = [neovm_value::value::Value::NIL];
-        slot.arm_leaf(leaf, consts.as_ptr(), false, true, false);
+        // SAFETY: `leaf` and `consts` live for the duration of `slot` in this test helper.
+        unsafe {
+            slot.arm_leaf(leaf, consts.as_ptr(), false, true, false);
+        }
         let exact = named_shape_name_for_test(&slot);
         leaf.has_binds = true;
         let binds = named_shape_name_for_test(&slot);
@@ -3762,7 +3766,7 @@ pub mod authority {
         func: &crate::emacs_core::bytecode::ByteCodeFunction,
         pc: usize,
     ) {
-        crate::emacs_core::jit::cache::prepare_osr_for_test(ctx, func, pc);
+        unsafe { crate::emacs_core::jit::cache::prepare_osr_for_test(ctx, func, pc) };
     }
 
     /// FENCE: transfer into a prepared OSR entry. `try_run_osr` stays
@@ -4194,11 +4198,11 @@ pub fn mir_build_copy_for_test(
     let ops = function.executable_ops();
     let map = function.executable_gnu_byte_offset_map();
     let arity = function
-        .params
+        .params()
         .stack_shape()
         .expect("fixture stack parameters")
         .required();
-    let constants: Vec<neovm_value::value::Value> = function.constants.iter().copied().collect();
+    let constants: Vec<neovm_value::value::Value> = function.constants().iter().copied().collect();
     let verdict = |offset_map| match crate::emacs_core::jit::mir::build_mir(
         ops, &constants, offset_map, arity,
     ) {
@@ -4319,7 +4323,7 @@ pub(crate) mod jit_fixture {
             }
             let function = value.get_bytecode_data().expect("fixture bytecode");
             for constant in function
-                .constants
+                .constants()
                 .iter()
                 .copied()
                 .filter(|v| v.is_bytecode())
@@ -4329,10 +4333,12 @@ pub(crate) mod jit_fixture {
             }
             // SAFETY: the fixture owns `roots.ev` exclusively for this
             // preparation and the cache entry stays on this thread.
-            crate::emacs_core::jit::cache::prepare_entry_for_test(
-                roots.ev as *mut Context,
-                function,
-            );
+            unsafe {
+                crate::emacs_core::jit::cache::prepare_entry_for_test(
+                    roots.ev as *mut Context,
+                    function,
+                );
+            }
         }
     }
 

@@ -47,9 +47,9 @@ fn retained_seed_capacity_is_not_a_root_between_collections() {
         heap.seed_root(root);
     }
     drop(loan);
-    heap.complete_collection();
+    heap.complete_collection_for_test();
     assert!(heap.owns_heap_value_for_test(value));
-    heap.collect_exact(std::iter::empty());
+    heap.collect_rooted(std::iter::empty());
     assert!(!heap.owns_heap_value_for_test(value));
     // SAFETY: no mutator or collection can race this isolated test owner.
     let mut loan = unsafe { heap.root_seed_scratch() };

@@ -58,6 +58,7 @@ fn soak_on_gnu_sources_prints_what_the_tree_walker_prints() {
     let mut off = context(TierIMode::Off);
     printed(&mut off, LOAD);
     let expected = printed(&mut off, WORK);
+    drop(off);
 
     let mut verify = context(TierIMode::Verify);
     printed(&mut verify, LOAD);
@@ -70,6 +71,7 @@ fn soak_on_gnu_sources_prints_what_the_tree_walker_prints() {
         "{}",
         stats.report()
     );
+    drop(verify);
 
     let mut on = context(TierIMode::On);
     printed(&mut on, LOAD);

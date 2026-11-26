@@ -281,3 +281,88 @@ fn sequence_never_wraps_or_reuses_the_final_nonce() {
     let mut sequence = OwnerStepSequence::new();
     assert_ne!(sequence.issue().unwrap(), sequence.issue().unwrap());
 }
+
+#[test]
+fn dropping_pending_metadata_does_not_cancel_or_retire_records() {
+    // Dropping pending metadata is not a cancel. These refs are forged, so
+    // the test does not prove a live GC root survives. It proves the same
+    // record ids still construct a step, and that this file's owner has no
+    // cancel and no Drop.
+    let step = key(parent(1));
+    let pending = callback(step);
+    let OwnerFrameSchema::Callback {
+        arguments,
+        frame,
+        restore,
+    } = pending.frame_schema()
+    else {
+        panic!("callback schema");
+    };
+    let kept = (arguments.record(), frame.record(), restore.record());
+    drop(pending);
+    let again = callback(step);
+    let OwnerFrameSchema::Callback {
+        arguments,
+        frame,
+        restore,
+    } = again.frame_schema()
+    else {
+        panic!("callback schema after drop");
+    };
+    assert_eq!((arguments.record(), frame.record(), restore.record()), kept);
+    let source = include_str!("../owner_step.rs");
+    assert!(
+        !source.contains("fn cancel") && !source.contains("impl Drop"),
+        "pending metadata has no cancel and no Drop that retires roots"
+    );
+}
+
+#[test]
+fn named_contract_negatives_stay_on_the_existing_witnesses() {
+    // Locks the existing compile-fail witnesses. It does not re-run trybuild
+    // and does not enable hosted admission.
+    let unmapped =
+        include_str!("../../../../neovm-core/tests/host_effect_ui/owner_step_result_unmapped.rs");
+    let unmapped_err = include_str!(
+        "../../../../neovm-core/tests/host_effect_ui/owner_step_result_unmapped.stderr"
+    );
+    assert!(!unmapped.contains("ContractInjected"));
+    assert!(unmapped_err.contains("error[E0004]"));
+    assert!(unmapped_err.contains("OwnerStepResult::ContractInjected"));
+
+    let schema =
+        include_str!("../../../../neovm-core/tests/host_effect_ui/owner_frame_schema_unmapped.rs");
+    let schema_err = include_str!(
+        "../../../../neovm-core/tests/host_effect_ui/owner_frame_schema_unmapped.stderr"
+    );
+    let consumer = schema
+        .split("fn incomplete_schema_consumer")
+        .nth(1)
+        .expect("schema consumer");
+    assert!(!consumer.contains("ContractInjected"));
+    assert!(schema_err.contains("error[E0004]"));
+    assert!(schema_err.contains("OwnerFrameSchema::ContractInjected"));
+
+    let duplicate =
+        include_str!("../../../../neovm-core/tests/host_effect_ui/owner_step_claim_consumed.rs");
+    let duplicate_err = include_str!(
+        "../../../../neovm-core/tests/host_effect_ui/owner_step_claim_consumed.stderr"
+    );
+    assert_eq!(duplicate.matches(".complete(").count(), 2);
+    assert!(duplicate_err.contains("error[E0382]"));
+
+    let port = include_str!("../../../../neovm-core/tests/host_effect_ui/port_used_twice.rs");
+    let port_err =
+        include_str!("../../../../neovm-core/tests/host_effect_ui/port_used_twice.stderr");
+    assert_eq!(port.matches(".complete(").count(), 2);
+    assert!(port_err.contains("error[E0382]"));
+
+    let identity = include_str!(
+        "../../../../neovm-core/tests/host_effect_ui/continuation_identity_private.rs"
+    );
+    let identity_err = include_str!(
+        "../../../../neovm-core/tests/host_effect_ui/continuation_identity_private.stderr"
+    );
+    assert!(identity.contains("OwnerContinuationId("));
+    assert!(identity_err.contains("error[E0423]"));
+}

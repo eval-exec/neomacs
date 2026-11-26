@@ -67,6 +67,11 @@ impl Default for CoreTextCatalogMonitor {
 }
 
 impl CoreTextCatalogMonitor {
+    pub(super) fn published_generation(&self) -> u64 {
+        let _ = self;
+        CATALOG_CHANGES.current()
+    }
+
     pub(super) fn poll(&mut self) -> FontCatalogChange {
         self.changes.poll(&CATALOG_CHANGES)
     }

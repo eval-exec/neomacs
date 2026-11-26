@@ -255,8 +255,8 @@ fn padded_secondary_terminal_renders_and_resumes_with_its_attached_device() {
             &session.device.capabilities,
         )
         .expect("padded secondary render must use the attached device snapshot");
-        session.suspend().unwrap();
-        session.resume().unwrap();
+        session.suspend(&[]).unwrap();
+        session.resume(&[]).unwrap();
     }
 }
 
@@ -339,13 +339,13 @@ fn secondary_tty_restores_implicit_input_baud_alias_and_erase_character() {
     assert_eq!(device.erase_char, 8);
     pty.assert_modes(&raw);
     for _ in 0..2 {
-        device.suspend().expect("suspend implicit-baud TTY");
+        device.suspend(&[]).expect("suspend implicit-baud TTY");
         pty.assert_modes(&original);
-        device.suspend().expect("suspend already suspended TTY");
+        device.suspend(&[]).expect("suspend already suspended TTY");
         pty.assert_modes(&original);
-        device.resume().expect("resume implicit-baud TTY");
+        device.resume(&[]).expect("resume implicit-baud TTY");
         pty.assert_modes(&raw);
-        device.resume().expect("resume already active TTY");
+        device.resume(&[]).expect("resume already active TTY");
         pty.assert_modes(&raw);
     }
     drop(device);
@@ -370,9 +370,9 @@ fn secondary_tty_restores_distinct_input_and_output_speeds() {
     raw.make_raw();
     let mut device = pty.open_device();
     pty.assert_modes(&raw);
-    device.suspend().expect("suspend distinct-speed TTY");
+    device.suspend(&[]).expect("suspend distinct-speed TTY");
     pty.assert_modes(&original);
-    device.resume().expect("resume distinct-speed TTY");
+    device.resume(&[]).expect("resume distinct-speed TTY");
     pty.assert_modes(&raw);
     drop(device);
     pty.assert_modes(&original);
@@ -408,8 +408,226 @@ fn secondary_tty_restores_modes_even_when_leaving_screen_fails() {
         .read(true)
         .open(&pty.path)
         .expect("open read-only PTY descriptor");
-    assert!(device.suspend().is_err(), "screen leave must fail to write");
+    assert!(
+        device.suspend(&[]).is_err(),
+        "screen leave must fail to write"
+    );
     pty.assert_modes(&original);
     drop(device);
     pty.assert_modes(&original);
+}
+
+#[cfg(unix)]
+#[test]
+fn secondary_tty_registry_isolates_mode_strings_across_suspend_resume_remove_and_close_all() {
+    use neovm_core::emacs_core::eval::QuitRequest;
+    use neovm_core::emacs_core::terminal::pure::TtyFrameHostFactory as _;
+    use std::fs::{File, OpenOptions};
+    use std::io::Read as _;
+    use std::os::fd::AsRawFd;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Arc, Condvar, Mutex};
+    use std::time::Duration;
+
+    struct DrainingPty {
+        _slave: File,
+        path: String,
+        buffer: Arc<(Mutex<Vec<u8>>, Condvar)>,
+        stop: Arc<AtomicBool>,
+        reader: Option<std::thread::JoinHandle<()>>,
+    }
+
+    impl DrainingPty {
+        fn open() -> Self {
+            let mut master = File::from(
+                rustix::pty::openpt(
+                    rustix::pty::OpenptFlags::RDWR | rustix::pty::OpenptFlags::NOCTTY,
+                )
+                .expect("posix_openpt failed"),
+            );
+            rustix::pty::grantpt(&master).expect("grantpt failed");
+            rustix::pty::unlockpt(&master).expect("unlockpt failed");
+            let path = rustix::pty::ptsname(&master, Vec::new())
+                .expect("ptsname failed")
+                .to_string_lossy()
+                .into_owned();
+            let slave = OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(&path)
+                .expect("open slave");
+            rustix::termios::tcsetwinsize(
+                &slave,
+                rustix::termios::Winsize {
+                    ws_row: 24,
+                    ws_col: 80,
+                    ws_xpixel: 0,
+                    ws_ypixel: 0,
+                },
+            )
+            .expect("set PTY size");
+            // SAFETY: `master` is a live owned PTY master descriptor.
+            let flags = unsafe { libc::fcntl(master.as_raw_fd(), libc::F_GETFL) };
+            assert!(flags >= 0);
+            // SAFETY: `master` is a live owned descriptor and `flags | O_NONBLOCK`
+            // preserves all existing open-file flags.
+            assert_eq!(
+                unsafe { libc::fcntl(master.as_raw_fd(), libc::F_SETFL, flags | libc::O_NONBLOCK) },
+                0
+            );
+            // Continuously drain master so `tcdrain(slave)` never blocks on macOS.
+            let buffer = Arc::new((Mutex::new(Vec::new()), Condvar::new()));
+            let stop = Arc::new(AtomicBool::new(false));
+            let thread_buf = Arc::clone(&buffer);
+            let thread_stop = Arc::clone(&stop);
+            let reader = std::thread::spawn(move || {
+                let mut chunk = [0u8; 4096];
+                while !thread_stop.load(Ordering::Acquire) {
+                    let mut pfd = libc::pollfd {
+                        fd: master.as_raw_fd(),
+                        events: libc::POLLIN,
+                        revents: 0,
+                    };
+                    // SAFETY: `pfd` is a valid initialized `pollfd` referencing
+                    // the live thread-owned `master` descriptor.
+                    let rc = unsafe { libc::poll(&mut pfd, 1, 20) };
+                    if rc <= 0 || (pfd.revents & libc::POLLIN) == 0 {
+                        continue;
+                    }
+                    loop {
+                        match master.read(&mut chunk) {
+                            Ok(0) => return,
+                            Ok(n) => {
+                                let (lock, cvar) = &*thread_buf;
+                                lock.lock().unwrap().extend_from_slice(&chunk[..n]);
+                                cvar.notify_all();
+                            }
+                            Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => break,
+                            Err(err) if err.kind() == std::io::ErrorKind::Interrupted => continue,
+                            Err(_) => return,
+                        }
+                    }
+                }
+            });
+            Self {
+                _slave: slave,
+                path,
+                buffer,
+                stop,
+                reader: Some(reader),
+            }
+        }
+
+        fn drain(&self) -> Vec<u8> {
+            let idle = Duration::from_millis(60);
+            let (lock, cvar) = &*self.buffer;
+            let mut guard = lock.lock().unwrap();
+            loop {
+                let before = guard.len();
+                let (next, _) = cvar.wait_timeout(guard, idle).unwrap();
+                guard = next;
+                if guard.len() == before {
+                    return std::mem::take(&mut *guard);
+                }
+            }
+        }
+    }
+
+    impl Drop for DrainingPty {
+        fn drop(&mut self) {
+            self.stop.store(true, Ordering::Release);
+            if let Some(reader) = self.reader.take() {
+                let _ = reader.join();
+            }
+        }
+    }
+
+    fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+        haystack.windows(needle.len()).position(|w| w == needle)
+    }
+
+    let pty_a = DrainingPty::open();
+    let pty_b = DrainingPty::open();
+
+    let registry = super::SecondaryTtyRegistry::default();
+    let mut context = neovm_core::emacs_core::eval_hook_installers::new_context();
+    let input = neovm_core::host_input::HostInputPublisher::install(&mut context);
+    let mut factory = super::SecondaryTtyFactory::new(registry.clone(), input, QuitRequest::new());
+
+    let req_a = neovm_core::emacs_core::terminal::pure::TtyFrameOpenRequest::new(
+        11,
+        neovm_core::window::FrameId(201),
+        pty_a.path.clone(),
+        "xterm-256color".to_string(),
+    )
+    .expect("request A");
+    let req_b = neovm_core::emacs_core::terminal::pure::TtyFrameOpenRequest::new(
+        12,
+        neovm_core::window::FrameId(202),
+        pty_b.path.clone(),
+        "xterm-256color".to_string(),
+    )
+    .expect("request B");
+
+    let mut host_a = factory.open_tty(req_a).expect("open A").host;
+    let _host_b = factory.open_tty(req_b).expect("open B").host;
+    let _ = pty_a.drain();
+    let _ = pty_b.drain();
+
+    // 1. Suspend A: only A receives <RESET-A> before te, B receives nothing.
+    host_a.suspend_tty(b"<RESET-A>").expect("suspend A");
+    let out_a = pty_a.drain();
+    let out_b = pty_b.drain();
+    let reset_pos = find_subslice(&out_a, b"<RESET-A>").expect("A reset marker");
+    let te_pos = find_subslice(&out_a, b"\x1b[?1049l").expect("A te");
+    assert!(
+        reset_pos < te_pos,
+        "reset strings must precede te: {out_a:?}"
+    );
+    assert!(
+        out_b.is_empty(),
+        "B must not receive A's suspend bytes: {out_b:?}"
+    );
+
+    // 2. Resume A: only A receives <SET-A> after ti/ks, B receives nothing.
+    host_a.resume_tty(b"<SET-A>").expect("resume A");
+    let out_a = pty_a.drain();
+    let out_b = pty_b.drain();
+    let ti_pos = find_subslice(&out_a, b"\x1b[?1049h").expect("A ti");
+    let set_pos = find_subslice(&out_a, b"<SET-A>").expect("A set marker");
+    assert!(ti_pos < set_pos, "set strings must follow ti: {out_a:?}");
+    assert!(
+        out_b.is_empty(),
+        "B must not receive A's resume bytes: {out_b:?}"
+    );
+
+    // 3. Delete A (`remove`): only A receives <DEL-A> before te, B receives nothing.
+    host_a.delete_terminal(b"<DEL-A>").expect("delete A");
+    let out_a = pty_a.drain();
+    let out_b = pty_b.drain();
+    let del_pos = find_subslice(&out_a, b"<DEL-A>").expect("A delete marker");
+    let te_pos = find_subslice(&out_a, b"\x1b[?1049l").expect("A delete te");
+    assert!(
+        del_pos < te_pos,
+        "delete reset strings must precede te: {out_a:?}"
+    );
+    assert!(
+        out_b.is_empty(),
+        "B must not receive A's delete bytes: {out_b:?}"
+    );
+
+    // 4. Exit (`close_all_with`): remaining terminal B receives its own reset bytes.
+    registry.close_all_with(|id| format!("<EXIT-{id}>").into_bytes());
+    let out_a = pty_a.drain();
+    let out_b = pty_b.drain();
+    assert!(
+        out_a.is_empty(),
+        "deleted A must not receive exit bytes: {out_a:?}"
+    );
+    let exit_pos = find_subslice(&out_b, b"<EXIT-12>").expect("B exit marker");
+    let te_pos = find_subslice(&out_b, b"\x1b[?1049l").expect("B exit te");
+    assert!(
+        exit_pos < te_pos,
+        "exit reset strings must precede te: {out_b:?}"
+    );
 }

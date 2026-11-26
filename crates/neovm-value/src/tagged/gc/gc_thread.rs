@@ -189,16 +189,33 @@ impl ConcurrentClaimJob {
     }
 }
 
-/// Owned worker result, sent only after the last heap/snapshot read.
-/// Headers remain live and non-moving until the coordinator joins the worker;
-/// addresses are never dereferenced after the old/young sweep starts.
-#[derive(Debug, Default)]
-pub(super) struct ConcurrentMarkResult {
-    /// Marker-owned work that the stopped mutators trace after receiving this result.
-    /// Only this worker appends; the completion channel transfers ownership.
-    pub(super) deferred: Vec<MarkWord>,
-    pub(super) promo: Vec<usize>,
-    pub(super) symbols: Vec<SymId>,
+include!("concurrent_mark_result.rs");
+
+#[cfg(any(test, feature = "test-support"))]
+impl ConcurrentMarkResult {
+    /// Safe empty result bound to `heap` (contains no deferred words or promo
+    /// pointers) for serial test fixtures that exercise completion channels.
+    pub(super) fn empty_for_heap(heap: HeapIdentity) -> Self {
+        Self {
+            heap,
+            deferred: Vec::new(),
+            promo: Vec::new(),
+            symbols: Vec::new(),
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) fn deferred_for_test(&self) -> &[MarkWord] {
+        &self.deferred
+    }
+
+    pub(super) fn promo_for_test(&self) -> &[usize] {
+        &self.promo
+    }
+
+    pub(super) fn symbols_for_test(&self) -> &[SymId] {
+        &self.symbols
+    }
 }
 
 /// Enabled-only claim state, boxed together with the original job at launch.
@@ -254,7 +271,9 @@ impl WorkerSymbolMarks for SymbolMarkBits {
 /// Job-local logs. No worker writes to collector or mutator symbol state.
 #[derive(Default)]
 struct WorkerMarkLogs<S: WorkerSymbolMarks = FxHashSet<SymId>> {
-    result: ConcurrentMarkResult,
+    deferred: Vec<MarkWord>,
+    promo: Vec<usize>,
+    symbols: Vec<SymId>,
     seen_symbols: S,
 }
 
@@ -263,14 +282,16 @@ type EnabledWorkerMarkLogs = WorkerMarkLogs<SymbolMarkBits>;
 impl<S: WorkerSymbolMarks> WorkerMarkLogs<S> {
     #[inline]
     fn note_symbol(&mut self, value: TaggedValue) -> bool {
-        self.seen_symbols.note(value, &mut self.result.symbols)
+        self.seen_symbols.note(value, &mut self.symbols)
     }
 
     /// Generation bytes do not change until this worker has exited.
     #[inline]
-    fn note_promotion<const MAJOR: bool>(&mut self, header: *const GcHeader) {
+    /// # Safety
+    /// `header` must point to a live, initialized GC object header.
+    unsafe fn note_promotion<const MAJOR: bool>(&mut self, header: *const GcHeader) {
         if MAJOR && !unsafe { (*header).tenured } {
-            self.result.promo.push(header as usize);
+            self.promo.push(header as usize);
         }
     }
 
@@ -278,7 +299,9 @@ impl<S: WorkerSymbolMarks> WorkerMarkLogs<S> {
     fn queue_child<const SYMBOLS: bool>(&mut self, value: TaggedValue, gray: &mut MarkStack) {
         if S::ENABLED {
             if value.is_heap_object() {
-                gray.push(value);
+                // SAFETY: `value` was discovered on the active heap during
+                // this mark cycle and stays live until termination drains `gray`.
+                unsafe { gray.push(value) };
             } else if SYMBOLS {
                 self.note_symbol(value);
             }
@@ -288,7 +311,8 @@ impl<S: WorkerSymbolMarks> WorkerMarkLogs<S> {
                 return;
             }
             if value.is_heap_object() {
-                gray.push(value);
+                // SAFETY: same active-cycle live child contract as above.
+                unsafe { gray.push(value) };
             }
         }
     }
@@ -301,7 +325,11 @@ impl<S: WorkerSymbolMarks> WorkerMarkLogs<S> {
 
 trait ClaimExtension {
     type Symbols: WorkerSymbolMarks;
-    fn try_mark<const MAJOR: bool>(
+
+    /// # Safety
+    /// `ptr` must point to a valid, live [`VecLikeHeader`] whose header and
+    /// payload are readable under the concurrent claim protocol of `job`.
+    unsafe fn try_mark<const MAJOR: bool>(
         &self,
         ptr: *const VecLikeHeader,
         job: &ConcurrentClaimJob,
@@ -315,7 +343,7 @@ struct LegacyClaims;
 impl ClaimExtension for LegacyClaims {
     type Symbols = FxHashSet<SymId>;
     #[inline(always)]
-    fn try_mark<const MAJOR: bool>(
+    unsafe fn try_mark<const MAJOR: bool>(
         &self,
         _ptr: *const VecLikeHeader,
         _job: &ConcurrentClaimJob,
@@ -386,7 +414,7 @@ impl Collector {
         let (requests, rx) = std::sync::mpsc::channel::<GcRequest>();
         let thread = match std::thread::Builder::new()
             .name(COLLECTOR_THREAD_NAME.to_owned())
-            .spawn(move || serve_gc_requests(rx))
+            .spawn(move || serve_gc_requests(heap, rx))
         {
             Ok(thread) => thread,
             Err(error) => return CollectorStart::Unavailable(error),
@@ -445,14 +473,14 @@ impl CollectorHandle {
 
 /// The collector's loop: drain requests until the heap retires (its sender
 /// is dropped).
-fn serve_gc_requests(rx: std::sync::mpsc::Receiver<GcRequest>) {
+fn serve_gc_requests(heap: HeapIdentity, rx: std::sync::mpsc::Receiver<GcRequest>) {
     while let Ok(req) = rx.recv() {
-        run_gc_request(req);
+        run_gc_request(heap, req);
     }
 }
 
 /// One implementation of the request protocol for both possible executors.
-fn run_gc_request(req: GcRequest) {
+fn run_gc_request(heap: HeapIdentity, req: GcRequest) {
     match req {
         GcRequest::MarkAll(HeapPtr(p), done) => {
             // SAFETY: the requester either executes this directly with
@@ -462,10 +490,14 @@ fn run_gc_request(req: GcRequest) {
             let _ = done.send(());
         }
         GcRequest::ConcurrentMark(job) => {
-            run_concurrent_mark(job);
+            // SAFETY: `send_to_collector`'s caller contract guarantees `job`
+            // came from a world-stopped start handshake on `heap`, whose
+            // storage remains retained until join.
+            unsafe { run_concurrent_mark(heap, job) };
         }
         GcRequest::ConcurrentMarkEnabled(job) => {
-            run_concurrent_mark_enabled(*job);
+            // SAFETY: same `send_to_collector` caller contract as above.
+            unsafe { run_concurrent_mark_enabled(heap, *job) };
         }
     }
 }
@@ -477,13 +509,13 @@ fn run_gc_request(req: GcRequest) {
 /// or dedicated-thread identity. Keep the active SATB window until normal join.
 #[cold]
 #[inline(never)]
-fn run_gc_request_inline(request: GcRequest) {
+fn run_gc_request_inline(heap: HeapIdentity, request: GcRequest) {
     let done = match &request {
         GcRequest::MarkAll(_, _) => None,
         GcRequest::ConcurrentMark(job) => Some(prepare_inline_mark(job)),
         GcRequest::ConcurrentMarkEnabled(job) => Some(prepare_inline_mark(&job.job)),
     };
-    run_gc_request(request);
+    run_gc_request(heap, request);
     if let Some(done) = done {
         // A quantum-stop bypasses the worker's drained store. Its owned result
         // is now queued, so safe-point polling must allow termination to join
@@ -514,7 +546,14 @@ fn collectors() -> std::sync::MutexGuard<'static, FxHashMap<HeapIdentity, Collec
 
 /// Hand `request` to `heap`'s collector, spawning the collector on the heap's
 /// first request and retrying each later request while its handle is Inline.
-pub(super) fn send_to_collector(heap: HeapIdentity, request: GcRequest) {
+///
+/// # Safety
+/// - For `GcRequest::MarkAll(HeapPtr(p), done)`, `p` must point to a valid
+///   exclusively borrowed `TaggedHeap` that remains live until `done` signals.
+/// - For `GcRequest::ConcurrentMark` / `ConcurrentMarkEnabled`, the job must
+///   satisfy [`run_concurrent_mark`]'s / [`run_concurrent_mark_enabled`]'s
+///   start-handshake liveness and retention contract.
+pub(super) unsafe fn send_to_collector(heap: HeapIdentity, request: GcRequest) {
     {
         use std::collections::hash_map::Entry;
         let mut registry = collectors();
@@ -539,7 +578,7 @@ pub(super) fn send_to_collector(heap: HeapIdentity, request: GcRequest) {
         }
     }
     // No registry lock spans heap marking, callbacks, or completion sends.
-    run_gc_request_inline(request);
+    run_gc_request_inline(heap, request);
 }
 
 /// Remove `heap`'s collector at heap teardown and close its request channel:
@@ -717,7 +756,8 @@ fn concurrent_try_mark_string_major<S: WorkerSymbolMarks>(
     }
     if unsafe { (*ptr).header.mark_claim_at(job.parity) } {
         job.str_claimed.fetch_add(1, Ordering::Relaxed);
-        logs.note_promotion::<true>(ptr.cast());
+        // SAFETY: `ptr` is a live heap object just claimed by this collector worker.
+        unsafe { logs.note_promotion::<true>(ptr.cast()) };
     }
     true
 }
@@ -781,7 +821,9 @@ pub(super) fn concurrent_try_mark_owned(
         &mut stack,
         &mut WorkerMarkLogs::default(),
     );
-    gray.extend(stack.into_values());
+    // SAFETY: `stack` is function-local and never crossed a thread boundary;
+    // every word was pushed from `val` on this thread during this call.
+    gray.extend(unsafe { stack.into_values() });
     handled
 }
 
@@ -815,7 +857,9 @@ fn concurrent_try_mark_owned_enabled<const MAJOR: bool>(
     let handled = concurrent_try_mark_owned_with_symbols::<MAJOR, true, EnabledClaims>(
         val, job, claims, &mut stack, logs,
     );
-    gray.extend(stack.into_values());
+    // SAFETY: `stack` is function-local and never crossed a thread boundary;
+    // every word was pushed from `val` on this thread during this call.
+    gray.extend(unsafe { stack.into_values() });
     handled
 }
 
@@ -878,7 +922,8 @@ fn concurrent_try_mark_owned_with_symbols<
         // this cycle) — equally done.
         if unsafe { (*ptr).header.mark_claim_at(job.parity) } {
             job.float_claimed.fetch_add(1, Ordering::Relaxed);
-            logs.note_promotion::<MAJOR>(ptr.cast());
+            // SAFETY: `ptr` is a live heap object just claimed by this collector worker.
+            unsafe { logs.note_promotion::<MAJOR>(ptr.cast()) };
         }
         return true;
     }
@@ -957,7 +1002,8 @@ fn concurrent_try_mark_owned_with_symbols<
             }
             if unsafe { (*ptr).gc.mark_claim_at(job.parity) } {
                 job.vec_claimed.fetch_add(1, Ordering::Relaxed);
-                logs.note_promotion::<MAJOR>(ptr.cast());
+                // SAFETY: `ptr` is a live heap object just claimed by this collector worker.
+                unsafe { logs.note_promotion::<MAJOR>(ptr.cast()) };
             }
             return true;
         }
@@ -992,8 +1038,9 @@ fn concurrent_try_mark_owned_with_symbols<
         // the termination drain — `mark_value` early-returns on the mark
         // bit — drops no children):
         //  (a) fresh claim: THIS arm gray-pushes exactly the fields
-        //      `trace_veclike`'s ByteCode arm traces (the two `aref` slot
-        //      objects, arglist, constants, env, doc_form, interactive,
+        //      `trace_veclike`'s ByteCode arm traces (the `aref` slot
+        //      objects — code, constants and the reader-installed GNU slot
+        //      vector — plus arglist, constants, env, doc_form, interactive,
         //      extra_slots and the Dynamic parameter child; Stack/Named
         //      parameters carry no heap children), and the drain traces them
         //      to the fixpoint (a mid-drain stop hands residual gray to the
@@ -1038,7 +1085,8 @@ fn concurrent_try_mark_owned_with_symbols<
             }
             if unsafe { (*ptr).gc.mark_claim_at(job.parity) } {
                 job.bc_claimed.fetch_add(1, Ordering::Relaxed);
-                logs.note_promotion::<MAJOR>(ptr.cast());
+                // SAFETY: `ptr` is a live heap object just claimed by this collector worker.
+                unsafe { logs.note_promotion::<MAJOR>(ptr.cast()) };
                 // Fresh claim: gray-push the children (coverage leg (a)).
                 // Field reads are race-free per the immutability argument
                 // above (a fresh claim proves the object pre-dates the
@@ -1062,14 +1110,14 @@ fn concurrent_try_mark_owned_with_symbols<
                     !data.is_pdump_stub(),
                     "arena bytecode must never be a lazy pdump stub"
                 );
-                logs.queue_child::<SYMBOLS>(data.arglist, gray);
-                if let Some(child) = data.params.heap_child() {
+                logs.queue_child::<SYMBOLS>(data.arglist(), gray);
+                if let Some(child) = data.params().heap_child() {
                     logs.queue_child::<SYMBOLS>(child, gray);
                 }
-                for &c in &data.constants {
+                for &c in data.constants() {
                     logs.queue_child::<SYMBOLS>(c, gray);
                 }
-                if let Some(env) = data.env {
+                if let Some(env) = data.env() {
                     logs.queue_child::<SYMBOLS>(env, gray);
                 }
                 if let Some(doc_form) = data.doc_form {
@@ -1086,7 +1134,8 @@ fn concurrent_try_mark_owned_with_symbols<
             // coverage leg (c)): equally handled, nothing further owed.
             return true;
         }
-        if let Some(handled) = extension.try_mark::<MAJOR>(ptr, job, gray, logs) {
+        // SAFETY: `ptr` was validated as a live heap object owned by this job's heap.
+        if let Some(handled) = unsafe { extension.try_mark::<MAJOR>(ptr, job, gray, logs) } {
             return handled;
         }
         // MAPPED (pdump) veclikes mark via the heap's side table
@@ -1132,7 +1181,7 @@ impl ClaimExtension for EnabledClaims {
     type Symbols = SymbolMarkBits;
 
     #[inline]
-    fn try_mark<const MAJOR: bool>(
+    unsafe fn try_mark<const MAJOR: bool>(
         &self,
         ptr: *const VecLikeHeader,
         job: &ConcurrentClaimJob,
@@ -1161,7 +1210,8 @@ impl ClaimExtension for EnabledClaims {
                         .as_ref()
                         .expect("Tier-H snapshot requires a cycle counter")
                         .fetch_add(1, Ordering::Relaxed);
-                    logs.note_promotion::<MAJOR>(ptr.cast());
+                    // SAFETY: `ptr` is a live heap object just claimed by this collector worker.
+                    unsafe { logs.note_promotion::<MAJOR>(ptr.cast()) };
                     // Complete this snapshot scan even if stop arrives now:
                     // a claimed header cannot be sent back for retracing.
                     #[cfg(any(test, feature = "test-support"))]
@@ -1200,7 +1250,8 @@ impl ClaimExtension for EnabledClaims {
                         .as_ref()
                         .expect("enabled leaf claims require a cycle counter")
                         .fetch_add(1, Ordering::Relaxed);
-                    logs.note_promotion::<MAJOR>(ptr.cast());
+                    // SAFETY: `ptr` is a live heap object just claimed by this collector worker.
+                    unsafe { logs.note_promotion::<MAJOR>(ptr.cast()) };
                     if class == ChunkClass::SymbolWithPos {
                         // These fields have no post-publication setter. A
                         // fresh claim excludes births at this cycle parity:
@@ -1249,13 +1300,15 @@ fn concurrent_trace_mapped_veclike<const MAJOR: bool, const SYMBOLS: bool, E: Cl
         if child.is_cons() {
             let addr = child.gc_cons_ptr() as usize;
             if addr < job.claims.dump_lo || addr >= job.claims.dump_hi {
-                job.gray.push(child);
+                // SAFETY: `child` was scanned from this active cycle's live snapshot.
+                unsafe { job.gray.push(child) };
             }
         } else if child.is_bare_symbol() {
             if SYMBOLS {
                 logs.note_symbol(child);
             } else if seen_symbols.insert(child.bits()) {
-                logs.result.deferred.push(MarkWord::of(child));
+                // SAFETY: `child` is a bare symbol scanned in this active cycle.
+                logs.deferred.push(unsafe { MarkWord::of(child) });
             }
         } else if child.is_heap_object()
             && !concurrent_try_mark_owned_with_symbols::<MAJOR, SYMBOLS, E>(
@@ -1266,7 +1319,8 @@ fn concurrent_trace_mapped_veclike<const MAJOR: bool, const SYMBOLS: bool, E: Cl
                 logs,
             )
         {
-            logs.result.deferred.push(MarkWord::of(child));
+            // SAFETY: `child` stays live through this cycle until termination.
+            logs.deferred.push(unsafe { MarkWord::of(child) });
         }
     };
     // SAFETY: stopped-start capture admitted these same-heap initialized
@@ -1280,27 +1334,49 @@ fn concurrent_trace_mapped_veclike<const MAJOR: bool, const SYMBOLS: bool, E: Cl
             MappedVeclikeScanItem::Deferred(owner) => {
                 // Direct push bypasses the dispatcher, so its first-cycle
                 // dump-child shortcut cannot discard termination-only owners.
-                logs.result.deferred.push(owner);
+                logs.deferred.push(owner);
             }
         })
     };
 }
 
-pub(super) fn run_concurrent_mark(job: ConcurrentMarkJob) {
+/// Execute a concurrent mark job on the collector worker thread.
+///
+/// # Safety
+/// `job` must have been captured at a world-stopped start handshake for a live
+/// heap whose blocks, pages, and snapshots remain retained until join, and all
+/// words in `job.gray` and `job.satb` must belong to that heap and stay live
+/// through start-of-cycle roots, marks, and barriers.
+pub(super) unsafe fn run_concurrent_mark(heap: HeapIdentity, job: ConcurrentMarkJob) {
     if job.claims.major {
-        run_concurrent_mark_impl::<true, true, LegacyClaims>(job, LegacyClaims);
+        // SAFETY: upheld by caller contract.
+        unsafe { run_concurrent_mark_impl::<true, true, LegacyClaims>(heap, job, LegacyClaims) };
     } else {
-        run_concurrent_mark_impl::<false, false, LegacyClaims>(job, LegacyClaims);
+        // SAFETY: upheld by caller contract.
+        unsafe { run_concurrent_mark_impl::<false, false, LegacyClaims>(heap, job, LegacyClaims) };
     }
 }
 
-pub(super) fn run_concurrent_mark_enabled(job: EnabledConcurrentMarkJob) {
+/// Execute an enabled-mode concurrent mark job on the collector worker thread.
+///
+/// # Safety
+/// Same world-stopped start-handshake liveness and retention contract as
+/// [`run_concurrent_mark`], including the enabled leaf/hash snapshots in
+/// `job.claims`.
+pub(super) unsafe fn run_concurrent_mark_enabled(
+    heap: HeapIdentity,
+    job: EnabledConcurrentMarkJob,
+) {
     // ON requires transitive bare-symbol handoff even in GEN0. This election
     // happens once, outside every classification and child-routing loop.
     if job.job.claims.major {
-        run_concurrent_mark_impl::<true, true, EnabledClaims>(job.job, job.claims);
+        // SAFETY: upheld by caller contract.
+        unsafe { run_concurrent_mark_impl::<true, true, EnabledClaims>(heap, job.job, job.claims) };
     } else {
-        run_concurrent_mark_impl::<false, true, EnabledClaims>(job.job, job.claims);
+        // SAFETY: upheld by caller contract.
+        unsafe {
+            run_concurrent_mark_impl::<false, true, EnabledClaims>(heap, job.job, job.claims)
+        };
     }
 }
 
@@ -1313,7 +1389,8 @@ fn route_snapshot_child<const MAJOR: bool, const SYMBOLS: bool, E: ClaimExtensio
 ) {
     if <E::Symbols as WorkerSymbolMarks>::ENABLED {
         if child.is_cons() {
-            job.gray.push(child);
+            // SAFETY: `child` was scanned from this active cycle's live snapshot.
+            unsafe { job.gray.push(child) };
         } else if child.is_heap_object() {
             if !concurrent_try_mark_owned_with_symbols::<MAJOR, SYMBOLS, E>(
                 child,
@@ -1322,7 +1399,8 @@ fn route_snapshot_child<const MAJOR: bool, const SYMBOLS: bool, E: ClaimExtensio
                 &mut job.gray,
                 logs,
             ) {
-                logs.result.deferred.push(MarkWord::of(child));
+                // SAFETY: `child` stays live through this cycle until termination.
+                logs.deferred.push(unsafe { MarkWord::of(child) });
             }
         } else if SYMBOLS {
             logs.note_symbol(child);
@@ -1333,7 +1411,8 @@ fn route_snapshot_child<const MAJOR: bool, const SYMBOLS: bool, E: ClaimExtensio
             return;
         }
         if child.is_cons() {
-            job.gray.push(child);
+            // SAFETY: `child` was scanned from this active cycle's live snapshot.
+            unsafe { job.gray.push(child) };
         } else if !concurrent_try_mark_owned_with_symbols::<MAJOR, SYMBOLS, E>(
             child,
             &job.claims,
@@ -1341,12 +1420,14 @@ fn route_snapshot_child<const MAJOR: bool, const SYMBOLS: bool, E: ClaimExtensio
             &mut job.gray,
             logs,
         ) {
-            logs.result.deferred.push(MarkWord::of(child));
+            // SAFETY: `child` stays live through this cycle until termination.
+            logs.deferred.push(unsafe { MarkWord::of(child) });
         }
     }
 }
 
-fn run_concurrent_mark_impl<const MAJOR: bool, const SYMBOLS: bool, E: ClaimExtension>(
+unsafe fn run_concurrent_mark_impl<const MAJOR: bool, const SYMBOLS: bool, E: ClaimExtension>(
+    heap: HeapIdentity,
     mut job: ConcurrentMarkJob,
     extension: E,
 ) {
@@ -1459,7 +1540,8 @@ fn run_concurrent_mark_impl<const MAJOR: bool, const SYMBOLS: bool, E: ClaimExte
                         // anyway) keeps ~2x the image size out of the queue.
                         let addr = child.gc_cons_ptr() as usize;
                         if addr < job.claims.dump_lo || addr >= job.claims.dump_hi {
-                            job.gray.push(child);
+                            // SAFETY: `child` was scanned from this cycle's live dump conses.
+                            unsafe { job.gray.push(child) };
                         }
                     } else if child.is_bare_symbol() {
                         // Deduped symbol hand-off: `mark_symbol` is
@@ -1469,7 +1551,8 @@ fn run_concurrent_mark_impl<const MAJOR: bool, const SYMBOLS: bool, E: ClaimExte
                         if SYMBOLS {
                             logs.note_symbol(child);
                         } else if seen_symbols.insert(child.bits()) {
-                            logs.result.deferred.push(MarkWord::of(child));
+                            // SAFETY: `child` is a bare symbol scanned in this active cycle.
+                            logs.deferred.push(unsafe { MarkWord::of(child) });
                         }
                     } else if child.is_heap_object() {
                         // Same filter as `mark_or_push_child`: immediates
@@ -1483,7 +1566,8 @@ fn run_concurrent_mark_impl<const MAJOR: bool, const SYMBOLS: bool, E: ClaimExte
                             &mut job.gray,
                             &mut logs,
                         ) {
-                            logs.result.deferred.push(MarkWord::of(child));
+                            // SAFETY: `child` stays live through this cycle until termination.
+                            logs.deferred.push(unsafe { MarkWord::of(child) });
                         }
                     }
                 }
@@ -1498,7 +1582,9 @@ fn run_concurrent_mark_impl<const MAJOR: bool, const SYMBOLS: bool, E: ClaimExte
     let mut since_stop_check = 0usize;
     'mark: loop {
         // Drain the local gray worklist (GC-thread-owned; no sharing).
-        while let Some(val) = job.gray.pop() {
+        // SAFETY: this is the concurrent marker thread inside an active cycle;
+        // queued words stay live through start-of-cycle roots, marks, and barriers.
+        while let Some(val) = unsafe { job.gray.pop() } {
             // Fix B: react to a stop request at a bounded quantum instead of
             // only between full drains. Any remaining gray work is handed to
             // the mutator below exactly like `deferred`: the termination fold
@@ -1510,7 +1596,8 @@ fn run_concurrent_mark_impl<const MAJOR: bool, const SYMBOLS: bool, E: ClaimExte
             if since_stop_check >= STOP_CHECK_QUANTUM {
                 since_stop_check = 0;
                 if job.stop.load(Ordering::Acquire) {
-                    job.gray.push(val); // not processed yet — hand it back too
+                    // SAFETY: `val` was just popped from `job.gray` in this cycle.
+                    unsafe { job.gray.push(val) }; // not processed yet — hand it back too
                     break 'mark;
                 }
             }
@@ -1526,7 +1613,8 @@ fn run_concurrent_mark_impl<const MAJOR: bool, const SYMBOLS: bool, E: ClaimExte
                 if !job.claims.pages.contains(ChunkClass::Cons, addr) {
                     // Mapped (non-dump) or new-block cons — let the mutator's
                     // termination mark it through the full `mark_value` path.
-                    logs.result.deferred.push(MarkWord::of(val));
+                    // SAFETY: `val` stays live through this cycle until termination.
+                    logs.deferred.push(unsafe { MarkWord::of(val) });
                     continue;
                 }
                 if unsafe { atomic_mark_owned_cons_ptr(ptr) } {
@@ -1546,7 +1634,8 @@ fn run_concurrent_mark_impl<const MAJOR: bool, const SYMBOLS: bool, E: ClaimExte
                         }
                         since_stop_check += 1;
                         if since_stop_check >= STOP_CHECK_QUANTUM {
-                            job.gray.push(cdr);
+                            // SAFETY: `cdr` is a live child read from an owned cons in this cycle.
+                            unsafe { job.gray.push(cdr) };
                             break;
                         }
                         let cptr = cdr.gc_cons_ptr();
@@ -1555,7 +1644,8 @@ fn run_concurrent_mark_impl<const MAJOR: bool, const SYMBOLS: bool, E: ClaimExte
                             break; // dump cons: permanent black
                         }
                         if !job.claims.pages.contains(ChunkClass::Cons, caddr) {
-                            logs.result.deferred.push(MarkWord::of(cdr));
+                            // SAFETY: `cdr` stays live through this cycle until termination.
+                            logs.deferred.push(unsafe { MarkWord::of(cdr) });
                             break;
                         }
                         if !unsafe { atomic_mark_owned_cons_ptr(cptr) } {
@@ -1582,7 +1672,8 @@ fn run_concurrent_mark_impl<const MAJOR: bool, const SYMBOLS: bool, E: ClaimExte
                 ) {
                     continue;
                 }
-                logs.result.deferred.push(MarkWord::of(val));
+                // SAFETY: `val` stays live through this cycle until termination.
+                logs.deferred.push(unsafe { MarkWord::of(val) });
             } else if <E::Symbols as WorkerSymbolMarks>::ENABLED && SYMBOLS {
                 logs.note_symbol(val);
             }
@@ -1627,11 +1718,16 @@ fn run_concurrent_mark_impl<const MAJOR: bool, const SYMBOLS: bool, E: ClaimExte
     // handoff; the termination fold routes both through the STW `mark_value`
     // drain. Empty on the normal (idle-stop) path.
     if !job.gray.is_empty() {
-        logs.result.deferred.extend(job.gray.drain_words());
+        logs.deferred.extend(job.gray.drain_words());
     }
     // Every exit, including either stop quantum, retains the owned logs.
     // No heap/snapshot access follows this handoff.
-    let _ = job.exited.send(logs.result);
+    // SAFETY: `logs.{deferred, promo, symbols}` were accumulated solely by
+    // this worker from live start-handshake state of `heap` and stay retained
+    // until `heap`'s coordinator joins on `job.exited`.
+    let result =
+        unsafe { ConcurrentMarkResult::from_parts(heap, logs.deferred, logs.promo, logs.symbols) };
+    let _ = job.exited.send(result);
 }
 
 /// Set the thread-local tagged heap pointer from the heap's provenance root.
@@ -1645,8 +1741,18 @@ fn run_concurrent_mark_impl<const MAJOR: bool, const SYMBOLS: bool, E: ClaimExte
 ///
 /// All production installers use this form. Root-owning test fixtures use it
 /// too; the legacy borrow installer is restricted to test builds.
+///
+/// # Safety
+///
+/// `root` is the allocation's [`super::AliasableBox`] root, and the caller
+/// is the owner installing or resuming that heap on this thread. The root
+/// stays live until it is cleared or replaced: every later `with_tagged_heap`
+/// dereferences it. No reference into the heap is live during the call,
+/// because mirror refresh forms a `&mut` from the root. Construct, pdump,
+/// world activation and resume, the gc-thread fallback, and the facade
+/// marker all use this one function. There is no second installer.
 #[doc(hidden)]
-pub fn set_tagged_heap_root(root: std::ptr::NonNull<TaggedHeap>) {
+pub unsafe fn set_tagged_heap_root(root: std::ptr::NonNull<TaggedHeap>) {
     // SAFETY: the caller supplies the live allocation's root pointer.
     if !tagged_heap_is_current(unsafe { root.as_ref() }) {
         super::super::collection_reads::reset_recent_reads_for_heap_installation();
@@ -1671,13 +1777,15 @@ pub fn set_tagged_heap_root(root: std::ptr::NonNull<TaggedHeap>) {
 /// migrated; no production or integration-test caller can use it.
 #[cfg(any(test, feature = "test-support"))]
 pub fn set_tagged_heap(heap: &mut TaggedHeap) {
+    let target = heap as *mut TaggedHeap;
+    refuse_if_foreign_heap_installed(target, heap.tagged_heap_identity());
     if !tagged_heap_is_current(heap) {
         super::super::collection_reads::reset_recent_reads_for_heap_installation();
     }
     // Legacy tests retain their existing borrow-derived heap contract.
     unsafe { attach_store_protocol(std::ptr::NonNull::from(&mut *heap)) };
-    TAGGED_HEAP.with(|h| h.set(heap as *mut TaggedHeap));
-    unsafe { sync_heap_tls_mirrors(heap as *mut TaggedHeap) };
+    TAGGED_HEAP.with(|h| h.set(target));
+    unsafe { sync_heap_tls_mirrors(target) };
 }
 
 /// Refresh the per-heap TLS mirrors after the allocation slot was stored.
@@ -1699,10 +1807,10 @@ unsafe fn sync_heap_tls_mirrors(root: *mut TaggedHeap) {
         TAGGED_HEAP_ID.with(|identity| identity.set(Some(heap.tagged_heap_identity())));
         TAGGED_HEAP_WRITE_TRACKING_MODE.with(|mode| mode.set(heap.write_tracking_mode()));
         TAGGED_HEAP_PARTITION_ACTIVE.with(|p| p.set(heap.partition_dump));
-        TAGGED_HEAP_CONCURRENT_ACTIVE.with(|c| c.set(heap.concurrent_mark_running));
+        TAGGED_HEAP_CONCURRENT_ACTIVE.with(|c| c.set(heap.concurrent_mark_running()));
         TAGGED_HEAP_CONCURRENT_HASH_ACTIVE.with(|active| {
             active.set(
-                heap.concurrent_mark_running
+                heap.concurrent_mark_running()
                     && heap.concurrent_claims()
                     && heap.concurrent_hash_snapshot().is_some(),
             );
@@ -1728,8 +1836,24 @@ unsafe fn sync_heap_tls_mirrors(root: *mut TaggedHeap) {
 /// installs the heap again, and the debug assertion at job start proves the
 /// slot was empty, so a read before that install faults deterministically
 /// instead of following a stale but plausible pointer.
+///
+/// # Safety
+///
+/// 1. No live active `Context` remains evaluating on this OS thread (owner
+///    state and carried World state have already been stowed or retired).
+///    Clearing a live `Context`'s slot allows a subsequent constructor or
+///    loader to install a foreign heap and turn the cleared `Context` dormant
+///    (rt A3).
+/// 2. No loan or reference derived from the TLS slot is live on this thread.
+/// 3. Store-protocol / deferred-reset lifecycle obligation: unlike
+///    [`clear_tagged_heap_if_installed`], this clears only the carrier's
+///    heap-pointer slot and hot-path mirrors — it does **not** call
+///    `detach_store_protocol()`, `clear_installed_store_heap()`, or
+///    `reset_recent_reads_for_heap_installation()`. The caller must ensure
+///    carrier stow and deferred `reset_carrier_tls()` uphold those invariants
+///    before any subsequent job runs on this carrier.
 #[doc(hidden)]
-pub fn clear_carrier_heap_tls() {
+pub unsafe fn clear_carrier_heap_tls() {
     TAGGED_HEAP.with(|slot| slot.set(std::ptr::null_mut()));
     TAGGED_HEAP_ID.with(|slot| slot.set(None));
     TAGGED_HEAP_WRITE_TRACKING_MODE.with(|slot| slot.set(WriteTrackingMode::Disabled));
@@ -1797,23 +1921,82 @@ pub fn carrier_heap_is_acceptable_for_job_start() -> bool {
 /// use-after-free, and the next heap to reuse that storage turns its header
 /// into garbage.
 ///
-/// The pointer identity check makes this safe to call unconditionally from a
-/// drop hook: an owner whose heap was already displaced by a later
-/// `set_tagged_heap` leaves the newer installation alone.
-pub fn clear_tagged_heap_if_installed(heap: &TaggedHeap) {
+/// Shared identity-checked TLS match predicate used by both foreign-heap
+/// refusal and conditional TLS clearing so install and uninstall cannot drift.
+///
+/// When `expected_id` is `Some(id)`, both the raw pointer and `TAGGED_HEAP_ID`
+/// must match (preventing same-address ABA reuse via `std::mem::replace` or
+/// free/realloc). When `None`, matches by raw pointer alone without
+/// dereferencing the heap (used by `clear_tagged_heap_root_if_installed` while
+/// an exclusive collector loan is held).
+#[inline]
+fn slot_matches_heap(
+    current: *mut TaggedHeap,
+    target: *const TaggedHeap,
+    expected_id: Option<usize>,
+) -> bool {
+    if current != (target as *mut TaggedHeap) {
+        return false;
+    }
+    match expected_id {
+        Some(id) => TAGGED_HEAP_ID
+            .try_with(|slot| slot.get() == Some(id))
+            .unwrap_or(false),
+        None => true,
+    }
+}
+
+/// The pointer and heap-identity (`TAGGED_HEAP_ID`) check makes this safe to
+/// call unconditionally from a drop hook: an owner whose heap was already
+/// displaced by a later `set_tagged_heap` (or a same-address `mem::replace`d
+/// heap with a different identity) leaves the installed heap alone.
+///
+/// # Safety
+///
+/// 1. `heap` is the caller's own heap, on its owning thread.
+/// 2. The owner becomes dormant: until its heap is reinstalled through the
+///    refusing predicate (or dropped), no evaluation, allocation, collection,
+///    or non-reactivating `Context` entry may run against the cleared heap.
+/// 3. No loan or reference derived from the TLS slot is live.
+#[doc(hidden)]
+pub unsafe fn clear_tagged_heap_if_installed(heap: &TaggedHeap) {
     heap.detach_store_protocol();
-    clear_tagged_heap_root_if_installed(std::ptr::NonNull::from(heap));
+    // SAFETY: caller upholds `clear_tagged_heap_root_matching`'s contract,
+    // `detach_store_protocol()` detached `heap`'s store protocol above, and
+    // passing `Some(heap.tagged_heap_identity())` prevents a same-address heap
+    // with a different identity from clearing another live heap's TLS slot.
+    unsafe {
+        clear_tagged_heap_root_matching(
+            std::ptr::NonNull::from(heap),
+            Some(heap.tagged_heap_identity()),
+        );
+    }
 }
 
 /// Uninstall by address alone, without creating a heap reference. Admission
 /// may hold an exclusive collector loan while clearing its root-derived TLS
 /// alias; even a shared reference from that root would invalidate the loan.
 /// This compares pointers and resets TLS mirrors, never dereferencing `root`.
+///
+/// # Safety
+///
+/// Same contract as [`clear_tagged_heap_if_installed`] (caller's own heap on
+/// its owning thread, owner dormant until reinstalled through the refusing
+/// predicate, no loan or reference derived from the TLS slot is live), plus
+/// the store protocol for `root` must already be detached.
 #[doc(hidden)]
-pub fn clear_tagged_heap_root_if_installed(root: std::ptr::NonNull<TaggedHeap>) {
+pub unsafe fn clear_tagged_heap_root_if_installed(root: std::ptr::NonNull<TaggedHeap>) {
+    // SAFETY: caller upholds the address-only uninstall contract above.
+    unsafe { clear_tagged_heap_root_matching(root, None) };
+}
+
+unsafe fn clear_tagged_heap_root_matching(
+    root: std::ptr::NonNull<TaggedHeap>,
+    expected_id: Option<usize>,
+) {
     let owned = root.as_ptr();
     let _ = TAGGED_HEAP.try_with(|h| {
-        if h.get() == owned {
+        if slot_matches_heap(h.get(), owned, expected_id) {
             super::super::collection_reads::clear_installed_store_heap(owned);
             super::super::collection_reads::reset_recent_reads_for_heap_installation();
             h.set(std::ptr::null_mut());
@@ -1918,6 +2101,201 @@ pub fn current_tagged_heap_identity() -> Option<usize> {
     TAGGED_HEAP_ID.with(Cell::get)
 }
 
+/// Whether the allocation slot currently names the armed per-thread test
+/// fallback heap, not a Context.
+///
+/// `Context::new` may replace that harness heap. It is not another live
+/// Context. Production builds, and an unarmed test process, always answer
+/// false: any installed pointer is then a real heap.
+#[doc(hidden)]
+pub fn installed_slot_is_armed_test_fallback() -> bool {
+    #[cfg(any(
+        any(test, feature = "test-support"),
+        feature = "test-thread-fallback-heap"
+    ))]
+    {
+        if !test_fallback_enabled() {
+            return false;
+        }
+        let ptr = TAGGED_HEAP.with(|slot| slot.get());
+        if ptr.is_null() {
+            return false;
+        }
+        TEST_FALLBACK_TAGGED_HEAP.with(|fb| {
+            fb.borrow()
+                .as_ref()
+                .is_some_and(|leak| leak.get().root().as_ptr() == ptr)
+        })
+    }
+    #[cfg(not(any(
+        any(test, feature = "test-support"),
+        feature = "test-thread-fallback-heap"
+    )))]
+    {
+        false
+    }
+}
+
+/// Cold refusal when a caller tries to install a live heap over another live
+/// heap on the same thread (rt A3).
+///
+/// No Lisp allocation: static string only.
+#[cold]
+#[inline(never)]
+fn refuse_foreign_heap_install() -> ! {
+    panic!(
+        "dormant Context: a Context heap cannot be installed while another heap is installed on this thread"
+    );
+}
+
+/// Refuse with a cold panic if a real (non-test-fallback) heap is already
+/// installed on this thread.
+#[doc(hidden)]
+pub fn refuse_if_live_heap_installed() {
+    if tagged_heap_is_installed() && !installed_slot_is_armed_test_fallback() {
+        refuse_foreign_heap_install();
+    }
+}
+
+/// Refuse if TLS already names a different live heap (by address or identity)
+/// that is not the armed test-fallback heap.
+///
+/// Checking both raw pointer equality and `TAGGED_HEAP_ID` closes address-reuse
+/// bypasses (such as `std::mem::replace` on a `TaggedHeap` at the same stack
+/// slot while the previous heap remains live).
+#[inline]
+fn refuse_if_foreign_heap_installed(target: *const TaggedHeap, target_id: usize) {
+    let current = TAGGED_HEAP.with(|slot| slot.get());
+    let same_heap = slot_matches_heap(current, target, Some(target_id));
+    if !current.is_null() && !same_heap && !installed_slot_is_armed_test_fallback() {
+        refuse_foreign_heap_install();
+    }
+}
+
+/// Install `root` if the slot is empty, already names `root` (same address and
+/// heap identity), or holds the armed test-fallback heap; otherwise refuse with
+/// a cold panic.
+///
+/// # Safety
+///
+/// Same contract as [`set_tagged_heap_root`].
+#[doc(hidden)]
+pub unsafe fn install_tagged_heap_root_refusing_foreign(root: std::ptr::NonNull<TaggedHeap>) {
+    // SAFETY: caller upholds `set_tagged_heap_root`'s contract (`root` is a
+    // live `TaggedHeap` allocation root with no conflicting mutable borrow).
+    let target_id = unsafe { (*root.as_ptr()).tagged_heap_identity() };
+    refuse_if_foreign_heap_installed(root.as_ptr(), target_id);
+    // SAFETY: caller upholds `set_tagged_heap_root`'s contract.
+    unsafe { set_tagged_heap_root(root) };
+}
+
+/// Save the installed heap, install `root`, and restore the saved slot on drop.
+///
+/// This is the only overwrite of a live slot besides `set_tagged_heap_root`
+/// itself. `Context::new` refuses that overwrite. Tests that intentionally
+/// nest a bare heap (no second Context) go through this scope. The scope does
+/// not borrow a Context; [`NestedTaggedHeapInstall`] tied to a Context is the
+/// eval crate's wrapper.
+///
+/// Drop restores only when the slot still names the heap this scope installed.
+/// A later installer keeps its slot.
+#[cfg(any(test, feature = "test-support"))]
+#[must_use]
+pub struct NestedTaggedHeapInstall<'a> {
+    previous: Option<std::ptr::NonNull<TaggedHeap>>,
+    installed: std::ptr::NonNull<TaggedHeap>,
+    active: bool,
+    _borrow: std::marker::PhantomData<&'a mut ()>,
+    _not_send: std::marker::PhantomData<std::rc::Rc<()>>,
+}
+
+#[cfg(any(test, feature = "test-support"))]
+impl NestedTaggedHeapInstall<'static> {
+    /// Install `root` with no Context borrow. Drop restores the previous slot.
+    ///
+    /// # Safety
+    ///
+    /// Same requirements as [`NestedTaggedHeapInstall::install`]: `root` must
+    /// be a live [`super::AliasableBox`] root owned until this scope ends or
+    /// drops, no references into `root` may be live during installation, and
+    /// any displaced previous root must stay live with no live references into
+    /// it when this scope ends or drops.
+    pub unsafe fn install_bare(root: std::ptr::NonNull<TaggedHeap>) -> Self {
+        // SAFETY: caller upholds `NestedTaggedHeapInstall::install`'s contract.
+        unsafe { Self::install(root) }
+    }
+}
+
+#[cfg(any(test, feature = "test-support"))]
+impl<'a> NestedTaggedHeapInstall<'a> {
+    /// Install `root`, saving any previously installed root to restore on drop.
+    ///
+    /// # Safety
+    ///
+    /// `root` must be a live [`super::AliasableBox`] root owned on this thread
+    /// until [`Self::end`] or [`Drop::drop`] completes. Forgetting the scope
+    /// (`std::mem::forget`) extends that liveness obligation indefinitely. No
+    /// reference into `root` may be live during this call (mirror refresh
+    /// forms `&mut`). Any displaced previous root must remain live until this
+    /// scope ends or drops, with no reference into it live during restoration.
+    pub unsafe fn install(root: std::ptr::NonNull<TaggedHeap>) -> Self {
+        let previous = TAGGED_HEAP.with(|slot| std::ptr::NonNull::new(slot.get()));
+        // SAFETY: caller guarantees `root` is a live AliasableBox root with no
+        // live references into it during installation.
+        unsafe { set_tagged_heap_root(root) };
+        Self {
+            previous,
+            installed: root,
+            active: true,
+            _borrow: std::marker::PhantomData,
+            _not_send: std::marker::PhantomData,
+        }
+    }
+
+    /// `true` when this scope replaced an empty slot, so Drop clears rather
+    /// than reinstalling a previous root.
+    pub fn replaced_empty_slot(&self) -> bool {
+        self.previous.is_none()
+    }
+
+    /// Restore the saved slot if this scope's heap is still installed.
+    pub fn end(&mut self) {
+        if !self.active {
+            return;
+        }
+        self.active = false;
+        let current = TAGGED_HEAP.with(|slot| slot.get());
+        if current != self.installed.as_ptr() {
+            return;
+        }
+        match self.previous {
+            Some(previous) => {
+                // SAFETY: `previous` was the live root displaced by `install`,
+                // and the caller guarantees it remains live until `end` with
+                // no live references into it during restoration.
+                unsafe { set_tagged_heap_root(previous) };
+            }
+            None => {
+                // `install` attached the store protocol. The address-only
+                // clear asserts that detach already happened, because an
+                // exclusive collector loan cannot form a heap reference.
+                // This scope holds no loan, so detach through the live heap.
+                // SAFETY: the caller keeps `installed` allocated until `end`.
+                // TestHeapScope ends the nest before retiring the heap.
+                // `install_bare` callers drop the nest while the box lives.
+                unsafe { clear_tagged_heap_if_installed(self.installed.as_ref()) };
+            }
+        }
+    }
+}
+
+#[cfg(any(test, feature = "test-support"))]
+impl Drop for NestedTaggedHeapInstall<'_> {
+    fn drop(&mut self) {
+        self.end();
+    }
+}
+
 /// Compile-time mode of the active mutator's heap, without installing one.
 /// Heapless lowering preserves the legacy shape. Heap-store leaves must be
 /// compiled on their intended heap; cached runtime leaves already obey this
@@ -1962,6 +2340,15 @@ unsafe fn installed_heap_generational_enabled(heap: *const TaggedHeap) -> bool {
 
 /// Access the thread-local tagged heap.
 ///
+/// # Safety
+///
+/// - No other `&mut TaggedHeap` (including an enclosing `with_tagged_heap`
+///   call or a live `&mut WorldView<TaggedHeap>`) may be active on this thread
+///   for the duration of `f`.
+/// - `f` must not mint a [`super::HeapRef`] or [`super::HeapMut`] (which would
+///   bypass `Context` / `WorldView` borrow checking) and must not trigger
+///   collection or sweep.
+///
 /// In a cfg(test) build, or after the dedicated test-thread-fallback-heap
 /// build used by the core tests' no-Context fixtures has been ARMED for this
 /// process (see `enable_test_thread_fallback`), auto-creates a fallback heap
@@ -1969,7 +2356,7 @@ unsafe fn installed_heap_generational_enabled(heap: *const TaggedHeap) -> bool {
 /// no heap is set: the fallback must not disable the tripwire for crates that
 /// never had it.
 #[inline]
-pub fn with_tagged_heap<R>(f: impl FnOnce(&mut TaggedHeap) -> R) -> R {
+pub unsafe fn with_tagged_heap<R>(f: impl FnOnce(&mut TaggedHeap) -> R) -> R {
     TAGGED_HEAP.with(|h| {
         let ptr = h.get();
         if !ptr.is_null() {
@@ -2001,7 +2388,10 @@ pub fn with_tagged_heap<R>(f: impl FnOnce(&mut TaggedHeap) -> R) -> R {
                     }
                     borrow.as_mut().unwrap().get_mut().root()
                 };
-                set_tagged_heap_root(root);
+                // SAFETY: the thread's fallback slot owns this AliasableBox root
+                // for the thread's life (ThreadExitLeak). It is created on the
+                // first call only. No heap reference is live here.
+                unsafe { set_tagged_heap_root(root) };
                 f(unsafe { &mut *root.as_ptr() })
             })
         }
@@ -2060,17 +2450,6 @@ pub fn note_heap_write(owner: TaggedValue, kind: HeapWriteKind) {
             note_heap_write_slow(owner, kind, None, None);
         }
     }
-}
-
-/// Central mutation hook for slot writes to the tagged heap.
-#[inline(always)]
-pub fn note_heap_slot_write(
-    owner: TaggedValue,
-    kind: HeapWriteKind,
-    slot: usize,
-    value: TaggedValue,
-) {
-    with_store_state(|store| note_heap_slot_write_in_store(store, owner, kind, slot, value));
 }
 
 #[inline(always)]
@@ -2211,7 +2590,9 @@ fn generation_only_cons_is_old(heap: &TaggedHeap, owner: TaggedValue) -> bool {
     if cur == 0 || ConsBlock::block_base_for_ptr(cur as *const ConsCell) != base {
         let owned = match heap.chunk_map.as_ref() {
             Some(map) => map.get(ptr as usize).is(ChunkClass::Cons),
-            None => return generation_only_registered_cons_is_old(heap, ptr),
+            // SAFETY: `ptr` was decoded from a live `TaggedValue` cons cell
+            // owned by this mutator; this leaf cannot safepoint.
+            None => return unsafe { generation_only_registered_cons_is_old(heap, ptr) },
         };
         if !owned {
             return false;
@@ -2243,9 +2624,14 @@ fn generation_only_cons_cell_offset(addr: usize) -> Option<usize> {
 /// Keep registry lookup temporaries inside the map-off fallback. Carrying
 /// its base and index across `contains_key` otherwise adds callee-saved
 /// registers to every setter, including the GEN0 immediate fast path.
+///
+/// # Safety
+/// If `ptr` falls inside a cons block registered in `heap`, it must point to a
+/// live, properly aligned [`ConsCell`] payload slot and no concurrent GC
+/// release or promotion may race with this call.
 #[cold]
 #[inline(never)]
-fn generation_only_registered_cons_is_old(heap: &TaggedHeap, ptr: *const ConsCell) -> bool {
+unsafe fn generation_only_registered_cons_is_old(heap: &TaggedHeap, ptr: *const ConsCell) -> bool {
     let base = ConsBlock::block_base_for_ptr(ptr);
     if !heap.cons_block_index_by_base.contains_key(&base) {
         return false;
@@ -2280,14 +2666,19 @@ fn note_cons_write_slow(
         // encoding and create no edge; a symbol's liveness rides on the card
         // like any heap value.
         if !value.is_some_and(TaggedValue::is_fixnum) {
-            with_tagged_heap(|heap| {
-                if heap
-                    .old_cons_trailer(owner)
-                    .is_some_and(|(trailer, index)| trailer.age_is_old(index))
-                {
-                    heap.mark_owner_card(addr);
-                }
-            });
+            // SAFETY: generational card-marking barrier; checks cons trailer
+            // age and marks a card byte only — never collects, re-enters
+            // `with_tagged_heap`, mints HeapRef/HeapMut, or mutates payloads.
+            unsafe {
+                with_tagged_heap(|heap| {
+                    if heap
+                        .old_cons_trailer(owner)
+                        .is_some_and(|(trailer, index)| trailer.age_is_old(index))
+                    {
+                        heap.mark_owner_card(addr);
+                    }
+                })
+            };
         }
         return;
     }
@@ -2312,13 +2703,19 @@ fn note_heap_write_slow(
         value,
     };
     if census_remset_probe_on() {
-        with_tagged_heap(|heap| heap.census_note_write(record));
+        // SAFETY: updates barrier census telemetry only; never collects,
+        // re-enters `with_tagged_heap`, mints capability tokens, or mutates
+        // Lisp object payloads.
+        unsafe { with_tagged_heap(|heap| heap.census_note_write(record)) };
     }
     let disabled =
         TAGGED_HEAP_WRITE_TRACKING_MODE.with(|mode| mode.get()) == WriteTrackingMode::Disabled;
     let concurrent = TAGGED_HEAP_CONCURRENT_ACTIVE.with(|c| c.get());
     if barrier_needs_heap(record, disabled, concurrent) {
-        with_tagged_heap(|heap| heap.record_heap_write(record));
+        // SAFETY: records write-barrier / SATB metadata only; never collects,
+        // re-enters `with_tagged_heap`, mints capability tokens, or mutates
+        // Lisp object payloads.
+        unsafe { with_tagged_heap(|heap| heap.record_heap_write(record)) };
     }
 }
 
@@ -2336,7 +2733,7 @@ pub(super) fn barrier_needs_heap(
         // Reject irrelevant generation-only writes before claiming the owner.
         // Tracking and concurrent marking use the legacy barrier below and
         // must not pay for a generational heap lookup.
-        let gen_decision = with_tagged_heap(|heap| {
+        let check_gen = |heap: &mut TaggedHeap| {
             if !heap.tagged_heap_generational_enabled() {
                 return None;
             }
@@ -2355,12 +2752,18 @@ pub(super) fn barrier_needs_heap(
                 heap.old_cons_trailer(record.owner)
                     .is_some_and(|(trailer, index)| trailer.age_is_old(index))
             } else {
-                TaggedHeap::value_heap_addr(record.owner).is_some_and(|addr| unsafe {
-                    GcHeader::needs_remembering(addr as *const GcHeader)
+                TaggedHeap::value_heap_addr(record.owner).is_some_and(|addr| {
+                    // SAFETY: `record.owner` is a live non-cons heap object
+                    // whose address begins with its initialized `GcHeader`.
+                    unsafe { GcHeader::needs_remembering(addr as *const GcHeader) }
                 })
             };
             Some(needs_log)
-        });
+        };
+        // SAFETY: read-only generational barrier filter; never collects,
+        // re-enters `with_tagged_heap`, mints capability tokens, or mutates
+        // Lisp object payloads.
+        let gen_decision = unsafe { with_tagged_heap(check_gen) };
         if let Some(needs_log) = gen_decision {
             return needs_log;
         }
@@ -2425,7 +2828,10 @@ pub fn feed_concurrent_roots(values: &[TaggedValue]) {
     if values.is_empty() || !TAGGED_HEAP_CONCURRENT_ACTIVE.with(|c| c.get()) {
         return;
     }
-    with_tagged_heap(|heap| heap.feed_satb_roots(values));
+    // SAFETY: pushes root words into the SATB buffer only; never collects,
+    // re-enters `with_tagged_heap`, mints capability tokens, or mutates
+    // Lisp object payloads.
+    unsafe { with_tagged_heap(|heap| heap.feed_satb_roots(values)) };
 }
 
 #[inline]
@@ -2442,7 +2848,10 @@ pub fn note_root_overwrite(pre_image: TaggedValue) {
     if !TAGGED_HEAP_CONCURRENT_ACTIVE.with(|c| c.get()) {
         return;
     }
-    with_tagged_heap(|heap| heap.note_root_overwrite_value(pre_image));
+    // SAFETY: logs a single SATB pre-image word only; never collects,
+    // re-enters `with_tagged_heap`, mints capability tokens, or mutates
+    // Lisp object payloads.
+    unsafe { with_tagged_heap(|heap| heap.note_root_overwrite_value(pre_image)) };
 }
 
 /// [`note_root_overwrite`] for a caller that has just read
@@ -2458,7 +2867,10 @@ pub(crate) fn note_root_overwrite_while_marking(pre_image: TaggedValue) {
     {
         return;
     }
-    with_tagged_heap(|heap| heap.note_root_overwrite_value(pre_image));
+    // SAFETY: logs a single SATB pre-image word only; never collects,
+    // re-enters `with_tagged_heap`, mints capability tokens, or mutates
+    // Lisp object payloads.
+    unsafe { with_tagged_heap(|heap| heap.note_root_overwrite_value(pre_image)) };
 }
 
 /// Whether a concurrent mark is active on this (mutator) thread — the gate the
@@ -2494,24 +2906,32 @@ pub(crate) fn note_string_interval_preimage(
     string_addr: usize,
     table: &crate::value::text_props::TextPropertyTable,
 ) {
-    with_tagged_heap(|heap| {
-        if !heap
-            .current_mutator_satb_mut()
-            .satb_string_preimage_addrs
-            .insert(string_addr)
-        {
-            return; // this string's full pre-image was already logged this cycle
-        }
-        let major = heap.generational.major_in_progress;
-        let (mutator, handoff) = heap.satb_parts();
-        table.for_each_root(|value| {
-            if value.is_heap_object()
-                || (major && matches!(value.gc_kind(), crate::tagged::value::ValueKind::Symbol(_)))
+    // SAFETY: records string interval pre-image roots in the SATB buffer only;
+    // never collects, re-enters `with_tagged_heap`, mints capability tokens,
+    // or mutates any Lisp object payload.
+    unsafe {
+        with_tagged_heap(|heap| {
+            if !heap
+                .current_mutator_satb_mut()
+                .satb_string_preimage_addrs
+                .insert(string_addr)
             {
-                mutator.satb.push(MarkWord::of(value), handoff);
+                return; // this string's full pre-image was already logged this cycle
             }
-        });
-    });
+            let major = heap.generational.major_in_progress;
+            let (mutator, handoff) = heap.satb_parts();
+            table.for_each_root(|value| {
+                if value.is_heap_object()
+                    || (major
+                        && matches!(value.gc_kind(), crate::tagged::value::ValueKind::Symbol(_)))
+                {
+                    // SAFETY: `value` is a live interval root on this heap
+                    // during its active concurrent mark cycle.
+                    mutator.satb.push(value, handoff);
+                }
+            });
+        })
+    };
 }
 
 #[cfg(test)]
@@ -2582,7 +3002,7 @@ pub(crate) mod concurrent_hash_worker_tests;
 mod worker_symbol_classification_tests {
     use super::*;
     use crate::heap_types::LispString;
-    use crate::intern::{intern, intern_uninterned};
+    use crate::intern::{intern, make_uninterned_symbol};
 
     #[test]
     fn worker_symbol_classification_preserves_namesakes_and_deduplicates_ids() {
@@ -2608,14 +3028,14 @@ mod worker_symbol_classification_tests {
         for value in ignored {
             assert!(!logs.note_symbol(value), "unexpected side mark: {value:?}");
         }
-        assert!(logs.result.symbols.is_empty());
+        assert!(logs.symbols.is_empty());
 
         let ids = [
             intern("u35-worker-symbol-classification"),
-            intern_uninterned("u35-worker-symbol-classification"),
-            intern_uninterned("nil"),
-            intern_uninterned("t"),
-            intern_uninterned("unbound"),
+            make_uninterned_symbol("u35-worker-symbol-classification"),
+            make_uninterned_symbol("nil"),
+            make_uninterned_symbol("t"),
+            make_uninterned_symbol("unbound"),
         ];
         assert_ne!(ids[0], ids[1], "same name does not imply same identity");
         for _ in 0..2 {
@@ -2628,7 +3048,7 @@ mod worker_symbol_classification_tests {
                 assert!(logs.note_symbol(value));
             }
         }
-        assert_eq!(logs.result.symbols, ids);
+        assert_eq!(logs.symbols, ids);
         assert_eq!(logs.seen_symbols.count(), ids.len());
 
         let mut gray = MarkStack::default();
@@ -2636,11 +3056,12 @@ mod worker_symbol_classification_tests {
             logs.queue_child::<true>(value, &mut gray);
         }
         assert_eq!(
-            gray.into_values(),
+            // SAFETY: unit test owns these values on this thread.
+            unsafe { gray.into_values() },
             heap_values,
             "only real heap objects join gray"
         );
-        assert_eq!(logs.result.symbols, ids);
+        assert_eq!(logs.symbols, ids);
 
         let mut legacy: WorkerMarkLogs = WorkerMarkLogs::default();
         let mut legacy_gray = MarkStack::default();
@@ -2650,8 +3071,9 @@ mod worker_symbol_classification_tests {
         for id in ids {
             legacy.queue_child::<false>(TaggedValue::from_sym_id(id), &mut legacy_gray);
         }
-        assert_eq!(legacy_gray.into_values(), heap_values);
-        assert!(legacy.result.symbols.is_empty());
+        // SAFETY: unit test owns these values on this thread.
+        assert_eq!(unsafe { legacy_gray.into_values() }, heap_values);
+        assert!(legacy.symbols.is_empty());
         assert_eq!(legacy.seen_symbols.len(), 0);
 
         // A fresh worker/cycle has its own bits. Snapshot routing preserves
@@ -2666,9 +3088,10 @@ mod worker_symbol_classification_tests {
                 next_cycle.queue_snapshot_child(TaggedValue::from_sym_id(id), &mut snapshot_gray);
             }
         }
-        assert_eq!(snapshot_gray.into_values(), heap_values);
+        // SAFETY: unit test owns these values on this thread.
+        assert_eq!(unsafe { snapshot_gray.into_values() }, heap_values);
         assert_eq!(
-            next_cycle.result.symbols,
+            next_cycle.symbols,
             ids.into_iter().rev().collect::<Vec<_>>()
         );
         assert_eq!(next_cycle.seen_symbols.count(), ids.len());
@@ -2743,3 +3166,16 @@ mod collector_test_support;
 #[cfg(test)]
 #[path = "tests/collector_start_test.rs"]
 mod collector_start_tests;
+
+#[cfg(test)]
+pub(crate) mod b13_test_hooks {
+    use super::*;
+    pub(crate) fn note_heap_slot_write(
+        owner: TaggedValue,
+        kind: HeapWriteKind,
+        slot: usize,
+        value: TaggedValue,
+    ) {
+        with_store_state(|store| note_heap_slot_write_in_store(store, owner, kind, slot, value));
+    }
+}

@@ -1,0 +1,23 @@
+error[E0599]: the associated function or constant `check` exists for struct `RequireClone<neovm_value::heap_registry::detachment::DetachedRegistry<std::string::String>>`, but its trait bounds were not satisfied
+ --> tests/pentry_e2_loan_ui/receipt_detached_registry_not_clone.rs
+  |
+  |     loan_bounds::RequireClone::<DetachedRegistry<String>>::check();
+  |                                                            ^^^^^ associated function or constant cannot be called due to unsatisfied trait bounds
+  |
+ ::: $WORKSPACE/crates/neovm-value/src/heap_registry/detachment.rs
+  |
+  | pub struct DetachedRegistry<T> {
+  | ------------------------------ doesn't satisfy `_: Clone`
+  |
+ ::: tests/pentry_e2_loan_ui/support/loan_bounds.rs
+  |
+  | pub struct RequireClone<T>(PhantomData<T>);
+  | -------------------------- associated function or constant `check` not found for this struct
+  |
+note: trait bound `neovm_value::heap_registry::detachment::DetachedRegistry<std::string::String>: Clone` was not satisfied
+ --> tests/pentry_e2_loan_ui/support/loan_bounds.rs
+  |
+  | impl<T: Clone> RequireClone<T> {
+  |         ^^^^^  ---------------
+  |         |
+  |         unsatisfied trait bound introduced here

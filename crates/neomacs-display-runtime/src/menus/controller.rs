@@ -582,25 +582,27 @@ impl MenuPresentation {
             .atlas
             .set_scale_factor(geometry.device_scale().get());
         self.host.draw(depth, device, queue, |target| {
-            renderer.begin_draw(target).paint_menu(
-                &MenuPanelPaint {
-                    panel: &local,
-                    menu: request.session.menu(),
-                    role: if depth == 0 {
-                        neomacs_display_protocol::menu::MenuPanelRole::Root
-                    } else {
-                        neomacs_display_protocol::menu::MenuPanelRole::Submenu
+            if let Ok(mut draw) = renderer.begin_draw(target) {
+                draw.paint_menu(
+                    &MenuPanelPaint {
+                        panel: &local,
+                        menu: request.session.menu(),
+                        role: if depth == 0 {
+                            neomacs_display_protocol::menu::MenuPanelRole::Root
+                        } else {
+                            neomacs_display_protocol::menu::MenuPanelRole::Submenu
+                        },
+                        face_fg: request.session.face_fg,
+                        face_bg: request.session.face_bg,
+                        font_face: request
+                            .fonts
+                            .font_bindings()
+                            .faces
+                            .get(&neomacs_display_protocol::FaceId::new(0)),
                     },
-                    face_fg: request.session.face_fg,
-                    face_bg: request.session.face_bg,
-                    font_face: request
-                        .fonts
-                        .font_bindings()
-                        .faces
-                        .get(&neomacs_display_protocol::FaceId::new(0)),
-                },
-                &mut request.atlas,
-            );
+                    &mut request.atlas,
+                );
+            }
         });
     }
 }

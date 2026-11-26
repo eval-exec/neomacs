@@ -20,8 +20,6 @@ use neovm_value::error::{expect_args, expect_max_args, expect_min_args};
 use neovm_value::heap_types::LispString;
 use neovm_value::value::ValueKind;
 use neovm_value::value::*;
-#[cfg(unix)]
-use std::ffi::CStr;
 use strum::IntoStaticStr;
 
 mod text_edit;
@@ -1478,7 +1476,7 @@ fn collect_overlay_change_hooks<H: crate::emacs_core::edit_host::EditHost>(
         // symbol's `insert-in-front-hooks' / `insert-behind-hooks' /
         // `modification-hooks' property.  Use the same category-resolving
         // lookup here instead of a plain plist read.
-        let mut overlay_hook = |prop: &str| -> Option<Value> {
+        let mut overlay_hook = |prop: &'static str| -> Option<Value> {
             let (edit, vars) = host.edit_and_vars();
             let value = crate::emacs_core::textprop::lookup_overlay_property(
                 vars,
@@ -2191,32 +2189,102 @@ pub fn builtin_preceding_char<H: crate::emacs_core::edit_host::EditHost>(
 /// `(file-group-gid)` — return the GID used for file ownership.
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
 
-/// `(group-name GID)` — return the group name for numeric GID.
+/// GNU `cons_to_unsigned` (`src/data.c:2932-2981`), backing `CONS_TO_INTEGER`
+/// for unsigned OS IDs such as `gid_t`.
+fn cons_to_unsigned(value: Value, max: u64) -> Result<u64, Flow> {
+    let mut valid = false;
+    let mut val = 0u64;
+
+    match value.kind() {
+        ValueKind::Float => {
+            let d = value.xfloat();
+            if d >= 0.0 && d < 1.0 + max as f64 {
+                val = d as u64;
+                valid = (val as f64) == d;
+            }
+        }
+        _ => {
+            let hi = if value.is_cons() {
+                value.cons_car()
+            } else {
+                value
+            };
+            let hi_val = match hi.kind() {
+                ValueKind::Fixnum(n) if n >= 0 => Some(n as u64),
+                ValueKind::Veclike(VecLikeType::Bignum) => {
+                    u64::try_from(hi.as_bignum().expect("bignum kind")).ok()
+                }
+                _ => None,
+            };
+            if let Some(top) = hi_val {
+                val = top;
+                valid = true;
+                if value.is_cons() {
+                    let rest = value.cons_cdr();
+                    if top <= (u64::MAX >> 40)
+                        && rest.is_cons()
+                        && matches!(rest.cons_car().kind(), ValueKind::Fixnum(m) if (0..(1 << 24)).contains(&m))
+                        && matches!(rest.cons_cdr().kind(), ValueKind::Fixnum(l) if (0..(1 << 16)).contains(&l))
+                    {
+                        let mid = rest.cons_car().as_fixnum().expect("checked") as u64;
+                        let low = rest.cons_cdr().as_fixnum().expect("checked") as u64;
+                        val = (top << 40) | (mid << 16) | low;
+                    } else if top <= (u64::MAX >> 16) {
+                        let low_obj = if rest.is_cons() {
+                            rest.cons_car()
+                        } else {
+                            rest
+                        };
+                        if let ValueKind::Fixnum(l) = low_obj.kind()
+                            && (0..(1 << 16)).contains(&l)
+                        {
+                            val = (top << 16) | (l as u64);
+                        } else {
+                            valid = false;
+                        }
+                    } else {
+                        valid = false;
+                    }
+                }
+            }
+        }
+    }
+
+    if valid && val <= max {
+        Ok(val)
+    } else {
+        Err(signal(
+            "error",
+            vec![Value::string(
+                "Not an in-range integer, integral float, or cons of integers",
+            )],
+        ))
+    }
+}
+
+/// `(group-name GID)` — return the group name for numeric GID, or nil if unknown.
+/// Matches GNU `Fgroup_name` (`src/editfns.c:1175-1191`).
 #[doc(hidden)]
 pub fn builtin_group_name(args: Vec<Value>) -> EvalResult {
     expect_args("group-name", &args, 1)?;
-    let gid = match args[0].kind() {
-        ValueKind::Fixnum(n) => n,
-        _ => {
-            return Err(signal(
-                "error",
-                vec![Value::string("Invalid GID specification")],
-            ));
-        }
-    };
-    if gid < 0 || gid > u32::MAX as i64 {
+    let arg = args[0];
+    if !matches!(
+        arg.kind(),
+        ValueKind::Fixnum(_)
+            | ValueKind::Float
+            | ValueKind::Cons
+            | ValueKind::Veclike(VecLikeType::Bignum)
+    ) {
         return Err(signal(
             "error",
             vec![Value::string("Invalid GID specification")],
         ));
     }
-    let Some(name) = lookup_group_name(gid as u32) else {
-        return Err(signal(
-            "error",
-            vec![Value::string("Invalid GID specification")],
-        ));
-    };
-    Ok(Value::string(name))
+    let gid = cons_to_unsigned(arg, u32::MAX as u64)? as u32;
+    match lookup_group_name(gid) {
+        Some(name) => Ok(Value::string(name)),
+        None => Ok(Value::NIL),
+    }
 }
 
 /// `(load-average &optional USE-FLOATS)` — return load averages.
@@ -2279,26 +2347,8 @@ pub fn builtin_logcount(args: Vec<Value>) -> EvalResult {
 // OS lookup helpers
 // ---------------------------------------------------------------------------
 
-#[cfg(unix)]
 fn lookup_group_name(gid: u32) -> Option<String> {
-    let group = unsafe { libc::getgrgid(gid as libc::gid_t) };
-    if group.is_null() {
-        return None;
-    }
-    let name_ptr = unsafe { (*group).gr_name };
-    if name_ptr.is_null() {
-        return None;
-    }
-    Some(
-        unsafe { CStr::from_ptr(name_ptr) }
-            .to_string_lossy()
-            .into_owned(),
-    )
-}
-
-#[cfg(not(unix))]
-fn lookup_group_name(_gid: u32) -> Option<String> {
-    None
+    neovm_value::system_vocab::posix_lookup::lookup_group_name(gid)
 }
 
 #[cfg(unix)]

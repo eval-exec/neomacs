@@ -100,7 +100,7 @@ fn max_leaf() -> crate::emacs_core::jit::compile::CompiledLeaf {
 }
 
 fn deopt(leaf: &crate::emacs_core::jit::compile::CompiledLeaf, ev: &mut Context) -> DeoptResume {
-    match leaf.call(ev as *mut Context as *mut u8, &[]) {
+    match unsafe { leaf.call(ev as *mut Context as *mut u8, &[]) } {
         NativeRun::DeoptAt(resume) => *resume,
         other => panic!("expected a precise deopt, got {other:?}"),
     }
@@ -182,10 +182,10 @@ fn note_deopt_prefers_the_stored_cause() {
         optional: Vec::new(),
         rest: None,
     });
-    f.lexical = true;
-    f.ops = vec![Op::Constant(0), Op::Constant(1), Op::Max, Op::Return];
-    f.constants = vec![Value::make_float(1.5), Value::make_int(7)].into();
-    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(4);
+    f.set_lexical(true);
+    f.set_ops(vec![Op::Constant(0), Op::Constant(1), Op::Max, Op::Return]);
+    f.set_constants(vec![Value::make_float(1.5), Value::make_int(7)].into());
+    f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(4));
     f.seal_hand_assembled_ops();
     let leaf = max_leaf();
     let resume = deopt(&leaf, &mut ev);
@@ -199,13 +199,15 @@ fn note_deopt_prefers_the_stored_cause() {
     let float = DeoptCause::ArithOperands(NumericFeedback::Float).census_index();
 
     let before = census();
-    let verdict = note_deopt(
-        ctx,
-        &f,
-        &leaf,
-        LeafOrigin::Entry,
-        precise(Some(DeoptCause::Unreached)),
-    );
+    let verdict = unsafe {
+        note_deopt(
+            ctx,
+            &f,
+            &leaf,
+            LeafOrigin::Entry,
+            precise(Some(DeoptCause::Unreached)),
+        )
+    };
     let after = census();
     assert_eq!(verdict, ReoptVerdict::Kept);
     assert_eq!(after[unreached] - before[unreached], 1);
@@ -221,7 +223,7 @@ fn note_deopt_prefers_the_stored_cause() {
 
     // No stored cause: the op classifies it, as before.
     let before = census();
-    let _ = note_deopt(ctx, &f, &leaf, LeafOrigin::Entry, precise(None));
+    let _ = unsafe { note_deopt(ctx, &f, &leaf, LeafOrigin::Entry, precise(None)) };
     let after = census();
     assert_eq!(after[float] - before[float], 1);
     assert_eq!(after[unreached], before[unreached]);

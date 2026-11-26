@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
 # The macOS neovm-core parity job, minus the runner plumbing (checkout, Rust
-# and Homebrew caches).  `.github/workflows/test-suite.yml`'s
-# `neovm-core-tests-macos` job runs exactly this file, so a lane can run the
-# same file on a Mac to prove the job before main's CI does:
+# and Homebrew caches), built in place.  A lane runs this file on a Mac to
+# prove the job before main's CI does:
 #
 #     scripts/ci/run-neovm-core-macos-job.sh \
 #         /opt/gnu-emacs-oracle/bin/emacs \
@@ -15,6 +14,15 @@
 # scripts/ci/build-gnu-oracle.sh (Darwin NS profile with kqueue; an NS build
 # answers --batch without a display).  A missing or different oracle fails in the checker below; nothing
 # is skipped.
+#
+# CI runs the same sequence from a shared build: in
+# `.github/workflows/test-suite.yml`, `neomacs-macos-test-build` runs the
+# fresh-build below (same LTO-off, 16-unit release settings) and archives the
+# test binaries with `cargo nextest archive`, and `neovm-core-tests-macos`
+# unpacks both and runs this file's other steps -- check-gnu-oracle.sh,
+# check-text-quoting-locale.sh, and `-E 'package(neovm-core)'` at 16 test
+# threads with NEOVM_FORCE_ORACLE_PATH -- from that archive.  Keep the two in
+# step: a check added here belongs in that job too.
 set -euo pipefail
 
 readonly usage="usage: $0 <gnu-emacs> <build-manifest> <version> <commit>"

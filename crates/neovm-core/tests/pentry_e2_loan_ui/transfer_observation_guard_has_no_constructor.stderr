@@ -1,0 +1,11 @@
+error[E0599]: no associated function or constant named `new` found for struct `neovm_value::tagged::collection_reads::ObservationPlaceholderGuard` in the current scope
+ --> tests/pentry_e2_loan_ui/transfer_observation_guard_has_no_constructor.rs
+  |
+  |     let _value = ObservationPlaceholderGuard::new();
+  |                                               ^^^ associated function or constant not found in `neovm_value::tagged::collection_reads::ObservationPlaceholderGuard`
+  |
+note: if you're trying to build a new `neovm_value::tagged::collection_reads::ObservationPlaceholderGuard`, consider using `neovm_value::tagged::collection_reads::ObservationPlaceholderGuard::install` which returns `neovm_value::tagged::collection_reads::ObservationPlaceholderGuard`
+ --> $WORKSPACE/crates/neovm-value/src/tagged/collection_reads.rs
+  |
+  |     pub unsafe fn install() -> Self {
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

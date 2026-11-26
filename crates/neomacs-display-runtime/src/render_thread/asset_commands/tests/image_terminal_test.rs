@@ -14,7 +14,9 @@ fn free_or_reload_clears_shared_image_terminal() {
     shared.publish_terminal(
         first,
         super::super::ImageDecodeTerminal::Failed(
-            neomacs_display_protocol::image_diagnostic::ImageDiagnostic::NotDrawable,
+            neomacs_display_protocol::image_diagnostic::ImageDecodeFailure::new(
+                neomacs_display_protocol::image_diagnostic::ImageDiagnostic::NotDrawable,
+            ),
         ),
     );
 
@@ -113,7 +115,9 @@ fn beginning_a_load_preserves_equal_newer_and_unrelated_terminal_state() {
     let newer = load(3);
     let unrelated = ImageLoadToken::new(ImageId::new(10), ImageLoadAttempt::new(1).unwrap());
     let failure = super::super::ImageDecodeTerminal::Failed(
-        neomacs_display_protocol::image_diagnostic::ImageDiagnostic::NotDrawable,
+        neomacs_display_protocol::image_diagnostic::ImageDecodeFailure::new(
+            neomacs_display_protocol::image_diagnostic::ImageDiagnostic::NotDrawable,
+        ),
     );
     shared.publish_terminal(older, failure.clone());
     shared.publish_terminal(

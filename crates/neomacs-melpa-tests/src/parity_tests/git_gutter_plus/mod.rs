@@ -80,7 +80,7 @@ const PRELUDE: &str = r####"
 
 (defun ggp412-test-write (file contents)
   (unless (and (file-name-absolute-p file)
-               (file-in-directory-p file ggp412-test-root))
+               (neomacs-melpa-path-inside-p file ggp412-test-root))
     (error "Refusing Git-Gutter+ fixture write outside owned root: %s" file))
   (let ((coding-system-for-write 'utf-8-unix))
     (with-temp-file file (insert contents))))
@@ -110,7 +110,7 @@ const PRELUDE: &str = r####"
    (lambda (argument)
      (if (and (stringp argument)
               (file-name-absolute-p argument)
-              (file-in-directory-p argument ggp412-test-root))
+              (neomacs-melpa-path-inside-p argument ggp412-test-root))
          (file-relative-name argument ggp412-test-root)
        argument))
    arguments))
@@ -131,7 +131,7 @@ const PRELUDE: &str = r####"
     (unless (and (equal program ggp412-test-git)
                  (null infile)
                  (not display)
-                 (file-in-directory-p default-directory ggp412-test-root))
+                 (neomacs-melpa-path-inside-p default-directory ggp412-test-root))
       (error "Unexpected Git-Gutter+ call-process: %S"
              (list program infile destination display arguments)))
     (let ((entry (ggp412-test-pop-plan 'call arguments)))
@@ -147,7 +147,7 @@ const PRELUDE: &str = r####"
                delete
                (eq destination t)
                (not display)
-               (file-in-directory-p default-directory ggp412-test-root))
+               (neomacs-melpa-path-inside-p default-directory ggp412-test-root))
     (error "Unexpected Git-Gutter+ call-process-region: %S"
            (list start end program delete destination display arguments)))
   (let* ((input (buffer-substring-no-properties start end))
@@ -168,7 +168,7 @@ const PRELUDE: &str = r####"
                (null infile)
                (equal destination '(t nil))
                (not display)
-               (file-in-directory-p default-directory ggp412-test-root))
+               (neomacs-melpa-path-inside-p default-directory ggp412-test-root))
     (error "Unexpected Git-Gutter+ process-file: %S"
            (list program infile destination display arguments)))
   (let ((entry (ggp412-test-pop-plan 'file arguments)))

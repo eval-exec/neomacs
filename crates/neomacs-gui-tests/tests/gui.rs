@@ -4,6 +4,9 @@
 //! selects it with --test. Each former per-file binary linked the display
 //! stack again; nextest runs every test in its own process.
 
+#[path = "braille_blank.rs"]
+mod braille_blank;
+
 #[path = "buffer_local_completion.rs"]
 mod buffer_local_completion;
 
@@ -25,8 +28,14 @@ mod close_confirmation;
 #[path = "coding_detection.rs"]
 mod coding_detection;
 
+#[path = "category_cursor_oracle.rs"]
+mod category_cursor_oracle;
+
 #[path = "coding_save.rs"]
 mod coding_save;
+
+#[path = "ctxmenu_popup_gui_oracle.rs"]
+mod ctxmenu_popup_gui_oracle;
 
 #[path = "colrv1_emoji.rs"]
 mod colrv1_emoji;
@@ -37,6 +46,25 @@ mod commit_editing;
 #[path = "compact_frame_geometry.rs"]
 mod compact_frame_geometry;
 
+#[path = "bidi_gui_cursor_785_oracle.rs"]
+mod bidi_gui_cursor_785_oracle;
+#[path = "bidi_gui_zero_width_785_oracle.rs"]
+mod bidi_gui_zero_width_785_oracle;
+#[path = "bidi_paragraph_direction_785_r2_gui_oracle.rs"]
+mod bidi_paragraph_direction_785_r2_gui_oracle;
+#[path = "composite_shaping_785_gui_oracle.rs"]
+mod composite_shaping_785_gui_oracle;
+#[path = "composition_gstring_metrics_n_orphan.rs"]
+mod composition_gstring_metrics_n_orphan;
+#[path = "composition_retry_folded_buffer.rs"]
+mod composition_retry_folded_buffer;
+
+#[path = "agent_shell_source.rs"]
+mod agent_shell_source;
+
+#[path = "chrome_source_acceptance.rs"]
+mod chrome_source_acceptance;
+
 #[path = "config_env_boot.rs"]
 mod config_env_boot;
 
@@ -45,6 +73,12 @@ mod desktop_font_startup;
 
 #[path = "desktop_font_updates.rs"]
 mod desktop_font_updates;
+
+#[path = "wayland_font_raster.rs"]
+mod wayland_font_raster;
+
+#[path = "font_xwayland_parity.rs"]
+mod font_xwayland_parity;
 
 // Only the Linux desktop-font suites (which pin a Linux font package) use
 // this helper; compiling it on other hosts is dead code.
@@ -76,14 +110,32 @@ mod extended_keysyms;
 #[path = "face_background_mode_gui_oracle.rs"]
 mod face_background_mode_gui_oracle;
 
+#[path = "failed_image_display_oracle.rs"]
+mod failed_image_display_oracle;
+
 #[path = "fill_column_stipple.rs"]
 mod fill_column_stipple;
+
+#[path = "indent_bars_stipple.rs"]
+mod indent_bars_stipple;
 
 #[path = "font_coverage.rs"]
 mod font_coverage;
 
+#[path = "font_fallback_composite_ink.rs"]
+mod font_fallback_composite_ink;
+
+#[path = "font_family_fallback.rs"]
+mod font_family_fallback;
+
 #[path = "font_name_pattern_resize.rs"]
 mod font_name_pattern_resize;
+
+#[path = "font_open_gui_oracle.rs"]
+mod font_open_gui_oracle;
+
+#[path = "font_otf_spec_selection.rs"]
+mod font_otf_spec_selection;
 
 #[path = "fontset_han_repertory.rs"]
 mod fontset_han_repertory;
@@ -93,6 +145,9 @@ mod frame_bar_parameters;
 
 #[path = "frame_resize_oracle.rs"]
 mod frame_resize_oracle;
+
+#[path = "gif_disposal_oracle.rs"]
+mod gif_disposal_oracle;
 
 #[path = "glyph_coverage.rs"]
 mod glyph_coverage;
@@ -139,6 +194,9 @@ mod minibuffer_line_gui;
 #[path = "minibuffer_selected_window.rs"]
 mod minibuffer_selected_window;
 
+#[path = "mini_query_geometry_gui_oracle.rs"]
+mod mini_query_geometry_gui_oracle;
+
 #[path = "mouse_position_in_root_frame_gui_oracle.rs"]
 mod mouse_position_in_root_frame_gui_oracle;
 
@@ -153,6 +211,10 @@ mod native_menus;
 
 #[path = "native_scrolling.rs"]
 mod native_scrolling;
+
+#[cfg(all(target_os = "linux", feature = "native-video-validation"))]
+#[path = "native_video_validation.rs"]
+mod native_video_validation;
 
 #[path = "neomacsclient_frames.rs"]
 mod neomacsclient_frames;
@@ -195,6 +257,9 @@ mod stalled_tls;
 
 #[path = "startup_failure.rs"]
 mod startup_failure;
+
+#[path = "startup_image_cache.rs"]
+mod startup_image_cache;
 
 #[path = "startup_user_settings.rs"]
 mod startup_user_settings;
@@ -239,3 +304,18 @@ mod category_word_wrap;
 
 #[path = "printer_quit.rs"]
 mod printer_quit;
+
+#[path = "line_number_scaled_cursor.rs"]
+mod line_number_scaled_cursor;
+
+#[path = "desktop_text_scaling.rs"]
+mod desktop_text_scaling;
+
+#[path = "font_hinting_weight.rs"]
+mod font_hinting_weight;
+
+#[path = "image_api_parity.rs"]
+mod image_api_parity;
+
+#[path = "font_hinting_advances.rs"]
+mod font_hinting_advances;

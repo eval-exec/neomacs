@@ -1,4 +1,7 @@
-use super::{CONSECUTIVE_SURFACE_LOST_THRESHOLD, DeviceLossDetector};
+use super::{
+    CONSECUTIVE_SURFACE_LOST_THRESHOLD, DeviceLossDetector, GpuExitDisposition,
+    gpu_exit_disposition, gpu_recovery_disposition,
+};
 use std::sync::atomic::Ordering;
 
 #[test]
@@ -54,6 +57,32 @@ fn successful_acquire_resets_the_streak() {
     assert!(!detector.take(), "acquired reset must restart the streak");
     assert!(detector.record_surface_lost());
     assert!(detector.take());
+}
+
+#[test]
+fn lost_device_exit_abandons_the_context() {
+    assert_eq!(gpu_exit_disposition(true), GpuExitDisposition::Abandon);
+}
+
+#[test]
+fn lost_device_recovery_abandons_the_context() {
+    assert_eq!(gpu_recovery_disposition(), GpuExitDisposition::Abandon);
+}
+
+#[test]
+fn live_device_exit_still_releases() {
+    assert_eq!(gpu_exit_disposition(false), GpuExitDisposition::Release);
+}
+
+#[test]
+fn is_latched_reads_without_draining() {
+    let mut detector = DeviceLossDetector::new();
+    assert!(!detector.is_latched());
+    detector.mark_lost_now();
+    assert!(detector.is_latched());
+    assert!(detector.is_latched());
+    assert!(detector.take());
+    assert!(!detector.is_latched());
 }
 
 #[test]

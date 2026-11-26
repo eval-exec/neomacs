@@ -76,14 +76,59 @@ enum RuntimeDirectory {
     InSandbox(PathBuf),
 }
 
+/// Byte budget for the `XDG_RUNTIME_DIR/emacs/server` socket path.
+///
+/// The harness contract (`harness_contract`, PEER 5832) requires the path
+/// below `XDG_RUNTIME_DIR` to stay at most 100 bytes: GNU appends
+/// `emacs/<server-name>` before binding an AF_UNIX socket, and `sun_path` is
+/// 108 bytes on Linux (104 on some BSDs). Keep the same bound as the contract
+/// test so a deep `TMPDIR` cannot silently violate it.
+#[cfg(unix)]
+const SOCKET_PATH_BUDGET: usize = 100;
+
+/// `tempfile` appends six random bytes to the "nmr-" prefix; the contract
+/// checks `base/nmr-XXXXXX/emacs/server`.
+#[cfg(unix)]
+const RUNTIME_DIR_SUFFIX_BYTES: usize = 1 + "nmr-".len() + 6 + "/emacs/server".len();
+
+/// Base directory for the short `XDG_RUNTIME_DIR`.
+///
+/// Prefer the caller's `TMPDIR` scratch location when it leaves enough socket
+/// headroom; otherwise use `/tmp`. Refuse when neither does: falling back to
+/// the deep directory would make every editor fail to bind its server socket,
+/// which is exactly the class of host-dependent skew this harness refuses
+/// instead of recording.
+#[cfg(unix)]
+fn socket_safe_runtime_base() -> Result<PathBuf, String> {
+    let fits =
+        |base: &Path| base.as_os_str().len() + RUNTIME_DIR_SUFFIX_BYTES <= SOCKET_PATH_BUDGET;
+    let ambient = std::env::temp_dir();
+    if fits(&ambient) {
+        return Ok(ambient);
+    }
+    let slash_tmp = PathBuf::from("/tmp");
+    if fits(&slash_tmp) {
+        return Ok(slash_tmp);
+    }
+    Err(format!(
+        "MELPA harness has no socket-safe XDG_RUNTIME_DIR base: TMPDIR {} and \
+         /tmp leave less than the {SOCKET_PATH_BUDGET}-byte budget for \
+         `emacs/<server-name>` (AF_UNIX sun_path is 108 bytes). Set TMPDIR to a \
+         short path (CI uses a short workspace TMPDIR) or unset CARGO_TARGET_DIR \
+         and run from a shallower checkout.",
+        ambient.display()
+    ))
+}
+
 impl RuntimeDirectory {
     fn new(_case_root: &Path) -> Result<Self, String> {
         #[cfg(unix)]
         {
             // GNU Emacs appends `emacs/<server-name>` to XDG_RUNTIME_DIR
             // before binding an AF_UNIX socket. Avoid the deeper CASE_ROOT
-            // path, while honoring the caller's TMPDIR scratch location.
-            let base = std::env::temp_dir();
+            // path, while honoring the caller's TMPDIR scratch location when
+            // it is short enough and refusing a base that is not.
+            let base = socket_safe_runtime_base()?;
             let directory = tempfile::Builder::new()
                 .prefix("nmr-")
                 .tempdir_in(&base)
@@ -131,13 +176,37 @@ const MAX_SANDBOX_HOME: usize = 120;
 
 /// Base directory for a scenario's ephemeral case root.
 ///
-/// The sandbox root is disposable, so choose the MELPA cache root when its
-/// path leaves the HOME short enough for the package-TUI prompt row; a deep
-/// worktree or CI sandbox falls back to the system temporary directory (and,
-/// on Unix, `/tmp` as the last resort).  This is the same shape as the
+/// Every sandbox lives below the MELPA cache root, which is inside the
+/// checkout, so the editor derives the same filesystem context for a case on
+/// every host.  That matters because observable editor state depends on the
+/// sandbox path: `normal-backup-enable-predicate' (GNU `files.el') suppresses
+/// backups below `temporary-file-directory' and `/tmp', and the
+/// auto-save-buffers-enhanced checkout fixture resolves its root by walking
+/// above the sandbox for a `.git'/`.svn'/`.cvs' marker.  A sandbox under
+/// `/tmp' turns both into host-path-dependent state that the recorded
+/// snapshots did not see.
+///
+/// The MELPA cache root follows `CARGO_TARGET_DIR`, so this is inside the
+/// checkout only when that variable is unset.  A `<worktree>/target` symlink
+/// to another volume still counts: the checkout walk is logical.  Differential
+/// parity probes do not rely on that silently: they call [`require_checkout_root`]
+/// and refuse an out-of-checkout base with an actionable message.
+///
+/// Package-TUI scenarios need a short HOME instead; see
+/// [`short_home_sandbox_base`].
+fn checkout_sandbox_base() -> PathBuf {
+    neomacs_infra::melpa_cache_root()
+}
+
+/// Base directory for the package-TUI scenarios, whose HOME is typed into a
+/// 160-column prompt row.
+///
+/// Choose the MELPA cache root when its path leaves the HOME short enough;
+/// a deep worktree or CI sandbox falls back to the system temporary directory
+/// (and, on Unix, `/tmp' as the last resort).  This is the same shape as the
 /// socket fixtures' sun_path handling: the harness, not the caller's path,
-/// picks a location the fixture can display and bind.
-fn sandbox_case_base(label: &str) -> PathBuf {
+/// picks a location the fixture can display and type.
+fn short_home_sandbox_base(label: &str) -> PathBuf {
     // tempfile appends six random characters to the prefix.
     let prefix_and_suffix = sanitize_label(label).len() + 1 + 6;
     let needed = prefix_and_suffix + "/home".len();
@@ -162,9 +231,20 @@ fn sandbox_case_base(label: &str) -> PathBuf {
 }
 
 impl MelpaSandbox {
-    /// Create a sandbox below the melpa cache root.
+    /// Create a sandbox below the melpa cache root inside the checkout.
     pub fn new(label: &str) -> Result<Self, String> {
-        let base = sandbox_case_base(label);
+        Self::with_base(label, checkout_sandbox_base())
+    }
+
+    /// Create a sandbox whose HOME fits the package-TUI prompt row.
+    ///
+    /// Only the PTY package scenarios that render `Write file: <home>/...'
+    /// need this shorter layout; every other caller uses [`Self::new`].
+    pub fn new_with_short_home(label: &str) -> Result<Self, String> {
+        Self::with_base(label, short_home_sandbox_base(label))
+    }
+
+    fn with_base(label: &str, base: PathBuf) -> Result<Self, String> {
         fs::create_dir_all(&base).map_err(|error| {
             format!(
                 "failed to create MELPA scratch directory {}: {error}",
@@ -280,6 +360,65 @@ pub fn package_environment_at(root: &Path) -> Result<CanonicalEnvironment, Strin
             .map_err(|error| format!("create {}: {error}", directory.display()))?;
     }
     neomacs_infra::packages::install::package_environment_with_runtime(root, &home, &tmp, &runtime)
+}
+
+/// The outermost ancestor of `path` that carries a checkout marker.
+///
+/// The walk is lexical. Canonicalizing first would follow a
+/// `<worktree>/target` symlink onto another volume and miss the checkout that
+/// owns the link. Marker checks still use [`Path::exists`], which follows a
+/// symlink at the marker itself, matching `file-exists-p` in the
+/// auto-save-buffers-enhanced fixture.
+///
+/// The marker set and the "outermost wins" rule match the fixtures that read
+/// a checkout out of the sandbox path: auto-save-buffers-enhanced walks the
+/// whole ancestor chain and keeps the LAST `.git'/`.svn'/`.cvs' it sees
+/// (`auto-save-buffers-enhanced.el:288-305`), not the nearest one
+/// `locate-dominating-file` would return.
+pub fn outermost_checkout_root(path: &Path) -> Option<PathBuf> {
+    let mut directory = if path.is_dir() {
+        path.to_path_buf()
+    } else {
+        path.parent()?.to_path_buf()
+    };
+    let mut outermost = None;
+    loop {
+        if [".git", ".svn", ".cvs"]
+            .iter()
+            .any(|marker| directory.join(marker).exists())
+        {
+            outermost = Some(directory.clone());
+        }
+        match directory.parent() {
+            Some(parent) if parent != directory => directory = parent.to_path_buf(),
+            _ => break,
+        }
+    }
+    outermost
+}
+
+/// Require `path` to live inside a checkout, for a caller whose observable
+/// behavior derives from the sandbox location.
+///
+/// GNU `files.el' disables backups below `temporary-file-directory' and
+/// `/tmp' (`normal-backup-enable-predicate'), and checkout fixtures resolve
+/// their root by walking above the sandbox.  A sandbox outside the checkout
+/// therefore makes a path-independent contract depend on the host.  The
+/// harness refuses such a layout instead of silently recording it.
+pub fn require_checkout_root(path: &Path) -> Result<PathBuf, String> {
+    outermost_checkout_root(path).ok_or_else(|| {
+        format!(
+            "sandbox {} is not inside a checkout (no .git/.svn/.cvs above it); \
+             run the MELPA suite with CARGO_TARGET_DIR unset so the MELPA cache \
+             root, and every case root below it, lives inside the checkout. \
+             If build output must live on another volume, leave CARGO_TARGET_DIR \
+             unset and point <worktree>/target at that directory with a symlink; \
+             the checkout walk uses that logical path. An absolute CARGO_TARGET_DIR \
+             outside the checkout is refused. GNU backup policy and the checkout \
+             fixtures derive observable state from that path.",
+            path.display()
+        )
+    })
 }
 
 pub fn sanitize_label(label: &str) -> String {
@@ -626,7 +765,11 @@ pub use neomacs_infra::packages::install::{
     deterministic_process_environment, package_preparation_run_id,
     publish_package_preparation_failure,
 };
-/// The path to the `neomacs` binary (override with `NEOMACS_BIN`).
+/// The path to the `neomacs` binary.
+///
+/// `NEOMACS_BIN` wins. Otherwise `NEOVM_BINARY_PATH` is the oracle harness
+/// path, so a private `CARGO_TARGET_DIR` does not fall through to the
+/// worktree `target/release` stamp. The workspace binary is the last resort.
 ///
 /// The resolved binary is attested against its fresh-build stamp before it is
 /// returned.  A MELPA/treesit probe that spawns an editor whose Lisp tree was
@@ -640,10 +783,29 @@ pub use neomacs_infra::packages::install::{
 /// `NEOVM_SKIP_FRESH_BUILD_STAMP=<non-empty>` is the shared documented
 /// override and its value is echoed.
 pub fn neomacs_binary() -> PathBuf {
-    let binary = std::env::var_os("NEOMACS_BIN")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| workspace_root().join("target/release/neomacs"));
+    let neomacs_bin = std::env::var_os("NEOMACS_BIN");
+    let neovm_binary_path = std::env::var_os("NEOVM_BINARY_PATH");
+    let binary = resolve_neomacs_binary(
+        neomacs_bin.as_deref(),
+        neovm_binary_path.as_deref(),
+        &workspace_root(),
+    );
     attested_neomacs_binary(binary)
+}
+
+/// Pick the editor binary without reading the process environment.
+///
+/// Split from [`neomacs_binary`] so the order can be tested without the
+/// attestation cache, which records one verdict per process.
+pub(crate) fn resolve_neomacs_binary(
+    neomacs_bin: Option<&OsStr>,
+    neovm_binary_path: Option<&OsStr>,
+    workspace: &Path,
+) -> PathBuf {
+    neomacs_bin
+        .map(PathBuf::from)
+        .or_else(|| neovm_binary_path.map(PathBuf::from))
+        .unwrap_or_else(|| workspace.join("target/release/neomacs"))
 }
 
 /// [`neomacs_binary`]'s attestation half, split out so the pinning test can

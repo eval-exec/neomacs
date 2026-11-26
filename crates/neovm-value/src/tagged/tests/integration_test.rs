@@ -276,7 +276,7 @@ fn test_gc_mixed_types() {
     assert_eq!(heap.allocated_count(), 4);
 
     // Collect with only root_cons and root_float as roots
-    heap.collect(vec![root_cons, root_float].into_iter());
+    heap.collect_rooted(vec![root_cons, root_float].into_iter());
 
     assert_eq!(heap.allocated_count(), 2);
     assert_eq!(root_cons.cons_car().as_fixnum(), Some(1));

@@ -68,9 +68,6 @@ const NON_EDITOR_PROGRAMS: &[&str] = &[
     // Compression fixture input (`source_startup_silences_jka_compr`):
     // produces the `.el.gz` under test, never spawns an editor.
     "gzip",
-    // Cargo metadata queries in the architecture guards: the build tool,
-    // not an editor.
-    "cargo",
 ];
 
 /// A reviewed spawn whose program is a variable but is not an editor.
@@ -115,6 +112,11 @@ const EXCEPTIONS: &[Exception] = &[
         path_suffix: "neomacs-melpa-tests/src/parity_tests/robe/mod.rs",
         argument: "program",
         reason: "Ruby/gem toolchain command prefix",
+    },
+    Exception {
+        path_suffix: "neomacs-melpa-tests/src/gui_parity_tests/gui_font_hermeticity_test.rs",
+        argument: "program",
+        reason: "fontconfig CLI (fc-list/fc-match) run under the pair's pinned FONTCONFIG_FILE",
     },
     Exception {
         path_suffix: "neomacs-tui-tests/src/lib.rs",
@@ -198,6 +200,20 @@ fn is_exception(relative: &str, argument: &str) -> bool {
     EXCEPTIONS.iter().any(|exception| {
         relative.ends_with(exception.path_suffix) && argument == exception.argument
     })
+}
+
+#[test]
+fn bash_that_can_launch_an_editor_stays_a_violation() {
+    assert!(
+        !NON_EDITOR_PROGRAMS.contains(&"bash"),
+        "a program-wide bash allow exempts every Command::new(\"bash\"), including a script that launches an editor"
+    );
+    let argument = first_argument("Command::new(\"bash\")");
+    assert_eq!(argument, "\"bash\"");
+    assert!(
+        !NON_EDITOR_PROGRAMS.contains(&argument.trim_matches('"')),
+        "Command::new(\"bash\") must fail the tripwire"
+    );
 }
 
 #[test]

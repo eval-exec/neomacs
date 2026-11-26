@@ -3,6 +3,7 @@ use crate::emacs_core::error::LispCondition;
 use crate::emacs_core::error::{FlowRef, FlowResultExt};
 use crate::emacs_core::print::{PrintShorthandSymbol, format_flow_with_eval, quote_payload};
 use crate::emacs_core::{Context, Value, print_value_bytes_with_eval, print_value_with_eval};
+use neovm_value::intern::intern;
 
 #[test]
 fn list_prints_buffers_with_names_in_eval_context() -> Result<(), EvalError> {
@@ -172,7 +173,7 @@ fn print_shorthand_symbol_domain_matches_gnu_printer_symbols() {
         (PrintShorthandSymbol::Comma, ","),
         (PrintShorthandSymbol::CommaAt, ",@"),
     ] {
-        let value = Value::symbol(name);
+        let value = Value::from_sym_id(intern(name));
         assert_eq!(symbol.name(), name);
         assert_eq!(PrintShorthandSymbol::from_lisp_value(&value), Some(symbol));
     }
@@ -382,7 +383,7 @@ fn raw_condition_inheriting_minibuffer_quit_does_not_take_down_session() {
 /// This is the cheap, direct pin for that class: build a signal whose payload
 /// is heap-allocated, drop every OTHER reference to it, collect, and require
 /// the payload to still be a live list. Before the fix the cons was on the
-/// free list, so its car read back as [`Value::DEAD`] — GNU's `dead_object`.
+/// free list, so its car read back as `DEAD` (`is_dead()`) — GNU's `dead_object`.
 #[test]
 fn in_flight_signal_payload_survives_a_collection() {
     crate::test_utils::init_test_tracing();
@@ -454,7 +455,7 @@ fn condition_case_binding_value_survives_a_collection() {
 /// `Flow::Throw` payload that is not a seeded root is reclaimed mid-unwind and
 /// `catch` returns a free-list cell.
 ///
-/// Red before the pin: the payload cons's car reads back as [`Value::DEAD`],
+/// Red before the pin: the payload cons's car reads back as `DEAD` (`is_dead()`),
 /// GNU's `dead_object` (src/alloc.c:6858) that `set_free_next` now writes.
 #[test]
 fn in_flight_throw_payload_survives_a_collection() {

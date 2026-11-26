@@ -7,9 +7,12 @@ fn satb_registered_hot_and_cold_mutators_fold_retired_owner_and_union_dedup() {
     let mut heap = TaggedHeap::new();
     let handoff = heap.satb_handoff.clone();
     heap.current_mutator_gc_mut().bytes_since_gc = 7;
-    heap.current_mutator_satb_mut()
-        .satb
-        .push(MarkWord::of(TaggedValue::fixnum(0)), &handoff);
+    // SAFETY: immediate fixnum pushed into this test heap's SATB handoff.
+    unsafe {
+        heap.current_mutator_satb_mut()
+            .satb
+            .push(TaggedValue::fixnum(0), &handoff);
+    }
     heap.current_mutator_satb_mut()
         .satb_snapshotted_owners
         .insert(17);
@@ -25,10 +28,13 @@ fn satb_registered_hot_and_cold_mutators_fold_retired_owner_and_union_dedup() {
         // Every mutator logs the same owner independently; only the stopped
         // union may dedup across owners. This catches accidental shared sets.
         assert!(entry.satb.satb_snapshotted_owners.insert(17));
-        entry.satb.satb.push(
-            MarkWord::of(TaggedValue::fixnum(((ordinal + 1) * 10) as i64)),
-            &handoff,
-        );
+        // SAFETY: immediate fixnum pushed into this test heap's SATB handoff.
+        unsafe {
+            entry
+                .satb
+                .satb
+                .push(TaggedValue::fixnum(((ordinal + 1) * 10) as i64), &handoff);
+        }
     }
     world
         .retire_mutator_gc_for_test(ids[1])
@@ -36,10 +42,13 @@ fn satb_registered_hot_and_cold_mutators_fold_retired_owner_and_union_dedup() {
         .acknowledge();
     for (ordinal, id) in ids.iter().copied().enumerate() {
         if ordinal != 1 {
-            world.mutator_gc_for_test(id).satb.satb.push(
-                MarkWord::of(TaggedValue::fixnum(((ordinal + 1) * 10 + 1) as i64)),
-                &handoff,
-            );
+            // SAFETY: immediate fixnum pushed into this test heap's SATB handoff.
+            unsafe {
+                world.mutator_gc_for_test(id).satb.satb.push(
+                    TaggedValue::fixnum(((ordinal + 1) * 10 + 1) as i64),
+                    &handoff,
+                );
+            }
         }
     }
     assert_eq!(world.heap().mutators().count(), 4);
@@ -67,11 +76,14 @@ fn satb_begin_rejects_residual_in_any_registration_without_clearing_it() {
     // SAFETY: fixture owns all K registered mutator states and the heap.
     let mut world = unsafe { scan_contract::SingleMutatorWorld::from_heap(&mut heap) };
     let id = world.register_mutator_gc_for_test();
-    world
-        .mutator_gc_for_test(id)
-        .satb
-        .satb
-        .push(MarkWord::of(TaggedValue::fixnum(42)), &handoff);
+    // SAFETY: immediate fixnum pushed into this test heap's SATB handoff.
+    unsafe {
+        world
+            .mutator_gc_for_test(id)
+            .satb
+            .satb
+            .push(TaggedValue::fixnum(42), &handoff);
+    }
     assert!(matches!(
         world.begin_satb_cycle(),
         Err(scan_contract::SatbDrainError::Residual)
@@ -94,9 +106,12 @@ fn satb_termination_counts_partials_separately_from_published_and_retired_chunks
     let mut heap = TaggedHeap::new();
     let handoff = heap.satb_handoff.clone();
     for ordinal in 0..satb::SATB_CHUNK_WORDS + 1 {
-        heap.current_mutator_satb_mut()
-            .satb
-            .push(MarkWord::of(TaggedValue::fixnum(ordinal as i64)), &handoff);
+        // SAFETY: immediate fixnum pushed into this test heap's SATB handoff.
+        unsafe {
+            heap.current_mutator_satb_mut()
+                .satb
+                .push(TaggedValue::fixnum(ordinal as i64), &handoff);
+        }
     }
     // SAFETY: this fixture owns every paired registration, with no worker,
     // TLS alias, callback or Lisp allocation while the world is admitted.
@@ -104,16 +119,23 @@ fn satb_termination_counts_partials_separately_from_published_and_retired_chunks
     let active = world.register_mutator_gc_for_test();
     let retired = world.register_mutator_gc_for_test();
     for ordinal in 0..satb::SATB_CHUNK_WORDS {
-        world.mutator_gc_for_test(active).satb.satb.push(
-            MarkWord::of(TaggedValue::fixnum((100 + ordinal) as i64)),
-            &handoff,
-        );
+        // SAFETY: immediate fixnum pushed into this test heap's SATB handoff.
+        unsafe {
+            world
+                .mutator_gc_for_test(active)
+                .satb
+                .satb
+                .push(TaggedValue::fixnum((100 + ordinal) as i64), &handoff);
+        }
     }
-    world
-        .mutator_gc_for_test(retired)
-        .satb
-        .satb
-        .push(MarkWord::of(TaggedValue::fixnum(200)), &handoff);
+    // SAFETY: immediate fixnum pushed into this test heap's SATB handoff.
+    unsafe {
+        world
+            .mutator_gc_for_test(retired)
+            .satb
+            .satb
+            .push(TaggedValue::fixnum(200), &handoff);
+    }
     world
         .retire_mutator_gc_for_test(retired)
         .unwrap()
@@ -149,9 +171,12 @@ fn satb_inventory_counts_aligned_control_chunks_partials_and_sidecar() {
     let mut heap = TaggedHeap::new();
     let handoff = heap.satb_handoff.clone();
     for ordinal in 0..satb::SATB_CHUNK_WORDS + 1 {
-        heap.current_mutator_satb_mut()
-            .satb
-            .push(MarkWord::of(TaggedValue::fixnum(ordinal as i64)), &handoff);
+        // SAFETY: immediate fixnum pushed into this test heap's SATB handoff.
+        unsafe {
+            heap.current_mutator_satb_mut()
+                .satb
+                .push(TaggedValue::fixnum(ordinal as i64), &handoff);
+        }
     }
     let inventory = memory_inventory::snapshot(&heap, false);
     let find = |name| {
@@ -179,7 +204,7 @@ fn satb_inventory_counts_aligned_control_chunks_partials_and_sidecar() {
 #[test]
 fn satb_test_owner_switch_restores_hot_cold_state_and_tls_after_panic() {
     let mut heap = AliasableBox::new(TaggedHeap::new());
-    set_tagged_heap_root(heap.root());
+    unsafe { set_tagged_heap_root(heap.root()) };
     heap.current_mutator_gc_mut().bytes_since_gc = 11;
     heap.current_mutator_satb_mut()
         .satb_snapshotted_owners
@@ -237,7 +262,7 @@ fn satb_test_owner_switch_restores_hot_cold_state_and_tls_after_panic() {
 fn heapborrow_r6_registered_owner_barrier_keeps_root_provenance() {
     let mut heap = aliasable::AliasableBox::new(TaggedHeap::new());
     let root = heap.root();
-    set_tagged_heap_root(root);
+    unsafe { set_tagged_heap_root(root) };
     let old = heap.alloc_cons(TaggedValue::fixnum(19), TaggedValue::NIL);
     let source = heap.alloc_cons(old, TaggedValue::NIL);
     let id = {
@@ -246,7 +271,7 @@ fn heapborrow_r6_registered_owner_barrier_keeps_root_provenance() {
         world.register_mutator_gc_for_test()
     };
     heap.concurrent_begin();
-    set_tagged_heap_root(root);
+    unsafe { set_tagged_heap_root(root) };
     {
         // SAFETY: all artificial owners are stopped on this fixture thread;
         // the selected writer changes only preallocated cons cells and logs.

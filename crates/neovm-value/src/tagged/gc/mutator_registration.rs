@@ -29,6 +29,8 @@ pub(crate) use admission_probe::{
 mod authority_word;
 mod collection;
 mod cons_allocation;
+mod numeric_allocation;
+pub use numeric_allocation::{NumericAllocError, NumericClass};
 mod cons_catalog;
 mod construction;
 #[cfg(feature = "test-support")]
@@ -66,8 +68,25 @@ mod keeper;
 pub use keeper::EraKeeper;
 #[doc(hidden)]
 pub use keeper::{FrozenFunctionRoots, FrozenLegacyRoots};
+mod world_loan;
+// `cfg(test)` alone leaves these types `pub(crate)`. A `pub use` in that
+// build is rejected. Eval tests see them through `test-support`, which also
+// makes the types and this module public.
+#[cfg(feature = "test-support")]
+#[doc(hidden)]
+pub use world_loan::retained::{
+    OwnerRecoveryError, RetainedEraOwner, RetainedOwnerRecoveryFailure,
+};
+#[doc(hidden)]
+pub use world_loan::{EraWorldLoan, SymbolRootDesignators, WorldIdentity, WorldLoan};
+mod entry_image;
 mod gate;
+use entry_image::EntryImageSlot;
+#[cfg(not(feature = "test-support"))]
 mod image;
+#[cfg(feature = "test-support")]
+#[doc(hidden)]
+pub mod image;
 mod native_extent;
 mod root_slot;
 mod run_slice;
@@ -77,13 +96,15 @@ mod weak_policy;
 pub use collection::{CollectionError, CollectionReport, MinorCollectionError};
 use gate::RegistryGuard;
 pub use root_slot::OwnerRootSlot;
-pub use run_slice::{RunSlice, SliceRoot};
+pub use run_slice::RunSlice;
+pub use run_slice::SliceRoot;
 #[cfg(all(
     feature = "test-support",
     not(test),
     not(feature = "gc-memory-telemetry")
 ))]
 pub(crate) mod c5_intern_testkit;
+pub(crate) mod custody_brand;
 mod rendezvous;
 mod summaries;
 #[cfg(not(feature = "test-support"))]
@@ -98,34 +119,43 @@ mod symbol_globals;
 #[cfg(feature = "test-support")]
 pub mod symbol_globals;
 mod symbol_intern;
+pub use symbol_authority::FunctionCallCache;
 #[cfg(any(test, feature = "test-support"))]
 pub use symbol_authority::FunctionOpKind;
+pub use symbol_authority::SymbolMut;
 pub(crate) use symbol_authority::SymbolReadToken;
+pub use symbol_authority::SymbolRef;
 #[doc(hidden)]
 pub use symbol_authority::SymbolWriteToken;
 pub use symbol_authority::{
-    FunctionActivation, FunctionCallCache, FunctionError, FunctionSelection, FunctionStep,
-    GlobalError, InitialInternError, KeeperSymbols, PlainSymbolBacking, SymbolHandle, SymbolMut,
-    SymbolRef,
+    FunctionActivation, FunctionError, FunctionSelection, KeeperSymbols, PlainSymbolBacking,
+    SymbolHandle,
 };
+pub use symbol_authority::{FunctionStep, GlobalError, InitialInternError};
 mod token;
 // The extent API ships ahead of its first production call site (the Green
 // mutex/condition release points); the re-export is for that integration.
+pub use native_extent::NativeReturn;
 #[allow(unused_imports)]
-pub use native_extent::{NativeReturn, NativeRoots};
-pub use rendezvous::{
-    AllStopped, AllStoppedFailure, Mode, Phase, Rendezvous, RendezvousError, Request,
-    ResumeGcImage, ResumeGcImageFailure, RootedRetireFailure, Snapshot,
-};
+pub use native_extent::NativeRoots;
+pub use rendezvous::Rendezvous;
+pub use rendezvous::ResumeGcImage;
+pub use rendezvous::{AllStopped, Mode, Phase, PollOutcome, RendezvousError, Request, Snapshot};
+pub use rendezvous::{AllStoppedFailure, ResumeGcImageFailure, RootedRetireFailure, SerialGrant};
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) use rendezvous::{OwnerRootAdmission, StoppedRootAdmission};
+pub use rendezvous::{RingClient, SerialClient};
+pub use rendezvous::{StopAttempt, StopPending};
 
 pub use summaries::{RegistrationCensus, StoppedSummaries};
-pub use table_authority::{KeeperTableMut, SealedTableAccess, TableMut, TableRef};
-pub use token::{
-    Mutator, MutatorFinishFailure, MutatorPermit, MutatorStartFailure, OwnerPublication, RunAccess,
-    YoungWorkerLoan,
-};
+pub use table_authority::KeeperTableMut;
+pub use table_authority::SealedTableAccess;
+pub use table_authority::TableMut;
+pub use table_authority::TableRef;
+pub use token::MutatorPermit;
+pub use token::OwnerPublication;
+pub use token::{Mutator, RunAccess};
+pub use token::{MutatorFinishFailure, MutatorStartFailure, YoungWorkerLoan};
 
 use admission::{AdmissionWord, PhaseLine, admissions_quiescent};
 use std::cell::{Cell, RefCell};
@@ -138,23 +168,21 @@ use std::thread::ThreadId;
 
 use rustc_hash::FxHashMap;
 
-use super::young_registry::{YoungRegistrationId, YoungRegistryError};
+use super::young_registry::{YoungBlockLog, YoungRegistrationId, YoungRegistryError};
 use super::{HeapIdentity, QuiescentCollector};
 
 /// VIS row: copied entry-image presence for the re-homed native-extent oracle.
-#[cfg(any(test, feature = "test-support"))]
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn entry_image_present_for_test(entry: &MutatorEntry) -> Result<bool, RendezvousError> {
     rendezvous::entry_state(entry).map(|state| state.image.is_some())
 }
 
 /// VIS row: copied entry image epoch for the re-homed native-extent oracle.
-#[cfg(any(test, feature = "test-support"))]
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn entry_image_epoch_for_test(entry: &MutatorEntry) -> Result<u64, RendezvousError> {
     rendezvous::entry_state(entry).map(|state| state.rendezvous.image_epoch)
 }
-use image::{OwnerGcState, PublishedGcImage};
+use image::{ImageError, OwnerGcState, PublishedGcImage, RestoreImageFailure};
 use weak_policy::WeakSweepPermit;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -163,9 +191,15 @@ pub enum RegistrationError {
     WrongOwner,
     StaleRegistration,
     DuplicateOwner,
+    /// The call ran on the wrong thread. Also: the keeper asked the era for
+    /// stopped summaries while it holds a stop; under a stop it takes them
+    /// through `AllStopped::summaries`, so this is the keeper calling from
+    /// the wrong place, not a contention to retry.
     WrongThread,
     Poisoned,
     Busy,
+    /// A live owner-cons lease. Cleared only by collection or an explicit return.
+    OwnerReserveHeld,
     Exhausted,
     Capacity,
     OutstandingLoan,
@@ -251,7 +285,7 @@ struct EntryState {
     owner_thread: Option<ThreadId>,
     publication_generation: u64,
     epoch: u64,
-    image: Option<PublishedGcImage>,
+    image: EntryImageSlot,
     run_loan: bool,
     worker_loan: bool,
     readers: usize,
@@ -271,6 +305,10 @@ pub struct MutatorEntry {
     cancelled_start: AtomicBool,
     /// Owner-written slice admission word (single writer: the owner thread).
     admission: AtomicU64,
+    /// Set while the stopped keeper holds `state` across a body it runs
+    /// (`rendezvous::keeper_hold`). Only the keeper thread writes or reads
+    /// it, so a set flag is exactly the keeper's own guard.
+    keeper_held: AtomicBool,
     state: Mutex<EntryState>,
 }
 
@@ -320,7 +358,8 @@ impl MutatorEntry {
             .lock()
             .unwrap()
             .image
-            .as_ref()
+            .as_ref_for(self.key.heap, self.young)
+            .expect("entry image identity must match entry")
             .map(|image| image.root_words_for_test())
     }
 
@@ -360,6 +399,16 @@ struct ParkLine {
     wake: std::sync::Condvar,
 }
 
+#[cfg(any(test, feature = "test-support"))]
+#[derive(Default)]
+struct OwnerConsRetireQueue {
+    /// Registration-tagged leases currently tracked by this era. Weak handles
+    /// stay alive while the heap lease table (or a live book) holds the `Arc`.
+    leased: FxHashMap<NonZeroU64, Vec<std::sync::Weak<super::cons_allocator::OwnerConsLease>>>,
+    /// Retired registrations whose closed leases await keeper reclaim.
+    retired: Vec<NonZeroU64>,
+}
+
 struct Registry {
     heap: HeapIdentity,
     world: HeapIdentity,
@@ -375,9 +424,138 @@ struct Registry {
     root_epoch: super::FacadeEpochRetention,
     cons_catalog: super::cons_storage::ConsCatalog,
     symbols: symbol_authority::SymbolSidecar,
+    /// Registration-tagged leases and retired registrations handed to the
+    /// keeper. The owner thread has no heap loan, so blocks are returned by
+    /// `EraCore::reclaim_retired_owner_cons` or the next full stop walk.
+    #[cfg(any(test, feature = "test-support"))]
+    owner_cons_retire: std::sync::Mutex<OwnerConsRetireQueue>,
 }
 
 impl Registry {
+    /// Track a registration-tagged lease so `retire_rooted` can check that its
+    /// book is closed and queue only owners that hold a lease.
+    #[cfg(any(test, feature = "test-support"))]
+    pub(super) fn note_owner_cons_lease_grant(
+        &self,
+        registration: NonZeroU64,
+        lease: std::sync::Weak<super::cons_allocator::OwnerConsLease>,
+    ) -> Result<(), super::ReserveError> {
+        let mut queue = self
+            .owner_cons_retire
+            .lock()
+            .map_err(|_| super::ReserveError::CollectorBusy)?;
+        if !queue.leased.contains_key(&registration) {
+            queue
+                .leased
+                .try_reserve(1)
+                .map_err(|_| super::ReserveError::Capacity)?;
+        }
+        let list = queue.leased.entry(registration).or_default();
+        list.try_reserve(1)
+            .map_err(|_| super::ReserveError::Capacity)?;
+        list.push(lease);
+        Ok(())
+    }
+
+    /// Remove a lease returned explicitly by `return_unused_before_sweep`.
+    #[cfg(any(test, feature = "test-support"))]
+    pub(super) fn note_owner_cons_lease_returned(&self, registration: NonZeroU64, owner_key: u64) {
+        let Ok(mut queue) = self.owner_cons_retire.lock() else {
+            return;
+        };
+        if let Some(list) = queue.leased.get_mut(&registration) {
+            list.retain(|weak| {
+                weak.upgrade().is_some_and(|lease| {
+                    lease.owner_key != owner_key
+                        && !lease
+                            .blocks
+                            .lock()
+                            .unwrap_or_else(|error| error.into_inner())
+                            .is_empty()
+                })
+            });
+            if list.is_empty() {
+                queue.leased.remove(&registration);
+            }
+        }
+    }
+
+    /// Refuse retirement if this registration still holds an open cons run.
+    #[cfg(any(test, feature = "test-support"))]
+    pub(super) fn check_owner_cons_closed(
+        &self,
+        registration: NonZeroU64,
+    ) -> Result<(), RegistrationError> {
+        let queue = self
+            .owner_cons_retire
+            .lock()
+            .map_err(|_| RegistrationError::Poisoned)?;
+        if let Some(list) = queue.leased.get(&registration) {
+            for weak in list {
+                if let Some(lease) = weak.upgrade() {
+                    if lease.open_run.load(Ordering::Acquire) {
+                        return Err(RegistrationError::OpenRegion);
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Record one retiring registration if it still holds a closed cons lease.
+    ///
+    /// Refuses with `OpenRegion` when any lease under `registration` still has
+    /// an open run. Owners with no live lease are not enqueued.
+    #[cfg(any(test, feature = "test-support"))]
+    pub(super) fn note_retired_owner_cons(
+        &self,
+        registration: std::num::NonZeroU64,
+    ) -> Result<(), RegistrationError> {
+        let mut queue = self
+            .owner_cons_retire
+            .lock()
+            .map_err(|_| RegistrationError::Poisoned)?;
+        let Some(list) = queue.leased.get_mut(&registration) else {
+            return Ok(());
+        };
+        for weak in list.iter() {
+            if let Some(lease) = weak.upgrade() {
+                if lease.open_run.load(Ordering::Acquire) {
+                    return Err(RegistrationError::OpenRegion);
+                }
+            }
+        }
+        list.retain(|weak| {
+            weak.upgrade().is_some_and(|lease| {
+                !lease
+                    .blocks
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner())
+                    .is_empty()
+            })
+        });
+        if list.is_empty() {
+            queue.leased.remove(&registration);
+            return Ok(());
+        }
+        queue
+            .retired
+            .try_reserve(1)
+            .map_err(|_| RegistrationError::Capacity)?;
+        queue.retired.push(registration);
+        Ok(())
+    }
+
+    /// Clear queued retirements and lease records after a full stop walk
+    /// returned every lease on the heap.
+    #[cfg(any(test, feature = "test-support"))]
+    pub(super) fn drain_retired_owner_cons_after_full_walk(&self) {
+        if let Ok(mut queue) = self.owner_cons_retire.lock() {
+            queue.retired.clear();
+            queue.leased.clear();
+        }
+    }
+
     fn validate(
         &self,
         state: &RegistryState,
@@ -577,16 +755,19 @@ impl<'heap, K: EraKeeper> EraCore<'heap, K> {
                 });
             }
         };
-        let mut image = match PublishedGcImage::from_legacy(collector.registration_heap_mut()) {
-            Ok(image) => image,
-            Err(error) => {
-                return Err(EraAdmissionFailure {
-                    reason: error.into(),
-                    collector,
-                    keeper,
-                });
-            }
-        };
+        // SAFETY: era entry holds exclusive stopped-world `&mut TaggedHeap`
+        // authority over the serial collector heap being frozen into entry 0.
+        let mut image =
+            match unsafe { PublishedGcImage::from_legacy(collector.registration_heap_mut()) } {
+                Ok(image) => image,
+                Err(error) => {
+                    return Err(EraAdmissionFailure {
+                        reason: error.into(),
+                        collector,
+                        keeper,
+                    });
+                }
+            };
         image.charge_symbol_tables(table_bytes);
         let young = image.young_id();
         let key = MutatorKey {
@@ -596,17 +777,23 @@ impl<'heap, K: EraKeeper> EraCore<'heap, K> {
             registration: NonZeroU64::MIN,
             generation,
         };
+        let mut image_slot = EntryImageSlot::empty();
+        // SAFETY: `image` was just frozen from `collector.registration_heap_mut()`
+        // on `heap` and carries its canonical legacy `young` registration ID.
+        unsafe { image_slot.install(heap, young, image) }
+            .expect("fresh legacy image matches entry identity");
         let entry = Arc::new(MutatorEntry {
             key,
             young,
             cancelled_start: AtomicBool::new(false),
             admission: AtomicU64::new(AdmissionWord::OUT),
+            keeper_held: AtomicBool::new(false),
             state: Mutex::new(EntryState {
                 phase: EntryPhase::Frozen,
                 owner_thread: Some(std::thread::current().id()),
                 publication_generation: 1,
                 epoch: 0,
-                image: Some(image),
+                image: image_slot,
                 run_loan: false,
                 worker_loan: false,
                 readers: 0,
@@ -654,6 +841,8 @@ impl<'heap, K: EraKeeper> EraCore<'heap, K> {
                     root_epoch,
                     cons_catalog: super::cons_storage::ConsCatalog::new(heap),
                     symbols,
+                    #[cfg(any(test, feature = "test-support"))]
+                    owner_cons_retire: std::sync::Mutex::new(OwnerConsRetireQueue::default()),
                 })),
                 _thread: PhantomData,
             },
@@ -719,12 +908,13 @@ impl<'heap, K: EraKeeper> EraCore<'heap, K> {
             young,
             cancelled_start: AtomicBool::new(false),
             admission: AtomicU64::new(AdmissionWord::OUT),
+            keeper_held: AtomicBool::new(false),
             state: Mutex::new(EntryState {
                 phase: EntryPhase::Starting,
                 owner_thread: None,
                 publication_generation: 0,
                 epoch: 0,
-                image: None,
+                image: EntryImageSlot::empty(),
                 run_loan: false,
                 worker_loan: false,
                 readers: 0,
@@ -746,8 +936,127 @@ impl<'heap, K: EraKeeper> EraCore<'heap, K> {
         })
     }
 
-    pub fn stopped_summaries(&self) -> Result<StoppedSummaries<'_>, RegistrationError> {
+    pub(crate) fn stopped_summaries(&self) -> Result<StoppedSummaries<'_>, RegistrationError> {
         StoppedSummaries::new(self.registry())
+    }
+
+    /// Return cons blocks for registrations `retire_rooted` recorded.
+    ///
+    /// The owner thread has no heap loan, and the quiescent collector is not
+    /// `Sync`, so the keeper calls this on its own thread while the collector
+    /// is free. A poisoned allocator puts the registration back on the queue.
+    /// Leases granted without a registration stay for the full-table stop walk.
+    ///
+    /// # Exclusion outside `AllStopped`
+    ///
+    /// This runs without a stop proof and relies on two invariants:
+    /// 1. It requires `collector.try_borrow_mut()` with `collector.as_mut()`
+    ///    present. Whenever the cons catalog is installed,
+    ///    `transfer_cons_storage(install)` has moved the collector into
+    ///    `suspended_cons`, so reclaim sees `None`, re-queues the pending
+    ///    registrations, and returns `Busy` without touching placeholder cons
+    ///    fields.
+    /// 2. `ConsCatalog::install` and `resume_cons_storage` refuse with
+    ///    `OwnerReserveHeld` while any owner-cons lease is live, so whenever a
+    ///    lease exists to reclaim, serial cons storage belongs exclusively to
+    ///    the keeper. Each lease holds whole blocks (`mint_cons_block` takes
+    ///    blocks with `next_index == 0` or fresh blocks), so other running
+    ///    owners only bump their own `OwnerAllocRegion` cursors inside their
+    ///    own disjoint leased blocks, while the retiring owner already passed
+    ///    `Mode::NativeStopped` and closed its book before `retire_rooted`.
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) fn reclaim_retired_owner_cons(&self) -> Result<(), RegistrationError> {
+        self.reclaim_retired_owner_cons_as(std::thread::current().id())
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub(super) fn reclaim_retired_owner_cons_as(
+        &self,
+        caller: std::thread::ThreadId,
+    ) -> Result<(), RegistrationError> {
+        if caller != self.registry().keeper_thread {
+            return Err(RegistrationError::WrongThread);
+        }
+        let pending = {
+            let mut queue = self
+                .registry()
+                .owner_cons_retire
+                .lock()
+                .map_err(|_| RegistrationError::Poisoned)?;
+            std::mem::take(&mut queue.retired)
+        };
+        if pending.is_empty() {
+            return Ok(());
+        }
+        let mut collector_ref = match self.collector.try_borrow_mut() {
+            Ok(guard) => guard,
+            Err(_) => {
+                self.requeue_retired_owner_cons(pending)?;
+                return Err(RegistrationError::Busy);
+            }
+        };
+        let Some(active) = collector_ref.as_mut() else {
+            drop(collector_ref);
+            self.requeue_retired_owner_cons(pending)?;
+            return Err(RegistrationError::Busy);
+        };
+        debug_assert!(
+            self.suspended_cons
+                .try_borrow()
+                .is_ok_and(|suspended| suspended.is_none()),
+            "keeper-held collector excludes an installed cons catalog"
+        );
+        let heap = active.registration_heap_mut();
+        let mut reclaimed = Vec::new();
+        let mut deferred = Vec::new();
+        for registration in pending {
+            if heap.reclaim_owner_cons_registration(registration) {
+                reclaimed.push(registration);
+            } else {
+                deferred.push(registration);
+            }
+        }
+        drop(collector_ref);
+        if !reclaimed.is_empty() || !deferred.is_empty() {
+            let mut queue = self
+                .registry()
+                .owner_cons_retire
+                .lock()
+                .map_err(|_| RegistrationError::Poisoned)?;
+            for registration in reclaimed {
+                queue.leased.remove(&registration);
+            }
+            if !deferred.is_empty() {
+                deferred.append(&mut queue.retired);
+                queue.retired = deferred;
+            }
+        }
+        Ok(())
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    fn requeue_retired_owner_cons(
+        &self,
+        mut front: Vec<std::num::NonZeroU64>,
+    ) -> Result<(), RegistrationError> {
+        let mut queue = self
+            .registry()
+            .owner_cons_retire
+            .lock()
+            .map_err(|_| RegistrationError::Poisoned)?;
+        front.append(&mut queue.retired);
+        queue.retired = front;
+        Ok(())
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub(super) fn retired_owner_cons_len_for_test(&self) -> usize {
+        self.registry()
+            .owner_cons_retire
+            .lock()
+            .expect("retired owner cons queue")
+            .retired
+            .len()
     }
 
     /// Explicit teardown performs no collection or implicit owner resumption.
@@ -770,6 +1079,14 @@ impl<'heap, K: EraKeeper> EraCore<'heap, K> {
         self.registry().symbols.functions.finish_ready()?;
         if self.suspended_cons.get_mut().is_some() {
             return Err(RegistrationError::OpenRegion);
+        }
+        if self
+            .collector
+            .get_mut()
+            .as_mut()
+            .is_some_and(|collector| collector.registration_heap_mut().has_owner_cons_reserves())
+        {
+            return Err(RegistrationError::OwnerReserveHeld);
         }
         use crate::tagged::transport::{ParallelRootBatchError, RootBatchError};
 
@@ -830,7 +1147,7 @@ impl<'heap, K: EraKeeper> EraCore<'heap, K> {
             }
             let image = current
                 .image
-                .as_ref()
+                .as_ref_for(entry.key.heap, entry.young)?
                 .ok_or(RegistrationError::Publication)?;
             if !image.roots_empty() {
                 return Err(RegistrationError::PendingRoots);
@@ -961,28 +1278,84 @@ impl<'heap, K: EraKeeper> EraCore<'heap, K> {
         let (legacy, owners) = entry_guards
             .split_first_mut()
             .ok_or(RegistrationError::Publication)?;
-        let mut image = legacy.image.take().expect("preflighted frozen image");
+        let legacy_entry = &state.entries[0];
+        let mut image = legacy
+            .image
+            .take_for(legacy_entry.key.heap, legacy_entry.young)
+            .map_err(RegistrationError::from)?
+            .expect("preflighted frozen image");
         for (entry, current) in state.entries.iter().skip(1).zip(owners.iter_mut()) {
             if entry.cancelled_start.load(Ordering::Acquire) {
                 continue;
             }
-            let other = current.image.take().expect("preflighted retiring image");
+            let other = match current.image.take_for(entry.key.heap, entry.young) {
+                Ok(Some(img)) => img,
+                Ok(None) => {
+                    // SAFETY: returning untouched legacy image taken above.
+                    if let Err(reinstall) = unsafe {
+                        legacy
+                            .image
+                            .install(legacy_entry.key.heap, legacy_entry.young, image)
+                    } {
+                        std::mem::forget(reinstall.image);
+                    }
+                    registry.poison();
+                    return Err(RegistrationError::Publication);
+                }
+                Err(error) => {
+                    // SAFETY: returning untouched legacy image taken above.
+                    if let Err(reinstall) = unsafe {
+                        legacy
+                            .image
+                            .install(legacy_entry.key.heap, legacy_entry.young, image)
+                    } {
+                        std::mem::forget(reinstall.image);
+                    }
+                    registry.poison();
+                    return Err(error.into());
+                }
+            };
             if let Err(failure) = image.merge_non_young(other) {
-                current.image = Some(failure.image);
-                legacy.image = Some(image);
+                // SAFETY: returning the untouched images just taken from `entry` and `legacy_entry`.
+                if let Err(reinstall) = unsafe {
+                    current
+                        .image
+                        .install(entry.key.heap, entry.young, failure.image)
+                } {
+                    std::mem::forget(reinstall.image);
+                }
+                if let Err(reinstall) = unsafe {
+                    legacy
+                        .image
+                        .install(legacy_entry.key.heap, legacy_entry.young, image)
+                } {
+                    std::mem::forget(reinstall.image);
+                }
                 registry.poison();
                 return Err(failure.error.into());
             }
             current.phase = EntryPhase::Retired;
         }
-        if let Err(failure) = image.restore_legacy(
-            self.collector
-                .get_mut()
-                .as_mut()
-                .expect("live era")
-                .registration_heap_mut(),
-        ) {
-            legacy.image = Some(failure.image);
+        // SAFETY: era finish runs on the keeper thread with all owners retired
+        // and exclusive `&mut TaggedHeap` ownership; `image` came from this era.
+        if let Err(failure) = unsafe {
+            image.restore_legacy_for_collection(
+                self.collector
+                    .get_mut()
+                    .as_mut()
+                    .expect("live era")
+                    .registration_heap_mut(),
+                |_moved_id| None,
+            )
+        } {
+            // SAFETY: returning the untouched legacy image just taken from `legacy_entry`.
+            if let Err(reinstall) = unsafe {
+                legacy
+                    .image
+                    .install(legacy_entry.key.heap, legacy_entry.young, failure.image)
+            } {
+                std::mem::forget(reinstall.image);
+            }
             registry.poison();
             return Err(failure.error.into());
         }
@@ -1053,6 +1426,15 @@ pub(crate) use cons_allocation_tests::{
     any(test, feature = "test-support"),
     not(feature = "gc-memory-telemetry")
 ))]
+pub use collection::{
+    StoppedAdapterEphemeronFixture, StoppedAdapterResourceFixture,
+    assert_stopped_adapter_ephemerons, assert_stopped_adapter_resources,
+    prepare_stopped_adapter_ephemerons, prepare_stopped_adapter_resources,
+};
+#[cfg(all(
+    any(test, feature = "test-support"),
+    not(feature = "gc-memory-telemetry")
+))]
 pub(crate) use collection::{WeakPolicyCase, WeakPolicyHost, run_weak_policy_case};
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) use rendezvous::fixture_helpers::RootedRendezvousCase;
@@ -1077,3 +1459,31 @@ pub(crate) mod restricted_lisp;
 
 // Shared dormant production-entry contention vocabulary.
 pub(crate) mod retry;
+
+// Direct storage aliasing qualification; full-World admission/rooting rows stay
+// native. No fixture authority or code is present in shipping builds.
+#[cfg(all(test, miri))]
+#[path = "mutator_registration/numeric_storage_miri.rs"]
+mod numeric_storage_miri;
+
+/// A heap-word proof for the test-support ownership probes.
+///
+/// `TaggedValue` is thread-confined, so tests that hand a value's word to
+/// another thread carry this type instead. Its constructor is crate-private:
+/// only a live `TaggedValue` can mint one, so a safe caller cannot pass an
+/// arbitrary word to `owns_heap_word_for_test`.
+#[cfg(any(test, feature = "test-support"))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[doc(hidden)]
+pub struct HeapWord(usize);
+
+#[cfg(any(test, feature = "test-support"))]
+impl HeapWord {
+    pub(crate) fn new(bits: usize) -> Self {
+        Self(bits)
+    }
+
+    pub fn bits(self) -> usize {
+        self.0
+    }
+}

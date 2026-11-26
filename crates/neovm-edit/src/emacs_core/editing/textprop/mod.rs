@@ -466,7 +466,7 @@ where
 /// Interned `category`, resolved once: [`resolve_effective_char_property`] runs
 /// per property lookup, and re-interning the name there costs a registry lock
 /// and a hash on the syntax scanner's run-refill path.
-fn category_sym_id() -> SymId {
+pub(crate) fn category_sym_id() -> SymId {
     static ID: std::sync::OnceLock<SymId> = std::sync::OnceLock::new();
     *ID.get_or_init(|| neovm_value::intern::intern("category"))
 }
@@ -1393,8 +1393,10 @@ pub fn verify_text_read_only_emacs_byte_range_in_state<'a, Vars: EditVariableRea
             if !alias_tail.is_cons() {
                 return None;
             }
-            let alias = alias_tail.cons_car();
-            alias_tail = alias_tail.cons_cdr();
+            // SAFETY: `alias_tail.is_cons()` just succeeded.
+            let alias = unsafe { alias_tail.cons_car_unchecked() };
+            // SAFETY: `alias_tail` is still that cons.
+            alias_tail = unsafe { alias_tail.cons_cdr_unchecked() };
             Some(alias)
         });
         let read_only = resolve_effective_char_property(
@@ -1434,10 +1436,13 @@ pub fn verify_text_read_only_emacs_byte_range_in_state<'a, Vars: EditVariableRea
 fn value_in_list(needle: Value, list: Value) -> bool {
     let mut cursor = list;
     while cursor.is_cons() {
-        if eq_value(&cursor.cons_car(), &needle) {
+        // SAFETY: `cursor.is_cons()` just succeeded.
+        let car = unsafe { cursor.cons_car_unchecked() };
+        if eq_value(&car, &needle) {
             return true;
         }
-        cursor = cursor.cons_cdr();
+        // SAFETY: `cursor` is still that cons.
+        cursor = unsafe { cursor.cons_cdr_unchecked() };
     }
     false
 }
@@ -2876,9 +2881,8 @@ pub fn builtin_set_text_properties<H: EditHost>(host: &mut H, args: Vec<Value>) 
         let (edit, _vars) = host.edit_and_vars();
         buffer_property_range_for_args(&edit.buffers, &args, 3)?.and_then(|(buf_id, byte_range)| {
             let buf = edit.buffers.get(buf_id)?;
-            (!pairs_for_probe.is_empty()
-                || buf.text_props_range_has_any_interval_in_emacs_byte_range(byte_range))
-            .then_some((buf_id, byte_range))
+            (!pairs_for_probe.is_empty() || buf.text_props_tree_present())
+                .then_some((buf_id, byte_range))
         })
     };
     match change {
@@ -2916,12 +2920,23 @@ pub fn builtin_set_text_properties_in_buffers(
     }
 
     let buf_id = resolve_text_property_buffer_id_in_buffers(buffers, args.get(3))?;
-    let buf = buffers
-        .get(buf_id)
-        .ok_or_else(|| signal("error", vec![Value::string("Buffer does not exist")]))?;
-
-    let Some(byte_range) = validate_buffer_property_range(buf, beg, end, args[0], args[1])? else {
-        return Ok(Value::NIL);
+    let byte_range = {
+        let buf = buffers
+            .get(buf_id)
+            .ok_or_else(|| signal("error", vec![Value::string("Buffer does not exist")]))?;
+        let Some(byte_range) = validate_buffer_property_range(buf, beg, end, args[0], args[1])?
+        else {
+            return Ok(Value::NIL);
+        };
+        // GNU `set_text_properties` returns nil without `modify_text_properties`
+        // when PROPERTIES is nil and `validate_interval_range` is null
+        // (`src/textprop.c`, emacs-31.1). Null means no interval tree, an
+        // empty range, or no accessible text. A tree anywhere, including an
+        // all-nil one, still modifies. Empty ranges already returned above.
+        if pairs.is_empty() && !buf.text_props_tree_present() {
+            return Ok(Value::NIL);
+        }
+        byte_range
     };
     let _ = buffers.set_buffer_text_properties_in_emacs_byte_range(buf_id, byte_range, pairs);
     let _ = buffers.record_buffer_text_property_modification(buf_id, byte_range);
@@ -4222,10 +4237,7 @@ fn find_display_property(disp: Value, spec: Value) -> Value {
         return Value::NIL;
     }
     if let Some(items) = disp.as_vector_data() {
-        return items
-            .iter()
-            .find_map(|&elem| spec_value(elem))
-            .unwrap_or(Value::NIL);
+        return items.iter().find_map(spec_value).unwrap_or(Value::NIL);
     }
     if disp.is_cons() && disp.cons_car().is_cons() {
         let mut cursor = disp;

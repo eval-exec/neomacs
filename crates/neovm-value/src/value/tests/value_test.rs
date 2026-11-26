@@ -1,9 +1,9 @@
 use super::*;
 use crate::heap_types::LispMarker;
-use crate::intern::{intern, intern_uninterned, resolve_sym};
-use crate::tagged::header::CLOSURE_ARGLIST;
+use crate::intern::{intern, make_uninterned_symbol};
 use crate::value::buffer_vocab::BufferId;
 use malachite::integer::Integer;
+use std::hash::{Hash, Hasher};
 use std::str::FromStr;
 
 /// Helper: set up a temporary heap for tests that use Value constructors.
@@ -222,14 +222,14 @@ fn treesit_node_header_is_opaque_to_record_and_sequence_access() {
         assert_eq!(node.veclike_type(), Some(VecLikeType::TsNode));
         assert_eq!(node.type_name(), "treesit-node");
         assert_eq!(copied, node);
-        assert_eq!(copied.as_treesit_node_data().unwrap()[2], parser);
+        assert_eq!(copied.as_treesit_node_data().unwrap().at(2), parser);
         assert!(forged.as_treesit_node_data().is_none());
         assert!(!node.is_record());
         assert!(node.as_record_data().is_none());
         assert!(node.as_vector_data().is_none());
         assert!(!node.set_record_slot(2, Value::NIL));
         assert!(!node.replace_vectorlike_sequence_data(vec![Value::NIL]));
-        assert_eq!(node.as_treesit_node_data().unwrap()[2], parser);
+        assert_eq!(node.as_treesit_node_data().unwrap().at(2), parser);
     });
 }
 
@@ -359,7 +359,7 @@ fn keyword_identity_is_consistent_across_constructors() {
 fn uninterned_colon_name_is_not_treated_as_keyword() {
     crate::test_utils::init_test_tracing();
     with_test_heap(|| {
-        let uninterned = Value::symbol(intern_uninterned(":vm-shadow-keyword"));
+        let uninterned = Value::symbol(make_uninterned_symbol(":vm-shadow-keyword"));
         assert!(!uninterned.is_bare_keyword());
         assert!(uninterned.as_bare_keyword_id().is_none());
 
@@ -507,6 +507,214 @@ fn equal_deferred_cycle_tracking_still_handles_circular_lists() {
     });
 }
 
+/// GNU `internal_equal_1` (`fns.c:2916-2934`) walks a list spine in a loop.
+/// Cars are compared at `depth + 1`, and only a non-cons tail increments
+/// depth. Attested Emacs 31.1: two fresh lists of 300 `(i . i)` pairs are
+/// `equal`. `Value ==` is that comparison. Car nesting past 200 stays
+/// unequal here; Lisp `equal` signals for that case instead.
+#[test]
+fn long_proper_list_partialeq_matches_lisp_equal() {
+    crate::test_utils::init_test_tracing();
+    with_test_heap(|| {
+        let pairs = |last: i64| {
+            Value::list(
+                (1..=300)
+                    .map(|i| {
+                        let n = if i == 300 { last } else { i };
+                        Value::cons(Value::fixnum(n), Value::fixnum(n))
+                    })
+                    .collect(),
+            )
+        };
+        let left = pairs(300);
+        let right = pairs(300);
+        let different = pairs(0);
+
+        assert!(!eq_value(&left, &right), "the lists are distinct objects");
+        assert!(left != different, "a different last pair is not equal");
+
+        let mut bounded = Value::fixnum(1);
+        let mut bounded_copy = Value::fixnum(1);
+        for _ in 0..200 {
+            bounded = Value::cons(bounded, Value::NIL);
+            bounded_copy = Value::cons(bounded_copy, Value::NIL);
+        }
+        assert!(
+            bounded == bounded_copy,
+            "car nesting of 200 is still equal; the cap is depth > 200"
+        );
+
+        let mut deep = Value::fixnum(1);
+        let mut deep_copy = Value::fixnum(1);
+        for _ in 0..201 {
+            deep = Value::cons(deep, Value::NIL);
+            deep_copy = Value::cons(deep_copy, Value::NIL);
+        }
+        assert!(
+            deep != deep_copy,
+            "car nesting past 200 stays unequal under PartialEq"
+        );
+
+        assert!(
+            left == right,
+            "a 300-element list of (i . i) is structurally equal"
+        );
+        assert_eq!(
+            left.to_hash_key(&HashTableTest::Equal),
+            right.to_hash_key(&HashTableTest::Equal),
+            "equal lists must share an equal-table hash key"
+        );
+
+        let improper = || {
+            let mut tail = Value::symbol("end");
+            for i in (1..=300).rev() {
+                tail = Value::cons(Value::fixnum(i), tail);
+            }
+            tail
+        };
+        let improper_left = improper();
+        let improper_right = improper();
+        assert!(
+            improper_left == improper_right,
+            "a long improper list is equal"
+        );
+        assert_eq!(
+            improper_left.to_hash_key(&HashTableTest::Equal),
+            improper_right.to_hash_key(&HashTableTest::Equal)
+        );
+
+        let long_cycle = || {
+            let head = Value::cons(Value::fixnum(1), Value::NIL);
+            let mut tail = head;
+            for i in 2..=250 {
+                let cell = Value::cons(Value::fixnum(i), Value::NIL);
+                tail.set_cdr(cell);
+                tail = cell;
+            }
+            tail.set_cdr(head);
+            head
+        };
+        let cycle_left = long_cycle();
+        let cycle_right = long_cycle();
+        assert!(cycle_left == cycle_right, "a long circular list is equal");
+        assert_eq!(
+            cycle_left.to_hash_key(&HashTableTest::Equal),
+            cycle_right.to_hash_key(&HashTableTest::Equal)
+        );
+    });
+}
+
+fn fixnum_list(len: usize) -> Value {
+    let mut tail = Value::NIL;
+    for i in (0..len).rev() {
+        tail = Value::cons(Value::fixnum(i as i64), tail);
+    }
+    tail
+}
+
+/// The old seen scan was quadratic: a 2048-cell list did about 2e6 pointer
+/// compares. The depth cap this replaced stopped near 201 cells, about 2e4
+/// compares. The map has to stay under that.
+#[test]
+fn equal_key_seen_compares_stay_under_parent_order() {
+    crate::test_utils::init_test_tracing();
+    with_test_heap(|| {
+        let key = fixnum_list(2048);
+        let compares = super::equal_key_compare_count_for_test(key);
+        assert!(
+            compares < 20_000,
+            "seen lookup on a 2048-list key did {compares} compares"
+        );
+    });
+}
+
+/// Building and dropping the stored key of a 100k-cell list must not recurse
+/// one frame per cons. Quiet is not active, so this row checks completion
+/// rather than wall time.
+#[test]
+fn equal_key_hundred_thousand_list_does_not_overflow() {
+    crate::test_utils::init_test_tracing();
+    with_test_heap(|| {
+        let left = fixnum_list(100_000);
+        let right = fixnum_list(100_000);
+        assert!(left == right, "a 100k-element list is equal");
+        let left_key = left.to_hash_key(&HashTableTest::Equal);
+        let right_key = right.to_hash_key(&HashTableTest::Equal);
+        // `assert!` rather than `assert_eq!`: derived `Debug` still recurses
+        // along the cdr chain, so a failing debug print would overflow.
+        assert!(
+            left_key == right_key,
+            "a 100k-element list key compares equal"
+        );
+        let mut left_hasher = std::collections::hash_map::DefaultHasher::new();
+        let mut right_hasher = std::collections::hash_map::DefaultHasher::new();
+        left_key.hash(&mut left_hasher);
+        right_key.hash(&mut right_hasher);
+        assert!(
+            left_hasher.finish() == right_hasher.finish(),
+            "a 100k-element list key hashes"
+        );
+        let cloned = left_key.clone();
+        assert!(cloned == left_key, "a 100k-element list key clones");
+        assert!(
+            !left_key.contains_truncation(),
+            "an unbounded 100k-element list key is not truncated"
+        );
+    });
+}
+
+/// `hash_key_to_value` walks the cdr spine in a loop. This row uses the
+/// unbounded `to_hash_key` builder, so the chain is one million conses. A
+/// hundred thousand still fits the 8MB test stack, so that count does not
+/// fail the recursive parent. A real equal-table insert stays capped by
+/// `EQUAL_KEY_NODE_BUDGET`. `assert!` avoids the derived `Debug`, which still
+/// walks the chain.
+#[test]
+fn hash_key_to_value_walks_a_one_million_element_list() {
+    crate::test_utils::init_test_tracing();
+    with_test_heap(|| {
+        let mut tail = Value::NIL;
+        for i in (0..1_000_000).rev() {
+            tail = Value::cons(Value::fixnum(i), tail);
+        }
+        let key = tail.to_hash_key(&HashTableTest::Equal);
+        let restored = crate::hashtab::hash_key_to_value(&key);
+        assert!(
+            restored == tail,
+            "a one-million-element list key converts back to its list"
+        );
+    });
+}
+
+fn rust_hash(value: &Value) -> u64 {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    value.hash(&mut hasher);
+    hasher.finish()
+}
+
+/// GNU `internal_equal_cycle` treats `#1=(1 . #1#)` and `#2=(1 1 . #2#)` as
+/// equal. Rust `Hash` must agree, or a `HashMap` keyed by `Value` breaks.
+#[test]
+fn equal_cycle_shapes_share_a_rust_hash() {
+    crate::test_utils::init_test_tracing();
+    with_test_heap(|| {
+        let one = Value::cons(Value::fixnum(1), Value::NIL);
+        one.set_cdr(one);
+        let two = Value::cons(Value::fixnum(1), Value::cons(Value::fixnum(1), Value::NIL));
+        two.cons_cdr().set_cdr(two);
+
+        assert!(!eq_value(&one, &two), "the two cycles are not eq");
+        assert!(
+            one == two,
+            "a one-cell cycle of 1 and a two-cell cycle of 1 are equal"
+        );
+        assert!(
+            rust_hash(&one) == rust_hash(&two),
+            "equal cycle shapes must share a Rust hash"
+        );
+    });
+}
+
 #[test]
 fn repeated_shallow_equal_avoids_cycle_tracking_overhead() {
     crate::test_utils::init_test_tracing();
@@ -533,46 +741,6 @@ fn repeated_shallow_equal_avoids_cycle_tracking_overhead() {
         assert!(
             elapsed < std::time::Duration::from_secs(2),
             "shallow equal should not allocate cycle tracking for every call; elapsed={elapsed:?}"
-        );
-    });
-}
-
-#[test]
-fn closure_slot_mutation_invalidates_cached_params() {
-    crate::test_utils::init_test_tracing();
-    with_test_heap(|| {
-        let closure = Value::make_lambda(LambdaData {
-            params: LambdaParams::simple(vec![intern("x")]).into(),
-            body: vec![Value::symbol("x")],
-            env: None,
-            docstring: None,
-            doc_form: None,
-            interactive: None,
-        });
-
-        assert_eq!(
-            closure
-                .closure_params()
-                .unwrap()
-                .required
-                .iter()
-                .map(|sym| resolve_sym(*sym))
-                .collect::<Vec<_>>(),
-            vec!["x"]
-        );
-
-        let new_arglist = Value::list(vec![Value::symbol("y"), Value::symbol("z")]);
-        assert!(closure.set_closure_slot(CLOSURE_ARGLIST, new_arglist));
-
-        assert_eq!(
-            closure
-                .closure_params()
-                .unwrap()
-                .required
-                .iter()
-                .map(|sym| resolve_sym(*sym))
-                .collect::<Vec<_>>(),
-            vec!["y", "z"]
         );
     });
 }
@@ -616,6 +784,20 @@ fn cons_accessors() {
         assert_eq!(c.cons_cdr(), Value::fixnum(2));
         c.set_car(Value::fixnum(10));
         assert_eq!(c.cons_car(), Value::fixnum(10));
+    });
+}
+
+#[test]
+fn cons_unchecked_matches_checked_on_a_cons() {
+    crate::test_utils::init_test_tracing();
+    with_test_heap(|| {
+        let c = Value::cons(Value::fixnum(1), Value::fixnum(2));
+        unsafe {
+            assert_eq!(c.cons_car_unchecked(), c.cons_car());
+            assert_eq!(c.cons_cdr_unchecked(), c.cons_cdr());
+            assert_eq!(c.cons_car_unobserved_unchecked(), c.cons_car_unobserved());
+            assert_eq!(c.cons_cdr_unobserved_unchecked(), c.cons_cdr_unobserved());
+        }
     });
 }
 
@@ -821,3 +1003,6 @@ fn list_iter_terminates_on_a_circular_list() {
 
 #[path = "hash_probe_test.rs"]
 mod hash_probe;
+
+#[path = "bounded_equal_key_test.rs"]
+mod bounded_equal_key;

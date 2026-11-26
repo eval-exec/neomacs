@@ -34,12 +34,12 @@ enum Collection {
 
 fn collect(heap: &mut TaggedHeap, owner: TaggedValue, collection: Collection) {
     match collection {
-        Collection::Major => heap.collect_exact(std::iter::once(owner)),
+        Collection::Major => heap.collect_rooted(std::iter::once(owner)),
         Collection::Minor => {
-            heap.begin_minor_collection().unwrap();
+            heap.begin_minor_collection_for_test().unwrap();
             heap.seed_root(owner);
-            heap.complete_minor_collection();
-            heap.finish_incremental_sweep_now();
+            heap.complete_minor_collection_for_test();
+            heap.finish_incremental_sweep_now_for_test();
         }
         Collection::Incremental | Collection::Concurrent => {
             heap.concurrent_begin();
@@ -55,8 +55,8 @@ fn collect(heap: &mut TaggedHeap, owner: TaggedValue, collection: Collection) {
             }
             let bytes_before = heap.live_bytes();
             heap.incremental_drain_all();
-            heap.incremental_finish(bytes_before, std::time::Instant::now());
-            heap.finish_incremental_sweep_now();
+            heap.incremental_finish_for_test(bytes_before, std::time::Instant::now());
+            heap.finish_incremental_sweep_now_for_test();
         }
     }
     assert!(!heap.mark_in_progress());
@@ -68,7 +68,9 @@ fn independent_parameter_child_survives(collection: Collection) {
     let mut heap = TaggedHeap::new();
     // SAFETY: serial fixture setup; no young-generation objects or
     // remembered-set state exist under the new mode.
-    unsafe { neovm_value::test_support::authority::set_generational_enabled_for_test(&mut heap, true) };
+    unsafe {
+        neovm_value::test_support::authority::set_generational_enabled_for_test(&mut heap, true)
+    };
     // SAFETY: serial fixture; the heap is exclusively borrowed by the test
     // thread and no other mutator or compiled leaf runs.
     unsafe { neovm_value::test_support::authority::publish_barrier_window_for_test(&mut heap) };
@@ -82,8 +84,8 @@ fn independent_parameter_child_survives(collection: Collection) {
     let mut function = ByteCodeFunction::new(FunctionParams::try_from(parameter_list).unwrap());
     // Both assignments are safe public Rust API, performed BEFORE publish.
     // Neither child is rooted directly: the function is their sole owner.
-    function.arglist = observable_arglist;
-    function.ops = vec![Op::Nil, Op::Return];
+    function.set_arglist(observable_arglist);
+    function.set_ops(vec![Op::Nil, Op::Return]);
     let owner = heap.alloc_bytecode(function);
     roots.keep(owner);
     collect(&mut heap, owner, collection);
@@ -102,7 +104,8 @@ fn independent_parameter_child_survives(collection: Collection) {
         TaggedValue::symbol("p6-independent-parameter")
     );
     assert_eq!(observable_arglist.cons_car().as_fixnum(), Some(91));
-    let children = heap.collect_veclike_children(owner.as_veclike_ptr().unwrap().cast_mut());
+    let children =
+        unsafe { heap.collect_veclike_children(owner.as_veclike_ptr().unwrap().cast_mut()) };
     assert!(children.contains(&parameter_list));
     assert!(children.contains(&observable_arglist));
 }

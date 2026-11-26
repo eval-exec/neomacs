@@ -187,3 +187,38 @@ fn oracle_pin_regexp_d7_pike_fallback_masks_overflow_at_one_candidate() {
     ]];
     crate::common::assert_oracle_parity_expect(form, expect);
 }
+
+/// GNU promotes raw bytes when pattern and buffer representations differ
+/// (`regex-emacs.c` exactn, 4444-4505). The gap is storage only; neither a
+/// literal prefilter nor an edit may change the match or move the gap.
+#[test]
+fn oracle_pin_regexp_mixed_representation_prefixes_preserve_gap_and_matches() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+
+    let form = r#"(let (results)
+  (dolist (representation '(u2m m2u))
+    (let* ((bytes (concat (unibyte-string 65 65 255) "[0-9]*Z"))
+           (pattern (if (eq representation 'u2m) (string-as-unibyte bytes)
+                      (string-to-multibyte bytes)))
+           (bytes (concat (make-string 300 ?x) (unibyte-string 65 65 255 49 50 90)))
+           (text (if (eq representation 'u2m) (string-to-multibyte bytes) bytes)))
+      (dolist (arm '(end mid))
+        (push
+          (with-temp-buffer
+            (set-buffer-multibyte (eq representation 'u2m))
+            (insert text)
+            (when (eq arm 'mid) (goto-char 150) (insert "Q") (delete-char -1))
+            (let ((before (gap-position)) (case-fold-search nil))
+              (goto-char 1) (set-match-data nil)
+              (let ((found (re-search-forward pattern nil t)))
+                (list representation arm (multibyte-string-p pattern)
+                      enable-multibyte-characters found
+                      (and found (list (match-beginning 0) (match-end 0)))
+                      before (gap-position)))))
+          results))))
+  (nreverse results))"#;
+    let expect = expect_test::expect![[
+        r#""OK ((u2m end nil t 307 (301 307) 307 307) (u2m mid nil t 307 (301 307) 150 150) (m2u end t nil 307 (301 307) 307 307) (m2u mid t nil 307 (301 307) 150 150))""#
+    ]];
+    crate::common::assert_oracle_parity_expect(form, expect);
+}

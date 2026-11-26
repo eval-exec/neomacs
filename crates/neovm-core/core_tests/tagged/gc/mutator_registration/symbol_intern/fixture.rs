@@ -4,9 +4,7 @@ use crate::tagged::gc::{Mutator, PlainSymbolBacking};
 use crate::tagged::transport::SharedRoot;
 use crate::tagged::value::TaggedValue as Value;
 use neovm_eval::test_support::authority::WorldProofEra as ParallelHeapEra;
-use neovm_value::test_support::authority::{self as contention, Deadline, Retry, retry_owned};
 use std::cell::RefCell;
-use std::ops::ControlFlow;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -37,16 +35,11 @@ impl Drop for FixtureGuard<'_> {
                 .clear_root_slots()
                 .map_err(|e| format!("C5 cleanup clear: {e:?}"))?;
             drop(self.inputs.take());
-            retry_owned(
-                Deadline::contention(),
-                owner,
-                |owner| owner.retire_rooted(&[]),
-                |failed| match contention::rendezvous(&failed.reason) {
-                    Retry::Busy => ControlFlow::Continue(failed.into_owner()),
-                    Retry::Refuse => ControlFlow::Break(failed),
-                },
-            )
-            .map_err(|failed| format!("C5 cleanup retirement: {failed:?}"))
+            // This fixture has one owner and all body loans have unwound.
+            // An unexpected refusal must remain visible on its first attempt.
+            owner
+                .retire_rooted(&[])
+                .map_err(|failed| format!("C5 cleanup retirement: {failed:?}"))
         })();
         *self.cleanup.borrow_mut() = Some(result);
     }
@@ -178,7 +171,7 @@ pub(super) fn with_query_era<R>(
         Query::Fresh | Query::FreshBoundary | Query::TableGrowth | Query::FreshReusedAtom => {
             let spelling = format!("p3sym-c5-new-{}", NEXT.fetch_add(1, Ordering::Relaxed));
             if matches!(query, Query::FreshBoundary | Query::TableGrowth) {
-                let mut id = crate::intern::intern_uninterned("p3sym-c5-gap");
+                let mut id = crate::intern::make_uninterned_symbol("p3sym-c5-gap");
                 let added_chunks = if matches!(query, Query::TableGrowth) {
                     1
                 } else {
@@ -186,10 +179,10 @@ pub(super) fn with_query_era<R>(
                 };
                 let target = (u64::from(id.to_raw()) / 4096 + added_chunks) * 4096 + 17;
                 while u64::from(id.to_raw()) + 1 < target {
-                    id = crate::intern::intern_uninterned("p3sym-c5-gap");
+                    id = crate::intern::make_uninterned_symbol("p3sym-c5-gap");
                 }
             } else if matches!(query, Query::FreshReusedAtom) {
-                crate::intern::intern_uninterned(&spelling);
+                crate::intern::make_uninterned_symbol(&spelling);
             }
             spelling
         }
@@ -204,10 +197,10 @@ pub(super) fn with_query_era<R>(
         }
         Query::Boundary => {
             let spelling = format!("p3sym-c5-boundary-{}", NEXT.fetch_add(1, Ordering::Relaxed));
-            let mut id = crate::intern::intern_uninterned("p3sym-c5-gap");
+            let mut id = crate::intern::make_uninterned_symbol("p3sym-c5-gap");
             let target = (u64::from(id.to_raw()) / 4096 + 2) * 4096 + 17;
             while u64::from(id.to_raw()) + 1 < target {
-                id = crate::intern::intern_uninterned("p3sym-c5-gap");
+                id = crate::intern::make_uninterned_symbol("p3sym-c5-gap");
             }
             crate::intern::intern(&spelling);
             spelling
@@ -241,28 +234,20 @@ pub(super) fn with_query_era<R>(
     )
 }
 
-pub(super) fn intern_retry<'era>(
+pub(super) fn intern_once<'era>(
     run: &mut RunAccess<'_, 'era>,
     name: &OwnerRootSlot<'era>,
     dst: &mut OwnerRootSlot<'era>,
 ) -> Result<(), crate::tagged::gc::InitialInternError> {
-    contention::retry(
-        Deadline::contention(),
-        || run.initial_intern_into(name, dst),
-        contention::initial_intern,
-    )
+    // Only serial fixture cases use this helper; the concurrent histories
+    // retain their own one-attempt observations and refusal policy.
+    run.initial_intern_into(name, dst)
 }
 
-pub(super) fn soft_retry<'era>(
+pub(super) fn soft_once<'era>(
     run: &mut RunAccess<'_, 'era>,
     name: &OwnerRootSlot<'era>,
     dst: &mut OwnerRootSlot<'era>,
 ) -> Result<(), crate::tagged::gc::InitialInternError> {
-    // Refused acquisition is legal. Every Busy releases its loan before the
-    // shared elapsed-time retry yields; a refusal stays a typed error.
-    contention::retry(
-        Deadline::contention(),
-        || run.initial_intern_soft_into(name, dst),
-        contention::initial_intern,
-    )
+    run.initial_intern_soft_into(name, dst)
 }

@@ -1178,7 +1178,7 @@ fn assert_core_set_char_table_range_matches_canonical_descriptor(context: &mut C
             "Invalid RANGE argument to \u{2018}set-char-table-range\u{2019}",
         ),
     ] {
-        context.set_variable("text-quoting-style", Value::symbol(style));
+        context.set_variable("text-quoting-style", Value::from_sym_id(intern(style)));
         let table = make_char_table_value(Value::NIL, Value::NIL);
         for bad in [Value::fixnum(-1), Value::string("invalid")] {
             let layout = current_char_table_layout_revision();
@@ -1698,8 +1698,8 @@ fn assert_core_substring_matches_canonical_descriptor(context: &mut Context) {
     let result = call(context, vec![vector, Value::fixnum(-2), Value::NIL]).unwrap();
     let elements = result.as_vector_data().expect("substring vector result");
     assert_eq!(elements.len(), 2);
-    assert_eq!(elements[0], Value::fixnum(2));
-    assert_eq!(elements[1], Value::fixnum(3));
+    assert_eq!(elements.at(0), Value::fixnum(2));
+    assert_eq!(elements.at(1), Value::fixnum(3));
     assert!(!neovm_value::value::eq_value(&result, &vector));
 
     let source = Value::string("abcd");

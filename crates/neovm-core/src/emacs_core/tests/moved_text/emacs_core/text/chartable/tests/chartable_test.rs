@@ -21,7 +21,7 @@ use neovm_value::boolvec::{bool_vector_from_bits, bool_vector_ref_value};
 
 use neovm_value::error::{FlowKind, FlowResultExt as _};
 
-use neovm_value::intern::{intern, intern_uninterned};
+use neovm_value::intern::{intern, make_uninterned_symbol};
 
 use neovm_value::symbol::CanonicalAccess;
 
@@ -103,7 +103,7 @@ fn builtin_make_char_table_checks_symbol_and_extra_slot_property_like_gnu() {
         "symbolp",
     );
 
-    let purpose = Value::symbol(intern_uninterned("neo-extra"));
+    let purpose = Value::symbol(make_uninterned_symbol("neo-extra"));
     eval.obarray_mut()
         .put_property_id(
             purpose.as_bare_symbol_id().unwrap(),
@@ -1878,8 +1878,7 @@ fn put_unicode_property_internal_numeric_round_trips_and_rejects_non_fixnum() {
     assert_eq!(ct_lookup(&table, 'B' as i64).unwrap(), Value::fixnum(0));
     assert_eq!(
         char_table_extra_slot_value(&table, 4)
-            .and_then(|v| v.as_vector_data())
-            .map(|v| v.to_vec()),
+            .and_then(|v| v.as_vector_data().map(|values| values.to_vec())),
         Some(vec![Value::fixnum(42)])
     );
 
@@ -2012,7 +2011,7 @@ fn find_char_table(value: Value) -> Option<Value> {
     }
     if let Some(items) = value.as_vector_data() {
         for item in items {
-            if let Some(table) = find_char_table(*item) {
+            if let Some(table) = find_char_table(item) {
                 return Some(table);
             }
         }

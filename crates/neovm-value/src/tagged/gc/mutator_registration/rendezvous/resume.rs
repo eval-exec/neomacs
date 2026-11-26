@@ -1,9 +1,9 @@
 //! One-shot owner image restoration, serialized with request admission.
 
+use super::sync::atomic::Ordering;
 use std::fmt;
 use std::marker::PhantomData;
 use std::rc::Rc;
-use std::sync::atomic::Ordering;
 
 #[cfg(any(test, feature = "test-support"))]
 use super::super::a8_probes;
@@ -53,7 +53,8 @@ impl fmt::Debug for ResumeGcImageFailure<'_, '_> {
 }
 
 impl<'era> Mutator<'era> {
-    pub fn begin_restore(
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn begin_restore(
         &mut self,
         native: bool,
     ) -> Result<ResumeGcImage<'_, 'era>, RendezvousError> {
@@ -148,6 +149,11 @@ impl<'era> Mutator<'era> {
                     if let Some(hook) = self.protocol.hooks.take_restore_wait() {
                         hook();
                     }
+                    #[cfg(any(test, feature = "test-support"))]
+                    if let Some(hook) = crate::tagged::gc::mutator_registration::test_fences::take_restore_gate_hook_for_test()
+                    {
+                        hook();
+                    }
                     // The predicate mutex is released by Condvar. No entry,
                     // image, or allocation loan survives across this wait.
                     gate = wait(registry, gate)?;
@@ -165,8 +171,16 @@ impl<'era> Mutator<'era> {
             if state.readers != 0 {
                 return Err(RendezvousError::Readers);
             }
-            if self.local.is_none() || state.image.is_none() {
+            if self.local.is_none() {
                 return Err(RendezvousError::Publication);
+            }
+            match state
+                .image
+                .as_ref_for(self.entry.key.heap, self.entry.young)
+            {
+                Ok(Some(_)) => {}
+                Ok(None) => return Err(RendezvousError::Publication),
+                Err(_) => return Err(RendezvousError::Identity),
             }
             state
                 .rendezvous
@@ -189,7 +203,8 @@ impl<'era> Mutator<'era> {
             // A request can no longer activate until apply finishes the debt.
             let image = state
                 .image
-                .take()
+                .take_for(self.entry.key.heap, self.entry.young)
+                .map_err(|_| RendezvousError::Identity)?
                 .expect("image preflighted under entry guard");
             drop(state);
             drop(gate);
@@ -197,6 +212,10 @@ impl<'era> Mutator<'era> {
         }
     }
 
+    /// Return from a native extent: wait out an active stop, then apply the
+    /// latest image and run again. The parallel owner's port (L6.7) leaves
+    /// native before it publishes for its next serial request.
+    #[doc(hidden)]
     pub fn leave_native(&mut self) -> Result<u64, RendezvousError> {
         let image = self.begin_restore(true)?;
         let epoch = image.epoch();
@@ -258,7 +277,11 @@ impl<'owner, 'era> ResumeGcImage<'owner, 'era> {
             .as_mut()
             .ok_or(RendezvousError::Publication)?;
         let image = self.image.take().ok_or(RendezvousError::Publication)?;
-        if let Err(failure) = local.restore(image) {
+        // SAFETY: `ResumeGcImage` is `!Send` on the owning mutator thread,
+        // `check_thread()`, `EntryPhase::Published`, `image_epoch`, `debt`,
+        // `!run_loan`, `!worker_loan`, and `readers == 0` verified that this
+        // image belongs to this exact owner in the current live era.
+        if let Err(failure) = unsafe { local.restore(image) } {
             self.image = Some(failure.image);
             return Err(RegistrationError::from(failure.error).into());
         }
@@ -267,6 +290,7 @@ impl<'owner, 'era> ResumeGcImage<'owner, 'era> {
             .finish_restore(self.owner.entry.key, &mut state.rendezvous);
         if completion.is_ok() {
             state.phase = EntryPhase::Running;
+            self.owner.protocol.stopped = false;
             #[cfg(any(test, feature = "test-support"))]
             a8_probes::mark(
                 a8_probes::OWNER_RUNNING,

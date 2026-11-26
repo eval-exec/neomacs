@@ -128,7 +128,8 @@ fn pdump_rejects_masked_row_flag_corruption() {
             head[field] = code;
             words[0] = usize::from_ne_bytes(head);
             let bytes = bytemuck::cast_slice_mut(&mut words);
-            let view = super::super::mapped_heap::MappedHeapView::from_mut_slice(bytes);
+            // SAFETY: `words` stays live for the duration of `decoder`.
+            let view = unsafe { super::super::mapped_heap::MappedHeapView::from_mut_slice(bytes) };
             let mut decoder = convert::LoadDecoder::new_with_mapped_heap(&heap, Some(view));
             let error = convert::load_obarray(&mut decoder, &row_obarray()).unwrap_err();
             match field {
@@ -226,7 +227,8 @@ fn pdump_rejects_unknown_row_redirect() {
     head[4] = 0x80;
     words[0] = usize::from_ne_bytes(head);
     let bytes = bytemuck::cast_slice_mut(&mut words);
-    let view = super::super::mapped_heap::MappedHeapView::from_mut_slice(bytes);
+    // SAFETY: `words` stays live for the duration of `decoder`.
+    let view = unsafe { super::super::mapped_heap::MappedHeapView::from_mut_slice(bytes) };
     let mut decoder = convert::LoadDecoder::new_with_mapped_heap(&heap, Some(view));
     let error = convert::load_obarray(&mut decoder, &row_obarray()).unwrap_err();
     assert!(matches!(error, DumpError::InvalidSymbolRedirect(source) if source.number == 0x80));
@@ -259,7 +261,8 @@ fn pdump_rejects_residual_only_redirect_in_fixed_row() {
     head[4] = u8::from(neovm_value::symbol::SymbolRedirect::Localized);
     words[0] = usize::from_ne_bytes(head);
     let bytes = bytemuck::cast_slice_mut(&mut words);
-    let view = super::super::mapped_heap::MappedHeapView::from_mut_slice(bytes);
+    // SAFETY: `words` stays live for the duration of `decoder`.
+    let view = unsafe { super::super::mapped_heap::MappedHeapView::from_mut_slice(bytes) };
     let mut decoder = convert::LoadDecoder::new_with_mapped_heap(&heap, Some(view));
     let error = convert::load_obarray(&mut decoder, &row_obarray()).unwrap_err();
     assert!(matches!(
@@ -278,7 +281,8 @@ fn pdump_rejects_non_boolean_declared_special_in_fixed_row() {
     head[7] = 2;
     words[0] = usize::from_ne_bytes(head);
     let bytes = bytemuck::cast_slice_mut(&mut words);
-    let view = super::super::mapped_heap::MappedHeapView::from_mut_slice(bytes);
+    // SAFETY: `words` stays live for the duration of `decoder`.
+    let view = unsafe { super::super::mapped_heap::MappedHeapView::from_mut_slice(bytes) };
     let mut decoder = convert::LoadDecoder::new_with_mapped_heap(&heap, Some(view));
     let error = convert::load_obarray(&mut decoder, &row_obarray()).unwrap_err();
     assert!(matches!(error, DumpError::InvalidObarrayDeclaredSpecial(2)));
@@ -288,7 +292,9 @@ fn pdump_rejects_non_boolean_declared_special_in_fixed_row() {
 fn pdump_short_heap_batch_cannot_return_a_value_word_pointer() {
     let mut bytes = [0u8; std::mem::size_of::<usize>()];
     for len in 0..bytes.len() {
-        let view = super::super::mapped_heap::MappedHeapView::from_mut_slice(&mut bytes[..len]);
+        // SAFETY: `bytes` stays live for the duration of `view`.
+        let view =
+            unsafe { super::super::mapped_heap::MappedHeapView::from_mut_slice(&mut bytes[..len]) };
         let batch = view.value_word_batch().unwrap();
         // Inspect validation only: never dereference the invalid pointer
         // returned by the old saturated maximum.
@@ -303,7 +309,9 @@ fn pdump_short_heap_batch_cannot_return_a_value_word_pointer() {
 fn pdump_short_heap_cannot_return_a_value_word_pointer() {
     let mut bytes = [0u8; std::mem::size_of::<usize>()];
     for len in 0..bytes.len() {
-        let view = super::super::mapped_heap::MappedHeapView::from_mut_slice(&mut bytes[..len]);
+        // SAFETY: `bytes` stays live for the duration of `view`.
+        let view =
+            unsafe { super::super::mapped_heap::MappedHeapView::from_mut_slice(&mut bytes[..len]) };
         assert!(matches!(
             view.value_word_ptr(0),
             Err(super::super::DumpError::MappedHeapTooShort)
@@ -316,9 +324,12 @@ fn pdump_rejects_overflowing_fixed_symbol_row_range() {
     let heap = empty_heap();
     for (offset, count) in [(u64::MAX, 1), (0, u64::MAX)] {
         let mut words = [0usize; 4];
-        let view = super::super::mapped_heap::MappedHeapView::from_mut_slice(
-            bytemuck::cast_slice_mut(&mut words),
-        );
+        // SAFETY: `words` stays live for the duration of `decoder`.
+        let view = unsafe {
+            super::super::mapped_heap::MappedHeapView::from_mut_slice(bytemuck::cast_slice_mut(
+                &mut words,
+            ))
+        };
         let mut decoder = convert::LoadDecoder::new_with_mapped_heap(&heap, Some(view));
         let mut obarray = row_obarray();
         obarray.plain_rows = Some((offset, count));
@@ -425,7 +436,8 @@ fn pdump_rejects_truncated_fixed_symbol_row() {
     let full = row_words();
     let mut words = [full[0], full[1], full[2]];
     let bytes = bytemuck::cast_slice_mut(&mut words);
-    let view = super::super::mapped_heap::MappedHeapView::from_mut_slice(bytes);
+    // SAFETY: `words` stays live for the duration of `decoder`.
+    let view = unsafe { super::super::mapped_heap::MappedHeapView::from_mut_slice(bytes) };
     let mut decoder = convert::LoadDecoder::new_with_mapped_heap(&heap, Some(view));
     let error = convert::load_obarray(&mut decoder, &row_obarray()).unwrap_err();
     assert!(matches!(

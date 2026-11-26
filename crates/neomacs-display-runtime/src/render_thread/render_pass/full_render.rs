@@ -58,12 +58,14 @@ pub(super) fn through_composition_ring(
     }
 
     if pane_blits.is_empty() {
-        renderer
-            .begin_draw(neomacs_renderer_wgpu::renderer::RenderTarget::new(
+        if let Ok(mut draw) =
+            renderer.begin_draw(neomacs_renderer_wgpu::renderer::RenderTarget::new(
                 composition_view,
                 inputs.present_mapping.surface(),
             ))
-            .blit_retained(composition.bind_group());
+        {
+            draw.blit_retained(composition.bind_group());
+        }
     } else {
         // Same picture, placed rather than copied whole: each pane
         // reads the region of the composed frame it owns and draws

@@ -90,9 +90,9 @@ fn fixnum_comparison_deopt_resumes_after_effect_without_replaying_it() {
         optional: vec![],
         rest: None,
     });
-    f.lexical = true;
-    f.constants = vec![Value::symbol("fixnum-comparison-effects")].into();
-    f.ops = vec![
+    f.set_lexical(true);
+    f.set_constants(vec![Value::symbol("fixnum-comparison-effects")].into());
+    f.set_ops(vec![
         Op::VarRef(0),
         Op::Add1,
         Op::VarSet(0),
@@ -100,16 +100,17 @@ fn fixnum_comparison_deopt_resumes_after_effect_without_replaying_it() {
         Op::StackRef(1),
         Op::Lss,
         Op::Return,
-    ];
-    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(8);
+    ]);
+    f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(8));
     f.seal_hand_assembled_ops();
-    let leaf = lower_leaf_full(&f.ops, &f.constants, 2, None, Some(&ctx.obarray), 0).unwrap();
+    let leaf = lower_leaf_full(f.ops(), f.constants(), 2, None, Some(&ctx.obarray), 0).unwrap();
     for (args, want) in [
         ([Value::make_float(0.5), Value::make_int(1)], Value::T),
         ([Value::make_int(1), Value::make_float(0.5)], Value::NIL),
     ] {
         ctx.eval_str("(setq fixnum-comparison-effects 0)").unwrap();
-        let NativeRun::DeoptAt(resume) = leaf.call(&mut ctx as *mut Context as *mut u8, &args)
+        let NativeRun::DeoptAt(resume) =
+            (unsafe { leaf.call(&mut ctx as *mut Context as *mut u8, &args) })
         else {
             panic!("a float at the fixnum site must deopt precisely");
         };

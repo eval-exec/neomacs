@@ -52,6 +52,7 @@ pub mod startup;
 pub use launch::TuiLaunch;
 pub use observation::{FencedTerminal, TuiObservationError};
 pub use oracle::{assert_neomacs_dumped_runtime, gnu_oracle_program, gnu_oracle_stamp};
+pub use pty_output::write_all_nonblocking_pty;
 use pty_output::{ObservationCursor, PtyOutputEvent, PtyOutputKind, PtyOutputPump};
 pub use recording::TuiRecordingScope;
 use recording::{
@@ -1008,6 +1009,31 @@ impl TuiSession {
         &self.terminal.recent_output
     }
 
+    /// Drain raw PTY output until `needle` appears in [`Self::recent_output`]
+    /// or `timeout` elapses.
+    pub fn wait_for_raw_output(&mut self, needle: &[u8], timeout: Duration) -> bool {
+        const SLICE: Duration = Duration::from_millis(20);
+        if needle.is_empty() {
+            return true;
+        }
+        let deadline = Instant::now() + timeout;
+        loop {
+            if self
+                .terminal
+                .recent_output
+                .windows(needle.len())
+                .any(|window| window == needle)
+            {
+                return true;
+            }
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return false;
+            }
+            self.read(remaining.min(SLICE));
+        }
+    }
+
     /// Return the asciicast artifact path when recording is enabled.
     pub fn recording_path(&self) -> Option<&Path> {
         self.terminal.recording.path()
@@ -1293,7 +1319,7 @@ fn single_character(name: &str) -> Option<char> {
 /// Translate an Emacs-style key name to the bytes a terminal sends.
 ///
 /// Supports: `C-x`, `M-x`, `C-M-x`, `RET`, `TAB`, `ESC`, `SPC`,
-/// `DEL`, and plain characters.
+/// `DEL`, xterm function keys `F5`-`F8`/`F10`, and plain characters.
 pub fn emacs_key(key: &str) -> Vec<u8> {
     if let Some(named) = TerminalNamedKey::parse(key) {
         return vec![named.terminal_byte()];
@@ -1304,6 +1330,10 @@ pub fn emacs_key(key: &str) -> Vec<u8> {
         "C-M-SPC" | "C-M-@" => return vec![0x1b, 0x00],
         "C-/" | "C-_" => return vec![0x1f],
         "C-M-/" | "C-M-_" => return vec![0x1b, 0x1f],
+        "F5" | "f5" => return vec![0x1b, b'[', b'1', b'5', b'~'],
+        "F6" | "f6" => return vec![0x1b, b'[', b'1', b'7', b'~'],
+        "F7" | "f7" => return vec![0x1b, b'[', b'1', b'8', b'~'],
+        "F8" | "f8" => return vec![0x1b, b'[', b'1', b'9', b'~'],
         "F10" | "f10" => return vec![0x1b, b'[', b'2', b'1', b'~'],
         "UP" | "<up>" => return vec![0x1b, b'[', b'A'],
         "DOWN" | "<down>" => return vec![0x1b, b'[', b'B'],

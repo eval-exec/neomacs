@@ -8,10 +8,10 @@ mod actual_completion;
 mod actual_completion_exit;
 use actual_completion_exit::emacs_core;
 
-use actual_completion_exit::{Baton, Control};
+use actual_completion_exit::{Control, TurnRight};
 use threading::ThreadId;
 
-fn publish_without_retirement(control: &Control, baton: Baton, thread: ThreadId) {
+fn publish_without_retirement(control: &Control, baton: TurnRight, thread: ThreadId) {
     // Resolves to the included production Control::finish signature.
     control.finish(thread, baton);
 }

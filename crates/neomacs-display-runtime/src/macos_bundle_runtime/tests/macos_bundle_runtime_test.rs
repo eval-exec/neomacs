@@ -53,3 +53,15 @@ fn requires_plugins_and_scanner_before_activating_private_runtime() {
 
     assert!(runtime.media_is_complete());
 }
+
+#[test]
+#[deny(unused_unsafe)]
+fn configure_before_threads_requires_unsafe_single_threaded_contract() {
+    // Fails to compile if `configure_before_threads` reverts to a safe fn.
+    if std::hint::black_box(false) {
+        // SAFETY: unreachable; exercises the unsafe signature requirement.
+        unsafe {
+            super::configure_before_threads();
+        }
+    }
+}

@@ -1,11 +1,14 @@
 use super::*;
 use neomacs_display_protocol::SelectionOwner;
 use neovm_edit::buffer::{BufferManager, LispCharPos1};
-use neovm_value::display_vocab::FrameDomain;
+use neovm_value::display_vocab::{FrameDomain, FrameId};
 #[doc(hidden)]
 pub use neovm_value::error::{expect_args, expect_args_range, expect_fixnum};
 use neovm_value::tagged::SymbolMode;
 use neovm_value::value::{ValueKind, VecLikeType};
+
+#[path = "selection_step.rs"]
+mod selection_step;
 
 // =========================================================================
 // fontset.c gap-fill stubs
@@ -91,16 +94,151 @@ fn cached_primary_selection_text() -> Option<String> {
 /// GNU NS reports monitor geometry in points, the unit frame sizes use;
 /// the frontend snapshot holds device pixels.
 
-#[doc(hidden)]
-pub fn builtin_neomacs_frame_geometry(args: Vec<Value>) -> EvalResult {
-    expect_args_range("neomacs-frame-geometry", &args, 0, 1)?;
-    Ok(Value::NIL)
+/// One GUI frame's pixel geometry in GNU `frame_geometry` terms.
+///
+/// GNU's X backend reads the window-manager decorations from X and treats the
+/// Gtk+ menu and tool bars as external widgets: `outer` includes them,
+/// `native` excludes them, and `inner` additionally excludes the internal
+/// border and the tab bar (src/xfns.c:6778-6958).  Neomacs has no separate
+/// toolkit window, so the same quantities come from the frame's stored
+/// physical size and realized bar heights.
+struct NeomacsGuiFrameGeometry {
+    width: i64,
+    height: i64,
+    left: i64,
+    top: i64,
+    /// Menu, tool and compact band excluding the tab bar: the external bars.
+    external_bar_height: i64,
+    menu_bar_height: i64,
+    tool_bar_height: i64,
+    tab_bar_height: i64,
+    internal_border_width: i64,
+    tool_bar_position: Value,
 }
 
-#[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
-pub(crate) fn builtin_neomacs_frame_edges(args: Vec<Value>) -> EvalResult {
-    expect_args_range("neomacs-frame-edges", &args, 0, 2)?;
-    Ok(Value::NIL)
+/// Resolve FRAME and read its GUI geometry, or nil for a frame that GNU's X
+/// backend would not describe (no window system, or no selected frame).
+fn neomacs_gui_frame_geometry(
+    ctx: &crate::emacs_core::eval::Context,
+    frame: Option<&Value>,
+) -> Result<Option<NeomacsGuiFrameGeometry>, Flow> {
+    let frame_id = match frame {
+        None => ctx.frame_manager().selected_frame().map(|frame| frame.id),
+        Some(value) if value.is_nil() => ctx.frame_manager().selected_frame().map(|frame| frame.id),
+        Some(value) if value.is_frame() => {
+            let frame_id = FrameId(value.as_frame_id().expect("frame value"));
+            if ctx.frame_manager().get(frame_id).is_none() {
+                return Err(signal(
+                    LispCondition::WrongTypeArgument,
+                    vec![Value::symbol("frame-live-p"), *value],
+                ));
+            }
+            Some(frame_id)
+        }
+        Some(value) => {
+            return Err(signal(
+                LispCondition::WrongTypeArgument,
+                vec![Value::symbol("frame-live-p"), *value],
+            ));
+        }
+    };
+    let Some(frame_id) = frame_id else {
+        return Ok(None);
+    };
+    let Some(frame) = ctx.frame_manager().get(frame_id) else {
+        return Ok(None);
+    };
+    if frame.effective_window_system().is_none() {
+        return Ok(None);
+    }
+    let external_bar_height = i64::from(frame.external_bar_height());
+    let tool_bar_position = frame
+        .parameters
+        .get(&Value::symbol("tool-bar-position"))
+        .copied()
+        .filter(|value| !value.is_nil())
+        .unwrap_or_else(|| Value::symbol("top"));
+    Ok(Some(NeomacsGuiFrameGeometry {
+        width: i64::from(frame.width),
+        height: i64::from(frame.height),
+        left: frame.left_pos,
+        top: frame.top_pos,
+        external_bar_height,
+        menu_bar_height: i64::from(frame.menu_bar_height),
+        tool_bar_height: i64::from(frame.reserved_tool_bar_height()),
+        tab_bar_height: i64::from(frame.tab_bar_height),
+        internal_border_width: frame.internal_border_width().max(0),
+        tool_bar_position,
+    }))
+}
+
+/// `(neomacs-frame-geometry &optional FRAME)` -> GNU `frame-geometry` alist.
+///
+/// Mirrors `Fx_frame_geometry`'s attributes (src/xfns.c:6959) for a Neomacs
+/// window: the outer size is the physical window including the client-drawn
+/// menu/tool band, while the native edges exclude that band.  The bar sizes
+/// are the frame's realized heights, so they stay visible to packages that
+/// position child frames.
+#[doc(hidden)]
+pub fn builtin_neomacs_frame_geometry(
+    ctx: &mut crate::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    expect_args_range("neomacs-frame-geometry", &args, 0, 1)?;
+    neomacs_frame_geometry_value(ctx, args.first())
+}
+
+/// The `frame_geometry` alist for a live Neomacs window.
+///
+/// GNU's `frame-geometry` dispatches to `x-frame-geometry` on an X frame
+/// (lisp/frame.el:2164-2214), so the two names answer one value; Neomacs
+/// shares this builder between `neomacs-frame-geometry` (its `frame-geometry`
+/// arm, lisp/frame.el `'neo`) and `x-frame-geometry`.  A frame with no
+/// window system has no rectangle to report and answers nil.
+#[doc(hidden)]
+pub fn neomacs_frame_geometry_value(
+    ctx: &crate::emacs_core::eval::Context,
+    frame: Option<&Value>,
+) -> Result<Value, Flow> {
+    let Some(geometry) = neomacs_gui_frame_geometry(ctx, frame)? else {
+        return Ok(Value::NIL);
+    };
+    let menu_width = if geometry.menu_bar_height > 0 {
+        geometry.width
+    } else {
+        0
+    };
+    let tool_width = if geometry.tool_bar_height > 0 {
+        geometry.width
+    } else {
+        0
+    };
+    let tab_width = if geometry.tab_bar_height > 0 {
+        (geometry.width - 2 * geometry.internal_border_width).max(0)
+    } else {
+        0
+    };
+    let pair = |car: i64, cdr: i64| Value::cons(Value::fixnum(car), Value::fixnum(cdr));
+    let entry = |name: &'static str, value: Value| Value::cons(Value::symbol(name), value);
+    Ok(Value::list(vec![
+        entry("outer-position", pair(geometry.left, geometry.top)),
+        entry("outer-size", pair(geometry.width, geometry.height)),
+        // Neomacs reports no window-manager decorations or title bar.
+        entry("external-border-size", pair(0, 0)),
+        entry("outer-border-width", Value::fixnum(0)),
+        entry("title-bar-size", pair(0, 0)),
+        // Both bars are outside the native frame in the Gtk+/NS reference.
+        entry("menu-bar-external", Value::T),
+        entry("menu-bar-size", pair(menu_width, geometry.menu_bar_height)),
+        entry("tab-bar-size", pair(tab_width, geometry.tab_bar_height)),
+        entry("tool-bar-external", Value::T),
+        entry("tool-bar-position", geometry.tool_bar_position),
+        entry("tool-bar-size", pair(tool_width, geometry.tool_bar_height)),
+        entry(
+            "internal-border-width",
+            Value::fixnum(geometry.internal_border_width),
+        ),
+    ]))
 }
 
 #[doc(hidden)]
@@ -117,6 +255,13 @@ pub fn builtin_neomacs_set_mouse_absolute_pixel_position(args: Vec<Value>) -> Ev
 
 #[doc(hidden)]
 pub fn builtin_neomacs_clipboard_set(
+    ctx: &mut crate::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    selection_step::clipboard_set(selection_step::installed(ctx), ctx, args).into_direct()
+}
+
+fn direct_neomacs_clipboard_set(
     ctx: &mut crate::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
@@ -142,6 +287,13 @@ pub fn builtin_neomacs_clipboard_get(
     ctx: &mut crate::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
+    selection_step::clipboard_get(selection_step::installed(ctx), ctx, args).into_direct()
+}
+
+fn direct_neomacs_clipboard_get(
+    ctx: &mut crate::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
     expect_args("neomacs-clipboard-get", &args, 0)?;
     let text = if let Some(host) = ctx.display_host.as_mut() {
         host.clipboard_text()
@@ -154,6 +306,13 @@ pub fn builtin_neomacs_clipboard_get(
 
 #[doc(hidden)]
 pub fn builtin_neomacs_primary_selection_set(
+    ctx: &mut crate::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    selection_step::primary_selection_set(selection_step::installed(ctx), ctx, args).into_direct()
+}
+
+fn direct_neomacs_primary_selection_set(
     ctx: &mut crate::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
@@ -179,6 +338,13 @@ pub fn builtin_neomacs_primary_selection_get(
     ctx: &mut crate::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
+    selection_step::primary_selection_get(selection_step::installed(ctx), ctx, args).into_direct()
+}
+
+fn direct_neomacs_primary_selection_get(
+    ctx: &mut crate::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
     expect_args("neomacs-primary-selection-get", &args, 0)?;
     let text = if let Some(host) = ctx.display_host.as_mut() {
         host.primary_selection_text()
@@ -191,6 +357,13 @@ pub fn builtin_neomacs_primary_selection_get(
 
 #[doc(hidden)]
 pub fn builtin_neomacs_primary_selection_owner(
+    ctx: &mut crate::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    selection_step::primary_selection_owner(selection_step::installed(ctx), ctx, args).into_direct()
+}
+
+fn direct_neomacs_primary_selection_owner(
     ctx: &mut crate::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
@@ -296,16 +469,14 @@ pub fn builtin_fillarray(args: Vec<Value>) -> EvalResult {
                 ));
             }
 
-            let _ = args[0].with_lisp_string_mut(|lisp_str| {
-                lisp_str.mutate_bytes(|bytes| {
-                    if fill_len == 1 && len == size_byte {
-                        bytes.fill(fill_bytes[0]);
-                    } else {
-                        for (idx, byte) in bytes.iter_mut().enumerate() {
-                            *byte = fill_bytes[idx % fill_len];
-                        }
+            let _ = args[0].with_string_bytes_mut(|bytes| {
+                if fill_len == 1 && len == size_byte {
+                    bytes.fill(fill_bytes[0]);
+                } else {
+                    for (idx, byte) in bytes.iter_mut().enumerate() {
+                        *byte = fill_bytes[idx % fill_len];
                     }
-                });
+                }
             });
             Ok(args[0])
         }
@@ -764,7 +935,7 @@ pub fn builtin_describe_vector(
                 continue;
             }
             let key = Value::fixnum(index as i64);
-            describe_vector_insert_entry(eval, formatter, key, *value, &mut first)?;
+            describe_vector_insert_entry(eval, formatter, key, value, &mut first)?;
         }
     }
 
@@ -1008,7 +1179,7 @@ pub fn builtin_garbage_collect_maybe(
     }
 
     let since_gc = eval.tagged_heap.bytes_since_gc_exact();
-    let inhibited = eval.gc_inhibit_depth > 0 && neovm_value::hashtab::hash_test_parity_enabled();
+    let inhibited = eval.is_explicit_gc_inhibited();
     if inhibited {
         // A callback can dynamically bind a new divisor threshold. The saved
         // allocation countdown still uses the threshold at guard entry.
@@ -1035,7 +1206,7 @@ pub fn builtin_garbage_collect_maybe(
         // GNU returns t when the threshold is reached even if the requested
         // collection is inhibited by a user test.
         if !inhibited {
-            eval.gc_collect_exact();
+            eval.gc_collect_exact_flow()?;
         }
         Ok(Value::T)
     } else {

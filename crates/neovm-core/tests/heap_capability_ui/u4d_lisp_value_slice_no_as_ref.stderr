@@ -1,0 +1,14 @@
+error[E0599]: the method `as_ref` exists for reference `&LispValueSlice`, but its trait bounds were not satisfied
+ --> tests/heap_capability_ui/u4d_lisp_value_slice_no_as_ref.rs:6:29
+  |
+6 |     let _: &[Value] = items.as_ref();
+  |                             ^^^^^^ method cannot be called on `&LispValueSlice` due to unsatisfied trait bounds
+  |
+ ::: $WORKSPACE/crates/neovm-value/src/tagged/slice_view.rs
+  |
+  | pub struct LispValueSlice([super::header::AtomicTaggedValue]);
+  | ------------------------- doesn't satisfy `LispValueSlice: AsRef<_>`
+  |
+  = note: the following trait bounds were not satisfied:
+          `LispValueSlice: AsRef<_>`
+          which is required by `&LispValueSlice: AsRef<_>`

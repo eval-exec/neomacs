@@ -419,6 +419,8 @@ fn nmjit_n4_hof_scope_source_guard_test() {
     assert!(leaf.contains("input.state = SingletonState::Consumed"));
     assert!(
         leaf.find("input.state = SingletonState::Consumed").unwrap()
-            < leaf.find("*destination = MarkWord::of(result)").unwrap()
+            < leaf
+                .find("local.set_root_slot(self.result.index, result)")
+                .unwrap()
     );
 }

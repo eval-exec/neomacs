@@ -290,10 +290,10 @@ impl Session {
             .local
             .as_ref()
             .ok_or(RegistrationError::StaleRegistration)?;
-        if !local.root_scratch.is_empty() {
+        if !local.root_scratch_is_empty() {
             return Err(Error::OccupiedFrame);
         }
-        if capacity > local.root_slot_limit || capacity > local.root_scratch.capacity() {
+        if capacity > local.root_slot_limit || capacity > local.root_scratch_capacity() {
             return Err(RegistrationError::Capacity.into());
         }
         let built = (|| -> Result<Frame<'era>, SeedError> {

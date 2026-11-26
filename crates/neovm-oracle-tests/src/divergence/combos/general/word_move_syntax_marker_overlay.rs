@@ -8,9 +8,7 @@ use crate::common::return_if_neovm_enable_oracle_proptest_not_set;
 fn combo_word_move_syntax_marker_overlay_narrow() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[
-        r#""ERR (error \"`let' bindings can have only one value-form\" narrow-to-region 1 20)""#
-    ]];
+    let expect = expect_test::expect![[r#""OK t""#]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (let ((buf (generate-new-buffer "wsm")))
@@ -23,8 +21,8 @@ fn combo_word_move_syntax_marker_overlay_narrow() {
           (let* ((ov (make-overlay 1 20))
                  (_ (overlay-put ov 'face 'bold))
                  (m (make-marker))
-                 (_ (set-marker m 1))
-                 (narrow-to-region 1 20))
+                 (_ (set-marker m 1)))
+            (narrow-to-region 1 20)
             (goto-char (point-min))
             (forward-word)
             (let ((p1 (point))

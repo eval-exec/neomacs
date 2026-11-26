@@ -23,15 +23,13 @@
 //! * Gradient geometry and glyph outlines share one transform stack, so a
 //!   transformed gradient is rasterized in the same space as its shape.
 
-use super::{ColorFaceBytes, ColorGlyphRaster, ColorGlyphRequest};
+use super::{ColorFaceBytes, ColorGlyphRaster, ColorGlyphRequest, ColorPaintFailure};
 use crate::raster_sources::ColorGlyphSource;
 use tiny_skia::{
     BlendMode, FillRule, Mask, Paint as SkiaPaint, Path, PathBuilder, Pixmap, PixmapPaint, Point,
     Shader, SpreadMode, Transform as SkiaTransform,
 };
-use ttf_parser::colr::{
-    ClipBox, ColorStop, CompositeMode, GradientExtend, Paint, Painter, Table as ColrTable,
-};
+use ttf_parser::colr::{ClipBox, ColorStop, CompositeMode, GradientExtend, Paint, Painter};
 use ttf_parser::{Face, GlyphId, NormalizedCoordinate, OutlineBuilder, RgbaColor, Transform};
 
 /// Caps that keep a malformed paint graph from allocating an unbounded
@@ -211,8 +209,10 @@ struct GraphRecorder<'a> {
     outlined: Option<Positioned>,
     /// Depth of bounding ancestors (`PaintGlyph` clips and clip boxes).
     bounding_depth: usize,
-    /// Set when the graph is malformed; the glyph then paints nothing.
-    malformed: bool,
+    /// Retain inability to execute the graph; never certify it as empty paint.
+    /// Whole-graph rejection is inherited here; broad malformed-subgraph
+    /// recovery is deliberately outside this raster-outcome correction.
+    failure: Option<ColorPaintFailure>,
 }
 
 impl<'a> GraphRecorder<'a> {
@@ -226,7 +226,7 @@ impl<'a> GraphRecorder<'a> {
             transforms: vec![SkiaTransform::identity()],
             outlined: None,
             bounding_depth: 0,
-            malformed: false,
+            failure: None,
         }
     }
 
@@ -246,7 +246,7 @@ impl<'a> GraphRecorder<'a> {
 
     fn push_path(&mut self, path: Path) -> PathId {
         if self.paths.len() >= MAX_PATHS {
-            self.malformed = true;
+            self.failure = Some(ColorPaintFailure::ResourceLimit);
             // A dangling id: nothing resolves it, and the graph is dropped.
             return PathId(u32::MAX);
         }
@@ -260,7 +260,7 @@ impl<'a> GraphRecorder<'a> {
     /// stop it), so the recorder's job is only to stay cheap from here on.
     fn record_step(&mut self, step: Step) {
         if self.steps.len() >= MAX_STEPS {
-            self.malformed = true;
+            self.failure = Some(ColorPaintFailure::ResourceLimit);
             return;
         }
         self.steps.push(step);
@@ -568,7 +568,7 @@ fn sanitize_unit_stops(stops: Vec<(f32, RgbaColor)>) -> Vec<(f32, RgbaColor)> {
 
 impl<'a> Painter<'a> for GraphRecorder<'a> {
     fn outline_glyph(&mut self, glyph_id: GlyphId) {
-        if self.malformed {
+        if self.failure.is_some() {
             return;
         }
         let mut outline = GlyphPath::default();
@@ -583,7 +583,7 @@ impl<'a> Painter<'a> for GraphRecorder<'a> {
     }
 
     fn paint(&mut self, paint: Paint<'a>) {
-        if self.malformed {
+        if self.failure.is_some() {
             return;
         }
         let Some(record) = self.record_paint(&paint) else {
@@ -607,7 +607,7 @@ impl<'a> Painter<'a> for GraphRecorder<'a> {
     }
 
     fn push_clip(&mut self) {
-        if self.malformed {
+        if self.failure.is_some() {
             return;
         }
         let step = Step::PushClip(self.outlined.unwrap_or_else(|| self.positioned(None)));
@@ -616,7 +616,7 @@ impl<'a> Painter<'a> for GraphRecorder<'a> {
     }
 
     fn push_clip_box(&mut self, clip_box: ClipBox) {
-        if self.malformed {
+        if self.failure.is_some() {
             return;
         }
         let step = Step::PushClipBox {
@@ -628,7 +628,7 @@ impl<'a> Painter<'a> for GraphRecorder<'a> {
     }
 
     fn pop_clip(&mut self) {
-        if self.malformed {
+        if self.failure.is_some() {
             return;
         }
         self.record_step(Step::PopClip);
@@ -640,14 +640,14 @@ impl<'a> Painter<'a> for GraphRecorder<'a> {
     }
 
     fn push_layer(&mut self, mode: CompositeMode) {
-        if self.malformed {
+        if self.failure.is_some() {
             return;
         }
         self.record_step(Step::PushLayer(mode));
     }
 
     fn pop_layer(&mut self) {
-        if self.malformed {
+        if self.failure.is_some() {
             return;
         }
         self.record_step(Step::PopLayer);
@@ -657,13 +657,17 @@ impl<'a> Painter<'a> for GraphRecorder<'a> {
         if !transform_is_invertible(&transform) {
             // A non-invertible transform cannot be replayed; dropping the
             // sub-graph is the spec's error recovery.
-            self.malformed = true;
+            self.failure = Some(ColorPaintFailure::Malformed);
             return;
         }
-        self.transforms.push(
-            self.current_transform()
-                .pre_concat(colr_transform(transform)),
-        );
+        let composed = self
+            .current_transform()
+            .pre_concat(colr_transform(transform));
+        if !composed.is_finite() {
+            self.failure = Some(ColorPaintFailure::InvalidBounds);
+            return;
+        }
+        self.transforms.push(composed);
     }
 
     fn pop_transform(&mut self) {
@@ -732,29 +736,29 @@ impl OutlineBuilder for GlyphPath {
 
 // --- rasterization -------------------------------------------------------
 
-/// Rasterize one glyph from a COLR/CPAL face.
-///
-/// Returns `None` when the face has no color table, the glyph has no paint
-/// graph, or the graph paints nothing.
+/// Rasterize a claimed COLR definition. Absence, successful no-paint and
+/// inability to render remain distinct; see the public rasterizer contract.
 pub(super) fn paint_colr_glyph(
     source: &ColorFaceBytes,
     request: &ColorGlyphRequest<'_>,
-) -> Option<ColorGlyphRaster> {
-    let mut face = source.face()?;
-    if !request.variations.is_empty() {
-        for (tag, value) in request.variations {
-            face.set_variation(*tag, *value);
-        }
+) -> Result<Option<ColorGlyphRaster>, ColorPaintFailure> {
+    let mut face = source.face().ok_or(ColorPaintFailure::Malformed)?;
+    let Some(colr) = face.tables().colr else {
+        return Ok(None);
+    };
+    if !colr.contains(GlyphId(request.glyph_id)) {
+        return Ok(None);
+    }
+    for (tag, value) in request.variations {
+        face.set_variation(*tag, *value);
     }
     let units_per_em = f32::from(face.units_per_em());
     if !units_per_em.is_finite() || units_per_em <= 0.0 {
-        return None;
+        return Err(ColorPaintFailure::InvalidBounds);
     }
     let coords: Vec<NormalizedCoordinate> = face.variation_coordinates().to_vec();
-
     let mut recorder = GraphRecorder::new(&face, request.palette, &coords);
-    let colr: ColrTable<'_> = face.tables().colr?;
-    colr.paint(
+    let traversed = colr.paint(
         GlyphId(request.glyph_id),
         request.palette,
         &mut recorder,
@@ -765,50 +769,46 @@ pub(super) fn paint_colr_glyph(
             blue: request.foreground[2],
             alpha: request.foreground[3],
         },
-    )?;
-    if recorder.malformed || recorder.steps.is_empty() {
-        return None;
+    );
+    if let Some(failure) = recorder.failure {
+        return Err(failure);
     }
-    // Spec: a color glyph definition must be bounded — "applications must
-    // confirm that the color glyph definition is bounded, and must not render
-    // the color glyph if the defining graph is not bounded."
-    if !graph_is_bounded(&recorder.steps) {
-        return None;
+    traversed.ok_or(ColorPaintFailure::Malformed)?;
+    if recorder.steps.is_empty() || !graph_is_bounded(&recorder.steps) {
+        // Empty color lines/degenerate paints and the specification's explicit
+        // suppression of an unbounded definition successfully produce no ink.
+        return Ok(Some(ColorGlyphRaster::empty(ColorGlyphSource::Colr)));
     }
-
     let scale = request.px_size / units_per_em;
     if !scale.is_finite() || scale <= 0.0 {
-        return None;
+        return Err(ColorPaintFailure::InvalidBounds);
     }
-    // Device space: font units scaled to pixels, y flipped so the baseline is
-    // y = 0 and the glyph grows upwards, plus the sub-pixel bin offset.
     let device =
         SkiaTransform::from_row(scale, 0.0, 0.0, -scale, request.offset.0, request.offset.1);
-
-    let bounds = measure(&recorder, device)?;
+    let Some(bounds) = measure(&recorder, device)? else {
+        return Ok(Some(ColorGlyphRaster::empty(ColorGlyphSource::Colr)));
+    };
     let place = SkiaTransform::from_translate(-bounds.left_px as f32, -bounds.top_px as f32);
-    // Pixel = place(device(font unit)) — the grid translation happens in
-    // device space, after the graph transform has been applied.
     let placement = place.pre_concat(device);
-
-    let mut surface = Pixmap::new(bounds.width_cells, bounds.height_cells)?;
+    let mut surface = Pixmap::new(bounds.width_cells, bounds.height_cells)
+        .ok_or(ColorPaintFailure::ResourceLimit)?;
     let mut state = RasterState::new(&recorder.paths, placement, &surface);
     if !state.replay(&recorder.steps, &mut surface) {
-        return None;
+        return Err(ColorPaintFailure::Unsupported);
     }
     let rgba = surface.take_demultiplied();
     let expected = bounds.width_cells as usize * bounds.height_cells as usize * 4;
     if rgba.len() != expected {
-        return None;
+        return Err(ColorPaintFailure::Malformed);
     }
-    Some(ColorGlyphRaster {
+    Ok(Some(ColorGlyphRaster {
         left: bounds.left_px,
         top: -bounds.top_px,
         width: bounds.width_cells,
         height: bounds.height_cells,
         rgba,
         source: ColorGlyphSource::Colr,
-    })
+    }))
 }
 
 /// Device-space bounds of everything the graph can paint, snapped outwards.
@@ -834,7 +834,10 @@ struct MeasureClip {
 /// A clip whose source *is* the fill's own geometry is skipped: it bounds the
 /// fill by being its shape, and multiplying it in again would square every
 /// antialiased edge.
-fn measure(recorder: &GraphRecorder<'_>, device: SkiaTransform) -> Option<DeviceBounds> {
+fn measure(
+    recorder: &GraphRecorder<'_>,
+    device: SkiaTransform,
+) -> Result<Option<DeviceBounds>, ColorPaintFailure> {
     let mut clips: Vec<MeasureClip> = Vec::new();
     let mut union: Option<RectF> = None;
     for step in &recorder.steps {
@@ -845,6 +848,9 @@ fn measure(recorder: &GraphRecorder<'_>, device: SkiaTransform) -> Option<Device
                 }
                 let Some((bounds, source)) = measure_geometry(recorder, shape, &clips, device)
                 else {
+                    if shape.path.is_some() {
+                        return Err(ColorPaintFailure::InvalidBounds);
+                    }
                     continue;
                 };
                 let clipped = clips
@@ -862,15 +868,24 @@ fn measure(recorder: &GraphRecorder<'_>, device: SkiaTransform) -> Option<Device
                     });
                 }
             }
-            Step::PushClip(positioned) => clips.push(MeasureClip {
-                own: shape_bounds(recorder, positioned, device),
-                source: ClipSource::Outline(*positioned),
-            }),
+            Step::PushClip(positioned) => {
+                let own = shape_bounds(recorder, positioned, device);
+                if positioned.path.is_some() && own.is_none() {
+                    return Err(ColorPaintFailure::InvalidBounds);
+                }
+                clips.push(MeasureClip {
+                    own,
+                    source: ClipSource::Outline(*positioned),
+                });
+            }
             Step::PushClipBox {
                 clip_box,
                 transform,
             } => clips.push(MeasureClip {
-                own: clip_box_bounds(*clip_box, *transform, device),
+                own: Some(
+                    clip_box_bounds(*clip_box, *transform, device)
+                        .ok_or(ColorPaintFailure::InvalidBounds)?,
+                ),
                 source: ClipSource::Box {
                     clip_box: *clip_box,
                     transform: *transform,
@@ -882,7 +897,9 @@ fn measure(recorder: &GraphRecorder<'_>, device: SkiaTransform) -> Option<Device
             Step::PushLayer(_) | Step::PopLayer => {}
         }
     }
-    let union = union?;
+    let Some(union) = union else {
+        return Ok(None);
+    };
     // Widths first, in the measurement's own space: casting the edges to i32
     // and subtracting them can overflow once a transform pushed the glyph
     // past the type's range.
@@ -891,20 +908,38 @@ fn measure(recorder: &GraphRecorder<'_>, device: SkiaTransform) -> Option<Device
     let width = union.x_max.ceil() - left;
     let height = union.y_max.ceil() - top;
     let cap = MAX_SIDE as f32;
-    if !(1.0..=cap).contains(&width) || !(1.0..=cap).contains(&height) {
-        return None;
+    if ![left, top, width, height]
+        .iter()
+        .all(|value| value.is_finite())
+        || width < 0.0
+        || height < 0.0
+    {
+        return Err(ColorPaintFailure::InvalidBounds);
+    }
+    if width == 0.0 || height == 0.0 {
+        return Ok(None);
+    }
+    if width > cap || height > cap {
+        return Err(ColorPaintFailure::ResourceLimit);
+    }
+    if left < i32::MIN as f32
+        || left >= i32::MAX as f32
+        || top <= i32::MIN as f32
+        || top >= i32::MAX as f32
+    {
+        return Err(ColorPaintFailure::InvalidBounds);
     }
     let width_cells = width as u32;
     let height_cells = height as u32;
     if u64::from(width_cells) * u64::from(height_cells) > MAX_PIXELS {
-        return None;
+        return Err(ColorPaintFailure::ResourceLimit);
     }
-    Some(DeviceBounds {
+    Ok(Some(DeviceBounds {
         left_px: left as i32,
         top_px: top as i32,
         width_cells,
         height_cells,
-    })
+    }))
 }
 
 /// The region a fill paints, per the recorded graph: its own shape, or the
@@ -1248,6 +1283,8 @@ impl<'a> RasterState<'a> {
                         continue;
                     };
                     let Some(paint) = build_skia_paint(paint, shader_transform) else {
+                        // A degenerate gradient paints nothing. Skip this
+                        // fill while preserving the glyph's other layers.
                         continue;
                     };
                     // The fill's own clip is left out of the mask: the fill's

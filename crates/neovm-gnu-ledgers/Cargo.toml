@@ -1,0 +1,14 @@
+[package]
+name = "neovm-gnu-ledgers"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Extraction, rendering and drift-checking of the pinned GNU source ledgers (DEFSYM boot table, C startup interns, DEFUN startup names)"
+
+[dependencies]
+
+[lints.rust]
+# Split-wave class guard (LEAD 11:5xZ): deny accidental self-recursion.
+unconditional_recursion = "deny"

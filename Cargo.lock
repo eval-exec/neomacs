@@ -2050,9 +2050,9 @@ dependencies = [
 
 [[package]]
 name = "form_urlencoded"
-version = "1.2.2"
+version = "1.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cb4cb245038516f5f85277875cdaa4f7d2c9a0fa0468de06ed190163b1581fcf"
+checksum = "afa489199eaffb1211795df1c6236ce1ad0d41a6fa45250add73e3b02420f06e"
 dependencies = [
  "percent-encoding",
 ]
@@ -3419,9 +3419,9 @@ dependencies = [
 
 [[package]]
 name = "libz-sys"
-version = "1.1.31"
+version = "1.1.33"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ff20308ecabd635a2dc1dd5834a86c462cca20efba1d5d3ddab1f8aea3455cb2"
+checksum = "fee3f59f4321dab0c78d828942e7aa09d0bd8ad6e78a501977e6bf3d02938045"
 dependencies = [
  "cc",
  "libc",
@@ -3815,7 +3815,7 @@ dependencies = [
 
 [[package]]
 name = "neomacs"
-version = "0.0.20"
+version = "0.0.21"
 dependencies = [
  "crossbeam-channel",
  "crossterm",
@@ -3856,7 +3856,7 @@ dependencies = [
 
 [[package]]
 name = "neomacs-allocator"
-version = "0.0.20"
+version = "0.0.21"
 dependencies = [
  "mimalloc",
  "tikv-jemallocator",
@@ -3864,7 +3864,7 @@ dependencies = [
 
 [[package]]
 name = "neomacs-diagnostics"
-version = "0.0.20"
+version = "0.0.21"
 dependencies = [
  "axum",
  "http-body-util",
@@ -3880,7 +3880,7 @@ dependencies = [
 
 [[package]]
 name = "neomacs-display-protocol"
-version = "0.0.20"
+version = "0.0.21"
 dependencies = [
  "bitflags 2.13.1",
  "neomacs-infra",
@@ -3898,7 +3898,7 @@ dependencies = [
 
 [[package]]
 name = "neomacs-display-runtime"
-version = "0.0.20"
+version = "0.0.21"
 dependencies = [
  "arboard",
  "ash",
@@ -3915,6 +3915,7 @@ dependencies = [
  "image",
  "libc",
  "neomacs-display-protocol",
+ "neomacs-font-materializer",
  "neomacs-infra",
  "neomacs-layout-engine",
  "neomacs-renderer-wgpu",
@@ -3922,6 +3923,7 @@ dependencies = [
  "neomacs-video-model",
  "neomacs-webview",
  "neovm-core",
+ "neovm-eval",
  "num_enum",
  "objc2",
  "objc2-app-kit",
@@ -3956,7 +3958,7 @@ dependencies = [
 
 [[package]]
 name = "neomacs-font-materializer"
-version = "0.0.20"
+version = "0.0.21"
 dependencies = [
  "allsorts",
  "cosmic-text",
@@ -3966,15 +3968,18 @@ dependencies = [
  "neomacs-display-protocol",
  "neomacs-test-fonts",
  "resvg",
+ "sys-locale",
+ "tempfile",
  "thiserror 2.0.20",
  "tiny-skia",
  "tracing",
  "ttf-parser",
+ "yeslogic-fontconfig-sys",
 ]
 
 [[package]]
 name = "neomacs-gui-tests"
-version = "0.0.20"
+version = "0.0.21"
 dependencies = [
  "core-foundation",
  "getrandom 0.4.3",
@@ -3985,6 +3990,7 @@ dependencies = [
  "neomacs-test-env",
  "neomacs-test-fonts",
  "neomacs-test-oracle",
+ "neomacs-video",
  "pollster",
  "rustix 1.1.6",
  "serde",
@@ -4000,7 +4006,7 @@ dependencies = [
 
 [[package]]
 name = "neomacs-infra"
-version = "0.0.20"
+version = "0.0.21"
 dependencies = [
  "fs4",
  "getrandom 0.4.3",
@@ -4014,7 +4020,7 @@ dependencies = [
 
 [[package]]
 name = "neomacs-layout-engine"
-version = "0.0.20"
+version = "0.0.21"
 dependencies = [
  "cosmic-text",
  "dwrote",
@@ -4027,6 +4033,9 @@ dependencies = [
  "neomacs-font-materializer",
  "neomacs-test-fonts",
  "neovm-core",
+ "neovm-display",
+ "neovm-edit",
+ "neovm-eval",
  "neovm-value",
  "num_enum",
  "objc2-core-foundation",
@@ -4041,7 +4050,6 @@ dependencies = [
  "tracing",
  "tracing-test",
  "ttf-parser",
- "unicode-script",
  "winapi",
  "wio",
  "yeslogic-fontconfig-sys",
@@ -4049,7 +4057,7 @@ dependencies = [
 
 [[package]]
 name = "neomacs-melpa-test-support"
-version = "0.0.20"
+version = "0.0.21"
 dependencies = [
  "command-group",
  "fs4",
@@ -4058,14 +4066,13 @@ dependencies = [
  "neomacs-test-env",
  "neomacs-test-oracle",
  "serde_json",
- "sha2",
  "tempfile",
  "wait-timeout",
 ]
 
 [[package]]
 name = "neomacs-melpa-tests"
-version = "0.0.20"
+version = "0.0.21"
 dependencies = [
  "base64 0.22.1",
  "expect-test",
@@ -4075,6 +4082,7 @@ dependencies = [
  "neomacs-infra",
  "neomacs-melpa-test-support",
  "neomacs-test-env",
+ "neomacs-test-fonts",
  "neomacs-test-oracle",
  "serde_json",
  "sha2",
@@ -4084,7 +4092,7 @@ dependencies = [
 
 [[package]]
 name = "neomacs-parity-reference"
-version = "0.0.20"
+version = "0.0.21"
 dependencies = [
  "neomacs-infra",
  "sha2",
@@ -4093,7 +4101,7 @@ dependencies = [
 
 [[package]]
 name = "neomacs-perf"
-version = "0.0.20"
+version = "0.0.21"
 dependencies = [
  "clap",
  "gstreamer",
@@ -4113,7 +4121,7 @@ dependencies = [
 
 [[package]]
 name = "neomacs-renderer-wgpu"
-version = "0.0.20"
+version = "0.0.21"
 dependencies = [
  "ash",
  "bytemuck",
@@ -4121,6 +4129,8 @@ dependencies = [
  "enum_dispatch",
  "flate2",
  "fontdb",
+ "freetype-rs",
+ "gif",
  "image",
  "image-extras",
  "imagesize 0.15.0",
@@ -4143,6 +4153,7 @@ dependencies = [
  "simplecss",
  "svgtypes",
  "swash",
+ "tempfile",
  "thiserror 2.0.20",
  "tracing",
  "tracing-test",
@@ -4153,8 +4164,9 @@ dependencies = [
 
 [[package]]
 name = "neomacs-terminfo"
-version = "0.0.20"
+version = "0.0.21"
 dependencies = [
+ "libc",
  "neomacs-infra",
  "pkg-config",
  "regex",
@@ -4165,7 +4177,7 @@ dependencies = [
 
 [[package]]
 name = "neomacs-test-env"
-version = "0.0.20"
+version = "0.0.21"
 dependencies = [
  "libc",
  "sha2",
@@ -4174,7 +4186,7 @@ dependencies = [
 
 [[package]]
 name = "neomacs-test-fonts"
-version = "0.0.20"
+version = "0.0.21"
 dependencies = [
  "flate2",
  "fs4",
@@ -4188,14 +4200,14 @@ dependencies = [
 
 [[package]]
 name = "neomacs-test-oracle"
-version = "0.0.20"
+version = "0.0.21"
 dependencies = [
  "neomacs-parity-reference",
 ]
 
 [[package]]
 name = "neomacs-tui-tests"
-version = "0.0.20"
+version = "0.0.21"
 dependencies = [
  "expect-test",
  "libc",
@@ -4216,7 +4228,7 @@ dependencies = [
 
 [[package]]
 name = "neomacs-video"
-version = "0.0.20"
+version = "0.0.21"
 dependencies = [
  "ash",
  "bytemuck",
@@ -4236,7 +4248,6 @@ dependencies = [
  "objc2-core-video",
  "objc2-foundation",
  "objc2-metal",
- "thiserror 2.0.20",
  "tracing",
  "url",
  "wgpu",
@@ -4247,7 +4258,7 @@ dependencies = [
 
 [[package]]
 name = "neomacs-video-model"
-version = "0.0.20"
+version = "0.0.21"
 dependencies = [
  "neomacs-display-protocol",
  "thiserror 2.0.20",
@@ -4255,7 +4266,7 @@ dependencies = [
 
 [[package]]
 name = "neomacs-webview"
-version = "0.0.20"
+version = "0.0.21"
 dependencies = [
  "bindgen",
  "bitflags 2.13.1",
@@ -4284,7 +4295,7 @@ dependencies = [
 
 [[package]]
 name = "neovm-core"
-version = "0.0.20"
+version = "0.0.21"
 dependencies = [
  "aes",
  "base64 0.22.1",
@@ -4331,6 +4342,7 @@ dependencies = [
  "neovm-display-identity",
  "neovm-edit",
  "neovm-eval",
+ "neovm-gnu-ledgers",
  "neovm-host-abi",
  "neovm-system",
  "neovm-text",
@@ -4387,7 +4399,7 @@ dependencies = [
 
 [[package]]
 name = "neovm-display"
-version = "0.0.20"
+version = "0.0.21"
 dependencies = [
  "enum-map",
  "libc",
@@ -4400,7 +4412,6 @@ dependencies = [
  "neovm-value",
  "num_enum",
  "pkg-config",
- "regex",
  "rodio",
  "rustc-hash 2.1.3",
  "smallvec",
@@ -4414,14 +4425,14 @@ dependencies = [
 
 [[package]]
 name = "neovm-display-identity"
-version = "0.0.20"
+version = "0.0.21"
 dependencies = [
  "serde",
 ]
 
 [[package]]
 name = "neovm-edit"
-version = "0.0.20"
+version = "0.0.21"
 dependencies = [
  "libc",
  "malachite",
@@ -4442,7 +4453,7 @@ dependencies = [
 
 [[package]]
 name = "neovm-eval"
-version = "0.0.20"
+version = "0.0.21"
 dependencies = [
  "bitflags 2.13.1",
  "bytemuck",
@@ -4458,7 +4469,6 @@ dependencies = [
  "enum-map",
  "enumflags2",
  "errno",
- "flate2",
  "fs4",
  "getrandom 0.4.3",
  "hashbrown 0.17.0",
@@ -4514,12 +4524,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "neovm-gnu-ledgers"
+version = "0.0.21"
+
+[[package]]
 name = "neovm-host-abi"
-version = "0.0.20"
+version = "0.0.21"
 
 [[package]]
 name = "neovm-oracle-tests"
-version = "0.0.20"
+version = "0.0.21"
 dependencies = [
  "colored",
  "expect-test",
@@ -4538,7 +4552,7 @@ dependencies = [
 
 [[package]]
 name = "neovm-system"
-version = "0.0.20"
+version = "0.0.21"
 dependencies = [
  "base64 0.22.1",
  "crossbeam-channel",
@@ -4558,7 +4572,6 @@ dependencies = [
  "pkg-config",
  "polling",
  "portable-pty",
- "regex",
  "rusqlite",
  "rustc-hash 2.1.3",
  "rustix 1.1.6",
@@ -4580,7 +4593,7 @@ dependencies = [
 
 [[package]]
 name = "neovm-text"
-version = "0.0.20"
+version = "0.0.21"
 dependencies = [
  "bitflags 2.13.1",
  "encoding_rs",
@@ -4610,7 +4623,7 @@ dependencies = [
 
 [[package]]
 name = "neovm-value"
-version = "0.0.20"
+version = "0.0.21"
 dependencies = [
  "bitflags 2.13.1",
  "bytemuck",
@@ -4641,7 +4654,7 @@ dependencies = [
 
 [[package]]
 name = "neovm-worker"
-version = "0.0.20"
+version = "0.0.21"
 dependencies = [
  "neovm-core",
  "neovm-host-abi",
@@ -7984,9 +7997,9 @@ dependencies = [
 
 [[package]]
 name = "url"
-version = "2.5.8"
+version = "2.5.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ff67a8a4397373c3ef660812acab3268222035010ab8680ec4215f38ba3d0eed"
+checksum = "f00cd2407bb42c0ef17be88d4cf020f5cceffd121665bac9b8b9493a369b3b1a"
 dependencies = [
  "form_urlencoded",
  "idna",
@@ -9503,10 +9516,11 @@ checksum = "ec7a2a501ed189703dba8b08142f057e887dfc4b2cc4db2d343ac6376ba3e0b9"
 
 [[package]]
 name = "xtask"
-version = "0.0.20"
+version = "0.0.21"
 dependencies = [
  "flate2",
  "neomacs-test-env",
+ "neovm-gnu-ledgers",
  "proc-macro2",
  "rayon",
  "resvg",

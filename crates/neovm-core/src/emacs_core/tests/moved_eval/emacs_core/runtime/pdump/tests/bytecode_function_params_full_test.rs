@@ -39,9 +39,9 @@ fn p6_pdump_round_trip_preserves_mapped_and_descriptor_parameter_modes() {
         ),
     ] {
         let mut code = ByteCodeFunction::new(params);
-        code.constants = vec![Value::from_sym_id(symbol)].into();
-        code.ops = vec![Op::VarRef(0), Op::Return];
-        code.max_stack = StackDepth::for_test(1);
+        code.set_constants(vec![Value::from_sym_id(symbol)].into());
+        code.set_ops(vec![Op::VarRef(0), Op::Return]);
+        code.set_max_stack(StackDepth::for_test(1));
         neovm_eval::test_support::authority::seal_hand_assembled_ops_for_test(&mut code);
         context
             .obarray_mut()
@@ -50,6 +50,7 @@ fn p6_pdump_round_trip_preserves_mapped_and_descriptor_parameter_modes() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("parameter-modes.pdump");
     dump_to_file(&context, &path).unwrap();
+    drop(context);
     let mut loaded = load_from_dump(&path).unwrap();
     let result = loaded
         .eval_str(

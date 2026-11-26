@@ -337,6 +337,19 @@ fn neomacs_binary_path_defaults_to_release_binary() {
     );
 }
 
+/// The pair arms are driven by F5-F8; before this row only F10 was encoded
+/// and the function-key names fell through to their literal text.
+#[test]
+fn emacs_key_encodes_xterm_function_keys() {
+    assert_eq!(emacs_key("F5"), vec![0x1b, b'[', b'1', b'5', b'~']);
+    assert_eq!(emacs_key("F6"), vec![0x1b, b'[', b'1', b'7', b'~']);
+    assert_eq!(emacs_key("F7"), vec![0x1b, b'[', b'1', b'8', b'~']);
+    assert_eq!(emacs_key("F8"), vec![0x1b, b'[', b'1', b'9', b'~']);
+    assert_eq!(emacs_key("F10"), vec![0x1b, b'[', b'2', b'1', b'~']);
+    // Lowercase spellings follow the same table.
+    assert_eq!(emacs_key("f5"), emacs_key("F5"));
+}
+
 #[test]
 fn emacs_key_maps_control_space_to_terminal_nul() {
     assert_eq!(emacs_key("C-SPC"), vec![0x00]);

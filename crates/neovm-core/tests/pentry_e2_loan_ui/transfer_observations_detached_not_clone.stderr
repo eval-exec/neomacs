@@ -1,0 +1,23 @@
+error[E0599]: the associated function or constant `check` exists for struct `RequireClone<neovm_value::tagged::collection_reads::SourceObservationsDetached>`, but its trait bounds were not satisfied
+ --> tests/pentry_e2_loan_ui/transfer_observations_detached_not_clone.rs
+  |
+  |     loan_bounds::RequireClone::<SourceObservationsDetached>::check();
+  |                                                              ^^^^^ associated function or constant cannot be called due to unsatisfied trait bounds
+  |
+ ::: $WORKSPACE/crates/neovm-value/src/tagged/collection_reads/store_state/detachment.rs
+  |
+  | pub struct SourceObservationsDetached {
+  | ------------------------------------- doesn't satisfy `_: Clone`
+  |
+ ::: tests/pentry_e2_loan_ui/support/loan_bounds.rs
+  |
+  | pub struct RequireClone<T>(PhantomData<T>);
+  | -------------------------- associated function or constant `check` not found for this struct
+  |
+note: trait bound `neovm_value::tagged::collection_reads::SourceObservationsDetached: Clone` was not satisfied
+ --> tests/pentry_e2_loan_ui/support/loan_bounds.rs
+  |
+  | impl<T: Clone> RequireClone<T> {
+  |         ^^^^^  ---------------
+  |         |
+  |         unsatisfied trait bound introduced here

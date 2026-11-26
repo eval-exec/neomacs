@@ -2314,9 +2314,7 @@ pub fn builtin_clear_string(args: Vec<Value>) -> EvalResult {
     expect_args("clear-string", &args, 1)?;
     let _ = expect_lisp_string(&args[0])?;
     if args[0].is_string() {
-        let _ = args[0].with_lisp_string_mut(|lisp_str| {
-            lisp_str.clear_contents_to_unibyte();
-        });
+        let _ = args[0].clear_string_contents();
     }
     Ok(Value::NIL)
 }
@@ -4089,7 +4087,7 @@ pub fn builtin_restore_buffer_modified_p<H: EditHost>(
 
 fn optional_buffer_tick_target_in_manager(
     buffers: &BufferManager,
-    name: &str,
+    name: &'static str,
     args: &[Value],
 ) -> Result<Option<BufferId>, Flow> {
     expect_max_args(name, args, 1)?;
@@ -4840,17 +4838,20 @@ pub(crate) fn builtin_overlay_put_in_buffers(
         && changed
     {
         let _ = buffers.note_overlay_modification(buf_id);
-        let evaporate = args[1].is_bare_symbol_named("evaporate") && val.is_truthy();
-        let is_empty = buffers
-            .get(buf_id)
-            .and_then(|buf| {
-                let start = buf.overlays.overlay_start_emacs_byte_pos(overlay)?;
-                let end = buf.overlays.overlay_end_emacs_byte_pos(overlay)?;
-                Some(start == end)
-            })
-            .unwrap_or(false);
-        if evaporate && is_empty {
-            let _ = buffers.delete_buffer_overlay(buf_id, overlay);
+        // GNU checks the property before resolving endpoints. Most puts do
+        // not concern evaporation and need no extra position queries here.
+        if args[1].is_bare_symbol_named("evaporate") && val.is_truthy() {
+            let is_empty = buffers
+                .get(buf_id)
+                .and_then(|buf| {
+                    let start = buf.overlays.overlay_start_emacs_byte_pos(overlay)?;
+                    let end = buf.overlays.overlay_end_emacs_byte_pos(overlay)?;
+                    Some(start == end)
+                })
+                .unwrap_or(false);
+            if is_empty {
+                let _ = buffers.delete_buffer_overlay(buf_id, overlay);
+            }
         }
     }
     Ok(val)

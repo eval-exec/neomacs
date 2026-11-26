@@ -24,6 +24,9 @@ thread_local! {
     static STANDARD_CATEGORY_TABLE_HEAP: Cell<usize> = const { Cell::new(0) };
 }
 
+#[doc(hidden)]
+pub mod retirement;
+
 /// GNU `syms_of_category` (src/category.c:442-500): the two word-boundary
 /// category lists are DEFVAR_LISP specials. Without the special flag a
 /// lexical-binding `let` of them lands in the lexenv, invisible to the

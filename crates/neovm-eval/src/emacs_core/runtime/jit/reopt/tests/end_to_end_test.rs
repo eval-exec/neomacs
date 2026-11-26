@@ -18,6 +18,7 @@ use crate::emacs_core::jit::compile::{force_deopt_for_test, force_profit_gate_fo
 use crate::emacs_core::jit::stats;
 use crate::emacs_core::print::print_value;
 use neovm_value::intern::SymId;
+use neovm_value::intern::intern;
 use neovm_value::value::LambdaParams;
 
 /// Finish only an actual queued compile AFTER its original Lisp call.
@@ -54,10 +55,10 @@ fn function(ops: Vec<Op>, constants: Vec<Value>, arity: usize) -> ByteCodeFuncti
         optional: Vec::new(),
         rest: None,
     });
-    f.lexical = true;
-    f.ops = ops;
-    f.constants = constants.into();
-    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
+    f.set_lexical(true);
+    f.set_ops(ops);
+    f.set_constants(constants.into());
+    f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
     f.seal_hand_assembled_ops();
     f
 }
@@ -114,7 +115,7 @@ fn caller_of(sym: Value) -> ByteCodeFunction {
 }
 
 fn install(ev: &mut Context, name: &str, f: ByteCodeFunction) -> Value {
-    let sym = Value::symbol(name);
+    let sym = Value::from_sym_id(intern(name));
     ev.obarray
         .set_symbol_function_id(sym.as_bare_symbol_id().unwrap(), Value::make_bytecode(f));
     sym
@@ -358,13 +359,17 @@ fn stale_leaf_deopt_unlinks_but_does_not_evict_successor() {
     let slot = p.caller_slot();
     // SAFETY: the old leaf is retired, never freed while the cache lives.
     let old_leaf = unsafe { &*old };
-    slot.arm_leaf(
-        old,
-        p.callee().constants.as_ptr(),
-        false,
-        !old_leaf.direct_call_eligible(),
-        old_leaf.entry_shape == crate::emacs_core::jit::compile::EntryShape::RawRegister,
-    );
+    // SAFETY: `old` is a retired cache leaf kept allocated for the cache lifetime,
+    // and `p.callee().constants()` stays live across the call below.
+    unsafe {
+        slot.arm_leaf(
+            old,
+            p.callee().constants().as_ptr(),
+            false,
+            !old_leaf.direct_call_eligible(),
+            old_leaf.entry_shape == crate::emacs_core::jit::compile::EntryShape::RawRegister,
+        );
+    }
     let stale = stats::compile_stats_snapshot().reopt_stale;
     let count = p.callee().jit_runtime().reopt_count();
     assert_eq!(p.call(|| Value::make_float(3.0)).as_float(), Some(27.0));
@@ -667,6 +672,48 @@ fn osr_deopt_without_invalidation_latches() {
     assert_eq!(got, Value::make_int(2000));
     assert_eq!(osr_transfers() - before, 1, "latched after the deopt");
     assert_eq!(f.jit_runtime().reopt_count(), 0);
+    force_reopt_for_test(None);
+}
+
+/// Each retired precise deopt resumes on a new `run_loop`. `note_reopt`
+/// allows at most `max_reopts + 4` invalidations before the level is
+/// Interpreter and the next probe latches, so the nested drivers stop
+/// inside that cap. `force_deopt` makes every re-entered leaf retire again.
+#[test]
+fn osr_retired_reentry_nests_within_the_reopt_cap() {
+    force_deopt_for_test(true);
+    force_reopt_for_test(Some(ReoptKnobs::stress()));
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
+    let (n, k) = (Value::make_int(2_500), Value::make_int(700));
+    crate::emacs_core::jit::force_osr_for_test(false);
+    let want = TestVm::from_context(&mut ev)
+        .execute(&osr_switch(), vec![n, k])
+        .expect("interp run")
+        .as_float();
+    crate::emacs_core::jit::force_osr_for_test(true);
+    let f = osr_switch();
+    f.jit_runtime().set_hot_for_test();
+    crate::emacs_core::jit::test_support::prepare_osr(&mut ev, &f, OSR_HEADER);
+    crate::emacs_core::bytecode::vm::reset_run_loop_max_depth();
+    let got = TestVm::from_context(&mut ev)
+        .execute(&f, vec![n, k])
+        .expect("OSR run")
+        .as_float();
+    crate::emacs_core::jit::force_osr_for_test(false);
+    let cap = usize::from(ReoptKnobs::stress().max_reopts) + 4;
+    let depth = crate::emacs_core::bytecode::vm::run_loop_max_depth();
+    assert_eq!(got, want, "OSR vs interp");
+    assert!(
+        usize::from(f.jit_runtime().reopt_count()) <= cap,
+        "invalidations {}",
+        f.jit_runtime().reopt_count()
+    );
+    assert!(
+        (2..=1 + cap).contains(&depth),
+        "resumed frames {depth}, cap {}",
+        1 + cap
+    );
+    force_deopt_for_test(false);
     force_reopt_for_test(None);
 }
 

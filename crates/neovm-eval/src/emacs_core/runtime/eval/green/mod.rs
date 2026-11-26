@@ -33,13 +33,42 @@ pub use api::{green_make_thread, green_world};
 pub(crate) use bootstrap::GreenBootstrap;
 #[cfg(debug_assertions)]
 pub(crate) use bootstrap::debug_assert_native_tables_open;
+pub(crate) use carried::SourceWorldCarriers;
+#[cfg(test)]
+pub(crate) use scheduler::Control;
 pub(crate) use scheduler::{ConditionId, MutexId, ThreadKey, Wait};
+pub(crate) use switch::WorldSeatParkedRoots;
 #[doc(hidden)]
 pub use switch::{GreenSeat, SelectTurn};
 
 use super::admission::AdmissionError;
 use super::{Context, ThreadingMode};
 use neovm_value::tagged::gc::{CollectorQuiescenceError, FacadeMarkExclusionError};
+
+/// Identity of one owner's registered `OwnerSlab` (stable for the life of its
+/// `World`, because `OwnerSlabRegistry` retains slabs until World drop).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct OwnerSlabId(usize);
+
+impl OwnerSlabId {
+    pub(super) fn from_slab(slab: &super::owner_bindings::OwnerSlab) -> Self {
+        Self(slab as *const super::owner_bindings::OwnerSlab as usize)
+    }
+}
+
+/// Which owner currently holds the World's carried TLS and warm
+/// `OwnerCarried` state on its OS thread, or whether both are stowed in
+/// [`GreenRuntime`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum CarriedHolder {
+    /// Both `carried` and `owner_carried` are stowed in `GreenRuntime`.
+    Stowed,
+    /// Held inline by the Context whose `OwnerSlab` has identity `slab` on `thread`.
+    Held {
+        slab: OwnerSlabId,
+        thread: std::thread::ThreadId,
+    },
+}
 
 /// The World's Green runtime, once started: what further owners are built
 /// from, the scheduler, and the state every Lisp thread shares. Held by the
@@ -58,6 +87,9 @@ pub(crate) struct GreenRuntime {
     /// The warm GNU-global state while its holder is parked
     /// (`owner_carried`, plan-3w.md section 10).
     pub(super) owner_carried: std::cell::RefCell<Option<owner_carried::OwnerCarried>>,
+    /// Ownership of `carried` and `owner_carried`: either stowed in this
+    /// runtime or held by one specific Context on its OS thread.
+    pub(super) carried_holder: std::cell::Cell<CarriedHolder>,
     /// A `kill-emacs` run by another thread, for main to exit with.
     pub(super) exit: std::cell::Cell<Option<super::ShutdownRequest>>,
     /// GNU reports an outgoing owner's failed constant exchange in the next
@@ -66,21 +98,15 @@ pub(crate) struct GreenRuntime {
     pub(super) outgoing_constant_error:
         std::cell::Cell<Option<(ThreadKey, neovm_value::intern::SymId)>>,
     /// The bounded carrier OS-thread pool (S-track). Carriers share its
-    /// `Arc` while idle; it owns every carrier's join handle. Visible to the
-    /// Green module and its children only, matching `CarrierPool`.
+    /// `Arc` while idle; each live slot owns that carrier's join handle.
+    /// Visible to the Green module and its children only, matching
+    /// `CarrierPool`.
     carriers: carrier::CarrierPool,
 
     /// The standard case table, one for every thread as in GNU:
     /// `set-standard-case-table` sets it here, and each thread installs it
     /// as it resumes.
     pub(super) standard_case_table: std::cell::Cell<Option<neovm_value::value::Value>>,
-    /// An error signalled into a thread before it first ran, as
-    /// `(SYMBOL, DATA)`: held from its start to its first switch, as GNU
-    /// `post_acquire_global_lock` raises nothing while a thread has no
-    /// handlers.
-    pub(super) deferred_errors: std::cell::RefCell<
-        rustc_hash::FxHashMap<ThreadKey, (neovm_value::value::Value, neovm_value::value::Value)>,
-    >,
 }
 
 impl std::fmt::Debug for GreenRuntime {
@@ -111,6 +137,12 @@ impl GreenRuntime {
         }
     }
 
+    /// Whether the World's carried TLS and warm `OwnerCarried` are currently
+    /// stowed in this runtime rather than held inline by a running Context.
+    pub(crate) fn carried_is_stowed(&self) -> bool {
+        self.carried_holder.get() == CarriedHolder::Stowed
+    }
+
     /// Visit every value the runtime holds. Out of line: the World's trace
     /// reaches it only in a Green World.
     #[cold]
@@ -128,10 +160,6 @@ impl GreenRuntime {
         }
         if let Some(state) = self.owner_carried.borrow().as_ref() {
             state.trace_roots(visit);
-        }
-        for (symbol, data) in self.deferred_errors.borrow().values() {
-            visit(*symbol);
-            visit(*data);
         }
     }
 }
@@ -206,6 +234,8 @@ impl Context {
         if !self.threads_admitted() {
             self.admit_threads()?;
         }
+        let main_slab = OwnerSlabId::from_slab(self.ensure_owner_slab());
+        let main_thread = std::thread::current().id();
         let bootstrap = GreenBootstrap::capture(self);
         let baton = self.issue_green_baton()?;
         self.install_green_runtime(Box::new(GreenRuntime {
@@ -218,12 +248,136 @@ impl Context {
             exit: Default::default(),
             carried: std::cell::RefCell::new(carried::CarriedState::placeholders()),
             owner_carried: Default::default(),
+            carried_holder: std::cell::Cell::new(CarriedHolder::Held {
+                slab: main_slab,
+                thread: main_thread,
+            }),
             standard_case_table: std::cell::Cell::new(self.cached_standard_case_table),
             outgoing_constant_error: std::cell::Cell::new(None),
-            deferred_errors: Default::default(),
             carriers: carrier::CarrierPool::new(),
         }));
         Ok(baton)
+    }
+
+    /// Whether this Context belongs to a Green World whose carried TLS and
+    /// warm `OwnerCarried` are not stowed in `GreenRuntime` (i.e., any
+    /// `CarriedHolder::Held { .. }` state fails closed; a detached owner cannot
+    /// legally hold the World because detaching a holder moves it to `Stowed`).
+    ///
+    /// Returns `false` for a Sim World (which has no `GreenRuntime`).
+    #[cold]
+    pub(in crate::emacs_core::eval) fn serial_world_held_elsewhere(&self) -> bool {
+        self.green_runtime_ref()
+            .as_ref()
+            .is_some_and(|runtime| runtime.carried_holder.get() != CarriedHolder::Stowed)
+    }
+
+    /// Whether this Context belongs to a Green World whose carried TLS and
+    /// warm `OwnerCarried` are currently stowed in `GreenRuntime`.
+    ///
+    /// Kept un-gated so `debug_assert!` in `reattach_serial_owner` type-checks
+    /// in release builds (where `debug_assert!` expands to `if cfg!(...)`).
+    #[cold]
+    pub(in crate::emacs_core::eval) fn serial_world_is_stowed(&self) -> bool {
+        self.green_runtime_ref()
+            .as_ref()
+            .is_some_and(|runtime| runtime.carried_holder.get() == CarriedHolder::Stowed)
+    }
+
+    /// Whether this Context on this OS thread currently holds the Green
+    /// World's carried TLS and warm `OwnerCarried`.
+    ///
+    /// Returns `false` for a Sim World or when the carriers are stowed or held
+    /// by another owner/thread.
+    #[cold]
+    pub(in crate::emacs_core::eval) fn holds_serial_world_here(&self) -> bool {
+        let Some(my_slab) = self.owner.slab().map(OwnerSlabId::from_slab) else {
+            return false;
+        };
+        let expected_holder = CarriedHolder::Held {
+            slab: my_slab,
+            thread: std::thread::current().id(),
+        };
+        self.green_runtime_ref()
+            .as_ref()
+            .is_some_and(|runtime| runtime.carried_holder.get() == expected_holder)
+    }
+
+    /// Move the World's carried TLS and warm `OwnerCarried` into `GreenRuntime`
+    /// during a serial detach, only when this Context on this OS thread
+    /// currently holds them.
+    ///
+    /// Returns `true` if this detach stowed them, or `false` when this is a
+    /// Sim World or when the World's carried state is held elsewhere (e.g., an
+    /// unparked main) or is already stowed in `GreenRuntime`.
+    #[cold]
+    pub(in crate::emacs_core::eval) fn stow_serial_world_state(&mut self) -> bool {
+        if !self.holds_serial_world_here() {
+            return false;
+        }
+        let warm = owner_carried::OwnerCarried::take(self);
+        let runtime = self.green_runtime_ref();
+        let runtime = runtime
+            .as_ref()
+            .expect("a Green runtime was present at the start of this stow");
+        {
+            let mut slot = runtime.owner_carried.borrow_mut();
+            assert!(slot.is_none(), "the warm carrier is in two places");
+            *slot = Some(warm);
+        }
+        runtime.carried.borrow_mut().stow();
+        runtime.carried_holder.set(CarriedHolder::Stowed);
+        true
+    }
+
+    /// Acquire the World's stowed carried TLS and warm `OwnerCarried` onto this
+    /// Context and OS thread during a serial reattach, before `resume_owner`
+    /// (matching Green's resume order in `switch.rs`).
+    ///
+    /// Callers check [`Self::serial_world_held_elsewhere`] first, so a Green
+    /// World always arrives here with `CarriedHolder::Stowed`; a Sim World has
+    /// no runtime and skips.
+    #[cold]
+    pub(in crate::emacs_core::eval) fn unstow_serial_world_state(&mut self) {
+        let stowed = self
+            .green_runtime_ref()
+            .as_ref()
+            .is_some_and(|runtime| runtime.carried_holder.get() == CarriedHolder::Stowed);
+        if !stowed {
+            return;
+        }
+        let my_slab = OwnerSlabId::from_slab(self.ensure_owner_slab());
+        let warm = {
+            let runtime = self.green_runtime_ref();
+            let Some(runtime) = runtime.as_ref() else {
+                return;
+            };
+            if runtime.carried_holder.get() != CarriedHolder::Stowed {
+                return;
+            }
+            runtime.carried.borrow_mut().unstow();
+            let warm = runtime.owner_carried.borrow_mut().take();
+            runtime.carried_holder.set(CarriedHolder::Held {
+                slab: my_slab,
+                thread: std::thread::current().id(),
+            });
+            warm
+        };
+        if let Some(warm) = warm {
+            warm.put(self);
+        }
+    }
+
+    /// `(carried holds the world, warm carrier is stowed)`. `None` when this
+    /// World has no Green runtime. The serial detach's row reads it.
+    #[cfg(test)]
+    pub(crate) fn serial_world_parked_for_test(&self) -> Option<(bool, bool)> {
+        let runtime = self.green_runtime_ref();
+        let runtime = runtime.as_ref()?;
+        Some((
+            runtime.carried.borrow().holds_world(),
+            runtime.owner_carried.borrow().is_some(),
+        ))
     }
 
     /// A further owner of the World BATON belongs to, on this OS thread,
@@ -233,12 +387,6 @@ impl Context {
     #[cold]
     #[inline(never)]
     pub(crate) fn new_green_owner(baton: &super::world::Baton) -> Context {
-        // The job prologue restored the World's carried state before this
-        // call (the carrier reset and `unstow_carried_state` run in
-        // `run_carrier_job`). This owner is about to run on this OS thread;
-        // reserve the dense SymId cache once instead of regrowing it from
-        // empty.
-        neovm_value::intern::prepare_thread_symbol_caches();
         let (seed, current, case_table) = {
             let runtime = baton.green_runtime();
             let bootstrap = &runtime
@@ -255,11 +403,55 @@ impl Context {
             )
         };
         let views = baton.owner_views(current);
+        Self::assemble_green_owner(views, seed, case_table)
+    }
+
+    /// A further owner of the World TURN belongs to, on this OS thread,
+    /// under either a `Solo(Baton)` or an active `Era` `WorldTurn`.
+    #[cold]
+    #[inline(never)]
+    pub(crate) fn new_green_owner_with_turn(turn: &super::world::TurnRight) -> Context {
+        let (seed, current, case_table) = {
+            let runtime = turn.green_runtime();
+            let bootstrap = &runtime
+                .as_ref()
+                .expect("a started Green runtime issued this turn right")
+                .bootstrap;
+            bootstrap.install_native_tables();
+            (
+                bootstrap.seed(),
+                bootstrap.current_buffer,
+                runtime
+                    .as_ref()
+                    .and_then(|runtime| runtime.standard_case_table.get()),
+            )
+        };
+        let views = turn.owner_views(current);
+        Self::assemble_green_owner(views, seed, case_table)
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn assemble_green_owner(
+        mut views: super::world::ReadyWorld,
+        seed: super::construct::ExecutionSeed,
+        case_table: Option<neovm_value::value::Value>,
+    ) -> Context {
+        // The job prologue restored the World's carried state before this
+        // call (the carrier reset and `unstow_carried_state` run in
+        // `run_carrier_job`). This owner is about to run on this OS thread;
+        // reserve the dense SymId cache once instead of regrowing it from
+        // empty.
+        neovm_value::intern::prepare_thread_symbol_caches();
         views.tagged_heap.install_tagged_heap();
         let mut owner = Context::assemble(views, seed);
         owner.cached_standard_case_table = case_table;
         owner.gc_count = owner.tagged_heap.gc_collections() as u64;
         owner.ensure_owner_slab();
+        debug_assert!(
+            owner.green_seat().is_none(),
+            "a newly assembled Green owner holds no seat"
+        );
         owner.setup_thread_locals();
         owner.republish_owner_mirrors();
         owner
@@ -373,6 +565,185 @@ impl Context {
 }
 
 #[cfg(test)]
+pub(crate) struct TestGreenBootstrap {
+    bootstrap: GreenBootstrap,
+    standard_case_table: Option<neovm_value::value::Value>,
+}
+
+// SAFETY: test-only fixture transfer across the `keeper_serve` spawn edge while
+// the closed World is escrowed in `PreparedEraStart`.
+#[cfg(test)]
+unsafe impl Send for TestGreenBootstrap {}
+
+#[cfg(test)]
+impl GreenRuntime {
+    pub(crate) fn new_stowed_for_test(
+        heap: neovm_value::tagged::gc::HeapIdentity,
+        captured: TestGreenBootstrap,
+    ) -> Box<Self> {
+        Box::new(Self {
+            bootstrap: captured.bootstrap,
+            control: Default::default(),
+            parked: std::cell::RefCell::new(host_service::WorldRootRegistry::new(heap)),
+            pending_starts: Default::default(),
+            exit: Default::default(),
+            carried: std::cell::RefCell::new(carried::CarriedState::placeholders()),
+            owner_carried: Default::default(),
+            carried_holder: std::cell::Cell::new(CarriedHolder::Stowed),
+            standard_case_table: std::cell::Cell::new(captured.standard_case_table),
+            outgoing_constant_error: std::cell::Cell::new(None),
+            carriers: carrier::CarrierPool::new(),
+        })
+    }
+
+    pub(crate) fn parked_is_empty_for_test(&self) -> bool {
+        self.parked.borrow().is_empty()
+    }
+}
+
+#[cfg(test)]
+impl Context {
+    /// Capture bootstrap metadata from a serial source Context before
+    /// `close(source).prepare_era()`, leaving `world.green` unset so A5 legacy
+    /// root capture continues to refuse pre-existing Green runtimes.
+    pub(crate) fn capture_green_bootstrap_for_test(&self) -> TestGreenBootstrap {
+        TestGreenBootstrap {
+            bootstrap: GreenBootstrap::capture(self),
+            standard_case_table: self.cached_standard_case_table,
+        }
+    }
+
+    /// Build and seat a Green worker Context over an already-open era's
+    /// `World` without holding the `Baton` inline (the keeper holds it).
+    /// Callers must serialize construction against the era's World turns.
+    pub(crate) fn new_seated_era_worker_for_test(
+        handle: &super::world::TestBatonWorldHandle,
+        worker_id: u64,
+    ) -> Self {
+        neovm_value::intern::prepare_thread_symbol_caches();
+        let (seed, current, case_table, control) = {
+            let runtime = handle.green_runtime_for_test();
+            let runtime = runtime
+                .as_ref()
+                .expect("era test installs GreenRuntime before spawning seated worker");
+            runtime.bootstrap.install_native_tables();
+            (
+                runtime.bootstrap.seed(),
+                runtime.bootstrap.current_buffer,
+                runtime.standard_case_table.get(),
+                std::sync::Arc::clone(&runtime.control),
+            )
+        };
+        let mut views = handle.owner_views_for_test(current);
+        views.tagged_heap.install_tagged_heap();
+        let mut owner = Context::assemble(views, seed);
+        owner.cached_standard_case_table = case_table;
+        owner.gc_count = owner.tagged_heap.gc_collections() as u64;
+        owner.ensure_owner_slab();
+        owner.setup_thread_locals();
+        owner.republish_owner_mirrors();
+        let key = ThreadKey::Worker(
+            std::num::NonZeroU64::new(worker_id).expect("worker_id must be nonzero"),
+        );
+        let (_tx, rx) = std::sync::mpsc::channel();
+        owner.take_green_seat_without_baton_for_test(key, control, rx);
+        owner.unstow_serial_world_state();
+        owner
+    }
+
+    /// Test-only: construct a seated `ThreadKey::Main` `Context` inside an
+    /// already-open live `KeeperEra` fixture, installing its `SelectHandleToken`
+    /// and seating it with the initial keeper-lent `TurnRight::Era`.
+    pub(crate) fn new_seated_era_main_for_test(
+        handle: &super::world::TestBatonWorldHandle,
+        mut initial_turn: super::world::TurnRight,
+    ) -> Self {
+        initial_turn.clear_stowed_for_return();
+        initial_turn.enter();
+        neovm_value::intern::prepare_thread_symbol_caches();
+        let (seed, current, case_table, control) = {
+            let runtime = handle.green_runtime_for_test();
+            let runtime = runtime
+                .as_ref()
+                .expect("era test installs GreenRuntime before spawning seated main");
+            runtime.bootstrap.install_native_tables();
+            (
+                runtime.bootstrap.seed(),
+                runtime.bootstrap.current_buffer,
+                runtime.standard_case_table.get(),
+                std::sync::Arc::clone(&runtime.control),
+            )
+        };
+        let mut views = handle.owner_views_for_test(current);
+        views.tagged_heap.install_tagged_heap();
+        let mut owner = Context::assemble(views, seed);
+        owner.cached_standard_case_table = case_table;
+        owner.gc_count = owner.tagged_heap.gc_collections() as u64;
+        owner.ensure_owner_slab();
+        owner.setup_thread_locals();
+        owner.republish_owner_mirrors();
+        control.install_select(crate::emacs_core::eval::process_hooks::select_handle(
+            &mut owner,
+        ));
+        let receiver = control.register_main();
+        owner.take_green_seat(ThreadKey::Main, control, receiver, initial_turn);
+        owner.unstow_serial_world_state();
+        owner
+    }
+
+    /// Build an unseated same-World `Context` over an already-open era's
+    /// `World` for `SerialHost` / `SerialTurn` testing (L6.7c). Unlike
+    /// [`Self::new_seated_era_worker_for_test`], this installs NO `GreenSeat`
+    /// so `SerialHost::detach` accepts it, and replaces its dynamic-module
+    /// registry handle so dropping the dormant owner does not retire the
+    /// shared World's registry.
+    pub(crate) fn new_unseated_serial_owner_for_test(
+        handle: &super::world::TestBatonWorldHandle,
+    ) -> Self {
+        neovm_value::intern::prepare_thread_symbol_caches();
+        let (seed, current, case_table) = {
+            let runtime = handle.green_runtime_for_test();
+            let runtime = runtime
+                .as_ref()
+                .expect("era test installs GreenRuntime before spawning serial owner");
+            runtime.bootstrap.install_native_tables();
+            (
+                runtime.bootstrap.seed(),
+                runtime.bootstrap.current_buffer,
+                runtime.standard_case_table.get(),
+            )
+        };
+        let mut views = handle.owner_views_for_test(current);
+        views.tagged_heap.install_tagged_heap();
+        let mut owner = Context::assemble(views, seed);
+        owner.dynamic_module_registry =
+            super::data::dynamic_module_registry::DynamicModuleRegistryHandle::new(Vec::new());
+        owner.cached_standard_case_table = case_table;
+        owner.gc_count = owner.tagged_heap.gc_collections() as u64;
+        owner.ensure_owner_slab();
+        owner.setup_thread_locals();
+        owner.republish_owner_mirrors();
+        owner.unstow_serial_world_state();
+        owner
+    }
+    /// Seat this main owner with an already-issued Baton (after
+    /// `start_green_runtime`), keeping `scheduler::Wake` inside Green.
+    pub(crate) fn seat_green_main_for_test(&mut self, baton: super::world::Baton) {
+        let control = self.with_green_runtime(|runtime| std::sync::Arc::clone(&runtime.control));
+        let receiver = control.register_main();
+        self.take_green_seat(ThreadKey::Main, control, receiver, baton.into());
+    }
+
+    /// Carrier pool `(slot count, join-handle count)`.
+    ///
+    /// `cfg(test)` only. The test-support build does not call it, and
+    /// `CarrierPool::counts_for_test` is not part of that feature.
+    pub(crate) fn carrier_pool_counts_for_test(&self) -> (usize, usize) {
+        self.with_green_runtime(|runtime| runtime.carriers.counts_for_test())
+    }
+}
+
+#[cfg(test)]
 #[path = "../tests/green_owner_test.rs"]
 mod tests;
 
@@ -387,6 +758,10 @@ mod p15_completion_tests;
 #[cfg(test)]
 #[path = "../tests/carrier_pool_test.rs"]
 mod carrier_pool_tests;
+
+#[cfg(all(test, feature = "perf-probes"))]
+#[path = "../tests/baton_cost_micro_test.rs"]
+mod baton_cost_micro_tests;
 
 // This child bounds its virtual address space through Linux /proc and
 // setrlimit; portable refusal injection lives in the GC unit-test family.
@@ -425,6 +800,10 @@ mod jit_inline2_tests;
 #[cfg(test)]
 #[path = "../tests/green_signal_depth_test.rs"]
 mod signal_depth_tests;
+
+#[cfg(test)]
+#[path = "../tests/green_host_refusal_test.rs"]
+mod host_refusal_tests;
 
 // Approved private fixtures; core supplies the canonical runtime factory.
 #[cfg(feature = "test-support")]

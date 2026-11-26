@@ -2,6 +2,7 @@ use super::*;
 use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
 use neovm_value::error::{FlowKind, FlowResultExt as _};
+use neovm_value::intern::intern;
 use neovm_value::value::LambdaParams;
 
 fn function(ops: Vec<Op>, constants: Vec<Value>, arity: usize) -> ByteCodeFunction {
@@ -13,16 +14,16 @@ fn function(ops: Vec<Op>, constants: Vec<Value>, arity: usize) -> ByteCodeFuncti
         optional: Vec::new(),
         rest: None,
     });
-    f.lexical = true;
-    f.ops = ops;
-    f.constants = constants.into();
-    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
+    f.set_lexical(true);
+    f.set_ops(ops);
+    f.set_constants(constants.into());
+    f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
     f.seal_hand_assembled_ops();
     f
 }
 
 fn install(ev: &mut Context, name: &str, f: ByteCodeFunction) -> Value {
-    let sym = Value::symbol(name);
+    let sym = Value::from_sym_id(intern(name));
     ev.obarray
         .set_symbol_function_id(sym.as_bare_symbol_id().unwrap(), Value::make_bytecode(f));
     sym
@@ -77,7 +78,7 @@ fn mir_call_retains_native_callee_slots_and_revalidates_redefinition() {
     let before = SPEC_SHIM_FAST_COUNT.load(Ordering::Relaxed);
     for _ in 0..6000 {
         assert_eq!(
-            leaf.call(ctx, &[Value::make_int(5)]),
+            unsafe { leaf.call(ctx, &[Value::make_int(5)]) },
             NativeRun::Ok(Value::make_int(4).bits())
         );
     }
@@ -88,13 +89,16 @@ fn mir_call_retains_native_callee_slots_and_revalidates_redefinition() {
     ev.eval_str("(fset 'mir-call-step (lambda (n) (+ n 20)))")
         .unwrap();
     assert_eq!(
-        leaf.call(ctx, &[Value::make_int(5)]),
+        unsafe { leaf.call(ctx, &[Value::make_int(5)]) },
         NativeRun::Ok(Value::make_int(25).bits())
     );
     assert!(leaf.spec_slots[0].leaf_ptr().is_null());
     // A changed arity must produce the same signal payload as the interpreter.
     ev.eval_str("(fset 'mir-call-step (lambda () 7))").unwrap();
-    assert_eq!(leaf.call(ctx, &[Value::make_int(5)]), NativeRun::Signal);
+    assert_eq!(
+        unsafe { leaf.call(ctx, &[Value::make_int(5)]) },
+        NativeRun::Signal
+    );
     let actual = take_pending_flow().unwrap();
     let expected = Vm::from_context(&mut ev)
         .execute(&f, vec![Value::make_int(5)])
@@ -172,7 +176,9 @@ fn mir_call_predicate_and_bytecode_fallbacks_preserve_live_heap_roots() {
             .unwrap();
         }
         for _ in 0..3 {
-            let NativeRun::Ok(bits) = leaf.call(&mut ev as *mut Context as *mut u8, &[]) else {
+            let NativeRun::Ok(bits) =
+                (unsafe { leaf.call(&mut ev as *mut Context as *mut u8, &[]) })
+            else {
                 panic!("call must return the live pair")
             };
             let pair = unsafe {
@@ -221,14 +227,14 @@ fn mir_call_loop_observes_subr_redefinition_from_a_gc_hook() {
     assert_eq!(leaf.tier, leaf::LeafTier::Mir);
     assert_eq!(leaf.spec_slots.len(), 1);
     assert_eq!(
-        leaf.call(&mut ev as *mut Context as *mut u8, &[Value::make_int(10)]),
+        unsafe { leaf.call(&mut ev as *mut Context as *mut u8, &[Value::make_int(10)]) },
         NativeRun::Ok(Value::make_int(2).bits())
     );
     ev.eval_str("(setq post-gc-hook (list (lambda () (fset 'mir-call-point (lambda () 9)))))")
         .unwrap();
     ev.gc_stress = true;
     assert_eq!(
-        leaf.call(&mut ev as *mut Context as *mut u8, &[Value::make_int(600)]),
+        unsafe { leaf.call(&mut ev as *mut Context as *mut u8, &[Value::make_int(600)]) },
         NativeRun::Ok(Value::make_int(9).bits())
     );
     ev.gc_stress = false;
@@ -264,7 +270,7 @@ fn mir_call_precise_exit_does_not_repeat_the_callee_side_effect() {
     let leaf = compile_bytecode_function_with(&f, Some(&ev.obarray)).unwrap();
     assert_eq!(leaf.tier, leaf::LeafTier::Mir);
     assert_eq!(leaf.spec_slots.len(), 1);
-    let result = leaf.call(&mut ev as *mut Context as *mut u8, &[]);
+    let result = unsafe { leaf.call(&mut ev as *mut Context as *mut u8, &[]) };
     let NativeRun::DeoptAt(ref frame) = result else {
         panic!("{result:?}")
     };
@@ -315,7 +321,7 @@ fn mir_call_observability_matches_the_interpreter() {
                 ],
                 vec![
                     value,
-                    Value::symbol(variable),
+                    Value::from_sym_id(intern(variable)),
                     Value::symbol("mir-call-state-point"),
                 ],
                 0,
@@ -327,7 +333,7 @@ fn mir_call_observability_matches_the_interpreter() {
                 ev.depth = 100;
             }
             let outcome = if native {
-                match leaf.call(&mut ev as *mut Context as *mut u8, &[]) {
+                match unsafe { leaf.call(&mut ev as *mut Context as *mut u8, &[]) } {
                     NativeRun::Ok(bits) => Ok(unsafe {
                         /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
                         Value::from_bits(bits)

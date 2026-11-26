@@ -63,7 +63,16 @@ pub struct GlobalRefEntry {
 }
 
 impl GlobalRefEntry {
-    pub fn new(value: Value, heap_identity: usize, tag_ptr: *mut emacs_value_tag) -> Self {
+    /// # Safety
+    ///
+    /// `tag_ptr` must be non-null and aligned, and it must address an
+    /// `emacs_value_tag` that stays live until this entry is dropped.
+    /// [`Drop`] writes `nil` through that pointer and does not free the cell.
+    pub unsafe fn new(value: Value, heap_identity: usize, tag_ptr: *mut emacs_value_tag) -> Self {
+        debug_assert!(
+            !tag_ptr.is_null() && tag_ptr.is_aligned(),
+            "GlobalRefEntry requires a live emacs_value_tag"
+        );
         Self {
             value,
             heap_identity,
@@ -112,22 +121,35 @@ impl Drop for GlobalRefEntry {
     fn drop(&mut self) {
         // Outstanding native references may be freed after their world ends.
         // Invalidate the Lisp word without freeing the independently owned tag.
+        debug_assert!(
+            !self.tag_ptr.is_null() && self.tag_ptr.is_aligned(),
+            "GlobalRefEntry requires a live emacs_value_tag"
+        );
+        if self.tag_ptr.is_null() || !self.tag_ptr.is_aligned() {
+            return;
+        }
+        // SAFETY: `new` requires a live, aligned tag, and the null/align
+        // guard above has rejected every other pointer.
         unsafe { (*self.tag_ptr).v = Value::NIL };
     }
 }
 
-pub type DynamicModuleRegistryHandle = HeapRegistryHandle<Vec<Option<GlobalRefEntry>>>;
+pub(crate) type DynamicModuleRegistryHandle = HeapRegistryHandle<Vec<Option<GlobalRefEntry>>>;
 
 thread_local! {
     static GLOBAL_REFS: HeapRegistrySlot<Vec<Option<GlobalRefEntry>>> =
         HeapRegistrySlot::new(Vec::new());
 }
 
-pub fn current_dynamic_module_registry_handle() -> DynamicModuleRegistryHandle {
+#[path = "dynamic_module_registry_detach.rs"]
+mod registry_detach;
+pub(crate) use registry_detach::detach_dynamic_module_registry;
+
+pub(crate) fn current_dynamic_module_registry_handle() -> DynamicModuleRegistryHandle {
     GLOBAL_REFS.with(HeapRegistrySlot::current)
 }
 
-pub fn install_dynamic_module_registry_handle(handle: &DynamicModuleRegistryHandle) {
+pub(crate) fn install_dynamic_module_registry_handle(handle: &DynamicModuleRegistryHandle) {
     GLOBAL_REFS.with(|slot| slot.install(handle));
 }
 
@@ -137,7 +159,7 @@ pub fn reset_dynamic_module_registry() {
 
 /// Carrier park: forget the installed global-ref registry handle (a plain
 /// store). The World's registry stays alive through its Contexts.
-pub fn park_dynamic_module_registry() {
+pub(crate) fn park_dynamic_module_registry() {
     GLOBAL_REFS.with(HeapRegistrySlot::park);
 }
 
@@ -154,11 +176,41 @@ pub fn with_global_refs<R>(
     GLOBAL_REFS.with(f)
 }
 
-pub fn retire_dynamic_module_registry(registry: &DynamicModuleRegistryHandle) {
+pub(crate) fn retire_dynamic_module_registry(registry: &DynamicModuleRegistryHandle) {
     registry.borrow_mut().clear();
 }
 
-pub fn collect_dynamic_module_registry_gc_roots(
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    #[deny(unused_unsafe)]
+    fn dropping_a_global_ref_entry_writes_nil_through_its_tag() {
+        let mut tag = emacs_value_tag::new(Value::fixnum(4));
+        assert!(!tag.v.is_nil());
+        // SAFETY: `tag` is a live stack cell and outlives `entry`.
+        let entry = unsafe { GlobalRefEntry::new(Value::fixnum(4), 0, &mut tag) };
+        drop(entry);
+        assert!(tag.v.is_nil());
+    }
+
+    #[test]
+    #[cfg(debug_assertions)]
+    fn global_ref_entry_rejects_a_null_tag_before_the_write() {
+        let built = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            // SAFETY: the pointer is deliberately null. The constructor's
+            // debug check must fire before `Drop` writes through it.
+            unsafe { GlobalRefEntry::new(Value::NIL, 0, std::ptr::null_mut()) }
+        }));
+        assert!(
+            built.is_err(),
+            "a null tag must fail the debug check before Drop writes through it"
+        );
+    }
+}
+
+pub(crate) fn collect_dynamic_module_registry_gc_roots(
     registry: &DynamicModuleRegistryHandle,
     roots: &mut Vec<Value>,
 ) {

@@ -38,6 +38,11 @@ impl Default for DirectWriteCatalogMonitor {
 }
 
 impl DirectWriteCatalogMonitor {
+    pub(super) fn published_generation(&self) -> u64 {
+        let _ = self;
+        CATALOG_CHANGES.current()
+    }
+
     pub(super) fn poll(&mut self) -> FontCatalogChange {
         match self.poller.begin(&CATALOG_CHANGES) {
             FontCatalogPollAction::PublishedChange => {

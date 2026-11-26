@@ -192,9 +192,9 @@ fn region_mean(pixels: &image::DynamicImage, rect: (u32, u32, u32, u32)) -> f64 
 // grim. The display harness provides the headless session.
 fn child_frame_fades_progress_across_presented_frames() {
     let root = neomacs_infra::crate_root!().join("../..");
-    let artifacts = root.join("target/neomacs-gui-tests/child-frame-animation");
-    let _ = fs::remove_dir_all(&artifacts);
-    fs::create_dir(&artifacts).unwrap();
+    let artifacts = neomacs_gui_tests::fresh_artifact_dir(
+        root.join("target/neomacs-gui-tests/child-frame-animation"),
+    );
     // The same session the grim-driven close-confirmation suite uses: sway
     // headless implements the wlr-screencopy protocol grim needs, and both
     // sides composite in software (wlroots' pixman renderer, the editor on

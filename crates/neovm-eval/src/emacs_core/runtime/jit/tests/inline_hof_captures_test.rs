@@ -54,10 +54,10 @@ impl Drop for Knobs {
 
 fn function(ops: Vec<Op>, constants: Vec<Value>) -> ByteCodeFunction {
     let mut function = ByteCodeFunction::new(LambdaParams::simple(vec![intern("hof-capture-arg")]));
-    function.lexical = true;
-    function.ops = ops;
-    function.constants = constants.into();
-    function.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
+    function.set_lexical(true);
+    function.set_ops(ops);
+    function.set_constants(constants.into());
+    function.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
     function.seal_hand_assembled_ops_for_test();
     function.jit_runtime().set_hot_for_test();
     function
@@ -161,7 +161,7 @@ fn inline_hof_captures_noncons_declines_without_an_early_branch_error() {
         };
         let fused = fuse(
             source.executable_ops(),
-            &source.constants,
+            source.constants(),
             None,
             1,
             &vec![
@@ -178,7 +178,7 @@ fn inline_hof_captures_noncons_declines_without_an_early_branch_error() {
         }
         let _ = ctx.debug_on_next_call_is_armed();
         let NativeRun::DeoptAt(resume) =
-            leaf.call(&mut ctx as *mut Context as *mut u8, &[sequence])
+            (unsafe { leaf.call(&mut ctx as *mut Context as *mut u8, &[sequence]) })
         else {
             panic!("non-cons capture declines before the original callback")
         };
@@ -214,7 +214,9 @@ fn inline_hof_captures_empty_mapping_skips_the_witness() {
     let source = caller(callback);
     let leaf = compile::compile_bytecode_function_with(&source, Some(&ctx.obarray)).unwrap();
     let _ = ctx.debug_on_next_call_is_armed();
-    let NativeRun::Ok(bits) = leaf.call(&mut ctx as *mut Context as *mut u8, &[Value::NIL]) else {
+    let NativeRun::Ok(bits) =
+        (unsafe { leaf.call(&mut ctx as *mut Context as *mut u8, &[Value::NIL]) })
+    else {
         panic!("empty mapping has no callback or capture witness")
     };
     assert_eq!(
@@ -248,7 +250,8 @@ fn inline_hof_captures_float_car_after_poll_deopts_inside_add1_once() {
     let _ = ctx.debug_on_next_call_is_armed();
     ctx.gc_stress = true;
     reset_bytecode_branch_poll_count();
-    let NativeRun::DeoptAt(resume) = leaf.call(&mut ctx as *mut Context as *mut u8, &[sequence])
+    let NativeRun::DeoptAt(resume) =
+        (unsafe { leaf.call(&mut ctx as *mut Context as *mut u8, &[sequence]) })
     else {
         panic!("fresh captured car transfers at the callback's Add1")
     };
@@ -285,7 +288,7 @@ fn assert_hof_admitted(source: &ByteCodeFunction) {
     };
     let Some(fused) = fuse(
         source.executable_ops(),
-        &source.constants,
+        source.constants(),
         None,
         1,
         &vec![crate::emacs_core::jit::NumericFeedback::FixnumOnly; source.executable_ops().len()],
@@ -350,7 +353,9 @@ fn inline_hof_flags_keep_conditional_captured_count_and_boundaries() {
             .is_ok()
     );
     let _ = ctx.debug_on_next_call_is_armed();
-    let NativeRun::Ok(bits) = leaf.call(&mut ctx as *mut Context as *mut u8, &[sequence]) else {
+    let NativeRun::Ok(bits) =
+        (unsafe { leaf.call(&mut ctx as *mut Context as *mut u8, &[sequence]) })
+    else {
         panic!("fixnum conditional capture fixture must run natively");
     };
     assert_eq!(
@@ -415,7 +420,8 @@ fn inline_hof_flags_keep_all_four_branch_stack_effects() {
         };
         ctx.push_vm_frame_root(reference);
         let _ = ctx.debug_on_next_call_is_armed();
-        let NativeRun::Ok(bits) = leaf.call(&mut ctx as *mut Context as *mut u8, &[sequence])
+        let NativeRun::Ok(bits) =
+            (unsafe { leaf.call(&mut ctx as *mut Context as *mut u8, &[sequence]) })
         else {
             panic!("branch fixture must run natively: {branch:?}");
         };
@@ -472,7 +478,8 @@ fn inline_hof_flags_resume_nan_then_error_without_repeating_capture() {
             .is_ok()
     );
     let _ = ctx.debug_on_next_call_is_armed();
-    let NativeRun::DeoptAt(resume) = leaf.call(&mut ctx as *mut Context as *mut u8, &[sequence])
+    let NativeRun::DeoptAt(resume) =
+        (unsafe { leaf.call(&mut ctx as *mut Context as *mut u8, &[sequence]) })
     else {
         panic!("cold float/type guard must resume the original callback");
     };
@@ -511,7 +518,8 @@ fn assert_flag_mapping_native(
     let leaf = compile::compile_bytecode_function_with(&source, Some(&ctx.obarray))
         .expect("the admitted flag fixture must compile");
     let _ = ctx.debug_on_next_call_is_armed();
-    let NativeRun::Ok(bits) = leaf.call(ctx as *mut Context as *mut u8, &[sequence]) else {
+    let NativeRun::Ok(bits) = (unsafe { leaf.call(ctx as *mut Context as *mut u8, &[sequence]) })
+    else {
         panic!("the successful flag fixture must execute its native HOF path");
     };
     let actual = neovm_value::value::list_to_vec(&unsafe {
@@ -984,7 +992,8 @@ fn inline_hof_flags_producer_deopt_keeps_resume_frontier() {
     assert_hof_admitted(&source);
     let leaf = compile::compile_bytecode_function_with(&source, Some(&ctx.obarray)).unwrap();
     let _ = ctx.debug_on_next_call_is_armed();
-    let NativeRun::DeoptAt(resume) = leaf.call(&mut ctx as *mut Context as *mut u8, &[sequence])
+    let NativeRun::DeoptAt(resume) =
+        (unsafe { leaf.call(&mut ctx as *mut Context as *mut u8, &[sequence]) })
     else {
         panic!("cold mixed numeric producer must transfer at its own opcode");
     };
@@ -1040,7 +1049,8 @@ fn inline_hof_flags_signal_cleanup_allows_next_mapping() {
     assert_hof_admitted(&source);
     let leaf = compile::compile_bytecode_function_with(&source, Some(&ctx.obarray)).unwrap();
     let _ = ctx.debug_on_next_call_is_armed();
-    let NativeRun::DeoptAt(resume) = leaf.call(&mut ctx as *mut Context as *mut u8, &[sequence])
+    let NativeRun::DeoptAt(resume) =
+        (unsafe { leaf.call(&mut ctx as *mut Context as *mut u8, &[sequence]) })
     else {
         panic!("the bad numeric operand must leave native code before signaling");
     };
@@ -1071,7 +1081,8 @@ fn inline_hof_flags_signal_cleanup_allows_next_mapping() {
     ctx.push_vm_frame_root(valid);
     let next_roots = ctx.save_vm_frame_roots();
     let _ = ctx.debug_on_next_call_is_armed();
-    let NativeRun::Ok(bits) = leaf.call(&mut ctx as *mut Context as *mut u8, &[valid]) else {
+    let NativeRun::Ok(bits) = (unsafe { leaf.call(&mut ctx as *mut Context as *mut u8, &[valid]) })
+    else {
         panic!("a handled callback signal must leave the next valid mapping usable");
     };
     assert_eq!(

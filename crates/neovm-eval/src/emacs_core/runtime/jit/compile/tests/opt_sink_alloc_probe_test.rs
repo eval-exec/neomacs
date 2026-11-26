@@ -5,6 +5,7 @@
 use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
 use crate::emacs_core::jit::compile::opt_census::SelectedTier;
+use neovm_value::intern::intern;
 
 use super::*;
 use crate::emacs_core::eval::{
@@ -130,7 +131,7 @@ fn constant_value(spec: oracle::ConstantSpec, objects: &[Value]) -> Value {
     match spec {
         oracle::ConstantSpec::Object(id) => objects[id],
         oracle::ConstantSpec::Integer(n) => Value::make_int(n),
-        oracle::ConstantSpec::Symbol(name) => Value::symbol(name),
+        oracle::ConstantSpec::Symbol(name) => Value::from_sym_id(intern(name)),
     }
 }
 
@@ -150,7 +151,8 @@ fn load_fixture(ctx: &mut Context, roots: &Roots) -> Fixture {
         .symbol_value_copied("t34-o36-fixture-objects")
         .expect("loader's graph binding");
     roots.add(&[graph]);
-    let objects = graph.as_vector_data().expect("42-node graph");
+    let objects = graph.as_vector_data().expect("42-node graph").to_vec();
+    let objects = objects.as_slice();
     assert_eq!(objects.len(), oracle::OBJECTS.len());
     for (id, &spec) in oracle::OBJECTS.iter().enumerate() {
         match spec {
@@ -163,7 +165,7 @@ fn load_fixture(ctx: &mut Context, roots: &Roots) -> Fixture {
                 assert_eq!(slots.len(), 7);
                 for (slot, &target) in edges.iter().enumerate() {
                     assert_eq!(
-                        slots[slot].bits(),
+                        slots.at(slot).bits(),
                         objects[target].bits(),
                         "graph edge {id}:{slot}"
                     );
@@ -194,14 +196,11 @@ fn load_fixture(ctx: &mut Context, roots: &Roots) -> Fixture {
         let source = value
             .get_bytecode_data()
             .expect("real GNU byte-code object");
-        assert_eq!(source.arglist, Value::make_int(spec.descriptor));
-        assert_eq!(source.max_stack.get(), spec.max_stack as usize);
-        assert_eq!(
-            source.gnu_bytecode_bytes.as_ref().unwrap().as_slice(),
-            spec.bytes
-        );
-        assert_eq!(source.constants.len(), spec.constants.len());
-        for (actual, &expected) in source.constants.iter().zip(spec.constants) {
+        assert_eq!(source.arglist(), Value::make_int(spec.descriptor));
+        assert_eq!(source.max_stack().get(), spec.max_stack as usize);
+        assert_eq!(source.gnu_bytecode_bytes().unwrap().as_slice(), spec.bytes);
+        assert_eq!(source.constants().len(), spec.constants.len());
+        for (actual, &expected) in source.constants().iter().zip(spec.constants) {
             assert_eq!(
                 actual.bits(),
                 constant_value(expected, objects).bits(),
@@ -425,11 +424,13 @@ fn freeze_gc_outside_brackets(ctx: &mut Context) {
 }
 
 fn native_ok(ctx: &mut Context, value: Value, leaf: &CompiledLeaf, args: &[Value]) -> Value {
-    match leaf.call_consts(
-        ctx as *mut Context as *mut u8,
-        source(value).jit_constant_base(),
-        args,
-    ) {
+    match unsafe {
+        leaf.call_consts(
+            ctx as *mut Context as *mut u8,
+            source(value).jit_constant_base(),
+            args,
+        )
+    } {
         NativeRun::Ok(bits) => unsafe {
             /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
             Value::from_bits(bits)
@@ -439,7 +440,7 @@ fn native_ok(ctx: &mut Context, value: Value, leaf: &CompiledLeaf, args: &[Value
 }
 
 fn check_float_identities(ctx: &mut Context, fixture: Fixture, roots: &Roots, leaf: &CompiledLeaf) {
-    let seed = source(fixture.float()).constants[0];
+    let seed = source(fixture.float()).constants()[0];
     let zero_a = native_ok(ctx, fixture.float(), leaf, &[Value::make_int(0)]);
     roots.add(&[zero_a]);
     let zero_b = native_ok(ctx, fixture.float(), leaf, &[Value::make_int(0)]);
@@ -567,7 +568,7 @@ fn assert_nbody_answer(ctx: &mut Context, fixture: Fixture, system: Value, steps
         let fields = value.as_vector_data().expect("actual seven-slot body");
         assert_eq!(fields.len(), 7);
         for field in 0..7 {
-            assert_eq!(float_bits(fields[field]), slots[7 * body + field]);
+            assert_eq!(float_bits(fields.at(field)), slots[7 * body + field]);
         }
     }
     // Outside the snapshot; energy intentionally allocates Float objects.
@@ -665,7 +666,7 @@ fn opt_sink_allocation_fixture_load_preserves_frozen_gnu_graph_and_answers() {
         assert_eq!(float_bits(actual), expected);
     }
     let zero = tier0(&mut ctx, fixture.float(), &[Value::make_int(0)]);
-    assert_eq!(zero.bits(), source(fixture.float()).constants[0].bits());
+    assert_eq!(zero.bits(), source(fixture.float()).constants()[0].bits());
     let dt = Value::make_float(0.01);
     roots.add(&[dt]);
     for &(steps, _, _) in &oracle::NBODY_ANSWERS {

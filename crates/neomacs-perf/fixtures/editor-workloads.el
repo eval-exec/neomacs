@@ -307,12 +307,216 @@ the point of keeping both."
              section)
      "| Name | Value |\n|------+-------|\n| alpha | 1 |\n\n")))
 
+(defconst neomacs-perf-workload--cjk-chars
+  "検索表示確認日本語漢字平仮名片中韓越文列幅計測フォールバック顔変更脈動再描画行末面外折返段落選択候補強調注釈境界線圏層厚"
+  "Sixty distinct CJK characters the pulse row displays.")
+
+(defconst neomacs-perf-workload--pulse-colors
+  '("#5b0000" "#6b1100" "#7b2200" "#8b3300" "#9b4400"
+    "#ab5500" "#bb6600" "#cb7700" "#db8800" "#eb9900")
+  "One background per `pulse-iterations' step.
+`pulse-tick' writes a new color each iteration. This row does those
+writes without the timer delay.")
+
+(defun neomacs-perf-workload--insert-cjk-buffer ()
+  "Insert twenty lines of the fixed CJK sample."
+  (dotimes (_ 20)
+    (insert neomacs-perf-workload--cjk-chars "\n")))
+
+(defun neomacs-perf-workload--cjk-distinct-count ()
+  "Count characters at or above U+3000 in the current buffer."
+  (let ((seen (make-hash-table :test 'eq)))
+    (save-excursion
+      (goto-char (point-min))
+      (while (not (eobp))
+        (let ((ch (char-after)))
+          (when (and ch (>= ch #x3000))
+            (puthash ch t seen)))
+        (forward-char 1)))
+    (hash-table-count seen)))
+
+(defvar neomacs-perf-workload--redisplay-count 0
+  "Redisplays the CJK pulse performed. Other workloads leave this 0.")
+
+(defvar neomacs-perf-workload--cjk-displayed nil
+  "Non-nil when every CJK pulse redisplay showed a CJK character.")
+
+(defconst neomacs-perf-workload--carryover-chunk-count 64
+  "Atomic pipe chunks (`<= PIPE_BUF` = 4096 bytes) per `process-output-carryover' iteration.")
+
+(defvar neomacs-perf-workload--carryover-chunks nil
+  "Pre-sliced unibyte chunks for `process-output-carryover'.")
+
+(defvar neomacs-perf-workload--carryover-expected-lens nil
+  "Vector of exact expected decoded character counts per carryover chunk.")
+
+(defvar neomacs-perf-workload--carryover-ref-md5 nil
+  "Expected MD5 of the decoded `process-output-carryover' stream.")
+
+(defvar neomacs-perf-workload--carryover-ref-chars 0
+  "Expected character count of the decoded `process-output-carryover' stream.")
+
+(defun neomacs-perf-workload--prepare-carryover-stream ()
+  "Build 64 `<= 4096'-byte chunks that split UTF-8 and CRLF across every boundary.
+
+Chunk 0 ends mid-2-byte UTF-8 while its earlier CRLF lines resolve sticky
+`utf-8' -> `utf-8-dos'; subsequent boundaries cycle 3-byte UTF-8, 4-byte
+UTF-8, trailing CR (DOS EOL lookahead), and 2-byte UTF-8 across all 63
+boundaries.  Every chunk is `<= 4096' bytes (POSIX `PIPE_BUF'), so a
+lockstep write through `cat' delivers one atomic read per chunk."
+  (let* ((unit (encode-coding-string
+                "alpha=123 cafe\u00e9 \u3042\u65e5 \U0001f600 line\r\n"
+                'utf-8-unix))
+         (raw (apply #'concat (make-list 7300 unit)))
+         (total (length raw))
+         (target neomacs-perf-workload--carryover-chunk-count)
+         (step (/ total target))
+         (pos 0)
+         (chunks nil)
+         (expected nil)
+         (carry ""))
+    (dotimes (i target)
+      (let* ((end (if (= i (1- target))
+                      total
+                    (let ((mode (% (1+ i) 4))
+                          (p (min (+ pos step) (- total 4)))
+                          (limit (min (+ pos 4090) (- total 4)))
+                          (found nil))
+                      (while (and (< p limit) (not found))
+                        (let ((b0 (aref raw p))
+                              (b1 (aref raw (1+ p))))
+                          (cond
+                           ((and (= mode 0) (= b0 ?\r) (= b1 ?\n))
+                            (setq found (1+ p)))
+                           ((and (= mode 1) (= b0 #xc3) (= b1 #xa9))
+                            (setq found (1+ p)))
+                           ((and (= mode 2) (= b0 #xe3) (= b1 #x81))
+                            (setq found (+ p 2)))
+                           ((and (= mode 3) (= b0 #xf0) (= b1 #x9f))
+                            (setq found (+ p 3)))))
+                        (setq p (1+ p)))
+                      (or found (error "carryover boundary %d not found" i)))))
+             (chunk (substring raw pos end)))
+        (when (> (length chunk) 4096)
+          (error "carryover chunk %d exceeds PIPE_BUF: %d" i (length chunk)))
+        (push chunk chunks)
+        (setq pos end)))
+    (setq chunks (nreverse chunks))
+    (dolist (ch chunks)
+      (let* ((comb (concat carry ch))
+             (len (length comb))
+             (cut len))
+        (cond
+         ((and (> len 0) (= (aref comb (1- len)) ?\r))
+          (setq cut (1- len)))
+         ((and (> len 0) (>= (aref comb (1- len)) #xc0))
+          (setq cut (1- len)))
+         ((and (> len 1) (>= (aref comb (- len 2)) #xe0))
+          (setq cut (- len 2)))
+         ((and (> len 2) (>= (aref comb (- len 3)) #xf0))
+          (setq cut (- len 3))))
+        (push (length (decode-coding-string (substring comb 0 cut) 'utf-8-dos))
+              expected)
+        (setq carry (substring comb cut))))
+    (unless (equal carry "")
+      (error "carryover stream left %d trailing bytes" (length carry)))
+    (let ((ref (decode-coding-string raw 'utf-8-dos)))
+      (setq neomacs-perf-workload--carryover-chunks (vconcat chunks)
+            neomacs-perf-workload--carryover-expected-lens (vconcat (nreverse expected))
+            neomacs-perf-workload--carryover-ref-md5 (md5 ref)
+            neomacs-perf-workload--carryover-ref-chars (length ref)))))
+
+(defun neomacs-perf-workload--run-process-output-carryover ()
+  "Stream the prepared 64-chunk payload through an async pipe `cat' filter.
+Returns (FILTER-CALLS CARRYOVER-BOUNDARIES VERIFIED-P)."
+  (let* ((process-adaptive-read-buffering nil)
+         (chunks neomacs-perf-workload--carryover-chunks)
+         (expected neomacs-perf-workload--carryover-expected-lens)
+         (count (length chunks))
+         (filter-calls 0)
+         (chunk-got 0)
+         (buf (generate-new-buffer " *neomacs-perf-carryover*")))
+    (unwind-protect
+        (let ((proc (make-process
+                     :name "neomacs-perf-carryover"
+                     :buffer nil
+                     :command '("cat")
+                     :coding '(utf-8 . no-conversion)
+                     :connection-type 'pipe
+                     :noquery t
+                     :sentinel #'ignore
+                     :filter (lambda (_p str)
+                               (setq filter-calls (1+ filter-calls)
+                                     chunk-got (+ chunk-got (length str)))
+                               (with-current-buffer buf
+                                 (goto-char (point-max))
+                                 (insert str))))))
+          (unwind-protect
+              (progn
+                (dotimes (i count)
+                  (let ((want (aref expected i)))
+                    (setq chunk-got 0)
+                    (process-send-string proc (aref chunks i))
+                    (while (< chunk-got want)
+                      (accept-process-output proc 1))
+                    (unless (= chunk-got want)
+                      (error "process-output-carryover chunk %d got %d want %d"
+                             i chunk-got want))))
+                (process-send-eof proc)
+                (while (process-live-p proc)
+                  (accept-process-output proc 0.05)))
+            (when (process-live-p proc)
+              (delete-process proc)))
+          (let* ((got (with-current-buffer buf (buffer-string)))
+                 (verified (and (eq last-coding-system-used 'utf-8-dos)
+                                (= (length got) neomacs-perf-workload--carryover-ref-chars)
+                                (equal (md5 got) neomacs-perf-workload--carryover-ref-md5))))
+            (list filter-calls (1- count) verified)))
+      (when (buffer-live-p buf)
+        (kill-buffer buf)))))
+
+(defun neomacs-perf-workload--pulse-face-steps ()
+  "Apply one xref pulse and redisplay after every face write.
+
+`lisp/pulse.el' does the writes from `pulse-tick' on a timer
+(`pulse-delay'). The delay is a UI pause, so this row applies the same
+face writes synchronously, calls `redisplay' after each one, and returns
+how many landed. It refuses a `pulse-iterations' other than 10. A
+redisplay that does not show the CJK line is an error."
+  (require 'pulse)
+  (unless (eq pulse-iterations 10)
+    (error "cjk-font-lock-pulse expects pulse-iterations 10, got %s"
+           pulse-iterations))
+  (unless (= (length neomacs-perf-workload--pulse-colors) pulse-iterations)
+    (error "pulse color list must have one entry per pulse-iterations"))
+  (let ((steps 0))
+    (dotimes (i pulse-iterations)
+      (set-face-background 'pulse-highlight-face
+                           (nth i neomacs-perf-workload--pulse-colors))
+      (redisplay t)
+      (setq neomacs-perf-workload--redisplay-count
+            (1+ neomacs-perf-workload--redisplay-count))
+      (unless (pos-visible-in-window-p (point-min))
+        (error "cjk-font-lock-pulse redisplay did not display the CJK line"))
+      (let ((ch (char-after (point-min))))
+        (unless (and ch (>= ch #x3000))
+          (error "cjk-font-lock-pulse window is not showing a CJK character, saw %s"
+                 ch)))
+      (setq steps (1+ steps)))
+    (setq neomacs-perf-workload--cjk-displayed t)
+    steps))
+
 (defun neomacs-perf-workload--prepare-buffer (scenario)
   (cond
    ((equal scenario "startup")
     (fundamental-mode))
    ((equal scenario "process-output")
     ;; The workload spawns the subprocess itself, once per iteration.
+    (fundamental-mode))
+   ((equal scenario "process-output-carryover")
+    ;; Precompute the 64 `<= PIPE_BUF' chunks and reference MD5 before the
+    ;; timed window opens.
+    (neomacs-perf-workload--prepare-carryover-stream)
     (fundamental-mode))
    ((equal scenario "file-open")
     ;; The workload opens the file itself, once per iteration, into a fresh
@@ -324,6 +528,25 @@ the point of keeping both."
     (setq neomacs-perf-workload--lsp-payload
           (neomacs-perf-workload--lsp-message 120))
     (fundamental-mode))
+   ((equal scenario "cjk-font-lock-pulse")
+    ;; `with-temp-buffer' names this buffer " *temp*". font-core turns
+    ;; font-lock off for a space-prefixed name. A visible name keeps it on
+    ;; once the session is a GUI frame rather than --batch.
+    (rename-buffer "cjk-font-lock-pulse" t)
+    (neomacs-perf-workload--insert-cjk-buffer)
+    (text-mode)
+    ;; Face every character so font-lock, not only the pulse face, covers
+    ;; the CJK run. The shared `font-lock-ensure' below this cond realizes it.
+    (font-lock-add-keywords nil '(("." 0 font-lock-string-face)) 'set)
+    (font-lock-mode 1)
+    (unless font-lock-mode
+      (error "cjk-font-lock-pulse left font-lock-mode off"))
+    (pop-to-buffer (current-buffer))
+    (goto-char (point-min))
+    (let ((distinct (neomacs-perf-workload--cjk-distinct-count)))
+      (unless (>= distinct 60)
+        (error "cjk-font-lock-pulse buffer has %s distinct CJK characters, need 60"
+               distinct))))
    ((equal scenario "org-editing")
     (require 'org)
     (dotimes (section 150)
@@ -350,7 +573,11 @@ the point of keeping both."
         (indent-us 0) (regex-us 0) (latencies nil)
         (mode-us 0) (fontify-us 0) (replace-us 0) (undo-redo-us 0)
         (isearch-us 0) (buffer-switch-us 0) (how-many-us 0) (motion-us 0)
-        (bookkeeping-us 0))
+        (bookkeeping-us 0) (face-changes 0) (distinct-cjk 0)
+        (process-filter-calls 0) (process-carryover-boundaries 0)
+        (process-carryover-verified t)
+        (neomacs-perf-workload--redisplay-count 0)
+        (neomacs-perf-workload--cjk-displayed nil))
     (dotimes (_ iterations)
       ;; The snapshot and the restore below are the HARNESS's own work, not
       ;; the workload's, and they sit inside the window `elapsed-us' and
@@ -405,7 +632,7 @@ the point of keeping both."
            ;; deterministic -- it reaches the same decoder
            ;; (`decode_process_run_in_context`), which is what this row exists
            ;; to hold honest; it does not cover filter dispatch or partial-run
-           ;; carryover, and a row that claimed to would be lying.
+           ;; carryover (covered by `process-output-carryover').
            (let ((path (neomacs-perf-workload--required-environment
                         "NEOMACS_PERF_SOURCE")))
              (setq type-us
@@ -414,6 +641,20 @@ the point of keeping both."
                        (lambda ()
                          (with-temp-buffer
                            (call-process "cat" nil t nil path))))))))
+          ("process-output-carryover"
+           ;; Asynchronous pipe subprocess output through a Lisp `:filter',
+           ;; exercising 63 deterministic UTF-8 and CRLF partial-run carryover
+           ;; boundaries per iteration.
+           (let (stats)
+             (setq type-us
+                   (+ type-us
+                      (neomacs-perf-workload--time
+                       (lambda ()
+                         (setq stats
+                               (neomacs-perf-workload--run-process-output-carryover))))))
+             (setq process-filter-calls (+ process-filter-calls (nth 0 stats))
+                   process-carryover-boundaries (+ process-carryover-boundaries (nth 1 stats))
+                   process-carryover-verified (and process-carryover-verified (nth 2 stats)))))
           ("file-open"
            ;; Opening a file, split into the two halves that behave
            ;; differently, because a single number hides both.
@@ -502,6 +743,16 @@ the point of keeping both."
           ("regex-search"
            (setq regex-us (+ regex-us (neomacs-perf-workload--time
                                        #'neomacs-perf-workload--regex-phase))))
+          ("cjk-font-lock-pulse"
+           (setq distinct-cjk (neomacs-perf-workload--cjk-distinct-count))
+           (setq fontify-us
+                 (+ fontify-us
+                    (neomacs-perf-workload--time
+                     (lambda ()
+                       (setq face-changes
+                             (+ face-changes
+                                (neomacs-perf-workload--pulse-face-steps)))
+                       (font-lock-ensure (point-min) (point-max)))))))
           (_ (error "unknown editor workload %S" scenario)))
         (let ((book-started (float-time)))
           (neomacs-perf-workload--restore text saved-point)
@@ -522,7 +773,15 @@ the point of keeping both."
       (isearch . ,isearch-us)
       (buffer-switch . ,buffer-switch-us)
       (how-many . ,how-many-us)
-      (motion . ,motion-us))))
+      (motion . ,motion-us)
+      (face-changes . ,face-changes)
+      (distinct-cjk . ,distinct-cjk)
+      (redisplays . ,neomacs-perf-workload--redisplay-count)
+      (cjk-displayed . ,neomacs-perf-workload--cjk-displayed)
+      (process-filter-calls . ,process-filter-calls)
+      (process-carryover-boundaries . ,process-carryover-boundaries)
+      (process-carryover-verified . ,(and (equal scenario "process-output-carryover")
+                                          process-carryover-verified)))))
 
 (defun neomacs-perf-workload--lsp-message (count)
   "Build one `textDocument/publishDiagnostics' plist with COUNT diagnostics.
@@ -594,14 +853,18 @@ Both engines run the same code here, so the number is comparable."
         (buffer_switch_phase_us . ,(alist-get 'buffer-switch phases))
         (how_many_phase_us . ,(alist-get 'how-many phases))
         (motion_phase_us . ,(alist-get 'motion phases))
+        (face_change_count . ,(or (alist-get 'face-changes phases) 0))
+        (distinct_cjk . ,(or (alist-get 'distinct-cjk phases) 0))
+        (redisplay_count . ,(or (alist-get 'redisplays phases) 0))
+        (cjk_displayed . ,(if (alist-get 'cjk-displayed phases) t :json-false))
+        (process_filter_calls . ,(or (alist-get 'process-filter-calls phases) 0))
+        (process_carryover_boundaries . ,(or (alist-get 'process-carryover-boundaries phases) 0))
+        (process_carryover_verified . ,(if (alist-get 'process-carryover-verified phases) t :json-false))
         ;; What the harness spent on its own snapshot/restore inside the
         ;; timed window, so a reader can tell the workload from the scaffold.
         (harness_bookkeeping_us . ,(alist-get 'bookkeeping phases))
-        ;; Collection parity. Comparing two engines without these is comparing
-        ;; different amounts of work: neomacs performs no automatic collections
-        ;; in --batch (its adaptive pacer's live-growth term is a strict max
-        ;; over gc-cons-threshold), so a batch row silently charges GNU for
-        ;; collection the other engine skipped.
+        ;; Collection parity. Record the collection work each engine performs
+        ;; inside the timed window so differing GC work remains visible.
         ;; These boundaries enclose the gate handshake as well as the loop.
         ;; The cumulative totals below include preparation and cannot explain
         ;; collection-sized variation in the edit-loop instruction count.

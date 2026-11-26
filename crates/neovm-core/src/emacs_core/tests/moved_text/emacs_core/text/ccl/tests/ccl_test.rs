@@ -17,8 +17,6 @@ use neovm_value::value::Value;
 
 use neovm_value::error::{FlowKind, FlowResultExt as _};
 
-use neovm_value::intern::intern;
-
 use neovm_value::value::ValueKind;
 
 #[test]
@@ -39,8 +37,8 @@ fn ccl_execute_call_runs_the_registered_program_and_returns() {
     );
     let registers = Value::vector(vec![Value::NIL; 8]);
     builtin_ccl_execute_impl(vec![caller, registers]).expect("call should return");
-    assert_eq!(registers.as_vector_data().unwrap()[0], Value::fixnum(7));
-    assert_eq!(registers.as_vector_data().unwrap()[1], Value::fixnum(3));
+    assert_eq!(registers.as_vector_data().unwrap().at(0), Value::fixnum(7));
+    assert_eq!(registers.as_vector_data().unwrap().at(1), Value::fixnum(3));
 }
 
 #[test]
@@ -72,9 +70,9 @@ fn ccl_execute_iterate_multiple_map_calls_a_program_then_continues() {
     let registers = Value::vector(vec![Value::NIL; 8]);
     builtin_ccl_execute_impl(vec![program, registers]).expect("iterate should call and continue");
     let slots = registers.as_vector_data().unwrap();
-    assert_eq!(slots[0], Value::fixnum(9));
-    assert_eq!(slots[1], Value::fixnum(4));
-    assert_eq!(slots[2], Value::fixnum(5));
+    assert_eq!(slots.at(0), Value::fixnum(9));
+    assert_eq!(slots.at(1), Value::fixnum(4));
+    assert_eq!(slots.at(2), Value::fixnum(5));
 }
 
 #[test]
@@ -95,9 +93,9 @@ fn ccl_execute_lookup_integer_reads_the_lisp_hash_table_vector() {
         )
         .expect("lookup-integer through the Lisp hash table");
     let registers = registers.as_vector_data().expect("register vector");
-    assert_eq!(registers[0], Value::fixnum(2));
-    assert_eq!(registers[1], Value::fixnum(16));
-    assert_eq!(registers[7], Value::fixnum(1));
+    assert_eq!(registers.at(0), Value::fixnum(2));
+    assert_eq!(registers.at(1), Value::fixnum(16));
+    assert_eq!(registers.at(7), Value::fixnum(1));
 }
 
 #[test]
@@ -118,8 +116,8 @@ fn ccl_execute_translate_character_rewrites_a_char_table_entry() {
         )
         .expect("translate A to B");
     let hit = hit.as_vector_data().expect("register vector");
-    assert_eq!(hit[0], Value::fixnum(66));
-    assert_eq!(hit[1], Value::fixnum(0));
+    assert_eq!(hit.at(0), Value::fixnum(66));
+    assert_eq!(hit.at(1), Value::fixnum(0));
 
     let miss = eval
         .eval_str(
@@ -129,8 +127,8 @@ fn ccl_execute_translate_character_rewrites_a_char_table_entry() {
         )
         .expect("untranslated Z stays Z");
     let miss = miss.as_vector_data().expect("register vector");
-    assert_eq!(miss[0], Value::fixnum(90));
-    assert_eq!(miss[1], Value::fixnum(0));
+    assert_eq!(miss.at(0), Value::fixnum(90));
+    assert_eq!(miss.at(1), Value::fixnum(0));
 }
 
 #[test]
@@ -149,8 +147,8 @@ fn ccl_execute_translate_character_keeps_everything_for_a_nil_table() {
         )
         .expect("nil table maps identity");
     let registers = registers.as_vector_data().expect("register vector");
-    assert_eq!(registers[0], Value::fixnum(65));
-    assert_eq!(registers[1], Value::fixnum(0));
+    assert_eq!(registers.at(0), Value::fixnum(65));
+    assert_eq!(registers.at(1), Value::fixnum(0));
 }
 
 #[test]
@@ -170,8 +168,8 @@ fn ccl_execute_translate_character_skips_a_mapping_that_is_not_a_character() {
         )
         .expect("non-character mapping keeps the input");
     let registers = registers.as_vector_data().expect("register vector");
-    assert_eq!(registers[0], Value::fixnum(65));
-    assert_eq!(registers[1], Value::fixnum(0));
+    assert_eq!(registers.at(0), Value::fixnum(65));
+    assert_eq!(registers.at(1), Value::fixnum(0));
 }
 
 #[test]
@@ -191,8 +189,8 @@ fn ccl_execute_translate_character_walks_a_list_of_tables() {
         )
         .expect("list table translates recursively");
     let registers = registers.as_vector_data().expect("register vector");
-    assert_eq!(registers[0], Value::fixnum(66));
-    assert_eq!(registers[1], Value::fixnum(0));
+    assert_eq!(registers.at(0), Value::fixnum(66));
+    assert_eq!(registers.at(1), Value::fixnum(0));
 }
 
 #[test]
@@ -293,21 +291,21 @@ fn ccl_execute_lookup_character_stores_an_int_including_negative() {
 
     let hit = lookup_character_registers(id, 65, 0);
     let hit = hit.as_vector_data().unwrap();
-    assert_eq!(hit[0], Value::fixnum(65));
-    assert_eq!(hit[1], Value::fixnum(99));
-    assert_eq!(hit[7], Value::fixnum(1));
+    assert_eq!(hit.at(0), Value::fixnum(65));
+    assert_eq!(hit.at(1), Value::fixnum(99));
+    assert_eq!(hit.at(7), Value::fixnum(1));
 
     let negative = lookup_character_registers(id, 66, 0);
     let negative = negative.as_vector_data().unwrap();
-    assert_eq!(negative[0], Value::fixnum(66));
-    assert_eq!(negative[1], Value::fixnum(-1));
-    assert_eq!(negative[7], Value::fixnum(1));
+    assert_eq!(negative.at(0), Value::fixnum(66));
+    assert_eq!(negative.at(1), Value::fixnum(-1));
+    assert_eq!(negative.at(7), Value::fixnum(1));
 
     let miss = lookup_character_registers(id, 69, 5);
     let miss = miss.as_vector_data().unwrap();
-    assert_eq!(miss[0], Value::fixnum(69));
-    assert_eq!(miss[1], Value::fixnum(0));
-    assert_eq!(miss[7], Value::fixnum(0));
+    assert_eq!(miss.at(0), Value::fixnum(69));
+    assert_eq!(miss.at(1), Value::fixnum(0));
+    assert_eq!(miss.at(7), Value::fixnum(0));
 }
 
 #[test]
@@ -355,7 +353,7 @@ fn ccl_execute_map_single_treats_an_out_of_int_range_value_as_a_miss() {
         )
         .expect("out-of-int-range map content is a miss, not an error");
     let regs = registers.as_vector_data().expect("register vector");
-    assert_eq!(regs[0], Value::fixnum(-1));
+    assert_eq!(regs.at(0), Value::fixnum(-1));
 }
 
 #[test]

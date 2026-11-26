@@ -69,7 +69,51 @@ impl<'heap> Gen1Admission<'heap> {
         Ok(Self { collector })
     }
 
-    pub(in crate::tagged::gc) fn into_collector(self) -> QuiescentCollector<'heap> {
+    pub(in crate::tagged::gc) fn collector_mut(&mut self) -> &mut QuiescentCollector<'heap> {
+        &mut self.collector
+    }
+
+    /// Retract this heap's observation owner. The caller passes the receipt to
+    /// `prepare_detached` after its own frames that still need the owner.
+    #[doc(hidden)]
+    pub fn detach_source_observations(
+        &mut self,
+    ) -> Result<
+        crate::tagged::collection_reads::SourceObservationsDetached,
+        crate::tagged::collection_reads::SourceObservationError,
+    > {
+        self.collector.detach_source_observations()
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn install_canonical_source_observations(&mut self) {
+        self.collector.install_canonical_source_observations();
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn leak_canonical_source_observation_owner(&mut self) {
+        self.collector.leak_canonical_source_observation_owner();
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn validate_source_observation_export(
+        &mut self,
+    ) -> Result<(), crate::tagged::collection_reads::SourceObservationError> {
+        self.collector.validate_source_observation_export()
+    }
+
+    pub(in crate::tagged::gc) fn heap_identity(&self) -> super::HeapIdentity {
+        self.collector.heap_identity()
+    }
+
+    /// Hand the exclusive loan back to the caller. The reference-free
+    /// transfer's destination callback returns this loan so the transfer can
+    /// check it is the same allocation. There is no second constructor.
+    #[doc(hidden)]
+    pub fn into_collector(self) -> QuiescentCollector<'heap> {
         self.collector
     }
 }

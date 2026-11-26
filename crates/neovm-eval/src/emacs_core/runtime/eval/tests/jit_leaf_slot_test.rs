@@ -14,6 +14,7 @@ use crate::emacs_core::jit::RuntimeStateArmedLeafExt;
 use crate::emacs_core::jit::RuntimeStateTieringExt;
 use crate::emacs_core::jit::cache;
 use neovm_value::intern::SymId;
+use neovm_value::intern::intern;
 use neovm_value::value::{LambdaParams, Value, ValueKind};
 
 fn bc(
@@ -47,10 +48,10 @@ fn bc_with(
         // SAFETY: test placeholder id, never resolved (peer seal N8).
         rest: rest.then_some(unsafe { SymId::from_raw(nonrest + 1) }),
     });
-    f.lexical = true;
-    f.ops = ops;
-    f.constants = constants.into();
-    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
+    f.set_lexical(true);
+    f.set_ops(ops);
+    f.set_constants(constants.into());
+    f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
     if hot {
         f.jit_runtime().set_hot_for_test();
     }
@@ -59,8 +60,8 @@ fn bc_with(
 
 /// Bind `name`'s function cell to `bytecode` (roots it in the obarray) and
 /// return the callable symbol and the bytecode object.
-fn bind_fn(ev: &mut Context, name: &str, bytecode: ByteCodeFunction) -> (Value, Value) {
-    let sym = Value::symbol(name);
+fn bind_fn(ev: &mut Context, name: &'static str, bytecode: ByteCodeFunction) -> (Value, Value) {
+    let sym = Value::from_sym_id(intern(name));
     let ValueKind::Symbol(id) = sym.kind() else {
         panic!("symbol")
     };
@@ -177,7 +178,7 @@ fn retire_and_clear_disarm_the_slot_and_the_next_call_re_arms_it() {
     );
     assert!(slot_armed(callee), "re-armed from the fresh cache entry");
     // `clear()` FREES leaves (image reload): every slot must read empty.
-    cache::clear();
+    cache::clear_with_serial_receipt().expect("serial jit grace");
     assert!(!slot_armed(callee), "clear() disarms every slot");
     assert_eq!(call0(&mut ev, caller), Value::make_int(3));
     assert!(slot_armed(callee));

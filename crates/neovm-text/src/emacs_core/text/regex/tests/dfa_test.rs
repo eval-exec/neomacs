@@ -24,6 +24,158 @@ use crate::emacs_core::regex_emacs::{
 use crate::emacs_core::regex_emacs::{matcher_entry_count, re_search};
 
 #[test]
+fn split_gap_cached_prefix_selects_storage_once_after_the_first_byte() {
+    use crate::emacs_core::regex_emacs::{Segments, chunk_query_count, segment_byte_query_count};
+
+    let syntax = DefaultSyntaxLookup;
+    for prefix_len in [0, 3, 7, 8] {
+        let expression = format!("{}Z", "a".repeat(prefix_len));
+        let text = format!("{}x", "a".repeat(prefix_len));
+        let text = text.as_bytes();
+        let compiled = regex_compile(&expression, false, false).unwrap();
+        let mut dfa = ExistenceDfa::new(Nfa::build(&compiled).unwrap());
+        let context = ClassContext::of_search(&compiled, dfa.nfa(), &syntax).unwrap();
+        dfa.classes.sync(context);
+        dfa.begin_search(&compiled, &syntax);
+        assert_eq!(
+            with_first_step(false, || {
+                dfa.anchored_exists(&compiled, text, 0, text.len(), 0, &syntax)
+            }),
+            Exists::No {
+                consumed: prefix_len
+            }
+        );
+        let counters = dfa.counters;
+        let transitions = dfa.trans.clone();
+        for split in 0..=text.len() {
+            let segmented = Segments {
+                left: &text[..split],
+                right: &text[split..],
+            };
+            let before = (segment_byte_query_count(), chunk_query_count());
+            let actual =
+                dfa.cached_prefix_rejection(&compiled, &segmented, 0, text.len(), 0, usize::MAX);
+            assert_eq!(
+                actual,
+                (prefix_len < CACHED_PREFIX_BYTES).then_some(prefix_len)
+            );
+            let byte_queries = segment_byte_query_count() - before.0;
+            let chunk_queries = chunk_query_count() - before.1;
+            assert_eq!(
+                dfa.counters, counters,
+                "cached probes must not publish counters"
+            );
+            assert_eq!(
+                dfa.trans, transitions,
+                "cached probes must not build transitions"
+            );
+            if prefix_len == 0 {
+                assert_eq!((byte_queries, chunk_queries), (1, 0));
+            } else {
+                assert!(
+                    byte_queries + chunk_queries <= 2,
+                    "prefix={prefix_len} split={split}: {byte_queries} individual byte selections + {chunk_queries} chunk selections"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn split_gap_cached_first_transition_respects_first_byte_limits() {
+    let compiled = regex_compile(r"\bZ", false, false).unwrap();
+    let text = b"x-";
+    let mut dfa = warmed_dead_prefix(&compiled, text, 1, 0);
+    let check = |dfa: &ExistenceDfa, stop, point, span, expected| {
+        assert_cached_prefix_at_every_split(dfa, &compiled, text, (1, stop, point, span), expected);
+    };
+    check(&dfa, 2, 0, 1, Some(0));
+    check(&dfa, 2, 3, 1, Some(0));
+    check(&dfa, 0, 0, 1, None);
+    check(&dfa, 1, 0, 1, None);
+    check(&dfa, 2, 0, 0, None);
+    dfa.search.read_limit = 1;
+    check(&dfa, 2, 0, 1, None);
+    dfa.search.read_limit = 2;
+    check(&dfa, 2, 0, 1, Some(0));
+
+    // A positioned search may use the base-table cache only when both the
+    // current and preceding word-boundary facts are in its known plain run.
+    dfa.search.positional = true;
+    dfa.plain = 0..2;
+    check(&dfa, 2, 0, 1, Some(0));
+    dfa.plain = 0..1;
+    check(&dfa, 2, 0, 1, None);
+    dfa.plain = 1..2;
+    check(&dfa, 2, 0, 1, None);
+    dfa.plain = 0..2;
+    check(&dfa, 2, 0, 1, Some(0));
+}
+
+#[test]
+fn split_gap_cached_first_transition_respects_dynamic_point() {
+    // The Q alternative makes the first byte class and its DEAD transition
+    // cacheable while the point assertion is false. At point it matches x.
+    let compiled = regex_compile(r"\=x\|Q", false, false).unwrap();
+    let text = b"-x";
+    let mut dfa = warmed_dead_prefix(&compiled, text, 1, 0);
+    assert_cached_prefix_at_every_split(&dfa, &compiled, text, (1, 2, 0, 1), Some(0));
+    assert_cached_prefix_at_every_split(&dfa, &compiled, text, (1, 2, 99, 1), Some(0));
+    assert_cached_prefix_at_every_split(&dfa, &compiled, text, (1, 2, 1, 1), None);
+    assert_eq!(
+        dfa.anchored_exists(&compiled, text, 1, 2, 1, &DefaultSyntaxLookup),
+        Exists::Yes
+    );
+    assert!(re_match(&compiled, text, 1, 2, &DefaultSyntaxLookup, 1).is_some());
+}
+
+fn warmed_dead_prefix(
+    compiled: &CompiledPattern,
+    text: &[u8],
+    position: usize,
+    point: usize,
+) -> ExistenceDfa {
+    let syntax = DefaultSyntaxLookup;
+    let mut dfa = ExistenceDfa::new(Nfa::build(compiled).unwrap());
+    let context = ClassContext::of_search(compiled, dfa.nfa(), &syntax).unwrap();
+    dfa.classes.sync(context);
+    dfa.begin_search(compiled, &syntax);
+    assert_eq!(
+        with_first_step(false, || {
+            dfa.anchored_exists(compiled, text, position, text.len(), point, &syntax)
+        }),
+        Exists::No { consumed: 0 }
+    );
+    dfa
+}
+
+fn assert_cached_prefix_at_every_split(
+    dfa: &ExistenceDfa,
+    compiled: &CompiledPattern,
+    text: &[u8],
+    (position, stop, point, span): (usize, usize, usize, usize),
+    expected: Option<usize>,
+) {
+    use crate::emacs_core::regex_emacs::Segments;
+
+    assert_eq!(
+        dfa.cached_prefix_rejection(compiled, text, position, stop, point, span),
+        expected
+    );
+    for split in 0..=text.len() {
+        let text = Segments {
+            left: &text[..split],
+            right: &text[split..],
+        };
+        assert_eq!(
+            dfa.cached_prefix_rejection(compiled, &text, position, stop, point, span),
+            expected,
+            "split={split} position={position} stop={stop} point={point} span={span}"
+        );
+    }
+}
+
+#[test]
 fn dfa_overrides_restore_nested_and_unwound_state() {
     let original_mode = DFA_MODE_OVERRIDE.with(std::cell::Cell::get);
     with_dfa_mode(DfaMode::Off, || {

@@ -2,7 +2,7 @@
 
 use super::*;
 #[cfg(test)]
-use crate::intern::intern_uninterned;
+use crate::intern::make_uninterned_symbol;
 #[cfg(test)]
 use crate::tagged::bytecode::chunk::ByteCodeFunction;
 use crate::value::{HashKey, HashTableTest, LispHashTable};
@@ -30,25 +30,26 @@ fn finish_cycle(heap: &mut TestHeap, roots: &[TaggedValue]) {
     }
     heap.incremental_drain_all();
     let live_bytes = heap.live_bytes();
-    heap.incremental_finish(live_bytes, Instant::now());
-    heap.finish_incremental_sweep_now();
+    heap.incremental_finish_for_test(live_bytes, Instant::now());
+    heap.finish_incremental_sweep_now_for_test();
 }
 
 /// Inspect only the joined worker's owned handoff, then relay the entire
 /// result through the normal finish seam so promotion and symbol logs survive.
 #[cfg(test)]
 fn inspect_completed_deferred(heap: &mut TestHeap, inspect: impl FnOnce(&[MarkWord])) {
-    let result = heap
-        .gc_exited
-        .take()
+    // SAFETY: inspecting completed worker result before relaying it back intact.
+    let result = unsafe { heap.gc_exited.take_receiver_for_test() }
         .expect("stopped worker completion receiver missing")
         .recv()
         .expect("stopped worker result missing");
-    inspect(&result.deferred);
+    inspect(result.deferred_for_test());
     let (send, receive) = std::sync::mpsc::channel();
     send.send(result)
         .expect("retain the complete worker result");
-    heap.gc_exited = Some(receive);
+    let heap_id = heap.heap_identity();
+    // SAFETY: relaying unmodified worker completion for `heap`.
+    unsafe { heap.gc_exited.install_for_heap(heap_id, receive) };
 }
 
 fn ordinary_cycle(heap: &mut TestHeap, roots: &[TaggedValue]) {
@@ -85,13 +86,13 @@ fn transitive_bare_symbol_cycle(claims: bool, generational: bool, ancestor: Symb
     unsafe { heap.set_generational_enabled(generational) };
     heap.install();
 
-    let symbol = TaggedValue::from_sym_id(intern_uninterned("u35-transitive-worker-weak-key"));
+    let symbol = TaggedValue::from_sym_id(make_uninterned_symbol("u35-transitive-worker-weak-key"));
     let id = symbol.as_bare_symbol_id().unwrap();
     let child = match ancestor {
         SymbolAncestor::Cons => heap.alloc_cons(symbol, TaggedValue::NIL),
         SymbolAncestor::Bytecode => {
             let mut function = ByteCodeFunction::new(LambdaParams::simple(vec![]));
-            function.constants = vec![symbol].into();
+            function.set_constants(vec![symbol].into());
             heap.alloc_bytecode(function)
         }
         SymbolAncestor::Vector => heap.alloc_vector(vec![symbol]),
@@ -165,7 +166,7 @@ fn transitive_bare_symbol_cycle(claims: bool, generational: bool, ancestor: Symb
         // Tier-B captures even an unrooted owned vector's backing. Remove this
         // edge while GC is inactive so the next blanket scan cannot retain the
         // symbol independently of the now-unrooted strong hash.
-        assert!(!heap.concurrent_mark_running);
+        assert!(!heap.concurrent_mark_running());
         assert!(crate::tagged::mutate::set_vector_slot(
             child,
             0,
@@ -281,7 +282,10 @@ fn paused_worker_with_policy(
     let leaves = heap.leaf_page_snapshot_for_mark(&mut pages);
     let job = ConcurrentMarkJob {
         // Pop the owner first so its first fresh claim reaches the latch.
-        gray: MarkStack::from_values(other_roots.iter().copied().chain([owner]).collect()),
+        // SAFETY: `other_roots` and `owner` are live values on `heap` for this test job.
+        gray: unsafe {
+            MarkStack::from_values(other_roots.iter().copied().chain([owner]).collect())
+        },
         claims: ConcurrentClaimJob {
             parity: heap.mark_parity,
             major: heap.generational.major_in_progress,
@@ -314,8 +318,12 @@ fn paused_worker_with_policy(
             hash_claimed: heap.concurrent_hash_claimed().cloned(),
         },
     };
-    heap.concurrent_mark_running = true;
-    heap.gc_exited = Some(result);
+    let heap_id = heap.heap_identity();
+    // SAFETY: manual paused-worker fixture paired with `job` for `heap_id`.
+    unsafe {
+        heap.concurrent_mark_running.set(true);
+        heap.gc_exited.install_for_heap(heap_id, result);
+    }
     heap.install();
     let (reached, receiver) = std::sync::mpsc::channel();
     let (resume, continue_scan) = std::sync::mpsc::channel();
@@ -340,7 +348,8 @@ fn paused_worker_with_policy(
                 });
             }
         }
-        run_concurrent_mark_enabled(job);
+        // SAFETY: `job` was assembled from this live fixture heap until join.
+        unsafe { run_concurrent_mark_enabled(heap_id, job) };
         CONCURRENT_HASH_BEFORE_CLAIM_HOOK.with(|slot| assert!(slot.borrow().is_none()));
         CONCURRENT_HASH_SCAN_HOOK.with(|slot| assert!(slot.borrow().is_none()));
     });
@@ -361,7 +370,7 @@ fn tier_h_actual_worker_stop_mid_scan_hands_off_every_child_before_termination()
         let records: Vec<_> = (0..CHILDREN)
             .map(|i| heap.alloc_record(vec![TaggedValue::fixnum(i as i64)]))
             .collect();
-        let symbol = TaggedValue::from_sym_id(intern_uninterned("u35-worker-stop-callback"));
+        let symbol = TaggedValue::from_sym_id(make_uninterned_symbol("u35-worker-stop-callback"));
         let mut table = LispHashTable::new(HashTableTest::Eq);
         for (i, &record) in records.iter().enumerate() {
             let key = TaggedValue::fixnum(i as i64);
@@ -396,7 +405,7 @@ fn tier_h_actual_worker_stop_mid_scan_hands_off_every_child_before_termination()
         inspect_completed_deferred(&mut heap, |deferred| {
             let mut remaining: FxHashSet<_> = records.iter().map(|record| record.bits()).collect();
             for word in deferred {
-                remaining.remove(&word.value().bits());
+                remaining.remove(&word.bits());
             }
             assert!(
                 remaining.is_empty(),
@@ -596,7 +605,7 @@ fn tier_h_actual_worker_first_write_before_and_after_claim_preserves_both_child_
             }
             drop(snapshot);
             let live_bytes = heap.live_bytes();
-            heap.incremental_finish(live_bytes, Instant::now());
+            heap.incremental_finish_for_test(live_bytes, Instant::now());
             assert!(heap.concurrent_hash_snapshot().is_none());
             assert_eq!(heap.last_concurrent_claim_counts().1, 1);
             assert!(
@@ -613,7 +622,7 @@ fn tier_h_actual_worker_first_write_before_and_after_claim_preserves_both_child_
                     .written_hash_owners
                     .is_empty()
             );
-            heap.finish_incremental_sweep_now();
+            heap.finish_incremental_sweep_now_for_test();
             for child in old_children
                 .iter()
                 .copied()
@@ -699,7 +708,7 @@ fn tier_h_actual_worker_deferred_first_write_keeps_header_white_and_both_child_s
             0,
         );
         inspect_completed_deferred(&mut heap, |deferred| {
-            assert!(deferred.contains(&MarkWord::of(owner)));
+            assert!(deferred.iter().any(|word| word.bits() == owner.bits()));
         });
 
         // No reader ever touches the changed backing. SATB retains removed
@@ -853,10 +862,9 @@ fn tier_h_exact_inventory_tracks_current_boxes_and_ordinary_old_owners() {
     for generational in [false, true] {
         // This image-shaped fixture is owned outside the heap and must outlive
         // its mapped registry. It has no ordinary-Box ownership membership.
-        let mut mapped = Box::new(HashTableObj {
-            header: VecLikeHeader::new(VecLikeType::HashTable),
-            table: worker_hash_table(TaggedValue::fixnum(2000)),
-        });
+        let mut mapped = Box::new(HashTableObj::new(worker_hash_table(TaggedValue::fixnum(
+            2000,
+        ))));
         let mut heap = heap(generational);
         let mapped_address = &mut mapped.header as *mut VecLikeHeader as usize;
         // SAFETY: this complete image-shaped Box outlives the heap registry.
@@ -869,7 +877,7 @@ fn tier_h_exact_inventory_tracks_current_boxes_and_ordinary_old_owners() {
         // A newly registered image requires its normal first-partition trace
         // and blackening. Complete that bootstrap before ordinary allocation:
         // these later Boxes must become ordinary-old, not image permanents.
-        heap.collect_exact(std::iter::empty());
+        heap.collect_rooted(std::iter::empty());
         assert!(heap.dump_blackened);
         assert!(!heap.is_partition_first_cycle());
         let child = heap.alloc_record(vec![TaggedValue::fixnum(2001)]);

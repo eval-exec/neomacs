@@ -45,7 +45,38 @@ struct MemoFrame {
     engine: LayoutEngine,
 }
 
+/// A memo frame whose heap is not the thread's active Context.
+struct SuspendedMemoFrame {
+    eval: neovm_eval::emacs_core::eval::parked_context::ParkedContext,
+    frame_id: neovm_core::window::FrameId,
+    window: neovm_core::window::WindowId,
+    engine: LayoutEngine,
+}
+
+impl SuspendedMemoFrame {
+    fn resume(self) -> MemoFrame {
+        MemoFrame {
+            eval: self
+                .eval
+                .resume_for_test()
+                .expect("memo frame resumes on an empty slot"),
+            frame_id: self.frame_id,
+            window: self.window,
+            engine: self.engine,
+        }
+    }
+}
+
 impl MemoFrame {
+    fn suspend(self) -> SuspendedMemoFrame {
+        SuspendedMemoFrame {
+            eval: self.eval.park_for_test(),
+            frame_id: self.frame_id,
+            window: self.window,
+            engine: self.engine,
+        }
+    }
+
     /// A frame showing `lines` source lines with [`MODE_LINE`], point at
     /// the start of line `point_line` (0-based), and one accepted frame.
     fn new(lines: usize, point_line: usize) -> Self {
@@ -174,16 +205,11 @@ fn a_mode_line_whose_text_changed_renders_again() {
     assert_eq!(stats.chrome_memo_hits, 0, "{stats:?}");
 }
 
-#[test]
-fn chrome_partial_reuse_keeps_fresh_eval_roots_help_and_width_transitions() {
-    let _memo = MemoGuard::set(ChromeMemoMode::On);
-    let mut frame = MemoFrame::new(120, 8);
-    let mut canonical = MemoFrame::new(120, 8);
-    for frame in [&mut frame, &mut canonical] {
-        frame
-            .eval
-            .eval_str(
-                r#"
+fn install_collecting_formatter(frame: &mut MemoFrame) {
+    frame
+        .eval
+        .eval_str(
+            r#"
       (set (make-local-variable 'mode-line-format)
         '("-" (:eval (progn
                         (setq neo-evals (1+ neo-evals))
@@ -194,10 +220,21 @@ fn chrome_partial_reuse_keeps_fresh_eval_roots_help_and_width_transitions() {
                                     'local-map (list 'keymap))))
           " L%l " (:propertize "tail" face (:box (:line-width -1)))))
     "#,
-            )
-            .expect("collecting formatter");
-        frame.step("(set-buffer-modified-p t)");
-    }
+        )
+        .expect("collecting formatter");
+    frame.step("(set-buffer-modified-p t)");
+}
+
+#[test]
+fn chrome_partial_reuse_keeps_fresh_eval_roots_help_and_width_transitions() {
+    let _memo = MemoGuard::set(ChromeMemoMode::On);
+    let mut frame = MemoFrame::new(120, 8);
+    install_collecting_formatter(&mut frame);
+    let mut parked_frame = frame.suspend();
+    let mut canonical = MemoFrame::new(120, 8);
+    install_collecting_formatter(&mut canonical);
+    let mut parked_canonical = canonical.suspend();
+    let mut frame = parked_frame.resume();
     let count = |frame: &mut MemoFrame| {
         frame
             .eval
@@ -208,6 +245,8 @@ fn chrome_partial_reuse_keeps_fresh_eval_roots_help_and_width_transitions() {
     };
     for line in [9, 10, 11, 99, 100, 101] {
         let before = count(&mut frame);
+        parked_frame = frame.suspend();
+        let mut canonical = parked_canonical.resume();
         let canonical_before = count(&mut canonical);
         let form = format!(
             "(progn (setq neo-help \"help-{line}\") (goto-char (point-min)) (forward-line {}) (set-buffer-modified-p t))",
@@ -217,6 +256,9 @@ fn chrome_partial_reuse_keeps_fresh_eval_roots_help_and_width_transitions() {
             let _canonical = MemoGuard::set(ChromeMemoMode::Off);
             canonical.step(&form);
         }
+        let canonical_delta = count(&mut canonical) - canonical_before;
+        parked_canonical = canonical.suspend();
+        frame = parked_frame.resume();
         {
             let _reuse = MemoGuard::set(ChromeMemoMode::On);
             frame.step(&form);
@@ -225,7 +267,7 @@ fn chrome_partial_reuse_keeps_fresh_eval_roots_help_and_width_transitions() {
         // sequence rather than inventing a fixed callback count for it.
         assert_eq!(
             count(&mut frame) - before,
-            count(&mut canonical) - canonical_before,
+            canonical_delta,
             "line {line}: callback count"
         );
         assert!(

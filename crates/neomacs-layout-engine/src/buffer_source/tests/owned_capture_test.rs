@@ -48,6 +48,7 @@ fn capture_with_properties(
         context,
         &mut FrameFaceAttempt::for_test_with_next_id(2),
         || false,
+        StringSourceRootScope::Rooted(eval.owned_root_retainer()),
     )
 }
 

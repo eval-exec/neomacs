@@ -43,6 +43,8 @@ use neovm_value::value::Value;
 mod opt_evidence;
 pub(crate) use opt_evidence::has_ready_opt_osr;
 mod osr_wait;
+#[path = "cache/source_detachment.rs"]
+pub(crate) mod source_detachment;
 
 /// Why a body is interpreted for now although it is hot.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -137,7 +139,8 @@ impl CacheEntry {
 /// `HashMap` probe — whose SipHash alone was ~13% of a call-heavy benchmark's
 /// CPU (every generic-shim call re-enters the seam and probes this cache).
 #[derive(Default)]
-struct DenseCache {
+#[doc(hidden)]
+pub struct DenseCache {
     slots: Vec<Option<CacheEntry>>,
     /// Evicted Compiled leaves kept alive (see `remove`).
     retired: Vec<Rc<CompiledLeaf>>,
@@ -212,7 +215,9 @@ impl DenseCache {
                 if old.obs.t2.due().is_some() {
                     super::tier2::upgrade_failed(&old);
                 }
-                fold_dropped_leaf(&old);
+                // No receipt on this path: keep the displaced leaf allocated.
+                // Draining it is `clear`, which consumes a [`JitGracePeriod`].
+                self.retire(old);
             }
             Some(CacheEntry::CompiledUpgrading(upgrade)) => {
                 super::tier2::upgrade_failed(&upgrade.old);
@@ -230,22 +235,31 @@ impl DenseCache {
     }
 
     /// `entry(id).or_insert_with(f)` equivalent.
+    ///
+    /// `f` receives this cache so a nested retire can park on `retired`
+    /// while the caller already holds the mut borrow. `f` must not insert
+    /// `id`; the slot is still empty when `f` runs.
     #[doc(hidden)]
     pub fn get_or_insert_with(
         &mut self,
         id: u64,
-        f: impl FnOnce() -> CacheEntry,
+        f: impl FnOnce(&mut Self) -> CacheEntry,
     ) -> &mut CacheEntry {
         let idx = id as usize;
         if self.slots.len() <= idx {
             self.slots.resize_with(idx + 1, || None);
         }
-        let slot = &mut self.slots[idx];
-        if slot.is_none() {
+        if self.slots[idx].is_none() {
             record_compiled_heap();
-            *slot = Some(f());
+            let entry = f(self);
+            if self.slots.len() <= idx {
+                self.slots.resize_with(idx + 1, || None);
+            }
+            if self.slots[idx].is_none() {
+                self.slots[idx] = Some(entry);
+            }
         }
-        slot.as_mut().expect("slot just filled")
+        self.slots[idx].as_mut().expect("slot just filled")
     }
 
     /// Occupied entries (id, entry) — skips empty slots.
@@ -268,8 +282,11 @@ impl DenseCache {
         self.slots.iter().filter(|s| s.is_some()).count()
     }
 
+    /// Drop every slot and the retired list. `receipt` is the proof a serial
+    /// mint already succeeded; only [`clear`] holds that receipt.
     #[doc(hidden)]
-    pub fn clear(&mut self) {
+    pub fn clear(&mut self, receipt: &JitGracePeriod) {
+        let JitGracePeriod { _private: () } = receipt;
         for entry in self.slots.iter().flatten() {
             if let Some(leaf) = entry.live_leaf() {
                 if leaf.obs.t2.due().is_some() {
@@ -293,6 +310,26 @@ thread_local! {
     /// totals still include them. Cold: touched only when leaves are dropped.
     static DROPPED_LEAF_TOTALS: std::cell::Cell<LeafTotals> =
         const { std::cell::Cell::new(LeafTotals { leaves: 0, entries: 0, deopt_at: 0, deopt_rerun: 0, signals: 0 }) };
+}
+
+/// Park `leaf` on the entry cache's retired list.
+///
+/// `held` is that cache when the caller already has the mut borrow (the
+/// entry compile that waits on an OSR job). Otherwise this borrows
+/// `COMPILED`. The leaf stays on `retired`, which [`clear`] drains.
+fn retire_displaced(held: Option<&mut DenseCache>, leaf: Rc<CompiledLeaf>) {
+    if let Some(cache) = held {
+        cache.retire(leaf);
+        return;
+    }
+    COMPILED.with(|cache| cache.borrow_mut().retire(leaf));
+}
+
+fn insert_osr(held: Option<&mut DenseCache>, key: (u64, usize), entry: Option<OsrEntry>) {
+    let previous = OSR_CACHE.with(|cache| cache.borrow_mut().insert(key, entry));
+    if let Some(Some(old)) = previous {
+        retire_displaced(held, old.leaf);
+    }
 }
 
 /// Fold a leaf that is about to leave every cache into the dropped totals.
@@ -501,6 +538,54 @@ struct OsrEntry {
     bind_depth: usize,
 }
 
+/// Heap identity pinned by the compiled-leaf cache.
+///
+/// Same 16-byte layout as `Option<usize>`: the refused state replaces the
+/// old side flag instead of adding a thread-local. `SwapRefused` keeps the
+/// identity that was current when the mint failed, and does not publish the
+/// new heap.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CompiledHeapPin {
+    Unpinned,
+    Pinned(usize),
+    SwapRefused(usize),
+}
+
+const _: () =
+    assert!(std::mem::size_of::<CompiledHeapPin>() == std::mem::size_of::<Option<usize>>());
+const _: () =
+    assert!(std::mem::align_of::<CompiledHeapPin>() == std::mem::align_of::<Option<usize>>());
+
+impl CompiledHeapPin {
+    fn from_identity(id: Option<usize>) -> Self {
+        match id {
+            Some(id) => Self::Pinned(id),
+            None => Self::Unpinned,
+        }
+    }
+
+    fn identity(self) -> Option<usize> {
+        match self {
+            Self::Unpinned => None,
+            Self::Pinned(id) | Self::SwapRefused(id) => Some(id),
+        }
+    }
+
+    fn refuse(self) -> Self {
+        match self.identity() {
+            Some(id) => Self::SwapRefused(id),
+            None => Self::Unpinned,
+        }
+    }
+
+    fn accept(self) -> Self {
+        match self {
+            Self::SwapRefused(id) => Self::Pinned(id),
+            other => other,
+        }
+    }
+}
+
 thread_local! {
     /// `compiled_id` -> compiled state, owned by and private to this thread.
     static COMPILED: RefCell<DenseCache> = RefCell::new(DenseCache::default());
@@ -528,9 +613,10 @@ thread_local! {
     /// (a pdump load / in-process image reload / cache-replay test), the whole
     /// cache is stale — detected lazily by identity in `sync_cache_to_current_heap`
     /// and cleared before any stale reloc value is traced or run. Pinned by the
-    /// first insert (`record_compiled_heap`), so `None` means "no leaf cached"
+    /// first insert (`record_compiled_heap`), so `Unpinned` means "no leaf cached"
     /// and is adopted, never cleared on.
-    static COMPILED_HEAP: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
+    static COMPILED_HEAP: std::cell::Cell<CompiledHeapPin> =
+        const { std::cell::Cell::new(CompiledHeapPin::Unpinned) };
 
     /// The [`Obarray::generation`] the cached leaves were compiled against,
     /// pinned by the first compile that had an obarray (like `COMPILED_HEAP`,
@@ -588,47 +674,84 @@ enum OsrLookup {
     Pending,
 }
 
-#[cfg(any(test, debug_assertions))]
+// Test, debug, and test-support keep the real nesting counter. A production
+// release has no `NATIVE_DEPTH` symbol: `native_depth` reads `CURRENT_LEAF_BASES`
+// (0 outside, 1 inside). `release-native-depth` selects that reading in tests
+// so this counter cannot mask a hole.
+#[cfg(any(test, debug_assertions, feature = "test-support"))]
 thread_local! {
-    /// Nesting depth of native leaf executions on this thread (debug and test
-    /// builds). `clear()` asserts it is 0: the soundness of every spec-slot leaf
-    /// pointer and every baked box address rests on "no clear() fires while a
-    /// native frame is live" (`resolve_compiled_leaf_ptr`), so a violation must
-    /// be loud in debug/test builds instead of a silent use-after-free.
-    static NATIVE_DEPTH: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+    /// Nesting depth of native leaf executions on this thread. The serial
+    /// [`JitGracePeriod`] mint refuses while `native_depth` is non-zero.
+    pub(crate) static NATIVE_DEPTH: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
 }
 
-/// Current native nesting depth (0 outside any leaf). Always 0 in production
-/// release builds, where the counter does not exist.
+/// Current native nesting depth (0 outside any leaf).
+///
+/// The counter build reports the real depth. The release build reports 0 or 1
+/// from [`super::compile::CURRENT_LEAF_BASES`].
+#[cfg(all(
+    any(test, debug_assertions, feature = "test-support"),
+    not(feature = "release-native-depth")
+))]
 #[inline]
 pub(crate) fn native_depth() -> u32 {
-    #[cfg(any(test, debug_assertions))]
-    {
-        NATIVE_DEPTH.with(|d| d.get())
-    }
-    #[cfg(not(any(test, debug_assertions)))]
-    {
-        0
+    NATIVE_DEPTH.with(|d| d.get())
+}
+
+/// Release reading of [`native_depth`]: the 8-byte extent cell, not the counter.
+#[cfg(not(all(
+    any(test, debug_assertions, feature = "test-support"),
+    not(feature = "release-native-depth")
+)))]
+#[inline]
+pub(crate) fn native_depth() -> u32 {
+    u32::from(super::compile::is_inside_native_extent())
+}
+
+/// Last `CompiledLeaf` drops observed while `native_depth() > 0`.
+/// The owner pin reads this counter. It must not catch a panic.
+#[cfg(test)]
+thread_local! {
+    static LIVE_FRAME_OWNER_DROPS: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+pub(crate) fn reset_live_frame_owner_drops_for_test() {
+    LIVE_FRAME_OWNER_DROPS.with(|drops| drops.set(0));
+}
+
+#[cfg(test)]
+pub(crate) fn live_frame_owner_drops_for_test() -> u32 {
+    LIVE_FRAME_OWNER_DROPS.with(std::cell::Cell::get)
+}
+
+#[cfg(test)]
+pub(crate) fn note_compiled_leaf_drop_for_test() {
+    if native_depth() > 0 {
+        LIVE_FRAME_OWNER_DROPS.with(|drops| drops.set(drops.get().saturating_add(1)));
     }
 }
 
-/// RAII marker for one native leaf execution (see `NATIVE_DEPTH`). Zero-sized
-/// and a no-op in production release builds; unwind-safe (the decrement is in `Drop`).
+/// RAII marker for one native leaf execution (see `NATIVE_DEPTH`).
+/// Unwind-safe: the decrement is in `Drop`.
+///
+/// Absent from a production release image, together with the counter.
+#[cfg(any(test, debug_assertions, feature = "test-support"))]
 #[must_use = "the thread-local extent ends when this guard drops"]
 #[derive(Debug)]
 pub(crate) struct NativeDepthGuard {
-    #[cfg(any(test, debug_assertions))]
     _scope: neovm_value::tls_scope::TlsScope<u32, std::cell::Cell<u32>>,
     _thread: std::marker::PhantomData<std::rc::Rc<()>>,
 }
+#[cfg(any(test, debug_assertions, feature = "test-support"))]
 static_assertions::assert_not_impl_any!(NativeDepthGuard: Send, Sync);
 
+#[cfg(any(test, debug_assertions, feature = "test-support"))]
 impl NativeDepthGuard {
     #[inline]
     #[doc(hidden)]
     pub fn enter() -> Self {
         Self {
-            #[cfg(any(test, debug_assertions))]
             _scope: neovm_value::tls_scope::TlsScope::restore(
                 &NATIVE_DEPTH,
                 NATIVE_DEPTH.with(|depth| depth.replace(depth.get().saturating_add(1))),
@@ -712,11 +835,11 @@ fn compile_osr_leaf_timed(
         }
         return None;
     }
-    if !func.lexical || osr_body_has_unsupported_state(func) {
+    if !func.lexical() || osr_body_has_unsupported_state(func) {
         if dbg {
             eprintln!(
                 "OSR_DEBUG reject pre: lexical={} dynstate={}",
-                func.lexical,
+                func.lexical(),
                 osr_body_has_unsupported_state(func)
             );
         }
@@ -727,7 +850,7 @@ fn compile_osr_leaf_timed(
     let optional = params.optional();
     let native_arity = params.entry_depth();
     let offset_map = func.executable_gnu_byte_offset_map();
-    let cfg = match super::compile::analyze_cfg(ops, &func.constants, offset_map, native_arity) {
+    let cfg = match super::compile::analyze_cfg(ops, func.constants(), offset_map, native_arity) {
         Ok(cfg) => cfg,
         Err(e) => {
             if dbg {
@@ -756,7 +879,7 @@ fn compile_osr_leaf_timed(
     let _regalloc = RegallocScope::enter(super::compile::regalloc_for(
         RegallocPolicy::Full,
         ops,
-        &func.constants,
+        func.constants(),
     ));
     // Same feedback the tier-up compile sees: without it every Float site
     // read FixnumOnly and an OSR'd float loop deopted straight back.
@@ -776,14 +899,14 @@ fn compile_osr_leaf_timed(
         let masked;
         let constants: &[Value] = if prefix > 0 {
             masked = func
-                .constants
+                .constants()
                 .iter()
                 .enumerate()
                 .map(|(i, &value)| if i < prefix { Value::NIL } else { value })
                 .collect::<Vec<_>>();
             &masked
         } else {
-            func.constants.as_ref()
+            func.constants().as_ref()
         };
         let feedback = (0..ops.len())
             .map(super::compile::active_numeric_feedback)
@@ -810,7 +933,7 @@ fn compile_osr_leaf_timed(
     let (ops, constants, offset_map) =
         fused
             .as_ref()
-            .map_or((ops, func.constants.as_ref(), offset_map), |body| {
+            .map_or((ops, func.constants().as_ref(), offset_map), |body| {
                 (
                     body.ops.as_slice(),
                     body.constants.as_slice(),
@@ -928,9 +1051,12 @@ pub(crate) unsafe fn try_run_osr_probe(
     if ctx.is_null() {
         return OsrProbe::NoTransfer;
     }
-    sync_cache_to_current_heap();
+    if sync_cache_to_current_heap().is_err() {
+        return OsrProbe::NoTransfer;
+    }
     let id = func.jit_runtime().compiled_id_or_assign();
-    let cached = match osr_lookup(ctx, func, osr_pc, id) {
+    // SAFETY: `ctx` is the live owner `Context` guaranteed by this function's contract and any `args_ptr`/`leaf` arguments remain valid for the call.
+    let cached = match unsafe { osr_lookup(ctx, func, osr_pc, id) } {
         OsrLookup::Entry(entry) => entry,
         OsrLookup::Pending => return OsrProbe::Pending,
     };
@@ -979,12 +1105,15 @@ pub(crate) unsafe fn try_run_osr_probe(
         None
     };
     OSR_TRANSFER_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let run = leaf.invoke_osr(
-        ctx as *mut u8,
-        arg_bits.as_ptr(),
-        func.jit_constant_base(),
-        bind_frame,
-    );
+    // SAFETY: `ctx` is the live owner `Context` guaranteed by this function's contract and any `args_ptr`/`leaf` arguments remain valid for the call.
+    let run = unsafe {
+        leaf.invoke_osr(
+            ctx as *mut u8,
+            arg_bits.as_ptr(),
+            func.jit_constant_base(),
+            bind_frame,
+        )
+    };
     if let Some((_, stack_base)) = bind_frame {
         // SAFETY: native execution has returned; only a dormant Context length read.
         // SAFETY (owner chain): (c) fails: the Vec::len receiver is a statement-local shared borrow;
@@ -995,16 +1124,19 @@ pub(crate) unsafe fn try_run_osr_probe(
     // The deopt hook runs before the interpreter installs the resume state
     // (the local `leaf` keeps the OSR leaf alive across it).
     let _verdict = match &run {
-        NativeRun::Deopt => super::reopt::note_deopt(
-            ctx,
-            func,
-            &leaf,
-            LeafOrigin::Osr {
-                header_pc: osr_pc,
-                snapshot: stack,
-            },
-            DeoptEvent::Rerun,
-        ),
+        // SAFETY: `ctx` is the live owner `Context` guaranteed by this function's contract and any `args_ptr`/`leaf` arguments remain valid for the call.
+        NativeRun::Deopt => unsafe {
+            super::reopt::note_deopt(
+                ctx,
+                func,
+                &leaf,
+                LeafOrigin::Osr {
+                    header_pc: osr_pc,
+                    snapshot: stack,
+                },
+                DeoptEvent::Rerun,
+            )
+        },
         NativeRun::DeoptAt(resume) => {
             let origin = LeafOrigin::Osr {
                 header_pc: osr_pc,
@@ -1021,31 +1153,37 @@ pub(crate) unsafe fn try_run_osr_probe(
                         )
                     },
                 );
-                super::reopt::note_deopt_chain(
-                    ctx,
-                    func,
-                    inner,
-                    &leaf,
-                    origin,
-                    inlined.guard_site_pc,
-                    DeoptEvent::Precise {
-                        pc: inner_pc,
-                        stack: inner_stack,
-                        cause: resume.cause,
-                    },
-                )
+                // SAFETY: `ctx` is the live owner `Context` guaranteed by this function's contract and any `args_ptr`/`leaf` arguments remain valid for the call.
+                unsafe {
+                    super::reopt::note_deopt_chain(
+                        ctx,
+                        func,
+                        inner,
+                        &leaf,
+                        origin,
+                        inlined.guard_site_pc,
+                        DeoptEvent::Precise {
+                            pc: inner_pc,
+                            stack: inner_stack,
+                            cause: resume.cause,
+                        },
+                    )
+                }
             } else {
-                super::reopt::note_deopt(
-                    ctx,
-                    func,
-                    &leaf,
-                    origin,
-                    DeoptEvent::Precise {
-                        pc: resume.pc,
-                        stack: &resume.stack,
-                        cause: resume.cause,
-                    },
-                )
+                // SAFETY: `ctx` is the live owner `Context` guaranteed by this function's contract and any `args_ptr`/`leaf` arguments remain valid for the call.
+                unsafe {
+                    super::reopt::note_deopt(
+                        ctx,
+                        func,
+                        &leaf,
+                        origin,
+                        DeoptEvent::Precise {
+                            pc: resume.pc,
+                            stack: &resume.stack,
+                            cause: resume.cause,
+                        },
+                    )
+                }
             }
         }
         NativeRun::Ok(_) | NativeRun::Signal => super::reopt::ReoptVerdict::Kept,
@@ -1065,7 +1203,16 @@ pub(crate) unsafe fn try_run_osr_probe(
 /// The OSR leaf of `(id, osr_pc)`: installed if its background compile
 /// finished, still pending, cached (compiled or refused), or compiled now --
 /// deferring its backend when the mode allows (class `Osr`).
-fn osr_lookup(ctx: *mut Context, func: &ByteCodeFunction, osr_pc: usize, id: u64) -> OsrLookup {
+///
+/// # Safety
+/// `ctx` must point to the live, dormant owner-thread [`Context`] for the
+/// duration of the lookup and any compilation/installation it performs.
+unsafe fn osr_lookup(
+    ctx: *mut Context,
+    func: &ByteCodeFunction,
+    osr_pc: usize,
+    id: u64,
+) -> OsrLookup {
     let key = (id, osr_pc);
     // SAFETY: dormant seam-provided Context (as try_run_compiled); shared reads.
     // SAFETY (owner chain): (b) fails: the older ctx pointer reaches only callee_name_hint and
@@ -1078,14 +1225,32 @@ fn osr_lookup(ctx: *mut Context, func: &ByteCodeFunction, osr_pc: usize, id: u64
         return lookup;
     }
     if let Some(entry) = OSR_CACHE.with(|c| c.borrow().get(&key).cloned()) {
-        return OsrLookup::Entry(entry);
+        if entry.as_ref().is_some_and(|entry| entry.leaf.retired.get()) {
+            // A borrow conflict put this leaf back. Move it onto `retired`
+            // now that the entry cache is free, then compile again.
+            let moved = COMPILED.with(|cache| {
+                let Ok(mut cache) = cache.try_borrow_mut() else {
+                    return false;
+                };
+                if let Some(Some(old)) = OSR_CACHE.with(|osr| osr.borrow_mut().remove(&key)) {
+                    cache.retire(old.leaf);
+                }
+                true
+            });
+            if !moved {
+                return OsrLookup::Pending;
+            }
+        } else {
+            return OsrLookup::Entry(entry);
+        }
     }
     if super::bg::pending_count() != 0 && adopt_pending_entry(id, func, live) {
         return OsrLookup::Pending;
     }
     // The running function's own frame is the innermost one.
     let name_hint = stats::naming_enabled()
-        .then(|| callee_name_hint(ctx, id))
+        // SAFETY: `ctx` is the live owner `Context` guaranteed by this function's contract and any `args_ptr`/`leaf` arguments remain valid for the call.
+        .then(|| unsafe { callee_name_hint(ctx, id) })
         .flatten();
     // A refused OSR job (the queue full of OSR jobs, or too many pending)
     // compiles in line: the loop is running now.
@@ -1095,7 +1260,8 @@ fn osr_lookup(ctx: *mut Context, func: &ByteCodeFunction, osr_pc: usize, id: u64
     );
     // The inline-variable environment (`NEOVM_JIT_INLINE_VARS`) is read by
     // the lowering, which runs here on the eval thread in every mode.
-    let _vars = super::compile::inline_vars::CompileEnvScope::enter(ctx);
+    // SAFETY: `ctx` is the live owner `Context` guaranteed by this function's contract and any `args_ptr`/`leaf` arguments remain valid for the call.
+    let _vars = unsafe { super::compile::inline_vars::CompileEnvScope::enter(ctx) };
     let compiled = compile_osr_leaf(&live.obarray, func, osr_pc, id, name_hint);
     drop(defer);
     if let Some(entry) = &compiled {
@@ -1135,7 +1301,7 @@ fn osr_lookup(ctx: *mut Context, func: &ByteCodeFunction, osr_pc: usize, id: u64
             if let Some(code) = deferred {
                 code.cancel();
             }
-            OSR_CACHE.with(|c| c.borrow_mut().insert(key, compiled.clone()));
+            insert_osr(None, key, compiled.clone());
             OsrLookup::Entry(compiled)
         }
     }
@@ -1193,7 +1359,7 @@ fn probe_osr_pending(key: (u64, usize), ctx: Option<&Context>) -> Option<OsrLook
         super::bg::note_osr_wait();
         return Some(OsrLookup::Pending);
     }
-    install_osr_pending(key, ctx, EntryLeaves::Cached)
+    install_osr_pending(None, key, ctx, EntryLeaves::Cached)
 }
 
 /// Whose inline dependencies an OSR installation re-reads for `id`'s entry.
@@ -1208,6 +1374,7 @@ enum EntryLeaves {
 
 /// Install `key`'s ready pending OSR job (see [`probe_osr_pending`]).
 fn install_osr_pending(
+    mut held: Option<&mut DenseCache>,
     key: (u64, usize),
     ctx: Option<&Context>,
     entry_leaves: EntryLeaves,
@@ -1223,13 +1390,13 @@ fn install_osr_pending(
             stack_depth,
             bind_depth,
         }),
-        Err(super::bg::Discard::Rejected) => {
+        Err(discarded) => {
+            retire_displaced(held.as_deref_mut(), Rc::new(discarded.leaf));
             refresh_cached_inline_deps(key.0);
-            None
-        }
-        Err(super::bg::Discard::Stale(_)) => {
-            refresh_cached_inline_deps(key.0);
-            return None;
+            match discarded.reason {
+                super::bg::Discard::Rejected => None,
+                super::bg::Discard::Stale(_) => return None,
+            }
         }
     };
     if let Some(entry) = &entry {
@@ -1237,7 +1404,7 @@ fn install_osr_pending(
     }
     // The settled job released a waiting entry: its next call compiles
     // against the installed (or refused) leaf.
-    OSR_CACHE.with(|c| c.borrow_mut().insert(key, entry.clone()));
+    insert_osr(held, key, entry.clone());
     Some(OsrLookup::Entry(entry))
 }
 
@@ -1354,7 +1521,10 @@ fn add_entry_inline_deps(id: u64) {
 }
 
 /// Add dependencies of every current OSR variant except one being replaced.
-/// All cache reads and reverse-map writes belong to the current mutator.
+/// A leaf parked on the map `retired` by a refused clear is not current: it
+/// never runs again, so its dependencies must not survive the invalidation
+/// that retired it. All cache reads and reverse-map writes belong to the
+/// current mutator.
 fn add_osr_inline_deps(id: u64, skip: Option<usize>) {
     if !super::compile::jit_inline2_mode().enabled() {
         return;
@@ -1364,6 +1534,7 @@ fn add_osr_inline_deps(id: u64, skip: Option<usize>) {
             if *fid == id
                 && skip != Some(*pc)
                 && let Some(entry) = entry
+                && !entry.leaf.retired.get()
             {
                 add_inline_deps(id, &entry.leaf);
             }
@@ -1445,6 +1616,7 @@ fn numeric_feedback_trace(id: u64, func: &ByteCodeFunction) {
 }
 
 fn compile_cache_entry(
+    cache: &mut DenseCache,
     id: u64,
     func: &ByteCodeFunction,
     obarray: Option<&Obarray>,
@@ -1469,7 +1641,7 @@ fn compile_cache_entry(
     // Background OSR backends only: decide after the optimized OSR compile
     // this frontend depends on settles, as a synchronous compile would.
     if super::bg::pending_count() != 0
-        && let Some(entry) = osr_wait::await_opt_osr(id, func, obarray, request)
+        && let Some(entry) = osr_wait::await_opt_osr(cache, id, func, obarray, request)
     {
         return entry;
     }
@@ -1595,9 +1767,11 @@ fn compile_cache_entry(
 /// symbol's function is the bytecode with this very `compiled_id`, so a
 /// wrong frame falls back to an anonymous label. Read-only: no interning,
 /// no allocation on the Lisp heap. Cold, and only called under naming.
+/// # Safety
+/// `ctx` must be null or point to a live, dormant owner-thread [`Context`].
 #[cold]
 #[inline(never)]
-fn callee_name_hint(ctx: *const Context, id: u64) -> Option<SymId> {
+unsafe fn callee_name_hint(ctx: *const Context, id: u64) -> Option<SymId> {
     let pending = stats::perf_map::take_pending_callee();
     if ctx.is_null() {
         return None;
@@ -1718,14 +1892,21 @@ pub(crate) struct RedefinedPin {
 /// pins (a `cl-letf` of a function in a loop alternates two values; an older
 /// duplicate only waits for the next collection).
 pub(crate) fn pin_redefined_function(sym: SymId, previous: Value) {
+    let Some(heap) = neovm_value::tagged::gc::current_tagged_heap_identity() else {
+        return;
+    };
+    pin_redefined_function_for_heap(heap, sym, previous);
+}
+
+/// Pin a redefined bytecode function explicitly under `heap` without relying
+/// on thread-local heap installation (used by `ParkedJit::resume_reusing`,
+/// which restores pins before `resume_owner` reinstalls carrier heap TLS).
+pub(crate) fn pin_redefined_function_for_heap(heap: usize, sym: SymId, previous: Value) {
     /// How many of the latest pins a new one is compared with.
     const RECENT: usize = 16;
     if !previous.is_bytecode() {
         return;
     }
-    let Some(heap) = neovm_value::tagged::gc::current_tagged_heap_identity() else {
-        return;
-    };
     REDEFINED_PINS.with(|pins| {
         let mut pins = pins.borrow_mut();
         if !pins
@@ -1756,11 +1937,23 @@ pub(crate) fn trace_redefined_pins(
     frame_calls: &dyn Fn(SymId) -> bool,
     visit: &mut dyn FnMut(Value),
 ) {
+    visit_redefined_pins_for_heap(heap, frame_calls, &mut |_, function| visit(function));
+}
+
+/// Like [`trace_redefined_pins`], also yielding each live pin's symbol so
+/// `ParkedJit::prepare_reusing` can preserve pre-park redefined pins in
+/// `ParkedJit::sources` across `reset_carrier_tls()` and restore them on resume
+/// with explicit heap identity (L6.7c (c) F1).
+pub(crate) fn visit_redefined_pins_for_heap(
+    heap: usize,
+    frame_calls: &dyn Fn(SymId) -> bool,
+    visit: &mut dyn FnMut(SymId, Value),
+) {
     REDEFINED_PINS.with(|pins| {
         pins.borrow_mut().retain(|pin| {
             let live = pin.heap == heap && frame_calls(pin.sym);
             if live {
-                visit(pin.function);
+                visit(pin.sym, pin.function);
             }
             live
         });
@@ -1801,16 +1994,24 @@ pub(crate) fn leaf_is_current(
     }
 }
 
-/// Whether `(func, osr_pc)` has an OSR cache entry (positive or negative) on
-/// this thread. `Vm::osr_transfer` asks after a transfer whose precise deopt
-/// it installed in place: an entry the deopt's invalidation dropped means
-/// the next hot back-edge may transfer again, into a leaf compiled from the
-/// widened feedback, instead of latching the loop onto the interpreter.
+/// Whether `(func, osr_pc)` holds a decision a future probe can use: a
+/// compiled entry, or a refusal. `Vm::osr_transfer` asks after a transfer
+/// whose precise deopt it installed in place: an entry the deopt's
+/// invalidation dropped means the next hot back-edge may transfer again,
+/// into a leaf compiled from the widened feedback, instead of latching the
+/// loop onto the interpreter. A leaf the invalidation parked on the map
+/// `retired` (its `Rc` must outlive the borrowed, live frame that made the
+/// clear refuse) is not such a decision: the next probe moves it onto
+/// `retired` and compiles again, so it reports not cached.
 pub(crate) fn osr_entry_cached(func: &ByteCodeFunction, osr_pc: usize) -> bool {
     let Some(id) = func.jit_runtime().compiled_id() else {
         return false;
     };
-    OSR_CACHE.with(|c| c.borrow().contains_key(&(id, osr_pc)))
+    OSR_CACHE.with(|c| {
+        c.borrow()
+            .get(&(id, osr_pc))
+            .is_some_and(|entry| !entry.as_ref().is_some_and(|e| e.leaf.retired.get()))
+    })
 }
 
 /// Deopt-driven invalidation of `func`'s compiled code on this thread
@@ -1892,7 +2093,7 @@ pub(crate) fn invalidate_for_reopt(
     }
     // Pending OSR compiles read the same feedback: drop them too.
     drop_osr_pending(id);
-    let osr: Vec<Rc<CompiledLeaf>> = OSR_CACHE.with(|c| {
+    let osr: Vec<((u64, usize), OsrEntry)> = OSR_CACHE.with(|c| {
         let Ok(mut c) = c.try_borrow_mut() else {
             return Vec::new();
         };
@@ -1902,26 +2103,32 @@ pub(crate) fn invalidate_for_reopt(
             .map(|(k, _)| *k)
             .collect();
         keys.iter()
-            .filter_map(|k| c.remove(k).flatten().map(|e| e.leaf))
+            .filter_map(|k| c.remove(k).flatten().map(|e| (*k, e)))
             .collect()
     });
+    let osr_leaf_count = osr.len();
     if !osr.is_empty() {
         let retired = COMPILED.with(|c| match c.try_borrow_mut() {
             Ok(mut c) => {
-                for leaf in &osr {
-                    c.retire(Rc::clone(leaf));
+                for (_, entry) in &osr {
+                    c.retire(Rc::clone(&entry.leaf));
                 }
                 true
             }
             Err(_) => false,
         });
         if !retired {
-            // Defensive cache-borrow failure: native dispatch normally releases
-            // the cache before running Lisp. This deopting transfer still owns
-            // its Rc through resume; no cache entry is published here.
-            for leaf in &osr {
-                fold_dropped_leaf(leaf);
-            }
+            // The entry cache is already borrowed on this thread, so these
+            // leaves cannot join `retired` yet. Put them back on the OSR
+            // map, marked retired, so the `Rc` is not dropped under a live
+            // frame. The next lookup moves them onto `retired`.
+            OSR_CACHE.with(|c| {
+                let mut map = c.borrow_mut();
+                for (key, entry) in osr {
+                    entry.leaf.retired.set(true);
+                    map.insert(key, Some(entry));
+                }
+            });
         }
     }
     let mut unlinked = 0;
@@ -1950,7 +2157,7 @@ pub(crate) fn invalidate_for_reopt(
         level = level.name(),
         count = rt.reopt_count(),
         entry = retired_entry.is_some(),
-        osr_leaves = osr.len(),
+        osr_leaves = osr_leaf_count,
         unlinked,
         "invalidated"
     );
@@ -2183,18 +2390,21 @@ pub(crate) fn compile_and_cache_jit_leaf(
     obarray: Option<&Obarray>,
 ) -> Option<u64> {
     let id = func.jit_runtime().compiled_id_or_assign();
-    let entry = compile_cache_entry(
-        id,
-        func,
-        obarray,
-        CompileRequest {
-            regalloc: RegallocPolicy::Auto,
-            bypass_profit_gate: false,
-            origin: stats::CompileOrigin::AotDrain,
-            tier: super::tier2::CompileTier::Plain,
-        },
-        None,
-    );
+    let entry = COMPILED.with(|cache| {
+        compile_cache_entry(
+            &mut cache.borrow_mut(),
+            id,
+            func,
+            obarray,
+            CompileRequest {
+                regalloc: RegallocPolicy::Auto,
+                bypass_profit_gate: false,
+                origin: stats::CompileOrigin::AotDrain,
+                tier: super::tier2::CompileTier::Plain,
+            },
+            None,
+        )
+    });
     let compiled = matches!(entry, CacheEntry::Compiled(_));
     COMPILED.with(|c| {
         c.borrow_mut().insert(id, entry);
@@ -2214,7 +2424,7 @@ pub(crate) fn compile_and_cache_jit_leaf(
 /// must neither be traced nor run. Detected by heap identity — one thread-local
 /// load + compare on the common no-change path; clears only on an actual change.
 ///
-/// `COMPILED_HEAP == None` is ADOPTED, never treated as a change: it means no
+/// `Unpinned` is ADOPTED, never treated as a change: it means no
 /// insert has pinned an identity yet (`record_compiled_heap`), i.e. the cache is
 /// empty — nothing can be stale. Treating the first observation as a change was
 /// the JIT-campaign entry crash (rr-proven): under the default no-AOT config the
@@ -2224,33 +2434,46 @@ pub(crate) fn compile_and_cache_jit_leaf(
 /// machine code; the next compile's `declare_function` name string landed in the
 /// freed reloc cell and the leaf called `"neovm_jit_varbind"`'s bytes as a
 /// function. See `resolve_compiled_leaf_ptr` for the invariant this preserves.
-fn sync_cache_to_current_heap() {
+fn sync_cache_to_current_heap() -> Result<(), JitGraceRefuse> {
     let cur = neovm_value::tagged::gc::current_tagged_heap_identity();
     let changed = COMPILED_HEAP.with(|h| match h.get() {
-        None => {
-            h.set(cur);
+        CompiledHeapPin::Unpinned => {
+            h.set(CompiledHeapPin::from_identity(cur));
             false
         }
-        Some(prev) if Some(prev) != cur => {
-            h.set(cur);
+        CompiledHeapPin::Pinned(prev) | CompiledHeapPin::SwapRefused(prev) if Some(prev) != cur => {
             true
         }
-        Some(_) => false,
+        CompiledHeapPin::Pinned(_) | CompiledHeapPin::SwapRefused(_) => false,
     });
-    if changed {
-        clear();
+    if !changed {
+        return Ok(());
     }
+    // Mint before publishing the new identity. Retiring is wrong: a retired
+    // leaf would keep reloc roots into the heap this swap replaced.
+    let receipt = match JitGracePeriod::mint_serial() {
+        Ok(receipt) => receipt,
+        Err(err) => {
+            COMPILED_HEAP.with(|h| h.set(h.get().refuse()));
+            return Err(err);
+        }
+    };
+    COMPILED_HEAP.with(|h| h.set(CompiledHeapPin::from_identity(cur)));
+    clear(receipt);
+    Ok(())
 }
 
 /// Pin the heap identity the cache's leaves are built against, at INSERT time
 /// (first insert wins; later ones are necessarily the same heap, or a genuine
 /// change that `sync_cache_to_current_heap` clears before any insert can run
-/// under the new heap via the GC-root/OSR paths). This is what makes `None` in
+/// under the new heap via the GC-root/OSR paths). This is what makes `Unpinned` in
 /// `sync_cache_to_current_heap` mean "empty cache" rather than "unknown".
 fn record_compiled_heap() {
     COMPILED_HEAP.with(|h| {
-        if h.get().is_none() {
-            h.set(neovm_value::tagged::gc::current_tagged_heap_identity());
+        if h.get() == CompiledHeapPin::Unpinned {
+            h.set(CompiledHeapPin::from_identity(
+                neovm_value::tagged::gc::current_tagged_heap_identity(),
+            ));
         }
     });
 }
@@ -2275,20 +2498,45 @@ fn record_compiled_obarray(obarray: Option<&Obarray>) {
 /// catches -- so this is the belt to that brace, for the leaves that keep
 /// obarray-internal addresses (symbol cells, BLV records, forwarder
 /// descriptors). One thread-local compare per GC root walk; nothing per call.
-pub(crate) fn sync_cache_to_obarray(generation: u64) {
+pub(crate) fn sync_cache_to_obarray(generation: u64) -> Result<(), JitGraceRefuse> {
     let changed = COMPILED_OBARRAY.with(|g| g.get().is_some_and(|prev| prev != generation));
-    if changed {
-        clear();
-        COMPILED_OBARRAY.with(|g| g.set(Some(generation)));
+    if !changed {
+        return Ok(());
     }
+    let receipt = match JitGracePeriod::mint_serial() {
+        Ok(receipt) => receipt,
+        Err(err) => {
+            COMPILED_HEAP.with(|h| h.set(h.get().refuse()));
+            return Err(err);
+        }
+    };
+    clear(receipt);
+    COMPILED_OBARRAY.with(|g| g.set(Some(generation)));
+    Ok(())
 }
 
 pub(crate) fn collect_jit_reloc_gc_roots_for_heap(roots: &mut Vec<Value>, heap_id: usize) {
-    sync_cache_to_current_heap();
+    if sync_cache_to_current_heap().is_err() {
+        return;
+    }
+    // One-shot: an obarray refuse leaves `SwapRefused` without clearing.
+    // Consume it for this walk, the same way the old flag's `replace` did.
+    let skipped = COMPILED_HEAP.with(|owner| {
+        let pin = owner.get();
+        if matches!(pin, CompiledHeapPin::SwapRefused(_)) {
+            owner.set(pin.accept());
+            true
+        } else {
+            false
+        }
+    });
+    if skipped {
+        return;
+    }
     // Another live Context can collect while this thread's active view still
     // names the cached leaves' owner. Its reloc Values belong to that owner,
     // irrespective of which heap is currently installed in TLS.
-    if COMPILED_HEAP.with(|owner| owner.get() != Some(heap_id)) {
+    if COMPILED_HEAP.with(|owner| owner.get().identity() != Some(heap_id)) {
         return;
     }
     COMPILED.with(|c| {
@@ -2323,7 +2571,13 @@ pub(crate) fn collect_jit_reloc_gc_roots_for_heap(roots: &mut Vec<Value>, heap_i
     // between an OSR compile and its next run could free the leaf's constants.
     OSR_CACHE.with(|c| {
         for entry in c.borrow().values().flatten() {
-            roots.extend_from_slice(entry.leaf.reloc_values());
+            if entry.leaf.retired.get() {
+                // A borrow conflict put this leaf back here instead of on
+                // `retired`. Root its fallback family until lookup moves it.
+                leaf_gc_roots(&entry.leaf, roots);
+            } else {
+                roots.extend_from_slice(entry.leaf.reloc_values());
+            }
         }
     });
     // And those of OSR leaves still compiling in the background.
@@ -2417,7 +2671,11 @@ pub(crate) fn prepopulate_aot_leaves(leaves: Vec<(u64, CompiledLeaf)>) -> Vec<u6
     // built against the CURRENT heap (the hook ran on this thread after the pdump
     // load), so it is valid and must be kept. Only a genuine heap CHANGE (a later
     // pdump reload) clears, via `sync_cache_to_current_heap` from the GC roots.
-    COMPILED_HEAP.with(|h| h.set(neovm_value::tagged::gc::current_tagged_heap_identity()));
+    COMPILED_HEAP.with(|h| {
+        h.set(CompiledHeapPin::from_identity(
+            neovm_value::tagged::gc::current_tagged_heap_identity(),
+        ))
+    });
     let mut inserted = Vec::new();
     COMPILED.with(|c| {
         let mut cache = c.borrow_mut();
@@ -2436,6 +2694,47 @@ pub(crate) fn prepopulate_aot_leaves(leaves: Vec<(u64, CompiledLeaf)>) -> Vec<u6
     inserted
 }
 
+/// Serial receipt for dropping cache-owned compiled leaves.
+///
+/// The constructor is private. [`JitGracePeriod::mint_serial`] succeeds only
+/// while `native_depth` is 0, including in release. The multi-mutator mint
+/// stays with the stop proof and is not part of this receipt.
+#[derive(Debug)]
+pub struct JitGracePeriod {
+    _private: (),
+}
+
+static_assertions::assert_not_impl_any!(JitGracePeriod: Clone, Copy);
+
+/// A serial mint refused because a native frame is still on this thread.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct JitGraceRefuse {
+    /// `native_depth` at the mint.
+    pub depth: u32,
+}
+
+impl JitGracePeriod {
+    pub(crate) fn mint_serial() -> Result<Self, JitGraceRefuse> {
+        let depth = native_depth();
+        if depth != 0 {
+            return Err(JitGraceRefuse { depth });
+        }
+        Ok(Self { _private: () })
+    }
+}
+
+/// Drop compiled leaves. External callers must pass a receipt; there is no
+/// public constructor for one.
+#[doc(hidden)]
+pub fn reclaim_with_receipt(receipt: JitGracePeriod) {
+    clear(receipt);
+}
+
+pub(crate) fn clear_with_serial_receipt() -> Result<(), JitGraceRefuse> {
+    clear(JitGracePeriod::mint_serial()?);
+    Ok(())
+}
+
 /// Drop all compiled state on this thread. Called when a pdump load replaces the
 /// runtime image (and thus the heap that every cached leaf's reloc vector + baked
 /// addresses reference) — so every cached leaf is now stale and must neither be run
@@ -2443,15 +2742,13 @@ pub(crate) fn prepopulate_aot_leaves(leaves: Vec<(u64, CompiledLeaf)>) -> Vec<u6
 /// matters when a process reloads an image in-place (e.g. the pdump round-trip
 /// tests), where leaving stale leaves cached makes R1a's reloc roots trace
 /// freed/reused memory.
-pub(crate) fn clear() {
-    debug_assert_eq!(
-        native_depth(),
-        0,
-        "jit::cache::clear() under a running native leaf would free its reloc/spec boxes \
-         beneath its own machine code (the heap-identity stability invariant, see \
-         resolve_compiled_leaf_ptr)"
-    );
-    COMPILED.with(|c| c.borrow_mut().clear());
+///
+/// `receipt` is the serial mint. It replaces the old depth assertion: a live
+/// frame fails the mint in release and never reaches this function.
+pub(crate) fn clear(receipt: JitGracePeriod) {
+    COMPILED_HEAP.with(|h| h.set(h.get().accept()));
+    COMPILED.with(|c| c.borrow_mut().clear(&receipt));
+    let JitGracePeriod { _private: () } = receipt;
     INLINE_DEPS.with(|m| m.borrow_mut().clear());
     INLINE_EVICTIONS.with(|m| m.borrow_mut().clear());
     OSR_CACHE.with(|c| {
@@ -2532,9 +2829,12 @@ fn publish_upgrade(
 /// Compile an upgrade without removing the running T1 first. A refusal
 /// or failure leaves that T1 native; a worker job retains it in the cache
 /// until install. Entry compiles continue using their interpreter hold.
+///
+/// # Safety
+/// `ctx` must be null or point to a live, dormant owner-thread [`Context`].
 #[cold]
 #[inline(never)]
-fn request_upgrade(
+unsafe fn request_upgrade(
     cache: &mut DenseCache,
     id: u64,
     func: &ByteCodeFunction,
@@ -2572,13 +2872,15 @@ fn request_upgrade(
     // write the borrowed Context/Obarray allocation through an older ctx pointer.
     let obarray = (!ctx.is_null()).then(|| unsafe { &*(*ctx).obarray });
     let name_hint = stats::naming_enabled()
-        .then(|| callee_name_hint(ctx, id))
+        .then(|| unsafe { callee_name_hint(ctx, id) })
         .flatten();
-    let _vars = super::compile::inline_vars::CompileEnvScope::enter(ctx);
+    // SAFETY: `ctx` is the live owner `Context` guaranteed by this function's contract and any `args_ptr`/`leaf` arguments remain valid for the call.
+    let _vars = unsafe { super::compile::inline_vars::CompileEnvScope::enter(ctx) };
     if kind == super::tier2::T2Upgrade::Retier {
         stats::record_retier();
     }
     let entry = compile_cache_entry(
+        cache,
         id,
         func,
         obarray,
@@ -2644,12 +2946,13 @@ fn probe_upgrade(cache: &mut DenseCache, id: u64, ctx: Option<&Context>) -> Rc<C
     };
     match super::bg::install(job, Some(&rt), ctx) {
         Ok(leaf) => publish_upgrade(cache, id, old, Rc::new(leaf), kind, &rt),
-        Err(reason) => {
+        Err(discarded) => {
             register_inline_deps(id, &old);
-            match reason {
+            match discarded.reason {
                 super::bg::Discard::Rejected => super::tier2::upgrade_failed(&old),
                 super::bg::Discard::Stale(_) => super::tier2::upgrade_deferred(&rt, &old),
             }
+            cache.retire(Rc::new(discarded.leaf));
             cache.insert(id, CacheEntry::Compiled(Rc::clone(&old)));
             old
         }
@@ -2659,9 +2962,12 @@ fn probe_upgrade(cache: &mut DenseCache, id: u64, ctx: Option<&Context>) -> Rc<C
 /// Keep all upgrade-only probes off the default entry path. The process flag
 /// is published before any profiling leaf can exist; tests use their thread's
 /// knob override. This helper owns no state beyond the borrowed mutator cache.
+///
+/// # Safety
+/// `ctx` must be null or point to a live, dormant owner-thread [`Context`].
 #[cold]
 #[inline(never)]
-fn probe_tier2_upgrade(
+unsafe fn probe_tier2_upgrade(
     cache: &mut DenseCache,
     id: u64,
     func: &ByteCodeFunction,
@@ -2683,7 +2989,8 @@ fn probe_tier2_upgrade(
                 .due()
                 .or_else(|| super::aot::retier::legacy_request(old, func.jit_runtime()))?;
             let old = Rc::clone(old);
-            Some(request_upgrade(cache, id, func, old, kind, ctx))
+            // SAFETY: `ctx` is the live owner `Context` guaranteed by this function's contract and any `args_ptr`/`leaf` arguments remain valid for the call.
+            Some(unsafe { request_upgrade(cache, id, func, old, kind, ctx) })
         }
         _ => None,
     }
@@ -2751,19 +3058,24 @@ fn install_pending(
             cache.insert(id, CacheEntry::Compiled(Rc::clone(&leaf)));
             Some(leaf)
         }
-        Err(super::bg::Discard::Rejected) => {
-            forget_inline_deps(id);
-            add_osr_inline_deps(id, None);
-            if let Some(rt) = rt {
-                rt.mark_native_rejected(rejection_epoch());
+        Err(discarded) => {
+            cache.retire(Rc::new(discarded.leaf));
+            match discarded.reason {
+                super::bg::Discard::Rejected => {
+                    forget_inline_deps(id);
+                    add_osr_inline_deps(id, None);
+                    if let Some(rt) = rt {
+                        rt.mark_native_rejected(rejection_epoch());
+                    }
+                    cache.insert(id, CacheEntry::NotCompilable);
+                    None
+                }
+                super::bg::Discard::Stale(_) => {
+                    forget_inline_deps(id);
+                    add_osr_inline_deps(id, None);
+                    None
+                }
             }
-            cache.insert(id, CacheEntry::NotCompilable);
-            None
-        }
-        Err(super::bg::Discard::Stale(_)) => {
-            forget_inline_deps(id);
-            add_osr_inline_deps(id, None);
-            None
         }
     }
 }
@@ -2855,7 +3167,8 @@ fn max_compiled_id() -> u64 {
 /// stays valid for the whole call; the caller holds the dormant-Context
 /// contract described above.
 #[inline(never)]
-pub unsafe fn try_run_compiled(
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) unsafe fn try_run_compiled(
     ctx: *mut Context,
     func: &ByteCodeFunction,
     func_value: Value,
@@ -2876,7 +3189,7 @@ pub unsafe fn try_run_compiled(
         });
         if dbg == Some(id) {
             let consts: Vec<String> = func
-                .constants
+                .constants()
                 .iter()
                 .map(crate::emacs_core::print::print_value)
                 .collect();
@@ -2903,7 +3216,8 @@ pub unsafe fn try_run_compiled(
         // A countdown upgrade keeps its T1 live until the replacement
         // really installs. The legacy heat-driven re-tier below is unchanged.
         if super::compile::jit_tier_upgrade_enabled()
-            && let Some(leaf) = probe_tier2_upgrade(&mut cache, id, func, ctx)
+            // SAFETY: `ctx` is the live owner `Context` guaranteed by this function's contract and any `args_ptr`/`leaf` arguments remain valid for the call.
+            && let Some(leaf) = unsafe { probe_tier2_upgrade(&mut cache, id, func, ctx) }
         {
             return Some(leaf).filter(|leaf| leaf.accepts(args.len()));
         }
@@ -3021,7 +3335,7 @@ pub unsafe fn try_run_compiled(
                 super::tier2::CompileTier::T1
             },
         };
-        match cache.get_or_insert_with(id, || {
+        match cache.get_or_insert_with(id, |cache| {
             // R1c-6: consult AOT FIRST (additive — a miss/error falls through to
             // the JIT below, leaving JIT behavior unchanged). An AOT hit is a
             // PRE-WARMED leaf: native code already on disk, no JIT compile. Only
@@ -3042,8 +3356,9 @@ pub unsafe fn try_run_compiled(
                 {
                     // AOT leaves never inline → no inline deps to register. Their
                     // reloc consts are rooted via the COMPILED walk (R1c-8).
-                    leaf.frame_bytes =
-                        crate::emacs_core::bytecode::vm::bytecode_frame_bytes(func.max_stack.get());
+                    leaf.frame_bytes = crate::emacs_core::bytecode::vm::bytecode_frame_bytes(
+                        func.max_stack().get(),
+                    );
                     leaf.obs.id = id;
                     super::aot::retier::prepare(&mut leaf, func.jit_runtime());
                     stats::record_aot_load(func.executable_ops().len());
@@ -3051,7 +3366,8 @@ pub unsafe fn try_run_compiled(
                 }
             }
             let name_hint = stats::naming_enabled()
-                .then(|| callee_name_hint(ctx, id))
+                // SAFETY: `ctx` is the live owner `Context` guaranteed by this function's contract and any `args_ptr`/`leaf` arguments remain valid for the call.
+                .then(|| unsafe { callee_name_hint(ctx, id) })
                 .flatten();
             // The origin is only read on this cold miss path.
             let origin = if retier {
@@ -3062,8 +3378,10 @@ pub unsafe fn try_run_compiled(
                 stats::CompileOrigin::Dispatch
             };
             // Inline variable ops classify against this context (P1.4 B).
-            let _vars = super::compile::inline_vars::CompileEnvScope::enter(ctx);
+            // SAFETY: `ctx` is the live owner `Context` guaranteed by this function's contract and any `args_ptr`/`leaf` arguments remain valid for the call.
+            let _vars = unsafe { super::compile::inline_vars::CompileEnvScope::enter(ctx) };
             compile_cache_entry(
+                cache,
                 id,
                 func,
                 obarray,
@@ -3092,7 +3410,8 @@ pub unsafe fn try_run_compiled(
         Some(leaf) => {
             #[cfg(test)]
             super::test_support::note_native_dispatch();
-            run_resolved_leaf(ctx, func, func_value, &leaf, args)
+            // SAFETY: `ctx` is the live owner `Context` guaranteed by this function's contract and any `args_ptr`/`leaf` arguments remain valid for the call.
+            unsafe { run_resolved_leaf(ctx, func, func_value, &leaf, args) }
         }
     }
 }
@@ -3200,21 +3519,31 @@ pub(crate) fn armed_leaf_for_native_call(
 /// (its premarshaled `Value` bits, NOT a pointer into the operand stack: a
 /// nested call's shim pushes onto it and may reallocate). Same result shape
 /// as `try_run_compiled`: `Ok(None)` = interpret instead.
+///
+/// # Safety
+/// `ctx` must point to the dormant owner-thread [`Context`], `leaf` must be a
+/// live leaf pointer armed under the current `leaf_slot_epoch`, and `args_ptr`
+/// must address `leaf.arity` readable tagged words for the call.
 #[inline(never)]
-pub(crate) fn run_armed_leaf(
+pub(crate) unsafe fn run_armed_leaf(
     ctx: *mut Context,
     func: &ByteCodeFunction,
     func_value: Value,
     leaf: *const CompiledLeaf,
     args_ptr: *const i64,
 ) -> Result<Option<usize>, Flow> {
+    // Outermost armed call: the raw entry publishes no bases. The live tag
+    // says native code is on the stack. A nested armed call during a framed
+    // tail must not hide that frame's pointer. No snapshot and no extra `Rc`:
+    // the tag covers the raw callees this leaf reaches.
+    let _armed = super::compile::enter_armed_live_extent();
     // SAFETY: see armed_leaf_for_stack_call.
     // SAFETY (owner chain): (b) fails for this owner: the incoming raw leaf is shadowed and only
     // &CompiledLeaf is forwarded. Native writes to Context target a different allocation; leaf
     // counters/spec cells use interior mutability, not an older mutable leaf pointer.
     let leaf = unsafe { &*leaf };
     super::stats::record_native_entry();
-    match run_resolved_leaf_native(ctx, func, func_value, leaf, args_ptr) {
+    match unsafe { run_resolved_leaf_native(ctx, func, func_value, leaf, args_ptr) } {
         NativeCallOutcome::Value(v) => Ok(Some(v.bits())),
         NativeCallOutcome::Fallback => Ok(None),
         NativeCallOutcome::FlowStashed => {
@@ -3228,13 +3557,17 @@ pub(crate) fn run_armed_leaf(
 /// exact-arity call takes the direct entry. Reads the cache only (the entry
 /// exists: the leaf just ran); Deferred/NotCompilable/inlining leaves leave
 /// the slot empty.
-pub(crate) fn arm_leaf_slot(ctx: *mut Context, func: &ByteCodeFunction) {
+///
+/// # Safety
+/// `ctx` must be null or point to a live, dormant owner-thread [`Context`].
+pub(crate) unsafe fn arm_leaf_slot(ctx: *mut Context, func: &ByteCodeFunction) {
     let rt = func.jit_runtime();
     let epoch = leaf_slot_epoch();
     if rt.armed_leaf_word(epoch).is_some() {
         return;
     }
-    if let Some(leaf) = resolve_compiled_leaf_ptr(ctx, func) {
+    // SAFETY: `ctx` is the live owner `Context` guaranteed by this function's contract and any `args_ptr`/`leaf` arguments remain valid for the call.
+    if let Some(leaf) = unsafe { resolve_compiled_leaf_ptr(ctx, func) } {
         // SAFETY: `leaf` was resolved from this source's cache entry while the
         // entry is live and under `epoch`; the cache retires leaves without
         // freeing them, and the slot is armed and probed on this same mutator
@@ -3252,8 +3585,10 @@ pub(crate) enum SpecCallLeaf {
     RetainedUpgrade(Rc<CompiledLeaf>),
 }
 
+/// # Safety
+/// `ctx` must be null or point to a live, dormant owner-thread [`Context`].
 #[inline(never)]
-pub(crate) fn resolve_compiled_leaf_ptr(
+pub(crate) unsafe fn resolve_compiled_leaf_ptr(
     ctx: *mut Context,
     func: &ByteCodeFunction,
 ) -> Option<*const CompiledLeaf> {
@@ -3295,19 +3630,22 @@ pub(crate) unsafe fn resolve_spec_call_leaf(
         // calls receive a retained handle instead, so a cold source need
         // not fall through the interpreter's initial heat threshold.
         if super::compile::jit_tier_upgrade_enabled() {
-            probe_tier2_upgrade(&mut cache, id, func, ctx);
+            // SAFETY: `ctx` is the live owner `Context` guaranteed by this function's contract and any `args_ptr`/`leaf` arguments remain valid for the call.
+            unsafe { probe_tier2_upgrade(&mut cache, id, func, ctx) };
         }
-        match cache.get_or_insert_with(id, || {
+        match cache.get_or_insert_with(id, |cache| {
             // SAFETY: same dormant-Context contract as try_run_compiled.
             // SAFETY (owner chain): (b) fails: the insertion closure passes raw ctx only to the shared
             // naming/environment readers, then passes typed obarray to compilation. It performs no
             // native execution or ancestor-pointer write to this borrowed allocation.
             let obarray = (!ctx.is_null()).then(|| unsafe { &*(*ctx).obarray });
             let name_hint = stats::naming_enabled()
-                .then(|| callee_name_hint(ctx, id))
+                .then(|| unsafe { callee_name_hint(ctx, id) })
                 .flatten();
-            let _vars = super::compile::inline_vars::CompileEnvScope::enter(ctx);
+            // SAFETY: `ctx` is the live owner `Context` guaranteed by this function's contract and any `args_ptr`/`leaf` arguments remain valid for the call.
+            let _vars = unsafe { super::compile::inline_vars::CompileEnvScope::enter(ctx) };
             compile_cache_entry(
+                cache,
                 id,
                 func,
                 obarray,
@@ -3381,11 +3719,11 @@ pub(crate) fn current_leaf_of(obs: &super::compile::LeafObs) -> Option<Rc<Compil
 #[inline(always)]
 fn cached_frame_bytes(leaf: &CompiledLeaf, func: &ByteCodeFunction) -> usize {
     match leaf.frame_bytes {
-        0 => crate::emacs_core::bytecode::vm::bytecode_frame_bytes(func.max_stack.get()),
+        0 => crate::emacs_core::bytecode::vm::bytecode_frame_bytes(func.max_stack().get()),
         cached => {
             debug_assert_eq!(
                 cached,
-                crate::emacs_core::bytecode::vm::bytecode_frame_bytes(func.max_stack.get()),
+                crate::emacs_core::bytecode::vm::bytecode_frame_bytes(func.max_stack().get()),
                 "cached frame_bytes diverged from the live function"
             );
             cached
@@ -3399,7 +3737,10 @@ fn cached_frame_bytes(leaf: &CompiledLeaf, func: &ByteCodeFunction) -> usize {
 /// both have byte-identical deopt/signal semantics. Same return shape as
 /// `try_run_compiled`: `Ok(Some(bits))` success, `Ok(None)` fall-back, `Err`
 /// on a non-local flow.
-pub(crate) fn run_resolved_leaf(
+/// # Safety
+/// `ctx` must be null (only for bodies needing no Context) or point to the
+/// dormant owner-thread [`Context`] alive for the whole native run.
+pub(crate) unsafe fn run_resolved_leaf(
     ctx: *mut Context,
     func: &ByteCodeFunction,
     func_value: Value,
@@ -3410,7 +3751,8 @@ pub(crate) fn run_resolved_leaf(
     // `run_resolved_leaf_native` does; an over-budget frame falls back to the
     // interpreter entry, which raises GNU's error.
     if ctx.is_null() {
-        return run_resolved_leaf_inner(ctx, func, func_value, leaf, args);
+        // SAFETY: `ctx` is the live owner `Context` guaranteed by this function's contract and any `args_ptr`/`leaf` arguments remain valid for the call.
+        return unsafe { run_resolved_leaf_inner(ctx, func, func_value, leaf, args) };
     }
     // SAFETY: the seam-provided Context is dormant for this native call.
     let charged = {
@@ -3426,9 +3768,12 @@ pub(crate) fn run_resolved_leaf(
     let Some(saved_budget) = charged else {
         return Ok(None);
     };
-    let outcome = run_with_bytecode_stack_probe(ctx, |ctx| {
-        run_resolved_leaf_inner(ctx, func, func_value, leaf, args)
-    });
+    // SAFETY: `ctx` is the live owner `Context` guaranteed by this function's contract and any `args_ptr`/`leaf` arguments remain valid for the call.
+    let outcome = unsafe {
+        run_with_bytecode_stack_probe(ctx, |ctx| {
+            run_resolved_leaf_inner(ctx, func, func_value, leaf, args)
+        })
+    };
     // SAFETY: as above; valid for this whole call.
     // SAFETY (owner chain): (b) fails: native dispatch has already returned, and
     // release_bytecode_frame writes through this current typed owner. No older ctx call follows; this
@@ -3438,7 +3783,9 @@ pub(crate) fn run_resolved_leaf(
     outcome
 }
 
-fn run_resolved_leaf_inner(
+/// # Safety
+/// `ctx` must satisfy [`run_resolved_leaf`].
+unsafe fn run_resolved_leaf_inner(
     ctx: *mut Context,
     func: &ByteCodeFunction,
     func_value: Value,
@@ -3446,13 +3793,16 @@ fn run_resolved_leaf_inner(
     args: &[Value],
 ) -> Result<Option<usize>, Flow> {
     super::stats::record_native_entry();
-    finish_native_run(
-        ctx,
-        func,
-        func_value,
-        leaf,
-        leaf.call_consts(ctx as *mut u8, func.jit_constant_base(), args),
-    )
+    // SAFETY: `ctx` is the live owner `Context` guaranteed by this function's contract and any `args_ptr`/`leaf` arguments remain valid for the call.
+    unsafe {
+        finish_native_run(
+            ctx,
+            func,
+            func_value,
+            leaf,
+            leaf.call_consts(ctx as *mut u8, func.jit_constant_base(), args),
+        )
+    }
 }
 
 /// Native-to-native variant of [`run_resolved_leaf`]: `args_ptr` addresses
@@ -3461,11 +3811,12 @@ fn run_resolved_leaf_inner(
 /// Skips the `LispArgVec` build and the `arg_bits` re-marshal entirely — the
 /// per-call cost the call-heavy benchmark is dominated by.
 ///
-/// SAFETY: see [`CompiledLeaf::call_premarshaled`] — `args_ptr` must address
-/// `leaf.arity` live words with no GC safepoint before the native entry reads
-/// them (the spec fast path's `maybe_quit`-returned-Ok window).
+/// # Safety
+/// `ctx` must be null (only for bodies needing no Context) or point to the
+/// dormant owner-thread [`Context`], and `args_ptr` must address `leaf.arity`
+/// live tagged words with no GC safepoint before the native entry reads them.
 #[inline(always)]
-pub(crate) fn run_resolved_leaf_native(
+pub(crate) unsafe fn run_resolved_leaf_native(
     ctx: *mut Context,
     func: &ByteCodeFunction,
     func_value: Value,
@@ -3479,7 +3830,8 @@ pub(crate) fn run_resolved_leaf_native(
     // which continues this same frame -- has finished; a fallback releases
     // before returning so the interpreter entry charges the frame once.
     if ctx.is_null() {
-        return run_resolved_leaf_native_inner(ctx, func, func_value, leaf, args_ptr);
+        // SAFETY: `ctx` is the live owner `Context` guaranteed by this function's contract and any `args_ptr`/`leaf` arguments remain valid for the call.
+        return unsafe { run_resolved_leaf_native_inner(ctx, func, func_value, leaf, args_ptr) };
     }
     // SAFETY: the seam-provided Context is dormant for this native call.
     let charged = {
@@ -3502,9 +3854,12 @@ pub(crate) fn run_resolved_leaf_native(
     // compiled leaf entered between samples never meets its own entry guard
     // before the bytecode budget is exhausted (the guard's threshold is
     // inside the probe reserve, see `maybe_grow_tracking_jit_limit`).
-    let outcome = run_with_bytecode_stack_probe(ctx, |ctx| {
-        run_resolved_leaf_native_inner(ctx, func, func_value, leaf, args_ptr)
-    });
+    // SAFETY: `ctx` is the live owner `Context` guaranteed by this function's contract and any `args_ptr`/`leaf` arguments remain valid for the call.
+    let outcome = unsafe {
+        run_with_bytecode_stack_probe(ctx, |ctx| {
+            run_resolved_leaf_native_inner(ctx, func, func_value, leaf, args_ptr)
+        })
+    };
     // SAFETY: as above; valid for this whole call.
     // SAFETY (owner chain): (b) fails: dispatch has finished and release writes through this new typed
     // owner, not the older pointer. The function returns immediately afterward, leaving no later owner
@@ -3528,8 +3883,10 @@ pub(crate) fn run_resolved_leaf_native(
 /// every native entry), which the protected-codegen census counted as
 /// run_armed_leaf +119 instructions. The hot path keeps only the depth test;
 /// the probe runs once per sampled interval, on the segment it grows.
+/// # Safety
+/// `ctx` must point to the live, dormant owner-thread [`Context`].
 #[inline(always)]
-pub(crate) fn run_with_bytecode_stack_probe<R>(
+pub(crate) unsafe fn run_with_bytecode_stack_probe<R>(
     ctx: *mut Context,
     run: impl FnOnce(*mut Context) -> R,
 ) -> R {
@@ -3540,14 +3897,18 @@ pub(crate) fn run_with_bytecode_stack_probe<R>(
     {
         return run(ctx);
     }
-    run_with_bytecode_stack_probe_sampled(ctx, run)
+    // SAFETY: `ctx` is the live owner `Context` guaranteed by this function's contract and any `args_ptr`/`leaf` arguments remain valid for the call.
+    unsafe { run_with_bytecode_stack_probe_sampled(ctx, run) }
 }
 
 /// The sampled half of [`run_with_bytecode_stack_probe`], deliberately out of
 /// line: stacker's remaining-stack query and the adaptive reserve arithmetic
 /// stay off the leaf entry path.
+///
+/// # Safety
+/// `ctx` must point to the live, dormant owner-thread [`Context`].
 #[inline(never)]
-fn run_with_bytecode_stack_probe_sampled<R>(
+unsafe fn run_with_bytecode_stack_probe_sampled<R>(
     ctx: *mut Context,
     run: impl FnOnce(*mut Context) -> R,
 ) -> R {
@@ -3568,7 +3929,9 @@ fn run_with_bytecode_stack_probe_sampled<R>(
     )
 }
 
-fn run_resolved_leaf_native_inner(
+/// # Safety
+/// `ctx` and `args_ptr` must satisfy [`run_resolved_leaf_native`].
+unsafe fn run_resolved_leaf_native_inner(
     ctx: *mut Context,
     func: &ByteCodeFunction,
     func_value: Value,
@@ -3577,10 +3940,12 @@ fn run_resolved_leaf_native_inner(
 ) -> NativeCallOutcome {
     // Direct handler-free path: a body with no binds, no handler frames and
     // no sidecar runs WITHOUT its own invoke_native frame — no bases
-    // snapshot, no CURRENT_LEAF_BASES publish, no NativeRun materialization.
-    // It executes inside the CALLER leaf's extent exactly like any runtime
-    // shim the caller invokes (see CompiledLeaf::direct_call_eligible for the
-    // containment/soundness argument). Non-OK statuses are routed through
+    // snapshot and no CURRENT_LEAF_BASES publish of its own, no NativeRun
+    // materialization. It executes inside the CALLER leaf's extent exactly
+    // like any runtime shim the caller invokes (see
+    // CompiledLeaf::direct_call_eligible for the containment/soundness
+    // argument). The outermost publication is `run_armed_leaf`'s live tag,
+    // and only when the cell is outside. Non-OK statuses are routed through
     // the same machinery invoke_native would use, out of line.
     //
     // `#[inline(always)]`: this is the shape test, the raw entry call and a
@@ -3603,18 +3968,20 @@ fn run_resolved_leaf_native_inner(
             leaf.entry_call_raw_memory(ctx as *mut u8, func.jit_constant_base(), args_ptr, &mut out)
         };
         if status == super::compile::STATUS_OK {
-            #[cfg(any(test, debug_assertions))]
+            #[cfg(any(test, debug_assertions, feature = "test-support"))]
             NATIVE_OK_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             return NativeCallOutcome::Value(unsafe {
                 /* SAFETY: JIT constant-pool word */
                 Value::from_bits(out as usize)
             });
         }
-        #[cfg(any(test, debug_assertions))]
+        #[cfg(any(test, debug_assertions, feature = "test-support"))]
         count_native_status(status);
-        return direct_call_cold(ctx, func, func_value, leaf, status);
+        // SAFETY: `ctx` is the live owner `Context` guaranteed by this function's contract and any `args_ptr`/`leaf` arguments remain valid for the call.
+        return unsafe { direct_call_cold(ctx, func, func_value, leaf, status) };
     }
-    run_resolved_leaf_native_outlined(ctx, func, func_value, leaf, args_ptr)
+    // SAFETY: `ctx` is the live owner `Context` guaranteed by this function's contract and any `args_ptr`/`leaf` arguments remain valid for the call.
+    unsafe { run_resolved_leaf_native_outlined(ctx, func, func_value, leaf, args_ptr) }
 }
 
 /// The out-of-line shapes of [`run_resolved_leaf_native`]: a frameless
@@ -3622,8 +3989,11 @@ fn run_resolved_leaf_native_inner(
 /// bindings, handler frames or a sidecar runs under its own `invoke_native`
 /// frame. Out of line so the memory-ABI raw path above, inlined into the
 /// call shims, stays a raw entry call and a status compare.
+///
+/// # Safety
+/// `ctx` and `args_ptr` must satisfy [`run_resolved_leaf_native`].
 #[inline(never)]
-fn run_resolved_leaf_native_outlined(
+unsafe fn run_resolved_leaf_native_outlined(
     ctx: *mut Context,
     func: &ByteCodeFunction,
     func_value: Value,
@@ -3636,34 +4006,42 @@ fn run_resolved_leaf_native_outlined(
             leaf.entry_call_raw_register(ctx as *mut u8, func.jit_constant_base(), args_ptr)
         };
         if ret.status == super::compile::STATUS_OK {
-            #[cfg(any(test, debug_assertions))]
+            #[cfg(any(test, debug_assertions, feature = "test-support"))]
             NATIVE_OK_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             return NativeCallOutcome::Value(unsafe {
                 /* SAFETY: JIT constant-pool word */
                 Value::from_bits(ret.value as usize)
             });
         }
-        #[cfg(any(test, debug_assertions))]
+        #[cfg(any(test, debug_assertions, feature = "test-support"))]
         count_native_status(ret.status);
-        return direct_call_cold(ctx, func, func_value, leaf, ret.status);
+        // SAFETY: `ctx` is the live owner `Context` guaranteed by this function's contract and any `args_ptr`/`leaf` arguments remain valid for the call.
+        return unsafe { direct_call_cold(ctx, func, func_value, leaf, ret.status) };
     }
-    let outcome = leaf.call_premarshaled_consts(ctx as *mut u8, func.jit_constant_base(), args_ptr);
-    finish_framed_run(ctx, func, func_value, leaf, outcome)
+    // SAFETY: `ctx` is the live owner `Context` guaranteed by this function's contract and any `args_ptr`/`leaf` arguments remain valid for the call.
+    let outcome = unsafe {
+        leaf.call_premarshaled_consts(ctx as *mut u8, func.jit_constant_base(), args_ptr)
+    };
+    // SAFETY: `ctx` is the live owner `Context` guaranteed by this function's contract and any `args_ptr`/`leaf` arguments remain valid for the call.
+    unsafe { finish_framed_run(ctx, func, func_value, leaf, outcome) }
 }
 
 /// Map a framed native run's outcome to the shim's compact outcome: the
 /// signal fold and the precise-deopt resume. Shared with the spec shim's
 /// fast path, which makes the framed call itself and hands a non-OK
 /// outcome here. `leaf` is the leaf that ran (the deopt hook's subject).
+///
+/// # Safety
+/// `ctx` must be null or point to the dormant owner-thread [`Context`].
 #[inline(never)]
-pub(crate) fn finish_framed_run(
+pub(crate) unsafe fn finish_framed_run(
     ctx: *mut Context,
     func: &ByteCodeFunction,
     func_value: Value,
     leaf: &CompiledLeaf,
     outcome: NativeRun,
 ) -> NativeCallOutcome {
-    #[cfg(any(test, debug_assertions))]
+    #[cfg(any(test, debug_assertions, feature = "test-support"))]
     count_native_outcome(&outcome);
     match outcome {
         NativeRun::Ok(bits) => NativeCallOutcome::Value(unsafe {
@@ -3673,7 +4051,10 @@ pub(crate) fn finish_framed_run(
         // call_premarshaled maps null-vmctx deopts to Deopt; defensive only —
         // the caller re-runs the callee on the interpreter.
         NativeRun::Deopt => {
-            super::reopt::note_deopt(ctx, func, leaf, LeafOrigin::Entry, DeoptEvent::Rerun);
+            // SAFETY: `ctx` is the live owner `Context` guaranteed by this function's contract and any `args_ptr`/`leaf` arguments remain valid for the call.
+            unsafe {
+                super::reopt::note_deopt(ctx, func, leaf, LeafOrigin::Entry, DeoptEvent::Rerun)
+            };
             NativeCallOutcome::Fallback
         }
         // Fold a contained shim panic into its signal flow at exactly the
@@ -3687,14 +4068,19 @@ pub(crate) fn finish_framed_run(
             stash_pending_flow(flow);
             NativeCallOutcome::FlowStashed
         }
-        NativeRun::DeoptAt(resume) => deopt_resume_outcome(ctx, func, func_value, leaf, *resume),
+        // SAFETY: `ctx` is the live owner `Context` guaranteed by this function's contract and any `args_ptr`/`leaf` arguments remain valid for the call.
+        NativeRun::DeoptAt(resume) => unsafe {
+            deopt_resume_outcome(ctx, func, func_value, leaf, *resume)
+        },
     }
 }
 
 /// Precise-deopt resume shared by the wrapped and direct native paths: run
 /// the Tier-0 interpreter mid-function off the [`DeoptResume`] payload.
 /// `leaf` is the entry leaf that deopted (the deopt hook's subject).
-fn deopt_resume_outcome(
+/// # Safety
+/// `ctx` must be null or point to the dormant owner-thread [`Context`].
+unsafe fn deopt_resume_outcome(
     ctx: *mut Context,
     func: &ByteCodeFunction,
     func_value: Value,
@@ -3721,9 +4107,12 @@ fn deopt_resume_outcome(
 
 /// Non-OK statuses of a direct handler-free native call, routed through the
 /// same machinery `invoke_native` would apply — out of the hot path.
+///
+/// # Safety
+/// `ctx` must point to the dormant owner-thread [`Context`].
 #[cold]
 #[inline(never)]
-pub(crate) fn direct_call_cold(
+pub(crate) unsafe fn direct_call_cold(
     ctx: *mut Context,
     func: &ByteCodeFunction,
     func_value: Value,
@@ -3766,20 +4155,24 @@ pub(crate) fn direct_call_cold(
             stash_pending_flow(flow);
             return NativeCallOutcome::FlowStashed;
         }
-        return dispatch_raw_signal(ctx, flow);
+        // SAFETY: `ctx` is the live owner `Context` guaranteed by this function's contract and any `args_ptr`/`leaf` arguments remain valid for the call.
+        return unsafe { dispatch_raw_signal(ctx, flow) };
     }
     if status == STATUS_DEOPT_AT {
         // Precise deopt: no bind/cond frames exist on the direct path (the
         // eligibility gate excludes them).
-        return match leaf.deopt_at_outcome(ctx as *mut u8, None, None) {
-            NativeRun::DeoptAt(resume) => {
+        // SAFETY: `ctx` is the live owner `Context` guaranteed by this function's contract and any `args_ptr`/`leaf` arguments remain valid for the call.
+        return match unsafe { leaf.deopt_at_outcome(ctx as *mut u8, None, None) } {
+            // SAFETY: `ctx` is the live owner `Context` guaranteed by this function's contract and any `args_ptr`/`leaf` arguments remain valid for the call.
+            NativeRun::DeoptAt(resume) => unsafe {
                 deopt_resume_outcome(ctx, func, func_value, leaf, *resume)
-            }
+            },
             // deopt_at_outcome only degrades to plain Deopt with a null vmctx.
             NativeRun::Signal => {
                 let flow = take_pending_flow()
                     .expect("STATUS_SIGNAL from compiled code implies a stashed Flow");
-                dispatch_raw_signal(ctx, flow)
+                // SAFETY: `ctx` is the live owner `Context` guaranteed by this function's contract and any `args_ptr`/`leaf` arguments remain valid for the call.
+                unsafe { dispatch_raw_signal(ctx, flow) }
             }
             _ => NativeCallOutcome::Fallback,
         };
@@ -3788,7 +4181,8 @@ pub(crate) fn direct_call_cold(
     // (the same defensive rule invoke_native applies).
     leaf.obs.note_deopt_rerun();
     leaf.assert_rerunnable();
-    super::reopt::note_deopt(ctx, func, leaf, LeafOrigin::Entry, DeoptEvent::Rerun);
+    // SAFETY: `ctx` is the live owner `Context` guaranteed by this function's contract and any `args_ptr`/`leaf` arguments remain valid for the call.
+    unsafe { super::reopt::note_deopt(ctx, func, leaf, LeafOrigin::Entry, DeoptEvent::Rerun) };
     NativeCallOutcome::Fallback
 }
 
@@ -3798,9 +4192,12 @@ pub(crate) fn direct_call_cold(
 /// caller's argument slot are live. Taking the flow first frees the pending
 /// slot for nested Lisp. The native runner supplies its mutator's Context;
 /// no Lisp state is shared or cached here.
+///
+/// # Safety
+/// `ctx` must point to the dormant owner-thread [`Context`].
 #[cold]
 #[inline(never)]
-fn dispatch_raw_signal(ctx: *mut Context, flow: Flow) -> NativeCallOutcome {
+unsafe fn dispatch_raw_signal(ctx: *mut Context, flow: Flow) -> NativeCallOutcome {
     // SAFETY: the native call's dormant seam Context, as in the runner.
     // SAFETY (owner chain): (b) fails: the incoming raw ctx is shadowed; dispatch_signal_flow_cold
     // borrows this current owner. No cache closure or later call carries an older ctx pointer, and
@@ -3865,7 +4262,7 @@ pub(crate) static SEAM_INTERP_FALLBACK_COUNT: std::sync::atomic::AtomicU64 =
 
 /// Called by the eval dispatch seam on an `Ok(None)` native attempt.
 #[inline]
-pub fn note_seam_interp_fallback() {
+pub(crate) fn note_seam_interp_fallback() {
     SEAM_INTERP_FALLBACK_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 }
 
@@ -3874,8 +4271,15 @@ pub fn note_seam_interp_fallback() {
 ///
 /// Test/debug builds only, like the spec-site counters: a relaxed
 /// `fetch_add` is still a locked read-modify-write on x86, ~20 cycles on
-/// every native call in a release build that reads the total nowhere.
-#[cfg(any(test, debug_assertions))]
+/// every native call in a release build that reads the total nowhere, so
+/// production (no `test-support`) carries none.
+///
+/// CFG CONTRACT (RELEASE-TEST-SUPPORT-CFG): [`native_run_counters`] is
+/// exposed to core's release test build under `test-support` and is read by
+/// e.g. `green_release_class_b_test`; this gate must stay a superset of that
+/// reader's (include `feature = "test-support"`), or the release test reads a
+/// counter that can never move.
+#[cfg(any(test, debug_assertions, feature = "test-support"))]
 pub(crate) fn count_native_status(status: i64) {
     use super::compile::{STATUS_DEOPT_AT, STATUS_SIGNAL};
     let counter = if status == STATUS_SIGNAL {
@@ -3888,7 +4292,7 @@ pub(crate) fn count_native_status(status: i64) {
     counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 }
 
-#[cfg(any(test, debug_assertions))]
+#[cfg(any(test, debug_assertions, feature = "test-support"))]
 fn count_native_outcome(outcome: &NativeRun) {
     let counter = match outcome {
         NativeRun::Ok(_) => &NATIVE_OK_COUNT,
@@ -3912,19 +4316,24 @@ pub(crate) fn native_run_counters() -> (u64, u64, u64, u64) {
     )
 }
 
-fn finish_native_run(
+/// # Safety
+/// `ctx` must be null or point to the dormant owner-thread [`Context`].
+unsafe fn finish_native_run(
     ctx: *mut Context,
     func: &ByteCodeFunction,
     func_value: Value,
     leaf: &CompiledLeaf,
     outcome: NativeRun,
 ) -> Result<Option<usize>, Flow> {
-    #[cfg(any(test, debug_assertions))]
+    #[cfg(any(test, debug_assertions, feature = "test-support"))]
     count_native_outcome(&outcome);
     match outcome {
         NativeRun::Ok(bits) => Ok(Some(bits)),
         NativeRun::Deopt => {
-            super::reopt::note_deopt(ctx, func, leaf, LeafOrigin::Entry, DeoptEvent::Rerun);
+            // SAFETY: `ctx` is the live owner `Context` guaranteed by this function's contract and any `args_ptr`/`leaf` arguments remain valid for the call.
+            unsafe {
+                super::reopt::note_deopt(ctx, func, leaf, LeafOrigin::Entry, DeoptEvent::Rerun)
+            };
             Ok(None)
         }
         NativeRun::DeoptAt(resume) => {
@@ -3983,8 +4392,8 @@ pub(crate) fn install_leaf_for_test(
     func: &ByteCodeFunction,
     leaf: CompiledLeaf,
 ) -> Rc<CompiledLeaf> {
-    sync_cache_to_current_heap();
-    sync_cache_to_obarray(ctx.obarray.generation());
+    sync_cache_to_current_heap().expect("serial jit grace");
+    sync_cache_to_obarray(ctx.obarray.generation()).expect("serial jit grace");
     let id = func.jit_runtime().compiled_id_or_assign();
     let leaf = Rc::new(leaf);
     func.jit_runtime().disarm_leaf_slot();
@@ -4001,10 +4410,13 @@ pub(crate) fn install_leaf_for_test(
 /// Prepare an entry through its real front/backend protocol without executing
 /// the body. Native-observation tests call this at explicit fixture boundaries;
 /// pending/cancellation tests use the production seam directly.
+///
+/// # Safety
+/// `ctx` must be null or point to a live, dormant owner-thread [`Context`].
 #[cfg(any(test, feature = "test-support"))]
-pub(crate) fn prepare_entry_for_test(ctx: *mut Context, func: &ByteCodeFunction) {
+pub(crate) unsafe fn prepare_entry_for_test(ctx: *mut Context, func: &ByteCodeFunction) {
     use std::time::Duration;
-    sync_cache_to_current_heap();
+    sync_cache_to_current_heap().expect("serial jit grace");
     let id = func.jit_runtime().compiled_id_or_assign();
     COMPILED.with(|cache| {
         let mut cache = cache.borrow_mut();
@@ -4014,8 +4426,9 @@ pub(crate) fn prepare_entry_for_test(ctx: *mut Context, func: &ByteCodeFunction)
             // owner, from which obarray is reborrowed. The later raw ctx use is the read-only
             // CompileEnvScope::enter; compilation gets typed obarray and no native body runs.
             let obarray = unsafe { ctx.as_ref() }.map(|ctx| &*ctx.obarray);
-            let _vars = super::compile::inline_vars::CompileEnvScope::enter(ctx);
+            let _vars = unsafe { super::compile::inline_vars::CompileEnvScope::enter(ctx) };
             let entry = compile_cache_entry(
+                &mut cache,
                 id,
                 func,
                 obarray,
@@ -4056,22 +4469,30 @@ pub(crate) fn prepare_entry_for_test(ctx: *mut Context, func: &ByteCodeFunction)
 
 /// Compile/await OSR without transferring control into it: observations retain
 /// their original counters, side effects, stack snapshot and binding depths.
+///
+/// # Safety
+/// `ctx` must point to a live, dormant owner-thread [`Context`].
 #[cfg(any(test, feature = "test-support"))]
-pub(crate) fn prepare_osr_for_test(ctx: *mut Context, func: &ByteCodeFunction, pc: usize) {
+pub(crate) unsafe fn prepare_osr_for_test(ctx: *mut Context, func: &ByteCodeFunction, pc: usize) {
     use std::time::Duration;
     assert!(
         !ctx.is_null(),
         "OSR preparation requires the owning Context"
     );
-    sync_cache_to_current_heap();
+    sync_cache_to_current_heap().expect("serial jit grace");
     let id = func.jit_runtime().compiled_id_or_assign();
-    let _ = osr_lookup(ctx, func, pc, id);
+    // SAFETY: `ctx` is the live owner `Context` passed into this test helper.
+    let _ = unsafe { osr_lookup(ctx, func, pc, id) };
     assert!(
         super::bg::quiesce_for_test(Duration::from_secs(60)),
         "OSR backend readiness timed out"
     );
     assert!(
-        matches!(osr_lookup(ctx, func, pc, id), OsrLookup::Entry(_)),
+        matches!(
+            // SAFETY: `ctx` is the live owner `Context` passed into this test helper.
+            unsafe { osr_lookup(ctx, func, pc, id) },
+            OsrLookup::Entry(_)
+        ),
         "OSR job must finish"
     );
 }
@@ -4079,16 +4500,20 @@ pub(crate) fn prepare_osr_for_test(ctx: *mut Context, func: &ByteCodeFunction, p
 /// Observe an admitted upgrade without executing the retained T1 while its
 /// backend is pending. The production probe keeps budget, policy and hold
 /// decisions intact; this fixture helper does not promise an upgrade.
+///
+/// # Safety
+/// `ctx` must be null or point to a live, dormant owner-thread [`Context`].
 #[cfg(test)]
-pub(crate) fn prepare_upgrade_for_test(ctx: *mut Context, func: &ByteCodeFunction) {
+pub(crate) unsafe fn prepare_upgrade_for_test(ctx: *mut Context, func: &ByteCodeFunction) {
     use std::time::Duration;
-    sync_cache_to_current_heap();
+    sync_cache_to_current_heap().expect("serial jit grace");
     let Some(id) = func.jit_runtime().compiled_id() else {
         return;
     };
     if super::compile::jit_tier_upgrade_enabled() {
         COMPILED.with(|cache| {
-            probe_tier2_upgrade(&mut cache.borrow_mut(), id, func, ctx);
+            // SAFETY: `ctx` is the live owner `Context` passed into this test helper.
+            unsafe { probe_tier2_upgrade(&mut cache.borrow_mut(), id, func, ctx) };
         });
         assert!(
             super::bg::quiesce_for_test(Duration::from_secs(60)),
@@ -4108,15 +4533,15 @@ pub(crate) fn prepare_upgrade_for_test(ctx: *mut Context, func: &ByteCodeFunctio
 /// on their blocked carrier and must not call this reset. Cached relocation
 /// Values are unrooted while idle, so the cache cannot enter the next job.
 pub(crate) fn reset_carrier_tls() {
-    debug_assert_eq!(
-        native_depth(),
-        0,
-        "a reused carrier must have no native leaf guards from its completed job"
-    );
-    #[cfg(any(test, debug_assertions))]
+    // A live frame still owns its leaves. Zeroing the counter first would
+    // let the mint succeed and drop those leaves under the frame.
+    let Ok(receipt) = JitGracePeriod::mint_serial() else {
+        return;
+    };
+    #[cfg(any(test, debug_assertions, feature = "test-support"))]
     NATIVE_DEPTH.with(|depth| depth.set(0));
-    clear();
-    COMPILED_HEAP.with(|slot| slot.set(None));
+    clear(receipt);
+    COMPILED_HEAP.with(|slot| slot.set(CompiledHeapPin::Unpinned));
     DROPPED_LEAF_TOTALS.with(|totals| {
         totals.set(LeafTotals {
             leaves: 0,
@@ -4148,18 +4573,13 @@ pub(crate) fn native_depth_reset_leak_probe_for_test() -> NativeDepthResetObserv
     std::thread::spawn(|| {
         assert_eq!(native_depth(), 0, "the probe starts outside native code");
         let guard = NativeDepthGuard::enter();
-        assert_eq!(
-            native_depth(),
-            u32::from(cfg!(any(test, debug_assertions))),
-            "the real guard establishes the configured native extent"
-        );
+        assert_eq!(native_depth(), 1, "the guard records one live native frame");
         std::mem::forget(guard);
 
         let reset = std::panic::catch_unwind(reset_carrier_tls);
         let retained_depth = native_depth();
         // Only the fixture repairs the deliberately leaked TLS, after observing
-        // whether the failed reset preserved it. A normal reset must then finish.
-        #[cfg(any(test, debug_assertions))]
+        // whether the refused reset preserved it. A normal reset must then finish.
         NATIVE_DEPTH.with(|depth| depth.set(0));
         reset_carrier_tls();
         NativeDepthResetObservation {
@@ -4182,7 +4602,10 @@ pub(crate) fn carrier_tls_fingerprint(h: &mut u64) {
             (c.len() as u64) ^ ((c.retired.len() as u64) << 32)
         }),
     );
-    neovm_value::tls_fingerprint::mix(h, COMPILED_HEAP.with(|slot| slot.get().is_some() as u64));
+    neovm_value::tls_fingerprint::mix(
+        h,
+        COMPILED_HEAP.with(|slot| u64::from(slot.get() != CompiledHeapPin::Unpinned)),
+    );
     neovm_value::tls_fingerprint::mix(h, COMPILED_OBARRAY.with(|slot| slot.get().is_some() as u64));
     neovm_value::tls_fingerprint::mix_debug(h, DROPPED_LEAF_TOTALS.with(|slot| slot.get()));
     neovm_value::tls_fingerprint::mix(h, INLINE_DEPS.with(|slot| slot.borrow().len() as u64));

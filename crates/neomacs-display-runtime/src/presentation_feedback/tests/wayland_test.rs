@@ -63,3 +63,106 @@ fn receipt_identifies_confirmed_layout_not_latest_requested_layout() {
     receipts.observe(NativeFeedback::Discarded(submission(4, 400)));
     assert_eq!(fs::read_to_string(&path).unwrap(), latest);
 }
+
+#[test]
+fn display_scoped_drops_protocol_before_display_owner_on_drop_and_unwind() {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    struct DropRecorder {
+        label: &'static str,
+        log: Rc<RefCell<Vec<&'static str>>>,
+    }
+
+    impl Drop for DropRecorder {
+        fn drop(&mut self) {
+            self.log.borrow_mut().push(self.label);
+        }
+    }
+
+    struct FakeProtocol {
+        _presentation: DropRecorder,
+        _connection: DropRecorder,
+        log: Rc<RefCell<Vec<&'static str>>>,
+    }
+
+    impl Drop for FakeProtocol {
+        fn drop(&mut self) {
+            self.log.borrow_mut().push("protocol_drop");
+        }
+    }
+
+    let log = Rc::new(RefCell::new(Vec::new()));
+    {
+        let _scoped = DisplayScoped::new(
+            FakeProtocol {
+                _presentation: DropRecorder {
+                    label: "presentation",
+                    log: Rc::clone(&log),
+                },
+                _connection: DropRecorder {
+                    label: "connection",
+                    log: Rc::clone(&log),
+                },
+                log: Rc::clone(&log),
+            },
+            DropRecorder {
+                label: "display_owner",
+                log: Rc::clone(&log),
+            },
+        );
+    }
+    assert_eq!(
+        *log.borrow(),
+        vec![
+            "protocol_drop",
+            "presentation",
+            "connection",
+            "display_owner"
+        ]
+    );
+
+    log.borrow_mut().clear();
+    let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _scoped = DisplayScoped::new(
+            FakeProtocol {
+                _presentation: DropRecorder {
+                    label: "presentation",
+                    log: Rc::clone(&log),
+                },
+                _connection: DropRecorder {
+                    label: "connection",
+                    log: Rc::clone(&log),
+                },
+                log: Rc::clone(&log),
+            },
+            DropRecorder {
+                label: "display_owner",
+                log: Rc::clone(&log),
+            },
+        );
+        panic!("simulated unwind");
+    }));
+    assert!(unwind.is_err());
+    assert_eq!(
+        *log.borrow(),
+        vec![
+            "protocol_drop",
+            "presentation",
+            "connection",
+            "display_owner"
+        ]
+    );
+}
+
+#[test]
+fn uninitialized_observer_without_attached_display_fails_closed_to_disabled() {
+    let mut observer = PresentationObserver {
+        state: ObserverState::Uninitialized {
+            path: PathBuf::from("/tmp/unused-presentation-receipt"),
+            display_owner: None,
+        },
+    };
+    assert!(observer.take_uninitialized_display().is_none());
+    assert!(matches!(observer.state, ObserverState::Disabled));
+}

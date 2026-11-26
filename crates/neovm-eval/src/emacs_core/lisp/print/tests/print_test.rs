@@ -4,7 +4,7 @@ pub use crate::emacs_core::builtins::{builtin_puthash, builtin_remhash};
 use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
 use neovm_edit::buffer::LispCharPos1;
 use neovm_edit::emacs_core::marker::make_marker_value;
-use neovm_value::intern::{intern, intern_uninterned, intern_uninterned_lisp_string};
+use neovm_value::intern::{intern, make_uninterned_symbol, make_uninterned_symbol_lisp_string};
 use neovm_value::value::{
     HashTableTest, LambdaData, LambdaParams, StringTextPropertyRun,
     set_string_text_properties_for_value,
@@ -68,19 +68,25 @@ fn print_symbol_escapes_numeric_looking_names_like_gnu() {
 #[test]
 fn print_uninterned_symbols_follow_gnu_default_print_gensym_nil() {
     let _harness = crate::test_utils::unit_harness();
-    assert_eq!(print_value(&Value::symbol(intern_uninterned("foo"))), "foo");
     assert_eq!(
-        print_value(&Value::symbol(intern_uninterned(":foo"))),
+        print_value(&Value::symbol(make_uninterned_symbol("foo"))),
+        "foo"
+    );
+    assert_eq!(
+        print_value(&Value::symbol(make_uninterned_symbol(":foo"))),
         ":foo"
     );
-    assert_eq!(print_value(&Value::symbol(intern_uninterned(""))), "##");
+    assert_eq!(
+        print_value(&Value::symbol(make_uninterned_symbol(""))),
+        "##"
+    );
 }
 
 #[test]
 fn print_raw_unibyte_uninterned_symbol_bytes_match_gnu_encoding() {
     let _harness = crate::test_utils::unit_harness();
     let raw_name = neovm_value::heap_types::LispString::from_unibyte(vec![0xFF, b'a']);
-    let sym = Value::symbol(intern_uninterned_lisp_string(&raw_name));
+    let sym = Value::symbol(make_uninterned_symbol_lisp_string(&raw_name));
     assert_eq!(print_value_bytes(&sym), vec![0xC1, 0xBF, b'a']);
 }
 
@@ -89,15 +95,15 @@ fn print_uninterned_symbols_support_print_gensym_round_trip_syntax() {
     let _harness = crate::test_utils::unit_harness();
     let options = PrintOptions::with_print_gensym(true);
     assert_eq!(
-        print_value_with_options(&Value::symbol(intern_uninterned("foo")), options),
+        print_value_with_options(&Value::symbol(make_uninterned_symbol("foo")), options),
         "#:foo"
     );
     assert_eq!(
-        print_value_with_options(&Value::symbol(intern_uninterned(":foo")), options),
+        print_value_with_options(&Value::symbol(make_uninterned_symbol(":foo")), options),
         "#::foo"
     );
     assert_eq!(
-        print_value_with_options(&Value::symbol(intern_uninterned("")), options),
+        print_value_with_options(&Value::symbol(make_uninterned_symbol("")), options),
         "#:"
     );
 }
@@ -107,7 +113,7 @@ fn print_gensym_raw_unibyte_symbol_bytes_match_gnu_encoding() {
     let _harness = crate::test_utils::unit_harness();
     let options = PrintOptions::with_print_gensym(true);
     let raw_name = neovm_value::heap_types::LispString::from_unibyte(vec![0xFF, b'a']);
-    let sym = Value::symbol(intern_uninterned_lisp_string(&raw_name));
+    let sym = Value::symbol(make_uninterned_symbol_lisp_string(&raw_name));
     assert_eq!(
         print_value_bytes_with_options(&sym, options),
         vec![b'#', b':', 0xC1, 0xBF, b'a']
@@ -559,10 +565,10 @@ fn print_default_handles_self_referential_bytecode_constants() {
     let _harness = crate::test_utils::unit_harness();
     let mut function =
         crate::emacs_core::bytecode::ByteCodeFunction::new(LambdaParams::simple(vec![]));
-    function.constants.ensure_owned().push(Value::NIL);
+    function.constants_mut().ensure_owned().push(Value::NIL);
     let bytecode = Value::make_bytecode(function);
     neovm_value::test_support::authority::with_bytecode_data_mut_for_test(bytecode, |data| {
-        data.constants[0] = bytecode
+        data.constants_mut()[0] = bytecode
     });
 
     assert_eq!(print_value(&bytecode), "#[nil nil [#0] 0]");
@@ -581,7 +587,7 @@ fn print_default_uses_gnu_depth_for_nested_bytecode_backrefs() {
     let record = Value::make_record(vec![Value::symbol("foo"), Value::NIL]);
     let mut function =
         crate::emacs_core::bytecode::ByteCodeFunction::new(LambdaParams::simple(vec![]));
-    function.constants.ensure_owned().push(record);
+    function.constants_mut().ensure_owned().push(record);
     let bytecode = Value::make_bytecode(function);
     record.with_record_data_mut(|slots| slots[1] = bytecode);
 
@@ -659,9 +665,9 @@ fn print_recursive_closure_uses_backreference() {
 #[test]
 fn print_frame_handles_use_oracle_style_f_prefix() {
     let _harness = crate::test_utils::unit_harness();
-    let f1 = Value::make_frame(neovm_value::display_vocab::FRAME_ID_BASE);
-    let f2 = Value::make_frame(neovm_value::display_vocab::FRAME_ID_BASE + 1);
-    let legacy = Value::make_frame(7);
+    let f1 = Value::mint_frame(neovm_value::display_vocab::FRAME_ID_BASE);
+    let f2 = Value::mint_frame(neovm_value::display_vocab::FRAME_ID_BASE + 1);
+    let legacy = Value::mint_frame(7);
 
     assert_eq!(print_value(&f1), "#<frame F1 0x100000000>");
     assert_eq!(print_value_bytes(&f1), b"#<frame F1 0x100000000>");

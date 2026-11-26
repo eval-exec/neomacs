@@ -16,12 +16,55 @@ use neovm_value::display_vocab::FrameId;
 /// GNU's initial terminal id (`initial_terminal`).
 pub const TERMINAL_ID: u64 = 0;
 
+/// GNU's controlling terminal device name (`DEV_TTY`, `src/keyboard.c:94`,
+/// matched by `get_named_terminal (dev_tty)` at `src/terminal.c:263-277`).
+#[cfg(windows)]
+pub const CONTROLLING_DEV_TTY_NAME: &str = "CONOUT$";
+#[cfg(not(windows))]
+pub const CONTROLLING_DEV_TTY_NAME: &str = "/dev/tty";
+
 use super::super::Context;
 
+/// Evaluator operations invoked by [`TerminalHost::run_emergency_escape`]
+/// during GNU's controlling-TTY 2nd-`C-g` prompts (`src/keyboard.c:12667-12702`).
+pub trait EmergencyEscapeOps {
+    /// GNU `Fdo_auto_save (Qt, Qnil)` for `"Auto-save? (y or n) "`.
+    fn auto_save(&mut self);
+
+    /// GNU `emacs_abort ()` -> `terminate_due_to_signal (SIGABRT, 40)` for
+    /// `"Abort (and dump core)? (y or n) "` (`src/sysdep.c:2401`,
+    /// `src/emacs.c:441-483`, `shut_down_emacs` `:3104-3160`).
+    fn abort_orderly(&mut self) -> !;
+
+    /// Raw `tty-mode-set-strings` bytes for the controlling terminal, queried
+    /// when re-entering TTY modes on `"Continuing..."` (`src/keyboard.c:12710`,
+    /// `src/term.c:222`).
+    fn tty_mode_set_strings(&self) -> Vec<u8> {
+        Vec::new()
+    }
+}
+
+/// Arguments forwarded from `suspend-emacs` to the controlling terminal host
+/// (GNU `Fsuspend_emacs`, `src/keyboard.c:12427-12476`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SuspendRequest<'a> {
+    pub stuffstring: Option<&'a [u8]>,
+    pub cannot_suspend: bool,
+    pub cwd: Option<&'a std::path::Path>,
+}
 pub trait TerminalHost {
-    fn suspend_tty(&mut self) -> Result<(), String>;
-    fn resume_tty(&mut self) -> Result<(), String>;
-    fn delete_terminal(&mut self) -> Result<(), String> {
+    fn suspend_tty(&mut self, reset_strings: &[u8]) -> Result<(), String>;
+    fn resume_tty(&mut self, set_strings: &[u8]) -> Result<(), String>;
+    fn delete_terminal(&mut self, _reset_strings: &[u8]) -> Result<(), String> {
+        Ok(())
+    }
+    /// Stop the process and yield the controlling TTY to its superior
+    /// (GNU `sys_suspend` / `sys_subshell`, `src/sysdep.c:629-750`).
+    ///
+    /// Only the primary interactive TTY host stops the process or spawns a
+    /// subshell; test and secondary hosts leave this as a no-op so unit tests
+    /// never send `SIGTSTP` to the test runner.
+    fn sys_suspend(&mut self, _request: SuspendRequest<'_>) -> Result<(), String> {
         Ok(())
     }
     /// GNU `Fsend_string_to_terminal`'s `fwrite`+`fflush` on the terminal's
@@ -32,6 +75,34 @@ pub trait TerminalHost {
     /// terminal record, not this error.
     fn write_bytes(&mut self, _bytes: &[u8]) -> Result<(), String> {
         Err("terminal host has no output stream".to_owned())
+    }
+
+    /// Current winsize of this host's own input, GNU `get_tty_size` on
+    /// `FRAME_TTY(f)->input` (`src/sysdep.c:1396`).
+    ///
+    /// `Some((0, 0))` is a failed ioctl or a successful 0×0 report. `None`
+    /// means this host has no input fd, so the caller keeps the size stored
+    /// on the terminal when it was opened.
+    fn tty_winsize_cells(&mut self) -> Option<(u32, u32)> {
+        None
+    }
+
+    /// GNU `handle_interrupt` controlling-TTY emergency escape
+    /// (`src/keyboard.c:12622-12711`): emit `reset_strings` and restore
+    /// terminal modes, suspend with `SIGTSTP`, and on resume prompt for
+    /// auto-save / abort / continue before re-entering raw mode and emitting
+    /// `ops.tty_mode_set_strings()`.
+    ///
+    /// Returns `true` when this host owns the interactive controlling TTY and
+    /// handled the emergency escape; returns `false` when the host does not
+    /// support emergency escape so the evaluator falls back to GNU's
+    /// `force_quit_count` path (`src/keyboard.c:12712-12720`).
+    fn run_emergency_escape(
+        &mut self,
+        _reset_strings: &[u8],
+        _ops: &mut dyn EmergencyEscapeOps,
+    ) -> bool {
+        false
     }
 }
 /// Validated identity of a text terminal a frontend must open for one frame.

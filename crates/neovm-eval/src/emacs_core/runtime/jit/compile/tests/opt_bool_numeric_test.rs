@@ -128,7 +128,7 @@ fn tier0(ctx: &mut Context, source: &ByteCodeFunction, args: &[Value]) -> Result
 }
 
 fn native_ok(ctx: &mut Context, leaf: &CompiledLeaf, args: &[Value]) -> Value {
-    match leaf.call(ctx as *mut Context as *mut u8, args) {
+    match unsafe { leaf.call(ctx as *mut Context as *mut u8, args) } {
         NativeRun::Ok(bits) => unsafe {
             /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
             Value::from_bits(bits)
@@ -367,14 +367,14 @@ fn cold_source(op: Op, wrong_on_right: bool) -> ByteCodeFunction {
 fn assert_complete_cold_frame(source: &ByteCodeFunction) {
     let cfg = analyze_cfg(
         source.executable_ops(),
-        &source.constants,
+        source.constants(),
         source.executable_gnu_byte_offset_map(),
         4,
     )
     .expect("cold CFG");
     let plan = opt_backend::build_plan(
         source.executable_ops(),
-        &source.constants,
+        source.constants(),
         &cfg,
         ir::ParamShape {
             required: 4,
@@ -540,7 +540,7 @@ fn opt_bool_numeric_generic_feedback_normalizes_success_and_preserves_signal_aft
                 assert_eq!(stored.cons_cdr().cons_cdr().cons_car(), payload);
                 ctx.eval_str("(setq t34-o32-side nil)").unwrap();
                 assert_eq!(
-                    leaf.call(&mut ctx as *mut Context as *mut u8, &args),
+                    unsafe { leaf.call(&mut ctx as *mut Context as *mut u8, &args) },
                     NativeRun::Signal,
                     "generic failure must use STATUS_SIGNAL without deopt"
                 );

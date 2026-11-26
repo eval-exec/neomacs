@@ -3,7 +3,6 @@
 
 use super::super::TaggedHeap;
 use super::*;
-#[cfg(any(test, feature = "test-support"))]
 use crate::tagged::header::HashTableObj;
 use crate::tagged::header::{GcHeader, HeapObjectKind, VecLikeHeader, VecLikeType};
 use crate::tagged::value::TaggedValue;
@@ -46,13 +45,18 @@ impl WeakSweepPermit {
                 {
                     return Err(RegistrationError::Publication);
                 }
-                let eligible =
-                    heap.collector_tables()
+                // Depth and the authority word are object metadata. Read them
+                // before inspect: a stopped visit's keeper lease CASes the
+                // word to WRITER, and a non-quiescent word must refuse here
+                // instead of panicking inside that lease.
+                let obj = &*(address as *const HashTableObj);
+                let metadata_clear = obj.test_depth.load(Ordering::Acquire) == 0
+                    && obj.authority.load(Ordering::Acquire) == 0;
+                let eligible = metadata_clear
+                    && heap
+                        .collector_tables()
                         .inspect(address as *mut HashTableObj, |ht| {
-                            ht.weakness.is_some()
-                                && ht.data.pending_entries().is_none()
-                                && ht.test_depth.load(Ordering::Acquire) == 0
-                                && ht.data.authority.load(Ordering::Acquire) == 0
+                            ht.weakness.is_some() && ht.data.pending_entries().is_none()
                         });
                 if !eligible || header.generation.permanent() || !header.flags.boxed() {
                     return Err(RegistrationError::Publication);
@@ -111,12 +115,22 @@ impl WeakSweepPermit {
                 }
                 TaggedValue::from_veclike_ptr(address as *const VecLikeHeader)
             };
+            // The enter CAS is the non-quiescent refusal. Depth is a separate
+            // object field; the CAS does not change it. Read it before the
+            // lease so the callback does not look for it on the payload.
+            // SAFETY: the stopped catalog retains this initialized hash table.
+            let depth_clear = unsafe {
+                (*(address as *const HashTableObj))
+                    .test_depth
+                    .load(Ordering::Acquire)
+                    == 0
+            };
             let lease = KeeperTableMut::enter(stopped, table)?;
             let accepted = lease.inspect(|ht| {
                 ht.weakness.is_none()
                     || (self.covers(heap, address)
                         && ht.data.pending_entries().is_none()
-                        && ht.test_depth.load(Ordering::Acquire) == 0)
+                        && depth_clear)
             });
             if !accepted {
                 return Err(RendezvousError::Publication);

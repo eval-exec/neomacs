@@ -420,15 +420,23 @@ fn set_fringe_bitmap_face_records_override() {
     let bitmap = eval.fringe_bitmaps.get_by_index(index).expect("entry");
     assert_eq!(bitmap.face.as_deref(), Some("magit-section-heading"));
 
-    // A subsequent geometry-only redefinition preserves the face override.
+    // A subsequent redefinition drops the face override: GNU's
+    // `init_fringe_bitmap` calls `destroy_fringe_bitmap`, which resets
+    // `fringe_faces[n]` to nil before storing the new definition (fringe.c).
+    // Attested against GNU 31.1 on X11: a bitmap given a red-on-blue face and
+    // then redefined paints black bits on the `fringe` background.
     define_via_eval(
         &mut eval,
         "(define-fringe-bitmap 'faced [#b11000000 #b11000000])",
     );
     let bitmap = eval.fringe_bitmaps.get_by_index(index).expect("entry");
     assert_eq!(
-        bitmap.face.as_deref(),
-        Some("magit-section-heading"),
-        "redefining geometry keeps the set-fringe-bitmap-face override"
+        bitmap.face, None,
+        "redefining a bitmap clears its set-fringe-bitmap-face override"
+    );
+    assert_eq!(
+        fringe_index(&mut eval, "faced"),
+        index,
+        "a redefinition keeps the bitmap's index"
     );
 }

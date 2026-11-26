@@ -77,7 +77,7 @@ fn context(shape: Shape, name: &str, projected: bool) -> Context {
                 .define_bool_variable(name, true, ByteBooleanVars::ErasedByLreadInit);
         }
         Shape::Obj => {
-            ev.obarray.intern(name);
+            ev.obarray.intern_member(name);
             ev.obarray
                 .install_objfwd(intern(name), alloc_objfwd(Value::fixnum(5)));
         }
@@ -197,8 +197,8 @@ fn bytecode_script(name: &str) -> ByteCodeFunction {
         optional: Vec::new(),
         rest: None,
     });
-    f.lexical = true;
-    f.ops = vec![
+    f.set_lexical(true);
+    f.set_ops(vec![
         Op::Constant(1),
         Op::VarBind(0),
         Op::Constant(2),
@@ -208,9 +208,16 @@ fn bytecode_script(name: &str) -> ByteCodeFunction {
         Op::VarRef(0),
         Op::List(2),
         Op::Return,
-    ];
-    f.constants = vec![Value::symbol(name), Value::fixnum(50), Value::fixnum(51)].into();
-    f.max_stack = StackDepth::for_test(4);
+    ]);
+    f.set_constants(
+        vec![
+            Value::from_sym_id(intern(name)),
+            Value::fixnum(50),
+            Value::fixnum(51),
+        ]
+        .into(),
+    );
+    f.set_max_stack(StackDepth::for_test(4));
     f
 }
 
@@ -258,12 +265,24 @@ fn divergences() -> Vec<String> {
             .map(Step::Form)
             .chain([Step::Bytecode])
             .collect();
-        let mut plain = context(shape, name, false);
-        let mut projected = context(shape, name, true);
+        let plain = context(shape, name, false);
+        let mut parked_plain = plain.park_for_test();
+        let projected = context(shape, name, true);
+        let mut parked_projected = projected.park_for_test();
         let mut collected = context(shape, name, true);
         for step in &steps {
+            let parked_collected = collected.park_for_test();
+            let mut plain = parked_plain.resume_for_test().expect("resume plain");
             let want = step.run(&mut plain, name);
+            parked_plain = plain.park_for_test();
+            let mut projected = parked_projected
+                .resume_for_test()
+                .expect("resume projected");
             let got = step.run(&mut projected, name);
+            parked_projected = projected.park_for_test();
+            collected = parked_collected
+                .resume_for_test()
+                .expect("resume collected");
             collected.gc_collect_exact();
             let got_collected = step.run(&mut collected, name);
             for (arm, got) in [("projected", got), ("collected", got_collected)] {

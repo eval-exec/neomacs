@@ -11,7 +11,7 @@ struct HeldPending;
 impl Drop for HeldPending {
     fn drop(&mut self) {
         // Cancel this mutator's jobs before its Context dies, even on failure.
-        cache::clear();
+        cache::clear_with_serial_receipt().expect("serial jit grace");
         bg::force_mode_for_test(None);
         force_profit_gate_for_test(true);
     }
@@ -127,7 +127,7 @@ fn held_pending_callee_keeps_cleanup_backtrace_args_after_recovery() {
                 "((\"kept-b\" (83 . 89) [97]))",
             ),
         ] {
-            cache::clear();
+            cache::clear_with_serial_receipt().expect("serial jit grace");
             let name = format!("neo-detach-pending-{nargs}");
             ev.eval_str(&format!(
                 "(progn
@@ -154,7 +154,11 @@ fn held_pending_callee_keeps_cleanup_backtrace_args_after_recovery() {
             let mut ops = vec![Op::Constant(0)];
             ops.extend((0..nargs).map(|_| Op::StackRef(nargs as u16)));
             ops.extend([Op::Call(nargs as u16), Op::Return]);
-            let caller = function(nargs, ops, vec![Value::symbol(&name)]);
+            let caller = function(
+                nargs,
+                ops,
+                vec![Value::from_sym_id(intern((&name).as_ref()))],
+            );
             let leaf = compile_bytecode_function_with(&caller, Some(&ev.obarray))
                 .expect("caller compiles synchronously");
             let arguments = ev.eval_str(argument_form).expect("fresh arguments");
@@ -166,7 +170,7 @@ fn held_pending_callee_keeps_cleanup_backtrace_args_after_recovery() {
             let spec0 = ev.specpdl.len();
             let args0 = ev.backtrace_args_stack_len_for_test();
             let ctx_ptr = &mut ev as *mut Context as *mut u8;
-            assert_eq!(leaf.call(ctx_ptr, &words), NativeRun::Signal);
+            assert_eq!(unsafe { leaf.call(ctx_ptr, &words) }, NativeRun::Signal);
             let id = callee
                 .get_bytecode_data()
                 .expect("callee")

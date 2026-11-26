@@ -6,7 +6,7 @@
 
 use super::*;
 use crate::heap_types::LispMarker;
-use crate::intern::intern_uninterned;
+use crate::intern::make_uninterned_symbol;
 use crate::tagged::header::ImageResident;
 use std::sync::Arc;
 
@@ -284,9 +284,10 @@ fn claim(
         } else {
             concurrent_try_mark_owned_logged::<false>(value, &job.base, &mut stack, &mut legacy)
         };
-        gray.extend(stack.into_values());
-        logs.result.promo.extend(legacy.result.promo);
-        logs.result.symbols.extend(legacy.result.symbols);
+        // SAFETY: synchronous test helper on the owning thread before sweep.
+        gray.extend(unsafe { stack.into_values() });
+        logs.promo.extend(legacy.promo);
+        logs.symbols.extend(legacy.symbols);
         handled
     }
 }
@@ -349,11 +350,11 @@ fn concurrent_leaf_claims_obey_generation_parity_and_once_only_promotion() {
                             expected
                         );
                         assert!(gray.is_empty());
-                        assert!(logs.result.symbols.is_empty());
+                        assert!(logs.symbols.is_empty());
                         if major && age == 0 {
-                            assert_eq!(logs.result.promo, [header(value) as usize]);
+                            assert_eq!(logs.promo, [header(value) as usize]);
                         } else {
-                            assert!(logs.result.promo.is_empty());
+                            assert!(logs.promo.is_empty());
                         }
                         if expected == 1 {
                             assert!(unsafe { (*header(value)).is_marked_at(parity) });
@@ -386,7 +387,7 @@ fn concurrent_leaf_claims_refuse_post_start_pages_without_touching_the_header() 
             let mut logs = EnabledWorkerMarkLogs::default();
             assert!(!claim(fresh, &job, &mut Vec::new(), &mut logs));
             assert_eq!(unsafe { (*header(fresh)).raw_mark() }, before);
-            assert!(logs.result.promo.is_empty());
+            assert!(logs.promo.is_empty());
             assert_eq!(
                 job.enabled
                     .as_ref()
@@ -416,7 +417,7 @@ fn concurrent_leaf_claims_keep_mapped_and_residual_box_symbol_positions_deferred
                 heap.register_mapped_veclike_object(object.cast(), size_of::<SymbolWithPosObj>())
             };
         } else {
-            heap.link_veclike(object.cast());
+            unsafe { heap.link_veclike(object.cast()) };
         }
         let value = unsafe { TaggedValue::from_veclike_ptr(object.cast()) };
         let job = job(&mut heap, false);
@@ -424,7 +425,7 @@ fn concurrent_leaf_claims_keep_mapped_and_residual_box_symbol_positions_deferred
         let mut logs = EnabledWorkerMarkLogs::default();
         assert!(!claim(value, &job, &mut Vec::new(), &mut logs));
         assert_eq!(unsafe { (*header(value)).raw_mark() }, before);
-        assert!(logs.result.symbols.is_empty());
+        assert!(logs.symbols.is_empty());
         assert_eq!(
             job.enabled
                 .as_ref()
@@ -441,7 +442,7 @@ fn concurrent_leaf_claims_keep_mapped_and_residual_box_symbol_positions_deferred
 fn concurrent_leaf_symbol_positions_route_both_fields_and_skip_born_black_payloads() {
     for major in [false, true] {
         let mut heap = heap(true, true, major);
-        let symbol = TaggedValue::from_sym_id(intern_uninterned("u35-leaf-symbol"));
+        let symbol = TaggedValue::from_sym_id(make_uninterned_symbol("u35-leaf-symbol"));
         let child = heap.alloc_cons(TaggedValue::fixnum(31), TaggedValue::NIL);
         // The ordinary constructor accepts two Values. Use a heap value in
         // pos here to prove both trace slots follow the mutator tracer.
@@ -452,7 +453,7 @@ fn concurrent_leaf_symbol_positions_route_both_fields_and_skip_born_black_payloa
         unsafe { (*header(value)).set_marked(job.parity) };
         assert!(claim(value, &job, &mut gray, &mut logs));
         assert!(gray.is_empty());
-        assert!(logs.result.symbols.is_empty());
+        assert!(logs.symbols.is_empty());
         assert_eq!(
             job.enabled
                 .as_ref()
@@ -470,7 +471,7 @@ fn concurrent_leaf_symbol_positions_route_both_fields_and_skip_born_black_payloa
         let crate::tagged::value::ValueKind::Symbol(id) = symbol.kind() else {
             unreachable!()
         };
-        assert_eq!(logs.result.symbols, [id]);
+        assert_eq!(logs.symbols, [id]);
     }
 }
 
@@ -495,8 +496,8 @@ fn concurrent_cycle(heap: &mut TestHeap, roots: &[TaggedValue]) {
     }
     heap.incremental_drain_all();
     let live_bytes = heap.live_bytes();
-    heap.incremental_finish(live_bytes, std::time::Instant::now());
-    heap.finish_incremental_sweep_now();
+    heap.incremental_finish_for_test(live_bytes, std::time::Instant::now());
+    heap.finish_incremental_sweep_now_for_test();
 }
 
 fn concurrent_leaf_claims_preserve_weak_symbol_liveness_and_reclaim_dead_objects() {
@@ -504,7 +505,7 @@ fn concurrent_leaf_claims_preserve_weak_symbol_liveness_and_reclaim_dead_objects
     for generational in [false, true] {
         for chunk_map in [false, true] {
             let mut heap = heap(true, chunk_map, generational);
-            let key = TaggedValue::from_sym_id(intern_uninterned("u35-leaf-weak-key"));
+            let key = TaggedValue::from_sym_id(make_uninterned_symbol("u35-leaf-weak-key"));
             let position = heap.alloc_symbol_with_pos(key, TaggedValue::fixnum(3));
             let marker = Leaf::Marker.allocate(&mut heap);
             let bignum = Leaf::Bignum.allocate(&mut heap);
@@ -571,7 +572,8 @@ fn concurrent_leaf_claims_do_not_read_marker_chain_payloads() {
 fn concurrent_leaf_claim_rmw_has_one_winner_across_threads() {
     let mut heap = heap(true, true, true);
     let value = Leaf::Marker.allocate(&mut heap);
-    let value_word = MarkWord::of(value);
+    // SAFETY: `value` lives on `heap`, which stays alive until the scoped worker joins.
+    let value_word = unsafe { MarkWord::of(value) };
     let job = job(&mut heap, true);
     let promotions = std::thread::scope(|scope| {
         let workers: Vec<_> = (0..8)
@@ -582,8 +584,13 @@ fn concurrent_leaf_claim_rmw_has_one_winner_across_threads() {
                     // SAFETY: this scoped collector fixture retains the heap
                     // and admitted job through every worker, with no payload
                     // mutation, collection or reclamation during the claims.
-                    assert!(claim(value_word.value(), job, &mut Vec::new(), &mut logs));
-                    logs.result.promo.len()
+                    assert!(claim(
+                        unsafe { value_word.value() },
+                        job,
+                        &mut Vec::new(),
+                        &mut logs
+                    ));
+                    logs.promo.len()
                 })
             })
             .collect();
@@ -611,12 +618,20 @@ fn concurrent_leaf_claims_lost_worker_result_fails_closed_with_generations_off()
     drop(sender);
     // Model an exited worker that lost its child/symbol result. No real
     // worker is using this heap, and no marking or sweep may follow the loss.
-    heap.concurrent_mark_running = true;
-    heap.gc_exited = Some(receiver);
+    let heap_id = heap.heap_identity();
+    // SAFETY: synthetic serial fixture modeling a disconnected worker.
+    unsafe {
+        heap.concurrent_mark_running.set(true);
+        heap.gc_exited.install_for_heap(heap_id, receiver);
+    }
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         heap.join_concurrent_mark();
     }));
-    heap.concurrent_mark_running = false;
+    // SAFETY: serial fixture teardown; no real worker exists.
+    unsafe {
+        heap.concurrent_mark_running.set(false);
+        heap.gc_exited.clear_sentinel_for_test(heap_id);
+    }
     heap.install();
     assert!(result.is_err());
     assert!(!heap.sweep_in_progress);

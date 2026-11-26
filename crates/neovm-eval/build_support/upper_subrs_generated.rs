@@ -256,7 +256,29 @@ fn validate_against_plan(
     Ok(())
 }
 
+/// `// host-cfg: <label>` for eval-owned feature classes. The line includes
+/// its trailing newline and no indent; the table emitter adds the indent.
+fn standin_cfg_comment(cfg: &str) -> Option<String> {
+    let class = host_cfg::HostCfgClass::from_label(cfg)?;
+    if class.standin_ignores_feature_cfg() {
+        Some(format!(
+            "{}{cfg}\n",
+            host_cfg::HostCfgClass::STANDIN_CFG_COMMENT_PREFIX
+        ))
+    } else {
+        None
+    }
+}
+
 fn cfg_attribute(cfg: &str) -> Result<Option<&'static str>, String> {
+    if let Some(class) = host_cfg::HostCfgClass::from_label(cfg) {
+        if class.standin_ignores_feature_cfg() {
+            // Sqlite, xwidgets, and vm-profile are eval's own features. The
+            // stand-in is dependency-free, so it is compiled everywhere and
+            // the unit runtimes select it with HostCfgClass::is_active.
+            return Ok(None);
+        }
+    }
     Ok(Some(match cfg {
         "always" => return Ok(None),
         "macos" => "target_os = \"macos\"",
@@ -264,8 +286,6 @@ fn cfg_attribute(cfg: &str) -> Result<Option<&'static str>, String> {
         "not-macos" => "not(target_os = \"macos\")",
         "x11-only" => "not(any(windows, target_os = \"macos\"))",
         "dbus" => "neomacs_have_dbus",
-        "sqlite" => "feature = \"sqlite\"",
-        "xwidgets" => "feature = \"xwidgets\"",
         other => {
             return Err(format!(
                 "cfg class {other:?} has no rendered attribute; add it here and to HostCfgClass"
@@ -279,6 +299,9 @@ pub fn render(rows: &[Row]) -> Result<String, String> {
     let mut out = String::with_capacity(rows.len() * 200 + HEADER.len() + TABLE_HEAD.len());
     out.push_str(HEADER);
     for (index, row) in rows.iter().enumerate() {
+        if let Some(comment) = standin_cfg_comment(&row.cfg) {
+            out.push_str(&comment);
+        }
         if let Some(attribute) = cfg_attribute(&row.cfg)? {
             out.push_str(&format!("#[cfg({attribute})]\n"));
         }
@@ -289,6 +312,10 @@ pub fn render(rows: &[Row]) -> Result<String, String> {
     }
     out.push_str(TABLE_HEAD);
     for (index, row) in rows.iter().enumerate() {
+        if let Some(comment) = standin_cfg_comment(&row.cfg) {
+            out.push_str("    ");
+            out.push_str(&comment);
+        }
         if let Some(attribute) = cfg_attribute(&row.cfg)? {
             out.push_str(&format!("    #[cfg({attribute})]\n"));
         }

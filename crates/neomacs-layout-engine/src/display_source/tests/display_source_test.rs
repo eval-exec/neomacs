@@ -434,6 +434,7 @@ fn text_sources_preserve_emacs_non_unicode_and_raw_byte_characters_for_display()
         value,
         RenderFaceRef::FaceId(FaceId::new(0)),
         LispStringSourceOrigin::Normal,
+        StringSourceRootScope::Rooted(eval.owned_root_retainer()),
     )
     .expect("Lisp string source");
     let multibyte_string_items = collect_items(&mut source);
@@ -452,6 +453,7 @@ fn text_sources_preserve_emacs_non_unicode_and_raw_byte_characters_for_display()
         value,
         RenderFaceRef::FaceId(FaceId::new(0)),
         LispStringSourceOrigin::Normal,
+        StringSourceRootScope::Rooted(eval.owned_root_retainer()),
     )
     .expect("unibyte Lisp string source");
     let unibyte_string_items = collect_items(&mut source);
@@ -598,6 +600,7 @@ fn buffer_display_replacement_string_source_maps_text_to_buffer_slot() {
         Value::string("fallback"),
         RenderFaceRef::FaceId(FaceId::new(42)),
         LispStringSourceOrigin::Normal,
+        StringSourceRootScope::Rooted(_eval.owned_root_retainer()),
     )
     .expect("string source");
     let mut source =
@@ -640,7 +643,10 @@ fn buffer_display_replacement_string_inherits_buffer_mouse_face() {
         replacement_source,
     )
     .with_pointer_appearance(Some(pointer))
-    .into_source(FaceId::new(42))
+    .into_source(
+        FaceId::new(42),
+        StringSourceRootScope::Rooted(_eval.owned_root_retainer()),
+    )
     .unwrap();
 
     let item = source
@@ -671,7 +677,10 @@ fn buffer_display_replacement_string_source_ignores_display_properties_inside_re
         }],
     );
     let mut source = BufferDisplayReplacementStringRequest::new(1, value, replacement_source)
-        .into_source(FaceId::new(42))
+        .into_source(
+            FaceId::new(42),
+            StringSourceRootScope::Rooted(_eval.owned_root_retainer()),
+        )
         .expect("replacement string source");
 
     let items = collect_items(&mut source);
@@ -688,6 +697,7 @@ fn lisp_string_source_cursor_emits_text_runs_with_source_spans() {
         value,
         RenderFaceRef::FaceId(FaceId::new(3)),
         LispStringSourceOrigin::Normal,
+        StringSourceRootScope::Rooted(_eval.owned_root_retainer()),
     )
     .expect("string source");
 
@@ -745,6 +755,7 @@ fn standalone_boxed_string_publishes_source_terminals_on_its_items() {
         Value::string("x\n"),
         RenderFaceRef::FaceId(FaceId::new(3)),
         LispStringSourceOrigin::Normal,
+        StringSourceRootScope::Rooted(_eval.owned_root_retainer()),
     )
     .expect("string source");
     let mut resolver = BoxedFaceResolver;
@@ -774,6 +785,7 @@ fn nested_boxed_string_uses_distinct_underlying_faces_at_each_boundary() {
         NestedDisplayPolicy::ModifiersOnly,
         DisplayPointerOccurrence::Source,
         DisplayStringBoxBoundaries::known(true, false),
+        StringSourceRootScope::Rooted(_eval.owned_root_retainer()),
     )
     .expect("nested string frame");
     let mut resolver = BoxedFaceResolver;
@@ -988,6 +1000,7 @@ impl DisplayItemFaceResolver for ResolvedDisplayPropertyResolver {
                 horizontal_margin: 0.0,
                 vertical_margin: 0.0,
                 opaque_background: None,
+                presentation: neomacs_display_protocol::ImageGlyphPresentation::Texture,
             }))
         } else {
             None
@@ -1210,6 +1223,7 @@ fn lisp_string_source_cursor_resolves_face_property() {
         value,
         RenderFaceRef::FaceId(FaceId::new(3)),
         LispStringSourceOrigin::Normal,
+        StringSourceRootScope::Rooted(_eval.owned_root_retainer()),
     )
     .expect("string source");
     let mut resolver = SymbolFaceResolver;
@@ -1249,6 +1263,7 @@ fn lisp_string_source_cursor_renders_explicit_composition_property_replacement()
         value,
         RenderFaceRef::FaceId(FaceId::new(3)),
         LispStringSourceOrigin::Normal,
+        StringSourceRootScope::Rooted(_eval.owned_root_retainer()),
     )
     .expect("string source");
 
@@ -1279,6 +1294,7 @@ fn lisp_string_source_cursor_resolves_display_property_through_context() {
         value,
         RenderFaceRef::FaceId(FaceId::new(3)),
         LispStringSourceOrigin::Normal,
+        StringSourceRootScope::Rooted(_eval.owned_root_retainer()),
     )
     .expect("string source");
     let mut resolver = ResolvedDisplayPropertyResolver { seen_face: None };
@@ -1324,6 +1340,7 @@ fn lisp_string_automatic_compositions_respect_rules_and_object_boundaries() {
             value,
             RenderFaceRef::FaceId(FaceId::new(0)),
             LispStringSourceOrigin::Normal,
+            StringSourceRootScope::Rooted(eval.owned_root_retainer()),
         )
         .expect("string");
         let mut context = DisplaySourceContext::empty().with_automatic_composition(rules);
@@ -1402,6 +1419,7 @@ fn lisp_string_source_cursor_uses_font_lock_face_when_face_is_absent() {
         value,
         RenderFaceRef::FaceId(FaceId::new(3)),
         LispStringSourceOrigin::Normal,
+        StringSourceRootScope::Rooted(_eval.owned_root_retainer()),
     )
     .expect("string source");
     let mut resolver = SymbolFaceResolver;
@@ -1445,6 +1463,7 @@ fn lisp_string_source_cursor_parses_display_space_width_as_stretch() {
         value,
         RenderFaceRef::FaceId(FaceId::new(3)),
         LispStringSourceOrigin::Normal,
+        StringSourceRootScope::Rooted(_eval.owned_root_retainer()),
     )
     .expect("string source");
 
@@ -1488,6 +1507,7 @@ fn lisp_string_source_cursor_parses_display_space_align_to_as_typed_expression()
         value,
         RenderFaceRef::FaceId(FaceId::new(3)),
         LispStringSourceOrigin::Normal,
+        StringSourceRootScope::Rooted(_eval.owned_root_retainer()),
     )
     .expect("string source");
 
@@ -1518,6 +1538,7 @@ fn lisp_string_source_cursor_emits_explicit_newline_row_breaks() {
         value,
         RenderFaceRef::FaceId(FaceId::new(3)),
         LispStringSourceOrigin::Normal,
+        StringSourceRootScope::Rooted(_eval.owned_root_retainer()),
     )
     .expect("string source");
     let items = collect_items(&mut source);
@@ -1538,6 +1559,7 @@ fn lisp_string_source_cursor_emits_control_and_glyphless_items() {
         value,
         RenderFaceRef::FaceId(FaceId::new(3)),
         LispStringSourceOrigin::Normal,
+        StringSourceRootScope::Rooted(_eval.owned_root_retainer()),
     )
     .expect("string source");
 
@@ -1608,6 +1630,7 @@ fn lisp_string_source_cursor_pushes_display_string_replacement_source() {
         value,
         RenderFaceRef::FaceId(FaceId::new(3)),
         LispStringSourceOrigin::Normal,
+        StringSourceRootScope::Rooted(_eval.owned_root_retainer()),
     )
     .expect("string source");
 
@@ -1648,6 +1671,7 @@ fn lisp_string_source_cursor_ignores_display_properties_inside_display_string_re
         value,
         RenderFaceRef::FaceId(FaceId::new(3)),
         LispStringSourceOrigin::Normal,
+        StringSourceRootScope::Rooted(_eval.owned_root_retainer()),
     )
     .expect("string source");
 
@@ -1691,6 +1715,7 @@ fn display_sources_parse_xwidget_display_specs_as_typed_items() {
         ),
         RenderFaceRef::FaceId(FaceId::new(3)),
         LispStringSourceOrigin::Normal,
+        StringSourceRootScope::Rooted(eval.owned_root_retainer()),
     )
     .expect("string source");
     let lisp_items = collect_items(&mut lisp_source);
@@ -2902,6 +2927,7 @@ fn lisp_string_mouse_face_survives_display_replacement_mapping() {
         value,
         RenderFaceRef::FaceId(FaceId::new(3)),
         LispStringSourceOrigin::Normal,
+        StringSourceRootScope::Rooted(_eval.owned_root_retainer()),
     )
     .expect("string source");
     let mut resolver = SymbolFaceResolver;
@@ -2936,6 +2962,7 @@ fn overlay_string_mouse_faces_are_scoped_to_the_overlay_occurrence() {
             value,
             RenderFaceRef::FaceId(FaceId::new(3)),
             LispStringSourceOrigin::OverlayString { overlay_id, kind },
+            StringSourceRootScope::Rooted(_eval.owned_root_retainer()),
         )
         .expect("overlay string source");
         let mut resolver = SymbolFaceResolver;
@@ -3003,7 +3030,10 @@ fn display_replacement_string_mouse_faces_are_scoped_to_the_buffer_anchor() {
             EmacsBytePos::new(anchor),
         );
         let mut source = BufferDisplayReplacementStringRequest::new(1, value, replacement_source)
-            .into_source(FaceId::new(3))
+            .into_source(
+                FaceId::new(3),
+                StringSourceRootScope::Rooted(_eval.owned_root_retainer()),
+            )
             .expect("replacement string source");
         let mut resolver = SymbolFaceResolver;
         let mut context = DisplaySourceContext::with_face_resolver(&mut resolver);
@@ -3864,4 +3894,407 @@ fn after_overlay_resume_without_an_insertion_preserves_fresh_box_start() {
         actual, expected,
         "AFTER seating preserves fresh emitted topology"
     );
+}
+
+/// `consume_until_line_break` skips an ASCII run in one step; it must land
+/// where the per-character walk lands, on ASCII and multibyte lines, with and
+/// without a newline, after a broken lead byte, and from a position past the
+/// end of the text.
+#[test]
+fn consume_until_line_break_matches_the_per_char_walk() {
+    fn per_char(mut position: DisplaySourceTextPosition, text: &[u8]) -> (bool, usize, i64) {
+        while position.byte_idx() < text.len() {
+            let Some(source_char) = position.consume_step_char(text) else {
+                break;
+            };
+            if source_char.ch() == '\n' {
+                return (true, position.byte_idx(), position.charpos());
+            }
+        }
+        (false, position.byte_idx(), position.charpos())
+    }
+
+    let long_ascii = [vec![b'a'; 5000], b"\nshort\n".to_vec()].concat();
+    let long_mixed = [
+        vec![b'a'; 5000],
+        "é\n".as_bytes().to_vec(),
+        b"tail\n".to_vec(),
+    ]
+    .concat();
+    let texts: [&[u8]; 10] = [
+        b"",
+        b"abc",
+        b"abc\ndef\n",
+        "aé\nbc".as_bytes(),
+        "αβγ".as_bytes(),
+        b"\n\nx",
+        "abcé".as_bytes(),
+        b"ab\xc3\ncd\n",
+        &long_ascii,
+        &long_mixed,
+    ];
+    for text in texts {
+        let starts: Vec<usize> = if text.len() > 100 {
+            // The long runs cross the bulk-scan threshold; the interesting
+            // starts are the edges and the first byte past the threshold.
+            [
+                0,
+                1,
+                4095,
+                4096,
+                5000,
+                text.len() - 2,
+                text.len(),
+                text.len() + 1,
+            ]
+            .into_iter()
+            .filter(|start| *start <= text.len() + 1)
+            .collect()
+        } else {
+            (0..=text.len() + 1).collect()
+        };
+        for byte_idx in starts {
+            let start = DisplaySourceTextPosition::new(byte_idx, 40);
+            let mut position = start;
+            let found = position.consume_until_line_break(text);
+            assert_eq!(
+                (found, position.byte_idx(), position.charpos()),
+                per_char(start, text),
+                "long text from byte {byte_idx}"
+            );
+        }
+    }
+}
+
+// Unlike an owned-getter unit row, these budgets surround the real source
+// constructor AND full consumption, so deferring a copy to next_item is caught.
+fn r2_display_interval_count() -> i64 {
+    use neovm_value::tagged::gc::MemoryUseCountSlot;
+    Value::memory_use_counts_snapshot()[MemoryUseCountSlot::Intervals.index()]
+}
+
+fn r2_alternating_display_string(interval_count: usize) -> Value {
+    let faces = [
+        Value::symbol("bold"),
+        Value::symbol("font-lock-string-face"),
+    ];
+    let value = Value::string_with_text_properties(
+        "x".repeat(interval_count),
+        (0..interval_count)
+            .map(|index| StringTextPropertyRun {
+                start: index,
+                end: index + 1,
+                plist: Value::list(vec![Value::symbol("face"), faces[index & 1]]),
+            })
+            .collect(),
+    );
+    assert_eq!(
+        neovm_core::emacs_core::value::borrow_string_text_properties_table_for_value(value)
+            .expect("alternating display properties")
+            .interval_plist_runs_for_test()
+            .len(),
+        interval_count,
+        "fixture intervals must not normalize away"
+    );
+    value
+}
+
+fn r2_consume_alternating_display_items(
+    mut next: impl FnMut() -> Option<DisplayItem>,
+    interval_count: usize,
+) {
+    for index in 0..interval_count {
+        let item = next().expect("every source character must be emitted");
+        assert_eq!(
+            item.span.start,
+            DisplaySourcePosition::lisp_string(71, index, index)
+        );
+        assert_eq!(
+            item.span.end,
+            DisplaySourcePosition::lisp_string(71, index + 1, index + 1)
+        );
+        assert_eq!(
+            item.face,
+            RenderFaceRef::FaceId(FaceId::new(if index & 1 == 0 { 7 } else { 9 })),
+            "actual source properties must determine the face at {index}"
+        );
+        let DisplayItemKind::TextRun(run) = item.kind else {
+            panic!("ordinary x must be consumed as text");
+        };
+        assert_eq!(run.text.as_ref(), "x");
+    }
+    assert!(next().is_none(), "the consumer must reach end of source");
+}
+
+fn r2_check_display_consumer_intervals(interval_count: usize, cursor: bool) {
+    use neovm_value::value::text_props::text_property_table_clones_for_test;
+    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
+    let value = r2_alternating_display_string(interval_count);
+    let mut resolver = SymbolFaceResolver;
+    let mut context = DisplaySourceContext::with_face_resolver(&mut resolver);
+    let before_intervals = r2_display_interval_count();
+    let before_tables = text_property_table_clones_for_test();
+    if cursor {
+        let mut source = LispStringSourceCursor::new(
+            71,
+            value,
+            RenderFaceRef::Inherit,
+            LispStringSourceOrigin::Normal,
+            StringSourceRootScope::Rooted(_eval.owned_root_retainer()),
+        )
+        .expect("actual Lisp string source cursor");
+        r2_consume_alternating_display_items(|| source.next_item(&mut context), interval_count);
+    } else {
+        let mut source = LispStringSourceFrame::new(
+            71,
+            value,
+            RenderFaceRef::Inherit,
+            LispStringSourceOrigin::Normal,
+            StringSourceRootScope::Rooted(_eval.owned_root_retainer()),
+        )
+        .expect("actual Lisp string source frame");
+        r2_consume_alternating_display_items(
+            || match source.next_action(&mut context, TtyGlyphlessCharDisplay::default()) {
+                LispStringAction::Emit(item) => Some(item),
+                LispStringAction::PopFrame => None,
+                _ => panic!("face-only source must emit text or finish"),
+            },
+            interval_count,
+        );
+    }
+    let intervals = r2_display_interval_count() - before_intervals;
+    let tables = text_property_table_clones_for_test() - before_tables;
+    assert_eq!(
+        (intervals, tables),
+        (0, 0),
+        "constructing and consuming {interval_count} property intervals (cursor={cursor}) copied the source"
+    );
+}
+
+macro_rules! r2_display_consumer_case {
+    ($name:ident, $count:expr, $cursor:expr) => {
+        #[test]
+        fn $name() {
+            r2_check_display_consumer_intervals($count, $cursor);
+        }
+    };
+}
+
+r2_display_consumer_case!(
+    r2_lisp_frame_consumption_no_interval_copies_2k,
+    2_048,
+    false
+);
+r2_display_consumer_case!(
+    r2_lisp_frame_consumption_no_interval_copies_16k,
+    16_384,
+    false
+);
+r2_display_consumer_case!(
+    r2_lisp_frame_consumption_no_interval_copies_64k,
+    65_536,
+    false
+);
+r2_display_consumer_case!(
+    r2_lisp_cursor_consumption_no_interval_copies_2k,
+    2_048,
+    true
+);
+r2_display_consumer_case!(
+    r2_lisp_cursor_consumption_no_interval_copies_16k,
+    16_384,
+    true
+);
+r2_display_consumer_case!(
+    r2_lisp_cursor_consumption_no_interval_copies_64k,
+    65_536,
+    true
+);
+
+// Deliberately separate from the consumer regressions: prove both counters
+// observe the current deep-copy operation rather than reporting constant zero.
+#[test]
+fn r2_owned_string_table_copy_counter_positive_control() {
+    use neovm_value::value::text_props::text_property_table_clones_for_test;
+    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
+    let value = r2_alternating_display_string(2_048);
+    let before_intervals = r2_display_interval_count();
+    let before_tables = text_property_table_clones_for_test();
+    let owned = neovm_core::emacs_core::value::get_string_text_properties_table_for_value(value)
+        .expect("explicit owned-copy positive control");
+    assert_eq!(owned.interval_plist_runs_for_test().len(), 2_048);
+    assert!(r2_display_interval_count() - before_intervals >= 2_048);
+    assert_eq!(text_property_table_clones_for_test() - before_tables, 1);
+}
+
+/// Safety regression for the actual frame owner, independent of ACTIVE source
+/// dependency capture. The resolver deliberately models a collecting callback;
+/// this does not claim that a production GNU face callback bug was reproduced.
+#[test]
+fn rooted_lisp_string_frame_keeps_detached_face_operands_through_callback_gc() {
+    use neovm_core::emacs_core::value::set_string_text_properties_for_value;
+
+    fn live_count() -> usize {
+        unsafe { neovm_core::tagged::gc::with_tagged_heap(|heap| heap.allocated_count()) }
+    }
+
+    struct CollectingFaceResolver<'a> {
+        evaluator: &'a mut Context,
+        calibrated_live: usize,
+        original_face_bits: [usize; 2],
+        collected: bool,
+        calls: usize,
+    }
+
+    impl DisplayItemFaceResolver for CollectingFaceResolver<'_> {
+        fn resolve_face_ref(&mut self, _base: RenderFaceRef, face_value: Value) -> RenderFaceRef {
+            if !self.collected {
+                self.evaluator.gc_collect_exact();
+                // Fail before dereferencing any old managed operand, or
+                // returning to the frame, if its explicit leases are broken.
+                assert_eq!(
+                    live_count(),
+                    self.calibrated_live,
+                    "the frame must retain the independently calibrated source and old plist graphs"
+                );
+                self.collected = true;
+            }
+            self.calls += 1;
+            let index = self
+                .original_face_bits
+                .iter()
+                .position(|bits| *bits == face_value.bits())
+                .expect("resolve the original captured face, not the replacement source state");
+            let payload = face_value
+                .as_vector_data()
+                .expect("original managed face vector");
+            assert_eq!(payload.len(), 1);
+            assert_eq!(
+                payload.at(0).as_utf8_str(),
+                Some(["captured left face", "captured right face"][index]),
+                "the detached original operand must remain readable after callback GC"
+            );
+            RenderFaceRef::FaceId(FaceId::new([71, 72][index]))
+        }
+
+        fn resolve_face_sources(
+            &mut self,
+            mut base: RenderFaceRef,
+            sources: &OrderedFaceSources,
+        ) -> RenderFaceRef {
+            for value in sources.values() {
+                base = self.resolve_face_ref(base, value);
+            }
+            base
+        }
+
+        fn face_has_box(&self, _face: RenderFaceRef) -> bool {
+            false
+        }
+    }
+
+    let mut evaluator = neovm_core::emacs_core::eval_hook_installers::new_context();
+    let face = Value::symbol("face");
+    evaluator.gc_collect_exact();
+    let baseline = live_count();
+    let left = Value::vector(vec![Value::string("captured left face")]);
+    let right = Value::vector(vec![Value::string("captured right face")]);
+    let source = Value::string_with_text_properties(
+        "ab",
+        vec![
+            StringTextPropertyRun {
+                start: 0,
+                end: 1,
+                plist: Value::list(vec![face, left]),
+            },
+            StringTextPropertyRun {
+                start: 1,
+                end: 2,
+                plist: Value::list(vec![face, right]),
+            },
+        ],
+    );
+    let mut frame = LispStringSourceFrame::new(
+        91,
+        source,
+        RenderFaceRef::Inherit,
+        LispStringSourceOrigin::Normal,
+        StringSourceRootScope::Rooted(evaluator.owned_root_retainer()),
+    )
+    .expect("actual rooted string frame");
+    let safety_guard = evaluator.retain_gc_roots(
+        [source].into_iter().chain(
+            frame
+                .props
+                .as_ref()
+                .expect("captured frame properties")
+                .root_operands(),
+        ),
+    );
+    // The source no longer owns either old face plist. Only the independent
+    // safety guard and the actual frame's snapshot leases can retain them.
+    set_string_text_properties_for_value(source, Vec::new());
+    evaluator.gc_collect_exact();
+    let calibrated_live = live_count();
+    assert!(
+        calibrated_live > baseline,
+        "the fixture must contain managed operands"
+    );
+    drop(safety_guard);
+
+    {
+        let mut resolver = CollectingFaceResolver {
+            evaluator: &mut evaluator,
+            calibrated_live,
+            original_face_bits: [left.bits(), right.bits()],
+            collected: false,
+            calls: 0,
+        };
+        // No automatic compositions, display replacements, or managed
+        // allocations precede the first callback in this face-only fixture.
+        let mut context = DisplaySourceContext::with_face_resolver(&mut resolver);
+        for (index, text) in ["a", "b"].into_iter().enumerate() {
+            let LispStringAction::Emit(item) =
+                frame.next_action(&mut context, TtyGlyphlessCharDisplay::default())
+            else {
+                panic!("the captured character must produce a real frame item");
+            };
+            assert_eq!(
+                item.face,
+                RenderFaceRef::FaceId(FaceId::new([71, 72][index]))
+            );
+            assert_eq!(
+                item.span.start,
+                DisplaySourcePosition::lisp_string(91, index, index)
+            );
+            assert_eq!(
+                item.span.end,
+                DisplaySourcePosition::lisp_string(91, index + 1, index + 1)
+            );
+            let DisplayItemKind::TextRun(run) = item.kind else {
+                panic!("ordinary captured character must remain text");
+            };
+            assert_eq!(run.text.as_ref(), text);
+        }
+        assert!(matches!(
+            frame.next_action(&mut context, TtyGlyphlessCharDisplay::default()),
+            LispStringAction::PopFrame
+        ));
+        drop(context);
+        assert!(
+            resolver.collected,
+            "the real frame must reach the collecting callback"
+        );
+        assert!(resolver.calls >= 2, "both captured faces must be resolved");
+    }
+
+    drop(frame);
+    evaluator.gc_collect_exact();
+    assert_eq!(
+        live_count(),
+        baseline,
+        "frame release must reclaim the detached graph"
+    );
+    // Only counts are queried after release; never inspect the reclaimed
+    // source, old plist heads, face vectors, or payload strings.
 }

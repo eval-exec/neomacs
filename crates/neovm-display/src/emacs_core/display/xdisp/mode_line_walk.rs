@@ -442,7 +442,9 @@ pub(super) fn walk<P: WalkPolicy>(
                 eval.push_specpdl_root(cdr);
                 match classify_cons::<P>(car, symbol_mode) {
                     ConsForm::Eval => {
-                        if matches!(P::risk(controls), Risk::Untrusted) {
+                        if matches!(P::risk(controls), Risk::Untrusted)
+                            || pctx.eval_policy == ModeLineEvalPolicy::InhibitLisp
+                        {
                             break;
                         }
                         if cdr.is_cons() {

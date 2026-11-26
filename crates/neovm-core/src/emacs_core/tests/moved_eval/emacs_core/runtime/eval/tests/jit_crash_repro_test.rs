@@ -23,6 +23,7 @@
 //! machinery), and no heap `Value` is held in a Rust local across a GC. A crash
 //! in one of THESE is a genuine JIT rooting gap.
 #![cfg(feature = "jit")]
+use neovm_value::intern::intern;
 
 use crate::emacs_core::bytecode::ByteCodeFunction;
 use crate::emacs_core::bytecode::opcode::Op;
@@ -40,10 +41,10 @@ fn bc(required: u32, ops: Vec<Op>, constants: Vec<Value>, hot: bool) -> ByteCode
         optional: Vec::new(),
         rest: None,
     });
-    f.lexical = true;
-    f.ops = ops;
-    f.constants = constants.into();
-    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(64);
+    f.set_lexical(true);
+    f.set_ops(ops);
+    f.set_constants(constants.into());
+    f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(64));
     if hot {
         neovm_eval::test_support::authority::jit_mark_hot_for_test(&f);
     }
@@ -53,7 +54,7 @@ fn bc(required: u32, ops: Vec<Op>, constants: Vec<Value>, hot: bool) -> ByteCode
 /// Bind `name`'s function cell to `bytecode` (roots it in the obarray) and
 /// return the callable symbol Value.
 fn bind_fn(ev: &mut Context, name: &str, bytecode: ByteCodeFunction) -> Value {
-    let sym = Value::symbol(name);
+    let sym = Value::from_sym_id(intern(name));
     let ValueKind::Symbol(id) = sym.kind() else {
         panic!("symbol")
     };

@@ -43,7 +43,7 @@ fn native_vt_console_negotiates_renders_and_restores_output_mode() {
         ConsoleMode::from(original.handle().clone()).mode().unwrap(),
         original_mode
     );
-    session.enter().unwrap();
+    session.enter(&[]).unwrap();
     let mode = ConsoleMode::from(original.handle().clone()).mode().unwrap();
     assert_ne!(mode & VIRTUAL_TERMINAL_PROCESSING, 0);
     session
@@ -54,7 +54,7 @@ fn native_vt_console_negotiates_renders_and_restores_output_mode() {
     let info = active.info().unwrap();
     assert_eq!(info.cursor_pos().x, info.terminal_window().left + 3);
     assert_eq!(info.cursor_pos().y, info.terminal_window().top + 1);
-    session.leave().unwrap();
+    session.leave(&[]).unwrap();
     assert_eq!(
         ConsoleMode::from(original.handle().clone()).mode().unwrap(),
         original_mode
@@ -73,7 +73,7 @@ fn native_legacy_console_restores_the_original_screen_and_mode() {
     ConsoleMode::from(session.original.handle().clone())
         .set_mode(session.original_mode)
         .unwrap();
-    session.enter().unwrap();
+    session.enter(&[]).unwrap();
     assert!(session.alternate.is_some());
     let mut painter = LegacyPainter { session: &session };
     painter.begin(80, 24).unwrap();
@@ -121,7 +121,7 @@ fn native_legacy_console_restores_the_original_screen_and_mode() {
         .cursor_pos();
     assert_eq!(position.x, window.left + 1);
     assert_eq!(position.y, window.top);
-    session.leave().unwrap();
+    session.leave(&[]).unwrap();
     let restored = ScreenBuffer::current().unwrap();
     assert_eq!(cursor_info::get(&restored).unwrap(), original_cursor);
     assert_eq!(restored.info().unwrap().cursor_pos(), original.cursor_pos());

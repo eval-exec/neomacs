@@ -3,6 +3,7 @@
 use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
 use crate::emacs_core::eval::Context;
 use crate::emacs_core::eval::assoc_predicate::PureAssocPredicate;
+use neovm_value::intern::intern;
 use neovm_value::value::Value;
 
 #[test]
@@ -25,7 +26,7 @@ fn assoc_callbacks_identify_pure_implementations_and_aliases() {
             .expect("install outer alias");
         let callable = eval.obarray().symbol_function(name).expect("builtin cell");
         for designator in [
-            Value::symbol(name),
+            Value::from_sym_id(intern(name)),
             Value::symbol("assoc-callback-outer"),
             callable,
         ] {
@@ -174,9 +175,14 @@ fn assoc_callbacks_resolve_and_call_named_bytecode() {
         optional: vec![],
         rest: None,
     });
-    bytecode.lexical = true;
-    bytecode.ops = vec![Op::StackRef(1), Op::StackRef(1), Op::List(2), Op::Return];
-    bytecode.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(8);
+    bytecode.set_lexical(true);
+    bytecode.set_ops(vec![
+        Op::StackRef(1),
+        Op::StackRef(1),
+        Op::List(2),
+        Op::Return,
+    ]);
+    bytecode.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(8));
     let callable = Value::make_bytecode(bytecode);
     eval.obarray
         .set_symbol_function("assoc-callback-bytecode", callable);

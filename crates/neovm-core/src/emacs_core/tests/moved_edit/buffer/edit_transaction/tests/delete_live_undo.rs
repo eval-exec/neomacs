@@ -1,6 +1,7 @@
 //! Live deletion undo state, with expectations captured from GNU Emacs 31.1.
 //! GNU undo.c:163-190 records point, marker adjustments, then deleted text;
 //! insdel.c:2023-2037 relocates markers even when undo is disabled.
+use neovm_value::intern::intern;
 
 use super::*;
 
@@ -63,7 +64,9 @@ fn assert_live_delete(prepared: UndoRecording, committed: UndoRecording) {
             anchor(buffers.get(id).unwrap(), pos),
             insertion_type,
         );
-        let marker_ref = neovm_edit::buffer::MarkerRef::new(marker_ptr);
+        // SAFETY: the pointer is the live node just returned. Nothing collects
+        // before `MarkerRef::new` returns. The chain is weak and is not a root.
+        let marker_ref = unsafe { neovm_edit::buffer::MarkerRef::new(marker_ptr) };
         ids.push(marker_ref);
         markers.push(buffers.marker_value(marker_ref).unwrap());
     }
@@ -87,9 +90,11 @@ fn assert_live_delete(prepared: UndoRecording, committed: UndoRecording) {
     buffers.remove_marker(ids[2]);
     let anchor = anchor(buffers.get(id).unwrap(), 3);
     let late_ptr = buffers.create_marker_at_anchor(id, anchor, InsertionType::Before);
+    // SAFETY: the pointer is the live node just returned. Nothing collects
+    // before `MarkerRef::new` returns. The chain is weak and is not a root.
     markers.push(
         buffers
-            .marker_value(neovm_edit::buffer::MarkerRef::new(late_ptr))
+            .marker_value(unsafe { neovm_edit::buffer::MarkerRef::new(late_ptr) })
             .unwrap(),
     );
     let live = buffers.get_mut(id).unwrap();
@@ -140,7 +145,10 @@ fn normalized_undo(mut undo: Value, markers: &[Value]) -> Value {
                     .iter()
                     .position(|m| m.bits() == entry.cons_car().bits())
                     .unwrap();
-                Value::cons(Value::symbol(&format!("m{index}")), entry.cons_cdr())
+                Value::cons(
+                    Value::from_sym_id(intern((&format!("m{index}")).as_ref())),
+                    entry.cons_cdr(),
+                )
             } else {
                 entry
             },

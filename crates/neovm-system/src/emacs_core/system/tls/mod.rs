@@ -26,7 +26,7 @@ pub fn gnutls_available_capabilities() -> &'static [&'static str] {
 }
 
 #[doc(hidden)]
-pub fn builtin_neomacs_tls_available_p(args: Vec<Value>) -> EvalResult {
+pub(crate) fn builtin_neomacs_tls_available_p(args: Vec<Value>) -> EvalResult {
     expect_args("neomacs-tls-available-p", &args, 0)?;
     Ok(Value::T)
 }
@@ -42,6 +42,7 @@ pub(crate) enum GnutlsCredentialType {
 pub(crate) struct GnutlsBootParameters {
     pub(crate) credential_type: GnutlsCredentialType,
     pub(crate) client: TlsClientParameters,
+    pub(crate) complete_negotiation: bool,
 }
 
 /// Certificate roots a TLS client must use for peer verification.
@@ -182,6 +183,8 @@ pub(crate) fn parse_gnutls_boot_parameters(
     } else {
         TlsTrustRoots::DefaultPlusFiles(trust_files)
     };
+    let complete_negotiation =
+        plist_first(&items, ":complete-negotiation", mode).is_some_and(|v| !v.is_nil());
 
     Ok(GnutlsBootParameters {
         credential_type,
@@ -189,6 +192,7 @@ pub(crate) fn parse_gnutls_boot_parameters(
             hostname,
             trust_roots,
         },
+        complete_negotiation,
     })
 }
 
@@ -241,7 +245,11 @@ pub(crate) fn gnutls_peer_status_to_value(status: &TlsPeerStatus) -> Value {
     if !status.warnings.is_empty() {
         entries.push(Value::keyword(":warnings"));
         entries.push(Value::list(
-            status.warnings.iter().map(Value::keyword).collect(),
+            status
+                .warnings
+                .iter()
+                .map(|name| Value::keyword(*name))
+                .collect(),
         ));
     }
 
@@ -541,6 +549,75 @@ impl TlsStreamIo for TlsStream {
     }
 }
 
+impl TlsStreamIo
+    for neovm_eval::emacs_core::eval::data::process_state::PollRegistration<TlsStream>
+{
+    fn handshake_interest(&self) -> TlsHandshakeInterest {
+        (**self).handshake_interest()
+    }
+
+    fn advance_handshake(&mut self) -> Result<TlsHandshakeProgress, TlsBackendError> {
+        self.with_rustls_mut(|conn, sock, certs| {
+            let mut transport = sock;
+            let progress = advance_rustls_handshake(conn, &mut transport)?;
+            if progress == TlsHandshakeProgress::Ready {
+                *certs = conn
+                    .peer_certificates()
+                    .map(|peer_certs| {
+                        peer_certs
+                            .iter()
+                            .map(|cert| der_certificate_to_pem(cert.as_ref()))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+            }
+            Ok(progress)
+        })
+    }
+
+    fn set_nonblocking(&self, nonblocking: bool) -> std::io::Result<()> {
+        (**self).set_nonblocking(nonblocking)
+    }
+
+    fn write_process_input_once(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.set_nonblocking(true)?;
+        self.with_rustls_mut(|conn, sock, _| {
+            let mut transport = sock;
+            let mut stream = rustls::Stream::new(conn, &mut transport);
+            match stream.write(bytes) {
+                Ok(n) => {
+                    match stream.flush() {
+                        Ok(()) => {}
+                        Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {}
+                        Err(err) => return Err(err),
+                    }
+                    Ok(n)
+                }
+                Err(err) => Err(err),
+            }
+        })
+    }
+
+    fn read_process_output(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        self.with_rustls_mut(|conn, sock, _| {
+            let mut transport = sock;
+            read_rustls_process_output(conn, &mut transport, buf)
+        })
+    }
+
+    fn peer_status(&self) -> TlsPeerStatus {
+        (**self).peer_status()
+    }
+
+    fn send_close_notify(&mut self, _wait_for_peer: bool) -> std::io::Result<TlsCloseNotifyResult> {
+        self.with_rustls_mut(|conn, sock, _| {
+            conn.send_close_notify();
+            let mut transport = sock;
+            rustls_complete_io_result_parts(conn, &mut transport)
+        })
+    }
+}
+
 fn rustls_handshake_interest(connection: &rustls::ClientConnection) -> TlsHandshakeInterest {
     match (connection.wants_read(), connection.wants_write()) {
         (true, true) => TlsHandshakeInterest::ReadableAndWritable,
@@ -560,10 +637,10 @@ pub(crate) fn advance_rustls_handshake(
         let result = if read && connection.wants_read() {
             match connection.read_tls(transport) {
                 Ok(0) if connection.is_handshaking() => return Err(TlsBackendError::UnexpectedEof),
-                Ok(_) => connection
-                    .process_new_packets()
-                    .map(|_| ())
-                    .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error)),
+                Ok(_) => match connection.process_new_packets() {
+                    Ok(_) => Ok(()),
+                    Err(error) => return Err(TlsBackendError::Protocol(error.to_string())),
+                },
                 Err(error) => Err(error),
             }
         } else if !read && connection.wants_write() {
@@ -593,7 +670,7 @@ pub(crate) fn advance_rustls_handshake(
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn read_rustls_process_output(
     connection: &mut rustls::ClientConnection,
-    socket: &mut TcpStream,
+    socket: &mut (impl Read + Write),
     buf: &mut [u8],
 ) -> std::io::Result<usize> {
     if buf.is_empty() {
@@ -620,10 +697,11 @@ pub(crate) fn read_rustls_process_output(
     }
 }
 
-fn rustls_complete_io_result(
-    stream: &mut RustlsTlsStream,
+fn rustls_complete_io_result_parts(
+    connection: &mut rustls::ClientConnection,
+    socket: &mut (impl Read + Write),
 ) -> std::io::Result<TlsCloseNotifyResult> {
-    match stream.inner.conn.complete_io(&mut stream.inner.sock) {
+    match connection.complete_io(socket) {
         Ok(_) => Ok(TlsCloseNotifyResult::Success),
         Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => Ok(TlsCloseNotifyResult::Again),
         Err(err) if err.kind() == std::io::ErrorKind::Interrupted => {
@@ -631,6 +709,12 @@ fn rustls_complete_io_result(
         }
         Err(err) => Err(err),
     }
+}
+
+fn rustls_complete_io_result(
+    stream: &mut RustlsTlsStream,
+) -> std::io::Result<TlsCloseNotifyResult> {
+    rustls_complete_io_result_parts(&mut stream.inner.conn, &mut stream.inner.sock)
 }
 
 fn rustls_peer_status(stream: &RustlsTlsStream) -> TlsPeerStatus {
@@ -762,6 +846,7 @@ pub(crate) enum TlsBackendError {
     InvalidHostname(String),
     TrustFile { path: PathBuf, reason: String },
     Connect(String),
+    Protocol(String),
     UnexpectedEof,
     Io(std::io::Error),
 }
@@ -774,6 +859,7 @@ impl std::fmt::Display for TlsBackendError {
                 write!(f, "Invalid TLS trust file {}: {reason}", path.display())
             }
             Self::Connect(err) => write!(f, "TLS handshake failed: {err}"),
+            Self::Protocol(err) => write!(f, "TLS handshake: {err}"),
             Self::UnexpectedEof => f.write_str("TLS handshake: unexpected EOF"),
             Self::Io(err) => write!(f, "TLS handshake: {err}"),
         }

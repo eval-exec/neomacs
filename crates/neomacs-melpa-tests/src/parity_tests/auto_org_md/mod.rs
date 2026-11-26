@@ -34,14 +34,22 @@ const AUTO_ORG_MD_TEST_PRELUDE: &str = r##"
   (put 'auto-org-md-mode 'state nil))
 
 (defun auto-org-md-test-root (name)
+  "Return NAME's root below this editor's private sandbox.
+The GNU Emacs and Neomacs halves of a batch run concurrently, and so do
+other cases.  Rooting the fixture under the harness sandbox keeps each
+editor's files private; a shared workspace path made the two editors
+visit and save the same file, and `userlock.el' then signalled
+\"Cannot resolve conflict in batch mode\" (or the loser saw the file
+disappear) under load."
   (let ((root
          (expand-file-name
           (concat "tmp/melpa-parity/auto-org-md/" name)
           ;; The archived shard runs on a machine that never compiled this
           ;; tree, so the baked constant names a path that does not exist
-          ;; there; nextest's remapped root comes first, like the Rust
+          ;; there; nextest's remapped root is the fallback, like the Rust
           ;; workspace_root() resolver (crate::test_utils).
-          (or (getenv "NEXTEST_WORKSPACE_ROOT")
+          (or (getenv "NEOMACS_TEST_SANDBOX_ROOT")
+              (getenv "NEXTEST_WORKSPACE_ROOT")
               (getenv "CARGO_WORKSPACE_DIR")))))
     (when (file-exists-p root)
       (delete-directory root t))

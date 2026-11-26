@@ -529,11 +529,16 @@ pub mod enabled {
         }
     }
 
+    fn sqlite_bind_nbytes(len: usize) -> Result<i32, Flow> {
+        i32::try_from(len).map_err(|_| sqlite_err("SQLite bind length exceeds INT_MAX"))
+    }
+
     fn bind_values(
         connection: &Connection,
-        stmt: *mut ffi::sqlite3_stmt,
+        statement: &PreparedStatement,
         values: &[BindValue],
     ) -> Result<(), Flow> {
+        let stmt = statement.stmt;
         let db = unsafe { connection.handle() };
         unsafe {
             ffi::sqlite3_reset(stmt);
@@ -551,7 +556,7 @@ pub mod enabled {
                         stmt,
                         index,
                         bytes.as_ptr().cast(),
-                        bytes.len() as i32,
+                        sqlite_bind_nbytes(bytes.len())?,
                         ffi::SQLITE_TRANSIENT(),
                     )
                 },
@@ -560,7 +565,7 @@ pub mod enabled {
                         stmt,
                         index,
                         bytes.as_ptr().cast(),
-                        bytes.len() as i32,
+                        sqlite_bind_nbytes(bytes.len())?,
                         ffi::SQLITE_TRANSIENT(),
                     )
                 },
@@ -697,7 +702,8 @@ pub mod enabled {
 
     /// Report the compiled-in SQLite backend.
     #[doc(hidden)]
-    pub fn available_p(args: Vec<Value>) -> EvalResult {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn available_p(args: Vec<Value>) -> EvalResult {
         neovm_eval::emacs_core::builtins::expect_args("sqlite-available-p", &args, 0)?;
         Ok(Value::T)
     }
@@ -711,7 +717,8 @@ pub mod enabled {
 
     /// (sqlitep OBJECT) → t or nil
     #[doc(hidden)]
-    pub fn is_sqlite_object(args: Vec<Value>) -> EvalResult {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn is_sqlite_object(args: Vec<Value>) -> EvalResult {
         neovm_eval::emacs_core::builtins::expect_args("sqlitep", &args, 1)?;
         Ok(Value::bool_val(args[0].is_sqlite()))
     }
@@ -793,7 +800,7 @@ pub mod enabled {
         let values = collect_bind_values(eval, &args.get(2).copied().unwrap_or(Value::NIL))?;
         let connection = connection_for_db(id)?;
         let statement = prepare_statement(SqliteOperation::Execute, &connection, &sql)?;
-        bind_values(&connection, statement.stmt, &values)?;
+        bind_values(&connection, &statement, &values)?;
 
         let db = unsafe { connection.handle() };
         let ret = unsafe { ffi::sqlite3_step(statement.stmt) };
@@ -825,7 +832,7 @@ pub mod enabled {
         let return_type = args.get(3).and_then(SqliteReturnType::from_value);
         let connection = connection_for_db(id)?;
         let statement = prepare_statement(SqliteOperation::Select, &connection, &sql)?;
-        bind_values(&connection, statement.stmt, &values)?;
+        bind_values(&connection, &statement, &values)?;
 
         if return_type == Some(SqliteReturnType::Set) {
             let stmt_id = alloc_handle_id();
@@ -890,7 +897,7 @@ pub mod enabled {
 
     /// (sqlite-more-p SET) → t or nil
     #[doc(hidden)]
-    pub fn more_p(args: Vec<Value>) -> EvalResult {
+    pub(crate) fn more_p(args: Vec<Value>) -> EvalResult {
         neovm_eval::emacs_core::builtins::expect_args("sqlite-more-p", &args, 1)?;
         let id = expect_stmt(&args[0])?;
         let has_more = RESULT_SETS.with(|sets| {
@@ -928,7 +935,7 @@ pub mod enabled {
 
     /// (sqlite-execute-batch DB STATEMENTS) → t or nil
     #[doc(hidden)]
-    pub fn execute_batch(
+    pub(crate) fn execute_batch(
         _eval: &mut neovm_eval::emacs_core::eval::Context,
         args: Vec<Value>,
     ) -> EvalResult {
@@ -941,7 +948,7 @@ pub mod enabled {
 
     /// (sqlite-transaction DB) → t or nil
     #[doc(hidden)]
-    pub fn transaction(args: Vec<Value>) -> EvalResult {
+    pub(crate) fn transaction(args: Vec<Value>) -> EvalResult {
         neovm_eval::emacs_core::builtins::expect_args("sqlite-transaction", &args, 1)?;
         let connection = connection_for_db(expect_db(&args[0])?)?;
         Ok(Value::bool_val(sqlite_exec(&connection, b"begin")))
@@ -965,7 +972,7 @@ pub mod enabled {
 
     /// (sqlite-pragma DB PRAGMA) → t or nil
     #[doc(hidden)]
-    pub fn pragma(args: Vec<Value>) -> EvalResult {
+    pub(crate) fn pragma(args: Vec<Value>) -> EvalResult {
         neovm_eval::emacs_core::builtins::expect_args("sqlite-pragma", &args, 2)?;
         let connection = connection_for_db(expect_db(&args[0])?)?;
         let pragma = sqlite_text_bytes(&args[1])?;
@@ -979,7 +986,7 @@ pub mod enabled {
     ///
     /// GNU semantics: load a SQLite extension, restricted to an allowlist.
     #[doc(hidden)]
-    pub fn load_extension(
+    pub(crate) fn load_extension(
         eval: &mut neovm_eval::emacs_core::eval::Context,
         args: Vec<Value>,
     ) -> EvalResult {
@@ -1070,14 +1077,115 @@ pub mod enabled {
 
         Ok(Value::bool_val(loaded))
     }
+
+    #[cfg(test)]
+    mod bind_length_tests {
+        use super::sqlite_bind_nbytes;
+
+        #[test]
+        fn sqlite_bind_nbytes_rejects_lengths_that_do_not_fit_in_i32() {
+            // `sqlite_err` builds a Lisp string, which needs the test heap.
+            crate::test_utils::init_test_tracing();
+            let too_big = (i32::MAX as usize).saturating_add(1);
+            sqlite_bind_nbytes(too_big).expect_err("a bind length above i32::MAX must signal");
+        }
+
+        #[test]
+        fn sqlite_bind_nbytes_accepts_lengths_that_fit_in_i32() {
+            assert_eq!(sqlite_bind_nbytes(0).expect("empty"), 0);
+            assert_eq!(
+                sqlite_bind_nbytes(i32::MAX as usize).expect("max"),
+                i32::MAX
+            );
+        }
+
+        #[test]
+        fn bind_values_binds_and_rebinds_all_variants_through_prepared_statement() {
+            crate::test_utils::init_test_tracing();
+            let connection = super::Connection::open_in_memory().expect("in-memory sqlite");
+            let statement = super::prepare_statement(
+                super::SqliteOperation::Select,
+                &connection,
+                b"SELECT ?1, ?2, ?3, ?4, ?5",
+            )
+            .expect("prepare statement");
+
+            let first = [
+                super::BindValue::Null,
+                super::BindValue::Integer(42),
+                super::BindValue::Real(3.5),
+                super::BindValue::Text(b"hello".to_vec()),
+                super::BindValue::Blob(vec![0x00, 0xFF, 0x10]),
+            ];
+            super::bind_values(&connection, &statement, &first).expect("bind first pass");
+            // SAFETY: `statement` owns a live prepared `sqlite3_stmt` on live `connection`.
+            assert_eq!(
+                unsafe { super::ffi::sqlite3_step(statement.stmt) },
+                super::ffi::SQLITE_ROW
+            );
+            // SAFETY: `sqlite3_step` returned `SQLITE_ROW` on this live statement.
+            let row = unsafe { super::row_to_value(statement.stmt) };
+            let cols = super::list_to_vec(&row).expect("row list");
+            assert_eq!(cols.len(), 5);
+            assert!(cols[0].is_nil());
+            assert_eq!(cols[1].as_int(), Some(42));
+            assert_eq!(cols[2].as_float(), Some(3.5));
+            assert_eq!(
+                cols[3].as_lisp_string().map(|s| s.as_bytes()),
+                Some(b"hello".as_slice())
+            );
+            assert_eq!(
+                cols[4]
+                    .as_lisp_string()
+                    .map(|s| (s.is_multibyte(), s.as_bytes())),
+                Some((false, [0x00, 0xFF, 0x10].as_slice()))
+            );
+
+            // Re-binding through the same typed owner resets and binds new values.
+            let second = [
+                super::BindValue::Integer(-7),
+                super::BindValue::Null,
+                super::BindValue::Real(-1.25),
+                super::BindValue::Text(b"again".to_vec()),
+                super::BindValue::Blob(vec![0xAB, 0xCD]),
+            ];
+            super::bind_values(&connection, &statement, &second).expect("re-bind pass");
+            // SAFETY: `statement` owns a live prepared `sqlite3_stmt` on live `connection`.
+            assert_eq!(
+                unsafe { super::ffi::sqlite3_step(statement.stmt) },
+                super::ffi::SQLITE_ROW
+            );
+            // SAFETY: `sqlite3_step` returned `SQLITE_ROW` on this live statement.
+            let row = unsafe { super::row_to_value(statement.stmt) };
+            let cols = super::list_to_vec(&row).expect("second row list");
+            assert_eq!(cols.len(), 5);
+            assert_eq!(cols[0].as_int(), Some(-7));
+            assert!(cols[1].is_nil());
+            assert_eq!(cols[2].as_float(), Some(-1.25));
+            assert_eq!(
+                cols[3].as_lisp_string().map(|s| s.as_bytes()),
+                Some(b"again".as_slice())
+            );
+            assert_eq!(
+                cols[4]
+                    .as_lisp_string()
+                    .map(|s| (s.is_multibyte(), s.as_bytes())),
+                Some((false, [0xAB, 0xCD].as_slice()))
+            );
+        }
+    }
 }
 
 #[cfg(feature = "sqlite")]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) use enabled::{available_p, is_sqlite_object};
+#[cfg(feature = "sqlite")]
 pub use enabled::{
-    available_p, close, columns, commit, execute, execute_batch, finalize,
-    install_sqlite_finalizer_hook, is_sqlite_object, load_extension, more_p, next, open, pragma,
-    rollback, select, transaction, version,
+    close, columns, commit, execute, finalize, install_sqlite_finalizer_hook, next, open, rollback,
+    select, version,
 };
+#[cfg(feature = "sqlite")]
+pub(crate) use enabled::{execute_batch, load_extension, more_p, pragma, transaction};
 #[cfg(feature = "sqlite")]
 pub use enabled::{swap_world_state, world_state_placeholder};
 
@@ -1095,14 +1203,18 @@ pub fn swap_world_state(_slot: &mut dyn std::any::Any) {}
 
 #[cfg(not(feature = "sqlite"))]
 #[doc(hidden)]
-pub fn is_sqlite_object(args: Vec<neovm_value::value::Value>) -> neovm_value::error::EvalResult {
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn is_sqlite_object(
+    args: Vec<neovm_value::value::Value>,
+) -> neovm_value::error::EvalResult {
     neovm_eval::emacs_core::builtins::expect_args("sqlitep", &args, 1)?;
     Ok(neovm_value::value::Value::NIL)
 }
 
 #[cfg(not(feature = "sqlite"))]
 #[doc(hidden)]
-pub fn available_p(args: Vec<neovm_value::value::Value>) -> neovm_value::error::EvalResult {
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn available_p(args: Vec<neovm_value::value::Value>) -> neovm_value::error::EvalResult {
     neovm_eval::emacs_core::builtins::expect_args("sqlite-available-p", &args, 0)?;
     Ok(neovm_value::value::Value::NIL)
 }

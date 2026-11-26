@@ -33,6 +33,7 @@ use neovm_value::symbol::Obarray;
 #[cold]
 #[inline(never)]
 pub(super) fn await_opt_osr(
+    cache: &mut super::DenseCache,
     id: u64,
     func: &ByteCodeFunction,
     obarray: Option<&Obarray>,
@@ -67,7 +68,7 @@ pub(super) fn await_opt_osr(
     let key = (id, headers.find(|h| pending.contains(h))?);
     let ready = OSR_PENDING.with(|p| p.borrow().get(&key).map(|osr| osr.job.is_ready()))?;
     if ready {
-        install_osr_pending(key, None, EntryLeaves::Compiling);
+        install_osr_pending(Some(cache), key, None, EntryLeaves::Compiling);
         return None;
     }
     OSR_PENDING.with(|p| {

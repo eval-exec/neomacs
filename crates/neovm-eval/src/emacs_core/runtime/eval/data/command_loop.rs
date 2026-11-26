@@ -41,7 +41,8 @@ struct InteractionPresentation {
 }
 
 /// Retains the Lisp meaning paired with immutable displayed frame snapshots.
-pub struct PresentedInteractions {
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) struct PresentedInteractions {
     next_presentation: u64,
     presentations: HashMap<u64, InteractionPresentation>,
 }
@@ -62,7 +63,8 @@ impl PresentedInteractions {
         id
     }
 
-    pub fn register_mouse_target(
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn register_mouse_target(
         &mut self,
         presentation: u64,
         target: PresentedMouseTarget,
@@ -96,7 +98,8 @@ impl neovm_value::gc_trace::GcTrace for PresentedInteractions {
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
-pub struct ReadKeySequenceState {
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) struct ReadKeySequenceState {
     raw_events: Vec<Value>,
     translated_events: Vec<Value>,
 }
@@ -111,25 +114,27 @@ impl ReadKeySequenceState {
         self.translated_events.clear();
     }
 
-    pub fn push_input_event(&mut self, event: Value) {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn push_input_event(&mut self, event: Value) {
         self.raw_events.push(event);
         self.translated_events.push(event);
     }
 
-    pub fn replace_translated_events(&mut self, events: Vec<Value>) {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn replace_translated_events(&mut self, events: Vec<Value>) {
         self.translated_events = events;
     }
 
-    pub fn replace_events(&mut self, events: Vec<Value>) {
+    pub(crate) fn replace_events(&mut self, events: Vec<Value>) {
         self.raw_events = events.clone();
         self.translated_events = events;
     }
 
-    pub fn raw_events(&self) -> &[Value] {
+    pub(crate) fn raw_events(&self) -> &[Value] {
         &self.raw_events
     }
 
-    pub fn translated_events(&self) -> &[Value] {
+    pub(crate) fn translated_events(&self) -> &[Value] {
         &self.translated_events
     }
 
@@ -157,7 +162,8 @@ pub struct MousePixelPositionState {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct PresentedMouseObservation {
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) struct PresentedMouseObservation {
     pub presentation: u64,
     pub hit: Option<neomacs_display_protocol::PresentedHit>,
     pub x: f32,
@@ -312,10 +318,10 @@ pub struct KBoard {
     /// Deferred switch-frame/select-window event that should be delivered
     /// before ordinary unread input, matching GNU
     /// `unread_switch_frame` plus read-key-sequence delayed selection events.
-    pub unread_selection_event: Option<Value>,
+    pub(crate) unread_selection_event: Option<Value>,
     /// Last frame observed by `internal-handle-focus-in`, matching GNU
     /// `internal_last_event_frame`.
-    pub internal_last_event_frame: Option<FrameId>,
+    pub(crate) internal_last_event_frame: Option<FrameId>,
     /// Last known mouse position in frame pixel coordinates.
     pub mouse_pixel_position: Option<MousePixelPositionState>,
     /// Last immutable semantic hit paired with the raw pointer coordinates.
@@ -325,12 +331,12 @@ pub struct KBoard {
     /// Unread command events in the Lisp-visible Emacs event form.
     pub unread_events: VecDeque<Value>,
     /// Current raw/translated key sequence being accumulated by `read_key_sequence`.
-    pub current_key_sequence: ReadKeySequenceState,
+    pub(crate) current_key_sequence: ReadKeySequenceState,
     /// Last translated key sequence read by the command loop or `read-key*`.
     pub command_keys: Vec<Value>,
     /// Raw key sequence before translation maps, for GNU
     /// `this-single-command-raw-keys`.
-    pub raw_command_keys: Vec<Value>,
+    pub(crate) raw_command_keys: Vec<Value>,
     /// Recent input history published through `recent-keys`.
     pub recent_input_events: Vec<Value>,
     /// Whether the current echo-area message is owned by keyboard echoing.
@@ -342,7 +348,7 @@ pub struct KBoard {
     /// Defining keyboard macro (if any).
     pub defining_kbd_macro: bool,
     /// Whether the current definition is appending to the prior macro.
-    pub appending_kbd_macro: bool,
+    pub(crate) appending_kbd_macro: bool,
     /// Keyboard macro buffer being defined, as Lisp-visible Emacs events.
     pub kbd_macro_events: Vec<Value>,
     /// Finalized prefix of `kbd_macro_events` that belongs to completed commands.
@@ -354,7 +360,7 @@ pub struct KBoard {
     /// Index into executing keyboard macro.
     pub kbd_macro_index: usize,
     /// Number of successful iterations for the innermost executing macro.
-    pub executing_kbd_macro_iterations: usize,
+    pub(crate) executing_kbd_macro_iterations: usize,
     /// Open dribble file handle. GNU
     /// `src/keyboard.c:64 (FILE *dribble)` is the global file
     /// handle that `open-dribble-file` opens and
@@ -363,7 +369,15 @@ pub struct KBoard {
     /// Neomacs's recursion guard for `input-method-function`.
     /// Quail also binds the Lisp function to nil during its nested reads.
     /// The saved-reader call scopes this flag across normal and error returns.
-    pub in_input_method_function: bool,
+    pub(crate) in_input_method_function: bool,
+    /// True when the most recently finished key-sequence read ended with the
+    /// user rejecting a mouse popup menu -- GNU's `read_char` returning Qt,
+    /// which `read_key_sequence` reports as its -1 result
+    /// (keyboard.c:11297-11302).  Cleared by `begin_key_sequence_read`, so it
+    /// describes only the read that just returned, never an earlier one.
+    /// KBoard-local like GNU's `used_mouse_menu`, and it fits the padding
+    /// next to the other boolean state.
+    pub(crate) last_read_menu_rejected: bool,
     /// Last mouse down event seen by the event-ingest path. GNU
     /// `keyboard.c:6041-6130` (`make_lispy_event` / the
     /// `button_down_time` / `last_mouse_click` globals) tracks
@@ -371,19 +385,19 @@ pub struct KBoard {
     /// timestamp so it can compute the click count for
     /// `double-click-time` / `double-click-fuzz` comparisons.
     /// Keyboard audit Finding 12.
-    pub last_mouse_click: Option<LastMouseClick>,
+    pub(crate) last_mouse_click: Option<LastMouseClick>,
     /// Per-button down positions while the button is held.  GNU keeps one
     /// `start_pos` per button in `button_down_location`; taking the entry on
     /// release is what lets a stray up event be dropped
     /// (`src/keyboard.c:6564-6566`, `6628-6632`).
-    pub button_down: [Option<MousePressState>; 5],
+    pub(crate) button_down: [Option<MousePressState>; 5],
 }
 
 /// Snapshot of the most recent mouse click used for double/triple
 /// click detection. Mirrors the GNU `button_down_info` bundle.
 /// Keyboard audit Finding 12.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct LastMouseClick {
+pub(crate) struct LastMouseClick {
     pub button: MouseButton,
     pub x: f32,
     pub y: f32,
@@ -393,7 +407,7 @@ pub struct LastMouseClick {
     /// Reset to 1 whenever a click falls outside
     /// `double-click-time` / `double-click-fuzz` of the previous
     /// click. Capped at 3.
-    pub click_count: u32,
+    pub(crate) click_count: u32,
 }
 
 /// One entry of GNU's `button_down_location` table: the down event's
@@ -401,12 +415,12 @@ pub struct LastMouseClick {
 /// release, so a later up event without a new down is dropped
 /// (`src/keyboard.c:6564-6566`, `6628-6632`).
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct MousePressState {
+pub(crate) struct MousePressState {
     pub x: f32,
     pub y: f32,
     pub frame_id: u64,
     /// Click count computed for this down event; the release reuses it.
-    pub click_count: u32,
+    pub(crate) click_count: u32,
     /// The full Lisp position copied from the down event: a drag event's
     /// START (`src/keyboard.c:6615`, `6739-6741`).
     pub position: Value,
@@ -459,6 +473,7 @@ impl KBoard {
             executing_kbd_macro_iterations: 0,
             dribble: None,
             in_input_method_function: false,
+            last_read_menu_rejected: false,
             last_mouse_click: None,
             button_down: [None; 5],
         }
@@ -501,7 +516,7 @@ impl KBoard {
     /// the standard event-to-string fallback. The dribble is
     /// flushed after every event so a crash leaves a complete
     /// record on disk.
-    pub fn dribble_event(&mut self, event: Value) {
+    pub(crate) fn dribble_event(&mut self, event: Value) {
         let Some(file) = self.dribble.as_mut() else {
             return;
         };
@@ -520,7 +535,7 @@ impl KBoard {
         let _ = file.flush();
     }
 
-    pub fn set_terminal_translation_maps(
+    pub(crate) fn set_terminal_translation_maps(
         &mut self,
         input_decode_map: Value,
         local_function_key_map: Value,
@@ -529,7 +544,8 @@ impl KBoard {
         self.local_function_key_map = local_function_key_map;
     }
 
-    pub fn set_input_decode_map(&mut self, map: Value) {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn set_input_decode_map(&mut self, map: Value) {
         self.input_decode_map = map;
     }
 
@@ -537,27 +553,30 @@ impl KBoard {
         self.input_decode_map
     }
 
-    pub fn set_local_function_key_map(&mut self, map: Value) {
+    pub(crate) fn set_local_function_key_map(&mut self, map: Value) {
         self.local_function_key_map = map;
     }
 
-    pub fn local_function_key_map(&self) -> Value {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn local_function_key_map(&self) -> Value {
         self.local_function_key_map
     }
 
-    pub fn unread_event(&mut self, event: Value) {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn unread_event(&mut self, event: Value) {
         self.unread_events.push_back(event);
     }
 
-    pub fn set_unread_selection_event(&mut self, event: Value) {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn set_unread_selection_event(&mut self, event: Value) {
         self.unread_selection_event = Some(event);
     }
 
-    pub fn internal_last_event_frame(&self) -> Option<FrameId> {
+    pub(crate) fn internal_last_event_frame(&self) -> Option<FrameId> {
         self.internal_last_event_frame
     }
 
-    pub fn set_internal_last_event_frame(&mut self, frame_id: FrameId) {
+    pub(crate) fn set_internal_last_event_frame(&mut self, frame_id: FrameId) {
         self.internal_last_event_frame = Some(frame_id);
     }
 
@@ -574,28 +593,30 @@ impl KBoard {
         self.mouse_pixel_position = Some(MousePixelPositionState { frame_id, x, y });
     }
 
-    pub fn unread_key(&mut self, event: KeyEvent) {
+    /// Bare frame ids this keyboard keeps across a collection.
+    ///
+    /// GNU's `recent_keys` and the last-event frame hold the frame object
+    /// (`frame.c:2898-2901`). These slots hold the id. The runtime pins the
+    /// object before an explicit collection while the id is still here.
+    pub(crate) fn collect_retained_frame_ids(&self, out: &mut Vec<u64>) {
+        if let Some(frame_id) = self.internal_last_event_frame {
+            out.push(frame_id.0);
+        }
+        if let Some(state) = self.mouse_pixel_position
+            && let Some(frame_id) = state.frame_id
+        {
+            out.push(frame_id.0);
+        }
+        if let Some(observation) = self.presented_mouse_observation
+            && observation.frame_id != 0
+        {
+            out.push(observation.frame_id);
+        }
+    }
+
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn unread_key(&mut self, event: KeyEvent) {
         self.unread_event(event.to_emacs_event_value());
-    }
-
-    pub fn reset_key_sequence(&mut self) {
-        self.current_key_sequence.reset();
-    }
-
-    pub fn push_key_sequence_input_event(&mut self, event: Value) {
-        self.current_key_sequence.push_input_event(event);
-    }
-
-    pub fn rewrite_key_sequence_translation(&mut self, events: Vec<Value>) {
-        self.current_key_sequence.replace_translated_events(events);
-    }
-
-    pub fn rewrite_key_sequence_events(&mut self, events: Vec<Value>) {
-        self.current_key_sequence.replace_events(events);
-    }
-
-    pub fn key_sequence_snapshot(&self) -> (Vec<Value>, Vec<Value>) {
-        self.current_key_sequence.snapshot()
     }
 
     pub fn set_command_key_sequences(&mut self, translated: Vec<Value>, raw: Vec<Value>) {
@@ -612,7 +633,7 @@ impl KBoard {
         self.raw_command_keys = keys;
     }
 
-    pub fn append_read_command_key(&mut self, key: Value) {
+    pub(crate) fn append_read_command_key(&mut self, key: Value) {
         self.command_keys.push(key);
         self.raw_command_keys.push(key);
     }
@@ -650,19 +671,21 @@ impl KBoard {
         }
     }
 
-    pub fn recent_input_events(&self) -> &[Value] {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn recent_input_events(&self) -> &[Value] {
         &self.recent_input_events
     }
 
-    pub fn clear_recent_input_events(&mut self) {
-        self.recent_input_events.clear();
-    }
-
-    pub fn start_kbd_macro(&mut self) {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn start_kbd_macro(&mut self) {
         self.start_kbd_macro_with_initial(None, false);
     }
 
-    pub fn start_kbd_macro_with_initial(&mut self, initial_events: Option<&[Value]>, append: bool) {
+    pub(crate) fn start_kbd_macro_with_initial(
+        &mut self,
+        initial_events: Option<&[Value]>,
+        append: bool,
+    ) {
         self.defining_kbd_macro = true;
         self.appending_kbd_macro = append;
         self.kbd_macro_events.clear();
@@ -672,21 +695,23 @@ impl KBoard {
         self.kbd_macro_end = self.kbd_macro_events.len();
     }
 
-    pub fn store_kbd_macro_event(&mut self, event: Value) {
+    pub(crate) fn store_kbd_macro_event(&mut self, event: Value) {
         if self.defining_kbd_macro {
             self.kbd_macro_events.push(event);
         }
     }
 
-    pub fn finalize_kbd_macro_chars(&mut self) {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn finalize_kbd_macro_chars(&mut self) {
         self.kbd_macro_end = self.kbd_macro_events.len();
     }
 
-    pub fn cancel_kbd_macro_events(&mut self) {
+    pub(crate) fn cancel_kbd_macro_events(&mut self) {
         self.kbd_macro_events.truncate(self.kbd_macro_end);
     }
 
-    pub fn end_kbd_macro(&mut self) -> Vec<Value> {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn end_kbd_macro(&mut self) -> Vec<Value> {
         self.defining_kbd_macro = false;
         self.appending_kbd_macro = false;
         let finalized = self.kbd_macro_events[..self.kbd_macro_end].to_vec();
@@ -698,17 +723,18 @@ impl KBoard {
         self.last_kbd_macro.as_deref()
     }
 
-    pub fn begin_executing_kbd_macro(&mut self, events: Vec<Value>) {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn begin_executing_kbd_macro(&mut self, events: Vec<Value>) {
         self.executing_kbd_macro = Some(events);
         self.kbd_macro_index = 0;
         self.executing_kbd_macro_iterations = 0;
     }
 
-    pub fn is_executing_kbd_macro(&self) -> bool {
+    pub(crate) fn is_executing_kbd_macro(&self) -> bool {
         self.executing_kbd_macro.is_some()
     }
 
-    pub fn finish_executing_kbd_macro(&mut self) {
+    pub(crate) fn finish_executing_kbd_macro(&mut self) {
         self.executing_kbd_macro = None;
         self.kbd_macro_index = 0;
     }
@@ -874,7 +900,7 @@ impl KeyboardRuntime {
     }
 
     #[doc(hidden)]
-    pub fn input_event_history_disposition(&self) -> InputEventHistoryDisposition {
+    pub(crate) fn input_event_history_disposition(&self) -> InputEventHistoryDisposition {
         if self.kboard.is_executing_kbd_macro() {
             InputEventHistoryDisposition::SuppressDuringMacroPlayback
         } else {
@@ -913,7 +939,34 @@ impl KeyboardRuntime {
         }
     }
 
-    pub fn active_terminal_id(&self) -> u64 {
+    /// Frame objects named by ids this keyboard still holds.
+    ///
+    /// Called before an explicit collection arms deleted frames. The lookup
+    /// happens here, not in `trace_roots`, so root enumeration does not
+    /// re-enter the heap. An id whose object is already gone is not pinned.
+    /// The caller stores the vector at the end of `Context` so the pin does
+    /// not shift the fields after `command_loop`.
+    pub(crate) fn retained_frame_pins(&self) -> Vec<Value> {
+        let mut ids = Vec::new();
+        for event in self.event_queue.iter() {
+            event.retained_frame_ids(&mut ids);
+        }
+        for event in self.pending_input_events.iter() {
+            event.retained_frame_ids(&mut ids);
+        }
+        self.kboard.collect_retained_frame_ids(&mut ids);
+        for kboard in self.parked_kboards.values() {
+            kboard.collect_retained_frame_ids(&mut ids);
+        }
+        ids.sort_unstable();
+        ids.dedup();
+        ids.into_iter()
+            .filter_map(Value::registered_frame)
+            .collect()
+    }
+
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn active_terminal_id(&self) -> u64 {
         self.active_terminal_id
     }
 
@@ -925,7 +978,8 @@ impl KeyboardRuntime {
         self.kboard.set_mouse_pixel_position(frame_id, x, y);
     }
 
-    pub fn select_terminal(&mut self, terminal_id: u64) {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn select_terminal(&mut self, terminal_id: u64) {
         if self.active_terminal_id == terminal_id {
             return;
         }
@@ -979,7 +1033,7 @@ impl KeyboardRuntime {
         None
     }
 
-    pub fn take_unread_selection_event(&mut self) -> Option<Value> {
+    pub(crate) fn take_unread_selection_event(&mut self) -> Option<Value> {
         self.kboard
             .unread_selection_event
             .take()
@@ -987,7 +1041,8 @@ impl KeyboardRuntime {
     }
 
     #[doc(hidden)]
-    pub fn set_unread_selection_event(&mut self, event: Value) {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn set_unread_selection_event(&mut self, event: Value) {
         self.kboard.set_unread_selection_event(event);
     }
 
@@ -996,14 +1051,14 @@ impl KeyboardRuntime {
         self.kboard.unread_selection_event.is_some()
     }
 
-    pub fn pop_unread_event(&mut self) -> Option<Value> {
+    pub(crate) fn pop_unread_event(&mut self) -> Option<Value> {
         self.kboard
             .unread_events
             .pop_front()
             .or_else(|| self.poll_parked_kboard(|kboard| kboard.unread_events.pop_front()))
     }
 
-    pub fn next_executing_kbd_macro_event(&mut self) -> Option<Value> {
+    pub(crate) fn next_executing_kbd_macro_event(&mut self) -> Option<Value> {
         if let Some(ref macro_events) = self.kboard.executing_kbd_macro
             && self.kboard.kbd_macro_index < macro_events.len()
         {
@@ -1025,7 +1080,7 @@ impl KeyboardRuntime {
     /// Return whether a keyboard read can consume a queued low-level or
     /// deferred-selection event before consulting the frontend transport.
     /// The filtered `input-pending-p` predicate is intentionally separate.
-    pub fn has_pending_low_level_input(&self) -> bool {
+    pub(crate) fn has_pending_low_level_input(&self) -> bool {
         self.kboards().any(|kboard| {
             kboard.unread_selection_event.is_some() || !kboard.unread_events.is_empty()
         })
@@ -1079,7 +1134,8 @@ impl KeyboardRuntime {
     /// Return whether the next keyboard read can complete without waiting.
     /// Unlike `input-pending-p`, a keyboard read can consume the remaining
     /// events of an executing keyboard macro.
-    pub fn has_pending_kboard_input(&self) -> bool {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn has_pending_kboard_input(&self) -> bool {
         self.has_pending_low_level_input()
             || self.kboards().any(|kboard| {
                 kboard
@@ -1089,7 +1145,7 @@ impl KeyboardRuntime {
             })
     }
 
-    pub fn set_terminal_translation_maps(
+    pub(crate) fn set_terminal_translation_maps(
         &mut self,
         input_decode_map: Value,
         local_function_key_map: Value,
@@ -1098,7 +1154,8 @@ impl KeyboardRuntime {
             .set_terminal_translation_maps(input_decode_map, local_function_key_map);
     }
 
-    pub fn set_input_decode_map(&mut self, map: Value) {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn set_input_decode_map(&mut self, map: Value) {
         self.kboard.set_input_decode_map(map);
     }
 
@@ -1106,27 +1163,32 @@ impl KeyboardRuntime {
         self.kboard.input_decode_map()
     }
 
-    pub fn set_local_function_key_map(&mut self, map: Value) {
+    pub(crate) fn set_local_function_key_map(&mut self, map: Value) {
         self.kboard.set_local_function_key_map(map);
     }
 
-    pub fn local_function_key_map(&self) -> Value {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn local_function_key_map(&self) -> Value {
         self.kboard.local_function_key_map()
     }
 
-    pub fn enqueue_event(&mut self, event: InputEvent) {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn enqueue_event(&mut self, event: InputEvent) {
         self.event_queue.push_back(event);
     }
 
-    pub fn unread_event(&mut self, event: Value) {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn unread_event(&mut self, event: Value) {
         self.kboard.unread_events.push_back(event);
     }
 
-    pub fn unread_key(&mut self, event: KeyEvent) {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn unread_key(&mut self, event: KeyEvent) {
         self.unread_event(event.to_emacs_event_value());
     }
 
-    pub fn read_key_event(&mut self) -> Option<Value> {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn read_key_event(&mut self) -> Option<Value> {
         if let Some(event) = self.pop_unread_event() {
             return Some(event);
         }
@@ -1136,35 +1198,37 @@ impl KeyboardRuntime {
         }
 
         while let Some(event) = self.event_queue.pop_front() {
-            if let InputEvent::KeyPress { key, .. } = event {
-                let emacs_event = key.to_emacs_event_value();
-                self.kboard.store_kbd_macro_event(emacs_event);
-                return Some(emacs_event);
-            }
+            let emacs_event = match event {
+                InputEvent::KeyPress { key, .. } => key.to_emacs_event_value(),
+                InputEvent::NativeNonKey { kind, .. } => kind.to_emacs_event_value(),
+                _ => continue,
+            };
+            self.kboard.store_kbd_macro_event(emacs_event);
+            return Some(emacs_event);
         }
 
         None
     }
 
-    pub fn reset_key_sequence(&mut self) {
+    pub(crate) fn reset_key_sequence(&mut self) {
         self.kboard.current_key_sequence.reset();
     }
 
-    pub fn push_key_sequence_input_event(&mut self, event: Value) {
+    pub(crate) fn push_key_sequence_input_event(&mut self, event: Value) {
         self.kboard.current_key_sequence.push_input_event(event);
     }
 
-    pub fn rewrite_key_sequence_translation(&mut self, events: Vec<Value>) {
+    pub(crate) fn rewrite_key_sequence_translation(&mut self, events: Vec<Value>) {
         self.kboard
             .current_key_sequence
             .replace_translated_events(events);
     }
 
-    pub fn rewrite_key_sequence_events(&mut self, events: Vec<Value>) {
+    pub(crate) fn rewrite_key_sequence_events(&mut self, events: Vec<Value>) {
         self.kboard.current_key_sequence.replace_events(events);
     }
 
-    pub fn key_sequence_snapshot(&self) -> (Vec<Value>, Vec<Value>) {
+    pub(crate) fn key_sequence_snapshot(&self) -> (Vec<Value>, Vec<Value>) {
         self.kboard.current_key_sequence.snapshot()
     }
 
@@ -1207,36 +1271,44 @@ impl KeyboardRuntime {
         self.kboard.record_recent_command(command);
     }
 
-    pub fn recent_input_events(&self) -> &[Value] {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn recent_input_events(&self) -> &[Value] {
         &self.kboard.recent_input_events
     }
 
-    pub fn clear_recent_input_events(&mut self) {
+    pub(crate) fn clear_recent_input_events(&mut self) {
         self.kboard.recent_input_events.clear();
     }
 
-    pub fn start_kbd_macro(&mut self) {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn start_kbd_macro(&mut self) {
         self.kboard.start_kbd_macro();
     }
 
-    pub fn start_kbd_macro_with_initial(&mut self, initial_events: Option<&[Value]>, append: bool) {
+    pub(crate) fn start_kbd_macro_with_initial(
+        &mut self,
+        initial_events: Option<&[Value]>,
+        append: bool,
+    ) {
         self.kboard
             .start_kbd_macro_with_initial(initial_events, append);
     }
 
-    pub fn store_kbd_macro_event(&mut self, event: Value) {
+    pub(crate) fn store_kbd_macro_event(&mut self, event: Value) {
         self.kboard.store_kbd_macro_event(event);
     }
 
-    pub fn finalize_kbd_macro_chars(&mut self) {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn finalize_kbd_macro_chars(&mut self) {
         self.kboard.finalize_kbd_macro_chars();
     }
 
-    pub fn cancel_kbd_macro_events(&mut self) {
+    pub(crate) fn cancel_kbd_macro_events(&mut self) {
         self.kboard.cancel_kbd_macro_events();
     }
 
-    pub fn end_kbd_macro(&mut self) -> Vec<Value> {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn end_kbd_macro(&mut self) -> Vec<Value> {
         self.kboard.end_kbd_macro()
     }
 
@@ -1244,15 +1316,12 @@ impl KeyboardRuntime {
         self.kboard.last_kbd_macro()
     }
 
-    pub fn begin_executing_kbd_macro(&mut self, events: Vec<Value>) {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn begin_executing_kbd_macro(&mut self, events: Vec<Value>) {
         self.kboard.begin_executing_kbd_macro(events);
     }
 
-    pub fn is_executing_kbd_macro(&self) -> bool {
-        self.kboard.is_executing_kbd_macro()
-    }
-
-    pub fn finish_executing_kbd_macro(&mut self) {
+    pub(crate) fn finish_executing_kbd_macro(&mut self) {
         self.kboard.finish_executing_kbd_macro();
     }
 }
@@ -1277,11 +1346,9 @@ pub struct CommandLoop {
     /// Keyboard-local runtime state.
     pub keyboard: KeyboardRuntime,
     /// Lisp meanings paired with immutable displayed frame presentations.
-    pub presented_interactions: PresentedInteractions,
+    pub(crate) presented_interactions: PresentedInteractions,
     /// Next bounded GUI service opportunity while command input stays queued.
     pub(crate) gui_display_deadline: Option<Instant>,
-    /// Current prefix argument.
-    pub prefix_arg: PrefixArg,
     /// Whether we are in a recursive edit.
     pub recursive_depth: usize,
     /// Whether the command loop is running.
@@ -1327,7 +1394,6 @@ impl CommandLoop {
             keyboard: KeyboardRuntime::new(),
             presented_interactions: PresentedInteractions::default(),
             gui_display_deadline: None,
-            prefix_arg: PrefixArg::None,
             recursive_depth: 0,
             running: false,
             quit_flag: false,
@@ -1340,28 +1406,32 @@ impl CommandLoop {
     }
 
     /// Push an input event.
-    pub fn enqueue_event(&mut self, event: InputEvent) {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn enqueue_event(&mut self, event: InputEvent) {
         self.keyboard.enqueue_event(event);
     }
 
     /// Push an unread command event (to be processed before the queue).
-    pub fn unread_event(&mut self, event: Value) {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn unread_event(&mut self, event: Value) {
         self.keyboard.unread_event(event);
     }
 
     /// Push an unread key event (to be processed before the queue).
-    pub fn unread_key(&mut self, event: KeyEvent) {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn unread_key(&mut self, event: KeyEvent) {
         self.keyboard.unread_key(event);
     }
 
     /// Read the next key event as a Lisp-visible Emacs event.
     /// Returns from unread events first, then the event queue.
-    pub fn read_key_event(&mut self) -> Option<Value> {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn read_key_event(&mut self) -> Option<Value> {
         self.keyboard.read_key_event()
     }
 
     /// Reset the key sequence accumulator.
-    pub fn reset_key_sequence(&mut self) {
+    pub(crate) fn reset_key_sequence(&mut self) {
         self.keyboard.reset_key_sequence();
     }
 
@@ -1417,38 +1487,46 @@ impl CommandLoop {
         self.keyboard.record_recent_command(command);
     }
 
-    pub fn recent_input_events(&self) -> &[Value] {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn recent_input_events(&self) -> &[Value] {
         self.keyboard.recent_input_events()
     }
 
-    pub fn clear_recent_input_events(&mut self) {
+    pub(crate) fn clear_recent_input_events(&mut self) {
         self.keyboard.clear_recent_input_events();
     }
 
     /// Start recording a keyboard macro.
-    pub fn start_kbd_macro(&mut self) {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn start_kbd_macro(&mut self) {
         self.keyboard.start_kbd_macro();
     }
 
-    pub fn start_kbd_macro_with_initial(&mut self, initial_events: Option<&[Value]>, append: bool) {
+    pub(crate) fn start_kbd_macro_with_initial(
+        &mut self,
+        initial_events: Option<&[Value]>,
+        append: bool,
+    ) {
         self.keyboard
             .start_kbd_macro_with_initial(initial_events, append);
     }
 
-    pub fn store_kbd_macro_event(&mut self, event: Value) {
+    pub(crate) fn store_kbd_macro_event(&mut self, event: Value) {
         self.keyboard.store_kbd_macro_event(event);
     }
 
-    pub fn finalize_kbd_macro_chars(&mut self) {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn finalize_kbd_macro_chars(&mut self) {
         self.keyboard.finalize_kbd_macro_chars();
     }
 
-    pub fn cancel_kbd_macro_events(&mut self) {
+    pub(crate) fn cancel_kbd_macro_events(&mut self) {
         self.keyboard.cancel_kbd_macro_events();
     }
 
     /// Stop recording a keyboard macro.
-    pub fn end_kbd_macro(&mut self) -> Vec<Value> {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn end_kbd_macro(&mut self) -> Vec<Value> {
         self.keyboard.end_kbd_macro()
     }
 
@@ -1456,27 +1534,26 @@ impl CommandLoop {
         self.keyboard.last_kbd_macro()
     }
 
-    pub fn begin_executing_kbd_macro(&mut self, events: Vec<Value>) {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn begin_executing_kbd_macro(&mut self, events: Vec<Value>) {
         self.keyboard.begin_executing_kbd_macro(events);
     }
 
-    pub fn is_executing_kbd_macro(&self) -> bool {
-        self.keyboard.is_executing_kbd_macro()
-    }
-
-    pub fn finish_executing_kbd_macro(&mut self) {
+    pub(crate) fn finish_executing_kbd_macro(&mut self) {
         self.keyboard.finish_executing_kbd_macro();
     }
 
     /// Signal a quit (C-g).
-    pub fn signal_quit(&mut self) {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn signal_quit(&mut self) {
         if !self.inhibit_quit {
             self.quit_flag = true;
         }
     }
 
     /// Clear the quit flag and return whether it was set.
-    pub fn check_quit(&mut self) -> bool {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn check_quit(&mut self) -> bool {
         let was_set = self.quit_flag;
         self.quit_flag = false;
         was_set

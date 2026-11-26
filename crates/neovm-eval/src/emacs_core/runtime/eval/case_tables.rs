@@ -24,9 +24,9 @@ use neovm_value::{HookInstallError, HookInstallStatus};
 use std::sync::OnceLock;
 
 /// Read the current buffer's canonical (or upcase) derived case table.
-pub type CaseTableRead = fn(&mut Context) -> Result<Value, Flow>;
+pub(crate) type CaseTableRead = fn(&mut Context) -> Result<Value, Flow>;
 /// Re-derive/validate the current buffer's case table after a buffer switch.
-pub type CaseTableSync = fn(&mut Context) -> Result<(), Flow>;
+pub(crate) type CaseTableSync = fn(&mut Context) -> Result<(), Flow>;
 
 /// The four cold bodies eval calls per case-sensitive operation.
 ///
@@ -87,7 +87,7 @@ impl CaseTableHooks {
     }
 
     /// The current buffer's case-table override, for casefiddle/string ops.
-    pub fn override_for_current_buffer(
+    pub(crate) fn override_for_current_buffer(
         &self,
     ) -> fn(&mut Context) -> Result<neovm_text::emacs_core::casetab::CaseTableOverride, Flow> {
         self.override_for_current_buffer
@@ -113,7 +113,7 @@ pub(crate) fn install_case_table_hooks(
 }
 
 /// The installed table, if core has run one of the two pinned install seams.
-pub fn case_table_hooks() -> Option<&'static CaseTableHooks> {
+pub(crate) fn case_table_hooks() -> Option<&'static CaseTableHooks> {
     CASE_TABLE_HOOKS.get()
 }
 
@@ -144,7 +144,7 @@ pub fn sync_current_buffer_case_table_state(ctx: &mut Context) -> Result<(), Flo
 }
 
 /// Install/return the standard case table for admission.
-pub fn standard_case_table(ctx: &mut Context) -> Result<Value, Flow> {
+pub(crate) fn standard_case_table(ctx: &mut Context) -> Result<Value, Flow> {
     (hooks_or_refusal()?.standard())(ctx)
 }
 

@@ -20,8 +20,6 @@ pub mod fileio;
 pub mod filelock;
 #[path = "system/host_input.rs"]
 pub mod host_input;
-#[path = "system/network/mod.rs"]
-pub mod network;
 #[path = "system/os_signal/mod.rs"]
 pub mod os_signal;
 #[path = "system/path_exec/mod.rs"]
@@ -38,6 +36,11 @@ pub mod process;
 pub mod shell_file_name;
 #[path = "system/sqlite/mod.rs"]
 pub mod sqlite;
+// W-REG R1: ordered SYSTEM registration stages.  Core's C14 manifest calls
+// `stages::register_subrs(ctx, SubrSegment::Variant)` at the recorded
+// positions; the batches stay crate-private.
+#[path = "system/stages/mod.rs"]
+pub mod stages;
 #[path = "system/timefns/mod.rs"]
 pub mod timefns;
 #[path = "system/timer/mod.rs"]

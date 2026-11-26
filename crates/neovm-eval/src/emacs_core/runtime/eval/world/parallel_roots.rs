@@ -172,14 +172,25 @@ impl Baton {
             return Err(neovm_value::tagged::gc::RegistrationError::WrongThread.into());
         }
         stopped.check_world_roots(self.parallel_heap_identity())?;
-        if self
-            .world
-            .green
-            .try_borrow()
-            .map_err(|_| RendezvousError::Busy)?
-            .is_some()
+        // A live Green runtime may participate in parallel collection only when
+        // its carried TLS and warm `OwnerCarried` are stowed (`CarriedHolder::Stowed`).
+        // If any owner still holds them inline (`CarriedHolder::Held`), fail closed.
         {
-            return Err(RendezvousError::Publication);
+            let green = self
+                .world
+                .green
+                .try_borrow()
+                .map_err(|_| RendezvousError::Busy)?;
+            if let Some(runtime) = green.as_deref() {
+                if !runtime.carried_is_stowed() {
+                    return Err(RendezvousError::Publication);
+                }
+                let _ = self
+                    .world
+                    .owner_slabs
+                    .try_borrow()
+                    .map_err(|_| RendezvousError::Busy)?;
+            }
         }
         // All symbol/projection access requires the same checked receiver.
         // Drop it before any collector/table bridge can borrow the stop.
@@ -197,7 +208,21 @@ impl Baton {
         let marker_heads = unsafe {
             let world = &self.world;
             let mut visit = |value| out.push(value);
-            (&*world.owned_roots.get()).trace_roots(&mut visit);
+            if let Some(runtime) = world.green.borrow().as_deref() {
+                // Parked seated Baton Contexts publish `RootBatchLease`s into
+                // the heap's transport root table, which `EraCore::collect_requested`
+                // already traces via `collect_shared_root_gc_roots`. Here we
+                // trace `GreenRuntime`'s own World roots (`bootstrap`,
+                // `pending_starts`, `standard_case_table`, stowed `owner_carried`)
+                // and every registered `OwnerSlab`'s dynamic-binding roots.
+                runtime.trace_roots(&mut visit);
+                world.owner_slabs.borrow().trace_roots_for_heap(
+                    stopped,
+                    self.parallel_heap_identity(),
+                    &mut visit,
+                )?;
+            }
+            (&*world.owned_roots.get()).trace_roots_with_buffers(&*world.buffers.get(), &mut visit);
             for value in (&*world.treesit.get()).roots() {
                 visit(value);
             }
@@ -248,9 +273,9 @@ impl Baton {
 }
 
 /// The full World root surface with one explicit synthetic-fixture setting.
-/// GNU's default weak window table is outside A5; no Lisp/window API executes
-/// in the fixture. Reclaim it serially before caller setup, leaving the strict
-/// production supported-type fence unchanged.
+/// GNU's default weak window table is reclaimed serially before caller setup,
+/// so each fixture's admission is attributable to the injected object alone;
+/// no Lisp/window API executes in the fixture.
 #[cfg(test)]
 fn collection_fixture_context() -> Context {
     let mut context = Context::new(crate::test_utils::unit_runtime());
@@ -288,9 +313,13 @@ impl Context {
         .expect("collection fixture drain");
         // Compare only the root address while the exclusive collector loan
         // is retained. Synthetic participants cannot use the serial TLS view.
-        neovm_value::tagged::gc::clear_tagged_heap_root_if_installed(
-            context.tagged_heap.heap_root(),
-        );
+        // SAFETY: `context` is owned locally by this fixture, is never
+        // evaluated during the era, and is dropped on exit without re-entry.
+        unsafe {
+            neovm_value::tagged::gc::clear_tagged_heap_root_if_installed(
+                context.tagged_heap.heap_root(),
+            );
+        }
         let era =
             crate::emacs_core::eval::world::WorldProofEra::admit_rooted(collector, keeper, frozen)
                 .unwrap_or_else(|failure| {
@@ -333,9 +362,13 @@ impl Context {
         .expect("collection fixture drain");
         // Compare only the root address while the exclusive collector loan
         // is retained. Synthetic participants cannot use the serial TLS view.
-        neovm_value::tagged::gc::clear_tagged_heap_root_if_installed(
-            context.tagged_heap.heap_root(),
-        );
+        // SAFETY: `context` is not evaluated during the era and its heap is
+        // reinstalled right after the era ends before `after(&mut context, ...)`.
+        unsafe {
+            neovm_value::tagged::gc::clear_tagged_heap_root_if_installed(
+                context.tagged_heap.heap_root(),
+            );
+        }
         let era =
             crate::emacs_core::eval::world::WorldProofEra::admit_rooted(collector, keeper, frozen)
                 .unwrap_or_else(|failure| {
@@ -375,6 +408,71 @@ mod function_boundary;
 #[cfg(all(test, not(feature = "gc-memory-telemetry")))]
 #[path = "tests/intern_boundary.rs"]
 mod intern_boundary;
+
+impl Baton {
+    /// The heap's original `AliasableBox` provenance root, retained by this
+    /// held Baton. It is not a collector reborrow. Reconstructing a heap loan
+    /// from it while another loan of the same allocation is live is forbidden;
+    /// that obligation is the unsafe constructor's contract.
+    #[cold]
+    #[inline(never)]
+    pub(crate) fn parallel_heap_root_designator(
+        &self,
+    ) -> neovm_value::tagged::gc::heap_transfer::HeapRootDesignator {
+        assert!(self.held_here(), "heap root designator requires the holder");
+        // SAFETY: this held Baton retains the World. `tagged_heap.root()` is
+        // the original provenance root, not a pointer derived from a collector.
+        unsafe {
+            neovm_value::tagged::gc::heap_transfer::HeapRootDesignator::from_original(
+                self.world.tagged_heap.root(),
+            )
+        }
+    }
+
+    /// Original allocation designators only. No aggregate manager borrow.
+    ///
+    /// Each call mints a fresh identity token from the live allocation.
+    /// Tokens for the same address compare equal and are not clones.
+    #[cold]
+    #[inline(never)]
+    pub(crate) fn parallel_symbol_root_designators(
+        &self,
+    ) -> neovm_value::tagged::gc::SymbolRootDesignators {
+        use neovm_value::tagged::gc::{SymbolRootDesignators, WorldIdentity};
+        assert!(self.held_here(), "symbol backing keeper must be held here");
+        let address = std::sync::Arc::as_ptr(&self.world) as usize;
+        // SAFETY: this held Baton retains the World. The address and the two
+        // manager pointers are identity metadata for that allocation. Neither
+        // pointer is dereferenced through the designator.
+        unsafe {
+            SymbolRootDesignators::new(
+                WorldIdentity::new(address),
+                std::ptr::NonNull::new(self.world.obarray.get())
+                    .expect("World obarray root")
+                    .cast(),
+                std::ptr::NonNull::from(&self.world.thread_projections).cast(),
+            )
+        }
+    }
+
+    /// Compare original allocation designators without borrowing managers.
+    #[cold]
+    #[inline(never)]
+    pub(crate) fn check_era_symbol_root_designators(
+        &self,
+        roots: &neovm_value::tagged::gc::SymbolRootDesignators,
+    ) -> Result<(), neovm_value::tagged::gc::RegistrationError> {
+        use neovm_value::tagged::gc::RegistrationError;
+        if !self.held_here() {
+            return Err(RegistrationError::WrongThread);
+        }
+        let current = self.parallel_symbol_root_designators();
+        if roots != &current {
+            return Err(RegistrationError::StaleRegistration);
+        }
+        Ok(())
+    }
+}
 
 // SAFETY: Baton is the unique serial-execution authority of its retained
 // World. Era ownership holds the real token by value on its keeper thread;

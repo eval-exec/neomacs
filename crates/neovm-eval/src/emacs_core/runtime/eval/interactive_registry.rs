@@ -63,11 +63,13 @@ impl InteractiveSpec {
     }
 
     /// Create a spec with no arguments (plain interactive command).
-    pub fn no_args() -> Self {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn no_args() -> Self {
         Self { spec: Value::NIL }
     }
 
-    pub fn string_code_runtime_owned(&self) -> Option<String> {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn string_code_runtime_owned(&self) -> Option<String> {
         match self.spec.kind() {
             ValueKind::Nil => Some(String::new()),
             ValueKind::String => self
@@ -232,7 +234,7 @@ impl WhereIsReverseIndex {
     /// Kept beside `trace_roots_with` so the two cannot drift: this is the
     /// definition of the index's root set, and the collector reads the vector
     /// this produces.
-    pub fn collect_traced_roots(
+    pub(crate) fn collect_traced_roots(
         state: &WhereIsKeymapState,
         sequences_by_definition: &HashMap<WhereIsDefinitionKey, Vec<Vec<Value>>>,
         remapping_by_command: &HashMap<SymId, Value>,
@@ -303,7 +305,8 @@ impl InteractiveRegistry {
     }
 
     /// Register a function symbol as interactive with the given spec.
-    pub fn register_interactive(&mut self, symbol: SymId, spec: InteractiveSpec) {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn register_interactive(&mut self, symbol: SymId, spec: InteractiveSpec) {
         if spec.spec.is_heap_object() {
             self.heap_specs.insert(symbol, spec.spec);
         } else {
@@ -313,7 +316,8 @@ impl InteractiveRegistry {
         self.specs.insert(symbol, spec);
     }
 
-    pub fn unregister_interactive(&mut self, symbol: SymId) {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn unregister_interactive(&mut self, symbol: SymId) {
         self.heap_specs.remove(&symbol);
         self.specs.remove(&symbol);
     }
@@ -324,17 +328,20 @@ impl InteractiveRegistry {
     }
 
     /// Get the interactive spec for a function symbol, if registered.
-    pub fn get_spec(&self, symbol: SymId) -> Option<&InteractiveSpec> {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn get_spec(&self, symbol: SymId) -> Option<&InteractiveSpec> {
         self.specs.get(&symbol)
     }
 
     /// Push an interactive call frame.
-    pub fn push_interactive_call(&mut self, is_interactive: bool) {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn push_interactive_call(&mut self, is_interactive: bool) {
         self.interactive_call_stack.push(is_interactive);
     }
 
     /// Pop an interactive call frame.
-    pub fn pop_interactive_call(&mut self) {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn pop_interactive_call(&mut self) {
         self.interactive_call_stack.pop();
     }
 
@@ -641,7 +648,6 @@ fn command_modes_from_stored_interactive_spec(spec: Value, symbol_mode: SymbolMo
     };
     items
         .get(1)
-        .copied()
         .map(|value| unquote_command_modes_value(value, symbol_mode))
         .unwrap_or(Value::NIL)
 }

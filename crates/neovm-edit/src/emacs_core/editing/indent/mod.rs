@@ -30,6 +30,36 @@ use std::cell::Cell;
 use std::collections::VecDeque;
 use std::sync::OnceLock;
 
+/// Characters a column scan decodes, counted for the flat-vs-size tests.
+///
+/// GNU measures a long hscrolled truncated line by jumping
+/// (`fast_move_it_horizontally`, src/xdisp.c:11676) instead of walking it
+/// character by character, so the work must not grow with the line length.
+/// Test-only: the increment sites are gated with this declaration.
+#[cfg(any(test, feature = "test-support"))]
+static COLUMN_SCAN_CHARACTERS: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) fn reset_column_scan_characters_for_test() {
+    COLUMN_SCAN_CHARACTERS.store(0, std::sync::atomic::Ordering::Relaxed);
+}
+
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) fn column_scan_characters_for_test() -> usize {
+    COLUMN_SCAN_CHARACTERS.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+#[cfg(any(test, feature = "test-support"))]
+#[inline(always)]
+fn count_column_scan_character() {
+    COLUMN_SCAN_CHARACTERS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+}
+
+#[cfg(not(any(test, feature = "test-support")))]
+#[inline(always)]
+fn count_column_scan_character() {}
+
 fn next_visible_line_start<H: EditHost>(
     host: &mut H,
     buffer_id: crate::buffer::BufferId,
@@ -1330,6 +1360,41 @@ pub fn scan_screen_line_motion_target<H: EditHost>(
     window: Option<Value>,
     lines: i64,
 ) -> Result<ScreenLineMotionScan, Flow> {
+    let engine = host.motion_engine();
+    scan_screen_line_motion_target_with_engine(host, current_buffer, point, window, lines, engine)
+}
+
+/// GNU `vmotion` (`src/indent.c:1963`, which calls `compute_motion`): the
+/// motion engine GNU's `window_scroll_for_long_lines` (`src/window.c:6242`)
+/// and `Frecenter`'s long-line fallback (`src/window.c:7434`) use directly,
+/// even when a display iterator is live.  Returns the target and the number
+/// of lines actually moved.
+pub fn vmotion_target<H: EditHost>(
+    host: &mut H,
+    current_buffer: BufferId,
+    point: EmacsBytePos,
+    window: Option<Value>,
+    lines: i64,
+) -> Result<(EmacsBytePos, i64), Flow> {
+    let scan = scan_screen_line_motion_target_with_engine(
+        host,
+        current_buffer,
+        point,
+        window,
+        lines,
+        MotionEngine::ComputeMotion,
+    )?;
+    Ok((scan.target, scan.moved))
+}
+
+fn scan_screen_line_motion_target_with_engine<H: EditHost>(
+    host: &mut H,
+    current_buffer: BufferId,
+    point: EmacsBytePos,
+    window: Option<Value>,
+    lines: i64,
+    engine: MotionEngine,
+) -> Result<ScreenLineMotionScan, Flow> {
     let point = {
         let Some(buf) = host.edit_and_vars().0.buffers.get(current_buffer) else {
             return Ok(ScreenLineMotionScan {
@@ -1342,7 +1407,6 @@ pub fn scan_screen_line_motion_target<H: EditHost>(
     };
 
     let screen_width = vertical_motion_screen_extent(host, window).last_visible_col;
-    let engine = host.motion_engine();
     let wrap = host.window_line_wrap(current_buffer, window, engine);
     let mut target =
         current_screen_line_start_with_truncation(host, current_buffer, point, screen_width, wrap)?
@@ -1504,6 +1568,23 @@ fn buffer_display_table_sym_id() -> neovm_value::intern::SymId {
 pub fn tab_width_sym_id() -> neovm_value::intern::SymId {
     static SYMBOL: OnceLock<neovm_value::intern::SymId> = OnceLock::new();
     *SYMBOL.get_or_init(|| neovm_value::intern::intern("tab-width"))
+}
+
+/// `long-line-threshold` (DEFVAR_LISP, src/buffer.c:5995-6042): the line
+/// length above which redisplay sets `long_line_optimizations_p`, and the
+/// gate of `current_column`'s approximation (src/indent.c:348-351).
+#[inline(always)]
+fn long_line_threshold_sym_id() -> neovm_value::intern::SymId {
+    static SYMBOL: OnceLock<neovm_value::intern::SymId> = OnceLock::new();
+    *SYMBOL.get_or_init(|| neovm_value::intern::intern("long-line-threshold"))
+}
+
+/// `large-hscroll-threshold` (DEFVAR_INT, src/buffer.c:6044): the column
+/// above which GNU's long+truncated column scans take their shortcut.
+#[inline(always)]
+fn large_hscroll_threshold_sym_id() -> neovm_value::intern::SymId {
+    static SYMBOL: OnceLock<neovm_value::intern::SymId> = OnceLock::new();
+    *SYMBOL.get_or_init(|| neovm_value::intern::intern("large-hscroll-threshold"))
 }
 
 /// GNU's staticpro'd `Qinvisible`.
@@ -2435,6 +2516,19 @@ enum ColumnTarget {
     Column(DisplayColumn),
 }
 
+/// Whether a column scan may take GNU's long+truncated shortcut
+/// (`scan_for_column`, src/indent.c:629-668).
+///
+/// `Exact` is for callers where GNU does not reach that code: the reader's
+/// invalid-read-syntax column (GNU `current_column`'s simple scan when the
+/// buffer has no intervals/overlays and is unibyte) and the auto-hscroll
+/// primitive (which has its own hscroll jump at the hscroll call site).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ColumnScanPolicy {
+    Exact,
+    GnuLongTruncated,
+}
+
 /// GNU selective-display recognizes CR as line end only for the symbol t.
 /// This per-scan copy has no Lisp handles or shared mutable state.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -2497,7 +2591,7 @@ fn advance_column_glyphs(
     let glyphs = entry.as_vector_data()?;
     let mut column = column.get();
     for glyph in glyphs.iter() {
-        let code = super::display_metrics::display_glyph_character(*glyph)
+        let code = super::display_metrics::display_glyph_character(glyph)
             .map(|character| character.code())
             .unwrap_or(u32::from(b' '));
         if line_end.is_line_end(code) {
@@ -2529,6 +2623,7 @@ fn simple_backward_column(
     let mut post_tab = None::<DisplayColumn>;
     let tab = tab_width.get();
     'text: while scan > start {
+        count_column_scan_character();
         scan = scan.saturating_sub_len(EmacsByteLen::new(1));
         let Some(byte) = buf.emacs_byte_at_pos(scan) else {
             break;
@@ -2538,7 +2633,7 @@ fn simple_backward_column(
         let count = glyphs.as_ref().map_or(1, |glyphs| glyphs.len());
         for index in (0..count).rev() {
             let code = match glyphs.as_ref() {
-                Some(glyphs) => super::display_metrics::display_glyph_character(glyphs[index])
+                Some(glyphs) => super::display_metrics::display_glyph_character(glyphs.at(index))
                     .map(|character| character.code())
                     .unwrap_or(u32::from(b' ')),
                 None => u32::from(byte),
@@ -2605,11 +2700,109 @@ fn display_table_column_advance(
     }
 }
 
+/// GNU `scan_for_column`'s long+truncated shortcut (src/indent.c:629-668).
+///
+/// On a buffer whose long-line flag is set and whose lines are truncated
+/// (`truncate-lines`, or the partial-width rule GNU reads at :637-643), GNU
+/// replaces the width walk with one-column-per-character arithmetic:
+///
+/// * `eolpos` is `find_newline`'s forward result, which is the position
+///   AFTER the newline (src/search.c:675-830), or ZV with no newline;
+/// * `scan = bolpos + goal`, clamped to ENDPOS (ZV for move-to-column, PT for
+///   current_column_1) and then to `eolpos - 1` (or ZV at end of buffer);
+/// * `col = scan - bolpos`; above `large-hscroll-threshold` the scan stops
+///   with `prev_col = col - 1`, `prev_pos = scan - 1`, and
+///   `prev_bpos = CHAR_TO_BYTE (scan)`.
+///
+/// The `prev_bpos` detail matters: Fmove_to_column compares it against the
+/// new PT_BYTE, so its FORCE tab-split can never trigger on this path.
+///
+/// Returns `None` when any gate fails or the clamped column is at or below
+/// `large-hscroll-threshold`; the caller then runs the exact walk.
+fn long_truncated_column_scan<H: EditHost>(
+    host: &mut H,
+    buffer_id: crate::buffer::BufferId,
+    target: ColumnTarget,
+) -> Result<Option<ColumnScan>, Flow> {
+    let large_hscroll_threshold = host
+        .forwarded_variable_value(large_hscroll_threshold_sym_id())
+        .and_then(|value| value.as_fixnum())
+        .unwrap_or(10_000);
+    let partial_width_truncation = host.long_line_partial_width_truncation(buffer_id);
+    let (edit, _vars) = host.edit_and_vars();
+    let buf = edit.buffers.get(buffer_id).ok_or_else(|| {
+        signal(
+            LispCondition::Error,
+            vec![Value::string("No current buffer")],
+        )
+    })?;
+    if !buf.long_line_optimizations_p() {
+        return Ok(None);
+    }
+    // GNU `:635-643`: truncate-lines, else the partial-width rule (which the
+    // host answers; a host with no window information returns false and GNU
+    // then also applies only truncate-lines).
+    let truncate_lines = buf.truncate_lines_p();
+    if !(truncate_lines || partial_width_truncation) {
+        return Ok(None);
+    }
+    let point_byte = buf
+        .accessible_emacs_byte_region()
+        .clamp(buf.point_emacs_byte_pos());
+    let bol_byte = bol_emacs_byte(buf, point_byte);
+    let bol_char = buf.emacs_byte_pos_to_lisp_char_pos(bol_byte).as_i64();
+    let accessible = buf.accessible_emacs_byte_region();
+    let zv = accessible.end();
+    let zv_char = buf.point_max_lisp_char_pos().as_i64();
+    // `find_newline (PT, ..., ZV, ..., 1)` is the position after the newline.
+    let (eolpos_char, eol_is_zv) = match buf.next_newline_emacs_byte(point_byte, zv) {
+        Some(newline) => (
+            buf.emacs_byte_pos_to_lisp_char_pos(newline).as_i64() + 1,
+            false,
+        ),
+        None => (zv_char, true),
+    };
+    // goalcol (MOST_POSITIVE for a position target) and endpos (ZV for
+    // move-to-column, the target position for current_column_1).
+    let (goal, end_char) = match target {
+        ColumnTarget::Column(goal) => (goal.get() as i64, zv_char),
+        ColumnTarget::Position(pos) => (
+            i64::MAX,
+            buf.emacs_byte_pos_to_lisp_char_pos(accessible.clamp(pos))
+                .as_i64(),
+        ),
+    };
+    let mut scan_char = bol_char.saturating_add(goal).min(end_char);
+    if scan_char > eolpos_char {
+        scan_char = if eol_is_zv { zv_char } else { eolpos_char - 1 };
+    }
+    let column = scan_char - bol_char;
+    if column <= large_hscroll_threshold {
+        return Ok(None);
+    }
+    let scan_byte =
+        buf.char_pos_to_emacs_byte_pos_clamped(CharPos0::new((scan_char - 1).max(0) as usize));
+    Ok(Some(ColumnScan {
+        byte_pos: scan_byte,
+        column: column as usize,
+        // GNU `:658-659`: prev_bpos is CHAR_TO_BYTE (scan), not scan - 1.
+        previous_byte_pos: scan_byte,
+        previous_column: column.saturating_sub(1) as usize,
+        previous_code: None,
+    }))
+}
+
 fn scan_for_column<H: EditHost>(
     host: &mut H,
     buffer_id: crate::buffer::BufferId,
     target: ColumnTarget,
+    policy: ColumnScanPolicy,
 ) -> Result<ColumnScan, Flow> {
+    if policy == ColumnScanPolicy::GnuLongTruncated
+        && let Some(scan) = long_truncated_column_scan(host, buffer_id, target)?
+    {
+        return Ok(scan);
+    }
     // This memo exists only for this scan. Property probes execute no Lisp;
     // native composition registration does not modify character widths.
     // Cache numeric non-ASCII widths, never display vectors or tab positions.
@@ -2772,6 +2965,7 @@ fn scan_for_column<H: EditHost>(
     let mut next_composition_probe = if composition_possible { scan } else { end };
 
     while scan < end {
+        count_column_scan_character();
         if scan >= next_invisible_probe {
             if let Some(next_visible) =
                 host.invisible_source_run_end(buffer_id, scan, InvisibleRunContext::ColumnScan)?
@@ -3106,9 +3300,67 @@ pub fn current_column<H: EditHost>(host: &mut H, args: Vec<Value>) -> EvalResult
     if let Some(column) = cached_current_column(current_id.0, point, modiff) {
         return Ok(Value::fixnum(column as i64));
     }
-    let scan = scan_for_column(host, current_id, ColumnTarget::Position(point))?;
+    // GNU `current_column` (src/indent.c:348-351): on a buffer whose
+    // redisplay found a long line, a point farther than
+    // `long-line-threshold` from the line's beginning gets the character
+    // distance as its column.  The early return deliberately does NOT update
+    // `last_known_column`.
+    if let Some(column) = long_line_current_column_approximation(host, current_id, point) {
+        return Ok(Value::fixnum(column));
+    }
+    // GNU `current_column` takes the scan path (current_column_1) only when
+    // intervals, overlays or multibyte text are present (src/indent.c:365-370);
+    // otherwise the simple backward scan runs and only the approximation above
+    // applies.  Keep the shortcut on the branch GNU reaches.
+    let policy = {
+        let (edit, _vars) = host.edit_and_vars();
+        match edit.buffers.get(current_id) {
+            Some(buffer) if current_column_uses_scan(buffer) => ColumnScanPolicy::GnuLongTruncated,
+            _ => ColumnScanPolicy::Exact,
+        }
+    };
+    let scan = scan_for_column(host, current_id, ColumnTarget::Position(point), policy)?;
     set_last_known_column(current_id.0, point, modiff, scan.column);
     Ok(Value::fixnum(scan.column as i64))
+}
+
+/// Whether GNU `current_column`'s properties/overlays/multibyte branch
+/// (`current_column_1`, src/indent.c:365-370) applies, which is the only
+/// branch that reaches `scan_for_column` from `current-column`.
+///
+/// The first test is GNU's `buffer_intervals (current_buffer)`, i.e. the
+/// interval tree EXISTS.  It is not "has a property": GNU keeps the tree
+/// after `remove-text-properties`, so the properties branch (and with it the
+/// long+truncated scan shortcut) still applies then.
+fn current_column_uses_scan(buffer: &Buffer) -> bool {
+    buffer.text_props_tree_present()
+        || !buffer.overlays.is_empty()
+        || buffer.total_char_len().get() != buffer.total_emacs_byte_len().get()
+}
+
+/// GNU's `current_column` long-line approximation (`src/indent.c:348-351`):
+/// when the buffer's `long_line_optimizations_p` is set, `long-line-threshold`
+/// is a non-nil fixnum, and point is more than that many characters past the
+/// beginning of its line, return that character distance.  GNU explicitly
+/// calls this "an approximation": tabs, wide characters, control
+/// representations and display properties are ignored.
+fn long_line_current_column_approximation<H: EditHost>(
+    host: &mut H,
+    buffer_id: BufferId,
+    point: EmacsBytePos,
+) -> Option<i64> {
+    let threshold = host
+        .forwarded_variable_value(long_line_threshold_sym_id())
+        .and_then(|value| value.as_fixnum())?;
+    let (edit, _vars) = host.edit_and_vars();
+    let buffer = edit.buffers.get(buffer_id)?;
+    if !buffer.long_line_optimizations_p() {
+        return None;
+    }
+    let bol = bol_emacs_byte(buffer, point);
+    let distance = buffer.emacs_byte_pos_to_lisp_char_pos(point).as_i64()
+        - buffer.emacs_byte_pos_to_lisp_char_pos(bol).as_i64();
+    (distance > threshold).then_some(distance)
 }
 
 /// Display column (`current-column`-equivalent) of an explicit byte position in
@@ -3132,7 +3384,15 @@ pub fn display_column_at_emacs_byte_pos<H: EditHost>(
         };
         buf.accessible_emacs_byte_region().clamp(pos)
     };
-    let scan = scan_for_column(host, buffer_id, ColumnTarget::Position(clamped))?;
+    // Exact: the reader's invalid-read-syntax column and auto-hscroll both
+    // come through here; GNU's reader uses current_column's different gate,
+    // and auto-hscroll has its own long-line jump at the hscroll call site.
+    let scan = scan_for_column(
+        host,
+        buffer_id,
+        ColumnTarget::Position(clamped),
+        ColumnScanPolicy::Exact,
+    )?;
     Ok(scan.column)
 }
 
@@ -3202,10 +3462,13 @@ pub fn move_to_column<H: EditHost>(host: &mut H, args: Vec<Value>) -> EvalResult
     }
 
     let mut tab_split: Option<(EmacsBytePos, usize, usize)> = None;
+    // GNU `Fmove_to_column` always reaches `scan_for_column` (src/indent.c:1142),
+    // so the long+truncated shortcut applies here.
     let scan = scan_for_column(
         host,
         current_id,
         ColumnTarget::Column(DisplayColumn::new(target)),
+        ColumnScanPolicy::GnuLongTruncated,
     )?;
     let dest_byte = scan.byte_pos;
     let mut reached = scan.column;

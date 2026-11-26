@@ -53,6 +53,40 @@ fn oracle_prop_overlay_make_and_predicates() {
 // ---------------------------------------------------------------------------
 
 #[test]
+fn oracle_prop_overlay_put_evaporate_owner_boundary() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+
+    let form = r####"(with-temp-buffer
+  (insert "abcd")
+  (let* ((empty (make-overlay 2 2))
+         (empty-result
+          (progn
+            (overlay-put empty 'evaporate t)
+            (list (overlay-buffer empty)
+                  (length (overlays-in 1 5))
+                  (overlays-at 2)
+                  (overlay-start empty)
+                  (overlay-end empty)
+                  (overlay-get empty 'evaporate)
+                  (next-overlay-change 1)
+                  (previous-overlay-change 5))))
+         (nonempty (make-overlay 2 3)))
+    (overlay-put nonempty 'evaporate t)
+    (list empty-result
+          (list (eq (overlay-buffer nonempty) (current-buffer))
+                (length (overlays-in 1 5))
+                (eq (car (overlays-at 2)) nonempty)
+                (overlay-start nonempty)
+                (overlay-end nonempty)
+                (overlay-get nonempty 'evaporate)
+                (next-overlay-change 1)
+                (previous-overlay-change 5)))))
+"####;
+    let expect = expect_test::expect![[r#""OK ((nil 0 nil nil nil t 5 1) (t 1 t 2 3 t 2 3))""#]];
+    crate::common::assert_oracle_parity_expect(form, expect);
+}
+
+#[test]
 fn oracle_prop_overlay_put_get_properties() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 

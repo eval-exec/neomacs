@@ -5,7 +5,9 @@
 //! GNU implements in frame.c. The Frame/FrameManager data structures
 //! live in crate::window; window.c builtins stay in super::window_cmds.
 
+mod chrome_resize;
 mod cycling;
+pub(crate) mod implied_resize;
 pub(crate) mod position;
 mod selection;
 use crate::window::DisplayFrameExt;
@@ -25,13 +27,17 @@ use super::window_cmds::{
     ensure_selected_frame_id_in_state, expect_int, flush_pending_live_gui_resize,
     frame_is_top_level_non_window, frame_name_parameter_value, frame_non_text_total_height_pixels,
     frame_non_text_total_width_pixels_in_state, frame_realized_lines, frame_size_param_to_cells,
-    frame_size_param_to_pixels, frame_text_height_pixels, frame_text_width_pixels_in_state,
-    frame_total_cols, frame_total_lines, make_frame_plain_on_terminal, other_frames_in_state,
-    parse_frame_size_param, remember_selected_window_point_in_state, request_live_gui_frame_resize,
-    resize_live_gui_frame, resolve_frame_id, resolve_frame_id_in_state, selected_frame_impl,
-    set_frame_text_size, stringish_value, sync_selected_window_buffer_in_state,
+    frame_size_param_to_pixels, frame_text_height_pixels, frame_text_width_pixels,
+    frame_text_width_pixels_in_state, frame_total_cols, frame_total_lines,
+    host_outer_non_text_height_pixels, make_frame_plain_on_terminal,
+    note_explicit_tool_bar_omission, other_frames_in_state, parse_frame_size_param,
+    remember_selected_window_point_in_state, request_live_gui_frame_resize, resize_live_gui_frame,
+    resolve_frame_id, resolve_frame_id_in_state, selected_frame_impl, set_frame_text_size,
+    stringish_value, sync_selected_window_buffer_in_state,
 };
 use crate::window::FrameManager;
+#[cfg(target_os = "linux")]
+use crate::window::ToolkitToolBar;
 use crate::window::{
     FrameDivider, FrameFullscreen, FrameId, FrameParam, FrameParamKey, FrameVisibility,
 };
@@ -41,6 +47,20 @@ use neovm_value::error::{EvalResult, LispCondition, signal, signal_error_with_ar
 use neovm_value::error::{expect_args, expect_max_args, expect_min_args};
 use neovm_value::intern::{intern, resolve_sym};
 use neovm_value::value::{Value, ValueKind, VecLikeType};
+
+pub(crate) fn implied_resize_creation_phase(
+    frame: &crate::window::Frame,
+) -> implied_resize::CreationPhase {
+    match frame.creation_phase {
+        crate::window::FrameCreationPhase::BeforeMakeFrame => {
+            implied_resize::CreationPhase::BeforeMakeFrame
+        }
+        // Neomacs projects its own toolbar allocation synchronously during
+        // construction, before Lisp marks the frame made. GTK's additional
+        // first-toolkit-allocation gate is therefore already satisfied here.
+        crate::window::FrameCreationPhase::Made => implied_resize::CreationPhase::Made,
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum IconifyFrameAction {
@@ -495,7 +515,19 @@ pub fn builtin_frame_native_height(
         .get(fid)
         .ok_or_else(|| signal("error", vec![Value::string("Frame not found")]))?;
     Ok(Value::fixnum(if frame_uses_window_system_pixels(frame) {
-        frame.height as i64
+        // GNU's Gtk+ and NS builds report the native frame without the menu
+        // and tool bars (src/frame.c:4401-4418), the same bars `frame-edges`
+        // and `frame-outer-height` include.  Neomacs paints those bars inside
+        // its own window, so its stored pixel height counts them; subtract
+        // the bar band here to expose GNU's native-frame value.  The tab bar
+        // stays included, matching `frame-inner-height`'s own subtraction of
+        // `tab-bar-height` (lisp/frame.el:1913).
+        let external_bar_height = if frame.displays_chrome {
+            frame.external_bar_height()
+        } else {
+            0
+        };
+        frame.height.saturating_sub(external_bar_height) as i64
     } else {
         frame_total_lines(frame)
     }))
@@ -719,6 +751,155 @@ pub fn builtin_frame_position(
     ))
 }
 
+/// Whether an explicit text height adds the tool bar to the host window.
+///
+/// GTK's inhibit-1 hook adds `FRAME_TOOLBAR_HEIGHT`, which stays 0 until the
+/// first item-bearing `update_frame_tool_bar` (gtkutil.c:1181-1182, :6149-6160).
+/// `frame-inhibit-implied-resize` is not consulted here. It applies to the
+/// later inhibit-2 allocation. On Linux the discriminator is that allocation
+/// flag. NS `ns_set_window_size` (nsterm.m:1877-1917) has no attested row in
+/// this change, so non-Linux builds keep the tool bar in the explicit request.
+fn explicit_outer_includes_tool_bar(
+    eval: &neovm_eval::emacs_core::eval::Context,
+    fid: FrameId,
+) -> Result<bool, Flow> {
+    let frame = eval
+        .frame_manager()
+        .get(fid)
+        .ok_or_else(|| signal("error", vec![Value::string("Frame not found")]))?;
+    #[cfg(target_os = "linux")]
+    {
+        Ok(matches!(frame.toolkit_tool_bar, ToolkitToolBar::Allocated))
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = frame;
+        Ok(true)
+    }
+}
+
+/// First Linux tool-bar allocation for one frame.
+///
+/// GNU packs the bar in `update_frame_tool_bar` when that frame has items,
+/// then runs inhibit 2 (`gtkutil.c:6149-6156`, `frame.c:885-905`). The trigger
+/// is this frame's redisplay, not a global `window-setup-hook` flag. An empty
+/// item list does not mark the frame allocated. GNU still sets
+/// `tool_bar_resized` on that update, including a creation-time update with
+/// 0 items (`gtkutil.c:6158-6160`); that creation case is left for a later
+/// attested row. The pixel height is stored only when `n_tool_bar_items`
+/// is non-zero.
+/// Preserving the text grid grows the window by the bar. Preserving the
+/// allocation keeps the outer pixels and the text rows shrink inside them.
+/// A window that already contains the band is only marked allocated.
+///
+/// `text_height` is read while the bar is still withheld, so it is already
+/// the full grid. The grow passes that height with `include_tool_bar` and
+/// does not add `tool_bar_height` a second time.
+pub fn note_linux_toolkit_tool_bar_allocation(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    fid: FrameId,
+    has_tool_bar_items: bool,
+) {
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = (eval, fid, has_tool_bar_items);
+    }
+    #[cfg(target_os = "linux")]
+    {
+        if !has_tool_bar_items {
+            return;
+        }
+        let Some((omitted, text_width, text_height, outer_width, outer_height)) =
+            eval.frame_manager().get(fid).and_then(|frame| {
+                if frame.effective_window_system().is_none()
+                    || matches!(frame.toolkit_tool_bar, ToolkitToolBar::Allocated)
+                    || frame.tool_bar_height == 0
+                {
+                    None
+                } else {
+                    Some((
+                        matches!(
+                            frame.toolkit_tool_bar,
+                            ToolkitToolBar::Unallocated {
+                                explicit_size_omitted: true
+                            }
+                        ),
+                        frame_text_width_pixels(frame),
+                        frame_text_height_pixels(frame),
+                        frame.width,
+                        frame.height,
+                    ))
+                }
+            })
+        else {
+            return;
+        };
+        let grow = omitted && {
+            match tool_bar_lines_policy(eval, fid) {
+                Ok(policy) => policy == implied_resize::ResizePolicy::PreserveTextGrid,
+                Err(err) => {
+                    tracing::warn!("tool-bar allocation policy failed: {err:?}");
+                    false
+                }
+            }
+        };
+        if let Some(frame) = eval.frame_manager_mut().get_mut(fid) {
+            frame.toolkit_tool_bar = ToolkitToolBar::Allocated;
+            frame.tool_bar_items_packed = true;
+        }
+        if grow {
+            let (frames, buffers, display_host) = eval.frame_manager_buffers_and_display_host_mut();
+            if let Err(err) = resize_live_gui_frame(
+                frames,
+                buffers,
+                display_host,
+                fid,
+                text_width,
+                text_height,
+                false,
+                true,
+            ) {
+                tracing::warn!("tool-bar allocation resize failed: {err:?}");
+            }
+            return;
+        }
+        if !omitted {
+            return;
+        }
+        // Inhibit 2 kept the outer window. Reflow so the now-reserved bar
+        // eats text rows. This is not a host request: the pixels already
+        // match the window that omitted the bar.
+        {
+            let (frames, buffers, _) = eval.frame_manager_buffers_and_display_host_mut();
+            if let Some(frame) = frames.get_mut(fid) {
+                frame.resize_pixelwise_with_buffer_constraints(buffers, outer_width, outer_height);
+            }
+        }
+        adjust_frame_glyph_matrices(eval, fid);
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn tool_bar_lines_policy(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    fid: FrameId,
+) -> Result<implied_resize::ResizePolicy, Flow> {
+    let inhibit = eval.eval_symbol_by_id(intern("frame-inhibit-implied-resize"))?;
+    let symbols = eval.symbol_mode();
+    let frame = eval
+        .frame_manager()
+        .get(fid)
+        .ok_or_else(|| signal("error", vec![Value::string("Frame not found")]))?;
+    implied_resize::policy(
+        frame,
+        inhibit,
+        implied_resize_creation_phase(frame),
+        implied_resize::ImpliedResizeReason::ToolBarLines,
+        implied_resize::ResizeAxis::Vertical,
+        symbols,
+    )
+}
+
 /// `(set-frame-height FRAME HEIGHT &optional PRETEND PIXELWISE)` -> nil.
 #[doc(hidden)]
 pub fn builtin_set_frame_height(
@@ -764,6 +945,7 @@ pub fn builtin_set_frame_height(
             let desired_total_lines = ((text_height_px as f32) / char_height.max(1.0))
                 .floor()
                 .max(1.0) as i64;
+            let include_tool_bar = explicit_outer_includes_tool_bar(ctx, fid)?;
             let (frames, buffers, display_host) = ctx.frame_manager_buffers_and_display_host_mut();
             request_live_gui_frame_resize_and_keep_pending(
                 frames,
@@ -781,8 +963,10 @@ pub fn builtin_set_frame_height(
                         total_lines: desired_total_lines,
                     }
                 },
+                include_tool_bar,
             )?;
         } else {
+            let include_tool_bar = explicit_outer_includes_tool_bar(ctx, fid)?;
             let (frames, buffers, display_host) = ctx.frame_manager_buffers_and_display_host_mut();
             request_live_gui_frame_resize(
                 frames,
@@ -792,6 +976,7 @@ pub fn builtin_set_frame_height(
                 current_text_width_px,
                 text_height_px,
                 pretend,
+                include_tool_bar,
             )?;
         }
     } else if ctx
@@ -891,6 +1076,7 @@ pub fn builtin_set_frame_width(
                 display_host,
                 fid,
                 FrameResizeRequest::TextWidth(text_width_px),
+                true,
             )?;
         } else {
             let (frames, buffers, display_host) = ctx.frame_manager_buffers_and_display_host_mut();
@@ -902,6 +1088,7 @@ pub fn builtin_set_frame_width(
                 text_width_px,
                 current_text_height_px,
                 pretend,
+                true,
             )?;
         }
     } else if ctx
@@ -1015,6 +1202,7 @@ pub fn builtin_set_frame_size(
             .floor()
             .max(1.0) as i64;
         if ctx.display_host.is_some() {
+            let include_tool_bar = explicit_outer_includes_tool_bar(ctx, fid)?;
             let (frames, buffers, display_host) = ctx.frame_manager_buffers_and_display_host_mut();
             request_live_gui_frame_resize_and_keep_pending(
                 frames,
@@ -1032,8 +1220,10 @@ pub fn builtin_set_frame_size(
                         total_lines: desired_total_lines,
                     }
                 },
+                include_tool_bar,
             )?;
         } else {
+            let include_tool_bar = explicit_outer_includes_tool_bar(ctx, fid)?;
             let (frames, buffers, display_host) = ctx.frame_manager_buffers_and_display_host_mut();
             request_live_gui_frame_resize(
                 frames,
@@ -1043,6 +1233,7 @@ pub fn builtin_set_frame_size(
                 text_width_px,
                 text_height_px,
                 false,
+                include_tool_bar,
             )?;
         }
     } else if ctx
@@ -1378,7 +1569,7 @@ fn make_terminal_frame_on_existing_terminal(
     terminal_id: u64,
 ) -> EvalResult {
     let parameters = args.first().copied().unwrap_or(Value::NIL);
-    let (width, height) = eval
+    let stored = eval
         .frame_manager()
         .selected_frame()
         .filter(|frame| frame.terminal_id == terminal_id)
@@ -1394,6 +1585,23 @@ fn make_terminal_frame_on_existing_terminal(
                 .map(|frame| (frame.width, frame.height))
         })
         .unwrap_or((80, 25));
+    // GNU sizes a root frame from the terminal, not from the selected frame
+    // (`frame.c:1850-1863`). A child keeps its parameter / parent geometry.
+    let parent = live_parent_frame_parameter(eval, parameters);
+    let (menu, tab) = if parent.is_some() {
+        (0, 0)
+    } else {
+        (
+            tty_root_bar_lines(eval, parameters, "menu-bar-lines", "menu-bar-mode"),
+            tty_root_bar_lines(eval, parameters, "tab-bar-lines", "tab-bar-mode"),
+        )
+    };
+    let (width, height) = if parent.is_some() {
+        (stored.0.max(1), stored.1.max(1))
+    } else {
+        let (cols, rows) = root_tty_winsize(terminal_id, stored);
+        clamped_tty_root_cells(cols, rows, menu, tab)
+    };
     let (frames, buffers) = eval.frame_manager_and_buffers_mut();
     let frame = make_frame_plain_on_terminal(frames, buffers, args, terminal_id, width, height)?;
     let frame_id = FrameId(frame.as_frame_id().expect("make-frame returned a frame"));
@@ -1411,14 +1619,105 @@ fn make_terminal_frame_on_existing_terminal(
         ));
     }
     let displays_chrome = !eval.noninteractive();
+    let Some(size) = super::terminal::pure::TtyFrameSize::new(width, height) else {
+        let _ = eval.frame_manager_mut().delete_frame(frame_id);
+        return Err(signal(
+            "error",
+            vec![Value::string("Screen size is too small")],
+        ));
+    };
     let (frames, buffers) = eval.frame_manager_and_buffers_mut();
-    if let Some(frame) = frames.get_mut(frame_id) {
-        let size = super::terminal::pure::TtyFrameSize::new(width, height)
-            .expect("live terminal frames have nonzero dimensions");
+    if let Some(frame) = frames.get_mut(frame_id)
+        && frame_is_top_level_non_window(frame)
+    {
+        // `make_terminal_frame` seeds the bars from the modes before
+        // `adjust_frame_size` (`frame.c:1602-1607`). An explicit alist entry
+        // already stored by `make_frame_plain_on_terminal` wins.
+        if alist_int_parameter(parameters, "menu-bar-lines").is_none() {
+            frame.set_parameter(
+                FrameParam::MenuBarLines.symbol(),
+                Value::fixnum(i64::from(menu)),
+            );
+        }
+        if alist_int_parameter(parameters, "tab-bar-lines").is_none() {
+            frame.set_parameter(
+                FrameParam::TabBarLines.symbol(),
+                Value::fixnum(i64::from(tab)),
+            );
+        }
+        frame.sync_menu_bar_height_from_parameters();
+        frame.sync_tab_bar_height_from_parameters();
         apply_terminal_viewport_to_tty_frame(frame, buffers, size, displays_chrome);
     }
     super::xfaces::realization::initialize_new_terminal_frame_faces(eval, frame_id, parameters)?;
     Ok(frame)
+}
+
+/// Total character cells of a root tty frame after GNU's safe clamp.
+///
+/// `adjust_frame_size` with inhibit 5 (`frame.c:860-927`) never rejects a
+/// zero winsize. The TTY arm of `frame_windows_min_size` (`frame.c:562-570`)
+/// floors the text height at menu + tab + mode line + echo area, and
+/// `window-safe-min-width` is 2. The returned height is the whole terminal:
+/// that text floor plus the top margin. Attested on a 0x0 pty with the menu
+/// bar on: `frame-width` 2, `frame-height` 3 (terminal rows 4). An 80x24
+/// winsize stays 80 by 24, so `frame-height` is 23.
+fn clamped_tty_root_cells(cols: u32, rows: u32, menu: u32, tab: u32) -> (u32, u32) {
+    const MIN_COLS: u32 = 2;
+    let mode_line = 1u32;
+    let echo = 1u32;
+    let top = menu.saturating_add(tab);
+    let text_floor = top.saturating_add(mode_line).saturating_add(echo);
+    let total_floor = text_floor.saturating_add(top);
+    (cols.max(MIN_COLS), rows.max(total_floor))
+}
+
+fn root_tty_winsize(terminal_id: u64, stored: (u32, u32)) -> (u32, u32) {
+    // GNU reads `get_tty_size(fileno(FRAME_TTY(f)->input))` (`frame.c:1861`).
+    // `(0, 0)` is that answer. A terminal with no query, no host fd, and no
+    // open size has nothing else to read, so the frame cells remain.
+    super::terminal::pure::terminal_winsize_cells(terminal_id).unwrap_or(stored)
+}
+
+fn tty_root_bar_lines(
+    eval: &neovm_eval::emacs_core::eval::Context,
+    params: Value,
+    parameter: &str,
+    mode: &str,
+) -> u32 {
+    if let Some(lines) = alist_int_parameter(params, parameter) {
+        return lines.max(0) as u32;
+    }
+    u32::from(
+        eval.builtin_var_value_by_name(mode)
+            .is_some_and(|value| value.is_truthy()),
+    )
+}
+
+fn alist_int_parameter(params: Value, name: &str) -> Option<i64> {
+    let items = neovm_value::value::list_to_vec(&params)?;
+    let key = Value::from_sym_id(intern(name));
+    for item in items {
+        if item.is_cons() && item.cons_car() == key {
+            return item.cons_cdr().as_int();
+        }
+    }
+    None
+}
+
+fn live_parent_frame_parameter(
+    eval: &neovm_eval::emacs_core::eval::Context,
+    params: Value,
+) -> Option<FrameId> {
+    let items = neovm_value::value::list_to_vec(&params)?;
+    let key = Value::from_sym_id(intern("parent-frame"));
+    for item in items {
+        if item.is_cons() && item.cons_car() == key {
+            let id = FrameId(item.cons_cdr().as_frame_id()?);
+            return eval.frame_manager().get(id).is_some().then_some(id);
+        }
+    }
+    None
 }
 
 /// Apply the physical terminal viewport only to its top-level frame.
@@ -1444,7 +1743,7 @@ fn terminal_frame_string_parameter(params: Value, name: &str) -> Result<Option<S
         return Ok(None);
     };
     for item in items {
-        if !item.is_cons() || item.cons_car() != Value::symbol(name) {
+        if !item.is_cons() || item.cons_car() != Value::from_sym_id(intern(name)) {
             continue;
         }
         let value = item.cons_cdr();
@@ -1586,14 +1885,18 @@ pub fn builtin_frame_parameters(
             frame.explicit_name_value(),
         ));
     }
-    let width = if frame_is_top_level_non_window(frame) {
+    let width = if frame_uses_window_system_pixels(frame) {
+        gui_frame_width_parameter(frame)
+    } else if frame_is_top_level_non_window(frame) {
         Value::fixnum(frame.columns() as i64)
     } else {
         frame
             .fixed_parameter(crate::window::FrameQueryParam::Width)
             .unwrap_or(Value::fixnum(frame.columns() as i64))
     };
-    let height = if frame_is_top_level_non_window(frame) {
+    let height = if frame_uses_window_system_pixels(frame) {
+        gui_frame_height_parameter(frame)
+    } else if frame_is_top_level_non_window(frame) {
         Value::fixnum(frame_realized_lines(frame))
     } else {
         frame
@@ -1834,6 +2137,7 @@ pub fn builtin_modify_frame_parameters(
     let mut requested_left = None;
     let mut requested_top = None;
     let mut matrix_geometry_changed = false;
+    let mut chrome_resize = None;
 
     for item in items.into_iter().rev() {
         if item.is_cons() {
@@ -1841,6 +2145,13 @@ pub fn builtin_modify_frame_parameters(
             let pair_cdr = item.cons_cdr();
             if let Some(key) = pair_car.as_symbol_id(symbol_mode) {
                 let key_name = resolve_sym(key);
+                let chrome_change = chrome_resize::ChromeChange::capture(
+                    eval,
+                    fid,
+                    key_name,
+                    pair_cdr,
+                    chrome_resize.as_ref(),
+                )?;
                 if matches!(
                     key_name,
                     "internal-border-width"
@@ -2178,6 +2489,9 @@ pub fn builtin_modify_frame_parameters(
                         }
                     },
                 }
+                if let Some(change) = chrome_change {
+                    chrome_resize = change.apply(eval, fid, chrome_resize)?;
+                }
             }
         }
     }
@@ -2186,10 +2500,43 @@ pub fn builtin_modify_frame_parameters(
         frame.sync_bar_heights_from_parameters();
     }
 
-    let requested_width =
+    let mut requested_width =
         resolve_frame_size_parameter(&eval.frame_manager(), fid, requested_width, true);
-    let requested_height =
+    let mut requested_height =
         resolve_frame_size_parameter(&eval.frame_manager(), fid, requested_height, false);
+
+    // Coalesce chrome changes into the explicit dimensions in this same alist.
+    // A font change may already have superseded this queued intent; in that
+    // case it owns the latest request and must not be replayed here.
+    if let Some(target) =
+        chrome_resize.filter(|target| target.is_current(&eval.frame_manager(), fid))
+    {
+        let request = target.request_with_explicit_dimensions(
+            &eval.frame_manager(),
+            fid,
+            requested_width,
+            requested_height,
+        )?;
+        // A chrome-only target's text height is already net of the bars, so
+        // the host add must put the tool bar back. An explicit height in this
+        // alist is a user text size and follows the tool-bar inhibition.
+        let include_tool_bar = if requested_height.is_some() {
+            explicit_outer_includes_tool_bar(eval, fid)?
+        } else {
+            true
+        };
+        let (frames, buffers, host) = eval.frame_manager_buffers_and_display_host_mut();
+        request_live_gui_frame_resize_and_keep_pending(
+            frames,
+            buffers,
+            host,
+            fid,
+            request,
+            include_tool_bar,
+        )?;
+        requested_width = None;
+        requested_height = None;
+    }
 
     // Position changes do not supersede outstanding size intent. Position is
     // applied below independently of whether a new size was requested.
@@ -2206,7 +2553,6 @@ pub fn builtin_modify_frame_parameters(
                 current_text_height_px,
                 char_width,
                 char_height,
-                should_defer_resize,
             ) = {
                 let frame = eval
                     .frame_manager()
@@ -2219,7 +2565,6 @@ pub fn builtin_modify_frame_parameters(
                     frame_text_height_pixels(frame),
                     frame.char_width,
                     frame.char_height,
-                    frame.should_defer_gui_parameter_resize(),
                 )
             };
             let resize_request = frame_resize_request_from_params(
@@ -2232,29 +2577,26 @@ pub fn builtin_modify_frame_parameters(
                 char_width,
                 char_height,
             );
-            if should_defer_resize {
-                let (desired_cols, desired_total_lines) =
-                    resize_request.logical_size(&eval.frame_manager(), fid)?;
-                let frame = eval
-                    .frame_manager_mut()
-                    .get_mut(fid)
-                    .ok_or_else(|| signal("error", vec![Value::string("Frame not found")]))?;
-                frame.queue_pending_gui_resize(desired_cols, desired_total_lines, None);
-            } else {
-                let (text_width_px, text_height_px) =
-                    resize_request.text_pixels(&eval.frame_manager(), fid)?;
-                let (frames, buffers, display_host) =
-                    eval.frame_manager_buffers_and_display_host_mut();
-                resize_live_gui_frame(
-                    frames,
-                    buffers,
-                    display_host,
-                    fid,
-                    text_width_px,
-                    text_height_px,
-                    false,
-                )?;
-            }
+            // GNU `gui_set_frame_parameters` calls `adjust_frame_size` with
+            // inhibit 1 (src/frame.c:5307). Inhibit 1 calls
+            // `set_window_size_hook` before returning (src/frame.c:976-995).
+            // `frame-inhibit-implied-resize` applies only to inhibit 2-4
+            // (src/frame.c:885-900), so a font change must not leave this
+            // explicit size queued until a later geometry query.
+            let (text_width_px, text_height_px) =
+                resize_request.text_pixels(&eval.frame_manager(), fid)?;
+            let include_tool_bar = explicit_outer_includes_tool_bar(eval, fid)?;
+            let (frames, buffers, display_host) = eval.frame_manager_buffers_and_display_host_mut();
+            resize_live_gui_frame(
+                frames,
+                buffers,
+                display_host,
+                fid,
+                text_width_px,
+                text_height_px,
+                false,
+                include_tool_bar,
+            )?;
         } else if eval
             .frame_manager()
             .get(fid)
@@ -2392,7 +2734,12 @@ pub fn builtin_framep(
         _ => return Ok(Value::NIL),
     };
     let Some(frame) = eval.frame_manager().get(FrameId(id)) else {
-        return Ok(Value::NIL);
+        // A deleted frame is gone from the live map. GNU still answers
+        // `framep` from the output method `delete_frame` left in place.
+        return Ok(eval
+            .frame_manager()
+            .deleted_frame_output(FrameId(id))
+            .unwrap_or(Value::NIL));
     };
     // GNU `Fframep` (frame.c) returns the frame's intrinsic output method
     // (output_pgtk -> `pgtk`, output_x_window -> `x`, output_termcap /
@@ -2406,7 +2753,11 @@ pub fn builtin_framep(
     Ok(frame.effective_window_system().unwrap_or(Value::T))
 }
 
-/// `(frame-live-p OBJ)` -> t if OBJ is a live frame object or frame id.
+/// `(frame-live-p OBJ)` -> the `framep` value of a live frame, else nil.
+///
+/// GNU `Fframe_live_p` (frame.c:334-337) returns `Fframep` when the object
+/// is a live frame and nil otherwise. A termcap frame is `t`. A GUI frame
+/// is its output-method symbol, the same value `builtin_framep` returns.
 #[doc(hidden)]
 pub fn builtin_frame_live_p(
     eval: &mut neovm_eval::emacs_core::eval::Context,
@@ -2424,7 +2775,10 @@ pub fn builtin_frame_live_p(
         ValueKind::Veclike(VecLikeType::Frame) => args[0].as_frame_id().unwrap(),
         _ => return Ok(Value::NIL),
     };
-    Ok(Value::bool_val(frames.get(FrameId(id)).is_some()))
+    let Some(frame) = frames.get(FrameId(id)) else {
+        return Ok(Value::NIL);
+    };
+    Ok(frame.effective_window_system().unwrap_or(Value::T))
 }
 
 pub(crate) fn live_frame_buffer_parameter_ids(
@@ -2593,6 +2947,7 @@ pub(crate) fn request_live_gui_frame_resize_and_keep_pending(
     display_host: &mut Option<Box<dyn neovm_eval::emacs_core::eval::DisplayHost>>,
     fid: FrameId,
     request: FrameResizeRequest,
+    include_tool_bar: bool,
 ) -> Result<(), Flow> {
     let (text_width_px, text_height_px) = request.text_pixels(frames, fid)?;
     let (total_width_px, total_height_px, title, geometry_hints, visibility, decorated) = {
@@ -2600,7 +2955,7 @@ pub(crate) fn request_live_gui_frame_resize_and_keep_pending(
             .get(fid)
             .ok_or_else(|| signal("error", vec![Value::string("Frame not found")]))?;
         let non_text_width = frame_non_text_total_width_pixels_in_state(frames, fid);
-        let non_text_height = frame_non_text_total_height_pixels(frame);
+        let non_text_height = host_outer_non_text_height_pixels(frame, include_tool_bar);
         (
             text_width_px.saturating_add(non_text_width).max(1),
             text_height_px.saturating_add(non_text_height).max(1),
@@ -2625,10 +2980,26 @@ pub(crate) fn request_live_gui_frame_resize_and_keep_pending(
             text_width_px,
             text_height_px,
             false,
+            include_tool_bar,
         );
     };
 
-    host.resize_gui_frame(neovm_eval::emacs_core::eval::GuiFrameHostRequest {
+    let (desired_cols, desired_total_lines) = request.logical_size(frames, fid)?;
+    let (request_id, previous_pending) = {
+        let frame = frames
+            .get_mut(fid)
+            .ok_or_else(|| signal("error", vec![Value::string("Frame not found")]))?;
+        note_explicit_tool_bar_omission(frame, include_tool_bar);
+        let previous_pending = frame.pending_gui_resize;
+        let request_id = frame.queue_pending_gui_resize(
+            desired_cols,
+            desired_total_lines,
+            Some((total_width_px, total_height_px)),
+        );
+        (request_id, previous_pending)
+    };
+    if let Err(message) = host.resize_gui_frame(neovm_eval::emacs_core::eval::GuiFrameHostRequest {
+        resize_request_id: Some(request_id),
         frame_id: fid,
         width: total_width_px,
         height: total_height_px,
@@ -2637,18 +3008,12 @@ pub(crate) fn request_live_gui_frame_resize_and_keep_pending(
         visibility,
         decorated,
         fullscreen: None,
-    })
-    .map_err(|message| signal("error", vec![Value::string(message)]))?;
-
-    let (desired_cols, desired_total_lines) = request.logical_size(frames, fid)?;
-    let frame = frames
-        .get_mut(fid)
-        .ok_or_else(|| signal("error", vec![Value::string("Frame not found")]))?;
-    frame.queue_pending_gui_resize(
-        desired_cols,
-        desired_total_lines,
-        Some((total_width_px, total_height_px)),
-    );
+    }) {
+        if let Some(frame) = frames.get_mut(fid) {
+            frame.pending_gui_resize = previous_pending;
+        }
+        return Err(signal("error", vec![Value::string(message)]));
+    }
     Ok(())
 }
 
@@ -2849,9 +3214,11 @@ pub(crate) fn frame_parameter_value(
         "height" if frame_is_top_level_non_window(frame) => {
             Value::fixnum(frame_realized_lines(frame))
         }
+        "width" if frame_uses_window_system_pixels(frame) => gui_frame_width_parameter(frame),
         "width" => frame
             .fixed_parameter(crate::window::FrameQueryParam::Width)
             .unwrap_or(Value::fixnum(frame.columns() as i64)),
+        "height" if frame_uses_window_system_pixels(frame) => gui_frame_height_parameter(frame),
         "height" => frame
             .fixed_parameter(crate::window::FrameQueryParam::Height)
             .unwrap_or(Value::fixnum(frame.lines() as i64)),
@@ -2877,4 +3244,30 @@ pub(crate) fn frame_parameter_value(
         }
         _ => frame.parameter_key(param_key).unwrap_or(Value::NIL),
     }
+}
+
+fn gui_frame_width_parameter(frame: &crate::window::Frame) -> Value {
+    // GNU frame.c:4145-4148 uses FRAME_COLS when no size is pending.
+    // Cached parameter entries cannot describe inhibited chrome reflow.
+    Value::fixnum(frame.pending_gui_resize.map_or_else(
+        || {
+            ((frame_text_width_pixels(frame) as f32) / frame.char_width.max(1.0))
+                .floor()
+                .max(1.0) as i64
+        },
+        |pending| pending.width_cols,
+    ))
+}
+
+fn gui_frame_height_parameter(frame: &crate::window::Frame) -> Value {
+    // GNU frame.c:4135-4144 reports a pending explicit size, otherwise
+    // FRAME_LINES. Cached parameter entries cannot describe chrome reflow.
+    Value::fixnum(frame.pending_gui_resize.map_or_else(
+        || {
+            ((frame_text_height_pixels(frame) as f32) / frame.char_height.max(1.0))
+                .floor()
+                .max(1.0) as i64
+        },
+        |pending| pending.total_lines,
+    ))
 }

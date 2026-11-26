@@ -50,14 +50,15 @@ fn foreign_completion_probe() -> ! {
         .threads
         .prepare_thread_completion(id, CompletionExit::Executed)
         .expect("first World's actual completion token");
-    let mut second =
-        Context::new_with_threading(ThreadingMode::Sim, crate::test_utils::unit_runtime());
-    let mut baton = second.issue_green_baton().expect("second World's keeper");
-    assert_ne!(completion.heap_identity(), baton.parallel_heap_identity());
     assert_eq!(first.threads.all_thread_ids(), vec![0]);
     // The first registry still owns its terminal object (the token itself is
     // not a root). Neither registry may be touched after the mismatch branch.
     assert!(first.threads.thread_handle(native).is_some());
+    let _parked_first = first.park_for_test();
+    let mut second =
+        Context::new_with_threading(ThreadingMode::Sim, crate::test_utils::unit_runtime());
+    let mut baton = second.issue_green_baton().expect("second World's keeper");
+    assert_ne!(completion.heap_identity(), baton.parallel_heap_identity());
     assert!(second.threads.thread_handle(0).is_some());
     println!("P15_FOREIGN_COMPLETION_AUTHORITY_MISMATCH");
     let _impossible = baton.retire_thread_completion(completion);

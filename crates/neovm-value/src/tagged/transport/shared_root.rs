@@ -367,3 +367,5 @@ impl fmt::Debug for LocalRoot<'_> {
         f.debug_tuple("LocalRoot").field(&self.value).finish()
     }
 }
+
+pub(crate) use cons_root::{RootedNumericDestination, bignum_into, float_into};

@@ -142,7 +142,7 @@ fn history(named: bool) {
     );
     let (retained, before_gc, after_gc) = stopped_collection(&mut ctx, old_word);
     assert!(retained.major);
-    assert_eq!(retained.frozen_owners, 0);
+    assert_eq!(retained.frozen_owners(), 0);
     assert!(before_gc && after_gc, "old definition remains rooted");
     coherent(&ctx, clock + 1);
     let old_answer = direct(&mut ctx, unsafe {
@@ -166,12 +166,12 @@ fn history(named: bool) {
         // reclamation. This is not automatic retirement-store reclamation.
         test_support::settle(&mut ctx);
         assert_eq!(cache::native_depth(), 0);
-        cache::clear();
+        cache::clear_with_serial_receipt().expect("serial jit grace");
     }
     assert_eq!(reloc_count(&ctx, old_word), 0);
     let (released, before_gc, after_gc) = stopped_collection(&mut ctx, old_word);
     assert!(released.major);
-    assert_eq!(released.frozen_owners, 0);
+    assert_eq!(released.frozen_owners(), 0);
     assert!(
         before_gc && !after_gc,
         "unrooted old definition is reclaimed"

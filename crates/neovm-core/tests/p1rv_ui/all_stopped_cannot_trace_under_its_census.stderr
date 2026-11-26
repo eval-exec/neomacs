@@ -1,0 +1,9 @@
+error[E0499]: cannot borrow `stopped` as mutable more than once at a time
+ --> tests/p1rv_ui/all_stopped_cannot_trace_under_its_census.rs:5:13
+  |
+4 |     let census = stopped.summaries();
+  |                  ------- first mutable borrow occurs here
+5 |     let _ = stopped.trace(|_stopped, _proof| Ok(()));
+  |             ^^^^^^^ second mutable borrow occurs here
+6 |     drop(census);
+  |          ------ first borrow later used here

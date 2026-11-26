@@ -2204,6 +2204,9 @@ fn div_core_divergence_surface_quit_process_sentinel_message() {
     return_if_neovm_enable_oracle_proptest_not_set!();
     let expect =
         expect_test::expect![[r#""OK (signal 3 ((\"quit (core dumped)\\n\" signal 3)))""#]];
+    // Use a direct long-running child so SIGQUIT cannot race a shell installing
+    // SIG_IGN for SIGQUIT during startup (GNU bash sets SIGQUIT to SIG_IGN and
+    // never execs an external command for the `read` builtin).
     // Divergence surfaced 2026-06-24:
     // GNU Emacs: OK (signal 3 (("quit (core dumped)\n" signal 3)))
     // Neomacs:   OK (signal 3 (("quit\n" signal 3)))
@@ -2212,7 +2215,7 @@ fn div_core_divergence_surface_quit_process_sentinel_message() {
 (let ((log nil))
   (let ((proc (make-process
                :name "probe-quit-sent"
-               :command '("/bin/sh" "-c" "read line")
+               :command '("sleep" "60")
                :connection-type 'pipe
                :sentinel (lambda (p e)
                            (push (list e
@@ -2220,19 +2223,105 @@ fn div_core_divergence_surface_quit_process_sentinel_message() {
                                        (process-exit-status p))
                                  log)))))
     (set-process-query-on-exit-flag proc nil)
-    (quit-process proc)
-    (let ((i 0))
-      (while (and (process-live-p proc) (< i 20))
-        (accept-process-output proc 0.05)
-        (setq i (1+ i))))
-    (let ((j 0))
-      (while (and (null log) (< j 20))
-        (accept-process-output proc 0.05)
-        (setq j (1+ j))))
-    (prog1 (list (process-status proc)
-                 (process-exit-status proc)
-                 (nreverse log))
+    (unwind-protect
+        (progn
+          (quit-process proc)
+          (neovm--oracle-settle-process proc 600)
+          (let ((j 0))
+            (while (and (null log) (< j 20))
+              (accept-process-output proc 0.05)
+              (setq j (1+ j))))
+          (list (process-status proc)
+                (process-exit-status proc)
+                (nreverse log)))
       (when (process-live-p proc) (delete-process proc)))))
+"##,
+        expect,
+    );
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn div_core_process_pty_child_signal_dispositions_match_pipe() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+    // Explicitly ignore SIGHUP, SIGINT, SIGQUIT, and SIGPROF in the test
+    // process before spawning GNU Emacs and Neomacs so the probe tests both
+    // preservation of non-default ignored signals (SIGHUP) and reset of
+    // GNU's child-default signals (SIGINT, SIGQUIT, SIGPIPE, SIGPROF)
+    // regardless of the ambient runner environment.
+    struct IgnoreGuard(Vec<(libc::c_int, libc::sigaction)>);
+    impl Drop for IgnoreGuard {
+        fn drop(&mut self) {
+            for (sig, old) in self.0.drain(..).rev() {
+                // SAFETY: restoring previously queried `sigaction` for `sig`.
+                unsafe {
+                    libc::sigaction(sig, &old, std::ptr::null_mut());
+                }
+            }
+        }
+    }
+    let _guard = {
+        let mut saved = Vec::new();
+        // SAFETY: `libc::sigaction` is a C POD struct; zero-init clears `sa_flags`.
+        let mut ign: libc::sigaction = unsafe { std::mem::zeroed() };
+        ign.sa_sigaction = libc::SIG_IGN;
+        // SAFETY: `ign.sa_mask` is a valid writable `sigset_t`.
+        assert_eq!(unsafe { libc::sigemptyset(&mut ign.sa_mask) }, 0);
+        for sig in [libc::SIGHUP, libc::SIGINT, libc::SIGQUIT, libc::SIGPROF] {
+            // SAFETY: `old` is an out-pointer initialized by `sigaction`.
+            let mut old: libc::sigaction = unsafe { std::mem::zeroed() };
+            // SAFETY: `sig` is a valid catchable signal.
+            assert_eq!(unsafe { libc::sigaction(sig, &ign, &mut old) }, 0);
+            saved.push((sig, old));
+        }
+        IgnoreGuard(saved)
+    };
+
+    let expect = expect_test::expect![[r#""OK (t t t t t t)""#]];
+    // Plain PTY children must match pipe children and GNU `emacs_spawn`
+    // (`src/callproc.c:1624-1647`): empty `SigBlk`, `{SIGINT, SIGQUIT,
+    // SIGPIPE, SIGPROF}` reset to `SIG_DFL`, and non-default ignored signals
+    // such as `SIGHUP` preserved identically across `:connection-type 'pipe`
+    // and `:connection-type 'pty`.
+    crate::common::assert_oracle_parity_expect(
+        r##"
+(let ((probe
+       (lambda (ctype)
+         (let* ((buf (generate-new-buffer " *sig-probe*"))
+                (proc (make-process
+                       :name "sig-probe"
+                       :buffer buf
+                       :command '("cat" "/proc/self/status")
+                       :connection-type ctype
+                       :noquery t)))
+           (unwind-protect
+               (progn
+                 (neovm--oracle-settle-process proc 600)
+                 (accept-process-output proc 0.05)
+                 (with-current-buffer buf
+                   (let (blk ign)
+                     (goto-char (point-min))
+                     (when (re-search-forward "^SigBlk:[ \t]+\\([0-9a-f]+\\)" nil t)
+                       (setq blk (string-to-number (match-string 1) 16)))
+                     (goto-char (point-min))
+                     (when (re-search-forward "^SigIgn:[ \t]+\\([0-9a-f]+\\)" nil t)
+                       (setq ign (string-to-number (match-string 1) 16)))
+                     (list blk ign))))
+             (when (process-live-p proc) (delete-process proc))
+             (when (buffer-live-p buf) (kill-buffer buf)))))))
+  (let* ((pipe (funcall probe 'pipe))
+         (pty (funcall probe 'pty))
+         ;; SIGHUP(1) | SIGINT(2) | SIGQUIT(3) | SIGPIPE(13) | SIGALRM(14) | SIGTERM(15) | SIGPROF(27)
+         (relevant #x04007007)
+         ;; SIGINT(2) | SIGQUIT(3) | SIGPIPE(13) | SIGPROF(27)
+         (default-sigs #x04001006))
+    (list (eq (car pipe) 0)
+          (eq (car pty) 0)
+          (= (logand (cadr pipe) default-sigs) 0)
+          (= (logand (cadr pty) default-sigs) 0)
+          (= (logand (cadr pipe) relevant)
+             (logand (cadr pty) relevant))
+          (/= (logand (cadr pty) 1) 0))))
 "##,
         expect,
     );

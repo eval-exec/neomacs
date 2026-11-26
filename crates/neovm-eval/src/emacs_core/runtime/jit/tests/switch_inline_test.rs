@@ -86,7 +86,7 @@ fn check_like_lookup(
         ctx.symbols_with_pos_enabled = swp;
         for &probe in probes {
             let want = lookup_answer(table, probe, swp);
-            let got = leaf.call(ctx as *mut Context as *mut u8, &[probe]);
+            let got = unsafe { leaf.call(ctx as *mut Context as *mut u8, &[probe]) };
             assert_eq!(
                 got,
                 NativeRun::Ok(Value::fixnum(want).bits()),
@@ -325,7 +325,7 @@ fn a_changed_table_is_answered_by_the_shim() {
     let before = inline_switch_sites_for_test();
     let leaf = dispatch_leaf(table, 3);
     assert_eq!(inline_switch_sites_for_test(), before + 1);
-    let answer = |arg: Value| match leaf.call(ctx_ptr, &[arg]) {
+    let answer = |arg: Value| match unsafe { leaf.call(ctx_ptr, &[arg]) } {
         NativeRun::Ok(bits) => unsafe {
             /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
             Value::from_bits(bits)
@@ -363,7 +363,7 @@ fn a_changed_table_is_answered_by_the_shim() {
     );
     put(a, Value::fixnum(offset(2)));
     assert_eq!(
-        leaf.call(ctx_ptr, &[a]),
+        unsafe { leaf.call(ctx_ptr, &[a]) },
         NativeRun::Signal,
         "an uncompiled target"
     );
@@ -393,7 +393,7 @@ fn an_inline_miss_asks_the_shim_under_symbols_with_pos() {
     assert_eq!(inline_switch_sites_for_test(), before + 2);
     let run = |ctx: &mut Context, leaf: &CompiledLeaf, arg: Value, swp: bool| {
         ctx.symbols_with_pos_enabled = swp;
-        let got = leaf.call(ctx as *mut Context as *mut u8, &[arg]);
+        let got = unsafe { leaf.call(ctx as *mut Context as *mut u8, &[arg]) };
         ctx.symbols_with_pos_enabled = false;
         got
     };
@@ -441,7 +441,7 @@ fn a_weak_table_keeps_the_shim() {
     assert_eq!(inline_switch_sites_for_test(), before);
     let mut ctx = Context::new_minimal_vm_harness(crate::test_utils::unit_runtime());
     assert_eq!(
-        leaf.call(&mut ctx as *mut Context as *mut u8, &[a]),
+        unsafe { leaf.call(&mut ctx as *mut Context as *mut u8, &[a]) },
         NativeRun::Ok(Value::fixnum(0).bits())
     );
 }

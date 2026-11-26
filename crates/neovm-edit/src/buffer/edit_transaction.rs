@@ -802,6 +802,12 @@ impl Buffer {
             self.text
                 .adjust_text_props_for_delete_range(range.char_range());
         }
+        // GNU `set_buffer_intervals (buffer, NULL)` when the whole text is
+        // deleted (`src/intervals.c:1324-1328` / `:1346`): the tree is
+        // discarded, so a later property store starts a fresh one.
+        if self.text.char_count().get() == 0 {
+            self.text.clear_text_prop_tree_presence();
+        }
         self.overlays.adjust_for_deleted_text(range);
         let delete_char_start = range.char_range().start().get() as i64;
         self.record_char_modification(char_len);

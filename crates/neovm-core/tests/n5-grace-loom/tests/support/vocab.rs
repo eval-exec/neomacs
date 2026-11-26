@@ -29,9 +29,9 @@ pub enum TableError {
 }
 
 // The tuple fields the ledger reads directly (`shape.chunks.0`,
-// `shape.slots.0`, publication.rs:293-294) are `pub` here: the real file
-// reaches them through child-module visibility, which the model's layout
-// cannot reproduce.
+// `shape.slots.0`, and `generation.0` in the test census) are `pub` here:
+// the real file reaches them through child-module visibility, which the
+// model's layout cannot reproduce.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(transparent)]
 pub struct SymbolSlotCount(pub usize);
@@ -87,7 +87,7 @@ impl From<usize> for SymbolChunkIndex {
 /// This clock is neither a registry epoch, function epoch nor stop receipt.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(transparent)]
-pub struct PointerTableGeneration(NonZeroU64);
+pub struct PointerTableGeneration(pub NonZeroU64);
 impl PointerTableGeneration {
     pub const INITIAL: Self = Self(NonZeroU64::MIN);
 
@@ -156,12 +156,53 @@ impl SymbolTableShape {
     }
 }
 
+/// One owner of the separately allocated immutable pointer array. The real
+/// `OwnedChunkAddresses::as_slice` is inherent. A `Box<[T]>` stand-in resolves
+/// `as_slice` to the unstable `[T]::as_slice` (`str_as_str`) instead.
+#[repr(C)]
+pub struct OwnedChunkAddresses {
+    root: NonNull<SymbolChunkAddress>,
+    len: SymbolChunkCount,
+}
+impl OwnedChunkAddresses {
+    pub fn from_box(chunks: Box<[SymbolChunkAddress]>) -> Self {
+        let len = SymbolChunkCount::from(chunks.len());
+        let root = Box::into_raw(chunks).cast::<SymbolChunkAddress>();
+        Self {
+            // SAFETY: Box::into_raw is nonnull, including an empty slice's
+            // aligned dangling pointer. It is this allocation's sole owner.
+            root: unsafe { NonNull::new_unchecked(root) },
+            len,
+        }
+    }
+
+    pub fn as_slice(&self) -> &[SymbolChunkAddress] {
+        // SAFETY: from_box retains the sole root of an initialized immutable
+        // array with this exact length, including a valid aligned empty slice.
+        // This shared borrow prevents Drop, and no mutable view is exposed.
+        unsafe { std::slice::from_raw_parts(self.root.as_ptr(), self.len.get()) }
+    }
+
+    pub fn get(&self, index: SymbolChunkIndex) -> Option<SymbolChunkAddress> {
+        self.as_slice().get(index.0).copied()
+    }
+}
+impl Drop for OwnedChunkAddresses {
+    fn drop(&mut self) {
+        let array = std::ptr::slice_from_raw_parts_mut(self.root.as_ptr(), self.len.get());
+        // SAFETY: from_box consumed exactly one Box of this pointer and length.
+        // No other owner or mutable array access is exposed. This reconstructs
+        // only the address array, never a backing chunk. Empty arrays are valid.
+        unsafe { drop(Box::from_raw(array)) }
+    }
+}
+
 /// Fully initialized immutable payload. Mutable symbol cells remain protected
 /// by their separate symbol authority; a table is not a collector root.
 pub struct PublishedSymbolTable {
     pub shape: SymbolTableShape,
     pub generation: PointerTableGeneration,
-    pub chunks: Box<[SymbolChunkAddress]>,
+    pub chunks: OwnedChunkAddresses,
 }
 impl PublishedSymbolTable {
     pub fn slots(&self) -> SymbolSlotCount {
@@ -181,7 +222,7 @@ impl PublishedSymbolTable {
     }
 
     pub fn chunk(&self, index: SymbolChunkIndex) -> Option<SymbolChunkAddress> {
-        self.chunks.get(index.0).copied()
+        self.chunks.get(index)
     }
 }
 
@@ -233,6 +274,7 @@ impl PreparedSymbolTable {
         // SAFETY: the loop initialized every element exactly once. No table
         // or address-array reference escaped this unpublished preparation.
         let chunks = unsafe { self.chunks.assume_init() };
+        let chunks = OwnedChunkAddresses::from_box(chunks);
         self.descriptor.write(PublishedSymbolTable {
             shape: self.shape,
             generation: self.generation,
@@ -282,3 +324,5 @@ static_assertions::assert_not_impl_any!(OwnedSymbolTable: Send, Sync, Clone, Cop
 static_assertions::assert_not_impl_any!(PublishedSymbolTable: Send, Sync, Clone, Copy);
 static_assertions::assert_eq_size!(SymbolChunkAddress, usize);
 static_assertions::assert_eq_size!(PointerTableGeneration, u64);
+static_assertions::assert_eq_size!(OwnedChunkAddresses, Box<[SymbolChunkAddress]>);
+static_assertions::assert_not_impl_any!(OwnedChunkAddresses: Send, Sync, Clone, Copy);

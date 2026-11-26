@@ -36,7 +36,7 @@ fn boundary_events(eval: &mut Context) -> Vec<Value> {
     .expect("proper callback event list")
 }
 
-fn assert_before(events: &[Value], first: &str, second: &str) {
+fn assert_before(events: &[Value], first: &'static str, second: &'static str) {
     let first_index = events
         .iter()
         .position(|event| *event == Value::symbol(first))
@@ -247,8 +247,17 @@ fn freshness_spans_keep_false_and_throwing_display_form_refusals() {
 }
 
 #[test]
-fn freshness_spans_keep_chrome_input_mutation_refusal() {
-    let (mut eval, frame, _, _) = boundary_fixture();
+fn freshness_spans_preserve_completed_body_across_late_chrome_source_changes() {
+    let (mut eval, frame, _, window) = boundary_fixture();
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
+    engine.layout_frame_rust(&mut eval, frame);
+    activate_last_engine_presentation(&mut eval, &engine, frame);
+    let before = selected_window_layout_trace(&eval, &engine, frame);
+    let before_id = engine
+        .last_frame_display_state
+        .as_ref()
+        .unwrap()
+        .presentation_id;
     eval.eval_str(
         r#"(setq mode-line-format
           '((:eval (progn
@@ -258,10 +267,47 @@ fn freshness_spans_keep_chrome_input_mutation_refusal() {
                      "BOUNDARY"))))"#,
     )
     .expect("install an input-changing late chrome formatter");
-    let mut engine = crate::font::metrics::test_catalog::layout_engine();
-    engine.layout_frame_rust(&mut eval, frame);
+    let FrameLayoutAttempt::Prepared(output) = engine.redisplay_frame_attempt(&mut eval, frame)
+    else {
+        panic!("late source mutation must accept the completed body");
+    };
+    assert_ne!(output.presentation_id, before_id);
     assert!(boundary_events(&mut eval).contains(&Value::symbol("chrome")));
-    assert_final_source_matches_full_producer(&mut eval, &engine, frame);
+    assert!(eval.eval_str("span-mutated").unwrap().is_truthy());
+    assert!(eval.eval_str("truncate-lines").unwrap().is_truthy());
+    engine.last_frame_display_state = Some(output);
+    activate_last_engine_presentation(&mut eval, &engine, frame);
+    let actual = selected_window_layout_trace(&eval, &engine, frame);
+    // Attested GNU retains wrapped rows after the late formatter sets
+    // truncate-lines, and truncates on the next explicit full redisplay.
+    // xdisp.c:21419-21483, mark_window_display_accurate_1:18281-18310.
+    assert_eq!(
+        actual, before,
+        "late chrome does not rewind completed body rows"
+    );
+    assert_ne!(
+        engine
+            .retained_window_matrices
+            .get(&DisplayWindowId::new(window.0 as i64))
+            .unwrap()
+            .key
+            .wrap_mode,
+        LineWrapMode::Truncate,
+        "the original produced-row key must not claim the callback's new policy"
+    );
+    eval.eval_str("(setq mode-line-format '(\"BOUNDARY\"))")
+        .unwrap();
+    engine.layout_frame_rust(&mut eval, frame);
+    activate_last_engine_presentation(&mut eval, &engine, frame);
+    let next = selected_window_layout_trace(&eval, &engine, frame);
+    assert_ne!(
+        next, actual,
+        "a new producer reads the changed truncation policy"
+    );
+    let mut fresh = crate::font::metrics::test_catalog::layout_engine();
+    fresh.layout_frame_rust(&mut eval, frame);
+    activate_last_engine_presentation(&mut eval, &fresh, frame);
+    assert_eq!(next, selected_window_layout_trace(&eval, &fresh, frame));
 }
 
 #[test]

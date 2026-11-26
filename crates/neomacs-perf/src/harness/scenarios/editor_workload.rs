@@ -1,6 +1,9 @@
 //! The shared editor-workload scenario family: one elisp fixture
-//! (`fixtures/editor-workloads.el`) driving the nine catalogued workloads
+//! (`fixtures/editor-workloads.el`) driving the catalogued workloads
 //! over deterministic sources, with per-scenario phase invariants.
+//!
+//! `cjk-font-lock-pulse` lives here and stays out of `STANDARD_SCENARIOS`
+//! until it has a measured baseline.
 //!
 //! Fixture-only measurement controls (read once before the selected workload):
 //!
@@ -22,9 +25,9 @@ use crate::harness::{
     CorrectnessMismatch, EditorProvenance, HostProvenance, INPUT_LATENCY_BUDGET_US, Measurement,
     MetricName, MetricUnit, PackageProvenance, PreparedScenario, PreparedWorkload, RunRequest,
     SCENARIO_RESULT_SCHEMA_VERSION, ScenarioId, ScenarioOutcome, ScenarioStatus,
-    collect_editor_provenance, collect_host_provenance, deserialize_optional_error, mismatch,
-    nearest_rank, prepare_gui_runtime_directory, require_positive_phase, scenario_outcome,
-    sha256_file,
+    collect_editor_provenance_with_environment, collect_host_provenance,
+    deserialize_optional_error, mismatch, nearest_rank, prepare_gui_runtime_directory,
+    require_positive_phase, scenario_outcome, sha256_file,
 };
 
 #[cfg(test)]
@@ -34,13 +37,28 @@ pub(crate) use package_loading::scenario_load_suffixes;
 mod magit_repository;
 use magit_repository::prepare_magit_repository;
 
+/// One xref pulse is `pulse-iterations` face writes. `lisp/pulse.el`
+/// defaults that to 10. The CJK row redisplays once per write.
+pub(crate) const CJK_PULSE_FACE_STEPS: u64 = 10;
+/// Distinct CJK characters the fixture must show. The row stays outside
+/// the standard suite until it has a measured baseline.
+pub(crate) const CJK_DISTINCT_MINIMUM: u64 = 60;
+/// Atomic (`<= PIPE_BUF`) chunks streamed per iteration of `process-output-carryover`.
+pub(crate) const PROCESS_CARRYOVER_CHUNKS: u64 = 64;
+/// Partial-run carryover boundaries per iteration (`PROCESS_CARRYOVER_CHUNKS - 1`).
+pub(crate) const PROCESS_CARRYOVER_BOUNDARIES: u64 = PROCESS_CARRYOVER_CHUNKS - 1;
+
 pub(crate) fn prepare(
     workspace_root: &Path,
     request: &RunRequest,
     run_directory: &Path,
 ) -> Result<PreparedScenario, String> {
     let sandbox = MelpaSandbox::new(&format!("perf-{}", request.scenario))?;
-    let editor = collect_editor_provenance(request.editor(), &sandbox)?;
+    let editor = collect_editor_provenance_with_environment(
+        request.editor(),
+        &sandbox,
+        request.benchmark_environment(),
+    )?;
     let fixture_source = workspace_root.join("crates/neomacs-perf/fixtures/editor-workloads.el");
     let source_fixture = workspace_root.join("lisp/emacs-lisp/bytecomp.el");
     for required in [&fixture_source, &source_fixture] {
@@ -197,6 +215,13 @@ pub(crate) struct EditorWorkloadResult {
     how_many_phase_us: u64,
     motion_phase_us: u64,
     harness_bookkeeping_us: u64,
+    face_change_count: u64,
+    distinct_cjk: u64,
+    redisplay_count: u64,
+    cjk_displayed: bool,
+    process_filter_calls: u64,
+    process_carryover_boundaries: u64,
+    process_carryover_verified: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -253,6 +278,27 @@ struct EditorWorkloadResultWire {
     /// this family do not report it.
     #[serde(default)]
     harness_bookkeeping_us: u64,
+    /// Face writes from the CJK pulse row. Other workloads leave this at 0.
+    #[serde(default)]
+    face_change_count: u64,
+    /// Distinct CJK characters in the prepared buffer. Other workloads leave 0.
+    #[serde(default)]
+    distinct_cjk: u64,
+    /// Redisplays inside the CJK pulse. Other workloads leave this at 0.
+    #[serde(default)]
+    redisplay_count: u64,
+    /// True when each CJK redisplay showed a character at or above U+3000.
+    #[serde(default)]
+    cjk_displayed: bool,
+    /// Lisp process-filter calls observed by `process-output-carryover`. Other workloads leave 0.
+    #[serde(default)]
+    process_filter_calls: u64,
+    /// Partial-run carryover boundaries exercised by `process-output-carryover`. Other workloads leave 0.
+    #[serde(default)]
+    process_carryover_boundaries: u64,
+    /// True when every `process-output-carryover` iteration matched `utf-8-dos` and the reference MD5.
+    #[serde(default)]
+    process_carryover_verified: bool,
     #[serde(deserialize_with = "deserialize_optional_error", rename = "error")]
     error: Option<String>,
 }
@@ -302,6 +348,13 @@ impl TryFrom<EditorWorkloadResultWire> for EditorWorkloadResult {
             how_many_phase_us: wire.how_many_phase_us,
             motion_phase_us: wire.motion_phase_us,
             harness_bookkeeping_us: wire.harness_bookkeeping_us,
+            face_change_count: wire.face_change_count,
+            distinct_cjk: wire.distinct_cjk,
+            redisplay_count: wire.redisplay_count,
+            cjk_displayed: wire.cjk_displayed,
+            process_filter_calls: wire.process_filter_calls,
+            process_carryover_boundaries: wire.process_carryover_boundaries,
+            process_carryover_verified: wire.process_carryover_verified,
         })
     }
 }
@@ -438,6 +491,31 @@ pub(crate) fn validate_editor_workload_result(
         ScenarioId::ProcessOutput => {
             require_positive_phase(&mut mismatches, "type-phase-time", result.type_phase_us);
         }
+        ScenarioId::ProcessOutputCarryover => {
+            require_positive_phase(&mut mismatches, "type-phase-time", result.type_phase_us);
+            let expected_filter_calls =
+                u64::from(request.iterations.get()) * PROCESS_CARRYOVER_CHUNKS;
+            mismatch(
+                &mut mismatches,
+                "process-filter-calls",
+                expected_filter_calls,
+                result.process_filter_calls,
+            );
+            let expected_carryover_boundaries =
+                u64::from(request.iterations.get()) * PROCESS_CARRYOVER_BOUNDARIES;
+            mismatch(
+                &mut mismatches,
+                "process-carryover-boundaries",
+                expected_carryover_boundaries,
+                result.process_carryover_boundaries,
+            );
+            mismatch(
+                &mut mismatches,
+                "process-carryover-verified",
+                true,
+                result.process_carryover_verified,
+            );
+        }
         ScenarioId::FileOpen => {
             require_positive_phase(&mut mismatches, "type-phase-time", result.type_phase_us);
             require_positive_phase(
@@ -452,6 +530,41 @@ pub(crate) fn validate_editor_workload_result(
         ScenarioId::Startup | ScenarioId::GuiInputLatency => {}
         ScenarioId::LspJsonRpc => {
             require_positive_phase(&mut mismatches, "regex-phase-time", result.regex_phase_us);
+        }
+        ScenarioId::CjkFontLockPulse => {
+            require_positive_phase(
+                &mut mismatches,
+                "fontify-phase-time",
+                result.fontify_phase_us,
+            );
+            let expected_faces = u64::from(request.iterations.get()) * CJK_PULSE_FACE_STEPS;
+            mismatch(
+                &mut mismatches,
+                "pulse-face-changes",
+                expected_faces,
+                result.face_change_count,
+            );
+            if result.distinct_cjk < CJK_DISTINCT_MINIMUM {
+                mismatches.push(CorrectnessMismatch {
+                    invariant: "distinct-cjk".to_string(),
+                    expected: format!("at least {CJK_DISTINCT_MINIMUM}"),
+                    actual: result.distinct_cjk.to_string(),
+                });
+            }
+            let expected_redisplays = u64::from(request.iterations.get()) * CJK_PULSE_FACE_STEPS;
+            mismatch(
+                &mut mismatches,
+                "pulse-redisplays",
+                expected_redisplays,
+                result.redisplay_count,
+            );
+            if !result.cjk_displayed {
+                mismatches.push(CorrectnessMismatch {
+                    invariant: "cjk-displayed".to_string(),
+                    expected: "true".to_string(),
+                    actual: "false".to_string(),
+                });
+            }
         }
         ScenarioId::OrgJournalOpen | ScenarioId::OrgJournalOpenCompiled => {
             unreachable!("org-journal-open has a dedicated result validator")

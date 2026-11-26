@@ -152,18 +152,39 @@ impl Context {
 
     #[doc(hidden)]
     pub fn has_active_condition_handler_for_signal(&self, sig: &SignalData) -> bool {
+        // One read of the signalled symbol's conditions, then GNU's
+        // `find_handler_clause` membership test for each active clause.
+        let conditions = self
+            .obarray
+            .get_property_id(sig.symbol, error_conditions_symbol());
         self.condition_stack.iter().rev().any(|frame| match frame {
-            ConditionFrame::ConditionCase { conditions, .. }
-            | ConditionFrame::HandlerBind { conditions, .. } => {
-                neovm_value::errors::signal_matches_condition_value_sym(
-                    &self.obarray,
-                    sig.symbol,
-                    conditions,
-                    self.symbol_mode(),
-                )
+            ConditionFrame::ConditionCase {
+                conditions: pattern,
+                ..
             }
+            | ConditionFrame::HandlerBind {
+                conditions: pattern,
+                ..
+            } => neovm_value::errors::signal_matches_conditions(
+                conditions.as_ref(),
+                pattern,
+                self.symbol_mode(),
+            ),
             _ => false,
         })
+    }
+
+    /// GNU `signal_quit_p` (src/eval.c:2199-2210): the signalled symbol is
+    /// `quit`, or `quit` is one of its `error-conditions`.
+    #[doc(hidden)]
+    pub fn signal_is_quit(&self, sig: &SignalData) -> bool {
+        sig.symbol == quit_symbol()
+            || neovm_value::errors::signal_conditions_contain(
+                &self.obarray,
+                sig.symbol,
+                quit_symbol(),
+                self.symbol_mode(),
+            )
     }
 
     #[doc(hidden)]
@@ -224,17 +245,33 @@ impl Context {
             });
         }
         self.run_signal_hook(&sig)?;
-        let original_delivery = sig.delivery();
-        sig = self.canonicalize_signal_symbol(sig);
-        if matches!(
-            original_delivery,
-            neovm_value::error::SignalDelivery::MemoryExhausted(_)
-        ) && matches!(sig.delivery(), neovm_value::error::SignalDelivery::Ordinary)
-        {
-            // GNU eval.c:1978-1980 signals a fresh ordinary error when an
-            // OOM descriptor names an undefined condition. Its hook runs.
+        // GNU eval.c:1978: one `Fget (real_error_symbol, Qerror_conditions)`
+        // after the hook.  The same value feeds the invalid-symbol check, the
+        // handler walk and the debugger for this signal; there is no re-read
+        // per clause, so a `handler-bind` handler that replaces the property
+        // mid-walk cannot change what later clauses match.
+        let real_symbol = sig.symbol;
+        let mut conditions = self
+            .obarray
+            .get_property_id(real_symbol, error_conditions_symbol());
+        sig = self.canonicalize_signal_symbol_with_conditions(sig, conditions.as_ref());
+        if sig.symbol != real_symbol {
+            // An undefined condition becomes GNU's `signal_error ("Invalid
+            // error symbol", ...)`, which re-enters `signal_or_quit`: that
+            // fresh ordinary signal runs its hook and reads its own
+            // conditions.  The OOM descriptor path lands here too, because
+            // canonicalization turns it into that same ordinary error.
             self.run_signal_hook(&sig)?;
+            conditions = self
+                .obarray
+                .get_property_id(sig.symbol, error_conditions_symbol());
         }
+        // The guarded `error`/`quit` symbols can reach the walk with no list
+        // only if the user has removed their own error-conditions; GNU would
+        // recurse into the invalid-symbol path forever there.  Keep the
+        // historical `(SYMBOL)` fallback for that degenerate state.
+        let conditions =
+            conditions.unwrap_or_else(|| Value::list(vec![Value::from_sym_id(sig.symbol)]));
 
         let mut idx = self.condition_stack.len();
         let mut seen_condition_entries = 0usize;
@@ -256,30 +293,31 @@ impl Context {
                         }
                     }
                 }
-                ConditionFrame::ConditionCase { conditions, resume } => {
+                ConditionFrame::ConditionCase {
+                    conditions: pattern,
+                    resume,
+                } => {
                     seen_condition_entries += 1;
-                    if neovm_value::errors::signal_matches_condition_value_sym(
-                        &self.obarray,
-                        sig.symbol,
-                        &conditions,
+                    if neovm_value::errors::signal_matches_conditions(
+                        Some(&conditions),
+                        &pattern,
                         self.symbol_mode(),
                     ) {
-                        self.maybe_call_debugger_for_signal(&sig, Some(&conditions))?;
+                        self.maybe_call_debugger_for_signal(&sig, Some(&pattern), &conditions)?;
                         *sig.selected_resume_mut() = Some(resume);
                         *sig.search_complete_mut() = true;
                         return Ok(sig);
                     }
                 }
                 ConditionFrame::HandlerBind {
-                    conditions,
+                    conditions: pattern,
                     handler,
                     mute_span,
                 } => {
                     seen_condition_entries += 1;
-                    if !neovm_value::errors::signal_matches_condition_value_sym(
-                        &self.obarray,
-                        sig.symbol,
-                        &conditions,
+                    if !neovm_value::errors::signal_matches_conditions(
+                        Some(&conditions),
+                        &pattern,
                         self.symbol_mode(),
                     ) {
                         continue;
@@ -333,7 +371,7 @@ impl Context {
             }
         }
 
-        self.maybe_call_debugger_for_signal(&sig, None)?;
+        self.maybe_call_debugger_for_signal(&sig, None, &conditions)?;
         // No handler matched: this signal will propagate to the command loop.
         // Capture the live Lisp backtrace NOW, while the specpdl is still intact
         // (unwinding happens as `Ok(sig)` propagates up), so the command loop's
@@ -397,7 +435,7 @@ impl Context {
         }
 
         let hook = self
-            .builtin_var_value_by_name("signal-hook-function")
+            .builtin_var_value(signal_hook_function_symbol())
             .unwrap_or(Value::NIL);
         if hook.is_nil() {
             return Ok(());
@@ -418,21 +456,31 @@ impl Context {
 
     #[doc(hidden)]
     pub fn canonicalize_signal_symbol(&self, sig: SignalData) -> SignalData {
+        let conditions = self
+            .obarray
+            .get_property_id(sig.symbol, error_conditions_symbol());
+        self.canonicalize_signal_symbol_with_conditions(sig, conditions.as_ref())
+    }
+
+    /// [`Self::canonicalize_signal_symbol`] with the `error-conditions` value
+    /// already read by the caller.  `dispatch_signal` uses this so the same
+    /// single read (GNU eval.c:1978) feeds the validity check and the walk.
+    fn canonicalize_signal_symbol_with_conditions(
+        &self,
+        sig: SignalData,
+        conditions: Option<&Value>,
+    ) -> SignalData {
         if sig.symbol == error_symbol() || sig.symbol == quit_symbol() {
             return sig;
         }
         // GNU `signal_or_quit` reads `error-conditions` directly from the
         // signalled symbol object (`Fget (real_error_symbol, Qerror_conditions)`,
-        // src/eval.c:1959), so an *uninterned* error symbol created via
+        // src/eval.c:1978), so an *uninterned* error symbol created via
         // `make-symbol` and given conditions by `define-error` is honoured.
         // Looking the property up by name (which interns) would resolve to a
         // *different*, interned symbol with no conditions and spuriously
         // canonicalize to "Invalid error symbol".  Use identity instead.
-        if self
-            .obarray
-            .get_property_id(sig.symbol, error_conditions_symbol())
-            .is_some()
-        {
+        if conditions.is_some() {
             return sig;
         }
 
@@ -461,6 +509,7 @@ impl Context {
         &mut self,
         sig: &SignalData,
         matched_clause: Option<&Value>,
+        conditions: &Value,
     ) -> Result<(), Flow> {
         // GNU eval.c:2041-2044 never enters the debugger for an OOM error,
         // even when debug-on-signal and a matched debug clause request it.
@@ -470,14 +519,14 @@ impl Context {
             | neovm_value::error::SignalDelivery::HookSuppressed => {}
         }
         if self
-            .builtin_var_value_by_name("inhibit-debugger")
+            .builtin_var_value(inhibit_debugger_symbol())
             .is_some_and(|value| !value.is_nil())
         {
             return Ok(());
         }
 
         let debug_on_signal = self
-            .builtin_var_value_by_name("debug-on-signal")
+            .builtin_var_value(debug_on_signal_symbol())
             .is_some_and(|value| !value.is_nil());
         let should_consider_debugger = debug_on_signal
             || matched_clause.is_none()
@@ -486,23 +535,17 @@ impl Context {
             return Ok(());
         }
 
-        let conditions = self.signal_conditions_value(sig);
-        let debug_setting = if neovm_value::errors::signal_matches_condition_value_sym(
-            &self.obarray,
-            sig.symbol,
-            &Value::from_sym_id(quit_symbol()),
-            self.symbol_mode(),
-        ) {
-            self.builtin_var_value_by_name("debug-on-quit")
+        let debug_setting = if self.signal_is_quit(sig) {
+            self.builtin_var_value(debug_on_quit_symbol())
                 .unwrap_or(Value::NIL)
         } else {
-            self.builtin_var_value_by_name("debug-on-error")
+            self.builtin_var_value(debug_on_error_symbol())
                 .unwrap_or(Value::NIL)
         };
-        if !wants_debugger(&debug_setting, &conditions, self.symbol_mode()) {
+        if !wants_debugger(&debug_setting, conditions, self.symbol_mode()) {
             return Ok(());
         }
-        if self.skip_debugger(sig, &conditions)? {
+        if self.skip_debugger(sig, conditions)? {
             return Ok(());
         }
         // GNU's last conjunct, and it is last there too: "See commentary on
@@ -532,7 +575,7 @@ impl Context {
     #[doc(hidden)]
     pub fn skip_debugger(&mut self, sig: &SignalData, conditions: &Value) -> Result<bool, Flow> {
         let ignored = self
-            .builtin_var_value_by_name("debug-ignored-errors")
+            .builtin_var_value(debug_ignored_errors_symbol())
             .unwrap_or(Value::NIL);
         let Some(entries) = list_to_vec(&ignored) else {
             return Ok(false);
@@ -626,12 +669,7 @@ impl Context {
     /// loop.  So this is infallible: a matcher failure is a `Diagnostic'.
     #[doc(hidden)]
     pub fn command_error_severity(&mut self, sig: &SignalData) -> CommandErrorSeverity {
-        if neovm_value::errors::signal_matches_condition_value_sym(
-            &self.obarray,
-            sig.symbol,
-            &Value::from_sym_id(quit_symbol()),
-            self.symbol_mode(),
-        ) {
+        if self.signal_is_quit(sig) {
             return CommandErrorSeverity::Routine;
         }
         let conditions = self.signal_conditions_value(sig);

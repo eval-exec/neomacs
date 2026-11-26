@@ -75,7 +75,7 @@ pub(crate) fn map_sequence_element(sequence: Value, index: usize) -> Result<Valu
             })
         }
         ValueKind::Veclike(VecLikeType::Vector) => {
-            Ok(sequence.as_vector_data().expect("vector")[index])
+            Ok(sequence.as_vector_data().expect("vector").at(index))
         }
         ValueKind::Veclike(VecLikeType::Lambda) => {
             super::cons_list::lambda_to_closure_vector(&sequence)
@@ -128,6 +128,10 @@ pub(crate) enum MapCallee {
     /// private capture guard. No Lisp state is shared between mutators.
     #[cfg(feature = "jit")]
     UnobservedByteCode(Value),
+    /// A canonical symbol whose function cell held byte-code when the map
+    /// began. Every call reads the cell again after its prologue, where GNU
+    /// `funcall_general` reads it, so a redefinition is seen as there.
+    NamedByteCode(Value),
     Subr {
         designator: Value,
         subr: Value,
@@ -141,6 +145,9 @@ impl MapCallee {
         #[cfg(feature = "jit")]
         if !neovm_value::tagged::collection_reads::reads_need_observation() && func.is_bytecode() {
             return Self::UnobservedByteCode(func);
+        }
+        if eval.named_bytecode_cell(func).is_some() {
+            return Self::NamedByteCode(func);
         }
         match eval.resolve_mapped_subr_callee(func) {
             Some((subr, epoch)) => MapCallee::Subr {
@@ -159,6 +166,9 @@ impl MapCallee {
             MapCallee::Generic(func) => apply1(eval, func, item),
             #[cfg(feature = "jit")]
             MapCallee::UnobservedByteCode(func) => eval.apply1_bytecode_unobserved(func, item),
+            MapCallee::NamedByteCode(designator) => {
+                eval.apply_named_bytecode(designator, LispArgVec::from_slice(&[item]))
+            }
             MapCallee::Subr {
                 designator,
                 subr,
@@ -1326,7 +1336,7 @@ fn sort_vector_values(
         runtime.root_sort_value(key_fn);
         let mut keys = Vec::with_capacity(len);
         for index in 0..len {
-            let value = vector.as_vector_data().unwrap()[index];
+            let value = vector.as_vector_data().unwrap().at(index);
             let key = runtime.call_sort_function1(key_fn, value)?;
             runtime.root_sort_value(key);
             keys.push(key);
@@ -1466,6 +1476,10 @@ mod higher_order_callback_policy;
 #[cfg(all(test, feature = "jit"))]
 #[path = "tests/mapcar_activation_test.rs"]
 mod mapcar_activation;
+
+#[cfg(test)]
+#[path = "tests/symbol_callee_test.rs"]
+mod symbol_callee;
 
 #[cfg(test)]
 #[path = "tests/positioned_final_boundaries_test.rs"]

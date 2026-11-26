@@ -128,7 +128,7 @@ default = ["jit", "sqlite"]
 # Diagnostic inventory walks and JSONL records; absent from ordinary builds.
 gc-memory-telemetry = ["dep:serde_json", "neovm-value/gc-memory-telemetry", "neovm-eval/gc-memory-telemetry", "neovm-display/gc-memory-telemetry"]
 sqlite = ["dep:rusqlite", "neovm-value/sqlite", "neovm-eval/sqlite", "neovm-system/sqlite", "neovm-display/sqlite"]
-xwidgets = ["neovm-eval/xwidgets", "neovm-display/xwidgets"]
+xwidgets = ["neovm-eval/xwidgets", "neovm-display/xwidgets", "neovm-value/xwidgets"]
 # Static-link the crate's bundled libdbus instead of pkg-config `dbus-1`.
 # Production/Nix builds leave this off and use the system library.  The
 # transport (and its dbus dependency) lives in neovm-system since stage 6,
@@ -140,7 +140,10 @@ sound = ["neovm-display/sound"]
 # `xwidget-internal` is provided: the evaluator cannot see
 # `neomacs-webview`'s feature directly, and advertising the layer without the
 # backend leaves `xwidget-webkit-browse-url` failing at creation.
-webview = ["neovm-value/webview"]
+# The macOS inline-webview backend implies the GNU keyed xwidget surface
+# (`xwidgets`, our HAVE_XWIDGETS): a build that advertises xwidget-internal
+# must also declare make-xwidget and bind xwidget-list.
+webview = ["neovm-value/webview", "xwidgets"]
 # The Linux display runtime enables this when it links its native GSettings
 # adapter. Bare evaluator builds must not advertise a native subscription.
 # The system-vocabulary table moved to neovm-value, so the same capability has
@@ -206,6 +209,9 @@ contract-fixtures = ["neovm-eval/contract-fixtures"]
 test-support = []
 
 [dev-dependencies]
+# W-GEN: the architecture freshness guard runs the same ledger generator
+# xtask uses; a dev edge keeps it out of product builds.
+neovm-gnu-ledgers.workspace = true
 # Peer ruling A2 + TEST-SUPPORT-DESIGN rev 2: a provider's test surface is
 # enabled only by a dev edge from a crate above it, never for normal builds.
 # Each edge below enables one lower provider's surface for core's test units.
@@ -241,7 +247,6 @@ proc-macro2 = { version = "1", features = ["span-locations"] }
 [build-dependencies]
 flate2.workspace = true
 pkg-config.workspace = true
-sha2.workspace = true
 
 [[test]]
 name = "thread_safety_contracts"
@@ -262,6 +267,11 @@ path = "tests/p1rv_contracts.rs"
 [[test]]
 name = "mint_seal_contracts"
 path = "tests/mint_seal_contracts.rs"
+
+[[test]]
+name = "heap_capability_contracts"
+path = "tests/heap_capability_contracts.rs"
+required-features = ["contract-fixtures"]
 
 # Runs its checks on a child process's MAIN thread, which libtest never
 # offers; the file answers the libtest CLI subset nextest uses.
@@ -307,3 +317,9 @@ path = "tests/core.rs"
 name = "retained_leaf_contracts"
 path = "tests/retained_leaf_contracts.rs"
 required-features = ["jit", "contract-fixtures"]
+
+# Dedicated Miri registration: the source reuses the real core era fixture
+# and allocation shells, and is empty outside cfg(miri).
+[[test]]
+name = "numeric_storage_miri"
+path = "tests/numeric_storage_miri.rs"

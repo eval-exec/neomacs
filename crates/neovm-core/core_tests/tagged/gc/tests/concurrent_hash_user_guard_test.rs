@@ -20,11 +20,14 @@ use neovm_value::test_support::authority::{
 /// The Rev R2 nesting count as seen by assertions: 0 outside any user test,
 /// one per in-flight activation on the table.
 fn depth(table: TaggedValue) -> u8 {
-    table
-        .as_hash_table()
-        .unwrap()
-        .test_depth
-        .load(std::sync::atomic::Ordering::Acquire)
+    let object = table.as_veclike_ptr().expect("hash table")
+        as *const neovm_value::tagged::header::HashTableObj;
+    // SAFETY: the fixture retains this live hash table; the byte is object metadata.
+    unsafe {
+        (*object)
+            .test_depth
+            .load(std::sync::atomic::Ordering::Acquire)
+    }
 }
 
 fn wait_for_worker(heap: &TaggedHeap) {
@@ -225,6 +228,6 @@ fn tier_h_user_test_guards_inhibit_gc_without_cow_and_restore_after_all_exits() 
         );
         let record = inserted.as_record_data().unwrap();
         assert_eq!(record.len(), 1);
-        assert_eq!(record[0], TaggedValue::fixnum(8091));
+        assert_eq!(record.at(0), TaggedValue::fixnum(8091));
     }
 }

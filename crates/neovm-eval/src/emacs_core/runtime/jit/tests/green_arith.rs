@@ -21,10 +21,10 @@ use neovm_value::value::{LambdaParams, Value};
 
 fn function(ops: Vec<Op>, constants: Vec<Value>) -> ByteCodeFunction {
     let mut source = ByteCodeFunction::new(LambdaParams::simple(Vec::new()));
-    source.lexical = true;
-    source.ops = ops;
-    source.constants = constants.into();
-    source.max_stack = StackDepth::for_test(16);
+    source.set_lexical(true);
+    source.set_ops(ops);
+    source.set_constants(constants.into());
+    source.set_max_stack(StackDepth::for_test(16));
     source.seal_hand_assembled_ops();
     source
         .jit_runtime()
@@ -49,10 +49,10 @@ fn redefine_and_collect(context: &mut Context) -> EvalResult {
         neovm_value::intern::intern("green-arith-a"),
         neovm_value::intern::intern("green-arith-b"),
     ]));
-    replacement.lexical = true;
-    replacement.ops = vec![Op::Constant(0), Op::Return];
-    replacement.constants = vec![Value::fixnum(37)].into();
-    replacement.max_stack = StackDepth::for_test(16);
+    replacement.set_lexical(true);
+    replacement.set_ops(vec![Op::Constant(0), Op::Return]);
+    replacement.set_constants(vec![Value::fixnum(37)].into());
+    replacement.set_max_stack(StackDepth::for_test(16));
     replacement.seal_hand_assembled_ops();
     let replacement = Value::make_bytecode(replacement);
     context.with_obarray_mut(|mut obarray| {
@@ -189,7 +189,7 @@ fn exercise(preadmitted: bool, osr: bool) {
     let source_data = source.get_bytecode_data().unwrap();
     // Compilation happens before the make-thread inside the native callback.
     let result = if osr {
-        cache::prepare_osr_for_test(&mut context, source_data, 1);
+        unsafe { cache::prepare_osr_for_test(&mut context, source_data, 1) };
         let _leaf = cache::osr_leaf_ptr_for_test(source_data, 1).expect("baseline OSR leaf");
         // SAFETY: `ctx` is the live `Context` this test owns; the call runs in this thread under the dormant-Context contract.
         let run =
@@ -221,7 +221,7 @@ fn exercise(preadmitted: bool, osr: bool) {
             resume.cond_base,
         )
     } else {
-        cache::prepare_entry_for_test(&mut context, source_data);
+        unsafe { cache::prepare_entry_for_test(&mut context, source_data) };
         let id = source_data.jit_runtime().compiled_id().unwrap();
         let original_pointer =
             cache::compiled_leaf_ptr_for_test(id).expect("original baseline leaf");

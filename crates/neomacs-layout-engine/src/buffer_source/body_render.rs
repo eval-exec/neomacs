@@ -392,6 +392,7 @@ impl BufferSourceWalkSetup {
                 self.charpos,
                 end,
                 loop_context.text_start_byte(),
+                state.source_render.string_source_root_scope(),
             ),
             None => BufferSourceWalk::new_for_window(
                 loop_context.buffer_id(),
@@ -399,6 +400,7 @@ impl BufferSourceWalkSetup {
                 Some(params.window_id as u64),
                 self.charpos,
                 loop_context.text_start_byte(),
+                state.source_render.string_source_root_scope(),
             ),
         }
         // The two bounds are orthogonal and both numeric: the acquisition
@@ -519,14 +521,14 @@ impl BufferSourceWalkSetup {
         output_emitter: &mut WindowOutputEmitter,
         render_services: ChromeRowRenderServices<'_, '_>,
         tail_context: &BufferSourceTailRequestContext<'_>,
+        char_to_byte: impl FnOnce(neovm_core::buffer::CharPos0) -> neovm_core::buffer::EmacsBytePos,
     ) -> TextWindowRedisplayPositions {
         tail_context
-            .body_install_request(self.byte_idx, &self.row_flags)
-            .install_and_apply(TextWindowBodyInstallState::new(
-                output,
-                output_emitter,
-                render_services,
-            ))
+            .body_install_request(&self.row_flags)
+            .install_and_apply(
+                TextWindowBodyInstallState::new(output, output_emitter, render_services),
+                char_to_byte,
+            )
     }
 
     #[allow(clippy::too_many_arguments)]

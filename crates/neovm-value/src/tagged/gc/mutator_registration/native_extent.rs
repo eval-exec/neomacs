@@ -35,7 +35,7 @@ use crate::tagged::transport::SharedRoot;
 
 /// Entry/return lock contention sits far below this bound; a Busy that
 /// survives it reports contract misuse instead of hanging the owner.
-const CONTENTION_WAIT: Duration = Duration::from_secs(60);
+pub(super) const CONTENTION_WAIT: Duration = Duration::from_secs(60);
 
 /// The retained root handles a native-safe extent may use.
 ///
@@ -68,7 +68,7 @@ impl<'extent> NativeRoots<'extent> {
     pub fn len(&self) -> usize {
         self.words.len()
     }
-    pub fn is_empty(&self) -> bool {
+    pub(crate) fn is_empty(&self) -> bool {
         self.words.is_empty()
     }
     /// One retained handle's word.

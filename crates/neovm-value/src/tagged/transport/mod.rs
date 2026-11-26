@@ -21,14 +21,17 @@ mod root_table;
 mod shared_root;
 
 pub use immediate::{ImmediateValue, NotImmediate};
-pub use root_batch::{
-    FinalizedRootBatch, PreparedRootBatch, RetiredRootBatch, RootBatchError,
-    RootBatchFinalizeFailure, RootBatchFinishFailure, RootBatchLease, RootBatchPublishFailure,
-    RootBatchReader,
-};
+#[cfg(any(test, feature = "test-support"))]
+#[doc(hidden)]
+pub use root_batch::HeldRootBatchReaderForTest;
+pub use root_batch::{FinalizedRootBatch, RootBatchReader};
 pub(crate) use root_batch::{
     ParallelRootBatchError, ParallelRootBatchLease, ParallelRootBatchReader, ParallelRootIdentity,
     PreparedParallelRootBatch,
+};
+pub use root_batch::{
+    PreparedRootBatch, RetiredRootBatch, RootBatchError, RootBatchFinalizeFailure,
+    RootBatchFinishFailure, RootBatchLease, RootBatchPublishFailure,
 };
 /// TEST-SUPPORT-VIS: the moved transport oracle reads the root-table census;
 /// root_table itself stays private and cell_census keeps pub(super) in product
@@ -42,5 +45,8 @@ pub use root_table::collect_shared_root_gc_roots;
 pub(crate) use root_table::root_table_is_alive_for_test;
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) use root_table::with_root_table_lock_for_test;
+pub use shared_root::RootedSlot;
 pub(crate) use shared_root::{ConsRootSeal, RootSlotOps, RootedConsInputs, cons_into};
-pub use shared_root::{LocalRoot, RootedSlot, SharedRoot, SharedRootError};
+pub use shared_root::{LocalRoot, SharedRoot, SharedRootError};
+
+pub(crate) use shared_root::{RootedNumericDestination, bignum_into, float_into};

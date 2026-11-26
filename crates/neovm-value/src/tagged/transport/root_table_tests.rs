@@ -104,7 +104,7 @@ fn retirement_during_capture_and_readmission_preserve_the_new_root() {
         collect_shared_root_gc_roots(&heap, &mut snapshot);
         assert_eq!(snapshot.len(), 1);
         assert_eq!(snapshot[0].bits(), new.bits());
-        heap.collect_exact(snapshot.into_iter());
+        heap.collect_rooted(snapshot.into_iter());
         assert!(!heap.owns_heap_value_for_test(old));
         assert!(heap.owns_heap_value_for_test(new));
         assert_eq!(
@@ -116,7 +116,7 @@ fn retirement_during_capture_and_readmission_preserve_the_new_root() {
         let mut no_roots = Vec::new();
         collect_shared_root_gc_roots(&heap, &mut no_roots);
         assert!(no_roots.is_empty());
-        heap.collect_exact(no_roots.into_iter());
+        heap.collect_rooted(no_roots.into_iter());
         assert!(!heap.owns_heap_value_for_test(new));
     }
 }

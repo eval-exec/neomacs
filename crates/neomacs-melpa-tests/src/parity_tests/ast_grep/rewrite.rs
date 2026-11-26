@@ -213,7 +213,7 @@ fn ast_grep_apply_rewrites_yes_skip_and_quit_follow_query_replace_semantics() ->
                    final-message)))
             (ast-grep-test-kill-file-buffer file)))"##,
         expect![[
-            r#"OK (#("old-a old-b old-c old-d\n" 0 24 (fontified nil)) nil ("Replace `old-d' with `new-d'? (y/n/!/q) ") "Replaced 0 match(es) in 0 file(s); skipped 0 (quit)")"#
+            r#"OK ("old-a old-b old-c old-d\n" nil ("Replace `old-d' with `new-d'? (y/n/!/q) ") "Replaced 0 match(es) in 0 file(s); skipped 0 (quit)")"#
         ]],
     )
 }

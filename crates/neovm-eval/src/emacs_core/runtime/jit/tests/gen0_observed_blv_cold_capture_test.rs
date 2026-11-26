@@ -9,6 +9,7 @@ use crate::emacs_core::eval::subr_abi::SubrFn;
 use crate::emacs_core::eval::subr_abi::SubrValueExt;
 use crate::emacs_core::eval::{SubrEntry, register_global_subr_entry};
 use neovm_value::error::EvalResult;
+use neovm_value::intern::intern;
 use neovm_value::tagged::collection_reads::{
     CompiledJournalMode, capture, force_compiled_journal_for_test, is_observed,
 };
@@ -33,11 +34,11 @@ fn cached_cell(context: &Context, name: &str, local: bool) -> Value {
     // Obarray::blv is the public reader of this symbol's BLV record. The
     // fixture loaded this buffer's actual cache; nothing here writes it.
     let blv = context.obarray().blv(id).expect("localized");
-    assert_eq!(blv.found, local);
+    assert_eq!(blv.found.get(), local);
     if !local {
-        assert_eq!(blv.valcell.get(), blv.defcell.get());
+        assert_eq!(blv.valcell(), blv.defcell());
     }
-    blv.valcell.get()
+    blv.valcell()
 }
 
 fn raw_cdr(owner: Value) -> Value {
@@ -113,7 +114,7 @@ fn check_setter(local: bool) {
     let leaf = compile_blv(
         &context,
         &[Op::StackRef(0), Op::VarSet(0), Op::StackRef(0), Op::Return],
-        &[Value::symbol(name)],
+        &[Value::from_sym_id(intern(name))],
         1,
     );
     assert_eq!(
@@ -209,7 +210,7 @@ fn check_binding(local: bool) {
             Op::Return,
         ],
         &[
-            Value::symbol(name),
+            Value::from_sym_id(intern(name)),
             Value::make_int(83),
             Value::from_sym_id(observer),
         ],
@@ -257,7 +258,7 @@ fn check_binding(local: bool) {
     let setter = compile_blv(
         &context,
         &[Op::StackRef(0), Op::VarSet(0), Op::StackRef(0), Op::Return],
-        &[Value::symbol(name)],
+        &[Value::from_sym_id(intern(name))],
         1,
     );
     assert_eq!(

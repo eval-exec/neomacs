@@ -559,6 +559,7 @@ fn display_replacement_property_accepts_only_matching_media_replacements() {
         horizontal_margin: 0.0,
         vertical_margin: 0.0,
         opaque_background: None,
+        presentation: neomacs_display_protocol::ImageGlyphPresentation::Texture,
     });
     let video = DisplayMediaReplacement::video(DisplayVideoItem {
         video_id: VideoId::new(2),

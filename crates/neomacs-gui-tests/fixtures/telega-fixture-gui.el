@@ -42,6 +42,9 @@
 (defconst tf/snapshot-path (getenv "NEOMACS_GUI_FRAME_SNAPSHOT_JSON"))
 
 (defvar tf/chats-loaded nil)
+(defvar tf/settle-tick nil)
+(defvar tf/settle-size nil)
+(defvar tf/chats-settled nil)
 (defvar tf/generation 0)
 (defvar tf/started-at (float-time))
 
@@ -219,10 +222,27 @@ and `:avatar-spec-*' the cached avatar image Telega built for it."
                       (format "%S" telega--auth-state))
            :window-start (and window (window-start window))
            :window-end (and window (window-end window))
+           :point (and window (window-point window))
+           :chats-settled (and tf/chats-settled t)
            :buffer-size (and root-buffer (with-current-buffer root-buffer (buffer-size)))
            :selected-buffer (buffer-name (window-buffer (selected-window)))
            :graphic (and (display-graphic-p) t))
      (tf/avatar-state))))
+
+(defun tf/update-settled ()
+  "Publish whether the root buffer's character content has stopped changing.
+Telega inserts fetched chats asynchronously, and point rests on the last
+insertion boundary until that sequence ends.  Two consecutive checkpoint
+ticks with the same chars-modified-tick and buffer-size mean no insertion
+is still in flight, so a viewport command cannot race one."
+  (let* ((root (get-buffer telega-root-buffer-name))
+         (tick (and root (buffer-chars-modified-tick root)))
+         (size (and root (buffer-size root))))
+    (setq tf/chats-settled (and tf/chats-loaded tick size
+                                (equal tick tf/settle-tick)
+                                (equal size tf/settle-size)))
+    (setq tf/settle-tick tick
+          tf/settle-size size)))
 
 (defun tf/write-checkpoint ()
   (setq tf/generation (1+ tf/generation))
@@ -234,6 +254,14 @@ and `:avatar-spec-*' the cached avatar image Telega built for it."
     (let* ((token (with-temp-buffer
                     (insert-file-contents tf/request-path)
                     (string-trim (buffer-string))))
+           ;; The snapshot dumps the presented frame matrix. `window-start'
+           ;; already reports the scroll position set by the last command, so
+           ;; a slow renderer can answer the request with the frame from
+           ;; BEFORE that scroll (CI saw rows at Synthetic Group 54 while the
+           ;; checkpoint said window-start 1). Force the pending redisplay
+           ;; first, like the xwidget fixture's capture does.
+           (_ (force-window-update))
+           (_ (redisplay t))
            (snapshot (and (fboundp 'neomacs--write-frame-snapshot)
                           (neomacs--write-frame-snapshot tf/snapshot-path t 'json))))
       (unless snapshot
@@ -245,6 +273,7 @@ and `:avatar-spec-*' the cached avatar image Telega built for it."
   "Periodic readiness checkpoint + snapshot service; never throws."
   (condition-case err
       (progn
+        (tf/update-settled)
         (tf/write-checkpoint)
         (tf/answer-snapshot-request)
         (when (file-exists-p tf/quit-path)

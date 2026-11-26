@@ -53,7 +53,7 @@ fn dead_chained_marker_is_unchained_before_its_slot_is_freed_and_reused() {
     // What the command loop does each cycle: hand the GC every buffer's
     // chain-head slot so `unchain_dead_markers` can splice the dead out.
     unsafe { heap.set_marker_chain_head_slots(vec![bt.markers_head_slot_raw()]) };
-    heap.collect_exact(std::iter::once(live));
+    heap.collect_rooted(std::iter::once(live));
     assert!(
         !heap.marker_arena_owns_for_test(dead_ptr as *const u8),
         "the unrooted marker's slot must be freed",

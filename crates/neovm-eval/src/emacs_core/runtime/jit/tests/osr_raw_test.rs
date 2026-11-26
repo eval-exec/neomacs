@@ -1,6 +1,7 @@
 use super::*;
 use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::eval::Context;
+use neovm_value::intern::intern;
 use neovm_value::value::LambdaParams;
 
 fn raw_loop(ops: Vec<Op>) -> ByteCodeFunction {
@@ -9,10 +10,10 @@ fn raw_loop(ops: Vec<Op>) -> ByteCodeFunction {
         optional: vec![],
         rest: None,
     });
-    f.lexical = true;
-    f.constants = vec![Value::make_int(0), Value::make_int(3), Value::make_int(99)].into();
-    f.ops = ops;
-    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(8);
+    f.set_lexical(true);
+    f.set_constants(vec![Value::make_int(0), Value::make_int(3), Value::make_int(99)].into());
+    f.set_ops(ops);
+    f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(8));
     f.seal_hand_assembled_ops();
     f
 }
@@ -52,8 +53,8 @@ fn osr_raw_zero_is_truthy_for_plain_and_else_pop_branches() {
             ops[3] = Op::Goto(bad);
         }
         let f = raw_loop(ops);
-        let cfg = analyze_cfg(&f.ops, &f.constants, None, 0).unwrap();
-        let facts = compute_known_fixnum_slots(&f.ops, &f.constants, &cfg);
+        let cfg = analyze_cfg(f.ops(), f.constants(), None, 0).unwrap();
+        let facts = compute_known_fixnum_slots(f.ops(), f.constants(), &cfg);
         assert!(uniform_raw_osr_slots(&cfg, &facts, Some(1))[0]);
         let mut ctx = Context::new(crate::test_utils::unit_runtime());
         let snapshot = [Value::make_int(0)];
@@ -88,8 +89,8 @@ fn osr_raw_condition_is_popped_before_normalizing_a_reused_temporary_slot() {
         Op::Return, // unreachable, retained to distinguish the exit leader
         Op::Return,
     ]);
-    let cfg = analyze_cfg(&f.ops, &f.constants, None, 0).unwrap();
-    let facts = compute_known_fixnum_slots(&f.ops, &f.constants, &cfg);
+    let cfg = analyze_cfg(f.ops(), f.constants(), None, 0).unwrap();
+    let facts = compute_known_fixnum_slots(f.ops(), f.constants(), &cfg);
     let raw = uniform_raw_osr_slots(&cfg, &facts, Some(1));
     assert!(raw[0] && raw[1]);
     let mut ctx = Context::new(crate::test_utils::unit_runtime());
@@ -119,15 +120,17 @@ fn osr_raw_switch_backedges_root_heap_payloads_and_preserve_quit_cadence() {
         optional: vec![],
         rest: None,
     });
-    f.lexical = true;
-    f.constants = vec![
-        Value::make_int(0),
-        Value::make_int(2),
-        table,
-        Value::make_int(1024),
-    ]
-    .into();
-    f.ops = vec![
+    f.set_lexical(true);
+    f.set_constants(
+        vec![
+            Value::make_int(0),
+            Value::make_int(2),
+            table,
+            Value::make_int(1024),
+        ]
+        .into(),
+    );
+    f.set_ops(vec![
         Op::Constant(3),
         Op::Nil,
         Op::Nil,
@@ -149,11 +152,11 @@ fn osr_raw_switch_backedges_root_heap_payloads_and_preserve_quit_cadence() {
         Op::Constant(2),
         Op::Switch,
         Op::Return,
-    ];
-    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(8);
+    ]);
+    f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(8));
     f.seal_hand_assembled_ops();
-    let cfg = analyze_cfg(&f.ops, &f.constants, None, 0).unwrap();
-    let facts = compute_known_fixnum_slots(&f.ops, &f.constants, &cfg);
+    let cfg = analyze_cfg(f.ops(), f.constants(), None, 0).unwrap();
+    let facts = compute_known_fixnum_slots(f.ops(), f.constants(), &cfg);
     let raw = uniform_raw_osr_slots(&cfg, &facts, Some(2));
     assert!(raw[0] && !raw[1]);
     for n in [1, 255, 256, 511, 1024] {
@@ -205,9 +208,9 @@ fn osr_raw_overflow_retags_the_snapshot_and_resumes_without_replaying_effects() 
         optional: vec![],
         rest: None,
     });
-    f.lexical = true;
-    f.constants = vec![Value::make_int(0), Value::symbol("osr-raw-effects")].into();
-    f.ops = vec![
+    f.set_lexical(true);
+    f.set_constants(vec![Value::make_int(0), Value::symbol("osr-raw-effects")].into());
+    f.set_ops(vec![
         Op::Constant(0),
         Op::VarRef(1),
         Op::Add1,
@@ -219,11 +222,11 @@ fn osr_raw_overflow_retags_the_snapshot_and_resumes_without_replaying_effects() 
         Op::Nil,
         Op::GotoIfNotNil(1),
         Op::Return,
-    ];
-    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(8);
+    ]);
+    f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(8));
     f.seal_hand_assembled_ops();
-    let cfg = analyze_cfg(&f.ops, &f.constants, None, 0).unwrap();
-    let facts = compute_known_fixnum_slots(&f.ops, &f.constants, &cfg);
+    let cfg = analyze_cfg(f.ops(), f.constants(), None, 0).unwrap();
+    let facts = compute_known_fixnum_slots(f.ops(), f.constants(), &cfg);
     assert!(uniform_raw_osr_slots(&cfg, &facts, Some(1))[0]);
     let max = Value::MOST_POSITIVE_FIXNUM;
     let snapshot = [Value::make_int(max)];
@@ -295,14 +298,16 @@ fn osr_raw_varref_preserves_loop_slots_on_inline_and_fallback_reads() {
             optional: vec![],
             rest: None,
         });
-        f.lexical = true;
-        f.constants = vec![
-            Value::make_int(0),
-            Value::symbol(name),
-            Value::make_int(1024),
-        ]
-        .into();
-        f.ops = vec![
+        f.set_lexical(true);
+        f.set_constants(
+            vec![
+                Value::make_int(0),
+                Value::from_sym_id(intern(name)),
+                Value::make_int(1024),
+            ]
+            .into(),
+        );
+        f.set_ops(vec![
             Op::Constant(2),
             Op::Constant(0),
             Op::StackRef(1),
@@ -319,11 +324,11 @@ fn osr_raw_varref_preserves_loop_slots_on_inline_and_fallback_reads() {
             Op::Goto(2),
             Op::List(2),
             Op::Return,
-        ];
-        f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(8);
+        ]);
+        f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(8));
         f.seal_hand_assembled_ops();
-        let cfg = analyze_cfg(&f.ops, &f.constants, None, 0).unwrap();
-        let facts = compute_known_fixnum_slots(&f.ops, &f.constants, &cfg);
+        let cfg = analyze_cfg(f.ops(), f.constants(), None, 0).unwrap();
+        let facts = compute_known_fixnum_slots(f.ops(), f.constants(), &cfg);
         let raw = uniform_raw_osr_slots(&cfg, &facts, Some(2));
         assert!(raw[0] && raw[1]);
         let snapshot = [Value::make_int(1024), Value::make_int(0)];
@@ -361,14 +366,16 @@ fn osr_raw_varref_type_change_retags_live_slots_for_precise_resume() {
         optional: vec![],
         rest: None,
     });
-    f.lexical = true;
-    f.constants = vec![
-        Value::make_int(0),
-        Value::symbol("raw-osr-float-read"),
-        Value::make_int(3),
-    ]
-    .into();
-    f.ops = vec![
+    f.set_lexical(true);
+    f.set_constants(
+        vec![
+            Value::make_int(0),
+            Value::symbol("raw-osr-float-read"),
+            Value::make_int(3),
+        ]
+        .into(),
+    );
+    f.set_ops(vec![
         Op::Constant(2),
         Op::Constant(0),
         Op::StackRef(1),
@@ -385,11 +392,11 @@ fn osr_raw_varref_type_change_retags_live_slots_for_precise_resume() {
         Op::Goto(2),
         Op::List(2),
         Op::Return,
-    ];
-    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(8);
+    ]);
+    f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(8));
     f.seal_hand_assembled_ops();
-    let cfg = analyze_cfg(&f.ops, &f.constants, None, 0).unwrap();
-    let facts = compute_known_fixnum_slots(&f.ops, &f.constants, &cfg);
+    let cfg = analyze_cfg(f.ops(), f.constants(), None, 0).unwrap();
+    let facts = compute_known_fixnum_slots(f.ops(), f.constants(), &cfg);
     let raw = uniform_raw_osr_slots(&cfg, &facts, Some(2));
     assert!(raw[0] && raw[1]);
     let snapshot = [Value::make_int(3), Value::make_int(0)];

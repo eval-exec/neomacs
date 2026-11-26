@@ -21,21 +21,21 @@ use std::time::Instant;
 
 /// Unsupported allocator observations remain absent rather than zero.
 #[derive(Clone, Copy, Debug, Default, Serialize)]
-pub struct AllocatorSnapshot {
-    pub available: bool,
-    pub stats_enabled: bool,
-    pub error: i32,
-    pub allocated_bytes: Option<usize>,
-    pub active_bytes: Option<usize>,
-    pub resident_bytes: Option<usize>,
-    pub mapped_bytes: Option<usize>,
-    pub retained_bytes: Option<usize>,
+pub(crate) struct AllocatorSnapshot {
+    pub(crate) available: bool,
+    pub(crate) stats_enabled: bool,
+    pub(crate) error: i32,
+    pub(crate) allocated_bytes: Option<usize>,
+    pub(crate) active_bytes: Option<usize>,
+    pub(crate) resident_bytes: Option<usize>,
+    pub(crate) mapped_bytes: Option<usize>,
+    pub(crate) retained_bytes: Option<usize>,
 }
 
 static ALLOCATOR_SAMPLER: OnceLock<fn() -> AllocatorSnapshot> = OnceLock::new();
 
 /// The process installing its allocator supplies the matching observer.
-pub fn set_allocator_sampler(sampler: fn() -> AllocatorSnapshot) {
+pub(crate) fn set_allocator_sampler(sampler: fn() -> AllocatorSnapshot) {
     let _ = ALLOCATOR_SAMPLER.set(sampler);
 }
 

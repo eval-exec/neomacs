@@ -100,10 +100,10 @@ fn generational_cons_card_lifecycle() {
     let roots = ScratchRoots::new();
     let owner = heap.alloc_cons(TaggedValue::NIL, TaggedValue::NIL);
     roots.keep(owner);
-    heap.begin_minor_collection().unwrap();
+    heap.begin_minor_collection_for_test().unwrap();
     heap.seed_root(owner);
-    heap.complete_minor_collection();
-    heap.finish_incremental_sweep_now();
+    heap.complete_minor_collection_for_test();
+    heap.finish_incremental_sweep_now_for_test();
     assert!(heap.value_is_old_for_test(owner));
     assert!(crate::tagged::mutate::set_cons_car(
         owner,
@@ -115,11 +115,11 @@ fn generational_cons_card_lifecycle() {
     assert!(crate::tagged::mutate::set_cons_cdr(owner, child));
     assert!(heap.owner_card_is_dirty_for_test(owner));
     assert!(heap.current_mutator_gc().remset.is_empty());
-    heap.begin_minor_collection().unwrap();
+    heap.begin_minor_collection_for_test().unwrap();
     assert!(heap.generational.r_seed.is_empty());
     heap.seed_root(owner);
-    heap.complete_minor_collection();
-    heap.finish_incremental_sweep_now();
+    heap.complete_minor_collection_for_test();
+    heap.finish_incremental_sweep_now_for_test();
     assert!(!heap.owner_card_is_dirty_for_test(owner));
     assert!(heap.owns_string_object(child.as_string_ptr().unwrap().cast()));
     assert!(heap.value_is_old_for_test(child));
@@ -138,7 +138,7 @@ fn generational_mapped_and_permanent_logs_are_per_cycle() {
     let permanent = heap.alloc_vector(vec![TaggedValue::NIL]);
     roots.keep(permanent);
     assert_eq!(heap.note_image_object(permanent), ImageStamp::Stamped);
-    heap.collect_exact(std::iter::once(permanent));
+    heap.collect_rooted(std::iter::once(permanent));
     assert!(header(permanent).generation.permanent());
     let child = heap.alloc_cons(TaggedValue::T, TaggedValue::NIL);
     for _ in 0..2 {
@@ -149,7 +149,7 @@ fn generational_mapped_and_permanent_logs_are_per_cycle() {
     heap.current_mutator_gc_mut()
         .remembered_cache
         .fill(permanent.bits());
-    heap.begin_minor_collection().unwrap();
+    heap.begin_minor_collection_for_test().unwrap();
     assert!(
         heap.current_mutator_gc()
             .remembered_cache
@@ -157,8 +157,8 @@ fn generational_mapped_and_permanent_logs_are_per_cycle() {
             .all(|&bits| bits == 0)
     );
     assert_eq!(heap.generational.r_seed.len(), 2);
-    heap.complete_minor_collection();
-    heap.finish_incremental_sweep_now();
+    heap.complete_minor_collection_for_test();
+    heap.finish_incremental_sweep_now_for_test();
     assert!(!header(permanent).is_remembered());
     assert!(heap.current_mutator_gc().r_mapped_seen.is_empty());
     assert!(heap.generational.r_seed.is_empty());
@@ -179,7 +179,7 @@ fn generational_disabled_never_logs_r() {
     let permanent = heap.alloc_vector(vec![TaggedValue::NIL]);
     roots.keep(permanent);
     assert_eq!(heap.note_image_object(permanent), ImageStamp::Stamped);
-    heap.collect_exact(std::iter::once(permanent));
+    heap.collect_rooted(std::iter::once(permanent));
     let child = heap.alloc_cons(TaggedValue::T, TaggedValue::NIL);
     crate::tagged::mutate::set_vector_slot(mapped, 0, child);
     crate::tagged::mutate::set_vector_slot(permanent, 0, child);
@@ -215,12 +215,12 @@ fn generational_header_claim_is_unique_across_threads() {
 }
 
 fn minor(heap: &mut TaggedHeap, roots: &[TaggedValue]) {
-    heap.begin_minor_collection().unwrap();
+    heap.begin_minor_collection_for_test().unwrap();
     for &root in roots {
         heap.seed_root(root);
     }
-    heap.complete_minor_collection();
-    heap.finish_incremental_sweep_now();
+    heap.complete_minor_collection_for_test();
+    heap.finish_incremental_sweep_now_for_test();
 }
 
 #[test]
@@ -251,7 +251,7 @@ fn minor_old_vector_and_cons_keep_new_children_and_drop_overwritten_young() {
     assert!(!heap.owns_string_object(discarded.as_string_ptr().unwrap().cast()));
     assert!(heap.value_is_old_for_test(child));
     assert!(heap.value_is_old_for_test(string));
-    assert_eq!(vector.as_vector_data().unwrap().as_slice()[0], child);
+    assert_eq!(vector.as_vector_data().unwrap().at(0), child);
     assert_eq!(cons.cons_car(), string);
     assert_eq!(header(vector).raw_mark(), UNMARKED_AT_REST);
     assert_eq!(heap.remembered_log_len_for_test(), 0);
@@ -272,7 +272,7 @@ fn minor_mapped_and_permanent_edges_are_seeded_by_r() {
     roots.keep(mapped);
     let permanent = heap.alloc_vector(vec![TaggedValue::NIL]);
     roots.keep(permanent);
-    heap.collect_exact(std::iter::once(permanent));
+    heap.collect_rooted(std::iter::once(permanent));
     let child = heap.alloc_cons(TaggedValue::fixnum(29), TaggedValue::NIL);
     crate::tagged::mutate::set_vector_slot(mapped, 0, child);
     crate::tagged::mutate::set_vector_slot(permanent, 0, child);
@@ -292,9 +292,9 @@ fn minor_eager_box_promotion_precedes_sweep_window_stores() {
     let roots = ScratchRoots::new();
     let owner = heap.alloc_hash_table(LispHashTable::new(HashTableTest::Eq));
     roots.keep(owner);
-    heap.begin_minor_collection().unwrap();
+    heap.begin_minor_collection_for_test().unwrap();
     heap.seed_root(owner);
-    heap.complete_minor_collection();
+    heap.complete_minor_collection_for_test();
     assert!(heap.sweep_in_progress());
     assert!(header(owner).tenured);
     assert!(
@@ -310,7 +310,7 @@ fn minor_eager_box_promotion_precedes_sweep_window_stores() {
         );
     });
     assert_eq!(heap.current_mutator_gc().remset, [owner]);
-    heap.finish_incremental_sweep_now();
+    heap.finish_incremental_sweep_now_for_test();
     assert_eq!(
         heap.generational.old_objects,
         header(owner) as *mut GcHeader
@@ -354,8 +354,8 @@ fn concurrent_major_promotes_mark_window_children_without_r() {
     heap.reseed_runtime_and_remembered_roots();
     heap.seed_root(owner);
     heap.incremental_drain_all();
-    heap.incremental_finish(heap.live_bytes(), std::time::Instant::now());
-    heap.finish_incremental_sweep_now();
+    heap.incremental_finish_for_test(heap.live_bytes(), std::time::Instant::now());
+    heap.finish_incremental_sweep_now_for_test();
     assert!(heap.value_is_old_for_test(child));
     assert!(heap.current_mutator_gc().remset.is_empty());
     minor(&mut heap, &[]);
@@ -447,11 +447,11 @@ fn major_before_first_minor_preserves_permanent_edge() {
     let owner = heap.alloc_vector(vec![TaggedValue::NIL]);
     roots.keep(owner);
     assert_eq!(heap.note_image_object(owner), ImageStamp::Stamped);
-    heap.collect_exact(std::iter::once(owner));
+    heap.collect_rooted(std::iter::once(owner));
     assert!(header(owner).generation.permanent());
     let child = heap.alloc_cons(TaggedValue::fixnum(97), TaggedValue::NIL);
     crate::tagged::mutate::set_vector_slot(owner, 0, child);
-    heap.collect_exact(std::iter::once(owner));
+    heap.collect_rooted(std::iter::once(owner));
     assert_eq!(heap.generational.old_bytes, size_of::<ConsCell>());
     assert!(heap.current_mutator_gc().remset.is_empty());
     minor(&mut heap, &[owner]);
@@ -461,13 +461,13 @@ fn major_before_first_minor_preserves_permanent_edge() {
 
 #[test]
 fn minor_uninterned_symbol_weak_key_survives_without_old_owner_retrace() {
-    use crate::intern::{intern_uninterned, is_canonical_id};
+    use crate::intern::{is_canonical_id, make_uninterned_symbol};
     use crate::value::{HashTableTest, LispHashTable};
 
     let mut heap = heap_with_generations(true);
     set_tagged_heap(&mut heap);
     let roots = ScratchRoots::new();
-    let symbol_id = intern_uninterned("u34-minor-old-owner-symbol");
+    let symbol_id = make_uninterned_symbol("u34-minor-old-owner-symbol");
     assert!(!is_canonical_id(symbol_id));
     let symbol = TaggedValue::from_sym_id(symbol_id);
     let owner = heap.alloc_vector(vec![symbol]);
@@ -513,14 +513,14 @@ fn minor_uninterned_symbol_weak_key_survives_without_old_owner_retrace() {
 
     // The full path must still perform the skipped old-owner repair rather
     // than treating every symbol id as live, as a minor conservatively does.
-    heap.collect_exact([owner, table].into_iter());
+    heap.collect_rooted([owner, table].into_iter());
     assert!(heap.marked_symbols.contains(symbol_id));
     assert_eq!(table.as_hash_table().unwrap().data.len(), 1);
 }
 
 #[test]
 fn minor_then_major_old_owner_keeps_new_uninterned_weak_symbol_key() {
-    use crate::intern::{intern_uninterned, is_canonical_id};
+    use crate::intern::{is_canonical_id, make_uninterned_symbol};
     use crate::value::{HashTableTest, LispHashTable};
 
     for cons_owner in [false, true] {
@@ -539,7 +539,7 @@ fn minor_then_major_old_owner_keeps_new_uninterned_weak_symbol_key() {
 
             // Create the symbol after promotion: the old owner's earlier
             // trace cannot have installed this symbol's side-table mark.
-            let id = intern_uninterned("u34-review-new-symbol-in-old-owner");
+            let id = make_uninterned_symbol("u34-review-new-symbol-in-old-owner");
             assert!(!is_canonical_id(id));
             let symbol = TaggedValue::from_sym_id(id);
             let strong_value = if with_position {
@@ -582,7 +582,7 @@ fn minor_then_major_old_owner_keeps_new_uninterned_weak_symbol_key() {
             assert_eq!(table.as_hash_table().unwrap().data.len(), 1);
             assert!(heap.marked_symbols.contains(id));
             // Until C2.6, a requested major is today's synchronous full cycle.
-            heap.collect_exact([owner, table].into_iter());
+            heap.collect_rooted([owner, table].into_iter());
             assert_eq!(table.as_hash_table().unwrap().data.len(), 1);
             assert!(heap.marked_symbols.contains(id));
         }
@@ -609,7 +609,7 @@ fn minor_lazy_hydration_keys_survive_from_old_and_permanent_owners() {
             let image = fake_image::FakeImage::leak(false);
             roots.keep(image.register_vector(&mut heap));
             assert_eq!(heap.note_image_object(owner), ImageStamp::Stamped);
-            heap.collect_exact(std::iter::once(owner));
+            heap.collect_rooted(std::iter::once(owner));
         } else {
             minor(&mut heap, &[owner]);
         }
@@ -670,7 +670,7 @@ fn generational_partition_verifier_checks_old_box_children() {
             child,
         );
     }
-    heap.begin_minor_collection().unwrap();
+    heap.begin_minor_collection_for_test().unwrap();
     heap.seed_root(owner);
     heap.incremental_drain_all();
     heap.verify_dump_partition();
@@ -689,7 +689,7 @@ fn generational_partition_verifier_checks_unmarked_old_cons_children() {
     // Deliberately bypass the barrier. The old cons will stay unmarked in the
     // next minor, so an ordinary mark-only owner walk cannot find this edge.
     unsafe { (*(owner.xcons_ptr() as *mut ConsCell)).set_car(child) };
-    heap.begin_minor_collection().unwrap();
+    heap.begin_minor_collection_for_test().unwrap();
     heap.seed_root(owner);
     heap.incremental_drain_all();
     heap.verify_dump_partition();

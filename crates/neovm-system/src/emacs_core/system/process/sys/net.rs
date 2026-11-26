@@ -17,7 +17,7 @@
 /// A resolved address family, platform-independent. [`classify_family`] maps a
 /// raw `AF_*` value (which differs by OS) into this so the parent never matches
 /// on `libc`/`windows_sys` constants.
-pub enum NetFamily {
+pub(crate) enum NetFamily {
     Unspecified,
     Ipv4,
     Ipv6,
@@ -29,39 +29,42 @@ pub enum NetFamily {
 
 /// `AF_UNIX` (local domain), or 0 where unavailable.
 #[cfg(unix)]
-pub fn af_local() -> i32 {
+pub(crate) fn af_local() -> i32 {
     libc::AF_UNIX
 }
 #[cfg(not(unix))]
-pub fn af_local() -> i32 {
+pub(crate) fn af_local() -> i32 {
     0
 }
 
 /// `AF_INET` (IPv4).
 #[cfg(unix)]
-pub fn af_inet() -> i32 {
+pub(crate) fn af_inet() -> i32 {
     libc::AF_INET
 }
 #[cfg(windows)]
-pub fn af_inet() -> i32 {
+pub(crate) fn af_inet() -> i32 {
     windows_sys::Win32::Networking::WinSock::AF_INET as i32
 }
 #[cfg(all(not(unix), not(windows)))]
-pub fn af_inet() -> i32 {
+pub(crate) fn af_inet() -> i32 {
     0
 }
 
 /// `AF_INET6` (IPv6).
 #[cfg(unix)]
-pub fn af_inet6() -> i32 {
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn af_inet6() -> i32 {
     libc::AF_INET6
 }
 #[cfg(windows)]
-pub fn af_inet6() -> i32 {
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn af_inet6() -> i32 {
     windows_sys::Win32::Networking::WinSock::AF_INET6 as i32
 }
 #[cfg(all(not(unix), not(windows)))]
-pub fn af_inet6() -> i32 {
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn af_inet6() -> i32 {
     0
 }
 
@@ -71,7 +74,7 @@ pub fn af_inet6() -> i32 {
 /// comparing against the forward accessors, because several families collapse to
 /// 0 on platforms that lack them and would otherwise alias.
 #[cfg(unix)]
-pub fn classify_family(raw: i32) -> NetFamily {
+pub(crate) fn classify_family(raw: i32) -> NetFamily {
     match raw {
         r if r == libc::AF_UNSPEC => NetFamily::Unspecified,
         r if r == libc::AF_INET => NetFamily::Ipv4,
@@ -82,7 +85,7 @@ pub fn classify_family(raw: i32) -> NetFamily {
 }
 
 #[cfg(windows)]
-pub fn classify_family(raw: i32) -> NetFamily {
+pub(crate) fn classify_family(raw: i32) -> NetFamily {
     use windows_sys::Win32::Networking::WinSock::{AF_INET, AF_INET6, AF_UNSPEC};
     match raw {
         r if r == AF_UNSPEC as i32 => NetFamily::Unspecified,
@@ -93,28 +96,28 @@ pub fn classify_family(raw: i32) -> NetFamily {
 }
 
 #[cfg(all(not(unix), not(windows)))]
-pub fn classify_family(raw: i32) -> NetFamily {
+pub(crate) fn classify_family(raw: i32) -> NetFamily {
     NetFamily::Other(raw)
 }
 
 /// The `getaddrinfo` `AI_NUMERICHOST` hint flag.
 #[cfg(unix)]
-pub fn ai_numerichost() -> i32 {
+pub(crate) fn ai_numerichost() -> i32 {
     libc::AI_NUMERICHOST
 }
 #[cfg(windows)]
-pub fn ai_numerichost() -> i32 {
+pub(crate) fn ai_numerichost() -> i32 {
     windows_sys::Win32::Networking::WinSock::AI_NUMERICHOST as i32
 }
 #[cfg(all(not(unix), not(windows)))]
-pub fn ai_numerichost() -> i32 {
+pub(crate) fn ai_numerichost() -> i32 {
     0
 }
 
 /// The `getaddrinfo` socktype value for a SOCK_SEQPACKET lookup (Unix only;
 /// `dns_lookup`'s `SockType` has no seqpacket variant).
 #[cfg(unix)]
-pub fn sock_seqpacket() -> i32 {
+pub(crate) fn sock_seqpacket() -> i32 {
     libc::SOCK_SEQPACKET
 }
 
@@ -141,14 +144,14 @@ pub(crate) fn sockaddr_in6_payload_len() -> usize {
 
 /// Length of a `sockaddr_un` past its family field (Unix local sockets).
 #[cfg(unix)]
-pub fn sockaddr_un_payload_len() -> usize {
+pub(crate) fn sockaddr_un_payload_len() -> usize {
     std::mem::size_of::<libc::sockaddr_un>() - std::mem::size_of::<libc::sa_family_t>()
 }
 
 /// Which end of a socket pair a `getsockname`/`getpeername` query reports.
 #[cfg(unix)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum SocketEnd {
+pub(crate) enum SocketEnd {
     Local,
     Peer,
 }
@@ -167,7 +170,7 @@ pub enum SocketEnd {
 /// `None` means the kernel call itself failed; GNU then leaves the address out
 /// of the contact plist (src/process.c:3684-3689, :5112-5116).
 #[cfg(unix)]
-pub fn unix_socket_name(fd: std::os::fd::RawFd, end: SocketEnd) -> Option<Vec<u8>> {
+pub(crate) fn unix_socket_name(fd: std::os::fd::RawFd, end: SocketEnd) -> Option<Vec<u8>> {
     let mut address: libc::sockaddr_un = unsafe { std::mem::zeroed() };
     let mut len = std::mem::size_of::<libc::sockaddr_un>() as libc::socklen_t;
     // SAFETY: `address` is a zeroed `sockaddr_un` the kernel fills; `len` is
@@ -203,13 +206,58 @@ pub fn unix_socket_name(fd: std::os::fd::RawFd, end: SocketEnd) -> Option<Vec<u8
 }
 
 /// Resolve a service name (e.g. "http") for a protocol ("tcp"/"udp") to its
-/// port via `getservbyname`. `None` off Unix (std/socket2 have no equivalent).
-#[cfg(unix)]
-pub fn service_port(service: &str, protocol: &str) -> Option<u16> {
+/// port. Uses reentrant `getservbyname_r` on Linux (glibc/musl) and serializes
+/// `getservbyname` with a process mutex on Unix targets without it (macOS/BSD).
+/// `None` off Unix (std/socket2 have no equivalent).
+#[cfg(all(target_os = "linux", any(target_env = "gnu", target_env = "musl")))]
+pub(crate) fn service_port(service: &str, protocol: &str) -> Option<u16> {
+    unsafe extern "C" {
+        fn getservbyname_r(
+            name: *const libc::c_char,
+            proto: *const libc::c_char,
+            result_buf: *mut libc::servent,
+            buf: *mut libc::c_char,
+            buflen: libc::size_t,
+            result: *mut *mut libc::servent,
+        ) -> libc::c_int;
+    }
+
     let service = std::ffi::CString::new(service).ok()?;
     let protocol = std::ffi::CString::new(protocol).ok()?;
-    // SAFETY: both pointers are valid C strings; getservbyname returns NULL or a
-    // pointer to a static (per-process) servent whose s_port we copy immediately.
+    // SAFETY: `libc::servent` is a C POD struct; `service` and `protocol` are
+    // valid NUL-terminated C strings; `getservbyname_r` populates `entry` and
+    // sets `result` non-null when `rc == 0`.
+    unsafe {
+        neovm_value::system_vocab::posix_lookup::retry_erange_lookup::<libc::servent, u16>(
+            |entry, buf, len, result| {
+                // SAFETY: `service` and `protocol` are valid NUL-terminated C
+                // strings; `entry`, `buf`, and `result` are valid out-parameters.
+                unsafe {
+                    getservbyname_r(service.as_ptr(), protocol.as_ptr(), entry, buf, len, result)
+                }
+            },
+            |entry| Some(u16::from_be(entry.s_port as u16)),
+        )
+    }
+}
+
+#[cfg(all(
+    unix,
+    not(all(target_os = "linux", any(target_env = "gnu", target_env = "musl")))
+))]
+static SERVENT_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+#[cfg(all(
+    unix,
+    not(all(target_os = "linux", any(target_env = "gnu", target_env = "musl")))
+))]
+pub(crate) fn service_port(service: &str, protocol: &str) -> Option<u16> {
+    let service = std::ffi::CString::new(service).ok()?;
+    let protocol = std::ffi::CString::new(protocol).ok()?;
+    let _guard = SERVENT_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    // SAFETY: both pointers are valid C strings; `SERVENT_LOCK` serializes
+    // access to the shared servent storage, and we copy `s_port` immediately
+    // before dropping `_guard`.
     let entry = unsafe { libc::getservbyname(service.as_ptr(), protocol.as_ptr()) };
     if entry.is_null() {
         None
@@ -219,7 +267,7 @@ pub fn service_port(service: &str, protocol: &str) -> Option<u16> {
 }
 
 #[cfg(not(unix))]
-pub fn service_port(_service: &str, _protocol: &str) -> Option<u16> {
+pub(crate) fn service_port(_service: &str, _protocol: &str) -> Option<u16> {
     None
 }
 

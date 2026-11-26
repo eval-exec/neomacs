@@ -27,6 +27,7 @@ use crate::emacs_core::jit::compile::param_shape::JitParamShape;
 use cranelift_codegen::settings::{self, Configurable};
 use cranelift_module::{Linkage, Module, default_libcall_names};
 use cranelift_object::{ObjectBuilder, ObjectModule};
+use neovm_value::intern::intern;
 
 use super::backend::BackendError;
 use super::compile::{CompileError, DeoptCells};
@@ -149,7 +150,11 @@ pub(crate) const ABI_TAG: u32 = compute_abi_tag();
 // AOT leaf's emitted direct-call charge adds the frame cost and compares
 // against the constant limit, so stale sidecars with the subtract/borrow
 // shape must be refused.
-const ABI_TAG_VERSION: u32 = 53;
+// v54: car/cdr and plain vector/string slots bake ConsCell, VectorObj,
+// RecordObj, StringObj, VecLikeHeader, and GcHeader layouts, plus the
+// cons/string/veclike tags. Those words are mixed below so a stale
+// NEOVM_AOT_DIR unit is not served after a heap-layout change.
+const ABI_TAG_VERSION: u32 = 54;
 
 /// Format version of the AOT descriptor spec-section + the runtime spec ABI
 /// (`SpecSlot`/`spec_expected` sidecar bases, the loader re-classify+arm protocol).
@@ -314,6 +319,26 @@ const fn compute_abi_tag() -> u32 {
     mix_u64!(SPEC_ENCODING_VERSION as u64);
     mix_u64!(core::mem::size_of::<super::compile::SpecSlot>() as u64);
     mix_u64!(super::compile::SpecCalleeKind::DISC_COUNT as u64);
+    // Heap layouts baked by lower_car_cdr and emit_plain_slot_address.
+    // jit_layout.rs admits AOT only for plain constants that this salt covers.
+    mix_u64!(super::compile::jit_layout::CONS_CAR_OFFSET as u64);
+    mix_u64!(super::compile::jit_layout::CONS_CDR_OFFSET as u64);
+    mix_u64!(neovm_value::tagged::value::TAG_MASK as u64);
+    mix_u64!(neovm_value::tagged::value::TAG_CONS as u64);
+    mix_u64!(neovm_value::tagged::value::TAG_STRING as u64);
+    mix_u64!(neovm_value::tagged::value::TAG_VECLIKE as u64);
+    mix_u64!(core::mem::offset_of!(neovm_value::tagged::header::VectorObj, data) as u64);
+    mix_u64!(core::mem::offset_of!(neovm_value::tagged::header::RecordObj, data) as u64);
+    mix_u64!(core::mem::offset_of!(neovm_value::tagged::header::StringObj, data) as u64);
+    mix_u64!(core::mem::offset_of!(neovm_value::tagged::header::VecLikeHeader, type_tag) as u64);
+    mix_u64!(core::mem::size_of::<neovm_value::tagged::header::GcHeader>() as u64);
+    mix_u64!(core::mem::offset_of!(neovm_value::tagged::header::GcHeader, marked) as u64);
+    mix_u64!(core::mem::offset_of!(neovm_value::tagged::header::GcHeader, kind) as u64);
+    mix_u64!(core::mem::offset_of!(neovm_value::tagged::header::GcHeader, tenured) as u64);
+    mix_u64!(core::mem::offset_of!(neovm_value::tagged::header::GcHeader, remembered) as u64);
+    mix_u64!(core::mem::offset_of!(neovm_value::tagged::header::GcHeader, flags) as u64);
+    mix_u64!(core::mem::offset_of!(neovm_value::tagged::header::GcHeader, generation) as u64);
+    mix_u64!(core::mem::offset_of!(neovm_value::tagged::header::GcHeader, next) as u64);
     h
 }
 
@@ -757,7 +782,7 @@ const RELOC_NOT_IN_POOL: u32 = u32::MAX;
 pub(crate) struct AotSpecSite {
     /// The baked [`SpecCalleeKind::to_spec_disc`] value (0..DISC_COUNT). The loader
     /// arms ONLY when the live re-classification yields this same discriminant.
-    pub kind_disc: u8,
+    pub(crate) kind_disc: u8,
     /// Reserved (0): a per-kind sub-discriminant for future variants (e.g. a
     /// `PredKind` split). Currently unused; salted into the ABI via the format.
     pub which: u8,
@@ -766,7 +791,7 @@ pub(crate) struct AotSpecSite {
     pub nargs: u16,
     /// Index into the leaf's reloc vector where the callee symbol lives; the loader
     /// reads `reloc_data[callee_reloc_idx].as_bare_symbol_id()` to recover the SymId.
-    pub callee_reloc_idx: u32,
+    pub(crate) callee_reloc_idx: u32,
 }
 
 /// On-disk byte width of one [`AotSpecSite`] (kind_disc:1 + which:1 + nargs:2 +
@@ -782,15 +807,15 @@ const MAX_SPEC_SITES: u32 = 64 * 1024;
 pub(crate) struct AotDescriptor {
     pub meta: super::compile::AotLeafMeta,
     /// Concatenated per-slot recipes (R1c-3); rebuilt into the reloc Vec at load.
-    pub reloc_recipe: Vec<u8>,
+    pub(crate) reloc_recipe: Vec<u8>,
     /// Number of reloc slots (recipes) in `reloc_recipe`.
-    pub reloc_count: u32,
+    pub(crate) reloc_count: u32,
     /// R2 increment B2: the `Op::Call` spec sites, in slot order (empty for a MIR
     /// leaf or a baseline leaf with no armed spec site).
-    pub spec_sites: Vec<AotSpecSite>,
+    pub(crate) spec_sites: Vec<AotSpecSite>,
     /// v3: per reloc slot, its index in the constant pool, or
     /// [`RELOC_NOT_IN_POOL`] (`reloc_count` entries).
-    pub pool_indices: Vec<u32>,
+    pub(crate) pool_indices: Vec<u32>,
 }
 
 /// Each reloc value's index in `constants` by identity (the pool is part of
@@ -1503,15 +1528,15 @@ fn baseline_is_aot_runnable(ops: &[Op]) -> bool {
 /// Stats from a multi-leaf preload build: how many candidates collapsed to how
 /// many unique objects (logged so dedup is never a silent drop).
 #[derive(Debug, Clone, Copy, Default)]
-pub struct PreloadBuildStats {
+pub(crate) struct PreloadBuildStats {
     /// Candidates offered to the builder.
     pub candidates: usize,
     /// Candidates that prepared successfully (in the AOT subset).
     pub prepared: usize,
     /// DISTINCT content hashes actually emitted into the object.
-    pub unique_emitted: usize,
+    pub(crate) unique_emitted: usize,
     /// Candidates dropped because they were outside the AOT subset.
-    pub skipped_unsupported: usize,
+    pub(crate) skipped_unsupported: usize,
     /// Candidates collapsed onto an already-emitted identical body (dedup).
     pub deduped: usize,
 }
@@ -1526,7 +1551,7 @@ pub struct PreloadBuildStats {
 /// emitted ONCE; every function with that body binds the same entry at load (the
 /// native code is identical, so it serves all of them). Returns the object bytes
 /// + [`PreloadBuildStats`] (no silent drops — candidates/unique/deduped/skipped).
-pub fn build_preload_object(
+pub(crate) fn build_preload_object(
     leaves: &[LoadupLeaf],
     // R2 increment B2: the LIVE (dump-time) obarray, so spec-bearing loadup bodies
     // bake their `Op::Call` spec fast paths + descriptor entries. `None` → CBSym-only.
@@ -1666,7 +1691,8 @@ fn define_leaf_index_into_module(
 
 /// File name of the dump-time AOT preload shared object (beside the pdump).
 pub const PRELOAD_SO_NAME: &str = "libneomacs-preload.so";
-/// File name of the preload manifest (fingerprint interlock + per-name pre-keys).
+/// File name of the preload manifest (fingerprint and Vec-layout interlock
+/// + per-name pre-keys).
 pub const PRELOAD_MANIFEST_NAME: &str = "libneomacs-preload.manifest";
 /// Manifest format version (bump on any manifest schema change).
 ///
@@ -1680,6 +1706,8 @@ pub const PRELOAD_MANIFEST_NAME: &str = "libneomacs-preload.manifest";
 /// stale by construction.
 /// v3 (P4.2 A4): a member is classed `m` (profitable native, prewarmed from its
 /// first call) or `c` (call glue, served when the JIT would compile it).
+/// The same version requires a `vec_layout` header line. A manifest that
+/// omits it fails [`manifest_interlock_ok`], so the version stays 3.
 const PRELOAD_MANIFEST_VERSION: u32 = 3;
 
 /// A hashable loadup function's class in the preload manifest.
@@ -1834,6 +1862,8 @@ struct ParsedPreloadManifest {
     version: Option<u32>,
     abi_tag: Option<u32>,
     fingerprint: Option<String>,
+    /// Live `value_vec_slice_offsets` token (`{ptr:x}_{len:x}`, or `none`).
+    vec_layout: Option<String>,
     prekeys: Option<PreKeyMap>,
 }
 
@@ -1844,6 +1874,7 @@ fn parse_preload_manifest(text: &str) -> ParsedPreloadManifest {
     let mut version: Option<u32> = None;
     let mut abi_tag: Option<u32> = None;
     let mut fingerprint: Option<String> = None;
+    let mut vec_layout: Option<String> = None;
     let mut declared_leaves: Option<usize> = None;
     let mut map: PreKeyMap = PreKeyMap::new();
     let mut malformed = false;
@@ -1854,6 +1885,7 @@ fn parse_preload_manifest(text: &str) -> ParsedPreloadManifest {
             "version" => version = it.next().and_then(|v| v.parse().ok()),
             "abi_tag" => abi_tag = it.next().and_then(|v| u32::from_str_radix(v, 16).ok()),
             "fingerprint" => fingerprint = it.next().map(str::to_string),
+            "vec_layout" => vec_layout = it.next().map(str::to_string),
             "leaves" => declared_leaves = it.next().and_then(|v| v.parse().ok()),
             "leaf" => {
                 let parsed = (|| {
@@ -1896,14 +1928,17 @@ fn parse_preload_manifest(text: &str) -> ParsedPreloadManifest {
         version,
         abi_tag,
         fingerprint,
+        vec_layout,
         prekeys,
     }
 }
 
-/// The STALE INTERLOCK on a parsed manifest: `version`, `abi_tag`, and
-/// `fingerprint` must all match the RUNNING build, else the whole preload is
-/// skipped (→ JIT) — a foreign / stale / ABI-incompatible preload never
-/// mis-serves native code. Mismatches are logged at debug.
+/// The STALE INTERLOCK on a parsed manifest: `version`, `abi_tag`,
+/// `fingerprint`, and `vec_layout` must all match the RUNNING build, else
+/// the whole preload is skipped (→ JIT). Two stamped builds can share a
+/// fingerprint and still disagree on `value_vec_slice_offsets`, so the
+/// layout token is part of the identity. A missing token does not match.
+/// Mismatches are logged at debug.
 fn manifest_interlock_ok(parsed: &ParsedPreloadManifest) -> bool {
     if parsed.version != Some(PRELOAD_MANIFEST_VERSION) {
         tracing::debug!(
@@ -1928,15 +1963,24 @@ fn manifest_interlock_ok(parsed: &ParsedPreloadManifest) -> bool {
         );
         return false;
     }
+    let layout = vec_slice_layout_token();
+    if parsed.vec_layout.as_deref() != Some(layout.as_str()) {
+        tracing::debug!(
+            "aot-preload: manifest vec_layout mismatch (manifest={:?} running={layout}); skip→JIT",
+            parsed.vec_layout
+        );
+        return false;
+    }
     true
 }
 
 /// R2-B6: enumerate `ctx`'s loadup AOT candidates, build ONE preload object,
 /// link it to `out_dir/libneomacs-preload.so`, and write
 /// `out_dir/libneomacs-preload.manifest`. The manifest carries the running
-/// pdump's `fingerprint_hex` (the STALE INTERLOCK — the loader refuses a `.so`
-/// whose manifest fingerprint ≠ the running pdump, so a foreign/stale preload is
-/// a clean skip→JIT, never a crash), the ABI_TAG, the manifest version, and (v2,
+/// pdump's `fingerprint_hex` and the live Vec slice token (the STALE
+/// INTERLOCK — the loader refuses a `.so` whose manifest fingerprint or
+/// layout ≠ the running build, so a foreign/stale preload is a clean
+/// skip→JIT, never a crash), the ABI_TAG, the manifest version, and (v2,
 /// task #11) one PRE-KEY line per hashable required-only loadup fn: NAME +
 /// ops-count + arity + content hash, classed (v3, P4.2 A4) `m` (emitted preload
 /// member, prewarmed), `c` (emitted member that is call glue, served at its
@@ -1946,7 +1990,7 @@ fn manifest_interlock_ok(parsed: &ParsedPreloadManifest) -> bool {
 /// what startup marking streams. Dedup'd bodies (distinct names, identical
 /// body) each get their own member line sharing the hash. `ctx` is the final
 /// pdump loaded in-process (the loadup closure). Returns the build stats.
-pub fn build_and_link_preload(
+pub(crate) fn build_and_link_preload(
     ctx: &crate::emacs_core::eval::Context,
     out_dir: &std::path::Path,
 ) -> Result<PreloadBuildStats, CompileError> {
@@ -2002,6 +2046,7 @@ pub fn build_and_link_preload(
         "fingerprint {}\n",
         crate::emacs_core::pdump::fingerprint_hex()
     ));
+    manifest.push_str(&format!("vec_layout {}\n", vec_slice_layout_token()));
     manifest.push_str(&format!("leaves {prekey_count}\n"));
     manifest.push_str(&prekey_lines);
     let manifest_path = out_dir.join(PRELOAD_MANIFEST_NAME);
@@ -2012,10 +2057,10 @@ pub fn build_and_link_preload(
 
 /// Env var that ENABLES the dump-time preload producer (set by
 /// `cargo xtask fresh-build --aot-preload` on the `--temacs=pdump` invocation).
-pub const PRELOAD_ENABLE_ENV: &str = "NEOVM_AOT_PRELOAD";
+pub(crate) const PRELOAD_ENABLE_ENV: &str = "NEOVM_AOT_PRELOAD";
 /// Env var that puts the producer in DRY-RUN mode: enumerate + log candidates +
 /// dedup stats, but do NOT link/write the `.so`/manifest.
-pub const PRELOAD_DRY_RUN_ENV: &str = "NEOVM_AOT_PRELOAD_DRY_RUN";
+pub(crate) const PRELOAD_DRY_RUN_ENV: &str = "NEOVM_AOT_PRELOAD_DRY_RUN";
 
 /// R2-B1 (resolution B): the dump-time preload hook, called from
 /// `builtin_dump_emacs_portable` right after the FINAL pdump is written, with
@@ -2162,7 +2207,7 @@ pub(crate) fn link_object_to_so(
 }
 
 /// Test-only: compile + link a leaf and place its `.so` into `dir` under the
-/// unit-index naming convention (`{hash:032x}_{tag:08x}.so`), so an INTEGRATION
+/// unit-index naming convention ([`aot_unit_file_name`]), so an INTEGRATION
 /// test can exercise the real `NEOVM_AOT=force` + `NEOVM_AOT_DIR` production path
 /// (the lib's `test_support` seam is unavailable to integration tests, and the
 /// `-rdynamic` shim export only applies to test binaries — see build.rs).
@@ -2179,7 +2224,7 @@ pub fn testkit_emit_and_place_so(
     // These low-level testkits emit WITHOUT a live obarray (no `Op::Call` spec
     // baking); the spec-aware selftests call the emit fns with an obarray directly.
     let (obj, content_hash) = compile_leaf_to_object(ops, constants, arity, None).ok()??;
-    let so_path = dir.join(format!("{content_hash:032x}_{ABI_TAG:08x}.so"));
+    let so_path = dir.join(aot_unit_file_name(content_hash));
     link_object_to_so(&obj, &so_path).ok()?;
     Some(content_hash)
 }
@@ -2197,7 +2242,7 @@ pub fn testkit_emit_baseline_and_place_so(
 ) -> Option<u128> {
     let (obj, content_hash) =
         build_baseline_object_for_leaf(ops, constants, arity, None).ok()??;
-    let so_path = dir.join(format!("{content_hash:032x}_{ABI_TAG:08x}.so"));
+    let so_path = dir.join(aot_unit_file_name(content_hash));
     link_object_to_so(&obj, &so_path).ok()?;
     Some(content_hash)
 }
@@ -2212,7 +2257,7 @@ pub fn testkit_emit_baseline_and_place_so(
 /// the content-hash inputs are ops/constants/arity) and the bytecode source the
 /// emitter needs. Borrowed from the obarray-held `ByteCodeFunction` (`'static`
 /// via the heap), so this carries refs, not copies.
-pub struct LoadupLeaf {
+pub(crate) struct LoadupLeaf {
     pub name: String,
     pub ops: &'static [Op],
     pub constants: &'static [Value],
@@ -2230,7 +2275,7 @@ pub struct LoadupLeaf {
 /// The D0 gate compiles with the LIVE obarray (increment B2), so a spec-bearing
 /// body is admitted via the same BASELINE tier the preload producer uses (matching
 /// emitted sets). Returns the candidates in obarray order (deterministic per image).
-pub fn enumerate_loadup_leaves(
+pub(crate) fn enumerate_loadup_leaves(
     ctx: &crate::emacs_core::eval::Context,
     d0_filter: bool,
 ) -> Vec<LoadupLeaf> {
@@ -2255,13 +2300,13 @@ pub fn enumerate_loadup_leaves(
             continue;
         };
         let ops = bc.executable_ops();
-        if d0_filter && !is_d0_aot_candidate(ops, &bc.constants, arity, Some(&ctx.obarray)) {
+        if d0_filter && !is_d0_aot_candidate(ops, bc.constants(), arity, Some(&ctx.obarray)) {
             continue;
         }
         out.push(LoadupLeaf {
             name: name.to_string(),
             ops,
-            constants: &bc.constants,
+            constants: bc.constants(),
             arity,
         });
     }
@@ -2273,7 +2318,7 @@ pub fn enumerate_loadup_leaves(
 /// MIR-lowerable, passes `mir_is_aot_runnable`, and every const is recipe-able).
 /// This is the SAME gate the runtime load path uses, so a candidate emitted here
 /// will load there.
-pub fn is_d0_aot_candidate(
+pub(crate) fn is_d0_aot_candidate(
     ops: &[Op],
     constants: &[Value],
     arity: usize,
@@ -2320,11 +2365,13 @@ fn testkit_mir_cons_reconstruction_case(
         optional: Vec::new(),
         rest: None,
     });
-    f.lexical = true;
-    f.max_stack = crate::emacs_core::bytecode::StackDepth::try_from(16usize)
-        .expect("testkit stack depth is representable");
-    f.constants = vec![Value::symbol("aot-rebuild-effect")].into();
-    f.ops = vec![
+    f.set_lexical(true);
+    f.set_max_stack(
+        crate::emacs_core::bytecode::StackDepth::try_from(16usize)
+            .expect("testkit stack depth is representable"),
+    );
+    f.set_constants(vec![Value::symbol("aot-rebuild-effect")].into());
+    f.set_ops(vec![
         Op::Constant(0),
         Op::Call(0),
         Op::Pop,
@@ -2340,12 +2387,12 @@ fn testkit_mir_cons_reconstruction_case(
         Op::Pop,
         Op::Car,
         Op::Return,
-    ];
+    ]);
     if singleton {
-        f.ops.splice(5..7, [Op::List(1)]);
+        f.ops_mut().splice(5..7, [Op::List(1)]);
     }
     f.seal_hand_assembled_ops();
-    let m = mir::build_mir(&f.ops, &f.constants, None, 2).unwrap();
+    let m = mir::build_mir(f.ops(), f.constants(), None, 2).unwrap();
     assert_eq!(
         super::compile::plan_mir_leaf(&m)
             .cons_repl
@@ -2354,7 +2401,7 @@ fn testkit_mir_cons_reconstruction_case(
             .count(),
         1
     );
-    let (obj, hash) = compile_leaf_to_object(&f.ops, &f.constants, 2, None)
+    let (obj, hash) = compile_leaf_to_object(f.ops(), f.constants(), 2, None)
         .unwrap()
         .unwrap();
     let path = dir.join(if singleton {
@@ -2369,10 +2416,10 @@ fn testkit_mir_cons_reconstruction_case(
     let unit = std::sync::Arc::new(LoadedUnit::new(library));
     let leaf = load_leaf_from_unit(&unit, hash, 2, &collect_reloc_consts(&m), None).unwrap();
     let float = ev.eval_str("1.5").unwrap();
-    let result = leaf.call(
-        &mut ev as *mut Context as *mut u8,
-        &[Value::make_int(7), float],
-    );
+    let vmctx = &mut ev as *mut Context as *mut u8;
+    let args = [Value::make_int(7), float];
+    // SAFETY: `vmctx` is the live owner `Context` and `args` matches arity 2.
+    let result = unsafe { leaf.call(vmctx, &args) };
     let NativeRun::DeoptAt(resume) = result else {
         panic!("precise AOT deopt expected: {result:?}")
     };
@@ -2459,16 +2506,18 @@ pub fn testkit_call_bearing_selftest(
             optional: Vec::new(),
             rest: None,
         });
-        f.lexical = true;
-        f.ops = ops;
-        f.constants = constants.into();
-        f.max_stack = crate::emacs_core::bytecode::StackDepth::try_from(32usize)
-            .expect("testkit stack depth is representable");
+        f.set_lexical(true);
+        f.set_ops(ops);
+        f.set_constants(constants.into());
+        f.set_max_stack(
+            crate::emacs_core::bytecode::StackDepth::try_from(32usize)
+                .expect("testkit stack depth is representable"),
+        );
         f.seal_hand_assembled_ops();
         f
     };
     let sym = |name: &str| -> (Value, SymId) {
-        let s = Value::symbol(name);
+        let s = Value::from_sym_id(intern(name));
         let ValueKind::Symbol(id) = s.kind() else {
             unreachable!("symbol");
         };
@@ -2640,11 +2689,13 @@ pub fn testkit_baseline_aot_selftest(
             optional: Vec::new(),
             rest: None,
         });
-        f.lexical = true;
-        f.ops = ops.clone();
-        f.constants = constants.clone().into();
-        f.max_stack = crate::emacs_core::bytecode::StackDepth::try_from(16usize)
-            .expect("testkit stack depth is representable");
+        f.set_lexical(true);
+        f.set_ops(ops.clone());
+        f.set_constants(constants.clone().into());
+        f.set_max_stack(
+            crate::emacs_core::bytecode::StackDepth::try_from(16usize)
+                .expect("testkit stack depth is representable"),
+        );
         f.seal_hand_assembled_ops();
         f
     };
@@ -2733,7 +2784,7 @@ pub fn testkit_baseline_aot_selftest(
         );
     }
 
-    super::cache::clear();
+    super::cache::clear_with_serial_receipt().expect("serial jit grace");
     Ok(())
 }
 
@@ -2797,11 +2848,13 @@ pub fn testkit_baseline_deep_rawslot_deopt_selftest(
             optional: Vec::new(),
             rest: None,
         });
-        f.lexical = true;
-        f.ops = ops.clone();
-        f.constants = constants.clone().into();
-        f.max_stack = crate::emacs_core::bytecode::StackDepth::try_from(16usize)
-            .expect("testkit stack depth is representable");
+        f.set_lexical(true);
+        f.set_ops(ops.clone());
+        f.set_constants(constants.clone().into());
+        f.set_max_stack(
+            crate::emacs_core::bytecode::StackDepth::try_from(16usize)
+                .expect("testkit stack depth is representable"),
+        );
         f.seal_hand_assembled_ops();
         f
     };
@@ -2871,7 +2924,7 @@ pub fn testkit_baseline_deep_rawslot_deopt_selftest(
         );
     }
 
-    super::cache::clear();
+    super::cache::clear_with_serial_receipt().expect("serial jit grace");
     Ok(())
 }
 
@@ -2954,11 +3007,13 @@ pub fn testkit_callbuiltinsym_aot_selftest(
             optional: Vec::new(),
             rest: None,
         });
-        f.lexical = true;
-        f.ops = ops.clone();
-        f.constants = constants.clone().into();
-        f.max_stack = crate::emacs_core::bytecode::StackDepth::try_from(16usize)
-            .expect("testkit stack depth is representable");
+        f.set_lexical(true);
+        f.set_ops(ops.clone());
+        f.set_constants(constants.clone().into());
+        f.set_max_stack(
+            crate::emacs_core::bytecode::StackDepth::try_from(16usize)
+                .expect("testkit stack depth is representable"),
+        );
         f.seal_hand_assembled_ops();
         f
     };
@@ -3042,7 +3097,7 @@ pub fn testkit_callbuiltinsym_aot_selftest(
         ));
     }
 
-    super::cache::clear();
+    super::cache::clear_with_serial_receipt().expect("serial jit grace");
     Ok(())
 }
 
@@ -3093,11 +3148,13 @@ fn cbsym_aot_serve_and_check(
             optional: Vec::new(),
             rest: None,
         });
-        f.lexical = true;
-        f.ops = ops.to_vec();
-        f.constants = constants.to_vec().into();
-        f.max_stack = crate::emacs_core::bytecode::StackDepth::try_from(16usize)
-            .expect("testkit stack depth is representable");
+        f.set_lexical(true);
+        f.set_ops(ops.to_vec());
+        f.set_constants(constants.to_vec().into());
+        f.set_max_stack(
+            crate::emacs_core::bytecode::StackDepth::try_from(16usize)
+                .expect("testkit stack depth is representable"),
+        );
         f.seal_hand_assembled_ops();
         f
     };
@@ -3237,7 +3294,7 @@ pub fn testkit_cbsym_aot_fast_shim_selftest(
         "Tier-B (length) [cbsym_spec]",
     )?;
 
-    super::cache::clear();
+    super::cache::clear_with_serial_receipt().expect("serial jit grace");
     Ok(())
 }
 
@@ -3391,11 +3448,13 @@ pub fn testkit_baseline_op_symbol_reloc_selftest(
                 optional: Vec::new(),
                 rest: None,
             });
-            f.lexical = true;
-            f.ops = b.ops.clone();
-            f.constants = b.constants.clone().into();
-            f.max_stack = crate::emacs_core::bytecode::StackDepth::try_from(16usize)
-                .expect("testkit stack depth is representable");
+            f.set_lexical(true);
+            f.set_ops(b.ops.clone());
+            f.set_constants(b.constants.clone().into());
+            f.set_max_stack(
+                crate::emacs_core::bytecode::StackDepth::try_from(16usize)
+                    .expect("testkit stack depth is representable"),
+            );
             f.seal_hand_assembled_ops();
             f
         };
@@ -3493,15 +3552,15 @@ pub fn testkit_baseline_op_symbol_reloc_selftest(
             let base = leaf.reloc_data.as_ptr();
             leaf.reloc_data[slot] = relocated;
             assert_eq!(leaf.reloc_data.as_ptr(), base);
-            match leaf.call(ctx as *mut u8, &[]) {
+            // SAFETY: `ctx` is the live `Context` for this 0-arg selftest leaf,
+            // and the relocated variable slot points into the live symbol table.
+            match unsafe { leaf.call(ctx as *mut u8, &[]) } {
                 super::compile::NativeRun::Ok(bits) => {
-                    assert_eq!(
-                        unsafe {
-                            /* SAFETY: JIT constant-pool word */
-                            Value::from_bits(bits)
-                        },
-                        Value::make_int(42)
-                    );
+                    // SAFETY: `NativeRun::Ok` carries a valid tagged Lisp value
+                    // word returned by the executed selftest leaf above, which
+                    // evaluated the relocated variable binding.
+                    let value = unsafe { Value::from_bits(bits) };
+                    assert_eq!(value, Value::make_int(42));
                 }
                 other => return Err(format!("relocated variable leaf: {other:?}")),
             }
@@ -3510,7 +3569,7 @@ pub fn testkit_baseline_op_symbol_reloc_selftest(
                 .map_err(|e| format!("relocated variable restoration: {e:?}"))?;
             assert_eq!(crate::emacs_core::print::print_value(&restored), "(41 17)");
         }
-        super::cache::clear();
+        super::cache::clear_with_serial_receipt().expect("serial jit grace");
     }
 
     Ok(())
@@ -3580,11 +3639,13 @@ pub fn testkit_spec_aot_selftest(
             optional: Vec::new(),
             rest: None,
         });
-        f.lexical = true;
-        f.ops = ops;
-        f.constants = vec![Value::symbol(intern(alias_name))].into();
-        f.max_stack = crate::emacs_core::bytecode::StackDepth::try_from(16usize)
-            .expect("testkit stack depth is representable");
+        f.set_lexical(true);
+        f.set_ops(ops);
+        f.set_constants(vec![Value::symbol(intern(alias_name))].into());
+        f.set_max_stack(
+            crate::emacs_core::bytecode::StackDepth::try_from(16usize)
+                .expect("testkit stack depth is representable"),
+        );
         f.seal_hand_assembled_ops();
         f
     };
@@ -3657,11 +3718,15 @@ pub fn testkit_spec_aot_selftest(
         let mut emit_ctx = Context::new(hooks);
         alias(&mut emit_ctx, c.alias, c.builtin)?;
         let f = mk_fn(c.alias, c.arity, &c.pushes);
-        let (obj, content_hash) =
-            build_baseline_object_for_leaf(&f.ops, &f.constants, c.arity, Some(&emit_ctx.obarray))
-                .map_err(|e| format!("{}: emit err {e}", c.label))?
-                .ok_or_else(|| format!("{}: emit produced no object (not spec-baked?)", c.label))?;
-        let so_path = dir.join(format!("{content_hash:032x}_{ABI_TAG:08x}.so"));
+        let (obj, content_hash) = build_baseline_object_for_leaf(
+            f.ops(),
+            f.constants(),
+            c.arity,
+            Some(&emit_ctx.obarray),
+        )
+        .map_err(|e| format!("{}: emit err {e}", c.label))?
+        .ok_or_else(|| format!("{}: emit produced no object (not spec-baked?)", c.label))?;
+        let so_path = dir.join(aot_unit_file_name(content_hash));
         link_object_to_so(&obj, &so_path).map_err(|e| format!("{}: link err {e}", c.label))?;
     }
     // Emit the CRUX body — aliased to `recordp` at emit (bakes a PredRecordp site).
@@ -3670,10 +3735,10 @@ pub fn testkit_spec_aot_selftest(
         alias(&mut emit_ctx, "aot-spec-crux", "recordp")?;
         let f = mk_fn("aot-spec-crux", 1, &[Op::StackRef(1)]);
         let (obj, content_hash) =
-            build_baseline_object_for_leaf(&f.ops, &f.constants, 1, Some(&emit_ctx.obarray))
+            build_baseline_object_for_leaf(f.ops(), f.constants(), 1, Some(&emit_ctx.obarray))
                 .map_err(|e| format!("crux: emit err {e}"))?
                 .ok_or("crux: emit produced no object")?;
-        let so_path = dir.join(format!("{content_hash:032x}_{ABI_TAG:08x}.so"));
+        let so_path = dir.join(aot_unit_file_name(content_hash));
         link_object_to_so(&obj, &so_path).map_err(|e| format!("crux: link err {e}"))?;
     }
 
@@ -3797,7 +3862,7 @@ pub fn testkit_spec_aot_selftest(
                 interp
             ));
         }
-        super::cache::clear();
+        super::cache::clear_with_serial_receipt().expect("serial jit grace");
     }
 
     // ---- PASS 2b (b/c/d) THE CRUX: load the recordp-baked body against an obarray
@@ -3899,7 +3964,7 @@ pub fn testkit_spec_aot_selftest(
                 "crux: GENERIC did not move on every repeated disarmed call ({gen1}->{gen2})"
             ));
         }
-        super::cache::clear();
+        super::cache::clear_with_serial_receipt().expect("serial jit grace");
     }
 
     Ok(())
@@ -3965,11 +4030,13 @@ pub fn testkit_pgo_roundtrip_selftest(
             optional: Vec::new(),
             rest: None,
         });
-        f.lexical = true;
-        f.ops = ops;
-        f.constants = vec![Value::symbol(intern(alias_name))].into();
-        f.max_stack = crate::emacs_core::bytecode::StackDepth::try_from(16usize)
-            .expect("testkit stack depth is representable");
+        f.set_lexical(true);
+        f.set_ops(ops);
+        f.set_constants(vec![Value::symbol(intern(alias_name))].into());
+        f.set_max_stack(
+            crate::emacs_core::bytecode::StackDepth::try_from(16usize)
+                .expect("testkit stack depth is representable"),
+        );
         f.seal_hand_assembled_ops();
         f
     };
@@ -3982,13 +4049,13 @@ pub fn testkit_pgo_roundtrip_selftest(
         alias(&mut emit_ctx, "aot-pgo-pred", "recordp")?;
         let f = mk_fn("aot-pgo-pred", 1, &[Op::StackRef(1)]);
         let (obj, content_hash) =
-            compile_leaf_to_object(&f.ops, &f.constants, 1, Some(&emit_ctx.obarray))
+            compile_leaf_to_object(f.ops(), f.constants(), 1, Some(&emit_ctx.obarray))
                 .map_err(|e| format!("pgo-roundtrip: emit err {e}"))?
                 .ok_or(
                     "pgo-roundtrip: compile_leaf_to_object produced no object \
                      (not AOT-runnable / not spec-baked?)",
                 )?;
-        let so_path = dir.join(format!("{content_hash:032x}_{ABI_TAG:08x}.so"));
+        let so_path = dir.join(aot_unit_file_name(content_hash));
         link_object_to_so(&obj, &so_path).map_err(|e| format!("pgo-roundtrip: link err {e}"))?;
     }
 
@@ -4048,7 +4115,7 @@ pub fn testkit_pgo_roundtrip_selftest(
             interp
         ));
     }
-    super::cache::clear();
+    super::cache::clear_with_serial_receipt().expect("serial jit grace");
     Ok(())
 }
 
@@ -4099,11 +4166,18 @@ pub fn testkit_pgo_drain_selftest(
             optional: Vec::new(),
             rest: None,
         });
-        f.lexical = true;
-        f.ops = vec![Op::Constant(0), Op::StackRef(1), Op::Call(1), Op::Return];
-        f.constants = vec![Value::symbol(intern(callee))].into();
-        f.max_stack = crate::emacs_core::bytecode::StackDepth::try_from(16usize)
-            .expect("testkit stack depth is representable");
+        f.set_lexical(true);
+        f.set_ops(vec![
+            Op::Constant(0),
+            Op::StackRef(1),
+            Op::Call(1),
+            Op::Return,
+        ]);
+        f.set_constants(vec![Value::symbol(intern(callee))].into());
+        f.set_max_stack(
+            crate::emacs_core::bytecode::StackDepth::try_from(16usize)
+                .expect("testkit stack depth is representable"),
+        );
         f.seal_hand_assembled_ops();
         f
     };
@@ -4133,8 +4207,8 @@ pub fn testkit_pgo_drain_selftest(
         return Err(format!("drain emitted {n} .so(s), expected 1"));
     }
     // Correct unit-index name.
-    let hash = leaf_content_hash(&bc.ops, &bc.constants, 1).ok_or("content hash None")?;
-    let expected = dir.join(format!("{hash:032x}_{ABI_TAG:08x}.so"));
+    let hash = leaf_content_hash(bc.ops(), bc.constants(), 1).ok_or("content hash None")?;
+    let expected = dir.join(aot_unit_file_name(hash));
     if !expected.exists() {
         return Err(format!(
             "drained .so not at expected name {}",
@@ -4150,7 +4224,8 @@ pub fn testkit_pgo_drain_selftest(
     }
 
     // ---- PASS 2 — a FRESH session serves the drained `.so` AOT + FAST-from-call-1. ----
-    super::cache::clear();
+    super::cache::clear_with_serial_receipt().expect("serial jit grace");
+    drop(c1);
     let mut c2 = Context::new(hooks);
     alias(&mut c2, "pgo-drain-callee", "recordp")?;
     let g = mk_fn("pgo-drain-callee");
@@ -4196,7 +4271,7 @@ pub fn testkit_pgo_drain_selftest(
             interp
         ));
     }
-    super::cache::clear();
+    super::cache::clear_with_serial_receipt().expect("serial jit grace");
     Ok(())
 }
 
@@ -4239,7 +4314,7 @@ pub fn testkit_pgo_default_off_selftest(
             "default-off left {so_files} .so file(s) in the dir"
         ));
     }
-    super::cache::clear();
+    super::cache::clear_with_serial_receipt().expect("serial jit grace");
     Ok(())
 }
 
@@ -4263,11 +4338,18 @@ fn ev_alias_and_build(
         optional: Vec::new(),
         rest: None,
     });
-    f.lexical = true;
-    f.ops = vec![Op::Constant(0), Op::StackRef(1), Op::Call(1), Op::Return];
-    f.constants = vec![Value::symbol(intern("pgo-off-callee"))].into();
-    f.max_stack = crate::emacs_core::bytecode::StackDepth::try_from(16usize)
-        .expect("testkit stack depth is representable");
+    f.set_lexical(true);
+    f.set_ops(vec![
+        Op::Constant(0),
+        Op::StackRef(1),
+        Op::Call(1),
+        Op::Return,
+    ]);
+    f.set_constants(vec![Value::symbol(intern("pgo-off-callee"))].into());
+    f.set_max_stack(
+        crate::emacs_core::bytecode::StackDepth::try_from(16usize)
+            .expect("testkit stack depth is representable"),
+    );
     c.obarray
         .set_symbol_function("pgo-off-fn", Value::make_bytecode(f));
     c.obarray
@@ -4279,38 +4361,81 @@ fn ev_alias_and_build(
 /// One AOT compilation unit's on-disk location, keyed by content hash.
 type UnitIndex = std::collections::HashMap<u128, std::path::PathBuf>;
 
+/// `{ptr:x}_{len:x}` from the live `LispValueVec` slice probe, or `none`
+/// when owned and mapped storage disagree. An unstamped binary's pdump
+/// fingerprint is the shared placeholder, so this token is what keeps a
+/// unit baked by another toolchain out of the index.
+fn vec_slice_layout_token() -> String {
+    match super::compile::jit_layout::heap::value_vec_slice_offsets() {
+        Some((pointer, length)) => format!("{pointer:x}_{length:x}"),
+        None => "none".to_string(),
+    }
+}
+
+/// On-disk name of a per-hash AOT unit for this build:
+/// `{content_hash:032x}_{ABI_TAG:08x}_{fingerprint}_{vec-slice}.so`.
+///
+/// `ABI_TAG` salts the named layouts. `value_vec_slice_offsets` is measured
+/// on a live `Vec` and baked into the object, so a rustc layout change does
+/// not move the tag. The token above is that measurement. The running pdump
+/// fingerprint is this binary's identity when `xtask` stamped it. An
+/// unstamped build still carries the placeholder, and the slice token is
+/// then the layout identity. [`unit_index`] serves a file only when both match.
+pub(crate) fn aot_unit_file_name(content_hash: u128) -> String {
+    format!(
+        "{content_hash:032x}_{ABI_TAG:08x}_{}_{}.so",
+        crate::emacs_core::pdump::fingerprint_hex(),
+        vec_slice_layout_token(),
+    )
+}
+
+/// Content hash of `name` when it is a unit of this build. A legacy
+/// `{hash}_{ABI_TAG}.so` name, a fingerprint-only name, any other
+/// fingerprint, or any other slice offsets, is `None`.
+fn content_hash_of_running_unit_name(name: &str) -> Option<u128> {
+    let suffix = format!(
+        "_{ABI_TAG:08x}_{}_{}.so",
+        crate::emacs_core::pdump::fingerprint_hex(),
+        vec_slice_layout_token(),
+    );
+    let stem = name.strip_suffix(&suffix)?;
+    if stem.len() != 32 || !stem.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return None;
+    }
+    u128::from_str_radix(stem, 16).ok()
+}
+
+/// Index `dir` the way [`unit_index`] does. A file whose name is not
+/// [`aot_unit_file_name`] for the running build is skipped.
+fn index_aot_dir(dir: &std::path::Path) -> UnitIndex {
+    let mut idx = UnitIndex::new();
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return idx;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        if let Some(hash) = content_hash_of_running_unit_name(name) {
+            idx.insert(hash, path);
+        }
+    }
+    idx
+}
+
 /// Process-wide index of available AOT `.so`s by content hash, built once from
 /// `NEOVM_AOT_DIR` (default: none → AOT disabled). Memoized loaded units are
 /// thread-local (the cache + leaves are `!Send`); the INDEX is shareable (just
-/// paths). Indexes only files whose name carries the CURRENT `ABI_TAG`.
+/// paths). Indexes only files whose name carries the current `ABI_TAG`,
+/// the running pdump fingerprint, and the live `Vec` slice offsets.
 fn unit_index() -> &'static UnitIndex {
     static INDEX: std::sync::OnceLock<UnitIndex> = std::sync::OnceLock::new();
     INDEX.get_or_init(|| {
-        let mut idx = UnitIndex::new();
         let Some(dir) = std::env::var_os("NEOVM_AOT_DIR") else {
-            return idx;
+            return UnitIndex::new();
         };
-        let tag_suffix = format!("_{ABI_TAG:08x}.so");
-        if let Ok(entries) = std::fs::read_dir(&dir) {
-            for e in entries.flatten() {
-                let path = e.path();
-                let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
-                    continue;
-                };
-                // Expect `<hash:032x>_<tag:08x>.so` (the entry-symbol stem). Only
-                // index files matching the current ABI_TAG.
-                if !name.ends_with(&tag_suffix) {
-                    continue;
-                }
-                let stem = &name[..name.len() - tag_suffix.len()];
-                if stem.len() == 32
-                    && let Ok(hash) = u128::from_str_radix(stem, 16)
-                {
-                    idx.insert(hash, path);
-                }
-            }
-        }
-        idx
+        index_aot_dir(std::path::Path::new(&dir))
     })
 }
 
@@ -4363,21 +4488,22 @@ fn load_unit(content_hash: u128) -> Option<std::sync::Arc<super::compile::Loaded
 
 // ---------------------------------------------------------------------------
 // R2-C1/C2: the dump-time PRELOAD — ONE `.so` (all loadup leaves) beside the
-// running executable, validated by a manifest fingerprint interlock + loaded
-// with RTLD_NOW (fail-closed). Distinct from the per-hash NEOVM_AOT_DIR index
+// running executable, validated by a manifest fingerprint and Vec-layout
+// interlock, then loaded with RTLD_NOW (fail-closed). Distinct from the
+// per-hash NEOVM_AOT_DIR index
 // above (R1c): the preload is a single unit serving every loadup entry by dlsym.
 // ---------------------------------------------------------------------------
 
 /// Path of the preload `.so` beside `exe` (same dir as the pdump, by
 /// construction — the dump-time producer wrote it next to `neomacs`).
-pub fn preload_so_path_for_executable(exe: &std::path::Path) -> std::path::PathBuf {
+pub(crate) fn preload_so_path_for_executable(exe: &std::path::Path) -> std::path::PathBuf {
     exe.parent()
         .unwrap_or_else(|| std::path::Path::new("."))
         .join(PRELOAD_SO_NAME)
 }
 
 /// Path of the preload manifest beside `exe`.
-pub fn preload_manifest_path_for_executable(exe: &std::path::Path) -> std::path::PathBuf {
+pub(crate) fn preload_manifest_path_for_executable(exe: &std::path::Path) -> std::path::PathBuf {
     exe.parent()
         .unwrap_or_else(|| std::path::Path::new("."))
         .join(PRELOAD_MANIFEST_NAME)
@@ -4385,8 +4511,9 @@ pub fn preload_manifest_path_for_executable(exe: &std::path::Path) -> std::path:
 
 /// Parse + validate the preload manifest at `manifest_path` against THIS image.
 /// Returns `true` only when the manifest header is well-formed AND its
-/// `version`, `abi_tag`, and `fingerprint` all match the running build — the
-/// STALE INTERLOCK: a foreign / stale / ABI-incompatible preload fails here so
+/// `version`, `abi_tag`, `fingerprint`, and `vec_layout` all match the
+/// running build — the STALE INTERLOCK: a foreign / stale / ABI-incompatible
+/// preload, or one baked with different Vec slice offsets, fails here so
 /// the loader skips it (→ JIT), never mis-serving native code built for a
 /// different image. Any parse/IO/mismatch → `false` (logged at debug). The v2
 /// pre-key section is NOT part of the interlock (a manifest with a valid header
@@ -4411,8 +4538,9 @@ fn preload_manifest_matches(manifest_path: &std::path::Path) -> bool {
 /// never the difference between serving and not serving a leaf the `.so` has).
 /// Re-reads + re-interlocks the manifest independently of [`load_preload`]'s
 /// validation: prepopulate runs once per startup, and a manifest swapped in
-/// between the two reads either carries the same fingerprint (same image →
-/// consistent pre-keys) or fails the interlock here (→ no pre-filter).
+/// between the two reads either carries the same fingerprint and Vec layout
+/// (same image → consistent pre-keys) or fails the interlock here (→ no
+/// pre-filter).
 fn load_preload_prekeys() -> Option<PreKeyMap> {
     // Test seam: directly-injected pre-keys let a unit test drive the pre-filter
     // without a real manifest beside the test binary.
@@ -4469,6 +4597,7 @@ fn for_each_manifest_member(text: &str, mut f: impl FnMut(&str, ManifestPreKey))
         version: None,
         abi_tag: None,
         fingerprint: None,
+        vec_layout: None,
         prekeys: None,
     };
     // The header lines precede the pre-keys (`build_and_link_preload`).
@@ -4481,6 +4610,7 @@ fn for_each_manifest_member(text: &str, mut f: impl FnMut(&str, ManifestPreKey))
                 header.abi_tag = it.next().and_then(|v| u32::from_str_radix(v, 16).ok());
             }
             Some("fingerprint") => header.fingerprint = it.next().map(str::to_string),
+            Some("vec_layout") => header.vec_layout = it.next().map(str::to_string),
             _ => {}
         }
     }
@@ -4713,14 +4843,14 @@ pub(crate) fn try_load_leaf_for(
     let stashed = rt.compiled_id().and_then(prewarm_hash_for);
     if stashed.is_some()
         && !rt.is_aot_prewarmed()
-        && !jit_would_compile_now(func.executable_ops(), &func.constants, bypass_profit_gate)
+        && !jit_would_compile_now(func.executable_ops(), func.constants(), bypass_profit_gate)
     {
         return None;
     }
     let arity = JitParamShape::try_from(func).ok()?.fixed_arity()?;
     try_load_leaf(
         func.executable_ops(),
-        &func.constants,
+        func.constants(),
         arity,
         stashed,
         obarray,
@@ -4913,7 +5043,7 @@ fn aot_index_symbol() -> String {
 /// `unit`'s leaf index, resolved once per unit; `None` for a unit that
 /// exports none (single-leaf `.so`s keep the per-leaf symbols) or a table
 /// whose header is not ours.
-fn unit_leaf_index(unit: &super::compile::LoadedUnit) -> Option<super::compile::AotUnitIndex> {
+fn unit_leaf_index(unit: &super::compile::LoadedUnit) -> Option<&super::compile::AotUnitIndex> {
     unit.index_or_init(|lib| {
         // SAFETY: a data symbol of a `.so` we emitted: the header (magic,
         // count) is checked before the rows are trusted; the count is capped.
@@ -4925,10 +5055,10 @@ fn unit_leaf_index(unit: &super::compile::LoadedUnit) -> Option<super::compile::
             if words[0] != INDEX_MAGIC || words[1] > u64::from(MAX_INDEX_ROWS) {
                 return None;
             }
-            Some(super::compile::AotUnitIndex {
-                rows: base.add(INDEX_HEADER_BYTES).cast(),
-                len: words[1] as usize,
-            })
+            Some(super::compile::AotUnitIndex::from_raw_parts(
+                base.add(INDEX_HEADER_BYTES).cast(),
+                words[1] as usize,
+            ))
         }
     })
 }
@@ -5243,7 +5373,7 @@ pub fn prepopulate_aot_from_preload(ctx: &crate::emacs_core::eval::Context) -> P
             stats.missed += 1;
             continue;
         }
-        let Some(content_hash) = leaf_content_hash(ops, &bc.constants, arity) else {
+        let Some(content_hash) = leaf_content_hash(ops, bc.constants(), arity) else {
             continue;
         };
         stats.candidates += 1;
@@ -5270,7 +5400,7 @@ pub fn prepopulate_aot_from_preload(ctx: &crate::emacs_core::eval::Context) -> P
             arity,
             // The pool travels to the leaf build below (the descriptor recipe
             // resolves + verifies against it — no build_mir at load anymore).
-            constants: bc.constants.as_slice().to_vec(),
+            constants: bc.constants().as_slice().to_vec(),
         });
     }
 
@@ -5352,9 +5482,9 @@ pub(crate) const PGO_DRAIN_CAP: usize = 128;
 static PGO_TEMP_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 /// The FINAL on-disk path of a drained leaf `.so`, in the unit-index naming the
-/// loader indexes: `{hash:032x}_{tag:08x}.so` (same convention as [`unit_index`]).
+/// loader indexes ([`aot_unit_file_name`]).
 fn pgo_final_path(dir: &std::path::Path, content_hash: u128) -> std::path::PathBuf {
-    dir.join(format!("{content_hash:032x}_{ABI_TAG:08x}.so"))
+    dir.join(aot_unit_file_name(content_hash))
 }
 
 /// ATOMIC place: link `obj_bytes` into a UNIQUE temp `.so` in `dir` then `fs::rename`
@@ -5364,7 +5494,7 @@ fn pgo_final_path(dir: &std::path::Path, content_hash: u128) -> std::path::PathB
 /// one. The temp `.so` (and `cc`'s own derived temp `.o`) carry pid + a monotonic
 /// counter + nanos, so parallel drainers into a shared dir don't clobber each other's
 /// intermediates; the `.tmp` extension also keeps them out of the loader's
-/// `_<tag>.so` index until the rename lands.
+/// fingerprint-suffixed index until the rename lands.
 fn pgo_atomic_place(
     obj_bytes: &[u8],
     dir: &std::path::Path,
@@ -5464,7 +5594,7 @@ pub(crate) fn drain_aot_pgo_to_dir(
             continue;
         }
         let ops = bc.executable_ops();
-        let Some(content_hash) = leaf_content_hash(ops, &bc.constants, arity) else {
+        let Some(content_hash) = leaf_content_hash(ops, bc.constants(), arity) else {
             continue; // non-canonical / non-recipe-able → skip (fail-closed).
         };
         cands.push((bc.jit_runtime().heat(), content_hash, bc, arity));
@@ -5482,7 +5612,7 @@ pub(crate) fn drain_aot_pgo_to_dir(
             continue;
         }
         let ops = bc.executable_ops();
-        match compile_leaf_to_object(ops, &bc.constants, arity, Some(&ctx.obarray)) {
+        match compile_leaf_to_object(ops, bc.constants(), arity, Some(&ctx.obarray)) {
             Ok(Some((obj, h))) => {
                 // content_hash == h by construction (both are leaf_content_hash of the
                 // same body); place under the OBJECT's own hash so the filename the
@@ -5522,7 +5652,8 @@ pub(crate) fn drain_aot_pgo_to_dir(
 /// three module seams: no `builder.symbol` (shims are `Linkage::Import`, host-
 /// exported), `Linkage::Export` (vs `Local`) for the entry, and `finish().emit()`
 /// (vs `finalize_definitions`/`get_finalized_function`).
-pub fn build_object_for_leaf(
+#[cfg(test)]
+pub(crate) fn build_object_for_leaf(
     m: &mir::MirFunction,
     entry_name: &str,
 ) -> Result<Vec<u8>, CompileError> {

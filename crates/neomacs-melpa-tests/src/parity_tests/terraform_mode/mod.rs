@@ -64,7 +64,7 @@ const PRELUDE: &str = r####"
 (defun tf416-test-write (relative contents)
   (let ((file (expand-file-name relative tf416-test-root)))
     (unless (and tf416-test-root-owned
-                 (file-in-directory-p file tf416-test-root))
+                 (neomacs-melpa-path-inside-p file tf416-test-root))
       (error "Refusing Terraform Mode write outside owned root: %s" file))
     (make-directory (file-name-directory file) t)
     (let ((coding-system-for-write 'utf-8-unix))

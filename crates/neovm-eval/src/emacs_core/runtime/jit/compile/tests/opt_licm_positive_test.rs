@@ -288,7 +288,8 @@ fn opt_licm_native_anticipated_header_guard_replays_full_entry_after_store() {
     assert_eq!(format!("{resumed_error:?}"), format!("{original_error:?}"));
     assert_one_store(&ctx);
     reset_watcher(&mut ctx);
-    let NativeRun::DeoptAt(resume) = baseline.call(&mut ctx as *mut Context as *mut u8, &wrong)
+    let NativeRun::DeoptAt(resume) =
+        (unsafe { baseline.call(&mut ctx as *mut Context as *mut u8, &wrong) })
     else {
         panic!("checked baseline native wrong type must provide its original frame")
     };
@@ -334,7 +335,8 @@ fn opt_licm_native_anticipated_header_guard_replays_full_entry_after_store() {
     assert_eq!(format!("{resumed_error:?}"), format!("{original_error:?}"));
     assert_one_store(&ctx);
     reset_watcher(&mut ctx);
-    let NativeRun::DeoptAt(resume) = candidate.call(&mut ctx as *mut Context as *mut u8, &wrong)
+    let NativeRun::DeoptAt(resume) =
+        (unsafe { candidate.call(&mut ctx as *mut Context as *mut u8, &wrong) })
     else {
         panic!("hoisted native guard must deopt at first loop entry")
     };
@@ -394,7 +396,9 @@ fn opt_licm_native_anticipated_header_guard_replays_full_entry_after_store() {
     force_deopt_for_test(false);
     let args = [Value::fixnum(255)];
     reset_watcher(&mut ctx);
-    let NativeRun::DeoptAt(resume) = forced.call(&mut ctx as *mut Context as *mut u8, &args) else {
+    let NativeRun::DeoptAt(resume) =
+        (unsafe { forced.call(&mut ctx as *mut Context as *mut u8, &args) })
+    else {
         panic!("forced actual anticipated guard must deopt")
     };
     let _resume = Roots::new(&resume.stack);

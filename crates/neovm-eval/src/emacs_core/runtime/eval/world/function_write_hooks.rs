@@ -179,23 +179,23 @@ fn verify_hof_entry(
 /// through the restricted interpreter. This is the sole shape recognizer.
 fn opaque_initial_bytecode(value: TaggedValue) -> bool {
     value.bytecode_data_if_materialized().is_some_and(|f| {
-        f.lexical
-            && f.params.fixed_arity() == Some(0)
-            && f.arglist.is_nil()
+        f.lexical()
+            && f.params().fixed_arity() == Some(0)
+            && f.arglist().is_nil()
             && f.ops_sealed()
             && f.stack_verified()
-            && f.ops.as_slice() == [Op::Constant(0), Op::Return]
-            && f.constants.len() == 1
-            && f.constants
+            && f.ops().as_slice() == [Op::Constant(0), Op::Return]
+            && f.constants().len() == 1
+            && f.constants()
                 .first()
                 .is_some_and(|answer| answer.is_nil() || answer.is_t() || answer.is_fixnum())
-            && f.env.is_none()
+            && f.env().is_none()
             && f.interactive.is_none()
             && f.doc_form.is_none()
             && f.docstring.is_none()
             && f.extra_slots.is_empty()
-            && f.gnu_bytecode_bytes.is_none()
-            && f.gnu_byte_offset_map.is_none()
+            && f.gnu_bytecode_bytes().is_none()
+            && f.gnu_byte_offset_map().is_none()
             && f.lazy_gnu_code().is_none()
     })
 }

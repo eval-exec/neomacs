@@ -29,7 +29,7 @@ fn opt_sink_numeric_infallible_ready_float_omits_only_unused_precise_exit() {
             vec![Value::make_float(2.0)],
             2,
         );
-        roots.add(&f.constants);
+        roots.add(f.constants());
         let cases = [-0.0, 0.0, 3.0, f64::NAN, f64::INFINITY]
             .into_iter()
             .map(|x| vec![Value::make_float(x), Value::make_float(-0.0)])
@@ -65,27 +65,31 @@ fn opt_sink_numeric_infallible_ready_float_omits_only_unused_precise_exit() {
         for leaf in [&base, &selected] {
             // guard_float branches directly and intentionally does not use the
             // force-deopt hook. Exercise its actual wrong-type branch instead.
-            let NativeRun::DeoptAt(exit) = leaf.call_consts(
-                &mut ctx as *mut Context as *mut u8,
-                f.constants.as_ptr(),
-                &bad_first,
-            ) else {
+            let NativeRun::DeoptAt(exit) = (unsafe {
+                leaf.call_consts(
+                    &mut ctx as *mut Context as *mut u8,
+                    f.constants().as_ptr(),
+                    &bad_first,
+                )
+            }) else {
                 panic!("actual Symbol input must fail original Borrow at pc2");
             };
             roots.add(&exit.stack);
             assert_eq!(exit.pc, 2);
             assert_eq!(
                 exit.stack,
-                [bad_first[0], bad_first[1], bad_first[0], f.constants[0]]
+                [bad_first[0], bad_first[1], bad_first[0], f.constants()[0]]
             );
             assert_eq!(observe(&resume(&mut ctx, &f, &exit)), observe(&first_error));
             assert_eq!(ctx.jit_root_stack_top, 0);
         }
-        let NativeRun::DeoptAt(exit) = selected.call_consts(
-            &mut ctx as *mut Context as *mut u8,
-            f.constants.as_ptr(),
-            &bad,
-        ) else {
+        let NativeRun::DeoptAt(exit) = (unsafe {
+            selected.call_consts(
+                &mut ctx as *mut Context as *mut u8,
+                f.constants().as_ptr(),
+                &bad,
+            )
+        }) else {
             panic!("pc7 Borrow guard must retain exact original cold frame");
         };
         roots.add(&exit.stack);
@@ -104,14 +108,14 @@ fn opt_sink_numeric_infallible_ready_float_omits_only_unused_precise_exit() {
                 op.clone(),
                 Op::Return,
             ],
-            vec![f.constants[0]],
+            vec![f.constants()[0]],
             1,
         );
         let product = tier0(&mut ctx, &oracle, &bad[..1]).unwrap();
         roots.add(&[product]);
         assert_eq!(exit.stack[2].xfloat().to_bits(), product.xfloat().to_bits());
         assert_ne!(exit.stack[2].bits(), bad[0].bits());
-        assert_ne!(exit.stack[2].bits(), f.constants[0].bits());
+        assert_ne!(exit.stack[2].bits(), f.constants()[0].bits());
         assert_eq!(observe(&resume(&mut ctx, &f, &exit)), observe(&expected));
         assert_eq!(ctx.jit_root_stack_top, 0);
 
@@ -160,11 +164,13 @@ fn opt_sink_numeric_infallible_ready_float_omits_only_unused_precise_exit() {
     check_semantics(&mut ctx, &mixed, &mixed_base, &integer_cases, &roots);
     check_semantics(&mut ctx, &mixed, &mixed_selected, &integer_cases, &roots);
     let forced_args = &integer_cases[0];
-    let NativeRun::DeoptAt(exit) = mixed_forced.call_consts(
-        &mut ctx as *mut Context as *mut u8,
-        mixed.constants.as_ptr(),
-        forced_args,
-    ) else {
+    let NativeRun::DeoptAt(exit) = (unsafe {
+        mixed_forced.call_consts(
+            &mut ctx as *mut Context as *mut u8,
+            mixed.constants().as_ptr(),
+            forced_args,
+        )
+    }) else {
         panic!("forced actual checked Add must retain pc2 exit");
     };
     roots.add(&exit.stack);
@@ -184,11 +190,13 @@ fn opt_sink_numeric_infallible_ready_float_omits_only_unused_precise_exit() {
     );
     assert_eq!(ctx.jit_root_stack_top, 0);
     let overflow = &integer_cases[1];
-    let NativeRun::DeoptAt(exit) = mixed_selected.call_consts(
-        &mut ctx as *mut Context as *mut u8,
-        mixed.constants.as_ptr(),
-        overflow,
-    ) else {
+    let NativeRun::DeoptAt(exit) = (unsafe {
+        mixed_selected.call_consts(
+            &mut ctx as *mut Context as *mut u8,
+            mixed.constants().as_ptr(),
+            overflow,
+        )
+    }) else {
         panic!("Ready mixed-kind fixnum overflow must retain pc4 exit");
     };
     roots.add(&exit.stack);

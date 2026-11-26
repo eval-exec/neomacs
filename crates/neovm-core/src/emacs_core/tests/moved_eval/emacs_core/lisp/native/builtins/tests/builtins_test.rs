@@ -3,6 +3,7 @@ use neovm_edit::buffer::{CharRange, EmacsByteRange, LispCharPos1};
 use neovm_eval::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
 use neovm_eval::emacs_core::eval::SubrValueExt;
 use neovm_value::error::{FlowKind, FlowRef, FlowResultExt as _};
+use neovm_value::intern::intern;
 fn test_ob() -> neovm_value::symbol::Obarray {
     neovm_value::symbol::Obarray::new()
 }
@@ -57,8 +58,7 @@ use neovm_edit::emacs_core::editfns::{
     builtin_delete_and_extract_region, builtin_delete_region, builtin_erase_buffer,
 };
 use neovm_text::emacs_core::regex::compute_buffer_replacement_with_syntax;
-use neovm_value::intern::intern;
-use neovm_value::intern::intern_uninterned;
+use neovm_value::intern::make_uninterned_symbol;
 use neovm_value::strings_core::lisp_string_char_codes;
 use neovm_value::value::{
     HashTableTest, LambdaData, LambdaParams, StringTextPropertyRun, Value, ValueKind,
@@ -76,7 +76,7 @@ use tree_sitter::Language;
 fn empty_function_cell_does_not_synthesize_builtin_alias() {
     crate::test_utils::init_test_tracing();
     let mut obarray = neovm_value::symbol::Obarray::new();
-    obarray.intern("string<");
+    obarray.intern_member("string<");
     let symbol = neovm_value::intern::intern("string<");
 
     assert_eq!(
@@ -119,7 +119,7 @@ thread_local! {
     static PURE_DISPATCH_TEST_CTX: std::cell::RefCell<
         Option<
             neovm_value::thread_exit_leak::ThreadExitLeak<
-                crate::emacs_core::eval::Context,
+                Option<neovm_eval::emacs_core::eval::parked_context::ParkedContext>,
             >,
         >,
     > = const { std::cell::RefCell::new(None) };
@@ -152,13 +152,21 @@ fn assert_x11_nil_subr_or_ns_void(name: &str, got: Option<EvalResult>) {
 }
 
 fn dispatch_builtin_pure(name: &str, args: Vec<Value>) -> Option<EvalResult> {
-    PURE_DISPATCH_TEST_CTX.with(|slot| {
-        let mut slot = slot.borrow_mut();
-        let ctx = slot.get_or_insert_with(|| {
-            neovm_value::thread_exit_leak::ThreadExitLeak::new(crate::test_utils::new_context())
-        });
-        crate::emacs_core::builtins::dispatch_pure_builtin_for_test(ctx.get_mut(), name, args)
-    })
+    let mut holder = PURE_DISPATCH_TEST_CTX.with(|slot| {
+        slot.borrow_mut()
+            .take()
+            .unwrap_or_else(|| neovm_value::thread_exit_leak::ThreadExitLeak::new(None))
+    });
+    let mut ctx = match holder.get_mut().take() {
+        Some(parked) => parked
+            .resume_for_test()
+            .expect("pure dispatch resumes on an empty slot"),
+        None => crate::test_utils::new_context(),
+    };
+    let result = crate::emacs_core::builtins::dispatch_pure_builtin_for_test(&mut ctx, name, args);
+    *holder.get_mut() = Some(ctx.park_for_test());
+    PURE_DISPATCH_TEST_CTX.with(|slot| *slot.borrow_mut() = Some(holder));
+    result
 }
 
 fn install_variable_watcher_probe(eval: &mut crate::emacs_core::eval::Context, callback: &str) {
@@ -370,10 +378,14 @@ fn pure_dispatch_typed_numeric_primitives_accept_markers() {
         false,
     );
 
+    let parked = eval.park_for_test();
     let max_with_marker = dispatch_builtin_pure("max", vec![Value::fixnum(1), marker])
         .expect("builtin max should resolve")
         .expect("builtin max should evaluate");
     assert_eq!(max_with_marker, Value::fixnum(4));
+    let mut eval = parked
+        .resume_for_test()
+        .expect("resume after pure dispatch");
 
     let marker = neovm_edit::emacs_core::marker::make_registered_buffer_marker(
         &mut eval.edit.buffers,
@@ -381,10 +393,14 @@ fn pure_dispatch_typed_numeric_primitives_accept_markers() {
         LispCharPos1::new(4),
         false,
     );
+    let parked = eval.park_for_test();
     let min_with_marker = dispatch_builtin_pure("min", vec![Value::fixnum(10), marker])
         .expect("builtin min should resolve")
         .expect("builtin min should evaluate");
     assert_eq!(min_with_marker, Value::fixnum(4));
+    let mut eval = parked
+        .resume_for_test()
+        .expect("resume after pure dispatch");
 
     let left_marker = neovm_edit::emacs_core::marker::make_registered_buffer_marker(
         &mut eval.edit.buffers,
@@ -398,10 +414,14 @@ fn pure_dispatch_typed_numeric_primitives_accept_markers() {
         LispCharPos1::new(5),
         false,
     );
+    let parked = eval.park_for_test();
     let lt_with_markers = dispatch_builtin_pure("<", vec![left_marker, right_marker])
         .expect("builtin < should resolve")
         .expect("builtin < should evaluate");
     assert_eq!(lt_with_markers, Value::T);
+    let mut eval = parked
+        .resume_for_test()
+        .expect("resume after pure dispatch");
 
     let marker = neovm_edit::emacs_core::marker::make_registered_buffer_marker(
         &mut eval.edit.buffers,
@@ -409,10 +429,14 @@ fn pure_dispatch_typed_numeric_primitives_accept_markers() {
         LispCharPos1::new(4),
         false,
     );
+    let parked = eval.park_for_test();
     let add1_with_marker = dispatch_builtin_pure("1+", vec![marker])
         .expect("builtin 1+ should resolve")
         .expect("builtin 1+ should evaluate");
     assert_eq!(add1_with_marker, Value::fixnum(5));
+    let mut eval = parked
+        .resume_for_test()
+        .expect("resume after pure dispatch");
 
     let marker = neovm_edit::emacs_core::marker::make_registered_buffer_marker(
         &mut eval.edit.buffers,
@@ -420,6 +444,7 @@ fn pure_dispatch_typed_numeric_primitives_accept_markers() {
         LispCharPos1::new(4),
         false,
     );
+    let _parked = eval.park_for_test();
     let sub1_with_marker = dispatch_builtin_pure("1-", vec![marker])
         .expect("builtin 1- should resolve")
         .expect("builtin 1- should evaluate");
@@ -1017,7 +1042,7 @@ fn make_byte_code_preserves_ordinary_vectors() {
         None,
     )
     .unwrap();
-    let converted = function.get_bytecode_data().unwrap().constants[0];
+    let converted = function.get_bytecode_data().unwrap().constants()[0];
     assert_eq!(converted, closure_vec);
     assert!(
         converted.is_vector(),
@@ -1045,7 +1070,7 @@ fn make_byte_code_preserves_cperl_key_vector_shape() {
         None,
     )
     .unwrap();
-    let converted = function.get_bytecode_data().unwrap().constants[0];
+    let converted = function.get_bytecode_data().unwrap().constants()[0];
     assert_eq!(converted, key_vec);
     assert!(
         converted.is_vector(),
@@ -1614,7 +1639,7 @@ fn accessible_keymaps_lists_an_autoloaded_keymap_symbol_without_loading_it() {
     assert_eq!(items.len(), 2, "{items:?}");
     let second = &items[1];
     assert_eq!(
-        second.cons_car().as_vector_data().unwrap().as_slice(),
+        second.cons_car().as_vector_data().unwrap(),
         &[Value::fixnum(11)]
     );
     assert_eq!(
@@ -4766,6 +4791,7 @@ fn barf_bury_char_equal_cl_type_and_cancel_semantics() {
         Value::symbol("interpreted-function")
     );
 
+    let parked_eval = eval.park_for_test();
     let mut cancel_eval = crate::test_utils::new_context();
     assert_eq!(
         builtin_cancel_kbd_macro_events(&mut cancel_eval, vec![]).unwrap(),
@@ -4784,6 +4810,8 @@ fn barf_bury_char_equal_cl_type_and_cancel_semantics() {
         other => panic!("unexpected flow: {other:?}"),
     }
 
+    drop(cancel_eval);
+    let mut eval = parked_eval.resume_for_test().expect("resume barf context");
     let barf_buffer = builtin_get_buffer_create(&mut eval, vec![Value::string("*barf*")])
         .expect("create buffer for barf-if-buffer-read-only tests");
     let _ = builtin_set_buffer(&mut eval, vec![barf_buffer]).expect("select barf test buffer");
@@ -5022,6 +5050,7 @@ fn byte_position_and_clear_bitmap_semantics() {
         other => panic!("unexpected flow: {other:?}"),
     }
 
+    drop(eval);
     let mut face_cache_ctx = crate::test_utils::new_context();
     let face_change_before = face_cache_ctx.face_change_count_for_test();
     assert_eq!(
@@ -6275,7 +6304,7 @@ fn define_hash_table_test_alias_is_thread_local() {
         // can construct the alias values.
         let _ctx = crate::test_utils::new_context();
         let _ = builtin_define_hash_table_test(vec![
-            Value::symbol(alias_name),
+            Value::from_sym_id(intern(alias_name)),
             Value::symbol("eq"),
             Value::symbol("sxhash-eq"),
         ])
@@ -6300,7 +6329,7 @@ fn define_hash_table_test_alias_redefinition_updates_mapping() {
         &mut ctx,
         "define-hash-table-test",
         vec![
-            Value::symbol(alias_name),
+            Value::from_sym_id(intern(alias_name)),
             Value::symbol("eq"),
             Value::symbol("sxhash-eq"),
         ],
@@ -6310,13 +6339,16 @@ fn define_hash_table_test_alias_redefinition_updates_mapping() {
     let first = crate::emacs_core::builtins::dispatch_pure_builtin_for_test(
         &mut ctx,
         "make-hash-table",
-        vec![Value::keyword(":test"), Value::symbol(alias_name)],
+        vec![
+            Value::keyword(":test"),
+            Value::from_sym_id(intern(alias_name)),
+        ],
     )
     .expect("make-hash-table should resolve")
     .expect("make-hash-table should evaluate");
     let first_name = neovm_value::hashtab::builtin_hash_table_test(vec![first])
         .expect("hash-table-test should evaluate for initial alias mapping");
-    assert_eq!(first_name, Value::symbol(alias_name));
+    assert_eq!(first_name, Value::from_sym_id(intern(alias_name)));
 
     if !first.is_hash_table() {
         panic!("expected hash table");
@@ -6330,7 +6362,7 @@ fn define_hash_table_test_alias_redefinition_updates_mapping() {
         &mut ctx,
         "define-hash-table-test",
         vec![
-            Value::symbol(alias_name),
+            Value::from_sym_id(intern(alias_name)),
             Value::symbol("equal"),
             Value::symbol("sxhash-equal"),
         ],
@@ -6340,13 +6372,16 @@ fn define_hash_table_test_alias_redefinition_updates_mapping() {
     let second = crate::emacs_core::builtins::dispatch_pure_builtin_for_test(
         &mut ctx,
         "make-hash-table",
-        vec![Value::keyword(":test"), Value::symbol(alias_name)],
+        vec![
+            Value::keyword(":test"),
+            Value::from_sym_id(intern(alias_name)),
+        ],
     )
     .expect("make-hash-table should resolve after alias redefinition")
     .expect("make-hash-table should evaluate after alias redefinition");
     let second_name = neovm_value::hashtab::builtin_hash_table_test(vec![second])
         .expect("hash-table-test should evaluate after alias redefinition");
-    assert_eq!(second_name, Value::symbol(alias_name));
+    assert_eq!(second_name, Value::from_sym_id(intern(alias_name)));
 
     if !second.is_hash_table() {
         panic!("expected hash table");
@@ -7229,14 +7264,9 @@ fn pure_dispatch_native_comp_surface_matches_no_native_comp_build() {
 #[test]
 fn pure_dispatch_open_overlay_placeholders_match_compat_contracts() {
     crate::test_utils::init_test_tracing();
-    let open_font = dispatch_builtin_pure(
-        "open-font",
-        vec![Value::vector(vec![Value::keyword("font-entity")])],
-    )
-    .expect("builtin open-font should resolve")
-    .expect("builtin open-font should evaluate");
-    assert!(open_font.is_nil());
-
+    // open-font is evaluator-backed now: it needs a live frame and the
+    // display host's exact entity catalog, so it is covered by the GUI
+    // oracle test rather than this pure-dispatch placeholder table.
     let open_dribble = dispatch_builtin_pure("open-dribble-file", vec![Value::string("x.log")])
         .expect("builtin open-dribble-file should resolve")
         .expect("builtin open-dribble-file should evaluate");
@@ -7540,6 +7570,7 @@ fn pure_dispatch_record_placeholders_match_compat_contracts() {
         other => panic!("unexpected flow: {other:?}"),
     }
 
+    drop(eval);
     let read_pos = dispatch_builtin_pure("read-positioning-symbols", vec![Value::string("x")])
         .expect("builtin read-positioning-symbols should resolve")
         .expect("builtin read-positioning-symbols should evaluate");
@@ -7558,8 +7589,9 @@ fn pure_dispatch_record_placeholders_match_compat_contracts() {
 #[test]
 fn query_fontset_matches_emacs_regexp_syntax() {
     crate::test_utils::init_test_tracing();
-    let _ctx = crate::test_utils::new_context();
+    let ctx = crate::test_utils::new_context();
     neovm_eval::test_support::authority::reset_symbols_thread_locals_for_test();
+    drop(ctx);
 
     // `[([]` is the character class emitted by GNU `rx` for `[` or `(`.
     // The second Emacs-regexp alternative matches the default fontset.
@@ -7662,6 +7694,7 @@ fn pure_dispatch_reconsider_redirect_placeholders_match_compat_contracts() {
     assert!(set_command_keys.is_nil());
     assert_eq!(eval.read_command_keys(), &[Value::fixnum('x' as i64)]);
 
+    drop(eval);
     let set_auto_saved = dispatch_builtin_pure("set-buffer-auto-saved", vec![])
         .expect("builtin set-buffer-auto-saved should resolve")
         .expect("builtin set-buffer-auto-saved should evaluate");
@@ -7836,6 +7869,56 @@ fn pure_dispatch_sort_subr_placeholder_cluster_matches_compat_contracts() {
         .expect("builtin this-single-command-raw-keys should resolve")
         .expect("builtin this-single-command-raw-keys should evaluate");
     assert!(single_raw_keys.is_nil());
+}
+
+#[test]
+fn sort_charsets_sorts_by_charset_priority_in_place() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = crate::test_utils::new_context();
+
+    // GNU `Fsort_charsets` (charset.c): each charset ranks by where its id
+    // stands in `Vcharset_ordered_list`, so an alias ties with its target and
+    // keeps its input order. The sorted names go back into the same conses.
+    let rendered = format_eval_result(&eval.eval_str(
+        r#"(let* ((l (list 'unicode 'ascii 'eight-bit))
+                  (second (cdr l))
+                  (sorted (sort-charsets l)))
+             (list sorted (eq sorted l) (eq (cdr l) second)
+                   (sort-charsets nil)
+                   (sort-charsets (list 'unicode 'ascii 'unicode))
+                   (sort-charsets (list 'unicode 'ucs 'ascii))
+                   (sort-charsets (list 'ucs 'unicode 'ascii))))"#,
+    ));
+    assert_eq!(
+        rendered,
+        "OK ((ascii unicode eight-bit) t t nil (ascii unicode unicode) (ascii unicode ucs) (ascii ucs unicode))"
+    );
+
+    // `list_length` checks the whole list before any element is checked
+    // against `charsetp`, and a failed call leaves the list as it was.
+    let rendered = format_eval_result(&eval.eval_str(
+        r#"(let ((circular (list 'ascii 'unicode))
+                 (bad (list 'unicode 'ascii 'foo)))
+             (setcdr (cdr circular) circular)
+             (list (condition-case e (sort-charsets 'ascii) (error e))
+                   (condition-case e (sort-charsets (cons 'foo 'bar)) (error e))
+                   (condition-case e (sort-charsets (list 'ascii 'foo)) (error e))
+                   (condition-case e (sort-charsets (list 1)) (error e))
+                   (car (condition-case e (sort-charsets circular) (error e)))
+                   (condition-case nil (sort-charsets bad) (error bad))))"#,
+    ));
+    assert_eq!(
+        rendered,
+        "OK ((wrong-type-argument listp ascii) (wrong-type-argument listp bar) (wrong-type-argument charsetp foo) (wrong-type-argument charsetp 1) circular-list (unicode ascii foo))"
+    );
+
+    // The order follows `set-charset-priority`.
+    let rendered = format_eval_result(&eval.eval_str(
+        r#"(progn
+             (set-charset-priority 'eight-bit 'unicode)
+             (sort-charsets (list 'ascii 'emacs 'ucs 'eight-bit)))"#,
+    ));
+    assert_eq!(rendered, "OK (eight-bit ucs ascii emacs)");
 }
 
 #[test]
@@ -8800,11 +8883,12 @@ fn pure_dispatch_def_keymap_placeholder_cluster_matches_compat_contracts() {
 
     let iso_charset = dispatch_builtin_pure(
         "iso-charset",
-        vec![Value::fixnum(1), Value::fixnum(2), Value::fixnum(3)],
+        vec![Value::fixnum(1), Value::fixnum(94), Value::fixnum(66)],
     )
     .expect("builtin iso-charset should resolve")
     .expect("builtin iso-charset should evaluate");
-    assert!(iso_charset.is_nil());
+    // GNU: (iso-charset 1 94 ?B) => ascii.
+    assert_eq!(iso_charset, Value::symbol("ascii"));
 
     let keyelt = dispatch_builtin_pure("keymap--get-keyelt", vec![Value::NIL, Value::NIL])
         .expect("builtin keymap--get-keyelt should resolve")
@@ -8929,6 +9013,88 @@ fn pure_dispatch_process_placeholder_cluster_matches_compat_contracts() {
 }
 
 #[test]
+fn lread_substitute_object_in_subtree_replaces_the_placeholder_in_place() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = crate::test_utils::new_context();
+
+    // GNU `substitute_object_recurse` (lread.c): every PLACEHOLDER reachable
+    // from OBJECT through conses, vectors, records, closures and string text
+    // properties becomes OBJECT, in place, and the subr returns nil. Hash
+    // tables and bool-vectors are left alone.
+    let rendered = format_eval_result(&eval.eval_str(
+        r#"(let* ((ph (cons nil nil))
+                  (s (propertize "ab" 'p ph 'q (list ph)))
+                  (f (make-byte-code 0 "\300\207" (vector ph) 1))
+                  (c (make-interpreted-closure nil '(x) (list (cons 'x ph))))
+                  (h (make-hash-table :test 'eq))
+                  (obj (list 1 ph (vector 2 ph) (cons ph 3) (record 'r ph) s f c h
+                             (make-bool-vector 2 t))))
+             (puthash 'k ph h)
+             (list (lread--substitute-object-in-subtree obj ph t)
+                   (eq (nth 1 obj) obj)
+                   (eq (aref (nth 2 obj) 1) obj)
+                   (eq (car (nth 3 obj)) obj)
+                   (eq (aref (nth 4 obj) 1) obj)
+                   (eq (get-text-property 1 'p s) obj)
+                   (eq (car (get-text-property 0 'q s)) obj)
+                   (eq (aref (aref f 2) 0) obj)
+                   (eq (funcall c) obj)
+                   (eq (gethash 'k h) ph)))"#,
+    ));
+    assert_eq!(rendered, "OK (nil t t t t t t t t t)");
+
+    // Any other pseudovector signals `sequencep`, after the slots walked
+    // before it were already substituted (GNU sets each car, then walks the
+    // cdr; each vector slot in turn).
+    let rendered = format_eval_result(&eval.eval_str(
+        r#"(let* ((ph (cons nil nil))
+                  (obj (list ph (current-buffer) ph))
+                  (v (vector ph (make-marker) ph))
+                  (e1 (condition-case e (lread--substitute-object-in-subtree obj ph t)
+                        (error e)))
+                  (e2 (condition-case e (lread--substitute-object-in-subtree v ph t)
+                        (error e))))
+             (list (car e1) (car (cdr e1)) (bufferp (nth 2 e1))
+                   (eq (car obj) obj) (eq (nth 2 obj) ph)
+                   (car e2) (car (cdr e2)) (markerp (nth 2 e2))
+                   (eq (aref v 0) v) (eq (aref v 2) ph)))"#,
+    ));
+    assert_eq!(
+        rendered,
+        "OK (wrong-type-argument sequencep t t t wrong-type-argument sequencep t t t)"
+    );
+}
+
+#[test]
+fn lread_substitute_object_in_subtree_walks_a_long_list_in_a_loop() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = crate::test_utils::new_context();
+
+    // A list's cdr chain is walked in a loop, so a list this long does not
+    // overflow the native stack. GNU 31.1 recurses on the cdr and crashes
+    // with SIGSEGV on both forms below (attested on the pinned oracle,
+    // a360712c9d: the 1M-element form exits with signal 11).
+    let rendered = format_eval_result(&eval.eval_str(
+        r#"(let* ((ph (cons nil nil))
+                  (long (nconc (make-list 1000000 1) (list ph (vector ph)))))
+             (list (lread--substitute-object-in-subtree long ph t)
+                   (eq (car (nthcdr 1000000 long)) long)
+                   (eq (aref (car (nthcdr 1000001 long)) 0) long)))"#,
+    ));
+    assert_eq!(rendered, "OK (nil t t)");
+
+    // The reader's `#N=` takes the same walk.
+    let rendered = format_eval_result(&eval.eval_str(
+        r##"(let ((v (car (read-from-string
+                           (concat "#1=[(" (mapconcat #'number-to-string
+                                                      (make-list 1000000 7) " ")
+                                   ") #1#]")))))
+              (list (eq (aref v 1) v) (length (aref v 0))))"##,
+    ));
+    assert_eq!(rendered, "OK (t 1000000)");
+}
+
+#[test]
 fn kill_emacs_eval_requests_shutdown_and_stops_command_loop() {
     crate::test_utils::init_test_tracing();
     let mut eval = crate::test_utils::new_context();
@@ -9005,9 +9171,13 @@ fn pure_dispatch_make_placeholder_cluster_matches_compat_contracts() {
         .get_bytecode_data()
         .expect("make-byte-code should produce bytecode data");
     // GNU Fmake_byte_code stores each supplied constant unchanged.
-    assert!(bc.constants[0].is_cons(), "the constant remains list data");
+    assert!(
+        bc.constants()[0].is_cons(),
+        "the constant remains list data"
+    );
     assert_eq!(
-        bc.constants[0], hash_literal,
+        bc.constants()[0],
+        hash_literal,
         "constant identity is preserved"
     );
 
@@ -9150,9 +9320,9 @@ fn make_byte_code_preserves_gnu_arg_slot_zero() {
     let lexical_bc = lexical
         .get_bytecode_data()
         .expect("make-byte-code should produce bytecode data");
-    assert_eq!(lexical_bc.arglist, lexical_arg_descriptor);
+    assert_eq!(lexical_bc.arglist(), lexical_arg_descriptor);
     assert!(
-        lexical_bc.lexical,
+        lexical_bc.lexical(),
         "GNU integer arg descriptors are lexical byte-code frames"
     );
 
@@ -9176,11 +9346,11 @@ fn make_byte_code_preserves_gnu_arg_slot_zero() {
         .get_bytecode_data()
         .expect("make-byte-code should produce bytecode data");
     assert!(
-        !dynamic_bc.lexical,
+        !dynamic_bc.lexical(),
         "GNU list arglists are old dynamically-bound byte-code frames"
     );
     assert_eq!(
-        neovm_value::value::list_to_vec(&dynamic_bc.arglist)
+        neovm_value::value::list_to_vec(&dynamic_bc.arglist())
             .expect("arg slot should stay a proper list"),
         vec![
             Value::symbol("arg0"),
@@ -10874,7 +11044,7 @@ fn replace_match_string_preserves_source_and_replacement_text_properties_like_gn
             start,
             end,
             Value::symbol("face"),
-            Value::symbol(face),
+            Value::from_sym_id(intern(face)),
         );
         neovm_value::value::set_string_text_properties_table_for_value(value, table);
     }
@@ -10889,7 +11059,7 @@ fn replace_match_string_preserves_source_and_replacement_text_properties_like_gn
         assert_eq!(interval.end, end);
         assert_eq!(
             interval.properties.get(&Value::symbol("face")),
-            Some(&Value::symbol(face))
+            Some(&Value::from_sym_id(intern(face)))
         );
     }
 
@@ -12366,7 +12536,7 @@ fn mouse_position_in_root_frame_walks_parent_frames() {
 fn mouse_position_in_root_frame_rejects_a_frame_that_no_longer_exists() {
     crate::test_utils::init_test_tracing();
     let mut eval = crate::test_utils::new_context();
-    eval.store_variable_by_name("issue660-dead-frame", Value::make_frame(999_999));
+    eval.store_variable_by_name("issue660-dead-frame", Value::mint_frame(999_999));
     eval.eval_str(
         "(setq mouse-position-function
                (lambda (_pos) (cons issue660-dead-frame (cons 5 6))))",
@@ -12397,7 +12567,7 @@ fn mouse_position_in_root_frame_rejects_a_missing_ancestor_frame() {
         // Neomacs delete-frame does not yet soft-delete a parent's children
         // the way GNU does (src/frame.c:2645-2664), so a surviving child can
         // still reference a frame that is no longer in the store.
-        frame.parent_frame = Value::make_frame(999_999);
+        frame.parent_frame = Value::mint_frame(999_999);
     }
     eval.store_variable_by_name("issue660-orphan-frame", Value::make_frame(child_id.0));
     eval.eval_str(
@@ -12602,7 +12772,7 @@ fn dispatch_builtin_pure_handles_window_placeholders_but_defers_frame_selection(
         dispatch_builtin_pure("handle-save-session", vec![Value::symbol("event")]),
     );
 
-    assert!(dispatch_builtin_pure("handle-switch-frame", vec![Value::make_frame(1)]).is_none());
+    assert!(dispatch_builtin_pure("handle-switch-frame", vec![Value::mint_frame(1)]).is_none());
 
     let divider = dispatch_builtin_pure("window-bottom-divider-width", vec![])
         .expect("window-bottom-divider-width should resolve")
@@ -13301,7 +13471,9 @@ fn gnutls_aes_256_cbc_crypto_matches_gnu_auth_source_shape() {
 #[test]
 fn dispatch_builtin_pure_handles_face_attribute_vector() {
     crate::test_utils::init_test_tracing();
-    let _eval = crate::test_utils::new_context();
+    // `Value::NIL` does not need a live heap. Drop the boot context so the
+    // pure-dispatch helper can install its own.
+    drop(crate::test_utils::new_context());
     let face = dispatch_builtin_pure("face-attributes-as-vector", vec![Value::NIL])
         .expect("face-attributes-as-vector should resolve")
         .expect("face-attributes-as-vector should evaluate");
@@ -13983,7 +14155,7 @@ fn prin1_to_string_reuses_print_number_table_positive_label() {
 fn prin1_to_string_preserves_gensym_lambda_parameter_identity_like_gnu() {
     crate::test_utils::init_test_tracing();
     let mut eval = crate::test_utils::new_context();
-    let sym = neovm_value::intern::intern_uninterned("stack");
+    let sym = neovm_value::intern::make_uninterned_symbol("stack");
     let lambda = Value::make_lambda(LambdaData {
         params: LambdaParams::simple(vec![sym]).into(),
         body: vec![Value::from_sym_id(sym)],
@@ -14124,7 +14296,7 @@ fn prin1_loaddefs_docstring_layout_matches_gnu_print_form() {
 fn prin1_to_string_respects_print_gensym_binding() {
     crate::test_utils::init_test_tracing();
     let mut eval = crate::test_utils::new_context();
-    let sym = Value::symbol(intern_uninterned("vm-print-gensym"));
+    let sym = Value::symbol(make_uninterned_symbol("vm-print-gensym"));
 
     let default_text = dispatch_builtin(&mut eval, "prin1-to-string", vec![sym])
         .expect("prin1-to-string should resolve")
@@ -14143,7 +14315,7 @@ fn prin1_to_string_preserves_raw_unibyte_symbol_bytes() {
     crate::test_utils::init_test_tracing();
     let mut eval = crate::test_utils::new_context();
     let raw_name = neovm_value::heap_types::LispString::from_unibyte(vec![0xFF, b'a']);
-    let sym = Value::symbol(neovm_value::intern::intern_uninterned_lisp_string(
+    let sym = Value::symbol(neovm_value::intern::make_uninterned_symbol_lisp_string(
         &raw_name,
     ));
 
@@ -14545,7 +14717,7 @@ fn error_message_string_preserves_percent_s_handle_semantics() {
             other => panic!("expected signal flow, got: {other:?}"),
         };
         let mut err_data = Vec::with_capacity(data.len() + 1);
-        err_data.push(Value::symbol(symbol));
+        err_data.push(Value::from_sym_id(symbol));
         err_data.extend(data);
         let rendered = dispatch_builtin(eval, "error-message-string", vec![Value::list(err_data)])
             .expect("error-message-string should resolve")
@@ -14599,7 +14771,10 @@ fn message_box_wrappers_render_opaque_handles_in_eval_dispatch() {
         match err.into_kind() {
             FlowKind::Signal(sig) => {
                 assert_eq!(sig.symbol_name(), "wrong-number-of-arguments");
-                assert_eq!(sig.data, vec![Value::symbol(symbol), Value::fixnum(0)]);
+                assert_eq!(
+                    sig.data,
+                    vec![Value::from_sym_id(intern(symbol)), Value::fixnum(0)]
+                );
             }
             other => panic!("expected signal, got: {other:?}"),
         }
@@ -16083,6 +16258,7 @@ fn set_buffer_multibyte_records_gnu_style_undo_entry() {
             Value::T,
         ]
     );
+    drop(eval);
 
     // Replaying it is lisp/simple.el's `primitive-undo' -- GNU has no C
     // version and neither do we -- so the round trip is asked of the loaded
@@ -16710,7 +16886,7 @@ fn functionp_eval_matches_symbol_and_lambda_form_semantics() {
         .expect("functionp should accept throw symbol");
     assert!(throw_symbol.is_truthy());
     for name in ["funcall", "defalias", "provide", "require"] {
-        let result = builtin_functionp(&mut eval, vec![Value::symbol(name)])
+        let result = builtin_functionp(&mut eval, vec![Value::from_sym_id(intern(name))])
             .unwrap_or_else(|_| panic!("functionp should accept {name} symbol"));
         assert!(result.is_truthy(), "expected {name} to satisfy functionp");
     }
@@ -16858,21 +17034,21 @@ fn fmakunbound_masks_builtin_special_and_evaluator_callables() {
         .expect("functionp should accept symbol");
     assert!(throw_functionp.is_nil());
     for name in ["funcall", "defalias", "provide", "require"] {
-        builtin_fmakunbound(&mut eval, vec![Value::symbol(name)])
+        builtin_fmakunbound(&mut eval, vec![Value::from_sym_id(intern(name))])
             .unwrap_or_else(|_| panic!("fmakunbound should accept {name}"));
-        let bound = builtin_fboundp(&mut eval, vec![Value::symbol(name)])
+        let bound = builtin_fboundp(&mut eval, vec![Value::from_sym_id(intern(name))])
             .unwrap_or_else(|_| panic!("fboundp should accept {name}"));
         assert!(
             bound.is_nil(),
             "expected {name} to be unbound after fmakunbound"
         );
-        let fn_cell = builtin_symbol_function(&mut eval, vec![Value::symbol(name)])
+        let fn_cell = builtin_symbol_function(&mut eval, vec![Value::from_sym_id(intern(name))])
             .unwrap_or_else(|_| panic!("symbol-function should accept {name}"));
         assert!(
             fn_cell.is_nil(),
             "expected symbol-function {name} to be nil"
         );
-        let functionp = builtin_functionp(&mut eval, vec![Value::symbol(name)])
+        let functionp = builtin_functionp(&mut eval, vec![Value::from_sym_id(intern(name))])
             .unwrap_or_else(|_| panic!("functionp should accept {name}"));
         assert!(
             functionp.is_nil(),
@@ -17357,7 +17533,7 @@ fn indirect_function_resolves_deep_alias_chain_without_depth_cutoff() {
         let target = if idx == depth - 1 {
             Value::symbol("car")
         } else {
-            Value::symbol(format!("vm-test-deep-alias-{}", idx + 1))
+            Value::from_sym_id(intern((format!("vm-test-deep-alias-{}", idx + 1)).as_ref()))
         };
         eval.obarray_mut().set_symbol_function(&name, target);
     }
@@ -17559,7 +17735,7 @@ fn boundp_buffer_local_lookup_uses_symbol_identity() {
     crate::test_utils::init_test_tracing();
     let mut eval = crate::test_utils::new_context();
 
-    let uninterned = neovm_value::intern::intern_uninterned("vm-bound-shadow");
+    let uninterned = neovm_value::intern::make_uninterned_symbol("vm-bound-shadow");
     let interned = intern("vm-bound-shadow");
     let current = eval
         .edit
@@ -19062,51 +19238,84 @@ fn window_text_pixel_size_includes_overlay_after_string_align_to() {
 
 /// Overlay `before-string`s anchored at a position contribute their columns too,
 /// and embedded newlines split the string into lines for the max-width measure.
+///
+/// GNU Emacs 31.1 (`Fbuffer_text_pixel_size` -> `window_text_pixel_size(Qnil, Qnil)`
+/// -> `move_it_by_lines(&it, 0)`, `src/xdisp.c:11867, 12180`):
+/// - a multi-line `before-string` at `(point-max)` (e.g. vertico candidates) or
+///   any position `> (point-min)` contributes its widest line (`(10 . 3)` here);
+/// - a multi-line `before-string` at `(point-min)` (`BEGV`) is consumed in
+///   `move_it_by_lines`'s rewind before `FROM`, leaving only buffer text (`(3 . 1)`);
+/// - a single-line `before-string` at `(point-min)` is not rewound (`(13 . 1)`).
 #[test]
 fn buffer_text_pixel_size_includes_overlay_before_string_multiline() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::test_utils::new_context();
-    let buf_id = eval
-        .edit
-        .buffers
-        .current_buffer()
-        .expect("current buffer")
-        .id();
-    let frame_id =
-        eval.frame_manager_mut()
-            .create_frame("buf-pixel-overlay-before", 200, 24, buf_id);
-    eval.frame_manager_mut().select_frame(frame_id);
-    {
-        let frame = eval
-            .frame_manager_mut()
-            .selected_frame_mut()
-            .expect("selected frame");
-        frame.char_width = 1.0;
-        frame.char_height = 1.0;
-        frame.font_pixel_size = 1.0;
-        frame.set_window_system(None);
-    }
+    let measure = |ov_setup: &str| -> (i64, i64) {
+        let mut eval = crate::test_utils::new_context();
+        let buf_id = eval
+            .edit
+            .buffers
+            .current_buffer()
+            .expect("current buffer")
+            .id();
+        let frame_id =
+            eval.frame_manager_mut()
+                .create_frame("buf-pixel-overlay-before", 200, 24, buf_id);
+        eval.frame_manager_mut().select_frame(frame_id);
+        {
+            let frame = eval
+                .frame_manager_mut()
+                .selected_frame_mut()
+                .expect("selected frame");
+            frame.char_width = 1.0;
+            frame.char_height = 1.0;
+            frame.font_pixel_size = 1.0;
+            frame.set_window_system(None);
+        }
 
-    eval.edit
-        .buffers
-        .get_mut(buf_id)
-        .expect("buffer")
-        .insert("abc");
+        eval.edit
+            .buffers
+            .get_mut(buf_id)
+            .expect("buffer")
+            .insert("abc");
+        eval.eval_str(ov_setup)
+            .expect("install overlay before-string");
 
-    // Before-string at buffer start whose widest embedded line is 10 columns.
-    eval.eval_str(
-        r#"
-        (let ((ov (make-overlay (point-min) (point-min))))
-          (overlay-put ov 'before-string "short\nten-cols!!\nx"))"#,
-    )
-    .expect("install overlay before-string");
+        let result = crate::emacs_core::xdisp::builtin_buffer_text_pixel_size(&mut eval, vec![])
+            .expect("buffer-text-pixel-size");
+        (
+            result.cons_car().as_int().expect("width"),
+            result.cons_cdr().as_int().expect("height"),
+        )
+    };
 
-    let result = crate::emacs_core::xdisp::builtin_buffer_text_pixel_size(&mut eval, vec![])
-        .expect("buffer-text-pixel-size");
+    // Multi-line before-string at `(point-max)`: widest embedded line (10 cols) drives width.
     assert_eq!(
-        result.cons_car(),
-        Value::fixnum(10),
-        "before-string widest line (ten-cols!! = 10) should drive width past the 3-col buffer text"
+        measure(
+            r#"(let ((ov (make-overlay (point-max) (point-max))))
+                 (overlay-put ov 'before-string "short\nten-cols!!\nx"))"#,
+        ),
+        (10, 3),
+        "before-string widest line (ten-cols!! = 10) at point-max should drive width past 3-col buffer text"
+    );
+
+    // Multi-line before-string at `(point-min)`: GNU rewinds past the newline at BEGV -> (3 . 1).
+    assert_eq!(
+        measure(
+            r#"(let ((ov (make-overlay (point-min) (point-min))))
+                 (overlay-put ov 'before-string "short\nten-cols!!\nx"))"#,
+        ),
+        (3, 1),
+        "GNU buffer-text-pixel-size rewinds multi-line before-string at point-min to buffer text"
+    );
+
+    // Single-line before-string at `(point-min)` is not rewound -> 10 + 3 = (13 . 1).
+    assert_eq!(
+        measure(
+            r#"(let ((ov (make-overlay (point-min) (point-min))))
+                 (overlay-put ov 'before-string "ten-cols!!"))"#,
+        ),
+        (13, 1),
+        "single-line before-string at point-min adds to buffer text width"
     );
 }
 

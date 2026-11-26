@@ -157,7 +157,11 @@ fn profiling_call(rt: &RtCtx) -> Option<T2Emit> {
 
 /// A speculated HOF call uses its profiling shim, with no separate generated
 /// credit call and no changes to the existing subr shim's hot path.
-pub(crate) fn subr_profiler(rt: &RtCtx, expected: u64) -> Option<T2Emit> {
+///
+/// # Safety
+/// `expected` must be the valid tagged bits of a live `Value` rooted by the
+/// active compilation snapshot.
+pub(crate) unsafe fn subr_profiler(rt: &RtCtx, expected: u64) -> Option<T2Emit> {
     profiling_call(rt).filter(|_| {
         unsafe {
             /* SAFETY: JIT constant-pool word */
@@ -234,15 +238,22 @@ pub(crate) fn emit_feedback_prof_call(
 /// Read-only HOF credit. Runtime state is leaf-owned and passed explicitly;
 /// no global or thread-local Lisp state is added. The original shim owns the
 /// Context and sequence rooting throughout the subsequent call.
+///
+/// # Safety
+/// `ctx` must point to the dormant owner-thread [`Context`], `func_bits` must
+/// be the valid tagged bits of a live `Value`, `obs` must point to a live
+/// [`LeafObs`], and when `nargs >= 2`, `args_ptr` must address at least two
+/// readable tagged words.
 #[inline]
-fn credit_generic(
+unsafe fn credit_generic(
     ctx: *mut u8,
     func_bits: i64,
     args_ptr: *const i64,
     nargs: i64,
     obs: *const LeafObs,
 ) {
-    if nargs < 2 || !credit_window_open(obs) {
+    // SAFETY: `obs`, `site`, `ctx`, and `args_ptr[..nargs]` uphold this tier-2 profile shim's live activation contract.
+    if nargs < 2 || !unsafe { credit_window_open(obs) } {
         return;
     }
     let callee = unsafe {
@@ -269,8 +280,11 @@ fn credit_generic(
 
 /// The profiling shims receive a live, mutator-owned leaf observation.
 /// Closed windows inspect no Lisp values and immediately use the plain shim.
+///
+/// # Safety
+/// `obs` must point to a live, mutator-owned [`LeafObs`].
 #[inline]
-pub(super) fn credit_window_open(obs: *const LeafObs) -> bool {
+pub(super) unsafe fn credit_window_open(obs: *const LeafObs) -> bool {
     // SAFETY: generated callers hold the containing leaf for the activation.
     let obs = unsafe { &*obs };
     obs.t2.state.get() == crate::emacs_core::jit::tier2::T2State::Idle
@@ -286,7 +300,7 @@ pub(super) fn credit_window_open(obs: *const LeafObs) -> bool {
 /// points to the live leaf-observation record. The call comes from generated
 /// code holding the frame, or from a Rust caller that upholds this contract.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn neovm_jit_t2_call_prof(
+pub(crate) unsafe extern "C" fn neovm_jit_t2_call_prof(
     ctx: *mut u8,
     func_bits: i64,
     args_ptr: *const i64,
@@ -294,7 +308,8 @@ pub unsafe extern "C" fn neovm_jit_t2_call_prof(
     out: *mut i64,
     obs: *const LeafObs,
 ) -> i64 {
-    credit_generic(ctx, func_bits, args_ptr, nargs, obs);
+    // SAFETY: `obs`, `site`, `ctx`, and `args_ptr[..nargs]` uphold this tier-2 profile shim's live activation contract.
+    unsafe { credit_generic(ctx, func_bits, args_ptr, nargs, obs) };
     // SAFETY: this shim's contract above covers ctx, args_ptr and out.
     unsafe { neovm_jit_call(ctx, func_bits, args_ptr, nargs, out) }
 }
@@ -311,7 +326,7 @@ pub unsafe extern "C" fn neovm_jit_t2_call_prof(
 /// The call comes from generated code holding the frame, or from a Rust
 /// caller that upholds this contract.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn neovm_jit_t2_call_subr_prof(
+pub(crate) unsafe extern "C" fn neovm_jit_t2_call_subr_prof(
     ctx: *mut u8,
     sym: i64,
     expected: i64,
@@ -321,7 +336,8 @@ pub unsafe extern "C" fn neovm_jit_t2_call_subr_prof(
     out: *mut i64,
     obs: *const LeafObs,
 ) -> i64 {
-    if nargs < 2 || !credit_window_open(obs) {
+    // SAFETY: `obs`, `site`, `ctx`, and `args_ptr[..nargs]` uphold this tier-2 profile shim's live activation contract.
+    if nargs < 2 || !unsafe { credit_window_open(obs) } {
         // SAFETY: this shim's contract covers ctx, args_ptr and out.
         return unsafe { neovm_jit_call_subr_spec(ctx, sym, expected, slot, args_ptr, nargs, out) };
     }
@@ -352,7 +368,7 @@ pub unsafe extern "C" fn neovm_jit_t2_call_subr_prof(
 /// leaf-observation record. The call comes from generated code holding the
 /// frame, or from a Rust caller that upholds this contract.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn neovm_jit_t2_call_feedback_prof(
+pub(crate) unsafe extern "C" fn neovm_jit_t2_call_feedback_prof(
     ctx: *mut u8,
     func_bits: i64,
     args_ptr: *const i64,
@@ -361,7 +377,8 @@ pub unsafe extern "C" fn neovm_jit_t2_call_feedback_prof(
     site: *const CallSiteFeedback,
     obs: *const LeafObs,
 ) -> i64 {
-    credit_generic(ctx, func_bits, args_ptr, nargs, obs);
+    // SAFETY: `obs`, `site`, `ctx`, and `args_ptr[..nargs]` uphold this tier-2 profile shim's live activation contract.
+    unsafe { credit_generic(ctx, func_bits, args_ptr, nargs, obs) };
     // SAFETY: this shim's contract covers ctx, args_ptr, out and site.
     unsafe {
         super::call_feedback::neovm_jit_call_prof::<true>(
@@ -380,7 +397,7 @@ pub unsafe extern "C" fn neovm_jit_t2_call_feedback_prof(
 /// leaf-observation record. The call comes from generated code holding the
 /// frame, or from a Rust caller that upholds this contract.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn neovm_jit_t2_call_feedback_census(
+pub(crate) unsafe extern "C" fn neovm_jit_t2_call_feedback_census(
     ctx: *mut u8,
     func_bits: i64,
     args_ptr: *const i64,
@@ -389,7 +406,8 @@ pub unsafe extern "C" fn neovm_jit_t2_call_feedback_census(
     site: *const CallSiteFeedback,
     obs: *const LeafObs,
 ) -> i64 {
-    credit_generic(ctx, func_bits, args_ptr, nargs, obs);
+    // SAFETY: `obs`, `site`, `ctx`, and `args_ptr[..nargs]` uphold this tier-2 profile shim's live activation contract.
+    unsafe { credit_generic(ctx, func_bits, args_ptr, nargs, obs) };
     // SAFETY: this shim's contract covers ctx, args_ptr, out and site.
     unsafe {
         super::call_feedback::neovm_jit_call_prof::<false>(
@@ -415,7 +433,7 @@ mod tests;
 /// leaf-observation record. The call comes from generated code holding the
 /// frame, or from a Rust caller that upholds this contract.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn neovm_jit_t2_call_use_prof(
+pub(crate) unsafe extern "C" fn neovm_jit_t2_call_use_prof(
     ctx: *mut u8,
     func_bits: i64,
     args_ptr: *const i64,
@@ -425,12 +443,15 @@ pub unsafe extern "C" fn neovm_jit_t2_call_use_prof(
     obs: *const LeafObs,
     loop_credit: i64,
 ) -> i64 {
-    if credit_window_open(obs) {
+    // SAFETY: `obs`, `site`, `ctx`, and `args_ptr[..nargs]` uphold this tier-2 profile shim's live activation contract.
+    if unsafe { credit_window_open(obs) } {
         // Record before HOF credit can request: the decision sees the target
         // of the current call. The plain shim still owns the full Lisp call.
-        super::call_feedback::record_at(site, func_bits, args_ptr, nargs);
+        // SAFETY: `obs`, `site`, `ctx`, and `args_ptr[..nargs]` uphold this tier-2 profile shim's live activation contract.
+        unsafe { super::call_feedback::record_at(site, func_bits, args_ptr, nargs) };
         if loop_credit != 0 {
-            credit_generic(ctx, func_bits, args_ptr, nargs, obs);
+            // SAFETY: `obs`, `site`, `ctx`, and `args_ptr[..nargs]` uphold this tier-2 profile shim's live activation contract.
+            unsafe { credit_generic(ctx, func_bits, args_ptr, nargs, obs) };
         }
     }
     // SAFETY: this shim's contract above covers ctx, args_ptr and out.
@@ -447,7 +468,7 @@ pub unsafe extern "C" fn neovm_jit_t2_call_use_prof(
 /// leaf-observation record. The call comes from generated code holding the
 /// frame, or from a Rust caller that upholds this contract.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn neovm_jit_t2_apply_use_prof(
+pub(crate) unsafe extern "C" fn neovm_jit_t2_apply_use_prof(
     ctx: *mut u8,
     func_bits: i64,
     args_ptr: *const i64,
@@ -456,8 +477,10 @@ pub unsafe extern "C" fn neovm_jit_t2_apply_use_prof(
     site: *const CallSiteFeedback,
     obs: *const LeafObs,
 ) -> i64 {
-    if credit_window_open(obs) {
-        super::call_feedback::record_at(site, func_bits, args_ptr, nargs);
+    // SAFETY: `obs`, `site`, `ctx`, and `args_ptr[..nargs]` uphold this tier-2 profile shim's live activation contract.
+    if unsafe { credit_window_open(obs) } {
+        // SAFETY: `obs`, `site`, `ctx`, and `args_ptr[..nargs]` uphold this tier-2 profile shim's live activation contract.
+        unsafe { super::call_feedback::record_at(site, func_bits, args_ptr, nargs) };
     }
     // SAFETY: this shim's contract above covers ctx, args_ptr and out.
     unsafe { neovm_jit_apply(ctx, func_bits, args_ptr, nargs, out) }
@@ -473,12 +496,13 @@ pub unsafe extern "C" fn neovm_jit_t2_apply_use_prof(
 /// The call comes from generated code holding the frame, or from a Rust
 /// caller that upholds this contract.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn neovm_jit_t2_record_call_use_target(
+pub(crate) unsafe extern "C" fn neovm_jit_t2_record_call_use_target(
     site: *const CallSiteFeedback,
     target: i64,
     obs: *const LeafObs,
 ) {
-    if credit_window_open(obs) {
+    // SAFETY: `obs`, `site`, `ctx`, and `args_ptr[..nargs]` uphold this tier-2 profile shim's live activation contract.
+    if unsafe { credit_window_open(obs) } {
         // SAFETY: the calling leaf keeps its source's table alive.
         unsafe { &*site }.observe_counted(unsafe {
             /* SAFETY: JIT constant-pool word */

@@ -96,6 +96,11 @@ impl FrontendEventQueue {
     }
 
     #[doc(hidden)]
+    pub fn iter(&self) -> impl Iterator<Item = &InputEvent> {
+        self.events.iter()
+    }
+
+    #[doc(hidden)]
     pub fn len(&self) -> usize {
         self.events.len()
     }
@@ -223,6 +228,7 @@ fn semantics(event: &InputEvent) -> FrontendEventSemantics {
         | InputEvent::TtyByte { .. }
         | InputEvent::TtyCharacter { .. }
         | InputEvent::KeyPress { .. }
+        | InputEvent::NativeNonKey { .. }
         | InputEvent::MousePress { .. }
         | InputEvent::MouseRelease { .. }
         | InputEvent::MouseScroll { .. }
@@ -275,6 +281,7 @@ fn semantics(event: &InputEvent) -> FrontendEventSemantics {
         }
         // Native geometry and host notifications progress without a keystroke.
         InputEvent::Resize { .. }
+        | InputEvent::ResizeRequestCompleted { .. }
         | InputEvent::DisplayReset
         | InputEvent::WebView(..)
         | InputEvent::SurfaceCreateFailed { .. }
@@ -282,7 +289,8 @@ fn semantics(event: &InputEvent) -> FrontendEventSemantics {
         | InputEvent::TerminalCreateFailed { .. }
         | InputEvent::TerminalExited { .. }
         | InputEvent::TerminalTitleChanged { .. }
-        | InputEvent::SystemFontsChanged { .. } => ServiceDuringWait,
+        | InputEvent::SystemFontsChanged { .. }
+        | InputEvent::SystemFontRenderingChanged { .. } => ServiceDuringWait,
         InputEvent::TtyHangup { .. } => {
             // A lost device is not command input. Wait servicing routes
             // this typed event to handle_tty_hangup_input_event, which

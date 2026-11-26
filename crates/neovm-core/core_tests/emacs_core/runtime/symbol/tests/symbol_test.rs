@@ -151,7 +151,7 @@ fn symbol_write_window_holds_flags_then_interned_global() {
 fn intern_creates_symbol() {
     crate::test_utils::init_test_tracing();
     let mut ob = Obarray::new();
-    ob.intern("foo");
+    ob.intern_member("foo");
     assert!(ob.intern_soft("foo").is_some());
     assert!(ob.intern_soft("bar").is_none());
 }
@@ -265,7 +265,7 @@ fn t_and_nil_are_preinterned() {
 fn interning_keyword_materializes_gnu_self_evaluating_symbol_state() {
     crate::test_utils::init_test_tracing();
     let mut ob = Obarray::new();
-    ob.intern(":vm-keyword");
+    ob.intern_member(":vm-keyword");
     assert!(ob.is_constant(":vm-keyword"));
     assert!(ob.is_special(":vm-keyword"));
     assert_eq!(
@@ -615,11 +615,11 @@ fn make_symbol_localized_allocates_blv() {
     assert_eq!(sym.redirect(), SymbolRedirect::Localized);
     let blv = ob.blv(id).expect("BLV pointer");
     // defcell == valcell initially.
-    assert_eq!(blv.defcell.get(), blv.valcell.get());
+    assert_eq!(blv.defcell(), blv.valcell());
     // (sym . default)
-    assert_eq!(blv.defcell.get().cons_cdr(), Value::fixnum(42));
+    assert_eq!(blv.defcell().cons_cdr(), Value::fixnum(42));
     assert!(blv.where_buf.get().is_nil());
-    assert!(!blv.found);
+    assert!(!blv.found.get());
     assert!(!blv.local_if_set);
 }
 
@@ -645,11 +645,11 @@ fn trace_roots_walks_blv_pool() {
     // equal to defcell. Both must be present in the root set.
     let blv = ob.blv(id).expect("BLV");
     assert!(
-        roots.iter().any(|r| r.bits() == blv.defcell.get().bits()),
+        roots.iter().any(|r| r.bits() == blv.defcell().bits()),
         "BLV defcell should be traced as a root"
     );
     assert!(
-        roots.iter().any(|r| r.bits() == blv.valcell.get().bits()),
+        roots.iter().any(|r| r.bits() == blv.valcell().bits()),
         "BLV valcell should be traced as a root"
     );
 }
@@ -689,7 +689,7 @@ fn localized_swap_in_reads_buffer_local_value() {
     // The cache now records `where_buf == buf_a` and `found == true`.
     let blv = ob.blv(id).expect("BLV");
     assert_eq!(blv.where_buf.get(), buf_a);
-    assert!(blv.found);
+    assert!(blv.found.get());
 }
 
 /// Switching buffers reloads the BLV cache. A symbol with a binding
@@ -718,7 +718,7 @@ fn localized_blv_cache_invalidated_on_buffer_switch() {
     assert_eq!(v_b, Some(Value::fixnum(0)));
     let blv = ob.blv(id).expect("BLV");
     assert_eq!(blv.where_buf.get(), buf_b);
-    assert!(!blv.found);
+    assert!(!blv.found.get());
 }
 
 // Phase 5 — LOCALIZED write path.
@@ -745,7 +745,7 @@ fn indexed_localized_reads_preserve_shared_cells_defaults_and_void_values() {
         ob.read_localized_in_buffer(id, buffers.get(a).unwrap()),
         Some(Value::fixnum(42))
     );
-    assert_eq!(ob.blv(id).unwrap().valcell.get(), a_cell);
+    assert_eq!(ob.blv(id).unwrap().valcell(), a_cell);
 
     a_cell.set_cdr(Value::UNBOUND);
     assert_eq!(
@@ -756,7 +756,7 @@ fn indexed_localized_reads_preserve_shared_cells_defaults_and_void_values() {
         ob.read_localized_in_buffer(id, buffers.get(b).unwrap()),
         Some(Value::fixnum(7))
     );
-    assert!(!ob.blv(id).unwrap().found);
+    assert!(!ob.blv(id).unwrap().found.get());
     // Switching back must preserve voidness rather than falling through to
     // the default, and subsequent writes must reach the same shared cell.
     assert_eq!(
@@ -771,7 +771,7 @@ fn indexed_localized_reads_preserve_shared_cells_defaults_and_void_values() {
         ob.read_localized_in_buffer(id, buffers.get(a).unwrap()),
         Some(Value::T)
     );
-    assert_eq!(ob.blv(id).unwrap().valcell.get(), a_cell);
+    assert_eq!(ob.blv(id).unwrap().valcell(), a_cell);
     buffers
         .get_mut(a)
         .unwrap()
@@ -780,7 +780,7 @@ fn indexed_localized_reads_preserve_shared_cells_defaults_and_void_values() {
         ob.read_localized_in_buffer(id, buffers.get(a).unwrap()),
         Some(Value::fixnum(7))
     );
-    assert!(!ob.blv(id).unwrap().found);
+    assert!(!ob.blv(id).unwrap().found.get());
 }
 
 /// `set_internal_localized` with `local_if_set = true` and
@@ -841,7 +841,7 @@ fn set_localized_writes_default_when_no_local_if_set() {
     assert_eq!(new_alist.into_value(), Value::NIL);
     // The default value was updated to 99.
     let blv = ob.blv(id).expect("BLV");
-    assert_eq!(blv.defcell.get().cons_cdr(), Value::fixnum(99));
+    assert_eq!(blv.defcell().cons_cdr(), Value::fixnum(99));
 }
 
 /// When `let_shadows == true`, the auto-create branch is suppressed.
@@ -867,7 +867,7 @@ fn set_localized_does_not_create_when_let_shadows() {
     // No per-buffer binding created; defcell got the write.
     assert_eq!(new_alist.into_value(), Value::NIL);
     let blv = ob.blv(id).expect("BLV");
-    assert_eq!(blv.defcell.get().cons_cdr(), Value::fixnum(13));
+    assert_eq!(blv.defcell().cons_cdr(), Value::fixnum(13));
 }
 
 /// `set_internal_localized` with `bindflag = Bind` (let-binding's
@@ -894,7 +894,7 @@ fn set_localized_bind_never_auto_creates() {
     );
     assert_eq!(new_alist.into_value(), Value::NIL);
     let blv = ob.blv(id).expect("BLV");
-    assert_eq!(blv.defcell.get().cons_cdr(), Value::fixnum(7));
+    assert_eq!(blv.defcell().cons_cdr(), Value::fixnum(7));
 }
 
 /// If the target buffer's `local_var_alist` entry was replaced after the BLV
@@ -1037,8 +1037,8 @@ fn clone_obarray_deep_copies_blvs() {
 fn uninterned_keyword_and_nil_names_are_not_canonical_constants() {
     crate::test_utils::init_test_tracing();
     let mut eval = crate::test_utils::new_context();
-    let nil_id = crate::emacs_core::intern::intern_uninterned("nil");
-    let kw_id = crate::emacs_core::intern::intern_uninterned(":vm-k");
+    let nil_id = crate::emacs_core::intern::make_uninterned_symbol("nil");
+    let kw_id = crate::emacs_core::intern::make_uninterned_symbol(":vm-k");
 
     assert!(!eval.obarray().is_constant_id(nil_id));
     assert!(!eval.obarray().is_constant_id(kw_id));

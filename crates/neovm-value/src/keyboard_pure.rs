@@ -3,7 +3,7 @@ use crate::error::LispCondition;
 use crate::tagged::value::SymbolMode;
 use crate::{
     error::{Flow, signal},
-    intern::resolve_sym,
+    intern::{intern, resolve_sym},
     value::{Value, ValueKind, VecLikeType, list_to_vec},
 };
 
@@ -365,7 +365,8 @@ pub fn key_sequence_values(value: &Value, mode: SymbolMode) -> Result<Vec<Value>
     }
 }
 
-pub fn resolve_control_code(code: i64) -> Option<i64> {
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn resolve_control_code(code: i64) -> Option<i64> {
     match code {
         32 => Some(0),               // SPC
         63 => Some(127),             // ?
@@ -381,7 +382,8 @@ pub fn resolve_control_code(code: i64) -> Option<i64> {
     }
 }
 
-pub fn event_modifier_bit(symbol: &str) -> Option<i64> {
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn event_modifier_bit(symbol: &str) -> Option<i64> {
     match symbol {
         "C" | "ctrl" | "control" => Some(KEY_CHAR_CTRL),
         "M" | "meta" => Some(KEY_CHAR_META),
@@ -439,7 +441,12 @@ pub fn reorder_event_symbol_modifiers(value: Value, mode: SymbolMode) -> Value {
     if canonical == name {
         value
     } else {
-        Value::symbol(canonical)
+        // GNU's `reorder_modifiers` keeps the symbol it was given and
+        // `apply_modifiers` interns a derived name (src/keyboard.c). This
+        // value helper has no obarray, so it resolves the canonical id;
+        // the publication site that hands the event to Lisp (define-key,
+        // the loader) publishes membership through the member funnels.
+        Value::from_sym_id(intern(&canonical))
     }
 }
 
@@ -523,11 +530,14 @@ pub fn convert_lucid_event_list(items: &[Value], mode: SymbolMode) -> Option<Val
             if mod_bits == 0 {
                 Some(Value::symbol(name))
             } else {
-                Some(Value::symbol(format!(
+                // See reorder_event_symbol_modifiers: the derived modifier
+                // spelling resolves a canonical id here; the publication
+                // site makes it a member.
+                Some(Value::from_sym_id(intern(&format!(
                     "{}{}",
                     event_modifier_prefix(mod_bits),
                     name
-                )))
+                ))))
             }
         }
         _ => None,
@@ -571,28 +581,6 @@ pub fn event_modifier_prefix(bits: i64) -> String {
     }
     // The `click' modifier is denoted by the absence of down/drag/etc.
     out
-}
-
-#[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
-pub fn basic_char_code(mut code: i64) -> i64 {
-    code &= KEY_CHAR_CODE_MASK;
-    match code {
-        0 => 64,
-        1..=26 => code + 96,
-        27..=31 => code + 64,
-        65..=90 => code + 32,
-        _ => code,
-    }
-}
-
-#[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
-pub fn symbol_has_modifier_prefix(name: &str) -> bool {
-    name.starts_with("C-")
-        || name.starts_with("M-")
-        || name.starts_with("S-")
-        || name.starts_with("s-")
-        || name.starts_with("H-")
-        || name.starts_with("A-")
 }
 
 pub fn register_bootstrap_vars(obarray: &mut crate::symbol::Obarray) {

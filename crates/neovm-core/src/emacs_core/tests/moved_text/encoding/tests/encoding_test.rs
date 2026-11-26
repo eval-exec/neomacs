@@ -1,4 +1,5 @@
 use super::*;
+use neovm_value::intern::intern;
 use std::fmt;
 
 use encoding_rs::{BIG5, GBK};
@@ -787,9 +788,19 @@ fn undecided_write_encoding_preserves_bytes_and_converts_eol() {
 #[test]
 fn multibyte_detection_treats_unibyte_storage_as_unibyte() {
     crate::test_utils::init_test_tracing();
-    assert!(!is_multibyte_string("abc"));
+    assert!(
+        !neovm_value::value::Value::string("abc")
+            .as_lisp_string()
+            .expect("string")
+            .is_multibyte()
+    );
     // Pure ASCII is not multibyte
-    assert!(!is_multibyte_string("hello"));
+    assert!(
+        !neovm_value::value::Value::string("hello")
+            .as_lisp_string()
+            .expect("string")
+            .is_multibyte()
+    );
 }
 
 #[test]
@@ -958,7 +969,6 @@ fn ccl_coding_system_executes_registered_identity_program() {
 #[test]
 fn decode_sjis_attaches_charset_property() {
     crate::test_utils::init_test_tracing();
-    use neovm_value::intern::intern;
     // Shift-JIS charset list is (ascii katakana-jisx0201 <kanji>); register a
     // deterministic dim-1 katakana charset and a dim-2 kanji charset.
     let mut kana_args = vec![Value::NIL; 17];
@@ -2209,7 +2219,10 @@ fn register_test_jis() -> neovm_value::intern::SymId {
 }
 
 fn charset_prop(charset: &str) -> Value {
-    Value::list(vec![Value::symbol("charset"), Value::symbol(charset)])
+    Value::list(vec![
+        Value::symbol("charset"),
+        Value::from_sym_id(intern(charset)),
+    ])
 }
 
 fn fmt(eval: &mut crate::emacs_core::Context, src: &str) -> String {

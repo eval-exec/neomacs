@@ -25,15 +25,15 @@ enum SlotStorage {
 struct ChartableImage {
     table: CharTableObj,
     child: SubCharTableObj,
-    child_slots: [TaggedValue; 128],
-    extra_slots: [TaggedValue; 3],
+    child_slots: [AtomicTaggedValue; 128],
+    extra_slots: [AtomicTaggedValue; 3],
 }
 
 /// Only the immutable backing is borrowed after registration. The live table
 /// headers remain behind their Values, so no shared borrow spans their writes.
 struct ImageBacking {
-    child_slots: &'static [TaggedValue; 128],
-    extra_slots: &'static [TaggedValue; 3],
+    child_slots: &'static [AtomicTaggedValue; 128],
+    extra_slots: &'static [AtomicTaggedValue; 3],
 }
 
 fn image(heap: &mut TaggedHeap, storage: SlotStorage) -> (TaggedValue, ImageBacking) {
@@ -61,8 +61,8 @@ fn image_with_child(
             min_char: 0,
             contents: LispValueVec::owned(vec![initial_child; 128]),
         },
-        child_slots: [initial_child; 128],
-        extra_slots: [TaggedValue::NIL; 3],
+        child_slots: [initial_child; 128].map(AtomicTaggedValue::new),
+        extra_slots: [TaggedValue::NIL; 3].map(AtomicTaggedValue::new),
     }));
     match storage {
         SlotStorage::Owned => {}
@@ -188,8 +188,8 @@ fn mapped_char_table_backing_promotion_retains_capture_storage() {
         table.as_char_table_obj().unwrap().extras[1],
         TaggedValue::fixnum(16_383)
     );
-    assert!(backing.child_slots.iter().all(|value| value.is_nil()));
-    assert!(backing.extra_slots.iter().all(|value| value.is_nil()));
+    assert!(backing.child_slots.iter().all(|value| value.get().is_nil()));
+    assert!(backing.extra_slots.iter().all(|value| value.get().is_nil()));
 }
 
 #[test]
@@ -222,8 +222,8 @@ fn mapped_chartable_promotion_retains_start_graph_heap_children() {
     heap.seed_root(table);
     let bytes_before = heap.live_bytes();
     heap.incremental_drain_all();
-    heap.incremental_finish(bytes_before, std::time::Instant::now());
-    heap.finish_incremental_sweep_now();
+    heap.incremental_finish_for_test(bytes_before, std::time::Instant::now());
+    heap.finish_incremental_sweep_now_for_test();
     heap.finish_first_partition_cycle();
 
     assert!(heap.owns_heap_value_for_test(head));
@@ -232,7 +232,7 @@ fn mapped_chartable_promotion_retains_start_graph_heap_children() {
     assert_eq!(head.cons_car(), TaggedValue::fixnum(19));
     assert_eq!(head.cons_cdr(), tail);
     assert_eq!(tail.cons_car(), TaggedValue::fixnum(23));
-    assert!(backing.child_slots.iter().all(|value| *value == head));
+    assert!(backing.child_slots.iter().all(|value| value.get() == head));
     for character in 0..128 {
         assert_eq!(
             ct_lookup(&table, character).unwrap(),

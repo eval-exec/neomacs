@@ -21,7 +21,7 @@
 use std::path::PathBuf;
 
 /// `ABI_TAG_VERSION` values in landing order.  Append-only.
-const ABI_TAG_HISTORY: &[u32] = &[52, 53];
+const ABI_TAG_HISTORY: &[u32] = &[52, 53, 54];
 
 const DECL: &str = "const ABI_TAG_VERSION: u32 = ";
 
@@ -57,4 +57,43 @@ fn aot_abi_tag_guard_pins_the_version_and_requires_an_append_only_history() {
          append the new value to the history",
         ABI_TAG_HISTORY.last()
     );
+}
+
+/// `lower_car_cdr` and `emit_plain_slot_address` bake cons and vector field
+/// offsets into AOT code. `compute_abi_tag` must salt those layouts, or a
+/// `NEOVM_AOT_DIR` unit from another build is served and reads the wrong words.
+#[test]
+fn abi_tag_salts_heap_layouts_baked_into_aot_code() {
+    let src = aot_source();
+    let start = src
+        .find("const fn compute_abi_tag()")
+        .expect("compute_abi_tag");
+    let body = &src[start..];
+    let end = body.find("\n}\n").expect("compute_abi_tag closing brace");
+    let body = &body[..end];
+    for needle in [
+        "CONS_CAR_OFFSET",
+        "CONS_CDR_OFFSET",
+        "TAG_MASK",
+        "TAG_CONS",
+        "TAG_STRING",
+        "TAG_VECLIKE",
+        "offset_of!(neovm_value::tagged::header::VectorObj, data)",
+        "offset_of!(neovm_value::tagged::header::RecordObj, data)",
+        "offset_of!(neovm_value::tagged::header::StringObj, data)",
+        "offset_of!(neovm_value::tagged::header::VecLikeHeader, type_tag)",
+        "size_of::<neovm_value::tagged::header::GcHeader>()",
+        "offset_of!(neovm_value::tagged::header::GcHeader, marked)",
+        "offset_of!(neovm_value::tagged::header::GcHeader, kind)",
+        "offset_of!(neovm_value::tagged::header::GcHeader, tenured)",
+        "offset_of!(neovm_value::tagged::header::GcHeader, remembered)",
+        "offset_of!(neovm_value::tagged::header::GcHeader, flags)",
+        "offset_of!(neovm_value::tagged::header::GcHeader, generation)",
+        "offset_of!(neovm_value::tagged::header::GcHeader, next)",
+    ] {
+        assert!(
+            body.contains(needle),
+            "compute_abi_tag does not salt {needle}; a stale NEOVM_AOT_DIR unit would keep the old heap layout"
+        );
+    }
 }

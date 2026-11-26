@@ -259,7 +259,7 @@ const ORG_REF_TEST_PRELUDE: &str = r####"
                 (expand-file-name
                  (format "org-ref362-%s project 界" case-id) owner))))
     (unless (and (file-name-absolute-p root)
-                 (file-in-directory-p root owner)
+                 (neomacs-melpa-path-inside-p root owner)
                  (not (equal (directory-file-name root)
                              (directory-file-name owner)))
                  (not (file-exists-p root)))
@@ -274,7 +274,7 @@ const ORG_REF_TEST_PRELUDE: &str = r####"
                 :library (file-name-as-directory
                           (expand-file-name "library" root))))
       (t
-       (when (and (file-directory-p root) (file-in-directory-p root owner))
+       (when (and (file-directory-p root) (neomacs-melpa-path-inside-p root owner))
          (delete-directory root t))
        (signal (car condition) (cdr condition))))))
 
@@ -1027,7 +1027,7 @@ bibliography:references.bib
                  (lambda ()
                    (unless (and (file-name-absolute-p root)
                                 (file-directory-p root)
-                                (file-in-directory-p root owner)
+                                (neomacs-melpa-path-inside-p root owner)
                                 (not (equal (directory-file-name root)
                                             (directory-file-name owner))))
                      (error "Unsafe Org Ref cleanup root: %S" root))

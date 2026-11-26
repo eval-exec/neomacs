@@ -157,7 +157,7 @@ fn add(dst: &mut usize, bytes: usize) {
 /// finished, and MUST be false after promotion or sweep reset final marks.
 pub(super) fn snapshot(heap: &TaggedHeap, marks_final: bool) -> MemoryInventory {
     debug_assert!(!heap.alloc_regions_open());
-    debug_assert!(!heap.concurrent_mark_running);
+    debug_assert!(!heap.concurrent_mark_running());
     let full_marks = marks_final && !heap.is_minor_collection();
     let mut out = MemoryInventory::default();
     if marks_final {
@@ -215,7 +215,11 @@ pub(super) fn snapshot(heap: &TaggedHeap, marks_final: bool) -> MemoryInventory 
         heap.generational.old_sweep_pending,
         heap.sweep_noncons_pending,
     ] {
-        boxed_inventory(heap, head, marks_final, full_marks, &mut out);
+        // SAFETY: each head is null or the head of a valid, null-terminated intrusive
+        // `gc_link` chain of live objects owned by `heap` while `heap` is borrowed.
+        unsafe {
+            boxed_inventory(heap, head, marks_final, full_marks, &mut out);
+        }
     }
     out.mapped = mapped_inventory(heap, marks_final);
     out.text_properties.merge(&out.ages.young.text_properties);
@@ -271,7 +275,7 @@ fn cons_inventory(
         .blocks
         .saturating_mul(CONS_BLOCK_BYTES - CONS_CELLS_BYTES);
     for block in &heap.cons_blocks {
-        let bumped = block.next_index as usize;
+        let bumped = block.next_index();
         let mut occupied = 0usize;
         // The free-list poison is the allocated/free discriminator here;
         // mark bits cannot distinguish newly allocated white cells from free
@@ -342,15 +346,17 @@ fn header_age(header: &GcHeader) -> Age {
     }
 }
 
-fn shared_bytecode_bytes(header: *const GcHeader) -> usize {
+/// # Safety
+/// `header` must point to a live, initialized [`GcHeader`] whose concrete
+/// object matches `(*header).kind` and `type_tag`.
+unsafe fn shared_bytecode_bytes(header: *const GcHeader) -> usize {
     unsafe {
         if (*header).kind == HeapObjectKind::VecLike
             && (*(header as *const VecLikeHeader)).type_tag == VecLikeType::ByteCode
         {
             (*(header as *const ByteCodeObj))
                 .data
-                .gnu_bytecode_bytes
-                .as_ref()
+                .gnu_bytecode_bytes()
                 .map_or(0, LispByteVec::owned_bytes)
         } else {
             0
@@ -358,8 +364,11 @@ fn shared_bytecode_bytes(header: *const GcHeader) -> usize {
     }
 }
 
+/// # Safety
+/// `header` must point to a live, initialized GC object owned by `heap` while
+/// `heap` is not mutating object headers concurrently.
 #[allow(clippy::too_many_arguments)]
-fn note_header(
+unsafe fn note_header(
     heap: &TaggedHeap,
     header: *const GcHeader,
     struct_bytes: usize,
@@ -372,10 +381,13 @@ fn note_header(
 ) {
     let h = unsafe { &*header };
     let age = header_age(h);
-    let pacing = heap.collector_object_bytes(header);
-    let shared = shared_bytecode_bytes(header);
+    // SAFETY: caller guarantees `header` points to a live initialized `GcHeader` owned by `heap`.
+    let pacing = unsafe { heap.collector_object_bytes(header) };
+    // SAFETY: caller guarantees `header` points to a live initialized `GcHeader` owned by `heap`.
+    let shared = unsafe { shared_bytecode_bytes(header) };
     let owned_payload = payload.capacity_bytes.saturating_sub(shared);
-    let text_properties = text_property_storage(header);
+    // SAFETY: caller guarantees `header` points to a live initialized `GcHeader` owned by `heap`.
+    let text_properties = unsafe { text_property_storage(header) };
     let item = ages.get_mut(age);
     add(
         &mut item.known_text_property_capacity_bytes,
@@ -424,19 +436,20 @@ fn arena_inventory<T: PagedObject>(
         ..ArenaInventory::default()
     };
     for page in &arena.pages {
-        out.occupied_slots += page.allocated;
-        out.reclaimed_slot_bytes += page.next_index.saturating_sub(page.allocated) * T::SLOT_BYTES;
-        out.never_bumped_slot_bytes += (ObjectPage::<T>::SLOTS - page.next_index) * T::SLOT_BYTES;
-        out.retired_pages += usize::from(page.retired);
-        if page.allocated == 0 {
+        out.occupied_slots += page.allocated();
+        out.reclaimed_slot_bytes +=
+            page.next_index().saturating_sub(page.allocated()) * T::SLOT_BYTES;
+        out.never_bumped_slot_bytes += (ObjectPage::<T>::SLOTS - page.next_index()) * T::SLOT_BYTES;
+        out.retired_pages += usize::from(page.is_retired());
+        if page.allocated() == 0 {
             out.empty_pages += 1;
-        } else if page.allocated == ObjectPage::<T>::SLOTS {
+        } else if page.allocated() == ObjectPage::<T>::SLOTS {
             out.full_pages += 1;
         } else {
             out.partial_pages += 1;
         }
         for word in 0..ObjectPage::<T>::ALLOC_WORDS {
-            let mut bits = page.alloc_bits[word];
+            let mut bits = page.alloc_bits()[word];
             while bits != 0 {
                 let bit = bits.trailing_zeros() as usize;
                 bits &= bits - 1;
@@ -445,26 +458,31 @@ fn arena_inventory<T: PagedObject>(
                 let payload = payload_layout(object);
                 add(
                     &mut out.known_text_property_capacity_bytes,
-                    text_property_storage(header).known_owned_capacity_bytes,
+                    // SAFETY: `header` is a live object walked from `heap`'s owned arena/boxed storage during inventory.
+                    unsafe { text_property_storage(header) }.known_owned_capacity_bytes,
                 );
-                let shared = shared_bytecode_bytes(header);
+                // SAFETY: `header` is a live object walked from `heap`'s owned arena/boxed storage during inventory.
+                let shared = unsafe { shared_bytecode_bytes(header) };
                 add(
                     &mut out.known_owned_payload_capacity_bytes,
                     payload.capacity_bytes.saturating_sub(shared),
                 );
                 add(&mut out.known_payload_logical_bytes, payload.logical_bytes);
                 add(&mut out.bytecode_shared_reference_bytes, shared);
-                note_header(
-                    heap,
-                    header,
-                    size_of::<T>(),
-                    payload,
-                    marks_final,
-                    full_marks,
-                    ages,
-                    old_dead_pacing,
-                    old_dead_storage,
-                );
+                // SAFETY: `header` is a live object walked from `heap`'s owned arena/boxed storage during inventory.
+                unsafe {
+                    note_header(
+                        heap,
+                        header,
+                        size_of::<T>(),
+                        payload,
+                        marks_final,
+                        full_marks,
+                        ages,
+                        old_dead_pacing,
+                        old_dead_storage,
+                    );
+                }
             }
         }
     }
@@ -476,7 +494,10 @@ fn arena_inventory<T: PagedObject>(
     out
 }
 
-fn object_struct_bytes(header: *const GcHeader) -> usize {
+/// # Safety
+/// `header` must point to a live, initialized [`GcHeader`] whose concrete
+/// object matches `(*header).kind` and `type_tag`.
+unsafe fn object_struct_bytes(header: *const GcHeader) -> usize {
     unsafe {
         match (*header).kind {
             HeapObjectKind::String => size_of::<StringObj>(),
@@ -522,7 +543,9 @@ fn object_struct_bytes(header: *const GcHeader) -> usize {
     }
 }
 
-fn header_payload(heap: &TaggedHeap, header: *const GcHeader) -> PayloadLayout {
+/// # Safety
+/// `header` must point to a live, initialized GC object owned by `heap`.
+unsafe fn header_payload(heap: &TaggedHeap, header: *const GcHeader) -> PayloadLayout {
     unsafe {
         match (*header).kind {
             HeapObjectKind::String => {
@@ -569,7 +592,10 @@ fn header_payload(heap: &TaggedHeap, header: *const GcHeader) -> PayloadLayout {
     }
 }
 
-fn boxed_inventory(
+/// # Safety
+/// `header` must be null or the head of a valid, null-terminated intrusive
+/// `gc_link` chain of live GC objects owned by `heap`.
+unsafe fn boxed_inventory(
     heap: &TaggedHeap,
     mut header: *const GcHeader,
     marks_final: bool,
@@ -577,7 +603,8 @@ fn boxed_inventory(
     out: &mut MemoryInventory,
 ) {
     while !header.is_null() {
-        let class = TaggedHeap::boxed_class(header);
+        // SAFETY: `header` is a live object walked from `heap`'s owned arena/boxed storage during inventory.
+        let class = unsafe { TaggedHeap::boxed_class(header) };
         let index = match out.boxed.iter().position(|item| item.class == class) {
             Some(index) => index,
             None => {
@@ -588,33 +615,43 @@ fn boxed_inventory(
                 out.boxed.len() - 1
             }
         };
-        let payload = header_payload(heap, header);
-        let struct_bytes = object_struct_bytes(header);
+        // SAFETY: `header` is a live object walked from `heap`'s owned arena/boxed storage during inventory.
+        let payload = unsafe { header_payload(heap, header) };
+        // SAFETY: `header` is a live object walked from `heap`'s owned arena/boxed storage during inventory.
+        let struct_bytes = unsafe { object_struct_bytes(header) };
         let item = &mut out.boxed[index];
         add(
             &mut item.known_text_property_capacity_bytes,
-            text_property_storage(header).known_owned_capacity_bytes,
+            // SAFETY: `header` is a live object walked from `heap`'s owned arena/boxed storage during inventory.
+            unsafe { text_property_storage(header) }.known_owned_capacity_bytes,
         );
         item.objects += 1;
         add(&mut item.object_struct_bytes, struct_bytes);
-        add(&mut item.pacing_bytes, heap.collector_object_bytes(header));
+        // SAFETY: `header` is a live object walked from `heap`'s owned arena/boxed storage during inventory.
+        add(&mut item.pacing_bytes, unsafe {
+            heap.collector_object_bytes(header)
+        });
         add(
             &mut item.known_owned_payload_capacity_bytes,
             payload
                 .capacity_bytes
-                .saturating_sub(shared_bytecode_bytes(header)),
+                // SAFETY: `header` is a live object walked from `heap`'s owned arena/boxed storage during inventory.
+                .saturating_sub(unsafe { shared_bytecode_bytes(header) }),
         );
-        note_header(
-            heap,
-            header,
-            struct_bytes,
-            payload,
-            marks_final,
-            full_marks,
-            &mut out.ages,
-            &mut out.old_dead_pacing_bytes,
-            &mut out.old_dead_object_and_payload_bytes,
-        );
+        // SAFETY: `header` is a live object walked from `heap`'s owned arena/boxed storage during inventory.
+        unsafe {
+            note_header(
+                heap,
+                header,
+                struct_bytes,
+                payload,
+                marks_final,
+                full_marks,
+                &mut out.ages,
+                &mut out.old_dead_pacing_bytes,
+                &mut out.old_dead_object_and_payload_bytes,
+            );
+        }
         header = unsafe { (*header).gc_link() };
     }
 }
@@ -648,8 +685,10 @@ fn mapped_inventory(heap: &TaggedHeap, marks_final: bool) -> MappedInventory {
     }
     for object in &heap.mapped_string_objects {
         add(&mut out.image_object_bytes, object.byte_len);
+        // SAFETY: `object.ptr` points to a live mapped `StringObj` owned by `heap`'s image.
         let payload = unsafe { string_payload_with_text_properties(&(*object.ptr).data) };
-        let text_properties = text_property_storage(object.ptr.cast());
+        // SAFETY: `object.ptr` begins with a live `GcHeader` for a mapped `StringObj`.
+        let text_properties = unsafe { text_property_storage(object.ptr.cast()) };
         add(
             &mut out.known_text_property_capacity_bytes,
             text_properties.known_owned_capacity_bytes,
@@ -668,14 +707,17 @@ fn mapped_inventory(heap: &TaggedHeap, marks_final: bool) -> MappedInventory {
     for object in &heap.mapped_veclike_objects {
         add(&mut out.image_object_bytes, object.byte_len);
         let header = object.header.cast::<GcHeader>();
-        let payload = header_payload(heap, header);
-        let text_properties = text_property_storage(header);
+        // SAFETY: `header` points to a live mapped veclike `GcHeader` owned by `heap`.
+        let payload = unsafe { header_payload(heap, header) };
+        // SAFETY: `header` points to a live mapped veclike `GcHeader` owned by `heap`.
+        let text_properties = unsafe { text_property_storage(header) };
         add(
             &mut out.known_text_property_capacity_bytes,
             text_properties.known_owned_capacity_bytes,
         );
         out.text_properties.merge(&text_properties);
-        let shared = shared_bytecode_bytes(header);
+        // SAFETY: `header` points to a live mapped veclike `GcHeader` owned by `heap`.
+        let shared = unsafe { shared_bytecode_bytes(header) };
         add(
             &mut out.copied_owned_payload_capacity_bytes,
             payload.capacity_bytes.saturating_sub(shared),
@@ -897,7 +939,10 @@ impl TextPropertyInventory {
     }
 }
 
-fn text_property_storage(header: *const GcHeader) -> TextPropertyInventory {
+/// # Safety
+/// `header` must point to a live, initialized [`GcHeader`] whose concrete
+/// object matches `(*header).kind` and `type_tag`.
+unsafe fn text_property_storage(header: *const GcHeader) -> TextPropertyInventory {
     let mut out = TextPropertyInventory::default();
     unsafe {
         match (*header).kind {

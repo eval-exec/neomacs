@@ -135,10 +135,13 @@ static_assertions::assert_not_impl_any!(CompileEnvScope: Send, Sync);
 
 impl CompileEnvScope {
     /// Enter CTX's environment (nothing when CTX is null).
-    /// CTX must stay alive and its obarray and mask unmoved while the scope
-    /// lives: the dormant seam-provided context of a compile.
+    ///
+    /// # Safety
+    /// `ctx` must be null or point to a live, dormant owner-thread [`Context`]
+    /// whose obarray and runtime projection mask stay alive and unmoved for the
+    /// lifetime of the returned [`CompileEnvScope`].
     #[doc(hidden)]
-    pub fn enter(ctx: *const Context) -> Self {
+    pub unsafe fn enter(ctx: *const Context) -> Self {
         let state = if ctx.is_null() {
             CompileEnvState::Absent
         } else {
@@ -253,33 +256,41 @@ fn classify(sym: u32) -> Option<VarSite> {
         // SAFETY: round-trip of interned ids stored in inline-var sites (peer seal N8).
         let id = unsafe { SymId::from_raw(sym) };
         let cell = obarray.jit_symbol_cell_addr(id)?;
-        let shape = match obarray.get_by_id(id) {
-            Some(symbol) => match symbol.value_cell() {
-                ValueCell::Localized(blv) => {
-                    let blv_ptr = blv.as_ptr();
-                    // SAFETY: a `Localized` cell names a record the obarray
-                    // owns for its life.
-                    let blv = unsafe { &*blv_ptr };
-                    match blv.fwd {
-                        Some(fwd) if FwdKind::of(fwd.ty()).is_none() => VarShape::Plain,
-                        fwd => VarShape::Localized {
-                            blv: blv_ptr as usize,
-                            fwd: fwd.map_or(0, |f| f.address()),
-                            rule: fwd.and_then(|f| FwdKind::of(f.ty())),
-                            remembered_defcell: None,
-                        },
+        // The `*-consed` DEFVAR_INTs are derived from live allocation
+        // accounting on every read; no cached cell is authoritative. `Plain`
+        // at run time refuses the forwarded redirect and takes the shim,
+        // where `read_var_cached` refreshes the value.
+        let shape = if crate::emacs_core::eval::derived_counters::slot(id).is_some() {
+            VarShape::Plain
+        } else {
+            match obarray.get_by_id(id) {
+                Some(symbol) => match symbol.value_cell() {
+                    ValueCell::Localized(blv) => {
+                        let blv_ptr = blv.as_ptr();
+                        // SAFETY: a `Localized` cell names a record the obarray
+                        // owns for its life.
+                        let blv = unsafe { &*blv_ptr };
+                        match blv.fwd {
+                            Some(fwd) if FwdKind::of(fwd.ty()).is_none() => VarShape::Plain,
+                            fwd => VarShape::Localized {
+                                blv: blv_ptr as usize,
+                                fwd: fwd.map_or(0, |f| f.address()),
+                                rule: fwd.and_then(|f| FwdKind::of(f.ty())),
+                                remembered_defcell: None,
+                            },
+                        }
                     }
-                }
-                ValueCell::Forwarded(fwd) => match FwdKind::of(fwd.ty()) {
-                    Some(kind) => VarShape::Forwarded {
-                        desc: fwd.address(),
-                        kind,
+                    ValueCell::Forwarded(fwd) => match FwdKind::of(fwd.ty()) {
+                        Some(kind) => VarShape::Forwarded {
+                            desc: fwd.address(),
+                            kind,
+                        },
+                        None => VarShape::Plain,
                     },
-                    None => VarShape::Plain,
+                    ValueCell::Plain(_) | ValueCell::Alias(_) => VarShape::Plain,
                 },
-                ValueCell::Plain(_) | ValueCell::Alias(_) => VarShape::Plain,
-            },
-            None => VarShape::Plain,
+                None => VarShape::Plain,
+            }
         };
         let bit = sym as usize;
         let projected = mask
@@ -305,14 +316,16 @@ fn with_remembered_defcell(mut site: VarSite) -> VarSite {
     } = site.shape
     {
         // SAFETY: a live BLV record (see `classify`).
-        let defcell = unsafe {
-            (*(blv as *const neovm_value::symbol::LispBufferLocalValue))
-                .defcell
-                .get()
+        let defcell =
+            unsafe { (*(blv as *const neovm_value::symbol::LispBufferLocalValue)).defcell() };
+        // SAFETY: records a mapped cons in the remembered-set table ahead of
+        // compiled stores; never collects, re-enters `with_tagged_heap`, mints
+        // capability tokens, or mutates Lisp object payloads.
+        let remembered = unsafe {
+            neovm_value::tagged::gc::with_tagged_heap(|heap| {
+                heap.remember_mapped_cons_ahead_of_writes(defcell)
+            })
         };
-        let remembered = neovm_value::tagged::gc::with_tagged_heap(|heap| {
-            heap.remember_mapped_cons_ahead_of_writes(defcell)
-        });
         *remembered_defcell = remembered.then_some(defcell.bits());
     }
     site
@@ -722,7 +735,8 @@ pub(crate) fn reset_inline_var_sites() {
 /// cache.
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) fn with_compile_env_for_test<R>(ctx: &Context, f: impl FnOnce() -> R) -> R {
-    let _scope = CompileEnvScope::enter(ctx);
+    // SAFETY: `ctx` is the live `Context` for the duration of this test closure and `_scope` drops before return.
+    let _scope = unsafe { CompileEnvScope::enter(ctx) };
     f()
 }
 
@@ -2015,3 +2029,20 @@ pub(crate) fn carrier_tls_fingerprint(h: &mut u64) {
     );
     neovm_value::tls_fingerprint::mix(h, UNBIND_SITES.with(|slot| slot.borrow().len() as u64));
 }
+
+/// Cold source boundary. Never clear pointers that belong to a live compile.
+#[cold]
+pub(crate) fn validate_source_compile_scope()
+-> Result<(), super::super::source_suspension::SourceScopeRefusal> {
+    use super::super::source_suspension::SourceScopeRefusal;
+    match ENV.with(Cell::get) {
+        CompileEnvState::Absent => Ok(()),
+        CompileEnvState::Sim(_) | CompileEnvState::Green(_) => {
+            Err(SourceScopeRefusal::CompileEnvironment)
+        }
+    }
+}
+
+#[cfg(test)]
+#[path = "inline_vars/tests/source_suspension_test.rs"]
+mod source_suspension_tests;

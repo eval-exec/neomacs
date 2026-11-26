@@ -26,7 +26,7 @@ pub struct WebKitRuntimeState {
     /// applies generation-qualified measurements from backends that expose
     /// progress (WPEPlatform, and KVO on WKWebView's `estimatedProgress'),
     /// and pins 1.0 at "load-finished".
-    pub load_progress: f64,
+    pub(crate) load_progress: f64,
 }
 
 #[derive(Clone, Debug)]
@@ -41,9 +41,9 @@ pub struct XwidgetState {
     pub internal_xwidget_view_list: Value,
     pub webkit_state: HashMap<WebViewId, WebKitRuntimeState>,
     pub script_callbacks: HashMap<XwidgetScriptRequestId, PendingScriptCallback>,
-    pub xwidget_counter: u32,
-    pub webview_counter: u32,
-    pub script_counter: u64,
+    pub(crate) xwidget_counter: u32,
+    pub(crate) webview_counter: u32,
+    pub(crate) script_counter: u64,
 }
 
 impl XwidgetState {

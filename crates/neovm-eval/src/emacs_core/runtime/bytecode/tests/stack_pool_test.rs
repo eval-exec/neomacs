@@ -132,13 +132,13 @@ fn stack_return_reuses_storage_after_an_unhandled_signal() {
             crate::test_utils::unit_runtime(),
         );
         let mut failing = ByteCodeFunction::new(LambdaParams::simple(vec![]));
-        failing.constants = vec![Value::symbol("vm-stack-return-undefined-function")].into();
-        failing.ops = vec![Op::Constant(0), Op::Call(0), Op::Return];
-        failing.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(1);
+        failing.set_constants(vec![Value::symbol("vm-stack-return-undefined-function")].into());
+        failing.set_ops(vec![Op::Constant(0), Op::Call(0), Op::Return]);
+        failing.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(1));
         let mut succeeding = ByteCodeFunction::new(LambdaParams::simple(vec![]));
-        succeeding.constants = vec![Value::fixnum(42)].into();
-        succeeding.ops = vec![Op::Constant(0), Op::Return];
-        succeeding.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(1);
+        succeeding.set_constants(vec![Value::fixnum(42)].into());
+        succeeding.set_ops(vec![Op::Constant(0), Op::Return]);
+        succeeding.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(1));
 
         let mut vm = Vm::from_context(&mut context);
         #[cfg(feature = "jit")]
@@ -188,8 +188,6 @@ fn stack_pools_do_not_share_cached_execution_allocations() {
     let function = ByteCodeFunction::new(LambdaParams::simple(vec![]));
     let mut first =
         crate::emacs_core::eval::Context::new_minimal_vm_harness(crate::test_utils::unit_runtime());
-    let mut second =
-        crate::emacs_core::eval::Context::new_minimal_vm_harness(crate::test_utils::unit_runtime());
     assert_eq!(
         std::mem::size_of_val(&first.interpreter_stacks),
         std::mem::size_of::<InterpreterStackPool>(),
@@ -199,9 +197,12 @@ fn stack_pools_do_not_share_cached_execution_allocations() {
         .interpreter_stacks
         .give_back(populated_stacks(&function));
     assert_eq!(first.interpreter_stacks.free.len(), 1);
-    assert!(second.interpreter_stacks.free.is_empty());
     let first_storage = first.interpreter_stacks.take();
     assert!(first.interpreter_stacks.free.is_empty());
+    let _parked_first = first.park_for_test();
+    let mut second =
+        crate::emacs_core::eval::Context::new_minimal_vm_harness(crate::test_utils::unit_runtime());
+    assert!(second.interpreter_stacks.free.is_empty());
     second
         .interpreter_stacks
         .give_back(populated_stacks(&function));

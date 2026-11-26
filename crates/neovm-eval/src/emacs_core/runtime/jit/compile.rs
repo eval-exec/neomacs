@@ -254,9 +254,9 @@ fn materialize_spec_slot(
 /// interpreter's `params_on_stack` in `vm.rs` `run_frame`. Dynamic-binding
 /// bytecode binds params via `varref` instead and is not supported here.
 fn params_on_stack(f: &ByteCodeFunction) -> bool {
-    f.lexical
-        || f.env.is_some()
-        || matches!(f.arglist.kind(), neovm_value::value::ValueKind::Fixnum(_))
+    f.lexical()
+        || f.env().is_some()
+        || matches!(f.arglist().kind(), neovm_value::value::ValueKind::Fixnum(_))
 }
 
 /// Compile a [`ByteCodeFunction`] whose parameters live on the operand stack
@@ -268,7 +268,10 @@ fn params_on_stack(f: &ByteCodeFunction) -> bool {
 /// construction) exactly as the interpreter's `run_frame` seeds it.
 /// Dynamic-binding bytecode (params bound via `varbind`, not on the stack)
 /// still bails.
-pub fn compile_bytecode_function(f: &ByteCodeFunction) -> Result<CompiledLeaf, CompileError> {
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn compile_bytecode_function(
+    f: &ByteCodeFunction,
+) -> Result<CompiledLeaf, CompileError> {
     compile_bytecode_function_with(f, None)
 }
 
@@ -443,7 +446,7 @@ fn jit_profile_emit(
     let reason = error.map_or_else(|| "-".to_string(), |e| format!("{e:?}"));
     let reason = reason.replace(',', ";").replace('\n', " ");
     let fingerprint: Vec<String> = f
-        .constants
+        .constants()
         .iter()
         .filter_map(|v| v.as_bare_symbol_id())
         .take(6)
@@ -511,14 +514,19 @@ fn jit_profile_emit(
     };
     let arity = params.entry_depth();
     let inlinable = match obarray {
-        Some(ob) => analyze_cfg(ops, &f.constants, f.executable_gnu_byte_offset_map(), arity)
-            .map(|cfg| {
-                find_spec_sites(ops, &f.constants, &cfg.leaders, ob, false)
-                    .values()
-                    .filter(|site| site.kind == SpecCalleeKind::Bytecode)
-                    .count()
-            })
-            .unwrap_or(0),
+        Some(ob) => analyze_cfg(
+            ops,
+            f.constants(),
+            f.executable_gnu_byte_offset_map(),
+            arity,
+        )
+        .map(|cfg| {
+            find_spec_sites(ops, f.constants(), &cfg.leaders, ob, false)
+                .values()
+                .filter(|site| site.kind == SpecCalleeKind::Bytecode)
+                .count()
+        })
+        .unwrap_or(0),
         None => 0,
     };
     let compiled_id = f
@@ -823,7 +831,8 @@ pub(crate) fn body_is_call_heavy(ops: &[Op], constants: &[Value]) -> bool {
     calls > arith
 }
 
-pub fn compile_bytecode_function_with(
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn compile_bytecode_function_with(
     f: &ByteCodeFunction,
     obarray: Option<&Obarray>,
 ) -> Result<CompiledLeaf, CompileError> {
@@ -851,13 +860,13 @@ pub(crate) fn compile_bytecode_function_tiered(
 
 /// What a compile is asked to do beyond the body itself.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct CompileRequest {
+pub(crate) struct CompileRequest {
     /// The register allocator policy (`lowering::choose_regalloc`).
     pub(crate) regalloc: lowering::RegallocPolicy,
     /// Compile a body the profitability gate would refuse: the deferred
     /// re-attempt of a call-heavy body that has since proven hot enough to
     /// amortize its compile (`RuntimeState::profit_deferred_heat`).
-    pub bypass_profit_gate: bool,
+    pub(crate) bypass_profit_gate: bool,
     /// Why the compile runs (the `[neovm-jit-*phases]` origin rows).
     pub(crate) origin: super::stats::CompileOrigin,
     /// What the compile is in the tier spine (`tier2`): a T1 entry compile
@@ -914,14 +923,14 @@ pub(crate) fn front_requires_osr_evidence(f: &ByteCodeFunction, request: Compile
     let front = opt_profit::front(
         request,
         f.executable_ops(),
-        opt_profit::CallDensity::from(body_is_call_heavy(f.executable_ops(), &f.constants)),
+        opt_profit::CallDensity::from(body_is_call_heavy(f.executable_ops(), f.constants())),
         f.jit_runtime(),
     );
     opt_profit::requires_osr_evidence(front)
 }
 
 /// [`compile_bytecode_function_tiered`] with the full [`CompileRequest`].
-pub fn compile_bytecode_function_requested(
+pub(crate) fn compile_bytecode_function_requested(
     f: &ByteCodeFunction,
     obarray: Option<&Obarray>,
     request: CompileRequest,
@@ -936,7 +945,7 @@ pub fn compile_bytecode_function_requested(
         let _numeric = publish_numeric_feedback(f);
         snapshot::FrontFeedbackScope::Main { _scope: _numeric }
     };
-    let call_heavy = body_is_call_heavy(f.executable_ops(), &f.constants);
+    let call_heavy = body_is_call_heavy(f.executable_ops(), f.constants());
     let self_recursive = body_calls_itself(f, obarray);
     let _scope = lowering::RegallocScope::enter(regalloc_for_shape(
         request.regalloc,
@@ -1011,7 +1020,8 @@ pub fn compile_bytecode_function_requested(
         // The live function's declared depth, not the JIT operand-stack
         // depth. Re-arm of a redefined callee compiles a new leaf, so this
         // stamp is the size the next call charges.
-        leaf.frame_bytes = crate::emacs_core::bytecode::vm::bytecode_frame_bytes(f.max_stack.get());
+        leaf.frame_bytes =
+            crate::emacs_core::bytecode::vm::bytecode_frame_bytes(f.max_stack().get());
     }
     if jit_profile_path().is_some() {
         let _phase = super::stats::enter_phase(super::stats::CompilePhase::Other);
@@ -1077,7 +1087,7 @@ fn body_calls_itself(f: &ByteCodeFunction, obarray: Option<&Obarray>) -> bool {
     {
         return false;
     }
-    f.constants.iter().any(|c| {
+    f.constants().iter().any(|c| {
         c.as_bare_symbol_id()
             .and_then(|id| obarray.symbol_function_id(id))
             .is_some_and(|binding| binding.is_bytecode_object_of(f))
@@ -1115,14 +1125,14 @@ fn resolve_inline_callee(ob: &Obarray, sym: Value) -> Option<mir::MirFunction> {
     // a real call. A depth that fits here is still spliced: the caller's
     // frame does not grow by the callee's max_stack, and the splice does
     // not repeat the positional compare.
-    if !crate::emacs_core::bytecode::vm::declared_frame_fits(bc.max_stack.get()) {
+    if !crate::emacs_core::bytecode::vm::declared_frame_fits(bc.max_stack().get()) {
         return None;
     }
     // Required-only lexical, and no captured lexenv: inlining drops the lexenv
     // install, which is only otherwise safe because lexenv-reading ops lower to
     // Opaque and `callee_inlinable` rejects them — keep the safety local here too.
     let arity = JitParamShape::try_from(bc).ok()?.fixed_arity()?;
-    if !bc.lexical || bc.env.is_some() {
+    if !bc.lexical() || bc.env().is_some() {
         return None;
     }
     // A patched source's leading constants are per-instance; inlining would
@@ -1160,7 +1170,7 @@ fn resolve_inline_callee(ob: &Obarray, sym: Value) -> Option<mir::MirFunction> {
     }
     mir::build_mir(
         bc.executable_ops(),
-        &bc.constants,
+        bc.constants(),
         bc.executable_gnu_byte_offset_map(),
         arity,
     )
@@ -3569,7 +3579,8 @@ pub(crate) fn baseline_needs_rt(ops: &[Op], has_backedge: bool) -> bool {
 /// Heap-store leaves must be lowered with their intended executing heap
 /// installed; they are not portable across heaps or generational modes.
 /// Heapless lowering retains the legacy generation-disabled shape.
-pub fn lower_leaf(
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn lower_leaf(
     ops: &[Op],
     constants: &[Value],
     arity: usize,
@@ -3580,7 +3591,8 @@ pub fn lower_leaf(
 /// [`lower_leaf`] with the function's GNU byte-offset map, needed to resolve
 /// `Op::Switch` jump-table addresses to instruction indices (GNU bytecode
 /// stores byte offsets; natively compiled chunks store indices directly).
-pub fn lower_leaf_with_map(
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn lower_leaf_with_map(
     ops: &[Op],
     constants: &[Value],
     arity: usize,
@@ -3592,7 +3604,8 @@ pub fn lower_leaf_with_map(
 /// [`lower_leaf_with_map`] plus the compiling thread's obarray, enabling
 /// direct-call speculation (constant-symbol callees bound to bytecode get
 /// epoch-validated direct calls; see [`find_spec_sites`]).
-pub fn lower_leaf_full(
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn lower_leaf_full(
     ops: &[Op],
     constants: &[Value],
     arity: usize,
@@ -3632,7 +3645,7 @@ fn mask_dynamic_prefix(constants: &[Value], dynamic_prefix: usize) -> Vec<Value>
 /// mid-execution. The OSR entry checks the header's known-fixnum facts against
 /// the original tagged snapshot before reusing those facts or untagging slot
 /// variables. A failed entry guard resumes at the header without bytecode effects.
-pub fn lower_leaf_full_osr(
+pub(crate) fn lower_leaf_full_osr(
     ops: &[Op],
     constants: &[Value],
     arity: usize,
@@ -3886,7 +3899,7 @@ fn lower_leaf_body_with_plan(
                 .get_bytecode_data()
                 .expect("admitted callback");
             for v in code
-                .constants
+                .constants()
                 .iter()
                 .skip(site.prefix)
                 .copied()
@@ -4138,12 +4151,12 @@ pub(crate) struct BaselineAotMeta {
     /// VarBind/Unbind/save-* present (the loader's `has_binds`).
     pub has_binds: bool,
     /// condition-case/catch handlers present.
-    pub has_handlers: bool,
+    pub(crate) has_handlers: bool,
     /// R2 increment B2: the `Op::Call` subr/bytecode spec sites baked into this
     /// leaf (in slot order — descriptor position == codegen slot index). Empty when
     /// emitted without a live obarray (CBSym-only, increment A). The descriptor
     /// carries these so the loader can re-classify + arm each runtime `SpecSlot`.
-    pub spec_sites: Vec<super::aot::AotSpecSite>,
+    pub(crate) spec_sites: Vec<super::aot::AotSpecSite>,
 }
 
 /// R2-E (baseline-tier AOT emit): lower a bytecode body through the BASELINE tier

@@ -1,4 +1,5 @@
 use super::*;
+use neovm_value::intern::intern;
 use neovm_value::value::positions::{CharPos0, CharRange};
 use std::path::PathBuf;
 
@@ -240,8 +241,7 @@ fn bookmark_copied_properties_have_only_manager_roots() {
             assert_eq!(
                 (unsafe { Value::from_bits(*bits) })
                     .as_vector_data()
-                    .expect("live bookmark property vector")
-                    .as_slice(),
+                    .expect("live bookmark property vector"),
                 &[Value::fixnum(index as i64)]
             );
         }
@@ -834,7 +834,7 @@ fn bookmark_record_key_domain_matches_gnu_bookmark_props() {
         (BookmarkRecordKey::Position, "position"),
         (BookmarkRecordKey::Annotation, "annotation"),
     ] {
-        let value = Value::symbol(name);
+        let value = Value::from_sym_id(intern(name));
         assert_eq!(key.name(), name);
         assert_eq!(BookmarkRecordKey::from_lisp_value(&value), Some(key));
     }

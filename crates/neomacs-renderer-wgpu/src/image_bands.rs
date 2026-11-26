@@ -355,10 +355,10 @@ pub(crate) enum BandedSource {
 /// The pixels are the target's own buffer, so they are at the raster's size and
 /// in its coordinates — there is no native-size image anywhere in this
 /// structure, which is the point. Which mask the source has is not the raster's
-/// answer: that is classified from the source's own alphas as its rows are read
-/// (`classify_alpha`), because a filtered raster has alphas the source never
-/// had: intermediate ones, and — a kernel with negative lobes being what it
-/// is — ones the source's own range cannot hold.
+/// answer: the decoder preserves the encoded transparency representation,
+/// because a filtered raster has alphas the source never had. In particular,
+/// PNG native alpha and tRNS transparency can produce identical RGBA pixels
+/// while only binary tRNS creates GNU's clipping mask.
 pub(crate) struct RasterPixels {
     native: ImageNativeExtent,
     raster: ImageRasterExtent,
@@ -396,12 +396,11 @@ impl RasterPixels {
     }
 }
 
-/// The mask identity of an RGBA buffer, as GNU's `:mask` reads it.
+/// Classify pixel alpha when a decoder supplies no format-specific mask origin.
 ///
-/// Continuous alpha is a different fact from a clipping mask, and the
-/// distinction is made from the decoded source pixels rather than from
-/// interpolated ones: the renderer may store both as RGBA, but storage must not
-/// collapse them into one semantic state.
+/// This fallback cannot distinguish native alpha from a clipping mask with
+/// identical RGBA pixels. Formats such as PNG supply their decoder's identity
+/// instead, before expansion or interpolation loses that distinction.
 pub(crate) fn classify_alpha(rgba: &[u8]) -> ImageMaskKind {
     let mut has_transparent = false;
     for alpha in rgba.iter().skip(3).step_by(4).copied() {
@@ -415,6 +414,32 @@ pub(crate) fn classify_alpha(rgba: &[u8]) -> ImageMaskKind {
         ImageMaskKind::Clipping
     } else {
         ImageMaskKind::None
+    }
+}
+
+/// PNG's encoded transparency representation, before RGBA expansion.
+///
+/// GNU `png_load_body` (`src/image.c:8407-8423,8507-8513`) allocates a
+/// clipping mask only for tRNS without partial alpha. RGB/grayscale tRNS
+/// contains a transparent sample key; only an indexed tRNS contains alpha
+/// values. Inspect the entire palette alpha table, including unused entries.
+pub(crate) fn png_source_mask(info: &png::Info<'_>) -> ImageMaskKind {
+    match info.color_type {
+        png::ColorType::Rgba | png::ColorType::GrayscaleAlpha => ImageMaskKind::AlphaChannel,
+        png::ColorType::Indexed => match info.trns.as_deref() {
+            Some(alpha) if alpha.iter().any(|value| *value != 0 && *value != 255) => {
+                ImageMaskKind::AlphaChannel
+            }
+            Some(_) => ImageMaskKind::Clipping,
+            None => ImageMaskKind::None,
+        },
+        png::ColorType::Rgb | png::ColorType::Grayscale => {
+            if info.trns.is_some() {
+                ImageMaskKind::Clipping
+            } else {
+                ImageMaskKind::None
+            }
+        }
     }
 }
 
@@ -804,7 +829,7 @@ pub(crate) struct PngRows {
     target: RasterTarget,
     /// One source row, expanded to RGBA.
     row: Vec<u8>,
-    /// The mask identity of the rows read so far.
+    /// The encoded PNG transparency representation, before RGBA expansion.
     mask: ImageMaskKind,
     /// Rows read so far. Every band is derived from this cursor.
     decoded: u32,
@@ -832,6 +857,7 @@ impl PngRows {
         // picture from the one the whole-image path decodes.
         decoder.set_transformations(png::Transformations::EXPAND);
         let reader = decoder.read_info().ok()?;
+        let mask = png_source_mask(reader.info());
         let (width, height) = (reader.info().width, reader.info().height);
         // Adam7 rows are partial rows, so an interlaced source is read whole
         // rather than guessed at — see
@@ -859,7 +885,7 @@ impl PngRows {
             native,
             band: plan.band_rows(width, height),
             format,
-            mask: ImageMaskKind::None,
+            mask,
             reader,
             decoded: 0,
             failed: false,
@@ -873,7 +899,6 @@ impl PngRows {
             format,
             target,
             row,
-            mask,
             ..
         } = self;
         let format = *format;
@@ -884,13 +909,8 @@ impl PngRows {
             return Err(());
         };
         format.expand_row(source.data(), row).ok_or(())?;
-        // The mask is a property of the source's own pixels, so it is read from
-        // them rather than from the raster they are filtered into: the filter
-        // gives a source with only opaque and clear pixels alphas in between,
-        // and asking the raster which mask it has would be asking the filter.
-        if format.may_be_transparent() {
-            *mask = merge_mask(*mask, classify_alpha(row));
-        }
+        // The mask identity came from the encoded header in `open`: neither
+        // expansion to RGBA nor resampling can recover native alpha vs tRNS.
         target.push_row(row);
         Ok(())
     }

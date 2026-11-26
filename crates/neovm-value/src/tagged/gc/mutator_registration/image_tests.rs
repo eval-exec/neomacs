@@ -1,19 +1,65 @@
-#![forbid(unsafe_code)]
+#![deny(unsafe_code)]
 
 use super::super::alloc_region::{ConsRegionSource, FloatRegionSource, RegionStats};
 use super::super::arena_pages::ArenaRunSource;
 use super::super::cons_allocator::ConsBlockBase;
 use super::super::mark_word::MarkWord;
+use super::super::owner_alloc_region::{ConsTailRefund, OwnerAllocRegion};
 use super::super::pacing::GenerationPacingCounters;
 use super::super::satb::SatbHandoff;
 use super::super::young_registry::{
     YoungLogSlot, YoungRegistrationId, YoungRegistryControl, YoungRegistryError,
 };
-use super::super::{ConsBlock, HeapIdentity, TaggedHeap};
-use super::image::{ImageError, OwnerGcState, PublishedGcWork};
+use super::super::{CONS_BLOCK_SIZE, ConsBlock, HeapIdentity, TaggedHeap};
+use super::image::{ImageError, OwnerGcState, PublishedGcImage, PublishedGcWork};
 use crate::intern::{NIL_SYM_ID, T_SYM_ID};
 use crate::tagged::header::{ConsCell, GcHeader, HeapObjectKind};
 use crate::tagged::value::TaggedValue;
+
+#[allow(unsafe_code)]
+fn publish_owner_for_test(state: &mut OwnerGcState) -> Result<PublishedGcImage, ImageError> {
+    // SAFETY: single-threaded unit test publishing fixture words on this thread.
+    unsafe { state.publish() }
+}
+
+#[allow(unsafe_code)]
+fn from_legacy_for_test(heap: &mut TaggedHeap) -> Result<PublishedGcImage, ImageError> {
+    // SAFETY: single-threaded unit test freezing its own live `&mut TaggedHeap`.
+    unsafe { PublishedGcImage::from_legacy(heap) }
+}
+
+#[allow(unsafe_code)]
+fn restore_owner_for_test(
+    state: &mut OwnerGcState,
+    image: PublishedGcImage,
+) -> Result<(), super::image::RestoreImageFailure> {
+    // SAFETY: single-threaded unit test restoring an image published on this
+    // same thread from immediate/live fixture words.
+    unsafe { state.restore(image) }
+}
+
+#[allow(unsafe_code)]
+fn restore_legacy_for_collection_for_test<'a>(
+    image: PublishedGcImage,
+    heap: &mut TaggedHeap,
+    resolve_peer: impl FnOnce(
+        YoungRegistrationId,
+    ) -> Option<&'a mut super::super::young_registry::YoungBlockLog>,
+) -> Result<(), super::image::RestoreImageFailure> {
+    // SAFETY: single-threaded unit test restoring a frozen legacy image back
+    // into its own live `&mut TaggedHeap` before any sweep.
+    unsafe { image.restore_legacy_for_collection(heap, resolve_peer) }
+}
+
+#[allow(unsafe_code)]
+fn push_satb_for_test(
+    satb: &mut super::super::satb::SatbBuffer,
+    value: TaggedValue,
+    handoff: &SatbHandoff,
+) {
+    // SAFETY: unit test pushing an immediate into its own local SATB handoff.
+    unsafe { satb.push(value, handoff) };
+}
 
 fn owner(heap: HeapIdentity) -> OwnerGcState {
     OwnerGcState::new(heap, YoungRegistrationId::issue_parallel(heap).unwrap(), 4).unwrap()
@@ -35,10 +81,9 @@ fn seed_scalar_facts(owner: &mut OwnerGcState) {
     owner.hot.major_cons_writes = vec![TaggedValue::fixnum(13)];
     owner.hot.major_symbol_preimages = vec![NIL_SYM_ID, T_SYM_ID];
     owner.hot.remembered_cache.fill(19);
-    owner.root_scratch = vec![
-        MarkWord::of(TaggedValue::fixnum(14)),
-        MarkWord::of(TaggedValue::fixnum(15)),
-    ];
+    owner.clear_root_scratch();
+    owner.push_immediate_root_slot_for_test(TaggedValue::fixnum(14));
+    owner.push_immediate_root_slot_for_test(TaggedValue::fixnum(15));
 }
 
 fn assert_scalar_facts(owner: &OwnerGcState) {
@@ -63,10 +108,10 @@ fn assert_scalar_facts(owner: &OwnerGcState) {
     assert_eq!(owner.hot.major_cons_writes, vec![TaggedValue::fixnum(13)]);
     assert_eq!(owner.hot.major_symbol_preimages, vec![NIL_SYM_ID, T_SYM_ID]);
     assert_eq!(
-        owner.root_scratch,
-        vec![
-            MarkWord::of(TaggedValue::fixnum(14)),
-            MarkWord::of(TaggedValue::fixnum(15))
+        owner.root_scratch_words_for_test(),
+        &[
+            MarkWord::from_immediate(TaggedValue::fixnum(14)).unwrap(),
+            MarkWord::from_immediate(TaggedValue::fixnum(15)).unwrap(),
         ]
     );
 }
@@ -134,7 +179,7 @@ fn image_round_trip_preserves_facts_and_visits_every_work_family() {
         float_tail_closes: 11,
     };
 
-    let image = state.publish().unwrap();
+    let image = publish_owner_for_test(&mut state).unwrap();
     assert_eq!(image.young_id(), id);
     let summary = image.summary();
     assert_eq!(summary.allocated_count, 17);
@@ -203,15 +248,21 @@ fn image_round_trip_preserves_facts_and_visits_every_work_family() {
         work
     );
     let mut words = Vec::new();
-    image.visit_logs(|word| words.push(word.value().as_fixnum().unwrap()));
-    assert_eq!(words, vec![11, 12, 13, 14, 15]);
+    image.visit_logs(|bits| words.push(bits));
+    assert_eq!(
+        words,
+        [11, 12, 13, 14, 15]
+            .into_iter()
+            .map(|n| TaggedValue::fixnum(n).bits())
+            .collect::<Vec<_>>()
+    );
     assert_eq!(state.hot.allocated_count, 0);
     assert_eq!(state.hot.pacing, GenerationPacingCounters::default());
-    assert!(state.hot.remset.is_empty() && state.root_scratch.is_empty());
+    assert!(state.hot.remset.is_empty() && state.root_scratch_is_empty());
     assert!(state.cold.young.resident().unwrap().blocks().is_empty());
     assert_eq!(stats_words(&state.region_stats), [0; 11]);
 
-    state.restore(image).unwrap();
+    restore_owner_for_test(&mut state, image).unwrap();
     assert_scalar_facts(&state);
     assert!(state.hot.remembered_cache.iter().all(|entry| *entry == 0));
     assert_eq!(state.hot.black_born, vec![header_ptr]);
@@ -248,10 +299,10 @@ fn wrong_heap_or_young_id_restore_retains_image_for_correct_owner() {
             heap
         });
         let destination_id = destination.cold.young.id();
-        let image = source.publish().unwrap();
+        let image = publish_owner_for_test(&mut source).unwrap();
         let summary = image.summary();
         let original_id = image.young_id();
-        let failure = destination.restore(image).unwrap_err();
+        let failure = restore_owner_for_test(&mut destination, image).unwrap_err();
         let expected = if wrong_heap {
             YoungRegistryError::WrongHeap
         } else {
@@ -282,8 +333,8 @@ fn wrong_heap_or_young_id_restore_retains_image_for_correct_owner() {
                 .is_none()
         );
         assert_eq!(destination.hot.allocated_count, 0);
-        assert!(destination.root_scratch.is_empty());
-        source.restore(failure.image).unwrap();
+        assert!(destination.root_scratch_is_empty());
+        restore_owner_for_test(&mut source, failure.image).unwrap();
         assert_scalar_facts(&source);
         assert_eq!(source.cold.young.resident().unwrap().blocks(), &[base]);
         assert_eq!(pending, vec![original_id]);
@@ -310,7 +361,10 @@ fn every_open_region_fact_refuses_publication_before_moving_owner_facts() {
             6 => state.hot.black_cons_region_start = Some(1),
             _ => state.hot.black_float_region_start = Some(1),
         }
-        assert!(matches!(state.publish(), Err(ImageError::RegionsOpen)));
+        assert!(matches!(
+            publish_owner_for_test(&mut state),
+            Err(ImageError::RegionsOpen)
+        ));
         assert_scalar_facts(&state);
         assert!(state.hot.remembered_cache.iter().all(|entry| *entry == 19));
         state.regions.cons = ConsRegionSource::Closed;
@@ -321,10 +375,33 @@ fn every_open_region_fact_refuses_publication_before_moving_owner_facts() {
         state.jit.float_lim.set(0);
         state.hot.black_cons_region_start = None;
         state.hot.black_float_region_start = None;
-        let image = state.publish().unwrap();
-        state.restore(image).unwrap();
+        let image = publish_owner_for_test(&mut state).unwrap();
+        restore_owner_for_test(&mut state, image).unwrap();
         assert_scalar_facts(&state);
     }
+}
+
+#[test]
+fn an_open_owner_region_refuses_publication_without_moving_facts() {
+    let mut state = owner(HeapIdentity::issue());
+    seed_scalar_facts(&mut state);
+    let mut region = OwnerAllocRegion::new();
+    region.install_cons_free_list(0x1000, 2);
+    assert!(matches!(
+        state.validate_publication_with_owner(&region),
+        Err(ImageError::RegionsOpen)
+    ));
+    assert_scalar_facts(&state);
+    let refund = region.close_for_stop();
+    assert_eq!(
+        refund.cons,
+        ConsTailRefund::FreeList {
+            first: 0x1000,
+            cells: 2,
+        }
+    );
+    state.validate_publication_with_owner(&region).unwrap();
+    assert_scalar_facts(&state);
 }
 
 #[test]
@@ -335,9 +412,13 @@ fn residual_satb_refuses_publication_without_moving_or_discarding_words() {
     let base = ConsBlockBase::of(&block);
     let _position = state.cold.young.resident_mut().unwrap().push(base);
     let handoff = SatbHandoff::new();
-    let word = MarkWord::of(TaggedValue::fixnum(99));
-    state.cold.satb.push(word, &handoff);
-    assert!(matches!(state.publish(), Err(ImageError::SatbResidual)));
+    let value = TaggedValue::fixnum(99);
+    let word = MarkWord::from_immediate(value).unwrap();
+    push_satb_for_test(&mut state.cold.satb, value, &handoff);
+    assert!(matches!(
+        publish_owner_for_test(&mut state),
+        Err(ImageError::SatbResidual)
+    ));
     assert_scalar_facts(&state);
     assert_eq!(state.cold.satb.words_for_test(), &[word]);
     assert_eq!(state.cold.young.resident().unwrap().blocks(), &[base]);
@@ -350,8 +431,8 @@ fn residual_satb_refuses_publication_without_moving_or_discarding_words() {
             .collect::<Vec<_>>(),
         vec![word]
     );
-    let image = state.publish().unwrap();
-    state.restore(image).unwrap();
+    let image = publish_owner_for_test(&mut state).unwrap();
+    restore_owner_for_test(&mut state, image).unwrap();
     assert_scalar_facts(&state);
 }
 
@@ -359,16 +440,16 @@ fn residual_satb_refuses_publication_without_moving_or_discarding_words() {
 fn occupied_destination_refuses_restore_and_preserves_image_for_retry() {
     let mut state = owner(HeapIdentity::issue());
     seed_scalar_facts(&mut state);
-    let image = state.publish().unwrap();
+    let image = publish_owner_for_test(&mut state).unwrap();
     let summary = image.summary();
     state.hot.bytes_since_gc = 1;
-    let failure = state.restore(image).unwrap_err();
+    let failure = restore_owner_for_test(&mut state, image).unwrap_err();
     assert!(matches!(failure.error, ImageError::DestinationOccupied));
     assert_eq!(failure.image.summary(), summary);
     assert_eq!(state.hot.bytes_since_gc, 1);
-    assert!(state.root_scratch.is_empty());
+    assert!(state.root_scratch_is_empty());
     state.hot.bytes_since_gc = 0;
-    state.restore(failure.image).unwrap();
+    restore_owner_for_test(&mut state, failure.image).unwrap();
     assert_scalar_facts(&state);
 }
 
@@ -455,4 +536,267 @@ fn parallel_young_ids_are_unique_across_threads_and_heaps() {
     assert_eq!(ordinals.len(), ids.len());
     let legacy = YoungRegistryControl::new(heaps[0]).1;
     assert!(!legacy.id().is_parallel());
+}
+
+#[test]
+fn restore_legacy_for_collection_merges_shell_young_blocks_into_empty_frozen_log() {
+    let mut heap = TaggedHeap::new();
+    assert!(
+        heap.tagged_heap_generational_enabled(),
+        "young-log merge tests require generational GC enabled (NEOVM_GC_GENERATIONAL!=0)"
+    );
+    heap.close_alloc_regions();
+    let legacy = from_legacy_for_test(&mut heap).unwrap();
+    assert!(legacy.young().blocks().is_empty());
+
+    // Simulate a WorldTurn / serial-turn cons allocation while entry 0 is frozen.
+    let _c = heap.alloc_cons(TaggedValue::fixnum(101), TaggedValue::fixnum(202));
+    heap.close_alloc_regions();
+    assert!(
+        !heap
+            .current_mutator_satb()
+            .young
+            .resident()
+            .unwrap()
+            .blocks()
+            .is_empty(),
+        "alloc_cons after freeze must populate the resident young shell"
+    );
+
+    let expected_blocks = heap
+        .current_mutator_satb()
+        .young
+        .resident()
+        .unwrap()
+        .blocks()
+        .to_vec();
+    restore_legacy_for_collection_for_test(legacy, &mut heap, |moved_id| {
+        panic!("unexpected peer pending lookup: {moved_id:?}");
+    })
+    .expect("restore_legacy_for_collection must fold resident shell young blocks");
+    let restored = heap.current_mutator_satb().young.resident().unwrap();
+    assert_eq!(restored.blocks(), expected_blocks.as_slice());
+    assert!(restored.pending_index().is_some());
+    heap.cons_allocator
+        .verify_young_registry_with_extra(restored, &[]);
+}
+
+#[test]
+fn restore_legacy_for_collection_merges_nonempty_frozen_and_shell_young_blocks() {
+    let mut heap = TaggedHeap::new();
+    assert!(
+        heap.tagged_heap_generational_enabled(),
+        "young-log merge tests require generational GC enabled (NEOVM_GC_GENERATIONAL!=0)"
+    );
+    // Allocate a cons so the frozen legacy image already owns a non-empty young
+    // block and a pending entry.
+    let _pre = heap.alloc_cons(TaggedValue::fixnum(1), TaggedValue::NIL);
+    heap.close_alloc_regions();
+    let legacy = from_legacy_for_test(&mut heap).unwrap();
+    let frozen_blocks = legacy.young().blocks().to_vec();
+    assert!(
+        !frozen_blocks.is_empty(),
+        "frozen legacy image must hold the pre-freeze young block"
+    );
+
+    // Fill the rest of the first ConsBlock so a fresh second ConsBlock is
+    // allocated and recorded into the resident shell (giving both frozen and
+    // shell distinct non-empty young logs + duplicate pending_mutators entries).
+    for i in 0..=CONS_BLOCK_SIZE {
+        let _ = heap.alloc_cons(TaggedValue::fixnum(i as i64), TaggedValue::NIL);
+    }
+    heap.close_alloc_regions();
+    let shell_blocks = heap
+        .current_mutator_satb()
+        .young
+        .resident()
+        .unwrap()
+        .blocks()
+        .to_vec();
+    assert!(
+        !shell_blocks.is_empty(),
+        "filling past one ConsBlock must record a fresh young block in the resident shell"
+    );
+
+    restore_legacy_for_collection_for_test(legacy, &mut heap, |moved_id| {
+        panic!("unexpected peer pending lookup: {moved_id:?}");
+    })
+    .expect("restore_legacy_for_collection must merge nonempty frozen + shell young logs");
+    let restored = heap.current_mutator_satb().young.resident().unwrap();
+    let mut expected = frozen_blocks;
+    expected.extend_from_slice(&shell_blocks);
+    assert_eq!(restored.blocks(), expected.as_slice());
+    assert!(restored.pending_index().is_some());
+    heap.cons_allocator
+        .verify_young_registry_with_extra(restored, &[]);
+}
+
+#[test]
+fn restore_legacy_for_collection_repairs_swapped_peer_pending_index() {
+    let mut heap = TaggedHeap::new();
+    assert!(
+        heap.tagged_heap_generational_enabled(),
+        "young-log merge tests require generational GC enabled (NEOVM_GC_GENERATIONAL!=0)"
+    );
+    // 1. Pre-freeze cons -> legacy id_0 sits at pending_mutators[0].
+    let _pre = heap.alloc_cons(TaggedValue::fixnum(1), TaggedValue::NIL);
+    heap.close_alloc_regions();
+    let legacy = from_legacy_for_test(&mut heap).unwrap();
+    let frozen_blocks = legacy.young().blocks().to_vec();
+
+    // 2. Shell cons past CONS_BLOCK_SIZE -> duplicate id_0 sits at pending_mutators[1].
+    for i in 0..=CONS_BLOCK_SIZE {
+        let _ = heap.alloc_cons(TaggedValue::fixnum(i as i64), TaggedValue::NIL);
+    }
+    heap.close_alloc_regions();
+    let shell_blocks = heap
+        .current_mutator_satb()
+        .young
+        .resident()
+        .unwrap()
+        .blocks()
+        .to_vec();
+    let shell_pending = heap
+        .current_mutator_satb()
+        .young
+        .resident()
+        .unwrap()
+        .pending_index()
+        .expect("shell is pending");
+
+    // 3. Register a third ConsBlock owned by `heap` and record a carve on a
+    //    parallel peer log so `peer_id` sits at the tail of `pending_mutators`
+    //    (`index > shell_pending`).
+    let peer_id = YoungRegistrationId::issue_parallel(heap.heap_identity()).unwrap();
+    let mut peer_slot = YoungLogSlot::new_parallel(peer_id);
+    let peer_block = ConsBlock::new();
+    let peer_base = ConsBlockBase::of(&peer_block);
+    heap.cons_allocator.register(&peer_block);
+    heap.cons_blocks.push(peer_block);
+    heap.cons_allocator
+        .note_carve(peer_base, peer_slot.resident_mut().unwrap())
+        .unwrap();
+    let peer_pending_before = peer_slot
+        .resident()
+        .unwrap()
+        .pending_index()
+        .expect("peer is pending");
+    assert!(
+        peer_pending_before.index() > shell_pending.index(),
+        "peer must sit at pending_mutators tail so swap_remove moves it"
+    );
+
+    // 4. Merging shell into frozen removes `shell_pending` via swap_remove and
+    //    must preflight and repair the swapped peer log's pending index.
+    let mut looked_up = None;
+    let peer_log = peer_slot.resident_mut().unwrap();
+    let mut peer_opt = Some(peer_log);
+    restore_legacy_for_collection_for_test(legacy, &mut heap, |moved_id| {
+        assert!(looked_up.is_none(), "at most one peer lookup occurs");
+        looked_up = Some(moved_id);
+        assert_eq!(moved_id, peer_id);
+        peer_opt.take()
+    })
+    .expect("restore_legacy_for_collection repairs swapped peer pending index");
+    assert_eq!(looked_up, Some(peer_id));
+    assert_eq!(
+        peer_slot.resident().unwrap().pending_index(),
+        Some(shell_pending)
+    );
+    let restored = heap.current_mutator_satb().young.resident().unwrap();
+    let mut expected = frozen_blocks;
+    expected.extend_from_slice(&shell_blocks);
+    assert_eq!(restored.blocks(), expected.as_slice());
+    heap.cons_allocator
+        .verify_young_registry_with_extra(restored, &[peer_slot.resident().unwrap()]);
+}
+
+#[test]
+fn restore_legacy_for_collection_refuses_missing_swapped_peer_without_mutating() {
+    let mut heap = TaggedHeap::new();
+    assert!(
+        heap.tagged_heap_generational_enabled(),
+        "young-log merge tests require generational GC enabled (NEOVM_GC_GENERATIONAL!=0)"
+    );
+    let _pre = heap.alloc_cons(TaggedValue::fixnum(1), TaggedValue::NIL);
+    heap.close_alloc_regions();
+    let legacy = from_legacy_for_test(&mut heap).unwrap();
+    let frozen_blocks = legacy.young().blocks().to_vec();
+    let frozen_pending = legacy.young().pending_index();
+
+    for i in 0..=CONS_BLOCK_SIZE {
+        let _ = heap.alloc_cons(TaggedValue::fixnum(i as i64), TaggedValue::NIL);
+    }
+    heap.close_alloc_regions();
+    let shell_blocks = heap
+        .current_mutator_satb()
+        .young
+        .resident()
+        .unwrap()
+        .blocks()
+        .to_vec();
+    let shell_pending = heap
+        .current_mutator_satb()
+        .young
+        .resident()
+        .unwrap()
+        .pending_index();
+
+    let peer_id = YoungRegistrationId::issue_parallel(heap.heap_identity()).unwrap();
+    let mut peer_slot = YoungLogSlot::new_parallel(peer_id);
+    let peer_block = ConsBlock::new();
+    let peer_base = ConsBlockBase::of(&peer_block);
+    heap.cons_allocator.register(&peer_block);
+    heap.cons_blocks.push(peer_block);
+    heap.cons_allocator
+        .note_carve(peer_base, peer_slot.resident_mut().unwrap())
+        .unwrap();
+    let peer_pending = peer_slot.resident().unwrap().pending_index();
+
+    let failure = restore_legacy_for_collection_for_test(legacy, &mut heap, |_moved_id| None)
+        .expect_err("unresolvable swapped peer must refuse before any mutation");
+    assert!(
+        matches!(
+            failure.error,
+            ImageError::Young(YoungRegistryError::UnknownRegistration)
+        ),
+        "expected UnknownRegistration, got {:?}",
+        failure.error
+    );
+    assert_eq!(
+        failure.image.young().blocks(),
+        frozen_blocks.as_slice(),
+        "refusal must leave frozen young blocks untouched"
+    );
+    assert_eq!(
+        failure.image.young().pending_index(),
+        frozen_pending,
+        "refusal must leave frozen pending index untouched"
+    );
+    let shell = heap.current_mutator_satb().young.resident().unwrap();
+    assert_eq!(
+        shell.blocks(),
+        shell_blocks.as_slice(),
+        "refusal must leave resident shell young blocks untouched"
+    );
+    assert_eq!(
+        shell.pending_index(),
+        shell_pending,
+        "refusal must leave resident shell pending index untouched"
+    );
+    assert_eq!(
+        peer_slot.resident().unwrap().pending_index(),
+        peer_pending,
+        "refusal must leave peer pending index untouched"
+    );
+
+    // Providing the peer afterward must still succeed cleanly with full registry invariants.
+    let mut peer_opt = Some(peer_slot.resident_mut().unwrap());
+    restore_legacy_for_collection_for_test(failure.image, &mut heap, |moved_id| {
+        (moved_id == peer_id).then(|| peer_opt.take()).flatten()
+    })
+    .expect("retry with valid peer succeeds after fail-closed refusal");
+    let restored = heap.current_mutator_satb().young.resident().unwrap();
+    heap.cons_allocator
+        .verify_young_registry_with_extra(restored, &[peer_slot.resident().unwrap()]);
 }

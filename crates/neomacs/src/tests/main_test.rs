@@ -4,7 +4,8 @@ use super::super::frame_layout::{
 use super::super::image_catalog::{AsyncImageCatalog, wait_for_image_metadata};
 use super::super::tty_frontend::{TtyPopupDisplayHost, TtyTerminalHost};
 use super::super::tty_init::{
-    default_controlling_tty_name, detect_tty_background_mode, should_enable_live_tty_io,
+    default_controlling_tty_name, detect_tty_background_mode, initial_tty_fatal_checks_apply,
+    should_enable_live_tty_io,
 };
 use super::super::{
     BOOTSTRAP_CORE_FEATURES, BootstrapDisplayConfig, DumpImageKind, EarlyCliAction, FontSizing,
@@ -52,7 +53,7 @@ use neovm_core::emacs_core::display_host::{
 };
 use neovm_core::emacs_core::error::EvalError;
 use neovm_core::emacs_core::eval::{
-    PopupMenuEntry, PopupMenuRequest, ShaderSurfaceLanguage, ShaderSurfaceUniformInit,
+    DisplayHost, PopupMenuEntry, PopupMenuRequest, ShaderSurfaceLanguage, ShaderSurfaceUniformInit,
     VideoResolveRequest, VideoResolveSource, WebKitResolveRequest, WebKitResolveSource,
 };
 use neovm_core::emacs_core::image_catalog::{AxisSize, ImageRotation, ImageSizeSpec};
@@ -79,6 +80,7 @@ use neovm_core::window::{
     FrameFullscreen, FrameId, FrameParam, FrameVisibility, GuiFrameGeometryHints, WindowId,
     default_gui_tool_bar_line_height,
 };
+use std::cell::RefCell;
 use std::path::Path;
 use std::rc::Rc;
 use std::sync::atomic::AtomicBool;
@@ -93,6 +95,19 @@ mod platform_fonts;
 #[path = "frame_snapshot_policy_test.rs"]
 mod frame_snapshot_policy;
 
+/// The synthetic display every GUI startup fixture bootstraps.
+///
+/// A fixture models a session that started on this display, so the frame's
+/// `display` parameter, the Lisp `DISPLAY` environment and the native host's
+/// connection identity must all agree with it.
+fn gui_display_identity() -> neomacs_display_protocol::GraphicalDisplayIdentity {
+    neomacs_display_protocol::GraphicalDisplayIdentity::named(
+        neomacs_display_protocol::GraphicalBackend::X11,
+        ":42",
+    )
+    .expect("constant synthetic display name")
+}
+
 fn gui_display() -> BootstrapDisplayConfig {
     let observation = neomacs_display_protocol::DisplayObservation::X11(
         neomacs_display_protocol::X11DisplayObservation::new(
@@ -104,11 +119,7 @@ fn gui_display() -> BootstrapDisplayConfig {
     bootstrap_gui_display_config(
         Interactivity::Interactive,
         gui_frame_font_scale_from_observation(observation),
-        neomacs_display_protocol::GraphicalDisplayIdentity::named(
-            neomacs_display_protocol::GraphicalBackend::X11,
-            ":42",
-        )
-        .unwrap(),
+        gui_display_identity(),
     )
 }
 
@@ -750,6 +761,35 @@ fn status_line_layout_mutation_rejects_rows_built_from_the_old_geometry() {
     let _ = redisplay.discard(&mut eval);
 }
 
+fn window_mode_line_text(
+    state: &neomacs_display_protocol::glyph_matrix::FrameDisplayState,
+    window_id: WindowId,
+) -> String {
+    use neomacs_display_protocol::frame_glyphs::GlyphRowRole;
+    use neomacs_display_protocol::glyph_matrix::{GlyphArea, GlyphType};
+    let entry = state
+        .window_matrices
+        .iter()
+        .find(|entry| entry.window_id.get() == window_id.0 as i64)
+        .expect("window matrix entry");
+    let mut out = String::new();
+    for row in entry
+        .matrix
+        .rows
+        .iter()
+        .filter(|row| row.enabled && row.role == GlyphRowRole::ModeLine)
+    {
+        for glyph in &row.glyphs[GlyphArea::Text.index()] {
+            match &glyph.glyph_type {
+                GlyphType::Char { ch } => out.push(*ch),
+                GlyphType::Composite { text } => out.push_str(text),
+                _ => {}
+            }
+        }
+    }
+    out
+}
+
 #[test]
 fn rejected_chrome_convergence_restores_the_last_accepted_window_end() {
     let (mut eval, _buffer_id, frame_id, window_id) = initialized_redisplay_test_frame(
@@ -771,11 +811,15 @@ fn rejected_chrome_convergence_restores_the_last_accepted_window_end() {
     eval.eval_str(
         "(progn
            (setq neomacs-rejected-end-attempt 0)
+           (setq neomacs-rejected-end-seen nil)
            (set (make-local-variable 'mode-line-format)
                 '((:eval
                    (progn
                      (setq neomacs-rejected-end-attempt
                            (1+ neomacs-rejected-end-attempt))
+                     (setq neomacs-rejected-end-seen
+                           (cons (window-end (selected-window) nil)
+                                 neomacs-rejected-end-seen))
                      (set-window-margins
                       (selected-window) neomacs-rejected-end-attempt 0)
                      \"RETRY\"))))
@@ -783,17 +827,41 @@ fn rejected_chrome_convergence_restores_the_last_accepted_window_end() {
     )
     .expect("install non-converging status line");
 
+    // 1. Strict non-fallback layout (`Snapshot`) rejects at exhaustion and
+    //    rolls back every rejected attempt's provisional window-end.
     let rejected = super::super::frame_layout::layout_frame_display_state(
         &mut eval,
         frame_id,
-        super::super::frame_layout::FrameLayoutPurpose::Redisplay,
+        super::super::frame_layout::FrameLayoutPurpose::Snapshot,
     );
     let rejected_attempts = eval
         .eval_str("neomacs-rejected-end-attempt")
         .expect("rejected attempt count");
     assert!(
         rejected.is_none(),
-        "continuously changing layout inputs must exhaust the bounded coordinator; attempts={rejected_attempts}"
+        "strict snapshot must exhaust the bounded coordinator without publishing; attempts={rejected_attempts}"
+    );
+    assert_eq!(
+        rejected_attempts.as_fixnum(),
+        Some(2),
+        "strict snapshot must exhaust repeating window-chrome input invalidation after 2 attempts"
+    );
+    assert_eq!(
+        super::super::frame_layout::last_layout_stats_for_test().exhaustion_snapshot_passes,
+        0,
+        "strict snapshot must not enter ExhaustionSnapshot"
+    );
+    let seen_provisional_ends = list_to_vec(
+        &eval
+            .eval_str("neomacs-rejected-end-seen")
+            .expect("provisional ends observed by chrome"),
+    )
+    .expect("provisional end list");
+    assert!(
+        seen_provisional_ends
+            .iter()
+            .any(|end| end.as_fixnum().is_some_and(|pos| pos != accepted_end)),
+        "chrome must observe the speculative body's provisional end before rejection: {seen_provisional_ends:?}"
     );
     let after = eval
         .eval_form(Value::list(vec![
@@ -807,6 +875,83 @@ fn rejected_chrome_convergence_restores_the_last_accepted_window_end() {
     assert_eq!(
         after, accepted_end,
         "a rejected body's provisional end is visible to its chrome, but must never become previous accepted viewport evidence"
+    );
+
+    // 2. Live `Redisplay` exhausts the same 2 converging attempts, rolls back
+    //    those rejected attempts, then publishes one callback-inhibited
+    //    ExhaustionSnapshot (GNU safety net) with reused chrome and live margins.
+    eval.eval_str(
+        "(progn
+           (setq neomacs-rejected-end-attempt 0)
+           (set-window-margins (selected-window) 0 0))",
+    )
+    .expect("reset counter and margins for live redisplay");
+    let published = super::super::frame_layout::layout_frame_display_state(
+        &mut eval,
+        frame_id,
+        super::super::frame_layout::FrameLayoutPurpose::Redisplay,
+    )
+    .expect("live redisplay must publish callback-inhibited ExhaustionSnapshot at exhaustion");
+    assert_eq!(
+        eval.eval_str("neomacs-rejected-end-attempt")
+            .expect("redisplay attempt count")
+            .as_fixnum(),
+        Some(2),
+        "ExhaustionSnapshot must inhibit mode-line :eval after repeating window-chrome input invalidation (2 attempts)"
+    );
+    assert_eq!(
+        super::super::frame_layout::last_layout_stats_for_test().exhaustion_snapshot_passes,
+        1,
+        "exactly one ExhaustionSnapshot pass must publish"
+    );
+    let info = published
+        .window_infos
+        .iter()
+        .find(|info| info.window_id.get() == window_id.0 as i64)
+        .expect("published window info");
+    let neomacs_display_protocol::frame_glyphs::PresentedWindowGeometry::Complete {
+        regions, ..
+    } = info.geometry
+    else {
+        panic!("published ExhaustionSnapshot window must have complete geometry")
+    };
+    assert_eq!(
+        (regions.left_margin_columns, regions.right_margin_columns),
+        (2, 0),
+        "ExhaustionSnapshot must reflect the final post-exhaustion live margins, not an earlier rejected attempt"
+    );
+    let ml_text = window_mode_line_text(&published, window_id);
+    assert!(
+        ml_text.contains("RETRY"),
+        "ExhaustionSnapshot must reuse the last captured mode-line string: {ml_text:?}"
+    );
+    let _ = published.discard(&mut eval);
+
+    let after_publish_cached = eval
+        .eval_form(Value::list(vec![
+            Value::symbol("window-end"),
+            Value::make_window(window_id.0),
+            Value::NIL,
+        ]))
+        .expect("cached window-end after ExhaustionSnapshot")
+        .as_fixnum()
+        .expect("cached end position");
+    let after_publish_update = eval
+        .eval_form(Value::list(vec![
+            Value::symbol("window-end"),
+            Value::make_window(window_id.0),
+            Value::T,
+        ]))
+        .expect("updated window-end after ExhaustionSnapshot")
+        .as_fixnum()
+        .expect("updated end position");
+    assert_ne!(
+        after_publish_cached, accepted_end,
+        "published ExhaustionSnapshot at window-start 300 must advance accepted viewport end"
+    );
+    assert_eq!(
+        after_publish_cached, after_publish_update,
+        "cached window-end after ExhaustionSnapshot must match the published viewport (GNU parity)"
     );
 }
 
@@ -868,14 +1013,28 @@ fn later_sibling_failure_restores_every_earlier_provisional_window_end() {
     )
     .expect("install later-sibling convergence failure");
 
+    // 1. Strict non-fallback layout (`Snapshot`) rejects the whole frame at
+    //    exhaustion and rolls back the earlier sibling's provisional end.
     assert!(
         super::super::frame_layout::layout_frame_display_state(
             &mut eval,
             frame_id,
-            super::super::frame_layout::FrameLayoutPurpose::Redisplay,
+            super::super::frame_layout::FrameLayoutPurpose::Snapshot,
         )
         .is_none(),
-        "the later sibling must exhaust the bounded frame coordinator"
+        "the later sibling must exhaust the strict bounded frame coordinator"
+    );
+    assert_eq!(
+        eval.eval_str("neomacs-later-sibling-attempt")
+            .expect("later sibling attempt count")
+            .as_fixnum(),
+        Some(2),
+        "strict snapshot must exhaust repeating window-chrome input invalidation after 2 attempts"
+    );
+    assert_eq!(
+        super::super::frame_layout::last_layout_stats_for_test().exhaustion_snapshot_passes,
+        0,
+        "strict snapshot must not enter ExhaustionSnapshot"
     );
     assert_eq!(
         eval.eval_form(Value::list(vec![
@@ -887,6 +1046,83 @@ fn later_sibling_failure_restores_every_earlier_provisional_window_end() {
         .as_fixnum(),
         Some(accepted_earlier_end),
         "leaf window ends become accepted evidence only when the entire frame converges"
+    );
+
+    // 2. Live `Redisplay` exhausts the bounded coordinator on the later sibling
+    //    and publishes both siblings cleanly in one callback-inhibited
+    //    ExhaustionSnapshot pass.
+    eval.eval_str(
+        "(progn
+           (setq neomacs-later-sibling-attempt 0)
+           (set-window-margins neomacs-failing-later-window 0 0))",
+    )
+    .expect("reset later sibling counter and margins");
+    let published = super::super::frame_layout::layout_frame_display_state(
+        &mut eval,
+        frame_id,
+        super::super::frame_layout::FrameLayoutPurpose::Redisplay,
+    )
+    .expect("live redisplay must publish ExhaustionSnapshot when later sibling exhausts");
+    assert_eq!(
+        eval.eval_str("neomacs-later-sibling-attempt")
+            .expect("later sibling redisplay attempt count")
+            .as_fixnum(),
+        Some(2),
+        "ExhaustionSnapshot must inhibit later sibling mode-line :eval after 2 attempts"
+    );
+    assert_eq!(
+        super::super::frame_layout::last_layout_stats_for_test().exhaustion_snapshot_passes,
+        1,
+        "exactly one ExhaustionSnapshot pass must publish"
+    );
+    let later_info = published
+        .window_infos
+        .iter()
+        .find(|info| info.window_id.get() == later_window.0 as i64)
+        .expect("published later sibling info");
+    let neomacs_display_protocol::frame_glyphs::PresentedWindowGeometry::Complete {
+        regions, ..
+    } = later_info.geometry
+    else {
+        panic!("published later sibling must have complete geometry")
+    };
+    assert_eq!(
+        (regions.left_margin_columns, regions.right_margin_columns),
+        (2, 0),
+        "later sibling must publish with post-exhaustion live margins"
+    );
+    let later_ml = window_mode_line_text(&published, later_window);
+    assert!(
+        later_ml.contains("RETRY"),
+        "later sibling must reuse captured mode-line string: {later_ml:?}"
+    );
+    let _ = published.discard(&mut eval);
+
+    let earlier_after_publish = eval
+        .eval_form(Value::list(vec![
+            Value::symbol("window-end"),
+            Value::make_window(earlier_window.0),
+            Value::NIL,
+        ]))
+        .expect("earlier cached window-end after ExhaustionSnapshot")
+        .as_fixnum()
+        .expect("earlier cached end");
+    let earlier_after_update = eval
+        .eval_form(Value::list(vec![
+            Value::symbol("window-end"),
+            Value::make_window(earlier_window.0),
+            Value::T,
+        ]))
+        .expect("earlier updated window-end after ExhaustionSnapshot")
+        .as_fixnum()
+        .expect("earlier updated end");
+    assert_ne!(
+        earlier_after_publish, accepted_earlier_end,
+        "published ExhaustionSnapshot must advance earlier sibling's accepted viewport end"
+    );
+    assert_eq!(
+        earlier_after_publish, earlier_after_update,
+        "earlier sibling's cached window-end must match its published ExhaustionSnapshot viewport"
     );
 }
 
@@ -1617,6 +1853,163 @@ fn synchronous_window_end_uses_the_final_source_buffer_identity() {
     );
 }
 
+#[test]
+fn synchronous_window_end_fontification_message_reenters_geometry_preparation() {
+    use neovm_core::emacs_core::eval::data::window_layout_query::WindowLayoutQueryAdapter;
+    use std::cell::Cell;
+
+    let _policy = neovm_core::emacs_core::eval::RedisplayHookPolicyGuard::gnu();
+    let (mut eval, _buffer_id, frame_id, window_id) = initialized_redisplay_test_frame(
+        "query-fontification-message",
+        800,
+        320,
+        "query fontification message fixture\n",
+        80,
+    );
+    {
+        let frame = eval.frame_manager_mut().get_mut(frame_id).expect("frame");
+        frame.set_window_system(Some(Value::symbol("neo")));
+        frame.visibility = FrameVisibility::Visible;
+        assert!(!frame.initial);
+    }
+    assert!(!eval.noninteractive());
+    assert!(eval.gnu_redisplay_hooks_policy_enabled());
+    super::super::frame_layout::install_frame_snapshot_fn(&mut eval);
+    eval.redisplay_fn = Some(Box::new(move |eval| {
+        if let Some(prepared) = super::super::frame_layout::layout_frame_display_state(
+            eval,
+            frame_id,
+            super::super::frame_layout::FrameLayoutPurpose::Redisplay,
+        ) {
+            let _ = prepared
+                .activate(eval)
+                .expect("activate frontend redisplay");
+        }
+    }));
+    eval.eval_str(
+        "(setq inhibit-redisplay nil inhibit-message nil
+               set-message-function nil clear-message-function nil)",
+    )
+    .expect("permit interactive echo geometry preparation");
+    eval.eval_str("(redisplay t)")
+        .expect("warm the real frontend presentation before installing the fontifier");
+    let mini_window = eval
+        .frame_manager()
+        .get(frame_id)
+        .expect("frame")
+        .minibuffer_window
+        .expect("graphical frame has a minibuffer window");
+    let mini_height_before = eval
+        .frame_manager()
+        .get(frame_id)
+        .and_then(|frame| frame.find_window(mini_window))
+        .expect("committed minibuffer window")
+        .bounds()
+        .height;
+
+    // Forward both real frontend callbacks. Positive counts distinguish this
+    // path from an unavailable adapter or a message suppressed before sizing.
+    let preparations = Rc::new(Cell::new(0usize));
+    let observed_preparations = preparations.clone();
+    let mut canonical_prepare = eval
+        .redisplay_prepare_fn
+        .take()
+        .expect("the frontend must install its geometry preparer");
+    eval.redisplay_prepare_fn = Some(Box::new(move |eval, request| {
+        observed_preparations.set(observed_preparations.get() + 1);
+        canonical_prepare(eval, request)
+    }));
+    let mut take = eval.take_window_layout_query();
+    let original = take.take_previous();
+    take.put_previous(WindowLayoutQueryAdapter::Unavailable);
+    eval.restore_window_layout_query(take);
+    let WindowLayoutQueryAdapter::Ready(mut canonical_query) = original else {
+        panic!("the real frontend layout-query adapter must be installed");
+    };
+    let queries = Rc::new(Cell::new(0usize));
+    let observed_queries = queries.clone();
+    eval.install_window_layout_query_handler(move |eval, frame, window, scope| {
+        observed_queries.set(observed_queries.get() + 1);
+        canonical_query(eval, frame, window, scope)
+    })
+    .expect("wrap the canonical query without replacing its geometry");
+
+    // This bare Context has no subr.el macros. Use the primitive expansion
+    // of `unless` so a missing macro cannot abort the callback before message.
+    eval.eval_str(
+        r#"(progn
+             (setq qf-once nil qf-calls 0 qf-message 'not-called qf-query-error nil)
+             (set (make-local-variable 'fontification-functions)
+                  (list (lambda (_start)
+                          (setq qf-calls (1+ qf-calls))
+                          (if qf-once nil
+                            (setq qf-once t)
+                            (put-text-property (point-min) (point-max) 'fontified t)
+                            (let ((inhibit-redisplay nil))
+                              (setq qf-message
+                                    (condition-case err
+                                        (list 'ok (message "query fontify"))
+                                      (error (list 'error (error-message-string err))))))))))
+             (goto-char (point-max))
+             (insert "stale query\n")
+             (goto-char (point-min))
+             (put-text-property (point-min) (point-max) 'fontified nil))"#,
+    )
+    .expect("arm a once-only message from a real fontification callback");
+    eval.frame_manager_mut()
+        .get_mut(frame_id)
+        .and_then(|frame| frame.find_window_mut(window_id))
+        .expect("query window")
+        .invalidate_window_end();
+    let witness = eval
+        .eval_str(
+            r#"(progn
+                 (setq qf-end
+                       (condition-case err
+                           (window-end nil t)
+                         (error (setq qf-query-error (error-message-string err)) nil)))
+                 (list qf-once (> qf-calls 0) qf-message
+                       (integerp qf-end) qf-query-error (current-message)))"#,
+        )
+        .expect("capture message and outer query errors before fontification demotes them");
+    let witness = print_value_with_eval(&eval, &witness);
+    let mini_height_after = eval
+        .frame_manager()
+        .get(frame_id)
+        .and_then(|frame| frame.find_window(mini_window))
+        .expect("minibuffer survives the query callback")
+        .bounds()
+        .height;
+    assert_eq!(
+        mini_height_after, mini_height_before,
+        "same-height message must retain committed mini geometry: {witness}"
+    );
+    assert!(queries.get() > 0, "the real query must run: {witness}");
+    assert!(
+        eval.eval_str("(and qf-once (> qf-calls 0))")
+            .expect("fontification callback witness")
+            .is_truthy(),
+        "the query must invoke the fontifier: {witness}"
+    );
+    assert!(
+        preparations.get() > 0,
+        "the message must enter the real geometry preparer: {witness}"
+    );
+    // Attested GNU 31.1 accepts this same-height message while its stack-local
+    // window-end iterator runs. Capture the result inside the fontifier so
+    // later safe-call error demotion cannot conceal a Lisp-visible failure.
+    assert!(
+        eval.eval_str(
+            r#"(and (equal qf-message '(ok "query fontify"))
+                    (integerp qf-end) (null qf-query-error)
+                    (<= (point-min) qf-end) (<= qf-end (point-max)))"#,
+        )
+        .expect("inspect the captured callback and query results")
+        .is_truthy(),
+        "message-time geometry preparation must complete during the synchronous query: {witness}"
+    );
+}
+
 fn test_image_catalog(
     cmd_tx: &neomacs_display_runtime::thread_comm::RenderCommandSender,
     image_metadata: SharedImageRenderState,
@@ -1639,6 +2032,444 @@ fn image_catalog_reports_renderer_owned_cache_bytes() {
     image_state.publish_cache_usage(neomacs_display_protocol::ImageCacheUsage::new(4_096, 768));
 
     assert_eq!(catalog.cached_size_bytes(), 4_864);
+}
+
+/// A full command channel must not let the usage acknowledgement overtake the
+/// wholesale clear it is supposed to observe: invalidation commands take the
+/// ordered (never deferred) path, so the read after clear-all is post-clear.
+#[test]
+fn clear_image_cache_usage_read_stays_post_clear_with_a_full_command_channel() {
+    use neomacs_display_protocol::{ImageCacheUsage, ImageId};
+    use neomacs_display_runtime::thread_comm::RenderCommandSender;
+    use neovm_core::emacs_core::image_catalog::ImageInvalidation;
+
+    let (cmd_tx, cmd_rx) =
+        RenderCommandSender::bounded(std::num::NonZeroUsize::new(1).expect("non-zero capacity"));
+    let image_state = Arc::new(neomacs_display_runtime::render_thread::ImageRenderState::default());
+    image_state.mark_renderer_ready();
+    let catalog = test_image_catalog(&cmd_tx, Arc::clone(&image_state));
+    image_state.publish_cache_usage(ImageCacheUsage::new(4_096, 0));
+
+    // Fill the single slot: the clearance below cannot be queued immediately
+    // and must wait for room instead of taking the decoder deferral path.
+    cmd_tx
+        .send(RenderCommand::Asset(AssetCommand::ImageRetire {
+            image: ImageId::new(9_999),
+        }))
+        .expect("pre-fill the command channel");
+
+    let order = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let order_for_thread = Arc::clone(&order);
+    let state_for_thread = Arc::clone(&image_state);
+    let drainer = std::thread::spawn(move || {
+        // Let the invalidation observe the channel full, then drain in order.
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        while let Ok(command) = cmd_rx.recv_timeout(std::time::Duration::from_millis(500)) {
+            match command {
+                RenderCommand::Asset(AssetCommand::ClearImageCache { .. }) => {
+                    order_for_thread.lock().expect("order lock").push("clear");
+                    state_for_thread.publish_cache_usage(ImageCacheUsage::default());
+                }
+                RenderCommand::Asset(AssetCommand::PublishImageCacheUsage { ack }) => {
+                    order_for_thread.lock().expect("order lock").push("publish");
+                    let _ = ack.try_send(());
+                    break;
+                }
+                _ => {}
+            }
+        }
+    });
+
+    let _ = catalog.invalidate(ImageInvalidation::All);
+    assert_eq!(
+        catalog.cached_size_bytes(),
+        0,
+        "the read after clear-all must be post-clear even when the channel was full"
+    );
+    drainer.join().expect("fake render thread");
+    assert_eq!(
+        *order.lock().expect("order lock"),
+        vec!["clear", "publish"],
+        "the publish must be processed after the wholesale clear"
+    );
+}
+
+/// A render thread that stalls past the old bounded ordering wait must not
+/// leak a pre-clear cache size.  GNU frees the cache on the caller's thread,
+/// so `clear-image-cache` followed by `image-cache-size` is 0 even when the
+/// renderer is slow; the read has to wait for the clear it issued to be
+/// executed and answer from that committed state.
+#[test]
+fn clear_image_cache_read_waits_out_a_stalled_render_thread() {
+    use neomacs_display_protocol::{ImageCacheUsage, ImageId};
+    use neomacs_display_runtime::thread_comm::RenderCommandSender;
+    use neovm_core::emacs_core::image_catalog::ImageInvalidation;
+
+    let (cmd_tx, cmd_rx) =
+        RenderCommandSender::bounded(std::num::NonZeroUsize::new(1).expect("non-zero capacity"));
+    let image_state = Arc::new(neomacs_display_runtime::render_thread::ImageRenderState::default());
+    image_state.mark_renderer_ready();
+    let catalog = test_image_catalog(&cmd_tx, Arc::clone(&image_state));
+    image_state.publish_cache_usage(ImageCacheUsage::new(4_096, 0));
+    cmd_tx
+        .send(RenderCommand::Asset(AssetCommand::ImageRetire {
+            image: ImageId::new(9_999),
+        }))
+        .expect("pre-fill the command channel");
+
+    let order = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let order_for_thread = Arc::clone(&order);
+    let state_for_thread = Arc::clone(&image_state);
+    let drainer = std::thread::spawn(move || {
+        // Stall well past the old bounded ordering wait; a read that answers
+        // from the stale snapshot instead of waiting shows up as 4096.
+        std::thread::sleep(std::time::Duration::from_millis(250));
+        while let Ok(command) = cmd_rx.recv_timeout(std::time::Duration::from_secs(2)) {
+            match command {
+                RenderCommand::Asset(AssetCommand::ClearImageCache { .. }) => {
+                    order_for_thread.lock().expect("order lock").push("clear");
+                    state_for_thread.publish_cache_usage(ImageCacheUsage::default());
+                }
+                RenderCommand::Asset(AssetCommand::PublishImageCacheUsage { ack }) => {
+                    order_for_thread.lock().expect("order lock").push("publish");
+                    let _ = ack.try_send(());
+                    break;
+                }
+                _ => {}
+            }
+        }
+    });
+
+    let _ = catalog.invalidate(ImageInvalidation::All);
+    assert_eq!(
+        catalog.cached_size_bytes(),
+        0,
+        "a read after clear-all must be post-clear even when the render thread stalls past the old bound"
+    );
+    drainer.join().expect("fake render thread");
+    assert_eq!(
+        *order.lock().expect("order lock"),
+        vec!["clear", "publish"],
+        "the publish must be processed after the wholesale clear"
+    );
+}
+
+/// Early init: `clear-image-cache` then `image-cache-size` before the
+/// renderer has a GPU. The renderer owns no image bytes yet, so the read must
+/// answer from the catalog's own post-clear accounting instead of waiting for
+/// a publish from a renderer that is itself waiting on first-frame readiness.
+#[test]
+fn clear_image_cache_read_before_gpu_startup_does_not_wait_for_the_renderer() {
+    use neomacs_display_protocol::ImageCacheUsage;
+    use neomacs_display_runtime::thread_comm::RenderCommandSender;
+    use neovm_core::emacs_core::image_catalog::ImageInvalidation;
+
+    let (cmd_tx, cmd_rx) = RenderCommandSender::unbounded();
+    let image_state = Arc::new(neomacs_display_runtime::render_thread::ImageRenderState::default());
+    // A pre-clear total from the stale snapshot must not leak out while the
+    // renderer has no GPU.
+    image_state.publish_cache_usage(ImageCacheUsage::new(4_096, 0));
+
+    let (done_tx, done_rx) = std::sync::mpsc::channel();
+    let state_for_catalog = Arc::clone(&image_state);
+    let sender_for_catalog = cmd_tx.clone();
+    let reader = std::thread::spawn(move || {
+        let catalog = test_image_catalog(&sender_for_catalog, state_for_catalog);
+        let _ = catalog.invalidate(ImageInvalidation::All);
+        let _ = done_tx.send(catalog.cached_size_bytes());
+    });
+    // Nobody drains `cmd_rx`: before the GPU exists the read must not wait on
+    // a renderer answer that cannot come.
+    let result = done_rx.recv_timeout(std::time::Duration::from_secs(2));
+    assert_eq!(
+        result,
+        Ok(0),
+        "a cache read before GPU startup must not wait for the renderer"
+    );
+    drop(cmd_rx);
+    drop(reader);
+}
+
+/// A renderer that exits with the usage acknowledgement still queued must not
+/// leave the evaluator blocked forever: crossbeam retains a buffered command
+/// while the evaluator's sender clones live, so the ack sender would never
+/// drop. The read must stop on the renderer-exit signal and answer with the
+/// known post-clear total, never the pre-clear snapshot.
+#[test]
+fn clear_image_cache_read_stops_when_the_renderer_exits_with_the_ack_queued() {
+    use neomacs_display_protocol::ImageCacheUsage;
+    use neomacs_display_runtime::thread_comm::RenderCommandSender;
+    use neovm_core::emacs_core::image_catalog::ImageInvalidation;
+
+    // The production channel is the bounded array flavor; that is the flavor
+    // whose buffered messages survive a receiver drop while sender clones
+    // remain.
+    let (cmd_tx, cmd_rx) =
+        RenderCommandSender::bounded(std::num::NonZeroUsize::new(64).expect("non-zero capacity"));
+    let image_state = Arc::new(neomacs_display_runtime::render_thread::ImageRenderState::default());
+    image_state.mark_renderer_ready();
+    image_state.publish_cache_usage(ImageCacheUsage::new(4_096, 0));
+
+    let (done_tx, done_rx) = std::sync::mpsc::channel();
+    let state_for_catalog = Arc::clone(&image_state);
+    let sender_for_catalog = cmd_tx.clone();
+    let reader = std::thread::spawn(move || {
+        let catalog = test_image_catalog(&sender_for_catalog, state_for_catalog);
+        let _ = catalog.invalidate(ImageInvalidation::All);
+        let _ = done_tx.send(catalog.cached_size_bytes());
+    });
+    // Wait until the read has queued the clear and its publish.
+    for _ in 0..400 {
+        if cmd_rx.len() >= 2 {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert!(
+        cmd_rx.len() >= 2,
+        "the read did not queue its publish behind the clear"
+    );
+    // The renderer exits without answering and its receiver goes away; the
+    // evaluator's sender clone (inside the catalog) keeps the queued ack
+    // alive, which is exactly the hang this row pins.
+    image_state.mark_renderer_exited();
+    drop(cmd_rx);
+
+    let result = done_rx.recv_timeout(std::time::Duration::from_secs(2));
+    assert_eq!(
+        result,
+        Ok(0),
+        "a cache read must stop when the renderer exits with its ack queued"
+    );
+    drop(reader);
+}
+
+/// Named Invariant-7 exception: a PARTIAL invalidation (here an animation
+/// retire) followed by renderer exit. The post-invalidation total exists only
+/// in the renderer's published accounting, so without the renderer the
+/// catalog returns the last published total -- never a fabricated zero --
+/// and keeps the pending flag for a later retry once the renderer can answer.
+#[test]
+fn partial_invalidation_read_on_renderer_exit_is_a_named_invariant_7_exception() {
+    use neomacs_display_protocol::ImageCacheUsage;
+    use neomacs_display_runtime::thread_comm::RenderCommandSender;
+
+    let (cmd_tx, cmd_rx) =
+        RenderCommandSender::bounded(std::num::NonZeroUsize::new(64).expect("non-zero capacity"));
+    let image_state = Arc::new(neomacs_display_runtime::render_thread::ImageRenderState::default());
+    image_state.mark_renderer_ready();
+    image_state.publish_cache_usage(ImageCacheUsage::new(4_096, 0));
+
+    let (queued_tx, queued_rx) = std::sync::mpsc::channel();
+    let (done_tx, done_rx) = std::sync::mpsc::channel();
+    let state_for_catalog = Arc::clone(&image_state);
+    let sender_for_catalog = cmd_tx.clone();
+    let reader = std::thread::spawn(move || {
+        let catalog = test_image_catalog(&sender_for_catalog, state_for_catalog);
+        // A real animation sequence must exist for `invalidate_animation` to
+        // admit a retire; a headerless data source registers one without
+        // needing the renderer.
+        let request = ImageResolveRequest {
+            spec: test_image_spec_identity("invariant-7"),
+            source: ImageResolveSource::Data(ImageDataSource::Isolated(EncodedBytes::new(
+                b"not an image".to_vec(),
+            ))),
+            identity: test_file_image_identity("invariant-7"),
+            size: ImageSizeSpec::new(AxisSize::AtMost(50), AxisSize::AtMost(50)),
+            rotation: ImageRotation::None,
+            colors: ImageColorContext::default(),
+            mask: Default::default(),
+            frame: ImageFrameIndex::new(3),
+            animation: ImageAnimationPolicy::disabled(),
+            realization: Default::default(),
+            failed_extent: Default::default(),
+        };
+        let _ = unbounded_lookup(&catalog, request);
+        let _ = catalog.invalidate_animation(ImageAnimationInvalidation::All);
+        let _ = queued_tx.send(());
+        let _ = done_tx.send(catalog.cached_size_bytes());
+    });
+    queued_rx
+        .recv_timeout(std::time::Duration::from_secs(2))
+        .expect("the retire was admitted");
+    // Give the read time to queue its publish behind the retire: on the
+    // pre-fix product that is the command whose ack can never arrive.
+    std::thread::sleep(std::time::Duration::from_millis(100));
+    image_state.mark_renderer_exited();
+    drop(cmd_rx);
+
+    let result = done_rx.recv_timeout(std::time::Duration::from_secs(2));
+    assert_eq!(
+        result,
+        Ok(4_096),
+        "a partial invalidation read on renderer exit must return the last published total"
+    );
+    drop(reader);
+}
+
+/// Clear, then a source that never becomes drawable, then the renderer exits:
+/// GNU charges nothing for a non-drawable source, so the clear's known zero
+/// stands. A post-clear load that actually becomes READY is the separate
+/// evaluator-ledger case and must invalidate the zero.
+#[test]
+fn clear_then_failed_load_then_renderer_exit_is_zero() {
+    use neomacs_display_protocol::ImageCacheUsage;
+    use neomacs_display_runtime::thread_comm::RenderCommandSender;
+    use neovm_core::emacs_core::image_catalog::ImageInvalidation;
+
+    let (cmd_tx, cmd_rx) =
+        RenderCommandSender::bounded(std::num::NonZeroUsize::new(64).expect("non-zero capacity"));
+    let image_state = Arc::new(neomacs_display_runtime::render_thread::ImageRenderState::default());
+    image_state.mark_renderer_ready();
+    image_state.publish_cache_usage(ImageCacheUsage::new(4_096, 0));
+
+    let (queued_tx, queued_rx) = std::sync::mpsc::channel();
+    let (done_tx, done_rx) = std::sync::mpsc::channel();
+    let state_for_catalog = Arc::clone(&image_state);
+    let sender_for_catalog = cmd_tx.clone();
+    let reader = std::thread::spawn(move || {
+        let catalog = test_image_catalog(&sender_for_catalog, state_for_catalog);
+        let _ = catalog.invalidate(ImageInvalidation::All);
+        let request = ImageResolveRequest {
+            spec: test_image_spec_identity("after-clear-load"),
+            source: ImageResolveSource::Data(ImageDataSource::Isolated(EncodedBytes::new(
+                b"not an image".to_vec(),
+            ))),
+            identity: test_file_image_identity("after-clear-load"),
+            size: ImageSizeSpec::new(AxisSize::AtMost(50), AxisSize::AtMost(50)),
+            rotation: ImageRotation::None,
+            colors: ImageColorContext::default(),
+            mask: Default::default(),
+            frame: ImageFrameIndex::new(3),
+            animation: ImageAnimationPolicy::disabled(),
+            realization: Default::default(),
+            failed_extent: Default::default(),
+        };
+        let _ = unbounded_lookup(&catalog, request);
+        let _ = queued_tx.send(());
+        let _ = done_tx.send(catalog.cached_size_bytes());
+    });
+    queued_rx
+        .recv_timeout(std::time::Duration::from_secs(2))
+        .expect("the clear and load were admitted");
+    std::thread::sleep(std::time::Duration::from_millis(100));
+    image_state.mark_renderer_exited();
+    drop(cmd_rx);
+
+    let result = done_rx.recv_timeout(std::time::Duration::from_secs(2));
+    assert_eq!(
+        result,
+        Ok(0),
+        "a non-drawable load after a clear charges nothing in GNU, so the clear's zero stands"
+    );
+    drop(reader);
+}
+
+/// A whole-cache clear issued after the renderer exited: the renderer-owned
+/// cache is gone with the renderer, so the known post-clear zero is the answer,
+/// never the last pre-clear total.
+#[test]
+fn clear_after_renderer_exit_reports_the_known_post_clear_zero() {
+    use neomacs_display_protocol::ImageCacheUsage;
+    use neomacs_display_runtime::thread_comm::RenderCommandSender;
+    use neovm_core::emacs_core::image_catalog::ImageInvalidation;
+
+    let (cmd_tx, cmd_rx) =
+        RenderCommandSender::bounded(std::num::NonZeroUsize::new(64).expect("non-zero capacity"));
+    let image_state = Arc::new(neomacs_display_runtime::render_thread::ImageRenderState::default());
+    image_state.mark_renderer_ready();
+    image_state.publish_cache_usage(ImageCacheUsage::new(4_096, 0));
+    let catalog = test_image_catalog(&cmd_tx, Arc::clone(&image_state));
+    image_state.mark_renderer_exited();
+    drop(cmd_rx);
+
+    let _ = catalog.invalidate(ImageInvalidation::All);
+    assert_eq!(
+        catalog.cached_size_bytes(),
+        0,
+        "a clear issued after renderer exit must report the known zero, not the stale total"
+    );
+}
+
+/// A load admitted after a whole-cache clear that becomes READY charges bytes,
+/// so it must invalidate the clear's known zero. The renderer-gone path that
+/// would otherwise answer 0 must instead fall back to the last published
+/// total. `clear_then_failed_load_then_renderer_exit_is_zero` pins the
+/// complementary non-drawable case: there the zero stands.
+#[test]
+fn post_clear_ready_load_invalidates_the_known_zero() {
+    use neomacs_display_protocol::ImageCacheUsage;
+    use neomacs_display_runtime::thread_comm::RenderCommandSender;
+    use neovm_core::emacs_core::image_catalog::ImageInvalidation;
+
+    // Control: a clear alone keeps the known zero even with the renderer gone.
+    {
+        let (cmd_tx, cmd_rx) =
+            RenderCommandSender::bounded(std::num::NonZeroUsize::new(64).expect("capacity"));
+        let image_state =
+            Arc::new(neomacs_display_runtime::render_thread::ImageRenderState::default());
+        image_state.mark_renderer_ready();
+        image_state.publish_cache_usage(ImageCacheUsage::new(4_096, 0));
+        let catalog = test_image_catalog(&cmd_tx, Arc::clone(&image_state));
+        let _ = catalog.invalidate(ImageInvalidation::All);
+        image_state.mark_renderer_exited();
+        drop(cmd_rx);
+        assert_eq!(
+            catalog.cached_size_bytes(),
+            0,
+            "control: a clear with no later ready load is the known zero"
+        );
+    }
+
+    let (cmd_tx, cmd_rx) =
+        RenderCommandSender::bounded(std::num::NonZeroUsize::new(64).expect("capacity"));
+    let image_state = Arc::new(neomacs_display_runtime::render_thread::ImageRenderState::default());
+    image_state.mark_renderer_ready();
+    image_state.publish_cache_usage(ImageCacheUsage::new(4_096, 0));
+    let catalog = test_image_catalog(&cmd_tx, Arc::clone(&image_state));
+
+    let _ = catalog.invalidate(ImageInvalidation::All);
+    let request = ImageResolveRequest {
+        spec: test_image_spec_identity("after-clear-ready"),
+        source: ImageResolveSource::Data(ImageDataSource::Isolated(EncodedBytes::new(
+            b"not an image".to_vec(),
+        ))),
+        identity: test_file_image_identity("after-clear-ready"),
+        size: ImageSizeSpec::new(AxisSize::AtMost(50), AxisSize::AtMost(50)),
+        rotation: ImageRotation::None,
+        colors: ImageColorContext::default(),
+        mask: Default::default(),
+        frame: ImageFrameIndex::new(3),
+        animation: ImageAnimationPolicy::disabled(),
+        realization: Default::default(),
+        failed_extent: Default::default(),
+    };
+    let ImageLookup::Pending(pending) = unbounded_lookup(&catalog, request.clone()) else {
+        panic!("headerless source lookup should be pending");
+    };
+    image_state.publish_terminal(
+        pending.load(),
+        ImageDecodeTerminal::Ready(ResolvedImageMetadata::layout_is_image_pixels(
+            25,
+            50,
+            0x12_34_56,
+            false,
+            Default::default(),
+        )),
+    );
+    let ImageLookup::Ready(_) = unbounded_lookup(&catalog, request) else {
+        panic!("the post-clear load should be ready");
+    };
+    // The renderer's published total now includes the post-clear image.
+    image_state.publish_cache_usage(ImageCacheUsage::new(4_096, 0));
+    image_state.mark_renderer_exited();
+    drop(cmd_rx);
+
+    assert_eq!(
+        catalog.cached_size_bytes(),
+        4_096,
+        "a post-clear READY load invalidates the known zero; the read must use the published total"
+    );
 }
 
 #[test]
@@ -2391,7 +3222,93 @@ fn raw_dump_loadup_invocation_owns_mode_and_build_argv() {
     );
 }
 
+/// Stand-in native connection for the GUI startup fixtures.
+///
+/// Production's `PrimaryWindowDisplayHost` owns the display connection the
+/// process really opened; a test evaluator has none. GNU's
+/// `window-system-initialization` still calls `x-open-connection` for the
+/// display the session started on, and since the admission rule in
+/// `builtin_x_open_connection` requires the host to own that connection, the
+/// fixture must supply it or startup aborts before the behaviours under test
+/// run.
+struct StartupGuiDisplayHost {
+    identity: neomacs_display_protocol::GraphicalDisplayIdentity,
+}
+
+impl DisplayHost for StartupGuiDisplayHost {
+    fn graphical_connection_identity(
+        &self,
+        display: Option<&str>,
+    ) -> Result<Option<neomacs_display_protocol::GraphicalDisplayIdentity>, String> {
+        match display {
+            // pgtk's nil display opens the owned default (src/pgtkfns.c:2140).
+            None | Some("") => Ok(Some(self.identity.clone())),
+            Some(name) if name == self.identity.terminal_name() => Ok(Some(self.identity.clone())),
+            Some(name) => Err(format!(
+                "synthetic startup display {} refused foreign display {name}",
+                self.identity.terminal_name()
+            )),
+        }
+    }
+
+    fn realize_gui_frame(&mut self, _request: GuiFrameHostRequest) -> Result<(), String> {
+        Ok(())
+    }
+
+    fn resize_gui_frame(&mut self, _request: GuiFrameHostRequest) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+/// Records `resize_gui_frame` so a test can see an explicit size.
+#[cfg(target_os = "linux")]
+struct RecordingResizeHost {
+    requests: Rc<RefCell<Vec<GuiFrameHostRequest>>>,
+}
+
+#[cfg(target_os = "linux")]
+impl DisplayHost for RecordingResizeHost {
+    fn realize_gui_frame(&mut self, _request: GuiFrameHostRequest) -> Result<(), String> {
+        Ok(())
+    }
+
+    fn resize_gui_frame(&mut self, request: GuiFrameHostRequest) -> Result<(), String> {
+        self.requests.borrow_mut().push(request);
+        Ok(())
+    }
+}
+
+/// Give a GUI startup fixture the display connection its bootstrap declares.
+fn install_synthetic_startup_display(eval: &mut Context) {
+    let identity = gui_display_identity();
+    // GNU resolves DISPLAY from `process-environment` first
+    // (src/callproc.c:1716-1746), so the ambient value would otherwise win
+    // over the frame's synthetic display and x-open-connection would ask for
+    // a foreign name, which the host correctly refuses.
+    eval.eval_str(&format!(
+        r#"(setenv "DISPLAY" "{}")"#,
+        identity.terminal_name()
+    ))
+    .expect("pin the fixture's synthetic display in process-environment");
+    eval.set_variable("x-display-name", Value::string(identity.terminal_name()));
+    eval.set_display_host(Box::new(StartupGuiDisplayHost { identity }));
+}
+
+/// A real frame for the configure_gnu_startup_state tests. A frame object
+/// exists only for a created frame (make_frame refuses an id the registry
+/// never minted), so these tests cannot pass a made-up FrameId.
+fn startup_state_test_frame(eval: &mut Context) -> FrameId {
+    let buffer = eval
+        .buffer_manager()
+        .current_buffer()
+        .expect("current buffer")
+        .id();
+    eval.frame_manager_mut()
+        .create_frame("startup-state", 800, 600, buffer)
+}
+
 fn bootstrap_runtime_gui_frame(eval: &mut Context) -> FrameId {
+    install_synthetic_startup_display(eval);
     load_neomacs_gui_term_layer(eval);
     let _bootstrap = bootstrap_buffers(eval, 960, 640, gui_display());
     eval.frame_manager()
@@ -2518,6 +3435,7 @@ fn opening_gui_frame_adoption_does_not_push_stale_window_size() {
     neovm_core::emacs_core::DisplayHost::realize_gui_frame(
         &mut host,
         GuiFrameHostRequest {
+            resize_request_id: None,
             frame_id: FrameId(0x100000001),
             width: 960,
             height: 640,
@@ -2601,6 +3519,7 @@ fn opening_gui_frame_adoption_applies_fullscreen_mode() {
     neovm_core::emacs_core::DisplayHost::realize_gui_frame(
         &mut host,
         GuiFrameHostRequest {
+            resize_request_id: None,
             frame_id: FrameId(0x100000001),
             width: 960,
             height: 640,
@@ -2816,6 +3735,7 @@ fn primary_image_catalog_lookup_returns_pending_without_waiting_for_render_threa
         frame: ImageFrameIndex::new(3),
         animation: ImageAnimationPolicy::disabled(),
         realization: Default::default(),
+        failed_extent: Default::default(),
     };
 
     let started = Instant::now();
@@ -2828,8 +3748,6 @@ fn primary_image_catalog_lookup_returns_pending_without_waiting_for_render_threa
     let ImageLookup::Pending(image) = lookup else {
         panic!("new image lookup should be pending");
     };
-    assert_eq!(image.placement().width(), 50);
-    assert_eq!(image.placement().height(), 50);
     match cmd_rx.try_recv().expect("queued image load") {
         RenderCommand::Asset(AssetCommand::ImageLoadFile { size, frame, .. }) => {
             assert_eq!(
@@ -2840,18 +3758,65 @@ fn primary_image_catalog_lookup_returns_pending_without_waiting_for_render_threa
         }
         other => panic!("expected ImageLoadFile, got {other:?}"),
     }
+    // The load token is the pending identity. The slot's layout is the header
+    // probe's separate subject -- it may settle between the two lookups -- so
+    // this assertion is on the token, not on the whole pending image.
+    let duplicate = unbounded_lookup(&host.image_catalog, request.clone());
+    let ImageLookup::Pending(duplicate) = duplicate else {
+        panic!("duplicate lookup should stay pending");
+    };
     assert_eq!(
-        unbounded_lookup(&host.image_catalog, request.clone()),
-        ImageLookup::Pending(image.clone()),
-        "duplicate lookup should reuse the same pending image"
+        duplicate.load(),
+        image.load(),
+        "duplicate lookup should reuse the same pending load token"
     );
     assert!(
         cmd_rx.try_recv().is_err(),
         "duplicate lookup must not enqueue a second decode"
     );
+}
+
+/// The pending slot's layout is the header's subject, not the token's: a live
+/// header probe may settle it at any point during another lookup. Assert the
+/// layout update deterministically instead: a source with no readable header
+/// keeps the placeholder, and this test publishes the decode-completion
+/// terminal itself (the render thread would in a live session), so neither
+/// side races the assertion.
+#[test]
+fn primary_image_catalog_pending_layout_updates_when_the_decode_completes() {
+    let (cmd_tx, _cmd_rx) = neomacs_display_runtime::thread_comm::RenderCommandSender::unbounded();
+    let image_metadata = Arc::new(ImageRenderState::default());
+    let catalog = test_image_catalog(&cmd_tx, Arc::clone(&image_metadata));
+    let request = ImageResolveRequest {
+        spec: test_image_spec_identity("pending-layout"),
+        source: ImageResolveSource::Data(ImageDataSource::Isolated(EncodedBytes::new(
+            b"not an image".to_vec(),
+        ))),
+        identity: test_file_image_identity("pending-layout"),
+        size: ImageSizeSpec::new(AxisSize::AtMost(50), AxisSize::AtMost(50)),
+        rotation: ImageRotation::None,
+        colors: ImageColorContext::default(),
+        mask: Default::default(),
+        frame: ImageFrameIndex::new(3),
+        animation: ImageAnimationPolicy::disabled(),
+        realization: Default::default(),
+        failed_extent: Default::default(),
+    };
+
+    let lookup = unbounded_lookup(&catalog, request.clone());
+    let ImageLookup::Pending(pending) = lookup else {
+        panic!("headerless source lookup should be pending");
+    };
+    assert_eq!(pending.placement().width(), 50);
+    assert_eq!(pending.placement().height(), 50);
+    assert_eq!(
+        unbounded_lookup(&catalog, request.clone()),
+        ImageLookup::Pending(pending.clone()),
+        "a headerless pending lookup keeps the placeholder and its token"
+    );
 
     image_metadata.publish_terminal(
-        image.load(),
+        pending.load(),
         ImageDecodeTerminal::Ready(ResolvedImageMetadata::layout_is_image_pixels(
             25,
             50,
@@ -2861,7 +3826,7 @@ fn primary_image_catalog_lookup_returns_pending_without_waiting_for_render_threa
         )),
     );
 
-    let ImageLookup::Ready(image) = unbounded_lookup(&host.image_catalog, request) else {
+    let ImageLookup::Ready(image) = unbounded_lookup(&catalog, request) else {
         panic!("decoded image lookup should be ready");
     };
     assert_eq!(image.metadata.layout.dimensions(), (25, 50));
@@ -2901,6 +3866,7 @@ fn animation_frames_share_sequence_identity_and_retirement_advances_generation()
         frame: ImageFrameIndex::new(0),
         animation: ImageAnimationPolicy::disabled(),
         realization: Default::default(),
+        failed_extent: Default::default(),
     };
 
     unbounded_lookup(&catalog, request.clone());
@@ -2954,6 +3920,7 @@ fn primary_image_catalog_does_not_block_on_render_command_backpressure() {
         animation: ImageAnimationPolicy::disabled(),
         frame: Default::default(),
         realization: Default::default(),
+        failed_extent: Default::default(),
     };
     let (done_tx, done_rx) = crossbeam_channel::bounded(1);
     let worker_cmd_tx = cmd_tx.clone();
@@ -3061,6 +4028,7 @@ fn primary_image_catalog_does_not_wait_for_renderer_metadata_lock() {
         animation: ImageAnimationPolicy::disabled(),
         frame: Default::default(),
         realization: Default::default(),
+        failed_extent: Default::default(),
     };
     let ImageLookup::Pending(expected) = unbounded_lookup(&host.image_catalog, request.clone())
     else {
@@ -3129,6 +4097,7 @@ fn primary_display_host_expands_tilde_in_image_file_before_render_command() {
         animation: ImageAnimationPolicy::disabled(),
         frame: Default::default(),
         realization: Default::default(),
+        failed_extent: Default::default(),
     };
 
     assert!(matches!(
@@ -3157,14 +4126,22 @@ fn failed_image_decode_wakes_waiter_and_is_negative_cached() {
         std::thread::sleep(Duration::from_millis(10));
         publisher.publish_terminal(
             load,
-            ImageDecodeTerminal::Failed(ImageDiagnostic::InvalidSize),
+            ImageDecodeTerminal::Failed(
+                neomacs_display_protocol::image_diagnostic::ImageDecodeFailure::new(
+                    ImageDiagnostic::InvalidSize,
+                ),
+            ),
         );
     });
 
     let started = Instant::now();
     assert_eq!(
         wait_for_image_metadata(&shared, load, Duration::from_secs(1)),
-        Some(ImageDecodeTerminal::Failed(ImageDiagnostic::InvalidSize))
+        Some(ImageDecodeTerminal::Failed(
+            neomacs_display_protocol::image_diagnostic::ImageDecodeFailure::new(
+                ImageDiagnostic::InvalidSize,
+            ),
+        ))
     );
     assert!(
         started.elapsed() < Duration::from_millis(250),
@@ -3175,7 +4152,11 @@ fn failed_image_decode_wakes_waiter_and_is_negative_cached() {
     let cached = Instant::now();
     assert_eq!(
         wait_for_image_metadata(&shared, load, Duration::from_secs(1)),
-        Some(ImageDecodeTerminal::Failed(ImageDiagnostic::InvalidSize))
+        Some(ImageDecodeTerminal::Failed(
+            neomacs_display_protocol::image_diagnostic::ImageDecodeFailure::new(
+                ImageDiagnostic::InvalidSize,
+            ),
+        ))
     );
     assert!(
         cached.elapsed() < Duration::from_millis(250),
@@ -3225,16 +4206,21 @@ fn primary_display_host_resolve_image_sync_returns_cached_decode_failure_promptl
         animation: ImageAnimationPolicy::disabled(),
         frame: Default::default(),
         realization: Default::default(),
+        failed_extent: Default::default(),
     };
     let ImageLookup::Pending(image) = unbounded_lookup(&host.image_catalog, request.clone()) else {
         panic!("new image should be pending");
     };
     image_metadata.publish_terminal(
         image.load(),
-        ImageDecodeTerminal::Failed(ImageDiagnostic::FormatError {
-            format: ImageFormatName::Png,
-            detail: "Read error".to_owned(),
-        }),
+        ImageDecodeTerminal::Failed(
+            neomacs_display_protocol::image_diagnostic::ImageDecodeFailure::new(
+                ImageDiagnostic::FormatError {
+                    format: ImageFormatName::Png,
+                    detail: "Read error".to_owned(),
+                },
+            ),
+        ),
     );
 
     let mut reported = Vec::new();
@@ -3244,7 +4230,8 @@ fn primary_display_host_resolve_image_sync_returns_cached_decode_failure_promptl
         else {
             panic!("failed decode should be negative-cached");
         };
-        assert_eq!(failed.placement(), image.placement());
+        assert_eq!(failed.placement().image_id(), image.placement().image_id());
+        assert_eq!(failed.placement().dimensions(), (30, 30));
         assert_eq!(failed.error.message(), "PNG error: Read error");
         reported.push(host.image_catalog.take_pending_diagnostics());
         assert!(
@@ -3265,13 +4252,30 @@ fn primary_display_host_resolve_image_sync_returns_cached_decode_failure_promptl
 
     for _ in 0..2 {
         let started = Instant::now();
-        assert_eq!(
+        let neovm_core::emacs_core::image_catalog::ImageSyncResolution::LoadFailed(failed) =
             neovm_core::emacs_core::DisplayHost::resolve_image_sync(
                 &host,
                 request.clone(),
                 ImageSizeLimit::UNLIMITED,
-            ),
-            Err("PNG error: Read error".to_owned()) // GNU's own words for the same bytes, not a generic failure string.
+            )
+        else {
+            panic!("cached decode failure must return LoadFailed");
+        };
+        assert_eq!(
+            failed.error,
+            ImageDiagnostic::FormatError {
+                format: ImageFormatName::Png,
+                detail: "Read error".to_owned(),
+            }
+        );
+        assert_eq!(
+            failed.failed_extent(),
+            neomacs_display_protocol::FailedImageExtent::default()
+        );
+        assert_eq!(
+            host.image_catalog.take_pending_diagnostics(),
+            vec!["PNG error: Read error".to_owned()],
+            "every synchronous query on a failed image logs its diagnostic like GNU lookup_image"
         );
         assert!(
             started.elapsed() < Duration::from_millis(250),
@@ -3821,6 +4825,7 @@ fn primary_window_resize_does_not_wait_for_host_acknowledgement() {
     neovm_core::emacs_core::DisplayHost::resize_gui_frame(
         &mut host,
         GuiFrameHostRequest {
+            resize_request_id: None,
             frame_id: FrameId(0x100000001),
             width: 1068,
             height: 1386,
@@ -4176,7 +5181,7 @@ fn tty_terminal_host_delete_terminal_sends_shutdown() {
     let (cmd_tx, cmd_rx) = neomacs_display_runtime::thread_comm::RenderCommandSender::unbounded();
     let mut host = TtyTerminalHost::new(cmd_tx);
 
-    host.delete_terminal()
+    host.delete_terminal(&[])
         .expect("delete terminal should succeed");
 
     match cmd_rx
@@ -4292,6 +5297,244 @@ fn publish_gui_frame_sends_every_visible_top_level_frame_tree() {
         .collect::<Vec<_>>();
     published.sort_by_key(|frame_id| frame_id.0);
     assert_eq!(published, vec![selected, second]);
+}
+
+/// One dirty redisplay evaluates a tool-bar item `:filter` once.
+///
+/// `note_redisplayed_linux_tool_bar` used to collect before layout while the
+/// selected window was still chrome-dirty, so the filter ran again. Layout
+/// is the collection GNU's `update_tool_bar` corresponds to. An allocated
+/// bar must not add another pass.
+#[cfg(target_os = "linux")]
+#[test]
+fn allocated_tool_bar_redisplay_evaluates_item_filter_once() {
+    let mut eval = create_bootstrap_evaluator_cached_with_features(&["neomacs"])
+        .expect("cached bootstrap evaluator");
+    let _bootstrap = bootstrap_buffers(&mut eval, 960, 640, gui_display());
+    let frame_id = eval
+        .frame_manager()
+        .selected_frame()
+        .expect("selected frame after bootstrap")
+        .id;
+    configure_gnu_startup_state(&mut eval, frame_id, &gui_startup());
+    eval.set_variable("n827-filter-count", Value::fixnum(0));
+    eval.eval_str(
+        r#"(setq tool-bar-map
+             (let ((map (make-sparse-keymap)))
+               (define-key map [n827]
+                 '(menu-item "N827" ignore
+                    :filter (lambda (cmd)
+                              (setq n827-filter-count (1+ n827-filter-count))
+                              cmd)))
+               map))"#,
+    )
+    .expect("install a counting tool-bar filter");
+    {
+        let frame = eval.frame_manager_mut().get_mut(frame_id).unwrap();
+        assert!(frame.tool_bar_height > 0);
+        frame.toolkit_tool_bar = neovm_core::window::ToolkitToolBar::Allocated;
+    }
+    let window = eval
+        .frame_manager()
+        .get(frame_id)
+        .expect("frame")
+        .selected_window;
+    eval.mark_chrome_dirty_window(window);
+
+    super::super::frame_layout::enable_cosmic_metrics_for_test();
+    let comms = neomacs_display_runtime::thread_comm::ThreadComms::new();
+    publish_gui_frame(&mut eval, &comms.frame_tx, None);
+    assert!(
+        comms.frame_rx.try_recv().is_ok(),
+        "the dirty redisplay publishes the frame"
+    );
+
+    let count = |eval: &Context| {
+        eval.default_value_only_by_name("n827-filter-count")
+            .expect("filter counter")
+    };
+    assert_eq!(
+        count(&eval),
+        Value::fixnum(1),
+        "an allocated dirty redisplay runs the tool-bar :filter once"
+    );
+
+    eval.frame_manager_mut()
+        .get_mut(frame_id)
+        .unwrap()
+        .toolkit_tool_bar = neovm_core::window::ToolkitToolBar::Unallocated {
+        explicit_size_omitted: false,
+    };
+    eval.mark_chrome_dirty_window(window);
+    publish_gui_frame(&mut eval, &comms.frame_tx, None);
+    let _ = comms.frame_rx.try_recv();
+    assert!(
+        count(&eval).as_int().unwrap() > 2,
+        "the unallocated redisplay still collects before layout, got {}",
+        count(&eval).as_int().unwrap()
+    );
+}
+
+/// A non-selected frame allocates its tool bar on its own redisplay.
+///
+/// GNU `prepare_menu_bars` calls `update_tool_bar` for every frame when
+/// `all_windows` is set (`xdisp.c:14328-14350`). `update_tool_bar` selects
+/// that frame only while it builds items (`xdisp.c:15698-15709`). An explicit
+/// size taken before that redisplay still omits `FRAME_TOOLBAR_HEIGHT`
+/// (`gtkutil.c:1181-1182`).
+#[cfg(target_os = "linux")]
+#[test]
+fn second_unselected_frame_allocates_its_tool_bar_on_its_own_redisplay() {
+    let mut eval = create_bootstrap_evaluator_cached_with_features(&["neomacs"])
+        .expect("cached bootstrap evaluator");
+    let _bootstrap = bootstrap_buffers(&mut eval, 960, 640, gui_display());
+    let selected = eval
+        .frame_manager()
+        .selected_frame()
+        .expect("selected frame after bootstrap")
+        .id;
+    configure_gnu_startup_state(&mut eval, selected, &gui_startup());
+
+    let second_buffer = eval.buffer_manager_mut().create_buffer("*second-frame*");
+    let second = eval
+        .frame_manager_mut()
+        .create_frame("second", 960, 640, second_buffer);
+    {
+        let frame = eval
+            .frame_manager_mut()
+            .get_mut(second)
+            .expect("second frame");
+        frame.set_window_system(Some(Value::symbol("neo")));
+        frame.displays_chrome = true;
+        frame.char_width = 8.0;
+        frame.char_height = 16.0;
+        frame.font_pixel_size = 14.0;
+        for (key, value) in [
+            ("vertical-scroll-bars", Value::NIL),
+            ("horizontal-scroll-bars", Value::NIL),
+            ("left-fringe", Value::fixnum(0)),
+            ("right-fringe", Value::fixnum(0)),
+            ("internal-border-width", Value::fixnum(0)),
+            ("menu-bar-lines", Value::fixnum(1)),
+            ("tool-bar-lines", Value::fixnum(1)),
+            ("tab-bar-lines", Value::fixnum(0)),
+            ("min-width", Value::fixnum(10)),
+            ("min-height", Value::fixnum(5)),
+        ] {
+            frame.set_parameter(Value::symbol(key), value);
+        }
+        frame.sync_bar_heights_from_parameters();
+    }
+    let (menu_height, tool_height) = {
+        let frame = eval.frame_manager().get(second).expect("second frame");
+        assert!(
+            frame.tool_bar_height > 0,
+            "frame 2 projects a tool-bar band"
+        );
+        assert_eq!(
+            frame.toolkit_tool_bar,
+            neovm_core::window::ToolkitToolBar::Unallocated {
+                explicit_size_omitted: false
+            }
+        );
+        (frame.menu_bar_height, frame.tool_bar_height)
+    };
+    assert_eq!(
+        eval.frame_manager().selected_frame().map(|frame| frame.id),
+        Some(selected),
+        "creating another top-level frame must not make it selected"
+    );
+
+    let requests = Rc::new(RefCell::new(Vec::new()));
+    eval.set_display_host(Box::new(RecordingResizeHost {
+        requests: Rc::clone(&requests),
+    }));
+    eval.set_variable("n827-other", Value::make_frame(second.0));
+    eval.eval_str(
+        r#"(progn
+            (setq frame-inhibit-implied-resize t)
+            (setq-default tool-bar-map
+              (let ((map (make-sparse-keymap)))
+                (define-key map [n827] '(menu-item "N827" ignore))
+                map))
+            (setq tool-bar-map (default-value 'tool-bar-map))
+            (with-current-buffer "*second-frame*"
+              (setq tool-bar-map (default-value 'tool-bar-map)))
+            (set-frame-size n827-other 90 40))"#,
+    )
+    .expect("explicit size on the unselected frame");
+
+    let request = {
+        let recorded = requests.borrow();
+        assert_eq!(
+            recorded.len(),
+            1,
+            "the unselected frame sends one explicit size"
+        );
+        assert_eq!(recorded[0].frame_id, second);
+        recorded[0].clone()
+    };
+    assert_eq!(
+        (request.width, request.height),
+        (720, 640 + menu_height),
+        "frame 2's explicit size omits its {tool_height}px tool bar"
+    );
+    assert_eq!(
+        eval.frame_manager().get(second).unwrap().toolkit_tool_bar,
+        neovm_core::window::ToolkitToolBar::Unallocated {
+            explicit_size_omitted: true
+        }
+    );
+    eval.apply_resize_input_event(request.width, request.height, 1.0, second.0, false)
+        .expect("host applies the omitted size");
+    assert_eq!(
+        eval.frame_manager().get(second).unwrap().toolkit_tool_bar,
+        neovm_core::window::ToolkitToolBar::Unallocated {
+            explicit_size_omitted: true
+        },
+        "applying the size keeps the bar omitted until this frame redisplays"
+    );
+    assert_eq!(
+        eval.frame_manager().selected_frame().map(|frame| frame.id),
+        Some(selected)
+    );
+
+    super::super::frame_layout::enable_cosmic_metrics_for_test();
+    let comms = neomacs_display_runtime::thread_comm::ThreadComms::new();
+    publish_gui_frame(&mut eval, &comms.frame_tx, None);
+
+    let mut published = comms
+        .frame_rx
+        .try_iter()
+        .map(|state| FrameId(state.frame_placement.frame().get()))
+        .collect::<Vec<_>>();
+    published.sort_by_key(|frame_id| frame_id.0);
+    assert_eq!(published, vec![selected, second]);
+    assert_eq!(
+        eval.frame_manager().get(selected).unwrap().toolkit_tool_bar,
+        neovm_core::window::ToolkitToolBar::Allocated,
+        "the selected frame allocates on this redisplay"
+    );
+    assert_eq!(
+        eval.frame_manager().get(second).unwrap().toolkit_tool_bar,
+        neovm_core::window::ToolkitToolBar::Allocated,
+        "the unselected frame allocates on its own redisplay"
+    );
+    assert_eq!(
+        requests.borrow().len(),
+        1,
+        "inhibit t reflows the omitted frame inside the explicit outer size"
+    );
+    assert_eq!(
+        eval.frame_manager().get(second).unwrap().height,
+        request.height,
+        "the second frame's outer pixels stay the size that omitted the bar"
+    );
+    assert_eq!(
+        eval.frame_manager().selected_frame().map(|frame| frame.id),
+        Some(selected),
+        "publishing the second frame must not select it"
+    );
 }
 
 #[test]
@@ -4481,6 +5724,7 @@ fn batch_tty_mode_leaves_redisplay_callback_unset() {
         eval.redisplay_fn.is_none(),
         "batch tty should not install a live redisplay callback"
     );
+    drop(eval);
 
     let interactive = StartupOptions {
         frontend: FrontendKind::Tty,
@@ -4727,6 +5971,7 @@ fn cl_generic_context_dispatch_uses_neo_window_system_method() {
 fn pdump_preserves_neo_term_generic_methods() {
     let mut eval = create_bootstrap_evaluator_cached_with_features(&["neomacs"])
         .expect("cached bootstrap evaluator");
+    install_synthetic_startup_display(&mut eval);
     load_neomacs_gui_term_layer(&mut eval);
 
     let pre = eval
@@ -4773,8 +6018,8 @@ fn neo_preload_binds_command_q_like_gnu_on_darwin() {
         .eval_str(
             r#"
         ;; GNU's NS port installs this binding in the dump
-        ;; (lisp/term/ns-win.el:141). The AppKit Quit redirect feeds s-q
-        ;; into the input transport, so the darwin branch must bind it.
+        ;; (lisp/term/ns-win.el:141), independently of the application's
+        ;; ns-power-off event binding (ns-win.el:195).
         (let ((system-type 'darwin)
               (original (lookup-key global-map [?\s-q])))
           (unwind-protect
@@ -4788,6 +6033,39 @@ fn neo_preload_binds_command_q_like_gnu_on_darwin() {
         .unwrap_or_else(|err| format!("{err:?}"));
 
     assert_eq!(rendered, "(t)");
+}
+
+#[test]
+fn neo_preload_ns_power_off_is_non_key_and_independent_of_super_q() {
+    let mut eval = create_bootstrap_evaluator_cached_with_features(&["neomacs"])
+        .expect("cached bootstrap evaluator");
+    let rendered = eval
+        .eval_str(
+            r#"
+        ;; GNU installs two independent bindings (ns-win.el:141,195), and
+        ;; marks only ns-power-off as non-key (ns-win.el:177; keymap.el:798).
+        (let ((system-type 'darwin)
+              (original-q (lookup-key global-map [?\s-q]))
+              (original-power (lookup-key global-map [ns-power-off]))
+              (original-mark (get 'ns-power-off 'non-key-event)))
+          (unwind-protect
+              (progn
+                (load "term/neo-preload.el" nil t)
+                (let ((before (key-binding [ns-power-off])))
+                  (global-set-key [?\s-q] #'ignore)
+                  (list (eq before #'save-buffers-kill-emacs)
+                        (eq (key-binding [ns-power-off]) #'save-buffers-kill-emacs)
+                        (eq (key-binding [?\s-q]) #'ignore)
+                        (eq (get 'ns-power-off 'non-key-event) t))))
+            (define-key global-map [?\s-q] original-q)
+            (define-key global-map [ns-power-off] original-power)
+            (put 'ns-power-off 'non-key-event original-mark)))
+        "#,
+        )
+        .map(|value| print_value_with_eval(&eval, &value))
+        .unwrap_or_else(|err| format!("{err:?}"));
+
+    assert_eq!(rendered, "(t t t t)");
 }
 
 #[test]
@@ -4816,6 +6094,7 @@ fn neo_win_registers_neo_display_format() {
 fn neo_window_system_initialization_preserves_gnu_clipboard_policy_and_user_customization() {
     let mut eval = create_bootstrap_evaluator_cached_with_features(&["neomacs"])
         .expect("cached bootstrap evaluator");
+    install_synthetic_startup_display(&mut eval);
 
     let rendered = eval
         .eval_str(
@@ -5158,7 +6437,8 @@ fn configure_gnu_startup_state_marks_batch_mode_noninteractive() {
         no_build_details: false,
         rows_query_admission: neomacs_layout_engine::RowsQueryAdmission::Off,
     };
-    configure_gnu_startup_state(&mut eval, FrameId(9), &startup);
+    let frame = startup_state_test_frame(&mut eval);
+    configure_gnu_startup_state(&mut eval, frame, &startup);
 
     assert_eq!(
         eval.default_value_only_by_name("noninteractive"),
@@ -5190,7 +6470,8 @@ fn configure_gnu_startup_state_marks_batch_mode_noninteractive() {
 fn configure_gnu_startup_state_seeds_command_line_args_left_for_gnu_startup() {
     let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let startup = gui_startup_with_args(&["-Q", "-l", "/tmp/demo.el"]);
-    configure_gnu_startup_state(&mut eval, FrameId(42), &startup);
+    let frame = startup_state_test_frame(&mut eval);
+    configure_gnu_startup_state(&mut eval, frame, &startup);
 
     assert_eq!(
         eval.default_value_only_by_name("command-line-args-left"),
@@ -5234,7 +6515,7 @@ fn bootstrap_buffers_seed_frame_with_renderer_metrics() {
 #[test]
 fn startup_dimensions_gui_matches_gnu_default_text_grid() {
     let metrics = bootstrap_frame_metrics();
-    let (width, height) = startup_dimensions(FrontendKind::Gui, metrics, false);
+    let (width, height) = startup_dimensions(FrontendKind::Gui, metrics, false, false);
     // GNU's default GUI frame is 80 text columns wide and 35 counted text rows
     // tall (its frame-height is deterministically one less than the nominal 36-row
     // geometry). The requested window reserves the scroll bar + both 8px fringes on
@@ -5259,7 +6540,19 @@ fn startup_dimensions_gui_matches_gnu_default_text_grid() {
 fn startup_dimensions_noninteractive_tty_matches_gnu_initial_frame() {
     let metrics = bootstrap_frame_metrics_for_frontend(FrontendKind::Tty);
     assert_eq!(
-        startup_dimensions(FrontendKind::Tty, metrics, true),
+        startup_dimensions(FrontendKind::Tty, metrics, true, false),
+        (80, 25)
+    );
+}
+
+#[test]
+fn startup_dimensions_daemon_skips_the_initial_tty_fatal_checks() {
+    let metrics = bootstrap_frame_metrics_for_frontend(FrontendKind::Tty);
+    assert!(!initial_tty_fatal_checks_apply(false, true));
+    assert!(!initial_tty_fatal_checks_apply(true, false));
+    assert!(initial_tty_fatal_checks_apply(false, false));
+    assert_eq!(
+        startup_dimensions(FrontendKind::Tty, metrics, false, true),
         (80, 25)
     );
 }
@@ -7627,7 +8920,8 @@ fn configure_gnu_startup_state_applies_explicit_no_build_details() {
     let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let mut startup = gui_startup();
     startup.no_build_details = true;
-    configure_gnu_startup_state(&mut eval, FrameId(42), &startup);
+    let frame = startup_state_test_frame(&mut eval);
+    configure_gnu_startup_state(&mut eval, frame, &startup);
     assert_eq!(
         eval.default_value_only_by_name("build-details"),
         Some(Value::NIL)
@@ -7655,5 +8949,65 @@ fn graphical_startup_exposes_only_initial_terminal_before_lisp_frame_creation() 
     assert_eq!(
         print_value_with_eval(&eval, &state),
         "(nil nil neo t t nil nil (t))"
+    );
+}
+
+#[test]
+fn webview_pre_thread_configuration_is_gated_to_gui_and_daemon_startup() {
+    use super::super::should_configure_webview_before_threads;
+
+    let parse = |args: &[&str]| {
+        parse_startup_options(args.iter().map(|arg| (*arg).to_owned())).expect("startup options")
+    };
+
+    assert!(
+        should_configure_webview_before_threads(RuntimeMode::FinalRun, &parse(&["neomacs"])),
+        "GUI startup must configure WPE DRM env before threads start"
+    );
+    assert!(
+        should_configure_webview_before_threads(
+            RuntimeMode::FinalRun,
+            &parse(&["neomacs", "--daemon"])
+        ),
+        "background daemon startup may host GUI frames later"
+    );
+    assert!(
+        should_configure_webview_before_threads(
+            RuntimeMode::FinalRun,
+            &parse(&["neomacs", "--fg-daemon=work"])
+        ),
+        "foreground daemon startup may host GUI frames later"
+    );
+    assert!(
+        !should_configure_webview_before_threads(
+            RuntimeMode::FinalRun,
+            &parse(&["neomacs", "--batch"])
+        ),
+        "--batch must not scan DRM devices or export WPE_DRM_* into Lisp getenv"
+    );
+    assert!(
+        !should_configure_webview_before_threads(
+            RuntimeMode::FinalRun,
+            &parse(&["neomacs", "-nw"])
+        ),
+        "TTY (-nw) startup must not export WPE_DRM_*"
+    );
+    assert!(
+        !should_configure_webview_before_threads(
+            RuntimeMode::FinalRun,
+            &parse(&["neomacs", "--batch", "--daemon"])
+        ),
+        "noninteractive startup must not export WPE_DRM_*"
+    );
+    assert!(
+        !should_configure_webview_before_threads(RuntimeMode::Raw, &parse(&["neomacs-temacs"])),
+        "neomacs-temacs build runs must not export WPE_DRM_*"
+    );
+    assert!(
+        !should_configure_webview_before_threads(
+            RuntimeMode::BootstrapUse,
+            &parse(&["bootstrap-neomacs"])
+        ),
+        "bootstrap-neomacs build runs must not export WPE_DRM_*"
     );
 }

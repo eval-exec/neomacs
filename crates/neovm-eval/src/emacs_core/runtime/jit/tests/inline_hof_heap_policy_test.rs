@@ -17,10 +17,10 @@ fn function(ops: Vec<Op>, constants: Vec<Value>) -> ByteCodeFunction {
         optional: vec![],
         rest: None,
     });
-    function.lexical = true;
-    function.ops = ops;
-    function.constants = constants.into();
-    function.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(8);
+    function.set_lexical(true);
+    function.set_ops(ops);
+    function.set_constants(constants.into());
+    function.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(8));
     function.seal_hand_assembled_ops_for_test();
     function.jit_runtime().set_hot_for_test();
     function
@@ -51,11 +51,11 @@ fn inline_hof_heap_policy_detects_hidden_loop_stores_and_releases_scope() {
                     Op::Call(2),
                     Op::Return,
                 ],
-                vec![Value::symbol(name), callback],
+                vec![Value::from_sym_id(intern(name)), callback],
             );
             let fused = inline::fuse_calls_v2(
                 caller.executable_ops(),
-                &caller.constants,
+                caller.constants(),
                 None,
                 1,
                 &vec![NumericFeedback::FixnumOnly; caller.executable_ops().len()],

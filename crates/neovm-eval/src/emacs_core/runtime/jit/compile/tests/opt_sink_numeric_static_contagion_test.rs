@@ -30,7 +30,7 @@ fn opt_sink_numeric_static_float_contagion_preserves_identity_and_integer_seed_p
             vec![Value::symbol("not-a-number")],
         ])
         .collect::<Vec<_>>();
-    roots.add(&f.constants);
+    roots.add(f.constants());
     // Train only the successful numeric path. Other feedback is deliberately
     // sticky; an error before either snapshot would leave the first Mul opaque
     // and fail to exercise the actual Const-origin proof at all.
@@ -63,7 +63,7 @@ fn opt_sink_numeric_static_float_contagion_preserves_identity_and_integer_seed_p
     );
     assert_ne!(
         a.bits(),
-        f.constants[0].bits(),
+        f.constants()[0].bits(),
         "constant Float keeps its own identity"
     );
     assert_eq!(

@@ -628,7 +628,14 @@ impl OwnedAbsoluteRoot {
         let workspace_root = fs::canonicalize(&workspace_root).map_err(|error| {
             format!("cannot canonicalize Tide workspace {workspace_root:?}: {error}")
         })?;
-        let workspace_tmp = fs::canonicalize(workspace_root.join("tmp"))
+        // `<repo>/tmp` is gitignored, so a fresh worktree does not have it.
+        // Canonicalize would panic the fixture through `expect` before any
+        // Tide case runs. Create the empty directory, then keep the child
+        // check against that real directory.
+        let repository_tmp = workspace_root.join("tmp");
+        fs::create_dir_all(&repository_tmp)
+            .map_err(|error| format!("cannot create repository tmp {repository_tmp:?}: {error}"))?;
+        let workspace_tmp = fs::canonicalize(&repository_tmp)
             .map_err(|error| format!("cannot canonicalize repository tmp: {error}"))?;
         let parent = root
             .parent()
@@ -5201,8 +5208,8 @@ const PRELUDE: &str = r####"
       ;; <workspace>/tmp.  NEOMACS_TEST_SCRATCH_ROOT is the approval channel
       ;; for that relocation; the workspace/tmp prefix was only the default
       ;; layout and refused every relocated target directory.
-      (unless (and (file-in-directory-p sandbox scratch)
-                   (file-in-directory-p tmp scratch)
+      (unless (and (neomacs-melpa-path-inside-p sandbox scratch)
+                   (neomacs-melpa-path-inside-p tmp scratch)
                    (tide368-test-direct-child-p owner sandbox)
                    (not (file-exists-p owner)))
         (error "Tide refuses owned root allocation: %S"
@@ -6676,6 +6683,25 @@ fn protocol_frame_with_tokens(
     let bytes = format!("Content-Length: {}\r\n\r\n{body}", body.len()).into_bytes();
     let digest = Sha256Digest::of(&bytes);
     ApprovedFrame::new(bytes, digest, delivery, tokens).expect("valid typed Tide protocol frame")
+}
+
+#[test]
+fn owned_absolute_root_creates_missing_repository_tmp() {
+    let workspace_dir = tempfile::tempdir().expect("fresh workspace");
+    let workspace = workspace_dir
+        .path()
+        .canonicalize()
+        .expect("canonicalize fresh workspace");
+    let expected_root = workspace.join("tmp/tide-fresh-owner");
+    assert!(
+        !workspace.join("tmp").exists(),
+        "the fresh workspace must start without a repository tmp"
+    );
+    let owned = OwnedAbsoluteRoot::new(&workspace, &expected_root)
+        .expect("a fresh worktree creates repository tmp and accepts a child");
+    assert_eq!(owned.0, expected_root);
+    assert!(workspace.join("tmp").is_dir());
+    assert!(!expected_root.exists());
 }
 
 fn assert_typed_contracts() {

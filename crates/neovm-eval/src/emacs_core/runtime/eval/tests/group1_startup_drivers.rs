@@ -92,10 +92,15 @@ pub(crate) fn mapcar_debug_entry_obs_for_test(
     }
     fn bytecode(target: Value) -> Value {
         let mut code = ByteCodeFunction::new(LambdaParams::simple(vec![intern("mapact-item")]));
-        code.lexical = true;
-        code.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(8);
-        code.constants = vec![target].into();
-        code.ops = vec![Op::Constant(0), Op::StackRef(1), Op::Call(1), Op::Return];
+        code.set_lexical(true);
+        code.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(8));
+        code.set_constants(vec![target].into());
+        code.set_ops(vec![
+            Op::Constant(0),
+            Op::StackRef(1),
+            Op::Call(1),
+            Op::Return,
+        ]);
         code.jit_runtime().set_hot_for_test();
         Value::make_bytecode(code)
     }
@@ -235,13 +240,13 @@ pub(crate) fn sink_only_materialize_at_aset_for_test(
         .expect("sink pass selected");
     let cfg = compile::analyze_cfg(
         source.executable_ops(),
-        &source.constants,
+        source.constants(),
         source.executable_gnu_byte_offset_map(),
-        source.params.fixed_arity().unwrap(),
+        source.params().fixed_arity().unwrap(),
     )
     .expect("exact sink repro CFG");
     let constants = source
-        .constants
+        .constants()
         .iter()
         .copied()
         .map(ir::ValueBits::from_value)
@@ -251,7 +256,7 @@ pub(crate) fn sink_only_materialize_at_aset_for_test(
         constants: &constants,
         cfg: &cfg,
         params: ir::ParamShape {
-            required: source.params.fixed_arity().unwrap(),
+            required: source.params().fixed_arity().unwrap(),
             ..Default::default()
         },
         dynamic_prefix: 0,
@@ -335,10 +340,10 @@ pub(crate) fn inline_hof_mapcar_backtrace_obs_for_test(
             optional: Vec::new(),
             rest: None,
         });
-        f.lexical = true;
-        f.ops = ops;
-        f.constants = constants.into();
-        f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(24);
+        f.set_lexical(true);
+        f.set_ops(ops);
+        f.set_constants(constants.into());
+        f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(24));
         ByteCodeFunctionExt::seal_hand_assembled_ops(&mut f);
         f.jit_runtime().set_hot_for_test();
         f
@@ -355,6 +360,7 @@ pub(crate) fn inline_hof_mapcar_backtrace_obs_for_test(
         callback.bits() as i64,
         sequence.bits() as i64,
     ];
+    // SAFETY: `sequence` is a live Value word this mutator owns.
     let len = unsafe { neovm_jit_hof_length(sequence.bits() as i64) };
     // SAFETY: this frame supplies the live `ctx` and argument words; the shim contract holds.
     let bt = unsafe {
@@ -425,19 +431,19 @@ pub(crate) fn opt_switch_hoist_call_mutation_for_test(ctx: &mut Context) -> (boo
     push_scratch_gc_roots(&[f]);
     let data = f.get_bytecode_data().unwrap();
     let arity = data
-        .params
+        .params()
         .stack_shape()
         .expect("fixture stack parameters")
         .required();
     let cfg = compile::analyze_cfg(
         data.executable_ops(),
-        &data.constants,
+        data.constants(),
         data.executable_gnu_byte_offset_map(),
         arity,
     )
     .unwrap();
     let constants = data
-        .constants
+        .constants()
         .iter()
         .copied()
         .map(ir::ValueBits::from_value)
@@ -470,7 +476,7 @@ pub(crate) fn opt_switch_hoist_call_mutation_for_test(ctx: &mut Context) -> (boo
         .expect("manual typed IR verifies before native lowering");
     let leaf = compile::lower_opt_ir_for_test(
         data.executable_ops(),
-        &data.constants,
+        data.constants(),
         arity,
         data.executable_gnu_byte_offset_map(),
         &plan,
@@ -478,7 +484,7 @@ pub(crate) fn opt_switch_hoist_call_mutation_for_test(ctx: &mut Context) -> (boo
     .expect("verified typed integer IR has native support");
     assert_eq!(leaf.selected_tier(), compile::opt_census::SelectedTier::Opt);
     let args = [Value::symbol("a"), Value::fixnum(300)];
-    let actual = match leaf.call(&mut *ctx as *mut Context as *mut u8, &args) {
+    let actual = match unsafe { leaf.call(&mut *ctx as *mut Context as *mut u8, &args) } {
         NativeRun::Ok(bits) => {
             // SAFETY: these bits are the completed native result of `leaf.call`.
             unsafe { Value::from_bits(bits) }
@@ -546,8 +552,8 @@ pub(crate) fn lists48_osr_aset_advice_obs_for_test(
         optional: Vec::new(),
         rest: None,
     });
-    source.lexical = true;
-    source.ops = vec![
+    source.set_lexical(true);
+    source.set_ops(vec![
         Op::Constant(0),
         Op::StackRef(0),
         Op::StackRef(2),
@@ -569,9 +575,9 @@ pub(crate) fn lists48_osr_aset_advice_obs_for_test(
         Op::Pop,
         Op::StackRef(2),
         Op::Return,
-    ];
-    source.constants = vec![Value::make_int(0)].into();
-    source.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(24);
+    ]);
+    source.set_constants(vec![Value::make_int(0)].into());
+    source.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(24));
     ByteCodeFunctionExt::seal_hand_assembled_ops(&mut source);
     source.jit_runtime().set_hot_for_test();
     let op_len = source.executable_ops().len();
@@ -589,15 +595,15 @@ pub(crate) fn lists48_osr_aset_advice_obs_for_test(
         == Some(NativeRun::Ok(alias.bits()));
     let osr_tier = cache::osr_leaf_ptr_for_test(&source, 1).expect("installed actual OSR leaf");
     let osr_tier = unsafe { &*osr_tier }.selected_tier().name();
-    let osr_vector = vector.as_vector_data().unwrap()[0].bits() == alias.bits();
+    let osr_vector = vector.as_vector_data().unwrap().at(0).bits() == alias.bits();
     let osr_pair = pair.cons_car() == Value::make_int(3);
     let function_value = Value::make_bytecode(source.clone());
     push_scratch_gc_root(function_value);
     let normal_ok = unsafe { try_run_compiled(ctx, &source, function_value, &args) }.unwrap()
         == Some(alias.bits());
-    let normal = cache::resolve_compiled_leaf_ptr(ctx, &source).unwrap();
+    let normal = unsafe { cache::resolve_compiled_leaf_ptr(ctx, &source) }.unwrap();
     let normal_tier = unsafe { &*normal }.selected_tier().name();
-    let normal_vector = vector.as_vector_data().unwrap()[0].bits() == alias.bits();
+    let normal_vector = vector.as_vector_data().unwrap().at(0).bits() == alias.bits();
     let normal_pair = pair.cons_car() == Value::make_int(3);
     let advice_native = ctx
         .obarray()

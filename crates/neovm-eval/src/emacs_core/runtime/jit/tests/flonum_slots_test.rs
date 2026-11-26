@@ -15,6 +15,7 @@ use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
 use crate::emacs_core::eval::Context;
 use crate::emacs_core::jit::NumericFeedback as NF;
 use neovm_value::error::{FlowKind, FlowResultExt as _};
+use neovm_value::intern::intern;
 use neovm_value::value::{LambdaParams, ValueKind};
 
 /// `(lambda (p0 .. pN-1) OPS)` with `Float` recorded at `float_pcs`.
@@ -32,13 +33,13 @@ fn float_fn(
         optional: Vec::new(),
         rest: None,
     });
-    f.lexical = true;
-    f.ops = ops;
-    f.constants = constants.into();
-    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
+    f.set_lexical(true);
+    f.set_ops(ops);
+    f.set_constants(constants.into());
+    f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
     f.seal_hand_assembled_ops();
     for &pc in float_pcs {
-        f.jit_runtime().record_numeric(pc, f.ops.len(), NF::Float);
+        f.jit_runtime().record_numeric(pc, f.ops().len(), NF::Float);
         assert_eq!(f.jit_runtime().numeric_feedback(pc), NF::Float);
     }
     f
@@ -61,7 +62,7 @@ fn compile_in(mode: FlonumMode, f: &ByteCodeFunction) -> (CompiledLeaf, lowering
 /// Run `leaf` natively and count the objects it allocated.
 fn run_counting(ev: &mut Context, leaf: &CompiledLeaf, args: &[Value]) -> (NativeRun, usize) {
     let before = ev.tagged_heap.allocated_count();
-    let run = leaf.call(ev as *mut Context as *mut u8, args);
+    let run = unsafe { leaf.call(ev as *mut Context as *mut u8, args) };
     (run, ev.tagged_heap.allocated_count() - before)
 }
 
@@ -214,8 +215,12 @@ fn aliases_of_one_result_are_one_object() {
     );
     assert_eq!(allocated, 1);
     let slots = v.as_vector_data().expect("vector");
-    assert_eq!(slots[0].bits(), slots[1].bits(), "one object in both slots");
-    assert_eq!(float_of(slots[0]), 3.0);
+    assert_eq!(
+        slots.at(0).bits(),
+        slots.at(1).bits(),
+        "one object in both slots"
+    );
+    assert_eq!(float_of(slots.at(0)), 3.0);
 
     // (lambda (a b) (let ((x (* a b))) (eq x x)))
     let eq_self = float_fn(
@@ -234,7 +239,7 @@ fn aliases_of_one_result_are_one_object() {
     let (leaf, census) = compile_in(FlonumMode::OpLocal, &eq_self);
     assert_eq!((census.results, census.escape_boxes), (1, 1));
     assert_eq!(
-        leaf.call(ctx, &[Value::make_float(1.5), Value::make_float(2.0)]),
+        unsafe { leaf.call(ctx, &[Value::make_float(1.5), Value::make_float(2.0)]) },
         NativeRun::Ok(Value::T.bits())
     );
 
@@ -260,7 +265,7 @@ fn aliases_of_one_result_are_one_object() {
     assert_eq!((census.results, census.escape_boxes), (1, 1));
     let v = Value::vector(vec![Value::NIL]);
     assert_eq!(
-        leaf.call(ctx, &[v, Value::make_float(1.5), Value::make_float(2.0)]),
+        unsafe { leaf.call(ctx, &[v, Value::make_float(1.5), Value::make_float(2.0)]) },
         NativeRun::Ok(Value::T.bits()),
         "aset returns the very object it stored"
     );
@@ -313,7 +318,7 @@ fn distinct_results_are_distinct_objects() {
         &[2, 5],
     );
     let (leaf, _) = compile_in(FlonumMode::OpLocal, &list_two);
-    let list = ok_value(leaf.call(&mut ev as *mut Context as *mut u8, &args));
+    let list = ok_value(unsafe { leaf.call(&mut ev as *mut Context as *mut u8, &args) });
     let items = neovm_value::value::list_to_vec(&list).expect("a list");
     assert_ne!(items[0].bits(), items[1].bits());
     assert_eq!(float_of(items[0]).to_bits(), float_of(items[1]).to_bits());
@@ -442,9 +447,9 @@ fn signed_zero_and_nan_bits_survive_unboxed_chains() {
             Value::make_float(b),
             Value::make_float(c),
         ];
-        let jit = float_of(ok_value(
-            leaf.call(&mut ev as *mut Context as *mut u8, &args),
-        ));
+        let jit = float_of(ok_value(unsafe {
+            leaf.call(&mut ev as *mut Context as *mut u8, &args)
+        }));
         let interp = float_of(
             Vm::from_context(&mut ev)
                 .execute(&f, args.to_vec())
@@ -485,7 +490,9 @@ fn a_flonum_into_a_fixnum_only_site_deopts_with_a_boxed_float() {
     // Float product: the guard on the tag word fails (never elided), the
     // exit boxes the float, and the interpreter reruns `1+` on it.
     let args = [Value::make_float(1.5), Value::make_float(2.0)];
-    let NativeRun::DeoptAt(resume) = leaf.call(&mut ev as *mut Context as *mut u8, &args) else {
+    let NativeRun::DeoptAt(resume) =
+        (unsafe { leaf.call(&mut ev as *mut Context as *mut u8, &args) })
+    else {
         panic!("a float into a fixnum-only 1+ must deopt precisely")
     };
     assert_eq!(resume.pc, 3);
@@ -552,7 +559,7 @@ fn mixed_compare_on_a_flonum_breaks_ties_on_integers() {
         assert_eq!((census.results, census.escape_boxes), (1, 0));
         let before = ev.tagged_heap.allocated_count();
         assert_eq!(
-            leaf.call(ctx, &args),
+            unsafe { leaf.call(ctx, &args) },
             NativeRun::Ok(expect.bits()),
             "{op:?} (+ 2^53 1) 2^53.0 must decide on the exact integers, as GNU does"
         );
@@ -565,7 +572,7 @@ fn mixed_compare_on_a_flonum_breaks_ties_on_integers() {
     // A float sum against a float, and a NaN.
     let f = cmp(Op::Gtr);
     let (leaf, _) = compile_in(FlonumMode::OpLocal, &f);
-    let run = |a: f64, b: f64, c: f64| {
+    let run = |a: f64, b: f64, c: f64| unsafe {
         leaf.call(
             ctx,
             &[
@@ -648,7 +655,7 @@ fn flonums_survive_a_call_that_collects() {
             let gcs = crate::emacs_core::gc_stats::snapshot().collections;
             let before = floats_consed(&ev);
             let args = [Value::make_float(1.5), Value::make_float(2.0)];
-            let got = ok_value(leaf.call(&mut ev as *mut Context as *mut u8, &args));
+            let got = ok_value(unsafe { leaf.call(&mut ev as *mut Context as *mut u8, &args) });
             assert_eq!(float_of(got).to_bits(), 7.5_f64.to_bits(), "{mode:?}");
             per_call.push(floats_consed(&ev) - before);
             assert!(
@@ -730,7 +737,7 @@ fn a_handler_sees_boxed_flonums() {
         assert_eq!(census.cold_boxes, cold, "{mode:?}");
         let before = floats_consed(&ev);
         let args = [Value::make_float(1.5), Value::make_float(2.0)];
-        let got = ok_value(leaf.call(&mut ev as *mut Context as *mut u8, &args));
+        let got = ok_value(unsafe { leaf.call(&mut ev as *mut Context as *mut u8, &args) });
         let consed = floats_consed(&ev) - before;
         assert_eq!(
             *off_consed.get_or_insert(consed),
@@ -775,7 +782,7 @@ fn a_variable_read_keeps_flonums_unboxed_and_its_handler_boxes_them() {
                 Op::Add,
                 Op::Return,
             ],
-            vec![Value::symbol(var)],
+            vec![Value::from_sym_id(intern(var))],
             &[2, 4],
         );
         let mut consed = Vec::new();
@@ -790,7 +797,7 @@ fn a_variable_read_keeps_flonums_unboxed_and_its_handler_boxes_them() {
             }
             let before = floats_consed(&ev);
             let args = [Value::make_float(1.5), Value::make_float(2.0)];
-            let got = ok_value(leaf.call(&mut ev as *mut Context as *mut u8, &args));
+            let got = ok_value(unsafe { leaf.call(&mut ev as *mut Context as *mut u8, &args) });
             assert_eq!(float_of(got), 3.5, "{var} {mode:?}");
             consed.push(floats_consed(&ev) - before);
         }
@@ -841,7 +848,7 @@ fn a_variable_read_keeps_flonums_unboxed_and_its_handler_boxes_them() {
         assert_eq!(census.escape_boxes, 0, "{mode:?}: the read keeps it");
         assert_eq!(census.cold_boxes, 1, "{mode:?}: the handler entry boxes it");
         let args = [Value::make_float(1.5), Value::make_float(2.0)];
-        let got = ok_value(leaf.call(&mut ev as *mut Context as *mut u8, &args));
+        let got = ok_value(unsafe { leaf.call(&mut ev as *mut Context as *mut u8, &args) });
         let items = neovm_value::value::list_to_vec(&got).expect("(list x y)");
         assert_eq!(float_of(items[0]), 3.0, "{mode:?}");
         assert_eq!(items[0].bits(), items[1].bits(), "{mode:?}: one object");
@@ -861,9 +868,9 @@ fn a_fused_region_entry_boxes_flonums_before_its_framestate() {
         optional: Vec::new(),
         rest: None,
     });
-    callee.lexical = true;
-    callee.ops = vec![Op::StackRef(0), Op::Return];
-    callee.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(4);
+    callee.set_lexical(true);
+    callee.set_ops(vec![Op::StackRef(0), Op::Return]);
+    callee.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(4));
     callee.jit_runtime().set_hot_for_test();
     let callee_value = Value::make_bytecode(callee);
     crate::emacs_core::eval::push_scratch_gc_root(callee_value);
@@ -897,7 +904,7 @@ fn a_fused_region_entry_boxes_flonums_before_its_framestate() {
         );
         let before = ev.tagged_heap.allocated_count();
         assert_eq!(
-            leaf.call(&mut ev as *mut Context as *mut u8, &args),
+            unsafe { leaf.call(&mut ev as *mut Context as *mut u8, &args) },
             NativeRun::Ok(Value::T.bits()),
             "{mode:?}: (eq (id p) p)"
         );
@@ -909,7 +916,7 @@ fn a_fused_region_entry_boxes_flonums_before_its_framestate() {
         force_deopt_for_test(true);
         let leaf = compile_bytecode_function_with(&f, Some(&ev.obarray)).expect("compiles");
         force_deopt_for_test(false);
-        let run = leaf.call(&mut ev as *mut Context as *mut u8, &args);
+        let run = unsafe { leaf.call(&mut ev as *mut Context as *mut u8, &args) };
         let NativeRun::DeoptAt(resume) = run else {
             panic!("{mode:?}: a forced region guard must deopt precisely, got {run:?}")
         };
