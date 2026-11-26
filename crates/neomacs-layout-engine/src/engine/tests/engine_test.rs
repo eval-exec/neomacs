@@ -40003,3 +40003,105 @@ fn truncated_line_overlay_past_the_window_edge_stays_out_of_the_consumed_span() 
         "a truncated line's off-screen overlay rendered; body={body:?}"
     );
 }
+
+/// Issue #856 (TUI): a reserved TTY tab-bar row with no items (`tab-bar-format`
+/// nil) must still publish a `FrameChromeKind::TabBar` band painted with the
+/// realized `tab-bar` face across the full frame width, matching GNU
+/// `display_tab_bar` (`src/xdisp.c:14671-14761`).
+#[test]
+fn tty_empty_tab_bar_publishes_tab_bar_faced_chrome_band() {
+    let (mut eval, frame_id, _buf_id, _window) = incr_editing_frame("hello\n", 80, 24);
+    eval.eval_str(
+        "(progn
+           (internal-make-lisp-face 'tab-bar)
+           (internal-set-lisp-face-attribute 'tab-bar :background \"#d9d9d9\" (selected-frame))
+           (internal-set-lisp-face-attribute 'tab-bar :foreground \"#000000\" (selected-frame)))",
+    )
+    .unwrap();
+    {
+        let frame = eval.frame_manager_mut().get_mut(frame_id).expect("frame");
+        frame.set_window_system(None);
+        frame.char_width = 1.0;
+        frame.char_height = 1.0;
+        frame
+            .parameters
+            .insert(Value::symbol("menu-bar-lines"), Value::fixnum(1));
+        frame
+            .parameters
+            .insert(Value::symbol("tab-bar-lines"), Value::fixnum(1));
+        frame.sync_menu_bar_height_from_parameters();
+        frame.tab_bar_height = 1;
+        frame.sync_window_area_bounds();
+    }
+
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
+    engine.layout_frame_rust(&mut eval, frame_id);
+
+    let state = engine
+        .last_frame_display_state
+        .as_ref()
+        .expect("TTY display state");
+    let tab_band = state
+        .frame_chrome
+        .band(FrameChromeKind::TabBar)
+        .expect("empty TTY tab-bar must still publish a TabBar chrome band");
+    assert_eq!(tab_band.bounds().height(), 1.0);
+    let FrameChromeContent::DisplayRow(tab_row) = tab_band.content() else {
+        panic!("tab-bar band must contain a DisplayRow");
+    };
+    let text_glyphs = &tab_row.row().glyphs[GlyphArea::Text.index()];
+    assert_eq!(
+        text_glyphs.len(),
+        1,
+        "empty TTY tab-bar row should contain one full-width fill stretch glyph"
+    );
+    let fill = &text_glyphs[0];
+    assert_eq!(
+        fill.glyph_type,
+        GlyphType::Stretch { width_cols: 80 },
+        "fill stretch must cover all 80 frame columns"
+    );
+    let fill_face = state
+        .faces
+        .get(&fill.face_id)
+        .expect("tab-bar fill face must be published in frame face table");
+    assert_ne!(
+        fill.face_id,
+        FaceId::new(0),
+        "empty TTY tab-bar must use the tab-bar face, not default face 0"
+    );
+    assert_eq!(
+        fill_face.background,
+        Color::from_pixel(0x00d9_d9d9),
+        "expected grey85 (#d9d9d9) tab-bar background, got {:?}",
+        fill_face.background
+    );
+}
+
+/// Issue #856 scope guard: the empty-TTY tab-bar fallback must NOT attach a
+/// synthetic `TabBar` chrome band on GUI frames (GUI empty tab-bar sizing is
+/// tracked separately via `redisplay_tab_bar`).
+#[test]
+fn gui_empty_tab_bar_does_not_publish_tty_fallback_chrome_band() {
+    let (mut eval, frame_id, _buf_id, _window) = incr_editing_frame("hello\n", 800, 600);
+    {
+        let frame = eval.frame_manager_mut().get_mut(frame_id).expect("frame");
+        frame.set_window_system(Some(Value::symbol("neomacs")));
+        frame.displays_chrome = true;
+        frame.char_height = 18.0;
+        frame.tab_bar_height = 18;
+        frame.sync_window_area_bounds();
+    }
+
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
+    engine.layout_frame_rust(&mut eval, frame_id);
+
+    let state = engine
+        .last_frame_display_state
+        .as_ref()
+        .expect("GUI display state");
+    assert!(
+        state.frame_chrome.band(FrameChromeKind::TabBar).is_none(),
+        "GUI frame with no tab-bar items must not receive the TTY empty-row fallback"
+    );
+}
