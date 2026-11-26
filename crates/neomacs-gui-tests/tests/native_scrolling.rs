@@ -168,6 +168,13 @@ fn sustained_scroll_stream_drains_and_reverses_in_large_rich_buffer() {
     );
 }
 
+/// Calibrated performance measurement (not a pass/fail assertion on an
+/// uncalibrated host): measures sustained 120 Hz plain-buffer scroll latency
+/// and cadence against `ResponseBudget::original()`. Excluded from CI via
+/// `not test(~continuous_120hz_)`; CI runs the state-only twin
+/// `sustained_scroll_stream_drains_and_reverses_in_large_plain_buffer`.
+/// Acceptable host bracket: any hardware Vulkan GPU or quiet calibrated
+/// software-Vulkan host (`docs/gui-timing-assertions-audit.md`).
 #[test]
 fn continuous_120hz_scroll_in_large_plain_buffer() {
     run_native_scroll_profile(
@@ -178,6 +185,14 @@ fn continuous_120hz_scroll_in_large_plain_buffer() {
     );
 }
 
+/// Calibrated performance measurement (not a pass/fail assertion on an
+/// uncalibrated host): probes software-Vulkan capacity via `glmark2` and
+/// measures sustained 120 Hz rich-buffer scroll latency and cadence against
+/// the host's recorded tier (`Original` hardware GPU, `SoftwareVulkanFast`
+/// `<= 3.0 ms`, or `SoftwareVulkanReducedCapacity` `<= 3.6 ms`). Excluded from
+/// CI via `not test(~continuous_120hz_)`; CI runs the state-only twin
+/// `sustained_scroll_stream_drains_and_reverses_in_large_rich_buffer`
+/// (`docs/gui-timing-assertions-audit.md`).
 #[test]
 fn continuous_120hz_scroll_in_large_rich_buffer() {
     run_native_scroll_profile(
