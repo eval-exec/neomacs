@@ -813,6 +813,107 @@ fn define_coding_system_internal_nil_conversion_slots_match_gnu() {
     );
 }
 
+#[test]
+fn coding_system_put_updates_typed_conversion_hooks_through_alias_and_subsidiary() {
+    crate::test_utils::init_test_tracing();
+    let mut m = mgr();
+    let mode = neovm_value::tagged::value::SymbolMode::Bare;
+    builtin_define_coding_system_alias(
+        &mut m,
+        vec![
+            Value::symbol("my-raw-hook-alias"),
+            Value::symbol("raw-text"),
+        ],
+        mode,
+    )
+    .unwrap();
+
+    // Setting :post-read-conversion on the alias updates the shared base info's
+    // typed field (GNU Fcoding_system_put, src/coding.c:11560-11564).
+    builtin_coding_system_put(
+        &mut m,
+        vec![
+            Value::symbol("my-raw-hook-alias"),
+            Value::keyword(":post-read-conversion"),
+            Value::symbol("my-post-read-fn"),
+        ],
+        mode,
+    )
+    .unwrap();
+    assert_eq!(
+        m.get("raw-text").unwrap().post_read_conversion,
+        Some(intern("my-post-read-fn"))
+    );
+
+    // Setting :pre-write-conversion through an EOL subsidiary updates the same
+    // shared base info.
+    builtin_coding_system_put(
+        &mut m,
+        vec![
+            Value::symbol("my-raw-hook-alias-unix"),
+            Value::keyword(":pre-write-conversion"),
+            Value::symbol("my-pre-write-fn"),
+        ],
+        mode,
+    )
+    .unwrap();
+    assert_eq!(
+        m.get("raw-text").unwrap().pre_write_conversion,
+        Some(intern("my-pre-write-fn"))
+    );
+
+    // Bare symbol `post-read-conversion` is an ordinary plist key (no CHECK_SYMBOL).
+    let bare = builtin_coding_system_put(
+        &mut m,
+        vec![
+            Value::symbol("my-raw-hook-alias"),
+            Value::symbol("post-read-conversion"),
+            Value::fixnum(123),
+        ],
+        mode,
+    )
+    .unwrap();
+    assert_eq!(bare, Value::fixnum(123));
+
+    // Keyword `:post-read-conversion` rejects non-symbol values with symbolp.
+    assert!(
+        builtin_coding_system_put(
+            &mut m,
+            vec![
+                Value::symbol("my-raw-hook-alias"),
+                Value::keyword(":post-read-conversion"),
+                Value::fixnum(123),
+            ],
+            mode,
+        )
+        .is_err()
+    );
+
+    // Clearing to nil resets the typed fields back to None.
+    builtin_coding_system_put(
+        &mut m,
+        vec![
+            Value::symbol("raw-text"),
+            Value::keyword(":post-read-conversion"),
+            Value::NIL,
+        ],
+        mode,
+    )
+    .unwrap();
+    builtin_coding_system_put(
+        &mut m,
+        vec![
+            Value::symbol("raw-text"),
+            Value::keyword(":pre-write-conversion"),
+            Value::NIL,
+        ],
+        mode,
+    )
+    .unwrap();
+    assert_eq!(m.get("raw-text").unwrap().post_read_conversion, None);
+    assert_eq!(m.get("raw-text").unwrap().pre_write_conversion, None);
+}
+
 /// GNU computes `:ascii-compatible-p` for a `charset`-type coding system at
 /// define time from its `:charset-list` (src/coding.c:11070, 11119-11129)
 /// and stores it in the coding's attributes; `coding-system-plist` reports
