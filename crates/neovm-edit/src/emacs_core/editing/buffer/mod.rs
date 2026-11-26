@@ -4231,7 +4231,7 @@ pub fn is_hidden_buffer(
 
 #[doc(hidden)]
 pub fn other_buffer_impl(
-    buffers: &mut crate::buffer::BufferManager,
+    buffers: &mut crate::buffer::BufferManagerMut<'_>,
     args: Vec<Value>,
 ) -> EvalResult {
     expect_max_args("other-buffer", &args, 3)?;

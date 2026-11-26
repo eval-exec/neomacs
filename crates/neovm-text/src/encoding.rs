@@ -1957,11 +1957,13 @@ fn insert_coding_result<H: TextHost>(
     text: &neovm_value::heap_types::LispString,
     restore_point: Option<TextPositionAnchor>,
 ) -> Result<(), neovm_value::error::Flow> {
-    ctx.buffers_mut()
+    ctx.buffers_view_mut()
         .insert_lisp_string_into_buffer(buffer_id, text)
         .ok_or_else(|| signal("error", vec![Value::string("Selecting deleted buffer")]))?;
     if let Some(point) = restore_point {
-        let _ = ctx.buffers_mut().set_buffer_point_anchor(buffer_id, point);
+        let _ = ctx
+            .buffers_view_mut()
+            .set_buffer_point_anchor(buffer_id, point);
     }
     Ok(())
 }
@@ -6582,7 +6584,7 @@ fn builtin_coding_region<H: TextHost>(
                 .map(|buf| buf.lisp_pos_to_accessible_emacs_byte_pos(LispCharPos1::new(new_pt)));
             if let Some(byte_pos) = byte_pos {
                 let _ = ctx
-                    .buffers_mut()
+                    .buffers_view_mut()
                     .goto_buffer_emacs_byte_pos(current_id, byte_pos);
             }
             Ok(Value::fixnum(produced_chars as i64))

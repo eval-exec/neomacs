@@ -403,19 +403,19 @@ fn set_category_docstring_in_table(
 }
 
 fn current_buffer_category_table_in_buffers(
-    buffers: &mut neovm_edit::buffer::BufferManager,
+    mut buffers: neovm_edit::buffer::BufferManagerMut<'_>,
 ) -> Result<Value, Flow> {
     use neovm_edit::buffer::buffer::BUFFER_SLOT_CATEGORY_TABLE;
     let current_id = buffers
         .current_buffer_id()
         .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
-    let buf = buffers
-        .get_mut(current_id)
-        .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
+    let table = buffers
+        .get(current_id)
+        .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?
+        .slots()[BUFFER_SLOT_CATEGORY_TABLE.index()];
 
     // Mirrors GNU `Fcategory_table` (`category.c:184-189`):
     //     return BVAR (current_buffer, category_table);
-    let table = buf.slots()[BUFFER_SLOT_CATEGORY_TABLE.index()];
     if !table.is_nil() {
         return Ok(table);
     }
@@ -424,12 +424,12 @@ fn current_buffer_category_table_in_buffers(
     // matches GNU `reset_buffer` cloning the standard table into
     // a fresh buffer.
     let fallback = ensure_standard_category_table_object()?;
-    buf.slots_mut()[BUFFER_SLOT_CATEGORY_TABLE.index()] = fallback;
+    let _ = buffers.set_buffer_slot(current_id, BUFFER_SLOT_CATEGORY_TABLE, fallback);
     Ok(fallback)
 }
 
 fn check_category_table_in_buffers_with_symbols(
-    buffers: &mut neovm_edit::buffer::BufferManager,
+    buffers: neovm_edit::buffer::BufferManagerMut<'_>,
     table: Option<Value>,
     mode: SymbolMode,
 ) -> Result<Value, Flow> {
@@ -450,26 +450,24 @@ fn check_category_table_in_buffers_with_symbols(
 
 fn check_category_table<H: TextHost>(host: &mut H, table: Option<Value>) -> Result<Value, Flow> {
     let mode = host.symbol_mode();
-    check_category_table_in_buffers_with_symbols(host.buffers_mut(), table, mode)
+    check_category_table_in_buffers_with_symbols(host.buffers_view_mut(), table, mode)
 }
 
 fn set_current_buffer_category_table_in_buffers(
-    buffers: &mut neovm_edit::buffer::BufferManager,
+    mut buffers: neovm_edit::buffer::BufferManagerMut<'_>,
     table: Value,
 ) -> Result<(), Flow> {
     use neovm_edit::buffer::buffer::BUFFER_SLOT_CATEGORY_TABLE;
     let current_id = buffers
         .current_buffer_id()
         .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
-    let buf = buffers
-        .get_mut(current_id)
-        .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
     // Mirrors GNU `Fset_category_table` (`category.c:262-275`):
     //     bset_category_table (current_buffer, table);
     //     SET_PER_BUFFER_VALUE_P (current_buffer,
     //                             PER_BUFFER_VAR_IDX (category_table), 1);
-    buf.slots_mut()[BUFFER_SLOT_CATEGORY_TABLE.index()] = table;
-    buf.set_slot_local_flag(BUFFER_SLOT_CATEGORY_TABLE, true);
+    buffers
+        .set_buffer_slot_local(current_id, BUFFER_SLOT_CATEGORY_TABLE, table)
+        .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
     Ok(())
 }
 
@@ -747,7 +745,7 @@ pub fn builtin_get_unused_category<H: TextHost>(host: &mut H, args: Vec<Value>) 
 pub fn builtin_char_category_set<H: TextHost>(host: &mut H, args: Vec<Value>) -> EvalResult {
     expect_args("char-category-set", &args, 1)?;
     let _ = extract_char_code(&args[0], "char-category-set")?;
-    let table = current_buffer_category_table_in_buffers(host.buffers_mut())?;
+    let table = current_buffer_category_table_in_buffers(host.buffers_view_mut())?;
     super::chartable::builtin_char_table_range_with_style(
         vec![table, args[0]],
         None,
@@ -757,11 +755,11 @@ pub fn builtin_char_category_set<H: TextHost>(host: &mut H, args: Vec<Value>) ->
 
 #[doc(hidden)]
 pub fn builtin_category_table<H: TextHost>(host: &mut H, args: Vec<Value>) -> EvalResult {
-    builtin_category_table_in_buffers(host.buffers_mut(), args)
+    builtin_category_table_in_buffers(host.buffers_view_mut(), args)
 }
 
 pub(crate) fn builtin_category_table_in_buffers(
-    buffers: &mut neovm_edit::buffer::BufferManager,
+    buffers: neovm_edit::buffer::BufferManagerMut<'_>,
     args: Vec<Value>,
 ) -> EvalResult {
     expect_max_args("category-table", &args, 0)?;
@@ -777,18 +775,21 @@ pub fn builtin_standard_category_table<H: TextHost>(_host: &mut H, args: Vec<Val
 #[doc(hidden)]
 pub fn builtin_set_category_table<H: TextHost>(host: &mut H, args: Vec<Value>) -> EvalResult {
     let mode = host.symbol_mode();
-    builtin_set_category_table_in_buffers_with_symbols(host.buffers_mut(), args, mode)
+    builtin_set_category_table_in_buffers_with_symbols(host.buffers_view_mut(), args, mode)
 }
 
 pub(crate) fn builtin_set_category_table_in_buffers_with_symbols(
-    buffers: &mut neovm_edit::buffer::BufferManager,
+    mut buffers: neovm_edit::buffer::BufferManagerMut<'_>,
     args: Vec<Value>,
     mode: SymbolMode,
 ) -> EvalResult {
     expect_args("set-category-table", &args, 1)?;
 
-    let installed =
-        check_category_table_in_buffers_with_symbols(buffers, args.first().copied(), mode)?;
+    let installed = check_category_table_in_buffers_with_symbols(
+        buffers.reborrow(),
+        args.first().copied(),
+        mode,
+    )?;
     set_current_buffer_category_table_in_buffers(buffers, installed)?;
     Ok(installed)
 }

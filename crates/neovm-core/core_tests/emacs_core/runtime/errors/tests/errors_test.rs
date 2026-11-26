@@ -791,7 +791,10 @@ fn builtin_error_message_string_formats_buffer_handles_with_names() {
     let mut evaluator = crate::test_utils::new_context();
     init_runtime_errors(&mut evaluator);
 
-    let live_id = evaluator.edit_mut().buffers.create_buffer("*ems-live*");
+    let live_id = evaluator
+        .edit_view_mut()
+        .buffers_mut()
+        .create_buffer("*ems-live*");
     let live_err = Value::list(vec![
         Value::symbol("args-out-of-range"),
         Value::make_buffer(live_id),
@@ -804,8 +807,11 @@ fn builtin_error_message_string_formats_buffer_handles_with_names() {
         Some("Args out of range: #<buffer *ems-live*>, 0")
     );
 
-    let dead_id = evaluator.edit_mut().buffers.create_buffer("*ems-dead*");
-    assert!(evaluator.edit_mut().buffers.kill_buffer(dead_id));
+    let dead_id = evaluator
+        .edit_view_mut()
+        .buffers_mut()
+        .create_buffer("*ems-dead*");
+    assert!(evaluator.edit_view_mut().buffers_mut().kill_buffer(dead_id));
     let dead_err = Value::list(vec![
         Value::symbol("args-out-of-range"),
         Value::make_buffer(dead_id),

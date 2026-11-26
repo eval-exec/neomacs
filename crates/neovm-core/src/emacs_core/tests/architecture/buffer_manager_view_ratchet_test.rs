@@ -210,14 +210,6 @@ const ALLOWED_RAW_BUFFER_OR_EDIT_MUT_ACCESSORS: &[(&str, &str)] = &[
     ),
     (
         "neovm-eval/src/emacs_core/runtime/eval/context_api.rs",
-        "buffers_and_obarray_view_mut",
-    ),
-    (
-        "neovm-eval/src/emacs_core/runtime/eval/context_api.rs",
-        "edit_mut",
-    ),
-    (
-        "neovm-eval/src/emacs_core/runtime/eval/context_api.rs",
         "frame_manager_and_buffers_mut",
     ),
     (
@@ -238,34 +230,6 @@ const ALLOWED_RAW_BUFFER_OR_EDIT_MUT_ACCESSORS: &[(&str, &str)] = &[
     ),
     (
         "neovm-eval/src/emacs_core/runtime/eval/context_api.rs",
-        "mode_line_formatting_inputs_mut",
-    ),
-    (
-        "neovm-eval/src/emacs_core/runtime/eval/context_api.rs",
-        "obarray_and_buffers_mut",
-    ),
-    (
-        "neovm-eval/src/emacs_core/runtime/eval/context_api.rs",
-        "processes_and_buffers_mut",
-    ),
-    (
-        "neovm-eval/src/emacs_core/runtime/eval/context_api.rs",
-        "processes_threads_and_buffers_mut",
-    ),
-    (
-        "neovm-eval/src/emacs_core/runtime/eval/context_api.rs",
-        "processes_threads_buffers_and_coding_systems_mut",
-    ),
-    (
-        "neovm-eval/src/emacs_core/runtime/eval/context_api.rs",
-        "runtime_binding_parts_mut",
-    ),
-    (
-        "neovm-eval/src/emacs_core/runtime/eval/context_api.rs",
-        "variable_view_and_buffers_mut",
-    ),
-    (
-        "neovm-eval/src/emacs_core/runtime/eval/context_api.rs",
         "variable_view_and_frames_buffers_mut",
     ),
     (
@@ -276,15 +240,6 @@ const ALLOWED_RAW_BUFFER_OR_EDIT_MUT_ACCESSORS: &[(&str, &str)] = &[
         "neovm-eval/src/emacs_core/runtime/eval/edit_host.rs",
         "edit_and_vars",
     ),
-    (
-        "neovm-eval/src/emacs_core/runtime/eval/text_host.rs",
-        "buffers_mut",
-    ),
-    (
-        "neovm-eval/src/emacs_core/runtime/eval/vm_shared.rs",
-        "gui_frame_creation_state",
-    ),
-    ("neovm-text/src/emacs_core/text/host/mod.rs", "buffers_mut"),
 ];
 
 /// Sanity floors so a rename or move cannot make this scanner pass vacuously.

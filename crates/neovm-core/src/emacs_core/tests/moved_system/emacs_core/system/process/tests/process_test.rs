@@ -954,7 +954,7 @@ fn process_send_region_accepts_get_process_designators_like_gnu() {
     ] {
         builtin_process_send_region_impl(
             &mut pm,
-            &mut buffers,
+            &mut crate::buffer::BufferManagerMut::new(&mut buffers),
             vec![target, Value::fixnum(1), Value::fixnum(4)],
         )
         .expect("process-send-region");
@@ -1509,7 +1509,7 @@ fn connection_process_mutators_keep_childp_plist_in_sync() {
 
     builtin_set_process_buffer_impl(
         &mut pm,
-        &mut buffers,
+        &mut crate::buffer::BufferManagerMut::new(&mut buffers),
         vec![Value::make_process(id), Value::NIL],
     )
     .expect("set-process-buffer");
@@ -1606,7 +1606,7 @@ fn process_buffer_storage_uses_buffer_objects() {
 
     builtin_set_process_buffer_impl(
         &mut pm,
-        &mut buffers,
+        &mut crate::buffer::BufferManagerMut::new(&mut buffers),
         vec![Value::make_process(id), Value::NIL],
     )
     .expect("set-process-buffer should accept nil");
@@ -1641,7 +1641,7 @@ fn process_mark_storage_uses_marker_objects() {
 
     builtin_set_process_buffer_impl(
         &mut pm,
-        &mut buffers,
+        &mut crate::buffer::BufferManagerMut::new(&mut buffers),
         vec![Value::make_process(id), Value::make_buffer(first)],
     )
     .expect("attach first process buffer");
@@ -1660,7 +1660,7 @@ fn process_mark_storage_uses_marker_objects() {
 
     builtin_set_process_buffer_impl(
         &mut pm,
-        &mut buffers,
+        &mut crate::buffer::BufferManagerMut::new(&mut buffers),
         vec![Value::make_process(id), Value::make_buffer(second)],
     )
     .expect("attach second process buffer");
@@ -1690,9 +1690,9 @@ fn internal_default_process_filter_moves_stored_process_mark() {
         vec![],
         crate::emacs_core::process::ProcessCodingSystems::gnu_make_process_initial(),
     );
-    let (processes, buffers) = ev.processes_and_buffers_mut();
+    let (processes, mut buffers) = ev.processes_and_buffer_view_mut();
     processes
-        .sync_process_mark(buffers, pid)
+        .sync_process_mark(&mut buffers, pid)
         .expect("sync process mark");
     assert_eq!(
         eval_one_in_context(
@@ -1793,9 +1793,9 @@ fn internal_default_process_sentinel_inserts_status_at_process_mark() {
         vec![],
         crate::emacs_core::process::ProcessCodingSystems::gnu_make_process_initial(),
     );
-    let (processes, buffers) = ev.processes_and_buffers_mut();
+    let (processes, mut buffers) = ev.processes_and_buffer_view_mut();
     processes
-        .sync_process_mark(buffers, pid)
+        .sync_process_mark(&mut buffers, pid)
         .expect("sync process mark");
     let mark = builtin_process_mark_impl(
         &ev.processes(),
@@ -1857,9 +1857,9 @@ fn process_status_notification_runs_default_sentinel_and_reaps() {
         vec![],
         crate::emacs_core::process::ProcessCodingSystems::gnu_make_process_initial(),
     );
-    let (processes, buffers) = ev.processes_and_buffers_mut();
+    let (processes, mut buffers) = ev.processes_and_buffer_view_mut();
     processes
-        .sync_process_mark(buffers, pid)
+        .sync_process_mark(&mut buffers, pid)
         .expect("sync process mark");
     ev.processes_mut()
         .set_child_status_pending(pid, process_status_exit_value(0));
@@ -1918,7 +1918,7 @@ fn make_process_stores_pipe_stderr_process_value() {
     let threads = neovm_eval::emacs_core::threads::ThreadManager::new();
     let process = builtin_make_process_impl(
         &mut pm,
-        &mut buffers,
+        &mut crate::buffer::BufferManagerMut::new(&mut buffers),
         &threads,
         vec![
             Value::keyword(":name"),
@@ -2128,7 +2128,7 @@ fn make_process_stderr_pipe_name_preserves_raw_unibyte_owner_bytes() {
     let threads = neovm_eval::emacs_core::threads::ThreadManager::new();
     let process = builtin_make_process_impl(
         &mut pm,
-        &mut buffers,
+        &mut crate::buffer::BufferManagerMut::new(&mut buffers),
         &threads,
         vec![
             Value::keyword(":name"),
@@ -2172,7 +2172,7 @@ fn make_process_accepts_existing_pipe_process_for_stderr() {
     let threads = neovm_eval::emacs_core::threads::ThreadManager::new();
     let stderrproc = builtin_make_pipe_process_impl(
         &mut pm,
-        &mut buffers,
+        &mut crate::buffer::BufferManagerMut::new(&mut buffers),
         &threads,
         None,
         crate::emacs_core::process::ConnectionProcessCodingVariables::unbound(),
@@ -2187,7 +2187,7 @@ fn make_process_accepts_existing_pipe_process_for_stderr() {
     .expect("make-pipe-process");
     let process = builtin_make_process_impl(
         &mut pm,
-        &mut buffers,
+        &mut crate::buffer::BufferManagerMut::new(&mut buffers),
         &threads,
         vec![
             Value::keyword(":name"),
@@ -2214,7 +2214,7 @@ fn make_process_merges_stderr_when_deleted_stderr_pipe_is_stale() {
     let threads = neovm_eval::emacs_core::threads::ThreadManager::new();
     let stderrproc = builtin_make_pipe_process_impl(
         &mut pm,
-        &mut buffers,
+        &mut crate::buffer::BufferManagerMut::new(&mut buffers),
         &threads,
         None,
         ConnectionProcessCodingVariables::unbound(),
@@ -2232,7 +2232,7 @@ fn make_process_merges_stderr_when_deleted_stderr_pipe_is_stale() {
 
     let process = builtin_make_process_impl(
         &mut pm,
-        &mut buffers,
+        &mut crate::buffer::BufferManagerMut::new(&mut buffers),
         &threads,
         vec![
             Value::keyword(":name"),
@@ -2275,7 +2275,7 @@ fn make_process_merges_stderr_when_pipe_writer_was_already_consumed() {
     let threads = neovm_eval::emacs_core::threads::ThreadManager::new();
     let stderrproc = builtin_make_pipe_process_impl(
         &mut pm,
-        &mut buffers,
+        &mut crate::buffer::BufferManagerMut::new(&mut buffers),
         &threads,
         None,
         ConnectionProcessCodingVariables::unbound(),
@@ -2291,7 +2291,7 @@ fn make_process_merges_stderr_when_pipe_writer_was_already_consumed() {
 
     let first = builtin_make_process_impl(
         &mut pm,
-        &mut buffers,
+        &mut crate::buffer::BufferManagerMut::new(&mut buffers),
         &threads,
         vec![
             Value::keyword(":name"),
@@ -2311,7 +2311,7 @@ fn make_process_merges_stderr_when_pipe_writer_was_already_consumed() {
 
     let second = builtin_make_process_impl(
         &mut pm,
-        &mut buffers,
+        &mut crate::buffer::BufferManagerMut::new(&mut buffers),
         &threads,
         vec![
             Value::keyword(":name"),
@@ -2360,7 +2360,7 @@ fn stderr_pipe_uses_child_stdout_as_its_live_source() {
     let threads = neovm_eval::emacs_core::threads::ThreadManager::new();
     let stderrproc = builtin_make_pipe_process_impl(
         &mut pm,
-        &mut buffers,
+        &mut crate::buffer::BufferManagerMut::new(&mut buffers),
         &threads,
         None,
         ConnectionProcessCodingVariables::unbound(),
@@ -2376,7 +2376,7 @@ fn stderr_pipe_uses_child_stdout_as_its_live_source() {
     let stderr_id = stderrproc.as_process_id().expect("stderr pipe process id");
     let process = builtin_make_process_impl(
         &mut pm,
-        &mut buffers,
+        &mut crate::buffer::BufferManagerMut::new(&mut buffers),
         &threads,
         vec![
             Value::keyword(":name"),
@@ -2533,11 +2533,11 @@ fn module_pipe_service_polling_is_nonblocking_before_write_and_services_data() {
     let worker = std::thread::spawn(move || {
         let mut ev = crate::emacs_core::eval_hook_installers::new_context();
         let (buffer_id, id, fd) = {
-            let (processes, threads, buffers) = ev.processes_threads_and_buffers_mut();
+            let (processes, threads, mut buffers) = ev.processes_threads_and_buffer_view_mut();
             let buffer_id = buffers.create_buffer(" *module-service-idle*");
             let process = builtin_make_pipe_process_impl(
                 processes,
-                buffers,
+                &mut buffers,
                 threads,
                 None,
                 ConnectionProcessCodingVariables::unbound(),
@@ -2620,7 +2620,7 @@ fn module_channel_writes_to_make_pipe_process() {
     let threads = neovm_eval::emacs_core::threads::ThreadManager::new();
     let process = builtin_make_pipe_process_impl(
         &mut processes,
-        &mut buffers,
+        &mut crate::buffer::BufferManagerMut::new(&mut buffers),
         &threads,
         None,
         ConnectionProcessCodingVariables::unbound(),
@@ -2723,7 +2723,7 @@ fn stderr_pipe_writer_is_restored_after_pipe_spawn_failure() {
     let threads = neovm_eval::emacs_core::threads::ThreadManager::new();
     let stderrproc = builtin_make_pipe_process_impl(
         &mut processes,
-        &mut buffers,
+        &mut crate::buffer::BufferManagerMut::new(&mut buffers),
         &threads,
         None,
         ConnectionProcessCodingVariables::unbound(),
@@ -2738,7 +2738,7 @@ fn stderr_pipe_writer_is_restored_after_pipe_spawn_failure() {
     .expect("make-pipe-process");
     let result = builtin_make_process_impl(
         &mut processes,
-        &mut buffers,
+        &mut crate::buffer::BufferManagerMut::new(&mut buffers),
         &threads,
         vec![
             Value::keyword(":name"),
@@ -2800,7 +2800,7 @@ fn stderr_pipe_writer_is_restored_after_pty_spawn_failure() {
     let threads = neovm_eval::emacs_core::threads::ThreadManager::new();
     let stderrproc = builtin_make_pipe_process_impl(
         &mut processes,
-        &mut buffers,
+        &mut crate::buffer::BufferManagerMut::new(&mut buffers),
         &threads,
         None,
         ConnectionProcessCodingVariables::unbound(),
@@ -2815,7 +2815,7 @@ fn stderr_pipe_writer_is_restored_after_pty_spawn_failure() {
     .expect("make-pipe-process");
     let result = builtin_make_process_impl(
         &mut processes,
-        &mut buffers,
+        &mut crate::buffer::BufferManagerMut::new(&mut buffers),
         &threads,
         vec![
             Value::keyword(":name"),
@@ -9368,9 +9368,9 @@ fn make_network_process_nowait_hostname_dns_failure_is_async_like_gnu() {
         .expect("wait for dns failure");
 
     assert_eq!(outcome, ProcessOutputWaitOutcome::NoProcessActivity);
-    let (processes, buffers) = eval.processes_and_buffers_mut();
+    let (processes, buffers) = eval.processes_and_buffer_view_mut();
     assert_eq!(
-        builtin_process_status_impl(processes, buffers, vec![Value::make_process(id)])
+        builtin_process_status_impl(processes, &buffers, vec![Value::make_process(id)])
             .expect("status"),
         Value::symbol("failed")
     );
@@ -11785,9 +11785,9 @@ fn internal_default_process_filter_inserts_while_another_buffer_is_read_only() {
         vec![],
         crate::emacs_core::process::ProcessCodingSystems::gnu_make_process_initial(),
     );
-    let (processes, buffers) = ev.processes_and_buffers_mut();
+    let (processes, mut buffers) = ev.processes_and_buffer_view_mut();
     processes
-        .sync_process_mark(buffers, pid)
+        .sync_process_mark(&mut buffers, pid)
         .expect("sync process mark");
 
     // A different, read-only buffer is current -- the blamed source file.

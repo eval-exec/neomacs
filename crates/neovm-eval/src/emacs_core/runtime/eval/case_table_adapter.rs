@@ -79,7 +79,7 @@ fn ensure_standard_case_table_for_context(ctx: &mut Context, mode: SymbolMode) -
 
 #[inline(always)]
 fn current_case_table_for_context(ctx: &mut Context, mode: SymbolMode) -> Result<Value, Flow> {
-    let (buffers, mut obarray_view) = ctx.buffers_and_obarray_view_mut();
+    let (buffers, mut obarray_view) = ctx.buffer_view_and_obarray_view_mut();
     // SAFETY: this noncalling phase selects/seeds case-table Values and buffer
     // slots, without changing function/debugger metadata or escaping a loan.
     unsafe {

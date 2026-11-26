@@ -539,7 +539,10 @@ impl AcceptedClientBuffer {
         Self::CreateNamed(format!("{base_name}{caller_suffix}"))
     }
 
-    pub(super) fn materialize(self, buffers: &mut BufferManager) -> Value {
+    pub(super) fn materialize(
+        self,
+        buffers: &mut neovm_edit::buffer::BufferManagerMut<'_>,
+    ) -> Value {
         match self {
             Self::None => Value::NIL,
             Self::CreateNamed(name) => {
@@ -4376,12 +4379,12 @@ pub trait SystemProcessExt {
     ) -> Result<PendingNetworkConnectCompletion, Flow>;
     fn create_accepted_network_client(
         &mut self,
-        buffers: &mut BufferManager,
+        buffers: &mut neovm_edit::buffer::BufferManagerMut<'_>,
         spec: AcceptedNetworkClientSpec,
     ) -> ProcessId;
     fn accept_network_server_connections(
         &mut self,
-        buffers: &mut BufferManager,
+        buffers: &mut neovm_edit::buffer::BufferManagerMut<'_>,
         id: ProcessId,
     ) -> Result<Vec<AcceptedNetworkConnection>, Flow>;
     fn read_process_output_result(
@@ -6883,7 +6886,7 @@ impl SystemProcessExt for ProcessManager {
 
     fn create_accepted_network_client(
         &mut self,
-        buffers: &mut BufferManager,
+        buffers: &mut neovm_edit::buffer::BufferManagerMut<'_>,
         spec: AcceptedNetworkClientSpec,
     ) -> ProcessId {
         let AcceptedNetworkClientSpec {
@@ -6926,7 +6929,7 @@ impl SystemProcessExt for ProcessManager {
 
     fn accept_network_server_connections(
         &mut self,
-        buffers: &mut BufferManager,
+        buffers: &mut neovm_edit::buffer::BufferManagerMut<'_>,
         id: ProcessId,
     ) -> Result<Vec<AcceptedNetworkConnection>, Flow> {
         // Accepted transports stay by value through this short-lived local
@@ -9296,8 +9299,8 @@ impl ProcessContextExt for neovm_eval::emacs_core::eval::Context {
             }
 
             self.sync_process_read_config_from_visible_variables();
-            let (processes, buffers) = self.processes_and_buffers_mut();
-            let accepted = processes.accept_network_server_connections(buffers, pid)?;
+            let (processes, mut buffers) = self.processes_and_buffer_view_mut();
+            let accepted = processes.accept_network_server_connections(&mut buffers, pid)?;
             for event in &accepted {
                 self.setup_process_output_descriptor(event.client_id)?;
             }

@@ -46,9 +46,9 @@ fn recorded_pty_status_before_read(interruptions: usize) -> (Context, ProcessId,
         vec!["-c".into(), "printf 'process-output\\n'".into()],
         ProcessCodingSystems::gnu_make_process_initial(),
     );
-    let (processes, buffers) = eval.processes_and_buffers_mut();
+    let (processes, mut buffers) = eval.processes_and_buffer_view_mut();
     processes
-        .sync_process_mark(buffers, id)
+        .sync_process_mark(&mut buffers, id)
         .expect("process mark");
     let proc = eval.processes_mut().get_mut(id).expect("fixture process");
     // No actual pid is attached to this injected reap: teardown must never

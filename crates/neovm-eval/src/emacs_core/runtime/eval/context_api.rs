@@ -324,13 +324,6 @@ impl Context {
         &self.edit
     }
 
-    /// R-b (PC11-F f2): mutable edit runtime for fixture setup that needs it.
-    #[doc(hidden)]
-    #[inline(always)]
-    pub fn edit_mut(&mut self) -> &mut neovm_edit::buffer::EditRuntime {
-        &mut self.edit
-    }
-
     /// Non-swappable exclusive capability over the edit runtime.
     #[doc(hidden)]
     #[inline(always)]
@@ -1129,13 +1122,6 @@ impl Context {
         (&self.frames, &mut self.edit.buffers)
     }
 
-    /// Split borrow: the process manager and the buffer manager, mutably.
-    #[doc(hidden)]
-    #[inline]
-    pub fn processes_and_buffers_mut(&mut self) -> (&mut ProcessManager, &mut BufferManager) {
-        (&mut self.processes, &mut self.edit.buffers)
-    }
-
     /// Split borrow: the process manager mutably and the thread manager by
     /// shared reference (status publication reads the current thread).
     #[doc(hidden)]
@@ -1323,63 +1309,28 @@ impl Context {
         )
     }
 
-    /// Split borrow: the obarray by shared reference and the buffer manager
-    /// mutably (casing property modes borrow the obarray while editing text).
+    /// Set a runtime variable binding by symbol id through the bounded
+    /// value/forwarder path without exposing `&mut BufferManager` or raw
+    /// authority parts to callers outside `neovm-eval`.
     #[doc(hidden)]
-    #[inline]
-    pub fn obarray_and_buffers_mut(&mut self) -> (&Obarray, &mut BufferManager) {
-        (&self.obarray, &mut self.edit.buffers)
-    }
-
-    /// Split borrow for a specpdl-rooted runtime binding write: the buffer
-    /// manager mutably, the owner slab mutably (when bound), the specpdl by
-    /// shared reference, and the obarray view mutably.
-    ///
-    /// # Safety
-    ///
-    /// The caller must hold the one-owner phase for this Context and use the
-    /// parts only for the bounded `with_legacy_value_write` publication that
-    /// retires before it returns.  The owner slab and specpdl are authority
-    /// state: mutating them outside that publication can break the World/owner
-    /// and binding-stack invariants.
-    #[doc(hidden)]
-    #[inline]
-    pub unsafe fn runtime_binding_parts_mut(
+    pub fn set_runtime_binding_by_sym_id(
         &mut self,
-    ) -> (
-        &mut BufferManager,
-        Option<&mut owner_bindings::OwnerSlab>,
-        &[SpecBinding],
-        &mut ObarrayView,
-    ) {
-        (
-            &mut self.edit.buffers,
-            self.owner.slab_mut(),
-            self.specpdl.as_slice(),
-            &mut self.obarray,
-        )
-    }
-
-    /// Split borrow: the buffer manager mutably and the obarray view mutably.
-    ///
-    /// The view half is the non-swappable [`ObarrayViewMut`] capability.
-    #[doc(hidden)]
-    #[inline]
-    pub fn buffers_and_obarray_view_mut(&mut self) -> (&mut BufferManager, ObarrayViewMut<'_>) {
-        (
-            &mut self.edit.buffers,
-            ObarrayViewMut::new(&mut self.obarray),
-        )
-    }
-
-    /// Split borrow: the obarray and owner bindings by shared reference, and
-    /// the buffer manager mutably (syntax scans read variables, edit text).
-    #[doc(hidden)]
-    #[inline]
-    pub fn variable_view_and_buffers_mut(
-        &mut self,
-    ) -> (&Obarray, &owner_bindings::OwnerSlot, &mut BufferManager) {
-        (&self.obarray, &self.owner, &mut self.edit.buffers)
+        sym_id: SymId,
+        value: Value,
+    ) -> Result<Option<BufferId>, Flow> {
+        let buffers = &mut self.edit.buffers;
+        let owner = self.owner.slab_mut();
+        let specpdl = self.specpdl.as_slice();
+        let obarray_view = &mut self.obarray;
+        // SAFETY: this storage helper only updates a runtime variable through
+        // the bounded value/forwarder path. It never runs Lisp watchers or
+        // modifies canonical dispatch words, and returns no borrowed manager
+        // or interior reference.
+        unsafe {
+            obarray_view.with_legacy_value_write(|obarray| {
+                super::set_runtime_binding(obarray, buffers, owner, specpdl, sym_id, value)
+            })
+        }
     }
 
     /// Split borrow: the frame manager by shared reference and the display
@@ -1469,7 +1420,8 @@ impl Context {
 
     /// Test-support split borrow for the mode-line formatting tests: the
     /// obarray and owner bindings by shared reference, the frame and process
-    /// managers by shared reference, and the buffer manager mutably.
+    /// managers by shared reference, and the buffer manager via its
+    /// non-swappable [`neovm_edit::buffer::BufferManagerMut`] capability.
     #[cfg(any(test, feature = "test-support"))]
     #[doc(hidden)]
     #[inline]
@@ -1480,14 +1432,14 @@ impl Context {
         &Obarray,
         &owner_bindings::OwnerSlot,
         &FrameManager,
-        &mut BufferManager,
+        neovm_edit::buffer::BufferManagerMut<'_>,
         &ProcessManager,
     ) {
         (
             &self.obarray,
             &self.owner,
             &self.frames,
-            &mut self.edit.buffers,
+            neovm_edit::buffer::BufferManagerMut::new(&mut self.edit.buffers),
             &self.processes,
         )
     }
@@ -1521,38 +1473,6 @@ impl Context {
         &mut self,
     ) -> (&mut FrameManager, &mut BufferManager, &MinibufferManager) {
         (&mut self.frames, &mut self.edit.buffers, &self.minibuffers)
-    }
-
-    /// Split borrow: the process manager (mutable), the thread manager
-    /// (shared), and the buffer manager (mutable).  Status publication reads
-    /// the current thread while mutating a process record and syncing its
-    /// mark in the buffer manager.
-    #[doc(hidden)]
-    #[inline]
-    pub fn processes_threads_and_buffers_mut(
-        &mut self,
-    ) -> (&mut ProcessManager, &ThreadManager, &mut BufferManager) {
-        (&mut self.processes, &self.threads, &mut self.edit.buffers)
-    }
-
-    /// Split borrow: processes and buffers mutably, threads and coding
-    /// systems by shared reference (process creation reads both).
-    #[doc(hidden)]
-    #[inline]
-    pub fn processes_threads_buffers_and_coding_systems_mut(
-        &mut self,
-    ) -> (
-        &mut ProcessManager,
-        &ThreadManager,
-        &mut BufferManager,
-        &mut CodingSystemManager,
-    ) {
-        (
-            &mut self.processes,
-            &self.threads,
-            &mut self.edit.buffers,
-            &mut self.coding_systems,
-        )
     }
 
     // --- Non-swappable BufferManagerMut split-borrow capabilities (rt A3 2c (d)) ---

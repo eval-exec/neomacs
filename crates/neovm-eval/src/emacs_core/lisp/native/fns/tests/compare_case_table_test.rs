@@ -46,7 +46,7 @@ fn set_case_table(ctx: &mut Context, table: Value) -> EvalResult {
 /// manager and the obarray view.
 fn current_case_table(ctx: &mut Context) -> EvalResult {
     let mode = ctx.symbol_mode();
-    let (buffers, mut obarray_view) = ctx.buffers_and_obarray_view_mut();
+    let (buffers, mut obarray_view) = ctx.buffer_view_and_obarray_view_mut();
     // SAFETY: this selects and seeds case-table values and the buffer slot.
     // It does not call Lisp or change function metadata.
     unsafe {

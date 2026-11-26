@@ -68,8 +68,8 @@ fn ready_process(eval: &mut Context, name: &str, chunks: usize) -> (ProcessId, A
         vec!["-c".into(), "producer".into()],
         ProcessCodingSystems::gnu_make_process_initial(),
     );
-    let (processes, buffers) = eval.processes_and_buffers_mut();
-    processes.sync_process_mark(buffers, id).unwrap();
+    let (processes, mut buffers) = eval.processes_and_buffer_view_mut();
+    processes.sync_process_mark(&mut buffers, id).unwrap();
     let reads = Arc::new(AtomicUsize::new(0));
     eval.processes_mut()
         .get_mut(id)

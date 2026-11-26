@@ -440,13 +440,13 @@ fn test_format_mode_line_in_state_uses_buffer_local_symbols_and_restores_buffer(
         .set_buffer_local_property(other_id, "mode-name", Value::string("Neo"))
         .expect("mode-name local should set");
 
-    let (ml_obarray, ml_owner, ml_frames, ml_buffers, ml_processes) =
+    let (ml_obarray, ml_owner, ml_frames, mut ml_buffers, ml_processes) =
         eval.mode_line_formatting_inputs_mut();
     let rendered = format_mode_line_from_state(
         VariableView::new(ml_obarray, ml_owner),
         &[],
         ml_frames,
-        ml_buffers,
+        &mut ml_buffers,
         ml_processes,
         vec![
             Value::list(vec![
@@ -532,13 +532,13 @@ fn test_format_mode_line_in_state_with_eval_keeps_shared_buffer_context_around_e
         .set_buffer_local_property(other_id, "mode-name", Value::string("Neo"))
         .expect("mode-name local should set");
 
-    let (ml_obarray, ml_owner, ml_frames, ml_buffers, ml_processes) =
+    let (ml_obarray, ml_owner, ml_frames, mut ml_buffers, ml_processes) =
         eval.mode_line_formatting_inputs_mut();
     let rendered = finish_format_mode_line_in_state_with_eval(
         VariableView::new(ml_obarray, ml_owner),
         &[],
         ml_frames,
-        ml_buffers,
+        &mut ml_buffers,
         ml_processes,
         &[
             Value::list(vec![
@@ -629,13 +629,13 @@ fn test_format_mode_line_string_valued_symbols_render_literally() {
         .set_buffer_local_property(other_id, "mode-name", Value::string("%b"))
         .expect("mode-name local should set");
 
-    let (ml_obarray, ml_owner, ml_frames, ml_buffers, ml_processes) =
+    let (ml_obarray, ml_owner, ml_frames, mut ml_buffers, ml_processes) =
         eval.mode_line_formatting_inputs_mut();
     let rendered = format_mode_line_from_state(
         VariableView::new(ml_obarray, ml_owner),
         &[],
         ml_frames,
-        ml_buffers,
+        &mut ml_buffers,
         ml_processes,
         vec![
             Value::list(vec![Value::string("%b "), Value::symbol("mode-name")]),
@@ -656,13 +656,13 @@ fn test_format_mode_line_fixnum_elements_pad_and_truncate_tail() {
     let mut eval = interactive_context();
     let other_id = eval.edit.buffers.create_buffer("xy");
 
-    let (ml_obarray, ml_owner, ml_frames, ml_buffers, ml_processes) =
+    let (ml_obarray, ml_owner, ml_frames, mut ml_buffers, ml_processes) =
         eval.mode_line_formatting_inputs_mut();
     let rendered = format_mode_line_from_state(
         VariableView::new(ml_obarray, ml_owner),
         &[],
         ml_frames,
-        ml_buffers,
+        &mut ml_buffers,
         ml_processes,
         vec![
             Value::list(vec![
@@ -687,13 +687,13 @@ fn test_format_mode_line_percent_specs_keep_gnu_field_width_and_dash_semantics()
     let mut eval = interactive_context();
     let other_id = eval.edit.buffers.create_buffer("xy");
 
-    let (ml_obarray, ml_owner, ml_frames, ml_buffers, ml_processes) =
+    let (ml_obarray, ml_owner, ml_frames, mut ml_buffers, ml_processes) =
         eval.mode_line_formatting_inputs_mut();
     let rendered = format_mode_line_from_state(
         VariableView::new(ml_obarray, ml_owner),
         &[],
         ml_frames,
-        ml_buffers,
+        &mut ml_buffers,
         ml_processes,
         vec![
             Value::string("%5b|%-|%2*"),

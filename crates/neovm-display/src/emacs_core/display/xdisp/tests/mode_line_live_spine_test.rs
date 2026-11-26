@@ -14,13 +14,13 @@ fn mode_line_split_callback_follows_replaced_live_tail() {
         .expect("callback format");
     let mut callbacks = 0;
     let before_roots = save_scratch_gc_roots();
-    let (ml_obarray, ml_owner, ml_frames, ml_buffers, ml_processes) =
+    let (ml_obarray, ml_owner, ml_frames, mut ml_buffers, ml_processes) =
         eval.mode_line_formatting_inputs_mut();
     let rendered = finish_format_mode_line_in_state_with_eval(
         neovm_eval::emacs_core::eval::VariableView::new(ml_obarray, ml_owner),
         &[],
         ml_frames,
-        ml_buffers,
+        &mut ml_buffers,
         ml_processes,
         &[format, Value::fixnum(0)],
         |_, _| {

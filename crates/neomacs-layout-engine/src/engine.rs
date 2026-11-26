@@ -8405,7 +8405,7 @@ impl LayoutEngine {
                         .map(|buffer| buffer.lisp_pos_to_emacs_byte_pos(point_lisp));
                     if let Some(byte_pos) = byte_pos {
                         let _ = evaluator
-                            .buffer_manager_mut()
+                            .buffer_manager_view_mut()
                             .goto_buffer_emacs_byte_pos(buffer_id, byte_pos);
                     }
                 }

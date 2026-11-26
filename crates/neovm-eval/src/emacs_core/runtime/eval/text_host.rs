@@ -34,11 +34,6 @@ impl TextHost for Context {
     }
 
     #[inline(always)]
-    fn buffers_mut(&mut self) -> &mut BufferManager {
-        &mut self.edit.buffers
-    }
-
-    #[inline(always)]
     fn buffers_view_mut(&mut self) -> neovm_edit::buffer::BufferManagerMut<'_> {
         neovm_edit::buffer::BufferManagerMut::new(&mut self.edit.buffers)
     }

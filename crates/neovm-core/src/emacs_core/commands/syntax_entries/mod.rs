@@ -134,14 +134,19 @@ pub(crate) fn builtin_forward_comment(
     // possible syntax-propertize callback.
     let policy = SexpScanPolicy::for_context(eval);
     let symbol_mode = eval.symbol_mode();
-    let (obarray, owner, buffers) = eval.variable_view_and_buffers_mut();
+    let (obarray, owner, mut buffers) = eval.variable_view_and_buffer_view_mut();
     let props = SyntaxProperties::for_scan_with_symbols(
         honor,
         VariableView::new(obarray, owner),
-        buffers,
+        &buffers,
         symbol_mode,
     );
-    forward_comment_in_buffers(buffers, count, props, policy.comment_end_escape())
+    forward_comment_in_buffers(
+        buffers.reborrow(),
+        count,
+        props,
+        policy.comment_end_escape(),
+    )
 }
 
 /// `(backward-prefix-chars)` — move point backward over prefix-syntax chars.
@@ -151,14 +156,14 @@ pub(crate) fn builtin_backward_prefix_chars(
 ) -> EvalResult {
     let honor = parse_sexp_lookup_properties_enabled(eval);
     let symbol_mode = eval.symbol_mode();
-    let (obarray, owner, buffers) = eval.variable_view_and_buffers_mut();
+    let (obarray, owner, mut buffers) = eval.variable_view_and_buffer_view_mut();
     let props = SyntaxProperties::for_scan_with_symbols(
         honor,
         VariableView::new(obarray, owner),
-        buffers,
+        &buffers,
         symbol_mode,
     );
-    builtin_backward_prefix_chars_in_buffers(buffers, args, props)
+    builtin_backward_prefix_chars_in_buffers(buffers.reborrow(), args, props)
 }
 
 /// GNU `find-word-boundary-function-table`'s symbol (DEFVAR_LISP,

@@ -220,7 +220,7 @@ fn mode_line_incremental_split_fresh_format_survives_nested_context_gc() {
         ),
         &[],
         &frames,
-        &mut buffers,
+        &mut neovm_edit::buffer::BufferManagerMut::new(&mut buffers),
         &processes,
         &[format],
         |form, _| {

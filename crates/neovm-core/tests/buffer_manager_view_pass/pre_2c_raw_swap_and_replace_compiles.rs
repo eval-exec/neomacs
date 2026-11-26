@@ -7,7 +7,7 @@
 //! buffer. This control demonstrates the exact soundness hole that
 //! `BufferManagerMut` and `EditRuntimeMut` close.
 
-use neovm_core::buffer::{Buffer, BufferId};
+use neovm_core::buffer::{Buffer, BufferId, EditRuntime};
 use neovm_core::emacs_core::eval::Context;
 use neovm_core::emacs_core::value::Value;
 
@@ -17,8 +17,8 @@ fn pre_2c_raw_manager_swap_compiles(first: &mut Context, second: &mut Context) {
 }
 
 #[allow(dead_code)]
-fn pre_2c_raw_edit_runtime_swap_compiles(first: &mut Context, second: &mut Context) {
-    std::mem::swap(first.edit_mut(), second.edit_mut());
+fn pre_2c_raw_edit_runtime_swap_compiles(first: &mut EditRuntime, second: &mut EditRuntime) {
+    std::mem::swap(first, second);
 }
 
 #[allow(dead_code)]

@@ -73,20 +73,20 @@ pub(crate) fn builtin_copy_syntax_table_with_symbols(
 }
 
 pub(crate) fn current_buffer_syntax_table_object_in_buffers_with_symbols(
-    buffers: &mut BufferManager,
+    mut buffers: neovm_edit::buffer::BufferManagerMut<'_>,
     mode: SymbolMode,
 ) -> Result<Value, Flow> {
     use neovm_edit::buffer::buffer::BUFFER_SLOT_SYNTAX_TABLE;
     let current_id = buffers
         .current_buffer_id()
         .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
-    let buf = buffers
-        .get_mut(current_id)
-        .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
+    let value = buffers
+        .get(current_id)
+        .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?
+        .slots()[BUFFER_SLOT_SYNTAX_TABLE.index()];
 
     // Mirrors GNU `Fsyntax_table` (`syntax.c:987-993`):
     //     return BVAR (current_buffer, syntax_table);
-    let value = buf.slots()[BUFFER_SLOT_SYNTAX_TABLE.index()];
     if !value.is_nil()
         && crate::emacs_core::chartable::char_table_has_subtype_named_with_symbols(
             &value,
@@ -104,12 +104,12 @@ pub(crate) fn current_buffer_syntax_table_object_in_buffers_with_symbols(
     // from the standard syntax table — matches GNU's
     // `reset_buffer` (`buffer.c:1149-1157`) which copies the
     // standard tables into a fresh buffer.
-    buf.slots_mut()[BUFFER_SLOT_SYNTAX_TABLE.index()] = fallback;
+    let _ = buffers.set_buffer_slot(current_id, BUFFER_SLOT_SYNTAX_TABLE, fallback);
     Ok(fallback)
 }
 
 pub(crate) fn builtin_syntax_table_in_buffers_with_symbols(
-    buffers: &mut BufferManager,
+    buffers: neovm_edit::buffer::BufferManagerMut<'_>,
     args: &[Value],
     mode: SymbolMode,
 ) -> EvalResult {
@@ -123,7 +123,7 @@ pub(crate) fn builtin_syntax_table_in_buffers_with_symbols(
 }
 
 pub(crate) fn builtin_set_syntax_table_in_buffers_with_symbols(
-    buffers: &mut BufferManager,
+    buffers: neovm_edit::buffer::BufferManagerMut<'_>,
     args: &[Value],
     mode: SymbolMode,
 ) -> EvalResult {
@@ -150,7 +150,7 @@ pub(crate) fn builtin_set_syntax_table_in_buffers_with_symbols(
 }
 
 pub(crate) fn modify_syntax_entry_in_buffers_with_symbols(
-    buffers: &mut BufferManager,
+    mut buffers: neovm_edit::buffer::BufferManagerMut<'_>,
     args: &[Value],
     mode: SymbolMode,
 ) -> EvalResult {
@@ -175,7 +175,7 @@ pub(crate) fn modify_syntax_entry_in_buffers_with_symbols(
         }
         *table
     } else {
-        current_buffer_syntax_table_object_in_buffers_with_symbols(buffers, mode)?
+        current_buffer_syntax_table_object_in_buffers_with_symbols(buffers.reborrow(), mode)?
     };
     let current_table = current_buffer_syntax_table_object_in_buffers_with_symbols(buffers, mode)?;
     let update_current_buffer_table = target_table == current_table;

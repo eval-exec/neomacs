@@ -1607,7 +1607,7 @@ pub fn word_motion_with_table<H: TextHost>(
                     region.range().start()
                 };
                 let _ = eval
-                    .buffers_mut()
+                    .buffers_view_mut()
                     .goto_buffer_emacs_byte_pos(current_id, limit);
             }
             completed = false;
@@ -1644,7 +1644,7 @@ pub fn word_motion_with_table<H: TextHost>(
                     buffer_char_to_emacs_byte_pos(buf, CharPos0::new(zero_based))
                 };
                 let _ = eval
-                    .buffers_mut()
+                    .buffers_view_mut()
                     .goto_buffer_emacs_byte_pos(current_id, byte);
                 handled = true;
             }
@@ -1670,7 +1670,7 @@ pub fn word_motion_with_table<H: TextHost>(
                 )
             };
             let _ = eval
-                .buffers_mut()
+                .buffers_view_mut()
                 .goto_buffer_emacs_byte_pos(current_id, byte);
             if !ok {
                 completed = false;
@@ -1707,7 +1707,9 @@ pub fn forward_word_destination<H: TextHost>(
         let (dest, _) = word_motion_with_table(eval, count, honor, wbtable);
         // word_motion_with_table moves point as it scans; restore it.
         if let (Some(id), Some(saved)) = (current_id, saved) {
-            let _ = eval.buffers_mut().goto_buffer_emacs_byte_pos(id, saved);
+            let _ = eval
+                .buffers_view_mut()
+                .goto_buffer_emacs_byte_pos(id, saved);
         }
         dest
     } else {
@@ -3121,7 +3123,7 @@ fn ensure_standard_syntax_table_object() -> EvalResult {
 #[cfg(any(test, feature = "test-support"))]
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
 fn current_buffer_syntax_table_object_in_buffers(
-    buffers: &mut BufferManager,
+    buffers: neovm_edit::buffer::BufferManagerMut<'_>,
 ) -> Result<Value, Flow> {
     current_buffer_syntax_table_object_in_buffers_with_symbols(
         buffers,
@@ -3137,27 +3139,26 @@ pub fn sync_current_buffer_syntax_table_state<H: TextHost>(ctx: &mut H) -> Resul
     // motion/parse code reads `buf.slots[BUFFER_SLOT_SYNTAX_TABLE.index()]`
     // directly via `SyntaxTable::for_buffer`. Matches GNU
     // `set_buffer_internal`.
-    let _ = current_buffer_syntax_table_object_in_buffers_with_symbols(ctx.buffers_mut(), mode)?;
+    let _ =
+        current_buffer_syntax_table_object_in_buffers_with_symbols(ctx.buffers_view_mut(), mode)?;
     Ok(())
 }
 
 fn set_current_buffer_syntax_table_object_in_buffers(
-    buffers: &mut BufferManager,
+    mut buffers: neovm_edit::buffer::BufferManagerMut<'_>,
     table: Value,
 ) -> Result<(), Flow> {
     use neovm_edit::buffer::buffer::BUFFER_SLOT_SYNTAX_TABLE;
     let current_id = buffers
         .current_buffer_id()
         .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
-    let buf = buffers
-        .get_mut(current_id)
-        .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
     // Mirrors GNU `Fset_syntax_table` (`syntax.c:1030-1042`):
     //     bset_syntax_table (current_buffer, table);
     //     SET_PER_BUFFER_VALUE_P (current_buffer,
     //                             PER_BUFFER_VAR_IDX (syntax_table), 1);
-    buf.slots_mut()[BUFFER_SLOT_SYNTAX_TABLE.index()] = table;
-    buf.set_slot_local_flag(BUFFER_SLOT_SYNTAX_TABLE, true);
+    buffers
+        .set_buffer_slot_local(current_id, BUFFER_SLOT_SYNTAX_TABLE, table)
+        .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
     Ok(())
 }
 
@@ -5412,7 +5413,7 @@ pub(crate) fn builtin_syntax_table<H: TextHost>(eval: &mut H, args: Vec<Value>) 
 pub fn builtin_syntax_table_0<H: TextHost>(eval: &mut H) -> EvalResult {
     let mode = eval.symbol_mode();
     let args: [Value; 0] = [];
-    builtin_syntax_table_in_buffers_with_symbols(eval.buffers_mut(), &args, mode)
+    builtin_syntax_table_in_buffers_with_symbols(eval.buffers_view_mut(), &args, mode)
 }
 
 /// `(set-syntax-table TABLE)` — install TABLE for current buffer and return it.
@@ -5433,7 +5434,7 @@ pub(crate) fn builtin_set_syntax_table<H: TextHost>(eval: &mut H, args: Vec<Valu
 pub fn builtin_set_syntax_table_1<H: TextHost>(eval: &mut H, table: Value) -> EvalResult {
     let mode = eval.symbol_mode();
     let args: [Value; 1] = [table];
-    builtin_set_syntax_table_in_buffers_with_symbols(eval.buffers_mut(), &args, mode)
+    builtin_set_syntax_table_in_buffers_with_symbols(eval.buffers_view_mut(), &args, mode)
 }
 
 // ===========================================================================
@@ -5444,7 +5445,7 @@ pub fn builtin_set_syntax_table_1<H: TextHost>(eval: &mut H, table: Value) -> Ev
 #[doc(hidden)]
 pub fn builtin_modify_syntax_entry<H: TextHost>(eval: &mut H, args: Vec<Value>) -> EvalResult {
     let mode = eval.symbol_mode();
-    modify_syntax_entry_in_buffers_with_symbols(eval.buffers_mut(), &args, mode)
+    modify_syntax_entry_in_buffers_with_symbols(eval.buffers_view_mut(), &args, mode)
 }
 
 /// `(char-syntax CHAR)` — return the syntax class designator char.
@@ -5643,7 +5644,7 @@ pub fn expect_forward_comment_count(args: &[Value]) -> Result<i64, Flow> {
 
 #[doc(hidden)]
 pub fn forward_comment_in_buffers(
-    buffers: &mut BufferManager,
+    mut buffers: neovm_edit::buffer::BufferManagerMut<'_>,
     count: i64,
     props: SyntaxProperties<'_>,
     escape_policy: CommentEndEscapePolicy,
@@ -6716,7 +6717,7 @@ fn scan_backward_comment_fence(
 
 #[doc(hidden)]
 pub fn builtin_backward_prefix_chars_in_buffers(
-    buffers: &mut BufferManager,
+    mut buffers: neovm_edit::buffer::BufferManagerMut<'_>,
     args: &[Value],
     props: SyntaxProperties<'_>,
 ) -> EvalResult {
@@ -6904,7 +6905,7 @@ pub(crate) fn builtin_forward_sexp<H: TextHost>(eval: &mut H, args: Vec<Value>) 
         .current_buffer_id()
         .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
     let _ = eval
-        .buffers_mut()
+        .buffers_view_mut()
         .goto_buffer_emacs_byte_pos(current_id, new_pos);
     Ok(Value::NIL)
 }
@@ -6951,7 +6952,7 @@ pub(crate) fn builtin_backward_sexp<H: TextHost>(eval: &mut H, args: Vec<Value>)
         .current_buffer_id()
         .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
     let _ = eval
-        .buffers_mut()
+        .buffers_view_mut()
         .goto_buffer_emacs_byte_pos(current_id, new_pos);
     Ok(Value::NIL)
 }
@@ -7993,7 +7994,7 @@ pub fn builtin_parse_partial_sexp_6<H: TextHost>(
         let current_id = buf.id();
         let stop_byte = lisp_pos_to_byte(buf, LispCharPos1::new(stop_pos));
         let _ = eval
-            .buffers_mut()
+            .buffers_view_mut()
             .goto_buffer_emacs_byte_pos(current_id, stop_byte);
         return Ok(state.into_value());
     }
@@ -8085,7 +8086,7 @@ pub fn builtin_parse_partial_sexp_6<H: TextHost>(
     let current_id = buf.id();
     let stop_byte = lisp_pos_to_byte(buf, LispCharPos1::new(stop_pos));
     let _ = eval
-        .buffers_mut()
+        .buffers_view_mut()
         .goto_buffer_emacs_byte_pos(current_id, stop_byte);
     Ok(state)
 }
@@ -8190,7 +8191,7 @@ pub fn builtin_skip_syntax_forward_2<H: TextHost>(
             }
             // The scan consumed the whole window: advance and continue.
             let _ = eval
-                .buffers_mut()
+                .buffers_view_mut()
                 .goto_buffer_emacs_byte_pos(current_id, EmacsBytePos::new(window_end_byte));
         }
         stop
@@ -8215,7 +8216,7 @@ pub fn builtin_skip_syntax_forward_2<H: TextHost>(
         .current_buffer_id()
         .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
     let _ = eval
-        .buffers_mut()
+        .buffers_view_mut()
         .goto_buffer_emacs_byte_pos(current_id, new_pos);
 
     // Return number of characters skipped (Emacs convention).
@@ -8282,7 +8283,7 @@ pub fn builtin_skip_syntax_backward_2<H: TextHost>(
         .current_buffer_id()
         .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
     let _ = eval
-        .buffers_mut()
+        .buffers_view_mut()
         .goto_buffer_emacs_byte_pos(current_id, new_pos);
 
     // Return negative number of characters skipped.

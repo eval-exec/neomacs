@@ -3087,8 +3087,9 @@ fn syntax_class_at_char_matches_gnu_defaults() {
     // Pin the GNU-standard syntax-class for representative characters,
     // read from the live chartable the default buffer holds.
     let mut eval = crate::test_utils::new_context();
-    let table = super::current_buffer_syntax_table_object_in_buffers(&mut eval.edit.buffers)
-        .expect("buffer syntax-table");
+    let table =
+        super::current_buffer_syntax_table_object_in_buffers(eval.buffer_manager_view_mut())
+            .expect("buffer syntax-table");
 
     let cases = [
         ('a', SyntaxClass::Word),

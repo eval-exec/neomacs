@@ -41,7 +41,6 @@ use crate::emacs_core::eval::data::process_tls::TlsStream;
 use crate::host_effect::wake::{
     ControlDestination, ControlNudge, ControlNudgeOutcome, NotificationLatch,
 };
-use neovm_edit::buffer::BufferManager;
 use neovm_value::error::{EvalResult, Flow, LispCondition, signal};
 use neovm_value::gc_trace::GcTrace;
 use neovm_value::intern::resolve_sym;
@@ -3809,7 +3808,11 @@ impl ProcessManager {
         })
     }
 
-    pub fn sync_process_mark(&mut self, buffers: &mut BufferManager, id: ProcessId) -> EvalResult {
+    pub fn sync_process_mark(
+        &mut self,
+        buffers: &mut neovm_edit::buffer::BufferManagerMut<'_>,
+        id: ProcessId,
+    ) -> EvalResult {
         let proc = self
             .get_mut(id)
             .ok_or_else(|| signal("error", vec![Value::string("Process not found")]))?;
@@ -4566,21 +4569,24 @@ pub fn os_str_to_lisp_string(value: &OsStr) -> LispString {
     }
 }
 
-pub fn update_process_mark(buffers: &mut BufferManager, proc: &mut Process) -> EvalResult {
+pub fn update_process_mark(
+    buffers: &mut neovm_edit::buffer::BufferManagerMut<'_>,
+    proc: &mut Process,
+) -> EvalResult {
     let Some(buffer_id) = proc.buffer.as_buffer_id() else {
-        return neovm_edit::emacs_core::marker::builtin_set_marker_in_buffers(
+        return neovm_edit::emacs_core::marker::builtin_set_marker_in_view(
             buffers,
             &[proc.mark, Value::NIL],
         );
     };
     let Some(buffer) = buffers.get(buffer_id) else {
-        return neovm_edit::emacs_core::marker::builtin_set_marker_in_buffers(
+        return neovm_edit::emacs_core::marker::builtin_set_marker_in_view(
             buffers,
             &[proc.mark, Value::NIL],
         );
     };
     let position = Value::fixnum(buffer.z_lisp_char_pos().as_i64());
-    neovm_edit::emacs_core::marker::builtin_set_marker_in_buffers(
+    neovm_edit::emacs_core::marker::builtin_set_marker_in_view(
         buffers,
         &[proc.mark, position, proc.buffer],
     )

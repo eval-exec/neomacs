@@ -153,7 +153,7 @@ fn casify_replace_current_buffer_region(
             .get(buffer_id)
             .is_some_and(|buf| !buf.text_props_is_empty()))
     .then(|| crate::buffer::text_props::CasingPropertyControls::for_host(eval));
-    let (obarray, buffers) = eval.obarray_and_buffers_mut();
+    let (obarray, mut buffers) = eval.obarray_and_buffer_view_mut();
     let properties =
         crate::buffer::text_props::CasingPropertyMode::from_controls(obarray, controls);
     buffers.casify_replace_buffer_region_with_expansions(

@@ -23,6 +23,7 @@
 
 use std::ops::Deref;
 
+use neovm_value::error::Flow;
 use neovm_value::heap_types::LispString;
 use neovm_value::intern::SymId;
 use neovm_value::symbol::Obarray;
@@ -30,12 +31,18 @@ use neovm_value::tagged::header::MarkerObj;
 use neovm_value::value::{RuntimeBindingValue, Value};
 
 use super::buffer::{
-    AccessibleBufferRegionSnapshot, Buffer, BufferId, BufferManager, BufferSlotInfo, InsertionType,
-    MarkerRef, OutermostRestrictionResetState, SavedRestrictionState, UndoBoundaryOutcome,
+    AccessibleBufferRegionSnapshot, BUFFER_SLOT_COUNT, Buffer, BufferId, BufferManager, BufferSlot,
+    BufferSlotInfo, InsertionType, MarkerRef, OutermostRestrictionResetState,
+    SavedRestrictionState, UndoBoundaryOutcome,
 };
 use super::edit_runtime::EditRuntime;
+use super::edit_transaction::TranspositionAnchorPolicy;
 use super::overlay::OverlayModificationHook;
 use super::position::{CharRange, EmacsBytePos, EmacsByteRange, LispCharPos1, TextPositionAnchor};
+use super::text::backend::ImplementedBufferTextBackendKind;
+use super::text_props::CasingPropertyMode;
+use super::undo::undo_list_boundary;
+use super::{CasifyExpansion, CasifyStorageShape, TextEditRange, TextExtent, TextTransposition};
 
 /// Non-swappable exclusive capability over a [`BufferManager`].
 ///
@@ -447,6 +454,240 @@ impl<'a> BufferManagerMut<'a> {
     #[inline]
     pub fn remove_marker(&mut self, marker: MarkerRef) {
         self.manager.remove_marker(marker)
+    }
+
+    #[inline]
+    pub fn insert_into_buffer(&mut self, id: BufferId, text: &str) -> Option<()> {
+        self.manager.insert_into_buffer(id, text)
+    }
+
+    #[inline]
+    pub fn insert_lisp_string_into_buffer(
+        &mut self,
+        id: BufferId,
+        text: &LispString,
+    ) -> Option<()> {
+        self.manager.insert_lisp_string_into_buffer(id, text)
+    }
+
+    #[inline]
+    pub fn insert_into_buffer_before_markers(&mut self, id: BufferId, text: &str) -> Option<()> {
+        self.manager.insert_into_buffer_before_markers(id, text)
+    }
+
+    #[inline]
+    pub fn insert_lisp_string_into_buffer_before_markers(
+        &mut self,
+        id: BufferId,
+        text: &LispString,
+    ) -> Option<()> {
+        self.manager
+            .insert_lisp_string_into_buffer_before_markers(id, text)
+    }
+
+    #[inline]
+    pub fn delete_buffer_emacs_byte_range(
+        &mut self,
+        id: BufferId,
+        byte_range: EmacsByteRange,
+    ) -> Option<()> {
+        self.manager.delete_buffer_emacs_byte_range(id, byte_range)
+    }
+
+    #[inline]
+    pub fn delete_buffer_measured_region(
+        &mut self,
+        id: BufferId,
+        range: TextEditRange,
+    ) -> Option<()> {
+        self.manager.delete_buffer_measured_region(id, range)
+    }
+
+    #[inline]
+    pub fn replace_buffer_emacs_byte_range_lisp_string(
+        &mut self,
+        id: BufferId,
+        byte_range: EmacsByteRange,
+        text: &LispString,
+    ) -> Option<()> {
+        self.manager
+            .replace_buffer_emacs_byte_range_lisp_string(id, byte_range, text)
+    }
+
+    #[inline]
+    pub fn replace_buffer_measured_region_lisp_string(
+        &mut self,
+        id: BufferId,
+        range: TextEditRange,
+        text: &LispString,
+    ) -> Option<TextExtent> {
+        self.manager
+            .replace_buffer_measured_region_lisp_string(id, range, text)
+    }
+
+    #[doc(hidden)]
+    #[inline]
+    pub fn casify_replace_buffer_region_with_expansions(
+        &mut self,
+        id: BufferId,
+        byte_range: EmacsByteRange,
+        text: &LispString,
+        expansions: &[CasifyExpansion],
+        storage_shape: CasifyStorageShape,
+        properties: &CasingPropertyMode<'_>,
+    ) -> Result<(), Flow> {
+        self.manager.casify_replace_buffer_region_with_expansions(
+            id,
+            byte_range,
+            text,
+            expansions,
+            storage_shape,
+            properties,
+        )
+    }
+
+    #[inline]
+    pub fn expose_empty_unibyte_buffer_bytes(&mut self, id: BufferId, bytes: &[u8]) -> Option<()> {
+        self.manager.expose_empty_unibyte_buffer_bytes(id, bytes)
+    }
+
+    #[inline]
+    pub fn seed_default_slot_into_unset_buffers(&mut self, slot: BufferSlot, value: Value) {
+        self.manager
+            .seed_default_slot_into_unset_buffers(slot, value)
+    }
+
+    #[inline]
+    pub fn set_default_text_backend_kind(&mut self, kind: ImplementedBufferTextBackendKind) {
+        self.manager.set_default_text_backend_kind(kind)
+    }
+
+    #[inline]
+    pub fn transpose_buffer_regions(
+        &mut self,
+        id: BufferId,
+        transposition: TextTransposition,
+        anchor_policy: TranspositionAnchorPolicy,
+    ) -> Option<()> {
+        self.manager
+            .transpose_buffer_regions(id, transposition, anchor_policy)
+    }
+
+    #[inline]
+    pub fn with_preserved_modification_state<R>(
+        &mut self,
+        id: BufferId,
+        operation: impl FnOnce(BufferManagerMut<'_>) -> R,
+    ) -> Option<R> {
+        self.manager
+            .with_preserved_modification_state(id, |manager| {
+                operation(BufferManagerMut::new(manager))
+            })
+    }
+
+    #[inline]
+    pub fn widen_buffer(&mut self, id: BufferId) -> Option<()> {
+        self.manager.get_mut(id)?.widen();
+        Some(())
+    }
+
+    #[inline]
+    pub fn widen_and_goto_end(&mut self, id: BufferId) -> Option<()> {
+        let buf = self.manager.get_mut(id)?;
+        buf.widen();
+        let end = buf.point_max_emacs_byte_pos();
+        buf.goto_emacs_byte_pos(end);
+        Some(())
+    }
+
+    #[inline]
+    pub fn clear_buffer_text_and_reset_point(&mut self, id: BufferId) -> Option<()> {
+        let buf = self.manager.get_mut(id)?;
+        buf.widen();
+        let len = buf.total_emacs_byte_len().get();
+        if len > 0 {
+            buf.delete_emacs_byte_range(EmacsByteRange::new(
+                EmacsBytePos::ZERO,
+                EmacsBytePos::new(len),
+            ));
+        }
+        buf.goto_emacs_byte_pos(EmacsBytePos::ZERO);
+        Some(())
+    }
+
+    #[inline]
+    pub fn append_undo_list_boundary_to_current(&mut self) {
+        if let Some(buf) = self.manager.current_buffer_mut() {
+            let mut ul = buf.get_undo_list();
+            undo_list_boundary(&mut ul);
+            buf.set_undo_list(ul);
+        }
+    }
+
+    #[inline]
+    pub fn set_buffer_undo_list(&mut self, id: BufferId, value: Value) -> Option<()> {
+        self.manager.get_mut(id)?.set_undo_list(value);
+        Some(())
+    }
+
+    #[inline]
+    pub fn kill_all_buffer_local_variables(
+        &mut self,
+        id: BufferId,
+        obarray: &mut Obarray,
+        kill_permanent: bool,
+        buffer_defaults: &[Value; BUFFER_SLOT_COUNT],
+    ) -> Option<()> {
+        self.manager.get_mut(id)?.kill_all_local_variables(
+            obarray,
+            kill_permanent,
+            buffer_defaults,
+        );
+        Some(())
+    }
+
+    #[inline]
+    pub fn put_buffer_text_property_in_emacs_byte_range(
+        &mut self,
+        id: BufferId,
+        range: EmacsByteRange,
+        prop: Value,
+        val: Value,
+    ) -> Option<()> {
+        self.manager
+            .get_mut(id)?
+            .text_props_put_property_in_emacs_byte_range(range, prop, val);
+        Some(())
+    }
+
+    #[inline]
+    pub fn set_buffer_slot(&mut self, id: BufferId, slot: BufferSlot, value: Value) -> Option<()> {
+        self.manager.get_mut(id)?.slots_mut()[slot.index()] = value;
+        Some(())
+    }
+
+    #[inline]
+    pub fn set_buffer_slot_local(
+        &mut self,
+        id: BufferId,
+        slot: BufferSlot,
+        value: Value,
+    ) -> Option<()> {
+        let buf = self.manager.get_mut(id)?;
+        buf.slots_mut()[slot.index()] = value;
+        buf.set_slot_local_flag(slot, true);
+        Some(())
+    }
+
+    #[inline]
+    pub(crate) fn register_marker_value_at_emacs_byte_pos(
+        &mut self,
+        marker: &Value,
+        buffer_id: Option<BufferId>,
+        byte_pos: Option<EmacsBytePos>,
+    ) {
+        self.manager
+            .register_marker_value_at_emacs_byte_pos(marker, buffer_id, byte_pos);
     }
 }
 
