@@ -312,6 +312,103 @@ fn auxiliary_self_closure_refuses_mismatched_face_and_font_map_keys() {
 }
 
 #[test]
+fn auxiliary_realized_gui_frame_refuses_additive_face_without_resolved_font_and_accepts_resolved_or_tty()
+ {
+    let base_face_id = crate::FaceId::new(0);
+    let additive_face_id = crate::FaceId::new(77);
+    let base_font_id = ResolvedFontId(1);
+    let additive_font_id = ResolvedFontId(95);
+
+    // Realized GUI base (`!fonts.is_empty()`): layout's realize_frame_fonts sets
+    // `default_resolved_font_id = Some(...)` on every GUI face.
+    let mut gui_state = base_state();
+    gui_state
+        .fonts
+        .insert(base_font_id, fixture_font(base_font_id, "DejaVu Sans Mono"));
+    gui_state
+        .faces
+        .get_mut(&base_face_id)
+        .unwrap()
+        .default_resolved_font_id = Some(base_font_id);
+
+    // 1. Negative GUI direction: additive face absent from base with
+    // `default_resolved_font_id: None` must be refused so the render thread
+    // cannot fall back to `record_emergency_font_fallback("layout published no font identity")`.
+    let mut unresolved_additive = gui_state.scroll_coverage[0].as_ref().clone();
+    unresolved_additive
+        .fonts
+        .insert(base_font_id, fixture_font(base_font_id, "DejaVu Sans Mono"));
+    unresolved_additive
+        .faces
+        .get_mut(&base_face_id)
+        .unwrap()
+        .default_resolved_font_id = Some(base_font_id);
+    unresolved_additive
+        .faces
+        .insert(additive_face_id, crate::Face::new(additive_face_id));
+    assert!(unresolved_additive.resources_self_closed());
+    assert!(!unresolved_additive.resources_compatible_with_frame_state(&gui_state));
+    assert!(!unresolved_additive.resources_compatible_with_frame_buffer(&gui_state.materialize()));
+
+    // 2. Positive GUI direction: realized GUI base + additive face carrying
+    // `default_resolved_font_id: Some(id)` backed by `coverage.fonts` is accepted.
+    let mut resolved_additive = unresolved_additive.clone();
+    resolved_additive.fonts.insert(
+        additive_font_id,
+        fixture_font(additive_font_id, "Additive GUI font"),
+    );
+    resolved_additive
+        .faces
+        .get_mut(&additive_face_id)
+        .unwrap()
+        .default_resolved_font_id = Some(additive_font_id);
+    assert!(resolved_additive.resources_self_closed());
+    assert!(resolved_additive.resources_compatible_with_frame_state(&gui_state));
+    assert!(resolved_additive.resources_compatible_with_frame_buffer(&gui_state.materialize()));
+
+    // 3. Positive TTY/headless direction: both base.fonts and coverage.fonts are empty,
+    // so an additive face with `default_resolved_font_id: None` remains valid.
+    let tty_state = base_state();
+    assert!(tty_state.fonts.is_empty());
+    let mut tty_additive = tty_state.scroll_coverage[0].as_ref().clone();
+    assert!(tty_additive.fonts.is_empty());
+    tty_additive
+        .faces
+        .insert(additive_face_id, crate::Face::new(additive_face_id));
+    assert!(tty_additive.resources_self_closed());
+    assert!(tty_additive.resources_compatible_with_frame_state(&tty_state));
+    assert!(tty_additive.resources_compatible_with_frame_buffer(&tty_state.materialize()));
+}
+
+#[test]
+fn auxiliary_asymmetric_realized_fonts_refuses_unresolved_additive_face() {
+    // Asymmetric escape (e.g. empty scalable catalog + fixed bitmap font in coverage, or a
+    // deserialized coverage carrying realized fonts against an empty-fonts base):
+    // `base.fonts.is_empty() && !coverage.fonts.is_empty()` must still refuse an additive face
+    // whose `default_resolved_font_id` is `None`.
+    let state = base_state();
+    assert!(state.fonts.is_empty());
+    let resolved_face_id = crate::FaceId::new(77);
+    let unresolved_face_id = crate::FaceId::new(78);
+    let bitmap_font_id = ResolvedFontId(95);
+
+    let mut coverage = state.scroll_coverage[0].as_ref().clone();
+    coverage
+        .fonts
+        .insert(bitmap_font_id, fixture_font(bitmap_font_id, "Spleen"));
+    let mut resolved_face = crate::Face::new(resolved_face_id);
+    resolved_face.default_resolved_font_id = Some(bitmap_font_id);
+    coverage.faces.insert(resolved_face_id, resolved_face);
+    coverage
+        .faces
+        .insert(unresolved_face_id, crate::Face::new(unresolved_face_id));
+
+    assert!(coverage.resources_self_closed());
+    assert!(!coverage.resources_compatible_with_frame_state(&state));
+    assert!(!coverage.resources_compatible_with_frame_buffer(&state.materialize()));
+}
+
+#[test]
 fn auxiliary_admission_checks_catalog_metrics_materialized_bars_and_bitmaps() {
     let mut state = base_state();
     let surface = state

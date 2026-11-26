@@ -402,7 +402,8 @@ fn auxiliary_accepts_self_closed_additive_resources_without_modifying_base() {
         FontFileAsset, FontOutlineAsset, FontReplay, FontSlantKind, ResolvedCharGlyph,
         ResolvedFont, ResolvedFontId, ResolvedFontIdentity, ResolvedGlyph, ResolvedGlyphId,
     };
-    let base = surface_frame(1, 7, 3);
+    let mut base = surface_frame(1, 7, 3);
+    base.faces.insert(FaceId::new(0), Face::new(FaceId::new(0)));
     let additive_face = FaceId::new(77);
     let additive_font = ResolvedFontId(77);
     let font = ResolvedFont {
@@ -627,6 +628,229 @@ fn auxiliary_rejects_mismatched_face_or_font_key_id_and_revokes_previous() {
                 DisplayWindowId::new(7),
                 3,
                 bad_face_pub
+            )
+            .is_none()
+    );
+}
+
+#[test]
+fn auxiliary_realized_gui_frame_refuses_unresolved_additive_face_and_accepts_resolved_or_tty() {
+    use neomacs_display_protocol::font::{
+        FontFileAsset, FontOutlineAsset, FontReplay, FontSlantKind, ResolvedFont, ResolvedFontId,
+        ResolvedFontIdentity,
+    };
+    let make_font = |id: ResolvedFontId, family: &str| ResolvedFont {
+        id,
+        identity: ResolvedFontIdentity::from_file("/fixture/f2-realizer.ttf", 0, None),
+        replay: FontReplay::Swash {
+            asset: FontOutlineAsset::File(
+                FontFileAsset::new("/fixture/f2-realizer.ttf", 0).unwrap(),
+            ),
+        },
+        family: family.into(),
+        full_name: None,
+        postscript_name: None,
+        weight: 400,
+        slant: FontSlantKind::Normal,
+        width: 5,
+        pixel_size: 10.0,
+        ascent_px: 8.0,
+        descent_px: 2.0,
+        space_advance_px: 10.0,
+        glyph_advance: Default::default(),
+        spacing: None,
+    };
+
+    let base_face_id = FaceId::new(0);
+    let additive_face_id = FaceId::new(77);
+    let base_font_id = ResolvedFontId(1);
+    let additive_font_id = ResolvedFontId(77);
+
+    // Realized GUI base (`!base.fonts.is_empty()` and `FaceId(0)` present in `base.faces`
+    // so `FaceId(0)` exercises `Some(base) => base == face` while `FaceId(77)` is additive).
+    let mut gui_base = surface_frame(1, 7, 3);
+    gui_base
+        .fonts
+        .insert(base_font_id, make_font(base_font_id, "DejaVu Sans Mono"));
+    let mut base_face = Face::new(base_face_id);
+    base_face.default_resolved_font_id = Some(base_font_id);
+    gui_base.faces.insert(base_face_id, base_face);
+    assert!(gui_base.faces.contains_key(&base_face_id));
+
+    // 1. Negative GUI direction: additive face with `default_resolved_font_id: None`
+    // is refused and revokes the previous surface.
+    let mut retention = CoverageRetention::default();
+    retention.refresh(&gui_base);
+    let unresolved_gui = surface_with_coverage_edit(7, 3, 1, |cov| {
+        cov.fonts
+            .insert(base_font_id, make_font(base_font_id, "DejaVu Sans Mono"));
+        cov.faces
+            .get_mut(&base_face_id)
+            .unwrap()
+            .default_resolved_font_id = Some(base_font_id);
+        cov.faces
+            .insert(additive_face_id, Face::new(additive_face_id));
+    });
+    let unresolved_pub = unresolved_gui.coverage().publication;
+    let changes = retention.apply_auxiliary(auxiliary(1, vec![unresolved_gui]), Some(&gui_base));
+    assert_eq!(
+        changes,
+        AuxiliaryCoverageChanges {
+            installed: 0,
+            revoked: 1,
+            conservative_revocations: 0,
+        }
+    );
+    assert!(retention.entries.is_empty());
+    assert!(
+        retention
+            .certified_publication_at(
+                gui_base.presentation_id,
+                DisplayWindowId::new(7),
+                3,
+                unresolved_pub,
+            )
+            .is_none()
+    );
+
+    // 2. Positive GUI direction: realized GUI base + additive face with
+    // `default_resolved_font_id: Some(additive_font_id)` installs cleanly.
+    retention.refresh(&gui_base);
+    let resolved_gui = surface_with_coverage_edit(7, 3, 1, |cov| {
+        cov.fonts
+            .insert(base_font_id, make_font(base_font_id, "DejaVu Sans Mono"));
+        cov.faces
+            .get_mut(&base_face_id)
+            .unwrap()
+            .default_resolved_font_id = Some(base_font_id);
+        cov.fonts.insert(
+            additive_font_id,
+            make_font(additive_font_id, "Additive GUI font"),
+        );
+        let mut additive_face = Face::new(additive_face_id);
+        additive_face.default_resolved_font_id = Some(additive_font_id);
+        cov.faces.insert(additive_face_id, additive_face);
+    });
+    let resolved_pub = resolved_gui.coverage().publication;
+    let changes = retention.apply_auxiliary(auxiliary(1, vec![resolved_gui]), Some(&gui_base));
+    assert_eq!(
+        changes,
+        AuxiliaryCoverageChanges {
+            installed: 1,
+            revoked: 0,
+            conservative_revocations: 0,
+        }
+    );
+    assert!(
+        retention
+            .certified_publication_at(
+                gui_base.presentation_id,
+                DisplayWindowId::new(7),
+                3,
+                resolved_pub,
+            )
+            .is_some()
+    );
+
+    // 3. Positive TTY/headless direction: both `tty_base.fonts` and `coverage.fonts`
+    // are empty, so an additive face with `default_resolved_font_id: None` installs cleanly.
+    let mut tty_base = surface_frame(1, 7, 3);
+    tty_base.faces.insert(base_face_id, Face::new(base_face_id));
+    assert!(tty_base.fonts.is_empty());
+    retention.refresh(&tty_base);
+    let tty_additive = surface_with_coverage_edit(7, 3, 1, |cov| {
+        cov.faces
+            .insert(additive_face_id, Face::new(additive_face_id));
+    });
+    assert!(tty_additive.coverage().fonts.is_empty());
+    let tty_pub = tty_additive.coverage().publication;
+    let changes = retention.apply_auxiliary(auxiliary(1, vec![tty_additive]), Some(&tty_base));
+    assert_eq!(
+        changes,
+        AuxiliaryCoverageChanges {
+            installed: 1,
+            revoked: 0,
+            conservative_revocations: 0,
+        }
+    );
+    assert!(
+        retention
+            .certified_publication_at(
+                tty_base.presentation_id,
+                DisplayWindowId::new(7),
+                3,
+                tty_pub
+            )
+            .is_some()
+    );
+}
+
+#[test]
+fn auxiliary_asymmetric_realized_fonts_rejects_unresolved_additive_face_and_revokes_previous() {
+    use neomacs_display_protocol::font::{
+        FontFileAsset, FontOutlineAsset, FontReplay, FontSlantKind, ResolvedFont, ResolvedFontId,
+        ResolvedFontIdentity,
+    };
+    let bitmap_font_id = ResolvedFontId(77);
+    let bitmap_font = ResolvedFont {
+        id: bitmap_font_id,
+        identity: ResolvedFontIdentity::from_file("/fixture/spleen.pcf", 0, None),
+        replay: FontReplay::Swash {
+            asset: FontOutlineAsset::File(FontFileAsset::new("/fixture/spleen.pcf", 0).unwrap()),
+        },
+        family: "Spleen".into(),
+        full_name: None,
+        postscript_name: None,
+        weight: 400,
+        slant: FontSlantKind::Normal,
+        width: 5,
+        pixel_size: 16.0,
+        ascent_px: 12.0,
+        descent_px: 4.0,
+        space_advance_px: 8.0,
+        glyph_advance: Default::default(),
+        spacing: None,
+    };
+
+    let base_face_id = FaceId::new(0);
+    let resolved_face_id = FaceId::new(77);
+    let unresolved_face_id = FaceId::new(78);
+
+    // Base has `fonts.is_empty()` while coverage carries a realized font (`!cov.fonts.is_empty()`)
+    // alongside an unresolved additive face (`FaceId(78)` with `default_resolved_font_id: None`).
+    let mut base = surface_frame(1, 7, 3);
+    base.faces.insert(base_face_id, Face::new(base_face_id));
+    assert!(base.fonts.is_empty());
+
+    let mut retention = CoverageRetention::default();
+    retention.refresh(&base);
+    let asymmetric = surface_with_coverage_edit(7, 3, 1, |cov| {
+        cov.fonts.insert(bitmap_font_id, bitmap_font);
+        let mut resolved_face = Face::new(resolved_face_id);
+        resolved_face.default_resolved_font_id = Some(bitmap_font_id);
+        cov.faces.insert(resolved_face_id, resolved_face);
+        cov.faces
+            .insert(unresolved_face_id, Face::new(unresolved_face_id));
+    });
+    assert!(!asymmetric.coverage().fonts.is_empty());
+    let asymmetric_pub = asymmetric.coverage().publication;
+    let changes = retention.apply_auxiliary(auxiliary(1, vec![asymmetric]), Some(&base));
+    assert_eq!(
+        changes,
+        AuxiliaryCoverageChanges {
+            installed: 0,
+            revoked: 1,
+            conservative_revocations: 0,
+        }
+    );
+    assert!(retention.entries.is_empty());
+    assert!(
+        retention
+            .certified_publication_at(
+                base.presentation_id,
+                DisplayWindowId::new(7),
+                3,
+                asymmetric_pub,
             )
             .is_none()
     );

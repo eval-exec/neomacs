@@ -269,6 +269,34 @@ impl ScrollCoverage {
             && shaped_clusters_closed
     }
 
+    /// Verify self-closure and entry-by-entry conflict freedom against `base`.
+    ///
+    /// - Additive `FaceId`s and `ResolvedFontId`s absent from `base` (under the
+    ///   same `font_catalog_generation`, enforced by `frame_resources_match` /
+    ///   `frame_buffer_resources_match` and `export_window`) are legitimate in
+    ///   Aux v2: offscreen lines in a rich buffer realize faces and weights the
+    ///   visible viewport never saw through the same `FontMetricsService`. Honest
+    ///   additions carry an openable `FontReplay` asset that the renderer replays
+    ///   verbatim via `GlyphAtlas::exact_attrs_for_resolved_font`, so
+    ///   `record_emergency_font_fallback` firing on an additive font is a
+    ///   tripwire for a forged or corrupted deserialized coverage rather than a
+    ///   normal path.
+    /// - Layout's `realize_frame_fonts` (`neomacs-layout-engine` `metrics.rs:4558-4574,
+    ///   4582-4602`) runs `realize_face_font` on every GUI face in `state.faces`
+    ///   (substituting `"monospace"` for empty `font_family`, including on
+    ///   decoration-only faces), but `realize_face_font` returns `Option<ResolvedFont>`
+    ///   and leaves `default_resolved_font_id: None` (with a `font_boundary` warning)
+    ///   when no font can be resolved. Any GUI face reaching the render thread with
+    ///   `None` triggers `record_emergency_font_fallback("layout published no font
+    ///   identity")`. Therefore, whenever either `base.fonts` or `self.fonts` carries
+    ///   realized fonts (`!fonts.is_empty() || !self.fonts.is_empty()`), any additive
+    ///   face with `default_resolved_font_id: None` is refused fail-closed — closing
+    ///   both the normal GUI path and asymmetric empty-base / populated-coverage
+    ///   cases (e.g. empty scalable catalog with a fixed bitmap font, or a
+    ///   deserialized coverage carrying realized fonts against an empty-fonts base).
+    ///   When both `fonts` and `self.fonts` are empty (headless/TTY fixtures where no
+    ///   `FontMetricsService` ran, or an all-empty-catalog base already carrying no
+    ///   realized fonts), `None` remains admitted.
     fn resources_compatible(
         &self,
         faces: &crate::FrameFaceMap,
@@ -276,11 +304,12 @@ impl ScrollCoverage {
         char_fonts: &crate::font::CharFontTable,
         shaped_clusters: &crate::font::ShapedClusterTable,
     ) -> bool {
+        let has_realized_fonts = !fonts.is_empty() || !self.fonts.is_empty();
         self.resources_self_closed()
-            && self
-                .faces
-                .iter()
-                .all(|(id, face)| faces.get(id).is_none_or(|base| base == face))
+            && self.faces.iter().all(|(id, face)| match faces.get(id) {
+                Some(base) => base == face,
+                None => !has_realized_fonts || face.default_resolved_font_id.is_some(),
+            })
             && self
                 .fonts
                 .iter()
