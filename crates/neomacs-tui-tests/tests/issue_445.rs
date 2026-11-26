@@ -13,7 +13,7 @@ use crate::support;
 use neomacs_tui_tests::TuiTempFile;
 use std::time::Duration;
 
-use support::{boot_pair, dump_pair_grids, read_both};
+use support::{assert_pair_exact_display, boot_pair, dump_pair_grids, read_both};
 
 /// The rendered line each case must keep visible.
 const TAIL: &str = "tail tail tail";
@@ -42,6 +42,7 @@ fn assert_tail_visible(
     label: &str,
     gnu: &mut neomacs_tui_tests::TuiSession,
     neo: &mut neomacs_tui_tests::TuiSession,
+    require_underline: bool,
 ) {
     read_both(gnu, neo, Duration::from_secs(1));
     let tail_visible = |grid: &[String]| grid.iter().any(|row| row.contains(TAIL));
@@ -55,13 +56,36 @@ fn assert_tail_visible(
         neo_ok,
         "{label}: Neomacs must keep the line visible (issue #445 blanked the row)"
     );
+    if require_underline {
+        let tail_row = gnu
+            .text_grid()
+            .iter()
+            .position(|row| row.contains(TAIL))
+            .expect("GNU tail row present") as u16;
+        let (_, cols) = gnu.screen_size();
+        let gnu_has_underline = (0..cols).any(|col| {
+            gnu.screen()
+                .cell(tail_row, col)
+                .is_some_and(|cell| cell.underline())
+        });
+        assert!(
+            gnu_has_underline,
+            "{label}: precondition failed — GNU row {tail_row} should carry underline attribute"
+        );
+    }
+    assert_pair_exact_display(label, gnu, neo);
 }
 
 #[test]
 fn face_boundary_on_zero_width_extender_keeps_line_visible() {
     let fixture = render_fixture(2, 3);
     let (mut gnu, mut neo) = boot_pair(&format!("-l {}", fixture.path().display()));
-    assert_tail_visible("issue #445/face-on-single-selector", &mut gnu, &mut neo);
+    assert_tail_visible(
+        "issue #445/face-on-single-selector",
+        &mut gnu,
+        &mut neo,
+        false,
+    );
 }
 
 #[test]
@@ -82,5 +106,10 @@ fn face_boundary_on_second_extender_keeps_line_visible() {
         ),
     );
     let (mut gnu, mut neo) = boot_pair(&format!("-l {}", fixture.path().display()));
-    assert_tail_visible("issue #445/face-on-doubled-selector", &mut gnu, &mut neo);
+    assert_tail_visible(
+        "issue #445/face-on-doubled-selector",
+        &mut gnu,
+        &mut neo,
+        true,
+    );
 }

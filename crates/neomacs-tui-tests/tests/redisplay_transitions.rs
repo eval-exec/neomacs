@@ -2,7 +2,10 @@
 //! Live GNU parity for chrome transitions and externally damaged TTY rows.
 
 use neomacs_tui_tests::pair::{read_both, send_both, wait_for_both};
-use neomacs_tui_tests::{TuiLaunch, TuiSession, TuiTempDirectory, TuiTerminalConfig};
+use neomacs_tui_tests::{
+    RawTerminalSnapshot, TuiLaunch, TuiSession, TuiTempDirectory, TuiTerminalConfig,
+    assert_raw_terminal_snapshots_eq, color_diffs_in, format_color_diffs,
+};
 use std::time::Duration;
 
 const INIT: &str = r#"(setq inhibit-startup-screen t initial-scratch-message nil
@@ -72,21 +75,46 @@ fn pair(hooks: bool) -> (TuiSession, TuiSession, TuiTempDirectory) {
     (gnu, neo, files)
 }
 
+fn assert_row_cells_match_gnu(label: &str, gnu: &TuiSession, neo: &TuiSession, row: u16) {
+    let (_, cols) = gnu.screen_size();
+    let diffs = color_diffs_in(gnu.screen(), neo.screen(), row..row + 1, 0..cols);
+    assert!(
+        diffs.is_empty(),
+        "{label}: row {row} colors diverged from GNU:\n{}",
+        format_color_diffs(&diffs, 16)
+    );
+    let gnu_snap = RawTerminalSnapshot::capture_rows(gnu.screen(), row..row + 1);
+    let neo_snap = RawTerminalSnapshot::capture_rows(neo.screen(), row..row + 1);
+    assert_raw_terminal_snapshots_eq(label, &gnu_snap, &neo_snap);
+}
+
 fn assert_mode_line(gnu: &TuiSession, neo: &TuiSession, expected: &str) {
-    let state = |session: &TuiSession| {
+    let state = |session: &TuiSession| -> (u16, String) {
         session
             .text_grid()
             .into_iter()
-            .find(|row| row.contains("STATE:"))
+            .enumerate()
+            .find(|(_, row)| row.contains("STATE:"))
+            .map(|(idx, row)| (idx as u16, row))
             .unwrap_or_else(|| panic!("{} has no mode line", session.name))
     };
-    let gnu_line = state(gnu);
-    let neo_line = state(neo);
+    let (gnu_row, gnu_line) = state(gnu);
+    let (neo_row, neo_line) = state(neo);
     assert!(gnu_line.contains(expected), "GNU transition: {gnu_line}");
     assert_eq!(
         neo_line, gnu_line,
         "mode-line transition differs from live GNU"
     );
+    assert_eq!(
+        neo_row, gnu_row,
+        "mode-line row index differs from live GNU"
+    );
+    let gnu_cell = gnu.screen().cell(gnu_row, 0).expect("GNU mode-line cell");
+    assert!(
+        gnu_cell.bgcolor() != vt100::Color::Default || gnu_cell.inverse(),
+        "precondition: GNU mode-line row {gnu_row} should carry mode-line face styling"
+    );
+    assert_row_cells_match_gnu(&format!("mode-line {expected}"), gnu, neo, gnu_row);
 }
 
 #[test]
@@ -150,6 +178,12 @@ fn assert_external_damage_is_repaired(hooks: bool) {
         assert_eq!(
             neo_grid[0], gnu_grid[0],
             "{command}, hooks={hooks}: damaged row must repaint"
+        );
+        assert_row_cells_match_gnu(
+            &format!("repaired row 0 ({command}, hooks={hooks})"),
+            &gnu,
+            &neo,
+            0,
         );
         assert_mode_line(&gnu, &neo, "STATE:Idle|BODY");
     }

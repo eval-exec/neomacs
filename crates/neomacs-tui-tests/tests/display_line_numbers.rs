@@ -72,6 +72,11 @@ fn display_string_newlines_do_not_number_synthetic_rows_or_shift_buffer_lines() 
     ];
     assert_eq!(rows(gnu.text_grid()), expected, "GNU 31.1 oracle");
     assert_eq!(rows(neo.text_grid()), expected, "issue #574");
+    support::assert_pair_exact_display(
+        "display_string_newlines_absolute_gutter_and_rows",
+        &gnu,
+        &neo,
+    );
 
     support::eval_expression(&mut gnu, &mut neo, "(setq display-line-numbers 'relative)");
     read_both(&mut gnu, &mut neo, Duration::from_secs(2));
@@ -88,6 +93,11 @@ fn display_string_newlines_do_not_number_synthetic_rows_or_shift_buffer_lines() 
         rows(neo.text_grid()),
         relative,
         "relative display-string rows"
+    );
+    support::assert_pair_exact_display(
+        "display_string_newlines_relative_gutter_and_rows",
+        &gnu,
+        &neo,
     );
 }
 
@@ -122,6 +132,7 @@ fn display_replacement_counts_the_buffer_newlines_it_hides() {
         expected,
         "issue #574 hidden buffer lines"
     );
+    support::assert_pair_exact_display("display_replacement_absolute_gutter_and_rows", &gnu, &neo);
 
     support::eval_expression(&mut gnu, &mut neo, "(setq display-line-numbers 'relative)");
     read_both(&mut gnu, &mut neo, Duration::from_secs(2));
@@ -132,6 +143,7 @@ fn display_replacement_counts_the_buffer_newlines_it_hides() {
         relative,
         "relative hidden buffer lines"
     );
+    support::assert_pair_exact_display("display_replacement_relative_gutter_and_rows", &gnu, &neo);
 }
 
 #[test]
@@ -184,6 +196,7 @@ fn narrowed_gutter_width_and_painted_prefix_match_gnu_matrix() {
         raw_widths: Vec<String>,
         prefixes: Vec<String>,
         tag_columns: Vec<usize>,
+        painted_rows: Vec<(usize, RawTerminalSnapshot)>,
         report: serde_json::Value,
     }
 
@@ -254,6 +267,7 @@ fn narrowed_gutter_width_and_painted_prefix_match_gnu_matrix() {
         }
         let mut prefixes = Vec::new();
         let mut tag_columns = Vec::new();
+        let mut painted_rows = Vec::new();
         let mut rows = Vec::new();
         for number in 1001..=1005 {
             let tag = format!("ROW{number:04} body {case}");
@@ -283,6 +297,11 @@ fn narrowed_gutter_width_and_painted_prefix_match_gnu_matrix() {
             }
             prefixes.push(prefix.to_owned());
             tag_columns.push(column); // ASCII fixture: byte and terminal-cell columns agree.
+            let row_u16 = row as u16;
+            painted_rows.push((
+                number,
+                RawTerminalSnapshot::capture_rows(session.screen(), row_u16..row_u16 + 1),
+            ));
             rows.push(serde_json::json!({"tag": tag, "row": row, "column": column, "prefix": prefix, "text": text}));
         }
         let report = serde_json::json!({"editor": editor, "widths": widths, "raw_widths": raw_widths, "query": query, "rows": rows,
@@ -292,6 +311,7 @@ fn narrowed_gutter_width_and_painted_prefix_match_gnu_matrix() {
             raw_widths,
             prefixes,
             tag_columns,
+            painted_rows,
             report,
         }
     }
@@ -516,6 +536,25 @@ fn narrowed_gutter_width_and_painted_prefix_match_gnu_matrix() {
                 "{case}: painted GNU prefixes {:?} at {:?} != Neo {:?} at {:?}",
                 a.prefixes, a.tag_columns, b.prefixes, b.tag_columns
             ));
+        }
+        if a.painted_rows.len() != b.painted_rows.len() {
+            failures.push(format!(
+                "{case}: painted row snapshot count GNU {} != Neo {}",
+                a.painted_rows.len(),
+                b.painted_rows.len()
+            ));
+        } else {
+            for ((gnu_num, gnu_snap), (neo_num, neo_snap)) in
+                a.painted_rows.iter().zip(b.painted_rows.iter())
+            {
+                let diffs = gnu_snap.exact_differences(neo_snap);
+                if gnu_num != neo_num || !diffs.is_empty() {
+                    failures.push(format!(
+                        "{case}: ROW{gnu_num:04} cell attributes diverged from GNU (neo ROW{neo_num:04}):\n  {}",
+                        diffs.iter().take(8).cloned().collect::<Vec<_>>().join("\n  ")
+                    ));
+                }
+            }
         }
         reports.push(
             serde_json::json!({"case": case, "enabled": enabled, "small": small,
