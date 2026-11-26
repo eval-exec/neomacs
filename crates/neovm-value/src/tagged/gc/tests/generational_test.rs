@@ -712,8 +712,8 @@ fn minor_sweep_work_estimate_is_bounded_by_the_young_list_not_the_old_boxes() {
     for _ in 0..16 {
         let _ = heap.alloc_hash_table(LispHashTable::new(HashTableTest::Eq));
     }
-    heap.begin_minor_collection().unwrap();
-    heap.complete_minor_collection();
+    heap.begin_minor_collection_for_test().unwrap();
+    heap.complete_minor_collection_for_test();
     assert!(heap.sweep_in_progress());
     assert!(heap.non_cons_object_addrs.len() > 20_000);
     // The old boxes alone would read as ten slices of 2,048 objects; this
@@ -723,7 +723,7 @@ fn minor_sweep_work_estimate_is_bounded_by_the_young_list_not_the_old_boxes() {
         remaining <= 2,
         "a 16-object young list estimated at {remaining} slices"
     );
-    heap.finish_incremental_sweep_now();
+    heap.finish_incremental_sweep_now_for_test();
 }
 
 /// Live bytes after a minor whose sweep window allocates `garbage` strings
@@ -740,13 +740,13 @@ fn live_bytes_after_minor_with_sweep_window_garbage(garbage: usize) -> usize {
         roots.keep(string);
     }
     minor(&mut heap, &kept);
-    heap.begin_minor_collection().unwrap();
-    heap.complete_minor_collection();
+    heap.begin_minor_collection_for_test().unwrap();
+    heap.complete_minor_collection_for_test();
     assert!(heap.sweep_in_progress());
     for i in 0..garbage {
         let _ = heap.alloc_string(LispString::from_utf8(&format!("garbage {i:08}")));
     }
-    heap.finish_incremental_sweep_now();
+    heap.finish_incremental_sweep_now_for_test();
     heap.live_bytes
 }
 
@@ -775,13 +775,13 @@ fn live_bytes_after_minor_with_sweep_window_conses(conses: usize) -> usize {
         roots.keep(string);
     }
     minor(&mut heap, &kept);
-    heap.begin_minor_collection().unwrap();
-    heap.complete_minor_collection();
+    heap.begin_minor_collection_for_test().unwrap();
+    heap.complete_minor_collection_for_test();
     assert!(heap.sweep_in_progress());
     for _ in 0..conses {
         let _ = heap.alloc_cons(TaggedValue::NIL, TaggedValue::NIL);
     }
-    heap.finish_incremental_sweep_now();
+    heap.finish_incremental_sweep_now_for_test();
     heap.live_bytes
 }
 
