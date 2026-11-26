@@ -474,3 +474,114 @@ fn oracle_prop_coding_string_hook_string_destination_keeps_ascii_fast_path() {
     ]];
     crate::common::assert_oracle_parity_expect(form, expect);
 }
+
+#[test]
+fn oracle_prop_coding_decode_charset_properties_across_eol_and_doors() {
+    // Issue #846 regression suite verifying GNU Emacs 31.1 `produce_charset`
+    // (`src/coding.c:7252-7261`), `decode_eol` (`src/coding.c:6761-6849`),
+    // `decode_coding_charset` (`src/coding.c:5511-5521`), and `decode_coding_gap`
+    // (`src/coding.c:7930-7995`) across:
+    // 1. Single-byte ISO-8859 (`iso-latin-1`, `iso-latin-5`, `iso-latin-9`) and
+    //    general charset (`koi8-r`) codings across Unix/DOS/Mac EOL, string vs
+    //    multibyte/unibyte buffer destinations, and `decode-coding-region`.
+    // 2. Even vs odd trailing `\r` runs under DOS lookahead (`\r`, `\r\r`,
+    //    `\r\r\r`, `a\rb\r`, `a\r\r`, `a\r\nb\r`, `a\r\nb\r\r`) on both
+    //    `iso-latin-1-dos` and `koi8-r-dos`.
+    // 3. Unibyte `decode-coding-region` (in-place and separate unibyte buffer)
+    //    verifying byte-space interval adjustment and `produced_char` return value.
+    // 4. `insert-file-contents` (`CodingEntry::FileGap`) pure-ASCII gap
+    //    optimization vs non-ASCII file decode.
+    let form = r#"(let ((collect-runs
+       (lambda (obj)
+         (let* ((is-str (stringp obj))
+                (pos (if is-str 0 (point-min)))
+                (end (if is-str (length obj) (point-max)))
+                (runs nil))
+           (while (< pos end)
+             (let* ((nxt (if is-str
+                             (or (next-property-change pos obj) end)
+                           (or (next-property-change pos) end)))
+                    (pl (if is-str
+                            (text-properties-at pos obj)
+                          (text-properties-at pos))))
+               (when pl
+                 (push (list pos nxt pl) runs))
+               (setq pos nxt)))
+           (nreverse runs)))))
+  (let ((single-byte-eol
+         (mapcar
+          (lambda (cs)
+            (let* ((s-str (decode-coding-string (unibyte-string ?a ?\r ?\n ?b ?\r ?\n) cs))
+                   (s-buf (with-temp-buffer
+                            (let ((ret (decode-coding-string (unibyte-string ?a ?b) cs nil (current-buffer))))
+                              (list ret (funcall collect-runs (current-buffer))))))
+                   (s-nonascii (decode-coding-string (unibyte-string #xe9 ?\r ?\n) cs)))
+              (list cs
+                    (funcall collect-runs s-str)
+                    s-buf
+                    (funcall collect-runs s-nonascii))))
+          '(iso-latin-1-dos iso-latin-1-mac iso-latin-5-dos iso-latin-9-dos koi8-r-dos)))
+        (trailing-cr-parity
+         (mapcar
+          (lambda (cs)
+            (list
+             cs
+             (mapcar
+              (lambda (raw)
+                (list
+                 (funcall collect-runs (decode-coding-string raw cs))
+                 (with-temp-buffer
+                   (decode-coding-string raw cs nil (current-buffer))
+                   (funcall collect-runs (current-buffer)))))
+              (list "\r" "\r\r" "\r\r\r" "a\rb\r" "a\r\r" "a\r\nb\r" "a\r\nb\r\r"))))
+          '(iso-latin-1-dos koi8-r-dos)))
+        (unibyte-region
+         (mapcar
+          (lambda (raw)
+            (let ((inplace
+                   (with-temp-buffer
+                     (set-buffer-multibyte nil)
+                     (insert raw)
+                     (let ((ret (decode-coding-region (point-min) (point-max) 'iso-latin-1-dos)))
+                       (list ret (string-to-list (buffer-string))
+                             (funcall collect-runs (current-buffer))))))
+                  (separate
+                   (let ((dst (generate-new-buffer " *u-dst*")))
+                     (unwind-protect
+                         (with-temp-buffer
+                           (set-buffer-multibyte nil)
+                           (insert raw)
+                           (with-current-buffer dst (set-buffer-multibyte nil))
+                           (let ((ret (decode-coding-region (point-min) (point-max) 'iso-latin-1-dos dst)))
+                             (with-current-buffer dst
+                               (list ret (string-to-list (buffer-string))
+                                     (funcall collect-runs (current-buffer))))))
+                       (kill-buffer dst)))))
+              (list inplace separate)))
+          (list (unibyte-string #xc3 #xa9 ?\r ?\n)
+                (unibyte-string #xe9 #xe9 #xe9 ?\r ?\n))))
+        (file-gap
+         (let ((f-ascii (make-temp-file "neomacs-846-ascii"))
+               (f-nonascii (make-temp-file "neomacs-846-nonascii")))
+           (unwind-protect
+               (progn
+                 (let ((coding-system-for-write 'no-conversion))
+                   (write-region "a\r\nb\r\n" nil f-ascii nil 'silent)
+                   (write-region (unibyte-string #xe9 ?\r ?\n) nil f-nonascii nil 'silent))
+                 (list
+                  (with-temp-buffer
+                    (let ((coding-system-for-read 'iso-latin-1-dos))
+                      (insert-file-contents f-ascii))
+                    (list (buffer-string) (funcall collect-runs (current-buffer))))
+                  (with-temp-buffer
+                    (let ((coding-system-for-read 'iso-latin-1-dos))
+                      (insert-file-contents f-nonascii))
+                    (list (string-to-list (buffer-string)) (funcall collect-runs (current-buffer))))))
+             (ignore-errors (delete-file f-ascii))
+             (ignore-errors (delete-file f-nonascii))))))
+    (list single-byte-eol trailing-cr-parity unibyte-region file-gap)))"#;
+    let expect = expect_test::expect![[
+        r#""OK (((iso-latin-1-dos ((0 4 (charset iso-8859-1))) (2 ((1 3 (charset iso-8859-1)))) ((0 2 (charset iso-8859-1)))) (iso-latin-1-mac ((0 6 (charset iso-8859-1))) (2 ((1 3 (charset iso-8859-1)))) ((0 3 (charset iso-8859-1)))) (iso-latin-5-dos ((0 4 (charset iso-8859-9))) (2 ((1 3 (charset iso-8859-9)))) ((0 2 (charset iso-8859-9)))) (iso-latin-9-dos ((0 4 (charset iso-8859-15))) (2 ((1 3 (charset iso-8859-15)))) ((0 2 (charset iso-8859-15)))) (koi8-r-dos ((0 4 (charset koi8-r))) (2 ((1 3 (charset koi8-r)))) ((0 2 (charset koi8-r))))) ((iso-latin-1-dos ((nil nil) (((0 2 (charset iso-8859-1))) ((1 3 (charset iso-8859-1)))) (((0 2 (charset iso-8859-1))) ((1 3 (charset iso-8859-1)))) (((0 3 (charset iso-8859-1))) ((1 4 (charset iso-8859-1)))) (((0 3 (charset iso-8859-1))) ((1 4 (charset iso-8859-1)))) (((0 3 (charset iso-8859-1))) ((1 4 (charset iso-8859-1)))) (((0 5 (charset iso-8859-1))) ((1 6 (charset iso-8859-1)))))) (koi8-r-dos ((nil nil) (((0 2 (charset koi8-r))) ((1 3 (charset koi8-r)))) (((0 2 (charset koi8-r))) ((1 3 (charset koi8-r)))) (((0 3 (charset koi8-r))) ((1 4 (charset koi8-r)))) (((0 3 (charset koi8-r))) ((1 4 (charset koi8-r)))) (((0 3 (charset koi8-r))) ((1 4 (charset koi8-r)))) (((0 5 (charset koi8-r))) ((1 6 (charset koi8-r))))))) (((3 (195 131 194 169 10) ((1 5 (charset iso-8859-1)))) (3 (195 131 194 169 10) ((1 5 (charset iso-8859-1))))) ((4 (195 169 195 169 195 169 10) ((1 6 (charset iso-8859-1)))) (4 (195 169 195 169 195 169 10) ((1 6 (charset iso-8859-1)))))) ((\"a\\nb\\n\" nil) ((233 10) ((1 3 (charset iso-8859-1))))))""#
+    ]];
+    crate::common::assert_oracle_parity_expect(form, expect);
+}

@@ -706,6 +706,104 @@ fn decode_eol_bytes_in_place(bytes: &mut Vec<u8>, eol: crate::emacs_core::coding
     }
 }
 
+/// Perform GNU `decode_eol` (`src/coding.c:6761-6849`) on `bytes` while
+/// adjusting text-property interval boundaries across deleted `\r` bytes
+/// (mirroring GNU's `del_range_2` at `:6839`), and return the number of `\r`
+/// bytes deleted.
+///
+/// When `dst_multibyte` is true, `bytes` holds Emacs internal multibyte bytes
+/// and `runs` are character-indexed; stepping uses `bytes_by_char_head` so
+/// each `\r` deletion records its character index. When `dst_multibyte` is
+/// false, `bytes` holds the unibyte buffer's bytes (where 1 byte == 1 buffer
+/// position) and `runs` are indexed in those unibyte buffer positions, so
+/// stepping advances byte-by-byte (`src/coding.c:6832-6835`).
+fn decode_eol_bytes_and_adjust_runs(
+    bytes: &mut Vec<u8>,
+    runs: &mut Vec<StringTextPropertyRun>,
+    eol: crate::emacs_core::coding::ResolvedEol,
+    dst_multibyte: bool,
+) -> usize {
+    use crate::emacs_core::coding::ResolvedEol;
+    if !matches!(eol, ResolvedEol::Dos) {
+        decode_eol_bytes_in_place(bytes, eol);
+        return 0;
+    }
+    if runs.is_empty() {
+        let before = bytes.len();
+        decode_eol_bytes_in_place(bytes, eol);
+        return before - bytes.len();
+    }
+    let Some(first_cr) = memchr::memchr(b'\r', bytes) else {
+        return 0;
+    };
+    let mut deleted_positions = Vec::new();
+    let mut read = 0usize;
+    let mut unit_idx = 0usize;
+    let len = bytes.len();
+    if first_cr > 0 {
+        if dst_multibyte {
+            while read < first_cr {
+                let step = neovm_value::emacs_char::bytes_by_char_head(bytes[read])
+                    .max(1)
+                    .min(len - read);
+                read += step;
+                unit_idx += 1;
+            }
+        } else {
+            read = first_cr;
+            unit_idx = first_cr;
+        }
+    }
+    let mut write = read;
+    while read < len {
+        if bytes[read] == b'\r' && read + 1 < len && bytes[read + 1] == b'\n' {
+            deleted_positions.push(unit_idx);
+            bytes[write] = b'\n';
+            write += 1;
+            read += 2;
+            unit_idx += 2;
+        } else {
+            let step = if dst_multibyte {
+                neovm_value::emacs_char::bytes_by_char_head(bytes[read])
+                    .max(1)
+                    .min(len - read)
+            } else {
+                1
+            };
+            if write != read {
+                bytes.copy_within(read..read + step, write);
+            }
+            write += step;
+            read += step;
+            unit_idx += 1;
+        }
+    }
+    bytes.truncate(write);
+    let deleted_count = deleted_positions.len();
+    if deleted_count == 0 {
+        return 0;
+    }
+    for run in runs.iter_mut() {
+        let shift_start = deleted_positions.partition_point(|&d| d < run.start);
+        let shift_end = deleted_positions.partition_point(|&d| d < run.end);
+        run.start -= shift_start;
+        run.end -= shift_end;
+    }
+    runs.retain(|run| run.start < run.end);
+    deleted_count
+}
+
+/// Under GNU's `eol_dos` lookahead (`src/coding.c:5511-5521`), `decode_coding_charset`
+/// performs `ONE_MORE_BYTE (byte_after_cr)` only when consuming a CR directly from
+/// the input stream (`byte_after_cr < 0`), not when consuming a previously buffered
+/// `byte_after_cr`. Consecutive CR bytes therefore pair up, so a trailing run of CR
+/// bytes leaves its final CR unconsumed (flushed unannotated by
+/// `CODING_MODE_LAST_BLOCK`) if and only if the trailing run has odd length.
+fn has_unconsumed_trailing_cr_under_dos(bytes: &[u8]) -> bool {
+    let trailing_crs = bytes.iter().rev().take_while(|&&b| b == b'\r').count();
+    trailing_crs % 2 == 1
+}
+
 fn decode_eol_bytes(bytes: &[u8], eol: crate::emacs_core::coding::ResolvedEol) -> Vec<u8> {
     use crate::emacs_core::coding::ResolvedEol;
     match eol {
@@ -1550,17 +1648,21 @@ fn charset_property_runs(
         char_count = idx + 1;
     }
 
-    let Some(first_non_ascii) = first_non_ascii else {
+    if char_count == 0 {
         return Vec::new();
-    };
-    // GNU records the charset selected by the decoder, not a property inferred
-    // from the resulting Unicode scalar.  Every byte in an ISO-8859 coding,
-    // including an ASCII byte, is decoded by that ISO charset, so once the
-    // non-ASCII fast path is left its property run begins at zero.
+    }
+    // GNU `decode_coding_charset` (`src/coding.c:5470-5593`) + `produce_charset`
+    // (`src/coding.c:7252-7261`) records the charset selected by the decoder for
+    // every decoded character, not a property inferred from the resulting Unicode
+    // scalar. Every byte in an ISO-8859 coding, including pure ASCII once the
+    // identity fast path is bypassed (e.g. CRLF/CR EOL conversion or a buffer
+    // destination), is decoded by that ISO charset and receives `(charset NAME)`.
     let start = if source_charset_decodes_ascii {
         0
-    } else {
+    } else if let Some(first_non_ascii) = first_non_ascii {
         first_non_ascii
+    } else {
+        return Vec::new();
     };
 
     vec![StringTextPropertyRun {
@@ -2713,12 +2815,13 @@ where
 {
     let mut sink = DecodeSink::with_capacity(bytes.len());
     let mut consumed = 0usize;
+    let mut buffered_after_cr = false;
     while consumed < bytes.len() {
         // The bulk ASCII path. Every byte here would otherwise cost a mark, a
         // `UnitReader`, a closure call, a bounds-checked read and a one-byte
         // push; source text is overwhelmingly this case, so the per-byte
         // scaffolding was most of the decode.
-        if ascii == AsciiRuns::Identity {
+        if ascii == AsciiRuns::Identity && !buffered_after_cr {
             let run = ascii_run_len(bytes, consumed, eol);
             if run > 0 {
                 sink.push_ascii_run(&bytes[consumed..consumed + run]);
@@ -2748,15 +2851,21 @@ where
             sink.rollback(mark);
             break;
         }
-        // GNU's `eol_dos` lookahead, in one place instead of the eight places
-        // it has it: the CR is produced, `ONE_MORE_BYTE (byte_after_cr)` is
-        // attempted, and an exhausted source unwinds the whole character.
-        if eol == DosEolLookahead::Required
-            && sink.last_char == Some(u32::from(b'\r'))
-            && unit.pos == bytes.len()
-        {
-            sink.rollback(mark);
-            break;
+        // GNU's `eol_dos` lookahead (`src/coding.c:5511-5521` and peers), in
+        // one place instead of the eight places GNU has it: when a CR is
+        // produced from the input stream (not from a previously buffered
+        // `byte_after_cr`), `ONE_MORE_BYTE (byte_after_cr)` is attempted; an
+        // exhausted source unwinds the CR into carryover, otherwise the next
+        // byte is buffered and the following iteration consumes it without
+        // triggering another lookahead.
+        if buffered_after_cr {
+            buffered_after_cr = false;
+        } else if eol == DosEolLookahead::Required && sink.last_char == Some(u32::from(b'\r')) {
+            if unit.pos == bytes.len() {
+                sink.rollback(mark);
+                break;
+            }
+            buffered_after_cr = true;
         }
         consumed = unit.pos;
     }
@@ -5342,6 +5451,52 @@ impl DecodedCoreText {
     }
 }
 
+/// Finalize decoded multibyte Emacs internal `bytes` and `(charset ...)`
+/// property `runs` for `eol` and `dst_multibyte`, matching GNU `decode_coding`
+/// (`src/coding.c:6832-6844`, `:7060-7068`, `:7252-7261`, `:7481`, `:8155-8156`).
+///
+/// When `dst_multibyte` is false (unibyte buffer destination), the returned
+/// `LispString` is already in unibyte storage form (`str_as_unibyte`), its
+/// property intervals are clamped to and adjusted in that unibyte coordinate
+/// space (guaranteeing every interval satisfies `end <= schars()`), and GNU's
+/// `coding->produced_char` (decoded character count minus deleted DOS `\r`s)
+/// is recorded on `run`.
+fn decoded_core_text_for_destination(
+    mut bytes: Vec<u8>,
+    mut runs: Vec<StringTextPropertyRun>,
+    eol: crate::emacs_core::coding::ResolvedEol,
+    dst_multibyte: bool,
+    run: &mut CodingRun<'_>,
+) -> DecodedCoreText {
+    if dst_multibyte {
+        decode_eol_bytes_and_adjust_runs(&mut bytes, &mut runs, eol, true);
+        if runs.is_empty() {
+            DecodedCoreText::Owned(neovm_value::heap_types::LispString::from_emacs_bytes(bytes))
+        } else {
+            DecodedCoreText::WithProperties(decoded_string_with_charset_runs(bytes, runs))
+        }
+    } else {
+        let pre_eol_chars = neovm_value::emacs_char::chars_in_multibyte(&bytes) as i64;
+        let mut unibyte = neovm_value::emacs_char::str_as_unibyte(&bytes);
+        let unibyte_len = unibyte.len();
+        for prop_run in &mut runs {
+            prop_run.start = prop_run.start.min(unibyte_len);
+            prop_run.end = prop_run.end.min(unibyte_len);
+        }
+        runs.retain(|prop_run| prop_run.start < prop_run.end);
+        let deleted_crs = decode_eol_bytes_and_adjust_runs(&mut unibyte, &mut runs, eol, false);
+        run.record_produced_chars(pre_eol_chars - deleted_crs as i64);
+        let ls = neovm_value::heap_types::LispString::from_unibyte(unibyte);
+        if runs.is_empty() {
+            DecodedCoreText::Owned(ls)
+        } else {
+            let value = Value::heap_string(ls);
+            neovm_value::value::set_string_text_properties_for_value(value, runs);
+            DecodedCoreText::WithProperties(value)
+        }
+    }
+}
+
 /// Shared non-hook decode pipeline used by both
 /// [`builtin_coding_string_in_context`] (decode path) and
 /// [`decode_raw_bytes_in_context`] (file and subprocess I/O).
@@ -5350,6 +5505,7 @@ impl DecodedCoreText {
 /// flush, and single post-decoder EOL resolution (`decode_eol`,
 /// src/coding.c:7481) without duplicating codec or EOL rules across entry
 /// points.
+#[allow(clippy::too_many_arguments)]
 fn decode_non_hook_bytes_core<H: TextHost>(
     ctx: &H,
     bytes: &[u8],
@@ -5357,9 +5513,20 @@ fn decode_non_hook_bytes_core<H: TextHost>(
     mut reported_coding: String,
     effective_decoder: EffectiveDecoder,
     codecs: &ResolvedCodecs,
+    entry: CodingEntry,
+    dst_multibyte: bool,
     run: &mut CodingRun<'_>,
     nocopy_source: Option<Value>,
 ) -> Result<(DecodedCoreText, String), neovm_value::error::Flow> {
+    // GNU `decode_coding_gap` (`src/coding.c:7930-7995`) skips `decode_coding`
+    // and `produce_charset` for pure-ASCII files under ASCII-compatible codings,
+    // handling EOL in place with no `(charset ...)` text properties.
+    let file_gap_ascii_opt = entry == CodingEntry::FileGap
+        && bytes.is_ascii()
+        && ctx
+            .coding_systems()
+            .is_ascii_compatible(&coding, ctx.symbol_mode());
+
     // The decode-side mirror, and the same single-pass rule: GNU's
     // `decode_coding` (src/coding.c:7481) runs the decoder and then calls
     // `decode_eol` once, outside every `decode_coding_*`.  The pass has to be
@@ -5459,31 +5626,19 @@ fn decode_non_hook_bytes_core<H: TextHost>(
                 // else as an eight-bit character.
                 flush_last_block_into(&mut decoded.bytes, tail);
             }
+            if file_gap_ascii_opt {
+                decoded.runs.clear();
+            }
             let resolution = decoded_eol.resolve_for_decode(&decoded.bytes, ctx.eol_conversion());
             reported_coding =
                 adjusted_coding_name(ctx.coding_systems(), &reported_coding, resolution);
-            // Only a dos/mac result transforms bytes; a unix one is a no-op
-            // and keeps any `(charset ...)` text-property runs attached.
-            if matches!(
+            decoded_core_text_for_destination(
+                decoded.bytes,
+                decoded.runs,
                 resolution.eol(),
-                crate::emacs_core::coding::ResolvedEol::Unix
-            ) {
-                if decoded.runs.is_empty() {
-                    DecodedCoreText::Owned(neovm_value::heap_types::LispString::from_emacs_bytes(
-                        decoded.bytes,
-                    ))
-                } else {
-                    DecodedCoreText::WithProperties(decoded_string_with_charset_runs(
-                        decoded.bytes,
-                        decoded.runs,
-                    ))
-                }
-            } else {
-                decode_eol_bytes_in_place(&mut decoded.bytes, resolution.eol());
-                DecodedCoreText::Owned(neovm_value::heap_types::LispString::from_emacs_bytes(
-                    decoded.bytes,
-                ))
-            }
+                dst_multibyte,
+                run,
+            )
         }
         // Every remaining coding system is one in which each byte is a
         // character (the ISO-8859 charsets, `raw-text`, `binary`), so its
@@ -5518,12 +5673,29 @@ fn decode_non_hook_bytes_core<H: TextHost>(
                         })
                     }
                 } else {
-                    DecodedCoreText::Owned(
-                        neovm_value::heap_types::LispString::from_emacs_bytes_with_chars(
+                    let runs = if file_gap_ascii_opt {
+                        Vec::new()
+                    } else {
+                        let ascii_str = std::str::from_utf8(bytes)
+                            .expect("coding_string_trivial_ascii_nocopy guarantees ASCII");
+                        fallback_charset_property_runs(ascii_str, &coding)
+                    };
+                    if dst_multibyte && runs.is_empty() {
+                        DecodedCoreText::Owned(
+                            neovm_value::heap_types::LispString::from_emacs_bytes_with_chars(
+                                bytes.to_vec(),
+                                bytes.len(),
+                            ),
+                        )
+                    } else {
+                        decoded_core_text_for_destination(
                             bytes.to_vec(),
-                            bytes.len(),
-                        ),
-                    )
+                            runs,
+                            resolution.eol(),
+                            dst_multibyte,
+                            run,
+                        )
+                    }
                 }
             } else if is_byte_preserving_coding_system(&coding) {
                 let resolution = decoded_eol.resolve_for_decode(bytes, ctx.eol_conversion());
@@ -5538,29 +5710,25 @@ fn decode_non_hook_bytes_core<H: TextHost>(
                     decoded_eol.resolve_for_decode(decoded.as_bytes(), ctx.eol_conversion());
                 reported_coding =
                     adjusted_coding_name(ctx.coding_systems(), &reported_coding, resolution);
-                if matches!(
-                    resolution.eol(),
-                    crate::emacs_core::coding::ResolvedEol::Unix
-                ) {
-                    let runs = fallback_charset_property_runs(&decoded, &coding);
-                    if !runs.is_empty() {
-                        DecodedCoreText::WithProperties(
-                            Value::multibyte_string_with_text_properties(decoded, runs),
-                        )
-                    } else {
-                        DecodedCoreText::Owned(
-                            neovm_value::heap_types::LispString::from_emacs_bytes(
-                                decoded.into_bytes(),
-                            ),
-                        )
-                    }
+                let unannotated_trailing_cr = dos_eol == DosEolLookahead::Required
+                    && has_unconsumed_trailing_cr_under_dos(bytes);
+                let annotated_slice = if unannotated_trailing_cr {
+                    decoded.strip_suffix('\r').unwrap_or(&decoded)
                 } else {
-                    let mut converted = decoded.into_bytes();
-                    decode_eol_bytes_in_place(&mut converted, resolution.eol());
-                    DecodedCoreText::Owned(neovm_value::heap_types::LispString::from_emacs_bytes(
-                        converted,
-                    ))
-                }
+                    &decoded
+                };
+                let runs = if file_gap_ascii_opt {
+                    Vec::new()
+                } else {
+                    fallback_charset_property_runs(annotated_slice, &coding)
+                };
+                decoded_core_text_for_destination(
+                    decoded.into_bytes(),
+                    runs,
+                    resolution.eol(),
+                    dst_multibyte,
+                    run,
+                )
             }
         }
     };
@@ -6001,6 +6169,9 @@ fn builtin_coding_string_in_context<H: TextHost>(
         // decode fresh text without copying source string text properties.
         let nocopy_source =
             (destination.is_none() && coding_string_nocopy(&args)).then_some(args[0]);
+        let dst_multibyte = destination
+            .and_then(|buffer_id| ctx.buffers().get(buffer_id).map(|buf| buf.get_multibyte()))
+            .unwrap_or(run.dst_multibyte);
         let (decoded, updated_reported) = decode_non_hook_bytes_core(
             ctx,
             &source_bytes,
@@ -6008,6 +6179,8 @@ fn builtin_coding_string_in_context<H: TextHost>(
             reported_coding,
             effective_decoder,
             &codecs,
+            entry,
+            dst_multibyte,
             run,
             nocopy_source,
         )?;
@@ -6042,7 +6215,10 @@ fn builtin_coding_string_in_context<H: TextHost>(
         ));
     }
     insert_coding_result(ctx, buffer_id, &result_text, restore_point)?;
-    Ok(Value::fixnum(result_text.schars() as i64))
+    let produced_chars = run
+        .produced_chars()
+        .unwrap_or_else(|| result_text.schars() as i64);
+    Ok(Value::fixnum(produced_chars))
 }
 
 #[doc(hidden)]
@@ -6417,6 +6593,8 @@ fn decode_raw_bytes_in_context<H: TextHost>(
         reported_coding,
         effective_decoder,
         &codecs,
+        entry,
+        run.dst_multibyte,
         run,
         None,
     )?;

@@ -2708,6 +2708,138 @@ fn decode_eol_bytes_in_place_matches_allocating_converter() {
     }
 }
 
+#[test]
+fn decode_eol_bytes_and_adjust_runs_preserves_charset_runs_across_dos_and_mac() {
+    crate::test_utils::init_test_tracing();
+    use crate::emacs_core::coding::ResolvedEol;
+    use neovm_value::value::StringTextPropertyRun;
+
+    let prop = Value::list(vec![Value::symbol("charset"), Value::symbol("iso-8859-1")]);
+
+    // Multibyte DOS: "é\r\nb\r\n" -> "é\nb\n" (chars 0..6 -> 0..4), 2 CRs deleted.
+    let mut mb_bytes = "é\r\nb\r\n".as_bytes().to_vec();
+    let mut mb_runs = vec![StringTextPropertyRun {
+        start: 0,
+        end: 6,
+        plist: prop,
+    }];
+    let deleted =
+        decode_eol_bytes_and_adjust_runs(&mut mb_bytes, &mut mb_runs, ResolvedEol::Dos, true);
+    assert_eq!(deleted, 2);
+    assert_eq!(mb_bytes, "é\nb\n".as_bytes());
+    assert_eq!(mb_runs.len(), 1);
+    assert_eq!((mb_runs[0].start, mb_runs[0].end), (0, 4));
+
+    // Unibyte DOS: internal UTF-8 bytes of "ééé\r\n" (8 bytes, 5 chars -> run 0..5).
+    // The CR at byte offset 6 is past end=5, so the run stays 0..5 while 1 CR is deleted.
+    let mut uni_bytes = "ééé\r\n".as_bytes().to_vec();
+    let mut uni_runs = vec![StringTextPropertyRun {
+        start: 0,
+        end: 5,
+        plist: prop,
+    }];
+    let deleted =
+        decode_eol_bytes_and_adjust_runs(&mut uni_bytes, &mut uni_runs, ResolvedEol::Dos, false);
+    assert_eq!(deleted, 1);
+    assert_eq!(uni_bytes, "ééé\n".as_bytes());
+    assert_eq!(uni_runs.len(), 1);
+    assert_eq!((uni_runs[0].start, uni_runs[0].end), (0, 5));
+
+    // Unibyte DOS where CR precedes end: "a\r\né" (5 bytes, 4 chars -> run 0..4).
+    // CR at byte offset 1 < 4 shrinks the run to 0..3.
+    let mut uni_early = "a\r\né".as_bytes().to_vec();
+    let mut uni_early_runs = vec![StringTextPropertyRun {
+        start: 0,
+        end: 4,
+        plist: prop,
+    }];
+    let deleted = decode_eol_bytes_and_adjust_runs(
+        &mut uni_early,
+        &mut uni_early_runs,
+        ResolvedEol::Dos,
+        false,
+    );
+    assert_eq!(deleted, 1);
+    assert_eq!(uni_early, "a\né".as_bytes());
+    assert_eq!(uni_early_runs.len(), 1);
+    assert_eq!((uni_early_runs[0].start, uni_early_runs[0].end), (0, 3));
+
+    // Mac EOL replaces CR in place without changing length or interval endpoints.
+    let mut mac_bytes = "a\rb\r".as_bytes().to_vec();
+    let mut mac_runs = vec![StringTextPropertyRun {
+        start: 0,
+        end: 4,
+        plist: prop,
+    }];
+    let deleted =
+        decode_eol_bytes_and_adjust_runs(&mut mac_bytes, &mut mac_runs, ResolvedEol::Mac, true);
+    assert_eq!(deleted, 0);
+    assert_eq!(mac_bytes, b"a\nb\n");
+    assert_eq!((mac_runs[0].start, mac_runs[0].end), (0, 4));
+}
+
+#[test]
+fn decode_units_dos_trailing_cr_parity_matches_gnu() {
+    crate::test_utils::init_test_tracing();
+    // GNU `decode_coding_charset` (`src/coding.c:5511-5521`) pairs consecutive CRs
+    // via `byte_after_cr`: odd trailing CR runs leave the final CR unconsumed;
+    // even trailing CR runs consume all bytes.
+    let cases: &[(&[u8], usize, bool)] = &[
+        (b"\r", 0, true),
+        (b"\r\r", 2, false),
+        (b"\r\r\r", 2, true),
+        (b"a\rb\r", 3, true),
+        (b"a\r\r", 3, false),
+        (b"a\r\nb\r", 4, true),
+        (b"a\r\nb\r\r", 6, false),
+    ];
+    for &(input, expected_consumed, expected_unconsumed) in cases {
+        assert_eq!(
+            has_unconsumed_trailing_cr_under_dos(input),
+            expected_unconsumed,
+            "parity helper mismatch for {input:?}"
+        );
+        let decoded = decode_units(input, DosEolLookahead::Required, |unit, sink| {
+            let b = unit.byte()?;
+            sink.push(u32::from(b), Some(intern("koi8-r")));
+            Ok(())
+        });
+        assert_eq!(
+            decoded.consumed.bytes(),
+            expected_consumed,
+            "decode_units consumed mismatch for {input:?}"
+        );
+    }
+}
+
+#[test]
+fn decode_coding_string_iso_latin_1_and_9_dos_pure_ascii_mark_charset_like_gnu() {
+    crate::test_utils::init_test_tracing();
+    for (coding, expected_charset) in [
+        ("iso-latin-1-dos", "iso-8859-1"),
+        ("iso-latin-9-dos", "iso-8859-15"),
+    ] {
+        let src = Value::heap_string(neovm_value::heap_types::LispString::from_unibyte(
+            b"a\r\nb\r\n".to_vec(),
+        ));
+        let out = builtin_decode_coding_string(vec![src, Value::symbol(coding)])
+            .expect("decode must succeed");
+        let ls = out.as_lisp_string().expect("must return LispString");
+        assert_eq!(ls.as_bytes(), b"a\nb\n");
+        let props = get_string_text_properties_for_value(out)
+            .expect("decoded string should carry charset property across DOS EOL");
+        assert_eq!(props.len(), 1);
+        assert_eq!((props[0].start, props[0].end), (0, 4));
+        assert_eq!(
+            props[0].plist,
+            Value::list(vec![
+                Value::symbol("charset"),
+                Value::symbol(expected_charset),
+            ])
+        );
+    }
+}
+
 #[cfg(test)]
 #[path = "gdh_utf8_unibyte.rs"]
 mod gdh_utf8_unibyte;

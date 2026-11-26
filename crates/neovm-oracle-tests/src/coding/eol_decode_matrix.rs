@@ -35,9 +35,9 @@
 //!
 //! Every coding system exercised here (`utf-8*`, `raw-text*`, `undecided*`,
 //! `iso-latin-1*`, `unix`/`dos`/`mac`, `nil`, `no-conversion`, explicit
-//! `define-coding-system-alias` targets, and `utf-16be-with-signature`) is
-//! pure deterministic Emacs C logic under `-Q --batch` with zero host-library,
-//! locale, or `iconv` dependence.
+//! `define-coding-system-alias` targets, `utf-16be-with-signature`, and
+//! `vietnamese-viqr`) is pure deterministic Emacs C/Elisp logic under
+//! `-Q --batch` with zero host-library, locale, or `iconv` dependence.
 //!
 //! # Reproducing `eol_decode_matrix_gnu31.tsv`
 //!
@@ -55,21 +55,19 @@
 //!
 //! # Tracked Divergences (Ratchet Ceilings)
 //!
-//! On `77h` (`e57c8d8b7c`, after 77g `f41b3eacc7` closed Classes B & D and 77h
-//! `cc67b23c64` closed Class C), 2,556 / 2,898 cases match GNU Emacs 31.1 and
-//! 342 / 2,898 diverge across exactly 2 remaining tracked classes (0 unexplained
-//! residuals):
-//! - Class A (#846): 324 cases — missing `(charset iso-8859-1)` on `iso-latin-1*` / `undecided*` decode
-//! - Class B (#847):   0 cases — fixed in 77g (`f41b3eacc7`, tightened 217 -> 0)
-//! - Class C (#848):   0 cases — fixed in 77h (`cc67b23c64`, tightened 98 -> 0)
-//! - Class D (#849):   0 cases — fixed in 77g (`f41b3eacc7`, tightened 21 -> 0)
-//! - Class E (#854):  18 cases — `vietnamese-viqr` conversion-hook buffer-dst fast-path guard
-//!   (`encoding.rs:5695`, 16 ASCII buffer-dst rows) and unibyte-buffer `:post-read-conversion`
-//!   multibyteness (`src/coding.c:8155-8197`, 2 `uni-viqr-mixed` `buf-uni` rows)
+//! All 2,898 / 2,898 cases match GNU Emacs 31.1 (0 divergences across all five
+//! historically tracked classes; 0 unexplained residuals):
+//! - Class A (#846): 0 cases — fixed (tightened 324 -> 0; `(charset NAME)` properties on decode)
+//! - Class B (#847): 0 cases — fixed in 77g (`f41b3eacc7`, tightened 217 -> 0)
+//! - Class C (#848): 0 cases — fixed in 77h (`ca6e500340`, tightened 98 -> 0)
+//! - Class D (#849): 0 cases — fixed in 77g (`f41b3eacc7`, tightened 21 -> 0)
+//! - Class E (#854): 0 cases — fixed in 77h (`31326924a6` + `092a5dee1c`, tightened 18 -> 0;
+//!   `vietnamese-viqr` conversion-hook buffer-dst fast-path guard at `encoding.rs:5710` pre-fix
+//!   and unibyte-buffer `:post-read-conversion` multibyteness, `src/coding.c:8155-8197`)
 //!
 //! All tracked cases are guarded by:
 //! - the always-on `coding_matrix_known_divergence_ratchet` (fails if any
-//!   class ceiling or total grows, or if any unclassified divergence appears), and
+//!   class ceiling or total grows above 0, or if any unclassified divergence appears), and
 //! - the opt-in `--features coding-known-divergences` suite (strict GNU-expected
 //!   per-issue rows, zero `#[ignore]`).
 
@@ -79,16 +77,14 @@ use crate::common;
 
 const GNU_31_TABLE_TSV: &str = include_str!("eol_decode_matrix_gnu31.tsv");
 
-// Tightened orthogonal ratchet ceilings on `77h` (`e57c8d8b7c`):
-// Classes B (#847), C (#848), and D (#849) are closed at 0; only Class A (#846,
-// 324 cases) and Class E (#854, 18 `vietnamese-viqr` buffer-dst cases) remain
-// (324 + 18 = 342 total distinct diverging cases).
-const RATCHET_MAX_TOTAL: usize = 342;
-const RATCHET_MAX_CLASS_A_846: usize = 324;
+// Tightened orthogonal ratchet ceilings: all 2,898 / 2,898 cases match GNU
+// Emacs 31.1 with zero divergences across all five classes (A–E).
+const RATCHET_MAX_TOTAL: usize = 0;
+const RATCHET_MAX_CLASS_A_846: usize = 0;
 const RATCHET_MAX_CLASS_B_847: usize = 0;
 const RATCHET_MAX_CLASS_C_848: usize = 0;
 const RATCHET_MAX_CLASS_D_849: usize = 0;
-const RATCHET_MAX_CLASS_E_854: usize = 18;
+const RATCHET_MAX_CLASS_E_854: usize = 0;
 
 const ELISP_PREAMBLE: &str = r#"
   (define-coding-system-alias 'cm-alias-utf8-dos 'utf-8-dos)
@@ -391,9 +387,10 @@ fn classify_divergence(case_id: &str, gnu: &str, neo: &str) -> DiffClassificatio
     }
 
     // Class E (#854): conversion-hook (`vietnamese-viqr`) buffer-destination
-    // fast-path omission (`encoding.rs:5695`) and unibyte-buffer `:post-read-conversion`
-    // multibyteness (`src/coding.c:8155-8197`). String destinations (`nil`/`t`)
-    // and any metadata/property divergence deliberately remain unclassified.
+    // fast-path omission (`encoding.rs:5710` pre-`31326924a6`) and unibyte-buffer
+    // `:post-read-conversion` multibyteness (`src/coding.c:8155-8197`). String
+    // destinations (`nil`/`t`) and any metadata/property divergence deliberately
+    // remain unclassified.
     if cs == "vietnamese-viqr"
         && (dst == "buf-mb" || dst == "buf-uni")
         && !diff_fields.contains(&":pt-same")
@@ -447,7 +444,7 @@ fn classify_divergence(case_id: &str, gnu: &str, neo: &str) -> DiffClassificatio
     out
 }
 
-/// Run the full 2,858-case probe on Neomacs (and verify `eol_decode_matrix_gnu31.tsv`
+/// Run the full 2,898-case probe on Neomacs (and verify `eol_decode_matrix_gnu31.tsv`
 /// against live attested GNU Emacs 31.1 under `NEOVM_ORACLE_MODE=verify|live`).
 fn run_full_matrix() -> (BTreeMap<String, String>, BTreeMap<String, String>) {
     let form = format!("(progn\n{ELISP_PREAMBLE}\n{FULL_MATRIX_BODY})");
@@ -1210,7 +1207,7 @@ mod exhaustive {
     fn coding_matrix_exhaustive_decode_string_dst() {
         assert_exhaustive_slice(
             "coding_matrix_exhaustive_decode_string_dst",
-            938,
+            1068,
             |op, _cs, _sk, _nc, dst, inh| {
                 op == "decode" && inh == "nil" && (dst == "nil" || dst == "t")
             },
@@ -1221,7 +1218,7 @@ mod exhaustive {
     fn coding_matrix_exhaustive_decode_buffer_dst() {
         assert_exhaustive_slice(
             "coding_matrix_exhaustive_decode_buffer_dst",
-            706,
+            1088,
             |op, _cs, _sk, _nc, dst, inh| {
                 op == "decode"
                     && inh == "nil"
@@ -1234,7 +1231,7 @@ mod exhaustive {
     fn coding_matrix_exhaustive_decode_inhibit_eol() {
         assert_exhaustive_slice(
             "coding_matrix_exhaustive_decode_inhibit_eol",
-            102,
+            126,
             |op, _cs, _sk, _nc, _dst, inh| op == "decode" && inh == "t",
         );
     }
@@ -1243,7 +1240,7 @@ mod exhaustive {
     fn coding_matrix_exhaustive_encode_all_dst() {
         assert_exhaustive_slice(
             "coding_matrix_exhaustive_encode_all_dst",
-            526,
+            616,
             |op, _cs, _sk, _nc, _dst, _inh| op == "encode",
         );
     }
@@ -1251,7 +1248,7 @@ mod exhaustive {
 
 // ===========================================================================
 // Known-Divergence Suite (`--features coding-known-divergences`, zero #[ignore])
-// Strictly GNU-expected; fails RED on current main until each tracked issue is fixed.
+// Strictly GNU-expected; all five historically tracked classes now pass GREEN.
 // ===========================================================================
 
 #[cfg(feature = "coding-known-divergences")]
@@ -1285,33 +1282,33 @@ mod known_divergences {
         );
     }
 
-    /// Issue #846: missing `(charset iso-8859-1)` text property on decode (324 cases on 9ca34ffd1c).
+    /// Issue #846: missing `(charset iso-8859-1)` text property on decode (0 cases; tightened 324 -> 0).
     #[test]
     fn coding_matrix_known_div_class_a_missing_charset_iso8859_1_issue_846() {
         assert_class_zero_divergences("Class A (#846)", |c| c.class_a_846);
     }
 
-    /// Issue #847: source string `(foo bar)` property leak into destination buffer / dst=t (217 cases on 9ca34ffd1c).
+    /// Issue #847: source string `(foo bar)` property leak into destination buffer / dst=t (0 cases; fixed in 77g).
     #[test]
     fn coding_matrix_known_div_class_b_buffer_property_leak_issue_847() {
         assert_class_zero_divergences("Class B (#847)", |c| c.class_b_847);
     }
 
-    /// Issue #848: decode of non-ASCII into unibyte buffer truncates instead of internal UTF-8 bytes (98 cases on 9ca34ffd1c).
+    /// Issue #848: decode of non-ASCII into unibyte buffer truncates instead of internal UTF-8 bytes (0 cases; fixed in 77h).
     #[test]
     fn coding_matrix_known_div_class_c_unibyte_buffer_truncation_issue_848() {
         assert_class_zero_divergences("Class C (#848)", |c| c.class_c_848);
     }
 
-    /// Issue #849: `coding-system = nil` mishandles `dst = nil` vs `dst = t` vs buffer (0 cases on 77h).
+    /// Issue #849: `coding-system = nil` mishandles `dst = nil` vs `dst = t` vs buffer (0 cases; fixed in 77g).
     #[test]
     fn coding_matrix_known_div_class_d_nil_coding_dst_semantics_issue_849() {
         assert_class_zero_divergences("Class D (#849)", |c| c.class_d_849);
     }
 
     /// Issue #854: `vietnamese-viqr` conversion-hook buffer-destination fast-path omission
-    /// (`encoding.rs:5695`, 16 ASCII buffer-dst rows) and unibyte-buffer `:post-read-conversion`
-    /// multibyteness (`src/coding.c:8155-8197`, 2 `uni-viqr-mixed` `buf-uni` rows).
+    /// (`encoding.rs:5710` pre-`31326924a6`) and unibyte-buffer `:post-read-conversion`
+    /// multibyteness (`src/coding.c:8155-8197`) (0 cases; fixed in 77h).
     #[test]
     fn coding_matrix_known_div_class_e_conversion_hook_buffer_dst_issue_854() {
         assert_class_zero_divergences("Class E (#854)", |c| c.class_e_854);
