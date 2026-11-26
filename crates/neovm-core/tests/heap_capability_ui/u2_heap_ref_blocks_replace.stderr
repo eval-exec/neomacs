@@ -1,0 +1,9 @@
+error[E0502]: cannot borrow `hm` as mutable because it is also borrowed as immutable
+  --> tests/heap_capability_ui/u2_heap_ref_blocks_replace.rs:9:38
+   |
+ 8 |     let items = v.vector_data_in(hm.as_ref()).unwrap();
+   |                                  -- immutable borrow occurs here
+ 9 |     let _ = v.replace_vector_data_in(&mut hm, Vec::new());
+   |                                      ^^^^^^^ mutable borrow occurs here
+10 |     let _ = items.len();
+   |             ----- immutable borrow later used here

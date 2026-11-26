@@ -41,10 +41,10 @@ fn lexical(ops: Vec<Op>, constants: Vec<Value>) -> ByteCodeFunction {
         optional: vec![],
         rest: None,
     });
-    f.lexical = true;
-    f.ops = ops;
-    f.constants = constants.into();
-    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
+    f.set_lexical(true);
+    f.set_ops(ops);
+    f.set_constants(constants.into());
+    f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
     f.seal_hand_assembled_ops_for_test();
     f.jit_runtime().set_hot_for_test();
     f
@@ -115,12 +115,12 @@ fn compiled(
     // Keep every source constant alive across native polls and Tier0 resume.
     ev.set_variable(
         "entry-cache-source-constants",
-        Value::vector(f.constants.as_slice().to_vec()),
+        Value::vector(f.constants().as_slice().to_vec()),
     );
     let _ = ev.debug_on_next_call_is_armed();
     let body = fuse_calls_v2(
         f.executable_ops(),
-        &f.constants,
+        f.constants(),
         None,
         1,
         &vec![crate::emacs_core::jit::NumericFeedback::FixnumOnly; f.executable_ops().len()],
@@ -154,11 +154,11 @@ fn inline_entry_cache_empty_loop_never_checks_depth_and_first_call_keeps_origina
     ev.depth = 2;
     ev.max_depth = 2;
     assert_eq!(
-        leaf.call(&mut ev as *mut Context as *mut u8, &[Value::make_int(0)]),
+        unsafe { leaf.call(&mut ev as *mut Context as *mut u8, &[Value::make_int(0)]) },
         NativeRun::Ok(Value::make_int(0).bits())
     );
     let NativeRun::DeoptAt(resume) =
-        leaf.call(&mut ev as *mut Context as *mut u8, &[Value::make_int(1)])
+        (unsafe { leaf.call(&mut ev as *mut Context as *mut u8, &[Value::make_int(1)]) })
     else {
         panic!("first real call must check depth");
     };
@@ -184,7 +184,7 @@ fn inline_entry_cache_successful_service_poll_rechecks_depth_at_the_next_call() 
     ev.max_depth = 1000;
     ev.gc_stress = true;
     reset_bytecode_branch_poll_count();
-    let run = leaf.call(&mut ev as *mut Context as *mut u8, &[Value::make_int(300)]);
+    let run = unsafe { leaf.call(&mut ev as *mut Context as *mut u8, &[Value::make_int(300)]) };
     ev.gc_stress = false;
     assert_eq!(bytecode_branch_poll_count(), 1);
     let NativeRun::DeoptAt(resume) = run else {
@@ -208,7 +208,7 @@ fn inline_entry_cache_context_write_keeps_every_entry_protocol() {
     ev.depth = 100;
     ev.max_depth = 1000;
     let NativeRun::DeoptAt(resume) =
-        leaf.call(&mut ev as *mut Context as *mut u8, &[Value::make_int(3)])
+        (unsafe { leaf.call(&mut ev as *mut Context as *mut u8, &[Value::make_int(3)]) })
     else {
         panic!("context write must invalidate a dominating protocol");
     };
@@ -233,7 +233,7 @@ fn inline_entry_physical_admission_fallback_keeps_empty_loops_observation_free()
             _ => unreachable!(),
         }
         let NativeRun::DeoptAt(resume) =
-            leaf.call(&mut ev as *mut Context as *mut u8, &[Value::make_int(0)])
+            (unsafe { leaf.call(&mut ev as *mut Context as *mut u8, &[Value::make_int(0)]) })
         else {
             panic!("failed admission returns the unchanged physical entry");
         };
@@ -281,7 +281,8 @@ fn inline_entry_physical_admission_fallback_preserves_argument_and_depth_error_o
         (Value::make_int(42), "wrong-type-argument"),
         (Value::cons(Value::make_int(42), Value::NIL), "error"),
     ] {
-        let NativeRun::DeoptAt(resume) = leaf.call(&mut ev as *mut Context as *mut u8, &[arg])
+        let NativeRun::DeoptAt(resume) =
+            (unsafe { leaf.call(&mut ev as *mut Context as *mut u8, &[arg]) })
         else {
             panic!("depth admission falls back before argument evaluation");
         };
@@ -335,10 +336,12 @@ fn inline_entry_physical_poll_fallback_resumes_the_header_without_repeating_the_
         ev.max_depth = 1000;
         ev.gc_stress = true;
         reset_bytecode_branch_poll_count();
-        let run = leaf.call(
-            &mut ev as *mut Context as *mut u8,
-            &[Value::make_int(iterations)],
-        );
+        let run = unsafe {
+            leaf.call(
+                &mut ev as *mut Context as *mut u8,
+                &[Value::make_int(iterations)],
+            )
+        };
         ev.gc_stress = false;
         let NativeRun::DeoptAt(resume) = run else {
             panic!("changed depth exits at the physical header: {run:?}")

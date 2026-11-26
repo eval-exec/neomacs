@@ -35,10 +35,10 @@ impl Drop for Profit {
 
 fn function(ops: Vec<Op>, constants: Vec<Value>) -> Value {
     let mut f = ByteCodeFunction::new(LambdaParams::simple(vec![]));
-    f.lexical = true;
-    f.ops = ops;
-    f.constants = constants.into();
-    f.max_stack = StackDepth::for_test(4);
+    f.set_lexical(true);
+    f.set_ops(ops);
+    f.set_constants(constants.into());
+    f.set_max_stack(StackDepth::for_test(4));
     f.jit_runtime().set_hot_for_test();
     Value::make_bytecode(f)
 }

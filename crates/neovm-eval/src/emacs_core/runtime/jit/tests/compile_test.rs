@@ -510,10 +510,10 @@ fn jit_matches_interpreter_on_if_branch() {
             optional: Vec::new(),
             rest: None,
         });
-        f.lexical = true;
-        f.ops = ops.to_vec();
-        f.constants = constants.to_vec().into();
-        f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
+        f.set_lexical(true);
+        f.set_ops(ops.to_vec());
+        f.set_constants(constants.to_vec().into());
+        f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
         let want = {
             let mut vm = Vm::from_context(&mut eval);
             vm.execute(&f, vec![arg]).expect("interp runs if").bits()
@@ -531,7 +531,7 @@ fn jit_matches_interpreter_on_if_branch() {
         let mir = mir::build_mir(&ops, &constants, None, 1).expect("MIR builds the if");
         let mleaf = lower_mir_pure(&mir).expect("MIR lowers the if");
         let ctx_ptr = &mut eval as *mut Context as *mut u8;
-        let NativeRun::Ok(bits) = mleaf.call(ctx_ptr, &[arg]) else {
+        let NativeRun::Ok(bits) = (unsafe { mleaf.call(ctx_ptr, &[arg]) }) else {
             panic!("MIR if must run natively for arg bits {}", arg.bits());
         };
         assert_eq!(
@@ -629,10 +629,10 @@ fn compiles_countdown_loop_matches_interpreter() {
             optional: Vec::new(),
             rest: None,
         });
-        f.lexical = true;
-        f.ops = ops.to_vec();
-        f.constants = constants.to_vec().into();
-        f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
+        f.set_lexical(true);
+        f.set_ops(ops.to_vec());
+        f.set_constants(constants.to_vec().into());
+        f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
         let want = {
             let mut vm = Vm::from_context(&mut eval);
             vm.execute(&f, vec![Value::make_int(n)])
@@ -653,7 +653,7 @@ fn compiles_countdown_loop_matches_interpreter() {
         let mir = mir::build_mir(&ops, &constants, None, 1).expect("MIR builds the loop");
         let mleaf = lower_mir_pure(&mir).expect("MIR lowers the loop");
         let ctx_ptr = &mut eval as *mut Context as *mut u8;
-        let NativeRun::Ok(bits) = mleaf.call(ctx_ptr, &[Value::make_int(n)]) else {
+        let NativeRun::Ok(bits) = (unsafe { mleaf.call(ctx_ptr, &[Value::make_int(n)]) }) else {
             panic!("MIR loop must run natively for n={n}");
         };
         assert_eq!(bits, want, "MIR loop mismatch for n={n}");
@@ -684,10 +684,10 @@ fn mir_merge_phi_matches_interpreter() {
             optional: Vec::new(),
             rest: None,
         });
-        f.lexical = true;
-        f.ops = ops.to_vec();
-        f.constants = constants.to_vec().into();
-        f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
+        f.set_lexical(true);
+        f.set_ops(ops.to_vec());
+        f.set_constants(constants.to_vec().into());
+        f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
         let want = {
             let mut vm = Vm::from_context(&mut eval);
             vm.execute(&f, vec![c]).expect("interp diamond").bits()
@@ -695,7 +695,7 @@ fn mir_merge_phi_matches_interpreter() {
         let mir = mir::build_mir(&ops, &constants, None, 1).expect("MIR builds the diamond");
         let mleaf = lower_mir_pure(&mir).expect("MIR lowers the diamond");
         let ctx_ptr = &mut eval as *mut Context as *mut u8;
-        let NativeRun::Ok(bits) = mleaf.call(ctx_ptr, &[c]) else {
+        let NativeRun::Ok(bits) = (unsafe { mleaf.call(ctx_ptr, &[c]) }) else {
             panic!("MIR diamond must run natively for cond bits {}", c.bits());
         };
         assert_eq!(
@@ -774,10 +774,10 @@ fn mir_probe_a_emits_one_tag_guard_per_iteration() {
             optional: Vec::new(),
             rest: None,
         });
-        f.lexical = true;
-        f.ops = ops.to_vec();
-        f.constants = constants.to_vec().into();
-        f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
+        f.set_lexical(true);
+        f.set_ops(ops.to_vec());
+        f.set_constants(constants.to_vec().into());
+        f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
         let args = [Value::make_int(n), Value::T];
         let want = {
             let mut vm = Vm::from_context(&mut eval);
@@ -786,7 +786,7 @@ fn mir_probe_a_emits_one_tag_guard_per_iteration() {
                 .bits()
         };
         let ctx_ptr = &mut eval as *mut Context as *mut u8;
-        let NativeRun::Ok(bits) = mleaf.call(ctx_ptr, &args) else {
+        let NativeRun::Ok(bits) = (unsafe { mleaf.call(ctx_ptr, &args) }) else {
             panic!("probe-a must run natively for n={n}");
         };
         assert_eq!(bits, want, "probe-a mismatch for n={n}");
@@ -796,7 +796,8 @@ fn mir_probe_a_emits_one_tag_guard_per_iteration() {
     // remaining guard rather than being shifted as a pointer.
     let mut eval = Context::new_minimal_vm_harness(crate::test_utils::unit_runtime());
     let ctx_ptr = &mut eval as *mut Context as *mut u8;
-    let NativeRun::DeoptAt(resume) = mleaf.call(ctx_ptr, &[Value::make_float(3.0), Value::NIL])
+    let NativeRun::DeoptAt(resume) =
+        (unsafe { mleaf.call(ctx_ptr, &[Value::make_float(3.0), Value::NIL]) })
     else {
         panic!("a float n must deopt precisely at the one remaining guard");
     };
@@ -828,7 +829,7 @@ fn mir_known_boolean_keeps_its_guard() {
     let ctx_ptr = &mut eval as *mut Context as *mut u8;
     assert!(
         matches!(
-            mleaf.call(ctx_ptr, &[Value::make_int(1), Value::make_int(2)]),
+            unsafe { mleaf.call(ctx_ptr, &[Value::make_int(1), Value::make_int(2)]) },
             NativeRun::Deopt
         ),
         "(1+ t) must deopt, not shift the tag bits of t"
@@ -871,9 +872,9 @@ fn mir_rooting_skip_on_an_inferred_fixnum_param_across_an_allocating_call() {
         optional: Vec::new(),
         rest: None,
     });
-    sq.lexical = true;
-    sq.ops = vec![Op::Dup, Op::Mul, Op::Return];
-    sq.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
+    sq.set_lexical(true);
+    sq.set_ops(vec![Op::Dup, Op::Mul, Op::Return]);
+    sq.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
     ev.obarray
         .set_symbol_function_id(sq_id, Value::make_bytecode(sq));
     let mut g = ByteCodeFunction::new(LambdaParams {
@@ -882,10 +883,10 @@ fn mir_rooting_skip_on_an_inferred_fixnum_param_across_an_allocating_call() {
         optional: Vec::new(),
         rest: None,
     });
-    g.lexical = true;
+    g.set_lexical(true);
     // (lambda (y) (garbage-collect) (make-list 4096 0)): an exact collection,
     // then a reallocation that reuses any freed cell.
-    g.ops = vec![
+    g.set_ops(vec![
         Op::Constant(0),
         Op::Call(0),
         Op::Pop,
@@ -894,15 +895,17 @@ fn mir_rooting_skip_on_an_inferred_fixnum_param_across_an_allocating_call() {
         Op::Constant(3),
         Op::Call(2),
         Op::Return,
-    ];
-    g.constants = vec![
-        Value::symbol("garbage-collect"),
-        Value::symbol("make-list"),
-        Value::make_int(4096),
-        Value::make_int(0),
-    ]
-    .into();
-    g.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
+    ]);
+    g.set_constants(
+        vec![
+            Value::symbol("garbage-collect"),
+            Value::symbol("make-list"),
+            Value::make_int(4096),
+            Value::make_int(0),
+        ]
+        .into(),
+    );
+    g.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
     ev.obarray
         .set_symbol_function_id(g_id, Value::make_bytecode(g));
     let mut f = ByteCodeFunction::new(LambdaParams {
@@ -911,8 +914,8 @@ fn mir_rooting_skip_on_an_inferred_fixnum_param_across_an_allocating_call() {
         optional: Vec::new(),
         rest: None,
     });
-    f.lexical = true;
-    f.ops = vec![
+    f.set_lexical(true);
+    f.set_ops(vec![
         Op::StackRef(0),  // 0: c               [c c]
         Op::GotoIfNil(4), // 1                  [c]
         Op::Constant(0),  // 2: 1               [c 1]
@@ -928,10 +931,10 @@ fn mir_rooting_skip_on_an_inferred_fixnum_param_across_an_allocating_call() {
         Op::StackRef(1),  // 12: i              [c i c i]
         Op::Cons,         // 13: (c . i)        [c i p]
         Op::Return,       // 14
-    ];
-    f.constants = vec![Value::make_int(1), Value::make_int(2), g_sym, sq_sym].into();
-    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
-    let mir = mir::build_mir(&f.ops, &f.constants, None, 1).expect("MIR builds F");
+    ]);
+    f.set_constants(vec![Value::make_int(1), Value::make_int(2), g_sym, sq_sym].into());
+    f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
+    let mir = mir::build_mir(f.ops(), f.constants(), None, 1).expect("MIR builds F");
     let merge = mir
         .blocks
         .iter()
@@ -971,7 +974,7 @@ fn mir_rooting_skip_on_an_inferred_fixnum_param_across_an_allocating_call() {
         // c non-nil: a fresh heap list that only the residual root keeps alive
         // across g's exact collection.
         let c = ev.eval_str("(list 7 8 9)").expect("c");
-        let NativeRun::Ok(bits) = leaf.call(ctx as *mut u8, &[c]) else {
+        let NativeRun::Ok(bits) = (unsafe { leaf.call(ctx as *mut u8, &[c]) }) else {
             panic!("F(list) must run natively");
         };
         let p = unsafe {
@@ -988,7 +991,7 @@ fn mir_rooting_skip_on_an_inferred_fixnum_param_across_an_allocating_call() {
             "i = 1 on the non-nil path"
         );
     }
-    let NativeRun::Ok(bits) = leaf.call(ctx as *mut u8, &[Value::NIL]) else {
+    let NativeRun::Ok(bits) = (unsafe { leaf.call(ctx as *mut u8, &[Value::NIL]) }) else {
         panic!("F(nil) must run natively");
     };
     let p = unsafe {
@@ -1025,10 +1028,10 @@ fn mir_multi_phi_merge_matches_interpreter() {
             optional: Vec::new(),
             rest: None,
         });
-        f.lexical = true;
-        f.ops = ops.to_vec();
-        f.constants = constants.to_vec().into();
-        f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
+        f.set_lexical(true);
+        f.set_ops(ops.to_vec());
+        f.set_constants(constants.to_vec().into());
+        f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
         let want = {
             let mut vm = Vm::from_context(&mut eval);
             vm.execute(&f, vec![c]).expect("interp multi-phi").bits()
@@ -1037,7 +1040,7 @@ fn mir_multi_phi_merge_matches_interpreter() {
             mir::build_mir(&ops, &constants, None, 1).expect("MIR builds the two-phi diamond");
         let mleaf = lower_mir_pure(&mir).expect("MIR lowers the two-phi diamond");
         let ctx_ptr = &mut eval as *mut Context as *mut u8;
-        let NativeRun::Ok(bits) = mleaf.call(ctx_ptr, &[c]) else {
+        let NativeRun::Ok(bits) = (unsafe { mleaf.call(ctx_ptr, &[c]) }) else {
             panic!(
                 "MIR two-phi diamond must run natively for cond bits {}",
                 c.bits()
@@ -1076,7 +1079,7 @@ fn inline_pure_callee_lowers_and_runs() {
     let leaf = lower_mir_pure(&m).expect("inlined (now pure) MIR lowers");
     for a in [3i64, 7, -4, 0] {
         let arg = Value::make_int(a);
-        match leaf.call(std::ptr::null_mut(), &[arg]) {
+        match unsafe { leaf.call(std::ptr::null_mut(), &[arg]) } {
             NativeRun::Ok(bits) => assert_eq!(
                 bits,
                 Value::make_int(a * a).bits(),
@@ -1113,9 +1116,9 @@ fn inlined_callee_redefinition_rejits() {
             optional: Vec::new(),
             rest: None,
         });
-        c.lexical = true;
-        c.ops = ops;
-        c.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
+        c.set_lexical(true);
+        c.set_ops(ops);
+        c.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
         Value::make_bytecode(c)
     };
     ev.obarray
@@ -1126,10 +1129,15 @@ fn inlined_callee_redefinition_rejits() {
         optional: Vec::new(),
         rest: None,
     });
-    f.lexical = true;
-    f.ops = vec![Op::Constant(0), Op::StackRef(1), Op::Call(1), Op::Return];
-    f.constants = vec![c_sym].into();
-    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
+    f.set_lexical(true);
+    f.set_ops(vec![
+        Op::Constant(0),
+        Op::StackRef(1),
+        Op::Call(1),
+        Op::Return,
+    ]);
+    f.set_constants(vec![c_sym].into());
+    f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
     let f_val = Value::make_bytecode(f.clone());
     prepare_entry(ctx, &f);
     // SAFETY: `ctx` is the live `Context` this test owns; the call runs in this thread under the dormant-Context contract.
@@ -1175,9 +1183,9 @@ fn mir_call_lowering_runs_a_non_inlined_call() {
         optional: Vec::new(),
         rest: None,
     });
-    c.lexical = true;
-    c.ops = vec![Op::StackRef(0), Op::Return];
-    c.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
+    c.set_lexical(true);
+    c.set_ops(vec![Op::StackRef(0), Op::Return]);
+    c.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
     ev.obarray
         .set_symbol_function_id(c_id, Value::make_bytecode(c));
     let f_ops = [
@@ -1194,7 +1202,7 @@ fn mir_call_lowering_runs_a_non_inlined_call() {
         leaf.has_side_effects,
         "a call-bearing MIR leaf is side-effecting (must never rerun-from-start)"
     );
-    match leaf.call(ctx as *mut u8, &[Value::make_int(5)]) {
+    match unsafe { leaf.call(ctx as *mut u8, &[Value::make_int(5)]) } {
         NativeRun::Ok(bits) => {
             assert_eq!(bits, Value::make_int(6).bits(), "1+(id 5) = 6")
         }
@@ -1232,9 +1240,9 @@ fn inline_plus_residual_call_keeps_shared_speculation_in_mir() {
         optional: Vec::new(),
         rest: None,
     });
-    sq.lexical = true;
-    sq.ops = vec![Op::Dup, Op::Mul, Op::Return];
-    sq.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
+    sq.set_lexical(true);
+    sq.set_ops(vec![Op::Dup, Op::Mul, Op::Return]);
+    sq.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
     ev.obarray
         .set_symbol_function_id(sq_id, Value::make_bytecode(sq));
     let mut g = ByteCodeFunction::new(LambdaParams {
@@ -1243,9 +1251,9 @@ fn inline_plus_residual_call_keeps_shared_speculation_in_mir() {
         optional: Vec::new(),
         rest: None,
     });
-    g.lexical = true;
+    g.set_lexical(true);
     // (if y (1+ y) 0) — two basic blocks, so callee_inlinable refuses it.
-    g.ops = vec![
+    g.set_ops(vec![
         Op::StackRef(0),
         Op::GotoIfNil(5),
         Op::StackRef(0),
@@ -1253,9 +1261,9 @@ fn inline_plus_residual_call_keeps_shared_speculation_in_mir() {
         Op::Return,
         Op::Constant(0),
         Op::Return,
-    ];
-    g.constants = vec![Value::make_int(0)].into();
-    g.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
+    ]);
+    g.set_constants(vec![Value::make_int(0)].into());
+    g.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
     ev.obarray
         .set_symbol_function_id(g_id, Value::make_bytecode(g));
     let mut f = ByteCodeFunction::new(LambdaParams {
@@ -1264,17 +1272,17 @@ fn inline_plus_residual_call_keeps_shared_speculation_in_mir() {
         optional: Vec::new(),
         rest: None,
     });
-    f.lexical = true;
-    f.ops = vec![
+    f.set_lexical(true);
+    f.set_ops(vec![
         Op::Constant(0), // g
         Op::Constant(1), // sq
         Op::StackRef(2), // a
         Op::Call(1),     // (sq a)
         Op::Call(1),     // (g (sq a))
         Op::Return,
-    ];
-    f.constants = vec![g_sym, sq_sym].into();
-    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
+    ]);
+    f.set_constants(vec![g_sym, sq_sym].into());
+    f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
     let leaf = compile_bytecode_function_with(&f, Some(&ev.obarray)).expect("F compiles");
     assert_eq!(
         leaf.tier,
@@ -1285,7 +1293,7 @@ fn inline_plus_residual_call_keeps_shared_speculation_in_mir() {
     assert_eq!(leaf.spec_slots.len(), 1);
     let _ = ev.debug_on_next_call_is_armed();
     // F(3) = g(sq(3)) = g(9) = 1+9 = 10.
-    match leaf.call(ctx as *mut u8, &[Value::make_int(3)]) {
+    match unsafe { leaf.call(ctx as *mut u8, &[Value::make_int(3)]) } {
         NativeRun::Ok(bits) => {
             assert_eq!(bits, Value::make_int(10).bits(), "g(sq(3)) = 1+9 = 10")
         }
@@ -1321,10 +1329,10 @@ fn precise_eviction_only_evicts_inlined_dependents() {
             optional: Vec::new(),
             rest: None,
         });
-        bf.lexical = true;
-        bf.ops = ops;
-        bf.constants = consts.into();
-        bf.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
+        bf.set_lexical(true);
+        bf.set_ops(ops);
+        bf.set_constants(consts.into());
+        bf.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
         bf
     };
     let (c_sym, c_id) = mk_sym("jit-pe-c");
@@ -1418,7 +1426,7 @@ fn mir_allocates_escaping_cons() {
         !leaf.has_side_effects,
         "a cons allocation is a GC safepoint, not a side effect (no precise deopt)"
     );
-    match leaf.call(ctx as *mut u8, &[Value::make_int(3), Value::make_int(5)]) {
+    match unsafe { leaf.call(ctx as *mut u8, &[Value::make_int(3), Value::make_int(5)]) } {
         NativeRun::Ok(bits) => assert!(
             matches!(
                 unsafe {
@@ -1465,10 +1473,10 @@ fn a_compiled_loop_polls_quit_whichever_tier_compiles_it() {
         optional: Vec::new(),
         rest: None,
     });
-    f.lexical = true;
-    f.ops = ops;
-    f.constants = vec![Value::make_int(0)].into();
-    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
+    f.set_lexical(true);
+    f.set_ops(ops);
+    f.set_constants(vec![Value::make_int(0)].into());
+    f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
     let mut ev = Context::new(crate::test_utils::unit_runtime());
     let ctx_ptr = &mut ev as *mut Context as *mut u8;
     let leaf = compile_bytecode_function_with(&f, Some(&ev.obarray)).expect("compiles");
@@ -1478,12 +1486,12 @@ fn a_compiled_loop_polls_quit_whichever_tier_compiles_it() {
         "the optimizing tier must run the loop and preserve its service polls"
     );
     assert_eq!(
-        leaf.call(ctx_ptr, &[Value::make_int(1000)]),
+        unsafe { leaf.call(ctx_ptr, &[Value::make_int(1000)]) },
         NativeRun::Ok(Value::make_int(0).bits()),
         "the loop runs to completion with no quit pending"
     );
     ev.set_quit_flag_value(Value::T);
-    let quit = leaf.call(ctx_ptr, &[Value::make_int(1000)]);
+    let quit = unsafe { leaf.call(ctx_ptr, &[Value::make_int(1000)]) };
     ev.set_quit_flag_value(Value::NIL);
     assert_eq!(
         quit,
@@ -1494,7 +1502,7 @@ fn a_compiled_loop_polls_quit_whichever_tier_compiles_it() {
     // The same for a loop that CONSES: its only shim is `neovm_jit_cons`,
     // which never reaches a safe point, so without a back-edge poll the loop
     // would allocate forever with no GC.
-    f.ops = vec![
+    f.set_ops(vec![
         Op::StackRef(0),
         Op::Constant(0),
         Op::Gtr,
@@ -1509,14 +1517,14 @@ fn a_compiled_loop_polls_quit_whichever_tier_compiles_it() {
         Op::Goto(0),
         Op::StackRef(0),
         Op::Return,
-    ];
+    ]);
     let consing = compile_bytecode_function_with(&f, Some(&ev.obarray)).expect("compiles");
     assert_eq!(
-        consing.call(ctx_ptr, &[Value::make_int(1000)]),
+        unsafe { consing.call(ctx_ptr, &[Value::make_int(1000)]) },
         NativeRun::Ok(Value::make_int(0).bits())
     );
     ev.set_quit_flag_value(Value::T);
-    let quit = consing.call(ctx_ptr, &[Value::make_int(1000)]);
+    let quit = unsafe { consing.call(ctx_ptr, &[Value::make_int(1000)]) };
     ev.set_quit_flag_value(Value::NIL);
     assert_eq!(
         quit,
@@ -1547,14 +1555,14 @@ fn mir_conditional_loops_preserve_poll_cadence_and_quit() {
             optional: Vec::new(),
             rest: None,
         });
-        f.lexical = true;
-        f.constants = vec![Value::make_int(0)].into();
-        f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(4);
+        f.set_lexical(true);
+        f.set_constants(vec![Value::make_int(0)].into());
+        f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(4));
         if else_pop {
-            f.ops.extend([Op::Nil, Op::Pop]);
+            f.ops_mut().extend([Op::Nil, Op::Pop]);
         }
         let target = if else_pop { 1 } else { 0 };
-        f.ops.extend([
+        f.ops_mut().extend([
             Op::StackRef(0),
             Op::Sub1,
             Op::StackSet(1),
@@ -1574,14 +1582,14 @@ fn mir_conditional_loops_preserve_poll_cadence_and_quit() {
         for n in [1, 254, 255, 256, 511] {
             reset_bytecode_branch_poll_count();
             assert_eq!(
-                leaf.call(ctx, &[Value::make_int(n)]),
+                unsafe { leaf.call(ctx, &[Value::make_int(n)]) },
                 NativeRun::Ok(Value::make_int(0).bits()),
                 "on_nil={on_nil} else_pop={else_pop} n={n}"
             );
             assert_eq!(bytecode_branch_poll_count(), ((n - 1) / 255) as usize);
         }
         ev.set_quit_flag_value(Value::T);
-        let quit = leaf.call(ctx, &[Value::make_int(256)]);
+        let quit = unsafe { leaf.call(ctx, &[Value::make_int(256)]) };
         ev.set_quit_flag_value(Value::NIL);
         assert_eq!(quit, NativeRun::Signal);
         assert!(take_pending_flow().is_some());
@@ -1606,11 +1614,11 @@ fn mir_loop_keeps_native_list_alive_across_exact_gc() {
         optional: Vec::new(),
         rest: None,
     });
-    f.lexical = true;
-    f.constants = vec![Value::make_int(0)].into();
-    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(4);
+    f.set_lexical(true);
+    f.set_constants(vec![Value::make_int(0)].into());
+    f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(4));
     // (lambda (n) (let (l) (while (> n 0) (setq l (cons n l) n (1- n))) l))
-    f.ops = vec![
+    f.set_ops(vec![
         Op::Nil,
         Op::StackRef(1),
         Op::Constant(0),
@@ -1625,12 +1633,12 @@ fn mir_loop_keeps_native_list_alive_across_exact_gc() {
         Op::StackSet(2),
         Op::Goto(1),
         Op::Return,
-    ];
+    ]);
     let leaf = compile_bytecode_function_with(&f, Some(&ev.obarray)).expect("compiles");
     assert_eq!(leaf.tier, super::leaf::LeafTier::Mir);
     let before = ev.tagged_heap.gc_collections();
     ev.gc_stress = true;
-    let result = leaf.call(&mut ev as *mut Context as *mut u8, &[Value::make_int(1024)]);
+    let result = unsafe { leaf.call(&mut ev as *mut Context as *mut u8, &[Value::make_int(1024)]) };
     ev.gc_stress = false;
     let NativeRun::Ok(bits) = result else {
         panic!("list-building loop failed: {result:?}");
@@ -1668,10 +1676,10 @@ fn mir_loop_overflow_after_a_poll_deopts_at_the_current_iteration() {
         optional: Vec::new(),
         rest: None,
     });
-    f.lexical = true;
-    f.constants = vec![Value::make_int(0)].into();
-    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(4);
-    f.ops = vec![
+    f.set_lexical(true);
+    f.set_constants(vec![Value::make_int(0)].into());
+    f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(4));
+    f.set_ops(vec![
         Op::StackRef(1),
         Op::Constant(0),
         Op::Gtr,
@@ -1684,15 +1692,17 @@ fn mir_loop_overflow_after_a_poll_deopts_at_the_current_iteration() {
         Op::StackSet(2),
         Op::Goto(0),
         Op::Return,
-    ];
+    ]);
     let leaf = compile_bytecode_function_with(&f, Some(&ev.obarray)).expect("compiles");
     assert_eq!(leaf.tier, super::leaf::LeafTier::Mir);
     let max = (1_i64 << 61) - 1;
     reset_bytecode_branch_poll_count();
-    let result = leaf.call(
-        &mut ev as *mut Context as *mut u8,
-        &[Value::make_int(512), Value::make_int(max - 300)],
-    );
+    let result = unsafe {
+        leaf.call(
+            &mut ev as *mut Context as *mut u8,
+            &[Value::make_int(512), Value::make_int(max - 300)],
+        )
+    };
     assert_eq!(bytecode_branch_poll_count(), 1);
     let NativeRun::DeoptAt(resume) = result else {
         panic!("loop must deopt precisely after its poll: {result:?}");
@@ -1729,9 +1739,9 @@ fn mir_loop_does_not_keep_an_inlined_callee_across_a_gc_hook() {
         optional: Vec::new(),
         rest: None,
     });
-    callee.lexical = true;
-    callee.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(2);
-    callee.ops = vec![Op::StackRef(0), Op::Sub1, Op::Return];
+    callee.set_lexical(true);
+    callee.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(2));
+    callee.set_ops(vec![Op::StackRef(0), Op::Sub1, Op::Return]);
     ev.obarray.set_symbol_function_id(
         step.as_bare_symbol_id().unwrap(),
         Value::make_bytecode(callee),
@@ -1742,10 +1752,10 @@ fn mir_loop_does_not_keep_an_inlined_callee_across_a_gc_hook() {
         optional: Vec::new(),
         rest: None,
     });
-    f.lexical = true;
-    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(3);
-    f.constants = vec![Value::make_int(0), step].into();
-    f.ops = vec![
+    f.set_lexical(true);
+    f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(3));
+    f.set_constants(vec![Value::make_int(0), step].into());
+    f.set_ops(vec![
         Op::StackRef(0),
         Op::Constant(0),
         Op::Gtr,
@@ -1756,19 +1766,19 @@ fn mir_loop_does_not_keep_an_inlined_callee_across_a_gc_hook() {
         Op::StackSet(1),
         Op::Goto(0),
         Op::Return,
-    ];
+    ]);
     f.seal_hand_assembled_ops();
     let _ = ev.debug_on_next_call_is_armed();
     let leaf = compile_bytecode_function_with(&f, Some(&ev.obarray)).expect("compiles");
     assert_eq!(leaf.tier, super::leaf::LeafTier::Mir);
     assert_eq!(
-        leaf.call(&mut ev as *mut Context as *mut u8, &[Value::make_int(1000)]),
+        unsafe { leaf.call(&mut ev as *mut Context as *mut u8, &[Value::make_int(1000)]) },
         NativeRun::Ok(Value::make_int(0).bits())
     );
     ev.eval_str("(setq post-gc-hook (list (lambda () (fset 'mir-loop-step (lambda (n) -7)))))")
         .expect("install redefining GC hook");
     ev.gc_stress = true;
-    let result = leaf.call(&mut ev as *mut Context as *mut u8, &[Value::make_int(1000)]);
+    let result = unsafe { leaf.call(&mut ev as *mut Context as *mut u8, &[Value::make_int(1000)]) };
     ev.gc_stress = false;
     let NativeRun::DeoptAt(frame) = &result else {
         panic!("{result:?}")
@@ -1820,14 +1830,14 @@ fn backedge_polls_quit_like_the_interpreter() {
 
     // Flag clear: the loop runs to completion natively (polls return OK).
     assert_eq!(
-        leaf.call(ctx_ptr, &[Value::make_int(1000)]),
+        unsafe { leaf.call(ctx_ptr, &[Value::make_int(1000)]) },
         NativeRun::Ok(Value::make_int(0).bits())
     );
 
     // Flag set: the wrap poll must signal quit out of native code...
     ev.set_quit_flag_value(Value::T);
     assert_eq!(
-        leaf.call(ctx_ptr, &[Value::make_int(1000)]),
+        unsafe { leaf.call(ctx_ptr, &[Value::make_int(1000)]) },
         NativeRun::Signal,
         "C-g must interrupt a compiled loop"
     );
@@ -1842,10 +1852,10 @@ fn backedge_polls_quit_like_the_interpreter() {
         optional: Vec::new(),
         rest: None,
     });
-    f.lexical = true;
-    f.ops = ops.to_vec();
-    f.constants = constants.to_vec().into();
-    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
+    f.set_lexical(true);
+    f.set_ops(ops.to_vec());
+    f.set_constants(constants.to_vec().into());
+    f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
     let interp = {
         let mut vm = Vm::from_context(&mut ev);
         vm.execute(&f, vec![Value::make_int(1000)])
@@ -1854,7 +1864,7 @@ fn backedge_polls_quit_like_the_interpreter() {
 
     // Flag cleared by the quit: the loop completes again.
     assert_eq!(
-        leaf.call(ctx_ptr, &[Value::make_int(1000)]),
+        unsafe { leaf.call(ctx_ptr, &[Value::make_int(1000)]) },
         NativeRun::Ok(Value::make_int(0).bits())
     );
 }
@@ -1889,7 +1899,7 @@ fn compiles_save_excursion_with_unwind_semantics() {
     )
     .unwrap();
     assert_eq!(
-        balanced.call(ctx_ptr, &[]),
+        unsafe { balanced.call(ctx_ptr, &[]) },
         NativeRun::Ok(Value::make_int(12).bits()),
         "point must be restored by the Unbind"
     );
@@ -1908,14 +1918,14 @@ fn compiles_save_excursion_with_unwind_semantics() {
     )
     .unwrap();
     assert_eq!(
-        dangling.call(ctx_ptr, &[]),
+        unsafe { dangling.call(ctx_ptr, &[]) },
         NativeRun::Ok(Value::make_int(1).bits())
     );
     assert_eq!(ev.specpdl.len(), specpdl_before, "frame unwind pops record");
     let point_now =
         lower_nullary_leaf(&[Op::Constant(2), Op::Call(0), Op::Return], &constants).unwrap();
     assert_eq!(
-        point_now.call(ctx_ptr, &[]),
+        unsafe { point_now.call(ctx_ptr, &[]) },
         NativeRun::Ok(Value::make_int(12).bits()),
         "point must be restored by the frame unwind too"
     );
@@ -1924,7 +1934,10 @@ fn compiles_save_excursion_with_unwind_semantics() {
     // cleanly (same shim/record machinery; arms mirrored 1:1).
     for op in [Op::SaveCurrentBuffer, Op::SaveRestriction] {
         let mech = lower_nullary_leaf(&[op, Op::Nil, Op::Return], &[]).unwrap();
-        assert_eq!(mech.call(ctx_ptr, &[]), NativeRun::Ok(Value::NIL.bits()));
+        assert_eq!(
+            unsafe { mech.call(ctx_ptr, &[]) },
+            NativeRun::Ok(Value::NIL.bits())
+        );
         assert_eq!(ev.specpdl.len(), specpdl_before);
     }
 
@@ -1936,7 +1949,7 @@ fn compiles_save_excursion_with_unwind_semantics() {
         &constants,
     )
     .expect("guard after a side effect compiles under precise deopt");
-    match after.call(ctx_ptr, &[]) {
+    match unsafe { after.call(ctx_ptr, &[]) } {
         NativeRun::Ok(_) => {}
         other => panic!("guard-after-save must run, got {other:?}"),
     }
@@ -1950,7 +1963,7 @@ fn compiles_trivial_natives_carsafe_maxmin_throw_numpreds() {
     let ctx_ptr = &mut ev as *mut crate::emacs_core::eval::Context as *mut u8;
     let t = NativeRun::Ok(Value::T.bits());
     let nil = NativeRun::Ok(Value::NIL.bits());
-    let run1 = |op: Op, v: Value, ctx: *mut u8| {
+    let run1 = |op: Op, v: Value, ctx: *mut u8| unsafe {
         lower_nullary_leaf(&[Op::Constant(0), op, Op::Return], &[v])
             .unwrap()
             .call(ctx, &[])
@@ -1972,7 +1985,7 @@ fn compiles_trivial_natives_carsafe_maxmin_throw_numpreds() {
 
     // max / min: fixnum fast path keeps the original tagged operand;
     // non-fixnum deopts to the interpreter's coercing builtin.
-    let run2 = |op: Op, a: Value, b: Value, ctx: *mut u8| {
+    let run2 = |op: Op, a: Value, b: Value, ctx: *mut u8| unsafe {
         lower_nullary_leaf(&[Op::Constant(0), Op::Constant(1), op, Op::Return], &[a, b])
             .unwrap()
             .call(ctx, &[])
@@ -2030,14 +2043,14 @@ fn compiles_trivial_natives_carsafe_maxmin_throw_numpreds() {
             resume: crate::emacs_core::eval::ResumeTarget::InterpreterCatch,
         });
         let mut code = nullary();
-        code.ops = ops.to_vec();
-        code.constants = constants.to_vec().into();
-        code.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(4);
+        code.set_ops(ops.to_vec());
+        code.set_constants(constants.to_vec().into());
+        code.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(4));
         code.seal_hand_assembled_ops_for_test();
         let interpreted = crate::emacs_core::bytecode::Vm::from_context(&mut ev)
             .execute(&code, vec![])
             .expect_err("throw leaves opcode frame");
-        assert_eq!(native.call(ctx_ptr, &[]), NativeRun::Signal);
+        assert_eq!(unsafe { native.call(ctx_ptr, &[]) }, NativeRun::Signal);
         let compiled = take_pending_flow().expect("throw Flow stashed");
         ev.set_variable("symbols-with-pos-enabled", Value::NIL);
         for flow in [interpreted, compiled] {
@@ -2060,7 +2073,7 @@ fn compiles_direct_builtin_ops() {
         crate::emacs_core::eval::Context::new_minimal_vm_harness(crate::test_utils::unit_runtime());
     let ctx_ptr = &mut ev as *mut crate::emacs_core::eval::Context as *mut u8;
     let ok_int = |n: i64| NativeRun::Ok(Value::make_int(n).bits());
-    let run = |ops: &[Op], consts: &[Value], ctx: *mut u8| {
+    let run = |ops: &[Op], consts: &[Value], ctx: *mut u8| unsafe {
         lower_nullary_leaf(ops, consts).unwrap().call(ctx, &[])
     };
 
@@ -2265,10 +2278,10 @@ fn arith_intrinsic_bitops_jit_match_interp_and_deopt() {
             optional: Vec::new(),
             rest: None,
         });
-        f.lexical = true;
-        f.ops = ops;
-        f.constants = vec![Value::from_sym_id(intern(op_name))].into();
-        f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
+        f.set_lexical(true);
+        f.set_ops(ops);
+        f.set_constants(vec![Value::from_sym_id(intern(op_name))].into());
+        f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
         compile_bytecode_function_with(&f, Some(ob)).expect("bit-op body compiles")
     };
     let int = |n: i64| Value::make_int(n);
@@ -2288,7 +2301,7 @@ fn arith_intrinsic_bitops_jit_match_interp_and_deopt() {
         let leaf = mk(name, 2, &ev.obarray);
         #[cfg(debug_assertions)]
         let fast0 = SUBR_SPEC_FAST_COUNT.load(Ordering::Relaxed);
-        let r = leaf.call(ctx, &[int(a), int(b)]);
+        let r = unsafe { leaf.call(ctx, &[int(a), int(b)]) };
         assert_eq!(
             r,
             NativeRun::Ok(int(want).bits()),
@@ -2306,7 +2319,7 @@ fn arith_intrinsic_bitops_jit_match_interp_and_deopt() {
         #[cfg(debug_assertions)]
         let fast0 = SUBR_SPEC_FAST_COUNT.load(Ordering::Relaxed);
         assert_eq!(
-            leaf.call(ctx, &[int(a)]),
+            unsafe { leaf.call(ctx, &[int(a)]) },
             NativeRun::Ok(int(want).bits()),
             "(lognot {a}) = {want}"
         );
@@ -2323,7 +2336,7 @@ fn arith_intrinsic_bitops_jit_match_interp_and_deopt() {
         let leaf = mk("ash", 2, &ev.obarray);
         #[cfg(debug_assertions)]
         let gen0 = SUBR_SPEC_GENERIC_COUNT.load(Ordering::Relaxed);
-        let NativeRun::Ok(bits) = leaf.call(ctx, &[int(1), int(100)]) else {
+        let NativeRun::Ok(bits) = (unsafe { leaf.call(ctx, &[int(1), int(100)]) }) else {
             panic!("(ash 1 100) must return Ok (a bignum via generic)");
         };
         let got = unsafe {
@@ -2350,7 +2363,7 @@ fn arith_intrinsic_bitops_jit_match_interp_and_deopt() {
     #[cfg(debug_assertions)]
     let gen0 = SUBR_SPEC_GENERIC_COUNT.load(Ordering::Relaxed);
     assert_eq!(
-        leaf.call(ctx, &[cons, int(5)]),
+        unsafe { leaf.call(ctx, &[cons, int(5)]) },
         NativeRun::Signal,
         "(logand '(1) 5) signals wrong-type via the generic fallback"
     );
@@ -2387,10 +2400,10 @@ fn arith_intrinsic_inline_level_b_matches_interp() {
             optional: Vec::new(),
             rest: None,
         });
-        f.lexical = true;
-        f.ops = ops;
-        f.constants = vec![Value::from_sym_id(intern(op_name))].into();
-        f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
+        f.set_lexical(true);
+        f.set_ops(ops);
+        f.set_constants(vec![Value::from_sym_id(intern(op_name))].into());
+        f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
         compile_bytecode_function_with(&f, Some(ob)).expect("inline bit-op body compiles")
     };
     let int = |n: i64| Value::make_int(n);
@@ -2419,7 +2432,7 @@ fn arith_intrinsic_inline_level_b_matches_interp() {
         );
         let argv: Vec<Value> = args.iter().map(|&n| int(n)).collect();
         assert_eq!(
-            leaf.call(ctx, &argv),
+            unsafe { leaf.call(ctx, &argv) },
             NativeRun::Ok(int(want).bits()),
             "({name} {args:?}) inline = {want}"
         );
@@ -2431,7 +2444,7 @@ fn arith_intrinsic_inline_level_b_matches_interp() {
         "ash stays on the shim — no inline redefinition dep"
     );
     assert_eq!(
-        ash_leaf.call(ctx, &[int(3), int(4)]),
+        unsafe { ash_leaf.call(ctx, &[int(3), int(4)]) },
         NativeRun::Ok(int(48).bits())
     );
     // A non-fixnum arg on an inline op DEOPTS (guard fails) — it never runs the
@@ -2440,7 +2453,7 @@ fn arith_intrinsic_inline_level_b_matches_interp() {
     let cons = Value::cons(int(1), Value::NIL);
     assert!(
         matches!(
-            leaf.call(ctx, &[cons, int(5)]),
+            unsafe { leaf.call(ctx, &[cons, int(5)]) },
             NativeRun::Deopt | NativeRun::DeoptAt(_)
         ),
         "(logand '(1) 5) must deopt, not compute inline"
@@ -2495,7 +2508,7 @@ fn osr_entry_resumes_loop_from_seeded_stack() {
     // Seed the operand stack = [i]; the OSR entry resumes the loop from `i`.
     for (seed, want) in [(0i64, 5i64), (3, 5), (5, 5), (10, 10)] {
         let args = [Value::make_int(seed).bits() as i64];
-        match leaf.call_premarshaled(ctx, args.as_ptr()) {
+        match unsafe { leaf.call_premarshaled(ctx, args.as_ptr()) } {
             NativeRun::Ok(bits) => assert_eq!(
                 unsafe {
                     /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
@@ -2527,8 +2540,8 @@ fn osr_transfers_hot_loop_and_matches_interpreter() {
             optional: Vec::new(),
             rest: None,
         });
-        f.lexical = true;
-        f.ops = vec![
+        f.set_lexical(true);
+        f.set_ops(vec![
             Op::Constant(0), // acc = 0
             Op::Constant(0), // i = 0
             Op::StackRef(0), // 2: L_header (OSR entry) — i
@@ -2545,9 +2558,9 @@ fn osr_transfers_hot_loop_and_matches_interpreter() {
             Op::Goto(2),     // back to L_header
             Op::StackRef(1), // 14: L_end — acc
             Op::Return,
-        ];
-        f.constants = vec![Value::make_int(0)].into();
-        f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
+        ]);
+        f.set_constants(vec![Value::make_int(0)].into());
+        f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
         f.seal_hand_assembled_ops();
         f
     };
@@ -2606,8 +2619,8 @@ fn osr_precise_deopt_resumes_without_replaying_iterations() {
             optional: Vec::new(),
             rest: None,
         });
-        f.lexical = true;
-        f.ops = vec![
+        f.set_lexical(true);
+        f.set_ops(vec![
             Op::Constant(0), // i = 0            [start n i]
             Op::StackRef(2), // x = start        [start n i x]
             Op::StackRef(1), // 2: L_header (OSR entry) -- i
@@ -2626,9 +2639,9 @@ fn osr_precise_deopt_resumes_without_replaying_iterations() {
             Op::Goto(2),
             Op::StackRef(1), // 16: L_end -- i
             Op::Return,
-        ];
-        f.constants = vec![Value::make_int(0), Value::symbol("osr-deopt-counter")].into();
-        f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
+        ]);
+        f.set_constants(vec![Value::make_int(0), Value::symbol("osr-deopt-counter")].into());
+        f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
         f.seal_hand_assembled_ops();
         f
     };
@@ -2706,7 +2719,7 @@ fn compiles_unwind_protect_pop() {
     )
     .unwrap();
     assert_eq!(
-        balanced.call(ctx_ptr, &[]),
+        unsafe { balanced.call(ctx_ptr, &[]) },
         NativeRun::Ok(Value::make_int(7).bits())
     );
     assert_eq!(
@@ -2729,7 +2742,7 @@ fn compiles_unwind_protect_pop() {
         &consts,
     )
     .unwrap();
-    assert_eq!(signaled.call(ctx_ptr, &[]), NativeRun::Signal);
+    assert_eq!(unsafe { signaled.call(ctx_ptr, &[]) }, NativeRun::Signal);
     assert!(take_pending_flow().is_some());
     assert_eq!(
         ev.eval_str("jit-up-ran").unwrap(),
@@ -2816,10 +2829,10 @@ fn mir_pure_lowering_matches_interpreter() {
             optional: Vec::new(),
             rest: None,
         });
-        f.lexical = true;
-        f.ops = ops.clone();
-        f.constants = constants.clone().into();
-        f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(32);
+        f.set_lexical(true);
+        f.set_ops(ops.clone());
+        f.set_constants(constants.clone().into());
+        f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(32));
         let want = {
             let mut vm = Vm::from_context(&mut ev);
             vm.execute(&f, args.clone()).expect("interpreter runs")
@@ -2887,7 +2900,7 @@ fn mir_pure_lowering_handles_a_call() {
         (sym, sym, Value::T),
         (sym, Value::NIL, Value::NIL),
     ] {
-        match eq_leaf.call(ctx, &[a, b]) {
+        match unsafe { eq_leaf.call(ctx, &[a, b]) } {
             NativeRun::Ok(bits) => assert_eq!(bits, want.bits(), "(eq {a:?} {b:?})"),
             other => panic!("(eq {a:?} {b:?}): {other:?}"),
         }
@@ -2921,8 +2934,8 @@ fn mir_hoists_the_root_window_across_shim_sites() {
         optional: Vec::new(),
         rest: None,
     });
-    churn.lexical = true;
-    churn.ops = vec![
+    churn.set_lexical(true);
+    churn.set_ops(vec![
         Op::Constant(0), // 'garbage-collect
         Op::Call(0),     // exact collection
         Op::Pop,
@@ -2931,15 +2944,17 @@ fn mir_hoists_the_root_window_across_shim_sites() {
         Op::Constant(3), // 0
         Op::Call(2),     // reuses freed slots
         Op::Return,
-    ];
-    churn.constants = vec![
-        Value::symbol("garbage-collect"),
-        Value::symbol("make-list"),
-        Value::make_int(4096),
-        Value::make_int(0),
-    ]
-    .into();
-    churn.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
+    ]);
+    churn.set_constants(
+        vec![
+            Value::symbol("garbage-collect"),
+            Value::symbol("make-list"),
+            Value::make_int(4096),
+            Value::make_int(0),
+        ]
+        .into(),
+    );
+    churn.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
     ev.obarray
         .set_symbol_function_id(churn_id, Value::make_bytecode(churn));
     let ops = vec![
@@ -2976,7 +2991,7 @@ fn mir_hoists_the_root_window_across_shim_sites() {
     );
     for _ in 0..3 {
         let l = ev.eval_str("(list 1 2 3)").expect("l");
-        let NativeRun::Ok(bits) = leaf.call(ctx, &[l]) else {
+        let NativeRun::Ok(bits) = (unsafe { leaf.call(ctx, &[l]) }) else {
             panic!("must run natively");
         };
         let h = unsafe {
@@ -3084,8 +3099,8 @@ fn baseline_tier_a_fallback_stores_do_not_leak_into_the_next_site() {
         optional: Vec::new(),
         rest: None,
     });
-    f.lexical = true;
-    f.ops = vec![
+    f.set_lexical(true);
+    f.set_ops(vec![
         Op::StackRef(1),                        // a        [a n a]
         Op::Dup,                                //          [a n a a]
         Op::Cons,                               // x        [a n x]
@@ -3098,9 +3113,9 @@ fn baseline_tier_a_fallback_stores_do_not_leak_into_the_next_site() {
         Op::Call(2),                            // residual [a n x]
         Op::Pop,                                //          [a n x]
         Op::Return,                             // x
-    ];
-    f.constants = vec![Value::symbol("jit-carry-h")].into();
-    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
+    ]);
+    f.set_constants(vec![Value::symbol("jit-carry-h")].into());
+    f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
     let leaf = compile_bytecode_function_with(&f, Some(&ev.obarray)).expect("compiles");
     assert_eq!(leaf.tier, super::leaf::LeafTier::Baseline);
     let (stored, elided) = super::lowering::rootwin_counters();
@@ -3129,8 +3144,8 @@ fn baseline_reg_args_fallback_stores_do_not_leak_into_the_next_site() {
         optional: Vec::new(),
         rest: None,
     });
-    f.lexical = true;
-    f.ops = vec![
+    f.set_lexical(true);
+    f.set_ops(vec![
         Op::StackRef(1), // a                 [a n a]
         Op::Dup,         //                   [a n a a]
         Op::Cons,        // x                 [a n x]
@@ -3143,9 +3158,9 @@ fn baseline_reg_args_fallback_stores_do_not_leak_into_the_next_site() {
         Op::Call(2),     // residual [a n x]
         Op::Pop,         //                   [a n x]
         Op::Return,      // x
-    ];
-    f.constants = vec![Value::symbol("jit-carry-h2"), Value::symbol("recordp")].into();
-    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
+    ]);
+    f.set_constants(vec![Value::symbol("jit-carry-h2"), Value::symbol("recordp")].into());
+    f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
     let leaf = compile_bytecode_function_with(&f, Some(&ev.obarray)).expect("compiles");
     assert_eq!(leaf.tier, super::leaf::LeafTier::Baseline);
     let (stored, elided) = super::lowering::rootwin_counters();
@@ -3179,8 +3194,8 @@ fn baseline_fallback_meet_keeps_only_the_slots_both_paths_agree_on() {
         optional: Vec::new(),
         rest: None,
     });
-    f.lexical = true;
-    f.ops = vec![
+    f.set_lexical(true);
+    f.set_ops(vec![
         Op::Constant(0),                        // [a b v]
         Op::VarSet(0),                          // residual [a b]: stores a, b
         Op::StackRef(1),                        // a        [a b a]
@@ -3192,13 +3207,13 @@ fn baseline_fallback_meet_keeps_only_the_slots_both_paths_agree_on() {
         Op::Constant(0),                        // [c b v]
         Op::VarSet(0),                          // residual [c b]: store c, elide b
         Op::Return,                             // b
-    ];
-    f.constants = vec![Value::symbol("jit-meet-carry-v")].into();
-    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
+    ]);
+    f.set_constants(vec![Value::symbol("jit-meet-carry-v")].into());
+    f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
     // Both tiers now use the same named-read fast path and rooted fallback.
     for baseline in [true, false] {
         let leaf = if baseline {
-            lower_leaf_full(&f.ops, &f.constants, 2, None, Some(&ev.obarray), 0)
+            lower_leaf_full(f.ops(), f.constants(), 2, None, Some(&ev.obarray), 0)
                 .expect("baseline compiles")
         } else {
             compile_bytecode_function_with(&f, Some(&ev.obarray)).expect("MIR compiles")
@@ -3241,8 +3256,8 @@ fn baseline_handler_dispatch_blocks_do_not_trust_the_block_end_store_record() {
         optional: Vec::new(),
         rest: None,
     });
-    f.lexical = true;
-    f.ops = vec![
+    f.set_lexical(true);
+    f.set_ops(vec![
         Op::StackRef(0),                        // 0: a              [a a]
         Op::Dup,                                // 1                 [a a a]
         Op::Cons,                               // 2: x              [a x]
@@ -3254,9 +3269,9 @@ fn baseline_handler_dispatch_blocks_do_not_trust_the_block_end_store_record() {
         Op::PopHandler,                         // 8                 [a x]
         Op::Return,                             // 9: x
         Op::Return,                             // 10: handler       [a x err]
-    ];
-    f.constants = vec![Value::symbol("jit-dispatch-carry-v")].into();
-    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
+    ]);
+    f.set_constants(vec![Value::symbol("jit-dispatch-carry-v")].into());
+    f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
     let leaf = compile_bytecode_function_with(&f, Some(&ev.obarray)).expect("compiles");
     assert_eq!(leaf.tier, super::leaf::LeafTier::Baseline);
     let (stored, elided) = super::lowering::rootwin_counters();
@@ -3452,7 +3467,7 @@ fn gc_free_unary_builtin_sites_root_no_residual() {
         "a GC-free unary builtin site stores no residual root"
     );
     let l = ev.eval_str("(list 1 2 3)").expect("l");
-    let NativeRun::Ok(bits) = leaf.call(ctx, &[l]) else {
+    let NativeRun::Ok(bits) = (unsafe { leaf.call(ctx, &[l]) }) else {
         panic!("length must run natively");
     };
     assert_eq!(
@@ -3491,7 +3506,7 @@ fn gc_free_builtin_sites_root_no_residual() {
         "a GC-free builtin site stores no residual root"
     );
     let l = ev.eval_str("(list 1 2 3)").expect("l");
-    let NativeRun::Ok(bits) = leaf.call(ctx, &[Value::make_int(2), l]) else {
+    let NativeRun::Ok(bits) = (unsafe { leaf.call(ctx, &[Value::make_int(2), l]) }) else {
         panic!("memq must run natively");
     };
     assert_eq!(
@@ -3551,7 +3566,7 @@ fn compiled_aset_matches_the_builtin() {
             args.cons_cdr().cons_car(),
             args.cons_cdr().cons_cdr().cons_car(),
         );
-        let native = match leaf.call(ctx, &[a, i, v]) {
+        let native = match unsafe { leaf.call(ctx, &[a, i, v]) } {
             NativeRun::Ok(bits) => Ok(unsafe {
                 /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
                 Value::from_bits(bits)
@@ -3614,7 +3629,7 @@ fn redefined_aset_cannot_reenter_through_an_opcode() {
     let leaf = lower_leaf(&ops, &constants, 1).expect("lowers");
     // The builtin: the vector changes.
     let v = ev.eval_str("(vector 0 0)").expect("v");
-    let NativeRun::Ok(bits) = leaf.call(ctx, &[v]) else {
+    let NativeRun::Ok(bits) = (unsafe { leaf.call(ctx, &[v]) }) else {
         panic!("aset must run natively");
     };
     let h = unsafe {
@@ -3628,7 +3643,7 @@ fn redefined_aset_cannot_reenter_through_an_opcode() {
         .expect("fset");
     for _ in 0..3 {
         let v = ev.eval_str("(vector 0 0)").expect("v");
-        let NativeRun::Ok(bits) = leaf.call(ctx, &[v]) else {
+        let NativeRun::Ok(bits) = (unsafe { leaf.call(ctx, &[v]) }) else {
             panic!("Baset must still run");
         };
         let h = unsafe {
@@ -3689,11 +3704,11 @@ fn tier_gate_sends_a_loop_with_a_shim_op_to_the_baseline() {
         optional: Vec::new(),
         rest: None,
     });
-    f.lexical = true;
-    f.ops = loop_ops.clone();
-    f.constants = vec![Value::make_int(0)].into();
-    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
-    let mir = mir::build_mir(&loop_ops, &f.constants, None, 2).expect("MIR builds");
+    f.set_lexical(true);
+    f.set_ops(loop_ops.clone());
+    f.set_constants(vec![Value::make_int(0)].into());
+    f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
+    let mir = mir::build_mir(&loop_ops, f.constants(), None, 2).expect("MIR builds");
     assert!(
         lower_mir_pure(&mir).is_ok(),
         "the MIR lowering accepts the loop, so the gate is what rejects it"
@@ -3705,7 +3720,7 @@ fn tier_gate_sends_a_loop_with_a_shim_op_to_the_baseline() {
         "gate:loop-opaque"
     );
     let l = ev.eval_str("(list 1 2)").expect("l");
-    match leaf.call(ctx, &[Value::make_int(5), l]) {
+    match unsafe { leaf.call(ctx, &[Value::make_int(5), l]) } {
         NativeRun::Ok(bits) => assert_eq!(bits, Value::make_int(5).bits()),
         other => panic!("loop: {other:?}"),
     }
@@ -3730,11 +3745,11 @@ fn tier_gate_sends_a_loop_with_a_shim_op_to_the_baseline() {
         optional: Vec::new(),
         rest: None,
     });
-    h.lexical = true;
-    h.ops = self_loop.clone();
-    h.constants = vec![Value::make_int(0)].into();
-    h.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
-    let mir = mir::build_mir(&self_loop, &h.constants, None, 2).expect("MIR builds the self-loop");
+    h.set_lexical(true);
+    h.set_ops(self_loop.clone());
+    h.set_constants(vec![Value::make_int(0)].into());
+    h.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
+    let mir = mir::build_mir(&self_loop, h.constants(), None, 2).expect("MIR builds the self-loop");
     assert!(
         super::lowering::plan_mir_leaf(&mir).has_backedge,
         "block 0 jumps to itself"
@@ -3752,13 +3767,13 @@ fn tier_gate_sends_a_loop_with_a_shim_op_to_the_baseline() {
         optional: Vec::new(),
         rest: None,
     });
-    g.lexical = true;
-    g.ops = vec![Op::StackRef(0), Op::Length, Op::Return];
-    g.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
+    g.set_lexical(true);
+    g.set_ops(vec![Op::StackRef(0), Op::Length, Op::Return]);
+    g.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
     let leaf = compile_bytecode_function_with(&g, Some(&ev.obarray)).expect("compiles");
     assert_eq!(leaf.tier, super::leaf::LeafTier::Mir);
     let l = ev.eval_str("(list 1 2 3)").expect("l");
-    match leaf.call(ctx, &[l]) {
+    match unsafe { leaf.call(ctx, &[l]) } {
         NativeRun::Ok(bits) => assert_eq!(bits, Value::make_int(3).bits()),
         other => panic!("length: {other:?}"),
     }
@@ -3791,9 +3806,9 @@ fn mir_inline_call_revalidates_after_fset_and_allows_state_reads() {
             optional: Vec::new(),
             rest: None,
         });
-        b.lexical = true;
-        b.ops = vec![Op::StackRef(0), op, Op::Return];
-        b.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
+        b.set_lexical(true);
+        b.set_ops(vec![Op::StackRef(0), op, Op::Return]);
+        b.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
         Value::make_bytecode(b)
     };
     let inc = unary(Op::Add1);
@@ -3805,8 +3820,8 @@ fn mir_inline_call_revalidates_after_fset_and_allows_state_reads() {
         optional: Vec::new(),
         rest: None,
     });
-    bar.lexical = true;
-    bar.ops = vec![
+    bar.set_lexical(true);
+    bar.set_ops(vec![
         Op::Constant(0), // 'f           [x new f]
         Op::StackRef(1), // new          [x new f new]
         Op::Fset,        //              [x new r]
@@ -3815,9 +3830,9 @@ fn mir_inline_call_revalidates_after_fset_and_allows_state_reads() {
         Op::StackRef(2), // x            [x new f x]
         Op::Call(1),     // (f x)        [x new r]
         Op::Return,
-    ];
-    bar.constants = vec![f_sym].into();
-    bar.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
+    ]);
+    bar.set_constants(vec![f_sym].into());
+    bar.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
     bar.seal_hand_assembled_ops();
     let _ = ev.debug_on_next_call_is_armed();
     let leaf = compile_bytecode_function_with(&bar, Some(&ev.obarray)).expect("compiles");
@@ -3826,7 +3841,7 @@ fn mir_inline_call_revalidates_after_fset_and_allows_state_reads() {
         super::leaf::LeafTier::Mir,
         "reentrant inlining has precise entry guards"
     );
-    let result = leaf.call(ctx, &[Value::make_int(5), dec]);
+    let result = unsafe { leaf.call(ctx, &[Value::make_int(5), dec]) };
     let NativeRun::DeoptAt(frame) = &result else {
         panic!("{result:?}")
     };
@@ -3843,17 +3858,17 @@ fn mir_inline_call_revalidates_after_fset_and_allows_state_reads() {
         optional: Vec::new(),
         rest: None,
     });
-    baz.lexical = true;
-    baz.ops = vec![
+    baz.set_lexical(true);
+    baz.set_ops(vec![
         Op::VarRef(1),   // v            [x v]
         Op::Pop,         //              [x]
         Op::Constant(0), // 'f           [x f]
         Op::StackRef(1), // x            [x f x]
         Op::Call(1),     // (f x)        [x r]
         Op::Return,
-    ];
-    baz.constants = vec![f_sym, Value::symbol("jit-gate-some-var")].into();
-    baz.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
+    ]);
+    baz.set_constants(vec![f_sym, Value::symbol("jit-gate-some-var")].into());
+    baz.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
     ev.eval_str("(setq jit-gate-some-var 1)").unwrap();
     let leaf = compile_bytecode_function_with(&baz, Some(&ev.obarray)).expect("compiles");
     assert_eq!(
@@ -3862,7 +3877,7 @@ fn mir_inline_call_revalidates_after_fset_and_allows_state_reads() {
         "state reads do not prevent guarded inlining"
     );
     assert_eq!(
-        leaf.call(ctx, &[Value::make_int(5)]),
+        unsafe { leaf.call(ctx, &[Value::make_int(5)]) },
         NativeRun::Ok(Value::make_int(6).bits())
     );
 }
@@ -3885,7 +3900,9 @@ fn mir_cons_only_body_does_not_hoist() {
         "no window, no stores"
     );
     assert_eq!(leaf.needs_vmctx, super::jit_inline_alloc_on());
-    let NativeRun::Ok(bits) = leaf.call(ctx, &[Value::make_int(1), Value::make_int(2)]) else {
+    let NativeRun::Ok(bits) =
+        (unsafe { leaf.call(ctx, &[Value::make_int(1), Value::make_int(2)]) })
+    else {
         panic!("a cons-only body runs natively");
     };
     let c = unsafe {
@@ -3910,7 +3927,11 @@ fn mir_adapter_lowers_a_variable_read() {
     let mir = mir::build_mir(&ops, &[sym], None, 0).expect("MIR builds");
     let leaf = lower_mir_pure(&mir).expect("VarRef lowers via the adapter");
     assert!(leaf.has_side_effects, "an Opaque body is precise");
-    assert_eq!(leaf.call(ctx, &[]), NativeRun::Signal, "unbound: signals");
+    assert_eq!(
+        unsafe { leaf.call(ctx, &[]) },
+        NativeRun::Signal,
+        "unbound: signals"
+    );
     match take_pending_flow()
         .expect("the signal is stashed")
         .into_kind()
@@ -3919,7 +3940,7 @@ fn mir_adapter_lowers_a_variable_read() {
         other => panic!("expected void-variable, got {other:?}"),
     }
     ev.eval_str("(setq jit-mir-adapter-var 41)").expect("bind");
-    match leaf.call(ctx, &[]) {
+    match unsafe { leaf.call(ctx, &[]) } {
         NativeRun::Ok(bits) => assert_eq!(bits, Value::make_int(41).bits()),
         other => panic!("bound read: {other:?}"),
     }
@@ -3949,7 +3970,7 @@ fn mir_adapter_deopt_after_a_varset_resumes_past_it() {
     ];
     let mir = mir::build_mir(&ops, &[Value::make_int(7), sym], None, 1).expect("MIR builds");
     let leaf = lower_mir_pure(&mir).expect("VarSet lowers via the adapter");
-    match leaf.call(ctx, &[Value::make_int(5)]) {
+    match unsafe { leaf.call(ctx, &[Value::make_int(5)]) } {
         NativeRun::DeoptAt(resume) => {
             assert_eq!(resume.pc, 3, "resume AT the 1+, after the assignment");
             assert_eq!(
@@ -3988,7 +4009,7 @@ fn mir_adapter_sizes_the_args_slot_for_a_wide_list() {
     let mir = mir::build_mir(&ops, &[], None, 1).expect("MIR builds");
     assert_eq!(super::lowering::plan_mir_leaf(&mir).max_call_args, 5);
     let leaf = lower_mir_pure(&mir).expect("List lowers via the adapter");
-    let NativeRun::Ok(bits) = leaf.call(ctx, &[Value::make_int(9)]) else {
+    let NativeRun::Ok(bits) = (unsafe { leaf.call(ctx, &[Value::make_int(9)]) }) else {
         panic!("(list a a a a a) must run natively");
     };
     let mut l = unsafe {
@@ -4042,7 +4063,8 @@ fn mir_adapter_keeps_conses_real_across_a_shim() {
     );
     let leaf = lower_mir_pure(&mir).expect("lowers via the adapter");
     for _ in 0..3 {
-        let NativeRun::Ok(bits) = leaf.call(ctx, &[Value::make_int(42), Value::NIL]) else {
+        let NativeRun::Ok(bits) = (unsafe { leaf.call(ctx, &[Value::make_int(42), Value::NIL]) })
+        else {
             panic!("must run natively");
         };
         let l = unsafe {
@@ -4081,9 +4103,9 @@ fn mir_adapter_inlined_predicate_reads_its_own_operand() {
         optional: Vec::new(),
         rest: None,
     });
-    f.lexical = true;
-    f.ops = vec![Op::StackRef(1), Op::Integerp, Op::Return];
-    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
+    f.set_lexical(true);
+    f.set_ops(vec![Op::StackRef(1), Op::Integerp, Op::Return]);
+    f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
     ev.obarray
         .set_symbol_function_id(f_id, Value::make_bytecode(f));
     let mut g = ByteCodeFunction::new(LambdaParams {
@@ -4092,17 +4114,17 @@ fn mir_adapter_inlined_predicate_reads_its_own_operand() {
         optional: Vec::new(),
         rest: None,
     });
-    g.lexical = true;
+    g.set_lexical(true);
     // (lambda (s) (f s 5))
-    g.ops = vec![
+    g.set_ops(vec![
         Op::Constant(0),
         Op::StackRef(1),
         Op::Constant(1),
         Op::Call(2),
         Op::Return,
-    ];
-    g.constants = vec![f_sym, Value::make_int(5)].into();
-    g.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
+    ]);
+    g.set_constants(vec![f_sym, Value::make_int(5)].into());
+    g.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
     let leaf = compile_bytecode_function_with(&g, Some(&ev.obarray)).expect("g compiles");
     assert!(leaf.inline_epoch().is_some(), "f was inlined -> MIR tier");
     for (arg, want) in [
@@ -4110,7 +4132,7 @@ fn mir_adapter_inlined_predicate_reads_its_own_operand() {
         (Value::make_int(3), Value::T),
         (Value::make_float(2.5), Value::NIL),
     ] {
-        match leaf.call(ctx, &[arg]) {
+        match unsafe { leaf.call(ctx, &[arg]) } {
             NativeRun::Ok(bits) => assert_eq!(bits, want.bits(), "(integerp {arg:?})"),
             other => panic!("(f {arg:?} 5): {other:?}"),
         }
@@ -4153,7 +4175,7 @@ fn list_and_slice_builtins_run_natively() {
         &[Value::make_int(1), Value::make_int(2), Value::make_int(3)],
     )
     .expect("list body compiles");
-    let NativeRun::Ok(bits) = leaf.call(ctx_ptr, &[]) else {
+    let NativeRun::Ok(bits) = (unsafe { leaf.call(ctx_ptr, &[]) }) else {
         panic!("native list failed");
     };
     assert_eq!(
@@ -4170,7 +4192,7 @@ fn list_and_slice_builtins_run_natively() {
         &[Value::string("foo"), Value::string("bar")],
     )
     .expect("concat body compiles");
-    let NativeRun::Ok(bits) = leaf.call(ctx_ptr, &[]) else {
+    let NativeRun::Ok(bits) = (unsafe { leaf.call(ctx_ptr, &[]) }) else {
         panic!("native concat failed");
     };
     assert_eq!(
@@ -4197,7 +4219,7 @@ fn list_and_slice_builtins_run_natively() {
         ],
     )
     .expect("substring body compiles");
-    let NativeRun::Ok(bits) = leaf.call(ctx_ptr, &[]) else {
+    let NativeRun::Ok(bits) = (unsafe { leaf.call(ctx_ptr, &[]) }) else {
         panic!("native substring failed");
     };
     assert_eq!(
@@ -4222,7 +4244,7 @@ fn list_and_slice_builtins_run_natively() {
         &[Value::make_int(1), Value::make_int(2), Value::make_int(3)],
     )
     .expect("nconc body compiles");
-    let NativeRun::Ok(bits) = leaf.call(ctx_ptr, &[]) else {
+    let NativeRun::Ok(bits) = (unsafe { leaf.call(ctx_ptr, &[]) }) else {
         panic!("native nconc failed");
     };
     assert_eq!(
@@ -4245,7 +4267,7 @@ fn list_and_slice_builtins_run_natively() {
         &[Value::make_int(5), Value::make_int(0), Value::make_int(1)],
     )
     .expect("substring body compiles");
-    assert_eq!(leaf.call(ctx_ptr, &[]), NativeRun::Signal);
+    assert_eq!(unsafe { leaf.call(ctx_ptr, &[]) }, NativeRun::Signal);
     let flow = take_pending_flow().expect("signal stashed");
     match flow.into_kind() {
         FlowKind::Signal(sig) => assert_eq!(sig.symbol_name(), "wrong-type-argument"),
@@ -4277,7 +4299,7 @@ fn named_builtin_ops_run_natively() {
     )
     .expect("aset body compiles");
     assert_eq!(
-        leaf.call(ctx_ptr, &[]),
+        unsafe { leaf.call(ctx_ptr, &[]) },
         NativeRun::Ok(Value::make_int(99).bits())
     );
     assert_eq!(print_value(&vec), "[0 99]");
@@ -4294,7 +4316,7 @@ fn named_builtin_ops_run_natively() {
         &[Value::make_int(5), Value::make_int(0), Value::make_int(1)],
     )
     .expect("aset body compiles");
-    assert_eq!(leaf.call(ctx_ptr, &[]), NativeRun::Signal);
+    assert_eq!(unsafe { leaf.call(ctx_ptr, &[]) }, NativeRun::Signal);
     let _ = take_pending_flow().expect("signal stashed");
 }
 
@@ -4511,10 +4533,10 @@ fn cross_block_call_function(sym_val: Value) -> ByteCodeFunction {
         optional: Vec::new(),
         rest: None,
     });
-    f.lexical = true;
-    f.ops = cross_block_call_ops().to_vec();
-    f.constants = vec![sym_val, Value::make_int(5), Value::make_int(7)].into();
-    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(8);
+    f.set_lexical(true);
+    f.set_ops(cross_block_call_ops().to_vec());
+    f.set_constants(vec![sym_val, Value::make_int(5), Value::make_int(7)].into());
+    f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(8));
     f
 }
 
@@ -4532,11 +4554,11 @@ fn a_cross_block_call_site_speculates_behind_a_callee_check() {
         let leaf = compile_bytecode_function_with(&f, Some(&ev.obarray)).expect("compiles");
         let before = super::shims::SPEC_CALL_COUNT.load(std::sync::atomic::Ordering::Relaxed);
         assert_eq!(
-            leaf.call(ctx_ptr, &[Value::T]),
+            unsafe { leaf.call(ctx_ptr, &[Value::T]) },
             NativeRun::Ok(Value::make_int(6).bits())
         );
         assert_eq!(
-            leaf.call(ctx_ptr, &[Value::NIL]),
+            unsafe { leaf.call(ctx_ptr, &[Value::NIL]) },
             NativeRun::Ok(Value::make_int(8).bits())
         );
         let spec_calls =
@@ -4574,8 +4596,8 @@ fn a_missed_callee_check_does_not_elide_the_speculated_path_stores() {
         optional: Vec::new(),
         rest: None,
     });
-    f.lexical = true;
-    f.ops = vec![
+    f.set_lexical(true);
+    f.set_ops(vec![
         Op::Constant(3),   // v             [a b v]
         Op::VarSet(3),     // stores [a b]  [a b]
         Op::StackRef(1),   // a             [a b a]
@@ -4591,19 +4613,21 @@ fn a_missed_callee_check_does_not_elide_the_speculated_path_stores() {
         Op::Call(1),     // residual [c b]
         Op::Pop,
         Op::Return, // b
-    ];
-    f.constants = vec![
-        sym_val,
-        Value::make_int(5),
-        Value::make_int(7),
-        Value::symbol("spec-cross-block-carry-v"),
-    ]
-    .into();
-    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
+    ]);
+    f.set_constants(
+        vec![
+            sym_val,
+            Value::make_int(5),
+            Value::make_int(7),
+            Value::symbol("spec-cross-block-carry-v"),
+        ]
+        .into(),
+    );
+    f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
     for baseline in [true, false] {
         let compile = || {
             if baseline {
-                lower_leaf_full(&f.ops, &f.constants, 2, None, Some(&ev.obarray), 0)
+                lower_leaf_full(f.ops(), f.constants(), 2, None, Some(&ev.obarray), 0)
             } else {
                 compile_bytecode_function_with(&f, Some(&ev.obarray))
             }
@@ -4633,7 +4657,7 @@ fn a_missed_callee_check_does_not_elide_the_speculated_path_stores() {
         let before = super::shims::SPEC_CALL_COUNT.load(std::sync::atomic::Ordering::Relaxed);
         let args = [Value::make_int(1), Value::make_int(2)];
         assert_eq!(
-            missing.call(ctx_ptr, &args),
+            unsafe { missing.call(ctx_ptr, &args) },
             NativeRun::Ok(Value::make_int(2).bits())
         );
         assert_eq!(
@@ -4641,7 +4665,7 @@ fn a_missed_callee_check_does_not_elide_the_speculated_path_stores() {
             before
         );
         assert_eq!(
-            leaf.call(ctx_ptr, &args),
+            unsafe { leaf.call(ctx_ptr, &args) },
             NativeRun::Ok(Value::make_int(2).bits())
         );
         assert_eq!(
@@ -4821,13 +4845,13 @@ fn a_switch_carries_known_fixnum_slots_to_its_arms() {
         optional: Vec::new(),
         rest: None,
     });
-    f.lexical = true;
-    f.ops = ops.to_vec();
-    f.constants = constants.to_vec().into();
-    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(8);
-    f.gnu_byte_offset_map = Some(map.clone());
+    f.set_lexical(true);
+    f.set_ops(ops.to_vec());
+    f.set_constants(constants.to_vec().into());
+    f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(8));
+    f.set_gnu_byte_offset_map(Some(map.clone()));
     for arg in [Value::make_int(5), Value::make_int(-3)] {
-        let native = leaf.call(ctx_ptr, &[arg]);
+        let native = unsafe { leaf.call(ctx_ptr, &[arg]) };
         let interp = {
             let mut vm = crate::emacs_core::bytecode::Vm::from_context(&mut ev);
             vm.execute(&f, vec![arg]).expect("interprets")
@@ -4836,7 +4860,7 @@ fn a_switch_carries_known_fixnum_slots_to_its_arms() {
     }
     assert!(
         matches!(
-            leaf.call(ctx_ptr, &[Value::symbol("x")]),
+            unsafe { leaf.call(ctx_ptr, &[Value::symbol("x")]) },
             NativeRun::Deopt | NativeRun::DeoptAt(_)
         ),
         "a non-fixnum argument deopts at the first guard"
@@ -4873,9 +4897,9 @@ fn switch_jump_table_dispatches_natively() {
         Some(&map),
     )
     .expect("switch body compiles");
-    let hit = leaf.call(ctx_ptr, &[Value::symbol("jit-sw-foo")]);
+    let hit = unsafe { leaf.call(ctx_ptr, &[Value::symbol("jit-sw-foo")]) };
     assert_eq!(hit, NativeRun::Ok(Value::make_int(20).bits()));
-    let miss = leaf.call(ctx_ptr, &[Value::symbol("jit-sw-bar")]);
+    let miss = unsafe { leaf.call(ctx_ptr, &[Value::symbol("jit-sw-bar")]) };
     assert_eq!(miss, NativeRun::Ok(Value::make_int(10).bits()));
 }
 
@@ -4929,7 +4953,7 @@ fn switch_equal_cons_table_dispatches_natively() {
         }
     });
     let leaf = lower_switch_on_arg(table);
-    let answer = |arg: Value| match leaf.call(ctx_ptr, &[arg]) {
+    let answer = |arg: Value| match unsafe { leaf.call(ctx_ptr, &[arg]) } {
         NativeRun::Ok(bits) => unsafe {
             /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
             Value::from_bits(bits)
@@ -4981,28 +5005,32 @@ fn switch_follows_mutation_after_compile() {
     };
     for _ in 0..3 {
         assert_eq!(
-            leaf.call(ctx_ptr, &[a]),
+            unsafe { leaf.call(ctx_ptr, &[a]) },
             NativeRun::Ok(Value::make_int(20).bits())
         );
         assert_eq!(
-            leaf.call(ctx_ptr, &[c]),
+            unsafe { leaf.call(ctx_ptr, &[c]) },
             NativeRun::Ok(Value::make_int(10).bits())
         );
     }
     put(c, Value::fixnum(12));
     assert_eq!(
-        leaf.call(ctx_ptr, &[c]),
+        unsafe { leaf.call(ctx_ptr, &[c]) },
         NativeRun::Ok(Value::make_int(30).bits()),
         "a new key targeting a compiled offset"
     );
     put(a, Value::fixnum(12));
     assert_eq!(
-        leaf.call(ctx_ptr, &[a]),
+        unsafe { leaf.call(ctx_ptr, &[a]) },
         NativeRun::Ok(Value::make_int(30).bits()),
         "a retargeted key"
     );
     let stale = |arg: Value| {
-        assert_eq!(leaf.call(ctx_ptr, &[arg]), NativeRun::Signal, "{arg:?}");
+        assert_eq!(
+            unsafe { leaf.call(ctx_ptr, &[arg]) },
+            NativeRun::Signal,
+            "{arg:?}"
+        );
         match take_pending_flow()
             .expect("the stale-table signal is stashed")
             .into_kind()
@@ -5018,7 +5046,7 @@ fn switch_follows_mutation_after_compile() {
     put(e, Value::symbol("jit-sw-mut-not-an-offset"));
     stale(e);
     assert_eq!(
-        leaf.call(ctx_ptr, &[b]),
+        unsafe { leaf.call(ctx_ptr, &[b]) },
         NativeRun::Ok(Value::make_int(30).bits()),
         "untouched keys still dispatch"
     );
@@ -5055,7 +5083,7 @@ fn handler_body_compiles_and_runs_catch_throw_natively() {
     )
     .expect("handler body compiles");
     let base = ev.condition_stack.len();
-    match leaf.call(ctx_ptr, &[]) {
+    match unsafe { leaf.call(ctx_ptr, &[]) } {
         NativeRun::Ok(bits) => {
             assert_eq!(
                 unsafe {
@@ -5094,7 +5122,7 @@ fn handler_frames_unwound_on_propagation() {
     )
     .expect("handler body compiles");
     let base = ev.condition_stack.len();
-    assert_eq!(leaf.call(ctx_ptr, &[]), NativeRun::Signal);
+    assert_eq!(unsafe { leaf.call(ctx_ptr, &[]) }, NativeRun::Signal);
     let flow = take_pending_flow().expect("no-catch flow stashed");
     match flow.into_kind() {
         FlowKind::Signal(sig) => assert_eq!(sig.symbol_name(), "no-catch"),
@@ -5117,7 +5145,7 @@ fn compiles_varref_and_varset() {
     // VarRef reads the live value.
     let read = lower_nullary_leaf(&[Op::VarRef(0), Op::Return], &[var]).unwrap();
     assert_eq!(
-        read.call(ctx_ptr, &[]),
+        unsafe { read.call(ctx_ptr, &[]) },
         NativeRun::Ok(Value::make_int(33).bits())
     );
 
@@ -5127,9 +5155,12 @@ fn compiles_varref_and_varset() {
         &[var, Value::make_int(44)],
     )
     .unwrap();
-    assert_eq!(write.call(ctx_ptr, &[]), NativeRun::Ok(Value::NIL.bits()));
     assert_eq!(
-        read.call(ctx_ptr, &[]),
+        unsafe { write.call(ctx_ptr, &[]) },
+        NativeRun::Ok(Value::NIL.bits())
+    );
+    assert_eq!(
+        unsafe { read.call(ctx_ptr, &[]) },
         NativeRun::Ok(Value::make_int(44).bits()),
         "VarSet must be visible to a subsequent VarRef"
     );
@@ -5137,7 +5168,7 @@ fn compiles_varref_and_varset() {
     // Reading an unbound variable signals (void-variable) -> Signal.
     let unbound = Value::symbol("jit-test-unbound-var");
     let bad = lower_nullary_leaf(&[Op::VarRef(0), Op::Return], &[unbound]).unwrap();
-    assert_eq!(bad.call(ctx_ptr, &[]), NativeRun::Signal);
+    assert_eq!(unsafe { bad.call(ctx_ptr, &[]) }, NativeRun::Signal);
     assert!(take_pending_flow().is_some());
 }
 
@@ -5155,7 +5186,7 @@ fn compiles_varbind_unbind_with_full_unwind_semantics() {
     let read = lower_nullary_leaf(&[Op::VarRef(0), Op::Return], &[var]).unwrap();
     let global_now = |ev: &mut crate::emacs_core::eval::Context| {
         let p = ev as *mut crate::emacs_core::eval::Context as *mut u8;
-        match read.call(p, &[]) {
+        match unsafe { read.call(p, &[]) } {
             NativeRun::Ok(bits) => unsafe {
                 /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
                 Value::from_bits(bits)
@@ -5176,7 +5207,7 @@ fn compiles_varbind_unbind_with_full_unwind_semantics() {
     let consts = [var, Value::make_int(5)];
     let balanced = lower_nullary_leaf(&ops, &consts).unwrap();
     assert_eq!(
-        balanced.call(ctx_ptr, &[]),
+        unsafe { balanced.call(ctx_ptr, &[]) },
         NativeRun::Ok(Value::make_int(5).bits())
     );
     assert_eq!(global_now(&mut ev), Value::make_int(99), "binding popped");
@@ -5186,10 +5217,10 @@ fn compiles_varbind_unbind_with_full_unwind_semantics() {
             optional: Vec::new(),
             rest: None,
         });
-        f.lexical = true;
-        f.ops = ops.to_vec();
-        f.constants = consts.to_vec().into();
-        f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
+        f.set_lexical(true);
+        f.set_ops(ops.to_vec());
+        f.set_constants(consts.to_vec().into());
+        f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
         let mut vm = Vm::from_context(&mut ev);
         vm.execute(&f, vec![]).expect("interp runs let")
     };
@@ -5203,7 +5234,10 @@ fn compiles_varbind_unbind_with_full_unwind_semantics() {
         &consts,
     )
     .unwrap();
-    assert_eq!(early.call(ctx_ptr, &[]), NativeRun::Ok(Value::T.bits()));
+    assert_eq!(
+        unsafe { early.call(ctx_ptr, &[]) },
+        NativeRun::Ok(Value::T.bits())
+    );
     assert_eq!(
         global_now(&mut ev),
         Value::make_int(99),
@@ -5226,7 +5260,7 @@ fn compiles_varbind_unbind_with_full_unwind_semantics() {
         ],
     )
     .unwrap();
-    assert_eq!(sig.call(ctx_ptr, &[]), NativeRun::Signal);
+    assert_eq!(unsafe { sig.call(ctx_ptr, &[]) }, NativeRun::Signal);
     assert!(take_pending_flow().is_some());
     assert_eq!(
         global_now(&mut ev),
@@ -5280,7 +5314,7 @@ fn a_compiled_let_reads_the_symbol_shape_again_when_it_pops() {
     .expect("compiles");
     let base = ev.specpdl.len();
     assert_eq!(
-        leaf.call(ctx, &[]),
+        unsafe { leaf.call(ctx, &[]) },
         NativeRun::Ok(Value::make_int(2).bits())
     );
     assert_eq!(ev.specpdl.len(), base, "the binding popped");
@@ -5294,7 +5328,7 @@ fn a_compiled_let_reads_the_symbol_shape_again_when_it_pops() {
     // The same body again: the bind is now watched too (the swap refuses,
     // the general path binds and notifies), and the pop still notifies.
     assert_eq!(
-        leaf.call(ctx, &[]),
+        unsafe { leaf.call(ctx, &[]) },
         NativeRun::Ok(Value::make_int(2).bits())
     );
     assert_eq!(
@@ -5339,7 +5373,10 @@ fn compiled_unbind_and_frame_exit_propagate_restore_watcher_signals() {
         &[Value::from_sym_id(intern(variable)), Value::make_int(1)],
     )
     .expect("explicit unbind body compiles");
-    assert_eq!(explicit.call(explicit_ptr, &[]), NativeRun::Signal);
+    assert_eq!(
+        unsafe { explicit.call(explicit_ptr, &[]) },
+        NativeRun::Signal
+    );
     assert!(matches!(
         take_pending_flow()
             .as_ref()
@@ -5347,6 +5384,7 @@ fn compiled_unbind_and_frame_exit_propagate_restore_watcher_signals() {
         Some(FlowRef::Signal(_))
     ));
     assert_eq!(explicit_ctx.specpdl.len(), explicit_base);
+    drop(explicit_ctx);
 
     let variable = "jit-test-frame-unbind-error";
     let mut frame_ctx = install_restore_watcher(variable);
@@ -5357,7 +5395,7 @@ fn compiled_unbind_and_frame_exit_propagate_restore_watcher_signals() {
         &[Value::from_sym_id(intern(variable)), Value::make_int(1)],
     )
     .expect("dangling binding body compiles");
-    assert_eq!(dangling.call(frame_ptr, &[]), NativeRun::Signal);
+    assert_eq!(unsafe { dangling.call(frame_ptr, &[]) }, NativeRun::Signal);
     assert!(matches!(
         take_pending_flow()
             .as_ref()
@@ -5477,7 +5515,7 @@ fn guard_after_varset_compiles_and_runs() {
     )
     .expect("guard after an assignment compiles under precise deopt");
     assert_eq!(
-        leaf.call(ctx_ptr, &[]),
+        unsafe { leaf.call(ctx_ptr, &[]) },
         NativeRun::Ok(Value::make_int(2).bits())
     );
 }
@@ -5613,7 +5651,7 @@ fn compiles_cons() {
         &[Value::make_int(1), Value::make_int(2)],
     )
     .unwrap();
-    let NativeRun::Ok(bits) = leaf.call(ctx, &[]) else {
+    let NativeRun::Ok(bits) = (unsafe { leaf.call(ctx, &[]) }) else {
         panic!("cons runs");
     };
     let cell = unsafe {
@@ -5644,7 +5682,7 @@ fn compiles_nested_cons_list() {
         &[Value::make_int(7), Value::make_int(8)],
     )
     .unwrap();
-    let NativeRun::Ok(bits) = leaf.call(ctx, &[]) else {
+    let NativeRun::Ok(bits) = (unsafe { leaf.call(ctx, &[]) }) else {
         panic!("nested cons runs");
     };
     let result = unsafe {
@@ -5673,9 +5711,9 @@ fn harness_with_inc_callee(name: &str) -> (crate::emacs_core::eval::Context, Val
         optional: Vec::new(),
         rest: None,
     });
-    callee.lexical = true;
-    callee.ops = vec![Op::StackRef(0), Op::Add1, Op::Return];
-    callee.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
+    callee.set_lexical(true);
+    callee.set_ops(vec![Op::StackRef(0), Op::Add1, Op::Return]);
+    callee.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
     ev.obarray
         .set_symbol_function_id(sym_id, Value::make_bytecode(callee));
     (ev, sym_val)
@@ -5694,7 +5732,7 @@ fn compiles_call_to_bytecode_callee() {
     .unwrap();
     let ctx_ptr = &mut ev as *mut crate::emacs_core::eval::Context as *mut u8;
     assert_eq!(
-        leaf.call(ctx_ptr, &[]),
+        unsafe { leaf.call(ctx_ptr, &[]) },
         NativeRun::Ok(Value::make_int(42).bits())
     );
 }
@@ -5720,7 +5758,7 @@ fn call_with_live_values_below_roots_and_returns() {
     .unwrap();
     let ctx_ptr = &mut ev as *mut crate::emacs_core::eval::Context as *mut u8;
     assert_eq!(
-        leaf.call(ctx_ptr, &[]),
+        unsafe { leaf.call(ctx_ptr, &[]) },
         NativeRun::Ok(Value::make_int(42).bits())
     );
 }
@@ -5734,7 +5772,7 @@ fn call_signal_propagates() {
     let sym_val = Value::symbol("jit-test-no-such-function");
     let leaf = lower_nullary_leaf(&[Op::Constant(0), Op::Call(0), Op::Return], &[sym_val]).unwrap();
     let ctx_ptr = &mut ev as *mut crate::emacs_core::eval::Context as *mut u8;
-    assert_eq!(leaf.call(ctx_ptr, &[]), NativeRun::Signal);
+    assert_eq!(unsafe { leaf.call(ctx_ptr, &[]) }, NativeRun::Signal);
     assert!(
         take_pending_flow().is_some(),
         "STATUS_SIGNAL must stash the Flow"
@@ -5763,8 +5801,8 @@ fn guard_after_call_deopts_without_replaying_the_call() {
         optional: Vec::new(),
         rest: None,
     });
-    callee.lexical = true;
-    callee.ops = vec![
+    callee.set_lexical(true);
+    callee.set_ops(vec![
         Op::Constant(0), // CELL
         Op::Constant(0), // CELL
         Op::Car,
@@ -5773,9 +5811,9 @@ fn guard_after_call_deopts_without_replaying_the_call() {
         Op::Pop,
         Op::StackRef(0),
         Op::Return,
-    ];
-    callee.constants = vec![cell].into();
-    callee.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
+    ]);
+    callee.set_constants(vec![cell].into());
+    callee.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
     ev.obarray
         .set_symbol_function_id(sym_id, Value::make_bytecode(callee));
 
@@ -5794,13 +5832,13 @@ fn guard_after_call_deopts_without_replaying_the_call() {
         optional: Vec::new(),
         rest: None,
     });
-    f.lexical = true;
-    f.ops = ops.clone();
-    f.constants = constants.clone().into();
-    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
+    f.set_lexical(true);
+    f.set_ops(ops.clone());
+    f.set_constants(constants.clone().into());
+    f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
     f.seal_hand_assembled_ops();
     let leaf = lower_nullary_leaf(&ops, &constants).expect("guard after call compiles now");
-    let native = match leaf.call(ctx_ptr, &[]) {
+    let native = match unsafe { leaf.call(ctx_ptr, &[]) } {
         NativeRun::DeoptAt(resume) => {
             let DeoptResume {
                 pc,
@@ -5868,7 +5906,7 @@ fn guard_before_call_compiles_and_deopts_cleanly() {
     let leaf = lower_nullary_leaf(&ops, &[sym_val, Value::make_int(40)]).unwrap();
     let ctx_ptr = &mut ev as *mut crate::emacs_core::eval::Context as *mut u8;
     assert_eq!(
-        leaf.call(ctx_ptr, &[]),
+        unsafe { leaf.call(ctx_ptr, &[]) },
         NativeRun::Ok(Value::make_int(42).bits())
     );
     // Boundary input: the pre-call guard now deopts PRECISELY at the 1+
@@ -5879,7 +5917,7 @@ fn guard_before_call_compiles_and_deopts_cleanly() {
         &[sym_val, Value::make_int(Value::MOST_POSITIVE_FIXNUM)],
     )
     .unwrap();
-    match leaf2.call(ctx_ptr, &[]) {
+    match unsafe { leaf2.call(ctx_ptr, &[]) } {
         NativeRun::DeoptAt(resume) => {
             let DeoptResume {
                 pc,
@@ -5958,7 +5996,7 @@ fn compiles_eq_and_symbolp() {
     let sym_a = Value::from_sym_id(intern(("jit-eq-sym-a").as_ref()));
     let s = Value::string("eq-str");
 
-    let eq2 = |a: Value, b: Value, ctx: *mut u8| {
+    let eq2 = |a: Value, b: Value, ctx: *mut u8| unsafe {
         lower_nullary_leaf(
             &[Op::Constant(0), Op::Constant(1), Op::Eq, Op::Return],
             &[a, b],
@@ -5976,7 +6014,7 @@ fn compiles_eq_and_symbolp() {
     assert_eq!(eq2(Value::make_int(7), Value::make_int(8), ctx_ptr), nil);
     assert_eq!(eq2(sym_a, Value::make_int(7), ctx_ptr), nil);
 
-    let symp = |v: Value, ctx: *mut u8| {
+    let symp = |v: Value, ctx: *mut u8| unsafe {
         lower_nullary_leaf(&[Op::Constant(0), Op::Symbolp, Op::Return], &[v])
             .unwrap()
             .call(ctx, &[])
@@ -6002,7 +6040,7 @@ fn compiles_apply_with_spread() {
     .unwrap();
     let ctx_ptr = &mut ev as *mut crate::emacs_core::eval::Context as *mut u8;
     assert_eq!(
-        leaf.call(ctx_ptr, &[]),
+        unsafe { leaf.call(ctx_ptr, &[]) },
         NativeRun::Ok(Value::make_int(42).bits())
     );
 }
@@ -6026,9 +6064,9 @@ fn compiles_apply_with_leading_args() {
         optional: Vec::new(),
         rest: None,
     });
-    callee.lexical = true;
-    callee.ops = vec![Op::StackRef(1), Op::StackRef(1), Op::Add, Op::Return];
-    callee.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
+    callee.set_lexical(true);
+    callee.set_ops(vec![Op::StackRef(1), Op::StackRef(1), Op::Add, Op::Return]);
+    callee.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
     ev.obarray
         .set_symbol_function_id(sym_id, Value::make_bytecode(callee));
 
@@ -6046,7 +6084,7 @@ fn compiles_apply_with_leading_args() {
     .unwrap();
     let ctx_ptr = &mut ev as *mut crate::emacs_core::eval::Context as *mut u8;
     assert_eq!(
-        leaf.call(ctx_ptr, &[]),
+        unsafe { leaf.call(ctx_ptr, &[]) },
         NativeRun::Ok(Value::make_int(42).bits())
     );
 }
@@ -6060,13 +6098,17 @@ fn bails_on_missing_return() {
 #[test]
 fn bails_on_argument_taking_function() {
     let mut f = nullary();
-    let mut params = f.params.named().expect("named fixture parameters").clone();
+    let mut params = f
+        .params()
+        .named()
+        .expect("named fixture parameters")
+        .clone();
     // SAFETY: test placeholder id, never resolved (peer seal N8).
     params
         .required
         .push(unsafe { neovm_value::intern::SymId::from_raw(1) });
-    f.params = params.into();
-    f.ops = vec![Op::Nil, Op::Return];
+    f.set_params(params.into());
+    f.set_ops(vec![Op::Nil, Op::Return]);
     let err = compile_bytecode_function(&f).unwrap_err();
     assert!(matches!(err, CompileError::TakesArguments));
 }
@@ -6081,8 +6123,8 @@ fn bails_on_stack_underflow() {
 fn compile_bytecode_function_handles_nullary_leaf() {
     let mut f = nullary();
     let c = Value::make_int(123);
-    f.constants = vec![c].into();
-    f.ops = vec![Op::Constant(0), Op::Return];
+    f.set_constants(vec![c].into());
+    f.set_ops(vec![Op::Constant(0), Op::Return]);
     let leaf = compile_bytecode_function(&f).unwrap();
     assert_eq!(leaf.call_for_test(&[]), Some(c.bits()));
 }
@@ -6135,9 +6177,9 @@ fn compile_bytecode_function_accepts_required_args_when_lexical() {
         optional: Vec::new(),
         rest: None,
     });
-    f.lexical = true;
-    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(4);
-    f.ops = vec![Op::StackRef(1), Op::StackRef(1), Op::Add, Op::Return];
+    f.set_lexical(true);
+    f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(4));
+    f.set_ops(vec![Op::StackRef(1), Op::StackRef(1), Op::Add, Op::Return]);
     let leaf = compile_bytecode_function(&f).unwrap();
     assert_eq!(leaf.arity(), 2);
     assert_eq!(
@@ -6157,8 +6199,8 @@ fn compile_bytecode_function_bails_on_dynamic_params() {
         optional: Vec::new(),
         rest: None,
     });
-    dynp.lexical = false;
-    dynp.ops = vec![Op::StackRef(0), Op::Return];
+    dynp.set_lexical(false);
+    dynp.set_ops(vec![Op::StackRef(0), Op::Return]);
     assert!(!params_on_stack(&dynp));
     assert!(matches!(
         compile_bytecode_function(&dynp),
@@ -6177,23 +6219,25 @@ fn compiles_optional_params_with_nil_padding() {
         optional: vec![unsafe { neovm_value::intern::SymId::from_raw(2) }],
         rest: None,
     });
-    f.lexical = true;
-    f.ops = vec![Op::StackRef(0), Op::Return]; // top of frame = b
-    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
+    f.set_lexical(true);
+    f.set_ops(vec![Op::StackRef(0), Op::Return]); // top of frame = b
+    f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
     let leaf = compile_bytecode_function(&f).unwrap();
     assert!(leaf.accepts(1) && leaf.accepts(2));
     assert!(!leaf.accepts(0) && !leaf.accepts(3));
     // One arg: b is nil.
     assert_eq!(
-        leaf.call(core::ptr::null_mut(), &[Value::make_int(5)]),
+        unsafe { leaf.call(core::ptr::null_mut(), &[Value::make_int(5)]) },
         NativeRun::Ok(Value::NIL.bits())
     );
     // Two args: b is supplied.
     assert_eq!(
-        leaf.call(
-            core::ptr::null_mut(),
-            &[Value::make_int(5), Value::make_int(6)]
-        ),
+        unsafe {
+            leaf.call(
+                core::ptr::null_mut(),
+                &[Value::make_int(5), Value::make_int(6)],
+            )
+        },
         NativeRun::Ok(Value::make_int(6).bits())
     );
 }
@@ -6208,21 +6252,23 @@ fn compiles_rest_param_as_list() {
         // SAFETY: test placeholder id, never resolved (peer seal N8).
         rest: Some(unsafe { neovm_value::intern::SymId::from_raw(1) }),
     });
-    f.lexical = true;
-    f.ops = vec![Op::StackRef(0), Op::Return];
-    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
+    f.set_lexical(true);
+    f.set_ops(vec![Op::StackRef(0), Op::Return]);
+    f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
     let leaf = compile_bytecode_function(&f).unwrap();
     assert!(leaf.accepts(0) && leaf.accepts(5));
     // No args: xs = nil.
     assert_eq!(
-        leaf.call(core::ptr::null_mut(), &[]),
+        unsafe { leaf.call(core::ptr::null_mut(), &[]) },
         NativeRun::Ok(Value::NIL.bits())
     );
     // Two args: xs = (10 20).
-    let NativeRun::Ok(bits) = leaf.call(
-        core::ptr::null_mut(),
-        &[Value::make_int(10), Value::make_int(20)],
-    ) else {
+    let NativeRun::Ok(bits) = (unsafe {
+        leaf.call(
+            core::ptr::null_mut(),
+            &[Value::make_int(10), Value::make_int(20)],
+        )
+    }) else {
         panic!("rest call must succeed");
     };
     let xs = unsafe {
@@ -6241,9 +6287,9 @@ fn interp_nullary(ops: &[Op], constants: &[Value]) -> Value {
     use crate::emacs_core::eval::Context;
     let mut eval = Context::new_minimal_vm_harness(crate::test_utils::unit_runtime());
     let mut f = nullary();
-    f.ops = ops.to_vec();
-    f.constants = constants.to_vec().into();
-    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
+    f.set_ops(ops.to_vec());
+    f.set_constants(constants.to_vec().into());
+    f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
     let mut vm = Vm::from_context(&mut eval);
     vm.execute(&f, vec![]).expect("interpreter runs the body")
 }
@@ -6371,9 +6417,9 @@ fn jit_matches_interpreter_with_args() {
         optional: Vec::new(),
         rest: None,
     });
-    f.lexical = true;
-    f.ops = ops.to_vec();
-    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
+    f.set_lexical(true);
+    f.set_ops(ops.to_vec());
+    f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
     let want = {
         let mut vm = Vm::from_context(&mut eval);
         vm.execute(&f, args.to_vec())
@@ -6429,10 +6475,10 @@ fn jit_bench_countdown_loop() {
         optional: Vec::new(),
         rest: None,
     });
-    f.lexical = true;
-    f.ops = ops.to_vec();
-    f.constants = constants.to_vec().into();
-    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
+    f.set_lexical(true);
+    f.set_ops(ops.to_vec());
+    f.set_constants(constants.to_vec().into());
+    f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
     let t0 = Instant::now();
     for _ in 0..calls {
         let mut vm = Vm::from_context(&mut ev);
@@ -6446,8 +6492,10 @@ fn jit_bench_countdown_loop() {
     let ctx_ptr = &mut ev as *mut Context as *mut u8;
     let t1 = Instant::now();
     for _ in 0..calls {
+        // SAFETY: `ctx_ptr` points to the live owner-thread `Context` `ev` and the
+        // 1-element arg slice matches `leaf`'s compiled arity.
         assert_eq!(
-            leaf.call(ctx_ptr, &[Value::make_int(iters)]),
+            unsafe { leaf.call(ctx_ptr, &[Value::make_int(iters)]) },
             NativeRun::Ok(Value::make_int(0).bits())
         );
     }
@@ -6479,16 +6527,16 @@ fn jit_bench_mir_loops_against_baseline() {
             optional: Vec::new(),
             rest: None,
         });
-        f.lexical = true;
-        f.constants = vec![Value::make_int(0), Value::make_int(3), Value::make_int(7)].into();
-        f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(8);
-        f.ops.push(Op::Constant(0)); // [n acc]
-        f.ops
+        f.set_lexical(true);
+        f.set_constants(vec![Value::make_int(0), Value::make_int(3), Value::make_int(7)].into());
+        f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(8));
+        f.ops_mut().push(Op::Constant(0)); // [n acc]
+        f.ops_mut()
             .extend([Op::StackRef(1), Op::Constant(0), Op::Gtr, Op::GotoIfNil(0)]);
         if name != "countdown" {
-            f.ops.extend([Op::StackRef(0), Op::StackRef(2)]); // [n acc acc n]
+            f.ops_mut().extend([Op::StackRef(0), Op::StackRef(2)]); // [n acc acc n]
             if name == "polynomial" {
-                f.ops.extend([
+                f.ops_mut().extend([
                     Op::Dup,
                     Op::Mul,
                     Op::StackRef(3),
@@ -6499,19 +6547,19 @@ fn jit_bench_mir_loops_against_baseline() {
                     Op::Add,
                 ]);
             }
-            f.ops.extend([Op::Add, Op::StackSet(1)]);
+            f.ops_mut().extend([Op::Add, Op::StackSet(1)]);
         }
-        f.ops
+        f.ops_mut()
             .extend([Op::StackRef(1), Op::Sub1, Op::StackSet(2), Op::Goto(1)]);
-        f.ops[4] = Op::GotoIfNil(f.ops.len() as u32);
-        f.ops.push(Op::Return);
+        f.ops_mut()[4] = Op::GotoIfNil(f.ops().len() as u32);
+        f.ops_mut().push(Op::Return);
         let expected = match name {
             "countdown" => 0,
             "sum" => n * (n + 1) / 2,
             "polynomial" => n * (n + 1) * (2 * n + 1) / 6 + 3 * n * (n + 1) / 2 + 7 * n,
             _ => unreachable!(),
         };
-        let baseline = lower_leaf(&f.ops, &f.constants, 1).expect("baseline compiles");
+        let baseline = lower_leaf(f.ops(), f.constants(), 1).expect("baseline compiles");
         let optimized =
             compile_bytecode_function_with(&f, Some(&ev.obarray)).expect("MIR compiles");
         assert_eq!(optimized.tier, super::leaf::LeafTier::Mir);
@@ -6522,8 +6570,10 @@ fn jit_bench_mir_loops_against_baseline() {
                 let leaf = [&baseline, &optimized][which];
                 let start = Instant::now();
                 for _ in 0..5 {
+                    // SAFETY: `ctx` points to the live owner-thread `Context` `ev` and
+                    // `args` has length 1 matching `leaf`'s compiled arity.
                     assert_eq!(
-                        leaf.call(ctx, &args),
+                        unsafe { leaf.call(ctx, &args) },
                         NativeRun::Ok(Value::make_int(expected).bits())
                     );
                 }
@@ -6662,10 +6712,10 @@ fn fuzz_straightline_bodies_match_interpreter() {
             optional: Vec::new(),
             rest: None,
         });
-        f.lexical = true;
-        f.ops = ops.clone();
-        f.constants = constants.clone().into();
-        f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(64);
+        f.set_lexical(true);
+        f.set_ops(ops.clone());
+        f.set_constants(constants.clone().into());
+        f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(64));
         // `execute` seals a hand-assembled chunk on its own; the precise-deopt
         // resume below (`run_resumed_frame`) does not, and rejects the chunk
         // as invalid bytecode. That rejection went unnoticed while every
@@ -6681,7 +6731,7 @@ fn fuzz_straightline_bodies_match_interpreter() {
         // JIT.
         let leaf = lower_leaf(&ops, &constants, 0)
             .unwrap_or_else(|e| panic!("seed {seed}: body must compile, got {e}: {ops:?}"));
-        match leaf.call(ctx_ptr, &[]) {
+        match unsafe { leaf.call(ctx_ptr, &[]) } {
             NativeRun::Ok(bits) => {
                 let want = interp.as_ref().unwrap_or_else(|e| {
                     panic!("seed {seed}: JIT Ok but interpreter erred ({e:?}): {ops:?}")
@@ -6751,7 +6801,7 @@ fn fuzz_straightline_bodies_match_interpreter() {
         if let Ok(mir) = mir::build_mir(&ops, &constants, None, 0)
             && let Ok(mleaf) = lower_mir_pure(&mir)
         {
-            match mleaf.call(ctx_ptr, &[]) {
+            match unsafe { mleaf.call(ctx_ptr, &[]) } {
                 NativeRun::Ok(bits) => {
                     if let Ok(want) = &interp {
                         assert!(
@@ -6931,10 +6981,10 @@ fn fuzz_varset_bodies_match_interpreter_state() {
             optional: Vec::new(),
             rest: None,
         });
-        f.lexical = true;
-        f.ops = ops.clone();
-        f.constants = constants.clone().into();
-        f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(64);
+        f.set_lexical(true);
+        f.set_ops(ops.clone());
+        f.set_constants(constants.clone().into());
+        f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(64));
         // Sealed for the precise-deopt resume, as in the fuzzer above.
         f.seal_hand_assembled_ops_for_test();
 
@@ -7004,7 +7054,7 @@ fn fuzz_varset_bodies_match_interpreter_state() {
     ) {
         reset(ev, var_ids, init);
         let init_state = snap(ev, var_ids);
-        match leaf.call(ctx_ptr, &[]) {
+        match unsafe { leaf.call(ctx_ptr, &[]) } {
             NativeRun::Ok(bits) => {
                 let want = interp.as_ref().unwrap_or_else(|e| {
                     panic!("seed {seed} [{tier}]: JIT Ok but interpreter erred ({e:?}): {ops:?}")
@@ -7375,7 +7425,7 @@ fn contained_shim_panic_surfaces_as_error_flow_and_vm_survives() {
     let mut ev = crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let ctx_ptr = &mut ev as *mut crate::emacs_core::eval::Context as *mut u8;
     let leaf = panicking_call_leaf("shim-boom");
-    assert_eq!(leaf.call(ctx_ptr, &[]), NativeRun::Signal);
+    assert_eq!(unsafe { leaf.call(ctx_ptr, &[]) }, NativeRun::Signal);
     let flow = take_pending_flow().expect("contained panic stashes a flow");
     let sig = match flow.into_kind() {
         FlowKind::Signal(sig) => sig,
@@ -7390,13 +7440,13 @@ fn contained_shim_panic_surfaces_as_error_flow_and_vm_survives() {
         "unexpected message: {msg}"
     );
     // No one-shot state: containment works again.
-    assert_eq!(leaf.call(ctx_ptr, &[]), NativeRun::Signal);
+    assert_eq!(unsafe { leaf.call(ctx_ptr, &[]) }, NativeRun::Signal);
     let _ = take_pending_flow().expect("second containment works");
     // The evaluator survives: a normal compiled call and a full GC run.
     let ok = lower_nullary_leaf(&[Op::Constant(0), Op::Return], &[Value::make_int(7)])
         .expect("trivial body compiles");
     assert_eq!(
-        ok.call(ctx_ptr, &[]),
+        unsafe { ok.call(ctx_ptr, &[]) },
         NativeRun::Ok(Value::make_int(7).bits())
     );
     ev.funcall_general_untraced(Value::symbol("garbage-collect"), vec![])
@@ -7422,8 +7472,8 @@ fn contained_shim_panic_restores_boundary_state() {
         optional: Vec::new(),
         rest: None,
     });
-    mid.lexical = true;
-    mid.ops = vec![
+    mid.set_lexical(true);
+    mid.set_ops(vec![
         Op::Constant(1), // 5
         Op::VarBind(0),  // bind jit-t5-dynvar := 5 (leaked by the panic)
         Op::Constant(2), // 'neovm--internal-panic
@@ -7431,15 +7481,17 @@ fn contained_shim_panic_restores_boundary_state() {
         Op::Call(1),
         Op::Unbind(1),
         Op::Return,
-    ];
-    mid.constants = vec![
-        var,
-        Value::make_int(5),
-        Value::symbol("neovm--internal-panic"),
-        Value::string("mid-boom"),
-    ]
-    .into();
-    mid.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
+    ]);
+    mid.set_constants(
+        vec![
+            var,
+            Value::make_int(5),
+            Value::symbol("neovm--internal-panic"),
+            Value::string("mid-boom"),
+        ]
+        .into(),
+    );
+    mid.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
     ev.obarray
         .set_symbol_function_id(mid_id, Value::make_bytecode(mid));
     // The leaf binds too, so it carries has_binds: its exit parity unwind
@@ -7463,7 +7515,7 @@ fn contained_shim_panic_restores_boundary_state() {
     let cond0 = ev.condition_stack.len();
     let spec0 = ev.specpdl.len();
     let roots0 = crate::emacs_core::eval::save_scratch_gc_roots();
-    assert_eq!(leaf.call(ctx_ptr, &[]), NativeRun::Signal);
+    assert_eq!(unsafe { leaf.call(ctx_ptr, &[]) }, NativeRun::Signal);
     let _ = take_pending_flow().expect("panic flow stashed");
     assert_eq!(ev.depth, depth0, "lisp depth restored");
     assert_eq!(ev.bc_frames.len(), frames0, "bc_frames truncated");
@@ -7503,10 +7555,10 @@ fn a_panic_contained_in_a_direct_callee_is_healed_by_the_caller() {
             optional: Vec::new(),
             rest: None,
         });
-        f.lexical = true;
-        f.ops = ops;
-        f.constants = constants.into();
-        f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
+        f.set_lexical(true);
+        f.set_ops(ops);
+        f.set_constants(constants.into());
+        f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
         f
     };
     // (lambda () (neovm--internal-panic "raw-boom")): no binding, no
@@ -7561,7 +7613,11 @@ fn a_panic_contained_in_a_direct_callee_is_healed_by_the_caller() {
         .enumerate()
     {
         let before = shim_fast();
-        assert_eq!(leaf.call(ctx_ptr, &[]), NativeRun::Signal, "{label}");
+        assert_eq!(
+            unsafe { leaf.call(ctx_ptr, &[]) },
+            NativeRun::Signal,
+            "{label}"
+        );
         if i == 1 {
             assert!(shim_fast() > before, "the second call takes the fast path");
         }
@@ -7619,10 +7675,10 @@ fn a_panic_contained_on_the_spec_fast_path_is_healed_by_the_caller() {
             optional: Vec::new(),
             rest: None,
         });
-        f.lexical = true;
-        f.ops = ops;
-        f.constants = constants.into();
-        f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
+        f.set_lexical(true);
+        f.set_ops(ops);
+        f.set_constants(constants.into());
+        f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
         f
     };
     // (lambda () (neovm--internal-panic "fast-boom")): the cleanup, run by
@@ -7695,7 +7751,11 @@ fn a_panic_contained_on_the_spec_fast_path_is_healed_by_the_caller() {
     // second takes the fast path and must leave the same state behind.
     for (i, label) in ["arming call", "fast-path call"].iter().enumerate() {
         let before = shim_fast();
-        assert_eq!(leaf.call(ctx_ptr, &[]), NativeRun::Signal, "{label}");
+        assert_eq!(
+            unsafe { leaf.call(ctx_ptr, &[]) },
+            NativeRun::Signal,
+            "{label}"
+        );
         if i == 1 {
             assert!(shim_fast() > before, "the second call takes the fast path");
         }
@@ -7757,7 +7817,7 @@ fn contained_shim_panic_is_caught_by_leaf_local_condition_case() {
         ],
     )
     .expect("handler body compiles");
-    let NativeRun::Ok(bits) = leaf.call(ctx_ptr, &[]) else {
+    let NativeRun::Ok(bits) = (unsafe { leaf.call(ctx_ptr, &[]) }) else {
         panic!("expected the leaf-local handler to catch the contained panic");
     };
     let err = unsafe {
@@ -7801,8 +7861,8 @@ fn contained_shim_panic_with_leaked_callee_handler_still_matches_leaf_handler() 
         optional: Vec::new(),
         rest: None,
     });
-    mid.lexical = true;
-    mid.ops = vec![
+    mid.set_lexical(true);
+    mid.set_ops(vec![
         Op::PushConditionCase(6),
         Op::Constant(0), // 'neovm--internal-panic
         Op::Constant(1), // "resid-boom"
@@ -7810,13 +7870,15 @@ fn contained_shim_panic_with_leaked_callee_handler_still_matches_leaf_handler() 
         Op::PopHandler,
         Op::Return,
         Op::Return, // 6: mid's handler (unreachable — panics skip it)
-    ];
-    mid.constants = vec![
-        Value::symbol("neovm--internal-panic"),
-        Value::string("resid-boom"),
-    ]
-    .into();
-    mid.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
+    ]);
+    mid.set_constants(
+        vec![
+            Value::symbol("neovm--internal-panic"),
+            Value::string("resid-boom"),
+        ]
+        .into(),
+    );
+    mid.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
     ev.obarray
         .set_symbol_function_id(mid_id, Value::make_bytecode(mid));
     let leaf = lower_nullary_leaf(
@@ -7832,7 +7894,7 @@ fn contained_shim_panic_with_leaked_callee_handler_still_matches_leaf_handler() 
     )
     .expect("handler body compiles");
     // Warm one round (interning, lazies) before taking the bases.
-    let NativeRun::Ok(_) = leaf.call(ctx_ptr, &[]) else {
+    let NativeRun::Ok(_) = (unsafe { leaf.call(ctx_ptr, &[]) }) else {
         panic!("leaf handler must catch the contained panic");
     };
     let cond0 = ev.condition_stack.len();
@@ -7840,7 +7902,7 @@ fn contained_shim_panic_with_leaked_callee_handler_still_matches_leaf_handler() 
     let frames0 = ev.bc_frames.len();
     let roots0 = crate::emacs_core::eval::save_scratch_gc_roots();
     for _ in 0..2 {
-        let NativeRun::Ok(bits) = leaf.call(ctx_ptr, &[]) else {
+        let NativeRun::Ok(bits) = (unsafe { leaf.call(ctx_ptr, &[]) }) else {
             panic!("leaf handler must catch the contained panic");
         };
         let err = unsafe {
@@ -7911,7 +7973,7 @@ fn contained_shim_panics_leave_no_residue_over_repeats() {
     )
     .expect("binding call body compiles");
     // Warm one containment (interning, lazies) before taking the bases.
-    assert_eq!(leaf.call(ctx_ptr, &[]), NativeRun::Signal);
+    assert_eq!(unsafe { leaf.call(ctx_ptr, &[]) }, NativeRun::Signal);
     let _ = take_pending_flow();
     let roots0 = crate::emacs_core::eval::save_scratch_gc_roots();
     let base = (
@@ -7922,7 +7984,7 @@ fn contained_shim_panics_leave_no_residue_over_repeats() {
         ev.specpdl.len(),
     );
     for _ in 0..16 {
-        assert_eq!(leaf.call(ctx_ptr, &[]), NativeRun::Signal);
+        assert_eq!(unsafe { leaf.call(ctx_ptr, &[]) }, NativeRun::Signal);
         let _ = take_pending_flow().expect("flow each iteration");
     }
     assert_eq!(
@@ -7949,7 +8011,7 @@ fn gc_suspect_shim_panic_is_re_raised_not_contained() {
     let ctx_ptr = &mut ev as *mut crate::emacs_core::eval::Context as *mut u8;
     ev.gc_driver_active = true;
     let payload: Box<dyn std::any::Any + Send> = Box::new("must-flee".to_string());
-    let back = contain_jit_shim_panic(ctx_ptr, payload)
+    let back = unsafe { contain_jit_shim_panic(ctx_ptr, payload) }
         .expect_err("GC-suspect panic must be re-raised, not contained");
     assert_eq!(back.downcast_ref::<String>().unwrap(), "must-flee");
     ev.gc_driver_active = false;
@@ -7968,7 +8030,7 @@ fn contained_panic_wins_over_stale_pending_flow() {
     let ctx_ptr = &mut ev as *mut crate::emacs_core::eval::Context as *mut u8;
     stash_pending_flow(signal("arith-error", vec![]));
     let payload: Box<dyn std::any::Any + Send> = Box::new("late-panic");
-    contain_jit_shim_panic(ctx_ptr, payload).expect("containable");
+    unsafe { contain_jit_shim_panic(ctx_ptr, payload) }.expect("containable");
     let flow = take_pending_flow().expect("panic flow present");
     let FlowKind::Signal(sig) = flow.into_kind() else {
         panic!("expected Signal");
@@ -8002,8 +8064,8 @@ fn parked_panic_survives_leaf_exit_cleanup_running_compiled_code() {
         optional: Vec::new(),
         rest: None,
     });
-    cleanup.lexical = true;
-    cleanup.ops = vec![
+    cleanup.set_lexical(true);
+    cleanup.set_ops(vec![
         Op::PushConditionCase(7),
         Op::Constant(0), // 'signal
         Op::Constant(1), // 'arith-error
@@ -8014,15 +8076,17 @@ fn parked_panic_survives_leaf_exit_cleanup_running_compiled_code() {
         Op::VarSet(3),   // 7: handler entry [err] -> jit-fx-witness
         Op::Constant(2), // nil
         Op::Return,
-    ];
-    cleanup.constants = vec![
-        Value::symbol("signal"),
-        Value::symbol("arith-error"),
-        Value::NIL,
-        Value::symbol("jit-fx-witness"),
-    ]
-    .into();
-    cleanup.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
+    ]);
+    cleanup.set_constants(
+        vec![
+            Value::symbol("signal"),
+            Value::symbol("arith-error"),
+            Value::NIL,
+            Value::symbol("jit-fx-witness"),
+        ]
+        .into(),
+    );
+    cleanup.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
     // Force the cleanup hot so its application inside the parity unwind
     // dispatches through the JIT (engagement asserted below — an
     // interpreted cleanup never touches the pending slots and would
@@ -8057,7 +8121,7 @@ fn parked_panic_survives_leaf_exit_cleanup_running_compiled_code() {
     )
     .expect("unwind-protect body compiles");
     let spec0 = ev.specpdl.len();
-    assert_eq!(leaf.call(ctx_ptr, &[]), NativeRun::Signal);
+    assert_eq!(unsafe { leaf.call(ctx_ptr, &[]) }, NativeRun::Signal);
     // The outer dispatcher's take sees the PANIC error, not the
     // cleanup's arith-error and not an empty slot.
     let flow = take_pending_flow().expect("parked panic re-stashed for the dispatcher take");
@@ -8120,19 +8184,21 @@ fn wide_arg_call_panic_releases_backtrace_args_cleanly() {
         optional: Vec::new(),
         rest: None,
     });
-    mid.lexical = true;
-    mid.ops = vec![
+    mid.set_lexical(true);
+    mid.set_ops(vec![
         Op::Constant(0), // 'neovm--internal-panic
         Op::Constant(1), // "wide-boom"
         Op::Call(1),
         Op::Return,
-    ];
-    mid.constants = vec![
-        Value::symbol("neovm--internal-panic"),
-        Value::string("wide-boom"),
-    ]
-    .into();
-    mid.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
+    ]);
+    mid.set_constants(
+        vec![
+            Value::symbol("neovm--internal-panic"),
+            Value::string("wide-boom"),
+        ]
+        .into(),
+    );
+    mid.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
     ev.obarray
         .set_symbol_function_id(mid_id, Value::make_bytecode(mid));
     let leaf = lower_nullary_leaf(
@@ -8159,7 +8225,7 @@ fn wide_arg_call_panic_releases_backtrace_args_cleanly() {
     .expect("wide call body compiles");
     let spec0 = ev.specpdl.len();
     let args0 = ev.backtrace_args_stack_len_for_test();
-    assert_eq!(leaf.call(ctx_ptr, &[]), NativeRun::Signal);
+    assert_eq!(unsafe { leaf.call(ctx_ptr, &[]) }, NativeRun::Signal);
     let flow = take_pending_flow().expect("panic flow stashed");
     let sig = match flow.into_kind() {
         FlowKind::Signal(sig) => sig,
@@ -8177,7 +8243,7 @@ fn wide_arg_call_panic_releases_backtrace_args_cleanly() {
     assert_eq!(ev.specpdl.len(), spec0, "specpdl swept at leaf exit");
     // The deferred unwind ran clean: a second containment round behaves
     // identically (no cascading re-containment from the release path).
-    assert_eq!(leaf.call(ctx_ptr, &[]), NativeRun::Signal);
+    assert_eq!(unsafe { leaf.call(ctx_ptr, &[]) }, NativeRun::Signal);
     let _ = take_pending_flow().expect("second round stashes too");
     assert_eq!(ev.backtrace_args_stack_len_for_test(), args0);
     assert_eq!(ev.specpdl.len(), spec0);
@@ -8191,9 +8257,9 @@ fn ctxless_shim_panic_re_raised_when_gc_locks_poisoned() {
     // lock the panic must be re-raised (abort at the shim in
     // production), stashing nothing. Poison is permanent for this
     // process — fine under nextest's process-per-test.
-    neovm_value::tagged::gc::with_tagged_heap(|h| h.poison_gc_locks_for_test());
+    unsafe { neovm_value::tagged::gc::with_tagged_heap(|h| h.poison_gc_locks_for_test()) };
     let payload: Box<dyn std::any::Any + Send> = Box::new("poisoned-flee");
-    let back = contain_jit_shim_panic(core::ptr::null_mut(), payload)
+    let back = unsafe { contain_jit_shim_panic(core::ptr::null_mut(), payload) }
         .expect_err("poisoned GC locks must re-raise on the ctx-less path");
     assert_eq!(back.downcast_ref::<&str>().unwrap(), &"poisoned-flee");
     assert!(
@@ -8244,10 +8310,10 @@ fn a_body_that_calls_itself_is_classified_by_identity() {
             optional: Vec::new(),
             rest: None,
         });
-        f.lexical = true;
-        f.ops = ops;
-        f.constants = vec![callee].into();
-        f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
+        f.set_lexical(true);
+        f.set_ops(ops);
+        f.set_constants(vec![callee].into());
+        f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
         f
     };
     let calls = || vec![Op::Constant(0), Op::StackRef(1), Op::Call(1), Op::Return];
@@ -8361,8 +8427,8 @@ fn entry_compiles_pick_the_allocator_by_shape_and_request() {
         return; // the A/B knob overrides the policy
     }
     let mut f = nullary();
-    f.ops = vec![Op::Constant(0), Op::Return];
-    f.constants = vec![Value::make_int(42)].into();
+    f.set_ops(vec![Op::Constant(0), Op::Return]);
+    f.set_constants(vec![Value::make_int(42)].into());
     let leaf = compile_bytecode_function_with(&f, None).expect("straight-line body compiles");
     assert_eq!(leaf.regalloc, RegallocChoice::Fast);
     let leaf = compile_bytecode_function_tiered(&f, None, RegallocPolicy::Full)
@@ -8380,7 +8446,7 @@ fn entry_compiles_pick_the_allocator_by_shape_and_request() {
         optional: Vec::new(),
         rest: None,
     });
-    lp.ops = vec![
+    lp.set_ops(vec![
         Op::StackRef(0),
         Op::Constant(0),
         Op::Gtr,
@@ -8391,10 +8457,10 @@ fn entry_compiles_pick_the_allocator_by_shape_and_request() {
         Op::Goto(0),
         Op::StackRef(0),
         Op::Return,
-    ];
-    lp.constants = vec![Value::make_int(0)].into();
-    lp.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
-    lp.lexical = true;
+    ]);
+    lp.set_constants(vec![Value::make_int(0)].into());
+    lp.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
+    lp.set_lexical(true);
     let leaf = compile_bytecode_function_with(&lp, None).expect("loop body compiles");
     assert_eq!(leaf.regalloc, RegallocChoice::Full);
 }
@@ -8420,14 +8486,14 @@ fn unreachable_block_after_an_exit_lowers_without_panicking() {
         ],
     ] {
         let mut f = nullary();
-        f.ops = ops;
-        f.constants = vec![Value::make_int(7)].into();
+        f.set_ops(ops);
+        f.set_constants(vec![Value::make_int(7)].into());
         let leaf = compile_bytecode_function_with(&f, None)
             .expect("dead code must not break the lowering");
         let mut ev = Context::new_minimal_vm_harness(crate::test_utils::unit_runtime());
         let ctx_ptr = &mut ev as *mut Context as *mut u8;
         assert_eq!(
-            leaf.call(ctx_ptr, &[]),
+            unsafe { leaf.call(ctx_ptr, &[]) },
             NativeRun::Ok(Value::make_int(7).bits())
         );
     }
@@ -8446,17 +8512,21 @@ fn a_pure_body_with_a_float_feedback_site_is_rejected_from_the_mir_tier() {
     // (lambda (a b) (+ a b)) — pure, required-only: MIR-eligible.
     fn adder() -> ByteCodeFunction {
         let mut f = nullary();
-        f.lexical = true;
-        let mut params = f.params.named().expect("named fixture parameters").clone();
+        f.set_lexical(true);
+        let mut params = f
+            .params()
+            .named()
+            .expect("named fixture parameters")
+            .clone();
         params.required = vec![
             // SAFETY: test placeholder id, never resolved (peer seal N8).
             unsafe { neovm_value::intern::SymId::from_raw(1) },
             // SAFETY: test placeholder id, never resolved (peer seal N8).
             unsafe { neovm_value::intern::SymId::from_raw(2) },
         ];
-        f.params = params.into();
-        f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(4);
-        f.ops = vec![Op::StackRef(1), Op::StackRef(1), Op::Add, Op::Return];
+        f.set_params(params.into());
+        f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(4));
+        f.set_ops(vec![Op::StackRef(1), Op::StackRef(1), Op::Add, Op::Return]);
         f
     }
     use crate::emacs_core::jit::NumericFeedback as NF;
@@ -8485,7 +8555,7 @@ fn a_pure_body_with_a_float_feedback_site_is_rejected_from_the_mir_tier() {
     let floaty = adder();
     floaty
         .jit_runtime()
-        .record_numeric(2, floaty.ops.len(), NF::Float);
+        .record_numeric(2, floaty.ops().len(), NF::Float);
     assert_eq!(
         floaty.jit_runtime().numeric_feedback(2),
         NF::Float,
@@ -8507,7 +8577,8 @@ fn a_pure_body_with_a_float_feedback_site_is_rejected_from_the_mir_tier() {
     // the float path ever runs.
     let mut eval = Context::new(crate::test_utils::unit_runtime());
     let ctx_ptr = &mut eval as *mut Context as *mut u8;
-    let got = match leaf.call(ctx_ptr, &[Value::make_float(1.5), Value::make_float(2.5)]) {
+    let got = match unsafe { leaf.call(ctx_ptr, &[Value::make_float(1.5), Value::make_float(2.5)]) }
+    {
         NativeRun::Ok(bits) => unsafe {
             /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
             Value::from_bits(bits)
@@ -8523,7 +8594,7 @@ fn a_pure_body_with_a_float_feedback_site_is_rejected_from_the_mir_tier() {
     // The site is sticky-Float from one float pair, but GNU's `(+ 2 3)` is the
     // FIXNUM 5 — and it must run natively (no deopt) or every fixnum call
     // after a single float pair pays a rerun. Mixed operands promote.
-    let fix = match leaf.call(ctx_ptr, &[Value::make_int(2), Value::make_int(3)]) {
+    let fix = match unsafe { leaf.call(ctx_ptr, &[Value::make_int(2), Value::make_int(3)]) } {
         NativeRun::Ok(bits) => unsafe {
             /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
             Value::from_bits(bits)
@@ -8535,7 +8606,7 @@ fn a_pure_body_with_a_float_feedback_site_is_rejected_from_the_mir_tier() {
         Value::make_int(5).bits(),
         "(+ 2 3) is the fixnum 5, not 5.0"
     );
-    let mixed = match leaf.call(ctx_ptr, &[Value::make_int(2), Value::make_float(0.5)]) {
+    let mixed = match unsafe { leaf.call(ctx_ptr, &[Value::make_int(2), Value::make_float(0.5)]) } {
         NativeRun::Ok(bits) => unsafe {
             /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
             Value::from_bits(bits)
@@ -8546,7 +8617,7 @@ fn a_pure_body_with_a_float_feedback_site_is_rejected_from_the_mir_tier() {
     assert_eq!(mixed.xfloat(), 2.5);
     // A non-number still deopts (the interpreter signals wrong-type-argument).
     assert!(matches!(
-        leaf.call(ctx_ptr, &[Value::symbol("x"), Value::make_int(1)]),
+        unsafe { leaf.call(ctx_ptr, &[Value::symbol("x"), Value::make_int(1)]) },
         NativeRun::Deopt | NativeRun::DeoptAt(_)
     ));
 }
@@ -8560,17 +8631,21 @@ fn a_pure_body_with_a_float_feedback_site_is_rejected_from_the_mir_tier() {
 fn a_float_site_compare_breaks_a_double_tie_on_exact_integers_like_gnu() {
     fn cmp_fn(op: Op) -> ByteCodeFunction {
         let mut f = nullary();
-        f.lexical = true;
-        let mut params = f.params.named().expect("named fixture parameters").clone();
+        f.set_lexical(true);
+        let mut params = f
+            .params()
+            .named()
+            .expect("named fixture parameters")
+            .clone();
         params.required = vec![
             // SAFETY: test placeholder id, never resolved (peer seal N8).
             unsafe { neovm_value::intern::SymId::from_raw(1) },
             // SAFETY: test placeholder id, never resolved (peer seal N8).
             unsafe { neovm_value::intern::SymId::from_raw(2) },
         ];
-        f.params = params.into();
-        f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(4);
-        f.ops = vec![Op::StackRef(1), Op::StackRef(1), op, Op::Return];
+        f.set_params(params.into());
+        f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(4));
+        f.set_ops(vec![Op::StackRef(1), Op::StackRef(1), op, Op::Return]);
         f
     }
     use crate::emacs_core::jit::NumericFeedback as NF;
@@ -8584,9 +8659,10 @@ fn a_float_site_compare_breaks_a_double_tie_on_exact_integers_like_gnu() {
 
     let gtr = cmp_fn(Op::Gtr);
     gtr.jit_runtime()
-        .record_numeric(2, gtr.ops.len(), NF::Float);
+        .record_numeric(2, gtr.ops().len(), NF::Float);
     let leaf = compile_bytecode_function(&gtr).expect("compiles");
-    let run = |leaf: &CompiledLeaf, a: Value, b: Value| match leaf.call(ctx_ptr, &[a, b]) {
+    let run = |leaf: &CompiledLeaf, a: Value, b: Value| match unsafe { leaf.call(ctx_ptr, &[a, b]) }
+    {
         NativeRun::Ok(bits) => bits,
         other => panic!("must run natively at a Float site, got {other:?}"),
     };
@@ -8613,7 +8689,8 @@ fn a_float_site_compare_breaks_a_double_tie_on_exact_integers_like_gnu() {
     );
 
     let eq = cmp_fn(Op::Eqlsign);
-    eq.jit_runtime().record_numeric(2, eq.ops.len(), NF::Float);
+    eq.jit_runtime()
+        .record_numeric(2, eq.ops().len(), NF::Float);
     let leaf = compile_bytecode_function(&eq).expect("compiles");
     assert_eq!(
         run(&leaf, Value::make_int(mpf), Value::make_float(mpf as f64)),
@@ -8653,8 +8730,12 @@ fn generic_arith_fn(
     feedback: crate::emacs_core::jit::NumericFeedback,
 ) -> ByteCodeFunction {
     let mut f = nullary();
-    f.lexical = true;
-    let mut params = f.params.named().expect("named fixture parameters").clone();
+    f.set_lexical(true);
+    let mut params = f
+        .params()
+        .named()
+        .expect("named fixture parameters")
+        .clone();
     params.required = (1..=nargs as u32)
         .map(|id| {
             // SAFETY: fixture ids are packed into bytecode descriptors and compared,
@@ -8662,16 +8743,16 @@ fn generic_arith_fn(
             unsafe { neovm_value::intern::SymId::from_raw(id) }
         })
         .collect();
-    f.params = params.into();
-    f.ops = if nargs == 2 {
+    f.set_params(params.into());
+    f.set_ops(if nargs == 2 {
         vec![Op::StackRef(1), Op::StackRef(1), op, Op::Return]
     } else {
         vec![Op::StackRef(0), op, Op::Return]
-    };
-    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(8);
+    });
+    f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(8));
     if feedback != crate::emacs_core::jit::NumericFeedback::FixnumOnly {
-        let pc = f.ops.len() - 2;
-        f.jit_runtime().record_numeric(pc, f.ops.len(), feedback);
+        let pc = f.ops().len() - 2;
+        f.jit_runtime().record_numeric(pc, f.ops().len(), feedback);
     }
     f
 }
@@ -8769,7 +8850,7 @@ fn generic_arith_sites_match_the_interpreter_without_deopting() {
                             vec![pair.cons_car()]
                         };
                         let want = interp(&mut eval, op, nargs, args.clone());
-                        let got = match leaf.call(ctx_ptr, &args) {
+                        let got = match unsafe { leaf.call(ctx_ptr, &args) } {
                             NativeRun::Ok(bits) => print_value(&unsafe {
                                 /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
                                 Value::from_bits(bits)
@@ -8803,8 +8884,12 @@ fn a_generic_site_result_is_not_a_known_fixnum_across_a_block_edge() {
     use crate::emacs_core::eval::Context;
     use crate::emacs_core::jit::NumericFeedback as NF;
     let mut f = nullary();
-    f.lexical = true;
-    let mut params = f.params.named().expect("named fixture parameters").clone();
+    f.set_lexical(true);
+    let mut params = f
+        .params()
+        .named()
+        .expect("named fixture parameters")
+        .clone();
     params.required = (1..=3)
         .map(|id| {
             // SAFETY: fixture ids are packed into bytecode descriptors and compared,
@@ -8812,8 +8897,8 @@ fn a_generic_site_result_is_not_a_known_fixnum_across_a_block_edge() {
             unsafe { neovm_value::intern::SymId::from_raw(id) }
         })
         .collect();
-    f.params = params.into();
-    f.ops = vec![
+    f.set_params(params.into());
+    f.set_ops(vec![
         Op::StackRef(2),  // 0: a        [a b c a]
         Op::StackRef(2),  // 1: b        [a b c a b]
         Op::Mul,          // 2: x        [a b c x]    (Other)
@@ -8821,15 +8906,15 @@ fn a_generic_site_result_is_not_a_known_fixnum_across_a_block_edge() {
         Op::GotoIfNil(5), // 4: leader 5 from both edges
         Op::Add1,         // 5:          [a b c x+1]  (FixnumOnly)
         Op::Return,
-    ];
-    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(8);
-    f.jit_runtime().record_numeric(2, f.ops.len(), NF::Other);
+    ]);
+    f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(8));
+    f.jit_runtime().record_numeric(2, f.ops().len(), NF::Other);
     let leaf = compile_bytecode_function(&f).expect("compiles");
     let mut eval = Context::new(crate::test_utils::unit_runtime());
     let ctx_ptr = &mut eval as *mut Context as *mut u8;
     let two40 = Value::make_int(1 << 40);
     for c in [Value::T, Value::NIL] {
-        match leaf.call(ctx_ptr, &[two40, two40, c]) {
+        match unsafe { leaf.call(ctx_ptr, &[two40, two40, c]) } {
             NativeRun::Ok(bits) => panic!(
                 "(1+ bignum) at a FixnumOnly site cannot finish natively; got bits {bits:#x} ({})",
                 crate::emacs_core::print::print_value(&unsafe {
@@ -8844,7 +8929,7 @@ fn a_generic_site_result_is_not_a_known_fixnum_across_a_block_edge() {
     // Fixnum products still run natively through both paths.
     for c in [Value::T, Value::NIL] {
         assert_eq!(
-            leaf.call(ctx_ptr, &[Value::make_int(6), Value::make_int(7), c]),
+            unsafe { leaf.call(ctx_ptr, &[Value::make_int(6), Value::make_int(7), c]) },
             NativeRun::Ok(Value::make_int(43).bits())
         );
     }
@@ -8893,8 +8978,12 @@ fn a_generic_arith_signal_is_caught_by_a_leaf_local_handler() {
     use crate::emacs_core::eval::Context;
     use crate::emacs_core::jit::NumericFeedback as NF;
     let mut f = nullary();
-    f.lexical = true;
-    let mut params = f.params.named().expect("named fixture parameters").clone();
+    f.set_lexical(true);
+    let mut params = f
+        .params()
+        .named()
+        .expect("named fixture parameters")
+        .clone();
     params.required = (1..=2)
         .map(|id| {
             // SAFETY: fixture ids are packed into bytecode descriptors and compared,
@@ -8902,8 +8991,8 @@ fn a_generic_arith_signal_is_caught_by_a_leaf_local_handler() {
             unsafe { neovm_value::intern::SymId::from_raw(id) }
         })
         .collect();
-    f.params = params.into();
-    f.ops = vec![
+    f.set_params(params.into());
+    f.set_ops(vec![
         Op::PushConditionCase(6), // 0
         Op::StackRef(1),          // 1 a
         Op::StackRef(1),          // 2 b
@@ -8914,15 +9003,15 @@ fn a_generic_arith_signal_is_caught_by_a_leaf_local_handler() {
         Op::StackRef(1),          // 7 err
         Op::List(2),              // 8
         Op::Return,               // 9
-    ];
-    f.constants = vec![Value::symbol("caught")].into();
-    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(8);
-    f.jit_runtime().record_numeric(3, f.ops.len(), NF::Other);
+    ]);
+    f.set_constants(vec![Value::symbol("caught")].into());
+    f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(8));
+    f.jit_runtime().record_numeric(3, f.ops().len(), NF::Other);
     let leaf = compile_bytecode_function(&f).expect("compiles");
     let mut eval = Context::new(crate::test_utils::unit_runtime());
     let ctx_ptr = &mut eval as *mut Context as *mut u8;
     let big = eval.eval_str("(expt 2 70)").expect("big");
-    match leaf.call(ctx_ptr, &[big, Value::symbol("oops")]) {
+    match unsafe { leaf.call(ctx_ptr, &[big, Value::symbol("oops")]) } {
         NativeRun::Ok(bits) => assert_eq!(
             crate::emacs_core::print::print_value(&unsafe {
                 /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
@@ -8932,7 +9021,7 @@ fn a_generic_arith_signal_is_caught_by_a_leaf_local_handler() {
         ),
         other => panic!("the handler must catch natively, got {other:?}"),
     }
-    match leaf.call(ctx_ptr, &[big, Value::make_int(1)]) {
+    match unsafe { leaf.call(ctx_ptr, &[big, Value::make_int(1)]) } {
         NativeRun::Ok(bits) => assert_eq!(
             crate::emacs_core::print::print_value(&unsafe {
                 /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
@@ -8954,8 +9043,12 @@ fn generic_arith_fallbacks_keep_the_residual_rooted() {
     use crate::emacs_core::eval::Context;
     use crate::emacs_core::jit::NumericFeedback as NF;
     let mut f = nullary();
-    f.lexical = true;
-    let mut params = f.params.named().expect("named fixture parameters").clone();
+    f.set_lexical(true);
+    let mut params = f
+        .params()
+        .named()
+        .expect("named fixture parameters")
+        .clone();
     params.required = (1..=2)
         .map(|id| {
             // SAFETY: fixture ids are packed into bytecode descriptors and compared,
@@ -8963,8 +9056,8 @@ fn generic_arith_fallbacks_keep_the_residual_rooted() {
             unsafe { neovm_value::intern::SymId::from_raw(id) }
         })
         .collect();
-    f.params = params.into();
-    f.ops = vec![
+    f.set_params(params.into());
+    f.set_ops(vec![
         Op::Constant(0), // [a b 1]
         Op::Constant(1), // [a b 1 2]
         Op::Cons,        // [a b h]
@@ -8977,11 +9070,11 @@ fn generic_arith_fallbacks_keep_the_residual_rooted() {
         Op::Mul, // 9 (Other)
         Op::Pop,
         Op::Return, // h
-    ];
-    f.constants = vec![Value::make_int(1), Value::make_int(2)].into();
-    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(8);
-    f.jit_runtime().record_numeric(5, f.ops.len(), NF::Other);
-    f.jit_runtime().record_numeric(9, f.ops.len(), NF::Other);
+    ]);
+    f.set_constants(vec![Value::make_int(1), Value::make_int(2)].into());
+    f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(8));
+    f.jit_runtime().record_numeric(5, f.ops().len(), NF::Other);
+    f.jit_runtime().record_numeric(9, f.ops().len(), NF::Other);
     let leaf = compile_bytecode_function(&f).expect("compiles");
     let mut eval = Context::new(crate::test_utils::unit_runtime());
     eval.gc_stress = true;
@@ -8990,7 +9083,7 @@ fn generic_arith_fallbacks_keep_the_residual_rooted() {
         let pair = eval
             .eval_str("(cons (expt 2 90) (expt 3 50))")
             .expect("operands");
-        match leaf.call(ctx_ptr, &[pair.cons_car(), pair.cons_cdr()]) {
+        match unsafe { leaf.call(ctx_ptr, &[pair.cons_car(), pair.cons_cdr()]) } {
             NativeRun::Ok(bits) => {
                 let h = unsafe {
                     /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
@@ -9017,8 +9110,12 @@ fn a_generic_arith_signal_hook_that_collects_keeps_the_residual_alive() {
     use crate::emacs_core::eval::Context;
     use crate::emacs_core::jit::NumericFeedback as NF;
     let mut f = nullary();
-    f.lexical = true;
-    let mut params = f.params.named().expect("named fixture parameters").clone();
+    f.set_lexical(true);
+    let mut params = f
+        .params()
+        .named()
+        .expect("named fixture parameters")
+        .clone();
     params.required = (1..=2)
         .map(|id| {
             // SAFETY: fixture ids are packed into bytecode descriptors and compared,
@@ -9026,8 +9123,8 @@ fn a_generic_arith_signal_hook_that_collects_keeps_the_residual_alive() {
             unsafe { neovm_value::intern::SymId::from_raw(id) }
         })
         .collect();
-    f.params = params.into();
-    f.ops = vec![
+    f.set_params(params.into());
+    f.set_ops(vec![
         Op::Constant(0),          // 0  [a b 1]
         Op::Constant(1),          // 1  [a b 1 2]
         Op::Cons,                 // 2  [a b h]
@@ -9039,10 +9136,10 @@ fn a_generic_arith_signal_hook_that_collects_keeps_the_residual_alive() {
         Op::Return,               // 8  the sum
         Op::Pop,                  // 9  handler [a b h err] -> [a b h]
         Op::Return,               // 10 h
-    ];
-    f.constants = vec![Value::make_int(1), Value::make_int(2)].into();
-    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(8);
-    f.jit_runtime().record_numeric(6, f.ops.len(), NF::Other);
+    ]);
+    f.set_constants(vec![Value::make_int(1), Value::make_int(2)].into());
+    f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(8));
+    f.jit_runtime().record_numeric(6, f.ops().len(), NF::Other);
     let leaf = compile_bytecode_function(&f).expect("compiles");
     let mut eval = Context::new(crate::test_utils::unit_runtime());
     eval.eval_str(
@@ -9053,7 +9150,7 @@ fn a_generic_arith_signal_hook_that_collects_keeps_the_residual_alive() {
     let ctx_ptr = &mut eval as *mut Context as *mut u8;
     for _ in 0..3 {
         let big = eval.eval_str("(expt 2 70)").expect("big");
-        match leaf.call(ctx_ptr, &[big, Value::symbol("oops")]) {
+        match unsafe { leaf.call(ctx_ptr, &[big, Value::symbol("oops")]) } {
             NativeRun::Ok(bits) => {
                 let h = unsafe {
                     /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
@@ -9156,8 +9253,8 @@ fn a_record_type_of_site_answers_inline() {
             optional: Vec::new(),
             rest: None,
         });
-        f.lexical = true;
-        f.ops = vec![
+        f.set_lexical(true);
+        f.set_ops(vec![
             Op::Constant(0),
             Op::Constant(1),
             Op::Call(1),
@@ -9166,14 +9263,16 @@ fn a_record_type_of_site_answers_inline() {
             Op::Call(1),
             Op::Cons,
             Op::Return,
-        ];
-        f.constants = vec![
-            Value::symbol("symbol-name"),
-            Value::symbol("zzz"),
-            Value::from_sym_id(intern(name)),
-        ]
-        .into();
-        f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(8);
+        ]);
+        f.set_constants(
+            vec![
+                Value::symbol("symbol-name"),
+                Value::symbol("zzz"),
+                Value::from_sym_id(intern(name)),
+            ]
+            .into(),
+        );
+        f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(8));
         f
     };
     let pool = ev
@@ -9190,7 +9289,7 @@ fn a_record_type_of_site_answers_inline() {
         let leaf = compile_bytecode_function_with(&f, Some(&ev.obarray)).expect("compiles");
         // Resolve the memoized debug-on-next-call cell the inline test reads.
         let _ = ev.debug_on_next_call_is_armed();
-        let run = |item: Value| match leaf.call(ctx, &[item]) {
+        let run = |item: Value| match unsafe { leaf.call(ctx, &[item]) } {
             NativeRun::Ok(bits) => crate::emacs_core::print::print_value(&unsafe {
                 /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
                 Value::from_bits(bits)
@@ -9232,13 +9331,18 @@ fn a_record_type_of_site_answers_inline() {
         // own: the call before it would consume the flag.)
         let lone = {
             let mut f = site(name);
-            f.ops = vec![Op::Constant(2), Op::StackRef(1), Op::Call(1), Op::Return];
+            f.set_ops(vec![
+                Op::Constant(2),
+                Op::StackRef(1),
+                Op::Call(1),
+                Op::Return,
+            ]);
             compile_bytecode_function_with(&f, Some(&ev.obarray)).expect("compiles")
         };
         // A pending quit: the site takes the shim, which polls first and
         // signals.
         ev.set_quit_flag_value(Value::T);
-        let quit = lone.call(ctx, &[record]);
+        let quit = unsafe { lone.call(ctx, &[record]) };
         ev.set_quit_flag_value(Value::NIL);
         assert!(
             matches!(quit, NativeRun::Signal),
@@ -9268,7 +9372,7 @@ fn a_record_type_of_site_answers_inline() {
                     _ => other.request(),
                 }
                 let shim0 = SUBR_SPEC_COUNT.load(Ordering::Relaxed);
-                let answer = lone.call(ctx, &[record]);
+                let answer = unsafe { lone.call(ctx, &[record]) };
                 match source {
                     "throw-on-input" => {
                         ev.eval_str("(setq throw-on-input nil)").expect("unbind");
@@ -9300,7 +9404,7 @@ fn a_record_type_of_site_answers_inline() {
         cell.set(true);
         #[cfg(debug_assertions)]
         let shim0 = SUBR_SPEC_COUNT.load(Ordering::Relaxed);
-        let _ = lone.call(ctx, &[record]);
+        let _ = unsafe { lone.call(ctx, &[record]) };
         cell.set(false);
         #[cfg(debug_assertions)]
         assert_eq!(
@@ -9356,10 +9460,15 @@ fn fboundp_call_sites_answer_as_the_builtin_on_the_fast_path() {
         optional: Vec::new(),
         rest: None,
     });
-    f.lexical = true;
-    f.ops = vec![Op::Constant(0), Op::StackRef(1), Op::Call(1), Op::Return];
-    f.constants = vec![Value::symbol("fboundp")].into();
-    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(8);
+    f.set_lexical(true);
+    f.set_ops(vec![
+        Op::Constant(0),
+        Op::StackRef(1),
+        Op::Call(1),
+        Op::Return,
+    ]);
+    f.set_constants(vec![Value::symbol("fboundp")].into());
+    f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(8));
     let leaf = compile_bytecode_function_with(&f, Some(&ev.obarray)).expect("compiles");
     let pool = ev.eval_str(pool_src).expect("pool");
     crate::emacs_core::eval::push_scratch_gc_root(pool);
@@ -9385,7 +9494,7 @@ fn fboundp_call_sites_answer_as_the_builtin_on_the_fast_path() {
         let want = outcome(crate::emacs_core::builtins::symbols::builtin_fboundp_1(
             &mut ev, *item,
         ));
-        let got = match leaf.call(ctx, &[*item]) {
+        let got = match unsafe { leaf.call(ctx, &[*item]) } {
             NativeRun::Ok(bits) => crate::emacs_core::print::print_value(&unsafe {
                 /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
                 Value::from_bits(bits)
@@ -9419,7 +9528,7 @@ fn fboundp_call_sites_answer_as_the_builtin_on_the_fast_path() {
     let (depth, max_depth) = (ev.depth, ev.max_depth);
     ev.max_depth = 100;
     ev.depth = 100;
-    match leaf.call(ctx, &[Value::symbol("car")]) {
+    match unsafe { leaf.call(ctx, &[Value::symbol("car")]) } {
         NativeRun::Signal => {
             let flow = take_pending_flow().expect("stashed flow");
             assert!(
@@ -9430,7 +9539,7 @@ fn fboundp_call_sites_answer_as_the_builtin_on_the_fast_path() {
         other => panic!("(fboundp 'car) at the depth limit: {other:?}"),
     }
     ev.depth = 99;
-    match leaf.call(ctx, &[Value::symbol("car")]) {
+    match unsafe { leaf.call(ctx, &[Value::symbol("car")]) } {
         NativeRun::Ok(bits) => assert_eq!(
             crate::emacs_core::print::print_value(&unsafe {
                 /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
@@ -9451,7 +9560,7 @@ fn fboundp_call_sites_answer_as_the_builtin_on_the_fast_path() {
         .expect("bound");
     ev.eval_str("(fset 'fboundp (lambda (_) 'redefined))")
         .expect("fset");
-    match leaf.call(ctx, &[Value::symbol("car")]) {
+    match unsafe { leaf.call(ctx, &[Value::symbol("car")]) } {
         NativeRun::Ok(bits) => assert_eq!(
             crate::emacs_core::print::print_value(&unsafe {
                 /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
@@ -9463,7 +9572,7 @@ fn fboundp_call_sites_answer_as_the_builtin_on_the_fast_path() {
     }
     ev.obarray
         .set_symbol_function_id(intern("fboundp"), original);
-    match leaf.call(ctx, &[Value::symbol("car")]) {
+    match unsafe { leaf.call(ctx, &[Value::symbol("car")]) } {
         NativeRun::Ok(bits) => assert_eq!(
             crate::emacs_core::print::print_value(&unsafe {
                 /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
@@ -9493,10 +9602,15 @@ fn fboundp_sites_use_the_dedicated_shim() {
             optional: Vec::new(),
             rest: None,
         });
-        f.lexical = true;
-        f.ops = vec![Op::Constant(0), Op::StackRef(1), Op::Call(1), Op::Return];
-        f.constants = vec![Value::from_sym_id(intern(name))].into();
-        f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(8);
+        f.set_lexical(true);
+        f.set_ops(vec![
+            Op::Constant(0),
+            Op::StackRef(1),
+            Op::Call(1),
+            Op::Return,
+        ]);
+        f.set_constants(vec![Value::from_sym_id(intern(name))].into());
+        f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(8));
         f
     };
     let f = leaf_for("fboundp");
@@ -9510,7 +9624,7 @@ fn fboundp_sites_use_the_dedicated_shim() {
     ] {
         #[cfg(debug_assertions)]
         let count0 = FBOUNDP_SPEC_COUNT.load(Ordering::Relaxed);
-        match fboundp_leaf.call(ctx, &[arg]) {
+        match unsafe { fboundp_leaf.call(ctx, &[arg]) } {
             NativeRun::Ok(_) => {}
             NativeRun::Signal => {
                 let _ = take_pending_flow();
@@ -9541,7 +9655,7 @@ fn fboundp_sites_use_the_dedicated_shim() {
         .expect("unrelated fset");
     #[cfg(debug_assertions)]
     let count0 = FBOUNDP_SPEC_COUNT.load(Ordering::Relaxed);
-    match fboundp_leaf.call(ctx, &[Value::symbol("car")]) {
+    match unsafe { fboundp_leaf.call(ctx, &[Value::symbol("car")]) } {
         NativeRun::Ok(bits) => assert_eq!(
             crate::emacs_core::print::print_value(&unsafe {
                 /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
@@ -9578,7 +9692,7 @@ fn fboundp_sites_use_the_dedicated_shim() {
     crate::emacs_core::jit::compile::force_inline_predicates_for_test(None);
     #[cfg(debug_assertions)]
     let count0 = FBOUNDP_SPEC_COUNT.load(Ordering::Relaxed);
-    let _ = recordp_leaf.call(ctx, &[Value::make_int(1)]);
+    let _ = unsafe { recordp_leaf.call(ctx, &[Value::make_int(1)]) };
     #[cfg(debug_assertions)]
     assert_eq!(
         FBOUNDP_SPEC_COUNT.load(Ordering::Relaxed),
@@ -9642,7 +9756,7 @@ fn autoload_do_load_call_sites_answer_as_the_builtin_on_the_fast_path() {
             optional: Vec::new(),
             rest: None,
         });
-        f.lexical = true;
+        f.set_lexical(true);
         let mut ops = vec![Op::Constant(0), Op::StackRef(1)];
         if nargs >= 2 {
             ops.push(Op::Constant(1));
@@ -9652,14 +9766,16 @@ fn autoload_do_load_call_sites_answer_as_the_builtin_on_the_fast_path() {
         }
         ops.push(Op::Call(nargs as u16));
         ops.push(Op::Return);
-        f.ops = ops;
-        f.constants = vec![
-            Value::symbol("autoload-do-load"),
-            Value::symbol("jit-adl-name"),
-            Value::symbol("macro"),
-        ]
-        .into();
-        f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(8);
+        f.set_ops(ops);
+        f.set_constants(
+            vec![
+                Value::symbol("autoload-do-load"),
+                Value::symbol("jit-adl-name"),
+                Value::symbol("macro"),
+            ]
+            .into(),
+        );
+        f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(8));
         let leaf = compile_bytecode_function_with(&f, Some(&ev.obarray)).expect("compiles");
         let pool = ev.eval_str(pool_src).expect("pool");
         crate::emacs_core::eval::push_scratch_gc_root(pool);
@@ -9681,7 +9797,7 @@ fn autoload_do_load_call_sites_answer_as_the_builtin_on_the_fast_path() {
             let want = outcome(crate::emacs_core::autoload::builtin_autoload_do_load_3(
                 &mut ev, *item, funname, macro_only,
             ));
-            let got = match leaf.call(ctx, &[*item]) {
+            let got = match unsafe { leaf.call(ctx, &[*item]) } {
                 NativeRun::Ok(bits) => {
                     crate::emacs_core::print::print_value(&unsafe {
                         /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
@@ -9722,10 +9838,15 @@ fn autoload_do_load_call_sites_answer_as_the_builtin_on_the_fast_path() {
         optional: Vec::new(),
         rest: None,
     });
-    f.lexical = true;
-    f.ops = vec![Op::Constant(0), Op::StackRef(1), Op::Call(1), Op::Return];
-    f.constants = vec![Value::symbol("autoload-do-load")].into();
-    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(8);
+    f.set_lexical(true);
+    f.set_ops(vec![
+        Op::Constant(0),
+        Op::StackRef(1),
+        Op::Call(1),
+        Op::Return,
+    ]);
+    f.set_constants(vec![Value::symbol("autoload-do-load")].into());
+    f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(8));
     let leaf = compile_bytecode_function_with(&f, Some(&ev.obarray)).expect("compiles");
     let original = ev
         .obarray
@@ -9733,7 +9854,7 @@ fn autoload_do_load_call_sites_answer_as_the_builtin_on_the_fast_path() {
         .expect("bound");
     ev.eval_str("(fset 'autoload-do-load (lambda (&rest _) 'redefined))")
         .expect("fset");
-    match leaf.call(ctx, &[Value::make_int(1)]) {
+    match unsafe { leaf.call(ctx, &[Value::make_int(1)]) } {
         NativeRun::Ok(bits) => assert_eq!(
             crate::emacs_core::print::print_value(&unsafe {
                 /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
@@ -9745,7 +9866,7 @@ fn autoload_do_load_call_sites_answer_as_the_builtin_on_the_fast_path() {
     }
     ev.obarray
         .set_symbol_function_id(intern("autoload-do-load"), original);
-    match leaf.call(ctx, &[Value::make_int(1)]) {
+    match unsafe { leaf.call(ctx, &[Value::make_int(1)]) } {
         NativeRun::Ok(bits) => assert_eq!(
             crate::emacs_core::print::print_value(&unsafe {
                 /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
@@ -9779,10 +9900,15 @@ fn type_tag_predicate_sites_answer_inline() {
             optional: Vec::new(),
             rest: None,
         });
-        f.lexical = true;
-        f.ops = vec![Op::Constant(0), Op::StackRef(1), Op::Call(1), Op::Return];
-        f.constants = vec![Value::from_sym_id(intern(name))].into();
-        f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(8);
+        f.set_lexical(true);
+        f.set_ops(vec![
+            Op::Constant(0),
+            Op::StackRef(1),
+            Op::Call(1),
+            Op::Return,
+        ]);
+        f.set_constants(vec![Value::from_sym_id(intern(name))].into());
+        f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(8));
         f
     };
     let pool = ev
@@ -9812,7 +9938,7 @@ fn type_tag_predicate_sites_answer_inline() {
             #[cfg(debug_assertions)]
             let shim0 = SUBR_SPEC_COUNT.load(Ordering::Relaxed);
             for &item in &items {
-                let got = match leaf.call(ctx, &[item]) {
+                let got = match unsafe { leaf.call(ctx, &[item]) } {
                     NativeRun::Ok(bits) => unsafe {
                         /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
                         Value::from_bits(bits)
@@ -9846,7 +9972,7 @@ fn type_tag_predicate_sites_answer_inline() {
         // A pending quit: the site takes the shim, which polls first and
         // signals.
         ev.set_quit_flag_value(Value::T);
-        let quit = leaf.call(ctx, &[record]);
+        let quit = unsafe { leaf.call(ctx, &[record]) };
         ev.set_quit_flag_value(Value::NIL);
         assert!(
             matches!(quit, NativeRun::Signal),
@@ -9861,7 +9987,7 @@ fn type_tag_predicate_sites_answer_inline() {
         cell.set(true);
         #[cfg(debug_assertions)]
         let shim0 = SUBR_SPEC_COUNT.load(Ordering::Relaxed);
-        let _ = leaf.call(ctx, &[record]);
+        let _ = unsafe { leaf.call(ctx, &[record]) };
         cell.set(false);
         let _ = take_pending_flow();
         #[cfg(debug_assertions)]
@@ -9877,7 +10003,7 @@ fn type_tag_predicate_sites_answer_inline() {
         let (depth, max_depth) = (ev.depth, ev.max_depth);
         ev.max_depth = 100;
         ev.depth = 100;
-        match leaf.call(ctx, &[record]) {
+        match unsafe { leaf.call(ctx, &[record]) } {
             NativeRun::Signal => {
                 let flow = take_pending_flow().expect("stashed flow");
                 let text = match Err::<Value, _>(flow).kinded() {
@@ -9899,7 +10025,7 @@ fn type_tag_predicate_sites_answer_inline() {
             other => panic!("({name}) at the depth limit: {other:?}"),
         }
         ev.depth = 99;
-        match leaf.call(ctx, &[record]) {
+        match unsafe { leaf.call(ctx, &[record]) } {
             NativeRun::Ok(bits) => {
                 assert_eq!(
                     unsafe {
@@ -9919,7 +10045,7 @@ fn type_tag_predicate_sites_answer_inline() {
         let original = ev.obarray.symbol_function_id(intern(name)).expect("bound");
         ev.eval_str(&format!("(fset '{name} (lambda (_) 'redefined))"))
             .expect("fset");
-        match leaf.call(ctx, &[record]) {
+        match unsafe { leaf.call(ctx, &[record]) } {
             NativeRun::Ok(bits) => assert_eq!(
                 crate::emacs_core::print::print_value(&unsafe {
                     /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
@@ -9931,7 +10057,7 @@ fn type_tag_predicate_sites_answer_inline() {
             other => panic!("redefined {name}: {other:?}"),
         }
         ev.obarray.set_symbol_function_id(intern(name), original);
-        match leaf.call(ctx, &[record]) {
+        match unsafe { leaf.call(ctx, &[record]) } {
             NativeRun::Ok(bits) => assert_eq!(
                 unsafe {
                     /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
@@ -9966,10 +10092,15 @@ fn autoload_do_load_sites_answer_non_autoload_inline() {
         optional: Vec::new(),
         rest: None,
     });
-    f.lexical = true;
-    f.ops = vec![Op::Constant(0), Op::StackRef(1), Op::Call(1), Op::Return];
-    f.constants = vec![Value::symbol("autoload-do-load")].into();
-    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(8);
+    f.set_lexical(true);
+    f.set_ops(vec![
+        Op::Constant(0),
+        Op::StackRef(1),
+        Op::Call(1),
+        Op::Return,
+    ]);
+    f.set_constants(vec![Value::symbol("autoload-do-load")].into());
+    f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(8));
     let outcome = |r: Result<Value, neovm_value::error::Flow>| -> String {
         match r.kinded() {
             Ok(v) => crate::emacs_core::print::print_value(&v),
@@ -10008,7 +10139,7 @@ fn autoload_do_load_sites_answer_non_autoload_inline() {
                 Value::NIL,
             ));
             let ctx = &mut ev as *mut Context as *mut u8;
-            let got = match leaf.call(ctx, &[item]) {
+            let got = match unsafe { leaf.call(ctx, &[item]) } {
                 NativeRun::Ok(bits) => {
                     crate::emacs_core::print::print_value(&unsafe {
                         /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
@@ -10071,7 +10202,7 @@ fn autoload_do_load_sites_answer_non_autoload_inline() {
         #[cfg(debug_assertions)]
         let shim0 = SUBR_SPEC_COUNT.load(Ordering::Relaxed);
         let ctx = &mut ev as *mut Context as *mut u8;
-        let got = match leaf.call(ctx, &[item]) {
+        let got = match unsafe { leaf.call(ctx, &[item]) } {
             NativeRun::Ok(bits) => crate::emacs_core::print::print_value(&unsafe {
                 /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
                 Value::from_bits(bits)
@@ -10099,7 +10230,7 @@ fn autoload_do_load_sites_answer_non_autoload_inline() {
         .expect("bound");
     ev.eval_str("(fset 'autoload-do-load (lambda (&rest _) 'redefined))")
         .expect("fset");
-    match leaf.call(ctx, &[Value::make_int(1)]) {
+    match unsafe { leaf.call(ctx, &[Value::make_int(1)]) } {
         NativeRun::Ok(bits) => assert_eq!(
             crate::emacs_core::print::print_value(&unsafe {
                 /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
@@ -10111,7 +10242,7 @@ fn autoload_do_load_sites_answer_non_autoload_inline() {
     }
     ev.obarray
         .set_symbol_function_id(intern("autoload-do-load"), original);
-    match leaf.call(ctx, &[Value::make_int(1)]) {
+    match unsafe { leaf.call(ctx, &[Value::make_int(1)]) } {
         NativeRun::Ok(bits) => assert_eq!(
             crate::emacs_core::print::print_value(&unsafe {
                 /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
@@ -10143,10 +10274,15 @@ fn type_of_call_sites_answer_as_the_builtin_on_the_fast_path() {
             optional: Vec::new(),
             rest: None,
         });
-        f.lexical = true;
-        f.ops = vec![Op::Constant(0), Op::StackRef(1), Op::Call(1), Op::Return];
-        f.constants = vec![Value::from_sym_id(intern(name))].into();
-        f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(8);
+        f.set_lexical(true);
+        f.set_ops(vec![
+            Op::Constant(0),
+            Op::StackRef(1),
+            Op::Call(1),
+            Op::Return,
+        ]);
+        f.set_constants(vec![Value::from_sym_id(intern(name))].into());
+        f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(8));
         // The site is the GC-free predicate intrinsic, not a general subr
         // speculation (which counts as a fast completion too).
         let binding = ev
@@ -10177,7 +10313,7 @@ fn type_of_call_sites_answer_as_the_builtin_on_the_fast_path() {
                 crate::emacs_core::builtins::types::builtin_cl_type_of(&[*item])
             }
             .expect("builtin answers");
-            match leaf.call(ctx, &[*item]) {
+            match unsafe { leaf.call(ctx, &[*item]) } {
                 NativeRun::Ok(bits) => assert_eq!(
                     crate::emacs_core::print::print_value(&unsafe {
                         /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
@@ -10203,7 +10339,7 @@ fn type_of_call_sites_answer_as_the_builtin_on_the_fast_path() {
         // generic call.
         ev.eval_str(&format!("(fset '{name} (lambda (_) 'redefined))"))
             .expect("fset");
-        match leaf.call(ctx, &[Value::make_int(1)]) {
+        match unsafe { leaf.call(ctx, &[Value::make_int(1)]) } {
             NativeRun::Ok(bits) => assert_eq!(
                 crate::emacs_core::print::print_value(&unsafe {
                     /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
@@ -10244,10 +10380,10 @@ fn an_unrelated_redefinition_keeps_an_inlining_leaf_compiled() {
             optional: Vec::new(),
             rest: None,
         });
-        bf.lexical = true;
-        bf.ops = ops;
-        bf.constants = consts.into();
-        bf.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
+        bf.set_lexical(true);
+        bf.set_ops(ops);
+        bf.set_constants(consts.into());
+        bf.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
         bf
     };
     let (c_sym, c_id) = mk_sym("jit-keep-c");
@@ -10325,10 +10461,10 @@ fn refsetting_the_same_function_and_repeated_redefinitions_stop_recompiling() {
             optional: Vec::new(),
             rest: None,
         });
-        bf.lexical = true;
-        bf.ops = ops;
-        bf.constants = consts.into();
-        bf.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
+        bf.set_lexical(true);
+        bf.set_ops(ops);
+        bf.set_constants(consts.into());
+        bf.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
         bf
     };
     let square = Value::make_bytecode(mk_fn(vec![Op::Dup, Op::Mul, Op::Return], vec![]));
@@ -10440,23 +10576,28 @@ fn subr_spec_screened_entry_cache_engages_and_a_rewrite_invalidates_it() {
         optional: Vec::new(),
         rest: None,
     });
-    f.lexical = true;
-    f.ops = vec![Op::Constant(0), Op::StackRef(1), Op::Call(1), Op::Return];
-    f.constants = vec![Value::from_sym_id(intern(name))].into();
-    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
+    f.set_lexical(true);
+    f.set_ops(vec![
+        Op::Constant(0),
+        Op::StackRef(1),
+        Op::Call(1),
+        Op::Return,
+    ]);
+    f.set_constants(vec![Value::from_sym_id(intern(name))].into());
+    f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
     let leaf = compile_bytecode_function_with(&f, Some(&ev.obarray)).expect("subr spec body");
 
     let ctx = &mut ev as *mut Context as *mut u8;
     let one = Value::make_int(1);
     assert_eq!(
-        leaf.call(ctx, &[one]),
+        unsafe { leaf.call(ctx, &[one]) },
         NativeRun::Ok(Value::make_int(2).bits()),
         "first call screens the fresh entry"
     );
     #[cfg(debug_assertions)]
     let cached0 = SUBR_SPEC_CACHED_COUNT.load(Ordering::Relaxed);
     assert_eq!(
-        leaf.call(ctx, &[one]),
+        unsafe { leaf.call(ctx, &[one]) },
         NativeRun::Ok(Value::make_int(2).bits())
     );
     #[cfg(debug_assertions)]
@@ -10482,6 +10623,6 @@ fn subr_spec_screened_entry_cache_engages_and_a_rewrite_invalidates_it() {
         };
         assert_eq!(signal.symbol, intern("wrong-number-of-arguments"));
     };
-    check_arity_signal(leaf.call(ctx, &[one]));
-    check_arity_signal(leaf.call(ctx, &[one]));
+    check_arity_signal(unsafe { leaf.call(ctx, &[one]) });
+    check_arity_signal(unsafe { leaf.call(ctx, &[one]) });
 }

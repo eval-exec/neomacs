@@ -731,7 +731,7 @@ fn emit_callback(
         .get_bytecode_data()
         .ok_or(CompileError::BadOperand)?;
     let ops = code.executable_ops();
-    let constants = mask_dynamic_prefix(&code.constants, site.prefix);
+    let constants = mask_dynamic_prefix(code.constants(), site.prefix);
     let cfg = analyze_cfg(ops, &constants, code.executable_gnu_byte_offset_map(), 1)?;
     let feedback: Vec<_> = (0..ops.len())
         .map(|pc| code.jit_runtime().numeric_feedback(pc))

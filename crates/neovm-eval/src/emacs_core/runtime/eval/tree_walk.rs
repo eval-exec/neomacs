@@ -65,11 +65,10 @@ impl Context {
                 match self.eval_sub(form).kinded() {
                     Ok(value) => last = value,
                     Err(FlowKind::ThreadBlocked(blocked)) => {
-                        let remaining_forms = if blocked.remaining_forms.is_nil() {
-                            rest
-                        } else {
-                            blocked.remaining_forms
-                        };
+                        let remaining_forms = crate::emacs_core::threads::chain_sim_blocked_forms(
+                            blocked.remaining_forms,
+                            rest,
+                        );
                         return Err(Flow::thread_blocked(blocked.blocker, remaining_forms));
                     }
                     Err(flow) => return Err(Flow::from_kind(flow)),
@@ -164,11 +163,12 @@ impl Context {
     #[cold]
     #[inline(never)]
     #[doc(hidden)]
-    pub fn collect_at_eval_safe_point(&mut self, form: Value) {
+    pub fn collect_at_eval_safe_point(&mut self, form: Value) -> Result<(), Flow> {
         let specpdl_root_scope = self.save_specpdl_roots();
         self.push_specpdl_root(form);
-        self.gc_collect_from_current_roots();
+        let result = self.gc_collect_from_current_roots_flow();
         self.restore_specpdl_roots(specpdl_root_scope);
+        result
     }
 
     /// GNU's `max_lisp_eval_depth` -- the `DEFVAR_INT` cell (`src/eval.c:4405`)
@@ -305,7 +305,7 @@ impl Context {
         // frame is recorded, exactly at the point `eval_sub` runs them.
         self.maybe_quit_before_gc()?;
         if self.gc_safe_point_exact_should_collect() {
-            self.collect_at_eval_safe_point(form);
+            self.collect_at_eval_safe_point(form)?;
         }
 
         // GNU eval.c:2583-2585 records an UNEVALLED backtrace frame on every

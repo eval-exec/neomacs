@@ -71,7 +71,7 @@ neovm_eval::emacs_core::subr::define_subrs! {
     )),
     neovm_eval::emacs_core::subr::world_subr!(SubrSpec::new(
         "close-font",
-        NativeFn::NoContextVec(close_font),
+        NativeFn::ContextVec(close_font),
         SubrArity::new(1, Some(2)),
     )),
     neovm_eval::emacs_core::subr::world_subr!(SubrSpec::new(

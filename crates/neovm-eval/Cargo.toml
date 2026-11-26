@@ -24,8 +24,14 @@ contract-fixtures = []
 # capability down so an eval-only consumer advertises the same
 # `dynamic-setting`/`system-font-setting` rows as a core consumer.
 desktop-font-settings = ["neovm-value/desktop-font-settings"]
-gc-memory-telemetry = []
+# Value's collector refuses this feature in `supported_with_weak`. An
+# eval-only `--features gc-memory-telemetry` build has to reach that
+# refusal; core already turns both crates on together.
+gc-memory-telemetry = ["neovm-value/gc-memory-telemetry"]
 jit = ["neovm-value/jit", "neovm-edit/jit", "neovm-text/jit"]
+# Test switch: `native_depth` reads `CURRENT_LEAF_BASES` the way a
+# production release build does, so the test counter cannot mask a hole.
+release-native-depth = ["jit"]
 perf-probes = []
 redisplay-test-policy = ["neovm-edit/redisplay-test-policy"]
 sqlite = []

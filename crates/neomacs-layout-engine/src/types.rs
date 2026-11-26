@@ -194,6 +194,7 @@ impl WindowParams {
             default_fg: self.default_fg,
             default_bg: self.default_bg,
             frame_foreground: self.frame_foreground,
+            frame_background: self.frame_background,
         }
     }
 }
@@ -311,6 +312,9 @@ pub struct WindowParams {
     /// Whether to wrap at word boundaries
     pub word_wrap: bool,
     pub word_wrap_policy: neovm_core::window::WordWrapPolicy,
+    /// The displayed buffer's paragraph direction (GNU
+    /// `it->paragraph_embedding`, `src/xdisp.c:3600-3611`).
+    pub bidi_paragraph_directions: crate::bidi::ParagraphDirections,
     /// Tab width in columns
     pub tab_width: i32,
     /// Custom tab stop positions (column numbers), from tab-stop-list buffer-local.
@@ -349,6 +353,11 @@ pub struct WindowParams {
     /// unresolvable color key with something reads this one, as in GNU
     /// (issue #556).
     pub frame_foreground: u32,
+    /// GNU's `FRAME_BACKGROUND_PIXEL` for this window's frame: the frame's
+    /// `background-color` parameter, equal to the `default` face's background.
+    /// Used by `gif_load` for borders outside frame 0 and for transparent GIF
+    /// pixels when `:background` is omitted (src/image.c:10092-10118).
+    pub frame_background: u32,
 
     /// Character cell dimensions
     pub char_width: f32,

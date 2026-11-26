@@ -20,7 +20,12 @@ error[E0599]: the associated function or constant `check` exists for struct `Req
   | |     T: ?Sized,
   | |     #[unstable(feature = "allocator_api", issue = "32838")] A: Allocator = Global,
   | | > {
-  | |_- doesn't satisfy `Rc<()>: Sync`
+  | |_- doesn't satisfy `Rc<()>: Sync` or `_: Sync`
+  |
+ ::: $RUST/core/src/ptr/non_null.rs
+  |
+  |   pub struct NonNull<T: PointeeSized> {
+  |   ----------------------------------- doesn't satisfy `_: Sync`
   |
  ::: tests/pentry_e2_loan_ui/support/loan_bounds.rs
   |
@@ -29,6 +34,10 @@ error[E0599]: the associated function or constant `check` exists for struct `Req
   |
   = note: the following trait bounds were not satisfied:
           `Rc<()>: Sync`
+          which is required by `neovm_value::tagged::gc::heap_transfer::RestoredHeapBacking: Sync`
+          `NonNull<collection_reads::store_state::WorldObservations>: Sync`
+          which is required by `neovm_value::tagged::gc::heap_transfer::RestoredHeapBacking: Sync`
+          `Rc<collection_reads::store_state::WorldObservations>: Sync`
           which is required by `neovm_value::tagged::gc::heap_transfer::RestoredHeapBacking: Sync`
           `(dyn neovm_value::tagged::gc::EraWorldLoan + 'static): Sync`
           which is required by `neovm_value::tagged::gc::heap_transfer::RestoredHeapBacking: Sync`

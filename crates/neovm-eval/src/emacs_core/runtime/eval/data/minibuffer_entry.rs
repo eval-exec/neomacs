@@ -17,6 +17,8 @@ use neovm_value::intern::{NIL_SYM_ID, SymId, T_SYM_ID, resolve_sym};
 use neovm_value::minibuffer_state::MinibufferEntryLevel;
 use neovm_value::symbol::Obarray;
 use neovm_value::value::{Value, ValueKind, VecLikeType};
+#[cfg(any(test, feature = "test-support"))]
+use std::cell::Cell;
 use std::num::NonZeroUsize;
 use strum::IntoStaticStr;
 
@@ -285,6 +287,8 @@ impl MinibufferManagerExt for MinibufferManager {
             completion_style: CompletionStyle::Prefix,
             #[cfg(test)]
             max_depth: 10,
+            #[cfg(any(test, feature = "test-support"))]
+            field_borrows_live: Cell::new(false),
         }
     }
 

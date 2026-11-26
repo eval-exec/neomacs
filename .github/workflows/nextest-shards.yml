@@ -44,7 +44,7 @@ jobs:
           case "$SHARD_SUITE" in
             core)
               echo "LINUX_PROFILE=build" >> "$GITHUB_ENV"
-              echo "NEXTEST_FILTER=package(neovm-core)" >> "$GITHUB_ENV"
+              echo "NEXTEST_FILTER=package(neovm-core) | package(neovm-value) | package(neovm-edit) | package(neovm-text) | package(neovm-eval) | package(neovm-display) | package(neovm-system)" >> "$GITHUB_ENV"
               ;;
             oracle)
               echo "LINUX_PROFILE=oracle" >> "$GITHUB_ENV"

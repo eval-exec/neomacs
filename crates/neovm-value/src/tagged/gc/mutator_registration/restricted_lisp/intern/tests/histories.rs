@@ -111,7 +111,7 @@ fn actor<'era>(
                 owner
                     .local
                     .as_ref()
-                    .map_or(0, |local| local.root_scratch.len())
+                    .map_or(0, |local| local.root_scratch_len())
             )
         })?);
         let frame = frame.as_mut().ok_or("C5 executor frame absent")?;

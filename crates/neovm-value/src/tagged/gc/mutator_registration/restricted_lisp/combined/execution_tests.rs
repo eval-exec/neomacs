@@ -547,8 +547,7 @@ pub(crate) fn p3sym_c6_mixed_seed_capacity_and_repeated_seed_preserve_the_bank<H
                     .local
                     .as_ref()
                     .unwrap()
-                    .root_scratch
-                    .is_empty()
+                    .root_scratch_is_empty()
             );
         },
     )
@@ -578,8 +577,7 @@ pub(crate) fn p3sym_c6_mixed_seed_capacity_and_repeated_seed_preserve_the_bank<H
                     .local
                     .as_ref()
                     .unwrap()
-                    .root_scratch
-                    .is_empty()
+                    .root_scratch_is_empty()
             );
             worker.seed(session).unwrap();
             worker.step(session).unwrap();
@@ -695,8 +693,7 @@ pub(crate) fn p3sym_c6_mixed_retired_session_and_stale_frame_refuse_before_acces
                     .local
                     .as_ref()
                     .unwrap()
-                    .root_scratch
-                    .is_empty()
+                    .root_scratch_is_empty()
             );
             worker.seed(session).unwrap();
             match &mut worker.frame {

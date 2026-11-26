@@ -1,0 +1,15 @@
+error[E0596]: cannot borrow data in dereference of `BufferManagerMut<'_>` as mutable
+  --> tests/buffer_manager_view_ui/split_borrow_buffer_view_cannot_be_swapped.rs:13:20
+   |
+13 |     std::mem::swap(&mut *bm_a, &mut *bm_b);
+   |                    ^^^^^^^^^^ cannot borrow as mutable
+   |
+   = help: trait `DerefMut` is required to modify through a dereference, but it is not implemented for `BufferManagerMut<'_>`
+
+error[E0596]: cannot borrow data in dereference of `BufferManagerMut<'_>` as mutable
+  --> tests/buffer_manager_view_ui/split_borrow_buffer_view_cannot_be_swapped.rs:13:32
+   |
+13 |     std::mem::swap(&mut *bm_a, &mut *bm_b);
+   |                                ^^^^^^^^^^ cannot borrow as mutable
+   |
+   = help: trait `DerefMut` is required to modify through a dereference, but it is not implemented for `BufferManagerMut<'_>`

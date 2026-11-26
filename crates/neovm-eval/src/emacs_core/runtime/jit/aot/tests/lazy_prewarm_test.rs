@@ -29,10 +29,10 @@ impl Member {
             optional: Vec::new(),
             rest: None,
         });
-        f.lexical = true;
-        f.ops = self.ops.clone();
-        f.constants = self.constants.clone().into();
-        f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
+        f.set_lexical(true);
+        f.set_ops(self.ops.clone());
+        f.set_constants(self.constants.clone().into());
+        f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
         f.seal_hand_assembled_ops();
         f
     }
@@ -134,7 +134,7 @@ fn lazy_prewarm_serves_a_marked_member_from_the_preload() {
         "the marked member must be served from the preload"
     );
 
-    super::super::cache::clear();
+    super::super::cache::clear_with_serial_receipt().expect("serial jit grace");
     test_support::reset();
 }
 
@@ -241,7 +241,7 @@ fn lazy_prewarm_battery_matches_the_interpreter_and_serves_every_member() {
     assert_eq!(stats.aot_loads, members.len() as u64, "{stats:?}");
     assert_eq!(stats.total_compiles, 0, "{stats:?}");
 
-    super::super::cache::clear();
+    super::super::cache::clear_with_serial_receipt().expect("serial jit grace");
     test_support::reset();
 }
 
@@ -283,9 +283,10 @@ fn lazy_prewarm_marks_pdump_stubs_without_materializing_them() {
     let dump_path = dir.path().join("lazy-stubs.pdump");
     crate::emacs_core::pdump::dump_to_file(&ctx, &dump_path).expect("dump");
     crate::emacs_core::eval::restore_scratch_gc_roots(scratch);
+    let proof = ctx.hooks_installed();
+    drop(ctx);
     let mut loaded =
-        crate::emacs_core::pdump::load_from_dump_with_proof(&dump_path, ctx.hooks_installed())
-            .expect("load");
+        crate::emacs_core::pdump::load_from_dump_with_proof(&dump_path, proof).expect("load");
 
     let lib = unsafe { libloading::Library::new(&so_path) }.expect("dlopen");
     test_support::set_forced_enabled(true);
@@ -331,7 +332,7 @@ fn lazy_prewarm_marks_pdump_stubs_without_materializing_them() {
         Some(true)
     );
 
-    super::super::cache::clear();
+    super::super::cache::clear_with_serial_receipt().expect("serial jit grace");
     test_support::reset();
 }
 
@@ -342,8 +343,8 @@ fn leaves_hash(ctx: &Context, name: &str) -> u128 {
         .expect("byte code");
     leaf_content_hash(
         bc.executable_ops(),
-        &bc.constants,
-        bc.params
+        bc.constants(),
+        bc.params()
             .stack_shape()
             .expect("fixture stack parameters")
             .required(),
@@ -364,7 +365,8 @@ fn manifest_member_stream_yields_members_behind_the_interlock() {
     };
     let header = |fingerprint: &str| {
         format!(
-            "version {PRELOAD_MANIFEST_VERSION}\nabi_tag {ABI_TAG:08x}\nfingerprint {fingerprint}\nleaves 6\n"
+            "version {PRELOAD_MANIFEST_VERSION}\nabi_tag {ABI_TAG:08x}\nfingerprint {fingerprint}\nvec_layout {}\nleaves 6\n",
+            vec_slice_layout_token(),
         )
     };
     use PreloadClass::{AtTierUp, NonMember, Prewarm};
@@ -471,7 +473,7 @@ fn call_glue_members_are_served_at_tier_up_not_from_call_1() {
             Some(true)
         );
 
-        super::super::cache::clear();
+        super::super::cache::clear_with_serial_receipt().expect("serial jit grace");
         test_support::reset();
     }
 }

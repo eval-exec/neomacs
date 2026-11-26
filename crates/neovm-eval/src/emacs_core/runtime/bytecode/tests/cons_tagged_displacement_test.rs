@@ -35,8 +35,8 @@ fn bytecode_cons_tagged_displacements_preserve_exact_slots_and_capture() {
             let is_car = matches!(op, Op::Car | Op::CarSafe);
             let expected = if is_car { car } else { cdr };
             let mut code = ByteCodeFunction::new(parse_arglist_descriptor(1 | (1 << 8)));
-            code.ops = vec![op.clone(), Op::Return];
-            code.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(1);
+            code.set_ops(vec![op.clone(), Op::Return]);
+            code.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(1));
             code.seal_hand_assembled_ops_for_test();
             assert!(code.executes_sealed_ops());
             assert!(

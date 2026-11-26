@@ -210,7 +210,9 @@ impl WgpuRenderer {
     ) {
         let logical_w = surface_width as f32 / self.scale_factor;
         let logical_h = surface_height as f32 / self.scale_factor;
-        let draw = self.parameters([logical_w, logical_h], 0.0);
+        let Ok(draw) = self.parameters([logical_w, logical_h], 0.0) else {
+            return;
+        };
 
         let (r, g, b, a) = (1.0_f32, 1.0_f32, 1.0_f32, alpha.clamp(0.0, 1.0));
         let color = [r, g, b, a];
@@ -601,7 +603,9 @@ impl WgpuRenderer {
         // Same cache key as `parameters()` when alpha is 1.0 and the scale is
         // the identity, so a settled child frame reuses the identical
         // immutable snapshot.
-        let draw = self.parameters_for([logical_w, logical_h], 0.0, alpha, scale, pivot);
+        let Ok(draw) = self.parameters_for([logical_w, logical_h], 0.0, alpha, scale, pivot) else {
+            return;
+        };
 
         let bw = child.border_width;
         // The CPU-built chrome geometry scales by the same factor the vertex

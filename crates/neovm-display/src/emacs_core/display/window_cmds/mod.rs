@@ -597,9 +597,8 @@ pub fn builtin_window_lines_pixel_dimensions(
     // GNU bails when `!w->window_end_valid || windows_or_buffers_changed ||
     // b->clip_changed || b->prevent_redisplay_optimizations_p ||
     // window_outdated (w)` -- redisplay has not run since the last change.
-    // `fresh_window_display_snapshot` is that same gate for retained rows, so
-    // a stale matrix answers nil rather than yesterday's geometry.
-    let Some(snapshot) = eval.fresh_window_display_snapshot(fid, window_id, buffer_id) else {
+    // This gate reads acceptance accuracy, not the original row-reuse token.
+    let Some(snapshot) = eval.gnu_current_matrix_snapshot(fid, window_id, buffer_id) else {
         return Ok(Value::NIL);
     };
     let Some(frame) = eval.frame_manager().get(fid) else {
@@ -1832,18 +1831,21 @@ pub(crate) fn window_line_wrap(
 
     // Re-read through the buffer: `eval.buffers` was borrowed mutably above.
     let current_buffer = eval.edit.buffers.get(current_buffer_id);
-    let partial_width_truncates =
-        match neovm_edit::emacs_core::indent::dynamic_buffer_or_global_symbol_value_fixed(
+    let truncate_partial_width =
+        neovm_edit::emacs_core::indent::dynamic_buffer_or_global_symbol_value_fixed(
             eval.variables(),
             &[],
             current_buffer,
             &neovm_value::intern::WellKnown::TruncatePartialWidthWindows,
-        ) {
-            Some(value) if value.is_nil() => false,
-            Some(value) if value.is_fixnum() => window_cols < value.as_fixnum().unwrap(),
-            Some(_) => true,
-            None => false,
-        };
+        );
+    // One shared predicate with the edit host's scan_for_column gate
+    // (neovm-value::display_vocab): the display and indent layers must not
+    // decide partial width differently.
+    let partial_width_truncates = neovm_value::display_vocab::partial_width_truncates(
+        window_cols,
+        root_cols,
+        truncate_partial_width,
+    );
     if partial_width_truncates {
         LineWrap::Truncate
     } else {
@@ -2215,23 +2217,27 @@ pub fn builtin_tty_frame_edges(
     Ok(tty_frame_edges_value(frame))
 }
 
-/// `(neomacs-frame-edges &optional FRAME TYPE)` -> GUI frame edges.
+/// The `frame_geometry` edges arm for a GUI frame.
 ///
-/// GNU's toolkit-specific `*-frame-edges` functions return a four-number
-/// edge list for `outer-edges`, `native-edges` (or nil), and `inner-edges`.
-/// Neomacs renders frames into one GPU-composited display surface, so native
-/// and outer edges currently coincide; inner edges exclude the frame's
-/// internal border just like GNU's `frame_geometry`.
-#[doc(hidden)]
-pub fn builtin_neomacs_frame_edges(
+/// GNU's toolkit-specific `*-frame-edges` functions and toolkit
+/// `*-frame-geometry` functions enter the same `frame_geometry`
+/// (src/xfns.c:6781-6960); `Fx_frame_edges` passes `Qouter_edges`,
+/// `Qnative_edges` or `Qinner_edges` as the attribute (src/xfns.c:7008-7027).
+/// Neomacs shares this builder between its toolkit names
+/// `neomacs-frame-edges` and `x-frame-edges`, so both report one value.
+/// The entry point owns its own arity check; the builder only resolves the
+/// live frame and answers the edge list.  The native edges exclude the
+/// external menu/tool bar band, which Neomacs draws inside its own window;
+/// the inner edges also exclude the internal border and the tab bar.
+pub(crate) fn gui_frame_edges_value(
     eval: &mut neovm_eval::emacs_core::eval::Context,
-    args: Vec<Value>,
+    frame: Option<&Value>,
+    requested: Option<&Value>,
 ) -> EvalResult {
     let symbol_mode = eval.symbol_mode();
-    expect_max_args("neomacs-frame-edges", &args, 2)?;
     let fid = resolve_frame_id(
         eval,
-        args.first(),
+        frame,
         crate::emacs_core::window_cmds::FrameDomain::Live,
     )?;
     let frame = eval
@@ -2251,28 +2257,59 @@ pub fn builtin_neomacs_frame_edges(
                 vec![Value::string("Frame origin unavailable for frame edges")],
             )
         })?;
-    let mut left = left.round() as i64;
-    let mut top = top.round() as i64;
-    let mut right = left.saturating_add(i64::from(frame.width));
-    let mut bottom = top.saturating_add(i64::from(frame.height));
+    let left = left.round() as i64;
+    let top = top.round() as i64;
+    let right = left.saturating_add(i64::from(frame.width));
+    let bottom = top.saturating_add(i64::from(frame.height));
+    // `FRAME_TOOLBAR_HEIGHT` is 0 until the bar is packed (xfns.c:6884-6886).
+    // That reserved height is `external_bar_height`, not the stored pixels.
+    let external_bar_height = i64::from(frame.external_bar_height());
+    let border = frame.internal_border_width().max(0);
+    let native_top = top.saturating_add(external_bar_height);
 
-    if args
-        .get(1)
-        .is_some_and(|value| value.is_symbol_named("inner-edges", symbol_mode))
-    {
-        let border = frame.internal_border_width().max(0);
-        left = left.saturating_add(border);
-        top = top.saturating_add(border);
-        right = right.saturating_sub(border);
-        bottom = bottom.saturating_sub(border);
+    if requested.is_some_and(|value| value.is_symbol_named("outer-edges", symbol_mode)) {
+        return Ok(Value::list(vec![
+            Value::fixnum(left),
+            Value::fixnum(top),
+            Value::fixnum(right),
+            Value::fixnum(bottom),
+        ]));
+    }
+    if requested.is_some_and(|value| value.is_symbol_named("inner-edges", symbol_mode)) {
+        return Ok(Value::list(vec![
+            Value::fixnum(left.saturating_add(border)),
+            Value::fixnum(
+                native_top
+                    .saturating_add(border)
+                    .saturating_add(i64::from(frame.tab_bar_height)),
+            ),
+            Value::fixnum(right.saturating_sub(border)),
+            Value::fixnum(bottom.saturating_sub(border)),
+        ]));
     }
 
+    // `native-edges`, nil, and any other TYPE all mean native edges.
     Ok(Value::list(vec![
         Value::fixnum(left),
-        Value::fixnum(top),
+        Value::fixnum(native_top),
         Value::fixnum(right),
         Value::fixnum(bottom),
     ]))
+}
+
+/// `(neomacs-frame-edges &optional FRAME TYPE)` -> GUI frame edges.
+///
+/// GNU's Neomacs toolkit arm (`framep-on-display` is `neo`) and the
+/// `frame-edges` dispatcher both reach this name (lisp/frame.el:2334-2365).
+/// It answers through the shared [`gui_frame_edges_value`] builder, exactly
+/// as `x-frame-edges` does.
+#[doc(hidden)]
+pub fn builtin_neomacs_frame_edges(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    expect_max_args("neomacs-frame-edges", &args, 2)?;
+    gui_frame_edges_value(eval, args.first(), args.get(1))
 }
 
 /// `(tty-frame-geometry &optional FRAME)` -> terminal frame geometry alist.
@@ -3031,12 +3068,12 @@ fn query_window_end(
     }
     if window_end.is_current()
         && eval
-            .fresh_window_display_snapshot(fid, wid, buffer_id)
+            .gnu_current_matrix_snapshot(fid, wid, buffer_id)
             .is_some()
     {
         // GNU Fwindow_end only constructs a stack-local iterator when the
-        // window's accepted end is no longer valid. The full retained-layout
-        // token is Neomacs's authoritative equivalent of GNU's validity bits.
+        // window's accepted end is no longer accurate. The row-production
+        // token remains separate and can already be stale after chrome.
         return Ok(Value::fixnum(stored_end.as_i64()));
     }
 
@@ -3663,13 +3700,44 @@ pub fn builtin_window_pixel_left(
     let graphical = frame.is_some_and(|frame| frame.effective_window_system().is_some());
     let cw = frame.map(|frame| frame.char_width).unwrap_or(8.0);
     let left = if graphical {
-        // GNU `Fwindow_pixel_left` returns `w->pixel_left` directly.
-        w.bounds().x as i64
+        // GNU `Fwindow_pixel_left` returns `w->pixel_left` directly, measured
+        // from the frame's window area; the internal border is not part of
+        // any window's pixel origin (lisp/window.el:3839 `window-edges` adds
+        // it separately when it reports body edges).
+        let border = frame.map(window_area_border_offset).unwrap_or(0);
+        (w.bounds().x as i64 - border).max(0)
     } else {
         tty_batch_pixel_left(w, cw)
     };
     Ok(Value::fixnum(left))
 }
+
+/// Pixel offset between Neomacs' window-tree origin and GNU's window-area
+/// origin for the top-left corner, as `(left, top)`.
+///
+/// GNU's `w->pixel_top` starts at `FRAME_TOP_MARGIN_HEIGHT` (src/window.c:
+/// 5077-5105) and its window tree carries no internal-border offset: the root
+/// window's pixel origin is the window area's origin.  Neomacs stores the menu
+/// and tool bar band and the internal border inside the window tree so the
+/// renderer can paint them, so both are subtracted here.
+///
+/// Only the menu and tool bar band moves: GNU's Gtk+ and NS builds keep those
+/// bars outside the native frame, while the tab bar is part of the window
+/// area (and therefore part of `FRAME_TOP_MARGIN_HEIGHT`).
+fn window_area_origin_offset(frame: &crate::window::Frame) -> (i64, i64) {
+    let external_bar = if frame.displays_chrome {
+        i64::from(frame.external_bar_height())
+    } else {
+        0
+    };
+    let border = window_area_border_offset(frame);
+    (border, external_bar + border)
+}
+
+fn window_area_border_offset(frame: &crate::window::Frame) -> i64 {
+    frame.internal_border_width().max(0)
+}
+
 /// `(window-pixel-top &optional WINDOW)` -> integer.
 ///
 /// Graphical frames report the stored frame-relative pixel coordinate.  In
@@ -3687,8 +3755,14 @@ pub fn builtin_window_pixel_top(
     let graphical = frame.is_some_and(|frame| frame.effective_window_system().is_some());
     let ch = frame.map(|frame| frame.char_height).unwrap_or(16.0);
     let top = if graphical {
-        // GNU `Fwindow_pixel_top` returns `w->pixel_top` directly.
-        w.bounds().y as i64
+        // GNU `Fwindow_pixel_top` returns `w->pixel_top`, relative to the
+        // frame's window area: the root starts at `FRAME_TOP_MARGIN_HEIGHT`
+        // and every child inherits that origin (src/window.c:5077-5105).  A
+        // GTK3 oracle frame reports 0 here with its menu and tool bars on,
+        // and a `(cells 1 1)` posframe anchor at top 17 for exactly this
+        // reason.
+        let (_, top_offset) = frame.map(window_area_origin_offset).unwrap_or((0, 0));
+        (w.bounds().y as i64 - top_offset).max(0)
     } else {
         tty_batch_pixel_top(w, ch)
     };
@@ -5966,6 +6040,7 @@ pub(crate) enum FrameResizeRequest {
     },
     Cells {
         cols: i64,
+        /// GUI text rows, including the minibuffer, excluding frame chrome.
         total_lines: i64,
     },
 }
@@ -6053,18 +6128,13 @@ pub(crate) fn frame_realized_lines(frame: &crate::window::Frame) -> i64 {
 
 fn frame_non_text_height_pixels(frame: &crate::window::Frame) -> u32 {
     // GNU frame text size includes the minibuffer window.  Only true frame
-    // chrome lives outside the text area for sizing math here.
+    // chrome lives outside the text area for sizing math here. The tool bar
+    // contributes the reserved height, which is 0 while an explicit size has
+    // left an unallocated bar out of the window.
     frame
         .menu_bar_height
-        .saturating_add(frame.tool_bar_height)
+        .saturating_add(frame.reserved_tool_bar_height())
         .saturating_add(frame.tab_bar_height)
-}
-
-fn frame_non_text_width_pixels_in_state(frames: &FrameManager, fid: FrameId) -> u32 {
-    frames
-        .get(fid)
-        .map(|frame| frame.horizontal_non_text_width().max(0) as u32)
-        .unwrap_or(0)
 }
 
 fn frame_internal_border_total_pixels(frame: &crate::window::Frame) -> u32 {
@@ -6077,24 +6147,77 @@ pub(crate) fn frame_non_text_total_width_pixels_in_state(
     frames: &FrameManager,
     fid: FrameId,
 ) -> u32 {
-    let border = frames
+    frames
         .get(fid)
-        .map(frame_internal_border_total_pixels)
-        .unwrap_or(0);
-    frame_non_text_width_pixels_in_state(frames, fid).saturating_add(border)
+        .map(frame_non_text_total_width_pixels)
+        .unwrap_or(0)
+}
+
+fn frame_non_text_total_width_pixels(frame: &crate::window::Frame) -> u32 {
+    (frame.horizontal_non_text_width().max(0) as u32)
+        .saturating_add(frame_internal_border_total_pixels(frame))
 }
 
 pub(crate) fn frame_non_text_total_height_pixels(frame: &crate::window::Frame) -> u32 {
     frame_non_text_height_pixels(frame).saturating_add(frame_internal_border_total_pixels(frame))
 }
 
+/// Chrome added above a requested text height when building the host window.
+///
+/// Menu-bar pixels are this frame's own `menu_bar_height` (a character row).
+/// Neomacs does not measure a GTK menu bar. `include_tool_bar` is false only
+/// for an explicit text size whose toolkit tool bar is not allocated yet, so
+/// the request matches `FRAME_TOOLBAR_HEIGHT` == 0 in `xg_frame_set_char_size`
+/// (gtkutil.c:1181-1182).
+pub(crate) fn host_outer_non_text_height_pixels(
+    frame: &crate::window::Frame,
+    include_tool_bar: bool,
+) -> u32 {
+    // `frame_non_text_total_height_pixels` already uses the reserved height.
+    // A caller that includes the bar still adds the stored height when the
+    // reserve is 0 (the first allocation grow, and a creation window that
+    // passes `include_tool_bar` while the enum is still unallocated). Subtract
+    // only a reserve that is actually in the total, so a withheld bar cannot
+    // underflow.
+    let reserved = frame.reserved_tool_bar_height();
+    let mut height = frame_non_text_total_height_pixels(frame);
+    if include_tool_bar {
+        height = height.saturating_add(frame.tool_bar_height.saturating_sub(reserved));
+    } else {
+        height = height.saturating_sub(reserved);
+    }
+    height
+}
+
+pub(crate) fn note_explicit_tool_bar_omission(
+    frame: &mut crate::window::Frame,
+    include_tool_bar: bool,
+) {
+    #[cfg(target_os = "linux")]
+    if !include_tool_bar
+        && matches!(
+            frame.toolkit_tool_bar,
+            crate::window::ToolkitToolBar::Unallocated { .. }
+        )
+    {
+        frame.toolkit_tool_bar = crate::window::ToolkitToolBar::Unallocated {
+            explicit_size_omitted: true,
+        };
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = (frame, include_tool_bar);
+    }
+}
+
 pub(crate) fn frame_text_width_pixels_in_state(frames: &FrameManager, fid: FrameId) -> u32 {
-    let Some(frame) = frames.get(fid) else {
-        return 0;
-    };
+    frames.get(fid).map(frame_text_width_pixels).unwrap_or(0)
+}
+
+pub(crate) fn frame_text_width_pixels(frame: &crate::window::Frame) -> u32 {
     frame
         .width
-        .saturating_sub(frame_non_text_total_width_pixels_in_state(frames, fid))
+        .saturating_sub(frame_non_text_total_width_pixels(frame))
         .max(1)
 }
 
@@ -6193,21 +6316,21 @@ fn live_gui_resize_pixels_from_logical_size(
     frames: &FrameManager,
     fid: FrameId,
     desired_cols: i64,
-    desired_total_lines: i64,
+    desired_text_lines: i64,
 ) -> Result<(u32, u32), Flow> {
     let frame = frames
         .get(fid)
         .ok_or_else(|| signal("error", vec![Value::string("Frame not found")]))?;
     let char_width = frame.char_width.max(1.0).round();
     let char_height = frame.char_height.max(1.0).round();
-    let non_text_height = frame_non_text_height_pixels(frame);
-    let total_height_px = ((desired_total_lines.max(1) as f32) * char_height)
+    // GNU set-frame-size/height pass the requested TEXT size to
+    // adjust_frame_size (frame.c:4563-4587,4621-4640). The host-request
+    // boundary adds frame chrome and borders once; these are not allocation
+    // rows from which a menu, toolbar, or tab band should be subtracted.
+    let text_height_px = ((desired_text_lines.max(1) as f32) * char_height)
         .round()
         .max(1.0) as u32;
     let text_width_px = ((desired_cols.max(1) as f32) * char_width).round().max(1.0) as u32;
-    let text_height_px = total_height_px
-        .saturating_sub(non_text_height)
-        .max(char_height.round().max(1.0) as u32);
     Ok((text_width_px, text_height_px))
 }
 
@@ -6219,6 +6342,7 @@ pub(crate) fn resize_live_gui_frame(
     text_width_px: u32,
     text_height_px: u32,
     pretend: bool,
+    include_tool_bar: bool,
 ) -> Result<(), Flow> {
     let (total_width_px, total_height_px, title, cols, text_lines) = {
         let frame = frames
@@ -6229,7 +6353,7 @@ pub(crate) fn resize_live_gui_frame(
         let cols = ((text_width_px as f32) / char_width).floor().max(1.0) as i64;
         let text_lines = ((text_height_px as f32) / char_height).floor().max(1.0) as i64;
         let non_text_width = frame_non_text_total_width_pixels_in_state(frames, fid);
-        let non_text_height = frame_non_text_total_height_pixels(frame);
+        let non_text_height = host_outer_non_text_height_pixels(frame, include_tool_bar);
         let title = frame.host_title_lisp_string();
         (
             text_width_px.saturating_add(non_text_width).max(1),
@@ -6244,6 +6368,7 @@ pub(crate) fn resize_live_gui_frame(
         let frame = frames
             .get_mut(fid)
             .ok_or_else(|| signal("error", vec![Value::string("Frame not found")]))?;
+        note_explicit_tool_bar_omission(frame, include_tool_bar);
         frame.clear_pending_gui_resize();
         tracing::debug!(
             "resize_live_gui_frame: fid={:?} pretend={} total={}x{} cols={} text_lines={}",
@@ -6262,10 +6387,15 @@ pub(crate) fn resize_live_gui_frame(
                 total_width_px,
                 total_height_px,
             );
-            frame.set_parameter(
-                Value::symbol(FRAME_TEXT_LINES_PARAM),
-                Value::fixnum(text_lines),
-            );
+            // The pixel resize already stored the lines that fit. When the
+            // tool bar sits inside the requested text height, those lines are
+            // fewer than `text_lines`; keep them.
+            if include_tool_bar {
+                frame.set_parameter(
+                    Value::symbol(FRAME_TEXT_LINES_PARAM),
+                    Value::fixnum(text_lines),
+                );
+            }
         }
     }
 
@@ -6299,6 +6429,7 @@ pub(crate) fn resize_live_gui_frame(
             title
         );
         host.resize_gui_frame(neovm_eval::emacs_core::eval::GuiFrameHostRequest {
+            resize_request_id: None,
             frame_id: fid,
             width: total_width_px,
             height: total_height_px,
@@ -6322,6 +6453,7 @@ pub(crate) fn request_live_gui_frame_resize(
     text_width_px: u32,
     text_height_px: u32,
     pretend: bool,
+    include_tool_bar: bool,
 ) -> Result<(), Flow> {
     let (total_width_px, total_height_px, title, cols, text_lines) = {
         let frame = frames
@@ -6332,7 +6464,7 @@ pub(crate) fn request_live_gui_frame_resize(
         let cols = ((text_width_px as f32) / char_width).floor().max(1.0) as i64;
         let text_lines = ((text_height_px as f32) / char_height).floor().max(1.0) as i64;
         let non_text_width = frame_non_text_total_width_pixels_in_state(frames, fid);
-        let non_text_height = frame_non_text_total_height_pixels(frame);
+        let non_text_height = host_outer_non_text_height_pixels(frame, include_tool_bar);
         let title = frame.host_title_lisp_string();
         (
             text_width_px.saturating_add(non_text_width).max(1),
@@ -6358,6 +6490,7 @@ pub(crate) fn request_live_gui_frame_resize(
         let frame = frames
             .get_mut(fid)
             .ok_or_else(|| signal("error", vec![Value::string("Frame not found")]))?;
+        note_explicit_tool_bar_omission(frame, include_tool_bar);
         frame.clear_pending_gui_resize();
         set_frame_text_size(frame, cols, text_lines);
         if frame.parent_frame.as_frame_id().is_some() {
@@ -6367,6 +6500,7 @@ pub(crate) fn request_live_gui_frame_resize(
     }
 
     if let Some(frame) = frames.get_mut(fid) {
+        note_explicit_tool_bar_omission(frame, include_tool_bar);
         frame.clear_pending_gui_resize();
     }
 
@@ -6387,6 +6521,7 @@ pub(crate) fn request_live_gui_frame_resize(
             })
             .ok_or_else(|| signal("error", vec![Value::string("Frame not found")]))?;
         host.resize_gui_frame(neovm_eval::emacs_core::eval::GuiFrameHostRequest {
+            resize_request_id: None,
             frame_id: fid,
             width: total_width_px,
             height: total_height_px,
@@ -6404,10 +6539,12 @@ pub(crate) fn request_live_gui_frame_resize(
         .get_mut(fid)
         .ok_or_else(|| signal("error", vec![Value::string("Frame not found")]))?;
     frame.resize_pixelwise_with_buffer_constraints(buffers, total_width_px, total_height_px);
-    frame.set_parameter(
-        Value::symbol(FRAME_TEXT_LINES_PARAM),
-        Value::fixnum(text_lines),
-    );
+    if include_tool_bar {
+        frame.set_parameter(
+            Value::symbol(FRAME_TEXT_LINES_PARAM),
+            Value::fixnum(text_lines),
+        );
+    }
     adjust_frame_glyph_matrices_in_state(frames, buffers, fid);
     Ok(())
 }
@@ -6451,6 +6588,7 @@ pub(crate) fn flush_pending_live_gui_resize(
                 cols: pending.width_cols,
                 total_lines: pending.total_lines,
             },
+            true,
         )?;
     }
     Ok(eval
@@ -6511,6 +6649,162 @@ fn scroll_lines_in_state(
         .unwrap_or(2);
     (wh - ctx).max(1) * direction
 }
+/// GNU `window_scroll_for_long_lines` (`src/window.c:6242-6315`), reached
+/// from `window_scroll` when `whole && long_lines_truncated`
+/// (`src/window.c:6157-6182`).  Whole-window scrolls only: nil ARG and `-`
+/// are whole, a numeric ARG is not (`src/window.c:7008-7014`).
+///
+/// The path is deliberately simplified exactly as GNU's: `n` is multiplied by
+/// `max (1, ht - next-screen-context-lines)`, motion goes through `vmotion`
+/// (`MotionEngine::ComputeMotion`), and scroll-margin /
+/// scroll-preserve-screen-position are not honored.  No Lisp runs on this
+/// path, so GNU's `specbind (Qfontification_functions, Qnil)`
+/// (`src/window.c:6178-6179`) has no observable counterpart here; the TUI row
+/// pins that a whole scroll runs no fontification function.
+fn try_scroll_long_lines(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    arg: Option<&Value>,
+    direction: i64,
+) -> Result<bool, Flow> {
+    use neovm_edit::emacs_core::edit_host::EditHost;
+    let minus = arg.is_some_and(|value| value.as_bare_symbol_name() == Some("-"));
+    let whole = match arg {
+        None => true,
+        Some(value) if value.is_nil() => true,
+        Some(_) => minus,
+    };
+    if !whole {
+        return Ok(false);
+    }
+    let frame = ensure_selected_frame_id(eval);
+    let Some(wid) = eval
+        .frame_manager()
+        .get(frame)
+        .map(|frame| frame.selected_window)
+    else {
+        return Ok(false);
+    };
+    let Some(buffer_id) = eval
+        .frame_manager()
+        .get(frame)
+        .and_then(|frame| frame.find_window(wid))
+        .and_then(|window| window.buffer_id())
+    else {
+        return Ok(false);
+    };
+    let truncated = {
+        let Some(buffer) = eval.edit.buffers.get(buffer_id) else {
+            return Ok(false);
+        };
+        if !buffer.long_line_optimizations_p() {
+            return Ok(false);
+        }
+        buffer.truncate_lines_p() || EditHost::long_line_partial_width_truncation(eval, buffer_id)
+    };
+    if !truncated {
+        return Ok(false);
+    }
+
+    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    let body_height = window_body_height_impl(frames, buffers, vec![])
+        .ok()
+        .and_then(|value| value.as_fixnum())
+        .unwrap_or(1)
+        .max(1);
+    let next_screen_context_lines = eval
+        .builtin_var_value_by_name("next-screen-context-lines")
+        .and_then(|value| value.as_fixnum())
+        .unwrap_or(2)
+        .clamp(0, 1_000_000);
+    // GNU `window_scroll_for_long_lines`: n *= max (1, ht - nscls).
+    let sign = if minus { -direction } else { direction };
+    let lines = sign * (body_height - next_screen_context_lines).max(1);
+
+    let (point, point_lisp, begv, zv) = {
+        let Some(buffer) = eval.edit.buffers.get(buffer_id) else {
+            return Ok(false);
+        };
+        let accessible = buffer.accessible_emacs_byte_region();
+        (
+            accessible.clamp(buffer.point_emacs_byte_pos()),
+            buffer.point_lisp_char_pos(),
+            accessible.start(),
+            accessible.end(),
+        )
+    };
+    // GNU `window_scroll_for_long_lines` starts the motion from the WINDOW
+    // START when point is fully visible; otherwise it first brings point
+    // inside with `vmotion (PT, -(ht/2))` and starts there
+    // (src/window.c:6248-6266).  It never starts from point unconditionally.
+    let point_visible = super::xdisp::builtin_pos_visible_in_window_p_ctx(
+        eval,
+        vec![
+            Value::fixnum(point_lisp.as_i64()),
+            Value::make_window(wid.0),
+        ],
+    )
+    .map(|value| value.is_truthy())
+    .unwrap_or(false);
+    let base = if point_visible {
+        eval.frame_manager()
+            .get(frame)
+            .and_then(|frame| frame.find_window(wid))
+            .and_then(|window| window.window_start())
+            .and_then(|start| {
+                eval.edit
+                    .buffers
+                    .get(buffer_id)
+                    .map(|buffer| buffer.lisp_pos_to_emacs_byte_pos(start))
+            })
+            .unwrap_or(point)
+    } else {
+        neovm_edit::emacs_core::indent::vmotion_target(
+            eval,
+            buffer_id,
+            point,
+            None,
+            -(body_height / 2),
+        )?
+        .0
+    };
+    let lose = lines < 0 && base == begv;
+    let (start, _moved) =
+        neovm_edit::emacs_core::indent::vmotion_target(eval, buffer_id, base, None, lines)?;
+    if lose {
+        return Err(scroll_down_batch_error());
+    }
+    if start >= zv {
+        return Err(scroll_up_batch_error());
+    }
+    // GNU points point at ht/2 from the new start, forward for n > 0.
+    let center_lines = if lines > 0 {
+        body_height / 2
+    } else {
+        -(body_height / 2)
+    };
+    let (center, _) =
+        neovm_edit::emacs_core::indent::vmotion_target(eval, buffer_id, start, None, center_lines)?;
+    let (start_lisp, point_lisp) = {
+        let Some(buffer) = eval.edit.buffers.get(buffer_id) else {
+            return Ok(false);
+        };
+        (
+            buffer.emacs_byte_pos_to_lisp_char_pos(start),
+            buffer.emacs_byte_pos_to_lisp_char_pos(center),
+        )
+    };
+    crate::window::WindowScrollUpdate {
+        frame,
+        window: wid,
+        buffer: buffer_id,
+        start: start_lisp,
+        point: point_lisp,
+        hidden_top_pixels: 0,
+    }
+    .commit(eval)?;
+    Ok(true)
+}
+
 /// `(scroll-up &optional ARG)` — scroll text upward (forward in buffer).
 ///
 /// Mirror GNU Emacs Fscroll_up (window.c): move point forward by ARG lines
@@ -6532,6 +6826,10 @@ pub fn builtin_scroll_up(
             // GNU window.c:6163, before Lisp-bearing motion queries.
             eval.gnu_mark_window_redisplay(window);
         }
+    }
+    if try_scroll_long_lines(eval, arg.as_ref(), 1)? {
+        eval.invalidate_redisplay();
+        return Ok(Value::NIL);
     }
     if crate::emacs_core::xdisp::motion::paging::try_scroll(eval, arg, 1)? {
         eval.invalidate_redisplay();
@@ -6570,6 +6868,10 @@ pub fn builtin_scroll_down(
             // GNU window.c:6163, before Lisp-bearing motion queries.
             eval.gnu_mark_window_redisplay(window);
         }
+    }
+    if try_scroll_long_lines(eval, arg.as_ref(), -1)? {
+        eval.invalidate_redisplay();
+        return Ok(Value::NIL);
     }
     if crate::emacs_core::xdisp::motion::paging::try_scroll(eval, arg, -1)? {
         eval.invalidate_redisplay();
@@ -6884,6 +7186,70 @@ pub fn builtin_recenter(
         // GNU redraws before display motion; a callback/error must already
         // observe the frame/window marks (window.c:7265-7272).
         crate::emacs_core::dispnew::pure::publish_gnu_frame_redraw(eval, fid);
+    }
+
+    // GNU Frecenter (src/window.c:7293-7296) uses the display-code path only
+    // when the buffer's long-line flag is nil; the fallback at :7400-7434 is
+    // line-based: center -> ht/2, negative -> += ht, clip to the scroll
+    // margins, then vmotion (PT, -iarg).  Point itself is not moved.
+    if eval
+        .edit
+        .buffers
+        .get(buffer_id)
+        .is_some_and(|buffer| buffer.long_line_optimizations_p())
+    {
+        let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+        let body_height = window_body_height_impl(frames, buffers, vec![])
+            .ok()
+            .and_then(|value| value.as_fixnum())
+            .unwrap_or(1)
+            .max(1);
+        let margin = crate::window::ScrollMargin::from_lisp_values(
+            eval.visible_variable_value_or_nil("scroll-margin")
+                .as_fixnum()
+                .unwrap_or(0),
+            eval.visible_variable_value_or_nil("maximum-scroll-margin")
+                .as_float(),
+        )
+        .lines(body_height);
+        let iarg = placement
+            .canonical_rows(body_height)
+            .clamp(margin, (body_height - margin - 1).max(margin));
+        let (pos, _) =
+            neovm_edit::emacs_core::indent::vmotion_target(eval, buffer_id, pt, None, -iarg)?;
+        {
+            let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+            let Some(buf) = buffers.get(buffer_id) else {
+                return Ok(Value::NIL);
+            };
+            let pos_lisp = buf.emacs_byte_pos_to_lisp_char_pos(pos).as_i64();
+            if let Some(clamped) =
+                clamped_window_position_in_state(frames, buffers, fid, wid, pos_lisp)
+                && let Some(window) = frames
+                    .get_mut(fid)
+                    .and_then(|frame| frame.find_window_mut(wid))
+            {
+                crate::window::window_markers::set_window_start_with_marker(
+                    buffers, window, clamped,
+                );
+                window.invalidate_window_end();
+                if let Window::Leaf {
+                    vscroll,
+                    preserve_vscroll_p,
+                    ..
+                } = window
+                {
+                    *vscroll = 0;
+                    *preserve_vscroll_p = false;
+                }
+            }
+        }
+        eval.gnu_mark_window_redisplay(wid);
+        match redraw {
+            RecenterRedraw::Window => eval.invalidate_redisplay(),
+            RecenterRedraw::FullFrame => {}
+        }
+        return Ok(Value::NIL);
     }
 
     // Move back `target_line` SCREEN lines, through the same display-motion
@@ -7503,7 +7869,7 @@ fn parsed_effective_internal_border_width(
     parsed
         .internal_border_width
         .map(|width| width.max(0) as u32)
-        .unwrap_or(0)
+        .unwrap_or(crate::window::GUI_DEFAULT_INTERNAL_BORDER_WIDTH)
 }
 
 fn current_gui_frame_metrics_in_state(frames: &FrameManager) -> GuiFrameMetrics {
@@ -7671,6 +8037,18 @@ pub fn builtin_x_create_frame(
             // merge still applies the user's early-init new-frame overrides.
             super::font::seed_live_frame_default_face_from_font_parameter(eval, frame_id);
             eval.initialize_display_faces_for_frame(frame_id);
+        }
+        // GNU init_frame_faces realizes the default face while x-create-frame
+        // builds any graphical frame (xfaces.c:6008-6105): an unspecified
+        // foreground/background comes from the frame's foreground-color and
+        // background-color parameters. Lisp's x-create-frame-with-faces then
+        // recalculates frame-local definitions on top.
+        if eval
+            .frame_manager()
+            .get(frame_id)
+            .is_some_and(|frame| frame.effective_window_system().is_some())
+        {
+            super::xfaces::realize_default_lisp_face_for_frame(eval, frame_id);
         }
         // The frame is already live and realized. Like GNU x_set_frame_alpha,
         // which ignores X errors, a host opacity failure must not turn into a
@@ -7902,6 +8280,7 @@ pub(crate) fn x_create_frame_impl(
         let frame = frames
             .get_mut(fid)
             .ok_or_else(|| signal("error", vec![Value::string("Frame not found")]))?;
+        frame.creation_phase = crate::window::FrameCreationPhase::BeforeMakeFrame;
         frame.set_name_value(name);
         if let Some(title) = explicit_title {
             frame.set_title_value(title);
@@ -8064,12 +8443,15 @@ pub(crate) fn x_create_frame_impl(
         );
         // No native allocation exists yet. Finish logical geometry against
         // the actual opened font, then publish it in the realization request.
-        resize_live_gui_frame(frames, buffers, &mut None, fid, width, height, false)?;
+        resize_live_gui_frame(frames, buffers, &mut None, fid, width, height, false, true)?;
     }
     if is_child_frame {
         // Resolve text dimensions after installing effective chrome and the
         // child's opened font. The provisional inherited metrics above cannot
         // size an explicit child font or account for its fringes/scrollbars.
+        // An explicit size omits the tool bar: the creation-time update has
+        // no items, so `FRAME_TOOLBAR_HEIGHT` is still 0
+        // (`gtkutil.c:1680-1681`, `:6149-6160`, `:1181-1182`).
         let frame = frames.get(fid).expect("new child frame exists");
         let width = parsed.width.map_or_else(
             || frame_text_width_pixels_in_state(frames, fid),
@@ -8079,7 +8461,39 @@ pub(crate) fn x_create_frame_impl(
             || frame_text_height_pixels(frame),
             |size| frame_size_param_to_pixels(size, frame.char_height),
         );
-        resize_live_gui_frame(frames, buffers, display_host, fid, width, height, false)?;
+        let include_tool_bar = parsed.height.is_none();
+        resize_live_gui_frame(
+            frames,
+            buffers,
+            display_host,
+            fid,
+            width,
+            height,
+            false,
+            include_tool_bar,
+        )?;
+    } else if initial_text_size.is_none() && parsed.height.is_some() {
+        // A later top-level `make-frame` with an explicit height. The pixel
+        // box above is the requested text size, and sync reserved the menu
+        // and tool bars inside it. GNU's creation window adds the menu bar
+        // and leaves the tool bar out: the creation-time update has no items
+        // (`gtkutil.c:1680-1681`, `:6149-6160`, `:1181-1182`). Inhibition
+        // then decides whether the first packed bar grows that window
+        // (`frame.c:204-209`). Width stays the box already chosen; side
+        // chrome is not added again here. The opening frame keeps its path.
+        #[cfg(target_os = "linux")]
+        {
+            let frame = frames.get_mut(fid).expect("new graphical frame exists");
+            let menu = frame.menu_bar_height;
+            let tool = frame.tool_bar_height;
+            if menu > 0 || tool > 0 {
+                // Keep the requested column and line parameters. A pixel
+                // resize would recompute them from the box minus side chrome.
+                note_explicit_tool_bar_omission(frame, false);
+                frame.height = frame.height.saturating_add(menu);
+                frame.sync_window_area_bounds();
+            }
+        }
     }
     // Identity, opened default font, chrome and owned mini geometry are final.
     adjust_frame_glyph_matrices_in_state(frames, buffers, fid);
@@ -8100,6 +8514,7 @@ pub(crate) fn x_create_frame_impl(
             })
             .ok_or_else(|| signal("error", vec![Value::string("Frame not found")]))?;
         host.realize_gui_frame(neovm_eval::emacs_core::eval::GuiFrameHostRequest {
+            resize_request_id: None,
             frame_id: fid,
             width,
             height,
@@ -8804,3 +9219,7 @@ mod selection_chrome_tests;
 #[cfg(test)]
 #[path = "tests/terminal_frame_deletion.rs"]
 mod terminal_frame_deletion_tests;
+
+#[cfg(test)]
+#[path = "tests/neomacs_frame_geometry_test.rs"]
+mod neomacs_frame_geometry_tests;

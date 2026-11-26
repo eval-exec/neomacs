@@ -1,14 +1,17 @@
 //! Generic publication owner.
 //!
 //! One current owner, a predecessor vector, a nonblocking metadata mutex, and
-//! an atomic root. There is no `reclaim` method. `NeedGrace` refuses and keeps
-//! every owner. The core does not implement `Send` or `Sync`: an arbitrary
+//! an atomic root. A noting replace may reclaim one predecessor when
+//! `view_depth` is zero, before the quote. `NeedGrace` still refuses while a
+//! view is outstanding or the quote does not fit, and that refusal keeps
+//! every owner. The no-hook path never reclaims: symbol publication does not
+//! call it. The core does not implement `Send` or `Sync`: an arbitrary
 //! published address is not that proof.
 
-use super::sync::{AtomicPtr, Mutex, MutexGuard, Ordering, TryLockError};
+use super::sync::{AtomicPtr, AtomicU32, Mutex, MutexGuard, Ordering, TryLockError};
 use super::{
-    PayloadPlan, PublicationChange, PublicationError, PublicationPayload, PublicationStatistics,
-    RetainedBytes, RetentionLimit, RetentionLimits, RetiredCount,
+    PayloadGeneration, PayloadPlan, PublicationChange, PublicationError, PublicationPayload,
+    PublicationStatistics, RetainedBytes, RetentionLimit, RetentionLimits, RetiredCount,
 };
 use std::marker::PhantomData;
 use std::mem;
@@ -16,7 +19,12 @@ use std::rc::Rc;
 
 struct Metadata<P> {
     current: P,
+    /// Generation the noting path appended for `current`.
+    /// `None` on the no-hook path, which never reclaims.
+    current_generation: Option<PayloadGeneration>,
     predecessors: Vec<P>,
+    /// Parallel to `predecessors`: the generation each one appended.
+    predecessor_generations: Vec<Option<PayloadGeneration>>,
     /// Test builds can tighten one owner's caps without process state.
     /// Absent means the limits stored at construction.
     #[cfg(any(test, feature = "test-support"))]
@@ -28,6 +36,13 @@ pub(crate) struct PublicationLedger<P: PublicationPayload> {
     root: AtomicPtr<u8>,
     metadata: Mutex<Metadata<P>>,
     limits: RetentionLimits,
+    /// Live [`PublicationView`]s of this ledger. Reclaim runs only at zero.
+    /// `AtomicU32` is `Sync`, so a view's reference does not add a
+    /// `Cell<u32>: Sync` note to the confinement fixture.
+    /// Each update is a relaxed load followed by a relaxed store. That pair
+    /// is sound only because this ledger is `!Send`: one thread owns the
+    /// counter.
+    view_depth: AtomicU32,
     // Keeps `Send`/`Sync` off this generic store. The typed publisher, not an
     // arbitrary pointer, is what may add that proof later.
     _not_send: PhantomData<Rc<()>>,
@@ -37,6 +52,7 @@ pub(crate) struct PublicationLedger<P: PublicationPayload> {
 #[must_use = "retain this view until every use of the loaded address returns"]
 pub(crate) struct PublicationView<'owner, P: PublicationPayload> {
     address: *mut u8,
+    depth: &'owner AtomicU32,
     _owner: PhantomData<&'owner PublicationLedger<P>>,
     _thread: PhantomData<Rc<()>>,
 }
@@ -54,6 +70,7 @@ pub(crate) struct PreparedPublication<'owner, P: PublicationPayload> {
 pub(crate) struct Admission<'a, P: PublicationPayload> {
     metadata: &'a mut Metadata<P>,
     limits: RetentionLimits,
+    view_depth: &'a AtomicU32,
 }
 
 /// What the caller commits after its own backing work. `Keep` neither
@@ -80,27 +97,30 @@ pub(crate) struct Accounted<'owner, P: PublicationPayload, T> {
     pub(crate) charged: RetainedBytes,
 }
 
-/// Names a payload for the auto-trait assertions and the compile-fail fixture.
-pub(crate) struct BoundWitness;
+/// Uninhabited witness naming a payload type for auto-trait assertions and
+/// compile-fail fixtures without permitting a value to be constructed.
+pub(crate) enum BoundWitness {}
 
-impl PublicationPayload for BoundWitness {
+// SAFETY: `BoundWitness` is uninhabited (`enum BoundWitness {}`), so no
+// instance can exist and every method is vacuously sound.
+unsafe impl PublicationPayload for BoundWitness {
     type Error = ();
     type Generation = u64;
 
     fn published_address(&self) -> *mut u8 {
-        std::ptr::null_mut()
+        match *self {}
     }
 
     fn retained_bytes(&self) -> RetainedBytes {
-        RetainedBytes::new(0)
+        match *self {}
     }
 
     fn generation(&self) -> u64 {
-        0
+        match *self {}
     }
 
-    fn prepare(_current: &Self) -> Result<PayloadPlan<Self>, Self::Error> {
-        Ok(PayloadPlan::Unchanged)
+    fn prepare(current: &Self) -> Result<PayloadPlan<Self>, Self::Error> {
+        match *current {}
     }
 }
 
@@ -112,6 +132,14 @@ static_assertions::assert_not_impl_any!(OpenPublication<'static, BoundWitness, (
 impl<P: PublicationPayload> PublicationView<'_, P> {
     pub(crate) fn published_address(&self) -> *mut u8 {
         self.address
+    }
+}
+
+impl<P: PublicationPayload> Drop for PublicationView<'_, P> {
+    fn drop(&mut self) {
+        let depth = self.depth.load(Ordering::Relaxed);
+        debug_assert!(depth > 0, "publication view depth underflow");
+        self.depth.store(depth.saturating_sub(1), Ordering::Relaxed);
     }
 }
 
@@ -129,11 +157,48 @@ impl<P: PublicationPayload> PublicationLedger<P> {
             root: AtomicPtr::new(std::ptr::null_mut()),
             metadata: Mutex::new(Metadata {
                 current: initial,
+                current_generation: None,
                 predecessors: Vec::new(),
+                predecessor_generations: Vec::new(),
                 #[cfg(any(test, feature = "test-support"))]
                 limit_override: None,
             }),
             limits,
+            view_depth: AtomicU32::new(0),
+            _not_send: PhantomData,
+        };
+        store.root.store(address, Ordering::Release);
+        Ok(store)
+    }
+
+    /// [`Self::create`] plus `note_roots` on the payload that becomes current,
+    /// before the Release store. A quote refusal does not call `note_roots`.
+    /// `note_roots` returns the generation id it appended.
+    ///
+    /// `create` itself stays the no-hook path so symbol publication does not
+    /// monomorphize a root callback.
+    pub(crate) fn create_noting(
+        initial: P,
+        limits: RetentionLimits,
+        note_roots: impl FnOnce(&P) -> PayloadGeneration,
+    ) -> Result<Self, PublicationError<P::Error>> {
+        if initial.retained_bytes().get() > limits.bytes.get() {
+            return Err(PublicationError::NeedGrace(RetentionLimit::RetainedBytes));
+        }
+        let address = initial.published_address();
+        let current_generation = note_roots(&initial);
+        let store = Self {
+            root: AtomicPtr::new(std::ptr::null_mut()),
+            metadata: Mutex::new(Metadata {
+                current: initial,
+                current_generation: Some(current_generation),
+                predecessors: Vec::new(),
+                predecessor_generations: Vec::new(),
+                #[cfg(any(test, feature = "test-support"))]
+                limit_override: None,
+            }),
+            limits,
+            view_depth: AtomicU32::new(0),
             _not_send: PhantomData,
         };
         store.root.store(address, Ordering::Release);
@@ -141,9 +206,20 @@ impl<P: PublicationPayload> PublicationLedger<P> {
     }
 
     /// One Acquire load. Later publications do not change this view.
+    ///
+    /// The view increments [`Self::view_depth`] and its drop decrements it.
+    /// Reclaim does not run while the count is positive. Each of those
+    /// updates is a relaxed load followed by a relaxed store, sound only
+    /// because this ledger is `!Send`.
     pub(crate) fn view(&self) -> PublicationView<'_, P> {
+        let depth = self.view_depth.load(Ordering::Relaxed);
+        self.view_depth.store(
+            depth.checked_add(1).expect("publication view depth"),
+            Ordering::Relaxed,
+        );
         PublicationView {
             address: self.root.load(Ordering::Acquire),
+            depth: &self.view_depth,
             _owner: PhantomData,
             _thread: PhantomData,
         }
@@ -204,6 +280,7 @@ impl<P: PublicationPayload> PublicationLedger<P> {
             let mut admission = Admission {
                 metadata: &mut metadata,
                 limits,
+                view_depth: &self.view_depth,
             };
             decide(&mut admission)
         };
@@ -311,6 +388,46 @@ impl<P: PublicationPayload> Admission<'_, P> {
     pub(crate) fn admit(&mut self, extra: RetainedBytes) -> Result<(), PublicationError<P::Error>> {
         admit_quote(self.metadata, extra.get(), self.limits)
     }
+
+    /// Drop the oldest predecessor when this replace is at the retiree cap
+    /// and no view is alive.
+    ///
+    /// `reclaim` removes that generation's roots and no other, while the
+    /// payload is still in `predecessors`. Current is never passed to it.
+    /// A positive view depth, a count under the cap, a missing generation
+    /// id, or a byte quote that would still refuse returns without
+    /// dropping an owner, so `admit` keeps `NeedGrace`.
+    #[cfg_attr(not(test), expect(dead_code, reason = "P10-b slices 2/3 wire refresh"))]
+    pub(crate) fn reclaim_oldest_predecessor(
+        &mut self,
+        extra: usize,
+        reclaim: impl FnOnce(PayloadGeneration),
+    ) {
+        if self.view_depth.load(Ordering::Relaxed) > 0 {
+            return;
+        }
+        if self.metadata.predecessors.len() < self.limits.retired.get() {
+            return;
+        }
+        let Some(generation) = self
+            .metadata
+            .predecessor_generations
+            .first()
+            .copied()
+            .flatten()
+        else {
+            return;
+        };
+        match quote_dropping_oldest(self.metadata, extra) {
+            Ok(needed) if needed <= self.limits.bytes.get() => {}
+            _ => return,
+        }
+        // Current is never reclaimed. This id is the oldest predecessor.
+        // Other stored ids stay valid: they are not slots.
+        reclaim(generation);
+        self.metadata.predecessors.remove(0);
+        self.metadata.predecessor_generations.remove(0);
+    }
 }
 
 impl<P: PublicationPayload, T> OpenPublication<'_, P, T> {
@@ -331,6 +448,33 @@ impl<P: PublicationPayload, T> OpenPublication<'_, P, T> {
             Commit::Replace(next) => Ok(commit_replacement(store, &mut metadata, next)),
         }
     }
+
+    /// [`Self::finish`] that notes the replacement before the Release store.
+    /// `Commit::Keep` does not call `note_roots`. `note_roots` returns the
+    /// generation id it appended for the new current payload.
+    pub(crate) fn finish_noting(
+        self,
+        decide: impl FnOnce(T, &P) -> Result<Commit<P>, PublicationError<P::Error>>,
+        note_roots: impl FnOnce(&P) -> PayloadGeneration,
+    ) -> Result<PublicationChange<P::Generation>, PublicationError<P::Error>> {
+        let OpenPublication {
+            store,
+            mut metadata,
+            body,
+            _thread,
+        } = self;
+        match decide(body, &metadata.current)? {
+            Commit::Keep => Ok(PublicationChange::Unchanged {
+                generation: metadata.current.generation(),
+            }),
+            Commit::Replace(next) => Ok(commit_replacement_noting(
+                store,
+                &mut metadata,
+                next,
+                note_roots,
+            )),
+        }
+    }
 }
 
 fn commit_replacement<P: PublicationPayload>(
@@ -341,13 +485,46 @@ fn commit_replacement<P: PublicationPayload>(
     let charged = next.retained_bytes();
     let generation = next.generation();
     let pointer = next.published_address();
+    let previous_generation = metadata.current_generation.take();
     let previous = mem::replace(&mut metadata.current, next);
-    metadata.predecessors.push(previous);
+    push_predecessor(metadata, previous, previous_generation);
     store.release_retained(pointer, &metadata.predecessors);
     PublicationChange::Published {
         generation,
         charged,
     }
+}
+
+/// [`commit_replacement`] after `note_roots` has seen the new current payload.
+/// The note runs only on this replacement path, before the Release store.
+/// `note_roots` returns the generation id appended for `next`.
+fn commit_replacement_noting<P: PublicationPayload>(
+    store: &PublicationLedger<P>,
+    metadata: &mut Metadata<P>,
+    next: P,
+    note_roots: impl FnOnce(&P) -> PayloadGeneration,
+) -> PublicationChange<P::Generation> {
+    let charged = next.retained_bytes();
+    let generation = next.generation();
+    let pointer = next.published_address();
+    let noted = note_roots(&next);
+    let previous_generation = metadata.current_generation.replace(noted);
+    let previous = mem::replace(&mut metadata.current, next);
+    push_predecessor(metadata, previous, previous_generation);
+    store.release_retained(pointer, &metadata.predecessors);
+    PublicationChange::Published {
+        generation,
+        charged,
+    }
+}
+
+fn push_predecessor<P>(
+    metadata: &mut Metadata<P>,
+    payload: P,
+    generation: Option<PayloadGeneration>,
+) {
+    metadata.predecessors.push(payload);
+    metadata.predecessor_generations.push(generation);
 }
 
 /// Retiree cap, then one reserved predecessor slot, then the byte quote.
@@ -371,7 +548,9 @@ fn admit_quote<P: PublicationPayload>(
     }
     // Reservation failure and quote overflow are capacity, not backpressure.
     // The two comparisons above and below are the only `NeedGrace` arms.
-    if metadata.predecessors.try_reserve(1).is_err() {
+    if metadata.predecessors.try_reserve(1).is_err()
+        || metadata.predecessor_generations.try_reserve(1).is_err()
+    {
         return Err(PublicationError::Capacity);
     }
     let needed = retained_quote(metadata)?
@@ -391,6 +570,28 @@ fn reserved_capacity_bytes<P: PublicationPayload>(metadata: &Metadata<P>) -> usi
         .predecessors
         .capacity()
         .saturating_mul(P::storage_overhead())
+}
+
+/// The quote `admit_quote` will see after the oldest predecessor is dropped.
+/// Capacity does not shrink on remove, so the reservation term stays.
+fn quote_dropping_oldest<P: PublicationPayload>(
+    metadata: &Metadata<P>,
+    extra: usize,
+) -> Result<usize, PublicationError<P::Error>> {
+    let mut total = metadata
+        .predecessors
+        .capacity()
+        .checked_mul(P::storage_overhead())
+        .ok_or(PublicationError::Capacity)?;
+    total = total
+        .checked_add(metadata.current.retained_bytes().get())
+        .ok_or(PublicationError::Capacity)?;
+    for owner in metadata.predecessors.iter().skip(1) {
+        total = total
+            .checked_add(owner.retained_bytes().get())
+            .ok_or(PublicationError::Capacity)?;
+    }
+    total.checked_add(extra).ok_or(PublicationError::Capacity)
 }
 
 fn retained_quote<P: PublicationPayload>(
@@ -459,7 +660,9 @@ mod tests {
         static PLAN: Cell<Option<u64>> = const { Cell::new(None) };
     }
 
-    impl PublicationPayload for Toy {
+    // SAFETY: `self.value` is a heap-allocated `Box<u64>`, so its address
+    // stays valid and unmoved across moves of `Toy` until drop.
+    unsafe impl PublicationPayload for Toy {
         type Error = ();
         type Generation = u64;
 

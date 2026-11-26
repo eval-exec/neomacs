@@ -34,11 +34,11 @@ fn cached_cell(context: &Context, name: &str, local: bool) -> Value {
     // Obarray::blv is the public reader of this symbol's BLV record. The
     // fixture loaded this buffer's actual cache; nothing here writes it.
     let blv = context.obarray().blv(id).expect("localized");
-    assert_eq!(blv.found, local);
+    assert_eq!(blv.found.get(), local);
     if !local {
-        assert_eq!(blv.valcell.get(), blv.defcell.get());
+        assert_eq!(blv.valcell(), blv.defcell());
     }
-    blv.valcell.get()
+    blv.valcell()
 }
 
 fn raw_cdr(owner: Value) -> Value {

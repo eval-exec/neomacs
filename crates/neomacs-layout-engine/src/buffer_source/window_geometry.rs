@@ -91,6 +91,32 @@ pub(crate) struct BufferWindowGeometry {
     pub(crate) visibility_bottom_y: f32,
 }
 
+#[cfg(test)]
+impl BufferWindowGeometry {
+    pub(crate) fn for_capacity_test(max_rows: usize, text_height: f32) -> Self {
+        Self {
+            text_x: 0.0,
+            text_y: 0.0,
+            text_width: 800.0,
+            text_height,
+            vscroll: 0.0,
+            char_width: 8.0,
+            char_height: 16.0,
+            max_rows,
+            matrix_body_rows: max_rows,
+            desired_matrix_rows: Some(max_rows),
+            display_text_row_base: 0,
+            display_text_rows: max_rows,
+            bottom_chrome_rows: 0,
+            mode_line_display_row: max_rows,
+            matrix_columns: GlyphMatrixColumnCapacity(80),
+            line_number_pixel_width: 0.0,
+            content_x: 0.0,
+            visibility_bottom_y: text_height,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct GlyphMatrixColumnCapacity(usize);
 
@@ -135,7 +161,7 @@ impl BufferWindowGeometry {
     /// at the top and the bottom. The frame-font count stays the floor, and
     /// a face at least as tall as that font does not move the mode line.
     pub(crate) fn widen_body_for_shorter_face(&mut self, face_line_px: f32) {
-        if !(face_line_px >= 1.0 && face_line_px + 1.0 < self.char_height) {
+        if !(face_line_px >= 1.0 && face_line_px + 1.0 <= self.char_height) {
             return;
         }
         let span = self.vscroll + self.text_height;

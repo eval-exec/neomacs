@@ -189,9 +189,10 @@ fn major_and_minor_keep_only_the_matching_heaps_scratch_root_graph() {
     first.gc_collect_exact();
     assert!(first.tagged_heap().owns_heap_value_for_test(first_owner));
     assert!(first.tagged_heap().owns_heap_value_for_test(first_child));
-    assert_eq!(first_owner.as_vector_data().unwrap()[0], first_child);
+    assert_eq!(first_owner.as_vector_data().unwrap().at(0), first_child);
     assert_eq!(first_child.cons_car(), Value::fixnum(167));
 
+    let parked_first = first.park_for_test();
     let mut second = context();
     let second_child = Value::cons(Value::fixnum(173), Value::NIL);
     let second_child_slot = roots.keep(second_child);
@@ -224,7 +225,8 @@ fn major_and_minor_keep_only_the_matching_heaps_scratch_root_graph() {
     );
     drop(discovered);
 
-    first.setup_thread_locals();
+    let parked_second = second.park_for_test();
+    let mut first = parked_first.resume_for_test().expect("resume first");
     minor(&mut first);
     first.gc_collect_exact();
     assert!(first.tagged_heap().owns_heap_value_for_test(first_child));
@@ -234,11 +236,12 @@ fn major_and_minor_keep_only_the_matching_heaps_scratch_root_graph() {
     assert!(!first.tagged_heap().owns_heap_value_for_test(first_owner));
     assert!(!first.tagged_heap().owns_heap_value_for_test(first_child));
 
-    second.setup_thread_locals();
+    drop(first);
+    let mut second = parked_second.resume_for_test().expect("resume second");
     second.gc_collect_exact();
     assert!(second.tagged_heap().owns_heap_value_for_test(second_owner));
     assert!(second.tagged_heap().owns_heap_value_for_test(second_child));
-    assert_eq!(second_owner.as_vector_data().unwrap()[0], second_child);
+    assert_eq!(second_owner.as_vector_data().unwrap().at(0), second_child);
     assert_eq!(second_child.cons_car(), Value::fixnum(173));
     roots.clear(second_owner_slot);
     second.gc_collect_exact();
@@ -276,7 +279,7 @@ fn major_and_minor_trace_an_old_graph_rooted_only_by_terminal_parameters() {
             .expect("terminal root remains installed"),
         owner
     );
-    assert_eq!(owner.as_vector_data().unwrap()[0], child);
+    assert_eq!(owner.as_vector_data().unwrap().at(0), child);
     assert_eq!(child.cons_car(), Value::fixnum(179));
 
     builtin_set_terminal_parameter(&mut context, vec![Value::NIL, key, Value::NIL])

@@ -61,7 +61,7 @@ fn paged_survivors_tenure_and_full_pages_retire_body(verify: bool) {
     assert_eq!(heap.note_image_object(v), ImageStamp::Stamped);
 
     // First partition cycle: full trace + sweep, then promotion.
-    heap.collect_exact(std::iter::once(root));
+    heap.collect_rooted(std::iter::once(root));
     assert!(heap.dump_blackened);
 
     // Every paged survivor is tenured (the promotion page walk).
@@ -79,11 +79,21 @@ fn paged_survivors_tenure_and_full_pages_retire_body(verify: bool) {
 
     // The full float page RETIRED; the partial string/vector pages did
     // not. Retired ⇒ still registered + owned (C1), full, no free list.
-    assert!(heap.float_arena.pages[0].retired, "full page must retire");
-    assert!(!heap.string_arena.pages[0].retired, "partial page retired");
-    assert!(!heap.vector_arena.pages[0].retired, "partial page retired");
+    assert!(
+        heap.float_arena.pages[0].is_retired(),
+        "full page must retire"
+    );
+    assert!(
+        !heap.string_arena.pages[0].is_retired(),
+        "partial page retired"
+    );
+    assert!(
+        !heap.vector_arena.pages[0].is_retired(),
+        "partial page retired"
+    );
     assert_eq!(
-        heap.float_arena.pages[0].allocated, FLOAT_PAGE_SLOTS,
+        heap.float_arena.pages[0].allocated(),
+        FLOAT_PAGE_SLOTS,
         "retired page must stay full",
     );
     heap.assert_object_arenas_coherent();
@@ -92,7 +102,7 @@ fn paged_survivors_tenure_and_full_pages_retire_body(verify: bool) {
     // never freed (retired page skipped whole; mixed pages tenured-skip)
     // and stay owned + intact.
     for cycle in 0..2 {
-        heap.collect_exact(std::iter::once(root));
+        heap.collect_rooted(std::iter::once(root));
         for (i, f) in floats.iter().enumerate() {
             let ptr = f.as_float_ptr().unwrap() as *const u8;
             assert!(
@@ -113,7 +123,7 @@ fn paged_survivors_tenure_and_full_pages_retire_body(verify: bool) {
             4,
             "tenured vector payload lost on cycle {cycle}",
         );
-        assert_eq!(heap.float_arena.pages[0].allocated, FLOAT_PAGE_SLOTS);
+        assert_eq!(heap.float_arena.pages[0].allocated(), FLOAT_PAGE_SLOTS);
         heap.assert_object_arenas_coherent();
     }
 }
@@ -163,11 +173,11 @@ fn mixed_page_tenured_slots_survive_alternating_parities_body(verify: bool) {
 
     // Promotion cycle: odd-indexed garbage is swept FIRST (its slots are
     // free at promotion), then the survivors tenure ⇒ MIXED pages.
-    heap.collect_exact(std::iter::once(root));
+    heap.collect_rooted(std::iter::once(root));
     assert!(heap.dump_blackened);
-    assert!(!heap.float_arena.pages[0].retired);
-    assert!(!heap.string_arena.pages[0].retired);
-    assert!(!heap.vector_arena.pages[0].retired);
+    assert!(!heap.float_arena.pages[0].is_retired());
+    assert!(!heap.string_arena.pages[0].is_retired());
+    assert!(!heap.vector_arena.pages[0].is_retired());
 
     // Refill the freed slots with YOUNG garbage (free-list reuse puts it
     // in the same mixed pages), then run one cycle per parity.
@@ -177,7 +187,7 @@ fn mixed_page_tenured_slots_survive_alternating_parities_body(verify: bool) {
             let _ = heap.alloc_string(crate::heap_types::LispString::from_utf8("young-garbage"));
             let _ = heap.alloc_vector(vec![TaggedValue::fixnum(-1); 2]);
         }
-        heap.collect_exact(std::iter::once(root));
+        heap.collect_rooted(std::iter::once(root));
         for (i, f) in keep_floats.iter().enumerate() {
             assert!(
                 heap.owns_non_cons_object(f.as_float_ptr().unwrap() as *const u8),
@@ -242,7 +252,7 @@ fn page_span_oracle_freed_slot_exactness() {
     let dead_s_ptr = dead_s.as_string_ptr().unwrap() as usize;
     let dead_v_ptr = dead_v.as_veclike_ptr().unwrap() as usize;
 
-    heap.collect_exact([keep_f, keep_f2, keep_s, keep_v].into_iter());
+    heap.collect_rooted([keep_f, keep_f2, keep_s, keep_v].into_iter());
 
     let f_addr = keep_f.as_float_ptr().unwrap() as usize;
     let s_addr = keep_s.as_string_ptr().unwrap() as usize;
@@ -312,7 +322,7 @@ fn payload_pages_freed_at_heap_drop_body(mid_mark: bool) {
 
         // Promotion + retirement happen before the drop (retired pages
         // must be freed by teardown too).
-        heap.collect_exact(std::iter::once(root));
+        heap.collect_rooted(std::iter::once(root));
         assert!(heap.dump_blackened);
         heap.assert_object_arenas_coherent();
 
@@ -382,16 +392,20 @@ fn sweep_live_bytes_track_variable_payload_sizes() {
 
     let expected_objects: usize = [s_big, s_small]
         .iter()
-        .map(
-            |s| TaggedHeap::object_bytes_from_header(s.as_string_ptr().unwrap() as *const GcHeader),
-        )
+        .map(|s| unsafe {
+            TaggedHeap::object_bytes_from_header(s.as_string_ptr().unwrap() as *const GcHeader)
+        })
         .sum::<usize>()
-        + TaggedHeap::object_bytes_from_header(v_big.as_veclike_ptr().unwrap() as *const GcHeader)
-        + TaggedHeap::object_bytes_from_header(f.as_float_ptr().unwrap() as *const GcHeader);
+        + unsafe {
+            TaggedHeap::object_bytes_from_header(v_big.as_veclike_ptr().unwrap() as *const GcHeader)
+        }
+        + unsafe {
+            TaggedHeap::object_bytes_from_header(f.as_float_ptr().unwrap() as *const GcHeader)
+        };
     let expected = expected_objects + cons_count * size_of::<ConsCell>();
 
     // Eager (finalize_collection) recompute site.
-    heap.collect_exact(std::iter::once(root));
+    heap.collect_rooted(std::iter::once(root));
     assert_eq!(
         heap.live_bytes(),
         expected,
@@ -405,8 +419,8 @@ fn sweep_live_bytes_track_variable_payload_sizes() {
     heap.seed_root(root);
     let bytes_before = heap.live_bytes();
     heap.incremental_drain_all();
-    heap.incremental_finish(bytes_before, std::time::Instant::now());
-    heap.finish_incremental_sweep_now();
+    heap.incremental_finish_for_test(bytes_before, std::time::Instant::now());
+    heap.finish_incremental_sweep_now_for_test();
     assert_eq!(
         heap.live_bytes(),
         expected,
@@ -444,7 +458,7 @@ fn tenured_page_owner_keeps_young_cons_child_alive_body(verify: bool) {
 
     // Promotion: v and s are runtime survivors (ordinary old in GEN1, young
     // in GEN0); y_* stay young either way.
-    heap.collect_exact(std::iter::once(root));
+    heap.collect_rooted(std::iter::once(root));
     assert!(heap.dump_blackened);
     assert_eq!(
         unsafe { (*(v.as_veclike_ptr().unwrap())).gc.tenured },
@@ -459,7 +473,7 @@ fn tenured_page_owner_keeps_young_cons_child_alive_body(verify: bool) {
     // never re-traced; the children survive ONLY via the promotion-time
     // page-tenured remembered-set scan.
     for cycle in 0..2 {
-        heap.collect_exact(std::iter::once(root));
+        heap.collect_rooted(std::iter::once(root));
         assert_eq!(
             unsafe { (*y_vec.xcons_ptr()).load_car() }.0,
             TaggedValue::fixnum(777).0,

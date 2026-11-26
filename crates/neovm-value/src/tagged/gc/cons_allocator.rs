@@ -13,12 +13,13 @@
 //! created here. A caller must unregister before releasing a block.
 
 use super::young_registry::{
-    StoppedYoungLogs, YoungBlockIndex, YoungBlockLog, YoungRegistrationId, YoungRegistryError,
+    StoppedYoungLogs, YoungBlockIndex, YoungBlockLog, YoungPendingIndex, YoungRegistrationId,
+    YoungRegistryError,
 };
 use super::*;
 use std::num::NonZeroUsize;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard};
 use typed_index_collections::TiVec;
 
 /// Canonical old-owner classification at a region carve. This snapshot may
@@ -60,6 +61,183 @@ impl std::ops::Deref for ConsAllocatorOwner {
 }
 
 impl ConsAllocatorOwner {
+    /// Credit one whole stopped-owner block. The granting caller checks the
+    /// complete grant's capacity before minting any block.
+    #[cfg(any(test, feature = "test-support"))]
+    pub(super) fn credit_owner_reserved_block(&mut self) {
+        let allocator = self
+            .0
+            .as_deref_mut()
+            .expect("allocator owner is initialized");
+        allocator.owner_reserved_blocks = allocator
+            .owner_reserved_blocks
+            .checked_add(1)
+            .expect("owner reserve grant checked block-count capacity");
+    }
+
+    /// Discharge only a successfully returned whole-book obligation.
+    /// Closing or exhausting a run does not return its backing block.
+    pub(super) fn return_owner_reserved_blocks(&mut self, blocks: usize) {
+        let allocator = self
+            .0
+            .as_deref_mut()
+            .expect("allocator owner is initialized");
+        allocator.owner_reserved_blocks = allocator
+            .owner_reserved_blocks
+            .checked_sub(blocks)
+            .expect("owner reserve return checked the outstanding block count");
+    }
+
+    /// Mint the lease-table key for one grant. The book and the table share it.
+    #[cfg_attr(not(any(test, feature = "test-support")), allow(dead_code))]
+    pub(super) fn mint_owner_cons_key(&mut self) -> u64 {
+        let allocator = self
+            .0
+            .as_deref_mut()
+            .expect("allocator owner is initialized");
+        let key = allocator.next_owner_cons_key;
+        allocator.next_owner_cons_key = key
+            .checked_add(1)
+            .expect("owner cons lease key space exhausted");
+        key
+    }
+
+    /// Publish a lease the stopped keeper can walk after the book is gone.
+    #[cfg_attr(not(any(test, feature = "test-support")), allow(dead_code))]
+    pub(super) fn insert_owner_cons_lease(&mut self, lease: Arc<OwnerConsLease>) {
+        let allocator = self
+            .0
+            .as_deref_mut()
+            .expect("allocator owner is initialized");
+        allocator.owner_cons_leases.push(lease);
+    }
+
+    /// Take the leases recorded under one registration. Others stay, in order.
+    ///
+    /// Asserts that every matching lease has a closed book before removing any
+    /// entry so a failed assertion leaves the lease table intact.
+    #[cfg(any(test, feature = "test-support"))]
+    pub(super) fn take_owner_cons_leases_for_registration(
+        &mut self,
+        registration: std::num::NonZeroU64,
+    ) -> Vec<Arc<OwnerConsLease>> {
+        let allocator = self
+            .0
+            .as_deref_mut()
+            .expect("allocator owner is initialized");
+        for lease in &allocator.owner_cons_leases {
+            if lease.registration == Some(registration) {
+                assert!(
+                    !lease.open_run.load(Ordering::Acquire),
+                    "reclaim_owner_cons_registration requires a closed owner cons book"
+                );
+            }
+        }
+        let mut taken = Vec::new();
+        let mut index = 0;
+        while index < allocator.owner_cons_leases.len() {
+            if allocator.owner_cons_leases[index].registration == Some(registration) {
+                taken.push(allocator.owner_cons_leases.remove(index));
+            } else {
+                index += 1;
+            }
+        }
+        taken
+    }
+
+    pub(super) fn remove_owner_cons_lease(&mut self, owner_key: u64) {
+        let allocator = self
+            .0
+            .as_deref_mut()
+            .expect("allocator owner is initialized");
+        allocator
+            .owner_cons_leases
+            .retain(|lease| lease.owner_key != owner_key);
+    }
+
+    pub(super) fn take_owner_cons_leases(&mut self) -> Vec<Arc<OwnerConsLease>> {
+        let allocator = self
+            .0
+            .as_deref_mut()
+            .expect("allocator owner is initialized");
+        std::mem::take(&mut allocator.owner_cons_leases)
+    }
+
+    /// Make [`ConsAllocator::is_poisoned`] stick.
+    ///
+    /// Sole storage becomes [`AllocatorStorage::Poisoned`] and the state is
+    /// parked. Admitted storage poisons its mutex by panicking while the
+    /// guard is held, the same sticky flag a production lock failure leaves.
+    /// The stopped-legacy heap is admitted, so the publication row uses that
+    /// path. [`Self::clear_storage_poison_for_test`] undoes either one so a
+    /// later return can lock.
+    #[cfg(any(test, feature = "test-support"))]
+    pub(super) fn poison_storage_for_test(&mut self) {
+        use std::panic::{AssertUnwindSafe, catch_unwind};
+
+        let allocator = self
+            .0
+            .as_deref_mut()
+            .expect("allocator owner is initialized");
+        let admitted = matches!(allocator.storage, AllocatorStorage::Admitted(_));
+        let poisoned = matches!(allocator.storage, AllocatorStorage::Poisoned);
+        if poisoned {
+            panic!("storage is already poisoned");
+        }
+        if admitted {
+            let AllocatorStorage::Admitted(mutex) = &mut allocator.storage else {
+                panic!("admitted storage changed before the poison");
+            };
+            assert!(!mutex.is_poisoned(), "admitted storage is already poisoned");
+            let caught = catch_unwind(AssertUnwindSafe(|| {
+                let _guard = mutex.lock().expect("lock admitted storage to poison it");
+                panic!("poison cons allocator for test");
+            }));
+            assert!(caught.is_err(), "the poison panic must surface");
+            assert!(mutex.is_poisoned(), "admitted storage stays poisoned");
+            return;
+        }
+        assert!(
+            allocator.stashed_sole_for_test.is_none(),
+            "sole storage is already stashed"
+        );
+        let state = match std::mem::replace(&mut allocator.storage, AllocatorStorage::Poisoned) {
+            AllocatorStorage::Sole(state) => state,
+            other => {
+                allocator.storage = other;
+                panic!("sole poison replaced a non-sole discriminant");
+            }
+        };
+        allocator.stashed_sole_for_test = Some(state);
+    }
+
+    /// Undo [`Self::poison_storage_for_test`] so a later return can lock.
+    #[cfg(any(test, feature = "test-support"))]
+    pub(super) fn clear_storage_poison_for_test(&mut self) {
+        let allocator = self
+            .0
+            .as_deref_mut()
+            .expect("allocator owner is initialized");
+        if let AllocatorStorage::Admitted(mutex) = &mut allocator.storage {
+            assert!(
+                mutex.is_poisoned(),
+                "clear expected a poisoned admitted mutex"
+            );
+            mutex.clear_poison();
+            assert!(!mutex.is_poisoned(), "admitted poison must clear");
+            return;
+        }
+        let state = allocator
+            .stashed_sole_for_test
+            .take()
+            .expect("no stashed sole storage");
+        let poisoned = matches!(
+            std::mem::replace(&mut allocator.storage, AllocatorStorage::Sole(state)),
+            AllocatorStorage::Poisoned
+        );
+        assert!(poisoned, "restore expected poisoned sole storage");
+    }
+
     /// # Safety
     /// Same stopped-world storage contract as ConsAllocator::stopped_world.
     pub(super) unsafe fn stopped_world(&mut self) -> ConsStopAll<'_> {
@@ -102,6 +280,23 @@ impl ConsAllocatorOwner {
             .as_deref_mut()
             .expect("allocator owner is initialized")
             .note_carve(base, log)
+    }
+
+    /// Merge young blocks recorded into the legacy owner's resident shell
+    /// (during a `WorldTurn` or `SerialTurn` while entry 0 was frozen) back
+    /// into entry 0's frozen `YoungBlockLog`, keeping block `YoungBlockIndex`
+    /// backlinks and `pending_mutators` consistent.
+    #[cold]
+    pub(super) fn merge_legacy_young_shell<'a>(
+        &mut self,
+        frozen: &mut YoungBlockLog,
+        shell: &mut YoungBlockLog,
+        resolve_peer: impl FnOnce(YoungRegistrationId) -> Option<&'a mut YoungBlockLog>,
+    ) -> Result<(), YoungRegistryError> {
+        self.0
+            .as_deref_mut()
+            .expect("allocator owner is initialized")
+            .merge_legacy_young_shell(frozen, shell, resolve_peer)
     }
 
     /// # Safety
@@ -643,6 +838,105 @@ impl AllocatorState {
         Ok(age)
     }
 
+    /// Merge young blocks recorded into entry 0's resident shell back into
+    /// entry 0's frozen `YoungBlockLog`, repairing every moved block's
+    /// `YoungBlockIndex` backlink and deduplicating `pending_mutators` before
+    /// `restore_owner_payload` runs. Refuses before any state mutation if
+    /// either log, any block backlink, or a swapped peer pending log fails
+    /// preflight.
+    #[cold]
+    pub(super) fn merge_legacy_young_shell<'a>(
+        &mut self,
+        frozen: &mut YoungBlockLog,
+        shell: &mut YoungBlockLog,
+        resolve_peer: impl FnOnce(YoungRegistrationId) -> Option<&'a mut YoungBlockLog>,
+    ) -> Result<(), YoungRegistryError> {
+        let id = frozen.id();
+        if id.heap_identity() != self.identity || shell.id().heap_identity() != self.identity {
+            return Err(YoungRegistryError::WrongHeap);
+        }
+        if shell.id() != id {
+            return Err(YoungRegistryError::UnknownRegistration);
+        }
+        if shell.blocks().is_empty() && shell.pending_index().is_none() {
+            return Ok(());
+        }
+        let shell_pending = match shell.pending_index() {
+            Some(index)
+                if !shell.blocks().is_empty()
+                    && self.pending_mutators.get(index.index()) == Some(&id) =>
+            {
+                index
+            }
+            _ => return Err(YoungRegistryError::UnknownRegistration),
+        };
+        match frozen.pending_index() {
+            Some(index)
+                if !frozen.blocks().is_empty()
+                    && self.pending_mutators.get(index.index()) == Some(&id)
+                    && index != shell_pending => {}
+            None if frozen.blocks().is_empty() => {}
+            _ => return Err(YoungRegistryError::UnknownRegistration),
+        }
+        for (pos, &base) in shell.blocks().iter().enumerate() {
+            let Some(&slot) = self.blocks.get(&base) else {
+                return Err(YoungRegistryError::UnknownRegistration);
+            };
+            let block = self.block(slot);
+            let backlink = block
+                .young_log_slot
+                .ok_or(YoungRegistryError::UnknownRegistration)?;
+            if backlink.registration != id
+                || backlink.index.index() != pos
+                || !block.young.load(Ordering::Relaxed)
+            {
+                return Err(YoungRegistryError::UnknownRegistration);
+            }
+        }
+        if frozen.blocks().is_empty() {
+            // Fast path: `shell`'s block backlinks (`1..=k`) and its single
+            // `pending_mutators` entry are already exact for `id`.
+            std::mem::swap(frozen, shell);
+            return Ok(());
+        }
+        // Preflight any peer registration that `swap_remove(shell_pending)`
+        // will move before draining blocks or modifying `pending_mutators`.
+        let last_pending = self.pending_mutators.len() - 1;
+        let moved_peer = if shell_pending.index() != last_pending {
+            let moved_id = self.pending_mutators[last_pending];
+            if moved_id == id {
+                None
+            } else {
+                let peer = resolve_peer(moved_id).ok_or(YoungRegistryError::UnknownRegistration)?;
+                if peer.id() != moved_id
+                    || peer.pending_index().map(YoungPendingIndex::index) != Some(last_pending)
+                {
+                    return Err(YoungRegistryError::UnknownRegistration);
+                }
+                Some(peer)
+            }
+        } else {
+            None
+        };
+        for base in shell.drain_blocks() {
+            let new_index = frozen.push(base);
+            self.block_for_base_mut(base).young_log_slot = Some(YoungLogSlot {
+                registration: id,
+                index: new_index,
+            });
+        }
+        if let Some(moved_id) = shell.remove_pending(&mut self.pending_mutators) {
+            if let Some(peer) = moved_peer {
+                debug_assert_eq!(moved_id, peer.id());
+                peer.repair_pending_index(shell_pending);
+            } else {
+                debug_assert_eq!(moved_id, id);
+                frozen.repair_pending_index(shell_pending);
+            }
+        }
+        Ok(())
+    }
+
     pub(super) fn mark_work_snapshot(&self) -> Vec<ConsBlockBase> {
         self.mark_work.clone()
     }
@@ -718,7 +1012,7 @@ impl AllocatorState {
         state.detach(slot);
         let entry = state.block_mut(slot);
         entry.head = head as usize;
-        entry.count = block.next_index as usize - live;
+        entry.count = block.next_index() - live;
         debug_assert_eq!(head.is_null(), entry.count == 0);
         entry.availability = BlockAvailability::Ready;
         state.attach_if_ready(slot);
@@ -804,7 +1098,7 @@ impl AllocatorState {
         head: *mut ConsCell,
         live: usize,
     ) {
-        let used = block.next_index as usize;
+        let used = block.next_index();
         let free_after = used
             .checked_sub(live)
             .expect("sweep live exceeds used cells");
@@ -959,16 +1253,73 @@ enum AllocatorAccessMode {
     Admitted,
 }
 
-/// Confined owner. Only its mutex-only facade can cross threads.
+/// One whole cons block recorded in an owner lease.
+///
+/// The range lives in the lease, not only in the book, so a stopped keeper
+/// can return it after the book is dropped or forgotten.
 #[derive(Debug)]
+pub(super) struct OwnerConsRange {
+    pub(super) block_index: usize,
+    pub(super) base: usize,
+    pub(super) origin: usize,
+    /// Exclusive end index. The block's `next_index` at grant.
+    pub(super) limit: usize,
+    /// Next cell index the owner may carve.
+    pub(super) carve_at: usize,
+}
+
+/// Cons blocks one owner holds, shared by the book and the heap lease table.
+///
+/// `owner_key` is a minted counter. `registration` is the owner's
+/// registration when the grant named one. The stopped session still returns
+/// every lease. `retire_rooted` records that registration, and the keeper
+/// returns only that lease.
+#[derive(Debug)]
+pub(super) struct OwnerConsLease {
+    pub(super) owner_key: u64,
+    /// `None` for a grant that did not name a registration. Those leases
+    /// stay on the full-table stop walk.
+    #[cfg(any(test, feature = "test-support"))]
+    pub(super) registration: Option<std::num::NonZeroU64>,
+    /// Set while the owning book holds an open carved run (`open_cons.is_some()`).
+    /// Cleared after `close_for_stop` refunds the unhanded tail into `carve_at`.
+    pub(super) open_run: AtomicBool,
+    /// `Mutex` so the closed book stays `Sync`. The stop protocol is the real
+    /// exclusion: the keeper runs only while the owner is stopped.
+    pub(super) blocks: Mutex<Vec<OwnerConsRange>>,
+}
+
+/// Confined owner. Only its mutex-only facade can cross threads.
+/// C layout keeps the existing allocator storage at offset zero when the
+/// cold reserve count is appended. The owner remains boxed, so this count
+/// and the lease table do not grow the inline heap layout.
+#[derive(Debug)]
+#[repr(C)]
 pub(super) struct ConsAllocator {
     storage: AllocatorStorage,
+    /// Whole blocks retained by stopped-owner reserve books. Only stopped
+    /// grant/return writes this count through the exclusive heap owner. It
+    /// stays outside the mutex so Drop can retain storage without locking.
+    owner_reserved_blocks: usize,
+    next_owner_cons_key: u64,
+    /// Leases keyed by [`OwnerConsLease::owner_key`]. The book holds the same
+    /// `Arc`, so a keeper return is visible to a book that is still alive.
+    owner_cons_leases: Vec<Arc<OwnerConsLease>>,
+    /// Sole storage parked while a test forces [`AllocatorStorage::Poisoned`].
+    /// Production poison still replaces the storage in place.
+    #[cfg(any(test, feature = "test-support"))]
+    stashed_sole_for_test: Option<AllocatorState>,
     _confined: std::marker::PhantomData<std::cell::Cell<()>>,
 }
 impl ConsAllocator {
     pub(super) fn new(identity: HeapIdentity) -> Self {
         Self {
             storage: AllocatorStorage::Sole(AllocatorState::new(identity)),
+            owner_reserved_blocks: 0,
+            next_owner_cons_key: 0,
+            owner_cons_leases: Vec::new(),
+            #[cfg(any(test, feature = "test-support"))]
+            stashed_sole_for_test: None,
             _confined: std::marker::PhantomData,
         }
     }
@@ -985,6 +1336,20 @@ pub(super) struct SharedConsAllocator<'a> {
 static_assertions::assert_impl_all!(SharedConsAllocator<'_>: Send, Sync);
 
 impl ConsAllocator {
+    #[inline]
+    pub(super) fn owner_reserved_blocks(&self) -> usize {
+        self.owner_reserved_blocks
+    }
+
+    /// Registration of each lease still in the table, in table order.
+    #[cfg(any(test, feature = "test-support"))]
+    pub(super) fn owner_cons_registrations_for_test(&self) -> Vec<Option<std::num::NonZeroU64>> {
+        self.owner_cons_leases
+            .iter()
+            .map(|lease| lease.registration)
+            .collect()
+    }
+
     #[inline]
     pub(super) fn threads_admitted(&self) -> bool {
         matches!(self.storage, AllocatorStorage::Admitted(_))
@@ -1076,6 +1441,71 @@ impl ConsAllocator {
         log: &mut YoungBlockLog,
     ) -> Result<ConsCarveAge, YoungRegistryError> {
         self.with_state_mut(|state, mode| state.note_carve(base, mode, log))
+    }
+
+    #[cold]
+    pub(super) fn merge_legacy_young_shell<'a>(
+        &mut self,
+        frozen: &mut YoungBlockLog,
+        shell: &mut YoungBlockLog,
+        resolve_peer: impl FnOnce(YoungRegistrationId) -> Option<&'a mut YoungBlockLog>,
+    ) -> Result<(), YoungRegistryError> {
+        self.with_state_mut(|state, _mode| {
+            state.merge_legacy_young_shell(frozen, shell, resolve_peer)
+        })
+    }
+
+    #[cfg(test)]
+    pub(super) fn verify_young_registry_with_extra(
+        &self,
+        current: &YoungBlockLog,
+        extra: &[&YoungBlockLog],
+    ) {
+        self.with_state(|state, _mode| {
+            state.verify_slots();
+            let mut listed = std::collections::HashSet::new();
+            let mut pending = std::collections::HashSet::new();
+            for registration in &state.pending_mutators {
+                assert_eq!(registration.heap_identity(), state.identity);
+                assert!(
+                    pending.insert(*registration),
+                    "duplicate pending canonical owner"
+                );
+            }
+            for log in std::iter::once(current).chain(extra.iter().copied()) {
+                assert_eq!(log.id().heap_identity(), state.identity);
+                assert_eq!(log.pending_index().is_some(), !log.blocks().is_empty());
+                if let Some(index) = log.pending_index() {
+                    assert_eq!(state.pending_mutators[index.index()], log.id());
+                    assert!(
+                        pending.remove(&log.id()),
+                        "canonical log missing pending ID"
+                    );
+                }
+                for (index, base) in log.blocks().iter().enumerate() {
+                    assert!(listed.insert(*base), "duplicate young log entry");
+                    let block = state.block_for_base(*base);
+                    let backlink = block
+                        .young_log_slot
+                        .expect("young block has canonical backlink");
+                    assert_eq!(backlink.registration, log.id());
+                    assert_eq!(backlink.index.index(), index);
+                }
+            }
+            assert!(pending.is_empty(), "pending ID has no canonical owner log");
+            for base in &state.mark_work {
+                assert!(listed.insert(*base), "duplicate captured young work");
+                assert!(state.block_for_base(*base).young_log_slot.is_none());
+            }
+            for (base, &slot) in &state.blocks {
+                let block = state.block(slot);
+                assert_eq!(
+                    block.young.load(Ordering::Relaxed),
+                    listed.contains(base),
+                    "young flag/log mismatch at {base:?}"
+                );
+            }
+        });
     }
 
     pub(super) fn mark_work_snapshot(&self) -> Vec<ConsBlockBase> {
@@ -1851,7 +2281,7 @@ impl ConsStopAll<'_> {
         self.verify_stale_marks(blocks);
         for block in blocks {
             let metadata = self.state.block_for_base(ConsBlockBase::of(block));
-            for index in 0..block.next_index as usize {
+            for index in 0..block.next_index() {
                 // SAFETY: this guard proves stopped mutators/closed regions,
                 // and its caller retains every listed block's storage.
                 let cell = unsafe { &*block.cells_ptr().add(index) };
@@ -1887,7 +2317,7 @@ impl ConsStopAll<'_> {
                 "cached old count differs from bitmap"
             );
             if !metadata.young.load(Ordering::Relaxed) {
-                for index in 0..block.next_index as usize {
+                for index in 0..block.next_index() {
                     assert!(
                         !block.trailer().is_marked(index) || block.trailer().is_old(index),
                         "non-young block has marked non-old cell"

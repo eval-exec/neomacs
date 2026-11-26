@@ -76,7 +76,8 @@ fn extracts_string_bytes_into_mapped_heap_section() {
         panic!("expected string object");
     };
 
-    let view = MappedHeapView::from_slice(&heap.bytes);
+    // SAFETY: `heap.bytes` stays live for the duration of `view`.
+    let view = unsafe { MappedHeapView::from_slice(&heap.bytes) };
     let mapped = view.bytes(data).unwrap();
     let mapped_bytes = unsafe { std::slice::from_raw_parts(mapped.ptr, mapped.len) };
     assert_eq!(mapped_bytes, b"abc");
@@ -146,7 +147,8 @@ fn empty_strings_still_create_heap_section_anchor() {
     let DumpHeapObject::Str { data, .. } = &tagged_heap.objects[0] else {
         panic!("expected string object");
     };
-    let view = MappedHeapView::from_slice(&heap.bytes);
+    // SAFETY: `heap.bytes` stays live for the duration of `view`.
+    let view = unsafe { MappedHeapView::from_slice(&heap.bytes) };
     let mapped = view.bytes(data).unwrap();
     assert_eq!(mapped.len, 0);
     assert!(mapped.ptr as usize >= heap.bytes.as_ptr() as usize);
@@ -186,7 +188,8 @@ fn reserves_aligned_slot_spans_for_vectorlike_objects() {
     let span = tagged_heap.mapped_slots[0].expect("vector slot span");
     assert!(span.offset as usize >= std::mem::size_of::<VectorObj>());
     assert_eq!(span.len, 2);
-    let view = MappedHeapView::from_mut_slice(&mut heap.bytes);
+    // SAFETY: `heap.bytes` stays live for the duration of `view`.
+    let view = unsafe { MappedHeapView::from_mut_slice(&mut heap.bytes) };
     let header = view.veclike_header_mut(object_span).unwrap();
     assert_eq!(header.cast::<u8>(), heap.bytes.as_mut_ptr());
     assert_eq!(view.veclike_type(object_span).unwrap(), VecLikeType::Vector);
@@ -233,7 +236,8 @@ fn reserves_mapped_cons_cells_as_heap_objects() {
     assert_eq!(first.offset, 0);
     assert_eq!(second.offset as usize, std::mem::size_of::<ConsCell>());
 
-    let view = MappedHeapView::from_mut_slice(&mut heap.bytes);
+    // SAFETY: `heap.bytes` stays live for the duration of `view`.
+    let view = unsafe { MappedHeapView::from_mut_slice(&mut heap.bytes) };
     let ptr = view.cons_cell_mut(first).unwrap();
     assert_eq!(ptr.cast::<u8>(), heap.bytes.as_mut_ptr());
 
@@ -278,7 +282,8 @@ fn reserves_mapped_float_objects_as_heap_objects() {
     assert_eq!(first.offset, 0);
     assert_eq!(second.offset as usize, std::mem::size_of::<FloatObj>());
 
-    let view = MappedHeapView::from_mut_slice(&mut heap.bytes);
+    // SAFETY: `heap.bytes` stays live for the duration of `view`.
+    let view = unsafe { MappedHeapView::from_mut_slice(&mut heap.bytes) };
     let ptr = view.float_obj_mut(first).unwrap();
     assert_eq!(ptr.cast::<u8>(), heap.bytes.as_mut_ptr());
 
@@ -523,6 +528,18 @@ fn reserves_mapped_vectorlike_headers_as_heap_objects() {
         std::mem::size_of::<MacroObj>()
     );
     assert!(heap.bytes.len() >= std::mem::size_of::<VectorObj>());
+}
+
+#[test]
+#[deny(unused_unsafe)]
+fn mapped_heap_view_slice_constructors_require_unsafe() {
+    let mut backing = vec![0u8; 16];
+    // SAFETY: `backing` stays live for the lifetime of both views.
+    let ro = unsafe { MappedHeapView::from_slice(&backing) };
+    assert_eq!(ro.len, 16);
+    // SAFETY: `backing` stays live and exclusively borrowed for the view.
+    let rw = unsafe { MappedHeapView::from_mut_slice(&mut backing) };
+    assert_eq!(rw.len, 16);
 }
 
 fn read_usize(bytes: &[u8], offset: usize) -> usize {

@@ -239,7 +239,7 @@ pub(crate) fn builtin_help_describe_vector(eval: &mut Context, args: Vec<Value>)
             i = run_end.min(stop - 1).max(starting_i);
             val
         } else {
-            vector.as_vector_data().unwrap()[starting_i as usize]
+            vector.as_vector_data().unwrap().at(starting_i as usize)
         };
         let definition = super::get_keyelt(raw, symbol_mode);
         if definition.is_nil() {
@@ -301,7 +301,7 @@ pub(crate) fn builtin_help_describe_vector(eval: &mut Context, args: Vec<Value>)
         if !is_char_table {
             let data = vector.as_vector_data().unwrap();
             while i + 1 < stop {
-                let next = super::get_keyelt(data[(i + 1) as usize], symbol_mode);
+                let next = super::get_keyelt(data.at((i + 1) as usize), symbol_mode);
                 if next.is_nil() || !equal_value(&next, &definition, 0) {
                     break;
                 }

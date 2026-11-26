@@ -820,13 +820,7 @@ impl Context {
             .iter()
             .rev()
             .take(max_scan)
-            .find_map(|entry| match entry {
-                SpecBinding::Backtrace { function, .. }
-                | SpecBinding::Backtrace1 { function, .. }
-                | SpecBinding::Backtrace2 { function, .. }
-                | SpecBinding::BacktraceNative { function, .. } => Some(*function),
-                _ => None,
-            })
+            .find_map(SpecBinding::backtrace_function)
     }
 
     /// The function of the innermost backtrace frame within `max_scan`
@@ -846,14 +840,13 @@ impl Context {
             .iter()
             .rev()
             .take(max_scan)
-            .filter_map(|entry| match entry {
-                SpecBinding::Backtrace { function, args, .. } => {
-                    Some((*function, args.is_unevalled()))
-                }
-                SpecBinding::Backtrace1 { function, .. }
-                | SpecBinding::Backtrace2 { function, .. }
-                | SpecBinding::BacktraceNative { function, .. } => Some((*function, false)),
-                _ => None,
+            .filter_map(|entry| {
+                let function = entry.backtrace_function()?;
+                let unevalled = matches!(
+                    entry,
+                    SpecBinding::Backtrace { args, .. } if args.is_unevalled()
+                );
+                Some((function, unevalled))
             })
             .find(|&(function, _)| keep(function))
             .and_then(|(function, unevalled)| (!unevalled).then_some(function))
@@ -1735,7 +1728,17 @@ impl Context {
         if self.specpdl.len() == count + 1
             && let Some(SpecBinding::LexicalEnv { old_lexenv }) = self.specpdl.last()
         {
-            self.lexenv = *old_lexenv;
+            let old_lexenv = *old_lexenv;
+            // GNU stays inside `Flet` for the whole wait (eval.c:1151). The
+            // Ok return only tests `is_err`. The thread-id check and the
+            // closure capture are in the cold helper, so this fast path does
+            // not call them.
+            let result = if result.is_err() {
+                self.capture_blocked_lexenv_continuation(result)
+            } else {
+                result
+            };
+            self.lexenv = old_lexenv;
             // SAFETY: a `LexicalEnv` entry owns nothing (see
             // `pop_simple_specpdl_suffix`'s LexicalEnv arm, which retires it
             // the same way).
@@ -1743,6 +1746,52 @@ impl Context {
             return result;
         }
         self.unbind_to_with_result(count, result)
+    }
+
+    /// Close a simulated worker's blocked forms over the lexenv this frame
+    /// is about to pop. A bare closure or a condition-case marker already
+    /// names its own environment; a plain form list does not. Main and green
+    /// threads return the error unchanged.
+    #[cold]
+    #[inline(never)]
+    fn capture_blocked_lexenv_continuation(&mut self, result: EvalResult) -> EvalResult {
+        if self.threads.current_thread_id() == 0 || self.green_threads_running() {
+            return result;
+        }
+        match result.kinded() {
+            Err(FlowKind::ThreadBlocked(blocked))
+                if !blocked.remaining_forms.is_nil()
+                    && crate::emacs_core::threads::thread_condition_case_continuation_parts(
+                        blocked.remaining_forms,
+                    )
+                    .is_none()
+                    && blocked
+                        .remaining_forms
+                        .closure_slot(neovm_value::tagged::header::CLOSURE_ARGLIST)
+                        .is_none() =>
+            {
+                match builtins::symbols::make_interpreted_closure_from_parts(
+                    &Value::NIL,
+                    &blocked.remaining_forms,
+                    &self.lexenv,
+                    None,
+                    None,
+                ) {
+                    Ok(resume_function) => {
+                        let call = Value::cons(
+                            Value::symbol("funcall"),
+                            Value::cons(resume_function, Value::NIL),
+                        );
+                        Err(Flow::thread_blocked(
+                            blocked.blocker,
+                            Value::cons(call, Value::NIL),
+                        ))
+                    }
+                    Err(flow) => Err(flow),
+                }
+            }
+            other => other.map_err(Flow::from_kind),
+        }
     }
 
     /// GNU's post-call order for a frame [`Self::push_backtrace_frame`]
@@ -2408,8 +2457,11 @@ impl Context {
             CallableRoot::Specpdl
         };
         let result = {
-            if self.gc_safe_point_exact_should_collect() {
-                self.gc_collect_from_current_roots();
+            if self.gc_safe_point_exact_should_collect()
+                && let Err(flow) = self.gc_collect_from_current_roots_flow()
+            {
+                self.depth -= 1;
+                return self.finish_traced_call(bt_count, Err(flow));
             }
             // GNU Ffuncall eval.c:3185-3190 in order: record_in_backtrace,
             // maybe_gc, then `if (debug_on_next_call) do_debug_on_call
@@ -2685,13 +2737,16 @@ impl Context {
                     // reallocate `bc_buf` under a pointer into it, this vector
                     // is a local that nothing appends to for the duration of
                     // the call.
-                    cache::run_armed_leaf(
-                        ctx_ptr,
-                        bc_data,
-                        func_value,
-                        leaf,
-                        args.as_ptr().cast::<i64>(),
-                    )
+                    // SAFETY: `ctx_ptr` is the live `Context`, `leaf` is pinned by the cache/slot, and `bits` holds rooted argument words matching the leaf arity.
+                    unsafe {
+                        cache::run_armed_leaf(
+                            ctx_ptr,
+                            bc_data,
+                            func_value,
+                            leaf,
+                            args.as_ptr().cast::<i64>(),
+                        )
+                    }
                 } else {
                     // Normalize to the leaf's ABI exactly as `call_consts`
                     // does: nil-padded for omitted `&optional`, the tail
@@ -2711,7 +2766,10 @@ impl Context {
                         };
                         bits.push(rest.bits() as i64);
                     }
-                    cache::run_armed_leaf(ctx_ptr, bc_data, func_value, leaf, bits.as_ptr())
+                    // SAFETY: `ctx_ptr` is the live `Context`, `leaf` is pinned by the cache/slot, and `bits` holds rooted argument words matching the leaf arity.
+                    unsafe {
+                        cache::run_armed_leaf(ctx_ptr, bc_data, func_value, leaf, bits.as_ptr())
+                    }
                 };
                 restore_scratch_gc_roots(saved_roots);
                 return match native {
@@ -2781,7 +2839,8 @@ impl Context {
                 // cache probe above — the same hand-off
                 // `dispatch_bytecode_call_from_stack` makes.
                 if matches!(native, Ok(Some(_))) {
-                    cache::arm_leaf_slot(ctx_ptr, bc_data);
+                    // SAFETY: `ctx_ptr` is the live `Context` for this bytecode call and `bc_data` is rooted for the duration of arming.
+                    unsafe { cache::arm_leaf_slot(ctx_ptr, bc_data) };
                 }
                 restore_scratch_gc_roots(saved_roots);
                 match native {
@@ -2874,8 +2933,11 @@ impl Context {
         let bt_count = self.specpdl.len();
         self.push_backtrace_frame(designator, &args);
         let result = {
-            if self.gc_safe_point_exact_should_collect() {
-                self.gc_collect_from_current_roots();
+            if self.gc_safe_point_exact_should_collect()
+                && let Err(flow) = self.gc_collect_from_current_roots_flow()
+            {
+                self.depth -= 1;
+                return self.finish_traced_call(bt_count, Err(flow));
             }
             let entered = match self.take_debug_on_call_arm(DebugOnCallCode::Funcall) {
                 Some(arm) => self.do_debug_on_call(arm),
@@ -2946,8 +3008,11 @@ impl Context {
         let bt_count = self.specpdl.len();
         self.push_backtrace_frame(designator, std::slice::from_ref(&arg0));
         let result = {
-            if self.gc_safe_point_exact_should_collect() {
-                self.gc_collect_from_current_roots();
+            if self.gc_safe_point_exact_should_collect()
+                && let Err(flow) = self.gc_collect_from_current_roots_flow()
+            {
+                self.depth -= 1;
+                return self.finish_traced_call(bt_count, Err(flow));
             }
             let entered = match self.take_debug_on_call_arm(DebugOnCallCode::Funcall) {
                 Some(arm) => self.do_debug_on_call(arm),
@@ -2992,8 +3057,11 @@ impl Context {
         let bt_count = self.specpdl.len();
         self.push_backtrace_frame(designator, &[arg0, arg1]);
         let result = {
-            if self.gc_safe_point_exact_should_collect() {
-                self.gc_collect_from_current_roots();
+            if self.gc_safe_point_exact_should_collect()
+                && let Err(flow) = self.gc_collect_from_current_roots_flow()
+            {
+                self.depth -= 1;
+                return self.finish_traced_call(bt_count, Err(flow));
             }
             let entered = match self.take_debug_on_call_arm(DebugOnCallCode::Funcall) {
                 Some(arm) => self.do_debug_on_call(arm),
@@ -3050,8 +3118,11 @@ impl Context {
         let bt_count = self.specpdl.len();
         self.push_backtrace_frame(function, std::slice::from_ref(&arg0));
         let result = {
-            if self.gc_safe_point_exact_should_collect() {
-                self.gc_collect_from_current_roots();
+            if self.gc_safe_point_exact_should_collect()
+                && let Err(flow) = self.gc_collect_from_current_roots_flow()
+            {
+                self.depth -= 1;
+                return self.finish_traced_call(bt_count, Err(flow));
             }
             let entered = match self.take_debug_on_call_arm(DebugOnCallCode::Funcall) {
                 Some(arm) => self.do_debug_on_call(arm),
@@ -3141,13 +3212,16 @@ impl Context {
             let native = if !has_rest && nonrest == 1 {
                 // `Value` is `#[repr(transparent)]` over a word: the local IS
                 // a one-element argument array in the leaf's ABI.
-                cache::run_armed_leaf(
-                    ctx_ptr,
-                    bc_data,
-                    func_value,
-                    leaf,
-                    std::ptr::from_ref(&arg0).cast::<i64>(),
-                )
+                // SAFETY: `ctx_ptr` is the live `Context`, `leaf` is pinned by the cache/slot, and `bits` holds rooted argument words matching the leaf arity.
+                unsafe {
+                    cache::run_armed_leaf(
+                        ctx_ptr,
+                        bc_data,
+                        func_value,
+                        leaf,
+                        std::ptr::from_ref(&arg0).cast::<i64>(),
+                    )
+                }
             } else {
                 let nil = Value::NIL.bits() as i64;
                 let fixed = nonrest.min(1);
@@ -3164,7 +3238,8 @@ impl Context {
                     };
                     bits.push(rest.bits() as i64);
                 }
-                cache::run_armed_leaf(ctx_ptr, bc_data, func_value, leaf, bits.as_ptr())
+                // SAFETY: `ctx_ptr` is the live `Context`, `leaf` is pinned by the cache/slot, and `bits` holds rooted argument words matching the leaf arity.
+                unsafe { cache::run_armed_leaf(ctx_ptr, bc_data, func_value, leaf, bits.as_ptr()) }
             };
             return match native {
                 Ok(Some(b)) => Ok(unsafe {
@@ -3236,8 +3311,11 @@ impl Context {
         let args = [arg0, arg1];
         self.push_backtrace_frame(function, &args);
         let result = {
-            if self.gc_safe_point_exact_should_collect() {
-                self.gc_collect_from_current_roots();
+            if self.gc_safe_point_exact_should_collect()
+                && let Err(flow) = self.gc_collect_from_current_roots_flow()
+            {
+                self.depth -= 1;
+                return self.finish_traced_call(bt_count, Err(flow));
             }
             let entered = match self.take_debug_on_call_arm(DebugOnCallCode::Funcall) {
                 Some(arm) => self.do_debug_on_call(arm),
@@ -3305,13 +3383,16 @@ impl Context {
             let ctx_ptr = self as *mut Context;
             let saved_roots = save_scratch_gc_roots();
             let native = if !has_rest && nonrest == 2 {
-                cache::run_armed_leaf(
-                    ctx_ptr,
-                    bc_data,
-                    function,
-                    leaf,
-                    args.as_ptr().cast::<i64>(),
-                )
+                // SAFETY: `ctx_ptr` is the live `Context`, `leaf` is pinned by the cache/slot, and `bits` holds rooted argument words matching the leaf arity.
+                unsafe {
+                    cache::run_armed_leaf(
+                        ctx_ptr,
+                        bc_data,
+                        function,
+                        leaf,
+                        args.as_ptr().cast::<i64>(),
+                    )
+                }
             } else {
                 let fixed = nonrest.min(2);
                 let nil = Value::NIL.bits() as i64;
@@ -3328,7 +3409,8 @@ impl Context {
                     };
                     bits.push(rest.bits() as i64);
                 }
-                cache::run_armed_leaf(ctx_ptr, bc_data, function, leaf, bits.as_ptr())
+                // SAFETY: `ctx_ptr` is the live `Context`, `leaf` is pinned by the cache/slot, and `bits` holds rooted argument words matching the leaf arity.
+                unsafe { cache::run_armed_leaf(ctx_ptr, bc_data, function, leaf, bits.as_ptr()) }
             };
             return match native {
                 Ok(Some(bits)) => Ok(unsafe {
@@ -3436,8 +3518,10 @@ impl Context {
                     };
                     bits[nonrest] = rest.bits() as i64;
                 }
-                let native =
-                    cache::run_armed_leaf(ctx_ptr, bc_data, func_value, leaf, bits.as_ptr());
+                // SAFETY: `ctx_ptr` is the live `Context`, `leaf` is pinned by the cache/slot, and `bits` holds rooted argument words matching the leaf arity.
+                let native = unsafe {
+                    cache::run_armed_leaf(ctx_ptr, bc_data, func_value, leaf, bits.as_ptr())
+                };
                 restore_scratch_gc_roots(saved_roots);
                 return Self::stack_call_dispatch_from_native(native);
             }
@@ -3460,7 +3544,8 @@ impl Context {
                         )
                     };
                     if matches!(native, Ok(Some(_))) {
-                        cache::arm_leaf_slot(ctx_ptr, bc_data);
+                        // SAFETY: `ctx_ptr` is the live `Context` for this bytecode call and `bc_data` is rooted for the duration of arming.
+                        unsafe { cache::arm_leaf_slot(ctx_ptr, bc_data) };
                     }
                     restore_scratch_gc_roots(saved_roots);
                     Self::stack_call_dispatch_from_native(native)
@@ -4524,10 +4609,10 @@ impl Context {
     /// (ROOT_COUNT), so the skip is a no-op.
     ///
     /// The skip's premise is checked here, at the decision point, in debug
-    /// builds: a body runner (or the bind-error path) that ever stopped
-    /// restoring the specpdl fails this assert before the skip could leave
-    /// bindings behind. `debug_assert_eq!` compiles out, so release code is
-    /// unchanged.
+    /// builds. Every result that is not a blocked simulated worker leaves
+    /// the specpdl at `count`. That worker is the only exemption: its frames
+    /// stay so they can be parked after `apply` returns. The assert compiles
+    /// out of release code.
     #[inline(always)]
     #[doc(hidden)]
     pub fn unwind_call_root(
@@ -4539,9 +4624,15 @@ impl Context {
         match root {
             CallableRoot::Specpdl => self.unbind_to_with_result(count, result),
             CallableRoot::Witnessed(_) => {
-                debug_assert_eq!(
-                    self.specpdl.len(),
-                    count,
+                // A simulated worker's `ThreadBlocked` keeps the Lisp stack
+                // (`unbind_to_with_result_slow`). `preserve_blocked_sim_worker`
+                // parks those frames after `apply` returns. Popping them here
+                // would run a `with-mutex` cleanup before the wait relocks.
+                let blocked = matches!(result.as_ref(), Err(flow) if flow.is_thread_blocked())
+                    && self.threads.current_thread_id() != 0
+                    && !self.green_threads_running();
+                debug_assert!(
+                    blocked || self.specpdl.len() == count,
                     "witnessed lexical call left specpdl entries above ROOT_COUNT"
                 );
                 result
@@ -4577,12 +4668,8 @@ impl Context {
                 return Err(signal(LispCondition::InvalidFunction, vec![func_value]));
             };
             let (Some(arglist), Some(body)) = (
-                slots
-                    .get(neovm_value::tagged::header::CLOSURE_ARGLIST)
-                    .copied(),
-                slots
-                    .get(neovm_value::tagged::header::CLOSURE_CODE)
-                    .copied(),
+                slots.get(neovm_value::tagged::header::CLOSURE_ARGLIST),
+                slots.get(neovm_value::tagged::header::CLOSURE_CODE),
             ) else {
                 return Err(signal(LispCondition::InvalidFunction, vec![func_value]));
             };
@@ -4590,7 +4677,6 @@ impl Context {
             // invalid function (the accessor returned None there too).
             let env = slots
                 .get(neovm_value::tagged::header::CLOSURE_CONSTANTS)
-                .copied()
                 .filter(|env| !env.is_nil());
             (arglist, body, env)
         };
@@ -4663,13 +4749,10 @@ impl Context {
         // allocates (the slice must not be held across an allocation).
         let (arglist, body, env) = match func.closure_slots() {
             Some(slots) => (
-                slots.get(CLOSURE_ARGLIST).copied(),
-                slots
-                    .get(neovm_value::tagged::header::CLOSURE_CODE)
-                    .copied(),
+                slots.get(CLOSURE_ARGLIST),
+                slots.get(neovm_value::tagged::header::CLOSURE_CODE),
                 slots
                     .get(neovm_value::tagged::header::CLOSURE_CONSTANTS)
-                    .copied()
                     .filter(|env| !env.is_nil()),
             ),
             None => (None, None, None),
@@ -4700,7 +4783,10 @@ impl Context {
     }
 
     /// A lambda body that blocked a thread mid-way resumes as a closure over
-    /// the forms it had left, in the current lexical environment.
+    /// the forms it had left, in the current lexical environment. A remaining
+    /// value that is already a closure keeps the env captured when its `let`
+    /// frame popped; wrapping that closure as a body is `wrong-type-argument
+    /// consp`.
     #[inline]
     #[doc(hidden)]
     pub fn rewrap_thread_blocked_in_lexenv(&mut self, result: EvalResult) -> EvalResult {
@@ -4710,7 +4796,11 @@ impl Context {
                     && crate::emacs_core::threads::thread_condition_case_continuation_parts(
                         blocked.remaining_forms,
                     )
-                    .is_none() =>
+                    .is_none()
+                    && blocked
+                        .remaining_forms
+                        .closure_slot(neovm_value::tagged::header::CLOSURE_ARGLIST)
+                        .is_none() =>
             {
                 match builtins::symbols::make_interpreted_closure_from_parts(
                     &Value::NIL,

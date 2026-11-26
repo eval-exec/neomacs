@@ -50,7 +50,7 @@ fn an_overdue_incremental_sweep_finishes_at_the_next_safe_point() {
         }
         // The mark window itself consed past the threshold (a busy test
         // runner): finish this cycle and try again.
-        ev.tagged_heap.finish_incremental_sweep_now();
+        ev.tagged_heap.finish_incremental_sweep_now_for_test();
         attempts += 1;
         assert!(attempts < 20, "could not observe a fresh sweep");
         garbage(&mut ev);

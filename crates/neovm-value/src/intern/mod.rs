@@ -1335,6 +1335,10 @@ impl SymbolRegistry {
 
     fn alloc_symbol(&mut self, name: NameId, canonical: bool, name_value: NewSymbolName) -> SymId {
         let id = SymId(self.symbols.len() as u32);
+        // GNU `syms_of_alloc` `symbols-consed` (`src/alloc.c:7429`) counts
+        // every symbol object, interned or uninterned; this is the one place
+        // a symbol id is handed out.
+        crate::value::add_wrapping(crate::tagged::gc::MemoryUseCountSlot::Symbols, 1);
         self.symbols.push(SymbolSlot {
             name,
             canonical,
@@ -1899,6 +1903,13 @@ pub fn restore_runtime_interner(
     restored
 }
 
+/// Number of symbol ids allocated so far. Neomacs never frees a symbol id, so
+/// this is also the live symbol count reported by `(garbage-collect)`.
+#[doc(hidden)]
+pub fn symbol_span_total() -> usize {
+    global_symbol_registry().read().symbol_span()
+}
+
 /// Intern a string using the global runtime symbol registry.
 #[inline]
 pub fn intern(s: &str) -> SymId {
@@ -2177,7 +2188,31 @@ pub fn canonical_symbol_for_name(id: NameId) -> Option<SymId> {
     Some(sym_id)
 }
 
-/// Resolve a SymId to its string using the global runtime symbol registry.
+/// A process-stable UTF-8 spelling of a symbol name whose bytes are not UTF-8.
+///
+/// The spelling is not the name. Each byte that is not a Unicode scalar
+/// becomes U+FFFD. Intern, `symbol-name`, and equality keep the Lisp string.
+/// The cache key is that spelling, so two different raw names may share a
+/// view; they do not share a symbol.
+fn lossy_raw_byte_symbol_name(name: &'static LispString) -> &'static str {
+    static CACHE: OnceLock<parking_lot::Mutex<HashMap<String, &'static str>>> = OnceLock::new();
+    let rendered =
+        crate::emacs_char::emacs_bytes_to_lossy_string(name.as_bytes(), name.is_multibyte());
+    let cache = CACHE.get_or_init(|| parking_lot::Mutex::new(HashMap::new()));
+    let mut guard = cache.lock();
+    if let Some(existing) = guard.get(&rendered) {
+        return existing;
+    }
+    let leaked: &'static str = Box::leak(rendered.clone().into_boxed_str());
+    guard.insert(rendered, leaked);
+    leaked
+}
+
+/// Resolve a SymId to a UTF-8 view of its name.
+///
+/// Valid UTF-8 is returned as those bytes. A raw-byte name has no such view:
+/// this returns the lossy spelling from [`lossy_raw_byte_symbol_name`] and
+/// does not build a `str` from the raw bytes.
 #[inline]
 pub fn resolve_sym(id: SymId) -> &'static str {
     ensure_thread_local_cache_epoch_current();
@@ -2189,16 +2224,15 @@ pub fn resolve_sym(id: SymId) -> &'static str {
     }
     let registry = global_symbol_registry().read();
     let name_value = registry.resolve_lisp_string(id);
-    let s = name_value
-        .as_utf8_str()
-        .unwrap_or_else(|| panic!("symbol name {:?} is not valid UTF-8", id));
     let is_canonical = registry.is_canonical_id(id);
     drop(registry);
     thread_local_record_canonical(id, is_canonical);
     if is_canonical {
         thread_local_record_name(id, name_value);
     }
-    s
+    name_value
+        .as_utf8_str()
+        .unwrap_or_else(|| lossy_raw_byte_symbol_name(name_value))
 }
 
 /// Resolve a SymId to its exact Lisp-string name using the global runtime
@@ -2433,6 +2467,11 @@ struct SymbolCacheEntry {
     /// `&str` on a hit avoids paying for a 16-byte fat pointer in every dense
     /// cache entry.
     name: Option<&'static LispString>,
+    /// `Some(true)` only after `as_utf8_str` accepted `name`. The hit path
+    /// then rebuilds `&str` without scanning. `Some(false)` is a raw-byte
+    /// name: `thread_local_resolve` misses and `resolve_sym` returns the
+    /// lossy spelling instead of these bytes.
+    utf8: Option<bool>,
     /// `NameId(u32::MAX)` is reserved globally and doubles as the cache-miss
     /// sentinel, avoiding the padding of `Option<NameId>`.
     name_id: u32,
@@ -2444,6 +2483,7 @@ impl Default for SymbolCacheEntry {
     fn default() -> Self {
         Self {
             name: None,
+            utf8: None,
             name_id: SYMBOL_NAME_CACHE_MISSING,
             canonical: None,
             keyword: None,
@@ -2660,14 +2700,55 @@ fn thread_local_record_interned_str(s: &'static str, id: SymId) {
 
 #[inline]
 fn thread_local_resolve(id: SymId) -> Option<&'static str> {
-    thread_local_resolve_lisp_string(id).map(|name| {
-        // `resolve_sym` validates a name via `as_utf8_str` BEFORE
-        // `thread_local_record_name` admits it, and symbol names are
-        // immutable — re-running full UTF-8 validation on every cache hit
-        // was the hottest single cost of symbol resolution (275M Ir of
-        // `from_utf8` on a 300k-iteration string workload).
-        debug_assert!(name.as_utf8_str().is_some());
-        unsafe { std::str::from_utf8_unchecked(name.as_bytes()) }
+    // Record time stores whether the interned bytes are UTF-8. A hit then
+    // rebuilds `&str` with no scan. A raw-byte name is `Some(false)` and
+    // misses, so `resolve_sym` takes the slow path and returns the lossy
+    // spelling. The raw bytes are never a `str`.
+    let name = SYMBOL_CACHE.with(|cache| {
+        let cache = cache.borrow();
+        let entry = cache.get(id.0 as usize)?;
+        match (entry.name, entry.utf8) {
+            (Some(name), Some(true)) => Some(name),
+            _ => None,
+        }
+    })?;
+    // SAFETY: `utf8` is `Some(true)` only after `LispString::as_utf8_str`
+    // accepted these bytes. An interned name is immutable for the process
+    // lifetime, so the scan is not repeated on the hit path.
+    Some(unsafe { std::str::from_utf8_unchecked(name.as_bytes()) })
+}
+
+/// A symbol name this thread has already classified.
+///
+/// `Utf8` was accepted by `as_utf8_str` at record time. `Raw` is a name that
+/// is not UTF-8. Neither arm scans the bytes again.
+#[derive(Clone, Copy)]
+pub(crate) enum RecordedSymbolName {
+    Utf8(&'static str),
+    Raw(&'static [u8]),
+}
+
+/// The recorded name, if this thread has classified `id`.
+///
+/// A hit does not call `from_utf8` and does not read the symbol registry.
+#[inline]
+pub(crate) fn recorded_symbol_name(id: SymId) -> Option<RecordedSymbolName> {
+    ensure_thread_local_cache_epoch_current();
+    if let Some(text) = thread_local_resolve(id) {
+        return Some(RecordedSymbolName::Utf8(text));
+    }
+    thread_local_recorded_raw_name(id).map(|name| RecordedSymbolName::Raw(name.as_bytes()))
+}
+
+#[inline]
+fn thread_local_recorded_raw_name(id: SymId) -> Option<&'static LispString> {
+    SYMBOL_CACHE.with(|cache| {
+        let cache = cache.borrow();
+        let entry = cache.get(id.0 as usize)?;
+        match (entry.name, entry.utf8) {
+            (Some(name), Some(false)) => Some(name),
+            _ => None,
+        }
     })
 }
 
@@ -2681,6 +2762,7 @@ fn thread_local_resolve_lisp_string(id: SymId) -> Option<&'static LispString> {
 
 #[inline]
 fn thread_local_record_name(id: SymId, name: &'static LispString) {
+    let utf8 = name.as_utf8_str().is_some();
     SYMBOL_CACHE.with(|cache| {
         let mut cache = cache.borrow_mut();
         let idx = id.0 as usize;
@@ -2688,6 +2770,7 @@ fn thread_local_record_name(id: SymId, name: &'static LispString) {
             cache.resize(idx + 1, SymbolCacheEntry::default());
         }
         cache[idx].name = Some(name);
+        cache[idx].utf8 = Some(utf8);
     });
 }
 

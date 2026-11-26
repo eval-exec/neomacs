@@ -9,6 +9,7 @@ use neovm_core::emacs_core::neo::scroll::ScrollContextExt;
 use neovm_core::emacs_core::xdisp::XdispContextExt;
 use neovm_core::window::display::WindowDisplayContextExt;
 mod diagnostic_knobs;
+mod leaf_cursor_checkpoint;
 mod window_input_ownership;
 use neovm_core::window::DisplayFrameExt;
 use neovm_core::window::DisplayFrameManagerExt;
@@ -34,6 +35,10 @@ mod rows_fontification;
 mod rows_lifetime;
 mod rows_query_policy;
 pub use rows_query_policy::{RowsQueryAdmission, RowsQueryPolicy};
+mod auxiliary_coverage;
+pub use auxiliary_coverage::{
+    AuxiliaryPreparation, AuxiliaryPublicationRefusal, PreparedAuxiliaryScrollCoverage,
+};
 mod scroll_coverage;
 pub use scroll_coverage::ScrollCoverageProgress;
 mod scroll_preview;
@@ -418,6 +423,9 @@ fn window_position_publication(
             WindowLayoutWalkPurpose::SynchronousQuery(
                 neovm_core::window::WindowLayoutQueryScope::Position { .. },
             ) => WindowPositionPublication::SynchronousQueryPosition,
+            WindowLayoutWalkPurpose::SynchronousQuery(
+                neovm_core::window::WindowLayoutQueryScope::TextExtent { .. },
+            ) => WindowPositionPublication::SynchronousQueryTextExtent,
             _ => WindowPositionPublication::SynchronousQueryEnd,
         };
     }
@@ -866,9 +874,12 @@ pub struct LayoutEngine {
     /// The last completed `FrameDisplayState`, produced by `layout_frame_rust()`.
     /// Used by the TTY redisplay path to drive `TtyRif` on the evaluator thread.
     pub last_frame_display_state: Option<neomacs_display_protocol::SealedFramePresentation>,
-    /// Shared paint coverage survives ownership transfer of the full frame.
-    scroll_preview_coverage:
-        Vec<std::sync::Arc<neomacs_display_protocol::scroll_coverage::ScrollCoverage>>,
+    /// Certified semantic rows survive full-frame transfer and renewal-only
+    /// publications, independently of the renderer's retained paint surface.
+    scroll_preview_coverage: scroll_preview::ScrollPreviewCoverage,
+    /// Compact base presentation template retained for auxiliary coverage
+    /// eligibility and evaluator-side surface materialization (R3/R7).
+    auxiliary_base: Option<auxiliary_coverage::AuxiliaryCoverageBase>,
     /// Last sealed face namespace for each logical frame.
     ///
     /// A speculative layout gets a fresh [`FrameFaceAttempt`] from this arena;
@@ -893,6 +904,10 @@ pub struct LayoutEngine {
     /// Last accepted layout per window, used by cursor, scroll, and edit
     /// replay. Speculative attempts never replace this state.
     retained_window_matrices: rustc_hash::FxHashMap<DisplayWindowId, RetainedWindowMatrix>,
+    /// Resolved automatic-composition widths for the current frame's windows,
+    /// parked and loaded with `retained_window_matrices`.
+    retained_composition_advances:
+        rustc_hash::FxHashMap<DisplayWindowId, RetainedCompositionAdvances>,
     prepared_viewports: PreparedViewports,
     scroll_coverage: scroll_coverage::ScrollCoverage,
     /// Every OTHER frame's retained state, parked while this one is laid out.
@@ -957,6 +972,10 @@ pub struct LayoutEngine {
     /// Instrumentation from the most recent `layout_frame_rust` pass: the
     /// relaid-row-count gate metric (spec §7). Reset per frame.
     layout_stats: LayoutStats,
+    /// Test-only override for the overlay source mode (`Captured` vs `Live`),
+    /// avoiding process-global or thread-local test state.
+    #[cfg(test)]
+    overlay_source_override: Option<super::neovm_bridge::OverlaySourceMode>,
 }
 
 /// Ownership of the numeric body observation's read journal.
@@ -1077,10 +1096,75 @@ impl PreparedGuiChromeSemantics {
 // Built and consumed once per layout attempt on the frame hot path; boxing
 // the large variant would add a heap allocation per attempt.
 #[allow(clippy::large_enum_variant)]
+/// Frame layout pass mode inside `'frame_layout`.
+///
+/// Ordinary attempts run in `Converging` mode with callbacks enabled. When a
+/// `LayoutPurpose::Redisplay` frame exhausts its bounded retry budget without
+/// a pending non-local `Flow` and while the frame is still live, the coordinator
+/// switches to ONE callback-inhibited `ExhaustionSnapshot` pass so the frame
+/// publishes coherently (mirroring GNU's fall-through to `update_frame` at
+/// retry exhaustion, `src/xdisp.c:17926-17973, 18054-18091`) instead of leaving
+/// windows permanently blank.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum FrameAttemptMode {
+    Converging,
+    ExhaustionSnapshot,
+}
+
+/// Typed outcome of one internal frame layout invocation.
+///
+/// Replaces re-entrant boolean flags on `LayoutEngine` so nested synchronous
+/// queries cannot clobber a redisplay attempt's NoSafe settlement decision.
+enum FrameLayoutInnerOutcome {
+    Prepared(Option<neovm_core::window::WindowLayoutQuery>),
+    Aborted { settle_no_safe: bool },
+}
+
+impl FrameLayoutInnerOutcome {
+    fn into_query(self) -> Option<neovm_core::window::WindowLayoutQuery> {
+        match self {
+            Self::Prepared(query) => query,
+            Self::Aborted { .. } => None,
+        }
+    }
+}
+
+/// Action returned by `decide_frame_relayout` when a speculative pass requests
+/// a whole-frame retry.
+enum RelayoutDecision {
+    Retry,
+    EnterExhaustionSnapshot,
+    Abort { settle_no_safe: bool },
+}
+
+/// Bounded leaf-local recollection state after pre-walk Lisp (`Prepass`
+/// fontification or pre-walk `display (when ...)`). Transitions strictly
+/// forward at most once per leaf per pass so it can never loop.
+enum PrepassRecollectState {
+    /// Initial leaf pass: run Prepass fontification and pre-walk `display (when ...)`.
+    Fresh,
+    /// Already recollected once after Prepass fontification mutated inputs.
+    /// Skip Prepass fontification; run pre-walk `display (when ...)` on fresh inputs.
+    AfterFontification {
+        outcome: neovm_core::emacs_core::xdisp::RedisplayFontificationOutcome,
+        fontify_end: i64,
+    },
+    /// Already recollected once after pre-walk `display (when ...)` mutated inputs.
+    /// Skip both Prepass fontification and pre-walk `display (when ...)`; walk immediately.
+    AfterDisplayWhen {
+        outcome: neovm_core::emacs_core::xdisp::RedisplayFontificationOutcome,
+        fontify_end: i64,
+        display_when: crate::display_when::DisplayWhenConditions,
+    },
+}
+
 enum LeafLayoutAttempt {
     Completed {
         outcome: WindowLayoutOutcome,
         window_end_attempt: Option<neovm_core::window::WindowEndAttempt>,
+        /// Attempt-owned geometry; retries cannot publish a candidate.
+        snapshot: Option<WindowPresentationSnapshot>,
+        produced_key: Option<RetainedWindowKey>,
     },
     Effect(LayoutEffect),
     /// The attempt unwound and asks the window loop to re-enter with these
@@ -1091,7 +1175,30 @@ enum LeafLayoutAttempt {
     /// still overflows a profiling evaluator's stack well before the
     /// numeric budget is spent.
     Retry(Box<WindowLayoutRetry>),
+    /// The overlay view could not certify the attempt (a window-range view
+    /// exhausted/underflowed, or a live view went stale after a callback
+    /// mutated overlays). The attempt is discarded; the window loop retries
+    /// with the whole-buffer view or a fresh live view (falling back to
+    /// captured after one stale retry).
+    OverlayViewUnusable(crate::neovm_bridge::OverlayViewUnusable),
+    /// The row walk painted an automatic composition whose shaped-gstring
+    /// width the visible-range resolution pass did not reach, so the row
+    /// would have measured the raw text instead of GNU's gstring width. The
+    /// attempt is discarded; the loop retries with the resolution range
+    /// widened to `resolve_from..resolve_through`, then (if that still
+    /// misses) to every span the snapshot captured.
+    AutomaticCompositionUnresolved {
+        resolve_from: usize,
+        resolve_through: usize,
+    },
+    /// Pre-walk Lisp (`Prepass` fontification or pre-walk `display (when ...)`)
+    /// mutated source inputs while window topology and face definitions stayed
+    /// unchanged. Recollect live inputs for this leaf once and walk immediately
+    /// without burning a frame retry.
+    PrepassInputsChanged(Box<PrepassRecollectState>),
     LogicalInputsChanged,
+    ChromeInputsChanged,
+    PostWalkDisplayWhenInputsChanged,
     MatrixCapacityUnavailable,
     /// A `when` clause the walk took by the structural rule evaluated nil
     /// after the walk: relayout the frame once with the evaluated answers,
@@ -1150,10 +1257,15 @@ impl FrameWindowEndAttempts {
     }
 }
 
+/// Owner and physical inputs of one completed body, retained only until this
+/// frame attempt has crossed every sibling's Lisp callback boundary.
+struct CompletedBodyIdentity {
+    source_buffer: neovm_core::buffer::BufferId,
+    inputs: neovm_core::window::WindowLayoutAttemptFreshness,
+}
+
 /// Callback acknowledgements and producer artifacts of one logical frame attempt.
-///
-/// Chrome/minibuffer convergence may perform several physical row walks. Those
-/// retries must not replay Lisp that the logical redisplay already ran.
+/// Chrome/minibuffer retries must not replay its acknowledged Lisp callbacks.
 #[derive(Default)]
 struct RedisplayLispLedger {
     rows_fontification: rows_fontification::RowsFontificationDemand,
@@ -1167,23 +1279,37 @@ struct RedisplayLispLedger {
         DisplayWindowId,
         crate::cursor_source_dependencies::CursorSourceDependencies,
     >,
+    /// Cleared on physical frame retry; completed siblings retain their owner
+    /// identities until final whole-frame admission, independently of source freshness.
+    completed_body_inputs: rustc_hash::FxHashMap<DisplayWindowId, CompletedBodyIdentity>,
+    /// Attempt-wide source-only retry request: the first window that requested
+    /// a source-only retry (for diagnostics) paired with a combined fingerprint
+    /// folding every requesting window's `(window_id, visible_unfontified_spans)`
+    /// in this attempt. Progress on any sibling changes the combined fingerprint
+    /// so a repeating declining hook on an earlier sibling cannot truncate a
+    /// later sibling that is still converging.
+    source_only_retry: Option<(DisplayWindowId, u64)>,
     /// Original source observations commit only with the accepted matrices.
     cursor_sources: rustc_hash::FxHashMap<
         DisplayWindowId,
         crate::cursor_source_dependencies::CursorSourceDependencies,
     >,
+    /// Most recent non-flow chrome outputs evaluated for each `(window, kind)`
+    /// during this frame's retry attempts. Values are rooted in the frame
+    /// attempt's `ScratchGcRootScope` and reused by `ExhaustionSnapshot`.
+    captured_chrome_outputs: crate::display_status_line::CapturedChromeOutputs,
+    /// Number of post-prepass freshness rechecks executed during this frame.
+    prepass_freshness_rechecks: usize,
 }
 
-/// A rejected source projection must not expose its speculative window end.
+/// A rejected body-source projection cannot retain its speculative end.
 fn reject_changed_cursor_sources(
     evaluator: &mut neovm_core::emacs_core::Context,
     window_end_attempt: &mut Option<neovm_core::window::WindowEndAttempt>,
     changed: bool,
 ) -> bool {
-    if changed {
-        if let Some(attempt) = window_end_attempt.take() {
-            evaluator.reject_redisplay_window_end_attempt(attempt);
-        }
+    if changed && let Some(attempt) = window_end_attempt.take() {
+        evaluator.reject_redisplay_window_end_attempt(attempt);
     }
     changed
 }
@@ -1350,14 +1476,123 @@ fn chrome_reuse_context(
 
 /// One frame's retained layout state, parked while another frame is laid out.
 ///
-/// The matrix and its chrome metrics travel together because they are keyed
-/// the same way and committed at the same instant. Keeping them in one type is
-/// the point: they previously sat in two sibling maps next to a third keyed by
-/// `FrameId`, and only the frame-keyed one was right.
+/// Matrices, chrome metrics, and certified semantic scroll rows travel together
+/// because they belong to the same accepted frame. Parking all three preserves
+/// renewal-only publications when redisplay switches from one frame to another.
 #[derive(Default)]
 struct RetainedFrameState {
     matrices: rustc_hash::FxHashMap<DisplayWindowId, RetainedWindowMatrix>,
     chrome_metrics: rustc_hash::FxHashMap<DisplayWindowId, WindowChromeMetrics>,
+    scroll_preview_coverage: scroll_preview::ScrollPreviewCoverage,
+    auxiliary_base: Option<auxiliary_coverage::AuxiliaryCoverageBase>,
+    composition_advances: rustc_hash::FxHashMap<DisplayWindowId, RetainedCompositionAdvances>,
+}
+
+/// Shaped automatic-composition widths retained for one window.
+///
+/// GNU's display reuses a matrix row without re-shaping its compositions; the
+/// equivalent here is to keep each resolved span's `composition_gstring_width`
+/// while the inputs that decide it are unchanged.  The advances map is rebuilt
+/// for the spans of one layout, so it stays bounded by the snapshot's captured
+/// span list.
+struct RetainedCompositionAdvances {
+    buffer_id: neovm_core::buffer::BufferId,
+    buffer_modiff: i64,
+    overlay_modified_tick: i64,
+    face_change_count: u64,
+    display_var_change_count: u64,
+    body_redisplay: neovm_core::window::BodyRedisplayRevision,
+    fontset_generation: u64,
+    window_parameters_generation: u64,
+    char_width_bits: u32,
+    advances: rustc_hash::FxHashMap<(usize, usize), f32>,
+}
+
+impl RetainedCompositionAdvances {
+    /// Whether these advances still describe the same composition inputs.
+    ///
+    /// This is deliberately the logical-input subset of
+    /// [`neovm_core::window::WindowDisplaySnapshotFreshness`], not the whole
+    /// token: the cache mirrors GNU's matrix-row reuse, which legitimately
+    /// survives point, vscroll and repaint-only (`redisplay_generation`)
+    /// moves, so comparing the full token would defeat the cache on every
+    /// cursor move.  The fields below are the ones that decide the shaped
+    /// width:
+    ///
+    /// - text/property changes move `buffer_modiff`;
+    /// - overlay changes move `overlay_modified_tick`;
+    /// - face definitions and fontsets move their generations;
+    /// - a per-window face parameter moves the window parameter generation,
+    ///   and `char_width_bits` catches a window font-size change that only
+    ///   the layout parameters record;
+    /// - `display_var_change_count` moves when a display-affecting variable
+    ///   changes without any of the above ticks — `face-remap-add-relative`
+    ///   (hence `text-scale-adjust`) writes buffer-local
+    ///   `face-remapping-alist`, and GNU re-derives the face (and therefore
+    ///   the font and the composition width) on every compute
+    ///   (src/xfaces.c:2141, 5188-5223);
+    /// - `body_redisplay` moves on `force-window-update`, which must re-derive
+    ///   the body even when no buffer/face/font tick moved
+    ///   (src/window.c:4492).
+    fn is_current_for(
+        &self,
+        buffer_id: neovm_core::buffer::BufferId,
+        buffer_modiff: i64,
+        overlay_modified_tick: i64,
+        face_change_count: u64,
+        display_var_change_count: u64,
+        body_redisplay: neovm_core::window::BodyRedisplayRevision,
+        fontset_generation: u64,
+        window_parameters_generation: u64,
+        char_width_bits: u32,
+    ) -> bool {
+        self.buffer_id == buffer_id
+            && self.buffer_modiff == buffer_modiff
+            && self.overlay_modified_tick == overlay_modified_tick
+            && self.face_change_count == face_change_count
+            && self.display_var_change_count == display_var_change_count
+            && self.body_redisplay == body_redisplay
+            && self.fontset_generation == fontset_generation
+            && self.window_parameters_generation == window_parameters_generation
+            && self.char_width_bits == char_width_bits
+    }
+}
+
+/// The advances one layout publishes for its window.
+///
+/// Every span the current snapshot captured keeps this layout's resolved
+/// width, or the validated previous layout's width for spans this pass did not
+/// resolve (a replay frame's narrow band must not erase the widths a
+/// full-screen pass resolved).  Resolutions for spans the snapshot no longer
+/// has are dropped, so the map stays bounded by the snapshot.
+fn retained_composition_advances_for_spans(
+    spans: impl Iterator<Item = (usize, usize)>,
+    resolved: &rustc_hash::FxHashMap<usize, f32>,
+    seeded: &rustc_hash::FxHashMap<(usize, usize), f32>,
+) -> rustc_hash::FxHashMap<(usize, usize), f32> {
+    let mut retained = rustc_hash::FxHashMap::default();
+    for (start, end) in spans {
+        let width = resolved
+            .get(&start)
+            .copied()
+            .or_else(|| seeded.get(&(start, end)).copied());
+        if let Some(width) = width {
+            retained.insert((start, end), width);
+        }
+    }
+    retained
+}
+
+/// Drop parked advances for windows the accepted frame no longer has.
+///
+/// The per-window caches are inserted while a layout attempt runs, so an
+/// attempt that retried, or a frame switch that removed a window, can leave an
+/// entry behind.  The accepted break owns this cleanup.
+fn prune_retained_composition_advances(
+    caches: &mut rustc_hash::FxHashMap<DisplayWindowId, RetainedCompositionAdvances>,
+    accepted: impl Fn(&DisplayWindowId) -> bool,
+) {
+    caches.retain(|window, _| accepted(window));
 }
 
 /// An upper bound on the characters a window can display, as
@@ -1380,6 +1615,42 @@ fn visible_char_bound(params: &WindowParams) -> (usize, usize) {
         first.saturating_sub(screenful),
         screenful.saturating_mul(4).max(8192),
     )
+}
+
+/// The span-start range of automatic compositions the row walk painted but
+/// the visible-range resolver did not cover, or `None` when the resolved
+/// range is sufficient.
+///
+/// `starts` are the snapshot's captured automatic-composition span starts in
+/// ascending order; the walk paints elements from `walk_start` up to (not
+/// including) `walk_end`, so a start in that half-open interval could have
+/// been painted and must lie in `resolve`.  Starts before `walk_start` are
+/// never painted by this walk (the snapshot's scan is deliberately wider than
+/// the window) and must not trigger a retry.  The returned range is the union
+/// of the missed starts, used to widen the resolver on the retry
+/// (`LeafLayoutAttempt::AutomaticCompositionUnresolved`).  This is the
+/// coverage proof behind "never measure the raw text as a fallback for a
+/// painted composition" (N-orphan A3).
+pub(crate) fn uncovered_automatic_composition_span_range(
+    starts: impl Iterator<Item = usize>,
+    walk_start: usize,
+    walk_end: usize,
+    resolve: &std::ops::Range<usize>,
+) -> Option<std::ops::Range<usize>> {
+    let mut missed: Option<std::ops::Range<usize>> = None;
+    for start in starts {
+        if start < walk_start
+            || start >= walk_end
+            || (start >= resolve.start && start < resolve.end)
+        {
+            continue;
+        }
+        missed = Some(match missed {
+            None => start..start.saturating_add(1),
+            Some(range) => range.start.min(start)..range.end.max(start.saturating_add(1)),
+        });
+    }
+    missed
 }
 
 fn admit_retained_frame_faces(
@@ -1477,11 +1748,17 @@ impl LayoutEngine {
         self.face_composed_sources = None;
         self.face_tty_realization = None;
         self.retained_window_matrices.clear();
+        self.retained_composition_advances.clear();
         self.prepared_viewports = PreparedViewports::default();
         self.scroll_coverage.cancel();
         self.retained_window_chrome_metrics.clear();
         self.last_frame_display_state = None;
         self.scroll_preview_coverage.clear();
+        self.auxiliary_base = None;
+        for retained in self.retained_by_frame.values_mut() {
+            retained.scroll_preview_coverage.clear();
+            retained.auxiliary_base = None;
+        }
         self.reset_frame_attempt_state();
     }
 
@@ -1502,24 +1779,73 @@ impl LayoutEngine {
         self.edit_window_ids.clear();
     }
 
-    fn accept_frame_relayout_request(
+    fn decide_frame_relayout(
+        &mut self,
         coordinator: &mut FrameLayoutCoordinator,
         evaluator: &mut neovm_core::emacs_core::Context,
+        frame_id: neovm_core::window::FrameId,
+        purpose: LayoutPurpose,
+        attempt_mode: FrameAttemptMode,
         window_end_attempts: &mut FrameWindowEndAttempts,
         presentation_id: u64,
         request: FrameRelayoutRequest,
-    ) -> bool {
-        match coordinator.request_retry(request) {
-            Ok(()) => true,
-            Err(error) => {
+    ) -> RelayoutDecision {
+        if evaluator.has_mode_line_display_flow() || evaluator.redisplay_hook_flow_pending() {
+            window_end_attempts.reject_all(evaluator);
+            evaluator.retire_interaction_presentation(presentation_id);
+            self.last_frame_display_state = None;
+            self.reset_frame_attempt_state();
+            return RelayoutDecision::Abort {
+                settle_no_safe: false,
+            };
+        }
+        if evaluator.frame_manager().get(frame_id).is_none() {
+            window_end_attempts.reject_all(evaluator);
+            evaluator.retire_interaction_presentation(presentation_id);
+            self.last_frame_display_state = None;
+            self.reset_frame_attempt_state();
+            return RelayoutDecision::Abort {
+                settle_no_safe: purpose == LayoutPurpose::Redisplay,
+            };
+        }
+        match attempt_mode {
+            FrameAttemptMode::Converging => match coordinator.request_retry(request) {
+                Ok(()) => RelayoutDecision::Retry,
+                Err(error) => {
+                    if purpose == LayoutPurpose::Redisplay {
+                        tracing::warn!(
+                            presentation = presentation_id,
+                            ?error,
+                            "frame layout retry budget exhausted; publishing callback-inhibited exhaustion snapshot"
+                        );
+                        RelayoutDecision::EnterExhaustionSnapshot
+                    } else {
+                        tracing::error!(
+                            presentation = presentation_id,
+                            ?error,
+                            "rejecting frame whose layout failed to converge"
+                        );
+                        window_end_attempts.reject_all(evaluator);
+                        evaluator.retire_interaction_presentation(presentation_id);
+                        RelayoutDecision::Abort {
+                            settle_no_safe: false,
+                        }
+                    }
+                }
+            },
+            FrameAttemptMode::ExhaustionSnapshot => {
                 tracing::error!(
                     presentation = presentation_id,
-                    ?error,
-                    "rejecting frame whose layout failed to converge"
+                    ?request,
+                    "rejecting frame after callback-inhibited exhaustion snapshot could not complete"
                 );
                 window_end_attempts.reject_all(evaluator);
                 evaluator.retire_interaction_presentation(presentation_id);
-                false
+                self.last_frame_display_state = None;
+                self.reset_frame_attempt_state();
+                RelayoutDecision::Abort {
+                    settle_no_safe: purpose == LayoutPurpose::Redisplay,
+                }
             }
         }
     }
@@ -1552,18 +1878,11 @@ impl LayoutEngine {
     /// temporary geometry, but window-end/posn/vertical-motion must never
     /// mistake those rows for evidence about the minibuffer's real buffer.
     fn mark_inactive_echo_snapshot_geometry_only(
-        &mut self,
-        window_id: neovm_core::window::WindowId,
+        snapshot: &mut Option<WindowPresentationSnapshot>,
         publication: WindowPositionPublication,
     ) {
-        if publication != WindowPositionPublication::InactiveEchoArea {
-            return;
-        }
-        if let Some(snapshot) = self
-            .window_snapshots
-            .iter_mut()
-            .rev()
-            .find(|snapshot| snapshot.display_snapshot().window_id == window_id)
+        if publication == WindowPositionPublication::InactiveEchoArea
+            && let Some(snapshot) = snapshot
         {
             snapshot.retain_as_geometry_only();
         }
@@ -1611,7 +1930,14 @@ impl LayoutEngine {
                 divider_paint,
                 effective_default_face,
             ),
-            ChromeRowRenderServices::new(font_metrics, face_resolver, &mut decoration_face_ids),
+            // Decorations emit native border/marker items. Their services
+            // carry neither a display host nor a Lisp face realizer.
+            ChromeRowRenderServices::new(
+                font_metrics,
+                face_resolver,
+                &mut decoration_face_ids,
+                crate::string_property_snapshot::StringSourceRootScope::CallbackFree,
+            ),
         );
     }
 
@@ -1666,11 +1992,13 @@ impl LayoutEngine {
             frame_output: FrameOutputOwner::new(),
             pending_tab_bar_pointer: None,
             last_frame_display_state: None,
-            scroll_preview_coverage: Vec::new(),
+            scroll_preview_coverage: scroll_preview::ScrollPreviewCoverage::default(),
+            auxiliary_base: None,
             frame_face_arenas: rustc_hash::FxHashMap::default(),
             face_composed_sources: None,
             face_tty_realization: None,
             retained_window_matrices: rustc_hash::FxHashMap::default(),
+            retained_composition_advances: rustc_hash::FxHashMap::default(),
             prepared_viewports: PreparedViewports::default(),
             scroll_coverage: scroll_coverage::ScrollCoverage::default(),
             retained_by_frame: rustc_hash::FxHashMap::default(),
@@ -1685,6 +2013,8 @@ impl LayoutEngine {
             frame_other_windows_changed: false,
             allow_below_reuse: true,
             layout_stats: LayoutStats::default(),
+            #[cfg(test)]
+            overlay_source_override: None,
         }
     }
 
@@ -1711,11 +2041,13 @@ impl LayoutEngine {
             frame_output: FrameOutputOwner::new(),
             pending_tab_bar_pointer: None,
             last_frame_display_state: None,
-            scroll_preview_coverage: Vec::new(),
+            scroll_preview_coverage: scroll_preview::ScrollPreviewCoverage::default(),
+            auxiliary_base: None,
             frame_face_arenas: rustc_hash::FxHashMap::default(),
             face_composed_sources: None,
             face_tty_realization: None,
             retained_window_matrices: rustc_hash::FxHashMap::default(),
+            retained_composition_advances: rustc_hash::FxHashMap::default(),
             prepared_viewports: PreparedViewports::default(),
             scroll_coverage: scroll_coverage::ScrollCoverage::default(),
             retained_by_frame: rustc_hash::FxHashMap::default(),
@@ -1730,7 +2062,32 @@ impl LayoutEngine {
             frame_other_windows_changed: false,
             allow_below_reuse: true,
             layout_stats: LayoutStats::default(),
+            #[cfg(test)]
+            overlay_source_override: None,
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_overlay_source_mode_for_test(
+        &mut self,
+        mode: super::neovm_bridge::OverlaySourceMode,
+    ) {
+        self.overlay_source_override = Some(mode);
+    }
+
+    #[inline]
+    fn effective_overlay_source_mode(
+        &self,
+        force_captured: bool,
+    ) -> super::neovm_bridge::OverlaySourceMode {
+        if force_captured {
+            return super::neovm_bridge::OverlaySourceMode::Captured;
+        }
+        #[cfg(test)]
+        if let Some(mode) = self.overlay_source_override {
+            return mode;
+        }
+        super::neovm_bridge::overlay_source_mode()
     }
 
     /// Disable cosmic-text font measurement (TTY mode).
@@ -1823,6 +2180,80 @@ impl LayoutEngine {
         self.frame_layout_attempt(evaluator, frame_id, LayoutPurpose::Redisplay)
     }
 
+    /// The face id redisplay sealed for one buffer position, and the arena
+    /// epoch that keys that face's fallback order.
+    ///
+    /// GNU `font_at` reads the frame face cache (`src/font.c` `font_at` and
+    /// `FACE_FOR_CHAR` at a360712c9d). This lookup uses that same arena. It
+    /// does not poll the font catalog and does not install a new fontset
+    /// context: either of those can clear or re-key the order font-at is
+    /// trying to see. A face this arena never sealed returns `None`, so the
+    /// caller keeps the implicit fontset instead of inventing an id.
+    pub fn realized_fontset_for_lisp_pos(
+        &mut self,
+        evaluator: &mut neovm_core::emacs_core::Context,
+        frame_id: neovm_core::window::FrameId,
+        window_id: neovm_core::window::WindowId,
+        lisp_pos: i64,
+    ) -> Option<(u32, u64)> {
+        let arena_epoch = self.frame_face_arenas.get(&frame_id)?.face_epoch();
+        let (bootstrap, window_system) = {
+            let frame = evaluator.frame_manager().get(frame_id)?;
+            if frame.find_window(window_id).is_none() {
+                return None;
+            }
+            let bootstrap = crate::neovm_bridge::frame_params_from_neovm(
+                frame,
+                evaluator.face_table(),
+                evaluator.variables(),
+            );
+            let window_system = frame
+                .effective_window_system()
+                .and_then(|value| value.as_bare_symbol_name().map(str::to_owned));
+            (bootstrap, window_system)
+        };
+        let font_sizing = self.font_sizing;
+        let mut resolver = crate::neovm_bridge::FaceResolver::new_with_font_sizing(
+            evaluator.face_table(),
+            0x00FFFFFF,
+            bootstrap.background,
+            bootstrap.font_pixel_size,
+            window_system,
+            font_sizing,
+        );
+        self.bind_face_composed_sources(&mut resolver);
+        self.prepare_face_resolver_tty(&mut resolver, frame_id, evaluator);
+        resolver.set_current_window_parameters(
+            evaluator.frame_manager().window_parameters_pairs(window_id),
+        );
+        resolver.set_current_window_id(Some(window_id.0));
+        let buffer_id = evaluator
+            .frame_manager()
+            .get(frame_id)?
+            .find_window(window_id)?
+            .buffer_id()?;
+        let mut resolved = {
+            let buffer = evaluator.buffer_manager().get(buffer_id)?;
+            let beg = buffer.point_min_lisp_char_pos().as_i64();
+            let end = buffer.point_max_lisp_char_pos().as_i64();
+            if !(beg <= lisp_pos && lisp_pos < end) {
+                return None;
+            }
+            let origin = crate::display_origin::DisplayOrigin::BufferText {
+                charpos: neovm_core::buffer::LispCharPos1::new(lisp_pos).to_char_pos(),
+            };
+            let mut next_check = 0usize;
+            resolver.default_base_face_for_origin(Some(buffer), &origin, &mut next_check)
+        };
+        resolver.realize_for_display(&mut resolved, evaluator);
+        let face_id = self
+            .frame_face_arenas
+            .get(&frame_id)?
+            .begin_attempt()
+            .lookup_face_id_for_resolved(&resolved)?;
+        Some((face_id.get(), arena_epoch.get()))
+    }
+
     /// Run one renderer-facing snapshot attempt.
     pub fn snapshot_frame_attempt(
         &mut self,
@@ -1843,12 +2274,14 @@ impl LayoutEngine {
         if evaluator.redisplay_hook_flow_pending() {
             return FrameLayoutAttempt::Aborted;
         }
-        self.layout_frame_rust_for_purpose_inner(
+        let outcome = self.layout_frame_rust_with_face_services(
             evaluator,
             frame_id,
             purpose,
             None,
             #[cfg(test)]
+            None,
+            &rows_face_services::NoopFaceServiceFactory,
             None,
         );
         self.retire_removed_frame_owners(evaluator);
@@ -1857,9 +2290,18 @@ impl LayoutEngine {
             return FrameLayoutAttempt::Aborted;
         }
         self.report_image_failures(evaluator);
-        self.last_frame_display_state
-            .take()
-            .map_or(FrameLayoutAttempt::Aborted, FrameLayoutAttempt::Prepared)
+        match (outcome, self.last_frame_display_state.take()) {
+            (FrameLayoutInnerOutcome::Prepared(_), Some(state)) => {
+                FrameLayoutAttempt::Prepared(state)
+            }
+            (FrameLayoutInnerOutcome::Aborted { settle_no_safe }, _) => {
+                if settle_no_safe && purpose == LayoutPurpose::Redisplay {
+                    evaluator.note_no_safe_handled_frame(frame_id);
+                }
+                FrameLayoutAttempt::Aborted
+            }
+            (FrameLayoutInnerOutcome::Prepared(_), None) => FrameLayoutAttempt::Aborted,
+        }
     }
 
     /// Report every image failure this pass observed.
@@ -1934,6 +2376,12 @@ impl LayoutEngine {
         frame_id: neovm_core::window::FrameId,
         inputs: &FrameFontInputs,
     ) -> PreparedFrameFonts {
+        // One read for this realization. Position queries and the layout loop
+        // both enter here, and a later bump must not re-key this attempt.
+        let face_epoch = crate::frame_face_arena::FaceEpoch::new(evaluator.face_change_count());
+        if let Some(service) = self.font_metrics.as_mut() {
+            service.set_realized_fontset_context(frame_id.0, face_epoch.get());
+        }
         // Realize the default face before collecting window params so frame and
         // window geometry use the same default metrics GNU Emacs redisplay does.
         let mut face_resolver = super::neovm_bridge::FaceResolver::new_with_font_sizing(
@@ -2051,7 +2499,7 @@ impl LayoutEngine {
         PreparedFrameFonts {
             resolver: face_resolver,
             default_metrics,
-            face_epoch: crate::frame_face_arena::FaceEpoch::new(evaluator.face_change_count()),
+            face_epoch,
         }
     }
 
@@ -2075,6 +2523,7 @@ impl LayoutEngine {
             &rows_face_services::NoopFaceServiceFactory,
             None,
         )
+        .into_query()
     }
 
     fn layout_frame_rust_with_face_services<F: FaceServiceFactory>(
@@ -2088,7 +2537,7 @@ impl LayoutEngine {
         >,
         face_services: &F,
         position_chrome: Option<&position_chrome::MeasuredPositionChrome>,
-    ) -> Option<neovm_core::window::WindowLayoutQuery> {
+    ) -> FrameLayoutInnerOutcome {
         // Anything recorded since the last pass that no pass has reported yet.
         // The drain below covers what this pass observes; this one covers
         // whatever a path outside layout observed -- a `:channel0` image spec
@@ -2151,8 +2600,12 @@ impl LayoutEngine {
             evaluator.sync_runtime_faces_for_frame(frame_id);
         }
 
-        let font_inputs = self.prepare_frame_font_inputs(evaluator, frame_id)?;
-        let window_system = &font_inputs.window_system;
+        let Some(font_inputs) = self.prepare_frame_font_inputs(evaluator, frame_id) else {
+            return FrameLayoutInnerOutcome::Aborted {
+                settle_no_safe: purpose == LayoutPurpose::Redisplay,
+            };
+        };
+        let window_system = font_inputs.window_system.clone();
         let presentation_id = evaluator.begin_interaction_presentation();
         let previous_visual_history = self.frame_visual_histories.snapshot(frame_id);
         let pending_frame_navigation = query_window
@@ -2166,7 +2619,7 @@ impl LayoutEngine {
 
         let PreparedFrameFonts {
             resolver: mut face_resolver,
-            default_metrics,
+            default_metrics: mut default_metrics,
             face_epoch,
         } = self.realize_frame_fonts(evaluator, frame_id, &font_inputs);
         let mut resolver_face_change_count = face_epoch.get();
@@ -2183,9 +2636,10 @@ impl LayoutEngine {
         // If so we call grow_mini_window / shrink_mini_window and
         // A typed coordinator gives frame chrome, leaf chrome, and minibuffer
         // allocation one bounded retry policy. Every retry discards the whole
-        // speculative output; only an iteration that requests no relayout can
-        // reach presentation sealing below.
+        // speculative output. A source-only retry is the exception at
+        // exhaustion: that completed attempt reaches sealing below.
         let mut layout_coordinator = FrameLayoutCoordinator::new(MAX_FRAME_LAYOUT_RETRIES);
+        let mut attempt_mode = FrameAttemptMode::Converging;
         // The Lisp objects of the `when` sites a walk records and of the
         // answers carried to a replay stay rooted for the whole logical frame
         // attempt: window chrome and the replay's preparation run Lisp (and
@@ -2209,8 +2663,14 @@ impl LayoutEngine {
         // identity memo and generation are replaced, so retained rows minted
         // under the old definitions fail admission with a typed
         // `StaleGeneration` instead of colliding on a recycled basic id.
-        let frame_face_epoch = FaceEpoch::new(evaluator.face_change_count());
-        let committed_face_arena = match self.frame_face_arenas.get(&frame_id) {
+        let mut frame_face_epoch = FaceEpoch::new(evaluator.face_change_count());
+        if let Some(service) = self.font_metrics.as_mut() {
+            // Bind the arena epoch once. Lisp inside the retry loop can bump
+            // the live counter; re-reading it would key this arena's face ids
+            // under the next epoch.
+            service.set_realized_fontset_context(frame_id.0, frame_face_epoch.get());
+        }
+        let mut committed_face_arena = match self.frame_face_arenas.get(&frame_id) {
             Some(arena) if arena.face_epoch() == frame_face_epoch => arena.clone(),
             Some(arena) => {
                 let invalidated = arena.invalidate_for_face_definition_change(frame_face_epoch);
@@ -2250,6 +2710,31 @@ impl LayoutEngine {
         // physical retry consumes the same numeric partition without Lisp.
         let mut chrome_remeasured_next_round: std::collections::HashSet<DisplayWindowId> =
             std::collections::HashSet::new();
+        macro_rules! request_frame_relayout {
+            ($label:lifetime, $request:expr) => {
+                match self.decide_frame_relayout(
+                    &mut layout_coordinator,
+                    evaluator,
+                    frame_id,
+                    purpose,
+                    attempt_mode,
+                    &mut frame_window_end_attempts,
+                    presentation_id,
+                    $request,
+                ) {
+                    RelayoutDecision::Retry => {
+                        continue $label;
+                    }
+                    RelayoutDecision::EnterExhaustionSnapshot => {
+                        attempt_mode = FrameAttemptMode::ExhaustionSnapshot;
+                        continue $label;
+                    }
+                    RelayoutDecision::Abort { settle_no_safe } => {
+                        return FrameLayoutInnerOutcome::Aborted { settle_no_safe };
+                    }
+                }
+            };
+        }
         let (
             frame_params,
             curr_window_infos,
@@ -2260,12 +2745,61 @@ impl LayoutEngine {
             accepted_window_navigation_intents,
             accepted_frame_navigation_intent,
         ) = 'frame_layout: loop {
+            lisp_ledger.completed_body_inputs.clear();
+            lisp_ledger.source_only_retry = None;
             let chrome_remeasured = std::mem::take(&mut chrome_remeasured_next_round);
             // Re-entering this loop means the preceding physical frame walk
             // was rejected. Restore every leaf publication before collecting
             // the next attempt's canonical previous-viewport evidence.
             frame_window_end_attempts.reject_all(evaluator);
-            if face_resolver.has_tty_realization() {
+            if attempt_mode == FrameAttemptMode::ExhaustionSnapshot {
+                // Converging callbacks (e.g. a face-mutating header-line) may
+                // have updated the live face table and bumped face_change_count.
+                // Refresh face resolver, metrics, epoch, and arena once before
+                // the callback-inhibited pass so the published snapshot seals
+                // against the latest live face definitions.
+                evaluator.sync_runtime_faces_for_frame(frame_id);
+                let live_face_epoch = FaceEpoch::new(evaluator.face_change_count());
+                if live_face_epoch != frame_face_epoch
+                    || resolver_face_change_count != live_face_epoch.get()
+                    || matches!(resolver_refresh, FaceResolverRefresh::Required)
+                {
+                    let Some(fresh_font_inputs) =
+                        self.prepare_frame_font_inputs(evaluator, frame_id)
+                    else {
+                        evaluator.retire_interaction_presentation(presentation_id);
+                        self.last_frame_display_state = None;
+                        self.reset_frame_attempt_state();
+                        return FrameLayoutInnerOutcome::Aborted {
+                            settle_no_safe: purpose == LayoutPurpose::Redisplay,
+                        };
+                    };
+                    let PreparedFrameFonts {
+                        resolver,
+                        default_metrics: fresh_metrics,
+                        face_epoch,
+                    } = self.realize_frame_fonts(evaluator, frame_id, &fresh_font_inputs);
+                    face_resolver = resolver;
+                    default_metrics = fresh_metrics;
+                    resolver_face_change_count = face_epoch.get();
+                    resolver_refresh = FaceResolverRefresh::Current;
+                    frame_face_epoch = FaceEpoch::new(evaluator.face_change_count());
+                    if let Some(service) = self.font_metrics.as_mut() {
+                        service.set_realized_fontset_context(frame_id.0, frame_face_epoch.get());
+                    }
+                    committed_face_arena = match self.frame_face_arenas.get(&frame_id) {
+                        Some(arena) if arena.face_epoch() == frame_face_epoch => arena.clone(),
+                        Some(arena) => {
+                            let invalidated =
+                                arena.invalidate_for_face_definition_change(frame_face_epoch);
+                            self.invalidate_for_font_selection_change();
+                            self.frame_face_arenas.insert(frame_id, invalidated.clone());
+                            invalidated
+                        }
+                        None => FrameFaceArena::default(),
+                    };
+                }
+            } else if face_resolver.has_tty_realization() {
                 // A color callback may mutate face definitions while a prior
                 // leaf is being rendered. Recollect the immutable resolver at
                 // the transaction restart, before any cached row is admitted.
@@ -2278,7 +2812,9 @@ impl LayoutEngine {
                 {
                     let Some(frame) = evaluator.frame_manager().get(frame_id) else {
                         evaluator.retire_interaction_presentation(presentation_id);
-                        return None;
+                        return FrameLayoutInnerOutcome::Aborted {
+                            settle_no_safe: purpose == LayoutPurpose::Redisplay,
+                        };
                     };
                     let bootstrap = super::neovm_bridge::frame_params_from_neovm(
                         frame,
@@ -2303,16 +2839,7 @@ impl LayoutEngine {
                         before: before_sync,
                         after: after_sync,
                     };
-                    if !Self::accept_frame_relayout_request(
-                        &mut layout_coordinator,
-                        evaluator,
-                        &mut frame_window_end_attempts,
-                        presentation_id,
-                        request,
-                    ) {
-                        return None;
-                    }
-                    continue 'frame_layout;
+                    request_frame_relayout!('frame_layout, request);
                 }
             }
             // Layout retries are speculative. GNU logs invalid face references
@@ -2369,7 +2896,9 @@ impl LayoutEngine {
                 evaluator.retire_interaction_presentation(presentation_id);
                 self.last_frame_display_state = None;
                 self.reset_frame_attempt_state();
-                return None;
+                return FrameLayoutInnerOutcome::Aborted {
+                    settle_no_safe: purpose == LayoutPurpose::Redisplay,
+                };
             };
 
             let window_paths: rustc_hash::FxHashMap<_, _> = evaluator
@@ -2393,7 +2922,9 @@ impl LayoutEngine {
                 let Some(path) = window_paths.get(&target) else {
                     evaluator.retire_interaction_presentation(presentation_id);
                     self.reset_frame_attempt_state();
-                    return None;
+                    return FrameLayoutInnerOutcome::Aborted {
+                        settle_no_safe: false,
+                    };
                 };
                 let Some(inputs) = collect_live_window_layout_inputs(
                     evaluator,
@@ -2407,7 +2938,9 @@ impl LayoutEngine {
                 ) else {
                     evaluator.retire_interaction_presentation(presentation_id);
                     self.reset_frame_attempt_state();
-                    return None;
+                    return FrameLayoutInnerOutcome::Aborted {
+                        settle_no_safe: false,
+                    };
                 };
                 (
                     inputs.frame,
@@ -2426,7 +2959,9 @@ impl LayoutEngine {
                     None => {
                         tracing::error!("layout_frame_rust: frame {:?} not found", frame_id);
                         evaluator.retire_interaction_presentation(presentation_id);
-                        return None;
+                        return FrameLayoutInnerOutcome::Aborted {
+                            settle_no_safe: purpose == LayoutPurpose::Redisplay,
+                        };
                     }
                 }
             };
@@ -2435,7 +2970,9 @@ impl LayoutEngine {
             // queries already captured only their target through its checked path.
             let divider_corners = if let Some(corner) = query_divider_corner {
                 let Some(params) = window_params_list.first() else {
-                    return None;
+                    return FrameLayoutInnerOutcome::Aborted {
+                        settle_no_safe: false,
+                    };
                 };
                 let mut corners = rustc_hash::FxHashMap::default();
                 corners.insert(
@@ -2451,7 +2988,9 @@ impl LayoutEngine {
                 let Some(corners) = corners else {
                     evaluator.retire_interaction_presentation(presentation_id);
                     self.reset_frame_attempt_state();
-                    return None;
+                    return FrameLayoutInnerOutcome::Aborted {
+                        settle_no_safe: purpose == LayoutPurpose::Redisplay,
+                    };
                 };
                 corners
             };
@@ -2638,7 +3177,7 @@ impl LayoutEngine {
                 .as_ref()
                 .and_then(|chrome| chrome.built_tab_bar.clone());
 
-            let window_layout_inputs: Vec<(WindowFrameGeometry, WindowLayoutBox)> =
+            let Some(window_layout_inputs): Option<Vec<(WindowFrameGeometry, WindowLayoutBox)>> =
                 window_params_list
                     .iter()
                     .map(|params| {
@@ -2658,12 +3197,14 @@ impl LayoutEngine {
                         );
                         Some((geometry, layout_box))
                     })
-                    .collect::<Option<Vec<_>>>()
-                    .or_else(|| {
-                        evaluator.retire_interaction_presentation(presentation_id);
-                        self.reset_frame_attempt_state();
-                        None
-                    })?;
+                    .collect()
+            else {
+                evaluator.retire_interaction_presentation(presentation_id);
+                self.reset_frame_attempt_state();
+                return FrameLayoutInnerOutcome::Aborted {
+                    settle_no_safe: purpose == LayoutPurpose::Redisplay,
+                };
+            };
 
             // Snapshot the exact accepted partition along with the other
             // incremental-layout inputs. A retry discards this vector, so only
@@ -2686,62 +3227,113 @@ impl LayoutEngine {
             // same-buffer ordering guarantee and the ownership boundary for the
             // frame-wide face namespace below.
             lisp_ledger.replay_sources.clear();
-            let mut window_plans: Vec<IncrementalWindowPlan> = window_params_list
+            let mut window_plans: Vec<IncrementalWindowPlan> =
+                Vec::with_capacity(window_params_list.len());
+            for ((params, (_, layout_box)), (_, key)) in window_params_list
                 .iter()
                 .zip(&window_layout_inputs)
                 .zip(&retained_keys)
-                .map(|((params, (_, layout_box)), (_, key))| {
-                    if query_window.is_some()
-                        || layout_walk_purpose == WindowLayoutWalkPurpose::Snapshot
+            {
+                if query_window.is_some()
+                    || layout_walk_purpose == WindowLayoutWalkPurpose::Snapshot
+                    || attempt_mode == FrameAttemptMode::ExhaustionSnapshot
+                {
+                    // Snapshot/query rows must start at the live marker;
+                    // ExhaustionSnapshot rebuilds cleanly without fast-path reuse.
+                    window_plans.push(IncrementalWindowPlan {
+                        prepared_faces: None,
+                        cursor_only: None,
+                        scroll: None,
+                        is_edit: false,
+                        retry_admitted_faces: None,
+                        scroll_continuation_faces: None,
+                    });
+                    continue;
+                }
+                // The mini-window is probe-excluded from retention: its
+                // layout runs `resize_mini_window` measurement passes whose
+                // results must not become a reusable matrix, and it is one
+                // or two rows tall, so the scroll and edit paths buy
+                // nothing.  It is re-walked every frame (the phase tests
+                // assert exactly this by counting the content window's
+                // classification) -- unless NEOMACS_LAYOUT_MINI_STILL lets
+                // it stand still: GNU's `redisplay_window` leaves an echo
+                // area it "already displayed" alone, and a retained key
+                // equal in every field (the displayed echo or minibuffer
+                // buffer and its ticks, point, cursor role, geometry
+                // including the resize measurement's start) is exactly
+                // that, so the cursor-only replay reuses every row.
+                if params.is_minibuffer() {
+                    let cursor_only = if crate::incremental_layout::mini_window_still_enabled() {
+                        self.build_cursor_only_replay(params, *layout_box, evaluator)
+                    } else {
+                        None
+                    };
+                    window_plans.push(IncrementalWindowPlan {
+                        prepared_faces: None,
+                        cursor_only,
+                        scroll: None,
+                        is_edit: false,
+                        retry_admitted_faces: None,
+                        scroll_continuation_faces: None,
+                    });
+                    continue;
+                }
+                let mut cursor_only = self.build_cursor_only_replay(params, *layout_box, evaluator);
+                let mut prepared_faces = None;
+                if cursor_only.is_none() {
+                    if let Some((replay, faces, sources)) = self.prepared_viewports.replay(
+                        frame_id,
+                        DisplayWindowId::new(params.window_id),
+                        key,
+                        params.force_start,
+                    ) {
+                        if let Some(sources) = sources {
+                            lisp_ledger
+                                .replay_sources
+                                .insert(DisplayWindowId::new(params.window_id), sources);
+                        }
+                        cursor_only = Some(replay);
+                        prepared_faces = Some(faces);
+                    }
+                }
+
+                let mut is_edit = false;
+                let mut scroll = if cursor_only.is_none() {
+                    if let Some(scroll) = self.build_scroll_replay(params, *layout_box, evaluator) {
+                        Some(scroll)
+                    } else if let Some(edit) =
+                        self.build_edit_replay(params, *layout_box, evaluator)
                     {
-                        // Snapshot/query rows must start at the live marker;
-                        // historical viewport replay belongs to redisplay.
-                        return IncrementalWindowPlan {
-                            prepared_faces: None,
-                            cursor_only: None,
-                            scroll: None,
-                            is_edit: false,
-                            retry_admitted_faces: None,
-                            scroll_continuation_faces: None,
-                        };
+                        is_edit = true;
+                        Some(edit)
+                    } else {
+                        None
                     }
-                    // The mini-window is probe-excluded from retention: its
-                    // layout runs `resize_mini_window` measurement passes whose
-                    // results must not become a reusable matrix, and it is one
-                    // or two rows tall, so the scroll and edit paths buy
-                    // nothing.  It is re-walked every frame (the phase tests
-                    // assert exactly this by counting the content window's
-                    // classification) -- unless NEOMACS_LAYOUT_MINI_STILL lets
-                    // it stand still: GNU's `redisplay_window` leaves an echo
-                    // area it "already displayed" alone, and a retained key
-                    // equal in every field (the displayed echo or minibuffer
-                    // buffer and its ticks, point, cursor role, geometry
-                    // including the resize measurement's start) is exactly
-                    // that, so the cursor-only replay reuses every row.
-                    if params.is_minibuffer() {
-                        let cursor_only = if crate::incremental_layout::mini_window_still_enabled()
-                        {
-                            self.build_cursor_only_replay(params, *layout_box, evaluator)
-                        } else {
-                            None
-                        };
-                        return IncrementalWindowPlan {
-                            prepared_faces: None,
-                            cursor_only,
-                            scroll: None,
-                            is_edit: false,
-                            retry_admitted_faces: None,
-                            scroll_continuation_faces: None,
-                        };
-                    }
-                    let mut cursor_only =
-                        self.build_cursor_only_replay(params, *layout_box, evaluator);
-                    let mut prepared_faces = None;
-                    if cursor_only.is_none() {
+                } else {
+                    None
+                };
+                // With no partial walk, the leaf may resolve a different
+                // semantic start before producing rows. History keys name
+                // that displayed start. Preserve ordinary scroll/edit plans,
+                // which consume the input start exactly, but prefer a full
+                // historical viewport over shifting a subset of that page.
+                if cursor_only.is_none() && scroll.is_none() {
+                    let resolved_start = resolve_leaf_window_start(
+                        evaluator,
+                        params,
+                        &frame_params,
+                        layout_box,
+                        WindowPositionPublication::Redisplay,
+                        false,
+                    );
+                    if resolved_start.get() != key.window_start {
+                        let mut prepared_key = key.clone();
+                        prepared_key.window_start = resolved_start.get();
                         if let Some((replay, faces, sources)) = self.prepared_viewports.replay(
                             frame_id,
                             DisplayWindowId::new(params.window_id),
-                            key,
+                            &prepared_key,
                             params.force_start,
                         ) {
                             if let Some(sources) = sources {
@@ -2753,149 +3345,130 @@ impl LayoutEngine {
                             prepared_faces = Some(faces);
                         }
                     }
-
-                    let mut is_edit = false;
-                    let mut scroll = if cursor_only.is_none() {
-                        if let Some(scroll) =
-                            self.build_scroll_replay(params, *layout_box, evaluator)
-                        {
-                            Some(scroll)
-                        } else if let Some(edit) =
-                            self.build_edit_replay(params, *layout_box, evaluator)
-                        {
-                            is_edit = true;
-                            Some(edit)
-                        } else {
-                            None
+                }
+                // A cached page supplies content, not a new viewport
+                // decision. Point motion alone must still run recentering.
+                // Prefer an existing backward synchronization plan over
+                // shifting an older page with less predictable overlap.
+                if cursor_only.is_none()
+                    && scroll.as_ref().is_none_or(|replay| replay.sync.is_none())
+                    && params.selected
+                    && self
+                        .retained_window_matrices
+                        .get(&DisplayWindowId::new(params.window_id))
+                        .is_some_and(|previous| {
+                            RetainedWindowKey::scroll_eligible(&previous.key, key)
+                        })
+                {
+                    let reused = scroll.as_ref().map_or(0, |replay| replay.reused_rows.len());
+                    if let Some((replay, faces, sources)) = self.prepared_viewports.scroll_replay(
+                        frame_id,
+                        DisplayWindowId::new(params.window_id),
+                        key,
+                        reused,
+                    ) {
+                        if let Some(sources) = sources {
+                            lisp_ledger
+                                .replay_sources
+                                .insert(DisplayWindowId::new(params.window_id), sources);
                         }
-                    } else {
-                        None
-                    };
-                    // With no partial walk, the leaf may resolve a different
-                    // semantic start before producing rows. History keys name
-                    // that displayed start. Preserve ordinary scroll/edit plans,
-                    // which consume the input start exactly, but prefer a full
-                    // historical viewport over shifting a subset of that page.
-                    if cursor_only.is_none() && scroll.is_none() {
-                        let resolved_start = resolve_leaf_window_start(
-                            evaluator,
-                            params,
-                            &frame_params,
-                            layout_box,
-                            WindowPositionPublication::Redisplay,
-                            false,
-                        );
-                        if resolved_start.get() != key.window_start {
-                            let mut prepared_key = key.clone();
-                            prepared_key.window_start = resolved_start.get();
-                            if let Some((replay, faces, sources)) = self.prepared_viewports.replay(
-                                frame_id,
-                                DisplayWindowId::new(params.window_id),
-                                &prepared_key,
-                                params.force_start,
-                            ) {
-                                if let Some(sources) = sources {
-                                    lisp_ledger
-                                        .replay_sources
-                                        .insert(DisplayWindowId::new(params.window_id), sources);
-                                }
-                                cursor_only = Some(replay);
-                                prepared_faces = Some(faces);
+                        scroll = Some(replay);
+                        prepared_faces = Some(faces);
+                        is_edit = false;
+                    }
+                }
+                if cursor_only.is_none()
+                    && !is_edit
+                    && !params.is_minibuffer()
+                    && self
+                        .prepared_viewports
+                        .has_computed(frame_id, DisplayWindowId::new(params.window_id))
+                    && params.display_line_numbers == crate::types::DisplayLineNumbersMode::Off
+                {
+                    let mut geometry = BufferWindowGeometryRequest::new(
+                        params,
+                        layout_box,
+                        params.char_width,
+                        params.char_height,
+                    )
+                    .into_geometry(
+                        crate::display_row::walk_state::LineNumberFieldLayout::new(
+                            0,
+                            params.char_width,
+                        ),
+                    );
+                    let projected = scroll
+                        .is_none()
+                        .then(|| {
+                            self.retained_window_matrices
+                                .get(&DisplayWindowId::new(params.window_id))
+                                .and_then(|previous| {
+                                    previous.prepared_projection_prefix(
+                                        key,
+                                        geometry.text_y - geometry.vscroll - params.bounds.y,
+                                    )
+                                })
+                        })
+                        .flatten();
+                    let prefix_sources = lisp_ledger
+                        .replay_sources
+                        .get(&DisplayWindowId::new(params.window_id))
+                        .cloned()
+                        .or_else(|| {
+                            self.frame_visual_histories
+                                .get(frame_id)
+                                .and_then(|history| {
+                                    history
+                                        .cursor_sources_for(DisplayWindowId::new(params.window_id))
+                                })
+                        });
+                    if let Some(prefix) = scroll.as_ref().or(projected.as_ref())
+                        && let Some(prefix_sources) = prefix_sources
+                    {
+                        if params.window_system
+                            && params.measurement_rows.is_none()
+                            && params.measurement_pixels.is_none()
+                            && params.source_extent == crate::types::WindowSourceExtent::Viewport
+                            && let Some(buffer) = evaluator
+                                .buffer_manager()
+                                .get(neovm_core::buffer::BufferId(params.buffer_id))
+                            && let Some(metrics) = self.font_metrics.as_mut()
+                        {
+                            let start =
+                                neovm_core::buffer::CharPos0::new(key.window_start.max(0) as usize);
+                            let view =
+                                crate::neovm_bridge::BorrowedLayoutBuffer::for_window_with_symbols(
+                                    buffer,
+                                    evaluator.variables(),
+                                    start,
+                                    1,
+                                    crate::display_property::DisplayPropertyTarget::Graphical,
+                                    evaluator.symbol_mode(),
+                                );
+                            if let Some(face_line) =
+                                crate::buffer_source::window_render::shorter_face_line_at_window_start(
+                                    &view,
+                                    params.window_id as u64,
+                                    start,
+                                    default_resolved,
+                                    self.font_sizing,
+                                    metrics,
+                                )
+                            {
+                                geometry.widen_body_for_shorter_face(face_line);
                             }
                         }
-                    }
-                    // A cached page supplies content, not a new viewport
-                    // decision. Point motion alone must still run recentering.
-                    // Prefer an existing backward synchronization plan over
-                    // shifting an older page with less predictable overlap.
-                    if cursor_only.is_none()
-                        && scroll.as_ref().is_none_or(|replay| replay.sync.is_none())
-                        && params.selected
-                        && self
-                            .retained_window_matrices
-                            .get(&DisplayWindowId::new(params.window_id))
-                            .is_some_and(|previous| {
-                                RetainedWindowKey::scroll_eligible(&previous.key, key)
-                            })
-                    {
-                        let reused = scroll.as_ref().map_or(0, |replay| replay.reused_rows.len());
                         if let Some((replay, faces, sources)) =
-                            self.prepared_viewports.scroll_replay(
+                            self.prepared_viewports.complete_forward_scroll(
                                 frame_id,
                                 DisplayWindowId::new(params.window_id),
                                 key,
-                                reused,
+                                prefix,
+                                geometry,
+                                &committed_face_arena,
+                                params.force_start,
+                                prefix_sources,
                             )
-                        {
-                            if let Some(sources) = sources {
-                                lisp_ledger
-                                    .replay_sources
-                                    .insert(DisplayWindowId::new(params.window_id), sources);
-                            }
-                            scroll = Some(replay);
-                            prepared_faces = Some(faces);
-                            is_edit = false;
-                        }
-                    }
-                    if cursor_only.is_none()
-                        && !is_edit
-                        && !params.is_minibuffer()
-                        && self
-                            .prepared_viewports
-                            .has_computed(frame_id, DisplayWindowId::new(params.window_id))
-                        && params.display_line_numbers == crate::types::DisplayLineNumbersMode::Off
-                    {
-                        let geometry = BufferWindowGeometryRequest::new(
-                            params,
-                            layout_box,
-                            params.char_width,
-                            params.char_height,
-                        )
-                        .into_geometry(
-                            crate::display_row::walk_state::LineNumberFieldLayout::new(
-                                0,
-                                params.char_width,
-                            ),
-                        );
-                        let projected = scroll
-                            .is_none()
-                            .then(|| {
-                                self.retained_window_matrices
-                                    .get(&DisplayWindowId::new(params.window_id))
-                                    .and_then(|previous| {
-                                        previous.prepared_projection_prefix(
-                                            key,
-                                            geometry.text_y - geometry.vscroll - params.bounds.y,
-                                        )
-                                    })
-                            })
-                            .flatten();
-                        let prefix_sources = lisp_ledger
-                            .replay_sources
-                            .get(&DisplayWindowId::new(params.window_id))
-                            .cloned()
-                            .or_else(|| {
-                                self.frame_visual_histories
-                                    .get(frame_id)
-                                    .and_then(|history| {
-                                        history.cursor_sources_for(DisplayWindowId::new(
-                                            params.window_id,
-                                        ))
-                                    })
-                            });
-                        if let Some(prefix) = scroll.as_ref().or(projected.as_ref())
-                            && let Some(prefix_sources) = prefix_sources
-                            && let Some((replay, faces, sources)) =
-                                self.prepared_viewports.complete_forward_scroll(
-                                    frame_id,
-                                    DisplayWindowId::new(params.window_id),
-                                    key,
-                                    prefix,
-                                    geometry,
-                                    &committed_face_arena,
-                                    params.force_start,
-                                    prefix_sources,
-                                )
                         {
                             if let Some(sources) = sources {
                                 lisp_ledger
@@ -2907,34 +3480,34 @@ impl LayoutEngine {
                             scroll = None;
                         }
                     }
-                    // A cursor-only decline or edit can discover a new viewport
-                    // while measuring. Admit all retained row faces in Phase A
-                    // so a later scroll continuation can reuse any of those rows
-                    // -- but only while a continuation could reuse them at all:
-                    // after a face/font/display change their IDs name stale
-                    // realizations of faces the fresh walk re-realizes.
-                    let scroll_continuation_faces = (cursor_only.is_none()
-                        && (scroll.is_none() || is_edit))
-                        .then(|| {
-                            self.retained_window_matrices
-                                .get(&DisplayWindowId::new(params.window_id))
-                        })
-                        .flatten()
-                        .and_then(|previous| {
-                            previous
-                                .continuation_candidate_rows(key)
-                                .map(|rows| (previous.face_generation, rows))
-                        });
-                    IncrementalWindowPlan {
-                        prepared_faces,
-                        cursor_only,
-                        scroll,
-                        is_edit,
-                        retry_admitted_faces: None,
-                        scroll_continuation_faces,
-                    }
-                })
-                .collect();
+                }
+                // A cursor-only decline or edit can discover a new viewport
+                // while measuring. Admit all retained row faces in Phase A
+                // so a later scroll continuation can reuse any of those rows
+                // -- but only while a continuation could reuse them at all:
+                // after a face/font/display change their IDs name stale
+                // realizations of faces the fresh walk re-realizes.
+                let scroll_continuation_faces = (cursor_only.is_none()
+                    && (scroll.is_none() || is_edit))
+                    .then(|| {
+                        self.retained_window_matrices
+                            .get(&DisplayWindowId::new(params.window_id))
+                    })
+                    .flatten()
+                    .and_then(|previous| {
+                        previous
+                            .continuation_candidate_rows(key)
+                            .map(|rows| (previous.face_generation, rows))
+                    });
+                window_plans.push(IncrementalWindowPlan {
+                    prepared_faces,
+                    cursor_only,
+                    scroll,
+                    is_edit,
+                    retry_admitted_faces: None,
+                    scroll_continuation_faces,
+                });
+            }
 
             // Admit all prior-frame face identities as one atomic batch before
             // the tab bar or any window can mint fresh IDs. A stale retained
@@ -2964,25 +3537,41 @@ impl LayoutEngine {
                     &face_attempt,
                 )
                 && actual_tab_bar_height != tab_bar_height
+                && attempt_mode == FrameAttemptMode::Converging
             {
                 let request = FrameRelayoutRequest::FrameTabBar {
                     assumed_height: tab_bar_height,
                     measured_height: actual_tab_bar_height,
                 };
-                if !Self::accept_frame_relayout_request(
+                match self.decide_frame_relayout(
                     &mut layout_coordinator,
                     evaluator,
+                    frame_id,
+                    purpose,
+                    attempt_mode,
                     &mut frame_window_end_attempts,
                     presentation_id,
                     request,
                 ) {
-                    return None;
+                    RelayoutDecision::Retry => {
+                        if let Some(frame) = evaluator.frame_manager_mut().get_mut(frame_id) {
+                            frame.tab_bar_height = actual_tab_bar_height.max(1.0) as u32;
+                            frame.sync_window_area_bounds();
+                        }
+                        continue 'frame_layout;
+                    }
+                    RelayoutDecision::EnterExhaustionSnapshot => {
+                        if let Some(frame) = evaluator.frame_manager_mut().get_mut(frame_id) {
+                            frame.tab_bar_height = actual_tab_bar_height.max(1.0) as u32;
+                            frame.sync_window_area_bounds();
+                        }
+                        attempt_mode = FrameAttemptMode::ExhaustionSnapshot;
+                        continue 'frame_layout;
+                    }
+                    RelayoutDecision::Abort { settle_no_safe } => {
+                        return FrameLayoutInnerOutcome::Aborted { settle_no_safe };
+                    }
                 }
-                if let Some(frame) = evaluator.frame_manager_mut().get_mut(frame_id) {
-                    frame.tab_bar_height = actual_tab_bar_height.max(1.0) as u32;
-                    frame.sync_window_area_bounds();
-                }
-                continue;
             }
 
             tracing::debug!(
@@ -3003,16 +3592,7 @@ impl LayoutEngine {
                     let request = FrameRelayoutRequest::LogicalInputsChanged {
                         window_id: DisplayWindowId::new(planned_params.window_id),
                     };
-                    if !Self::accept_frame_relayout_request(
-                        &mut layout_coordinator,
-                        evaluator,
-                        &mut frame_window_end_attempts,
-                        presentation_id,
-                        request,
-                    ) {
-                        return None;
-                    }
-                    continue 'frame_layout;
+                    request_frame_relayout!('frame_layout, request);
                 };
                 let mut live_inputs = LiveWindowLayoutInputs {
                     frame: frame_params.clone(),
@@ -3042,16 +3622,7 @@ impl LayoutEngine {
                         let request = FrameRelayoutRequest::LogicalInputsChanged {
                             window_id: DisplayWindowId::new(planned_params.window_id),
                         };
-                        if !Self::accept_frame_relayout_request(
-                            &mut layout_coordinator,
-                            evaluator,
-                            &mut frame_window_end_attempts,
-                            presentation_id,
-                            request,
-                        ) {
-                            return None;
-                        }
-                        continue 'frame_layout;
+                        request_frame_relayout!('frame_layout, request);
                     };
                     live_inputs = current;
                     // GNU's preliminary resize-mini-window walk intentionally
@@ -3103,7 +3674,9 @@ impl LayoutEngine {
                 {
                     evaluator.retire_interaction_presentation(presentation_id);
                     self.reset_frame_attempt_state();
-                    return None;
+                    return FrameLayoutInnerOutcome::Aborted {
+                        settle_no_safe: false,
+                    };
                 }
                 let live_key =
                     RetainedWindowKey::from_params(&live_inputs.window, layout_box, evaluator);
@@ -3154,31 +3727,45 @@ impl LayoutEngine {
                     MAX_WINDOW_VISIBILITY_RETRIES
                 };
                 let mut viewport_retry_phase = ViewportResolutionPhase::Resolve;
+                let mut overlay_view_full = false;
+                let mut overlay_view_stale_retries: u8 = 0;
+                let mut overlay_view_force_captured = false;
+                // Automatic-composition resolution range widened by the
+                // previous attempt's post-walk coverage check, if any
+                // (`None` = the normal visible-range pass). `(0, usize::MAX)`
+                // resolves every span the snapshot captured.
+                let mut automatic_composition_resolve: Option<(usize, usize)> = None;
+                let mut prepass_recollect = PrepassRecollectState::Fresh;
+                let allow_prepass_recollect = purpose == LayoutPurpose::Redisplay
+                    && attempt_mode == FrameAttemptMode::Converging;
+                let capture_chrome_for_exhaustion = attempt_mode == FrameAttemptMode::Converging
+                    && layout_coordinator.retry_count() > 0;
+                let completed_row_key;
                 let window_layout = loop {
                     // A leaf hook/visibility continuation can re-enter this
                     // loop without visiting the outer transaction restart.
                     // Reject before rendering any stale logical face sources.
                     let current_face_change_count = evaluator.face_change_count();
-                    if face_resolver.has_tty_realization()
+                    if attempt_mode == FrameAttemptMode::Converging
+                        && face_resolver.has_tty_realization()
                         && current_face_change_count != resolver_face_change_count
                     {
                         let request = FrameRelayoutRequest::FaceRealizationInputsChanged {
                             before: resolver_face_change_count,
                             after: current_face_change_count,
                         };
-                        if !Self::accept_frame_relayout_request(
-                            &mut layout_coordinator,
-                            evaluator,
-                            &mut frame_window_end_attempts,
-                            presentation_id,
-                            request,
-                        ) {
-                            return None;
-                        }
-                        continue 'frame_layout;
+                        request_frame_relayout!('frame_layout, request);
                     }
                     let bound_faces = face_services.bind(&face_resolver);
-                    match self.layout_window_rust(
+                    let output_checkpoint =
+                        self.frame_output
+                            .capture_leaf_attempt_checkpoint(DisplayWindowId::new(
+                                live_inputs.window.window_id,
+                            ));
+                    let cursor_checkpoint = leaf_cursor_checkpoint::LeafCursorCheckpoint::capture(
+                        evaluator, frame_id, window_id,
+                    );
+                    let attempt = self.layout_window_rust(
                         evaluator,
                         frame_id,
                         &live_inputs.window,
@@ -3188,6 +3775,9 @@ impl LayoutEngine {
                         window_geometry.reserve_terminal_right_border_col,
                         visibility_retry_budget,
                         viewport_retry_phase.clone(),
+                        overlay_view_full,
+                        overlay_view_force_captured,
+                        automatic_composition_resolve,
                         cursor_only_replay.take(),
                         scroll_replay.take(),
                         is_edit,
@@ -3198,11 +3788,41 @@ impl LayoutEngine {
                         &mut lisp_ledger,
                         attempt_topology_generation,
                         &face_attempt,
-                    ) {
+                        attempt_mode,
+                        allow_prepass_recollect,
+                        capture_chrome_for_exhaustion,
+                        &mut prepass_recollect,
+                    );
+                    // Every in-leaf continuation passes this boundary, including
+                    // implicit loop re-entry after Retry/Effect. The closed row
+                    // grid and paint/cursor artifacts remain speculative until
+                    // the post-walk checks accept this attempt.
+                    if !matches!(&attempt, LeafLayoutAttempt::Completed { .. }) {
+                        self.frame_output
+                            .restore_leaf_attempt_checkpoint(output_checkpoint);
+                    }
+                    let accepted = matches!(
+                        &attempt,
+                        LeafLayoutAttempt::Completed {
+                            outcome: WindowLayoutOutcome::Stable { .. }
+                                | WindowLayoutOutcome::Skipped,
+                            ..
+                        }
+                    );
+                    if !accepted && let Some(checkpoint) = cursor_checkpoint {
+                        checkpoint.restore(evaluator, frame_id, window_id);
+                    }
+                    match attempt {
                         LeafLayoutAttempt::Completed {
                             outcome,
                             window_end_attempt,
+                            snapshot,
+                            produced_key,
                         } => {
+                            completed_row_key = produced_key;
+                            if accepted {
+                                self.window_snapshots.extend(snapshot);
+                            }
                             frame_window_end_attempts.stage(window_end_attempt);
                             break outcome;
                         }
@@ -3250,6 +3870,112 @@ impl LayoutEngine {
                             viewport_retry_phase = retry.viewport_resolution;
                             is_edit = false;
                         }
+                        LeafLayoutAttempt::OverlayViewUnusable(reason) => match reason {
+                            crate::neovm_bridge::OverlayViewUnusable::Exhausted
+                            | crate::neovm_bridge::OverlayViewUnusable::Underflow => {
+                                // The attempt read a subset of the buffer's
+                                // overlays outside the range view's span. It is
+                                // discarded; one more attempt uses the
+                                // whole-buffer view, which cannot exhaust.
+                                debug_assert!(
+                                    !overlay_view_full,
+                                    "whole-buffer overlay view reported exhaustion/underflow"
+                                );
+                                overlay_view_full = true;
+                                continue;
+                            }
+                            crate::neovm_bridge::OverlayViewUnusable::Stale => {
+                                // A Lisp callback mutated overlays while a live
+                                // overlay view was active. Discard the attempt,
+                                // refresh live inputs, retry once with a fresh
+                                // live view, and fall back to a captured
+                                // whole-buffer snapshot on a second stale hit
+                                // so a mutating callback can never loop.
+                                if evaluator.has_mode_line_display_flow() {
+                                    frame_window_end_attempts.reject_all(evaluator);
+                                    evaluator.retire_interaction_presentation(presentation_id);
+                                    return FrameLayoutInnerOutcome::Aborted {
+                                        settle_no_safe: false,
+                                    };
+                                }
+                                let current_topology_generation =
+                                    evaluator.frame_manager().window_topology_generation();
+                                if current_topology_generation != attempt_topology_generation {
+                                    let request = FrameRelayoutRequest::WindowTopologyChanged {
+                                        before: attempt_topology_generation,
+                                        after: current_topology_generation,
+                                    };
+                                    request_frame_relayout!('frame_layout, request);
+                                }
+                                let Some(mut current) = collect_live_window_layout_inputs(
+                                    evaluator,
+                                    frame_id,
+                                    window_id,
+                                    window_path,
+                                    default_metrics.map(|metrics| metrics.ascent),
+                                    self.font_sizing,
+                                    &window_chrome_metrics,
+                                    layout_walk_purpose,
+                                ) else {
+                                    let request = FrameRelayoutRequest::LogicalInputsChanged {
+                                        window_id: DisplayWindowId::new(
+                                            live_inputs.window.window_id,
+                                        ),
+                                    };
+                                    request_frame_relayout!('frame_layout, request);
+                                };
+                                current.window.force_start |= consumed_force_start;
+                                live_inputs = current;
+                                window_geometry = WindowFrameGeometryRequest::new(
+                                    &live_inputs.window,
+                                    &live_inputs.frame,
+                                    live_inputs.main_area_bottom,
+                                    live_inputs.divider_corner,
+                                )
+                                .resolve();
+                                layout_box = WindowLayoutBox::resolve(
+                                    &live_inputs.window,
+                                    WindowChromeMetrics::from_params(&live_inputs.window),
+                                    WindowDividerLayout::resolve(
+                                        &live_inputs.window,
+                                        &live_inputs.frame,
+                                        window_geometry,
+                                    ),
+                                );
+                                position_publication = window_position_publication(
+                                    evaluator,
+                                    &live_inputs.window,
+                                    layout_walk_purpose,
+                                    live_inputs.source,
+                                );
+                                is_edit = false;
+                                prepass_recollect = PrepassRecollectState::Fresh;
+                                if overlay_view_stale_retries == 0 {
+                                    overlay_view_stale_retries = 1;
+                                } else {
+                                    overlay_view_force_captured = true;
+                                    overlay_view_full = true;
+                                }
+                                continue;
+                            }
+                        },
+                        LeafLayoutAttempt::AutomaticCompositionUnresolved {
+                            resolve_from,
+                            resolve_through,
+                        } => {
+                            // The walk painted a composition the visible-range
+                            // pass did not resolve. Discard the attempt and
+                            // retry with the range widened to cover it; if that
+                            // second pass still misses (a rule may change the
+                            // walk's own extent), resolve every span the
+                            // snapshot captured, which cannot miss.
+                            automatic_composition_resolve =
+                                Some(match automatic_composition_resolve {
+                                    Some(_) => (0, usize::MAX),
+                                    None => (resolve_from, resolve_through),
+                                });
+                            continue;
+                        }
                         LeafLayoutAttempt::Effect(effect) => {
                             lisp_ledger.acknowledge_scroll_hook(&effect);
                             if let Err(flow) = effect.execute_inline(evaluator) {
@@ -3258,7 +3984,9 @@ impl LayoutEngine {
                                 evaluator.retire_interaction_presentation(presentation_id);
                                 self.last_frame_display_state = None;
                                 self.reset_frame_attempt_state();
-                                return None;
+                                return FrameLayoutInnerOutcome::Aborted {
+                                    settle_no_safe: false,
+                                };
                             }
                             lisp_ledger
                                 .acknowledge_live_hook_resume(evaluator, frame_id, window_id);
@@ -3269,16 +3997,7 @@ impl LayoutEngine {
                                     before: attempt_topology_generation,
                                     after: current_topology_generation,
                                 };
-                                if !Self::accept_frame_relayout_request(
-                                    &mut layout_coordinator,
-                                    evaluator,
-                                    &mut frame_window_end_attempts,
-                                    presentation_id,
-                                    request,
-                                ) {
-                                    return None;
-                                }
-                                continue 'frame_layout;
+                                request_frame_relayout!('frame_layout, request);
                             }
                             let Some(mut current) = collect_live_window_layout_inputs(
                                 evaluator,
@@ -3293,16 +4012,7 @@ impl LayoutEngine {
                                 let request = FrameRelayoutRequest::LogicalInputsChanged {
                                     window_id: DisplayWindowId::new(live_inputs.window.window_id),
                                 };
-                                if !Self::accept_frame_relayout_request(
-                                    &mut layout_coordinator,
-                                    evaluator,
-                                    &mut frame_window_end_attempts,
-                                    presentation_id,
-                                    request,
-                                ) {
-                                    return None;
-                                }
-                                continue 'frame_layout;
+                                request_frame_relayout!('frame_layout, request);
                             };
                             current.window.force_start |= consumed_force_start;
                             live_inputs = current;
@@ -3329,6 +4039,7 @@ impl LayoutEngine {
                                 live_inputs.source,
                             );
                             is_edit = false;
+                            prepass_recollect = PrepassRecollectState::Fresh;
                             // A hook effect re-enters this leaf from its live
                             // inputs, which is the same fresh attempt the old
                             // recursion performed by unwinding to this loop.
@@ -3346,47 +4057,130 @@ impl LayoutEngine {
                             evaluator.retire_interaction_presentation(presentation_id);
                             self.last_frame_display_state = None;
                             self.reset_frame_attempt_state();
-                            return None;
+                            return FrameLayoutInnerOutcome::Aborted {
+                                settle_no_safe: purpose == LayoutPurpose::Redisplay,
+                            };
+                        }
+                        LeafLayoutAttempt::PrepassInputsChanged(next_recollect) => {
+                            let Some(mut current) = collect_live_window_layout_inputs(
+                                evaluator,
+                                frame_id,
+                                window_id,
+                                window_path,
+                                default_metrics.map(|metrics| metrics.ascent),
+                                self.font_sizing,
+                                &window_chrome_metrics,
+                                layout_walk_purpose,
+                            ) else {
+                                let request = FrameRelayoutRequest::LogicalInputsChanged {
+                                    window_id: DisplayWindowId::new(live_inputs.window.window_id),
+                                };
+                                request_frame_relayout!('frame_layout, request);
+                            };
+                            if minibuffer_measurement_needs_begv
+                                && matches!(
+                                    window_position_publication(
+                                        evaluator,
+                                        &current.window,
+                                        layout_walk_purpose,
+                                        current.source,
+                                    ),
+                                    WindowPositionPublication::RedisplayMinibufferMeasurement
+                                )
+                            {
+                                current.window.window_start = current.window.buffer_begv;
+                                current.window.previous_visible_end = None;
+                                current.window.force_start = false;
+                            }
+                            current.window.force_start |= consumed_force_start;
+                            live_inputs = current;
+                            window_geometry = WindowFrameGeometryRequest::new(
+                                &live_inputs.window,
+                                &live_inputs.frame,
+                                live_inputs.main_area_bottom,
+                                live_inputs.divider_corner,
+                            )
+                            .resolve();
+                            layout_box = WindowLayoutBox::resolve(
+                                &live_inputs.window,
+                                WindowChromeMetrics::from_params(&live_inputs.window),
+                                WindowDividerLayout::resolve(
+                                    &live_inputs.window,
+                                    &live_inputs.frame,
+                                    window_geometry,
+                                ),
+                            );
+                            position_publication = window_position_publication(
+                                evaluator,
+                                &live_inputs.window,
+                                layout_walk_purpose,
+                                live_inputs.source,
+                            );
+                            let live_key = RetainedWindowKey::from_params(
+                                &live_inputs.window,
+                                layout_box,
+                                evaluator,
+                            );
+                            retained_keys[window_index] =
+                                (DisplayWindowId::new(live_inputs.window.window_id), live_key);
+                            self.prepared_window_ids
+                                .remove(&DisplayWindowId::new(live_inputs.window.window_id));
+                            cursor_only_replay = None;
+                            scroll_replay = None;
+                            is_edit = false;
+                            prepass_recollect = *next_recollect;
                         }
                         LeafLayoutAttempt::LogicalInputsChanged => {
                             if evaluator.has_mode_line_display_flow() {
                                 frame_window_end_attempts.reject_all(evaluator);
                                 evaluator.retire_interaction_presentation(presentation_id);
-                                return None;
+                                return FrameLayoutInnerOutcome::Aborted {
+                                    settle_no_safe: false,
+                                };
                             }
                             let request = FrameRelayoutRequest::LogicalInputsChanged {
                                 window_id: DisplayWindowId::new(live_inputs.window.window_id),
                             };
-                            if !Self::accept_frame_relayout_request(
-                                &mut layout_coordinator,
-                                evaluator,
-                                &mut frame_window_end_attempts,
-                                presentation_id,
-                                request,
-                            ) {
-                                return None;
+                            request_frame_relayout!('frame_layout, request);
+                        }
+                        LeafLayoutAttempt::ChromeInputsChanged => {
+                            if evaluator.has_mode_line_display_flow() {
+                                frame_window_end_attempts.reject_all(evaluator);
+                                evaluator.retire_interaction_presentation(presentation_id);
+                                return FrameLayoutInnerOutcome::Aborted {
+                                    settle_no_safe: false,
+                                };
                             }
-                            continue 'frame_layout;
+                            let request = FrameRelayoutRequest::WindowChromeInputsChanged {
+                                window_id: DisplayWindowId::new(live_inputs.window.window_id),
+                            };
+                            request_frame_relayout!('frame_layout, request);
+                        }
+                        LeafLayoutAttempt::PostWalkDisplayWhenInputsChanged => {
+                            if evaluator.has_mode_line_display_flow() {
+                                frame_window_end_attempts.reject_all(evaluator);
+                                evaluator.retire_interaction_presentation(presentation_id);
+                                return FrameLayoutInnerOutcome::Aborted {
+                                    settle_no_safe: false,
+                                };
+                            }
+                            let request = FrameRelayoutRequest::PostWalkDisplayWhenInputsChanged {
+                                window_id: DisplayWindowId::new(live_inputs.window.window_id),
+                            };
+                            request_frame_relayout!('frame_layout, request);
                         }
                         LeafLayoutAttempt::DisplayWhenReplay => {
                             if evaluator.has_mode_line_display_flow() {
                                 frame_window_end_attempts.reject_all(evaluator);
                                 evaluator.retire_interaction_presentation(presentation_id);
-                                return None;
+                                return FrameLayoutInnerOutcome::Aborted {
+                                    settle_no_safe: false,
+                                };
                             }
                             let request = FrameRelayoutRequest::DisplayWhenAnswerChanged {
                                 window_id: DisplayWindowId::new(live_inputs.window.window_id),
                             };
-                            if !Self::accept_frame_relayout_request(
-                                &mut layout_coordinator,
-                                evaluator,
-                                &mut frame_window_end_attempts,
-                                presentation_id,
-                                request,
-                            ) {
-                                return None;
-                            }
-                            continue 'frame_layout;
+                            request_frame_relayout!('frame_layout, request);
                         }
                     }
                 };
@@ -3408,19 +4202,33 @@ impl LayoutEngine {
                             assumed,
                             measured,
                         };
-                        if !Self::accept_frame_relayout_request(
+                        match self.decide_frame_relayout(
                             &mut layout_coordinator,
                             evaluator,
+                            frame_id,
+                            purpose,
+                            attempt_mode,
                             &mut frame_window_end_attempts,
                             presentation_id,
                             request,
                         ) {
-                            return None;
+                            RelayoutDecision::Retry => {
+                                window_chrome_metrics
+                                    .insert(DisplayWindowId::new(params.window_id), measured);
+                                chrome_remeasured_next_round
+                                    .insert(DisplayWindowId::new(params.window_id));
+                                continue 'frame_layout;
+                            }
+                            RelayoutDecision::EnterExhaustionSnapshot => {
+                                window_chrome_metrics
+                                    .insert(DisplayWindowId::new(params.window_id), measured);
+                                attempt_mode = FrameAttemptMode::ExhaustionSnapshot;
+                                continue 'frame_layout;
+                            }
+                            RelayoutDecision::Abort { settle_no_safe } => {
+                                return FrameLayoutInnerOutcome::Aborted { settle_no_safe };
+                            }
                         }
-                        window_chrome_metrics
-                            .insert(DisplayWindowId::new(params.window_id), measured);
-                        chrome_remeasured_next_round.insert(DisplayWindowId::new(params.window_id));
-                        continue 'frame_layout;
                     }
                 };
                 if params.is_minibuffer() {
@@ -3429,7 +4237,9 @@ impl LayoutEngine {
 
                 retained_keys[window_index] = (
                     DisplayWindowId::new(params.window_id),
-                    RetainedWindowKey::from_params(params, accepted_layout_box, evaluator),
+                    completed_row_key.unwrap_or_else(|| {
+                        RetainedWindowKey::from_params(params, accepted_layout_box, evaluator)
+                    }),
                 );
 
                 if let Some(snapshot) = self
@@ -3600,7 +4410,9 @@ impl LayoutEngine {
                 }
                 #[cfg(not(test))]
                 let _ = witness;
-                return Some(neovm_core::window::WindowLayoutQuery::new(end, geometry));
+                return FrameLayoutInnerOutcome::Prepared(Some(
+                    neovm_core::window::WindowLayoutQuery::new(end, geometry),
+                ));
             }
 
             // GNU `resize_mini_window` compares measured content pixels with
@@ -3608,8 +4420,9 @@ impl LayoutEngine {
             // this speculative frame, then apply it and retry within the
             // shared convergence budget. Resize policy controls which planned
             // growth or shrink is permitted; the frame owns its geometry.
-            if !(evaluator.gnu_redisplay_hooks_policy_enabled()
-                && evaluator.gnu_redisplay_transaction_active())
+            if attempt_mode == FrameAttemptMode::Converging
+                && !(evaluator.gnu_redisplay_hooks_policy_enabled()
+                    && evaluator.gnu_redisplay_transaction_active())
                 && let Some(mini_params) = window_params_list.last()
                 && mini_params.is_minibuffer()
                 && let Some(mini_content_height_px) = self.output_window_automatic_mini_height_px(
@@ -3698,7 +4511,9 @@ impl LayoutEngine {
                             evaluator.retire_interaction_presentation(presentation_id);
                             self.last_frame_display_state = None;
                             self.reset_frame_attempt_state();
-                            return None;
+                            return FrameLayoutInnerOutcome::Aborted {
+                                settle_no_safe: false,
+                            };
                         }
                     };
                     match resize_outcome {
@@ -3714,16 +4529,7 @@ impl LayoutEngine {
                                 let request = FrameRelayoutRequest::LogicalInputsChanged {
                                     window_id: DisplayWindowId::new(window.0 as i64),
                                 };
-                                if !Self::accept_frame_relayout_request(
-                                    &mut layout_coordinator,
-                                    evaluator,
-                                    &mut frame_window_end_attempts,
-                                    presentation_id,
-                                    request,
-                                ) {
-                                    return None;
-                                }
-                                continue 'frame_layout;
+                                request_frame_relayout!('frame_layout, request);
                             }
                         }
                         neovm_core::window::PreparedMiniResizeOutcome::Committed => {
@@ -3741,16 +4547,7 @@ impl LayoutEngine {
                                 allocated_height_px: resize.previous_height_px(),
                                 required_height_px,
                             };
-                            if !Self::accept_frame_relayout_request(
-                                &mut layout_coordinator,
-                                evaluator,
-                                &mut frame_window_end_attempts,
-                                presentation_id,
-                                request,
-                            ) {
-                                return None;
-                            }
-                            continue;
+                            request_frame_relayout!('frame_layout, request);
                         }
                     }
                 }
@@ -3775,10 +4572,12 @@ impl LayoutEngine {
                 evaluator.retire_interaction_presentation(presentation_id);
                 self.last_frame_display_state = None;
                 self.reset_frame_attempt_state();
-                return None;
+                return FrameLayoutInnerOutcome::Aborted {
+                    settle_no_safe: false,
+                };
             }
 
-            if face_resolver.has_tty_realization() {
+            if attempt_mode == FrameAttemptMode::Converging && face_resolver.has_tty_realization() {
                 let refreshed = evaluator.sync_runtime_faces_for_frame(frame_id);
                 let after = evaluator.face_change_count();
                 if refreshed || after != resolver_face_change_count {
@@ -3787,16 +4586,7 @@ impl LayoutEngine {
                         before: resolver_face_change_count,
                         after,
                     };
-                    if !Self::accept_frame_relayout_request(
-                        &mut layout_coordinator,
-                        evaluator,
-                        &mut frame_window_end_attempts,
-                        presentation_id,
-                        request,
-                    ) {
-                        return None;
-                    }
-                    continue 'frame_layout;
+                    request_frame_relayout!('frame_layout, request);
                 }
             }
 
@@ -3807,38 +4597,35 @@ impl LayoutEngine {
                     before: attempt_topology_generation,
                     after: current_topology_generation,
                 };
-                if !Self::accept_frame_relayout_request(
-                    &mut layout_coordinator,
-                    evaluator,
-                    &mut frame_window_end_attempts,
-                    presentation_id,
-                    request,
-                ) {
-                    return None;
-                }
-                continue 'frame_layout;
+                request_frame_relayout!('frame_layout, request);
             }
 
-            // A later leaf's Lisp can mutate an earlier leaf's source string
-            // without changing buffer/overlay ticks. Validate the complete
-            // accepted set after the final Lisp-capable boundary, not merely
-            // when each individual leaf finishes.
-            if let Some(window_id) = curr_window_infos.keys().copied().find(|window| {
-                lisp_ledger
-                    .cursor_sources
-                    .get(window)
-                    .is_some_and(|sources| !sources.unchanged())
-            }) {
-                if !Self::accept_frame_relayout_request(
-                    &mut layout_coordinator,
-                    evaluator,
-                    &mut frame_window_end_attempts,
-                    presentation_id,
-                    FrameRelayoutRequest::LogicalInputsChanged { window_id },
-                ) {
-                    return None;
-                }
-                continue 'frame_layout;
+            // Later sibling chrome may change an earlier window's buffer
+            // without changing topology. Sources may become stale, but a
+            // completed body cannot be published for a different owner or
+            // physical allocation. Validate every original body identity now.
+            if attempt_mode == FrameAttemptMode::Converging
+                && let Some(window_id) = curr_window_infos.keys().copied().find(|window| {
+                    lisp_ledger
+                        .completed_body_inputs
+                        .get(window)
+                        .is_some_and(|body| {
+                            evaluator
+                                .window_layout_attempt_freshness(
+                                    frame_id,
+                                    neovm_core::window::WindowId(window.get() as u64),
+                                    body.source_buffer,
+                                )
+                                .is_none_or(|after| {
+                                    !body.inputs.remains_valid_across(
+                                        &after,
+                                        neovm_core::window::WindowLayoutLispBoundary::WindowChrome,
+                                    )
+                                })
+                        })
+                })
+            {
+                request_frame_relayout!('frame_layout, FrameRelayoutRequest::LogicalInputsChanged { window_id });
             }
 
             let Some(current_smallest_font_height) = evaluator
@@ -3850,25 +4637,20 @@ impl LayoutEngine {
                 evaluator.retire_interaction_presentation(presentation_id);
                 self.last_frame_display_state = None;
                 self.reset_frame_attempt_state();
-                return None;
+                return FrameLayoutInnerOutcome::Aborted {
+                    settle_no_safe: purpose == LayoutPurpose::Redisplay,
+                };
             };
             // `None` (no graphical connection) never changes during an
             // attempt, so a difference here always carries real heights; the
             // sentinel 1 only reports a pre-open graphical minimum.
-            if current_smallest_font_height != attempt_smallest_font_height {
-                if !Self::accept_frame_relayout_request(
-                    &mut layout_coordinator,
-                    evaluator,
-                    &mut frame_window_end_attempts,
-                    presentation_id,
-                    FrameRelayoutRequest::FontCapacityInputsChanged {
-                        before: attempt_smallest_font_height.unwrap_or(1),
-                        after: current_smallest_font_height.unwrap_or(1),
-                    },
-                ) {
-                    return None;
-                }
-                continue 'frame_layout;
+            if attempt_mode == FrameAttemptMode::Converging
+                && current_smallest_font_height != attempt_smallest_font_height
+            {
+                request_frame_relayout!('frame_layout, FrameRelayoutRequest::FontCapacityInputsChanged {
+                    before: attempt_smallest_font_height.unwrap_or(1),
+                    after: current_smallest_font_height.unwrap_or(1),
+                });
             }
 
             let accepted_window_chrome_metrics: rustc_hash::FxHashMap<
@@ -4021,7 +4803,9 @@ impl LayoutEngine {
                         tracing::error!(%error, "rejecting invalid frame chrome snapshot");
                         frame_window_end_attempts.reject_all(evaluator);
                         evaluator.retire_interaction_presentation(presentation_id);
-                        return None;
+                        return FrameLayoutInnerOutcome::Aborted {
+                            settle_no_safe: purpose == LayoutPurpose::Redisplay,
+                        };
                     }
                 };
             let Some(current_smallest_font_height) = evaluator
@@ -4033,25 +4817,68 @@ impl LayoutEngine {
                 evaluator.retire_interaction_presentation(presentation_id);
                 self.last_frame_display_state = None;
                 self.reset_frame_attempt_state();
-                return None;
+                return FrameLayoutInnerOutcome::Aborted {
+                    settle_no_safe: purpose == LayoutPurpose::Redisplay,
+                };
             };
             // `None` (no graphical connection) never changes during an
             // attempt, so a difference here always carries real heights; the
             // sentinel 1 only reports a pre-open graphical minimum.
-            if current_smallest_font_height != attempt_smallest_font_height {
-                if !Self::accept_frame_relayout_request(
-                    &mut layout_coordinator,
-                    evaluator,
-                    &mut frame_window_end_attempts,
-                    presentation_id,
-                    FrameRelayoutRequest::FontCapacityInputsChanged {
-                        before: attempt_smallest_font_height.unwrap_or(1),
-                        after: current_smallest_font_height.unwrap_or(1),
-                    },
-                ) {
-                    return None;
+            if attempt_mode == FrameAttemptMode::Converging
+                && current_smallest_font_height != attempt_smallest_font_height
+            {
+                request_frame_relayout!('frame_layout, FrameRelayoutRequest::FontCapacityInputsChanged {
+                    before: attempt_smallest_font_height.unwrap_or(1),
+                    after: current_smallest_font_height.unwrap_or(1),
+                });
+            }
+
+            // The body rows are already certified. A source-only fontifier
+            // disagreement retries the whole frame while the budget remains.
+            // Spending the budget must not retire this presentation: the
+            // ordinary tail below publishes the attempt just assembled.
+            if attempt_mode == FrameAttemptMode::Converging
+                && let Some((window_id, stops_fingerprint)) = lisp_ledger.source_only_retry.take()
+            {
+                let request = FrameRelayoutRequest::SourceOnlyRetry {
+                    window_id,
+                    stops_fingerprint,
+                };
+                if layout_coordinator.request_retry(request).is_ok() {
+                    continue 'frame_layout;
                 }
-                continue 'frame_layout;
+            }
+
+            if attempt_mode == FrameAttemptMode::ExhaustionSnapshot {
+                // Runtime guard (N3): every known Lisp seam is skipped during
+                // ExhaustionSnapshot, except TTY face realization advice under
+                // `realization.rs:777`. If unexpected Lisp mutated face definitions
+                // or window topology during the snapshot pass, refuse to publish
+                // a half-mutated frame and settle NoSafe cleanly.
+                let face_epoch_moved = evaluator.face_change_count() != frame_face_epoch.get();
+                let topology_moved = evaluator.frame_manager().window_topology_generation()
+                    != attempt_topology_generation;
+                if face_epoch_moved
+                    || topology_moved
+                    || evaluator.has_mode_line_display_flow()
+                    || evaluator.redisplay_hook_flow_pending()
+                {
+                    tracing::error!(
+                        presentation = presentation_id,
+                        face_epoch_moved,
+                        topology_moved,
+                        "rejecting exhaustion snapshot after unexpected state mutation"
+                    );
+                    frame_window_end_attempts.reject_all(evaluator);
+                    evaluator.retire_interaction_presentation(presentation_id);
+                    self.last_frame_display_state = None;
+                    self.reset_frame_attempt_state();
+                    let flow_pending = evaluator.has_mode_line_display_flow()
+                        || evaluator.redisplay_hook_flow_pending();
+                    return FrameLayoutInnerOutcome::Aborted {
+                        settle_no_safe: !flow_pending && purpose == LayoutPurpose::Redisplay,
+                    };
+                }
             }
 
             break (
@@ -4082,7 +4909,9 @@ impl LayoutEngine {
                 tracing::error!(?error, "rejecting incoherent frame face namespace");
                 frame_window_end_attempts.reject_all(evaluator);
                 evaluator.retire_interaction_presentation(presentation_id);
-                return None;
+                return FrameLayoutInnerOutcome::Aborted {
+                    settle_no_safe: purpose == LayoutPurpose::Redisplay,
+                };
             }
         };
 
@@ -4128,11 +4957,18 @@ impl LayoutEngine {
         // on a resize-retry `continue`. Phase 0a always full-rebuilds: every
         // enabled row is `relaid`, every window is classified `Full`, and the
         // retained matrices are written but NOT read (no fast path exists yet).
-        let (next_layout_stats, next_retained_window_matrices, acked_buffer_ids) = {
+        let (mut next_layout_stats, next_retained_window_matrices, acked_buffer_ids) = {
             let key_map: rustc_hash::FxHashMap<DisplayWindowId, RetainedWindowKey> =
                 retained_keys.into_iter().collect();
             let frame_state = &mut frame_display_state;
-            let mut next_layout_stats = LayoutStats::default();
+            let mut next_layout_stats = LayoutStats {
+                exhaustion_snapshot_passes: usize::from(
+                    attempt_mode == FrameAttemptMode::ExhaustionSnapshot,
+                ),
+                prepass_freshness_rechecks: lisp_ledger.prepass_freshness_rechecks,
+                chrome_exhaustion_captures: lisp_ledger.captured_chrome_outputs.captures(),
+                ..LayoutStats::default()
+            };
             let mut retained: rustc_hash::FxHashMap<DisplayWindowId, RetainedWindowMatrix> =
                 rustc_hash::FxHashMap::default();
             let presented_cursors: rustc_hash::FxHashMap<DisplayWindowId, PhysCursor> = frame_state
@@ -4199,7 +5035,7 @@ impl LayoutEngine {
                     if self.prepared_window_ids.contains(&window_id) {
                         next_layout_stats.prepared_windows += 1;
                     }
-                    next_layout_stats.record_window_class(LayoutClass::CursorOnly);
+                    next_layout_stats.record_window_class(window_id, LayoutClass::CursorOnly);
                 } else if let Some((ref reused, _dvpos)) = scroll_reused {
                     // Overlapping rows reused shifted; the rest were newly exposed
                     // and walked.
@@ -4209,7 +5045,7 @@ impl LayoutEngine {
                     if self.prepared_window_ids.contains(&window_id) {
                         next_layout_stats.prepared_windows += 1;
                     }
-                    next_layout_stats.record_window_class(LayoutClass::Scroll);
+                    next_layout_stats.record_window_class(window_id, LayoutClass::Scroll);
                 } else if let Some(ref reused) = edit_reused {
                     // Rows outside the regenerated edit span reused verbatim;
                     // under the edit sync the rows below a span that changed
@@ -4219,10 +5055,10 @@ impl LayoutEngine {
                     next_layout_stats.reused_rows += reused.saturating_sub(shifted);
                     next_layout_stats.reused_shifted_rows += shifted.min(reused);
                     next_layout_stats.relaid_body_rows += enabled_body - reused;
-                    next_layout_stats.record_window_class(LayoutClass::Edit);
+                    next_layout_stats.record_window_class(window_id, LayoutClass::Edit);
                 } else {
                     next_layout_stats.relaid_body_rows += enabled_body;
-                    next_layout_stats.record_window_class(LayoutClass::Full);
+                    next_layout_stats.record_window_class(window_id, LayoutClass::Full);
                 }
 
                 // Phase 5 (#44) per-row provenance. The fast paths reuse the
@@ -4274,6 +5110,13 @@ impl LayoutEngine {
                     }
                 }
 
+                // Do not retain degraded matrices from a callback-inhibited
+                // ExhaustionSnapshot pass: the next real redisplay must rebuild
+                // cleanly with callbacks enabled instead of reusing degraded rows
+                // or chrome_memo fingerprints.
+                if attempt_mode == FrameAttemptMode::ExhaustionSnapshot {
+                    continue;
+                }
                 // Probe-pass exclusion: a window that laid out <=1 enabled row
                 // is the scroll-off hazard (spec §4.1); never retain it as a
                 // clean reusable matrix. The mini-window is one row by nature,
@@ -4316,6 +5159,9 @@ impl LayoutEngine {
                         RetainedWindowMatrix {
                             matrix: entry.matrix.clone(),
                             key: displayed_key,
+                            // Filled from the same accepted post-callback stamp
+                            // as the window's normal redisplay output below.
+                            gnu_accuracy: None,
                             // Every enabled body row now carries real
                             // MATRIX_ROW_START/END_CHARPOS values (empty lines
                             // hold their line's position; the EOB placeholder
@@ -4391,16 +5237,25 @@ impl LayoutEngine {
         self.prepared_viewports.export(
             frame_id,
             &next_retained_window_matrices,
+            &mut next_layout_stats,
+            evaluator
+                .frame_manager()
+                .get(frame_id)
+                .and_then(|frame| frame.active_presentation())
+                .map(|id| neomacs_display_protocol::PresentationId::new(id.get())),
             &mut frame_display_state,
             &sealed_face_arena,
             &mut self.font_metrics,
+            |window| {
+                let window = neovm_core::window::WindowId(window.get() as u64);
+                (
+                    evaluator.compositor_scrolling_enabled(window),
+                    evaluator.permits_compositor_pixel_scroll(window),
+                )
+            },
         );
-        for coverage in &mut frame_display_state.scroll_coverage {
+        for coverage in &frame_display_state.scroll_coverage {
             let window = neovm_core::window::WindowId(coverage.content.window_id.get() as u64);
-            std::sync::Arc::make_mut(coverage).compositor_enabled =
-                evaluator.compositor_scrolling_enabled(window);
-            std::sync::Arc::make_mut(coverage).predict_pixels =
-                evaluator.permits_compositor_pixel_scroll(window);
             tracing::debug!(target: "neomacs_layout_engine::scroll_coverage",
                 predict_pixels = coverage.predict_pixels, window = window.0,
                 epoch = coverage.epoch, anchor_row = coverage.anchor_row, origin = coverage.origin,
@@ -4409,18 +5264,15 @@ impl LayoutEngine {
                 text_bounds = ?coverage.content.text_clip_bounds,
                 "exported compositor coverage");
         }
-        for renewal in &mut frame_display_state.scroll_coverage_renewals {
-            let window = neovm_core::window::WindowId(renewal.window.get() as u64);
-            renewal.compositor_enabled = evaluator.compositor_scrolling_enabled(window);
-            renewal.predict_pixels = evaluator.permits_compositor_pixel_scroll(window);
-        }
         let resolved = match crate::frame_presentation::ResolvedFrame::new(frame_display_state) {
             Ok(resolved) => resolved,
             Err(error) => {
                 tracing::error!(?error, "rejecting incoherent resolved frame");
                 frame_window_end_attempts.reject_all(evaluator);
                 evaluator.retire_interaction_presentation(presentation_id);
-                return None;
+                return FrameLayoutInnerOutcome::Aborted {
+                    settle_no_safe: purpose == LayoutPurpose::Redisplay,
+                };
             }
         };
         let presentation_inputs = crate::frame_presentation::PresentationInputs::new(
@@ -4437,7 +5289,9 @@ impl LayoutEngine {
                 tracing::error!(?error, "rejecting invalid frame presentation");
                 frame_window_end_attempts.reject_all(evaluator);
                 evaluator.retire_interaction_presentation(presentation_id);
-                return None;
+                return FrameLayoutInnerOutcome::Aborted {
+                    settle_no_safe: purpose == LayoutPurpose::Redisplay,
+                };
             }
         };
         debug_assert_eq!(sealed.presentation(), sealed.state().presentation_id);
@@ -4478,9 +5332,10 @@ impl LayoutEngine {
                 .append(true)
                 .open(stats_path)
             {
+                let overlay_stats = neovm_core::buffer::overlay::take_overlay_layout_stats();
                 let _ = writeln!(
                     f,
-                    "full={} cursor_only={} scroll={} edit={} relaid_body={} relaid_chrome={} reused={} reused_shifted={} reused_chrome={} snapshots={} compose_bytes={} text_cow_copies={} mini_still={} chrome_memo={} prepared={}",
+                    "full={} cursor_only={} scroll={} edit={} relaid_body={} relaid_chrome={} reused={} reused_shifted={} reused_chrome={} snapshots={} compose_bytes={} text_cow_copies={} mini_still={} chrome_memo={} prepared={} {}",
                     s.full_windows,
                     s.cursor_only_windows,
                     s.scroll_windows,
@@ -4496,6 +5351,7 @@ impl LayoutEngine {
                     s.mini_window_still,
                     s.chrome_memo_hits,
                     s.prepared_windows,
+                    neovm_core::buffer::overlay::format_overlay_layout_stats(overlay_stats),
                 );
             }
         }
@@ -4514,6 +5370,14 @@ impl LayoutEngine {
             self.frame_visual_histories.get(frame_id),
         );
         self.retained_window_matrices = next_retained_window_matrices;
+        // Composition advances are inserted per window while the attempt
+        // runs, including attempts that later retry and windows a frame
+        // switch removed. The accepted matrices are exactly this frame's
+        // windows, so prune to them here: a deleted window must not leave its
+        // shaped widths (and its buffer's roots) behind.
+        prune_retained_composition_advances(&mut self.retained_composition_advances, |window| {
+            self.retained_window_matrices.contains_key(window)
+        });
         self.frame_face_arenas.insert(frame_id, sealed_face_arena);
         for buffer_id in acked_buffer_ids {
             if let Some(buffer) = evaluator
@@ -4526,7 +5390,18 @@ impl LayoutEngine {
         neomacs_display_protocol::input_latency::sealed(frame_id.0, sealed.presentation(), || {
             evaluator.input_latency_viewport(frame_id.0)
         });
-        self.scroll_preview_coverage = sealed.scroll_coverage.clone();
+        self.auxiliary_base = Some(auxiliary_coverage::AuxiliaryCoverageBase::from_sealed(
+            frame_id,
+            &sealed,
+            evaluator.redisplay_generation(),
+            window_system.is_some()
+                && attempt_mode != FrameAttemptMode::ExhaustionSnapshot
+                && layout_walk_purpose != WindowLayoutWalkPurpose::Snapshot,
+        ));
+        self.scroll_preview_coverage.refresh(&sealed);
+        if self.scroll_coverage.frame == Some(frame_id) {
+            self.scroll_coverage.clear_publication_pending();
+        }
         self.last_frame_display_state = Some(sealed);
         // Acknowledge the chrome dirty flag for exactly the windows whose
         // chrome this layout GENERATED — GNU's `mark_window_display_accurate_1`.
@@ -4634,6 +5509,33 @@ impl LayoutEngine {
         } else {
             None
         };
+        // GNU marks current matrices accurate after the last callback. This
+        // does not recapture the source inputs retained with the produced rows.
+        let accepted_accuracy: Vec<_> = self
+            .window_snapshots
+            .iter()
+            .filter_map(|publication| {
+                let WindowPresentationSnapshot::LiveWindow(snapshot) = publication else {
+                    return None;
+                };
+                let window = snapshot.window_id;
+                let buffer = lisp_ledger
+                    .completed_body_inputs
+                    .get(&DisplayWindowId::new(window.0 as i64))
+                    .map(|body| body.source_buffer)
+                    .or_else(|| {
+                        evaluator
+                            .frame_manager()
+                            .get(frame_id)?
+                            .find_window(window)?
+                            .buffer_id()
+                    })?;
+                Some((
+                    window,
+                    evaluator.gnu_window_accuracy(frame_id, window, buffer)?,
+                ))
+            })
+            .collect();
         let snapshots = std::mem::take(&mut self.window_snapshots);
         if let Some(frame) = evaluator.frame_manager_mut().get_mut(frame_id) {
             frame
@@ -4645,16 +5547,58 @@ impl LayoutEngine {
                 .expect("layout presentation identity is fresh");
             // Body dimensions are now authoritative before renderer activation.
             // Failed prepare and missing-frame paths cannot acknowledge output.
-            evaluator.note_gnu_frame_display_accepted(
-                frame_id,
-                self.retained_window_matrices
-                    .keys()
-                    .map(|window| neovm_core::window::WindowId(window.get() as u64)),
-            );
+            // On ExhaustionSnapshot, retained_window_matrices is intentionally
+            // empty (no cache poisoning), so acknowledge the laid-out windows
+            // from curr_window_infos instead.
+            if attempt_mode == FrameAttemptMode::ExhaustionSnapshot {
+                let accepted_windows: Vec<_> = self
+                    .last_frame_display_state
+                    .as_ref()
+                    .map(|sealed| {
+                        sealed
+                            .state()
+                            .window_infos
+                            .iter()
+                            .map(|info| neovm_core::window::WindowId(info.window_id.get() as u64))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                evaluator.note_gnu_frame_display_accepted(frame_id, accepted_windows);
+            } else {
+                evaluator.note_gnu_frame_display_accepted(
+                    frame_id,
+                    self.retained_window_matrices
+                        .keys()
+                        .map(|window| neovm_core::window::WindowId(window.get() as u64)),
+                );
+            }
+        }
+        for (window, accuracy) in accepted_accuracy {
+            let stamped = evaluator
+                .frame_manager_mut()
+                .get_mut(frame_id)
+                .and_then(|frame| frame.find_window_mut(window))
+                .is_some_and(|window| {
+                    window.set_gnu_redisplay_accuracy(
+                        neovm_core::window::geometry::PresentationId::new(presentation_id),
+                        accuracy,
+                    )
+                });
+            if stamped {
+                if let Some(buffer) = evaluator.buffer_manager().get(accuracy.buffer_id) {
+                    buffer.acknowledge_mode_line_clip();
+                }
+                if let Some(retained) = self
+                    .retained_window_matrices
+                    .get_mut(&DisplayWindowId::new(window.0 as i64))
+                {
+                    retained.gnu_accuracy = Some(accuracy);
+                }
+            }
         }
         frame_window_end_attempts.accept_all();
         log_invalid_face_references(evaluator, &face_resolver.take_invalid_face_references());
-        None
+        FrameLayoutInnerOutcome::Prepared(None)
     }
 
     /// GNU resize_mini_window's full, renderer-inert BEGV-to-ZV walk. The
@@ -5022,6 +5966,7 @@ impl LayoutEngine {
                             &face_services,
                             None,
                         )
+                        .into_query()
                     },
                 );
                 if let Some(producer) = lifetime.as_mut().and_then(|pending| pending.as_mut().ok())
@@ -5136,12 +6081,18 @@ impl LayoutEngine {
                 RetainedFrameState {
                     matrices: std::mem::take(&mut self.retained_window_matrices),
                     chrome_metrics: std::mem::take(&mut self.retained_window_chrome_metrics),
+                    scroll_preview_coverage: std::mem::take(&mut self.scroll_preview_coverage),
+                    auxiliary_base: self.auxiliary_base.take(),
+                    composition_advances: std::mem::take(&mut self.retained_composition_advances),
                 },
             );
         }
         let loaded = self.retained_by_frame.remove(&frame_id).unwrap_or_default();
         self.retained_window_matrices = loaded.matrices;
         self.retained_window_chrome_metrics = loaded.chrome_metrics;
+        self.scroll_preview_coverage = loaded.scroll_preview_coverage;
+        self.auxiliary_base = loaded.auxiliary_base;
+        self.retained_composition_advances = loaded.composition_advances;
         self.retained_frame = Some(frame_id);
     }
 
@@ -5786,6 +6737,63 @@ impl LayoutEngine {
     }
 
     #[allow(clippy::too_many_arguments)]
+    /// The overlay-view character span for one window attempt.
+    ///
+    /// The view must cover what the walk consumes. The accepted previous
+    /// window end is the measured consumed span; a full visible budget of
+    /// margin covers ordinary growth. Even on the first frame (when no
+    /// previous span is recorded), `minimum_end + budget` keeps the initial
+    /// overlay snapshot window-sized instead of copying the entire buffer.
+    /// Invisible overlays can make the walk consume far past this span; that
+    /// attempt is rejected (`OverlayViewUnusable::Exhausted`) and retried with
+    /// the whole-buffer view, so a range view never commits a subset answer.
+    fn overlay_view_char_span_for(
+        &self,
+        params: &WindowParams,
+        buffer: &neovm_core::buffer::Buffer,
+    ) -> Option<(usize, usize)> {
+        // `visible_char_bound` returns an unbounded budget when the source
+        // extent is AccessibleEnd; the overlay view must stay window-sized in
+        // that mode too, so derive the viewport rows from the text-area
+        // geometry instead of the source-interpretation row count.
+        let cols = (params.text_bounds.width / params.char_width.max(1.0)).ceil() as usize;
+        let rows = (params.text_bounds.height / params.char_height.max(1.0))
+            .ceil()
+            .max(1.0) as usize;
+        let screenful = rows.saturating_mul(cols).max(1);
+        let budget = screenful.saturating_mul(4).max(8192);
+        let first = (params.window_start.max(0) as usize).saturating_sub(screenful);
+        let minimum_end = first.saturating_add(budget);
+        let end_anchor = match self
+            .retained_window_matrices
+            .get(&DisplayWindowId::new(params.window_id))
+            .and_then(|matrix| matrix.display_snapshot.visible_buffer_span())
+        {
+            Some(previous_span) => {
+                let previous_start =
+                    neovm_core::buffer::CharPos0::from_lisp(previous_span.start()).get();
+                let previous_end = neovm_core::buffer::CharPos0::from_lisp(previous_span.end())
+                    .get()
+                    .saturating_add(1);
+                // Carry forward `previous_end` only when the new viewport overlaps or
+                // adjoins the previous one (e.g. scrolling/editing across an invisible
+                // span). A large jump backward (such as `G` -> `gg` in a long log
+                // buffer) must not stretch the range view from the new top all the way
+                // to the old bottom and snapshot the entire buffer's overlays.
+                if previous_start <= minimum_end && first <= previous_end {
+                    previous_end.max(minimum_end)
+                } else {
+                    minimum_end
+                }
+            }
+            None => minimum_end,
+        };
+        let end = end_anchor
+            .saturating_add(budget)
+            .min(buffer.total_char_end_pos().get());
+        Some((first.min(end), end))
+    }
+
     fn layout_window_rust<FS: crate::neovm_bridge::FaceServices>(
         &mut self,
         evaluator: &mut neovm_core::emacs_core::Context,
@@ -5797,6 +6805,17 @@ impl LayoutEngine {
         reserve_right_border_col: bool,
         remaining_visibility_retries: usize,
         viewport_resolution: ViewportResolutionPhase,
+        // A walk that consumed at or past a window-range overlay view must be
+        // retried once with the whole-buffer view. `true` selects it.
+        overlay_view_full: bool,
+        // After a repeated live-view staleness hit in one window attempt,
+        // fall back to a captured overlay snapshot to bound retries.
+        overlay_view_force_captured: bool,
+        // A previous attempt's row walk painted an automatic composition
+        // outside the visible-range resolution pass (`None` = no widening).
+        // `Some(from, through)` resolves at least that range; `(0,
+        // usize::MAX)` resolves every span the snapshot captured.
+        automatic_composition_resolve: Option<(usize, usize)>,
         // Phase A (gather) classified this window's incremental fast path against
         // the *original* params (before any echo-buffer swap below), reading the
         // same retained key the predicate was snapshotted from. Phase B (here)
@@ -5812,8 +6831,16 @@ impl LayoutEngine {
         lisp_ledger: &mut RedisplayLispLedger,
         topology_generation: u64,
         face_attempt: &FrameFaceAttempt,
+        attempt_mode: FrameAttemptMode,
+        allow_prepass_recollect: bool,
+        capture_chrome_for_exhaustion: bool,
+        prepass_recollect: &mut PrepassRecollectState,
     ) -> LeafLayoutAttempt {
-        let source_capture = crate::cursor_source_dependencies::Capture::begin(evaluator);
+        // A row walk may finish before coverage, freshness or viewport checks
+        // reject it. Keep its sole snapshot local until Completed transfers it
+        // to the frame coordinator; all other returns drop the candidate.
+        let mut window_snapshot = None;
+        let mut source_capture = crate::cursor_source_dependencies::Capture::begin(evaluator);
         let source_window = DisplayWindowId::new(params.window_id);
         lisp_ledger.cursor_sources.remove(&source_window);
         let previous_sources = lisp_ledger
@@ -5834,6 +6861,43 @@ impl LayoutEngine {
             None
         };
         let scroll_replay = if sources_current { scroll_replay } else { None };
+        // How much of the window this layout will actually (re)produce.  A
+        // scroll replay regenerates only the newly exposed rows; the rest
+        // are reused with their advances already baked in.  Record the first
+        // regenerated position and the newly exposed row count so the
+        // composition resolver can cover just that band.  A cursor-only
+        // replay leaves `scroll_replay` None and keeps the full range.
+        let replay_composition_walk = scroll_replay.as_ref().map(|replay| {
+            (
+                usize::try_from(replay.walk_start.get().max(0)).unwrap_or(0),
+                replay.exposed_row_count,
+            )
+        });
+        // When a reused row starts BELOW the regenerated start (an upward
+        // scroll or an edit above the viewport), the regenerated band ends at
+        // that row's source position; the rows below it are reused and need
+        // no resolution.  `None` means the walk regenerates to the window end
+        // (a downward scroll).
+        let replay_first_reused_below_start =
+            replay_composition_walk.and_then(|(walk_start, _)| {
+                scroll_replay.as_ref().and_then(|replay| {
+                    replay
+                        .reused_row_snapshots
+                        .iter()
+                        .filter_map(|row| row.start_buffer_pos)
+                        .map(|pos| neovm_core::buffer::CharPos0::from_lisp(pos).get())
+                        .filter(|start| *start > walk_start)
+                        .min()
+                })
+            });
+        tracing::debug!(
+            target: "neomacs_layout_engine::composition_resolver",
+            replay = scroll_replay.is_some(),
+            cursor_only = cursor_only_replay.is_some(),
+            ?replay_composition_walk,
+            ?replay_first_reused_below_start,
+            "composition walk scope"
+        );
         let face_resolver = face_services.resolver();
         #[cfg(test)]
         let _viewport_retry_depth = viewport_retry_depth_probe::Guard::enter();
@@ -5877,7 +6941,13 @@ impl LayoutEngine {
             &resolved_params
         };
         let scroll_hook_site = WindowScrollHookSite::new(window_id, resolved_window_start);
-        let site_publication = if params.is_minibuffer()
+        let site_publication = if attempt_mode == FrameAttemptMode::ExhaustionSnapshot
+            && matches!(position_publication, WindowPositionPublication::Redisplay)
+        {
+            // Commit the resolved window start without invoking
+            // `window-scroll-functions` Lisp during ExhaustionSnapshot.
+            WindowPositionPublication::RedisplayResumedScrollHook
+        } else if params.is_minibuffer()
             && matches!(position_publication, WindowPositionPublication::Redisplay)
             && evaluator.gnu_redisplay_hooks_policy_enabled()
             && evaluator.gnu_redisplay_transaction_active()
@@ -5910,7 +6980,23 @@ impl LayoutEngine {
         let accessible_end = params.accessible_end_charpos().get();
         let window_start = params.window_start_charpos().get().max(accessible_start);
         let max_rows = i64::try_from(params.source_interpretation_rows()).unwrap_or(i64::MAX);
-        let fontify_end = window_start
+        // GNU reads `w->window_end_valid` once, at the start of
+        // `redisplay_window`, and it is one input of
+        // `current_matrix_up_to_date_p` (src/xdisp.c:20557-20586). The walk
+        // below REPUBLISHES it, so the probe gate must read this entry value,
+        // not the one the completed walk leaves behind.
+        let window_end_valid_at_entry = evaluator
+            .frame_manager()
+            .get(frame_id)
+            .and_then(|frame| frame.find_window(window_id))
+            .and_then(neovm_core::window::Window::window_end_valid)
+            == Some(true);
+        // Speculative pre-walk span.  It lets a fontifying hook (jit-lock
+        // style) mark text before the walk, and it also bounds the
+        // display-condition (`when`) scan.  A hook that DECLINES ends the
+        // pre-walk request at its first declined stop; the coverage pass below
+        // then owns GNU's visible-stop schedule.
+        let mut fontify_end = window_start
             .saturating_add(max_rows.saturating_mul(200))
             .min(accessible_end);
         let Some(freshness_before_fontification) =
@@ -5918,140 +7004,235 @@ impl LayoutEngine {
         else {
             return LeafLayoutAttempt::LogicalInputsChanged;
         };
-        lisp_ledger.rows_fontification.begin_leaf(window_id, buf_id);
-        let fontification_outcome =
-            lisp_ledger
-                .rows_fontification
-                .ensure(evaluator, buf_id, window_start, fontify_end);
-        // `(when FORM . SPEC)` display specs need Lisp, which the walk cannot
-        // run while it holds the buffer: evaluate the forms of the span the
-        // walk can reach (the same one fontification just covered) here, so
-        // the freshness and topology checks below cover this Lisp too, and
-        // let the snapshot carry the results.
         let display_target = crate::display_property::DisplayPropertyTarget::for_window_system(
             face_resolver.is_window_system(),
         );
-        // GNU `try_cursor_movement` reuses the rows of a window whose text
-        // did not change and never evaluates a reused row's `when` FORM
-        // again (src/xdisp.c:19838-19876).  Take the cursor-only replay
-        // without evaluating when its retained rows were built from known
-        // answers and none of GNU's refusals holds since: the chrome-dirty
-        // generation (`update_mode_lines`, `force-mode-line-update`), an
-        // invalidated window end, `windows_or_buffers_changed` (the GNU policy's
-        // pending window scope, and a buffer change another window shows),
-        // the minibuffer, `show-trailing-whitespace`, line numbers and an
-        // overlay arrow.  Anything else that can move the rows is in the
-        // retained key the replay already matched.
-        // The accepted dependency record for this window. It lives in the
-        // sealed per-frame visual history, not in the retained matrix and not
-        // in LayoutEngine: per-thread state may not grow.
-        let accepted_display_when = self
-            .frame_visual_histories
-            .get(frame_id)
-            .and_then(|history| history.display_when_for(DisplayWindowId::new(params.window_id)));
-        let display_when_reuse = cursor_only_replay.is_some()
-            && accepted_display_when.is_some_and(|retention| {
-                retention.record == crate::display_when::DisplayWhenRecord::Known
-                    && retention.mode_line_generation
-                        == evaluator.chrome_dirty().all_generation()
-            })
-            // Rows from the retained matrix: a replay of a prepared viewport
-            // carries rows the record does not describe.
-            && !self
-                .prepared_window_ids
-                .contains(&DisplayWindowId::new(params.window_id))
-            && !position_publication.is_synchronous_query()
-            && !matches!(&viewport_resolution, ViewportResolutionPhase::Measure(_))
-            // GNU `current_matrix_up_to_date_p` requires `w->window_end_valid`,
-            // which `set-window-start` and a buffer switch clear even when
-            // the start does not move (src/xdisp.c:20557).
-            && evaluator
-                .frame_manager()
-                .get(frame_id)
-                .and_then(|frame| frame.find_window(window_id))
-                .and_then(neovm_core::window::Window::window_end_valid)
-                == Some(true)
-            && !evaluator.gnu_redisplay_refuses_cursor_movement()
-            && !self.frame_other_windows_changed
-            && !params.is_minibuffer()
-            && !params.show_trailing_whitespace
-            && !params.display_line_numbers.enabled()
-            && scroll_coverage::inactive_overlay_arrows(evaluator, Some(buf_id));
-        let display_when = if display_when_reuse {
-            crate::display_when::DisplayWhenConditions::reused_without_evaluation(
-                neovm_core::emacs_core::value::Value::make_buffer(buf_id),
-            )
-        } else if params.source_extent == WindowSourceExtent::AccessibleEnd
-            && evaluator.gnu_redisplay_hooks_policy_enabled()
-        {
-            let condition_end =
-                mini_source_stop::condition_end_boundary(evaluator, params, fontify_end);
-            crate::display_when::evaluate_window_display_when_forms_at_end(
-                evaluator,
-                buf_id,
-                Some(window_id.0),
-                neovm_core::buffer::CharPos0::new(window_start.max(0) as usize),
-                neovm_core::buffer::CharPos0::new(fontify_end.max(0) as usize),
-                display_target,
-                condition_end,
-            )
-        } else {
-            crate::display_when::evaluate_window_display_when_forms(
-                evaluator,
-                buf_id,
-                Some(window_id.0),
-                neovm_core::buffer::CharPos0::new(window_start.max(0) as usize),
-                neovm_core::buffer::CharPos0::new(fontify_end.max(0) as usize),
-                display_target,
-            )
-        };
-        // The walk records the clauses it has to take by the structural rule
-        // (sites the scan did not reach); a replay of this window finds the
-        // answers evaluated after the first walk carried in the ledger.
-        let display_when = display_when
-            .with_visit_recording()
-            .with_carried_answers(lisp_ledger.display_when.carried(window_id));
-        // The retained key tracks buffer/face changes, not arbitrary Lisp
-        // dependencies. A newly evaluated condition can change glyphs without
-        // moving any of those ticks. This applies to cursor, scroll, and edit
-        // replay alike; static windows keep their existing fast paths.
-        if !display_when.allows_body_reuse() {
-            self.query_body_cache_state = QueryBodyCacheState::Disabled;
-        }
-        // Rows whose `when` answers stayed unverified (the replay bound's
-        // fallback, an unevaluable site, a failed evaluation) are never
-        // reused, even when this attempt's scan finds nothing to evaluate:
-        // the clauses they were drawn by lie outside the scan.
-        let retained_rows_unverified = self
-            .frame_visual_histories
-            .get(frame_id)
-            .is_some_and(|history| history.any_display_when_unverified())
-            && accepted_display_when.is_some_and(|retention| {
-                retention.record == crate::display_when::DisplayWhenRecord::Unknown
-            });
-        let (cursor_only_replay, scroll_replay, is_edit) = if display_when_reuse {
-            (cursor_only_replay, None, false)
-        } else if display_when.allows_body_reuse() && !retained_rows_unverified {
-            (cursor_only_replay, scroll_replay, is_edit)
-        } else {
-            (None, None, false)
-        };
-        if evaluator.frame_manager().window_topology_generation() != topology_generation {
-            return LeafLayoutAttempt::LogicalInputsChanged;
-        }
         let freshness_mode = crate::attempt_freshness::mode();
-        let freshness_after_fontification = crate::attempt_freshness::after_span(
-            evaluator,
-            &freshness_before_fontification,
-            crate::attempt_freshness::preparation_admission(fontification_outcome, &display_when),
-            freshness_mode,
-        );
-        let Some(freshness_after_fontification) = freshness_after_fontification else {
-            return LeafLayoutAttempt::LogicalInputsChanged;
+        let (
+            fontification_outcome,
+            display_when,
+            display_when_reuse,
+            cursor_only_replay,
+            scroll_replay,
+            is_edit,
+            freshness_after_fontification,
+        ) = if attempt_mode == FrameAttemptMode::ExhaustionSnapshot {
+            // Callback-inhibited exhaustion snapshot: skip prepass fontification,
+            // pre-walk `display (when ...)` Lisp, and incremental fast-path reuse.
+            (
+                neovm_core::emacs_core::xdisp::RedisplayFontificationOutcome::Unchanged,
+                crate::display_when::DisplayWhenConditions::Structural,
+                false,
+                None,
+                None,
+                false,
+                std::borrow::Cow::Owned(freshness_before_fontification),
+            )
+        } else {
+            let face_change_before_prepass = evaluator.face_change_count();
+            let incoming_recollect =
+                std::mem::replace(prepass_recollect, PrepassRecollectState::Fresh);
+            let (
+                fontification_outcome,
+                run_prewalk_display_when,
+                can_recollect_display_when,
+                carried_display_when,
+            ) = match incoming_recollect {
+                PrepassRecollectState::Fresh => {
+                    lisp_ledger.rows_fontification.begin_leaf(window_id, buf_id);
+                    let outcome = lisp_ledger.rows_fontification.ensure(
+                        evaluator,
+                        buf_id,
+                        window_start,
+                        fontify_end,
+                        params.point_charpos().get() as i64 + 1,
+                        neovm_core::emacs_core::xdisp::RedisplayFontificationRequest::Prepass,
+                        neovm_core::emacs_core::xdisp::ProbeRow::None,
+                    );
+                    let preserve_fast_path_replan =
+                        (is_edit || scroll_replay.is_some() || cursor_only_replay.is_some())
+                            && matches!(
+                            outcome,
+                            neovm_core::emacs_core::xdisp::RedisplayFontificationOutcome::Fontified
+                        );
+                    if allow_prepass_recollect
+                        && outcome.entered_callbacks()
+                        && !preserve_fast_path_replan
+                        && !evaluator.has_mode_line_display_flow()
+                        && !evaluator.redisplay_hook_flow_pending()
+                        && evaluator.frame_manager().window_topology_generation()
+                            == topology_generation
+                        && evaluator.face_change_count() == face_change_before_prepass
+                    {
+                        lisp_ledger.prepass_freshness_rechecks += 1;
+                        let after_prepass =
+                            evaluator.window_layout_attempt_freshness(frame_id, window_id, buf_id);
+                        if let Some(after_prepass) = after_prepass
+                            && after_prepass != freshness_before_fontification
+                        {
+                            return LeafLayoutAttempt::PrepassInputsChanged(Box::new(
+                                PrepassRecollectState::AfterFontification {
+                                    outcome,
+                                    fontify_end,
+                                },
+                            ));
+                        }
+                    }
+                    (
+                        outcome,
+                        true,
+                        allow_prepass_recollect && !preserve_fast_path_replan,
+                        None,
+                    )
+                }
+                PrepassRecollectState::AfterFontification {
+                    outcome,
+                    fontify_end: carried_end,
+                } => {
+                    fontify_end = carried_end;
+                    (outcome, true, false, None)
+                }
+                PrepassRecollectState::AfterDisplayWhen {
+                    outcome,
+                    fontify_end: carried_end,
+                    display_when,
+                } => {
+                    fontify_end = carried_end;
+                    (outcome, false, false, Some(display_when))
+                }
+            };
+            let accepted_display_when =
+                self.frame_visual_histories
+                    .get(frame_id)
+                    .and_then(|history| {
+                        history.display_when_for(DisplayWindowId::new(params.window_id))
+                    });
+            let display_when_reuse = run_prewalk_display_when
+                && cursor_only_replay.is_some()
+                && accepted_display_when.is_some_and(|retention| {
+                    retention.record == crate::display_when::DisplayWhenRecord::Known
+                        && retention.mode_line_generation
+                            == evaluator.chrome_dirty().all_generation()
+                })
+                && !self
+                    .prepared_window_ids
+                    .contains(&DisplayWindowId::new(params.window_id))
+                && !position_publication.is_synchronous_query()
+                && !matches!(&viewport_resolution, ViewportResolutionPhase::Measure(_))
+                && evaluator
+                    .frame_manager()
+                    .get(frame_id)
+                    .and_then(|frame| frame.find_window(window_id))
+                    .and_then(neovm_core::window::Window::window_end_valid)
+                    == Some(true)
+                && !evaluator.gnu_redisplay_refuses_cursor_movement()
+                && !self.frame_other_windows_changed
+                && !params.is_minibuffer()
+                && !params.show_trailing_whitespace
+                && !params.display_line_numbers.enabled()
+                && scroll_coverage::inactive_overlay_arrows(evaluator, Some(buf_id));
+            let display_when = if let Some(carried) = carried_display_when {
+                carried
+            } else if display_when_reuse {
+                crate::display_when::DisplayWhenConditions::reused_without_evaluation(
+                    neovm_core::emacs_core::value::Value::make_buffer(buf_id),
+                )
+            } else if params.source_extent == WindowSourceExtent::AccessibleEnd
+                && evaluator.gnu_redisplay_hooks_policy_enabled()
+            {
+                let scan_end = window_start
+                    .saturating_add(max_rows.saturating_mul(200))
+                    .min(accessible_end);
+                let condition_end =
+                    mini_source_stop::condition_end_boundary(evaluator, params, scan_end);
+                crate::display_when::evaluate_window_display_when_forms_at_end(
+                    evaluator,
+                    buf_id,
+                    Some(window_id.0),
+                    neovm_core::buffer::CharPos0::new(window_start.max(0) as usize),
+                    neovm_core::buffer::CharPos0::new(scan_end.max(0) as usize),
+                    display_target,
+                    condition_end,
+                )
+            } else {
+                let scan_end = window_start
+                    .saturating_add(max_rows.saturating_mul(200))
+                    .min(accessible_end);
+                crate::display_when::evaluate_window_display_when_forms(
+                    evaluator,
+                    buf_id,
+                    Some(window_id.0),
+                    neovm_core::buffer::CharPos0::new(window_start.max(0) as usize),
+                    neovm_core::buffer::CharPos0::new(scan_end.max(0) as usize),
+                    display_target,
+                )
+            };
+            let display_when = display_when
+                .with_visit_recording()
+                .with_carried_answers(lisp_ledger.display_when.carried(window_id));
+            if !display_when.allows_body_reuse() {
+                self.query_body_cache_state = QueryBodyCacheState::Disabled;
+            }
+            let retained_rows_unverified = self
+                .frame_visual_histories
+                .get(frame_id)
+                .is_some_and(|history| history.any_display_when_unverified())
+                && accepted_display_when.is_some_and(|retention| {
+                    retention.record == crate::display_when::DisplayWhenRecord::Unknown
+                });
+            let (cursor_only_replay, scroll_replay, is_edit) = if display_when_reuse {
+                (cursor_only_replay, None, false)
+            } else if display_when.allows_body_reuse() && !retained_rows_unverified {
+                (cursor_only_replay, scroll_replay, is_edit)
+            } else {
+                (None, None, false)
+            };
+            if evaluator.frame_manager().window_topology_generation() != topology_generation {
+                return LeafLayoutAttempt::LogicalInputsChanged;
+            }
+            let freshness_after_fontification = if !run_prewalk_display_when {
+                std::borrow::Cow::Owned(freshness_before_fontification)
+            } else {
+                let admission = crate::attempt_freshness::preparation_admission(
+                    fontification_outcome,
+                    &display_when,
+                );
+                let Some(after) = crate::attempt_freshness::after_span(
+                    evaluator,
+                    &freshness_before_fontification,
+                    admission,
+                    freshness_mode,
+                ) else {
+                    return LeafLayoutAttempt::LogicalInputsChanged;
+                };
+                if after.as_ref() != &freshness_before_fontification {
+                    if can_recollect_display_when
+                        && !evaluator.has_mode_line_display_flow()
+                        && !evaluator.redisplay_hook_flow_pending()
+                        && evaluator.face_change_count() == face_change_before_prepass
+                    {
+                        return LeafLayoutAttempt::PrepassInputsChanged(Box::new(
+                            PrepassRecollectState::AfterDisplayWhen {
+                                outcome: fontification_outcome,
+                                fontify_end,
+                                display_when,
+                            },
+                        ));
+                    }
+                    return LeafLayoutAttempt::LogicalInputsChanged;
+                }
+                after
+            };
+            (
+                fontification_outcome,
+                display_when,
+                display_when_reuse,
+                cursor_only_replay,
+                scroll_replay,
+                is_edit,
+                freshness_after_fontification,
+            )
         };
-        if freshness_after_fontification.as_ref() != &freshness_before_fontification {
-            return LeafLayoutAttempt::LogicalInputsChanged;
-        }
 
         // Conditional display can install fontification callbacks during
         // preparation. Check the final callback state before bounding rows.
@@ -6075,14 +7256,24 @@ impl LayoutEngine {
             .unwrap_or(0.0);
         // `params` already names the semantic display source chosen before
         // fontification and incremental classification.
-        let layout_buffer = match evaluator.buffer_manager().get(buf_id) {
+        let mut layout_buffer = match evaluator.buffer_manager().get(buf_id) {
             Some(buffer) => {
-                super::neovm_bridge::LayoutBufferSnapshot::from_buffer_for_window_with_symbols(
+                let overlay_span = if overlay_view_full {
+                    None
+                } else {
+                    self.overlay_view_char_span_for(params, buffer)
+                };
+                let overlay_source =
+                    self.effective_overlay_source_mode(overlay_view_force_captured);
+                super::neovm_bridge::LayoutBufferSnapshot::from_buffer_for_window_with_symbols_and_source(
                     buffer,
                     evaluator.variables(),
                     Some(visible_char_bound(params)),
+                    overlay_span,
                     display_target,
                     evaluator.symbol_mode(),
+                    &evaluator.owned_root_retainer(),
+                    overlay_source,
                 )
                 .with_accessible_end(neovm_core::buffer::CharPos0::new(
                     params.accessible_end_charpos().get().max(0) as usize,
@@ -6099,24 +7290,194 @@ impl LayoutEngine {
                         // produced and there is no field on screen to report.
                         None,
                     ));
-                self.window_snapshots.push(WindowPresentationSnapshot::live(
-                    WindowDisplaySnapshot {
-                        window_id,
-                        cell_origin: neovm_core::window::geometry::CellOrigin::new(
-                            params.left_col,
-                            params.top_line,
-                        ),
-                        regions: layout_box.regions(),
-                        regions_materialized: false,
-                        ..Default::default()
-                    },
-                ));
+                window_snapshot = Some(WindowPresentationSnapshot::live(WindowDisplaySnapshot {
+                    window_id,
+                    cell_origin: neovm_core::window::geometry::CellOrigin::new(
+                        params.left_col,
+                        params.top_line,
+                    ),
+                    regions: layout_box.regions(),
+                    regions_materialized: false,
+                    ..Default::default()
+                }));
                 return LeafLayoutAttempt::Completed {
                     outcome: WindowLayoutOutcome::Skipped,
                     window_end_attempt: None,
+                    snapshot: window_snapshot,
+                    produced_key: None,
                 };
             }
         };
+        // GNU resolves an automatic composition's rule lazily while the
+        // display iterator reaches it; the snapshot is immutable across the
+        // row walk (and may feed a worker), so resolve the visible spans'
+        // gstring widths once, here, with the evaluator in scope.
+        //
+        // A cache miss can enter Lisp (the matched rule's FUNC). This call
+        // sits after `freshness_after_fontification` and before the buffer
+        // render's own capture, so a rule that moved any logical input fails
+        // the BufferBody revalidation below and retries instead of publishing
+        // rows built from pre-call inputs; because the shaped gstring is then
+        // cached, the retry does not enter Lisp again (GNU's `autocmp_chars`
+        // skips the rule for a gstring with a non-nil ID).
+        //
+        // The first pass bounds the rows this layout will actually produce:
+        // one screenful plus one line on a first display, or just the
+        // replay's regenerated band on a scroll.  That character count is a
+        // heuristic (proportional fonts fit more characters per row than
+        // `text_width / char_width`), so the post-walk coverage check below
+        // verifies every painted automatic span was resolved and
+        // widens/retries instead of letting the row measure the raw text,
+        // which is exactly the pre-fix wrong advance.
+        let mut resolved_composition_range: Option<std::ops::Range<usize>> = None;
+        if matches!(
+            display_target,
+            crate::display_property::DisplayPropertyTarget::Graphical
+        ) {
+            let rows = params.source_interpretation_rows();
+            let cols = (params.text_bounds.width / params.char_width.max(1.0)).ceil() as usize;
+            let screenful = rows.saturating_mul(cols).max(1);
+            let visible_start = params.window_start.max(0) as usize;
+            let mut resolve_start = visible_start.saturating_sub(cols);
+            let mut resolve_end = visible_start.saturating_add(screenful).saturating_add(cols);
+            // A scroll replay regenerates only the newly exposed rows; the
+            // reused rows are not re-measured and keep their advances.  Bound
+            // both ends to that regenerated band so a 4 px scroll resolves at
+            // most the newly exposed line's compositions, exactly like GNU
+            // shaping a composition when its iterator first reaches it.  A
+            // frame that exposes no whole new row resolves only the two-line
+            // band around the edge row.
+            if let Some((replay_walk_start, exposed_rows)) = replay_composition_walk {
+                // Keep one line of margin on each side: the iterator may
+                // reseat onto a composition beginning just above the
+                // regenerated start, and a wrapped/narrow line can hold more
+                // characters per row than `cols`.  Zero newly exposed rows
+                // still keeps two lines: the replay can re-lay the partially
+                // visible edge row even when no whole row entered.
+                resolve_start = resolve_start.max(replay_walk_start.saturating_sub(cols));
+                let band = exposed_rows.saturating_add(2).saturating_mul(cols);
+                resolve_end = resolve_end.min(replay_walk_start.saturating_add(band));
+            }
+            if let Some((from, through)) = automatic_composition_resolve {
+                resolve_start = resolve_start.min(from);
+                resolve_end = resolve_end.max(through);
+            }
+            // Reuse the previous layout's shaped widths when the inputs that
+            // decide them did not move.  This is the GNU matrix-row reuse for
+            // compositions: a scroll that keeps faces, overlays and text
+            // unchanged does not re-enter `font-at` or the rule search.
+            let (composition_buffer_modiff, composition_overlay_modified_tick) = evaluator
+                .buffer_manager()
+                .get(buf_id)
+                .map(|buffer| (buffer.modified_tick(), buffer.overlay_modified_tick()))
+                .unwrap_or((i64::MIN, i64::MIN));
+            let composition_face_change_count = evaluator.face_change_count();
+            let composition_display_var_change_count = evaluator.display_var_change_count();
+            let composition_body_redisplay = evaluator.body_redisplay_revision(window_id, buf_id);
+            let composition_fontset_generation =
+                neovm_core::emacs_core::fontset::fontset_generation();
+            let composition_window_parameters_generation = evaluator
+                .frame_manager()
+                .get(frame_id)
+                .and_then(|frame| frame.window_layout_inputs(window_id))
+                .map(|inputs| inputs.window_parameters_generation)
+                .unwrap_or(0);
+            let composition_char_width_bits = params.char_width.to_bits();
+            let composition_window = DisplayWindowId::new(params.window_id);
+            // The rejection dump costs a cache lookup even when nobody is
+            // listening; only build it when this target is enabled.
+            if tracing::enabled!(
+                target: "neomacs_layout_engine::composition_resolver",
+                tracing::Level::DEBUG
+            ) && let Some(previous) = self.retained_composition_advances.get(&composition_window)
+            {
+                tracing::debug!(
+                    target: "neomacs_layout_engine::composition_resolver",
+                    previous = ?(
+                        previous.buffer_modiff,
+                        previous.overlay_modified_tick,
+                        previous.face_change_count,
+                        previous.display_var_change_count,
+                        previous.fontset_generation,
+                        previous.window_parameters_generation,
+                        previous.char_width_bits,
+                    ),
+                    current = ?(
+                        composition_buffer_modiff,
+                        composition_overlay_modified_tick,
+                        composition_face_change_count,
+                        composition_display_var_change_count,
+                        composition_fontset_generation,
+                        composition_window_parameters_generation,
+                        composition_char_width_bits,
+                    ),
+                    body_unchanged = previous.body_redisplay == composition_body_redisplay,
+                    "composition cache inputs"
+                );
+            }
+            let seeded_composition_advances = self
+                .retained_composition_advances
+                .get(&composition_window)
+                .filter(|cache| {
+                    cache.is_current_for(
+                        buf_id,
+                        composition_buffer_modiff,
+                        composition_overlay_modified_tick,
+                        composition_face_change_count,
+                        composition_display_var_change_count,
+                        composition_body_redisplay,
+                        composition_fontset_generation,
+                        composition_window_parameters_generation,
+                        composition_char_width_bits,
+                    )
+                })
+                .map(|cache| cache.advances.clone())
+                .unwrap_or_default();
+            let composition_resolve_started = std::time::Instant::now();
+            layout_buffer.resolve_automatic_composition_advances(
+                evaluator,
+                buf_id,
+                resolve_start..resolve_end,
+                &seeded_composition_advances,
+            );
+            tracing::debug!(
+                target: "neomacs_layout_engine::composition_resolver",
+                micros = composition_resolve_started.elapsed().as_micros() as u64,
+                seeded = seeded_composition_advances.len(),
+                resolve_start,
+                resolve_end,
+                "composition resolve timing"
+            );
+            let resolved_advances = layout_buffer.resolved_automatic_composition_advances();
+            let retained_advances = retained_composition_advances_for_spans(
+                layout_buffer.automatic_composition_span_ranges(),
+                &resolved_advances,
+                &seeded_composition_advances,
+            );
+            self.retained_composition_advances.insert(
+                composition_window,
+                RetainedCompositionAdvances {
+                    buffer_id: buf_id,
+                    buffer_modiff: composition_buffer_modiff,
+                    overlay_modified_tick: composition_overlay_modified_tick,
+                    face_change_count: composition_face_change_count,
+                    display_var_change_count: composition_display_var_change_count,
+                    body_redisplay: composition_body_redisplay,
+                    fontset_generation: composition_fontset_generation,
+                    window_parameters_generation: composition_window_parameters_generation,
+                    char_width_bits: composition_char_width_bits,
+                    advances: retained_advances,
+                },
+            );
+            resolved_composition_range = Some(resolve_start..resolve_end);
+        }
+        // Automatic-composition rule resolution above may enter Lisp and mutate
+        // overlays. Reject a stale live overlay view before starting the walk.
+        if crate::neovm_bridge::LayoutBufferView::layout_overlay_view_stale(&layout_buffer) {
+            return LeafLayoutAttempt::OverlayViewUnusable(
+                crate::neovm_bridge::OverlayViewUnusable::Stale,
+            );
+        }
         let buffer = &layout_buffer;
 
         // Point the face resolver at this window's parameters so a
@@ -6179,6 +7540,71 @@ impl LayoutEngine {
         let scroll_replay = if sources_current { scroll_replay } else { None };
         let canonical_source_walk = cursor_only_replay.is_none() && scroll_replay.is_none();
         let unchanged_body_replay = cursor_only_replay.is_some();
+        let produced_freshness = match evaluator
+            .window_display_snapshot_freshness(frame_id, window_id, buf_id)
+        {
+            Some(token) => {
+                crate::buffer_source::render_attempt::ProducedSnapshotIdentity::Live(token)
+            }
+            None if position_publication == WindowPositionPublication::InactiveEchoArea => {
+                crate::buffer_source::render_attempt::ProducedSnapshotIdentity::InactiveEchoArea
+            }
+            None if position_publication
+                == WindowPositionPublication::SynchronousQueryTextExtent =>
+            {
+                // Only the explicit TextExtent scope admits a projected
+                // query source without live-window snapshot identity.
+                crate::buffer_source::render_attempt::ProducedSnapshotIdentity::ProjectedTextExtent
+            }
+            None => {
+                if let Some(attempt) = window_end_attempt.take() {
+                    evaluator.reject_redisplay_window_end_attempt(attempt);
+                }
+                return LeafLayoutAttempt::LogicalInputsChanged;
+            }
+        };
+        let produced_key = RetainedWindowKey::from_params(params, *layout_box, evaluator);
+        let produced_modiff = evaluator
+            .buffer_manager()
+            .get(buf_id)
+            .map(neovm_core::buffer::Buffer::modified_tick)
+            .unwrap_or(0);
+        let source_walk = if canonical_source_walk {
+            crate::buffer_source::render_attempt::BodySourceWalk::Canonical
+        } else if let Some(previous) = previous_sources.clone() {
+            if unchanged_body_replay {
+                crate::buffer_source::render_attempt::BodySourceWalk::Unchanged(previous)
+            } else {
+                crate::buffer_source::render_attempt::BodySourceWalk::Partial(previous)
+            }
+        } else {
+            if let Some(attempt) = window_end_attempt.take() {
+                evaluator.reject_redisplay_window_end_attempt(attempt);
+            }
+            return LeafLayoutAttempt::LogicalInputsChanged;
+        };
+        let body_completion = crate::buffer_source::render_attempt::BodyCompletionRequest::new(
+            &mut source_capture,
+            freshness_after_fontification.as_ref().clone(),
+            produced_key,
+            produced_freshness,
+            produced_modiff,
+            source_walk,
+        );
+        let chrome_eval_mode = match attempt_mode {
+            FrameAttemptMode::Converging => {
+                crate::display_status_line::WindowChromeEvalMode::Converging {
+                    captured: (capture_chrome_for_exhaustion
+                        && !position_publication.is_synchronous_query())
+                    .then_some(&mut lisp_ledger.captured_chrome_outputs),
+                }
+            }
+            FrameAttemptMode::ExhaustionSnapshot => {
+                crate::display_status_line::WindowChromeEvalMode::ExhaustionSnapshot {
+                    captured: &lisp_ledger.captured_chrome_outputs,
+                }
+            }
+        };
         let render_outcome = render_request.render_into(
             BufferSourceRenderAttemptContext::from_frame_output_owner(
                 &mut self.frame_output,
@@ -6186,7 +7612,9 @@ impl LayoutEngine {
                 &mut self.font_metrics,
                 face_services,
                 face_attempt.clone(),
-                &mut self.window_snapshots,
+                &mut window_snapshot,
+                body_completion,
+                chrome_eval_mode,
             ),
             &mut self.text_buf,
             remaining_visibility_retries,
@@ -6194,11 +7622,97 @@ impl LayoutEngine {
             scroll_replay,
         );
 
-        // Body and chrome can evaluate arbitrary Lisp after fontification.
-        // Rows are valid only if the complete typed source projection still
-        // equals the one they were produced from. Reject before attaching the
-        // post-callback token to those rows; otherwise stale geometry could be
-        // certified as fresh.
+        // GNU's composition width comes from the shaped gstring, never from
+        // measuring the raw text. The visible-range resolution pass above is
+        // a character-count heuristic, so check the walk it produced: every
+        // automatic-composition span the walk could have painted must lie in
+        // the range the resolver covered. Otherwise discard the attempt and
+        // ask the loop for a wider pass (`usize::MAX` on the second miss
+        // covers every captured span, so this terminates).
+        if let (
+            BufferSourceRenderAttemptOutcome::Finished {
+                redisplay_positions,
+                cursor_only,
+                reused_matrix_rows,
+                ..
+            },
+            Some(resolved),
+        ) = (&render_outcome, resolved_composition_range.clone())
+            && !*cursor_only
+        {
+            let semantic_walk_start =
+                usize::try_from(resolved_window_start.get().max(0)).unwrap_or(0);
+            // Only an attempt that really reused matrix rows walked from the
+            // replay's `walk_start`; a refused replay is re-laid without it
+            // and then covers the semantic range, where this check exposes any
+            // span the narrow range missed.
+            let walk_start = if reused_matrix_rows.is_some() {
+                replay_composition_walk
+                    .map(|(walk_start, _)| walk_start)
+                    .unwrap_or(semantic_walk_start)
+            } else {
+                semantic_walk_start
+            };
+            let walk_end =
+                neovm_core::buffer::CharPos0::from_lisp(redisplay_positions.window_end_lisp())
+                    .get();
+            // With reused rows the walk paints only the regenerated band:
+            // it starts at `walk_start` and either runs to the window end
+            // (downward scroll) or stops where the reused rows resume
+            // (upward scroll / edit).  Spans in the reused part already carry
+            // their advances.  A frame that exposes no whole new row keeps
+            // the two-line band the resolver used: the replay may re-lay the
+            // partially visible edge row.
+            let coverage_end = if reused_matrix_rows.is_some() {
+                match (replay_first_reused_below_start, replay_composition_walk) {
+                    (Some(sync), _) => sync.min(walk_end),
+                    (None, Some((walk_start, 0))) => {
+                        let cols =
+                            (params.text_bounds.width / params.char_width.max(1.0)).ceil() as usize;
+                        walk_start
+                            .saturating_add(cols.saturating_mul(2))
+                            .min(walk_end)
+                    }
+                    (None, _) => walk_end,
+                }
+            } else {
+                walk_end
+            };
+            if let Some(missed) = uncovered_automatic_composition_span_range(
+                layout_buffer.automatic_composition_span_starts(),
+                walk_start,
+                coverage_end,
+                &resolved,
+            ) {
+                tracing::debug!(
+                    target: "neomacs_layout_engine::composition_resolver",
+                    missed_start = missed.start,
+                    missed_end = missed.end,
+                    walk_start,
+                    coverage_end,
+                    resolve_start = resolved.start,
+                    resolve_end = resolved.end,
+                    "automatic composition coverage retry"
+                );
+                if let Some(attempt) = window_end_attempt.take() {
+                    evaluator.reject_redisplay_window_end_attempt(attempt);
+                }
+                let cols = (params.text_bounds.width / params.char_width.max(1.0)).ceil() as usize;
+                let resolve_from = resolved.start.min(missed.start);
+                let resolve_through = resolved
+                    .end
+                    .max(missed.end)
+                    .max(walk_end.saturating_add(cols));
+                return LeafLayoutAttempt::AutomaticCompositionUnresolved {
+                    resolve_from,
+                    resolve_through,
+                };
+            }
+        }
+
+        // Body evidence was sealed before chrome. Late source mutations do
+        // not discard those completed rows; ownership, physical geometry and
+        // realized resources must still survive the callback boundary.
         let freshness_after_leaf = match &render_outcome {
             BufferSourceRenderAttemptOutcome::Finished {
                 freshness_before_chrome,
@@ -6217,6 +7731,8 @@ impl LayoutEngine {
             ),
             BufferSourceRenderAttemptOutcome::Skipped
             | BufferSourceRenderAttemptOutcome::LogicalInputsChanged
+            | BufferSourceRenderAttemptOutcome::ChromeSourceInvalidated
+            | BufferSourceRenderAttemptOutcome::OverlayViewUnusable(_)
             | BufferSourceRenderAttemptOutcome::GlyphMatrixCapacityExhausted
             | BufferSourceRenderAttemptOutcome::GnuMiniEobCursorUnavailable { .. }
             | BufferSourceRenderAttemptOutcome::Retry { .. }
@@ -6239,15 +7755,11 @@ impl LayoutEngine {
                     ..
                 },
                 Some(freshness_after_leaf),
-            ) => {
-                freshness_after_fontification.remains_valid_across(
-                    freshness_before_chrome,
-                    neovm_core::window::WindowLayoutLispBoundary::BufferBody,
-                ) && freshness_before_chrome.remains_valid_across(
-                    freshness_after_leaf,
-                    neovm_core::window::WindowLayoutLispBoundary::WindowChrome,
-                )
-            }
+            ) => freshness_before_chrome.remains_valid_across(
+                freshness_after_leaf,
+                neovm_core::window::WindowLayoutLispBoundary::WindowChrome,
+            ),
+            (BufferSourceRenderAttemptOutcome::OverlayViewUnusable(_), Some(_)) => true,
             (_, Some(freshness_after_leaf)) => {
                 freshness_after_leaf.as_ref() == freshness_after_fontification.as_ref()
             }
@@ -6255,38 +7767,161 @@ impl LayoutEngine {
         };
         if evaluator.frame_manager().window_topology_generation() != topology_generation
             || !lisp_boundaries_remain_valid
-            || !source_capture.unchanged()
-            || (!canonical_source_walk
-                && !previous_sources
-                    .as_ref()
-                    .is_some_and(|sources| sources.unchanged()))
         {
             if let Some(attempt) = window_end_attempt.take() {
                 evaluator.reject_redisplay_window_end_attempt(attempt);
             }
-            return LeafLayoutAttempt::LogicalInputsChanged;
+            let chrome_may_have_entered = matches!(
+                &render_outcome,
+                BufferSourceRenderAttemptOutcome::Finished {
+                    chrome_lisp_admission:
+                        crate::attempt_freshness::LayoutLispAdmission::MayHaveEntered,
+                    ..
+                } | BufferSourceRenderAttemptOutcome::EmptyBodyChromeMeasured {
+                    chrome_lisp_admission:
+                        crate::attempt_freshness::LayoutLispAdmission::MayHaveEntered,
+                    ..
+                } | BufferSourceRenderAttemptOutcome::ChromeSourceInvalidated
+            );
+            return if chrome_may_have_entered {
+                LeafLayoutAttempt::ChromeInputsChanged
+            } else {
+                LeafLayoutAttempt::LogicalInputsChanged
+            };
         }
 
-        // The contiguous pre-pass above is an optimization, not a semantic
-        // visibility boundary.  A provisional row walk can jump over an
-        // arbitrarily large invisible/folded span and reach visible positions
-        // beyond that estimate.  GNU handles `fontified` at exactly those
-        // iterator stops.  Our immutable walk records the equivalent visible
-        // positions; fontify any uncovered sparse spans and retry from a fresh
-        // snapshot before accepting their provisional glyphs.
-        if matches!(
-            &render_outcome,
-            BufferSourceRenderAttemptOutcome::Finished { .. }
-        ) {
-            let coverage = self
-                .window_snapshots
+        // Two fontification requests precede this comment's pass.  The
+        // speculative PREPASS above covers the budget span for hooks that MARK
+        // text; a hook that declines ends that request at its first declined
+        // stop.  The VISIBLE pass below starts from the completed row walk's
+        // own positions, so it follows the stops GNU's iterator actually
+        // displays (handle_fontified_prop, src/xdisp.c:4702-4786), including
+        // GNU's one-row probe past the window end when the walk qualifies.
+        // Sparse spans are fontified before retrying from a fresh snapshot.
+        //
+        // Convergence with a mixed hook (marks one stop, declines a later
+        // one): the prepass reports Fontified, which forces a retry; that
+        // retry's prepass starts on the now-fontified text and its first
+        // remaining unfontified stop is declined, yielding
+        // CallbacksUnchanged; the visible pass then restarts from the window
+        // start and covers the declined stops.
+        //
+        // GNU's reuse decision, not Neo's: `partial_line_height` is skipped
+        // only when `current_matrix_up_to_date_p` held at entry AND the walk
+        // actually took a reuse path.  Neo's own reuse of rows under a stale
+        // window end is an optimization and must not hide the probe-row hook
+        // calls GNU makes.  The three per-buffer/per-window inputs of the
+        // predicate are read from the retained matrix of the last accepted
+        // display, the state GNU keeps in `w->current_matrix` plus
+        // `w->last_modified`/`last_overlay_modified`.
+        let retained_matrix = self
+            .retained_window_matrices
+            .get(&DisplayWindowId::new(params.window_id));
+        let buffer_state = evaluator.buffer_manager().get(buf_id);
+        // GNU `window_outdated` compares `w->last_modified` with `BUF_MODIFF`
+        // and `w->last_overlay_modified` with `BUF_OVERLAY_MODIFF`
+        // (src/window.c:231-236).  `modified_tick` is MODIFF, which also moves
+        // for `restore-buffer-modified-p` (src/buffer.c:1630-1631) and for
+        // text-property changes, so it is the faithful half; the retained
+        // matrix records it at acceptance, after redisplay's own fontification.
+        let window_outdated = match (retained_matrix, buffer_state) {
+            (Some(retained), Some(buffer)) => {
+                retained.gnu_accuracy.as_ref().is_none_or(|accuracy| {
+                    buffer.modified_tick() != accuracy.modified_tick
+                        || buffer.overlay_modified_tick() != accuracy.overlay_modified_tick
+                })
+            }
+            _ => false,
+        };
+        // GNU `prevent_redisplay_optimizations_p` has its own per-buffer
+        // witness (raised by set-buffer-redisplay and force-mode-line-update).
+        // A moved body revision -- GNU `force-window-update` -- refuses too.
+        let prevent_redisplay_optimizations = retained_matrix.is_some_and(|retained| {
+            retained.key.body_redisplay != evaluator.body_redisplay_revision(window_id, buf_id)
+                || retained.gnu_accuracy.as_ref().is_none_or(|accuracy| {
+                    accuracy.redisplay_optimizations
+                        != evaluator.prevent_redisplay_optimizations_revision(buf_id)
+                })
+        });
+        // GNU reads `clip_changed` only after `reconsider_clip_changes (w)`
+        // (src/xdisp.c:20486), which clears it when the window's current
+        // matrix already matches the buffer and its restriction
+        // (src/xdisp.c:17271-17277).  The retained key carries exactly those
+        // matrix facts: buffer identity, BEGV and ZV.
+        let clip_changed = match (retained_matrix, buffer_state) {
+            (Some(retained), Some(buffer)) => {
+                // The key stores BEGV and ZV as `CharPos0` counts
+                // (neovm_bridge.rs:2029-2031), so compare the same form.
+                let matrix_matches = window_end_valid_at_entry
+                    && retained.gnu_accuracy.as_ref().is_some_and(|accuracy| {
+                        accuracy.buffer_id == buf_id
+                            && accuracy.accessible_chars.start() == buffer.point_min_char_pos()
+                            && accuracy.accessible_chars.end() == buffer.point_max_char_pos()
+                    });
+                buffer.mode_line_clip_changed() && !matrix_matches
+            }
+            (Some(_), None) => false,
+            (None, Some(buffer)) => buffer.mode_line_clip_changed(),
+            (None, None) => false,
+        };
+        let gnu_matrix_reuse = GnuMatrixReuse::at_entry(
+            window_end_valid_at_entry,
+            evaluator.gnu_redisplay_refuses_cursor_movement(),
+            self.frame_other_windows_changed,
+            clip_changed,
+            prevent_redisplay_optimizations,
+            window_outdated,
+        );
+        let finished_walk = match &render_outcome {
+            BufferSourceRenderAttemptOutcome::Finished {
+                redisplay_positions,
+                cursor_only,
+                reused_matrix_rows,
+                ..
+            } => Some((
+                redisplay_positions.window_end_lisp(),
+                gnu_matrix_reuse.skips_probe(*cursor_only || reused_matrix_rows.is_some()),
+            )),
+            _ => None,
+        };
+        // Set when this walk's own visible fontification is a source-only
+        // retry. Display-when then compares against that post-hook token, so
+        // the fontifier's admitted source edits are not a second cause.
+        let mut fontification_source_baseline: Option<
+            neovm_core::window::WindowLayoutAttemptFreshness,
+        > = None;
+        if attempt_mode == FrameAttemptMode::Converging
+            && let Some((window_end, skip_probe)) = finished_walk
+        {
+            // GNU `partial_line_height` (`src/xdisp.c:11630-11661`): when
+            // `try_window` ran with TRY_WINDOW_CHECK_MARGINS, it re-walks to
+            // the window bottom and then scans the FIRST screen row after the
+            // window end, entering fontification hooks at that row's stops
+            // (the sole call site is `try_window`, src/xdisp.c:21718).  That
+            // row starts at the walk's published window end.
+            let probe = if skip_probe {
+                neovm_core::emacs_core::xdisp::ProbeRow::None
+            } else {
+                fontification_probe_row(evaluator, params, frame_id, window_id, buf_id, window_end)
+            };
+            let coverage = window_snapshot
                 .iter()
                 .rev()
                 .map(WindowPresentationSnapshot::display_snapshot)
                 .find(|snapshot| snapshot.window_id == window_id)
                 .map(|snapshot| {
-                    let prepass_end =
-                        neovm_core::buffer::CharPos0::new(fontify_end.max(0) as usize);
+                    // A declining pre-walk hook did not fontify the budget
+                    // span, so the walk's visible positions must be
+                    // reconsidered by the coverage pass.  A marking or
+                    // no-callback prepass keeps the old boundary.
+                    let prepass_end = if matches!(
+                        fontification_outcome,
+                        neovm_core::emacs_core::xdisp::RedisplayFontificationOutcome::CallbacksUnchanged
+                    ) {
+                        neovm_core::buffer::CharPos0::new(window_start.max(0) as usize)
+                    } else {
+                        neovm_core::buffer::CharPos0::new(fontify_end.max(0) as usize)
+                    };
                     if admitted_edit_sync_fontify_attempt {
                         VisibleFontificationCoverage::inspect_for_edit_sync(
                             buffer,
@@ -6316,12 +7951,22 @@ impl LayoutEngine {
                 // buffer yields dozens of sparse visible runs -- more than the
                 // retry budget -- so that shape could never converge.
                 let mut requires_replay = false;
-                for span in plan.spans() {
+                let spans: Vec<_> = plan.spans().collect();
+                let last_span = spans.len().checked_sub(1);
+                for (index, span) in spans.iter().enumerate() {
+                    let span_probe = if Some(index) == last_span {
+                        probe
+                    } else {
+                        neovm_core::emacs_core::xdisp::ProbeRow::None
+                    };
                     let outcome = lisp_ledger.rows_fontification.ensure(
                         evaluator,
                         buf_id,
                         span.start(),
                         span.end(),
+                        params.point_charpos().get() as i64 + 1,
+                        neovm_core::emacs_core::xdisp::RedisplayFontificationRequest::VisibleWalk,
+                        span_probe,
                     );
                     requires_replay |= outcome.requires_layout_retry();
                     if evaluator.frame_manager().window_topology_generation() != topology_generation
@@ -6334,18 +7979,58 @@ impl LayoutEngine {
                 }
                 // Check freshness once, after the whole plan ran. The property
                 // ticks it changed were produced by the fontification this
-                // attempt itself requested, and the replay re-walks the frame
-                // with the faces it installed.
+                // attempt itself requested.
                 let freshness_after_visible_fontification =
                     evaluator.window_layout_attempt_freshness(frame_id, window_id, buf_id);
                 if requires_replay
                     || freshness_after_visible_fontification.as_ref()
                         != freshness_after_leaf.as_deref()
                 {
-                    if let Some(attempt) = window_end_attempt.take() {
-                        evaluator.reject_redisplay_window_end_attempt(attempt);
+                    let seals_completed_body = matches!(
+                        position_publication,
+                        WindowPositionPublication::Redisplay
+                            | WindowPositionPublication::RedisplayResumedScrollHook
+                            | WindowPositionPublication::RedisplayMiniEobFallback
+                    );
+                    let source_only = match (
+                        freshness_after_leaf.as_ref(),
+                        freshness_after_visible_fontification.as_ref(),
+                    ) {
+                        (Some(before), Some(after)) => before.remains_valid_across(
+                            after,
+                            neovm_core::window::WindowLayoutLispBoundary::WindowChrome,
+                        ),
+                        _ => false,
+                    };
+                    // A finished body may keep its rows across a source edit
+                    // this fontification itself performed. Finish the siblings
+                    // and seal; the frame loop retries, and publishes this
+                    // attempt when the budget is spent. Owner, physical, and
+                    // topology changes stay on the discard path above.
+                    if seals_completed_body && source_only {
+                        fontification_source_baseline = freshness_after_visible_fontification;
+                        let (first_window, mut stops_fingerprint) =
+                            lisp_ledger.source_only_retry.unwrap_or((
+                                DisplayWindowId::new(params.window_id),
+                                0xcbf29ce484222325,
+                            ));
+                        for word in [params.window_id as u64, spans.len() as u64] {
+                            stops_fingerprint ^= word;
+                            stops_fingerprint = stops_fingerprint.wrapping_mul(0x100000001b3);
+                        }
+                        for span in &spans {
+                            for word in [span.start() as u64, span.end() as u64] {
+                                stops_fingerprint ^= word;
+                                stops_fingerprint = stops_fingerprint.wrapping_mul(0x100000001b3);
+                            }
+                        }
+                        lisp_ledger.source_only_retry = Some((first_window, stops_fingerprint));
+                    } else {
+                        if let Some(attempt) = window_end_attempt.take() {
+                            evaluator.reject_redisplay_window_end_attempt(attempt);
+                        }
+                        return LeafLayoutAttempt::LogicalInputsChanged;
                     }
-                    return LeafLayoutAttempt::LogicalInputsChanged;
                 }
             }
         }
@@ -6357,57 +8042,68 @@ impl LayoutEngine {
             &render_outcome,
             BufferSourceRenderAttemptOutcome::Finished { .. }
         ) {
-            let conditions = layout_buffer.display_when_conditions();
-            let evaluates_lisp = conditions.has_recorded_visits();
-            let settlement = crate::display_when::settle_display_when_visits(
-                evaluator,
-                buf_id,
-                window_id,
-                conditions,
-                display_target,
-                &mut lisp_ledger.display_when,
-            );
-            if evaluates_lisp
-                && (evaluator.frame_manager().window_topology_generation() != topology_generation
-                    || evaluator
-                        .window_layout_attempt_freshness(frame_id, window_id, buf_id)
-                        .as_ref()
-                        != freshness_after_leaf.as_deref())
-            {
-                if let Some(attempt) = window_end_attempt.take() {
-                    evaluator.reject_redisplay_window_end_attempt(attempt);
-                }
-                return LeafLayoutAttempt::LogicalInputsChanged;
-            }
-            match settlement {
-                crate::display_when::DisplayWhenSettlement::Replay => {
+            if attempt_mode == FrameAttemptMode::ExhaustionSnapshot {
+                lisp_ledger
+                    .display_when
+                    .settle_window(window_id, crate::display_when::DisplayWhenRecord::Unknown);
+            } else {
+                let conditions = layout_buffer.display_when_conditions();
+                let evaluates_lisp = conditions.has_recorded_visits();
+                let settlement = crate::display_when::settle_display_when_visits(
+                    evaluator,
+                    buf_id,
+                    window_id,
+                    conditions,
+                    display_target,
+                    &mut lisp_ledger.display_when,
+                );
+                let display_when_baseline = fontification_source_baseline
+                    .as_ref()
+                    .or(freshness_after_leaf.as_deref());
+                if evaluates_lisp
+                    && (evaluator.frame_manager().window_topology_generation()
+                        != topology_generation
+                        || evaluator
+                            .window_layout_attempt_freshness(frame_id, window_id, buf_id)
+                            .as_ref()
+                            != display_when_baseline)
+                {
                     if let Some(attempt) = window_end_attempt.take() {
                         evaluator.reject_redisplay_window_end_attempt(attempt);
                     }
-                    return LeafLayoutAttempt::DisplayWhenReplay;
+                    return LeafLayoutAttempt::PostWalkDisplayWhenInputsChanged;
                 }
-                crate::display_when::DisplayWhenSettlement::Settled(record) => {
-                    // A reuse without evaluation keeps the rows, and so the
-                    // record, it reused.
-                    let record = if display_when_reuse
-                        && record == crate::display_when::DisplayWhenRecord::NoSites
-                    {
-                        crate::display_when::DisplayWhenRecord::Known
-                    } else {
-                        record
-                    };
-                    tracing::trace!(target: "neomacs_layout_engine::display_when",
-                        window = window_id.0, ?record, display_when_reuse,
-                        "walk's `when' record settled");
-                    // The record lives with the frame attempt's display-when
-                    // ledger (a stack local), not in LayoutEngine: it must not
-                    // add bytes to the thread-local redisplay runtime.
-                    lisp_ledger.display_when.settle_window(window_id, record);
+                match settlement {
+                    crate::display_when::DisplayWhenSettlement::Replay => {
+                        if let Some(attempt) = window_end_attempt.take() {
+                            evaluator.reject_redisplay_window_end_attempt(attempt);
+                        }
+                        return LeafLayoutAttempt::DisplayWhenReplay;
+                    }
+                    crate::display_when::DisplayWhenSettlement::Settled(record) => {
+                        // A reuse without evaluation keeps the rows, and so the
+                        // record, it reused.
+                        let record = if display_when_reuse
+                            && record == crate::display_when::DisplayWhenRecord::NoSites
+                        {
+                            crate::display_when::DisplayWhenRecord::Known
+                        } else {
+                            record
+                        };
+                        tracing::trace!(target: "neomacs_layout_engine::display_when",
+                            window = window_id.0, ?record, display_when_reuse,
+                            "walk's `when' record settled");
+                        // The record lives with the frame attempt's display-when
+                        // ledger (a stack local), not in LayoutEngine: it must not
+                        // add bytes to the thread-local redisplay runtime.
+                        lisp_ledger.display_when.settle_window(window_id, record);
+                    }
                 }
             }
         }
 
         drop(freshness_after_leaf);
+        let completed_body_key;
         let (redisplay_positions, effective_default_face, line_number_field) = match render_outcome
         {
             BufferSourceRenderAttemptOutcome::GlyphMatrixCapacityExhausted => {
@@ -6445,10 +8141,18 @@ impl LayoutEngine {
                 return LeafLayoutAttempt::LogicalInputsChanged;
             }
             BufferSourceRenderAttemptOutcome::LogicalInputsChanged => {
+                reject_changed_cursor_sources(evaluator, &mut window_end_attempt, true);
+                return LeafLayoutAttempt::LogicalInputsChanged;
+            }
+            BufferSourceRenderAttemptOutcome::ChromeSourceInvalidated => {
+                reject_changed_cursor_sources(evaluator, &mut window_end_attempt, true);
+                return LeafLayoutAttempt::ChromeInputsChanged;
+            }
+            BufferSourceRenderAttemptOutcome::OverlayViewUnusable(reason) => {
                 if let Some(attempt) = window_end_attempt.take() {
                     evaluator.reject_redisplay_window_end_attempt(attempt);
                 }
-                return LeafLayoutAttempt::LogicalInputsChanged;
+                return LeafLayoutAttempt::OverlayViewUnusable(reason);
             }
             BufferSourceRenderAttemptOutcome::GnuMiniEobCursorUnavailable { boundary } => {
                 if let Some(attempt) = window_end_attempt.take() {
@@ -6477,7 +8181,9 @@ impl LayoutEngine {
                 let effect = LayoutEffect::RunWindowScrollFunctions(
                     crate::layout_effect::WindowScrollEffect::new(site),
                 );
-                if evaluator.window_scroll_functions_may_run(window_id) {
+                if attempt_mode == FrameAttemptMode::Converging
+                    && evaluator.window_scroll_functions_may_run(window_id)
+                {
                     return LeafLayoutAttempt::Effect(effect);
                 }
                 // With no Lisp hook, acknowledge the same semantic decision
@@ -6491,7 +8197,8 @@ impl LayoutEngine {
                 }));
             }
             BufferSourceRenderAttemptOutcome::EmptyBodyChromeMeasured { measured, .. }
-                if layout_box.chrome() != measured =>
+                if attempt_mode == FrameAttemptMode::Converging
+                    && layout_box.chrome() != measured =>
             {
                 if let Some(attempt) = window_end_attempt.take() {
                     evaluator.reject_redisplay_window_end_attempt(attempt);
@@ -6502,6 +8209,8 @@ impl LayoutEngine {
                         measured,
                     },
                     window_end_attempt: None,
+                    snapshot: window_snapshot,
+                    produced_key: None,
                 };
             }
             BufferSourceRenderAttemptOutcome::Skipped
@@ -6514,22 +8223,26 @@ impl LayoutEngine {
                         // produced and there is no field on screen to report.
                         None,
                     ));
-                self.window_snapshots.push(WindowPresentationSnapshot::live(
-                    WindowDisplaySnapshot {
-                        window_id,
-                        cell_origin: neovm_core::window::geometry::CellOrigin::new(
-                            params.left_col,
-                            params.top_line,
-                        ),
-                        regions: layout_box.regions(),
-                        regions_materialized: false,
-                        ..WindowDisplaySnapshot::default()
-                    },
-                ));
-                self.mark_inactive_echo_snapshot_geometry_only(window_id, position_publication);
+                self.publish_window_fringe_backgrounds(buffer, face_resolver, layout_box);
+                window_snapshot = Some(WindowPresentationSnapshot::live(WindowDisplaySnapshot {
+                    window_id,
+                    cell_origin: neovm_core::window::geometry::CellOrigin::new(
+                        params.left_col,
+                        params.top_line,
+                    ),
+                    regions: layout_box.regions(),
+                    regions_materialized: false,
+                    ..WindowDisplaySnapshot::default()
+                }));
+                Self::mark_inactive_echo_snapshot_geometry_only(
+                    &mut window_snapshot,
+                    position_publication,
+                );
                 return LeafLayoutAttempt::Completed {
                     outcome: WindowLayoutOutcome::Skipped,
                     window_end_attempt,
+                    snapshot: window_snapshot,
+                    produced_key: None,
                 };
             }
             BufferSourceRenderAttemptOutcome::ReplayMispredicted
@@ -6576,16 +8289,20 @@ impl LayoutEngine {
                 let freshness_before_motion =
                     evaluator.window_layout_attempt_freshness(frame_id, window_id, buf_id);
                 let point = neovm_core::buffer::CharPos0::new(params.point.max(0) as usize);
-                let resolved_start = evaluator
-                    .redisplay_start_before_point_by_display_rows(
-                        buf_id,
-                        window_id,
-                        point,
-                        lines_above_point,
-                    )
-                    .map_or(fallback_window_start, |start| {
-                        ResolvedWindowStart::from_layout_charpos(start.get() as i64)
-                    });
+                let resolved_start = if attempt_mode == FrameAttemptMode::ExhaustionSnapshot {
+                    fallback_window_start
+                } else {
+                    evaluator
+                        .redisplay_start_before_point_by_display_rows(
+                            buf_id,
+                            window_id,
+                            point,
+                            lines_above_point,
+                        )
+                        .map_or(fallback_window_start, |start| {
+                            ResolvedWindowStart::from_layout_charpos(start.get() as i64)
+                        })
+                };
                 tracing::debug!(
                     "layout_window_rust: point-relative placement win={} point={} lines_above={} fallback={} resolved={} remaining={}",
                     params.window_id,
@@ -6707,49 +8424,30 @@ impl LayoutEngine {
                 query_row_coverage,
                 query_target_prefix_policy,
                 window_end_record,
-                freshness_before_chrome: _,
+                freshness_before_chrome,
                 chrome_lisp_admission: _,
                 effective_default_face,
                 cursor_only,
                 reused_matrix_rows,
                 line_number_field_width,
             } => {
-                // Only the canonical producer establishes completeness. A
-                // cursor-only walk carries the original certificate, never an
-                // empty observation from skipping the strings. Partial walks
-                // preserve original known domains; newly expanded domains
-                // validate this frame but require a fresh canonical next walk.
-                if reject_changed_cursor_sources(
-                    evaluator,
-                    &mut window_end_attempt,
-                    !source_capture.unchanged()
-                        || (!canonical_source_walk
-                            && !previous_sources
-                                .as_ref()
-                                .is_some_and(|sources| sources.unchanged())),
-                ) {
-                    return LeafLayoutAttempt::LogicalInputsChanged;
+                let body = freshness_before_chrome;
+                if let Some(snapshot) = window_snapshot.as_mut() {
+                    let snapshot = snapshot.display_snapshot_mut();
+                    snapshot.layout_freshness = body.freshness.into_freshness();
+                    snapshot.buffer_modiff = Some(body.buffer_modiff);
                 }
-                let observed = source_capture.finish();
-                let sources = if canonical_source_walk {
-                    observed
-                } else if unchanged_body_replay {
-                    previous_sources
-                } else {
-                    previous_sources
-                        .as_ref()
-                        .and_then(|old| observed.and_then(|fresh| old.after_partial_walk(fresh)))
-                };
-                let Some(sources) = sources else {
-                    // Unknown observations cannot authorize this frame after
-                    // later Lisp callbacks. Use the coordinator's bounded
-                    // retry/abort policy, not a fabricated empty certificate.
-                    if let Some(attempt) = window_end_attempt.take() {
-                        evaluator.reject_redisplay_window_end_attempt(attempt);
-                    }
-                    return LeafLayoutAttempt::LogicalInputsChanged;
-                };
-                lisp_ledger.cursor_sources.insert(source_window, sources);
+                lisp_ledger.completed_body_inputs.insert(
+                    source_window,
+                    CompletedBodyIdentity {
+                        source_buffer: buf_id,
+                        inputs: body.attempt,
+                    },
+                );
+                completed_body_key = Some(body.key);
+                lisp_ledger
+                    .cursor_sources
+                    .insert(source_window, body.sources);
                 if position_publication.is_synchronous_query() {
                     self.query_row_coverage = query_row_coverage;
                     self.query_target_prefix_policy = query_target_prefix_policy;
@@ -6757,8 +8455,7 @@ impl LayoutEngine {
                 if params.measurement_pixels.is_some() {
                     self.query_restart_rows = query_restart_rows;
                 }
-                if let Some(snapshot) = self
-                    .window_snapshots
+                if let Some(snapshot) = window_snapshot
                     .iter_mut()
                     .rev()
                     .map(|snapshot| snapshot.display_snapshot_mut())
@@ -6798,6 +8495,7 @@ impl LayoutEngine {
                 live_window_frame_metadata(evaluator, buf_id),
                 line_number_field,
             ));
+        self.publish_window_fringe_backgrounds(buffer, face_resolver, layout_box);
 
         tracing::debug!(
             "  layout_window_rust: window_start={} window_end={}",
@@ -6806,16 +8504,21 @@ impl LayoutEngine {
         );
 
         let assumed = WindowChromeMetrics::from_params(params);
-        let measured = self
-            .window_snapshots
+        let measured = window_snapshot
             .iter()
             .rev()
             .map(WindowPresentationSnapshot::display_snapshot)
             .find(|snapshot| snapshot.window_id == window_id)
             .map(WindowChromeMetrics::from_snapshot)
             .unwrap_or(assumed);
-        let outcome =
-            WindowLayoutOutcome::from_measurement(*layout_box, measured, effective_default_face);
+        let outcome = if attempt_mode == FrameAttemptMode::ExhaustionSnapshot {
+            WindowLayoutOutcome::Stable {
+                layout_box: *layout_box,
+                effective_default_face,
+            }
+        } else {
+            WindowLayoutOutcome::from_measurement(*layout_box, measured, effective_default_face)
+        };
         if let WindowLayoutOutcome::NeedsRelayout { assumed, measured } = outcome {
             if let Some(attempt) = window_end_attempt.take() {
                 evaluator.reject_redisplay_window_end_attempt(attempt);
@@ -6827,11 +8530,48 @@ impl LayoutEngine {
                 "window chrome metrics changed; rejecting speculative layout"
             );
         } else {
-            self.mark_inactive_echo_snapshot_geometry_only(window_id, position_publication);
+            Self::mark_inactive_echo_snapshot_geometry_only(
+                &mut window_snapshot,
+                position_publication,
+            );
         }
         LeafLayoutAttempt::Completed {
             outcome,
             window_end_attempt,
+            snapshot: window_snapshot,
+            produced_key: completed_body_key,
+        }
+    }
+
+    /// Paint the window's left and right fringe columns with the window's
+    /// resolved `fringe` face background (honoring buffer-local
+    /// `face-remapping-alist`, matching GNU `draw_window_fringes` in
+    /// `src/fringe.c`). Runs for accepted and empty/minibuffer windows; TTY
+    /// frames have no fringe regions and emit nothing.
+    fn publish_window_fringe_backgrounds(
+        &mut self,
+        buffer: &impl super::neovm_bridge::LayoutBufferView,
+        face_resolver: &super::neovm_bridge::FaceResolver,
+        layout_box: &crate::window_layout::WindowLayoutBox,
+    ) {
+        let regions = layout_box.regions();
+        if regions.left_fringe.is_none() && regions.right_fringe.is_none() {
+            return;
+        }
+        let fringe_face = crate::display_row::face_environment::FrameFaces::new(face_resolver)
+            .for_window(buffer)
+            .resolve_fixed_face(neovm_core::emacs_core::intern::WellKnown::Fringe);
+        if fringe_face.use_default_background {
+            return;
+        }
+        let color = Color::from_pixel(fringe_face.bg);
+        for rect in [regions.left_fringe, regions.right_fringe]
+            .into_iter()
+            .flatten()
+        {
+            if rect.width > 0.0 && rect.height > 0.0 {
+                self.frame_output.add_fringe_background(rect, color);
+            }
         }
     }
 
@@ -6845,9 +8585,18 @@ impl LayoutEngine {
         buf_id: neovm_core::buffer::BufferId,
         from: i64,
         to: i64,
+        request: neovm_core::emacs_core::xdisp::RedisplayFontificationRequest,
+        probe: neovm_core::emacs_core::xdisp::ProbeRow,
+        window_point: i64,
     ) -> neovm_core::emacs_core::xdisp::RedisplayFontificationOutcome {
-        match neovm_core::emacs_core::xdisp::ensure_fontified_for_redisplay(
-            evaluator, buf_id, from, to,
+        match neovm_core::emacs_core::xdisp::ensure_fontified_for_redisplay_for_window_request(
+            evaluator,
+            buf_id,
+            from,
+            to,
+            request,
+            probe,
+            window_point,
         ) {
             Ok(outcome) => outcome,
             Err(e) => {
@@ -6855,6 +8604,239 @@ impl LayoutEngine {
                 neovm_core::emacs_core::xdisp::RedisplayFontificationOutcome::CallbacksUnchanged
             }
         }
+    }
+}
+
+/// GNU's matrix-reuse eligibility for one window redisplay
+/// (`current_matrix_up_to_date_p`, src/xdisp.c:20557-20586).
+///
+/// `redisplay_window` reads `w->window_end_valid` at ENTRY and only consults
+/// `try_cursor_movement` (`:20923`) and
+/// `try_window_reusing_current_matrix` (`:21041`) when the predicate holds.
+/// The same-start branch otherwise falls into
+/// `try_window (..., TRY_WINDOW_CHECK_MARGINS)` (`:21052`), so this is also
+/// the gate for `partial_line_height`'s probe row.
+///
+/// Known follow-ups (N1-F2..F5) — each is a GNU comparison this predicate's
+/// first implementation does not perform yet; none changes the six inputs
+/// above:
+///
+/// * N1-F2 — GNU's strict boundary in `window_outdated` (src/window.c:231-236)
+///   is `w->last_modified < BUF_MODIFF` and
+///   `w->last_overlay_modified < BUF_OVERLAY_MODIFF`.  Neo records both ticks
+///   at acceptance and compares with `!=`, so a tick that moves backwards
+///   refuses reuse where GNU would accept it.
+/// * N1-F3 — hscroll/vscroll buffer scope.  GNU raises the *buffer's*
+///   `prevent_redisplay_optimizations_p` when `set-window-hscroll` changes
+///   `w->hscroll` (src/window.c:1303), `set-window-vscroll` changes
+///   `w->vscroll` (src/window.c:8971), or redisplay auto-hscrolls
+///   (src/xdisp.c:16879), so every window showing that buffer refuses reuse.
+///   Neo records hscroll/vscroll in the changed window's retained key but
+///   does not raise the buffer's prevent revision, so a sibling window
+///   showing the same buffer can still reuse its matrix.
+/// * N1-F4 — jit-lock steady state.  GNU records `w->last_modified` /
+///   `w->last_overlay_modified` only when the matrix is marked accurate
+///   (`mark_window_display_accurate_1`, src/xdisp.c:18282-18290); Neo records
+///   them on every accepted retained matrix.  Verify that repeated
+///   property-only fontification settles to one rebuild and then reuses.
+/// * N1-F5 — recenter/scroll `TRY_WINDOW_CHECK_MARGINS`.  GNU passes the
+///   flag on the same-start (`src/xdisp.c:21052`) and recenter (`:21403`)
+///   walks, where `partial_line_height` can move the window start; Neo has no
+///   carried check-margins bit and refuses every non-presentation walk, so
+///   that arm is UNATTESTED.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum GnuMatrixReuse {
+    /// The predicate held at entry: GNU may display this window from the
+    /// current matrix and `partial_line_height` does not run.
+    Eligible,
+    /// GNU re-walks with `try_window (..., TRY_WINDOW_CHECK_MARGINS)`.
+    NotEligible,
+}
+
+impl GnuMatrixReuse {
+    /// `window_end_valid` must be the value from the START of this window's
+    /// redisplay: the walk republishes it.
+    ///
+    /// `windows_or_buffers_changed` clears `w->window_end_valid` and forces
+    /// the predicate false (src/xdisp.c:20576-20586); Neo represents that
+    /// pending scope with `gnu_redisplay_refuses_cursor_movement`, and the
+    /// sibling-window change flag is its frame-local companion.
+    ///
+    /// The predicate has three more per-buffer/per-window inputs
+    /// (src/xdisp.c:20557-20565):
+    ///
+    /// * `current_buffer->clip_changed` is not read raw: `redisplay_window`
+    ///   calls `reconsider_clip_changes (w)` first (src/xdisp.c:20486,
+    ///   :17271-17277), which clears it when the window's current matrix still
+    ///   matches the buffer and its BEGV/ZV.  Neo's caller performs the same
+    ///   reconsideration against the retained matrix's buffer/BEGV/ZV before
+    ///   passing `clip_changed`; the durable witness itself is never cleared
+    ///   here (the mode-line path owns that).
+    /// * `current_buffer->prevent_redisplay_optimizations_p` has its own
+    ///   per-buffer revision, raised by `set-buffer-redisplay`
+    ///   (src/xdisp.c:929) and both `force-mode-line-update` branches
+    ///   (src/buffer.c:1538-1545) and recorded on the accepted matrix outside
+    ///   its reuse key.  `force-window-update` additionally moves the body
+    ///   revision; either move is a refusal.  Chrome-only raises never move
+    ///   the body revision.
+    /// * `window_outdated (w)` -- `w->last_modified < BUF_MODIFF` or
+    ///   `w->last_overlay_modified < BUF_OVERLAY_MODIFF` (src/window.c:231-236).
+    ///   Neo records both at acceptance (`modified_tick`, the overlay tick).
+    ///   Its own reuse keys the overlay SET on a digest, so the raw overlay
+    ///   tick must be compared here: a touch that leaves the set identical is
+    ///   still "outdated" to GNU and still disables its optimizations.
+    ///
+    /// A window that is stale for any of these is `NotEligible` even if the
+    /// walk later reuses rows internally.
+    fn at_entry(
+        window_end_valid: bool,
+        refuses_cursor_movement: bool,
+        other_windows_changed: bool,
+        clip_changed: bool,
+        prevent_redisplay_optimizations: bool,
+        window_outdated: bool,
+    ) -> Self {
+        if window_end_valid
+            && !refuses_cursor_movement
+            && !other_windows_changed
+            && !clip_changed
+            && !prevent_redisplay_optimizations
+            && !window_outdated
+        {
+            Self::Eligible
+        } else {
+            Self::NotEligible
+        }
+    }
+
+    /// GNU runs `partial_line_height` unless the predicate held AND the walk
+    /// reused the current matrix.  When the predicate held but Neo rebuilt
+    /// the rows, GNU's own fallback would have called `try_window` with the
+    /// check-margins flag, so the probe still runs.
+    fn skips_probe(self, walk_reused_rows: bool) -> bool {
+        self == Self::Eligible && walk_reused_rows
+    }
+}
+
+/// GNU `partial_line_height`'s probe row (`src/xdisp.c:11630-11661`).
+///
+/// `try_window` runs it only under `TRY_WINDOW_CHECK_MARGINS` with
+/// `w->vscroll == 0` in a non-minibuffer window (`src/xdisp.c:21696-21722`);
+/// the flag is passed on the same-window-start path (`:21052`) and recenter
+/// (`:21402`) but not on a forced start (`:20767`, `:20901`) or a plain
+/// `try_window (..., 0)`.  Neo has no carried check-margins bit: this helper
+/// represents that gate by refusing every non-presentation walk (query
+/// target, measurement rows/pixels, accessible-end extent) and every
+/// `force_start` walk; the matrix-reuse half of the gate is
+/// [`GnuMatrixReuse`], applied by the caller.  `partial_line_height` walks to
+/// the window bottom
+/// and, unless that walk hits EOB, scans the FIRST screen row after the
+/// window end with `move_it_by_lines (&it, 1)`.  The returned typed probe is
+/// that row's exclusive Lisp end.  A long-line truncated buffer returns early
+/// (`:11636-11638`).
+///
+/// The row starts at the completed walk's PUBLISHED window end -- the
+/// exclusive first position after the last displayed row, the same value the
+/// engine records as `window-end` -- and its boundary is measured by the
+/// display line-motion engine (`MotionEngine::ComputeMotion`), not from a
+/// character count, so wrapping and truncation decide it.
+fn fontification_probe_row(
+    evaluator: &mut neovm_core::emacs_core::Context,
+    params: &crate::types::WindowParams,
+    frame_id: neovm_core::window::FrameId,
+    window_id: neovm_core::window::WindowId,
+    buf_id: neovm_core::buffer::BufferId,
+    window_end: neovm_core::buffer::LispCharPos1,
+) -> neovm_core::emacs_core::xdisp::ProbeRow {
+    use neovm_core::emacs_core::xdisp::ProbeRow;
+    // `force_start` bypasses TRY_WINDOW_CHECK_MARGINS (src/xdisp.c:20767,
+    // :20901): one pass, no probe row.
+    if params.force_start {
+        return ProbeRow::None;
+    }
+    // Neo does not carry GNU's TRY_WINDOW_CHECK_MARGINS bit; these params
+    // identify the walks that are not a margin-checked presentation walk
+    // (`try_window (..., 0)` and synchronous measurement/query walks), and
+    // they get no probe.
+    if params.query_target.is_some()
+        || params.measurement_rows.is_some()
+        || params.measurement_pixels.is_some()
+        || params.source_extent == crate::types::WindowSourceExtent::AccessibleEnd
+    {
+        return ProbeRow::None;
+    }
+    // `try_window`'s own gates (src/xdisp.c:21696-21722).
+    if params.is_minibuffer() {
+        return ProbeRow::None;
+    }
+    let Some(window) = evaluator
+        .frame_manager()
+        .get(frame_id)
+        .and_then(|frame| frame.find_window(window_id))
+    else {
+        return ProbeRow::None;
+    };
+    if let neovm_core::window::Window::Leaf { vscroll, .. } = window
+        && *vscroll != 0
+    {
+        return ProbeRow::None;
+    }
+    let Some(buffer) = evaluator.edit.buffers.get(buf_id) else {
+        return ProbeRow::None;
+    };
+    // `partial_line_height` returns early for a long-line truncated buffer
+    // (src/xdisp.c:11636-11638).
+    if buffer.long_line_optimizations_p()
+        && params.wrap_mode == crate::types::LineWrapMode::Truncate
+    {
+        return ProbeRow::None;
+    }
+    // GNU's `move_it_to (..., it.last_visible_y, ...)` re-walks the window to
+    // its bottom and `move_it_by_lines (&it, 1)` then scans the FIRST screen
+    // row after the window end (`src/xdisp.c:11630-11661`). That row starts at
+    // the position Neo publishes as `window-end`: the exclusive first
+    // position after the last displayed row, passed in from the same
+    // `TextWindowRedisplayPositions` record the engine turns into the
+    // `WindowEndRecord` it publishes (and that `window-end` returns).
+    //
+    // Do not derive it from `visible_buffer_span().end()`: that is the last
+    // drawn glyph (an inclusive position), and a right-truncated row reports
+    // its skipped line terminator there, so a probe started there begins
+    // inside a row the window already displayed and its one-line advance
+    // does not reach the following row. The published end also sits after a
+    // closing glyph that covers a source range (`display` property or
+    // composition), where last-glyph arithmetic has no exact successor in the
+    // buffer.
+    let probe_start = window_end;
+    // The re-walk reached EOB: GNU takes the `IT_EOB` branch and never scans
+    // a following row (`src/xdisp.c:11644-11649`).
+    if probe_start.as_i64() >= buffer.point_max_lisp_char_pos().as_i64() {
+        return ProbeRow::None;
+    }
+    let start_byte = buffer.lisp_pos_to_emacs_byte_pos(probe_start);
+    // Pass the laid-out window, not the selected one: GNU's
+    // `move_it_by_lines` uses THIS window's width and wrap decision.
+    let window_value = Value::make_window(window_id.0);
+    let Ok((end_byte, moved)) = neovm_core::emacs_core::indent::vmotion_target(
+        evaluator,
+        buf_id,
+        start_byte,
+        Some(window_value),
+        1,
+    ) else {
+        return ProbeRow::None;
+    };
+    if moved == 0 || end_byte <= start_byte {
+        return ProbeRow::None;
+    }
+    let Some(buffer) = evaluator.edit.buffers.get(buf_id) else {
+        return ProbeRow::None;
+    };
+    let end_lisp = buffer.emacs_byte_pos_to_lisp_char_pos(end_byte).as_i64();
+    if end_lisp <= probe_start.as_i64() {
+        ProbeRow::None
+    } else {
+        ProbeRow::Through(end_lisp)
     }
 }
 
@@ -6893,6 +8875,9 @@ impl LayoutEngine {
         let mut face_ids = face_attempt.clone();
         let automatic_composition =
             crate::neovm_bridge::current_string_composition_rules(evaluator);
+        let root_scope = crate::string_property_snapshot::StringSourceRootScope::Rooted(
+            evaluator.owned_root_retainer(),
+        );
         let rendered_tab_bar = {
             let (display_host, evaluator) = if face_resolver.has_tty_realization() {
                 (None, Some(&mut *evaluator))
@@ -6919,9 +8904,14 @@ impl LayoutEngine {
                     text: tab_bar.text,
                     image_scale_environment: frame_params.image_scale_environment,
                 },
-                ChromeRowRenderServices::new(&mut self.font_metrics, face_resolver, &mut face_ids)
-                    .with_face_realizer(realizer)
-                    .with_automatic_composition(automatic_composition),
+                ChromeRowRenderServices::new(
+                    &mut self.font_metrics,
+                    face_resolver,
+                    &mut face_ids,
+                    root_scope,
+                )
+                .with_face_realizer(realizer)
+                .with_automatic_composition(automatic_composition),
                 display_host,
             )
         }?;

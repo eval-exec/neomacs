@@ -337,7 +337,10 @@ fn validate_owner_frame_records(
 }
 
 impl HostRegistry {
-    pub(crate) fn validate_owner_step_baton(&self, baton: &Baton) -> Result<(), OwnerStepError> {
+    pub(crate) fn validate_owner_step_baton(
+        &self,
+        baton: &TurnRight,
+    ) -> Result<(), OwnerStepError> {
         if !baton.held_here() {
             return Err(HostRootError::BatonRequired.into());
         }
@@ -354,7 +357,7 @@ impl HostRegistry {
 
     pub(crate) fn request_owner_interruption(
         &mut self,
-        baton: &Baton,
+        baton: &TurnRight,
         parent: HostRequestKey,
         reason: CancelReason,
     ) -> Result<OwnerInterruption, OwnerStepError> {
@@ -368,7 +371,7 @@ impl HostRegistry {
 
     pub(crate) fn owner_interruption(
         &self,
-        baton: &Baton,
+        baton: &TurnRight,
         key: StepKey,
     ) -> Result<OwnerInterruption, OwnerStepError> {
         self.validate_owner_step_baton(baton)?;
@@ -412,7 +415,7 @@ impl HostRegistry {
     /// a restored requester prepares its next semantic stop.
     pub(crate) fn issue_owner_step(
         &mut self,
-        baton: &Baton,
+        baton: &TurnRight,
         heap: &TaggedHeap,
         parent: HostRequestKey,
         owner: ThreadKey,
@@ -445,7 +448,7 @@ impl HostRegistry {
 
     pub(crate) fn prepare_owner_step(
         &mut self,
-        baton: &Baton,
+        baton: &TurnRight,
         heap: &TaggedHeap,
         pending: PendingStep,
     ) -> Result<(), RejectedContinuation<PendingStep>> {
@@ -490,7 +493,7 @@ impl HostRegistry {
     /// cleanup during Closing, while its current consuming claim remains live.
     pub(crate) fn issue_successor(
         &mut self,
-        baton: &Baton,
+        baton: &TurnRight,
         heap: &TaggedHeap,
         access: &ContinuationAccess,
     ) -> Result<StepKey, OwnerStepError> {
@@ -524,7 +527,7 @@ impl HostRegistry {
 
     pub(crate) fn prepare_successor(
         &mut self,
-        baton: &Baton,
+        baton: &TurnRight,
         heap: &TaggedHeap,
         access: &ContinuationAccess,
         pending: PendingStep,
@@ -568,7 +571,7 @@ impl HostRegistry {
     /// This mutates metadata, never dereferences a worker Lisp object.
     pub(crate) fn publish_owner_step(
         &mut self,
-        baton: &Baton,
+        baton: &TurnRight,
         key: StepKey,
     ) -> Result<(), OwnerStepError> {
         if !baton.held_here() {
@@ -649,7 +652,7 @@ impl HostRegistry {
 
     pub(crate) fn validate_continuation_access(
         &self,
-        baton: &Baton,
+        baton: &TurnRight,
         heap: &TaggedHeap,
         access: &ContinuationAccess,
     ) -> Result<(), OwnerStepError> {
@@ -669,7 +672,7 @@ impl HostRegistry {
     /// no GC, callback or handoff occurs through registration.
     pub(crate) unsafe fn register_continuation<K: RegisteredRecord>(
         &mut self,
-        baton: &Baton,
+        baton: &TurnRight,
         heap: &TaggedHeap,
         access: &ContinuationAccess,
         roots: &[TaggedValue],
@@ -691,7 +694,7 @@ impl HostRegistry {
 
     pub(crate) fn complete_owner_step(
         &mut self,
-        baton: &Baton,
+        baton: &TurnRight,
         heap: &TaggedHeap,
         completion: StepCompletion,
     ) -> Result<(), RejectedContinuation<StepCompletion>> {
@@ -798,7 +801,7 @@ impl HostRegistry {
 
     pub(crate) fn take_owner_completion(
         &mut self,
-        baton: &Baton,
+        baton: &TurnRight,
         key: StepKey,
     ) -> Result<OwnerStepReady, OwnerStepError> {
         if !baton.held_here() {
@@ -834,7 +837,7 @@ impl HostRegistry {
 
     pub(crate) fn validate_owner_completion(
         &self,
-        baton: &Baton,
+        baton: &TurnRight,
         key: StepKey,
     ) -> Result<(), OwnerStepError> {
         if !baton.held_here() {
@@ -851,7 +854,7 @@ impl HostRegistry {
 
     pub(crate) fn finish_native_owner_step(
         &mut self,
-        baton: &Baton,
+        baton: &TurnRight,
         settled: super::scheduling::NativeCleanupSettled,
     ) -> Result<(), OwnerStepError> {
         self.validate_owner_step_baton(baton)?;
@@ -877,7 +880,7 @@ impl HostRegistry {
     /// Active owner authority is never disposed through this transition.
     pub(crate) fn finish_unstarted_owner_step(
         &mut self,
-        baton: &Baton,
+        baton: &TurnRight,
         unstarted: super::scheduling::UnstartedHostCall,
     ) -> Result<(), OwnerStepError> {
         self.validate_owner_step_baton(baton)?;
@@ -890,7 +893,7 @@ impl HostRegistry {
 
     pub(crate) fn revoke_owner_step(
         &mut self,
-        baton: &Baton,
+        baton: &TurnRight,
         ended: &super::super::scheduler::EndedServiceOwner,
         key: StepKey,
     ) -> Result<(), OwnerStepError> {
@@ -979,7 +982,7 @@ impl HostRegistry {
 
     pub(crate) fn copy_owner_frame(
         &self,
-        baton: &Baton,
+        baton: &TurnRight,
         heap: &TaggedHeap,
         key: StepKey,
         slots: [OwnerFrameRecordSlot; 3],
@@ -1037,7 +1040,7 @@ pub(super) struct OwnerExecutionFrame<'owner> {
 /// every return or unwind, without needing another evaluator borrow.
 struct OwnerBatonLoan<'seat> {
     seat: &'seat mut super::super::GreenSeat,
-    baton: Option<Baton>,
+    baton: Option<TurnRight>,
 }
 
 impl<'seat> OwnerBatonLoan<'seat> {
@@ -1052,7 +1055,7 @@ impl<'seat> OwnerBatonLoan<'seat> {
         })
     }
 
-    pub(crate) fn baton(&self) -> Result<&Baton, HostRootError> {
+    pub(crate) fn baton(&self) -> Result<&TurnRight, HostRootError> {
         self.baton.as_ref().ok_or(HostRootError::BatonRequired)
     }
 }

@@ -452,11 +452,10 @@ impl ConstantsVector {
         self.value
     }
 
-    pub fn as_slice(&self) -> &[Value] {
+    pub fn as_slice(&self) -> &neovm_value::tagged::header::LispValueSlice {
         self.value
             .as_vector_data()
             .expect("ConstantsVector constructor checked the vector payload")
-            .as_slice()
     }
 }
 

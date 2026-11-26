@@ -10,7 +10,7 @@
 use crate::error::LispCondition;
 use crate::error::{EvalResult, Flow, signal};
 use crate::error::{expect_args, expect_max_args, expect_min_args};
-use crate::intern::{SymId, resolve_sym};
+use crate::intern::{RecordedSymbolName, recorded_symbol_name, resolve_sym_lisp_string};
 use crate::tagged::SymbolMode;
 use crate::tagged::gc::with_tagged_heap;
 use crate::value::positions::{CharLen, CharPos0, CharRange};
@@ -31,7 +31,7 @@ pub struct HashTestGcInhibitAccounting {
     /// Resolved only when GC-maybe first needs the saved entry operands.
     pub(crate) threshold_at_start: Option<std::num::NonZeroUsize>,
     pub(crate) entry_threshold_bytes: usize,
-    pub(crate) entry_percentage_scaled: Option<std::num::NonZeroU64>,
+    pub(crate) entry_percentage: Option<f64>,
     pub(crate) threshold_overridden: bool,
     pub(crate) memory_full: bool,
     pub(crate) startup_ceiling: bool,
@@ -94,7 +94,24 @@ pub(crate) fn hash_key_to_value(key: &HashKey) -> Value {
         HashKey::Window(id) => Value::make_window(*id),
         HashKey::Frame(id) => Value::make_frame(*id),
         HashKey::Ptr(_) => Value::NIL, // can't reconstruct from pointer
-        HashKey::EqualCons(car, cdr) => Value::cons(hash_key_to_value(car), hash_key_to_value(cdr)),
+        HashKey::EqualCons(_, _) => {
+            let mut cars = Vec::new();
+            let mut node = key;
+            let tail = loop {
+                match node {
+                    HashKey::EqualCons(car, cdr) => {
+                        cars.push(hash_key_to_value(car));
+                        node = cdr.as_ref();
+                    }
+                    other => break hash_key_to_value(other),
+                }
+            };
+            let mut value = tail;
+            while let Some(car) = cars.pop() {
+                value = Value::cons(car, value);
+            }
+            value
+        }
         HashKey::EqualVec(items) => {
             let vals: Vec<Value> = items.iter().map(hash_key_to_value).collect();
             Value::vector(vals)
@@ -253,7 +270,7 @@ fn emacs_sxhash_structural_pseudovector(
     if kind == VecLikeType::SubCharTable {
         return Some(42);
     }
-    let view = StructuralPseudovectorView::from_value(*value, kind)?;
+    let view = StructuralPseudovectorView::from_value(value, kind)?;
     let mut hash = view.len() as u64;
     let count = view.len().min(SXHASH_MAX_LEN);
     for index in 0..count {
@@ -394,6 +411,59 @@ pub fn knuth_hash_index(hash: u32, bits: u32) -> usize {
     ((product as u64) >> (32 - bits)) as usize
 }
 
+#[cfg(any(test, feature = "test-support"))]
+thread_local! {
+    static SYMBOL_EQUAL_HASH_NAME_VALIDATIONS: std::cell::Cell<usize> =
+        const { std::cell::Cell::new(0) };
+}
+
+#[cfg(any(test, feature = "test-support"))]
+fn note_symbol_equal_hash_name_validation() {
+    SYMBOL_EQUAL_HASH_NAME_VALIDATIONS.with(|count| count.set(count.get() + 1));
+}
+
+#[cfg(not(any(test, feature = "test-support")))]
+fn note_symbol_equal_hash_name_validation() {}
+
+#[cfg(any(test, feature = "test-support"))]
+fn reset_symbol_equal_hash_name_validations() {
+    SYMBOL_EQUAL_HASH_NAME_VALIDATIONS.with(|count| count.set(0));
+}
+
+#[cfg(any(test, feature = "test-support"))]
+fn symbol_equal_hash_name_validations() -> usize {
+    SYMBOL_EQUAL_HASH_NAME_VALIDATIONS.with(|count| count.get())
+}
+
+fn hash_symbol_name_for_equal(id: crate::intern::SymId, hasher: &mut DefaultHasher) {
+    // UTF-8 names keep the `&str` hash the fallback used before. A raw-byte
+    // name hashes its bytes. After this thread records the name, both views
+    // come from that record, so a repeat does not call `from_utf8`.
+    match recorded_symbol_name(id) {
+        Some(RecordedSymbolName::Utf8(text)) => {
+            text.hash(hasher);
+        }
+        Some(RecordedSymbolName::Raw(bytes)) => {
+            bytes.hash(hasher);
+        }
+        None => {
+            note_symbol_equal_hash_name_validation();
+            let name = resolve_sym_lisp_string(id);
+            match recorded_symbol_name(id) {
+                Some(RecordedSymbolName::Utf8(text)) => text.hash(hasher),
+                Some(RecordedSymbolName::Raw(_)) => name.as_bytes().hash(hasher),
+                None => {
+                    if let Some(text) = name.as_utf8_str() {
+                        text.hash(hasher);
+                    } else {
+                        name.as_bytes().hash(hasher);
+                    }
+                }
+            }
+        }
+    }
+}
+
 fn hash_value_for_equal(
     value: &Value,
     hasher: &mut DefaultHasher,
@@ -419,7 +489,7 @@ fn hash_value_for_equal(
         }
         ValueKind::Symbol(id) => {
             4_u8.hash(hasher);
-            resolve_sym(id).hash(hasher);
+            hash_symbol_name_for_equal(id, hasher);
         }
         ValueKind::String => {
             6_u8.hash(hasher);
@@ -475,12 +545,12 @@ fn hash_value_for_equal(
         }
         ValueKind::Subr(id) => {
             13_u8.hash(hasher);
-            resolve_sym(id).hash(hasher);
+            hash_symbol_name_for_equal(id, hasher);
         }
         ValueKind::Veclike(VecLikeType::Subr) => {
             13_u8.hash(hasher);
             let id = value.as_subr_id().unwrap();
-            resolve_sym(id).hash(hasher);
+            hash_symbol_name_for_equal(id, hasher);
         }
         ValueKind::Veclike(VecLikeType::Lambda) => {
             14_u8.hash(hasher);
@@ -741,15 +811,15 @@ pub fn builtin_copy_hash_table(args: Vec<Value>) -> EvalResult {
     expect_args("copy-hash-table", &args, 1)?;
     match args[0].kind() {
         ValueKind::Veclike(VecLikeType::HashTable) => {
-            let mut new_table = args[0].as_hash_table().unwrap().clone();
-            if hash_test_parity_enabled() {
-                // GNU copies entries and test functions, but a running test's
-                // logical immutability belongs only to its original table:
-                // the copy's nesting count starts at zero even when the
-                // source is mid-test (Rev R2).
-                new_table.test_depth = std::sync::atomic::AtomicU8::new(0);
-            }
-            Ok(with_tagged_heap(|h| h.alloc_hash_table(new_table)))
+            let new_table = args[0].as_hash_table().unwrap().clone();
+            // GNU copies entries and test functions, but a running test's
+            // logical immutability belongs only to its original table. The
+            // nesting count lives on the object, and `alloc_hash_table`
+            // starts the copy at zero even when the source is mid-test.
+            // SAFETY: pure allocation (`alloc_hash_table`); never collects,
+            // sweeps, re-enters `with_tagged_heap`, mints capability tokens,
+            // or mutates existing payloads.
+            Ok(unsafe { with_tagged_heap(|h| h.alloc_hash_table(new_table)) })
         }
         _ => Err(signal(
             LispCondition::WrongTypeArgument,
@@ -1010,8 +1080,8 @@ impl HashTestGcInhibitAccounting {
     }
     #[inline]
     #[doc(hidden)]
-    pub fn entry_percentage_scaled(&self) -> &Option<std::num::NonZeroU64> {
-        &self.entry_percentage_scaled
+    pub fn entry_percentage(&self) -> Option<f64> {
+        self.entry_percentage
     }
     #[inline]
     #[doc(hidden)]
@@ -1043,7 +1113,7 @@ impl HashTestGcInhibitAccounting {
         collector_threshold_at_start: usize,
         threshold_at_start: Option<std::num::NonZeroUsize>,
         entry_threshold_bytes: usize,
-        entry_percentage_scaled: Option<std::num::NonZeroU64>,
+        entry_percentage: Option<f64>,
         threshold_overridden: bool,
         memory_full: bool,
         startup_ceiling: bool,
@@ -1054,7 +1124,7 @@ impl HashTestGcInhibitAccounting {
             collector_threshold_at_start,
             threshold_at_start,
             entry_threshold_bytes,
-            entry_percentage_scaled,
+            entry_percentage,
             threshold_overridden,
             memory_full,
             startup_ceiling,

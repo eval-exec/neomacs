@@ -184,9 +184,9 @@ fn run_case(name: &str, ops: Vec<Op>, constants: Vec<Datum>, args: Vec<Datum>, m
     }
     let nargs = args.len();
     let mut code = ByteCodeFunction::new(parse_arglist_descriptor((nargs | (nargs << 8)) as i64));
-    code.ops = ops;
-    code.constants = values.into();
-    code.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(max_stack);
+    code.set_ops(ops);
+    code.set_constants(values.into());
+    code.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(max_stack));
     code.seal_hand_assembled_ops_for_test();
     assert!(
         code.executes_verified_ops(),

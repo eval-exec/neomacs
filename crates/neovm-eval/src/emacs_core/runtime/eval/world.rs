@@ -40,9 +40,27 @@ mod era_world_loan;
 mod function_write_hooks;
 mod green_owner;
 mod heap_transfer_adapter;
+pub(crate) use heap_transfer_adapter::PreparedHeapTransferProductionEra;
+#[cfg(test)]
+pub(crate) use heap_transfer_adapter::recover_transferred_source;
 #[cfg(test)]
 #[path = "world/tests/heap_transfer.rs"]
 mod heap_transfer_tests;
+/// Production safepoint polls. Dormant until the E4 engine slice calls them.
+pub(crate) mod poll;
+/// #7712 gate surface. cfg(test) only, beside the symbol fixture. Not on the
+/// test-support re-export, so another crate's tests cannot call it.
+#[cfg(test)]
+#[path = "world/tests/serial_gate.rs"]
+pub(crate) mod serial_gate;
+/// Product retarget of the E2 thread doubles onto the #7712 names.
+#[cfg(test)]
+#[path = "world/tests/serial_gate_retarget.rs"]
+mod serial_gate_retarget;
+/// Second-thread product cases. The ticket stays on the keeper.
+#[cfg(test)]
+#[path = "world/tests/serial_gate_threads.rs"]
+mod serial_gate_threads;
 mod slot;
 mod source_entry;
 // Crate-visible so the public test-support re-export in eval/mod.rs can name
@@ -53,6 +71,10 @@ pub(crate) mod sole_owner;
 pub use green_owner::Baton;
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) use green_owner::OwnedProofProjection;
+#[cfg(test)]
+pub(crate) use green_owner::TestBatonWorldHandle;
+#[allow(unused_imports)]
+pub(crate) use green_owner::{EraTurnRight, EraWorldHandle, TurnRight};
 #[allow(unused_imports)]
 pub(crate) use green_owner::{FrozenLegacyRoots, OwnedParallelError, OwnedParallelProjection};
 pub(crate) use slot::WorldSlot;
@@ -95,6 +117,16 @@ struct World {
     /// The OS thread holding the World's Baton, in a Green World
     /// (`green_owner`'s safety argument; checked in debug builds).
     baton_holder: Cell<Option<std::thread::ThreadId>>,
+    /// The cut-4 flip's one activation authority. Minted with the World
+    /// allocation, taken once by the main owner's hosted activation, and kept
+    /// off every builtin path by its visibility.
+    activation_authority: Cell<Option<super::activation::ActivationAuthority>>,
+    /// Set once by the main owner's hosted cold activation. A worker owner
+    /// reads it to choose the routed host arm for a host-affine primitive:
+    /// without it an unhosted Green session must keep the serial TLS-cache
+    /// path. Written and read under the Baton; never cleared (there is no
+    /// host detach, and a rolled-back session is still hosted).
+    hosted_session: Cell<bool>,
 }
 
 impl Drop for World {
@@ -126,6 +158,44 @@ impl ColdRetained for World {}
 pub(crate) struct WorldLease(Arc<World>);
 static_assertions::assert_not_impl_any!(WorldLease: Send, Sync, Clone);
 static_assertions::assert_eq_size!(WorldLease, Arc<World>);
+
+impl WorldLease {
+    /// Take the session's one activation authority. The first call returns
+    /// `Some`; every later call returns `None`. Visibility stops at
+    /// `emacs_core::eval`, so a builtin module cannot name this accessor.
+    pub(in crate::emacs_core::eval) fn take_activation_authority(
+        &self,
+    ) -> Option<super::activation::ActivationAuthority> {
+        self.0.activation_authority.take()
+    }
+
+    /// Mark this World's hosted Green session. Only the main owner's cold
+    /// activation writes it, before it takes the authority; a re-attach after
+    /// the authority is consumed still marks the session hosted.
+    pub(in crate::emacs_core::eval) fn mark_hosted_session(&self) {
+        self.0.hosted_session.set(true);
+    }
+
+    /// Whether the main owner's cold activation marked this World hosted.
+    pub(in crate::emacs_core::eval) fn hosted_session(&self) -> bool {
+        self.0.hosted_session.get()
+    }
+}
+
+#[cfg(test)]
+mod activation_slot {
+    use super::activation::ActivationAuthority;
+
+    /// The activation slot is one byte: the authority is a ZST and `Option`
+    /// carries only the discriminant. Context layout is unaffected because
+    /// the slot lives inside the World allocation, not in Context.
+    #[test]
+    fn activation_authority_slot_is_one_byte() {
+        assert_eq!(std::mem::size_of::<ActivationAuthority>(), 0);
+        assert_eq!(std::mem::size_of::<Option<ActivationAuthority>>(), 1);
+        assert!(std::mem::size_of::<super::World>() > 0);
+    }
+}
 
 #[cfg(any(test, feature = "test-support"))]
 impl Context {
@@ -241,8 +311,12 @@ impl WorldView<neovm_value::tagged::gc::TaggedHeap> {
     /// The slot is set from the view's provenance root, which is the same
     /// root every access through the view derives from, so later `&mut`
     /// reborrows through the view cannot invalidate the installed pointer.
-    pub(crate) fn install_tagged_heap(&self) {
-        neovm_value::tagged::gc::set_tagged_heap_root(self.ptr);
+    pub(crate) fn install_tagged_heap(&mut self) {
+        // SAFETY: `self.ptr` is the World's AliasableBox provenance root.
+        // It lives as long as this view. `&mut self` is what makes a live
+        // heap reference fail to compile across the install. Refuses with a
+        // cold release panic if a different live heap is already installed.
+        unsafe { neovm_value::tagged::gc::install_tagged_heap_root_refusing_foreign(self.ptr) };
     }
 }
 
@@ -1307,12 +1381,25 @@ impl WorldStorageBuilder {
             threading: Cell::new(super::admission::ThreadingMode::from_env()),
             green: Default::default(),
             baton_holder: Cell::new(None),
+            // SAFETY: this is the World factory, the mint's only caller. The
+            // value stays in the private slot and is taken only by the
+            // eval-scoped activation path; no builtin can name the mint or
+            // the take.
+            activation_authority: Cell::new(Some(unsafe {
+                super::activation::ActivationAuthority::mint()
+            })),
+            hosted_session: Cell::new(false),
         }));
         // Reinstall the upstream TLS slot from the finalized heap's root
         // before any allocation-capable Context setup resumes. The root (not
         // a `&mut` borrow) is what makes the slot survive every sibling
         // access the owner later takes.
-        neovm_value::tagged::gc::set_tagged_heap_root(lease.0.tagged_heap.root());
+        // SAFETY: `lease` owns the AliasableBox root this view installs.
+        unsafe {
+            neovm_value::tagged::gc::install_tagged_heap_root_refusing_foreign(
+                lease.0.tagged_heap.root(),
+            )
+        };
         Self::publish_views(&lease, selection)
     }
 
@@ -1431,6 +1518,35 @@ impl Context {
     #[inline]
     pub(crate) fn threading_mode(&self) -> super::admission::ThreadingMode {
         self.obarray.lease.0.threading.get()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_threading_mode_for_test(&mut self, mode: super::admission::ThreadingMode) {
+        self.obarray.lease.0.threading.set(mode);
+    }
+
+    /// Take the World's one activation authority through this Context's
+    /// lease. `pub(in ...eval)` keeps every builtin module out.
+    pub(in crate::emacs_core::eval) fn take_activation_authority(
+        &self,
+    ) -> Option<super::activation::ActivationAuthority> {
+        self.obarray.lease.take_activation_authority()
+    }
+
+    /// Whether this World has a hosted Green session: main's cold activation
+    /// marked it before installing the Local selection arm. Read by the
+    /// owner selector to route a host-affine worker call; false for Sim,
+    /// unhosted Green and every batch session.
+    #[inline]
+    pub(crate) fn in_hosted_green_session(&self) -> bool {
+        self.obarray.lease.hosted_session()
+    }
+
+    /// Mark the session hosted. Only the main owner's cold activation calls
+    /// this (`activation_owner.rs`).
+    #[cold]
+    pub(in crate::emacs_core::eval) fn mark_hosted_session(&self) {
+        self.obarray.lease.mark_hosted_session()
     }
 
     /// Fix the World's threading mode. Only construction calls this, before
@@ -1561,6 +1677,25 @@ impl Context {
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn thread_projection_count_for_test(&self) -> usize {
         self.obarray.lease.0.thread_projections.borrow().len()
+    }
+
+    /// Whether this World has allocated a `GreenRuntime` (false while Green is
+    /// dormant on the no-thread path).
+    #[cfg(test)]
+    pub(crate) fn has_green_runtime_for_test(&self) -> bool {
+        self.obarray.lease.0.green.borrow().is_some()
+    }
+
+    /// Current Baton holder thread, if a Green Baton has been issued.
+    #[cfg(test)]
+    pub(crate) fn baton_holder_for_test(&self) -> Option<std::thread::ThreadId> {
+        self.obarray.lease.0.baton_holder.get()
+    }
+
+    /// Number of owner slabs registered in this World's `OwnerSlabRegistry`.
+    #[cfg(test)]
+    pub(crate) fn owner_slab_count_for_test(&self) -> usize {
+        self.obarray.lease.0.owner_slabs.borrow().len_for_test()
     }
 }
 

@@ -1,0 +1,13 @@
+error[E0308]: mismatched types
+ --> tests/pentry_e2_loan_ui/custody_notice_as_return.rs:5:34
+  |
+5 |     let _ = keeper.accept_return(notice);
+  |                    ------------- ^^^^^^ expected `ReturnedSerialTicket`, found `CustodyFailureNotice`
+  |                    |
+  |                    arguments to this method are incorrect
+  |
+note: method defined here
+ --> $WORKSPACE/crates/neovm-eval/src/emacs_core/runtime/eval/parallel_entry/keeper_custody.rs
+  |
+  |     pub fn accept_return(
+  |            ^^^^^^^^^^^^^

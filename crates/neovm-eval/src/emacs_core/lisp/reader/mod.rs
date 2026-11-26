@@ -254,8 +254,7 @@ pub fn finish_minibuffer_result_after_unwind(
     } else {
         result
     };
-    let read_result =
-        read_from_string_impl(eval.variables(), vec![Value::heap_string(input.clone())])?;
+    let read_result = read_from_string_impl(eval, vec![Value::heap_string(input.clone())])?;
     let value = read_result.cons_car();
     let end_char = read_result.cons_cdr().xfixnum().max(0) as usize;
     let end_byte = if input.is_multibyte() {
@@ -272,7 +271,7 @@ pub fn finish_minibuffer_result_after_unwind(
             vec![Value::string("Trailing garbage following expression")],
         ));
     }
-    eval.obarray_mut().intern_member_symbols_in(value);
+    publish_read_symbols(eval, value);
     Ok(value)
 }
 
@@ -653,7 +652,10 @@ pub fn read_from_active_load_cursor(
             shorthands.as_ref(),
             ctx.symbol_mode(),
         )
-        .map_err(signal_reader_error_from_string)?;
+        .map_err(|error| {
+            reset_obarray_after_reader_error(ctx, &error);
+            signal_reader_error_from_string(error)
+        })?;
     let Some((value, next_pos)) = read_result else {
         return Err(end_of_file_error_for_source(eof_source));
     };
@@ -661,8 +663,28 @@ pub fn read_from_active_load_cursor(
     if let Some(cursor) = ctx.load_read_cursors.last_mut() {
         cursor.pos = next_pos;
     }
-    ctx.obarray_mut().intern_member_symbols_in(value);
+    publish_read_symbols(ctx, value);
     Ok(value)
+}
+
+/// GNU `check_obarray_slow` resets `Vobarray` to the initial obarray before
+/// signalling when the rejected value is the current obarray
+/// (`lread.c:4662-4665`). The value reader reports the obarrayp signal but
+/// holds only a `VariableView`, so the reset happens at this boundary, where
+/// the Context can write the current `obarray` binding.
+#[doc(hidden)]
+pub fn reset_obarray_after_reader_error(
+    ctx: &mut super::eval::Context,
+    error: &super::value_reader::ReadError,
+) {
+    // Only the reader's own check_obarray rejection carries GNU's reset; a
+    // wrong-type-argument obarrayp raised by a callable source must not.
+    if error.kind != super::value_reader::ReadErrorKind::ObarrayRejected {
+        return;
+    }
+    if let Some(&rejected) = error.signal_data.get(1) {
+        super::builtins::symbols::reset_rejected_obarray(ctx, rejected);
+    }
 }
 
 #[doc(hidden)]
@@ -678,7 +700,8 @@ pub fn signal_reader_error_from_string(e: super::value_reader::ReadError) -> Flo
             LispCondition::InvalidReadSyntax,
             vec![Value::string(e.message)],
         ),
-        super::value_reader::ReadErrorKind::Signal => signal(
+        super::value_reader::ReadErrorKind::Signal
+        | super::value_reader::ReadErrorKind::ObarrayRejected => signal(
             neovm_value::error::UserCondition::from(
                 e.signal_symbol.unwrap_or_else(|| intern("error")),
             ),
@@ -708,7 +731,8 @@ pub fn signal_reader_error_from_buffer(
                 e.message,
             )
         }
-        super::value_reader::ReadErrorKind::Signal => signal(
+        super::value_reader::ReadErrorKind::Signal
+        | super::value_reader::ReadErrorKind::ObarrayRejected => signal(
             neovm_value::error::UserCondition::from(
                 e.signal_symbol.unwrap_or_else(|| intern("error")),
             ),
@@ -758,29 +782,28 @@ pub fn current_read_symbol_shorthands(
 pub fn builtin_read_from_string(ctx: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
     let shorthands = current_read_symbol_shorthands(ctx);
     let result = read_from_string_impl_inner(
-        ctx.variables(),
+        ctx,
         args,
         SymbolPositionMode::Bare,
         shorthands.as_ref(),
         ctx.symbol_mode(),
     )?;
     if result.is_cons() {
-        ctx.obarray_mut()
-            .intern_member_symbols_in(result.cons_car());
+        publish_read_symbols(ctx, result.cons_car());
     }
     Ok(result)
 }
 
 pub(crate) fn read_from_string_impl(
-    vars: crate::emacs_core::eval::VariableView<'_>,
+    ctx: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    read_from_string_impl_inner(vars, args, SymbolPositionMode::Bare, None, SymbolMode::Bare)
+    read_from_string_impl_inner(ctx, args, SymbolPositionMode::Bare, None, SymbolMode::Bare)
 }
 
 #[doc(hidden)]
 pub fn read_from_string_impl_inner(
-    vars: VariableView<'_>,
+    ctx: &mut super::eval::Context,
     args: Vec<Value>,
     symbol_position_mode: SymbolPositionMode,
     shorthands: Option<&super::value_reader::ReadSymbolShorthands>,
@@ -868,16 +891,22 @@ pub fn read_from_string_impl_inner(
         start_char,
     ));
     let range = super::value_reader::CharacterReadRange::for_original(&args[0], range, start_byte)
-        .map_err(signal_reader_error_from_string)?;
+        .map_err(|error| {
+            reset_obarray_after_reader_error(ctx, &error);
+            signal_reader_error_from_string(error)
+        })?;
     let read_result = read_source.read_one_character_range_with_locate_syms_with_symbols(
         range,
         symbol_position_mode,
-        vars,
+        ctx.variables(),
         shorthands.into(),
         mode,
     );
     let (value, end_position) = read_result
-        .map_err(signal_reader_error_from_string)?
+        .map_err(|error| {
+            reset_obarray_after_reader_error(ctx, &error);
+            signal_reader_error_from_string(error)
+        })?
         .ok_or_else(|| signal(LispCondition::EndOfFile, vec![]))?;
     let absolute_end_char = end_position.get();
 
@@ -898,7 +927,7 @@ pub fn read_from_callable(
     symbol_position_mode: SymbolPositionMode,
 ) -> EvalResult {
     let value = super::value_reader::read_from_callable(ctx, func, symbol_position_mode)?;
-    ctx.obarray_mut().intern_member_symbols_in(value);
+    publish_read_symbols(ctx, value);
     Ok(value)
 }
 
@@ -1043,7 +1072,6 @@ impl KeyboardInputRuntime for super::eval::Context {
 /// the symbol module, which must not name a byte-code item.
 pub(crate) trait ObarrayReadSymbolsExt {
     fn intern_member_symbols_in(&mut self, value: Value);
-    fn intern_member_symbols_in_1(&mut self, value: Value, seen: &mut rustc_hash::FxHashSet<usize>);
 }
 
 impl ObarrayReadSymbolsExt for Obarray {
@@ -1051,27 +1079,34 @@ impl ObarrayReadSymbolsExt for Obarray {
     /// obarray. Non-canonical `make-symbol` objects stay uninterned, as in
     /// GNU.
     fn intern_member_symbols_in(&mut self, value: Value) {
-        // Cycle detection must use object *identity*, not `Value`'s `==`
-        // (which is structural `equal`).  A `Vec` + `contains` here was
-        // O(n^2) deep-`equal` over every loaded form -- the dominant cost of
-        // startup.  Track visited heap objects by their tagged-pointer bits.
-        let mut seen = rustc_hash::FxHashSet::default();
-        self.intern_member_symbols_in_1(value, &mut seen);
+        walk_member_symbols(value, |symbol| {
+            if let Some(id) = symbol.as_symbol_id(SymbolMode::Bare) {
+                self.ensure_interned_global_id(id);
+            }
+        });
     }
+}
 
-    fn intern_member_symbols_in_1(
-        &mut self,
-        value: Value,
-        seen: &mut rustc_hash::FxHashSet<usize>,
-    ) {
+/// Visit every canonical symbol reachable from VALUE.
+///
+/// The walk is a LIFO worklist, not Rust recursion: the graph size is the
+/// caller's data (a loaded file, a cache, a keymap), so recursion depth grew
+/// with it and could exhaust the evaluator stack (issue #590). Children are
+/// pushed in reverse so the visit order stays the reader's left-to-right
+/// depth-first order. Cycle detection uses object identity, never `Value`'s
+/// structural `==`.
+pub(crate) fn walk_member_symbols(value: Value, mut on_symbol: impl FnMut(Value)) {
+    let mut seen = rustc_hash::FxHashSet::default();
+    let mut stack = vec![value];
+    while let Some(value) = stack.pop() {
         match value.kind() {
-            ValueKind::Symbol(id) => self.ensure_interned_global_id(id),
+            ValueKind::Symbol(_) => on_symbol(value),
             ValueKind::Cons => {
                 if !seen.insert(value.bits()) {
-                    return;
+                    continue;
                 }
-                self.intern_member_symbols_in_1(value.cons_car(), seen);
-                self.intern_member_symbols_in_1(value.cons_cdr(), seen);
+                stack.push(value.cons_cdr());
+                stack.push(value.cons_car());
             }
             ValueKind::Veclike(
                 VecLikeType::Vector
@@ -1080,82 +1115,118 @@ impl ObarrayReadSymbolsExt for Obarray {
                 | VecLikeType::Macro,
             ) => {
                 if !seen.insert(value.bits()) {
-                    return;
+                    continue;
                 }
                 if let Some(slots) = value
                     .as_vector_data()
                     .or_else(|| value.as_record_data())
                     .or_else(|| value.closure_slots())
                 {
-                    for slot in slots.iter().copied() {
-                        self.intern_member_symbols_in_1(slot, seen);
-                    }
+                    stack.extend(slots.iter().rev());
                 }
             }
             ValueKind::Veclike(VecLikeType::CharTable) => {
                 if !seen.insert(value.bits()) {
-                    return;
+                    continue;
                 }
                 if let Some(slots) = value.char_table_external_slots() {
-                    for slot in slots {
-                        self.intern_member_symbols_in_1(slot, seen);
-                    }
+                    stack.extend(slots.into_iter().rev());
                 }
             }
             ValueKind::Veclike(VecLikeType::SubCharTable) => {
                 if !seen.insert(value.bits()) {
-                    return;
+                    continue;
                 }
                 if let Some(table) = value.as_sub_char_table_obj() {
-                    for slot in table.contents.iter().copied() {
-                        self.intern_member_symbols_in_1(slot, seen);
-                    }
+                    stack.extend(table.contents.iter().rev().copied());
                 }
             }
             ValueKind::Veclike(VecLikeType::HashTable) => {
                 if !seen.insert(value.bits()) {
-                    return;
+                    continue;
                 }
                 if let Some(table) = value.as_hash_table() {
-                    for key_value in table.key_snapshots().copied() {
-                        self.intern_member_symbols_in_1(key_value, seen);
-                    }
-                    for value in table.data.values().copied() {
-                        self.intern_member_symbols_in_1(value, seen);
-                    }
+                    // Visit every key, then every value, in table order; the
+                    // snapshots are forward iterators, so reverse them
+                    // through a temporary buffer for the LIFO worklist.
+                    let keys: Vec<Value> = table.key_snapshots().copied().collect();
+                    let values: Vec<Value> = table.data.values().copied().collect();
+                    stack.extend(values.into_iter().rev());
+                    stack.extend(keys.into_iter().rev());
                 }
             }
             ValueKind::Veclike(VecLikeType::ByteCode) => {
                 if !seen.insert(value.bits()) {
-                    return;
+                    continue;
                 }
                 if let Some(bytecode) = value.get_bytecode_data() {
-                    self.intern_member_symbols_in_1(bytecode.arglist, seen);
-                    for constant in bytecode.constants.iter().copied() {
-                        self.intern_member_symbols_in_1(constant, seen);
-                    }
-                    if let Some(env) = bytecode.env {
-                        self.intern_member_symbols_in_1(env, seen);
-                    }
-                    if let Some(doc_form) = bytecode.doc_form {
-                        self.intern_member_symbols_in_1(doc_form, seen);
+                    for slot in bytecode.extra_slots.iter().rev() {
+                        stack.push(*slot);
                     }
                     if let Some(interactive) = bytecode.interactive {
-                        self.intern_member_symbols_in_1(interactive, seen);
+                        stack.push(interactive);
                     }
-                    for slot in bytecode.extra_slots.iter().copied() {
-                        self.intern_member_symbols_in_1(slot, seen);
+                    if let Some(doc_form) = bytecode.doc_form {
+                        stack.push(doc_form);
                     }
+                    if let Some(env) = bytecode.env() {
+                        stack.push(env);
+                    }
+                    for constant in bytecode.constants().iter().rev() {
+                        stack.push(*constant);
+                    }
+                    stack.push(bytecode.arglist());
                 }
             }
             ValueKind::Veclike(VecLikeType::SymbolWithPos) => {
+                if !seen.insert(value.bits()) {
+                    continue;
+                }
                 if let Some(symbol) = value.as_symbol_with_pos_sym() {
-                    self.intern_member_symbols_in_1(symbol, seen);
+                    stack.push(symbol);
                 }
             }
             _ => {}
         }
     }
+}
+
+/// Publish the canonical symbols a read value hands to Lisp into the global
+/// obarray. GNU's reader interns every symbol token into the current
+/// `Vobarray` while reading (lread.c:4217-4249); Neomacs's value reader now
+/// does the same for a custom obarray, so nothing is owed after the read.
+/// The global obarray keeps this extra pass because the value reader
+/// allocates canonical symbol ids without adding obarray membership.
+///
+/// Reader-inserted constants (`quote`, `function`) and `#:` uninterned
+/// symbols are deliberately absent from a custom obarray, exactly as in GNU.
+pub fn publish_read_symbols(eval: &mut super::eval::Context, value: Value) {
+    use crate::emacs_core::builtins::symbols::{
+        current_lisp_obarray_value, is_global_obarray_proxy,
+    };
+    let current = current_lisp_obarray_value(eval);
+    if current.is_nil() || is_global_obarray_proxy(eval, &current) {
+        eval.obarray_mut().intern_member_symbols_in(value);
+    }
+}
+
+/// Publish symbols a Lisp-facing producer created the way GNU's `Fintern`
+/// would: into the current `obarray` (a custom obarray gets the canonical
+/// symbol prepended when its spelling is absent, otherwise the global
+/// obarray gains membership). Producers such as `event-convert-list` and
+/// keyboard-macro normalization use this; the reader does not need it.
+pub fn publish_derived_symbols(eval: &mut super::eval::Context, value: Value) {
+    use crate::emacs_core::builtins::symbols::{
+        current_lisp_obarray_value, intern_symbol_value_into_obarray, is_global_obarray_proxy,
+    };
+    let current = current_lisp_obarray_value(eval);
+    if current.is_nil() || is_global_obarray_proxy(eval, &current) {
+        eval.obarray_mut().intern_member_symbols_in(value);
+        return;
+    }
+    walk_member_symbols(value, |symbol| {
+        let _ = intern_symbol_value_into_obarray(symbol, current);
+    });
 }
 
 // ---------------------------------------------------------------------------
@@ -1164,3 +1235,7 @@ impl ObarrayReadSymbolsExt for Obarray {
 #[cfg(test)]
 #[path = "tests/raw_bytes_test.rs"]
 mod raw_bytes_tests;
+
+#[cfg(test)]
+#[path = "tests/intern_walk_test.rs"]
+mod intern_walk_tests;

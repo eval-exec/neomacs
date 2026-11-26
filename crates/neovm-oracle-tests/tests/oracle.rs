@@ -7,6 +7,9 @@
 #[path = "../src/common.rs"]
 mod common;
 
+#[path = "../src/arithcompare_marker_order.rs"]
+mod arithcompare_marker_order;
+
 #[path = "oracle_backend_quit_binding.rs"]
 mod oracle_backend_quit_binding;
 
@@ -40,6 +43,12 @@ mod oracle_copy_lisp_face_defaults;
 #[path = "oracle_default_threads.rs"]
 mod oracle_default_threads;
 
+#[path = "oracle_gc_pacing.rs"]
+mod oracle_gc_pacing;
+
+#[path = "oracle_gc_rows.rs"]
+mod oracle_gc_rows;
+
 #[path = "oracle_divergence.rs"]
 mod oracle_divergence;
 
@@ -61,6 +70,9 @@ mod oracle_dual_width_text;
 #[path = "oracle_eob_overlay_motion.rs"]
 mod oracle_eob_overlay_motion;
 
+#[path = "oracle_echo_clear_callback.rs"]
+mod oracle_echo_clear_callback;
+
 #[path = "oracle_window_text_chrome.rs"]
 mod oracle_window_text_chrome;
 
@@ -75,6 +87,12 @@ mod oracle_face_sentinel_identity;
 
 #[path = "oracle_face_theme.rs"]
 mod oracle_face_theme;
+
+#[path = "oracle_signal_conditions_once.rs"]
+mod oracle_signal_conditions_once;
+
+#[path = "oracle_signal_matcher_callers.rs"]
+mod oracle_signal_matcher_callers;
 
 #[path = "oracle_filelock_identity.rs"]
 mod oracle_filelock_identity;

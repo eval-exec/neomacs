@@ -145,7 +145,7 @@ fn reclaimed_cells_come_back_through_the_free_list() {
         .map(|c| c.as_cons_ptr().unwrap() as usize)
         .collect();
 
-    heap.collect_exact(kept.iter().copied());
+    heap.collect_rooted(kept.iter().copied());
     assert!(
         heap.cons_allocator.free_count() != 0,
         "the collection must reclaim the unrooted conses"
@@ -203,7 +203,7 @@ fn list_from_slice_charges_every_counter_per_cons() {
     for _ in 0..8 {
         heap.alloc_cons(TaggedValue::NIL, TaggedValue::NIL);
     }
-    heap.collect_exact(kept.iter().copied());
+    heap.collect_rooted(kept.iter().copied());
     assert!(heap.cons_allocator.free_count() != 0);
 
     let elements: Vec<TaggedValue> = (0..CONS_BLOCK_SIZE as i64 + 3)

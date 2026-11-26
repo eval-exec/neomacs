@@ -170,14 +170,21 @@ fn panic_recovery_restores_owner_bindings_without_lisp() {
 
 /// The same forms, projected and not, give the same answers.
 fn same_answers(forms: &[&str]) {
-    let mut plain = context(false);
+    let plain = context(false);
+    let mut parked_plain = plain.park_for_test();
     let mut projected = context(true);
     for form in forms {
+        let parked_projected = projected.park_for_test();
+        let mut plain = parked_plain.resume_for_test().expect("resume plain");
         let want = eval(&mut plain, form);
         assert!(
             !want.contains("void-function"),
             "the bare harness lacks a function {form} needs: {want}"
         );
+        parked_plain = plain.park_for_test();
+        projected = parked_projected
+            .resume_for_test()
+            .expect("resume projected");
         let got = eval(&mut projected, form);
         assert_eq!(got, want, "{form}");
     }

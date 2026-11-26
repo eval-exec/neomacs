@@ -1,11 +1,12 @@
 //! Pinned upstream fixtures, fetched explicitly or on demand and verified on every use.
 //!
 //! A test that needs an upstream artifact pins it by URL and SHA-256 and asks
-//! [`pinned_file`] for it: the bytes land in `tmp/pinned-fixtures` under the
-//! workspace, a cached copy is re-verified against the hash before it is
-//! trusted, and a mismatch is an error rather than a silently different
-//! fixture. Nothing is vendored -- the file stays upstream's, and the hash is
-//! what makes the pin a pin.
+//! [`pinned_file`] for it: the bytes land in the shared cache returned by
+//! [`pinned_fixture_cache_root`] under `<sha256>/<name>`, keyed by the pin's
+//! SHA-256 digest rather than by worktree path. A cached copy is re-verified
+//! against the hash before it is trusted, and a mismatch is an error rather
+//! than a silently different fixture. Nothing is vendored -- the file stays
+//! upstream's, and the hash is what makes the pin a pin.
 //!
 //! `neomacs-test-fonts` applies the same convention to its fonts -- including
 //! its archives, via [`pinned_file_with_limit`]; unpacking an archive stays
@@ -13,18 +14,100 @@
 //!
 //! Fixtures prepared before a test run use [`cached_pinned_file`], which
 //! only reads and verifies the cache and never attempts a download.
+//!
+//! Cache reads and writes reject symlinks at `<cache_root>/<sha256>` and
+//! `<name>` via `symlink_metadata` (`lstat`) before opening or replacing. This
+//! assumes cooperative writers sharing a trusted cache root; eliminating the
+//! residual cross-step `lstat`-then-open TOCTOU against an untrusted local
+//! process with write access to `<cache_root>` would require platform-specific
+//! `O_DIRECTORY | O_NOFOLLOW` + `openat`/`renameat` APIs and is a known
+//! limitation of the portable path-based design.
 
-use std::fs::{self, File};
-use std::path::{Path, PathBuf};
+use std::ffi::OsString;
+use std::fs::{self, OpenOptions};
+use std::path::{Component, Path, PathBuf};
 use std::time::Duration;
 
 use fs4::FileExt;
 use thiserror::Error;
 
-/// The workspace root, or the live one when nextest provides it. See
-/// [`crate::workspace_root`].
+/// Environment variable overriding the shared pinned-fixture cache directory.
+pub const PINNED_FIXTURE_CACHE_OVERRIDE: &str = "NEOMACS_PINNED_FIXTURE_CACHE";
+
+/// Shared directory for SHA-256-keyed pinned fixtures across worktrees.
+///
+/// Resolution order:
+/// 1. Nonempty `NEOMACS_PINNED_FIXTURE_CACHE`
+/// 2. Absolute `$XDG_CACHE_HOME/neomacs/pinned-fixtures` (relative values are
+///    ignored per the XDG Base Directory Specification)
+/// 3. `$HOME/.cache/neomacs/pinned-fixtures`
+/// 4. `<workspace>/tmp/pinned-fixtures` as a last resort when neither an
+///    absolute XDG path nor HOME is set.
+#[must_use]
+pub fn pinned_fixture_cache_root() -> PathBuf {
+    resolve_pinned_fixture_cache_root(
+        std::env::var_os(PINNED_FIXTURE_CACHE_OVERRIDE),
+        std::env::var_os("XDG_CACHE_HOME"),
+        std::env::var_os("HOME"),
+        crate::workspace_root(),
+    )
+}
+
+pub(crate) fn resolve_pinned_fixture_cache_root(
+    explicit: Option<OsString>,
+    xdg_cache_home: Option<OsString>,
+    home: Option<OsString>,
+    workspace: PathBuf,
+) -> PathBuf {
+    fn nonempty(value: Option<OsString>) -> Option<PathBuf> {
+        value.filter(|item| !item.is_empty()).map(PathBuf::from)
+    }
+    if let Some(path) = nonempty(explicit) {
+        return path;
+    }
+    if let Some(xdg) = nonempty(xdg_cache_home).filter(|path| path.is_absolute()) {
+        return xdg.join("neomacs").join("pinned-fixtures");
+    }
+    if let Some(home) = nonempty(home) {
+        return home.join(".cache").join("neomacs").join("pinned-fixtures");
+    }
+    workspace.join("tmp").join("pinned-fixtures")
+}
+
 fn cache_root() -> PathBuf {
-    crate::workspace_root().join("tmp/pinned-fixtures")
+    pinned_fixture_cache_root()
+}
+
+pub(crate) fn entry_dir(root: &Path, sha256: &str) -> PathBuf {
+    root.join(sha256)
+}
+
+#[cfg(test)]
+pub(crate) fn entry_path(root: &Path, name: &str, sha256: &str) -> PathBuf {
+    entry_dir(root, sha256).join(name)
+}
+
+fn validate_pin(name: &str, sha256: &str) -> Result<(), PinnedError> {
+    let mut components = Path::new(name).components();
+    let is_single_normal = matches!(components.next(), Some(Component::Normal(_)))
+        && components.next().is_none()
+        && !name.contains('/')
+        && !name.contains('\\');
+    if !is_single_normal {
+        return Err(PinnedError::InvalidPin {
+            reason: format!("fixture name `{name}` must be a single cache filename"),
+        });
+    }
+    if sha256.len() != 64
+        || !sha256
+            .bytes()
+            .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+    {
+        return Err(PinnedError::InvalidPin {
+            reason: format!("fixture SHA-256 `{sha256}` must be 64 lowercase hex digits"),
+        });
+    }
+    Ok(())
 }
 
 /// The largest fixture [`pinned_file`] will fetch: a test asset, not a
@@ -39,6 +122,8 @@ const MAX_PINNED_FIXTURE_BYTES: u64 = 32 * 1024 * 1024;
 /// not which test wanted the bytes.
 #[derive(Debug, Error)]
 pub enum PinnedError {
+    #[error("invalid pinned fixture identity: {reason}")]
+    InvalidPin { reason: String },
     #[error(
         "pinned fixture missing from cache at {path}; prefetch the fixture before running tests"
     )]
@@ -121,13 +206,8 @@ pub fn cached_pinned_file(name: &str, sha256: &str) -> Result<PathBuf, PinnedErr
 }
 
 fn cached_pinned_file_in(root: &Path, name: &str, sha256: &str) -> Result<PathBuf, PinnedError> {
-    let destination = root.join(name);
-    match verify(&destination, sha256) {
-        Err(PinnedError::Read { source, .. }) if source.kind() == std::io::ErrorKind::NotFound => {
-            Err(PinnedError::CacheMiss { path: destination })
-        }
-        result => result.map(|()| destination),
-    }
+    validate_pin(name, sha256)?;
+    verify_cache_entry(root, name, sha256)
 }
 
 /// [`pinned_file`] with the fetch's size cap named by the caller: a font
@@ -138,36 +218,52 @@ pub fn pinned_file_with_limit(
     sha256: &str,
     max_bytes: u64,
 ) -> Result<PathBuf, PinnedError> {
-    let root = cache_root();
-    fs::create_dir_all(&root).map_err(|source| PinnedError::CacheRoot {
-        path: root.clone(),
+    pinned_file_in_with_fetch(&cache_root(), name, url, sha256, max_bytes, || {
+        download_pinned(url, max_bytes)
+    })
+}
+
+fn pinned_file_in_with_fetch<F>(
+    root: &Path,
+    name: &str,
+    url: &str,
+    sha256: &str,
+    max_bytes: u64,
+    fetch: F,
+) -> Result<PathBuf, PinnedError>
+where
+    F: FnOnce() -> Result<Vec<u8>, PinnedError>,
+{
+    validate_pin(name, sha256)?;
+    if let Ok(path) = verify_cache_entry(root, name, sha256) {
+        return Ok(path);
+    }
+    fs::create_dir_all(root).map_err(|source| PinnedError::CacheRoot {
+        path: root.to_path_buf(),
         source,
     })?;
-    let destination = root.join(name);
-    // One fetch per fixture across concurrently running test binaries.
-    let lock_path = root.join(format!(".{name}.lock"));
-    let lock = File::create(&lock_path).map_err(|source| PinnedError::Lock {
-        path: lock_path.clone(),
-        source,
-    })?;
+    // One fetch per pinned digest across concurrently running test binaries and worktrees.
+    let lock_path = root.join(format!(".{sha256}.lock"));
+    let lock = OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(&lock_path)
+        .map_err(|source| PinnedError::Lock {
+            path: lock_path.clone(),
+            source,
+        })?;
     lock.lock().map_err(|source| PinnedError::Lock {
         path: lock_path,
         source,
     })?;
-    let result = ensure_pinned(&destination, url, sha256, max_bytes);
+    let result = ensure_pinned_in(root, name, url, sha256, max_bytes, fetch);
     let _ = FileExt::unlock(&lock);
-    result.map(|()| destination)
+    result
 }
 
-fn ensure_pinned(
-    destination: &Path,
-    url: &str,
-    sha256: &str,
-    max_bytes: u64,
-) -> Result<(), PinnedError> {
-    if destination.exists() && verify(destination, sha256).is_ok() {
-        return Ok(());
-    }
+fn download_pinned(url: &str, max_bytes: u64) -> Result<Vec<u8>, PinnedError> {
     let agent = ureq::Agent::config_builder()
         .timeout_global(Some(Duration::from_secs(120)))
         .timeout_connect(Some(Duration::from_secs(15)))
@@ -183,7 +279,7 @@ fn ensure_pinned(
     // One byte over the cap, then an explicit check: ureq's limit reader
     // raises `BodyExceedsLimit` on the read after its allowance reaches zero,
     // so a body exactly at `max_bytes` must not be what trips it.
-    let bytes = response
+    response
         .body_mut()
         .with_config()
         .limit(max_bytes.saturating_add(1))
@@ -191,7 +287,24 @@ fn ensure_pinned(
         .map_err(|source| PinnedError::Http {
             url: url.to_owned(),
             source: Box::new(source),
-        })?;
+        })
+}
+
+fn ensure_pinned_in<F>(
+    root: &Path,
+    name: &str,
+    url: &str,
+    sha256: &str,
+    max_bytes: u64,
+    fetch: F,
+) -> Result<PathBuf, PinnedError>
+where
+    F: FnOnce() -> Result<Vec<u8>, PinnedError>,
+{
+    if let Ok(path) = verify_cache_entry(root, name, sha256) {
+        return Ok(path);
+    }
+    let bytes = fetch()?;
     if bytes.len() as u64 > max_bytes {
         return Err(PinnedError::TooLarge {
             url: url.to_owned(),
@@ -200,43 +313,314 @@ fn ensure_pinned(
         });
     }
 
-    // Verify before touching the cache, so a bad response cannot replace a
-    // good copy.
-    let actual = crate::inventory::sha256_hex(&bytes);
-    if actual != sha256 {
-        return Err(PinnedError::DownloadedHash {
+    // Verify once before touching the cache, so a bad response cannot replace a
+    // good copy or leave an entry directory behind, and cold fetches do not
+    // re-hash large archives multiple times.
+    let verified =
+        VerifiedBytes::verify(&bytes, sha256).map_err(|actual| PinnedError::DownloadedHash {
             url: url.to_owned(),
             expected: sha256.to_owned(),
             actual,
-        });
+        })?;
+    publish_verified(root, name, verified)
+}
+
+mod verified {
+    /// Proof token binding `bytes` to the exact `sha256` digest verified by
+    /// [`Self::verify`]. Sealed inside a private submodule so code in the
+    /// parent module and its tests cannot forge unverified bytes or mismatch a
+    /// digest at the type level.
+    pub(super) struct VerifiedBytes<'a> {
+        bytes: &'a [u8],
+        sha256: &'a str,
     }
-    let partial =
-        destination.with_file_name(format!(".{name}.partial", name = name_of(destination)));
-    fs::write(&partial, &bytes).map_err(|source| PinnedError::Write {
-        path: partial.clone(),
-        source,
-    })?;
-    fs::rename(&partial, destination).map_err(|source| PinnedError::Rename {
+
+    impl<'a> VerifiedBytes<'a> {
+        pub(super) fn verify(bytes: &'a [u8], expected_sha256: &'a str) -> Result<Self, String> {
+            let actual = super::hash_bytes(bytes);
+            if actual == expected_sha256 {
+                Ok(Self {
+                    bytes,
+                    sha256: expected_sha256,
+                })
+            } else {
+                Err(actual)
+            }
+        }
+
+        pub(super) fn bytes(&self) -> &'a [u8] {
+            self.bytes
+        }
+
+        pub(super) fn sha256(&self) -> &'a str {
+            self.sha256
+        }
+    }
+}
+
+use verified::VerifiedBytes;
+
+/// RAII staging directory created via `fs::create_dir` so it inherits the
+/// process umask (supporting multi-user/group shared caches) instead of
+/// `mkdtemp`'s hardcoded `0700`.
+struct StageDir {
+    path: PathBuf,
+    remove_on_drop: bool,
+}
+
+impl StageDir {
+    fn create_in(root: &Path, sha256: &str) -> Result<Self, PinnedError> {
+        let prefix = format!(".stage-{}-", &sha256[..12]);
+        for _ in 0..64 {
+            let mut nonce = [0u8; 8];
+            getrandom::fill(&mut nonce).map_err(|error| PinnedError::Write {
+                path: root.to_path_buf(),
+                source: std::io::Error::other(error),
+            })?;
+            let candidate = root.join(format!("{prefix}{:016x}", u64::from_ne_bytes(nonce)));
+            match fs::create_dir(&candidate) {
+                Ok(()) => {
+                    return Ok(Self {
+                        path: candidate,
+                        remove_on_drop: true,
+                    });
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(source) => {
+                    return Err(PinnedError::Write {
+                        path: candidate,
+                        source,
+                    });
+                }
+            }
+        }
+        Err(PinnedError::Write {
+            path: root.to_path_buf(),
+            source: std::io::Error::new(
+                std::io::ErrorKind::AlreadyExists,
+                "could not allocate unique staging directory",
+            ),
+        })
+    }
+
+    fn path(&self) -> &Path {
+        &self.path
+    }
+
+    fn disarm(mut self) {
+        self.remove_on_drop = false;
+    }
+}
+
+impl Drop for StageDir {
+    fn drop(&mut self) {
+        if self.remove_on_drop {
+            let _ = fs::remove_dir_all(&self.path);
+        }
+    }
+}
+
+/// True only when `path` is a real directory, without following symlinks.
+fn is_real_dir(path: &Path) -> bool {
+    fs::symlink_metadata(path).is_ok_and(|meta| meta.file_type().is_dir())
+}
+
+/// Remove a stray non-directory entry (such as a regular file or symlink) at
+/// `<cache_root>/<sha256>` so the hash directory can be published cleanly.
+fn remove_stray_non_dir(path: &Path) -> Result<bool, std::io::Error> {
+    match fs::symlink_metadata(path) {
+        Ok(meta) if !meta.file_type().is_dir() => match fs::remove_file(path) {
+            Ok(()) => Ok(true),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(true),
+            // On Windows, directory symlinks require `remove_dir`.
+            Err(error)
+                if cfg!(windows)
+                    && meta.file_type().is_symlink()
+                    && error.kind() == std::io::ErrorKind::PermissionDenied =>
+            {
+                match fs::remove_dir(path) {
+                    Ok(()) => Ok(true),
+                    Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(true),
+                    Err(err) => Err(err),
+                }
+            }
+            Err(error) => Err(error),
+        },
+        Ok(_) => Ok(false),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(error),
+    }
+}
+
+fn publish_stage_dir<R>(
+    stage: StageDir,
+    staged_file: &Path,
+    target_dir: &Path,
+    destination: &Path,
+    rename: R,
+) -> Result<(), PinnedError>
+where
+    R: Fn(&Path, &Path) -> std::io::Result<()>,
+{
+    remove_stray_non_dir(target_dir).map_err(|source| PinnedError::Rename {
         path: destination.to_path_buf(),
         source,
     })?;
-    verify(destination, sha256)
+
+    if !is_real_dir(target_dir) {
+        match rename(stage.path(), target_dir) {
+            Ok(()) => {
+                // The staging directory is now the live entry directory.
+                stage.disarm();
+            }
+            Err(_) if is_real_dir(target_dir) => {
+                // Another writer created the real hash directory concurrently;
+                // publish the staged file atomically into it.
+                rename(staged_file, destination).map_err(|source| PinnedError::Rename {
+                    path: destination.to_path_buf(),
+                    source,
+                })?;
+            }
+            Err(source) => match remove_stray_non_dir(target_dir) {
+                Ok(true) => {
+                    rename(stage.path(), target_dir).map_err(|retry_source| {
+                        PinnedError::Rename {
+                            path: destination.to_path_buf(),
+                            source: retry_source,
+                        }
+                    })?;
+                    stage.disarm();
+                }
+                _ => {
+                    return Err(PinnedError::Rename {
+                        path: destination.to_path_buf(),
+                        source,
+                    });
+                }
+            },
+        }
+    } else {
+        rename(staged_file, destination).map_err(|source| PinnedError::Rename {
+            path: destination.to_path_buf(),
+            source,
+        })?;
+    }
+    Ok(())
 }
 
-fn name_of(path: &Path) -> String {
-    path.file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or("pinned")
-        .to_owned()
+/// Stage already-verified bytes in a sibling temporary directory inside `root`
+/// and publish them atomically via rename.
+fn publish_verified(
+    root: &Path,
+    name: &str,
+    verified: VerifiedBytes<'_>,
+) -> Result<PathBuf, PinnedError> {
+    let sha256 = verified.sha256();
+    validate_pin(name, sha256)?;
+    let target_dir = entry_dir(root, sha256);
+    let destination = target_dir.join(name);
+    fs::create_dir_all(root).map_err(|source| PinnedError::CacheRoot {
+        path: root.to_path_buf(),
+        source,
+    })?;
+    let stage = StageDir::create_in(root, sha256)?;
+    let staged_file = stage.path().join(name);
+    fs::write(&staged_file, verified.bytes()).map_err(|source| PinnedError::Write {
+        path: staged_file.clone(),
+        source,
+    })?;
+    publish_stage_dir(
+        stage,
+        &staged_file,
+        &target_dir,
+        &destination,
+        |from, to| fs::rename(from, to),
+    )?;
+    Ok(destination)
 }
 
-/// The cached bytes are what the pin describes.
-fn verify(path: &Path, expected: &str) -> Result<(), PinnedError> {
+#[cfg(test)]
+fn publish_verified_bytes(
+    root: &Path,
+    name: &str,
+    sha256: &str,
+    bytes: &[u8],
+) -> Result<PathBuf, PinnedError> {
+    validate_pin(name, sha256)?;
+    let destination = entry_path(root, name, sha256);
+    let verified =
+        VerifiedBytes::verify(bytes, sha256).map_err(|actual| PinnedError::CachedHash {
+            path: destination,
+            expected: sha256.to_owned(),
+            actual,
+        })?;
+    publish_verified(root, name, verified)
+}
+
+#[cfg(test)]
+thread_local! {
+    static TEST_HASH_CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+fn hash_bytes(bytes: &[u8]) -> String {
+    #[cfg(test)]
+    TEST_HASH_CALLS.with(|count| count.set(count.get() + 1));
+    crate::inventory::sha256_hex(bytes)
+}
+
+/// Verify that `<root>/<sha256>` is a real directory, `<root>/<sha256>/<name>`
+/// is a real regular file (never following symlinks), and its SHA-256 matches
+/// `sha256`.
+fn verify_cache_entry(root: &Path, name: &str, sha256: &str) -> Result<PathBuf, PinnedError> {
+    let dir = entry_dir(root, sha256);
+    let destination = dir.join(name);
+    match fs::symlink_metadata(&dir) {
+        Ok(meta) if meta.file_type().is_dir() => {}
+        Ok(_) => {
+            return Err(PinnedError::Read {
+                path: dir,
+                source: std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "pinned fixture hash directory must be a real directory, not a symlink or file",
+                ),
+            });
+        }
+        Err(source) if source.kind() == std::io::ErrorKind::NotFound => {
+            return Err(PinnedError::CacheMiss { path: destination });
+        }
+        Err(source) => return Err(PinnedError::Read { path: dir, source }),
+    }
+    match fs::symlink_metadata(&destination) {
+        Ok(meta) if meta.file_type().is_file() => {}
+        Ok(_) => {
+            return Err(PinnedError::Read {
+                path: destination,
+                source: std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "pinned fixture cache entry must be a real file, not a symlink or directory",
+                ),
+            });
+        }
+        Err(source) if source.kind() == std::io::ErrorKind::NotFound => {
+            return Err(PinnedError::CacheMiss { path: destination });
+        }
+        Err(source) => {
+            return Err(PinnedError::Read {
+                path: destination,
+                source,
+            });
+        }
+    }
+    verify_bytes_at_path(&destination, sha256).map(|()| destination)
+}
+
+/// Read and hash an already-`lstat`-verified regular file path.
+fn verify_bytes_at_path(path: &Path, expected: &str) -> Result<(), PinnedError> {
     let bytes = fs::read(path).map_err(|source| PinnedError::Read {
         path: path.to_path_buf(),
         source,
     })?;
-    let actual = crate::inventory::sha256_hex(&bytes);
+    let actual = hash_bytes(&bytes);
     if actual == expected {
         Ok(())
     } else {
@@ -246,6 +630,25 @@ fn verify(path: &Path, expected: &str) -> Result<(), PinnedError> {
             actual,
         })
     }
+}
+
+/// The cached bytes are what the pin describes. Never follows symlinks.
+#[cfg(test)]
+fn verify(path: &Path, expected: &str) -> Result<(), PinnedError> {
+    let meta = fs::symlink_metadata(path).map_err(|source| PinnedError::Read {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    if !meta.file_type().is_file() {
+        return Err(PinnedError::Read {
+            path: path.to_path_buf(),
+            source: std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "pinned fixture cache entry must be a real file, not a symlink or directory",
+            ),
+        });
+    }
+    verify_bytes_at_path(path, expected)
 }
 
 #[cfg(test)]

@@ -4,7 +4,6 @@
 //! parent's view of its private items (`use super::*`).
 
 use super::reap::ChildOwnershipIo;
-use super::reap::ReapableChildIo;
 use super::*;
 
 pub fn register_bootstrap_vars(obarray: &mut neovm_value::symbol::Obarray) {
@@ -319,7 +318,7 @@ pub(super) fn deliver_process_signal(
     signal_num: i32,
     recipient: ProcessSignalRecipient,
 ) -> i32 {
-    let Some(pid) = proc.live_io.child.pid_if_unreaped() else {
+    let Some(pid) = proc.live_io().child().pid_if_unreaped() else {
         return -1;
     };
     match recipient {
@@ -358,7 +357,7 @@ fn send_signal_via_terminal_character(proc: &mut Process, signal_num: i32) -> bo
         libc::SIGTSTP => libc::VSUSP,
         _ => return false,
     } as usize;
-    let Some(fd) = proc.live_io.pty_master.as_ref().and_then(|m| m.as_raw_fd()) else {
+    let Some(fd) = proc.live_io().pty_master().and_then(|m| m.as_raw_fd()) else {
         return false;
     };
     let mut termios = std::mem::MaybeUninit::<libc::termios>::uninit();
@@ -377,7 +376,7 @@ fn send_signal_via_terminal_character(proc: &mut Process, signal_num: i32) -> bo
     if character == libc::_POSIX_VDISABLE as libc::cc_t {
         return false;
     }
-    let Some(writer) = proc.live_io.pty_writer.as_mut() else {
+    let Some(writer) = proc.pty_writer_mut() else {
         return false;
     };
     // The master fd is non-blocking (PTY registration sets O_NONBLOCK), so a
@@ -412,7 +411,7 @@ fn send_signal_via_terminal_character(_proc: &mut Process, _signal_num: i32) -> 
 }
 
 pub(super) fn process_has_subprocess_backing(proc: &Process) -> bool {
-    proc.os_pid.is_some() || proc.live_io.child.has_child()
+    proc.os_pid.is_some() || proc.live_io().child().has_child()
 }
 
 pub(super) fn record_unbacked_real_process_signal(proc: &mut Process, signal_num: i32) -> bool {
@@ -447,14 +446,18 @@ pub(super) fn kill_real_process_child(proc: &mut Process, signal_num: i32) {
     if record_unbacked_real_process_signal(proc, signal_num) {
         return;
     }
-    proc.live_io.child.kill_handle();
+    proc.live_io_mut().child_mut().kill_handle();
 }
 
 /// GNU asynchronous delete transfers the child to deleted_pid_list
 /// (callproc.c:202-207); handle_child_signal later reaps it with WNOHANG
 /// (process.c:7700-7715). Never block while the child can need its PTY drained.
+///
+/// Any poll-registered child `stdin` is wrapped in `PollRegistration<File>`, so
+/// transferring ownership to the deferred reaper still unregisters `stdin`
+/// before closing it.
 pub(super) fn defer_real_process_child_reaping(proc: &mut Process) {
-    proc.live_io.child.defer_reaping();
+    proc.live_io_mut().child_mut().defer_reaping();
 }
 
 pub(super) fn signal_hup_number() -> i32 {
@@ -693,14 +696,24 @@ pub(super) fn parse_network_host(
     }
 }
 
-pub(super) fn network_service_protocol(socket_type: NetworkSocketType) -> &'static str {
-    match socket_type {
-        NetworkSocketType::Datagram => "udp",
-        _ => "tcp",
+/// Convert `make-network-process` `:service` to the `portstring` passed to
+/// `getaddrinfo` (GNU `src/process.c:4139-4154`): `t` -> `"0"`, fixnum ->
+/// decimal string (including negative fixnums, which `getaddrinfo` rejects with
+/// `EAI_SERVICE`), string -> raw bytes, anything else -> `(wrong-type-argument stringp ...)`.
+pub(super) fn network_service_to_addrinfo_string(value: &Value) -> Result<String, Flow> {
+    match value.kind() {
+        ValueKind::T => Ok("0".to_string()),
+        ValueKind::Fixnum(port) => Ok(port.to_string()),
+        ValueKind::String => Ok(process_owned_runtime_string(*value)),
+        _ => Err(signal_wrong_type_string(*value)),
     }
 }
 
 pub(super) fn parse_network_numeric_service_port(service: &str) -> Option<u16> {
+    let service = service.split('\0').next().unwrap_or_default();
+    if service.is_empty() {
+        return Some(0);
+    }
     let service = service.trim_start_matches(|ch: char| ch.is_ascii_whitespace());
     let service = service.strip_prefix('+').unwrap_or(service);
     if service.is_empty() || !service.bytes().all(|byte| byte.is_ascii_digit()) {
@@ -710,35 +723,6 @@ pub(super) fn parse_network_numeric_service_port(service: &str) -> Option<u16> {
         .parse::<u128>()
         .ok()
         .map(|port| (port % (1 << 16)) as u16)
-}
-
-pub(super) fn parse_network_service_port(
-    value: &Value,
-    server: bool,
-    socket_type: NetworkSocketType,
-) -> Result<u16, Flow> {
-    match value.kind() {
-        ValueKind::T if server => Ok(0),
-        ValueKind::Fixnum(port) if port >= 0 => Ok((port as u64 % (1 << 16)) as u16),
-        ValueKind::String => {
-            let service = process_owned_runtime_string(*value);
-            if service.is_empty() {
-                return Ok(0);
-            }
-            if let Some(port) = parse_network_numeric_service_port(&service) {
-                return Ok(port);
-            }
-            sys::net::service_port(&service, network_service_protocol(socket_type)).ok_or_else(
-                || {
-                    signal(
-                        "error",
-                        vec![Value::string(format!("Unknown service: {}", service))],
-                    )
-                },
-            )
-        }
-        _ => Err(signal_wrong_type_string(*value)),
-    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -764,11 +748,11 @@ pub(super) fn parse_network_address_spec(value: &Value) -> Result<NetworkAddress
 
     match items.len() {
         5 => {
-            let a = parse_lisp_sockaddr_part(items[0], 255)?;
-            let b = parse_lisp_sockaddr_part(items[1], 255)?;
-            let c = parse_lisp_sockaddr_part(items[2], 255)?;
-            let d = parse_lisp_sockaddr_part(items[3], 255)?;
-            let port = parse_lisp_sockaddr_part(items[4], u16::MAX as i64)?;
+            let a = parse_lisp_sockaddr_part(items.at(0), 255)?;
+            let b = parse_lisp_sockaddr_part(items.at(1), 255)?;
+            let c = parse_lisp_sockaddr_part(items.at(2), 255)?;
+            let d = parse_lisp_sockaddr_part(items.at(3), 255)?;
+            let port = parse_lisp_sockaddr_part(items.at(4), u16::MAX as i64)?;
             Ok(NetworkAddressSpec::Inet(SocketAddr::new(
                 IpAddr::V4(Ipv4Addr::new(a as u8, b as u8, c as u8, d as u8)),
                 port as u16,
@@ -777,9 +761,9 @@ pub(super) fn parse_network_address_spec(value: &Value) -> Result<NetworkAddress
         9 => {
             let mut segments = [0_u16; 8];
             for (idx, segment) in segments.iter_mut().enumerate() {
-                *segment = parse_lisp_sockaddr_part(items[idx], u16::MAX as i64)? as u16;
+                *segment = parse_lisp_sockaddr_part(items.at(idx), u16::MAX as i64)? as u16;
             }
-            let port = parse_lisp_sockaddr_part(items[8], u16::MAX as i64)?;
+            let port = parse_lisp_sockaddr_part(items.at(8), u16::MAX as i64)?;
             Ok(NetworkAddressSpec::Inet(SocketAddr::new(
                 IpAddr::V6(Ipv6Addr::new(
                     segments[0],

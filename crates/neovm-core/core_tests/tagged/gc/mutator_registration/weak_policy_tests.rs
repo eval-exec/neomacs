@@ -65,6 +65,9 @@ fn foreign_keeper_case(case: WeakPolicyCase) {
     let mut first = clean_context();
     let table = weak_table(&mut first);
     with_weak_sweep_keeper_for_test(&mut first, |first, first_keeper| {
+        // SAFETY: `first` is held stopped under `first_keeper` and is never
+        // evaluated while `second` is constructed for this foreign-keeper test.
+        unsafe { neovm_value::tagged::gc::clear_tagged_heap_if_installed(first.tagged_heap()) };
         let mut second = clean_context();
         with_weak_sweep_keeper_for_test(&mut second, |second, second_keeper| {
             let first_heap = first.tagged_heap();

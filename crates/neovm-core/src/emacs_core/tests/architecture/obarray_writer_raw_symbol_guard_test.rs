@@ -8,8 +8,8 @@
 //! `fn f(&mut self, name: &str) -> &mut LispSymbol` would bypass the
 //! Value/canonical-id domain: callers could read or mutate a symbol cell by
 //! name without the membership funnels, the function-clock policy, or the
-//! phase dispatch audit. The raw `Obarray` manager keeps such lookups
-//! internally (`get_or_intern`), but no writer capability may surface one.
+//! phase dispatch audit. No public `Obarray` method or writer capability may
+//! surface a mutable raw symbol borrow.
 //!
 //! This scans production source with syn:
 //!

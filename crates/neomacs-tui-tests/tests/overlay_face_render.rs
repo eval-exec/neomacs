@@ -461,3 +461,223 @@ fn overlay_face_wins_over_text_face_properties() {
         );
     }
 }
+
+/// P5a (default `live` overlay source): a fontification callback that moves an
+/// overlay, changes another via `overlay-put`, deletes a third, and forces GC
+/// mid-attempt must render byte-for-byte identically to GNU Emacs with
+/// `NEOMACS_LAYOUT_OVERLAY_SOURCE` unset while recording 0 copies, 0 view
+/// entries, 0 roots, and nonzero live records.
+#[test]
+fn live_overlay_source_fontification_mutations_match_gnu() {
+    let stats_dir = tempfile::tempdir().expect("live overlay stats tempdir");
+    let stats_path = stats_dir.path().join("layout-stats.log");
+
+    let (mut gnu, mut neo) = boot_pair_with_envs(
+        "",
+        &[],
+        &[("NEOMACS_LAYOUT_STATS_FILE", stats_path.as_os_str())],
+    );
+    eval_expression(
+        &mut gnu,
+        &mut neo,
+        r##"(progn
+  (show-paren-mode -1)
+  (switch-to-buffer (get-buffer-create "probe-live-ov"))
+  (fundamental-mode)
+  (erase-buffer)
+  (defface probe-live-f1 '((((type tty pc)) :background "#1144AA") (t :background "#1144AA")) "f1")
+  (defface probe-live-f2 '((((type tty pc)) :background "#AA4411") (t :background "#AA4411")) "f2")
+  (defface probe-live-f3 '((((type tty pc)) :background "#11AA44") (t :background "#11AA44")) "f3")
+  (insert "LINE1-MOVE\nLINE2-PUT\nLINE3-DEL\nLINE4-DEST\n")
+  (setq probe-live-ran nil)
+  (setq probe-live-ov-move (make-overlay 1 11))
+  (overlay-put probe-live-ov-move 'face 'probe-live-f1)
+  (setq probe-live-ov-put (make-overlay 12 21))
+  (overlay-put probe-live-ov-put 'face 'probe-live-f2)
+  (setq probe-live-ov-del (make-overlay 22 31))
+  (overlay-put probe-live-ov-del 'face 'probe-live-f2)
+  (put-text-property (point-min) (point-max) 'fontified nil)
+  (setq fontification-functions
+        (list (lambda (pos)
+                (unless probe-live-ran
+                  (setq probe-live-ran t)
+                  (move-overlay probe-live-ov-move 32 42)
+                  (overlay-put probe-live-ov-put 'face 'probe-live-f3)
+                  (delete-overlay probe-live-ov-del)
+                  (setq probe-live-ov-del nil)
+                  (garbage-collect))
+                (put-text-property pos (point-max) 'fontified t))))
+  (goto-char (point-min))
+  (redisplay t))"##,
+    );
+    read_both(&mut gnu, &mut neo, Duration::from_millis(500));
+    assert_pair_exact_display(
+        "live_overlay_source_fontification_mutations_match_gnu",
+        &gnu,
+        &neo,
+    );
+
+    let find_row = |session: &TuiSession, prefix: &str| -> u16 {
+        let screen = session.screen();
+        (0..screen.size().0)
+            .find(|row| {
+                (0..screen.size().1)
+                    .filter_map(|col| screen.cell(*row, col))
+                    .map(|cell| cell.contents().to_string())
+                    .collect::<String>()
+                    .starts_with(prefix)
+            })
+            .unwrap_or_else(|| panic!("row starting with {prefix} not found"))
+    };
+    for (label, session) in [("GNU", &gnu), ("NEO", &neo)] {
+        let screen = session.screen();
+        let r1 = find_row(session, "LINE1-MOVE");
+        let r2 = find_row(session, "LINE2-PUT");
+        let r3 = find_row(session, "LINE3-DEL");
+        let r4 = find_row(session, "LINE4-DEST");
+        assert_eq!(
+            screen.cell(r1, 2).unwrap().bgcolor(),
+            vt100::Color::Default,
+            "{label}: moved overlay must no longer paint LINE1-MOVE"
+        );
+        assert_eq!(
+            screen.cell(r2, 2).unwrap().bgcolor(),
+            vt100::Color::Rgb(17, 170, 68),
+            "{label}: overlay-put face must paint LINE2-PUT"
+        );
+        assert_eq!(
+            screen.cell(r3, 2).unwrap().bgcolor(),
+            vt100::Color::Default,
+            "{label}: deleted overlay must no longer paint LINE3-DEL"
+        );
+        assert_eq!(
+            screen.cell(r4, 2).unwrap().bgcolor(),
+            vt100::Color::Rgb(17, 68, 170),
+            "{label}: moved overlay must paint LINE4-DEST"
+        );
+    }
+
+    let stats_text = std::fs::read_to_string(&stats_path)
+        .expect("NEOMACS_LAYOUT_STATS_FILE must be written in default (live) mode");
+    assert!(
+        !stats_text.trim().is_empty(),
+        "expected layout stats lines in {}",
+        stats_path.display()
+    );
+    let mut saw_live_records = false;
+    for line in stats_text
+        .lines()
+        .filter(|line| line.contains("overlay_copies="))
+    {
+        assert!(
+            line.contains(
+                "overlay_copies=0 overlay_view_entries=0 overlay_roots=0 overlay_rebuilds=0"
+            ),
+            "default (live) overlay source must report 0 copies/entries/roots/rebuilds: {line}"
+        );
+        if let Some(rest) = line.split("overlay_live_records=").nth(1) {
+            let count: usize = rest
+                .split_whitespace()
+                .next()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(0);
+            if count > 0 {
+                saw_live_records = true;
+            }
+        }
+    }
+    assert!(
+        saw_live_records,
+        "expected nonzero overlay_live_records in stats:\n{stats_text}"
+    );
+}
+
+/// P5a (`NEOMACS_LAYOUT_OVERLAY_SOURCE=captured`): the explicit fallback knob
+/// must reach LayoutEngine end-to-end, render byte-for-byte identically to GNU
+/// Emacs, and record nonzero `overlay_copies` / `overlay_roots` with zero
+/// `overlay_live_records`.
+#[test]
+fn captured_env_knob_fontification_mutations_match_gnu() {
+    let stats_dir = tempfile::tempdir().expect("captured overlay stats tempdir");
+    let stats_path = stats_dir.path().join("layout-stats.log");
+
+    let (mut gnu, mut neo) = boot_pair_with_envs(
+        "",
+        &[],
+        &[
+            (
+                "NEOMACS_LAYOUT_OVERLAY_SOURCE",
+                std::ffi::OsStr::new("captured"),
+            ),
+            ("NEOMACS_LAYOUT_STATS_FILE", stats_path.as_os_str()),
+        ],
+    );
+    eval_expression(
+        &mut gnu,
+        &mut neo,
+        r##"(progn
+  (show-paren-mode -1)
+  (switch-to-buffer (get-buffer-create "probe-captured-ov"))
+  (fundamental-mode)
+  (erase-buffer)
+  (defface probe-cap-f1 '((((type tty pc)) :background "#1144AA") (t :background "#1144AA")) "f1")
+  (defface probe-cap-f2 '((((type tty pc)) :background "#AA4411") (t :background "#AA4411")) "f2")
+  (defface probe-cap-f3 '((((type tty pc)) :background "#11AA44") (t :background "#11AA44")) "f3")
+  (insert "LINE1-MOVE\nLINE2-PUT\nLINE3-DEL\nLINE4-DEST\n")
+  (setq probe-cap-ran nil)
+  (setq probe-cap-ov-move (make-overlay 1 11))
+  (overlay-put probe-cap-ov-move 'face 'probe-cap-f1)
+  (setq probe-cap-ov-put (make-overlay 12 21))
+  (overlay-put probe-cap-ov-put 'face 'probe-cap-f2)
+  (setq probe-cap-ov-del (make-overlay 22 31))
+  (overlay-put probe-cap-ov-del 'face 'probe-cap-f2)
+  (put-text-property (point-min) (point-max) 'fontified nil)
+  (setq fontification-functions
+        (list (lambda (pos)
+                (unless probe-cap-ran
+                  (setq probe-cap-ran t)
+                  (move-overlay probe-cap-ov-move 32 42)
+                  (overlay-put probe-cap-ov-put 'face 'probe-cap-f3)
+                  (delete-overlay probe-cap-ov-del)
+                  (setq probe-cap-ov-del nil)
+                  (garbage-collect))
+                (put-text-property pos (point-max) 'fontified t))))
+  (goto-char (point-min))
+  (redisplay t))"##,
+    );
+    read_both(&mut gnu, &mut neo, Duration::from_millis(500));
+    assert_pair_exact_display(
+        "captured_env_knob_fontification_mutations_match_gnu",
+        &gnu,
+        &neo,
+    );
+
+    let stats_text = std::fs::read_to_string(&stats_path).expect(
+        "NEOMACS_LAYOUT_STATS_FILE must be written under NEOMACS_LAYOUT_OVERLAY_SOURCE=captured",
+    );
+    let parse_stat = |line: &str, key: &str| -> usize {
+        line.split(&format!("{key}="))
+            .nth(1)
+            .and_then(|rest| rest.split_whitespace().next())
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0)
+    };
+    let mut total_copies = 0usize;
+    let mut total_roots = 0usize;
+    for line in stats_text
+        .lines()
+        .filter(|line| line.contains("overlay_copies="))
+    {
+        assert_eq!(
+            parse_stat(line, "overlay_live_records"),
+            0,
+            "captured fallback knob must visit 0 live records: {line}"
+        );
+        total_copies += parse_stat(line, "overlay_copies");
+        total_roots += parse_stat(line, "overlay_roots");
+    }
+    assert!(
+        total_copies > 0 && total_roots > 0,
+        "NEOMACS_LAYOUT_OVERLAY_SOURCE=captured must copy overlays and retain roots (copies={total_copies}, roots={total_roots}):\n{stats_text}"
+    );
+}

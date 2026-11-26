@@ -1,0 +1,26 @@
+[package]
+name = "pentry-l6-loom"
+version = "0.0.0"
+edition = "2024"
+publish = false
+license = "GPL-3.0-or-later"
+autotests = false
+
+# L6 design section 3: the product rendezvous control/ring copied read-only and
+# driven under Loom. No product workspace dependency and no product feature.
+[workspace]
+
+[dev-dependencies]
+loom = "=0.7.2"
+static_assertions = "=1.1.0"
+
+[profile.test]
+opt-level = 1
+
+[[test]]
+name = "ring"
+path = "tests/ring.rs"
+
+[[test]]
+name = "confinement"
+path = "tests/confinement.rs"

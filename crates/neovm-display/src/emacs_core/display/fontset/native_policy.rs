@@ -3,7 +3,10 @@
 //! The fontset owner resolves symbol spellings at mutation/restore. Capturing a
 //! character clones two shared slices; it neither copies nor limits the chain.
 
-use super::{DEFAULT_FONTSET_NAME, FontSpecEntry, FontsetData, fontset_name_spelling, registry};
+use super::{
+    DEFAULT_FONTSET_NAME, FontSpecEntry, FontSpecEntryExt, FontsetData, fontset_name_spelling,
+    registry,
+};
 use crate::emacs_core::fontset::StoredFontSpecExt;
 use crate::face::{FontSlant, FontWeight, FontWidth};
 use neovm_value::intern::{SymId, resolve_sym_lisp_string};
@@ -308,6 +311,21 @@ impl CapturedFontsetChain {
         self.revision
     }
 
+    /// Rendering specs in charset order, split so a caller can reorder only
+    /// the fallback group. Each spec is the rendering view (no encoding
+    /// metadata), which is the value the live walk stores.
+    pub fn rendering_groups(
+        &self,
+    ) -> (
+        Vec<(FontSpecEntry, FontsetRenderingEntry)>,
+        Vec<(FontSpecEntry, FontsetRenderingEntry)>,
+    ) {
+        (
+            rendering_view(&self.specific),
+            rendering_view(&self.fallback),
+        )
+    }
+
     /// The terminal ExplicitNone is deliberately visible. Consumers distinguish
     /// that stop from exhaustion before deciding to try generic native fallback.
     pub fn iter(&self) -> impl Iterator<Item = &FontsetRenderingEntry> {
@@ -316,6 +334,18 @@ impl CapturedFontsetChain {
             .chain(self.fallback.iter())
             .map(StoredFontsetEntry::rendering)
     }
+}
+
+fn rendering_view(entries: &SharedFontsetEntries) -> Vec<(FontSpecEntry, FontsetRenderingEntry)> {
+    entries
+        .iter()
+        .filter_map(|entry| {
+            let spec = entry
+                .original()
+                .for_lookup(0, super::FontsetLookupPurpose::Rendering)?;
+            Some((spec, entry.rendering().clone()))
+        })
+        .collect()
 }
 
 static_assertions::assert_impl_all!(CapturedFontsetChain: Send, Sync, Clone, std::fmt::Debug);

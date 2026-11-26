@@ -66,3 +66,20 @@ impl TaggedValue {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::TaggedValue;
+
+    #[test]
+    fn gc_string_ptr_refuses_dead_object() {
+        assert!(
+            TaggedValue::DEAD.gc_string_ptr().is_none(),
+            "DEAD must not project a string pointer"
+        );
+        assert!(
+            TaggedValue::DEAD.gc_heap_ptr().is_none(),
+            "DEAD must not project a heap pointer"
+        );
+    }
+}

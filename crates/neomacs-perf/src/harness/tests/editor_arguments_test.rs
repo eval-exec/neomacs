@@ -204,3 +204,55 @@ fn editor_arguments_default_empty_keeps_the_original_frontend_argv() {
             .any(|arg| arg.to_string_lossy().contains("rows-query-admission"))
     );
 }
+
+/// #14946 wiring-edge test: resolved canonical `taskset` and `perf` paths on
+/// `RunRequest` MUST reach `frontend_command` (`Command::get_program`) and
+/// `PerfStatCapture::wrap` (`Command::get_program` + wrapped args). Reverting
+/// either call site back to bare `"taskset"` or `"perf"` fails this test.
+#[test]
+fn resolved_guard_tools_reach_frontend_command_and_perf_stat_capture() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path();
+    let prepared = prepared(root);
+    let pinned_taskset = PathBuf::from("/opt/pinned-tools/bin/taskset");
+    let pinned_perf = PathBuf::from("/opt/pinned-tools/bin/perf");
+    let request = RunRequest::new(
+        ScenarioId::OrgEditing,
+        "/opt/neomacs-perf/v0.0.21/bin/neomacs",
+        NonZeroU32::new(20).unwrap(),
+    )
+    .with_frontend(Frontend::Batch)
+    .with_machine_policy(MachinePolicy {
+        cpu: Some(0),
+        required_governor: None,
+    })
+    .with_counters(Some(CounterScope::EditLoop))
+    .with_resolved_tools(Some(pinned_taskset.clone()), Some(pinned_perf.clone()));
+
+    let frontend = frontend_command(&request, root, &prepared, None);
+    assert_eq!(
+        frontend.get_program(),
+        pinned_taskset.as_os_str(),
+        "frontend_command must invoke resolved canonical taskset path"
+    );
+
+    #[cfg(target_os = "linux")]
+    {
+        let mut capture =
+            PerfStatCapture::new(root, CounterScope::WholeProcess, Duration::from_secs(10))
+                .with_perf_program(request.resolved_perf());
+        let wrapped = capture
+            .wrap(frontend, crate::CaptureRoute::Direct)
+            .expect("wrap batch command in perf stat");
+        assert_eq!(
+            wrapped.get_program(),
+            pinned_perf.as_os_str(),
+            "PerfStatCapture::wrap must invoke resolved canonical perf path"
+        );
+        let args: Vec<OsString> = wrapped.get_args().map(OsString::from).collect();
+        assert!(
+            args.iter().any(|arg| arg == pinned_taskset.as_os_str()),
+            "perf stat command must exec resolved canonical taskset path: {args:?}"
+        );
+    }
+}

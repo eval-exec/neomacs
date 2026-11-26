@@ -290,7 +290,7 @@ fn site_verdict(
     pool_len: usize,
 ) -> Result<Vec<usize>, String> {
     inlinable_verdict(callee, nargs)?;
-    if pool_len + callee.constants.len() > u16::MAX as usize + 1 {
+    if pool_len + callee.constants().len() > u16::MAX as usize + 1 {
         return Err("constant-pool".into());
     }
     // Unreachable ops (dead code after a `Return`) have no depth; skip the one
@@ -302,10 +302,10 @@ fn site_verdict(
 /// back by `NEOVM_JIT_COMPILE_STATS=1`, so each names ONE rule: whichever
 /// dominates a real workload is the rule worth relaxing next.
 fn inlinable_verdict(callee: &ByteCodeFunction, nargs: usize) -> Result<(), String> {
-    if !callee.lexical {
+    if !callee.lexical() {
         return Err("dynamic".into());
     }
-    if callee.env.is_some() {
+    if callee.env().is_some() {
         return Err("env".into());
     }
     let arity = JitParamShape::try_from(callee)
@@ -328,7 +328,7 @@ fn inlinable_verdict(callee: &ByteCodeFunction, nargs: usize) -> Result<(), Stri
     // A declared depth that cannot fit at position 0 must stay a call
     // (GNU setup_frame, src/bytecode.c:510-515). A fitting depth is still
     // spliced, with no positional charge at the splice.
-    if !crate::emacs_core::bytecode::vm::declared_frame_fits(callee.max_stack.get()) {
+    if !crate::emacs_core::bytecode::vm::declared_frame_fits(callee.max_stack().get()) {
         return Err("frame".into());
     }
     // A body that has never run has no feedback to trust.
@@ -400,7 +400,7 @@ fn callee_depths(callee: &ByteCodeFunction, nargs: usize) -> Option<Vec<usize>> 
     let ops = callee.executable_ops();
     let cfg = analyze_cfg(
         ops,
-        &callee.constants,
+        callee.constants(),
         callee.executable_gnu_byte_offset_map(),
         nargs,
     )
@@ -510,7 +510,7 @@ pub(crate) fn fuse_calls_from_body(
                 }
                 match site_verdict(bc, nargs, pool_len) {
                     Ok(depths) => {
-                        pool_len += bc.constants.len();
+                        pool_len += bc.constants().len();
                         sites.push((i, cidx, nargs, depths));
                     }
                     Err(why) => super::stats::record_inline(format!("reject:{why}")),
@@ -637,7 +637,7 @@ fn splice_sites(
             region_of.push(Some(region_id));
             caller_of_fused.push(i);
         }
-        fused_constants.extend_from_slice(&bc.constants);
+        fused_constants.extend_from_slice(bc.constants());
         let region_end = out.len();
         for g in return_gotos {
             out[g] = Op::Goto(region_end as u32);
@@ -863,3 +863,24 @@ pub(crate) fn reset_carrier_tls() {
 pub(crate) fn carrier_tls_fingerprint(h: &mut u64) {
     neovm_value::tls_fingerprint::mix(h, ACTIVE_FUSED.with(|slot| slot.borrow().is_some() as u64));
 }
+
+/// Cold source check. Cloning a fused body would retain its managed constants.
+#[cold]
+pub(crate) fn validate_source_compile_scope()
+-> Result<(), super::source_suspension::SourceScopeRefusal> {
+    use super::source_suspension::{SourceScopeRefusal, SourceScopeSlot};
+    ACTIVE_FUSED.with(|slot| {
+        let body = slot
+            .try_borrow_mut()
+            .map_err(|_| SourceScopeRefusal::Borrowed(SourceScopeSlot::FusedBody))?;
+        if body.is_some() {
+            Err(SourceScopeRefusal::FusedBody)
+        } else {
+            Ok(())
+        }
+    })
+}
+
+#[cfg(test)]
+#[path = "tests/inline_source_suspension_test.rs"]
+mod source_suspension_tests;

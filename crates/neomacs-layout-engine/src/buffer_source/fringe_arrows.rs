@@ -138,11 +138,17 @@ impl TruncationContinuationFringeRequest {
     }
 
     /// Apply the same resolved decoration to a detached worker row.
-    pub(crate) fn decorate_row(&self, row: &mut GlyphRow, continued: bool, continuation: bool) {
+    pub(crate) fn decorate_row(
+        &self,
+        row: &mut GlyphRow,
+        continued: bool,
+        continuation: bool,
+        truncated_right: bool,
+    ) {
         FringeArrowRowMutation {
             continued,
             continuation,
-            truncated_right: false,
+            truncated_right,
             has_left_fringe: self.has_left_fringe,
             has_right_fringe: self.has_right_fringe,
             bitmaps: self.bitmaps,

@@ -1,0 +1,25 @@
+error[E0597]: `run` does not live long enough
+  --> tests/p2ht_ui/finish_while_leased.rs:11:25
+   |
+ 9 |     let lease = {
+   |         ----- borrow later stored here
+10 |         let mut run = owner.run_access().unwrap();
+   |             ------- binding `run` declared here
+11 |         TableMut::enter(&mut run, table).unwrap()
+   |                         ^^^^^^^^ borrowed value does not live long enough
+12 |     };
+   |     - `run` dropped here while still borrowed
+
+error[E0505]: cannot move out of `owner` because it is borrowed
+  --> tests/p2ht_ui/finish_while_leased.rs:13:13
+   |
+ 8 | fn finish_while_leased(mut owner: Mutator<'static>, table: TaggedValue) {
+   |                        --------- binding `owner` declared here
+ 9 |     let lease = {
+10 |         let mut run = owner.run_access().unwrap();
+   |                       ----- borrow of `owner` occurs here
+...
+13 |     let _ = owner.finish(NonZeroU64::new(1).unwrap());
+   |             ^^^^^ move out of `owner` occurs here
+14 |     drop(lease);
+   |          ----- borrow later used here

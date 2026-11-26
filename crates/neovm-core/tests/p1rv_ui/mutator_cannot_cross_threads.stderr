@@ -41,5 +41,9 @@ error[E0599]: the associated function or constant `transfer` exists for struct `
           which is required by `Mutator<'static>: Send`
           `*mut GcHeader: Send`
           which is required by `Mutator<'static>: Send`
+          `*mut u8: Send`
+          which is required by `Mutator<'static>: Send`
+          `*mut usize: Send`
+          which is required by `Mutator<'static>: Send`
           `*const (): Send`
           which is required by `Mutator<'static>: Send`

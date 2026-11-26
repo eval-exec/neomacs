@@ -309,6 +309,8 @@ fn last_terminal_disconnect_enters_dying_after_kill_emacs_hook() {
     let _recorder = install_last_terminal_hook(&mut ctx);
     ctx.handle_display_terminal_disconnect();
     assert_last_terminal_exit(&mut ctx);
+    drop(_recorder);
+    drop(ctx);
 
     // GNU's SIGHUP path calls `Fkill_emacs` again while the first call
     // is still on the stack (`emacs.c:453-460`). A disconnect during

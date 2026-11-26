@@ -693,3 +693,322 @@ fn oracle_prop_iso_final_char_range() {
     ]];
     crate::common::assert_oracle_parity_expect(form, expect);
 }
+
+#[test]
+fn oracle_prop_iso_2022_list_is_not_the_bare_marker() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+
+    // coding.c:11017-11024 matches the symbol `iso-2022` before charset
+    // lookup. A one-element list is a charset, even when that charset is
+    // named `iso-2022`.
+    let form = r#"(progn
+        (define-charset 'iso-2022 "named"
+          :dimension 1 :code-space [33 126] :iso-final-char ?Q :code-offset 900)
+        (define-coding-system 'cr-list "x"
+          :mnemonic ?x :coding-type 'iso-2022 :charset-list '(iso-2022)
+          :designation [(ascii 94) nil nil nil]
+          :flags '(7-bit designation))
+        (define-coding-system 'cr-bare "x"
+          :mnemonic ?x :coding-type 'iso-2022 :charset-list 'iso-2022
+          :designation [(ascii t) nil nil nil]
+          :flags '(7-bit designation))
+        (list
+          (coding-system-get 'cr-list :charset-list)
+          (coding-system-get 'cr-bare :charset-list)
+          (string-to-list (decode-coding-string "\e(QA" 'cr-list))
+          (string-to-list (decode-coding-string "\e(QA" 'cr-bare))
+          (string-to-list (decode-coding-string "\e,AA" 'cr-list))
+          (string-to-list (decode-coding-string "\e,AA" 'cr-bare))))"#;
+    let expect =
+        expect_test::expect![[r#""OK ((iso-2022) iso-2022 (932) (932) (27 44 65 65) (193))""#]];
+    crate::common::assert_oracle_parity_expect(form, expect);
+}
+
+#[test]
+fn oracle_prop_iso_2022_explicit_entry_must_be_a_charset() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+
+    // CHECK_CHARSET_GET_CHARSET (charset.h:365-399) signals charsetp for an
+    // undefined symbol and for a non-symbol. The signal is raised before the
+    // coding system is registered.
+    let form = r#"(list
+        (condition-case err
+            (progn
+              (define-coding-system 'cr-missing "x"
+                :mnemonic ?x :coding-type 'iso-2022
+                :charset-list '(ascii cr-missing)
+                :designation [(ascii 94) nil nil nil]
+                :flags '(7-bit designation))
+              'ok)
+          (error (list 'err err)))
+        (condition-case err
+            (progn
+              (define-coding-system 'cr-nonsym "x"
+                :mnemonic ?x :coding-type 'iso-2022
+                :charset-list '(ascii 1)
+                :designation [(ascii 94) nil nil nil]
+                :flags '(7-bit designation))
+              'ok)
+          (error (list 'err err))))"#;
+    let expect = expect_test::expect![[
+        r#""OK ((err (wrong-type-argument charsetp cr-missing)) (err (wrong-type-argument charsetp 1)))""#
+    ]];
+    crate::common::assert_oracle_parity_expect(form, expect);
+}
+
+#[test]
+fn oracle_prop_charset_type_list_entry_must_be_a_charset() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+
+    // coding.c:11044-11049 rejects an undefined explicit list entry before
+    // registration for every coding type, not only iso-2022. A `charset`-type
+    // system then derives :ascii-compatible-p from the listed charsets
+    // (coding.c:11119-11129).
+    let form = r#"(list
+        (condition-case err
+            (progn
+              (define-coding-system-internal 'memo-test-cs ?x 'charset '(memo-test-charset)
+                nil nil nil nil nil nil nil '(:name memo-test-cs :docstring "") nil)
+              'ok)
+          (error (list 'err err)))
+        (progn
+          (define-charset-internal 'memo-test-charset 1 [33 126 0 0 0 0 0 0]
+            nil nil nil nil nil t nil nil 0 nil nil nil nil nil)
+          (define-coding-system-internal 'memo-test-cs ?x 'charset '(memo-test-charset)
+            nil nil nil nil nil nil nil '(:name memo-test-cs :docstring "") nil)
+          (plist-get (coding-system-plist 'memo-test-cs) :ascii-compatible-p)))"#;
+    let expect = expect_test::expect![[
+        r#""OK ((err (wrong-type-argument charsetp memo-test-charset)) t)""#
+    ]];
+    crate::common::assert_oracle_parity_expect(form, expect);
+}
+
+#[test]
+fn oracle_prop_iso_2022_cant_handle_charset_without_a_final() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+
+    // coding.c:11049-11055. An iso-2022 list rejects a charset with no final.
+    // An emacs-mule list rejects a charset with no mule id. The bare
+    // `emacs-mule` symbol does not take that check. The message is
+    // `error("Can't handle charset `%s'")` routed through doprnt, which
+    // follows the current text-quoting-style (doprnt.c:493-499): curve by
+    // default, grave and straight verbatim/replaced when bound.
+    let form = r#"(list
+        (condition-case err
+            (progn
+              (define-charset 'cr-nofinal "x"
+                :dimension 1 :code-space [33 126] :code-offset 100)
+              (define-coding-system 'cr-nofinal-cs "x"
+                :mnemonic ?x :coding-type 'iso-2022
+                :charset-list '(ascii cr-nofinal)
+                :designation [(ascii 94) nil nil nil]
+                :flags '(7-bit designation))
+              'ok)
+          (error (list 'error (error-message-string err))))
+        (condition-case err
+            (progn
+              (define-charset 'cr-nomule "x"
+                :dimension 1 :code-space [33 126] :code-offset 100)
+              (define-coding-system 'cr-nomule-cs "x"
+                :mnemonic ?x :coding-type 'emacs-mule
+                :charset-list '(cr-nomule))
+              'ok)
+          (error (list 'error (error-message-string err))))
+        (condition-case err
+            (progn
+              (define-coding-system 'cr-mule-sym "x"
+                :mnemonic ?x :coding-type 'emacs-mule
+                :charset-list 'emacs-mule)
+              (coding-system-get 'cr-mule-sym :charset-list))
+          (error (list 'err err)))
+        (let ((text-quoting-style 'grave))
+          (condition-case err
+              (progn
+                (define-coding-system 'cr-nofinal-grave-cs "x"
+                  :mnemonic ?x :coding-type 'iso-2022
+                  :charset-list '(ascii cr-nofinal)
+                  :designation [(ascii 94) nil nil nil]
+                  :flags '(7-bit designation))
+                'ok)
+            (error (list 'error (error-message-string err)))))
+        (let ((text-quoting-style 'straight))
+          (condition-case err
+              (progn
+                (define-coding-system 'cr-nomule-straight-cs "x"
+                  :mnemonic ?x :coding-type 'emacs-mule
+                  :charset-list '(cr-nomule))
+                'ok)
+            (error (list 'error (error-message-string err))))))"#;
+    let expect = expect_test::expect![[
+        r#""OK ((error \"Can’t handle charset ‘cr-nofinal’\") (error \"Can’t handle charset ‘cr-nomule’\") emacs-mule (error \"Can't handle charset `cr-nofinal'\") (error \"Can't handle charset 'cr-nomule'\"))""#
+    ]];
+    crate::common::assert_oracle_parity_expect(form, expect);
+}
+
+#[test]
+fn oracle_prop_iso_2022_priority_refreshes_full_support() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+
+    // Fset_charset_priority (charset.c:2173-2223) replaces
+    // Viso_2022_charset_list. The next full-support setup copies that object
+    // (coding.c:2868-2874). A later append keeps the new head, so it stays
+    // out. An explicit list is not full support and does not refresh.
+    let form = r#"(progn
+        (define-coding-system 'cr-full "x"
+          :mnemonic ?x :coding-type 'iso-2022 :charset-list 'iso-2022
+          :designation [(ascii t) nil nil nil]
+          :flags '(7-bit designation))
+        (define-charset 'cr-z "x"
+          :dimension 1 :code-space [33 126] :iso-final-char ?Z :code-offset 900)
+        (let ((before (string-to-list (decode-coding-string "\e(ZA" 'cr-full))))
+          (set-charset-priority 'cr-z)
+          (let ((after (string-to-list (decode-coding-string "\e(ZA" 'cr-full))))
+            (define-charset 'cr-y "x"
+              :dimension 1 :code-space [33 126] :iso-final-char ?Y :code-offset 700)
+            (let ((appended (string-to-list (decode-coding-string "\e(YA" 'cr-full))))
+              (define-charset 'cr-w "x"
+                :dimension 1 :code-space [33 126] :iso-final-char ?W :code-offset 500)
+              (define-coding-system 'cr-rest "x"
+                :mnemonic ?x :coding-type 'iso-2022 :charset-list '(ascii cr-w)
+                :designation [(ascii 94) nil nil nil]
+                :flags '(7-bit designation))
+              (define-charset 'cr-v "x"
+                :dimension 1 :code-space [33 126] :iso-final-char ?V :code-offset 300)
+              (set-charset-priority 'cr-v)
+              (list before after appended
+                (string-to-list (decode-coding-string "\e(WA" 'cr-rest))
+                (string-to-list (decode-coding-string "\e(VA" 'cr-rest)))))))"#;
+    let expect =
+        expect_test::expect![[r#""OK ((27 40 90 65) (932) (27 40 89 65) (532) (27 40 86 65))""#]];
+    crate::common::assert_oracle_parity_expect(form, expect);
+}
+
+#[test]
+fn oracle_prop_iso_2022_level4_accepts_a_gl_single_shift() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+
+    // coding.c:3721-3725. 8-bit level 4 accepts a GL single-shift lead.
+    // Level 4A accepts a GR lead. A control lead is rejected in both, and
+    // level 4 rejects a GR lead.
+    let form = r#"(progn
+        (define-charset 'cr-ss "x"
+          :dimension 2 :code-space [0 255 0 255] :iso-final-char ?Y :code-offset 0)
+        (define-coding-system 'cr-l4 "x"
+          :mnemonic ?x :coding-type 'iso-2022 :charset-list '(ascii cr-ss)
+          :designation [(ascii 94) nil cr-ss nil]
+          :flags '(designation single-shift 8-bit-level-4))
+        (define-coding-system 'cr-l4a "x"
+          :mnemonic ?x :coding-type 'iso-2022 :charset-list '(ascii cr-ss)
+          :designation [(ascii 94) nil cr-ss nil]
+          :flags '(designation single-shift))
+        (list
+          (string-to-list (decode-coding-string "\eN!!" 'cr-l4))
+          (string-to-list (decode-coding-string "\eN!!" 'cr-l4a))
+          (string-to-list (decode-coding-string "\eN\n!" 'cr-l4))
+          (string-to-list (decode-coding-string "\eN\n!" 'cr-l4a))
+          (string-to-list (decode-coding-string (unibyte-string #x8E ?! ?!) 'cr-l4))
+          (string-to-list (decode-coding-string (unibyte-string #x8E #xA1 #xA1) 'cr-l4a))
+          (string-to-list (decode-coding-string (unibyte-string #x8E #xA1 #xA1) 'cr-l4))
+          (string-to-list (decode-coding-string (unibyte-string #x8E ?! ?!) 'cr-l4a))))"#;
+    let expect = expect_test::expect![[
+        r#""OK ((8481) (27 78 33 33) (27 78 10 33) (27 78 10 33) (8481) (8481) (4194190 4194209 4194209) (4194190 33 33))""#
+    ]];
+    crate::common::assert_oracle_parity_expect(form, expect);
+}
+
+#[test]
+fn oracle_prop_iso_2022_c1_resets_g0_before_the_graphic() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+
+    // coding.c:3601-3602. A C1 byte other than SS2/SS3 is invalid_code
+    // before graphic lookup, so G0 returns to ASCII. An unmapped GL graphic
+    // still keeps G0 (coding.c:3916-3926).
+    let form = r#"(progn
+        (define-charset 'cr-g0 "x"
+          :dimension 1 :code-space [33 126] :max-code 65
+          :iso-final-char ?Z :code-offset 200)
+        (define-coding-system 'cr-8 "x"
+          :mnemonic ?x :coding-type 'iso-2022 :charset-list '(ascii cr-g0)
+          :designation [cr-g0 latin-iso8859-1 nil nil]
+          :flags '(designation))
+        (list
+          (string-to-list (decode-coding-string (unibyte-string #x81 ?A) 'cr-8))
+          (string-to-list (decode-coding-string (unibyte-string #x9B ?A) 'cr-8))
+          (string-to-list (decode-coding-string "~A" 'cr-8))))"#;
+    let expect = expect_test::expect![[r#""OK ((4194177 65) (4194203 65) (126 232))""#]];
+    crate::common::assert_oracle_parity_expect(form, expect);
+}
+
+#[test]
+fn oracle_prop_sort_charsets_orders_by_priority_in_place() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+
+    // GNU `Fsort_charsets` (charset.c:2254): each charset ranks by where its
+    // id stands in `Vcharset_ordered_list`, so an alias ties with its target
+    // and keeps its input order. The sorted names go back into the same
+    // conses. `ctext-pre-write-conversion` (mule.el) sorts
+    // `ctext-standard-encodings` this way. The harness's
+    // `(set-language-environment "UTF-8")` ranks `unicode` above `ascii`.
+    let form = r#"(let* ((l (list 'unicode 'ascii 'eight-bit))
+       (second (cdr l))
+       (sorted (sort-charsets l)))
+  (list sorted (eq sorted l) (eq (cdr l) second)
+        (sort-charsets nil)
+        (sort-charsets (list 'unicode 'ascii 'unicode))
+        (sort-charsets (list 'unicode 'ucs 'ascii))
+        (sort-charsets (list 'ucs 'unicode 'ascii))
+        (sort-charsets (list 'japanese-jisx0208 'latin-iso8859-1 'ascii
+                             'chinese-gb2312 'korean-ksc5601))
+        (equal (sort-charsets (reverse (charset-priority-list)))
+               (charset-priority-list))
+        (sort-charsets (copy-sequence ctext-standard-encodings))))"#;
+    let expect = expect_test::expect![[
+        r#""OK ((unicode ascii eight-bit) t t nil (unicode unicode ascii) (unicode ucs ascii) (ucs unicode ascii) (ascii latin-iso8859-1 chinese-gb2312 japanese-jisx0208 korean-ksc5601) t (ascii latin-iso8859-1 latin-iso8859-2 latin-iso8859-3 latin-iso8859-4 cyrillic-iso8859-5 arabic-iso8859-6 greek-iso8859-7 hebrew-iso8859-8 latin-iso8859-9 chinese-gb2312 japanese-jisx0208 korean-ksc5601 latin-jisx0201 katakana-jisx0201))""#
+    ]];
+    crate::common::assert_oracle_parity_expect(form, expect);
+}
+
+#[test]
+fn oracle_prop_sort_charsets_checks_the_list_before_its_charsets() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+
+    // `list_length` rejects an improper or circular list before any element
+    // meets `CHECK_CHARSET_GET_ATTR`, and a failed call leaves the list as it
+    // was.
+    let form = r#"(let ((circular (list 'ascii 'unicode))
+      (bad (list 'unicode 'ascii 'foo)))
+  (setcdr (cdr circular) circular)
+  (list (condition-case e (sort-charsets 'ascii) (error e))
+        (condition-case e (sort-charsets (cons 'unicode 'ascii)) (error e))
+        (condition-case e (sort-charsets (cons 'foo 'bar)) (error e))
+        (condition-case e (sort-charsets (list 'ascii 'foo)) (error e))
+        (condition-case e (sort-charsets (list 1)) (error e))
+        (condition-case e (sort-charsets (list nil)) (error e))
+        (condition-case e (sort-charsets (list "ascii")) (error e))
+        (car (condition-case e (sort-charsets circular) (error e)))
+        (condition-case nil (sort-charsets bad) (error bad))))"#;
+    let expect = expect_test::expect![[
+        r#""OK ((wrong-type-argument listp ascii) (wrong-type-argument listp ascii) (wrong-type-argument listp bar) (wrong-type-argument charsetp foo) (wrong-type-argument charsetp 1) (wrong-type-argument charsetp nil) (wrong-type-argument charsetp \"ascii\") circular-list (unicode ascii foo))""#
+    ]];
+    crate::common::assert_oracle_parity_expect(form, expect);
+}
+
+#[test]
+fn oracle_prop_sort_charsets_follows_set_charset_priority() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+
+    // `set-charset-priority` reorders `Vcharset_ordered_list`, and an alias
+    // defined afterwards ranks with the charset it names.
+    let form = r#"(progn
+  (set-charset-priority 'korean-ksc5601 'latin-iso8859-1)
+  (define-charset-alias 'neo-sort-charsets-alias 'korean-ksc5601)
+  (list (sort-charsets (list 'ascii 'latin-iso8859-1 'japanese-jisx0208
+                             'korean-ksc5601))
+        (sort-charsets (list 'ascii 'neo-sort-charsets-alias 'latin-iso8859-1))
+        (equal (sort-charsets (reverse (charset-priority-list)))
+               (charset-priority-list))))"#;
+    let expect = expect_test::expect![[
+        r#""OK ((korean-ksc5601 latin-iso8859-1 ascii japanese-jisx0208) (neo-sort-charsets-alias latin-iso8859-1 ascii) t)""#
+    ]];
+    crate::common::assert_oracle_parity_expect(form, expect);
+}

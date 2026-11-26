@@ -2,28 +2,304 @@
 
 use super::*;
 use neomacs_display_protocol::glyph_matrix::{GlyphMatrix, MatrixRow};
-use neomacs_display_protocol::scroll_coverage::{ScrollCoverage, ScrollCoverageRenewal};
-use neomacs_display_protocol::{
-    FrameDisplayState, FrameRect, GlyphRowRole, PresentedHitIndex, PresentedHitRegion,
-    PresentedRegionKind, Rect,
+use neomacs_display_protocol::scroll_coverage::{
+    CoveragePublicationId, ScrollCoverage, ScrollCoverageRenewal,
 };
+use neomacs_display_protocol::{FrameDisplayState, GlyphRowRole, Rect};
 use neovm_core::window::{PresentedBodyRowSnapshot, WindowDisplaySnapshot};
+use std::rc::Rc;
 use std::sync::Arc;
 
 const MAX_COVERAGE_ROWS: usize = 192;
 
+/// An isolated process can retain the old exporter as the paired cost control.
+/// The setting is immutable for that process, like the point-row controls.
+fn coverage_export_reuse_enabled() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        !matches!(
+            std::env::var("NEOMACS_COVERAGE_EXPORT_REUSE")
+                .ok()
+                .map(|value| value.trim().to_ascii_lowercase())
+                .as_deref(),
+            Some("off" | "0" | "false" | "no")
+        )
+    })
+}
+
+#[derive(Clone, Copy, PartialEq)]
+struct ExportPlacement {
+    viewport: Rect,
+    window: Rect,
+    text: Rect,
+    clip: Option<Rect>,
+    selected: bool,
+}
+
+impl ExportPlacement {
+    fn new(
+        window: DisplayWindowId,
+        current: &RetainedWindowMatrix,
+        state: &FrameDisplayState,
+    ) -> Option<Self> {
+        let original = state
+            .window_matrices
+            .iter()
+            .find(|entry| entry.window_id == window)?;
+        Some(Self {
+            viewport: current.display_snapshot.regions.text_body,
+            window: original.pixel_bounds,
+            text: original.text_pixel_bounds,
+            clip: original.text_clip_bounds,
+            selected: original.selected,
+        })
+    }
+}
+
+// A frame can be coalesced before the renderer acquires its surface. Keep
+// exporting until activation acknowledges one of the full-surface publishes.
+#[derive(Clone, Copy)]
+enum ExportReceipt {
+    AwaitingActivation { first: u64, last: u64 },
+    // Every accepted frame passes through export, which either carries this
+    // epoch or revokes/re-keys it. Renderer activation acknowledges a full
+    // publish; CoverageRetention keeps its CPU surface across GPU device loss
+    // (frame_windows.rs::clear_gpu_resident_state drops GPU history only).
+    // An activation older than this receipt must not authorize renewal.
+    Active { first: u64 },
+}
+
+pub(super) struct CoverageExportInputs {
+    key: RetainedWindowKey,
+    placement: ExportPlacement,
+    pages: Vec<Rc<PreparedViewportPayload>>,
+    font_catalog: neomacs_display_protocol::font::FontCatalogGeneration,
+    surface: Arc<neomacs_display_protocol::scroll_coverage::ScrollSurface>,
+    receipt: ExportReceipt,
+}
+
+impl CoverageExportInputs {
+    fn new(
+        window: DisplayWindowId,
+        current: &RetainedWindowMatrix,
+        state: &FrameDisplayState,
+        pages: &[&PreparedViewport],
+        surface: &Arc<neomacs_display_protocol::scroll_coverage::ScrollSurface>,
+        receipt: ExportReceipt,
+    ) -> Option<Self> {
+        Some(Self {
+            key: current.key.clone(),
+            placement: ExportPlacement::new(window, current, state)?,
+            pages: pages.iter().map(|page| Rc::clone(&page.payload)).collect(),
+            font_catalog: state.font_catalog_generation,
+            surface: Arc::clone(surface),
+            receipt,
+        })
+    }
+
+    fn matches_surface(
+        &self,
+        window: DisplayWindowId,
+        current: &RetainedWindowMatrix,
+        state: &FrameDisplayState,
+    ) -> bool {
+        // Only point may differ. In particular preserve this window's own
+        // start, hscroll, vscroll, partition, source and font invalidators.
+        let mut key = current.key.clone();
+        key.point = self.key.point;
+        key == self.key
+            && ExportPlacement::new(window, current, state) == Some(self.placement)
+            && self.font_catalog == state.font_catalog_generation
+            && self.surface.frame_resources_match(state)
+    }
+
+    fn matches(
+        &self,
+        window: DisplayWindowId,
+        current: &RetainedWindowMatrix,
+        state: &FrameDisplayState,
+        pages: &[&PreparedViewport],
+    ) -> bool {
+        // Fault injection for the real exporter regression rows. The product
+        // has no switch that can bypass receipt freshness validation.
+        #[cfg(test)]
+        if std::env::var_os("NEOMACS_TEST_SKIP_COVERAGE_RECEIPT_INPUTS").is_some() {
+            return true;
+        }
+        self.matches_surface(window, current, state)
+            && self.pages.len() == pages.len()
+            && self
+                .pages
+                .iter()
+                .zip(pages)
+                .all(|(old, page)| Rc::ptr_eq(old, &page.payload))
+    }
+
+    fn activated(&mut self, active: Option<neomacs_display_protocol::PresentationId>) -> bool {
+        let Some(active) = active else { return false };
+        match self.receipt {
+            ExportReceipt::AwaitingActivation { first, last }
+                if (first..=last).contains(&active.get()) =>
+            {
+                self.receipt = ExportReceipt::Active { first };
+                true
+            }
+            ExportReceipt::Active { first } => active.get() >= first,
+            ExportReceipt::AwaitingActivation { .. } => false,
+        }
+    }
+}
+
 impl PreparedViewports {
+    pub(in crate::engine) fn export_auxiliary(
+        &mut self,
+        frame: neovm_core::window::FrameId,
+        retained: &rustc_hash::FxHashMap<DisplayWindowId, RetainedWindowMatrix>,
+        template: &FrameDisplayState,
+        arena: &FrameFaceArena,
+        metrics: &mut Option<crate::font::metrics::FontMetricsService>,
+        window_policy: impl Fn(DisplayWindowId) -> (bool, bool),
+    ) -> Result<
+        (
+            Vec<Arc<neomacs_display_protocol::scroll_coverage::ScrollSurface>>,
+            Vec<super::super::auxiliary_coverage::StagedAuxiliaryExport>,
+        ),
+        super::super::auxiliary_coverage::AuxiliaryPublicationRefusal,
+    > {
+        use super::super::auxiliary_coverage::{
+            AuxiliaryPublicationRefusal as Refusal, StagedAuxiliaryExport,
+        };
+        let reuse_enabled = coverage_export_reuse_enabled();
+        let mut windows: Vec<_> = retained.keys().copied().collect();
+        windows.sort_unstable_by_key(|owner| owner.get());
+        let mut surfaces = Vec::new();
+        let mut staged = Vec::with_capacity(windows.len());
+        for window in windows {
+            let current = &retained[&window];
+            let epoch = match self
+                .exports
+                .iter_mut()
+                .find(|export| export.frame == frame && export.window == window)
+            {
+                Some(export) => {
+                    if !RetainedWindowKey::row_content_eligible(&export.key, &current.key) {
+                        export.key = current.key.clone();
+                        export.epoch = next_epoch();
+                        export.certified = false;
+                        export.last_export = None;
+                    }
+                    export.visible_source = text_source_range(current);
+                    export.epoch
+                }
+                None => {
+                    let epoch = next_epoch();
+                    self.exports.push(ExportedCoverage {
+                        frame,
+                        window,
+                        key: current.key.clone(),
+                        epoch,
+                        certified: false,
+                        last_export: None,
+                        backward_start: None,
+                        visible_source: text_source_range(current),
+                    });
+                    epoch
+                }
+            };
+            if !reuse_enabled {
+                staged.push(StagedAuxiliaryExport {
+                    window,
+                    backward_start: None,
+                    published: false,
+                });
+                continue;
+            }
+            let Some(mut coverage) =
+                self.export_window(frame, window, current, template, arena, metrics, epoch)
+            else {
+                staged.push(StagedAuxiliaryExport {
+                    window,
+                    backward_start: None,
+                    published: false,
+                });
+                continue;
+            };
+            let (compositor_enabled, predict_pixels) = window_policy(window);
+            coverage.compositor_enabled = compositor_enabled;
+            coverage.predict_pixels = predict_pixels;
+            if !coverage.resources_compatible_with_frame_state(template) {
+                return Err(Refusal::ResourceConflict(window));
+            }
+            let backward_start = coverage
+                .content
+                .matrix
+                .rows
+                .first()
+                .map(|row| CharPos0::new(row.start_charpos));
+            let coverage = Arc::new(coverage);
+            let Some(surface) = coverage.materialize(template) else {
+                return Err(Refusal::SurfaceMaterializationRejected(window));
+            };
+            surfaces.push(surface);
+            staged.push(StagedAuxiliaryExport {
+                window,
+                backward_start,
+                published: true,
+            });
+        }
+        Ok((surfaces, staged))
+    }
+
+    pub(in crate::engine) fn commit_auxiliary_exports(
+        &mut self,
+        frame: neovm_core::window::FrameId,
+        staged: &[super::super::auxiliary_coverage::StagedAuxiliaryExport],
+    ) {
+        self.exports.retain(|export| {
+            export.frame != frame || staged.iter().any(|entry| entry.window == export.window)
+        });
+        for entry in staged {
+            if let Some(export) = self
+                .exports
+                .iter_mut()
+                .find(|export| export.frame == frame && export.window == entry.window)
+            {
+                export.certified = entry.published;
+                // Conservative receipt (no ACK in v1): the next ordinary frame
+                // re-exports cleanly instead of assuming renderer ingestion.
+                export.last_export = None;
+                export.backward_start = entry.backward_start;
+            }
+        }
+    }
+
+    pub(in crate::engine) fn clear_certified_exports_for_frame(
+        &mut self,
+        frame: neovm_core::window::FrameId,
+    ) {
+        for export in &mut self.exports {
+            if export.frame == frame {
+                export.certified = false;
+                export.last_export = None;
+            }
+        }
+    }
+
     pub(in crate::engine) fn export(
         &mut self,
         frame: neovm_core::window::FrameId,
         retained: &rustc_hash::FxHashMap<DisplayWindowId, RetainedWindowMatrix>,
+        stats: &mut LayoutStats,
+        active_presentation: Option<neomacs_display_protocol::PresentationId>,
         state: &mut FrameDisplayState,
         arena: &FrameFaceArena,
         metrics: &mut Option<crate::font::metrics::FontMetricsService>,
+        window_policy: impl Fn(DisplayWindowId) -> (bool, bool),
     ) {
+        let reuse_enabled = coverage_export_reuse_enabled();
         self.retire_invalid_dependencies();
         self.exports
-            .retain(|export| export.frame == frame && retained.contains_key(&export.window));
+            .retain(|export| export.frame != frame || retained.contains_key(&export.window));
         for (window, current) in retained {
             let index = match self
                 .exports
@@ -36,6 +312,7 @@ impl PreparedViewports {
                         export.key = current.key.clone();
                         export.epoch = next_epoch();
                         export.certified = false;
+                        export.last_export = None;
                     }
                     index
                 }
@@ -46,6 +323,7 @@ impl PreparedViewports {
                         key: current.key.clone(),
                         epoch: next_epoch(),
                         certified: false,
+                        last_export: None,
                         backward_start: None,
                         visible_source: text_source_range(current),
                     });
@@ -53,6 +331,39 @@ impl PreparedViewports {
                 }
             };
             self.exports[index].visible_source = text_source_range(current);
+            let pages: Vec<_> = self
+                .entries
+                .iter()
+                .filter(|entry| {
+                    reuse_enabled && entry.export_eligible(frame, *window, &current.key)
+                })
+                .collect();
+            // GNU xdisp.c:19867-19935 keeps the current matrix for ordinary
+            // point motion. Consume THIS window's accepted replay decision;
+            // a still sibling or minibuffer cannot certify its body geometry.
+            let body_reused = stats.window_classes.get(window) == Some(&LayoutClass::CursorOnly);
+            let same_inputs = body_reused
+                && self.exports[index]
+                    .last_export
+                    .as_ref()
+                    .is_some_and(|inputs| inputs.matches(*window, current, state, &pages));
+            if same_inputs
+                && self.exports[index].certified
+                && self.exports[index]
+                    .last_export
+                    .as_mut()
+                    .is_some_and(|inputs| inputs.activated(active_presentation))
+            {
+                let (compositor_enabled, predict_pixels) = window_policy(*window);
+                state.scroll_coverage_renewals.push(ScrollCoverageRenewal {
+                    window: *window,
+                    epoch: self.exports[index].epoch,
+                    predict_pixels,
+                    compositor_enabled,
+                });
+                continue;
+            }
+            *stats.coverage_export_calls.entry(*window).or_default() += 1;
             let coverage = self.export_window(
                 frame,
                 *window,
@@ -67,28 +378,101 @@ impl PreparedViewports {
                 .and_then(|coverage| coverage.content.matrix.rows.first())
                 .map(|row| CharPos0::new(row.start_charpos));
             match coverage {
-                Some(coverage) => {
+                Some(mut coverage) => {
+                    if same_inputs
+                        && let Some(previous) = self.exports[index].last_export.as_ref()
+                        && matches!(previous.receipt, ExportReceipt::AwaitingActivation { .. })
+                    {
+                        let held = previous.surface.coverage();
+                        // Any earlier equivalent full export can activate
+                        // this family. Its renderer-held surface and the
+                        // evaluator's latest mirror must name the same offset
+                        // coordinates even if an intervening frame coalesces.
+                        if held.origin == coverage.origin
+                            && held.anchor_row == coverage.anchor_row
+                            && held.viewport == coverage.viewport
+                            && held.content.text_pixel_bounds == coverage.content.text_pixel_bounds
+                            && held.content.text_clip_bounds == coverage.content.text_clip_bounds
+                        {
+                            coverage.publication = held.publication;
+                        }
+                    }
+                    let (compositor_enabled, predict_pixels) = window_policy(*window);
                     self.exports[index].certified = true;
-                    state.scroll_coverage.push(Arc::new(coverage));
+                    coverage.compositor_enabled = compositor_enabled;
+                    coverage.predict_pixels = predict_pixels;
+                    let coverage = Arc::new(coverage);
+                    // Activation alone does not prove coverage admission. A
+                    // rejected surface must keep retrying the normal path.
+                    let first = match self.exports[index].last_export.as_ref() {
+                        Some(CoverageExportInputs {
+                            receipt: ExportReceipt::AwaitingActivation { first, .. },
+                            ..
+                        }) if same_inputs => *first,
+                        _ => state.presentation_id.get(),
+                    };
+                    let surface = if reuse_enabled {
+                        state.prepare_scroll_coverage(Arc::clone(&coverage))
+                    } else {
+                        None
+                    };
+                    // The isolated cost probe distinguishes entry attempts
+                    // from real exports and observes admission's actual full
+                    // position-vector construction state. Clean timings keep
+                    // this trace target disabled.
+                    tracing::trace!(
+                        target: "neomacs_layout_engine::coverage_cost",
+                        window = window.get(),
+                        rows = coverage.content.matrix.rows.len(),
+                        admitted = surface.is_some(),
+                        text_deferred = coverage.hit_index.text_deferred(),
+                        "prepared scroll coverage hit geometry"
+                    );
+                    self.exports[index].last_export = surface.as_ref().and_then(|surface| {
+                        CoverageExportInputs::new(
+                            *window,
+                            current,
+                            state,
+                            &pages,
+                            surface,
+                            ExportReceipt::AwaitingActivation {
+                                first,
+                                last: state.presentation_id.get(),
+                            },
+                        )
+                    });
+                    state.scroll_coverage.push(coverage);
                 }
                 // A publish that re-exports nothing (cursor-only redisplay,
                 // drained worker pages, or an exactly-viewport body) must not
-                // read as revocation on the compositor side. Renew the last
-                // certified epoch explicitly; policy bits are stamped by the
-                // evaluator alongside fresh coverages. Absence of both a
-                // surface and a renewal expires the retained coverage.
-                None if self.exports[index].certified => {
+                // read as revocation on the compositor side — only while the
+                // window's anchor (`window_start`, `vscroll`), placement, and
+                // frame resources still match the last exported surface.
+                // Preserve `last_export` so later frames keep checking that
+                // anchor; once the anchor changes, expire the old epoch instead
+                // of renewing a stale surface.
+                None if self.exports[index].certified
+                    && body_reused
+                    && self.exports[index]
+                        .last_export
+                        .as_ref()
+                        .is_some_and(|inputs| inputs.matches_surface(*window, current, state)) =>
+                {
+                    let (compositor_enabled, predict_pixels) = window_policy(*window);
                     state.scroll_coverage_renewals.push(ScrollCoverageRenewal {
                         window: *window,
                         epoch: self.exports[index].epoch,
-                        predict_pixels: false,
-                        compositor_enabled: false,
+                        predict_pixels,
+                        compositor_enabled,
                     });
                     tracing::debug!(target: "neomacs_layout_engine::scroll_coverage",
                         window = window.get(), epoch = self.exports[index].epoch,
                         "renewed certified scroll coverage without a fresh surface");
                 }
-                None => {}
+                None => {
+                    self.exports[index].certified = false;
+                    self.exports[index].last_export = None;
+                }
             }
         }
     }
@@ -103,16 +487,14 @@ impl PreparedViewports {
         metrics: &mut Option<crate::font::metrics::FontMetricsService>,
         epoch: u64,
     ) -> Option<ScrollCoverage> {
+        tracing::trace!(target: "neomacs_layout_engine::coverage_cost",
+            window = window.get(), start = current.key.window_start,
+            hscroll = current.key.hscroll, vscroll = current.key.vscroll,
+            epoch, "building scroll coverage");
         let entries: Vec<_> = self
             .entries
             .iter()
-            .filter(|entry| {
-                entry.computed
-                    && entry.dependencies_valid()
-                    && entry.frame == frame
-                    && entry.window == window
-                    && RetainedWindowKey::row_content_eligible(&entry.retained.key, &current.key)
-            })
+            .filter(|entry| entry.export_eligible(frame, window, &current.key))
             .collect();
         // Build an extra scroll surface only when it adds prepared content.
         // A current-only surface repeats resource and hit-index work on every
@@ -380,17 +762,11 @@ impl PreparedViewports {
         }
         let bounds = Rect::new(bounds.x, 0.0, bounds.width, bounds.height);
         snapshot.regions.text_body = bounds;
-        let positions =
-            crate::presentation::spatial::body_text_positions(window, &snapshot, bounds).ok()?;
-        let hit_index = PresentedHitIndex::from_parts(
+        let hit_index = crate::presentation::spatial::coverage_hit_index(
             state.presentation_id,
-            vec![PresentedHitRegion::new(
-                Some(window),
-                PresentedRegionKind::TextBody,
-                FrameRect::new(bounds.x, bounds.y, bounds.width, bounds.height).ok()?,
-                0,
-            )],
-            positions,
+            window,
+            Arc::new(snapshot),
+            bounds,
         )
         .ok()?;
         let mut content = original.clone();
@@ -401,11 +777,18 @@ impl PreparedViewports {
         fonts.font_pixel_size = state.font_pixel_size;
         fonts.faces = attempt.faces();
         fonts.window_matrices.push(content.clone());
+        if let Some(service) = metrics.as_mut() {
+            service.set_realized_fontset_context(frame.0, arena.face_epoch().get());
+        }
         crate::font::metrics::realize_frame_fonts(&mut fonts, metrics);
+        if fonts.font_catalog_generation != state.font_catalog_generation {
+            return None;
+        }
         let pointer_source =
             crate::presentation::pointer::window_pointer_source_map(&fonts).ok()?;
         Some(ScrollCoverage {
             epoch,
+            publication: CoveragePublicationId::allocate()?,
             predict_pixels: false,
             compositor_enabled: false,
             anchor_row: anchor_index - begin,

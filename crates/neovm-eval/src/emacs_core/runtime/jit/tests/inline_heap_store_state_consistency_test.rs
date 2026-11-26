@@ -129,8 +129,8 @@ fn run_arm(arm: &str) {
     assert!(active.is_none());
     assert_eq!(owners[0].cons_car(), Value::fixnum(7));
     assert_eq!(owners[0].cons_cdr(), Value::fixnum(7));
-    assert_eq!(owners[1].as_vector_data().unwrap()[0], Value::fixnum(7));
-    assert_eq!(owners[2].as_record_data().unwrap()[0], Value::fixnum(7));
+    assert_eq!(owners[1].as_vector_data().unwrap().at(0), Value::fixnum(7));
+    assert_eq!(owners[2].as_record_data().unwrap().at(0), Value::fixnum(7));
     assert_eq!(
         shim_calls() + aset_shim_calls() - shims,
         if arm == "on" { 0 } else { 4 },

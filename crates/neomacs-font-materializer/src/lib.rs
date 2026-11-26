@@ -6,14 +6,18 @@
 //! selection, and pixel-format normalization remain implementation details.
 
 pub mod color_glyph;
+#[cfg(target_os = "linux")]
+pub mod fontconfig;
 mod fontdb;
 pub mod raster_sources;
 
 pub use color_glyph::{
     ColorGlyphError, ColorGlyphRaster, ColorGlyphRasterizer, ColorGlyphRequest, Tag,
+    layered_color_glyph_claim,
 };
 pub use fontdb::{
     FontDbLoadOutcome, FontDbSourceError, FontFileCache, LegacyBitmapFormat, PinnedFontFace,
+    reset_system_font_database, reset_system_font_system,
 };
 pub use raster_sources::{
     ColorGlyphSource, SfntFaceRasterSources, classify_sfnt_face, classify_table_directory,
@@ -65,6 +69,36 @@ pub struct FontOpenRequest<'a> {
 pub enum RasterPixels {
     Mask8(Vec<u8>),
     Bgra8(Vec<u8>),
+}
+
+/// GNU `font->driver->text_extents` metrics for one glyph at the frame's
+/// device size: `Fcomposition_get_gstring` fills every gstring glyph with
+/// these before any shaping (src/font.c `font_fill_lglyph_metrics`), and the
+/// automatic-composition rules adjust from them.
+///
+/// The integer fields follow `ftcrfont_glyph_extents` (src/ftcrfont.c):
+/// `lbearing = floor(x_bearing)`, `rbearing = ceil(x_bearing + width)`,
+/// `width = lround(x_advance)`, `ascent = ceil(-y_bearing - 1/256)`,
+/// `descent = ceil(height + y_bearing)`.  Values are logical frame pixels
+/// (device pixels divided by the frame device scale).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct GlyphTextExtents {
+    pub lbearing_px: f32,
+    pub rbearing_px: f32,
+    pub advance_px: f32,
+    pub ascent_px: f32,
+    pub descent_px: f32,
+}
+
+/// One character's encoded font code plus its GNU `text_extents`.
+///
+/// `code` is what `font->driver->encode_char` returns and what
+/// `font_fill_lglyph_metrics` stores in LGLYPH_CODE; the extents are the
+/// same driver's `text_extents` metrics for that code.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct GlyphTextMetrics {
+    pub code: u32,
+    pub extents: GlyphTextExtents,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -198,38 +232,23 @@ impl OpenedFont {
             let mode = bitmap.pixel_mode().map_err(|error| {
                 FontMaterializationError::UnsupportedPixelMode(error.to_string())
             })?;
+            let (width_px, height_px) = bitmap_dimensions(&bitmap)?;
             let pixels = match mode {
-                freetype::bitmap::PixelMode::Mono => RasterPixels::Mask8(normalize_mono_bitmap(
-                    &bitmap,
-                    bitmap.width() as u32,
-                    bitmap.rows() as u32,
-                )?),
-                freetype::bitmap::PixelMode::Gray => RasterPixels::Mask8(normalize_gray_bitmap(
-                    &bitmap,
-                    bitmap.width() as u32,
-                    bitmap.rows() as u32,
-                )?),
+                freetype::bitmap::PixelMode::Mono => {
+                    RasterPixels::Mask8(normalize_mono_bitmap(&bitmap)?)
+                }
+                freetype::bitmap::PixelMode::Gray => {
+                    RasterPixels::Mask8(normalize_gray_bitmap(&bitmap)?)
+                }
                 freetype::bitmap::PixelMode::Gray2 => {
-                    RasterPixels::Mask8(normalize_packed_gray_bitmap(
-                        &bitmap,
-                        bitmap.width() as u32,
-                        bitmap.rows() as u32,
-                        2,
-                    )?)
+                    RasterPixels::Mask8(normalize_packed_gray_bitmap(&bitmap, 2)?)
                 }
                 freetype::bitmap::PixelMode::Gray4 => {
-                    RasterPixels::Mask8(normalize_packed_gray_bitmap(
-                        &bitmap,
-                        bitmap.width() as u32,
-                        bitmap.rows() as u32,
-                        4,
-                    )?)
+                    RasterPixels::Mask8(normalize_packed_gray_bitmap(&bitmap, 4)?)
                 }
-                freetype::bitmap::PixelMode::Bgra => RasterPixels::Bgra8(normalize_bgra_bitmap(
-                    &bitmap,
-                    bitmap.width() as u32,
-                    bitmap.rows() as u32,
-                )?),
+                freetype::bitmap::PixelMode::Bgra => {
+                    RasterPixels::Bgra8(normalize_bgra_bitmap(&bitmap)?)
+                }
                 other => {
                     return Err(FontMaterializationError::UnsupportedPixelMode(format!(
                         "{other:?}"
@@ -237,13 +256,55 @@ impl OpenedFont {
                 }
             };
             Ok(RasterizedGlyph {
-                width_px: bitmap.width() as u32,
-                height_px: bitmap.rows() as u32,
+                width_px,
+                height_px,
                 left_px: slot.bitmap_left(),
                 top_px: slot.bitmap_top(),
                 advance_px: (slot.metrics().horiAdvance >> 6) as f32 / self.device_scale,
                 pixels,
             })
+        }
+        #[cfg(not(any(windows, target_os = "linux")))]
+        {
+            let _ = glyph;
+            Err(FontMaterializationError::BackendUnavailable)
+        }
+    }
+
+    /// GNU `text_extents` for one glyph: the unshaped ink box, ascent and
+    /// descent the automatic-composition machinery fills a gstring with.
+    ///
+    /// The outline is loaded unhinted so the bearing arithmetic matches
+    /// GNU's cairo extents (`ftcrfont_glyph_extents`) rather than a
+    /// grid-fitted bitmap; bitmap-only faces fall back to their native
+    /// metrics.
+    pub fn text_extents(
+        &self,
+        glyph: ResolvedGlyphId,
+    ) -> Result<GlyphTextExtents, FontMaterializationError> {
+        #[cfg(any(windows, target_os = "linux"))]
+        {
+            let scalable = self._face.is_scalable();
+            let flags = if scalable {
+                LoadFlag::NO_HINTING | LoadFlag::NO_BITMAP
+            } else {
+                LoadFlag::DEFAULT
+            };
+            self._face.load_glyph(glyph.get(), flags).map_err(|error| {
+                FontMaterializationError::LoadGlyph {
+                    glyph_id: glyph.get(),
+                    reason: error.to_string(),
+                }
+            })?;
+            let metrics = self._face.glyph().metrics();
+            Ok(text_extents_from_metrics(
+                i64::from(metrics.horiBearingX),
+                i64::from(metrics.horiBearingY),
+                i64::from(metrics.width),
+                i64::from(metrics.height),
+                i64::from(metrics.horiAdvance),
+                self.device_scale,
+            ))
         }
         #[cfg(not(any(windows, target_os = "linux")))]
         {
@@ -288,6 +349,35 @@ impl std::fmt::Debug for FontMaterializer {
     }
 }
 
+/// GNU `ftcrfont_glyph_extents` rounding over FreeType 26.6 metrics.
+///
+/// `hori_bearing_y`/`height` point down in FreeType's coordinate system;
+/// cairo's `y_bearing` is the negated top, which is what the ascent and
+/// descent formulas use.
+fn text_extents_from_metrics(
+    hori_bearing_x: i64,
+    hori_bearing_y: i64,
+    width: i64,
+    height: i64,
+    hori_advance: i64,
+    device_scale: f32,
+) -> GlyphTextExtents {
+    let scale = device_scale.max(f32::EPSILON);
+    let fixed = |value: i64| value as f64 / 64.0;
+    let x_bearing = fixed(hori_bearing_x);
+    let y_bearing = -fixed(hori_bearing_y);
+    let width = fixed(width);
+    let height = fixed(height);
+    let x_advance = fixed(hori_advance);
+    GlyphTextExtents {
+        lbearing_px: (x_bearing.floor() as f32) / scale,
+        rbearing_px: ((x_bearing + width).ceil() as f32) / scale,
+        advance_px: (x_advance.round() as f32) / scale,
+        ascent_px: (((-y_bearing) - 1.0 / 256.0).ceil() as f32) / scale,
+        descent_px: ((height + y_bearing).ceil() as f32) / scale,
+    }
+}
+
 impl FontMaterializer {
     pub fn new() -> Result<Self, FontMaterializationError> {
         #[cfg(any(windows, target_os = "linux"))]
@@ -299,6 +389,84 @@ impl FontMaterializer {
         }
         #[cfg(not(any(windows, target_os = "linux")))]
         {
+            Err(FontMaterializationError::BackendUnavailable)
+        }
+    }
+
+    /// GNU `text_extents` for one character of an exact font file face.
+    ///
+    /// Unlike [`Self::open`] this accepts scalable faces: automatic
+    /// composition needs the unshaped ink box of ordinary outline glyphs,
+    /// not a bitmap strike.  The face is selected at the frame's device pixel
+    /// size and loaded unhinted so the rounding matches GNU's cairo extents.
+    pub fn text_extents_for_char(
+        &self,
+        asset: &FontFileAsset,
+        requested_layout_px: f32,
+        device_scale: f32,
+        ch: char,
+    ) -> Result<GlyphTextExtents, FontMaterializationError> {
+        self.text_metrics_for_char(asset, requested_layout_px, device_scale, ch)
+            .map(|metrics| metrics.extents)
+    }
+
+    /// GNU `font_fill_lglyph_metrics` for one character: the encoded font
+    /// code and the unshaped driver extents.  The automatic-composition
+    /// gstring stores both (`src/composite.c` `fill_gstring_body`), so a
+    /// Lisp-visible gstring must carry the same code the font driver would
+    /// return.
+    pub fn text_metrics_for_char(
+        &self,
+        asset: &FontFileAsset,
+        requested_layout_px: f32,
+        device_scale: f32,
+        ch: char,
+    ) -> Result<GlyphTextMetrics, FontMaterializationError> {
+        #[cfg(any(windows, target_os = "linux"))]
+        {
+            if !(requested_layout_px.is_finite() && requested_layout_px > 0.0) {
+                return Err(FontMaterializationError::InvalidRequestedSize);
+            }
+            let face = self
+                .library
+                .new_face(asset.path(), asset.face_index() as isize)
+                .map_err(|error| FontMaterializationError::OpenFace {
+                    path: asset.path().to_owned(),
+                    reason: error.to_string(),
+                })?;
+            let device_px = (requested_layout_px * device_scale.max(f32::EPSILON))
+                .round()
+                .max(1.0) as u32;
+            face.set_pixel_sizes(device_px, device_px)
+                .map_err(|error| FontMaterializationError::SelectSize {
+                    device_px,
+                    reason: error.to_string(),
+                })?;
+            let glyph = face
+                .get_char_index(ch as usize)
+                .ok_or(FontMaterializationError::MissingGlyph)?;
+            face.load_glyph(glyph, LoadFlag::DEFAULT).map_err(|error| {
+                FontMaterializationError::LoadGlyph {
+                    glyph_id: glyph as u32,
+                    reason: error.to_string(),
+                }
+            })?;
+            let metrics = face.glyph().metrics();
+            Ok(GlyphTextMetrics {
+                code: glyph as u32,
+                extents: text_extents_from_metrics(
+                    i64::from(metrics.horiBearingX),
+                    i64::from(metrics.horiBearingY),
+                    i64::from(metrics.width),
+                    i64::from(metrics.height),
+                    i64::from(metrics.horiAdvance),
+                    device_scale,
+                ),
+            })
+        }
+        #[cfg(not(any(windows, target_os = "linux")))]
+        {
+            let _ = (asset, requested_layout_px, device_scale, ch);
             Err(FontMaterializationError::BackendUnavailable)
         }
     }
@@ -592,16 +760,45 @@ fn bitmap_line_height(
 mod lib_test;
 
 #[cfg(any(windows, target_os = "linux"))]
-fn normalize_mono_bitmap(
-    bitmap: &freetype::Bitmap,
-    width: u32,
-    height: u32,
-) -> Result<Vec<u8>, FontMaterializationError> {
-    let mut mask = vec![0; width as usize * height as usize];
+fn bitmap_dimensions(bitmap: &freetype::Bitmap) -> Result<(u32, u32), FontMaterializationError> {
+    let raw_width = bitmap.width();
+    let width =
+        u32::try_from(raw_width).map_err(|_| FontMaterializationError::MalformedBitmapBuffer {
+            expected: 1,
+            actual: 0,
+        })?;
+    let raw_rows = bitmap.rows();
+    let height =
+        u32::try_from(raw_rows).map_err(|_| FontMaterializationError::MalformedBitmapBuffer {
+            expected: 1,
+            actual: 0,
+        })?;
+    Ok((width, height))
+}
+
+#[cfg(any(windows, target_os = "linux"))]
+fn bitmap_output_len(row_len: usize, height: usize) -> Result<usize, FontMaterializationError> {
+    row_len
+        .checked_mul(height)
+        .ok_or(FontMaterializationError::MalformedBitmapBuffer {
+            expected: usize::MAX,
+            actual: 0,
+        })
+}
+
+#[cfg(any(windows, target_os = "linux"))]
+fn normalize_mono_bitmap(bitmap: &freetype::Bitmap) -> Result<Vec<u8>, FontMaterializationError> {
+    let (width, height) = bitmap_dimensions(bitmap)?;
+    if width == 0 || height == 0 {
+        return Ok(Vec::new());
+    }
+    let width_usize = width as usize;
+    let height_usize = height as usize;
+    let mut mask = vec![0; bitmap_output_len(width_usize, height_usize)?];
     let required_row_len = width.div_ceil(8) as usize;
-    for y in 0..height as usize {
+    for y in 0..height_usize {
         let row = bitmap_row(bitmap, y, required_row_len)?;
-        let output = &mut mask[y * width as usize..(y + 1) * width as usize];
+        let output = &mut mask[y * width_usize..(y + 1) * width_usize];
         for (x, alpha) in output.iter_mut().enumerate() {
             let bit = 0x80 >> (x & 7);
             *alpha = if row[x >> 3] & bit != 0 { 255 } else { 0 };
@@ -611,16 +808,18 @@ fn normalize_mono_bitmap(
 }
 
 #[cfg(any(windows, target_os = "linux"))]
-fn normalize_gray_bitmap(
-    bitmap: &freetype::Bitmap,
-    width: u32,
-    height: u32,
-) -> Result<Vec<u8>, FontMaterializationError> {
-    let mut mask = vec![0; width as usize * height as usize];
+fn normalize_gray_bitmap(bitmap: &freetype::Bitmap) -> Result<Vec<u8>, FontMaterializationError> {
+    let (width, height) = bitmap_dimensions(bitmap)?;
+    if width == 0 || height == 0 {
+        return Ok(Vec::new());
+    }
+    let width_usize = width as usize;
+    let height_usize = height as usize;
+    let mut mask = vec![0; bitmap_output_len(width_usize, height_usize)?];
     let max_gray = bitmap.raw().num_grays.saturating_sub(1).max(1) as u32;
-    for y in 0..height as usize {
-        let row = bitmap_row(bitmap, y, width as usize)?;
-        let output = &mut mask[y * width as usize..(y + 1) * width as usize];
+    for y in 0..height_usize {
+        let row = bitmap_row(bitmap, y, width_usize)?;
+        let output = &mut mask[y * width_usize..(y + 1) * width_usize];
         for (alpha, value) in output.iter_mut().zip(row.iter().copied()) {
             *alpha = (u32::from(value) * 255 / max_gray) as u8;
         }
@@ -631,17 +830,21 @@ fn normalize_gray_bitmap(
 #[cfg(any(windows, target_os = "linux"))]
 fn normalize_packed_gray_bitmap(
     bitmap: &freetype::Bitmap,
-    width: u32,
-    height: u32,
     bits_per_pixel: u8,
 ) -> Result<Vec<u8>, FontMaterializationError> {
-    let mut mask = vec![0; width as usize * height as usize];
+    let (width, height) = bitmap_dimensions(bitmap)?;
+    if width == 0 || height == 0 {
+        return Ok(Vec::new());
+    }
+    let width_usize = width as usize;
+    let height_usize = height as usize;
+    let mut mask = vec![0; bitmap_output_len(width_usize, height_usize)?];
     let pixels_per_byte = 8 / usize::from(bits_per_pixel);
-    let required_row_len = (width as usize).div_ceil(pixels_per_byte);
+    let required_row_len = width_usize.div_ceil(pixels_per_byte);
     let value_mask = (1u8 << bits_per_pixel) - 1;
-    for y in 0..height as usize {
+    for y in 0..height_usize {
         let row = bitmap_row(bitmap, y, required_row_len)?;
-        let output = &mut mask[y * width as usize..(y + 1) * width as usize];
+        let output = &mut mask[y * width_usize..(y + 1) * width_usize];
         for (x, alpha) in output.iter_mut().enumerate() {
             let shift = 8 - usize::from(bits_per_pixel) * (x % pixels_per_byte + 1);
             let value = (row[x / pixels_per_byte] >> shift) & value_mask;
@@ -652,14 +855,21 @@ fn normalize_packed_gray_bitmap(
 }
 
 #[cfg(any(windows, target_os = "linux"))]
-fn normalize_bgra_bitmap(
-    bitmap: &freetype::Bitmap,
-    width: u32,
-    height: u32,
-) -> Result<Vec<u8>, FontMaterializationError> {
-    let row_len = width as usize * 4;
-    let mut pixels = vec![0; row_len * height as usize];
-    for y in 0..height as usize {
+fn normalize_bgra_bitmap(bitmap: &freetype::Bitmap) -> Result<Vec<u8>, FontMaterializationError> {
+    let (width, height) = bitmap_dimensions(bitmap)?;
+    if width == 0 || height == 0 {
+        return Ok(Vec::new());
+    }
+    let row_len =
+        (width as usize)
+            .checked_mul(4)
+            .ok_or(FontMaterializationError::MalformedBitmapBuffer {
+                expected: usize::MAX,
+                actual: 0,
+            })?;
+    let height_usize = height as usize;
+    let mut pixels = vec![0; bitmap_output_len(row_len, height_usize)?];
+    for y in 0..height_usize {
         pixels[y * row_len..(y + 1) * row_len].copy_from_slice(bitmap_row(bitmap, y, row_len)?);
     }
     Ok(pixels)
@@ -671,6 +881,18 @@ fn bitmap_row(
     y: usize,
     required_len: usize,
 ) -> Result<&[u8], FontMaterializationError> {
+    let rows = usize::try_from(bitmap.rows()).map_err(|_| {
+        FontMaterializationError::MalformedBitmapBuffer {
+            expected: y.saturating_add(1),
+            actual: 0,
+        }
+    })?;
+    if y >= rows {
+        return Err(FontMaterializationError::MalformedBitmapBuffer {
+            expected: y.saturating_add(1),
+            actual: rows,
+        });
+    }
     let pitch = bitmap.pitch();
     let row_bytes = pitch.unsigned_abs() as usize;
     let buffer = bitmap.raw().buffer;
@@ -680,11 +902,27 @@ fn bitmap_row(
             actual: row_bytes,
         });
     }
-    // FreeType defines `pitch` as the signed offset from one logical row to
-    // the next. The buffer remains valid until the next face operation.
-    Ok(unsafe {
-        std::slice::from_raw_parts(buffer.offset(y as isize * pitch as isize), required_len)
-    })
+    // FreeType stores `buffer` at the lowest address. For positive pitch
+    // (down-flow), row 0 is at `buffer` and row `y` is at `y * row_bytes`.
+    // For negative pitch (up-flow), row 0 is the highest row at
+    // `(rows - 1) * row_bytes`, and row `y` is at `(rows - 1 - y) * row_bytes`.
+    let physical_row = if pitch < 0 { rows - 1 - y } else { y };
+    let byte_offset = physical_row
+        .checked_mul(row_bytes)
+        .filter(|offset| {
+            offset
+                .checked_add(required_len)
+                .is_some_and(|end| end <= isize::MAX as usize)
+        })
+        .ok_or(FontMaterializationError::MalformedBitmapBuffer {
+            expected: required_len,
+            actual: row_bytes,
+        })?;
+    // SAFETY: `y < rows` ensures `physical_row < rows`, `row_bytes >= required_len`
+    // keeps `[byte_offset..byte_offset + required_len]` inside the FreeType
+    // bitmap buffer (`rows * row_bytes` bytes), and `buffer` is non-null and
+    // stays valid for `&freetype::Bitmap`.
+    Ok(unsafe { std::slice::from_raw_parts(buffer.add(byte_offset), required_len) })
 }
 
 #[cfg(any(windows, target_os = "linux"))]

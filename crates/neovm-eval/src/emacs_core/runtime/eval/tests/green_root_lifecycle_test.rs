@@ -52,9 +52,9 @@ fn restored_owner_retirement_leaves_cooperative_sweep_pending() {
         .unwrap();
     if owner.tagged_heap.tagged_heap_generational_enabled() {
         assert!(!owner.tagged_heap.value_is_old_for_test(root));
-        owner.tagged_heap.begin_minor_collection();
+        owner.tagged_heap.begin_minor_collection_for_test();
     } else {
-        owner.tagged_heap.begin_stw_collection();
+        owner.tagged_heap.begin_stw_collection_for_test();
     }
     let heap: *mut neovm_value::tagged::gc::TaggedHeap = owner.tagged_heap.heap_root().as_ptr();
     // SAFETY: this fixture owns the Baton without any other owner, callback,
@@ -65,7 +65,7 @@ fn restored_owner_retirement_leaves_cooperative_sweep_pending() {
     let bytes = owner.tagged_heap.live_bytes();
     owner
         .tagged_heap
-        .incremental_finish(bytes, std::time::Instant::now());
+        .incremental_finish_for_test(bytes, std::time::Instant::now());
     assert!(!owner.tagged_heap.mark_in_progress());
     assert!(owner.tagged_heap.sweep_in_progress());
 
@@ -86,7 +86,7 @@ fn restored_owner_retirement_leaves_cooperative_sweep_pending() {
     roots.clear();
     collect_shared_root_gc_roots(&owner.tagged_heap, &mut roots);
     assert!(roots.is_empty());
-    owner.tagged_heap.finish_incremental_sweep_now();
+    owner.tagged_heap.finish_incremental_sweep_now_for_test();
     assert_eq!(
         print_value(&root),
         "\"restored owner during deferred sweep\""

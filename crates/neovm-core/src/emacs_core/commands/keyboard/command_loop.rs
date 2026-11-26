@@ -667,6 +667,19 @@ impl CommandLoopHost for Context {
                 crate::keyboard::CommandKeySequenceRead::Command { keys, binding } => {
                     (keys, Some(binding))
                 }
+                // GNU command_loop_1 (keyboard.c:1436-1441): "-1 means
+                // read_key_sequence got a menu that was rejected.  Just loop
+                // around and read another command."  Ending the loop here
+                // would treat an Escape-out of a popup menu as end-of-input
+                // and shut the editor down.
+                crate::keyboard::CommandKeySequenceRead::End(
+                    crate::keyboard::CommandKeySequenceEnd::MenuRejected,
+                ) => {
+                    // cancel_echoing (); the reader already reset
+                    // this_command_key_count (keyboard.c:1439-1440).
+                    self.clear_key_echo_message();
+                    continue;
+                }
                 crate::keyboard::CommandKeySequenceRead::End(_) => (Vec::new(), None),
             };
 
@@ -839,7 +852,7 @@ impl CommandLoopHost for Context {
             // hook function is removed instead of re-firing on every
             // command. Finding 7 — GNU `keyboard.c:1510`
             // (`safe_run_hooks_maybe_narrowed (Qpre_command_hook, ...)`).
-            self.safe_run_hook_if_bound(CommandLoopHook::PreCommand.id())?;
+            self.safe_run_hook_maybe_narrowed(CommandLoopHook::PreCommand.id())?;
 
             // GNU `keyboard.c:1530-1534` adds undo boundaries here, after
             // `pre-command-hook` and before command execution, so the
@@ -904,7 +917,7 @@ impl CommandLoopHost for Context {
             // Run post-command-hook via safe-run-hooks (Finding 7).
             // GNU `command_loop_1` calls `safe_run_hooks (Qpost_command_hook)`
             // at keyboard.c:1563.
-            self.safe_run_hook_if_bound(CommandLoopHook::PostCommand.id())?;
+            self.safe_run_hook_maybe_narrowed(CommandLoopHook::PostCommand.id())?;
             input_measurement.complete(|frame| self.input_latency_viewport(frame));
 
             // GNU `command_loop_1` (src/keyboard.c:1342-1345): "If displaying a
@@ -1062,7 +1075,7 @@ impl CommandLoopHost for Context {
             .unwrap_or(Value::NIL)
             .is_nil()
         {
-            self.safe_run_hook_if_bound(CommandLoopHook::PostCommand.id())?;
+            self.safe_run_hook_maybe_narrowed(CommandLoopHook::PostCommand.id())?;
 
             if self
                 .eval_symbol_by_id(CommandLoopSymbol::DelayedWarningsList.id())

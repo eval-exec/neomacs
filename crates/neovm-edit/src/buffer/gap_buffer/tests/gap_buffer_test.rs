@@ -397,6 +397,200 @@ fn byte_to_char_cjk() {
 }
 
 #[test]
+fn gap_char_to_byte_midpoint_avoids_availability_scan_with_2000_utf8_lines() {
+    check_gap_char_to_byte_midpoint_availability(2_000);
+}
+
+#[test]
+fn gap_char_to_byte_midpoint_avoids_availability_scan_with_16000_utf8_lines() {
+    check_gap_char_to_byte_midpoint_availability(16_000);
+}
+
+#[test]
+fn gap_char_to_byte_midpoint_avoids_availability_scan_with_64000_utf8_lines() {
+    check_gap_char_to_byte_midpoint_availability(64_000);
+}
+
+fn check_gap_char_to_byte_midpoint_availability(lines: usize) {
+    crate::test_utils::init_test_tracing();
+    let text = "éa日🙂\n".repeat(lines);
+    let expected = gap_utf8_position_offsets(&text);
+    const STEPS: usize = 64;
+    // The decoders probe a 64-byte block, then inspect the target character
+    // and (forward only) the following lead byte. Count those repeated visits,
+    // not just the returned byte span. No allowance depends on buffer length.
+    let bound = STEPS * (64 + neovm_value::emacs_char::MAX_MULTIBYTE_LENGTH + 1);
+    for forward in [true, false] {
+        let buf = GapBuffer::from_str(&text);
+        assert!(buf.is_multibyte());
+        assert_ne!(buf.char_count(), buf.emacs_byte_len());
+        assert_eq!(buf.gpt_byte(), buf.emacs_byte_len());
+        let midpoint = buf.char_count() / 2;
+        assert_eq!(char_to_byte(&buf, midpoint), expected[midpoint]);
+        let _ = buf.take_char_to_byte_walked_bytes_for_test();
+        for step in 1..=STEPS {
+            let char_pos = if forward {
+                midpoint + step
+            } else {
+                midpoint - step
+            };
+            assert_eq!(char_to_byte(&buf, char_pos), expected[char_pos]);
+        }
+        let actual = buf.take_char_to_byte_walked_bytes_for_test();
+        eprintln!("gap walk: lines={lines} forward={forward} bytes={actual} bound={bound}");
+        assert!(
+            actual > 0,
+            "mixed-width conversions must exercise the walk counter"
+        );
+        assert!(
+            actual <= bound,
+            "nearby conversions walked {actual} bytes, limit {bound}"
+        );
+    }
+}
+
+#[test]
+fn gap_char_to_byte_walk_counter_observes_counts_and_both_decoders() {
+    let text = "éa日🙂\n".repeat(40);
+    let bytes = text.as_bytes();
+    let before = neovm_value::emacs_char::position_conversion_walked_bytes_for_test();
+    assert_eq!(emacs_char_count_bytes(bytes, true).get(), 200);
+    assert_eq!(
+        neovm_value::emacs_char::position_conversion_walked_bytes_for_test() - before,
+        bytes.len(),
+        "whole-slice counts must be observed without a call-site counter"
+    );
+    let before = neovm_value::emacs_char::position_conversion_walked_bytes_for_test();
+    assert_eq!(emacs_char_to_byte_in_slice(bytes, 1, true), 2);
+    assert_eq!(
+        neovm_value::emacs_char::position_conversion_walked_bytes_for_test() - before,
+        64 + 3,
+        "forward block, first lead, continuation, next lead"
+    );
+    let before = neovm_value::emacs_char::position_conversion_walked_bytes_for_test();
+    assert_eq!(nth_lead_from_end(bytes, 1, true), Some(bytes.len() - 1));
+    assert_eq!(
+        neovm_value::emacs_char::position_conversion_walked_bytes_for_test() - before,
+        64 + 1,
+        "backward block and final newline"
+    );
+}
+
+#[test]
+fn gap_char_to_byte_anchor_coordinates_survive_gap_moves_and_edits() {
+    crate::test_utils::init_test_tracing();
+    let mut text = "aé日🙂bc\n".repeat(16);
+    let mut buf = GapBuffer::from_str(&text);
+    let expected = gap_utf8_position_offsets(&text);
+    for gap_char in [0, 1, buf.char_count() / 2, buf.char_count()] {
+        gap_move_to_emacs_byte_and_char(&mut buf, expected[gap_char], gap_char);
+        assert_gap_char_positions(&buf, &expected);
+    }
+
+    let insert_byte = gap_utf8_position_offsets(&text)[20];
+    gap_insert_storage_string(&mut buf, insert_byte, "界x");
+    text.insert_str(insert_byte, "界x");
+    assert_gap_char_positions(&buf, &gap_utf8_position_offsets(&text));
+
+    let expected = gap_utf8_position_offsets(&text);
+    let (from, to) = (expected[8], expected[13]);
+    gap_delete_emacs_range(&mut buf, from, to);
+    text.replace_range(from..to, "");
+    assert_gap_char_positions(&buf, &gap_utf8_position_offsets(&text));
+
+    let from = text.find('é').expect("remaining accented character");
+    gap_replace_same_len_emacs_bytes(&mut buf, from, from + 2, "ß".as_bytes());
+    text.replace_range(from..from + 2, "ß");
+    assert_gap_char_positions(&buf, &gap_utf8_position_offsets(&text));
+
+    // Same byte length with a different character count must also keep the
+    // gap's character metadata and newly warmed anchors exact.
+    let from = text.find('日').expect("remaining CJK character");
+    gap_replace_same_len_emacs_bytes(&mut buf, from, from + 3, b"xyz");
+    text.replace_range(from..from + 3, "xyz");
+    assert_gap_char_positions(&buf, &gap_utf8_position_offsets(&text));
+
+    // Changing the character count after or across the gap exercises the
+    // total-only and split updates to the coordinates used by conversion.
+    for (gap_char, from_char, to_char, replacement) in [(2, 9, 10, "xyz"), (3, 1, 4, "123456789")] {
+        let mut text = "aé日🙂bc\n".repeat(16);
+        let mut buf = GapBuffer::from_str(&text);
+        let expected = gap_utf8_position_offsets(&text);
+        let gap_byte = expected[gap_char];
+        gap_move_to_emacs_byte_and_char(&mut buf, gap_byte, gap_char);
+        assert_gap_char_positions(&buf, &expected);
+        let (from, to) = (expected[from_char], expected[to_char]);
+        assert_eq!(to - from, replacement.len());
+        gap_replace_same_len_emacs_bytes(&mut buf, from, to, replacement.as_bytes());
+        text.replace_range(from..to, replacement);
+        assert_eq!(buf.gpt_byte(), gap_byte);
+        assert_eq!(buf.gpt(), text[..gap_byte].chars().count());
+        assert_gap_char_positions(&buf, &gap_utf8_position_offsets(&text));
+    }
+}
+
+#[test]
+fn gap_char_to_byte_anchor_controls_ascii_unibyte_and_encoded_byte8() {
+    crate::test_utils::init_test_tracing();
+    let ascii = "plain ASCII\n".repeat(16);
+    let mut ascii_buf = GapBuffer::from_str(&ascii);
+    ascii_buf.move_gap_to(17);
+    assert_gap_char_positions(&ascii_buf, &(0..=ascii.len()).collect::<Vec<_>>());
+
+    let raw = [0x80, b'A', 0xFF, b'\n'].repeat(16);
+    let mut unibyte = GapBuffer::from_emacs_bytes(&raw, false);
+    unibyte.move_gap_to(17);
+    assert_gap_char_positions(&unibyte, &(0..=raw.len()).collect::<Vec<_>>());
+
+    let mut bytes = Vec::new();
+    let mut expected = vec![0];
+    for _ in 0..16 {
+        for code in [
+            b'A' as u32,
+            neovm_value::emacs_char::byte8_to_char(0x80),
+            'é' as u32,
+            '日' as u32,
+            neovm_value::emacs_char::byte8_to_char(0xFF),
+        ] {
+            let mut encoded = [0; neovm_value::emacs_char::MAX_MULTIBYTE_LENGTH];
+            let len = neovm_value::emacs_char::char_string(code, &mut encoded);
+            bytes.extend_from_slice(&encoded[..len]);
+            expected.push(bytes.len());
+        }
+    }
+    let mut byte8 = GapBuffer::from_emacs_bytes(&bytes, true);
+    gap_move_to_emacs_byte_and_char(&mut byte8, expected[17], 17);
+    assert_gap_char_positions(&byte8, &expected);
+    byte8.set_multibyte(false);
+    assert_gap_char_positions(&byte8, &(0..=bytes.len()).collect::<Vec<_>>());
+    byte8.set_multibyte(true);
+    assert_gap_char_positions(&byte8, &expected);
+}
+
+fn gap_utf8_position_offsets(text: &str) -> Vec<usize> {
+    text.char_indices()
+        .map(|(offset, _)| offset)
+        .chain(std::iter::once(text.len()))
+        .collect()
+}
+
+fn assert_gap_char_positions(buf: &GapBuffer, expected: &[usize]) {
+    assert_eq!(buf.char_count() + 1, expected.len());
+    for char_pos in 0..expected.len() {
+        assert_eq!(char_to_byte(buf, char_pos), expected[char_pos]);
+        assert_eq!(byte_to_char(buf, expected[char_pos]), char_pos);
+    }
+    // Reverse order exercises scans from anchors above the target too.
+    for char_pos in (0..expected.len()).rev() {
+        assert_eq!(char_to_byte(buf, char_pos), expected[char_pos]);
+    }
+    assert_eq!(
+        char_to_byte(buf, buf.char_count() + 17),
+        *expected.last().unwrap()
+    );
+}
+
+#[test]
 fn char_to_byte_cjk() {
     crate::test_utils::init_test_tracing();
     let buf = GapBuffer::from_str("\u{4F60}\u{597D}\u{4E16}"); // 你好世

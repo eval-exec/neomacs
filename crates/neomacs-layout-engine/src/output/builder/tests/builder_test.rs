@@ -1609,8 +1609,12 @@ fn builder_reorders_status_line_rtl_row() {
 /// A buffer `Text` row (incremental path — reorders at `end_current_row`) and a
 /// `ModeLine` chrome row (copied row path — reorders at `end_current_row`)
 /// built from the SAME Hebrew string must reorder to the SAME visual glyph
-/// order, per-glyph `bidi_level`, and `reversed_p`. Today the two paths run the
-/// same `reorder_row_bidi` finalizer, so these axes are identical.
+/// order and per-glyph `bidi_level`.  Their PARAGRAPH direction differs by
+/// GNU's own rule: buffer text follows the buffer's bidi variables
+/// (src/xdisp.c:3600-3611; nil here means first-strong-character, RTL), while
+/// `display_mode_line` pins mode, header and tab-line chrome to L2R
+/// (src/xdisp.c:28165).  The Hebrew run is still reversed inside both lines,
+/// but only the Text row is a reversed_p, right-aligned paragraph.
 ///
 /// The cursor column is the ONE axis that legitimately differs (the Text path
 /// threads `phys_cursor`; the copied chrome path passes `None`), so it is
@@ -1656,9 +1660,12 @@ fn rtl_text_and_chrome_rows_reorder_identically() {
     assert_eq!(text_glyphs[1].glyph_type, chrome_glyphs[1].glyph_type);
     assert_eq!(text_glyphs[0].bidi_level, chrome_glyphs[0].bidi_level);
     assert_eq!(text_glyphs[1].bidi_level, chrome_glyphs[1].bidi_level);
-    // Both rows are flagged reversed (RTL paragraph) — same row-level flag.
+    // Only the buffer Text row resolves an RTL paragraph here.  GNU's
+    // display_mode_line forces chrome rows to L2R, so the same Hebrew run is
+    // an L2R paragraph's reversed run: same glyph order and levels above,
+    // but no reversed_p / right alignment.
     assert!(rows[0].reversed_p);
-    assert!(rows[1].reversed_p);
+    assert!(!rows[1].reversed_p);
 }
 
 /// Regression test for the face-id-collision bug that caused

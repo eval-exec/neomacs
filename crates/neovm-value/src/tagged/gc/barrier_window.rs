@@ -243,9 +243,13 @@ impl TaggedHeap {
     /// Like the interpreter's setter, it journals and observes the projected
     /// owner. This touches only the mutator's Rust bookkeeping: no Lisp
     /// allocation, callback, collection or safe point can run here.
+    ///
+    /// # Safety
+    /// `bits` is a live `Value` word owned by the calling mutator. Rebuilding a
+    /// value from any other word and reading its header is undefined behavior.
     #[cfg(feature = "jit")]
     #[doc(hidden)]
-    pub extern "C" fn record_compiled_collection_write(bits: usize) {
+    pub unsafe extern "C" fn record_compiled_collection_write(bits: usize) {
         use super::super::collection_reads::{WriteProjection, record_projected_write};
         let owner = unsafe {
             /* SAFETY: value-internal construction from a real Value */
@@ -263,7 +267,7 @@ impl TaggedHeap {
 
     /// The window this heap's current state implies (see the module doc).
     pub(crate) fn barrier_window(&self) -> BarrierWindow {
-        if self.concurrent_mark_running
+        if self.concurrent_mark_running()
             || self.write_tracking_mode != WriteTrackingMode::Disabled
             || self.census.as_deref().is_some_and(GenCensus::remset_probe)
         {
@@ -518,7 +522,8 @@ impl TaggedHeap {
     #[cfg(any(test, feature = "test-support"))]
     pub(crate) unsafe fn set_concurrent_active_for_test(&mut self, on: bool) {
         self.close_alloc_regions();
-        self.concurrent_mark_running = on;
+        // SAFETY: caller's contract excludes any live concurrent marker.
+        unsafe { self.concurrent_mark_running.set(on) };
         TAGGED_HEAP_CONCURRENT_ACTIVE.with(|c| c.set(on));
         if tagged_heap_is_current(self) {
             TAGGED_HEAP_CONCURRENT_HASH_ACTIVE.with(|active| {
@@ -557,11 +562,16 @@ pub(crate) fn publish_collection_observation_window(observed: CompiledObservatio
 /// local interval. This performs Rust bookkeeping only: no Lisp allocation,
 /// callback, collection or safe point. Another mutator's shared mark alone
 /// does not create a dependency in this mutator's private certificate journal.
+///
+/// # Safety
+/// `owner_bits` is a live `Value` word owned by the calling mutator.
+/// Rebuilding a value from any other word and reading its header is
+/// undefined behavior.
 #[cfg(feature = "jit")]
 #[cold]
 #[inline(never)]
 #[doc(hidden)]
-pub extern "C" fn neovm_jit_unobserved_collection_owner(owner_bits: i64) -> i8 {
+pub unsafe extern "C" fn neovm_jit_unobserved_collection_owner(owner_bits: i64) -> i8 {
     use super::super::collection_reads::{CompiledJournalMode, compiled_journal_mode};
     let bits = owner_bits as usize;
     let owner = unsafe {
@@ -644,12 +654,12 @@ pub(crate) fn current_collection_dump_window() -> BarrierWindow {
 #[cfg(any(test, feature = "test-support"))]
 impl TaggedHeap {
     /// Read the current synthetic fixture's words without consuming them.
-    pub(super) fn satb_words_for_test(&self) -> Vec<TaggedValue> {
+    pub(super) fn satb_words_for_test(&self) -> Vec<super::mark_word::MarkWord> {
         let mut words = self.satb_handoff.snapshot_words_for_test().unwrap();
         for mutator in self.mutator_satb_states() {
             words.extend_from_slice(mutator.satb.words_for_test());
         }
-        words.into_iter().map(MarkWord::value).collect()
+        words
     }
 
     /// Test hook: is `value` a tenured (old-generation) heap object?
@@ -713,7 +723,9 @@ impl TaggedHeap {
             .unwrap()
             .into_iter()
             .flat_map(satb::SatbChunk::into_words)
-            .map(MarkWord::value)
+            // SAFETY: caller contract guarantees no concurrent marker is
+            // running and this thread owns the serial fixture heap.
+            .map(|word| unsafe { word.value() })
             .collect()
     }
 

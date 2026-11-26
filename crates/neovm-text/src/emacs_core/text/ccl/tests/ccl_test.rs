@@ -477,7 +477,7 @@ fn ccl_execute_on_string_accepts_registered_symbol_program_designator() {
     );
     assert!(!output.as_lisp_string().unwrap().is_multibyte());
     assert_eq!(
-        status.as_vector_data().unwrap().as_slice(),
+        status.as_vector_data().unwrap(),
         &[
             Value::fixnum(-1),
             Value::fixnum(0),
@@ -516,8 +516,8 @@ fn ccl_execute_on_string_resumes_identity_program_from_status_instruction() {
     ])
     .expect("continued execution should suspend at the read instruction");
     assert_eq!(first.as_lisp_string().unwrap().as_bytes(), &[65, 128]);
-    assert_eq!(status.as_vector_data().unwrap()[0], Value::fixnum(128));
-    assert_eq!(status.as_vector_data().unwrap()[8], Value::fixnum(4));
+    assert_eq!(status.as_vector_data().unwrap().at(0), Value::fixnum(128));
+    assert_eq!(status.as_vector_data().unwrap().at(8), Value::fixnum(4));
 
     let second = builtin_ccl_execute_on_string_impl(vec![
         program,
@@ -530,8 +530,8 @@ fn ccl_execute_on_string_resumes_identity_program_from_status_instruction() {
     ])
     .expect("final execution should run the EOF block");
     assert_eq!(second.as_lisp_string().unwrap().as_bytes(), &[66, 255]);
-    assert_eq!(status.as_vector_data().unwrap()[0], Value::fixnum(-1));
-    assert_eq!(status.as_vector_data().unwrap()[8], Value::fixnum(5));
+    assert_eq!(status.as_vector_data().unwrap().at(0), Value::fixnum(-1));
+    assert_eq!(status.as_vector_data().unwrap().at(8), Value::fixnum(5));
 }
 
 #[test]
@@ -559,7 +559,7 @@ fn ccl_execute_on_string_runs_branch_to_the_selected_block() {
     assert_eq!(output.as_lisp_string().unwrap().as_bytes(), b"A");
     assert!(!output.as_lisp_string().unwrap().is_multibyte());
     assert_eq!(
-        status.as_vector_data().unwrap().as_slice(),
+        status.as_vector_data().unwrap(),
         &[
             Value::fixnum(0),
             Value::fixnum(0),
@@ -666,7 +666,7 @@ fn ccl_execute_runs_assignment_and_comparison() {
     ]);
     builtin_ccl_execute_impl(vec![program, registers]).expect("arithmetic program should run");
     assert_eq!(
-        registers.as_vector_data().unwrap().as_slice(),
+        registers.as_vector_data().unwrap(),
         &[
             Value::fixnum(7),
             Value::fixnum(8),
@@ -708,8 +708,8 @@ fn ccl_execute_on_string_resumes_a_multiregister_read() {
     ])
     .expect("the second read should resume at r1");
     assert_eq!(output.as_lisp_string().unwrap().as_bytes(), b"AB");
-    assert_eq!(status.as_vector_data().unwrap()[1], Value::fixnum(66));
-    assert_eq!(status.as_vector_data().unwrap()[8], Value::fixnum(6));
+    assert_eq!(status.as_vector_data().unwrap().at(1), Value::fixnum(66));
+    assert_eq!(status.as_vector_data().unwrap().at(8), Value::fixnum(6));
 }
 
 #[test]
@@ -786,8 +786,8 @@ fn ccl_execute_set_array_reads_the_indexed_element() {
         Value::NIL,
     ]);
     builtin_ccl_execute_impl(vec![program, registers]).expect("set-array should run");
-    assert_eq!(registers.as_vector_data().unwrap()[0], Value::fixnum(66));
-    assert_eq!(registers.as_vector_data().unwrap()[1], Value::fixnum(1));
+    assert_eq!(registers.as_vector_data().unwrap().at(0), Value::fixnum(66));
+    assert_eq!(registers.as_vector_data().unwrap().at(1), Value::fixnum(1));
 }
 
 #[test]
@@ -857,7 +857,7 @@ fn ccl_execute_call_resolves_an_embedded_program_symbol() {
     ]);
     let registers = Value::vector(vec![Value::NIL; 8]);
     builtin_ccl_execute_impl(vec![caller, registers]).expect("symbol call should resolve");
-    assert_eq!(registers.as_vector_data().unwrap()[0], Value::fixnum(7));
+    assert_eq!(registers.as_vector_data().unwrap().at(0), Value::fixnum(7));
 }
 
 #[test]
@@ -886,8 +886,8 @@ fn ccl_execute_map_single_reads_the_code_conversion_map() {
         Value::NIL,
     ]);
     builtin_ccl_execute_impl(vec![program, registers]).expect("map-single should run");
-    assert_eq!(registers.as_vector_data().unwrap()[0], Value::fixnum(30));
-    assert_eq!(registers.as_vector_data().unwrap()[1], Value::fixnum(0));
+    assert_eq!(registers.as_vector_data().unwrap().at(0), Value::fixnum(30));
+    assert_eq!(registers.as_vector_data().unwrap().at(1), Value::fixnum(0));
 }
 
 #[test]
@@ -923,8 +923,8 @@ fn ccl_execute_map_multiple_restores_the_value_when_the_called_program_returns_m
     ]);
     builtin_ccl_execute_impl(vec![program, registers]).expect("map-multiple should resume");
     let slots = registers.as_vector_data().unwrap();
-    assert_eq!(slots[0], Value::fixnum(4));
-    assert_eq!(slots[1], Value::fixnum(-1));
+    assert_eq!(slots.at(0), Value::fixnum(4));
+    assert_eq!(slots.at(1), Value::fixnum(-1));
 }
 
 #[test]
@@ -956,8 +956,8 @@ fn ccl_execute_map_multiple_keeps_a_normal_call_result_and_skips_the_rest() {
     let registers = Value::vector(vec![Value::NIL; 8]);
     builtin_ccl_execute_impl(vec![program, registers]).expect("map-multiple should resume");
     let slots = registers.as_vector_data().unwrap();
-    assert_eq!(slots[0], Value::fixnum(7));
-    assert_eq!(slots[1], Value::fixnum(0));
+    assert_eq!(slots.at(0), Value::fixnum(7));
+    assert_eq!(slots.at(1), Value::fixnum(0));
 }
 
 #[test]
@@ -984,8 +984,8 @@ fn ccl_execute_map_multiple_chains_nested_separator_sets() {
     let registers = Value::vector(vec![Value::NIL; 8]);
     builtin_ccl_execute_impl(vec![program, registers]).expect("nested map-multiple");
     let slots = registers.as_vector_data().unwrap();
-    assert_eq!(slots[0], Value::fixnum(20));
-    assert_eq!(slots[1], Value::fixnum(3));
+    assert_eq!(slots.at(0), Value::fixnum(20));
+    assert_eq!(slots.at(1), Value::fixnum(3));
 }
 
 #[test]
@@ -1008,8 +1008,8 @@ fn ccl_execute_map_single_reads_a_pair_value() {
     let registers = Value::vector(vec![Value::NIL; 8]);
     builtin_ccl_execute_impl(vec![program, registers]).expect("pair map-single");
     let slots = registers.as_vector_data().unwrap();
-    assert_eq!(slots[0], Value::fixnum(55));
-    assert_eq!(slots[1], Value::fixnum(0));
+    assert_eq!(slots.at(0), Value::fixnum(55));
+    assert_eq!(slots.at(1), Value::fixnum(0));
 }
 
 #[test]
@@ -1043,8 +1043,8 @@ fn ccl_execute_map_multiple_applies_a_closed_open_range() {
         Value::NIL,
     ]);
     builtin_ccl_execute_impl(vec![program, inside]).expect("range hit");
-    assert_eq!(inside.as_vector_data().unwrap()[0], Value::fixnum(77));
-    assert_eq!(inside.as_vector_data().unwrap()[1], Value::fixnum(0));
+    assert_eq!(inside.as_vector_data().unwrap().at(0), Value::fixnum(77));
+    assert_eq!(inside.as_vector_data().unwrap().at(1), Value::fixnum(0));
 
     let program = Value::vector(
         [0, 5, 278_815, 1, id, 22]
@@ -1063,8 +1063,8 @@ fn ccl_execute_map_multiple_applies_a_closed_open_range() {
         Value::NIL,
     ]);
     builtin_ccl_execute_impl(vec![program, outside]).expect("range miss");
-    assert_eq!(outside.as_vector_data().unwrap()[0], Value::fixnum(9));
-    assert_eq!(outside.as_vector_data().unwrap()[1], Value::fixnum(-1));
+    assert_eq!(outside.as_vector_data().unwrap().at(0), Value::fixnum(9));
+    assert_eq!(outside.as_vector_data().unwrap().at(1), Value::fixnum(-1));
 }
 
 #[test]
@@ -1213,8 +1213,8 @@ fn ccl_execute_lookup_integer_rejects_a_non_character_value() {
         }
         other => panic!("expected error signal, got {other:?}"),
     }
-    assert_eq!(registers.as_vector_data().unwrap()[0], Value::fixnum(1));
-    assert_eq!(registers.as_vector_data().unwrap()[1], Value::NIL);
+    assert_eq!(registers.as_vector_data().unwrap().at(0), Value::fixnum(1));
+    assert_eq!(registers.as_vector_data().unwrap().at(1), Value::NIL);
 }
 
 #[test]
@@ -1244,9 +1244,9 @@ fn ccl_execute_lookup_integer_sets_unicode_and_the_value() {
     ]);
     builtin_ccl_execute_impl(vec![program, registers]).expect("lookup-integer should run");
     let slots = registers.as_vector_data().unwrap();
-    assert_eq!(slots[0], Value::fixnum(2));
-    assert_eq!(slots[1], Value::fixnum(16));
-    assert_eq!(slots[7], Value::fixnum(1));
+    assert_eq!(slots.at(0), Value::fixnum(2));
+    assert_eq!(slots.at(1), Value::fixnum(16));
+    assert_eq!(slots.at(7), Value::fixnum(1));
 }
 
 #[test]
@@ -1284,8 +1284,8 @@ fn ccl_execute_lookup_character_rejects_an_integer_past_int_max() {
         }
         other => panic!("expected error signal, got {other:?}"),
     }
-    assert_eq!(registers.as_vector_data().unwrap()[0], Value::fixnum(68));
-    assert_eq!(registers.as_vector_data().unwrap()[7], Value::NIL);
+    assert_eq!(registers.as_vector_data().unwrap().at(0), Value::fixnum(68));
+    assert_eq!(registers.as_vector_data().unwrap().at(7), Value::NIL);
 }
 
 #[test]
@@ -1339,8 +1339,8 @@ fn ccl_execute_on_string_runs_packed_constant_string_in_eof_block() {
         ])
         .expect("the final block should write its packed ASCII constant");
         assert_eq!(output.as_lisp_string().unwrap().as_bytes(), expected);
-        assert_eq!(status.as_vector_data().unwrap()[0], Value::fixnum(-1));
-        assert_eq!(status.as_vector_data().unwrap()[8], Value::fixnum(8));
+        assert_eq!(status.as_vector_data().unwrap().at(0), Value::fixnum(-1));
+        assert_eq!(status.as_vector_data().unwrap().at(8), Value::fixnum(8));
     }
 }
 
@@ -1406,8 +1406,8 @@ fn ccl_execute_runs_a_tight_loop_way_past_any_step_budget() {
         }
     }
     let regs = registers.as_vector_data().unwrap();
-    assert_eq!(regs[0], Value::fixnum(0));
-    assert_eq!(regs[7], Value::fixnum(1));
+    assert_eq!(regs.at(0), Value::fixnum(0));
+    assert_eq!(regs.at(7), Value::fixnum(1));
 }
 
 #[test]
@@ -1480,7 +1480,7 @@ fn ccl_execute_wraps_int_max_plus_one_like_gnu_ckd_add() {
     ]);
     builtin_ccl_execute_impl(vec![program, registers]).expect("GNU wraps r0 += 1 past INT_MAX");
     let regs = registers.as_vector_data().unwrap();
-    assert_eq!(regs[0], Value::fixnum(-2_147_483_648));
+    assert_eq!(regs.at(0), Value::fixnum(-2_147_483_648));
 }
 
 #[test]
@@ -1510,8 +1510,8 @@ fn ccl_execute_runs_shift_jis_decoding_via_set_expr_reg() {
         Err(other) => panic!("unexpected flow: {other:?}"),
     }
     let regs = registers.as_vector_data().unwrap();
-    assert_eq!(regs[0], Value::fixnum(0x21));
-    assert_eq!(regs[7], Value::fixnum(0x11));
+    assert_eq!(regs.at(0), Value::fixnum(0x21));
+    assert_eq!(regs.at(7), Value::fixnum(0x11));
 }
 
 fn execute_ccl_on_string(

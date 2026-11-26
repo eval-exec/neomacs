@@ -121,7 +121,7 @@ fn observed_slot_geometry_only_includes_vector_and_record_owners() {
         assert_eq!(string.as_str_owned().unwrap(), "abc");
         assert_eq!(reference.veclike_type(), Some(VecLikeType::Buffer));
         assert_eq!(
-            vector.as_vector_data().unwrap()[0],
+            vector.as_vector_data().unwrap().at(0),
             TaggedValue::make_int(97)
         );
         assert_eq!(record.veclike_type(), Some(VecLikeType::Record));

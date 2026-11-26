@@ -89,6 +89,12 @@ impl Registry {
         self.gate.gate_owner.load(Ordering::Acquire) == current_thread()
     }
 
+    /// The gate's tag for the thread holding it now, if any. A diagnostic
+    /// read with no authority; it may be stale when the caller looks.
+    pub(super) fn gate_holder(&self) -> Option<std::num::NonZeroU64> {
+        std::num::NonZeroU64::new(self.gate.gate_owner.load(Ordering::Acquire))
+    }
+
     /// Real failed acquisition of the predicate mutex. Fixtures use this to
     /// prove a waiter is about to park; it is not a sleep or a `Busy` guess.
     #[cfg(any(test, feature = "test-support"))]
@@ -123,6 +129,23 @@ impl Registry {
                 self.poison();
                 Err(RegistrationError::Poisoned)
             }
+        }
+    }
+
+    /// The stopped keeper's acquisition. At its call sites the keeper holds
+    /// no other guard, and no gate holder waits on the keeper (every wait
+    /// under the gate is the condvar wait that releases it), so this waits
+    /// out a brief holder instead of refusing `Busy`. Its callers consume a
+    /// stop or a receipt, and a transient refusal would drop it.
+    /// Same-thread re-entry still refuses `Busy`.
+    pub(super) fn lock_for_keeper(&self) -> Result<RegistryGuard<'_>, RegistrationError> {
+        match self.lock() {
+            Err(RegistrationError::Busy) => {
+                #[cfg(any(test, feature = "test-support"))]
+                super::test_fences::note_gate_contention();
+                self.lock_blocking()
+            }
+            acquired => acquired,
         }
     }
 
@@ -192,6 +215,37 @@ impl Registry {
             }
             Err(error) => {
                 let _guard = RegistryGuard::new(self, error.into_inner());
+                self.poison();
+                Err(RegistrationError::Poisoned)
+            }
+        }
+    }
+
+    /// Same wake as [`Self::wait`]. A timeout returns the guard so the caller
+    /// can recheck its predicate; it does not poison. The keeper's bounded
+    /// stop (L6.7 K8) waits here, and test rows use it to bound a parked
+    /// owner. Owners still park on [`Self::wait`].
+    pub(super) fn wait_timeout<'a>(
+        &'a self,
+        guard: RegistryGuard<'a>,
+        timeout: std::time::Duration,
+    ) -> Result<RegistryGuard<'a>, RegistrationError> {
+        debug_assert!(std::ptr::eq(self, guard.registry));
+        if self.park.poisoned.load(Ordering::Acquire) {
+            return Err(RegistrationError::Poisoned);
+        }
+        match self.park.wake.wait_timeout(guard.take_for_wait(), timeout) {
+            Ok((guard, _)) => {
+                let guard = RegistryGuard::new(self, guard);
+                if self.park.poisoned.load(Ordering::Acquire) {
+                    Err(RegistrationError::Poisoned)
+                } else {
+                    Ok(guard)
+                }
+            }
+            Err(error) => {
+                let (guard, _timed) = error.into_inner();
+                let _guard = RegistryGuard::new(self, guard);
                 self.poison();
                 Err(RegistrationError::Poisoned)
             }

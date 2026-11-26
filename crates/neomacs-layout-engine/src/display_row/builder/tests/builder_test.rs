@@ -16,6 +16,7 @@ use crate::display_text_run_measurement::{
     DisplayTextRunMeasurementPlan,
 };
 use crate::output::builder::DisplayOutputBuilder;
+use crate::string_property_snapshot::StringSourceRootScope;
 use neomacs_display_protocol::frame_glyphs::GlyphRowRole;
 use neomacs_display_protocol::glyph_matrix::{
     Glyph, GlyphArea, GlyphPointerAppearance, GlyphPointerOccurrenceIdentity,
@@ -597,7 +598,10 @@ fn display_row_progress_writer_uses_thin_space_glyphless_width() {
 
     let progress = writer.push_item(glyphless_item('\u{2009}', GlyphlessMethod::ThinSpace));
 
-    assert_eq!(progress.end(), DisplayRowPosition::new(2.0, 1));
+    // GNU's `produce_glyphless_glyph` sets `it->pixel_width` to
+    // `THIN_SPACE_WIDTH`, which is 1 pixel on a window system
+    // (xdisp.c:1120 and xdisp.c:33455), not a fraction of the cell width.
+    assert_eq!(progress.end(), DisplayRowPosition::new(1.0, 1));
     let glyph = &row.glyphs[GlyphArea::Text.index()][0];
     assert_eq!(
         glyph.glyph_type,
@@ -606,7 +610,7 @@ fn display_row_progress_writer_uses_thin_space_glyphless_width() {
             presentation: GlyphlessPresentation::ThinSpace,
         }
     );
-    assert_eq!(glyph.pixel_width, 2.0);
+    assert_eq!(glyph.pixel_width, 1.0);
 }
 
 #[test]
@@ -1005,6 +1009,7 @@ fn display_row_append_cursor_appends_explicit_source_item() {
         Value::string("abc"),
         RenderFaceRef::FaceId(FaceId::new(2)),
         LispStringSourceOrigin::Normal,
+        StringSourceRootScope::Rooted(_eval.owned_root_retainer()),
     )
     .expect("source");
     let mut context = DisplaySourceContext::empty();
@@ -1040,6 +1045,7 @@ fn display_row_append_cursor_appends_explicit_source_item_with_glyph_measurer() 
         Value::string("mi"),
         RenderFaceRef::FaceId(FaceId::new(2)),
         LispStringSourceOrigin::Normal,
+        StringSourceRootScope::Rooted(_eval.owned_root_retainer()),
     )
     .expect("source");
     let mut context = DisplaySourceContext::empty();
@@ -1295,6 +1301,7 @@ fn display_row_builder_consumes_display_item_source() {
         Value::string("abc"),
         RenderFaceRef::FaceId(FaceId::new(2)),
         LispStringSourceOrigin::Normal,
+        StringSourceRootScope::Rooted(_eval.owned_root_retainer()),
     )
     .expect("source");
     let mut context = DisplaySourceContext::empty();
@@ -1517,6 +1524,7 @@ fn display_row_writer_consumes_display_item_source() {
         Value::string("a\tb"),
         RenderFaceRef::FaceId(FaceId::new(2)),
         LispStringSourceOrigin::Normal,
+        StringSourceRootScope::Rooted(_eval.owned_root_retainer()),
     )
     .expect("source");
     let mut context = DisplaySourceContext::empty();
@@ -2499,7 +2507,10 @@ fn replacement_string_session_stamps_gnu_string_indices() {
         Value::string("STR"),
         covered,
     )
-    .into_source(FaceId::new(2))
+    .into_source(
+        FaceId::new(2),
+        StringSourceRootScope::Rooted(_eval.owned_root_retainer()),
+    )
     .expect("replacement string source");
     let mut context = DisplaySourceContext::empty();
 
@@ -2661,7 +2672,10 @@ fn owned_mapped_text_preserves_string_coordinates_and_clipping_on_a_worker() {
         Value::string("STR"),
         covered,
     )
-    .into_source(FaceId::new(2))
+    .into_source(
+        FaceId::new(2),
+        StringSourceRootScope::Rooted(_eval.owned_root_retainer()),
+    )
     .unwrap();
     let item = source
         .next_item(&mut DisplaySourceContext::empty())

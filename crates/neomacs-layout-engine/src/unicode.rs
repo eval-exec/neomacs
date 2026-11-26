@@ -118,6 +118,15 @@ pub(crate) fn is_emoji_presentation(cp: u32) -> bool {
 /// Enclosing Keycap `U+20E3`, and the skin-tone Emoji Modifier range
 /// `U+1F3FB..U+1F3FF`.
 pub(crate) fn is_cluster_extender(ch: char) -> bool {
+    // Control characters are zero-width in GNU's char-width-table but are
+    // never grapheme extenders: UAX#29 puts Cc chars on cluster boundaries,
+    // and GNU composes across them only never — find_newline's composition
+    // walk assumes "a newline can never be composed" (composite.c).  Without
+    // this guard a measurement span swallows the newline and merges the
+    // lines around it into one shaping run.
+    if ch.is_control() {
+        return false;
+    }
     if neovm_core::encoding::char_width(ch) == 0 {
         return true;
     }

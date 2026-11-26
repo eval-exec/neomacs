@@ -30,12 +30,10 @@ fn native_x11_focus_routes_typing_to_the_focused_frame() {
         Some(other) => panic!("unsupported NEOMACS_GUI_TEST_BACKEND={other:?}"),
     }
     let root = neomacs_infra::workspace_root();
-    let artifacts = root.join(format!(
+    let artifacts = neomacs_gui_tests::fresh_artifact_dir(root.join(format!(
         "target/neomacs-gui-tests/native-frame-focus-{}",
         std::process::id()
-    ));
-    fs::create_dir_all(artifacts.parent().unwrap()).unwrap();
-    fs::create_dir(&artifacts).expect("fresh focus test artifacts");
+    )));
     let session = DisplayHarness::Xvfb
         .start_session(&artifacts)
         .expect("isolated headless X11 display");

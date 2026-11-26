@@ -20,8 +20,14 @@
            (unless (and (vectorp actual) (vectorp control)
                         (= (aref actual 2) (aref control 2)))
              (error "Startup font size differs from named control: %S vs %S" actual control)))
+         ;; GNU's Gtk+ native height excludes the external menu and tool
+         ;; bars (src/frame.c:4401-4418); the outer measures are the host
+         ;; window the toolkit allocated.  Record both so the test checks the
+         ;; allocation and the GNU-correct native frame separately.
          (with-temp-file (getenv "NEOMACS_GUI_STATE_JSON")
            (insert (json-serialize `((native_width . ,(frame-native-width))
-                                     (native_height . ,(frame-native-height))))))
+                                     (native_height . ,(frame-native-height))
+                                     (outer_width . ,(frame-outer-width))
+                                     (outer_height . ,(frame-outer-height))))))
          (kill-emacs 0))
      (error (message "Command-line startup font: %S" err) (kill-emacs 1)))))

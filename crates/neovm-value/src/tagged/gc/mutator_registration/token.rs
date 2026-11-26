@@ -8,6 +8,7 @@ impl From<ImageError> for RegistrationError {
         match error {
             ImageError::Capacity => Self::Capacity,
             ImageError::RegionsOpen => Self::OpenRegion,
+            ImageError::OutstandingLoan => Self::OutstandingLoan,
             ImageError::SatbResidual => Self::ResidualSatb,
             ImageError::NonemptyYoung => Self::PendingYoung,
             ImageError::ExecutionRoots => Self::PendingRoots,
@@ -160,7 +161,7 @@ impl Drop for RunAccess<'_, '_> {
             .owner
             .local
             .as_ref()
-            .is_some_and(|local| local.catalog_region.is_some())
+            .is_some_and(|local| local.catalog_region.is_some() || !local.numeric.is_closed())
         {
             // No allocator work in Drop. Retain the run obligation and all
             // backing until terminal era cleanup; never ACK an open region.
@@ -240,14 +241,16 @@ impl std::fmt::Debug for Mutator<'_> {
     }
 }
 
+#[must_use = "into_owner() to retry the finish; dropping poisons"]
 pub struct MutatorFinishFailure<'era> {
     pub reason: RegistrationError,
     owner: Mutator<'era>,
 }
 impl<'era> MutatorFinishFailure<'era> {
-    #[cfg(any(test, feature = "test-support"))]
-    #[cfg_attr(feature = "test-support", visibility::make(pub))]
-    pub(crate) fn into_owner(self) -> Mutator<'era> {
+    /// `finish` consumes the owner, and dropping an unfinished owner poisons
+    /// the era. A refusal (a stop in progress, a contended gate) hands the
+    /// owner back so the caller can finish it later.
+    pub fn into_owner(self) -> Mutator<'era> {
         self.owner
     }
 }
@@ -299,6 +302,17 @@ impl<'era> Mutator<'era> {
         Arc::clone(&self.entry)
     }
 
+    /// Retain the era's facade-mark exclusion epoch so a parallel owner
+    /// parking its serial turn for a keeper collection can publish its
+    /// private roots in the heap's transport root table (L6.7c (c)).
+    #[cold]
+    #[doc(hidden)]
+    pub fn parallel_epoch_retention(
+        &self,
+    ) -> Result<super::super::FacadeEpochRetention, super::super::FacadeMarkExclusionError> {
+        self.registry.root_epoch.retain()
+    }
+
     /// Same admission word `MutatorEntry::admitted` reads. The entry stays private.
     #[cfg(any(test, feature = "test-support"))]
     #[doc(hidden)]
@@ -346,7 +360,7 @@ impl<'era> Mutator<'era> {
     /// distinguishes poison.
     pub fn run_access(&mut self) -> Result<RunAccess<'_, 'era>, RegistrationError> {
         self.check_thread()?;
-        if self.finished || self.published.is_some() {
+        if self.finished || self.published.is_some() || self.protocol.stopped {
             return Err(RegistrationError::Busy);
         }
         if self.run_admitted || self.young_loan {
@@ -416,7 +430,13 @@ impl<'era> Mutator<'era> {
         if state.phase != EntryPhase::Running || self.published.is_some() {
             return Err(RegistrationError::Busy);
         }
-        if state.worker_loan || state.run_loan {
+        if state.worker_loan
+            || state.run_loan
+            || self
+                .local
+                .as_ref()
+                .is_some_and(|local| local.user_test_holds.load(Ordering::Relaxed) > 0)
+        {
             return Err(RegistrationError::OutstandingLoan);
         }
         if epoch.get() <= state.epoch {
@@ -430,12 +450,26 @@ impl<'era> Mutator<'era> {
         // Every fallible identity/loan/phase check precedes moving any log.
         // Held cons tails publish back to the catalog before the image does.
         self.publish_cons_tails()?;
-        let image = self
-            .local
-            .as_mut()
-            .expect("owner shells remain local")
-            .publish()?;
-        state.image = Some(image);
+        // SAFETY: `check_thread()` pinned this call to the owning mutator
+        // thread, `publish_cons_tails()` closed all held cons tails, and all
+        // words in `self.local` belong to this live era's heap.
+        let image = unsafe {
+            self.local
+                .as_mut()
+                .expect("owner shells remain local")
+                .publish()?
+        };
+        // SAFETY: `image` was just published from `self.local`, which belongs
+        // to `(self.entry.key.heap, self.entry.young)` in this live era.
+        unsafe {
+            state
+                .image
+                .install(self.entry.key.heap, self.entry.young, image)
+        }
+        .map_err(|failure| {
+            std::mem::forget(failure.image);
+            RegistrationError::from(failure.error)
+        })?;
         state.publication_generation = next.get();
         state.epoch = epoch.get();
         state.phase = EntryPhase::Published;
@@ -470,10 +504,26 @@ impl<'era> Mutator<'era> {
         if state.readers != 0 || state.worker_loan {
             return Err(RegistrationError::OutstandingLoan);
         }
-        let image = state.image.take().ok_or(RegistrationError::Publication)?;
-        if let Err(failure) = self.local.as_mut().expect("local shells").restore(image) {
+        let image = state
+            .image
+            .take_for(self.entry.key.heap, self.entry.young)
+            .map_err(RegistrationError::from)?
+            .ok_or(RegistrationError::Publication)?;
+        // SAFETY: `check_thread()` pinned this call to the owning mutator
+        // thread, `state.phase == Published`, `binding.epoch` matched, and
+        // `readers == 0` / `!worker_loan` ensure the image belongs to this
+        // live era and no sweep has reclaimed its words.
+        if let Err(failure) = unsafe { self.local.as_mut().expect("local shells").restore(image) } {
             let reason = failure.error.into();
-            state.image = Some(failure.image);
+            // SAFETY: returning the untouched image just taken from this entry
+            // after a failed restore.
+            if let Err(reinstall) = unsafe {
+                state
+                    .image
+                    .install(self.entry.key.heap, self.entry.young, failure.image)
+            } {
+                std::mem::forget(reinstall.image);
+            }
             return Err(reason);
         }
         state.phase = EntryPhase::Running;
@@ -484,6 +534,13 @@ impl<'era> Mutator<'era> {
     pub fn finish(mut self, epoch: NonZeroU64) -> Result<(), MutatorFinishFailure<'era>> {
         let result = (|| {
             self.check_thread()?;
+            if self
+                .local
+                .as_ref()
+                .is_some_and(|local| local.user_test_holds.load(Ordering::Relaxed) > 0)
+            {
+                return Err(RegistrationError::OutstandingLoan);
+            }
             if self.published.is_none() {
                 self.publish(epoch)?;
             }
@@ -608,7 +665,8 @@ pub struct OwnerGcSnapshot {
 }
 
 impl RunAccess<'_, '_> {
-    pub(in crate::tagged::gc) fn state(&mut self) -> &mut OwnerGcState {
+    #[cfg(any(test, feature = "test-support"))]
+    pub(super) fn state(&mut self) -> &mut OwnerGcState {
         self.owner.local.as_mut().expect("resident owner state")
     }
 
@@ -665,12 +723,8 @@ impl RunAccess<'_, '_> {
             allocated_count: state.hot.allocated_count,
             bytes_since_gc: state.hot.bytes_since_gc,
             memory_use_counts: state.hot.memory_use_counts,
-            root_words: state
-                .root_scratch
-                .iter()
-                .map(|w| w.value().bits())
-                .collect(),
-            root_capacity: state.root_scratch.capacity(),
+            root_words: state.root_words_bits(),
+            root_capacity: state.root_scratch_capacity(),
             root_slot_generation: state.root_slot_generation,
         }
     }
@@ -684,18 +738,35 @@ impl RunAccess<'_, '_> {
         self.state().root_slot_generation = u64::MAX;
     }
 
-    /// Value-FENCE hook (class C3): assertion-only plant of a same-heap
-    /// immediate into this owner's root scratch slot. Callers go through
-    /// neovm_value::test_support::authority::plant_scalar_root_for_test.
+    /// Value-FENCE hook (class C3): assertion-only plant of a non-heap scalar
+    /// into this owner's root scratch slot. Callers go through
+    /// `neovm_value::test_support::authority::plant_scalar_root_for_test`.
+    ///
+    /// # Safety
+    /// `value` must be a non-heap scalar (immediate or bare symbol), `root`
+    /// must name one of this owner's rooted slots, and the owner must be
+    /// exclusively borrowed by `self`.
     #[cfg(any(test, feature = "test-support"))]
     #[doc(hidden)]
-    pub(crate) fn plant_scalar_root_for_test(
+    pub(crate) unsafe fn plant_scalar_root_for_test(
         &mut self,
         root: &OwnerRootSlot<'_>,
         value: crate::tagged::value::TaggedValue,
     ) {
-        self.owner.local.as_mut().unwrap().root_scratch[root.index] =
-            crate::tagged::gc::mark_word::MarkWord::of(value);
+        assert!(
+            !value.is_heap_object(),
+            "plant_scalar_root_for_test requires a non-heap scalar value"
+        );
+        // SAFETY: `value` is asserted non-heap and caller upholds slot
+        // ownership under this exclusive `RunAccess`.
+        unsafe {
+            self.owner
+                .local
+                .as_mut()
+                .unwrap()
+                .set_root_slot(root.index, value)
+                .expect("valid root slot index");
+        }
     }
 
     /// Era follow-up row (peer 10:5xZ item 3): copied owner region-statistics
@@ -712,7 +783,7 @@ impl RunAccess<'_, '_> {
     #[doc(hidden)]
     pub fn root_bank_for_test(&mut self) -> (usize, usize) {
         let state = self.state();
-        (state.root_scratch.len(), state.root_scratch.capacity())
+        (state.root_scratch_len(), state.root_scratch_capacity())
     }
 
     /// Era follow-up row: copied owner allocation count. The owner GC state
@@ -737,9 +808,8 @@ impl RunAccess<'_, '_> {
         &mut self,
         value: crate::tagged::value::TaggedValue,
     ) {
-        self.state()
-            .root_scratch
-            .push(crate::tagged::gc::mark_word::MarkWord::of(value));
+        // SAFETY: upheld by caller contract.
+        unsafe { self.state().push_root_slot(value) };
     }
 
     /// Value-FENCE hook (class C3): seed the generation-pacing promoted

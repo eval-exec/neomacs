@@ -49,13 +49,15 @@ impl<'a> BirthPhase<'a> {
     fn new(heap: &'a mut TaggedHeap, concurrent: bool) -> Self {
         heap.concurrent_begin();
         heap.generational.major_in_progress = heap.generational.enabled;
-        heap.concurrent_mark_running = concurrent;
+        // SAFETY: synthetic serial fixture, no live worker.
+        unsafe { heap.concurrent_mark_running.set(concurrent) };
         Self(heap)
     }
 
     fn stop(&mut self) {
         self.0.close_alloc_regions();
-        self.0.concurrent_mark_running = false;
+        // SAFETY: synthetic serial fixture cleanup.
+        unsafe { self.0.concurrent_mark_running.set(false) };
     }
 }
 
@@ -101,7 +103,7 @@ fn float_births(heap: &TaggedHeap) -> Vec<usize> {
 
 fn bytecode() -> ByteCodeFunction {
     let mut function = ByteCodeFunction::new(LambdaParams::simple(vec![]));
-    function.ops = vec![Op::Nil];
+    function.set_ops(vec![Op::Nil]);
     function
 }
 
@@ -249,7 +251,8 @@ fn partial_regions_log_only_used_cells_and_float_headers() {
         "floats log by region"
     );
     assert_eq!(
-        phase.float_arena.pages[0].allocated, 3,
+        phase.float_arena.pages[0].allocated(),
+        3,
         "unused tail refunded"
     );
 }

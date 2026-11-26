@@ -15,7 +15,9 @@
 //! revalidate, expire — and the lookups answer "is this epoch certified for
 //! exactly this presentation".
 
-use neomacs_display_protocol::scroll_coverage::ScrollSurface;
+use neomacs_display_protocol::scroll_coverage::{
+    AuxiliaryScrollCoverage, CoveragePublicationId, ScrollSurface,
+};
 use neomacs_display_protocol::types::DisplayWindowId;
 use neomacs_display_protocol::{FrameGlyphBuffer, PresentationId};
 use std::collections::{HashMap, HashSet};
@@ -52,7 +54,116 @@ impl RetainedCoverage {
     }
 }
 
+#[derive(Debug, Default, PartialEq, Eq)]
+pub(in crate::render_thread) struct AuxiliaryCoverageChanges {
+    pub installed: usize,
+    pub revoked: usize,
+    /// Absent windows revoked by a snapshot for a different logical base.
+    pub conservative_revocations: usize,
+}
+
+impl AuxiliaryCoverageChanges {
+    pub fn changed(&self) -> bool {
+        self.installed != 0 || self.revoked != 0
+    }
+}
+
 impl CoverageRetention {
+    /// Apply a complete desired snapshot. Revocation is intentionally more
+    /// conservative than installation: an absent window loses coverage even
+    /// when the native frame has already advanced past this update's base.
+    pub(in crate::render_thread) fn apply_auxiliary(
+        &mut self,
+        update: AuxiliaryScrollCoverage,
+        frame: Option<&FrameGlyphBuffer>,
+    ) -> AuxiliaryCoverageChanges {
+        let desired: HashSet<_> = update
+            .surfaces
+            .iter()
+            .map(|surface| surface.coverage().content.window_id)
+            .collect();
+        let mut changes = AuxiliaryCoverageChanges::default();
+        self.entries.retain(|window, _| {
+            if desired.contains(window) {
+                true
+            } else {
+                changes.revoked += 1;
+                false
+            }
+        });
+        let Some(frame) = frame.filter(|frame| {
+            frame.presentation_id == update.base && frame.frame_placement.frame() == update.frame
+        }) else {
+            if !update.surfaces.is_empty() {
+                tracing::debug!(
+                    target: "neomacs_display_runtime::retained_scroll",
+                    update_base = update.base.get(),
+                    update_frame = update.frame.get(),
+                    current_base = frame.map(|frame| frame.presentation_id.get()),
+                    current_frame = frame.map(|frame| frame.frame_placement.frame().get()),
+                    "rejected auxiliary compositor coverage base mismatch"
+                );
+            }
+            changes.conservative_revocations = changes.revoked;
+            return changes;
+        };
+        for surface in update.surfaces {
+            let coverage = surface.coverage();
+            let window = coverage.content.window_id;
+            if coverage.hit_index.presentation() != update.base
+                || !surface.frame_buffer_resources_match(frame)
+                || !coverage.resources_compatible_with_frame_buffer(frame)
+            {
+                tracing::debug!(
+                    target: "neomacs_display_runtime::retained_scroll",
+                    window = window.get(),
+                    base = update.base.get(),
+                    hit_index_base = coverage.hit_index.presentation().get(),
+                    "rejected auxiliary compositor coverage surface"
+                );
+                changes.revoked += usize::from(self.entries.remove(&window).is_some());
+                continue;
+            }
+            if self.entries.get(&window).is_some_and(|entry| {
+                Arc::ptr_eq(&entry.surface, &surface)
+                    && entry.valid_presentation == update.base
+                    && entry.predict_pixels == coverage.predict_pixels
+                    && entry.compositor_enabled == coverage.compositor_enabled
+            }) {
+                continue;
+            }
+            let predict_pixels = coverage.predict_pixels;
+            let compositor_enabled = coverage.compositor_enabled;
+            let epoch = coverage.epoch;
+            let publication = coverage.publication.get();
+            let anchor_row = coverage.anchor_row;
+            let origin = coverage.origin;
+            self.entries.insert(
+                window,
+                RetainedCoverage {
+                    predict_pixels,
+                    compositor_enabled,
+                    surface,
+                    valid_presentation: update.base,
+                },
+            );
+            tracing::debug!(
+                target: "neomacs_display_runtime::retained_scroll",
+                window = window.get(),
+                base = update.base.get(),
+                epoch,
+                publication,
+                compositor_enabled,
+                predict_pixels,
+                anchor_row,
+                origin,
+                "installed auxiliary compositor coverage"
+            );
+            changes.installed += 1;
+        }
+        changes
+    }
+
     /// Apply one ingested publish. A window absent from both its surfaces and
     /// its renewals loses its entry: that publish either revoked the coverage
     /// or coalesced away the publish that carried it, and a surface of unknown
@@ -119,6 +230,20 @@ impl CoverageRetention {
     ) -> Option<&RetainedCoverage> {
         self.certified_at(presentation, window)
             .filter(|entry| entry.surface.coverage().epoch == epoch)
+    }
+
+    /// An offset belongs to one exact export, not merely its content lease.
+    /// Renewals keep that retained export's identity; a same-epoch replacement
+    /// must not inherit permission to use offsets chosen against its predecessor.
+    pub(in crate::render_thread) fn certified_publication_at(
+        &self,
+        presentation: PresentationId,
+        window: DisplayWindowId,
+        epoch: u64,
+        publication: CoveragePublicationId,
+    ) -> Option<&RetainedCoverage> {
+        self.certified_epoch_at(presentation, window, epoch)
+            .filter(|entry| entry.surface.coverage().publication == publication)
     }
 
     /// Every entry certified for exactly this presentation, in map order.

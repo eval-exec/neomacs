@@ -34,6 +34,7 @@ fn gc_tls_ownership_in_flight_filters_two_live_heaps() {
     let mut first = crate::emacs_core::eval_hook_installers::new_context();
     let a = first.eval_str("(vector 41)").unwrap();
     let flow_a = Flow::throw(Value::symbol("gc-tls-first"), a);
+    let parked_first = first.park_for_test();
     let mut second = crate::emacs_core::eval_hook_installers::new_context();
     let b = second.eval_str("(vector 42)").unwrap();
     let flow_b = Flow::throw(Value::symbol("gc-tls-second"), b);
@@ -41,13 +42,15 @@ fn gc_tls_ownership_in_flight_filters_two_live_heaps() {
     assert!(roots.iter().any(|root| root.bits() == b.bits()));
     assert!(roots.iter().all(|root| root.bits() != a.bits()));
     second.gc_collect_exact();
+    let _parked_second = second.park_for_test();
+    let mut first = parked_first.resume_for_test().expect("resume first");
     first.setup_thread_locals();
     let roots = roots_for(&first);
     assert!(roots.iter().any(|root| root.bits() == a.bits()));
     assert!(roots.iter().all(|root| root.bits() != b.bits()));
     first.gc_collect_exact();
-    assert_eq!(a.as_vector_data().unwrap()[0], Value::fixnum(41));
-    assert_eq!(b.as_vector_data().unwrap()[0], Value::fixnum(42));
+    assert_eq!(a.as_vector_data().unwrap().at(0), Value::fixnum(41));
+    assert_eq!(b.as_vector_data().unwrap().at(0), Value::fixnum(42));
     drop((flow_a, flow_b));
 }
 
@@ -56,6 +59,7 @@ fn gc_tls_ownership_in_flight_clone_keeps_the_original_heap() {
     let mut first = crate::emacs_core::eval_hook_installers::new_context();
     let payload = first.eval_str("(vector 43)").unwrap();
     let original = Flow::throw(Value::symbol("gc-tls-clone"), payload);
+    let parked_first = first.park_for_test();
     let mut second = crate::emacs_core::eval_hook_installers::new_context();
     let cloned = original.clone();
     drop(original);
@@ -65,6 +69,8 @@ fn gc_tls_ownership_in_flight_clone_keeps_the_original_heap() {
             .all(|root| root.bits() != payload.bits())
     );
     second.gc_collect_exact();
+    drop(second);
+    let mut first = parked_first.resume_for_test().expect("resume first");
     first.setup_thread_locals();
     assert!(
         roots_for(&first)
@@ -72,7 +78,7 @@ fn gc_tls_ownership_in_flight_clone_keeps_the_original_heap() {
             .any(|root| root.bits() == payload.bits())
     );
     first.gc_collect_exact();
-    assert_eq!(payload.as_vector_data().unwrap()[0], Value::fixnum(43));
+    assert_eq!(payload.as_vector_data().unwrap().at(0), Value::fixnum(43));
     drop(cloned);
     assert!(
         roots_for(&first)
@@ -92,7 +98,7 @@ fn gc_tls_ownership_in_flight_signal_roots_survive_same_heap_gc() {
             .any(|root| root.bits() == payload.bits())
     );
     ctx.gc_collect_exact();
-    assert_eq!(payload.as_vector_data().unwrap()[0], Value::fixnum(44));
+    assert_eq!(payload.as_vector_data().unwrap().at(0), Value::fixnum(44));
     drop(flow);
     assert!(
         roots_for(&ctx)
@@ -138,6 +144,7 @@ fn gc_tls_ownership_in_flight_shared_registry_pin_outlives_owner_local_error() {
             .any(|root| root.bits() == payload_bits)
     );
 
+    let parked_first = first.park_for_test();
     let mut second = crate::emacs_core::eval_hook_installers::new_context();
     let other = second
         .eval_str("(signal 'error (list (vector 47)))")
@@ -153,20 +160,23 @@ fn gc_tls_ownership_in_flight_shared_registry_pin_outlives_owner_local_error() {
     );
     second.gc_collect_exact();
     assert_eq!(
-        other_payload.as_vector_data().unwrap()[0],
+        other_payload.as_vector_data().unwrap().at(0),
         Value::fixnum(47)
     );
     release.send(()).unwrap();
     worker
         .join()
         .expect("release the worker's local registry pin");
-    first.setup_thread_locals();
+    let parked_second = second.park_for_test();
+    let mut first = parked_first.resume_for_test().expect("resume first");
     assert!(
         roots_for(&first)
             .iter()
             .all(|root| root.bits() != payload_bits)
     );
     first.gc_collect_exact();
+    drop(first);
+    let _second = parked_second.resume_for_test().expect("resume second");
     drop(other);
 }
 
@@ -204,6 +214,7 @@ fn gc_tls_ownership_in_flight_registry_pins_change_during_owner_gc() {
         drop(pin);
         worker_finished.store(true, Ordering::Release);
     });
+    let parked_first = first.park_for_test();
     let mut second = crate::emacs_core::eval_hook_installers::new_context();
     let other = second
         .eval_str("(signal 'error (list (vector 49)))")
@@ -212,6 +223,8 @@ fn gc_tls_ownership_in_flight_registry_pins_change_during_owner_gc() {
         EvalError::Signal { data, .. } => data[0],
         other => panic!("expected signal, received {other:?}"),
     };
+    let parked_second = second.park_for_test();
+    let mut first = parked_first.resume_for_test().expect("resume first");
     collecting.wait();
     drop(error);
     let mut collections = 0;
@@ -223,14 +236,14 @@ fn gc_tls_ownership_in_flight_registry_pins_change_during_owner_gc() {
     worker
         .join()
         .expect("clone and release registry pins during owner GC");
-    first.setup_thread_locals();
     assert!(
         roots_for(&first)
             .iter()
             .all(|root| root.bits() != payload_bits)
     );
     first.gc_collect_exact();
-    second.setup_thread_locals();
+    drop(first);
+    let mut second = parked_second.resume_for_test().expect("resume second");
     assert!(
         roots_for(&second)
             .iter()
@@ -238,7 +251,7 @@ fn gc_tls_ownership_in_flight_registry_pins_change_during_owner_gc() {
     );
     second.gc_collect_exact();
     assert_eq!(
-        other_payload.as_vector_data().unwrap()[0],
+        other_payload.as_vector_data().unwrap().at(0),
         Value::fixnum(49)
     );
     drop(other);

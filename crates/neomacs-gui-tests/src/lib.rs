@@ -808,6 +808,42 @@ pub trait GuiCommandRunner {
     ) -> io::Result<GuiCommandOutput>;
 }
 
+/// The last `*-STATE` line a GUI fixture wrote to its stderr log.
+///
+/// Fixtures publish observed geometry and receipt state while they wait for
+/// the native receipt that ends a stage.  The harness process timeout is the
+/// only wall-clock bound, so quoting this line in the timeout panic keeps a
+/// red diagnosable without reintroducing a per-stage deadline.
+pub fn last_editor_state_line(path: impl AsRef<Path>) -> String {
+    let bytes = fs::read(path).unwrap_or_default();
+    let text = String::from_utf8_lossy(&bytes);
+    text.lines()
+        .rev()
+        .find(|line| line.contains("-STATE "))
+        .unwrap_or("no *-STATE line in editor stderr")
+        .trim()
+        .to_owned()
+}
+
+/// Create a fresh GUI artifact leaf directory, creating its parent chain first.
+///
+/// A GUI suite can run first in a fresh worktree, where
+/// `<root>/target/neomacs-gui-tests` (or the suite's own parent) does not
+/// exist yet; a bare `fs::create_dir` then fails with ENOENT before any
+/// fixture runs. Remove a stale leaf from an earlier run as well, so the
+/// suite never reads old artifacts.
+pub fn fresh_artifact_dir(path: impl AsRef<Path>) -> PathBuf {
+    let path = path.as_ref();
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    fs::create_dir_all(parent)
+        .unwrap_or_else(|error| panic!("create GUI artifact parent {}: {error}", parent.display()));
+    let _ = fs::remove_dir_all(path);
+    fs::create_dir(path).unwrap_or_else(|error| {
+        panic!("create fresh GUI artifact dir {}: {error}", path.display())
+    });
+    path.to_path_buf()
+}
+
 /// Run an input-injection tool (wtype, xdotool, ...) with a deadline.
 ///
 /// These tools talk to a live compositor; when the compositor stops

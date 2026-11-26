@@ -19,7 +19,8 @@ pub(crate) use super::types::{
 
 const BUFFER_MAGIC: [u8; 16] = *b"NEOBUFFER\0\0\0\0\0\0\0";
 // v9 appends GNU `auto_save_failure_time` (`pdumper.c:2855`) after `modtime_size`.
-const BUFFER_FORMAT_VERSION: u32 = 9;
+// v10 appends `long_line_optimizations_p` (`pdumper.c:2866`).
+const BUFFER_FORMAT_VERSION: u32 = 10;
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Pod, Zeroable)]
@@ -194,6 +195,8 @@ fn write_buffer(out: &mut Vec<u8>, buffer: &DumpBuffer) -> Result<(), DumpError>
     write_opt_i64(out, buffer.modtime_size);
     // v9: GNU `auto_save_failure_time` (`pdumper.c:2855`).
     write_i64(out, buffer.auto_save_failure_time);
+    // v10: GNU `long_line_optimizations_p` (`pdumper.c:2866`).
+    write_bool(out, buffer.long_line_optimizations_p);
     Ok(())
 }
 
@@ -246,6 +249,7 @@ fn read_buffer(cursor: &mut Cursor<'_>) -> Result<DumpBuffer, DumpError> {
         modtime_nsec: read_opt_i32(cursor, "buffer modtime nsec")?,
         modtime_size: read_opt_i64(cursor, "buffer modtime size")?,
         auto_save_failure_time: read_i64(cursor, "buffer auto-save failure time")?,
+        long_line_optimizations_p: cursor.read_bool("buffer long-line optimizations")?,
     })
 }
 

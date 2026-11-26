@@ -185,6 +185,12 @@ shells! {
     explicitly_finished_reader_allows_real_collection => ExplicitlyFinishedReaderAllowsRealCollection,
     repeated_worlds_have_distinct_heaps_and_independent_collection_cycles => RepeatedWorldsHaveDistinctHeapsAndIndependentCollectionCycles,
     serial_heap_restoration_reclaims_former_owner_roots_after_resume => SerialHeapRestorationReclaimsFormerOwnerRootsAfterResume,
+    should_collect_stopped_tracks_published_debt_without_consuming_trace => ShouldCollectStoppedTracksPublishedDebtWithoutConsumingTrace,
+    stopped_summaries_rejects_zero_epoch_outside_pre_stop_native => StoppedSummariesRejectsZeroEpochOutsidePreStopNative,
+    collect_requested_after_trace_refuses_early_without_world_walk => CollectRequestedAfterTraceRefusesEarlyWithoutWorldWalk,
+    should_collect_stopped_counts_keeper_heap_serial_debt => ShouldCollectStoppedCountsKeeperHeapSerialDebt,
+    prepare_finish_folds_serial_facts_and_young_shell_without_collection => PrepareFinishFoldsSerialFactsAndYoungShellWithoutCollection,
+    swapped_entry_image_between_non_generational_eras_fails_closed_at_collect_stopped => SwappedEntryImageBetweenNonGenerationalErasFailsClosedAtCollectStopped,
 }
 
 #[test]

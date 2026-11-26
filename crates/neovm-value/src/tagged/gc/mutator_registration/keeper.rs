@@ -54,6 +54,14 @@ impl FrozenLegacyRoots {
         &self.words
     }
 
+    /// Test-only census observation. The words stay private, and this grants
+    /// no decoding right. The real source remains closed.
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn contains_for_test(&self, word: TaggedValue) -> bool {
+        self.words.contains(&word)
+    }
+
     pub(crate) fn function_roots(&self) -> FrozenFunctionRoots {
         if self.functions_quiescent {
             FrozenFunctionRoots::Quiescent

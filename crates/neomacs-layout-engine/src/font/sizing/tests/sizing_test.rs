@@ -294,3 +294,64 @@ fn pre_window_observations_resolve_only_logical_font_scale() {
     assert_eq!(profile.font_sizing().layout_dpi(), 96.0);
     assert_eq!(profile.source(), FrameFontScaleSource::PlatformLogical);
 }
+
+#[test]
+fn wayland_desktop_text_dpi_scales_point_fonts() {
+    for (dpi, expected_pixels) in [(96.0, 16.0), (144.0, 24.0), (192.0, 32.0)] {
+        let profile = resolve_frame_font_scale(
+            DisplayObservation::WaylandWithTextDpi(Dpi::new(dpi).unwrap()),
+            FrameFontScalePolicy::Automatic,
+        );
+        let sizing = profile.font_sizing();
+        assert_eq!(profile.source(), FrameFontScaleSource::DesktopTextSettings);
+        assert_eq!(sizing.layout_dpi(), dpi);
+        assert_eq!(sizing.face_height_to_layout_pixels(120), expected_pixels);
+        assert_eq!(
+            sizing
+                .font_size_px_for_request(FrameFontSize::points(12.0).unwrap())
+                .unwrap()
+                .get(),
+            expected_pixels
+        );
+    }
+}
+
+#[test]
+fn wayland_desktop_text_dpi_preserves_explicit_pixel_fonts() {
+    for dpi in [48.0, 96.0, 144.0, 192.0] {
+        let profile = resolve_frame_font_scale(
+            DisplayObservation::WaylandWithTextDpi(Dpi::new(dpi).unwrap()),
+            FrameFontScalePolicy::Automatic,
+        );
+        let sizing = profile.font_sizing();
+        assert_eq!(
+            sizing
+                .font_size_px_for_request(FrameFontSize::pixels(16).unwrap())
+                .unwrap()
+                .get(),
+            16.0
+        );
+        assert_eq!(
+            sizing
+                .font_opening_size_px(FontOpeningSize::Pixels(
+                    std::num::NonZeroU32::new(16).unwrap()
+                ))
+                .get(),
+            16
+        );
+    }
+}
+
+#[test]
+fn explicit_font_dpi_policy_overrides_wayland_desktop_settings() {
+    let profile = resolve_frame_font_scale(
+        DisplayObservation::WaylandWithTextDpi(Dpi::new(192.0).unwrap()),
+        FrameFontScalePolicy::Explicit(Dpi::new(120.0).unwrap()),
+    );
+    assert_eq!(profile.source(), FrameFontScaleSource::ExplicitPolicy);
+    assert_eq!(profile.font_sizing().layout_dpi(), 120.0);
+    assert_eq!(
+        profile.font_sizing().face_height_to_layout_pixels(120),
+        20.0
+    );
+}

@@ -6,6 +6,35 @@
     (add-to-list 'load-path directory)))
 (require 'svg-tag-mode)
 
+(defun desktop-font-startup-receipt ()
+  (let ((file (getenv "NEOMACS_GUI_PRESENTATION_RECEIPT")))
+    (when (and file (file-exists-p file))
+      (with-temp-buffer (insert-file-contents file) (read (current-buffer))))))
+
+(defun desktop-font-startup-presented (after)
+  (or (not (getenv "NEOMACS_GUI_PRESENTATION_RECEIPT"))
+      (let ((receipt (desktop-font-startup-receipt)))
+        (and receipt
+             (eq (plist-get receipt :outcome) 'presented)
+             (> (plist-get receipt :submission) after)
+             (= (plist-get receipt :width) (frame-outer-width))
+             (= (plist-get receipt :height) (frame-outer-height))
+             (integerp (plist-get receipt :clock-id))
+             (natnump (plist-get receipt :seconds))
+             (natnump (plist-get receipt :nanoseconds))
+             (< (plist-get receipt :nanoseconds) 1000000000)))))
+
+(defvar desktop-font-startup-last-state nil)
+(defun desktop-font-startup-log-state (stage expected submission)
+  "Publish the observed startup-resize geometry when it changes."
+  (let ((line (format
+               "DESKTOP-FONT-STARTUP-STATE stage=%s columns=%S width=%S height=%S expected=%s submission=%S"
+               stage (frame-width) (frame-pixel-width) (frame-pixel-height)
+               expected submission)))
+    (unless (equal line desktop-font-startup-last-state)
+      (setq desktop-font-startup-last-state line)
+      (princ (concat line "\n") 'external-debugging-output))))
+
 (run-at-time
  1 nil
  (lambda ()
@@ -43,28 +72,27 @@
          (when (fboundp 'neomacs--write-frame-snapshot)
            (neomacs--write-frame-snapshot
             (getenv "NEOMACS_GUI_FRAME_SNAPSHOT_JSON") t 'json))
-         ;; Observe the settled native resize, not just the pending Lisp
-         ;; request: a software Wayland compositor can take longer than any
-         ;; fixed delay to acknowledge the configure, so poll the settled
-         ;; geometry and fail only at a deadline.
+         ;; Observe the settled native resize through the presentation
+         ;; receipt, not just the pending Lisp request: a software Wayland
+         ;; compositor can take arbitrarily long to acknowledge the configure,
+         ;; so the receipt for the 91-column frame is the barrier and the
+         ;; harness's 60 s process cap is the only wall-clock bound.
          (let ((original-height (frame-pixel-height))
-               (deadline (+ (float-time) 12))
+               (submission
+                (or (plist-get (desktop-font-startup-receipt) :submission) 0))
                (timer nil))
            (set-frame-width nil 91)
            (setq timer
                  (run-at-time
                   0 0.02
                   (lambda ()
+                    (desktop-font-startup-log-state
+                     "resized" (format "91/%S" original-height) submission)
                     (when (and (= (frame-width) 91)
-                               (= (frame-pixel-height) original-height))
+                               (= (frame-pixel-height) original-height)
+                               (desktop-font-startup-presented submission))
                       (cancel-timer timer)
-                      (kill-emacs 0))
-                    (when (> (float-time) deadline)
-                      (cancel-timer timer)
-                      (princ (format "DESKTOP-FONT-STARTUP-FAIL resized geometry: expected 91 columns and height %S, got %S / %S\n"
-                                     original-height (frame-width) (frame-pixel-height))
-                             'external-debugging-output)
-                      (kill-emacs 1)))))))
+                      (kill-emacs 0)))))))
      (error
       (princ (format "DESKTOP-FONT-STARTUP-FAIL %S\n" err) 'external-debugging-output)
       (message "Desktop font startup regression: %S" err)

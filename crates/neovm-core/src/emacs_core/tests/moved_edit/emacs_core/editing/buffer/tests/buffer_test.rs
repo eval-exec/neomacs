@@ -306,6 +306,7 @@ fn insert_reads_the_string_after_before_change_functions_like_gnu() {
         "GNU's copy_text runs after prepare_to_modify_buffer"
     );
 
+    drop(eval);
     let mut eval = crate::test_utils::new_context();
     assert_eq!(
         format_eval_result(&eval.eval_str(
@@ -319,6 +320,7 @@ fn insert_reads_the_string_after_before_change_functions_like_gnu() {
         "insert-before-markers shares insert_from_string_1"
     );
 
+    drop(eval);
     let mut eval = crate::test_utils::new_context();
     assert_eq!(
         format_eval_result(&eval.eval_str(
@@ -333,6 +335,7 @@ fn insert_reads_the_string_after_before_change_functions_like_gnu() {
         "GNU grafts string_intervals (string) read after the hook"
     );
 
+    drop(eval);
     let mut eval = crate::test_utils::new_context();
     assert_eq!(
         format_eval_result(&eval.eval_str(
@@ -373,6 +376,7 @@ fn every_insert_door_reads_the_string_after_the_change_hook_like_gnu() {
         "insert-and-inherit"
     );
 
+    drop(eval);
     let mut eval = crate::test_utils::new_context();
     assert_eq!(
         format_eval_result(&eval.eval_str(
@@ -386,6 +390,7 @@ fn every_insert_door_reads_the_string_after_the_change_hook_like_gnu() {
         "insert-before-markers-and-inherit"
     );
 
+    drop(eval);
     let mut eval = crate::test_utils::new_context();
     assert_eq!(
         format_eval_result(&eval.eval_str(
@@ -403,6 +408,7 @@ fn every_insert_door_reads_the_string_after_the_change_hook_like_gnu() {
     // The loop shape: only the argument the hook mutates changes, and the
     // hook fires once per argument, so argument 1 is already in the buffer
     // when the mutation lands.  GNU: "aaaZbb".
+    drop(eval);
     let mut eval = crate::test_utils::new_context();
     assert_eq!(
         format_eval_result(&eval.eval_str(
@@ -418,6 +424,7 @@ fn every_insert_door_reads_the_string_after_the_change_hook_like_gnu() {
 
     // A character argument has nothing a hook can mutate, and GNU converts it
     // eagerly (`CHAR_STRING`, src/editfns.c:1327).  Control for the split.
+    drop(eval);
     let mut eval = crate::test_utils::new_context();
     assert_eq!(
         format_eval_result(&eval.eval_str(
@@ -431,6 +438,7 @@ fn every_insert_door_reads_the_string_after_the_change_hook_like_gnu() {
 
     // An empty string returns before `prepare_to_modify_buffer`, so it runs
     // no hook at all (`insert_from_string`, src/insdel.c:986-987).  GNU: (1 "a").
+    drop(eval);
     let mut eval = crate::test_utils::new_context();
     assert_eq!(
         format_eval_result(&eval.eval_str(

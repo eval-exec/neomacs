@@ -5,12 +5,12 @@
 //! direct bodies, and each function here is a one-arm call of that body.
 //! There is no thread test, TLS read, env read, or second algorithm.
 
-use std::time::Duration;
-
 use neomacs_layout_engine::RowsQueryPolicy;
 use neovm_core::Value;
 use neovm_core::emacs_core::error::Flow;
-use neovm_core::emacs_core::eval::{Context, RedisplayMiniGeometryRequest};
+use neovm_core::emacs_core::eval::{
+    Context, DisplayMaintenanceOutcome, RedisplayMiniGeometryRequest,
+};
 use neovm_core::emacs_core::font::GstringShapeOutcome;
 use neovm_core::window::{FrameId, WindowId, WindowLayoutQueryOutcome, WindowLayoutQueryScope};
 
@@ -67,7 +67,7 @@ pub(crate) fn maintain_scroll_coverage(
     installer: RedisplayInstaller,
     runtime: &RedisplayRuntime,
     evaluator: &Context,
-) -> RedisplayStep<(Option<Duration>, bool)> {
+) -> RedisplayStep<DisplayMaintenanceOutcome> {
     match installer {
         RedisplayInstaller::InlineSerialMain => {
             RedisplayStep::Done(runtime.maintain_scroll_coverage(evaluator))

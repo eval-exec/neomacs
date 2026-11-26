@@ -317,7 +317,7 @@ fn collection_clears_dirty_owner_tracking_at_begin() {
     // Completing the cycle leaves them clear (marking traces but writes no heap
     // slots, so the barrier records nothing).
     heap.seed_root(reachable);
-    heap.complete_collection();
+    heap.complete_collection_for_test();
     assert_eq!(heap.dirty_owner_count(), 0);
     assert_eq!(heap.dirty_write_count(), 0);
 }
@@ -372,7 +372,7 @@ fn gc_basic_collection() {
     assert_eq!(heap.allocated_count(), 2);
 
     // Collect with only `reachable` as a root
-    heap.collect(std::iter::once(reachable));
+    heap.collect_rooted(std::iter::once(reachable));
 
     // The unreachable cons should be freed
     assert_eq!(heap.allocated_count(), 1);
@@ -397,7 +397,7 @@ fn gc_transitive_reachability() {
     assert_eq!(heap.allocated_count(), 4);
 
     // Collect with c1 as root — c2 and c3 should survive transitively
-    heap.collect(std::iter::once(c1));
+    heap.collect_rooted(std::iter::once(c1));
 
     assert_eq!(heap.allocated_count(), 3); // c1, c2, c3 survive; _garbage freed
 
@@ -417,7 +417,7 @@ fn gc_float_collection() {
 
     assert_eq!(heap.allocated_count(), 2);
 
-    heap.collect(std::iter::once(f1));
+    heap.collect_rooted(std::iter::once(f1));
 
     assert_eq!(heap.allocated_count(), 1);
     assert!((f1.xfloat() - 1.0).abs() < f64::EPSILON);
@@ -435,7 +435,7 @@ fn gc_collect_exact_does_not_scan_the_machine_stack() {
     let keep_visible = [stack_only];
     std::hint::black_box(&keep_visible);
 
-    heap.collect_exact(std::iter::empty());
+    heap.collect_rooted(std::iter::empty());
 
     assert_eq!(heap.allocated_count(), 0);
 }
@@ -457,7 +457,7 @@ fn gc_collect_exact_preserves_roots_across_multiple_cons_blocks() {
         }
     }
 
-    heap.collect_exact([first_block_root, later_block_root].into_iter());
+    heap.collect_rooted([first_block_root, later_block_root].into_iter());
 
     assert_eq!(first_block_root.cons_car().as_fixnum(), Some(10));
     assert_eq!(later_block_root.cons_car().as_fixnum(), Some(9_500));

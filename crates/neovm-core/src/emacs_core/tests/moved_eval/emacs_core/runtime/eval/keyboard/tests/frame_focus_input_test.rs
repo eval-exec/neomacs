@@ -3,7 +3,9 @@
 use crate::emacs_core::Context;
 use crate::emacs_core::eval::*;
 use crate::host_input::HostInputPublisher;
-use crate::keyboard::{FrontendKey, InputEvent, render_key_transport_to_input_event};
+use crate::keyboard::{
+    FrontendKey, InputEvent, NativeNonKeyKind, render_key_transport_to_input_event,
+};
 use crate::window::DisplayFrameManagerExt;
 use crate::window::FrameId;
 use neovm_edit::buffer::BufferId;
@@ -15,6 +17,43 @@ struct FocusFixture {
     second: FrameId,
     primary: BufferId,
     secondary: BufferId,
+}
+
+#[test]
+fn native_nonkey_frame_switch_deferral_preserves_its_origin() {
+    let mut fixture = FocusFixture::new();
+    fixture.deliver(vec![InputEvent::NativeNonKey {
+        kind: NativeNonKeyKind::PowerOff,
+        emacs_frame_id: fixture.second.0,
+    }]);
+    let sequence = fixture
+        .eval
+        .eval_str("(setq issue395-input-sequence (read-key-sequence-vector nil nil nil t))")
+        .expect("read native event's preceding frame switch");
+    {
+        let events = sequence.as_vector_data().expect("frame-switch sequence");
+        assert_eq!(events.len(), 1);
+        assert_eq!(events.at(0).cons_car(), Value::symbol("switch-frame"));
+        assert_eq!(
+            events.at(0).cons_cdr().cons_car(),
+            Value::make_frame(fixture.second.0)
+        );
+    }
+    fixture
+        .eval
+        .eval_str("(execute-kbd-macro issue395-input-sequence)")
+        .expect("select source frame");
+    let observed = fixture
+        .eval
+        .eval_str(
+            "(list (append (read-key-sequence-vector nil) nil)
+               last-nonmenu-event last-input-event)",
+        )
+        .expect("read deferred native event");
+    assert_eq!(
+        crate::emacs_core::print_value(&observed),
+        "((ns-power-off) nil ns-power-off)"
+    );
 }
 
 impl FocusFixture {
@@ -81,7 +120,7 @@ impl FocusFixture {
         {
             let events = sequence.as_vector_data().expect("symbolic input sequence");
             assert_eq!(events.len(), 1, "frame switch must precede its key");
-            let event = events[0];
+            let event = events.at(0);
             assert!(event.is_cons(), "expected a switch-frame event");
             assert_eq!(event.cons_car(), Value::symbol("switch-frame"));
             assert_eq!(event.cons_cdr().cons_car(), Value::make_frame(target.0));
@@ -115,7 +154,7 @@ impl FocusFixture {
             .eval_str("(setq issue395-input-sequence (read-key-sequence-vector nil))")
             .unwrap();
         assert_eq!(
-            key.as_vector_data().unwrap().as_slice(),
+            key.as_vector_data().unwrap(),
             &[Value::fixnum(character as i64)],
             "the original key must be delivered exactly once after selection"
         );

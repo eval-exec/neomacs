@@ -15,16 +15,18 @@ fn effect_before_numeric_loop() -> ByteCodeFunction {
         optional: vec![],
         rest: None,
     });
-    f.lexical = true;
-    f.constants = vec![
-        Value::make_int(0),
-        Value::make_int(3),
-        Value::symbol("osr-entry-held"),
-        Value::symbol("osr-entry-effect"),
-        Value::make_int(42),
-    ]
-    .into();
-    f.ops = vec![
+    f.set_lexical(true);
+    f.set_constants(
+        vec![
+            Value::make_int(0),
+            Value::make_int(3),
+            Value::symbol("osr-entry-held"),
+            Value::symbol("osr-entry-effect"),
+            Value::make_int(42),
+        ]
+        .into(),
+    );
+    f.set_ops(vec![
         Op::Constant(1),
         Op::VarBind(2),
         Op::Constant(0), // payload n i
@@ -43,8 +45,8 @@ fn effect_before_numeric_loop() -> ByteCodeFunction {
         Op::Pop,
         Op::Unbind(1),
         Op::Return,
-    ];
-    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(8);
+    ]);
+    f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(8));
     f.seal_hand_assembled_ops();
     f
 }

@@ -20,22 +20,18 @@
         :graphical-display (display-graphic-p (terminal-name))
         :display-frames (frames-on-display-list (terminal-name))))
 
-;; How long one stage may wait for an asynchronous desktop notification.
-;; The GSettings change reaches GNU (or Neomacs) through the D-Bus/gsettings
-;; stack, whose cold start on a loaded machine costs seconds; the stage
-;; asserts the resulting geometry, so the budget only covers propagation.
-(defvar desktop-font-live-stage-seconds 20)
-
-(defun desktop-font-live-await (predicate continuation deadline)
+(defun desktop-font-live-await (predicate continuation)
+  ;; Wait until the observed settings change, geometry and (when the backend
+  ;; provides one) native presentation receipt all hold.  The harness's 60 s
+  ;; process timeout is the only wall-clock bound; a fixed per-stage deadline
+  ;; turned a loaded machine's D-Bus/GSettings propagation into a spurious
+  ;; failure, while the predicate itself is the settings-change receipt.
   (condition-case err
-      (cond ((funcall predicate) (funcall continuation))
-            ((> (float-time) deadline)
-             (error "Live font update timed out: %S geometry=%S text=%S receipt=%S"
-                    (desktop-font-live-state) (desktop-font-live-frame-state)
-                    (list (frame-text-width) (frame-text-height))
-                    (desktop-font-live-receipt)))
-            (t (run-at-time 0.05 nil #'desktop-font-live-await
-                            predicate continuation deadline)))
+      (progn
+        (desktop-font-live-log-state)
+        (cond ((funcall predicate) (funcall continuation))
+              (t (run-at-time 0.05 nil #'desktop-font-live-await
+                              predicate continuation))))
     (error (desktop-font-live-log "LIVE-FONT-FAIL %S" err) (kill-emacs 1))))
 
 (defun desktop-font-live-write (key value)
@@ -45,10 +41,24 @@
                              "org.gnome.desktop.interface" key value))
     (error "Isolated GSettings writer failed")))
 
+(defvar desktop-font-live-current-stage "startup")
+(defvar desktop-font-live-last-state nil)
+
 (defun desktop-font-live-frame-state ()
   (list (face-attribute 'default :family) (face-attribute 'default :height)
         (frame-parameter nil 'font) (window-font-width) (window-font-height)
         (frame-width) (frame-height) (frame-pixel-width) (frame-pixel-height)))
+
+(defun desktop-font-live-log-state ()
+  "Publish the observed live-font stage state when it changes."
+  (let* ((receipt (desktop-font-live-receipt))
+         (line (format "DESKTOP-FONT-LIVE-STATE stage=%s state=%S receipt-submission=%S"
+                       desktop-font-live-current-stage
+                       (desktop-font-live-frame-state)
+                       (plist-get receipt :submission))))
+    (unless (equal line desktop-font-live-last-state)
+      (setq desktop-font-live-last-state line)
+      (princ (concat line "\n") 'external-debugging-output))))
 
 (defun desktop-font-live-unchanged (before font)
   (unless (and (equal before (desktop-font-live-frame-state))
@@ -77,9 +87,7 @@
         (lambda () (equal (font-get-system-normal-font) "DejaVu Sans 12"))
         (lambda ()
           (desktop-font-live-unchanged before font)
-          (desktop-font-live-pass))
-        (+ (float-time) desktop-font-live-stage-seconds)))
-     (+ (float-time) desktop-font-live-stage-seconds))))
+          (desktop-font-live-pass)))))))
 
 (defun desktop-font-live-opt-in (&optional continuation)
   (setq font-use-system-font t)
@@ -95,8 +103,7 @@
    (lambda ()
      (unless (equal (font-get-system-normal-font) "Ubuntu 10")
        (error "Monospace update replaced the application preference"))
-     (funcall (or continuation #'desktop-font-live-pass)))
-   (+ (float-time) desktop-font-live-stage-seconds)))
+     (funcall (or continuation #'desktop-font-live-pass)))))
 
 (defun desktop-font-live-explicit-and-future ()
   (set-frame-font "DejaVu Sans Mono 12")
@@ -161,9 +168,7 @@
              (desktop-font-live-log "LIVE-GEOMETRY-AFTER %S receipt=%S"
                                     (desktop-font-live-frame-state)
                                     (desktop-font-live-receipt))
-             (funcall (or continuation #'desktop-font-live-pass)))
-           (+ (float-time) desktop-font-live-stage-seconds))))))
-   (+ (float-time) desktop-font-live-stage-seconds)))
+             (funcall (or continuation #'desktop-font-live-pass))))))))))
 
 (defun desktop-font-live-overlapping-resize ()
   (menu-bar-mode -1)
@@ -182,8 +187,7 @@
         (lambda () (and (= (frame-width) 91) (= (frame-text-lines) 25)
                         (= (frame-char-width) 13) (= (frame-char-height) 25)
                         (desktop-font-live-presented submission)))
-        #'desktop-font-live-pass (+ (float-time) desktop-font-live-stage-seconds))))
-   (+ (float-time) desktop-font-live-stage-seconds)))
+        #'desktop-font-live-pass )))))
 
 (defun desktop-font-live-repeated ()
   (desktop-font-live-geometry
@@ -208,9 +212,7 @@
                     (= (window-font-width) 10) (= (window-font-height) 20)
                     (desktop-font-live-grid-ready)
                     (desktop-font-live-presented submission)))
-             #'desktop-font-live-pass
-             (+ (float-time) desktop-font-live-stage-seconds))))
-        (+ (float-time) desktop-font-live-stage-seconds))))))
+             #'desktop-font-live-pass))))))))
 
 (defun desktop-font-live-inhibited ()
   (desktop-font-live-geometry
@@ -234,8 +236,7 @@
        (unless (= (frame-width) (/ (frame-text-width) (frame-char-width)))
          (error "Inhibited font update left stale columns: %S text=%S"
                 (desktop-font-live-frame-state) (frame-text-width)))
-       (desktop-font-live-pass))
-     (+ (float-time) desktop-font-live-stage-seconds))))
+       (desktop-font-live-pass)))))
 
 (defun desktop-font-live-fullscreen ()
   (desktop-font-live-geometry
@@ -248,8 +249,7 @@
                         (desktop-font-live-presented submission)))
         (lambda ()
           (setq frame-inhibit-implied-resize nil)
-          (desktop-font-live-keep-pixels))
-        (+ (float-time) desktop-font-live-stage-seconds))))))
+          (desktop-font-live-keep-pixels)))))))
 
 (defun desktop-font-live-grown-minibuffer ()
   (menu-bar-mode -1)
@@ -283,9 +283,7 @@
                            (window-pixel-height (minibuffer-window)))
                         (frame-text-height))
                      (desktop-font-live-presented submission)))
-              #'desktop-font-live-pass (+ (float-time) desktop-font-live-stage-seconds)))))
-        (+ (float-time) desktop-font-live-stage-seconds))))
-   (+ (float-time) desktop-font-live-stage-seconds)))
+              #'desktop-font-live-pass )))))))))
 
 (defun desktop-font-live-minimum (&optional vertical)
   (menu-bar-mode -1)
@@ -319,9 +317,7 @@
                          (>= (frame-native-width) (frame-windows-min-size nil t nil t))
                          (= (frame-native-height) height)))
                   (desktop-font-live-presented submission)))
-           #'desktop-font-live-pass
-           (+ (float-time) desktop-font-live-stage-seconds))))))
-   (+ (float-time) desktop-font-live-stage-seconds)))
+           #'desktop-font-live-pass)))))))
 
 (defun desktop-font-live-child (&optional chrome)
   (let ((child (make-frame `((parent-frame . ,(selected-frame))
@@ -362,9 +358,7 @@
              (and (= (frame-char-width child) 13) (= (frame-char-height child) 25)
                   (= (frame-text-width child) (* 40 13))
                   (= (frame-text-height child) (* 10 25))))
-           #'desktop-font-live-pass
-           (+ (float-time) desktop-font-live-stage-seconds)))))
-     (+ (float-time) desktop-font-live-stage-seconds))))
+           #'desktop-font-live-pass)))))))
 
 (defun desktop-font-live-probe ()
   "Everything the isolation failure needs on a runner: the setting
@@ -404,19 +398,33 @@ keyfile contents the keyfile backend would read."
                   (desktop-font-live-state) (desktop-font-live-probe)))
          (desktop-font-live-log "LIVE-FONT-BEFORE %S" (desktop-font-live-state))
          (pcase (getenv "NEOMACS_GUI_LIVE_FONT_CASE")
-           ("opt-in" (desktop-font-live-opt-in))
-           ("opt-out" (desktop-font-live-opt-out))
-           ("explicit-and-future" (desktop-font-live-explicit-and-future))
-           ("geometry" (desktop-font-live-geometry))
-           ("repeated" (desktop-font-live-repeated))
-           ("inhibited" (desktop-font-live-inhibited))
-           ("child" (desktop-font-live-child))
-           ("child-chrome" (desktop-font-live-child t))
-           ("child-scrollbar" (desktop-font-live-child 'scrollbar))
-           ("minimum" (desktop-font-live-minimum))
-           ("minimum-vertical" (desktop-font-live-minimum t))
-           ("grown-minibuffer" (desktop-font-live-grown-minibuffer))
-           ("overlapping-resize" (desktop-font-live-overlapping-resize))
-           ("fullscreen" (desktop-font-live-fullscreen))
+           ("opt-in" (setq desktop-font-live-current-stage "opt-in")
+            (desktop-font-live-opt-in))
+           ("opt-out" (setq desktop-font-live-current-stage "opt-out")
+            (desktop-font-live-opt-out))
+           ("explicit-and-future" (setq desktop-font-live-current-stage "explicit-and-future")
+            (desktop-font-live-explicit-and-future))
+           ("geometry" (setq desktop-font-live-current-stage "geometry")
+            (desktop-font-live-geometry))
+           ("repeated" (setq desktop-font-live-current-stage "repeated")
+            (desktop-font-live-repeated))
+           ("inhibited" (setq desktop-font-live-current-stage "inhibited")
+            (desktop-font-live-inhibited))
+           ("child" (setq desktop-font-live-current-stage "child")
+            (desktop-font-live-child))
+           ("child-chrome" (setq desktop-font-live-current-stage "child-chrome")
+            (desktop-font-live-child t))
+           ("child-scrollbar" (setq desktop-font-live-current-stage "child-scrollbar")
+            (desktop-font-live-child 'scrollbar))
+           ("minimum" (setq desktop-font-live-current-stage "minimum")
+            (desktop-font-live-minimum))
+           ("minimum-vertical" (setq desktop-font-live-current-stage "minimum-vertical")
+            (desktop-font-live-minimum t))
+           ("grown-minibuffer" (setq desktop-font-live-current-stage "grown-minibuffer")
+            (desktop-font-live-grown-minibuffer))
+           ("overlapping-resize" (setq desktop-font-live-current-stage "overlapping-resize")
+            (desktop-font-live-overlapping-resize))
+           ("fullscreen" (setq desktop-font-live-current-stage "fullscreen")
+            (desktop-font-live-fullscreen))
            (_ (error "Unknown live font case: %S" (getenv "NEOMACS_GUI_LIVE_FONT_CASE")))))
      (error (desktop-font-live-log "LIVE-FONT-FAIL %S" err) (kill-emacs 1)))))

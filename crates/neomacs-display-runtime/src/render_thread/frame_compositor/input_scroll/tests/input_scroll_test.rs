@@ -2,7 +2,7 @@ use super::*;
 use neomacs_display_protocol::input_progress::{InputProgress, InputStream};
 use neomacs_display_protocol::*;
 
-fn frame(presentation: u64, displacement: f32, epoch: u64) -> FrameGlyphBuffer {
+pub(super) fn frame(presentation: u64, displacement: f32, epoch: u64) -> FrameGlyphBuffer {
     frame_with_prediction(presentation, displacement, epoch, true)
 }
 
@@ -61,13 +61,18 @@ fn frame_with_prediction(
     state.scroll_coverage.push(Arc::new(
         neomacs_display_protocol::scroll_coverage::ScrollCoverage {
             epoch,
+            publication:
+                neomacs_display_protocol::scroll_coverage::CoveragePublicationId::allocate()
+                    .unwrap(),
             anchor_row: 0,
             predict_pixels,
             compositor_enabled: true,
             viewport,
             origin: displacement,
             content,
-            faces: Default::default(),
+            faces: [(FaceId::new(0), Face::new(FaceId::new(0)))]
+                .into_iter()
+                .collect(),
             fonts: Default::default(),
             char_fonts: Default::default(),
             shaped_clusters: Default::default(),
@@ -106,7 +111,7 @@ fn install_retention(frames: &[&FrameGlyphBuffer]) -> CoverageRetention {
     retention
 }
 
-fn point(frame: &FrameGlyphBuffer, y: f32) -> PresentationFramePoint {
+pub(super) fn point(frame: &FrameGlyphBuffer, y: f32) -> PresentationFramePoint {
     InteractionProjection::settled(frame.presentation_id)
         .map(GeometryPoint::<RootSurfaceSpace, LogicalPixels>::from_px(1.0, y).unwrap())
         .unwrap()
@@ -201,15 +206,14 @@ fn resolved_scroll_uses_authoritative_destination_without_predictable_lisp_bindi
             window: DisplayWindowId::new(1),
             presentation: PresentationId::new(presentation),
             epoch,
+            publication: first.scroll_surfaces[0].coverage().publication,
             offset: 12.0,
             inputs: vec![delivery.receipt()],
         };
     let retention = install_retention(&[&first]);
     let mut scroll = InputScroll::default();
-    // Presentation equality is no longer the gate: an intent names a coverage
-    // epoch, and the retention map decides whether that epoch is certified for
-    // the installed presentation. Presentation mismatch with a certified epoch
-    // is a renewal (the rows are unchanged), so the intent still applies.
+    // A renewal can certify the same exact coverage publication for another
+    // logical frame. The intent's presentation stamp alone is not the gate.
     assert!(scroll.resolve(&retention, &first, make_intent(2, 1)));
     assert!(!scroll.resolve(&retention, &first, make_intent(1, 2)));
     assert!(scroll.resolve(&retention, &first, make_intent(1, 1)));
@@ -321,6 +325,7 @@ fn resolved_intent_applies_across_intervening_cursor_only_publish() {
         window: DisplayWindowId::new(1),
         presentation: first.presentation_id,
         epoch: 1,
+        publication: first.scroll_surfaces[0].coverage().publication,
         offset: 12.0,
         inputs: vec![delivery.receipt()],
     };
@@ -340,6 +345,173 @@ fn resolved_intent_applies_across_intervening_cursor_only_publish() {
             .unwrap()
             .buffer_position(),
         3
+    );
+}
+
+fn assert_resolved_intent_requires_exact_coverage_publication(
+    original_origin: f32,
+    original_offset: f32,
+    replacement_origin: f32,
+    expected_position: i64,
+) {
+    let original = frame(1, original_origin, 1);
+    let replacement = frame(2, replacement_origin, 1);
+    let retention = install_retention(&[&original, &replacement]);
+    let stream = InputStream::default();
+    let delivery = stream.issue().unwrap();
+    let make_intent = |source: &FrameGlyphBuffer, offset| {
+        neomacs_display_protocol::scroll_coverage::ResolvedScrollIntent {
+            frame: 1,
+            window: DisplayWindowId::new(1),
+            presentation: source.presentation_id,
+            epoch: 1,
+            publication: source.scroll_surfaces[0].coverage().publication,
+            offset,
+            inputs: vec![delivery.receipt()],
+        }
+    };
+    // Both exports describe the same buffer revision, but each offset is in
+    // its own coverage coordinates. Reusing the epoch does not preserve the
+    // origin or identify the surface against which dispatch chose a target.
+    let replacement_offset = original_origin + original_offset - replacement_origin;
+    let mut scroll = InputScroll::default();
+    assert!(scroll.resolve(
+        &retention,
+        &replacement,
+        make_intent(&replacement, replacement_offset),
+    ));
+    let mut projected = replacement.clone();
+    scroll.paint(&mut projected);
+    scroll.submit();
+    let hit_position = |scroll: &InputScroll| {
+        scroll
+            .hit(point(&replacement, 1.0))
+            .unwrap()
+            .unwrap()
+            .unwrap()
+            .text_position()
+            .unwrap()
+            .buffer_position()
+    };
+    assert_eq!(hit_position(&scroll), expected_position);
+    assert!(!scroll.resolve(
+        &retention,
+        &replacement,
+        make_intent(&original, original_offset),
+    ));
+    assert_eq!(scroll.active.as_ref().unwrap().offset, replacement_offset);
+    scroll.paint(&mut projected);
+    scroll.submit();
+    assert_eq!(hit_position(&scroll), expected_position);
+}
+
+#[test]
+fn resolved_intent_rejects_a_replaced_publication_with_the_same_epoch() {
+    assert_resolved_intent_requires_exact_coverage_publication(0.0, 12.0, 15.0, 3);
+}
+
+#[test]
+fn resolved_intent_rejects_a_replaced_backward_bridge_with_the_same_epoch() {
+    // The old -12 destination names coverage coordinate 8. On the new bridge
+    // it must be -32; accepting -12 would instead expose coordinate 28.
+    assert_resolved_intent_requires_exact_coverage_publication(20.0, -12.0, 40.0, 1);
+}
+
+#[test]
+fn resolved_intent_requires_exact_publication_within_one_presentation() {
+    let original = frame(1, 0.0, 1);
+    let replacement = frame(1, 15.0, 1);
+    assert_eq!(original.presentation_id, replacement.presentation_id);
+    assert_ne!(
+        original.scroll_surfaces[0].coverage().publication,
+        replacement.scroll_surfaces[0].coverage().publication,
+    );
+    let retention = install_retention(&[&original, &replacement]);
+    let stream = InputStream::default();
+    let delivery = stream.issue().unwrap();
+    let make_intent = |source: &FrameGlyphBuffer, offset| {
+        neomacs_display_protocol::scroll_coverage::ResolvedScrollIntent {
+            frame: 1,
+            window: DisplayWindowId::new(1),
+            presentation: source.presentation_id,
+            epoch: 1,
+            publication: source.scroll_surfaces[0].coverage().publication,
+            offset,
+            inputs: vec![delivery.receipt()],
+        }
+    };
+    let mut scroll = InputScroll::default();
+    // Auxiliary coverage replacement need not mint a logical presentation.
+    // Both intents name that same presentation, but only one names its rows.
+    assert!(!scroll.resolve(&retention, &replacement, make_intent(&original, 12.0)));
+    assert!(!scroll.active());
+    assert!(scroll.resolve(&retention, &replacement, make_intent(&replacement, -3.0)));
+    let mut projected = replacement.clone();
+    scroll.paint(&mut projected);
+    scroll.submit();
+    assert_eq!(
+        scroll
+            .hit(point(&replacement, 1.0))
+            .unwrap()
+            .unwrap()
+            .unwrap()
+            .text_position()
+            .unwrap()
+            .buffer_position(),
+        3,
+    );
+}
+
+#[test]
+fn raw_prediction_reconciles_a_replaced_publication_before_accumulating_input() {
+    let original = frame(1, 0.0, 1);
+    let replacement = frame(2, 40.0, 1);
+    let stream = InputStream::default();
+    let first_delivery = stream.issue().unwrap();
+    let next_delivery = stream.issue().unwrap();
+    let mut scroll = InputScroll::default();
+    assert!(scroll.push(
+        &install_retention(&[&original]),
+        &original,
+        1.0,
+        1.0,
+        12.0,
+        first_delivery.receipt(),
+        None,
+    ));
+    // Deliberately do not call reconcile: a new input can see replacement
+    // coverage before any paint. Offset 12 becomes -28 at its new origin;
+    // the next four pixels must accumulate there, not clamp 16 against B
+    // and then paint offset zero through the old A surface.
+    assert!(scroll.push(
+        &install_retention(&[&original, &replacement]),
+        &replacement,
+        1.0,
+        1.0,
+        4.0,
+        next_delivery.receipt(),
+        None,
+    ));
+    let active = scroll.active.as_ref().unwrap();
+    assert!(Arc::ptr_eq(
+        &active.surface,
+        &replacement.scroll_surfaces[0]
+    ));
+    assert_eq!(active.offset, -24.0);
+    assert_eq!(active.receipts.len(), 2);
+    let mut projected = replacement.clone();
+    scroll.paint(&mut projected);
+    scroll.submit();
+    assert_eq!(
+        scroll
+            .hit(point(&replacement, 1.0))
+            .unwrap()
+            .unwrap()
+            .unwrap()
+            .text_position()
+            .unwrap()
+            .buffer_position(),
+        3,
     );
 }
 
@@ -368,6 +540,7 @@ fn renewal_policy_flip_blocks_raw_prediction_but_keeps_resolved_authority() {
         window: DisplayWindowId::new(1),
         presentation: revoked.presentation_id,
         epoch: 1,
+        publication: first.scroll_surfaces[0].coverage().publication,
         offset: 12.0,
         inputs: vec![delivery.receipt()],
     };

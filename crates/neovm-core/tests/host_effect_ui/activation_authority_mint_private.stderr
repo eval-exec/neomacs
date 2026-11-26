@@ -6,5 +6,5 @@ error[E0624]: associated function `mint` is private
   |
  ::: tests/host_effect_ui/support/../../../../neovm-eval/src/emacs_core/runtime/eval/activation.rs
   |
-  |     unsafe fn mint() -> Self {
-  |     ------------------------ private associated function defined here
+  |     pub(super) unsafe fn mint() -> Self {
+  |     ----------------------------------- private associated function defined here

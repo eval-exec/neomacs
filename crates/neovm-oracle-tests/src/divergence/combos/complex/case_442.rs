@@ -157,15 +157,23 @@ fn div_cx442_file_access_predicates() {
 }
 
 /// file-symlink-p chain: follow symlinks to original.
+///
+/// The alias is built inside a private temp directory rather than around
+/// "/tmp".  GNU `file-equal-p` compares the full `file-attributes` of the
+/// two names (including atime, mtime, ctime and nlink), so any concurrent
+/// writer to "/tmp" can flip a global-path comparison.  The assertion also
+/// avoids a literal path, because macOS resolves "/var" to "/private/var".
 #[test]
 fn div_cx442_file_symlink_chain() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK (\"/tmp\" t)""#]];
+    let expect = expect_test::expect![[r#""OK (t t)""#]];
     crate::common::assert_oracle_parity_expect(
-        r##"(condition-case e
-    (list (file-truename "/tmp")
-          (file-equal-p "/tmp" "/tmp/../tmp"))
-  (error (car e)))"##,
+        r##"(let* ((d (make-temp-file "neo-cx442-fsc-" t))
+       (alias (concat d "/../" (file-name-nondirectory d))))
+  (unwind-protect
+      (list (equal (file-truename d) (file-truename alias))
+            (file-equal-p d alias))
+    (delete-directory d t)))"##,
         expect,
     );
 }

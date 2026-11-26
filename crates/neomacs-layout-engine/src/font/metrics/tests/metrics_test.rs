@@ -1,6 +1,9 @@
 use super::*;
 use tracing::debug;
 
+#[path = "empty_catalog_test.rs"]
+mod empty_catalog_tests;
+
 #[cfg(all(test, target_os = "linux"))]
 #[path = "gnu_cjk_metrics.rs"]
 mod gnu_cjk_metrics;
@@ -215,7 +218,13 @@ fn symbol_font_policy_tracks_the_live_char_script_table_and_invalidates_char_cac
 
     let selection = RealizedFaceFontSelection::new("monospace", 400, false, 13.0);
     let cache_key = svc.realized_face_font_cache_key(selection);
-    svc.char_cache.insert((cache_key, '▶'), 13.0);
+    svc.char_cache.insert(
+        (cache_key, '▶'),
+        OrderStamped {
+            value: 13.0,
+            fallback: None,
+        },
+    );
 
     eval.eval_str(
         "(let ((unrelated (make-char-table 'neomacs-unrelated nil)))
@@ -293,9 +302,8 @@ fn covered_symbol_uses_and_publishes_the_realized_primary_font() {
     assert_eq!(symbol.font.id, primary.font.id);
     assert_eq!(symbol.resolution, FontResolutionSource::FacePrimary);
 
-    let (_, published_fonts) = svc
-        .resolve_cluster_uncached("▶", selection)
-        .expect("resolved symbol cluster");
+    let (resolved, _) = svc.resolve_cluster_uncached("▶", selection);
+    let (_, published_fonts) = resolved.expect("resolved symbol cluster");
     let published = published_fonts
         .iter()
         .find(|font| font.id == primary.font.id)
@@ -415,6 +423,109 @@ fn frame_cell_metrics_for_monospace_use_ascii_max_not_space() {
 
     assert_eq!(cell.column_width, 10.0);
     assert_eq!(cell.confidence, MetricConfidence::Degraded);
+}
+
+#[test]
+fn native_frame_columns_use_average_even_for_monospace_families() {
+    // Attested GNU 31.1 ftcrfont, pinned Noto Sans Mono with full hinting:
+    // 14px average/max/space = 8/10/8; 13px = 7/9/8. x_new_font
+    // publishes average_width, independently of the family's spacing policy.
+    // The final control is deliberately below the old monospace threshold:
+    // a positive native average is authoritative even for a narrow font.
+    for (size, average, maximum, space) in [(14, 8, 10, 8), (13, 7, 9, 8), (20, 3, 4, 1)] {
+        let probe = crate::font::probe::FontPxMetrics {
+            pixel_size: size,
+            height: 20,
+            ascent: 15,
+            descent: 5,
+            average_width: average,
+            max_width: maximum,
+            space_width: space,
+        };
+        let advances = FontAdvanceMetrics::from_font_probe(probe);
+        let cell = FrameCellMetrics::derive(
+            true,
+            size as f32,
+            FontVerticalMetrics {
+                ascent: probe.ascent as f32,
+                descent: probe.descent as f32,
+                line_height: probe.height as f32,
+            },
+            advances,
+        );
+
+        assert_eq!(cell.column_width, average as f32, "{size}px native average");
+        assert_ne!(cell.column_width, maximum as f32);
+        assert_eq!(cell.confidence, MetricConfidence::Validated);
+        assert_eq!(advances.max_width, maximum as f32);
+        assert_eq!(advances.space_width, space as f32);
+    }
+}
+
+#[test]
+fn materialized_frame_columns_preserve_native_and_table_provenance() {
+    // The standard catalog's "monospace" alias is Noto Sans Mono, whose
+    // spacing metadata is proportional. This test needs an actual spacing-100
+    // family so the fallback max policy differs from the native average policy.
+    let catalog = crate::font::metrics::test_catalog::TestFontCatalog::from_files(&[
+        neomacs_test_fonts::dejavu_2_37().mono_regular(),
+    ])
+    .expect("pinned fixed-pitch fixture catalog");
+    for (size, average, maximum) in [(14, 8, 10), (13, 7, 9)] {
+        let probe = crate::font::probe::FontPxMetrics {
+            pixel_size: size,
+            height: 20,
+            ascent: 15,
+            descent: 5,
+            average_width: average,
+            max_width: maximum,
+            space_width: 8,
+        };
+        for (observed, source, expected) in [
+            (
+                ObservedFontPxMetrics::Native(probe),
+                FontMetricSource::OpenedFontProbe,
+                average,
+            ),
+            (
+                ObservedFontPxMetrics::Tables(probe),
+                FontMetricSource::OpenedFontTables,
+                maximum,
+            ),
+        ] {
+            let mut service = catalog.metrics_service();
+            let family = "monospace";
+            assert!(
+                service.font_resolver.family_prefers_monospace(family),
+                "the fixture must exercise the fallback monospace policy"
+            );
+            let size = size as f32;
+            let key = service.cache_key(family, 400, false, size);
+            let mut handle = service
+                .materialized_font_for_face(family, 400, false, size)
+                .expect("materialized fixture font");
+            // Replay identical aggregate values from each origin through the
+            // real materialized cache and frame publication entry point.
+            handle.px_metrics = Some(observed);
+            service
+                .resolved_face_font_cache
+                .insert(key.clone(), Some(handle));
+
+            let FrameCellGeometry::Graphic(geometry) = service.frame_cell_geometry(
+                family,
+                400,
+                false,
+                size,
+                FrameFontDomain::for_frame(true, size),
+            ) else {
+                panic!("graphic frame geometry");
+            };
+            assert_eq!(service.metrics_cache[&key].source, source);
+            assert_eq!(geometry.font_size.get(), size);
+            assert_eq!(geometry.metrics.char_width, expected as f32);
+            assert_eq!(geometry.metrics.space_width, 8.0);
+        }
+    }
 }
 
 #[test]
@@ -561,7 +672,7 @@ fn frame_cell_geometry_reuses_the_effective_size_from_its_metric_observation() {
     let effective_size = service
         .materialized_font_for_face("monospace", 400, false, requested_size)
         .and_then(|font| font.px_metrics)
-        .map(|metrics| metrics.pixel_size as f32)
+        .map(|metrics| metrics.metrics().pixel_size as f32)
         .expect("test font must expose probed pixel metrics");
 
     let _ = service.font_metrics("monospace", 400, false, requested_size);
@@ -616,13 +727,17 @@ fn selected_font_probe_observes_vertical_and_advance_metrics_at_one_size() {
         .db()
         .face(font_id.expect("selected font"))
         .expect("selected face");
-    let probe = crate::font::probe::probe_font_px_metrics(
-        &fontdb_face_file(face).expect("file-backed selected face"),
-        face.index,
-        geometry.font_size.get() as u32,
-        None,
-    )
-    .expect("selected face metrics");
+    // Attested GNU 31.1 gives this Noto Sans Mono file average widths 7 with
+    // full hinting and 8 with slight hinting at 13 px. Compare observations
+    // from the fixture's own authority, rather than the host's system policy.
+    let probe = service
+        .probe_font_px_metrics(
+            &fontdb_face_file(face).expect("file-backed selected face"),
+            face.index,
+            geometry.font_size.get() as u32,
+            None,
+        )
+        .expect("selected face metrics");
     let expected = FrameCellMetrics::derive(
         service.font_resolver.family_prefers_monospace(family),
         geometry.font_size.get(),
@@ -957,6 +1072,10 @@ struct ChangingCatalogBackend {
     catalog: crate::font::metrics::test_catalog::TestFontCatalog,
     pending: std::sync::Arc<std::sync::atomic::AtomicBool>,
     advances: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    /// `0` keeps each poll as its own event. A shared non-zero value is one
+    /// process-wide publication. Services that hold the same `Arc` see a
+    /// later store as the next publication.
+    generation: std::sync::Arc<std::sync::atomic::AtomicU64>,
 }
 
 struct RecordingFamilyShaper {
@@ -1067,6 +1186,10 @@ impl crate::font_backend::FontBackend for ChangingCatalogBackend {
             crate::font::catalog::FontCatalogChange::Unchanged
         }
     }
+
+    fn published_catalog_generation(&self) -> u64 {
+        self.generation.load(std::sync::atomic::Ordering::Acquire)
+    }
 }
 
 #[test]
@@ -1079,6 +1202,7 @@ fn font_metrics_consumes_native_catalog_changes_once_at_a_safe_point() {
             catalog: crate::font::metrics::test_catalog::standard_catalog().clone(),
             pending: std::sync::Arc::clone(&pending),
             advances: std::sync::Arc::clone(&advances),
+            generation: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
         }));
     let initial = svc.font_catalog_generation();
 
@@ -1092,6 +1216,47 @@ fn font_metrics_consumes_native_catalog_changes_once_at_a_safe_point() {
     assert_eq!(advances.load(std::sync::atomic::Ordering::Relaxed), 1);
     assert!(!svc.synchronize_font_catalog().changed());
     assert_eq!(advances.load(std::sync::atomic::Ordering::Relaxed), 1);
+}
+
+#[test]
+fn native_catalog_and_wayland_preferences_coalesce_into_one_font_generation() {
+    use neomacs_display_protocol::{
+        DesktopFontHinting, DesktopFontRenderOptions, GraphicalBackend,
+    };
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
+    };
+    let pending = Arc::new(AtomicBool::new(false));
+    let advances = Arc::new(AtomicUsize::new(0));
+    let mut service = make_svc();
+    service
+        .font_resolver
+        .replace_backend(Box::new(ChangingCatalogBackend {
+            catalog: crate::font::metrics::test_catalog::standard_catalog().clone(),
+            pending: Arc::clone(&pending),
+            advances: Arc::clone(&advances),
+            generation: Arc::new(AtomicU64::new(0)),
+        }));
+    let display = GraphicalDisplayIdentity::anonymous_connection(GraphicalBackend::Wayland);
+    service.set_display_identity(display.clone());
+    let before = service.font_catalog_generation();
+    let before_advances = advances.load(Ordering::Relaxed);
+    pending.store(true, Ordering::Release);
+    assert!(
+        display.observe_font_render_options(DesktopFontRenderOptions {
+            hinting: DesktopFontHinting::Full,
+            ..Default::default()
+        })
+    );
+    let update = service.synchronize_font_catalog();
+    assert!(update.changed());
+    assert!(update.catalog.changed());
+    assert!(update.rendering_changed);
+    assert_eq!(update.generation(), before.next());
+    assert_eq!(advances.load(Ordering::Relaxed), before_advances + 1);
+    assert!(!service.synchronize_font_catalog().changed());
+    assert_eq!(advances.load(Ordering::Relaxed), before_advances + 1);
 }
 
 #[cfg(unix)]
@@ -1522,6 +1687,7 @@ fn scalable_color_bitmap_keeps_exact_platform_identity_at_requested_size() {
 
 fn fixture_properties(pixel_size: f32, family: &str) -> FontInstanceProperties {
     FontInstanceProperties {
+        spacing: None,
         family: family.to_owned(),
         full_name: None,
         postscript_name: None,
@@ -1623,6 +1789,7 @@ fn catalog_advance_republishes_records_under_stable_ids() {
             catalog: crate::font::metrics::test_catalog::standard_catalog().clone(),
             pending: std::sync::Arc::clone(&pending),
             advances: std::sync::Arc::clone(&advances),
+            generation: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
         }));
     let identity = ResolvedFontIdentity::from_file("/fonts/replaced.ttf", 0, None);
     let replay = swash_replay_for(&identity);
@@ -1696,7 +1863,6 @@ fn native_metrics_fixture_service(
     String,
     crate::font_backend::PlatformFontDesignMetrics,
 ) {
-    let fixture = test_font_path(neomacs_test_fonts::spleen_2_2_0().woff());
     let design_metrics = crate::font_backend::PlatformFontDesignMetrics {
         units_per_em: 1000,
         ascent: 1010,
@@ -1706,6 +1872,19 @@ fn native_metrics_fixture_service(
         space_advance: 600,
         average_advance: 600,
     };
+    native_metrics_fixture_service_with_metrics(variations, design_metrics)
+}
+
+fn native_metrics_fixture_service_with_metrics(
+    variations: Vec<neomacs_display_protocol::font::FontVariationCoord>,
+    design_metrics: crate::font_backend::PlatformFontDesignMetrics,
+) -> (
+    FontMetricsService,
+    fontdb::ID,
+    String,
+    crate::font_backend::PlatformFontDesignMetrics,
+) {
+    let fixture = test_font_path(neomacs_test_fonts::spleen_2_2_0().woff());
     let mut svc = make_svc();
     let ids = FontFileCache::open_file(svc.font_system.db_mut(), &fixture, 0)
         .expect("decode pinned font fixture");
@@ -1741,6 +1920,119 @@ fn native_metrics_fixture_service(
     (svc, fontdb_id, family, design_metrics)
 }
 
+fn fifteen_pixel_native_metrics() -> crate::font_backend::PlatformFontDesignMetrics {
+    crate::font_backend::PlatformFontDesignMetrics {
+        units_per_em: 13,
+        ascent: 12,
+        descent: 3,
+        line_gap: 0,
+        max_advance: 8,
+        space_advance: 8,
+        average_advance: 8,
+    }
+}
+
+#[test]
+fn opening_an_enumerated_font_enriches_native_metrics_before_first_interning() {
+    let (mut svc, _, family, native) =
+        native_metrics_fixture_service_with_metrics(Vec::new(), fifteen_pixel_native_metrics());
+    let query = crate::font::resolver::FontEntityQuery::new(
+        crate::font_backend::FontFamilyName::new(&family),
+    )
+    .with_selection(neovm_core::emacs_core::eval::FontSpecSelection::OpenBySpec)
+    .with_weight(400)
+    .with_slant(FontSlant::Normal)
+    .with_width(FontWidth::Normal);
+    let entity = svc.resolve_font_entity(&query).expect("enumerated entity");
+    assert!(entity.matched.metadata.design_metrics.is_none());
+    let opened = svc
+        .open_platform_match_font(&entity.matched, 13)
+        .expect("open enumerated entity");
+    let expected = native.at_pixel_size(13.0).unwrap();
+    assert_eq!(
+        (expected.height, expected.ascent, expected.descent),
+        (15, 12, 3)
+    );
+    assert_eq!(opened.metrics, expected);
+    assert_eq!(opened.resolved.ascent_px, 12.0);
+    assert_eq!(opened.resolved.descent_px, 3.0);
+    assert_eq!(opened.resolved.identity, entity.matched.identity);
+
+    let info = svc
+        .font_resolver
+        .open_entity(&query, 13)
+        .expect("font-info");
+    assert_eq!(info.metrics, expected);
+    let startup = svc
+        .select_font_for_char('M', &family, 400, false, 13.0)
+        .expect("startup selection");
+    assert_eq!(startup.metrics, expected);
+    assert_eq!(startup.resolved, opened.resolved);
+    let FrameCellGeometry::Graphic(geometry) = svc.frame_cell_geometry(
+        &family,
+        400,
+        false,
+        13.0,
+        FrameFontDomain::for_frame(true, 13.0),
+    ) else {
+        panic!("graphic frame geometry");
+    };
+    assert_eq!(geometry.metrics.line_height, 15.0);
+    assert_eq!(geometry.metrics.ascent, 12.0);
+    assert_eq!(geometry.metrics.descent, 3.0);
+}
+
+#[test]
+fn opening_an_entity_uses_native_metrics_even_when_an_interned_record_retains_old_metrics() {
+    let (mut svc, _, family, native) =
+        native_metrics_fixture_service_with_metrics(Vec::new(), fifteen_pixel_native_metrics());
+    let query = crate::font::resolver::FontEntityQuery::new(
+        crate::font_backend::FontFamilyName::new(&family),
+    )
+    .with_selection(neovm_core::emacs_core::eval::FontSpecSelection::OpenBySpec);
+    let entity = svc.resolve_font_entity(&query).expect("enumerated entity");
+    // Model a retained record observed before the native opening boundary.
+    // Its stable identity must not substitute stale 17px data for the newly
+    // opened font's independent 15px native metrics.
+    let stale = svc.font_instances.intern(
+        entity.matched.identity.clone(),
+        FontReplay::Swash {
+            asset: entity.matched.asset.clone(),
+        },
+        13.0,
+        || FontInstanceProperties {
+            family: family.clone(),
+            full_name: None,
+            postscript_name: entity.matched.identity.postscript_name.clone(),
+            weight: 400,
+            slant: FontSlantKind::Normal,
+            width: 5,
+            ascent_px: 13.0,
+            descent_px: 4.0,
+            space_advance_px: 8.0,
+            glyph_advance: ResolvedFontAdvance::monospace_cells(8.0),
+            spacing: Some(100),
+        },
+    );
+    let opened = svc
+        .open_platform_match_font(&entity.matched, 13)
+        .expect("native opening after retained record");
+    assert_eq!(opened.resolved.id, stale.id);
+    assert_eq!(opened.resolved.ascent_px + opened.resolved.descent_px, 17.0);
+    assert_eq!(opened.metrics, native.at_pixel_size(13.0).unwrap());
+    assert_eq!(opened.metrics.height, 15);
+    let FrameCellGeometry::Graphic(geometry) = svc.frame_cell_geometry(
+        &family,
+        400,
+        false,
+        13.0,
+        FrameFontDomain::for_frame(true, 13.0),
+    ) else {
+        panic!("graphic frame geometry");
+    };
+    assert_eq!(geometry.metrics.line_height, 15.0);
+}
+
 #[test]
 fn shaping_first_realization_publishes_the_native_face_metrics() {
     // Catch table metrics being interned before the resolver attaches native
@@ -1766,7 +2058,10 @@ fn shaping_first_realization_publishes_the_native_face_metrics() {
             via_face.font, expected.font,
             "shaping-first must preserve native metrics at {size}px"
         );
-        let handle_metrics = via_face.px_metrics.expect("native handle metrics");
+        let handle_metrics = via_face
+            .px_metrics
+            .expect("native handle metrics")
+            .metrics();
         assert_eq!(via_face.font.ascent_px, handle_metrics.ascent as f32);
         assert_eq!(via_face.font.descent_px, handle_metrics.descent as f32);
         assert_eq!(
@@ -1888,7 +2183,8 @@ fn shaping_metrics_do_not_come_from_another_variation_of_the_same_file() {
         Some(selected.post_script_name.clone()),
         &family,
     );
-    let expected = FontMetricsService::probe_resolved_font_metrics(&identity, None, size)
+    let expected = svc
+        .probe_resolved_font_metrics(&identity, None, size)
         .or_else(|| svc.font_px_metrics_from_selected_face(fontdb_id, size, &[]))
         .expect("selected file metrics");
     let shaping = svc
@@ -3195,6 +3491,50 @@ fn portable_metric_fallback_stays_on_the_selected_face() {
 
 #[cfg(target_os = "linux")]
 #[test]
+fn resolve_family_preserves_approved_collection_members() {
+    let file = neomacs_test_fonts::noto_sans_cjk_variable();
+    let catalog = crate::font::metrics::test_catalog::TestFontCatalog::from_files(&[file])
+        .expect("pinned collection catalog");
+    let mut svc = catalog.metrics_service();
+    let rejected: Vec<_> = svc
+        .font_system
+        .db()
+        .faces()
+        .filter(|face| face.index != 0)
+        .map(|face| face.id)
+        .collect();
+    assert!(
+        !rejected.is_empty(),
+        "fixture must contain sibling collection faces"
+    );
+    // Model the admitted-index-only DB produced by the private Fontconfig
+    // collection-filter test in the materializer, then exercise the ordinary
+    // layout realization entry point without a process-global configuration.
+    for id in rejected {
+        svc.font_system.db_mut().remove_face(id);
+    }
+    let approved = svc.font_system.db().faces().next().unwrap();
+    let family = approved.families[0].0.clone();
+    let identity = (approved.id, approved.index, approved.families.clone());
+    assert_eq!(svc.font_system.db().len(), 1);
+    for _ in 0..2 {
+        assert_eq!(svc.resolve_family(&family, file.to_str()), family);
+        let faces: Vec<_> = svc
+            .font_system
+            .db()
+            .faces()
+            .map(|face| (face.id, face.index, face.families.clone()))
+            .collect();
+        assert_eq!(
+            faces,
+            vec![identity.clone()],
+            "resolving an approved file must not publish rejected TTC siblings"
+        );
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
 #[tracing_test::traced_test]
 fn resolved_font_for_face_preserves_platform_named_instance() {
     use neovm_core::face::{FontSlant, FontWeight};
@@ -3229,9 +3569,9 @@ fn resolved_font_for_face_preserves_platform_named_instance() {
         "the fixed fixture must exercise a named instance"
     );
     let mut svc = catalog.metrics_service();
-    // Frame face realization currently primes the platform file before the
-    // finished-frame font table is materialized.  The exact realization
-    // contract must survive that ordinary pipeline ordering.
+    // Frame face realization resolves the family before the finished-frame
+    // font table is materialized. The exact realization contract must survive
+    // that ordinary pipeline ordering.
     svc.resolve_family("Noto Sans", Some(platform_file));
     let regular = svc
         .resolved_font_for_face("Noto Sans", 400, false, 12.0)
@@ -3876,6 +4216,1223 @@ fn glyph_vertical_metrics_match_canonical_font_selection_across_cache_changes() 
             }
         }
     }
+}
+
+/// Two fixtures whose U+30EA advances differ. The family string is the
+/// fontset spec. Plemol's リ is wider than one em; Noto Sans CJK's リ is one em.
+#[cfg(target_os = "linux")]
+struct MetricsFallbackBackend {
+    only_c2: String,
+    covers_both: String,
+}
+
+#[cfg(target_os = "linux")]
+impl crate::font_backend::FontBackend for MetricsFallbackBackend {
+    fn kind(&self) -> FontBackendKind {
+        FontBackendKind::Fontconfig
+    }
+
+    fn list_families(&self) -> Vec<crate::font_backend::FontFamilyName> {
+        Vec::new()
+    }
+
+    fn resolve_family(&self, family: &str) -> String {
+        family.to_owned()
+    }
+
+    fn family_prefers_monospace(&self, _family: &str) -> bool {
+        false
+    }
+
+    fn list_candidates(
+        &self,
+        query: &crate::font_backend::FontCandidateQuery,
+    ) -> Vec<crate::font_backend::FontCandidate> {
+        let Some(ch) = query.required.single_char() else {
+            return Vec::new();
+        };
+        let Some(family) = query.scope.queried_family() else {
+            return Vec::new();
+        };
+        let (file, face_index) = match family {
+            "OnlyC2" if ch == 'リ' => (self.only_c2.as_str(), 0),
+            "CoversBoth" if matches!(ch, '検' | 'リ') => (self.covers_both.as_str(), 0),
+            _ => return Vec::new(),
+        };
+        vec![crate::font_backend::FontCandidate {
+            matched: platform_file_candidate(
+                ResolvedFontIdentity::from_file(file, face_index, None),
+                crate::font_backend::PlatformFontMetadata {
+                    foundry: None,
+                    family: family.to_owned(),
+                    weight: Some(400),
+                    slant: FontSlant::Normal,
+                    width: Some(FontWidth::Normal),
+                    spacing: None,
+                    design_metrics: None,
+                    size: crate::font_backend::PlatformFontSize::Scalable,
+                },
+            ),
+        }]
+    }
+
+    fn advance_catalog_generation(&mut self) {}
+
+    fn poll_catalog_change(&mut self) -> crate::font::catalog::FontCatalogChange {
+        crate::font::catalog::FontCatalogChange::Unchanged
+    }
+}
+
+/// Spleen is the face's bitmap primary. OnlyC2 and CoversBoth are outline
+/// fallbacks, so a later character in a simple-copy cluster can leave the
+/// bitmap while the representative stays on it.
+#[cfg(target_os = "linux")]
+struct BitmapClusterFallbackBackend {
+    spleen: String,
+    only_c2: String,
+    covers_both: String,
+}
+
+#[cfg(target_os = "linux")]
+impl crate::font_backend::FontBackend for BitmapClusterFallbackBackend {
+    fn kind(&self) -> FontBackendKind {
+        FontBackendKind::Fontconfig
+    }
+
+    fn list_families(&self) -> Vec<crate::font_backend::FontFamilyName> {
+        Vec::new()
+    }
+
+    fn resolve_family(&self, family: &str) -> String {
+        family.to_owned()
+    }
+
+    fn family_prefers_monospace(&self, _family: &str) -> bool {
+        false
+    }
+
+    fn list_candidates(
+        &self,
+        query: &crate::font_backend::FontCandidateQuery,
+    ) -> Vec<crate::font_backend::FontCandidate> {
+        let family = query.scope.queried_family();
+        let ch = query.required.single_char();
+        let (file, family, size) = match family {
+            Some("OnlyC2") => {
+                if ch != Some('リ') {
+                    return Vec::new();
+                }
+                (
+                    self.only_c2.as_str(),
+                    "OnlyC2",
+                    crate::font_backend::PlatformFontSize::Scalable,
+                )
+            }
+            Some("CoversBoth") => {
+                if !matches!(ch, Some('検' | 'リ')) {
+                    return Vec::new();
+                }
+                (
+                    self.covers_both.as_str(),
+                    "CoversBoth",
+                    crate::font_backend::PlatformFontSize::Scalable,
+                )
+            }
+            Some(other) => (
+                self.spleen.as_str(),
+                other,
+                crate::font_backend::PlatformFontSize::Unknown,
+            ),
+            None => (
+                self.spleen.as_str(),
+                "Spleen",
+                crate::font_backend::PlatformFontSize::Unknown,
+            ),
+        };
+        vec![crate::font_backend::FontCandidate {
+            matched: platform_file_candidate(
+                ResolvedFontIdentity::from_file(file, 0, None),
+                crate::font_backend::PlatformFontMetadata {
+                    foundry: None,
+                    family: family.to_owned(),
+                    weight: Some(400),
+                    slant: FontSlant::Normal,
+                    width: Some(FontWidth::Normal),
+                    spacing: None,
+                    design_metrics: None,
+                    size,
+                },
+            ),
+        }]
+    }
+
+    fn advance_catalog_generation(&mut self) {}
+
+    fn poll_catalog_change(&mut self) -> crate::font::catalog::FontCatalogChange {
+        crate::font::catalog::FontCatalogChange::Unchanged
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn materialized_seen_character_follows_a_later_fallback_move() {
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
+    eval.eval_str(
+        r#"(progn
+            (set-fontset-font t nil "OnlyC2")
+            (set-fontset-font t nil "CoversBoth" nil 'append))"#,
+    )
+    .expect("fallback specs");
+    let mut svc = make_svc();
+    svc.font_resolver
+        .replace_backend(Box::new(MetricsFallbackBackend {
+            only_c2: test_font_path(
+                neomacs_test_fonts::plemol_jp_console_nf_regular().to_path_buf(),
+            ),
+            covers_both: test_font_path(neomacs_test_fonts::noto_sans_cjk_variable().to_path_buf()),
+        }));
+    let selection = RealizedFaceFontSelection::new("DejaVu Sans", 400, false, 16.0);
+    let family = |svc: &mut FontMetricsService, ch| {
+        svc.resolved_font_for_realized_face_char(ch, selection)
+            .unwrap_or_else(|| panic!("materialized font for {ch}"))
+            .family
+    };
+    let cluster = |svc: &mut FontMetricsService, text: &str| {
+        svc.resolved_glyphs_for_realized_face_cluster(text, selection)
+            .unwrap_or_else(|| panic!("cluster {text}"))
+            .1
+            .into_iter()
+            .next()
+            .unwrap_or_else(|| panic!("no font for {text}"))
+            .family
+    };
+    assert_eq!(family(&mut svc, 'リ'), "OnlyC2");
+    let only_c2_advance = svc.char_width_for_realized_face('リ', selection);
+    assert_eq!(cluster(&mut svc, "リ"), "OnlyC2");
+    assert_eq!(family(&mut svc, '検'), "CoversBoth");
+    assert_eq!(
+        family(&mut svc, 'リ'),
+        "CoversBoth",
+        "layout's character cache must follow the fallback that moved to the front"
+    );
+    assert_eq!(only_c2_advance, 17.0, "Plemol リ at 16px");
+    let covers_both_advance = svc.char_width_for_realized_face('リ', selection);
+    assert_eq!(
+        covers_both_advance, 16.0,
+        "Noto Sans CJK リ at 16px must replace the cached Plemol advance"
+    );
+    assert_eq!(
+        cluster(&mut svc, "リ"),
+        "CoversBoth",
+        "the cluster cache must follow the same front"
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn realized_fontsets_keep_separate_cached_fallback_widths() {
+    // The context has to stay alive: dropping it restores the default fontset.
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
+    eval.eval_str(
+        r#"(progn
+            (set-fontset-font t nil "OnlyC2")
+            (set-fontset-font t nil "CoversBoth" nil 'append))"#,
+    )
+    .expect("fallback specs");
+    let mut svc = make_svc();
+    svc.font_resolver
+        .replace_backend(Box::new(MetricsFallbackBackend {
+            only_c2: test_font_path(
+                neomacs_test_fonts::plemol_jp_console_nf_regular().to_path_buf(),
+            ),
+            covers_both: test_font_path(neomacs_test_fonts::noto_sans_cjk_variable().to_path_buf()),
+        }));
+    let face = |face: u32, epoch: u64| {
+        RealizedFaceFontSelection::new("DejaVu Sans", 400, false, 16.0).with_fontset(1, face, epoch)
+    };
+    let opened = |svc: &mut FontMetricsService, selection, ch: char| {
+        svc.resolved_font_for_realized_face_char(ch, selection)
+            .unwrap_or_else(|| panic!("materialized font for {ch}"))
+            .family
+    };
+    let first = face(1, 1);
+    assert_eq!(opened(&mut svc, first, 'リ'), "OnlyC2");
+    assert_eq!(svc.char_width_for_realized_face('リ', first), 17.0);
+    let second = face(0, 1);
+    assert_eq!(opened(&mut svc, second, '検'), "CoversBoth");
+    assert_eq!(opened(&mut svc, second, 'リ'), "CoversBoth");
+    assert_eq!(svc.char_width_for_realized_face('リ', second), 16.0);
+    assert_eq!(
+        opened(&mut svc, first, 'リ'),
+        "OnlyC2",
+        "the other face's cached リ stays on the font it opened"
+    );
+    assert_eq!(
+        svc.char_width_for_realized_face('リ', first),
+        17.0,
+        "the other face's cached advance stays on Plemol"
+    );
+    let next_epoch = face(0, 2);
+    assert_eq!(
+        opened(&mut svc, next_epoch, 'リ'),
+        "OnlyC2",
+        "a new face epoch starts again in charset order"
+    );
+    drop(eval);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn bitmap_cluster_records_every_fallback_stamp() {
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
+    eval.eval_str(
+        r#"(progn
+            (set-fontset-font t nil "OnlyC2")
+            (set-fontset-font t nil "CoversBoth" nil 'append))"#,
+    )
+    .expect("fallback specs");
+    let mut svc = make_svc();
+    svc.font_resolver
+        .replace_backend(Box::new(BitmapClusterFallbackBackend {
+            spleen: test_font_path(neomacs_test_fonts::spleen_2_2_0().bdf()),
+            only_c2: test_font_path(
+                neomacs_test_fonts::plemol_jp_console_nf_regular().to_path_buf(),
+            ),
+            covers_both: test_font_path(neomacs_test_fonts::noto_sans_cjk_variable().to_path_buf()),
+        }));
+    let selection = RealizedFaceFontSelection::new("Spleen", 400, false, 16.0);
+    let later_family = |svc: &mut FontMetricsService| {
+        let (glyphs, fonts) = svc
+            .resolved_glyphs_for_realized_face_cluster("©リ", selection)
+            .expect("©リ bitmap cluster");
+        let glyph = glyphs
+            .iter()
+            .find(|glyph| glyph.cluster_start == 2)
+            .expect("リ starts at the second UTF-8 byte");
+        fonts
+            .iter()
+            .find(|font| font.id == glyph.resolved_font_id)
+            .expect("リ's font")
+            .family
+            .clone()
+    };
+    assert_eq!(later_family(&mut svc), "OnlyC2");
+    assert_eq!(
+        svc.resolved_font_for_realized_face_char('検', selection)
+            .expect("検")
+            .family,
+        "CoversBoth"
+    );
+    assert_eq!(
+        later_family(&mut svc),
+        "CoversBoth",
+        "a later character's fallback stamp must miss after that entry moves"
+    );
+    drop(eval);
+}
+
+/// The face primary has no U+00A9. BitmapFb is a BDF fallback that does, and
+/// Later is an outline font that also does, so a move has to change the
+/// cluster's font. The representative stamp is the only thing that can
+/// invalidate the bitmap cluster: the bitmap covers the representative, so
+/// the per-character loop never records it.
+#[cfg(target_os = "linux")]
+struct BitmapRepresentativeBackend {
+    symbols: String,
+    spleen: String,
+    later: String,
+}
+
+#[cfg(target_os = "linux")]
+impl crate::font_backend::FontBackend for BitmapRepresentativeBackend {
+    fn kind(&self) -> FontBackendKind {
+        FontBackendKind::Fontconfig
+    }
+
+    fn list_families(&self) -> Vec<crate::font_backend::FontFamilyName> {
+        Vec::new()
+    }
+
+    fn resolve_family(&self, family: &str) -> String {
+        family.to_owned()
+    }
+
+    fn family_prefers_monospace(&self, _family: &str) -> bool {
+        false
+    }
+
+    fn list_candidates(
+        &self,
+        query: &crate::font_backend::FontCandidateQuery,
+    ) -> Vec<crate::font_backend::FontCandidate> {
+        let family = query.scope.queried_family();
+        let ch = query.required.single_char();
+        let (file, family, size) = match family {
+            Some("BitmapFb") => {
+                if ch != Some('©') {
+                    return Vec::new();
+                }
+                (
+                    self.spleen.as_str(),
+                    "BitmapFb",
+                    crate::font_backend::PlatformFontSize::Unknown,
+                )
+            }
+            Some("Later") => {
+                if !matches!(ch, Some('©') | Some('検')) {
+                    return Vec::new();
+                }
+                (
+                    self.later.as_str(),
+                    "Later",
+                    crate::font_backend::PlatformFontSize::Scalable,
+                )
+            }
+            Some(name) => (
+                self.symbols.as_str(),
+                name,
+                crate::font_backend::PlatformFontSize::Scalable,
+            ),
+            None => return Vec::new(),
+        };
+        vec![crate::font_backend::FontCandidate {
+            matched: platform_file_candidate(
+                ResolvedFontIdentity::from_file(file, 0, None),
+                crate::font_backend::PlatformFontMetadata {
+                    foundry: None,
+                    family: family.to_owned(),
+                    weight: Some(400),
+                    slant: FontSlant::Normal,
+                    width: Some(FontWidth::Normal),
+                    spacing: None,
+                    design_metrics: None,
+                    size,
+                },
+            ),
+        }]
+    }
+
+    fn advance_catalog_generation(&mut self) {}
+
+    fn poll_catalog_change(&mut self) -> crate::font::catalog::FontCatalogChange {
+        crate::font::catalog::FontCatalogChange::Unchanged
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn bitmap_representative_follows_a_fallback_move() {
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
+    eval.eval_str(
+        r#"(progn
+            (set-fontset-font t nil "BitmapFb")
+            (set-fontset-font t nil "Later" nil 'append))"#,
+    )
+    .expect("bitmap fallback specs");
+    let mut svc = make_svc();
+    svc.font_resolver
+        .replace_backend(Box::new(BitmapRepresentativeBackend {
+            symbols: test_font_path(neomacs_test_fonts::symbols_nerd_mono_3_4_0().to_path_buf()),
+            spleen: test_font_path(neomacs_test_fonts::spleen_2_2_0().bdf()),
+            later: test_font_path(neomacs_test_fonts::noto_sans_cjk_variable().to_path_buf()),
+        }));
+    let selection = RealizedFaceFontSelection::new("Symbols Nerd Font Mono", 400, false, 16.0);
+    let cluster_family = |svc: &mut FontMetricsService| {
+        let (glyphs, fonts) = svc
+            .resolved_glyphs_for_realized_face_cluster("©", selection)
+            .expect("© bitmap cluster");
+        let glyph = glyphs.first().expect("© glyph");
+        fonts
+            .iter()
+            .find(|font| font.id == glyph.resolved_font_id)
+            .expect("© font")
+            .family
+            .clone()
+    };
+    assert_eq!(cluster_family(&mut svc), "BitmapFb");
+    assert_eq!(
+        svc.resolved_font_for_realized_face_char('検', selection)
+            .expect("検")
+            .family,
+        "Later"
+    );
+    assert_eq!(
+        cluster_family(&mut svc),
+        "Later",
+        "a bitmap representative's fallback stamp must miss after that entry moves"
+    );
+    drop(eval);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn face_epoch_prunes_stale_fontset_entries() {
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
+    eval.eval_str(
+        r#"(progn
+            (set-fontset-font t nil "OnlyC2")
+            (set-fontset-font t nil "CoversBoth" nil 'append))"#,
+    )
+    .expect("fallback specs");
+    let mut svc = make_svc();
+    svc.font_resolver
+        .replace_backend(Box::new(MetricsFallbackBackend {
+            only_c2: test_font_path(
+                neomacs_test_fonts::plemol_jp_console_nf_regular().to_path_buf(),
+            ),
+            covers_both: test_font_path(neomacs_test_fonts::noto_sans_cjk_variable().to_path_buf()),
+        }));
+    let selection = |frame: u64, epoch: u64| {
+        RealizedFaceFontSelection::new("DejaVu Sans", 400, false, 16.0)
+            .with_fontset(frame, 1, epoch)
+    };
+    svc.set_realized_fontset_context(4, 1);
+    assert_eq!(
+        svc.resolved_font_for_realized_face_char('リ', selection(4, 1))
+            .expect("リ")
+            .family,
+        "OnlyC2"
+    );
+    let one_epoch_groups = crate::font::fallback_order::fallback_order_group_count();
+    let one_epoch_caches = svc.realized_fontset_cache_len();
+    assert!(one_epoch_groups > 0);
+    assert!(one_epoch_caches > 0);
+    for epoch in 2..=8 {
+        svc.set_realized_fontset_context(4, epoch);
+        assert_eq!(
+            crate::font::fallback_order::fallback_order_groups_for_frame(4),
+            0,
+            "epoch {epoch} drops the previous face's groups"
+        );
+        assert_eq!(
+            svc.resolved_font_for_realized_face_char('リ', selection(4, epoch))
+                .expect("リ")
+                .family,
+            "OnlyC2"
+        );
+        assert!(
+            crate::font::fallback_order::fallback_order_group_count() <= one_epoch_groups,
+            "ten face changes must not keep every epoch"
+        );
+        assert!(svc.realized_fontset_cache_len() <= one_epoch_caches);
+    }
+    let frame_a = crate::font::fallback_order::fallback_order_groups_for_frame(4);
+    assert_eq!(
+        svc.resolved_font_for_realized_face_char('検', selection(5, 8))
+            .expect("検")
+            .family,
+        "CoversBoth"
+    );
+    let frame_b = crate::font::fallback_order::fallback_order_groups_for_frame(5);
+    assert!(frame_b > 0);
+    svc.set_realized_fontset_context(5, 8);
+    assert_eq!(
+        crate::font::fallback_order::fallback_order_groups_for_frame(4),
+        frame_a,
+        "a frame switch at the same epoch keeps both frames"
+    );
+    svc.prune_dead_frame_fontsets(|frame| frame != 4);
+    assert_eq!(
+        crate::font::fallback_order::fallback_order_groups_for_frame(4),
+        0
+    );
+    assert_eq!(
+        crate::font::fallback_order::fallback_order_groups_for_frame(5),
+        frame_b,
+        "deleting frame 4 leaves frame 5's group"
+    );
+    drop(eval);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn two_faces_in_one_frame_publish_different_fallback_fonts() {
+    use neomacs_display_protocol::face::Face;
+    use neomacs_display_protocol::glyph_matrix::{
+        FrameDisplayState, Glyph, GlyphArea, GlyphMatrix, WindowMatrixEntry,
+    };
+    use neomacs_display_protocol::types::Rect;
+
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
+    eval.eval_str(
+        r#"(progn
+            (set-fontset-font t nil "OnlyC2")
+            (set-fontset-font t nil "CoversBoth" nil 'append))"#,
+    )
+    .expect("fallback specs");
+    let mut svc = make_svc();
+    svc.font_resolver
+        .replace_backend(Box::new(MetricsFallbackBackend {
+            only_c2: test_font_path(
+                neomacs_test_fonts::plemol_jp_console_nf_regular().to_path_buf(),
+            ),
+            covers_both: test_font_path(neomacs_test_fonts::noto_sans_cjk_variable().to_path_buf()),
+        }));
+    svc.set_realized_fontset_context(9, 1);
+    let moved =
+        RealizedFaceFontSelection::new("DejaVu Sans", 400, false, 16.0).with_fontset(9, 1, 1);
+    assert_eq!(
+        svc.resolved_font_for_realized_face_char('検', moved)
+            .expect("検")
+            .family,
+        "CoversBoth"
+    );
+
+    let mut state = FrameDisplayState::new(20, 1, 8.0, 16.0);
+    for id in [1u32, 2] {
+        let mut face = Face::new(FaceId::new(id));
+        face.font_family = std::sync::Arc::from("DejaVu Sans");
+        face.font_size = 16.0;
+        face.font_weight = 400;
+        state.faces.insert(FaceId::new(id), face);
+    }
+    let mut matrix = GlyphMatrix::new(1, 20);
+    neomacs_display_protocol::glyph_matrix::MatrixRow::make_mut(&mut matrix.rows[0]).enabled = true;
+    for (column, face) in [1u32, 2].into_iter().enumerate() {
+        neomacs_display_protocol::glyph_matrix::MatrixRow::make_mut(&mut matrix.rows[0]).glyphs
+            [GlyphArea::Text as usize]
+            .push(Glyph::char('リ', FaceId::new(face), column));
+    }
+    state.window_matrices.push(WindowMatrixEntry {
+        window_id: neomacs_display_protocol::types::DisplayWindowId::new(1),
+        matrix,
+        pixel_bounds: Rect::new(0.0, 0.0, 160.0, 16.0),
+        text_pixel_bounds: Rect::new(0.0, 0.0, 160.0, 16.0),
+        text_clip_bounds: None,
+        selected: true,
+    });
+    let mut service = Some(svc);
+    realize_frame_fonts(&mut state, &mut service);
+    let family = |face: u32| {
+        let fonts = state
+            .char_fonts
+            .get(&FaceId::new(face))
+            .unwrap_or_else(|| panic!("face {face}"));
+        let glyph = fonts.get(&'リ').unwrap_or_else(|| panic!("face {face} リ"));
+        state.fonts[&glyph.resolved_font_id].family.clone()
+    };
+    assert_eq!(family(1), "CoversBoth");
+    assert_eq!(family(2), "OnlyC2");
+    drop(eval);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn worker_frame_switch_keeps_the_main_fallback_order() {
+    use crate::display_item::{
+        DisplayItem, DisplayItemKind, DisplayTextRun, RenderFaceRef, SourceSpan,
+    };
+    use crate::display_row::face_state::DisplayRowFace;
+    use crate::row_layout::font_measurement::{FontMeasurementSnapshot, WorkerFontMeasurements};
+
+    // The worker service is rebuilt from this catalog, so the primary receipt
+    // has to be that catalog's DejaVu Sans. A stand-in backend would fail the
+    // receipt check and never reach the order map.
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
+    let mut main = make_svc();
+    assert!(
+        main.synchronize_symbol_font_policy(true, None).changed(),
+        "the worker must absorb a symbol policy that is not the default"
+    );
+    let mut face = DisplayRowFace::from_resolved(
+        FaceId::new(1),
+        &crate::neovm_bridge::ResolvedFace::default(),
+    );
+    face.font_family = std::sync::Arc::from("DejaVu Sans");
+    face.font_weight = 400;
+    face.font_size = 16.0;
+    let faces = [face];
+    let items = [DisplayItem::new(
+        SourceSpan::synthetic(1, 0, 1),
+        RenderFaceRef::FaceId(faces[0].face_id),
+        DisplayItemKind::TextRun(DisplayTextRun::independent("検")),
+    )];
+    let mut worker = WorkerFontMeasurements::default();
+    main.set_realized_fontset_context(11, 1);
+    let frame_a = FontMeasurementSnapshot::capture(&faces, &mut main, &items).expect("frame A");
+    worker
+        .prepare(&frame_a, &faces, &|| false)
+        .expect("worker absorbs the symbol policy");
+    let moved = crate::font::fallback_order::FallbackOrderKey {
+        fontset: crate::font::fallback_order::FaceFontsetId {
+            frame: 11,
+            face: 1,
+            face_epoch: 1,
+        },
+        family: "DejaVu Sans".to_string(),
+        weight: 400,
+        slant: 0,
+        width: 100,
+        size: None,
+        fontset_generation: 1,
+    };
+    let captured = crate::font::fallback_order::fallback_order_groups_for_frame(11);
+    assert!(
+        captured >= 1,
+        "the worker's first install must not clear the group capture just recorded"
+    );
+    crate::font::fallback_order::promote_fallback(
+        &moved,
+        &neovm_core::emacs_core::fontset::FontSpecEntry::ExplicitNone,
+    );
+    let planted = crate::font::fallback_order::fallback_order_groups_for_frame(11);
+    assert!(
+        planted >= captured,
+        "the move under test is planted after the worker's first install"
+    );
+    main.set_realized_fontset_context(22, 1);
+    let frame_b = FontMeasurementSnapshot::capture(&faces, &mut main, &items).expect("frame B");
+    worker
+        .prepare(&frame_b, &faces, &|| false)
+        .expect("frame B reuses the worker service");
+    assert_eq!(
+        worker.cache_rebuilds(),
+        1,
+        "a frame switch is context, not a service rebuild"
+    );
+    assert_eq!(
+        crate::font::fallback_order::fallback_order_groups_for_frame(11),
+        planted,
+        "frame B's prepare must not clear frame A's moved front"
+    );
+    drop(eval);
+}
+
+#[test]
+fn stale_epoch_context_keeps_the_newer_fallback_group() {
+    let mut newer = make_svc();
+    newer.set_realized_fontset_context(4, 2);
+    let key = crate::font::fallback_order::FallbackOrderKey {
+        fontset: crate::font::fallback_order::FaceFontsetId {
+            frame: 4,
+            face: 1,
+            face_epoch: 2,
+        },
+        family: "Probe".to_string(),
+        weight: 400,
+        slant: 0,
+        width: 100,
+        size: None,
+        fontset_generation: 1,
+    };
+    crate::font::fallback_order::promote_fallback(
+        &key,
+        &neovm_core::emacs_core::fontset::FontSpecEntry::ExplicitNone,
+    );
+    let mut stale = make_svc();
+    stale.set_realized_fontset_context(4, 1);
+    assert_eq!(
+        crate::font::fallback_order::fallback_order_groups_for_frame(4),
+        1,
+        "a stale epoch must not drop the newer epoch's group"
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn worker_epoch_churn_past_the_query_cap_keeps_the_moved_front() {
+    use crate::display_item::{
+        DisplayItem, DisplayItemKind, DisplayTextRun, RenderFaceRef, SourceSpan,
+    };
+    use crate::display_row::face_state::DisplayRowFace;
+    use crate::row_layout::font_measurement::{FontMeasurementSnapshot, WorkerFontMeasurements};
+
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
+    let mut main = make_svc();
+    assert!(main.synchronize_symbol_font_policy(true, None).changed());
+    let mut face = DisplayRowFace::from_resolved(
+        FaceId::new(1),
+        &crate::neovm_bridge::ResolvedFace::default(),
+    );
+    face.font_family = std::sync::Arc::from("DejaVu Sans");
+    face.font_weight = 400;
+    face.font_size = 16.0;
+    let faces = [face];
+    let items = [DisplayItem::new(
+        SourceSpan::synthetic(1, 0, 1),
+        RenderFaceRef::FaceId(faces[0].face_id),
+        DisplayItemKind::TextRun(DisplayTextRun::independent("検")),
+    )];
+    let mut worker = WorkerFontMeasurements::default();
+    // One new key per epoch. 513 epochs is one past the 512-query cap.
+    for epoch in 1..=513 {
+        main.set_realized_fontset_context(11, epoch);
+        if epoch == 513 {
+            crate::font::fallback_order::promote_fallback(
+                &crate::font::fallback_order::FallbackOrderKey {
+                    fontset: crate::font::fallback_order::FaceFontsetId {
+                        frame: 11,
+                        face: 1,
+                        face_epoch: 513,
+                    },
+                    family: "DejaVu Sans".to_string(),
+                    weight: 400,
+                    slant: 0,
+                    width: 100,
+                    size: None,
+                    fontset_generation: 1,
+                },
+                &neovm_core::emacs_core::fontset::FontSpecEntry::ExplicitNone,
+            );
+        }
+        let snapshot =
+            FontMeasurementSnapshot::capture(&faces, &mut main, &items).expect("epoch snapshot");
+        worker
+            .prepare(&snapshot, &faces, &|| false)
+            .expect("epoch prepare");
+    }
+    assert_eq!(
+        worker.cache_rebuilds(),
+        1,
+        "stale epochs are dropped before the fit check, so the cap does not rebuild"
+    );
+    assert!(
+        crate::font::fallback_order::fallback_order_groups_for_frame(11) >= 1,
+        "crossing the query cap must not clear the current epoch's moved front"
+    );
+    drop(eval);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn worker_epoch_advance_prunes_its_own_fontset_caches() {
+    use crate::display_item::{
+        DisplayItem, DisplayItemKind, DisplayTextRun, RenderFaceRef, SourceSpan,
+    };
+    use crate::display_row::face_state::DisplayRowFace;
+    use crate::row_layout::font_measurement::{FontMeasurementSnapshot, WorkerFontMeasurements};
+
+    // Main records the epoch before the worker exists. The worker's snapshot
+    // therefore never advances the process mark, and its own caches still
+    // have to drop the epoch it just left.
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
+    let mut main = make_svc();
+    assert!(main.synchronize_symbol_font_policy(true, None).changed());
+    let mut face = DisplayRowFace::from_resolved(
+        FaceId::new(1),
+        &crate::neovm_bridge::ResolvedFace::default(),
+    );
+    face.font_family = std::sync::Arc::from("DejaVu Sans");
+    face.font_weight = 400;
+    face.font_size = 16.0;
+    let faces = [face];
+    let items = [DisplayItem::new(
+        SourceSpan::synthetic(1, 0, 1),
+        RenderFaceRef::FaceId(faces[0].face_id),
+        DisplayItemKind::TextRun(DisplayTextRun::independent("検")),
+    )];
+    let mut worker = WorkerFontMeasurements::default();
+
+    fn measure(
+        worker: &mut WorkerFontMeasurements,
+        snapshot: &FontMeasurementSnapshot,
+        faces: &[DisplayRowFace],
+    ) {
+        let service = worker
+            .prepare(snapshot, faces, &|| false)
+            .expect("worker prepare");
+        let (frame, epoch) = service.realized_fontset_context();
+        let face = &faces[0];
+        let selection = crate::font::metrics::RealizedFaceFontSelection::new(
+            face.font_family.as_ref(),
+            face.font_weight,
+            face.italic,
+            face.font_size.max(1.0),
+        )
+        .with_fontset(frame, face.face_id.get(), epoch);
+        let _ = service.resolved_font_for_realized_face_char('検', selection);
+    }
+
+    main.set_realized_fontset_context(11, 1);
+    let epoch_one =
+        FontMeasurementSnapshot::capture(&faces, &mut main, &items).expect("epoch 1 snapshot");
+    measure(&mut worker, &epoch_one, &faces);
+    let filled = worker.entries_at_face_epoch(1);
+    assert!(
+        filled > 0,
+        "epoch 1 must leave a worker cache entry before the next epoch can prove a prune"
+    );
+    main.set_realized_fontset_context(11, 2);
+    let epoch_two =
+        FontMeasurementSnapshot::capture(&faces, &mut main, &items).expect("epoch 2 snapshot");
+    measure(&mut worker, &epoch_two, &faces);
+    assert_eq!(
+        worker.cache_rebuilds(),
+        1,
+        "the epoch change is context, not a service rebuild"
+    );
+    assert_eq!(
+        worker.entries_at_face_epoch(1),
+        0,
+        "the worker must drop its own epoch 1 fontset caches when main already recorded epoch 2"
+    );
+    drop(eval);
+}
+
+#[test]
+fn second_service_adopts_symbol_policy_without_clearing_orders() {
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
+    let mut main = make_svc();
+    assert!(main.synchronize_symbol_font_policy(true, None).changed());
+    crate::font::fallback_order::promote_fallback(
+        &crate::font::fallback_order::FallbackOrderKey {
+            fontset: crate::font::fallback_order::FaceFontsetId {
+                frame: 31,
+                face: 1,
+                face_epoch: 1,
+            },
+            family: "Probe".to_string(),
+            weight: 400,
+            slant: 0,
+            width: 100,
+            size: None,
+            fontset_generation: 1,
+        },
+        &neovm_core::emacs_core::fontset::FontSpecEntry::ExplicitNone,
+    );
+    assert_eq!(
+        crate::font::fallback_order::fallback_order_groups_for_frame(31),
+        1
+    );
+    // make-syntax-table is a Lisp wrapper around make-char-table. This eval
+    // context has the primitive. The write moves char_table_write_tick and
+    // leaves the symbol selection alone.
+    let tick_before = neovm_core::emacs_core::fontset::char_script_table_generation();
+    eval.eval_str("(make-char-table nil)")
+        .expect("make-char-table");
+    assert!(
+        neovm_core::emacs_core::fontset::char_script_table_generation() > tick_before,
+        "the char-table write must move the process-wide tick"
+    );
+    let mut font_at = make_svc();
+    assert!(font_at.synchronize_symbol_font_policy(true, None).changed());
+    assert_eq!(
+        crate::font::fallback_order::fallback_order_groups_for_frame(31),
+        1,
+        "a second service adopting the same symbol policy must not clear fallback orders"
+    );
+    drop(eval);
+}
+
+#[test]
+fn second_service_display_identity_keeps_the_moved_front() {
+    use neomacs_display_protocol::GraphicalBackend;
+
+    let display = GraphicalDisplayIdentity::anonymous_connection(GraphicalBackend::Wayland);
+    let mut main = make_svc();
+    main.set_display_identity(display.clone());
+    crate::font::fallback_order::promote_fallback(
+        &crate::font::fallback_order::FallbackOrderKey {
+            fontset: crate::font::fallback_order::FaceFontsetId {
+                frame: 32,
+                face: 1,
+                face_epoch: 1,
+            },
+            family: "Probe".to_string(),
+            weight: 400,
+            slant: 0,
+            width: 100,
+            size: None,
+            fontset_generation: 1,
+        },
+        &neovm_core::emacs_core::fontset::FontSpecEntry::ExplicitNone,
+    );
+    assert_eq!(
+        crate::font::fallback_order::fallback_order_groups_for_frame(32),
+        1
+    );
+    let mut font_at = make_svc();
+    font_at.set_display_identity(display);
+    assert_eq!(
+        crate::font::fallback_order::fallback_order_groups_for_frame(32),
+        1,
+        "a second service binding the same render options must not clear fallback orders"
+    );
+}
+
+#[test]
+fn second_service_catalog_sync_keeps_the_moved_front() {
+    use neomacs_display_protocol::{
+        DesktopFontHinting, DesktopFontRenderOptions, GraphicalBackend,
+    };
+
+    let display = GraphicalDisplayIdentity::anonymous_connection(GraphicalBackend::Wayland);
+    let mut main = make_svc();
+    let mut font_at = make_svc();
+    main.set_display_identity(display.clone());
+    font_at.set_display_identity(display.clone());
+    assert!(
+        display.observe_font_render_options(DesktopFontRenderOptions {
+            hinting: DesktopFontHinting::Full,
+            ..Default::default()
+        })
+    );
+    let edge = main.synchronize_font_catalog();
+    assert!(edge.rendering_changed);
+    crate::font::fallback_order::promote_fallback(
+        &crate::font::fallback_order::FallbackOrderKey {
+            fontset: crate::font::fallback_order::FaceFontsetId {
+                frame: 33,
+                face: 1,
+                face_epoch: 1,
+            },
+            family: "Probe".to_string(),
+            weight: 400,
+            slant: 0,
+            width: 100,
+            size: None,
+            fontset_generation: 1,
+        },
+        &neovm_core::emacs_core::fontset::FontSpecEntry::ExplicitNone,
+    );
+    assert_eq!(
+        crate::font::fallback_order::fallback_order_groups_for_frame(33),
+        1
+    );
+    let follow = font_at.synchronize_font_catalog();
+    assert!(follow.rendering_changed);
+    assert_eq!(
+        crate::font::fallback_order::fallback_order_groups_for_frame(33),
+        1,
+        "a second service's catalog sync of the same render edge must not clear fallback orders"
+    );
+}
+
+#[test]
+fn second_service_native_catalog_publication_keeps_the_moved_front() {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, AtomicU64, AtomicUsize},
+    };
+    let catalog = crate::font::metrics::test_catalog::standard_catalog().clone();
+    let mut main = make_svc();
+    let mut font_at = make_svc();
+    main.font_resolver
+        .replace_backend(Box::new(ChangingCatalogBackend {
+            catalog: catalog.clone(),
+            pending: Arc::new(AtomicBool::new(true)),
+            advances: Arc::new(AtomicUsize::new(0)),
+            generation: Arc::new(AtomicU64::new(1)),
+        }));
+    font_at
+        .font_resolver
+        .replace_backend(Box::new(ChangingCatalogBackend {
+            catalog,
+            pending: Arc::new(AtomicBool::new(true)),
+            advances: Arc::new(AtomicUsize::new(0)),
+            generation: Arc::new(AtomicU64::new(1)),
+        }));
+    assert!(main.synchronize_font_catalog().catalog.changed());
+    crate::font::fallback_order::promote_fallback(
+        &crate::font::fallback_order::FallbackOrderKey {
+            fontset: crate::font::fallback_order::FaceFontsetId {
+                frame: 34,
+                face: 1,
+                face_epoch: 1,
+            },
+            family: "Probe".to_string(),
+            weight: 400,
+            slant: 0,
+            width: 100,
+            size: None,
+            fontset_generation: 1,
+        },
+        &neovm_core::emacs_core::fontset::FontSpecEntry::ExplicitNone,
+    );
+    assert_eq!(
+        crate::font::fallback_order::fallback_order_groups_for_frame(34),
+        1
+    );
+    assert!(font_at.synchronize_font_catalog().catalog.changed());
+    assert_eq!(
+        crate::font::fallback_order::fallback_order_groups_for_frame(34),
+        1,
+        "a second service observing the same catalog publication must not clear fallback orders"
+    );
+}
+
+#[test]
+fn second_service_unshared_catalog_event_clears_the_moved_front() {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, AtomicU64, AtomicUsize},
+    };
+    let catalog = crate::font::metrics::test_catalog::standard_catalog().clone();
+    let mut main = make_svc();
+    let mut font_at = make_svc();
+    main.font_resolver
+        .replace_backend(Box::new(ChangingCatalogBackend {
+            catalog: catalog.clone(),
+            pending: Arc::new(AtomicBool::new(true)),
+            advances: Arc::new(AtomicUsize::new(0)),
+            generation: Arc::new(AtomicU64::new(0)),
+        }));
+    font_at
+        .font_resolver
+        .replace_backend(Box::new(ChangingCatalogBackend {
+            catalog,
+            pending: Arc::new(AtomicBool::new(true)),
+            advances: Arc::new(AtomicUsize::new(0)),
+            generation: Arc::new(AtomicU64::new(0)),
+        }));
+    assert!(main.synchronize_font_catalog().catalog.changed());
+    crate::font::fallback_order::promote_fallback(
+        &crate::font::fallback_order::FallbackOrderKey {
+            fontset: crate::font::fallback_order::FaceFontsetId {
+                frame: 35,
+                face: 1,
+                face_epoch: 1,
+            },
+            family: "Probe".to_string(),
+            weight: 400,
+            slant: 0,
+            width: 100,
+            size: None,
+            fontset_generation: 1,
+        },
+        &neovm_core::emacs_core::fontset::FontSpecEntry::ExplicitNone,
+    );
+    assert!(font_at.synchronize_font_catalog().catalog.changed());
+    assert_eq!(
+        crate::font::fallback_order::fallback_order_groups_for_frame(35),
+        0,
+        "generation 0 is not a shared publication, so the second Changed poll still clears orders"
+    );
+}
+
+/// The catalog pollers are the engine layout service and the font-at host.
+/// Row workers do not poll; they follow `MeasurementRevision::rebuild_key`.
+/// Publication 1 clears on the engine's poll. The font-at host's poll of
+/// that same publication does not clear again. Publication 2 clears again.
+#[test]
+fn non_zero_catalog_publication_clears_orders_and_the_next_publication_clears_again() {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
+    };
+    let catalog = crate::font::metrics::test_catalog::standard_catalog().clone();
+    let generation = Arc::new(AtomicU64::new(1));
+    let main_pending = Arc::new(AtomicBool::new(true));
+    let mut main = make_svc();
+    let mut font_at = make_svc();
+    main.font_resolver
+        .replace_backend(Box::new(ChangingCatalogBackend {
+            catalog: catalog.clone(),
+            pending: Arc::clone(&main_pending),
+            advances: Arc::new(AtomicUsize::new(0)),
+            generation: Arc::clone(&generation),
+        }));
+    font_at
+        .font_resolver
+        .replace_backend(Box::new(ChangingCatalogBackend {
+            catalog,
+            pending: Arc::new(AtomicBool::new(true)),
+            advances: Arc::new(AtomicUsize::new(0)),
+            generation: Arc::clone(&generation),
+        }));
+    crate::font::fallback_order::promote_fallback(
+        &crate::font::fallback_order::FallbackOrderKey {
+            fontset: crate::font::fallback_order::FaceFontsetId {
+                frame: 36,
+                face: 1,
+                face_epoch: 1,
+            },
+            family: "Probe".to_string(),
+            weight: 400,
+            slant: 0,
+            width: 100,
+            size: None,
+            fontset_generation: 1,
+        },
+        &neovm_core::emacs_core::fontset::FontSpecEntry::ExplicitNone,
+    );
+    assert_eq!(
+        crate::font::fallback_order::fallback_order_groups_for_frame(36),
+        1
+    );
+    assert!(main.synchronize_font_catalog().catalog.changed());
+    assert_eq!(
+        crate::font::fallback_order::fallback_order_groups_for_frame(36),
+        0,
+        "the engine service's poll of a non-zero catalog publication clears orders"
+    );
+    crate::font::fallback_order::promote_fallback(
+        &crate::font::fallback_order::FallbackOrderKey {
+            fontset: crate::font::fallback_order::FaceFontsetId {
+                frame: 36,
+                face: 1,
+                face_epoch: 1,
+            },
+            family: "Probe".to_string(),
+            weight: 400,
+            slant: 0,
+            width: 100,
+            size: None,
+            fontset_generation: 1,
+        },
+        &neovm_core::emacs_core::fontset::FontSpecEntry::ExplicitNone,
+    );
+    assert!(font_at.synchronize_font_catalog().catalog.changed());
+    assert_eq!(
+        crate::font::fallback_order::fallback_order_groups_for_frame(36),
+        1,
+        "the font-at host's poll of the same publication does not clear orders again"
+    );
+    main_pending.store(true, Ordering::Release);
+    generation.store(2, Ordering::Release);
+    assert!(main.synchronize_font_catalog().catalog.changed());
+    assert_eq!(
+        crate::font::fallback_order::fallback_order_groups_for_frame(36),
+        0,
+        "the next publication is a new clear, not one the high-water mark suppresses"
+    );
+}
+
+#[test]
+fn worker_symbol_tick_keeps_font_caches_warm() {
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
+    let mut main = make_svc();
+    assert!(main.synchronize_symbol_font_policy(true, None).changed());
+    let before = main
+        .capture_worker_font_policy(&[("monospace", '中', 400, false, 13.0)], 4096)
+        .expect("unicode capture");
+    let mut worker = make_svc();
+    worker.install_worker_font_policy(&before);
+    worker.font_metrics("monospace", 400, false, 13.0);
+    let cached = worker.metrics_cache.len();
+    assert!(cached > 0, "the worker must fill a cache before the tick");
+
+    let tick = neovm_core::emacs_core::fontset::char_script_table_generation();
+    eval.eval_str("(make-char-table nil)")
+        .expect("make-char-table");
+    assert!(neovm_core::emacs_core::fontset::char_script_table_generation() > tick);
+    assert!(
+        !main.synchronize_symbol_font_policy(true, None).changed(),
+        "a char-table write with the same symbol ranges is not a selection change"
+    );
+    let after = main
+        .capture_worker_font_policy(&[("monospace", '中', 400, false, 13.0)], 4096)
+        .expect("capture after the tick");
+    assert_ne!(
+        before.symbols.key.char_script_table_generation,
+        after.symbols.key.char_script_table_generation,
+        "main records the new tick on an unchanged selection"
+    );
+    worker.install_worker_font_policy(&after);
+    assert_eq!(
+        worker.metrics_cache.len(),
+        cached,
+        "a char-table tick must not cold-clear the worker font caches"
+    );
+
+    let mut changed = after.clone();
+    changed.symbols.symbol_ranges.push((0x30, 0x39));
+    worker.install_worker_font_policy(&changed);
+    assert!(
+        worker.metrics_cache.is_empty(),
+        "a real symbol-range change still clears the worker caches"
+    );
+    drop(eval);
 }
 
 #[test]

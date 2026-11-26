@@ -47,9 +47,11 @@ fn property_string(plist: Value) -> Value {
 #[test]
 fn chrome_captured_memo_keys_match_core_equality_for_all_fixture_pairs() {
     let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
-    let positioned = neovm_core::tagged::gc::with_tagged_heap(|heap| {
-        heap.alloc_symbol_with_pos(Value::symbol("chrome-key"), Value::fixnum(3))
-    });
+    let positioned = unsafe {
+        neovm_core::tagged::gc::with_tagged_heap(|heap| {
+            heap.alloc_symbol_with_pos(Value::symbol("chrome-key"), Value::fixnum(3))
+        })
+    };
     let float = Value::make_float(f64::from_bits(0x7ff8_0000_0000_0001));
     let plain = Value::string("same");
     let mut values = vec![
@@ -253,7 +255,7 @@ impl CoreEqualityEncoder {
                     self.inner.out.push(tag::VECTOR);
                     self.inner.u64(elements.len() as u64);
                     for element in elements.iter() {
-                        self.reference_value(*element, depth + 1)?;
+                        self.reference_value(element, depth + 1)?;
                     }
                     Ok(())
                 }

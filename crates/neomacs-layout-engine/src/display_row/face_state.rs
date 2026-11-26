@@ -140,6 +140,15 @@ impl DisplayRowFaceMetrics {
         DisplayRowCharWidthPolicy::new(fallback_char_width).width(self.char_width_px)
     }
 
+    pub(crate) fn char_width_for_mode(
+        self,
+        fallback_char_width: f32,
+        mode: DisplayRowMeasurementMode,
+    ) -> f32 {
+        DisplayRowMeasurementPolicy::for_mode(mode)
+            .face_char_width(self.char_width_px, fallback_char_width)
+    }
+
     pub(crate) fn char_width_or_measured_px(
         self,
         fallback_char_width: f32,
@@ -150,7 +159,12 @@ impl DisplayRowFaceMetrics {
     }
 
     pub(crate) fn normalize_char_width(&mut self, fallback_char_width: f32) {
-        self.set_char_width_px(self.char_width_px(fallback_char_width));
+        // Realization records font facts. A narrower valid font must survive
+        // capture; the consumer's measurement policy decides whether to use
+        // its concrete pixels or the logical frame grid.
+        if !self.has_char_width(fallback_char_width) {
+            self.set_char_width_px(DisplayRowCharWidthPolicy::new(fallback_char_width).fallback());
+        }
     }
 
     pub(crate) fn include_in_layout(self, layout: &mut DisplayRowLayout) {
@@ -509,9 +523,7 @@ impl<'a> DisplayRowFaceRealizer<'a> {
 
         if needs_metrics && let Some(metrics) = self.measured_font_metrics_for_face(face) {
             if !face.has_char_width(fallback_char_width) {
-                face.metrics.set_char_width_px(
-                    DisplayRowCharWidthPolicy::new(fallback_char_width).width(metrics.char_width),
-                );
+                face.metrics.set_char_width_px(metrics.char_width);
             }
             if face.metrics.ascent_px() <= 0.0 && metrics.ascent > 0.0 {
                 face.metrics.set_ascent_px(metrics.ascent);
@@ -575,6 +587,17 @@ impl DisplayRowMeasurementMode {
     }
 }
 
+fn realized_selection<'face>(
+    service: Option<&crate::font::metrics::FontMetricsService>,
+    face: &'face DisplayRowFace,
+) -> crate::font::metrics::RealizedFaceFontSelection<'face> {
+    let (frame, face_epoch) = service
+        .map(crate::font::metrics::FontMetricsService::realized_fontset_context)
+        .unwrap_or((0, 0));
+    face.font_selection()
+        .with_fontset(frame, face.face_id.get(), face_epoch)
+}
+
 pub(crate) struct DisplayRowGlyphMeasurer<'a> {
     faces: &'a [DisplayRowFace],
     font_metrics: Option<&'a mut FontMetricsService>,
@@ -601,12 +624,11 @@ impl DisplayTextRunAdvancePolicy for DisplayRowTextRunAdvancePolicy<'_, '_> {
     }
 
     fn shape_span(&mut self, text: &str) -> Vec<crate::font::metrics::ShapedGlyph> {
+        let selection = realized_selection(self.measurer.font_metrics.as_deref(), self.face);
         self.measurer
             .font_metrics
             .as_mut()
-            .map(|font_metrics| {
-                font_metrics.shape_run_for_realized_face(text, self.face.font_selection())
-            })
+            .map(|font_metrics| font_metrics.shape_run_for_realized_face(text, selection))
             .unwrap_or_default()
     }
 }
@@ -673,10 +695,11 @@ impl<'a> DisplayRowGlyphMeasurer<'a> {
         GLYPH_MEASURE_CALLS.with(|calls| calls.set(calls.get() + 1));
         let face_char_width = face.char_width_px(self.fallback_char_width);
         let column_advance = f32::from(columns) * face_char_width;
+        let selection = realized_selection(self.font_metrics.as_deref(), face);
         let measured = self
             .font_metrics
             .as_mut()
-            .map(|service| service.char_width_for_realized_face(ch, face.font_selection()));
+            .map(|service| service.char_width_for_realized_face(ch, selection));
         let minimum = self.mode.minimum_glyph_advance_px(measured, column_advance);
         self.quantization
             .resolve(measured, fallback_advance_px.max(column_advance), minimum)
@@ -727,10 +750,11 @@ impl DisplayGlyphMeasurer for DisplayRowGlyphMeasurer<'_> {
             return None;
         }
         let face = self.face(face_id)?;
+        let selection = realized_selection(self.font_metrics.as_deref(), face);
         let metrics = self
             .font_metrics
             .as_mut()?
-            .vertical_metrics_for_realized_face_char(ch, face.font_selection())?;
+            .vertical_metrics_for_realized_face_char(ch, selection)?;
         let height = metrics.line_height;
         (height > 0.0).then(|| {
             crate::display_row::builder::DisplayRowVerticalMetrics::new(height, metrics.ascent)
@@ -826,6 +850,15 @@ impl DisplayRowMeasurementPolicy {
         Self { mode }
     }
 
+    fn face_char_width(self, measured_width: f32, fallback_char_width: f32) -> f32 {
+        let policy = DisplayRowCharWidthPolicy::new(fallback_char_width);
+        if self.uses_concrete_font_geometry() && policy.has_width(measured_width) {
+            measured_width
+        } else {
+            policy.width(measured_width)
+        }
+    }
+
     pub(crate) fn uses_concrete_font_geometry(self) -> bool {
         self.mode.uses_concrete_font_geometry()
     }
@@ -866,11 +899,13 @@ impl DisplayRowMeasurementPolicy {
             measurement_face.advance_for_char(font_metrics, ' ', fallback_width_policy.fallback());
         let (char_width, row_height, ascent) = metrics
             .map(|metrics| {
-                (
-                    fallback_width_policy.width(metrics.char_width),
-                    metrics.line_height,
-                    metrics.ascent,
-                )
+                // A concrete font can be narrower than the frame grid after
+                // face remapping. The grid width is only its missing-metrics
+                // fallback; flooring it here widens captured text/newline
+                // cursors even though shaping uses the smaller font advances.
+                let char_width =
+                    self.face_char_width(metrics.char_width, fallback_width_policy.fallback());
+                (char_width, metrics.line_height, metrics.ascent)
             })
             .unwrap_or((
                 fallback_width_policy.fallback(),

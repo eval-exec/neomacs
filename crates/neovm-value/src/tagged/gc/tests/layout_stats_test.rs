@@ -53,7 +53,7 @@ fn completed_sweep_releases_empty_cons_blocks_and_rebuilds_free_list() {
     }
     assert_eq!(heap.cons_blocks.len(), 2);
 
-    heap.collect_exact(std::iter::once(survivor));
+    heap.collect_rooted(std::iter::once(survivor));
 
     assert_eq!(heap.cons_blocks.len(), 1);
     assert_eq!(heap.cons_block_index_by_base.len(), 1);

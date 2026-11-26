@@ -5,7 +5,8 @@ use super::*;
 use crate::tagged::header::ImageResident;
 
 fn float_slot(arena: &mut ObjectArena<FloatObj>, value: f64, parity: MarkParity) -> *mut FloatObj {
-    let slot = arena.alloc_slot();
+    // SAFETY: `ptr::write` immediately initializes `slot` with a full `FloatObj`.
+    let slot = unsafe { arena.alloc_slot() };
     // Allocated slots require a fully initialized object before sweep reads
     // the header; unallocated slot bytes are never read by these tests.
     unsafe {

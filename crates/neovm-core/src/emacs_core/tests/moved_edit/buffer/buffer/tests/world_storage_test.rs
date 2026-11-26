@@ -108,7 +108,7 @@ fn detached_clone_roots_keep_source_removed_values_alive() {
         .buffer_local_value("p0-detached-root")
         .unwrap();
     assert_eq!(
-        retained.as_vector_data().unwrap()[0].cons_car(),
+        retained.as_vector_data().unwrap().at(0).cons_car(),
         Value::fixnum(73)
     );
 }
@@ -142,7 +142,7 @@ fn detached_clone_mutation_refreshes_its_explicit_root_publication() {
         .buffer_local_value("p0-refreshed-root")
         .unwrap();
     assert_eq!(
-        retained.as_vector_data().unwrap()[0].cons_car(),
+        retained.as_vector_data().unwrap().at(0).cons_car(),
         Value::fixnum(91)
     );
 }

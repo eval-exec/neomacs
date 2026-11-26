@@ -140,7 +140,7 @@ pub(crate) fn sanitize(name: &str) -> Box<str> {
 /// calls or reads first), or `anon` when it has none.
 pub(crate) fn anon_name(func: &ByteCodeFunction) -> Box<str> {
     let syms: Vec<&str> = func
-        .constants
+        .constants()
         .iter()
         .filter_map(|v| v.as_bare_symbol_id())
         .take(2)

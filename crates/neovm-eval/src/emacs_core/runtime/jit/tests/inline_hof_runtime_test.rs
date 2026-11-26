@@ -58,10 +58,10 @@ fn function(arity: usize, ops: Vec<Op>, constants: Vec<Value>) -> ByteCodeFuncti
         optional: Vec::new(),
         rest: None,
     });
-    f.lexical = true;
-    f.ops = ops;
-    f.constants = constants.into();
-    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(24);
+    f.set_lexical(true);
+    f.set_ops(ops);
+    f.set_constants(constants.into());
+    f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(24));
     f.seal_hand_assembled_ops_for_test();
     f.jit_runtime().set_hot_for_test();
     f
@@ -99,7 +99,7 @@ fn invoke(ctx: &mut Context, f: &ByteCodeFunction, sequence: Value) -> Result<Va
     let leaf =
         compile::compile_bytecode_function_with(f, Some(&ctx.obarray)).expect("HOF compiles");
     let _ = ctx.debug_on_next_call_is_armed();
-    match leaf.call(ctx as *mut Context as *mut u8, &[sequence]) {
+    match unsafe { leaf.call(ctx as *mut Context as *mut u8, &[sequence]) } {
         NativeRun::Ok(bits) => Ok(unsafe {
             /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
             Value::from_bits(bits)
@@ -128,7 +128,8 @@ fn active(
         callback.bits() as i64,
         sequence.bits() as i64,
     ];
-    let len = neovm_jit_hof_length(sequence.bits() as i64);
+    // SAFETY: `sequence` is a live Value word this test mutator owns.
+    let len = unsafe { neovm_jit_hof_length(sequence.bits() as i64) };
     // SAFETY: the test frame supplies the live `ctx` and argument words; the shim contract holds.
     let bt = unsafe {
         neovm_jit_hof_start(
@@ -306,7 +307,11 @@ fn inline_hof_runtime_length_declines_invalid_lists_without_allocation() {
         (at_bound, HOF_LIST_PREFLIGHT_MAX),
         (long, -1),
     ] {
-        assert_eq!(neovm_jit_hof_length(sequence.bits() as i64), expected);
+        // SAFETY: `sequence` is a live Value word this test mutator owns.
+        assert_eq!(
+            unsafe { neovm_jit_hof_length(sequence.bits() as i64) },
+            expected
+        );
     }
     assert_eq!(Value::memory_use_counts_snapshot(), before);
 }
@@ -338,7 +343,8 @@ fn inline_hof_runtime_native_mapc_mapcar_preserve_allocation_deltas() {
             let (value, native_delta, reference, reference_delta) = ctx.with_gc_inhibited(|ctx| {
                 crate::emacs_core::eval::reset_bytecode_branch_poll_count();
                 let before = Value::memory_use_counts_snapshot();
-                let NativeRun::Ok(bits) = leaf.call(ctx as *mut Context as *mut u8, &[sequence])
+                let NativeRun::Ok(bits) =
+                    (unsafe { leaf.call(ctx as *mut Context as *mut u8, &[sequence]) })
                 else {
                     panic!("valid fixnums stay native")
                 };
@@ -360,7 +366,7 @@ fn inline_hof_runtime_native_mapc_mapcar_preserve_allocation_deltas() {
                     Value::memory_use_counts_snapshot()[i] - before[i]
                 });
                 let before = Value::memory_use_counts_snapshot();
-                let reference = ctx.apply2(f.constants[0], callback, sequence).unwrap();
+                let reference = ctx.apply2(f.constants()[0], callback, sequence).unwrap();
                 let reference_delta = std::array::from_fn::<_, 7, _>(|i| {
                     Value::memory_use_counts_snapshot()[i] - before[i]
                 });
@@ -650,7 +656,8 @@ fn inline_hof_runtime_native_guard_resumes_lambda_and_parent_after_call() {
     let leaf = compile::compile_bytecode_function_with(&f, Some(&ctx.obarray)).unwrap();
     let _ = ctx.debug_on_next_call_is_armed();
     let before = Value::memory_use_counts_snapshot();
-    let NativeRun::DeoptAt(resume) = leaf.call(&mut ctx as *mut Context as *mut u8, &[sequence])
+    let NativeRun::DeoptAt(resume) =
+        (unsafe { leaf.call(&mut ctx as *mut Context as *mut u8, &[sequence]) })
     else {
         panic!("mixed Add1 guard transfers the mapping")
     };
@@ -727,7 +734,7 @@ fn inline_hof_runtime_native_deopt_at_each_element_preserves_committed_capture_o
                 let run = |ctx: &mut Context| {
                     let before = Value::memory_use_counts_snapshot();
                     let NativeRun::DeoptAt(resume) =
-                        leaf.call(ctx as *mut Context as *mut u8, &[sequence])
+                        (unsafe { leaf.call(ctx as *mut Context as *mut u8, &[sequence]) })
                     else {
                         panic!("{kind:?} element {guard_index}: mixed Add1 must deopt")
                     };
@@ -766,7 +773,7 @@ fn inline_hof_runtime_native_deopt_at_each_element_preserves_committed_capture_o
                         .jit_runtime()
                         .set_cold_for_test();
                     let before = Value::memory_use_counts_snapshot();
-                    let reference = ctx.apply2(f.constants[0], callback, sequence).unwrap();
+                    let reference = ctx.apply2(f.constants()[0], callback, sequence).unwrap();
                     let reference_delta = std::array::from_fn::<_, 7, _>(|i| {
                         Value::memory_use_counts_snapshot()[i] - before[i]
                     });
@@ -856,7 +863,7 @@ fn inline_hof_runtime_nonlist_or_invalid_list_keeps_builtin_protocol() {
         if let Ok(value) = native.as_ref() {
             ctx.push_vm_frame_root(*value);
         }
-        let reference = ctx.apply2(f.constants[0], callback, sequence);
+        let reference = ctx.apply2(f.constants()[0], callback, sequence);
         match (native.kinded(), reference.kinded()) {
             (Ok(native), Ok(reference)) => {
                 assert_eq!(print_value(&native), print_value(&reference))
@@ -890,7 +897,8 @@ fn inline_hof_runtime_rechecks_callback_depth_after_a_serviced_poll() {
     ctx.max_depth = 1000;
     ctx.gc_stress = true;
     crate::emacs_core::eval::reset_bytecode_branch_poll_count();
-    let NativeRun::DeoptAt(resume) = leaf.call(&mut ctx as *mut Context as *mut u8, &[sequence])
+    let NativeRun::DeoptAt(resume) =
+        (unsafe { leaf.call(&mut ctx as *mut Context as *mut u8, &[sequence]) })
     else {
         panic!("the next callback must observe the poll hook's new depth limit")
     };
@@ -956,9 +964,10 @@ fn inline_hof_runtime_collection_capture_declines_native_loop_and_records_mappin
             let mut last_reads = None;
             for attempt in 0..3 {
                 let (result, reads) = capture(|| {
-                    assert_eq!(neovm_jit_hof_length(sequence.bits() as i64), -1);
+                    // SAFETY: `sequence` is a live Value word this test mutator owns.
+                    assert_eq!(unsafe { neovm_jit_hof_length(sequence.bits() as i64) }, -1);
                     let NativeRun::DeoptAt(resume) =
-                        leaf.call(&mut ctx as *mut Context as *mut u8, &[sequence])
+                        (unsafe { leaf.call(&mut ctx as *mut Context as *mut u8, &[sequence]) })
                     else {
                         panic!("an active capture must decline the direct-load mapping loop")
                     };
@@ -1062,11 +1071,12 @@ fn inline_hof_runtime_native_cache_call_preserves_mid_map_deopt_floor_and_prefix
     let bases = compile::JitLeafBases {
         snap: ctx.module_boundary_snapshot(),
     };
-    let outer_bases = compile::CURRENT_LEAF_BASES
-        .with(|slot| slot.replace(Some(std::ptr::NonNull::from(&bases))));
+    // SAFETY: `bases` lives on this frame until `_bases_guard` drops right after the call.
+    let _bases_guard =
+        unsafe { compile::publish_leaf_bases(Some(std::ptr::NonNull::from(&bases))) };
     let before = Value::memory_use_counts_snapshot();
     let arguments = [sequence.bits() as i64];
-    let outcome = ctx.with_gc_inhibited(|ctx| {
+    let outcome = ctx.with_gc_inhibited(|ctx| unsafe {
         cache::run_resolved_leaf_native(
             ctx as *mut Context,
             f,
@@ -1075,7 +1085,7 @@ fn inline_hof_runtime_native_cache_call_preserves_mid_map_deopt_floor_and_prefix
             arguments.as_ptr(),
         )
     });
-    compile::CURRENT_LEAF_BASES.with(|slot| slot.set(outer_bases));
+    drop(_bases_guard);
     let result = match outcome {
         NativeCallOutcome::Value(value) => value,
         NativeCallOutcome::FlowStashed => panic!(

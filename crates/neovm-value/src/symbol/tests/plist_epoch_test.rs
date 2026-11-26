@@ -91,7 +91,8 @@ fn construction_and_pdump_head_stores_take_the_seam() {
     assert_eq!(slot.plist.get(), Value::fixnum(11));
 
     let mut ob = Obarray::new();
-    let fresh = ob.get_or_intern("p10-a2-fresh-intern-symbol");
+    let fresh_id = ob.get_or_intern("p10-a2-fresh-intern-symbol");
+    let fresh = ob.get_by_id(fresh_id).expect("freshly interned symbol");
     assert!(fresh.plist.get().is_nil());
     unchanged(before);
 }

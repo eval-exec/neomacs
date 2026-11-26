@@ -27,6 +27,8 @@ pub(crate) mod emacs_core {
         // neovm_value recursion-depth type. The mock manager must return that
         // same type; a fixture-local copy is a distinct type (E0308).
         use neovm_value::heap_types::threading::RecursionDepth;
+        // Production threads re-exports the neovm_value wait_condvar kind.
+        pub(crate) use neovm_value::heap_types::threading::WaitCondvar;
 
         // Opaque neighbours retain the real heap word's auto traits. No shim
         // constructor or association query can pretend to validate handles.
@@ -103,6 +105,13 @@ pub(crate) mod emacs_core {
             }
             pub(crate) fn green_raise_pending_signal(&mut self, _: ThreadKey) -> Result<(), Flow> {
                 unreachable!("real deferred error delivery")
+            }
+            pub(crate) fn green_in_wait_condvar<R>(
+                &mut self,
+                _: super::threads::WaitCondvar,
+                _: impl FnOnce(&mut Self) -> Result<R, Flow>,
+            ) -> Result<R, Flow> {
+                unreachable!("real wait_condvar bracket")
             }
         }
     }

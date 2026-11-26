@@ -59,12 +59,12 @@ fn verified_heap() -> TaggedHeap {
 }
 
 fn minor(heap: &mut TaggedHeap, roots: &[TaggedValue]) {
-    heap.begin_minor_collection().unwrap();
+    heap.begin_minor_collection_for_test().unwrap();
     for &root in roots {
         heap.seed_root(root);
     }
-    heap.complete_minor_collection();
-    heap.finish_incremental_sweep_now();
+    heap.complete_minor_collection_for_test();
+    heap.finish_incremental_sweep_now_for_test();
 }
 
 fn panic_message(panic: Box<dyn std::any::Any + Send>) -> String {
@@ -102,7 +102,7 @@ fn verify_rejects_a_major_that_leaves_a_dead_cell_old_in_the_mirror() {
     drop(roots);
     let fault = Fault::inject(MirrorFault::SkipMajorClear);
     let panic = catch_unwind(AssertUnwindSafe(|| {
-        heap.collect_exact(std::iter::empty());
+        heap.collect_rooted(std::iter::empty());
     }))
     .expect_err("a major that keeps a dead cell old in the mirror must fail verification");
     drop(fault);
@@ -126,8 +126,8 @@ fn a_freed_old_slot_reused_by_a_new_cons_reads_young_at_the_barrier() {
     drop(roots);
     let roots = ScratchRoots::new();
     roots.keep(keeper);
-    heap.collect_exact(std::iter::once(keeper));
-    heap.finish_incremental_sweep_now();
+    heap.collect_rooted(std::iter::once(keeper));
+    heap.finish_incremental_sweep_now_for_test();
     // The sweep hands freed cells back to allocation; find the old slot.
     let reused = (0..4 * CONS_BLOCK_SIZE)
         .map(|_| {

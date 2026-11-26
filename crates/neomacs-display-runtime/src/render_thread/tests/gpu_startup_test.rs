@@ -1,4 +1,6 @@
 use super::*;
+use neomacs_display_protocol::frame_time::observe_platform_now;
+use std::time::Duration;
 use winit::{
     event::{Ime, Modifiers, MouseScrollDelta, TouchPhase},
     keyboard::ModifiersState,
@@ -163,4 +165,523 @@ fn lavapipe_drops_x11_frames_before_mesa_24_0_2() {
             "{backend:?} {driver} {driver_info:?}"
         );
     }
+}
+
+fn candidate(
+    name: &str,
+    vendor: u32,
+    device: u32,
+    device_type: wgpu::DeviceType,
+) -> StartupAdapterCandidate {
+    StartupAdapterCandidate {
+        identity: AdapterIdentity {
+            backend: wgpu::Backend::Vulkan,
+            vendor,
+            device,
+            name: name.to_string(),
+        },
+        device_type,
+        surface_compatible: true,
+    }
+}
+
+fn high_performance() -> wgpu::PowerPreference {
+    wgpu::PowerPreference::HighPerformance
+}
+
+#[test]
+fn excluded_discrete_yields_the_integrated_adapter() {
+    let adapters = [
+        candidate("Quadro P620", 0x10de, 0x1cb6, wgpu::DeviceType::DiscreteGpu),
+        candidate("Intel UHD", 0x8086, 0x3e92, wgpu::DeviceType::IntegratedGpu),
+    ];
+    let pick = choose_startup_adapter(
+        &adapters,
+        high_performance(),
+        &StartupAdapterChoice::SkipFailed {
+            excluded: vec![adapters[0].identity.clone()],
+        },
+    )
+    .expect("an integrated adapter remains");
+    assert_eq!(pick.index, 1);
+    assert!(!pick.software);
+    assert!(pick.warning.is_none());
+}
+
+#[test]
+fn excluded_sole_discrete_yields_none() {
+    let adapters = [candidate(
+        "Quadro P620",
+        0x10de,
+        0x1cb6,
+        wgpu::DeviceType::DiscreteGpu,
+    )];
+    let pick = choose_startup_adapter(
+        &adapters,
+        high_performance(),
+        &StartupAdapterChoice::SkipFailed {
+            excluded: vec![adapters[0].identity.clone()],
+        },
+    );
+    assert!(
+        pick.is_none(),
+        "the only adapter already failed; do not select it again"
+    );
+}
+
+#[test]
+fn no_hardware_left_yields_cpu_with_a_warning() {
+    let adapters = [
+        candidate("Quadro P620", 0x10de, 0x1cb6, wgpu::DeviceType::DiscreteGpu),
+        candidate("llvmpipe", 0x10005, 0, wgpu::DeviceType::Cpu),
+    ];
+    let pick = choose_startup_adapter(
+        &adapters,
+        high_performance(),
+        &StartupAdapterChoice::SkipFailed {
+            excluded: vec![adapters[0].identity.clone()],
+        },
+    )
+    .expect("a software adapter remains");
+    assert_eq!(pick.index, 1);
+    assert!(pick.software);
+    let warning = pick.warning.expect("software fallback warns");
+    assert!(
+        warning.contains("llvmpipe"),
+        "warning should name the software adapter, got {warning}"
+    );
+}
+
+#[test]
+fn cpu_is_not_chosen_while_hardware_remains() {
+    let adapters = [
+        candidate("Quadro P620", 0x10de, 0x1cb6, wgpu::DeviceType::DiscreteGpu),
+        candidate("Intel UHD", 0x8086, 0x3e92, wgpu::DeviceType::IntegratedGpu),
+        candidate("llvmpipe", 0x10005, 0, wgpu::DeviceType::Cpu),
+    ];
+    let pick = choose_startup_adapter(&adapters, high_performance(), &StartupAdapterChoice::Ranked)
+        .expect("hardware remains");
+    assert_eq!(pick.index, 0);
+    assert!(!pick.software);
+    assert!(pick.warning.is_none());
+}
+
+fn intel(
+    name: &str,
+    backend: wgpu::Backend,
+    device_type: wgpu::DeviceType,
+) -> StartupAdapterCandidate {
+    let mut adapter = candidate("placeholder", 0x8086, 0x8a52, device_type);
+    adapter.identity.backend = backend;
+    adapter.identity.name = name.to_string();
+    adapter
+}
+
+#[test]
+fn windows_prefers_dx12_over_vulkan_for_the_same_intel_device() {
+    let adapters = [
+        intel(
+            "Intel Iris Plus (Vulkan)",
+            wgpu::Backend::Vulkan,
+            wgpu::DeviceType::IntegratedGpu,
+        ),
+        intel(
+            "Microsoft Basic Render Driver",
+            wgpu::Backend::Dx12,
+            wgpu::DeviceType::Cpu,
+        ),
+        intel(
+            "Intel Iris Plus (DX12)",
+            wgpu::Backend::Dx12,
+            wgpu::DeviceType::IntegratedGpu,
+        ),
+    ];
+    let pick = choose_startup_adapter_on(
+        &adapters,
+        high_performance(),
+        &StartupAdapterChoice::Ranked,
+        StartupOs::Windows,
+        StartupBackendPolicy::Default,
+    )
+    .expect("DX12 hardware remains");
+    assert_eq!(pick.index, 2, "DX12 wins over Vulkan for the same device");
+    assert!(!pick.software);
+    assert!(pick.warning.is_none());
+}
+
+#[test]
+fn windows_default_startup_instance_is_dx12_only() {
+    let plan = instance_backend_plan(
+        StartupOs::Windows,
+        StartupBackendPolicy::Default,
+        wgpu::Backends::all(),
+    );
+    assert_eq!(plan[0].backends, wgpu::Backends::DX12);
+    assert!(
+        !plan[0].backends.contains(wgpu::Backends::GL),
+        "GL stays off the default Windows instance"
+    );
+    assert!(
+        !plan[0].backends.contains(wgpu::Backends::VULKAN),
+        "Vulkan stays off the default Windows instance"
+    );
+    assert!(!plan[0].fallback);
+    assert_eq!(
+        startup_display_slot(plan[0].backends),
+        StartupDisplaySlot::Omit
+    );
+}
+
+#[test]
+fn windows_startup_instance_honors_wgpu_backend() {
+    let vulkan = instance_backend_plan(
+        StartupOs::Windows,
+        StartupBackendPolicy::Explicit(wgpu::Backend::Vulkan),
+        wgpu::Backends::all(),
+    );
+    assert_eq!(
+        vulkan,
+        vec![InstanceBackendAttempt {
+            backends: wgpu::Backends::VULKAN,
+            fallback: false,
+        }]
+    );
+
+    let gl = instance_backend_plan(
+        StartupOs::Windows,
+        StartupBackendPolicy::Explicit(wgpu::Backend::Gl),
+        wgpu::Backends::all(),
+    );
+    assert_eq!(
+        gl,
+        vec![InstanceBackendAttempt {
+            backends: wgpu::Backends::GL,
+            fallback: false,
+        }]
+    );
+    assert_eq!(
+        startup_display_slot(gl[0].backends),
+        StartupDisplaySlot::Attach
+    );
+
+    let limited = instance_backend_plan(
+        StartupOs::Windows,
+        StartupBackendPolicy::Limited(wgpu::Backends::DX12 | wgpu::Backends::VULKAN),
+        wgpu::Backends::all(),
+    );
+    assert_eq!(
+        limited,
+        vec![InstanceBackendAttempt {
+            backends: wgpu::Backends::DX12 | wgpu::Backends::VULKAN,
+            fallback: false,
+        }]
+    );
+}
+
+#[test]
+fn windows_startup_instance_falls_back_gl_then_vulkan() {
+    let plan = instance_backend_plan(
+        StartupOs::Windows,
+        StartupBackendPolicy::Default,
+        wgpu::Backends::all(),
+    );
+    assert_eq!(
+        plan,
+        vec![
+            InstanceBackendAttempt {
+                backends: wgpu::Backends::DX12,
+                fallback: false,
+            },
+            InstanceBackendAttempt {
+                backends: wgpu::Backends::GL,
+                fallback: true,
+            },
+            InstanceBackendAttempt {
+                backends: wgpu::Backends::VULKAN,
+                fallback: true,
+            },
+        ]
+    );
+    assert_eq!(
+        startup_display_slot(plan[1].backends),
+        StartupDisplaySlot::Attach
+    );
+    assert_eq!(
+        startup_display_slot(plan[2].backends),
+        StartupDisplaySlot::Omit
+    );
+
+    // Microsoft Basic Render is Cpu. It is not a usable adapter, so GL is next.
+    assert_eq!(
+        choose_startup_instance(&[
+            vec![wgpu::DeviceType::Cpu],
+            vec![wgpu::DeviceType::IntegratedGpu],
+            vec![wgpu::DeviceType::DiscreteGpu],
+        ]),
+        Some(1)
+    );
+    assert_eq!(
+        choose_startup_instance(&[vec![], vec![], vec![wgpu::DeviceType::IntegratedGpu],]),
+        Some(2)
+    );
+    assert_eq!(
+        choose_startup_instance(&[
+            vec![wgpu::DeviceType::IntegratedGpu, wgpu::DeviceType::Cpu],
+            vec![wgpu::DeviceType::DiscreteGpu],
+        ]),
+        Some(0)
+    );
+    // No hardware anywhere: keep the first software adapter.
+    assert_eq!(
+        choose_startup_instance(&[
+            vec![wgpu::DeviceType::Cpu],
+            vec![],
+            vec![wgpu::DeviceType::Cpu],
+        ]),
+        Some(0)
+    );
+    assert_eq!(choose_startup_instance(&[vec![], vec![], vec![]]), None);
+}
+
+#[test]
+fn other_os_startup_instance_keeps_descriptor_backends() {
+    let backends = wgpu::Backends::VULKAN | wgpu::Backends::GL;
+    let plan = instance_backend_plan(StartupOs::Other, StartupBackendPolicy::Default, backends);
+    assert_eq!(
+        plan,
+        vec![InstanceBackendAttempt {
+            backends,
+            fallback: false,
+        }]
+    );
+}
+
+#[test]
+fn startup_watch_is_silent_before_ten_seconds() {
+    let phase = StartupWatchPhase::Device {
+        name: "Quadro P620".to_string(),
+        driver: "NVK".to_string(),
+    };
+    assert!(startup_watch_warning(Duration::from_millis(9_900), false, &phase).is_none());
+}
+
+#[test]
+fn startup_watch_warns_once_at_ten_seconds() {
+    let phase = StartupWatchPhase::Device {
+        name: "Quadro P620".to_string(),
+        driver: "NVK".to_string(),
+    };
+    let warning =
+        startup_watch_warning(Duration::from_secs(10), false, &phase).expect("one warning at 10s");
+    assert!(warning.contains("Quadro P620"), "{warning}");
+    assert!(warning.contains("NVK"), "{warning}");
+    assert!(warning.contains("WGPU_BACKEND=gl"), "{warning}");
+    assert!(warning.contains("NEOMACS_GPU=integrated"), "{warning}");
+    assert!(startup_watch_warning(Duration::from_secs(30), true, &phase).is_none());
+}
+
+#[test]
+fn startup_watch_names_enumeration_before_an_adapter_exists() {
+    let warning = startup_watch_warning(
+        Duration::from_secs(10),
+        false,
+        &StartupWatchPhase::Enumeration,
+    )
+    .expect("enumeration warning at 10s");
+    assert!(warning.contains("enumeration"), "{warning}");
+    assert!(warning.contains("WGPU_BACKEND=gl"), "{warning}");
+    assert!(warning.contains("NEOMACS_GPU=integrated"), "{warning}");
+}
+
+#[test]
+fn enumeration_warning_names_vk_driver_files() {
+    let warning = startup_watch_warning(
+        Duration::from_secs(10),
+        false,
+        &StartupWatchPhase::Enumeration,
+    )
+    .expect("enumeration warning");
+    assert!(warning.contains("WGPU_BACKEND=gl"), "{warning}");
+    assert!(warning.contains("VK_DRIVER_FILES"), "{warning}");
+}
+
+#[test]
+fn device_line_names_the_adapter_after_enumeration_warned() {
+    assert!(
+        startup_device_watch_line(Duration::from_millis(9_900), false, "Quadro P620", "NVK")
+            .is_none()
+    );
+    let line = startup_device_watch_line(Duration::from_secs(65), false, "Quadro P620", "NVK")
+        .expect("device line after the enumeration warning");
+    assert!(line.contains("Quadro P620"), "{line}");
+    assert!(line.contains("NVK"), "{line}");
+    assert!(
+        startup_device_watch_line(Duration::from_secs(65), true, "Quadro P620", "NVK").is_none()
+    );
+}
+
+#[test]
+fn integrated_scope_drops_discrete_quadro_and_keeps_intel() {
+    let adapters = [
+        candidate("Quadro P620", 0x10de, 0x1cb6, wgpu::DeviceType::DiscreteGpu),
+        candidate("Intel UHD", 0x8086, 0x3e92, wgpu::DeviceType::IntegratedGpu),
+    ];
+    let decision = integrated_startup_scope(&adapters, StartupGpuScope::Integrated);
+    assert_eq!(decision.indexes, vec![1]);
+    assert_eq!(decision.skipped_names, vec!["Quadro P620".to_string()]);
+    assert!(!decision.restored_discrete);
+}
+
+#[test]
+fn integrated_scope_restores_discrete_when_nothing_else_supports_the_surface() {
+    let mut adapters = [
+        candidate("Quadro P620", 0x10de, 0x1cb6, wgpu::DeviceType::DiscreteGpu),
+        candidate("Intel UHD", 0x8086, 0x3e92, wgpu::DeviceType::IntegratedGpu),
+    ];
+    adapters[1].surface_compatible = false;
+    let decision = integrated_startup_scope(&adapters, StartupGpuScope::Integrated);
+    assert!(decision.restored_discrete);
+    assert_eq!(decision.indexes, vec![0, 1]);
+    assert_eq!(decision.skipped_names, vec!["Quadro P620".to_string()]);
+}
+
+#[test]
+fn any_scope_keeps_discrete_and_integrated() {
+    let adapters = [
+        candidate("Quadro P620", 0x10de, 0x1cb6, wgpu::DeviceType::DiscreteGpu),
+        candidate("Intel UHD", 0x8086, 0x3e92, wgpu::DeviceType::IntegratedGpu),
+    ];
+    let decision = integrated_startup_scope(&adapters, StartupGpuScope::Any);
+    assert_eq!(decision.indexes, vec![0, 1]);
+    assert!(decision.skipped_names.is_empty());
+    assert!(!decision.restored_discrete);
+}
+
+#[test]
+fn startup_watch_arms_a_deadline_until_the_empty_poll_warns() {
+    let started = observe_platform_now();
+    let phase = StartupWatchPhase::Enumeration;
+    assert_eq!(
+        watch_deadline_for(started, false),
+        Some(started.plus(Duration::from_secs(10)))
+    );
+    assert!(watch_deadline_for(started, true).is_none());
+    let early = drive_startup_watch(
+        started,
+        false,
+        started.plus(Duration::from_millis(9_900)),
+        StartupWorkerPoll::Empty,
+        &phase,
+    );
+    assert!(early.warning.is_none());
+    assert!(!early.warned);
+    assert_eq!(early.deadline, watch_deadline_for(started, early.warned));
+
+    let due = drive_startup_watch(
+        started,
+        false,
+        started.plus(Duration::from_secs(10)),
+        StartupWorkerPoll::Empty,
+        &phase,
+    );
+    let warning = due.warning.expect("empty poll at 10s warns");
+    assert!(warning.contains("enumeration"), "{warning}");
+    assert!(warning.contains("WGPU_BACKEND=gl"), "{warning}");
+    assert!(warning.contains("NEOMACS_GPU=integrated"), "{warning}");
+    assert!(due.warned);
+    assert!(due.deadline.is_none());
+
+    let again = drive_startup_watch(
+        started,
+        true,
+        started.plus(Duration::from_secs(30)),
+        StartupWorkerPoll::Empty,
+        &phase,
+    );
+    assert!(again.warning.is_none());
+    assert!(again.deadline.is_none());
+}
+
+#[test]
+fn finished_startup_does_not_warn_that_it_is_still_running() {
+    let started = observe_platform_now();
+    let phase = StartupWatchPhase::Device {
+        name: "Quadro P620".to_string(),
+        driver: "NVK".to_string(),
+    };
+    let step = drive_startup_watch(
+        started,
+        false,
+        started.plus(Duration::from_secs(65)),
+        StartupWorkerPoll::Finished,
+        &phase,
+    );
+    assert!(
+        step.warning.is_none(),
+        "a finished worker is not still running: {:?}",
+        step.warning
+    );
+    assert!(step.deadline.is_none());
+}
+
+#[test]
+fn two_failed_adapters_stay_excluded() {
+    let adapters = [
+        candidate("Quadro P620", 0x10de, 0x1cb6, wgpu::DeviceType::DiscreteGpu),
+        candidate("Intel UHD", 0x8086, 0x3e92, wgpu::DeviceType::IntegratedGpu),
+    ];
+    let mut choice = StartupAdapterChoice::Ranked;
+    choice.record_failure(adapters[0].identity.clone());
+    let second = choose_startup_adapter(&adapters, high_performance(), &choice)
+        .expect("the integrated adapter is still eligible");
+    assert_eq!(second.index, 1);
+    choice.record_failure(adapters[1].identity.clone());
+    assert!(
+        choose_startup_adapter(&adapters, high_performance(), &choice).is_none(),
+        "both hardware adapters failed; do not return to the first"
+    );
+}
+
+#[test]
+fn two_failed_hardware_adapters_fall_back_to_cpu_then_exhaust() {
+    let adapters = [
+        candidate("Quadro P620", 0x10de, 0x1cb6, wgpu::DeviceType::DiscreteGpu),
+        candidate("Intel UHD", 0x8086, 0x3e92, wgpu::DeviceType::IntegratedGpu),
+        candidate("llvmpipe", 0x10005, 0, wgpu::DeviceType::Cpu),
+    ];
+    let mut choice = StartupAdapterChoice::Ranked;
+    choice.record_failure(adapters[0].identity.clone());
+    choice.record_failure(adapters[1].identity.clone());
+    let software = choose_startup_adapter(&adapters, high_performance(), &choice)
+        .expect("software remains after both hardware adapters fail");
+    assert_eq!(software.index, 2);
+    assert!(software.software);
+    choice.record_failure(adapters[2].identity.clone());
+    assert!(choose_startup_adapter(&adapters, high_performance(), &choice).is_none());
+}
+
+#[test]
+fn explicit_vulkan_backend_keeps_vulkan_on_windows() {
+    let adapters = [
+        intel(
+            "Intel Iris Plus (DX12)",
+            wgpu::Backend::Dx12,
+            wgpu::DeviceType::IntegratedGpu,
+        ),
+        intel(
+            "Intel Iris Plus (Vulkan)",
+            wgpu::Backend::Vulkan,
+            wgpu::DeviceType::IntegratedGpu,
+        ),
+    ];
+    let pick = choose_startup_adapter_on(
+        &adapters,
+        high_performance(),
+        &StartupAdapterChoice::Ranked,
+        StartupOs::Windows,
+        StartupBackendPolicy::Explicit(wgpu::Backend::Vulkan),
+    )
+    .expect("explicit Vulkan remains");
+    assert_eq!(pick.index, 1);
+    assert_eq!(adapters[pick.index].identity.backend, wgpu::Backend::Vulkan);
 }

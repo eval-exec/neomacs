@@ -149,10 +149,10 @@ fn function(ops: Vec<Op>, constants: Vec<Value>) -> ByteCodeFunction {
         optional: Vec::new(),
         rest: None,
     });
-    function.lexical = true;
-    function.ops = ops;
-    function.constants = constants.into();
-    function.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
+    function.set_lexical(true);
+    function.set_ops(ops);
+    function.set_constants(constants.into());
+    function.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
     function.seal_hand_assembled_ops();
     function.jit_runtime().set_hot_for_test();
     function
@@ -165,7 +165,8 @@ fn green_owner_turn_invalidates_shared_source_leaf_slots() {
     let _backend = compile::opt_mode_scope_for_test(OptMode::Legacy);
     let mut context = Context::new(crate::test_utils::unit_runtime());
     let source = function(vec![Op::StackRef(0), Op::Add1, Op::Return], vec![]);
-    let leaf = cache::resolve_compiled_leaf_ptr(&mut context, &source).expect("compiled source");
+    let leaf = unsafe { cache::resolve_compiled_leaf_ptr(&mut context, &source) }
+        .expect("compiled source");
     let epoch = cache::leaf_slot_epoch();
     // SAFETY: test-only; `leaf` was resolved by the cache under `epoch` and
     // stays allocated for the test's duration.
@@ -254,10 +255,12 @@ fn green_inline_retirement_keeps_native_leaf_allocation_alive() {
     assert!(retained.retired.get());
     assert_eq!(retained.entry, entry);
     assert_eq!(
-        retained.call(
-            frame.context as *mut Context as *mut u8,
-            &[Value::make_int(4)]
-        ),
+        unsafe {
+            retained.call(
+                frame.context as *mut Context as *mut u8,
+                &[Value::make_int(4)],
+            )
+        },
         NativeRun::Ok(Value::make_int(16).bits()),
         "an original continuation can finish in retired code"
     );
@@ -282,7 +285,8 @@ fn green_admission_accepts_all_inline_and_backend_configurations() {
                 Context::new_with_threading(
                     crate::emacs_core::eval::ThreadingMode::Green,
                     crate::test_utils::unit_runtime(),
-                ),
+                )
+                .park_for_test(),
             ));
         }
         for inline in [
@@ -298,11 +302,15 @@ fn green_admission_accepts_all_inline_and_backend_configurations() {
                 Context::new_with_threading(
                     crate::emacs_core::eval::ThreadingMode::Green,
                     crate::test_utils::unit_runtime(),
-                ),
+                )
+                .park_for_test(),
             ));
         }
     }
-    for (mode, inline, background, mut context) in cases {
+    for (mode, inline, background, parked_context) in cases {
+        let mut context = parked_context
+            .resume_for_test()
+            .expect("resume admission case");
         let _backend = compile::opt_mode_scope_for_test(mode);
         let _configuration = AdmissionScope::enter(inline, background);
         context.setup_thread_locals();
@@ -424,7 +432,7 @@ fn green_park_accepts_entry_and_unregistered_osr_arithmetic() {
             "an interpreted source alone is admissible"
         );
         let function = source.get_bytecode_data().expect("bytecode fixture");
-        cache::resolve_compiled_leaf_ptr(frame.context, function).expect("native entry");
+        unsafe { cache::resolve_compiled_leaf_ptr(frame.context, function) }.expect("native entry");
         assert!(green_owner::ParkedJit::prepare(frame.context).is_ok());
     }
     {
@@ -476,9 +484,10 @@ fn green_checkpoint_rejects_foreign_return_before_epoch_mutation() {
     crate::test_utils::init_test_tracing();
     let _admission = AdmissionScope::enter(Inline2Mode::Off, BgMode::Sync);
     let _backend = compile::opt_mode_scope_for_test(OptMode::Legacy);
-    let mut original = Context::new(crate::test_utils::unit_runtime());
+    let original = Context::new(crate::test_utils::unit_runtime());
     let checkpoint = green_owner::ParkedJit::prepare(&original).expect("original owner checkpoint");
     assert!(checkpoint.roots().is_empty());
+    let parked_original = original.park_for_test();
     {
         let foreign = Context::new(crate::test_utils::unit_runtime());
         // Context construction may itself invalidate the cache. Measure only
@@ -490,6 +499,9 @@ fn green_checkpoint_rejects_foreign_return_before_epoch_mutation() {
         ));
         assert_eq!(cache::leaf_slot_epoch(), epoch);
     }
+    let mut original = parked_original
+        .resume_for_test()
+        .expect("resume original owner");
     original.setup_thread_locals();
 }
 
@@ -601,7 +613,7 @@ fn green_background_fixture(redefine: bool) {
     // and a fresh compile must observe B's new canonical function definition.
     if redefine {
         assert_eq!(cache::inline_dependent_count_for_test(callee), 0);
-        cache::prepare_entry_for_test(&mut context, source_data);
+        unsafe { cache::prepare_entry_for_test(&mut context, source_data) };
     } else {
         cache::drain_ready_pending(Some(&context));
     }
@@ -695,7 +707,7 @@ fn evict_running_osr_then_collect_and_park(
         .symbol_function("green-evicted-osr-source")
         .unwrap();
     let function = source.get_bytecode_data().unwrap();
-    let literal = function.constants[3];
+    let literal = function.constants()[3];
     let id = function.jit_runtime().compiled_id().unwrap();
     assert_eq!(
         cache::cache_entry_kind_for_test(id),
@@ -784,7 +796,7 @@ fn green_evicted_active_osr_retains_code_relocations_and_exact_source_through_pa
         )
         .unwrap();
     let source_data = source.get_bytecode_data().unwrap();
-    cache::prepare_osr_for_test(&mut context, source_data, 1);
+    unsafe { cache::prepare_osr_for_test(&mut context, source_data, 1) };
     let leaf = cache::osr_leaf_ptr_for_test(source_data, 1).unwrap();
     let frame = FrameScope::enter(&mut context, Value::symbol("green-evicted-osr-source"));
     // SAFETY: `ctx` is the live `Context` this test owns; the call runs in this thread under the dormant-Context contract.

@@ -14,7 +14,7 @@ use crate::display_cursor::{
     capture_cursor_approximation,
 };
 use crate::display_row::append_context::DisplayRowAppendSurface;
-use crate::display_row::builder::DisplayRowPosition;
+use crate::display_row::builder::{DisplayRowAppendStatus, DisplayRowPosition};
 use crate::display_row::face_state::DisplayRowActiveFaceState;
 use crate::display_row::geometry::{
     DisplayRowExtendState, DisplayRowFlags, DisplayRowGeometryDefaults, DisplayRowGeometryState,
@@ -49,14 +49,16 @@ use crate::display_source_progress::{
     DisplaySourceProgressState, DisplaySourceRowProgressState, DisplaySourceVisualRowProgress,
 };
 use crate::frame_face_arena::FrameFaceAttempt;
-use crate::neovm_bridge::{LayoutBufferView, LayoutCharPropertyLookup, RustTextPropAccess};
+use crate::neovm_bridge::{
+    LayoutBufferView, LayoutCharPropertyLookup, LayoutVar, RustTextPropAccess,
+};
 use crate::types::LayoutCharPos0;
 use crate::unicode::is_wide_char;
 use crate::window_output::{
     DisplayRowTerminator, DisplayRowTerminatorCell, DisplayTextRowTransition, WindowOutputEmitter,
 };
 use neomacs_display_protocol::types::Color;
-use neovm_core::buffer::{EmacsBytePos, LispCharPos1};
+use neovm_core::buffer::{CharPos0, EmacsByteLen, EmacsBytePos, LispCharPos1};
 use neovm_core::emacs_core::value::{Value, list_to_vec};
 
 mod source_line_restart;
@@ -629,6 +631,22 @@ pub(crate) struct BufferSourceHscrollSkipRenderContext<'a> {
     row_limit: DisplayRowLimit,
 }
 
+/// Characters the hscroll walk consumed one at a time. The long-line jump
+/// must make this independent of how far the window is hscrolled.
+#[cfg(test)]
+static HSCROLL_SKIP_CHAR_STEPS: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
+#[cfg(test)]
+pub(crate) fn reset_hscroll_skip_char_steps() {
+    HSCROLL_SKIP_CHAR_STEPS.store(0, std::sync::atomic::Ordering::Relaxed);
+}
+
+#[cfg(test)]
+pub(crate) fn hscroll_skip_char_steps() -> usize {
+    HSCROLL_SKIP_CHAR_STEPS.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 pub(crate) fn consume_hscroll_skip_from_position<B: LayoutBufferView + ?Sized>(
     text: &[u8],
     position: &mut DisplaySourceTextPosition,
@@ -637,6 +655,8 @@ pub(crate) fn consume_hscroll_skip_from_position<B: LayoutBufferView + ?Sized>(
     buffer: &B,
     text_start_byte: usize,
 ) -> Option<BufferSourceHscrollSkipAction> {
+    #[cfg(test)]
+    HSCROLL_SKIP_CHAR_STEPS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let source_char = position.consume_step_char(text)?;
     // A `(space :align-to N)` / `(space :width N)` spec on the skipped char
     // occupies its RESOLVED width, not one column: GNU's hscroll move
@@ -657,6 +677,93 @@ pub(crate) fn consume_hscroll_skip_from_position<B: LayoutBufferView + ?Sized>(
         tab_width,
         spec_columns,
     ))
+}
+
+/// GNU's long-line hscroll shortcut in `display_line`
+/// (`src/xdisp.c:25896-25920`): a truncated line hscrolled past
+/// `large-hscroll-threshold` in a long-line buffer is not walked character by
+/// character. `fast_move_it_horizontally` (`src/xdisp.c:11676`) first finds the
+/// line's newline, jumps `first_visible_x / column-width` characters, and the
+/// iterator is seated at that boundary — one column per character, ignoring
+/// tabs, wide characters and display specs, exactly as GNU approximates it.
+///
+/// Returns the position the jump landed on, with the skip state advanced past
+/// the boundary. `None` leaves the ordinary per-character walk in charge: the
+/// buffer has no long-line flag, the window is scrolled less than the
+/// threshold, the row already consumed characters, or the jump target lies
+/// outside the walk's text slice (the walk then grows its read window).
+pub(crate) fn long_line_hscroll_jump<B: LayoutBufferView + ?Sized>(
+    text: &[u8],
+    position: DisplaySourceTextPosition,
+    hscroll_skip: &mut HorizontalScrollSkipState,
+    buffer: &B,
+    text_start_byte: usize,
+    query_target: Option<i64>,
+) -> Option<DisplaySourceTextPosition> {
+    if hscroll_skip.consumed_columns() != 0 || !buffer.layout_long_line_optimizations_p() {
+        return None;
+    }
+    let configured_columns = hscroll_skip.configured_columns();
+    let threshold = buffer
+        .layout_buffer_local_value(LayoutVar::LargeHscrollThreshold)
+        .and_then(|value| value.as_fixnum())
+        .unwrap_or(10_000);
+    if i64::from(configured_columns) <= threshold {
+        return None;
+    }
+    // GNU `find_newline_no_quit` starts after an already-consumed newline.
+    if text.get(position.byte_idx()) == Some(&b'\n') {
+        return None;
+    }
+    // The line end must be provable inside this walk's slice; otherwise the
+    // ordinary walk reaches the slice edge and the caller reads more text.
+    let slice_end_byte = text_start_byte.saturating_add(text.len());
+    let slice_limit =
+        EmacsBytePos::new(slice_end_byte).min(buffer.layout_point_max_emacs_byte_pos());
+    let (past_newline, crossed) = buffer.layout_nth_newline_emacs_byte(
+        EmacsBytePos::new(text_start_byte + position.byte_idx()),
+        slice_limit,
+        1,
+    );
+    // No newline: the line ends at the accessible end, which is usable only
+    // when the slice reaches it (otherwise the walk must read more text).
+    let newline_byte = if crossed == 0 {
+        if slice_limit < buffer.layout_point_max_emacs_byte_pos() {
+            return None;
+        }
+        slice_limit
+    } else {
+        past_newline.saturating_sub_len(EmacsByteLen::new(1))
+    };
+    let from_char = position.charpos();
+    let newline_char = buffer.layout_emacs_byte_pos_to_char_pos(newline_byte).get() as i64;
+    let chars_before_newline = newline_char.saturating_sub(from_char);
+    let chars_to_skip = i64::from(configured_columns);
+    // A synchronous query for a position inside the skipped span publishes
+    // its off-screen point (GNU `pos_visible_p`), so it keeps the walk.
+    let hidden_end_char = from_char.saturating_add(chars_to_skip.min(chars_before_newline));
+    if query_target.is_some_and(|target| target >= from_char && target < hidden_end_char) {
+        return None;
+    }
+    if chars_to_skip < chars_before_newline {
+        let target_char = from_char + chars_to_skip;
+        let target_byte =
+            buffer.layout_char_pos_to_emacs_byte_pos(CharPos0::new(target_char as usize));
+        if target_byte.get() > slice_end_byte {
+            return None;
+        }
+        hscroll_skip.complete_at_visible_boundary();
+        Some(DisplaySourceTextPosition::new(
+            target_byte.get() - text_start_byte,
+            target_char,
+        ))
+    } else {
+        hscroll_skip.complete_hidden_line();
+        Some(DisplaySourceTextPosition::new(
+            newline_byte.get() - text_start_byte,
+            newline_char,
+        ))
+    }
 }
 
 /// The column width a `(space …)` display spec occupies at the shared pen
@@ -754,6 +861,27 @@ impl<'a> BufferSourceHscrollSkipRenderContext<'a> {
         let mut progress = progress;
         let mut source_render = source_render;
         let context = self;
+
+        // GNU's long-line hscroll shortcut (src/xdisp.c:25906) seats the
+        // iterator at the first visible boundary in one jump. Take it before
+        // the per-character skip; the next call renders the boundary glyph
+        // and installs the left-truncation marker.
+        let hscroll_start = progress.source_position();
+        if let Some(jumped) = source_walk.try_long_line_hscroll_jump(
+            context.text,
+            hscroll_start,
+            row_carryover.hscroll_skip,
+            context.query_target,
+        ) {
+            // The row starts at its first hidden position even though the
+            // walk never produced it (GNU records `row->start` before the
+            // skip, src/xdisp.c:25857).
+            source_render
+                .output_emitter()
+                .note_row_walk_start(LispCharPos1::new(hscroll_start.charpos() + 1));
+            progress.apply_source_position(jumped);
+            return DisplayRowTransitionContinuation::Continue;
+        }
 
         let columns_before = row_carryover.hscroll_skip.consumed_columns();
         let hscroll_columns = row_carryover.hscroll_skip.configured_columns();
@@ -980,11 +1108,13 @@ pub(crate) enum BufferSourceSelectiveDisplayTailRenderOutcome {
     Stop,
 }
 
-/// The invisible checkpoint never ends the row: it either leaves the position
-/// visible or folds a hidden span and hands the walk back. Ending a row from a
-/// property is the selective-display tail's job, which is why only
-/// [`BufferSourceSelectiveDisplayTailRenderOutcome`] carries a `Stop`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// Folding hidden text does not by itself end the row unless its ellipsis
+/// clips on a wrapping row. Under `word-wrap` with an earlier break candidate,
+/// GNU rewinds to that candidate so the preceding word moves down together
+/// with the whole ellipsis (src/xdisp.c:26379-26406); otherwise the fitting
+/// dot(s) remain on this row and the remaining dots continue on the next row
+/// (src/xdisp.c:5653-5672, 9258, 4115-4121).
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) enum BufferSourceInvisibleTextRenderOutcome {
     /// No hidden text begins at the current source position.
     Visible,
@@ -995,6 +1125,27 @@ pub(crate) enum BufferSourceInvisibleTextRenderOutcome {
     /// The hidden span (and optional ellipsis) was consumed; restart the walk
     /// at its first visible position.
     HiddenSpanApplied,
+    /// The hidden span was consumed, but its ellipsis clipped on a wrapping
+    /// row. End this row as a continuation with the given wrap-break kind and
+    /// resume the remaining ellipsis dot(s) at the start of the next row,
+    /// before the text following the span.
+    EllipsisContinuesOnNextRow(crate::display_row::transition::VisualWrapBreak),
+    /// The hidden span's ellipsis clipped under `word-wrap` while an earlier
+    /// word-wrap break candidate stands on this row. Rewind to that candidate
+    /// so the word in front moves down together with the whole ellipsis.
+    RewindToWordWrap(crate::display_row::walk_state::WordWrapBreakCandidate),
+}
+
+/// Where an invisible-text ellipsis landed on the current row.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum InvisibleEllipsisRowPlacement {
+    /// Nothing to draw, the whole marker fit, the row truncated in place
+    /// (`truncate-lines`), or an empty row overflowed without progress.
+    Settled,
+    /// Wrapping row clipped before or inside the ellipsis. The glyphs that fit
+    /// remain on this row; the caller continues from this character offset
+    /// (GNU `dpvec_index`, src/xdisp.c:4115-4121) on the next row.
+    ContinueOnNextRow(usize),
 }
 
 impl BufferSourceSelectiveDisplayTailRenderOutcome {
@@ -1321,7 +1472,8 @@ impl BufferSourceInvisibleTextSkip {
         source_render: &mut TextRowSourceRenderState<'_, FS>,
         row_progress: &mut DisplaySourceRowProgressState<'_>,
         ellipsis_text: Option<&str>,
-    ) {
+        break_at_ellipsis_start: bool,
+    ) -> InvisibleEllipsisRowPlacement {
         let position = row_progress.row_position();
         self.capture_cursor_if_point(
             cursor_info,
@@ -1331,17 +1483,96 @@ impl BufferSourceInvisibleTextSkip {
             position.col(),
         );
 
+        let skip_end = self.skip_to.max(0) as usize;
         let Some(request) = self.ellipsis_append_request(position, ellipsis_text) else {
-            return;
+            source_render.advance_current_row_source_end(skip_end);
+            return InvisibleEllipsisRowPlacement::Settled;
         };
-        append_synthetic_request_to_text_row(
+        let total_chars = ellipsis_char_count(ellipsis_text);
+        // GNU `setup_for_ellipsis` (src/xdisp.c:5653-5672) and
+        // `next_element_from_display_vector` (src/xdisp.c:9258) produce one
+        // ellipsis glyph per element. Keep the glyphs that fit on this row;
+        // under `LineWrapMode::Wrap` resume the remaining dots at `dpvec_index`
+        // on the next continuation row (xdisp.c:4115-4121), unless a word-wrap
+        // break candidate stands right before the hidden span (in which case
+        // GNU moves all dots onto the next row while keeping `row->end` at the
+        // post-skip position). Under `LineWrapMode::Truncate`, keep the partial
+        // dots and stay on this row so truncation handles the rest of the line.
+        place_invisible_ellipsis(
             render_context,
             row_geometry,
             source_render,
             row_progress,
             request,
-        );
+            0,
+            total_chars,
+            Some(skip_end),
+            break_at_ellipsis_start,
+        )
     }
+}
+
+fn ellipsis_char_count(ellipsis_text: Option<&str>) -> usize {
+    match ellipsis_text {
+        Some(text) if !text.is_empty() => text.chars().count(),
+        _ => SyntheticTextMarker::InvisibleEllipsis
+            .text()
+            .chars()
+            .count(),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn place_invisible_ellipsis<FS: crate::neovm_bridge::FaceServices>(
+    render_context: BufferSyntheticTextRenderContext<'_>,
+    row_geometry: &DisplayRowGeometryState,
+    source_render: &mut TextRowSourceRenderState<'_, FS>,
+    row_progress: &mut DisplaySourceRowProgressState<'_>,
+    request: SyntheticTextAppendRequest,
+    start_offset: usize,
+    total_chars: usize,
+    skip_end: Option<usize>,
+    break_at_ellipsis_start: bool,
+) -> InvisibleEllipsisRowPlacement {
+    let wraps = render_context.wraps();
+    let checkpoint = source_render.capture_glyph_checkpoint();
+    let had_other_glyphs = checkpoint.text_glyph_count() > 0;
+    let output_progress_before = source_render
+        .output_emitter_ref()
+        .capture_row_progress(row_progress.row_position());
+    let rendered = render_context.render_request_to_text_row(source_render, row_geometry, request);
+    if let Some(progress) = &rendered {
+        row_progress.apply_position(progress.end());
+    }
+    if let Some(source_end) = skip_end {
+        source_render.advance_current_row_source_end(source_end);
+    }
+    let Some(progress) = rendered else {
+        return InvisibleEllipsisRowPlacement::Settled;
+    };
+    if progress.status() == DisplayRowAppendStatus::Complete || !wraps {
+        return InvisibleEllipsisRowPlacement::Settled;
+    }
+    if break_at_ellipsis_start && had_other_glyphs {
+        // Restore both the glyph row and the emitter's progress atomically;
+        // row height/ascent are restored by the caller's `resume_offset == 0`
+        // `replace_current_row_metrics` branch before row finish writes them.
+        source_render.restore_glyph_checkpoint(checkpoint);
+        source_render
+            .output_emitter()
+            .restore_row_progress(output_progress_before);
+        row_progress.apply_position(output_progress_before.row_position());
+        if let Some(source_end) = skip_end {
+            source_render.advance_current_row_source_end(source_end);
+        }
+        return InvisibleEllipsisRowPlacement::ContinueOnNextRow(0);
+    }
+    let emitted = progress.emitted_glyphs();
+    let next_offset = start_offset.saturating_add(emitted);
+    if (had_other_glyphs || emitted > 0) && next_offset < total_chars {
+        return InvisibleEllipsisRowPlacement::ContinueOnNextRow(next_offset);
+    }
+    InvisibleEllipsisRowPlacement::Settled
 }
 
 impl<'a> BufferSourceInvisibleTextRenderContext<'a> {
@@ -1407,14 +1638,30 @@ impl<'a> BufferSourceInvisibleTextRenderContext<'a> {
             return BufferSourceInvisibleTextRenderOutcome::Visible;
         };
 
-        // Advance display-line-numbers past the buffer lines this fold hid, so
-        // the next visible row's gutter shows its true buffer line number (GNU
-        // counts every buffer newline, including ones inside invisible text).
-        hidden_text.apply_to_line_numbers(row_carryover.line_numbers);
-
         let ellipsis_text = crate::neovm_bridge::buffer_invisible_ellipsis_text(buffer);
+        let first_ellipsis_char = ellipsis_text
+            .as_deref()
+            .and_then(|text| text.chars().next())
+            .or_else(|| SyntheticTextMarker::InvisibleEllipsis.text().chars().next())
+            .unwrap_or('.');
+        let pen_before_ellipsis = progress.row_progress().x();
+        let break_at_ellipsis_start = context.append_surface.line_wrap().is_word_wrap()
+            && row_carryover
+                .word_wrap
+                .can_record_candidate(first_ellipsis_char);
+        let word_wrap_candidate = (!break_at_ellipsis_start
+            && context.append_surface.line_wrap().is_word_wrap()
+            && row_carryover.word_wrap.has_candidate())
+        .then(|| row_carryover.word_wrap.candidate())
+        .filter(|candidate| {
+            candidate.glyph_checkpoint().text_glyph_count() > 0
+                && candidate.row_position().x_px() < pen_before_ellipsis
+        });
+
+        let row_height = row_build.row_geometry.height();
+        let row_ascent = row_build.row_geometry.ascent();
         let mut row_progress = progress.row_progress_mut().reborrow();
-        hidden_text.append_to_text_row_and_apply(
+        let placement = hidden_text.append_to_text_row_and_apply(
             BufferSyntheticTextRenderContext::with_face_attempt(
                 context.append_surface,
                 context.active_face_state,
@@ -1427,12 +1674,100 @@ impl<'a> BufferSourceInvisibleTextRenderContext<'a> {
             &mut source_render.reborrow(),
             &mut row_progress,
             ellipsis_text.as_deref(),
+            break_at_ellipsis_start,
         );
+        if let InvisibleEllipsisRowPlacement::ContinueOnNextRow(resume_offset) = placement {
+            if let Some(candidate) = word_wrap_candidate {
+                // GNU `wrap_row_used > 0` / `goto back_to_wrap`
+                // (src/xdisp.c:26379-26406) rewinds to the earlier word break
+                // before applying this span's hidden line count (the rewind
+                // replays this hidden span on the continuation row).
+                return BufferSourceInvisibleTextRenderOutcome::RewindToWordWrap(candidate);
+            }
+            // Advance display-line-numbers past the buffer lines this fold hid,
+            // matching GNU's physical line counting across hidden spans.
+            hidden_text.apply_to_line_numbers(row_carryover.line_numbers);
+            if resume_offset == 0 {
+                row_build
+                    .row_geometry
+                    .replace_current_row_metrics(row_height, row_ascent);
+            }
+            invisible_text_checkpoint.defer_ellipsis_from(resume_offset);
+            let wrap_break = if break_at_ellipsis_start && resume_offset == 0 {
+                crate::display_row::transition::VisualWrapBreak::AtWordBoundary
+            } else {
+                crate::display_row::transition::VisualWrapBreak::MidElement
+            };
+            return BufferSourceInvisibleTextRenderOutcome::EllipsisContinuesOnNextRow(wrap_break);
+        }
+
+        // Advance display-line-numbers past the buffer lines this fold hid, so
+        // the next visible row's gutter shows its true buffer line number (GNU
+        // counts every buffer newline, including ones inside invisible text).
+        hidden_text.apply_to_line_numbers(row_carryover.line_numbers);
 
         // The strings anchored at the post-skip position are NOT rendered here
         // since P4.6: the producer surfaces them as an element when it produces
         // at that position, which is the very next step and appends nothing in
         // between.
+        BufferSourceInvisibleTextRenderOutcome::HiddenSpanApplied
+    }
+
+    /// Draw the remaining invisible-ellipsis glyphs from `resume_offset`
+    /// (GNU `dpvec_index`, src/xdisp.c:4115-4121) on a continuation row.
+    pub(crate) fn place_deferred_ellipsis<
+        B: LayoutBufferView,
+        FS: crate::neovm_bridge::FaceServices,
+    >(
+        self,
+        buffer: &B,
+        resume_offset: usize,
+        state: BufferSourceLoopMutableState<'_, '_, '_, FS>,
+    ) -> BufferSourceInvisibleTextRenderOutcome {
+        let BufferSourceLoopMutableState {
+            invisible_text_checkpoint,
+            mut progress,
+            source_render,
+            row_build,
+            face_ids,
+            ..
+        } = state;
+        let mut source_render = source_render;
+        let ellipsis_text = crate::neovm_bridge::buffer_invisible_ellipsis_text(buffer);
+        let total_chars = ellipsis_char_count(ellipsis_text.as_deref());
+        let mut row_progress = progress.row_progress_mut().reborrow();
+        let position = row_progress.row_position();
+        let Some(request) = SyntheticTextAppendRequest::active_marker_with_text_from_offset(
+            position,
+            SyntheticTextMarker::InvisibleEllipsis,
+            ellipsis_text.as_deref(),
+            resume_offset,
+        ) else {
+            return BufferSourceInvisibleTextRenderOutcome::HiddenSpanApplied;
+        };
+        let placement = place_invisible_ellipsis(
+            BufferSyntheticTextRenderContext::with_face_attempt(
+                self.append_surface,
+                self.active_face_state,
+                self.glyph_y_offset,
+                self.metrics,
+                face_ids.clone(),
+            ),
+            row_build.row_geometry,
+            &mut source_render,
+            &mut row_progress,
+            request,
+            resume_offset,
+            total_chars,
+            None,
+            false,
+        );
+        if let InvisibleEllipsisRowPlacement::ContinueOnNextRow(next_offset) = placement {
+            invisible_text_checkpoint.defer_ellipsis_from(next_offset);
+            return BufferSourceInvisibleTextRenderOutcome::EllipsisContinuesOnNextRow(
+                crate::display_row::transition::VisualWrapBreak::MidElement,
+            );
+        }
         BufferSourceInvisibleTextRenderOutcome::HiddenSpanApplied
     }
 }
@@ -2594,3 +2929,7 @@ pub(crate) fn append_hscroll_truncation_marker_to_text_row<
     );
     source_render.mark_current_text_row_truncated_left();
 }
+
+#[cfg(test)]
+#[path = "tests/hscroll_jump_test.rs"]
+mod hscroll_jump_tests;

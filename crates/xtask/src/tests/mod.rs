@@ -6,3 +6,4 @@ mod main_test;
 mod aot_preload_test;
 
 mod dump_recipe_test;
+mod wave_stdio_test;

@@ -185,6 +185,8 @@ impl RenderApp {
                             tracing::error!("Failed to initialize clipboard service: {err}");
                         }
                     }
+                    self.presentation_observer
+                        .attach_display(event_loop.owned_display_handle());
 
                     let raw_scale_factor = window.scale_factor();
                     let effective_scale = effective_window_scale_factor(raw_scale_factor);
@@ -234,6 +236,7 @@ impl RenderApp {
                         window.clone(),
                         descriptor,
                         proxy,
+                        neomacs_display_protocol::frame_time::observe_platform_now(),
                     ) {
                         Ok(pending) => {
                             self.gpu_startup = Some(pending);
@@ -252,7 +255,8 @@ impl RenderApp {
                         apply_window_geometry_hints(window.as_ref(), geometry_hints);
                     }
 
-                    self.window_icon.apply(window.as_ref());
+                    self.window_icon
+                        .apply(window.as_ref(), event_loop.owned_display_handle());
                 }
                 Err(e) => {
                     tracing::error!("Failed to create window: {:?}", e);
@@ -264,8 +268,15 @@ impl RenderApp {
         self.refresh_monitor_snapshot(event_loop, false);
     }
 
+    fn startup_watch_deadline(&self) -> Option<std::time::Instant> {
+        self.gpu_startup
+            .as_ref()
+            .and_then(|pending| pending.watch_deadline())
+            .map(neomacs_display_protocol::frame_time::EventTime::into_instant)
+    }
+
     pub(super) fn handle_about_to_wait(&mut self, event_loop: &dyn ActiveEventLoop) {
-        // A Cmd-Q that arrived while the input queue was full is retried here
+        // An application Quit that found a full input queue is retried here
         // rather than dropped or blocked on the AppKit main thread.
         #[cfg(target_os = "macos")]
         super::macos_quit_redirect::deliver_pending_quit(&self.comms.input_tx);
@@ -294,16 +305,22 @@ impl RenderApp {
             return;
         }
         if let Some(pending) = self.gpu_startup.take() {
-            match pending.poll(&event_loop.create_proxy()) {
+            match pending.poll(&event_loop.create_proxy(), now) {
                 Ok(super::gpu_startup::GpuAttemptPoll::Pending(pending)) => {
+                    self.startup_adapter_choice = pending.adapter_choice().clone();
                     self.gpu_startup = Some(pending)
                 }
-                Ok(super::gpu_startup::GpuAttemptPoll::Ready { gpu, input }) => {
+                Ok(super::gpu_startup::GpuAttemptPoll::Ready { gpu, input, choice }) => {
+                    self.startup_adapter_choice = choice;
                     self.install_wgpu(gpu);
                     self.startup_input = Some(input);
                 }
                 Err(error) => {
-                    self.startup_error = Some(error);
+                    self.startup_adapter_choice = error.choice;
+                    if self.startup_adapter_choice.exclusion_len() > 0 {
+                        self.startup_adapter_exhausted = true;
+                    }
+                    self.startup_error = Some(error.message);
                     event_loop.exit();
                     return;
                 }
@@ -332,7 +349,12 @@ impl RenderApp {
                 }
                 self.startup_commands.push_back(command);
             }
-            event_loop.set_control_flow(ControlFlow::Wait);
+            // Enumeration can outlive this wake. Arm the 10s watch or the
+            // warning never runs until the worker itself finishes.
+            event_loop.set_control_flow(match self.startup_watch_deadline() {
+                Some(deadline) => ControlFlow::WaitUntil(deadline),
+                None => ControlFlow::Wait,
+            });
             return;
         }
         // Device-loss recovery (SHADER_SURFACES.md: user shader hang → TDR):
@@ -341,6 +363,7 @@ impl RenderApp {
         // command. Rebuild the whole GPU stack before doing anything else
         // with it.
         if self.device_lost.take() {
+            self.note_pre_present_adapter_failure();
             self.comms.tooltip_context.invalidate();
             self.tooltips.shutdown();
             self.menus.cancel();
@@ -575,8 +598,11 @@ impl RenderApp {
         if let Some(tooltip_deadline) = self.menus.tooltip_deadline() {
             deadline = Some(deadline.map_or(tooltip_deadline, |d| d.min(tooltip_deadline)));
         }
-        // A deferred Cmd-Q must not wait for an unrelated event to wake the
-        // loop: keep a bounded retry deadline until the queue has room.
+        if let Some(watch) = self.startup_watch_deadline() {
+            deadline = Some(deadline.map_or(watch, |existing| existing.min(watch)));
+        }
+        // A deferred application Quit must not wait for an unrelated event:
+        // keep a bounded retry deadline until the queue has room.
         #[cfg(target_os = "macos")]
         if super::macos_quit_redirect::quit_is_pending() {
             const QUIT_RETRY_INTERVAL: std::time::Duration = std::time::Duration::from_millis(50);
@@ -662,7 +688,7 @@ impl RenderApp {
             let fx = &window_state.render.compositor.renderer_effects;
             let effect_demands = [
                 (
-                    window_state.has_presentable_dirty_content(),
+                    window_state.has_presentable_dirty_content_at(now),
                     DemandReason::Redisplay,
                     max_rate,
                 ),
@@ -759,6 +785,24 @@ impl RenderApp {
                 } else {
                     self.frame_coordinator.retract(id, reason);
                 }
+            }
+
+            // A withheld native resize is normally answered by the relaid
+            // presentation, whose ingestion submits a Redisplay demand. If
+            // the evaluator cannot reproduce the requested extent (a
+            // minimum-size clamp, for example), the bounded wait is the only
+            // thing that can release the retained scene; schedule that wake
+            // so the loop cannot sleep past it.
+            if let Some(deadline) = window_state.render.native_resize_withhold_deadline_at(now) {
+                let _ = self.frame_coordinator.submit_demand(
+                    id,
+                    FrameDemand {
+                        invalidation: legacy_repaint,
+                        cadence: Cadence::At(deadline),
+                        reason: DemandReason::Redisplay,
+                    },
+                    now,
+                );
             }
 
             // Cursor geometry is compositor state, not editor content. Keep
@@ -873,7 +917,7 @@ impl RenderApp {
             // retained scene; a content repaint owed on the same pass has
             // already submitted the stronger Redisplay demand above and wins
             // the strongest-invalidation merge.
-            if window_state.has_presentable_cursor_change() {
+            if window_state.has_presentable_cursor_change_at(now) {
                 let cursor_action = self.frame_coordinator.submit_demand(
                     id,
                     FrameDemand {
@@ -1127,6 +1171,15 @@ impl RenderApp {
     }
 
     pub(super) fn handle_exiting(&mut self) {
+        // Retire image-command obligations first: publish the exit so a cache
+        // read aborts instead of waiting for an acknowledgement this renderer
+        // will never send, then drop every buffered command (and with it each
+        // queued ack sender). This must run before any teardown that can block
+        // (GPU, clipboard, native window waits below).
+        super::bootstrap::retire_render_command_obligations(
+            &self.image_metadata,
+            &self.comms.cmd_rx,
+        );
         // Release pending native surfaces before any display teardown. Workers
         // retain only GPU objects; wgpu-core owns the descriptor's independent
         // OwnedDisplayHandle until its backend instances have been destroyed.
@@ -1159,36 +1212,63 @@ impl RenderApp {
             Err("display is shutting down".to_owned()),
         ));
 
-        // Drop the renderer first. Its WebView retirement queue waits for each
-        // exact GPU copy submission and releases the corresponding remote WPE
-        // lease. The WPE reactor must still be alive to consume those release
-        // commands and acknowledge the native buffers.
-        drop(self.renderer.take());
-        // Now no renderer-owned browser frame can refer back to WPE; stop the
-        // WebKit views and their reactor-local EGL/GObject state.
-        #[cfg(feature = "webview")]
-        {
-            self.webview_system = None;
-        }
-        // Drop adopted primary state (surface holds wl_surface proxy if on Wayland)
-        drop(self.frame_windows.take_primary_window());
-        // Drop multi-window state (secondary surfaces)
-        self.frame_windows.destroy_all();
-        // Leak the adapter to prevent eglTerminate crash on Wayland.
-        // The adapter's Drop triggers eglTerminate → dri2_teardown_wayland which
-        // SEGVs if the Wayland connection is already gone. Since we're exiting,
-        // the OS will reclaim all GPU/EGL resources.
-        if let Some(gpu) = self.gpu.take() {
-            let RenderGpuContext {
-                instance,
-                adapter,
-                device,
-                queue,
-            } = gpu;
-            drop(device);
-            drop(queue);
-            drop(instance);
-            std::mem::forget(adapter);
+        // A lost device's Drop waits inside the wedged driver (the NVK exit
+        // spent about 80s here). Forget that graph. A live device still drops
+        // device, queue, and instance while the display connection is up, and
+        // still forgets the adapter so eglTerminate cannot run after it.
+        match super::device_loss::gpu_exit_disposition(self.device_lost.is_latched()) {
+            super::device_loss::GpuExitDisposition::Abandon => {
+                tracing::warn!(
+                    "GPU device is lost; abandoning devices, surfaces, and the renderer instead of dropping them"
+                );
+                if let Some(renderer) = self.renderer.take() {
+                    std::mem::forget(renderer);
+                }
+                #[cfg(feature = "webview")]
+                if let Some(webview) = self.webview_system.take() {
+                    std::mem::forget(webview);
+                }
+                std::mem::forget(std::mem::replace(
+                    &mut self.frame_windows,
+                    super::frame_windows::GuiFrameWindowManager::new(),
+                ));
+                if let Some(gpu) = self.gpu.take() {
+                    std::mem::forget(gpu);
+                }
+            }
+            super::device_loss::GpuExitDisposition::Release => {
+                // Drop the renderer first. Its WebView retirement queue waits for each
+                // exact GPU copy submission and releases the corresponding remote WPE
+                // lease. The WPE reactor must still be alive to consume those release
+                // commands and acknowledge the native buffers.
+                drop(self.renderer.take());
+                // Now no renderer-owned browser frame can refer back to WPE; stop the
+                // WebKit views and their reactor-local EGL/GObject state.
+                #[cfg(feature = "webview")]
+                {
+                    self.webview_system = None;
+                }
+                // Drop adopted primary state (surface holds wl_surface proxy if on Wayland)
+                drop(self.frame_windows.take_primary_window());
+                // Drop multi-window state (secondary surfaces)
+                self.frame_windows.destroy_all();
+                // Leak the adapter to prevent eglTerminate crash on Wayland.
+                // The adapter's Drop triggers eglTerminate → dri2_teardown_wayland which
+                // SEGVs if the Wayland connection is already gone. Since we're exiting,
+                // the OS will reclaim all GPU/EGL resources.
+                if let Some(gpu) = self.gpu.take() {
+                    let RenderGpuContext {
+                        instance,
+                        adapter,
+                        device,
+                        queue,
+                    } = gpu;
+                    drop(device);
+                    drop(queue);
+                    drop(instance);
+                    std::mem::forget(adapter);
+                }
+            }
         }
 
         tracing::info!("GPU resources cleaned up");

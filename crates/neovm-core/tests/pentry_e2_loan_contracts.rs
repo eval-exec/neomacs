@@ -82,6 +82,11 @@ fn pentry_e2_loan_compile_contracts() {
             "impl<T: Sync> RequireSync<T> {",
             "impl<T> RequireSync<T> {",
         ),
+        (
+            "custody_unentered_not_send",
+            "impl<T: Send> RequireSend<T> {",
+            "impl<T> RequireSend<T> {",
+        ),
     ];
     for (name, before, after) in bound_mutations {
         assert_eq!(bounds.matches(before).count(), 1, "one bound for {name}");
@@ -155,6 +160,147 @@ fn pentry_e2_loan_compile_contracts() {
         fs::write(&path, mutated_body).expect("safe copy of the constructor call");
         cases.pass(path);
     }
+
+    // L5 custody. S2 waits on the held heap-loan receiver. S4 stays with the
+    // held keeper thread. Each control changes one line, or drops one bound.
+    let entry = manifest.join("../neovm-eval/src/emacs_core/runtime/eval/parallel_entry");
+    let custody = fs::read_to_string(entry.join("keeper_custody.rs")).expect("keeper custody");
+    let capability = fs::read_to_string(entry.join("capability.rs")).expect("capability source");
+    let stop_scope = fs::read_to_string(
+        manifest
+            .join("../neovm-value/src/tagged/gc/mutator_registration/custody_brand/stop_scope.rs"),
+    )
+    .expect("stop scope");
+    let reservation = fs::read_to_string(
+        manifest
+            .join("../neovm-value/src/tagged/gc/mutator_registration/custody_brand/reservation.rs"),
+    )
+    .expect("unentered reservation");
+
+    let fixture_mutations = [
+        (
+            "custody_suspended_lend",
+            "keeper: SuspendedKeeper<'static, 'static>,",
+            "keeper: StoppedKeeper<'static, 'static>,",
+        ),
+        (
+            "custody_notice_as_return",
+            "notice: CustodyFailureNotice)",
+            "notice: ReturnedSerialTicket)",
+        ),
+        (
+            "custody_two_scope",
+            "with_stop_scope(|inner| unify(&outer, &inner));",
+            "unify(&outer, &outer);",
+        ),
+    ];
+    for (name, before, after) in fixture_mutations {
+        let fixture =
+            fs::read_to_string(manifest.join(format!("tests/pentry_e2_loan_ui/{name}.rs")))
+                .expect("negative fixture body");
+        assert_eq!(fixture.matches(before).count(), 1, "one line for {name}");
+        assert!(!before.contains('\n') && !after.contains('\n'));
+        let directory = output.join(name);
+        fs::create_dir_all(&directory).expect("isolated custody mutation directory");
+        let path = directory.join(format!("{name}_mutation.rs"));
+        fs::write(&path, fixture.replacen(before, after, 1)).expect("one-line custody control");
+        cases.pass(path);
+    }
+
+    {
+        let name = "custody_scope_escape";
+        let before = "body: impl for<'g> FnOnce(&mut SerialContext<'g, 'g, 'heap, 'owner>, BatonWitness<'g, 'heap, 'owner>) -> R,";
+        let after = "body: impl FnOnce(&mut SerialContext<'static, 'static, 'heap, 'owner>, BatonWitness<'static, 'heap, 'owner>) -> R,";
+        assert_eq!(capability.matches(before).count(), 1, "one scope bound");
+        assert!(!before.contains('\n') && !after.contains('\n'));
+        let directory = output.join(name);
+        fs::create_dir_all(&directory).expect("isolated scope directory");
+        fs::write(
+            directory.join("capability.rs"),
+            capability.replacen(before, after, 1),
+        )
+        .expect("scope bound removed");
+        let fixture =
+            fs::read_to_string(manifest.join(format!("tests/pentry_e2_loan_ui/{name}.rs")))
+                .expect("scope escape fixture");
+        let fixture = fixture.replace(
+            "../../../neovm-eval/src/emacs_core/runtime/eval/parallel_entry/capability.rs",
+            "capability.rs",
+        );
+        let path = directory.join(format!("{name}_mutation.rs"));
+        fs::write(&path, fixture).expect("scope escape against the static bound");
+        cases.pass(path);
+    }
+
+    {
+        let name = "custody_cross_scope";
+        let before = "    stop: PhantomData<fn(&'s mut ()) -> &'s mut ()>,";
+        let after = "    stop: PhantomData<&'s ()>,";
+        assert_eq!(
+            custody.matches(before).count(),
+            1,
+            "one invariant request marker"
+        );
+        assert!(!before.contains('\n') && !after.contains('\n'));
+        let directory = output.join(name);
+        fs::create_dir_all(&directory).expect("isolated cross-scope directory");
+        fs::write(
+            directory.join("keeper_custody.rs"),
+            custody.replacen(before, after, 1),
+        )
+        .expect("request marker made covariant");
+        let fixture =
+            fs::read_to_string(manifest.join(format!("tests/pentry_e2_loan_ui/{name}.rs")))
+                .expect("cross-scope fixture");
+        let fixture = fixture.replace(
+            "../../../neovm-eval/src/emacs_core/runtime/eval/parallel_entry/keeper_custody.rs",
+            "keeper_custody.rs",
+        );
+        let path = directory.join(format!("{name}_mutation.rs"));
+        fs::write(&path, fixture).expect("cross-scope against the covariant marker");
+        cases.pass(path);
+    }
+
+    let signature =
+        "pub fn with_stop_scope<R>(body: impl for<'s> FnOnce(StopScope<'s>) -> R) -> R {";
+    assert_eq!(
+        stop_scope.matches(signature).count(),
+        1,
+        "one generative stop scope"
+    );
+    assert!(!signature.contains('\n'));
+    let standalone = [
+        (
+            "custody_stop_scope_escape",
+            "use std::marker::PhantomData;\n\
+             struct StopScope<'s>(PhantomData<fn(&'s mut ()) -> &'s mut ()>);\n\
+             fn with_stop_scope<R>(body: impl FnOnce(StopScope<'static>) -> R) -> R {\n    \
+             body(StopScope(PhantomData))\n}\n\
+             fn main() {\n    \
+             let _escaped: StopScope<'static> = with_stop_scope(|scope| scope);\n}\n",
+        ),
+        (
+            "custody_unentered_has_no_constructor",
+            "struct UnenteredReservation;\n\
+             impl UnenteredReservation {\n    \
+             pub fn new() -> Self { Self }\n}\n\
+             fn main() { let _reservation = UnenteredReservation::new(); }\n",
+        ),
+    ];
+    assert!(reservation.contains("pub struct UnenteredReservation"));
+    assert!(
+        !reservation.contains("fn new"),
+        "the dormant reservation has no constructor"
+    );
+    for (name, mutated_body) in standalone {
+        assert!(!mutated_body.contains("unsafe"));
+        assert!(!mutated_body.contains("for<'s>"));
+        let directory = output.join(name);
+        fs::create_dir_all(&directory).expect("isolated standalone control directory");
+        let path = directory.join(format!("{name}_mutation.rs"));
+        fs::write(&path, mutated_body).expect("standalone custody control");
+        cases.pass(path);
+    }
 }
 
 #[test]
@@ -190,6 +336,17 @@ fn pentry_e2_loan_transfer_compile_contracts() {
         "transfer_restored_not_copy.rs",
         "transfer_restored_not_send.rs",
         "transfer_restored_not_sync.rs",
+        "transfer_observations_detached_has_no_constructor.rs",
+        "transfer_observations_detached_not_clone.rs",
+        "transfer_observations_detached_not_copy.rs",
+        "transfer_observations_detached_not_send.rs",
+        "transfer_observations_detached_not_sync.rs",
+        "transfer_observation_guard_has_no_constructor.rs",
+        "transfer_observation_guard_install_requires_unsafe.rs",
+        "transfer_observation_guard_not_clone.rs",
+        "transfer_observation_guard_not_copy.rs",
+        "transfer_observation_guard_not_send.rs",
+        "transfer_observation_guard_not_sync.rs",
     ];
     for name in fail {
         cases.compile_fail(manifest.join("tests/pentry_e2_loan_ui").join(name));
@@ -301,6 +458,46 @@ fn pentry_e2_loan_transfer_compile_contracts() {
             "impl<T: Sync> RequireSync<T> {",
             "impl<T> RequireSync<T> {",
         ),
+        (
+            "transfer_observations_detached_not_clone",
+            "impl<T: Clone> RequireClone<T> {",
+            "impl<T> RequireClone<T> {",
+        ),
+        (
+            "transfer_observations_detached_not_copy",
+            "impl<T: Copy> RequireCopy<T> {",
+            "impl<T> RequireCopy<T> {",
+        ),
+        (
+            "transfer_observations_detached_not_send",
+            "impl<T: Send> RequireSend<T> {",
+            "impl<T> RequireSend<T> {",
+        ),
+        (
+            "transfer_observations_detached_not_sync",
+            "impl<T: Sync> RequireSync<T> {",
+            "impl<T> RequireSync<T> {",
+        ),
+        (
+            "transfer_observation_guard_not_clone",
+            "impl<T: Clone> RequireClone<T> {",
+            "impl<T> RequireClone<T> {",
+        ),
+        (
+            "transfer_observation_guard_not_copy",
+            "impl<T: Copy> RequireCopy<T> {",
+            "impl<T> RequireCopy<T> {",
+        ),
+        (
+            "transfer_observation_guard_not_send",
+            "impl<T: Send> RequireSend<T> {",
+            "impl<T> RequireSend<T> {",
+        ),
+        (
+            "transfer_observation_guard_not_sync",
+            "impl<T: Sync> RequireSync<T> {",
+            "impl<T> RequireSync<T> {",
+        ),
     ];
     for (name, before, after) in bound_mutations {
         assert_eq!(bounds.matches(before).count(), 1, "one bound for {name}");
@@ -387,6 +584,61 @@ fn pentry_e2_loan_transfer_compile_contracts() {
         fs::write(&path, mutated_body).expect("safe copy of the constructor call");
         cases.pass(path);
     }
+
+    // The observation receipt and the placeholder guard live outside
+    // heap_transfer.rs. Their needles are checked against the file that
+    // defines the type.
+    let detachment = fs::read_to_string(
+        manifest.join("../neovm-value/src/tagged/collection_reads/store_state/detachment.rs"),
+    )
+    .expect("observation detachment");
+    let reads = fs::read_to_string(manifest.join("../neovm-value/src/tagged/collection_reads.rs"))
+        .expect("collection reads");
+    let observation_constructors = [
+        (
+            "transfer_observations_detached_has_no_constructor",
+            "pub struct SourceObservationsDetached {",
+            detachment.as_str(),
+            "struct SourceObservationsDetached;\n\
+             impl SourceObservationsDetached {\n    \
+             pub fn new() -> Self { Self }\n}\n\
+             fn main() { let _receipt = SourceObservationsDetached::new(); }\n",
+        ),
+        (
+            "transfer_observation_guard_has_no_constructor",
+            "pub struct ObservationPlaceholderGuard {",
+            reads.as_str(),
+            "struct ObservationPlaceholderGuard;\n\
+             impl ObservationPlaceholderGuard {\n    \
+             pub fn new() -> Self { Self }\n}\n\
+             fn main() { let _guard = ObservationPlaceholderGuard::new(); }\n",
+        ),
+        (
+            "transfer_observation_guard_install_requires_unsafe",
+            "pub unsafe fn install()",
+            reads.as_str(),
+            "struct ObservationPlaceholderGuard;\n\
+             impl ObservationPlaceholderGuard {\n    \
+             pub fn install() -> Self { Self }\n}\n\
+             fn main() { let _guard = ObservationPlaceholderGuard::install(); }\n",
+        ),
+    ];
+    for (name, before, source, mutated_body) in observation_constructors {
+        assert!(
+            source.contains(before),
+            "constructor source for {name} must contain {before}"
+        );
+        assert!(!before.contains('\n'));
+        assert!(
+            !mutated_body.contains("unsafe"),
+            "mutation must drop unsafe for {name}"
+        );
+        let directory = output.join(name);
+        fs::create_dir_all(&directory).expect("isolated constructor mutation directory");
+        let path = directory.join(format!("{name}_mutation.rs"));
+        fs::write(&path, mutated_body).expect("safe copy of the constructor call");
+        cases.pass(path);
+    }
 }
 
 #[test]
@@ -420,6 +672,17 @@ fn pentry_e2_receipt_compile_contracts() {
         "receipt_prepared_cache_not_sync.rs",
         "receipt_integer_width_is_private.rs",
         "receipt_in_flight_is_private.rs",
+        "receipt_source_shell_in_flight_detach_requires_unsafe.rs",
+        "receipt_source_shell_in_flight_has_no_constructor.rs",
+        "receipt_source_shell_in_flight_not_clone.rs",
+        "receipt_source_shell_in_flight_not_copy.rs",
+        "receipt_source_shell_in_flight_not_send.rs",
+        "receipt_source_shell_in_flight_not_sync.rs",
+        "receipt_source_shell_in_flight_refusal_has_no_constructor.rs",
+        "receipt_source_shell_in_flight_refusal_not_clone.rs",
+        "receipt_source_shell_in_flight_refusal_not_copy.rs",
+        "receipt_source_shell_in_flight_refusal_not_send.rs",
+        "receipt_source_shell_in_flight_refusal_not_sync.rs",
     ];
     for name in fail {
         cases.compile_fail(manifest.join("tests/pentry_e2_loan_ui").join(name));
@@ -453,6 +716,13 @@ fn pentry_e2_receipt_compile_contracts() {
             .count(),
         1,
         "quit detach stays one unsafe constructor"
+    );
+    assert_eq!(
+        in_flight
+            .matches("pub unsafe fn detach_source_shell_in_flight(")
+            .count(),
+        1,
+        "source-shell in-flight detach stays one unsafe constructor"
     );
     let output = manifest.join("../../tmp/pentry-r2/e2-receipt-mutations");
     let bound_mutations = [
@@ -513,6 +783,46 @@ fn pentry_e2_receipt_compile_contracts() {
         ),
         (
             "receipt_prepared_cache_not_sync",
+            "impl<T: Sync> RequireSync<T> {",
+            "impl<T> RequireSync<T> {",
+        ),
+        (
+            "receipt_source_shell_in_flight_not_clone",
+            "impl<T: Clone> RequireClone<T> {",
+            "impl<T> RequireClone<T> {",
+        ),
+        (
+            "receipt_source_shell_in_flight_not_copy",
+            "impl<T: Copy> RequireCopy<T> {",
+            "impl<T> RequireCopy<T> {",
+        ),
+        (
+            "receipt_source_shell_in_flight_not_send",
+            "impl<T: Send> RequireSend<T> {",
+            "impl<T> RequireSend<T> {",
+        ),
+        (
+            "receipt_source_shell_in_flight_not_sync",
+            "impl<T: Sync> RequireSync<T> {",
+            "impl<T> RequireSync<T> {",
+        ),
+        (
+            "receipt_source_shell_in_flight_refusal_not_clone",
+            "impl<T: Clone> RequireClone<T> {",
+            "impl<T> RequireClone<T> {",
+        ),
+        (
+            "receipt_source_shell_in_flight_refusal_not_copy",
+            "impl<T: Copy> RequireCopy<T> {",
+            "impl<T> RequireCopy<T> {",
+        ),
+        (
+            "receipt_source_shell_in_flight_refusal_not_send",
+            "impl<T: Send> RequireSend<T> {",
+            "impl<T> RequireSend<T> {",
+        ),
+        (
+            "receipt_source_shell_in_flight_refusal_not_sync",
             "impl<T: Sync> RequireSync<T> {",
             "impl<T> RequireSync<T> {",
         ),
@@ -626,6 +936,38 @@ fn pentry_e2_receipt_compile_contracts() {
             "pub(crate) struct DetachedInFlightRegistry {",
             "pub struct DetachedInFlightRegistry;\n\
              fn main() { let _receipt = DetachedInFlightRegistry; }\n",
+        ),
+        (
+            &in_flight,
+            "receipt_source_shell_in_flight_detach_requires_unsafe",
+            "pub unsafe fn detach_source_shell_in_flight(",
+            "struct InFlightRegistryHandle;\n\
+             struct SourceShellInFlightReceipt;\n\
+             fn detach_source_shell_in_flight(\
+             _expected: &InFlightRegistryHandle,\
+             ) -> SourceShellInFlightReceipt {\n    \
+             SourceShellInFlightReceipt\n}\n\
+             fn main() {\n    \
+             let handle = InFlightRegistryHandle;\n    \
+             let _receipt = detach_source_shell_in_flight(&handle);\n}\n",
+        ),
+        (
+            &in_flight,
+            "receipt_source_shell_in_flight_has_no_constructor",
+            "pub struct SourceShellInFlightReceipt {",
+            "struct SourceShellInFlightReceipt;\n\
+             impl SourceShellInFlightReceipt {\n    \
+             pub fn new() -> Self { Self }\n}\n\
+             fn main() { let _receipt = SourceShellInFlightReceipt::new(); }\n",
+        ),
+        (
+            &in_flight,
+            "receipt_source_shell_in_flight_refusal_has_no_constructor",
+            "pub struct SourceShellInFlightRefusal {",
+            "struct SourceShellInFlightRefusal;\n\
+             impl SourceShellInFlightRefusal {\n    \
+             pub fn new() -> Self { Self }\n}\n\
+             fn main() { let _refusal = SourceShellInFlightRefusal::new(); }\n",
         ),
     ];
     for (product, name, before, mutated_body) in constructor_mutations {

@@ -77,12 +77,47 @@ impl std::fmt::Display for Errno {
 /// Rust's `io::Error::to_string()` appends "(os error N)", which GNU never
 /// emits, so go through libc directly.
 ///
-/// One implementation for every platform, as in GNU: `libc::strerror` is the
-/// CRT's on Windows just as GNU's `WINDOWSNT` build calls the same function.
+/// On Unix we use XSI `libc::strerror_r` (which `libc` binds to
+/// `__xpg_strerror_r` on glibc) so concurrent threads never race on a shared
+/// static buffer.  On Windows, UCRT's `strerror` uses per-thread storage.
+#[cfg(unix)]
 pub fn emacs_strerror(errno: libc::c_int) -> String {
-    // SAFETY: `strerror` returns a pointer to a static (per-thread) C string,
-    // valid until the next `strerror` call on this thread; the `CStr` borrow
-    // and the `to_string_lossy().into_owned()` copy both end before that.
+    let mut buf_len = 256usize;
+    loop {
+        let mut buf = vec![0u8; buf_len];
+        // SAFETY: `buf` is valid writable memory of `buf_len` bytes, and
+        // `libc::strerror_r` has the XSI `-> c_int` signature on all Unix
+        // targets supported by `libc`.
+        let rc = unsafe { libc::strerror_r(errno, buf.as_mut_ptr().cast(), buf_len) };
+        if rc == 0 {
+            let cstr = CStr::from_bytes_until_nul(&buf).unwrap_or(c"");
+            return cstr.to_string_lossy().into_owned();
+        }
+        let err = if rc == -1 {
+            std::io::Error::last_os_error().raw_os_error().unwrap_or(0)
+        } else {
+            rc
+        };
+        if err == libc::ERANGE && buf_len < 65536 {
+            buf_len *= 2;
+            continue;
+        }
+        // On glibc and macOS, `strerror_r` still writes `"Unknown error N"` /
+        // `"Unknown error: N"` into `buf` when returning `EINVAL`.
+        if let Ok(cstr) = CStr::from_bytes_until_nul(&buf)
+            && !cstr.to_bytes().is_empty()
+        {
+            return cstr.to_string_lossy().into_owned();
+        }
+        return format!("Unknown error {errno}");
+    }
+}
+
+#[cfg(not(unix))]
+pub fn emacs_strerror(errno: libc::c_int) -> String {
+    // SAFETY: Windows UCRT `strerror` returns a pointer to a thread-local C
+    // string valid until the next `strerror` call on this thread; the `CStr`
+    // borrow and the owned copy both finish before returning.
     unsafe {
         let ptr = libc::strerror(errno);
         if ptr.is_null() {

@@ -21,10 +21,10 @@ fn function(ops: Vec<Op>, constants: Vec<Value>) -> ByteCodeFunction {
         optional: Vec::new(),
         rest: None,
     });
-    f.lexical = true;
-    f.ops = ops;
-    f.constants = constants.into();
-    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(4);
+    f.set_lexical(true);
+    f.set_ops(ops);
+    f.set_constants(constants.into());
+    f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(4));
     f.seal_hand_assembled_ops();
     f
 }
@@ -52,17 +52,19 @@ fn readback(
     cause: DeoptCause,
 ) -> ReoptVerdict {
     leaf.obs.note_deopt_at(pc as u32);
-    note_deopt(
-        std::ptr::null(),
-        f,
-        leaf,
-        LeafOrigin::Entry,
-        DeoptEvent::Precise {
-            pc,
-            stack: &[],
-            cause: Some(cause),
-        },
-    )
+    unsafe {
+        note_deopt(
+            std::ptr::null(),
+            f,
+            leaf,
+            LeafOrigin::Entry,
+            DeoptEvent::Precise {
+                pc,
+                stack: &[],
+                cause: Some(cause),
+            },
+        )
+    }
 }
 
 #[test]
@@ -123,19 +125,21 @@ fn semantic_chain_deopts_do_not_accelerate_inline_guard_retirement() {
     let leaf = cached_leaf(&physical);
     let readback = |cause| {
         leaf.obs.note_deopt_at(0);
-        note_deopt_chain(
-            std::ptr::null(),
-            &physical,
-            &inner,
-            leaf,
-            LeafOrigin::Entry,
-            0,
-            DeoptEvent::Precise {
-                pc: 2,
-                stack: &[],
-                cause: Some(cause),
-            },
-        )
+        unsafe {
+            note_deopt_chain(
+                std::ptr::null(),
+                &physical,
+                &inner,
+                leaf,
+                LeafOrigin::Entry,
+                0,
+                DeoptEvent::Precise {
+                    pc: 2,
+                    stack: &[],
+                    cause: Some(cause),
+                },
+            )
+        }
     };
     for cause in SEMANTIC {
         for _ in 0..3 {
@@ -178,20 +182,22 @@ fn semantic_deopts_do_not_skip_first_osr_feedback_reopen() {
     assert!(!f.jit_runtime().wants_numeric_feedback());
     leaf.obs.note_deopt_at(1);
     assert_eq!(
-        note_deopt(
-            std::ptr::null(),
-            &f,
-            leaf,
-            LeafOrigin::Osr {
-                header_pc: 1,
-                snapshot: &[],
-            },
-            DeoptEvent::Precise {
-                pc: 1,
-                stack: &[],
-                cause: Some(DeoptCause::OsrEntry),
-            }
-        ),
+        unsafe {
+            note_deopt(
+                std::ptr::null(),
+                &f,
+                leaf,
+                LeafOrigin::Osr {
+                    header_pc: 1,
+                    snapshot: &[],
+                },
+                DeoptEvent::Precise {
+                    pc: 1,
+                    stack: &[],
+                    cause: Some(DeoptCause::OsrEntry),
+                },
+            )
+        },
         ReoptVerdict::Kept,
         "the first eligible refusal is below the policy limit"
     );

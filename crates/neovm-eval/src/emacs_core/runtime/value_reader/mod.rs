@@ -28,10 +28,12 @@ use smallvec::SmallVec;
 use std::cell::Cell;
 
 use super::builtins::collections::lookup_hash_table_test_alias;
+use super::builtins::{bytecode_closure_length, bytecode_closure_slot};
+use neovm_value::error::{Flow, LispCondition, signal};
 use neovm_value::value::{
-    HashTableLiteralKey, HashTableTest, HashTableWeakness, Value, build_hash_table_literal_value,
-    eq_value, get_string_text_properties_for_value, list_to_vec,
-    set_string_text_properties_for_value,
+    HashTableLiteralKey, HashTableTest, HashTableWeakness, StringTextPropertyRun, Value, ValueKind,
+    VecLikeType, build_hash_table_literal_value, eq_value, get_string_text_properties_for_value,
+    list_to_vec, set_string_text_properties_for_value,
 };
 
 const UNICODE_CHARACTER_NAME_LENGTH_BOUND: usize = 200;
@@ -557,6 +559,12 @@ pub(crate) enum ReadErrorKind {
     EndOfFile,
     Error,
     Signal,
+    /// The reader's own `check_obarray` rejection. Unlike an arbitrary
+    /// `(wrong-type-argument obarrayp V)` that a callable source could raise,
+    /// this one carries GNU's reset of `Vobarray` to the initial obarray
+    /// before the signal (lread.c:4662-4665), applied by the boundary that
+    /// owns the Context.
+    ObarrayRejected,
 }
 
 impl std::fmt::Display for ReadError {
@@ -655,6 +663,52 @@ impl<'a> From<Option<&'a ReadSymbolShorthands>> for ReadSymbolShorthandBinding<'
         match value {
             None => Self::Unbound,
             Some(snapshot) => Self::Snapshot(snapshot),
+        }
+    }
+}
+
+/// The obarray symbol tokens intern into while reading, matching GNU's
+/// `Vobarray` consultation at each symbol atom (`lread.c:4217`). A plain
+/// string/buffer/file read cannot run Lisp, so its binding is a snapshot; a
+/// callable source may rebind `obarray` between characters and is consulted
+/// live at every symbol token.
+#[derive(Clone, Copy, Debug)]
+enum ReaderObarrayBinding<'a> {
+    /// The global obarray: reading keeps canonical symbol identity.
+    Global,
+    /// A Lisp obarray value: each token interns into it at read time.
+    Custom(Value),
+    LiveCallable(&'a callable::CallableSource<'a>),
+}
+
+impl<'a> ReaderObarrayBinding<'a> {
+    fn resolve_variables(vars: crate::emacs_core::eval::VariableView<'a>) -> Self {
+        // Neomacs names the global obarray `neovm--obarray-object`; without
+        // that name a custom value cannot be distinguished from the global
+        // one, so keep the canonical path rather than interning into the
+        // wrong structure during bootstrap.
+        let Some(proxy) = vars.value_by_name("neovm--obarray-object") else {
+            return Self::Global;
+        };
+        match vars.value_by_name("obarray") {
+            None => Self::Global,
+            Some(value) if value.bits() == proxy.bits() => Self::Global,
+            Some(value) => Self::Custom(value),
+        }
+    }
+
+    /// The custom obarray that needs token-time interning, or None when the
+    /// current obarray is the global one. GNU's `Vobarray` is never void, so
+    /// an unbound visible value falls back to the global path.
+    fn custom_obarray(self) -> Option<Value> {
+        match self {
+            Self::Global => None,
+            Self::Custom(value) => Some(value),
+            Self::LiveCallable(source) => {
+                let proxy = source.variable("neovm--obarray-object")?;
+                let value = source.variable("obarray")?;
+                (value.bits() != proxy.bits()).then_some(value)
+            }
         }
     }
 }
@@ -1044,6 +1098,9 @@ struct Reader<'a> {
     /// Active `read-symbol-shorthands`, if any.  GNU's reader rewrites symbol
     /// names before interning when this dynamic variable is non-nil.
     shorthands: ReaderShorthands<'a>,
+    /// The obarray symbol tokens intern into (GNU `Vobarray`), consulted per
+    /// symbol atom. A byte-backed source snapshots it; a callable is live.
+    obarray: ReaderObarrayBinding<'a>,
     /// One-entry decode cache: `(pos, code, next_pos)` for the most recently
     /// decoded position.  neomacs's reader peeks the current char
     /// (`source_code_at`) then advances (`next_pos`) as separate steps, which
@@ -1146,72 +1203,293 @@ impl ReaderToken {
 
 type ReaderTokenBytes = SmallVec<[u8; 64]>;
 
-fn substitute_read_placeholder(object: Value, placeholder: Value) {
-    let mut seen = Vec::new();
-    let result = substitute_read_placeholder_recurse(object, placeholder, object, &mut seen);
-    debug_assert!(eq_value(&result, &object));
-}
-
-fn substitute_read_placeholder_recurse(
+/// GNU `Flread__substitute_object_in_subtree` and `substitute_object_recurse`
+/// (lread.c): put OBJECT everywhere PLACEHOLDER occurs inside it, in place.
+/// The reader's `#N=` and the Lisp subr, which edebug's `#N=` reader calls,
+/// share this walk as they share GNU's.
+///
+/// GNU remembers only the nodes its COMPLETED argument names, which is enough
+/// to stop at the cycles `#N=` builds. This walk remembers every container it
+/// enters. That visits each node once and leaves the same objects behind on
+/// every input on which GNU's walk terminates, so COMPLETED is not needed.
+pub(crate) fn substitute_object_in_subtree(
     object: Value,
     placeholder: Value,
-    subtree: Value,
-    seen: &mut Vec<Value>,
-) -> Value {
-    if eq_value(&subtree, &placeholder) {
-        return object;
-    }
+    mode: SymbolMode,
+) -> Result<(), Flow> {
+    let mut walk = SubstituteWalk {
+        object,
+        placeholder,
+        mode,
+        seen: rustc_hash::FxHashSet::default(),
+    };
+    let result = walk.substitute(object)?;
+    debug_assert!(eq_value(&result, &object));
+    Ok(())
+}
 
-    if subtree.is_bare_symbol() || subtree.is_number() {
-        return subtree;
-    }
+/// GNU `struct subst`.
+struct SubstituteWalk {
+    object: Value,
+    placeholder: Value,
+    mode: SymbolMode,
+    /// The containers entered so far, by identity (`eq` compares bits).
+    seen: rustc_hash::FxHashSet<usize>,
+}
 
-    if seen.iter().any(|seen| eq_value(seen, &subtree)) {
-        return subtree;
-    }
-    seen.push(subtree);
-
-    if subtree.is_string() {
-        if let Some(runs) = get_string_text_properties_for_value(subtree) {
-            let remapped = runs
-                .into_iter()
-                .map(|mut run| {
-                    run.plist =
-                        substitute_read_placeholder_recurse(object, placeholder, run.plist, seen);
-                    run
-                })
-                .collect();
-            set_string_text_properties_for_value(subtree, remapped);
+impl SubstituteWalk {
+    /// What a slot holding SUBTREE holds after the walk: OBJECT for the
+    /// placeholder, otherwise SUBTREE with its contents substituted.
+    ///
+    /// A list's cdr chain is walked in a loop, so only nesting depth (cars,
+    /// slots) costs native stack, not list length.
+    fn substitute(&mut self, subtree: Value) -> Result<Value, Flow> {
+        if eq_value(&subtree, &self.placeholder) {
+            return Ok(self.object);
         }
-        return subtree;
-    }
-
-    if subtree.is_cons() {
-        let car =
-            substitute_read_placeholder_recurse(object, placeholder, subtree.cons_car(), seen);
-        let cdr =
-            substitute_read_placeholder_recurse(object, placeholder, subtree.cons_cdr(), seen);
-        subtree.set_car(car);
-        subtree.set_cdr(cdr);
-    } else if subtree.is_vector() {
-        if let Some(items) = subtree.as_vector_data() {
-            let mut items = items.clone();
-            for item in &mut items {
-                *item = substitute_read_placeholder_recurse(object, placeholder, *item, seen);
+        // GNU stops at symbols (`SYMBOLP`, which takes a symbol with position
+        // only under `symbols-with-pos-enabled`), numbers, and strings
+        // without text properties.
+        if subtree.is_symbol(self.mode) || subtree.is_number() {
+            return Ok(subtree);
+        }
+        let text_properties = if subtree.is_string() {
+            match get_string_text_properties_for_value(subtree) {
+                Some(runs) => Some(runs),
+                None => return Ok(subtree),
             }
-            let _ = subtree.replace_vector_data(items);
+        } else {
+            None
+        };
+        if !self.seen.insert(subtree.bits()) {
+            return Ok(subtree);
         }
-    } else if subtree.is_record()
-        && let Some(items) = subtree.as_record_data()
-    {
-        let mut items = items.clone();
-        for item in &mut items {
-            *item = substitute_read_placeholder_recurse(object, placeholder, *item, seen);
+
+        match subtree.kind() {
+            ValueKind::Cons => {
+                // GNU stores the car before it walks the cdr, so an error in
+                // the cdr leaves the car substituted.
+                let mut cell = subtree;
+                loop {
+                    let car = cell.cons_car();
+                    let new_car = self.substitute(car)?;
+                    if !eq_value(&new_car, &car) {
+                        cell.set_car(new_car);
+                    }
+                    let cdr = cell.cons_cdr();
+                    // A cons cdr that is neither the placeholder nor already
+                    // seen is one `substitute` would enter and return
+                    // unchanged: walk it in this loop instead.
+                    if cdr.is_cons()
+                        && !eq_value(&cdr, &self.placeholder)
+                        && self.seen.insert(cdr.bits())
+                    {
+                        cell = cdr;
+                        continue;
+                    }
+                    let new_cdr = self.substitute(cdr)?;
+                    if !eq_value(&new_cdr, &cdr) {
+                        cell.set_cdr(new_cdr);
+                    }
+                    break;
+                }
+            }
+            ValueKind::String => {
+                if let Some(runs) = text_properties {
+                    self.substitute_in_text_properties(subtree, runs)?;
+                }
+            }
+            ValueKind::Veclike(kind) => self.substitute_in_vectorlike(subtree, kind)?,
+            ValueKind::Subr(_) => return Err(not_a_sequence(subtree)),
+            // Symbols and numbers returned above; nothing else holds objects.
+            ValueKind::Nil
+            | ValueKind::T
+            | ValueKind::Fixnum(_)
+            | ValueKind::Symbol(_)
+            | ValueKind::Float
+            | ValueKind::Unbound
+            | ValueKind::Unknown => {}
         }
-        let _ = subtree.replace_record_data(items);
+        Ok(subtree)
     }
 
-    subtree
+    /// GNU's `Lisp_Vectorlike` arm, slot by slot in order.
+    fn substitute_in_vectorlike(&mut self, subtree: Value, kind: VecLikeType) -> Result<(), Flow> {
+        match kind {
+            VecLikeType::Vector | VecLikeType::Record => {
+                let mut index = 0;
+                while let Some(item) = subtree
+                    .as_vector_data()
+                    .or_else(|| subtree.as_record_data())
+                    .and_then(|items| items.get(index))
+                {
+                    let new_item = self.substitute(item)?;
+                    if !eq_value(&new_item, &item) {
+                        let _ = match kind {
+                            VecLikeType::Vector => subtree.set_vector_slot(index, new_item),
+                            _ => subtree.set_record_slot(index, new_item),
+                        };
+                    }
+                    index += 1;
+                }
+            }
+            VecLikeType::Lambda | VecLikeType::Macro => {
+                let mut index = 0;
+                while let Some(slot) = subtree.closure_slots().and_then(|slots| slots.get(index)) {
+                    let new_slot = self.substitute(slot)?;
+                    if !eq_value(&new_slot, &slot)
+                        && let Some(slots) = subtree.closure_slots()
+                    {
+                        let mut slots = slots.to_vec();
+                        slots[index] = new_slot;
+                        let _ = subtree.replace_closure_slots(slots);
+                    }
+                    index += 1;
+                }
+            }
+            VecLikeType::ByteCode => {
+                // GNU's CLOSURE branch takes `PVSIZE` and `ASET`s every
+                // closure slot back (src/lread.c substitute_object_recurse).
+                // A store cannot touch the immutable `ByteCodeFunction`, so
+                // the first changed slot installs the function's GNU slot
+                // vector (a snapshot of the observable slots) and every
+                // later store goes through the ordinary vector store path.
+                // Slots 1/2 keep their identity objects (`aref` hands out the
+                // code string and constants vector), and inner containers
+                // such as the constants vector are still walked in place.
+                let count = bytecode_closure_length(&subtree).unwrap_or(0);
+                let count = usize::try_from(count).unwrap_or(0);
+                let saved_roots = crate::emacs_core::eval::save_scratch_gc_roots();
+                // Restore the scratch roots even when a nested walk signals
+                // (for example a `sequencep` from a marker inside a slot).
+                let outcome = (|| -> Result<(), Flow> {
+                    let mut slot_vector: Option<Value> = None;
+                    for index in 0..count {
+                        let Some(slot) = bytecode_closure_slot(&subtree, index) else {
+                            break;
+                        };
+                        let new_slot = self.substitute(slot)?;
+                        if eq_value(&new_slot, &slot) {
+                            continue;
+                        }
+                        let vector = match slot_vector {
+                            Some(vector) => vector,
+                            None => {
+                                let snapshot: Vec<Value> = (0..count)
+                                    .map(|index| {
+                                        bytecode_closure_slot(&subtree, index).unwrap_or(Value::NIL)
+                                    })
+                                    .collect();
+                                let vector = Value::vector(snapshot);
+                                // The walk is single-threaded and this object
+                                // was just entered, so the installer cannot
+                                // lose a race; a `false` here would mean
+                                // another writer already installed the
+                                // vector, which has no second writer in the
+                                // reader.
+                                let _ = neovm_value::tagged::mutate::install_bytecode_slots_vector(
+                                    subtree, vector,
+                                );
+                                crate::emacs_core::eval::push_scratch_gc_root(vector);
+                                slot_vector = Some(vector);
+                                vector
+                            }
+                        };
+                        crate::emacs_core::eval::push_scratch_gc_root(new_slot);
+                        vector.set_vector_slot(index, new_slot);
+                    }
+                    Ok(())
+                })();
+                crate::emacs_core::eval::restore_scratch_gc_roots(saved_roots);
+                outcome?;
+            }
+            // A bool-vector holds bits, and GNU's hash-table pseudovector
+            // size counts no Lisp slot, so GNU walks neither. A bignum is a
+            // number and returned above.
+            VecLikeType::BoolVector | VecLikeType::HashTable | VecLikeType::Bignum => {}
+            VecLikeType::CharTable | VecLikeType::SubCharTable => {
+                // GNU lread.c uses raw AREF/ASET, including the independent
+                // ASCII slot. Sub-char tables start at raw slot 2, skipping
+                // their first content entry on the pinned 64-bit profile.
+                let mut index = if kind == VecLikeType::SubCharTable {
+                    2
+                } else {
+                    0
+                };
+                while let Some(slot) = neovm_value::chartab::char_table_lisp_slot(subtree, index) {
+                    let replacement = self.substitute(slot)?;
+                    if neovm_value::chartab::set_char_table_lisp_slot(subtree, index, replacement) {
+                        neovm_text::emacs_core::substrate_hooks::note_char_table_layout_mutation();
+                    }
+                    index += 1;
+                }
+            }
+            // GNU: an unknown pseudovector may hold non-Lisp fields, so it
+            // signals `sequencep`, as the `Flength` it once called did.
+            VecLikeType::Marker
+            | VecLikeType::Overlay
+            | VecLikeType::Finalizer
+            | VecLikeType::SymbolWithPos
+            | VecLikeType::UserPtr
+            | VecLikeType::Process
+            | VecLikeType::Frame
+            | VecLikeType::Window
+            | VecLikeType::Buffer
+            | VecLikeType::Obarray
+            | VecLikeType::Terminal
+            | VecLikeType::WindowConfiguration
+            | VecLikeType::Subr
+            | VecLikeType::Xwidget
+            | VecLikeType::XwidgetView
+            | VecLikeType::Thread
+            | VecLikeType::Mutex
+            | VecLikeType::CondVar
+            | VecLikeType::ModuleFunction
+            | VecLikeType::TsNode
+            | VecLikeType::Sqlite
+            | VecLikeType::Font
+            | VecLikeType::Timer
+            | VecLikeType::SurfaceHandle
+            | VecLikeType::VideoHandle => return Err(not_a_sequence(subtree)),
+        }
+        Ok(())
+    }
+
+    /// GNU walks each interval's plist and stores it back. Here each run's
+    /// plist is built afresh, so a property name or value that is the
+    /// placeholder itself is replaced only by writing the runs back; values
+    /// that contain it are substituted in place.
+    fn substitute_in_text_properties(
+        &mut self,
+        string: Value,
+        mut runs: Vec<StringTextPropertyRun>,
+    ) -> Result<(), Flow> {
+        let rewrite = runs.iter().any(|run| {
+            list_to_vec(&run.plist)
+                .is_some_and(|items| items.iter().any(|item| eq_value(item, &self.placeholder)))
+        });
+        let mut result = Ok(());
+        for run in &mut runs {
+            match self.substitute(run.plist) {
+                Ok(plist) => run.plist = plist,
+                Err(flow) => {
+                    result = Err(flow);
+                    break;
+                }
+            }
+        }
+        if rewrite {
+            set_string_text_properties_for_value(string, runs);
+        }
+        result
+    }
+}
+
+fn not_a_sequence(subtree: Value) -> Flow {
+    signal(
+        LispCondition::WrongTypeArgument,
+        vec![Value::symbol("sequencep"), subtree],
+    )
 }
 
 impl<'a> Reader<'a> {
@@ -1246,6 +1524,7 @@ impl<'a> Reader<'a> {
             symbol_mode: SymbolMode::Bare,
             readchar_offset_origin: ReadcharOffsetOrigin::RelativeToSourceByte(0),
             environment: ReaderEnvironment::Variables(vars),
+            obarray: ReaderObarrayBinding::resolve_variables(vars),
             lazy_doc_policy: Cell::new(LazyDocPolicy::Unknown),
             file_origin: None,
             saved_doc_blocks: None,
@@ -1280,6 +1559,7 @@ impl<'a> Reader<'a> {
             symbol_mode: SymbolMode::Bare,
             readchar_offset_origin: ReadcharOffsetOrigin::RelativeToSourceByte(0),
             environment: ReaderEnvironment::Variables(vars),
+            obarray: ReaderObarrayBinding::resolve_variables(vars),
             lazy_doc_policy: Cell::new(LazyDocPolicy::Unknown),
             file_origin: Some(origin),
             saved_doc_blocks: Some(saved_doc_blocks),
@@ -1334,6 +1614,7 @@ impl<'a> Reader<'a> {
             symbol_mode: SymbolMode::Bare,
             readchar_offset_origin: ReadcharOffsetOrigin::RelativeToSourceByte(start),
             environment: ReaderEnvironment::Variables(vars),
+            obarray: ReaderObarrayBinding::resolve_variables(vars),
             lazy_doc_policy: Cell::new(LazyDocPolicy::Unknown),
             file_origin: None,
             saved_doc_blocks: None,
@@ -1379,6 +1660,7 @@ impl<'a> Reader<'a> {
                 }
             },
             environment: ReaderEnvironment::Variables(vars),
+            obarray: ReaderObarrayBinding::resolve_variables(vars),
             lazy_doc_policy: Cell::new(LazyDocPolicy::Unknown),
             file_origin: None,
             saved_doc_blocks: None,
@@ -1563,9 +1845,14 @@ impl<'a> Reader<'a> {
             SymbolPositionMode::Positioned => {
                 if value.is_bare_symbol() && !value.is_nil() {
                     let pos_val = Value::fixnum(self.symbol_position(form_start) as i64);
-                    Ok(neovm_value::tagged::gc::with_tagged_heap(|heap| {
-                        heap.alloc_symbol_with_pos(value, pos_val)
-                    }))
+                    // SAFETY: pure arena allocation (`alloc_symbol_with_pos`);
+                    // never collects, sweeps, re-enters `with_tagged_heap`,
+                    // mints capability tokens, or mutates existing payloads.
+                    Ok(unsafe {
+                        neovm_value::tagged::gc::with_tagged_heap(|heap| {
+                            heap.alloc_symbol_with_pos(value, pos_val)
+                        })
+                    })
                 } else {
                     Ok(value)
                 }
@@ -2311,6 +2598,11 @@ impl<'a> Reader<'a> {
                     return self.intern_empty_symbol();
                 }
                 let name = token.to_lisp_string();
+                // `#_` only skips shorthand rewriting; GNU still interns the
+                // token through the current obarray (lread.c:3999-4005).
+                if let Some(obarray) = self.obarray.custom_obarray() {
+                    return self.intern_name_in_custom_obarray(obarray, name);
+                }
                 Ok(Value::from_sym_id(neovm_value::intern::intern_reader_name(
                     name,
                 )))
@@ -2572,7 +2864,8 @@ impl<'a> Reader<'a> {
                             placeholder.set_cdr(expr.cons_cdr());
                             placeholder
                         } else {
-                            substitute_read_placeholder(expr, placeholder);
+                            substitute_object_in_subtree(expr, placeholder, self.symbol_mode())
+                                .map_err(|flow| self.flow_signal_error(flow, "sequencep"))?;
                             self.read_labels.insert(label, expr);
                             expr
                         };
@@ -3028,6 +3321,8 @@ impl<'a> Reader<'a> {
         // expansion (lread.c:4222-4255); core symbols can be uninterned
         // (lread.c:4887-4922). Only bypass spelling lookup when this binding
         // cannot rewrite and the original core identity remains canonical.
+        // A custom obarray must create its own nil/t, as GNU does, so the
+        // obarray is consulted only for these two spellings.
         if matches!(self.shorthands, ReaderShorthands::Unbound)
             && let Some(id) = match token.bytes.as_slice() {
                 b"nil" => Some(neovm_value::intern::NIL_SYM_ID),
@@ -3035,6 +3330,7 @@ impl<'a> Reader<'a> {
                 _ => None,
             }
             && neovm_value::intern::is_canonical_id(id)
+            && self.obarray.custom_obarray().is_none()
         {
             return Ok(Value::from_sym_id(id));
         }
@@ -3085,6 +3381,15 @@ impl<'a> Reader<'a> {
             return self.intern_empty_symbol();
         }
 
+        // A custom obarray interns every symbol token as it reads (GNU
+        // `Vobarray`, lread.c:4217-4249): the spelling's symbol there is
+        // returned, or a fresh one is created and prepended to its bucket.
+        // Number tokens returned above, so this is only the symbol path.
+        if let Some(obarray) = self.obarray.custom_obarray() {
+            let name = self.to_lisp_string_for_token(&token)?;
+            return self.intern_name_in_custom_obarray(obarray, name);
+        }
+
         // A computed ASCII spelling has encoding-independent canonical hit
         // identity. Retain this token's exact source encoding only if the
         // shared hit path must create its first canonical symbol.
@@ -3108,9 +3413,25 @@ impl<'a> Reader<'a> {
         Ok(Value::from_sym_id(id))
     }
 
+    /// Intern NAME into the custom OBARRAY exactly as GNU's reader does
+    /// (`lread.c:4217-4249`), validating it first so a non-obarray value
+    /// signals `(wrong-type-argument obarrayp V)` at the token, as GNU does.
+    fn intern_name_in_custom_obarray(
+        &self,
+        obarray_value: Value,
+        name: neovm_value::heap_types::LispString,
+    ) -> Result<Value, ReadError> {
+        let effective = crate::emacs_core::builtins::symbols::check_obarray_reader(obarray_value)
+            .map_err(|value| self.obarray_rejected_error(value))?;
+        crate::emacs_core::builtins::symbols::obarray_intern_reader_name(effective, name)
+            .map_err(|value| self.obarray_rejected_error(value))
+    }
+
     /// Empty #_ and ## use Fintern, including empty-prefix shorthands
     /// (GNU lread.c:3851, 3999). Rewritten builtin names are multibyte
     /// (lread.c:4793-4796), independently of the reader source encoding.
+    /// Fintern uses the current `Vobarray`, so a custom obarray interns the
+    /// empty spelling there instead of returning the global empty symbol.
     #[cold]
     #[doc(hidden)]
     pub fn intern_empty_symbol(&self) -> Result<Value, ReadError> {
@@ -3119,6 +3440,10 @@ impl<'a> Reader<'a> {
             .shorthands
             .rewrite(&empty)
             .map_err(|error| self.ordinary_error(&error.to_string()))?;
+        if let Some(obarray) = self.obarray.custom_obarray() {
+            let name = rewritten.unwrap_or(empty);
+            return self.intern_name_in_custom_obarray(obarray, name);
+        }
         Ok(match rewritten {
             Some(name) => Value::from_sym_id(neovm_value::intern::intern_reader_name(name)),
             None => Value::from_sym_id(intern("")),
@@ -3491,6 +3816,19 @@ impl<'a> Reader<'a> {
     }
 
     #[doc(hidden)]
+    /// The reader's own invalid-obarray error: GNU's `check_obarray_slow`
+    /// payload, marked so only this rejection carries the `Vobarray` reset.
+    #[doc(hidden)]
+    pub fn obarray_rejected_error(&self, value: Value) -> ReadError {
+        let mut error = self.signal_error(
+            neovm_value::error::LispCondition::WrongTypeArgument,
+            vec![Value::symbol("obarrayp"), value],
+            "Invalid obarray",
+        );
+        error.kind = ReadErrorKind::ObarrayRejected;
+        error
+    }
+
     pub fn signal_error(
         &self,
         symbol: impl neovm_value::error::IntoConditionSym,

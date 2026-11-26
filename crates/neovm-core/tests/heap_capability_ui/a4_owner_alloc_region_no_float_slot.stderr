@@ -1,0 +1,5 @@
+error[E0599]: no method named `take_float_slot` found for struct `OwnerAllocRegion` in the current scope
+ --> tests/heap_capability_ui/a4_owner_alloc_region_no_float_slot.rs:7:20
+  |
+7 |     let _ = region.take_float_slot();
+  |                    ^^^^^^^^^^^^^^^ method not found in `OwnerAllocRegion`

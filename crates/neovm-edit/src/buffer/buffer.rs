@@ -40,7 +40,7 @@ pub use super::text::{BufferTextBackendKind, ImplementedBufferTextBackendKind};
 // `SharedUndoState` (for the two always-present slots that don't
 // match either pattern). Mirrors GNU's struct buffer layout in
 // buffer.h:330-462.
-use super::overlay::OverlayList;
+use super::overlay::{OverlayList, OverlaySnapshot};
 use super::shared::{SavedPointBeforeCommand, SharedUndoState};
 use super::text_props::{ObjectIntervalRun, TextPropertyTable};
 use super::undo;
@@ -1313,8 +1313,11 @@ pub const DISPLAY_AFFECTING_GLOBAL_VARS: &[&str] = &[
     "display-fill-column-indicator-character",
     "show-trailing-whitespace",
     "indicate-empty-lines",
-    "overlay-arrow-position",
-    "overlay-arrow-string",
+    // Not `overlay-arrow-string` or `overlay-arrow-position`. GNU's bare
+    // redisplay keeps the old glyphs (`xdisp.c:17115-17127`, `:20557-20563`,
+    // `:20920-20931`, `:18135`): a marker move and a `setq` of a new marker
+    // both stay on "=>ta" until `force-window-update`. `body_redisplay` still
+    // escalates a forced update.
     "ctl-arrow",
     "glyphless-char-display",
     "nobreak-char-display",
@@ -1849,19 +1852,30 @@ pub struct MarkerRef(Option<NonNull<neovm_value::tagged::header::MarkerObj>>);
 impl MarkerRef {
     pub const NONE: Self = Self(None);
 
+    /// # Safety
+    /// `ptr` is null, or it points at a live `MarkerObj` that the caller
+    /// roots for as long as this `MarkerRef` is read. Reading `anchor`,
+    /// `insertion_type`, `buffer_id`, `is_chained`, or `as_value` after the
+    /// last root is dropped is a use-after-free.
     #[inline]
-    pub fn new(ptr: *mut neovm_value::tagged::header::MarkerObj) -> Self {
+    pub unsafe fn new(ptr: *mut neovm_value::tagged::header::MarkerObj) -> Self {
         Self(NonNull::new(ptr))
     }
 
+    /// # Safety
+    /// When `value` is a marker, the caller roots that marker for as long as
+    /// the returned `MarkerRef` is read. A non-marker returns `None` and
+    /// dereferences nothing.
     #[inline]
-    pub fn from_value(value: &Value) -> Option<Self> {
+    pub unsafe fn from_value(value: &Value) -> Option<Self> {
         if !value.is_marker() {
             return None;
         }
-        value
-            .as_veclike_ptr()
-            .map(|ptr| Self::new(ptr as *mut neovm_value::tagged::header::MarkerObj))
+        value.as_veclike_ptr().map(|ptr| {
+            // SAFETY: `value` is a marker, so the veclike pointer is its
+            // `MarkerObj`. The caller upholds the rooting contract above.
+            unsafe { Self::new(ptr as *mut neovm_value::tagged::header::MarkerObj) }
+        })
     }
 
     #[inline]
@@ -2010,7 +2024,41 @@ pub struct BufferTextSnapshot {
     text: BufferText,
 }
 
+/// Weak identity of the immutable property table held by a text snapshot.
+/// This handle cannot read properties or keep the table alive on its own.
+#[derive(Clone, Debug)]
+pub struct TextPropertyRoots {
+    table: Weak<TextPropertyTable>,
+}
+static_assertions::assert_not_impl_any!(TextPropertyRoots: Send, Sync);
+
+impl TextPropertyRoots {
+    /// Opaque native identity, used only to avoid re-enumerating a held table
+    /// when several pending snapshots share its same immutable Rc.
+    #[doc(hidden)]
+    pub fn identity(&self) -> usize {
+        self.table.as_ptr() as usize
+    }
+
+    /// Visit the held immutable table's operands at a collection boundary.
+    /// The evaluator skips identities covered by the live-buffer root walk.
+    #[doc(hidden)]
+    pub fn trace_roots(&self, visit: &mut dyn FnMut(Value)) {
+        if let Some(table) = self.table.upgrade() {
+            table.for_each_root(visit);
+        }
+    }
+}
+
 impl BufferTextSnapshot {
+    /// O(1) weak registration input for the evaluator's native GC lease.
+    /// The snapshot itself remains the strong owner of its interval table.
+    pub fn text_property_roots(&self) -> TextPropertyRoots {
+        TextPropertyRoots {
+            table: self.text.weak_text_property_table(),
+        }
+    }
+
     pub fn is_multibyte(&self) -> bool {
         self.text.is_multibyte()
     }
@@ -2080,6 +2128,13 @@ impl BufferTextSnapshot {
     /// Constant-time absence proof over the complete, unprojected property table.
     pub fn text_props_is_empty(&self) -> bool {
         self.text.text_props_is_empty()
+    }
+
+    /// GNU `buffer_intervals (buffer) != NULL`: the interval tree exists,
+    /// even if every property has been removed. `current_column` dispatches
+    /// on this state (`src/indent.c:365-370`).
+    pub fn text_props_tree_present(&self) -> bool {
+        self.text.text_props_tree_present()
     }
 
     pub fn text_prop_at_emacs_byte_pos(&self, pos: EmacsBytePos, name: Value) -> Option<Value> {
@@ -2357,6 +2412,8 @@ pub struct BufferDumpParts {
     /// GNU `struct buffer.auto_save_failure_time`. Seconds since the epoch,
     /// or 0 when unset. The pdump image copies it (`pdumper.c:2855`).
     pub auto_save_failure_time: i64,
+    /// GNU `struct buffer.long_line_optimizations_p` (`pdumper.c:2866`).
+    pub long_line_optimizations_p: bool,
     pub last_window_start: LispCharPos1,
     pub last_selected_window: Option<WindowId>,
     pub inhibit_buffer_hooks: bool,
@@ -2516,6 +2573,16 @@ pub struct Buffer {
     /// buffer supersedes the point saved for every other one -- see
     /// [`SavedPointBeforeCommand`].
     pub(crate) saved_point_before_command: SavedPointBeforeCommand,
+    /// GNU `struct buffer.long_line_optimizations_p` (`buffer.h`): redisplay
+    /// found a line longer than `long-line-threshold`. Redisplay shortcuts and
+    /// the fontification narrowing are in effect while this is set. Only
+    /// [`Self::refresh_long_line_optimizations`] writes it.
+    pub(crate) long_line_optimizations_p: bool,
+    /// `chars_modified_tick` when the long-line scan last ran. Prevents
+    /// redundant rescans within the same redisplay pass before
+    /// `reset_unchanged_region` snaps `unchanged_modified_tick` to `modified_tick`
+    /// (`src/xdisp.c:18303,20646-20663`).
+    pub(crate) long_line_scan_tick: i64,
 }
 #[cfg(any(test, feature = "test-support"))]
 /// A single text buffer with point, mark, narrowing, markers, and local vars.
@@ -2653,6 +2720,16 @@ pub struct Buffer {
     /// buffer supersedes the point saved for every other one -- see
     /// [`SavedPointBeforeCommand`].
     pub(crate) saved_point_before_command: SavedPointBeforeCommand,
+    /// GNU `struct buffer.long_line_optimizations_p` (`buffer.h`): redisplay
+    /// found a line longer than `long-line-threshold`. Redisplay shortcuts and
+    /// the fontification narrowing are in effect while this is set. Only
+    /// [`Self::refresh_long_line_optimizations`] writes it.
+    pub(crate) long_line_optimizations_p: bool,
+    /// `chars_modified_tick` when the long-line scan last ran. Prevents
+    /// redundant rescans within the same redisplay pass before
+    /// `reset_unchanged_region` snaps `unchanged_modified_tick` to `modified_tick`
+    /// (`src/xdisp.c:18303,20646-20663`).
+    pub(crate) long_line_scan_tick: i64,
 }
 
 /// Stand-in digest for an overlay set that cannot be content-addressed. Mixed
@@ -2759,6 +2836,16 @@ impl Buffer {
         mem::swap(&mut self.state_markers, &mut other.state_markers);
         mem::swap(&mut self.undo_state, &mut other.undo_state);
         mem::swap(&mut self.overlays, &mut other.overlays);
+        // GNU `buffer-swap-text` swaps the long-line flag with the text
+        // (`src/buffer.c:2630`).
+        mem::swap(
+            &mut self.long_line_optimizations_p,
+            &mut other.long_line_optimizations_p,
+        );
+        mem::swap(
+            &mut self.long_line_scan_tick,
+            &mut other.long_line_scan_tick,
+        );
         self.swap_slot_with(other, BUFFER_SLOT_MARK_ACTIVE);
         self.swap_slot_with(other, BUFFER_SLOT_ENABLE_MULTIBYTE_CHARACTERS);
         self.swap_slot_with(other, BUFFER_SLOT_BIDI_DISPLAY_REORDERING);
@@ -2892,6 +2979,8 @@ impl Buffer {
         assert!(name.is_string(), "buffer name must be a Lisp string");
         Self {
             line_number_anchor: std::cell::Cell::new(None),
+            long_line_optimizations_p: false,
+            long_line_scan_tick: 0,
             id,
             name,
             last_name: Value::NIL,
@@ -2947,6 +3036,8 @@ impl Buffer {
             accessible_end: parts.accessible_end,
             autosave_modified_tick: parts.autosave_modified_tick,
             auto_save_failure_time: parts.auto_save_failure_time,
+            long_line_optimizations_p: parts.long_line_optimizations_p,
+            long_line_scan_tick: 0,
             last_window_start: parts.last_window_start,
             last_selected_window: parts.last_selected_window,
             inhibit_buffer_hooks: parts.inhibit_buffer_hooks,
@@ -3407,6 +3498,79 @@ impl Buffer {
     /// End of the accessible portion as a 1-based Lisp character position.
     pub fn point_max_lisp_char_pos(&self) -> LispCharPos1 {
         self.point_max_char_pos().to_lisp()
+    }
+
+    /// GNU `struct buffer.long_line_optimizations_p` (`buffer.h`): redisplay
+    /// found a line longer than `long-line-threshold`, so the long-line
+    /// display shortcuts and the `fontification-functions` narrowing are in
+    /// effect.
+    pub fn long_line_optimizations_p(&self) -> bool {
+        self.long_line_optimizations_p
+    }
+
+    /// GNU `BVAR (buffer, truncate_lines)`: lines too wide for the window are
+    /// truncated rather than continued. Read by the long-line redisplay
+    /// shortcuts (`src/indent.c:635`, `src/window.c:6157`).
+    pub fn truncate_lines_p(&self) -> bool {
+        !self.slots[BUFFER_SLOT_TRUNCATE_LINES.index()].is_nil()
+    }
+
+    /// Rescan the accessible region for a line longer than `threshold`
+    /// characters, following GNU `redisplay_window` (`src/xdisp.c:20646-20663`):
+    /// stop at the first line over the threshold, and rescan a buffer that has
+    /// no long line only when `CHARS_MODIFF - UNCHANGED_MODIFIED > 8` or the
+    /// restriction changed (`clip_changed`). As a Neomacs-only optimization,
+    /// also skips rescanning when `long_line_scan_tick == chars_tick` and
+    /// `!clip_changed`, avoiding redundant scans across multiple windows or
+    /// fontification checks within the same redisplay pass before
+    /// [`Self::reset_unchanged_region`] snaps `unchanged_modified_tick` to
+    /// `modified_tick`. Non-positive thresholds are treated as disabled,
+    /// matching GNU's "positive integer or nil" contract for
+    /// `long-line-threshold`.
+    ///
+    /// Returns whether a long line is present. Because every Emacs character
+    /// occupies at least one byte, a line whose byte length is at most
+    /// `threshold` cannot exceed `threshold` characters; only lines whose byte
+    /// span exceeds `threshold` convert endpoints to character positions.
+    #[doc(hidden)]
+    pub fn refresh_long_line_optimizations(&mut self, threshold: i64) -> bool {
+        if self.long_line_optimizations_p {
+            return true;
+        }
+        if threshold <= 0 {
+            return false;
+        }
+        let chars_tick = self.chars_modified_tick();
+        let unchanged = self.unchanged_modified_tick();
+        if !self.mode_line_clip_changed()
+            && (chars_tick.saturating_sub(unchanged) <= 8 || self.long_line_scan_tick == chars_tick)
+        {
+            return false;
+        }
+        self.long_line_scan_tick = chars_tick;
+        #[cfg(test)]
+        LONG_LINE_FULL_SCANS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let limit = self.point_max_emacs_byte_pos();
+        let mut byte = self.point_min_emacs_byte_pos();
+        let mut found = false;
+        while byte < limit {
+            let (past, crossed) = self.nth_newline_emacs_byte(byte, limit, 1);
+            let next = if crossed == 0 { limit } else { past };
+            if (next.get() - byte.get()) as i64 > threshold {
+                let start_chars = self.emacs_byte_pos_to_lisp_char_pos(byte).as_i64();
+                let next_chars = self.emacs_byte_pos_to_lisp_char_pos(next).as_i64();
+                if next_chars.saturating_sub(start_chars) > threshold {
+                    found = true;
+                    break;
+                }
+            }
+            if crossed == 0 {
+                break;
+            }
+            byte = next;
+        }
+        self.long_line_optimizations_p = found;
+        found
     }
 
     /// Total number of characters in the buffer text.
@@ -3922,27 +4086,97 @@ impl Buffer {
         self.text.put_syntax_safe_positions(index)
     }
 
-    /// See [`crate::buffer::buffer_text::BufferText::syntax_byte_run_memo_lookup`].
-    pub fn syntax_byte_run_memo_lookup(
+    fn syntax_run_memo_eligible(
+        &self,
+        resolver: &crate::emacs_core::textprop::CharPropertyResolver<'_>,
+    ) -> bool {
+        let category = Value::from_sym_id(crate::emacs_core::textprop::category_sym_id());
+        resolver.supports_presence_coalescing()
+            && self.text_props_property_name_presence(category)
+                == crate::buffer::text_props::PropertyNamePresence::DefinitelyAbsent
+    }
+
+    fn coalesced_syntax_run_end(
+        &self,
+        char_pos: CharPos0,
+        resolver: &crate::emacs_core::textprop::CharPropertyResolver<'_>,
+    ) -> CharPos0 {
+        const COALESCE_LOOKAHEAD_CHARS: usize = 4096;
+        let total = self.accessible_char_region().end();
+        let cap = CharPos0::new(
+            char_pos
+                .get()
+                .saturating_add(COALESCE_LOOKAHEAD_CHARS)
+                .min(total.get()),
+        );
+        let end = if resolver.supports_presence_coalescing() {
+            self.syntax_prop_free_run_end_at_char_pos(char_pos, cap)
+        } else {
+            let (_, _, end) = self.interval_plist_run_at_char_pos(char_pos);
+            end
+        };
+        if end <= char_pos {
+            CharPos0::new(char_pos.get() + 1)
+        } else {
+            end
+        }
+    }
+
+    /// Resolve the `syntax-table` property run covering `byte_pos`, consulting
+    /// and populating the per-buffer byte-run memo only when resolution cannot
+    /// depend on unobserved Lisp structures (`category` symbol plists,
+    /// `char-property-alias-alist`, or `default-text-properties`).
+    pub fn resolve_syntax_byte_run(
         &self,
         byte_pos: EmacsBytePos,
-    ) -> Option<(u64, u64, Option<Value>)> {
-        self.text.syntax_byte_run_memo_lookup(byte_pos)
+        resolver: &crate::emacs_core::textprop::CharPropertyResolver<'_>,
+    ) -> (usize, usize, Option<Value>) {
+        let memo_ok = self.syntax_run_memo_eligible(resolver);
+        if memo_ok
+            && let Some((start, end, value)) = self.text.syntax_byte_run_memo_lookup(byte_pos)
+        {
+            return (start as usize, end as usize, value);
+        }
+        let char_pos = self.emacs_byte_pos_to_char_pos_clamped(byte_pos);
+        let (plist, start, _end) = self.interval_plist_run_at_char_pos(char_pos);
+        let value = plist.and_then(|plist| resolver.resolve_interval_plist(plist));
+        let end = self.coalesced_syntax_run_end(char_pos, resolver);
+        let end_byte = self.char_pos_to_emacs_byte_pos_clamped(end).get();
+        let start_byte = if start < char_pos {
+            self.char_pos_to_emacs_byte_pos_clamped(start).get()
+        } else {
+            byte_pos.get()
+        };
+        if memo_ok {
+            self.text
+                .syntax_byte_run_memo_store(start_byte as u64, end_byte as u64, value);
+        }
+        (start_byte, end_byte, value)
     }
 
-    /// See [`crate::buffer::buffer_text::BufferText::syntax_byte_run_memo_store`].
-    pub fn syntax_byte_run_memo_store(&self, start: u64, end: u64, value: Option<Value>) {
-        self.text.syntax_byte_run_memo_store(start, end, value);
-    }
-
-    /// See [`crate::buffer::buffer_text::BufferText::syntax_char_run_memo_lookup`].
-    pub fn syntax_char_run_memo_lookup(&self, pos: usize) -> Option<(u64, u64, Option<Value>)> {
-        self.text.syntax_char_run_memo_lookup(pos)
-    }
-
-    /// See [`crate::buffer::buffer_text::BufferText::syntax_char_run_memo_store`].
-    pub fn syntax_char_run_memo_store(&self, start: u64, end: u64, value: Option<Value>) {
-        self.text.syntax_char_run_memo_store(start, end, value);
+    /// Resolve the `syntax-table` property run covering zero-based char `pos`,
+    /// consulting and populating the per-buffer char-run memo only when
+    /// resolution cannot depend on unobserved Lisp structures (`category`
+    /// symbol plists, `char-property-alias-alist`, or
+    /// `default-text-properties`).
+    pub fn resolve_syntax_char_run(
+        &self,
+        pos: usize,
+        resolver: &crate::emacs_core::textprop::CharPropertyResolver<'_>,
+    ) -> (usize, usize, Option<Value>) {
+        let memo_ok = self.syntax_run_memo_eligible(resolver);
+        if memo_ok && let Some((start, end, value)) = self.text.syntax_char_run_memo_lookup(pos) {
+            return (start as usize, end as usize, value);
+        }
+        let char_pos = CharPos0::new(pos);
+        let (plist, start, _end) = self.interval_plist_run_at_char_pos(char_pos);
+        let value = plist.and_then(|plist| resolver.resolve_interval_plist(plist));
+        let end = self.coalesced_syntax_run_end(char_pos, resolver);
+        if memo_ok {
+            self.text
+                .syntax_char_run_memo_store(start.get() as u64, end.get() as u64, value);
+        }
+        (start.get(), end.get(), value)
     }
 
     /// Whether any property in `keys` is non-nil inside the bounded character
@@ -4104,6 +4338,41 @@ impl Buffer {
             )
     }
 
+    /// GNU `compute_stop_pos`'s automatic-composition delimiter scan
+    /// (`src/xdisp.c:4380-4398`): the first space, TAB, newline, or formfeed
+    /// at or after FROM and before TO.  Those ASCII bytes never occur inside
+    /// a multibyte sequence, so a byte scan is exact.
+    pub fn first_composition_delimiter_emacs_byte(
+        &self,
+        from: EmacsBytePos,
+        to: EmacsBytePos,
+    ) -> Option<EmacsBytePos> {
+        let range = self.clamped_emacs_byte_range(EmacsByteRange::new(from, to));
+        if range.is_empty() {
+            return None;
+        }
+        let mut found = None;
+        // A range straddling the gap buffer's hole is delivered as two
+        // chunks: [start..gap_start) then [gap_end..end).  `index` is local to
+        // the current chunk, so track the logical offset across chunks instead
+        // of using range.start() for both.
+        let mut offset = range.start().get();
+        let _ = self
+            .text
+            .for_each_emacs_byte_range_chunk(range, |chunk| -> Result<(), ()> {
+                if let Some(index) = chunk
+                    .iter()
+                    .position(|byte| matches!(byte, b' ' | b'\t' | b'\n' | b'\x0c'))
+                {
+                    found = Some(EmacsBytePos::new(offset + index));
+                    return Err(());
+                }
+                offset += chunk.len();
+                Ok(())
+            });
+        found
+    }
+
     pub fn text_props_previous_change_before_emacs_byte_pos(
         &self,
         pos: EmacsBytePos,
@@ -4155,6 +4424,13 @@ impl Buffer {
 
     pub fn text_props_is_empty(&self) -> bool {
         self.text.text_props_is_empty()
+    }
+
+    /// GNU `buffer_intervals (buffer) != NULL`: the interval tree exists,
+    /// even if every property has been removed. `current_column` dispatches
+    /// on this state (`src/indent.c:365-370`).
+    pub fn text_props_tree_present(&self) -> bool {
+        self.text.text_props_tree_present()
     }
 
     pub fn text_props_snapshot(&self) -> TextPropertyTable {
@@ -4662,18 +4938,25 @@ impl Buffer {
         self.goto_emacs_byte_pos(self.point_emacs_byte_pos());
     }
 
+    /// # Safety
+    /// `marker_ptr` is a live `MarkerObj` from `TaggedHeap::alloc_marker`,
+    /// not currently on a chain, and not collected during this call.
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
-    pub(crate) fn register_marker_at_emacs_byte_pos(
+    pub(crate) unsafe fn register_marker_at_emacs_byte_pos(
         &mut self,
         marker_ptr: *mut neovm_value::tagged::header::MarkerObj,
         pos: EmacsBytePos,
         insertion_type: InsertionType,
     ) {
         let position = self.marker_anchor_for_emacs_byte_pos(pos);
-        self.register_marker_at_anchor(marker_ptr, position, insertion_type);
+        // SAFETY: same pointer and rooting contract as this function.
+        unsafe { self.register_marker_at_anchor(marker_ptr, position, insertion_type) };
     }
 
-    pub(crate) fn register_marker_at_anchor(
+    /// # Safety
+    /// `marker_ptr` is a live `MarkerObj` from `TaggedHeap::alloc_marker`,
+    /// not currently on a chain, and not collected during this call.
+    pub(crate) unsafe fn register_marker_at_anchor(
         &mut self,
         marker_ptr: *mut neovm_value::tagged::header::MarkerObj,
         position: TextPositionAnchor,
@@ -4741,6 +5024,15 @@ impl Buffer {
         self.text.mode_line_clipped(self.id)
     }
 
+    /// Acknowledge the restriction-change witness, as an accepted redisplay
+    /// does. A redisplay-internal restriction that is restored before the pass
+    /// ends was never a user restriction change, so it must not leave the
+    /// frame marked for a mode-line/whole-frame redisplay.
+    #[doc(hidden)]
+    pub fn acknowledge_mode_line_clip(&self) {
+        self.text.acknowledge_mode_line_clip(self.id);
+    }
+
     pub(in crate::buffer) fn set_accessible_region_anchors_unchecked(
         &mut self,
         start: TextPositionAnchor,
@@ -4763,7 +5055,9 @@ impl Buffer {
         &self,
         marker: MarkerRef,
     ) -> Option<(TextPositionAnchor, InsertionType)> {
-        self.text.marker_chain_anchor_of(marker.as_ptr())
+        // SAFETY: `MarkerRef`'s constructor contract is that the owner roots
+        // the marker for as long as this reference is read.
+        unsafe { self.text.marker_chain_anchor_of(marker.as_ptr()) }
     }
 
     #[cfg(any(test, feature = "test-support"))]
@@ -4819,8 +5113,11 @@ impl Buffer {
     }
 
     pub fn move_marker_ref_to_anchor(&self, marker: MarkerRef, position: TextPositionAnchor) {
-        self.text
-            .move_marker_ptr_to_anchor(marker.as_ptr(), position);
+        // SAFETY: `marker` was constructed under `MarkerRef`'s rooting contract.
+        unsafe {
+            self.text
+                .move_marker_ptr_to_anchor(marker.as_ptr(), position)
+        };
     }
 
     /// Move a marker that is ALREADY on this buffer's chain to `pos`, GNU
@@ -4829,13 +5126,17 @@ impl Buffer {
     /// The anchor is canonicalised exactly as `register_marker_at_anchor`
     /// does, so the in-place and the re-chaining path cannot disagree about
     /// where a given byte position lands.
-    pub(crate) fn move_marker_ptr_to_emacs_byte_pos(
+    /// # Safety
+    /// `marker_ptr` is a live `MarkerObj` already on this buffer's chain.
+    /// The caller roots it for the duration of the write.
+    pub(crate) unsafe fn move_marker_ptr_to_emacs_byte_pos(
         &self,
         marker_ptr: *mut neovm_value::tagged::header::MarkerObj,
         pos: EmacsBytePos,
     ) {
         let position = self.marker_anchor_for_emacs_byte_pos(pos);
-        self.text.move_marker_ptr_to_anchor(marker_ptr, position);
+        // SAFETY: the caller upholds this function's contract.
+        unsafe { self.text.move_marker_ptr_to_anchor(marker_ptr, position) };
     }
 
     // -- Mark ----------------------------------------------------------------
@@ -4866,7 +5167,8 @@ impl Buffer {
                 self.text
                     .register_marker(ptr, self.id, position, super::InsertionType::Before);
             }
-            self.mark_marker = MarkerRef::new(ptr);
+            // SAFETY: `ptr` is the marker just registered on this buffer.
+            self.mark_marker = unsafe { MarkerRef::new(ptr) };
             return;
         }
         let ptr = self.mark_marker.as_ptr();
@@ -4975,6 +5277,10 @@ impl Buffer {
         self.text.chars_modified_tick()
     }
 
+    pub fn unchanged_modified_tick(&self) -> i64 {
+        self.text.unchanged_modified_tick()
+    }
+
     /// The accumulated dirty char range `[beg, end)` since the last redisplay
     /// ack, or `None` if nothing changed (incremental-layout Phase 3, spec §6).
     /// Buffer-absolute char positions; the window side intersects with the
@@ -5066,6 +5372,16 @@ impl Buffer {
             .unwrap_or(NO_OVERLAY_CONTENT_DIGEST ^ tick as u64);
         self.overlay_digest_cache.set(Some((tick, digest)));
         digest
+    }
+
+    /// Immutable overlay view containing only the overlays a layout walk can
+    /// observe inside the character span `[first, end)`.
+    pub fn overlay_snapshot_in_char_span(&self, first: usize, end: usize) -> OverlaySnapshot {
+        let end = end.min(self.total_char_end_pos().get());
+        let start = self.char_pos_to_emacs_byte_pos_clamped_no_alloc(CharPos0::new(first));
+        let end_byte = self.char_pos_to_emacs_byte_pos_clamped_no_alloc(CharPos0::new(end));
+        self.overlays
+            .snapshot_in_range(EmacsByteRange::new(start, end_byte))
     }
 
     /// The buffer's automatic-composition spans, recomputed only when
@@ -6491,6 +6807,15 @@ impl Deref for BufferManager {
 }
 
 impl BufferStorage {
+    /// O(buffers) identities covered by the ordinary native root walk, with
+    /// no interval enumeration. Killed buffers never supply this proof.
+    #[doc(hidden)]
+    pub fn live_text_property_table_identities(&self) -> impl Iterator<Item = usize> + '_ {
+        self.buffers
+            .values()
+            .map(|buffer| buffer.text.text_property_table_identity())
+    }
+
     #[inline]
     fn observe_buffer_order(&mut self, change: BufferOrderChange) {
         if self.buffer_order_observer.is_some() {
@@ -7006,8 +7331,12 @@ impl BufferManager {
             other
                 .text
                 .retarget_markers_for_buffer_swap(current_id, other_id);
-            current.overlays.retarget_buffer(other_id, current_id);
-            other.overlays.retarget_buffer(current_id, other_id);
+            current
+                .overlays
+                .retarget_buffer_for_swap(other_id, current_id);
+            other
+                .overlays
+                .retarget_buffer_for_swap(current_id, other_id);
             current.text.record_char_modification(1);
             other.text.record_char_modification(1);
             current.increment_overlay_modified_tick();
@@ -7357,9 +7686,13 @@ impl BufferManager {
             .buffers
             .get_mut(&buffer_id)?
             .state_markers = Some(BufferStateMarkers {
-            pt_marker: MarkerRef::new(pt_marker),
-            begv_marker: MarkerRef::new(begv_marker),
-            zv_marker: MarkerRef::new(zv_marker),
+            // SAFETY: each pointer is the live node just returned. Nothing
+            // collects before these `MarkerRef::new` calls. `BufferStateMarkers`
+            // is the owner that traces them once they are stored. The marker
+            // chain is weak and is not a root.
+            pt_marker: unsafe { MarkerRef::new(pt_marker) },
+            begv_marker: unsafe { MarkerRef::new(begv_marker) },
+            zv_marker: unsafe { MarkerRef::new(zv_marker) },
         });
         Some(())
     }
@@ -7381,24 +7714,28 @@ impl BufferManager {
             buf.text.chain_unlink(markers.begv_marker.as_ptr());
             buf.text.chain_unlink(markers.zv_marker.as_ptr());
         }
-        self.register_marker_at_emacs_byte_pos(
-            markers.pt_marker.as_ptr(),
-            buffer_id,
-            pt,
-            InsertionType::Before,
-        )?;
-        self.register_marker_at_emacs_byte_pos(
-            markers.begv_marker.as_ptr(),
-            buffer_id,
-            begv,
-            InsertionType::Before,
-        )?;
-        self.register_marker_at_emacs_byte_pos(
-            markers.zv_marker.as_ptr(),
-            buffer_id,
-            zv,
-            InsertionType::After,
-        )?;
+        // SAFETY: these are the buffer's own state markers, unlinked just
+        // above, and the buffer roots them.
+        unsafe {
+            self.register_marker_at_emacs_byte_pos(
+                markers.pt_marker.as_ptr(),
+                buffer_id,
+                pt,
+                InsertionType::Before,
+            )?;
+            self.register_marker_at_emacs_byte_pos(
+                markers.begv_marker.as_ptr(),
+                buffer_id,
+                begv,
+                InsertionType::Before,
+            )?;
+            self.register_marker_at_emacs_byte_pos(
+                markers.zv_marker.as_ptr(),
+                buffer_id,
+                zv,
+                InsertionType::After,
+            )?;
+        }
         Some(())
     }
 
@@ -7734,7 +8071,11 @@ impl BufferManager {
             buf.marker_chain_anchor_lookup(marker)?
         };
         let marker_ptr = self.create_marker_at_anchor(buffer_id, position, insertion_type);
-        Some(MarkerRef::new(marker_ptr))
+        // SAFETY: the pointer is the live node just returned. Nothing collects
+        // before `MarkerRef::new` returns. The labeled-restriction table traces
+        // this `MarkerRef` once it is stored. The marker chain is weak and is
+        // not a root.
+        Some(unsafe { MarkerRef::new(marker_ptr) })
     }
 
     fn clone_labeled_restrictions(
@@ -7815,8 +8156,9 @@ impl BufferManager {
             .or_default()
             .push(LabeledRestriction {
                 label,
-                beg_marker: MarkerRef::new(beg_marker),
-                end_marker: MarkerRef::new(end_marker),
+                // SAFETY: both pointers were just created and chained above.
+                beg_marker: unsafe { MarkerRef::new(beg_marker) },
+                end_marker: unsafe { MarkerRef::new(end_marker) },
             });
         Some(())
     }
@@ -8557,8 +8899,9 @@ impl BufferManager {
             let end_marker =
                 self.create_marker_at_emacs_byte_pos(buffer_id, zv, InsertionType::After);
             SavedRestrictionKind::Markers {
-                beg_marker: MarkerRef::new(beg_marker),
-                end_marker: MarkerRef::new(end_marker),
+                // SAFETY: both pointers were just created and chained above.
+                beg_marker: unsafe { MarkerRef::new(beg_marker) },
+                end_marker: unsafe { MarkerRef::new(end_marker) },
             }
         };
         let labeled_restrictions = self.clone_labeled_restrictions(buffer_id).unwrap_or(None);
@@ -8805,7 +9148,14 @@ impl BufferManager {
         insertion_type: InsertionType,
     ) -> *mut neovm_value::tagged::header::MarkerObj {
         let marker_ptr = Self::allocate_marker_node(buffer_id, insertion_type);
-        let _ = self.register_marker_at_emacs_byte_pos(marker_ptr, buffer_id, pos, insertion_type);
+        // SAFETY: `allocate_marker_node` just built this MarkerObj. It is
+        // live, not on a chain, and not collected during registration. The
+        // marker chain is weak (`unchain_dead_markers` drops unmarked nodes),
+        // so it is not a root. The caller must root the node before a later
+        // collection.
+        let _ = unsafe {
+            self.register_marker_at_emacs_byte_pos(marker_ptr, buffer_id, pos, insertion_type)
+        };
         marker_ptr
     }
 
@@ -8816,7 +9166,12 @@ impl BufferManager {
         insertion_type: InsertionType,
     ) -> *mut neovm_value::tagged::header::MarkerObj {
         let marker_ptr = Self::allocate_marker_node(buffer_id, insertion_type);
-        let _ = self.register_marker_at_anchor(marker_ptr, buffer_id, position, insertion_type);
+        // SAFETY: the node was just allocated. It is live, not on a chain,
+        // and not collected during registration. The marker chain is weak
+        // and is not a root.
+        let _ = unsafe {
+            self.register_marker_at_anchor(marker_ptr, buffer_id, position, insertion_type)
+        };
         marker_ptr
     }
 
@@ -8841,8 +9196,11 @@ impl BufferManager {
             as *mut neovm_value::tagged::header::MarkerObj
     }
 
+    /// # Safety
+    /// `marker_ptr` is a live `MarkerObj` not currently on a chain, and not
+    /// collected during this call.
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
-    pub(crate) fn register_marker_at_emacs_byte_pos(
+    pub(crate) unsafe fn register_marker_at_emacs_byte_pos(
         &mut self,
         marker_ptr: *mut neovm_value::tagged::header::MarkerObj,
         buffer_id: BufferId,
@@ -8850,11 +9208,15 @@ impl BufferManager {
         insertion_type: InsertionType,
     ) -> Option<()> {
         let buf = self.storage_mut().buffers.get_mut(&buffer_id)?;
-        buf.register_marker_at_emacs_byte_pos(marker_ptr, pos, insertion_type);
+        // SAFETY: the caller upholds this function's contract.
+        unsafe { buf.register_marker_at_emacs_byte_pos(marker_ptr, pos, insertion_type) };
         Some(())
     }
 
-    pub(crate) fn register_marker_at_anchor(
+    /// # Safety
+    /// `marker_ptr` is a live `MarkerObj` not currently on a chain, and not
+    /// collected during this call.
+    pub(crate) unsafe fn register_marker_at_anchor(
         &mut self,
         marker_ptr: *mut neovm_value::tagged::header::MarkerObj,
         buffer_id: BufferId,
@@ -8862,7 +9224,8 @@ impl BufferManager {
         insertion_type: InsertionType,
     ) -> Option<()> {
         let buf = self.storage_mut().buffers.get_mut(&buffer_id)?;
-        buf.register_marker_at_anchor(marker_ptr, position, insertion_type);
+        // SAFETY: the caller upholds this function's contract.
+        unsafe { buf.register_marker_at_anchor(marker_ptr, position, insertion_type) };
         Some(())
     }
 
@@ -8897,15 +9260,22 @@ impl BufferManager {
     }
 
     /// See `Buffer::move_marker_ptr_to_emacs_byte_pos`.
-    pub(crate) fn move_marker_ptr_to_emacs_byte_pos(
+    ///
+    /// # Safety
+    /// `marker_ptr` is a live `MarkerObj` already on `buffer_id`'s chain.
+    /// The caller roots it.
+    pub(crate) unsafe fn move_marker_ptr_to_emacs_byte_pos(
         &self,
         buffer_id: BufferId,
         marker_ptr: *mut neovm_value::tagged::header::MarkerObj,
         pos: EmacsBytePos,
     ) -> Option<()> {
-        self.buffers
-            .get(&buffer_id)?
-            .move_marker_ptr_to_emacs_byte_pos(marker_ptr, pos);
+        // SAFETY: the caller upholds this function's contract.
+        unsafe {
+            self.buffers
+                .get(&buffer_id)?
+                .move_marker_ptr_to_emacs_byte_pos(marker_ptr, pos);
+        }
         Some(())
     }
 
@@ -9301,6 +9671,10 @@ impl ModeLineNumberAnchor {
         }
     }
 }
+
+#[cfg(test)]
+static LONG_LINE_FULL_SCANS: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
 
 #[cfg(test)]
 #[path = "buffer/tests/buffer_test.rs"]

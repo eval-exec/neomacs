@@ -354,6 +354,16 @@ impl SpecialInputServiceOutcome {
         }
     }
 
+    /// A host callback can mutate displayed Lisp state even when no native
+    /// window dimensions changed. Carry its display debt through the wait.
+    #[doc(hidden)]
+    pub fn after_callback(self) -> Self {
+        Self {
+            redisplay_needed: true,
+            ..self
+        }
+    }
+
     #[doc(hidden)]
     pub fn merge(self, other: Self) -> Self {
         Self {
@@ -480,11 +490,14 @@ impl KeyEvent {
     /// overwhelmingly common default so a blocked bytecode loop can be
     /// interrupted.
     pub(crate) fn is_default_quit_char(&self) -> bool {
-        if !matches!(self.key, Key::Char('g')) {
+        let m = self.modifiers;
+        if m.meta || m.alt || m.super_ || m.hyper || m.shift {
             return false;
         }
-        let m = self.modifiers;
-        m.ctrl && !m.meta && !m.super_ && !m.hyper
+        matches!(
+            (&self.key, m.ctrl),
+            (Key::Char('g'), true) | (Key::Char('\x07'), _)
+        )
     }
 
     /// Format as Emacs key description (e.g., "C-x", "M-f", "RET").
@@ -681,9 +694,16 @@ impl Default for KeySequence {
 #[derive(Clone, Copy, Debug)]
 struct ReadCharEvent {
     event: Value,
+    origin: ReadCharOrigin,
     allow_input_method: bool,
     command_key_recording: CommandKeyRecording,
     input_history: InputHistoryRecording,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum ReadCharOrigin {
+    Ordinary,
+    NativeNonKey,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -738,6 +758,16 @@ pub enum IdleTransitionPolicy {
     Preserve,
 }
 
+/// A frontend maintenance deadline resumes the same logical input read.
+/// Timer and input service still run, but a quiet resume owes no new Lisp
+/// preliminary redisplay (GNU keyboard.c:2693-2721).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[doc(hidden)]
+pub enum ReadCharRedisplayPhase {
+    Preliminary,
+    IdleMaintenance,
+}
+
 impl IdleTransitionPolicy {
     #[doc(hidden)]
     pub fn start_idle(self, eval: &mut crate::emacs_core::Context) {
@@ -772,6 +802,7 @@ impl ReadCharEvent {
     pub fn fresh_input_method_candidate(event: Value) -> Self {
         Self {
             event,
+            origin: ReadCharOrigin::Ordinary,
             allow_input_method: true,
             command_key_recording: CommandKeyRecording::Append,
             input_history: InputHistoryRecording::BeforeInputMethod,
@@ -782,6 +813,7 @@ impl ReadCharEvent {
     pub fn reread_input_method_candidate(event: Value) -> Self {
         Self {
             event,
+            origin: ReadCharOrigin::Ordinary,
             allow_input_method: true,
             command_key_recording: CommandKeyRecording::AppendIfEmpty,
             input_history: InputHistoryRecording::AfterInputMethod,
@@ -792,6 +824,7 @@ impl ReadCharEvent {
     pub fn post_input_method(event: Value) -> Self {
         Self {
             event,
+            origin: ReadCharOrigin::Ordinary,
             allow_input_method: false,
             command_key_recording: CommandKeyRecording::AppendIfEmpty,
             input_history: InputHistoryRecording::AlreadyRecorded,
@@ -910,6 +943,11 @@ pub enum CommandKeySequenceEnd {
     KeyboardMacroIteration,
     /// The evaluator has no command-input source left to read.
     Input,
+    /// GNU `read_key_sequence` returned -1: `read_char` showed a mouse popup
+    /// menu and the user rejected it (keyboard.c:11297-11302).  Not an
+    /// input-source boundary -- `command_loop_1` "just loops around and reads
+    /// another command" (keyboard.c:1436-1441).
+    MenuRejected,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -1294,6 +1332,20 @@ impl TtyInputTarget {
     }
 }
 
+/// Native non-key event identities supported by the frontend.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum NativeNonKeyKind {
+    PowerOff,
+}
+
+impl NativeNonKeyKind {
+    pub(crate) fn to_emacs_event_value(self) -> Value {
+        match self {
+            Self::PowerOff => Value::symbol(WellKnown::NsPowerOff.id()),
+        }
+    }
+}
+
 /// Input events from the display layer.
 #[derive(Clone, Debug)]
 pub enum InputEvent {
@@ -1334,6 +1386,15 @@ pub enum InputEvent {
     },
     /// Keyboard key press.
     KeyPress { key: KeyEvent, emacs_frame_id: u64 },
+    /// A native non-key event represented in Lisp by a function-key symbol.
+    ///
+    /// GNU NS_NONKEY_EVENT preserves `last-nonmenu-event` like native menu
+    /// selection (keyboard.c:4501-4505). Keep that provenance distinct from
+    /// a physical key that happens to produce the same symbol.
+    NativeNonKey {
+        kind: NativeNonKeyKind,
+        emacs_frame_id: u64,
+    },
     /// Mouse button press.
     MousePress {
         button: MouseButton,
@@ -1442,6 +1503,11 @@ pub enum InputEvent {
         scale_factor: f64,
         emacs_frame_id: u64,
     },
+    /// A terminal reply to one resize request, after its actual allocation.
+    ResizeRequestCompleted {
+        request_id: neovm_value::display_vocab::GuiResizeRequestId,
+        emacs_frame_id: u64,
+    },
     /// Window focus change.
     Focus { focused: bool, emacs_frame_id: u64 },
     /// Monitor configuration changed.
@@ -1451,6 +1517,10 @@ pub enum InputEvent {
     /// Native desktop preferences, distinct from installed-font catalog changes.
     SystemFontsChanged {
         fonts: crate::emacs_core::eval::protocol::SystemFonts,
+        display: neomacs_display_protocol::GraphicalDisplayIdentity,
+    },
+    /// A Wayland connection has published new font-opening/rendering options.
+    SystemFontRenderingChanged {
         display: neomacs_display_protocol::GraphicalDisplayIdentity,
     },
     /// Window-selection change.
@@ -1507,6 +1577,51 @@ pub enum InputEvent {
 }
 
 impl InputEvent {
+    fn read_char_origin(&self) -> ReadCharOrigin {
+        match self {
+            Self::NativeNonKey { .. } => ReadCharOrigin::NativeNonKey,
+            Self::Tracked { event, .. }
+            | Self::Observed { event, .. }
+            | Self::FrameSwitchDeferred(event) => event.read_char_origin(),
+            Self::RawTtyBytes { .. }
+            | Self::TtyByte { .. }
+            | Self::TtyCharacter { .. }
+            | Self::KeyPress { .. }
+            | Self::MousePress { .. }
+            | Self::MouseRelease { .. }
+            | Self::MouseMove { .. }
+            | Self::PresentedRegion { .. }
+            | Self::MouseScroll { .. }
+            | Self::PixelScroll { .. }
+            | Self::LayoutInvalidated
+            | Self::ImageStateChanged { .. }
+            | Self::MenuSelection { .. }
+            | Self::ToolBarClick { .. }
+            | Self::PresentedPointer { .. }
+            | Self::PresentationActivated { .. }
+            | Self::PresentationDiscarded { .. }
+            | Self::PresentationRetired { .. }
+            | Self::MenuBarClick { .. }
+            | Self::Resize { .. }
+            | Self::ResizeRequestCompleted { .. }
+            | Self::Focus { .. }
+            | Self::MonitorsChanged { .. }
+            | Self::SystemFontsChanged { .. }
+            | Self::SystemFontRenderingChanged { .. }
+            | Self::SelectWindow { .. }
+            | Self::WindowClose { .. }
+            | Self::TtyHangup { .. }
+            | Self::ThreadEvent { .. }
+            | Self::DisplayReset
+            | Self::WebView(_)
+            | Self::SurfaceCreateFailed { .. }
+            | Self::FrameShaderFailed { .. }
+            | Self::TerminalCreateFailed { .. }
+            | Self::TerminalExited { .. }
+            | Self::TerminalTitleChanged { .. } => ReadCharOrigin::Ordinary,
+        }
+    }
+
     pub fn raw_tty_bytes(bytes: Vec<u8>, emacs_frame_id: u64) -> Self {
         Self::RawTtyBytes {
             bytes,
@@ -1556,12 +1671,14 @@ impl InputEvent {
                 }
             }
             Self::KeyPress { emacs_frame_id, .. }
+            | Self::NativeNonKey { emacs_frame_id, .. }
             | Self::ToolBarClick { emacs_frame_id, .. }
             | Self::PresentedPointer { emacs_frame_id, .. }
             | Self::PresentationActivated { emacs_frame_id, .. }
             | Self::PresentationDiscarded { emacs_frame_id, .. }
             | Self::MenuBarClick { emacs_frame_id, .. }
             | Self::Resize { emacs_frame_id, .. }
+            | Self::ResizeRequestCompleted { emacs_frame_id, .. }
             | Self::Focus { emacs_frame_id, .. }
             | Self::WindowClose { emacs_frame_id, .. } => {
                 if *emacs_frame_id != 0 {
@@ -1596,6 +1713,7 @@ impl InputEvent {
             | Self::PresentationRetired { .. }
             | Self::MonitorsChanged { .. }
             | Self::SystemFontsChanged { .. }
+            | Self::SystemFontRenderingChanged { .. }
             | Self::SelectWindow { .. }
             | Self::TtyHangup { .. }
             | Self::ThreadEvent { .. }
@@ -1609,17 +1727,22 @@ impl InputEvent {
         }
     }
 
-    /// Whether this transport fact contains GNU Emacs's default quit input,
-    /// `C-g`, and should wake an evaluator that is busy outside `read_char`.
-    pub fn requests_default_quit(&self) -> bool {
+    /// How many default quit (`C-g` / `0x07`) presses this transport event
+    /// carries. A single `RawTtyBytes` chunk may coalesce multiple `0x07`
+    /// bytes; counting each preserves GNU's `force_quit_count` across rapid
+    /// TTY presses.
+    pub fn default_quit_count(&self) -> u32 {
         match self {
-            Self::RawTtyBytes { bytes, .. } => bytes.contains(&0x07),
-            Self::TtyByte { byte, .. } => *byte == 0x07,
-            Self::TtyCharacter { character, .. } => character.code() == 0x07,
-            Self::KeyPress { key, .. } => key.is_default_quit_char(),
-            Self::FrameSwitchDeferred(event) => event.requests_default_quit(),
+            Self::RawTtyBytes { bytes, .. } => {
+                u32::try_from(bytes.iter().filter(|&&b| b == 0x07).count()).unwrap_or(u32::MAX)
+            }
+            Self::TtyByte { byte, .. } => u32::from(*byte == 0x07),
+            Self::TtyCharacter { character, .. } => u32::from(character.code() == 0x07),
+            Self::KeyPress { key, .. } => u32::from(key.is_default_quit_char()),
+            Self::FrameSwitchDeferred(event) => event.default_quit_count(),
             Self::Tracked { .. }
             | Self::Observed { .. }
+            | Self::NativeNonKey { .. }
             | Self::MousePress { .. }
             | Self::MouseRelease { .. }
             | Self::MouseMove { .. }
@@ -1636,9 +1759,11 @@ impl InputEvent {
             | Self::PresentationRetired { .. }
             | Self::MenuBarClick { .. }
             | Self::Resize { .. }
+            | Self::ResizeRequestCompleted { .. }
             | Self::Focus { .. }
             | Self::MonitorsChanged { .. }
             | Self::SystemFontsChanged { .. }
+            | Self::SystemFontRenderingChanged { .. }
             | Self::SelectWindow { .. }
             | Self::WindowClose { .. }
             | Self::TtyHangup { .. }
@@ -1650,8 +1775,14 @@ impl InputEvent {
             | Self::FrameShaderFailed { .. }
             | Self::TerminalCreateFailed { .. }
             | Self::TerminalExited { .. }
-            | Self::TerminalTitleChanged { .. } => false,
+            | Self::TerminalTitleChanged { .. } => 0,
         }
+    }
+
+    /// Whether this transport fact contains GNU Emacs's default quit input,
+    /// `C-g`, and should wake an evaluator that is busy outside `read_char`.
+    pub fn requests_default_quit(&self) -> bool {
+        self.default_quit_count() != 0
     }
 }
 
@@ -1699,30 +1830,28 @@ fn apply_resize_input_event_in_keyboard_runtime(
         crate::emacs_core::eval::lifecycle::resize_frame_pixelwise_with_buffer_constraints(
             frame, buffers, width, height,
         );
-        frame.pending_gui_resize =
-            pending.and_then(|pending| pending.after_native_observation(width, height));
+        frame.pending_gui_resize = pending.and_then(|pending| pending.after_native_size_applied());
         (old_root_bounds != *frame.root_window().bounds()).then_some(fid)
     } else {
         None
     }
 }
 
-fn pending_live_gui_resize_target(
-    frames: &crate::emacs_core::eval::data::window_state::FrameManager,
+fn apply_gui_resize_request_completion(
+    frames: &mut crate::emacs_core::eval::data::window_state::FrameManager,
+    request_id: neovm_value::display_vocab::GuiResizeRequestId,
     emacs_frame_id: u64,
-) -> Option<neovm_value::display_vocab::FrameId> {
-    let target_fid = if emacs_frame_id == 0 {
+) {
+    let fid = if emacs_frame_id == 0 {
         frames.selected_frame().map(|frame| frame.id)
     } else {
         Some(neovm_value::display_vocab::FrameId(emacs_frame_id))
-    }?;
-    frames.get(target_fid).and_then(|frame| {
-        frame
+    };
+    if let Some(frame) = fid.and_then(|fid| frames.get_mut(fid)) {
+        frame.pending_gui_resize = frame
             .pending_gui_resize
-            .as_ref()
-            .filter(|pending| pending.is_queued())
-            .map(|_| target_fid)
-    })
+            .and_then(|pending| pending.after_request_completion(request_id));
+    }
 }
 
 fn sync_pending_resize_events_in_keyboard_runtime(
@@ -1738,6 +1867,15 @@ fn sync_pending_resize_events_in_keyboard_runtime(
 
     loop {
         match pending_input_events.front() {
+            Some(InputEvent::ResizeRequestCompleted {
+                request_id,
+                emacs_frame_id,
+            }) => {
+                let (request_id, emacs_frame_id) = (*request_id, *emacs_frame_id);
+                pending_input_events.pop_visible_front();
+                apply_gui_resize_request_completion(frames, request_id, emacs_frame_id);
+                applied_resize = true;
+            }
             Some(InputEvent::Focus { .. }) => {
                 if let Some(event) = pending_input_events.pop_visible_front() {
                     deferred.push_back(event);
@@ -1749,9 +1887,6 @@ fn sync_pending_resize_events_in_keyboard_runtime(
                 scale_factor,
                 emacs_frame_id,
             }) => {
-                if pending_live_gui_resize_target(frames, *emacs_frame_id).is_some() {
-                    break;
-                }
                 let (width, height, scale_factor, emacs_frame_id) =
                     (*width, *height, *scale_factor, *emacs_frame_id);
                 pending_input_events.pop_visible_front();
@@ -1788,23 +1923,19 @@ fn sync_pending_resize_events_in_keyboard_runtime(
 
     loop {
         match rx.try_recv() {
+            Ok(InputEvent::ResizeRequestCompleted {
+                request_id,
+                emacs_frame_id,
+            }) => {
+                apply_gui_resize_request_completion(frames, request_id, emacs_frame_id);
+                applied_resize = true;
+            }
             Ok(InputEvent::Resize {
                 width,
                 height,
                 scale_factor,
                 emacs_frame_id,
             }) => {
-                if pending_live_gui_resize_target(frames, emacs_frame_id).is_some() {
-                    // Preserve host resize acks until the geometry-query path
-                    // flushes the deferred live-GUI resize request.
-                    deferred.push_back(InputEvent::Resize {
-                        width,
-                        height,
-                        scale_factor,
-                        emacs_frame_id,
-                    });
-                    break;
-                }
                 if let Some(frame) = apply_resize_input_event_in_keyboard_runtime(
                     frames,
                     buffers,
@@ -2387,6 +2518,137 @@ impl crate::emacs_core::eval::Context {
             && self
                 .eval_symbol_by_id(EXECUTING_KBD_MACRO.id())
                 .is_ok_and(|value| value.is_nil())
+    }
+
+    /// GNU `read_char_x_menu_prompt` (src/keyboard.c:10094-10152): the
+    /// branch of `read_char` that reads the next event from a mouse popup
+    /// menu instead of the keyboard, when the pending lookup map is a
+    /// keymap and the previous event was a positional mouse event.
+    ///
+    /// The return mirrors the prompt's three GNU outcomes: `Ok(None)` is
+    /// `Qnil` -- no menu applies and the caller reads on normally;
+    /// `Ok(Some(t))` is the `Qt` return for a menu the user dismissed,
+    /// which `read_key_sequence` turns into its -1 "no sequence" return
+    /// (keyboard.c:11297-11302); `Ok(Some(event))` is the selected event,
+    /// which becomes the next event of the key sequence being read.
+    ///
+    /// The guards fold the call-site conditions (keyboard.c:2909-2919) and
+    /// the body's event checks (:10107-10110), which test the same
+    /// predicates.  The popup runs through the `x-popup-menu` subr, whose
+    /// modal session performs its own nested `read_key_sequence`; the
+    /// caller saves and restores the in-progress sequence around this
+    /// call.  `begin_key_sequence_read` clears `last-nonmenu-event` for
+    /// that nested read, so a prefix reached inside menu navigation cannot
+    /// re-enter this prompt.
+    fn read_char_x_menu_prompt(
+        &mut self,
+        map: Value,
+    ) -> Result<Option<Value>, neovm_value::error::Flow> {
+        // `menu-prompting` gates the whole prompt (keyboard.c:10102,
+        // DEFVAR_BOOL keyboard.c:13978).
+        if self
+            .visible_variable_value_or_nil("menu-prompting")
+            .is_nil()
+        {
+            return Ok(None);
+        }
+        if !self.keyboard_input_is_interactive() {
+            return Ok(None);
+        }
+        let prev_event = self
+            .eval_symbol_by_id(LAST_NONMENU_EVENT.id())
+            .unwrap_or(Value::NIL);
+        // EVENT_HAS_PARAMETERS (keyboard.c:2417 region): a cons whose cdr is
+        // a cons -- keyboard events and bare symbols do not qualify.
+        if !(prev_event.is_cons() && prev_event.cons_cdr().is_cons()) {
+            return Ok(None);
+        }
+        let mode = self.symbol_mode();
+        if let Some(head) = prev_event.cons_car().as_symbol_name(mode)
+            && matches!(head, "menu-bar" | "tab-bar" | "tool-bar")
+        {
+            return Ok(None);
+        }
+        // "Don't bring up a menu if we already have another event"
+        // (keyboard.c:2918-2919).
+        if self
+            .eval_symbol_by_id(WellKnown::UnreadCommandEvents.id())
+            .is_ok_and(|pending| pending.is_cons())
+        {
+            return Ok(None);
+        }
+        // keyboard.c:10115: `x_popup_menu_1 (prev_event, get_keymap (map, 0,
+        // 1))`.  `map` is already a resolved keymap here, and the subr owns
+        // the modal session.  The subr returns the selection as the event
+        // path -- `(choose)' for a top-level item, `(parent child)' from a
+        // submenu -- which is GNU's `value' list shape.
+        let value = self.funcall_general(Value::symbol("x-popup-menu"), vec![prev_event, map])?;
+        if value.is_nil() {
+            return Ok(Some(Value::T));
+        }
+        if !value.is_cons() {
+            return Ok(Some(value));
+        }
+        // GNU keyboard.c:10117-10141: return the first event of the path,
+        // record every remaining event, and unread them.  A symbol or
+        // fixnum tail event is wrapped as `(EVENT . disabled)` so the later
+        // read can tell it came from the menu; read_char unwraps it and
+        // keeps `last-nonmenu-event` on the mouse event that opened the
+        // menu (keyboard.c:2623-2632).  The wrapper is what lets a nested
+        // submenu selection complete as `[mouse parent child]` instead of
+        // treating `[mouse parent]` as a prefix and re-opening the menu.
+        let selection = value.cons_car();
+        let root_scope = self.save_specpdl_roots();
+        self.push_specpdl_root(value);
+        let mut tail = value.cons_cdr();
+        let mut unread_events = Vec::new();
+        while tail.is_cons() {
+            let event = tail.cons_car();
+            self.push_specpdl_root(event);
+            // record_menu_key (keyboard.c:3432-3447): record each tail
+            // event now; the reread below does not record it again.
+            self.record_input_event_history(event);
+            self.assign_by_id(LAST_INPUT_EVENT.id(), event);
+            unread_events.push(if event.is_symbol(mode) || event.is_fixnum() {
+                Value::cons(event, Value::symbol("disabled"))
+            } else {
+                event
+            });
+            tail = tail.cons_cdr();
+        }
+        if !unread_events.is_empty() {
+            let existing = self
+                .eval_symbol_by_id(WellKnown::UnreadCommandEvents.id())
+                .unwrap_or(Value::NIL);
+            self.push_specpdl_root(existing);
+            let mut unread = existing;
+            for event in unread_events.into_iter().rev() {
+                unread = Value::cons(event, unread);
+                self.push_specpdl_root(unread);
+            }
+            self.assign_by_id(WellKnown::UnreadCommandEvents.id(), unread);
+        }
+        self.restore_specpdl_roots(root_scope);
+        Ok(Some(selection))
+    }
+
+    /// GNU read_char's undo of the marker `read_char_x_menu_prompt` puts on
+    /// the tail of a selected menu event path (keyboard.c:2623-2632):
+    /// `(EVENT . disabled)` with a symbol or fixnum EVENT is a re-read menu
+    /// event.  The caller must treat the iteration as `used_mouse_menu`, so
+    /// the event does not overwrite `last-nonmenu-event`.
+    fn unwrap_disabled_menu_event(&self, value: Value, mode: SymbolMode) -> Option<Value> {
+        if !value.is_cons() {
+            return None;
+        }
+        let event = value.cons_car();
+        if !(event.is_symbol(mode) || event.is_fixnum()) {
+            return None;
+        }
+        value
+            .cons_cdr()
+            .is_symbol_named("disabled", mode)
+            .then_some(event)
     }
 
     /// Return true if EVENT matches `help-char` (default `Ctrl-h`
@@ -3175,6 +3437,17 @@ impl crate::emacs_core::eval::Context {
             }
 
             match event {
+                InputEvent::ResizeRequestCompleted {
+                    request_id,
+                    emacs_frame_id,
+                } => {
+                    apply_gui_resize_request_completion(
+                        &mut self.frames,
+                        request_id,
+                        emacs_frame_id,
+                    );
+                    outcome = outcome.merge(SpecialInputServiceOutcome::resize_with_redisplay());
+                }
                 InputEvent::Resize {
                     width,
                     height,
@@ -3191,7 +3464,8 @@ impl crate::emacs_core::eval::Context {
                     )?;
                 }
                 InputEvent::MonitorsChanged { monitors } => {
-                    outcome = outcome.merge(SpecialInputServiceOutcome::any_activity());
+                    outcome =
+                        outcome.merge(SpecialInputServiceOutcome::any_activity().after_callback());
                     crate::emacs_core::builtins::set_neomacs_monitor_info(monitors);
                     let hook_sym = crate::emacs_core::hook_runtime::hook_symbol_by_name(
                         self,
@@ -3210,6 +3484,12 @@ impl crate::emacs_core::eval::Context {
                             outcome.merge(SpecialInputServiceOutcome::resize_with_redisplay());
                     }
                 }
+                InputEvent::SystemFontRenderingChanged { display } => {
+                    if self.handle_system_font_rendering_input_event(display)? {
+                        outcome =
+                            outcome.merge(SpecialInputServiceOutcome::resize_with_redisplay());
+                    }
+                }
                 InputEvent::MouseMove {
                     x,
                     y,
@@ -3221,11 +3501,13 @@ impl crate::emacs_core::eval::Context {
                     idle_policy.resume_idle(self);
                 }
                 InputEvent::WindowClose { emacs_frame_id } => {
-                    outcome = outcome.merge(SpecialInputServiceOutcome::any_activity());
+                    outcome =
+                        outcome.merge(SpecialInputServiceOutcome::any_activity().after_callback());
                     self.handle_window_close_input_event(emacs_frame_id, idle_policy)?;
                 }
                 InputEvent::TtyHangup { terminal_id } => {
-                    outcome = outcome.merge(SpecialInputServiceOutcome::any_activity());
+                    outcome =
+                        outcome.merge(SpecialInputServiceOutcome::any_activity().after_callback());
                     self.delete_input_terminal_noelisp(terminal_id)?;
                 }
                 InputEvent::DisplayReset => {
@@ -3243,9 +3525,10 @@ impl crate::emacs_core::eval::Context {
                     }
                 }
                 InputEvent::SurfaceCreateFailed { id, error } => {
-                    // Not user activity and needs no redisplay — just run the
-                    // hook (mirrors MonitorsChanged running its hook here).
+                    // The hook may change displayed Lisp state, just like the
+                    // monitor callback, even though geometry did not change.
                     self.handle_surface_create_failed_input_event(id, &error)?;
+                    outcome = outcome.merge(SpecialInputServiceOutcome::default().after_callback());
                 }
                 InputEvent::FrameShaderFailed { error } => {
                     let effects =
@@ -3255,12 +3538,15 @@ impl crate::emacs_core::eval::Context {
                 }
                 InputEvent::TerminalCreateFailed { id, error } => {
                     self.handle_terminal_create_failed_input_event(id, &error)?;
+                    outcome = outcome.merge(SpecialInputServiceOutcome::default().after_callback());
                 }
                 InputEvent::TerminalExited { id } => {
                     self.handle_terminal_exited_input_event(id)?;
+                    outcome = outcome.merge(SpecialInputServiceOutcome::default().after_callback());
                 }
                 InputEvent::TerminalTitleChanged { id, title } => {
                     self.handle_terminal_title_changed_input_event(id, &title)?;
+                    outcome = outcome.merge(SpecialInputServiceOutcome::default().after_callback());
                 }
                 _ => {}
             }
@@ -3313,6 +3599,31 @@ impl crate::emacs_core::eval::Context {
             font_event |= handled && role == SystemFontRole::Monospace;
         }
         Ok(font_event)
+    }
+
+    /// GNU PGTK's xsettings.c `store_font_options_changed` emits
+    /// `(config-changed-event font-render DISPLAY)`. The existing Lisp handler
+    /// reconsiders frame fonts, including their policy-dependent metrics.
+    #[doc(hidden)]
+    pub fn handle_system_font_rendering_input_event(
+        &mut self,
+        display: neomacs_display_protocol::GraphicalDisplayIdentity,
+    ) -> Result<bool, neovm_value::error::Flow> {
+        if display.backend() != neomacs_display_protocol::GraphicalBackend::Wayland {
+            return Ok(false);
+        }
+        let event = Value::list(vec![
+            Value::symbol("config-changed-event"),
+            Value::symbol("font-render"),
+            Value::string(display.terminal_name()),
+        ]);
+        let result = self.execute_special_event_if_bound(event);
+        // A -Q/bootstrap context can have no Lisp binding yet. The already
+        // published connection options still require a fresh frame then, and
+        // also when a user handler exits nonlocally.
+        self.invalidate_redisplay();
+        result?;
+        Ok(true)
     }
 
     /// The display lost its GPU device and rebuilt from scratch
@@ -3485,7 +3796,15 @@ impl crate::emacs_core::eval::Context {
             ));
         }
 
-        let (keys, binding) = self.read_key_sequence_with_options(options)?;
+        // GNU command_loop_1 calls `read_key_sequence` directly, not
+        // `read_key_sequence_vs`, so a rejected menu is its typed -1 result
+        // rather than the quit the Lisp-facing reader converts it to.
+        let (keys, binding) = self.read_key_sequence_inner(options)?;
+        if self.command_loop.keyboard.kboard.last_read_menu_rejected {
+            return Ok(CommandKeySequenceRead::End(
+                CommandKeySequenceEnd::MenuRejected,
+            ));
+        }
         if keys.is_empty() && binding.executed().is_nil() {
             // The zero-length result is a macro-iteration boundary when the
             // macro is (still) exhausted -- GNU's `at_end_of_macro_p` check
@@ -3560,15 +3879,38 @@ impl crate::emacs_core::eval::Context {
         if !continue_echo {
             self.clear_read_command_keys();
         }
+        // GNU reports a rejected menu purely as read_key_sequence's -1
+        // return, so the state cannot outlive the read that produced it.
+        self.command_loop.keyboard.kboard.last_read_menu_rejected = false;
         self.assign_by_id(LAST_NONMENU_EVENT.id(), Value::NIL);
+    }
+
+    /// The Lisp-facing key-sequence read: GNU `read_key_sequence_vs`
+    /// (keyboard.c:11903-11934) wrapped around the internal reader.  A read
+    /// that ended with the user rejecting a mouse menu is GNU's -1 result,
+    /// which `read_key_sequence_vs` surfaces to Lisp as a quit
+    /// (keyboard.c:11929-11933: `Vquit_flag = Qt; maybe_quit ()`).  With
+    /// `inhibit-quit` bound -- the popup modal session reads that way --
+    /// `maybe_quit` declines to signal and the empty sequence returns, the
+    /// same dismissal its caller already maps from a rejected menu.
+    #[doc(hidden)]
+    pub fn read_key_sequence_with_options(
+        &mut self,
+        options: ReadKeySequenceOptions,
+    ) -> Result<(Vec<Value>, ReadCommandBinding), neovm_value::error::Flow> {
+        let read = self.read_key_sequence_inner(options)?;
+        if self.command_loop.keyboard.kboard.last_read_menu_rejected {
+            self.set_quit_flag_value(Value::T);
+            self.maybe_quit()?;
+        }
+        Ok(read)
     }
 
     /// Returns the key events and the command pair GNU's `done` label
     /// publishes: the keymaps' binding plus its one-level remapping.  The
     /// command loop executes the latter and records the former, so it must
     /// not run `command-remapping` again.
-    #[doc(hidden)]
-    pub fn read_key_sequence_with_options(
+    fn read_key_sequence_inner(
         &mut self,
         options: ReadKeySequenceOptions,
     ) -> Result<(Vec<Value>, ReadCommandBinding), neovm_value::error::Flow> {
@@ -3605,6 +3947,11 @@ impl crate::emacs_core::eval::Context {
         let mut delayed_selection_event: Option<Value> = None;
         let mut saved_current_buffer: Option<neovm_edit::buffer::BufferId> = None;
         let mut replay_current_sequence = false;
+        // GNU's per-iteration `used_mouse_menu` (keyboard.c:11087): the
+        // event that just entered the sequence came from a mouse popup menu
+        // (the `read_char_x_menu_prompt` port below), so `last-nonmenu-event`
+        // must not take it (keyboard.c:11668-11673).
+        let mut menu_event_in_sequence = false;
 
         loop {
             if replay_current_sequence {
@@ -3647,6 +3994,21 @@ impl crate::emacs_core::eval::Context {
                     }
                 };
                 let mut emacs_event = read_event.event;
+                // GNU's NS_NONKEY_EVENT sets used_mouse_menu regardless of
+                // the symbol it becomes (keyboard.c:4501-4505). The same
+                // symbol from physical input remains an ordinary key.
+                menu_event_in_sequence |= matches!(read_event.origin, ReadCharOrigin::NativeNonKey);
+                // GNU read_char undoes the marker read_char_x_menu_prompt
+                // puts on the tail of a selected menu event path
+                // (keyboard.c:2623-2632) and keeps `used_mouse_menu` set,
+                // so the re-read event leaves last-nonmenu-event on the
+                // mouse event that opened the menu.
+                if let Some(event) =
+                    self.unwrap_disabled_menu_event(emacs_event, self.symbol_mode())
+                {
+                    emacs_event = event;
+                    menu_event_in_sequence = true;
+                }
                 self.clear_quit_flag_after_read_key_sequence_event(&emacs_event);
                 if Self::has_switch_frame_event_kind(&emacs_event, self.symbol_mode())
                     && (!self
@@ -3866,15 +4228,20 @@ impl crate::emacs_core::eval::Context {
 
             // GNU `keyboard.c:11668-11673`: after keyremap / function-key-map
             // translation, `last_nonmenu_event = key` holds the TRANSLATED key
-            // (e.g. the GUI `<return>` becomes RET/13), not the raw event, unless
-            // a mouse popup menu was used to read it (neomacs does not synthesize
-            // those yet). `last-input-event` (recorded raw above) is unchanged;
-            // only `last-nonmenu-event` takes the translated event -- matching
-            // GNU, where reading an unbound `<return>` yields
+            // (e.g. the GUI `<return>` becomes RET/13), not the raw event,
+            // unless a native menu/non-key event was used to read it: GNU skips the
+            // assignment while `used_mouse_menu` is set, so the mouse event
+            // that opened the menu keeps holding the slot.  The flag is raised
+            // by native event provenance or `read_char_x_menu_prompt` and covers exactly
+            // the replay iteration that appends the menu selection.
+            // `last-input-event` (recorded raw above) is unchanged; only
+            // `last-nonmenu-event` takes the translated event -- matching GNU,
+            // where reading an unbound `<return>` yields
             // last-input-event=return but last-nonmenu-event=13.
-            if let Some(translated_last) = translated_events.last() {
+            if !menu_event_in_sequence && let Some(translated_last) = translated_events.last() {
                 self.record_nonmenu_input_event(*translated_last);
             }
+            menu_event_in_sequence = false;
 
             if self
                 .command_loop
@@ -4071,14 +4438,74 @@ impl crate::emacs_core::eval::Context {
                 }
             }
 
-            let is_prefix = resolve_prefix_keymap_binding_in_obarray(
+            let prefix_keymap = resolve_prefix_keymap_binding_in_obarray(
                 &self.obarray,
                 &resolved.lookup,
                 self.symbol_mode(),
-            )
-            .is_some();
+            );
 
-            if is_prefix {
+            if let Some(prefix_keymap) = prefix_keymap {
+                // The read that produces the next event of this sequence is
+                // GNU `read_char (commandflag, current_binding,
+                // last_nonmenu_event, ...)` (keyboard.c:11221-11224), and its
+                // `read_char_x_menu_prompt` branch (call site
+                // keyboard.c:2909-2925, body :10094-10152) pops a mouse menu
+                // INSTEAD of waiting for the next key when the pending lookup
+                // map is a keymap and the previous event was a positional
+                // event.  The DOWN click therefore opens the menu at the
+                // pointer, and the selection becomes the next event of THIS
+                // key sequence: `[down-mouse-3 choose]` dispatches the
+                // command bound under the menu keymap.  Without it, the down
+                // event only selects the keymap and the following mouse-3
+                // release reads as an unbound key -- the M-CTXMENU report.
+                let sequence_snapshot = self.command_loop.keyboard.key_sequence_snapshot();
+                match self.read_char_x_menu_prompt(prefix_keymap)? {
+                    // GNU: the user rejected the menu, so `read_char` returns
+                    // Qt and `read_key_sequence` returns -1
+                    // (keyboard.c:11297-11302) -- no command runs and the
+                    // command loop reads a fresh sequence.
+                    Some(dismissed) if dismissed.is_t() => {
+                        self.restore_delayed_selection_event(&mut delayed_selection_event);
+                        self.restore_key_sequence_current_buffer(&mut saved_current_buffer);
+                        // this_command_key_count = 0 (keyboard.c:1439-1440),
+                        // done here once for both consumers of the -1 result.
+                        self.command_loop
+                            .set_command_key_sequences(Vec::new(), Vec::new());
+                        self.command_loop.keyboard.kboard.last_read_menu_rejected = true;
+                        return Ok((Vec::new(), ReadCommandBinding::unremapped(Value::NIL)));
+                    }
+                    // GNU: `read_char` returns the selected event; back in
+                    // `read_key_sequence` it lands in `keybuf[t++] = key`
+                    // (keyboard.c:11663) with the record_menu_key bookkeeping
+                    // already done by the prompt (keyboard.c:3432-3446).  The
+                    // popup's own nested read resets the in-progress sequence
+                    // accumulator, so restore it and append the selection;
+                    // replaying the iteration runs the translation and lookup
+                    // passes over the completed sequence without reading
+                    // another event.
+                    Some(selection) => {
+                        let (translated_snapshot, raw_snapshot) = sequence_snapshot;
+                        self.command_loop
+                            .keyboard
+                            .rewrite_key_sequence_events(raw_snapshot);
+                        self.command_loop
+                            .keyboard
+                            .rewrite_key_sequence_translation(translated_snapshot);
+                        self.command_loop
+                            .keyboard
+                            .push_key_sequence_input_event(selection);
+                        self.publish_current_key_sequence_as_command_keys();
+                        self.record_input_event_history(selection);
+                        self.assign_by_id(LAST_INPUT_EVENT.id(), selection);
+                        menu_event_in_sequence = true;
+                        replay_current_sequence = true;
+                    }
+                    // No menu applies (not interactive, no positional
+                    // previous event, unread input pending, or `menu-prompting`
+                    // off): read the next event normally.  The nested popup
+                    // never ran, so the accumulator is untouched.
+                    None => {}
+                }
                 // GNU doesn't publish a prefix merely because lookup found a
                 // prefix map.  The following unbounded `read_char` owns the
                 // delay: it waits `echo-keystrokes`, verifies that no input or
@@ -4499,6 +4926,14 @@ impl crate::emacs_core::eval::Context {
                 idle_policy.resume_idle(self);
                 Ok(None)
             }
+            InputEvent::ResizeRequestCompleted {
+                request_id,
+                emacs_frame_id,
+            } => {
+                apply_gui_resize_request_completion(&mut self.frames, request_id, emacs_frame_id);
+                idle_policy.resume_idle(self);
+                Ok(None)
+            }
             InputEvent::DisplayReset => {
                 // Mirrors the WindowResize shape: apply, redisplay, resume
                 // idle. The reset handler busts the redisplay signature
@@ -4588,9 +5023,38 @@ impl crate::emacs_core::eval::Context {
                 }
                 Ok(None)
             }
+            InputEvent::SystemFontRenderingChanged { display } => {
+                if self.handle_system_font_rendering_input_event(display)? {
+                    self.redisplay()?;
+                }
+                Ok(None)
+            }
             InputEvent::SelectWindow { window_id } => {
                 idle_policy.resume_idle(self);
                 Ok(self.make_lispy_select_window_event(window_id))
+            }
+            InputEvent::NativeNonKey {
+                kind,
+                emacs_frame_id,
+            } => {
+                if frame_already_routed {
+                    self.select_keyboard_input_kboard(emacs_frame_id);
+                } else {
+                    self.route_keyboard_input_to_frame(emacs_frame_id);
+                }
+                if self.command_loop.keyboard.has_unread_selection_event() {
+                    self.command_loop.keyboard.pending_input_events.push_front(
+                        InputEvent::FrameSwitchDeferred(Box::new(InputEvent::NativeNonKey {
+                            kind,
+                            emacs_frame_id,
+                        })),
+                    );
+                    return Ok(None);
+                }
+                self.clear_current_message_for_keyboard_input();
+                let event = kind.to_emacs_event_value();
+                self.command_loop.store_kbd_macro_event(event);
+                Ok(Some(event))
             }
             InputEvent::KeyPress {
                 key,
@@ -4997,6 +5461,7 @@ impl crate::emacs_core::eval::Context {
         self.redecorate_immediate_key_echo();
         let mut idle_auto_save_deadline = None;
         let mut key_echo_deadline = self.delayed_key_echo_deadline(timeout);
+        let mut redisplay_phase = ReadCharRedisplayPhase::Preliminary;
 
         loop {
             self.sync_keyboard_terminal_owner();
@@ -5008,7 +5473,10 @@ impl crate::emacs_core::eval::Context {
             crate::emacs_core::eval::lifecycle::dbusbind_drain_events(self)?;
             match self.pop_queued_read_char_event(idle_policy)? {
                 QueuedReadCharEvent::Event(event) => return Ok(Some(event)),
-                QueuedReadCharEvent::HandledInternally => continue,
+                QueuedReadCharEvent::HandledInternally => {
+                    redisplay_phase = ReadCharRedisplayPhase::Preliminary;
+                    continue;
+                }
                 QueuedReadCharEvent::None => {}
             }
 
@@ -5016,23 +5484,37 @@ impl crate::emacs_core::eval::Context {
                 self.redisplay()?;
             }
             if let Some(event) = self.drain_ready_input_event_for_read_char(idle_policy)? {
+                let origin = event.read_char_origin();
                 if let Some(value) = self.handle_read_char_input_event_with_idle_policy(
                     event,
                     tty_input_decoding,
                     idle_policy,
                 )? {
-                    return Ok(Some(ReadCharEvent::fresh_input_method_candidate(value)));
+                    return Ok(Some(ReadCharEvent {
+                        origin,
+                        ..ReadCharEvent::fresh_input_method_candidate(value)
+                    }));
                 }
+                redisplay_phase = ReadCharRedisplayPhase::Preliminary;
                 continue;
             }
             if self.shutdown_request.is_some() {
                 return Err(neovm_value::error::signal(LispCondition::Quit, vec![]));
             }
 
+            // Timer service also flushes deferred safe Lisp callbacks. A
+            // pending callback is real work even when no timer is due.
+            if self.has_pending_safe_funcalls() {
+                redisplay_phase = ReadCharRedisplayPhase::Preliminary;
+            }
             crate::emacs_core::eval::hooks_proof::wait::service_read_char_preliminary_redisplay(
                 self,
                 idle_policy,
+                redisplay_phase,
             )?;
+            // Preserve ordinary event/callback retry boundaries. Only a pure
+            // maintenance timeout below opts into reusing this preparation.
+            redisplay_phase = ReadCharRedisplayPhase::Preliminary;
 
             // GNU read_char re-checks Vunread_command_events after idle
             // timers/sit-for/read-event can requeue input, before consulting
@@ -5064,12 +5546,16 @@ impl crate::emacs_core::eval::Context {
             }
 
             if let Some(event) = self.drain_ready_input_event_for_read_char(idle_policy)? {
+                let origin = event.read_char_origin();
                 if let Some(value) = self.handle_read_char_input_event_with_idle_policy(
                     event,
                     tty_input_decoding,
                     idle_policy,
                 )? {
-                    return Ok(Some(ReadCharEvent::fresh_input_method_candidate(value)));
+                    return Ok(Some(ReadCharEvent {
+                        origin,
+                        ..ReadCharEvent::fresh_input_method_candidate(value)
+                    }));
                 }
                 continue;
             }
@@ -5183,6 +5669,10 @@ impl crate::emacs_core::eval::Context {
                         idle_policy.stop_idle(self);
                         return Ok(None);
                     }
+                    let only_maintenance = display_idle_deadline
+                        .is_some_and(|deadline| now >= deadline)
+                        && !key_echo_deadline.is_some_and(|deadline| now >= deadline)
+                        && !idle_auto_save_deadline.is_some_and(|deadline| now >= deadline);
                     if key_echo_deadline.is_some_and(|deadline| now >= deadline) {
                         key_echo_deadline = None;
                         if self.current_message_value().is_none()
@@ -5206,6 +5696,9 @@ impl crate::emacs_core::eval::Context {
                         idle_auto_save_deadline = None;
                         self.run_command_loop_auto_save("idle timeout");
                         self.redisplay()?;
+                    }
+                    if only_maintenance {
+                        redisplay_phase = ReadCharRedisplayPhase::IdleMaintenance;
                     }
                     continue;
                 }
@@ -5260,15 +5753,13 @@ impl crate::emacs_core::eval::Context {
         let Some(mut maintenance) = self.display_idle_maintenance_fn.take() else {
             return Ok(None);
         };
-        let (next, publish) = maintenance(self);
+        let outcome = maintenance(self);
         self.display_idle_maintenance_fn = Some(maintenance);
-        if publish {
-            // Drop the engine borrow before redisplay re-enters layout. This
-            // publishes newly available coverage without changing the buffer.
-            self.invalidate_redisplay();
-            self.redisplay()?;
-        }
-        Ok(next.and_then(|delay| std::time::Instant::now().checked_add(delay)))
+        // Native publication is complete (or deferred) in the frontend. It
+        // cannot invalidate the accepted base or enter Lisp-bearing redisplay.
+        Ok(outcome
+            .next_wake
+            .and_then(|delay| std::time::Instant::now().checked_add(delay)))
     }
 
     /// GNU's buffer-size-scaled delay for `auto-save-timeout`.
@@ -5350,6 +5841,9 @@ impl crate::emacs_core::eval::Context {
                 CommandKeyRecording::AppendIfEmpty => {}
             }
             self.refresh_immediate_key_echo();
+        }
+        if self.inhibit_quit.is_truthy() && self.event_is_quit_char(&read_event.event) {
+            self.clear_quit_flag_after_read_char_under_inhibit_quit();
         }
         Ok(Some(read_event.event))
     }
@@ -5461,6 +5955,19 @@ impl crate::emacs_core::eval::Context {
         };
         let window = frame.find_window(window_id)?;
         let buffer_id = window.buffer_id()?;
+        if let Some(observation) = observation
+            && window
+                .display()
+                .and_then(|display| display.redisplay_output())
+                .is_some_and(|output| output.generation.get() != observation.presentation)
+        {
+            // A newer prepared output can be accurate without being visible.
+            // Its source stamp cannot authorize an older renderer-active hit.
+            return None;
+        }
+        if window.gnu_text_hover_is_current(&self.edit.buffers) == Some(false) {
+            return None;
+        }
 
         let pair =
             neovm_edit::emacs_core::textprop::builtin_get_char_property_and_overlay_in_state(
@@ -6383,7 +6890,9 @@ impl crate::emacs_core::eval::Context {
         }
         let frame_height = frame.height as i64;
         let menu_bar_height = frame.menu_bar_height as i64;
-        let tool_bar_height = frame.tool_bar_height as i64;
+        // The omitted gap is text. Classify it with the reserved height, the
+        // same pixels `frame-edges` and layout use (`FRAME_TOOLBAR_HEIGHT`).
+        let tool_bar_height = i64::from(frame.reserved_tool_bar_height());
         let tab_bar_height = frame.tab_bar_height as i64;
 
         if menu_bar_height > 0 && frame_y < menu_bar_height {

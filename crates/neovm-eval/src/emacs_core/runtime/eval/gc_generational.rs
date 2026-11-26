@@ -28,6 +28,7 @@ impl Context {
     ) -> neovm_value::tagged::gc::RootSeedBreakdown {
         let mut registered = self.stopped_mutators_world_stopped();
         let Some(first) = registered.next() else {
+            unsafe { (*heap_ptr).note_context_seed_us(0) };
             return Default::default();
         };
         let mut roots = unsafe { first.seed_all_context_roots(heap_ptr) };
@@ -36,6 +37,8 @@ impl Context {
             roots.total_us = roots.total_us.saturating_add(next.total_us);
             roots.groups.extend(next.groups);
         }
+        // `total_us` is the one clock already taken around the context walk.
+        unsafe { (*heap_ptr).note_context_seed_us(roots.total_us) };
         roots
     }
 }

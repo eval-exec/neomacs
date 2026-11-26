@@ -10,6 +10,7 @@ mod edit_runtime;
 mod edit_transaction;
 #[cfg(any(test, feature = "test-support"))]
 pub mod edit_transaction;
+mod manager_view;
 #[doc(hidden)]
 pub mod storage_string;
 #[doc(hidden)]
@@ -41,7 +42,7 @@ pub mod visited_file_modtime;
 
 pub use buffer::{
     Buffer, BufferId, BufferManager, BufferTextSnapshot, InsertionType, LineIndexBuild, MarkerRef,
-    SavedRestrictionState,
+    SavedRestrictionState, TextPropertyRoots,
 };
 #[cfg(feature = "test-support")]
 pub use buffer::{LabeledRestriction, SavedLabeledRestrictions};
@@ -58,7 +59,8 @@ pub(crate) use edit_transaction::TranspositionAnchorPolicy;
 pub use edit_transaction::TranspositionAnchorPolicy;
 #[doc(hidden)]
 pub use edit_transaction::{PreparedBufferEdit, TextMeasurement};
-pub use overlay::{Overlay, OverlayList};
+pub use manager_view::{BufferManagerMut, EditRuntimeMut};
+pub use overlay::{LiveOverlayView, Overlay, OverlayList, OverlayRead};
 #[cfg(not(any(test, feature = "test-support")))]
 pub(crate) use position::BufferLispPos;
 #[cfg(any(test, feature = "test-support"))]

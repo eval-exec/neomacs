@@ -1,6 +1,7 @@
 use super::*;
 use crate::buffer_source::text_source::BufferTextSourceCursor;
 use crate::display_source::{DisplayItemSource, DisplaySourceContext};
+use crate::string_property_snapshot::StringSourceRootScope;
 use neovm_core::buffer::CharLen;
 use neovm_core::emacs_core::Context;
 
@@ -867,6 +868,7 @@ fn classifier_rejects_string_overlay_touching_row_endpoints() {
     );
     // Overlay starting exactly at the row's newline: its before-string fires
     // at the newline position, which the pipeline's line-break lifecycle owns.
+    drop(eval);
     let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = buffer_with_text(&mut eval, "ab\ncd\n");
     eval.buffer_manager_mut().set_current(buf_id);
@@ -1029,6 +1031,7 @@ fn classifier_routes_a_prefix_whose_unroutable_string_it_never_reaches() {
         "a whole-line plan reaches the unroutable string"
     );
 
+    drop(eval);
     let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = buffer_with_text(&mut eval, &text);
     eval.buffer_manager_mut().set_current(buf_id);
@@ -1082,6 +1085,7 @@ fn classifier_routes_a_prefix_whose_line_end_anchor_it_never_reaches() {
 
     // Overflow-prefix plan holding 10 columns: the coverage stops 30 chars
     // short of the anchor, so the prefix still routes.
+    drop(eval);
     let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = buffer_with_text(&mut eval, &text);
     eval.buffer_manager_mut().set_current(buf_id);
@@ -1300,12 +1304,14 @@ fn plain_source_matches_buffer_text_source_cursor_items() {
     let start = CharPos0::ZERO;
     let line_end = CharPos0::new("hello world".chars().count());
 
-    let mut cursor = BufferTextSourceCursor::new(
+    let mut cursor = BufferTextSourceCursor::new_for_window(
         buf_id,
         buffer,
+        None,
         start,
         line_end.add_len(CharLen::new(1)),
         RenderFaceRef::Inherit,
+        StringSourceRootScope::Rooted(eval.owned_root_retainer()),
     );
     let mut cursor_items = Vec::new();
     let mut context = DisplaySourceContext::empty();
@@ -1342,12 +1348,14 @@ fn routed_source_matches_buffer_text_source_cursor_items_for_tab_and_wide() {
     let start = CharPos0::ZERO;
     let line_end = CharPos0::new(text.chars().count() - 1);
 
-    let mut cursor = BufferTextSourceCursor::new(
+    let mut cursor = BufferTextSourceCursor::new_for_window(
         buf_id,
         buffer,
+        None,
         start,
         line_end.add_len(CharLen::new(1)),
         RenderFaceRef::Inherit,
+        StringSourceRootScope::Rooted(eval.owned_root_retainer()),
     );
     let mut cursor_items = Vec::new();
     let mut context = DisplaySourceContext::empty();
@@ -1440,6 +1448,7 @@ fn resolve_routed_position_face_covers_the_newline_span() {
 
     // A span ending exactly at the newline leaves the newline on the base
     // face.
+    drop(eval);
     let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = buffer_with_text(&mut eval, "abcd\nnext\n");
     eval.buffer_manager_mut().set_current(buf_id);
@@ -1720,6 +1729,7 @@ fn classifier_elision_uses_entry_run_ellipsis_flag_for_adjacent_runs() {
     .expect("entry run without ellipsis routes");
     assert_eq!(plan.elided(), &[(1, 3)], "adjacent runs collapse into one");
 
+    drop(eval);
     let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = buffer_with_text(&mut eval, text);
     eval.buffer_manager_mut().set_current(buf_id);
@@ -1765,6 +1775,7 @@ fn classifier_rejects_invisible_spanning_the_newline() {
     );
 
     // The invisible run covering ONLY the newline refuses too.
+    drop(eval);
     let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let text = "abc\nx\n";
     let buf_id = buffer_with_text(&mut eval, text);
@@ -2067,6 +2078,7 @@ fn classifier_rejects_replacement_combined_with_elision_or_overflow() {
         "replacement + elision must keep the buffer pipeline"
     );
 
+    drop(eval);
     let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let text = "abXXcdefghij\n";
     let buf_id = buffer_with_text(&mut eval, text);
@@ -2395,6 +2407,7 @@ fn classifier_rejects_composed_cluster_with_hidden_base() {
         "a visible extender whose base is hidden must refuse"
     );
 
+    drop(eval);
     let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = buffer_with_text(&mut eval, text);
     eval.buffer_manager_mut().set_current(buf_id);
@@ -2422,12 +2435,14 @@ fn routed_source_matches_cursor_items_for_combining_mark() {
     let start = CharPos0::ZERO;
     let line_end = CharPos0::new(text.chars().count() - 1);
 
-    let mut cursor = BufferTextSourceCursor::new(
+    let mut cursor = BufferTextSourceCursor::new_for_window(
         buf_id,
         buffer,
+        None,
         start,
         line_end.add_len(CharLen::new(1)),
         RenderFaceRef::Inherit,
+        StringSourceRootScope::Rooted(eval.owned_root_retainer()),
     );
     let mut cursor_items = Vec::new();
     let mut context = DisplaySourceContext::empty();
@@ -3181,4 +3196,86 @@ fn classifier_refuses_a_line_cut_by_a_character_horizon() {
     )
     .expect("a newline-less tail at the real source end routes");
     assert!(plan.is_end_of_source());
+}
+
+fn r2_routed_string_interval_count() -> i64 {
+    use neovm_value::tagged::gc::MemoryUseCountSlot;
+    Value::memory_use_counts_snapshot()[MemoryUseCountSlot::Intervals.index()]
+}
+
+fn r2_check_propertized_route_refusal_without_interval_copies(interval_count: usize) {
+    use neovm_core::emacs_core::value::{
+        StringTextPropertyRun, borrow_string_text_properties_table_for_value,
+    };
+    use neovm_value::value::text_props::text_property_table_clones_for_test;
+    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
+    let faces = [
+        Value::symbol("bold"),
+        Value::symbol("font-lock-string-face"),
+    ];
+    let value = Value::string_with_text_properties(
+        "x".repeat(interval_count),
+        (0..interval_count)
+            .map(|index| StringTextPropertyRun {
+                start: index,
+                end: index + 1,
+                plist: Value::list(vec![Value::symbol("face"), faces[index & 1]]),
+            })
+            .collect(),
+    );
+    let table = borrow_string_text_properties_table_for_value(value).expect("property fixture");
+    assert_eq!(table.interval_plist_runs_for_test().len(), interval_count);
+    for index in [0, interval_count / 2, interval_count - 1] {
+        assert_eq!(
+            table.get_property_at_char_pos(CharPos0::new(index), Value::symbol("face")),
+            Some(faces[index & 1])
+        );
+    }
+    let before_intervals = r2_routed_string_interval_count();
+    let before_tables = text_property_table_clones_for_test();
+    assert_eq!(
+        routed_lisp_string_advance_cols(value),
+        None,
+        "actual row-route consumer must refuse the propertized string"
+    );
+    let intervals = r2_routed_string_interval_count() - before_intervals;
+    let tables = text_property_table_clones_for_test() - before_tables;
+    assert_eq!(
+        (intervals, tables),
+        (0, 0),
+        "property-presence classification copied {interval_count} source intervals"
+    );
+}
+
+#[test]
+fn r2_routed_string_property_refusal_no_interval_copies_2k() {
+    r2_check_propertized_route_refusal_without_interval_copies(2_048);
+}
+
+#[test]
+fn r2_routed_string_property_refusal_no_interval_copies_16k() {
+    r2_check_propertized_route_refusal_without_interval_copies(16_384);
+}
+
+#[test]
+fn r2_routed_string_property_refusal_no_interval_copies_64k() {
+    r2_check_propertized_route_refusal_without_interval_copies(65_536);
+}
+
+// Prevent a classifier that refuses every input from satisfying the allocation
+// regression. Width and exceptional-character witnesses use the real helper.
+#[test]
+fn r2_routed_string_classifier_semantics_control() {
+    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
+    assert_eq!(
+        routed_lisp_string_advance_cols(Value::string("abc")),
+        Some(3)
+    );
+    assert_eq!(
+        routed_lisp_string_advance_cols(Value::string("a文")),
+        Some(3)
+    );
+    assert_eq!(routed_lisp_string_advance_cols(Value::string("a\tb")), None);
+    assert_eq!(routed_lisp_string_advance_cols(Value::string("a\nb")), None);
+    assert_eq!(routed_lisp_string_advance_cols(Value::string("")), None);
 }

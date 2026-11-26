@@ -12,13 +12,6 @@ use neovm_value::heap_registry::detachment::{
 type GlobalRefs = Vec<Option<GlobalRefEntry>>;
 
 #[cold]
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "E2 L3 dormant cold detach; no production caller enters it"
-    )
-)]
 pub(crate) fn detach_dynamic_module_registry(
     handle: &HeapRegistryHandle<GlobalRefs>,
 ) -> Result<DetachedRegistry<GlobalRefs>, RegistryDetachFailure<GlobalRefs>> {

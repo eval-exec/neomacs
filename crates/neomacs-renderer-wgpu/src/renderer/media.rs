@@ -41,14 +41,17 @@ impl WgpuRenderer {
     #[cfg(feature = "video")]
     pub(super) fn submit_video_frame_content_pass(
         &mut self,
-        mut encoder: wgpu::CommandEncoder,
+        mut encoder: crate::video_cache::FrameCommandEncoder,
         timing: Option<crate::gpu_frame_timing::PendingGpuFrameTiming>,
         video_ids: Vec<VideoId>,
     ) {
         if let Some(timing) = &timing {
-            timing.resolve(&mut encoder);
+            timing.resolve_frame_encoder(&mut encoder);
         }
-        let submission = self.queue.submit([encoder.finish()]);
+        let submission = self
+            .caches
+            .video
+            .submit_command_encoder(encoder, &self.queue);
         if let Some(timing) = timing {
             self.gpu_frame_timer
                 .submit(timing, submission, video_ids.clone());
@@ -80,7 +83,8 @@ impl WgpuRenderer {
     /// Realize chrome using its owning window's scale, not the last drawn window.
     pub fn load_toolbar_icon(&mut self, key: &neomacs_display_protocol::ToolBarIconKey) -> ImageId {
         match key.source() {
-            neomacs_display_protocol::ToolBarImageSource::File { path } => {
+            neomacs_display_protocol::ToolBarImageSource::GnuRaster { path }
+            | neomacs_display_protocol::ToolBarImageSource::ThemedVector { path } => {
                 self.caches.image.load_file(
                     path,
                     key.size_spec(),
@@ -274,6 +278,23 @@ impl WgpuRenderer {
     /// Begin presentation-safe retirement of an image texture.
     pub fn retire_image(&mut self, image: ImageId) {
         self.caches.image.retire(image)
+    }
+
+    /// Free one image's texture immediately (GNU `image-flush`).
+    ///
+    /// Unlike [`Self::retire_image`], this does not wait for presentations to
+    /// release the identity: the matching pixmaps are freed now, and a later
+    /// redisplay of the image realizes it again from its source.
+    pub fn flush_image(&mut self, image: ImageId) {
+        self.caches.image.flush(image);
+    }
+
+    /// Drop every retained image texture, including chrome icons.
+    ///
+    /// GNU `clear-image-cache` frees the frame image caches; this is the
+    /// shared-cache equivalent, used by the render thread's wholesale clear.
+    pub fn clear_image_cache(&mut self, through: u64) {
+        self.caches.image.clear(through);
     }
 
     /// Replace the complete set of image identities retained by render
@@ -627,6 +648,10 @@ impl WgpuRenderer {
         self.reconcile_media_budget();
         let sources = self.caches.surface.external_channel_sources();
         #[cfg(feature = "video")]
+        let Ok(frame_params) = self.frame_parameters() else {
+            return;
+        };
+        #[cfg(feature = "video")]
         let video_views = self.caches.video.prepare_channel_views(
             sources.iter().filter_map(|source| match source {
                 SurfaceChannelSource::Video(id) => {
@@ -635,9 +660,9 @@ impl WgpuRenderer {
                 SurfaceChannelSource::Surface(_) | SurfaceChannelSource::Image(_) => None,
             }),
             &self.device,
-            &self.queue,
+            &self.pipelines.packed_video_copy,
             &self.pipelines.bi_planar_video_copy,
-            self.frame_parameters().binding(),
+            frame_params.binding(),
         );
         let mut external = std::collections::HashMap::new();
         for source in sources {

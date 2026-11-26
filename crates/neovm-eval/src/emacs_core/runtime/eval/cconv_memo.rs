@@ -832,7 +832,7 @@ fn closures_agree(memo: Value, lisp: Value) -> bool {
         if a == b {
             continue;
         }
-        let (mut x, mut y) = (*a, *b);
+        let (mut x, mut y) = (a, b);
         while x.is_cons() && y.is_cons() {
             if x.cons_car() != y.cons_car() {
                 return false;
@@ -1210,10 +1210,10 @@ impl Context {
             return None;
         }
         let slots = closure.closure_slots()?;
-        if slots.get(CLOSURE_ARGLIST) != Some(&params) || slots.get(CLOSURE_CODE) != Some(&body) {
+        if slots.get(CLOSURE_ARGLIST) != Some(params) || slots.get(CLOSURE_CODE) != Some(body) {
             return None;
         }
-        let newenv = *slots.get(CLOSURE_CONSTANTS)?;
+        let newenv = slots.get(CLOSURE_CONSTANTS)?;
         if newenv == self.cconv_memo.trusted.empty_env() {
             return Some((Box::default(), Box::default()));
         }
@@ -1326,12 +1326,16 @@ impl Context {
         if std::mem::take(&mut self.cconv_memo.collect_in_next_observed_run) {
             self.gc_collect_exact();
         }
-        let result = self.cconv_run_lisp(closure_hook, params, body, env, docstring, iform);
+        let mut result = self.cconv_run_lisp(closure_hook, params, body, env, docstring, iform);
         self.cconv_memo.observing -= 1;
         let after = self.cconv_effect_snapshot();
         let gc_cycles = self.gc_count.wrapping_sub(gc_count);
         if self.cconv_memo.observing == 0 && self.cconv_memo.owed_gc_hooks > 0 {
-            self.cconv_run_owed_gc_hooks(&result);
+            // A finalizer `throw` to a live catch leaves this run as an
+            // error, exactly as it would leave the collection it was owed by.
+            if let Some(flow) = self.cconv_run_owed_gc_hooks(&result) {
+                result = Err(flow);
+            }
         }
         ObservedRun {
             result,
@@ -1358,16 +1362,21 @@ impl Context {
     #[cold]
     #[inline(never)]
     #[doc(hidden)]
-    pub fn cconv_run_owed_gc_hooks(&mut self, result: &EvalResult) {
+    pub fn cconv_run_owed_gc_hooks(&mut self, result: &EvalResult) -> Option<Flow> {
         let cycles = std::mem::take(&mut self.cconv_memo.owed_gc_hooks);
         self.cconv_memo.note(CconvMemoEvent::GcHooksDeferred);
         let scope = self.save_specpdl_roots();
         push_result_roots(self, result);
-        self.run_doomed_finalizers();
-        for _ in 0..cycles {
-            self.run_post_gc_hook();
+        let flow = self.run_doomed_finalizers().err();
+        // GNU runs post-gc-hook after run_finalizers; a finalizer throw
+        // unwinds before it.
+        if flow.is_none() {
+            for _ in 0..cycles {
+                self.run_post_gc_hook();
+            }
         }
         self.restore_specpdl_roots(scope);
+        flow
     }
 
     /// Run a call the memo does not serve: observed (for the statistics)

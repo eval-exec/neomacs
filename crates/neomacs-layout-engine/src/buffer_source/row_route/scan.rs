@@ -547,7 +547,7 @@ pub(super) fn routed_lisp_string_advance_cols(value: Value) -> Option<usize> {
     if text.is_empty() {
         return None;
     }
-    if neovm_core::emacs_core::value::get_string_text_properties_table_for_value(value).is_some() {
+    if neovm_core::emacs_core::value::string_has_text_properties_for_value(value) {
         return None;
     }
     let mut advance_cols = 0usize;
@@ -607,7 +607,7 @@ pub(super) fn routed_lisp_string_advance_cols(value: Value) -> Option<usize> {
 /// exactly at `start_byte` still reaches the caller, which the half-open query
 /// alone would drop.
 fn overlays_possibly_intersecting(
-    overlays: &neovm_core::buffer::OverlayList,
+    overlays: crate::neovm_bridge::LayoutOverlays<'_>,
     start_byte: usize,
     end_byte: usize,
 ) -> Vec<Value> {
@@ -616,8 +616,9 @@ fn overlays_possibly_intersecting(
         EmacsBytePos::new(end_byte.saturating_add(1)),
     );
     let mut ids = overlays.overlays_in_emacs_byte_range(scan_range);
-    ids.sort();
-    ids.dedup();
+    // Deduplicate by object identity (`eq`), not `Value::eq` (Lisp `equal`).
+    ids.sort_by_key(|v| v.bits());
+    ids.dedup_by_key(|v| v.bits());
     ids
 }
 

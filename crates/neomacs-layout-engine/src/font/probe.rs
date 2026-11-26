@@ -10,7 +10,7 @@
 //! extents for ascent/descent.
 //!
 //! This module reproduces that with FreeType directly:
-//! - per-glyph width = hinted `FT_Load_Char(FT_LOAD_DEFAULT)` advance,
+//! - per-glyph width = `FT_Load_Char` advance with the selected hinting policy,
 //!   rounded from 26.6 to integer pixels (cairo hint-metrics equivalent);
 //! - ascent/descent = rounded FT size metrics (what cairo's font extents
 //!   report for an FT backend with hint-metrics on).
@@ -110,6 +110,8 @@ pub(crate) struct ExactDeviceFontRequest<'a> {
     selector: FreeTypeFaceSelector,
     size: DeviceFontPixelSize,
     weight: DeviceFontWeight,
+    #[cfg(target_os = "linux")]
+    options: Option<neomacs_font_materializer::fontconfig::FontRenderOptions>,
 }
 
 #[derive(Clone, Copy)]
@@ -136,6 +138,15 @@ impl<'a> ExactDeviceFontRequest<'a> {
             size,
             DeviceVariationPolicy::ExistingAsciiBestEffort,
         )
+    }
+
+    #[cfg(target_os = "linux")]
+    pub(crate) fn with_render_options(
+        mut self,
+        options: neomacs_font_materializer::fontconfig::FontRenderOptions,
+    ) -> Self {
+        self.options = Some(options);
+        self
     }
 
     fn from_identity(
@@ -172,6 +183,8 @@ impl<'a> ExactDeviceFontRequest<'a> {
             selector: FreeTypeFaceSelector(selector),
             size: DeviceFontPixelSize::new(size.rounded_device_px())?,
             weight,
+            #[cfg(target_os = "linux")]
+            options: None,
         })
     }
 }
@@ -195,6 +208,9 @@ pub(crate) enum DeviceFontProbeError {
     #[cfg(not(target_os = "linux"))]
     #[error("this target has no Fontconfig device glyph probe")]
     UnsupportedPlatform,
+    #[cfg(target_os = "linux")]
+    #[error("selected font rendering policy is unavailable")]
+    RenderOptionsUnavailable,
     #[cfg(target_os = "linux")]
     #[error(transparent)]
     FreeType(#[from] freetype::Error),
@@ -229,6 +245,7 @@ std::cfg_select! {
     target_os = "linux" => {
         use freetype::Library;
         use freetype::face::LoadFlag;
+        use neomacs_font_materializer::fontconfig::{FontRenderOptions, FontconfigContext};
 
         /// Probe `file`[`face_index`] like GNU `font_open_entity`: try
         /// `pixel_size`, bumping upward (at most 15 times) until average
@@ -238,6 +255,20 @@ std::cfg_select! {
             face_index: u32,
             pixel_size: u32,
             wght: Option<f32>,
+        ) -> Option<FontPxMetrics> {
+            let context = FontconfigContext::system()?;
+            probe_font_px_metrics_with_policy(file, face_index, pixel_size, wght, |size| {
+                context.options_for_file_with_weight(std::path::Path::new(file), face_index, size as f32, wght)
+            })
+        }
+
+        /// The font backend supplies policy from the authority that selected it.
+        pub(crate) fn probe_font_px_metrics_with_policy(
+            file: &str,
+            face_index: u32,
+            pixel_size: u32,
+            wght: Option<f32>,
+            mut policy: impl FnMut(u32) -> Option<FontRenderOptions>,
         ) -> Option<FontPxMetrics> {
             let library = Library::init().ok()?;
             let mut face = library.new_face(file, face_index as isize).ok()?;
@@ -250,7 +281,7 @@ std::cfg_select! {
             }
             let start = pixel_size.max(1);
             for psize in start..=start + 15 {
-                if let Some(metrics) = probe_at_exact_px(&face, psize)
+                if let Some(metrics) = probe_at_exact_px(&face, psize, policy(psize)?.metrics_load_flags())
                     && metrics.average_width > 0
                     && metrics.height > 0
                 {
@@ -273,6 +304,7 @@ std::cfg_select! {
                 file,
                 selector: FreeTypeFaceSelector(face_selector),
                 size: DeviceFontPixelSize::new(device_pixel_size.max(1)).ok()?,
+                options: None,
                 weight: match wght {
                     Some(weight) => DeviceFontWeight::LegacyBestEffort(weight),
                     None => DeviceFontWeight::Default,
@@ -284,13 +316,13 @@ std::cfg_select! {
         pub(crate) fn probe_device_ascii_advances_for_request(
             request: &ExactDeviceFontRequest<'_>,
         ) -> Result<DeviceAsciiAdvances, DeviceFontProbeError> {
-            with_device_sized_face(request, |face| {
+            with_device_sized_face(request, |face, flags| {
                 let mut widths = [0; 128];
                 for byte in 32u8..127 {
                     let glyph = face.get_char_index(usize::from(byte)).unwrap_or(0);
                     // GNU ftcrfont_open deliberately probes glyph 0 for missing ASCII.
-                    if let Ok(advance) = hinted_device_advance(face, glyph, request.size)
-                        .or_else(|_| hinted_device_advance(face, 0, request.size))
+                    if let Ok(advance) = hinted_device_advance(face, glyph, request.size, flags)
+                        .or_else(|_| hinted_device_advance(face, 0, request.size, flags))
                     {
                         widths[usize::from(byte)] = advance.advance_px;
                     }
@@ -308,17 +340,17 @@ std::cfg_select! {
             request: &ExactDeviceFontRequest<'_>,
             ch: char,
         ) -> Result<DeviceGlyphProbe, DeviceFontProbeError> {
-            with_device_sized_face(request, |face| {
+            with_device_sized_face(request, |face, flags| {
                 let Some(glyph) = face.get_char_index(ch as usize) else {
                     return Ok(DeviceGlyphProbe::MissingGlyph);
                 };
-                hinted_device_advance(face, glyph, request.size).map(DeviceGlyphProbe::Present)
+                hinted_device_advance(face, glyph, request.size, flags).map(DeviceGlyphProbe::Present)
             })
         }
 
         fn with_device_sized_face<T>(
             request: &ExactDeviceFontRequest<'_>,
-            measure: impl FnOnce(&freetype::Face) -> Result<T, DeviceFontProbeError>,
+            measure: impl FnOnce(&freetype::Face, LoadFlag) -> Result<T, DeviceFontProbeError>,
         ) -> Result<T, DeviceFontProbeError> {
             let library = Library::init()?;
             let selector = isize::try_from(request.selector.0)
@@ -330,15 +362,22 @@ std::cfg_select! {
                 DeviceFontWeight::LegacyBestEffort(weight) => apply_wght_axis(&library, &mut face, weight),
             }
             face.set_pixel_sizes(request.size.get(), request.size.get())?;
-            measure(&face)
+            let options = request.options.or_else(|| {
+                FontconfigContext::system()?.options_for_file_with_weight(
+                    std::path::Path::new(request.file), request.selector.0, request.size.get() as f32,
+                    match request.weight { DeviceFontWeight::Default => None, DeviceFontWeight::Explicit(weight) | DeviceFontWeight::LegacyBestEffort(weight) => Some(weight) },
+                )
+            }).ok_or(DeviceFontProbeError::RenderOptionsUnavailable)?;
+            measure(&face, options.metrics_load_flags())
         }
 
         fn hinted_device_advance(
             face: &freetype::Face,
             glyph: u32,
             size: DeviceFontPixelSize,
+            flags: LoadFlag,
         ) -> Result<DeviceGlyphAdvance, DeviceFontProbeError> {
-            face.load_glyph(glyph, LoadFlag::TARGET_LIGHT)?;
+            face.load_glyph(glyph, flags)?;
             // GNU ftcrfont_glyph_extents uses lround of the hinted advance.
             let rounded = face.glyph().advance().x.checked_add(32)
                 .ok_or(DeviceFontProbeError::InvalidAdvance)? >> 6;
@@ -362,12 +401,12 @@ std::cfg_select! {
             let Ok(library) = Library::init() else {
                 return Vec::new();
             };
-            let Ok(face) = library.new_face(file, face_index as isize) else {
+            let Ok(mut face) = library.new_face(file, face_index as isize) else {
                 return Vec::new();
             };
             let mut weights = Vec::new();
             unsafe {
-                let raw = face.raw() as *const ft::FT_FaceRec as *mut ft::FT_FaceRec;
+                let raw = std::ptr::from_mut(face.raw_mut());
                 let mut mm: *mut ft::FT_MM_Var = std::ptr::null_mut();
                 if ft::FT_Get_MM_Var(raw, &mut mm) != 0 || mm.is_null() {
                     return Vec::new();
@@ -409,11 +448,11 @@ std::cfg_select! {
             let Ok(library) = Library::init() else {
                 return Vec::new();
             };
-            let Ok(face) = library.new_face(file, (face_selector & 0xffff) as isize) else {
+            let Ok(mut face) = library.new_face(file, (face_selector & 0xffff) as isize) else {
                 return Vec::new();
             };
             unsafe {
-                let raw = face.raw() as *const ft::FT_FaceRec as *mut ft::FT_FaceRec;
+                let raw = std::ptr::from_mut(face.raw_mut());
                 let mut mm: *mut ft::FT_MM_Var = std::ptr::null_mut();
                 if ft::FT_Get_MM_Var(raw, &mut mm) != 0 || mm.is_null() {
                     return Vec::new();
@@ -552,7 +591,7 @@ std::cfg_select! {
             Ok(())
         }
 
-        fn probe_at_exact_px(face: &freetype::Face, pixel_size: u32) -> Option<FontPxMetrics> {
+        fn probe_at_exact_px(face: &freetype::Face, pixel_size: u32, load_flags: LoadFlag) -> Option<FontPxMetrics> {
             face.set_pixel_sizes(pixel_size, pixel_size).ok()?;
 
             // ASCII printables loop (ftcrfont.c ftcrfont_open): per-glyph
@@ -564,13 +603,9 @@ std::cfg_select! {
             let mut space_width = 0i32;
             let mut average_width = 0i64;
             let mut n = 0i64;
-            // Cairo under fontconfig's default hintstyle=hintslight loads
-            // with FT_LOAD_TARGET_LIGHT: vertical-only hinting, so horizontal
-            // advances stay fractional and hint-metrics rounding (lround)
-            // decides the pixel width. Full bytecode hinting (LOAD_DEFAULT)
-            // would widen some glyphs (Noto '@'-class) to 2px where GNU
-            // reports 1.
-            let load_flags = LoadFlag::TARGET_LIGHT;
+            // Match the same prepared rendering policy as the opened font.
+            // At small sizes full and slight hinting can differ in advance,
+            // even when their integer average width happens to agree.
             for c in 32u8..127 {
                 if face.load_char(c as usize, load_flags).is_err()
                     && face.load_glyph(0, load_flags).is_err()

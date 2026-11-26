@@ -28,9 +28,9 @@ fn corpus_under(mode: BgMode) -> (Vec<String>, Vec<String>) {
             for (ops, constants, arity) in corpus() {
                 let f = function(ops, constants, arity);
                 assert!(
-                    cache::resolve_compiled_leaf_ptr(ctx, &f).is_some(),
+                    unsafe { cache::resolve_compiled_leaf_ptr(ctx, &f) }.is_some(),
                     "{mode:?}: every corpus body compiles: {:?}",
-                    f.ops
+                    f.ops()
                 );
             }
         })

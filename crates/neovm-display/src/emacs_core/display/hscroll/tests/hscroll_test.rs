@@ -342,3 +342,51 @@ fn truncated_window_pass_scans_point_column() {
 
     assert!(point_column_scans_in_one_pass(&mut ctx) > 0);
 }
+
+/// Character work one redisplay's hscroll pass spends measuring point's
+/// column for a truncated window on a line of `len` characters.
+fn truncated_pass_scan_work(len: usize) -> usize {
+    let mut ctx = crate::test_utils::xdisp_test_upper_layer_helpers::interactive_context(|| {
+        neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime())
+    });
+    let buffer_id = ctx
+        .edit
+        .buffers
+        .current_buffer()
+        .expect("current buffer")
+        .id();
+    ctx.frame_manager_mut()
+        .create_frame("hscroll-flat-line", 800, 480, buffer_id);
+    ctx.edit
+        .buffers
+        .get_mut(buffer_id)
+        .expect("buffer")
+        .insert(&"a".repeat(len));
+    ctx.edit
+        .buffers
+        .set_buffer_local_property(buffer_id, "truncate-lines", Value::T)
+        .expect("enable truncation");
+
+    neovm_edit::test_support::authority::reset_column_scan_characters();
+    update_auto_hscroll_before_redisplay(&mut ctx);
+    neovm_edit::test_support::authority::column_scan_characters()
+}
+
+/// GNU measures a long hscrolled truncated line with
+/// `fast_move_it_horizontally` (src/xdisp.c:16797-16807, 11676): it reseats at
+/// point and adds `nchars` columns instead of walking the line from its
+/// beginning. The pass's decoded-character count must therefore be flat as the
+/// line grows; a per-character walk grows with it.
+#[test]
+fn truncated_window_pass_column_work_is_flat_as_the_line_grows() {
+    let short = truncated_pass_scan_work(200_000);
+    let long = truncated_pass_scan_work(400_000);
+    assert_eq!(
+        long, short,
+        "column-scan work must not grow with the line: {short} -> {long}"
+    );
+    assert!(
+        short <= 8,
+        "the long-line hscroll pass must not walk the line: {short} characters decoded"
+    );
+}

@@ -485,6 +485,18 @@ impl DisplayCurrentRowMutation for DisplayRowGlyphCheckpointRestoreMutation {
     }
 }
 
+struct AdvanceRowSourceEnd {
+    source_end: usize,
+}
+
+impl DisplayCurrentRowMutation for AdvanceRowSourceEnd {
+    type Output = ();
+
+    fn apply(self, row: &mut GlyphRow) -> Self::Output {
+        row.end_charpos = row.end_charpos.max(self.source_end);
+    }
+}
+
 impl<S, P> DisplayCurrentRowMutation
     for DisplayRowCurrentSourceStepMutation<'_, '_, '_, '_, '_, S, P>
 where
@@ -565,6 +577,9 @@ impl<'face, 'emit, FS: crate::neovm_bridge::FaceServices>
         // DisplayHost supplies graphic image/font services to this renderer;
         // terminal images are replacement text, so no host borrow is needed.
         // Keep the host on Context itself: advised Lisp callbacks still see it.
+        let string_roots = crate::string_property_snapshot::StringSourceRootScope::Rooted(
+            self.evaluator.owned_root_retainer(),
+        );
         let (display_host, evaluator) = if self.face_resolver.resolver().has_tty_realization() {
             (None, Some(&mut *self.evaluator))
         } else {
@@ -590,6 +605,7 @@ impl<'face, 'emit, FS: crate::neovm_bridge::FaceServices>
                 self.face_resolver.resolver(),
                 display_host,
                 self.face_ids,
+                string_roots,
             )
             .with_face_realizer(realizer)
             .with_automatic_composition(self.automatic_composition),
@@ -618,6 +634,9 @@ impl<'face, 'emit, FS: crate::neovm_bridge::FaceServices>
         // DisplayHost supplies graphic image/font services to this renderer;
         // terminal images are replacement text, so no host borrow is needed.
         // Keep the host on Context itself: advised Lisp callbacks still see it.
+        let string_roots = crate::string_property_snapshot::StringSourceRootScope::Rooted(
+            self.evaluator.owned_root_retainer(),
+        );
         let (display_host, evaluator) = if self.face_resolver.resolver().has_tty_realization() {
             (None, Some(&mut *self.evaluator))
         } else {
@@ -646,6 +665,7 @@ impl<'face, 'emit, FS: crate::neovm_bridge::FaceServices>
                 self.face_resolver.resolver(),
                 display_host,
                 self.face_ids,
+                string_roots,
             )
             .with_face_realizer(realizer)
             .with_automatic_composition(self.automatic_composition),
@@ -691,6 +711,9 @@ impl<'face, 'emit, FS: crate::neovm_bridge::FaceServices>
         source: &mut S,
         source_state: &mut DisplayRowSourceState,
     ) -> Option<DisplayRowRenderIntoRowResult> {
+        let string_roots = crate::string_property_snapshot::StringSourceRootScope::Rooted(
+            self.evaluator.owned_root_retainer(),
+        );
         let (display_host, evaluator) = if self.face_resolver.resolver().has_tty_realization() {
             (None, Some(&mut *self.evaluator))
         } else {
@@ -713,6 +736,7 @@ impl<'face, 'emit, FS: crate::neovm_bridge::FaceServices>
             self.face_resolver.resolver(),
             display_host,
             self.face_ids,
+            string_roots,
         )
         .with_face_realizer(realizer)
         .with_automatic_composition(self.automatic_composition);
@@ -942,13 +966,16 @@ impl<'a> TextRowOutputRenderState<'a> {
     }
 
     /// Truncate the current output row's drawn glyphs back to `checkpoint`,
-    /// dropping the partial-word glyphs that the word-wrap break rewinds past.
-    #[cfg(test)]
-    fn restore_current_row_glyph_checkpoint(&mut self, checkpoint: DisplayRowGlyphCheckpoint) {
+    /// dropping glyphs the caller has decided belong on the next row.
+    fn restore_current_row_glyph_checkpoint(
+        &mut self,
+        checkpoint: DisplayRowGlyphCheckpoint,
+        source_end: Option<usize>,
+    ) {
         self.output.current_row_output().apply_current_row_mutation(
             DisplayRowGlyphCheckpointRestoreMutation {
                 checkpoint,
-                source_end: None,
+                source_end,
             },
         );
     }
@@ -1046,6 +1073,14 @@ pub(crate) struct TextRowSourceRenderState<
 }
 
 impl<'a, FS: crate::neovm_bridge::FaceServices> TextRowSourceRenderState<'a, FS> {
+    pub(crate) fn string_source_root_scope(
+        &self,
+    ) -> crate::string_property_snapshot::StringSourceRootScope {
+        crate::string_property_snapshot::StringSourceRootScope::Rooted(
+            self.output_render.evaluator.owned_root_retainer(),
+        )
+    }
+
     pub(crate) fn from_output_render(
         output_render: TextRowOutputRenderState<'a>,
         font_metrics: &'a mut Option<FontMetricsService>,
@@ -1578,7 +1613,7 @@ impl<'a, FS: crate::neovm_bridge::FaceServices> TextRowSourceRenderState<'a, FS>
     ) {
         match emission {
             DisplayNonTextAreaEmission::Fringe(layout) => {
-                self.record_fringe_bitmap_layout(&layout, face_ids, fallback_face_id);
+                self.record_fringe_bitmap_layout(&layout, face_ids);
             }
             DisplayNonTextAreaEmission::Margin(margin) => {
                 self.render_margin_emission(margin, face_scope, frame, face_ids, structural_order);
@@ -1651,6 +1686,7 @@ impl<'a, FS: crate::neovm_bridge::FaceServices> TextRowSourceRenderState<'a, FS>
                     *value,
                     RenderFaceRef::FaceId(margin_face_id),
                     LispStringSourceOrigin::MarginDisplayReplacement,
+                    self.string_source_root_scope(),
                 ) {
                     let _ = self.render_natural_fragment_into_current_row(
                         fragment,
@@ -1879,27 +1915,20 @@ impl<'a, FS: crate::neovm_bridge::FaceServices> TextRowSourceRenderState<'a, FS>
         &mut self,
         descriptor: &DisplayPropertyReplacementDescriptor,
         face_ids: &mut FrameFaceAttempt,
-        active_face_state: &DisplayRowActiveFaceState,
     ) {
         if let Some(DisplayReplacementProperty::Fringe(layout)) =
             descriptor.classification().replacement()
         {
-            let layout = *layout;
-            self.record_fringe_bitmap_layout(&layout, face_ids, active_face_state.face_id());
+            self.record_fringe_bitmap_layout(layout, face_ids);
         }
     }
 
     /// Record a parsed fringe layout (from any source path) on the current row.
-    /// `fallback_face_id` is the row's active face, used only when neither a
-    /// `set-fringe-bitmap-face` override nor the spec's FACE resolves.
-    ///
-    /// Resolution honors GNU's `set-fringe-bitmap-face` override: the face name
-    /// stored on the registry entry wins over the spec's FACE argument.
+    /// The bitmap paints with the face [`Self::resolve_fringe_face_id`] picks.
     pub(crate) fn record_fringe_bitmap_layout(
         &mut self,
         layout: &crate::display_spec::DisplayFringeLayout,
         face_ids: &mut FrameFaceAttempt,
-        fallback_face_id: FaceId,
     ) {
         let layout = *layout;
 
@@ -1919,14 +1948,8 @@ impl<'a, FS: crate::neovm_bridge::FaceServices> TextRowSourceRenderState<'a, FS>
                 None => return,
             };
 
-        // The face id: prefer the `set-fringe-bitmap-face` override, then the
-        // spec's FACE, then the row's active face.
-        let face_id = self.resolve_fringe_face_id(
-            registry_face_name.as_deref(),
-            layout.face,
-            face_ids,
-            fallback_face_id,
-        );
+        let face_id =
+            self.resolve_fringe_face_id(registry_face_name.as_deref(), layout.face, face_ids);
 
         let info = FringeBitmapInfo {
             bitmap_index,
@@ -1938,28 +1961,62 @@ impl<'a, FS: crate::neovm_bridge::FaceServices> TextRowSourceRenderState<'a, FS>
             .apply_current_row_mutation(SetRowFringeBitmapMutation { side, info });
     }
 
-    /// Resolve the face id used for a fringe bitmap. `override_name` is the
-    /// `set-fringe-bitmap-face` registry override (highest priority); `spec_face`
-    /// is the FACE from the display spec; the active row face is the fallback.
+    /// The face one fringe bitmap paints with, GNU's rule for both the FACE of
+    /// a `(left-fringe BITMAP FACE)` display spec and the bitmap's
+    /// `set-fringe-bitmap-face` face.
+    ///
+    /// `handle_single_display_spec` (src/xdisp.c) records a FACE from the spec
+    /// as `lookup_derived_face (FACE, FRINGE_FACE_ID)`: the face merged OVER
+    /// the `fringe` face, so a face that sets only `:foreground` keeps the
+    /// fringe background. A missing FACE, or one that names no face (that
+    /// lookup returns -1 without signalling), leaves the row on the default
+    /// face id; `draw_fringe_bitmap_1` (src/fringe.c) substitutes a face only
+    /// then: the bitmap's `set-fringe-bitmap-face` face, likewise merged over
+    /// `fringe`, or plain `fringe` when the bitmap has none. The override
+    /// therefore never displaces a FACE written in the display spec, and the
+    /// text beside the bitmap never lends it a face.
     fn resolve_fringe_face_id(
         &mut self,
         override_name: Option<&str>,
         spec_face: Option<Value>,
         face_ids: &mut FrameFaceAttempt,
-        fallback_face_id: FaceId,
     ) -> FaceId {
-        if let Some(name) = override_name {
-            let resolved = self.faces.resolve_named_face(name);
-            return self.intern_and_install_face(face_ids, &resolved);
+        // GNU `lookup_derived_face (w, f, face, FRINGE_FACE_ID, false)`
+        // (src/xfaces.c:5350) merges over the frame's unremapped
+        // `FRINGE_FACE_ID`, whereas the FACE-less / unknown-FACE fallback in
+        // `draw_fringe_bitmap_1` (src/fringe.c:608) calls
+        // `lookup_named_face (w, f, Qfringe, false)`, honoring buffer-local
+        // `face-remapping-alist`.
+        let frame_fringe = self
+            .faces
+            .resolve_unremapped_fixed_face(neovm_core::emacs_core::intern::WellKnown::Fringe);
+        let mut resolved = None;
+        if let Some(face_value) = spec_face {
+            resolved = self.resolve_derived_face_over(&frame_fringe, &face_value);
         }
-        if let Some(face_value) = spec_face
-            && let Some(resolved) = self
-                .faces
-                .resolve_face_value_over(&self.faces.default_face(), &face_value)
+        if resolved.is_none()
+            && let Some(name) = override_name
         {
-            return self.intern_and_install_face(face_ids, &resolved);
+            let sym = Value::from_sym_id(neovm_core::emacs_core::intern::intern(name));
+            resolved = self.resolve_derived_face_over(&frame_fringe, &sym);
         }
-        fallback_face_id
+        let resolved = resolved.unwrap_or_else(|| {
+            self.resolve_fixed_face(neovm_core::emacs_core::intern::WellKnown::Fringe)
+        });
+        self.intern_and_install_face(face_ids, &resolved)
+    }
+
+    /// Merge a named face over a base resolved face and realize it for
+    /// display. `None` when the value names no defined or remapped face, like
+    /// GNU's `lookup_derived_face` with `signal_p` false, which yields -1.
+    pub(crate) fn resolve_derived_face_over(
+        &mut self,
+        base: &ResolvedFace,
+        face_value: &Value,
+    ) -> Option<ResolvedFace> {
+        let mut face = self.faces.resolve_derived_face_over(base, face_value)?;
+        self.realize_face_for_display(&mut face);
+        Some(face)
     }
 
     pub(crate) fn output_emitter(&mut self) -> &mut WindowOutputEmitter {
@@ -1985,12 +2042,23 @@ impl<'a, FS: crate::neovm_bridge::FaceServices> TextRowSourceRenderState<'a, FS>
             .apply_current_row_mutation(FirstTextGlyphAfterCheckpointMutation { checkpoint })?
     }
 
-    /// Roll the current row's drawn glyphs back to `checkpoint` when the
-    /// word-wrap break rewinds to a word boundary.
-    #[cfg(test)]
+    /// Roll the current row's drawn glyphs back to `checkpoint`.
+    ///
+    /// Used when a word-wrap break opportunity stands immediately before an
+    /// invisible ellipsis that clips, dropping partial dot(s) so all ellipsis
+    /// dots open the continuation row.
     pub(crate) fn restore_glyph_checkpoint(&mut self, checkpoint: DisplayRowGlyphCheckpoint) {
         self.output_render
-            .restore_current_row_glyph_checkpoint(checkpoint);
+            .restore_current_row_glyph_checkpoint(checkpoint, None);
+    }
+
+    /// Advance the current row's `end_charpos` to at least `source_end` (for a
+    /// skipped invisible span whose synthetic ellipsis or elision adds no
+    /// buffer-sourced glyph, matching GNU `display_line`'s `row->end = it->current`).
+    pub(crate) fn advance_current_row_source_end(&mut self, source_end: usize) {
+        self.output_render
+            .current_row_output()
+            .apply_current_row_mutation(AdvanceRowSourceEnd { source_end });
     }
 
     pub(crate) fn restore_word_wrap_checkpoint(
@@ -2099,6 +2167,9 @@ impl<'a> TextRowSourceMeasureState<'a> {
                 self.face_resolver,
                 self.evaluator.display_host.as_deref(),
                 face_ids,
+                crate::string_property_snapshot::StringSourceRootScope::Rooted(
+                    self.evaluator.owned_root_retainer(),
+                ),
             )
             .with_automatic_composition(self.automatic_composition),
             render_policy: &mut policy,

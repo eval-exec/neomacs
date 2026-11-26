@@ -66,8 +66,8 @@ impl StoreKind {
         match self {
             Self::Setcar | Self::ConstantSetcar => owner.cons_car(),
             Self::Setcdr | Self::BlvDefault | Self::BlvLocal => owner.cons_cdr(),
-            Self::VectorAset => owner.as_vector_data().expect("vector")[0],
-            Self::RecordAset => owner.as_record_data().expect("record")[1],
+            Self::VectorAset => owner.as_vector_data().expect("vector").at(0),
+            Self::RecordAset => owner.as_record_data().expect("record").at(1),
             Self::UnibyteStringAset | Self::MultibyteStringAset => Value::make_int(i64::from(
                 owner.as_str_owned().expect("string").as_bytes()[0],
             )),
@@ -283,15 +283,7 @@ fn check_mapped_blv_binding() {
     // the same coherent (SYMBOL . DEFAULT) pair retained explicitly in this
     // image, so the remembered mapped-cell proof is exercised rather than
     // silently testing a newly allocated owner outside the dump window.
-    // Obarray::blv is the public reader of that record. store_atomic takes a
-    // shared cell, so the install does not need a mutable borrow.
-    {
-        let blv = context.obarray().blv(id).expect("localized");
-        if blv.valcell.get() == blv.defcell.get() {
-            blv.valcell.store_atomic(owner);
-        }
-        blv.defcell.store_atomic(owner);
-    }
+    context.obarray.replace_blv_defcell_for_test(id, owner);
     assert!(
         context
             .tagged_heap
@@ -690,13 +682,16 @@ fn gen0_observed_certificate_survives_context_switch_until_its_owner_is_stored()
     let (_, reads) = capture(|| owner.cons_car());
     let reads = reads.expect("Context A owner");
     assert!(is_observed(owner.bits()));
-    let _second_context = context(false);
+    let parked_first = first_context.park_for_test();
+    let second_context = context(false);
     let leaf = compile_bytecode_function(&store_function(Op::Setcar)).expect("Context B setter");
     assert!(reads.unchanged(), "creating B does not mutate A's owner");
-    // Independent Worlds now retain independent journals. Reactivate the
-    // owning World before storing its object; Green peers instead share that
-    // World's state through the Baton (covered by the Green transfer fixture).
-    first_context.setup_thread_locals();
+    // Independent Worlds now retain independent journals. Park B and resume
+    // the owning World before storing its object; Green peers instead share
+    // that World's state through the Baton (covered by the Green transfer
+    // fixture).
+    let _parked_second = second_context.park_for_test();
+    let mut first_context = parked_first.resume_for_test().expect("resume Context A");
     let before = LispCollectionRevision::current();
     native(&mut first_context, &leaf, &[owner, Value::make_int(65)]);
     assert_eq!(
@@ -852,8 +847,8 @@ fn concurrent_cycle(heap: &mut TaggedHeap, roots: &[Value]) {
     }
     let before = heap.live_bytes();
     heap.incremental_drain_all();
-    heap.incremental_finish(before, std::time::Instant::now());
-    heap.finish_incremental_sweep_now();
+    heap.incremental_finish_for_test(before, std::time::Instant::now());
+    heap.finish_incremental_sweep_now_for_test();
     assert!(!heap.sweep_in_progress());
 }
 
@@ -869,7 +864,7 @@ fn gen0_observed_mark_survives_live_stw_and_concurrent_gc_cycles() {
         assert!(reads.expect("live owner read").unchanged());
         assert!(is_observed(owner.bits()));
         for _ in 0..2 {
-            heap.collect_exact(std::iter::once(owner));
+            heap.collect_rooted(std::iter::once(owner));
             assert!(is_observed(owner.bits()), "live STW survivor: {kind:?}");
         }
         concurrent_cycle(&mut heap, &[owner]);
@@ -893,7 +888,7 @@ fn gen0_observed_mark_clears_when_gc_frees_and_reuses_the_exact_slot() {
         let (_, reads) = capture(|| kind.read(doomed));
         let old_reads = reads.expect("observed owner before reclamation");
         assert!(is_observed(old_bits));
-        heap.collect_exact([keep, keep2].into_iter());
+        heap.collect_rooted([keep, keep2].into_iter());
         assert!(!heap.owns_heap_value_for_test(doomed));
         // The same-class neighbors retain this block/page's storage. The
         // non-observing query can inspect its cleared free-slot metadata.
@@ -923,7 +918,7 @@ fn gen0_observed_reused_address_republishes_before_recent_read_dedup() {
         let (_, reads) = capture(|| {
             kind.read(doomed);
             assert!(is_observed(old_bits));
-            heap.collect_exact([keep, keep2].into_iter());
+            heap.collect_rooted([keep, keep2].into_iter());
             assert!(!is_observed(old_bits));
             let reused = kind.allocate(&mut heap);
             assert_eq!(reused.bits(), old_bits);

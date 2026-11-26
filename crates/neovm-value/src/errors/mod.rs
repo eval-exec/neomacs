@@ -123,10 +123,25 @@ pub fn signal_matches_condition_value_sym(
     pattern: &Value,
     symbol_mode: SymbolMode,
 ) -> bool {
-    // The signal's own conditions, read by identity (falling back to just the
-    // symbol itself, matching `signal_matches_hierarchical`'s exact-match rule).
+    // The signal's own conditions, read by identity.  An uninterned error
+    // symbol carries them on that exact symbol object.
     let conditions = obarray.get_property_id(signal_sym, error_conditions_sym_id());
-    signal_matches_pattern_against_conditions(signal_sym, conditions.as_ref(), pattern, symbol_mode)
+    signal_matches_conditions(conditions.as_ref(), pattern, symbol_mode)
+}
+
+/// GNU `find_handler_clause` (src/eval.c:2241-2263): match the clause
+/// `pattern` against an already-read `error-conditions` list.
+///
+/// Matching is membership of every clause handler in `conditions`, with `t`
+/// as the catch-all.  There is deliberately no "the clause names the
+/// signalled symbol" shortcut: GNU has none, so a customized list that omits
+/// the signalled symbol does not match that symbol's own clause.
+pub fn signal_matches_conditions(
+    conditions: Option<&Value>,
+    pattern: &Value,
+    symbol_mode: SymbolMode,
+) -> bool {
+    find_clause_pattern(conditions, pattern, symbol_mode)
 }
 
 /// Identity-aware hierarchical match for one signal and one condition.
@@ -141,16 +156,25 @@ pub fn signal_matches_hierarchical_sym(
     symbol_mode: SymbolMode,
 ) -> bool {
     let conditions = obarray.get_property_id(signal_sym, error_conditions_sym_id());
-    signal_matches_symbol_against_conditions(
-        signal_sym,
-        conditions.as_ref(),
-        condition_sym,
-        symbol_mode,
-    )
+    find_clause_symbol(conditions.as_ref(), condition_sym, symbol_mode)
 }
 
-fn signal_matches_pattern_against_conditions(
+/// GNU `Fmemq (condition, (get signal 'error-conditions))`.
+///
+/// Membership only.  Callers that need GNU's identity half (for example
+/// `signal_quit_p`, src/eval.c:2199-2210) add it themselves: the debugger and
+/// the command-error severity do exactly that.
+pub fn signal_conditions_contain(
+    obarray: &Obarray,
     signal_sym: SymId,
+    condition_sym: SymId,
+    symbol_mode: SymbolMode,
+) -> bool {
+    let conditions = obarray.get_property_id(signal_sym, error_conditions_sym_id());
+    find_clause_symbol(conditions.as_ref(), condition_sym, symbol_mode)
+}
+
+fn find_clause_pattern(
     conditions: Option<&Value>,
     pattern: &Value,
     symbol_mode: SymbolMode,
@@ -159,26 +183,25 @@ fn signal_matches_pattern_against_conditions(
         ValueKind::T => true,
         ValueKind::Nil => false,
         ValueKind::Cons => list_to_vec(pattern).is_some_and(|items| {
-            items.iter().any(|item| {
-                signal_matches_pattern_against_conditions(signal_sym, conditions, item, symbol_mode)
-            })
+            items
+                .iter()
+                .any(|item| find_clause_pattern(conditions, item, symbol_mode))
         }),
         _ => {
             let Some(cond_id) = crate::value::symbol_id(pattern, symbol_mode) else {
                 return false;
             };
-            signal_matches_symbol_against_conditions(signal_sym, conditions, cond_id, symbol_mode)
+            find_clause_symbol(conditions, cond_id, symbol_mode)
         }
     }
 }
 
-fn signal_matches_symbol_against_conditions(
-    signal_sym: SymId,
+fn find_clause_symbol(
     conditions: Option<&Value>,
     condition_sym: SymId,
     symbol_mode: SymbolMode,
 ) -> bool {
-    if pattern_is_catch_all(condition_sym) || condition_sym == signal_sym {
+    if pattern_is_catch_all(condition_sym) {
         return true;
     }
     let Some(conditions) = conditions else {
@@ -355,12 +378,6 @@ pub fn init_standard_errors(obarray: &mut Obarray) {
     register_simple(obarray, "type-mismatch", "Type mismatch", &["error"]);
     register_simple(
         obarray,
-        "permission-denied",
-        "Permission denied",
-        &["error"],
-    );
-    register_simple(
-        obarray,
         "recursion-error",
         "Excessive recursive calling error",
         &["error"],
@@ -415,6 +432,13 @@ pub fn init_standard_errors(obarray: &mut Obarray) {
     // symbol visible at boot and changed `(intern-soft "file-locked")` /
     // `(all-completions "file-" obarray)`.
     register_simple(obarray, "file-missing", "File is missing", &["file-error"]);
+    // GNU src/fileio.c:6819-6822 (`syms_of_fileio`).
+    register_simple(
+        obarray,
+        "permission-denied",
+        "Cannot access file or directory",
+        &["file-error"],
+    );
     register_simple(
         obarray,
         "file-notify-error",

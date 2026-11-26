@@ -65,13 +65,6 @@ impl IntegerWidthContext {
     /// Uninstall only this Context's activation. A newer Context is preserved.
     /// AlreadyInactive installs nothing. No `Drop` hook reinstalls the binding.
     #[cold]
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "E2 L3 cold integer-width detach; no production caller enters it"
-        )
-    )]
     pub(crate) fn detach_activation(
         &self,
     ) -> Result<DetachedIntegerWidthActivation, IntegerWidthDetachError> {

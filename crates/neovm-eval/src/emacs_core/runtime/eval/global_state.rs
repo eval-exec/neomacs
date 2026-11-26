@@ -28,6 +28,9 @@ macro_rules! global_state {
             /// xdisp.c `mode_line_elt_no` and its active output scope. Accessor
             /// owned so adding formatter state does not move Context/JIT fields.
             pub(crate) mode_line_output: crate::emacs_core::eval::data::redisplay::ModeLineOutputOwner,
+            /// alloc.c's fixed-symbol and last-sweep runtime-symbol census.
+            /// Accessor-owned: this boxed state adds no inline Context slot.
+            pub(crate) gc_symbol_census: super::gc_pacing::symbol_census::SymbolGcCensus,
             /// print.c print state, one per World: the `print_buffer`
             /// accumulator every buffer/marker print shares, plus the
             /// `print_number_index` counter (design rev 2 A2/A3). PRIVATE to
@@ -184,6 +187,7 @@ impl GlobalState {
             input_mode_interrupt: true,
             debugging_output_file: None,
             mode_line_output: Default::default(),
+            gc_symbol_census: Default::default(),
         }
     }
 }

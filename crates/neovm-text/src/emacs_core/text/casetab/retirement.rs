@@ -127,3 +127,14 @@ mod tests {
         assert_eq!(STANDARD_CASE_TABLE_HEAP.with(Cell::get), 0);
     }
 }
+
+/// The composition tests hold this TLS loan. No production callback and no
+/// new slot. Retirement must refuse it.
+#[cfg(any(test, feature = "test-support"))]
+#[doc(hidden)]
+pub fn with_source_retirement_reader_for_test<R>(body: impl FnOnce() -> R) -> R {
+    STANDARD_CASE_TABLE_OBJECT.with(|slot| {
+        let _reader = slot.borrow();
+        body()
+    })
+}

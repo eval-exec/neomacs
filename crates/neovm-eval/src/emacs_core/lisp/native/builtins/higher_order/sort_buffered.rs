@@ -83,10 +83,7 @@ impl State {
             .iter_mut()
             .zip(self.vector.as_vector_data().unwrap())
         {
-            *item = SortItem {
-                value: *value,
-                key: *value,
-            };
+            *item = SortItem { value, key: value };
         }
         self.publication = VectorPublication::Current;
     }
@@ -393,10 +390,7 @@ pub(super) fn sort_native_vector(
             .as_vector_data()
             .unwrap()
             .iter()
-            .map(|value| SortItem {
-                value: *value,
-                key: *value,
-            })
+            .map(|value| SortItem { value, key: value })
             .collect(),
         roots: Vec::new(),
         publication: VectorPublication::Current,

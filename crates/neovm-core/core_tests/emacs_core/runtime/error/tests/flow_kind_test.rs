@@ -254,7 +254,7 @@ fn gdl_eval_error_memory_round_trip_keeps_original_binding_through_clone_and_gc(
     assert!(ctx.tagged_heap().owns_heap_value_for_test(vector));
     assert_eq!(binding.cons_car().as_bare_symbol_id(), Some(symbol));
     assert_eq!(tail.cons_cdr(), Value::fixnum(99));
-    assert_eq!(vector.as_vector_data().unwrap()[0], Value::fixnum(7));
+    assert_eq!(vector.as_vector_data().unwrap().at(0), Value::fixnum(7));
 }
 
 #[test]

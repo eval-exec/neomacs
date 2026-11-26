@@ -37,10 +37,17 @@ impl ToolbarResources {
         &self.textures
     }
 
+    /// Forget every realized icon texture without retiring it, because the
+    /// caller has already dropped the renderer's image cache (a wholesale
+    /// `clear-image-cache`) or the device that owned it.
+    pub(super) fn forget_realized(&mut self) {
+        self.textures.clear();
+    }
+
     /// The old GPU already owns/destroyed these resources; do not retire them
     /// through the replacement device's unrelated image identities.
     pub(super) fn forget_after_device_loss(&mut self) {
-        self.textures.clear();
+        self.forget_realized();
     }
 
     pub(super) fn reconcile(

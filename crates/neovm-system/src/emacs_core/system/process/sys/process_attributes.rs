@@ -21,8 +21,6 @@
 //! Additional native Darwin/BSD or Windows queries belong behind these same
 //! functions.
 
-use std::ffi::CStr;
-
 /// Native Darwin attributes, matching GNU `sysdep.c:4273-4459`. Every query
 /// owns its buffers; snapshots contain no shared or thread-confined state.
 #[cfg(target_os = "macos")]
@@ -652,52 +650,10 @@ pub(crate) fn process_effective_ids(pid: i64) -> Option<(u32, u32)> {
     Some((euid?, egid?))
 }
 
-#[cfg(not(target_os = "windows"))]
 pub(crate) fn user_name(uid: u32) -> Option<String> {
-    // SAFETY: libc returns either null or a valid passwd struct pointer.
-    let user = unsafe { libc::getpwuid(uid as libc::uid_t) };
-    if user.is_null() {
-        return None;
-    }
-    // SAFETY: `user` is non-null and `pw_name` is a valid C string pointer.
-    let name_ptr = unsafe { (*user).pw_name };
-    if name_ptr.is_null() {
-        return None;
-    }
-    // SAFETY: `name_ptr` is a valid NUL-terminated C string.
-    Some(
-        unsafe { CStr::from_ptr(name_ptr) }
-            .to_string_lossy()
-            .into_owned(),
-    )
+    neovm_value::system_vocab::posix_lookup::lookup_user_name(uid)
 }
 
-#[cfg(target_os = "windows")]
-pub(crate) fn user_name(_uid: u32) -> Option<String> {
-    None
-}
-
-#[cfg(not(target_os = "windows"))]
 pub fn group_name(gid: u32) -> Option<String> {
-    // SAFETY: libc returns either null or a valid group struct pointer.
-    let group = unsafe { libc::getgrgid(gid as libc::gid_t) };
-    if group.is_null() {
-        return None;
-    }
-    // SAFETY: `group` is non-null and `gr_name` is a valid C string pointer.
-    let name_ptr = unsafe { (*group).gr_name };
-    if name_ptr.is_null() {
-        return None;
-    }
-    // SAFETY: `name_ptr` is a valid NUL-terminated C string.
-    Some(
-        unsafe { CStr::from_ptr(name_ptr) }
-            .to_string_lossy()
-            .into_owned(),
-    )
-}
-
-#[cfg(target_os = "windows")]
-pub fn group_name(_gid: u32) -> Option<String> {
-    None
+    neovm_value::system_vocab::posix_lookup::lookup_group_name(gid)
 }

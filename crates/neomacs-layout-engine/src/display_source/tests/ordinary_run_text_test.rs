@@ -1,4 +1,5 @@
 use super::*;
+use crate::string_property_snapshot::StringSourceRootScope;
 use neovm_core::emacs_core::Context;
 use neovm_core::emacs_core::emacs_char::MAX_5_BYTE_CHAR;
 use neovm_core::emacs_core::value::StringTextPropertyRun;
@@ -10,6 +11,7 @@ fn frame(value: Value) -> LispStringSourceFrame {
         value,
         RenderFaceRef::Inherit,
         LispStringSourceOrigin::Normal,
+        StringSourceRootScope::CallbackFree,
     )
     .expect("native string fixture")
 }
@@ -209,6 +211,7 @@ fn ordinary_run_text_full_cursor_keeps_special_item_coordinates() {
         value,
         RenderFaceRef::Inherit,
         LispStringSourceOrigin::Normal,
+        StringSourceRootScope::Rooted(_eval.owned_root_retainer()),
     )
     .expect("string cursor");
     let mut context = DisplaySourceContext::empty();

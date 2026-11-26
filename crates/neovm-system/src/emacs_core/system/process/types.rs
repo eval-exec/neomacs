@@ -410,9 +410,9 @@ impl StderrPipeWriterTransfer<'_> {
 
     pub fn commit(&mut self) {
         if let Some(stderr_id) = self.stderr_pipe_id
-            && let Some(stderr_proc) = self.processes.processes.get_mut(&stderr_id)
+            && let Some(stderr_proc) = self.processes.get_mut(stderr_id)
         {
-            stderr_proc.live_io.stderr_pipe_owner = Some(self.owner_id);
+            stderr_proc.set_stderr_pipe_owner(Some(self.owner_id));
         }
         drop(self.writer.take());
         self.committed = true;
@@ -444,11 +444,11 @@ impl Drop for StderrPipeWriterTransfer<'_> {
         let Some(writer) = self.writer.take() else {
             return;
         };
-        let Some(stderr_proc) = self.processes.processes.get_mut(&stderr_id) else {
+        let Some(stderr_proc) = self.processes.get_mut(stderr_id) else {
             return;
         };
-        if stderr_proc.live_io.module_pipe_writer.is_none() {
-            stderr_proc.live_io.module_pipe_writer = Some(writer);
+        if stderr_proc.live_io().module_pipe_writer().is_none() {
+            stderr_proc.set_module_pipe_writer(Some(writer));
         }
     }
 }
@@ -596,13 +596,13 @@ pub(super) fn accepted_network_process_name(server_name: &str, addr: SocketAddr)
 
 pub(super) fn process_is_datagram_network(proc: &Process) -> bool {
     let is_datagram = matches!(
-        proc.live_io.network_socket.as_ref(),
+        proc.live_io().network_socket().map(|s| &**s),
         Some(NetworkSocket::UdpSocket(_))
     );
     #[cfg(unix)]
     let is_datagram = is_datagram
         || matches!(
-            proc.live_io.network_socket.as_ref(),
+            proc.live_io().network_socket().map(|s| &**s),
             Some(NetworkSocket::UnixDatagram(_))
         );
     is_datagram
@@ -1412,6 +1412,37 @@ pub(super) fn pending_process_output_run(
 pub(super) fn process_read_buffer_len(proc: &Process) -> usize {
     proc.readmax.clamp(1, READ_PROCESS_OUTPUT_MAX_CEILING)
 }
+
+/// GNU `create_process` enlarges the child's stdout pipe to the process's
+/// `readmax` (`src/process.c:2223-2227`) so that a single `read_process_output`
+/// read can fill the whole `read-process-output-max` buffer.
+///
+/// Linux caps a pipe at 64 KiB by default.  Without this, a consumer that
+/// raises `read-process-output-max` (consult sets it to 1 MiB for its async
+/// pipeline) still gets one process-filter call per 64 KiB instead of one per
+/// buffer: for the same `rg` output, consult's filter, refresh and vertico
+/// re-filtering run 16 times as often, which is the difference between a
+/// bounded search and an unusably slow, memory-hungry one (#625).
+///
+/// GNU ignores both `fcntl` results: the pipe is usable at its old size, and
+/// requests above `/proc/sys/fs/pipe-max-size` are allowed to fail.  Platforms
+/// without `F_SETPIPE_SZ` keep the default capacity in GNU too.
+#[cfg(all(unix, any(target_os = "linux", target_os = "android")))]
+fn enlarge_child_output_pipe<F: std::os::unix::io::AsRawFd>(pipe: &F, readmax: usize) {
+    let fd = pipe.as_raw_fd();
+    // SAFETY: `fd` is an open pipe descriptor owned by `pipe`, and both
+    // commands only inspect/resize that pipe's capacity; neither retains the
+    // descriptor.  Both results are ignored, exactly as GNU ignores them.
+    let current = unsafe { libc::fcntl(fd, libc::F_GETPIPE_SZ) };
+    // GNU's condition is `readmax > fcntl (fd, F_GETPIPE_SZ)` with no success
+    // test, so a failed query (-1) still attempts the resize; keep that shape.
+    if readmax as i64 > current as i64 {
+        unsafe { libc::fcntl(fd, libc::F_SETPIPE_SZ, readmax as libc::c_int) };
+    }
+}
+
+#[cfg(not(all(unix, any(target_os = "linux", target_os = "android"))))]
+fn enlarge_child_output_pipe<F>(_pipe: &F, _readmax: usize) {}
 
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(super) fn update_process_adaptive_read_buffering(
@@ -2990,13 +3021,13 @@ pub(super) enum ProcessOutputSource {
 }
 
 pub(super) fn process_output_source(proc: &Process) -> Option<ProcessOutputSource> {
-    if proc.live_io.pty_reader.is_some() {
+    if proc.live_io().pty_reader().is_some() {
         Some(ProcessOutputSource::Pty)
-    } else if proc.live_io.child_stdout.is_some() {
+    } else if proc.live_io().child_stdout().is_some() {
         Some(ProcessOutputSource::ChildStdout)
-    } else if proc.live_io.tls_stream.is_some() || proc.live_io.network_socket.is_some() {
+    } else if proc.live_io().tls_stream().is_some() || proc.live_io().network_socket().is_some() {
         Some(ProcessOutputSource::Network)
-    } else if proc.live_io.serial_port.is_some() {
+    } else if proc.live_io().serial_port().is_some() {
         Some(ProcessOutputSource::Serial)
     } else {
         None
@@ -3091,12 +3122,10 @@ pub(super) fn process_status_is_exit_or_signal(status: &Value) -> bool {
 
 pub(super) fn process_defers_pty_status_after_explicit_coding(proc: &Process) -> bool {
     proc.coding_explicitly_set
-        && (proc.live_io.child.is_pty_handle()
-            || proc
-                .live_io
-                .pty_reader
-                .as_ref()
-                .is_some_and(PtyOutputReader::is_monitored))
+        && proc
+            .live_io()
+            .pty_reader()
+            .is_some_and(PtyOutputReader::is_monitored)
 }
 
 pub(super) fn process_defers_status_poll_while_readable_pty(proc: &Process) -> bool {
@@ -3119,9 +3148,8 @@ pub(super) fn process_publishes_status_after_ready_output(proc: &Process) -> boo
             Some(ProcessOutputSource::ChildStdout)
         )
         || (proc
-            .live_io
-            .pty_reader
-            .as_ref()
+            .live_io()
+            .pty_reader()
             .is_some_and(PtyOutputReader::is_monitored)
             && !process_command_is_shell_command(proc))
 }
@@ -3137,11 +3165,11 @@ pub(super) fn process_should_defer_explicit_coding_status_after_output(
 
 pub(super) fn process_is_harness_record_without_write_source(proc: &Process) -> bool {
     proc.os_pid.is_none()
-        && !proc.live_io.child.has_pipe_child()
-        && proc.live_io.pty_writer.is_none()
-        && proc.live_io.tls_stream.is_none()
-        && proc.live_io.network_socket.is_none()
-        && proc.live_io.serial_port.is_none()
+        && !proc.live_io().child().has_pipe_child()
+        && proc.live_io().pty_writer().is_none()
+        && proc.live_io().tls_stream().is_none()
+        && proc.live_io().network_socket().is_none()
+        && proc.live_io().serial_port().is_none()
 }
 
 pub(super) fn pending_network_connect_id(
@@ -3152,7 +3180,7 @@ pub(super) fn pending_network_connect_id(
     Ok(processes
         .get(id)
         .is_some_and(|proc| {
-            proc.kind == ProcessKind::Network && proc.live_io.pending_network_connect.is_some()
+            proc.kind == ProcessKind::Network && proc.live_io().pending_network_connect().is_some()
         })
         .then_some(id))
 }
@@ -3343,8 +3371,8 @@ pub(super) fn apply_network_socket_option_to_process(
     proc: &mut Process,
     spec: NetworkSocketOptionSpec,
 ) -> EvalResult {
-    if let Some(socket) = proc.live_io.network_socket.as_ref() {
-        return match socket {
+    if let Some(socket) = proc.live_io().network_socket() {
+        return match &**socket {
             NetworkSocket::TcpStream(stream) => {
                 apply_network_socket_option_to_socket(&SockRef::from(stream), spec)
             }
@@ -3377,7 +3405,7 @@ pub(super) fn apply_network_socket_option_to_process(
         };
     }
 
-    if let Some(tls) = proc.live_io.tls_stream.as_ref() {
+    if let Some(tls) = proc.live_io().tls_stream() {
         return apply_network_socket_option_to_socket(&SockRef::from(tls.tcp_stream()), spec);
     }
 
@@ -3569,21 +3597,22 @@ pub(super) fn network_addrinfo_item_error_detail(err: std::io::Error) -> String 
 
 pub(super) fn resolve_network_socket_addrs_raw(
     host: &str,
-    port: u16,
+    service: &str,
     family: NetworkProcessFamily,
     socket_type: NetworkSocketType,
 ) -> Result<Vec<SocketAddr>, String> {
     use dns_lookup::AddrInfoHints;
 
     let normalized_host = host.split('\0').next().unwrap_or_default();
-    let service = port.to_string();
+    let normalized_service = service.split('\0').next().unwrap_or_default();
     let hints = AddrInfoHints {
         address: family.addrinfo_family(),
         socktype: network_socket_type_addrinfo_socktype(socket_type),
         ..AddrInfoHints::default()
     };
-    let iter = dns_lookup::getaddrinfo(Some(normalized_host), Some(&service), Some(hints))
-        .map_err(network_addrinfo_error_detail)?;
+    let iter =
+        dns_lookup::getaddrinfo(Some(normalized_host), Some(normalized_service), Some(hints))
+            .map_err(network_addrinfo_error_detail)?;
     let mut addrs = Vec::new();
     for info in iter {
         let info = info.map_err(network_addrinfo_item_error_detail)?;
@@ -3598,22 +3627,25 @@ pub(super) fn resolve_network_socket_addrs_raw(
 
 pub(super) fn resolve_network_socket_addrs(
     host: &str,
-    port: u16,
+    service: &str,
     family: NetworkProcessFamily,
     socket_type: NetworkSocketType,
 ) -> Result<Vec<SocketAddr>, Flow> {
     let normalized_host = host.split('\0').next().unwrap_or_default();
-    resolve_network_socket_addrs_raw(host, port, family, socket_type).map_err(|detail| {
+    let normalized_service = service.split('\0').next().unwrap_or_default();
+    resolve_network_socket_addrs_raw(host, service, family, socket_type).map_err(|detail| {
         signal(
             "error",
-            vec![Value::string(format!("{normalized_host}/{port} {detail}"))],
+            vec![Value::string(format!(
+                "{normalized_host}/{normalized_service} {detail}"
+            ))],
         )
     })
 }
 
 pub(super) fn start_async_network_dns_lookup(
     host: String,
-    port: u16,
+    service: String,
     family: NetworkProcessFamily,
     socket_type: NetworkSocketType,
     socket_options: Vec<NetworkSocketOptionSpec>,
@@ -3634,7 +3666,7 @@ pub(super) fn start_async_network_dns_lookup(
     let thread_ready = Arc::clone(&ready);
     let thread_host = host.clone();
     std::thread::spawn(move || {
-        let result = resolve_network_socket_addrs_raw(&thread_host, port, family, socket_type);
+        let result = resolve_network_socket_addrs_raw(&thread_host, &service, family, socket_type);
         let _ = sender.send(result);
         thread_ready.store(true, Ordering::Release);
         if let Some(notifier) = notifier
@@ -3668,9 +3700,10 @@ pub(super) fn hostname_fails_without_dns_lookup(host: &str) -> bool {
 pub(super) fn nowait_tcp_immediate_addrs(
     host_value: Value,
     host: &str,
-    port: u16,
+    service: &str,
     family: NetworkProcessFamily,
 ) -> Option<Vec<SocketAddr>> {
+    let port = parse_network_numeric_service_port(service)?;
     if host_value.is_nil()
         || host_value.as_bare_symbol_name() == Some("local")
         || host == "localhost"
@@ -3688,12 +3721,12 @@ pub(super) fn nowait_tcp_immediate_addrs(
 
 pub(super) fn bind_udp_socket_host(
     host: &str,
-    port: u16,
+    service: &str,
     family: NetworkProcessFamily,
     options: &[NetworkSocketOptionSpec],
 ) -> Result<UdpSocket, Flow> {
     let mut last_error = None;
-    for addr in resolve_network_socket_addrs(host, port, family, NetworkSocketType::Datagram)? {
+    for addr in resolve_network_socket_addrs(host, service, family, NetworkSocketType::Datagram)? {
         match bind_udp_socket(addr, options) {
             Ok(socket) => return Ok(socket),
             Err(err) => last_error = Some(err),
@@ -3709,12 +3742,12 @@ pub(super) fn bind_udp_socket_host(
 
 pub(super) fn connect_udp_socket_host(
     host: &str,
-    port: u16,
+    service: &str,
     family: NetworkProcessFamily,
     options: &[NetworkSocketOptionSpec],
 ) -> Result<(UdpSocket, SocketAddr), Flow> {
     let mut last_error = None;
-    for addr in resolve_network_socket_addrs(host, port, family, NetworkSocketType::Datagram)? {
+    for addr in resolve_network_socket_addrs(host, service, family, NetworkSocketType::Datagram)? {
         match bind_udp_client_socket(addr, options) {
             Ok(socket) => return Ok((socket, addr)),
             Err(err) => last_error = Some(err),
@@ -3730,13 +3763,13 @@ pub(super) fn connect_udp_socket_host(
 
 pub(super) fn bind_tcp_listener_host(
     host: &str,
-    port: u16,
+    service: &str,
     family: NetworkProcessFamily,
     backlog: i32,
     options: &[NetworkSocketOptionSpec],
 ) -> Result<TcpListener, Flow> {
     let mut last_error = None;
-    for addr in resolve_network_socket_addrs(host, port, family, NetworkSocketType::Stream)? {
+    for addr in resolve_network_socket_addrs(host, service, family, NetworkSocketType::Stream)? {
         match bind_tcp_listener_socket(addr, backlog, options) {
             Ok(listener) => return Ok(listener),
             Err(err) => last_error = Some(err),
@@ -3752,13 +3785,13 @@ pub(super) fn bind_tcp_listener_host(
 
 pub(super) fn connect_tcp_stream_host(
     host: &str,
-    port: u16,
+    service: &str,
     family: NetworkProcessFamily,
     options: &[NetworkSocketOptionSpec],
     contact: Value,
 ) -> Result<TcpStream, Flow> {
     let mut last_error = None;
-    for addr in resolve_network_socket_addrs(host, port, family, NetworkSocketType::Stream)? {
+    for addr in resolve_network_socket_addrs(host, service, family, NetworkSocketType::Stream)? {
         match connect_tcp_stream_socket(addr, options, contact) {
             Ok(stream) => return Ok(stream),
             Err(err) => last_error = Some(err),
@@ -3947,16 +3980,158 @@ use super::child_status::{
     UnrecordedStatusRead, UpdateStatusSite, record_status_notify_visits,
 };
 use neovm_eval::emacs_core::eval::data::process_state::StatusChangeSite;
+/// Crate-internal poller registration helpers for child pipe descriptors.
+///
+/// Kept off `pub trait SystemProcessExt` and routed through `PollRegistration`
+/// so every registered descriptor carries `Arc<Poller>` and unregisters itself
+/// on drop (soundness B5).
+pub(crate) trait ChildPipePollerExt {
+    #[cfg(unix)]
+    fn register_child_stdout_with_poller(
+        poller: &Arc<polling::Poller>,
+        stdout: &neovm_eval::emacs_core::eval::data::process_state::PollRegistration<
+            ChildOutputReader,
+        >,
+        id: ProcessId,
+    );
+    #[cfg(not(unix))]
+    fn register_child_stdout_with_poller(
+        _poller: &Arc<polling::Poller>,
+        _stdout: &neovm_eval::emacs_core::eval::data::process_state::PollRegistration<
+            ChildOutputReader,
+        >,
+        _id: ProcessId,
+    );
+    fn unregister_child_stdout_from_poller(
+        stdout: &neovm_eval::emacs_core::eval::data::process_state::PollRegistration<
+            ChildOutputReader,
+        >,
+    );
+    #[cfg(unix)]
+    fn register_child_stdin_writable_with_poller(
+        poller: &Arc<polling::Poller>,
+        stdin: &neovm_eval::emacs_core::eval::data::process_state::PollRegistration<std::fs::File>,
+        id: ProcessId,
+    );
+    #[cfg(not(unix))]
+    fn register_child_stdin_writable_with_poller(
+        _poller: &Arc<polling::Poller>,
+        _stdin: &neovm_eval::emacs_core::eval::data::process_state::PollRegistration<std::fs::File>,
+        _id: ProcessId,
+    );
+    fn unregister_child_stdin_writable_from_poller(
+        stdin: &neovm_eval::emacs_core::eval::data::process_state::PollRegistration<std::fs::File>,
+    );
+    /// GNU `deactivate_process` translated into the Rust ownership model:
+    /// drop `proc`'s live I/O (every `PollRegistration` unregisters on drop).
+    fn deactivate_process_io(proc: &mut Process);
+}
+
+impl ChildPipePollerExt for ProcessManager {
+    #[cfg(unix)]
+    fn register_child_stdout_with_poller(
+        poller: &Arc<polling::Poller>,
+        stdout: &neovm_eval::emacs_core::eval::data::process_state::PollRegistration<
+            ChildOutputReader,
+        >,
+        id: ProcessId,
+    ) {
+        use std::os::unix::io::AsRawFd;
+        let _ = sys::set_fd_nonblocking(stdout.as_raw_fd());
+        let _ = stdout.register(
+            poller,
+            polling::Event::readable(id as usize),
+            polling::PollMode::Level,
+        );
+    }
+
+    #[cfg(not(unix))]
+    fn register_child_stdout_with_poller(
+        _poller: &Arc<polling::Poller>,
+        _stdout: &neovm_eval::emacs_core::eval::data::process_state::PollRegistration<
+            ChildOutputReader,
+        >,
+        _id: ProcessId,
+    ) {
+        // GNU Emacs does not pass Windows subprocess pipe handles to Winsock
+        // select.  Its w32 layer uses a reader thread plus event objects.  Until
+        // Neomacs has the same backend, child pipe output is serviced by the
+        // regular non-blocking wait pass instead of the socket poller.
+    }
+
+    fn unregister_child_stdout_from_poller(
+        stdout: &neovm_eval::emacs_core::eval::data::process_state::PollRegistration<
+            ChildOutputReader,
+        >,
+    ) {
+        stdout.unregister();
+    }
+
+    #[cfg(unix)]
+    fn register_child_stdin_writable_with_poller(
+        poller: &Arc<polling::Poller>,
+        stdin: &neovm_eval::emacs_core::eval::data::process_state::PollRegistration<std::fs::File>,
+        id: ProcessId,
+    ) {
+        use std::os::unix::io::AsRawFd;
+        let _ = sys::set_fd_nonblocking(stdin.as_raw_fd());
+        let _ = stdin.register(
+            poller,
+            polling::Event::writable(id as usize),
+            polling::PollMode::Level,
+        );
+    }
+
+    #[cfg(not(unix))]
+    fn register_child_stdin_writable_with_poller(
+        _poller: &Arc<polling::Poller>,
+        _stdin: &neovm_eval::emacs_core::eval::data::process_state::PollRegistration<std::fs::File>,
+        _id: ProcessId,
+    ) {
+        // Windows subprocess stdin is not integrated into the poller yet.
+    }
+
+    fn unregister_child_stdin_writable_from_poller(
+        stdin: &neovm_eval::emacs_core::eval::data::process_state::PollRegistration<std::fs::File>,
+    ) {
+        stdin.unregister();
+    }
+
+    fn deactivate_process_io(proc: &mut Process) {
+        proc.clear_live_io();
+        // GNU `deactivate_process` (`src/process.c:4820`) calls
+        // `emacs_gnutls_deinit`, which lowers `GNUTLS_INITSTAGE` to
+        // `GNUTLS_STAGE_CALLBACKS` (3) when `>= GNUTLS_STAGE_INIT` (4) and
+        // leaves stage 0 unchanged.
+        if i64::from(proc.gnutls_initstage) >= i64::from(GnutlsInitStage::Init) {
+            proc.gnutls_initstage = GnutlsInitStage::Callbacks;
+        }
+        proc.gnutls_boot_parameters = Value::NIL;
+    }
+}
+
 #[doc(hidden)]
 pub trait SystemProcessExt {
-    fn register_readable_source(
+    /// Register `source` for level-triggered readable events on `poller`.
+    ///
+    /// # Safety
+    /// The caller must delete `source` from `poller` (via `poller.delete`)
+    /// before closing or dropping the underlying descriptor, matching
+    /// `polling::Poller::add_with_mode`'s safety contract.
+    unsafe fn register_readable_source(
         poller: &polling::Poller,
-        source: impl polling::AsRawSource,
+        source: impl polling::AsSource,
         id: ProcessId,
     ) -> Result<(), String>;
-    fn register_writable_source(
+    /// Register `source` for level-triggered writable events on `poller`.
+    ///
+    /// # Safety
+    /// The caller must delete `source` from `poller` (via `poller.delete`)
+    /// before closing or dropping the underlying descriptor, matching
+    /// `polling::Poller::add_with_mode`'s safety contract.
+    unsafe fn register_writable_source(
         poller: &polling::Poller,
-        source: impl polling::AsRawSource,
+        source: impl polling::AsSource,
         id: ProcessId,
     ) -> Result<(), String>;
     fn modify_poll_source(
@@ -3964,62 +4139,36 @@ pub trait SystemProcessExt {
         source: impl polling::AsSource,
         event: polling::Event,
     ) -> Result<(), String>;
+    /// Register a borrowed Unix fd for readable events on `poller`.
+    ///
+    /// # Safety
+    /// The caller must delete `fd` from `poller` before closing or dropping
+    /// the descriptor that `fd` borrows.
     #[cfg(unix)]
-    fn register_readable_raw_fd(
+    unsafe fn register_readable_raw_fd(
         poller: &polling::Poller,
-        fd: std::os::unix::io::RawFd,
+        fd: std::os::unix::io::BorrowedFd<'_>,
         id: ProcessId,
     ) -> Result<(), String>;
+    /// Register a borrowed Unix fd for writable events on `poller`.
+    ///
+    /// # Safety
+    /// The caller must delete `fd` from `poller` before closing or dropping
+    /// the descriptor that `fd` borrows.
     #[cfg(unix)]
-    fn register_writable_raw_fd(
+    unsafe fn register_writable_raw_fd(
         poller: &polling::Poller,
-        fd: std::os::unix::io::RawFd,
+        fd: std::os::unix::io::BorrowedFd<'_>,
         id: ProcessId,
     ) -> Result<(), String>;
     #[cfg(unix)]
     fn modify_raw_fd_interest(
         poller: &polling::Poller,
-        fd: std::os::unix::io::RawFd,
+        fd: std::os::unix::io::BorrowedFd<'_>,
         event: polling::Event,
     ) -> Result<(), String>;
-    #[cfg(unix)]
-    fn register_child_stdout_with_poller(
-        poller: &polling::Poller,
-        stdout: &ChildOutputReader,
-        id: ProcessId,
-    );
-    #[cfg(not(unix))]
-    fn register_child_stdout_with_poller(
-        _poller: &polling::Poller,
-        _stdout: &ChildOutputReader,
-        _id: ProcessId,
-    );
-    #[cfg(unix)]
-    fn unregister_child_stdout_from_poller(poller: &polling::Poller, stdout: &ChildOutputReader);
-    #[cfg(not(unix))]
-    fn unregister_child_stdout_from_poller(_poller: &polling::Poller, _stdout: &ChildOutputReader);
     fn set_process_output_read_interest(&self, id: ProcessId, enabled: bool);
-    #[cfg(unix)]
-    fn register_child_stdin_writable_with_poller(
-        poller: &polling::Poller,
-        stdin: &std::fs::File,
-        id: ProcessId,
-    );
-    #[cfg(not(unix))]
-    fn register_child_stdin_writable_with_poller(
-        _poller: &polling::Poller,
-        _stdin: &std::fs::File,
-        _id: ProcessId,
-    );
-    #[cfg(unix)]
-    fn unregister_child_stdin_writable_from_poller(poller: &polling::Poller, stdin: &std::fs::File);
-    #[cfg(not(unix))]
-    fn unregister_child_stdin_writable_from_poller(
-        _poller: &polling::Poller,
-        _stdin: &std::fs::File,
-    );
-    fn unregister_process_poll_sources(poller: Option<&polling::Poller>, proc: &Process);
-    fn deactivate_process_io(poller: Option<&polling::Poller>, proc: &mut Process);
+    fn unregister_process_poll_sources(proc: &Process);
     fn deactivate_terminal_process_io(&mut self, id: ProcessId);
     fn apply_process_io_teardown(&mut self, id: ProcessId, teardown: ProcessIoTeardown);
     #[cfg(any(test, feature = "test-support"))]
@@ -4297,6 +4446,14 @@ pub trait SystemProcessExt {
     /// retired -- the analogue of `get_process` having answered `nil` before
     /// any of these sites was reached.
     fn observe(&mut self, site: UpdateStatusSite, id: ProcessId) -> Option<ObservedProcess<'_>>;
+    /// GNU's `handle_child_signal` body for ONE child, run at an observation
+    /// because this port has no SIGCHLD handler: the per-pid
+    /// `child_status_changed` probe and the record, never the notification.
+    fn reap_observed_child(&mut self, id: ProcessId);
+    /// The ProcessId whose live child has OS pid PID, if this World owns it.
+    /// `process-attributes` and a numeric `signal-process` start from an OS
+    /// pid; GNU's handler reached the process by `p->pid`.
+    fn process_with_os_pid(&self, pid: i64) -> Option<ProcessId>;
     /// Read a Lisp-visible status at one of the enumerated holes, WITHOUT
     /// GNU's recording having been made here.
     ///
@@ -4360,19 +4517,17 @@ pub(crate) fn restore_skipping_adaptive_reads(processes: &mut ProcessManager, id
 }
 
 impl SystemProcessExt for ProcessManager {
-    fn register_readable_source(
+    unsafe fn register_readable_source(
         poller: &polling::Poller,
-        source: impl polling::AsRawSource,
+        source: impl polling::AsSource,
         id: ProcessId,
     ) -> Result<(), String> {
-        // SAFETY: ProcessManager only registers descriptors owned by the
-        // corresponding Process record.  `unregister_process_poll_sources`
-        // removes every registered descriptor from this poller before the
-        // Process drops or replaces the descriptor.
+        // SAFETY: `source` is a live `AsSource` and the caller guarantees it
+        // will be deleted from `poller` before being closed or dropped.
         unsafe {
             poller
                 .add_with_mode(
-                    source,
+                    &source.source(),
                     polling::Event::readable(id as usize),
                     polling::PollMode::Level,
                 )
@@ -4380,19 +4535,17 @@ impl SystemProcessExt for ProcessManager {
         }
     }
 
-    fn register_writable_source(
+    unsafe fn register_writable_source(
         poller: &polling::Poller,
-        source: impl polling::AsRawSource,
+        source: impl polling::AsSource,
         id: ProcessId,
     ) -> Result<(), String> {
-        // SAFETY: ProcessManager only registers descriptors owned by the
-        // corresponding Process record.  `unregister_process_poll_sources`
-        // removes every registered descriptor from this poller before the
-        // Process drops or replaces the descriptor.
+        // SAFETY: `source` is a live `AsSource` and the caller guarantees it
+        // will be deleted from `poller` before being closed or dropped.
         unsafe {
             poller
                 .add_with_mode(
-                    source,
+                    &source.source(),
                     polling::Event::writable(id as usize),
                     polling::PollMode::Level,
                 )
@@ -4411,75 +4564,32 @@ impl SystemProcessExt for ProcessManager {
     }
 
     #[cfg(unix)]
-    fn register_readable_raw_fd(
+    unsafe fn register_readable_raw_fd(
         poller: &polling::Poller,
-        fd: std::os::unix::io::RawFd,
+        fd: std::os::unix::io::BorrowedFd<'_>,
         id: ProcessId,
     ) -> Result<(), String> {
-        // SAFETY: `fd` is borrowed from a process-owned descriptor that
-        // remains alive until `unregister_process_poll_sources` removes it
-        // from the poller.
-        let borrowed = unsafe { std::os::unix::io::BorrowedFd::borrow_raw(fd) };
-        Self::register_readable_source(poller, &borrowed, id)
+        // SAFETY: forwarded from `register_readable_raw_fd`'s caller contract.
+        unsafe { Self::register_readable_source(poller, fd, id) }
     }
 
     #[cfg(unix)]
-    fn register_writable_raw_fd(
+    unsafe fn register_writable_raw_fd(
         poller: &polling::Poller,
-        fd: std::os::unix::io::RawFd,
+        fd: std::os::unix::io::BorrowedFd<'_>,
         id: ProcessId,
     ) -> Result<(), String> {
-        let borrowed = unsafe { std::os::unix::io::BorrowedFd::borrow_raw(fd) };
-        Self::register_writable_source(poller, &borrowed, id)
+        // SAFETY: forwarded from `register_writable_raw_fd`'s caller contract.
+        unsafe { Self::register_writable_source(poller, fd, id) }
     }
 
     #[cfg(unix)]
     fn modify_raw_fd_interest(
         poller: &polling::Poller,
-        fd: std::os::unix::io::RawFd,
+        fd: std::os::unix::io::BorrowedFd<'_>,
         event: polling::Event,
     ) -> Result<(), String> {
-        let borrowed = unsafe { std::os::unix::io::BorrowedFd::borrow_raw(fd) };
-        Self::modify_poll_source(poller, borrowed, event)
-    }
-
-    #[cfg(unix)]
-    fn register_child_stdout_with_poller(
-        poller: &polling::Poller,
-        stdout: &ChildOutputReader,
-        id: ProcessId,
-    ) {
-        use std::os::unix::io::AsRawFd;
-        let fd = stdout.as_raw_fd();
-        // Set non-blocking before registering.
-        let _ = sys::set_fd_nonblocking(fd);
-        // Use process id as the event key so we know which process is ready.
-        let _ = Self::register_readable_raw_fd(poller, fd, id);
-    }
-
-    #[cfg(not(unix))]
-    fn register_child_stdout_with_poller(
-        _poller: &polling::Poller,
-        _stdout: &ChildOutputReader,
-        _id: ProcessId,
-    ) {
-        // GNU Emacs does not pass Windows subprocess pipe handles to Winsock
-        // select.  Its w32 layer uses a reader thread plus event objects.  Until
-        // Neomacs has the same backend, child pipe output is serviced by the
-        // regular non-blocking wait pass instead of the socket poller.
-    }
-
-    #[cfg(unix)]
-    fn unregister_child_stdout_from_poller(poller: &polling::Poller, stdout: &ChildOutputReader) {
-        use std::os::unix::io::AsRawFd;
-        let fd = stdout.as_raw_fd();
-        let borrowed = unsafe { std::os::unix::io::BorrowedFd::borrow_raw(fd) };
-        let _ = poller.delete(borrowed);
-    }
-
-    #[cfg(not(unix))]
-    fn unregister_child_stdout_from_poller(_poller: &polling::Poller, _stdout: &ChildOutputReader) {
-        // See `register_child_stdout_with_poller`.
+        Self::modify_poll_source(poller, fd, event)
     }
 
     /// Mirror GNU `set_process_filter_masks`: Lisp filter `t` removes only the
@@ -4487,10 +4597,10 @@ impl SystemProcessExt for ProcessManager {
     /// Resuming the filter restores read interest without consuming bytes that
     /// accumulated while suspended.
     fn set_process_output_read_interest(&self, id: ProcessId, enabled: bool) {
-        let Some(poller) = self.wait_backend.poller() else {
+        let Some(poller) = self.wait_backend.poller_arc() else {
             return;
         };
-        let Some(proc) = self.processes.get(&id) else {
+        let Some(proc) = self.get(id) else {
             return;
         };
 
@@ -4502,25 +4612,24 @@ impl SystemProcessExt for ProcessManager {
         let enabled = enabled
             && !process_stopped_for_io(proc)
             && proc
-                .live_io
-                .pty_reader
-                .as_ref()
+                .live_io()
+                .pty_reader()
                 .is_none_or(PtyOutputReader::is_monitored);
 
         if self.refresh_pending_tls_interest(id) {
             return;
         }
 
-        if let Some(stdout) = proc.live_io.child_stdout.as_ref() {
+        if let Some(stdout) = proc.live_io().child_stdout() {
             if enabled {
-                Self::register_child_stdout_with_poller(poller, stdout, id);
+                Self::register_child_stdout_with_poller(&poller, stdout, id);
             } else {
-                Self::unregister_child_stdout_from_poller(poller, stdout);
+                Self::unregister_child_stdout_from_poller(stdout);
             }
             return;
         }
         let wants_write = proc.input_disposition == ProcessInputDisposition::Connected
-            && (proc.live_io.pending_network_connect.is_some() || !proc.write_queue.is_nil());
+            && (proc.live_io().pending_network_connect().is_some() || !proc.write_queue.is_nil());
         let event = match (enabled, wants_write) {
             (true, true) => Some(polling::Event::all(id as usize)),
             (true, false) => Some(polling::Event::readable(id as usize)),
@@ -4528,156 +4637,101 @@ impl SystemProcessExt for ProcessManager {
             (false, false) => None,
         };
 
-        if let Some(tls) = proc.live_io.tls_stream.as_ref() {
+        if let Some(tls) = proc.live_io().tls_stream() {
             match event {
                 Some(event) => {
-                    if Self::modify_poll_source(poller, tls.tcp_stream(), event).is_err() {
-                        let _ = Self::register_readable_source(poller, tls.tcp_stream(), id);
-                        let _ = Self::modify_poll_source(poller, tls.tcp_stream(), event);
+                    if tls
+                        .modify(&poller, event, polling::PollMode::Level)
+                        .is_err()
+                    {
+                        let _ = tls.register(&poller, event, polling::PollMode::Level);
                     }
                 }
-                None => {
-                    let _ = poller.delete(tls.tcp_stream());
-                }
+                None => tls.unregister(),
             }
             return;
         }
-        if let Some(socket) = proc.live_io.network_socket.as_ref() {
+        if let Some(socket) = proc.live_io().network_socket() {
             match event {
                 Some(event) => {
-                    if socket.modify_interest(poller, id, event).is_err() {
-                        let _ = socket.register_readable(poller, id);
-                        let _ = socket.modify_interest(poller, id, event);
+                    let event = if socket.is_listener() {
+                        polling::Event::readable(id as usize)
+                    } else {
+                        event
+                    };
+                    if socket
+                        .modify(&poller, event, polling::PollMode::Level)
+                        .is_err()
+                    {
+                        let _ = socket.register(&poller, event, polling::PollMode::Level);
                     }
                 }
-                None => socket.unregister_readable(poller),
+                None => socket.unregister(),
             }
             return;
         }
-        if let Some(port) = proc.live_io.serial_port.as_ref() {
+        if let Some(port) = proc.live_io().serial_port() {
             match event {
                 Some(event) => {
-                    if port.modify_interest(poller, event).is_err() {
-                        let _ = port.register_readable(poller, id);
-                        let _ = port.modify_interest(poller, event);
+                    if port
+                        .modify(&poller, event, polling::PollMode::Level)
+                        .is_err()
+                    {
+                        let _ = port.register(&poller, event, polling::PollMode::Level);
                     }
                 }
-                None => port.unregister(poller),
+                None => port.unregister(),
             }
             return;
         }
         #[cfg(unix)]
-        if let Some(master) = proc
-            .live_io
-            .pty_master
-            .as_ref()
-            .and_then(|master| master.as_raw_fd())
-        {
+        if let Some(master) = proc.live_io().pty_master() {
             match event {
                 Some(event) => {
-                    if Self::modify_raw_fd_interest(poller, master, event).is_err() {
-                        let _ = Self::register_readable_raw_fd(poller, master, id);
-                        let _ = Self::modify_raw_fd_interest(poller, master, event);
+                    if master
+                        .modify(&poller, event, polling::PollMode::Level)
+                        .is_err()
+                    {
+                        let _ = master.register(&poller, event, polling::PollMode::Level);
                     }
                 }
-                None => {
-                    let borrowed = unsafe { std::os::unix::io::BorrowedFd::borrow_raw(master) };
-                    let _ = poller.delete(borrowed);
-                }
+                None => master.unregister(),
             }
         }
     }
 
-    #[cfg(unix)]
-    fn register_child_stdin_writable_with_poller(
-        poller: &polling::Poller,
-        stdin: &std::fs::File,
-        id: ProcessId,
-    ) {
-        use std::os::unix::io::AsRawFd;
-        let fd = stdin.as_raw_fd();
-        let _ = sys::set_fd_nonblocking(fd);
-        let _ = Self::register_writable_raw_fd(poller, fd, id);
-    }
-
-    #[cfg(not(unix))]
-    fn register_child_stdin_writable_with_poller(
-        _poller: &polling::Poller,
-        _stdin: &std::fs::File,
-        _id: ProcessId,
-    ) {
-        // Windows subprocess stdin is not integrated into the poller yet.
-    }
-
-    #[cfg(unix)]
-    fn unregister_child_stdin_writable_from_poller(
-        poller: &polling::Poller,
-        stdin: &std::fs::File,
-    ) {
-        use std::os::unix::io::AsRawFd;
-        let fd = stdin.as_raw_fd();
-        let borrowed = unsafe { std::os::unix::io::BorrowedFd::borrow_raw(fd) };
-        let _ = poller.delete(borrowed);
-    }
-
-    #[cfg(not(unix))]
-    fn unregister_child_stdin_writable_from_poller(
-        _poller: &polling::Poller,
-        _stdin: &std::fs::File,
-    ) {
-        // See `register_child_stdin_writable_with_poller`.
-    }
-
-    fn unregister_process_poll_sources(poller: Option<&polling::Poller>, proc: &Process) {
-        let Some(poller) = poller else {
-            return;
-        };
-
-        if let Some(stdout) = proc.live_io.child_stdout.as_ref() {
-            Self::unregister_child_stdout_from_poller(poller, stdout);
+    fn unregister_process_poll_sources(proc: &Process) {
+        if let Some(stdout) = proc.live_io().child_stdout() {
+            stdout.unregister();
         }
-        if let Some(stdin) = proc.live_io.child.stdin() {
-            Self::unregister_child_stdin_writable_from_poller(poller, stdin);
+        if let Some(stdin) = proc.live_io().child().stdin() {
+            stdin.unregister();
         }
-        if let Some(status_source) = proc.live_io.child_status_source.as_ref() {
-            status_source.unregister_from_poller(poller);
+        if let Some(status_source) = proc.live_io().child_status_source() {
+            status_source.unregister();
         }
-        if let Some(tls) = proc.live_io.tls_stream.as_ref() {
-            let _ = poller.delete(tls.tcp_stream());
+        if let Some(tls) = proc.live_io().tls_stream() {
+            tls.unregister();
         }
-        if let Some(socket) = proc.live_io.network_socket.as_ref() {
-            socket.unregister_readable(poller);
+        if let Some(socket) = proc.live_io().network_socket() {
+            socket.unregister();
         }
-        if let Some(port) = proc.live_io.serial_port.as_ref() {
-            port.unregister(poller);
+        if let Some(port) = proc.live_io().serial_port() {
+            port.unregister();
         }
-        #[cfg(unix)]
-        if let Some(master) = proc
-            .live_io
-            .pty_master
-            .as_ref()
-            .and_then(|master| master.as_raw_fd())
-        {
-            let borrowed = unsafe { std::os::unix::io::BorrowedFd::borrow_raw(master) };
-            let _ = poller.delete(borrowed);
+        if let Some(master) = proc.live_io().pty_master() {
+            master.unregister();
         }
     }
 
     /// GNU `deactivate_process` translated into the Rust ownership model.
     ///
-    /// Poll registrations borrow native descriptors, so unregister them
-    /// before dropping their single aggregate owner.  Durable Lisp identity,
+    /// Every poll-registered descriptor inside `LiveProcessIo` is wrapped in
+    /// `PollRegistration` and unregisters on drop. Durable Lisp identity,
     /// status, callbacks, and captured output remain on `Process`.
-    fn deactivate_process_io(poller: Option<&polling::Poller>, proc: &mut Process) {
-        Self::unregister_process_poll_sources(poller, proc);
-        drop(std::mem::take(&mut proc.live_io));
-        proc.gnutls_initstage = GnutlsInitStage::Empty;
-        proc.gnutls_boot_parameters = Value::NIL;
-    }
-
     fn deactivate_terminal_process_io(&mut self, id: ProcessId) {
-        if let Some(proc) = self.processes.get_mut(&id) {
-            Self::deactivate_process_io(self.wait_backend.poller(), proc);
+        if let Some(proc) = self.get_mut(id) {
+            Self::deactivate_process_io(proc);
         }
     }
 
@@ -4823,8 +4877,8 @@ impl SystemProcessExt for ProcessManager {
             None,
             coding,
         );
-        if let Some(proc) = self.processes.get_mut(&id) {
-            proc.live_io.serial_port = Some(port);
+        if let Some(proc) = self.get_mut(id) {
+            proc.live_io_mut().set_serial_port(Some(port));
             // GNU's `Fmake_serial_process` stores `open`, not `run`
             // (`process-status` on a live serial port is `open`, measured).
             proc.status = ProcessStatusSymbol::Open.value();
@@ -4834,9 +4888,10 @@ impl SystemProcessExt for ProcessManager {
 
     /// Spawn an OS child process for a tracked process record.
     ///
-    /// When `use_pty` is true (and on Unix), the child is spawned on a
-    /// pseudo-terminal via `portable-pty`. Otherwise the traditional
-    /// pipe-based `std::process::Command` path is used.
+    /// When `use_pty` is true (and on Unix), the child is attached to a
+    /// pseudo-terminal (opened via `portable-pty`, spawned via
+    /// `ChildCommand::into_forking_command`). Otherwise the pipe-based
+    /// `ChildCommand` path is used.
     fn spawn_child(&mut self, id: ProcessId, use_pty: bool) -> Result<(), String> {
         self.spawn_child_with_environment(id, use_pty, None)
             .map(|_| ())
@@ -4849,11 +4904,10 @@ impl SystemProcessExt for ProcessManager {
         child_environment: Option<super::super::environment::ChildEnvironment>,
     ) -> Result<ChildSpawnOutcome, String> {
         let proc = self
-            .processes
-            .get_mut(&id)
+            .get_mut(id)
             .ok_or_else(|| "Process not found".to_string())?;
 
-        if proc.live_io.child.has_child() {
+        if proc.live_io().child().has_child() {
             return Ok(ChildSpawnOutcome::Spawned); // Already spawned
         }
 
@@ -4898,8 +4952,7 @@ impl SystemProcessExt for ProcessManager {
         env_overrides: &[(LispString, Option<LispString>)],
     ) -> Result<ChildSpawnOutcome, String> {
         let proc = self
-            .processes
-            .get(&id)
+            .get(id)
             .ok_or_else(|| "Process not found".to_string())?;
 
         let Some(argv) = process_spawn_lisp_argv(proc) else {
@@ -4916,6 +4969,7 @@ impl SystemProcessExt for ProcessManager {
         // die from SIGPIPE.
         let requested_stderr_pipe_id = process_value_to_id(&proc.stderrproc);
         let default_directory = proc.default_directory.clone();
+        let readmax = proc.readmax;
         let _ = proc;
         let mut stderr_transfer = self.take_stderr_pipe_writer(id, requested_stderr_pipe_id);
 
@@ -4937,6 +4991,8 @@ impl SystemProcessExt for ProcessManager {
         } else {
             let (reader, writer) = os_pipe::pipe()
                 .map_err(|error| format!("Failed to create child output pipe: {error}"))?;
+            // GNU enlarges the child's stdout pipe before forking it.
+            enlarge_child_output_pipe(&reader, readmax);
             let stderr_writer = writer
                 .try_clone()
                 .map_err(|error| format!("Failed to duplicate child output pipe: {error}"))?;
@@ -4983,34 +5039,46 @@ impl SystemProcessExt for ProcessManager {
 
         let stdout = match shared_output_reader {
             Some(reader) => Some(ChildOutputReader::Shared(reader)),
-            None => child.stdout.take().map(ChildOutputReader::Stdout),
+            // A separate `:stderr` leaves stdout on the pipe `Command::spawn`
+            // created; enlarge it here, where its read end first exists.
+            None => child.stdout.take().map(|stdout| {
+                enlarge_child_output_pipe(&stdout, readmax);
+                ChildOutputReader::Stdout(stdout)
+            }),
         };
 
-        // Register stdout with the poller where the platform exposes child
-        // pipe descriptors as pollable sources.
-        if stderr_transfer
-            .processes
-            .get(id)
-            .is_none_or(process_filter_accepts_output)
-            && let (Some(poller), Some(stdout)) = (stderr_transfer.wait_backend.poller(), &stdout)
-        {
-            Self::register_child_stdout_with_poller(poller, stdout, id);
-        }
-        if let Some(status_source) = child_status_source.as_ref() {
-            status_source.register_with_poller(stderr_transfer.wait_backend.poller(), id);
-        }
-
         if let Some(proc) = stderr_transfer.processes.get_mut(id) {
-            proc.live_io.child_stdout = stdout;
+            proc.live_io_mut().set_child_stdout(stdout);
             proc.os_pid = os_pid;
-            proc.live_io.child_status_source = child_status_source;
-            proc.live_io.child = ChildOwnership::of_pipe_child(child);
+            proc.live_io_mut()
+                .set_child_status_source(child_status_source);
+            proc.live_io_mut()
+                .set_child(ChildOwnership::of_pipe_child(child));
             proc.status = process_status_run_value();
             // Pipe-mode processes don't have a real TTY.
             proc.tty_name = Value::NIL;
             proc.tty_stdin = false;
             proc.tty_stdout = false;
             proc.tty_stderr = false;
+        }
+
+        // Register stdout and pidfd with the poller via `PollRegistration` now
+        // that `proc.live_io` owns them.
+        if let Some(poller) = stderr_transfer.wait_backend.poller_arc()
+            && let Some(proc) = stderr_transfer.processes.get(id)
+        {
+            if process_filter_accepts_output(proc)
+                && let Some(stdout) = proc.live_io().child_stdout()
+            {
+                Self::register_child_stdout_with_poller(&poller, stdout, id);
+            }
+            if let Some(status_source) = proc.live_io().child_status_source() {
+                let _ = status_source.register(
+                    &poller,
+                    polling::Event::readable(id as usize),
+                    polling::PollMode::Level,
+                );
+            }
         }
 
         Ok(ChildSpawnOutcome::Spawned)
@@ -5024,16 +5092,15 @@ impl SystemProcessExt for ProcessManager {
         let transferable_id = stderr_pipe_id.filter(|stderr_id| {
             *stderr_id != main_id
                 && self
-                    .processes
-                    .get(stderr_id)
+                    .get(*stderr_id)
                     .is_some_and(|proc| proc.kind == ProcessKind::Pipe)
         });
         let writer = transferable_id
-            .and_then(|stderr_id| self.processes.get_mut(&stderr_id))
+            .and_then(|stderr_id| self.get_mut(stderr_id))
             .and_then(|stderr_proc| {
                 #[cfg(windows)]
                 {}
-                stderr_proc.live_io.module_pipe_writer.take()
+                stderr_proc.take_module_pipe_writer()
             });
         let transferred_id = writer.as_ref().and(transferable_id);
         StderrPipeWriterTransfer {
@@ -5045,7 +5112,9 @@ impl SystemProcessExt for ProcessManager {
         }
     }
 
-    /// PTY-based child spawn via `portable-pty`.
+    /// PTY-based child spawn: allocates the master/slave pair via `portable-pty`
+    /// and spawns the child via `ChildCommand::into_forking_command` +
+    /// `sys::establish_pty_controlling_terminal`.
     ///
     /// The child is attached to a pseudo-terminal. The master side provides
     /// a single combined I/O stream (PTY merges stdout and stderr) — UNLESS a
@@ -5061,8 +5130,7 @@ impl SystemProcessExt for ProcessManager {
         env_overrides: &[(LispString, Option<LispString>)],
     ) -> Result<ChildSpawnOutcome, String> {
         let proc = self
-            .processes
-            .get_mut(&id)
+            .get_mut(id)
             .ok_or_else(|| "Process not found".to_string())?;
 
         let rows = proc.window_rows.unwrap_or(24) as u16;
@@ -5115,144 +5183,120 @@ impl SystemProcessExt for ProcessManager {
             return Err(format!("Failed to configure PTY child tty: {error}"));
         }
 
-        // GNU's `emacs_perror` names the program that could not be exec'd, so
-        // keep it before `CommandBuilder::from_argv` consumes the argv.
+        // GNU's `emacs_perror` names the program that could not be exec'd;
+        // retain it for the `ExecFailed` diagnostic path below.
         let program_os = argv_os[0].clone();
         let mut outcome = ChildSpawnOutcome::Spawned;
 
-        // With a separate stderr pipe-process we cannot use portable_pty's
-        // `spawn_command` (it hardwires the child's stdin/stdout/stderr all to
-        // the PTY slave).  Instead spawn the child ourselves, dup'ing the PTY
-        // slave onto stdin/stdout and leaving stderr on an OS pipe, mirroring
-        // GNU's `emacs_spawn` where `std_err` is the separate `forkerr` fd and
-        // only merges into `std_out` when no stderr pipe-process exists.
-        if stderr_transfer.pipe_id().is_some() {
-            let Some(tty_path) = tty_name_path.clone() else {
-                return Err("PTY has no tty name for :stderr split spawn".to_string());
-            };
-            let mut cmd = crate::emacs_core::callproc::new_child_command(&argv_os[0]);
-            cmd.args(&argv_os[1..]);
+        // Spawn every Unix PTY child (both plain PTY and separate `:stderr`
+        // pipe) via `ChildCommand::into_forking_command` +
+        // `sys::establish_pty_controlling_terminal`, rather than
+        // `portable_pty`'s `spawn_command`: `portable_pty` resets
+        // SIGHUP/SIGTERM/SIGALRM to SIG_DFL, leaves SIGPROF ignored, and
+        // allocates in `close_random_fds` inside `pre_exec`.  Routing both
+        // through `into_forking_command` gives every PTY child GNU's exact
+        // `emacs_spawn` signal dispositions and empty mask
+        // (`src/callproc.c:1624-1647`, `src/keyboard.c:13277`), and merges
+        // stderr onto the PTY slave when no separate `:stderr` pipe exists.
+        let separate_stderr = stderr_transfer.pipe_id().is_some();
+        let Some(tty_path) = tty_name_path.clone() else {
+            return Err("PTY has no tty name for PTY spawn".to_string());
+        };
+        let mut cmd = crate::emacs_core::callproc::new_child_command(&argv_os[0]);
+        cmd.args(&argv_os[1..]);
+        if separate_stderr {
             let child_writer = stderr_transfer
                 .writer()
                 .expect("a transferred stderr pipe id always has its writer")
                 .try_clone()
                 .map_err(|error| format!("Failed to duplicate stderr pipe: {error}"))?;
             cmd.stderr(child_writer);
-            if let Some(dir) = &default_directory {
-                cmd.current_dir(dir);
-            }
-            if let Some(environment) = child_environment {
-                environment.apply_to_child_command(&mut cmd);
-            }
-            for (key, val) in env_overrides {
-                let key_str = lisp_string_to_os_string(key);
-                match val {
-                    Some(v) => {
-                        cmd.env(&key_str, lisp_string_to_os_string(v));
-                    }
-                    None => {
-                        cmd.env_remove(&key_str);
-                    }
+        }
+        if let Some(dir) = &default_directory {
+            cmd.current_dir(dir);
+        }
+        if let Some(environment) = child_environment {
+            environment.apply_to_child_command(&mut cmd);
+        }
+        for (key, val) in env_overrides {
+            let key_str = lisp_string_to_os_string(key);
+            match val {
+                Some(v) => {
+                    cmd.env(&key_str, lisp_string_to_os_string(v));
+                }
+                None => {
+                    cmd.env_remove(&key_str);
                 }
             }
-            // A pty child needs post-fork setup `posix_spawn` cannot express,
-            // so take the forking `Command` (GNU likewise falls back to `vfork`
-            // for pty children).  It already carries the `setsid` `pre_exec`
-            // (own session, no controlling tty).  Chain a second `pre_exec`
-            // that opens the PTY slave by path and makes it the controlling
-            // terminal on fds 0/1, leaving fd 2 (stderr) on the pipe set up
-            // above — exactly GNU's forkin/forkout=pty_tty, forkerr=stderr-pipe
-            // arrangement.
-            let mut cmd = cmd
-                .into_forking_command()
-                .map_err(|error| error.to_string())?;
-            let tty_cstr = match std::ffi::CString::new(tty_path.as_os_str().as_bytes()) {
-                Ok(path) => path,
-                Err(_) => return Err("PTY tty name contains an interior NUL".to_string()),
-            };
-            // SAFETY: `pre_exec` runs in the forked child before exec; the closure
-            // calls only `sys::establish_pty_controlling_terminal`, which is itself
-            // restricted to async-signal-safe syscalls for exactly this context.
-            unsafe {
-                use std::os::unix::process::CommandExt;
-                cmd.pre_exec(move || sys::establish_pty_controlling_terminal(&tty_cstr));
-            }
+        }
+        // A pty child needs post-fork setup `posix_spawn` cannot express, so
+        // take the forking `Command` (GNU likewise falls back to `vfork` for
+        // pty children).  It already carries `isolate_child_command`'s
+        // `pre_exec` (`setsid`, GNU child-default signal dispositions, empty
+        // signal mask).  Chain a second `pre_exec` that opens the PTY slave by
+        // path, makes it the controlling terminal, and dup2s it onto fds 0/1
+        // (plus fd 2 when `merge_stderr` is true; otherwise leaving fd 2 on
+        // the separate stderr pipe).
+        let mut cmd = cmd
+            .into_forking_command()
+            .map_err(|error| error.to_string())?;
+        let tty_cstr = match std::ffi::CString::new(tty_path.as_os_str().as_bytes()) {
+            Ok(path) => path,
+            Err(_) => return Err("PTY tty name contains an interior NUL".to_string()),
+        };
+        let merge_stderr = !separate_stderr;
+        // SAFETY: `pre_exec` runs in the forked child before exec; the closure
+        // calls only `sys::establish_pty_controlling_terminal`, which is itself
+        // restricted to async-signal-safe syscalls for exactly this context.
+        unsafe {
+            use std::os::unix::process::CommandExt;
+            cmd.pre_exec(move || sys::establish_pty_controlling_terminal(&tty_cstr, merge_stderr));
+        }
 
-            let child = match cmd.spawn() {
-                Ok(child) => SpawnedChild::from_std(child),
-                Err(error) => return Err(format!("Failed to spawn PTY child: {error}")),
-            };
-            stderr_transfer.commit();
-            // GNU records the child's real OS pid (create_process sets p->pid).
-            let os_pid = Some(child.id());
-            let child_status_source = os_pid.and_then(ChildStatusSource::open);
-            if let Some(status_source) = child_status_source.as_ref() {
-                status_source.register_with_poller(stderr_transfer.wait_backend.poller(), id);
-            }
-            if let Some(proc) = stderr_transfer.processes.get_mut(id) {
-                proc.os_pid = os_pid;
-                proc.live_io.child_status_source = child_status_source;
-                proc.live_io.child = ChildOwnership::of_pipe_child(child);
-            }
-        } else {
-            let mut cmd = portable_pty::CommandBuilder::from_argv(argv_os);
-            if let Some(dir) = &default_directory {
-                cmd.cwd(dir);
-            }
-            if let Some(environment) = child_environment {
-                environment.apply_to_pty_command(&mut cmd);
-            }
-            for (key, val) in env_overrides {
-                let key_str = lisp_string_to_os_string(key);
-                match val {
-                    Some(v) => {
-                        let v_str = lisp_string_to_os_string(v);
-                        cmd.env(&key_str, &v_str);
-                    }
-                    None => {
-                        cmd.env_remove(&key_str);
-                    }
+        match cmd.spawn() {
+            Ok(child) => {
+                let child = SpawnedChild::from_std(child);
+                if separate_stderr {
+                    stderr_transfer.commit();
+                }
+                // GNU records the child's real OS pid (create_process sets p->pid).
+                let os_pid = Some(child.id());
+                let child_status_source = os_pid.and_then(ChildStatusSource::open);
+                if let Some(proc) = stderr_transfer.processes.get_mut(id) {
+                    proc.os_pid = os_pid;
+                    proc.live_io_mut()
+                        .set_child_status_source(child_status_source);
+                    proc.live_io_mut()
+                        .set_child(ChildOwnership::of_pipe_child(child));
+                }
+                if let Some(poller) = stderr_transfer.wait_backend.poller_arc()
+                    && let Some(status_source) = stderr_transfer
+                        .processes
+                        .get(id)
+                        .and_then(|proc| proc.live_io().child_status_source())
+                {
+                    let _ = status_source.register(
+                        &poller,
+                        polling::Event::readable(id as usize),
+                        polling::PollMode::Level,
+                    );
                 }
             }
-
-            #[cfg(unix)]
-            crate::emacs_core::callproc::retain_child_exit_status()
-                .map_err(|error| error.to_string())?;
-            match pty_pair.slave.spawn_command(cmd) {
-                Ok(pty_child) => {
-                    // GNU records the child's real OS pid; portable_pty exposes
-                    // it via `Child::process_id`.
-                    let os_pid = pty_child.process_id();
-                    let child_status_source = os_pid.and_then(ChildStatusSource::open);
-                    if let Some(status_source) = child_status_source.as_ref() {
-                        status_source
-                            .register_with_poller(stderr_transfer.wait_backend.poller(), id);
-                    }
-                    if let Some(proc) = stderr_transfer.processes.get_mut(id) {
-                        proc.os_pid = os_pid;
-                        proc.live_io.child_status_source = child_status_source;
-                        proc.live_io.child = ChildOwnership::of_pty_child(pty_child);
-                    }
+            Err(error) => {
+                if separate_stderr {
+                    return Err(format!("Failed to spawn PTY child: {error}"));
                 }
-                Err(error) => {
-                    // The exec failed.  GNU's forked child is still alive at
-                    // this point and writes `emacs_perror`'s line to its own
-                    // STDERR -- which here IS the pty -- before `_exit`ing
-                    // (src/callproc.c:1206-1216).  There is no child to do it,
-                    // so the parent writes the same bytes to the same tty, and
-                    // the PTY master below is installed exactly as for a
-                    // successful spawn: the reader finds the diagnostic and
-                    // then EOF, and the caller supplies GNU's exit status.
-                    let errno = error
-                        .chain()
-                        .find_map(|cause| cause.downcast_ref::<std::io::Error>())
-                        .and_then(|io| io.raw_os_error())
-                        .unwrap_or(libc::ENOENT);
-                    if let Some(tty_path) = tty_name_path.as_ref() {
-                        write_exec_failure_diagnostic_to_tty(tty_path, &program_os, errno);
-                    }
-                    outcome = ChildSpawnOutcome::ExecFailed(errno);
-                }
+                // The exec failed.  GNU's forked child is still alive at this
+                // point and writes `emacs_perror`'s line to its own STDERR --
+                // which here IS the pty -- before `_exit`ing
+                // (src/callproc.c:1206-1216).  There is no child to do it, so
+                // the parent writes the same bytes to the same tty, and the
+                // PTY master below is installed exactly as for a successful
+                // spawn: the reader finds the diagnostic and then EOF, and the
+                // caller supplies GNU's exit status.
+                let errno = error.raw_os_error().unwrap_or(libc::ENOENT);
+                write_exec_failure_diagnostic_to_tty(&tty_path, &program_os, errno);
+                outcome = ChildSpawnOutcome::ExecFailed(errno);
             }
         }
 
@@ -5269,25 +5313,16 @@ impl SystemProcessExt for ProcessManager {
             .take_writer()
             .map_err(|e| format!("Failed to take PTY writer: {}", e))?;
 
-        // Register the PTY master fd with the poller for non-blocking I/O.
         if let Some(master_fd) = pty_pair.master.as_raw_fd() {
             // Set non-blocking on the master fd.
             let _ = sys::set_fd_nonblocking(master_fd);
-            if stderr_transfer
-                .processes
-                .get(id)
-                .is_none_or(process_filter_accepts_output)
-                && let Some(poller) = stderr_transfer.wait_backend.poller()
-            {
-                let _ = Self::register_readable_raw_fd(poller, master_fd, id);
-            }
         }
 
         let stderr_is_pty = stderr_transfer.pipe_id().is_none();
         if let Some(proc) = stderr_transfer.processes.get_mut(id) {
-            proc.live_io.pty_master = Some(pty_pair.master);
-            proc.live_io.pty_reader = Some(PtyOutputReader::new(pty_read));
-            proc.live_io.pty_writer = Some(Box::new(pty_write));
+            proc.live_io_mut().set_pty_master(Some(pty_pair.master));
+            proc.set_pty_reader(Some(PtyOutputReader::new(pty_read)));
+            proc.set_pty_writer(Some(Box::new(pty_write)));
             proc.status = process_status_run_value();
             proc.tty_name = tty_name;
             proc.tty_stdin = true;
@@ -5297,8 +5332,45 @@ impl SystemProcessExt for ProcessManager {
             // nil for the stderr stream when `p->stderrproc` is set).
             proc.tty_stderr = stderr_is_pty;
         }
+        // Register the PTY master fd with the poller via `PollRegistration` now
+        // that `proc.live_io` owns it.
+        if let Some(poller) = stderr_transfer.wait_backend.poller_arc()
+            && let Some(proc) = stderr_transfer.processes.get(id)
+            && process_filter_accepts_output(proc)
+            && let Some(master) = proc.live_io().pty_master()
+        {
+            let _ = master.register(
+                &poller,
+                polling::Event::readable(id as usize),
+                polling::PollMode::Level,
+            );
+        }
 
         Ok(outcome)
+    }
+
+    fn reap_observed_child(&mut self, id: ProcessId) {
+        // GNU's handler runs at SIGCHLD delivery; a port without a walk-capable
+        // handler can only latch the delivery, so reap only after one. An
+        // observation before the delivery sees the stale status, exactly as
+        // GNU's observation does, which is what keeps a caller's await loop
+        // entering its wait (ledger 180's sentinel-in-the-let shape).
+        if !crate::emacs_core::os_signal::child_signal_seen() {
+            return;
+        }
+        if self
+            .get(id)
+            .is_some_and(|proc| SweepableChild::of(id, proc).is_some())
+        {
+            self.check_child_status_change(id);
+        }
+    }
+
+    fn process_with_os_pid(&self, pid: i64) -> Option<ProcessId> {
+        let pid = u32::try_from(pid).ok()?;
+        self.process_map().iter().find_map(|(id, proc)| {
+            (proc.live_io().child().pid_if_unreaped() == Some(pid)).then_some(*id)
+        })
     }
 
     /// Poll one child-status transition and stage it for sentinel delivery.
@@ -5315,16 +5387,14 @@ impl SystemProcessExt for ProcessManager {
     }
 
     fn deactivate_child_status_source(&mut self, id: ProcessId) {
-        if let Some(proc) = self.processes.get_mut(&id)
-            && let Some(status_source) = proc.live_io.child_status_source.take()
-            && let Some(poller) = self.wait_backend.poller()
-        {
-            status_source.unregister_from_poller(poller);
+        if let Some(proc) = self.get_mut(id) {
+            // `PollRegistration<ChildStatusSource>` unregisters on drop.
+            proc.live_io_mut().set_child_status_source(None);
         }
     }
 
     fn poll_child_status_change(&mut self, id: ProcessId) -> Option<Value> {
-        let proc = self.processes.get_mut(&id)?;
+        let proc = self.get_mut(id)?;
 
         // GNU keeps waiting on a stopped child so WCONTINUED (or a terminal
         // signal delivered while stopped) remains observable.  Only one
@@ -5338,12 +5408,9 @@ impl SystemProcessExt for ProcessManager {
         }
 
         // GNU's `child_status_changed (p->pid, &status, WUNTRACED |
-        // WCONTINUED)` (src/process.c:7742).  The dispatch between the two
-        // handle shapes, and the raw `waitpid` itself, live in
-        // `process/reap.rs`, which is the only owner of either -- so a
-        // terminal answer here is also the moment `p->alive` becomes 0 and
-        // the pid stops being spellable.
-        match proc.live_io.child.poll_status() {
+        // WCONTINUED)` (src/process.c:7742).  `SpawnedChild.stdin` is wrapped
+        // in `PollRegistration<File>`, so reaping unregisters `stdin` on drop.
+        match proc.live_io_mut().child_mut().poll_status() {
             ChildStatusChange::NoChange | ChildStatusChange::Gone => None,
             ChildStatusChange::StillOurs(status) | ChildStatusChange::Reaped(status) => {
                 Some(status)
@@ -5361,25 +5428,32 @@ impl SystemProcessExt for ProcessManager {
         mode: SymbolMode,
         global_null_inhibition: bool,
     ) -> ProcessBytesRead {
-        let Some(proc) = self.processes.get_mut(&id) else {
+        let Some((proc, scratch)) = self.process_and_read_scratch_mut(id) else {
             return ProcessBytesRead::NoSource;
         };
         let read_len = process_read_buffer_len(proc);
 
-        let Some(stdout) = proc.live_io.child_stdout.as_mut() else {
+        // Use non-blocking read via set_nonblocking on Unix (once per fd).
+        #[cfg(unix)]
+        if !proc.live_io().is_child_stdout_nonblocking() {
+            use std::os::unix::io::AsRawFd;
+            let Some(stdout) = proc.live_io().child_stdout() else {
+                return ProcessBytesRead::NoSource;
+            };
+            let fd = stdout.as_raw_fd();
+            if sys::set_fd_nonblocking(fd).is_ok() {
+                proc.live_io_mut().mark_child_stdout_nonblocking();
+            }
+        }
+
+        let Some(stdout) = proc.live_io_mut().child_stdout_mut() else {
             return ProcessBytesRead::NoSource;
         };
 
-        // Use non-blocking read via set_nonblocking on Unix
-        #[cfg(unix)]
-        {
-            use std::os::unix::io::AsRawFd;
-            let fd = stdout.as_raw_fd();
-            // Set non-blocking
-            let _ = sys::set_fd_nonblocking(fd);
+        if scratch.len() < read_len {
+            scratch.resize(read_len, 0);
         }
-
-        let mut buf = vec![0u8; read_len];
+        let buf = &mut scratch[..read_len];
         let full_read_len = buf.len();
         #[cfg(windows)]
         let result = {
@@ -5394,13 +5468,13 @@ impl SystemProcessExt for ProcessManager {
             }
         };
         #[cfg(not(windows))]
-        let result = stdout.read(&mut buf);
+        let result = stdout.read(buf);
         process_output_read_from_io_result(
             proc,
             coding_systems,
             destination,
             ProcessReadOutcome::from_stream_read(&result),
-            &buf,
+            buf,
             full_read_len,
             mode,
             global_null_inhibition,
@@ -5421,23 +5495,26 @@ impl SystemProcessExt for ProcessManager {
         mode: SymbolMode,
         global_null_inhibition: bool,
     ) -> ProcessBytesRead {
-        let Some(proc) = self.processes.get_mut(&id) else {
+        let Some((proc, scratch)) = self.process_and_read_scratch_mut(id) else {
             return ProcessBytesRead::NoSource;
         };
         let read_len = process_read_buffer_len(proc);
-        let Some(port) = proc.live_io.serial_port.as_mut() else {
+        let Some(port) = proc.live_io_mut().serial_port_mut() else {
             return ProcessBytesRead::NoSource;
         };
 
-        let mut buf = vec![0u8; read_len];
+        if scratch.len() < read_len {
+            scratch.resize(read_len, 0);
+        }
+        let buf = &mut scratch[..read_len];
         let full_read_len = buf.len();
-        let result = port.read(&mut buf);
+        let result = port.read(buf);
         process_output_read_from_io_result(
             proc,
             coding_systems,
             destination,
             ProcessReadOutcome::from_stream_read(&result),
-            &buf,
+            buf,
             full_read_len,
             mode,
             global_null_inhibition,
@@ -5455,23 +5532,26 @@ impl SystemProcessExt for ProcessManager {
         mode: SymbolMode,
         global_null_inhibition: bool,
     ) -> ProcessBytesRead {
-        let Some(proc) = self.processes.get_mut(&id) else {
+        let Some((proc, scratch)) = self.process_and_read_scratch_mut(id) else {
             return ProcessBytesRead::NoSource;
         };
         let read_len = process_read_buffer_len(proc);
-        let Some(reader) = proc.live_io.pty_reader.as_mut() else {
+        let Some(reader) = proc.pty_reader_mut() else {
             return ProcessBytesRead::NoSource;
         };
 
-        let mut buf = vec![0u8; read_len];
+        if scratch.len() < read_len {
+            scratch.resize(read_len, 0);
+        }
+        let buf = &mut scratch[..read_len];
         let full_read_len = buf.len();
-        let result = reader.read(&mut buf);
+        let result = reader.read(buf);
         process_output_read_from_io_result(
             proc,
             coding_systems,
             destination,
             ProcessReadOutcome::from_pty_read(&result),
-            &buf,
+            buf,
             full_read_len,
             mode,
             global_null_inhibition,
@@ -5486,7 +5566,7 @@ impl SystemProcessExt for ProcessManager {
         mode: SymbolMode,
         global_null_inhibition: bool,
     ) -> ProcessBytesRead {
-        let Some(proc) = self.processes.get_mut(&id) else {
+        let Some((proc, scratch)) = self.process_and_read_scratch_mut(id) else {
             return ProcessBytesRead::NoSource;
         };
 
@@ -5494,16 +5574,19 @@ impl SystemProcessExt for ProcessManager {
             return ProcessBytesRead::WouldBlock;
         }
         let read_len = process_read_buffer_len(proc);
-        if let Some(ref mut tls) = proc.live_io.tls_stream {
-            let mut buf = vec![0u8; read_len];
+        if let Some(tls) = proc.live_io_mut().tls_stream_mut() {
+            if scratch.len() < read_len {
+                scratch.resize(read_len, 0);
+            }
+            let buf = &mut scratch[..read_len];
             let full_read_len = buf.len();
-            let result = tls.read_process_output(&mut buf);
+            let result = tls.read_process_output(buf);
             let read = process_output_read_from_io_result(
                 proc,
                 coding_systems,
                 destination,
                 ProcessReadOutcome::from_stream_read(&result),
-                &buf,
+                buf,
                 full_read_len,
                 mode,
                 global_null_inhibition,
@@ -5511,7 +5594,7 @@ impl SystemProcessExt for ProcessManager {
             return read;
         }
 
-        if proc.live_io.network_socket.is_some() {
+        if proc.live_io().network_socket().is_some() {
             enum RawNetworkRead {
                 Stream(std::io::Result<usize>),
                 Udp(std::io::Result<(usize, SocketAddr)>),
@@ -5520,19 +5603,22 @@ impl SystemProcessExt for ProcessManager {
                 Unsupported,
             }
 
-            let mut buf = vec![0u8; read_len];
+            if scratch.len() < read_len {
+                scratch.resize(read_len, 0);
+            }
+            let buf = &mut scratch[..read_len];
             let full_read_len = buf.len();
             let raw_read = {
-                let socket = proc.live_io.network_socket.as_mut().expect("checked above");
-                match socket.read_stream_output(&mut buf) {
+                let socket = proc.live_io().network_socket().expect("checked above");
+                match socket.read_stream_output(buf) {
                     Some(result) => RawNetworkRead::Stream(result),
-                    None => match socket {
+                    None => match &**socket {
                         NetworkSocket::UdpSocket(socket) => {
-                            RawNetworkRead::Udp(socket.recv_from(&mut buf))
+                            RawNetworkRead::Udp(socket.recv_from(buf))
                         }
                         #[cfg(unix)]
                         NetworkSocket::UnixDatagram(socket) => {
-                            RawNetworkRead::UnixDatagram(socket.recv_from(&mut buf))
+                            RawNetworkRead::UnixDatagram(socket.recv_from(buf))
                         }
                         _ => RawNetworkRead::Unsupported,
                     },
@@ -5544,7 +5630,7 @@ impl SystemProcessExt for ProcessManager {
                     coding_systems,
                     destination,
                     ProcessReadOutcome::from_stream_read(&result),
-                    &buf,
+                    buf,
                     full_read_len,
                     mode,
                     global_null_inhibition,
@@ -5652,7 +5738,7 @@ impl SystemProcessExt for ProcessManager {
     ) -> Option<ProcessWaitEvents> {
         let events = self
             .wait_backend
-            .wait_for_events(&self.processes, timeout, interest);
+            .wait_for_events(self.process_map(), timeout, interest);
         #[cfg(any(test, feature = "test-support"))]
         if let Some(events) = &events {
             self.observe_native_connect_writable_for_test(events);
@@ -5665,16 +5751,16 @@ impl SystemProcessExt for ProcessManager {
     #[cfg(unix)]
     fn unlink_owned_unix_listener_for_exit(&mut self, id: ProcessId) {
         use std::os::unix::fs::{FileTypeExt, MetadataExt};
-        let Some(proc) = self.processes.get_mut(&id) else {
+        let Some(proc) = self.get_mut(id) else {
             return;
         };
         if !matches!(
-            proc.live_io.network_socket,
+            proc.live_io().network_socket().map(|s| &**s),
             Some(NetworkSocket::UnixListener(_))
         ) {
             return;
         }
-        if let Some((path, device, inode)) = proc.live_io.unix_listener_path.take()
+        if let Some((path, device, inode)) = proc.take_unix_listener_path()
             && let Ok(metadata) = std::fs::symlink_metadata(&path)
             && metadata.file_type().is_socket()
             && metadata.dev() == device
@@ -5685,11 +5771,12 @@ impl SystemProcessExt for ProcessManager {
     }
 
     fn deactivate_network_process_io(&mut self, id: ProcessId) {
-        if let Some(proc) = self.processes.get_mut(&id) {
-            Self::unregister_process_poll_sources(self.wait_backend.poller(), proc);
-            proc.live_io.tls_stream = None;
-            proc.live_io.network_socket = None;
-            proc.gnutls_initstage = GnutlsInitStage::Empty;
+        if let Some(proc) = self.get_mut(id) {
+            proc.live_io_mut().set_tls_stream(None);
+            proc.live_io_mut().set_network_socket(None);
+            if i64::from(proc.gnutls_initstage) >= i64::from(GnutlsInitStage::Init) {
+                proc.gnutls_initstage = GnutlsInitStage::Callbacks;
+            }
         }
     }
 
@@ -5697,9 +5784,8 @@ impl SystemProcessExt for ProcessManager {
     /// Removes the stderr fd from the poller and drops it so the descriptor is
     /// closed and the process stops being polled.
     fn deactivate_stderr_pipe_process_io(&mut self, id: ProcessId) {
-        if let Some(proc) = self.processes.get_mut(&id) {
-            Self::unregister_process_poll_sources(self.wait_backend.poller(), proc);
-            proc.live_io.child_stdout = None;
+        if let Some(proc) = self.get_mut(id) {
+            proc.live_io_mut().set_child_stdout(None);
         }
     }
 
@@ -5730,7 +5816,7 @@ impl SystemProcessExt for ProcessManager {
     fn retire_pipe_process_at_read_eof(&mut self, id: ProcessId) {
         self.deactivate_stderr_pipe_process_io(id);
         let mut changed = false;
-        if let Some(proc) = self.processes.get_mut(&id)
+        if let Some(proc) = self.get_mut(id)
             && !process_status_is_terminal_for_notify(&proc.status)
         {
             let terminal = process_status_exit_value(0);
@@ -5750,30 +5836,23 @@ impl SystemProcessExt for ProcessManager {
     /// (src/process.c:6081-6090): close the failed read side and report exit
     /// status 256 when no already-observed child status supersedes it.
     fn retire_process_at_read_failure(&mut self, id: ProcessId) {
-        let source = self.processes.get(&id).and_then(process_output_source);
+        let source = self.get(id).and_then(process_output_source);
         match source {
             Some(ProcessOutputSource::ChildStdout) => {
-                if let Some(proc) = self.processes.get_mut(&id) {
-                    if let (Some(poller), Some(stdout)) = (
-                        self.wait_backend.poller(),
-                        proc.live_io.child_stdout.as_ref(),
-                    ) {
-                        Self::unregister_child_stdout_from_poller(poller, stdout);
-                    }
-                    proc.live_io.child_stdout = None;
+                if let Some(proc) = self.get_mut(id) {
+                    proc.live_io_mut().set_child_stdout(None);
                 }
             }
             Some(ProcessOutputSource::Pty) => self.deactivate_pty_process_read_io(id),
             Some(ProcessOutputSource::Serial) => {
-                if let Some(proc) = self.processes.get_mut(&id) {
-                    Self::unregister_process_poll_sources(self.wait_backend.poller(), proc);
-                    proc.live_io.serial_port = None;
+                if let Some(proc) = self.get_mut(id) {
+                    proc.live_io_mut().set_serial_port(None);
                 }
             }
             Some(ProcessOutputSource::Network) | None => {}
         }
 
-        let Some(proc) = self.processes.get_mut(&id) else {
+        let Some(proc) = self.get_mut(id) else {
             return;
         };
         if !proc.pending_status.is_nil() {
@@ -5798,27 +5877,21 @@ impl SystemProcessExt for ProcessManager {
     /// GNU `delete_read_fd` on PTY EOF/EIO (process.c:6038-6061) stops
     /// monitoring but retains infd for status_notify's final drain (:7896-7911).
     fn stop_pty_process_read_monitoring(&mut self, id: ProcessId) {
-        if let Some(proc) = self.processes.get_mut(&id) {
-            let Some(reader) = proc.live_io.pty_reader.as_mut() else {
-                return;
-            };
-            if !reader.is_monitored() {
+        if let Some(proc) = self.get_mut(id) {
+            if !proc
+                .live_io()
+                .pty_reader()
+                .is_some_and(PtyOutputReader::is_monitored)
+            {
                 return;
             }
             #[cfg(unix)]
-            if let (Some(poller), Some(master)) = (
-                self.wait_backend.poller(),
-                proc.live_io
-                    .pty_master
-                    .as_ref()
-                    .and_then(|master| master.as_raw_fd()),
-            ) {
-                // SAFETY: the master owns this fd throughout the borrowed
-                // registration removal; neither reader nor master is dropped.
-                let borrowed = unsafe { std::os::unix::io::BorrowedFd::borrow_raw(master) };
-                let _ = poller.delete(borrowed);
+            if let Some(master) = proc.live_io().pty_master() {
+                master.unregister();
             }
-            reader.stop_monitoring();
+            if let Some(reader) = proc.pty_reader_mut() {
+                reader.stop_monitoring();
+            }
         }
     }
 
@@ -5826,22 +5899,22 @@ impl SystemProcessExt for ProcessManager {
     /// leave a readable descriptor for the later status notification.
     fn deactivate_pty_process_read_io(&mut self, id: ProcessId) {
         self.stop_pty_process_read_monitoring(id);
-        if let Some(proc) = self.processes.get_mut(&id) {
-            proc.live_io.pty_reader = None;
+        if let Some(proc) = self.get_mut(id) {
+            proc.set_pty_reader(None);
         }
     }
 
     /// Kill (remove) a process by id.  Returns true if found.
     fn kill_process(&mut self, id: ProcessId) -> bool {
-        if let Some(proc) = self.processes.get_mut(&id) {
-            Self::unregister_process_poll_sources(self.wait_backend.poller(), proc);
+        if let Some(proc) = self.get_mut(id) {
+            Self::unregister_process_poll_sources(proc);
             kill_real_process_child(proc, signal_kill_number());
-            proc.live_io.tls_stream.take();
+            proc.live_io_mut().take_tls_stream();
             proc.gnutls_initstage = GnutlsInitStage::Empty;
             proc.gnutls_boot_parameters = Value::NIL;
-            proc.live_io.network_socket.take();
+            proc.live_io_mut().take_network_socket();
             proc.status = process_status_signal_value(signal_kill_number());
-            proc.live_io.child_status_source = None;
+            proc.live_io_mut().set_child_status_source(None);
             true
         } else {
             false
@@ -5858,7 +5931,7 @@ impl SystemProcessExt for ProcessManager {
     ///
     /// Returns whether the id named a live process.
     fn stamp_process_for_delete(&mut self, id: ProcessId) -> bool {
-        let Some(proc) = self.processes.get_mut(&id) else {
+        let Some(proc) = self.get_mut(id) else {
             return false;
         };
         // GNU's FIRST statement here is `p->raw_status_new = 0;`
@@ -5896,10 +5969,13 @@ impl SystemProcessExt for ProcessManager {
         } else {
             StatusChangeSite::DeleteProcessChild
         };
+        // Eagerly unregister poll sources before deferring/deactivating (and
+        // every `PollRegistration` also unregisters automatically on drop).
+        Self::unregister_process_poll_sources(proc);
         defer_real_process_child_reaping(proc);
         proc.status_notify_pending = false;
         proc.pending_status = Value::NIL;
-        Self::deactivate_process_io(self.wait_backend.poller(), proc);
+        Self::deactivate_process_io(proc);
         // GNU's two `p->tick = ++process_tick;` here (:1128 for the connection
         // arm, :1148 for the subprocess arm) are each followed IMMEDIATELY by
         // `status_notify (p, NULL)` (:1129, :1149), so the tick they move is
@@ -5919,12 +5995,12 @@ impl SystemProcessExt for ProcessManager {
             self.reap_exited_process(id);
             true
         } else {
-            self.deleted_processes.contains_key(&id)
+            self.deleted_process_map().contains_key(&id)
         }
     }
 
     fn hangup_real_process_for_buffer_kill(&mut self, id: ProcessId) -> bool {
-        let Some(proc) = self.processes.get_mut(&id) else {
+        let Some(proc) = self.get_mut(id) else {
             return false;
         };
         if proc.kind != ProcessKind::Real
@@ -5964,9 +6040,11 @@ impl SystemProcessExt for ProcessManager {
     /// re-stamp the child — it has already exited and its recorded terminal
     /// status (exit/signal) must be preserved for `process-status' on the value.
     fn reap_exited_process(&mut self, id: ProcessId) {
-        if let Some(mut proc) = self.processes.remove(&id) {
-            Self::deactivate_process_io(self.wait_backend.poller(), &mut proc);
-            self.deleted_processes.insert(id, proc);
+        if let Some(mut proc) = self.remove_live_process_record(id) {
+            Self::deactivate_process_io(&mut proc);
+            self.insert_deleted_process_record(id, proc);
+            // #776: this record still owes its deciding major.
+            self.note_retired_process(id);
         }
     }
 
@@ -6004,7 +6082,7 @@ impl SystemProcessExt for ProcessManager {
                     if observer.owner == std::thread::current().id()
                         && events.writable_processes_ref().contains(&observer.process)
                         && self.get(observer.process).is_some_and(|process| {
-                            process.live_io.pending_network_connect.is_some()
+                            process.live_io().pending_network_connect().is_some()
                                 && ProcessStatusSymbol::from_status_value(process.status)
                                     == Some(ProcessStatusSymbol::Connect)
                         }) =>
@@ -6037,7 +6115,7 @@ impl SystemProcessExt for ProcessManager {
                 "readiness child no longer exists",
             )
         })?;
-        let stdout = process.live_io.child_stdout.as_ref().ok_or_else(|| {
+        let stdout = process.live_io().child_stdout().ok_or_else(|| {
             std::io::Error::new(
                 std::io::ErrorKind::NotFound,
                 "readiness child has no owned stdout",
@@ -6111,7 +6189,7 @@ impl SystemProcessExt for ProcessManager {
             use windows_sys::Win32::System::Threading::{
                 OpenProcess, PROCESS_SYNCHRONIZE, WaitForSingleObject,
             };
-            let pid = process.live_io.child.pid_if_unreaped().ok_or_else(|| {
+            let pid = process.live_io().child().pid_if_unreaped().ok_or_else(|| {
                 std::io::Error::new(
                     std::io::ErrorKind::NotFound,
                     "readiness child ownership missing",
@@ -6178,7 +6256,7 @@ impl SystemProcessExt for ProcessManager {
                 vec![Value::symbol("pipe-process-p"), process],
             ));
         }
-        let writer = proc.live_io.module_pipe_writer.as_ref().ok_or_else(|| {
+        let writer = proc.live_io().module_pipe_writer().ok_or_else(|| {
             signal(
                 "error",
                 vec![Value::string("Pipe process has no writable channel")],
@@ -6202,9 +6280,11 @@ impl SystemProcessExt for ProcessManager {
     }
 
     fn flush_process_write_queue(&mut self, id: ProcessId) -> Result<ProcessWriteFlush, Flow> {
-        if self
-            .get(id)
-            .is_some_and(|proc| proc.gnutls_initstage == GnutlsInitStage::HandshakeTried)
+        let Some(proc) = self.get(id) else {
+            return Ok(ProcessWriteFlush::NoSource);
+        };
+        if proc.gnutls_initstage == GnutlsInitStage::HandshakeTried
+            && proc.tls_handshake_owner() != TlsHandshakeOwner::None
         {
             return Ok(ProcessWriteFlush::Blocked);
         }
@@ -6249,10 +6329,10 @@ impl SystemProcessExt for ProcessManager {
                     // queue before the Lisp layer reports the closed output
                     // descriptor. Keep the legacy no-endpoint harness behavior
                     // for `Connected`, whose source may be attached later.
-                    if self.processes.get(&id).is_some_and(|proc| {
+                    if self.get(id).is_some_and(|proc| {
                         proc.input_disposition == ProcessInputDisposition::Disconnected
                     }) {
-                        if let Some(proc) = self.processes.get_mut(&id) {
+                        if let Some(proc) = self.get_mut(id) {
                             proc.write_queue = Value::NIL;
                         }
                     } else {
@@ -6269,7 +6349,8 @@ impl SystemProcessExt for ProcessManager {
         id: ProcessId,
         bytes: &[u8],
     ) -> Result<ProcessWriteAttempt, Flow> {
-        let Some(proc) = self.processes.get_mut(&id) else {
+        let poller = self.wait_backend.poller_arc();
+        let Some(proc) = self.get_mut(id) else {
             return Ok(ProcessWriteAttempt::NoSource);
         };
 
@@ -6340,7 +6421,7 @@ impl SystemProcessExt for ProcessManager {
                     proc.status_notify_pending = true;
                 }
                 let name = process_name_runtime(proc.name);
-                endpoint.disconnect(self.wait_backend.poller(), proc);
+                endpoint.disconnect(proc);
                 let error = signal(
                     "error",
                     vec![Value::string(format!(
@@ -6362,16 +6443,18 @@ impl SystemProcessExt for ProcessManager {
     fn has_pending_tls_handshake(&self, id: ProcessId) -> bool {
         self.get(id).is_some_and(|process| {
             process.gnutls_initstage == GnutlsInitStage::HandshakeTried
-                && process.live_io.tls_stream.is_some()
+                && process.tls_handshake_owner() == TlsHandshakeOwner::BlockingOnStack
+                && process.live_io().tls_stream().is_some()
         })
     }
 
     fn tls_handshake_process_ids(&self) -> Vec<ProcessId> {
-        self.processes
+        self.process_map()
             .iter()
             .filter_map(|(&id, proc)| {
                 (proc.gnutls_initstage == GnutlsInitStage::HandshakeTried
-                    && proc.live_io.tls_stream.is_some())
+                    && proc.tls_handshake_owner() == TlsHandshakeOwner::BlockingOnStack
+                    && proc.live_io().tls_stream().is_some())
                 .then_some(id)
             })
             .collect()
@@ -6382,13 +6465,20 @@ impl SystemProcessExt for ProcessManager {
         let Some(process) = self.get(id) else {
             return false;
         };
-        if process.gnutls_initstage != GnutlsInitStage::HandshakeTried {
+        if process.gnutls_initstage != GnutlsInitStage::HandshakeTried
+            || process.tls_handshake_owner() == TlsHandshakeOwner::None
+        {
             return false;
         }
-        let Some(tls) = process.live_io.tls_stream.as_ref() else {
+        let Some(tls) = process.live_io().tls_stream() else {
             return false;
         };
-        self.set_tls_handshake_interest(id, Some(tls.handshake_interest()));
+        let interest = if process.live_io().pending_network_connect().is_some() {
+            TlsHandshakeInterest::Writable
+        } else {
+            tls.handshake_interest()
+        };
+        self.set_tls_handshake_interest(id, Some(interest));
         true
     }
 
@@ -6396,10 +6486,10 @@ impl SystemProcessExt for ProcessManager {
         let Some(process) = self.get_mut(id) else {
             return false;
         };
-        if process.live_io.tls_polling == TlsPolling::Suspended {
+        if process.live_io().tls_polling() == TlsPolling::Suspended {
             return false;
         }
-        process.live_io.tls_polling = TlsPolling::Suspended;
+        process.set_tls_polling(TlsPolling::Suspended);
         self.set_tls_handshake_interest(id, None);
         true
     }
@@ -6408,31 +6498,33 @@ impl SystemProcessExt for ProcessManager {
         let Some(process) = self.get_mut(id) else {
             return;
         };
-        process.live_io.tls_polling = TlsPolling::Enabled;
+        process.set_tls_polling(TlsPolling::Enabled);
         if process.gnutls_initstage == GnutlsInitStage::HandshakeTried
-            && let Some(tls) = process.live_io.tls_stream.as_ref()
+            && process.tls_handshake_owner() != TlsHandshakeOwner::None
+            && let Some(tls) = process.live_io().tls_stream()
         {
-            let interest = tls.handshake_interest();
+            let interest = if process.live_io().pending_network_connect().is_some() {
+                TlsHandshakeInterest::Writable
+            } else {
+                tls.handshake_interest()
+            };
             self.set_tls_handshake_interest(id, Some(interest));
         }
     }
     fn set_tls_handshake_interest(&self, id: ProcessId, interest: Option<TlsHandshakeInterest>) {
-        let Some(poller) = self.wait_backend.poller() else {
+        let Some(poller) = self.wait_backend.poller_arc() else {
             return;
         };
-        let Some(tls) = self
-            .get(id)
-            .and_then(|proc| proc.live_io.tls_stream.as_ref())
-        else {
+        let Some(tls) = self.get(id).and_then(|proc| proc.live_io().tls_stream()) else {
             return;
         };
         let Some(interest) = interest else {
-            let _ = poller.delete(tls.tcp_stream());
+            tls.unregister();
             return;
         };
         if self
             .get(id)
-            .is_some_and(|process| process.live_io.tls_polling == TlsPolling::Suspended)
+            .is_some_and(|process| process.live_io().tls_polling() == TlsPolling::Suspended)
         {
             return;
         }
@@ -6442,16 +6534,18 @@ impl SystemProcessExt for ProcessManager {
             TlsHandshakeInterest::ReadableAndWritable => (true, true),
         };
         let event = polling::Event::new(id as usize, readable, writable);
-        if Self::modify_poll_source(poller, tls.tcp_stream(), event).is_err() {
-            let _ = Self::register_readable_source(poller, tls.tcp_stream(), id);
-            let _ = Self::modify_poll_source(poller, tls.tcp_stream(), event);
+        if tls
+            .modify(&poller, event, polling::PollMode::Level)
+            .is_err()
+        {
+            let _ = tls.register(&poller, event, polling::PollMode::Level);
         }
     }
 
     /// Register a network socket with the I/O poller so that
     /// `wait_for_output` wakes up when data arrives.
     fn register_socket_fd(&self, id: ProcessId) -> Result<(), String> {
-        let proc = self.processes.get(&id).ok_or("Process not found")?;
+        let proc = self.get(id).ok_or("Process not found")?;
         if self.refresh_pending_tls_interest(id) {
             return Ok(());
         }
@@ -6461,14 +6555,25 @@ impl SystemProcessExt for ProcessManager {
         if process_stopped_for_io(proc) || !process_filter_accepts_output(proc) {
             return Ok(());
         }
-        if let Some(poller) = self.wait_backend.poller() {
-            if let Some(tls) = proc.live_io.tls_stream.as_ref() {
-                Self::register_readable_source(poller, tls.tcp_stream(), id)?;
+        if let Some(poller) = self.wait_backend.poller_arc() {
+            if let Some(tls) = proc.live_io().tls_stream() {
+                tls.register(
+                    &poller,
+                    polling::Event::readable(id as usize),
+                    polling::PollMode::Level,
+                )
+                .map_err(|e| format!("Failed to register socket: {e}"))?;
                 return Ok(());
             }
 
-            let socket = proc.live_io.network_socket.as_ref().ok_or("No socket")?;
-            socket.register_readable(poller, id)?;
+            let socket = proc.live_io().network_socket().ok_or("No socket")?;
+            socket
+                .register(
+                    &poller,
+                    polling::Event::readable(id as usize),
+                    polling::PollMode::Level,
+                )
+                .map_err(|e| format!("Failed to register socket: {e}"))?;
         }
         Ok(())
     }
@@ -6478,44 +6583,57 @@ impl SystemProcessExt for ProcessManager {
     /// `if (!EQ (p->command, Qt) && !EQ (p->filter, Qt))` -- a `:stop t` port
     /// and a port whose filter is `t` are opened and configured but not polled.
     fn register_serial_read_fd(&self, id: ProcessId) {
-        let Some(poller) = self.wait_backend.poller() else {
+        let Some(poller) = self.wait_backend.poller_arc() else {
             return;
         };
-        let Some(proc) = self.processes.get(&id) else {
+        let Some(proc) = self.get(id) else {
             return;
         };
         if process_stopped_for_io(proc) || !process_filter_accepts_output(proc) {
             return;
         }
-        if let Some(port) = proc.live_io.serial_port.as_ref() {
-            let _ = port.register_readable(poller, id);
+        if let Some(port) = proc.live_io().serial_port() {
+            let _ = port.register(
+                &poller,
+                polling::Event::readable(id as usize),
+                polling::PollMode::Level,
+            );
         }
     }
 
     fn register_socket_writable_fd(&self, id: ProcessId) -> Result<(), String> {
-        let proc = self.processes.get(&id).ok_or("Process not found")?;
-        if let Some(poller) = self.wait_backend.poller() {
-            let socket = proc.live_io.network_socket.as_ref().ok_or("No socket")?;
-            socket.register_writable(poller, id)?;
+        let proc = self.get(id).ok_or("Process not found")?;
+        if let Some(poller) = self.wait_backend.poller_arc() {
+            let socket = proc.live_io().network_socket().ok_or("No socket")?;
+            if socket.is_listener() {
+                return Err("Listener sockets are not writable process sources".into());
+            }
+            socket
+                .register(
+                    &poller,
+                    polling::Event::writable(id as usize),
+                    polling::PollMode::Level,
+                )
+                .map_err(|e| format!("Failed to register socket: {e}"))?;
         }
         Ok(())
     }
 
     fn update_process_write_interest(&self, id: ProcessId, interest: ProcessWriteInterest) {
-        let Some(poller) = self.wait_backend.poller() else {
+        let Some(poller) = self.wait_backend.poller_arc() else {
             return;
         };
-        let Some(proc) = self.processes.get(&id) else {
+        let Some(proc) = self.get(id) else {
             return;
         };
 
-        if let Some(stdin) = proc.live_io.child.stdin() {
+        if let Some(stdin) = proc.live_io().child().stdin() {
             match interest {
                 ProcessWriteInterest::Readable => {
-                    Self::unregister_child_stdin_writable_from_poller(poller, stdin);
+                    Self::unregister_child_stdin_writable_from_poller(stdin);
                 }
                 ProcessWriteInterest::ReadableAndWritable => {
-                    Self::register_child_stdin_writable_with_poller(poller, stdin, id);
+                    Self::register_child_stdin_writable_with_poller(&poller, stdin, id);
                 }
             }
             return;
@@ -6558,12 +6676,13 @@ impl SystemProcessExt for ProcessManager {
             PendingNetworkConnectStart::Failed(code) => return Ok(Some(code)),
         };
         let local_addr = started.stream.local_addr().ok();
-        if let Some(proc) = self.processes.get_mut(&id) {
-            proc.live_io.network_socket = Some(NetworkSocket::TcpStream(started.stream));
-            proc.live_io.pending_network_connect = Some(PendingNetworkConnect::Tcp {
+        if let Some(proc) = self.get_mut(id) {
+            proc.live_io_mut()
+                .set_network_socket(Some(NetworkSocket::TcpStream(started.stream)));
+            proc.set_pending_network_connect(Some(PendingNetworkConnect::Tcp {
                 remaining_addrs: started.remaining_addrs,
                 socket_options: options.to_vec(),
-            });
+            }));
             proc.status = process_status_connect_value();
             Self::update_tcp_client_contact(proc, started.remote_addr, local_addr)?;
         }
@@ -6576,42 +6695,44 @@ impl SystemProcessExt for ProcessManager {
         id: ProcessId,
         mode: SymbolMode,
     ) -> Result<PendingNetworkConnectCompletion, Flow> {
-        let Some(proc) = self.processes.get(&id) else {
+        let Some(proc) = self.get(id) else {
             return Ok(PendingNetworkConnectCompletion::None);
         };
-        if proc.live_io.pending_network_connect.is_none() {
+        if proc.live_io().pending_network_connect().is_none() {
             return Ok(PendingNetworkConnectCompletion::None);
         }
         if proc
-            .live_io
-            .pending_network_connect
-            .as_ref()
+            .live_io()
+            .pending_network_connect()
             .is_some_and(|pending| matches!(pending, PendingNetworkConnect::Dns(_)))
         {
             return self.complete_pending_dns_network_connect(id);
         }
-        let connect_error = proc
-            .live_io
-            .network_socket
-            .as_ref()
-            .and_then(NetworkSocket::take_pending_connect_error)
-            .transpose()
-            .map_err(|err| signal_process_io("Checking network connection", None, err))?
-            .flatten();
+        let connect_error = if let Some(socket) = proc.live_io().network_socket() {
+            socket.take_pending_connect_error()
+        } else if let Some(tls) = proc.live_io().tls_stream() {
+            Some(socket2::SockRef::from(tls.tcp_stream()).take_error())
+        } else {
+            None
+        }
+        .transpose()
+        .map_err(|err| signal_process_io("Checking network connection", None, err))?
+        .flatten();
 
         if let Some(err) = connect_error {
             let pending = self
-                .processes
-                .get_mut(&id)
-                .and_then(|proc| proc.live_io.pending_network_connect.take());
+                .get_mut(id)
+                .and_then(|proc| proc.take_pending_network_connect());
             let Some(pending) = pending else {
                 return Ok(PendingNetworkConnectCompletion::None);
             };
-            if let Some(proc) = self.processes.get(&id)
-                && let Some(socket) = proc.live_io.network_socket.as_ref()
-                && let Some(poller) = self.wait_backend.poller()
-            {
-                socket.unregister_readable(poller);
+            if let Some(proc) = self.get(id) {
+                if let Some(socket) = proc.live_io().network_socket() {
+                    socket.unregister();
+                }
+                if let Some(tls) = proc.live_io().tls_stream() {
+                    tls.unregister();
+                }
             }
             let code = io_error_status_code(&err);
             match pending {
@@ -6626,15 +6747,18 @@ impl SystemProcessExt for ProcessManager {
                     )? {
                         None => Ok(PendingNetworkConnectCompletion::Retrying),
                         Some(code) => {
-                            let sentinel = self
-                                .processes
-                                .get(&id)
-                                .map(|proc| proc.sentinel)
-                                .unwrap_or(Value::NIL);
-                            if let Some(proc) = self.processes.get_mut(&id) {
+                            let sentinel =
+                                self.get(id).map(|proc| proc.sentinel).unwrap_or(Value::NIL);
+                            if let Some(proc) = self.get_mut(id) {
                                 proc.status = process_status_failed_value(code);
-                                proc.live_io.network_socket = None;
-                                proc.live_io.pending_network_connect = None;
+                                proc.live_io_mut().set_tls_stream(None);
+                                proc.live_io_mut().set_network_socket(None);
+                                if i64::from(proc.gnutls_initstage)
+                                    >= i64::from(GnutlsInitStage::Init)
+                                {
+                                    proc.gnutls_initstage = GnutlsInitStage::Callbacks;
+                                }
+                                proc.set_pending_network_connect(None);
                             }
                             // GNU src/process.c:6141.
                             self.record_status_change(
@@ -6648,56 +6772,59 @@ impl SystemProcessExt for ProcessManager {
                 _ => {}
             }
 
-            let sentinel = self
-                .processes
-                .get(&id)
-                .map(|proc| proc.sentinel)
-                .unwrap_or(Value::NIL);
-            if let Some(proc) = self.processes.get_mut(&id) {
+            let sentinel = self.get(id).map(|proc| proc.sentinel).unwrap_or(Value::NIL);
+            if let Some(proc) = self.get_mut(id) {
                 proc.status = process_status_failed_value(code);
-                proc.live_io.network_socket = None;
-                proc.live_io.pending_network_connect = None;
+                proc.live_io_mut().set_tls_stream(None);
+                proc.live_io_mut().set_network_socket(None);
+                if i64::from(proc.gnutls_initstage) >= i64::from(GnutlsInitStage::Init) {
+                    proc.gnutls_initstage = GnutlsInitStage::Callbacks;
+                }
+                proc.set_pending_network_connect(None);
             }
             // GNU src/process.c:6141, the arm with no addrinfos left.
             self.record_status_change(StatusChangeSite::NonBlockingConnectFailed, id);
             return Ok(PendingNetworkConnectCompletion::Failed { sentinel, code });
         }
 
-        let sentinel = self
-            .processes
-            .get(&id)
-            .map(|proc| proc.sentinel)
-            .unwrap_or(Value::NIL);
-        if let Some(proc) = self.processes.get(&id)
-            && let Some(socket) = proc.live_io.network_socket.as_ref()
-            && let Some(poller) = self.wait_backend.poller()
+        let sentinel = self.get(id).map(|proc| proc.sentinel).unwrap_or(Value::NIL);
+        if let Some(proc) = self.get(id)
+            && let Some(socket) = proc.live_io().network_socket()
         {
-            socket.unregister_readable(poller);
+            socket.unregister();
         }
-        if let Some(proc) = self.processes.get_mut(&id) {
-            proc.live_io.pending_network_connect = None;
+        if let Some(proc) = self.get_mut(id) {
+            proc.set_pending_network_connect(None);
             proc.status = process_status_run_value();
         }
-        let tls_parameters = self
-            .processes
-            .get(&id)
-            .map(|proc| proc.gnutls_boot_parameters)
-            .filter(|parameters| !parameters.is_nil())
-            .map(|parameters| parse_make_network_tls_parameters(parameters, mode))
-            .transpose()
-            .map_err(|flow| {
-                self.delete_process(id);
-                flow
-            })?
-            .flatten();
-        if let Some(parameters) = tls_parameters {
-            begin_process_tls::<RustlsBackend>(
-                self,
-                id,
-                &parameters.client,
-                "make-network-process",
-                signal_gnutls_boot_error,
-            )?;
+        let has_preinstalled_tls = self
+            .get(id)
+            .is_some_and(|proc| proc.live_io().tls_stream().is_some());
+        if !has_preinstalled_tls {
+            let tls_parameters = self
+                .get(id)
+                .map(|proc| proc.gnutls_boot_parameters)
+                .filter(|parameters| !parameters.is_nil())
+                .map(|parameters| parse_make_network_tls_parameters(parameters, mode))
+                .transpose()
+                .map_err(|flow| {
+                    self.delete_process(id);
+                    flow
+                })?
+                .flatten();
+            if let Some(parameters) = tls_parameters {
+                if let Some(proc) = self.get_mut(id) {
+                    proc.gnutls_boot_parameters = Value::NIL;
+                }
+                begin_process_tls::<RustlsBackend>(
+                    self,
+                    id,
+                    &parameters.client,
+                    TlsHandshakeOwner::BlockingOnStack,
+                    "make-network-process",
+                    signal_gnutls_boot_error,
+                )?;
+            }
         }
         self.register_socket_fd(id).ok();
         Ok(PendingNetworkConnectCompletion::Connected { sentinel })
@@ -6707,11 +6834,10 @@ impl SystemProcessExt for ProcessManager {
         &mut self,
         id: ProcessId,
     ) -> Result<PendingNetworkConnectCompletion, Flow> {
-        let Some(proc) = self.processes.get(&id) else {
+        let Some(proc) = self.get(id) else {
             return Ok(PendingNetworkConnectCompletion::None);
         };
-        let Some(PendingNetworkConnect::Dns(request)) =
-            proc.live_io.pending_network_connect.as_ref()
+        let Some(PendingNetworkConnect::Dns(request)) = proc.live_io().pending_network_connect()
         else {
             return Ok(PendingNetworkConnectCompletion::None);
         };
@@ -6720,9 +6846,8 @@ impl SystemProcessExt for ProcessManager {
         }
 
         let pending = self
-            .processes
-            .get_mut(&id)
-            .and_then(|proc| proc.live_io.pending_network_connect.take());
+            .get_mut(id)
+            .and_then(|proc| proc.take_pending_network_connect());
         let Some(PendingNetworkConnect::Dns(request)) = pending else {
             return Ok(PendingNetworkConnectCompletion::None);
         };
@@ -6730,9 +6855,8 @@ impl SystemProcessExt for ProcessManager {
         let resolved = match request.receiver.try_recv() {
             Ok(result) => result,
             Err(mpsc::TryRecvError::Empty) => {
-                if let Some(proc) = self.processes.get_mut(&id) {
-                    proc.live_io.pending_network_connect =
-                        Some(PendingNetworkConnect::Dns(request));
+                if let Some(proc) = self.get_mut(id) {
+                    proc.set_pending_network_connect(Some(PendingNetworkConnect::Dns(request)));
                 }
                 return Ok(PendingNetworkConnectCompletion::None);
             }
@@ -6746,15 +6870,11 @@ impl SystemProcessExt for ProcessManager {
                 match self.start_next_pending_network_connect(id, addrs, &request.socket_options)? {
                     None => Ok(PendingNetworkConnectCompletion::Retrying),
                     Some(code) => {
-                        let sentinel = self
-                            .processes
-                            .get(&id)
-                            .map(|proc| proc.sentinel)
-                            .unwrap_or(Value::NIL);
-                        if let Some(proc) = self.processes.get_mut(&id) {
+                        let sentinel = self.get(id).map(|proc| proc.sentinel).unwrap_or(Value::NIL);
+                        if let Some(proc) = self.get_mut(id) {
                             proc.status = process_status_failed_value(code);
-                            proc.live_io.network_socket = None;
-                            proc.live_io.pending_network_connect = None;
+                            proc.live_io_mut().set_network_socket(None);
+                            proc.set_pending_network_connect(None);
                         }
                         // GNU src/process.c:6141.
                         self.record_status_change(StatusChangeSite::NonBlockingConnectFailed, id);
@@ -6764,12 +6884,12 @@ impl SystemProcessExt for ProcessManager {
             }
             Ok(_) | Err(_) => {
                 let host = request.host.split('\0').next().unwrap_or(&request.host);
-                if let Some(proc) = self.processes.get_mut(&id) {
+                if let Some(proc) = self.get_mut(id) {
                     proc.status = process_status_failed_message_value(format!(
                         "Name lookup of {host} failed"
                     ));
-                    proc.live_io.network_socket = None;
-                    proc.live_io.pending_network_connect = None;
+                    proc.live_io_mut().set_network_socket(None);
+                    proc.set_pending_network_connect(None);
                 }
                 Ok(PendingNetworkConnectCompletion::DnsFailed)
             }
@@ -6799,7 +6919,7 @@ impl SystemProcessExt for ProcessManager {
             inheritance.coding,
         );
         if let Some(client) = self.get_mut(client_id) {
-            client.live_io.network_socket = Some(socket);
+            client.live_io_mut().set_network_socket(Some(socket));
             client.status = process_status_run_value();
             client.childp = contact;
             client.filter = inheritance.filter;
@@ -6855,10 +6975,10 @@ impl SystemProcessExt for ProcessManager {
 
         loop {
             let accepted_socket = {
-                let Some(server) = self.processes.get(&id) else {
+                let Some(server) = self.get(id) else {
                     return Ok(accepted);
                 };
-                match server.live_io.network_socket.as_ref() {
+                match server.live_io().network_socket().map(|s| &**s) {
                     Some(NetworkSocket::TcpListener(listener)) => match listener.accept() {
                         Ok((stream, remote_addr)) => Ok(Some(AcceptedSocket::Tcp {
                             local_addr: stream.local_addr().ok(),
@@ -6919,7 +7039,7 @@ impl SystemProcessExt for ProcessManager {
                 inherit_coding_system_flag,
                 server_thread,
             ) = {
-                let Some(server) = self.processes.get(&id) else {
+                let Some(server) = self.get(id) else {
                     return Ok(accepted);
                 };
                 (
@@ -7056,7 +7176,7 @@ impl SystemProcessExt for ProcessManager {
 
                         let prefix = format!("{} <", server_name);
                         let sequence = self
-                            .processes
+                            .process_map()
                             .values()
                             .filter(|process| {
                                 process_name_runtime(process.name).starts_with(&prefix)
@@ -7107,7 +7227,7 @@ impl SystemProcessExt for ProcessManager {
 
                     let prefix = format!("{} <", server_name);
                     let sequence = self
-                        .processes
+                        .process_map()
                         .values()
                         .filter(|process| process_name_runtime(process.name).starts_with(&prefix))
                         .count()
@@ -7166,13 +7286,12 @@ impl SystemProcessExt for ProcessManager {
         global_null_inhibition: bool,
     ) -> ProcessBytesRead {
         if self
-            .processes
-            .get(&id)
+            .get(id)
             .is_some_and(|process| !process_filter_accepts_output(process))
         {
             return ProcessBytesRead::WouldBlock;
         }
-        let source = self.processes.get(&id).and_then(process_output_source);
+        let source = self.get(id).and_then(process_output_source);
 
         match source {
             Some(ProcessOutputSource::Pty) => self.read_pty_output_result(
@@ -7310,10 +7429,14 @@ impl SystemProcessExt for ProcessManager {
         site: crate::emacs_core::wait::WaitStatusNotifySite,
     ) -> usize {
         let _ = site;
+        // The full walk covers every live child, so it is the point that
+        // consumes the SIGCHLD latch. Clear before polling: a delivery during
+        // the walk sets it again and stays visible to the next observation.
+        crate::emacs_core::os_signal::clear_child_signal_seen();
         super::reap::collect_deferred_child_status_changes();
         STATUS_NOTIFY_WALKS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let mut population: Vec<SweepableChild> = self
-            .processes
+            .process_map()
             .iter()
             .filter_map(|(id, proc)| SweepableChild::of(*id, proc))
             .collect();
@@ -7338,15 +7461,15 @@ impl SystemProcessExt for ProcessManager {
     /// any of these sites was reached.
     fn observe(&mut self, site: UpdateStatusSite, id: ProcessId) -> Option<ObservedProcess<'_>> {
         match site.recording() {
-            // NO ARM SWEEPS, and both variants say why rather than leaving it
-            // to be inferred.  `AlreadyRecorded` needs nothing because the
-            // machinery around the site has just made the record;
-            // `AsynchronouslyRecorded` needs nothing because the SIGCHLD
-            // trigger made it at a safe point -- and must not sweep here,
-            // because a sweep AT the observation is what ledger 180 measured
-            // and withdrew.  This `match` exists to make that a decision the
-            // type forces rather than an omission.
-            Recording::AlreadyRecorded { .. } | Recording::AsynchronouslyRecorded { .. } => {}
+            // The synchronous sites have just made the record themselves.
+            Recording::AlreadyRecorded { .. } => {}
+            // GNU reaches these sites with the record already made because
+            // `handle_child_signal` ran asynchronously. This port has no
+            // handler, so the observation performs GNU's per-child probe and
+            // record here (one child, WNOHANG, exactly the handler's body).
+            // It records only: the sentinel still runs from `status_notify`
+            // inside a wait, so an observation cannot steal the notification.
+            Recording::AsynchronouslyRecorded { .. } => self.reap_observed_child(id),
         }
         self.get_any(id).map(ObservedProcess::new)
     }
@@ -7370,7 +7493,7 @@ impl SystemProcessExt for ProcessManager {
 
     /// GNU `p->update_tick = p->tick;` (src/process.c:7894 and :7935).
     fn mark_status_change_notified(&mut self, id: ProcessId) {
-        if let Some(proc) = self.processes.get_mut(&id) {
+        if let Some(proc) = self.get_mut(id) {
             proc.status_ticks.mark_notified();
         }
     }
@@ -7386,7 +7509,7 @@ impl SystemProcessExt for ProcessManager {
     /// it and therefore notified AFTER it (ledger 54).
     fn processes_with_unnotified_status_change(&self) -> Vec<ProcessId> {
         let mut ids: Vec<ProcessId> = self
-            .processes
+            .process_map()
             .iter()
             .filter_map(|(id, proc)| proc.status_ticks.is_unnotified().then_some(*id))
             .collect();
@@ -7507,6 +7630,7 @@ impl AsyncCallbackKind {
 #[doc(hidden)]
 pub trait ProcessContextExt {
     fn wait_while_network_process_connecting(&mut self, id: ProcessId) -> Result<(), Flow>;
+    fn wait_for_nonblocking_tls_negotiation(&mut self, id: ProcessId) -> Result<(), Flow>;
     fn send_process_input_reentrant(
         &mut self,
         id: ProcessId,
@@ -7533,7 +7657,7 @@ pub trait ProcessContextExt {
         &mut self,
         pid: ProcessId,
         filter: Value,
-        data: &LispString,
+        data: LispString,
     ) -> Result<(), Flow>;
     fn notify_stderr_pipe_owner_first(
         &mut self,
@@ -7642,6 +7766,92 @@ pub trait ProcessContextExt {
     ) -> Result<ProcessOutputServiceOutcome, Flow>;
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum NonBlockingTlsAdvance {
+    Inactive,
+    StillPending,
+    BecameReady,
+    Failed,
+}
+
+fn fail_nonblocking_tls_handshake(eval: &mut neovm_eval::emacs_core::eval::Context, id: ProcessId) {
+    // GNU `wait_reading_process_output` (`src/process.c:5455-5457`):
+    // deactivate TLS + fds (lowering initstage to `Callbacks` = 3),
+    // keep the process in the process table, set status to
+    // `(failed "TLS negotiation failed")`, and run NO sentinel.
+    eval.processes_mut().deactivate_network_process_io(id);
+    if let Some(proc) = eval.processes_mut().get_mut(id) {
+        proc.write_queue = Value::NIL;
+        proc.status = process_status_failed_message_value("TLS negotiation failed".to_string());
+        proc.pending_status = Value::NIL;
+        proc.status_notify_pending = false;
+    }
+}
+
+fn advance_nonblocking_tls_handshake(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    id: ProcessId,
+) -> Result<NonBlockingTlsAdvance, Flow> {
+    let eligible = eval.processes().get(id).is_some_and(|proc| {
+        proc.gnutls_initstage == GnutlsInitStage::HandshakeTried
+            && proc.tls_handshake_owner() == TlsHandshakeOwner::NonBlockingAsync
+            && proc.live_io().pending_network_connect().is_none()
+            && proc.live_io().tls_stream().is_some()
+    });
+    if !eligible {
+        return Ok(NonBlockingTlsAdvance::Inactive);
+    }
+
+    let progress = {
+        let Some(proc) = eval.processes_mut().get_mut(id) else {
+            return Ok(NonBlockingTlsAdvance::Inactive);
+        };
+        let Some(stream) = proc.live_io_mut().tls_stream_mut() else {
+            return Ok(NonBlockingTlsAdvance::Inactive);
+        };
+        stream.advance_handshake()
+    };
+
+    match progress {
+        Ok(TlsHandshakeProgress::Ready) => {
+            let Some(accepts_output) = eval.processes_mut().get_mut(id).map(|proc| {
+                proc.gnutls_initstage = GnutlsInitStage::Ready;
+                proc.set_tls_handshake_owner(TlsHandshakeOwner::None);
+                // GNU `finish_after_tls_connection` (`src/process.c:3409`):
+                // mark status `run` (public `open` for network processes) and
+                // preserve `gnutls_boot_parameters`.
+                proc.status = process_status_run_value();
+                process_filter_accepts_output(proc)
+            }) else {
+                return Ok(NonBlockingTlsAdvance::Inactive);
+            };
+            eval.processes()
+                .set_process_output_read_interest(id, accepts_output);
+            eval.processes_mut().flush_process_write_queue(id)?;
+            let sentinel = eval
+                .processes()
+                .get(id)
+                .map(|proc| proc.sentinel)
+                .unwrap_or(Value::NIL);
+            let roots = eval.save_specpdl_roots();
+            eval.push_specpdl_root(sentinel);
+            let sentinel_result = eval.run_process_sentinel_callback(id, sentinel, "open\n");
+            eval.restore_specpdl_roots(roots);
+            sentinel_result?;
+            Ok(NonBlockingTlsAdvance::BecameReady)
+        }
+        Ok(TlsHandshakeProgress::Pending(interest)) => {
+            eval.processes()
+                .set_tls_handshake_interest(id, Some(interest));
+            Ok(NonBlockingTlsAdvance::StillPending)
+        }
+        Err(_) => {
+            fail_nonblocking_tls_handshake(eval, id);
+            Ok(NonBlockingTlsAdvance::Failed)
+        }
+    }
+}
+
 impl ProcessContextExt for neovm_eval::emacs_core::eval::Context {
     fn wait_while_network_process_connecting(&mut self, id: ProcessId) -> Result<(), Flow> {
         while self.processes().get(id).is_some_and(|proc| {
@@ -7657,22 +7867,68 @@ impl ProcessContextExt for neovm_eval::emacs_core::eval::Context {
         Ok(())
     }
 
+    fn wait_for_nonblocking_tls_negotiation(&mut self, id: ProcessId) -> Result<(), Flow> {
+        loop {
+            let Some((stage, owner)) = self
+                .processes()
+                .get(id)
+                .map(|proc| (proc.gnutls_initstage, proc.tls_handshake_owner()))
+            else {
+                return Ok(());
+            };
+            if stage != GnutlsInitStage::HandshakeTried {
+                return Ok(());
+            }
+            match owner {
+                TlsHandshakeOwner::BlockingOnStack => return Ok(()),
+                TlsHandshakeOwner::None => {
+                    // Initial non-blocking `gnutls-boot` already failed and
+                    // left stage 8 with no active handshake loop.  Mirror GNU
+                    // `send_process` -> `wait_for_tls_negotiation` by failing
+                    // and deactivating the session so `send_process` errors
+                    // promptly instead of spinning forever.
+                    fail_nonblocking_tls_handshake(self, id);
+                    return Ok(());
+                }
+                TlsHandshakeOwner::NonBlockingAsync => {
+                    let _ = self.wait_for_process_output(ProcessOutputWaitRequest::new(
+                        ProcessOutputWaitTiming::For(Duration::from_millis(20)),
+                        Some(id),
+                        false,
+                        true,
+                    ))?;
+                }
+            }
+        }
+    }
+
     fn send_process_input_reentrant(
         &mut self,
         id: ProcessId,
         input: &LispString,
     ) -> Result<(), Flow> {
+        // Wait for any pending async TLS negotiation before queuing bytes so a
+        // failing handshake signals cleanly instead of queuing and dropping data.
+        self.wait_for_nonblocking_tls_negotiation(id)?;
+        if self
+            .processes_mut()
+            .observe(UpdateStatusSite::SendProcess, id)
+            .is_some_and(|observed| !observed.allows_send())
+        {
+            return Err(signal_process_not_running_in_manager(&self.processes(), id));
+        }
+
         if !self.processes_mut().queue_input(id, input)? {
             return Err(signal("error", vec![Value::string("Process not found")]));
         }
 
-        // A reentrant timer/filter cannot drive the suspended TLS handshake.
-        // Retain application data until verification succeeds, then flush it.
-        if self
-            .processes()
-            .get(id)
-            .is_some_and(|process| process.gnutls_initstage == GnutlsInitStage::HandshakeTried)
-        {
+        // A reentrant timer/filter cannot drive a suspended on-stack blocking
+        // TLS handshake.  Retain application data until verification succeeds,
+        // then flush it.
+        if self.processes().get(id).is_some_and(|process| {
+            process.gnutls_initstage == GnutlsInitStage::HandshakeTried
+                && process.tls_handshake_owner() == TlsHandshakeOwner::BlockingOnStack
+        }) {
             return Ok(());
         }
 
@@ -7680,6 +7936,13 @@ impl ProcessContextExt for neovm_eval::emacs_core::eval::Context {
             match self.processes_mut().flush_process_write_queue(id)? {
                 ProcessWriteFlush::Drained => return Ok(()),
                 ProcessWriteFlush::NoSource => {
+                    if self
+                        .processes_mut()
+                        .observe(UpdateStatusSite::SendProcess, id)
+                        .is_some_and(|observed| !observed.allows_send())
+                    {
+                        return Err(signal_process_not_running_in_manager(&self.processes(), id));
+                    }
                     if self
                         .processes()
                         .get_any(id)
@@ -7706,6 +7969,13 @@ impl ProcessContextExt for neovm_eval::emacs_core::eval::Context {
                         false,
                         true,
                     ))?;
+                    if self
+                        .processes_mut()
+                        .observe(UpdateStatusSite::SendProcess, id)
+                        .is_some_and(|observed| !observed.allows_send())
+                    {
+                        return Err(signal_process_not_running_in_manager(&self.processes(), id));
+                    }
                 }
             }
         }
@@ -7927,10 +8197,10 @@ impl ProcessContextExt for neovm_eval::emacs_core::eval::Context {
         &mut self,
         pid: ProcessId,
         filter: Value,
-        data: &LispString,
+        data: LispString,
     ) -> Result<(), Flow> {
         let proc_val = Value::make_process(pid);
-        let output_val = Value::heap_string(data.clone());
+        let output_val = Value::heap_string(data);
         match ProcessFilterDispatch::from_lisp(filter) {
             ProcessFilterDispatch::Default => {
                 let callback = Value::symbol(DEFAULT_PROCESS_FILTER_SYMBOL);
@@ -8191,7 +8461,7 @@ impl ProcessContextExt for neovm_eval::emacs_core::eval::Context {
                     .get(id)
                     .map(|p| p.filter)
                     .unwrap_or(Value::NIL);
-                self.run_process_filter_callback(id, filter, &decoded.run.text)?;
+                self.run_process_filter_callback(id, filter, decoded.run.text)?;
             }
             return Ok(ProcessOutputRead::Eof);
         }
@@ -8318,7 +8588,7 @@ impl ProcessContextExt for neovm_eval::emacs_core::eval::Context {
                             .get(stderr_id)
                             .map(|p| p.filter)
                             .unwrap_or(Value::NIL);
-                        self.run_process_filter_callback(stderr_id, filter, &data)?;
+                        self.run_process_filter_callback(stderr_id, filter, data)?;
                     }
                     if policy == ProcessOutputReadPolicy::Live {
                         return Ok(outcome);
@@ -8360,7 +8630,7 @@ impl ProcessContextExt for neovm_eval::emacs_core::eval::Context {
                         .get(pid)
                         .map(|p| p.filter)
                         .unwrap_or(Value::NIL);
-                    self.run_process_filter_callback(pid, filter, &data)?;
+                    self.run_process_filter_callback(pid, filter, data)?;
                 }
                 if bytes_read > 0 {
                     ProcessOutputDrainDisposition::Output
@@ -8445,7 +8715,7 @@ impl ProcessContextExt for neovm_eval::emacs_core::eval::Context {
     /// notification retires nothing.
     fn notify_process_status_sentinel(&mut self, pid: ProcessId) -> Result<(), Flow> {
         let Some(notification) =
-            ProcessStatusNotification::for_retired_process(&self.processes(), pid)
+            ProcessStatusNotification::for_retired_process(self.processes(), pid)
         else {
             return Ok(());
         };
@@ -8542,12 +8812,22 @@ impl ProcessContextExt for neovm_eval::emacs_core::eval::Context {
     ) -> Result<ProcessOutputServiceOutcome, Flow> {
         let target_process = request.target_process();
         let proc_ids = request.live_processes(self.processes().live_process_ids());
-        self.service_process_output_for_ids(
+        let mut outcome = ProcessOutputServiceOutcome::default();
+        for &pid in &proc_ids {
+            match advance_nonblocking_tls_handshake(self, pid)? {
+                NonBlockingTlsAdvance::Inactive | NonBlockingTlsAdvance::StillPending => {}
+                NonBlockingTlsAdvance::BecameReady | NonBlockingTlsAdvance::Failed => {
+                    outcome.record_serviced();
+                }
+            }
+        }
+        outcome.absorb(self.service_process_output_for_ids(
             proc_ids,
             target_process,
             true,
             ProcessOutputServicePass::Readiness,
-        )
+        )?);
+        Ok(outcome)
     }
 
     /// GNU `status_notify (NULL, WAIT_PROC)` (src/process.c:5554, :5854), with
@@ -8606,7 +8886,7 @@ impl ProcessContextExt for neovm_eval::emacs_core::eval::Context {
                         vec![Value::string("Process closed during TLS negotiation")],
                     )
                 })?;
-                let stream = proc.live_io.tls_stream.as_mut().ok_or_else(|| {
+                let stream = proc.live_io_mut().tls_stream_mut().ok_or_else(|| {
                     signal(
                         "error",
                         vec![Value::string("TLS connection closed during negotiation")],
@@ -8615,8 +8895,10 @@ impl ProcessContextExt for neovm_eval::emacs_core::eval::Context {
                 match stream.advance_handshake().map_err(map_error)? {
                     TlsHandshakeProgress::Ready => {
                         proc.gnutls_initstage = GnutlsInitStage::Ready;
-                        proc.gnutls_boot_parameters = Value::NIL;
-                        self.processes().register_socket_fd(id).ok();
+                        proc.set_tls_handshake_owner(TlsHandshakeOwner::None);
+                        let accepts_output = process_filter_accepts_output(proc);
+                        self.processes()
+                            .set_process_output_read_interest(id, accepts_output);
                         self.processes_mut().flush_process_write_queue(id)?;
                         return Ok(());
                     }
@@ -8641,11 +8923,10 @@ impl ProcessContextExt for neovm_eval::emacs_core::eval::Context {
     ) -> Result<(), Flow> {
         let roots = self.save_specpdl_roots();
         self.push_specpdl_root(sentinel);
-        let result = if self
-            .processes()
-            .get(id)
-            .is_some_and(|proc| proc.gnutls_initstage == GnutlsInitStage::HandshakeTried)
-        {
+        let result = if self.processes().get(id).is_some_and(|proc| {
+            proc.gnutls_initstage == GnutlsInitStage::HandshakeTried
+                && proc.tls_handshake_owner() == TlsHandshakeOwner::BlockingOnStack
+        }) {
             self.finish_process_tls_handshake(id, signal_gnutls_boot_error)
         } else {
             Ok(())
@@ -8661,6 +8942,7 @@ impl ProcessContextExt for neovm_eval::emacs_core::eval::Context {
     ) -> Result<ProcessOutputServiceOutcome, Flow> {
         let target_process = request.target_process();
         let mut outcome = ProcessOutputServiceOutcome::default();
+        let mut newly_ready_tls_ids = Vec::new();
 
         let writable_processes = request.ready_processes(events.writable_processes_ref().to_vec());
         for pid in writable_processes {
@@ -8674,12 +8956,21 @@ impl ProcessContextExt for neovm_eval::emacs_core::eval::Context {
                     outcome.record_serviced();
                 }
                 PendingNetworkConnectCompletion::Connected { sentinel } => {
-                    self.finish_connected_tls_before_sentinel(pid, sentinel)?;
-                    self.setup_process_output_descriptor(pid)?;
-                    // GNU services :nowait completion inside the wait and
-                    // keeps waiting (only read bytes complete the wait).
-                    outcome.record_serviced();
-                    self.run_process_sentinel_callback(pid, sentinel, "open\n")?;
+                    let deferred_async_tls = self.processes().get(pid).is_some_and(|proc| {
+                        proc.gnutls_initstage == GnutlsInitStage::HandshakeTried
+                            && proc.tls_handshake_owner() == TlsHandshakeOwner::NonBlockingAsync
+                    });
+                    if deferred_async_tls {
+                        self.setup_process_output_descriptor(pid)?;
+                        outcome.record_serviced();
+                    } else {
+                        self.finish_connected_tls_before_sentinel(pid, sentinel)?;
+                        self.setup_process_output_descriptor(pid)?;
+                        // GNU services :nowait completion inside the wait and
+                        // keeps waiting (only read bytes complete the wait).
+                        outcome.record_serviced();
+                        self.run_process_sentinel_callback(pid, sentinel, "open\n")?;
+                    }
                 }
                 PendingNetworkConnectCompletion::Failed { sentinel, code } => {
                     outcome.record_serviced();
@@ -8697,15 +8988,40 @@ impl ProcessContextExt for neovm_eval::emacs_core::eval::Context {
                     outcome.record_serviced();
                 }
             }
-            match self.processes_mut().flush_process_write_queue(pid)? {
-                ProcessWriteFlush::Drained | ProcessWriteFlush::Blocked => {
+            match advance_nonblocking_tls_handshake(self, pid)? {
+                NonBlockingTlsAdvance::Inactive => {
+                    match self.processes_mut().flush_process_write_queue(pid)? {
+                        ProcessWriteFlush::Drained | ProcessWriteFlush::Blocked => {
+                            outcome.record_serviced();
+                        }
+                        ProcessWriteFlush::NoSource => {}
+                    }
+                }
+                NonBlockingTlsAdvance::StillPending => {}
+                NonBlockingTlsAdvance::BecameReady => {
+                    outcome.record_serviced();
+                    newly_ready_tls_ids.push(pid);
+                }
+                NonBlockingTlsAdvance::Failed => {
                     outcome.record_serviced();
                 }
-                ProcessWriteFlush::NoSource => {}
             }
         }
 
-        let proc_ids = request.ready_processes(events.ready_processes_ref().to_vec());
+        let mut proc_ids = request.ready_processes(events.ready_processes_ref().to_vec());
+        for &pid in &proc_ids {
+            match advance_nonblocking_tls_handshake(self, pid)? {
+                NonBlockingTlsAdvance::Inactive | NonBlockingTlsAdvance::StillPending => {}
+                NonBlockingTlsAdvance::BecameReady => {
+                    outcome.record_serviced();
+                    newly_ready_tls_ids.push(pid);
+                }
+                NonBlockingTlsAdvance::Failed => {
+                    outcome.record_serviced();
+                }
+            }
+        }
+        proc_ids.extend(newly_ready_tls_ids);
         outcome.absorb(self.service_process_output_for_ids(
             proc_ids,
             target_process,
@@ -8776,7 +9092,7 @@ impl ProcessContextExt for neovm_eval::emacs_core::eval::Context {
             }
             ProcessOutputServicePass::StatusNotification => {}
         }
-        order_pending_status_notifications_newest_first(&self.processes(), &mut proc_ids);
+        order_pending_status_notifications_newest_first(self.processes(), &mut proc_ids);
         match pass {
             ProcessOutputServicePass::StatusNotification => {
                 if let Some(target) = target_process
@@ -8828,10 +9144,19 @@ impl ProcessContextExt for neovm_eval::emacs_core::eval::Context {
                         outcome.record_serviced();
                     }
                     PendingNetworkConnectCompletion::Connected { sentinel } => {
-                        self.finish_connected_tls_before_sentinel(pid, sentinel)?;
-                        self.setup_process_output_descriptor(pid)?;
-                        outcome.record_serviced();
-                        self.run_process_sentinel_callback(pid, sentinel, "open\n")?;
+                        let deferred_async_tls = self.processes().get(pid).is_some_and(|proc| {
+                            proc.gnutls_initstage == GnutlsInitStage::HandshakeTried
+                                && proc.tls_handshake_owner() == TlsHandshakeOwner::NonBlockingAsync
+                        });
+                        if deferred_async_tls {
+                            self.setup_process_output_descriptor(pid)?;
+                            outcome.record_serviced();
+                        } else {
+                            self.finish_connected_tls_before_sentinel(pid, sentinel)?;
+                            self.setup_process_output_descriptor(pid)?;
+                            outcome.record_serviced();
+                            self.run_process_sentinel_callback(pid, sentinel, "open\n")?;
+                        }
                     }
                     PendingNetworkConnectCompletion::Failed { sentinel, code } => {
                         outcome.record_serviced();
@@ -8867,7 +9192,7 @@ impl ProcessContextExt for neovm_eval::emacs_core::eval::Context {
                 // GNU still has the pipe attached and `closed` (ledger 54).
                 let is_implicit_stderr = self.processes().get(pid).is_some_and(|process| {
                     process.kind == ProcessKind::Pipe
-                        && !process.live_io.child.has_child()
+                        && !process.live_io().child().has_child()
                         && self.processes().stderr_pipe_owner(pid).is_some()
                 });
                 let allow_pipe_notification =
@@ -9071,7 +9396,7 @@ impl ProcessContextExt for neovm_eval::emacs_core::eval::Context {
                             .get(pid)
                             .map(|p| p.filter)
                             .unwrap_or(Value::NIL);
-                        self.run_process_filter_callback(pid, filter, &data)?;
+                        self.run_process_filter_callback(pid, filter, data)?;
                     }
                 }
                 ProcessOutputRead::Eof if is_stderr_pipe => {
@@ -9338,7 +9663,7 @@ impl ProcessContextExt for neovm_eval::emacs_core::eval::Context {
                     .get(pid)
                     .map(|p| p.filter)
                     .unwrap_or(Value::NIL);
-                self.run_process_filter_callback(pid, filter, &data)?;
+                self.run_process_filter_callback(pid, filter, data)?;
             }
         }
         if let Some(proc) = self.processes_mut().get_mut(pid)
@@ -9389,5 +9714,134 @@ impl ProcessContextExt for neovm_eval::emacs_core::eval::Context {
         }
         outcome.record_serviced();
         Ok(outcome)
+    }
+}
+
+#[cfg(all(test, unix))]
+mod borrowed_fd_tests {
+    use super::{ProcessManager, SystemProcessExt};
+    use std::os::fd::AsFd;
+
+    #[test]
+    fn register_readable_raw_fd_borrows_a_live_pipe() {
+        let (reader, writer) = std::io::pipe().expect("pipe");
+        let poller = polling::Poller::new().expect("poller");
+        // SAFETY: `reader` and `writer` are deleted from `poller` before drop.
+        unsafe {
+            ProcessManager::register_readable_raw_fd(&poller, reader.as_fd(), 1)
+                .expect("a live pipe end registers");
+            ProcessManager::register_writable_source(&poller, &writer, 2)
+                .expect("a live pipe writer registers");
+        }
+        poller.delete(reader.as_fd()).expect("delete reader");
+        poller.delete(&writer).expect("delete writer");
+    }
+
+    /// Soundness B5 guard: raw `SystemProcessExt` wrappers around
+    /// `polling::Poller::add_with_mode` must stay `unsafe fn` and require
+    /// `polling::AsSource` (not `AsRawSource`), while production process
+    /// descriptors route through RAII `PollRegistration<T>`.
+    #[test]
+    fn b5_poller_registration_methods_require_unsafe_and_as_source() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let types_full =
+            std::fs::read_to_string(root.join("src/emacs_core/system/process/types.rs"))
+                .expect("read process/types.rs");
+        let types_src = types_full
+            .split("mod borrowed_fd_tests")
+            .next()
+            .expect("production section before borrowed_fd_tests");
+
+        let mut violations = Vec::new();
+        for name in [
+            "register_readable_source",
+            "register_writable_source",
+            "register_readable_raw_fd",
+            "register_writable_raw_fd",
+        ] {
+            let safe_sig = format!("    fn {name}(");
+            let unsafe_sig = format!("    unsafe fn {name}(");
+            if types_src.contains(&safe_sig) {
+                violations.push(format!("process/types.rs: `{name}` is still a safe `fn`"));
+            }
+            if types_src.matches(&unsafe_sig).count() < 2 {
+                violations.push(format!(
+                    "process/types.rs: expected trait + impl `unsafe fn {name}(`"
+                ));
+            }
+        }
+        if types_src.contains("AsRawSource") {
+            violations.push(
+                "process/types.rs: registration wrappers must take `AsSource`, not `AsRawSource`"
+                    .into(),
+            );
+        }
+
+        let crates_dir = root.parent().expect("workspace crates directory");
+        let eval_state_src = std::fs::read_to_string(
+            crates_dir.join("neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs"),
+        )
+        .expect("read neovm-eval process_state.rs");
+        if eval_state_src.contains("DerefMut for PollRegistration")
+            || eval_state_src.contains("DerefMut> for PollRegistration")
+        {
+            violations
+                .push("process_state.rs: `PollRegistration` must not implement `DerefMut`".into());
+        }
+        if !eval_state_src.contains("pub unsafe trait PollableResource") {
+            violations
+                .push("process_state.rs: `PollableResource` must remain `pub unsafe trait`".into());
+        }
+        let poll_reg_body = eval_state_src
+            .split("pub struct PollRegistration<T: PollableResource> {")
+            .nth(1)
+            .and_then(|rest| rest.split("\n}").next())
+            .expect("struct PollRegistration definition in process_state.rs");
+        assert!(
+            poll_reg_body.contains("poller:")
+                && poll_reg_body.contains("inner:")
+                && poll_reg_body.contains("T::RegistrationToken"),
+            "process_state.rs: unexpected PollRegistration struct body slice: {poll_reg_body}"
+        );
+        if poll_reg_body.contains("pub ") || poll_reg_body.contains("pub(") {
+            violations.push(
+                "process_state.rs: `PollRegistration` struct fields must all stay private".into(),
+            );
+        }
+        if eval_state_src.contains("fn inner_mut") {
+            violations
+                .push("process_state.rs: `PollRegistration` must not expose `fn inner_mut`".into());
+        }
+        if !eval_state_src.contains("fn capture_registration_token(") {
+            violations.push(
+                "process_state.rs: `PollableResource` must keep `capture_registration_token`"
+                    .into(),
+            );
+        }
+        if !eval_state_src.contains("pub struct MasterPtyRegistrationToken(") {
+            violations.push(
+                "process_state.rs: `MasterPty` must use unforgeable `MasterPtyRegistrationToken`"
+                    .into(),
+            );
+        }
+        if eval_state_src.contains("Default)]\npub struct MasterPtyRegistrationToken(") {
+            violations.push(
+                "process_state.rs: `MasterPtyRegistrationToken` must not derive `Default`".into(),
+            );
+        }
+        if !eval_state_src.contains("unsafe fn modify_on_poller(")
+            || !eval_state_src.contains("unsafe fn unregister_from_poller(")
+        {
+            violations.push(
+                "process_state.rs: `modify_on_poller` and `unregister_from_poller` must remain `unsafe fn`"
+                    .into(),
+            );
+        }
+
+        assert!(
+            violations.is_empty(),
+            "B5 poller-registration soundness violations:\n{}",
+            violations.join("\n")
+        );
     }
 }

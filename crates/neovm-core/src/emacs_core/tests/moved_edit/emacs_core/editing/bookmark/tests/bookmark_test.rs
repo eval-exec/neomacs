@@ -242,8 +242,7 @@ fn bookmark_copied_properties_have_only_manager_roots() {
             assert_eq!(
                 (unsafe { Value::from_bits(*bits) })
                     .as_vector_data()
-                    .expect("live bookmark property vector")
-                    .as_slice(),
+                    .expect("live bookmark property vector"),
                 &[Value::fixnum(index as i64)]
             );
         }

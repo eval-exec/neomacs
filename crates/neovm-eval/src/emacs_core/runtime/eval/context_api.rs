@@ -9,6 +9,26 @@
 
 use super::*;
 
+/// Clears the minibuffer field-borrow flag when the restore split ends,
+/// including when `body` unwinds.
+#[cfg(any(test, feature = "test-support"))]
+struct MinibufferFieldBorrowGuard<'a>(&'a std::cell::Cell<bool>);
+
+#[cfg(any(test, feature = "test-support"))]
+impl<'a> MinibufferFieldBorrowGuard<'a> {
+    fn enter(flag: &'a std::cell::Cell<bool>) -> Self {
+        flag.set(true);
+        Self(flag)
+    }
+}
+
+#[cfg(any(test, feature = "test-support"))]
+impl Drop for MinibufferFieldBorrowGuard<'_> {
+    fn drop(&mut self) {
+        self.0.set(false);
+    }
+}
+
 impl Context {
     #[doc(hidden)]
     pub fn set_interpreted_closure_filter_fn(&mut self, filter_fn: Option<Value>) {
@@ -171,6 +191,18 @@ impl Context {
         &self.tagged_heap
     }
 
+    /// Mint a shared [`neovm_value::tagged::gc::HeapRef`] tied to `&self`.
+    #[inline(always)]
+    pub fn heap_ref(&self) -> neovm_value::tagged::gc::HeapRef<'_> {
+        self.tagged_heap.heap_ref()
+    }
+
+    /// Mint an exclusive [`neovm_value::tagged::gc::HeapMut`] tied to `&mut self`.
+    #[inline(always)]
+    pub fn heap_mut(&mut self) -> neovm_value::tagged::gc::HeapMut<'_> {
+        self.tagged_heap.heap_mut()
+    }
+
     /// R-b (PC11-F f2): mutable tagged-heap view, for fixture setup that
     /// allocates (`alloc_cons`) or sets heap policy. Live callers are the
     /// re-homed value era fixtures.
@@ -297,6 +329,13 @@ impl Context {
     #[inline(always)]
     pub fn edit_mut(&mut self) -> &mut neovm_edit::buffer::EditRuntime {
         &mut self.edit
+    }
+
+    /// Non-swappable exclusive capability over the edit runtime.
+    #[doc(hidden)]
+    #[inline(always)]
+    pub fn edit_view_mut(&mut self) -> neovm_edit::buffer::EditRuntimeMut<'_> {
+        neovm_edit::buffer::EditRuntimeMut::new(&mut self.edit)
     }
 
     /// R-b (PC11-F f1): the thread-projection binding authority (read).
@@ -572,6 +611,12 @@ impl Context {
     /// Public mutable access to the buffer manager.
     pub fn buffer_manager_mut(&mut self) -> &mut BufferManager {
         &mut self.edit.buffers
+    }
+
+    /// Public non-swappable mutable capability over the buffer manager.
+    #[inline(always)]
+    pub fn buffer_manager_view_mut(&mut self) -> neovm_edit::buffer::BufferManagerMut<'_> {
+        neovm_edit::buffer::BufferManagerMut::new(&mut self.edit.buffers)
     }
 
     /// Public read access to the frame manager.
@@ -1149,6 +1194,70 @@ impl Context {
         &mut self.gstring_shape_cache
     }
 
+    /// Process-wide monotonic source for a cached gstring's ID.
+    ///
+    /// GNU stores the header with `hash_put` and uses the returned table index
+    /// as the ID (`composition_gstring_put_cache`, src/composite.c:651-668).
+    /// That value is only ever tested for non-nil — it marks the gstring as
+    /// already shaped so `autocmp_chars` skips the rule (src/composite.c:973)
+    /// — so Neomacs only needs a unique non-nil fixnum.  A counter is O(1); the
+    /// previous maximum-live-ID scan was O(entries) per `font-shape-gstring`,
+    /// and an ID is never reused after `clear-composition-cache` / `close-font`
+    /// removes its entry.
+    fn next_gstring_shape_cache_id() -> i64 {
+        static NEXT_ID: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
+        NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// GNU `composition_gstring_put_cache (gstring, -1)`
+    /// (src/composite.c:650-670): store a copy of GSTRING's header and of its
+    /// glyphs up to the first nil, keyed by the header, and return that copy
+    /// with its ID slot set.  The display path calls this after a rule
+    /// returns an unshaped gstring (`composition_reseat_it`,
+    /// src/composite.c:1410-1412), so the next search hits
+    /// `composition_get_gstring`'s cache and skips the rule entirely.
+    ///
+    /// A gstring that already carries an ID, or whose header cannot be
+    /// fingerprinted, is returned unchanged.  The input is not the cached
+    /// object: like GNU's copy, `eq` distinguishes them.
+    #[doc(hidden)]
+    pub fn composition_gstring_put_cache(&mut self, gstring: Value) -> Value {
+        let Some(slots) = gstring.as_vector_data() else {
+            return gstring;
+        };
+        if slots.len() < 2 || !slots.at(1).is_nil() {
+            return gstring;
+        }
+        let header_value = slots.at(0);
+        let Some(header) = header_value.as_vector_data() else {
+            return gstring;
+        };
+        let Some(key) = neovm_value::display_vocab::gstring_cache_key_from_header_slots(header)
+        else {
+            return gstring;
+        };
+        if let Some(cached) = self.gstring_shape_cache.get(&key) {
+            return cached.clone();
+        }
+        let glyph_count = slots[2..]
+            .iter()
+            .take_while(|glyph| !glyph.is_nil())
+            .count();
+        let id = Self::next_gstring_shape_cache_id();
+        let mut copy_slots = Vec::with_capacity(2 + glyph_count);
+        copy_slots.push(Value::vector(header.to_vec()));
+        copy_slots.push(Value::fixnum(id));
+        for glyph in &slots[2..2 + glyph_count] {
+            let Some(glyph) = glyph.as_vector_data() else {
+                break;
+            };
+            copy_slots.push(Value::vector(glyph.to_vec()));
+        }
+        let copy = Value::vector(copy_slots);
+        self.gstring_shape_cache.insert(key, copy.clone());
+        copy
+    }
+
     /// Split borrow: the frame manager mutably and the two minibuffer
     /// selection slots mutably.
     #[doc(hidden)]
@@ -1180,6 +1289,33 @@ impl Context {
         &mut Option<neovm_edit::emacs_core::display_metrics::WindowId>,
     ) {
         (
+            &mut self.frames,
+            &mut self.edit.buffers,
+            &mut self.minibuffer_selected_window,
+            &mut self.active_minibuffer_window,
+        )
+    }
+
+    /// Same split as [`Self::frame_manager_buffers_and_minibuffer_selection_mut`],
+    /// passed to `body` so the borrows end when `body` returns.
+    ///
+    /// Test builds record those borrows on the minibuffer manager for the
+    /// duration of `body`, including unwind. A minibuffer mode hook reads
+    /// that flag and must not run while it is set. The flag is a `Cell` on
+    /// the manager, not a thread-local.
+    #[doc(hidden)]
+    pub fn with_frame_buffers_and_minibuffer_selection_mut<R>(
+        &mut self,
+        body: impl FnOnce(
+            &mut FrameManager,
+            &mut BufferManager,
+            &mut Option<neovm_edit::emacs_core::display_metrics::WindowId>,
+            &mut Option<neovm_edit::emacs_core::display_metrics::WindowId>,
+        ) -> R,
+    ) -> R {
+        #[cfg(any(test, feature = "test-support"))]
+        let _guard = MinibufferFieldBorrowGuard::enter(&self.minibuffers.field_borrows_live);
+        body(
             &mut self.frames,
             &mut self.edit.buffers,
             &mut self.minibuffer_selected_window,
@@ -1415,6 +1551,232 @@ impl Context {
             &mut self.processes,
             &self.threads,
             &mut self.edit.buffers,
+            &mut self.coding_systems,
+        )
+    }
+
+    // --- Non-swappable BufferManagerMut split-borrow capabilities (rt A3 2c (d)) ---
+
+    /// Split borrow: the frame manager mutably and the buffer manager via its
+    /// non-swappable [`neovm_edit::buffer::BufferManagerMut`] capability.
+    #[doc(hidden)]
+    #[inline]
+    pub fn frame_manager_and_buffer_view_mut(
+        &mut self,
+    ) -> (&mut FrameManager, neovm_edit::buffer::BufferManagerMut<'_>) {
+        (
+            &mut self.frames,
+            neovm_edit::buffer::BufferManagerMut::new(&mut self.edit.buffers),
+        )
+    }
+
+    /// Split borrow: the frame manager by shared reference and the buffer
+    /// manager via its non-swappable capability.
+    #[doc(hidden)]
+    #[inline]
+    pub fn frame_manager_read_and_buffer_view_mut(
+        &mut self,
+    ) -> (&FrameManager, neovm_edit::buffer::BufferManagerMut<'_>) {
+        (
+            &self.frames,
+            neovm_edit::buffer::BufferManagerMut::new(&mut self.edit.buffers),
+        )
+    }
+
+    /// Split borrow: the process manager mutably and the buffer manager via
+    /// its non-swappable capability.
+    #[doc(hidden)]
+    #[inline]
+    pub fn processes_and_buffer_view_mut(
+        &mut self,
+    ) -> (
+        &mut ProcessManager,
+        neovm_edit::buffer::BufferManagerMut<'_>,
+    ) {
+        (
+            &mut self.processes,
+            neovm_edit::buffer::BufferManagerMut::new(&mut self.edit.buffers),
+        )
+    }
+
+    /// Split borrow: the frame manager, non-swappable buffer view, and the
+    /// two minibuffer selection slots, all mutably.
+    #[doc(hidden)]
+    #[inline]
+    pub fn frame_manager_buffer_view_and_minibuffer_selection_mut(
+        &mut self,
+    ) -> (
+        &mut FrameManager,
+        neovm_edit::buffer::BufferManagerMut<'_>,
+        &mut Option<neovm_edit::emacs_core::display_metrics::WindowId>,
+        &mut Option<neovm_edit::emacs_core::display_metrics::WindowId>,
+    ) {
+        (
+            &mut self.frames,
+            neovm_edit::buffer::BufferManagerMut::new(&mut self.edit.buffers),
+            &mut self.minibuffer_selected_window,
+            &mut self.active_minibuffer_window,
+        )
+    }
+
+    /// Same split as [`Self::frame_manager_buffer_view_and_minibuffer_selection_mut`],
+    /// passed to `body` so the borrows end when `body` returns.
+    #[doc(hidden)]
+    pub fn with_frame_buffer_view_and_minibuffer_selection_mut<R>(
+        &mut self,
+        body: impl FnOnce(
+            &mut FrameManager,
+            neovm_edit::buffer::BufferManagerMut<'_>,
+            &mut Option<neovm_edit::emacs_core::display_metrics::WindowId>,
+            &mut Option<neovm_edit::emacs_core::display_metrics::WindowId>,
+        ) -> R,
+    ) -> R {
+        #[cfg(any(test, feature = "test-support"))]
+        let _guard = MinibufferFieldBorrowGuard::enter(&self.minibuffers.field_borrows_live);
+        body(
+            &mut self.frames,
+            neovm_edit::buffer::BufferManagerMut::new(&mut self.edit.buffers),
+            &mut self.minibuffer_selected_window,
+            &mut self.active_minibuffer_window,
+        )
+    }
+
+    /// Split borrow: the obarray by shared reference and the buffer manager
+    /// via its non-swappable capability.
+    #[doc(hidden)]
+    #[inline]
+    pub fn obarray_and_buffer_view_mut(
+        &mut self,
+    ) -> (&Obarray, neovm_edit::buffer::BufferManagerMut<'_>) {
+        (
+            &self.obarray,
+            neovm_edit::buffer::BufferManagerMut::new(&mut self.edit.buffers),
+        )
+    }
+
+    /// Split borrow: both the buffer manager and the obarray view through
+    /// their non-swappable capabilities.
+    #[doc(hidden)]
+    #[inline]
+    pub fn buffer_view_and_obarray_view_mut(
+        &mut self,
+    ) -> (neovm_edit::buffer::BufferManagerMut<'_>, ObarrayViewMut<'_>) {
+        (
+            neovm_edit::buffer::BufferManagerMut::new(&mut self.edit.buffers),
+            ObarrayViewMut::new(&mut self.obarray),
+        )
+    }
+
+    /// Split borrow: the obarray and owner bindings by shared reference, and
+    /// the buffer manager via its non-swappable capability.
+    #[doc(hidden)]
+    #[inline]
+    pub fn variable_view_and_buffer_view_mut(
+        &mut self,
+    ) -> (
+        &Obarray,
+        &owner_bindings::OwnerSlot,
+        neovm_edit::buffer::BufferManagerMut<'_>,
+    ) {
+        (
+            &self.obarray,
+            &self.owner,
+            neovm_edit::buffer::BufferManagerMut::new(&mut self.edit.buffers),
+        )
+    }
+
+    /// Split borrow: the frame manager, non-swappable buffer view, and
+    /// display host, all mutably.
+    #[doc(hidden)]
+    #[inline]
+    pub fn frame_manager_buffer_view_and_display_host_mut(
+        &mut self,
+    ) -> (
+        &mut FrameManager,
+        neovm_edit::buffer::BufferManagerMut<'_>,
+        &mut Option<Box<dyn DisplayHost>>,
+    ) {
+        (
+            &mut self.frames,
+            neovm_edit::buffer::BufferManagerMut::new(&mut self.edit.buffers),
+            &mut self.display_host,
+        )
+    }
+
+    /// Split borrow for variable reads that also scroll a window: the obarray
+    /// and owner bindings by shared reference, the frame manager mutably, and
+    /// the buffer manager via its non-swappable capability.
+    #[doc(hidden)]
+    #[inline]
+    pub fn variable_view_and_frames_buffer_view_mut(
+        &mut self,
+    ) -> (
+        &Obarray,
+        &owner_bindings::OwnerSlot,
+        &mut FrameManager,
+        neovm_edit::buffer::BufferManagerMut<'_>,
+    ) {
+        (
+            &self.obarray,
+            &self.owner,
+            &mut self.frames,
+            neovm_edit::buffer::BufferManagerMut::new(&mut self.edit.buffers),
+        )
+    }
+
+    /// Split borrow: the frame manager mutably, the buffer manager via its
+    /// non-swappable capability, and the minibuffer manager by shared
+    /// reference.
+    #[doc(hidden)]
+    #[inline]
+    pub fn frame_manager_buffer_view_and_minibuffers_mut(
+        &mut self,
+    ) -> (
+        &mut FrameManager,
+        neovm_edit::buffer::BufferManagerMut<'_>,
+        &MinibufferManager,
+    ) {
+        (
+            &mut self.frames,
+            neovm_edit::buffer::BufferManagerMut::new(&mut self.edit.buffers),
+            &self.minibuffers,
+        )
+    }
+
+    /// Split borrow: the process manager mutably, the thread manager by shared
+    /// reference, and the buffer manager via its non-swappable capability.
+    #[doc(hidden)]
+    #[inline]
+    pub fn processes_threads_and_buffer_view_mut(
+        &mut self,
+    ) -> (
+        &mut ProcessManager,
+        &ThreadManager,
+        neovm_edit::buffer::BufferManagerMut<'_>,
+    ) {
+        (
+            &mut self.processes,
+            &self.threads,
+            neovm_edit::buffer::BufferManagerMut::new(&mut self.edit.buffers),
+        )
+    }
+
+    /// Split borrow: processes and coding systems mutably, threads by shared
+    /// reference, and the buffer manager via its non-swappable capability.
+    #[doc(hidden)]
+    #[inline]
+    pub fn processes_threads_buffer_view_and_coding_systems_mut(
+        &mut self,
+    ) -> (
+        &mut ProcessManager,
+        &ThreadManager,
+        neovm_edit::buffer::BufferManagerMut<'_>,
+        &mut CodingSystemManager,
+    ) {
+        (
+            &mut self.processes,
+            &self.threads,
+            neovm_edit::buffer::BufferManagerMut::new(&mut self.edit.buffers),
             &mut self.coding_systems,
         )
     }
@@ -1688,7 +2050,6 @@ impl Context {
         }
 
         let had_current_message = self.current_message.is_some();
-        let mut called_clear_function = false;
         let mut clear_result = EchoMessageClearResult::ClearEchoArea;
 
         let clear_message_function =
@@ -1697,7 +2058,6 @@ impl Context {
             && self.gc_inhibit_depth == 0
             && self.function_value_is_callable(&clear_message_function)
         {
-            called_clear_function = true;
             let specpdl_count = self.specpdl.len();
             if let Err(err) = self.try_specbind_or_unwind_to(
                 specpdl_count,
@@ -1727,10 +2087,12 @@ impl Context {
             }
         }
 
+        // GNU clear_message (xdisp.c:13635-13661) calls the clear function
+        // without invalidating body geometry. The default callback is a no-op
+        // for ordinary input with no minibuffer message; invalidating merely
+        // because it ran would discard retained motion rows on every key.
+        // Callback mutations publish their own display invalidations.
         if clear_result == EchoMessageClearResult::PreserveEchoArea {
-            if called_clear_function {
-                self.invalidate_redisplay();
-            }
             return clear_result;
         }
 
@@ -1742,11 +2104,8 @@ impl Context {
             let _ = crate::emacs_core::hook_runtime::safe_run_named_hook(self, hook, &[]);
         }
 
-        let changed = self.current_message.take().is_some();
-        if changed {
+        if self.current_message.take().is_some() {
             let _ = self.mirror_message_to_echo_area_buffer(None);
-        }
-        if changed || called_clear_function {
             self.invalidate_redisplay();
         }
         clear_result

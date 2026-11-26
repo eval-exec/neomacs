@@ -1586,7 +1586,9 @@ impl WgpuRenderer {
             );
         }
 
-        let (logical_w, logical_h, draw) = self.prepare_frame_uniforms(mapping);
+        let Ok((logical_w, logical_h, draw)) = self.prepare_frame_uniforms(mapping) else {
+            return;
+        };
         if trace_face_debug_enabled() {
             tracing::info!(
                 "face-debug call={} milestone=after_prepare_uniforms logical=({:.1},{:.1})",
@@ -1669,6 +1671,14 @@ impl WgpuRenderer {
         let timestamp_writes = None;
 
         // Create command encoder
+        #[cfg(feature = "video")]
+        let mut encoder = self.caches.video.create_command_encoder(
+            &self.device,
+            &wgpu::CommandEncoderDescriptor {
+                label: Some("Frame Glyphs Encoder"),
+            },
+        );
+        #[cfg(not(feature = "video"))]
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -1693,7 +1703,7 @@ impl WgpuRenderer {
             })
         };
         {
-            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            let pass_desc = wgpu::RenderPassDescriptor {
                 label: Some("Frame Glyphs Pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view,
@@ -1708,7 +1718,12 @@ impl WgpuRenderer {
                 timestamp_writes,
                 occlusion_query_set: None,
                 multiview_mask: None,
-            });
+            };
+            #[cfg(feature = "video")]
+            let mut render_pass = encoder.begin_render_pass(&pass_desc);
+            #[cfg(not(feature = "video"))]
+            let mut render_pass =
+                super::frame_pass::FrameRenderPass::Plain(encoder.begin_render_pass(&pass_desc));
             // Group 0 belongs to this pass's destination. Layer painters inherit
             // it and must not replace it with a renderer-global projection.
             render_pass.set_bind_group(0, draw.binding(), &[]);
@@ -1826,7 +1841,9 @@ impl WgpuRenderer {
         debug_assert_eq!(mapping.presentation(), frame_glyphs.presentation_id);
         debug_assert_eq!(mapping.content_logical_size().width(), frame_glyphs.width);
         debug_assert_eq!(mapping.content_logical_size().height(), frame_glyphs.height);
-        let (logical_w, logical_h, draw) = self.prepare_frame_uniforms(mapping);
+        let Ok((logical_w, logical_h, draw)) = self.prepare_frame_uniforms(mapping) else {
+            return;
+        };
         let params = FrameParams {
             frame_glyphs,
             pointer_override: super::pointer_override::PointerOverrideResolver::new(
@@ -1853,22 +1870,24 @@ impl WgpuRenderer {
                 label: Some("Cursor-Only Encoder"),
             });
         {
-            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("Cursor-Only Pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Load,
-                        store: wgpu::StoreOp::Store,
-                    },
-                    depth_slice: None,
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
+            let mut render_pass = super::frame_pass::FrameRenderPass::Plain(
+                encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("Cursor-Only Pass"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Load,
+                            store: wgpu::StoreOp::Store,
+                        },
+                        depth_slice: None,
+                    })],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                    multiview_mask: None,
+                }),
+            );
             // As in the full frame pass, layers inherit the target's group 0.
             render_pass.set_bind_group(0, draw.binding(), &[]);
             // Filled-box inverse-video parts (cursor_bg, behind-text trail) are
@@ -2027,7 +2046,7 @@ impl WgpuRenderer {
     fn prepare_frame_uniforms(
         &mut self,
         mapping: neomacs_display_protocol::PresentMapping,
-    ) -> (f32, f32, super::draw::DrawParameters) {
+    ) -> Result<(f32, f32, super::draw::DrawParameters), super::draw::DeviceLost> {
         // The swapchain is the destination and the immutable glyph presentation
         // is the source. Their sizes deliberately advance on different clocks.
         // Projection therefore follows the resolved mapping's live-surface
@@ -2047,8 +2066,8 @@ impl WgpuRenderer {
             _pivot_padding: 0.0,
             content_pivot: [0.0; 2],
         };
-        let draw = self.parameters(uniforms.screen_size, uniforms.time);
-        (logical_w, logical_h, draw)
+        let draw = self.parameters(uniforms.screen_size, uniforms.time)?;
+        Ok((logical_w, logical_h, draw))
     }
 
     fn face_has_rounded_box(faces: &FrameFaceMap, face_id: FaceId) -> bool {
@@ -2087,7 +2106,7 @@ impl WgpuRenderer {
 
     pub(super) fn draw_rect_vertex_layer(
         &mut self,
-        render_pass: &mut wgpu::RenderPass<'_>,
+        render_pass: &mut super::frame_pass::FrameRenderPass<'_>,
         rect_vertices: &[RectVertex],
     ) {
         let Some(upload) = self

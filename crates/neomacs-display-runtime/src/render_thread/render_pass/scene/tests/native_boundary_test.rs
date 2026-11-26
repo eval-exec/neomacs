@@ -292,6 +292,7 @@ fn dispatched_scale_zoom_strips_use_final_native_conversion_with_opaque_controls
             ));
             renderer
                 .begin_draw(RenderTarget::new(destination, surface))
+                .expect("live device draw parameters")
                 .blit_retained(new.bind_group());
             render_frame_transitions(
                 &mut renderer,

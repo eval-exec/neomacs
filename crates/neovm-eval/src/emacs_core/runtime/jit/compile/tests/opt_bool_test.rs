@@ -55,19 +55,19 @@ impl Drop for Roots {
 
 fn plan(source: &ByteCodeFunction) -> ir::Func {
     let arity = source
-        .params
+        .params()
         .stack_shape()
         .expect("fixture stack parameters")
         .required();
     let cfg = analyze_cfg(
         source.executable_ops(),
-        &source.constants,
+        source.constants(),
         source.executable_gnu_byte_offset_map(),
         arity,
     )
     .expect("source CFG");
     let constants = source
-        .constants
+        .constants()
         .iter()
         .copied()
         .map(ir::ValueBits::from_value)
@@ -98,9 +98,9 @@ fn lower(source: &ByteCodeFunction, plan: &ir::Func) -> CompiledLeaf {
     plan.verify().expect("native input verifies");
     let leaf = lower_opt_ir_for_test(
         source.executable_ops(),
-        &source.constants,
+        source.constants(),
         source
-            .params
+            .params()
             .stack_shape()
             .expect("fixture stack parameters")
             .required(),
@@ -135,7 +135,7 @@ fn reference(ctx: &mut Context, plan: &ir::Func, args: &[Value]) -> Value {
 }
 
 fn native(ctx: &mut Context, leaf: &CompiledLeaf, args: &[Value]) -> Value {
-    let NativeRun::Ok(bits) = leaf.call(ctx as *mut Context as *mut u8, args) else {
+    let NativeRun::Ok(bits) = (unsafe { leaf.call(ctx as *mut Context as *mut u8, args) }) else {
         panic!("native must return")
     };
     unsafe {
@@ -837,14 +837,14 @@ fn cold_source(first: Op) -> ByteCodeFunction {
         ],
         4,
     );
-    source.gnu_byte_offset_map = Some(
+    source.set_gnu_byte_offset_map(Some(
         (0..15)
             .map(|instruction_index| GnuByteOffsetMapEntry {
                 byte_offset: instruction_index,
                 instruction_index,
             })
             .collect(),
-    );
+    ));
     source
 }
 
@@ -1000,7 +1000,8 @@ fn opt_bool_native_cold_guard_materializes_complete_frame_after_visible_store() 
         let eval::Outcome::Deopt(expected) = run.outcome else {
             panic!("reference-only numeric guard must deopt before the opaque comparison")
         };
-        let NativeRun::DeoptAt(actual) = leaf.call(&mut ctx as *mut Context as *mut u8, &args)
+        let NativeRun::DeoptAt(actual) =
+            (unsafe { leaf.call(&mut ctx as *mut Context as *mut u8, &args) })
         else {
             panic!("native failed guard must preserve its full frame")
         };
@@ -1221,7 +1222,7 @@ fn opt_bool_native_quit_at_255_and_510_matches_tier0_flow_and_cadence() {
         let expected = expected.as_signal().expect("Tier-0 quit signal");
         reset_bytecode_branch_poll_count();
         assert_eq!(
-            leaf.call(&mut ctx as *mut Context as *mut u8, &args),
+            unsafe { leaf.call(&mut ctx as *mut Context as *mut u8, &args) },
             NativeRun::Signal
         );
         ctx.set_quit_flag_value(Value::NIL);

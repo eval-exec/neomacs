@@ -57,7 +57,7 @@ fn native_padded_output_keeps_literal_text_and_scales_clear_screen() {
     caps.attach(&file).unwrap();
     let mut output = Vec::new();
     caps.enter(2).write_to(&mut output, &caps).unwrap();
-    assert_eq!(output, b"CLEAR\x1b[?2004h");
+    assert_eq!(output, b"CLEAR");
     output.clear();
     let mut row = cells("A$<10/>B");
     {
@@ -84,7 +84,7 @@ fn native_padded_output_keeps_literal_text_and_scales_clear_screen() {
     assert!(!output.windows(2).any(|pair| pair == b"$<"));
     output.clear();
     caps.leave().write_to(&mut output, &caps).unwrap();
-    assert_eq!(output, b"OFF\x1b[?2004l");
+    assert_eq!(output, b"OFF");
 }
 
 #[test]
@@ -290,6 +290,43 @@ fn retry_exits_modes_left_active_by_a_partial_write() {
 fn missing_terminal_description_is_an_initialization_error() {
     assert!(Capabilities::load("").is_err());
     assert!(Capabilities::load("neo-certainly-no-such-terminal-363").is_err());
+}
+
+#[test]
+fn mode_strings_position_and_bypass_padding() {
+    let mut database = Database(
+        [
+            ("cm", b"\x1b[%i%d;%dH".as_slice()),
+            ("ti", b"ENTER"),
+            ("ks", b"KEYS"),
+            ("vi", b"HIDE"),
+            ("cl", b"CLEAR"),
+            ("ei", b"NOINS"),
+            ("me", b"SGR0"),
+            ("ke", b"NORMAL"),
+            ("ve", b"SHOW"),
+            ("te", b"LEAVE"),
+        ]
+        .into(),
+    );
+    let caps = Capabilities::from_database(&mut database, "").unwrap();
+    // Literal `$<10/>` in mode strings must be emitted verbatim (GNU `fwrite`,
+    // never `tputs`), with `tty-mode-reset-strings` first on leave and
+    // `tty-mode-set-strings` last on enter (note: Neomacs's internal `ei`/`me`
+    // order after reset strings is pre-existing and distinct from GNU's
+    // `me`/`ei`/`ke`/`ve`/`te`/`orig_pair` sequence in `src/term.c:230-247`).
+    let reset = b"<RESET-A>$<10/><RESET-B>";
+    let leave = caps.leave_with(reset);
+    assert!(leave.padded.is_empty());
+    assert_eq!(
+        leave.bytes,
+        b"<RESET-A>$<10/><RESET-B>NOINSSGR0NORMALSHOWLEAVE"
+    );
+
+    let set = b"<SET-A>$<10/><SET-B>";
+    let enter = caps.enter_with(24, set);
+    assert!(enter.padded.is_empty());
+    assert_eq!(enter.bytes, b"ENTERKEYSHIDECLEAR<SET-A>$<10/><SET-B>");
 }
 
 #[cfg(test)]

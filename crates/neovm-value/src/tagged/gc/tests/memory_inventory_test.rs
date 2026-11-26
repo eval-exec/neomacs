@@ -20,12 +20,12 @@ fn header(value: TaggedValue) -> &'static mut GcHeader {
 }
 
 fn minor(heap: &mut TaggedHeap, roots: &[TaggedValue]) {
-    heap.begin_minor_collection().unwrap();
+    heap.begin_minor_collection_for_test().unwrap();
     for &root in roots {
         heap.seed_root(root);
     }
-    heap.complete_minor_collection();
-    heap.finish_incremental_sweep_now();
+    heap.complete_minor_collection_for_test();
+    heap.finish_incremental_sweep_now_for_test();
 }
 
 #[test]
@@ -71,7 +71,7 @@ fn memory_inventory_reports_old_dead_only_before_major_promotion() {
     let dead_vector = heap.alloc_vector(vec![TaggedValue::NIL; 17]);
     minor(&mut heap, &[live_cons, dead_cons, live_vector, dead_vector]);
 
-    heap.begin_minor_collection().unwrap();
+    heap.begin_minor_collection_for_test().unwrap();
     heap.seed_root(live_cons);
     heap.seed_root(live_vector);
     heap.incremental_drain_all();
@@ -79,15 +79,16 @@ fn memory_inventory_reports_old_dead_only_before_major_promotion() {
     assert!(minor_inventory.old_dead_pacing_bytes.is_none());
     assert!(minor_inventory.old_dead_object_and_payload_bytes.is_none());
     assert!(minor_inventory.ages.old.marked_live_pacing_bytes.is_none());
-    heap.complete_minor_collection();
-    heap.finish_incremental_sweep_now();
+    heap.complete_minor_collection_for_test();
+    heap.finish_incremental_sweep_now_for_test();
 
-    heap.begin_stw_collection();
+    heap.begin_stw_collection_for_test();
     heap.seed_root(live_cons);
     heap.seed_root(live_vector);
     heap.incremental_drain_all();
-    heap.mark_and_queue_doomed_finalizers();
-    heap.mark_and_sweep_weak_tables();
+    // Post-mark, pre-sweep. Empty explicit maps reclaim nothing, so the
+    // dead cons and vector are still owned when the snapshot is taken.
+    let _ = heap.finish_stopped_mark_adapters();
     let inventory = snapshot(&heap, true);
     let dead_vector_bytes = size_of::<VectorObj>() + 17 * size_of::<TaggedValue>();
     assert_eq!(
@@ -102,7 +103,7 @@ fn memory_inventory_reports_old_dead_only_before_major_promotion() {
         inventory.ages.old.marked_live_pacing_bytes,
         Some(size_of::<ConsCell>() + size_of::<VectorObj>() + size_of::<TaggedValue>())
     );
-    heap.complete_collection();
+    heap.complete_collection_for_test();
     let completed = snapshot(&heap, false);
     assert_eq!(completed.ages.old.objects, 2);
     assert!(completed.old_dead_pacing_bytes.is_none());
@@ -116,7 +117,7 @@ fn memory_inventory_counts_arena_spares_and_partial_page_holes_once() {
     for _ in 0..ObjectPage::<StringObj>::SLOTS {
         heap.alloc_string(LispString::from_utf8("discarded"));
     }
-    heap.collect_exact(std::iter::once(survivor));
+    heap.collect_rooted(std::iter::once(survivor));
     let inventory = snapshot(&heap, false);
     let string = inventory
         .arenas
@@ -151,7 +152,7 @@ fn memory_inventory_does_not_count_free_unmarked_cons_as_occupied() {
     for _ in 0..CONS_BLOCK_SIZE {
         heap.alloc_cons(TaggedValue::T, TaggedValue::NIL);
     }
-    heap.collect_exact(std::iter::once(survivor));
+    heap.collect_rooted(std::iter::once(survivor));
     // Keep a reclaimed cell white: age/mark bits alone cannot tell this free
     // cell apart from the newly allocated white cell immediately below.
     assert_eq!(heap.cons_blocks.len(), 1);
@@ -194,7 +195,7 @@ fn memory_inventory_includes_detached_young_box_sweep_list() {
     unsafe { heap.begin_collection() };
     heap.seed_root(table);
     heap.incremental_drain_all();
-    heap.incremental_finish(0, std::time::Instant::now());
+    heap.incremental_finish_for_test(0, std::time::Instant::now());
     assert!(heap.all_objects.is_null());
     assert!(!heap.sweep_noncons_pending.is_null());
     let inventory = snapshot(&heap, false);
@@ -205,7 +206,7 @@ fn memory_inventory_includes_detached_young_box_sweep_list() {
         .unwrap();
     assert_eq!(table.objects, 1);
     assert_eq!(inventory.ages.young.objects, 1);
-    heap.finish_incremental_sweep_now();
+    heap.finish_incremental_sweep_now_for_test();
 }
 
 #[test]

@@ -8,7 +8,7 @@
 use std::cell::{Cell, OnceCell, RefCell};
 use std::collections::{HashMap, HashSet};
 use std::fmt;
-use std::rc::Rc;
+use std::rc::{Rc, Weak};
 
 use neovm_value::value::Value;
 
@@ -120,32 +120,31 @@ struct SyntaxRunMemoEntry {
 
 /// Byte-coordinate twin of [`SyntaxRunMemoEntry`], carrying the RESOLVED
 /// `syntax-table` value for the run so the byte-addressed scanners' refill
-/// needs no byte<->char conversions and no interval lookup on a hit. The
-/// value bits are only handed out while (epoch, tick) match, and a live
-/// value is rooted by the interval plist it came from.
+/// needs no byte<->char conversions and no interval lookup on a hit. Live
+/// entries (matching `(epoch, tick)`) are traced as GC roots by
+/// `BufferText::trace_text_prop_roots_with` and only populated when the
+/// buffer resolves syntax properties directly without `category` / alias /
+/// default fallbacks.
 #[derive(Clone, Copy, Default)]
 struct SyntaxByteRunMemoEntry {
     epoch: u64,
     tick: u64,
     start: u64,
     end: u64,
-    value_bits: u64,
-    value_present: bool,
+    value: Option<Value>,
 }
 
 /// Char-coordinate twin of [`SyntaxByteRunMemoEntry`], for the char-indexed
 /// parse loop's `SyntaxPropRange`: a hit hands the resolved run to a fresh
-/// scan with no interval descent and no coalescing walk. Same soundness
-/// contract: value bits only leave while (epoch, tick) match, and a live
-/// value is rooted by the interval plist it came from.
+/// scan with no interval descent and no coalescing walk. Same GC-rooting and
+/// direct-property memoization contract as [`SyntaxByteRunMemoEntry`].
 #[derive(Clone, Copy, Default)]
 struct SyntaxCharRunMemoEntry {
     epoch: u64,
     tick: u64,
     start: u64,
     end: u64,
-    value_bits: u64,
-    value_present: bool,
+    value: Option<Value>,
 }
 
 /// One content mutation, in the terms the char<->byte position anchors need to
@@ -295,6 +294,10 @@ struct BufferTextStorage {
     virtual_gap: GapCompatState,
     modified_tick: i64,
     chars_modified_tick: i64,
+    /// GNU `BUF_UNCHANGED_MODIFIED` (`src/buffer.c:634`, `src/xdisp.c:18303`):
+    /// initialized to 1 and snapped to `modified_tick` at each accurate
+    /// redisplay ack in [`BufferText::reset_unchanged_region`].
+    unchanged_modified: i64,
     /// Tracks `modified_tick` at the last text-PROPERTY change (GNU has no
     /// direct analog; mirrors `chars_modified_tick` for char edits). Lets
     /// redisplay distinguish "appearance changed" (face/display/invisible
@@ -402,6 +405,10 @@ pub struct BufferTextStorage {
     virtual_gap: GapCompatState,
     modified_tick: i64,
     chars_modified_tick: i64,
+    /// GNU `BUF_UNCHANGED_MODIFIED` (`src/buffer.c:634`, `src/xdisp.c:18303`):
+    /// initialized to 1 and snapped to `modified_tick` at each accurate
+    /// redisplay ack in [`BufferText::reset_unchanged_region`].
+    unchanged_modified: i64,
     /// Tracks `modified_tick` at the last text-PROPERTY change (GNU has no
     /// direct analog; mirrors `chars_modified_tick` for char edits). Lets
     /// redisplay distinguish "appearance changed" (face/display/invisible
@@ -647,6 +654,7 @@ impl Clone for BufferTextStorage {
             virtual_gap: self.virtual_gap,
             modified_tick: self.modified_tick,
             chars_modified_tick: self.chars_modified_tick,
+            unchanged_modified: self.unchanged_modified,
             props_modified_tick: self.props_modified_tick,
             beg_unchanged: self.beg_unchanged,
             end_unchanged: self.end_unchanged,
@@ -664,10 +672,12 @@ impl Clone for BufferTextStorage {
             anchor_cache_cursor: Cell::new(anchor_cache_cursor),
             syntax_run_memo: self.syntax_run_memo.clone(),
             syntax_run_memo_cursor: self.syntax_run_memo_cursor.clone(),
-            syntax_byte_run_memo: self.syntax_byte_run_memo.clone(),
-            syntax_byte_run_memo_cursor: self.syntax_byte_run_memo_cursor.clone(),
-            syntax_char_run_memo: self.syntax_char_run_memo.clone(),
-            syntax_char_run_memo_cursor: self.syntax_char_run_memo_cursor.clone(),
+            // Snapshots do not trace syntax-run memos as GC roots; start empty
+            // so no snapshot can retain untraced `Value`s.
+            syntax_byte_run_memo: RefCell::new([SyntaxByteRunMemoEntry::default(); 4]),
+            syntax_byte_run_memo_cursor: Cell::new(0),
+            syntax_char_run_memo: RefCell::new([SyntaxCharRunMemoEntry::default(); 4]),
+            syntax_char_run_memo_cursor: Cell::new(0),
             // A snapshot starts without the index; it is rebuilt on demand.
             syntax_safe_positions: RefCell::new(SyntaxSafePositions::default()),
             text_index,
@@ -807,6 +817,7 @@ impl BufferText {
                 virtual_gap,
                 modified_tick: 1,
                 chars_modified_tick: 1,
+                unchanged_modified: 1,
                 props_modified_tick: 1,
                 beg_unchanged: i64::MAX,
                 end_unchanged: i64::MAX,
@@ -1221,6 +1232,10 @@ impl BufferText {
 
     pub fn chars_modified_tick(&self) -> i64 {
         self.storage.borrow().chars_modified_tick
+    }
+
+    pub fn unchanged_modified_tick(&self) -> i64 {
+        self.storage.borrow().unchanged_modified
     }
 
     pub fn props_modified_tick(&self) -> i64 {
@@ -1740,8 +1755,11 @@ impl BufferText {
     /// Reset the unchanged-region accumulator to "fully unchanged" — the
     /// redisplay ack, performed at the committed (accepted) layout break, NOT on
     /// a retry/`continue` (which would under-invalidate, spec §6).
+    /// Also snaps `unchanged_modified` to `modified_tick`, matching GNU
+    /// `mark_window_display_accurate_1` (`src/xdisp.c:18303`).
     pub fn reset_unchanged_region(&self) {
         let mut storage = self.storage.borrow_mut();
+        storage.unchanged_modified = storage.modified_tick;
         storage.beg_unchanged = i64::MAX;
         storage.end_unchanged = i64::MAX;
         storage.prop_beg_unchanged = i64::MAX;
@@ -1839,6 +1857,19 @@ impl BufferText {
         self.storage.borrow().text_props.is_empty()
     }
 
+    /// GNU `buffer_intervals (buffer) != NULL`: the interval tree exists,
+    /// even when it currently carries no properties. Sticky across property
+    /// removal; cleared only where GNU sets the tree to NULL.
+    pub fn text_props_tree_present(&self) -> bool {
+        self.storage.borrow().text_props.interval_tree_present()
+    }
+
+    /// GNU `set_buffer_intervals (buffer, NULL)` for the whole-text-delete
+    /// site (`src/intervals.c:1324-1328`).
+    pub(crate) fn clear_text_prop_tree_presence(&self) {
+        Rc::make_mut(&mut self.storage.borrow_mut().text_props).clear_interval_tree_presence();
+    }
+
     pub fn text_props_snapshot(&self) -> TextPropertyTable {
         // Callers here (transpose-regions, pdump, buffer-copy) want an owned,
         // independent table, so deep-clone the shared inner table -- not the Rc.
@@ -1850,8 +1881,12 @@ impl BufferText {
     /// publish a standalone live property edit: table-local mutation numbers
     /// can collide. Live callers must pair it with the existing content epoch;
     /// the test-only raw replacement helper intentionally bypasses that rule.
-    pub fn text_props_replace(&self, table: TextPropertyTable) {
+    pub fn text_props_replace(&self, mut table: TextPropertyTable) {
         let mut storage = self.storage.borrow_mut();
+        // GNU's interval tree is persistent across edits; a table rebuilt
+        // from runs must not drop the presence bit.  The explicit
+        // whole-text-delete clear runs after the replacement.
+        table.inherit_interval_tree_presence(&storage.text_props);
         storage.text_props = Rc::new(table);
         // A swapped-in table carries its own mutation-tick lineage, which can
         // collide with the memo's stored ticks — drop the memo outright.
@@ -2062,6 +2097,9 @@ impl BufferText {
     /// keeps those two coordinates together on `struct Lisp_Marker`; Neomacs
     /// uses `TextPositionAnchor` at this semantic boundary so callers cannot
     /// accidentally update one coordinate without the other.
+    ///
+    /// The closure must not run Lisp or collect. The next link is copied out
+    /// before the call, and a collection could free that node.
     pub(crate) fn remap_marker_anchors<F>(&self, mut remap: F)
     where
         F: FnMut(TextPositionAnchor) -> TextPositionAnchor,
@@ -2074,10 +2112,14 @@ impl BufferText {
         // chain link or null.
         unsafe {
             while !curr.is_null() {
-                let data = &mut (*curr).data;
-                let new_position = remap(marker_data_anchor(data));
-                set_marker_data_anchor(data, new_position);
-                curr = data.next_marker_ptr();
+                // Copy the anchor and the next link out before the closure.
+                // The closure may read this marker through another `MarkerRef`,
+                // and that read must not alias a live `&mut` of the same node.
+                let old_position = marker_data_anchor(&(*curr).data);
+                let next = (*curr).data.next_marker_ptr();
+                let new_position = remap(old_position);
+                set_marker_data_anchor(&mut (*curr).data, new_position);
+                curr = next;
             }
         }
     }
@@ -2278,10 +2320,10 @@ impl BufferText {
         end
     }
 
-    /// Byte-run memo lookup for the byte-addressed syntax scanners: on a hit
+    /// Byte-run memo lookup for `Buffer::resolve_syntax_byte_run`: on a hit
     /// the refill needs no conversion and no interval lookup. Returns
     /// `(start_byte, end_byte, resolved_value)`.
-    pub fn syntax_byte_run_memo_lookup(
+    pub(crate) fn syntax_byte_run_memo_lookup(
         &self,
         byte_pos: EmacsBytePos,
     ) -> Option<(u64, u64, Option<Value>)> {
@@ -2291,18 +2333,17 @@ impl BufferText {
         let pos = byte_pos.get() as u64;
         for entry in storage.syntax_byte_run_memo.borrow().iter() {
             if entry.epoch == epoch && entry.tick == tick && pos >= entry.start && pos < entry.end {
-                let value = entry.value_present.then(|| unsafe {
-                    /* SAFETY: buffer text word */
-                    Value::from_bits(entry.value_bits as usize)
-                });
-                return Some((entry.start, entry.end, value));
+                return Some((entry.start, entry.end, entry.value));
             }
         }
         None
     }
 
     /// Store a computed byte run (see `syntax_byte_run_memo_lookup`).
-    pub fn syntax_byte_run_memo_store(&self, start: u64, end: u64, value: Option<Value>) {
+    /// Crate-private: external callers must go through
+    /// `Buffer::resolve_syntax_byte_run`, which enforces direct-property
+    /// memoization preconditions.
+    pub(crate) fn syntax_byte_run_memo_store(&self, start: u64, end: u64, value: Option<Value>) {
         if end <= start {
             return;
         }
@@ -2316,34 +2357,34 @@ impl BufferText {
             tick,
             start,
             end,
-            value_bits: value.map_or(0, |v| v.bits() as u64),
-            value_present: value.is_some(),
+            value,
         };
         storage.syntax_byte_run_memo_cursor.set(slot + 1);
     }
 
-    /// Char-run memo lookup for the char-indexed parse loop (see
+    /// Char-run memo lookup for `Buffer::resolve_syntax_char_run` (see
     /// [`Self::syntax_byte_run_memo_lookup`] — same contract in char
     /// coordinates). Returns `(start_char, end_char, resolved_value)`.
-    pub fn syntax_char_run_memo_lookup(&self, pos: usize) -> Option<(u64, u64, Option<Value>)> {
+    pub(crate) fn syntax_char_run_memo_lookup(
+        &self,
+        pos: usize,
+    ) -> Option<(u64, u64, Option<Value>)> {
         let storage = self.storage.borrow();
         let epoch = storage.content_epoch;
         let tick = storage.text_props.syntax_prop_tick();
         let pos = pos as u64;
         for entry in storage.syntax_char_run_memo.borrow().iter() {
             if entry.epoch == epoch && entry.tick == tick && pos >= entry.start && pos < entry.end {
-                let value = entry.value_present.then(|| unsafe {
-                    /* SAFETY: buffer text word */
-                    Value::from_bits(entry.value_bits as usize)
-                });
-                return Some((entry.start, entry.end, value));
+                return Some((entry.start, entry.end, entry.value));
             }
         }
         None
     }
 
     /// Store a computed char run (see [`Self::syntax_char_run_memo_lookup`]).
-    pub fn syntax_char_run_memo_store(&self, start: u64, end: u64, value: Option<Value>) {
+    /// Crate-private: external callers must go through
+    /// `Buffer::resolve_syntax_char_run`.
+    pub(crate) fn syntax_char_run_memo_store(&self, start: u64, end: u64, value: Option<Value>) {
         if end <= start {
             return;
         }
@@ -2357,8 +2398,7 @@ impl BufferText {
             tick,
             start,
             end,
-            value_bits: value.map_or(0, |v| v.bits() as u64),
-            value_present: value.is_some(),
+            value,
         };
         storage.syntax_char_run_memo_cursor.set(slot + 1);
     }
@@ -2878,8 +2918,37 @@ impl BufferText {
             .adjust_for_replace_at_char_pos(start, old_len, new_len);
     }
 
+    pub(crate) fn weak_text_property_table(&self) -> Weak<TextPropertyTable> {
+        Rc::downgrade(&self.storage.borrow().text_props)
+    }
+
+    pub(crate) fn text_property_table_identity(&self) -> usize {
+        Rc::as_ptr(&self.storage.borrow().text_props) as usize
+    }
+
     pub(crate) fn trace_text_prop_roots_with(&self, visit: &mut dyn FnMut(Value)) {
-        self.storage.borrow().text_props.for_each_root(visit);
+        let storage = self.storage.borrow();
+        storage.text_props.for_each_root(&mut *visit);
+        let epoch = storage.content_epoch;
+        let tick = storage.text_props.syntax_prop_tick();
+        for entry in storage.syntax_byte_run_memo.borrow_mut().iter_mut() {
+            if entry.epoch == epoch && entry.tick == tick {
+                if let Some(value) = entry.value {
+                    visit(value);
+                }
+            } else {
+                *entry = SyntaxByteRunMemoEntry::default();
+            }
+        }
+        for entry in storage.syntax_char_run_memo.borrow_mut().iter_mut() {
+            if entry.epoch == epoch && entry.tick == tick {
+                if let Some(value) = entry.value {
+                    visit(value);
+                }
+            } else {
+                *entry = SyntaxCharRunMemoEntry::default();
+            }
+        }
     }
 
     /// Register a marker in this buffer. Updates `LispMarker` fields
@@ -2918,7 +2987,8 @@ impl BufferText {
                 .data
                 .set_insertion_type(insertion_type == InsertionType::After);
         }
-        self.chain_splice_at_head(marker_ptr);
+        // SAFETY: `register_marker`'s contract is this splice's contract.
+        unsafe { self.chain_splice_at_head(marker_ptr) };
     }
 
     /// Walk the chain and invoke `f` with each node's raw pointer. The pdump
@@ -2978,7 +3048,10 @@ impl BufferText {
 
     /// GNU `attach_marker's position write (src/marker.c): `m->charpos' and
     /// `m->bytepos', and nothing else.
-    pub(crate) fn move_marker_ptr_to_anchor(
+    /// # Safety
+    /// `marker` is a live `MarkerObj` on this buffer's chain. The caller
+    /// roots it for the duration of the write.
+    pub(crate) unsafe fn move_marker_ptr_to_anchor(
         &self,
         marker: *mut neovm_value::tagged::header::MarkerObj,
         position: TextPositionAnchor,
@@ -2995,7 +3068,10 @@ impl BufferText {
     /// Read a chained marker's position anchor and insertion type directly
     /// from its payload. `None` when the marker is detached from every chain
     /// (GNU `marker_position` reports nil for an unchained marker).
-    pub(crate) fn marker_chain_anchor_of(
+    /// # Safety
+    /// `marker` is null, or it is a live `MarkerObj` the caller roots for
+    /// the duration of the read.
+    pub(crate) unsafe fn marker_chain_anchor_of(
         &self,
         marker: *mut neovm_value::tagged::header::MarkerObj,
     ) -> Option<(TextPositionAnchor, InsertionType)> {
@@ -3319,7 +3395,14 @@ impl BufferText {
     /// **Precondition:** `marker.next_marker` must be null (marker is not
     /// currently on any chain). Violating this silently truncates the
     /// other chain. `debug_assert!` enforces it in debug builds.
-    pub(crate) fn chain_splice_at_head(&self, marker: *mut neovm_value::tagged::header::MarkerObj) {
+    /// # Safety
+    /// `marker` is a live `MarkerObj` allocated by `TaggedHeap::alloc_marker`,
+    /// not currently on any chain, and not collected during this call.
+    /// `next_marker` is null; a non-null link truncates the other chain.
+    pub(crate) unsafe fn chain_splice_at_head(
+        &self,
+        marker: *mut neovm_value::tagged::header::MarkerObj,
+    ) {
         let mut storage = self.storage.borrow_mut();
         let old_head = storage.markers_head;
         unsafe {
@@ -3719,6 +3802,8 @@ impl BufferText {
     }
 
     fn emacs_byte_pos_to_char_pos_multibyte(&self, target: EmacsBytePos) -> CharPos0 {
+        #[cfg(test)]
+        MULTIBYTE_BYTE_TO_CHAR_CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let storage = self.storage.borrow();
         let metrics = storage.metrics;
         let content_epoch = storage.content_epoch;
@@ -3844,6 +3929,11 @@ impl BufferText {
         if let Some(span) = SingleBytePositionSpan::from_bounds(storage.content_epoch, bounds) {
             storage.single_byte_span.set(span);
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn multibyte_byte_to_char_calls_for_test() -> usize {
+        MULTIBYTE_BYTE_TO_CHAR_CALLS.load(std::sync::atomic::Ordering::Relaxed)
     }
 
     #[cfg(test)]
@@ -4175,6 +4265,10 @@ fn scan_backward_bytes(
         .is_some_and(|b| (b & 0xC0) == 0x80);
     cp.saturating_sub_len(CharLen::new(starts + usize::from(inside_char)))
 }
+
+#[cfg(test)]
+static MULTIBYTE_BYTE_TO_CHAR_CALLS: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
 
 #[cfg(test)]
 #[path = "buffer_text/tests/buffer_text_test.rs"]

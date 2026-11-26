@@ -86,7 +86,7 @@ fn assert_vectors_live(context: &Context, values: [Value; 3]) {
     // Every allocation-membership assertion precedes every payload decode.
     for (index, value) in values.into_iter().enumerate() {
         assert_eq!(
-            value.as_vector_data().unwrap().as_slice(),
+            value.as_vector_data().unwrap(),
             &[Value::fixnum(710 + index as i64)]
         );
     }
@@ -251,10 +251,7 @@ fn p15_mailbox_main_event_alone_retains_completed_sender_until_consumption() {
     context.gc_collect_exact();
     assert!(context.tagged_heap.owns_heap_value_for_test(sender));
     assert!(context.tagged_heap.owns_heap_value_for_test(data));
-    assert_eq!(
-        data.as_vector_data().unwrap().as_slice(),
-        &[Value::fixnum(912)]
-    );
+    assert_eq!(data.as_vector_data().unwrap(), &[Value::fixnum(912)]);
 
     context.stage_pending_thread_events().unwrap();
     assert!(

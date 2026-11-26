@@ -14,8 +14,8 @@ fn vm_unbind_zero_preserves_caller_binding_like_gnu() {
         rest: None,
     });
     let answer = function.add_constant(Value::fixnum(1));
-    function.ops = vec![Op::Unbind(0), Op::Constant(answer), Op::Return];
-    function.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(1);
+    function.set_ops(vec![Op::Unbind(0), Op::Constant(answer), Op::Return]);
+    function.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(1));
     // GNU bytecode.c's Bunbind0 calls unbind_to(SPECPDL_INDEX(), Qnil).
     let result = new_vm(&mut eval).execute(&function, vec![]).unwrap();
     assert_eq!(result, Value::fixnum(1));
@@ -41,8 +41,8 @@ fn vm_unbind_excess_rejects_without_unwinding_caller() {
         rest: None,
     });
     let answer = function.add_constant(Value::fixnum(1));
-    function.ops = vec![Op::Unbind(1), Op::Constant(answer), Op::Return];
-    function.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(1);
+    function.set_ops(vec![Op::Unbind(1), Op::Constant(answer), Op::Return]);
+    function.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(1));
     // This is a Neo safety boundary test, not a GNU malformed-bytecode probe:
     // the function owns no bind entries and must never unwind its caller.
     let result = new_vm(&mut eval).execute(&function, vec![]);
@@ -84,7 +84,7 @@ fn vm_unbind_excess_signal_is_caught_by_the_same_frame_handler() {
     // (condition-case nil <Bunbind 1> (error 2)): the rejected count must
     // publish the live operand stack before the frame's own handler resumes.
     let handler = 5;
-    function.ops = vec![
+    function.set_ops(vec![
         Op::PushConditionCase(handler),
         Op::Unbind(1),
         Op::Constant(unreached),
@@ -93,8 +93,8 @@ fn vm_unbind_excess_signal_is_caught_by_the_same_frame_handler() {
         Op::Pop,
         Op::Constant(handled),
         Op::Return,
-    ];
-    function.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(2);
+    ]);
+    function.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(2));
     let result = new_vm(&mut eval).execute(&function, vec![]).unwrap();
     assert_eq!(result, Value::fixnum(2));
     assert_eq!(eval.specpdl.len(), caller_depth);

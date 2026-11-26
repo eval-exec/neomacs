@@ -7,6 +7,10 @@ impl TaggedHeap {
     #[cold]
     #[inline(never)]
     pub(super) fn begin_old_sweep_world_stopped(&mut self) {
+        assert!(
+            !self.has_unfinished_concurrent_mark(),
+            "begin_old_sweep_world_stopped cannot run while a concurrent mark is unfinished"
+        );
         if self.generational.major_in_progress {
             debug_assert!(self.generational.old_sweep_pending.is_null());
             self.generational.old_sweep_pending = self.generational.old_objects;
@@ -17,6 +21,10 @@ impl TaggedHeap {
     #[cold]
     #[inline(never)]
     pub(super) fn sweep_old_objects_slice(&mut self, budget: usize) -> usize {
+        assert!(
+            !self.has_unfinished_concurrent_mark(),
+            "sweep_old_objects_slice cannot free objects while a concurrent mark is unfinished"
+        );
         let mut freed = 0;
         for _ in 0..budget {
             let ptr = self.generational.old_sweep_pending;
@@ -61,8 +69,9 @@ impl TaggedHeap {
         let mut bytes = conses * size_of::<ConsCell>();
         let mut visit = |ptr: *mut GcHeader| {
             let header = unsafe { &*ptr };
-            if header.tenured && !header.generation.permanent() {
-                bytes = bytes.saturating_add(self.collector_object_bytes(ptr));
+            if header.tenured && !header.generation.permanent() && !header.flags.image_resident() {
+                // SAFETY: `ptr` is a live old-generation object walked while the world is stopped.
+                bytes = bytes.saturating_add(unsafe { self.collector_object_bytes(ptr) });
             }
         };
         self.float_arena.for_each_allocated_slot(&mut visit);

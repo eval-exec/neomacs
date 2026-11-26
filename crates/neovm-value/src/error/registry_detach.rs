@@ -124,13 +124,6 @@ static_assertions::assert_not_impl_any!(InFlightRestoreFailure: Send, Sync, Clon
 /// call [`InFlightRegistryHandle::new`] or the lazy getter, and it does not
 /// end a caller's pin.
 #[cold]
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "E2 L3 cold in-flight registry detach; no production caller enters it"
-    )
-)]
 pub(crate) fn detach_in_flight_registry_handle(
     expected: &InFlightRegistryHandle,
     placeholder: InFlightRegistryHandle,
@@ -222,6 +215,63 @@ fn restore_inner(receipt: &DetachedInFlightRegistry) -> Result<(), InFlightDetac
             }
         }
     })
+}
+
+/// Sealed carrier for the eval source shell. `DetachedInFlightRegistry` stays
+/// crate-private; this wrapper has no public fields and no public constructor.
+#[must_use]
+#[doc(hidden)]
+pub struct SourceShellInFlightReceipt {
+    #[expect(
+        dead_code,
+        reason = "retained private receipt; the shell has no reader and Drop does not restore"
+    )]
+    receipt: DetachedInFlightRegistry,
+    local: PhantomData<Rc<()>>,
+}
+
+/// Refusal of that carrier. Drop returns nothing to the slot.
+#[must_use]
+#[doc(hidden)]
+pub struct SourceShellInFlightRefusal {
+    failure: InFlightDetachFailure,
+    local: PhantomData<Rc<()>>,
+}
+
+impl std::fmt::Debug for SourceShellInFlightRefusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("SourceShellInFlightRefusal")
+            .field(&self.failure)
+            .finish()
+    }
+}
+
+static_assertions::assert_not_impl_any!(SourceShellInFlightReceipt: Send, Sync, Clone, Copy);
+static_assertions::assert_not_impl_any!(SourceShellInFlightRefusal: Send, Sync, Clone, Copy);
+
+/// Mint the empty placeholder and uninstall only the exact retained table.
+///
+/// # Safety
+///
+/// The caller has excluded every other use of this thread's in-flight slot
+/// for the receipt's lifetime. The receipt names no World and does not resume
+/// a source. Only the dormant source shell calls this.
+#[cold]
+#[doc(hidden)]
+pub unsafe fn detach_source_shell_in_flight(
+    expected: &InFlightRegistryHandle,
+) -> Result<SourceShellInFlightReceipt, SourceShellInFlightRefusal> {
+    let placeholder = InFlightRegistryHandle::new(None);
+    match detach_in_flight_registry_handle(expected, placeholder) {
+        Ok(receipt) => Ok(SourceShellInFlightReceipt {
+            receipt,
+            local: PhantomData,
+        }),
+        Err(failure) => Err(SourceShellInFlightRefusal {
+            failure,
+            local: PhantomData,
+        }),
+    }
 }
 
 #[cfg(test)]

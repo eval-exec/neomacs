@@ -8,14 +8,8 @@ use neovm_value::heap_registry::detachment::{
 };
 
 #[cold]
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "E2 L3 dormant cold detach; no production caller enters it"
-    )
-)]
-pub(crate) fn detach_font_registry(
+#[doc(hidden)]
+pub fn detach_font_registry(
     handle: &FontRegistryHandle,
 ) -> Result<DetachedRegistry<FaceAttrState>, RegistryDetachFailure<FaceAttrState>> {
     FACE_ATTR_STATE.with(|slot| {

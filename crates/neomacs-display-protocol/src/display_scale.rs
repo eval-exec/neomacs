@@ -115,7 +115,11 @@ impl X11DisplayObservation {
 #[non_exhaustive]
 pub enum DisplayObservation {
     X11(X11DisplayObservation),
+    /// No desktop text DPI was available; use the platform logical baseline.
     Wayland,
+    /// Desktop text DPI in logical coordinates. Compositor backing scale is
+    /// observed separately after creating the native window.
+    WaylandWithTextDpi(Dpi),
     Cocoa,
     Windows,
 }

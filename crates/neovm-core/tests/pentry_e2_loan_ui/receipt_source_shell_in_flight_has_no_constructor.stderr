@@ -1,0 +1,5 @@
+error[E0599]: no associated function or constant named `new` found for struct `neovm_value::error::SourceShellInFlightReceipt` in the current scope
+ --> tests/pentry_e2_loan_ui/receipt_source_shell_in_flight_has_no_constructor.rs
+  |
+  |     let _receipt = SourceShellInFlightReceipt::new();
+  |                                                ^^^ associated function or constant not found in `neovm_value::error::SourceShellInFlightReceipt`

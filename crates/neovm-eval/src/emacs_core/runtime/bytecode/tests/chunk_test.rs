@@ -8,7 +8,7 @@ fn constant_dedup() {
     let i1 = func.add_constant(Value::fixnum(42));
     let i2 = func.add_constant(Value::fixnum(42));
     assert_eq!(i1, i2);
-    assert_eq!(func.constants.len(), 1);
+    assert_eq!(func.constants().len(), 1);
 }
 
 #[test]
@@ -20,7 +20,7 @@ fn symbol_dedup() {
     let i3 = func.add_symbol("y");
     assert_eq!(i1, i2);
     assert_ne!(i1, i3);
-    assert_eq!(func.constants.len(), 2);
+    assert_eq!(func.constants().len(), 2);
 }
 
 #[test]
@@ -32,7 +32,7 @@ fn patch_jump() {
     func.emit(Op::Return);
     let target = func.current_offset();
     func.patch_jump(0, target);
-    assert_eq!(func.ops[0], Op::GotoIfNil(3));
+    assert_eq!(func.ops()[0], Op::GotoIfNil(3));
 }
 
 #[test]
@@ -58,9 +58,9 @@ fn gnu_ir_is_decoded_only_on_first_access() {
     let (ops, offset_map) =
         super::super::decode::decode_gnu_bytecode_with_offset_map(&raw, &mut constants).unwrap();
     let mut func = ByteCodeFunction::new(LambdaParams::simple(vec![]));
-    func.ops = ops.clone();
-    func.gnu_byte_offset_map = Some(offset_map);
-    func.gnu_bytecode_bytes = Some(neovm_value::tagged::header::LispByteVec::owned(raw));
+    func.set_ops(ops.clone());
+    func.set_gnu_byte_offset_map(Some(offset_map));
+    func.set_gnu_bytecode_bytes(Some(neovm_value::tagged::header::LispByteVec::owned(raw)));
 
     func.defer_gnu_decode();
     assert!(func.resident_ops().is_empty());
@@ -80,9 +80,9 @@ fn gnu_ir_is_decoded_only_on_first_access() {
 fn cloning_deferred_gnu_code_shares_the_decoded_ir() {
     let raw = vec![135]; // return
     let mut func = ByteCodeFunction::new(LambdaParams::simple(vec![]));
-    func.ops = vec![Op::Return];
-    func.gnu_byte_offset_map = Some(Vec::new());
-    func.gnu_bytecode_bytes = Some(neovm_value::tagged::header::LispByteVec::owned(raw));
+    func.set_ops(vec![Op::Return]);
+    func.set_gnu_byte_offset_map(Some(Vec::new()));
+    func.set_gnu_bytecode_bytes(Some(neovm_value::tagged::header::LispByteVec::owned(raw)));
     func.defer_gnu_decode();
     let decodes_before = super::lazy_gnu_decode_count_for_test();
     assert_eq!(func.executable_ops(), &[Op::Return]);
@@ -107,4 +107,31 @@ fn cloning_deferred_gnu_code_shares_the_decoded_ir() {
         ),
         "one decode cell per source"
     );
+}
+
+/// A cold lazy cell is shared by clone. Replacing the clone's GNU bytes
+/// must not publish that decode into the prototype's cell.
+#[test]
+fn replacing_gnu_bytes_on_a_cold_clone_keeps_the_prototype_decode() {
+    let mut proto = ByteCodeFunction::new(LambdaParams::simple(vec![]));
+    proto.set_gnu_bytecode_bytes(Some(neovm_value::tagged::header::LispByteVec::owned(vec![
+        135,
+    ])));
+    proto.defer_gnu_decode();
+    let mut cloned = proto.clone();
+    assert!(std::sync::Arc::ptr_eq(
+        proto.lazy_gnu_code().as_ref().unwrap(),
+        cloned.lazy_gnu_code().as_ref().unwrap()
+    ));
+    // discardN 3; return — a different body from the prototype's bare return.
+    cloned.set_gnu_bytecode_bytes(Some(neovm_value::tagged::header::LispByteVec::owned(vec![
+        182, 3, 135,
+    ])));
+    let _clone_ops = cloned.executable_ops().to_vec();
+    assert_eq!(
+        proto.executable_ops(),
+        &[Op::Return],
+        "the prototype still decodes its own bytes"
+    );
+    assert_ne!(cloned.executable_ops(), proto.executable_ops());
 }

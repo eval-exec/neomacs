@@ -42,8 +42,11 @@
        (princ "GPU-KEYBOARD-FAIL: key sent during pending discovery was lost\n"
               'external-debugging-output)
        (kill-emacs 1)))
-   (when (and (= (frame-native-width startup-gpu-primary) 901)
-              (= (frame-native-height startup-gpu-primary) 603)
+   ;; 901x603 is the X window the harness allocated; the outer measures are
+   ;; that window.  GNU's native height excludes the external menu/tool band
+   ;; (src/frame.c:4401-4418), so native height is smaller once bars exist.
+   (when (and (= (frame-outer-width startup-gpu-primary) 901)
+              (= (frame-outer-height startup-gpu-primary) 603)
               (equal startup-gpu-child-size
                      (list (frame-native-width startup-gpu-child)
                            (frame-native-height startup-gpu-child))))

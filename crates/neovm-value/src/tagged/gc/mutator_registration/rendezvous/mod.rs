@@ -5,13 +5,19 @@ mod keeper;
 mod owner;
 mod resume;
 mod run_admission;
+mod sync;
 
-pub use control::{Mode, Phase, Request};
+pub use control::{Mode, Phase, Request, RingClient, SerialClient};
 pub use keeper::AllStopped;
 pub use keeper::AllStoppedFailure;
+pub use keeper::SerialGrant;
+pub use keeper::{StopAttempt, StopPending};
+pub use owner::PollOutcome;
 pub use owner::RootedRetireFailure;
 pub use resume::ResumeGcImage;
 pub use resume::ResumeGcImageFailure;
+
+use std::num::NonZeroU64;
 
 use super::*;
 use crate::tagged::transport::{ParallelRootBatchError, ParallelRootIdentity, SharedRoot};
@@ -28,6 +34,11 @@ pub enum RendezvousError {
     Capacity,
     Root,
     Registration(RegistrationError),
+    /// E3.3: this build carries `gc-memory-telemetry`, for which the stopped
+    /// collector takes the documented serial-only route (DESIGN §4: a complete
+    /// stopped aggregation or an explicit serial-only route, never partial
+    /// data). The heap stays on the typed Baton-serial fallback.
+    TelemetryStoppedGcUnavailable,
 }
 impl std::fmt::Display for RendezvousError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -46,6 +57,9 @@ impl From<RegistrationError> for RendezvousError {
             RegistrationError::OutstandingLoan => Self::Loan,
             RegistrationError::Exhausted => Self::Generation,
             RegistrationError::Capacity => Self::Capacity,
+            // A live owner-cons lease is permanent. Name it so the catch-all
+            // cannot turn it into Busy. The payload stays OwnerReserveHeld.
+            held @ RegistrationError::OwnerReserveHeld => Self::Registration(held),
             other => Self::Registration(other),
         }
     }
@@ -141,8 +155,15 @@ impl StoppedRootAdmission<'_> {
 mod owner_test_hooks {
     #[derive(Default)]
     pub(in crate::tagged::gc::mutator_registration) struct Hooks {
+        /// Runs after `Publishing` is visible, with the gate released.
         pub(super) publication_hook: Option<Box<dyn FnOnce()>>,
+        /// Runs while `prepare_restore` HOLDS the gate, just before its
+        /// condvar wait. A hook that blocks here is a gate holder that
+        /// waits: a keeper in `with_stopped_gate` (bind, receipt check)
+        /// waits it out, so a row must not block this hook on the keeper.
         pub(super) restore_wait_hook: Option<Box<dyn FnOnce()>>,
+        /// Runs after a native publication commits, with the gate released.
+        pub(super) receipt_hook: Option<Box<dyn FnOnce()>>,
     }
     impl Hooks {
         pub(super) fn take_publication(&mut self) -> Option<Box<dyn FnOnce()>> {
@@ -150,6 +171,12 @@ mod owner_test_hooks {
         }
         pub(super) fn take_restore_wait(&mut self) -> Option<Box<dyn FnOnce()>> {
             self.restore_wait_hook.take()
+        }
+        /// Runs after a native publication commits, before its receipt is read.
+        pub(in crate::tagged::gc::mutator_registration) fn take_receipt(
+            &mut self,
+        ) -> Option<Box<dyn FnOnce()>> {
+            self.receipt_hook.take()
         }
     }
 }
@@ -171,12 +198,16 @@ use owner_test_hooks::Hooks;
 #[derive(Default)]
 pub(super) struct OwnerLocal {
     pub(super) participating: bool,
+    /// True while this owner's image is published/parked (`Stopped` or
+    /// `NativeStopped`) and has not yet been restored to `Running`.
+    pub(super) stopped: bool,
     pub(super) hooks: Hooks,
 }
 impl std::fmt::Debug for OwnerLocal {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("OwnerLocal")
             .field("participating", &self.participating)
+            .field("stopped", &self.stopped)
             .finish_non_exhaustive()
     }
 }
@@ -251,6 +282,100 @@ pub(super) fn entry_state(
         Err(std::sync::TryLockError::Poisoned(_)) => Err(RendezvousError::Poisoned),
     }
 }
+
+/// An owner holds its entry only for a moment, under the gate. A keeper that
+/// meets that moment outside the gate retries it instead of refusing `Busy`.
+/// The retry is bounded: a hold this long is not an owner's moment, and it
+/// refuses `Busy` as before. The keeper's own hold across a body never
+/// reaches this wait (`keeper_hold`).
+pub(super) fn wait_out_owner_moment<T>(
+    mut attempt: impl FnMut() -> Result<T, RendezvousError>,
+) -> Result<T, RendezvousError> {
+    #[cfg(any(test, feature = "test-support"))]
+    if let Some(hook) = super::test_fences::take_owner_moment_hook_for_test() {
+        hook();
+    }
+    let deadline = std::time::Instant::now() + super::native_extent::CONTENTION_WAIT;
+    loop {
+        match attempt() {
+            Err(RendezvousError::Busy) if std::time::Instant::now() < deadline => {
+                #[cfg(any(test, feature = "test-support"))]
+                super::test_fences::note_gate_contention();
+                std::thread::yield_now();
+            }
+            other => return other,
+        }
+    }
+}
+
+/// The stopped keeper's hold on one entry across a body it runs.
+pub(super) struct KeeperHold<'entry> {
+    entry: &'entry MutatorEntry,
+    state: MutexGuard<'entry, EntryState>,
+}
+
+impl std::ops::Deref for KeeperHold<'_> {
+    type Target = EntryState;
+    fn deref(&self) -> &EntryState {
+        &self.state
+    }
+}
+
+impl std::ops::DerefMut for KeeperHold<'_> {
+    fn deref_mut(&mut self) -> &mut EntryState {
+        &mut self.state
+    }
+}
+
+impl Drop for KeeperHold<'_> {
+    fn drop(&mut self) {
+        // Cleared before the guard field drops: the flag never outlives the
+        // keeper's guard.
+        self.entry
+            .keeper_held
+            .store(false, sync::atomic::Ordering::Relaxed);
+    }
+}
+
+/// The stopped keeper takes ENTRY for a body it runs, waiting out an owner's
+/// moment. A body can reach the same entry again through its stop. That hold
+/// is the keeper's own and is not a moment, so waiting cannot end it: it
+/// refuses at once as `Publication`, the class `validate` gives the keeper's
+/// own hold on a frozen entry.
+pub(super) fn keeper_hold(entry: &MutatorEntry) -> Result<KeeperHold<'_>, RendezvousError> {
+    if entry.keeper_held.load(sync::atomic::Ordering::Relaxed) {
+        return Err(RendezvousError::Publication);
+    }
+    let state = wait_out_owner_moment(|| entry_state(entry))?;
+    entry
+        .keeper_held
+        .store(true, sync::atomic::Ordering::Relaxed);
+    Ok(KeeperHold { entry, state })
+}
+
+/// Every published root batch, current or retained, has no reader left.
+fn readers_finished(entries: &[Arc<MutatorEntry>]) -> Result<(), RendezvousError> {
+    for entry in entries {
+        let state = entry_state(entry)?;
+        if let Some(roots) = &state.roots {
+            roots.validate_no_readers().map_err(RendezvousError::from)?;
+        }
+        for roots in &state.retained_roots {
+            roots.validate_no_readers().map_err(RendezvousError::from)?;
+        }
+    }
+    Ok(())
+}
+
+/// The keeper's reader scan (completion and collection). It stays outside the
+/// gate because root-table locks never overlap it, so an owner's moment on an
+/// entry is waited out.
+pub(super) fn readers_finished_waiting(
+    entries: &[Arc<MutatorEntry>],
+) -> Result<(), RendezvousError> {
+    wait_out_owner_moment(|| readers_finished(entries))
+}
+
 pub(super) fn membership(gate: &RegistryState) -> Result<Vec<(MutatorKey, Mode)>, RendezvousError> {
     let mut result = Vec::new();
     result
@@ -296,6 +421,126 @@ pub(super) fn request(registry: &Registry) -> Result<Request, RendezvousError> {
     registry.park.wake.notify_all();
     Ok(request)
 }
+
+/// L6.7 K4: the keeper commits one serial request at the ring's tail.
+/// Commit order is the keeper's receive order. Keeper thread only; the gate
+/// is the keeper's waiting acquisition.
+pub(super) fn enqueue_serial(
+    registry: &Registry,
+    owner: MutatorKey,
+    generation: NonZeroU64,
+) -> Result<(), RendezvousError> {
+    keeper::keeper_thread(registry)?;
+    let mut gate = registry.lock_for_keeper()?;
+    gate.rendezvous
+        .enqueue_serial(owner, generation)
+        .map(|_| ())
+}
+
+/// L6.7 K7: the keeper poisons the era on a proven invariant break (an
+/// owner that unwound or leaked its lend, a message that cannot belong to the
+/// protocol). Parked owners wake with `Poisoned`. Keeper thread only.
+pub(super) fn poison_era(registry: &Registry) -> Result<(), RendezvousError> {
+    keeper::keeper_thread(registry)?;
+    registry.poison();
+    Ok(())
+}
+
+/// L6.7 K6: the keeper cancels `owner`'s queued request. A granted entry
+/// refuses with `Identity`; its grant's retire ends it.
+pub(super) fn cancel_serial(registry: &Registry, owner: MutatorKey) -> Result<(), RendezvousError> {
+    cancel_queued(registry, SerialClient::Owner(owner))
+}
+
+/// L6.7b b3: the keeper commits the Baton group's request at the ring's
+/// tail. The group is one client: a second entry while one is queued or
+/// granted refuses with `Identity`. Keeper thread only.
+pub(super) fn enqueue_baton_group(registry: &Registry) -> Result<(), RendezvousError> {
+    keeper::keeper_thread(registry)?;
+    let mut gate = registry.lock_for_keeper()?;
+    gate.rendezvous.enqueue_baton_group().map(|_| ())
+}
+
+/// L6.7b b5: the keeper puts the Baton group's request back at the ring's
+/// HEAD after the group's turn came back asking for a collection. Keeper
+/// thread only; refused while another group entry exists or a turn is out.
+pub(super) fn requeue_baton_group_at_head(registry: &Registry) -> Result<(), RendezvousError> {
+    keeper::keeper_thread(registry)?;
+    let mut gate = registry.lock_for_keeper()?;
+    gate.rendezvous.requeue_baton_group_at_head().map(|_| ())
+}
+
+/// L6.7c (c): the keeper commits an owner's request at the ring's HEAD: the
+/// owner's turn came back asking for a collection, and this is its next
+/// request. Keeper thread only; refused while the owner has an entry or a
+/// turn is out.
+pub(super) fn requeue_serial_at_head(
+    registry: &Registry,
+    owner: MutatorKey,
+    generation: NonZeroU64,
+) -> Result<(), RendezvousError> {
+    keeper::keeper_thread(registry)?;
+    let mut gate = registry.lock_for_keeper()?;
+    gate.rendezvous
+        .requeue_serial_at_head(owner, generation)
+        .map(|_| ())
+}
+
+/// L6.7b b3: the keeper cancels the Baton group's queued request when the
+/// group leaves the era. A granted entry refuses with `Identity`.
+pub(super) fn cancel_baton_group(registry: &Registry) -> Result<(), RendezvousError> {
+    cancel_queued(registry, SerialClient::BatonGroup)
+}
+
+fn cancel_queued(registry: &Registry, client: SerialClient) -> Result<(), RendezvousError> {
+    keeper::keeper_thread(registry)?;
+    let mut gate = registry.lock_for_keeper()?;
+    gate.rendezvous.cancel_queued(client)
+}
+
+/// Test-only: queue one serial request without the keeper-thread check.
+/// The product commit is [`enqueue_serial`]. `generation` is recorded and is
+/// not checked here; the keeper's `ready` callback checks it at the grant.
+#[cfg(any(test, feature = "test-support"))]
+pub(super) fn enqueue_serial_for_test(
+    registry: &Registry,
+    owner: MutatorKey,
+    generation: NonZeroU64,
+) -> Result<u64, RendezvousError> {
+    let mut gate = registry.lock()?;
+    Ok(gate.rendezvous.enqueue_serial(owner, generation)?.get())
+}
+
+/// Head of the live ring, without granting it.
+#[cfg(any(test, feature = "test-support"))]
+pub(super) fn serial_ring_head_for_test(
+    registry: &Registry,
+) -> Result<(usize, Option<u64>), RendezvousError> {
+    let gate = registry.lock()?;
+    gate.rendezvous.live()?;
+    Ok((
+        gate.rendezvous.ring_len(),
+        gate.rendezvous.ring_head().map(|id| id.get()),
+    ))
+}
+
+/// Retire the current head when it is `id`. A granted head retires the same way.
+#[cfg(any(test, feature = "test-support"))]
+pub(super) fn retire_serial_head_for_test(
+    registry: &Registry,
+    id: u64,
+) -> Result<(), RendezvousError> {
+    let mut gate = registry.lock()?;
+    let head = gate
+        .rendezvous
+        .ring_head()
+        .ok_or(RendezvousError::Identity)?;
+    if head.get() != id {
+        return Err(RendezvousError::Identity);
+    }
+    gate.rendezvous.retire_serial(head)
+}
+
 pub(super) fn finish_debt(
     registry: &Registry,
     gate: &mut RegistryState,
@@ -366,6 +611,19 @@ pub(super) fn wait<'a>(
     gate: RegistryGuard<'a>,
 ) -> Result<RegistryGuard<'a>, RendezvousError> {
     wait_after_poison_check(registry, gate)
+}
+
+/// Bounded form of [`wait`]. The caller owns the deadline; this helper
+/// returns the guard either way so the predicate runs again. Poison still
+/// refuses.
+pub(super) fn wait_timeout<'a>(
+    registry: &'a Registry,
+    gate: RegistryGuard<'a>,
+    timeout: std::time::Duration,
+) -> Result<RegistryGuard<'a>, RendezvousError> {
+    let gate = registry.wait_timeout(gate, timeout)?;
+    gate.rendezvous.live()?;
+    Ok(gate)
 }
 
 // Separated to force poison after a caller's predicate check in regressions.

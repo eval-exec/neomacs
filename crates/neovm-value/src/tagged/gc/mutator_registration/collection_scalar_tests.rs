@@ -1,4 +1,4 @@
-#![forbid(unsafe_code)]
+#![deny(unsafe_code)]
 //! Redistribute existing real credits, then prove sweeping and serial merge do
 //! not resurrect the pre-sweep peer balance or duplicate cumulative histories.
 use super::super::TaggedHeap;
@@ -7,6 +7,33 @@ use super::super::pacing::GenerationPacingCounters;
 use super::image::{CollectionHistory, OwnerGcState, PublishedGcImage, ResponsePacing};
 use super::*;
 use crate::tagged::value::TaggedValue;
+
+#[allow(unsafe_code)]
+fn publish_owner_for_test(
+    owner: &mut OwnerGcState,
+) -> Result<PublishedGcImage, super::image::ImageError> {
+    // SAFETY: single-threaded unit test publishing an owner populated with
+    // immediate/live fixture words on this thread.
+    unsafe { owner.publish() }
+}
+
+#[allow(unsafe_code)]
+fn from_legacy_for_test(
+    heap: &mut TaggedHeap,
+) -> Result<PublishedGcImage, super::image::ImageError> {
+    // SAFETY: single-threaded unit test freezing its own live `&mut TaggedHeap`.
+    unsafe { PublishedGcImage::from_legacy(heap) }
+}
+
+#[allow(unsafe_code)]
+fn restore_legacy_for_test(
+    image: PublishedGcImage,
+    heap: &mut TaggedHeap,
+) -> Result<(), super::image::RestoreImageFailure> {
+    // SAFETY: single-threaded unit test restoring `image` back into its
+    // own live `&mut TaggedHeap` before any sweep.
+    unsafe { image.restore_legacy(heap) }
+}
 
 #[test]
 fn stopped_scalar_fold_preserves_history_and_rebases_real_live_credits_once() {
@@ -64,7 +91,7 @@ fn stopped_scalar_fold_preserves_history_and_rebases_real_live_credits_once() {
     h.pacing = local_pacing;
     owner.hot.pacing = peer_pacing;
     owner.region_stats = std::mem::take(&mut heap.region_stats);
-    let mut peer = owner.publish().unwrap();
+    let mut peer = publish_owner_for_test(&mut owner).unwrap();
     let own_memory = heap.current_mutator_gc().memory_use_counts;
     let own_bytes = heap.total_allocated_bytes();
     let history = CollectionHistory::save(&heap);
@@ -75,7 +102,7 @@ fn stopped_scalar_fold_preserves_history_and_rebases_real_live_credits_once() {
     assert_eq!(heap.current_mutator_gc().pacing.promoted_since_major, 10);
     let bytes = heap.live_bytes();
     let started = std::time::Instant::now();
-    heap.begin_stw_collection();
+    heap.begin_stw_collection_for_test();
     heap.seed_root(live);
     heap.mark_all();
     heap.finalize_collection(0, bytes, started);
@@ -111,9 +138,9 @@ fn stopped_scalar_fold_preserves_history_and_rebases_real_live_credits_once() {
         }
     );
     // Use the actual era-finish fold to check a second accounting boundary.
-    let mut serial = PublishedGcImage::from_legacy(&mut heap).unwrap();
+    let mut serial = from_legacy_for_test(&mut heap).unwrap();
     serial.merge_non_young(peer).unwrap();
-    serial.restore_legacy(&mut heap).unwrap();
+    restore_legacy_for_test(serial, &mut heap).unwrap();
     assert_eq!(heap.current_mutator_gc().allocated_count, after_count);
     assert_eq!(heap.memory_use_counts_snapshot(), before_memory);
     assert_eq!(heap.total_allocated_bytes(), before_bytes);
@@ -125,7 +152,7 @@ fn stopped_scalar_fold_preserves_history_and_rebases_real_live_credits_once() {
     // A later stopped cycle with no new allocations must not bank twice.
     let started = std::time::Instant::now();
     let bytes = heap.live_bytes();
-    heap.begin_stw_collection();
+    heap.begin_stw_collection_for_test();
     heap.seed_root(live);
     heap.mark_all();
     heap.finalize_collection(0, bytes, started);

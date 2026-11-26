@@ -2,6 +2,8 @@ use std::collections::{BTreeMap, HashMap};
 use std::mem::MaybeUninit;
 use std::ops::Range;
 use std::ptr::NonNull;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
 
 use tree_sitter::{InputEdit, Language, Parser, Point, Query, QueryError, Tree, ffi};
 
@@ -151,13 +153,22 @@ pub struct ParsedTree {
 
 impl ParsedTree {
     #[doc(hidden)]
-    pub const fn new(tree: Tree, visible: EmacsByteRange) -> Self {
+    pub(crate) const fn new(tree: Tree, visible: EmacsByteRange) -> Self {
         Self { tree, visible }
     }
 
-    #[doc(hidden)]
-    pub const fn tree(&self) -> &Tree {
+    /// Crate-private. Other crates must not see a `&Tree`: `Tree::clone` is
+    /// public, and an uncounted copy shares the root that an in-place edit
+    /// rewrites.
+    pub(crate) const fn tree(&self) -> &Tree {
         &self.tree
+    }
+
+    /// Uncounted `ts_tree_copy`. Reparse and the in-walk edit snapshot are
+    /// the only callers, and both drop the copy before returning. A walk
+    /// uses [`ParserEntry::walk_clone`], which counts the extra owner.
+    pub(crate) fn clone_tree(&self) -> Tree {
+        self.tree.clone()
     }
 
     #[doc(hidden)]
@@ -165,29 +176,41 @@ impl ParsedTree {
         self.visible
     }
 
-    fn apply_edit(&mut self, edit: &InputEdit, new_visible: EmacsByteRange) {
+    /// The only `ts_tree_edit` on a parser tree. Callers go through
+    /// [`TreeSitterManager::apply_parser_edits`], which bumps `generation`
+    /// and, while a walk clone is alive, remaps published nodes.
+    fn edit_tree(&mut self, edit: &InputEdit) {
         self.tree.edit(edit);
-        self.visible = new_visible;
     }
 
-    /// Move this tree's window onto BUFFER's current restriction, GNU
+    fn set_visible(&mut self, visible: EmacsByteRange) {
+        self.visible = visible;
+    }
+
+    /// Edits that move this tree's window onto BUFFER's restriction, GNU
     /// `treesit_sync_visible_region` (`src/treesit.c:1626-1740`).
     ///
-    /// Returns whether the window moved, which is GNU's reason to set
-    /// `need_reparse` (`src/treesit.c:1654-1656`).
-    fn sync_visible_region(&mut self, buffer: &Buffer, tracking: ParserPointTracking) -> bool {
+    /// `None` means the window already matches. The edits are not applied
+    /// here: a direct `ts_tree_edit` would skip the node remap.
+    fn plan_visible_sync(
+        &self,
+        buffer: &Buffer,
+        tracking: ParserPointTracking,
+    ) -> Option<(Vec<InputEdit>, EmacsByteRange)> {
         let accessible = buffer.accessible_emacs_byte_range();
         if self.visible == accessible {
-            return false;
+            return None;
         }
         let (begv, zv) = (accessible.start(), accessible.end());
+        let mut visible = self.visible;
+        let mut edits = Vec::new();
 
         // 1. Make sure visible.start <= BEGV: tree-sitter sees an insertion at
         //    the beginning.
-        if self.visible.start() > begv {
-            let new_end = self.visible.start().get() - begv.get();
-            let new_end_position = parser_point_at(buffer, begv, self.visible.start(), tracking);
-            self.tree.edit(&InputEdit {
+        if visible.start() > begv {
+            let new_end = visible.start().get() - begv.get();
+            let new_end_position = parser_point_at(buffer, begv, visible.start(), tracking);
+            edits.push(InputEdit {
                 start_byte: 0,
                 old_end_byte: 0,
                 new_end_byte: new_end,
@@ -195,17 +218,16 @@ impl ParsedTree {
                 old_end_position: TREESIT_TS_POINT_1_0,
                 new_end_position,
             });
-            self.visible = EmacsByteRange::new(begv, self.visible.end());
+            visible = EmacsByteRange::new(begv, visible.end());
         }
 
         // 2. Make sure visible.end = ZV: an insertion or a deletion at the end.
-        let visible_start = self.visible.start();
-        if self.visible.end() < zv {
-            let old_end = self.visible.end().get() - visible_start.get();
-            let start_position =
-                parser_point_at(buffer, visible_start, self.visible.end(), tracking);
+        let visible_start = visible.start();
+        if visible.end() < zv {
+            let old_end = visible.end().get() - visible_start.get();
+            let start_position = parser_point_at(buffer, visible_start, visible.end(), tracking);
             let new_end_position = parser_point_at(buffer, visible_start, zv, tracking);
-            self.tree.edit(&InputEdit {
+            edits.push(InputEdit {
                 start_byte: old_end,
                 old_end_byte: old_end,
                 new_end_byte: zv.get() - visible_start.get(),
@@ -213,28 +235,27 @@ impl ParsedTree {
                 old_end_position: start_position,
                 new_end_position,
             });
-            self.visible = EmacsByteRange::new(visible_start, zv);
-        } else if self.visible.end() > zv {
+            visible = EmacsByteRange::new(visible_start, zv);
+        } else if visible.end() > zv {
             let start = zv.get().saturating_sub(visible_start.get());
             let start_position = parser_point_at(buffer, visible_start, zv, tracking);
-            let old_end_position =
-                parser_point_at(buffer, visible_start, self.visible.end(), tracking);
-            self.tree.edit(&InputEdit {
+            let old_end_position = parser_point_at(buffer, visible_start, visible.end(), tracking);
+            edits.push(InputEdit {
                 start_byte: start,
-                old_end_byte: self.visible.end().get() - visible_start.get(),
+                old_end_byte: visible.end().get() - visible_start.get(),
                 new_end_byte: start,
                 start_position,
                 old_end_position,
                 new_end_position: start_position,
             });
-            self.visible = EmacsByteRange::new(visible_start, zv);
+            visible = EmacsByteRange::new(visible_start, zv);
         }
 
         // 3. Make sure visible.start = BEGV: a deletion at the beginning.
-        if self.visible.start() < begv {
-            let old_end = begv.get() - self.visible.start().get();
-            let old_end_position = parser_point_at(buffer, self.visible.start(), begv, tracking);
-            self.tree.edit(&InputEdit {
+        if visible.start() < begv {
+            let old_end = begv.get() - visible.start().get();
+            let old_end_position = parser_point_at(buffer, visible.start(), begv, tracking);
+            edits.push(InputEdit {
                 start_byte: 0,
                 old_end_byte: old_end,
                 new_end_byte: 0,
@@ -242,11 +263,11 @@ impl ParsedTree {
                 old_end_position,
                 new_end_position: TREESIT_TS_POINT_1_0,
             });
-            self.visible = EmacsByteRange::new(begv, self.visible.end());
+            visible = EmacsByteRange::new(begv, visible.end());
         }
 
-        debug_assert_eq!(self.visible, accessible);
-        true
+        debug_assert_eq!(visible, accessible);
+        Some((edits, visible))
     }
 }
 
@@ -344,6 +365,13 @@ pub struct ParserEntry {
     pub(crate) tree: Option<ParsedTree>,
     pub(crate) freshness: ParserFreshness,
     pub(crate) generation: u64,
+    /// Advances only when a reparse replaces the tree. Lisp node handles
+    /// compare this, matching GNU's parser timestamp (`src/treesit.c:1941`).
+    /// `generation` also advances on a buffer edit and stays the query `:pred`
+    /// check.
+    pub(crate) reparse_epoch: u64,
+    /// Live walk clones. An edit snapshots only while this is non-zero.
+    pub(crate) walk_clones: Arc<AtomicU32>,
     pub(crate) need_to_gc_buffer: bool,
     pub(crate) deleted: bool,
     pub(crate) tracking_linecol: bool,
@@ -361,6 +389,13 @@ pub struct ParserEntry {
     pub(crate) tree: Option<ParsedTree>,
     pub(crate) freshness: ParserFreshness,
     pub(crate) generation: u64,
+    /// Advances only when a reparse replaces the tree. Lisp node handles
+    /// compare this, matching GNU's parser timestamp (`src/treesit.c:1941`).
+    /// `generation` also advances on a buffer edit and stays the query `:pred`
+    /// check.
+    pub(crate) reparse_epoch: u64,
+    /// Live walk clones. An edit snapshots only while this is non-zero.
+    pub(crate) walk_clones: Arc<AtomicU32>,
     pub(crate) need_to_gc_buffer: bool,
     pub(crate) deleted: bool,
     pub(crate) tracking_linecol: bool,
@@ -371,7 +406,7 @@ pub struct ParserEntry {
 pub struct NodeEntry {
     pub(crate) parser_id: u64,
     pub(crate) raw: tree_sitter::ffi::TSNode,
-    pub(crate) generation: u64,
+    pub(crate) reparse_epoch: u64,
 }
 
 #[doc(hidden)]
@@ -423,6 +458,7 @@ pub struct RawQueryMatch {
 #[doc(hidden)]
 pub struct EmacsQuery {
     raw: NonNull<ffi::TSQuery>,
+    language: Language,
     capture_names: Vec<String>,
     predicates: Vec<Vec<QueryPredicate>>,
 }
@@ -434,12 +470,18 @@ impl EmacsQuery {
             .expect("tree-sitter returned a null query without an error");
         let mut query = Self {
             raw,
+            language: language.clone(),
             capture_names: Vec::new(),
             predicates: Vec::new(),
         };
         query.capture_names = query.read_capture_names();
         query.predicates = query.read_predicates();
         Ok(query)
+    }
+
+    #[doc(hidden)]
+    pub fn language(&self) -> &Language {
+        &self.language
     }
 
     #[doc(hidden)]
@@ -452,13 +494,22 @@ impl EmacsQuery {
         &self.predicates
     }
 
+    /// Execute this compiled query against `node` within `byte_range`.
+    ///
+    /// # Safety
+    /// `node` must be a valid `TSNode` belonging to a live `TSTree` parsed with
+    /// `self.language()` that remains alive and unmutated for the duration of
+    /// this call.
     #[doc(hidden)]
-    pub fn matches(
+    pub unsafe fn matches(
         &self,
         node: ffi::TSNode,
         byte_range: Option<Range<usize>>,
     ) -> Result<Vec<RawQueryMatch>, &'static str> {
-        let cursor = RawQueryCursor::new(self.raw, node, byte_range)?;
+        // SAFETY: `self.raw` is a live `TSQuery` owned by `self` for the
+        // duration of `&self`, the caller guarantees `node` belongs to a live,
+        // unmutated tree, and `cursor` is dropped before `matches` returns.
+        let cursor = unsafe { RawQueryCursor::new(self.raw, node, byte_range) }?;
         let mut matches = Vec::new();
         loop {
             let mut raw_match = MaybeUninit::<ffi::TSQueryMatch>::uninit();
@@ -544,7 +595,11 @@ struct RawQueryCursor {
 }
 
 impl RawQueryCursor {
-    fn new(
+    /// # Safety
+    /// `query` must point to a live `TSQuery` that outlives the returned
+    /// `RawQueryCursor`, and `node` must belong to a live tree compatible with
+    /// that query.
+    unsafe fn new(
         query: NonNull<ffi::TSQuery>,
         node: ffi::TSNode,
         byte_range: Option<Range<usize>>,
@@ -747,6 +802,29 @@ fn clamp_into(pos: EmacsBytePos, range: EmacsByteRange) -> EmacsBytePos {
     pos.max(range.start()).min(range.end())
 }
 
+/// Owns one `ts_tree_copy` and the parser's live-walk count.
+///
+/// The tree is not `Clone`. Another copy would share the root without being
+/// counted, and the next edit would rewrite that root in place.
+#[doc(hidden)]
+pub struct WalkClone {
+    tree: Tree,
+    live: Arc<AtomicU32>,
+}
+
+impl Drop for WalkClone {
+    fn drop(&mut self) {
+        self.live.fetch_sub(1, Ordering::Release);
+    }
+}
+
+impl WalkClone {
+    #[doc(hidden)]
+    pub fn root_node(&self) -> tree_sitter::Node<'_> {
+        self.tree.root_node()
+    }
+}
+
 #[derive(Default)]
 #[doc(hidden)]
 pub struct TreeSitterManager {
@@ -775,6 +853,68 @@ impl TreeSitterManager {
             linecol_caches: HashMap::new(),
             pending_edits: HashMap::new(),
         }
+    }
+
+    /// Replace the parser tree. The previous tree is cloned only here, for
+    /// `ts_parser_parse` to diff against, and dropped before return. That
+    /// copy is not a walk.
+    ///
+    /// `TreeSitterManager` owns raw `TSNode` invalidation: replacing
+    /// `parser.tree` frees the previous `TSTree`, so this method bumps
+    /// `reparse_epoch` and clears all `self.nodes` entries for `parser_id`
+    /// atomically before returning (matching `finish_buffer_edit`'s
+    /// `BufferEditAction::Invalidate` branch).
+    ///
+    /// The callback type matches `Parser::parse_with_options` so a slice
+    /// borrowed from the caller's buffer stays a concrete `T`, not a
+    /// higher-ranked `&[u8]`.
+    #[doc(hidden)]
+    pub fn reparse_parser<T, F>(
+        &mut self,
+        parser_id: u64,
+        visible: EmacsByteRange,
+        revision: ParserInputRevision,
+        incremental: bool,
+        collect_changes: bool,
+        read: &mut F,
+    ) -> Result<Vec<SourceByteRange>, ()>
+    where
+        T: AsRef<[u8]>,
+        F: FnMut(usize, Point) -> T,
+    {
+        let Some(parser) = self.parsers.get_mut(&parser_id) else {
+            return Err(());
+        };
+        let old_tree = if incremental {
+            parser.tree.as_ref().map(ParsedTree::clone_tree)
+        } else {
+            None
+        };
+        let tree = parser
+            .parser
+            .parse_with_options(read, old_tree.as_ref(), None)
+            .ok_or(())?;
+        let changed_ranges = if !collect_changes {
+            Vec::new()
+        } else if let Some(old_tree) = old_tree.as_ref() {
+            old_tree
+                .changed_ranges(&tree)
+                .map(|range| SourceByteRange::new(range.start_byte, range.end_byte))
+                .collect()
+        } else if visible.is_empty() {
+            Vec::new()
+        } else {
+            vec![SourceByteRange::new(0, visible.len().get())]
+        };
+        parser.tree = Some(ParsedTree::new(tree, visible));
+        parser.freshness = ParserFreshness::Clean(revision);
+        parser.generation = parser.generation.saturating_add(1);
+        parser.reparse_epoch = parser.reparse_epoch.saturating_add(1);
+        if collect_changes {
+            parser.last_changed_ranges = changed_ranges.clone();
+        }
+        self.clear_nodes_for_parser(parser_id);
+        Ok(changed_ranges)
     }
 
     /// Trace every native Value owner independently of the parser record's
@@ -843,6 +983,8 @@ impl TreeSitterManager {
                 tree: None,
                 freshness: ParserFreshness::Unparsed,
                 generation: 0,
+                reparse_epoch: 0,
+                walk_clones: Arc::new(AtomicU32::new(0)),
                 need_to_gc_buffer: false,
                 deleted: false,
                 tracking_linecol,
@@ -906,13 +1048,39 @@ impl TreeSitterManager {
         true
     }
 
+    /// Store a node belonging to `parser_id`'s current live tree.
+    ///
+    /// Note that `node`'s `Node<'_>` lifetime is unrelated to `self` (the
+    /// manager) and ends at return once `node.into_raw()` is stored. The
+    /// runtime assertions below — deliberate production panics if `parser_id`
+    /// does not exist, has no parsed tree, `node` does not belong to that
+    /// parser's current live `TSTree`, or `reparse_epoch` does not match the
+    /// parser's current epoch — are therefore the sole soundness guard
+    /// guaranteeing that every `NodeEntry.raw` names its parser's live tree
+    /// (until `apply_parser_edits` retargets it or a reparse clears it).
     #[doc(hidden)]
     pub fn insert_node(
         &mut self,
         parser_id: u64,
-        raw: tree_sitter::ffi::TSNode,
-        generation: u64,
+        node: tree_sitter::Node<'_>,
+        reparse_epoch: u64,
     ) -> u64 {
+        let Some(parser) = self.parsers.get(&parser_id) else {
+            panic!("insert_node requires an existing parser {parser_id}");
+        };
+        let Some(live_root) = parser.root_raw() else {
+            panic!("insert_node requires parser {parser_id} to have a live tree");
+        };
+        let raw = node.into_raw();
+        assert!(
+            !live_root.tree.is_null() && raw.tree == live_root.tree,
+            "insert_node requires a node belonging to parser {parser_id}'s current live tree"
+        );
+        assert_eq!(
+            reparse_epoch,
+            parser.reparse_epoch(),
+            "insert_node requires parser {parser_id}'s current reparse_epoch"
+        );
         let id = self.next_node_id;
         self.next_node_id += 1;
         self.nodes.insert(
@@ -920,7 +1088,7 @@ impl TreeSitterManager {
             NodeEntry {
                 parser_id,
                 raw,
-                generation,
+                reparse_epoch,
             },
         );
         id
@@ -931,8 +1099,7 @@ impl TreeSitterManager {
         self.nodes.get(&id)
     }
 
-    #[doc(hidden)]
-    pub fn clear_nodes_for_parser(&mut self, parser_id: u64) {
+    fn clear_nodes_for_parser(&mut self, parser_id: u64) {
         self.nodes.retain(|_, entry| entry.parser_id != parser_id);
     }
 
@@ -1014,18 +1181,27 @@ impl TreeSitterManager {
     /// narrowing is a reason to reparse, never a reason to lose the tree.
     #[doc(hidden)]
     pub fn sync_visible_region(&mut self, parser_id: u64, buffer: &Buffer) {
-        let Some(parser) = self.parsers.get_mut(&parser_id) else {
+        let plan = {
+            let Some(parser) = self.parsers.get(&parser_id) else {
+                return;
+            };
+            let tracking = if parser.tracking_linecol {
+                ParserPointTracking::LineAndColumn
+            } else {
+                ParserPointTracking::BytesOnly
+            };
+            let Some(tree) = parser.tree.as_ref() else {
+                return;
+            };
+            tree.plan_visible_sync(buffer, tracking)
+        };
+        let Some((edits, visible)) = plan else {
             return;
         };
-        let tracking = if parser.tracking_linecol {
-            ParserPointTracking::LineAndColumn
-        } else {
-            ParserPointTracking::BytesOnly
-        };
-        let Some(tree) = parser.tree.as_mut() else {
-            return;
-        };
-        if tree.sync_visible_region(buffer, tracking) {
+        // One generation bump for the whole window move, including when a
+        // walk is live. `reparse_epoch` stays put, so `outdated` stays nil.
+        self.apply_parser_edits(parser_id, &edits, visible);
+        if let Some(parser) = self.parsers.get_mut(&parser_id) {
             parser
                 .freshness
                 .note_window_moved(ParserInputRevision::for_buffer(buffer));
@@ -1088,38 +1264,283 @@ impl TreeSitterManager {
             return;
         };
         let new_revision = ParserInputRevision::for_buffer(buffer);
-
-        let mut edited_parser_ids = Vec::new();
-        for (parser_id, parser) in &mut self.parsers {
-            if parser.deleted || parser.orig_buffer_id != buffer_id {
-                continue;
-            }
-            if let Some(tree) = parser.tree.as_mut() {
+        let parser_ids: Vec<u64> = self.parsers.keys().copied().collect();
+        for parser_id in parser_ids {
+            let action = {
+                let Some(parser) = self.parsers.get(&parser_id) else {
+                    continue;
+                };
+                if parser.deleted || parser.orig_buffer_id != buffer_id {
+                    continue;
+                }
+                let Some(tree) = parser.tree.as_ref() else {
+                    continue;
+                };
                 if parser
                     .freshness
                     .accepts_incremental_edit(edit.content_revision)
                 {
-                    let relative =
-                        edit.for_window(buffer, *parser_id, tree.visible(), new_end_byte);
-                    tree.apply_edit(&relative.edit, relative.new_visible);
-                    parser.freshness = ParserFreshness::ReparsePending(new_revision);
+                    let relative = edit.for_window(buffer, parser_id, tree.visible(), new_end_byte);
+                    BufferEditAction::Apply(relative.edit, relative.new_visible)
                 } else {
+                    BufferEditAction::Invalidate
+                }
+            };
+            match action {
+                BufferEditAction::Apply(input, visible) => {
+                    self.apply_parser_edits(parser_id, &[input], visible);
+                    if let Some(parser) = self.parsers.get_mut(&parser_id) {
+                        parser.freshness = ParserFreshness::ReparsePending(new_revision);
+                        parser.last_changed_ranges.clear();
+                    }
+                }
+                BufferEditAction::Invalidate => {
                     // A text change that never reached this hook left the tree's
                     // window describing text that is no longer there, so unlike
                     // GNU -- which sees every change -- the tree cannot be
                     // reused.
-                    parser.freshness = ParserFreshness::FullReparseRequired;
+                    if let Some(parser) = self.parsers.get_mut(&parser_id) {
+                        parser.freshness = ParserFreshness::FullReparseRequired;
+                        parser.generation = parser.generation.saturating_add(1);
+                        parser.last_changed_ranges.clear();
+                    }
+                    self.clear_nodes_for_parser(parser_id);
                 }
-                parser.generation = parser.generation.saturating_add(1);
-                parser.last_changed_ranges.clear();
-                edited_parser_ids.push(*parser_id);
             }
         }
+    }
 
-        for parser_id in edited_parser_ids {
-            self.clear_nodes_for_parser(parser_id);
+    /// Every `ts_tree_edit` on a parser tree. With no live walk clone the
+    /// tree is the only owner of its subtrees, so the edit is in place and
+    /// published ids stay valid. Cost is the edit itself: no snapshot and no
+    /// per-node path walk. While a walk holds `ts_tree_copy`, `ts_tree_edit`
+    /// copy-on-writes; snapshot, keep each node's `TSNode.context`, and
+    /// replace only `id` and `tree`. `generation` advances either way so a
+    /// walk stops retargeting clone ids in O(1). `reparse_epoch` does not,
+    /// matching GNU's parser timestamp (`src/treesit.c:1941`), which moves
+    /// only on reparse.
+    fn apply_parser_edits(
+        &mut self,
+        parser_id: u64,
+        edits: &[InputEdit],
+        new_visible: EmacsByteRange,
+    ) {
+        if edits.is_empty() {
+            return;
+        }
+        let walk_live = self
+            .parsers
+            .get(&parser_id)
+            .is_some_and(|parser| parser.walk_clones.load(Ordering::Acquire) > 0);
+        let updates = if walk_live {
+            self.edit_parser_keeping_walk_clone(parser_id, edits, new_visible)
+        } else {
+            self.edit_parser_in_place(parser_id, edits, new_visible);
+            Vec::new()
+        };
+        for (id, mapped) in updates {
+            match mapped {
+                Some(raw) => {
+                    if let Some(entry) = self.nodes.get_mut(&id) {
+                        entry.raw = raw;
+                    }
+                }
+                None => {
+                    self.nodes.remove(&id);
+                }
+            }
         }
     }
+
+    fn edit_parser_in_place(
+        &mut self,
+        parser_id: u64,
+        edits: &[InputEdit],
+        new_visible: EmacsByteRange,
+    ) {
+        let Some(parser) = self.parsers.get_mut(&parser_id) else {
+            return;
+        };
+        if parser.tree.is_none() {
+            return;
+        }
+        if let Some(tree) = parser.tree.as_mut() {
+            for edit in edits {
+                tree.edit_tree(edit);
+            }
+            tree.set_visible(new_visible);
+        }
+        parser.generation = parser.generation.saturating_add(1);
+    }
+
+    fn collect_nodes_for_walk_edit(
+        &self,
+        parser_id: u64,
+        parser_reparse_epoch: u64,
+        live_tree_addr: usize,
+    ) -> (Vec<(u64, ffi::TSNode)>, Vec<(u64, Option<ffi::TSNode>)>) {
+        let mut live_nodes = Vec::new();
+        let mut stale_removals = Vec::new();
+        for (&id, entry) in &self.nodes {
+            if entry.parser_id != parser_id {
+                continue;
+            }
+            if entry.reparse_epoch != parser_reparse_epoch
+                || (entry.raw.tree as usize) != live_tree_addr
+            {
+                stale_removals.push((id, None));
+                continue;
+            }
+            live_nodes.push((id, entry.raw));
+        }
+        (live_nodes, stale_removals)
+    }
+
+    fn edit_parser_keeping_walk_clone(
+        &mut self,
+        parser_id: u64,
+        edits: &[InputEdit],
+        new_visible: EmacsByteRange,
+    ) -> Vec<(u64, Option<ffi::TSNode>)> {
+        let (snapshot, snap_ptr, live_tree_addr, root_id, parser_reparse_epoch) = {
+            let Some(parser) = self.parsers.get(&parser_id) else {
+                return Vec::new();
+            };
+            let Some(tree) = parser.tree.as_ref() else {
+                return Vec::new();
+            };
+            let snapshot = tree.clone_tree();
+            let snap_ptr = snapshot.root_node().into_raw().tree;
+            let live_root_raw = tree.tree().root_node().into_raw();
+            (
+                snapshot,
+                snap_ptr,
+                live_root_raw.tree as usize,
+                live_root_raw.id,
+                parser.reparse_epoch(),
+            )
+        };
+        let (node_raws, stale_removals) =
+            self.collect_nodes_for_walk_edit(parser_id, parser_reparse_epoch, live_tree_addr);
+        let mut planned = Vec::with_capacity(node_raws.len());
+        for (id, raw) in node_raws {
+            if raw.id == root_id {
+                // `&TSTree.root` does not move, and path-walking it against
+                // the snapshot fails because the snapshot has its own field.
+                // Leave the published context in place.
+                planned.push((id, PlannedNode::Keep(raw)));
+                continue;
+            }
+            let mut on_snapshot = raw;
+            on_snapshot.tree = snap_ptr;
+            // SAFETY: `snapshot` is a `ts_tree_copy` of the pre-edit parser
+            // tree, and `collect_nodes_for_walk_edit` verified that `entry`
+            // matches both `parser.reparse_epoch()` and `live_tree_addr`
+            // (in addition to `reparse_parser` clearing `self.nodes` on tree
+            // replacement), so `snapshot` owns the subtree `raw.id` names.
+            // The node stored later comes from the parser tree. A failed path
+            // drops the entry rather than leaving an id the snapshot will free
+            // (GNU bug#60127). That drop is safety, not a GNU match.
+            let path = node_index_path(unsafe { tree_sitter::Node::from_raw(on_snapshot) });
+            planned.push((id, PlannedNode::Path { old: raw, path }));
+        }
+        drop(snapshot);
+
+        {
+            let Some(parser) = self.parsers.get_mut(&parser_id) else {
+                return stale_removals;
+            };
+            let Some(tree) = parser.tree.as_mut() else {
+                return stale_removals;
+            };
+            for edit in edits {
+                tree.edit_tree(edit);
+            }
+            tree.set_visible(new_visible);
+        }
+
+        let updates = {
+            let Some(parser) = self.parsers.get(&parser_id) else {
+                return stale_removals;
+            };
+            let Some(tree) = parser.tree.as_ref() else {
+                return stale_removals;
+            };
+            let live_root = tree.tree().root_node();
+            let mut updates = Vec::with_capacity(stale_removals.len() + planned.len());
+            updates.extend(stale_removals);
+            for (id, planned_node) in planned {
+                match planned_node {
+                    PlannedNode::Keep(raw) => updates.push((id, Some(raw))),
+                    PlannedNode::Path { old, path } => {
+                        let mapped = path
+                            .and_then(|path| node_at_index_path(live_root, &path))
+                            .map(|node| {
+                                let mut live = node.into_raw();
+                                // `ts_node_end_byte` is the context start plus
+                                // the subtree size (`lib/src/node.c`). Keeping
+                                // the pre-edit context leaves both ends stale
+                                // when the edit did not change that size.
+                                live.context = old.context;
+                                live
+                            });
+                        updates.push((id, mapped));
+                    }
+                }
+            }
+            updates
+        };
+        if let Some(parser) = self.parsers.get_mut(&parser_id) {
+            parser.generation = parser.generation.saturating_add(1);
+        }
+        updates
+    }
+}
+
+enum BufferEditAction {
+    Apply(InputEdit, EmacsByteRange),
+    Invalidate,
+}
+
+enum PlannedNode {
+    Keep(ffi::TSNode),
+    Path {
+        old: ffi::TSNode,
+        path: Option<Vec<u32>>,
+    },
+}
+
+#[doc(hidden)]
+pub fn node_index_path(node: tree_sitter::Node<'_>) -> Option<Vec<u32>> {
+    let mut reversed = Vec::new();
+    let mut current = node;
+    while let Some(parent) = current.parent() {
+        let mut index = None;
+        for child_index in 0..parent.child_count() {
+            if parent
+                .child(child_index)
+                .is_some_and(|child| child.id() == current.id())
+            {
+                index = Some(child_index);
+                break;
+            }
+        }
+        reversed.push(index?);
+        current = parent;
+    }
+    reversed.reverse();
+    Some(reversed)
+}
+
+#[doc(hidden)]
+pub fn node_at_index_path<'tree>(
+    mut node: tree_sitter::Node<'tree>,
+    path: &[u32],
+) -> Option<tree_sitter::Node<'tree>> {
+    for &index in path {
+        node = node.child(index)?;
+    }
+    Some(node)
 }
 
 #[cfg(test)]
@@ -1242,7 +1663,7 @@ fn record_id_with_tag(value: Value, expected_tag: &str, id_slot: usize) -> Optio
 fn record_tag_is(value: Value, expected_tag: &str) -> bool {
     value
         .as_record_data()
-        .and_then(|items| items.first().copied())
+        .and_then(|items| items.first())
         .and_then(|tag| tag.as_bare_symbol_name())
         == Some(expected_tag)
 }
@@ -1304,8 +1725,33 @@ impl ParserEntry {
     }
 
     #[doc(hidden)]
-    pub fn set_generation(&mut self, generation: u64) {
-        self.generation = generation;
+    pub fn reparse_epoch(&self) -> u64 {
+        self.reparse_epoch
+    }
+
+    /// Counted `ts_tree_copy`. The guard is the only walk clone other crates
+    /// can hold. Dropping it releases the count that chooses an in-place edit.
+    #[doc(hidden)]
+    pub fn walk_clone(&self) -> Option<WalkClone> {
+        let tree = self.tree.as_ref()?.clone_tree();
+        self.walk_clones.fetch_add(1, Ordering::AcqRel);
+        Some(WalkClone {
+            tree,
+            live: Arc::clone(&self.walk_clones),
+        })
+    }
+
+    #[doc(hidden)]
+    pub fn root_raw(&self) -> Option<ffi::TSNode> {
+        self.tree
+            .as_ref()
+            .map(|parsed| parsed.tree().root_node().into_raw())
+    }
+
+    #[doc(hidden)]
+    pub fn node_raw_at_index_path(&self, path: &[u32]) -> Option<ffi::TSNode> {
+        let root = self.tree.as_ref()?.tree().root_node();
+        node_at_index_path(root, path).map(|node| node.into_raw())
     }
 
     #[doc(hidden)]
@@ -1344,18 +1790,8 @@ impl ParserEntry {
     }
 
     #[doc(hidden)]
-    pub fn set_tree(&mut self, tree: Option<ParsedTree>) {
-        self.tree = tree;
-    }
-
-    #[doc(hidden)]
     pub fn last_changed_ranges_mut(&mut self) -> &mut Vec<SourceByteRange> {
         &mut self.last_changed_ranges
-    }
-
-    #[doc(hidden)]
-    pub fn set_last_changed_ranges(&mut self, ranges: Vec<SourceByteRange>) {
-        self.last_changed_ranges = ranges;
     }
 
     #[doc(hidden)]
@@ -1366,6 +1802,12 @@ impl ParserEntry {
     #[doc(hidden)]
     pub fn parser_mut(&mut self) -> &mut Parser {
         &mut self.parser
+    }
+
+    /// The `TSLanguage` loaded into this parser (`ts_parser_language`).
+    #[doc(hidden)]
+    pub fn language(&self) -> Option<tree_sitter::LanguageRef<'_>> {
+        self.parser.language()
     }
 }
 
@@ -1382,8 +1824,8 @@ impl NodeEntry {
     }
 
     #[doc(hidden)]
-    pub fn generation(&self) -> u64 {
-        self.generation
+    pub fn reparse_epoch(&self) -> u64 {
+        self.reparse_epoch
     }
 }
 

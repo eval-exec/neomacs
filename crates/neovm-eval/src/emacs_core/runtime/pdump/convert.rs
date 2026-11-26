@@ -649,13 +649,19 @@ impl<'a> LoadDecoder<'a> {
         // permanent. Mapped rows are already permanent through the mapped
         // side tables, and the heap ignores conses, mapped objects and static
         // values.
-        with_tagged_heap(|heap| {
-            for index in 0..self.state.values.len() {
-                if let Some(value) = self.state.cached_value(index) {
-                    heap.note_image_object(value);
+        // SAFETY: pdump loader runs serially before exposing loaded values;
+        // `note_image_object` only stamps image-resident metadata and never
+        // collects, re-enters `with_tagged_heap`, mints capability tokens, or
+        // mutates existing Lisp payloads.
+        unsafe {
+            with_tagged_heap(|heap| {
+                for index in 0..self.state.values.len() {
+                    if let Some(value) = self.state.cached_value(index) {
+                        heap.note_image_object(value);
+                    }
                 }
-            }
-        });
+            })
+        };
         Ok(())
     }
 
@@ -892,7 +898,10 @@ impl<'a> LoadDecoder<'a> {
         // table is far cheaper than growing a 12K-entry FxHashMap by
         // rehashing during registration.
         let (veclikes, strings) = self.state.spans.count_vectorlikes_and_strings();
-        with_tagged_heap(|heap| heap.reserve_mapped_object_capacity(veclikes, strings));
+        // SAFETY: pdump loader pre-reserves mapped-registry capacity only;
+        // never collects, re-enters `with_tagged_heap`, mints capability
+        // tokens, or mutates Lisp payloads.
+        unsafe { with_tagged_heap(|heap| heap.reserve_mapped_object_capacity(veclikes, strings)) };
 
         for (_index, record) in self.state.spans.iter() {
             match record {
@@ -909,9 +918,15 @@ impl<'a> LoadDecoder<'a> {
                             )
                         })?;
                         let ptr = mapped_heap.cons_cell_mut(DumpConsSpan { offset: run_start })?;
-                        with_tagged_heap(|heap| unsafe {
-                            heap.register_mapped_cons_range(ptr, run_len);
-                        });
+                        let register = |heap: &mut neovm_value::tagged::gc::TaggedHeap| {
+                            // SAFETY: `ptr..ptr+run_len` is a validated cons
+                            // span in the loaded mapped image.
+                            unsafe { heap.register_mapped_cons_range(ptr, run_len) };
+                        };
+                        // SAFETY: registers mapped cons metadata during serial
+                        // pdump load; never collects, re-enters
+                        // `with_tagged_heap`, or mints capability tokens.
+                        unsafe { with_tagged_heap(register) };
                         Ok(())
                     })?;
                 }
@@ -924,9 +939,15 @@ impl<'a> LoadDecoder<'a> {
                             )
                         })?;
                         let ptr = mapped_heap.float_obj_mut(DumpFloatSpan { offset: run_start })?;
-                        with_tagged_heap(|heap| unsafe {
-                            heap.register_mapped_float_range(ptr, run_len);
-                        });
+                        let register = |heap: &mut neovm_value::tagged::gc::TaggedHeap| {
+                            // SAFETY: `ptr..ptr+run_len` is a validated float
+                            // span in the loaded mapped image.
+                            unsafe { heap.register_mapped_float_range(ptr, run_len) };
+                        };
+                        // SAFETY: registers mapped float metadata during serial
+                        // pdump load; never collects, re-enters
+                        // `with_tagged_heap`, or mints capability tokens.
+                        unsafe { with_tagged_heap(register) };
                         Ok(())
                     })?;
                 }
@@ -938,9 +959,20 @@ impl<'a> LoadDecoder<'a> {
                         )
                     })?;
                     let ptr = mapped_heap.string_obj_mut(span)?;
-                    with_tagged_heap(|heap| unsafe {
-                        heap.register_mapped_string_object(ptr, std::mem::size_of::<StringObj>())
-                    });
+                    let register = |heap: &mut neovm_value::tagged::gc::TaggedHeap| {
+                        // SAFETY: `ptr` is a validated mapped `StringObj` span
+                        // in the loaded image.
+                        unsafe {
+                            heap.register_mapped_string_object(
+                                ptr,
+                                std::mem::size_of::<StringObj>(),
+                            )
+                        }
+                    };
+                    // SAFETY: registers mapped string metadata during serial
+                    // pdump load; never collects, re-enters `with_tagged_heap`,
+                    // or mints capability tokens.
+                    unsafe { with_tagged_heap(register) };
                 }
                 LoadedObjectSpan::Vectorlike { object: span, .. } => {
                     let mapped_heap = mapped_heap.ok_or_else(|| {
@@ -955,9 +987,15 @@ impl<'a> LoadDecoder<'a> {
                             "mapped vectorlike span length overflows usize".into(),
                         )
                     })?;
-                    with_tagged_heap(|heap| unsafe {
-                        heap.register_mapped_veclike_object(ptr, byte_len)
-                    });
+                    let register = |heap: &mut neovm_value::tagged::gc::TaggedHeap| {
+                        // SAFETY: `ptr` addresses `byte_len` validated bytes
+                        // of a mapped veclike object in the loaded image.
+                        unsafe { heap.register_mapped_veclike_object(ptr, byte_len) }
+                    };
+                    // SAFETY: registers mapped veclike metadata during serial
+                    // pdump load; never collects, re-enters `with_tagged_heap`,
+                    // or mints capability tokens.
+                    unsafe { with_tagged_heap(register) };
                 }
                 LoadedObjectSpan::None | LoadedObjectSpan::Unmapped => {}
             }
@@ -970,9 +1008,15 @@ impl<'a> LoadDecoder<'a> {
                 )
             })?;
             let ptr = mapped_heap.cons_cell_mut(DumpConsSpan { offset: run_start })?;
-            with_tagged_heap(|heap| unsafe {
-                heap.register_mapped_cons_range(ptr, run_len);
-            });
+            let register = |heap: &mut neovm_value::tagged::gc::TaggedHeap| {
+                // SAFETY: `ptr..ptr+run_len` is a validated trailing cons span
+                // in the loaded mapped image.
+                unsafe { heap.register_mapped_cons_range(ptr, run_len) };
+            };
+            // SAFETY: registers mapped cons metadata during serial pdump load;
+            // never collects, re-enters `with_tagged_heap`, or mints capability
+            // tokens.
+            unsafe { with_tagged_heap(register) };
             Ok(())
         })?;
         float_run.finish(|run_start, run_len| {
@@ -982,9 +1026,15 @@ impl<'a> LoadDecoder<'a> {
                 )
             })?;
             let ptr = mapped_heap.float_obj_mut(DumpFloatSpan { offset: run_start })?;
-            with_tagged_heap(|heap| unsafe {
-                heap.register_mapped_float_range(ptr, run_len);
-            });
+            let register = |heap: &mut neovm_value::tagged::gc::TaggedHeap| {
+                // SAFETY: `ptr..ptr+run_len` is a validated trailing float span
+                // in the loaded mapped image.
+                unsafe { heap.register_mapped_float_range(ptr, run_len) };
+            };
+            // SAFETY: registers mapped float metadata during serial pdump load;
+            // never collects, re-enters `with_tagged_heap`, or mints capability
+            // tokens.
+            unsafe { with_tagged_heap(register) };
             Ok(())
         })?;
         Ok(())
@@ -1282,7 +1332,8 @@ impl<'a> LoadDecoder<'a> {
                     )
                 })?;
                 let bytes = mapped_heap.bytes(data)?;
-                Ok(unsafe { LispString::from_mapped_bytes(bytes.ptr, bytes.len, size, size_byte) })
+                unsafe { LispString::from_mapped_bytes(bytes.ptr, bytes.len, size, size_byte) }
+                    .map_err(|err| DumpError::ImageFormatError(err.to_string()))
             }
             DumpByteData::StaticRoData { key, len } => {
                 if size_byte != -2 {
@@ -1304,8 +1355,11 @@ impl<'a> LoadDecoder<'a> {
         }
     }
 
+    /// # Safety
+    /// `ptr` must point to a valid, exclusively accessible mapped [`StringObj`]
+    /// whose storage sidecar can be verified or installed for `data`.
     #[doc(hidden)]
-    pub fn install_mapped_string_sidecars(
+    pub unsafe fn install_mapped_string_sidecars(
         &self,
         ptr: *mut StringObj,
         data: &DumpByteData,
@@ -1375,7 +1429,11 @@ impl<'a> LoadDecoder<'a> {
             }
         }
         Ok(Some(unsafe {
-            LispValueVec::mapped(ptr.cast_const(), slots.len())
+            LispValueVec::mapped(
+                ptr.cast::<neovm_value::tagged::header::AtomicTaggedValue>()
+                    .cast_const(),
+                slots.len(),
+            )
         }))
     }
 
@@ -1389,7 +1447,11 @@ impl<'a> LoadDecoder<'a> {
             return Ok(None);
         };
         Ok(Some(unsafe {
-            LispValueVec::mapped(ptr.cast_const(), expected_len)
+            LispValueVec::mapped(
+                ptr.cast::<neovm_value::tagged::header::AtomicTaggedValue>()
+                    .cast_const(),
+                expected_len,
+            )
         }))
     }
 
@@ -1475,7 +1537,8 @@ impl<'a> LoadDecoder<'a> {
         #[cfg(debug_assertions)]
         {
             let data = DumpByteData::Mapped(byte_span);
-            self.install_mapped_string_sidecars(ptr, &data)?;
+            // SAFETY: `ptr` is the live mapped `StringObj` resolved above.
+            unsafe { self.install_mapped_string_sidecars(ptr, &data)? };
         }
         #[cfg(not(debug_assertions))]
         let _ = byte_span;
@@ -1515,35 +1578,56 @@ impl<'a> LoadDecoder<'a> {
         mapped_heap.typed_object_mut::<T>(span, label).map(Some)
     }
 
+    /// Install mapped slot storage on a freshly allocated vector placeholder.
+    ///
+    /// # Safety
+    /// `value` must be a pre-publish pdump restore placeholder with no live
+    /// shared references: this replaces `(*ptr).data` without a GC write
+    /// barrier.
     #[doc(hidden)]
-    pub fn install_mapped_vector_slots(value: Value, storage: LispValueVec) -> bool {
+    pub unsafe fn install_mapped_vector_slots(value: Value, storage: LispValueVec) -> bool {
         if value.veclike_type() != Some(VecLikeType::Vector) {
             return false;
         }
         let ptr = value.as_veclike_ptr().unwrap() as *mut VectorObj;
+        // SAFETY: type check established `VectorObj`; caller guarantees pre-publish exclusivity.
         unsafe {
             (*ptr).data = storage;
         }
         true
     }
 
+    /// Install mapped slot storage on a freshly allocated record placeholder.
+    ///
+    /// # Safety
+    /// `value` must be a pre-publish pdump restore placeholder with no live
+    /// shared references: this replaces `(*ptr).data` without a GC write
+    /// barrier.
     #[doc(hidden)]
-    pub fn install_mapped_record_slots(value: Value, storage: LispValueVec) -> bool {
+    pub unsafe fn install_mapped_record_slots(value: Value, storage: LispValueVec) -> bool {
         if value.veclike_type() != Some(VecLikeType::Record) {
             return false;
         }
         let ptr = value.as_veclike_ptr().unwrap() as *mut RecordObj;
+        // SAFETY: type check established `RecordObj`; caller guarantees pre-publish exclusivity.
         unsafe {
             (*ptr).data = storage;
         }
         true
     }
 
+    /// Install mapped slot storage on a freshly allocated closure placeholder.
+    ///
+    /// # Safety
+    /// `value` must be a pre-publish pdump restore placeholder with no live
+    /// shared references: this clears `(*ptr).parsed_params` (`take()`) and
+    /// replaces `(*ptr).data` without a GC write barrier.
     #[doc(hidden)]
-    pub fn install_mapped_closure_slots(value: Value, storage: LispValueVec) -> bool {
+    pub unsafe fn install_mapped_closure_slots(value: Value, storage: LispValueVec) -> bool {
         match value.veclike_type() {
             Some(VecLikeType::Lambda) => {
                 let ptr = value.as_veclike_ptr().unwrap() as *mut LambdaObj;
+                // SAFETY: type check established `LambdaObj`; caller guarantees pre-publish exclusivity.
                 unsafe {
                     let obj = &mut *ptr;
                     let _ = obj.parsed_params.take();
@@ -1553,6 +1637,7 @@ impl<'a> LoadDecoder<'a> {
             }
             Some(VecLikeType::Macro) => {
                 let ptr = value.as_veclike_ptr().unwrap() as *mut MacroObj;
+                // SAFETY: type check established `MacroObj`; caller guarantees pre-publish exclusivity.
                 unsafe {
                     let obj = &mut *ptr;
                     let _ = obj.parsed_params.take();
@@ -1564,8 +1649,15 @@ impl<'a> LoadDecoder<'a> {
         }
     }
 
+    /// Install restored `ByteCodeFunction` data on a freshly allocated
+    /// bytecode placeholder.
+    ///
+    /// # Safety
+    /// `value` must be a pre-publish pdump restore placeholder with no live
+    /// shared references: this replaces `(*ptr).data` without a GC write
+    /// barrier.
     #[doc(hidden)]
-    pub fn install_restored_bytecode_data(
+    pub unsafe fn install_restored_bytecode_data(
         value: Value,
         data: ByteCodeFunction,
     ) -> Result<(), DumpError> {
@@ -1578,6 +1670,7 @@ impl<'a> LoadDecoder<'a> {
         // This is pdump restore-time initialization of a freshly allocated
         // placeholder.  GNU applies dump relocations directly into restored
         // objects here; no user-observable heap mutation has happened yet.
+        // SAFETY: type check established `ByteCodeObj`; caller guarantees pre-publish exclusivity.
         unsafe {
             (*ptr).data = data;
         }
@@ -1586,16 +1679,30 @@ impl<'a> LoadDecoder<'a> {
 
     /// Restore-time twin of `mutate::install_bytecode_slot_object`: the
     /// object is not yet user-observable (pre-publish), so no barrier.
+    ///
+    /// Returns false when `value` is not a bytecode object. The cast is
+    /// unreachable for any other veclike type.
+    ///
+    /// # Safety
+    /// `value` must be a pre-publish pdump restore placeholder (so skipping
+    /// the GC write barrier is sound).
     #[doc(hidden)]
-    pub fn install_restored_bytecode_slot_object(
+    pub unsafe fn install_restored_bytecode_slot_object(
         value: Value,
         slot: ByteCodeSlotObject,
         object: Value,
-    ) {
-        let ptr = value.as_veclike_ptr().unwrap() as *const ByteCodeObj;
-        // SAFETY: `install_restored_bytecode_data` proved a live byte-code
-        // object; the slot words are atomics.
+    ) -> bool {
+        if value.veclike_type() != Some(VecLikeType::ByteCode) {
+            return false;
+        }
+        let Some(header) = value.as_veclike_ptr() else {
+            return false;
+        };
+        let ptr = header as *const ByteCodeObj;
+        // SAFETY: the type test established a live byte-code object. The
+        // slot words are atomics. Caller guarantees this runs pre-publish.
         unsafe { (*ptr).slot_objects.set(slot, object) };
+        true
     }
 
     #[doc(hidden)]
@@ -1616,8 +1723,10 @@ impl<'a> LoadDecoder<'a> {
         self.state.spans.slots(id.index as usize).is_some()
     }
 
-    #[doc(hidden)]
-    pub fn populate_from_mapped_heap_without_descriptor_clone(
+    /// Populate a pre-publish pdump placeholder directly from mapped heap
+    /// slots without cloning its descriptor. Only valid during restore before
+    /// the object is published to Lisp or GC.
+    pub(crate) fn populate_from_mapped_heap_without_descriptor_clone(
         &mut self,
         id: TaggedHeapRef,
         value: Value,
@@ -1639,7 +1748,8 @@ impl<'a> LoadDecoder<'a> {
                                 "mapped vector object has no mapped slot storage".into(),
                             )
                         })?;
-                    let _ = Self::install_mapped_vector_slots(value, storage);
+                    // SAFETY: `value` is a pre-publish pdump restore placeholder.
+                    let _ = unsafe { Self::install_mapped_vector_slots(value, storage) };
                     return Ok(true);
                 }
             }
@@ -1653,7 +1763,8 @@ impl<'a> LoadDecoder<'a> {
                                 "mapped closure object has no mapped slot storage".into(),
                             )
                         })?;
-                    let _ = Self::install_mapped_closure_slots(value, storage);
+                    // SAFETY: `value` is a pre-publish pdump restore placeholder.
+                    let _ = unsafe { Self::install_mapped_closure_slots(value, storage) };
                     return Ok(true);
                 }
             }
@@ -1667,7 +1778,8 @@ impl<'a> LoadDecoder<'a> {
                                 "mapped record object has no mapped slot storage".into(),
                             )
                         })?;
-                    let _ = Self::install_mapped_record_slots(value, storage);
+                    // SAFETY: `value` is a pre-publish pdump restore placeholder.
+                    let _ = unsafe { Self::install_mapped_record_slots(value, storage) };
                     return Ok(true);
                 }
             }
@@ -1767,19 +1879,24 @@ impl<'a> LoadDecoder<'a> {
                 })?;
                 Value::make_sub_char_table(depth, min_char, vec![Value::NIL; contents.len()])
             }
-            DumpHeapObject::HashTable(ht) => with_tagged_heap(|heap| {
-                // GNU pdumper restores the hash table header first and wires
-                // the key/value arrays via relocation.  This placeholder is
-                // only for identity during graph fixups, so avoid allocating
-                // maps that population immediately replaces.
-                heap.alloc_hash_table(LispHashTable::new_unpopulated_with_options(
-                    load_hash_table_test(&ht.test),
-                    ht.size,
-                    ht.weakness.as_ref().map(load_hash_table_weakness),
-                    ht.rehash_size,
-                    ht.rehash_threshold,
-                ))
-            }),
+            // SAFETY: pure allocation (`alloc_hash_table`) during pdump load;
+            // never collects, sweeps, re-enters `with_tagged_heap`, mints
+            // capability tokens, or mutates existing payloads.
+            DumpHeapObject::HashTable(ht) => unsafe {
+                with_tagged_heap(|heap| {
+                    // GNU pdumper restores the hash table header first and wires
+                    // the key/value arrays via relocation.  This placeholder is
+                    // only for identity during graph fixups, so avoid allocating
+                    // maps that population immediately replaces.
+                    heap.alloc_hash_table(LispHashTable::new_unpopulated_with_options(
+                        load_hash_table_test(&ht.test),
+                        ht.size,
+                        ht.weakness.as_ref().map(load_hash_table_weakness),
+                        ht.rehash_size,
+                        ht.rehash_threshold,
+                    ))
+                })
+            },
             DumpHeapObject::Obarray { buckets, .. } => Value::obarray(buckets.len()),
             // Self-contained: no Lisp children, so the one allocation is the
             // whole restore.
@@ -1801,7 +1918,8 @@ impl<'a> LoadDecoder<'a> {
                         debug_assert_eq!((*ptr).data.schars(), *size);
                         debug_assert_eq!((*ptr).data.size_byte(), *size_byte);
                     }
-                    self.install_mapped_string_sidecars(ptr, data)?;
+                    // SAFETY: `ptr` is the live mapped `StringObj` resolved above.
+                    unsafe { self.install_mapped_string_sidecars(ptr, data)? };
                     unsafe { Value::from_string_ptr(ptr) }
                 } else {
                     let string = self.load_dump_string(data, *size, *size_byte)?;
@@ -1828,7 +1946,10 @@ impl<'a> LoadDecoder<'a> {
                         Value::from_veclike_ptr(ptr.cast::<VecLikeHeader>())
                     }
                 } else {
-                    with_tagged_heap(|heap| heap.alloc_lambda(vec![Value::NIL; len]))
+                    // SAFETY: pure arena allocation (`alloc_lambda`) during
+                    // pdump load; never collects, sweeps, re-enters
+                    // `with_tagged_heap`, or mints capability tokens.
+                    unsafe { with_tagged_heap(|heap| heap.alloc_lambda(vec![Value::NIL; len])) }
                 }
             }
             DumpHeapObject::Macro(slots) => {
@@ -1850,7 +1971,10 @@ impl<'a> LoadDecoder<'a> {
                         Value::from_veclike_ptr(ptr.cast::<VecLikeHeader>())
                     }
                 } else {
-                    with_tagged_heap(|heap| heap.alloc_macro(vec![Value::NIL; len]))
+                    // SAFETY: pure arena allocation (`alloc_macro`) during
+                    // pdump load; never collects, sweeps, re-enters
+                    // `with_tagged_heap`, or mints capability tokens.
+                    unsafe { with_tagged_heap(|heap| heap.alloc_macro(vec![Value::NIL; len])) }
                 }
             }
             DumpHeapObject::ByteCode(_) => {
@@ -1966,7 +2090,10 @@ impl<'a> LoadDecoder<'a> {
                     })?;
                 // A mapped object is written in place instead of allocated by
                 // `alloc_overlay`, so resume the World counter explicitly.
-                with_tagged_heap(|heap| heap.observe_overlay_serial(serial));
+                // SAFETY: updates the heap's overlay serial high-water mark
+                // only; never collects, re-enters `with_tagged_heap`, mints
+                // capability tokens, or mutates Lisp payloads.
+                unsafe { with_tagged_heap(|heap| heap.observe_overlay_serial(serial)) };
                 let data = neovm_value::heap_types::OverlayData::new(
                     serial,
                     Value::NIL,
@@ -2046,8 +2173,11 @@ impl<'a> LoadDecoder<'a> {
     /// `tagged::pdump_image::BytecodeExtras`) — the self-contained replacement for
     /// the object-extra descriptor. Runs after the value-fixup pass, so the
     /// metadata and extra-slot words read as final tagged values.
-    #[doc(hidden)]
-    pub fn populate_bytecode_from_extras(
+    ///
+    /// Crate-private: like `populate_tagged_object`, this invokes unsafe
+    /// pre-publish placeholder installers and must not be exposed to external
+    /// callers after publication.
+    pub(crate) fn populate_bytecode_from_extras(
         &mut self,
         id: TaggedHeapRef,
         value: Value,
@@ -2080,11 +2210,27 @@ impl<'a> LoadDecoder<'a> {
             static STUB_TEMPLATE_ZERO: std::sync::OnceLock<Box<[u8]>> = std::sync::OnceLock::new();
             let template = STUB_TEMPLATE_ZERO
                 .get_or_init(|| crate::emacs_core::pdump::mapped_heap::baked_stub_template(0));
-            let obj_ptr = value.as_veclike_ptr().ok_or_else(|| {
-                DumpError::ImageFormatError(
-                    "bytecode finalize on a value without a veclike pointer".into(),
-                )
-            })? as *const u8;
+            let expected_ptr = self
+                .mapped_typed_object_for_object::<ByteCodeObj>(id, "bytecode")?
+                .ok_or_else(|| {
+                    DumpError::ImageFormatError(format!(
+                        "bytecode extras object {} has no mapped bytecode object span",
+                        id.index
+                    ))
+                })?;
+            if value.veclike_type() != Some(VecLikeType::ByteCode)
+                || value.as_veclike_ptr() != Some(expected_ptr.cast::<VecLikeHeader>())
+            {
+                return Err(DumpError::ImageFormatError(format!(
+                    "bytecode finalize value does not match object {}'s mapped bytecode span",
+                    id.index
+                )));
+            }
+            let obj_ptr = expected_ptr.cast::<u8>();
+            // SAFETY: `mapped_typed_object_for_object::<ByteCodeObj>` proved
+            // `expected_ptr` covers a full `ByteCodeObj` inside `mapped_heap`,
+            // so `data_ptr..data_ptr + template.len()` (`size_of::<ByteCodeFunction>()`)
+            // lies within the validated mapped span.
             let data_ptr = unsafe {
                 obj_ptr.add(std::mem::offset_of!(
                     neovm_value::tagged::header::ByteCodeObj,
@@ -2184,10 +2330,13 @@ impl<'a> LoadDecoder<'a> {
                         "bytecode extras claim a GNU region but the object has no span".into(),
                     )
                 })?;
-            let gnu_offset =
-                u64::try_from(obj_span.offset as i64 + header.gnu_rel).map_err(|_| {
+            let gnu_offset = i64::try_from(obj_span.offset)
+                .ok()
+                .and_then(|base| base.checked_add(header.gnu_rel))
+                .and_then(|off| u64::try_from(off).ok())
+                .ok_or_else(|| {
                     DumpError::ImageFormatError(
-                        "bytecode GNU region offset underflows the heap image".into(),
+                        "bytecode GNU region offset overflows or underflows the heap image".into(),
                     )
                 })?;
             // Structural presence check; decode-level validation happens at
@@ -2209,10 +2358,13 @@ impl<'a> LoadDecoder<'a> {
                         "bytecode extras claim constants but the object has no span".into(),
                     )
                 })?;
-            let const_offset =
-                u64::try_from(obj_span.offset as i64 + header.const_rel).map_err(|_| {
+            let const_offset = i64::try_from(obj_span.offset)
+                .ok()
+                .and_then(|base| base.checked_add(header.const_rel))
+                .and_then(|off| u64::try_from(off).ok())
+                .ok_or_else(|| {
                     DumpError::ImageFormatError(
-                        "bytecode constants offset underflows the heap image".into(),
+                        "bytecode constants offset overflows or underflows the heap image".into(),
                     )
                 })?;
             mapped_heap.slots_mut(
@@ -2272,14 +2424,18 @@ impl<'a> LoadDecoder<'a> {
 
         // (c) Eager-GNU mode: materialize now, exactly as the old load did.
         if crate::emacs_core::bytecode::chunk::eager_gnu_bytecode() {
+            // SAFETY: `value` was just verified above to match `id`'s validated
+            // mapped `ByteCodeObj` span and extras region.
             let function = unsafe { materialize_bytecode_from_extras_at(value) };
-            Self::install_restored_bytecode_data(value, function)?;
+            // SAFETY: `value` is a pre-publish pdump restore placeholder.
+            unsafe { Self::install_restored_bytecode_data(value, function)? };
         }
         Ok(true)
     }
 
-    #[doc(hidden)]
-    pub fn populate_tagged_object(&mut self, id: TaggedHeapRef) -> Result<(), DumpError> {
+    /// Populate `id`'s pre-publish pdump restore placeholder once. Only valid
+    /// during load before placeholders are published to Lisp or GC.
+    pub(crate) fn populate_tagged_object(&mut self, id: TaggedHeapRef) -> Result<(), DumpError> {
         let index = id.index as usize;
         if self.state.is_populated(index) {
             return Ok(());
@@ -2307,11 +2463,13 @@ impl<'a> LoadDecoder<'a> {
             DumpHeapObject::Vector(items) => {
                 let len = self.mapped_slot_count_or(id, items.len())?;
                 if let Some(storage) = self.mapped_slots_for_object_without_copy(id, len)? {
-                    let _ = Self::install_mapped_vector_slots(value, storage);
+                    // SAFETY: `value` is a pre-publish pdump restore placeholder.
+                    let _ = unsafe { Self::install_mapped_vector_slots(value, storage) };
                 } else {
                     let slots: Vec<_> = items.iter().map(|item| self.load_value(item)).collect();
                     if let Some(storage) = self.mapped_slots_for_object(id, &slots)? {
-                        let _ = Self::install_mapped_vector_slots(value, storage);
+                        // SAFETY: `value` is a pre-publish pdump restore placeholder.
+                        let _ = unsafe { Self::install_mapped_vector_slots(value, storage) };
                     } else {
                         let _ = value.replace_vector_data(slots);
                     }
@@ -2445,11 +2603,13 @@ impl<'a> LoadDecoder<'a> {
             DumpHeapObject::Lambda(slots) | DumpHeapObject::Macro(slots) => {
                 let len = self.mapped_slot_count_or(id, slots.len())?;
                 if let Some(storage) = self.mapped_slots_for_object_without_copy(id, len)? {
-                    let _ = Self::install_mapped_closure_slots(value, storage);
+                    // SAFETY: `value` is a pre-publish pdump restore placeholder.
+                    let _ = unsafe { Self::install_mapped_closure_slots(value, storage) };
                 } else {
                     let slots: Vec<_> = slots.iter().map(|slot| self.load_value(slot)).collect();
                     if let Some(storage) = self.mapped_slots_for_object(id, &slots)? {
-                        let _ = Self::install_mapped_closure_slots(value, storage);
+                        // SAFETY: `value` is a pre-publish pdump restore placeholder.
+                        let _ = unsafe { Self::install_mapped_closure_slots(value, storage) };
                     } else {
                         let _ = value.replace_closure_slots(slots);
                     }
@@ -2464,25 +2624,36 @@ impl<'a> LoadDecoder<'a> {
                 let code_object = bc.code_object.take();
                 let constants_object = bc.constants_object.take();
                 let data = load_bytecode_owned(self, bc, mapped)?;
-                Self::install_restored_bytecode_data(value, data)?;
+                // SAFETY: `value` is a pre-publish pdump restore placeholder.
+                unsafe { Self::install_restored_bytecode_data(value, data)? };
                 for (slot, object) in [
                     (ByteCodeSlotObject::Code, code_object),
                     (ByteCodeSlotObject::Constants, constants_object),
                 ] {
                     if let Some(object) = object {
                         let object = self.load_value(&object);
-                        Self::install_restored_bytecode_slot_object(value, slot, object);
+                        // SAFETY: `value` is a pre-publish pdump restore placeholder.
+                        if !unsafe {
+                            Self::install_restored_bytecode_slot_object(value, slot, object)
+                        } {
+                            return Err(DumpError::ImageFormatError(
+                                "pdump bytecode slot object resolved to a non-bytecode object"
+                                    .into(),
+                            ));
+                        }
                     }
                 }
             }
             DumpHeapObject::Record(items) => {
                 let len = self.mapped_slot_count_or(id, items.len())?;
                 if let Some(storage) = self.mapped_slots_for_object_without_copy(id, len)? {
-                    let _ = Self::install_mapped_record_slots(value, storage);
+                    // SAFETY: `value` is a pre-publish pdump restore placeholder.
+                    let _ = unsafe { Self::install_mapped_record_slots(value, storage) };
                 } else {
                     let slots: Vec<_> = items.iter().map(|item| self.load_value(item)).collect();
                     if let Some(storage) = self.mapped_slots_for_object(id, &slots)? {
-                        let _ = Self::install_mapped_record_slots(value, storage);
+                        // SAFETY: `value` is a pre-publish pdump restore placeholder.
+                        let _ = unsafe { Self::install_mapped_record_slots(value, storage) };
                     } else {
                         let _ = value.replace_record_data(slots);
                     }
@@ -2891,7 +3062,7 @@ pub(crate) unsafe fn materialize_bytecode_from_extras_at(value: Value) -> ByteCo
 
     let constants = if header.const_count > 0 {
         let slots_ptr = unsafe { base.offset(header.const_rel as isize) }
-            .cast::<neovm_value::tagged::value::TaggedValue>();
+            .cast::<neovm_value::tagged::header::AtomicTaggedValue>();
         unsafe {
             neovm_value::tagged::header::LispValueVec::mapped(
                 slots_ptr,
@@ -2941,7 +3112,7 @@ pub(crate) unsafe fn materialize_bytecode_from_extras_at(value: Value) -> ByteCo
             extra_slots,
         )
     };
-    if function.gnu_bytecode_bytes.is_some() {
+    if function.gnu_bytecode_bytes().is_some() {
         function
             .restore_gnu_decode_policy()
             .unwrap_or_else(|error| {
@@ -2961,6 +3132,9 @@ pub(crate) unsafe fn materialize_bytecode_from_extras_at(value: Value) -> ByteCo
 #[cold]
 #[inline(never)]
 pub(crate) fn materialize_and_publish_stub(value: Value) {
+    if value.veclike_type() != Some(VecLikeType::ByteCode) {
+        return;
+    }
     let ptr = value
         .as_veclike_ptr()
         .expect("stub materialization requires a bytecode object")
@@ -3110,7 +3284,7 @@ pub(crate) fn dump_bytecode(
     encoder: &mut DumpEncoder,
     bc: &ByteCodeFunction,
 ) -> DumpByteCodeFunction {
-    let instructions = match &bc.gnu_bytecode_bytes {
+    let instructions = match bc.gnu_bytecode_bytes() {
         Some(bytes) => {
             DumpByteCodeInstructions::Gnu(DumpByteData::owned(bytes.as_slice().to_vec()))
         }
@@ -3119,19 +3293,19 @@ pub(crate) fn dump_bytecode(
     DumpByteCodeFunction {
         instructions,
         constants: bc
-            .constants
+            .constants()
             .iter()
             .map(|value| encoder.dump_value(value))
             .collect(),
-        max_stack: bc.max_stack.get() as u64,
-        params: match &bc.params {
+        max_stack: bc.max_stack().get() as u64,
+        params: match bc.params() {
             FunctionParams::Stack(template) => DumpFunctionParams::Stack(template.raw()),
             FunctionParams::Dynamic(_) => DumpFunctionParams::Dynamic,
             FunctionParams::Named(params) => DumpFunctionParams::Named(dump_lambda_params(params)),
         },
-        arglist: Some(encoder.dump_value(&bc.arglist)),
-        lexical: bc.lexical,
-        env: encoder.dump_opt_value(&bc.env),
+        arglist: Some(encoder.dump_value(&bc.arglist())),
+        lexical: bc.lexical(),
+        env: encoder.dump_opt_value(&bc.env()),
         docstring: bc.docstring.as_ref().map(dump_lisp_string),
         doc_form: encoder.dump_opt_value(&bc.doc_form),
         interactive: encoder.dump_opt_value(&bc.interactive),
@@ -3175,10 +3349,27 @@ pub(crate) fn dump_hash_key(encoder: &mut DumpEncoder, k: &HashKey) -> DumpHashK
                 DumpHashKey::Ptr(*p as u64)
             }
         }
-        HashKey::EqualCons(a, b) => DumpHashKey::EqualCons(
-            Box::new(dump_hash_key(encoder, a)),
-            Box::new(dump_hash_key(encoder, b)),
-        ),
+        HashKey::EqualCons(_, _) => {
+            // A proper list is one cdr chain. Recursing on it overflows near
+            // the insert budget. Cars stay recursive; their nesting is the
+            // depth cap.
+            let mut cars = Vec::new();
+            let mut node = k;
+            let tail = loop {
+                match node {
+                    HashKey::EqualCons(car, cdr) => {
+                        cars.push(dump_hash_key(encoder, car));
+                        node = cdr.as_ref();
+                    }
+                    other => break dump_hash_key(encoder, other),
+                }
+            };
+            let mut dumped = tail;
+            while let Some(car) = cars.pop() {
+                dumped = DumpHashKey::EqualCons(Box::new(car), Box::new(dumped));
+            }
+            dumped
+        }
         HashKey::EqualVec(v) => {
             DumpHashKey::EqualVec(v.iter().map(|key| dump_hash_key(encoder, key)).collect())
         }
@@ -3298,7 +3489,7 @@ pub(crate) fn dump_hash_table(encoder: &mut DumpEncoder, ht: &LispHashTable) -> 
 fn dump_closure_slots(encoder: &mut DumpEncoder, value: Value) -> Vec<DumpValue> {
     value
         .closure_slots()
-        .map(|slots| slots.iter().map(|slot| encoder.dump_value(slot)).collect())
+        .map(|slots| slots.iter().map(|slot| encoder.dump_value(&slot)).collect())
         .unwrap_or_default()
 }
 
@@ -3342,7 +3533,7 @@ fn dump_heap_object_from_value(encoder: &mut DumpEncoder, value: Value) -> DumpH
                 .as_vector_data()
                 .expect("vector")
                 .iter()
-                .map(|item| encoder.dump_value(item))
+                .map(|item| encoder.dump_value(&item))
                 .collect(),
         ),
         ValueKind::Veclike(VecLikeType::CharTable) => {
@@ -3423,7 +3614,7 @@ fn dump_heap_object_from_value(encoder: &mut DumpEncoder, value: Value) -> DumpH
                 .as_record_data()
                 .expect("record")
                 .iter()
-                .map(|item| encoder.dump_value(item))
+                .map(|item| encoder.dump_value(&item))
                 .collect(),
         ),
         // A window-configuration is structurally a record; serialize its slots
@@ -3434,7 +3625,7 @@ fn dump_heap_object_from_value(encoder: &mut DumpEncoder, value: Value) -> DumpH
                 .as_window_configuration_data()
                 .expect("window-configuration")
                 .iter()
-                .map(|item| encoder.dump_value(item))
+                .map(|item| encoder.dump_value(&item))
                 .collect(),
         ),
         ValueKind::Veclike(VecLikeType::TsNode) => {
@@ -3637,8 +3828,8 @@ fn dump_symbol_data(
         interned: sd.flags().interned().into(),
         declared_special: sd.flags().declared_special(),
         val,
-        function: encoder.dump_value(&sd.function.get()),
-        plist: encoder.dump_value(&sd.plist.get()),
+        function: encoder.dump_value(&sd.function()),
+        plist: encoder.dump_value(&sd.plist()),
     }
 }
 
@@ -3677,7 +3868,7 @@ fn dump_localized_val(
     // the symbol naming it (or its projection) is alive.
     let (default_val, local_if_set, forwarder) = unsafe {
         let blv = &*blv.as_ptr();
-        let default_val = blv.defcell.get().cons_cdr();
+        let default_val = blv.defcell().cons_cdr();
         (default_val, blv.local_if_set, blv.fwd.map(|fwd| fwd.ty()))
     };
     let default_val = match dynamic_default {
@@ -3957,6 +4148,7 @@ fn dump_buffer(encoder: &mut DumpEncoder, buf: &Buffer) -> DumpBuffer {
         save_modified_tick: Some(buf.save_modified_tick()),
         autosave_modified_tick: Some(buf.autosave_modified_tick()),
         auto_save_failure_time: buf.auto_save_failure_time(),
+        long_line_optimizations_p: buf.long_line_optimizations_p(),
         modtime_sec,
         modtime_nsec,
         modtime_size: buf.modtime_size(),
@@ -5209,7 +5401,7 @@ fn load_bytecode_owned(
                 .collect(),
         )
     };
-    if function.gnu_bytecode_bytes.is_some() {
+    if function.gnu_bytecode_bytes().is_some() {
         function.restore_gnu_decode_policy().map_err(|error| {
             DumpError::DeserializationError(format!("invalid GNU bytecode in pdump: {error}"))
         })?;
@@ -5240,10 +5432,24 @@ pub(crate) fn load_hash_key(decoder: &mut LoadDecoder, k: &DumpHashKey) -> HashK
                 .heap_ref_to_value(TaggedHeapRef { index: *a })
                 .bits(),
         ),
-        DumpHashKey::EqualCons(a, b) => HashKey::EqualCons(
-            Box::new(load_hash_key(decoder, a)),
-            Box::new(load_hash_key(decoder, b)),
-        ),
+        DumpHashKey::EqualCons(_, _) => {
+            let mut cars = Vec::new();
+            let mut node = k;
+            let tail = loop {
+                match node {
+                    DumpHashKey::EqualCons(car, cdr) => {
+                        cars.push(load_hash_key(decoder, car));
+                        node = cdr.as_ref();
+                    }
+                    other => break load_hash_key(decoder, other),
+                }
+            };
+            let mut loaded = tail;
+            while let Some(car) = cars.pop() {
+                loaded = HashKey::EqualCons(Box::new(car), Box::new(loaded));
+            }
+            loaded
+        }
         DumpHashKey::EqualVec(v) => HashKey::EqualVec(
             v.iter()
                 .map(|item| load_hash_key(decoder, item))
@@ -5313,68 +5519,110 @@ fn load_byte_code_key_part(
     }
 }
 
-fn load_hash_key_owned(decoder: &mut LoadDecoder, k: DumpHashKey) -> HashKey {
+fn load_hash_key_owned(decoder: &mut LoadDecoder, mut k: DumpHashKey) -> HashKey {
+    // `DumpHashKey` implements `Drop`, so a by-value match cannot move its
+    // fields out. Drain them through this reference and let the shell drop.
+    load_hash_key_owned_in_place(decoder, &mut k)
+}
+
+fn load_hash_key_owned_in_place(decoder: &mut LoadDecoder, k: &mut DumpHashKey) -> HashKey {
     match k {
         DumpHashKey::Nil => HashKey::Nil,
         DumpHashKey::True => HashKey::True,
-        DumpHashKey::Int(n) => HashKey::Int(n),
-        DumpHashKey::Bignum(limbs) => HashKey::Bignum(limbs.into_boxed_slice()),
-        DumpHashKey::Float(bits) => HashKey::Float(bits),
-        DumpHashKey::FloatEq(bits, id) => HashKey::FloatEq(bits, id),
-        DumpHashKey::Symbol(s) => HashKey::Symbol(load_sym_id(&s)),
-        DumpHashKey::Keyword(s) => HashKey::Keyword(load_sym_id(&s)),
-        DumpHashKey::Str(id) => {
-            HashKey::Ptr(decoder.heap_ref_to_value(tagged_heap_ref(&id)).bits())
-        }
-        DumpHashKey::Char(c) => HashKey::Char(c),
-        DumpHashKey::Window(w) => HashKey::Window(w),
-        DumpHashKey::Frame(f) => HashKey::Frame(f),
-        DumpHashKey::Ptr(p) => HashKey::Ptr(p as usize),
-        DumpHashKey::HeapRef(a) => {
-            HashKey::Ptr(decoder.heap_ref_to_value(TaggedHeapRef { index: a }).bits())
-        }
-        DumpHashKey::EqualCons(a, b) => HashKey::EqualCons(
-            Box::new(load_hash_key_owned(decoder, *a)),
-            Box::new(load_hash_key_owned(decoder, *b)),
+        DumpHashKey::Int(n) => HashKey::Int(*n),
+        DumpHashKey::Bignum(limbs) => HashKey::Bignum(std::mem::take(limbs).into_boxed_slice()),
+        DumpHashKey::Float(bits) => HashKey::Float(*bits),
+        DumpHashKey::FloatEq(bits, id) => HashKey::FloatEq(*bits, *id),
+        DumpHashKey::Symbol(s) => HashKey::Symbol(load_sym_id(s)),
+        DumpHashKey::Keyword(s) => HashKey::Keyword(load_sym_id(s)),
+        DumpHashKey::Str(id) => HashKey::Ptr(decoder.heap_ref_to_value(tagged_heap_ref(id)).bits()),
+        DumpHashKey::Char(c) => HashKey::Char(*c),
+        DumpHashKey::Window(w) => HashKey::Window(*w),
+        DumpHashKey::Frame(f) => HashKey::Frame(*f),
+        DumpHashKey::Ptr(p) => HashKey::Ptr(*p as usize),
+        DumpHashKey::HeapRef(a) => HashKey::Ptr(
+            decoder
+                .heap_ref_to_value(TaggedHeapRef { index: *a })
+                .bits(),
         ),
+        DumpHashKey::EqualCons(car, cdr) => {
+            load_equal_cons_owned(decoder, car.as_mut(), cdr.as_mut())
+        }
         DumpHashKey::EqualVec(v) => HashKey::EqualVec(
-            v.into_iter()
+            std::mem::take(v)
+                .into_iter()
                 .map(|item| load_hash_key_owned(decoder, item))
                 .collect::<Vec<_>>()
                 .into_boxed_slice(),
         ),
         DumpHashKey::ByteCode(parts) => HashKey::ByteCode(
-            parts
+            std::mem::take(parts)
                 .into_iter()
                 .map(|part| load_byte_code_key_part_owned(decoder, part))
                 .collect::<Vec<_>>()
                 .into_boxed_slice(),
         ),
-        DumpHashKey::Marker(buffer, bytepos) => HashKey::Marker(Box::new((buffer, bytepos))),
+        DumpHashKey::Marker(buffer, bytepos) => HashKey::Marker(Box::new((*buffer, *bytepos))),
         DumpHashKey::Overlay {
             buffer,
             start,
             end,
             plist,
-        } => HashKey::Overlay(Box::new((
-            buffer,
-            start,
-            end,
-            load_hash_key_owned(decoder, *plist),
+        } => {
+            let plist = std::mem::replace(plist.as_mut(), DumpHashKey::Nil);
+            HashKey::Overlay(Box::new((
+                *buffer,
+                *start,
+                *end,
+                load_hash_key_owned(decoder, plist),
+            )))
+        }
+        DumpHashKey::BoolVector { nbits, words } => HashKey::BoolVector(Box::new((
+            *nbits as usize,
+            std::mem::take(words).into_boxed_slice(),
         ))),
-        DumpHashKey::BoolVector { nbits, words } => {
-            HashKey::BoolVector(Box::new((nbits as usize, words.into_boxed_slice())))
+        DumpHashKey::SymbolWithPos(sym, pos) => {
+            let sym = std::mem::replace(sym.as_mut(), DumpHashKey::Nil);
+            let pos = std::mem::replace(pos.as_mut(), DumpHashKey::Nil);
+            HashKey::SymbolWithPos(
+                Box::new(load_hash_key_owned(decoder, sym)),
+                Box::new(load_hash_key_owned(decoder, pos)),
+            )
         }
-        DumpHashKey::SymbolWithPos(sym, pos) => HashKey::SymbolWithPos(
-            Box::new(load_hash_key_owned(decoder, *sym)),
-            Box::new(load_hash_key_owned(decoder, *pos)),
-        ),
-        DumpHashKey::Cycle(index) => HashKey::Cycle(index),
+        DumpHashKey::Cycle(index) => HashKey::Cycle(*index),
         DumpHashKey::StringContent(bytes, schars) => {
-            HashKey::string_content(&bytes, schars as usize)
+            HashKey::string_content(std::mem::take(bytes).as_slice(), *schars as usize)
         }
-        DumpHashKey::Text(text) => HashKey::Text(text.into_boxed_str()),
+        DumpHashKey::Text(text) => HashKey::Text(std::mem::take(text).into_boxed_str()),
     }
+}
+
+fn load_equal_cons_owned(
+    decoder: &mut LoadDecoder,
+    car: &mut DumpHashKey,
+    cdr: &mut DumpHashKey,
+) -> HashKey {
+    let mut cars = vec![load_hash_key_owned_in_place(decoder, car)];
+    let mut node = std::mem::replace(cdr, DumpHashKey::Nil);
+    let tail = loop {
+        // End the borrow of `node` before assigning the next cdr into it.
+        let rest = match &mut node {
+            DumpHashKey::EqualCons(next_car, next_cdr) => {
+                cars.push(load_hash_key_owned_in_place(decoder, next_car.as_mut()));
+                Some(std::mem::replace(next_cdr.as_mut(), DumpHashKey::Nil))
+            }
+            _ => None,
+        };
+        match rest {
+            Some(rest) => node = rest,
+            None => break load_hash_key_owned_in_place(decoder, &mut node),
+        }
+    };
+    let mut loaded = tail;
+    while let Some(car) = cars.pop() {
+        loaded = HashKey::EqualCons(Box::new(car), Box::new(loaded));
+    }
+    loaded
 }
 
 fn load_byte_code_key_part_owned(
@@ -6156,7 +6404,8 @@ fn load_buffer(
                         debug_assert!(false, "state marker id {mid} missing from the chain walk");
                         std::ptr::null_mut()
                     });
-                MarkerRef::new(ptr)
+                // SAFETY: the dump decoder's marker table holds the loaded object.
+                unsafe { MarkerRef::new(ptr) }
             };
             Some(neovm_edit::buffer::buffer::BufferStateMarkers {
                 pt_marker: resolve(pt_marker),
@@ -6190,12 +6439,16 @@ fn load_buffer(
         mark_marker: db
             .mark_marker
             .and_then(|id| decoder.state.markers_by_id.get(&id).copied())
-            .map(MarkerRef::new)
+            .map(|ptr| {
+                // SAFETY: the dump decoder's marker table holds the loaded object.
+                unsafe { MarkerRef::new(ptr) }
+            })
             .unwrap_or(MarkerRef::NONE),
         accessible_start: dump_text_position_anchor(begv_char, db.begv),
         accessible_end: dump_text_position_anchor(zv_char, db.zv),
         autosave_modified_tick,
         auto_save_failure_time: db.auto_save_failure_time,
+        long_line_optimizations_p: db.long_line_optimizations_p,
         modtime: neovm_edit::buffer::VisitedFileModtime::from_dump_halves(
             db.modtime_sec,
             db.modtime_nsec,
@@ -7025,6 +7278,12 @@ pub(crate) fn load_charset_registry(decoder: &mut LoadDecoder, dcr: &DumpCharset
             .iso2022_members
             .as_ref()
             .map(|names| names.iter().map(load_sym_id).collect()),
+        // The dump does not carry the in-session Viso epoch. A reload starts
+        // at 0 with an empty bind map, so the first use keeps the dumped
+        // safe vector.
+        iso2022_epoch: 0,
+        iso2022_coding_epochs: Vec::new(),
+        iso2022_coding_members: Vec::new(),
         next_id: dcr.next_id,
         // The binary dump does not carry GNU's `Vcharset_non_preferred_head`
         // boundary; a freshly loaded session reproduces GNU's dumped default

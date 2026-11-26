@@ -69,7 +69,7 @@ fn make_sub_char_table(depth: usize, min_char: i64, init: Value) -> Value {
         vec![init; GNU_CHARTAB_SIZE[depth]],
     )
 }
-fn sub_char_table_contents(value: Value) -> Option<&'static [Value]> {
+fn sub_char_table_contents(value: &Value) -> Option<&[Value]> {
     value
         .as_sub_char_table_obj()
         .map(|obj| obj.contents.as_slice())
@@ -106,13 +106,13 @@ fn char_table_ascii(table: Value, mode: SymbolMode) -> Value {
     if !is_sub_char_table(sub) {
         return sub;
     }
-    sub = sub_char_table_contents(sub)
+    sub = sub_char_table_contents(&sub)
         .and_then(|contents| contents.first().copied())
         .unwrap_or(Value::NIL);
     if !is_sub_char_table(sub) {
         return sub;
     }
-    let val = sub_char_table_contents(sub)
+    let val = sub_char_table_contents(&sub)
         .and_then(|contents| contents.first().copied())
         .unwrap_or(Value::NIL);
     if is_char_code_property_table(&table, mode) && uniprop_compressed_string(val).is_some() {
@@ -627,32 +627,46 @@ pub fn ct_set_single_with_symbols(table: &Value, ch: i64, value: Value, mode: Sy
     );
     char_table_set_char_direct(*table, ch, value, mode);
 }
-fn ct_lookup_ascii_cached(mut obj: &crate::tagged::header::CharTableObj, ch: i64) -> Option<Value> {
+fn ct_lookup_ascii_cached(root: &crate::tagged::header::CharTableObj, ch: i64) -> Option<Value> {
     if !(0..CT_ASCII_CACHE_LEN as i64).contains(&ch) {
         return None;
     }
+    // The caller owns the first table. Each parent is a copied `Value` place,
+    // and the object borrow ends before that place is replaced.
+    let mut held: Option<Value> = None;
     loop {
-        // A single observing projection covers both the type and contents.
-        // No Lisp callback or write separates these adjacent reads.
-        let value = if let Some(ascii) = obj.ascii.get().as_sub_char_table_obj() {
-            ascii
-                .contents
-                .get(ch as usize)
-                .copied()
-                .unwrap_or(Value::NIL)
-        } else {
-            obj.ascii.get()
+        let parent = {
+            let obj = if let Some(value) = held.as_ref() {
+                match value.as_char_table_obj() {
+                    Some(obj) => obj,
+                    None => return Some(Value::NIL),
+                }
+            } else {
+                root
+            };
+            // A single observing projection covers both the type and contents.
+            // No Lisp callback or write separates these adjacent reads.
+            let value = if let Some(ascii) = obj.ascii.get().as_sub_char_table_obj() {
+                ascii
+                    .contents
+                    .get(ch as usize)
+                    .copied()
+                    .unwrap_or(Value::NIL)
+            } else {
+                obj.ascii.get()
+            };
+            if !value.is_nil() {
+                return Some(value);
+            }
+            if !obj.defalt.get().is_nil() {
+                return Some(obj.defalt.get());
+            }
+            obj.parent.get()
         };
-        if !value.is_nil() {
-            return Some(value);
+        if parent.is_nil() {
+            return Some(Value::NIL);
         }
-        if !obj.defalt.get().is_nil() {
-            return Some(obj.defalt.get());
-        }
-        match obj.parent.get().as_char_table_obj() {
-            Some(parent) => obj = parent,
-            None => return Some(Value::NIL),
-        }
+        held = Some(parent);
     }
 }
 
@@ -665,55 +679,69 @@ fn ct_lookup_ascii_cached(mut obj: &crate::tagged::header::CharTableObj, ch: i64
 /// char-table; callers fall back to per-character lookup.
 #[doc(hidden)]
 pub fn ct_ascii_raw_values(table: &Value, out: &mut [Value; CT_ASCII_CACHE_LEN]) -> bool {
-    let Some(mut obj) = table.as_char_table_obj() else {
+    let Some(root) = table.as_char_table_obj() else {
         return false;
     };
+    // Same place rule as `ct_lookup_ascii_cached`: a parent borrow dies with
+    // the temporary `Value` from `parent.get()`, so the next table is owned.
+    let mut held: Option<Value> = None;
     let mut resolved = [false; CT_ASCII_CACHE_LEN];
     let mut remaining = CT_ASCII_CACHE_LEN;
     loop {
-        // Same resolution order as `ct_lookup_ascii_cached`: this table's
-        // ASCII slot, then its default, then the parent chain.
-        let ascii = obj.ascii.get();
-        if let Some(sub) = ascii.as_sub_char_table_obj() {
-            for (cp, slot) in resolved.iter_mut().enumerate() {
-                if !*slot {
-                    let value = sub.contents.get(cp).copied().unwrap_or(Value::NIL);
-                    if !value.is_nil() {
-                        out[cp] = value;
+        let parent = {
+            let obj = if let Some(value) = held.as_ref() {
+                match value.as_char_table_obj() {
+                    Some(obj) => obj,
+                    None => break,
+                }
+            } else {
+                root
+            };
+            // Same resolution order as `ct_lookup_ascii_cached`: this table's
+            // ASCII slot, then its default, then the parent chain.
+            let ascii = obj.ascii.get();
+            if let Some(sub) = ascii.as_sub_char_table_obj() {
+                for (cp, slot) in resolved.iter_mut().enumerate() {
+                    if !*slot {
+                        let value = sub.contents.get(cp).copied().unwrap_or(Value::NIL);
+                        if !value.is_nil() {
+                            out[cp] = value;
+                            *slot = true;
+                            remaining -= 1;
+                        }
+                    }
+                }
+            } else if !ascii.is_nil() {
+                for (cp, slot) in resolved.iter_mut().enumerate() {
+                    if !*slot {
+                        out[cp] = ascii;
                         *slot = true;
                         remaining -= 1;
                     }
                 }
             }
-        } else if !ascii.is_nil() {
-            for (cp, slot) in resolved.iter_mut().enumerate() {
-                if !*slot {
-                    out[cp] = ascii;
-                    *slot = true;
-                    remaining -= 1;
+            if remaining == 0 {
+                break;
+            }
+            let defalt = obj.defalt.get();
+            if !defalt.is_nil() {
+                for (cp, slot) in resolved.iter_mut().enumerate() {
+                    if !*slot {
+                        out[cp] = defalt;
+                        *slot = true;
+                        remaining -= 1;
+                    }
                 }
             }
-        }
-        if remaining == 0 {
-            break;
-        }
-        let defalt = obj.defalt.get();
-        if !defalt.is_nil() {
-            for (cp, slot) in resolved.iter_mut().enumerate() {
-                if !*slot {
-                    out[cp] = defalt;
-                    *slot = true;
-                    remaining -= 1;
-                }
+            if remaining == 0 {
+                break;
             }
-        }
-        if remaining == 0 {
+            obj.parent.get()
+        };
+        if parent.is_nil() {
             break;
         }
-        match obj.parent.get().as_char_table_obj() {
-            Some(parent) => obj = parent,
-            None => break,
-        }
+        held = Some(parent);
     }
     for (cp, slot) in resolved.iter().enumerate() {
         if !*slot {
@@ -1661,6 +1689,63 @@ pub fn char_table_external_slots(table: &Value) -> Option<Vec<Value>> {
 
     table.char_table_external_slots()
 }
+
+/// Read one Lisp field using GNU's pseudovector word indexing. The two
+/// sub-char-table C ints occupy one word on the pinned 64-bit profile;
+/// that metadata word is not itself a Lisp field.
+#[doc(hidden)]
+pub fn char_table_lisp_slot(table: Value, index: usize) -> Option<Value> {
+    if let Some(object) = table.as_char_table_obj() {
+        return match index {
+            0 => Some(object.defalt.get()),
+            1 => Some(object.parent.get()),
+            2 => Some(object.purpose.get()),
+            3 => Some(object.ascii.get()),
+            4..GNU_CHAR_TABLE_STANDARD_SLOTS => {
+                Some(object.contents[index - GNU_CHAR_TABLE_CONTENT_START].get())
+            }
+            _ => object
+                .extras
+                .get(index - GNU_CHAR_TABLE_STANDARD_SLOTS)
+                .copied(),
+        };
+    }
+    let object = table.as_sub_char_table_obj()?;
+    let metadata_words = (2 * size_of::<i32>()).div_ceil(size_of::<Value>());
+    object
+        .contents
+        .get(index.checked_sub(metadata_words)?)
+        .copied()
+}
+
+/// Store a Lisp field without semantic parent validation or ASCII
+/// recomputation, like GNU ASET. Use the fixed-shape barrier capability and
+/// invalidate lookup caches even when an aliased child kept its identity.
+#[doc(hidden)]
+pub fn set_char_table_lisp_slot(table: Value, index: usize, value: Value) -> bool {
+    if char_table_lisp_slot(table, index).is_none() {
+        return false;
+    }
+    bump_char_table_write_tick();
+    if table.is_char_table() {
+        return table
+            .with_char_table_mut(|writer| match index {
+                0 => writer.set_default(value),
+                1 => writer.set_parent(value),
+                2 => writer.set_purpose(value),
+                3 => writer.set_ascii(value),
+                4..GNU_CHAR_TABLE_STANDARD_SLOTS => {
+                    writer.set_contents(index - GNU_CHAR_TABLE_CONTENT_START, value)
+                }
+                _ => writer.set_extra(index - GNU_CHAR_TABLE_STANDARD_SLOTS, value),
+            })
+            .is_some();
+    }
+    let metadata_words = (2 * size_of::<i32>()).div_ceil(size_of::<Value>());
+    table
+        .with_sub_char_table_mut(|writer| writer.set_contents(index - metadata_words, value))
+        .is_some()
+}
 /// `(char-table-subtype TABLE)` -- return the sub-type symbol.
 /// `char-table-p` + subtype check against a symbol name, without the
 /// builtin arg plumbing (two Vec allocs) or the purpose symbol's
@@ -1710,7 +1795,7 @@ pub fn decode_uniprop_run_length(table: Value, value: Value) -> Value {
     }
     value_table
         .as_vector_data()
-        .and_then(|values| values.get(index as usize).copied())
+        .and_then(|values| values.get(index as usize))
         .unwrap_or(value)
 }
 fn decode_unicode_property_map_value(table: Value, value: Value, mode: SymbolMode) -> Value {

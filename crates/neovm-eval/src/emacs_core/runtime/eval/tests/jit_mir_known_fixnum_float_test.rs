@@ -43,10 +43,10 @@ fn probe() -> ByteCodeFunction {
     ];
     let ops = decode_gnu_bytecode(&bytes, &mut constants).expect("GNU bytecode decodes");
     let mut f = ByteCodeFunction::new(parse_arglist_descriptor(514));
-    f.lexical = true;
-    f.ops = ops;
-    f.constants = constants.into();
-    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(7);
+    f.set_lexical(true);
+    f.set_ops(ops);
+    f.set_constants(constants.into());
+    f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(7));
     f
 }
 
@@ -92,7 +92,7 @@ fn a_mir_eligible_float_loop_keeps_the_guard_on_its_cold_add1() {
     // (b) The MIR-level fact, independent of which tier the gate picks.
     let map = bc.executable_gnu_byte_offset_map();
     let reach = crate::emacs_core::jit::compile::MirReach::OFF;
-    let m = mir::build_mir_with_feedback(&ops, &bc.constants, map, 2, reach, &|pc| snapshot[pc])
+    let m = mir::build_mir_with_feedback(&ops, bc.constants(), map, 2, reach, &|pc| snapshot[pc])
         .expect("probe builds as MIR");
     let float_bins: Vec<&mir::MirInst> = m
         .blocks

@@ -45,6 +45,7 @@ fn packed_bool_vectors_round_trip_with_their_identity() {
     let dump_path = dir.path().join("bool-vectors.pdump");
     dump_to_file(&ctx, &dump_path).expect("dump should succeed");
     crate::emacs_core::eval::restore_scratch_gc_roots(scratch_base);
+    drop(ctx);
     let mut loaded = load_from_dump(&dump_path).expect("load should succeed");
 
     assert!(eval(&mut loaded, "pbv-a").is_bool_vector_obj());

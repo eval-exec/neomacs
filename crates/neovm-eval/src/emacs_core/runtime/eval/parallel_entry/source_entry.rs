@@ -111,13 +111,6 @@ pub(crate) fn install_inactive_source_module_probe_for_test() {
 /// The future thread-start dispatcher must choose its functional Baton-serial
 /// route instead. This is not a user-visible failure of an opt-in request.
 #[cold]
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "E2 L3 dormant source-entry observer; no production caller enters it"
-    )
-)]
 pub(crate) fn validate_serial_source_entry(source: &Context) -> Result<(), SourceEntryRefusal> {
     if source.gc_inhibit_depth != 0 {
         return Err(SourceEntryRefusal::GcInhibited);

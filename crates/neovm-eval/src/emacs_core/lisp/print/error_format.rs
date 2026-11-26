@@ -898,7 +898,7 @@ fn format_vector_bytes_in_state(
             out.push(b' ');
         }
         out.extend(format_value_bytes_in_state_with_options(
-            obarray, buffers, frames, threads, item, options,
+            obarray, buffers, frames, threads, &item, options,
         ));
     }
     out.push(b']');
@@ -933,7 +933,7 @@ fn format_record_bytes_in_state(
             out.push(b' ');
         }
         out.extend(format_value_bytes_in_state_with_options(
-            obarray, buffers, frames, threads, item, options,
+            obarray, buffers, frames, threads, &item, options,
         ));
     }
     out.push(b')');

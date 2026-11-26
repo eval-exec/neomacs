@@ -609,21 +609,52 @@ fn tty_rows_observation_reentrant_global_merge_rejects_by_palette_at_equal_count
         .set_symbol_value("rows-palette-probe-gstring", gstring);
     let captured = Rc::new(RefCell::new(None));
     let callback_capture = Rc::clone(&captured);
-    context.font_shape_fn = Some(Box::new(move |context, _, _| {
-        // This is the actual installed font-shaping callback reached by Lisp,
-        // not a test-only producer seal or a fabricated epoch. The callback
-        // warms the recorded dirty table before taking a real Core receipt.
-        assert!(context.sync_runtime_faces_for_frame(frame));
-        let epoch = context.begin_tty_rows_observation(frame, None).unwrap();
-        let count = context.face_change_count_for_test();
-        let cache = &context.frame_manager().get(frame).unwrap().face_realization;
-        let realization = cache.realization_epoch().unwrap();
-        let palette = cache.table(count).unwrap().rows_snapshot_identity();
-        assert!(context.static_rows_observation_current(&epoch).is_ok());
-        assert!(callback_capture.borrow().is_none());
-        *callback_capture.borrow_mut() = Some((epoch, realization, palette, count));
-        font::GstringShapeOutcome::NotShapable
-    }));
+    struct RowsPaletteProbeDriver<F>(F);
+    impl<F: FnMut(&mut Context)> font::FontDriver for RowsPaletteProbeDriver<F> {
+        fn shape_gstring(
+            &mut self,
+            context: &mut Context,
+            _gstring: Value,
+            _direction: Value,
+        ) -> font::GstringShapeOutcome {
+            (self.0)(context);
+            font::GstringShapeOutcome::NotShapable
+        }
+
+        fn glyph_text_metrics(
+            &mut self,
+            _font: Value,
+            _ch: u32,
+        ) -> Option<neovm_value::display_vocab::GlyphTextMetrics> {
+            None
+        }
+
+        fn realized_fontset(
+            &mut self,
+            _eval: &mut Context,
+            _frame_id: FrameId,
+            _window_id: neovm_edit::emacs_core::display_metrics::WindowId,
+            _lisp_pos: i64,
+        ) -> Option<(u32, u64)> {
+            None
+        }
+    }
+    context.font_driver = Some(Box::new(RowsPaletteProbeDriver(
+        move |context: &mut Context| {
+            // This is the actual installed font-shaping callback reached by Lisp,
+            // not a test-only producer seal or a fabricated epoch. The callback
+            // warms the recorded dirty table before taking a real Core receipt.
+            assert!(context.sync_runtime_faces_for_frame(frame));
+            let epoch = context.begin_tty_rows_observation(frame, None).unwrap();
+            let count = context.face_change_count_for_test();
+            let cache = &context.frame_manager().get(frame).unwrap().face_realization;
+            let realization = cache.realization_epoch().unwrap();
+            let palette = cache.table(count).unwrap().rows_snapshot_identity();
+            assert!(context.static_rows_observation_current(&epoch).is_ok());
+            assert!(callback_capture.borrow().is_none());
+            *callback_capture.borrow_mut() = Some((epoch, realization, palette, count));
+        },
+    )));
     assert!(
         context
             .frame_manager()

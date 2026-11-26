@@ -1,0 +1,19 @@
+error[E0382]: use of moved value: `batch`
+  --> tests/pentry_e2_loan_ui/custody_batch_lends_once.rs:14:13
+   |
+12 | fn lend_twice<O: KeeperOps, B: Batch<O>>(batch: B, first: B::Ready, next: B::Ready) {
+   |                                          ----- move occurs because `batch` has type `B`, which does not implement the `Copy` trait
+13 |     let _lent = batch.lend(first);
+   |                       ----------- `batch` moved due to this method call
+14 |     let _ = batch.lend(next);
+   |             ^^^^^ value used here after move
+   |
+note: `Batch::lend` takes ownership of the receiver `self`, which moves `batch`
+  --> tests/pentry_e2_loan_ui/../../../neovm-eval/src/emacs_core/runtime/eval/parallel_entry/driver_core.rs
+   |
+   |     fn lend(self, ready: Self::Ready) -> Result<(O::Ticket, Self::Held), CustodyRefused>;
+   |             ^^^^
+help: consider further restricting type parameter `B` with trait `Copy`
+   |
+12 | fn lend_twice<O: KeeperOps, B: Batch<O> + Copy>(batch: B, first: B::Ready, next: B::Ready) {
+   |                                         ++++++

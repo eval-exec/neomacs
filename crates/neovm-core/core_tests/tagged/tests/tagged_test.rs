@@ -101,7 +101,7 @@ fn alloc_roundtrip_cost_probe() {
         for _ in 0..1000 {
             alloc_one(&mut heap);
         }
-        heap.collect_exact(std::iter::empty());
+        heap.collect_rooted(std::iter::empty());
 
         let t0 = Instant::now();
         for _ in 0..m {
@@ -111,11 +111,11 @@ fn alloc_roundtrip_cost_probe() {
 
         // Free side: empty-roots collection frees all M objects.
         let t1 = Instant::now();
-        heap.collect_exact(std::iter::empty());
+        heap.collect_rooted(std::iter::empty());
         let free_total = t1.elapsed();
         // Baseline: same collection on the now-empty heap (fixed overhead).
         let t2 = Instant::now();
-        heap.collect_exact(std::iter::empty());
+        heap.collect_rooted(std::iter::empty());
         let baseline = t2.elapsed();
         let free_ns = (free_total.saturating_sub(baseline)).as_nanos() as f64 / m as f64;
 

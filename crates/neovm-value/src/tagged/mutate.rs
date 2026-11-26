@@ -3,14 +3,21 @@
 //! These functions apply generational and concurrent write barriers in the
 //! tagged runtime.
 
-use crate::heap_types::{LispMarker, LispString, OverlayData};
+#[cfg(any(test, feature = "test-support"))]
+use crate::heap_types::LispString;
+use crate::heap_types::{LispMarker, OverlayData};
 #[cfg(any(test, feature = "test-support"))]
 use crate::tagged::bytecode::chunk::ByteCodeFunction;
-use crate::value::LispHashTable;
 use crate::value::text_props::TextPropertyTable;
+use crate::value::{HydratedHashTable, LispHashTable};
 
 use super::collection_reads::{StoreState, WriteProjection, record_projected_write_in_store};
-use super::gc::{HeapWriteKind, note_heap_slot_write_in_store, note_heap_write, with_store_state};
+#[cfg(any(test, feature = "test-support"))]
+use super::gc::SerialStringStorageCharge;
+use super::gc::{
+    HeapWriteKind, note_heap_slot_write_in_store, note_heap_write,
+    note_string_backing_allocation_in_store, with_store_state,
+};
 use super::header::{
     BoolVectorObj, ByteCodeObj, ByteCodeSlotObject, ConsCell, HashTableObj, LambdaObj, MacroObj,
     MarkerObj, OverlayObj, RecordObj, StringObj, VecLikeHeader, VecLikeType, VectorObj, XwidgetObj,
@@ -75,7 +82,7 @@ impl LispCollectionRevision {
         }
         super::collection_reads::with_store(|store| {
             let next = store.advance();
-            super::collection_reads::record_write(value, next);
+            super::collection_reads::record_write_in_store(store, value, next);
         });
     }
 }
@@ -301,7 +308,10 @@ pub fn set_compiled_cons_cdr(cell: TaggedValue, value: TaggedValue) -> bool {
     let (lo, hi) = super::collection_reads::compiled_observation_window();
     let observed = lo <= address && address < hi && is_observed(cell.bits());
     if !observed {
-        super::gc::neovm_jit_unobserved_collection_owner(cell.bits() as i64);
+        // SAFETY: `cell` passed the cons check above and is a live word this mutator owns.
+        unsafe {
+            super::gc::neovm_jit_unobserved_collection_owner(cell.bits() as i64);
+        }
     }
     with_store_state(|store| {
         if observed {
@@ -331,7 +341,11 @@ pub fn with_vector_data_mut<R>(
     // (see the heap-side hook) — a single thread-local load, so the idle path pays
     // essentially nothing.
     if super::gc::concurrent_mark_active() {
-        super::gc::with_tagged_heap(|heap| heap.concurrent_clone_on_write_vector(value));
+        // SAFETY: invoked at the exclusive vector bulk-mutation entry point
+        // (no live HeapRef borrow of this vector); clones and retires the old
+        // backing for the concurrent marker without collecting, re-entering
+        // `with_tagged_heap`, or minting capability tokens.
+        unsafe { super::gc::with_tagged_heap(|heap| heap.concurrent_clone_on_write_vector(value)) };
     }
     let ptr = value.as_veclike_ptr().unwrap() as *mut VectorObj;
     #[cfg(any(test, debug_assertions, feature = "test-support"))]
@@ -535,14 +549,20 @@ pub(crate) fn with_string_text_props_mut<R>(
     value: TaggedValue,
     f: impl FnOnce(&mut TextPropertyTable) -> R,
 ) -> Option<R> {
-    LispCollectionRevision::changed(value);
     let ptr = value.as_string_ptr()? as *mut StringObj;
     note_heap_write(value, HeapWriteKind::StringTextProps);
     #[cfg(any(test, debug_assertions, feature = "test-support"))]
     let _guard = HeapMutClosureGuard::enter();
-    Some(f(unsafe { (*ptr).data.intervals_mut() }))
+    // SAFETY: the published string is exclusively borrowed until `f` returns.
+    // The journal sentinel is armed here and recorded by the caller only when
+    // the closure changes property contents. The GC barrier stays first.
+    let table = unsafe { (*ptr).data.intervals_mut() };
+    table.arm_journal_mark();
+    Some(f(table))
 }
 
+/// Fixture-only unrestricted edits; production callers use typed string operations.
+#[cfg(any(test, feature = "test-support"))]
 #[inline]
 pub fn with_lisp_string_mut<R>(
     value: TaggedValue,
@@ -551,9 +571,124 @@ pub fn with_lisp_string_mut<R>(
     LispCollectionRevision::changed(value);
     let ptr = value.as_string_ptr()? as *mut StringObj;
     note_heap_write(value, HeapWriteKind::StringData);
+    // SAFETY: this published string and its serial owner outlive the payload
+    // edit, with no callback or safepoint. Declaring this before the mutation
+    // guard ends the payload loan first, including while unwinding.
+    let _storage_charge = unsafe { SerialStringStorageCharge::new(ptr) };
     #[cfg(any(test, debug_assertions, feature = "test-support"))]
     let _guard = HeapMutClosureGuard::enter();
     Some(f(unsafe { &mut (*ptr).data }))
+}
+
+/// Edit a published string's existing byte extent. A slice cannot replace or
+/// grow its backing; only borrowed bytes need allocation accounting.
+#[inline]
+pub fn with_string_bytes_mut<R>(value: TaggedValue, f: impl FnOnce(&mut [u8]) -> R) -> Option<R> {
+    LispCollectionRevision::changed(value);
+    let ptr = value.as_string_ptr()? as *mut StringObj;
+    note_heap_write(value, HeapWriteKind::StringData);
+    #[cfg(any(test, debug_assertions, feature = "test-support"))]
+    let _guard = HeapMutClosureGuard::enter();
+    // SAFETY: the published string is exclusively borrowed until the closure
+    // ends. No callback, collector safepoint, or escaping payload loan is allowed.
+    let string = unsafe { &mut (*ptr).data };
+    if !string.has_owned_storage() {
+        let allocated = string.materialize_owned_storage();
+        // Bill before invoking f, including when its fixed-size edit unwinds.
+        with_store_state(|store| note_string_backing_allocation_in_store(store, allocated));
+    }
+    Some(string.mutate_fixed_bytes(f))
+}
+
+/// Clear bytes and properties through the published owner's mutation barrier.
+#[inline]
+pub fn clear_string_contents(value: TaggedValue) -> bool {
+    LispCollectionRevision::changed(value);
+    let Some(ptr) = value.as_string_ptr() else {
+        return false;
+    };
+    note_heap_write(value, HeapWriteKind::StringData);
+    #[cfg(any(test, debug_assertions, feature = "test-support"))]
+    let _guard = HeapMutClosureGuard::enter();
+    // SAFETY: this operation has serial access to the initialized string,
+    // with no callback or safepoint before the payload loan ends.
+    let allocated = unsafe {
+        (*ptr.cast_mut())
+            .data
+            .clear_contents_to_unibyte_allocation()
+    };
+    if allocated != 0 {
+        with_store_state(|store| note_string_backing_allocation_in_store(store, allocated));
+    }
+    true
+}
+
+/// Pin published bytecode storage; an owned payload remains in place.
+#[inline]
+pub fn pin_string_immovable(value: TaggedValue) -> bool {
+    LispCollectionRevision::changed(value);
+    let Some(ptr) = value.as_string_ptr() else {
+        return false;
+    };
+    note_heap_write(value, HeapWriteKind::StringData);
+    #[cfg(any(test, debug_assertions, feature = "test-support"))]
+    let _guard = HeapMutClosureGuard::enter();
+    // SAFETY: serial bytecode construction keeps the string live and uniquely
+    // mutated, with no callback, collection, or escaping payload loan.
+    let string = unsafe { &mut (*ptr.cast_mut()).data };
+    if !string.has_owned_storage() {
+        let allocated = string.materialize_owned_storage();
+        with_store_state(|store| note_string_backing_allocation_in_store(store, allocated));
+    }
+    string.pin_immovable();
+    true
+}
+
+/// Remove properties without changing the string's byte backing.
+///
+/// A string with no interval tree returns false and does not journal.
+/// GNU `set_text_properties` returns `Qnil` before `set_string_intervals`
+/// in that case (`src/textprop.c`, emacs-31.1). The absent tree is not a
+/// mutation; journaling it advances `LispCollectionRevision` on the
+/// canonical empty string.
+#[inline]
+pub fn clear_string_intervals(value: TaggedValue) -> bool {
+    if value.is_string() {
+        let ptr = (value.bits() & !TAG_MASK) as *const StringObj;
+        // SAFETY: `is_string` means this word addresses a live `StringObj`.
+        // The load is atomic and records no collection read, so a string that
+        // does have intervals keeps the journal-before-read order below.
+        if unsafe { !(*ptr).data.has_intervals() } {
+            return false;
+        }
+    }
+    LispCollectionRevision::changed(value);
+    let Some(ptr) = value.as_string_ptr() else {
+        return false;
+    };
+    note_heap_write(value, HeapWriteKind::StringTextProps);
+    #[cfg(any(test, debug_assertions, feature = "test-support"))]
+    let _guard = HeapMutClosureGuard::enter();
+    // SAFETY: serial owner access outlives this metadata-only mutation, and
+    // clear_intervals enforces its interval-child SATB preimage barrier.
+    unsafe { (*ptr.cast_mut()).data.clear_intervals() };
+    true
+}
+
+/// Drop a table `intervals_mut` installed when the closure changed nothing.
+///
+/// The string's observable properties are still absent, so this is not a
+/// collection write. The heap barrier still covers the pointer store.
+#[inline]
+pub(crate) fn drop_unmodified_string_intervals(value: TaggedValue) {
+    let Some(ptr) = value.as_string_ptr() else {
+        return;
+    };
+    note_heap_write(value, HeapWriteKind::StringTextProps);
+    #[cfg(any(test, debug_assertions, feature = "test-support"))]
+    let _guard = HeapMutClosureGuard::enter();
+    // SAFETY: same exclusive string borrow as `clear_string_intervals`.
+    unsafe { (*ptr.cast_mut()).data.clear_intervals() };
 }
 
 /// Overwrite one byte of a string's text in place (see
@@ -609,7 +744,12 @@ pub(crate) fn set_string_byte_same_char_count_in_store(
     {
         return false;
     }
-    string.set_byte_same_char_count(byte_pos, byte);
+    if string.has_owned_storage() {
+        string.set_byte_same_char_count(byte_pos, byte);
+    } else {
+        string.set_byte_same_char_count(byte_pos, byte);
+        note_string_backing_allocation_in_store(store, string.owned_capacity());
+    }
     true
 }
 
@@ -623,7 +763,7 @@ pub fn with_hash_table_mut<R>(
     }
     // SAFETY: this mutation contains no collector transition. The caller's
     // closure obeys the ordinary heap-mutation contract, which forbids GC.
-    unsafe { with_hash_table_mut_inactive(value, f) }
+    unsafe { with_hash_table_mut_inactive_metered(value, f) }
 }
 
 /// Base mutation body for a caller that has already rejected Tier-H activation.
@@ -637,19 +777,108 @@ pub(crate) unsafe fn with_hash_table_mut_inactive<R>(
     value: TaggedValue,
     f: impl FnOnce(&mut LispHashTable) -> R,
 ) -> Option<R> {
+    // SAFETY: the caller supplies the inactive mutation contract. Sealed
+    // owners and typed writers retain their own allocation accounting.
+    unsafe { with_hash_table_mut_inactive_impl::<false, R>(value, f) }
+}
+
+/// Generic mutation retains a positive-net storage charge. Validation and
+/// barriers precede the normal snapshot, without repeating type observations.
+///
+/// # Safety
+/// Same inactive-owner and no-callback/no-GC contract as the unmetered entry.
+#[inline]
+pub(crate) unsafe fn with_hash_table_mut_inactive_metered<R>(
+    value: TaggedValue,
+    f: impl FnOnce(&mut LispHashTable) -> R,
+) -> Option<R> {
+    // SAFETY: the caller retains the same serialized payload extent.
+    unsafe { with_hash_table_mut_inactive_impl::<true, R>(value, f) }
+}
+
+#[inline]
+unsafe fn with_hash_table_mut_inactive_impl<const METERED: bool, R>(
+    value: TaggedValue,
+    f: impl FnOnce(&mut LispHashTable) -> R,
+) -> Option<R> {
+    let ptr = prepare_hash_table_mut_inactive(value)?;
+    // SAFETY: validation established this initialized table; the serialized
+    // barrier enumerates pending entries directly and does not hydrate them.
+    if unsafe { (*ptr).table.needs_hydration() } {
+        // SAFETY: the cold scope keeps one net charge over both hydration and
+        // the callback, including replacement with smaller detached storage.
+        return Some(unsafe { with_pending_hash_table_mut::<METERED, R>(ptr, f) });
+    }
+    // SAFETY: the validated table is hydrated, and the caller retains serial
+    // access until the callback's borrow and its accounting guard have ended.
+    Some(unsafe { with_verified_hash_table_mut::<METERED, R>(ptr, f) })
+}
+
+/// Typed writers have already completed the charged read-access hydration.
+/// Keeping that fact in the entry contract avoids preparing a pending-table
+/// callback environment on every already-hydrated edit.
+///
+/// The witness is constructed only inside the existing inactive typed Value
+/// accessor, after hydration and before any callback, GC or owner transition.
+#[inline]
+pub(crate) fn with_hydrated_hash_table_mut_inactive<R>(
+    hydrated: HydratedHashTable<'_>,
+    f: impl FnOnce(&mut LispHashTable) -> R,
+) -> Option<R> {
+    let ptr = prepare_hash_table_mut_inactive(hydrated.into_value())?;
+    // SAFETY: validation established the initialized table; the witness
+    // establishes hydration in the uninterrupted inactive typed extent.
+    debug_assert!(!unsafe { (*ptr).table.needs_hydration() });
+    // SAFETY: the typed capability reports its own growth and cannot replace
+    // the table. Its payload borrow ends before the serialized extent ends.
+    Some(unsafe { with_verified_hash_table_mut::<false, R>(ptr, f) })
+}
+
+/// Keep revision and write-barrier ordering shared by both serial entries.
+///
+#[inline(always)]
+fn prepare_hash_table_mut_inactive(value: TaggedValue) -> Option<*mut HashTableObj> {
     debug_assert!(!super::gc::concurrent_hash_mutation_active());
     LispCollectionRevision::changed(value);
     if value.veclike_type()? != VecLikeType::HashTable {
         return None;
     }
     note_heap_write(value, HeapWriteKind::HashTableData);
-    let ptr = value.as_veclike_ptr().unwrap() as *mut HashTableObj;
+    Some(value.as_veclike_ptr().unwrap() as *mut HashTableObj)
+}
+
+#[cold]
+#[inline(never)]
+unsafe fn with_pending_hash_table_mut<const METERED: bool, R>(
+    ptr: *mut HashTableObj,
+    f: impl FnOnce(&mut LispHashTable) -> R,
+) -> R {
+    let _storage_charge = if METERED {
+        // SAFETY: this guard precedes the first materialization, and its
+        // serialized table extent also covers the verified edit below.
+        Some(unsafe { super::gc::SerialHashTableStorageCharge::new(ptr) })
+    } else {
+        None
+    };
+    // SAFETY: pending hydration precedes publication of the mutable payload.
+    unsafe { (*ptr).table.hydrate_pending() };
+    // SAFETY: the cold outer guard is the sole generic net biller. The inner
+    // debug closure guard ends before this storage guard, also on unwind.
+    unsafe { with_verified_hash_table_mut::<false, R>(ptr, f) }
+}
+
+/// Preserve the original inlined payload-loan body. An opaque forwarding ABI
+/// here spills the callback environment and result storage on every edit.
+///
+/// # Safety
+/// `ptr` names a live, hydrated table in the caller's exclusive inactive-owner
+/// extent. The callback must not call Lisp, collect, or escape its payload loan.
+#[inline(always)]
+unsafe fn with_verified_hash_table_mut<const METERED: bool, R>(
+    ptr: *mut HashTableObj,
+    f: impl FnOnce(&mut LispHashTable) -> R,
+) -> R {
     unsafe {
-        // Lazy dump hydration before the caller sees the table (see
-        // `Value::as_hash_table`).
-        if (*ptr).table.needs_hydration() {
-            (*ptr).table.hydrate_pending();
-        }
         // Whatever `f` does to the table, a `switch` plan compiled from its
         // keys no longer describes it. A wholesale replacement (`*table =
         // other`) installs a table whose cache starts empty.
@@ -662,11 +891,33 @@ pub(crate) unsafe fn with_hash_table_mut_inactive<R>(
     // equal one compiled against this object.
     let epoch = unsafe { (*ptr).table.data.switch_epoch.wrapping_add(1) };
     unsafe { (*ptr).table.data.switch_epoch = epoch };
-    #[cfg(any(test, debug_assertions, feature = "test-support"))]
-    let _guard = HeapMutClosureGuard::enter();
-    let result = f(unsafe { &mut (*ptr).table });
-    unsafe { (*ptr).table.data.switch_epoch = epoch };
-    Some(result)
+    // Both concrete extents use the same payload loan. Expanding its lexical
+    // scope keeps the debug guard inside the metered charge's drop scope,
+    // without constructing an Option<charge> in the unmetered extent.
+    macro_rules! payload_loan {
+        () => {{
+            #[cfg(any(test, debug_assertions, feature = "test-support"))]
+            let _guard = HeapMutClosureGuard::enter();
+            // SAFETY: the caller retains the verified hydrated payload loan.
+            let result = f(unsafe { &mut (*ptr).table });
+            // SAFETY: the loan ended above; restore this table's write epoch.
+            unsafe { (*ptr).table.data.switch_epoch = epoch };
+            result
+        }};
+    }
+    if METERED {
+        // Declare this before the debug closure guard in the payload loan:
+        // reverse-drop must end that extent before accounting reads it again.
+        // Retain the existing metered representation and unwind consumer;
+        // only the unmetered branch needs to omit the optional charge object.
+        // SAFETY: all non-payload bookkeeping is complete; the callback may
+        // replace this table, but its borrow cannot outlive the guard.
+        let _storage_charge = Some(unsafe { super::gc::SerialHashTableStorageCharge::new(ptr) });
+        payload_loan!()
+    } else {
+        // The unmetered extent has no charge object, including on unwind.
+        payload_loan!()
+    }
 }
 
 /// Keep the snapshot, mutation lease and unwind/drop paths in the active clone.
@@ -692,6 +943,9 @@ pub(crate) fn with_hash_table_mut_concurrent<R>(
         super::gc::prepare_concurrent_hash_write(value, guard);
     }
     let ptr = value.as_veclike_ptr().unwrap() as *mut HashTableObj;
+    // SAFETY: serial Tier-H access holds the mutation lease through this
+    // scope; the table's mutable borrow ends before the charge guard drops.
+    let _storage_charge = unsafe { super::gc::SerialHashTableStorageCharge::new(ptr) };
     unsafe {
         // Lazy dump hydration before the caller sees the table (see
         // `Value::as_hash_table`).
@@ -747,6 +1001,34 @@ pub fn install_bytecode_slot_object(
     }
     note_heap_write(value, HeapWriteKind::ByteCodeData);
     objects.set(slot, object);
+    true
+}
+
+/// Install the GNU closure-slot vector `aref` will report for every slot of
+/// a byte-code function, on first use by the reader's substitutions.
+///
+/// The walk stores GNU's `ASET (closure, i, value)` results without mutating
+/// the immutable `ByteCodeFunction`: the vector starts as a snapshot of the
+/// observable slots and later stores go through `set_vector_slot`, which
+/// already runs the write barrier and keeps the GC's view of the vector
+/// sound.  `slot_objects.children()` includes it, so it is traced with the
+/// function.
+///
+/// Returns `false` for a non-bytecode `value` or an already-installed slot
+/// vector.
+pub fn install_bytecode_slots_vector(value: TaggedValue, slots: TaggedValue) -> bool {
+    if value.veclike_type() != Some(VecLikeType::ByteCode) {
+        return false;
+    }
+    let ptr = value.as_veclike_ptr().unwrap() as *const ByteCodeObj;
+    // SAFETY: a live byte-code object (the type test above); the word is an
+    // atomic written through a shared reference.
+    let objects = unsafe { &(*ptr).slot_objects };
+    if !objects.slots_vector().is_nil() {
+        return false;
+    }
+    note_heap_write(value, HeapWriteKind::ByteCodeData);
+    objects.set_slots_vector(slots);
     true
 }
 

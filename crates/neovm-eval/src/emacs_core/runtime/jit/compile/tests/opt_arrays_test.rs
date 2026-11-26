@@ -80,19 +80,19 @@ fn plan(f: &ByteCodeFunction) -> ir::Func {
 }
 fn plan_prefix(f: &ByteCodeFunction, prefix: usize) -> ir::Func {
     let arity = f
-        .params
+        .params()
         .stack_shape()
         .expect("fixture stack parameters")
         .required();
     let cfg = analyze_cfg(
         f.executable_ops(),
-        &f.constants,
+        f.constants(),
         f.executable_gnu_byte_offset_map(),
         arity,
     )
     .unwrap();
     let constants = f
-        .constants
+        .constants()
         .iter()
         .copied()
         .map(ir::ValueBits::from_value)
@@ -115,8 +115,8 @@ fn lower(f: &ByteCodeFunction, ir: &ir::Func) -> CompiledLeaf {
     ir.verify().unwrap();
     let leaf = lower_opt_ir_for_test(
         f.executable_ops(),
-        &f.constants,
-        f.params
+        f.constants(),
+        f.params()
             .stack_shape()
             .expect("fixture stack parameters")
             .required(),
@@ -134,7 +134,7 @@ fn tier0(ctx: &mut Context, f: &ByteCodeFunction, args: &[Value]) -> Result<Valu
 }
 fn native(ctx: &mut Context, f: &ByteCodeFunction, leaf: &CompiledLeaf, args: &[Value]) -> Value {
     let NativeRun::Ok(bits) =
-        leaf.call_consts(ctx as *mut Context as *mut u8, f.constants.as_ptr(), args)
+        (unsafe { leaf.call_consts(ctx as *mut Context as *mut u8, f.constants().as_ptr(), args) })
     else {
         panic!("successful source array case must finish NativeRun::Ok")
     };
@@ -157,7 +157,7 @@ fn parity(
         ctx,
         eval::Inputs {
             args,
-            prefix: &f.constants[..ir.dynamic_prefix],
+            prefix: &f.constants()[..ir.dynamic_prefix],
             ..Default::default()
         },
     )
@@ -210,7 +210,7 @@ fn candidate(
     let _scope = super::snapshot::publish_numeric_feedback_with_arrays(f);
     let hints = super::array_snapshot::admission(
         f.executable_ops().len(),
-        &f.constants,
+        f.constants(),
         before.dynamic_prefix,
     );
     let mut after = before.clone();
@@ -374,7 +374,7 @@ fn opt_range_native_actual_vector_record_arefs_elide_current_bounds_and_keep_err
         ctx.obarray.set_symbol_value("t34-o335-side", Value::NIL);
         // Original native errors are checked independently, including existing
         // baseline signal protocol; frame omissions are kept in frozen67 report.
-        match baseline.call(&mut ctx as *mut Context as *mut u8, &args) {
+        match unsafe { baseline.call(&mut ctx as *mut Context as *mut u8, &args) } {
             NativeRun::Signal => {
                 let flow = super::shims::take_pending_flow().unwrap();
                 assert_eq!(
@@ -392,7 +392,8 @@ fn opt_range_native_actual_vector_record_arefs_elide_current_bounds_and_keep_err
             other => panic!("baseline Aref outcome must be its ordinary success/signal: {other:?}"),
         }
         ctx.obarray.set_symbol_value("t34-o335-side", Value::NIL);
-        let NativeRun::DeoptAt(exit) = optimized.call(&mut ctx as *mut Context as *mut u8, &args)
+        let NativeRun::DeoptAt(exit) =
+            (unsafe { optimized.call(&mut ctx as *mut Context as *mut u8, &args) })
         else {
             panic!("wrong shape/index/bounds leaves through original Aref snapshot")
         };
@@ -758,7 +759,7 @@ fn opt_range_native_array_singleton_shape_guard_preserves_exact_word_identity() 
     // missing native opcode/layout/frame failure cannot make this test pass.
     let selected = match lower_opt_ir_for_test(
         source.executable_ops(),
-        &source.constants,
+        source.constants(),
         1,
         source.executable_gnu_byte_offset_map(),
         &after,
@@ -772,11 +773,13 @@ fn opt_range_native_array_singleton_shape_guard_preserves_exact_word_identity() 
         print_value(&native(&mut ctx, &source, &selected, &[expected_array])),
         print_value(&expected)
     );
-    let NativeRun::DeoptAt(native_exit) = selected.call_consts(
-        &mut ctx as *mut Context as *mut u8,
-        source.constants.as_ptr(),
-        &[distinct_array],
-    ) else {
+    let NativeRun::DeoptAt(native_exit) = (unsafe {
+        selected.call_consts(
+            &mut ctx as *mut Context as *mut u8,
+            source.constants().as_ptr(),
+            &[distinct_array],
+        )
+    }) else {
         panic!("native shape guard accepted a different vector under exact singleton TypeSet")
     };
     assert_eq!(native_exit.pc as u32, reference_exit.pc);

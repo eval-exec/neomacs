@@ -1099,3 +1099,118 @@ fn green_kill_and_remake_a_local_rebound_inside_backtrace_exchange() {
         expect_test::expect![[r#""OK ((bound (exchange-bound default remade) bound) local t)""#]],
     );
 }
+
+/// Cut-4b: a worker's selection calls keep GNU's batch-visible values. In
+/// `emacs -Q --batch` the default backend methods are no-ops, so this pins
+/// the Lisp contract (no thread-affine error; `gui-get-selection` nil,
+/// `gui-set-selection` returns DATA) rather than a host effect; the routed
+/// boundary itself is covered by the selection unit rows.
+#[test]
+fn green_worker_selection_calls_keep_gnu_batch_values() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+    assert_green_oracle(
+        r##"
+(let* ((get (make-thread (lambda () (gui-get-selection 'PRIMARY))))
+       (set (make-thread (lambda () (gui-set-selection 'PRIMARY "x")))))
+  (list (thread-join get) (thread-join set)))
+"##,
+        expect_test::expect![[r#""OK (nil \"x\")""#]],
+    );
+}
+
+// E4-P1 C4: Plain dynamic-binding histories across `make-thread`. GNU 31.1
+// (attested) answers; the same four forms also print these values on the
+// Neomacs release binary. `default-value` on a Plain variable follows the
+// current dynamic binding while let-bound (data.c:1962-1975) and exposes the
+// latest global after unlet; a local void binding is local to its thread
+// (eval.c:2584-2592, data.c:1645-1657).
+#[test]
+fn green_thread_local_let_does_not_cross_threads() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+    assert_green_oracle(
+        r##"
+(progn
+  (defvar neovm-c4-let)
+  (setq neovm-c4-let 'global)
+  (list (let ((neovm-c4-let 'main))
+          (list (thread-join (make-thread (lambda () neovm-c4-let) "c4-let"))
+                neovm-c4-let
+                (default-value 'neovm-c4-let)))
+        neovm-c4-let
+        (default-value 'neovm-c4-let)))
+"##,
+        expect_test::expect![[r#""OK ((global main main) global global)""#]],
+    );
+}
+
+#[test]
+fn green_cross_thread_setq_exposes_the_latest_global_after_unlet() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+    assert_green_oracle(
+        r##"
+(progn
+  (defvar neovm-c4-setq)
+  (setq neovm-c4-setq 'global)
+  (list (let ((neovm-c4-setq 'main))
+          (list (thread-join
+                 (make-thread (lambda ()
+                                (setq neovm-c4-setq 'worker)
+                                neovm-c4-setq)
+                              "c4-setq"))
+                neovm-c4-setq
+                (default-value 'neovm-c4-setq)))
+        neovm-c4-setq
+        (default-value 'neovm-c4-setq)))
+"##,
+        expect_test::expect![[r#""OK ((worker main main) worker worker)""#]],
+    );
+}
+
+#[test]
+fn green_cross_thread_set_default_exposes_the_latest_global_after_unlet() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+    assert_green_oracle(
+        r##"
+(progn
+  (defvar neovm-c4-def2)
+  (setq neovm-c4-def2 'global)
+  (list (let ((neovm-c4-def2 'main))
+          (list (thread-join
+                 (make-thread (lambda ()
+                                (set-default 'neovm-c4-def2 'worker)
+                                (list (default-value 'neovm-c4-def2)
+                                      neovm-c4-def2))
+                              "c4-def2"))
+                neovm-c4-def2
+                (default-value 'neovm-c4-def2)))
+        neovm-c4-def2
+        (default-value 'neovm-c4-def2)
+        (default-boundp 'neovm-c4-def2)))
+"##,
+        expect_test::expect![[r#""OK (((worker worker) main main) worker worker t)""#]],
+    );
+}
+
+#[test]
+fn green_local_void_stays_local_and_the_worker_sees_global() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+    assert_green_oracle(
+        r##"
+(progn
+  (defvar neovm-c4-void3)
+  (setq neovm-c4-void3 'global)
+  (list (let ((neovm-c4-void3 'main))
+          (makunbound 'neovm-c4-void3)
+          (list (condition-case e neovm-c4-void3
+                  (void-variable (list 'void-variable (cdr e))))
+                (thread-join (make-thread (lambda () neovm-c4-void3) "c4-void3"))
+                (default-boundp 'neovm-c4-void3)
+                (boundp 'neovm-c4-void3)))
+        neovm-c4-void3
+        (default-value 'neovm-c4-void3)))
+"##,
+        expect_test::expect![[
+            r#""OK (((void-variable (neovm-c4-void3)) global nil nil) global global)""#
+        ]],
+    );
+}

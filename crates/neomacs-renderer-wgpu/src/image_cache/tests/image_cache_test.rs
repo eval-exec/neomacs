@@ -137,7 +137,7 @@ fn ready_and_failed_terminals_consume_their_active_generations() {
     assert!(matches!(
         loads.take_current(WorkerDecodeOutcome::Failed {
             load: failed,
-            diagnostic: test_diagnostic()
+            failure: ImageDecodeFailure::new(test_diagnostic())
         }),
         Some(WorkerDecodeOutcome::Failed { .. })
     ));
@@ -147,7 +147,7 @@ fn ready_and_failed_terminals_consume_their_active_generations() {
         loads
             .take_current(WorkerDecodeOutcome::Failed {
                 load: failed,
-                diagnostic: test_diagnostic()
+                failure: ImageDecodeFailure::new(test_diagnostic())
             })
             .is_none()
     );
@@ -306,6 +306,174 @@ fn decoded_opaque_png_reports_gnu_corner_background_without_lisp_background() {
 }
 
 #[test]
+fn png_mask_identity_comes_from_encoded_transparency_in_whole_and_banded_decodes() {
+    // GNU png_load_body (image.c:8407-8423,8507-8513) creates a mask
+    // from binary tRNS, even when a transparent palette entry is unused.
+    // Native alpha and partial tRNS never create that mask, even when the
+    // pixels actually used by the image happen to have only binary alpha.
+    let cases = [
+        (
+            "rgba-binary",
+            png::ColorType::Rgba,
+            None,
+            &[12, 34, 56, 0, 65, 43, 21, 255][..],
+            ImageMaskKind::AlphaChannel,
+        ),
+        (
+            "rgba-opaque",
+            png::ColorType::Rgba,
+            None,
+            &[12, 34, 56, 255, 65, 43, 21, 255][..],
+            ImageMaskKind::AlphaChannel,
+        ),
+        (
+            "gray-alpha-binary",
+            png::ColorType::GrayscaleAlpha,
+            None,
+            &[12, 0, 34, 255][..],
+            ImageMaskKind::AlphaChannel,
+        ),
+        (
+            "rgb-trns",
+            png::ColorType::Rgb,
+            Some(&[0, 12, 0, 34, 0, 56][..]),
+            &[12, 34, 56, 65, 43, 21][..],
+            ImageMaskKind::Clipping,
+        ),
+        (
+            "gray-trns",
+            png::ColorType::Grayscale,
+            Some(&[0, 128][..]),
+            &[128, 255][..],
+            ImageMaskKind::Clipping,
+        ),
+        (
+            "palette-binary",
+            png::ColorType::Indexed,
+            Some(&[0, 255, 255][..]),
+            &[0, 1][..],
+            ImageMaskKind::Clipping,
+        ),
+        (
+            "palette-unused-transparent",
+            png::ColorType::Indexed,
+            Some(&[0, 255, 255][..]),
+            &[1, 2][..],
+            ImageMaskKind::Clipping,
+        ),
+        (
+            "palette-opaque-trns",
+            png::ColorType::Indexed,
+            Some(&[255, 255, 255][..]),
+            &[0, 1][..],
+            ImageMaskKind::Clipping,
+        ),
+        (
+            "palette-unused-partial",
+            png::ColorType::Indexed,
+            Some(&[0, 128, 255][..]),
+            &[0, 2][..],
+            ImageMaskKind::AlphaChannel,
+        ),
+        (
+            "rgb-opaque",
+            png::ColorType::Rgb,
+            None,
+            &[12, 34, 56, 65, 43, 21][..],
+            ImageMaskKind::None,
+        ),
+    ];
+    for (name, color, trns, pixels, expected) in cases {
+        let data = png_mask_fixture(color, trns, pixels);
+        let whole = ImageCache::decode_data_with_metadata(
+            &data,
+            ImageSizeSpec::default(),
+            ImageRotation::None,
+            (0, 0),
+        )
+        .expect(name);
+        assert_eq!(whole.metadata.mask, expected, "whole {name}");
+
+        let BandSource::Banded(mut source) = BandSource::open_forced(
+            EncodedBytes::copy_of(&data),
+            ImageSizeSpec::default(),
+            ImageRealization::default(),
+        ) else {
+            panic!("{name} has a row-wise PNG decoder");
+        };
+        loop {
+            match source.next_band() {
+                BandStep::Band(_) => {}
+                BandStep::Done => break,
+                BandStep::Failed => panic!("{name} banded decode failed"),
+            }
+        }
+        let raster = source.into_raster().expect(name);
+        assert_eq!(raster.mask(), expected, "banded {name}");
+        assert_eq!(raster.into_rgba(), whole.data, "pixels {name}");
+    }
+}
+
+fn png_mask_fixture(color: png::ColorType, trns: Option<&[u8]>, pixels: &[u8]) -> Vec<u8> {
+    let mut data = Vec::new();
+    {
+        let mut encoder = png::Encoder::new(&mut data, 2, 1);
+        encoder.set_color(color);
+        encoder.set_depth(png::BitDepth::Eight);
+        if color == png::ColorType::Indexed {
+            encoder.set_palette(vec![12, 34, 56, 65, 43, 21, 78, 90, 12]);
+        }
+        if let Some(trns) = trns {
+            encoder.set_trns(trns.to_vec());
+        }
+        let mut writer = encoder.write_header().expect("PNG header");
+        writer.write_image_data(pixels).expect("PNG pixels");
+        writer.finish().expect("PNG finish");
+    }
+    data
+}
+
+#[test]
+fn png_mask_suppression_clears_trns_clipping_but_preserves_native_binary_alpha() {
+    for (name, data, expected, alphas) in [
+        (
+            "native alpha",
+            png_mask_fixture(
+                png::ColorType::Rgba,
+                None,
+                &[12, 34, 56, 0, 65, 43, 21, 255],
+            ),
+            ImageMaskKind::AlphaChannel,
+            [0, 255],
+        ),
+        (
+            "tRNS clipping",
+            png_mask_fixture(png::ColorType::Indexed, Some(&[0, 255, 255]), &[0, 1]),
+            ImageMaskKind::None,
+            [255, 255],
+        ),
+    ] {
+        let decoded = ImageCache::decode_data(
+            EncodedBytes::copy_of(&data),
+            ImageSizeSpec::default(),
+            ImageRotation::None,
+            ImageColorContext::default(),
+            ImageRealization::default(),
+            ImageMaskPolicy::Suppress,
+            ImageAnimationPolicy::disabled(),
+            ImageFrameIndex::default(),
+            crate::svg::SvgResourceContext::Isolated,
+            &ImageSequenceCache::new(),
+            ImageSequenceId::new(1).expect("test sequence"),
+            None,
+        )
+        .expect(name);
+        assert_eq!(decoded.mask, expected, "{name}");
+        assert_eq!([decoded.rgba[3], decoded.rgba[7]], alphas, "{name}");
+    }
+}
+
+#[test]
 fn decoded_transparent_png_stays_transparent_with_explicit_lisp_background() {
     let data = png_bytes([0x12, 0x34, 0x56, 0x00].repeat(4), 2, 2);
     let decoded = ImageCache::decode_data_with_metadata(
@@ -317,7 +485,9 @@ fn decoded_transparent_png_stays_transparent_with_explicit_lisp_background() {
     .unwrap();
 
     assert!(decoded.metadata.background_transparent);
-    assert_eq!(decoded.metadata.mask, ImageMaskKind::Clipping);
+    // The attested native-RGBA probe returns nil from image-mask-p: GNU
+    // creates PNG clipping only from binary tRNS (image.c:8407-8423).
+    assert_eq!(decoded.metadata.mask, ImageMaskKind::AlphaChannel);
     assert_ne!(decoded.metadata.background, 0xaa_bb_cc);
 }
 
@@ -337,13 +507,18 @@ fn decoded_partial_alpha_is_not_misreported_as_a_clipping_mask() {
 }
 
 #[test]
-fn mask_suppression_removes_alpha_and_mask_identity() {
+fn mask_suppression_removes_clipping_alpha_and_mask_identity() {
     let mut rgba = vec![
         0x12, 0x34, 0x56, 0x00, 0x12, 0x34, 0x56, 0xff, 0x12, 0x34, 0x56, 0xff, 0x12, 0x34, 0x56,
         0x00,
     ];
 
-    let mask = apply_mask_policy(&mut rgba, (2, 2), ImageMaskPolicy::Suppress);
+    let mask = apply_mask_policy(
+        &mut rgba,
+        (2, 2),
+        ImageMaskKind::Clipping,
+        ImageMaskPolicy::Suppress,
+    );
 
     assert_eq!(mask, ImageMaskKind::None);
     assert!(rgba.iter().skip(3).step_by(4).all(|alpha| *alpha == 255));
@@ -353,7 +528,12 @@ fn mask_suppression_removes_alpha_and_mask_identity() {
 fn mask_suppression_does_not_discard_continuous_alpha() {
     let mut rgba = vec![0x12, 0x34, 0x56, 0x80];
 
-    let mask = apply_mask_policy(&mut rgba, (1, 1), ImageMaskPolicy::Suppress);
+    let mask = apply_mask_policy(
+        &mut rgba,
+        (1, 1),
+        ImageMaskKind::AlphaChannel,
+        ImageMaskPolicy::Suppress,
+    );
 
     assert_eq!(mask, ImageMaskKind::AlphaChannel);
     assert_eq!(rgba[3], 0x80);
@@ -369,6 +549,7 @@ fn heuristic_mask_builds_a_binary_clip_from_the_corner_background() {
     let mask = apply_mask_policy(
         &mut rgba,
         (2, 2),
+        ImageMaskKind::AlphaChannel,
         ImageMaskPolicy::Heuristic(ImageHeuristicMask::FourCorners),
     );
 
@@ -386,6 +567,7 @@ fn heuristic_mask_accepts_gnu_sixteen_bit_rgb_components() {
     let mask = apply_mask_policy(
         &mut rgba,
         (2, 1),
+        ImageMaskKind::None,
         ImageMaskPolicy::Heuristic(ImageHeuristicMask::Rgb16([65535, 32896, 0])),
     );
 
@@ -2719,4 +2901,58 @@ fn disabled_animation_policy_never_serves_a_warmed_computed_sequence() {
     let cold_disabled = decode(&ImageSequenceCache::new(), ImageAnimationPolicy::disabled());
     assert_ne!(warmed.rgba, disabled_after.rgba);
     assert_eq!(cold_disabled.rgba, disabled_after.rgba);
+}
+
+#[test]
+fn png_empty_indexed_trns_is_ignored_before_mask_classification() {
+    // GNU libpng ignores this invalid ancillary chunk. png 0.18's
+    // start_chunk accepts tRNS lengths 1..=256 and rejects (skips) length 0
+    // before parse_trns can populate Info::trns.
+    let data = png_mask_fixture(png::ColorType::Indexed, Some(&[]), &[0, 1]);
+    assert!(data.windows(8).any(|bytes| bytes == b"\0\0\0\0tRNS"));
+    let reader = png::Decoder::new(Cursor::new(&data)).read_info().unwrap();
+    assert!(reader.info().trns.is_none());
+    let decoded = ImageCache::decode_data_with_metadata(
+        &data,
+        ImageSizeSpec::default(),
+        ImageRotation::None,
+        (0, 0),
+    )
+    .unwrap();
+    assert_eq!(decoded.metadata.mask, ImageMaskKind::None);
+}
+
+/// A wholesale clear must release every resident image from the media budget:
+/// each texture was charged when it was created, and the budget drives live
+/// eviction decisions for other media.
+#[test]
+fn clearing_the_cache_frees_every_resident_image_accounting() {
+    use crate::media_budget::{MediaAccounting, MediaBudget, MediaType};
+    let ids = [ImageId::new(3), ImageId::new(7), ImageId::new(11)];
+    let mut budget = MediaBudget::new();
+    for (image, bytes) in ids.iter().zip([60usize, 8, 24]) {
+        budget.register(MediaType::Image, image.get(), bytes);
+    }
+    assert_eq!(budget.current_usage(), 92);
+
+    let freed = ImageCache::cleared_image_accounting(ids.iter());
+    assert_eq!(freed.len(), ids.len(), "one Free per resident image");
+    assert!(
+        freed.iter().all(|event| matches!(
+            event,
+            MediaAccounting::Freed {
+                media_type: MediaType::Image,
+                ..
+            }
+        )),
+        "every event must free an image: {freed:?}"
+    );
+    for event in freed {
+        budget.apply(event);
+    }
+    assert_eq!(
+        budget.current_usage(),
+        0,
+        "a cleared image cache holds no budgeted image bytes"
+    );
 }

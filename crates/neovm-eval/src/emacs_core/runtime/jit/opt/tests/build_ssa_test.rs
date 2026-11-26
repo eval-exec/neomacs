@@ -818,9 +818,9 @@ fn opt_ssa_fused_v2_regions_intern_exact_caller_replay_frames() {
         optional: vec![],
         rest: None,
     });
-    callee.lexical = true;
-    callee.ops = vec![Op::Dup, Op::CarSafe, Op::Return];
-    callee.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(8);
+    callee.set_lexical(true);
+    callee.set_ops(vec![Op::Dup, Op::CarSafe, Op::Return]);
+    callee.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(8));
     callee.seal_hand_assembled_ops_for_test();
     callee.jit_runtime().set_hot_for_test();
     let constants = [LispValue::make_bytecode(callee)];

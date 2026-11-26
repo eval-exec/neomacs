@@ -1,5 +1,6 @@
 use super::*;
 use crate::display_property::DisplayPropertyObject;
+use crate::string_property_snapshot::StringSourceRootScope;
 use neomacs_display_protocol::VideoId;
 
 fn test_image_load(id: u32) -> neomacs_display_protocol::ImageLoadToken {
@@ -479,7 +480,7 @@ impl DisplayHost for RecordingAppendImageHost {
         &self,
         _request: ImageResolveRequest,
         _limit: neovm_core::emacs_core::image_catalog::ImageSizeLimit,
-    ) -> Result<Option<ReadyImage>, String> {
+    ) -> neovm_core::emacs_core::image_catalog::ImageSyncResolution {
         panic!("append display source rendering must not use synchronous image resolution");
     }
 
@@ -837,6 +838,7 @@ fn display_row_transition_request_context_builds_line_break_and_overflow_request
     assert_eq!(transition, DisplayTextRowTransition::BeganNextRow);
     assert_eq!(line_ctx.geometry.row(), 1);
     assert_eq!(line_ctx.row_y_positions.recorded(), &[0.0, 20.0]);
+    drop(line_ctx);
 
     let mut wrap_ctx = RowTransitionTestContext::new("transition-context-overflow");
     let DisplaySourceTextCharOverflowAction::CharacterWrap { transition } =
@@ -909,6 +911,7 @@ fn display_row_text_window_transition_context_emits_line_break_and_overflow() {
     assert_eq!(transition, DisplayTextRowTransition::BeganNextRow);
     assert_eq!(line_ctx.geometry.row(), 1);
     assert_eq!(line_ctx.row_y_positions.recorded(), &[0.0, 18.0]);
+    drop(line_ctx);
 
     let mut overflow_ctx = RowTransitionTestContext::new("text-window-transition-overflow");
     let DisplaySourceTextCharOverflowAction::CharacterWrap { transition } =
@@ -1337,7 +1340,14 @@ fn buffer_hscroll_skip_render_request_appends_left_truncation_marker() {
         .expect("current buffer")
         .id();
     let snapshot = current_buffer_snapshot(&context.eval, buf_id);
-    let mut source_walk = BufferSourceWalk::new(buf_id, &snapshot, 0, 0);
+    let mut source_walk = BufferSourceWalk::new_for_window(
+        buf_id,
+        &snapshot,
+        None,
+        0,
+        0,
+        StringSourceRootScope::Rooted(context.eval.owned_root_retainer()),
+    );
 
     let continuation = BufferSourceHscrollSkipRenderContext::new(
         b"\tabc",
@@ -2006,7 +2016,14 @@ fn buffer_invisible_text_render_request_appends_ellipsis_and_captures_cursor() {
     let mut trailing_whitespace = TrailingWhitespaceRenderState::new(false, 0);
     let mut face_scan = FaceScanCheckpoint::initial();
     let mut font_metrics = None;
-    let mut source_walk = BufferSourceWalk::new(buf_id, &snapshot, 0, 0);
+    let mut source_walk = BufferSourceWalk::new_for_window(
+        buf_id,
+        &snapshot,
+        None,
+        0,
+        0,
+        StringSourceRootScope::Rooted(context.eval.owned_root_retainer()),
+    );
 
     let outcome = BufferSourceInvisibleTextRenderContext::new(
         b"folded rest",
@@ -2216,12 +2233,14 @@ fn buffer_text_source_consumption_state_preserves_single_char_source_item() {
         buffer.insert("a");
     }
     let snapshot = current_buffer_snapshot(&eval, buf_id);
-    let mut cursor = BufferTextSourceCursor::new(
+    let mut cursor = BufferTextSourceCursor::new_for_window(
         buf_id,
         &snapshot,
+        None,
         CharPos0::new(0),
         CharPos0::new(1),
         RenderFaceRef::Inherit,
+        StringSourceRootScope::Rooted(eval.owned_root_retainer()),
     );
     let item = cursor
         .next_item(&mut DisplaySourceContext::empty())
@@ -2268,12 +2287,14 @@ fn buffer_text_source_consumption_state_can_return_full_text_run_item() {
         buffer.insert("abcdefghij");
     }
     let snapshot = current_buffer_snapshot(&eval, buf_id);
-    let mut cursor = BufferTextSourceCursor::new(
+    let mut cursor = BufferTextSourceCursor::new_for_window(
         buf_id,
         &snapshot,
+        None,
         CharPos0::new(0),
         CharPos0::new(3),
         RenderFaceRef::Inherit,
+        StringSourceRootScope::Rooted(eval.owned_root_retainer()),
     );
     let mut source_context = DisplaySourceContext::empty();
     let mut source_consumption = BufferSourceConsumptionState::new(0);
@@ -2305,12 +2326,14 @@ fn buffer_text_source_item_can_build_direct_single_char_step() {
         buffer.insert("a");
     }
     let snapshot = current_buffer_snapshot(&eval, buf_id);
-    let mut cursor = BufferTextSourceCursor::new(
+    let mut cursor = BufferTextSourceCursor::new_for_window(
         buf_id,
         &snapshot,
+        None,
         CharPos0::new(0),
         CharPos0::new(1),
         RenderFaceRef::Inherit,
+        StringSourceRootScope::Rooted(eval.owned_root_retainer()),
     );
     let mut source_context = DisplaySourceContext::empty();
     let mut source_consumption = BufferSourceConsumptionState::new(0);
@@ -2453,12 +2476,14 @@ fn buffer_text_source_item_builds_direct_multi_char_runs() {
         buffer.insert("ab");
     }
     let snapshot = current_buffer_snapshot(&eval, buf_id);
-    let mut cursor = BufferTextSourceCursor::new(
+    let mut cursor = BufferTextSourceCursor::new_for_window(
         buf_id,
         &snapshot,
+        None,
         CharPos0::new(0),
         CharPos0::new(2),
         RenderFaceRef::Inherit,
+        StringSourceRootScope::Rooted(eval.owned_root_retainer()),
     );
     let mut source_context = DisplaySourceContext::empty();
     let mut source_consumption = BufferSourceConsumptionState::new(0);
@@ -2559,12 +2584,14 @@ fn buffer_text_source_consumption_state_splits_persistent_text_run() {
         buffer.insert("abc");
     }
     let snapshot = current_buffer_snapshot(&eval, buf_id);
-    let mut cursor = BufferTextSourceCursor::new(
+    let mut cursor = BufferTextSourceCursor::new_for_window(
         buf_id,
         &snapshot,
+        None,
         CharPos0::new(0),
         CharPos0::new(3),
         RenderFaceRef::Inherit,
+        StringSourceRootScope::Rooted(eval.owned_root_retainer()),
     );
     let mut source_context = DisplaySourceContext::empty();
     let mut source_consumption = BufferSourceConsumptionState::new(0);
@@ -2963,6 +2990,10 @@ fn buffer_text_line_break_render_request_emits_row_transition_and_syncs_position
         buffer.insert("\nnext");
     }
     let snapshot = current_buffer_snapshot(&eval, buf_id);
+    let retainer = eval.owned_root_retainer();
+    // The row fixture installs its own heap. The buffer snapshot stays
+    // allocated on this parked heap, which is no longer the active Context.
+    let _parked = eval.park_for_test();
     let mut context = RowTransitionTestContext::new("line-break-render-request");
     let active_face = test_active_face_state(FaceId::new(9), 8.0);
     let text = b"\nnext";
@@ -3012,7 +3043,14 @@ fn buffer_text_line_break_render_request_emits_row_transition_and_syncs_position
     );
     let mut face_ids = FrameFaceAttempt::for_test_with_next_id(20);
     context.builder.set_face_attempt(face_ids.clone());
-    let mut source_walk = BufferSourceWalk::new(buf_id, &snapshot, charpos, 0);
+    let mut source_walk = BufferSourceWalk::new_for_window(
+        buf_id,
+        &snapshot,
+        None,
+        charpos,
+        0,
+        StringSourceRootScope::Rooted(retainer),
+    );
 
     let continuation = BufferSourceLineBreakRenderRequest::new(
         source_char,
@@ -3185,7 +3223,14 @@ fn buffer_selective_display_tail_render_request_appends_marker_and_transitions_r
         4,
     );
     let mut font_metrics = None;
-    let mut source_walk = BufferSourceWalk::new(buf_id, &snapshot, charpos, 0);
+    let mut source_walk = BufferSourceWalk::new_for_window(
+        buf_id,
+        &snapshot,
+        None,
+        charpos,
+        0,
+        StringSourceRootScope::Rooted(context.eval.owned_root_retainer()),
+    );
 
     let outcome = BufferSourceSelectiveDisplayTailRenderRequest::new(
         source_step_char,
@@ -3686,7 +3731,6 @@ fn buffer_text_special_wrap_source_action_applies_transition_state() {
 
 #[test]
 fn buffer_text_special_overflow_render_request_wraps_then_keeps_prepared_append() {
-    let mut context = RowTransitionTestContext::new("special-overflow-wrap-request");
     let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = eval
         .buffer_manager()
@@ -3698,6 +3742,9 @@ fn buffer_text_special_overflow_render_request_wraps_then_keeps_prepared_append(
         buffer.insert("a");
     }
     let snapshot = current_buffer_snapshot(&eval, buf_id);
+    let retainer = eval.owned_root_retainer();
+    let _parked = eval.park_for_test();
+    let mut context = RowTransitionTestContext::new("special-overflow-wrap-request");
     let prepared_append = DisplaySourceSpecialCharPreparedAppend::new(
         DisplaySourceSpecialDisplayKind::Control,
         DisplaySourceSpecialCharAppendPlan::new(
@@ -3756,7 +3803,14 @@ fn buffer_text_special_overflow_render_request_wraps_then_keeps_prepared_append(
         0,
         4,
     );
-    let mut source_walk = BufferSourceWalk::new(buf_id, &snapshot, charpos, 0);
+    let mut source_walk = BufferSourceWalk::new_for_window(
+        buf_id,
+        &snapshot,
+        None,
+        charpos,
+        0,
+        StringSourceRootScope::Rooted(retainer),
+    );
 
     let outcome = BufferSourceSpecialOverflowRenderRequest::new(
         &prepared_append,
@@ -4036,7 +4090,14 @@ fn buffer_text_overflow_render_request_handles_character_wrap_transition() {
         DisplayRowFallbackMetrics::from_default_face_extents(8.0, 16.0, 12.0),
         face_ids.clone(),
     );
-    let mut source_walk = BufferSourceWalk::new(buf_id, &snapshot, charpos, 0);
+    let mut source_walk = BufferSourceWalk::new_for_window(
+        buf_id,
+        &snapshot,
+        None,
+        charpos,
+        0,
+        StringSourceRootScope::Rooted(context.eval.owned_root_retainer()),
+    );
 
     let outcome = BufferSourceOverflowRenderRequest::new(
         &prepared_append,
@@ -5549,6 +5610,7 @@ fn render_natural_display_item_source_into_current_text_row_stamps_slots_at_curr
         Value::string("x"),
         RenderFaceRef::FaceId(FaceId::new(7)),
         crate::display_source::LispStringSourceOrigin::Normal,
+        StringSourceRootScope::Rooted(eval.owned_root_retainer()),
     )
     .expect("lisp string source");
     let mut source_state = DisplayRowSourceState::frame_local();
@@ -5678,12 +5740,14 @@ fn append_rendered_display_row_fragment_to_text_row_and_emit_appends_glyphs_and_
     let mut font_metrics = None;
     let rendered = {
         let buffer = eval.buffer_manager().get(buf_id).expect("buffer");
-        let mut source = crate::buffer_source::text_source::BufferTextSourceCursor::new(
+        let mut source = crate::buffer_source::text_source::BufferTextSourceCursor::new_for_window(
             buf_id,
             buffer,
+            None,
             CharPos0::new(0),
             CharPos0::new(2),
             RenderFaceRef::FaceId(FaceId::new(7)),
+            StringSourceRootScope::Rooted(eval.owned_root_retainer()),
         );
         let mut renderer =
             DisplayRowRenderer::new(&mut font_metrics, DisplayRowMeasurementMode::LogicalCells);
@@ -5706,6 +5770,7 @@ fn append_rendered_display_row_fragment_to_text_row_and_emit_appends_glyphs_and_
             &face_resolver,
             None,
             &mut face_ids,
+            StringSourceRootScope::Rooted(eval.owned_root_retainer()),
         )
         .expect("rendered source")
     };
@@ -6454,6 +6519,7 @@ fn resolve_next_display_source_item_returns_item_and_pending_faces() {
         value,
         RenderFaceRef::FaceId(FaceId::new(0)),
         crate::display_source::LispStringSourceOrigin::Normal,
+        StringSourceRootScope::Rooted(_eval.owned_root_retainer()),
     )
     .expect("string source");
 
@@ -6560,6 +6626,7 @@ fn resolve_next_display_source_item_resolves_height_modifier_to_pending_face() {
         value,
         RenderFaceRef::FaceId(FaceId::new(0)),
         crate::display_source::LispStringSourceOrigin::Normal,
+        StringSourceRootScope::Rooted(_eval.owned_root_retainer()),
     )
     .expect("string source");
 
@@ -6626,6 +6693,7 @@ fn display_row_source_walker_reuses_face_cache_across_items() {
         value,
         RenderFaceRef::FaceId(FaceId::new(0)),
         crate::display_source::LispStringSourceOrigin::Normal,
+        StringSourceRootScope::Rooted(_eval.owned_root_retainer()),
     )
     .expect("string source");
     let mut source = DisplayRowSourceWalker::new(source);
@@ -6793,8 +6861,12 @@ fn lisp_string_append_context_appends_fragment_items() {
         LispStringSourceId::PREFIX,
         Value::string("=>"),
     );
-    let session_request =
-        LispStringSourceAppendSessionRequest::frame_local(request, FaceId::new(0), base_face);
+    let session_request = LispStringSourceAppendSessionRequest::frame_local(
+        request,
+        FaceId::new(0),
+        base_face,
+        StringSourceRootScope::Rooted(eval.owned_root_retainer()),
+    );
     let end = append_context.render_active_face_source_request_to_text_row_and_emit(
         &mut text_row_source_render_state(
             &mut builder,
@@ -7099,7 +7171,14 @@ fn buffer_text_source_render_request_appends_plain_text_run_with_cursor_inside()
     let mut cursor_info = CursorCaptureState::new();
     let mut face_ids = FrameFaceAttempt::for_test_with_next_id(7);
     context.builder.set_face_attempt(face_ids.clone());
-    let mut source_walk = BufferSourceWalk::new(buf_id, &snapshot, charpos, 0);
+    let mut source_walk = BufferSourceWalk::new_for_window(
+        buf_id,
+        &snapshot,
+        None,
+        charpos,
+        0,
+        StringSourceRootScope::Rooted(context.eval.owned_root_retainer()),
+    );
     let face_resolution_context = BufferSourceFaceResolutionContext::new(
         &snapshot,
         &face_resolver,
@@ -7252,7 +7331,14 @@ fn buffer_text_source_render_request_keeps_space_run_whole_when_trailing_enabled
     let mut cursor_info = CursorCaptureState::new();
     let mut face_ids = FrameFaceAttempt::for_test_with_next_id(7);
     context.builder.set_face_attempt(face_ids.clone());
-    let mut source_walk = BufferSourceWalk::new(buf_id, &snapshot, charpos, 0);
+    let mut source_walk = BufferSourceWalk::new_for_window(
+        buf_id,
+        &snapshot,
+        None,
+        charpos,
+        0,
+        StringSourceRootScope::Rooted(context.eval.owned_root_retainer()),
+    );
     let face_resolution_context = BufferSourceFaceResolutionContext::new(
         &snapshot,
         &face_resolver,
@@ -7412,7 +7498,14 @@ fn buffer_text_source_render_request_keeps_space_run_whole_when_word_wrap_enable
     let mut cursor_info = CursorCaptureState::new();
     let mut face_ids = FrameFaceAttempt::for_test_with_next_id(7);
     context.builder.set_face_attempt(face_ids.clone());
-    let mut source_walk = BufferSourceWalk::new(buf_id, &snapshot, charpos, 0);
+    let mut source_walk = BufferSourceWalk::new_for_window(
+        buf_id,
+        &snapshot,
+        None,
+        charpos,
+        0,
+        StringSourceRootScope::Rooted(context.eval.owned_root_retainer()),
+    );
     let face_resolution_context = BufferSourceFaceResolutionContext::new(
         &snapshot,
         &face_resolver,
@@ -7574,7 +7667,14 @@ fn buffer_text_source_render_request_renders_fit_prefix_before_overflow() {
     let mut cursor_info = CursorCaptureState::new();
     let mut face_ids = FrameFaceAttempt::for_test_with_next_id(7);
     context.builder.set_face_attempt(face_ids.clone());
-    let mut source_walk = BufferSourceWalk::new(buf_id, &snapshot, charpos, 0);
+    let mut source_walk = BufferSourceWalk::new_for_window(
+        buf_id,
+        &snapshot,
+        None,
+        charpos,
+        0,
+        StringSourceRootScope::Rooted(context.eval.owned_root_retainer()),
+    );
     let face_resolution_context = BufferSourceFaceResolutionContext::new(
         &snapshot,
         &face_resolver,
@@ -8160,8 +8260,6 @@ fn buffer_text_window_body_install_request_records_positions_and_edge_markers() 
         41,
         3,
         i64::MAX,
-        100,
-        4,
         true,
         false,
         0,
@@ -8171,15 +8269,19 @@ fn buffer_text_window_body_install_request_records_positions_and_edge_markers() 
         face_resolver.default_face(),
         8.0,
     ))
-    .install_and_apply(TextWindowBodyInstallState::new(
-        TextWindowOutputTarget::from_builder(&mut builder),
-        &mut output_emitter,
-        crate::display_status_line::ChromeRowRenderServices::new(
-            &mut font_metrics,
-            &face_resolver,
-            &mut face_ids,
+    .install_and_apply(
+        TextWindowBodyInstallState::new(
+            TextWindowOutputTarget::from_builder(&mut builder),
+            &mut output_emitter,
+            crate::display_status_line::ChromeRowRenderServices::new(
+                &mut font_metrics,
+                &face_resolver,
+                &mut face_ids,
+                StringSourceRootScope::Rooted(eval.owned_root_retainer()),
+            ),
         ),
-    ));
+        |pos| EmacsBytePos::new(97 + pos.get()),
+    );
 
     assert_eq!(positions.window_start(), LispCharPos1::new(4));
     assert_eq!(positions.window_end_lisp(), LispCharPos1::new(8));
@@ -8336,6 +8438,7 @@ fn buffer_text_window_terminal_right_border_request_installs_face_and_border() {
             &mut font_metrics,
             &face_resolver,
             &mut face_ids,
+            StringSourceRootScope::CallbackFree,
         ),
         &effective_default_face,
     );
@@ -8380,6 +8483,7 @@ fn terminal_right_border_decoration_preserves_the_rows_semantic_role() {
             &mut font_metrics,
             &face_resolver,
             &mut face_ids,
+            StringSourceRootScope::CallbackFree,
         ),
         &effective_default_face,
     );
@@ -8433,6 +8537,7 @@ fn terminal_right_border_face_id_comes_from_the_shared_frame_allocator() {
             &mut font_metrics,
             &face_resolver,
             &mut face_ids,
+            StringSourceRootScope::CallbackFree,
         ),
         &effective_default_face,
     );
@@ -8478,6 +8583,7 @@ fn buffer_text_window_terminal_right_border_request_pads_blank_rows_and_preserve
             &mut font_metrics,
             &face_resolver,
             &mut face_ids,
+            StringSourceRootScope::CallbackFree,
         ),
         &effective_default_face,
     );
@@ -8573,6 +8679,7 @@ fn terminal_right_border_padding_uses_the_effective_window_default_face() {
             &mut font_metrics,
             &face_resolver,
             &mut face_ids,
+            StringSourceRootScope::Rooted(_runtime.owned_root_retainer()),
         ),
         crate::display_row::special_glyphs::TextWindowRightBorder {
             ch: '|',
@@ -10188,8 +10295,12 @@ fn lisp_string_source_append_context_preserves_source_after_row_break() {
         LispStringSourceId::OVERLAY_STRING,
         Value::string("a\nb"),
     );
-    let session_request =
-        LispStringSourceAppendSessionRequest::frame_local(request, FaceId::new(7), base_face);
+    let session_request = LispStringSourceAppendSessionRequest::frame_local(
+        request,
+        FaceId::new(7),
+        base_face,
+        StringSourceRootScope::Rooted(eval.owned_root_retainer()),
+    );
     let row_session_request = LispStringSourceRowAppendSessionRequest::new(
         session_request,
         &surface,
@@ -10675,7 +10786,7 @@ fn bounded_replacement_source_text(value: Value) -> String {
         value,
         BufferDisplayReplacementSource::new(BufferId(7), CharPos0::new(4), EmacsBytePos::new(4)),
     )
-    .into_source(FaceId::new(7))
+    .into_source(FaceId::new(7), StringSourceRootScope::CallbackFree)
     .expect("resolved display string source");
     let mut context = DisplaySourceContext::empty();
     let mut emitted = String::new();
@@ -11126,6 +11237,7 @@ fn buffer_display_property_replacement_outcome_applies_walk_state_and_cursor() {
             DisplayPropertyReplacementCursorPolicy::FaceChar,
         ),
         skip_to: 4,
+        skip_to_byte_idx: None,
     };
     let mut byte_idx = "a".len();
     let mut charpos = 1;
@@ -11159,6 +11271,82 @@ fn buffer_display_property_replacement_outcome_applies_walk_state_and_cursor() {
     assert_eq!(cursor.byte_idx, "a".len());
     assert_eq!(cursor.col, 1);
     assert_eq!(cursor.slot_width, Some(8.0));
+}
+
+#[test]
+fn buffer_display_property_replacement_outcome_jumps_directly_when_byte_end_is_known() {
+    // Raw unibyte binary payload (as in `image-mode` for a GIF buffer): bytes
+    // >= 0xC0 would confuse UTF-8 decoding and scanning megabytes byte by byte
+    // stalls animation (#823). With `skip_to_byte_idx` known from the Emacs
+    // byte span, the walk jumps in O(1).
+    let raw_gif_like: &[u8] = &[0x47, 0x49, 0x46, 0xC0, 0xFF, 0xE0, 0x80, 0x3B];
+    let outcome = BufferDisplayPropertyTextReplacementOutcome {
+        replacement: DisplayPropertyReplacementAppendOutcome::new(
+            DisplayRowPosition::new(0.0, 0),
+            DisplayRowPosition::new(480.0, 60),
+            DisplayPropertyReplacementCursorPolicy::FaceChar,
+        ),
+        skip_to: raw_gif_like.len() as i64,
+        skip_to_byte_idx: Some(raw_gif_like.len()),
+    };
+    let mut byte_idx = 0usize;
+    let mut charpos = 0i64;
+    let mut x = 0.0;
+    let mut col = 0usize;
+    let active_face = test_active_face_state(FaceId::new(7), 8.0);
+    let geometry = DisplayRowGeometryState::new(0, 0.0, 0.0, 16.0, 12.0);
+    let mut cursor_info = CursorCaptureState::new();
+    {
+        let mut progress =
+            DisplaySourceProgressState::new(&mut byte_idx, &mut charpos, &mut x, &mut col);
+        outcome.apply_to_progress_and_cursor(
+            raw_gif_like,
+            &mut progress,
+            &mut cursor_info,
+            &active_face,
+            &geometry,
+            0,
+            0,
+            &mut LineNumberRenderState::new(false, 1, 0),
+        );
+    }
+    assert_eq!(byte_idx, raw_gif_like.len());
+    assert_eq!(charpos, raw_gif_like.len() as i64);
+    assert_eq!(x, 480.0);
+    assert_eq!(col, 60);
+
+    // Jumping past a bounded viewport copy (`skip_to_byte_idx > text.len()`)
+    // advances directly to the replacement's true end without retrying copies
+    // across megabytes of covered buffer text (#823).
+    let beyond_horizon = BufferDisplayPropertyTextReplacementOutcome {
+        replacement: DisplayPropertyReplacementAppendOutcome::new(
+            DisplayRowPosition::new(0.0, 0),
+            DisplayRowPosition::new(480.0, 60),
+            DisplayPropertyReplacementCursorPolicy::FaceChar,
+        ),
+        skip_to: 19_335_521,
+        skip_to_byte_idx: Some(19_335_521),
+    };
+    let mut byte_idx = 0usize;
+    let mut charpos = 0i64;
+    let mut x = 0.0;
+    let mut col = 0usize;
+    {
+        let mut progress =
+            DisplaySourceProgressState::new(&mut byte_idx, &mut charpos, &mut x, &mut col);
+        beyond_horizon.apply_to_progress_and_cursor(
+            raw_gif_like,
+            &mut progress,
+            &mut CursorCaptureState::new(),
+            &active_face,
+            &geometry,
+            0,
+            0,
+            &mut LineNumberRenderState::new(false, 1, 0),
+        );
+    }
+    assert_eq!(byte_idx, 19_335_521);
+    assert_eq!(charpos, 19_335_521);
 }
 
 #[test]
@@ -11470,6 +11658,7 @@ fn test_display_space_window_params() -> WindowParams {
         tab_stop_list: vec![],
         default_fg: 0xFFFFFF,
         frame_foreground: 0xFFFFFF,
+        frame_background: 0x000000,
         default_bg: 0x000000,
         char_width: 8.0,
         char_height: 16.0,
@@ -11515,6 +11704,7 @@ fn test_display_space_window_params() -> WindowParams {
         horizontal_scroll_bar: false,
         scroll_bar_pixel_width: 0.0,
         scroll_bar_pixel_height: 0.0,
+        bidi_paragraph_directions: Default::default(),
     }
 }
 
@@ -11680,6 +11870,7 @@ fn display_replacement_media_append_item_names_display_and_cursor_extents() {
         horizontal_margin: 0.0,
         vertical_margin: 0.0,
         opaque_background: None,
+        presentation: neomacs_display_protocol::ImageGlyphPresentation::Texture,
     });
 
     let ordinary = DisplayReplacementMediaSourceItem::new(
@@ -11703,6 +11894,7 @@ fn display_replacement_media_append_item_names_display_and_cursor_extents() {
         horizontal_margin: 0.0,
         vertical_margin: 0.0,
         opaque_background: None,
+        presentation: neomacs_display_protocol::ImageGlyphPresentation::Texture,
     });
     let xwidget_cursor = DisplayReplacementMediaSourceItem::new(
         xwidget_media,
@@ -11725,6 +11917,7 @@ fn positive_image_box_width_expands_layout_and_insets_content() {
         horizontal_margin: 0.0,
         vertical_margin: 0.0,
         opaque_background: None,
+        presentation: neomacs_display_protocol::ImageGlyphPresentation::Texture,
     })
     .with_positive_box_line_width(2.0)
     .apply_positive_box_expansion(neomacs_display_protocol::face::BoxVerticalEdges::Both);
@@ -11756,6 +11949,7 @@ fn positive_image_box_width_respects_slice_and_terminal_boundaries() {
         horizontal_margin: 0.0,
         vertical_margin: 0.0,
         opaque_background: None,
+        presentation: neomacs_display_protocol::ImageGlyphPresentation::Texture,
     })
     .with_positive_box_line_width(2.0)
     .apply_positive_box_expansion(neomacs_display_protocol::face::BoxVerticalEdges::Both);
@@ -11795,6 +11989,7 @@ fn display_replacement_media_append_item_resolves_direct_media_property() {
         neovm_core::emacs_core::image_catalog::ImageScaleEnvironment::default(),
         None,
         0,
+        0,
     )
     .expect("direct media replacement");
 
@@ -11823,6 +12018,7 @@ fn display_replacement_media_append_item_resolves_placeholder_item_without_host(
         neovm_core::emacs_core::image_catalog::ImageScaleEnvironment::default(),
         None,
         0,
+        0,
     )
     .expect("image placeholder");
 
@@ -11847,6 +12043,7 @@ fn display_replacement_media_append_item_names_row_extent_policy() {
             horizontal_margin: 0.0,
             vertical_margin: 0.0,
             opaque_background: None,
+            presentation: neomacs_display_protocol::ImageGlyphPresentation::Texture,
         }),
         active_face.metrics().row_height(),
         active_face.metrics().ascent(),
@@ -12512,6 +12709,7 @@ fn display_replacement_append_context_installs_image_replacements() {
             horizontal_margin: 0.0,
             vertical_margin: 0.0,
             opaque_background: None,
+            presentation: neomacs_display_protocol::ImageGlyphPresentation::Texture,
         }),
         active_face.metrics().row_height(),
         active_face.metrics().ascent(),
@@ -12676,6 +12874,7 @@ fn display_replacement_append_context_crops_an_image_wider_than_the_text_area() 
             horizontal_margin: 0.0,
             vertical_margin: 0.0,
             opaque_background: None,
+            presentation: neomacs_display_protocol::ImageGlyphPresentation::Texture,
         }),
         active_face.metrics().row_height(),
         active_face.metrics().ascent(),
@@ -12838,6 +13037,7 @@ fn display_replacement_row_render_reports_an_image_the_row_refuses() {
             horizontal_margin: 0.0,
             vertical_margin: 0.0,
             opaque_background: None,
+            presentation: neomacs_display_protocol::ImageGlyphPresentation::Texture,
         }),
         active_face.metrics().row_height(),
         active_face.metrics().ascent(),
@@ -12913,6 +13113,7 @@ fn display_replacement_row_render_reports_an_image_the_row_refuses() {
                     horizontal_margin: 0.0,
                     vertical_margin: 0.0,
                     opaque_background: None,
+                    presentation: neomacs_display_protocol::ImageGlyphPresentation::Texture,
                 }),
                 active_face.metrics().row_height(),
                 active_face.metrics().ascent(),
@@ -13361,7 +13562,14 @@ fn display_property_live_render_outcome(
     let mut cursor_info = CursorCaptureState::new();
     let mut face_ids = FrameFaceAttempt::for_test_with_next_id(7);
     context.builder.set_face_attempt(face_ids.clone());
-    let mut source_walk = BufferSourceWalk::new(buf_id, &snapshot, charpos, 0);
+    let mut source_walk = BufferSourceWalk::new_for_window(
+        buf_id,
+        &snapshot,
+        None,
+        charpos,
+        0,
+        StringSourceRootScope::Rooted(context.eval.owned_root_retainer()),
+    );
 
     let mut continued = Vec::new();
     // Drive the live render loop until the buffer walk stops (or all chars

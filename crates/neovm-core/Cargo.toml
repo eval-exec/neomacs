@@ -268,6 +268,11 @@ path = "tests/p1rv_contracts.rs"
 name = "mint_seal_contracts"
 path = "tests/mint_seal_contracts.rs"
 
+[[test]]
+name = "heap_capability_contracts"
+path = "tests/heap_capability_contracts.rs"
+required-features = ["contract-fixtures"]
+
 # Runs its checks on a child process's MAIN thread, which libtest never
 # offers; the file answers the libtest CLI subset nextest uses.
 [[test]]
@@ -312,3 +317,9 @@ path = "tests/core.rs"
 name = "retained_leaf_contracts"
 path = "tests/retained_leaf_contracts.rs"
 required-features = ["jit", "contract-fixtures"]
+
+# Dedicated Miri registration: the source reuses the real core era fixture
+# and allocation shells, and is empty outside cfg(miri).
+[[test]]
+name = "numeric_storage_miri"
+path = "tests/numeric_storage_miri.rs"

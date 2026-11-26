@@ -75,8 +75,7 @@ fn kmacro_copied_properties_have_only_manager_roots() {
                 assert_eq!(
                     unsafe { Value::from_bits(*bits) }
                         .as_vector_data()
-                        .expect("live kmacro vector")
-                        .as_slice(),
+                        .expect("live kmacro vector"),
                     &[Value::fixnum(index as i64)]
                 );
             }

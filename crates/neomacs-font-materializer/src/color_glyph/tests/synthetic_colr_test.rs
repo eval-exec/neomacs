@@ -964,14 +964,18 @@ fn layer_fan_out_is_capped() {
         cpal_table(&[RED]),
     );
     assert_eq!(
-        rasterize_at(
+        super::test_support::rasterize_at_result(
             &exploded,
             "synthetic:fan-out-big",
             base,
             [0, 0, 0, 255],
-            8.0
+            8.0,
         ),
-        None,
+        Err(ColorGlyphError::Paint {
+            glyph_id: base,
+            paint_source: ColorGlyphSource::Colr,
+            reason: ColorPaintFailure::ResourceLimit
+        }),
         "a graph past the cap must be dropped, not allocated"
     );
 }
@@ -990,8 +994,18 @@ fn huge_transforms_do_not_overflow_the_measurement() {
     );
     let font = font_with_color_tables(colr_v1_table(base, &huge), cpal_table(&[RED]));
     assert_eq!(
-        rasterize(&font, "synthetic:huge-transform", base, [0, 0, 0, 255]),
-        None,
+        super::test_support::rasterize_at_result(
+            &font,
+            "synthetic:huge-transform",
+            base,
+            [0, 0, 0, 255],
+            48.0,
+        ),
+        Err(ColorGlyphError::Paint {
+            glyph_id: base,
+            paint_source: ColorGlyphSource::Colr,
+            reason: ColorPaintFailure::ResourceLimit
+        }),
         "a glyph scaled past the size cap must not render"
     );
 }
@@ -1346,3 +1360,6 @@ fn composite_destination_atop_is_bounded_by_its_source() {
     );
     assert_close_to(mean_color(&raster), RED, 8.0);
 }
+
+#[path = "empty_outcome_test.rs"]
+mod empty_outcomes;

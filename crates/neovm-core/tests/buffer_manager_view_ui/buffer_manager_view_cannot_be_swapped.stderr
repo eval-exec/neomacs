@@ -1,0 +1,51 @@
+error[E0599]: no method named `into_manager` found for struct `BufferManagerMut<'_>` in the current scope
+  --> tests/buffer_manager_view_ui/buffer_manager_view_cannot_be_swapped.rs:27:18
+   |
+27 |     let _ = view.into_manager();
+   |                  ^^^^^^^^^^^^ method not found in `BufferManagerMut<'_>`
+
+error[E0599]: no method named `into_runtime` found for struct `EditRuntimeMut<'_>` in the current scope
+  --> tests/buffer_manager_view_ui/buffer_manager_view_cannot_be_swapped.rs:31:18
+   |
+31 |     let _ = edit.into_runtime();
+   |                  ^^^^^^^^^^^^ method not found in `EditRuntimeMut<'_>`
+
+error[E0596]: cannot borrow data in dereference of `BufferManagerMut<'_>` as mutable
+  --> tests/buffer_manager_view_ui/buffer_manager_view_cannot_be_swapped.rs:14:20
+   |
+14 |     std::mem::swap(&mut *first, &mut *second);
+   |                    ^^^^^^^^^^^ cannot borrow as mutable
+   |
+   = help: trait `DerefMut` is required to modify through a dereference, but it is not implemented for `BufferManagerMut<'_>`
+
+error[E0596]: cannot borrow data in dereference of `BufferManagerMut<'_>` as mutable
+  --> tests/buffer_manager_view_ui/buffer_manager_view_cannot_be_swapped.rs:14:33
+   |
+14 |     std::mem::swap(&mut *first, &mut *second);
+   |                                 ^^^^^^^^^^^^ cannot borrow as mutable
+   |
+   = help: trait `DerefMut` is required to modify through a dereference, but it is not implemented for `BufferManagerMut<'_>`
+
+error[E0596]: cannot borrow data in dereference of `BufferManagerMut<'_>` as mutable
+  --> tests/buffer_manager_view_ui/buffer_manager_view_cannot_be_swapped.rs:19:20
+   |
+19 |     std::mem::swap(&mut *view, &mut fresh);
+   |                    ^^^^^^^^^^ cannot borrow as mutable
+   |
+   = help: trait `DerefMut` is required to modify through a dereference, but it is not implemented for `BufferManagerMut<'_>`
+
+error[E0596]: cannot borrow data in dereference of `EditRuntimeMut<'_>` as mutable
+  --> tests/buffer_manager_view_ui/buffer_manager_view_cannot_be_swapped.rs:23:20
+   |
+23 |     std::mem::swap(&mut *first, &mut *second);
+   |                    ^^^^^^^^^^^ cannot borrow as mutable
+   |
+   = help: trait `DerefMut` is required to modify through a dereference, but it is not implemented for `EditRuntimeMut<'_>`
+
+error[E0596]: cannot borrow data in dereference of `EditRuntimeMut<'_>` as mutable
+  --> tests/buffer_manager_view_ui/buffer_manager_view_cannot_be_swapped.rs:23:33
+   |
+23 |     std::mem::swap(&mut *first, &mut *second);
+   |                                 ^^^^^^^^^^^^ cannot borrow as mutable
+   |
+   = help: trait `DerefMut` is required to modify through a dereference, but it is not implemented for `EditRuntimeMut<'_>`

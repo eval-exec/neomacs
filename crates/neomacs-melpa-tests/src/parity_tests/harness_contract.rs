@@ -1166,8 +1166,9 @@ fn every_exact_package_has_a_complete_acyclic_source_plan() {
     // The checked-in lock is the source of truth; this expectation tracks its
     // size and is refreshed with `UPDATE_EXPECT=1` when the lock intentionally
     // gains or loses a package.  It guards against a parser that silently
-    // drops rows, not against deliberate lock changes.
-    expect_test::expect!["799"].assert_eq(&sources.len().to_string());
+    // drops rows, not against deliberate lock changes.  831 is 799 plus the
+    // 32 emacs-taf rows added to the lock in 00f9a747d7.
+    expect_test::expect!["831"].assert_eq(&sources.len().to_string());
 
     for source in sources {
         let package = source.package();

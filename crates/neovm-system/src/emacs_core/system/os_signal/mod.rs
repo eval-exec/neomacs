@@ -136,7 +136,7 @@
 use std::sync::OnceLock;
 #[cfg(unix)]
 use std::sync::atomic::AtomicI32;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 mod platform;
 
@@ -149,28 +149,35 @@ mod platform;
 /// hole ledger 180 §9.6 opened. SIGTERM/SIGHUP instead use GNU's fatal-signal
 /// path: capture the numeric status, then call kill-emacs at a safe point.
 ///
-/// **SIGCHLD is deliberately NOT here** (ledger 208).  GNU's
-/// `catch_child_signal` (src/process.c:8645-8660) exists to make the child
-/// record early and to WAKE the `pselect`; a handler here could do neither.
-/// The walk cannot run in a handler (the process table is a `HashMap` owned by
-/// the Lisp thread and iterating it allocates, which GNU's own two warnings
-/// above `handle_child_signal` forbid), and the wake never existed -- the
-/// self-pipe's read end is registered with no poller, and
-/// `polling::Poller::wait` catches `ErrorKind::Interrupted` and re-enters,
-/// measured at 3.000038747s of a 3s block after a confirmed delivery (ledger
-/// 200 §10.1).  GNU exempts exactly this case in its own words: *"WINDOWSNT
-/// doesn't need this facility because its 'pselect' emulation ... waits on a
-/// subprocess handle, which becomes signaled when the process exits"*
-/// (:7548-7552), and this port's `pidfd` is that handle.
+/// **SIGCHLD is not a `HandledSignal`**: GNU registers it with
+/// `catch_child_signal` rather than `add_user_signal`, and its Lisp-visible
+/// work is the child record, not a user event. It has its own private,
+/// flag-writing handler installed by [`install`]:
 ///
-/// What was left of the trigger was an ARMING condition for the walk -- and
-/// GNU does not arm the walk with a signal either.  It arms it with
-/// `update_tick != process_tick` (:5524, :5845), a COUNTER, and that arming is
-/// only a performance short-circuit: delete it from both of GNU's wait sites
-/// and GNU is still correct, because `status_notify`'s body is guarded per
-/// process by `p->tick != p->update_tick` (:7892).  Ledger 208 gave this port
-/// that per-process pair, ran the walk unconditionally at GNU's own two sites,
-/// and the signal then had no job left.
+/// * GNU's `handle_child_signal` (src/process.c:7734-7763) walks the process
+///   alist and reaps every changed child. That walk cannot run in signal
+///   context here: the process table is a `HashMap` owned by the Lisp thread,
+///   and iterating it allocates, which GNU's own two warnings above the
+///   handler forbid.
+/// * The handler therefore only stores one relaxed atomic
+///   ([`note_child_signal`]). `ProcessManager::reap_observed_child` turns the
+///   latch into GNU's one-child `waitpid (WNOHANG | WUNTRACED | WCONTINUED)`
+///   record at an observation, and the wait's full walk clears the latch.
+///   This restores GNU's timing: an observation before the delivery sees the
+///   stale status, so a caller's await loop still enters its wait (ledger
+///   180's sentinel-in-the-let shape), while a pure spin that outlives the
+///   delivery sees `exit` (ledger 180 §9.1-9.2, ledger 184 rows 2-3).
+/// * The wake is still the `pidfd`, not a self-pipe byte: the pidfd is what
+///   GNU's WINDOWSNT `pselect` emulation uses, and this port's
+///   `polling::Poller::wait` catches `ErrorKind::Interrupted` and re-enters.
+///   The signal has no wake job left.
+/// * `catch_child_signal` (src/process.c:8645-8662) also preserves the handler
+///   it replaces and calls it from `handle_child_signal`'s last line
+///   (`lib_child_handler (sig)`, :7657, :7769), which keeps Glib's or
+///   GNUstep's own child tracking working. [`install_child_signal_flag`] makes
+///   the same swap and [`note_child_signal`] chains the preserved handler.
+///   Ledger 208 had removed the disposition; this is the entry for re-adding
+///   it, with that source citation, rather than only the flag write.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(usize)]
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
@@ -399,6 +406,236 @@ impl InstallReport {
 static PENDING: [AtomicU32; HandledSignal::COUNT] =
     [const { AtomicU32::new(0) }; HandledSignal::COUNT];
 
+/// Set by the private SIGCHLD handler; read by child-status observations.
+///
+/// GNU's `handle_child_signal` reaps the child at signal delivery. This port's
+/// process table is a Lisp-thread-owned `HashMap`, so the handler cannot walk
+/// it; the handler only latches that a delivery happened, and the observation
+/// turns the latch into GNU's one-child `waitpid` record
+/// (`ProcessManager::reap_observed_child`). The latch is cleared when the
+/// wait's full status walk runs, so an observation before the next SIGCHLD
+/// does not reap ahead of GNU's signal timing.
+static CHILD_SIGNAL_SEEN: AtomicBool = AtomicBool::new(false);
+
+/// GNU's `lib_child_handler` (src/process.c:7657): the handler that was
+/// installed for SIGCHLD before `catch_child_signal` claimed the signal, or 0
+/// for `SIG_DFL`/`SIG_IGN`. `note_child_signal` calls it after latching, as
+/// `handle_child_signal` ends `lib_child_handler (sig);` (:7769), so a library
+/// that installed its own child handler (Glib before 2.73.2, GNUstep) keeps
+/// receiving the signal while this port records the child. A predecessor with
+/// `SA_SIGINFO` is not recorded: its real ABI takes three arguments, and
+/// calling it with this one is undefined behaviour (GNU only easserts it
+/// cannot happen, src/process.c:8652-8653).
+#[cfg(unix)]
+static LIB_CHILD_HANDLER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// Callback ABIs `handler_from_address` may decode.
+///
+/// The associated constant is evaluated when the helper is monomorphized, so
+/// a callback whose size is not a pointer fails the build instead of taking a
+/// panic branch inside signal context.
+#[cfg(unix)]
+trait SignalHandlerAbi: Copy {
+    const POINTER_SIZED: () = assert!(std::mem::size_of::<Self>() == std::mem::size_of::<usize>());
+}
+
+#[cfg(unix)]
+impl SignalHandlerAbi for extern "C" fn(libc::c_int) {}
+
+#[cfg(unix)]
+impl SignalHandlerAbi for FaultHandler {}
+
+/// The one address-to-callback conversion in this module, shared by the
+/// SIGCHLD chain and the fatal-fault chain.
+///
+/// A `sigaction` names its handler as an integer by ABI; there is no safe
+/// route from that integer to a function pointer. Keeping the conversion in
+/// one place means the transmute ratchet sees one audited site rather than
+/// one per chain (the guard counts `transmute_copy` against the same
+/// ceiling).
+///
+/// # Safety
+/// `address` was read from a `sigaction` this process installed or inherited,
+/// and `T` is the exact callback type that disposition carries: a one-argument
+/// handler for a disposition without `SA_SIGINFO`, a three-argument
+/// `FaultHandler` for one with it.
+#[cfg(unix)]
+unsafe fn handler_from_address<T: SignalHandlerAbi>(address: usize) -> T {
+    let () = T::POINTER_SIZED;
+    // SAFETY: the caller fixes `T` as the installed callback type; the
+    // associated constant above has proved `T` is pointer-sized where this is
+    // monomorphized, so the read names exactly those bits.
+    unsafe { std::mem::transmute_copy::<usize, T>(&address) }
+}
+
+#[cfg(unix)]
+extern "C" fn note_child_signal(signal: libc::c_int) {
+    // Async-signal-safe: one relaxed store, no allocation, no lock.
+    CHILD_SIGNAL_SEEN.store(true, Ordering::Relaxed);
+    let handler = LIB_CHILD_HANDLER.load(Ordering::Acquire);
+    if handler != 0 {
+        // SAFETY: `install_child_signal_flag` stores only a previous handler
+        // that was neither `SIG_DFL` nor `SIG_IGN` and does not carry
+        // `SA_SIGINFO`, so the one-argument signature below is its real ABI;
+        // GNU calls it the same way (`lib_child_handler (sig)`, :7769).
+        let handler: extern "C" fn(libc::c_int) = unsafe { handler_from_address(handler) };
+        handler(signal);
+    }
+}
+
+/// Whether a SIGCHLD was delivered since the last full status walk.
+pub(crate) fn child_signal_seen() -> bool {
+    CHILD_SIGNAL_SEEN.load(Ordering::Relaxed)
+}
+
+/// Clear the latch at the start of the wait's full status walk.
+pub(crate) fn clear_child_signal_seen() {
+    CHILD_SIGNAL_SEEN.store(false, Ordering::Relaxed);
+}
+
+/// GNU's `noninteractive` as of the last mode-aware install.
+///
+/// GNU installs every disposition from `main`, after the command line has set
+/// `noninteractive`. This port's first claim runs earlier (the evaluator and
+/// its wake pipe exist before the command loop), so it installs the normal
+/// GUI/TUI profile (`false`) until [`install_termination`] records the real
+/// value and re-applies every disposition.
+#[cfg(unix)]
+static SIGACTION_NONINTERACTIVE: AtomicBool = AtomicBool::new(false);
+
+#[cfg(unix)]
+fn sigaction_noninteractive() -> bool {
+    SIGACTION_NONINTERACTIVE.load(Ordering::Relaxed)
+}
+
+/// GNU `emacs_sigaction_init` (src/sysdep.c:1679-1707), the one builder for
+/// every disposition this module installs.
+///
+/// Mask, in GNU's order: SIGALRM, SIGCHLD, SIGDANGER (where the platform has
+/// it), SIGPROF (only with GNU's `PROFILER_CPU_SUPPORT` configure option;
+/// this build has no CPU profiler), SIGWINCH; and, only when interactive,
+/// SIGINT, SIGQUIT and SIGIO (GNU's `USABLE_SIGIO`; `SIGPOLL` is the same
+/// number where it exists).
+///
+/// Flags deviate from `emacs_sigaction_flags` (src/sysdep.c:1655-1673) on
+/// purpose: `SA_RESTART` is set in BOTH modes, where GNU drops it when
+/// interactive so a long syscall is interrupted to poll pending input. This
+/// port does not poll pending input in that window; its wake is the self-pipe
+/// and the pidfd, and the one wait it must interrupt is `epoll_wait`, which
+/// signal(7) lists among the calls that are "never restarted after being
+/// interrupted by a signal handler, regardless of the use of SA_RESTART". So
+/// SA_RESTART costs nothing here and spares every other blocking call on the
+/// render, tty-input and worker threads a spurious EINTR; std's `read`/`write`
+/// do not retry `Interrupted`. (This is the internal deviation the pre-N2
+/// install_once comment recorded.)
+#[cfg(unix)]
+fn emacs_sigaction_init(handler: usize, noninteractive: bool) -> libc::sigaction {
+    let mut action: libc::sigaction = unsafe { std::mem::zeroed() };
+    // SAFETY: `sigemptyset`/`sigaddset` write only through `sa_mask`.
+    unsafe {
+        libc::sigemptyset(&mut action.sa_mask);
+        libc::sigaddset(&mut action.sa_mask, libc::SIGALRM);
+        libc::sigaddset(&mut action.sa_mask, libc::SIGCHLD);
+        #[cfg(target_os = "aix")]
+        libc::sigaddset(&mut action.sa_mask, libc::SIGDANGER);
+        libc::sigaddset(&mut action.sa_mask, libc::SIGWINCH);
+        if !noninteractive {
+            libc::sigaddset(&mut action.sa_mask, libc::SIGINT);
+            libc::sigaddset(&mut action.sa_mask, libc::SIGQUIT);
+            libc::sigaddset(&mut action.sa_mask, libc::SIGIO);
+        }
+    }
+    action.sa_sigaction = handler;
+    action.sa_flags = libc::SA_RESTART;
+    action
+}
+
+/// Claim SIGCHLD the way GNU's `catch_child_signal` does
+/// (src/process.c:8645-8662 led down to the flag-only handler above):
+///
+/// * block SIGCHLD and SIGINT across the swap, as GNU's `block_child_signal`
+///   does (src/sysdep.c:857-864), through `pthread_sigmask`;
+/// * install `note_child_signal` with `emacs_sigaction_init`'s mask and flags;
+/// * keep a one-argument handler installed before, so `note_child_signal` can
+///   chain it (`lib_child_handler (sig)`, src/process.c:7657, :7769); a
+///   `SA_SIGINFO` predecessor is refused with an install-time diagnostic
+///   because the chain's one-argument call would be undefined behaviour.
+///
+/// GNU replaces the disposition with `deliver_child_signal` here. Ledger 208
+/// had removed it entirely; 456ab01b28 re-added it as GNU's flag-only
+/// equivalent, and this function is that entry's citation for the install.
+#[cfg(unix)]
+fn install_child_signal_flag() -> bool {
+    // SAFETY: `sigaction` receives a fully initialised action and a valid
+    // signal number; the action goes through `emacs_sigaction_init`, and the
+    // handler only stores an atomic and calls a handler the process
+    // installed, both on the async-signal-safe list.
+    unsafe {
+        let action = emacs_sigaction_init(note_child_signal as usize, sigaction_noninteractive());
+
+        // GNU `block_child_signal` (src/sysdep.c:857-864): SIGCHLD and SIGINT,
+        // with `pthread_sigmask` (POSIX leaves `sigprocmask` unspecified once
+        // the process has more than one thread).
+        let mut set: libc::sigset_t = std::mem::zeroed();
+        let mut old_set: libc::sigset_t = std::mem::zeroed();
+        libc::sigemptyset(&mut set);
+        libc::sigaddset(&mut set, libc::SIGCHLD);
+        libc::sigaddset(&mut set, libc::SIGINT);
+        libc::pthread_sigmask(libc::SIG_BLOCK, &set, &mut old_set);
+
+        let mut old_action: libc::sigaction = std::mem::zeroed();
+        let installed = libc::sigaction(libc::SIGCHLD, &action, &mut old_action) == 0;
+        if installed
+            && old_action.sa_sigaction != note_child_signal as usize
+            && old_action.sa_sigaction != libc::SIG_DFL
+            && old_action.sa_sigaction != libc::SIG_IGN
+        {
+            if old_action.sa_flags & libc::SA_SIGINFO != 0 {
+                // GNU easserts the replaced handler has no SA_SIGINFO
+                // (src/process.c:8652-8653), but only in a debug build; a
+                // three-argument handler called with one argument is UB in
+                // signal context. Refuse to chain, and say so here, at
+                // install time, rather than guess the wrong ABI later.
+                tracing::warn!(
+                    "SIGCHLD predecessor carries SA_SIGINFO; not chaining it \
+                     (the one-argument chain would be undefined behaviour)"
+                );
+            } else {
+                LIB_CHILD_HANDLER.store(old_action.sa_sigaction, Ordering::Release);
+            }
+        }
+
+        libc::pthread_sigmask(libc::SIG_SETMASK, &old_set, std::ptr::null_mut());
+        installed
+    }
+}
+
+/// Re-claim SIGCHLD after a library replaced the disposition, the way GNU
+/// calls `catch_child_signal` again after Glib, GNUstep or WebKit touch it
+/// (src/xgselect.c:268; src/xwidget.c:382, :3128, :4281, :4303).
+///
+/// One claim cannot survive a library that installs its own SIGCHLD handler:
+/// the kernel delivers to the newest disposition, so this port's latch would
+/// go silent. Re-running the swap restores `note_child_signal` and preserves
+/// whatever handler is now installed, so the next delivery both latches and
+/// chains it. Idempotent and async-signal-safe requirements are the same as
+/// the first install; it runs on the owning thread, never in a handler.
+///
+/// Neo's claim point is the WebKit/WPE stack (glib `GMainContext`); its
+/// equivalent of GNU's `glib_installs_sigchld_handler` gate is the caller's,
+/// because the pinned Glib decides from its version and pidfd support
+/// (src/process.c:8705-8731).
+pub fn reclaim_child_signal() -> bool {
+    #[cfg(unix)]
+    {
+        install_child_signal_flag()
+    }
+    #[cfg(not(unix))]
+    {
+        false
+    }
+}
+
 /// The write end of GNU's self-pipe (`child_signal_write_fd`,
 /// src/process.c:7595).  `-1` until [`install`] creates it.
 #[cfg(unix)]
@@ -574,37 +811,12 @@ fn install_once() -> InstallReport {
     let mut installed = [false; HandledSignal::COUNT];
 
     for &signal in supported_signals() {
-        // GNU's `emacs_sigaction_init` (src/sysdep.c:1678-1710) blocks the
-        // nonfatal signals Emacs catches while this one is being handled, "so
-        // race conditions are less likely".  The set is reproduced here for
-        // the signals this port installs; the rest of GNU's set names signals
-        // nothing here catches, so adding them would block a disposition that
-        // does not exist.
-        //
-        // SAFETY: `sigaction` is called with a fully initialised `struct
-        // sigaction` and a valid signal number, before any thread that could
-        // race with it is started.
-        let mut action: libc::sigaction = unsafe { std::mem::zeroed() };
-        // SAFETY: `sigemptyset`/`sigaddset` write only through `sa_mask`.
-        unsafe {
-            libc::sigemptyset(&mut action.sa_mask);
-            for &other in supported_signals() {
-                libc::sigaddset(&mut action.sa_mask, other.number());
-            }
-        }
-        let handler: extern "C" fn(libc::c_int) = deliver_user_signal;
-        action.sa_sigaction = handler as usize;
-        // SA_RESTART unconditionally, where GNU takes it only when
-        // `noninteractive` (`emacs_sigaction_flags`, src/sysdep.c:1660-1673).
-        // GNU's interactive reason for omitting it is "we need to poll for
-        // pending input so we need long-running syscalls to be interrupted";
-        // this port's wake is the self-pipe instead, and the wait it must
-        // interrupt is `epoll_wait`, which signal(7) lists among the calls
-        // that are "never restarted after being interrupted by a signal
-        // handler, regardless of the use of SA_RESTART".  So SA_RESTART costs
-        // nothing here and spares every other blocking call in the render
-        // thread and the workers a spurious EINTR.
-        action.sa_flags = libc::SA_RESTART;
+        // GNU builds every action with `emacs_sigaction_init`. The command
+        // line's `noninteractive` is not known this early (the wake pipe is
+        // created before the command loop), so this is the stored pre-mode
+        // profile; `install_termination` records the real value and
+        // re-applies the same builder to every disposition.
+        let action = emacs_sigaction_init(deliver_user_signal as usize, sigaction_noninteractive());
 
         // Seeded with a sentinel `sigaction` cannot produce, so
         // "the previous disposition was SIG_DFL" is a reading and not the
@@ -618,6 +830,14 @@ fn install_once() -> InstallReport {
             installed[index] = true;
             previous[index] = classify_previous(&old);
         }
+    }
+
+    // GNU's `catch_child_signal` (src/process.c:8645-8651) runs from
+    // `init_process_emacs`, before any child is forked. This port's handler
+    // only latches the delivery; the child record stays with the observations
+    // and the wait.
+    if !install_child_signal_flag() {
+        tracing::warn!("could not install the SIGCHLD flag handler");
     }
 
     let report = InstallReport {
@@ -666,6 +886,11 @@ pub fn install_termination(noninteractive: bool) {
     #[cfg(unix)]
     {
         install();
+        // The mode is now known. Every disposition installed before this
+        // point used the stored pre-mode profile, so record the real value
+        // and re-apply the one GNU builder to each of them.
+        SIGACTION_NONINTERACTIVE.store(noninteractive, Ordering::Release);
+
         for sig in FATAL_SIGNALS {
             // SAFETY: valid signals and initialized local sigaction storage.
             let mut old: libc::sigaction = unsafe { std::mem::zeroed() };
@@ -678,26 +903,35 @@ pub fn install_termination(noninteractive: bool) {
             if noninteractive && old.sa_sigaction == libc::SIG_IGN {
                 continue;
             }
-            let mut action: libc::sigaction = unsafe { std::mem::zeroed() };
-            action.sa_sigaction = deliver_user_signal as *const () as usize;
-            action.sa_flags = libc::SA_RESTART;
-            // SAFETY: initialized action, valid signal set and signal numbers.
-            unsafe {
-                libc::sigemptyset(&mut action.sa_mask);
-                libc::sigaddset(&mut action.sa_mask, libc::SIGTERM);
-                libc::sigaddset(&mut action.sa_mask, libc::SIGHUP);
-                if libc::sigaction(sig, &action, std::ptr::null_mut()) != 0 {
-                    panic!(
-                        "cannot install orderly shutdown signal {sig}: {}",
-                        std::io::Error::last_os_error()
-                    );
-                }
+            let action = emacs_sigaction_init(deliver_user_signal as usize, noninteractive);
+            // SAFETY: initialized action and a valid signal number.
+            if unsafe { libc::sigaction(sig, &action, std::ptr::null_mut()) } != 0 {
+                panic!(
+                    "cannot install orderly shutdown signal {sig}: {}",
+                    std::io::Error::last_os_error()
+                );
             }
         }
+
+        // The user signals were installed before the mode was known; replace
+        // the pre-mode action with the mode-correct mask and flags.
+        for &signal in supported_signals() {
+            let action = emacs_sigaction_init(deliver_user_signal as usize, noninteractive);
+            // SAFETY: initialized action and a valid signal number.
+            unsafe {
+                libc::sigaction(signal.number(), &action, std::ptr::null_mut());
+            }
+        }
+
+        // SIGCHLD's mask and flags are mode-dependent too.
+        if !install_child_signal_flag() {
+            tracing::warn!("could not re-claim SIGCHLD for the known batch/interactive mode");
+        }
+
         // P4: GNU's fatal faults are installed after Rust std's runtime has
         // taken SIGSEGV/SIGBUS for its stack-overflow detector; the install
         // saves std's action so a genuine guard-page hit still chains to it.
-        install_fault_dispositions();
+        install_fault_dispositions(noninteractive);
     }
     #[cfg(not(unix))]
     let _ = noninteractive;
@@ -936,13 +1170,13 @@ fn previous_fault_handler(sig: libc::c_int) -> Option<FaultHandler> {
     if flags & libc::SA_SIGINFO == 0 {
         return None;
     }
-    // SAFETY: this is the one peer-signed transmute exception for the fatal
-    // P4 work (TRANSMUTE_CEILING 6 -> 7, pid f70ad89b). `sa_sigaction` is an
-    // integer by ABI and there is no safe route from an integer to a function
-    // pointer. The value was read back from a sigaction this process
-    // installed; SIG_DFL/SIG_IGN are filtered above and SA_SIGINFO fixes the
-    // three-argument signature, so the bits name a valid callback.
-    Some(unsafe { std::mem::transmute::<usize, FaultHandler>(action) })
+    // SAFETY: the P4 fatal-fault chain's peer-signed conversion (the
+    // TRANSMUTE_CEILING 6 -> 7 entry, pid f70ad89b) now goes through the
+    // module's single `handler_from_address` helper. The value was read back
+    // from a sigaction this process installed; SIG_DFL/SIG_IGN are filtered
+    // above and SA_SIGINFO fixes the three-argument signature, so the bits
+    // name a valid callback.
+    Some(unsafe { handler_from_address::<FaultHandler>(action) })
 }
 
 /// Die by `sig` the way GNU's `terminate_due_to_signal` ends: unblock it,
@@ -1010,11 +1244,46 @@ unsafe extern "C" fn deliver_fatal_fault(
     }
 }
 
+/// Emit GNU `shut_down_emacs`'s `"Fatal error 6: Aborted\n"` diagnostic to
+/// stderr when this process owns the foreground controlling TTY
+/// (`src/emacs.c:3112-3147`).
+pub fn write_fatal_abort_diagnostic() {
+    #[cfg(unix)]
+    // SAFETY: `write_fatal_error_line` performs only `tcgetpgrp`, `getpgrp`,
+    // and raw `write(STDERR_FILENO, ...)` syscalls.
+    unsafe {
+        write_fatal_error_line(libc::SIGABRT);
+    }
+}
+
+/// Finish GNU `emacs_abort ()` -> `terminate_due_to_signal (SIGABRT, 40)`
+/// (`src/sysdep.c:2401`, `src/emacs.c:464-483`): optionally write a 40-frame
+/// backtrace to stderr, then unblock `SIGABRT`, restore `SIG_DFL`, and raise
+/// `SIGABRT`.
+pub fn terminate_with_abort(print_backtrace: bool) -> ! {
+    #[cfg(unix)]
+    // SAFETY: captures and writes stack frames via `backtrace(3)` /
+    // `backtrace_symbols_fd`, then unblocks `SIGABRT`, restores `SIG_DFL`, and
+    // raises `SIGABRT`.
+    unsafe {
+        if print_backtrace {
+            capture_fault_backtrace();
+            write_fault_backtrace();
+        }
+        raise_fault_now(libc::SIGABRT)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = print_backtrace;
+        std::process::abort()
+    }
+}
+
 /// Install our SIGSEGV/SIGBUS actions after Rust std's, saving the previous
 /// action per signal. Idempotent; called by [`install_termination`], which
 /// runs from `main` after the Rust runtime has installed its handler.
 #[cfg(unix)]
-fn install_fault_dispositions() {
+fn install_fault_dispositions(noninteractive: bool) {
     FAULT_INSTALL.get_or_init(|| {
         // GNU initializes the backtrace tables before any handler can run
         // (`emacs_backtrace (-1)`, src/emacs.c:1627) because the first
@@ -1027,16 +1296,15 @@ fn install_fault_dispositions() {
             (libc::SIGSEGV, &PREVIOUS_SEGV_ACTION, &PREVIOUS_SEGV_FLAGS),
             (libc::SIGBUS, &PREVIOUS_BUS_ACTION, &PREVIOUS_BUS_FLAGS),
         ] {
-            let mut action: libc::sigaction = unsafe { std::mem::zeroed() };
-            action.sa_sigaction = deliver_fatal_fault as usize;
-            action.sa_flags = libc::SA_SIGINFO | libc::SA_ONSTACK;
+            // GNU builds these with `emacs_sigaction_init` and adds SA_ONSTACK;
+            // this port also takes SA_SIGINFO so a genuine guard-page hit can
+            // chain to Rust std's three-argument handler.
+            let mut action = emacs_sigaction_init(deliver_fatal_fault as usize, noninteractive);
+            action.sa_flags |= libc::SA_SIGINFO | libc::SA_ONSTACK;
             let mut old: libc::sigaction = unsafe { std::mem::zeroed() };
             // SAFETY: both pointers are to initialised locals and `sig` is a
             // valid signal number.
-            let installed = unsafe {
-                libc::sigfillset(&mut action.sa_mask);
-                libc::sigaction(sig, &action, &mut old)
-            };
+            let installed = unsafe { libc::sigaction(sig, &action, &mut old) };
             if installed == 0 {
                 previous_action.store(old.sa_sigaction, Ordering::Release);
                 previous_flags.store(old.sa_flags, Ordering::Release);

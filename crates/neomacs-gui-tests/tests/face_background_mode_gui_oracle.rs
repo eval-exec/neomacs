@@ -23,6 +23,17 @@
 //!   (lisp/faces.el:2293-2305), so an explicit `background-color` overrides the
 //!   default face's color.
 //!
+//! * **The default face reports the frame's colors.** On an opening graphical
+//!   frame `face-attribute 'default :background'/`:foreground` are color
+//!   strings, not `unspecified-bg'/`unspecified-fg'; frame creation and
+//!   `background-color` assignment keep them in step with the frame
+//!   parameters.
+//!
+//! * **`frame-live-p` reports the terminal type.** GNU returns `Fframep` for
+//!   a live frame and nil otherwise (src/frame.c:326-338), so the fixture
+//!   records `(eq (frame-live-p frame) (framep frame))` rather than the
+//!   backend-specific symbol.
+//!
 //! This is a real GNU-parity contract: it is not to be blessed from Neomacs,
 //! weakened, or skipped.
 

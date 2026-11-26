@@ -28,9 +28,8 @@ fn pty_with_unread_output() -> (ProcessManager, ProcessId, u32) {
     let process = manager.get(id).expect("spawned process");
     let pid = process.os_pid.expect("own child pid");
     let fd = process
-        .live_io
-        .pty_master
-        .as_ref()
+        .live_io()
+        .pty_master()
         .and_then(|master| master.as_raw_fd())
         .expect("native master fd");
     let mut event = libc::pollfd {

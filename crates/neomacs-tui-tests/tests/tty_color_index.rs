@@ -117,7 +117,7 @@ struct Editor {
 fn gnu() -> Editor {
     Editor {
         name: "GNU",
-        program: PathBuf::from("emacs"),
+        program: neomacs_tui_tests::oracle::gnu_oracle_program(),
         extra_args: vec![
             "-no-comp-spawn".to_string(),
             "--eval=(progn(set'native-comp-jit-compilation())(set'native-comp-async-report-warnings-errors'silent))".to_string(),

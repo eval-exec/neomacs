@@ -387,30 +387,29 @@ fn composition_components_display_text(components: Value, relative_p: bool) -> O
             .map(|components| composition_chars_display_text(components.chars())),
         ValueKind::Cons => {
             let items = list_to_vec(&components)?;
-            composition_items_display_text(&items, relative_p)
+            composition_items_display_text(items.into_iter(), relative_p)
         }
         _ if components.is_vector() => {
             let items = components.as_vector_data()?;
-            composition_items_display_text(items, relative_p)
+            composition_items_display_text(items.iter(), relative_p)
         }
         _ => None,
     }
 }
 
-fn composition_items_display_text(items: &[Value], relative_p: bool) -> Option<String> {
-    if items.is_empty() {
+fn composition_items_display_text(
+    items: impl ExactSizeIterator<Item = Value>,
+    relative_p: bool,
+) -> Option<String> {
+    if items.len() == 0 {
         return Some(String::new());
     }
-    let glyphs: Vec<Value> = if relative_p {
-        items.to_vec()
-    } else {
-        if items.len().is_multiple_of(2) {
-            return None;
-        }
-        items.iter().step_by(2).copied().collect()
-    };
+    if !relative_p && items.len().is_multiple_of(2) {
+        return None;
+    }
     let mut text = String::new();
-    for item in glyphs {
+    let step = if relative_p { 1 } else { 2 };
+    for item in items.step_by(step) {
         let code = item.as_fixnum()?;
         CompositionDisplayComponent::from_code(code)?.append_visible_text(&mut text);
     }
@@ -684,7 +683,7 @@ fn composition_get_id_width(components: Value, key: &Value) -> Option<i64> {
     // (rule/altchars vectors and lists) requires an odd-length, all-fixnum key.
     let is_glyph_string = components
         .as_vector_data()
-        .is_some_and(|c| c.len() >= 2 && c[0].is_vector());
+        .is_some_and(|c| c.len() >= 2 && c.at(0).is_vector());
     if is_glyph_string {
         // Each composed glyph element must be a vector.
         if items.iter().skip(1).any(|v| !v.is_vector()) {
@@ -773,52 +772,6 @@ fn find_composition_in_buffer(
 
 /// How a caller bounds GNU's automatic-composition search.
 ///
-/// `find_automatic_composition' gives negative, forward, and backward limits
-/// different meanings.  Naming those states keeps the signed sentinel out of
-/// the range-selection logic below.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum AutomaticCompositionQuery {
-    Covering { pos: usize },
-    Forward { pos: usize, limit: usize },
-    Backward { pos: usize, limit: usize },
-}
-
-impl AutomaticCompositionQuery {
-    fn new(pos: usize, limit: i64) -> Self {
-        if limit < 0 || limit as usize == pos {
-            Self::Covering { pos }
-        } else if limit as usize > pos {
-            Self::Forward {
-                pos,
-                limit: limit as usize,
-            }
-        } else {
-            Self::Backward {
-                pos,
-                limit: limit as usize,
-            }
-        }
-    }
-
-    #[cfg_attr(feature = "test-support", visibility::make(pub))]
-    fn accepts(self, range: CharRange) -> bool {
-        let start = range.start().get();
-        let end = range.end().get();
-        match self {
-            Self::Covering { pos } => start <= pos && pos < end,
-            Self::Forward { pos, limit } => pos < end && start < limit,
-            Self::Backward { pos, limit } => limit < end && start < pos,
-        }
-    }
-
-    fn select(self, ranges: Vec<CharRange>) -> Option<CharRange> {
-        match self {
-            Self::Backward { .. } => ranges.into_iter().rev().find(|range| self.accepts(*range)),
-            _ => ranges.into_iter().find(|range| self.accepts(*range)),
-        }
-    }
-}
-
 /// Distinguish stored `composition' properties from display-driven automatic
 /// compositions.  The former must pass Form-A/Form-B validation and may be
 /// registered; the latter already carries the glyph string returned to Lisp.
@@ -906,6 +859,15 @@ impl AutomaticCompositionRules {
         })
     }
 
+    /// Enumerate the original Lisp tables this view can read after a callback.
+    /// The evaluator-side owner supplies the lifetime lease; enumeration does
+    /// not consult the buffer again, execute Lisp, or traverse table contents.
+    pub fn gc_roots(&self) -> impl Iterator<Item = Value> + '_ {
+        [Some(self.table), Some(self.syntax.chartable), self.category]
+            .into_iter()
+            .flatten()
+    }
+
     pub fn spans(self, text: &str) -> Vec<AutomaticCompositionSpan> {
         self.spans_in(text, 0)
     }
@@ -918,6 +880,200 @@ impl AutomaticCompositionRules {
                 .with_symbol_mode(self.symbol_mode),
         };
         select_automatic_composition_spans(self.table, &syntax, text, char_offset)
+    }
+
+    /// GNU `find_automatic_composition` over a text slice.
+    ///
+    /// `pos` and `limit` are character indices into `text`; `None` for the
+    /// limit is GNU's negative LIMIT ("at POS").  `head` is the safe rewind
+    /// bound (the first character after the previous newline, or 0 for a
+    /// string).  `shape` builds and shapes one candidate composition;
+    /// returning `None` is GNU's `autocmp_chars` nil.  The returned span is in
+    /// slice character coordinates.
+    ///
+    /// The rewind/scan loop and its "last examined rule" result follow
+    /// src/composite.c:1641-1875: a composable POS is rewound to the start of
+    /// its composable run, rules are gated by `check_pos >= head` and by the
+    /// LIMIT side, and a scan that finds no covering composition returns the
+    /// result of the last rule it examined (nil when that rule failed).
+    pub(crate) fn find_automatic_composition(
+        self,
+        text: &str,
+        pos: usize,
+        limit: Option<i64>,
+        head: usize,
+        shape: &mut dyn FnMut(usize, usize, Value) -> Option<Value>,
+    ) -> Option<(usize, usize, Value)> {
+        if text.is_empty() {
+            return None;
+        }
+        let mut byte_offsets = Vec::with_capacity(text.len() + 1);
+        byte_offsets.extend(text.char_indices().map(|(offset, _)| offset));
+        byte_offsets.push(text.len());
+        let char_count = byte_offsets.len() - 1;
+        if pos >= char_count || head > pos {
+            return None;
+        }
+        let char_at = |index: usize| {
+            text[byte_offsets[index]..]
+                .chars()
+                .next()
+                .expect("character index is inside the scanned text")
+        };
+        let syntax = super::regex_emacs::BufferSyntaxLookup {
+            syntax_table: self.syntax,
+            category_table: self.category,
+            word_boundary: super::regex_emacs::WordBoundaryLookup::default()
+                .with_symbol_mode(self.symbol_mode),
+        };
+
+        let limit = match limit {
+            Some(limit) => limit.min(char_count as i64),
+            None => pos as i64,
+        };
+        let tail = char_count;
+        let mut fore_check_limit = if limit <= pos as i64 {
+            (pos + 1 + MAX_AUTO_COMPOSITION_LOOKBACK).min(tail)
+        } else {
+            ((limit.max(0) as usize) + MAX_AUTO_COMPOSITION_LOOKBACK).min(tail)
+        };
+        let mut cur = pos;
+        loop {
+            let mut skip_rewind = false;
+            if !char_composable_p(char_at(cur)) {
+                if limit <= pos as i64 {
+                    // Case (1): back up to the previous composable character.
+                    loop {
+                        if cur as i64 <= limit || cur == 0 {
+                            return None;
+                        }
+                        cur -= 1;
+                        if char_composable_p(char_at(cur)) {
+                            break;
+                        }
+                    }
+                    fore_check_limit = (cur + 1).min(tail);
+                } else {
+                    // Case (2): no rewinding; search forward from POS.
+                    skip_rewind = true;
+                }
+            }
+            if !skip_rewind {
+                // Rewind to the start of the current composable run.
+                while head < cur {
+                    let previous = cur;
+                    cur -= 1;
+                    if !char_composable_p(char_at(cur)) {
+                        cur = previous;
+                        break;
+                    }
+                }
+            }
+
+            let scan_start = cur;
+            let mut last: Option<(usize, usize, Value)> = None;
+            while cur < fore_check_limit {
+                let trigger = cur;
+                let rules = super::chartable::ct_lookup_with_symbols(
+                    &self.table,
+                    i64::from(char_at(trigger) as u32),
+                    self.symbol_mode,
+                )
+                .unwrap_or(Value::NIL);
+                let mut advanced_to_end = false;
+                if !rules.is_nil() {
+                    for rule in neovm_value::value::list_iter(rules) {
+                        let Some(fields) = rule.as_vector_data() else {
+                            continue;
+                        };
+                        if fields.len() != 3 {
+                            continue;
+                        }
+                        let Some(lookback) = fields
+                            .at(1)
+                            .as_fixnum()
+                            .and_then(|value| usize::try_from(value).ok())
+                        else {
+                            continue;
+                        };
+                        let Some(start) = trigger.checked_sub(lookback) else {
+                            continue;
+                        };
+                        if start < head {
+                            continue;
+                        }
+                        if limit <= pos as i64 {
+                            if (pos as i64) < start as i64 {
+                                continue;
+                            }
+                        } else if limit <= start as i64 {
+                            continue;
+                        }
+                        // Every rule that passes the gates is examined: GNU
+                        // assigns the rule function's result to *gstring even
+                        // when that result is nil.
+                        last = None;
+                        let pattern_value = fields.at(0);
+                        let match_len = if pattern_value.is_nil() {
+                            1
+                        } else {
+                            let Some(pattern) = pattern_value.as_lisp_string() else {
+                                continue;
+                            };
+                            let suffix = &text[byte_offsets[start]..];
+                            let Ok(Some(match_len)) =
+                                super::regex::looking_at_lisp_pattern_length_with_syntax(
+                                    pattern, suffix, &syntax,
+                                )
+                            else {
+                                continue;
+                            };
+                            match_len
+                        };
+                        let end = start.saturating_add(match_len).min(tail);
+                        if start >= end || trigger >= end {
+                            continue;
+                        }
+                        // GNU passes the matched rule's FUNC to
+                        // `auto-composition-function` as its first
+                        // argument (`autocmp_chars`, src/composite.c).
+                        let Some(gstring) = shape(start, end, fields.at(2)) else {
+                            continue;
+                        };
+                        last = Some((start, end, gstring));
+                        let target = if (pos as i64) < limit {
+                            (pos as i64) < end as i64
+                        } else {
+                            start as i64 <= pos as i64 && (pos as i64) < end as i64
+                        };
+                        if target {
+                            return last;
+                        }
+                        cur = end;
+                        advanced_to_end = true;
+                        break;
+                    }
+                }
+                if !advanced_to_end {
+                    cur += 1;
+                }
+            }
+
+            if (pos as i64) < limit {
+                return None;
+            }
+            if let Some(found) = last {
+                return Some(found);
+            }
+            if scan_start == head {
+                return None;
+            }
+            cur = scan_start;
+            if cur == 0 {
+                return None;
+            }
+            cur -= 1;
+        }
     }
 }
 
@@ -1050,7 +1206,8 @@ fn select_automatic_composition_spans(
             if fields.len() != 3 {
                 continue;
             }
-            let Some(lookback) = fields[1]
+            let Some(lookback) = fields
+                .at(1)
                 .as_fixnum()
                 .and_then(|value| usize::try_from(value).ok())
             else {
@@ -1063,10 +1220,11 @@ fn select_automatic_composition_spans(
                 continue;
             }
 
-            let match_len = if fields[0].is_nil() {
+            let pattern_value = fields.at(0);
+            let match_len = if pattern_value.is_nil() {
                 1
             } else {
-                let Some(pattern) = fields[0].as_lisp_string() else {
+                let Some(pattern) = pattern_value.as_lisp_string() else {
                     continue;
                 };
                 let suffix = &text[byte_offsets[start]..];
@@ -1154,108 +1312,282 @@ pub fn automatic_composition_for_terminal(text: &str) -> TerminalComposition {
     }
 }
 
-fn is_unicode_combining_mark(code: u32) -> bool {
-    use neovm_value::emacs_char::UnicodeCategory;
+/// GNU `char_composable_p` (src/composite.c:986-1005): characters of general
+/// category C? (except ZWNJ, ZWJ and the tag characters) and the line and
+/// paragraph separators are the only non-composable characters.  This is a
+/// property of the character, not of whether the composition-function-table
+/// currently has a rule for it.
+fn char_composable_p(ch: char) -> bool {
+    use neovm_value::emacs_char::{UnicodeCategory, char_general_category};
 
-    let Some(ch) = char::from_u32(code) else {
+    let code = ch as u32;
+    // GNU uses `c >= ' '` before consulting the category table.
+    if code < ' ' as u32 {
         return false;
-    };
-    matches!(
-        UnicodeCategory::from(unicode_general_category::get_general_category(ch)),
-        UnicodeCategory::NonspacingMark
-            | UnicodeCategory::SpacingMark
-            | UnicodeCategory::EnclosingMark
-    )
+    }
+    if code == 0x200C || code == 0x200D {
+        return true;
+    }
+    if (0xE0020..=0xE007F).contains(&code) {
+        return true;
+    }
+    char_general_category(code)
+        .is_some_and(|category| category <= UnicodeCategory::SpaceSeparator as i64)
 }
 
-/// Whether the active table still contains GNU's default look-behind-one rule
-/// for graphic combining characters.
+/// The shared gates of GNU `find_automatic_composition` as reached from
+/// `Ffind_composition_internal` (src/composite.c): multibyte text,
+/// `auto-composition-mode` enabled, and the current buffer displayed in some
+/// window (`Fget_buffer_window (Fcurrent_buffer (), Qnil)`).
 ///
-/// Consulting the table is important: users can disable or replace automatic
-/// composition per character.  This recognizes the rule installed by
-/// `lisp/composite.el`; general execution of arbitrary composition rules remains
-/// the broader `find_automatic_composition' port.
-fn has_default_combining_rule<H: TextHost>(ctx: &H, code: u32) -> bool {
-    let symbol_mode = ctx.symbol_mode();
-    let table = ctx
-        .visible_variable_value_or_nil(neovm_value::intern::intern("composition-function-table"));
-    let Ok(rules) = super::chartable::builtin_char_table_range_with_symbols(
-        vec![table, Value::fixnum(code as i64)],
-        Some(ctx.variables()),
-        symbol_mode,
-    ) else {
-        return false;
-    };
-    let Some(rules) = list_to_vec(&rules) else {
-        return false;
-    };
-
-    rules.into_iter().any(|rule| {
-        let Some(fields) = rule.as_vector_data() else {
-            return false;
-        };
-        fields.len() == 3
-            && fields[0].as_utf8_str() == Some("\\c.\\c^+")
-            && fields[1].as_fixnum() == Some(1)
-            && fields[2].is_symbol_named("compose-gstring-for-graphic", symbol_mode)
-    })
-}
-
-/// Fast path for the default base-plus-combining-marks rule installed by GNU
-/// `composite.el`.
-///
-/// This is deliberately modeled as an automatic composition, rather than as
-/// unconditional Unicode grapheme segmentation: it observes
-/// `auto-composition-mode`, multibyte-ness, and the live
-/// `composition-function-table`, matching the control points used by GNU's
-/// `find_automatic_composition`.
-fn find_default_combining_composition_in_string<H: TextHost>(
-    ctx: &H,
-    string: &neovm_value::heap_types::LispString,
-    pos: usize,
-    limit: i64,
-) -> Option<CharRange> {
-    if !string.is_multibyte()
-        || !ctx.current_buffer_is_displayed()
-        || ctx
+/// GNU's `inhibit_auto_composition` (src/composite.c:1008-1022) also disables
+/// composition when `auto-composition-mode` is a string equal to the selected
+/// terminal's `tty-type`; that check runs in
+/// `TextHost::composition_font_or_frame_at` where terminal state lives.
+fn automatic_composition_enabled<H: TextHost>(ctx: &H, multibyte: bool) -> bool {
+    multibyte
+        && ctx.current_buffer_is_displayed()
+        && !ctx
             .visible_variable_value_or_nil(neovm_value::intern::intern("auto-composition-mode"))
             .is_nil()
+}
+
+/// Build and shape the gstring of one composition as GNU's `autocmp_chars`
+/// does (src/composite.c:929-984): resolve `font_object` natively (the
+/// displaying window's frame on non-window/TTY frames, or the resolved font
+/// object on graphical frames — never by calling Lisp `font-at`), consult
+/// `composition-get-gstring`, and when the gstring has no cached ID call
+/// `auto-composition-function` with the matched rule's FUNC.
+///
+/// A font or shaping failure yields `None`, matching `autocmp_chars`'s nil
+/// return that keeps GNU's scan moving to the next candidate.  One
+/// simplification against `autocmp_chars` is deliberate: on graphical frames
+/// the font comes from the composition start rather than GNU's whole-range
+/// `font_range` walk (equivalent whenever one face covers the composition).
+fn shape_composition_gstring<H: TextHost>(
+    ctx: &mut H,
+    start: i64,
+    end: i64,
+    func: Value,
+    string: Value,
+) -> Option<Value> {
+    let font = ctx.composition_font_or_frame_at(start, string)?;
+    let gstring = composition_get_gstring(
+        ctx,
+        vec![Value::fixnum(start), Value::fixnum(end), font, string],
+    )
+    .ok()?;
+    // GNU `autocmp_chars` calls `auto-composition-function` only when the
+    // gstring has no ID (src/composite.c:973); a cached shaped gstring is
+    // reused as-is.
+    if gstring
+        .as_vector_data()
+        .and_then(|slots| slots.get(1))
+        .is_some_and(|id| !id.is_nil())
     {
+        return Some(gstring);
+    }
+    // GNU `autocmp_chars` runs the default `auto-composition-function`
+    // (`auto-compose-chars`) with the matched rule's FUNC and the metric-
+    // filled gstring; that default builds/looks up the gstring and calls
+    // FUNC, which decides whether to shape (compose-gstring-for-graphic's
+    // lone-mark branch only sets an adjustment, and non-window frames pass
+    // `win->frame` so `auto-compose-chars` runs `compose-gstring-for-terminal`).
+    // Calling `font-shape-gstring` directly here would skip both the user's
+    // buffer-local function and the rule's non-shaping / terminal branches.
+    let auto_composition =
+        ctx.visible_variable_value_or_nil(neovm_value::intern::intern("auto-composition-function"));
+    tracing::debug!(
+        target: "neovm_text::composition_search",
+        start,
+        font_object = font.is_font_object(),
+        auto_composition_nil = auto_composition.is_nil(),
+        auto_composition_kind = ?auto_composition.kind(),
+        "autocmp shape"
+    );
+    if auto_composition.is_nil() {
         return None;
     }
+    // GNU `autocmp_chars` uses `safe_calln`, not `eval`: the arguments are
+    // VALUES (the rule's FUNC symbol, the font/frame object, STRING) and must
+    // not be evaluated as variables.  Its `record_unwind_save_match_data`
+    // (composite.c:941) and the point save around the call are mirrored by
+    // `save-match-data` + `save-excursion`, so a rule's `string-match` cannot
+    // leak out of the composition search.
+    //
+    // DIRECTION is Qnil on purpose.  The `find-composition-internal` subr
+    // matches GNU `Ffind_composition_internal`, which passes Qnil.  The
+    // layout snapshot resolver also reaches this builder (Neo's display
+    // path), and it passes Qnil too, whereas GNU's `composition_reseat_it`
+    // derives the direction from the run's bidi level (even -> L2R, odd ->
+    // R2L, below zero -> nil).  HarfBuzz normally guesses the same direction
+    // from the script, so Arabic and Hebrew agree; Common/Inherited-script
+    // clusters on odd levels diverge.  That pre-existing display-path gap is
+    // named N-autocmp-direction.
+    let quote = |value: Value| {
+        Value::list(vec![
+            Value::symbol(neovm_value::intern::intern("quote")),
+            value,
+        ])
+    };
+    let call = Value::list(vec![
+        Value::symbol(neovm_value::intern::intern("save-match-data")),
+        Value::list(vec![
+            Value::symbol(neovm_value::intern::intern("save-excursion")),
+            Value::list(vec![
+                Value::symbol(neovm_value::intern::intern("funcall")),
+                quote(auto_composition),
+                quote(func),
+                Value::fixnum(start),
+                Value::fixnum(end),
+                quote(font),
+                quote(string),
+                Value::NIL,
+            ]),
+        ]),
+    ]);
+    let shaped = ctx.eval_sub(call).ok()?;
+    (!shaped.is_nil()).then_some(shaped)
+}
 
-    let codes = neovm_value::strings_core::lisp_string_char_codes(string);
-    let query = AutomaticCompositionQuery::new(pos, limit);
-    let mut ranges = Vec::new();
-    let mut base = 0usize;
-    while base < codes.len() {
-        if is_unicode_combining_mark(codes[base]) {
-            base += 1;
-            continue;
-        }
-
-        let mut end = base + 1;
-        while end < codes.len()
-            && is_unicode_combining_mark(codes[end])
-            && has_default_combining_rule(ctx, codes[end])
-        {
-            end += 1;
-        }
-        if end > base + 1 {
-            ranges.push(CharRange::new(CharPos0::new(base), CharPos0::new(end)));
-        }
-        base = end;
+/// The string-arm automatic composition search: GNU
+/// `find_automatic_composition` for `Ffind_composition_internal`'s string
+/// case (`src/composite.c:2071-2081`).  `pos` and `limit` are in the string's
+/// 0-based coordinates, as the caller received them.
+fn find_automatic_composition_in_string<H: TextHost>(
+    ctx: &mut H,
+    string: Value,
+    text: &str,
+    multibyte: bool,
+    pos: usize,
+    limit: i64,
+) -> Option<(i64, i64, Value)> {
+    if !automatic_composition_enabled(ctx, multibyte) {
+        return None;
     }
-    query.select(ranges)
+    let table = ctx
+        .visible_variable_value_or_nil(neovm_value::intern::intern("composition-function-table"));
+    let rules = {
+        let buf = ctx.buffers().current_buffer()?;
+        AutomaticCompositionRules::new(&buf, table)?
+    };
+    let limit = (limit >= 0).then_some(limit);
+    let mut shape = |start: usize, end: usize, func: Value| {
+        shape_composition_gstring(ctx, start as i64, end as i64, func, string)
+    };
+    rules
+        .find_automatic_composition(text, pos, limit, 0, &mut shape)
+        .map(|(start, end, gstring)| (start as i64, end as i64, gstring))
+}
+
+/// The buffer-arm automatic composition search: GNU
+/// `find_automatic_composition` for `Ffind_composition_internal`'s nil-string
+/// case.  `pos` and `to` are buffer positions (1-based; `to` negative means
+/// "at POS").
+///
+/// The scan is bounded to POS's line — "This assumes a newline can never be
+/// composed" — and to GNU's forward check limit.  The returned span is
+/// 1-based and end-exclusive, like the property-based search beside it.
+fn find_automatic_composition_in_buffer<H: TextHost>(
+    ctx: &mut H,
+    pos: i64,
+    to: i64,
+) -> Option<(i64, i64, Value)> {
+    let (begv, zv, multibyte) = {
+        let buf = ctx.buffers().current_buffer()?;
+        (
+            buf.point_min_lisp_char_pos().as_i64(),
+            buf.point_max_lisp_char_pos().as_i64(),
+            buf.get_multibyte(),
+        )
+    };
+    if !automatic_composition_enabled(ctx, multibyte) {
+        return None;
+    }
+    // GNU scans from the start of POS's line; a lookback that crosses a
+    // newline is as impossible as a match that spans one.
+    let head = {
+        let buf = ctx.buffers().current_buffer()?;
+        let mut byte = buf.lisp_pos_to_emacs_byte_pos(neovm_edit::buffer::LispCharPos1::new(pos));
+        let begv_byte = buf.lisp_pos_to_emacs_byte_pos(neovm_edit::buffer::LispCharPos1::new(begv));
+        while byte > begv_byte {
+            match buf.char_before_emacs_byte_pos(byte) {
+                Some('\n') | None => break,
+                Some(_) => {
+                    let Some(len) = buf.char_before_emacs_byte_len(byte) else {
+                        break;
+                    };
+                    byte = byte.saturating_sub_len(len);
+                }
+            }
+        }
+        buf.emacs_byte_pos_to_lisp_char_pos(byte).as_i64()
+    };
+    // The forward trigger limit past POS (or LIMIT): matches may run to the
+    // end of their line, but no trigger beyond this limit starts one.
+    let fore_check_limit = if to >= 0 && to > pos {
+        (to + MAX_AUTO_COMPOSITION_LOOKBACK as i64).min(zv)
+    } else {
+        (pos + 1 + MAX_AUTO_COMPOSITION_LOOKBACK as i64).min(zv)
+    };
+    let scan_end = {
+        let buf = ctx.buffers().current_buffer()?;
+        let mut cursor = fore_check_limit.max(head).min(zv);
+        while cursor < zv {
+            let byte =
+                buf.lisp_pos_to_emacs_byte_pos(neovm_edit::buffer::LispCharPos1::new(cursor));
+            if buf.char_code_after_emacs_byte_pos(byte) == Some('\n' as u32) {
+                break;
+            }
+            cursor += 1;
+        }
+        cursor
+    };
+    if scan_end <= head {
+        return None;
+    }
+    let text = {
+        let buf = ctx.buffers().current_buffer()?;
+        let byte_range =
+            neovm_edit::emacs_core::editfns::current_buffer_accessible_char_region_in_buffers(
+                ctx.buffers(),
+                &Value::fixnum(head),
+                &Value::fixnum(scan_end),
+            )
+            .ok()??;
+        buf.buffer_substring_lisp_string_range(byte_range)
+            .as_utf8_str()?
+            .to_owned()
+    };
+    let table = ctx
+        .visible_variable_value_or_nil(neovm_value::intern::intern("composition-function-table"));
+    let rules = {
+        let buf = ctx.buffers().current_buffer()?;
+        AutomaticCompositionRules::new(&buf, table)?
+    };
+    let pos_index = usize::try_from(pos - head).ok()?;
+    let limit = (to >= 0).then_some(to - head);
+    let mut shape = |start: usize, end: usize, func: Value| {
+        shape_composition_gstring(
+            ctx,
+            head + start as i64,
+            head + end as i64,
+            func,
+            Value::NIL,
+        )
+    };
+    rules
+        .find_automatic_composition(&text, pos_index, limit, 0, &mut shape)
+        .map(|(start, end, gstring)| (head + start as i64, head + end as i64, gstring))
 }
 
 /// `(find-composition-internal POS LIMIT STRING DETAIL-P)`
 ///
-/// GNU `Ffind_composition_internal` (composite.c): describe the composition at
-/// or nearest to POS. With DETAIL-P nil, returns `(FROM TO VALID-P)`; otherwise
-/// `(FROM TO COMPONENTS RELATIVE-P MOD-FUNC WIDTH)`.  The default
-/// base-plus-combining-marks automatic rule is implemented here; arbitrary
-/// font-driven rules still require the broader display shaper port.
+/// GNU `Ffind_composition_internal` (`src/composite.c:2040-2095`): describe the
+/// composition at or nearest to POS. With DETAIL-P nil, returns
+/// `(FROM TO VALID-P)` for stored compositions or `(FROM TO GSTRING)` for
+/// automatic compositions; otherwise `(FROM TO COMPONENTS RELATIVE-P MOD-FUNC
+/// WIDTH)` for stored compositions or `(FROM TO GSTRING)` for automatic ones.
 #[doc(hidden)]
 pub fn find_composition_internal<H: TextHost>(ctx: &mut H, args: Vec<Value>) -> EvalResult {
     expect_args("find-composition-internal", &args, 4)?;
@@ -1302,34 +1634,28 @@ pub fn find_composition_internal<H: TextHost>(ctx: &mut H, args: Vec<Value>) -> 
             }
         };
         // STRING positions are 0-based.  Stored composition properties take
-        // precedence over automatic composition, as in GNU composite.c.
+        // precedence over automatic composition, as in GNU `src/composite.c:2071-2081`.
         if let Some((start, end, property)) = run_at(pos) {
             Some(LocatedComposition::Stored {
                 start,
                 end,
                 property,
             })
-        } else if let Some(range) =
-            find_default_combining_composition_in_string(ctx, text, pos as usize, limit)
-        {
-            let start = range.start().get() as i64;
-            let end = range.end().get() as i64;
-            let gstring = composition_get_gstring(
+        } else {
+            let text_str = text.as_utf8_str().map(str::to_owned).unwrap_or_default();
+            find_automatic_composition_in_string(
                 ctx,
-                vec![
-                    Value::fixnum(start),
-                    Value::fixnum(end),
-                    Value::NIL,
-                    args[2],
-                ],
-            )?;
-            Some(LocatedComposition::Automatic {
+                args[2],
+                &text_str,
+                text.is_multibyte(),
+                pos as usize,
+                limit,
+            )
+            .map(|(start, end, gstring)| LocatedComposition::Automatic {
                 start,
                 end,
                 gstring,
             })
-        } else {
-            None
         }
     } else {
         let (begv, zv) = {
@@ -1356,17 +1682,50 @@ pub fn find_composition_internal<H: TextHost>(ctx: &mut H, args: Vec<Value>) -> 
             ));
         }
         let to = if limit < 0 { -1 } else { limit.clamp(begv, zv) };
-        let buf = ctx
-            .buffers()
-            .current_buffer()
-            .expect("checked current buffer");
-        find_composition_in_buffer(buf, begv, zv, pos, to, comp).map(|(start, end, property)| {
-            LocatedComposition::Stored {
-                start,
-                end,
-                property,
+        let stored = {
+            let buf = ctx
+                .buffers()
+                .current_buffer()
+                .expect("checked current buffer");
+            find_composition_in_buffer(buf, begv, zv, pos, to, comp)
+        };
+        match stored {
+            // A stored run that does not cover POS still wins unless an
+            // automatic composition sits strictly closer to POS (GNU
+            // Ffind_composition_internal's second branch).
+            Some((start, end, property)) if !(start <= pos && pos < end) => {
+                match find_automatic_composition_in_buffer(ctx, pos, to) {
+                    Some((s, e, gstring)) if (if e <= pos { e > end } else { s < start }) => {
+                        Some(LocatedComposition::Automatic {
+                            start: s,
+                            end: e,
+                            gstring,
+                        })
+                    }
+                    _ => Some(LocatedComposition::Stored {
+                        start,
+                        end,
+                        property,
+                    }),
+                }
             }
-        })
+            found => {
+                found.map(|(start, end, property)| LocatedComposition::Stored {
+                    start,
+                    end,
+                    property,
+                })
+            }
+            .or_else(|| {
+                find_automatic_composition_in_buffer(ctx, pos, to).map(|(s, e, gstring)| {
+                    LocatedComposition::Automatic {
+                        start: s,
+                        end: e,
+                        gstring,
+                    }
+                })
+            }),
+        }
     };
 
     let Some(found) = found else {
@@ -1501,32 +1860,72 @@ pub fn composition_get_gstring<H: TextHost>(ctx: &mut H, args: Vec<Value>) -> Ev
     }
 
     let segment = &codes;
-    let mut encoded = vec![if args[2].is_font_object() {
-        args[2]
+    let font_object = args[2];
+    let mut encoded = vec![if font_object.is_font_object() {
+        font_object
     } else {
         Value::symbol("utf-8-unix")
     }];
     encoded.extend(segment.iter().map(|code| Value::fixnum(*code as i64)));
 
+    // GNU `Fcomposition_get_gstring` consults `gstring_hash_table` by the
+    // header before building the body (src/composite.c:1981-1988).  A hit is
+    // the previously SHAPED gstring with its ID set; returning it lets the
+    // automatic-composition search skip the rule call entirely on re-display.
+    let header_value = Value::vector(encoded.clone());
+    if let Some(cached) = ctx.composition_gstring_cache_lookup(header_value) {
+        return Ok(cached);
+    }
     let mut gstring = vec![Value::vector(encoded), Value::NIL];
     // GNU `fill_gstring_body` sets each glyph's FROM and TO to the
-    // character's index in the gstring (src/composite.c:889-891).  The
-    // terminal path (no font object) then copies the character code into
-    // the glyph CODE slot and the char width table's width into WIDTH
-    // (src/composite.c:907-916).
+    // character's index in the gstring (src/composite.c:889-891).  With a
+    // font object it fills the driver's encoded code and text extents
+    // (`font_fill_lglyph_metrics`); a character the font cannot encode, and
+    // the terminal path, take the char-width-table fallback
+    // (src/composite.c:907-916).  Composition rules read those metrics
+    // (`compose-gstring-for-graphic` derives a lone mark's spacing
+    // adjustment from lbearing/rbearing/width), so a placeholder metric here
+    // changes the displayed advance.
+    let width_table = if font_object.is_font_object() {
+        None
+    } else {
+        crate::encoding::char_width_table_value(ctx)
+    };
     for (i, code) in segment.iter().enumerate() {
         let code = *code as i64;
         let index = Value::fixnum(i as i64);
+        let (code_slot, width, lbearing, rbearing, ascent, descent) =
+            match (font_object.is_font_object(), u32::try_from(code).ok()) {
+                (true, Some(ch)) => match ctx.font_glyph_text_metrics(font_object, ch) {
+                    Some(metrics) => (
+                        Value::fixnum(i64::from(metrics.code)),
+                        metrics.width,
+                        metrics.lbearing,
+                        metrics.rbearing,
+                        metrics.ascent,
+                        metrics.descent,
+                    ),
+                    None => {
+                        let width = crate::encoding::char_width_in_table(width_table, ch);
+                        (Value::fixnum(code), width as i64, 0, width as i64, 1, 0)
+                    }
+                },
+                (false, Some(ch)) => {
+                    let width = crate::encoding::char_width_in_table(width_table, ch);
+                    (Value::fixnum(code), width as i64, 0, width as i64, 1, 0)
+                }
+                _ => (Value::fixnum(code), 1, 0, 1, 1, 0),
+            };
         gstring.push(Value::vector(vec![
             index,
             index,
             Value::fixnum(code),
-            Value::fixnum(code),
-            Value::fixnum(1),
-            Value::fixnum(0),
-            Value::fixnum(1),
-            Value::fixnum(1),
-            Value::fixnum(0),
+            code_slot,
+            Value::fixnum(width),
+            Value::fixnum(lbearing),
+            Value::fixnum(rbearing),
+            Value::fixnum(ascent),
+            Value::fixnum(descent),
             Value::NIL,
         ]));
     }
@@ -1549,15 +1948,17 @@ pub fn composition_gstring_p<H: TextHost>(ctx: &H, value: Value) -> bool {
     if gstring.len() < 2 {
         return false;
     }
-    let Some(header) = gstring[0].as_vector_data() else {
+    let header_value = gstring.at(0);
+    let Some(header) = header_value.as_vector_data() else {
         return false;
     };
     if header.len() < 2 {
         return false;
     }
-    let valid_header_font = header[0].is_nil()
-        || header[0].is_font_object()
-        || header[0]
+    let header_font = header.at(0);
+    let valid_header_font = header_font.is_nil()
+        || header_font.is_font_object()
+        || header_font
             .as_symbol_name(symbol_mode)
             .is_some_and(|name| ctx.coding_systems().is_known_or_derived(name));
     if !valid_header_font
@@ -1567,7 +1968,8 @@ pub fn composition_gstring_p<H: TextHost>(ctx: &H, value: Value) -> bool {
     {
         return false;
     }
-    if !(gstring[1].is_nil() || gstring[1].as_int().is_some_and(|id| id >= 0)) {
+    let gstring_id = gstring.at(1);
+    if !(gstring_id.is_nil() || gstring_id.as_int().is_some_and(|id| id >= 0)) {
         return false;
     }
     gstring[2..]
@@ -1634,10 +2036,11 @@ pub fn compose_string<H: crate::emacs_core::text_host::TextHost>(
 
 #[doc(hidden)]
 pub fn clear_cache<H: crate::emacs_core::text_host::TextHost>(
-    _ctx: &mut H,
+    ctx: &mut H,
     args: Vec<Value>,
 ) -> EvalResult {
-    clear_composition_cache(args)
+    expect_max_args("clear-composition-cache", &args, 0)?;
+    ctx.composition_gstring_cache_clear()
 }
 
 #[doc(hidden)]

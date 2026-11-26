@@ -60,6 +60,109 @@ fn faces() -> Vec<DisplayRowFace> {
     ]
 }
 
+fn narrow_newline_face() -> ResolvedFace {
+    let mut face = ResolvedFace::default();
+    face.set_measured_char_width_px(19.0);
+    face.font_ascent = 14.0;
+    face.font_line_height = 18.0;
+    face
+}
+
+#[test]
+fn row_capture_preserves_a_measured_face_width_below_the_frame_grid() {
+    use crate::display_row::face_state::DisplayRowFaceRealizer;
+
+    let mut native_fonts = None;
+    let captured = DisplayRowFaceRealizer::new(&mut native_fonts).realize_face(
+        FaceId::new(1),
+        &narrow_newline_face(),
+        20.0,
+        14.0,
+        18.0,
+    );
+    // Capture retains the measured fact. Interpreting it as GUI pixels or
+    // terminal cells belongs to replay, after the measurement mode is known.
+    assert_eq!(captured.metrics.char_width_px(1.0), 19.0);
+    assert_eq!(captured.metrics.line_height_px(), 18.0);
+}
+
+fn assert_captured_newline_matches_canonical_width(
+    mode: DisplayRowMeasurementMode,
+    expected_width: f32,
+) {
+    use crate::display_row::face_state::{DisplayRowFaceRealizer, DisplayRowMeasurementPolicy};
+    use crate::font::metrics::FontMetrics;
+
+    let id = FaceId::new(1);
+    let resolved = narrow_newline_face();
+    let fallback = DisplayRowFallbackMetrics::from_default_face_extents(20.0, 18.0, 14.0);
+    let metrics = FontMetrics {
+        ascent: 14.0,
+        descent: 4.0,
+        line_height: 18.0,
+        char_width: 19.0,
+        space_width: 19.0,
+    };
+    let mut native_fonts = None;
+    let canonical = DisplayRowMeasurementPolicy::for_mode(mode).measured_face(
+        id,
+        &resolved,
+        Some(metrics),
+        20.0,
+        fallback,
+        &mut native_fonts,
+    );
+    assert_eq!(canonical.metrics().char_width(), expected_width);
+    // The direct face isolates the replay getter from realization; the
+    // realized face also exercises the actual worker capture boundary.
+    let realized = DisplayRowFaceRealizer::new(&mut native_fonts)
+        .realize_face(id, &resolved, 20.0, 14.0, 18.0);
+    for face in [DisplayRowFace::from_resolved(id, &resolved), realized] {
+        let faces = vec![face];
+        let mut geometry = geometry(200.0);
+        geometry.metrics = fallback;
+        let mut measurer = DisplayRowGlyphMeasurer::with_mode(
+            &faces,
+            None,
+            20.0,
+            GlyphAdvanceQuantization::PreserveLogicalPixels,
+            mode,
+        );
+        // No glyph shaping or native service is needed for an empty line.
+        // GNU still appends a face-font space to size its newline cursor.
+        let row = RowProgram::capture(
+            geometry,
+            [DisplayItem::new(
+                SourceSpan::synthetic(1, 0, 1),
+                RenderFaceRef::FaceId(id),
+                DisplayItemKind::RowBreak(DisplayRowBreak {
+                    line_height: DisplayLineHeightPolicy::Default,
+                    line_spacing: DisplayLineSpacingPolicy::Inherit,
+                }),
+            )],
+            faces.clone(),
+            &mut measurer,
+            limits(),
+        )
+        .unwrap()
+        .compute(|| false)
+        .unwrap();
+        assert_eq!(row.end_kind, ComputedRowEnd::Newline);
+        assert_eq!(row.terminator_width, canonical.metrics().char_width());
+        assert_eq!(row.terminator_height, 18.0);
+    }
+}
+
+#[test]
+fn captured_newline_preserves_concrete_face_width_below_the_frame_grid() {
+    assert_captured_newline_matches_canonical_width(DisplayRowMeasurementMode::ConcreteFont, 19.0);
+}
+
+#[test]
+fn captured_newline_keeps_the_logical_cell_grid_for_a_narrower_face() {
+    assert_captured_newline_matches_canonical_width(DisplayRowMeasurementMode::LogicalCells, 20.0);
+}
+
 fn ascii_wrapped_program(text: &str) -> RowProgram {
     let face = FaceId::new(1);
     let faces = vec![DisplayRowFace::from_resolved(
@@ -766,4 +869,319 @@ fn word_wrap_after_string_checkpoint_does_not_restart_inserted_text_on_worker() 
             .any(|row| row.end_kind == ComputedRowEnd::Newline),
         "the row limit must not conceal an unfinished repeated insertion"
     );
+}
+
+/// GNU `display_line` restores the iterator to before an element that drew
+/// GNU `setup_for_ellipsis` (src/xdisp.c:5653-5672) and
+/// `next_element_from_display_vector` (src/xdisp.c:9258) produce one dot per
+/// element and resume mid-vector on the continuation row (xdisp.c:4115-4121).
+/// When one dot fits in the leftover cell on row 0, row 0 keeps that dot and
+/// row 1 continues with the remaining two dots while holding the unconsumed
+/// buffer anchor (`preserves_buffer_anchor`). When zero dots fit, all three
+/// dots continue on row 1.
+#[test]
+fn zero_fit_invisible_ellipsis_continues_on_the_next_row() {
+    use crate::display_row::source_append::SyntheticTextMarker;
+    use neomacs_display_protocol::glyph_matrix::{GlyphArea, GlyphProvenance, GlyphType};
+
+    let face = FaceId::new(1);
+    let faces = vec![DisplayRowFace::from_resolved(
+        face,
+        &ResolvedFace::default(),
+    )];
+    let ellipsis = SyntheticTextMarker::InvisibleEllipsis;
+    let text = |id, start, end, body: &str| {
+        DisplayItem::new(
+            SourceSpan::synthetic(id, start, end),
+            RenderFaceRef::FaceId(face),
+            DisplayItemKind::TextRun(DisplayTextRun::independent(body)),
+        )
+    };
+    let chars = |row: &ComputedRow| -> String {
+        row.row.glyphs[GlyphArea::Text.index()]
+            .iter()
+            .filter(|glyph| !glyph.padding)
+            // GNU `append_space_for_newline` (src/xdisp.c:24141) stamps a
+            // positionless space on the terminated row. It is not ellipsis text.
+            .filter(|glyph| glyph.provenance != GlyphProvenance::line_end())
+            .filter_map(|glyph| match glyph.glyph_type {
+                GlyphType::Char { ch } => Some(ch),
+                _ => None,
+            })
+            .collect()
+    };
+
+    // One leftover cell (40px = 5 cells after 4-cell "abcd"): 1 dot fits on
+    // row 0, remaining 2 dots continue on row 1.
+    let mut split_geometry = geometry(40.0);
+    split_geometry.character_wrap = true;
+    let mut measurer = DisplayRowGlyphMeasurer::new(&faces, None, 8.0);
+    let program = RowProgram::capture(
+        split_geometry,
+        [
+            text(1, 0, 4, "abcd"),
+            text(ellipsis.source_id(), 0, 3, ellipsis.text()),
+            DisplayItem::new(
+                SourceSpan::synthetic(1, 4, 5),
+                RenderFaceRef::FaceId(face),
+                DisplayItemKind::RowBreak(DisplayRowBreak {
+                    line_height: DisplayLineHeightPolicy::Default,
+                    line_spacing: DisplayLineSpacingPolicy::Inherit,
+                }),
+            ),
+        ],
+        faces.clone(),
+        &mut measurer,
+        limits(),
+    )
+    .expect("capture the split ellipsis program");
+    let rows = program
+        .compute_visual_rows(4, || false)
+        .expect("a partially fitting ellipsis splits across visual rows");
+    assert_eq!(chars(&rows[0]), "abcd.");
+    assert_eq!(rows[0].end_kind, ComputedRowEnd::Continuation);
+    assert_eq!(chars(&rows[1]), "..");
+    assert_eq!(rows[1].source.start, rows[0].source.end);
+    assert!(
+        preserves_buffer_anchor(&rows[1].slots[0].source()),
+        "the continued ellipsis keeps its display-vector anchor"
+    );
+
+    // Zero leftover cells (32px = 4 cells after 4-cell "abcd"): all 3 dots
+    // continue on row 1.
+    let mut zero_geometry = geometry(32.0);
+    zero_geometry.character_wrap = true;
+    let mut measurer = DisplayRowGlyphMeasurer::new(&faces, None, 8.0);
+    let program = RowProgram::capture(
+        zero_geometry,
+        [
+            text(1, 0, 4, "abcd"),
+            text(ellipsis.source_id(), 0, 3, ellipsis.text()),
+            DisplayItem::new(
+                SourceSpan::synthetic(1, 4, 5),
+                RenderFaceRef::FaceId(face),
+                DisplayItemKind::RowBreak(DisplayRowBreak {
+                    line_height: DisplayLineHeightPolicy::Default,
+                    line_spacing: DisplayLineSpacingPolicy::Inherit,
+                }),
+            ),
+        ],
+        faces.clone(),
+        &mut measurer,
+        limits(),
+    )
+    .expect("capture the zero-fit ellipsis program");
+    let rows = program
+        .compute_visual_rows(4, || false)
+        .expect("a zero-fit ellipsis moves to the next row");
+    assert_eq!(chars(&rows[0]), "abcd");
+    assert_eq!(rows[0].end_kind, ComputedRowEnd::Continuation);
+    assert_eq!(chars(&rows[1]), "...");
+    assert_eq!(rows[1].source.start, rows[0].source.end);
+    assert!(
+        preserves_buffer_anchor(&rows[1].slots[0].source()),
+        "the continued ellipsis keeps its display-vector anchor"
+    );
+}
+
+#[test]
+fn clipped_overlay_string_splits_mid_string_preserving_buffer_anchor() {
+    use neomacs_display_protocol::glyph_matrix::{GlyphArea, GlyphProvenance, GlyphType};
+
+    let face = FaceId::new(1);
+    let faces = vec![DisplayRowFace::from_resolved(
+        face,
+        &ResolvedFace::default(),
+    )];
+    let buffer_id = neovm_core::buffer::BufferId(1);
+    let buf_pos = |pos: usize| {
+        DisplaySourcePosition::buffer(
+            buffer_id,
+            neovm_core::buffer::CharPos0::new(pos),
+            neovm_core::buffer::EmacsBytePos::new(pos),
+        )
+    };
+    let str_pos = |pos: usize| DisplaySourcePosition::lisp_string(9, pos, pos);
+    let mut geometry = geometry(64.0);
+    geometry.character_wrap = true;
+    let mut measurer = DisplayRowGlyphMeasurer::new(&faces, None, 8.0);
+    let program = RowProgram::capture(
+        geometry,
+        [
+            DisplayItem::new(
+                SourceSpan::new(buf_pos(0), buf_pos(4)),
+                RenderFaceRef::FaceId(face),
+                DisplayItemKind::TextRun(DisplayTextRun::independent("abcd")),
+            ),
+            DisplayItem::new(
+                SourceSpan::new(str_pos(0), str_pos(10)),
+                RenderFaceRef::FaceId(face),
+                DisplayItemKind::TextRun(DisplayTextRun::independent("edge-after")),
+            ),
+            DisplayItem::new(
+                SourceSpan::new(buf_pos(4), buf_pos(5)),
+                RenderFaceRef::FaceId(face),
+                DisplayItemKind::RowBreak(DisplayRowBreak {
+                    line_height: DisplayLineHeightPolicy::Default,
+                    line_spacing: DisplayLineSpacingPolicy::Inherit,
+                }),
+            ),
+        ],
+        faces.clone(),
+        &mut measurer,
+        limits(),
+    )
+    .expect("capture overlay string wrap program")
+    .with_overlay_string_kinds(vec![(1, crate::display_origin::OverlayStringKind::After)]);
+    let rows = program
+        .compute_visual_rows(4, || false)
+        .expect("clipped overlay string splits across visual rows");
+    let chars = |row: &ComputedRow| -> String {
+        row.row.glyphs[GlyphArea::Text.index()]
+            .iter()
+            .filter(|glyph| !glyph.padding)
+            .filter(|glyph| glyph.provenance != GlyphProvenance::line_end())
+            .filter_map(|glyph| match glyph.glyph_type {
+                GlyphType::Char { ch } => Some(ch),
+                _ => None,
+            })
+            .collect()
+    };
+    assert_eq!(chars(&rows[0]), "abcdedge");
+    assert_eq!(
+        rows[0].end_kind,
+        ComputedRowEnd::OverlayContinuation(crate::display_origin::OverlayStringKind::After)
+    );
+    assert_eq!(chars(&rows[1]), "-after");
+    assert_eq!(rows[0].source.end, buf_pos(4));
+    assert_eq!(rows[1].source.start, buf_pos(4));
+}
+
+#[test]
+fn clipped_invisible_ellipsis_under_word_wrap_rewinds_to_word_boundary() {
+    use crate::display_row::source_append::SyntheticTextMarker;
+    use neomacs_display_protocol::glyph_matrix::{GlyphArea, GlyphProvenance, GlyphType};
+
+    let face = FaceId::new(1);
+    let faces = vec![DisplayRowFace::from_resolved(
+        face,
+        &ResolvedFace::default(),
+    )];
+    let buffer_id = neovm_core::buffer::BufferId(1);
+    let buf_pos = |pos: usize| {
+        DisplaySourcePosition::buffer(
+            buffer_id,
+            neovm_core::buffer::CharPos0::new(pos),
+            neovm_core::buffer::EmacsBytePos::new(pos),
+        )
+    };
+    let ellipsis = SyntheticTextMarker::InvisibleEllipsis;
+    let chars = |row: &ComputedRow| -> String {
+        row.row.glyphs[GlyphArea::Text.index()]
+            .iter()
+            .filter(|glyph| !glyph.padding)
+            .filter(|glyph| glyph.provenance != GlyphProvenance::line_end())
+            .filter_map(|glyph| match glyph.glyph_type {
+                GlyphType::Char { ch } => Some(ch),
+                _ => None,
+            })
+            .collect()
+    };
+
+    // Case 1: word before hidden span (`aa bbbbbb<hidden>T\n`) in 10-cell (80px) width.
+    let mut ww_geometry = geometry(80.0);
+    ww_geometry.character_wrap = true;
+    ww_geometry.word_wrap = true;
+    let mut measurer = DisplayRowGlyphMeasurer::new(&faces, None, 8.0);
+    let program = RowProgram::capture(
+        ww_geometry.clone(),
+        [
+            DisplayItem::new(
+                SourceSpan::new(buf_pos(0), buf_pos(9)),
+                RenderFaceRef::FaceId(face),
+                DisplayItemKind::TextRun(DisplayTextRun::independent("aa bbbbbb")),
+            ),
+            DisplayItem::new(
+                SourceSpan::new(buf_pos(9), buf_pos(15)),
+                RenderFaceRef::FaceId(face),
+                DisplayItemKind::TextRun(DisplayTextRun::independent("")),
+            ),
+            DisplayItem::new(
+                SourceSpan::synthetic(ellipsis.source_id(), 0, 3),
+                RenderFaceRef::FaceId(face),
+                DisplayItemKind::TextRun(DisplayTextRun::independent(ellipsis.text())),
+            ),
+            DisplayItem::new(
+                SourceSpan::new(buf_pos(15), buf_pos(16)),
+                RenderFaceRef::FaceId(face),
+                DisplayItemKind::TextRun(DisplayTextRun::independent("T")),
+            ),
+            DisplayItem::new(
+                SourceSpan::new(buf_pos(16), buf_pos(17)),
+                RenderFaceRef::FaceId(face),
+                DisplayItemKind::RowBreak(DisplayRowBreak {
+                    line_height: DisplayLineHeightPolicy::Default,
+                    line_spacing: DisplayLineSpacingPolicy::Inherit,
+                }),
+            ),
+        ],
+        faces.clone(),
+        &mut measurer,
+        limits(),
+    )
+    .expect("capture word-wrap ellipsis program");
+    let rows = program
+        .compute_visual_rows(4, || false)
+        .expect("word-wrap ellipsis rewinds to preceding word boundary");
+    assert_eq!(chars(&rows[0]), "aa ");
+    assert_eq!(rows[0].source.end, buf_pos(3));
+    assert_eq!(chars(&rows[1]), "bbbbbb...T");
+    assert_eq!(rows[1].source.start, buf_pos(3));
+
+    // Case 2: space immediately before hidden span (`aaaaaaaa <hidden>TAIL\n`) in 10-cell (80px) width.
+    let mut measurer = DisplayRowGlyphMeasurer::new(&faces, None, 8.0);
+    let program = RowProgram::capture(
+        ww_geometry,
+        [
+            DisplayItem::new(
+                SourceSpan::new(buf_pos(0), buf_pos(9)),
+                RenderFaceRef::FaceId(face),
+                DisplayItemKind::TextRun(DisplayTextRun::independent("aaaaaaaa ")),
+            ),
+            DisplayItem::new(
+                SourceSpan::new(buf_pos(9), buf_pos(15)),
+                RenderFaceRef::FaceId(face),
+                DisplayItemKind::TextRun(DisplayTextRun::independent("")),
+            ),
+            DisplayItem::new(
+                SourceSpan::synthetic(ellipsis.source_id(), 0, 3),
+                RenderFaceRef::FaceId(face),
+                DisplayItemKind::TextRun(DisplayTextRun::independent(ellipsis.text())),
+            ),
+            DisplayItem::new(
+                SourceSpan::new(buf_pos(15), buf_pos(19)),
+                RenderFaceRef::FaceId(face),
+                DisplayItemKind::TextRun(DisplayTextRun::independent("TAIL")),
+            ),
+            DisplayItem::new(
+                SourceSpan::new(buf_pos(19), buf_pos(20)),
+                RenderFaceRef::FaceId(face),
+                DisplayItemKind::RowBreak(DisplayRowBreak {
+                    line_height: DisplayLineHeightPolicy::Default,
+                    line_spacing: DisplayLineSpacingPolicy::Inherit,
+                }),
+            ),
+        ],
+        faces.clone(),
+        &mut measurer,
+        limits(),
+    )
+    .expect("capture space-before-ellipsis program");
+    let rows = program
+        .compute_visual_rows(4, || false)
+        .expect("space before ellipsis moves whole ellipsis to row 1");
+    assert_eq!(chars(&rows[0]), "aaaaaaaa ");
+    assert_eq!(rows[0].source.end, buf_pos(15));
+    assert_eq!(chars(&rows[1]), "...TAIL");
+    assert_eq!(rows[1].source.start, buf_pos(15));
 }

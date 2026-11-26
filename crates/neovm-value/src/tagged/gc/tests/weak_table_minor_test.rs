@@ -47,7 +47,7 @@ fn table_len(table: TaggedValue) -> usize {
 /// TABLE included.
 fn first_partition(heap: &mut TaggedHeap, table: TaggedValue, roots: &[TaggedValue]) {
     heap.extend_dump_span(4096, 16);
-    heap.collect_exact(roots.iter().copied());
+    heap.collect_rooted(roots.iter().copied());
     assert!(!heap.sweep_in_progress());
     assert!(heap.value_is_old_for_test(table));
     let ptr = table.as_veclike_ptr().unwrap() as *mut HashTableObj;
@@ -64,12 +64,12 @@ fn tenure(heap: &mut TaggedHeap, table: TaggedValue, roots: &[TaggedValue]) {
 }
 
 fn minor(heap: &mut TaggedHeap, roots: &[TaggedValue]) {
-    heap.begin_minor_collection().unwrap();
+    heap.begin_minor_collection_for_test().unwrap();
     for &root in roots {
         heap.seed_root(root);
     }
-    heap.complete_minor_collection();
-    heap.finish_incremental_sweep_now();
+    heap.complete_minor_collection_for_test();
+    heap.finish_incremental_sweep_now_for_test();
 }
 
 /// `WEAK_ENTRY_VISITS` is process-global: the exact count relies on nextest
@@ -97,7 +97,7 @@ fn minor_skips_an_unwritten_old_weak_table() {
 
     // A major keeps the full pass over every always-swept table.
     WEAK_ENTRY_VISITS.store(0, Ordering::Relaxed);
-    heap.collect_exact([table, holder].into_iter());
+    heap.collect_rooted([table, holder].into_iter());
     assert!(WEAK_ENTRY_VISITS.load(Ordering::Relaxed) >= ENTRIES);
     assert_eq!(table_len(table), ENTRIES);
 }

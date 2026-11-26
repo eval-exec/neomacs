@@ -57,7 +57,7 @@ fn sweep_contract(garbage_stride: usize, max_rebuilds: usize) {
         .collect();
     let (_, reads) = capture(|| {
         for owner in &owners {
-            owner.as_vector_data().expect("vector")[0];
+            owner.as_vector_data().expect("vector").at(0);
         }
     });
     drop(reads);
@@ -73,7 +73,7 @@ fn sweep_contract(garbage_stride: usize, max_rebuilds: usize) {
         .filter(|(index, _)| index % garbage_stride == 0)
         .map(|(_, owner)| owner.bits())
         .collect();
-    let (_, live_reads) = capture(|| live[0].as_vector_data().expect("vector")[0]);
+    let (_, live_reads) = capture(|| live[0].as_vector_data().expect("vector").at(0));
     let live_reads = live_reads.expect("rooted live dependency");
     let (validated_before, rebuilds_before, ledger_before) = ledger_counters();
     assert!(ledger_before >= OWNERS);
@@ -85,10 +85,10 @@ fn sweep_contract(garbage_stride: usize, max_rebuilds: usize) {
     }
     heap.incremental_drain_all();
     let bytes_before = heap.live_bytes();
-    heap.incremental_finish(bytes_before, std::time::Instant::now());
+    heap.incremental_finish_for_test(bytes_before, std::time::Instant::now());
     let started = std::time::Instant::now();
     let mut slices = 0usize;
-    while !heap.incremental_sweep_slice(1) {
+    while !heap.incremental_sweep_slice_for_test(1) {
         slices += 1;
     }
     let elapsed = started.elapsed();
@@ -149,7 +149,7 @@ fn sweep_contract(garbage_stride: usize, max_rebuilds: usize) {
             !with_state(|state| state.borrow().observed.already_published(owner.bits())),
             "a dead lifetime's ledger entry is not a publication of its reuse"
         );
-        let (_, reads) = capture(|| owner.as_vector_data().expect("vector")[0]);
+        let (_, reads) = capture(|| owner.as_vector_data().expect("vector").at(0));
         let reads = reads.expect("fresh live dependency");
         assert!(
             collection_observed_metadata(owner.bits()),

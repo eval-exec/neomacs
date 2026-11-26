@@ -283,6 +283,7 @@ fn media_glyphs_participate_in_the_shared_main_and_child_box_collection() {
         height: 10.0,
         face_id,
         box_vertical_edges: BoxVerticalEdges::Right,
+        presentation: neomacs_display_protocol::ImageGlyphPresentation::Texture,
     });
 
     let pointer_override = PointerOverrideResolver::new(&frame, None);
@@ -332,6 +333,7 @@ fn image_mouse_face_enters_shared_box_topology() {
         height: 10.0,
         face_id: base_id,
         box_vertical_edges: BoxVerticalEdges::Neither,
+        presentation: neomacs_display_protocol::ImageGlyphPresentation::Texture,
     });
     let appearance = PointerAppearanceId::try_from(0usize).unwrap();
     frame
@@ -402,6 +404,7 @@ fn mixed_image_text_mouse_face_uses_box_rect_adjacency() {
         height: 10.0,
         face_id: base_id,
         box_vertical_edges: BoxVerticalEdges::Neither,
+        presentation: neomacs_display_protocol::ImageGlyphPresentation::Texture,
     });
     frame.glyphs.push(FrameGlyph::Char {
         window_id,

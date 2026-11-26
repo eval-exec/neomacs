@@ -20,6 +20,11 @@ impl PresentationObserver {
         }
     }
     #[allow(unused_variables)]
+    pub(crate) fn attach_display(&mut self, display: winit::event_loop::OwnedDisplayHandle) {
+        #[cfg(target_os = "linux")]
+        self.wayland.attach_display(display);
+    }
+    #[allow(unused_variables)]
     pub(crate) fn before_present(
         &mut self,
         window: &dyn winit::window::Window,

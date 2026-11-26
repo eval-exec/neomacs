@@ -150,6 +150,46 @@ impl<'heap, 'owner> WorldBatonGuard<'heap, 'owner> {
     }
 }
 
+#[derive(Debug)]
+#[allow(dead_code)] // R8 sentinel. No product guard writes Poisoned yet.
+pub(crate) enum ScopeFailure {
+    Poisoned,
+}
+
+#[allow(dead_code)] // E2 scope. The destination projection is still held.
+impl<'heap, 'owner> WorldBatonGuard<'heap, 'owner> {
+    /// Higher-ranked loan of a context and a witness. `with_witness` is unchanged.
+    ///
+    /// The signature stays on one line: the S7 control replaces that line only.
+    #[rustfmt::skip]
+    pub(crate) fn with_scope<R>(
+        &mut self,
+        body: impl for<'g> FnOnce(&mut SerialContext<'g, 'g, 'heap, 'owner>, BatonWitness<'g, 'heap, 'owner>) -> R,
+    ) -> Result<R, ScopeFailure> {
+        Ok(lend_scope(body))
+    }
+}
+
+#[allow(dead_code)]
+fn lend_scope<'g, 'heap, 'owner, R>(
+    body: impl FnOnce(&mut SerialContext<'g, 'g, 'heap, 'owner>, BatonWitness<'g, 'heap, 'owner>) -> R,
+) -> R {
+    let mut context = SerialContext {
+        loan: PhantomData,
+        guard: PhantomData,
+        heap: PhantomData,
+        owner: PhantomData,
+        confined: PhantomData,
+    };
+    let witness = BatonWitness {
+        guard: PhantomData,
+        heap: PhantomData,
+        owner: PhantomData,
+        confined: PhantomData,
+    };
+    body(&mut context, witness)
+}
+
 static_assertions::assert_not_impl_any!(OwnerState<'static, 'static, 'static>: Send, Sync, Clone, Copy);
 static_assertions::assert_not_impl_any!(ParallelExecution<'static, 'static, 'static, 'static>: Send, Sync, Clone, Copy);
 static_assertions::assert_not_impl_any!(NativeExecution<'static, 'static, 'static>: Send, Sync, Clone, Copy);

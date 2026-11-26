@@ -451,11 +451,12 @@ effect_config!(
 effect_config!(
     /// Configuration for the cursor color cycle effect.
     ///
-    /// Opt-in so an untouched configuration creates no standing animation
-    /// demand. When enabled, compositor-only updates default to 24 Hz and
-    /// remain capped to the display cadence.
+    /// Enabled as a product default. Its standing compositor-only demand
+    /// defaults to 24 Hz and stays capped to the display cadence, and it
+    /// pauses whenever the cycle cannot change pixels (unfocused frame,
+    /// blink-off phase, hollow cursor). Set `:enabled nil` to opt out.
     CursorColorCycleConfig {
-        enabled: bool = false,
+        enabled: bool = true,
         fps: FrameRate = FrameRate::new(24).expect("24 Hz is non-zero"),
         speed: f32 = 0.5,
         saturation: f32 = 0.8,

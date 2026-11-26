@@ -141,3 +141,82 @@ fn bignum_vs_float_comparison_stays_exact() {
     assert_eq!(eval_one("(max 1.0e40 (expt 10 30))"), "OK 1e+40");
     assert_eq!(eval_one("(min (expt 10 30) 5)"), "OK 5");
 }
+
+// -----------------------------------------------------------------------
+// A NaN against a non-number.  GNU `arithcompare` settles the other
+// operand's type before its NaN rule: the isnan test sits inside the
+// bignum arm and a non-number signals first (data.c:2760-2773, 2814,
+// 2847, 2850), on either side of the NaN.
+// -----------------------------------------------------------------------
+
+#[test]
+fn nan_compared_with_a_non_number_signals_with_nan_first() {
+    // GNU: (< (/ 0.0 0.0) nil) signals (wrong-type-argument number-or-marker-p nil)
+    for op in ["<", "<=", "=", "/=", ">", ">="] {
+        assert_eq!(
+            eval_one(&format!("({op} (/ 0.0 0.0) nil)")),
+            "ERR (wrong-type-argument (number-or-marker-p nil))"
+        );
+    }
+    // GNU: (< (/ 0.0 0.0) t) ; (< (/ 0.0 0.0) "s")
+    assert_eq!(
+        eval_one("(< (/ 0.0 0.0) t)"),
+        "ERR (wrong-type-argument (number-or-marker-p t))"
+    );
+    assert_eq!(
+        eval_one("(< (/ 0.0 0.0) \"s\")"),
+        "ERR (wrong-type-argument (number-or-marker-p \"s\"))"
+    );
+}
+
+#[test]
+fn nan_compared_with_a_non_number_signals_with_nan_second() {
+    // GNU: (< nil (/ 0.0 0.0)) signals (wrong-type-argument number-or-marker-p nil)
+    for op in ["<", "<=", "=", "/=", ">", ">="] {
+        assert_eq!(
+            eval_one(&format!("({op} nil (/ 0.0 0.0))")),
+            "ERR (wrong-type-argument (number-or-marker-p nil))"
+        );
+    }
+    // GNU: (< t (/ 0.0 0.0)) ; (< "s" (/ 0.0 0.0))
+    assert_eq!(
+        eval_one("(< t (/ 0.0 0.0))"),
+        "ERR (wrong-type-argument (number-or-marker-p t))"
+    );
+    assert_eq!(
+        eval_one("(< \"s\" (/ 0.0 0.0))"),
+        "ERR (wrong-type-argument (number-or-marker-p \"s\"))"
+    );
+}
+
+#[test]
+fn nan_compared_with_a_number_or_marker_stays_false() {
+    // The NaN rule proper (data.c:2762, 2821) and the float-vs-fixnum arms:
+    // every relation is false on either side, only /= passes.
+    for op in ["<", "<=", "=", ">", ">="] {
+        assert_eq!(eval_one(&format!("({op} (/ 0.0 0.0) 0)")), "OK nil");
+        assert_eq!(eval_one(&format!("({op} 0 (/ 0.0 0.0))")), "OK nil");
+    }
+    assert_eq!(eval_one("(/= (/ 0.0 0.0) 0)"), "OK t");
+    assert_eq!(eval_one("(/= 0 (/ 0.0 0.0))"), "OK t");
+    // A bignum and a marker are numbers for this rule.
+    // GNU: (< (/ 0.0 0.0) (1+ most-positive-fixnum)) => nil
+    assert_eq!(
+        eval_one("(< (/ 0.0 0.0) (1+ most-positive-fixnum))"),
+        "OK nil"
+    );
+    assert_eq!(
+        eval_one("(< (1+ most-positive-fixnum) (/ 0.0 0.0))"),
+        "OK nil"
+    );
+    // GNU: (with-temp-buffer (insert "abc") (< (/ 0.0 0.0) (point-marker))) => nil
+    // (the unit runtime has a current buffer; `with-temp-buffer` is Lisp).
+    assert_eq!(
+        eval_one("(progn (erase-buffer) (insert \"abc\") (< (/ 0.0 0.0) (point-marker)))"),
+        "OK nil"
+    );
+    assert_eq!(
+        eval_one("(progn (erase-buffer) (insert \"abc\") (< (point-marker) (/ 0.0 0.0)))"),
+        "OK nil"
+    );
+}

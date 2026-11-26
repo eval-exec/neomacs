@@ -17,6 +17,86 @@ use std::cell::RefCell;
 use std::fs;
 use std::rc::Rc;
 
+/// Test-only [`FontDriver`] stub built from optional per-method closures.
+/// Production drivers must implement every method on [`FontDriver`] directly.
+#[allow(clippy::type_complexity)]
+#[derive(Default)]
+struct StubFontDriver {
+    shape: Option<Box<dyn FnMut(&mut Context, Value, Value) -> GstringShapeOutcome>>,
+    metrics:
+        Option<Box<dyn FnMut(Value, u32) -> Option<neovm_value::display_vocab::GlyphTextMetrics>>>,
+    realized: Option<
+        Box<
+            dyn FnMut(
+                &mut Context,
+                FrameId,
+                neovm_edit::emacs_core::display_metrics::WindowId,
+                i64,
+            ) -> Option<(u32, u64)>,
+        >,
+    >,
+}
+
+impl StubFontDriver {
+    fn shape(
+        f: impl FnMut(&mut Context, Value, Value) -> GstringShapeOutcome + 'static,
+    ) -> Box<dyn FontDriver> {
+        Box::new(Self {
+            shape: Some(Box::new(f)),
+            ..Self::default()
+        })
+    }
+
+    fn realized_fontset(
+        f: impl FnMut(
+            &mut Context,
+            FrameId,
+            neovm_edit::emacs_core::display_metrics::WindowId,
+            i64,
+        ) -> Option<(u32, u64)>
+        + 'static,
+    ) -> Box<dyn FontDriver> {
+        Box::new(Self {
+            realized: Some(Box::new(f)),
+            ..Self::default()
+        })
+    }
+}
+
+impl FontDriver for StubFontDriver {
+    fn shape_gstring(
+        &mut self,
+        eval: &mut Context,
+        gstring: Value,
+        direction: Value,
+    ) -> GstringShapeOutcome {
+        match self.shape.as_mut() {
+            Some(f) => f(eval, gstring, direction),
+            None => GstringShapeOutcome::NotShapable,
+        }
+    }
+
+    fn glyph_text_metrics(
+        &mut self,
+        font: Value,
+        ch: u32,
+    ) -> Option<neovm_value::display_vocab::GlyphTextMetrics> {
+        self.metrics.as_mut().and_then(|f| f(font, ch))
+    }
+
+    fn realized_fontset(
+        &mut self,
+        eval: &mut Context,
+        frame_id: FrameId,
+        window_id: neovm_edit::emacs_core::display_metrics::WindowId,
+        lisp_pos: i64,
+    ) -> Option<(u32, u64)> {
+        self.realized
+            .as_mut()
+            .and_then(|f| f(eval, frame_id, window_id, lisp_pos))
+    }
+}
+
 #[test]
 fn cached_font_name_spelling_preserves_bytes_and_drops_intervals() {
     let cases = [
@@ -193,10 +273,11 @@ fn context_prebinds_gnu_font_style_tables() {
         .expect("font-weight-table");
     let rows = weight_table.as_vector_data().expect("weight table vector");
     assert_eq!(rows.len(), 11);
-    let ultra_light = rows[1].as_vector_data().expect("weight row");
-    assert_eq!(ultra_light[0], Value::fixnum(40));
-    assert_eq!(ultra_light[1].as_bare_symbol_name(), Some("ultra-light"));
-    assert_eq!(ultra_light[4].as_bare_symbol_name(), Some("extralight"));
+    let ultra_light_val = rows.at(1);
+    let ultra_light = ultra_light_val.as_vector_data().expect("weight row");
+    assert_eq!(ultra_light.at(0), Value::fixnum(40));
+    assert_eq!(ultra_light.at(1).as_bare_symbol_name(), Some("ultra-light"));
+    assert_eq!(ultra_light.at(4).as_bare_symbol_name(), Some("extralight"));
 
     let slant_table = eval
         .obarray_view()
@@ -204,10 +285,11 @@ fn context_prebinds_gnu_font_style_tables() {
         .expect("font-slant-table");
     let rows = slant_table.as_vector_data().expect("slant table vector");
     assert_eq!(rows.len(), 5);
-    let normal = rows[2].as_vector_data().expect("slant row");
-    assert_eq!(normal[0], Value::fixnum(100));
-    assert_eq!(normal[1].as_bare_symbol_name(), Some("normal"));
-    assert_eq!(normal[3].as_bare_symbol_name(), Some("unspecified"));
+    let normal_val = rows.at(2);
+    let normal = normal_val.as_vector_data().expect("slant row");
+    assert_eq!(normal.at(0), Value::fixnum(100));
+    assert_eq!(normal.at(1).as_bare_symbol_name(), Some("normal"));
+    assert_eq!(normal.at(3).as_bare_symbol_name(), Some("unspecified"));
 
     let width_table = eval
         .obarray_view()
@@ -215,10 +297,11 @@ fn context_prebinds_gnu_font_style_tables() {
         .expect("font-width-table");
     let rows = width_table.as_vector_data().expect("width table vector");
     assert_eq!(rows.len(), 9);
-    let normal = rows[4].as_vector_data().expect("width row");
-    assert_eq!(normal[0], Value::fixnum(100));
-    assert_eq!(normal[1].as_bare_symbol_name(), Some("normal"));
-    assert_eq!(normal[4].as_bare_symbol_name(), Some("unspecified"));
+    let normal_val = rows.at(4);
+    let normal = normal_val.as_vector_data().expect("width row");
+    assert_eq!(normal.at(0), Value::fixnum(100));
+    assert_eq!(normal.at(1).as_bare_symbol_name(), Some("normal"));
+    assert_eq!(normal.at(4).as_bare_symbol_name(), Some("unspecified"));
 }
 
 #[test]
@@ -367,6 +450,8 @@ struct FontAtDisplayHost {
     matched: Option<ResolvedFontMatch>,
     metrics: Option<FontPxProbeResult>,
     capability: Option<FontOtfCapability>,
+    /// When set, only this character resolves. `None` keeps the `好` host.
+    match_char: Option<u32>,
 }
 
 impl DisplayHost for FontAtDisplayHost {
@@ -382,7 +467,10 @@ impl DisplayHost for FontAtDisplayHost {
         &mut self,
         request: FontResolveRequest,
     ) -> Result<Option<ResolvedFontMatch>, String> {
-        if request.character == neovm_value::emacs_char::EmacsChar::from_char('好') {
+        let wanted = self.match_char.unwrap_or(u32::from('好'));
+        if request.character
+            == neovm_value::emacs_char::EmacsChar::from_code(wanted).expect("test character")
+        {
             Ok(self.matched.clone())
         } else {
             Ok(None)
@@ -534,7 +622,7 @@ fn named_font_info_opens_thin_only_family_without_weakening_find_font() {
         .as_vector_data()
         .expect("named opening must substitute the available Thin face");
     assert_eq!(fields.len(), 14);
-    assert!(fields[3].as_int().is_some_and(|height| height > 0));
+    assert!(fields.at(3).as_int().is_some_and(|height| height > 0));
 }
 
 struct NativeFontEntityDisplayHost {
@@ -686,9 +774,9 @@ fn font_info_opens_a_native_entity_without_a_file() {
     let values = info
         .as_vector_data()
         .expect("native entity must produce a font-info vector");
-    assert_eq!(values[2].as_int(), Some(1));
-    assert_eq!(values[3].as_int(), Some(2));
-    assert!(values[12].is_nil());
+    assert_eq!(values.at(2).as_int(), Some(1));
+    assert_eq!(values.at(3).as_int(), Some(2));
+    assert!(values.at(12).is_nil());
 
     let request = request.borrow();
     let request = request.as_ref().expect("native entity probe request");
@@ -763,10 +851,10 @@ fn find_font_eval_requests_exact_registry_match_from_display_host() {
     );
     let info = font_info(&mut eval, vec![font]).unwrap();
     let values = info.as_vector_data().expect("font info vector");
-    assert_eq!(values[2].as_int(), Some(1));
-    assert_eq!(values[3].as_int(), Some(2));
+    assert_eq!(values.at(2).as_int(), Some(1));
+    assert_eq!(values.at(3).as_int(), Some(2));
     assert_eq!(
-        values[12].as_utf8_str(),
+        values.at(12).as_utf8_str(),
         Some("/tmp/NotoSansMonoCJKsc-Regular.otf")
     );
 
@@ -1171,7 +1259,8 @@ fn font_xlfd_name_too_many_args() {
 #[test]
 fn close_font_requires_font_object() {
     crate::test_utils::init_test_tracing();
-    let wrong_nil = close_font(vec![Value::NIL]).unwrap_err();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
+    let wrong_nil = close_font(&mut eval, vec![Value::NIL]).unwrap_err();
     match wrong_nil.into_kind() {
         FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
@@ -1180,7 +1269,7 @@ fn close_font_requires_font_object() {
         other => panic!("expected wrong-type-argument, got {other:?}"),
     }
 
-    let wrong_spec = close_font(vec![font_spec(vec![]).unwrap()]).unwrap_err();
+    let wrong_spec = close_font(&mut eval, vec![font_spec(vec![]).unwrap()]).unwrap_err();
     match wrong_spec.into_kind() {
         FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
@@ -1193,13 +1282,17 @@ fn close_font_requires_font_object() {
 #[test]
 fn close_font_accepts_opaque_font_object_and_checks_arity() {
     crate::test_utils::init_test_tracing();
-    let _eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime()); // sets up heap
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime()); // sets up heap
     let font_obj = build_font_object(&RuntimeFace::new("default"));
-    assert!(close_font(vec![font_obj]).unwrap().is_nil());
-    assert!(close_font(vec![font_obj, Value::NIL]).unwrap().is_nil());
+    assert!(close_font(&mut eval, vec![font_obj]).unwrap().is_nil());
+    assert!(
+        close_font(&mut eval, vec![font_obj, Value::NIL])
+            .unwrap()
+            .is_nil()
+    );
 
-    assert!(close_font(vec![]).is_err());
-    assert!(close_font(vec![Value::NIL, Value::NIL, Value::NIL]).is_err());
+    assert!(close_font(&mut eval, vec![]).is_err());
+    assert!(close_font(&mut eval, vec![Value::NIL, Value::NIL, Value::NIL]).is_err());
 }
 
 #[test]
@@ -1406,6 +1499,73 @@ fn font_at_eval_passes_effective_inline_family_to_font_selection() {
         Some("Symbols Nerd Font Mono"),
         "the inline family realizes the ASCII/primary face"
     );
+    assert_eq!(request.realized_face_id, None);
+    assert_eq!(request.realized_face_epoch, None);
+}
+
+#[test]
+fn font_at_passes_the_realized_face_redisplay_sealed() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
+    ensure_selected_gui_frame(&mut eval);
+    let captured = Rc::new(RefCell::new(None));
+    eval.set_display_host(Box::new(CapturingFontAtDisplayHost {
+        last_request: captured.clone(),
+    }));
+    eval.font_driver = Some(StubFontDriver::realized_fontset(
+        |_eval, _frame, _window, _pos| Some((7, 3)),
+    ));
+    let buffer = eval
+        .edit
+        .buffers
+        .current_buffer_mut()
+        .expect("current buffer");
+    buffer.insert("ab");
+
+    assert!(
+        font_at(&mut eval, vec![Value::fixnum(1)])
+            .expect("font-at")
+            .is_nil()
+    );
+    let request = captured.borrow().clone().expect("captured request");
+    assert_eq!(request.realized_face_id, Some(7));
+    assert_eq!(request.realized_face_epoch, Some(3));
+
+    *captured.borrow_mut() = None;
+    assert!(
+        font_at(
+            &mut eval,
+            vec![Value::fixnum(0), Value::NIL, Value::string("ab")]
+        )
+        .expect("string font-at")
+        .is_nil()
+    );
+    let string_request = captured.borrow().clone().expect("string request");
+    assert_eq!(
+        string_request.realized_face_id, None,
+        "a string position has no buffer face id"
+    );
+    assert_eq!(string_request.realized_face_epoch, None);
+
+    *captured.borrow_mut() = None;
+    assert!(
+        internal_char_font(&mut eval, vec![Value::fixnum(1)])
+            .expect("internal-char-font")
+            .is_nil()
+    );
+    let char_font = captured.borrow().clone().expect("char-font request");
+    assert_eq!(char_font.realized_face_id, Some(7));
+    assert_eq!(char_font.realized_face_epoch, Some(3));
+
+    *captured.borrow_mut() = None;
+    assert!(
+        internal_char_font(&mut eval, vec![Value::NIL, Value::fixnum('a' as i64)])
+            .expect("nil-position internal-char-font")
+            .is_nil()
+    );
+    let nil_position = captured.borrow().clone().expect("nil position request");
+    assert_eq!(nil_position.realized_face_id, None);
+    assert_eq!(nil_position.realized_face_epoch, None);
 }
 
 #[test]
@@ -1470,7 +1630,7 @@ fn font_at_eval_prefers_backend_selected_font_match_when_available() {
     let info = font_info(&mut eval, vec![font]).unwrap();
     let values = info.as_vector_data().expect("font info vector");
     assert_eq!(
-        values[12].as_utf8_str(),
+        values.at(12).as_utf8_str(),
         Some("/tmp/NotoSansMonoCJKsc-Regular.otf")
     );
 }
@@ -1718,6 +1878,273 @@ fn internal_char_font_preserves_the_full_emacs_character_domain_to_the_host() {
     }
 }
 
+#[test]
+fn internal_char_font_nil_position_does_not_rebuild_the_face_table_per_call() {
+    // `(internal-char-font nil CH)` is the `char-displayable-p` path magit
+    // hits once per section ellipsis. GNU realizes the default face from the
+    // frame cache and rebuilds only after a face change. Walking every Lisp
+    // face on each call is the #829 gap.
+    crate::test_utils::init_test_tracing();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
+    ensure_selected_gui_frame(&mut eval);
+    reset_frame_lisp_face_table_rebuilds();
+    const CALLS: u64 = 8;
+    for _ in 0..CALLS {
+        internal_char_font(&mut eval, vec![Value::NIL, Value::fixnum(0x2026)]).unwrap();
+    }
+    let rebuilds = frame_lisp_face_table_rebuilds();
+    assert!(
+        rebuilds <= 1,
+        "{CALLS} nil-position internal-char-font calls rebuilt the face table {rebuilds} times"
+    );
+}
+
+#[test]
+fn composition_font_or_frame_at_returns_tty_frame_and_honors_tty_type_inhibition() {
+    crate::test_utils::init_test_tracing();
+    struct TerminalRuntimeResetGuard;
+    impl Drop for TerminalRuntimeResetGuard {
+        fn drop(&mut self) {
+            crate::emacs_core::terminal::pure::reset_terminal_thread_locals();
+            crate::emacs_core::terminal::pure::reset_terminal_runtime();
+        }
+    }
+    let _reset_guard = TerminalRuntimeResetGuard;
+    crate::emacs_core::terminal::pure::reset_terminal_thread_locals();
+    crate::emacs_core::terminal::pure::configure_terminal_runtime(
+        crate::emacs_core::terminal::pure::TerminalRuntimeConfig::interactive(
+            Some("xterm-256color".to_string()),
+            neomacs_display_protocol::tty_capabilities::TtyAttributeCapabilities::full_with_color_cells(256),
+        ),
+    );
+
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
+    let buf_id = eval
+        .edit
+        .buffers
+        .current_buffer_id()
+        .expect("current buffer");
+    eval.edit
+        .buffers
+        .get_mut(buf_id)
+        .expect("buffer")
+        .insert("cafe\u{0301}\n");
+    let frame_id = eval
+        .frame_manager_mut()
+        .create_frame("tty-comp", 80, 24, buf_id);
+    eval.obarray_mut()
+        .set_symbol_value("auto-composition-mode", Value::T);
+
+    let tty_type =
+        crate::emacs_core::terminal::pure::builtin_tty_type(&mut eval, vec![]).expect("tty-type");
+    assert_eq!(
+        tty_type,
+        Value::string("xterm-256color"),
+        "interactive TTY terminal must report a concrete tty-type string"
+    );
+
+    let result = composition_font_or_frame_at(&mut eval, 4, Value::NIL);
+    assert_eq!(
+        result,
+        Some(Value::make_frame(frame_id.0)),
+        "non-window frame must return win->frame per GNU autocmp_chars"
+    );
+
+    // Non-matching string auto-composition-mode does not inhibit.
+    eval.obarray_mut()
+        .set_symbol_value("auto-composition-mode", Value::string("vt100"));
+    assert_eq!(
+        composition_font_or_frame_at(&mut eval, 4, Value::NIL),
+        Some(Value::make_frame(frame_id.0)),
+    );
+
+    // Matching tty-type string inhibits (GNU inhibit_auto_composition).
+    eval.obarray_mut()
+        .set_symbol_value("auto-composition-mode", tty_type);
+    assert_eq!(
+        composition_font_or_frame_at(&mut eval, 4, Value::NIL),
+        None,
+        "matching tty-type string must inhibit automatic composition"
+    );
+
+    eval.obarray_mut()
+        .set_symbol_value("auto-composition-mode", Value::NIL);
+    assert_eq!(composition_font_or_frame_at(&mut eval, 4, Value::NIL), None);
+}
+
+#[test]
+fn composition_font_or_frame_at_gui_uses_cached_realized_face_table() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
+    ensure_selected_gui_frame(&mut eval);
+    eval.edit
+        .buffers
+        .current_buffer_mut()
+        .expect("current buffer")
+        .insert("cafe\u{0301}\n");
+    eval.obarray_mut()
+        .set_symbol_value("auto-composition-mode", Value::T);
+    eval.set_display_host(Box::new(FontAtDisplayHost {
+        matched: Some(resolved_font_match(
+            "DejaVu Sans Mono",
+            None,
+            Some("DejaVuSansMono"),
+            Some(0x45),
+            FontPxProbeResult {
+                pixel_size: 14,
+                height: 16,
+                ascent: 12,
+                descent: 4,
+                max_width: 8,
+                space_width: 8,
+                average_width: 8,
+            },
+            None,
+        )),
+        match_char: Some(u32::from('e')),
+        ..Default::default()
+    }));
+
+    reset_frame_lisp_face_table_rebuilds();
+    const CALLS: u64 = 16;
+    let mut first = None;
+    for _ in 0..CALLS {
+        let font = composition_font_or_frame_at(&mut eval, 4, Value::NIL)
+            .expect("GUI frame must resolve a font object");
+        assert!(font.is_font_object(), "GUI result must be a font object");
+        if let Some(prev) = first {
+            assert_eq!(font, prev, "realized face font object must be reused");
+        } else {
+            first = Some(font);
+        }
+    }
+    let string = Value::string("cafe\u{0301}");
+    let string_font = composition_font_or_frame_at(&mut eval, 3, string)
+        .expect("GUI frame must resolve a font object for string position");
+    assert_eq!(
+        Some(string_font),
+        first,
+        "GUI string position must reuse the realized font object"
+    );
+    let rebuilds = frame_lisp_face_table_rebuilds();
+    assert!(
+        rebuilds <= 1,
+        "{CALLS} composition_font_or_frame_at calls rebuilt the face table {rebuilds} times"
+    );
+}
+
+#[test]
+fn internal_char_font_uses_the_default_face_after_a_face_attribute_change() {
+    // GNU `Finternal_char_font` reads the realized default face, so a
+    // `set-face-attribute` on `default` changes the font object on the next
+    // nil-position call (`:height 240` moves the opened size; the glyph code
+    // stays). The full table walk must still not run once per call.
+    crate::test_utils::init_test_tracing();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
+    ensure_selected_gui_frame(&mut eval);
+    eval.set_display_host(Box::new(FontAtDisplayHost {
+        matched: Some(resolved_font_match(
+            "Noto Sans Mono CJK SC",
+            None,
+            Some("NotoSansMonoCJKsc-Regular"),
+            Some(0x2A),
+            FontPxProbeResult {
+                pixel_size: 15,
+                height: 16,
+                ascent: 12,
+                descent: 4,
+                max_width: 9,
+                space_width: 8,
+                average_width: 8,
+            },
+            None,
+        )),
+        ..Default::default()
+    }));
+    let ch = Value::fixnum(i64::from('好' as u32));
+    reset_frame_lisp_face_table_rebuilds();
+    let before = internal_char_font(&mut eval, vec![Value::NIL, ch]).unwrap();
+    let before_height = font_get(vec![before.cons_car(), Value::keyword(":height")]).unwrap();
+    builtin_internal_set_lisp_face_attribute(
+        &mut eval,
+        vec![
+            Value::symbol("default"),
+            Value::keyword(":height"),
+            Value::fixnum(240),
+        ],
+    )
+    .unwrap();
+    let after = internal_char_font(&mut eval, vec![Value::NIL, ch]).unwrap();
+    let after_height = font_get(vec![after.cons_car(), Value::keyword(":height")]).unwrap();
+    assert_ne!(before_height, after_height);
+    assert_eq!(after_height, Value::fixnum(240));
+    assert_eq!(before.cons_cdr(), Value::fixnum(0x2A));
+    assert_eq!(after.cons_cdr(), Value::fixnum(0x2A));
+    for _ in 0..7 {
+        internal_char_font(&mut eval, vec![Value::NIL, ch]).unwrap();
+    }
+    let rebuilds = frame_lisp_face_table_rebuilds();
+    assert!(
+        rebuilds <= 1,
+        "face-attribute change must not restore a per-call rebuild ({rebuilds})"
+    );
+}
+
+#[test]
+fn internal_char_font_reuses_one_font_object_for_a_realized_face() {
+    // GNU `Finternal_char_font` returns the realized face's font
+    // (`XSETFONT` of `face->font`, src/font.c:4815-4824). Repeated
+    // nil-position calls for one character are `eq` while the face is
+    // unchanged, and the OTF capability list is built once for that font.
+    crate::test_utils::init_test_tracing();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
+    ensure_selected_gui_frame(&mut eval);
+    let glyph = 0x24B;
+    eval.set_display_host(Box::new(FontAtDisplayHost {
+        matched: Some(resolved_font_match(
+            "Noto Sans Mono CJK SC",
+            Some("NotoSansMonoCJKsc-Regular.otf"),
+            Some("NotoSansMonoCJKsc-Regular"),
+            Some(glyph),
+            FontPxProbeResult {
+                pixel_size: 15,
+                height: 16,
+                ascent: 12,
+                descent: 4,
+                max_width: 9,
+                space_width: 8,
+                average_width: 8,
+            },
+            Some(FontOtfCapability {
+                gsub: vec![("DFLT".into(), vec![(None, vec!["liga".into()])])],
+                gpos: Vec::new(),
+            }),
+        )),
+        match_char: Some(0x2026),
+        ..Default::default()
+    }));
+    reset_opened_font_otf_builds();
+    const CALLS: u64 = 8;
+    let mut fonts = Vec::with_capacity(CALLS as usize);
+    for _ in 0..CALLS {
+        let result =
+            internal_char_font(&mut eval, vec![Value::NIL, Value::fixnum(0x2026)]).unwrap();
+        assert_eq!(result.cons_cdr(), Value::fixnum(i64::from(glyph)));
+        fonts.push(result.cons_car());
+    }
+    let builds = opened_font_otf_builds();
+    assert!(
+        builds <= 1,
+        "{CALLS} nil-position internal-char-font calls built the OTF capability list {builds} times"
+    );
+    for font in fonts.iter().skip(1) {
+        assert!(
+            neovm_value::value::eq_value(&fonts[0], font),
+            "realized font object must stay eq across nil-position calls"
+        );
+    }
+}
+
 // -----------------------------------------------------------------------
 // Face builtins
 // -----------------------------------------------------------------------
@@ -1827,6 +2254,7 @@ fn query_font_uses_stored_metrics_when_file_probe_is_unavailable() {
         // unavailable. `query-font` must read the opened object, not retry it.
         metrics: None,
         capability: None,
+        match_char: None,
     }));
     eval.edit
         .buffers
@@ -1844,19 +2272,23 @@ fn query_font_uses_stored_metrics_when_file_probe_is_unavailable() {
 
     assert_eq!(values.len(), 9);
     assert!(
-        values[0]
+        values
+            .at(0)
             .as_utf8_str()
             .is_some_and(|name| name.contains("-17-"))
     );
     assert_eq!(
-        values[1].as_utf8_str(),
+        values.at(1).as_utf8_str(),
         Some("/tmp/NotoSansMonoCJKsc-Regular.otf")
     );
     for (index, expected) in [(2, 17), (3, 19), (4, 13), (5, 5), (6, 11), (7, 12)] {
-        assert_eq!(values[index].as_int(), Some(expected), "slot {index}");
+        assert_eq!(values.at(index).as_int(), Some(expected), "slot {index}");
     }
-    assert_eq!(values[8].cons_car().as_bare_symbol_name(), Some("opentype"));
-    assert!(values[8].cons_cdr().cons_car().is_cons());
+    assert_eq!(
+        values.at(8).cons_car().as_bare_symbol_name(),
+        Some("opentype")
+    );
+    assert!(values.at(8).cons_cdr().cons_car().is_cons());
 
     let err = query_font(&mut eval, vec![Value::NIL]).unwrap_err();
     match err.into_kind() {
@@ -1917,6 +2349,7 @@ fn query_font_uses_opened_object_metrics_without_a_font_file() {
             average_width: 10,
         }),
         capability: None,
+        match_char: None,
     }));
     eval.edit
         .buffers
@@ -1928,9 +2361,9 @@ fn query_font_uses_opened_object_metrics_without_a_font_file() {
     let query = query_font(&mut eval, vec![font]).unwrap();
     let values = query.as_vector_data().expect("query-font vector");
 
-    assert!(values[1].is_nil(), "a memory font may have no filename");
+    assert!(values.at(1).is_nil(), "a memory font may have no filename");
     for (index, expected) in [(2, 17), (3, 19), (4, 15), (5, 6), (6, 8), (7, 10)] {
-        assert_eq!(values[index].as_int(), Some(expected), "slot {index}");
+        assert_eq!(values.at(index).as_int(), Some(expected), "slot {index}");
     }
 }
 
@@ -1978,6 +2411,7 @@ fn opened_font_retains_exact_backend_identity_and_variations() {
                 descent_px: 6.0,
                 space_advance_px: 9.0,
                 glyph_advance: Default::default(),
+                spacing: None,
             },
             foundry: Some(LispString::from_utf8("TEST")),
             slant: FontSlant::Normal,
@@ -2000,11 +2434,11 @@ fn opened_font_retains_exact_backend_identity_and_variations() {
             .unwrap()
             .is_nil()
     );
-    let info = OpenedFont::decode(object)
+    let info = OpenedFont::decode(&object)
         .expect("opened font payload")
         .info_vector();
     let values = info.as_vector_data().expect("font info vector");
-    assert_eq!(values[1].as_utf8_str(), Some("Variable Sans Semibold"));
+    assert_eq!(values.at(1).as_utf8_str(), Some("Variable Sans Semibold"));
     assert_eq!(
         font_get(vec![object, Value::keyword("postscript-name")])
             .unwrap()
@@ -2047,7 +2481,7 @@ fn font_info_eval_reports_font_vector_file_slot_on_live_gui_frame() {
     let values = info.as_vector_data().expect("font info vector");
 
     assert_eq!(values.len(), 14);
-    assert_eq!(values[12].as_utf8_str(), Some("/tmp/NotoSans.ttf"));
+    assert_eq!(values.at(12).as_utf8_str(), Some("/tmp/NotoSans.ttf"));
 }
 
 #[test]
@@ -2113,7 +2547,7 @@ fn font_shape_gstring_fills_slots_through_the_installed_shaper() {
 
     // A test shaper shaped as ONE ligature glyph covering both characters:
     // slot[2] = [from=0 to=1 code=0xF1 width=13 …], slot[3] = nil.
-    eval.font_shape_fn = Some(Box::new(|_eval, gstring, _direction| {
+    eval.font_driver = Some(StubFontDriver::shape(|_eval, gstring, _direction| {
         let Some(slots) = gstring.as_vector_data() else {
             return crate::emacs_core::font::GstringShapeOutcome::NotShapable;
         };
@@ -2141,19 +2575,105 @@ fn font_shape_gstring_fills_slots_through_the_installed_shaper() {
 
     let shaped = font_shape_gstring(&mut eval, vec![gstring.clone(), Value::NIL])
         .expect("shaping should not signal");
+    // GNU `Ffont_shape_gstring` ends in `composition_gstring_put_cache`
+    // (src/font.c:4685), which stores and returns a COPY of the header and
+    // shaped glyphs with its ID slot set (src/composite.c:663-669).  The
+    // input object keeps its nil ID, so it is not the returned gstring.
+    assert_ne!(shaped.bits(), gstring.bits(), "GNU returns the cached copy");
+    let slots = shaped.as_vector_data().expect("gstring vector");
     assert!(
-        shaped == gstring,
-        "GNU returns the gstring itself after shaping"
+        slots.at(1).as_int().is_some(),
+        "the cached copy carries its shape id"
+    );
+    assert_eq!(slots.len(), 3, "the copy holds exactly the shaped glyphs");
+    let glyph_val = slots.at(2);
+    let glyph = glyph_val.as_vector_data().expect("first glyph slot");
+    assert_eq!(glyph.at(0), Value::fixnum(0), "from");
+    assert_eq!(glyph.at(1), Value::fixnum(1), "to");
+    assert_eq!(glyph.at(3), Value::fixnum(0xF1), "the shaper's glyph code");
+    assert_eq!(glyph.at(4), Value::fixnum(13), "the shaper's advance");
+}
+
+#[test]
+fn font_shape_gstring_accepts_several_glyphs_in_one_cluster() {
+    // GNU's coverage rule (src/font.c Ffont_shape_gstring) compares a glyph's
+    // FROM with the PREVIOUS GLYPH's FROM: glyphs of one grapheme cluster all
+    // share a single from/to pair, and that `to` may span more than one
+    // character.  Comparing against the previous TO instead rejected a
+    // shaped base+mark cluster such as Devanagari "ते" (two glyphs, from=0
+    // to=1), so find-composition returned nil for a composition the display
+    // matrix had drawn (issue #785).
+    crate::test_utils::init_test_tracing();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
+
+    let font = build_font_object(&RuntimeFace::new("default"));
+    let gstring = neovm_text::emacs_core::composite::composition_get_gstring(
+        &mut eval,
+        vec![
+            Value::fixnum(0),
+            Value::fixnum(3),
+            font,
+            Value::string("abc"),
+        ],
+    )
+    .expect("composition-get-gstring should build a GNU-shaped gstring");
+
+    // "ab" is one cluster with two glyphs (from=0 to=1); "c" is its own
+    // cluster (from=2 to=2).
+    eval.font_driver = Some(StubFontDriver::shape(|_eval, gstring, _direction| {
+        let Some(slots) = gstring.as_vector_data() else {
+            return crate::emacs_core::font::GstringShapeOutcome::NotShapable;
+        };
+        if slots.len() < 5 {
+            return crate::emacs_core::font::GstringShapeOutcome::NeedLargerGlyphs;
+        }
+        let glyph = |from: i64, to: i64, code: i64, width: i64| {
+            Value::vector(vec![
+                Value::fixnum(from),
+                Value::fixnum(to),
+                Value::NIL,
+                Value::fixnum(code),
+                Value::fixnum(width),
+                Value::NIL,
+                Value::NIL,
+                Value::NIL,
+                Value::NIL,
+                Value::NIL,
+            ])
+        };
+        gstring.set_vector_slot(2, glyph(0, 1, 0xE1, 7));
+        gstring.set_vector_slot(3, glyph(0, 1, 0xE2, 0));
+        gstring.set_vector_slot(4, glyph(2, 2, 0xE3, 9));
+        gstring.set_vector_slot(5, Value::NIL);
+        crate::emacs_core::font::GstringShapeOutcome::Shaped(3)
+    }));
+
+    let shaped = font_shape_gstring(&mut eval, vec![gstring.clone(), Value::NIL])
+        .expect("a shared-cluster gstring must not signal");
+    assert!(
+        !shaped.is_nil(),
+        "a multi-glyph cluster whose to spans its characters must shape"
     );
     let slots = shaped.as_vector_data().expect("gstring vector");
-    // The shape id (slot 1) is the composition cache's bookkeeping — that
-    // cache is not yet implemented in this port, so it stays nil here.
-    assert!(slots[3].is_nil(), "the glyph vector is truncated at n=1");
-    let glyph = slots[2].as_vector_data().expect("first glyph slot");
-    assert_eq!(glyph[0], Value::fixnum(0), "from");
-    assert_eq!(glyph[1], Value::fixnum(1), "to");
-    assert_eq!(glyph[3], Value::fixnum(0xF1), "the shaper's glyph code");
-    assert_eq!(glyph[4], Value::fixnum(13), "the shaper's advance");
+    let first_val = slots.at(2);
+    let first = first_val.as_vector_data().expect("first glyph");
+    let second_val = slots.at(3);
+    let second = second_val.as_vector_data().expect("second glyph");
+    let third_val = slots.at(4);
+    let third = third_val.as_vector_data().expect("third glyph");
+    assert_eq!(
+        (first.at(0).as_int(), first.at(1).as_int()),
+        (Some(0), Some(1))
+    );
+    assert_eq!(
+        (second.at(0).as_int(), second.at(1).as_int()),
+        (Some(0), Some(1)),
+        "same cluster keeps the same from/to"
+    );
+    assert_eq!(
+        (third.at(0).as_int(), third.at(1).as_int()),
+        (Some(2), Some(2))
+    );
 }
 
 #[test]
@@ -2176,7 +2696,7 @@ fn font_shape_gstring_adjusts_zero_width_clusters() {
     .expect("gstring");
 
     // A shaper that produces two ZERO-ADVANCE glyphs (e.g. combining marks).
-    eval.font_shape_fn = Some(Box::new(|_eval, gstring, _direction| {
+    eval.font_driver = Some(StubFontDriver::shape(|_eval, gstring, _direction| {
         gstring.set_vector_slot(
             2,
             Value::vector(vec![
@@ -2214,11 +2734,21 @@ fn font_shape_gstring_adjusts_zero_width_clusters() {
         .expect("zero-width shaping should succeed");
     let slots = shaped.as_vector_data().expect("gstring vector");
     for index in [2usize, 3usize] {
-        let glyph = slots[index].as_vector_data().expect("glyph slot");
-        let adjustment = glyph[5].as_vector_data().expect("zero-width cluster must             get its last glyph's ADJUSTMENT set to [0 0 width+1]");
-        assert_eq!(adjustment[0], Value::fixnum(0));
-        assert_eq!(adjustment[1], Value::fixnum(0));
-        assert_eq!(adjustment[2], Value::fixnum(1), "width + 1");
+        let glyph_val = slots.at(index);
+        let glyph = glyph_val.as_vector_data().expect("glyph slot");
+        // GNU's LGLYPH layout (lisp/composite.el `lglyph-adjustment`) is
+        // index 9; slots 5..8 are lbearing/rbearing/ascent/descent.
+        assert!(
+            glyph.at(5).is_nil(),
+            "slot 5 is LBEARING, not the adjustment"
+        );
+        let adj_val = glyph.at(9);
+        let adjustment = adj_val
+            .as_vector_data()
+            .expect("zero-width cluster must get its last glyph's ADJUSTMENT set to [0 0 width+1]");
+        assert_eq!(adjustment.at(0), Value::fixnum(0));
+        assert_eq!(adjustment.at(1), Value::fixnum(0));
+        assert_eq!(adjustment.at(2), Value::fixnum(1), "width + 1");
     }
 }
 
@@ -2243,7 +2773,7 @@ fn font_shape_gstring_caches_by_header_and_returns_the_cached_gstring() {
         .expect("gstring")
     };
 
-    eval.font_shape_fn = Some(Box::new(|_eval, gstring, _direction| {
+    eval.font_driver = Some(StubFontDriver::shape(|_eval, gstring, _direction| {
         gstring.set_vector_slot(
             2,
             Value::vector(vec![
@@ -2274,12 +2804,183 @@ fn font_shape_gstring_caches_by_header_and_returns_the_cached_gstring() {
         "the cache hit must return the cached gstring"
     );
     assert!(
-        second.as_vector_data().expect("g")[1].as_int().is_some(),
+        second.as_vector_data().expect("g").at(1).as_int().is_some(),
         "the cached gstring carries its shape id"
     );
     // The driver ran exactly once: shape both calls and count the driver
     // invocations through the id monotonicity — the second call's ID equals
     // the first's (same cache entry), proving no re-shape.
+}
+
+#[test]
+fn font_shape_gstring_cache_key_separates_same_family_and_pixel_weight() {
+    // GNU keys the shaped-gstring cache on the whole header
+    // `[FONT-OBJECT C1 ...]` under `equal`
+    // (`composition_gstring_put_cache`, src/composite.c).  Two font objects
+    // with the same family and pixel size but different weights must not
+    // share an entry: a cached bold width would otherwise be reused for the
+    // regular face (and vice versa).
+    crate::test_utils::init_test_tracing();
+    use neovm_text::emacs_core::text_host::TextHost;
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
+    let regular = build_font_object(&RuntimeFace::new("default"));
+    let mut bold_face = RuntimeFace::new("default");
+    bold_face.weight = Some(neovm_value::display_vocab::FontWeight::Bold);
+    let bold = build_font_object(&bold_face);
+
+    let mut next_width = 7i64;
+    eval.font_driver = Some(StubFontDriver::shape(move |_eval, gstring, _direction| {
+        let width = next_width;
+        next_width += 2;
+        gstring.set_vector_slot(
+            2,
+            Value::vector(vec![
+                Value::fixnum(0),
+                Value::fixnum(1),
+                Value::fixnum(0x66),
+                Value::fixnum(0x66),
+                Value::fixnum(width),
+                Value::NIL,
+                Value::NIL,
+                Value::NIL,
+                Value::NIL,
+                Value::NIL,
+            ]),
+        );
+        gstring.set_vector_slot(3, Value::NIL);
+        crate::emacs_core::font::GstringShapeOutcome::Shaped(1)
+    }));
+    let build = |eval: &mut Context, font: Value| {
+        neovm_text::emacs_core::composite::composition_get_gstring(
+            eval,
+            vec![
+                Value::fixnum(0),
+                Value::fixnum(2),
+                font,
+                Value::string("fi"),
+            ],
+        )
+        .expect("gstring")
+    };
+
+    let input = build(&mut eval, regular);
+    let regular_gstring =
+        font_shape_gstring(&mut eval, vec![input, Value::NIL]).expect("regular shaping");
+    let input = build(&mut eval, bold);
+    let bold_gstring =
+        font_shape_gstring(&mut eval, vec![input, Value::NIL]).expect("bold shaping");
+
+    assert_ne!(
+        regular_gstring.bits(),
+        bold_gstring.bits(),
+        "the two weights must not share a cached gstring"
+    );
+    assert_eq!(
+        eval.gstring_shape_cache_mut().len(),
+        2,
+        "the face weight is part of the cache key"
+    );
+    let width_of = |gstring: Value| {
+        gstring
+            .as_vector_data()
+            .expect("gstring")
+            .at(2)
+            .as_vector_data()
+            .expect("glyph")
+            .at(4)
+            .as_int()
+    };
+    assert_eq!(width_of(regular_gstring), Some(7));
+    assert_eq!(width_of(bold_gstring), Some(9));
+    let header_of = |gstring: Value| gstring.as_vector_data().expect("gstring").at(0);
+    let regular_hit = eval
+        .composition_gstring_cache_lookup(header_of(regular_gstring))
+        .expect("regular header must hit its own entry");
+    let bold_hit = eval
+        .composition_gstring_cache_lookup(header_of(bold_gstring))
+        .expect("bold header must hit its own entry");
+    assert_eq!(regular_hit.bits(), regular_gstring.bits());
+    assert_eq!(bold_hit.bits(), bold_gstring.bits());
+}
+
+#[test]
+fn gstring_cache_key_ignores_font_realization_identity() {
+    // Two separately opened font objects for the same face carry equal Lisp
+    // state but distinct heap payloads: the OTF capability list is rebuilt
+    // for every realization, so its identity bits differ.  GNU's key is
+    // `equal` over the header (src/composite.c:640-669), so a re-realization
+    // of the same font must still hit the first one's shaped gstring.
+    crate::test_utils::init_test_tracing();
+    let _eval = Context::new(crate::test_utils::unit_runtime());
+    let a = opened_font_with_capability(arab_capability());
+    let b = opened_font_with_capability(arab_capability());
+    assert_ne!(a.bits(), b.bits(), "distinct font objects");
+    let header = |font: Value| Value::vector(vec![font, Value::fixnum(0x66)]);
+    let key_a = neovm_value::display_vocab::gstring_cache_key_from_header(&header(a))
+        .expect("key for the first realization");
+    let key_b = neovm_value::display_vocab::gstring_cache_key_from_header(&header(b))
+        .expect("key for the second realization");
+    assert_eq!(
+        key_a, key_b,
+        "the same face realized twice must share one cache key"
+    );
+}
+
+#[test]
+fn clear_composition_cache_empties_the_shaped_gstring_table() {
+    // GNU `Fclear_composition_cache` replaces the whole gstring table and
+    // returns `(clear-face-cache t)` (src/composite.c:697-707), so the next
+    // automatic-composition search shapes again instead of reusing a gstring
+    // whose font may be gone.
+    crate::test_utils::init_test_tracing();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
+    let font = build_font_object(&RuntimeFace::new("default"));
+    eval.font_driver = Some(StubFontDriver::shape(|_eval, gstring, _direction| {
+        gstring.set_vector_slot(
+            2,
+            Value::vector(vec![
+                Value::fixnum(0),
+                Value::fixnum(1),
+                Value::fixnum(0x66),
+                Value::fixnum(0x66),
+                Value::fixnum(7),
+                Value::NIL,
+                Value::NIL,
+                Value::NIL,
+                Value::NIL,
+                Value::NIL,
+            ]),
+        );
+        gstring.set_vector_slot(3, Value::NIL);
+        crate::emacs_core::font::GstringShapeOutcome::Shaped(1)
+    }));
+    let gstring = neovm_text::emacs_core::composite::composition_get_gstring(
+        &mut eval,
+        vec![
+            Value::fixnum(0),
+            Value::fixnum(2),
+            font,
+            Value::string("fi"),
+        ],
+    )
+    .expect("gstring");
+    font_shape_gstring(&mut eval, vec![gstring, Value::NIL]).expect("shaping");
+    assert_eq!(eval.gstring_shape_cache_mut().len(), 1);
+    let face_change_before = eval.face_change_count();
+    let result = neovm_text::emacs_core::composite::clear_cache(&mut eval, vec![])
+        .expect("clear-composition-cache");
+    assert!(
+        eval.gstring_shape_cache_mut().is_empty(),
+        "clear-composition-cache must drop every shaped gstring"
+    );
+    assert!(
+        result.is_nil(),
+        "clear-face-cache returns nil (src/xfaces.c Fclear_face_cache)"
+    );
+    assert!(
+        eval.face_change_count() > face_change_before,
+        "GNU forces face re-realization after clearing the composition cache"
+    );
 }
 
 #[test]
@@ -2303,7 +3004,7 @@ fn font_shape_gstring_cache_is_the_sole_edge_across_minor_and_full_gc() {
         )
         .expect("gstring")
     };
-    eval.font_shape_fn = Some(Box::new(|_eval, gstring, _direction| {
+    eval.font_driver = Some(StubFontDriver::shape(|_eval, gstring, _direction| {
         gstring.set_vector_slot(
             2,
             Value::vector(vec![
@@ -2327,9 +3028,23 @@ fn font_shape_gstring_cache_is_the_sole_edge_across_minor_and_full_gc() {
         identity_bits: usize,
         slot_bits: Vec<usize>,
     }
-    let (cached_bits, snapshots) = eval.with_gc_inhibited(|eval| {
+    let (cached_bits, header_bits, snapshots) = eval.with_gc_inhibited(|eval| {
         let input = build(eval);
         let cached = font_shape_gstring(eval, vec![input, Value::NIL]).expect("first shaping");
+        let header_bits = cached
+            .as_vector_data()
+            .expect("cached gstring")
+            .first()
+            .and_then(|header| {
+                Some(
+                    header
+                        .as_vector_data()?
+                        .iter()
+                        .map(|value| value.bits())
+                        .collect::<Vec<_>>(),
+                )
+            })
+            .expect("cached header");
         let mut pending = vec![cached];
         let mut snapshots = Vec::new();
         while let Some(vector) = pending.pop() {
@@ -2338,9 +3053,9 @@ fn font_shape_gstring_cache_is_the_sole_edge_across_minor_and_full_gc() {
                 identity_bits: vector.bits(),
                 slot_bits: slots.iter().map(|slot| slot.bits()).collect(),
             });
-            pending.extend(slots.iter().copied().filter(|slot| slot.is_vector()));
+            pending.extend(slots.iter().filter(|slot| slot.is_vector()));
         }
-        (cached.bits(), snapshots)
+        (cached.bits(), header_bits, snapshots)
     });
     // Only native integer snapshots escape setup: no Lisp variable, scratch
     // root, callback capture, argument vector or other owner retains the graph.
@@ -2413,7 +3128,16 @@ fn font_shape_gstring_cache_is_the_sole_edge_across_minor_and_full_gc() {
     check_cached_graph(&eval);
 
     eval.with_gc_inhibited(|eval| {
-        let fresh = build(eval);
+        // `composition-get-gstring` now returns the cached gstring for this
+        // header (GNU `gstring_hash_table`), so a fresh input is built
+        // directly: the same header elements, a nil ID and no glyphs.
+        let header = Value::vector(
+            header_bits
+                .iter()
+                .map(|bits| unsafe { Value::from_bits(*bits) })
+                .collect(),
+        );
+        let fresh = Value::vector(vec![header, Value::NIL]);
         assert_ne!(fresh.bits(), cached_bits, "lookup must use a fresh input");
         let hit = font_shape_gstring(eval, vec![fresh, Value::NIL]).expect("same-key hit");
         assert_eq!(hit.bits(), cached_bits, "cache hit must preserve identity");
@@ -2441,7 +3165,7 @@ fn font_shape_gstring_grows_the_glyph_vector_when_the_shaper_needs_room() {
     // A shaper that first asks for a larger vector, then produces one glyph
     // covering the run — GNU grows the gstring and retries, up to three
     // attempts (src/font.c Ffont_shape_gstring).
-    eval.font_shape_fn = Some(Box::new(|_eval, gstring, _direction| {
+    eval.font_driver = Some(StubFontDriver::shape(|_eval, gstring, _direction| {
         use std::cell::Cell;
         use std::rc::Rc;
         thread_local! {
@@ -2477,7 +3201,7 @@ fn font_shape_gstring_grows_the_glyph_vector_when_the_shaper_needs_room() {
     let shaped = font_shape_gstring(&mut eval, vec![gstring, Value::NIL])
         .expect("growing retry should not signal");
     let slots = shaped.as_vector_data().expect("gstring vector");
-    assert!(!slots[2].is_nil(), "shaped after growing");
+    assert!(!slots.at(2).is_nil(), "shaped after growing");
 }
 
 #[test]
@@ -2550,9 +3274,10 @@ fn assert_font_shape_driver_survives(failure: ShapeFailure) {
     crate::test_utils::init_test_tracing();
     let mut eval = Context::new(crate::test_utils::unit_runtime());
     let font = build_font_object(&RuntimeFace::new("default"));
-    eval.font_shape_fn = Some(Box::new(move |_eval, gstring, _direction| {
-        let header = gstring.as_vector_data().expect("gstring")[0];
-        let failing = header.as_vector_data().expect("header")[1] == Value::fixnum(i64::from(b'b'));
+    eval.font_driver = Some(StubFontDriver::shape(move |_eval, gstring, _direction| {
+        let header = gstring.as_vector_data().expect("gstring").at(0);
+        let failing =
+            header.as_vector_data().expect("header").at(1) == Value::fixnum(i64::from(b'b'));
         let (from, to) = if failing {
             match failure {
                 ShapeFailure::Refused => return GstringShapeOutcome::NotShapable,
@@ -2605,15 +3330,15 @@ fn assert_font_shape_driver_survives(failure: ShapeFailure) {
     );
     let slots = following.as_vector_data().expect("shaped gstring");
     assert!(
-        slots[1].as_int().is_some(),
+        slots.at(1).as_int().is_some(),
         "the following run must enter the shape cache"
     );
     assert_eq!(
-        slots[2].as_vector_data().expect("glyph")[3],
+        slots.at(2).as_vector_data().expect("glyph").at(3),
         Value::fixnum(123)
     );
     assert!(
-        eval.font_shape_fn.is_some(),
+        eval.font_driver.is_some(),
         "the driver must remain installed after success"
     );
 }

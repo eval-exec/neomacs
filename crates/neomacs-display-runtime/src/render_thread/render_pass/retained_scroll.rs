@@ -24,6 +24,7 @@ struct RasterPaint {
     background: Color,
     defaults: [f32; 3],
     font_catalog: neomacs_display_protocol::font::FontCatalogGeneration,
+    desktop_font_render_options: Option<neomacs_display_protocol::DesktopFontRenderOptions>,
     scale: DeviceScale,
     size: SnapshotSize,
     origin: (f32, f32),
@@ -39,6 +40,7 @@ impl RasterPaint {
             && self.background == next.background
             && self.defaults == next.defaults
             && self.font_catalog == next.font_catalog
+            && self.desktop_font_render_options == next.desktop_font_render_options
             && previous.epoch == coverage.epoch
             && previous.content.window_id == coverage.content.window_id
             && previous.content.text_clip_bounds == coverage.content.text_clip_bounds
@@ -139,6 +141,7 @@ fn raster_frame(
     // Coverage owns every binding used by its picture. Do not retain hidden
     // dependencies on unrelated font tables from the current frame.
     raster.font_catalog_generation = frame.font_catalog_generation;
+    raster.desktop_font_render_options = frame.desktop_font_render_options;
     raster.faces = coverage.faces.clone();
     raster.fonts = coverage.fonts.clone();
     raster.char_fonts = coverage.char_fonts.clone();
@@ -212,8 +215,10 @@ fn coverage_live(
     frame: &FrameGlyphBuffer,
 ) -> bool {
     let coverage = cache.paint.surface.coverage();
-    // Retained coverage stays live through renewals (publishes that certified
-    // the epoch without re-exporting a surface); only silence expires it.
+    // Residency alone grants no coordinate authority. Before sampling,
+    // prepare checks every raster input and uses the staged surface's own
+    // origin/offset. Keep pixel-equivalent pictures across fresh exports of
+    // the same lease instead of retiring them before that equality check.
     render
         .compositor
         .coverage_retention
@@ -298,6 +303,7 @@ pub(super) fn prepare(
         background,
         defaults,
         font_catalog: frame.font_catalog_generation,
+        desktop_font_render_options: frame.desktop_font_render_options,
         scale,
         size,
         origin,

@@ -1,0 +1,11 @@
+error[E0505]: cannot move out of `stopped` because it is borrowed
+ --> tests/p1rv_ui/all_stopped_cannot_complete_under_its_census.rs:5:13
+  |
+3 | fn complete_under_census(mut stopped: AllStopped<'static>) {
+  |                          ----------- binding `stopped` declared here
+4 |     let census = stopped.summaries();
+  |                  ------- borrow of `stopped` occurs here
+5 |     let _ = stopped.complete();
+  |             ^^^^^^^ move out of `stopped` occurs here
+6 |     drop(census);
+  |          ------ borrow later used here

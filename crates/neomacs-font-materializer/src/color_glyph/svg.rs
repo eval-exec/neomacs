@@ -12,7 +12,7 @@
 //!   fallback)` paint resolves to the CPAL entry or to the fallback.
 
 use super::colr::{MAX_PIXELS, MAX_SIDE};
-use super::{ColorGlyphRaster, ColorGlyphRequest};
+use super::{ColorGlyphRaster, ColorGlyphRequest, ColorPaintFailure};
 use crate::raster_sources::ColorGlyphSource;
 use resvg::{tiny_skia, usvg};
 use std::io::Read as _;
@@ -23,35 +23,50 @@ use ttf_parser::{Face, GlyphId};
 pub(super) fn paint_svg_glyph(
     face: &Face<'_>,
     request: &ColorGlyphRequest<'_>,
-) -> Option<ColorGlyphRaster> {
-    let table = face.tables().svg?;
-    let document = table.documents.find(GlyphId(request.glyph_id))?;
-    let data = decompressed(document.data)?;
+) -> Result<Option<ColorGlyphRaster>, ColorPaintFailure> {
+    let Some(document) = face.glyph_svg_image(GlyphId(request.glyph_id)) else {
+        return Ok(None);
+    };
+    let data = decompressed(document.data).ok_or(ColorPaintFailure::Malformed)?;
     // Spec: the (uncompressed) document must be UTF-8.
-    let text = std::str::from_utf8(&data).ok()?;
+    let text = std::str::from_utf8(&data).map_err(|_| ColorPaintFailure::Malformed)?;
     let prepared = prepare_document(text, face, request);
     // Only the glyph's own element is its description; the rest of the
     // document exists so it can be referenced.  Pruning before parsing keeps
     // the document's own coordinate context (a root viewBox, wrapper group
     // transforms) while dropping sibling glyph descriptions.
-    let pruned = pruned_document(&prepared, request.glyph_id)?;
+    // The record claims this glyph. OpenType SVG's Glyph Identifiers section
+    // requires its document to contain the corresponding glyph<ID> element.
+    let pruned =
+        pruned_document(&prepared, request.glyph_id)?.ok_or(ColorPaintFailure::Malformed)?;
 
     let options = usvg::Options::default();
-    let tree = usvg::Tree::from_data(pruned.as_bytes(), &options).ok()?;
-    let node = find_glyph_node(tree.root(), request.glyph_id)?;
+    let tree = usvg::Tree::from_data(pruned.as_bytes(), &options)
+        .map_err(|_| ColorPaintFailure::Malformed)?;
+    // The raw glyph element existed and parsed successfully. usvg may remove
+    // valid empty groups or fully invisible artwork during simplification.
+    let Some(node) = find_glyph_node(tree.root(), request.glyph_id) else {
+        return Ok(Some(ColorGlyphRaster::empty(
+            ColorGlyphSource::SvgDocuments,
+        )));
+    };
 
     let units_per_em = f32::from(face.units_per_em());
     if !units_per_em.is_finite() || units_per_em <= 0.0 {
-        return None;
+        return Err(ColorPaintFailure::InvalidBounds);
     }
     let scale = request.px_size / units_per_em;
     if !scale.is_finite() || scale <= 0.0 {
-        return None;
+        return Err(ColorPaintFailure::InvalidBounds);
     }
 
     // Design units are the document's own space (y-down from the baseline),
     // so the device transform scales and offsets without a y flip.
-    let bounds = node.abs_layer_bounding_box()?;
+    let Some(bounds) = node.abs_layer_bounding_box() else {
+        return Ok(Some(ColorGlyphRaster::empty(
+            ColorGlyphSource::SvgDocuments,
+        )));
+    };
     let left = (bounds.x() * scale + request.offset.0).floor();
     let top = (bounds.y() * scale + request.offset.1).floor();
     let right = ((bounds.x() + bounds.width()) * scale + request.offset.0).ceil();
@@ -59,16 +74,34 @@ pub(super) fn paint_svg_glyph(
     let width = right - left;
     let height = bottom - top;
     let cap = MAX_SIDE as f32;
-    if !(1.0..=cap).contains(&width) || !(1.0..=cap).contains(&height) {
-        return None;
+    if ![left, top, width, height]
+        .iter()
+        .all(|value| value.is_finite())
+        || width < 0.0
+        || height < 0.0
+        || left < i32::MIN as f32
+        || left >= i32::MAX as f32
+        || top <= i32::MIN as f32
+        || top >= i32::MAX as f32
+    {
+        return Err(ColorPaintFailure::InvalidBounds);
+    }
+    if width == 0.0 || height == 0.0 {
+        return Ok(Some(ColorGlyphRaster::empty(
+            ColorGlyphSource::SvgDocuments,
+        )));
+    }
+    if width > cap || height > cap {
+        return Err(ColorPaintFailure::ResourceLimit);
     }
     let width_cells = width as u32;
     let height_cells = height as u32;
     if u64::from(width_cells) * u64::from(height_cells) > MAX_PIXELS {
-        return None;
+        return Err(ColorPaintFailure::ResourceLimit);
     }
 
-    let mut pixmap = tiny_skia::Pixmap::new(width_cells, height_cells)?;
+    let mut pixmap = tiny_skia::Pixmap::new(width_cells, height_cells)
+        .ok_or(ColorPaintFailure::ResourceLimit)?;
     // The pruned tree renders only the glyph description, in the document's
     // own coordinate system: the root transform is the device mapping with
     // the pixmap window folded in.
@@ -80,16 +113,16 @@ pub(super) fn paint_svg_glyph(
     let rgba = pixmap.take_demultiplied();
     let expected = width_cells as usize * height_cells as usize * 4;
     if rgba.len() != expected {
-        return None;
+        return Err(ColorPaintFailure::Malformed);
     }
-    Some(ColorGlyphRaster {
+    Ok(Some(ColorGlyphRaster {
         left: left as i32,
         top: -(top as i32),
         width: width_cells,
         height: height_cells,
         rgba,
         source: ColorGlyphSource::SvgDocuments,
-    })
+    }))
 }
 
 /// Decompressed-document ceiling.  Real documents stay far below it — the
@@ -136,12 +169,16 @@ fn find_glyph_node(group: &usvg::Group, glyph_id: u16) -> Option<&usvg::Node> {
 /// something referenceable, keeping the document's coordinate context.
 ///
 /// `None` when the document has no element for the glyph.
-fn pruned_document(text: &str, glyph_id: u16) -> Option<String> {
-    let document = usvg::roxmltree::Document::parse(text).ok()?;
+fn pruned_document(text: &str, glyph_id: u16) -> Result<Option<String>, ColorPaintFailure> {
+    let document =
+        usvg::roxmltree::Document::parse(text).map_err(|_| ColorPaintFailure::Malformed)?;
     let wanted = format!("glyph{glyph_id}");
-    let target = document
+    let Some(target) = document
         .descendants()
-        .find(|node| node.is_element() && node.attribute("id") == Some(wanted.as_str()))?;
+        .find(|node| node.is_element() && node.attribute("id") == Some(wanted.as_str()))
+    else {
+        return Ok(None);
+    };
 
     // Rebuild from the root down to the glyph's element, keeping every
     // sibling that is not another glyph description.  Definitions may live
@@ -174,7 +211,7 @@ fn pruned_document(text: &str, glyph_id: u16) -> Option<String> {
         cursor = range.end;
     }
     out.push_str(&text[cursor..]);
-    Some(out)
+    Ok(Some(out))
 }
 
 /// Element names usvg renders; keeping one outside a `defs` would paint

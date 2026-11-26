@@ -51,6 +51,7 @@ use crate::tagged::value::{TAG_BITS, TAG_MASK, TaggedValue};
 /// 64-bit) encoding type and payload via tag bits.  Pattern matching uses
 /// `value.kind()` → `ValueKind`.
 pub type Value = TaggedValue;
+pub use crate::tagged::heap_ref::{HeapMut, HeapRef};
 
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
 #[doc(hidden)]
@@ -64,6 +65,10 @@ pub(crate) mod hook_publication;
 
 pub(crate) use bytecode_semantics::bytecode_semantics;
 pub mod flow_vocab;
+mod hash_mutation;
+#[doc(hidden)]
+pub use hash_mutation::HashTableWrite;
+pub(crate) use hash_mutation::HydratedHashTable;
 #[doc(hidden)]
 pub mod jit_runtime;
 pub mod positions;
@@ -320,14 +325,25 @@ pub fn note_bytecode_data_access() {
     BYTECODE_DATA_ACCESS_COUNT.with(|count| count.set(count.get() + 1));
 }
 
+/// Charge one allocation-counter slot. Thread-local by design: the counters
+/// are drained on the thread that allocated. The symbol registry and the
+/// interval tree allocate outside the tagged heap, so they call this directly.
 #[inline(always)]
-fn add_wrapping(counter: MemoryUseCountSlot, delta: u64) {
+pub(crate) fn add_wrapping(counter: MemoryUseCountSlot, delta: u64) {
     THREAD_LOCAL_ALLOCATION_COUNTS.with(|counts| {
         let mut values = counts.get();
         let slot = counter.index();
         values[slot] = values[slot].wrapping_add(delta);
         counts.set(values);
     });
+}
+
+/// This mutator's allocation counts that have not been drained into its
+/// `MutatorGcState` yet, for a heap-side reader that already holds the heap
+/// and cannot take [`Value::memory_use_counts_snapshot`]'s `with_tagged_heap`.
+#[inline]
+pub(crate) fn thread_local_allocation_counts() -> [u64; MEMORY_USE_COUNT_LEN] {
+    THREAD_LOCAL_ALLOCATION_COUNTS.with(|counts| counts.get())
 }
 
 fn as_neovm_int(value: u64) -> i64 {
@@ -389,9 +405,25 @@ pub fn set_string_text_properties_table_for_value(value: Value, table: TextPrope
         clear_string_text_properties_for_value(value);
         return;
     }
-    let _ = mutate::with_string_text_props_mut(value, |props| {
+    let len = value
+        .as_lisp_string()
+        .map(|string| string.schars())
+        .unwrap_or(0);
+    // Skip only an `eq` plist spine with the same boundaries. `equal` values
+    // still replace the conses `text-properties-at` returns. A string with no
+    // table must not pay for that comparison.
+    if let Some(existing) = string_text_props(value)
+        && existing.same_eq_plist_boundaries(&table, len)
+    {
+        return;
+    }
+    if mutate::with_string_text_props_mut(value, |props| {
         *props = table;
-    });
+    })
+    .is_some()
+    {
+        mutate::LispCollectionRevision::changed(value);
+    }
 }
 
 /// Mutate a string's interval tree IN PLACE.
@@ -411,15 +443,27 @@ pub fn mutate_string_text_properties<R>(
     value: Value,
     f: impl FnOnce(&mut TextPropertyTable) -> R,
 ) -> Option<R> {
+    let had = string_has_text_property_interval_tree(value);
     let result = mutate::with_string_text_props_mut(value, f)?;
-    if string_text_props(value).is_some_and(TextPropertyTable::is_empty) {
-        clear_string_text_properties_for_value(value);
+    let props = string_text_props(value);
+    let empty = props.is_some_and(TextPropertyTable::is_empty);
+    let changed = props.is_some_and(TextPropertyTable::journal_mark_changed);
+    if empty {
+        if had || changed {
+            // One journal: `clear_string_intervals` records the drop. The
+            // closure itself no longer journals.
+            clear_string_text_properties_for_value(value);
+        } else {
+            mutate::drop_unmodified_string_intervals(value);
+        }
+    } else if changed {
+        mutate::LispCollectionRevision::changed(value);
     }
     Some(result)
 }
 
 pub fn clear_string_text_properties_for_value(value: Value) {
-    let _ = mutate::with_lisp_string_mut(value, |s| s.clear_intervals());
+    let _ = mutate::clear_string_intervals(value);
 }
 
 pub fn string_has_text_property_interval_tree(value: Value) -> bool {
@@ -782,20 +826,16 @@ impl LambdaData {
 
 /// Hash table with configurable test function.
 ///
-/// `test_depth` (proof 2 Rev R2) is the atomic nesting count that replaced
-/// GNU's `mutable` bool: zero means "no owner is inside a user test or hash
-/// function on this table", and every in-flight activation counts, so two
-/// owners' tests nest to 2 and any owner's mutation signals while the count
-/// is nonzero. It sits in the bool's exact field position (1 byte, alignment
-/// 1, `data` still last), so no downstream offset moves. `Clone` copies the
-/// byte and copy-hash-table resets it to zero explicitly.
+/// The user-test nesting count and the sealed authority word are metadata
+/// on [`crate::tagged::header::HashTableObj`], beside this payload. Replacing
+/// a `LispHashTable` inside an edit must not clear either one. `Clone`
+/// copies contents only; a new object starts its own word and depth at zero.
 #[derive(Debug)]
 pub struct LispHashTable {
     pub test: HashTableTest,
     pub test_name: Option<SymId>,
     pub user_cmp_function: Option<Value>,
     pub user_hash_function: Option<Value>,
-    pub test_depth: std::sync::atomic::AtomicU8,
     pub size: i64,
     pub weakness: Option<HashTableWeakness>,
     pub rehash_size: f64,
@@ -810,9 +850,6 @@ impl Clone for LispHashTable {
             test_name: self.test_name,
             user_cmp_function: self.user_cmp_function,
             user_hash_function: self.user_hash_function,
-            test_depth: std::sync::atomic::AtomicU8::new(
-                self.test_depth.load(std::sync::atomic::Ordering::Relaxed),
-            ),
             size: self.size,
             weakness: self.weakness,
             rehash_size: self.rehash_size,
@@ -828,6 +865,27 @@ pub struct HashTableEntry {
     pub value: Value,
 }
 
+/// Stack-only description of materialized backing, excluding parked entries.
+/// Byte conversion stays in one place and is unnecessary for unchanged edits.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct HashTableStorageCapacities {
+    index: usize,
+    slots: usize,
+    free_slots: usize,
+}
+
+impl HashTableStorageCapacities {
+    pub(crate) fn materialized_bytes(self) -> usize {
+        self.index
+            .saturating_mul(size_of::<hash_index::IndexEntry>())
+            .saturating_add(
+                self.slots
+                    .saturating_mul(size_of::<Option<HashTableEntry>>()),
+            )
+            .saturating_add(self.free_slots.saturating_mul(size_of::<usize>()))
+    }
+}
+
 /// Compact backing store for a Lisp hash table.
 ///
 /// The hash index files each entry under the hash computed when it was made
@@ -836,8 +894,8 @@ pub struct HashTableEntry {
 /// the original Lisp key and value. See [`hash_index`] for how an `equal`
 /// table finds a key.
 ///
-/// `Clone` is manual: the proof-2 authority word at the end is zeroed on
-/// every copy rather than copied (see the field's comment).
+/// The sealed authority word is not stored here. It lives on the hash-table
+/// object, so cloning or replacing this storage cannot clear a live writer.
 #[derive(Debug, Default)]
 pub struct HashTableStorage {
     index: HashIndex,
@@ -894,16 +952,6 @@ pub struct HashTableStorage {
     pub(crate) switch_epoch: u64,
     #[cfg(not(feature = "test-support"))]
     pub(crate) switch_epoch: u64,
-    /// Proof 2 sealed authority (design §2.1), appended AFTER `switch_epoch`
-    /// so every existing field offset — in particular the JIT-read
-    /// `SWITCH_EPOCH_OFFSET` — is unchanged. Bit 63 is the WRITER hold
-    /// (taken by one uncontended CAS from a fully quiescent word, which
-    /// drains every in-flight sealed reader); the low 47 bits count sealed
-    /// readers walking storage under the read count. Zero on every fresh,
-    /// copied, dumped and restored table: a new table object never inherits
-    /// another's in-flight state. Only the sealed lease types
-    /// (`table_authority.rs`) touch this word.
-    pub(crate) authority: std::sync::atomic::AtomicU64,
 }
 
 impl Clone for HashTableStorage {
@@ -917,9 +965,6 @@ impl Clone for HashTableStorage {
             pending: self.pending.clone(),
             switch_plan: self.switch_plan.clone(),
             switch_epoch: self.switch_epoch,
-            // A copy starts quiescent: it is never mid-drain and never
-            // carries another table object's readers or writer.
-            authority: std::sync::atomic::AtomicU64::new(0),
         }
     }
 }
@@ -972,15 +1017,11 @@ impl std::ops::Index<&HashKey> for HashTableStorage {
     }
 }
 
-impl HashTableStorage {
-    /// Relaxed load of the sealed authority word. The atomic stays private
-    /// so a caller cannot store through this route.
-    #[cfg(any(test, feature = "test-support"))]
-    #[doc(hidden)]
-    pub fn authority_word(&self) -> u64 {
-        self.authority.load(std::sync::atomic::Ordering::Relaxed)
-    }
+fn vec_storage_bytes<T>(values: &Vec<T>) -> usize {
+    values.capacity().saturating_mul(size_of::<T>())
+}
 
+impl HashTableStorage {
     fn try_with_capacity(
         capacity: crate::alloc::HashTableSize,
     ) -> Result<Self, crate::error::Flow> {
@@ -1012,7 +1053,6 @@ impl HashTableStorage {
             pending: None,
             switch_plan: switch_plan::SwitchPlanCache::default(),
             switch_epoch: 0,
-            authority: std::sync::atomic::AtomicU64::new(0),
         }
     }
 
@@ -1362,14 +1402,7 @@ impl HashTableStorage {
         else {
             return Ok(None);
         };
-        let removed = self
-            .index
-            .remove_matching(hash, |entry| entry.slot == slot)
-            .expect("the entry just found is in the index");
-        // The removed key is what `forget_user_hash` needs to keep the memo
-        // maps from going stale.
-        self.forget_user_hash(&removed.key);
-        Ok(self.remove_slot(slot))
+        Ok(self.remove_found(hash, slot))
     }
 
     pub fn get_mut(&mut self, key: &HashKey) -> Option<&mut Value> {
@@ -1420,15 +1453,7 @@ impl HashTableStorage {
     }
 
     fn alloc_slot(&mut self, key: Value, value: Value) -> usize {
-        if let Some(slot) = self.free_slots.pop() {
-            debug_assert!(self.slots[slot].is_none());
-            self.slots[slot] = Some(HashTableEntry { key, value });
-            slot
-        } else {
-            let slot = self.slots.len();
-            self.slots.push(Some(HashTableEntry { key, value }));
-            slot
-        }
+        self.alloc_slot_with_growth(key, value, &mut |_| {})
     }
 
     pub fn insert(&mut self, hash_key: HashKey, key: Value, value: Value) -> Option<Value> {
@@ -1478,13 +1503,29 @@ impl HashTableStorage {
         Some(entry.value)
     }
 
+    // Keep the complete clear's field effects visible to the completion
+    // guard. The index can recover usable capacity while the Vecs retain it.
+    #[inline(always)]
     pub fn clear(&mut self) {
         self.switch_plan.invalidate();
         self.index.clear();
         self.slots.clear();
         self.free_slots.clear();
-        self.user_hashes.clear();
-        self.user_buckets.clear();
+        if !self.user_hashes.is_empty() || !self.user_buckets.is_empty() {
+            Self::clear_user_hash_maps(&mut self.user_hashes, &mut self.user_buckets);
+        }
+    }
+
+    /// Custom-test memo maps are disjoint from the paced backing. Keep their
+    /// recursive key drops out of the ordinary clear's fixed-capacity wrapper.
+    #[cold]
+    #[inline(never)]
+    fn clear_user_hash_maps(
+        hashes: &mut rustc_hash::FxHashMap<HashKey, i64>,
+        buckets: &mut rustc_hash::FxHashMap<i64, smallvec::SmallVec<[HashKey; 1]>>,
+    ) {
+        hashes.clear();
+        buckets.clear();
     }
 
     /// What the user-defined hash function answered for `key`, if it has been
@@ -1692,25 +1733,24 @@ impl HashTableStorage {
 
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn known_storage_bytes(&self) -> usize {
-        self.index
-            .capacity()
-            .saturating_mul(size_of::<hash_index::IndexEntry>())
-            .saturating_add(
-                self.pending
-                    .as_deref()
-                    .map_or(0, |p| p.capacity())
-                    .saturating_mul(size_of::<(HashKey, Value, Option<Value>)>()),
-            )
-            .saturating_add(
-                self.slots
-                    .capacity()
-                    .saturating_mul(size_of::<Option<HashTableEntry>>()),
-            )
-            .saturating_add(
-                self.free_slots
-                    .capacity()
-                    .saturating_mul(size_of::<usize>()),
-            )
+        self.materialized_storage_bytes()
+            .saturating_add(self.pending.as_deref().map_or(0, vec_storage_bytes))
+    }
+
+    /// Runtime backing, excluding parked decoded image entries. GNU thaws
+    /// hash/index/next arrays eagerly and counts key/value storage on growth;
+    /// Neo materializes its index and slots together on first access.
+    pub(crate) fn materialized_storage_bytes(&self) -> usize {
+        self.materialized_storage_capacities().materialized_bytes()
+    }
+
+    #[inline]
+    pub(crate) fn materialized_storage_capacities(&self) -> HashTableStorageCapacities {
+        HashTableStorageCapacities {
+            index: self.index.capacity(),
+            slots: self.slots.capacity(),
+            free_slots: self.free_slots.capacity(),
+        }
     }
 
     /// What a proof-2 sealed edit charges its owner for growth (§4 Rev R3):
@@ -1937,7 +1977,7 @@ pub enum ByteCodeKeyPart {
 }
 
 /// Key type that supports hashing for `eq`, `eql`, and `equal` tests.
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub enum HashKey {
     Nil,
     True,
@@ -2058,10 +2098,10 @@ fn probe_leaf(
         // nothing to validate.
         ValueKind::String => match test {
             HashTableTest::Equal => {
+                let Some(string) = value.as_lisp_string() else {
+                    return identity(hasher);
+                };
                 23u8.hash(&mut hasher);
-                let string = value
-                    .as_lisp_string()
-                    .expect("a String value carries a LispString payload");
                 hash_char_array(string.as_bytes(), &mut hasher);
                 string.schars().hash(&mut hasher);
             }
@@ -2180,6 +2220,21 @@ fn hash_char_array<H: std::hash::Hasher>(bytes: &[u8], state: &mut H) {
 
 impl std::hash::Hash for HashKey {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        // A proper list is one `EqualCons` cdr chain. Hashing that chain by
+        // recursion overflows near 1e5 cells. Cars stay recursive: the builder
+        // caps car nesting at depth 200.
+        if let HashKey::EqualCons(car, cdr) = self {
+            12u8.hash(state);
+            car.hash(state);
+            let mut rest = cdr.as_ref();
+            while let HashKey::EqualCons(next_car, next_cdr) = rest {
+                12u8.hash(state);
+                next_car.hash(state);
+                rest = next_cdr.as_ref();
+            }
+            rest.hash(state);
+            return;
+        }
         let tag: u8 = match self {
             HashKey::Nil => 0,
             HashKey::True => 1,
@@ -2192,7 +2247,6 @@ impl std::hash::Hash for HashKey {
             HashKey::Window(_) => 8,
             HashKey::Frame(_) => 9,
             HashKey::Ptr(_) => 10,
-            HashKey::EqualCons(_, _) => 12,
             HashKey::EqualVec(_) => 13,
             HashKey::ByteCode(_) => 22,
             HashKey::Keyword(_) => 14,
@@ -2203,6 +2257,7 @@ impl std::hash::Hash for HashKey {
             HashKey::Marker(_) => 18,
             HashKey::Overlay(_) => 19,
             HashKey::BoolVector(_) => 24,
+            HashKey::EqualCons(_, _) => unreachable!("spines are hashed above"),
         };
         tag.hash(state);
         match self {
@@ -2218,10 +2273,7 @@ impl std::hash::Hash for HashKey {
             HashKey::Char(c) => c.hash(state),
             HashKey::Window(id) | HashKey::Frame(id) => id.hash(state),
             HashKey::Ptr(p) => p.hash(state),
-            HashKey::EqualCons(car, cdr) => {
-                car.hash(state);
-                cdr.hash(state);
-            }
+            HashKey::EqualCons(_, _) => {}
             HashKey::EqualVec(items) => {
                 items.len().hash(state);
                 for item in items {
@@ -2259,39 +2311,233 @@ impl std::hash::Hash for HashKey {
 
 impl PartialEq for HashKey {
     fn eq(&self, other: &Self) -> bool {
-        match (self, other) {
-            (HashKey::Nil, HashKey::Nil) | (HashKey::True, HashKey::True) => true,
-            (HashKey::Int(a), HashKey::Int(b)) => a == b,
-            (HashKey::Bignum(a), HashKey::Bignum(b)) => a == b,
-            (HashKey::Float(a), HashKey::Float(b)) => a == b,
-            (HashKey::FloatEq(a, id_a), HashKey::FloatEq(b, id_b)) => a == b && id_a == id_b,
-            (HashKey::Symbol(a), HashKey::Symbol(b)) => a == b,
-            (HashKey::Keyword(a), HashKey::Keyword(b)) => a == b,
-            (HashKey::Char(a), HashKey::Char(b)) => a == b,
-            (HashKey::Window(a), HashKey::Window(b)) | (HashKey::Frame(a), HashKey::Frame(b)) => {
-                a == b
+        let mut left = self;
+        let mut right = other;
+        loop {
+            match (left, right) {
+                (HashKey::EqualCons(a_car, a_cdr), HashKey::EqualCons(b_car, b_cdr)) => {
+                    // Cars recurse (nesting is capped at 200). The cdr chain
+                    // stays in this loop so a long proper list does not blow
+                    // the stack.
+                    if a_car != b_car {
+                        return false;
+                    }
+                    left = a_cdr.as_ref();
+                    right = b_cdr.as_ref();
+                }
+                (HashKey::Nil, HashKey::Nil) | (HashKey::True, HashKey::True) => return true,
+                (HashKey::Int(a), HashKey::Int(b)) => return a == b,
+                (HashKey::Bignum(a), HashKey::Bignum(b)) => return a == b,
+                (HashKey::Float(a), HashKey::Float(b)) => return a == b,
+                (HashKey::FloatEq(a, id_a), HashKey::FloatEq(b, id_b)) => {
+                    return a == b && id_a == id_b;
+                }
+                (HashKey::Symbol(a), HashKey::Symbol(b)) => return a == b,
+                (HashKey::Keyword(a), HashKey::Keyword(b)) => return a == b,
+                (HashKey::Char(a), HashKey::Char(b)) => return a == b,
+                (HashKey::Window(a), HashKey::Window(b))
+                | (HashKey::Frame(a), HashKey::Frame(b)) => return a == b,
+                (HashKey::Ptr(a), HashKey::Ptr(b)) => return a == b,
+                (HashKey::EqualVec(a), HashKey::EqualVec(b)) => return a == b,
+                (HashKey::ByteCode(a), HashKey::ByteCode(b)) => return a == b,
+                (HashKey::Marker(a), HashKey::Marker(b)) => return a == b,
+                (HashKey::Overlay(a), HashKey::Overlay(b)) => return a == b,
+                (HashKey::BoolVector(a), HashKey::BoolVector(b)) => return a == b,
+                (HashKey::SymbolWithPos(a_sym, a_pos), HashKey::SymbolWithPos(b_sym, b_pos)) => {
+                    return a_sym == b_sym && a_pos == b_pos;
+                }
+                (HashKey::Cycle(a), HashKey::Cycle(b)) => return a == b,
+                (HashKey::Text(a), HashKey::Text(b)) => return a == b,
+                (HashKey::StringContent(a), HashKey::StringContent(b)) => return a == b,
+                _ => return false,
             }
-            (HashKey::Ptr(a), HashKey::Ptr(b)) => a == b,
-            (HashKey::EqualCons(a_car, a_cdr), HashKey::EqualCons(b_car, b_cdr)) => {
-                a_car == b_car && a_cdr == b_cdr
-            }
-            (HashKey::EqualVec(a), HashKey::EqualVec(b)) => a == b,
-            (HashKey::ByteCode(a), HashKey::ByteCode(b)) => a == b,
-            (HashKey::Marker(a), HashKey::Marker(b)) => a == b,
-            (HashKey::Overlay(a), HashKey::Overlay(b)) => a == b,
-            (HashKey::BoolVector(a), HashKey::BoolVector(b)) => a == b,
-            (HashKey::SymbolWithPos(a_sym, a_pos), HashKey::SymbolWithPos(b_sym, b_pos)) => {
-                a_sym == b_sym && a_pos == b_pos
-            }
-            (HashKey::Cycle(a), HashKey::Cycle(b)) => a == b,
-            (HashKey::Text(a), HashKey::Text(b)) => a == b,
-            (HashKey::StringContent(a), HashKey::StringContent(b)) => a == b,
-            _ => false,
         }
     }
 }
 
 impl Eq for HashKey {}
+
+impl Clone for HashKey {
+    fn clone(&self) -> Self {
+        if let HashKey::EqualCons(_, _) = self {
+            return clone_equal_cons_spine(self);
+        }
+        match self {
+            HashKey::Nil => HashKey::Nil,
+            HashKey::True => HashKey::True,
+            HashKey::Int(n) => HashKey::Int(*n),
+            HashKey::Bignum(limbs) => HashKey::Bignum(limbs.clone()),
+            HashKey::Float(bits) => HashKey::Float(*bits),
+            HashKey::FloatEq(bits, id) => HashKey::FloatEq(*bits, *id),
+            HashKey::Symbol(id) => HashKey::Symbol(id.clone()),
+            HashKey::Keyword(id) => HashKey::Keyword(id.clone()),
+            HashKey::Char(c) => HashKey::Char(*c),
+            HashKey::Window(id) => HashKey::Window(*id),
+            HashKey::Frame(id) => HashKey::Frame(*id),
+            HashKey::Ptr(ptr) => HashKey::Ptr(*ptr),
+            HashKey::EqualVec(items) => HashKey::EqualVec(items.clone()),
+            HashKey::ByteCode(parts) => HashKey::ByteCode(parts.clone()),
+            HashKey::Marker(parts) => HashKey::Marker(parts.clone()),
+            HashKey::Overlay(parts) => HashKey::Overlay(parts.clone()),
+            HashKey::BoolVector(parts) => HashKey::BoolVector(parts.clone()),
+            HashKey::SymbolWithPos(sym, pos) => HashKey::SymbolWithPos(sym.clone(), pos.clone()),
+            HashKey::Cycle(index) => HashKey::Cycle(*index),
+            HashKey::Text(text) => HashKey::Text(text.clone()),
+            HashKey::StringContent(content) => HashKey::StringContent(content.clone()),
+            HashKey::EqualCons(_, _) => unreachable!("spines are cloned above"),
+        }
+    }
+}
+
+/// Clone one `EqualCons` cdr chain without a stack frame per cell.
+fn clone_equal_cons_spine(key: &HashKey) -> HashKey {
+    let mut cars = Vec::new();
+    let mut node = key;
+    let tail = loop {
+        match node {
+            HashKey::EqualCons(car, cdr) => {
+                cars.push(car.as_ref());
+                node = cdr.as_ref();
+            }
+            other => break other.clone(),
+        }
+    };
+    let mut cloned = tail;
+    while let Some(car) = cars.pop() {
+        cloned = HashKey::EqualCons(Box::new(car.clone()), Box::new(cloned));
+    }
+    cloned
+}
+
+impl Drop for HashKey {
+    fn drop(&mut self) {
+        // A proper list is one cdr chain. Walk it by taking each tail out of
+        // its box and leaving `Nil`, then drop that cell normally. The cell's
+        // own `Drop` sees a nil cdr, so it does not follow the chain, and a
+        // 100k-cell key does not recurse one frame per cons. The car drops
+        // with the cell; car nesting stays within the depth cap.
+        let HashKey::EqualCons(_, cdr) = self else {
+            return;
+        };
+        let mut next = std::mem::replace(cdr.as_mut(), HashKey::Nil);
+        while let HashKey::EqualCons(_, cdr) = &mut next {
+            let rest = std::mem::replace(cdr.as_mut(), HashKey::Nil);
+            next = rest;
+        }
+    }
+}
+
+/// Pointers already entered by the structural `equal` key walk, in visit order.
+///
+/// [`HashKey::Cycle`] stores that visit index, so a short key stays
+/// bit-identical to the linear scan. Once `order` reaches
+/// [`SEEN_INDEX_THRESHOLD`], lookup switches to a map: a list of a few
+/// thousand cells was an O(n²) scan, past the cost of the old depth cap.
+/// `cars` is scratch shared by nested cons walks so each cons does not
+/// allocate its own vector.
+pub struct EqualKeySeen {
+    order: Vec<usize>,
+    index: Option<HashMap<usize, u32>>,
+    cars: Vec<HashKey>,
+    #[cfg(test)]
+    compares: u64,
+}
+
+/// Length of `order` at which [`EqualKeySeen`] builds its pointer map.
+const SEEN_INDEX_THRESHOLD: usize = 32;
+
+impl EqualKeySeen {
+    pub fn new() -> Self {
+        Self {
+            order: Vec::new(),
+            index: None,
+            cars: Vec::new(),
+            #[cfg(test)]
+            compares: 0,
+        }
+    }
+
+    fn len(&self) -> usize {
+        self.order.len()
+    }
+
+    fn index_of(&mut self, ptr: usize) -> Option<u32> {
+        if let Some(index) = &self.index {
+            #[cfg(test)]
+            {
+                self.compares = self.compares.saturating_add(1);
+            }
+            return index.get(&ptr).copied();
+        }
+        for (at, seen) in self.order.iter().enumerate() {
+            #[cfg(test)]
+            {
+                self.compares = self.compares.saturating_add(1);
+            }
+            if *seen == ptr {
+                return Some(at as u32);
+            }
+        }
+        None
+    }
+
+    fn push(&mut self, ptr: usize) {
+        let at = self.order.len() as u32;
+        self.order.push(ptr);
+        if let Some(index) = &mut self.index {
+            index.insert(ptr, at);
+        } else if self.order.len() >= SEEN_INDEX_THRESHOLD {
+            let mut index = HashMap::with_capacity(self.order.len());
+            for (at, seen) in self.order.iter().enumerate() {
+                index.insert(*seen, at as u32);
+            }
+            self.index = Some(index);
+        }
+    }
+
+    fn pop(&mut self) {
+        let Some(ptr) = self.order.pop() else {
+            return;
+        };
+        if let Some(index) = &mut self.index {
+            index.remove(&ptr);
+        }
+    }
+
+    fn truncate(&mut self, len: usize) {
+        if len >= self.order.len() {
+            return;
+        }
+        if let Some(index) = &mut self.index {
+            for ptr in self.order.drain(len..) {
+                index.remove(&ptr);
+            }
+        } else {
+            self.order.truncate(len);
+        }
+    }
+
+    fn cars_len(&self) -> usize {
+        self.cars.len()
+    }
+
+    fn push_car(&mut self, key: HashKey) {
+        self.cars.push(key);
+    }
+
+    fn pop_car(&mut self) -> Option<HashKey> {
+        self.cars.pop()
+    }
+}
+
+/// Seen-pointer comparisons performed while building one unbounded equal key.
+#[cfg(test)]
+fn equal_key_compare_count_for_test(value: Value) -> u64 {
+    let mut seen = EqualKeySeen::new();
+    let mut budget = usize::MAX;
+    let _key = value.to_equal_key_depth_budgeted(0, &mut seen, false, &mut budget);
+    seen.compares
+}
 
 impl HashKey {
     /// Create a string hash key by allocating on the heap.
@@ -2317,7 +2563,15 @@ impl HashKey {
     pub(crate) fn heap_bytes(&self) -> usize {
         match self {
             HashKey::Bignum(limbs) => limbs.len() * size_of::<u64>(),
-            HashKey::EqualCons(car, cdr) => car.heap_bytes() + cdr.heap_bytes(),
+            HashKey::EqualCons(car, cdr) => {
+                let mut total = car.heap_bytes();
+                let mut node = cdr.as_ref();
+                while let HashKey::EqualCons(next_car, next_cdr) = node {
+                    total += next_car.heap_bytes();
+                    node = next_cdr.as_ref();
+                }
+                total + node.heap_bytes()
+            }
             HashKey::EqualVec(parts) => parts.iter().map(Self::heap_bytes).sum(),
             HashKey::ByteCode(parts) => parts.iter().map(ByteCodeKeyPart::heap_bytes).sum(),
             HashKey::Marker(body) => 0,
@@ -2355,9 +2609,8 @@ impl LispHashTable {
     /// size, not a Rust capacity. Zero grows to 6; sizes through 64 grow by
     /// 4x; larger sizes grow by 2x. Backing maps grow with inserted entries.
     ///
-    /// `pub(crate)` so the restricted Lisp overlap can grow a table without
-    /// naming the evaluator. neovm-eval keeps its own copy of this policy.
-    #[cfg(any(test, feature = "test-support"))]
+    /// Shared by the typed serial writer and restricted Lisp without naming
+    /// the evaluator. The unrestricted evaluator path keeps the same policy.
     pub(crate) fn maybe_resize_for_insert(&mut self, inserting_new_key: bool) {
         if !inserting_new_key {
             return;
@@ -2432,7 +2685,6 @@ impl LispHashTable {
             test_name: None,
             user_cmp_function: None,
             user_hash_function: None,
-            test_depth: std::sync::atomic::AtomicU8::new(0),
             size,
             weakness,
             rehash_size,
@@ -2537,8 +2789,26 @@ pub fn build_hash_table_literal_value(
         table.user_cmp_function = None;
         table.user_hash_function = None;
         for (key_value, val_value) in entries {
-            let key = key_value.to_hash_key(&table.test);
-            table.insert(key, key_value, val_value);
+            // Membership is decided by the live key object (as `puthash`
+            // does), not by the stored key: a budgeted stored key can share a
+            // truncated prefix with an unequal key.
+            match table
+                .data
+                .try_probe_for_insert(key_value, table.test, false)
+            {
+                Ok(HashProbe::Found(slot)) => {
+                    if let Some(stored) = table.data.slot_value_mut(slot) {
+                        *stored = val_value;
+                    }
+                }
+                Ok(HashProbe::Absent(hash)) => {
+                    let key = key_value.to_hash_key_for_insert(table.test, false);
+                    table.data.insert_absent(hash, key, key_value, val_value);
+                }
+                // Literal tables have no user hash/comparison function, so
+                // the probe has nothing to signal.
+                Err(_) => {}
+            }
         }
     });
     table_value
@@ -2597,9 +2867,8 @@ impl IntoSymbol for &ProducerSymbolName {
             "nil" => Value::NIL,
             "t" => Value::T,
             name => {
-                // Match the &str constructor's observable accounting and
-                // keyword tag even when the producer avoids another intern.
-                add_wrapping(MemoryUseCountSlot::Symbols, 1);
+                // Symbol accounting is per allocated symbol, charged by the
+                // registry; naming an existing symbol allocates nothing.
                 if name.starts_with(':') {
                     TaggedValue::from_kw_id(self.symbol)
                 } else {
@@ -2623,23 +2892,20 @@ impl IntoSymbol for &'static str {
         } else if self == "t" {
             Value::T
         } else if self.starts_with(':') {
-            add_wrapping(MemoryUseCountSlot::Symbols, 1);
             TaggedValue::from_kw_id(intern(self))
         } else {
-            add_wrapping(MemoryUseCountSlot::Symbols, 1);
             TaggedValue::from_sym_id(intern(self))
         }
     }
 }
 
-// A fixed DEFSYM identity keeps the string constructor's observable symbol
-// accounting. The table's compile-time checks exclude nil, t and keyword
-// spellings, so the tag is always a plain canonical symbol; no runtime name
-// inspection is needed (or possible to get wrong).
+// A fixed DEFSYM identity is already allocated; the registry charged it when
+// the symbol id was created. The table's compile-time checks exclude nil, t
+// and keyword spellings, so the tag is always a plain canonical symbol; no
+// runtime name inspection is needed (or possible to get wrong).
 impl IntoSymbol for crate::intern::WellKnown {
     #[inline]
     fn into_symbol(self) -> Value {
-        add_wrapping(MemoryUseCountSlot::Symbols, 1);
         TaggedValue::from_sym_id(self.id())
     }
 }
@@ -2659,29 +2925,36 @@ fn canonical_keyword_name(name: &str) -> String {
     }
 }
 
+/// Sentinel for a stored structural key whose node budget was exhausted.
+///
+/// `Cycle` is already reserved for structural back-references, and
+/// `switch_plan::flatten` rejects every `Cycle` (a plan needs exact keys), so
+/// this value can never be treated as a real key by an exact-key consumer.
+/// An index of `u32::MAX` cannot arise from a real back-reference: it would
+/// require more than four billion objects on the path.
+pub(crate) const TRUNCATED_KEY_CYCLE: u32 = u32::MAX;
+
+/// Node budget for the structural key stored beside an equal-table entry.
+///
+/// The stored key feeds iteration, dumping and switch-plan compilation; it is
+/// not what decides equal-table membership.  Ordinary keys are far below this
+/// bound; a shared DAG's unfolded key tree stops here instead of expanding
+/// exponentially with depth.
+const EQUAL_KEY_NODE_BUDGET: usize = 4096;
+
 // ---------------------------------------------------------------------------
 // Convenience constructors on TaggedValue
 // ---------------------------------------------------------------------------
 
 impl TaggedValue {
-    /// Record the symbol-use accounting the string symbol constructor
-    /// performs. Subsystems that compare a spelling path against a fixed-id
-    /// path (face-name producers) call this explicitly so the counters stay
-    /// equal; it creates no symbol and publishes no membership.
-    #[doc(hidden)]
-    #[inline]
-    pub fn account_symbol_name_use() {
-        add_wrapping(MemoryUseCountSlot::Symbols, 1);
-    }
-
     /// Create a symbol from a string (with nil/t/keyword canonicalization) or SymId.
     pub fn symbol(s: impl IntoSymbol) -> Self {
         s.into_symbol()
     }
 
-    /// Create a keyword by interning a canonical `:name` symbol.
+    /// Create a keyword by interning a canonical `:name` symbol. The registry
+    /// charges the symbol counter when the spelling is new; a hit is free.
     pub fn keyword(s: &'static str) -> Self {
-        add_wrapping(MemoryUseCountSlot::Symbols, 1);
         TaggedValue::from_kw_id(intern(&canonical_keyword_name(s.as_ref())))
     }
 
@@ -2712,24 +2985,36 @@ impl TaggedValue {
     pub fn make_string(s: impl Into<String>) -> Self {
         let s = s.into();
         let multibyte = !s.is_ascii();
-        with_tagged_heap(|h| h.alloc_string(LispString::new(s, multibyte)))
+        // SAFETY: pure arena allocation (`alloc_string`); never collects,
+        // sweeps, re-enters `with_tagged_heap`, mints capability tokens, or
+        // mutates existing payloads.
+        unsafe { with_tagged_heap(|h| h.alloc_string(LispString::new(s, multibyte))) }
     }
 
     /// Allocate a string from a pre-built LispString.
     pub fn heap_string(s: LispString) -> Self {
-        with_tagged_heap(|h| h.alloc_string(s))
+        // SAFETY: pure arena allocation (`alloc_string`); never collects,
+        // sweeps, re-enters `with_tagged_heap`, mints capability tokens, or
+        // mutates existing payloads.
+        unsafe { with_tagged_heap(|h| h.alloc_string(s)) }
     }
 
     /// Allocate a multibyte string.
     pub fn multibyte_string(s: impl Into<String>) -> Self {
         let s = s.into();
-        with_tagged_heap(|h| h.alloc_string(LispString::new(s, true)))
+        // SAFETY: pure arena allocation (`alloc_string`); never collects,
+        // sweeps, re-enters `with_tagged_heap`, mints capability tokens, or
+        // mutates existing payloads.
+        unsafe { with_tagged_heap(|h| h.alloc_string(LispString::new(s, true))) }
     }
 
     /// Allocate a unibyte string.
     pub fn unibyte_string(s: impl Into<String>) -> Self {
         let s = s.into();
-        with_tagged_heap(|h| h.alloc_string(LispString::new(s, false)))
+        // SAFETY: pure arena allocation (`alloc_string`); never collects,
+        // sweeps, re-enters `with_tagged_heap`, mints capability tokens, or
+        // mutates existing payloads.
+        unsafe { with_tagged_heap(|h| h.alloc_string(LispString::new(s, false))) }
     }
 
     /// Allocate a string with text properties.
@@ -2754,7 +3039,10 @@ impl TaggedValue {
 
     /// Allocate a float on the heap.
     pub fn make_float(f: f64) -> Self {
-        with_tagged_heap(|h| h.alloc_float(f))
+        // SAFETY: pure arena allocation (`alloc_float`); never collects,
+        // sweeps, re-enters `with_tagged_heap`, mints capability tokens, or
+        // mutates existing payloads.
+        unsafe { with_tagged_heap(|h| h.alloc_float(f)) }
     }
 
     /// Allocate a bignum on the heap. Caller is responsible for ensuring
@@ -2764,7 +3052,10 @@ impl TaggedValue {
     /// fixnum when the value fits and only allocating a bignum on
     /// promotion.
     pub fn bignum(value: Integer) -> Self {
-        with_tagged_heap(|h| h.alloc_bignum(value))
+        // SAFETY: pure allocation (`alloc_bignum`); never collects, sweeps,
+        // re-enters `with_tagged_heap`, mints capability tokens, or mutates
+        // existing payloads.
+        unsafe { with_tagged_heap(|h| h.alloc_bignum(value)) }
     }
 
     /// [`Self::bignum`] with the arena allocation inlined into the caller:
@@ -2774,7 +3065,10 @@ impl TaggedValue {
     #[inline(always)]
     #[doc(hidden)]
     pub fn bignum_inline(value: Integer) -> Self {
-        with_tagged_heap(|h| h.alloc_bignum_inline(value))
+        // SAFETY: pure allocation (`alloc_bignum_inline`); never collects,
+        // sweeps, re-enters `with_tagged_heap`, mints capability tokens, or
+        // mutates existing payloads.
+        unsafe { with_tagged_heap(|h| h.alloc_bignum_inline(value)) }
     }
 
     /// Canonical "make a Lisp integer from this machine integer" fast
@@ -2858,8 +3152,7 @@ impl TaggedValue {
     pub fn make_cons(car: Value, cdr: Value) -> Self {
         // Keep the expensive corruption diagnostic out of release allocation hot paths.
         #[cfg(debug_assertions)]
-        if car.is_string() {
-            let ptr = car.as_string_ptr().unwrap();
+        if let Some(ptr) = car.as_string_ptr() {
             let hdr = unsafe { &(*ptr).header };
             if !matches!(hdr.kind, crate::tagged::header::HeapObjectKind::String) {
                 // Check if the address is actually a VecLike — dump its type_tag
@@ -2879,7 +3172,10 @@ impl TaggedValue {
                 );
             }
         }
-        with_tagged_heap(|h| h.alloc_cons(car, cdr))
+        // SAFETY: pure cons-region allocation (`alloc_cons`); never collects,
+        // sweeps, re-enters `with_tagged_heap`, mints capability tokens, or
+        // mutates existing payloads.
+        unsafe { with_tagged_heap(|h| h.alloc_cons(car, cdr)) }
     }
 
     /// Build a proper list from a Vec.
@@ -2900,7 +3196,10 @@ impl TaggedValue {
         if values.is_empty() {
             return Value::NIL;
         }
-        with_tagged_heap(|heap| heap.list_from_slice(values))
+        // SAFETY: pure cons-region allocation (`list_from_slice`); never
+        // collects, sweeps, re-enters `with_tagged_heap`, mints capability
+        // tokens, or mutates existing payloads.
+        unsafe { with_tagged_heap(|heap| heap.list_from_slice(values)) }
     }
 
     /// Allocate a vector (old API name).
@@ -2910,7 +3209,10 @@ impl TaggedValue {
 
     /// Allocate a vector.
     pub fn make_vector(values: Vec<Value>) -> Self {
-        with_tagged_heap(|h| h.alloc_vector(values))
+        // SAFETY: pure arena allocation (`alloc_vector`); never collects,
+        // sweeps, re-enters `with_tagged_heap`, mints capability tokens, or
+        // mutates existing payloads.
+        unsafe { with_tagged_heap(|h| h.alloc_vector(values)) }
     }
 
     /// Allocate a GNU-shaped char-table.
@@ -2918,7 +3220,10 @@ impl TaggedValue {
         // A new table can reuse a collected table's address; caches keyed on
         // (table bits, char-table write tick) must not match across that.
         bump_char_table_write_tick();
-        with_tagged_heap(|h| h.alloc_char_table(purpose, init, n_extras))
+        // SAFETY: pure allocation (`alloc_char_table`); never collects,
+        // sweeps, re-enters `with_tagged_heap`, mints capability tokens, or
+        // mutates existing payloads.
+        unsafe { with_tagged_heap(|h| h.alloc_char_table(purpose, init, n_extras)) }
     }
 
     /// Allocate Lisp-supplied extra slots only after GNU count validation.
@@ -2932,58 +3237,86 @@ impl TaggedValue {
         let mut extras = reserved_values(count)?;
         extras.resize(count.capacity(), init);
         bump_char_table_write_tick();
-        Ok(with_tagged_heap(|h| {
-            h.alloc_char_table_with_extras(purpose, init, extras)
-        }))
+        // SAFETY: pure allocation (`alloc_char_table_with_extras`); never
+        // collects, sweeps, re-enters `with_tagged_heap`, mints capability
+        // tokens, or mutates existing payloads.
+        Ok(unsafe { with_tagged_heap(|h| h.alloc_char_table_with_extras(purpose, init, extras)) })
     }
 
     /// Allocate a GNU-shaped sub-char-table.
     pub fn make_sub_char_table(depth: i32, min_char: i32, contents: Vec<Value>) -> Self {
-        with_tagged_heap(|h| h.alloc_sub_char_table(depth, min_char, contents))
+        // SAFETY: pure allocation (`alloc_sub_char_table`); never collects,
+        // sweeps, re-enters `with_tagged_heap`, mints capability tokens, or
+        // mutates existing payloads.
+        unsafe { with_tagged_heap(|h| h.alloc_sub_char_table(depth, min_char, contents)) }
     }
 
     /// Allocate a record.
     pub fn make_record(values: Vec<Value>) -> Self {
-        with_tagged_heap(|h| h.alloc_record(values))
+        // SAFETY: pure arena allocation (`alloc_record`); never collects,
+        // sweeps, re-enters `with_tagged_heap`, mints capability tokens, or
+        // mutates existing payloads.
+        unsafe { with_tagged_heap(|h| h.alloc_record(values)) }
     }
 
     /// Allocate a native tree-sitter node with private, GC-traced slots.
     /// Ordinary Lisp records cannot acquire this pseudovector type.
     #[doc(hidden)]
     pub fn make_treesit_node(values: Vec<Value>) -> Self {
-        with_tagged_heap(|h| h.alloc_treesit_node(values))
+        // SAFETY: pure arena allocation (`alloc_treesit_node`); never
+        // collects, sweeps, re-enters `with_tagged_heap`, mints capability
+        // tokens, or mutates existing payloads.
+        unsafe { with_tagged_heap(|h| h.alloc_treesit_node(values)) }
     }
 
     /// Allocate an opaque opened-font pseudovector (`PVEC_FONT`).
     #[doc(hidden)]
     pub fn make_font(data: FontObjectData) -> Self {
-        with_tagged_heap(|h| h.alloc_font(data))
+        // SAFETY: pure allocation (`alloc_font`); never collects, sweeps,
+        // re-enters `with_tagged_heap`, mints capability tokens, or mutates
+        // existing payloads.
+        unsafe { with_tagged_heap(|h| h.alloc_font(data)) }
     }
 
     /// Allocate a window-configuration pseudovector (distinct type tag, same
     /// `{header, data}` storage as a record).
     pub fn make_window_configuration(values: Vec<Value>) -> Self {
-        with_tagged_heap(|h| h.alloc_window_configuration(values))
+        // SAFETY: pure arena allocation (`alloc_window_configuration`); never
+        // collects, sweeps, re-enters `with_tagged_heap`, mints capability
+        // tokens, or mutates existing payloads.
+        unsafe { with_tagged_heap(|h| h.alloc_window_configuration(values)) }
     }
 
     /// Allocate a lambda. Converts LambdaData to a Value vector for GC safety.
     pub fn make_lambda(data: LambdaData) -> Self {
-        with_tagged_heap(|h| h.alloc_lambda_from_data(data))
+        // SAFETY: pure arena allocation (`alloc_lambda_from_data`); never
+        // collects, sweeps, re-enters `with_tagged_heap`, mints capability
+        // tokens, or mutates existing payloads.
+        unsafe { with_tagged_heap(|h| h.alloc_lambda_from_data(data)) }
     }
 
     /// Allocate a lambda from already-validated GNU closure slots.
     pub fn make_lambda_with_slots(slots: Vec<Value>) -> Self {
-        with_tagged_heap(|h| h.alloc_lambda(slots))
+        // SAFETY: pure arena allocation (`alloc_lambda`); never collects,
+        // sweeps, re-enters `with_tagged_heap`, mints capability tokens, or
+        // mutates existing payloads.
+        unsafe { with_tagged_heap(|h| h.alloc_lambda(slots)) }
     }
 
     /// Allocate a macro. Converts LambdaData to a Value vector for GC safety.
     pub fn make_macro(data: LambdaData) -> Self {
-        with_tagged_heap(|h| h.alloc_macro_from_data(data))
+        // SAFETY: pure arena allocation (`alloc_macro_from_data`); never
+        // collects, sweeps, re-enters `with_tagged_heap`, mints capability
+        // tokens, or mutates existing payloads.
+        unsafe { with_tagged_heap(|h| h.alloc_macro_from_data(data)) }
     }
 
     /// Allocate a hash table.
     pub fn hash_table(test: HashTableTest) -> Self {
-        with_tagged_heap(|h| h.alloc_hash_table(LispHashTable::new(test)))
+        // SAFETY: pure allocation (`alloc_hash_table`); never collects,
+        // sweeps, re-enters `with_tagged_heap`, mints capability tokens, or
+        // mutates existing payloads.
+        unsafe { with_tagged_heap(|h| h.alloc_hash_table(LispHashTable::new(test))) }
     }
 
     /// Allocate a hash table with options.
@@ -2994,15 +3327,20 @@ impl TaggedValue {
         rehash_size: f64,
         rehash_threshold: f64,
     ) -> Self {
-        with_tagged_heap(|h| {
-            h.alloc_hash_table(LispHashTable::new_with_options(
-                test,
-                size,
-                weakness,
-                rehash_size,
-                rehash_threshold,
-            ))
-        })
+        // SAFETY: pure allocation (`alloc_hash_table`); never collects,
+        // sweeps, re-enters `with_tagged_heap`, mints capability tokens, or
+        // mutates existing payloads.
+        unsafe {
+            with_tagged_heap(|h| {
+                h.alloc_hash_table(LispHashTable::new_with_options(
+                    test,
+                    size,
+                    weakness,
+                    rehash_size,
+                    rehash_threshold,
+                ))
+            })
+        }
     }
 
     /// Allocate a hash table after validating the Lisp capacity and reserving
@@ -3017,12 +3355,18 @@ impl TaggedValue {
         let data = HashTableStorage::try_with_capacity(size)?;
         let table =
             LispHashTable::with_storage(test, size.capacity() as i64, weakness, 1.5, 0.8125, data);
-        Ok(with_tagged_heap(|h| h.alloc_hash_table(table)))
+        // SAFETY: pure allocation (`alloc_hash_table`); never collects,
+        // sweeps, re-enters `with_tagged_heap`, mints capability tokens, or
+        // mutates existing payloads.
+        Ok(unsafe { with_tagged_heap(|h| h.alloc_hash_table(table)) })
     }
 
     /// Allocate a GNU-shaped obarray object.
     pub fn obarray(size: usize) -> Self {
-        with_tagged_heap(|h| h.alloc_obarray(vec![Value::NIL; size]))
+        // SAFETY: pure allocation (`alloc_obarray`); never collects, sweeps,
+        // re-enters `with_tagged_heap`, mints capability tokens, or mutates
+        // existing payloads.
+        unsafe { with_tagged_heap(|h| h.alloc_obarray(vec![Value::NIL; size])) }
     }
 
     /// Allocate obarray buckets after validating GNU's size-hint boundary.
@@ -3031,45 +3375,64 @@ impl TaggedValue {
         use crate::alloc::{AllocLen, reserved_values};
         let mut buckets = reserved_values(size)?;
         buckets.resize(size.capacity(), Value::NIL);
-        Ok(with_tagged_heap(|h| h.alloc_obarray(buckets)))
+        // SAFETY: pure allocation (`alloc_obarray`); never collects, sweeps,
+        // re-enters `with_tagged_heap`, mints capability tokens, or mutates
+        // existing payloads.
+        Ok(unsafe { with_tagged_heap(|h| h.alloc_obarray(buckets)) })
     }
 
     /// Allocate a marker.
     pub fn make_marker(data: crate::heap_types::LispMarker) -> Self {
-        with_tagged_heap(|h| h.alloc_marker(data))
+        // SAFETY: pure arena allocation (`alloc_marker`); never collects,
+        // sweeps, re-enters `with_tagged_heap`, mints capability tokens, or
+        // mutates existing payloads.
+        unsafe { with_tagged_heap(|h| h.alloc_marker(data)) }
     }
 
     /// Allocate an overlay. A fresh object's precedence serial is minted by
     /// the World's heap before the value is published; `Preserved` sources
     /// (observer copies, buffered copies, image loads) keep their identity.
     pub fn make_overlay(init: crate::heap_types::OverlayDataInit) -> Self {
-        with_tagged_heap(|h| h.alloc_overlay(init))
+        // SAFETY: pure allocation (`alloc_overlay`); never collects, sweeps,
+        // re-enters `with_tagged_heap`, mints capability tokens, or mutates
+        // existing payloads.
+        unsafe { with_tagged_heap(|h| h.alloc_overlay(init)) }
     }
 
     /// Allocate a buffer reference.
     pub fn make_buffer(id: BufferId) -> Self {
-        with_tagged_heap(|h| {
-            if let Some(value) = h.buffer_value(id) {
-                value
-            } else {
-                let value = h.alloc_buffer(id);
-                h.register_buffer_value(id, value);
-                value
-            }
-        })
+        // SAFETY: looks up or allocates+registers a buffer handle in the
+        // heap's handle table; never collects, sweeps, re-enters
+        // `with_tagged_heap`, mints capability tokens, or mutates payloads.
+        unsafe {
+            with_tagged_heap(|h| {
+                if let Some(value) = h.buffer_value(id) {
+                    value
+                } else {
+                    let value = h.alloc_buffer(id);
+                    h.register_buffer_value(id, value);
+                    value
+                }
+            })
+        }
     }
 
     /// Allocate a window reference.
     pub fn make_window(id: u64) -> Self {
-        with_tagged_heap(|h| {
-            if let Some(value) = h.window_value(id) {
-                value
-            } else {
-                let value = h.alloc_window(id);
-                h.register_window_value(id, value);
-                value
-            }
-        })
+        // SAFETY: looks up or allocates+registers a window handle in the
+        // heap's handle table; never collects, sweeps, re-enters
+        // `with_tagged_heap`, mints capability tokens, or mutates payloads.
+        unsafe {
+            with_tagged_heap(|h| {
+                if let Some(value) = h.window_value(id) {
+                    value
+                } else {
+                    let value = h.alloc_window(id);
+                    h.register_window_value(id, value);
+                    value
+                }
+            })
+        }
     }
 
     /// Return the frame object for `id`.
@@ -3078,20 +3441,25 @@ impl TaggedValue {
     /// registry entry means the frame was reclaimed or never created. This
     /// lookup does not allocate and does not reinsert.
     pub fn make_frame(id: u64) -> Self {
-        with_tagged_heap(|h| match h.frame_value(id) {
-            Some(value) => value,
-            None => {
-                tracing::error!(
-                    frame_id = id,
-                    "make_frame refused a missing frame id; a missing registry entry means the frame was reclaimed or never existed"
-                );
-                debug_assert!(
-                    false,
-                    "make_frame({id}) on a missing frame registry entry (reclaimed or never existed)"
-                );
-                Value::NIL
-            }
-        })
+        // SAFETY: read-only frame-handle registry lookup; never allocates,
+        // collects, re-enters `with_tagged_heap`, mints capability tokens, or
+        // mutates Lisp payloads.
+        unsafe {
+            with_tagged_heap(|h| match h.frame_value(id) {
+                Some(value) => value,
+                None => {
+                    tracing::error!(
+                        frame_id = id,
+                        "make_frame refused a missing frame id; a missing registry entry means the frame was reclaimed or never existed"
+                    );
+                    debug_assert!(
+                        false,
+                        "make_frame({id}) on a missing frame registry entry (reclaimed or never existed)"
+                    );
+                    Value::NIL
+                }
+            })
+        }
     }
 
     /// The frame object when the registry still has `id`.
@@ -3101,7 +3469,10 @@ impl TaggedValue {
     /// reclaimed id never reaches the refusal. A structure that keeps the id
     /// must root the returned object or clear the id at delete.
     pub fn registered_frame(id: u64) -> Option<Self> {
-        with_tagged_heap(|h| h.frame_value(id))
+        // SAFETY: read-only frame-handle registry lookup; never allocates,
+        // collects, re-enters `with_tagged_heap`, mints capability tokens, or
+        // mutates Lisp payloads.
+        unsafe { with_tagged_heap(|h| h.frame_value(id)) }
     }
 
     /// Mint the heap object for a frame at the moment the frame is created.
@@ -3109,27 +3480,37 @@ impl TaggedValue {
     /// Idempotent: an id that is already registered returns that object.
     /// [`Self::make_frame`] is the later lookup and never mints.
     pub fn mint_frame(id: u64) -> Self {
-        with_tagged_heap(|h| {
-            if let Some(value) = h.frame_value(id) {
-                return value;
-            }
-            let value = h.alloc_frame(id);
-            h.register_frame_value(id, value);
-            value
-        })
+        // SAFETY: looks up or allocates+registers a frame handle in the
+        // heap's handle table; never collects, sweeps, re-enters
+        // `with_tagged_heap`, mints capability tokens, or mutates payloads.
+        unsafe {
+            with_tagged_heap(|h| {
+                if let Some(value) = h.frame_value(id) {
+                    return value;
+                }
+                let value = h.alloc_frame(id);
+                h.register_frame_value(id, value);
+                value
+            })
+        }
     }
 
     /// Allocate a timer reference.
     pub fn make_timer(id: u64) -> Self {
-        with_tagged_heap(|h| {
-            if let Some(value) = h.timer_value(id) {
-                value
-            } else {
-                let value = h.alloc_timer(id);
-                h.register_timer_value(id, value);
-                value
-            }
-        })
+        // SAFETY: looks up or allocates+registers a timer handle in the
+        // heap's handle table; never collects, sweeps, re-enters
+        // `with_tagged_heap`, mints capability tokens, or mutates payloads.
+        unsafe {
+            with_tagged_heap(|h| {
+                if let Some(value) = h.timer_value(id) {
+                    value
+                } else {
+                    let value = h.alloc_timer(id);
+                    h.register_timer_value(id, value);
+                    value
+                }
+            })
+        }
     }
 
     /// Allocate a process reference.
@@ -3139,20 +3520,28 @@ impl TaggedValue {
     /// exited is still a process object in GNU (status `exit`/`signal`), so the
     /// cached value is never evicted on `delete-process`.
     pub fn make_process(id: u64) -> Self {
-        with_tagged_heap(|h| {
-            if let Some(value) = h.process_value(id) {
-                value
-            } else {
-                let value = h.alloc_process(id);
-                h.register_process_value(id, value);
-                value
-            }
-        })
+        // SAFETY: looks up or allocates+registers a process handle in the
+        // heap's handle table; never collects, sweeps, re-enters
+        // `with_tagged_heap`, mints capability tokens, or mutates payloads.
+        unsafe {
+            with_tagged_heap(|h| {
+                if let Some(value) = h.process_value(id) {
+                    value
+                } else {
+                    let value = h.alloc_process(id);
+                    h.register_process_value(id, value);
+                    value
+                }
+            })
+        }
     }
 
     /// Allocate a GNU-shaped terminal object.
     pub fn make_terminal(id: u64) -> Self {
-        with_tagged_heap(|h| h.alloc_terminal(id))
+        // SAFETY: pure allocation (`alloc_terminal`); never collects, sweeps,
+        // re-enters `with_tagged_heap`, mints capability tokens, or mutates
+        // existing payloads.
+        unsafe { with_tagged_heap(|h| h.alloc_terminal(id)) }
     }
 
     /// Allocate a GNU-shaped xwidget model object.
@@ -3165,16 +3554,24 @@ impl TaggedValue {
         xwidget_id: u32,
         webview_id: neovm_display_identity::WebViewId,
     ) -> Self {
-        with_tagged_heap(|h| {
-            h.alloc_xwidget(type_, title, buffer, width, height, xwidget_id, webview_id)
-        })
+        // SAFETY: pure allocation (`alloc_xwidget`); never collects, sweeps,
+        // re-enters `with_tagged_heap`, mints capability tokens, or mutates
+        // existing payloads.
+        unsafe {
+            with_tagged_heap(|h| {
+                h.alloc_xwidget(type_, title, buffer, width, height, xwidget_id, webview_id)
+            })
+        }
     }
 
     /// Allocate a bool-vector of `nbits` bits from `words` (`⌈nbits/64⌉`
     /// of them, GNU's PVEC_BOOL_VECTOR layout). Lisp-level constructors go
     /// through `boolvec`.
     pub fn make_bool_vector(nbits: usize, words: Vec<u64>) -> Self {
-        with_tagged_heap(|h| h.alloc_bool_vector(nbits, words))
+        // SAFETY: pure allocation (`alloc_bool_vector`); never collects,
+        // sweeps, re-enters `with_tagged_heap`, mints capability tokens, or
+        // mutates existing payloads.
+        unsafe { with_tagged_heap(|h| h.alloc_bool_vector(nbits, words)) }
     }
 
     /// Allocate a GC-managed shader-surface handle wrapping a host surface
@@ -3183,13 +3580,19 @@ impl TaggedValue {
     /// `DisplayHost::destroy_shader_surface`, so a handle Lisp drops without
     /// an explicit `neomacs-surface-destroy` still frees its GPU objects.
     pub fn make_surface_handle(surface_id: u32) -> Self {
-        with_tagged_heap(|h| h.alloc_surface_handle(surface_id))
+        // SAFETY: pure allocation (`alloc_surface_handle`); never collects,
+        // sweeps, re-enters `with_tagged_heap`, mints capability tokens, or
+        // mutates existing payloads.
+        unsafe { with_tagged_heap(|h| h.alloc_surface_handle(surface_id)) }
     }
 
     /// Allocate a GC-managed video-session handle. The stable `VideoId` is
     /// destroyed through the display host when Lisp drops the final reference.
     pub fn make_video_handle(video_id: neovm_display_identity::VideoId) -> Self {
-        with_tagged_heap(|h| h.alloc_video_handle(video_id))
+        // SAFETY: pure allocation (`alloc_video_handle`); never collects,
+        // sweeps, re-enters `with_tagged_heap`, mints capability tokens, or
+        // mutates existing payloads.
+        unsafe { with_tagged_heap(|h| h.alloc_video_handle(video_id)) }
     }
 
     /// The native scheduler key inside a thread, mutex or condition variable.
@@ -3249,7 +3652,10 @@ impl TaggedValue {
     /// Allocate an opaque SQLite database or statement object.
     #[doc(hidden)]
     pub fn make_sqlite(is_statement: bool, id: i64) -> Self {
-        with_tagged_heap(|h| h.alloc_sqlite(is_statement, id))
+        // SAFETY: pure allocation (`alloc_sqlite`); never collects, sweeps,
+        // re-enters `with_tagged_heap`, mints capability tokens, or mutates
+        // existing payloads.
+        unsafe { with_tagged_heap(|h| h.alloc_sqlite(is_statement, id)) }
     }
 
     // -- Veclike accessor helpers --
@@ -3468,12 +3874,10 @@ impl TaggedValue {
     /// — a `Copy` word with no borrow to track. Those need an explicit root
     /// (DIVERGENCES.md 161/162's `InFlightRoots`), not a lifetime.
     #[inline]
-    pub fn lisp_string_in(self, heap: &crate::tagged::gc::TaggedHeap) -> Option<&LispString> {
-        let _ = heap;
-        // SAFETY: the anchor is `heap`. Reaching a collection needs `&mut
-        // Context`, which owns the heap, so this borrow cannot coexist with
-        // one -- a stronger anchor than `as_lisp_string`'s place, which is the
-        // whole reason this function exists.
+    pub fn lisp_string_in<'h>(self, _heap: HeapRef<'h>) -> Option<&'h LispString> {
+        // SAFETY: the anchor is `heap`. Reaching a collection, teardown, or
+        // bulk replacement needs `&mut Context` / `&mut TaggedHeap` / `&mut HeapMut`,
+        // so this borrow cannot coexist with one.
         unsafe { self.as_lisp_string_reanchored() }
     }
 
@@ -3501,10 +3905,7 @@ impl TaggedValue {
     /// (`builtins/treesit.rs`, `E0502` ×3 on `eval.buffers`), and 185 §2 is
     /// this.
     #[inline]
-    pub fn expect_lisp_string_in(
-        self,
-        heap: &crate::tagged::gc::TaggedHeap,
-    ) -> Result<&LispString, Flow> {
+    pub fn expect_lisp_string_in<'h>(self, heap: HeapRef<'h>) -> Result<&'h LispString, Flow> {
         self.lisp_string_in(heap).ok_or_else(|| {
             signal(
                 crate::error::LispCondition::WrongTypeArgument,
@@ -3519,16 +3920,19 @@ impl TaggedValue {
     }
 
     /// Get the closure slot vector for a Lambda or Macro.
-    pub fn closure_slots(self) -> Option<&'static LispValueSlice> {
+    ///
+    /// Tied to this `Value` place. A later collection does not conflict with
+    /// this borrow.
+    pub fn closure_slots(&self) -> Option<&LispValueSlice> {
         let header = self.as_veclike_ptr()?;
         match unsafe { (*header).type_tag } {
             VecLikeType::Lambda => {
                 let ptr = header as *const LambdaObj;
-                Some(unsafe { LispValueSlice::from_slice((*ptr).data.as_slice()) })
+                Some(unsafe { (*ptr).data.as_value_slice() })
             }
             VecLikeType::Macro => {
                 let ptr = header as *const MacroObj;
-                Some(unsafe { LispValueSlice::from_slice((*ptr).data.as_slice()) })
+                Some(unsafe { (*ptr).data.as_value_slice() })
             }
             _ => None,
         }
@@ -3555,11 +3959,14 @@ impl TaggedValue {
     }
 
     pub fn closure_slot(self, index: usize) -> Option<Value> {
-        self.closure_slots()
-            .and_then(|slots| slots.get(index).copied())
+        self.closure_slots().and_then(|slots| slots.get(index))
     }
 
-    pub fn closure_params(self) -> Option<&'static LambdaParams> {
+    /// Parsed parameter list.
+    ///
+    /// Tied to this `Value` place. A later collection does not conflict with
+    /// this borrow.
+    pub fn closure_params(&self) -> Option<&LambdaParams> {
         let cell = self.closure_parsed_params_cell()?;
         Some(cell.get_or_init(|| {
             let arglist = self.closure_slot(CLOSURE_ARGLIST).unwrap_or(Value::NIL);
@@ -3712,7 +4119,10 @@ impl TaggedValue {
     }
 
     /// Get the xwidget payload from an xwidget value.
-    pub fn as_xwidget(self) -> Option<&'static XwidgetObj> {
+    ///
+    /// Tied to this `Value` place. A later collection does not conflict with
+    /// this borrow.
+    pub fn as_xwidget(&self) -> Option<&XwidgetObj> {
         if self.is_xwidget() {
             let ptr = self.as_veclike_ptr().unwrap() as *const XwidgetObj;
             Some(unsafe { &*ptr })
@@ -3727,7 +4137,10 @@ impl TaggedValue {
     }
 
     /// Get the xwidget-view payload from an xwidget-view value.
-    pub fn as_xwidget_view(self) -> Option<&'static XwidgetViewObj> {
+    ///
+    /// Tied to this `Value` place. A later collection does not conflict with
+    /// this borrow.
+    pub fn as_xwidget_view(&self) -> Option<&XwidgetViewObj> {
         if self.is_xwidget_view() {
             let ptr = self.as_veclike_ptr().unwrap() as *const XwidgetViewObj;
             Some(unsafe { &*ptr })
@@ -3737,7 +4150,10 @@ impl TaggedValue {
     }
 
     /// Get the marker data from a marker value.
-    pub fn as_marker_data(self) -> Option<&'static crate::heap_types::LispMarker> {
+    ///
+    /// Tied to this `Value` place. A later collection does not conflict with
+    /// this borrow.
+    pub fn as_marker_data(&self) -> Option<&crate::heap_types::LispMarker> {
         if self.is_marker() {
             let ptr = self.as_veclike_ptr().unwrap() as *const MarkerObj;
             Some(unsafe { &(*ptr).data })
@@ -3755,7 +4171,10 @@ impl TaggedValue {
     }
 
     /// Get the overlay data from an overlay value.
-    pub fn as_overlay_data(self) -> Option<&'static crate::heap_types::OverlayData> {
+    ///
+    /// Tied to this `Value` place. A later collection does not conflict with
+    /// this borrow.
+    pub fn as_overlay_data(&self) -> Option<&crate::heap_types::OverlayData> {
         if self.is_overlay() {
             let ptr = self.as_veclike_ptr().unwrap() as *const OverlayObj;
             Some(unsafe { &(*ptr).data })
@@ -3773,11 +4192,15 @@ impl TaggedValue {
     }
 
     /// Get vector elements.
-    pub fn as_vector_data(self) -> Option<&'static LispValueSlice> {
+    ///
+    /// Tied to this `Value` place. A later collection does not conflict with
+    /// this borrow.
+    #[inline]
+    pub fn as_vector_data(&self) -> Option<&LispValueSlice> {
         let header = self.as_veclike_ptr()?;
         if unsafe { (*header).type_tag } == VecLikeType::Vector {
             let ptr = header as *const VectorObj;
-            Some(unsafe { LispValueSlice::from_slice((*ptr).data.as_slice()) })
+            Some(unsafe { (*ptr).data.as_value_slice() })
         } else {
             None
         }
@@ -3808,8 +4231,11 @@ impl TaggedValue {
     }
 
     /// Borrow a packed bool-vector.
+    ///
+    /// Tied to this `Value` place. A later collection does not conflict with
+    /// this borrow.
     #[inline]
-    pub fn as_bool_vector_obj(self) -> Option<&'static BoolVectorObj> {
+    pub fn as_bool_vector_obj(&self) -> Option<&BoolVectorObj> {
         if self.is_bool_vector_obj() {
             let ptr = self.as_veclike_ptr().unwrap() as *const BoolVectorObj;
             Some(unsafe { &*ptr })
@@ -3830,7 +4256,10 @@ impl TaggedValue {
     }
 
     /// Borrow a GNU-shaped char-table object.
-    pub fn as_char_table_obj(self) -> Option<&'static CharTableObj> {
+    ///
+    /// Tied to this `Value` place. A later collection does not conflict with
+    /// this borrow.
+    pub fn as_char_table_obj(&self) -> Option<&CharTableObj> {
         let header = self.as_veclike_ptr()?;
         if unsafe { (*header).type_tag } == VecLikeType::CharTable {
             let ptr = header as *const CharTableObj;
@@ -3850,7 +4279,10 @@ impl TaggedValue {
     }
 
     /// Borrow a GNU-shaped sub-char-table object.
-    pub fn as_sub_char_table_obj(self) -> Option<&'static SubCharTableObj> {
+    ///
+    /// Tied to this `Value` place. A later collection does not conflict with
+    /// this borrow.
+    pub fn as_sub_char_table_obj(&self) -> Option<&SubCharTableObj> {
         let header = self.as_veclike_ptr()?;
         if unsafe { (*header).type_tag } == VecLikeType::SubCharTable {
             let ptr = header as *const SubCharTableObj;
@@ -3883,11 +4315,14 @@ impl TaggedValue {
     }
 
     /// Get record elements.
-    pub fn as_record_data(self) -> Option<&'static LispValueSlice> {
+    ///
+    /// Tied to this `Value` place. A later collection does not conflict with
+    /// this borrow.
+    pub fn as_record_data(&self) -> Option<&LispValueSlice> {
         let header = self.as_veclike_ptr()?;
         if unsafe { (*header).type_tag } == VecLikeType::Record {
             let ptr = header as *const RecordObj;
-            Some(unsafe { LispValueSlice::from_slice((*ptr).data.as_slice()) })
+            Some(unsafe { (*ptr).data.as_value_slice() })
         } else {
             None
         }
@@ -3895,22 +4330,28 @@ impl TaggedValue {
 
     /// Borrow the private GC-traced slots of a native tree-sitter node.
     /// This does not establish backend freshness or parser liveness.
+    ///
+    /// Tied to this `Value` place. A later collection does not conflict with
+    /// this borrow.
     #[doc(hidden)]
-    pub fn as_treesit_node_data(self) -> Option<&'static LispValueSlice> {
+    pub fn as_treesit_node_data(&self) -> Option<&LispValueSlice> {
         let header = self.as_veclike_ptr()?;
         if unsafe { (*header).type_tag } == VecLikeType::TsNode {
             // SAFETY: TsNode allocations share the RecordObj storage layout,
             // selected here only after checking their intrinsic header tag.
             let ptr = header as *const RecordObj;
-            Some(unsafe { LispValueSlice::from_slice((*ptr).data.as_slice()) })
+            Some(unsafe { (*ptr).data.as_value_slice() })
         } else {
             None
         }
     }
 
     /// Borrow the typed native payload of an opened-font pseudovector.
+    ///
+    /// Tied to this `Value` place. A later collection does not conflict with
+    /// this borrow.
     #[doc(hidden)]
-    pub fn as_font_data(self) -> Option<&'static FontObjectData> {
+    pub fn as_font_data(&self) -> Option<&FontObjectData> {
         if self.is_font_object() {
             let ptr = self.as_veclike_ptr().unwrap() as *const FontObj;
             Some(unsafe { &(*ptr).data })
@@ -3922,10 +4363,13 @@ impl TaggedValue {
     /// Borrow the data slots of a window-configuration pseudovector. Distinct
     /// from `as_vector_data`/`as_record_data` so that a window-configuration is
     /// never mistaken for a vector or a record by the type predicates.
-    pub fn as_window_configuration_data(self) -> Option<&'static LispValueSlice> {
+    ///
+    /// Tied to this `Value` place. A later collection does not conflict with
+    /// this borrow.
+    pub fn as_window_configuration_data(&self) -> Option<&LispValueSlice> {
         if self.is_window_configuration() {
             let ptr = self.as_veclike_ptr().unwrap() as *const RecordObj;
-            Some(unsafe { LispValueSlice::from_slice((*ptr).data.as_slice()) })
+            Some(unsafe { (*ptr).data.as_value_slice() })
         } else {
             None
         }
@@ -3947,8 +4391,11 @@ impl TaggedValue {
     }
 
     /// Get hash table reference.
+    ///
+    /// Tied to this `Value` place. A later collection does not conflict with
+    /// this borrow.
     #[inline]
-    pub fn as_hash_table(self) -> Option<&'static LispHashTable> {
+    pub fn as_hash_table(&self) -> Option<&LispHashTable> {
         if self.is_hash_table() {
             let ptr = self.as_veclike_ptr().unwrap() as *mut HashTableObj;
             // Lazy dump hydration happens through the raw pointer BEFORE the
@@ -3971,12 +4418,20 @@ impl TaggedValue {
     // outlining the already-hydrated read adds work to every gethash/puthash.
     #[cold]
     #[inline(never)]
-    fn hydrate_hash_table_for_access(self, ptr: *mut HashTableObj) {
+    /// # Safety
+    /// `ptr` must point to a live, initialized `HashTableObj` owned by the current heap.
+    unsafe fn hydrate_hash_table_for_access(self, ptr: *mut HashTableObj) {
         // A parked structural key without a snapshot can be reconstructed as
         // a fresh heap object. Remember the owner before creating that edge.
-        if with_tagged_heap(|heap| heap.tagged_heap_generational_enabled()) {
+        // SAFETY: reads the generational-GC mode flag only; never collects,
+        // re-enters `with_tagged_heap`, mints capability tokens, or mutates
+        // any Lisp payload.
+        if unsafe { with_tagged_heap(|heap| heap.tagged_heap_generational_enabled()) } {
             note_heap_write(self, HeapWriteKind::HashTableData);
         }
+        // SAFETY: this cold serial path owns the initialized table until
+        // hydration completes and the caller publishes its shared reference.
+        let _storage_charge = unsafe { crate::tagged::gc::SerialHashTableStorageCharge::new(ptr) };
         // SAFETY: as_hash_table has checked the type and holds no reference
         // to the payload until this pre-publication hydration has completed.
         unsafe { (*ptr).table.hydrate_pending() };
@@ -3999,7 +4454,9 @@ impl TaggedValue {
         f: impl FnOnce(&mut LispHashTable) -> R,
     ) -> Option<R> {
         // SAFETY: the caller supplies the same inactive-mutation contract.
-        unsafe { mutate::with_hash_table_mut_inactive(self, f) }
+        // Generic mutation meters the verified payload; sealed/typed owners
+        // retain the shared unmetered body and their own allocation reporters.
+        unsafe { mutate::with_hash_table_mut_inactive_metered(self, f) }
     }
 
     /// Active mutation accessor for a caller that has already dispatched.
@@ -4058,14 +4515,443 @@ impl TaggedValue {
         mutate::with_bytecode_data_mut_for_test(self, f)
     }
 
-    /// Mutate string data through the centralized tagged-runtime write path.
+    /// Fixture-only unrestricted string edits through the tagged write path.
+    #[cfg(any(test, feature = "test-support"))]
     pub fn with_lisp_string_mut<R>(self, f: impl FnOnce(&mut LispString) -> R) -> Option<R> {
         mutate::with_lisp_string_mut(self, f)
+    }
+
+    /// Edit only the string's existing byte extent through its write barrier.
+    pub fn with_string_bytes_mut<R>(self, f: impl FnOnce(&mut [u8]) -> R) -> Option<R> {
+        mutate::with_string_bytes_mut(self, f)
+    }
+
+    /// Clear contents without permitting arbitrary backing replacement.
+    pub fn clear_string_contents(self) -> bool {
+        mutate::clear_string_contents(self)
+    }
+
+    /// Pin published bytecode storage without replacing an owned backing.
+    pub fn pin_string_immovable(self) -> bool {
+        mutate::pin_string_immovable(self)
     }
 
     /// See [`mutate::set_string_byte_same_char_count`].
     pub fn set_string_byte_same_char_count(self, byte_pos: usize, byte: u8) -> bool {
         mutate::set_string_byte_same_char_count(self, byte_pos, byte)
+    }
+
+    // -----------------------------------------------------------------------
+    // Phase 1c: HeapRef-anchored payload readers and HeapMut-gated bulk mutators
+    //
+    // SAFETY INVARIANT FOR ALL `*_in(&self, _heap: HeapRef<'h>)` READERS:
+    // Returning `&'h T` tied to `HeapRef<'h>` is sound while:
+    // (a) `self` was allocated in the `TaggedHeap` that minted `_heap`
+    //     (heap-identity branding is not yet enforced at compile time; see
+    //     `tagged::heap_ref`'s "Not yet enforced" section);
+    // (b) no collection or sweep runs during `'h`, enforced by `HeapRef<'h>`
+    //     holding `&'h TaggedHeap` while collection requires `&mut Context`
+    //     / `&mut TaggedHeap` and `with_tagged_heap` is `unsafe fn`;
+    // (c) no structural/bulk payload mutation runs during `'h` — Phase 1c.0
+    //     provides `*_in(&mut HeapMut)` counterparts, and Phase 1c.1 withdraws
+    //     the tokenless bulk mutators;
+    // (d) for `&'h LispValueSlice` readers, Phase 1b enforces interior-mutable
+    //     `[AtomicTaggedValue]` storage with relaxed atomic loads (no raw
+    //     `&[TaggedValue]`), so single-slot atomic stores never alias a live
+    //     slice view.
+    // -----------------------------------------------------------------------
+
+    /// Borrow the closure slot vector for a Lambda or Macro, anchored to `heap`.
+    #[inline]
+    pub fn closure_slots_in<'h>(self, _heap: HeapRef<'h>) -> Option<&'h LispValueSlice> {
+        let header = self.as_veclike_ptr()?;
+        // SAFETY: `header` is a valid veclike header; lifetime `'h` is tied to
+        // `_heap` under the Phase 1c `*_in` invariant (a)–(d) above.
+        match unsafe { (*header).type_tag } {
+            VecLikeType::Lambda => {
+                let ptr = header as *const LambdaObj;
+                Some(unsafe { (*ptr).data.as_value_slice() })
+            }
+            VecLikeType::Macro => {
+                let ptr = header as *const MacroObj;
+                Some(unsafe { (*ptr).data.as_value_slice() })
+            }
+            _ => None,
+        }
+    }
+
+    /// Borrow parsed closure parameters, anchored to `heap`.
+    #[inline]
+    pub fn closure_params_in<'h>(self, _heap: HeapRef<'h>) -> Option<&'h LambdaParams> {
+        // SAFETY: `closure_parsed_params_cell` returns the `OnceLock` owned by
+        // the closure object; its lifetime is tied to `_heap` under invariant
+        // (a)–(c) above.
+        let cell = self.closure_parsed_params_cell()?;
+        Some(cell.get_or_init(|| {
+            let arglist = self.closure_slot(CLOSURE_ARGLIST).unwrap_or(Value::NIL);
+            parse_lambda_params_from_value(&arglist)
+                .unwrap_or_else(|_| LambdaParams::simple(vec![]))
+        }))
+    }
+
+    /// Borrow the xwidget payload, anchored to `heap`.
+    #[inline]
+    pub fn xwidget_in<'h>(self, _heap: HeapRef<'h>) -> Option<&'h XwidgetObj> {
+        if self.is_xwidget() {
+            let ptr = self.as_veclike_ptr().unwrap() as *const XwidgetObj;
+            // SAFETY: `self.is_xwidget()` verified the header tag; `'h` is
+            // tied to `_heap` under the Phase 1c `*_in` invariant (a)–(c).
+            Some(unsafe { &*ptr })
+        } else {
+            None
+        }
+    }
+
+    /// Borrow the xwidget-view payload, anchored to `heap`.
+    #[inline]
+    pub fn xwidget_view_in<'h>(self, _heap: HeapRef<'h>) -> Option<&'h XwidgetViewObj> {
+        if self.is_xwidget_view() {
+            let ptr = self.as_veclike_ptr().unwrap() as *const XwidgetViewObj;
+            // SAFETY: `self.is_xwidget_view()` verified the header tag; `'h` is
+            // tied to `_heap` under the Phase 1c `*_in` invariant (a)–(c).
+            Some(unsafe { &*ptr })
+        } else {
+            None
+        }
+    }
+
+    /// Borrow marker data, anchored to `heap`.
+    #[inline]
+    pub fn marker_data_in<'h>(
+        self,
+        _heap: HeapRef<'h>,
+    ) -> Option<&'h crate::heap_types::LispMarker> {
+        if self.is_marker() {
+            let ptr = self.as_veclike_ptr().unwrap() as *const MarkerObj;
+            // SAFETY: `self.is_marker()` verified the header tag; `'h` is tied
+            // to `_heap` under the Phase 1c `*_in` invariant (a)–(c).
+            Some(unsafe { &(*ptr).data })
+        } else {
+            None
+        }
+    }
+
+    /// Borrow overlay data, anchored to `heap`.
+    #[inline]
+    pub fn overlay_data_in<'h>(
+        self,
+        _heap: HeapRef<'h>,
+    ) -> Option<&'h crate::heap_types::OverlayData> {
+        if self.is_overlay() {
+            let ptr = self.as_veclike_ptr().unwrap() as *const OverlayObj;
+            // SAFETY: `self.is_overlay()` verified the header tag; `'h` is tied
+            // to `_heap` under the Phase 1c `*_in` invariant (a)–(c).
+            Some(unsafe { &(*ptr).data })
+        } else {
+            None
+        }
+    }
+
+    /// Borrow vector elements, anchored to `heap`.
+    ///
+    /// On an `Owned` vector, a live `&'h LispValueSlice` observes subsequent
+    /// single-slot stores (`set_vector_slot`). On a `Mapped` (pdump) vector,
+    /// the first single-slot store copy-promotes to a fresh `Owned` buffer;
+    /// an earlier `&'h LispValueSlice` stays sound as an immutable snapshot of
+    /// the pre-promotion mapped slots, so callers needing post-write values
+    /// must re-borrow.
+    #[inline]
+    pub fn vector_data_in<'h>(self, _heap: HeapRef<'h>) -> Option<&'h LispValueSlice> {
+        let header = self.as_veclike_ptr()?;
+        // SAFETY: `header` is a valid veclike header; after confirming
+        // `VecLikeType::Vector`, `'h` is tied to `_heap` under invariant (a)–(d).
+        if unsafe { (*header).type_tag } == VecLikeType::Vector {
+            let ptr = header as *const VectorObj;
+            Some(unsafe { (*ptr).data.as_value_slice() })
+        } else {
+            None
+        }
+    }
+
+    /// Borrow a packed bool-vector, anchored to `heap`.
+    #[inline]
+    pub fn bool_vector_obj_in<'h>(self, _heap: HeapRef<'h>) -> Option<&'h BoolVectorObj> {
+        if self.is_bool_vector_obj() {
+            let ptr = self.as_veclike_ptr().unwrap() as *const BoolVectorObj;
+            // SAFETY: `self.is_bool_vector_obj()` verified the header tag; `'h`
+            // is tied to `_heap` under the Phase 1c `*_in` invariant (a)–(c).
+            Some(unsafe { &*ptr })
+        } else {
+            None
+        }
+    }
+
+    /// Borrow a GNU-shaped char-table object, anchored to `heap`.
+    #[inline]
+    pub fn char_table_obj_in<'h>(self, _heap: HeapRef<'h>) -> Option<&'h CharTableObj> {
+        let header = self.as_veclike_ptr()?;
+        // SAFETY: `header` is a valid veclike header; after confirming
+        // `VecLikeType::CharTable`, `'h` is tied to `_heap` under invariant (a)–(c).
+        if unsafe { (*header).type_tag } == VecLikeType::CharTable {
+            let ptr = header as *const CharTableObj;
+            Some(unsafe { &*ptr })
+        } else {
+            None
+        }
+    }
+
+    /// Borrow a GNU-shaped sub-char-table object, anchored to `heap`.
+    #[inline]
+    pub fn sub_char_table_obj_in<'h>(self, _heap: HeapRef<'h>) -> Option<&'h SubCharTableObj> {
+        let header = self.as_veclike_ptr()?;
+        // SAFETY: `header` is a valid veclike header; after confirming
+        // `VecLikeType::SubCharTable`, `'h` is tied to `_heap` under invariant (a)–(c).
+        if unsafe { (*header).type_tag } == VecLikeType::SubCharTable {
+            let ptr = header as *const SubCharTableObj;
+            Some(unsafe { &*ptr })
+        } else {
+            None
+        }
+    }
+
+    /// Borrow record elements, anchored to `heap`.
+    #[inline]
+    pub fn record_data_in<'h>(self, _heap: HeapRef<'h>) -> Option<&'h LispValueSlice> {
+        let header = self.as_veclike_ptr()?;
+        // SAFETY: `header` is a valid veclike header; after confirming
+        // `VecLikeType::Record`, `'h` is tied to `_heap` under invariant (a)–(d).
+        if unsafe { (*header).type_tag } == VecLikeType::Record {
+            let ptr = header as *const RecordObj;
+            Some(unsafe { (*ptr).data.as_value_slice() })
+        } else {
+            None
+        }
+    }
+
+    /// Borrow tree-sitter node slots, anchored to `heap`.
+    #[inline]
+    #[doc(hidden)]
+    pub fn treesit_node_data_in<'h>(self, _heap: HeapRef<'h>) -> Option<&'h LispValueSlice> {
+        let header = self.as_veclike_ptr()?;
+        // SAFETY: `header` is a valid veclike header; after confirming
+        // `VecLikeType::TsNode`, `'h` is tied to `_heap` under invariant (a)–(d).
+        if unsafe { (*header).type_tag } == VecLikeType::TsNode {
+            let ptr = header as *const RecordObj;
+            Some(unsafe { (*ptr).data.as_value_slice() })
+        } else {
+            None
+        }
+    }
+
+    /// Borrow opened-font pseudovector data, anchored to `heap`.
+    #[inline]
+    #[doc(hidden)]
+    pub fn font_data_in<'h>(self, _heap: HeapRef<'h>) -> Option<&'h FontObjectData> {
+        if self.is_font_object() {
+            let ptr = self.as_veclike_ptr().unwrap() as *const FontObj;
+            // SAFETY: `self.is_font_object()` verified the header tag; `'h` is
+            // tied to `_heap` under the Phase 1c `*_in` invariant (a)–(c).
+            Some(unsafe { &(*ptr).data })
+        } else {
+            None
+        }
+    }
+
+    /// Borrow window-configuration slots, anchored to `heap`.
+    #[inline]
+    pub fn window_configuration_data_in<'h>(
+        self,
+        _heap: HeapRef<'h>,
+    ) -> Option<&'h LispValueSlice> {
+        if self.is_window_configuration() {
+            let ptr = self.as_veclike_ptr().unwrap() as *const RecordObj;
+            // SAFETY: `self.is_window_configuration()` verified the header tag;
+            // `'h` is tied to `_heap` under invariant (a)–(d).
+            Some(unsafe { (*ptr).data.as_value_slice() })
+        } else {
+            None
+        }
+    }
+
+    /// Borrow a hash table, anchored to `heap`.
+    #[inline]
+    pub fn hash_table_in<'h>(self, _heap: HeapRef<'h>) -> Option<&'h LispHashTable> {
+        if self.is_hash_table() {
+            let ptr = self.as_veclike_ptr().unwrap() as *mut HashTableObj;
+            // SAFETY: `self.is_hash_table()` verified the header tag; lazy
+            // hydration initializes internal buckets once before sharing, and
+            // `'h` is tied to `_heap` under invariant (a)–(c).
+            unsafe {
+                if (*ptr).table.needs_hydration() {
+                    self.hydrate_hash_table_for_access(ptr);
+                }
+                Some(&(*ptr).table)
+            }
+        } else {
+            None
+        }
+    }
+
+    /// Replace closure slots under exclusive [`HeapMut`] capability.
+    #[inline]
+    pub fn replace_closure_slots_in(self, _heap: &mut HeapMut<'_>, slots: Vec<Value>) -> bool {
+        mutate::replace_closure_slots(self, slots)
+    }
+
+    /// Mutate xwidget data under exclusive [`HeapMut`] capability.
+    #[inline]
+    pub fn with_xwidget_mut_in<R>(
+        self,
+        _heap: &mut HeapMut<'_>,
+        f: impl FnOnce(&mut XwidgetObj) -> R,
+    ) -> Option<R> {
+        mutate::with_xwidget_mut(self, f)
+    }
+
+    /// Mutate xwidget-view data under exclusive [`HeapMut`] capability.
+    #[inline]
+    pub fn with_xwidget_view_mut_in<R>(
+        self,
+        _heap: &mut HeapMut<'_>,
+        f: impl FnOnce(&mut XwidgetViewObj) -> R,
+    ) -> Option<R> {
+        mutate::with_xwidget_view_mut(self, f)
+    }
+
+    /// Mutate marker data under exclusive [`HeapMut`] capability.
+    #[inline]
+    pub fn with_marker_data_mut_in<R>(
+        self,
+        _heap: &mut HeapMut<'_>,
+        f: impl FnOnce(&mut crate::heap_types::LispMarker) -> R,
+    ) -> Option<R> {
+        mutate::with_marker_data_mut(self, f)
+    }
+
+    /// Mutate overlay data under exclusive [`HeapMut`] capability.
+    #[inline]
+    pub fn with_overlay_data_mut_in<R>(
+        self,
+        _heap: &mut HeapMut<'_>,
+        f: impl FnOnce(&mut crate::heap_types::OverlayData) -> R,
+    ) -> Option<R> {
+        mutate::with_overlay_data_mut(self, f)
+    }
+
+    /// Mutate vector elements under exclusive [`HeapMut`] capability.
+    #[inline]
+    pub fn with_vector_data_mut_in<R>(
+        self,
+        _heap: &mut HeapMut<'_>,
+        f: impl FnOnce(&mut Vec<Value>) -> R,
+    ) -> Option<R> {
+        mutate::with_vector_data_mut(self, f)
+    }
+
+    /// Replace vector elements under exclusive [`HeapMut`] capability.
+    #[inline]
+    pub fn replace_vector_data_in(self, _heap: &mut HeapMut<'_>, values: Vec<Value>) -> bool {
+        mutate::replace_vector_data(self, values)
+    }
+
+    /// Mutate packed bool-vector bits under exclusive [`HeapMut`] capability.
+    #[inline]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn with_bool_vector_mut_in<R>(
+        self,
+        _heap: &mut HeapMut<'_>,
+        f: impl FnOnce(&mut BoolVectorObj) -> R,
+    ) -> Option<R> {
+        mutate::with_bool_vector_mut(self, f)
+    }
+
+    /// Mutate char-table slots under exclusive [`HeapMut`] capability.
+    #[inline]
+    pub fn with_char_table_mut_in<R>(
+        self,
+        _heap: &mut HeapMut<'_>,
+        f: impl FnOnce(&mut mutate::CharTableWrite<'_>) -> R,
+    ) -> Option<R> {
+        mutate::with_char_table_write(self, f)
+    }
+
+    /// Mutate sub-char-table slots under exclusive [`HeapMut`] capability.
+    #[inline]
+    pub fn with_sub_char_table_mut_in<R>(
+        self,
+        _heap: &mut HeapMut<'_>,
+        f: impl FnOnce(&mut mutate::SubCharTableWrite<'_>) -> R,
+    ) -> Option<R> {
+        mutate::with_sub_char_table_write(self, f)
+    }
+
+    /// Mutate record elements under exclusive [`HeapMut`] capability.
+    #[inline]
+    pub fn with_record_data_mut_in<R>(
+        self,
+        _heap: &mut HeapMut<'_>,
+        f: impl FnOnce(&mut Vec<Value>) -> R,
+    ) -> Option<R> {
+        mutate::with_record_data_mut(self, f)
+    }
+
+    /// Replace record elements under exclusive [`HeapMut`] capability.
+    #[inline]
+    pub fn replace_record_data_in(self, _heap: &mut HeapMut<'_>, values: Vec<Value>) -> bool {
+        mutate::replace_record_data(self, values)
+    }
+
+    /// Mutate a hash table under exclusive [`HeapMut`] capability.
+    #[inline]
+    pub fn with_hash_table_mut_in<R>(
+        self,
+        _heap: &mut HeapMut<'_>,
+        f: impl FnOnce(&mut LispHashTable) -> R,
+    ) -> Option<R> {
+        mutate::with_hash_table_mut(self, f)
+    }
+
+    /// Mutate an obarray under exclusive [`HeapMut`] capability.
+    #[inline]
+    pub fn with_obarray_mut_in<R>(
+        self,
+        _heap: &mut HeapMut<'_>,
+        f: impl FnOnce(&mut ObarrayObj) -> R,
+    ) -> Option<R> {
+        self.with_obarray_mut(f)
+    }
+
+    /// Fixture-only string edits under exclusive [`HeapMut`] capability.
+    #[inline]
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn with_lisp_string_mut_in<R>(
+        self,
+        _heap: &mut HeapMut<'_>,
+        f: impl FnOnce(&mut LispString) -> R,
+    ) -> Option<R> {
+        mutate::with_lisp_string_mut(self, f)
+    }
+
+    /// Edit string bytes in place under exclusive [`HeapMut`] capability.
+    #[inline]
+    pub fn with_string_bytes_mut_in<R>(
+        self,
+        _heap: &mut HeapMut<'_>,
+        f: impl FnOnce(&mut [u8]) -> R,
+    ) -> Option<R> {
+        mutate::with_string_bytes_mut(self, f)
+    }
+
+    /// Clear string contents under exclusive [`HeapMut`] capability.
+    #[inline]
+    pub fn clear_string_contents_in(self, _heap: &mut HeapMut<'_>) -> bool {
+        mutate::clear_string_contents(self)
+    }
+
+    /// Clear string intervals under exclusive [`HeapMut`] capability.
+    #[inline]
+    pub fn clear_string_intervals_in(self, _heap: &mut HeapMut<'_>) -> bool {
+        mutate::clear_string_intervals(self)
     }
 
     /// Convert to hash key based on the hash table test.
@@ -4083,6 +4969,46 @@ impl TaggedValue {
             HashTableTest::Eq => self.to_eq_key_swp(symbols_with_pos_enabled),
             HashTableTest::Eql => self.to_eql_key_swp(symbols_with_pos_enabled),
             HashTableTest::Equal => self.to_equal_key_swp(symbols_with_pos_enabled),
+        }
+    }
+
+    /// Structural `equal` key with a hard node budget.
+    ///
+    /// See [`Self::to_equal_key_depth_budgeted`]: the walk emits
+    /// [`TRUNCATED_KEY_CYCLE`] once `max_nodes` key nodes have been built.
+    pub fn to_equal_key_bounded(
+        &self,
+        max_nodes: usize,
+        symbols_with_pos_enabled: bool,
+    ) -> HashKey {
+        let mut budget = max_nodes;
+        self.to_equal_key_depth_budgeted(
+            0,
+            &mut EqualKeySeen::new(),
+            symbols_with_pos_enabled,
+            &mut budget,
+        )
+    }
+
+    /// The materialized key filed beside a new entry of a table with `test`.
+    ///
+    /// An equal table decides membership with `equal_value_hash` plus a live
+    /// `equal`; the stored key exists for iteration, dumping and switch
+    /// plans.  It is therefore budgeted: a shared DAG can otherwise unfold
+    /// into an exponential key tree at insertion.  Exact-key consumers reject
+    /// a truncated key, and every ordinary key is unchanged.
+    pub fn to_hash_key_for_insert(
+        self,
+        test: HashTableTest,
+        symbols_with_pos_enabled: bool,
+    ) -> HashKey {
+        match test {
+            HashTableTest::Equal => {
+                self.to_equal_key_bounded(EQUAL_KEY_NODE_BUDGET, symbols_with_pos_enabled)
+            }
+            HashTableTest::Eq | HashTableTest::Eql => {
+                self.to_hash_key_swp(&test, symbols_with_pos_enabled)
+            }
         }
     }
 
@@ -4153,12 +5079,12 @@ impl TaggedValue {
     }
 
     fn to_equal_key(self) -> HashKey {
-        let mut seen = Vec::new();
+        let mut seen = EqualKeySeen::new();
         self.to_equal_key_depth_swp(0, &mut seen, false)
     }
 
     fn to_equal_key_swp(self, symbols_with_pos_enabled: bool) -> HashKey {
-        let mut seen = Vec::new();
+        let mut seen = EqualKeySeen::new();
         self.to_equal_key_depth_swp(0, &mut seen, symbols_with_pos_enabled)
     }
 
@@ -4166,12 +5092,98 @@ impl TaggedValue {
     pub fn to_equal_key_depth_swp(
         self,
         depth: usize,
-        seen: &mut Vec<usize>,
+        seen: &mut EqualKeySeen,
         symbols_with_pos_enabled: bool,
+    ) -> HashKey {
+        let mut budget = usize::MAX;
+        self.to_equal_key_depth_budgeted(depth, seen, symbols_with_pos_enabled, &mut budget)
+    }
+
+    /// Equal-hash of one cons, walking the cdr spine at `depth`.
+    ///
+    /// GNU `equal` does not count list length as nesting. This walk keeps
+    /// the stored key aligned with `PartialEq` for an acyclic list of one
+    /// shape: a tail past depth 200 used to become a pointer key, so two
+    /// long equal lists hashed apart. Two values can still be `equal` and
+    /// hash apart when their cycle shapes differ.
+    /// Each cons still spends one budget node. Cars and the non-cons tail
+    /// are hashed at `depth + 1`.
+    fn equal_cons_key(
+        self,
+        depth: usize,
+        seen: &mut EqualKeySeen,
+        symbols_with_pos_enabled: bool,
+        budget: &mut usize,
+    ) -> HashKey {
+        let seen_start = seen.len();
+        let cars_start = seen.cars_len();
+        let mut tail = self;
+        let mut first = true;
+        let terminal = loop {
+            if !tail.is_cons() {
+                break tail.to_equal_key_depth_budgeted(
+                    depth + 1,
+                    seen,
+                    symbols_with_pos_enabled,
+                    budget,
+                );
+            }
+            if !first {
+                if *budget == 0 {
+                    break HashKey::Cycle(TRUNCATED_KEY_CYCLE);
+                }
+                *budget -= 1;
+            }
+            first = false;
+            let ptr = tail.bits();
+            if let Some(index) = seen.index_of(ptr) {
+                break HashKey::Cycle(index);
+            }
+            seen.push(ptr);
+            let car_key = tail.cons_car().to_equal_key_depth_budgeted(
+                depth + 1,
+                seen,
+                symbols_with_pos_enabled,
+                budget,
+            );
+            seen.push_car(car_key);
+            tail = tail.cons_cdr();
+        };
+        seen.truncate(seen_start);
+        let mut key = terminal;
+        while seen.cars_len() > cars_start {
+            let car_key = seen.pop_car().expect("cons car key");
+            key = HashKey::EqualCons(Box::new(car_key), Box::new(key));
+        }
+        key
+    }
+
+    /// [`Self::to_equal_key_depth_swp`] with a hard node budget.
+    ///
+    /// A structural key unfolds a DAG into a tree, so its size is exponential
+    /// in depth even though the object graph is small.  GNU bounds its equal
+    /// hash (`SXHASH_MAX_DEPTH`/`SXHASH_MAX_LEN`); the stored key used for
+    /// iteration, dumping and switch plans had no such bound, so a 30-level
+    /// shared pair of conses expands to 2^30 key nodes.  Once `budget` is
+    /// exhausted the walk emits [`TRUNCATED_KEY_CYCLE`], which exact-key
+    /// consumers (the switch plan) reject.  Equal-table membership is decided
+    /// by `equal_value_hash` plus a live `equal`, so truncation cannot change
+    /// a lookup answer.
+    #[doc(hidden)]
+    pub fn to_equal_key_depth_budgeted(
+        self,
+        depth: usize,
+        seen: &mut EqualKeySeen,
+        symbols_with_pos_enabled: bool,
+        budget: &mut usize,
     ) -> HashKey {
         if depth > 200 {
             return self.to_eq_key();
         }
+        if *budget == 0 {
+            return HashKey::Cycle(TRUNCATED_KEY_CYCLE);
+        }
+        *budget -= 1;
         match self.kind() {
             ValueKind::Nil => HashKey::Nil,
             ValueKind::T => HashKey::True,
@@ -4183,18 +5195,20 @@ impl TaggedValue {
             ValueKind::Veclike(VecLikeType::SymbolWithPos) => {
                 let swp = self.as_symbol_with_pos().unwrap();
                 if symbols_with_pos_enabled {
-                    return swp.sym.to_equal_key_depth_swp(
+                    return swp.sym.to_equal_key_depth_budgeted(
                         depth + 1,
                         seen,
                         symbols_with_pos_enabled,
+                        budget,
                     );
                 }
                 HashKey::SymbolWithPos(
                     Box::new(swp.sym.to_eq_key()),
-                    Box::new(swp.pos.to_equal_key_depth_swp(
+                    Box::new(swp.pos.to_equal_key_depth_budgeted(
                         depth + 1,
                         seen,
                         symbols_with_pos_enabled,
+                        budget,
                     )),
                 )
             }
@@ -4203,19 +5217,7 @@ impl TaggedValue {
                 Some(string) => HashKey::string_content(string.as_bytes(), string.schars()),
                 None => self.to_eq_key(),
             },
-            ValueKind::Cons => {
-                let ptr = self.bits();
-                if let Some(index) = seen.iter().position(|&p| p == ptr) {
-                    return HashKey::Cycle(index as u32);
-                }
-                seen.push(ptr);
-                let car = self.cons_car();
-                let cdr = self.cons_cdr();
-                let car_key = car.to_equal_key_depth_swp(depth + 1, seen, symbols_with_pos_enabled);
-                let cdr_key = cdr.to_equal_key_depth_swp(depth + 1, seen, symbols_with_pos_enabled);
-                seen.pop();
-                HashKey::EqualCons(Box::new(car_key), Box::new(cdr_key))
-            }
+            ValueKind::Cons => self.equal_cons_key(depth, seen, symbols_with_pos_enabled, budget),
             ValueKind::Veclike(VecLikeType::BoolVector) => match self.as_bool_vector_obj() {
                 Some(bv) => HashKey::BoolVector(Box::new((bv.nbits, bv.words().into()))),
                 None => self.to_eq_key(),
@@ -4231,20 +5233,21 @@ impl TaggedValue {
                 ) =>
             {
                 let ptr = self.bits();
-                if let Some(index) = seen.iter().position(|&p| p == ptr) {
-                    return HashKey::Cycle(index as u32);
+                if let Some(index) = seen.index_of(ptr) {
+                    return HashKey::Cycle(index);
                 }
                 seen.push(ptr);
-                let view = StructuralPseudovectorView::from_value(self, kind)
+                let view = StructuralPseudovectorView::from_value(&self, kind)
                     .expect("structural pseudovector kind must expose its storage");
                 let mut keys = Vec::with_capacity(view.len() + 3);
                 keys.push(HashKey::Text(view.hash_tag().into()));
                 view.append_shape_hash_keys(&mut keys);
                 for index in 0..view.len() {
-                    keys.push(view.slot(index).to_equal_key_depth_swp(
+                    keys.push(view.slot(index).to_equal_key_depth_budgeted(
                         depth + 1,
                         seen,
                         symbols_with_pos_enabled,
+                        budget,
                     ));
                 }
                 seen.pop();
@@ -4258,10 +5261,11 @@ impl TaggedValue {
                         overlay.buffer.map(|buffer| buffer.0),
                         start,
                         end,
-                        overlay.plist.to_equal_key_depth_swp(
+                        overlay.plist.to_equal_key_depth_budgeted(
                             depth + 1,
                             seen,
                             symbols_with_pos_enabled,
+                            budget,
                         ),
                     )))
                 } else {
@@ -4270,8 +5274,8 @@ impl TaggedValue {
             }
             ValueKind::Veclike(VecLikeType::ByteCode) => {
                 let ptr = self.bits();
-                if let Some(index) = seen.iter().position(|&p| p == ptr) {
-                    return HashKey::Cycle(index as u32);
+                if let Some(index) = seen.index_of(ptr) {
+                    return HashKey::Cycle(index);
                 }
                 seen.push(ptr);
                 let key = bytecode_semantics().to_equal_key(
@@ -4279,14 +5283,15 @@ impl TaggedValue {
                     depth + 1,
                     seen,
                     symbols_with_pos_enabled,
+                    budget,
                 );
                 seen.pop();
                 key
             }
             ValueKind::Veclike(VecLikeType::Lambda) => {
                 let ptr = self.bits();
-                if let Some(index) = seen.iter().position(|&p| p == ptr) {
-                    return HashKey::Cycle(index as u32);
+                if let Some(index) = seen.index_of(ptr) {
+                    return HashKey::Cycle(index);
                 }
                 seen.push(ptr);
                 let key = closure_to_equal_key(
@@ -4294,6 +5299,7 @@ impl TaggedValue {
                     depth + 1,
                     seen,
                     crate::tagged::SymbolMode::from(symbols_with_pos_enabled),
+                    budget,
                 );
                 seen.pop();
                 key
@@ -4304,7 +5310,10 @@ impl TaggedValue {
 
     #[doc(hidden)]
     pub fn memory_use_counts_snapshot() -> [i64; 7] {
-        let mut counts = with_tagged_heap(|heap| heap.memory_use_counts_snapshot());
+        // SAFETY: reads allocation counter telemetry only; never collects,
+        // re-enters `with_tagged_heap`, mints capability tokens, or mutates
+        // any Lisp payload.
+        let mut counts = unsafe { with_tagged_heap(|heap| heap.memory_use_counts_snapshot()) };
         let thread_local_counts = THREAD_LOCAL_ALLOCATION_COUNTS.with(|counts| counts.get());
         for (count, extra) in counts.iter_mut().zip(thread_local_counts) {
             *count = count.wrapping_add(extra);
@@ -4323,7 +5332,10 @@ impl TaggedValue {
     /// Return the live cons-cell count for `(garbage-collect)` statistics.
     #[doc(hidden)]
     pub fn cons_live_count_snapshot() -> i64 {
-        with_tagged_heap(|heap| heap.cons_live_count_exact() as i64)
+        // SAFETY: computes read-only live cons count; never collects,
+        // re-enters `with_tagged_heap`, mints capability tokens, or mutates
+        // any Lisp payload.
+        unsafe { with_tagged_heap(|heap| heap.cons_live_count_exact() as i64) }
     }
 }
 
@@ -4495,27 +5507,21 @@ impl EqualSeenPair {
 /// does not expose their slots through ordinary Lisp record or sequence APIs.
 #[derive(Clone, Copy)]
 pub(crate) enum StructuralPseudovectorView<'a> {
-    Vector(&'a [Value]),
-    Record(&'a [Value]),
+    Vector(&'a LispValueSlice),
+    Record(&'a LispValueSlice),
     // Keep the existing private wrapper slot equality/hash contract while
     // excluding nodes from ordinary record access and cross-type equality.
-    TsNode(&'a [Value]),
+    TsNode(&'a LispValueSlice),
     CharTable(&'a CharTableObj),
     SubCharTable(&'a SubCharTableObj),
 }
 
-impl StructuralPseudovectorView<'_> {
-    pub(crate) fn from_value(value: Value, kind: VecLikeType) -> Option<Self> {
+impl<'a> StructuralPseudovectorView<'a> {
+    pub(crate) fn from_value(value: &'a Value, kind: VecLikeType) -> Option<Self> {
         match kind {
-            VecLikeType::Vector => value
-                .as_vector_data()
-                .map(|slots| Self::Vector(slots.as_slice())),
-            VecLikeType::Record => value
-                .as_record_data()
-                .map(|slots| Self::Record(slots.as_slice())),
-            VecLikeType::TsNode => value
-                .as_treesit_node_data()
-                .map(|slots| Self::TsNode(slots.as_slice())),
+            VecLikeType::Vector => value.as_vector_data().map(Self::Vector),
+            VecLikeType::Record => value.as_record_data().map(Self::Record),
+            VecLikeType::TsNode => value.as_treesit_node_data().map(Self::TsNode),
             VecLikeType::CharTable => value.as_char_table_obj().map(Self::CharTable),
             VecLikeType::SubCharTable => value.as_sub_char_table_obj().map(Self::SubCharTable),
             _ => None,
@@ -4549,7 +5555,7 @@ impl StructuralPseudovectorView<'_> {
 
     pub(crate) fn slot(self, index: usize) -> Value {
         match self {
-            Self::Vector(slots) | Self::Record(slots) | Self::TsNode(slots) => slots[index],
+            Self::Vector(slots) | Self::Record(slots) | Self::TsNode(slots) => slots.at(index),
             Self::CharTable(table) => match index {
                 0 => table.defalt.get(),
                 1 => table.parent.get(),
@@ -4642,26 +5648,59 @@ pub fn equal_value_inner(
         if !right.is_cons() {
             return false;
         }
+        // GNU fns.c:2916-2934 (`FOR_EACH_TAIL_BASIC`): list length does not
+        // raise depth. Cars use `depth + 1`. A non-cons tail recurses once.
+        // This bool walk returns false past depth 200. It does not signal;
+        // `try_equal_value_inner` is the Lisp `equal` that does.
         if depth > 10 {
             let pair = EqualSeenPair::new(left, right);
             if !seen.get_or_insert_with(HashSet::new).insert(pair) {
                 return true;
             }
         }
-        let a_car = left.cons_car();
-        let a_cdr = left.cons_cdr();
-        let b_car = right.cons_car();
-        let b_cdr = right.cons_cdr();
+        let mut left_tail = left;
+        let mut right_tail = right;
+        let mut tail_guard = EqualTailGuard::new(left_tail);
+        while left_tail.is_cons() {
+            if !right_tail.is_cons() {
+                return false;
+            }
+            let left_car = left_tail.cons_car();
+            let right_car = right_tail.cons_car();
+            if !equal_value_inner(
+                &left_car,
+                &right_car,
+                depth + 1,
+                seen,
+                symbols_with_pos_enabled,
+                kind,
+            ) {
+                return false;
+            }
+            let left_cdr = left_tail.cons_cdr();
+            right_tail = right_tail.cons_cdr();
+            if left_cdr.bits() == right_tail.bits() {
+                return true;
+            }
+            left_tail = left_cdr;
+            if tail_guard.found_cycle_after_advance(left_tail) {
+                return if right_tail.is_cons() {
+                    equal_value_cycle_bool(
+                        right_tail,
+                        left_tail,
+                        depth,
+                        seen,
+                        symbols_with_pos_enabled,
+                        kind,
+                    )
+                } else {
+                    false
+                };
+            }
+        }
         return equal_value_inner(
-            &a_car,
-            &b_car,
-            depth + 1,
-            seen,
-            symbols_with_pos_enabled,
-            kind,
-        ) && equal_value_inner(
-            &a_cdr,
-            &b_cdr,
+            &left_tail,
+            &right_tail,
             depth + 1,
             seen,
             symbols_with_pos_enabled,
@@ -4717,8 +5756,8 @@ pub fn equal_value_inner(
         | VecLikeType::CharTable
         | VecLikeType::SubCharTable => {
             let (Some(left_view), Some(right_view)) = (
-                StructuralPseudovectorView::from_value(left, left_type),
-                StructuralPseudovectorView::from_value(right, right_type),
+                StructuralPseudovectorView::from_value(&left, left_type),
+                StructuralPseudovectorView::from_value(&right, right_type),
             ) else {
                 return false;
             };
@@ -4857,6 +5896,49 @@ fn equal_value_cycle(
     }
     // o1 (right) terminated but o2 (left) is circular: not equal.
     Ok(false)
+}
+
+/// Bool twin of [`equal_value_cycle`]. Car comparison uses
+/// [`equal_value_inner`], so a nest past depth 200 is `false` and
+/// `PartialEq` does not build a signal.
+fn equal_value_cycle_bool(
+    o1: Value,
+    o2: Value,
+    depth: usize,
+    seen: &mut Option<HashSet<EqualSeenPair>>,
+    symbols_with_pos_enabled: bool,
+    kind: EqualKind,
+) -> bool {
+    let mut o1_tail = o1;
+    let mut o2_tail = o2;
+    let mut guard = EqualTailGuard::new(o1_tail);
+    while o1_tail.is_cons() {
+        if !o2_tail.is_cons() {
+            return false;
+        }
+        let o1_car = o1_tail.cons_car();
+        let o2_car = o2_tail.cons_car();
+        if !equal_value_inner(
+            &o1_car,
+            &o2_car,
+            depth + 1,
+            seen,
+            symbols_with_pos_enabled,
+            kind,
+        ) {
+            return false;
+        }
+        let o1_cdr = o1_tail.cons_cdr();
+        o2_tail = o2_tail.cons_cdr();
+        if o1_cdr.bits() == o2_tail.bits() {
+            return true;
+        }
+        o1_tail = o1_cdr;
+        if guard.found_cycle_after_advance(o1_tail) {
+            return true;
+        }
+    }
+    false
 }
 
 #[doc(hidden)]
@@ -5032,8 +6114,8 @@ pub fn try_equal_value_inner(
         | VecLikeType::CharTable
         | VecLikeType::SubCharTable => {
             let (Some(left_view), Some(right_view)) = (
-                StructuralPseudovectorView::from_value(left, left_type),
-                StructuralPseudovectorView::from_value(right, right_type),
+                StructuralPseudovectorView::from_value(&left, left_type),
+                StructuralPseudovectorView::from_value(&right, right_type),
             ) else {
                 return Ok(false);
             };
@@ -5101,8 +6183,9 @@ pub fn try_equal_value_inner(
 fn closure_to_equal_key(
     value: Value,
     depth: usize,
-    seen: &mut Vec<usize>,
+    seen: &mut EqualKeySeen,
     symbol_mode: crate::tagged::SymbolMode,
+    budget: &mut usize,
 ) -> HashKey {
     let symbols_with_pos_enabled = match symbol_mode {
         crate::tagged::SymbolMode::Bare => false,
@@ -5118,12 +6201,14 @@ fn closure_to_equal_key(
 
     let mut slots = vec![
         HashKey::Text("lambda".into()),
-        arglist.to_equal_key_depth_swp(depth + 1, seen, symbols_with_pos_enabled),
+        arglist.to_equal_key_depth_budgeted(depth + 1, seen, symbols_with_pos_enabled, budget),
         value.closure_body_value().map_or(HashKey::Nil, |body| {
-            body.to_equal_key_depth_swp(depth + 1, seen, symbols_with_pos_enabled)
+            body.to_equal_key_depth_budgeted(depth + 1, seen, symbols_with_pos_enabled, budget)
         }),
         match value.closure_env().unwrap_or(None) {
-            Some(env) => env.to_equal_key_depth_swp(depth + 1, seen, symbols_with_pos_enabled),
+            Some(env) => {
+                env.to_equal_key_depth_budgeted(depth + 1, seen, symbols_with_pos_enabled, budget)
+            }
             None => HashKey::Text("dynamic".into()),
         },
     ];
@@ -5136,7 +6221,12 @@ fn closure_to_equal_key(
         // string value (valid UTF-8 -> text key, eight-bit -> eq key) instead of
         // the retired storage form, whose in-Unicode sentinels would collide a
         // real Private-Use glyph with a raw byte in the equal hash key.
-        let doc = doc_value.to_equal_key_depth_swp(depth + 1, seen, symbols_with_pos_enabled);
+        let doc = doc_value.to_equal_key_depth_budgeted(
+            depth + 1,
+            seen,
+            symbols_with_pos_enabled,
+            budget,
+        );
         slots.push(doc);
     }
 

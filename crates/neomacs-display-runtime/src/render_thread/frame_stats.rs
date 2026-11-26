@@ -53,6 +53,9 @@ pub(super) static RETAINED_STATIC_BUILDS: AtomicU64 = AtomicU64::new(0);
 /// Certified off-screen body rasterizations and viewport crops of those rasters.
 pub(super) static SCROLL_RASTER_BUILDS: AtomicU64 = AtomicU64::new(0);
 pub(super) static SCROLL_RASTER_BLITS: AtomicU64 = AtomicU64::new(0);
+/// Safe undercoverage caused by absent windows in an auxiliary snapshot whose
+/// logical base no longer matches the current native frame.
+pub(super) static AUXILIARY_COVERAGE_CONSERVATIVE_REVOCATIONS: AtomicU64 = AtomicU64::new(0);
 /// Resize content crossfade quads drawn: the previous presentation's
 /// picture fading out beneath a freshly installed child-frame payload.
 pub(super) static CHILD_FRAME_CROSSFADE_QUADS: AtomicU64 = AtomicU64::new(0);
@@ -238,6 +241,7 @@ pub struct FrameSchedSnapshot {
     pub retained_static_builds: u64,
     pub scroll_raster_builds: u64,
     pub scroll_raster_blits: u64,
+    pub auxiliary_coverage_conservative_revocations: u64,
     pub composite_only_frames: u64,
     /// Latest commit-to-submission latency; historical diagnostic field name.
     pub last_commit_to_present_us: u64,
@@ -309,6 +313,8 @@ pub fn snapshot() -> FrameSchedSnapshot {
         retained_static_builds: RETAINED_STATIC_BUILDS.load(Ordering::Relaxed),
         scroll_raster_builds: SCROLL_RASTER_BUILDS.load(Ordering::Relaxed),
         scroll_raster_blits: SCROLL_RASTER_BLITS.load(Ordering::Relaxed),
+        auxiliary_coverage_conservative_revocations: AUXILIARY_COVERAGE_CONSERVATIVE_REVOCATIONS
+            .load(Ordering::Relaxed),
         composite_only_frames: COMPOSITE_ONLY_FRAMES.load(Ordering::Relaxed),
         last_commit_to_present_us: LAST_COMMIT_TO_SUBMISSION_US.load(Ordering::Relaxed),
         max_commit_to_present_us: MAX_COMMIT_TO_SUBMISSION_US.load(Ordering::Relaxed),
@@ -364,6 +370,8 @@ pub(super) fn maybe_log_snapshot(now: EventTime) {
         retained_static_builds = snap.retained_static_builds,
         scroll_raster_builds = snap.scroll_raster_builds,
         scroll_raster_blits = snap.scroll_raster_blits,
+        auxiliary_coverage_conservative_revocations =
+            snap.auxiliary_coverage_conservative_revocations,
         full_frame_texture_refusals = FULL_FRAME_TEXTURE_REFUSALS.load(Ordering::Relaxed),
         composite_only_frames = snap.composite_only_frames,
         last_commit_to_present_us = snap.last_commit_to_present_us,

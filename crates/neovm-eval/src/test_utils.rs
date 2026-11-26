@@ -666,6 +666,7 @@ mod unit_runtime {
             s::terminal_handle_value,
             unit_terminal_delete_noelisp,
             s::terminal_frame_terminal,
+            s::terminal_suspend_emacs,
             s::terminal_print_handle,
             s::terminal_configure_window_system_runtime,
             s::terminal_park_carrier_tls,
@@ -678,6 +679,7 @@ mod unit_runtime {
             s::terminal_current_registry_handle,
             s::terminal_install_registry_handle,
             s::terminal_install_owner_registry_handle,
+            Some(s::terminal_detach_registry),
         ),
         FontsetHooks::new(
             s::fontset_alias_alist_startup_value,
@@ -718,6 +720,7 @@ mod unit_runtime {
             Some(s::xfaces_carrier_tls_fingerprint),
             s::xfaces_current_registry_handle,
             s::xfaces_install_registry_handle,
+            Some(s::xfaces_detach_registry),
         ),
         s::timefns_reset,
         s::sqlite_reset,
@@ -784,6 +787,16 @@ mod unit_runtime {
         Ok(())
     }
 
+    fn unit_try_controlling_tty_emergency_escape(_ctx: &mut Context) -> bool {
+        false
+    }
+
+    fn unit_write_fatal_abort_diagnostic() {}
+
+    fn unit_terminate_with_abort(_print_backtrace: bool) -> ! {
+        std::process::abort()
+    }
+
     static INPUT: InputHooks = InputHooks::new(
         s::input_interrupt_for_input_event_if_requested,
         unit_os_signal_pending,
@@ -793,6 +806,9 @@ mod unit_runtime {
             read_fd: s::input_signal_wake_pipe_read_fd,
             drain: s::input_drain_signal_wake_pipe,
         },
+        unit_try_controlling_tty_emergency_escape,
+        unit_write_fatal_abort_diagnostic,
+        unit_terminate_with_abort,
     );
 
     static CALL_INTERACTIVELY: CallInteractivelyHooks =
@@ -918,6 +934,7 @@ mod unit_runtime {
             s::display_window_window_hscroll,
             s::display_window_invisible_status,
             s::display_window_invisible_source_run_end,
+            s::display_window_composition_font_or_frame_at,
         );
 
     static DISPLAY_QUERY: DisplayQueryHooks = DisplayQueryHooks::new(
@@ -2872,8 +2889,8 @@ mod unit_runtime {
         let result = call(context, vec![vector, Value::fixnum(-2), Value::NIL]).unwrap();
         let elements = result.as_vector_data().expect("substring vector result");
         assert_eq!(elements.len(), 2);
-        assert_eq!(elements[0], Value::fixnum(2));
-        assert_eq!(elements[1], Value::fixnum(3));
+        assert_eq!(elements.at(0), Value::fixnum(2));
+        assert_eq!(elements.at(1), Value::fixnum(3));
         assert!(!neovm_value::value::eq_value(&result, &vector));
 
         let source = Value::string("abcd");

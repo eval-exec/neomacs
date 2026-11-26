@@ -83,14 +83,14 @@ fn store_function(op: Op) -> ByteCodeFunction {
         optional: Vec::new(),
         rest: None,
     });
-    function.lexical = true;
-    function.ops = vec![Op::StackRef(1), Op::StackRef(1), op, Op::Return];
-    function.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(8);
+    function.set_lexical(true);
+    function.set_ops(vec![Op::StackRef(1), Op::StackRef(1), op, Op::Return]);
+    function.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(8));
     function
 }
 
 fn native(context: &mut Context, leaf: &CompiledLeaf, args: &[Value]) -> Value {
-    match leaf.call(context as *mut Context as *mut u8, args) {
+    match unsafe { leaf.call(context as *mut Context as *mut u8, args) } {
         NativeRun::Ok(bits) => unsafe {
             /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
             Value::from_bits(bits)
@@ -107,7 +107,8 @@ fn cons_shims() -> usize {
 fn heapless_runtime_lowering_does_not_install_a_fallback_heap() {
     let mut heap = neovm_value::tagged::gc::TaggedHeap::new();
     neovm_value::tagged::gc::set_tagged_heap(&mut heap);
-    neovm_value::tagged::gc::clear_tagged_heap_if_installed(&heap);
+    // SAFETY: standalone bare `TaggedHeap` test fixture cleared to exercise null-heap store.
+    unsafe { neovm_value::tagged::gc::clear_tagged_heap_if_installed(&heap) };
     // Each store reaches RtCtx's lazy generational-mode capture. With no
     // installed heap it must choose the legacy gate without creating one.
     for op in [Op::Setcar, Op::Setcdr] {
@@ -390,11 +391,7 @@ fn blv(context: &Context) -> *mut LispBufferLocalValue {
 fn blv_cell(context: &Context, local: bool) -> Value {
     // SAFETY: blv checked the record's live localized owner.
     let blv = unsafe { &*blv(context) };
-    if local {
-        blv.valcell.get()
-    } else {
-        blv.defcell.get()
-    }
+    if local { blv.valcell() } else { blv.defcell() }
 }
 
 fn compile_blv(context: &Context, ops: &[Op], constants: &[Value], arity: usize) -> CompiledLeaf {
@@ -500,7 +497,6 @@ fn mapped_blv_default_never_uses_the_owned_cons_trailer_or_a_baked_remembered_fa
     use super::shims::VARSET_SHIM_CALLS;
     use neovm_value::tagged::header::{ConsCdrWord, ConsCell, ConsWord};
     let mut context = blv_fixture(false);
-    let record = blv(&context);
     let old_default = blv_cell(&context, false);
     // One process-lifetime image cell keeps the mapped span exact. It has no
     // 64 KiB owned-block trailer and is registered like a pdump loader cell.
@@ -509,14 +505,16 @@ fn mapped_blv_default_never_uses_the_owned_cons_trailer_or_a_baked_remembered_fa
         cdr_or_next: ConsCdrWord::new(old_default.cons_cdr()),
     }));
     // SAFETY: leaked writable storage satisfies mapped range lifetime and
-    // alignment. Both BLV pointers are updated while the collector is idle.
+    // alignment. `replace_blv_defcell_for_test` updates `defcell` (and
+    // `valcell` while equal to `defcell`, which holds for `blv_fixture(false)`)
+    // while the collector is idle.
     let owner = unsafe {
         context.tagged_heap.register_mapped_cons_range(mapped, 1);
-        let owner = Value::from_cons_ptr(mapped);
-        (*record).defcell.store_atomic(owner);
-        (*record).valcell.store_atomic(owner);
-        owner
+        Value::from_cons_ptr(mapped)
     };
+    context
+        .obarray
+        .replace_blv_defcell_for_test(intern("u34-inline-blv"), owner);
     context.gc_collect_exact();
     let leaf = blv_set_leaf(&context);
     let roots = context.save_specpdl_roots();
@@ -580,14 +578,14 @@ fn opt_store_leaf(ops: Vec<Op>) -> (CompiledLeaf, String) {
     let _restore = Restore;
     force_opt_for_test(Some(OptMode::Opt), Some(OptAdmit::ALL));
     let mut function = store_function(Op::Setcar);
-    function.ops = ops;
+    function.set_ops(ops);
     function.seal_hand_assembled_ops();
     let mut leaf = None;
     let clif = captured_clif(|| {
         leaf = Some(
             lower_leaf_full_osr_with_opt(
                 function.executable_ops(),
-                &function.constants,
+                function.constants(),
                 2,
                 function.executable_gnu_byte_offset_map(),
                 None,
@@ -660,7 +658,10 @@ fn gen1_optimized_fixnum_store_needs_no_card_mark() {
     for input in [float, Value::make_int(Value::MOST_POSITIVE_FIXNUM)] {
         let ctx_ptr = &mut context as *mut Context as *mut u8;
         assert!(
-            matches!(leaf.call(ctx_ptr, &[owner, input]), NativeRun::DeoptAt(_)),
+            matches!(
+                unsafe { leaf.call(ctx_ptr, &[owner, input]) },
+                NativeRun::DeoptAt(_)
+            ),
             "a non-fixnum result leaves before the store"
         );
         assert_eq!(owner.cons_car(), Value::make_int(42));

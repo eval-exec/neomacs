@@ -9,7 +9,9 @@
 //! objects, which are never marked and get swept while live.
 
 use super::*;
-use crate::tagged::header::{LispValueVec, VecLikeHeader, VecLikeType, VectorObj};
+use crate::tagged::header::{
+    AtomicTaggedValue, LispValueVec, VecLikeHeader, VecLikeType, VectorObj,
+};
 
 /// The image's objects, adjacent in memory.
 #[repr(C)]
@@ -19,7 +21,7 @@ pub struct FakeImage {
     vector: VectorObj,
     /// Backing for a vector whose slots are mapped storage (a store must
     /// copy them first); `vector`'s own slots are owned.
-    mapped_slots: [TaggedValue; 3],
+    mapped_slots: [AtomicTaggedValue; 3],
 }
 
 impl FakeImage {
@@ -36,7 +38,7 @@ impl FakeImage {
                 header: VecLikeHeader::new(VecLikeType::Vector),
                 data: LispValueVec::owned(vec![TaggedValue::NIL; 2]),
             },
-            mapped_slots: [TaggedValue::fixnum(9); 3],
+            mapped_slots: std::array::from_fn(|_| AtomicTaggedValue::new(TaggedValue::fixnum(9))),
         }));
         if mapped_storage {
             let slots = image.mapped_slots.as_ptr();

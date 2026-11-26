@@ -33,8 +33,12 @@ pub(super) fn parse_option(arg: &str) -> Option<Options> {
 
 /// Called before starting any runtime threads. Background startup uses a
 /// close-on-exec socketpair, so child programs cannot hold the readiness peer.
+///
+/// # Safety
+/// The caller must ensure no other threads exist in the current process
+/// (required by `std::env::remove_var` and `libc::fork`).
 #[cfg(unix)]
-pub(super) fn prepare(options: Option<&Options>) -> Result<Option<DaemonNotifier>, String> {
+pub(super) unsafe fn prepare(options: Option<&Options>) -> Result<Option<DaemonNotifier>, String> {
     use std::io::{Read, Write};
     use std::os::fd::AsRawFd;
     use std::os::unix::net::UnixStream;
@@ -87,7 +91,8 @@ pub(super) fn prepare(options: Option<&Options>) -> Result<Option<DaemonNotifier
     // Automatic startup transfers the endpoint lock to this launcher before
     // the requester can abandon its wait. Only the launcher retains it: the
     // evaluator and all Lisp subprocesses must not own this capability.
-    let startup_lock = inherited_startup_lock()?;
+    // SAFETY: caller guarantees this process is single-threaded.
+    let startup_lock = unsafe { inherited_startup_lock() }?;
     let (mut parent, mut child) = UnixStream::pair().map_err(|error| error.to_string())?;
     // SAFETY: this is the early, single-threaded startup boundary, before
     // logging, evaluator workers, native displays or signal-reader threads.
@@ -133,8 +138,11 @@ pub(super) fn prepare(options: Option<&Options>) -> Result<Option<DaemonNotifier
     })))
 }
 
+/// # Safety
+/// The caller must ensure no other threads exist in the current process
+/// (required by `std::env::remove_var`).
 #[cfg(unix)]
-fn inherited_startup_lock() -> Result<Option<std::fs::File>, String> {
+unsafe fn inherited_startup_lock() -> Result<Option<std::fs::File>, String> {
     use std::os::fd::FromRawFd;
     use std::os::unix::fs::MetadataExt;
     let Some(raw) = std::env::var_os("NEOMACS_DAEMON_LOCK_FD") else {
@@ -200,8 +208,10 @@ fn settle_failed_child(pid: libc::pid_t) -> String {
     }
 }
 
+/// # Safety
+/// Matches the Unix single-threaded startup contract.
 #[cfg(not(unix))]
-pub(super) fn prepare(options: Option<&Options>) -> Result<Option<DaemonNotifier>, String> {
+pub(super) unsafe fn prepare(options: Option<&Options>) -> Result<Option<DaemonNotifier>, String> {
     if options.is_some() {
         Err("daemon mode is not supported on this platform".into())
     } else {

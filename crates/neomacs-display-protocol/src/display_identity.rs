@@ -3,8 +3,8 @@
 //! A display label is not a unique ID. In particular an inherited Wayland
 //! connection has a stable backend label, not a fabricated socket pathname.
 
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::{Arc, RwLock};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, strum::EnumIter, strum::IntoStaticStr)]
 pub enum GraphicalBackend {
@@ -49,6 +49,7 @@ struct GraphicalConnection {
     /// fonts. Ordinary cache invalidation must not raise this minimum: GNU
     /// font_close_object decrements n_fonts without recomputing it.
     smallest_opened_font_height: AtomicU32,
+    font_render_options: RwLock<crate::DesktopFontRenderOptions>,
 }
 
 impl PartialEq for GraphicalDisplayIdentity {
@@ -88,6 +89,7 @@ impl GraphicalDisplayIdentity {
                 backend,
                 name: DisplayName::Connection(name),
                 smallest_opened_font_height: AtomicU32::new(0),
+                font_render_options: RwLock::new(Default::default()),
             }),
         })
     }
@@ -98,8 +100,41 @@ impl GraphicalDisplayIdentity {
                 backend,
                 name: DisplayName::BackendLabel,
                 smallest_opened_font_height: AtomicU32::new(0),
+                font_render_options: RwLock::new(Default::default()),
             }),
         }
+    }
+
+    /// GNU PGTK consumes these preferences while opening fonts as well as
+    /// drawing. The connection owns one snapshot shared by layout services;
+    /// X11 and other backends retain their own metric policy.
+    pub fn font_render_options(&self) -> Option<crate::DesktopFontRenderOptions> {
+        (self.backend() == GraphicalBackend::Wayland).then(|| {
+            *self
+                .connection
+                .font_render_options
+                .read()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+        })
+    }
+
+    /// Publish an effective settings edge. Equal labels on independent
+    /// connections never share this state, and duplicate observations do not
+    /// require font-cache invalidation.
+    pub fn observe_font_render_options(&self, options: crate::DesktopFontRenderOptions) -> bool {
+        if self.backend() != GraphicalBackend::Wayland {
+            return false;
+        }
+        let mut current = self
+            .connection
+            .font_render_options
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if *current == options {
+            return false;
+        }
+        *current = options;
+        true
     }
 
     /// GNU's display-wide smallest opened font ascent plus descent.

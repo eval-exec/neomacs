@@ -79,7 +79,7 @@ fn run(name: &str) {
         let leaf = leaf_borrow.as_ref().expect("the switch body compiles");
         let mut context = cell.borrow_mut();
         let ctx_ptr = &mut *context as *mut crate::emacs_core::eval::Context as *mut u8;
-        match leaf.call(ctx_ptr, args) {
+        match unsafe { leaf.call(ctx_ptr, args) } {
             crate::emacs_core::jit::compile::NativeRun::Ok(bits) => (0, bits, String::new()),
             crate::emacs_core::jit::compile::NativeRun::Signal => (1, 0, String::new()),
             other => (2, 0, format!("{other:?}")),
@@ -151,6 +151,10 @@ shell!(a6_ht_gc_old_tables_remember_young_values);
 shell!(a6_ht_b7_make_copy_collect_resume_and_reclaim);
 shell!(a6_ht_b7_copy_while_another_owner_mutates);
 shell!(a6_ht_b7_copy_active_test_starts_quiescent_and_bad_home_is_atomic);
+shell!(c9_user_test_hold_refuses_clear_and_finish_while_held);
+shell!(c9_user_test_hold_drop_releases_clear_and_finish);
+shell!(c9_user_test_hold_refuses_retire_rooted_and_native_run_access);
+shell!(c9_user_test_hold_drop_releases_retire_rooted);
 
 #[cfg(feature = "perf-probes")]
 #[test]

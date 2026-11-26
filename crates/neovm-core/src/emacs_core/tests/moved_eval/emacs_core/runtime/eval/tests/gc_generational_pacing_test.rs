@@ -378,7 +378,7 @@ fn generational_done_poll_terminates_immediately_and_folds_resident_satb_partial
     );
     assert!(context.tagged_heap().value_is_marked_for_test(orphan));
     // SAFETY: test-only owner-thread heap setup through the non-swappable mutable accessor contract; the view is used in place for allocation/policy and is never swapped or moved across Worlds.
-    unsafe { context.tagged_heap_mut() }.finish_incremental_sweep_now();
+    unsafe { context.tagged_heap_mut() }.finish_incremental_sweep_now_for_test();
     assert!(context.tagged_heap().owns_heap_value_for_test(orphan));
 }
 
@@ -464,7 +464,7 @@ fn scheduler_finishes_residual_major_and_skips_minor() {
             neovm_value::tagged::value::TaggedValue::fixnum(241)
         );
         assert_eq!(
-            child.as_vector_data().unwrap()[0],
+            child.as_vector_data().unwrap().at(0),
             neovm_value::tagged::value::TaggedValue::fixnum(239)
         );
     }

@@ -64,7 +64,7 @@ fn jit_bg_osr_uses_full_feedback_backend_without_a_countdown() {
             2,
         );
         f.jit_runtime()
-            .call_sites_for(f.executable_ops(), &f.constants)
+            .call_sites_for(f.executable_ops(), f.constants())
             .site_at(7)
             .expect("callback feedback")
             .observe(callback);

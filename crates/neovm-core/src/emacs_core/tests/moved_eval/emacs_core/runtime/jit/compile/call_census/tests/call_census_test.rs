@@ -142,7 +142,7 @@ fn the_census_counts_apply_opcode_and_builtin_targets() {
                 )
                 .expect("apply opcode compiles");
                 assert!(matches!(
-                    leaf.call(core::ptr::from_mut(&mut ev).cast(), &[]),
+                    unsafe { leaf.call(core::ptr::from_mut(&mut ev).cast(), &[]) },
                     NativeRun::Ok(_)
                 ));
             }
@@ -165,7 +165,7 @@ fn the_census_counts_apply_opcode_and_builtin_targets() {
                 )
                 .expect("apply builtin compiles");
                 assert!(matches!(
-                    leaf.call(core::ptr::from_mut(&mut ev).cast(), &[]),
+                    unsafe { leaf.call(core::ptr::from_mut(&mut ev).cast(), &[]) },
                     NativeRun::Ok(_)
                 ));
             }
@@ -261,7 +261,9 @@ fn accepted_spec_fast_counts(on: bool) -> ((u64, u64), (u64, u64)) {
             let mut first = (0, 0);
             for pass in 0..2 {
                 assert!(matches!(
-                    leaf.call(core::ptr::from_mut(&mut ev).cast(), &[Value::make_int(9)]),
+                    unsafe {
+                        leaf.call(core::ptr::from_mut(&mut ev).cast(), &[Value::make_int(9)])
+                    },
                     NativeRun::Ok(_)
                 ));
                 if pass == 0 {

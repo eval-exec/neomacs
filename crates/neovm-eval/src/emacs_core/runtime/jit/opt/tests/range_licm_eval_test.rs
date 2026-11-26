@@ -51,17 +51,17 @@ fn bytecode(ops: Vec<Op>, constants: Vec<LispValue>, arity: usize) -> ByteCodeFu
         optional: Vec::new(),
         rest: None,
     });
-    source.lexical = true;
-    source.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(128);
-    source.ops = ops;
-    source.constants = constants.into();
+    source.set_lexical(true);
+    source.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(128));
+    source.set_ops(ops);
+    source.set_constants(constants.into());
     source
 }
 
 fn plan(source: &ByteCodeFunction, prefix: usize, osr: Option<(usize, usize)>) -> Func {
     let params = ParamShape {
         required: source
-            .params
+            .params()
             .stack_shape()
             .expect("fixture stack parameters")
             .required(),
@@ -69,13 +69,13 @@ fn plan(source: &ByteCodeFunction, prefix: usize, osr: Option<(usize, usize)>) -
     };
     let cfg = crate::emacs_core::jit::compile::analyze_cfg(
         source.executable_ops(),
-        &source.constants,
+        source.constants(),
         source.executable_gnu_byte_offset_map(),
         params.native_arity(),
     )
     .expect("source CFG");
     let constants = source
-        .constants
+        .constants()
         .iter()
         .copied()
         .map(ValueBits::from_value)
@@ -127,7 +127,7 @@ fn answer(result: Result<LispValue, Flow>) -> Answer {
 
 fn tier0(ctx: &mut Context, source: &ByteCodeFunction, args: &[LispValue]) -> Answer {
     let _args = Roots::new(args);
-    let _constants = Roots::new(&source.constants);
+    let _constants = Roots::new(source.constants());
     let mut vm = Vm::from_context(ctx);
     vm.force_interpreter_only_for_test();
     answer(vm.execute(source, args.to_vec()))
@@ -141,7 +141,7 @@ fn resume(ctx: &mut Context, source: &ByteCodeFunction, pc: usize, stack: &[Lisp
     assert_eq!(resumed_source.executable_ops(), source.executable_ops());
     let source = &resumed_source;
     let _stack = Roots::new(stack);
-    let _constants = Roots::new(&source.constants);
+    let _constants = Roots::new(source.constants());
     let spec_base = ctx.specpdl.len();
     let condition_base = ctx.condition_stack_depth_for_test();
     let mut vm = Vm::from_context(ctx);
@@ -170,7 +170,7 @@ fn reference(
     let _args = Roots::new(inputs.args);
     let _osr = Roots::new(inputs.osr_stack);
     let _prefix = Roots::new(inputs.prefix);
-    let _constants = Roots::new(&source.constants);
+    let _constants = Roots::new(source.constants());
     let run = match evaluate(func, ctx, inputs) {
         Ok(run) => run,
         Err(EvalError::Flow(flow)) => return (answer(Err(flow)), None),
@@ -663,7 +663,7 @@ fn opt_range_reference_unknown_osr_and_prefix_keep_unproved_checks() {
     // exact patched source pool, never silently replay a stale template value.
     let prefix = plan(&source, 1, None);
     let patched = bytecode(
-        source.ops.clone(),
+        source.ops().clone(),
         arguments(&[LispValue::MOST_POSITIVE_FIXNUM, 0]),
         1,
     );

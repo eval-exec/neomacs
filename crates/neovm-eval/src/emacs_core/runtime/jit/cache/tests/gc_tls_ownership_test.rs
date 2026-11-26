@@ -11,9 +11,9 @@ fn cache_payload() -> Value {
         optional: Vec::new(),
         rest: None,
     });
-    function.ops = vec![Op::Constant(0), Op::Car, Op::Return];
-    function.constants = vec![payload].into();
-    function.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
+    function.set_ops(vec![Op::Constant(0), Op::Car, Op::Return]);
+    function.set_constants(vec![payload].into());
+    function.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
     function.jit_runtime().set_hot_for_test();
     let object = Value::make_bytecode(function.clone());
     assert!(
@@ -38,20 +38,25 @@ fn roots_for(ctx: &Context) -> Vec<Value> {
 #[test]
 fn gc_tls_ownership_jit_reloc_excludes_another_live_heap() {
     crate::emacs_core::jit::compile::force_deopt_for_test(false);
-    let mut first = Context::new(crate::test_utils::unit_runtime());
-    let mut second = Context::new(crate::test_utils::unit_runtime());
+    let first = Context::new(crate::test_utils::unit_runtime());
+    let parked_first = first.park_for_test();
+    let second = Context::new(crate::test_utils::unit_runtime());
     let payload = cache_payload();
     assert!(
         roots_for(&second)
             .iter()
             .any(|root| root.bits() == payload.bits())
     );
+    let parked_second = second.park_for_test();
+    let mut first = parked_first.resume_for_test().expect("resume first heap");
     assert!(
         roots_for(&first)
             .iter()
             .all(|root| root.bits() != payload.bits())
     );
     first.gc_collect_exact();
+    drop(first);
+    let mut second = parked_second.resume_for_test().expect("resume second heap");
     second.setup_thread_locals();
     second.gc_collect_exact();
 }

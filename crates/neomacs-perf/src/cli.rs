@@ -76,6 +76,7 @@ pub enum PerfCommand {
         machine: MachinePolicy,
         counters: Option<CounterScope>,
         previous_suite: Option<PathBuf>,
+        baseline_manifest: Option<PathBuf>,
     },
     Help {
         rendered: String,
@@ -267,6 +268,10 @@ struct SuiteArgs {
     /// Link this artifact to an earlier immutable suite artifact.
     #[arg(long)]
     previous_suite: Option<PathBuf>,
+    /// Verify the baseline executable and its sibling portable dump against a
+    /// committed baseline manifest JSON before running any scenario.
+    #[arg(long)]
+    baseline_manifest: Option<PathBuf>,
     #[command(flatten)]
     counters: CounterArgs,
 }
@@ -559,6 +564,7 @@ impl TryFrom<PerfSubcommand> for PerfCommand {
                 },
                 counters: arguments.counters.scope(),
                 previous_suite: arguments.previous_suite,
+                baseline_manifest: arguments.baseline_manifest,
             },
         })
     }
@@ -762,12 +768,14 @@ pub fn run_cli(
             machine,
             counters,
             previous_suite,
+            baseline_manifest,
         } => {
             let request = SuiteRequest::new(suite, baseline_editor, candidate_editor, samples)
                 .with_timeout(timeout)
                 .with_machine_policy(machine)
                 .with_counters(counters)
-                .with_previous_suite(previous_suite);
+                .with_previous_suite(previous_suite)
+                .with_baseline_manifest(baseline_manifest);
             let report = PerfHarness::new(workspace_root).suite(&request)?;
             println!("suite   = {}", report.artifact_path.display());
             match &report.artifact.verdict {

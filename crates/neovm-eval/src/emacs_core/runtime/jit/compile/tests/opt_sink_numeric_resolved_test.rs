@@ -42,7 +42,7 @@ fn opt_sink_numeric_resolved_float_keeps_original_guards_and_frames_without_dupl
             vec![Value::make_float(2.0)],
             2,
         );
-        roots.add(&f.constants);
+        roots.add(f.constants());
         let cases = [-0.0, 0.0, 3.0, f64::NAN, f64::INFINITY, f64::NEG_INFINITY]
             .into_iter()
             .map(|x| vec![Value::make_float(x), Value::make_float(-0.0)])
@@ -77,24 +77,26 @@ fn opt_sink_numeric_resolved_float_keeps_original_guards_and_frames_without_dupl
         roots.add(&[second]);
         assert_ne!(first.bits(), second.bits(), "fresh dynamic result identity");
         assert_ne!(first.bits(), valid[0].bits());
-        assert_ne!(first.bits(), f.constants[0].bits());
+        assert_ne!(first.bits(), f.constants()[0].bits());
 
         let bad_first = [Value::symbol("not-a-number"), Value::make_int(1)];
         roots.add(&bad_first);
         let expected = tier0(&mut ctx, &f, &bad_first);
         for leaf in [&baseline, &selected] {
-            let NativeRun::DeoptAt(exit) = leaf.call_consts(
-                &mut ctx as *mut Context as *mut u8,
-                f.constants.as_ptr(),
-                &bad_first,
-            ) else {
+            let NativeRun::DeoptAt(exit) = (unsafe {
+                leaf.call_consts(
+                    &mut ctx as *mut Context as *mut u8,
+                    f.constants().as_ptr(),
+                    &bad_first,
+                )
+            }) else {
                 panic!("original pc2 Borrow type guard must remain");
             };
             roots.add(&exit.stack);
             assert_eq!(exit.pc, 2);
             assert_eq!(
                 exit.stack,
-                [bad_first[0], bad_first[1], bad_first[0], f.constants[0]]
+                [bad_first[0], bad_first[1], bad_first[0], f.constants()[0]]
             );
             assert_eq!(observe(&resume(&mut ctx, &f, &exit)), observe(&expected));
             assert_eq!(ctx.jit_root_stack_top, 0);
@@ -105,17 +107,19 @@ fn opt_sink_numeric_resolved_float_keeps_original_guards_and_frames_without_dupl
         let expected = tier0(&mut ctx, &f, &bad_late);
         let prefix = program(
             vec![Op::StackRef(0), Op::Constant(0), op.clone(), Op::Return],
-            vec![f.constants[0]],
+            vec![f.constants()[0]],
             1,
         );
         let product = tier0(&mut ctx, &prefix, &bad_late[..1]).unwrap();
         roots.add(&[product]);
         for leaf in [&baseline, &selected] {
-            let NativeRun::DeoptAt(exit) = leaf.call_consts(
-                &mut ctx as *mut Context as *mut u8,
-                f.constants.as_ptr(),
-                &bad_late,
-            ) else {
+            let NativeRun::DeoptAt(exit) = (unsafe {
+                leaf.call_consts(
+                    &mut ctx as *mut Context as *mut u8,
+                    f.constants().as_ptr(),
+                    &bad_late,
+                )
+            }) else {
                 panic!("original pc5 unknown-Borrow guard must remain");
             };
             roots.add(&exit.stack);
@@ -131,7 +135,7 @@ fn opt_sink_numeric_resolved_float_keeps_original_guards_and_frames_without_dupl
             );
             assert_eq!(exit.stack[2].xfloat().to_bits(), product.xfloat().to_bits());
             assert_ne!(exit.stack[2].bits(), bad_late[0].bits());
-            assert_ne!(exit.stack[2].bits(), f.constants[0].bits());
+            assert_ne!(exit.stack[2].bits(), f.constants()[0].bits());
             assert_eq!(observe(&resume(&mut ctx, &f, &exit)), observe(&expected));
             assert_eq!(ctx.jit_root_stack_top, 0);
         }
@@ -178,11 +182,13 @@ fn opt_sink_numeric_resolved_float_keeps_original_guards_and_frames_without_dupl
     ];
     check_semantics(&mut ctx, &mixed, &baseline, &cases, &roots);
     check_semantics(&mut ctx, &mixed, &selected, &cases, &roots);
-    let NativeRun::DeoptAt(exit) = forced.call_consts(
-        &mut ctx as *mut Context as *mut u8,
-        mixed.constants.as_ptr(),
-        &cases[0],
-    ) else {
+    let NativeRun::DeoptAt(exit) = (unsafe {
+        forced.call_consts(
+            &mut ctx as *mut Context as *mut u8,
+            mixed.constants().as_ptr(),
+            &cases[0],
+        )
+    }) else {
         panic!("force hook still applies to actual checked both-fix Add");
     };
     roots.add(&exit.stack);
@@ -195,11 +201,13 @@ fn opt_sink_numeric_resolved_float_keeps_original_guards_and_frames_without_dupl
         observe(&resume(&mut ctx, &mixed, &exit)),
         observe(&tier0(&mut ctx, &mixed, &cases[0]))
     );
-    let NativeRun::DeoptAt(exit) = selected.call_consts(
-        &mut ctx as *mut Context as *mut u8,
-        mixed.constants.as_ptr(),
-        &cases[1],
-    ) else {
+    let NativeRun::DeoptAt(exit) = (unsafe {
+        selected.call_consts(
+            &mut ctx as *mut Context as *mut u8,
+            mixed.constants().as_ptr(),
+            &cases[1],
+        )
+    }) else {
         panic!("unknown-kind both-fix Mul overflow must retain exact exit");
     };
     roots.add(&exit.stack);

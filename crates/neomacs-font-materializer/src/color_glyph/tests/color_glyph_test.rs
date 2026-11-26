@@ -175,16 +175,14 @@ fn rasterizing_is_deterministic_and_cached() {
 }
 
 #[test]
-fn zero_and_invalid_sizes_paint_nothing() {
+fn zero_and_invalid_sizes_report_invalid_requests() {
     let asset = colrv1_asset();
     let mut rasterizer = ColorGlyphRasterizer::new();
     let glyph = glyph_id(&asset, '\u{1F347}');
     for px_size in [0.0, -8.0, f32::NAN, f32::INFINITY] {
         assert_eq!(
-            rasterizer
-                .rasterize(&asset, &request(glyph, px_size))
-                .unwrap(),
-            None,
+            rasterizer.rasterize(&asset, &request(glyph, px_size)),
+            Err(ColorGlyphError::InvalidRequest { glyph_id: glyph }),
             "size {px_size} must not rasterize"
         );
     }

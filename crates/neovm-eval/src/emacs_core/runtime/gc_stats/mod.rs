@@ -25,6 +25,9 @@ static VECTOR_CELLS: AtomicU64 = AtomicU64::new(0);
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct GcStatsSnapshot {
     pub collections: u64,
+    /// Last completed runtime-owned heap census. The Lisp percentage census
+    /// additionally accounts for external symbol cells.
+    /// Mapped/image-resident storage is reported by heap memory inventory.
     pub live_bytes: u64,
     pub total_allocated_bytes: u64,
     pub cons_cells: u64,

@@ -1,0 +1,12 @@
+error: lifetime may not live long enough
+ --> tests/pentry_e2_loan_ui/custody_scope_escape.rs:7:42
+  |
+7 |     guard.with_scope(|_context, witness| witness).unwrap()
+  |                       --------         - ^^^^^^^ returning this value requires that `'1` must outlive `'2`
+  |                       |                |
+  |                       |                return type of closure is BatonWitness<'2, '_, '_>
+  |                       has type `&mut SerialContext<'1, '1, '_, '_>`
+  |
+  = note: requirement occurs because of the type `BatonWitness<'_, '_, '_>`, which makes the generic argument `'_` invariant
+  = note: the struct `BatonWitness<'guard, 'heap, 'owner>` is invariant over the parameter `'guard`
+  = help: see <https://doc.rust-lang.org/nomicon/subtyping.html> for more information about variance

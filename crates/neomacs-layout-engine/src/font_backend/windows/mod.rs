@@ -126,6 +126,10 @@ impl FontBackend for DirectWriteBackend {
     fn poll_catalog_change(&mut self) -> crate::font::catalog::FontCatalogChange {
         self.catalog.poll()
     }
+
+    fn published_catalog_generation(&self) -> u64 {
+        self.catalog.published_generation()
+    }
 }
 
 fn font_supports_required(font: &Font, required: &RequiredFontCoverage) -> bool {

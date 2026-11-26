@@ -91,17 +91,10 @@ struct RoutedRowCheckpoint {
     line_numbers: LineNumberRenderState,
     cursor_info: CursorCaptureState,
     row: GlyphRow,
-    /// Display points emitted into the window's geometry so far. The routed
-    /// render emits them per part (the same `..._and_emit` seam the buffer
-    /// pipeline uses), so a refused attempt must truncate back to this count —
-    /// the producer half of the pipeline's own word-wrap rewind
-    /// (`truncate_display_points` + restored row display positions/pen,
-    /// overflow.rs `restore_row_output_progress`).
-    display_point_len: usize,
-    row_display_positions: (
-        Option<neovm_core::buffer::LispCharPos1>,
-        Option<neovm_core::buffer::LispCharPos1>,
-    ),
+    /// Emitter-side row progress snapshot (display points, row buffer bounds,
+    /// and pen) shared with word-wrap and ellipsis rollback so a refused
+    /// routed-row attempt rolls back all three atomically.
+    output_progress: crate::window_output::RowOutputProgressCheckpoint,
     /// The face-cache speculation window the attempt opened before its
     /// first probe (`arm_face_cache_speculation`): probes realize faces and
     /// the render pass resolves more, so both journal their cache inserts.
@@ -139,8 +132,7 @@ impl RoutedRowCheckpoint {
             line_numbers: *state.row_carryover.line_numbers,
             cursor_info: state.cursor_info.clone(),
             row,
-            display_point_len: emitter.display_point_len(),
-            row_display_positions: emitter.current_row_display_positions(),
+            output_progress: emitter.capture_row_progress(position),
             face_cache_mark,
         })
     }
@@ -156,15 +148,10 @@ impl RoutedRowCheckpoint {
             state.source_render.restore_current_row_snapshot(self.row),
             "a routed-row checkpoint always belongs to an open output row"
         );
-        {
-            let emitter = state.source_render.output_emitter();
-            emitter.truncate_display_points(self.display_point_len);
-            emitter.restore_current_row_display_positions(
-                self.row_display_positions.0,
-                self.row_display_positions.1,
-            );
-            emitter.restore_current_row_pen(DisplayRowPosition::new(self.row_x, self.row_col));
-        }
+        state
+            .source_render
+            .output_emitter()
+            .restore_row_progress(self.output_progress);
         *state.row_build.row_geometry = self.row_geometry;
         *state.row_build.row_extend = self.row_extend;
         *state.row_build.box_face = self.box_face;
@@ -726,6 +713,7 @@ impl<'rows, 'emit, 'surface, FS: crate::neovm_bridge::FaceServices>
                                 return Err(());
                             }
                             replacement_context.apply_completed_string(
+                                buffer,
                                 session.finish(outcome.end_position()),
                                 &mut self.progress,
                                 self.row_carryover.line_numbers,

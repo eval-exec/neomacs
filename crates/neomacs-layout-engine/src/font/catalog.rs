@@ -33,6 +33,13 @@ impl FontCatalogChangeCounter {
         self.0.fetch_add(1, Ordering::Release);
     }
 
+    /// Publication id every service observes. `0` is the counter's initial
+    /// value, before any native change has been published.
+    #[must_use]
+    pub fn current(&self) -> u64 {
+        self.0.load(Ordering::Acquire)
+    }
+
     #[must_use]
     pub fn cursor(&self) -> FontCatalogChangeCursor {
         FontCatalogChangeCursor {

@@ -261,8 +261,11 @@ impl DirectSite {
     /// and its unarmed test on every call. And the caller must be a body
     /// whose calls run often enough to pay the site's compile back
     /// ([`DirectSitesMode`], [`UnboundedBodyScope`]).
+    /// # Safety
+    /// `expected` must be the valid tagged bits of a live `Value` rooted by
+    /// the active compilation snapshot.
     #[doc(hidden)]
-    pub fn plan(rt: &RtCtx, aot: bool, expected: u64, nargs: usize) -> Option<Self> {
+    pub unsafe fn plan(rt: &RtCtx, aot: bool, expected: u64, nargs: usize) -> Option<Self> {
         if aot || !jit_direct_call_on() || jit_force_slow_spec() || nargs > MAX_REST_CALL_ARGS {
             return None;
         }
@@ -278,7 +281,8 @@ impl DirectSite {
         let self_only = jit_direct_sites() == DirectSitesMode::SelfOnly;
         if self_only {
             let source = rt.self_direct_source?;
-            if !self_only::expected_is_source(expected, source)
+            // SAFETY: `expected` is a live JIT constant-pool tagged callee word.
+            if !unsafe { self_only::expected_is_source(expected, source) }
                 || params.fixed_arity() != Some(nargs)
             {
                 return None;
@@ -337,7 +341,7 @@ impl DirectSite {
         rt.direct_sites.set(rt.direct_sites.get() + 1);
         Some(DirectSite {
             expected,
-            frame_bytes: crate::emacs_core::bytecode::vm::bytecode_frame_bytes(bc.max_stack.get())
+            frame_bytes: crate::emacs_core::bytecode::vm::bytecode_frame_bytes(bc.max_stack().get())
                 as u64,
             nargs,
             callee,
@@ -1063,11 +1067,14 @@ pub(crate) unsafe extern "C" fn neovm_jit_direct_slow(
     // SAFETY: the executing leaf's slot (the contract above).
     let slot = unsafe { &*(slot as *const SpecSlot) };
     if slot.direct_entry.load(Ordering::Relaxed) == 0 && !slot.leaf_ptr().is_null() {
-        super::spec_slot::arm_shaped_direct_entry(
-            slot,
-            CalleeShape::from_word(shape),
-            nargs as usize,
-        );
+        // SAFETY: `slot` was armed by `neovm_jit_call_spec` with a live/retired cache leaf.
+        unsafe {
+            super::spec_slot::arm_shaped_direct_entry(
+                slot,
+                CalleeShape::from_word(shape),
+                nargs as usize,
+            );
+        }
     }
     status
 }
@@ -1155,20 +1162,23 @@ pub(crate) unsafe extern "C" fn neovm_jit_direct_finish(
     } else {
         super::dispatch::FastRun::Raw(status)
     };
-    super::dispatch::call_spec_finish(
-        ctx,
-        unsafe {
-            /* SAFETY: JIT constant-pool word */
-            Value::from_bits(expected as usize)
-        },
-        leaf,
-        args,
-        nargs,
-        out,
-        bt_count,
-        run,
-        budget_restore as usize,
-    )
+    // SAFETY: `expected` is a live JIT constant-pool tagged callee word.
+    let expected = unsafe { Value::from_bits(expected as usize) };
+    // SAFETY: `ctx`, `leaf`, `args[..nargs]`, and `out` uphold this direct-call
+    // finish shim's native activation contract for the duration of the call.
+    unsafe {
+        super::dispatch::call_spec_finish(
+            ctx,
+            expected,
+            leaf,
+            args,
+            nargs,
+            out,
+            bt_count,
+            run,
+            budget_restore as usize,
+        )
+    }
 }
 
 #[cfg(any(test, debug_assertions, feature = "test-support"))]

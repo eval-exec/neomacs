@@ -16,7 +16,7 @@ inputs, hot paths, generated code or layouts.
 | Files | Modeled contract |
 | --- | --- |
 | `tests/model/mod.rs` | The modeled table: authority word (bit 63 WRITER, low bits reader count), epoch, guard depth, one two-word entry with two consistent states, backing generations with a freed-generation ledger, the enter/exit protocols, thread-confined lease stand-ins (`!Send`/`!Sync`) and the RAII guard hold |
-| `tests/authority.rs` | Reader overlap (parallel readers do not serialise), the writer drain, reader retry under WRITER, keeper quiescence after all actors stop, and the torn-entry negative control for a writer that skips the drain |
+| `tests/authority.rs` | Reader overlap (parallel readers do not serialise), the writer drain, reader retry under WRITER, keeper quiescence after all actors stop, the torn-entry negative control for a writer that skips the drain, and hydration: a reader loads the payload generation only under the reader count or WRITER while a writer replaces an unhydrated payload |
 | `tests/revalidate.rs` | Epoch revalidation retry across a modeled callback, convergence under repeated mutation, and the stale-answer negative control for skipping the recheck |
 | `tests/guard.rs` | Rev R2 nesting count: two owners in user tests plus a third whose mutation must signal, RAII unwind to depth zero, own-mutation-inside-own-test, and the lost-restore negative control for GNU's unconditional bool restore |
 | `tests/growth.rs` | Growth frees the old backing only after the drain, and the freed-under-a-reader negative control |
@@ -47,6 +47,7 @@ to find the specific witness (exact panic text, caught by
 `support::negative`):
 
 - `writer_skipping_drain_observes_torn_entry` — `torn entry observed`
+- `reader_loading_payload_before_the_word_sees_a_mid_replace` — `unsynchronized payload observed`
 - `reader_skipping_revalidation_accepts_stale_entry` — `stale answer accepted after callback`
 - `bool_guard_lost_restore_misses_signal` — `mutation inside active user test was not signaled`
 - `growth_without_drain_frees_live_backing` — `reader walked a freed backing`

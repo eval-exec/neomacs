@@ -10,6 +10,62 @@ pub(super) use padding::write_padded;
 
 static NATIVE: Mutex<()> = Mutex::new(());
 
+/// Temporarily block `SIGTTOU` on the calling thread and restore the previous
+/// signal mask on drop, matching GNU `block_tty_out_signal` /
+/// `unblock_tty_out_signal` (`src/sysdep.c:924-939`).
+///
+/// Used around `tgetent` (GNU `src/term.c:4485-4489`) and ncurses `setupterm`
+/// (which `tgetent` wraps), because terminfo initialization may access the
+/// controlling terminal while the process is not in the foreground process
+/// group. Blocking rather than ignoring preserves the process's inherited
+/// `SIGTTOU` disposition for the editor and its subprocesses.
+pub(super) struct TtyOutSignalGuard {
+    oldset: libc::sigset_t,
+    active: bool,
+}
+
+impl TtyOutSignalGuard {
+    pub(super) fn block() -> Self {
+        // SAFETY: `sigset_t` is plain C storage initialized by `sigemptyset` /
+        // `sigaddset`, and `pthread_sigmask` updates only the calling thread's
+        // mask while writing the previous mask into `oldset`.
+        unsafe {
+            let mut blocked: libc::sigset_t = std::mem::zeroed();
+            let mut oldset: libc::sigset_t = std::mem::zeroed();
+            if libc::sigemptyset(&raw mut blocked) == 0
+                && libc::sigaddset(&raw mut blocked, libc::SIGTTOU) == 0
+                && libc::pthread_sigmask(libc::SIG_BLOCK, &raw const blocked, &raw mut oldset) == 0
+            {
+                Self {
+                    oldset,
+                    active: true,
+                }
+            } else {
+                Self {
+                    oldset,
+                    active: false,
+                }
+            }
+        }
+    }
+}
+
+impl Drop for TtyOutSignalGuard {
+    fn drop(&mut self) {
+        if self.active {
+            // SAFETY: `oldset` was populated by the matching
+            // `pthread_sigmask(SIG_BLOCK, ...)` call in `Self::block`.
+            unsafe {
+                libc::pthread_sigmask(
+                    libc::SIG_SETMASK,
+                    &raw const self.oldset,
+                    std::ptr::null_mut(),
+                );
+            }
+        }
+    }
+}
+
 unsafe extern "C" {
     fn tgetent(buffer: *mut c_char, term: *const c_char) -> c_int;
     fn tgetstr(name: *const c_char, area: *mut *mut c_char) -> *mut c_char;
@@ -47,9 +103,13 @@ pub(super) fn load(term: &str, queries: &[Query<'_>]) -> Result<Database, Error>
     // failure. Reusing the null buffer selects the same bounded cache slot.
     // Do not del_curterm: that would leave tgetent's cache with a dangling owner.
     // ncurses ignores the buffer (this is not a generic BSD termcap binding).
-    let status = unsafe {
-        set_curterm(std::ptr::null_mut());
-        tgetent(std::ptr::null_mut(), term.as_ptr())
+    // Block SIGTTOU across tgetent matching GNU `init_tty` (`src/term.c:4485-4489`).
+    let status = {
+        let _tty_out_guard = TtyOutSignalGuard::block();
+        unsafe {
+            set_curterm(std::ptr::null_mut());
+            tgetent(std::ptr::null_mut(), term.as_ptr())
+        }
     };
     match status {
         1 => {}
@@ -172,4 +232,120 @@ fn call_numeric(
     // SAFETY: non-null tparm output is a NUL-terminated native buffer; no other
     // native operation can reuse/free it while NATIVE is held.
     Ok(unsafe { CStr::from_ptr(raw) }.to_bytes().to_vec())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sigttou_is_blocked() -> bool {
+        unsafe {
+            let mut current: libc::sigset_t = std::mem::zeroed();
+            assert_eq!(
+                libc::pthread_sigmask(libc::SIG_SETMASK, std::ptr::null(), &raw mut current),
+                0
+            );
+            libc::sigismember(&raw const current, libc::SIGTTOU) == 1
+        }
+    }
+
+    fn sigttou_handler() -> libc::sighandler_t {
+        unsafe {
+            let mut action: libc::sigaction = std::mem::zeroed();
+            assert_eq!(
+                libc::sigaction(libc::SIGTTOU, std::ptr::null(), &raw mut action),
+                0
+            );
+            action.sa_sigaction
+        }
+    }
+
+    #[test]
+    fn tty_out_signal_guard_blocks_and_restores_without_changing_disposition() {
+        let handler_before = sigttou_handler();
+        // Ensure SIGTTOU starts unblocked on this thread.
+        unsafe {
+            let mut set: libc::sigset_t = std::mem::zeroed();
+            assert_eq!(libc::sigemptyset(&raw mut set), 0);
+            assert_eq!(libc::sigaddset(&raw mut set, libc::SIGTTOU), 0);
+            assert_eq!(
+                libc::pthread_sigmask(libc::SIG_UNBLOCK, &raw const set, std::ptr::null_mut()),
+                0
+            );
+        }
+        assert!(!sigttou_is_blocked());
+
+        {
+            let _guard = TtyOutSignalGuard::block();
+            assert!(
+                sigttou_is_blocked(),
+                "SIGTTOU must be blocked while TtyOutSignalGuard is live"
+            );
+            assert_eq!(
+                sigttou_handler(),
+                handler_before,
+                "TtyOutSignalGuard must not alter SIGTTOU disposition"
+            );
+        }
+
+        assert!(
+            !sigttou_is_blocked(),
+            "SIGTTOU must be restored to unblocked when TtyOutSignalGuard drops"
+        );
+        assert_eq!(sigttou_handler(), handler_before);
+    }
+
+    #[test]
+    fn tty_out_signal_guard_preserves_preexisting_sigttou_block() {
+        let _outer = TtyOutSignalGuard::block();
+        assert!(sigttou_is_blocked());
+        {
+            let _inner = TtyOutSignalGuard::block();
+            assert!(sigttou_is_blocked());
+        }
+        assert!(
+            sigttou_is_blocked(),
+            "dropping inner guard must restore oldset with SIGTTOU still blocked"
+        );
+    }
+
+    #[test]
+    fn tty_out_signal_guard_restores_mask_on_panic() {
+        unsafe {
+            let mut set: libc::sigset_t = std::mem::zeroed();
+            assert_eq!(libc::sigemptyset(&raw mut set), 0);
+            assert_eq!(libc::sigaddset(&raw mut set, libc::SIGTTOU), 0);
+            assert_eq!(
+                libc::pthread_sigmask(libc::SIG_UNBLOCK, &raw const set, std::ptr::null_mut()),
+                0
+            );
+        }
+        let result = std::panic::catch_unwind(|| {
+            let _guard = TtyOutSignalGuard::block();
+            assert!(sigttou_is_blocked());
+            panic!("intentional unwind inside SIGTTOU block");
+        });
+        assert!(result.is_err());
+        assert!(
+            !sigttou_is_blocked(),
+            "SIGTTOU must be unblocked after unwinding through TtyOutSignalGuard"
+        );
+    }
+
+    #[test]
+    fn database_load_restores_sigttou_mask_and_disposition() {
+        let handler_before = sigttou_handler();
+        unsafe {
+            let mut set: libc::sigset_t = std::mem::zeroed();
+            assert_eq!(libc::sigemptyset(&raw mut set), 0);
+            assert_eq!(libc::sigaddset(&raw mut set, libc::SIGTTOU), 0);
+            assert_eq!(
+                libc::pthread_sigmask(libc::SIG_UNBLOCK, &raw const set, std::ptr::null_mut()),
+                0
+            );
+        }
+        let _ = Database::load("xterm", &[Query::String(StringCapability::Termcap("md"))]);
+        assert!(!sigttou_is_blocked());
+        assert_eq!(sigttou_handler(), handler_before);
+    }
 }

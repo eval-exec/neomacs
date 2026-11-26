@@ -275,22 +275,6 @@ pub(crate) trait SerialPortIo {
         &self,
         settings: impl FnOnce(&mut SerialAttributes) -> Result<(), E>,
     ) -> Result<(), SerialConfigureFailure<E>>;
-    /// Register this device's readable edge with the wait `poller`, keyed by
-    /// process id, using the same level-triggered policy as every other
-    /// process-output source.
-    fn register_readable(
-        &self,
-        poller: &polling::Poller,
-        id: crate::emacs_core::process::ProcessId,
-    ) -> Result<(), String>;
-    /// Change this device's poll interest (readable, writable, or both).
-    fn modify_interest(
-        &self,
-        poller: &polling::Poller,
-        event: polling::Event,
-    ) -> Result<(), String>;
-    /// Remove this device from `poller`.
-    fn unregister(&self, poller: &polling::Poller);
 }
 
 impl SerialPortIo for SerialPort {
@@ -311,26 +295,6 @@ impl SerialPortIo for SerialPort {
         self.0
             .write_attributes(&attributes.0)
             .map_err(SerialConfigureFailure::Device)
-    }
-
-    fn register_readable(
-        &self,
-        poller: &polling::Poller,
-        id: crate::emacs_core::process::ProcessId,
-    ) -> Result<(), String> {
-        self.0.register_readable(poller, id)
-    }
-
-    fn modify_interest(
-        &self,
-        poller: &polling::Poller,
-        event: polling::Event,
-    ) -> Result<(), String> {
-        self.0.modify_interest(poller, event)
-    }
-
-    fn unregister(&self, poller: &polling::Poller) {
-        self.0.unregister(poller);
     }
 }
 

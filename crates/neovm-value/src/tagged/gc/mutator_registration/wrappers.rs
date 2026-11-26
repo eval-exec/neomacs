@@ -354,6 +354,13 @@ impl<'heap, K: EraKeeper> ProofEra<'heap, K> {
     ) -> Result<symbol_authority::PreparedNameFunction, FunctionError> {
         self.core.prepare_name_function_symbol(key)
     }
+
+    /// Head of the live serial ring. This does not grant it.
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn serial_ring_head_for_test(&self) -> Result<(usize, Option<u64>), RendezvousError> {
+        super::rendezvous::serial_ring_head_for_test(self.core.registry())
+    }
 }
 
 // These are direct forwards, not a Deref exposing the private core. The sole
@@ -466,6 +473,149 @@ macro_rules! era_operations {
 
             pub fn stop(&self) -> Result<AllStopped<'_>, RendezvousError> {
                 self.core.stop()
+            }
+
+            /// The gate tag of the thread holding the registry gate now, for a
+            /// contention diagnostic (L6.7 K8). It carries no authority.
+            pub fn gate_holder(&self) -> Option<std::num::NonZeroU64> {
+                self.core.gate_holder()
+            }
+
+            /// [`Self::stop`] bounded by BUDGET (L6.7 K8). A pending attempt
+            /// leaves the request standing; the next attempt continues it.
+            pub fn stop_within(
+                &self,
+                budget: std::time::Duration,
+            ) -> Result<StopAttempt<'_>, RendezvousError> {
+                self.core.stop_within(budget)
+            }
+
+            /// Whether aggregate stopped allocation debt meets the heap's GC
+            /// threshold (`bytes_since_gc >= gc_threshold`). See
+            /// [`EraCore::should_collect_stopped`].
+            #[cold]
+            #[doc(hidden)]
+            pub fn should_collect_stopped(
+                &self,
+                stopped: &mut AllStopped<'_>,
+            ) -> Result<bool, RendezvousError> {
+                self.core.should_collect_stopped(stopped)
+            }
+
+            #[cfg(any(test, feature = "test-support"))]
+            #[doc(hidden)]
+            pub fn charge_serial_bytes_for_test(
+                &self,
+                stopped: &AllStopped<'_>,
+                bytes: usize,
+            ) -> Result<(), CollectionError> {
+                self.core.charge_serial_bytes_for_test(stopped, bytes)
+            }
+
+            #[cfg(any(test, feature = "test-support"))]
+            #[doc(hidden)]
+            pub fn alloc_serial_cons_for_test(
+                &self,
+                stopped: &AllStopped<'_>,
+            ) -> Result<HeapWord, CollectionError> {
+                self.core.alloc_serial_cons_for_test(stopped)
+            }
+
+            #[cfg(any(test, feature = "test-support"))]
+            #[doc(hidden)]
+            pub fn set_gc_threshold_for_test(
+                &self,
+                stopped: &AllStopped<'_>,
+                threshold: usize,
+            ) -> Result<(), CollectionError> {
+                self.core.set_gc_threshold_for_test(stopped, threshold)
+            }
+
+            #[cfg(any(test, feature = "test-support"))]
+            #[doc(hidden)]
+            pub fn gc_threshold_for_test(
+                &self,
+                stopped: &AllStopped<'_>,
+            ) -> Result<usize, CollectionError> {
+                self.core.gc_threshold_for_test(stopped)
+            }
+
+            #[cfg(any(test, feature = "test-support"))]
+            #[doc(hidden)]
+            pub fn gc_collections_for_test(
+                &self,
+                stopped: &AllStopped<'_>,
+            ) -> Result<usize, CollectionError> {
+                self.core.gc_collections_for_test(stopped)
+            }
+
+            #[cfg(any(test, feature = "test-support"))]
+            #[doc(hidden)]
+            pub fn owns_heap_word_for_test(
+                &self,
+                stopped: &AllStopped<'_>,
+                proof: HeapWord,
+            ) -> Result<bool, CollectionError> {
+                self.core.owns_heap_word_for_test(stopped, proof)
+            }
+
+            #[cfg(any(test, feature = "test-support"))]
+            #[doc(hidden)]
+            pub fn grant_closed_owner_cons_lease_for_test(
+                &self,
+                stopped: &AllStopped<'_>,
+                key: super::MutatorKey,
+            ) -> Result<(), CollectionError> {
+                self.core
+                    .grant_closed_owner_cons_lease_for_test(stopped, key)
+            }
+
+            #[cfg(any(test, feature = "test-support"))]
+            #[doc(hidden)]
+            pub fn poison_cons_allocator_for_test(
+                &self,
+                stopped: &AllStopped<'_>,
+            ) -> Result<(), CollectionError> {
+                self.core.poison_cons_allocator_for_test(stopped)
+            }
+
+            #[cfg(any(test, feature = "test-support"))]
+            #[doc(hidden)]
+            pub fn has_owner_cons_reserves_for_test(
+                &self,
+                stopped: &AllStopped<'_>,
+            ) -> Result<bool, CollectionError> {
+                self.core.has_owner_cons_reserves_for_test(stopped)
+            }
+
+            #[cfg(any(test, feature = "test-support"))]
+            #[doc(hidden)]
+            pub fn retired_owner_cons_len_for_test(&self) -> usize {
+                self.core.retired_owner_cons_len_for_test()
+            }
+            /// Main-thread GC request. See [`EraCore::collect_requested`].
+            ///
+            /// # Safety
+            /// Same complete CURRENT World root walk contract as
+            /// [`Self::collect_stopped_with`]: the upper adapter must supply
+            /// the complete CURRENT World root walk of the retained keeper,
+            /// including stable marker head slots, and no root or reference
+            /// may escape its real stopped authority.
+            #[cold]
+            #[doc(hidden)]
+            pub unsafe fn collect_requested(
+                &self,
+                stopped: &mut AllStopped<'_>,
+                roots: impl FnOnce(
+                    &K,
+                    &mut AllStopped<'_>,
+                    &mut Vec<crate::tagged::value::TaggedValue>,
+                ) -> Result<
+                    Vec<*mut *mut crate::tagged::header::MarkerObj>,
+                    RendezvousError,
+                >,
+            ) -> Result<CollectionReport, CollectionError> {
+                self.core.collect_requested(stopped, roots)
             }
 
             pub fn rendezvous(&self) -> Rendezvous<'_> {
@@ -596,6 +746,109 @@ impl<'heap, K: EraKeeper> ParallelHeapEra<'heap, K> {
             table.chunk_count().get(),
             table.chunk_slots().get(),
         ))
+    }
+
+    /// Park poison, the same word a dropped stop proof publishes. The
+    /// live-lend keeper calls this from a panic drop guard so a parked
+    /// owner returns `Poisoned` and the scoped join finishes.
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn poison_for_test(&self) {
+        self.core.registry().poison();
+    }
+
+    /// L6.7 K4: the keeper commits one serial request at the ring's tail.
+    /// Keeper thread only. `generation` names the owner's publication; the
+    /// keeper's grant checks it against the receipt it holds.
+    #[doc(hidden)]
+    pub fn enqueue_serial(
+        &self,
+        owner: super::MutatorKey,
+        generation: std::num::NonZeroU64,
+    ) -> Result<(), RendezvousError> {
+        super::rendezvous::enqueue_serial(self.core.registry(), owner, generation)
+    }
+
+    /// L6.7 K7: poison the era on a proven invariant break. Keeper thread
+    /// only; parked owners wake with `Poisoned`.
+    #[doc(hidden)]
+    pub fn poison_era(&self) -> Result<(), RendezvousError> {
+        super::rendezvous::poison_era(self.core.registry())
+    }
+
+    /// L6.7 K6: the keeper cancels `owner`'s queued request. A granted
+    /// request refuses with `Identity`.
+    #[doc(hidden)]
+    pub fn cancel_serial(&self, owner: super::MutatorKey) -> Result<(), RendezvousError> {
+        super::rendezvous::cancel_serial(self.core.registry(), owner)
+    }
+
+    /// L6.7b b3: the keeper commits the Baton group's request at the ring's
+    /// tail. One entry for the whole group: a second refuses `Identity`.
+    #[doc(hidden)]
+    pub fn enqueue_baton_group(&self) -> Result<(), RendezvousError> {
+        super::rendezvous::enqueue_baton_group(self.core.registry())
+    }
+
+    /// L6.7b b5: the keeper puts the Baton group's request back at the
+    /// ring's HEAD, so the group is the next World user after the collection
+    /// it asked for.
+    #[doc(hidden)]
+    pub fn requeue_baton_group_at_head(&self) -> Result<(), RendezvousError> {
+        super::rendezvous::requeue_baton_group_at_head(self.core.registry())
+    }
+
+    /// L6.7c (c): the keeper commits an owner's request at the ring's HEAD,
+    /// after that owner's turn came back asking for a collection, so the
+    /// owner resumes next after the collection.
+    #[doc(hidden)]
+    pub fn requeue_serial_at_head(
+        &self,
+        owner: super::MutatorKey,
+        generation: std::num::NonZeroU64,
+    ) -> Result<(), RendezvousError> {
+        super::rendezvous::requeue_serial_at_head(self.core.registry(), owner, generation)
+    }
+
+    /// L6.7b b3: the keeper cancels the Baton group's queued request. A
+    /// granted request refuses with `Identity`.
+    #[doc(hidden)]
+    pub fn cancel_baton_group(&self) -> Result<(), RendezvousError> {
+        super::rendezvous::cancel_baton_group(self.core.registry())
+    }
+
+    /// Queue one serial request ahead of a live stop. Not the product ring.
+    /// L6.7 owns that enqueue. The generation is stored and is not a
+    /// publication check.
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn enqueue_serial_for_test(
+        &self,
+        owner: super::MutatorKey,
+        generation: std::num::NonZeroU64,
+    ) -> Result<u64, RendezvousError> {
+        super::rendezvous::enqueue_serial_for_test(self.core.registry(), owner, generation)
+    }
+
+    /// Head of the live ring. This does not grant it.
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn serial_ring_head_for_test(&self) -> Result<(usize, Option<u64>), RendezvousError> {
+        super::rendezvous::serial_ring_head_for_test(self.core.registry())
+    }
+
+    /// Retire the queued or granted head when its id is `id`.
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn retire_serial_head_for_test(&self, id: u64) -> Result<(), RendezvousError> {
+        super::rendezvous::retire_serial_head_for_test(self.core.registry(), id)
+    }
+
+    /// Read-only keeper accessor for live-era test fixtures.
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn keeper_for_test(&self) -> Option<&K> {
+        self.core.keeper.as_ref()
     }
 }
 

@@ -720,7 +720,7 @@ fn shared_font_database() -> Arc<usvg::fontdb::Database> {
     static FONT_DATABASE: OnceLock<Arc<usvg::fontdb::Database>> = OnceLock::new();
     Arc::clone(FONT_DATABASE.get_or_init(|| {
         let mut database = usvg::fontdb::Database::new();
-        database.load_system_fonts();
+        neomacs_font_materializer::reset_system_font_database(&mut database);
         Arc::new(database)
     }))
 }

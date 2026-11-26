@@ -5,16 +5,24 @@ use super::*;
 #[test]
 fn terminal_gc_roots_exclude_another_live_heap() {
     let collecting = Context::new(crate::test_utils::unit_runtime());
+    let collecting_heap = collecting.tagged_heap().tagged_heap_identity();
+    let parked_collecting = collecting.park_for_test();
     let other = Context::new(crate::test_utils::unit_runtime());
 
     let mut roots = Vec::new();
-    collect_terminal_gc_roots(&mut roots, collecting.tagged_heap().tagged_heap_identity());
+    collect_terminal_gc_roots(&mut roots, collecting_heap);
+    let parked_other = other.park_for_test();
+    let collecting = parked_collecting
+        .resume_for_test()
+        .expect("resume collecting");
     assert!(
         roots
             .iter()
             .all(|root| collecting.tagged_heap().owns_heap_value_for_test(*root)),
         "the terminal root walk retained another evaluator's handle"
     );
+    let _parked_collecting = collecting.park_for_test();
+    let other = parked_other.resume_for_test().expect("resume other");
     let mut active_roots = Vec::new();
     collect_terminal_gc_roots(
         &mut active_roots,
@@ -28,7 +36,7 @@ fn terminal_gc_roots_exclude_another_live_heap() {
 /// them, even while the evaluator that supplied the old handle is alive.
 #[test]
 fn terminal_gc_handle_refreshes_when_the_active_heap_changes() {
-    let mut first = Context::new(crate::test_utils::unit_runtime());
+    let first = Context::new(crate::test_utils::unit_runtime());
     let lifecycle = Rc::new(RefCell::new(Vec::new()));
     configure_terminal_runtime(TerminalRuntimeConfig::interactive(
         Some("xterm-256color".to_string()),
@@ -39,8 +47,10 @@ fn terminal_gc_handle_refreshes_when_the_active_heap_changes() {
     set_terminal_host(Box::new(RecordingTerminalHost {
         log: Rc::clone(&lifecycle),
     }));
-    let _other = Context::new(crate::test_utils::unit_runtime());
-    first.setup_thread_locals();
+    let parked_first = first.park_for_test();
+    let other = Context::new(crate::test_utils::unit_runtime());
+    let _parked_other = other.park_for_test();
+    let mut first = parked_first.resume_for_test().expect("resume first");
 
     let handle = builtin_selected_terminal(vec![]).expect("selected terminal");
     assert!(

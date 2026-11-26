@@ -85,7 +85,7 @@ fn inherited_first_winner_never_resolves_unused_large_family_alternatives() {
     }));
 
     let selected = resolver
-        .resolve_from_policy(&policy, false)
+        .resolve_from_policy(&policy, false, CatalogPass::All)
         .expect("the first inherited alias retains its selected candidate");
 
     assert_eq!(selected, expected);

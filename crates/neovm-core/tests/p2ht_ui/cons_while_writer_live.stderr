@@ -1,0 +1,9 @@
+error[E0499]: cannot borrow `run` as mutable more than once at a time
+  --> tests/p2ht_ui/cons_while_writer_live.rs:16:13
+   |
+15 |     let _lease = TableMut::enter(&mut run, table).unwrap();
+   |                                  -------- first mutable borrow occurs here
+16 |     let _ = run.cons(car, cdr);
+   |             ^^^ second mutable borrow occurs here
+17 | }
+   | - first borrow might be used here, when `_lease` is dropped and runs the `Drop` code for type `TableMut`

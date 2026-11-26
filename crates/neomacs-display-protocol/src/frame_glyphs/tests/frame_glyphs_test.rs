@@ -18,6 +18,86 @@ fn assert_color_eq(actual: &Color, expected: &Color) {
 }
 
 #[test]
+fn stipple_tiles_from_the_frame_origin() {
+    // Column 0 of an 8-pixel bitmap. GNU samples that column at every
+    // frame x where x % 8 == 0 (xterm.c `XSetTSOrigin` keeps the tile on
+    // the drawable origin). A cell whose left edge is frame x=10 must
+    // light frame x=16, the next multiple of the period, not its own left edge.
+    let pattern = StipplePattern {
+        width: 8,
+        height: 1,
+        bits: vec![0x01],
+    };
+    assert_eq!(
+        pattern.covered_runs(10.0, 4.0, 8.0, 1.0),
+        vec![(16.0, 4.0, 1.0, 1.0)]
+    );
+}
+
+#[test]
+fn stipple_at_frame_origin_keeps_column_zero() {
+    let pattern = StipplePattern {
+        width: 8,
+        height: 1,
+        bits: vec![0x01],
+    };
+    assert_eq!(
+        pattern.covered_runs(0.0, 0.0, 8.0, 1.0),
+        vec![(0.0, 0.0, 1.0, 1.0)]
+    );
+}
+
+#[test]
+fn stipple_row_phase_follows_the_frame_y() {
+    // Only bitmap row 0 is set. A rect at frame y=2 lights the row whose
+    // frame y is a multiple of the height (y=4), not the rect's top.
+    let pattern = StipplePattern {
+        width: 8,
+        height: 4,
+        bits: vec![0x01, 0x00, 0x00, 0x00],
+    };
+    assert_eq!(
+        pattern.covered_runs(0.0, 2.0, 1.0, 4.0),
+        vec![(0.0, 4.0, 1.0, 1.0)]
+    );
+}
+
+#[test]
+fn stipple_negative_coordinates_use_euclidean_phase() {
+    // Height 4, only row 0 set. x=-6 covers frame columns -6..4, so the
+    // only multiple of 8 is column 0. y=-2 covers rows -2..2, so the only
+    // multiple of 4 is row 0.
+    let pattern = StipplePattern {
+        width: 8,
+        height: 4,
+        bits: vec![0x01, 0x00, 0x00, 0x00],
+    };
+    assert_eq!(
+        pattern.covered_runs(-6.0, -2.0, 10.0, 4.0),
+        vec![(0.0, 0.0, 1.0, 1.0)]
+    );
+}
+
+#[test]
+fn stipple_fractional_origin_covers_the_frame_column() {
+    let pattern = StipplePattern {
+        width: 8,
+        height: 1,
+        bits: vec![0x01],
+    };
+    let runs = pattern.covered_runs(10.6, 4.25, 8.0, 1.0);
+    assert_eq!(runs.len(), 1, "{runs:?}");
+    let (qx, qy, qw, qh) = runs[0];
+    assert!((qy - 4.25).abs() < 1e-5, "{qy}");
+    assert!((qh - 1.0).abs() < 1e-5, "{qh}");
+    // Frame column 16 is the lit bit. The quad must cover part of [16, 17).
+    assert!(
+        qx < 17.0 && qx + qw > 16.0,
+        "quad {qx}+{qw} misses frame column 16"
+    );
+}
+
+#[test]
 fn frame_default_resolved_font_is_one_coherent_binding_lookup() {
     use crate::font::{
         FontFileAsset, FontOutlineAsset, FontReplay, FontSlantKind, ResolvedFont,
@@ -51,6 +131,7 @@ fn frame_default_resolved_font_is_one_coherent_binding_lookup() {
             descent_px: 4.0,
             space_advance_px: 10.0,
             glyph_advance: ResolvedFontAdvance::fixed_cell(10.0),
+            spacing: None,
         },
     );
 

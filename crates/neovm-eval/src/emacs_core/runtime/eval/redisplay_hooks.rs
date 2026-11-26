@@ -89,6 +89,54 @@ static WINDOW_RESIZE_MINI_FRAME: WellKnown = WellKnown::WindowResizeMiniFrame;
 use neomacs_display_protocol::types::Px;
 use std::collections::{HashMap, HashSet};
 
+/// The frontend's native publication result. No variant authorizes a logical
+/// redisplay: background row acquisition cannot create evaluator display debt.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum DisplayMaintenancePublication {
+    #[default]
+    Idle,
+    PublishedNatively,
+    Deferred,
+}
+
+/// One bounded native maintenance opportunity and its next idle deadline.
+#[must_use]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct DisplayMaintenanceOutcome {
+    pub next_wake: Option<std::time::Duration>,
+    pub publication: DisplayMaintenancePublication,
+}
+
+/// Real callback work serviced before a GUI command-boundary display check.
+/// GNU redraws after timer/process callbacks even if display facts stayed equal.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GuiBoundaryServiceActivity {
+    Idle,
+    CallbacksRan,
+}
+
+/// Ordinary redisplay work that a native auxiliary publication cannot settle.
+/// These checks observe original pending marks before hook preparation turns
+/// text/frame-change marks into the final ordinary skip predicate's targets.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AuxiliaryRedisplayRefusal {
+    RedisplayInProgress,
+    CommittedScrollInProgress,
+    DeferredLayoutFlow,
+    DeferredModeLineFlow,
+    GenerationChanged { expected: u64, observed: u64 },
+    ExactEchoResizePending,
+    UnacknowledgedBufferChanges,
+    PendingWindowScope,
+    PendingModeLineScope,
+    PendingWindowTargets,
+    PendingFrameTargets,
+    PendingModeLineTargets,
+    PendingTextTargets,
+    MissingSignature,
+    ChangedSignature,
+}
+
 /// A renderer-inert GNU resize_mini_window request. The source buffer is
 /// explicit because inactive echo uses a temporary buffer, while the selected
 /// minibuffer uses its live buffer even before a reader is active. No body/chrome presentation is accepted.
@@ -321,10 +369,91 @@ impl RedisplayHookOwnership {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RedisplayMiniPreparationFailure {
     DidNotConverge,
-    PresentationBorrowed,
 }
 
 impl Context {
+    /// Whether an accepted base can receive native coverage without entering
+    /// ordinary redisplay. Unlike RedisplayTransaction's final skip check,
+    /// this runs no Lisp, distributes no text marks, and consumes no debt.
+    pub fn auxiliary_redisplay_readiness(
+        &self,
+        base_generation: u64,
+    ) -> Result<(), AuxiliaryRedisplayRefusal> {
+        use AuxiliaryRedisplayRefusal as Refusal;
+        match self.gnu_redisplay_hooks.active {
+            RedisplayActiveOwner::Idle => {}
+            RedisplayActiveOwner::RedisplayTransaction => {
+                return Err(Refusal::RedisplayInProgress);
+            }
+            RedisplayActiveOwner::CommittedScroll => {
+                return Err(Refusal::CommittedScrollInProgress);
+            }
+        }
+        if self.redisplay_hook_flow_pending() {
+            return Err(Refusal::DeferredLayoutFlow);
+        }
+        if self.has_mode_line_display_flow() {
+            return Err(Refusal::DeferredModeLineFlow);
+        }
+        let observed = self.redisplay_generation();
+        if observed != base_generation {
+            return Err(Refusal::GenerationChanged {
+                expected: base_generation,
+                observed,
+            });
+        }
+        if self.echo_area_resize_exact_pending {
+            return Err(Refusal::ExactEchoResizePending);
+        }
+        if self.displayed_buffer_changes_unacknowledged() {
+            return Err(Refusal::UnacknowledgedBufferChanges);
+        }
+        let pending = &self.gnu_redisplay_hooks;
+        // Legacy display does not consume the unused initial GNU scopes.
+        // Only the GNU policy interprets these marks as pending work.
+        if gnu_redisplay_hooks_enabled() {
+            if pending.windows != PendingScope::None {
+                return Err(Refusal::PendingWindowScope);
+            }
+            if pending.mode_lines != PendingScope::None {
+                return Err(Refusal::PendingModeLineScope);
+            }
+            if !pending.redisplay_windows.is_empty() {
+                return Err(Refusal::PendingWindowTargets);
+            }
+            if !pending.redisplay_frames.is_empty() {
+                return Err(Refusal::PendingFrameTargets);
+            }
+            if !pending.mode_line_windows.is_empty() {
+                return Err(Refusal::PendingModeLineTargets);
+            }
+            if !pending.redisplay_text.is_empty() {
+                return Err(Refusal::PendingTextTargets);
+            }
+            // Note: `frame_window_change` is intentionally NOT checked here,
+            // matching `RedisplayTransaction::run`'s skip predicate. Accepting
+            // a frame whose materialized body height changed sets
+            // `frame_window_change` for the NEXT redisplay's window-change
+            // hooks without leaving display debt on the accepted frame; any
+            // real topology/geometry/buffer change before redisplay is already
+            // caught by `redisplay_frames`, `redisplay_windows`, and
+            // `last_redisplay_signature`.
+        }
+        // Note: `physical_redraw_frames` is intentionally NOT checked here,
+        // matching `RedisplayTransaction::run`'s skip predicate. It tracks
+        // TTY-only physical terminal damage consumed exclusively by
+        // `gnu_take_tty_frame_redraw` (`tty_rif.force_redraw()`); GUI frames
+        // never drain it, and startup's initial terminal frame can leave an
+        // entry in it for the lifetime of a GUI process.
+        let Some(previous) = self.last_redisplay_signature.as_ref() else {
+            return Err(Refusal::MissingSignature);
+        };
+        if *previous != self.redisplay_signature() {
+            return Err(Refusal::ChangedSignature);
+        }
+        Ok(())
+    }
+
     #[cfg(any(test, feature = "test-support"))]
     #[doc(hidden)]
     pub fn gnu_redisplay_hooks_active(&self) -> bool {
@@ -375,9 +504,6 @@ impl Context {
         let message = match reason {
             RedisplayMiniPreparationFailure::DidNotConverge => {
                 "Minibuffer geometry preparation did not converge"
-            }
-            RedisplayMiniPreparationFailure::PresentationBorrowed => {
-                "Minibuffer geometry preparation is already active"
             }
         };
         neovm_value::error::signal("error", vec![Value::string(message)])
@@ -682,6 +808,60 @@ impl Context {
         self.gnu_redisplay_hooks.windows.raise(PendingScope::Some);
     }
 
+    /// Record that `frame`'s bounded redisplay produced no publishable candidate.
+    ///
+    /// The enclosing transaction consumes this after callback Flow checks.
+    /// It does not increment `accepted_serial`.
+    #[doc(hidden)]
+    pub fn note_no_safe_handled_frame(&mut self, frame: FrameId) {
+        self.no_safe_handled_frame = Some(frame);
+    }
+
+    /// Drop the owned request for one exhausted frame and stamp the signature.
+    ///
+    /// `PendingScope::All` is materialized onto every other live frame before
+    /// the broad scope is cleared, so one NoSafe frame does not erase their
+    /// demand. `accepted_serial`, echo exact-sizing, and physical redraw stay
+    /// untouched.
+    fn settle_no_safe_handled_frame(&mut self, frame: FrameId) {
+        let owned_windows = self.gnu_window_order(frame);
+        self.gnu_redisplay_hooks.redisplay_frames.remove(&frame);
+        for window in owned_windows {
+            self.gnu_redisplay_hooks.redisplay_windows.remove(&window);
+            self.gnu_redisplay_hooks.mode_line_windows.remove(&window);
+        }
+        let windows_all = self.gnu_redisplay_hooks.windows == PendingScope::All;
+        let mode_lines_all = self.gnu_redisplay_hooks.mode_lines == PendingScope::All;
+        if windows_all || mode_lines_all {
+            for other in self.gnu_frame_order() {
+                if other != frame {
+                    self.gnu_redisplay_hooks.redisplay_frames.insert(other);
+                }
+            }
+        }
+        if windows_all {
+            self.gnu_redisplay_hooks.windows = PendingScope::None;
+        }
+        if mode_lines_all {
+            self.gnu_redisplay_hooks.mode_lines = PendingScope::None;
+        }
+        // A `Some` scope whose sets are empty names no remaining owner.
+        // Shared-text marks stay, so this does not clear that demand.
+        if self.gnu_redisplay_hooks.redisplay_windows.is_empty()
+            && self.gnu_redisplay_hooks.mode_line_windows.is_empty()
+            && self.gnu_redisplay_hooks.redisplay_frames.is_empty()
+            && self.gnu_redisplay_hooks.redisplay_text.is_empty()
+        {
+            if self.gnu_redisplay_hooks.windows == PendingScope::Some {
+                self.gnu_redisplay_hooks.windows = PendingScope::None;
+            }
+            if self.gnu_redisplay_hooks.mode_lines == PendingScope::Some {
+                self.gnu_redisplay_hooks.mode_lines = PendingScope::None;
+            }
+        }
+        *self.last_redisplay_signature = Some(self.redisplay_signature());
+    }
+
     /// Whether a frame-level redisplay request is pending for `frame`
     /// (GNU `fset_redisplay`'s set, src/xdisp.c:879).
     #[doc(hidden)]
@@ -797,6 +977,12 @@ impl Context {
         gnu_redisplay_hooks_enabled()
             && (self.gnu_redisplay_hooks.windows != PendingScope::None
                 || self.gnu_redisplay_hooks.mode_lines != PendingScope::None)
+    }
+
+    /// GNU current-matrix query gate: window/buffer changes, independently of
+    /// the mode-line-only flag used by try_cursor_movement.
+    pub fn gnu_current_matrix_change_pending(&self) -> bool {
+        gnu_redisplay_hooks_enabled() && self.gnu_redisplay_hooks.windows != PendingScope::None
     }
 
     /// True only while the complete GNU transaction owns mini preparation.
@@ -1261,16 +1447,21 @@ impl RedisplayTransaction<'_> {
         // its Context-owned slot. Consume it at the same restored transaction
         // boundary as hook failures, before acknowledging a successful frame.
         if let Some(flow) = self.eval.take_mode_line_display_flow() {
+            self.eval.no_safe_handled_frame = None;
             return Err(flow);
         }
         if let Some(flow) = self.eval.gnu_redisplay_hooks.layout_flow.take() {
+            self.eval.no_safe_handled_frame = None;
             return Err(flow);
         }
         if self.eval.gnu_redisplay_hooks.accepted_serial != accepted_before {
+            self.eval.no_safe_handled_frame = None;
             self.eval.echo_area_resize_exact_pending = false;
             self.eval.gnu_redisplay_hooks.windows = PendingScope::None;
             self.eval.gnu_redisplay_hooks.mode_lines = PendingScope::None;
             *self.eval.last_redisplay_signature = Some(self.eval.redisplay_signature());
+        } else if let Some(frame) = self.eval.no_safe_handled_frame.take() {
+            self.eval.settle_no_safe_handled_frame(frame);
         }
         Ok(Value::NIL)
     }

@@ -153,11 +153,11 @@ fn rows_owned_domain_idle_refuses_major_partial_and_deferred_without_count_chang
     heap.seed_root(root);
     heap.incremental_drain_all();
     let bytes = heap.live_bytes();
-    heap.incremental_finish(bytes, std::time::Instant::now());
+    heap.incremental_finish_for_test(bytes, std::time::Instant::now());
     assert!(heap.sweep_in_progress());
     assert_eq!(heap.gc_collections(), before);
     assert!(!heap.rows_observation_idle());
-    heap.finish_incremental_sweep_now();
+    heap.finish_incremental_sweep_now_for_test();
     assert!(heap.gc_collections() > before);
     assert!(heap.rows_observation_idle());
 }
@@ -168,15 +168,15 @@ fn rows_owned_domain_minor_to_deferred_handoff_has_no_idle_gap() {
     assert!(heap.tagged_heap_generational_enabled());
     let root = heap.alloc_vector(vec![TaggedValue::NIL]);
     let count = heap.gc_collections();
-    heap.begin_minor_collection().unwrap();
+    heap.begin_minor_collection_for_test().unwrap();
     assert_eq!(heap.gc_collections(), count);
     assert!(!heap.rows_observation_idle());
     heap.seed_root(root);
-    heap.complete_minor_collection();
+    heap.complete_minor_collection_for_test();
     assert!(heap.sweep_in_progress());
     assert_eq!(heap.gc_collections(), count);
     assert!(!heap.rows_observation_idle());
-    heap.finish_incremental_sweep_now();
+    heap.finish_incremental_sweep_now_for_test();
     assert!(heap.gc_collections() > count);
     assert!(heap.rows_observation_idle());
 }
@@ -204,7 +204,7 @@ fn rows_owned_domain_caught_direct_gen1_reclaim_panic_keeps_visible_obligation()
     let panic = tracing::subscriber::with_default(subscriber, || {
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             // Standalone heap: empty roots really are its entire live graph.
-            heap.collect_exact(std::iter::empty());
+            heap.collect_rooted(std::iter::empty());
         }))
     });
     assert!(panic.is_err(), "must exercise the exact post-reclaim event");
@@ -270,16 +270,22 @@ fn rows_owned_domain_failed_concurrent_completion_retains_busy_obligation() {
         // worker exists. Exercise the real finish error paths without racing
         // a live worker or claiming that a worker actually disconnected.
         let (send, receive) = std::sync::mpsc::channel();
-        heap.concurrent_mark_running = true;
-        heap.gc_exited = Some(receive);
+        let heap_id = heap.heap_identity();
+        // SAFETY: inert synthetic fixture, no live worker.
+        unsafe {
+            heap.concurrent_mark_running.set(true);
+            heap.gc_exited.install_for_heap(heap_id, receive);
+        }
         match failure {
             Failure::Missing => {
-                heap.gc_exited = None;
+                // SAFETY: inert synthetic fixture testing MissingCompletion.
+                unsafe { heap.gc_exited.clear_for_test() };
                 drop(send);
             }
             Failure::Disconnected => drop(send),
             Failure::Poisoned => {
-                send.send(ConcurrentMarkResult::default()).unwrap();
+                send.send(ConcurrentMarkResult::empty_for_heap(heap.heap_identity()))
+                    .unwrap();
                 heap.satb_handoff.poison_for_test();
             }
         }

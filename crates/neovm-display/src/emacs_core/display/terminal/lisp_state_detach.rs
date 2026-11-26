@@ -11,14 +11,8 @@ use neovm_value::heap_registry::detachment::{
 };
 
 #[cold]
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "E2 L3 dormant cold detach; no production caller enters it"
-    )
-)]
-pub(crate) fn detach_terminal_registry(
+#[doc(hidden)]
+pub fn detach_terminal_registry(
     handle: &TerminalRegistryHandle,
 ) -> Result<DetachedRegistry<TerminalLispRegistry>, RegistryDetachFailure<TerminalLispRegistry>> {
     TERMINAL_LISP_STATE.with(|slot| {

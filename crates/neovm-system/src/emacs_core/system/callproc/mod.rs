@@ -97,9 +97,10 @@ pub(crate) fn new_child_command_calls_for_test() -> usize {
 ///
 /// On Unix we therefore `setsid` the child (new session: own process group AND
 /// no controlling terminal), which fixes both. On Windows we give it its own
-/// process group (`CREATE_NEW_PROCESS_GROUP`). Children that genuinely need a
-/// controlling terminal (M-x shell/term) are spawned via portable_pty, which
-/// sets up the pty as their controlling terminal — they do not use this path.
+/// process group (`CREATE_NEW_PROCESS_GROUP`). Unix PTY children (M-x
+/// shell/term) also go through this path via `ChildCommand::into_forking_command`
+/// and chain `sys::establish_pty_controlling_terminal` to acquire the PTY slave
+/// as their controlling terminal.
 pub(crate) fn new_child_command<S: AsRef<std::ffi::OsStr>>(program: S) -> ChildCommand {
     // The re-homed editfns test asserts this counter, so it must move in the
     // test-support build too.
@@ -108,9 +109,26 @@ pub(crate) fn new_child_command<S: AsRef<std::ffi::OsStr>>(program: S) -> ChildC
     ChildCommand::new(program)
 }
 
-/// Apply the platform's "own process group" isolation to an already-built
-/// command. Split out so callers that need portable_pty (which already
-/// `setsid`s the child) or a pre-configured command can opt in explicitly.
+/// Signals reset to `SIG_DFL` in every spawned child process, matching GNU
+/// `emacs_posix_spawn_init_attributes` (`src/callproc.c:1387-1406`) and the
+/// `vfork`/`fork` child path before `child_setup` (`src/callproc.c:1624-1643`).
+///
+/// Shared by both `posix::Attributes::gnu` (`spawn.rs`) and
+/// [`isolate_child_command`] so the `posix_spawn` and `fork` paths cannot drift.
+#[cfg(unix)]
+pub(super) const CHILD_DEFAULT_SIGNALS: &[libc::c_int] = &[
+    #[cfg(target_os = "macos")]
+    libc::SIGCHLD,
+    libc::SIGINT,
+    libc::SIGQUIT,
+    libc::SIGPIPE,
+    libc::SIGPROF,
+];
+
+/// Apply the platform's "own process group" isolation and GNU child signal
+/// hygiene to an already-built `std::process::Command`. Used by
+/// `ChildCommand::forking_command` for both non-Linux-glibc pipe spawns and
+/// Unix PTY spawns (`into_forking_command`).
 pub(crate) fn isolate_child_command(command: &mut Command) {
     #[cfg(unix)]
     {
@@ -125,15 +143,57 @@ pub(crate) fn isolate_child_command(command: &mut Command) {
         //     stopped during its job-control init, and wedges a synchronous
         //     `call-process` wait forever (the hang). With no controlling
         //     terminal bash degrades to "no job control" and runs to completion.
-        // `setsid` subsumes `setpgid(0, 0)`. PTY children that *need* a
-        // controlling terminal go through portable_pty instead, not this path.
+        // `setsid` subsumes `setpgid(0, 0)`. PTY children run a chained
+        // `pre_exec` after this (`sys::establish_pty_controlling_terminal`)
+        // to acquire the PTY slave as their controlling terminal.
+        //
+        // Also reset `CHILD_DEFAULT_SIGNALS` to `SIG_DFL` and clear the child
+        // signal mask: GNU's `emacs_spawn` resets the same signals
+        // (`src/callproc.c:1624-1643`) and restores `oldset`
+        // (`unblock_child_signal` at `src/callproc.c:1647` /
+        // `posix_spawnattr_setsigmask` at `src/callproc.c:1413`), where
+        // `oldset` is empty because `init_keyboard` (`src/keyboard.c:13277`)
+        // cleared Emacs's own mask with `pthread_sigmask(SIG_SETMASK, &empty_mask, 0)`
+        // at startup.
+        //
+        // Startup-mask decision (recorded here rather than changed in `main.rs`):
+        // Neomacs does not currently clear its own inherited process signal mask
+        // at startup (unlike GNU `init_keyboard`), so clearing the child mask
+        // explicitly here is what keeps child `SigBlk == 0` matching GNU and
+        // Neomacs's Linux-glibc `posix::Attributes::gnu` (`spawn.rs:851-885`).
+        // If startup is later changed to match GNU `init_keyboard` (clearing the
+        // main thread's signal mask in `crates/neomacs/src/main.rs` while
+        // single-threaded), keep this explicit empty-mask clear in both `isolate_child_command` and `Attributes::gnu`
+        // as defense-in-depth for `tty_frontend` temporary `SIG_BLOCK` scopes
+        // and library/unit-test callers that do not run `main()`, and update this
+        // note accordingly.
         //
         // SAFETY: the closure runs in the forked child before exec and calls
-        // only the async-signal-safe `setsid`. A freshly forked process is
-        // never a process-group leader, so `setsid` cannot fail with EPERM.
+        // only async-signal-safe POSIX functions (`setsid`, `sigemptyset`,
+        // `sigaction`, `sigprocmask`). A freshly forked process is never a
+        // process-group leader, so `setsid` cannot fail with EPERM; returning
+        // `io::Error::last_os_error()` stores only the raw errno without
+        // allocating on the heap.
         unsafe {
             command.pre_exec(|| {
                 if libc::setsid() == -1 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                let mut action: libc::sigaction = std::mem::zeroed();
+                action.sa_sigaction = libc::SIG_DFL;
+                if libc::sigemptyset(&mut action.sa_mask) != 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                for &sig in CHILD_DEFAULT_SIGNALS {
+                    if libc::sigaction(sig, &action, std::ptr::null_mut()) != 0 {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                }
+                let mut empty = std::mem::MaybeUninit::<libc::sigset_t>::uninit();
+                if libc::sigemptyset(empty.as_mut_ptr()) != 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                if libc::sigprocmask(libc::SIG_SETMASK, empty.as_ptr(), std::ptr::null_mut()) != 0 {
                     return Err(std::io::Error::last_os_error());
                 }
                 Ok(())
@@ -754,14 +814,8 @@ fn route_captured_output_in_state(
 
 #[cfg(unix)]
 fn signal_description(signal: i32) -> String {
-    let ptr = unsafe { libc::strsignal(signal) };
-    if ptr.is_null() {
-        "unknown".to_string()
-    } else {
-        unsafe { std::ffi::CStr::from_ptr(ptr) }
-            .to_string_lossy()
-            .into_owned()
-    }
+    crate::emacs_core::process::sys::raw_signal_description(signal)
+        .unwrap_or_else(|| "unknown".to_string())
 }
 
 fn call_process_status_value(status: std::process::ExitStatus) -> Value {

@@ -14,9 +14,9 @@ fn source(tag: i64) -> ByteCodeFunction {
         optional: Vec::new(),
         rest: None,
     });
-    f.ops = vec![Op::Constant(0), Op::Return];
-    f.constants = vec![Value::make_int(tag)].into();
-    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(1);
+    f.set_ops(vec![Op::Constant(0), Op::Return]);
+    f.set_constants(vec![Value::make_int(tag)].into());
+    f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(1));
     f
 }
 
@@ -45,6 +45,41 @@ fn a_symbol_site_is_monomorphic_until_a_second_symbol() {
     // Mega is final.
     s.observe(a);
     assert!(matches!(s.target(), CallTarget::Mega));
+}
+
+/// A compile thread reads a source slot that the owner publishes while the
+/// reader is already running, so the slot is the reader's only path to the
+/// source. The publication must order the source's initialization before
+/// the reader's upgrade. ThreadSanitizer reports an unordered (Relaxed)
+/// publication here; without TSan this row checks only the outcome.
+#[cfg(feature = "jit")]
+#[test]
+fn a_published_source_is_ordered_before_a_concurrent_compile_read() {
+    let _harness = crate::test_utils::unit_harness();
+    let s = site();
+    let started = std::sync::Barrier::new(2);
+    std::thread::scope(|scope| {
+        let reader = scope.spawn(|| {
+            started.wait();
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            loop {
+                if let CallTarget::Sources(live) = s.target() {
+                    return live.len();
+                }
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "the compile reader never saw the published source"
+                );
+                std::hint::spin_loop();
+            }
+        });
+        started.wait();
+        // Created after the barrier: nothing but the slot orders it before
+        // the reader's upgrade.
+        let f = Value::make_bytecode(source(7));
+        s.observe(f);
+        assert_eq!(reader.join().expect("compile reader"), 1);
+    });
 }
 
 #[cfg(feature = "jit")]
@@ -123,17 +158,140 @@ fn a_site_holds_its_sources_weakly_and_releases_them() {
     let live = Arc::new(RuntimeState::new());
     let dead = Arc::new(RuntimeState::new());
     let s = site();
-    // SAFETY: this fresh site's source slots are null. Each word is
-    // Weak::into_raw of a live downgrade, and no concurrent reader runs.
-    unsafe {
-        s.install_source(0, Arc::downgrade(&live));
-        s.install_source(1, Arc::downgrade(&dead));
-    }
+    assert_eq!(s.claim_source(&live), SourceClaim::Published(0));
+    assert_eq!(s.claim_source(&dead), SourceClaim::Published(1));
+    assert_eq!(s.claim_source(&live), SourceClaim::Held(0));
     s.state_word().store((2 << 3) | TAG_POLY, Ordering::Relaxed);
     drop(dead);
     assert_eq!(sources_of(&s), vec![Arc::as_ptr(&live)]);
     drop(live);
     assert!(matches!(s.target(), CallTarget::Mega), "every source died");
+}
+
+/// Two recorders that loaded the same word both transition, as two
+/// parallel owners running one body will. The second must neither replace
+/// nor release the source the first published: the site ends polymorphic
+/// with both, and the first source's `Weak` is still the site's. Releasing
+/// it while a compile thread borrows the slot is the FEEDBACK-UAF.
+#[cfg(feature = "jit")]
+#[test]
+fn a_stale_second_recorder_keeps_the_first_published_source() {
+    let _harness = crate::test_utils::unit_harness();
+    let s = site();
+    let a = Value::make_bytecode(source(1));
+    let b = Value::make_bytecode(source(2));
+    let a_state = a.get_bytecode_data().unwrap().jit_runtime().share_state();
+    let b_ptr = b.get_bytecode_data().unwrap().jit_runtime().state_ptr();
+    // Both recorders loaded the uninitialized word before either moved it.
+    s.transition(STATE_UNINIT, target_key(a), a);
+    s.transition(STATE_UNINIT, target_key(b), b);
+    assert_eq!(sources_of(&s), vec![Arc::as_ptr(&a_state), b_ptr]);
+    assert_eq!(
+        Arc::weak_count(&a_state),
+        1,
+        "the site still holds the first source"
+    );
+}
+
+/// A recorder whose word is stale joins its observation into the word it
+/// lost to and never overwrites it: the lattice only moves up.
+#[cfg(feature = "jit")]
+#[test]
+fn a_stale_recorder_joins_the_word_it_lost_to() {
+    let _harness = crate::test_utils::unit_harness();
+    let f = Value::make_bytecode(source(1));
+    let sym = Value::symbol("feedback-test-stale");
+    // A symbol, then a stale source, and the reverse: two kinds are Mega.
+    for (first, second) in [(sym, f), (f, sym)] {
+        let s = site();
+        s.transition(STATE_UNINIT, target_key(first), first);
+        s.transition(STATE_UNINIT, target_key(second), second);
+        assert!(
+            matches!(s.target(), CallTarget::Mega),
+            "{first:?} then a stale {second:?}"
+        );
+    }
+    // The same symbol twice stays monomorphic.
+    let s = site();
+    s.transition(STATE_UNINIT, target_key(sym), sym);
+    s.transition(STATE_UNINIT, target_key(sym), sym);
+    assert!(matches!(s.target(), CallTarget::Sym(id) if Some(id) == sym.as_bare_symbol_id()));
+    // A third source recorded against the one-source word keeps the second.
+    let s = site();
+    let g = Value::make_bytecode(source(2));
+    let h = Value::make_bytecode(source(3));
+    s.observe(f);
+    let one = s.state_word().load(Ordering::Relaxed);
+    s.observe(g);
+    s.transition(one, target_key(h), h);
+    assert_eq!(sources_of(&s).len(), 3, "f, g and h");
+}
+
+/// Recorders on POLY threads seat distinct sources in one fresh site while
+/// a compile thread reads it, each recorder dropping its own strong hold
+/// when done. The reader finds every slot the word counts already filled
+/// (the publication order), no observation is lost (the word counts every
+/// source) and no published slot is released (the site still holds each
+/// source's Weak). ThreadSanitizer checks the slot and word handoff.
+#[cfg(feature = "jit")]
+#[test]
+fn concurrent_recorders_lose_no_source_and_release_none() {
+    for _ in 0..64 {
+        let s = site();
+        let sources: Vec<Arc<RuntimeState>> =
+            (0..POLY).map(|_| Arc::new(RuntimeState::new())).collect();
+        let start = std::sync::Barrier::new(POLY + 1);
+        let recording = std::sync::atomic::AtomicUsize::new(POLY);
+        std::thread::scope(|scope| {
+            scope.spawn(|| {
+                start.wait();
+                while recording.load(Ordering::Acquire) != 0 {
+                    // Every slot the word counts must read non-null: the
+                    // sources stay strongly alive, so a null upgrade here
+                    // is a counted slot published out of order.
+                    let word = s.state_word().load(Ordering::Acquire);
+                    let n = match word & TAG_BITS {
+                        _ if word == STATE_UNINIT => 0,
+                        TAG_SOURCE => 1,
+                        TAG_POLY => (word >> 3) as usize,
+                        _ => panic!("only sources were recorded: {word:#x}"),
+                    };
+                    for i in 0..n {
+                        assert!(
+                            s.upgrade_source(i).is_some(),
+                            "slot {i}, counted by {word:#x}, reads null"
+                        );
+                    }
+                }
+            });
+            for source in &sources {
+                let (s, start, recording) = (&s, &start, &recording);
+                let source = Arc::clone(source);
+                scope.spawn(move || {
+                    // Only the one-source word holds a key, and every
+                    // recorder here is a source, so any 8-aligned word works.
+                    let key = Arc::as_ptr(&source) as u64 | TAG_SOURCE;
+                    start.wait();
+                    let seen = seat_source(s, key, Some(&source));
+                    advance(s, STATE_UNINIT, seen);
+                    drop(source);
+                    recording.fetch_sub(1, Ordering::Release);
+                });
+            }
+        });
+        assert_eq!(
+            s.state_word().load(Ordering::Acquire),
+            ((POLY as u64) << 3) | TAG_POLY
+        );
+        let mut held = sources_of(&s);
+        let mut want: Vec<*const RuntimeState> = sources.iter().map(Arc::as_ptr).collect();
+        held.sort();
+        want.sort();
+        assert_eq!(held, want);
+        for source in &sources {
+            assert_eq!(Arc::weak_count(source), 1, "the site's Weak");
+        }
+    }
 }
 
 /// A counted transition after the window is late; before it, it is not.

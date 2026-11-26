@@ -11,6 +11,8 @@ use std::cmp::Ordering;
 use std::collections::{BTreeMap, BinaryHeap};
 use std::rc::Rc;
 
+use rustc_hash::FxHashMap;
+
 use crate::buffer::BufferId;
 use neovm_value::error::Flow;
 use neovm_value::gc_trace::GcTrace;
@@ -23,8 +25,8 @@ use neovm_value::value::{Value, ValueKind, eq_value};
 
 pub use super::overlay_index::OverlayPropertyFilter;
 use super::overlay_index::{
-    EndpointKind, OverlayBatchOrder, OverlayEditEffect, OverlayEditOrder, OverlayEndpoint,
-    OverlayEndpointRecords, OverlayIdentity, OverlayIndex, OverlayTextEdit,
+    EndpointKind, LiveOverlayIndex, OverlayBatchOrder, OverlayEditEffect, OverlayEditOrder,
+    OverlayEndpoint, OverlayEndpointRecords, OverlayIdentity, OverlayIndex, OverlayTextEdit,
 };
 use super::position::{CharPos0, EmacsByteLen, EmacsBytePos, EmacsByteRange};
 use super::text::{TextEditRange, TextInsertion, TextReplacement};
@@ -207,9 +209,113 @@ pub(crate) use neovm_value::heap_types::overlay_storage::instrumentation::{
 #[cfg(test)]
 pub(crate) use neovm_value::test_support::authority::reset_overlay_full_enumeration_visit_count;
 
-#[cfg(test)]
+/// Preserve-precedence overlay copies. `cfg(test)` increments this inside
+/// neovm-edit's own tests only. Every other build, including the editor,
+/// increments it only while [`overlay_layout_stats_enabled`] is set, so a
+/// stats-off run does not touch the atomic.
 static OVERLAY_SNAPSHOT_COPIES: std::sync::atomic::AtomicUsize =
     std::sync::atomic::AtomicUsize::new(0);
+
+/// Index entries attached to a redisplay overlay view.
+static OVERLAY_VIEW_ENTRIES: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
+/// Overlay values a layout capture passed to the native root lease.
+static OVERLAY_ROOTS_RETAINED: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
+/// Whole-buffer `snapshot` calls that missed the cache and rebuilt.
+static OVERLAY_WHOLE_BUFFER_REBUILDS: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
+/// Live overlay records a layout walk visited. Stays zero until the live
+/// view exists; the accepted-frame line still prints it.
+static OVERLAY_LIVE_RECORDS: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
+/// One cached bool for `NEOMACS_LAYOUT_STATS_FILE`. Empty and unset stay
+/// off. No thread-local. A later change to the environment does not retarget
+/// the process.
+pub(crate) fn overlay_layout_stats_enabled() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        std::env::var("NEOMACS_LAYOUT_STATS_FILE")
+            .ok()
+            .is_some_and(|path| !path.is_empty())
+    })
+}
+
+#[inline]
+fn note_overlay_layout_stat(counter: &std::sync::atomic::AtomicUsize, n: usize) {
+    if n == 0 || !overlay_layout_stats_enabled() {
+        return;
+    }
+    counter.fetch_add(n, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Count of overlay values handed to one layout-capture root lease.
+pub fn note_overlay_roots_retained(n: usize) {
+    note_overlay_layout_stat(&OVERLAY_ROOTS_RETAINED, n);
+}
+
+#[inline]
+pub(super) fn note_overlay_live_records_visited(n: usize) {
+    note_overlay_layout_stat(&OVERLAY_LIVE_RECORDS, n);
+}
+
+/// Counters for one stretch of layout work. `take_overlay_layout_stats`
+/// zeros them so each accepted frame's line is that frame's delta.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct OverlayLayoutStats {
+    pub copies: usize,
+    pub view_entries: usize,
+    pub roots: usize,
+    pub rebuilds: usize,
+    pub live_records: usize,
+}
+
+fn load_overlay_layout_stats(take: bool) -> OverlayLayoutStats {
+    let load = |counter: &std::sync::atomic::AtomicUsize| {
+        if take {
+            counter.swap(0, std::sync::atomic::Ordering::Relaxed)
+        } else {
+            counter.load(std::sync::atomic::Ordering::Relaxed)
+        }
+    };
+    OverlayLayoutStats {
+        copies: load(&OVERLAY_SNAPSHOT_COPIES),
+        view_entries: load(&OVERLAY_VIEW_ENTRIES),
+        roots: load(&OVERLAY_ROOTS_RETAINED),
+        rebuilds: load(&OVERLAY_WHOLE_BUFFER_REBUILDS),
+        live_records: load(&OVERLAY_LIVE_RECORDS),
+    }
+}
+
+#[cfg(any(test, feature = "test-support"))]
+pub fn overlay_layout_stats() -> OverlayLayoutStats {
+    load_overlay_layout_stats(false)
+}
+
+pub fn take_overlay_layout_stats() -> OverlayLayoutStats {
+    load_overlay_layout_stats(true)
+}
+
+#[cfg(any(test, feature = "test-support"))]
+pub fn reset_overlay_layout_stats() {
+    OVERLAY_SNAPSHOT_COPIES.store(0, std::sync::atomic::Ordering::Relaxed);
+    OVERLAY_VIEW_ENTRIES.store(0, std::sync::atomic::Ordering::Relaxed);
+    OVERLAY_ROOTS_RETAINED.store(0, std::sync::atomic::Ordering::Relaxed);
+    OVERLAY_WHOLE_BUFFER_REBUILDS.store(0, std::sync::atomic::Ordering::Relaxed);
+    OVERLAY_LIVE_RECORDS.store(0, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Keys appended to the accepted-frame `NEOMACS_LAYOUT_STATS_FILE` line.
+pub fn format_overlay_layout_stats(stats: OverlayLayoutStats) -> String {
+    format!(
+        "overlay_copies={} overlay_view_entries={} overlay_roots={} overlay_rebuilds={} overlay_live_records={}",
+        stats.copies, stats.view_entries, stats.roots, stats.rebuilds, stats.live_records
+    )
+}
 
 #[cfg(test)]
 pub(crate) fn reset_overlay_snapshot_copy_count() {
@@ -219,6 +325,20 @@ pub(crate) fn reset_overlay_snapshot_copy_count() {
 #[cfg(test)]
 pub(crate) fn overlay_snapshot_copy_count() -> usize {
     OVERLAY_SNAPSHOT_COPIES.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+#[cfg(test)]
+static OVERLAY_CONTENT_COMPONENT_SCANS: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
+#[cfg(test)]
+pub(crate) fn reset_overlay_content_component_scan_count() {
+    OVERLAY_CONTENT_COMPONENT_SCANS.store(0, std::sync::atomic::Ordering::Relaxed);
+}
+
+#[cfg(test)]
+pub(crate) fn overlay_content_component_scan_count() -> usize {
+    OVERLAY_CONTENT_COMPONENT_SCANS.load(std::sync::atomic::Ordering::Relaxed)
 }
 
 #[cfg(test)]
@@ -235,23 +355,78 @@ pub(crate) fn overlay_mirror_candidate_count() -> usize {
     OVERLAY_MIRROR_CANDIDATES.load(std::sync::atomic::Ordering::Relaxed)
 }
 
+/// How many range-view copy HEADERS (each with its copied plist spine) one
+/// buffer's memo may retain. This is a count of current copies, not a byte
+/// budget: payload sizes vary. The revision map is separately bounded by the
+/// live captured serials, and the eviction queue is compacted well below any
+/// unbounded growth. Retention follows the cap and the live overlay count --
+/// never the window size or the number of redisplay captures/versions. The
+/// working window (tens of overlays) stays far below the cap, while a long
+/// scroll evicts the oldest copies in insertion order.
+pub(crate) const SNAPSHOT_COPY_MEMO_CAP: usize = 4_096;
+
+/// One read-only overlay copy handed to a layout range view.
+///
+/// Valid only while its `revision` matches the list's current snapshot-copy
+/// revision: every write that can change what a copy would contain bumps that
+/// ONE overlay's revision, so an unrelated write (hl-line moving between
+/// lines, one overlay-put) does not invalidate the other copies. Observers
+/// keep an old copy alive after a bump; range views never mutate it.
+struct SnapshotCopyEntry {
+    revision: u64,
+    /// Insertion stamp; the eviction order deque carries a matching pair, so
+    /// a stale queue entry (from a superseded copy) is skipped.
+    stamp: u64,
+    range: EmacsByteRange,
+    front_advance: bool,
+    rear_advance: bool,
+    buffer: Option<BufferId>,
+    copy: Value,
+}
+
 #[cfg(not(any(test, feature = "test-support")))]
 pub struct OverlayList {
     index: OverlayIndex,
     snapshot: RefCell<Option<OverlaySnapshot>>,
-    // Permanent symbol identities only: no additional Lisp roots. A small
-    // negative cache prevents Bloom collisions from causing full scans on
-    // every redisplay. Membership and property writes clear it with snapshots.
-    absent_properties: Cell<[Option<neovm_value::intern::SymId>; 8]>,
+    // Commutative multiset hash of the rendered overlay content: positions and
+    // rendered plist properties. A membership, position or plist write adds or
+    // subtracts one overlay's component, so the whole-buffer digest redisplay
+    // compares every frame is O(1). Bulk changes (a text edit shifting many
+    // overlays, a remap) mark it dirty and rebuild once on demand.
+    content_component_sum: Cell<u64>,
+    content_unhashable: Cell<usize>,
+    content_dirty: Cell<bool>,
+    // A window-range view captured by `snapshot_in_range` answers completely
+    // only for positions at or after the capture floor. A layout query below
+    // that floor sees a subset of the overlays, so redisplay must discard the
+    // attempt and retry with the whole-buffer view. None on a whole-buffer
+    // list, which makes the start-side check a no-op there.
+    view_query_floor: Option<EmacsBytePos>,
+    view_query_underflow: Cell<bool>,
+    // Range-view copies keyed by the source overlay's creation serial, with
+    // the per-overlay revision each copy was made at. Writes bump only the
+    // written overlay's revision; a deletion forgets its entry. The copies are
+    // read only, so several range views can share one (see `GcTrace`).
+    snapshot_copy_revisions: RefCell<FxHashMap<u64, u64>>,
+    snapshot_copies: RefCell<FxHashMap<u64, SnapshotCopyEntry>>,
+    snapshot_copy_stamp: Cell<u64>,
+    snapshot_copy_insert_order: RefCell<std::collections::VecDeque<(u64, u64)>>,
 }
 #[cfg(any(test, feature = "test-support"))]
 pub struct OverlayList {
     pub(crate) index: OverlayIndex,
     snapshot: RefCell<Option<OverlaySnapshot>>,
-    // Permanent symbol identities only: no additional Lisp roots. A small
-    // negative cache prevents Bloom collisions from causing full scans on
-    // every redisplay. Membership and property writes clear it with snapshots.
-    absent_properties: Cell<[Option<neovm_value::intern::SymId>; 8]>,
+    // See the production struct's comment.
+    content_component_sum: Cell<u64>,
+    content_unhashable: Cell<usize>,
+    content_dirty: Cell<bool>,
+    view_query_floor: Option<EmacsBytePos>,
+    view_query_underflow: Cell<bool>,
+    // See the production struct's comment.
+    snapshot_copy_revisions: RefCell<FxHashMap<u64, u64>>,
+    snapshot_copies: RefCell<FxHashMap<u64, SnapshotCopyEntry>>,
+    snapshot_copy_stamp: Cell<u64>,
+    snapshot_copy_insert_order: RefCell<std::collections::VecDeque<(u64, u64)>>,
 }
 
 /// An evaluator-owned immutable overlay index. Like overlay plist values,
@@ -265,6 +440,14 @@ impl std::ops::Deref for OverlaySnapshot {
     fn deref(&self) -> &Self::Target {
         &self.0
     }
+}
+
+/// One overlay's contribution to the commutative content hash. A category
+/// indirection cannot be hashed from the overlay alone.
+#[derive(Clone, Copy)]
+enum OverlayContentComponent {
+    Hashable(u64),
+    CategoryIndirection,
 }
 
 #[derive(Clone, Copy)]
@@ -301,14 +484,128 @@ impl OverlayList {
         if let Some(snapshot) = self.snapshot.borrow().as_ref() {
             return snapshot.clone();
         }
+        note_overlay_layout_stat(&OVERLAY_WHOLE_BUFFER_REBUILDS, 1);
         let snapshot = OverlaySnapshot(Rc::new(self.snapshot_clone()));
         *self.snapshot.borrow_mut() = Some(snapshot.clone());
         snapshot
     }
 
+    /// Immutable view of the overlays a layout walk can observe inside
+    /// `range`. Unlike [`Self::snapshot`] it copies only the in-range entries,
+    /// so its cost follows the window, not the buffer's overlay count.
+    pub(crate) fn snapshot_in_range(&self, range: EmacsByteRange) -> OverlaySnapshot {
+        let mut view = self.snapshot_clone_in_range(range);
+        // The captured view is complete from this floor up: the index query
+        // above starts one position before the span so that an overlay ending
+        // exactly at `range.start` is still present for its after-string.
+        view.view_query_floor = Some(Self::view_query_range(range).start());
+        OverlaySnapshot(Rc::new(view))
+    }
+
     fn invalidate_snapshot(&mut self) {
-        self.absent_properties.set([None; 8]);
         self.snapshot.get_mut().take();
+    }
+
+    /// The copy revision of one live overlay. A range-view copy made at a
+    /// different revision is stale. Writes bump only the written overlay, so
+    /// an unrelated write (hl-line moving between lines) still reuses the
+    /// other overlays' copies.
+    fn snapshot_copy_revision(&self, serial: u64) -> u64 {
+        self.snapshot_copy_revisions
+            .borrow()
+            .get(&serial)
+            .copied()
+            .unwrap_or(0)
+    }
+
+    /// Invalidate one overlay's range-view copy. Called by every write that
+    /// can change what a copy of it would contain: plist writes, position and
+    /// advance-flag changes, retargets, and text-edit effects.
+    ///
+    /// With no memo copy there is nothing reusable to invalidate, so a write
+    /// to an overlay this list never captured records no revision. That keeps
+    /// the map bounded by captured live overlays: `overlay-put` on an overlay
+    /// before it is inserted, or on a detached one, allocates no state here.
+    /// A later capture always makes a fresh copy and records the revision it
+    /// was made at, so skipping the bump cannot let a stale entry survive.
+    fn bump_snapshot_copy_revision(&mut self, overlay: Value) {
+        let Some(serial) = overlay.as_overlay_data().map(|data| data.serial.get()) else {
+            return;
+        };
+        // The superseded copy stays alive for any observer that already holds
+        // it; dropping the entry lets a later capture replace it.
+        if self.snapshot_copies.get_mut().remove(&serial).is_none() {
+            return;
+        }
+        let mut revisions = self.snapshot_copy_revisions.get_mut();
+        let revision = revisions.entry(serial).or_insert(0);
+        *revision = revision.wrapping_add(1);
+    }
+
+    /// An overlay left this list: it can never be captured here again, so its
+    /// revision and copy would only retain storage.
+    fn forget_snapshot_copy(&mut self, overlay: Value) {
+        let Some(serial) = overlay.as_overlay_data().map(|data| data.serial.get()) else {
+            return;
+        };
+        self.snapshot_copy_revisions.get_mut().remove(&serial);
+        self.snapshot_copies.get_mut().remove(&serial);
+    }
+
+    fn clear_snapshot_copies(&mut self) {
+        self.snapshot_copy_revisions.get_mut().clear();
+        self.snapshot_copies.get_mut().clear();
+        self.snapshot_copy_insert_order.get_mut().clear();
+    }
+
+    /// Bound the range-view memo: evict the oldest inserted copies until it
+    /// is back under [`SNAPSHOT_COPY_MEMO_CAP`]. Stale order entries (a copy
+    /// superseded by a bump, or forgotten) are skipped, and a long-lived map
+    /// under the cap periodically compacts its queue.
+    fn trim_snapshot_copy_memo(&self) {
+        let mut order = self.snapshot_copy_insert_order.borrow_mut();
+        loop {
+            if self.snapshot_copies.borrow().len() > SNAPSHOT_COPY_MEMO_CAP {
+                let Some((serial, stamp)) = order.pop_front() else {
+                    break;
+                };
+                let mut copies = self.snapshot_copies.borrow_mut();
+                if copies
+                    .get(&serial)
+                    .is_some_and(|entry| entry.stamp == stamp)
+                {
+                    copies.remove(&serial);
+                }
+                continue;
+            }
+            if order.len() > SNAPSHOT_COPY_MEMO_CAP * 4 {
+                let copies = self.snapshot_copies.borrow();
+                order.retain(|(serial, stamp)| {
+                    copies
+                        .get(serial)
+                        .is_some_and(|entry| entry.stamp == *stamp)
+                });
+            }
+            break;
+        }
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn snapshot_copy_memo_len_for_test(&self) -> usize {
+        self.snapshot_copies.borrow().len()
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn snapshot_copy_revision_len_for_test(&self) -> usize {
+        self.snapshot_copy_revisions.borrow().len()
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn snapshot_copy_memo_contains_for_test(&self, serial: u64) -> bool {
+        self.snapshot_copies.borrow().contains_key(&serial)
     }
 
     /// Keep the cached snapshot only if no observer shares it and `update`
@@ -336,7 +633,12 @@ impl OverlayList {
     /// The search examines at most `MIRROR_CANDIDATE_LIMIT` overlays touching
     /// that start. Past it the cache is dropped, so a write never costs more
     /// than a bounded search, as the next snapshot's rebuild is paid anyway.
-    fn mirror_plist_write(&mut self, source: Value, start: EmacsBytePos) -> bool {
+    fn mirror_plist_write(
+        &mut self,
+        source: Value,
+        start: EmacsBytePos,
+        added_prop: Option<Value>,
+    ) -> bool {
         const MIRROR_CANDIDATE_LIMIT: usize = 32;
         let source = source
             .as_overlay_data()
@@ -364,14 +666,25 @@ impl OverlayList {
         let _ = copy.with_overlay_data_mut(|data| {
             data.plist = plist;
         });
+        self.content_dirty.set(true);
         self.invalidate_snapshot();
-        self.index.overlay_properties_changed(copy);
+        // `overlay_put` is the only plist mutator and already resolved whether
+        // a new key was prepended (`added_prop = Some`) or an existing key's
+        // value was overwritten in place (`added_prop = None`). Mirror that
+        // exact index update instead of rescanning the full plist keys.
+        if let Some(prop) = added_prop {
+            self.index.overlay_property_key_added_to_member(copy, prop);
+        } else {
+            self.index.bump_generation();
+        }
         true
     }
 
     /// Apply a text edit to this list's index and overlay objects.
     fn apply_text_edit(&mut self, edit: OverlayTextEdit) -> OverlayEditOrder {
-        self.absent_properties.set([None; 8]);
+        // A text edit shifts or evaporates an unbounded number of overlays;
+        // rebuild the commutative component sum once on the next digest.
+        self.content_dirty.set(true);
         let outcome = self.index.adjust_for_text_edit(edit);
         self.apply_edit_effects(outcome.effects);
         outcome.order
@@ -428,52 +741,154 @@ impl OverlayList {
     /// `compare_overlays` tiebreak merely because redisplay took a snapshot.
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn snapshot_clone(&self) -> Self {
-        self.clone_with_identity(OverlayCloneIdentity::PreservePrecedence)
+        self.clone_selected_with_identity(
+            self.index.all_ascending(),
+            OverlayCloneIdentity::PreservePrecedence,
+            false,
+        )
+    }
+
+    /// Copy only the overlays an observer can read inside `range`.
+    ///
+    /// A layout walk reads overlays through a window-bounded view, so copying
+    /// the whole buffer's overlay set makes redisplay O(total overlays). The
+    /// query includes overlays that start before the range and overlap it and
+    /// empty overlays inside it, exactly the set a query at an in-range
+    /// position can observe.
+    ///
+    /// Private so the sole way to obtain a memoized range view is
+    /// [`Self::snapshot_in_range`], which wraps the result in an immutable
+    /// [`OverlaySnapshot`] and enforces the frozen-observer invariant by
+    /// construction.
+    fn snapshot_clone_in_range(&self, range: EmacsByteRange) -> Self {
+        self.clone_selected_with_identity(
+            self.index
+                .overlays_in_region(Self::view_query_range(range), range.end()),
+            OverlayCloneIdentity::PreservePrecedence,
+            true,
+        )
+    }
+
+    /// Include overlays that end exactly at `range.start`: a query at that
+    /// position can still read their after-string. The end is kept exclusive
+    /// through `accessible_end = range.end()` in the index query.
+    fn view_query_range(range: EmacsByteRange) -> EmacsByteRange {
+        EmacsByteRange::new(
+            EmacsBytePos::new(range.start().get().saturating_sub(1)),
+            range.end(),
+        )
     }
 
     fn clone_with_identity(&self, identity: OverlayCloneIdentity) -> Self {
+        self.clone_selected_with_identity(self.index.all_ascending(), identity, false)
+    }
+
+    fn clone_selected_with_identity(
+        &self,
+        selected: Vec<Value>,
+        identity: OverlayCloneIdentity,
+        memoize: bool,
+    ) -> Self {
+        let memoize = memoize && matches!(identity, OverlayCloneIdentity::PreservePrecedence);
+        // One cached-bool load for the whole clone. Tests count every
+        // preserve-copy with the env unset; the editor counts only while
+        // layout stats are on. `cfg!(test)` is false in the editor binary,
+        // so a stats-off run does not touch the copy atomic.
+        let count_preserve_copies = matches!(identity, OverlayCloneIdentity::PreservePrecedence)
+            && (cfg!(test) || overlay_layout_stats_enabled());
         let saved_roots = save_scratch_gc_roots();
-        let entries: Vec<_> = self
-            .index
-            .all_ascending()
+        let entries: Vec<_> = selected
             .into_iter()
             .map(|overlay| {
                 let data = overlay
                     .as_overlay_data()
                     .expect("overlay index contains a non-overlay value");
                 let range = overlay_data_range(data);
-                // `copy-sequence`'s body with its arity check proven by the
-                // single argument: the value-core copy in bare-symbol mode.
-                let plist = neovm_value::sequence_copy::copy_sequence_with_symbols(
-                    data.plist,
-                    neovm_value::tagged::SymbolMode::Bare,
-                )
-                .expect("a live overlay must carry a copyable plist");
-                push_scratch_gc_root(plist);
-                // GNU `copy_overlays` publishes distinct objects; redisplay
-                // observer copies must preserve the source's precedence
-                // identity or taking a snapshot could change a tie's winner.
-                let copy = Value::make_overlay(neovm_value::heap_types::OverlayDataInit {
-                    serial: match identity {
-                        OverlayCloneIdentity::Fresh => {
-                            neovm_value::heap_types::OverlaySerialSource::Mint
-                        }
-                        OverlayCloneIdentity::PreservePrecedence => {
-                            neovm_value::heap_types::OverlaySerialSource::Preserved(data.serial)
-                        }
-                    },
-                    plist,
-                    buffer: data.buffer,
-                    start: range.start().get(),
-                    end: range.end().get(),
-                    front_advance: data.front_advance,
-                    rear_advance: data.rear_advance,
-                });
-                push_scratch_gc_root(copy);
-                #[cfg(test)]
-                if matches!(identity, OverlayCloneIdentity::PreservePrecedence) {
-                    OVERLAY_SNAPSHOT_COPIES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                }
+                let serial = data.serial.get();
+                // An unchanged overlay reuses its read-only range-view copy:
+                // same revision, position, advance flags and buffer. Only a
+                // write to this overlay bumps its revision, so an unrelated
+                // write does not force a re-copy here.
+                let revision = self.snapshot_copy_revision(serial);
+                let reusable = if memoize {
+                    self.snapshot_copies
+                        .borrow()
+                        .get(&serial)
+                        .filter(|entry| {
+                            entry.revision == revision
+                                && entry.range == range
+                                && entry.front_advance == data.front_advance
+                                && entry.rear_advance == data.rear_advance
+                                && entry.buffer == data.buffer
+                        })
+                        .map(|entry| entry.copy)
+                } else {
+                    None
+                };
+                let copy = if let Some(copy) = reusable {
+                    push_scratch_gc_root(copy);
+                    copy
+                } else {
+                    // `copy-sequence`'s body with its arity check proven by the
+                    // single argument: the value-core copy in bare-symbol mode.
+                    let plist = neovm_value::sequence_copy::copy_sequence_with_symbols(
+                        data.plist,
+                        neovm_value::tagged::SymbolMode::Bare,
+                    )
+                    .expect("a live overlay must carry a copyable plist");
+                    push_scratch_gc_root(plist);
+                    // GNU `copy_overlays` publishes distinct objects; redisplay
+                    // observer copies must preserve the source's precedence
+                    // identity or taking a snapshot could change a tie's winner.
+                    let copy = Value::make_overlay(neovm_value::heap_types::OverlayDataInit {
+                        serial: match identity {
+                            OverlayCloneIdentity::Fresh => {
+                                neovm_value::heap_types::OverlaySerialSource::Mint
+                            }
+                            OverlayCloneIdentity::PreservePrecedence => {
+                                neovm_value::heap_types::OverlaySerialSource::Preserved(data.serial)
+                            }
+                        },
+                        plist,
+                        buffer: data.buffer,
+                        start: range.start().get(),
+                        end: range.end().get(),
+                        front_advance: data.front_advance,
+                        rear_advance: data.rear_advance,
+                    });
+                    push_scratch_gc_root(copy);
+                    // Several range views may share this one read-only copy.
+                    // Each observer answers range queries from its OWN index
+                    // and the copy keeps its frozen `(start, end)` without
+                    // mutating `position_handle`, so reusing it across range
+                    // views never bumps `LispCollectionRevision` or invalidates
+                    // an earlier `CollectionReads` certificate. A changed live
+                    // range makes a fresh copy instead.
+                    if memoize {
+                        let stamp = self.snapshot_copy_stamp.get().wrapping_add(1);
+                        self.snapshot_copy_stamp.set(stamp);
+                        self.snapshot_copy_insert_order
+                            .borrow_mut()
+                            .push_back((serial, stamp));
+                        self.snapshot_copies.borrow_mut().insert(
+                            serial,
+                            SnapshotCopyEntry {
+                                revision,
+                                stamp,
+                                range,
+                                front_advance: data.front_advance,
+                                rear_advance: data.rear_advance,
+                                buffer: data.buffer,
+                                copy,
+                            },
+                        );
+                        self.trim_snapshot_copy_memo();
+                    }
+                    if count_preserve_copies {
+                        OVERLAY_SNAPSHOT_COPIES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    }
+                    copy
+                };
                 (copy, range)
             })
             .collect();
@@ -487,8 +902,18 @@ impl OverlayList {
             // remain identical to the live buffer.
             OverlayCloneIdentity::PreservePrecedence => OverlayBatchOrder::AscendingQueryOrder,
         };
-        let attached = cloned.index.attach_batch(&entries, batch_order);
+        let attached = if memoize {
+            cloned
+                .index
+                .attach_batch_frozen_observer(&entries, batch_order)
+        } else {
+            cloned.index.attach_batch(&entries, batch_order)
+        };
         debug_assert!(attached, "fresh overlay clone index rejected its batch");
+        if attached && matches!(identity, OverlayCloneIdentity::PreservePrecedence) {
+            note_overlay_layout_stat(&OVERLAY_VIEW_ENTRIES, entries.len());
+        }
+        cloned.content_dirty.set(true);
         restore_scratch_gc_roots(saved_roots);
         cloned
     }
@@ -538,8 +963,637 @@ pub enum OverlayPropertyAtPoint<'a, R> {
 ///
 /// Its exact-extent operation consumes the resolution, so callers cannot mix
 /// a winner with another overlay list, window, position, or property resolver.
+/// Shared read surface implemented by both a captured [`OverlayList`] and a
+/// generation-checked [`LiveOverlayView`].
+pub trait OverlayRead {
+    fn is_empty(&self) -> bool;
+    fn may_contain_property(&self, property: Value) -> bool;
+    fn overlay_plist(&self, overlay: Value) -> Option<Value>;
+    fn overlay_get_named(&self, overlay: Value, prop_name: Value) -> Option<Value>;
+    fn overlay_applies_to_window(&self, overlay: Value, window_id: Option<u64>) -> bool;
+    fn overlay_start_emacs_byte_pos(&self, overlay: Value) -> Option<EmacsBytePos>;
+    fn overlay_end_emacs_byte_pos(&self, overlay: Value) -> Option<EmacsBytePos>;
+    fn overlays_at_emacs_byte_pos(&self, pos: EmacsBytePos) -> Vec<Value>;
+    fn overlays_in_emacs_byte_range(&self, range: EmacsByteRange) -> Vec<Value>;
+    fn overlays_in_gnu_lists_order(&self) -> Vec<Value>;
+    fn next_boundary_after_emacs_byte_pos(&self, pos: EmacsBytePos) -> Option<EmacsBytePos>;
+    fn next_property_boundary_after_until_emacs_byte_pos(
+        &self,
+        pos: EmacsBytePos,
+        limit: EmacsBytePos,
+        properties: &[Value],
+    ) -> Option<EmacsBytePos>;
+    fn highest_priority_overlay_property_value_at_emacs_byte_pos(
+        &self,
+        pos: EmacsBytePos,
+        property: Value,
+        window_id: Option<u64>,
+    ) -> Option<Value>;
+    fn sort_overlay_ids_by_priority_desc(&self, overlay_ids: &mut [Value]);
+    fn sort_overlay_ids_by_priority_desc_with(
+        &self,
+        overlay_ids: &mut [Value],
+        priority_of: OverlayPriorityLookup,
+    );
+    fn iter_overlays_at_emacs_byte_pos(
+        &self,
+        pos: EmacsBytePos,
+    ) -> impl Iterator<Item = Value> + '_;
+    fn iter_overlays_in_accessible_emacs_byte_range(
+        &self,
+        range: EmacsByteRange,
+        accessible_end: EmacsBytePos,
+    ) -> impl Iterator<Item = Value> + '_;
+    fn resolve_overlay_property_at_emacs_byte_pos<R>(
+        &self,
+        pos: EmacsBytePos,
+        window_id: Option<u64>,
+        property_value: R,
+    ) -> OverlayPropertyAtPoint<'_, R>
+    where
+        R: OverlayPropertyResolver;
+}
+
+/// Scoped, generation-checked read view onto a buffer's live overlay tree.
+///
+/// Holds cloned `Arc` handles to the buffer's interval tree and shared core,
+/// never `&Buffer`. Copies no overlays and retains no root lease. Every read
+/// takes a short guard, verifies `core.generation == stamp`, latches `stale`
+/// on any mismatch (returning empty/`None`/`false` without dereferencing
+/// overlay objects), and drops all guards before returning.
+#[derive(Clone, Debug)]
+pub struct LiveOverlayView {
+    index: LiveOverlayIndex,
+    stale: Cell<bool>,
+}
+
+impl LiveOverlayView {
+    /// Whether the live overlay index has advanced past this view's stamp.
+    pub fn is_stale(&self) -> bool {
+        self.index.is_stale(&self.stale)
+    }
+
+    /// Generation stamp recorded when this view was created.
+    pub fn generation_stamp(&self) -> u64 {
+        self.index.stamp()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.index.is_empty(&self.stale)
+    }
+
+    pub fn may_contain_property(&self, property: Value) -> bool {
+        self.index.may_contain_property(property, &self.stale)
+    }
+
+    pub fn overlay_plist(&self, overlay: Value) -> Option<Value> {
+        if self.is_stale() {
+            return None;
+        }
+        let contained = self.index.contains(overlay, &self.stale);
+        if self.stale.get() {
+            return None;
+        }
+        if contained || overlay_live_buffer(overlay).is_none() {
+            return overlay.as_overlay_data().map(|data| data.plist);
+        }
+        None
+    }
+
+    pub fn overlay_get_named(&self, overlay: Value, prop_name: Value) -> Option<Value> {
+        if self.is_stale() {
+            return None;
+        }
+        overlay_property_named(overlay, prop_name)
+    }
+
+    pub fn overlay_applies_to_window(&self, overlay: Value, window_id: Option<u64>) -> bool {
+        if self.is_stale() {
+            return false;
+        }
+        overlay_applies_to_window(overlay, window_id)
+    }
+
+    pub fn overlay_start_emacs_byte_pos(&self, overlay: Value) -> Option<EmacsBytePos> {
+        if self.is_stale() {
+            return None;
+        }
+        overlay_live_buffer(overlay)?;
+        self.index
+            .range(overlay, &self.stale)
+            .map(EmacsByteRange::start)
+    }
+
+    pub fn overlay_end_emacs_byte_pos(&self, overlay: Value) -> Option<EmacsBytePos> {
+        if self.is_stale() {
+            return None;
+        }
+        overlay_live_buffer(overlay)?;
+        self.index
+            .range(overlay, &self.stale)
+            .map(EmacsByteRange::end)
+    }
+
+    pub fn overlays_at_emacs_byte_pos(&self, pos: EmacsBytePos) -> Vec<Value> {
+        self.index.overlays_at(pos, &self.stale)
+    }
+
+    pub fn overlays_in_emacs_byte_range(&self, range: EmacsByteRange) -> Vec<Value> {
+        self.index
+            .overlays_in_region(range, range.end(), &self.stale)
+    }
+
+    pub fn overlays_in_gnu_lists_order(&self) -> Vec<Value> {
+        self.index.all_ascending(&self.stale)
+    }
+
+    pub fn next_boundary_after_emacs_byte_pos(&self, pos: EmacsBytePos) -> Option<EmacsBytePos> {
+        self.index
+            .next_boundary_after(pos, EmacsBytePos::new(usize::MAX), &self.stale)
+    }
+
+    pub fn next_property_boundary_after_until_emacs_byte_pos(
+        &self,
+        pos: EmacsBytePos,
+        limit: EmacsBytePos,
+        properties: &[Value],
+    ) -> Option<EmacsBytePos> {
+        if pos >= limit
+            || !properties
+                .iter()
+                .any(|&property| self.may_contain_property(property))
+        {
+            return None;
+        }
+        self.index.next_boundary_after_matching_no_publish(
+            pos,
+            limit,
+            OverlayPropertyFilter::for_properties(properties.iter().copied()),
+            &self.stale,
+        )
+    }
+
+    pub fn highest_priority_overlay_property_value_at_emacs_byte_pos(
+        &self,
+        pos: EmacsBytePos,
+        property: Value,
+        window_id: Option<u64>,
+    ) -> Option<Value> {
+        // `overlay_property_named` checks direct plist keys only, so an absent
+        // direct key proves no live overlay carries `property` without reading
+        // any plist cons cell or publishing the lazy endpoint tree.
+        if !self.may_contain_property(property) {
+            return None;
+        }
+        match self.resolve_overlay_property_at_emacs_byte_pos(pos, window_id, |overlay| {
+            overlay_property_named(overlay, property)
+        }) {
+            OverlayPropertyAtPoint::Present(resolution) => Some(resolution.value()),
+            OverlayPropertyAtPoint::Vacant(_) => None,
+        }
+    }
+
+    pub fn sort_overlay_ids_by_priority_desc(&self, overlay_ids: &mut [Value]) {
+        self.sort_overlay_ids_by_priority_desc_with(overlay_ids, &overlay_plist_priority);
+    }
+
+    pub fn sort_overlay_ids_by_priority_desc_with(
+        &self,
+        overlay_ids: &mut [Value],
+        priority_of: OverlayPriorityLookup,
+    ) {
+        if overlay_ids.len() < 2 || self.is_stale() {
+            return;
+        }
+        sort_overlay_ids_by_priority_desc_impl(overlay_ids, priority_of);
+    }
+
+    pub fn iter_overlays_at_emacs_byte_pos(
+        &self,
+        pos: EmacsBytePos,
+    ) -> impl Iterator<Item = Value> + '_ {
+        self.index.overlays_at_small(pos, &self.stale).into_iter()
+    }
+
+    pub fn iter_overlays_in_accessible_emacs_byte_range(
+        &self,
+        range: EmacsByteRange,
+        accessible_end: EmacsBytePos,
+    ) -> impl Iterator<Item = Value> + '_ {
+        self.index
+            .overlays_in_region_small(range, accessible_end, &self.stale)
+            .into_iter()
+    }
+
+    pub fn resolve_overlay_property_at_emacs_byte_pos<R>(
+        &self,
+        pos: EmacsBytePos,
+        window_id: Option<u64>,
+        mut property_value: R,
+    ) -> OverlayPropertyAtPoint<'_, R>
+    where
+        R: OverlayPropertyResolver,
+    {
+        let source = OverlayReadRef::Live(self);
+        let mut active = source.active_property_overlays_at(pos, window_id, &mut property_value);
+        match active.winner() {
+            Some(winner) => OverlayPropertyAtPoint::Present(OverlayPropertyResolution {
+                overlays: source,
+                at: pos,
+                window_id,
+                winner,
+                active,
+                property_value,
+            }),
+            None => OverlayPropertyAtPoint::Vacant(OverlayPropertyVacancy {
+                overlays: source,
+                at: pos,
+                window_id,
+                active,
+                property_value,
+            }),
+        }
+    }
+}
+
+impl OverlayRead for OverlayList {
+    fn is_empty(&self) -> bool {
+        OverlayList::is_empty(self)
+    }
+    fn may_contain_property(&self, property: Value) -> bool {
+        OverlayList::may_contain_property(self, property)
+    }
+    fn overlay_plist(&self, overlay: Value) -> Option<Value> {
+        OverlayList::overlay_plist(self, overlay)
+    }
+    fn overlay_get_named(&self, overlay: Value, prop_name: Value) -> Option<Value> {
+        OverlayList::overlay_get_named(self, overlay, prop_name)
+    }
+    fn overlay_applies_to_window(&self, overlay: Value, window_id: Option<u64>) -> bool {
+        OverlayList::overlay_applies_to_window(self, overlay, window_id)
+    }
+    fn overlay_start_emacs_byte_pos(&self, overlay: Value) -> Option<EmacsBytePos> {
+        OverlayList::overlay_start_emacs_byte_pos(self, overlay)
+    }
+    fn overlay_end_emacs_byte_pos(&self, overlay: Value) -> Option<EmacsBytePos> {
+        OverlayList::overlay_end_emacs_byte_pos(self, overlay)
+    }
+    fn overlays_at_emacs_byte_pos(&self, pos: EmacsBytePos) -> Vec<Value> {
+        OverlayList::overlays_at_emacs_byte_pos(self, pos)
+    }
+    fn overlays_in_emacs_byte_range(&self, range: EmacsByteRange) -> Vec<Value> {
+        OverlayList::overlays_in_emacs_byte_range(self, range)
+    }
+    fn overlays_in_gnu_lists_order(&self) -> Vec<Value> {
+        OverlayList::overlays_in_gnu_lists_order(self)
+    }
+    fn next_boundary_after_emacs_byte_pos(&self, pos: EmacsBytePos) -> Option<EmacsBytePos> {
+        OverlayList::next_boundary_after_emacs_byte_pos(self, pos)
+    }
+    fn next_property_boundary_after_until_emacs_byte_pos(
+        &self,
+        pos: EmacsBytePos,
+        limit: EmacsBytePos,
+        properties: &[Value],
+    ) -> Option<EmacsBytePos> {
+        OverlayList::next_property_boundary_after_until_emacs_byte_pos(self, pos, limit, properties)
+    }
+    fn highest_priority_overlay_property_value_at_emacs_byte_pos(
+        &self,
+        pos: EmacsBytePos,
+        property: Value,
+        window_id: Option<u64>,
+    ) -> Option<Value> {
+        OverlayList::highest_priority_overlay_property_value_at_emacs_byte_pos(
+            self, pos, property, window_id,
+        )
+    }
+    fn sort_overlay_ids_by_priority_desc(&self, overlay_ids: &mut [Value]) {
+        OverlayList::sort_overlay_ids_by_priority_desc(self, overlay_ids)
+    }
+    fn sort_overlay_ids_by_priority_desc_with(
+        &self,
+        overlay_ids: &mut [Value],
+        priority_of: OverlayPriorityLookup,
+    ) {
+        OverlayList::sort_overlay_ids_by_priority_desc_with(self, overlay_ids, priority_of)
+    }
+    fn iter_overlays_at_emacs_byte_pos(
+        &self,
+        pos: EmacsBytePos,
+    ) -> impl Iterator<Item = Value> + '_ {
+        OverlayList::iter_overlays_at_emacs_byte_pos(self, pos)
+    }
+    fn iter_overlays_in_accessible_emacs_byte_range(
+        &self,
+        range: EmacsByteRange,
+        accessible_end: EmacsBytePos,
+    ) -> impl Iterator<Item = Value> + '_ {
+        OverlayList::iter_overlays_in_accessible_emacs_byte_range(self, range, accessible_end)
+    }
+    fn resolve_overlay_property_at_emacs_byte_pos<R>(
+        &self,
+        pos: EmacsBytePos,
+        window_id: Option<u64>,
+        property_value: R,
+    ) -> OverlayPropertyAtPoint<'_, R>
+    where
+        R: OverlayPropertyResolver,
+    {
+        OverlayList::resolve_overlay_property_at_emacs_byte_pos(
+            self,
+            pos,
+            window_id,
+            property_value,
+        )
+    }
+}
+
+impl OverlayRead for LiveOverlayView {
+    fn is_empty(&self) -> bool {
+        LiveOverlayView::is_empty(self)
+    }
+    fn may_contain_property(&self, property: Value) -> bool {
+        LiveOverlayView::may_contain_property(self, property)
+    }
+    fn overlay_plist(&self, overlay: Value) -> Option<Value> {
+        LiveOverlayView::overlay_plist(self, overlay)
+    }
+    fn overlay_get_named(&self, overlay: Value, prop_name: Value) -> Option<Value> {
+        LiveOverlayView::overlay_get_named(self, overlay, prop_name)
+    }
+    fn overlay_applies_to_window(&self, overlay: Value, window_id: Option<u64>) -> bool {
+        LiveOverlayView::overlay_applies_to_window(self, overlay, window_id)
+    }
+    fn overlay_start_emacs_byte_pos(&self, overlay: Value) -> Option<EmacsBytePos> {
+        LiveOverlayView::overlay_start_emacs_byte_pos(self, overlay)
+    }
+    fn overlay_end_emacs_byte_pos(&self, overlay: Value) -> Option<EmacsBytePos> {
+        LiveOverlayView::overlay_end_emacs_byte_pos(self, overlay)
+    }
+    fn overlays_at_emacs_byte_pos(&self, pos: EmacsBytePos) -> Vec<Value> {
+        LiveOverlayView::overlays_at_emacs_byte_pos(self, pos)
+    }
+    fn overlays_in_emacs_byte_range(&self, range: EmacsByteRange) -> Vec<Value> {
+        LiveOverlayView::overlays_in_emacs_byte_range(self, range)
+    }
+    fn overlays_in_gnu_lists_order(&self) -> Vec<Value> {
+        LiveOverlayView::overlays_in_gnu_lists_order(self)
+    }
+    fn next_boundary_after_emacs_byte_pos(&self, pos: EmacsBytePos) -> Option<EmacsBytePos> {
+        LiveOverlayView::next_boundary_after_emacs_byte_pos(self, pos)
+    }
+    fn next_property_boundary_after_until_emacs_byte_pos(
+        &self,
+        pos: EmacsBytePos,
+        limit: EmacsBytePos,
+        properties: &[Value],
+    ) -> Option<EmacsBytePos> {
+        LiveOverlayView::next_property_boundary_after_until_emacs_byte_pos(
+            self, pos, limit, properties,
+        )
+    }
+    fn highest_priority_overlay_property_value_at_emacs_byte_pos(
+        &self,
+        pos: EmacsBytePos,
+        property: Value,
+        window_id: Option<u64>,
+    ) -> Option<Value> {
+        LiveOverlayView::highest_priority_overlay_property_value_at_emacs_byte_pos(
+            self, pos, property, window_id,
+        )
+    }
+    fn sort_overlay_ids_by_priority_desc(&self, overlay_ids: &mut [Value]) {
+        LiveOverlayView::sort_overlay_ids_by_priority_desc(self, overlay_ids)
+    }
+    fn sort_overlay_ids_by_priority_desc_with(
+        &self,
+        overlay_ids: &mut [Value],
+        priority_of: OverlayPriorityLookup,
+    ) {
+        LiveOverlayView::sort_overlay_ids_by_priority_desc_with(self, overlay_ids, priority_of)
+    }
+    fn iter_overlays_at_emacs_byte_pos(
+        &self,
+        pos: EmacsBytePos,
+    ) -> impl Iterator<Item = Value> + '_ {
+        LiveOverlayView::iter_overlays_at_emacs_byte_pos(self, pos)
+    }
+    fn iter_overlays_in_accessible_emacs_byte_range(
+        &self,
+        range: EmacsByteRange,
+        accessible_end: EmacsBytePos,
+    ) -> impl Iterator<Item = Value> + '_ {
+        LiveOverlayView::iter_overlays_in_accessible_emacs_byte_range(self, range, accessible_end)
+    }
+    fn resolve_overlay_property_at_emacs_byte_pos<R>(
+        &self,
+        pos: EmacsBytePos,
+        window_id: Option<u64>,
+        property_value: R,
+    ) -> OverlayPropertyAtPoint<'_, R>
+    where
+        R: OverlayPropertyResolver,
+    {
+        LiveOverlayView::resolve_overlay_property_at_emacs_byte_pos(
+            self,
+            pos,
+            window_id,
+            property_value,
+        )
+    }
+}
+
+#[derive(Clone, Copy)]
+enum OverlayReadRef<'a> {
+    List(&'a OverlayList),
+    Live(&'a LiveOverlayView),
+}
+
+impl<'a> OverlayReadRef<'a> {
+    fn is_stale(self) -> bool {
+        match self {
+            Self::List(_) => false,
+            Self::Live(view) => view.is_stale(),
+        }
+    }
+
+    fn endpoint_records_strictly_within(
+        self,
+        bounds: EmacsByteRange,
+        property_filter: OverlayPropertyFilter,
+    ) -> OverlayEndpointRecords<'a> {
+        match self {
+            Self::List(list) => list
+                .index
+                .endpoint_records_strictly_within(bounds, property_filter),
+            Self::Live(view) => {
+                view.index
+                    .endpoint_records_strictly_within(bounds, property_filter, &view.stale)
+            }
+        }
+    }
+
+    fn endpoint_records_strictly_within_reverse(
+        self,
+        bounds: EmacsByteRange,
+        property_filter: OverlayPropertyFilter,
+    ) -> OverlayEndpointRecords<'a> {
+        match self {
+            Self::List(list) => list
+                .index
+                .endpoint_records_strictly_within_reverse(bounds, property_filter),
+            Self::Live(view) => view.index.endpoint_records_strictly_within_reverse(
+                bounds,
+                property_filter,
+                &view.stale,
+            ),
+        }
+    }
+
+    fn active_property_overlays_at(
+        self,
+        pos: EmacsBytePos,
+        window_id: Option<u64>,
+        property_value: &mut impl OverlayPropertyResolver,
+    ) -> ActivePropertyOverlays {
+        let mut active = ActivePropertyOverlays::new();
+        match self {
+            Self::List(list) => {
+                for overlay in list.iter_overlays_at_emacs_byte_pos(pos) {
+                    if overlay_applies_to_window(overlay, window_id) {
+                        active
+                            .inspect_and_insert(overlay, property_value.value_for_overlay(overlay));
+                    }
+                }
+            }
+            Self::Live(view) => {
+                for overlay in view.iter_overlays_at_emacs_byte_pos(pos) {
+                    if view.is_stale() {
+                        return ActivePropertyOverlays::new();
+                    }
+                    if overlay_applies_to_window(overlay, window_id) {
+                        active
+                            .inspect_and_insert(overlay, property_value.value_for_overlay(overlay));
+                    }
+                }
+            }
+        }
+        active
+    }
+
+    fn property_frontier_extent(
+        self,
+        pos: EmacsBytePos,
+        window_id: Option<u64>,
+        target: Option<Value>,
+        mut active: ActivePropertyOverlays,
+        bounds: EmacsByteRange,
+        property_value: &mut impl OverlayPropertyResolver,
+    ) -> Option<EmacsByteRange> {
+        if bounds.is_empty() || pos < bounds.start() || pos >= bounds.end() || self.is_stale() {
+            return None;
+        }
+
+        debug_assert!(same_overlay_identity(
+            active.winner().map(OverlayPropertyWinner::overlay),
+            target,
+        ));
+
+        let start = self.property_frontier_start(
+            pos,
+            window_id,
+            target,
+            active.clone(),
+            bounds,
+            property_value,
+        )?;
+
+        let mut end = bounds.end();
+        let forward_bounds = EmacsByteRange::new(pos, bounds.end());
+        let endpoint_filter = property_value.endpoint_filter();
+        let mut endpoints = self
+            .endpoint_records_strictly_within(forward_bounds, endpoint_filter)
+            .peekable();
+        while let Some(boundary) = endpoints.peek().map(|endpoint| endpoint.position) {
+            while endpoints
+                .peek()
+                .is_some_and(|endpoint| endpoint.position == boundary)
+            {
+                let endpoint = endpoints.next().expect("peeked overlay endpoint");
+                if self.is_stale() {
+                    return None;
+                }
+                active.apply_endpoint(
+                    endpoint,
+                    EndpointTraversalDirection::Forward,
+                    window_id,
+                    property_value,
+                );
+            }
+            if !same_overlay_identity(active.winner().map(OverlayPropertyWinner::overlay), target) {
+                end = boundary;
+                break;
+            }
+        }
+
+        Some(EmacsByteRange::new(start, end))
+    }
+
+    fn property_frontier_start(
+        self,
+        pos: EmacsBytePos,
+        window_id: Option<u64>,
+        target: Option<Value>,
+        mut active: ActivePropertyOverlays,
+        bounds: EmacsByteRange,
+        property_value: &mut impl OverlayPropertyResolver,
+    ) -> Option<EmacsBytePos> {
+        if bounds.is_empty() || pos < bounds.start() || pos >= bounds.end() || self.is_stale() {
+            return None;
+        }
+
+        debug_assert!(same_overlay_identity(
+            active.winner().map(OverlayPropertyWinner::overlay),
+            target,
+        ));
+
+        let mut start = bounds.start();
+        let reverse_bounds = EmacsByteRange::new(
+            bounds.start(),
+            EmacsBytePos::new(pos.get().saturating_add(1)),
+        );
+        let endpoint_filter = property_value.endpoint_filter();
+        let mut endpoints = self
+            .endpoint_records_strictly_within_reverse(reverse_bounds, endpoint_filter)
+            .peekable();
+        while let Some(boundary) = endpoints.peek().map(|endpoint| endpoint.position) {
+            while endpoints
+                .peek()
+                .is_some_and(|endpoint| endpoint.position == boundary)
+            {
+                let endpoint = endpoints.next().expect("peeked overlay endpoint");
+                if self.is_stale() {
+                    return None;
+                }
+                active.apply_endpoint(
+                    endpoint,
+                    EndpointTraversalDirection::Reverse,
+                    window_id,
+                    property_value,
+                );
+            }
+            if !same_overlay_identity(active.winner().map(OverlayPropertyWinner::overlay), target) {
+                start = boundary;
+                break;
+            }
+        }
+        Some(start)
+    }
+}
+
 pub struct OverlayPropertyResolution<'a, R> {
-    overlays: &'a OverlayList,
+    overlays: OverlayReadRef<'a>,
     at: EmacsBytePos,
     window_id: Option<u64>,
     winner: OverlayPropertyWinner,
@@ -612,7 +1666,7 @@ where
 /// it immediately. A caller with a proven non-nil text property can promote it
 /// to [`OverlayPropertyFallback`], which permits a bounded sweep.
 pub struct OverlayPropertyVacancy<'a, R> {
-    overlays: &'a OverlayList,
+    overlays: OverlayReadRef<'a>,
     at: EmacsBytePos,
     window_id: Option<u64>,
     active: ActivePropertyOverlays,
@@ -729,7 +1783,7 @@ pub struct OverlayPropertySweep<'a, R>
 where
     R: OverlayPropertyResolver,
 {
-    overlays: &'a OverlayList,
+    overlays: OverlayReadRef<'a>,
     bounds: EmacsByteRange,
     window_id: Option<u64>,
     property_value: R,
@@ -753,13 +1807,14 @@ where
         window_id: Option<u64>,
         mut property_value: R,
     ) -> Self {
+        let source = OverlayReadRef::List(overlays);
         let active = if bounds.is_empty() {
             ActivePropertyOverlays::new()
         } else {
-            overlays.active_property_overlays_at(bounds.start(), window_id, &mut property_value)
+            source.active_property_overlays_at(bounds.start(), window_id, &mut property_value)
         };
         Self::from_frontier(
-            overlays,
+            source,
             bounds,
             window_id,
             property_value,
@@ -769,7 +1824,7 @@ where
     }
 
     fn from_frontier(
-        overlays: &'a OverlayList,
+        overlays: OverlayReadRef<'a>,
         bounds: EmacsByteRange,
         window_id: Option<u64>,
         property_value: R,
@@ -784,7 +1839,6 @@ where
             property_value,
             active,
             endpoints: overlays
-                .index
                 .endpoint_records_strictly_within(bounds, endpoint_filter)
                 .peekable(),
             cursor: bounds.start(),
@@ -795,6 +1849,10 @@ where
     }
 
     fn restart(&mut self) {
+        // Release any held `core.read()` guard on the previous endpoint cursor
+        // before `active_property_overlays_at` acquires `intervals.read()`
+        // (`intervals -> core` lock order).
+        self.endpoints = OverlayEndpointRecords::empty().peekable();
         self.active = if self.bounds.is_empty() {
             ActivePropertyOverlays::new()
         } else {
@@ -807,7 +1865,6 @@ where
         let endpoint_filter = self.property_value.endpoint_filter();
         self.endpoints = self
             .overlays
-            .index
             .endpoint_records_strictly_within(self.bounds, endpoint_filter)
             .peekable();
         self.cursor = self.bounds.start();
@@ -875,6 +1932,10 @@ where
                 .is_some_and(|endpoint| endpoint.position == boundary)
             {
                 let endpoint = self.endpoints.next().expect("peeked overlay endpoint");
+                if self.overlays.is_stale() {
+                    self.cursor = self.bounds.end();
+                    return None;
+                }
                 self.active.apply_endpoint(
                     endpoint,
                     EndpointTraversalDirection::Forward,
@@ -1003,7 +2064,15 @@ impl OverlayList {
         Self {
             index: OverlayIndex::new(),
             snapshot: RefCell::new(None),
-            absent_properties: Cell::new([None; 8]),
+            content_component_sum: Cell::new(0),
+            content_unhashable: Cell::new(0),
+            content_dirty: Cell::new(false),
+            view_query_floor: None,
+            view_query_underflow: Cell::new(false),
+            snapshot_copy_revisions: RefCell::new(FxHashMap::default()),
+            snapshot_copies: RefCell::new(FxHashMap::default()),
+            snapshot_copy_stamp: Cell::new(0),
+            snapshot_copy_insert_order: RefCell::new(std::collections::VecDeque::new()),
         }
     }
 
@@ -1013,6 +2082,23 @@ impl OverlayList {
         self.index.interval_height()
     }
 
+    /// Capture a live, generation-stamped read view onto this overlay list
+    /// without copying overlays or building a view index.
+    pub fn live_view(&self) -> LiveOverlayView {
+        LiveOverlayView {
+            index: self.index.live_handle(),
+            stale: Cell::new(false),
+        }
+    }
+
+    /// Generation of the live overlay index. Writes advance it; a no-op
+    /// remap does not.
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn overlay_generation(&self) -> u64 {
+        self.index.generation()
+    }
+
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn insert_overlay(&mut self, overlay: Value) {
         let data = overlay.as_overlay_data().unwrap();
@@ -1020,12 +2106,25 @@ impl OverlayList {
         // overlay already owned by this index is rejected, while cross-buffer
         // moves materialize and rewrite the coordinates before reattaching.
         let range = EmacsByteRange::from_usize(data.start, data.end);
-        self.index_mut().attach(overlay, range);
+        if self.index_mut().attach(overlay, range) {
+            // A cross-buffer move or reattach rewrote the object's coordinates
+            // and buffer before this call; make any copy made in a previous
+            // list unreusable here.
+            self.bump_snapshot_copy_revision(overlay);
+            self.add_overlay_content_component(overlay);
+        }
     }
 
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn detach_overlay(&mut self, overlay: Value) -> bool {
-        self.index_mut().detach(overlay).is_some()
+        let component = self.overlay_content_component(overlay);
+        if self.index_mut().detach(overlay).is_some() {
+            self.forget_snapshot_copy(overlay);
+            self.subtract_overlay_content_component(component);
+            true
+        } else {
+            false
+        }
     }
 
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
@@ -1041,6 +2140,7 @@ impl OverlayList {
 
     pub fn delete_all_overlays(&mut self) {
         self.invalidate_snapshot();
+        self.clear_snapshot_copies();
         let live: Vec<Value> = self.index.values().collect();
         for overlay in live {
             let _ = overlay.with_overlay_data_mut(|data| {
@@ -1048,10 +2148,36 @@ impl OverlayList {
             });
         }
         self.index.clear();
+        self.content_component_sum.set(0);
+        self.content_unhashable.set(0);
+        self.content_dirty.set(false);
     }
 
     pub(crate) fn retarget_buffer(&mut self, from: BufferId, to: BufferId) {
         self.invalidate_snapshot();
+        // A whole-list retarget is rare and can affect any subset; dropping
+        // the copies costs one re-copy per overlay on the next capture.
+        self.clear_snapshot_copies();
+        let mut changed = false;
+        for overlay in self.index.values() {
+            let _ = overlay.with_overlay_data_mut(|data| {
+                if data.buffer == Some(from) {
+                    data.buffer = Some(to);
+                    changed = true;
+                }
+            });
+        }
+        if changed {
+            self.index.bump_generation();
+        }
+    }
+
+    /// Retarget overlays after `buffer-swap-text` swapped two buffers' lists.
+    /// Always advances the generation even when this list is empty so a live
+    /// view captured against the old buffer goes stale after the swap.
+    pub(crate) fn retarget_buffer_for_swap(&mut self, from: BufferId, to: BufferId) {
+        self.invalidate_snapshot();
+        self.clear_snapshot_copies();
         for overlay in self.index.values() {
             let _ = overlay.with_overlay_data_mut(|data| {
                 if data.buffer == Some(from) {
@@ -1059,6 +2185,7 @@ impl OverlayList {
                 }
             });
         }
+        self.index.bump_generation();
     }
 
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
@@ -1069,6 +2196,13 @@ impl OverlayList {
         value: Value,
     ) -> Result<bool, Flow> {
         neovm_value::symbol::SymbolPropertyRevision::observe_category_property(prop, value);
+        // This inner plist step runs no Lisp and only changes the plist.
+        // builtin_overlay_put_in_buffers performs any evaporate deletion
+        // after we return, through the ordinary owner deletion path.
+        // Membership and positions stay fixed through hashing, key accounting
+        // and snapshot mirroring; resolve them once for the whole write.
+        let range = self.index.range(overlay);
+        let previous_component = Self::overlay_content_component_at_range(overlay, range);
         let (changed, plist_replaced) = overlay
             .with_overlay_data_mut(|data| {
                 let (plist, changed) = overlay_plist_put(data.plist, prop, value);
@@ -1080,14 +2214,40 @@ impl OverlayList {
         // Adding a previously absent nil property changes the plist even
         // though GNU's display-change flag remains false.
         if changed || plist_replaced {
-            self.absent_properties.set([None; 8]);
-            self.index.overlay_properties_changed(overlay);
-            self.retain_snapshot_if(|live, snapshot| {
-                live.range(overlay)
-                    .is_some_and(|range| snapshot.mirror_plist_write(overlay, range.start()))
+            self.bump_snapshot_copy_revision(overlay);
+            if plist_replaced && range.is_some() {
+                self.index
+                    .overlay_property_key_added_to_member(overlay, prop);
+            } else {
+                self.index.bump_generation();
+            }
+            self.subtract_overlay_content_component(previous_component);
+            if !self.content_dirty.get() {
+                self.add_computed_overlay_content_component(
+                    Self::overlay_content_component_at_range(overlay, range),
+                );
+            }
+            self.retain_snapshot_if(|_live, snapshot| {
+                range.is_some_and(|range| {
+                    snapshot.mirror_plist_write(
+                        overlay,
+                        range.start(),
+                        plist_replaced.then_some(prop),
+                    )
+                })
             });
         }
         Ok(changed)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn start_owner_query_count_for_test(&self) {
+        super::overlay_index::start_owner_query_count_for_test(&self.index);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn finish_owner_query_count_for_test(&self) -> usize {
+        super::overlay_index::finish_owner_query_count_for_test(&self.index)
     }
 
     pub(crate) fn overlay_get(&self, overlay: Value, prop: &Value) -> Option<Value> {
@@ -1140,6 +2300,7 @@ impl OverlayList {
         overlay: Value,
         range: EmacsByteRange,
     ) {
+        let previous_component = self.overlay_content_component(overlay);
         if self.index_mut().move_to(overlay, range).is_none() {
             return;
         }
@@ -1147,6 +2308,8 @@ impl OverlayList {
             data.start = range.start().get();
             data.end = range.end().get();
         });
+        self.bump_snapshot_copy_revision(overlay);
+        self.replace_overlay_content_component(previous_component, overlay);
         // GNU Emacs drops empty overlays created by move-overlay when
         // `evaporate' is non-nil. Minibuffer shadow overlays depend on this
         // to avoid leaking stale before/after-strings into later prompts.
@@ -1181,10 +2344,27 @@ impl OverlayList {
                 data.start = remap.range.start().get();
                 data.end = remap.range.end().get();
             });
+            self.bump_snapshot_copy_revision(remap.overlay);
+        }
+        self.content_dirty.set(true);
+    }
+
+    /// Note that a layout query starts at `pos`. A window-range view is
+    /// complete only at or above its capture floor.
+    fn note_overlay_view_query(&self, pos: EmacsBytePos) {
+        if self.view_query_floor.is_some_and(|floor| pos < floor) {
+            self.view_query_underflow.set(true);
         }
     }
 
+    /// Whether a window-range view was queried below its capture floor.
+    /// Always false for a whole-buffer list.
+    pub fn overlay_view_query_underflowed(&self) -> bool {
+        self.view_query_underflow.get()
+    }
+
     pub fn overlays_at_emacs_byte_pos(&self, pos: EmacsBytePos) -> Vec<Value> {
+        self.note_overlay_view_query(pos);
         self.index.overlays_at(pos)
     }
 
@@ -1193,6 +2373,7 @@ impl OverlayList {
         &self,
         pos: EmacsBytePos,
     ) -> impl Iterator<Item = Value> + '_ {
+        self.note_overlay_view_query(pos);
         self.index.overlays_at_iter(pos)
     }
 
@@ -1204,6 +2385,7 @@ impl OverlayList {
     /// of narrowing (buffer.c:4012; itree.c:1200-1205). Empty intervals at Z
     /// are therefore omitted when BEG differs from Z.
     pub(crate) fn overlays_in_gnu_full_region(&self, range: EmacsByteRange) -> Vec<Value> {
+        self.note_overlay_view_query(range.start());
         self.index.overlays_intersecting(range)
     }
 
@@ -1214,32 +2396,11 @@ impl OverlayList {
         self.index.all_ascending()
     }
 
-    /// Conservative test of direct plist keys across all live overlays.
-    /// False proves absence. A Bloom-signature collision for a symbol key is
-    /// checked once and its absence cached until the next overlay mutation.
-    /// Category inheritance is intentionally not followed here.
+    /// Exact direct-key presence, including nil-valued and duplicate keys.
+    /// Owner mutations maintain numeric refcounts; category inheritance and
+    /// alias selection remain the caller's separate property semantics.
     pub fn may_contain_property(&self, property: Value) -> bool {
-        if !self.index.may_contain_property(property) {
-            return false;
-        }
-        let Some(symbol) = property.as_bare_symbol_id() else {
-            return true;
-        };
-        let mut absent = self.absent_properties.get();
-        if absent.contains(&Some(symbol)) {
-            return false;
-        }
-        if self
-            .index
-            .values()
-            .any(|overlay| self.overlay_get_named(overlay, property).is_some())
-        {
-            return true;
-        }
-        absent.rotate_right(1);
-        absent[0] = Some(symbol);
-        self.absent_properties.set(absent);
-        false
+        self.index.may_contain_property(property)
     }
 
     /// A content digest of every live overlay: its span and its whole
@@ -1265,42 +2426,142 @@ impl OverlayList {
     /// often -- over-invalidating costs a redisplay, under-invalidating
     /// leaves a stale frame on screen.
     pub fn content_digest(&self) -> Option<u64> {
+        self.ensure_content_components();
+        if self.content_unhashable.get() > 0 {
+            None
+        } else {
+            Some(self.content_component_sum.get())
+        }
+    }
+
+    /// Recompute the commutative component sum without the incremental
+    /// update paths. Test-only: it is the oracle those paths are checked
+    /// against.
+    #[cfg(test)]
+    pub(crate) fn content_digest_from_scratch_for_test(&self) -> Option<u64> {
+        let mut sum = 0u64;
+        let mut unhashable = 0usize;
+        for overlay in self.index.all_ascending() {
+            match self.overlay_content_component(overlay) {
+                OverlayContentComponent::Hashable(hash) => sum = sum.wrapping_add(hash),
+                OverlayContentComponent::CategoryIndirection => unhashable += 1,
+            }
+        }
+        (unhashable == 0).then_some(sum)
+    }
+
+    fn ensure_content_components(&self) {
+        if !self.content_dirty.get() {
+            return;
+        }
+        let mut sum = 0u64;
+        let mut unhashable = 0usize;
+        for overlay in self.index.all_ascending() {
+            #[cfg(test)]
+            OVERLAY_CONTENT_COMPONENT_SCANS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            match self.overlay_content_component(overlay) {
+                OverlayContentComponent::Hashable(hash) => sum = sum.wrapping_add(hash),
+                OverlayContentComponent::CategoryIndirection => unhashable += 1,
+            }
+        }
+        self.content_component_sum.set(sum);
+        self.content_unhashable.set(unhashable);
+        self.content_dirty.set(false);
+    }
+
+    fn add_overlay_content_component(&self, overlay: Value) {
+        // Dirty totals are not authoritative. The next digest rebuilds from
+        // the current owner set, including this insertion or replacement.
+        if self.content_dirty.get() {
+            return;
+        }
+        self.add_computed_overlay_content_component(self.overlay_content_component(overlay));
+    }
+
+    fn add_computed_overlay_content_component(&self, component: OverlayContentComponent) {
+        match component {
+            OverlayContentComponent::Hashable(hash) => self
+                .content_component_sum
+                .set(self.content_component_sum.get().wrapping_add(hash)),
+            OverlayContentComponent::CategoryIndirection => {
+                self.content_unhashable
+                    .set(self.content_unhashable.get() + 1);
+            }
+        }
+    }
+
+    fn subtract_overlay_content_component(&self, component: OverlayContentComponent) {
+        // A bulk edit or restore may have invalidated every cached component.
+        // Do not subtract from stale totals; keep them dirty until rebuilt.
+        if self.content_dirty.get() {
+            return;
+        }
+        match component {
+            OverlayContentComponent::Hashable(hash) => self
+                .content_component_sum
+                .set(self.content_component_sum.get().wrapping_sub(hash)),
+            OverlayContentComponent::CategoryIndirection => {
+                let count = self.content_unhashable.get();
+                debug_assert!(count > 0, "category component removed without an owner");
+                self.content_unhashable.set(count.saturating_sub(1));
+            }
+        }
+    }
+
+    fn replace_overlay_content_component(&self, previous: OverlayContentComponent, overlay: Value) {
+        self.subtract_overlay_content_component(previous);
+        self.add_overlay_content_component(overlay);
+    }
+
+    /// One overlay's contribution to the commutative content hash: its
+    /// positions plus every rendered plist property. A category indirection is
+    /// unhashable because the real properties live on a symbol plist nothing
+    /// here can watch, matching [`Self::content_digest_of`]'s refusal.
+    fn overlay_content_component(&self, overlay: Value) -> OverlayContentComponent {
+        Self::overlay_content_component_at_range(overlay, self.index.range(overlay))
+    }
+
+    /// `range` is the membership/position result for this owner. Ordinary
+    /// overlay-put reuses it while its exclusive, callback-free write keeps
+    /// attachment and geometry unchanged.
+    fn overlay_content_component_at_range(
+        overlay: Value,
+        range: Option<EmacsByteRange>,
+    ) -> OverlayContentComponent {
         use std::hash::Hasher;
 
         let properties = DisplayOverlayProperties::intern();
         let mut hasher = rustc_hash::FxHasher::default();
-        for overlay in self.index.all_ascending() {
-            hasher.write_u64(
-                self.overlay_start_emacs_byte_pos(overlay)
-                    .map_or(u64::MAX, |p| p.get() as u64),
-            );
-            hasher.write_u64(
-                self.overlay_end_emacs_byte_pos(overlay)
-                    .map_or(u64::MAX, |p| p.get() as u64),
-            );
-            let Some(plist) = self.overlay_plist(overlay) else {
-                hasher.write_u8(0xff);
-                continue;
-            };
-            let mut cursor = plist;
-            while cursor.is_cons() {
-                let key = cursor.cons_car();
-                let rest = cursor.cons_cdr();
-                if !rest.is_cons() {
-                    break;
-                }
-                match properties.classify(key) {
-                    OverlayPropertyRelevance::CategoryIndirection => return None,
-                    OverlayPropertyRelevance::Rendered => {
-                        hash_value_content(key, 0, &mut hasher);
-                        hash_value_content(rest.cons_car(), 0, &mut hasher);
-                    }
-                    OverlayPropertyRelevance::Unrendered => {}
-                }
-                cursor = rest.cons_cdr();
+        hasher.write_u64(range.map_or(u64::MAX, |range| range.start().get() as u64));
+        hasher.write_u64(range.map_or(u64::MAX, |range| range.end().get() as u64));
+        // Preserve overlay_plist's member-or-detached visibility rule without
+        // repeating a membership query already answered by `range`.
+        let plist = (range.is_some() || overlay_live_buffer(overlay).is_none())
+            .then(|| overlay.as_overlay_data().unwrap().plist);
+        let Some(plist) = plist else {
+            hasher.write_u8(0xff);
+            return OverlayContentComponent::Hashable(hasher.finish());
+        };
+        let mut cursor = plist;
+        while cursor.is_cons() {
+            let key = cursor.cons_car();
+            let rest = cursor.cons_cdr();
+            if !rest.is_cons() {
+                break;
             }
+            match properties.classify(key) {
+                OverlayPropertyRelevance::CategoryIndirection => {
+                    return OverlayContentComponent::CategoryIndirection;
+                }
+                OverlayPropertyRelevance::Rendered => {
+                    hash_value_content(key, 0, &mut hasher);
+                    hash_value_content(rest.cons_car(), 0, &mut hasher);
+                }
+                OverlayPropertyRelevance::Unrendered => {}
+            }
+            cursor = rest.cons_cdr();
         }
-        Some(hasher.finish())
+        OverlayContentComponent::Hashable(hasher.finish())
     }
 
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
@@ -1309,6 +2570,7 @@ impl OverlayList {
         range: EmacsByteRange,
         accessible_end: EmacsBytePos,
     ) -> Vec<Value> {
+        self.note_overlay_view_query(range.start());
         self.index.overlays_in_region(range, accessible_end)
     }
 
@@ -1318,6 +2580,7 @@ impl OverlayList {
         range: EmacsByteRange,
         accessible_end: EmacsBytePos,
     ) -> impl Iterator<Item = Value> + '_ {
+        self.note_overlay_view_query(range.start());
         self.index.overlays_in_region_iter(range, accessible_end)
     }
 
@@ -1391,10 +2654,11 @@ impl OverlayList {
     where
         R: OverlayPropertyResolver,
     {
-        let mut active = self.active_property_overlays_at(pos, window_id, &mut property_value);
+        let source = OverlayReadRef::List(self);
+        let mut active = source.active_property_overlays_at(pos, window_id, &mut property_value);
         match active.winner() {
             Some(winner) => OverlayPropertyAtPoint::Present(OverlayPropertyResolution {
-                overlays: self,
+                overlays: source,
                 at: pos,
                 window_id,
                 winner,
@@ -1402,28 +2666,13 @@ impl OverlayList {
                 property_value,
             }),
             None => OverlayPropertyAtPoint::Vacant(OverlayPropertyVacancy {
-                overlays: self,
+                overlays: source,
                 at: pos,
                 window_id,
                 active,
                 property_value,
             }),
         }
-    }
-
-    fn active_property_overlays_at(
-        &self,
-        pos: EmacsBytePos,
-        window_id: Option<u64>,
-        property_value: &mut impl OverlayPropertyResolver,
-    ) -> ActivePropertyOverlays {
-        let mut active = ActivePropertyOverlays::new();
-        for overlay in self.iter_overlays_at_emacs_byte_pos(pos) {
-            if overlay_applies_to_window(overlay, window_id) {
-                active.inspect_and_insert(overlay, property_value.value_for_overlay(overlay));
-            }
-        }
-        active
     }
 
     /// Create a bounded monotonic property sweep for redisplay.
@@ -1467,6 +2716,18 @@ impl OverlayList {
         property: Value,
         window_id: Option<u64>,
     ) -> Option<Value> {
+        // Record range-view underflow BEFORE any absent-property fast path so a
+        // window-range snapshot queried below its capture floor still escalates
+        // to the whole-buffer retry.
+        self.note_overlay_view_query(pos);
+        // `overlay_property_named` inspects direct plist keys only (no category
+        // or alias indirection). When `may_contain_property(property)` is false,
+        // the owner-maintained bloom/inline/refcount summary proves no live
+        // overlay carries `property` without touching any plist cons cell or
+        // publishing the lazy endpoint tree (0 observed collection_reads owners).
+        if !self.may_contain_property(property) {
+            return None;
+        }
         match self.resolve_overlay_property_at_emacs_byte_pos(pos, window_id, |overlay| {
             overlay_property_named(overlay, property)
         }) {
@@ -1534,120 +2795,6 @@ impl OverlayList {
             .collect()
     }
 
-    /// Sweep outward from an already-resolved point until the winning overlay
-    /// identity changes.
-    fn property_frontier_extent(
-        &self,
-        pos: EmacsBytePos,
-        window_id: Option<u64>,
-        target: Option<Value>,
-        mut active: ActivePropertyOverlays,
-        bounds: EmacsByteRange,
-        property_value: &mut impl OverlayPropertyResolver,
-    ) -> Option<EmacsByteRange> {
-        if bounds.is_empty() || pos < bounds.start() || pos >= bounds.end() {
-            return None;
-        }
-
-        debug_assert!(same_overlay_identity(
-            active.winner().map(OverlayPropertyWinner::overlay),
-            target,
-        ));
-
-        let start = self.property_frontier_start(
-            pos,
-            window_id,
-            target,
-            active.clone(),
-            bounds,
-            property_value,
-        )?;
-
-        let mut end = bounds.end();
-        let forward_bounds = EmacsByteRange::new(pos, bounds.end());
-        let endpoint_filter = property_value.endpoint_filter();
-        let mut endpoints = self
-            .index
-            .endpoint_records_strictly_within(forward_bounds, endpoint_filter)
-            .peekable();
-        while let Some(boundary) = endpoints.peek().map(|endpoint| endpoint.position) {
-            while endpoints
-                .peek()
-                .is_some_and(|endpoint| endpoint.position == boundary)
-            {
-                let endpoint = endpoints.next().expect("peeked overlay endpoint");
-                active.apply_endpoint(
-                    endpoint,
-                    EndpointTraversalDirection::Forward,
-                    window_id,
-                    property_value,
-                );
-            }
-            if !same_overlay_identity(active.winner().map(OverlayPropertyWinner::overlay), target) {
-                end = boundary;
-                break;
-            }
-        }
-
-        Some(EmacsByteRange::new(start, end))
-    }
-
-    /// Find the semantic start of the at-point winner with one reverse
-    /// endpoint traversal.
-    ///
-    /// Crossing a boundary backwards reverses the forward update: starts are
-    /// removed and ends are inserted. The B+ tree is searched once and then
-    /// streamed in descending order, avoiding a root search and allocation at
-    /// every predecessor boundary.
-    fn property_frontier_start(
-        &self,
-        pos: EmacsBytePos,
-        window_id: Option<u64>,
-        target: Option<Value>,
-        mut active: ActivePropertyOverlays,
-        bounds: EmacsByteRange,
-        property_value: &mut impl OverlayPropertyResolver,
-    ) -> Option<EmacsBytePos> {
-        if bounds.is_empty() || pos < bounds.start() || pos >= bounds.end() {
-            return None;
-        }
-
-        debug_assert!(same_overlay_identity(
-            active.winner().map(OverlayPropertyWinner::overlay),
-            target,
-        ));
-
-        let mut start = bounds.start();
-        let reverse_bounds = EmacsByteRange::new(
-            bounds.start(),
-            EmacsBytePos::new(pos.get().saturating_add(1)),
-        );
-        let endpoint_filter = property_value.endpoint_filter();
-        let mut endpoints = self
-            .index
-            .endpoint_records_strictly_within_reverse(reverse_bounds, endpoint_filter)
-            .peekable();
-        while let Some(boundary) = endpoints.peek().map(|endpoint| endpoint.position) {
-            while endpoints
-                .peek()
-                .is_some_and(|endpoint| endpoint.position == boundary)
-            {
-                let endpoint = endpoints.next().expect("peeked overlay endpoint");
-                active.apply_endpoint(
-                    endpoint,
-                    EndpointTraversalDirection::Reverse,
-                    window_id,
-                    property_value,
-                );
-            }
-            if !same_overlay_identity(active.winner().map(OverlayPropertyWinner::overlay), target) {
-                start = boundary;
-                break;
-            }
-        }
-        Some(start)
-    }
-
     #[cfg(test)]
     pub(crate) fn highest_priority_overlay_for_inserted_emacs_byte_pos(
         &self,
@@ -1701,19 +2848,7 @@ impl OverlayList {
         overlay_ids: &mut [Value],
         priority_of: OverlayPriorityLookup,
     ) {
-        if overlay_ids.len() < 2 {
-            return;
-        }
-        // Key once per overlay, then sort (see `OverlayPrecedence`).
-        let mut keyed: Vec<(Value, Option<OverlayPrecedence>)> = overlay_ids
-            .iter()
-            .map(|overlay| (*overlay, overlay_precedence(*overlay, priority_of)))
-            .collect();
-        gnu_sort_overlay_keys_ascending(&mut keyed);
-        keyed.reverse();
-        for (slot, (overlay, _)) in overlay_ids.iter_mut().zip(keyed) {
-            *slot = overlay;
-        }
+        sort_overlay_ids_by_priority_desc_impl(overlay_ids, priority_of);
     }
 
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
@@ -1761,6 +2896,7 @@ impl OverlayList {
                         object.start = range.start().get();
                         object.end = range.end().get();
                     });
+                    self.bump_snapshot_copy_revision(overlay);
                 }
                 OverlayEditEffect::Evaporated {
                     overlay,
@@ -1771,6 +2907,9 @@ impl OverlayList {
                         object.end = collapsed_at.get();
                         object.buffer = None;
                     });
+                    // The edit removed it from this list; no later capture can
+                    // see it here.
+                    self.forget_snapshot_copy(overlay);
                 }
             }
         }
@@ -1810,6 +2949,8 @@ impl OverlayList {
         let _ = overlay.with_overlay_data_mut(|data| {
             data.front_advance = advance;
         });
+        self.index.bump_generation();
+        self.bump_snapshot_copy_revision(overlay);
     }
 
     #[cfg(any(test, feature = "test-support"))]
@@ -1819,6 +2960,8 @@ impl OverlayList {
         let _ = overlay.with_overlay_data_mut(|data| {
             data.rear_advance = advance;
         });
+        self.index.bump_generation();
+        self.bump_snapshot_copy_revision(overlay);
     }
 
     pub fn get(&self, overlay: Value) -> Option<Overlay> {
@@ -1844,18 +2987,51 @@ impl OverlayList {
         pos: EmacsBytePos,
         limit: EmacsBytePos,
     ) -> Option<EmacsBytePos> {
+        self.note_overlay_view_query(pos);
         self.index.next_boundary_after(pos, limit)
     }
 
+    /// Next overlay boundary in `(pos, limit]` that may affect any direct key
+    /// in `properties`, without publishing the lazy endpoint index.
+    ///
+    /// Always records `note_overlay_view_query(pos)` first so window-range
+    /// underflow stays exact. When none of `properties` exist on any overlay,
+    /// returns `None` in O(1) with zero observed owners and without touching
+    /// the endpoint index or interval tree. When some property exists and the
+    /// endpoint tree is already published, uses `OrderedFilterMask` to skip
+    /// non-carrier subtrees in O(log N); when cold, falls back to the
+    /// non-publishing interval boundary walk.
+    pub fn next_property_boundary_after_until_emacs_byte_pos(
+        &self,
+        pos: EmacsBytePos,
+        limit: EmacsBytePos,
+        properties: &[Value],
+    ) -> Option<EmacsBytePos> {
+        self.note_overlay_view_query(pos);
+        if pos >= limit
+            || !properties
+                .iter()
+                .any(|&property| self.may_contain_property(property))
+        {
+            return None;
+        }
+        self.index.next_boundary_after_matching_no_publish(
+            pos,
+            limit,
+            OverlayPropertyFilter::for_properties(properties.iter().copied()),
+        )
+    }
+
     /// Return the next endpoint without allocating or publishing a lazy index.
-    /// Until the endpoint index exists, this borrows and scans interval records
-    /// in O(overlays); subsequent queries reuse the existing endpoint tree.
+    /// Until the endpoint index exists, this combines the next interval start
+    /// with ends of intervals containing `pos`; later queries reuse the tree.
     #[doc(hidden)]
     pub fn next_boundary_after_until_emacs_byte_pos_no_alloc(
         &self,
         pos: EmacsBytePos,
         limit: EmacsBytePos,
     ) -> Option<EmacsBytePos> {
+        self.note_overlay_view_query(pos);
         self.index.next_boundary_after_no_alloc(pos, limit)
     }
 
@@ -1872,6 +3048,7 @@ impl OverlayList {
         pos: EmacsBytePos,
         limit: EmacsBytePos,
     ) -> Option<EmacsBytePos> {
+        self.note_overlay_view_query(pos);
         self.index.previous_boundary_before(pos, limit)
     }
 
@@ -1898,6 +3075,8 @@ impl OverlayList {
             .index
             .attach_batch(&entries, OverlayBatchOrder::AscendingQueryOrder);
         debug_assert!(attached, "fresh overlay list rejected its dump batch");
+        // Batch attachment bypasses the incremental component updates.
+        list.content_dirty.set(true);
         list
     }
 
@@ -1943,6 +3122,25 @@ impl OverlayList {
             }
         }
         best
+    }
+}
+
+fn sort_overlay_ids_by_priority_desc_impl(
+    overlay_ids: &mut [Value],
+    priority_of: OverlayPriorityLookup,
+) {
+    if overlay_ids.len() < 2 {
+        return;
+    }
+    // Key once per overlay, then sort (see `OverlayPrecedence`).
+    let mut keyed: Vec<(Value, Option<OverlayPrecedence>)> = overlay_ids
+        .iter()
+        .map(|overlay| (*overlay, overlay_precedence(*overlay, priority_of)))
+        .collect();
+    gnu_sort_overlay_keys_ascending(&mut keyed);
+    keyed.reverse();
+    for (slot, (overlay, _)) in overlay_ids.iter_mut().zip(keyed) {
+        *slot = overlay;
     }
 }
 
@@ -2287,6 +3485,9 @@ impl GcTrace for OverlayList {
     fn trace_roots_with(&self, visit: &mut dyn FnMut(Value)) {
         for overlay in self.index.values() {
             visit(overlay);
+        }
+        for entry in self.snapshot_copies.borrow().values() {
+            visit(entry.copy);
         }
         if let Some(snapshot) = self.snapshot.borrow().as_ref() {
             snapshot.trace_roots_with(visit);

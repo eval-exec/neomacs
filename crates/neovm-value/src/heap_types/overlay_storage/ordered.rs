@@ -813,6 +813,16 @@ impl<R: OrderedShiftRecord> OrderedShiftTree<R> {
         OrderedTreeMatches::new(tree, query)
     }
 
+    #[inline(always)]
+    #[doc(hidden)]
+    pub fn matches_owned_reverse<T, Q>(tree: T, query: Q) -> OrderedTreeMatches<T, R, Q>
+    where
+        T: Deref<Target = Self>,
+        Q: OrderedTreeQuery<R>,
+    {
+        OrderedTreeMatches::new_reverse(tree, query)
+    }
+
     /// Visit every matching record without constructing resumable iterator
     /// state.  Materialized Lisp queries consume the complete result in one
     /// call, so a bounded recursive walk avoids copying the fixed frame stack
@@ -922,6 +932,54 @@ impl<R: OrderedShiftRecord> OrderedShiftTree<R> {
                 });
                 for child in &children[cursor.min(end)..end] {
                     self.for_each_match_in_node(*child, record_delta, query, visit);
+                }
+            }
+        }
+    }
+
+    /// Find a successor by KEY position. Interval end maxima cannot choose
+    /// this path: a long earlier interval may end after many later starts.
+    /// Keep this separate from the endpoint-specialized contiguous search.
+    pub(super) fn next_key_position_after(
+        &self,
+        position: EmacsBytePos,
+        limit: EmacsBytePos,
+    ) -> Option<EmacsBytePos> {
+        if position >= limit {
+            return None;
+        }
+        let mut id = self.root?;
+        let mut inherited = EmacsByteDelta::ZERO;
+        loop {
+            // With a cold endpoint index this existing counter isolates the
+            // key-successor descent; Point visits have their separate counter.
+            #[cfg(any(test, feature = "test-support"))]
+            super::instrumentation::record_endpoint_search_node_visit();
+            let node = self.node(id);
+            let record_delta = inherited.combine(node.pending_shift);
+            match &node.kind {
+                OrderedNodeKind::Leaf(records) => {
+                    let candidate_index = records.partition_point(|record| {
+                        record_delta.apply_to_pos(record.key_position()) <= position
+                    });
+                    return records.get(candidate_index).and_then(|record| {
+                        let candidate = record_delta.apply_to_pos(record.key_position());
+                        (candidate <= limit).then_some(candidate)
+                    });
+                }
+                OrderedNodeKind::Branch(children) => {
+                    // Child maximum key positions are ordered. Child summaries
+                    // already include their own shifts, while record_delta
+                    // supplies this node's and all ancestors' pending shifts.
+                    let first_candidate = children.partition_point(|child| {
+                        record_delta.apply_to_pos(self.summary(*child).max_position) <= position
+                    });
+                    let child = *children.get(first_candidate)?;
+                    if record_delta.apply_to_pos(self.summary(child).min_position) > limit {
+                        return None;
+                    }
+                    id = child;
+                    inherited = record_delta;
                 }
             }
         }
@@ -1761,6 +1819,25 @@ impl<R: OrderedFilteredRecord> OrderedShiftTree<R> {
         identity: R::Identity,
         mask: OrderedFilterMask,
     ) -> Option<OrderedFilterMask> {
+        self.update_filter_mask(identity, |_| mask)
+    }
+
+    /// Add known record classes without resolving positions or reading the
+    /// record's source data. Existing classes and pending shifts stay intact.
+    #[doc(hidden)]
+    pub fn grow_filter_mask(
+        &mut self,
+        identity: R::Identity,
+        added: OrderedFilterMask,
+    ) -> Option<OrderedFilterMask> {
+        self.update_filter_mask(identity, |previous| previous | added)
+    }
+
+    fn update_filter_mask(
+        &mut self,
+        identity: R::Identity,
+        update: impl FnOnce(OrderedFilterMask) -> OrderedFilterMask,
+    ) -> Option<OrderedFilterMask> {
         let leaf = *self.by_identity.get(&identity)?;
         let records = self.leaf_records_mut(leaf);
         let slot = records
@@ -1768,6 +1845,7 @@ impl<R: OrderedFilteredRecord> OrderedShiftTree<R> {
             .find(|record| record.identity() == identity)
             .expect("overlay B+ identity map pointed to the wrong leaf");
         let previous = slot.filter_mask();
+        let mask = update(previous);
         if previous != mask {
             *slot = slot.with_filter_mask(mask);
             self.republish_filter_masks(leaf, FilterMaskChange::new(previous, mask));

@@ -6,6 +6,7 @@ import hashlib
 from http.client import HTTPResponse, IncompleteRead, RemoteDisconnected
 import importlib.util
 import io
+import os
 from pathlib import Path
 import socket
 import ssl
@@ -43,7 +44,12 @@ class ImageFixtureTests(unittest.TestCase):
             f'pub const NYAN_MODE_SHA256: &str =\n    "{self.pin.sha256}";\n'
         )
         self.cache = self.workspace / "tmp/pinned-fixtures"
-        self.destination = self.cache / self.pin.name
+        self.destination = self.cache / self.pin.sha256 / self.pin.name
+        env_guard = mock.patch.dict(os.environ, {}, clear=False)
+        env_guard.start()
+        for key in ("NEOMACS_PINNED_FIXTURE_CACHE", "XDG_CACHE_HOME", "HOME"):
+            os.environ.pop(key, None)
+        self.addCleanup(env_guard.stop)
         guard = mock.patch.object(
             provisioner,
             "urlopen",
@@ -60,8 +66,15 @@ class ImageFixtureTests(unittest.TestCase):
         self.addCleanup(sleep_guard.stop)
 
     def seed(self, data):
-        self.cache.mkdir(parents=True)
+        self.destination.parent.mkdir(parents=True, exist_ok=True)
         self.destination.write_bytes(data)
+
+    def cache_entries(self):
+        if not self.cache.exists():
+            return []
+        return [
+            entry for entry in self.cache.iterdir() if not entry.name.endswith(".lock")
+        ]
 
     def test_parser_reads_actual_shared_rust_pin_without_python_or_yaml_copy(self):
         pin = provisioner.read_pin(WORKSPACE)
@@ -103,7 +116,8 @@ class ImageFixtureTests(unittest.TestCase):
             )
         fetch.assert_not_called()
         replace.assert_not_called()
-        self.assertEqual(list(self.cache.iterdir()), [self.destination])
+        self.assertEqual(self.cache_entries(), [self.destination.parent])
+        self.assertEqual(list(self.destination.parent.iterdir()), [self.destination])
 
     def test_missing_entry_is_fetched_verified_and_published_in_live_workspace(self):
         fetch = mock.Mock(return_value=self.data)
@@ -112,7 +126,8 @@ class ImageFixtureTests(unittest.TestCase):
         )
         fetch.assert_called_once_with(self.pin.url)
         self.assertEqual(self.destination.read_bytes(), self.data)
-        self.assertEqual(list(self.cache.iterdir()), [self.destination])
+        self.assertEqual(self.cache_entries(), [self.destination.parent])
+        self.assertEqual(list(self.destination.parent.iterdir()), [self.destination])
 
     def test_corrupt_entry_is_replaced_only_after_verified_temporary_write(self):
         self.seed(b"corrupt")
@@ -120,7 +135,8 @@ class ImageFixtureTests(unittest.TestCase):
 
         def observe(source, destination):
             self.assertEqual(self.destination.read_bytes(), b"corrupt")
-            self.assertEqual(Path(source).parent, self.cache)
+            self.assertEqual(Path(source).parent.parent, self.cache)
+            self.assertEqual(Path(source).name, self.pin.name)
             self.assertEqual(Path(source).read_bytes(), self.data)
             real_replace(source, destination)
 
@@ -132,21 +148,24 @@ class ImageFixtureTests(unittest.TestCase):
             )
         replace.assert_called_once()
         self.assertEqual(self.destination.read_bytes(), self.data)
-        self.assertEqual(list(self.cache.iterdir()), [self.destination])
+        self.assertEqual(self.cache_entries(), [self.destination.parent])
+        self.assertEqual(list(self.destination.parent.iterdir()), [self.destination])
 
     def test_hash_failure_never_publishes_or_damages_existing_cache(self):
         with self.assertRaisesRegex(ValueError, "SHA-256"):
             provisioner.prefetch(
                 self.workspace, self.pin, mock.Mock(return_value=b"wrong response")
             )
-        self.assertFalse(self.cache.exists())
+        self.assertEqual(self.cache_entries(), [])
+        self.assertFalse(self.destination.parent.exists())
         self.seed(b"existing corrupt cache")
         with self.assertRaisesRegex(ValueError, "SHA-256"):
             provisioner.prefetch(
                 self.workspace, self.pin, mock.Mock(return_value=b"wrong response")
             )
         self.assertEqual(self.destination.read_bytes(), b"existing corrupt cache")
-        self.assertEqual(list(self.cache.iterdir()), [self.destination])
+        self.assertEqual(self.cache_entries(), [self.destination.parent])
+        self.assertEqual(list(self.destination.parent.iterdir()), [self.destination])
 
     def test_replace_failure_keeps_destination_and_cleans_temporary_file(self):
         self.seed(b"existing corrupt cache")
@@ -158,7 +177,8 @@ class ImageFixtureTests(unittest.TestCase):
                     self.workspace, self.pin, mock.Mock(return_value=self.data)
                 )
         self.assertEqual(self.destination.read_bytes(), b"existing corrupt cache")
-        self.assertEqual(list(self.cache.iterdir()), [self.destination])
+        self.assertEqual(self.cache_entries(), [self.destination.parent])
+        self.assertEqual(list(self.destination.parent.iterdir()), [self.destination])
 
     def test_fetch_failure_keeps_full_diagnostic_and_existing_bytes(self):
         self.seed(b"existing corrupt cache")
@@ -186,7 +206,8 @@ class ImageFixtureTests(unittest.TestCase):
                 provisioner.prefetch(
                     self.workspace, self.pin, mock.Mock(return_value=b"12345")
                 )
-        self.assertFalse(self.cache.exists())
+        self.assertEqual(self.cache_entries(), [])
+        self.assertFalse(self.destination.parent.exists())
 
     def test_download_reads_complete_verified_candidate_bytes(self):
         with mock.patch.object(
@@ -290,7 +311,8 @@ class ImageFixtureTests(unittest.TestCase):
             sleep.call_args_list, [mock.call(2), mock.call(5), mock.call(15)]
         )
         self.assertEqual(self.destination.read_bytes(), b"existing corrupt cache")
-        self.assertEqual(list(self.cache.iterdir()), [self.destination])
+        self.assertEqual(self.cache_entries(), [self.destination.parent])
+        self.assertEqual(list(self.destination.parent.iterdir()), [self.destination])
 
     def test_permanent_failure_after_transient_does_not_spend_remaining_attempts(self):
         permanent = HTTPError(self.pin.url, 404, "not found", None, None)
@@ -370,7 +392,8 @@ class ImageFixtureTests(unittest.TestCase):
                 provisioner.prefetch(self.workspace, self.pin)
             opened.assert_called_once()
             sleep.assert_not_called()
-            self.assertFalse(self.cache.exists())
+            self.assertEqual(self.cache_entries(), [])
+            self.assertFalse(self.destination.parent.exists())
         self.seed(self.data)
         with (
             mock.patch.object(provisioner, "urlopen") as opened,
@@ -433,6 +456,439 @@ class ImageFixtureTests(unittest.TestCase):
             self.assertEqual(provisioner.main(["--workspace", str(self.workspace)]), 0)
         self.assertIn(str(self.destination), output.getvalue())
         self.assertIn(self.pin.sha256, output.getvalue())
+
+    def test_cache_root_prefers_explicit_then_xdg_then_home_then_workspace(self):
+        with mock.patch.dict(
+            os.environ,
+            {
+                "NEOMACS_PINNED_FIXTURE_CACHE": "/shared/pinned",
+                "XDG_CACHE_HOME": "/xdg",
+                "HOME": "/home/tester",
+            },
+            clear=False,
+        ):
+            self.assertEqual(
+                provisioner.cache_root(self.workspace), Path("/shared/pinned")
+            )
+        with mock.patch.dict(
+            os.environ,
+            {
+                "NEOMACS_PINNED_FIXTURE_CACHE": "",
+                "XDG_CACHE_HOME": "/xdg",
+                "HOME": "/home/tester",
+            },
+            clear=False,
+        ):
+            self.assertEqual(
+                provisioner.cache_root(self.workspace),
+                Path("/xdg/neomacs/pinned-fixtures"),
+            )
+        with mock.patch.dict(
+            os.environ,
+            {
+                "NEOMACS_PINNED_FIXTURE_CACHE": "",
+                "XDG_CACHE_HOME": "",
+                "HOME": "/home/tester",
+            },
+            clear=False,
+        ):
+            self.assertEqual(
+                provisioner.cache_root(self.workspace),
+                Path("/home/tester/.cache/neomacs/pinned-fixtures"),
+            )
+        with mock.patch.dict(
+            os.environ,
+            {
+                "NEOMACS_PINNED_FIXTURE_CACHE": "",
+                "XDG_CACHE_HOME": "relative/xdg",
+                "HOME": "/home/tester",
+            },
+            clear=False,
+        ):
+            self.assertEqual(
+                provisioner.cache_root(self.workspace),
+                Path("/home/tester/.cache/neomacs/pinned-fixtures"),
+            )
+        with mock.patch.dict(
+            os.environ,
+            {
+                "NEOMACS_PINNED_FIXTURE_CACHE": "",
+                "XDG_CACHE_HOME": "relative/xdg",
+                "HOME": "",
+            },
+            clear=False,
+        ):
+            self.assertEqual(
+                provisioner.cache_root(self.workspace),
+                self.workspace / "tmp/pinned-fixtures",
+            )
+        self.assertEqual(
+            provisioner.cache_root(self.workspace),
+            self.workspace / "tmp/pinned-fixtures",
+        )
+
+    def test_fresh_publish_renames_staging_directory_atomically_and_cleans_up_on_error(
+        self,
+    ):
+        real_rename = provisioner.os.rename
+
+        def observe(source, target):
+            self.assertEqual(Path(source).parent, self.cache)
+            self.assertTrue(Path(source).name.startswith(".stage-"))
+            self.assertEqual(Path(target), self.destination.parent)
+            self.assertFalse(Path(target).exists())
+            self.assertEqual((Path(source) / self.pin.name).read_bytes(), self.data)
+            real_rename(source, target)
+
+        with mock.patch.object(
+            provisioner.os, "rename", side_effect=observe
+        ) as rename:
+            self.assertEqual(
+                provisioner.prefetch(
+                    self.workspace, self.pin, mock.Mock(return_value=self.data)
+                ),
+                self.destination,
+            )
+        rename.assert_called_once()
+        self.assertEqual(self.cache_entries(), [self.destination.parent])
+
+        # A rename failure on a fresh entry cleans up the staging directory.
+        second_data = b"second pinned image"
+        second_pin = provisioner.Pin(
+            self.pin.name,
+            "2" * 40,
+            "https://fixtures.invalid/" + "2" * 40 + "/image.xpm",
+            hashlib.sha256(second_data).hexdigest(),
+        )
+        with mock.patch.object(
+            provisioner.os, "rename", side_effect=OSError("rename refused")
+        ):
+            with self.assertRaisesRegex(OSError, "rename refused"):
+                provisioner.prefetch(
+                    self.workspace, second_pin, mock.Mock(return_value=second_data)
+                )
+        self.assertEqual(self.cache_entries(), [self.destination.parent])
+
+    def test_rename_collision_falls_back_to_atomic_file_replace(self):
+        real_replace = provisioner.os.replace
+
+        def simulate_concurrent_dir_creation(source, target):
+            Path(target).mkdir(parents=True, exist_ok=True)
+            raise PermissionError(errno.EACCES, "directory already created")
+
+        with (
+            mock.patch.object(
+                provisioner.os, "rename", side_effect=simulate_concurrent_dir_creation
+            ) as rename,
+            mock.patch.object(
+                provisioner.os, "replace", side_effect=real_replace
+            ) as replace,
+        ):
+            result = provisioner.prefetch(
+                self.workspace, self.pin, mock.Mock(return_value=self.data)
+            )
+        self.assertEqual(result, self.destination)
+        self.assertEqual(self.destination.read_bytes(), self.data)
+        rename.assert_called_once()
+        replace.assert_called_once()
+        self.assertEqual(self.cache_entries(), [self.destination.parent])
+        self.assertEqual(list(self.destination.parent.iterdir()), [self.destination])
+
+    def test_lock_rechecks_entry_populated_while_waiting(self):
+        real_pin_lock = provisioner.pin_lock
+
+        @contextlib.contextmanager
+        def populate_while_waiting(root, sha256):
+            with real_pin_lock(root, sha256):
+                self.seed(self.data)
+                yield
+
+        fetch = mock.Mock(
+            side_effect=AssertionError("re-check under lock must skip fetch")
+        )
+        with mock.patch.object(
+            provisioner, "pin_lock", side_effect=populate_while_waiting
+        ):
+            self.assertEqual(
+                provisioner.prefetch(self.workspace, self.pin, fetch), self.destination
+            )
+        fetch.assert_not_called()
+        self.assertTrue((self.cache / f".{self.pin.sha256}.lock").is_file())
+
+    def test_stray_regular_file_at_hash_path_is_replaced_cleanly(self):
+        self.cache.mkdir(parents=True, exist_ok=True)
+        self.destination.parent.write_bytes(b"stray regular file")
+        self.assertTrue(self.destination.parent.is_file())
+        result = provisioner.prefetch(
+            self.workspace, self.pin, mock.Mock(return_value=self.data)
+        )
+        self.assertEqual(result, self.destination)
+        self.assertTrue(self.destination.parent.is_dir())
+        self.assertEqual(self.destination.read_bytes(), self.data)
+        self.assertEqual(self.cache_entries(), [self.destination.parent])
+
+    def test_published_hash_directory_inherits_umask_instead_of_0700(self):
+        if os.name != "posix":
+            return
+        self.cache.mkdir(parents=True, exist_ok=True)
+        reference = self.cache / "umask-reference"
+        os.mkdir(reference, 0o777)
+        expected_mode = reference.stat().st_mode & 0o777
+        reference.rmdir()
+
+        provisioner.prefetch(
+            self.workspace, self.pin, mock.Mock(return_value=self.data)
+        )
+        actual_mode = self.destination.parent.stat().st_mode & 0o777
+        self.assertEqual(actual_mode, expected_mode)
+
+    def test_stray_symlinks_are_replaced_without_touching_symlink_target(self):
+        if os.name != "posix":
+            return
+        self.cache.mkdir(parents=True, exist_ok=True)
+        external = self.workspace / "external-target"
+        external.mkdir()
+        (external / "keep.txt").write_bytes(b"do not touch")
+
+        os.symlink(external, self.destination.parent)
+        result = provisioner.prefetch(
+            self.workspace, self.pin, mock.Mock(return_value=self.data)
+        )
+        self.assertEqual(result, self.destination)
+        self.assertTrue(provisioner.is_real_dir(self.destination.parent))
+        self.assertEqual(self.destination.read_bytes(), self.data)
+        self.assertEqual((external / "keep.txt").read_bytes(), b"do not touch")
+        self.assertFalse((external / self.pin.name).exists())
+
+        second_data = b"dangling symlink replacement"
+        second_pin = provisioner.Pin(
+            self.pin.name,
+            "2" * 40,
+            "https://fixtures.invalid/" + "2" * 40 + "/image.xpm",
+            hashlib.sha256(second_data).hexdigest(),
+        )
+        dangling = self.cache / second_pin.sha256
+        os.symlink(self.workspace / "does-not-exist", dangling)
+        result_b = provisioner.prefetch(
+            self.workspace, second_pin, mock.Mock(return_value=second_data)
+        )
+        self.assertTrue(provisioner.is_real_dir(dangling))
+        self.assertEqual(result_b.read_bytes(), second_data)
+
+    def test_post_rename_retry_unlinks_raced_symlink_without_following_it(self):
+        if os.name != "posix":
+            return
+        external = self.workspace / "external-target"
+        external.mkdir()
+        (external / "keep.txt").write_bytes(b"untouched")
+
+        real_rename = provisioner.os.rename
+        attempts = []
+
+        def race_then_rename(source, target):
+            attempts.append((Path(source), Path(target)))
+            if len(attempts) == 1:
+                os.symlink(external, target)
+                raise OSError(errno.ENOTDIR, "raced symlink-to-dir")
+            real_rename(source, target)
+
+        with (
+            mock.patch.object(provisioner.os, "rename", side_effect=race_then_rename),
+            mock.patch.object(
+                provisioner.os,
+                "replace",
+                side_effect=AssertionError("must not follow raced symlink"),
+            ),
+        ):
+            result = provisioner.prefetch(
+                self.workspace, self.pin, mock.Mock(return_value=self.data)
+            )
+        self.assertEqual(result, self.destination)
+        self.assertEqual(len(attempts), 2)
+        self.assertTrue(provisioner.is_real_dir(self.destination.parent))
+        self.assertEqual(self.destination.read_bytes(), self.data)
+        self.assertEqual((external / "keep.txt").read_bytes(), b"untouched")
+        self.assertFalse((external / self.pin.name).exists())
+        self.assertEqual(self.cache_entries(), [self.destination.parent])
+
+    def test_read_path_refuses_symlinks_even_with_matching_bytes_or_subdir_entry(self):
+        if os.name != "posix":
+            return
+        self.cache.mkdir(parents=True, exist_ok=True)
+        external = self.workspace / "external-target"
+        external.mkdir()
+
+        # Case 1: <cache>/<sha256> -> external/ where external/<name> holds
+        # exact matching bytes. entry_matches must return False and prefetch
+        # must fetch and replace the symlink with a real directory + real file.
+        external_match = external / self.pin.name
+        external_match.write_bytes(self.data)
+        os.symlink(external, self.destination.parent)
+        self.assertFalse(provisioner.entry_matches(self.destination, self.pin.sha256))
+        fetch = mock.Mock(return_value=self.data)
+        result = provisioner.prefetch(self.workspace, self.pin, fetch)
+        fetch.assert_called_once_with(self.pin.url)
+        self.assertEqual(result, self.destination)
+        self.assertTrue(provisioner.is_real_dir(self.destination.parent))
+        self.assertTrue(provisioner.is_real_file(self.destination))
+        self.assertEqual(external_match.read_bytes(), self.data)
+
+        # Case 2: <cache>/<sha_b> -> external_sub/ where external_sub/<name> is
+        # a subdirectory. entry_matches must return False (not raise
+        # IsADirectoryError) and prefetch must replace the symlink cleanly.
+        data_b = b"fixture replacing symlink-to-subdir-entry"
+        pin_b = provisioner.Pin(
+            self.pin.name,
+            "2" * 40,
+            "https://fixtures.invalid/" + "2" * 40 + "/image.xpm",
+            hashlib.sha256(data_b).hexdigest(),
+        )
+        external_sub = self.workspace / "external-sub"
+        (external_sub / pin_b.name).mkdir(parents=True)
+        dest_b = self.cache / pin_b.sha256 / pin_b.name
+        os.symlink(external_sub, dest_b.parent)
+        self.assertFalse(provisioner.entry_matches(dest_b, pin_b.sha256))
+        result_b = provisioner.prefetch(
+            self.workspace, pin_b, mock.Mock(return_value=data_b)
+        )
+        self.assertEqual(result_b, dest_b)
+        self.assertTrue(provisioner.is_real_dir(dest_b.parent))
+        self.assertTrue(provisioner.is_real_file(dest_b))
+        self.assertTrue((external_sub / pin_b.name).is_dir())
+
+        # Case 3: <cache>/<sha_c> is a real dir, but <cache>/<sha_c>/<name> is a
+        # symlink pointing to an external file with matching bytes.
+        data_c = b"symlinked file entry payload"
+        pin_c = provisioner.Pin(
+            self.pin.name,
+            "3" * 40,
+            "https://fixtures.invalid/" + "3" * 40 + "/image.xpm",
+            hashlib.sha256(data_c).hexdigest(),
+        )
+        external_c = external / "matching-c.xpm"
+        external_c.write_bytes(data_c)
+        dest_c = self.cache / pin_c.sha256 / pin_c.name
+        dest_c.parent.mkdir(parents=True)
+        os.symlink(external_c, dest_c)
+        self.assertFalse(provisioner.entry_matches(dest_c, pin_c.sha256))
+        fetch_c = mock.Mock(return_value=data_c)
+        result_c = provisioner.prefetch(self.workspace, pin_c, fetch_c)
+        fetch_c.assert_called_once_with(pin_c.url)
+        self.assertEqual(result_c, dest_c)
+        self.assertTrue(provisioner.is_real_file(dest_c))
+        self.assertEqual(external_c.read_bytes(), data_c)
+
+    def test_remove_stray_non_dir_uses_rmdir_fallback_for_windows_dir_symlink(self):
+        fake_lstat = mock.Mock(st_mode=provisioner.stat.S_IFLNK | 0o777)
+        target = self.cache / self.pin.sha256
+        with (
+            mock.patch.object(provisioner.os, "name", "nt"),
+            mock.patch.object(provisioner.os, "lstat", return_value=fake_lstat),
+            mock.patch.object(
+                provisioner.os, "unlink", side_effect=PermissionError(errno.EACCES, "denied")
+            ) as unlink,
+            mock.patch.object(provisioner.os, "rmdir") as rmdir,
+        ):
+            self.assertTrue(provisioner.remove_stray_non_dir(target))
+        unlink.assert_called_once_with(target)
+        rmdir.assert_called_once_with(target)
+
+    def test_remove_stray_non_dir_reraises_permission_error_for_windows_regular_file(
+        self,
+    ):
+        fake_lstat = mock.Mock(st_mode=provisioner.stat.S_IFREG | 0o644)
+        target = self.cache / self.pin.sha256
+        with (
+            mock.patch.object(provisioner.os, "name", "nt"),
+            mock.patch.object(provisioner.os, "lstat", return_value=fake_lstat),
+            mock.patch.object(
+                provisioner.os,
+                "unlink",
+                side_effect=PermissionError(errno.EACCES, "denied"),
+            ) as unlink,
+            mock.patch.object(provisioner.os, "rmdir") as rmdir,
+        ):
+            with self.assertRaises(PermissionError):
+                provisioner.remove_stray_non_dir(target)
+        unlink.assert_called_once_with(target)
+        rmdir.assert_not_called()
+
+    def test_single_lstat_helpers_never_call_stat(self):
+        self.seed(self.data)
+        stray = self.cache / ("0" * 64)
+        stray.write_bytes(b"stray")
+        with mock.patch.object(
+            provisioner.os,
+            "stat",
+            side_effect=AssertionError("lstat helpers must never call os.stat"),
+        ):
+            self.assertTrue(provisioner.is_real_dir(self.destination.parent))
+            self.assertTrue(provisioner.is_real_file(self.destination))
+            self.assertTrue(provisioner.entry_matches(self.destination, self.pin.sha256))
+            self.assertTrue(provisioner.remove_stray_non_dir(stray))
+            self.assertFalse(provisioner.is_real_dir(stray))
+
+    def test_entry_matches_treats_unsearchable_hash_dir_as_miss(self):
+        if os.name != "posix" or os.geteuid() == 0:
+            return
+        self.seed(self.data)
+        os.chmod(self.destination.parent, 0o000)
+        try:
+            self.assertFalse(
+                provisioner.entry_matches(self.destination, self.pin.sha256)
+            )
+        finally:
+            os.chmod(self.destination.parent, 0o755)
+
+    def test_distinct_revisions_for_same_filename_coexist_in_shared_cache(self):
+        rev_b_data = b"revision b image bytes"
+        pin_b = provisioner.Pin(
+            self.pin.name,
+            "2" * 40,
+            "https://fixtures.invalid/" + "2" * 40 + "/image.xpm",
+            hashlib.sha256(rev_b_data).hexdigest(),
+        )
+        dest_a = provisioner.prefetch(
+            self.workspace, self.pin, mock.Mock(return_value=self.data)
+        )
+        dest_b = provisioner.prefetch(
+            self.workspace, pin_b, mock.Mock(return_value=rev_b_data)
+        )
+        self.assertNotEqual(dest_a, dest_b)
+        self.assertEqual(dest_a.read_bytes(), self.data)
+        self.assertEqual(dest_b.read_bytes(), rev_b_data)
+
+    def test_two_worktrees_share_hash_keyed_entry_without_refetch(self):
+        wt_a = self.workspace / "wt-a"
+        wt_b = self.workspace / "wt-b"
+        shared_xdg = self.workspace / "shared-xdg"
+        for wt in (wt_a, wt_b):
+            pin_file = wt / provisioner.PIN_SOURCE
+            pin_file.parent.mkdir(parents=True)
+            pin_file.write_text(self.source)
+
+        expected_shared = (
+            shared_xdg / "neomacs/pinned-fixtures" / self.pin.sha256 / self.pin.name
+        )
+        with mock.patch.dict(
+            os.environ, {"XDG_CACHE_HOME": str(shared_xdg)}, clear=False
+        ):
+            with (
+                mock.patch.object(
+                    provisioner, "urlopen", return_value=io.BytesIO(self.data)
+                ) as opened,
+                contextlib.redirect_stdout(io.StringIO()) as out_a,
+            ):
+                self.assertEqual(provisioner.main(["--workspace", str(wt_a)]), 0)
+            opened.assert_called_once()
+            self.assertIn(str(expected_shared), out_a.getvalue())
+
+            # Second worktree hits the exact same entry with urlopen forbidden.
+            with contextlib.redirect_stdout(io.StringIO()) as out_b:
+                self.assertEqual(provisioner.main(["--workspace", str(wt_b)]), 0)
+            self.assertIn(str(expected_shared), out_b.getvalue())
+            self.assertFalse((wt_a / "tmp").exists())
+            self.assertFalse((wt_b / "tmp").exists())
 
     def test_display_archive_prepares_live_remap_before_nextest(self):
         workflow = (WORKSPACE / ".github/workflows/test-suite.yml").read_text()
