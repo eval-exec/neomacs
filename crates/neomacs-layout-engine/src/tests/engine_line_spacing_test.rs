@@ -1,5 +1,6 @@
 //! Line spacing is row geometry, independent of point and region decoration.
 use super::*;
+use crate::string_property_snapshot::StringSourceRootScope;
 
 /// A small buffer newline changes only its own row, independently of point.
 #[test]
@@ -359,6 +360,101 @@ fn newline_cursor_replay_preserves_font_and_spacing_metrics() {
                         "cursor replay: height={height}, spacing={spacing}, extend={extend}, box={box_spec}, hidden={hide_text}, point={point}"
                     );
                 }
+            }
+        }
+    }
+}
+
+/// A newline inheriting the buffer default keeps that font's remapped width;
+/// the frame column width still owns grid geometry and non-stretching tabs.
+#[test]
+fn remapped_default_newline_cursor_replay_preserves_width() {
+    for height in ["0.5", "2.0"] {
+        for line_numbers in ["nil", "t"] {
+            let (mut eval, frame, _buffer, window) =
+                incr_editing_frame("mmmmmmmm\nnext\n", 800, 240);
+            realize_test_gui_frame(&mut eval, frame);
+            install_test_gnu_line_number_face_inheritance(&mut eval);
+            eval.eval_str(&format!(
+                "(progn
+                   (internal-set-lisp-face-attribute
+                     'default :family \"DejaVu Sans Mono\" (selected-frame))
+                   (set (make-local-variable 'face-remapping-alist)
+                     '((default (:height {height}) default)))
+                   (set (make-local-variable 'display-line-numbers) {line_numbers})
+                   (set-window-point (selected-window) 1))"
+            ))
+            .unwrap();
+            let mut engine = crate::font::metrics::test_catalog::layout_engine();
+            crate::font::metrics::test_catalog::enable_metrics(&mut engine);
+            let FrameLayoutAttempt::Prepared(initial) =
+                engine.redisplay_frame_attempt(&mut eval, frame)
+            else {
+                panic!("initial remapped frame should prepare");
+            };
+            let first_text_glyph = initial
+                .window_matrices
+                .iter()
+                .find(|entry| entry.window_id.get() == window.0 as i64)
+                .into_iter()
+                .flat_map(|entry| &entry.matrix.rows)
+                .flat_map(|row| &row.glyphs[GlyphArea::Text.index()])
+                .find(|glyph| matches!(glyph.provenance, GlyphProvenance::Buffer { charpos: 0 }))
+                .cloned();
+            let initial = initial.materialize();
+            let text_width = initial.active_cursor().expect("initial text cursor").width;
+            // A hand-built frame starts with the TTY family "default". GNU
+            // initializes a GUI default from its opened frame font instead
+            // (xfaces.c:6008-6043). Seed a real fixed-pitch family above: a
+            // proportional fallback's m advance need not equal its average
+            // column width, even after its size has changed correctly.
+            let glyph = first_text_glyph.expect("first buffer character");
+            let face = initial.faces.get(&glyph.face_id).unwrap();
+            let frame_face = initial.faces.get(&FaceId::new(0)).unwrap();
+            assert_eq!(&*face.font_family, "DejaVu Sans Mono");
+            assert_eq!(&*frame_face.font_family, "DejaVu Sans Mono");
+            assert!(
+                (face.font_size - frame_face.font_size * height.parse::<f32>().unwrap()).abs()
+                    < 0.001,
+                "the published text font must carry the remapped size"
+            );
+            assert_ne!(
+                text_width,
+                eval.frame_manager().get(frame).unwrap().char_width,
+                "the remapped text must differ from the frame grid"
+            );
+
+            // Both positions stay on the same numbered row, so the gutter's
+            // current-line face does not invalidate cursor-only replay.
+            for point in [9, 1, 9] {
+                eval.eval_str(&format!("(set-window-point (selected-window) {point})"))
+                    .unwrap();
+                let FrameLayoutAttempt::Prepared(replayed) =
+                    engine.redisplay_frame_attempt(&mut eval, frame)
+                else {
+                    panic!("remapped cursor replay should prepare");
+                };
+                assert_eq!(engine.last_layout_stats().cursor_only_windows, 1);
+                assert!(engine.last_layout_stats().reused_rows > 0);
+                let mut fresh = crate::font::metrics::test_catalog::layout_engine();
+                crate::font::metrics::test_catalog::enable_metrics(&mut fresh);
+                let FrameLayoutAttempt::Prepared(rebuilt) =
+                    fresh.redisplay_frame_attempt(&mut eval, frame)
+                else {
+                    panic!("fresh remapped frame should prepare");
+                };
+                let replayed = replayed.materialize();
+                let rebuilt = rebuilt.materialize();
+                let actual = replayed.active_cursor().expect("replayed cursor").width;
+                let expected = rebuilt.active_cursor().expect("fresh cursor").width;
+                assert_eq!(
+                    actual, expected,
+                    "height={height}, line-numbers={line_numbers}, point={point}"
+                );
+                assert_eq!(
+                    actual, text_width,
+                    "newline and text cursors share the remapped monospace width: height={height}, line-numbers={line_numbers}, point={point}"
+                );
             }
         }
     }
@@ -877,7 +973,7 @@ fn hidden_explicit_cursor_reselects_after_string_property_mutation() {
 }
 
 /// A later leaf may mutate an earlier leaf's string without changing its
-/// buffer or overlay ticks. Acceptance must revalidate the whole frame.
+/// buffer or overlay ticks. Keep its completed cursor, then refuse source replay.
 #[test]
 fn hidden_cursor_sources_are_revalidated_after_later_window_callbacks() {
     let (mut eval, frame, _, window) = incr_editing_frame("a\n", 800, 240);
@@ -905,6 +1001,13 @@ fn hidden_cursor_sources_are_revalidated_after_later_window_callbacks() {
     let mut engine = crate::font::metrics::test_catalog::layout_engine();
     crate::font::metrics::test_catalog::enable_metrics(&mut engine);
     engine.layout_frame_rust(&mut eval, frame);
+    let before = eval
+        .frame_manager()
+        .get(frame)
+        .unwrap()
+        .redisplay_snapshot(window)
+        .unwrap()
+        .clone();
     let hook = eval.eval_str("(list (lambda (_pos) (if neo-frame-mutated nil (progn (setq neo-frame-mutated t) (put-text-property 0 1 'cursor nil neo-frame-string) (put-text-property 1 2 'cursor 1 neo-frame-string)))))").unwrap();
     eval.buffer_manager_mut()
         .get_mut(side)
@@ -922,6 +1025,41 @@ fn hidden_cursor_sources_are_revalidated_after_later_window_callbacks() {
         .redisplay_snapshot(window)
         .unwrap()
         .clone();
+    let position = |s: &neovm_core::window::WindowDisplaySnapshot| {
+        s.logical_cursor.as_ref().map(|c| (c.x, c.y, c.row, c.col))
+    };
+    assert!(actual.phys_cursor.is_none());
+    // GNU keeps the earlier completed cursor after a later leaf mutates its
+    // string; the next full frame uses the new source. Hidden presentation
+    // changes physical drawing only, not that logical source selection.
+    assert_eq!(position(&actual), position(&before));
+    assert_eq!(
+        actual.logical_cursor_dimensions,
+        before.logical_cursor_dimensions
+    );
+    assert!(
+        !engine
+            .frame_visual_histories
+            .get(frame)
+            .unwrap()
+            .cursor_sources_for(DisplayWindowId::new(window.0 as i64))
+            .unwrap()
+            .unchanged(),
+        "the original source certificate must become stale, never rebased"
+    );
+    engine.layout_frame_rust(&mut eval, frame);
+    let next = eval
+        .frame_manager()
+        .get(frame)
+        .unwrap()
+        .redisplay_snapshot(window)
+        .unwrap()
+        .clone();
+    assert_ne!(
+        position(&actual),
+        position(&next),
+        "future replay must refuse the changed string"
+    );
     let mut fresh = crate::font::metrics::test_catalog::layout_engine();
     crate::font::metrics::test_catalog::enable_metrics(&mut fresh);
     fresh.layout_frame_rust(&mut eval, frame);
@@ -931,13 +1069,10 @@ fn hidden_cursor_sources_are_revalidated_after_later_window_callbacks() {
         .unwrap()
         .redisplay_snapshot(window)
         .unwrap();
-    let position = |s: &neovm_core::window::WindowDisplaySnapshot| {
-        s.logical_cursor.as_ref().map(|c| (c.x, c.y, c.row, c.col))
-    };
-    assert!(actual.phys_cursor.is_none());
-    assert_eq!(position(&actual), position(expected));
+    assert!(next.phys_cursor.is_none());
+    assert_eq!(position(&next), position(expected));
     assert_eq!(
-        actual.logical_cursor_dimensions,
+        next.logical_cursor_dimensions,
         expected.logical_cursor_dimensions
     );
 }
@@ -1076,7 +1211,10 @@ fn late_source_rejection_restores_speculative_window_end() {
         .unwrap();
     let source = eval.eval_str("neo-end-source").unwrap();
     let capture = crate::cursor_source_dependencies::Capture::begin(&eval);
-    crate::cursor_source_dependencies::string_properties(source);
+    crate::cursor_source_dependencies::string_properties(
+        source,
+        &StringSourceRootScope::Rooted(eval.owned_root_retainer()),
+    );
     eval.eval_str("(put-text-property 0 1 'cursor nil neo-end-source)")
         .unwrap();
     assert!(!capture.unchanged());
@@ -1113,11 +1251,15 @@ fn deleted_frame_source_roots_retire_during_idle_without_a_presentation() {
     for _ in 0..3 {
         eval.gc_collect_exact();
     }
-    let count = || neovm_core::tagged::gc::with_tagged_heap(|heap| heap.allocated_count());
+    let count =
+        || unsafe { neovm_core::tagged::gc::with_tagged_heap(|heap| heap.allocated_count()) };
     let baseline = count();
     let source = Value::string("deleted-frame-unique-source");
     let capture = Capture::begin(&eval);
-    string_properties(source);
+    string_properties(
+        source,
+        &StringSourceRootScope::Rooted(eval.owned_root_retainer()),
+    );
     let certificate = capture.finish().unwrap();
     let mut engine = crate::font::metrics::test_catalog::layout_engine();
     engine.frame_visual_histories.commit(

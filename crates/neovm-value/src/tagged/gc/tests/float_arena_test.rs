@@ -26,8 +26,8 @@ fn run_concurrent_cycle(heap: &mut TaggedHeap, roots: &[TaggedValue]) {
     }
     let bytes_before = heap.live_bytes();
     heap.incremental_drain_all();
-    heap.incremental_finish(bytes_before, std::time::Instant::now());
-    heap.finish_incremental_sweep_now();
+    heap.incremental_finish_for_test(bytes_before, std::time::Instant::now());
+    heap.finish_incremental_sweep_now_for_test();
     assert!(!heap.sweep_in_progress());
 }
 
@@ -44,7 +44,7 @@ fn reuse_within_one_cooperative_sweep_window_body(verify: bool) {
         arm_verify(&mut heap);
         // Bootstrap cycle: blackens the (fake) dump so later
         // terminations run the armed verifiers.
-        heap.collect_exact(std::iter::empty());
+        heap.collect_rooted(std::iter::empty());
     }
 
     // Exactly three full pages of floats.
@@ -80,11 +80,14 @@ fn reuse_within_one_cooperative_sweep_window_body(verify: bool) {
     }
     let bytes_before = heap.live_bytes();
     heap.incremental_drain_all();
-    heap.incremental_finish(bytes_before, std::time::Instant::now());
+    heap.incremental_finish_for_test(bytes_before, std::time::Instant::now());
     assert!(heap.sweep_in_progress());
 
     // Slice 1 (budget 1): sweeps float page 0 only — the window is open.
-    assert!(!heap.incremental_sweep_slice(1), "3 pages need >1 slice");
+    assert!(
+        !heap.incremental_sweep_slice_for_test(1),
+        "3 pages need >1 slice"
+    );
     assert!(heap.sweep_in_progress());
     heap.assert_object_arenas_coherent();
 
@@ -111,7 +114,7 @@ fn reuse_within_one_cooperative_sweep_window_body(verify: bool) {
     // Drain the rest. The reallocated slots were re-read from the LIVE
     // bitmap and born at the cycle parity, so the remaining slices must
     // not free them (no premature free) nor re-free their slots.
-    while !heap.incremental_sweep_slice(1) {}
+    while !heap.incremental_sweep_slice_for_test(1) {}
     assert!(!heap.sweep_in_progress());
     heap.assert_object_arenas_coherent();
 
@@ -170,7 +173,7 @@ fn parity_two_cycle_float_survival_and_reclaim_body(verify: bool) {
     for i in 0..100_000 {
         spine = heap.alloc_cons(TaggedValue::fixnum(i), spine);
     }
-    heap.collect_exact(std::iter::once(spine));
+    heap.collect_rooted(std::iter::once(spine));
     assert!(heap.should_run_concurrent());
 
     // Cycle 2: float born MID-MARK (allocate-black at this cycle's
@@ -188,8 +191,8 @@ fn parity_two_cycle_float_survival_and_reclaim_body(verify: bool) {
     heap.seed_root(spine); // f deliberately NOT seeded
     let bytes_before = heap.live_bytes();
     heap.incremental_drain_all();
-    heap.incremental_finish(bytes_before, std::time::Instant::now());
-    heap.finish_incremental_sweep_now();
+    heap.incremental_finish_for_test(bytes_before, std::time::Instant::now());
+    heap.finish_incremental_sweep_now_for_test();
     assert!(
         heap.owns_non_cons_object(f_ptr),
         "allocate-black float must survive the cycle it was born in",
@@ -221,8 +224,8 @@ fn parity_two_cycle_float_survival_and_reclaim_body(verify: bool) {
     heap.seed_root(f);
     let bytes_before = heap.live_bytes();
     heap.incremental_drain_all();
-    heap.incremental_finish(bytes_before, std::time::Instant::now());
-    heap.finish_incremental_sweep_now();
+    heap.incremental_finish_for_test(bytes_before, std::time::Instant::now());
+    heap.finish_incremental_sweep_now_for_test();
     // No allocations since the sweep: the ownership probes below cannot
     // be confused by slot reuse.
     assert!(
@@ -275,7 +278,7 @@ fn deferred_floats_resolve_at_termination_body(verify: bool) {
     for i in 0..100_000 {
         spine = heap.alloc_cons(TaggedValue::fixnum(i), spine);
     }
-    heap.collect_exact(std::iter::once(spine));
+    heap.collect_rooted(std::iter::once(spine));
     assert!(heap.should_run_concurrent());
 
     // A rooted cons list carrying float cars: the GC thread marks the
@@ -321,8 +324,8 @@ fn deferred_floats_resolve_at_termination_body(verify: bool) {
     heap.seed_root(list);
     let bytes_before = heap.live_bytes();
     heap.incremental_drain_all();
-    heap.incremental_finish(bytes_before, std::time::Instant::now());
-    heap.finish_incremental_sweep_now();
+    heap.incremental_finish_for_test(bytes_before, std::time::Instant::now());
+    heap.finish_incremental_sweep_now_for_test();
 
     for (i, f) in float_vals.iter().enumerate() {
         assert!(
@@ -453,7 +456,7 @@ fn concurrent_tenured_float_dropped_not_claimed() {
     // The worker's tenured short-circuit is the permanent-image path.
     assert_eq!(heap.note_image_object(f), ImageStamp::Stamped);
     let root = heap.alloc_cons(f, TaggedValue::fixnum(0));
-    heap.collect_exact(std::iter::once(root));
+    heap.collect_rooted(std::iter::once(root));
     let f_ptr = f.as_float_ptr().unwrap();
     assert!(
         unsafe { (*f_ptr).header.tenured },
@@ -498,7 +501,7 @@ fn pages_freed_at_heap_drop_body(verify: bool) {
     set_tagged_heap(&mut heap);
     if verify {
         heap.extend_dump_span(4096, 16);
-        heap.collect_exact(std::iter::empty());
+        heap.collect_rooted(std::iter::empty());
     }
     for i in 0..(2 * FLOAT_PAGE_SLOTS + 5) {
         let _ = heap.alloc_float(i as f64);
@@ -510,13 +513,13 @@ fn pages_freed_at_heap_drop_body(verify: bool) {
     );
     // A GC in between releases pages that have no surviving slots. Their
     // storage stays spare for the next cycle's pages...
-    heap.collect_exact(std::iter::empty());
+    heap.collect_rooted(std::iter::empty());
     assert!(heap.float_arena.pages.is_empty());
     assert_eq!(heap.float_arena.spare_storage.len(), 3);
     assert_eq!(LIVE_FLOAT_PAGES.load(Ordering::Relaxed), before + 3);
     heap.assert_object_arenas_coherent();
     // ...and a cycle that needs none of it returns it to the allocator.
-    heap.collect_exact(std::iter::empty());
+    heap.collect_rooted(std::iter::empty());
     assert_eq!(
         LIVE_FLOAT_PAGES.load(Ordering::Relaxed),
         before,
@@ -527,7 +530,7 @@ fn pages_freed_at_heap_drop_body(verify: bool) {
     for i in 0..5 {
         let _ = heap.alloc_float(i as f64);
     }
-    heap.collect_exact(std::iter::empty());
+    heap.collect_rooted(std::iter::empty());
     assert_eq!(LIVE_FLOAT_PAGES.load(Ordering::Relaxed), before + 1);
     drop(heap);
     assert_eq!(
@@ -629,7 +632,7 @@ fn mapped_and_page_floats_coexist_body(verify: bool) {
     let root = heap.alloc_cons(h, m);
 
     // First partition cycle: full STW trace + sweep, then promote/blacken.
-    heap.collect_exact(std::iter::once(root));
+    heap.collect_rooted(std::iter::once(root));
     assert!(heap.dump_blackened);
 
     // Routing: the page float is owned (addr set); the mapped float is
@@ -655,7 +658,7 @@ fn mapped_and_page_floats_coexist_body(verify: bool) {
     // the page float re-marks via the root, fresh garbage is swept.
     let g2 = heap.alloc_float(3.5);
     let g2_ptr = g2.as_float_ptr().unwrap() as *const u8;
-    heap.collect_exact(std::iter::once(root));
+    heap.collect_rooted(std::iter::once(root));
     assert!(heap.owns_non_cons_object(h_ptr));
     assert!(!heap.owns_non_cons_object(g2_ptr));
     assert!((h.xfloat() - 1.25).abs() < f64::EPSILON);
@@ -701,7 +704,7 @@ fn freed_slot_garbage_headers_are_never_read_body(verify: bool) {
         .collect();
 
     // Free the odd half (this is the first/promote cycle under verify).
-    heap.collect_exact(keep.iter().copied());
+    heap.collect_rooted(keep.iter().copied());
     for &p in &dead_ptrs {
         assert!(!heap.owns_non_cons_object(p as *const u8));
     }
@@ -716,7 +719,7 @@ fn freed_slot_garbage_headers_are_never_read_body(verify: bool) {
     // A full cycle re-sweeps the page: the scribbled slots' bits are
     // clear, so no header is Drop-dispatched, size-read, or parity-read
     // (reading one would trip the kind/tenured debug asserts — or UB).
-    heap.collect_exact(keep.iter().copied());
+    heap.collect_rooted(keep.iter().copied());
     for (i, k) in keep.iter().enumerate() {
         assert!((k.xfloat() - (2 * i) as f64).abs() < f64::EPSILON);
     }
@@ -757,11 +760,11 @@ fn freed_slot_garbage_headers_are_never_read_body(verify: bool) {
     // final unrooted cycle reclaims them cleanly.
     let mut roots: Vec<TaggedValue> = keep.clone();
     roots.extend(reused.iter().copied());
-    heap.collect_exact(roots.iter().copied());
+    heap.collect_rooted(roots.iter().copied());
     for (i, r) in reused.iter().enumerate() {
         assert!((r.xfloat() - (500.0 + i as f64)).abs() < f64::EPSILON);
     }
-    heap.collect_exact(keep.iter().copied());
+    heap.collect_rooted(keep.iter().copied());
     for r in &reused {
         assert!(!heap.owns_non_cons_object(r.as_float_ptr().unwrap() as *const u8));
     }
@@ -801,7 +804,7 @@ fn tenured_owner_keeps_young_page_float_alive_body(verify: bool) {
     let root = heap.alloc_cons(t, TaggedValue::fixnum(0));
 
     // First partition cycle: T promotes to tenured.
-    heap.collect_exact(std::iter::once(root));
+    heap.collect_rooted(std::iter::once(root));
     assert!(heap.dump_blackened);
     let t_header = t.as_veclike_ptr().unwrap();
     // Runtime owner: ordinary old in GEN1; young (traced every collection)
@@ -817,7 +820,7 @@ fn tenured_owner_keeps_young_page_float_alive_body(verify: bool) {
     // never re-traced; F survives ONLY via the promotion-time remembered
     // set — the permanent owner's young-float edge.
     for cycle in 0..2 {
-        heap.collect_exact(std::iter::once(root));
+        heap.collect_rooted(std::iter::once(root));
         assert!(
             heap.owns_non_cons_object(f_ptr),
             "young page float lost on partitioned cycle {cycle} \
@@ -860,7 +863,7 @@ fn an_emptied_page_lends_its_storage_to_the_next_page() {
         .map(ObjectPage::base_addr)
         .collect();
     assert_eq!(bases.len(), 4);
-    heap.collect_exact(std::iter::empty());
+    heap.collect_rooted(std::iter::empty());
     assert!(heap.float_arena.pages.is_empty());
     assert_eq!(heap.float_arena.spare_storage.len(), 4);
 
@@ -881,7 +884,7 @@ fn an_emptied_page_lends_its_storage_to_the_next_page() {
 
     // The two spares nobody took this cycle go back to the allocator; the
     // live floats keep both pages.
-    heap.collect_exact(kept.iter().copied());
+    heap.collect_rooted(kept.iter().copied());
     assert_eq!(heap.float_arena.pages.len(), 2);
     assert!(heap.float_arena.spare_storage.is_empty());
     assert_eq!(LIVE_FLOAT_PAGES.load(Ordering::Relaxed), before + 2);
@@ -910,7 +913,7 @@ fn a_deferred_sweep_finishes_while_the_mutator_opens_pages() {
     unsafe { heap.begin_collection() };
     let bytes_before = heap.live_bytes();
     heap.incremental_drain_all();
-    heap.incremental_finish(bytes_before, std::time::Instant::now());
+    heap.incremental_finish_for_test(bytes_before, std::time::Instant::now());
     let mut slices = 0;
     let mut born = Vec::new();
     loop {
@@ -920,7 +923,7 @@ fn a_deferred_sweep_finishes_while_the_mutator_opens_pages() {
             born.push(heap.alloc_float(i as f64));
         }
         slices += 1;
-        if heap.incremental_sweep_slice(1) {
+        if heap.incremental_sweep_slice_for_test(1) {
             break;
         }
         assert!(
@@ -934,4 +937,199 @@ fn a_deferred_sweep_finishes_while_the_mutator_opens_pages() {
     for (i, f) in born.iter().enumerate() {
         assert_eq!(f.xfloat(), (i % (2 * FLOAT_PAGE_SLOTS)) as f64);
     }
+}
+
+#[test]
+fn numeric_owner_reconcile_returns_older_page_suffix_to_serial_allocation() {
+    let mut arena = ObjectArena::<FloatObj>::new(None);
+    let slots = ObjectPage::<FloatObj>::SLOTS;
+    let older = arena.mint_uninit_numeric_owner_page(0);
+    let newest = arena.mint_uninit_numeric_owner_page(older + 1);
+    assert_ne!(older, newest, "the original mint must grant disjoint pages");
+    assert_eq!(arena.pages.len(), 2);
+    let original_bases = [
+        arena.pages[older].base_addr(),
+        arena.pages[newest].base_addr(),
+    ];
+
+    let committed = arena.pages[older].slot_ptr(0);
+    // SAFETY: both pages are exclusively owned by this direct arena fixture.
+    // The selected older slot is uninitialized. Its complete header/payload
+    // precedes the bit, matching the owner bank's Init-only bit invariant.
+    unsafe {
+        committed.write(FloatObj {
+            header: GcHeader::new_marked(HeapObjectKind::Float, MarkParity::One),
+            value: 17.25,
+        });
+    }
+    arena.pages[older].set_allocated(0);
+    arena.reconcile_numeric_owner_page(older, 1);
+    arena.reconcile_numeric_owner_page(newest, 0);
+
+    let mut addresses = std::collections::HashSet::new();
+    assert!(addresses.insert(committed as usize));
+    // All uninitialized capacity of BOTH pages must be allocatable without
+    // collecting. This exercises actual alloc_slot, not a duplicate allocator.
+    for offset in 0..(2 * slots - 1) {
+        // SAFETY: the loop immediately initializes `slot` with a full `FloatObj`.
+        let slot = unsafe { arena.alloc_slot() };
+        // SAFETY: alloc_slot grants this fixture one exclusive slot and sets
+        // its bit. A complete FloatObj is written immediately, before any
+        // assertion or possible unwind can let ObjectPage::Drop see the bit.
+        unsafe {
+            slot.write(FloatObj {
+                header: GcHeader::new_marked(HeapObjectKind::Float, MarkParity::One),
+                value: offset as f64,
+            });
+        }
+        assert!(
+            addresses.insert(slot as usize),
+            "a committed slot was allocated twice"
+        );
+    }
+    assert_eq!(
+        arena.pages.len(),
+        2,
+        "reconciliation must make older page capacity available before another page is allocated",
+    );
+    assert_eq!(addresses.len(), 2 * slots);
+    assert!(
+        addresses.iter().all(|&address| {
+            let base = address & !(OBJECT_PAGE_ALIGN - 1);
+            original_bases.contains(&base)
+        }),
+        "every serial result must lie in one of the two original pages"
+    );
+    assert_eq!(arena.pages[older].allocated(), slots);
+    assert_eq!(arena.pages[newest].allocated(), slots);
+    // All set bits now have valid complete FloatObjs, including on failure.
+}
+
+#[test]
+fn numeric_owner_remint_claims_two_distinct_empty_reconciled_pages() {
+    let mut arena = ObjectArena::<FloatObj>::new(None);
+    let slots = ObjectPage::<FloatObj>::SLOTS;
+    let older = arena.mint_uninit_numeric_owner_page(0);
+    let newest = arena.mint_uninit_numeric_owner_page(older + 1);
+    assert_ne!(older, newest);
+    let original_bases = [
+        arena.pages[older].base_addr(),
+        arena.pages[newest].base_addr(),
+    ];
+    arena.reconcile_numeric_owner_page(older, 0);
+    arena.reconcile_numeric_owner_page(newest, 0);
+
+    // The monotonic cursor belongs to this one stopped mint, never an owner.
+    let first = arena.mint_uninit_numeric_owner_page(0);
+    let second = arena.mint_uninit_numeric_owner_page(first + 1);
+    assert_ne!(
+        first, second,
+        "one zero-occupancy page cannot be selected twice in one pool"
+    );
+    assert_eq!(arena.pages.len(), 2, "reuse the fully empty returned pages");
+    for index in [first, second] {
+        let page = &arena.pages[index];
+        assert!(original_bases.contains(&page.base_addr()));
+        assert_eq!(page.allocated(), 0);
+        assert!(page.alloc_bits().iter().all(|&word| word == 0));
+        assert_eq!(page.next_index(), slots);
+        assert!(
+            !page.on_partial(),
+            "a minted page is no longer serial-allocatable"
+        );
+        assert_eq!(page.free_head(), PAGE_NONE);
+        assert_eq!(page.next_partial(), PAGE_NONE);
+    }
+    // Both pages remain entirely Uninit with clear bits, so Drop reads no
+    // slot payload. The test creates no fake initialized float or bitmap bit.
+}
+
+#[test]
+fn numeric_owner_uninitialized_suffix_never_becomes_a_dropped_payload() {
+    use std::mem::ManuallyDrop;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[repr(C)]
+    struct Counted {
+        header: GcHeader,
+        drops: Arc<AtomicUsize>,
+    }
+    impl Drop for Counted {
+        fn drop(&mut self) {
+            self.drops.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+    impl PagedObject for Counted {
+        const SLOT_BYTES: usize = 32;
+        const KIND: HeapObjectKind = HeapObjectKind::Float;
+        const CLASS: &'static str = "numeric-drop-probe";
+        const CHUNK_CLASS: ChunkClass = ChunkClass::Float;
+        fn live_page_counter() -> &'static AtomicUsize {
+            static PAGES: AtomicUsize = AtomicUsize::new(0);
+            &PAGES
+        }
+    }
+
+    let drops = Arc::new(AtomicUsize::new(0));
+    let pages_before = Counted::live_page_counter().load(Ordering::SeqCst);
+    // Until the clear-bit precondition has been checked, a failing allocator
+    // must not make unwinding inspect uninitialized Arc payloads.
+    let mut arena = ManuallyDrop::new(ObjectArena::<Counted>::new(None));
+    let page = arena.mint_uninit_numeric_owner_page(0);
+    assert_eq!(arena.pages[page].allocated(), 0);
+    assert!(arena.pages[page].alloc_bits().iter().all(|&word| word == 0));
+    for index in 0..2 {
+        // SAFETY: this fixture exclusively owns the clear-bit page. Write the
+        // complete counted object before marking its slot initialized.
+        unsafe {
+            arena.pages[page].slot_ptr(index).write(Counted {
+                header: GcHeader::new_marked(HeapObjectKind::Float, MarkParity::One),
+                drops: Arc::clone(&drops),
+            });
+        }
+        arena.pages[page].set_allocated(index);
+    }
+    arena.reconcile_numeric_owner_page(page, 2);
+    assert_eq!(drops.load(Ordering::SeqCst), 0);
+    assert_eq!(arena.pages[page].allocated(), 2);
+    assert_eq!(arena.pages[page].alloc_bits()[0], 3);
+    assert!(
+        arena.pages[page].alloc_bits()[1..]
+            .iter()
+            .all(|&word| word == 0)
+    );
+    // Only the two set bits can now drive real ObjectPage::Drop.
+    drop(ManuallyDrop::into_inner(arena));
+    assert_eq!(drops.load(Ordering::SeqCst), 2);
+    assert_eq!(Arc::strong_count(&drops), 1);
+    assert_eq!(
+        Counted::live_page_counter().load(Ordering::SeqCst),
+        pages_before
+    );
+}
+
+/// A replacement for an earlier trimmed key can occupy a later missing key's
+/// address. The later recovery must not lend that descriptor a second time.
+#[test]
+fn numeric_owner_recovery_never_reuses_an_already_recovered_descriptor() {
+    let mut arena = ObjectArena::<FloatObj>::new(None);
+    let first = arena.mint_uninit_numeric_owner_page(0);
+    let base = arena.pages[first].base_addr();
+    // This is the actual post-recovery state: the address now names a page
+    // already committed to another retained logical frontier.
+    let recovered = rustc_hash::FxHashSet::from_iter([first]);
+    let second = arena.recover_numeric_owner_page(base, &recovered);
+    assert_ne!(
+        first, second,
+        "retained logical pages need distinct descriptors"
+    );
+    assert_ne!(base, arena.pages[second].base_addr());
+    assert_eq!(arena.pages.len(), 2);
+    for page in &arena.pages {
+        assert_eq!(page.allocated(), 0);
+        assert!(page.alloc_bits().iter().all(|&bits| bits == 0));
+    }
+    arena.reconcile_numeric_owner_page(first, 0);
+    arena.reconcile_numeric_owner_page(second, 0);
 }

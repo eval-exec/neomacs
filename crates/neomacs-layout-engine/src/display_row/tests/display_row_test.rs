@@ -64,7 +64,12 @@ fn fresh_pen_render_lisp(
     .into_render_request(&mut face_ids)
     .with_append_start_policy(policy);
     let (plan, session_request) = request.into_render_parts();
-    let mut context = DisplayRowRenderContext::new(&resolver, None, &mut face_ids);
+    let mut context = DisplayRowRenderContext::new(
+        &resolver,
+        None,
+        &mut face_ids,
+        StringSourceRootScope::CallbackFree,
+    );
     renderer
         .render_lisp_string_plan_with_context(plan, session_request, &mut context)
         .expect("fresh Lisp chrome row")
@@ -249,7 +254,12 @@ fn fresh_chrome_integer_pen_preserves_fractional_measured_run_then_following_ite
         .with_append_start_policy(policy);
         let mut row = GlyphRow::new(GlyphRowRole::ModeLine);
         let mut state = DisplayRowSourceState::frame_local();
-        let mut context = DisplayRowRenderContext::new(&resolver, None, &mut face_ids);
+        let mut context = DisplayRowRenderContext::new(
+            &resolver,
+            None,
+            &mut face_ids,
+            StringSourceRootScope::CallbackFree,
+        );
         let result = request
             .render_fragment_step_into_row_with_policy(
                 &mut renderer,
@@ -318,7 +328,13 @@ fn fresh_chrome_integer_pen_preserves_cross_item_combining_tail_mutation() {
             GlyphRowRole::ModeLine,
         )
         .with_append_start_policy(policy)
-        .render(&mut renderer, &mut source, &resolver, &mut face_ids)
+        .render(
+            &mut renderer,
+            &mut source,
+            &resolver,
+            &mut face_ids,
+            StringSourceRootScope::CallbackFree,
+        )
         .expect("cross-item UnicodeFallback chrome row")
     }
 
@@ -434,7 +450,12 @@ fn render_lisp_string_row(
     face_resolver: &FaceResolver,
     face_ids: &mut FrameFaceAttempt,
 ) -> Option<RenderedDisplayRow> {
-    let mut context = DisplayRowRenderContext::new(face_resolver, None, face_ids);
+    let mut context = DisplayRowRenderContext::new(
+        face_resolver,
+        None,
+        face_ids,
+        StringSourceRootScope::CallbackFree,
+    );
     render_lisp_string_row_with_context(renderer, request, value, &mut context)
 }
 
@@ -446,7 +467,12 @@ fn render_lisp_string_row_with_display_host(
     display_host: Option<&dyn DisplayHost>,
     face_ids: &mut FrameFaceAttempt,
 ) -> Option<RenderedDisplayRow> {
-    let mut context = DisplayRowRenderContext::new(face_resolver, display_host, face_ids);
+    let mut context = DisplayRowRenderContext::new(
+        face_resolver,
+        display_host,
+        face_ids,
+        StringSourceRootScope::CallbackFree,
+    );
     render_lisp_string_row_with_context(renderer, request, value, &mut context)
 }
 
@@ -495,7 +521,7 @@ impl DisplayHost for RecordingDisplayRowMediaHost {
         &self,
         _request: ImageResolveRequest,
         _limit: neovm_core::emacs_core::image_catalog::ImageSizeLimit,
-    ) -> Result<Option<ReadyImage>, String> {
+    ) -> neovm_core::emacs_core::image_catalog::ImageSyncResolution {
         panic!("display row rendering must not use synchronous image resolution");
     }
 
@@ -924,7 +950,12 @@ fn display_row_render_context_builds_source_resolve_params() {
     let face_resolver = FaceResolver::new(&table, 0x00FFFFFF, 0x00000000, 14.0, None);
     let base_face = face_resolver.default_face();
     let mut face_ids = FrameFaceAttempt::for_test_with_next_id(20);
-    let context = DisplayRowRenderContext::new(&face_resolver, None, &mut face_ids);
+    let context = DisplayRowRenderContext::new(
+        &face_resolver,
+        None,
+        &mut face_ids,
+        StringSourceRootScope::CallbackFree,
+    );
     let fallback =
         crate::display_row::metrics::DisplayRowFallbackMetrics::from_default_face_extents(
             8.0, 16.0, 12.0,
@@ -1238,6 +1269,7 @@ fn display_row_source_state_reuses_face_cache_across_items() {
         value,
         RenderFaceRef::FaceId(FaceId::new(0)),
         crate::display_source::LispStringSourceOrigin::Normal,
+        StringSourceRootScope::Rooted(_eval.owned_root_retainer()),
     )
     .expect("string source");
     let mut state = DisplayRowSourceState::frame_local();
@@ -1460,7 +1492,12 @@ fn display_row_renderer_continues_source_mapped_text_after_clip() {
         )),
     };
     let mut state = DisplayRowSourceState::frame_local();
-    let mut context = DisplayRowRenderContext::new(&resolver, None, &mut face_ids);
+    let mut context = DisplayRowRenderContext::new(
+        &resolver,
+        None,
+        &mut face_ids,
+        StringSourceRootScope::CallbackFree,
+    );
 
     let first = display_row_request_for_face(
         DisplayRowGeometry {
@@ -1551,7 +1588,12 @@ fn display_row_renderer_accepts_direct_text_run_measurement_policy() {
     let mut row = GlyphRow::new(GlyphRowRole::Text);
     let mut state = DisplayRowSourceState::frame_local();
     let mut policy = DirectTextRunPolicy;
-    let mut context = DisplayRowRenderContext::new(&resolver, None, &mut face_ids);
+    let mut context = DisplayRowRenderContext::new(
+        &resolver,
+        None,
+        &mut face_ids,
+        StringSourceRootScope::CallbackFree,
+    );
 
     let result = display_row_request_for_face(
         DisplayRowGeometry {
@@ -1732,8 +1774,13 @@ fn render_lisp_display_row_output_with_symbols_and_chrome_text_area_left(
         symbol_values,
     )
     .with_chrome_text_area_left_px(chrome_text_area_left_px);
-    let mut context = DisplayRowRenderContext::new(&resolver, None, &mut face_ids)
-        .with_automatic_composition(automatic_composition);
+    let mut context = DisplayRowRenderContext::new(
+        &resolver,
+        None,
+        &mut face_ids,
+        StringSourceRootScope::CallbackFree,
+    )
+    .with_automatic_composition(automatic_composition);
     render_lisp_string_row_with_context(&mut renderer, request, rendered, &mut context)
         .expect("display source row")
 }
@@ -1805,16 +1852,24 @@ fn render_buffer_display_row_with_properties(
         role,
         std::collections::HashMap::new(),
     );
-    let mut source = crate::buffer_source::text_source::BufferTextSourceCursor::new(
+    let mut source = crate::buffer_source::text_source::BufferTextSourceCursor::new_for_window(
         buf_id,
         &snapshot,
+        None,
         CharPos0::ZERO,
         snapshot.layout_point_max_char_pos(),
         request.base_face_ref(),
+        StringSourceRootScope::Rooted(eval.owned_root_retainer()),
     );
 
     request
-        .render(&mut renderer, &mut source, &resolver, &mut face_ids)
+        .render(
+            &mut renderer,
+            &mut source,
+            &resolver,
+            &mut face_ids,
+            StringSourceRootScope::Rooted(eval.owned_root_retainer()),
+        )
         .expect("buffer display source row")
         .into_row()
 }
@@ -1838,12 +1893,14 @@ fn render_display_item_source_row_accepts_buffer_text_source() {
     let table = FaceTable::new();
     let resolver = FaceResolver::new(&table, 0x00FFFFFF, 0x00000000, 14.0, None);
     let mut face_ids = FrameFaceAttempt::for_test_with_next_id(1);
-    let mut source = crate::buffer_source::text_source::BufferTextSourceCursor::new(
+    let mut source = crate::buffer_source::text_source::BufferTextSourceCursor::new_for_window(
         buf_id,
         buffer,
+        None,
         neovm_core::buffer::CharPos0::new(0),
         buffer.layout_point_max_char_pos(),
         RenderFaceRef::FaceId(FaceId::new(1)),
+        StringSourceRootScope::Rooted(eval.owned_root_retainer()),
     );
 
     let rendered = display_row_request_for_face(
@@ -1860,7 +1917,13 @@ fn render_display_item_source_row_accepts_buffer_text_source() {
         resolver.default_face(),
         GlyphRowRole::TabLine,
     )
-    .render(&mut renderer, &mut source, &resolver, &mut face_ids)
+    .render(
+        &mut renderer,
+        &mut source,
+        &resolver,
+        &mut face_ids,
+        StringSourceRootScope::Rooted(eval.owned_root_retainer()),
+    )
     .expect("display source row");
 
     assert_eq!(rendered.source_slots().len(), 5);
@@ -2400,7 +2463,7 @@ fn render_lisp_string_row_resolves_webkit_display_property_through_display_host(
 
 #[test]
 fn display_row_buffer_and_lisp_sources_share_display_space_semantics() {
-    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
+    let eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let display_space = Value::list(vec![
         Value::symbol("space"),
         Value::keyword("align-to"),
@@ -2417,11 +2480,13 @@ fn display_row_buffer_and_lisp_sources_share_display_space_semantics() {
         ),
         GlyphRowRole::HeaderLine,
     );
+    let display_name = Value::symbol("display");
+    let _parked = eval.park_for_test();
     let buffer_row = render_buffer_display_row_with_property(
         "A B",
         1,
         2,
-        Value::symbol("display"),
+        display_name,
         display_space,
         GlyphRowRole::HeaderLine,
     );
@@ -2445,7 +2510,7 @@ fn display_row_buffer_and_lisp_sources_share_display_space_semantics() {
 
 #[test]
 fn display_row_buffer_and_lisp_sources_share_display_replacement_string_semantics() {
-    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
+    let eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let replacement = Value::string("YZ");
     let lisp_row = render_lisp_display_row(
         Value::string_with_text_properties(
@@ -2458,11 +2523,13 @@ fn display_row_buffer_and_lisp_sources_share_display_replacement_string_semantic
         ),
         GlyphRowRole::TabLine,
     );
+    let display_name = Value::symbol("display");
+    let _parked = eval.park_for_test();
     let buffer_row = render_buffer_display_row_with_property(
         "axb",
         1,
         2,
-        Value::symbol("display"),
+        display_name,
         replacement,
         GlyphRowRole::TabLine,
     );
@@ -2480,7 +2547,7 @@ fn display_row_buffer_and_lisp_sources_share_display_replacement_string_semantic
 
 #[test]
 fn display_row_buffer_and_lisp_sources_share_face_property_semantics() {
-    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
+    let eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let face = Value::list(vec![Value::keyword("foreground"), Value::string("#ff0000")]);
     let lisp_row = render_lisp_display_row(
         Value::string_with_text_properties(
@@ -2493,11 +2560,13 @@ fn display_row_buffer_and_lisp_sources_share_face_property_semantics() {
         ),
         GlyphRowRole::ModeLine,
     );
+    let face_name = Value::symbol("face");
+    let _parked = eval.park_for_test();
     let buffer_row = render_buffer_display_row_with_property(
         "AB",
         1,
         2,
-        Value::symbol("face"),
+        face_name,
         face,
         GlyphRowRole::ModeLine,
     );
@@ -2513,7 +2582,7 @@ fn display_row_buffer_and_lisp_sources_share_face_property_semantics() {
 
 #[test]
 fn display_row_buffer_and_lisp_sources_share_raise_property_semantics() {
-    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
+    let eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let raise = Value::list(vec![Value::symbol("raise"), Value::make_float(0.25)]);
     let lisp_row = render_lisp_display_row(
         Value::string_with_text_properties(
@@ -2526,11 +2595,13 @@ fn display_row_buffer_and_lisp_sources_share_raise_property_semantics() {
         ),
         GlyphRowRole::ModeLine,
     );
+    let display_name = Value::symbol("display");
+    let _parked = eval.park_for_test();
     let buffer_row = render_buffer_display_row_with_property(
         "AB",
         1,
         2,
-        Value::symbol("display"),
+        display_name,
         raise,
         GlyphRowRole::ModeLine,
     );
@@ -2556,7 +2627,7 @@ fn display_row_buffer_and_lisp_sources_share_raise_property_semantics() {
 
 #[test]
 fn display_row_buffer_and_lisp_sources_share_height_property_semantics() {
-    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
+    let eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let height = Value::list(vec![Value::symbol("height"), Value::make_float(2.0)]);
     let lisp_row = render_lisp_display_row(
         Value::string_with_text_properties(
@@ -2569,11 +2640,13 @@ fn display_row_buffer_and_lisp_sources_share_height_property_semantics() {
         ),
         GlyphRowRole::ModeLine,
     );
+    let display_name = Value::symbol("display");
+    let _parked = eval.park_for_test();
     let buffer_row = render_buffer_display_row_with_property(
         "AB",
         1,
         2,
-        Value::symbol("display"),
+        display_name,
         height,
         GlyphRowRole::ModeLine,
     );
@@ -2596,10 +2669,12 @@ fn display_row_buffer_and_lisp_sources_share_height_property_semantics() {
 
 #[test]
 fn display_row_buffer_and_lisp_sources_share_control_and_glyphless_semantics() {
-    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
+    let eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     // U+FFFC stays glyphless; U+FFF0 would instead escape to `\`+octal.
     let text = "a\u{0001}\u{fffc}b";
-    let lisp_row = render_lisp_display_row(Value::string(text), GlyphRowRole::HeaderLine);
+    let lisp_text = Value::string(text);
+    let lisp_row = render_lisp_display_row(lisp_text, GlyphRowRole::HeaderLine);
+    let _parked = eval.park_for_test();
     let buffer_row = render_buffer_display_row(text, GlyphRowRole::HeaderLine);
 
     assert_eq!(
@@ -2633,12 +2708,14 @@ fn render_display_item_source_row_uses_spec_tab_policy() {
     let table = FaceTable::new();
     let resolver = FaceResolver::new(&table, 0x00FFFFFF, 0x00000000, 14.0, None);
     let mut face_ids = FrameFaceAttempt::for_test_with_next_id(1);
-    let mut source = crate::buffer_source::text_source::BufferTextSourceCursor::new(
+    let mut source = crate::buffer_source::text_source::BufferTextSourceCursor::new_for_window(
         buf_id,
         buffer,
+        None,
         neovm_core::buffer::CharPos0::new(0),
         buffer.layout_point_max_char_pos(),
         RenderFaceRef::FaceId(FaceId::new(1)),
+        StringSourceRootScope::Rooted(eval.owned_root_retainer()),
     );
 
     let rendered = display_row_request_for_face(
@@ -2659,7 +2736,13 @@ fn render_display_item_source_row_uses_spec_tab_policy() {
         resolver.default_face(),
         GlyphRowRole::TabLine,
     )
-    .render(&mut renderer, &mut source, &resolver, &mut face_ids)
+    .render(
+        &mut renderer,
+        &mut source,
+        &resolver,
+        &mut face_ids,
+        StringSourceRootScope::Rooted(eval.owned_root_retainer()),
+    )
     .expect("display source row");
 
     let glyphs = &rendered.row().glyphs[1];
@@ -2999,6 +3082,43 @@ fn display_row_measurement_policy_builds_measured_face_with_line_metrics() {
     assert_eq!(measured_metrics.char_width(), 9.0);
     assert_eq!(measured_metrics.row_height(), 18.0);
     assert_eq!(measured_metrics.ascent(), 13.0);
+}
+
+#[test]
+fn measured_font_width_can_shrink_below_the_frame_grid() {
+    let base = base_face();
+    let fallback = DisplayRowFallbackMetrics::from_default_face_extents(11.0, 22.0, 17.0);
+    for width in [4.0_f32, 8.0, 16.0] {
+        for mode in [
+            DisplayRowMeasurementMode::ConcreteFont,
+            DisplayRowMeasurementMode::LogicalCells,
+        ] {
+            let mut font_metrics = None;
+            let measured = DisplayRowMeasurementPolicy::for_mode(mode).measured_face(
+                FaceId::new(8),
+                &base,
+                Some(FontMetrics {
+                    char_width: width,
+                    space_width: width,
+                    ascent: 10.0,
+                    descent: 3.0,
+                    line_height: 13.0,
+                }),
+                fallback.char_width(),
+                fallback,
+                &mut font_metrics,
+            );
+            let expected = match mode {
+                DisplayRowMeasurementMode::ConcreteFont => width,
+                DisplayRowMeasurementMode::LogicalCells => width.max(fallback.char_width()),
+            };
+            assert_eq!(
+                measured.metrics().char_width(),
+                expected,
+                "font width {width}, measurement mode {mode:?}"
+            );
+        }
+    }
 }
 
 #[test]
@@ -3770,17 +3890,20 @@ fn tty_mode_line_relative_space_keeps_cell_and_pixel_pens_together() {
 /// character produces a stretch filling columns 1..4 after the initial "X".
 #[test]
 fn buffer_align_to_number_unchanged_by_unification() {
-    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
+    let eval = neovm_core::emacs_core::eval_hook_installers::new_context();
+    let display_name = Value::symbol("display");
+    let spec = Value::list(vec![
+        Value::symbol("space"),
+        Value::keyword("align-to"),
+        Value::fixnum(4),
+    ]);
+    let _parked = eval.park_for_test();
     let row = render_buffer_display_row_with_property(
         "X Y",
         1,
         2,
-        Value::symbol("display"),
-        Value::list(vec![
-            Value::symbol("space"),
-            Value::keyword("align-to"),
-            Value::fixnum(4),
-        ]),
+        display_name,
+        spec,
         GlyphRowRole::Text,
     );
 
@@ -3934,7 +4057,12 @@ fn display_row_lisp_string_source_request_uses_render_context() {
         GlyphRowRole::TabBar,
         std::collections::HashMap::new(),
     );
-    let mut context = DisplayRowRenderContext::new(&resolver, None, &mut face_ids);
+    let mut context = DisplayRowRenderContext::new(
+        &resolver,
+        None,
+        &mut face_ids,
+        StringSourceRootScope::Rooted(_eval.owned_root_retainer()),
+    );
 
     let rendered = render_lisp_string_row_with_context(
         &mut renderer,
@@ -3977,6 +4105,7 @@ fn display_row_render_executor_renders_lisp_string_source_request() {
         &resolver,
         None,
         &mut face_ids,
+        StringSourceRootScope::Rooted(_eval.owned_root_retainer()),
     );
 
     let rendered = executor
@@ -4141,6 +4270,7 @@ fn display_row_fragment_keeps_bidi_unfinalized_for_current_row_append() {
         Value::string("אב"),
         base_face,
         crate::display_source::LispStringSourceOrigin::Normal,
+        StringSourceRootScope::Rooted(_eval.owned_root_retainer()),
     )
     .expect("lisp string source");
     let mut state = DisplayRowSourceState::frame_local();
@@ -4153,6 +4283,7 @@ fn display_row_fragment_keeps_bidi_unfinalized_for_current_row_append() {
             &resolver,
             None,
             &mut face_ids,
+            StringSourceRootScope::Rooted(_eval.owned_root_retainer()),
         )
         .expect("unfinalized row fragment")
         .into_row();
@@ -4218,6 +4349,7 @@ fn display_row_renderer_can_render_source_fragment_into_existing_row() {
             &resolver,
             None,
             &mut face_ids,
+            StringSourceRootScope::Rooted(_eval.owned_root_retainer()),
         )
         .expect("row render fragment");
 
@@ -4518,6 +4650,7 @@ fn measured_display_row_content_policy_ignores_allocated_row_height() {
         width_cols: 4,
         margins: image_margins,
         opaque_background: neomacs_display_protocol::ImageOpaqueBackground::default(),
+        presentation: neomacs_display_protocol::ImageGlyphPresentation::Texture,
     };
     row.glyphs[GlyphArea::Text.index()].push(image);
     let measured = MeasuredDisplayRow::new(
@@ -4626,12 +4759,14 @@ fn render_buffer_text_row_with_display_at_content_x(
     let table = FaceTable::new();
     let resolver = FaceResolver::new(&table, 0x00FFFFFF, 0x00000000, 14.0, None);
     let mut face_ids = FrameFaceAttempt::for_test_with_next_id(1);
-    let mut source = crate::buffer_source::text_source::BufferTextSourceCursor::new(
+    let mut source = crate::buffer_source::text_source::BufferTextSourceCursor::new_for_window(
         buf_id,
         &snapshot,
+        None,
         CharPos0::new(0),
         snapshot.layout_point_max_char_pos(),
         RenderFaceRef::FaceId(FaceId::new(1)),
+        StringSourceRootScope::Rooted(eval.owned_root_retainer()),
     );
     display_row_request_for_face(
         DisplayRowGeometry {
@@ -4651,7 +4786,13 @@ fn render_buffer_text_row_with_display_at_content_x(
         resolver.default_face(),
         GlyphRowRole::Text,
     )
-    .render(&mut renderer, &mut source, &resolver, &mut face_ids)
+    .render(
+        &mut renderer,
+        &mut source,
+        &resolver,
+        &mut face_ids,
+        StringSourceRootScope::Rooted(eval.owned_root_retainer()),
+    )
     .expect("buffer text row")
     .row()
     .clone()
@@ -4666,12 +4807,14 @@ fn buffer_align_to_center_measures_from_the_text_area_not_the_window_edge() {
     // exactly half the text area wide however wide the left fringe is.  With
     // an 8px fringe the stretch came out 8px short (dashboard's centered
     // banner and title sat one fringe left of center).
-    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
+    let eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let spec = Value::list(vec![
         Value::symbol("space"),
         Value::keyword("align-to"),
         Value::symbol("center"),
     ]);
+    // The row helper installs its own heap. The spec stays on this one.
+    let _parked = eval.park_for_test();
     for content_x in [0.0_f32, 8.0] {
         let row = render_buffer_text_row_with_display_at_content_x("XY", spec, content_x);
         let stretch = row.glyphs[1]

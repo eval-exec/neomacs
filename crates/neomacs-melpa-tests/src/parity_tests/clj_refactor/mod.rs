@@ -63,7 +63,7 @@ const PRELUDE: &str = r####"
 (defun cljr414-test-write (relative contents)
   (let ((file (expand-file-name relative cljr414-test-root)))
     (unless (and cljr414-test-root-owned
-                 (file-in-directory-p file cljr414-test-root))
+                 (neomacs-melpa-path-inside-p file cljr414-test-root))
       (error "Refusing clj-refactor write outside owned root: %s" file))
     (make-directory (file-name-directory file) t)
     (let ((coding-system-for-write 'utf-8-unix))

@@ -702,6 +702,27 @@ impl neomacs_display_protocol::PresentedTextPositionSource for DeferredFrameText
         PresentedTextPositionHit::Resolved(Ok(None))
     }
 
+    fn validate_region(
+        &self,
+        window: DisplayWindowId,
+        bounds: FrameRect,
+        max_positions: usize,
+    ) -> neomacs_display_protocol::PresentedTextRegionValidation {
+        use neomacs_display_protocol::PresentedTextRegionValidation;
+        let [source] = self.windows.as_slice() else {
+            return PresentedTextRegionValidation::Unsupported;
+        };
+        if source.window != window || source.text_body != bounds.raw() {
+            return PresentedTextRegionValidation::Unsupported;
+        }
+        source
+            .row_text
+            .as_ref()
+            .map_or(PresentedTextRegionValidation::Unsupported, |rows| {
+                rows.validate_region(window, bounds, max_positions)
+            })
+    }
+
     fn is_empty(&self) -> Option<bool> {
         if self.windows.iter().any(|window| window.row_text.is_none()) {
             None
@@ -901,6 +922,51 @@ fn push_region(
     Ok(())
 }
 
+/// Build bounded coverage hits from the same immutable row source as visible
+/// presentation hits. Legacy or ambiguous row descriptors retain eager
+/// compilation, including its global error checks before publication.
+pub(crate) fn coverage_hit_index(
+    presentation: neomacs_display_protocol::PresentationId,
+    window: DisplayWindowId,
+    snapshot: std::sync::Arc<WindowDisplaySnapshot>,
+    text_body: neomacs_display_protocol::Rect,
+) -> Result<PresentedHitIndex, PresentedHitError> {
+    let row_text = if row_text::has_unique_ordered_point_rows(&snapshot) {
+        row_text::RowWindowText::new(window, snapshot.clone(), text_body)?
+    } else {
+        None
+    };
+    let positions = if row_text.is_some() {
+        Vec::new()
+    } else {
+        body_text_positions(window, &snapshot, text_body)?
+    };
+    let bounds = FrameRect::new(text_body.x, text_body.y, text_body.width, text_body.height)
+        .map_err(|_| PresentedHitError::InvalidRegionGeometry)?;
+    let index = PresentedHitIndex::from_parts(
+        presentation,
+        vec![PresentedHitRegion::new(
+            Some(window),
+            PresentedRegionKind::TextBody,
+            bounds,
+            0,
+        )],
+        positions,
+    )?;
+    Ok(if let Some(row_text) = row_text {
+        index.with_deferred_text(std::sync::Arc::new(DeferredFrameText {
+            windows: vec![DeferredWindowText {
+                window,
+                snapshot,
+                text_body,
+                row_text: Some(row_text),
+            }],
+        }))
+    } else {
+        index
+    })
+}
+
 /// Shared body source geometry for visible rows and bounded scroll coverage.
 /// The caller supplies its own body extent; this grants no query freshness.
 pub(crate) fn body_text_positions(
@@ -957,3 +1023,11 @@ pub(crate) fn body_text_positions(
     push_row_fallback_positions(&mut positions, window, snapshot, text_body)?;
     Ok(positions)
 }
+
+#[cfg(test)]
+#[path = "tests/spatial_coverage_test.rs"]
+mod coverage_tests;
+
+#[cfg(test)]
+#[path = "tests/spatial_visible_order_test.rs"]
+mod visible_order_tests;

@@ -56,6 +56,87 @@ pub(crate) fn thread_condition_case_continuation_parts(
     Some((items[1], items[2], items[3], items[4]))
 }
 
+fn blocks_form_chain(value: Value) -> bool {
+    thread_condition_case_continuation_parts(value).is_some()
+        || value
+            .closure_slot(neovm_value::tagged::header::CLOSURE_ARGLIST)
+            .is_some()
+}
+
+/// Forms still to run at this `progn`, then the forms after it.
+///
+/// A blocking call's own tail is not the rest of the enclosing body. A plain
+/// form list is that tail; append the enclosing rest. A condition-case marker
+/// or a resumed closure already names its own continuation.
+#[cold]
+#[inline(never)]
+pub(crate) fn chain_sim_blocked_forms(inner: Value, rest: Value) -> Value {
+    if inner.is_nil() {
+        return rest;
+    }
+    if rest.is_nil() || blocks_form_chain(inner) {
+        return inner;
+    }
+    append_lisp_forms(inner, rest)
+}
+
+/// Re-enter this `while` after the forms that remain in the blocked iteration.
+///
+/// The simulated waiter unwinds its Rust stack. GNU stays inside `Fwhile`.
+/// The saved forms finish this iteration, then evaluate the same `while`.
+pub(crate) fn while_sim_block_continuation(
+    call_name: neovm_value::intern::SymId,
+    tail: Value,
+    inner: Value,
+) -> Value {
+    if blocks_form_chain(inner) {
+        return inner;
+    }
+    let restart = Value::cons(Value::from_sym_id(call_name), tail);
+    let restart_forms = Value::cons(restart, Value::NIL);
+    if inner.is_nil() {
+        restart_forms
+    } else {
+        append_lisp_forms(inner, restart_forms)
+    }
+}
+
+#[cold]
+#[inline(never)]
+pub(crate) fn blocked_while_result(
+    call_name: neovm_value::intern::SymId,
+    tail: Value,
+    result: EvalResult,
+) -> EvalResult {
+    match result {
+        Err(flow) if flow.is_thread_blocked() => {
+            let Some(blocked) = flow.as_thread_blocked() else {
+                return Err(flow);
+            };
+            let forms = while_sim_block_continuation(call_name, tail, blocked.remaining_forms);
+            Err(Flow::thread_blocked(blocked.blocker, forms))
+        }
+        other => other,
+    }
+}
+
+fn append_lisp_forms(prefix: Value, suffix: Value) -> Value {
+    let mut cells = Vec::new();
+    let mut cursor = prefix;
+    while cursor.is_cons() {
+        cells.push(cursor.cons_car());
+        cursor = cursor.cons_cdr();
+    }
+    if !cursor.is_nil() {
+        return prefix;
+    }
+    let mut out = suffix;
+    for car in cells.into_iter().rev() {
+        out = Value::cons(car, out);
+    }
+    out
+}
+
 #[doc(hidden)]
 pub fn make_sleep_blocker(seconds: f64) -> Value {
     Value::list(vec![
@@ -120,7 +201,7 @@ impl ThreadName {
 /// traced children. A successful admission permits these leases to expire;
 /// a refusal leaves the caller's event intact.
 #[derive(Clone, Debug)]
-pub struct InFlightThreadEvent {
+pub(crate) struct InFlightThreadEvent {
     pub sender: SharedRoot,
     pub error_symbol: SharedRoot,
     pub data: SharedRoot,
@@ -184,17 +265,20 @@ mod completion;
 mod layout;
 mod mailbox;
 mod manager;
+mod opt_in;
 mod release_point;
 
 use completion::SimCompletion;
 pub(crate) use completion::{CompletingThread, CompletionExit, RetiredCompletion};
+#[doc(hidden)]
+pub use opt_in::{builtin_neomacs_make_parallel_thread, builtin_neomacs_thread_parallel_p};
 #[doc(hidden)]
 pub use release_point::SimReleasePoint;
 
 pub(crate) use neovm_value::heap_types::threading::{
     BlockedWait, CondVarId, CondVarPayload, HandlerList, JoinObservation, MutexId, MutexOwnership,
     MutexPayload, MutexReference, RecursionDepth, RunState, StoredThreadEvent, ThreadChildren,
-    ThreadId, ThreadIds, ThreadNativeState, ThreadOutcome, ThreadPayload, ThreadPhase,
+    ThreadId, ThreadIds, ThreadNativeState, ThreadOutcome, ThreadPayload, ThreadPhase, WaitCondvar,
 };
 
 /// A validated object identity. This word is not a GC root by itself: Lisp
@@ -697,13 +781,24 @@ pub fn builtin_thread_join(
     // :805 before `handlerlist_sentinel` (:810-815), and
     // `post_acquire_global_lock` (:141-154) raises only once that handler
     // exists. The snapshot above is what join re-raises.
-    ctx.sim_release_point(SimReleasePoint::Join)?;
-    if ctx.threads.thread_ready_to_resume(id) {
-        resume_blocked_thread(ctx, id)?;
-    } else if let Some(duration) = ctx.threads.blocked_sleep_duration(id) {
-        std::thread::sleep(duration);
-        ctx.threads.wake_thread(id);
-        resume_blocked_thread(ctx, id)?;
+    // GNU calls `thread_join_callback` only for a live target. It waits only
+    // while this thread has no pending error, then its
+    // `post_acquire_global_lock` raises one ahead of the snapshot
+    // (src/thread.c:1110-1115, :1137-1138).
+    let target_live = ctx.threads.thread_alive_p(id);
+    let current = ctx.threads.current_thread_id();
+    if !(target_live && ctx.threads.has_pending_thread_signal(current)) {
+        ctx.sim_release_point(SimReleasePoint::Join)?;
+        if ctx.threads.thread_ready_to_resume(id) {
+            resume_blocked_thread(ctx, id)?;
+        } else if let Some(duration) = ctx.threads.blocked_sleep_duration(id) {
+            std::thread::sleep(duration);
+            ctx.threads.wake_thread(id);
+            resume_blocked_thread(ctx, id)?;
+        }
+    }
+    if target_live {
+        ctx.deliver_pending_sim_signal()?;
     }
     // GNU `Fthread_join` (thread.c:1118-1144) re-raises only an error injected
     // into this thread by `thread-signal` (recorded in `error_symbol`); an
@@ -962,16 +1057,22 @@ pub fn builtin_thread_signal(
         ctx.threads
             .queue_thread_event(target, &event)
             .map_err(mailbox::event_error)?;
-        if ctx.green_threads_running() {
+        if ctx.green_runtime_started() {
             ctx.green_wake_main_for_thread_event();
         }
         return Ok(Value::NIL);
     }
-    if ctx.green_threads_running() {
+    if ctx.green_runtime_started() {
         return ctx.green_thread_signal(args[0], error_symbol, data);
     }
+    let target_waits = ctx.threads.blocked_wait_ends_on_signal(id);
     ctx.threads
         .signal_thread_for_value(args[0], Value::cons(error_symbol, data));
+    if target_waits {
+        // GNU's `thread_signal_callback` ends with the sender's own
+        // `post_acquire_global_lock` (src/thread.c:974-982).
+        ctx.deliver_pending_sim_signal()?;
+    }
     Ok(Value::NIL)
 }
 
@@ -1251,12 +1352,15 @@ pub fn builtin_mutex_unlock(
             vec![Value::string("Cannot unlock mutex owned by another thread")],
         ));
     }
-    if ctx.green_threads_running() {
+    if ctx.green_runtime_started() {
         return ctx.green_mutex_unlock(id);
     }
     match ctx.threads.mutex_unlock(id) {
         MutexRelease::Released => {
             ctx.threads.wake_threads_blocked_on(args[0]);
+            // GNU `mutex_unlock_callback` (src/thread.c:372-378) runs
+            // `post_acquire_global_lock` after a release.
+            ctx.deliver_pending_sim_signal()?;
             Ok(Value::NIL)
         }
         MutexRelease::StillLocked => Ok(Value::NIL),
@@ -1362,20 +1466,11 @@ pub fn builtin_condition_wait(
     if ctx.green_threads_running() {
         return ctx.green_condition_wait(id);
     }
-    if ctx.threads.current_thread_id() != 0 && !ctx.sim_thread_wait_is_resumable() {
-        // A suspended simulated worker resumes as a saved form list; it
-        // cannot carry dynamic let-bindings, unwind-protect cleanups,
-        // excursions or load state across the switch (the thread-switch
-        // path itself requires the specpdl to unwind first, and a
-        // `with-mutex` cleanup would then release COND's mutex a second
-        // time). GNU parks the whole Lisp stack here. For such nested
-        // contexts the simulation keeps its historical degeneration: the
-        // wait returns at once and the mutex stays held, so the P11 soak's
-        // inline-burn accounting is unchanged. A wait in the worker's
-        // top-level body carries only call frames and takes the real
-        // handoff path below.
-        return Ok(Value::NIL);
-    }
+    // A worker parks here inside `with-mutex` and dynamic `let`. GNU leaves
+    // that stack in place (`Fcondition_wait`, src/thread.c:446-501).
+    // `preserve_blocked_sim_worker` saves the specpdl, including the
+    // `unwind-protect` cleanup, and the resume relocks before the
+    // continuation, so the cleanup unlocks the mutex once.
     let Some(depth) = ctx.threads.mutex_unlock_for_wait(mutex_id) else {
         return Err(condition_mutex_not_held());
     };
@@ -1423,13 +1518,19 @@ pub fn builtin_condition_wait(
     // the wait object, give the other threads their chance, and block.
     ctx.threads
         .set_blocked_wait(current, Some(BlockedWait::ConditionWait(depth)));
-    ctx.threads.set_thread_blocker(current, args[0]);
-    if let Err(flow) = ctx.sim_release_point(SimReleasePoint::ConditionWait) {
-        ctx.threads.set_blocked_wait(current, None);
-        ctx.threads.clear_thread_blocker(current);
-        return Err(flow);
+    // GNU waits only while this thread has no pending error
+    // (`condition_wait_callback`, src/thread.c:457-464), such as one
+    // signalled before it first ran; it then reacquires and raises.
+    let signalled = ctx.threads.has_pending_thread_signal(current);
+    if !signalled {
+        ctx.threads.set_thread_blocker(current, args[0]);
+        if let Err(flow) = ctx.sim_release_point(SimReleasePoint::ConditionWait) {
+            ctx.threads.set_blocked_wait(current, None);
+            ctx.threads.clear_thread_blocker(current);
+            return Err(flow);
+        }
     }
-    if ctx.threads.thread_is_woken(current) {
+    if signalled || ctx.threads.thread_is_woken(current) {
         // A notification (or an injected signal, which wakes the wait too)
         // arrived while the lock was released. GNU's sys_cond_wait returns;
         // the mutex is reacquired before any pending error is raised.
@@ -1489,7 +1590,7 @@ pub fn builtin_condition_notify(
         Some(all) if all.is_truthy() => NotificationScope::All,
         Some(_) | None => NotificationScope::One,
     };
-    if ctx.green_threads_running() {
+    if ctx.green_runtime_started() {
         return ctx.green_condition_notify(id, scope);
     }
     let Some(depth) = ctx.threads.mutex_unlock_for_wait(mutex_id) else {
@@ -1509,7 +1610,9 @@ pub fn builtin_condition_notify(
     // Notifies never observe a stolen mutex: no other Lisp thread runs
     // between `lisp_mutex_unlock_for_wait` and `lisp_mutex_lock` here.
     match ctx.sim_relock_after_wait(mutex_id, depth, SimReleasePoint::ConditionWait) {
-        Ok(true) => Ok(Value::NIL),
+        // GNU `condition_notify_callback` ends with
+        // `post_acquire_global_lock` (src/thread.c:533).
+        Ok(true) => ctx.deliver_pending_sim_signal().map(|()| Value::NIL),
         Ok(false) => Err(Flow::thread_blocked(mutex_value, Value::NIL)),
         Err(flow) => Err(flow),
     }

@@ -17,7 +17,7 @@ use super::face::{BoxVerticalEdges, FaceAttributes, UnderlineStyle};
 use super::frame_chrome::{FrameChrome, FrameChromeContent, PresentationId};
 use super::frame_glyphs::{
     ContentTransitionHint, CursorStyle, DisplaySlotId, FrameGlyph, FrameGlyphBuffer,
-    FringeBitmapData, FringeSide, GlyphRowRole, MaterializedFaceData, PhysCursor,
+    FringeBitmapData, FringeBitmapKind, FringeSide, GlyphRowRole, MaterializedFaceData, PhysCursor,
     PresentedWindowGeometry, WindowCursor, WindowInfo,
 };
 use super::image::{ImageMargins, ImageOpaqueBackground, ImageSourceRect, RetainedImageSet};
@@ -35,7 +35,7 @@ use num_enum::{IntoPrimitive, TryFromPrimitive};
 use rustc_hash::FxHashMap as HashMap;
 
 mod text_geometry;
-pub use text_geometry::{TextRowGeometry, TextSlotColumn, VisualTextGlyphIndex};
+pub use text_geometry::{TextGeometryUnits, TextRowGeometry, TextSlotColumn, VisualTextGlyphIndex};
 
 mod clone_row;
 
@@ -108,6 +108,7 @@ pub enum GlyphType {
         source_rect: ImageSourceRect,
         margins: GlyphImageMarginsId,
         opaque_background: ImageOpaqueBackground,
+        presentation: crate::image::ImageGlyphPresentation,
     },
     /// Inline video, represented by the same row primitive that reserves its
     /// layout slot.
@@ -997,7 +998,150 @@ impl Glyph {
             }
         }
     }
+}
 
+/// GNU `CHARACTER_WIDTH`, injected by the layer that owns the char-width table.
+///
+/// The display protocol deliberately does not link the VM's width table, so
+/// both terminal consumers (the TTY rasterizer and [`TextRowGeometry`]) take
+/// the same function pointer. Keeping one value for both guarantees the
+/// right-aligned origin the cursor uses is the origin the rasterizer paints.
+#[derive(Clone, Copy)]
+pub struct TerminalCharWidths(fn(char) -> usize);
+
+impl TerminalCharWidths {
+    pub const fn new(char_width: fn(char) -> usize) -> Self {
+        Self(char_width)
+    }
+
+    /// GNU `CHARACTER_WIDTH` of `ch`, in terminal cells.
+    pub fn cells(self, ch: char) -> usize {
+        (self.0)(ch)
+    }
+}
+
+impl std::fmt::Debug for TerminalCharWidths {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("TerminalCharWidths")
+    }
+}
+
+/// Terminal cells written for one TEXT_AREA glyph, plus the run-member padding
+/// glyphs the rasterizer consumes as part of it.
+///
+/// This is the shared per-glyph rule behind both the TTY rasterizer's
+/// `text_area_terminal_cells` and the cursor geometry, so the right-aligned
+/// origin and the painted cells cannot disagree.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TerminalGlyphCells {
+    /// Cells the rasterizer writes for the glyph itself.
+    pub cells: u16,
+    /// Following glyphs consumed by this one (their cells are already counted).
+    pub consumed_paddings: usize,
+}
+
+/// Whether `glyph` is a padding cell that belongs to the preceding composite
+/// run rather than a standalone wide-character second cell.
+pub fn is_run_member_padding_cell(glyph: &Glyph) -> bool {
+    glyph.padding
+        && match &glyph.glyph_type {
+            GlyphType::Char { ch } => *ch != ' ',
+            GlyphType::Composite { .. } | GlyphType::AutomaticComposite { .. } => true,
+            _ => false,
+        }
+}
+
+/// Cell accounting for the TEXT_AREA glyph at `index`.
+///
+/// Mirrors the TTY rasterizer's consumption rules without touching a grid:
+/// run-member paddings after a Composite/AutomaticComposite are owned by it,
+/// a standalone padding is one blank cell, a zero-width character advances
+/// nothing, and a wide base without an explicit padding cell writes two.
+pub fn terminal_glyph_cells(
+    glyphs: &[Glyph],
+    index: usize,
+    widths: TerminalCharWidths,
+) -> Option<TerminalGlyphCells> {
+    let glyph = glyphs.get(index)?;
+    let following = &glyphs[index + 1..];
+    if glyph.padding {
+        return Some(TerminalGlyphCells {
+            cells: 1,
+            consumed_paddings: 0,
+        });
+    }
+    let cells = match &glyph.glyph_type {
+        GlyphType::AutomaticComposite { text, terminal } => {
+            let cells = terminal.cells.iter().fold(0u16, |cells, cell| {
+                cells.saturating_add(u16::from(cell.width_cols.max(1)))
+            });
+            let source_paddings = text.chars().count().saturating_sub(1);
+            let consumed = following
+                .iter()
+                .take(source_paddings)
+                .take_while(|next| is_run_member_padding_cell(next))
+                .count();
+            return Some(TerminalGlyphCells {
+                cells,
+                consumed_paddings: consumed,
+            });
+        }
+        GlyphType::Composite { .. } => {
+            let run_paddings = following
+                .iter()
+                .take_while(|next| is_run_member_padding_cell(next))
+                .count();
+            // The run members are painted as part of this glyph's cells, so
+            // the row walk must skip them; returning them here keeps the
+            // rasterizer's consumption identical to the painted span.
+            let cells = if run_paddings == 0 {
+                1
+            } else {
+                u16::try_from(run_paddings)
+                    .unwrap_or(u16::MAX)
+                    .saturating_add(1)
+            };
+            return Some(TerminalGlyphCells {
+                cells,
+                consumed_paddings: run_paddings,
+            });
+        }
+        GlyphType::Stretch { width_cols } => (*width_cols).max(1),
+        GlyphType::Surface { width_cols, .. } => (*width_cols).max(1),
+        GlyphType::Glyphless { .. } => 1,
+        GlyphType::Char { ch } if widths.cells(*ch) == 0 => 0,
+        _ => {
+            let next_is_explicit_padding =
+                glyph.wide && following.first().is_some_and(|next| next.padding);
+            if glyph.wide && !next_is_explicit_padding {
+                2
+            } else {
+                1
+            }
+        }
+    };
+    Some(TerminalGlyphCells {
+        cells,
+        consumed_paddings: 0,
+    })
+}
+
+/// Terminal cells the TTY rasterizer writes for a TEXT_AREA glyph vector.
+///
+/// The single authority for the terminal row width: right-aligned terminal
+/// rows and the TTY cursor geometry both call this, so a zero-width RLM/LRM or
+/// a composite's padding cells shift both by the same amount.
+pub fn terminal_text_area_cells(glyphs: &[Glyph], widths: TerminalCharWidths) -> u16 {
+    let mut cells = 0u16;
+    let mut index = 0usize;
+    while let Some(glyph_cells) = terminal_glyph_cells(glyphs, index, widths) {
+        cells = cells.saturating_add(glyph_cells.cells);
+        index += 1 + glyph_cells.consumed_paddings;
+    }
+    cells
+}
+
+impl Glyph {
     /// Pointer-paint primitive produced when this glyph is materialized.
     ///
     /// Keep this exhaustive beside [`GlyphType`]: a pointer run may only name
@@ -1295,6 +1439,7 @@ impl GlyphRow {
                         source_rect,
                         margins: margins_id,
                         opaque_background,
+                        presentation,
                     } => {
                         0x4000_0000
                             ^ (*image_id as u64)
@@ -1310,6 +1455,7 @@ impl GlyphRow {
                                 .packed()
                                 .rotate_left(7)
                             ^ u64::from(opaque_background.packed()).rotate_left(19)
+                            ^ u64::from(presentation.packed()).rotate_left(27)
                     }
                     GlyphType::Video {
                         video_id,
@@ -1947,7 +2093,7 @@ pub struct CursorItem {
 }
 
 /// A scroll bar.
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ScrollBarItem {
     pub window_id: DisplayWindowId,
     pub row_role: GlyphRowRole,
@@ -1973,6 +2119,10 @@ pub struct FrameDisplayState {
     /// Bounded body coverage, separate from authoritative query geometry.
     #[serde(default)]
     pub scroll_coverage: Vec<std::sync::Arc<crate::scroll_coverage::ScrollCoverage>>,
+    /// Reuse admission outcomes only for the same coverage identity and
+    /// still-matching frame inputs. Rejected inputs can recover after mutation.
+    #[serde(skip)]
+    prepared_scroll_admissions: Vec<crate::scroll_coverage::ScrollCoverageAdmission>,
     /// Epochs whose certified coverage this publish re-asserts without
     /// re-exporting a surface (see [`crate::scroll_coverage::ScrollCoverageRenewal`]).
     #[serde(default)]
@@ -2015,6 +2165,9 @@ pub struct FrameDisplayState {
     /// this immutable presentation.
     #[serde(default)]
     pub font_catalog_generation: crate::font::FontCatalogGeneration,
+    /// PGTK options used to open the exact fonts carrying this frame's metrics.
+    #[serde(default, rename = "pgtk_font_options")]
+    pub desktop_font_render_options: Option<crate::DesktopFontRenderOptions>,
     /// Resolved font table for this frame. `Face::default_resolved_font_id`
     /// and (eventually) shaped glyph runs reference entries here; the render
     /// thread rasterizes these exact fonts instead of re-selecting by
@@ -2045,6 +2198,10 @@ pub struct FrameDisplayState {
     pub backgrounds: Vec<BackgroundItem>,
     /// Face-backed rectangular fills for redisplay-owned blank cells.
     pub face_fills: Vec<FaceFillItem>,
+    /// Empty fringe column background rectangles (GNU `fringe` face background,
+    /// painted over the window background and below per-row fringe bitmaps).
+    #[serde(default)]
+    pub fringe_backgrounds: Vec<BackgroundItem>,
     /// Window border/divider rectangles.
     pub borders: Vec<BorderItem>,
     /// Cursor entries.
@@ -2537,6 +2694,7 @@ impl FrameDisplayState {
         Self {
             scroll_input_policy: crate::ScrollInputPolicy::default(),
             scroll_coverage: Vec::new(),
+            prepared_scroll_admissions: Vec::new(),
             scroll_coverage_renewals: Vec::new(),
             input_checkpoint: Vec::new(),
             presentation_id: PresentationId::default(),
@@ -2561,6 +2719,7 @@ impl FrameDisplayState {
             },
             faces: HashMap::default(),
             font_catalog_generation: crate::font::FontCatalogGeneration::default(),
+            desktop_font_render_options: None,
             fonts: crate::font::ResolvedFontTable::default(),
             char_fonts: crate::font::CharFontTable::default(),
             shaped_clusters: crate::font::ShapedClusterTable::default(),
@@ -2586,6 +2745,7 @@ impl FrameDisplayState {
             transition_hints: Vec::new(),
             backgrounds: Vec::new(),
             face_fills: Vec::new(),
+            fringe_backgrounds: Vec::new(),
             borders: Vec::new(),
             cursors: Vec::new(),
             cursor_effects_by_window: HashMap::default(),
@@ -2658,6 +2818,7 @@ impl FrameDisplayState {
         state.no_accept_focus = buf.no_accept_focus;
         state.faces = buf.faces.clone();
         state.font_catalog_generation = buf.font_catalog_generation;
+        state.desktop_font_render_options = buf.desktop_font_render_options;
         state.fonts = buf.fonts.clone();
         state.char_fonts = buf.char_fonts.clone();
         state.shaped_clusters = buf.shaped_clusters.clone();
@@ -2779,6 +2940,38 @@ impl FrameDisplayState {
         state
     }
 
+    /// Admit coverage once for this publication's inputs, retaining one
+    /// outcome per window and retiring older publications. Mutating coverage
+    /// or frame resources causes admission to run again, including recovery
+    /// from a previously rejected surface.
+    pub fn prepare_scroll_coverage(
+        &mut self,
+        coverage: std::sync::Arc<crate::scroll_coverage::ScrollCoverage>,
+    ) -> Option<std::sync::Arc<crate::scroll_coverage::ScrollSurface>> {
+        let presentation = self.presentation_id;
+        self.prepared_scroll_admissions
+            .retain(|cached| cached.presentation() == presentation);
+        if let Some(cached) = self
+            .prepared_scroll_admissions
+            .iter()
+            .find(|cached| cached.matches(&coverage, self))
+        {
+            return cached.surface();
+        }
+        let window = coverage.content.window_id;
+        let admission = crate::scroll_coverage::ScrollCoverageAdmission::prepare(coverage, self);
+        let surface = admission.surface();
+        self.prepared_scroll_admissions
+            .retain(|cached| cached.window() != window);
+        self.prepared_scroll_admissions.push(admission);
+        surface
+    }
+
+    #[cfg(test)]
+    pub(crate) fn prepared_scroll_admission_count(&self) -> usize {
+        self.prepared_scroll_admissions.len()
+    }
+
     /// Convert this `FrameDisplayState` into a `FrameGlyphBuffer`.
     ///
     /// Materializes the `GlyphMatrix` grid into pixel-positioned
@@ -2794,7 +2987,16 @@ impl FrameDisplayState {
         buf.scroll_surfaces = self
             .scroll_coverage
             .iter()
-            .filter_map(|coverage| coverage.materialize(self))
+            .filter_map(|coverage| {
+                match self
+                    .prepared_scroll_admissions
+                    .iter()
+                    .find(|cached| cached.matches(coverage, self))
+                {
+                    Some(admission) => admission.surface(),
+                    None => coverage.materialize(self),
+                }
+            })
             .collect();
         buf.scroll_coverage_renewals = self.scroll_coverage_renewals.clone();
         buf.frame_placement = self.frame_placement;
@@ -2818,6 +3020,7 @@ impl FrameDisplayState {
         }
 
         buf.font_catalog_generation = self.font_catalog_generation;
+        buf.desktop_font_render_options = self.desktop_font_render_options;
         // Copy resolved fonts
         for (id, font) in &self.fonts {
             buf.fonts.insert(*id, font.clone());
@@ -2922,6 +3125,15 @@ impl FrameDisplayState {
             push(FrameGlyph::Background {
                 bounds: fill.bounds,
                 color: face_data.bg,
+            });
+        }
+        // Fringe column backgrounds sit above the full-window background and
+        // face fills, and below per-row fringe bitmaps, text, borders, and
+        // scroll bars — matching GNU `draw_window_fringes` (src/fringe.c).
+        for bg in &self.fringe_backgrounds {
+            push(FrameGlyph::Background {
+                bounds: bg.bounds,
+                color: bg.color,
             });
         }
 
@@ -3045,11 +3257,13 @@ impl FrameDisplayState {
                         bitmap_index: info.bitmap_index,
                         face_id: info.face_id,
                         side: FringeSide::Left,
+                        kind: FringeBitmapKind::RowBitmap,
                     });
                 }
                 // GNU draws the overlay arrow over the left fringe after the
                 // row's own left bitmap, never instead of it (`src/fringe.c`
-                // `draw_fringe_bitmap`).
+                // `draw_fringe_bitmap`), and as an overlay: set bits only, no
+                // background (`draw_fringe_bitmap_1` with `overlay` set).
                 if let Some(info) = glyph_row.overlay_arrow_bitmap {
                     push(FrameGlyph::FringeBitmap {
                         window_id,
@@ -3062,6 +3276,7 @@ impl FrameDisplayState {
                         bitmap_index: info.bitmap_index,
                         face_id: info.face_id,
                         side: FringeSide::Left,
+                        kind: FringeBitmapKind::Overlay,
                     });
                 }
                 if let Some(info) = glyph_row.right_fringe_bitmap {
@@ -3076,6 +3291,7 @@ impl FrameDisplayState {
                         bitmap_index: info.bitmap_index,
                         face_id: info.face_id,
                         side: FringeSide::Right,
+                        kind: FringeBitmapKind::RowBitmap,
                     });
                 }
             }
@@ -3449,6 +3665,7 @@ impl FrameDisplayState {
                         image_id,
                         source_rect,
                         margins: margins_id,
+                        presentation,
                         ..
                     } => {
                         let margins = glyph_row
@@ -3491,6 +3708,7 @@ impl FrameDisplayState {
                                 height: (layout_height - top_margin - bottom_margin).max(0.0),
                                 face_id: glyph.face_id,
                                 box_vertical_edges: glyph.box_vertical_edges,
+                                presentation: *presentation,
                             },
                             glyph,
                             glyph_row,

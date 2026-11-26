@@ -222,8 +222,9 @@ fn nmjit_n3_publication_poison_retains_readable_owned_tables() {
         .unwrap();
     let before = tables.view();
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let _ledger = tables.ledger.lock().unwrap();
-        panic!("NMJIT_N3_TEST_POISONED_METADATA_LOCK");
+        tables
+            .ledger
+            .hold_metadata_for_test(|| panic!("NMJIT_N3_TEST_POISONED_METADATA_LOCK"));
     }));
     assert!(outcome.is_err());
     assert!(matches!(
@@ -234,9 +235,87 @@ fn nmjit_n3_publication_poison_retains_readable_owned_tables() {
     assert!(std::ptr::eq(before.table(), tables.view().table()));
     assert_eq!(before.table().chunk_count().get(), 2);
     // Poisoning does not drain ownership of the predecessor either.
-    let poisoned = tables.ledger.lock().err().unwrap().into_inner();
-    assert_eq!(poisoned.retired.len(), 1);
-    assert_eq!(poisoned.retired[0].table().chunk_count().get(), 1);
+    let counts = tables.with_owners_for_test(|_current, predecessors| {
+        predecessors
+            .iter()
+            .map(|owner| owner.table.table().chunk_count().get())
+            .collect::<Vec<_>>()
+    });
+    assert_eq!(counts, vec![1]);
+}
+
+#[test]
+fn nmjit_n3_publication_byte_quote_overflow_is_table_capacity() {
+    use crate::tagged::gc::publication::{
+        PayloadPlan, PublicationLedger, PublicationPayload, RetainedBytes, RetentionLimits,
+        RetiredCount,
+    };
+
+    /// Toy payload whose quote is `usize::MAX`, so the next admission overflows.
+    struct OverflowPayload {
+        value: Box<u8>,
+    }
+    // SAFETY: `self.value` is a heap-allocated `Box<u8>`, so its address stays
+    // valid and stable across moves of `OverflowPayload` until drop.
+    unsafe impl PublicationPayload for OverflowPayload {
+        type Error = TableError;
+        type Generation = u64;
+
+        fn published_address(&self) -> *mut u8 {
+            (&raw const *self.value).cast_mut().cast()
+        }
+
+        fn retained_bytes(&self) -> RetainedBytes {
+            RetainedBytes::new(usize::MAX)
+        }
+
+        fn generation(&self) -> u64 {
+            0
+        }
+
+        fn prepare(current: &Self) -> Result<PayloadPlan<Self>, Self::Error> {
+            let _ = current;
+            Ok(PayloadPlan::Replacement(OverflowPayload {
+                value: Box::new(2),
+            }))
+        }
+    }
+
+    let store = PublicationLedger::create(
+        OverflowPayload { value: Box::new(1) },
+        RetentionLimits::new(RetainedBytes::new(usize::MAX), RetiredCount::new(4)),
+    )
+    .unwrap();
+    let Err(refused) = store.prepare() else {
+        panic!("usize::MAX quote prepared a transaction");
+    };
+    assert_eq!(
+        map_publication_error(refused),
+        TablePublicationError::Table(TableError::Capacity)
+    );
+
+    let backing = Backing::new();
+    let tables = PublishedSymbolTables::new(backing.initial(), TableLimits::default()).unwrap();
+    let accounted = tables.ledger.account(|admission| {
+        admission.admit(RetainedBytes::new(usize::MAX))?;
+        Ok(())
+    });
+    let Err(refused) = accounted.result else {
+        panic!("usize::MAX admission prepared a table");
+    };
+    assert_eq!(
+        map_publication_error(refused),
+        TablePublicationError::Table(TableError::Capacity)
+    );
+    // Reserve runs before the overflowing add, so the capacity charge stays
+    // and nothing is published.
+    assert!(accounted.charged.get() >= std::mem::size_of::<OwnedSymbolTable>());
+    assert_eq!(tables.view().table().chunk_count().get(), 1);
+    assert_eq!(tables.stats().unwrap().retired.get(), 0);
+    assert_eq!(
+        tables.retained_bytes().unwrap().get(),
+        table_bytes(shape(1)).unwrap() + accounted.charged.get()
+    );
 }
 
 #[test]

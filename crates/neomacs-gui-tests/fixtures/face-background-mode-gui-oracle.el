@@ -5,12 +5,17 @@
 ;; under both editors on one X11 display and compares the files line by line.
 ;;
 ;; STATE is
-;;   (background-mode foreground-color background-color PROBE-DUAL)
+;;   (background-mode foreground-color background-color PROBE-DUAL
+;;    DEFAULT-BACKGROUND DEFAULT-FOREGROUND LIVE-IS-FRAME-TYPE)
 ;;
-;; The default face's own attributes are deliberately not recorded: on the
-;; untouched opening frame Neomacs leaves them `unspecified-fg'/`unspecified-bg'
-;; where GNU reports the frame colors. That is a separate lazy-realization
-;; divergence, not this contract.
+;; DEFAULT-BACKGROUND and DEFAULT-FOREGROUND are the default face's own
+;; attributes on FRAME.  GNU resolves them from the frame's colors, so an
+;; opening X frame reports a color rather than `unspecified-bg'/`unspecified-fg'.
+;;
+;; LIVE-IS-FRAME-TYPE records whether `frame-live-p' returns what `framep'
+;; returns (GNU src/frame.c:326-338 returns Fframep for a live frame, nil
+;; otherwise).  The terminal type symbol itself is backend-specific (`x' in
+;; GNU, `neo' here), so only the relation is compared.
 ;;
 ;; The contract pinned here, from GNU 31.1:
 ;;
@@ -29,6 +34,9 @@
 ;; * Frame parameters named explicitly at frame creation are applied after
 ;;   the face merge (the `face-params' loop in face-set-after-frame-default,
 ;;   lisp/faces.el:2293-2305), so they win over the default face's color.
+;;
+;; * `frame-live-p' reports the frame's terminal type, not `t'
+;;   (src/frame.c:326-338).
 
 (defface probe-dual
   '((((background dark)) (:foreground "yellow"))
@@ -41,7 +49,10 @@
   (list (frame-parameter frame 'background-mode)
         (frame-parameter frame 'foreground-color)
         (frame-parameter frame 'background-color)
-        (face-attribute 'probe-dual :foreground frame t)))
+        (face-attribute 'probe-dual :foreground frame t)
+        (face-attribute 'default :background frame)
+        (face-attribute 'default :foreground frame)
+        (eq (frame-live-p frame) (framep frame))))
 
 (defun neo-face-background-mode-oracle--record (name thunk)
   ;; Errors propagate: a fixture that cannot reach the state under test must
@@ -54,6 +65,27 @@
 (neo-face-background-mode-oracle--record
  'opening
  (lambda () (neo-face-background-mode-oracle--state (selected-frame))))
+
+;; A plain new frame, before any default-face customization, reports its own
+;; frame colors on the default face.
+(neo-face-background-mode-oracle--record
+ 'new-plain
+ (lambda ()
+   (let ((frame (make-frame '((name . "probe-plain")))))
+     (unwind-protect
+         (neo-face-background-mode-oracle--state frame)
+       (delete-frame frame)))))
+
+;; A deleted frame is not live, and a non-frame object is not live either.
+(neo-face-background-mode-oracle--record
+ 'deleted
+ (lambda ()
+   (let ((frame (make-frame '((name . "probe-deleted")))))
+     (delete-frame frame)
+     (list (frame-live-p frame)))))
+(neo-face-background-mode-oracle--record
+ 'non-frame
+ (lambda () (list (frame-live-p 'not-a-frame))))
 
 ;; Changing the default face on the existing frame updates its colors and
 ;; background mode immediately.

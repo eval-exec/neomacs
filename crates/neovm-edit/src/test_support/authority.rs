@@ -22,7 +22,8 @@ pub unsafe fn chain_splice_at_head_for_test(
     text: &crate::buffer::buffer_text::BufferText,
     marker: *mut neovm_value::tagged::header::MarkerObj,
 ) {
-    text.chain_splice_at_head(marker);
+    // SAFETY: the caller of this fence upholds the same contract.
+    unsafe { text.chain_splice_at_head(marker) };
 }
 
 /// P1-CLASSES-ALL-CRATES FENCE (N2 counter reset): zero the buffer-local
@@ -39,6 +40,13 @@ pub fn reset_buffer_local_value_lookup_probes() {
 /// no visibility widening.
 pub fn reset_screen_line_scan_steps_for_test() {
     crate::emacs_core::indent::reset_screen_line_scan_steps_for_test();
+}
+
+/// FENCE (slice-2 work rows): read the screen-line scan-step counter. The
+/// counter stays `pub(crate)`; this is the cross-crate read route used by the
+/// scroll/recenter work rows.
+pub fn screen_line_scan_steps() -> usize {
+    crate::emacs_core::indent::screen_line_scan_steps_for_test()
 }
 
 /// P1-CLASSES-ALL-CRATES FENCE (LEAD 10:1xZ retraction): zero the
@@ -59,6 +67,20 @@ pub fn reset_char_pos_to_emacs_byte_pos_call_count() {
 /// thread. The original stays pub(crate) with no visibility widening.
 pub fn reset_local_var_alist_entry_probes() {
     crate::buffer::buffer::reset_local_var_alist_entry_probes();
+}
+
+/// FENCE (#640 flat-vs-size): zero the column scan's decoded-character
+/// counter. The increment sites and the counter stay pub(crate) under the
+/// `cfg(any(test, feature = "test-support"))` gate; this fence is the
+/// cross-crate reset and read route for the auto-hscroll work test.
+pub fn reset_column_scan_characters() {
+    crate::emacs_core::indent::reset_column_scan_characters_for_test();
+}
+
+/// FENCE (#640 flat-vs-size): characters decoded by column scans since the
+/// last reset.
+pub fn column_scan_characters() -> usize {
+    crate::emacs_core::indent::column_scan_characters_for_test()
 }
 
 /// Setter fence for `Buffer::undo_state` (peer #816 write arm): the moved
@@ -130,4 +152,13 @@ pub fn save_point_before_command_for_test(
     point: crate::buffer::CharPos0,
 ) {
     buffer.save_point_before_command_raw(buffer_id, point);
+}
+
+/// B15-1 wave-3 FENCE: thread-local snapshot-mode override for the moved
+/// layout-engine COW tests. The raw setter stays pub(crate) and
+/// cfg(any(test, feature)); this fence is the only cross-crate write route.
+pub fn set_text_snapshot_mode_override_for_test(
+    mode: Option<crate::buffer::text_snapshot::TextSnapshotMode>,
+) {
+    crate::buffer::text_snapshot::set_text_snapshot_mode_override(mode);
 }

@@ -663,7 +663,10 @@ fn excursion_scope_panic_recovery_does_not_seed_standard_case_table() {
                     .context()
                     .obarray_view_mut()
                     .set_symbol_value_id(symbol, value),
-                None => scope.context().obarray_view_mut().makunbound_id(symbol),
+                None => scope
+                    .context()
+                    .obarray_view_mut()
+                    .makunbound_canonical(neovm_value::symbol::CanonicalAccess::TEST, symbol),
             }
             // Capture after the scope's point marker and normal buffer switch
             // have allocated. Only fallback work is measured below.
@@ -714,7 +717,10 @@ fn excursion_scope_normal_finish_retains_standard_case_table_seeding() {
         .context()
         .set_current_buffer_unrecorded(other)
         .unwrap();
-    scope.context().obarray_view_mut().makunbound_id(symbol);
+    scope
+        .context()
+        .obarray_view_mut()
+        .makunbound_canonical(neovm_value::symbol::CanonicalAccess::TEST, symbol);
     assert!(scope.finish(Ok(Value::NIL)).is_ok());
     assert_eq!(ctx.edit.buffers.current_buffer_id(), Some(original));
     assert!(ctx.obarray().symbol_value_id_copied(symbol).is_some());
@@ -827,15 +833,17 @@ fn discard_local_binding_does_not_allocate_ambient_buffer_wrapper() {
         .get(buffer)
         .and_then(|buffer| buffer.local_variable_binding_cell(symbol))
         .expect("existing canonical local cell");
-    assert_eq!(
-        owner.obarray().blv(symbol).unwrap().valcell.get(),
-        binding_cell
-    );
+    assert_eq!(owner.obarray().blv(symbol).unwrap().valcell(), binding_cell);
+    // SAFETY: `owner` is not evaluated while `ambient` is active; only
+    // `discard_specpdl_to` (which must not allocate in `ambient`) runs before
+    // `ambient` drops and `owner` reactivates.
+    unsafe { neovm_value::tagged::gc::clear_tagged_heap_if_installed(owner.tagged_heap()) };
     let mut ambient = crate::test_utils::new_context();
     ambient.setup_thread_locals();
     let before = ambient.tagged_heap().bytes_since_gc_exact();
     owner.discard_specpdl_to(count);
     let after = ambient.tagged_heap().bytes_since_gc_exact();
+    drop(ambient);
     owner.setup_thread_locals();
     assert_eq!(
         after, before,
@@ -859,10 +867,7 @@ fn discard_local_binding_does_not_allocate_ambient_buffer_wrapper() {
         Some(binding_cell),
         "recovery keeps the existing binding cell"
     );
-    assert_eq!(
-        owner.obarray().blv(symbol).unwrap().valcell.get(),
-        binding_cell
-    );
+    assert_eq!(owner.obarray().blv(symbol).unwrap().valcell(), binding_cell);
     assert_eq!(
         owner.visible_variable_value_or_nil_by_id(symbol),
         Value::fixnum(10),
@@ -986,7 +991,7 @@ fn panic_recovery_unbound_localized_builtin_keeps_cells_and_projection() {
     let cells = [boolean, object].map(|symbol| {
         let blv = ctx.obarray().blv(symbol).expect("BLV");
         assert!(blv.fwd.is_some());
-        (blv.defcell.get(), blv.valcell.get())
+        (blv.defcell(), blv.valcell())
     });
     ctx.publish_runtime_binding_write_by_resolved_id(object, Value::NIL);
     let count = ctx.specpdl().len();
@@ -1006,14 +1011,14 @@ fn panic_recovery_unbound_localized_builtin_keeps_cells_and_projection() {
     assert!(outcome.is_err());
     for (symbol, cells) in [boolean, object].into_iter().zip(cells) {
         let blv = ctx.obarray().blv(symbol).expect("retained BLV");
-        assert_eq!((blv.defcell.get(), blv.valcell.get()), cells);
+        assert_eq!((blv.defcell(), blv.valcell()), cells);
         let retained = if symbol == boolean {
             Value::NIL
         } else {
             retained
         };
-        assert_eq!(blv.defcell.get().cons_cdr(), retained);
-        assert_eq!(blv.valcell.get().cons_cdr(), retained);
+        assert_eq!(blv.defcell().cons_cdr(), retained);
+        assert_eq!(blv.valcell().cons_cdr(), retained);
         assert!(blv.fwd.is_some());
     }
     assert!(!bool_fwd.get());
@@ -1021,4 +1026,101 @@ fn panic_recovery_unbound_localized_builtin_keeps_cells_and_projection() {
     assert_eq!(ctx.cached_throw_on_input_for_test(), retained);
     assert_eq!(ctx.specpdl().len(), count);
     assert_eq!(ctx.tagged_heap().bytes_since_gc_exact(), allocated);
+}
+
+/// Regression test for review B1: one physical C-g delivered through both the
+/// input bridge (`quit_requested.request()`) and the input queue (`KeyPress`)
+/// must never be counted twice, and under `inhibit-quit` `read_char` clears
+/// `quit-flag` and returns `7` (GNU `src/keyboard.c:2809-2812,3834`), so
+/// `(let ((inhibit-quit t)) (list (read-event) (read-event) (read-event)))`
+/// returns `(7 7 7)` instead of quitting on the second press.
+#[test]
+fn single_cg_via_bridge_and_read_char_counts_once_and_clears_quit_flag_under_inhibit_quit() {
+    use crate::emacs_core::eval::keyboard::{InputEvent, KeyEvent, Modifiers};
+
+    crate::test_utils::init_test_tracing();
+    let mut ctx = crate::test_utils::new_context();
+    ctx.set_variable("inhibit-quit", Value::T);
+
+    let cg_event = || InputEvent::key_press(KeyEvent::char_with_mods('g', Modifiers::ctrl()));
+
+    // Ordering A: read_char pops KeyPress(C-g) before maybe_quit drains the bridge.
+    ctx.quit_requested.request();
+    ctx.command_loop_mut()
+        .keyboard
+        .pending_input_events
+        .push_back(cg_event());
+    assert_eq!(
+        ctx.read_char()
+            .expect("read_char returns C-g under inhibit-quit"),
+        Value::fixnum(7)
+    );
+    assert!(ctx.quit_flag_value().is_nil());
+    assert!(!ctx.quit_requested.is_requested());
+    assert_eq!(ctx.quit_requested.force_quit_count_for_test(), 1);
+    ctx.maybe_quit().expect("no leftover quit after read_char");
+
+    // Ordering B: maybe_quit drains the bridge before read_char pops KeyPress(C-g).
+    ctx.quit_requested.request();
+    ctx.command_loop_mut()
+        .keyboard
+        .pending_input_events
+        .push_back(cg_event());
+    ctx.maybe_quit()
+        .expect("maybe_quit respects inhibit-quit on first C-g");
+    assert_eq!(ctx.quit_requested.force_quit_count_for_test(), 1);
+    assert_eq!(
+        ctx.read_char()
+            .expect("read_char returns C-g under inhibit-quit"),
+        Value::fixnum(7)
+    );
+    assert!(
+        ctx.quit_flag_value().is_nil(),
+        "GNU keyboard.c:2811-2812 clears quit-flag when returning C-g under inhibit-quit"
+    );
+    assert_eq!(
+        ctx.quit_requested.force_quit_count_for_test(),
+        1,
+        "reading the queued KeyPress must not double-count the bridge press"
+    );
+
+    // Three sequential C-g reads under inhibit-quit return (7 7 7) with quit-flag nil.
+    let mut read_values = Vec::new();
+    for _ in 0..3 {
+        ctx.quit_requested.request();
+        ctx.command_loop_mut()
+            .keyboard
+            .pending_input_events
+            .push_back(cg_event());
+        ctx.maybe_quit().expect("inhibit-quit must remain active");
+        read_values.push(ctx.read_char().expect("read_char must return 7"));
+        ctx.maybe_quit()
+            .expect("quit-flag was cleared on return so inhibit-quit stays active");
+    }
+    assert_eq!(
+        read_values,
+        vec![Value::fixnum(7), Value::fixnum(7), Value::fixnum(7)]
+    );
+    assert!(ctx.quit_flag_value().is_nil());
+    assert!(ctx.inhibit_quit.is_truthy());
+
+    // Without inhibit-quit, one C-g delivered through both bridge and queue counts once.
+    ctx.set_variable("inhibit-quit", Value::NIL);
+    ctx.quit_requested.clear();
+    ctx.quit_requested.request();
+    ctx.command_loop_mut()
+        .keyboard
+        .pending_input_events
+        .push_back(cg_event());
+    assert_eq!(
+        ctx.read_char().expect("read_char returns raw event"),
+        Value::fixnum(7)
+    );
+    assert!(!ctx.quit_requested.is_requested());
+    assert_eq!(ctx.quit_requested.force_quit_count_for_test(), 1);
+    assert!(ctx.quit_flag_value().is_truthy());
+    let err = ctx
+        .maybe_quit()
+        .expect_err("without inhibit-quit, maybe_quit signals quit");
+    assert!(format!("{err:?}").contains("quit"), "{err:?}");
 }

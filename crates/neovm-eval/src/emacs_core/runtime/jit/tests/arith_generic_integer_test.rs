@@ -26,16 +26,16 @@ fn generic_site(op: Op, nargs: usize) -> ByteCodeFunction {
         optional: Vec::new(),
         rest: None,
     });
-    f.lexical = true;
-    f.ops = if nargs == 2 {
+    f.set_lexical(true);
+    f.set_ops(if nargs == 2 {
         vec![Op::StackRef(1), Op::StackRef(1), op, Op::Return]
     } else {
         vec![Op::StackRef(0), op, Op::Return]
-    };
-    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(8);
-    let pc = f.ops.len() - 2;
+    });
+    f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(8));
+    let pc = f.ops().len() - 2;
     f.jit_runtime()
-        .record_numeric(pc, f.ops.len(), NumericFeedback::Other);
+        .record_numeric(pc, f.ops().len(), NumericFeedback::Other);
     f
 }
 
@@ -99,7 +99,7 @@ fn check_all(force_deopt: bool) {
                         print_value(&v)
                     };
                     let direct0 = crate::emacs_core::bytecode::vm::arith_integer_fast_count();
-                    let got = match leaf.call(ctx_ptr, &args) {
+                    let got = match unsafe { leaf.call(ctx_ptr, &args) } {
                         NativeRun::Ok(bits) => print_value(&unsafe {
                             /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
                             Value::from_bits(bits)

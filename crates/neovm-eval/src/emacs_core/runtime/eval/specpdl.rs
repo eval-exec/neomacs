@@ -524,7 +524,7 @@ impl Context {
                     .buffers
                     .current_buffer()
                     .and_then(|buffer| buffer.local_variable_binding_cell(resolved))
-                    .unwrap_or(blv.defcell.get())
+                    .unwrap_or(blv.defcell())
                     .cons_cdr()
             } else {
                 self.visible_runtime_variable_value_by_id_resolved(resolved)
@@ -1168,13 +1168,9 @@ impl Context {
         // runtime value and invalidates retained redisplay state.
         let value = old_value.unwrap_or(Value::UNBOUND);
         super::super::data::set_default_internal_resolved(self, sym_id, value, bindflag)?;
-        // The evaluator caches a few of these cells in its own fields (the
-        // quit flags, `throw-on-input`, the eval-depth limit) so its hot
-        // paths do not consult the obarray. The plain-cell restore in
-        // `unbind_to_result` republishes them; this one restores a
-        // LOCALIZED/FORWARDED cell and must do the same, or a cache keeps a
-        // value the binding it mirrors has already given up.
-        self.sync_cached_runtime_binding_by_id(sym_id, old_value.unwrap_or(Value::NIL));
+        // The storage seam already publishes the now-visible runtime value.
+        // Repeating that sync here duplicates forwarded callbacks and can
+        // replace a current local value with the hidden saved default.
         self.sync_user_test_gc_binding_by_id(sym_id);
         Ok(())
     }
@@ -1632,33 +1628,6 @@ impl Context {
         result
     }
 
-    /// Whether a simulated worker may suspend at this point and resume from
-    /// a saved form list.
-    ///
-    /// The simulated backend resumes a blocked worker by evaluating the rest
-    /// of its body. That cannot carry dynamic `let` bindings, cleanup
-    /// handlers, excursions, restrictions or load state across the switch:
-    /// the thread-switch path itself requires the active specpdl to unwind
-    /// first, and a `with-mutex` cleanup would then free the mutex the wait
-    /// already released. Call frames, temporary roots, the lexical
-    /// environment (the resumed continuation is rewrapped as a closure over
-    /// it) and no-op entries do not affect the continuation.
-    #[doc(hidden)]
-    pub fn sim_thread_wait_is_resumable(&self) -> bool {
-        self.specpdl.iter().all(|binding| {
-            matches!(
-                binding,
-                SpecBinding::LexicalEnv { .. }
-                    | SpecBinding::GcRoot { .. }
-                    | SpecBinding::Backtrace { .. }
-                    | SpecBinding::Backtrace1 { .. }
-                    | SpecBinding::Backtrace2 { .. }
-                    | SpecBinding::BacktraceNative { .. }
-                    | SpecBinding::Nop
-            )
-        })
-    }
-
     #[doc(hidden)]
     pub fn suspend_dynamic_bindings_for_thread_switch(
         &mut self,
@@ -1670,12 +1639,19 @@ impl Context {
             self.lexenv_special_cache.clear();
             return Err(flow);
         }
+        // Unbind still runs as the outgoing thread. The counter switches
+        // with the thread, after that exchange: GNU sets `current_thread`
+        // before `rebind_for_thread_switch` (`src/thread.c` `post_acquire_global_lock`),
+        // and a new worker's `m_lisp_eval_depth` is 0.
+        let lisp_eval_depth = self.depth;
+        self.depth = 0;
         let suspended_depth = self.suspended_thread_bindings.len();
         self.suspended_thread_bindings
             .push(ThreadDynamicBindingState {
                 lexenv,
                 specpdl: std::mem::take(&mut self.specpdl),
                 condition_stack: std::mem::take(&mut self.condition_stack),
+                lisp_eval_depth,
                 parked_thread: None,
             });
         Ok(ThreadDynamicBindingToken { suspended_depth })
@@ -1692,14 +1668,29 @@ impl Context {
     pub fn park_sim_worker_bindings(&mut self, thread_id: u64) -> Result<(), Flow> {
         self.specpdl
             .retain(|binding| !matches!(binding, SpecBinding::BacktraceNative { .. }));
-        if self.specpdl.is_empty() && self.condition_stack.is_empty() && self.lexenv.is_nil() {
+        if self.specpdl.is_empty()
+            && self.condition_stack.is_empty()
+            && self.lexenv.is_nil()
+            && self.depth == 0
+        {
             return Ok(());
         }
         self.specpdl_unrewind_vars_for_thread_switch(false)?;
+        // `apply` and `eval_cons_dispatch` have returned and each subtracted
+        // its depth bump, so `self.depth` is the baseline those native frames
+        // restored. The Lisp `let` and `unwind-protect` frames have not
+        // unwound (`unbind_to_with_result_slow` left them for this park), and
+        // the caller that scheduled this worker is still on the stack. The
+        // saved value is the depth the continuation resumes from. Zeroing the
+        // counter keeps that baseline off the shared `Context` while the
+        // caller stays live.
+        let lisp_eval_depth = self.depth;
+        self.depth = 0;
         let state = ThreadDynamicBindingState {
             lexenv: std::mem::replace(&mut self.lexenv, Value::NIL),
             specpdl: std::mem::take(&mut self.specpdl),
             condition_stack: std::mem::take(&mut self.condition_stack),
+            lisp_eval_depth,
             parked_thread: Some(thread_id),
         };
         self.lexenv_assq_cache.clear();
@@ -1739,6 +1730,7 @@ impl Context {
         );
         self.specpdl = state.specpdl;
         self.condition_stack = state.condition_stack;
+        self.depth = state.lisp_eval_depth;
         let rewound = self.specpdl_unrewind_vars_for_thread_switch(true);
         self.lexenv = state.lexenv;
         self.lexenv_assq_cache.clear();
@@ -1770,6 +1762,9 @@ impl Context {
             state.parked_thread.is_none(),
             "a thread switch resumes the caller frame, not a parked worker"
         );
+        // The caller is current again before its bindings rewind, matching
+        // GNU's `current_thread = self` before `rebind_for_thread_switch`.
+        self.depth = state.lisp_eval_depth;
         self.specpdl = state.specpdl;
         self.condition_stack = state.condition_stack;
         let result = self.specpdl_unrewind_vars_for_thread_switch(true);

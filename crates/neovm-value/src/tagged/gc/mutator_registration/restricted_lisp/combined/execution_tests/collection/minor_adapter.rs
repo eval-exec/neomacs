@@ -88,8 +88,16 @@ fn rebind<K: crate::tagged::gc::mutator_registration::EraKeeper>(
     heap.generational.verify = true;
     let mut from = legacy.state.try_lock().unwrap();
     let mut to = peer.state.try_lock().unwrap();
-    let from = from.image.as_mut().unwrap().young_mut();
-    let to = to.image.as_mut().unwrap().young_mut();
+    let from = from
+        .image
+        .young_mut_for(legacy.key.heap, legacy.young)
+        .unwrap()
+        .unwrap();
+    let to = to
+        .image
+        .young_mut_for(peer.key.heap, peer.young)
+        .unwrap()
+        .unwrap();
     let registration = to.id();
     // SAFETY: genuine AllStopped, all native images retain their canonical
     // payloads, and these two unique entry locks cover real setup blocks.
@@ -148,7 +156,11 @@ pub(super) fn exercise<K, W>(
         let mut published = Vec::new();
         for entry in &entries {
             let state = entry.state.try_lock().unwrap();
-            let image = state.image.as_ref().unwrap();
+            let image = state
+                .image
+                .as_ref_for(entry.key.heap, entry.young)
+                .unwrap()
+                .unwrap();
             published.push(YoungPublication {
                 owner: OwnerId(entry.key.owner()),
                 registration: image.young_id(),

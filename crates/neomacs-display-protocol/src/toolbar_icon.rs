@@ -55,9 +55,24 @@ impl ToolBarIconKey {
     pub fn colors(&self) -> ImageColorContext {
         self.style.colors
     }
+    /// The size request the decoder must honor.
+    ///
+    /// A chrome-owned vector has no intrinsic resolution to protect, so the
+    /// slot's exact size is requested and the SVG rasterizes at the slot's
+    /// physical extent (`ceil(size * device_scale)`) instead of being stretched
+    /// from its authored size.  GNU images keep GNU's clamp-only
+    /// `compute_image_size` semantics and are never upscaled.
     pub fn size_spec(&self) -> ImageSizeSpec {
-        let limit = AxisSize::AtMost(self.style.size.get());
-        ImageSizeSpec::new(limit, limit)
+        match &self.source {
+            ToolBarImageSource::ThemedVector { .. } => {
+                let size = self.style.size.get();
+                ImageSizeSpec::new(AxisSize::Exact(size), AxisSize::Exact(size))
+            }
+            ToolBarImageSource::GnuRaster { .. } => {
+                let limit = AxisSize::AtMost(self.style.size.get());
+                ImageSizeSpec::new(limit, limit)
+            }
+        }
     }
     pub fn realization(&self) -> ImageRealization {
         self.realization

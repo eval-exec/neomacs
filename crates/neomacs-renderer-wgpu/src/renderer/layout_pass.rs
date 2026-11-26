@@ -189,7 +189,10 @@ impl WgpuRenderer {
                 multiview_mask: None,
             });
             pass.set_pipeline(&self.pipelines.surface_copy);
-            pass.set_bind_group(0, self.frame_parameters().binding(), &[]);
+            let Ok(frame_params) = self.frame_parameters() else {
+                return;
+            };
+            pass.set_bind_group(0, frame_params.binding(), &[]);
             pass.set_bind_group(1, source, &[]);
             pass.set_vertex_buffer(0, upload.buffer_slice());
             pass.draw(0..6, 0..1);

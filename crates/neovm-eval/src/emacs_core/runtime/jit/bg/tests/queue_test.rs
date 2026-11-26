@@ -51,7 +51,7 @@ fn jit_bg_queue_serves_classes_in_priority_order() {
     {
         let _hold = hold_workers_for_test();
         assert_eq!(entry(ctx, &e1), None);
-        assert!(cache::resolve_compiled_leaf_ptr(ctx, &s1).is_none());
+        assert!(unsafe { cache::resolve_compiled_leaf_ptr(ctx, &s1) }.is_none());
         assert_eq!(entry(ctx, &e2), None);
         assert!(matches!(
             // SAFETY: `ctx` is the live `Context` this test owns; the call runs in this thread under the dormant-Context contract.
@@ -66,7 +66,7 @@ fn jit_bg_queue_serves_classes_in_priority_order() {
             },
             cache::OsrProbe::Pending
         ));
-        assert!(cache::resolve_compiled_leaf_ptr(ctx, &s2).is_none());
+        assert!(unsafe { cache::resolve_compiled_leaf_ptr(ctx, &s2) }.is_none());
     }
     assert!(quiesce_for_test(QUIET));
     let served = take_served_for_test();
@@ -119,7 +119,7 @@ fn jit_bg_full_queue_refuses_and_drops_the_lowest_class_newest() {
         assert_eq!(stats_snapshot().refused, before.refused + 1);
         assert!(e3.jit_runtime().deferred_heat() >= heat.saturating_mul(2));
         // A first-sight job makes way: the newest entry job is dropped.
-        assert!(cache::resolve_compiled_leaf_ptr(ctx, &s1).is_none());
+        assert!(unsafe { cache::resolve_compiled_leaf_ptr(ctx, &s1) }.is_none());
         assert_eq!(kind(&s1), "pending");
         assert_eq!(entry(ctx, &e2), None, "told it was dropped");
         assert_eq!(kind(&e2), "none");

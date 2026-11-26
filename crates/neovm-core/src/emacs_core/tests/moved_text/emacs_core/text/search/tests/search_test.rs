@@ -93,6 +93,7 @@ fn buffer_replace_match_rejects_backslash_question_but_string_path_allows_it() {
     );
 
     // Buffer path: other escapes still resolve normally.
+    drop(ev);
     let mut ev = crate::test_utils::new_context();
     let ok = ev
         .eval_str(
@@ -107,6 +108,7 @@ fn buffer_replace_match_rejects_backslash_question_but_string_path_allows_it() {
     assert_str(ok, "a[b-b-\\]c");
 
     // String path (replace-regexp-in-string): `\?' is kept literally.
+    drop(ev);
     let result = call_replace_regexp_in_string(vec![
         Value::string("b"),
         Value::string("\\?"),

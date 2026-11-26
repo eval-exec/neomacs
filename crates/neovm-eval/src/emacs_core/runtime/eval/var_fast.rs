@@ -388,7 +388,7 @@ impl Context {
     pub fn read_var_cached(&self, id: SymId) -> Option<Value> {
         let tier = CachedVarReadTier::admit()?;
         let sym = self.obarray.get_by_id(id)?;
-        self.read_var_cached_symbol(sym, tier)
+        self.read_var_cached_symbol(id, sym, tier)
     }
 
     /// The admitted Read tier for a symbol borrowed from this Context's obarray.
@@ -399,12 +399,13 @@ impl Context {
     #[doc(hidden)]
     pub fn read_var_cached_symbol(
         &self,
+        id: SymId,
         sym: &LispSymbol,
         _tier: CachedVarReadTier,
     ) -> Option<Value> {
         let value = match sym.redirect() {
             SymbolRedirect::Localized => self.read_localized_cached(sym),
-            SymbolRedirect::Forwarded => self.read_forwarded_cached(sym),
+            SymbolRedirect::Forwarded => self.read_forwarded_cached(id, sym),
             SymbolRedirect::Plainval | SymbolRedirect::Varalias => return None,
         };
         if value.is_none() {
@@ -428,8 +429,18 @@ impl Context {
 
     #[inline(always)]
     #[doc(hidden)]
-    pub fn read_forwarded_cached(&self, sym: &LispSymbol) -> Option<Value> {
+    pub fn read_forwarded_cached(&self, id: SymId, sym: &LispSymbol) -> Option<Value> {
         let fwd = sym.forwarded_descriptor()?;
+        // The seven `*-consed` DEFVAR_INTs are derived from live allocation
+        // accounting; their cell is only a cache the read refreshes. Only an
+        // `Int` forwarder can be one, so localized, plain and other forwarder
+        // families never test the seven ids.
+        if fwd.ty() == LispFwdType::Int
+            && let Some(value) = self.derived_memory_use_read(id)
+        {
+            note(VarCacheEvent::ReadForwarded);
+            return Some(value);
+        }
         if let Some(value) = fwd.load() {
             note(VarCacheEvent::ReadForwarded);
             return Some(value);

@@ -1913,7 +1913,11 @@ const fn const_assert_vector_record_share_layout() {
 
 /// Lower a no-argument straight-line leaf body. Thin wrapper over [`lower_leaf`]
 /// kept for the existing call sites/tests.
-pub fn lower_nullary_leaf(ops: &[Op], constants: &[Value]) -> Result<CompiledLeaf, CompileError> {
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn lower_nullary_leaf(
+    ops: &[Op],
+    constants: &[Value],
+) -> Result<CompiledLeaf, CompileError> {
     lower_leaf(ops, constants, 0)
 }
 
@@ -5224,14 +5228,23 @@ fn lower_bcall_leaf_site(
     );
     fb.ins().brif(is_sentinel, exit, &[], cont, &[]);
 
-    // Cold exit: which sentinel.
+    // Cold exit: discriminate exact sentinel words; any other 0b001 word
+    // (such as allocator-internal DEAD poison) falls back to `cont` rather
+    // than masquerading as a signal or generic decline.
     fb.switch_to_block(exit);
     fb.seal_block(exit);
     fb.set_cold_block(exit);
+    let check_signal = fb.create_block();
     let signal_blk = fb.create_block();
     let reference = fb.create_block();
     let need_generic = icmp_imm_p(fb, IntCC::Equal, word, leaf_abi::LEAF_NEED_GENERIC);
-    fb.ins().brif(need_generic, reference, &[], signal_blk, &[]);
+    fb.ins()
+        .brif(need_generic, reference, &[], check_signal, &[]);
+    fb.switch_to_block(check_signal);
+    fb.seal_block(check_signal);
+    fb.set_cold_block(check_signal);
+    let is_signal = icmp_imm_p(fb, IntCC::Equal, word, leaf_abi::LEAF_SIGNAL);
+    fb.ins().brif(is_signal, signal_blk, &[], cont, &[]);
 
     // Materialized per cold exit: the hot path carries no call-buffer
     // address/arity/result setup for any site, guarded or not.
@@ -8014,7 +8027,8 @@ fn lower_simple_op_arms(
             // behind the same run-time symbol check the general lowering
             // emits; a callee mismatch is the plain call of the actual value.
             if let Some((sym, expected, slot_ptr, _, SpecCalleeKind::SubrGeneral)) = spec
-                && let Some(leaf) = super::leaf_abi::bcall_leaf_site(expected, n, aot)
+                // SAFETY: `expected` is a valid tagged constant word from the compiled bytecode constant pool.
+                && let Some(leaf) = unsafe { super::leaf_abi::bcall_leaf_site(expected, n, aot) }
             {
                 return lower_bcall_leaf_site(
                     fb,
@@ -8043,7 +8057,9 @@ fn lower_simple_op_arms(
             // symbol constant.
             if let Some((sym, expected, slot_ptr, _, SpecCalleeKind::Bytecode)) = spec
                 && guarded_sym.is_none()
-                && let Some(site) = super::direct_call::DirectSite::plan(rt, aot, expected, n)
+                && let Some(site) =
+                    // SAFETY: `expected` is a valid tagged constant word from the compiled bytecode constant pool.
+                    unsafe { super::direct_call::DirectSite::plan(rt, aot, expected, n) }
             {
                 let sym_v = materialize_op_sym_value(fb, reloc_base, reloc_index, sym);
                 return lower_direct_call_site(
@@ -8356,7 +8372,10 @@ fn lower_simple_op_arms(
                         // declare is keyed on exactly that condition).
                         match (kind, &reg_args) {
                             (SpecCalleeKind::SubrGeneral, _) => {
-                                if let Some(t2) = super::t2_profile::subr_profiler(rt, expected) {
+                                if let Some(t2) =
+                                    // SAFETY: `expected` is a valid tagged constant word from the compiled bytecode constant pool.
+                                    unsafe { super::t2_profile::subr_profiler(rt, expected) }
+                                {
                                     let f = rt
                                         .refs
                                         .try_get(fb.func, Shim::T2CallSubrProf)
@@ -9138,13 +9157,7 @@ fn lower_simple_op_arms(
                 let word = super::leaf_abi::emit_bare_leaf_call(fb, rt, id, &operands);
                 let se = signal_target_for_site(fb, signal_exit, handlers, pending, stack, reps);
                 let cont = fb.create_block();
-                let tag = band_imm_p(fb, word, TAG_MASK as i64);
-                let is_signal = icmp_imm_p(
-                    fb,
-                    IntCC::Equal,
-                    tag,
-                    super::leaf_abi::LEAF_SIGNAL & TAG_MASK as i64,
-                );
+                let is_signal = icmp_imm_p(fb, IntCC::Equal, word, super::leaf_abi::LEAF_SIGNAL);
                 fb.ins().brif(is_signal, se, &[], cont, &[]);
                 fb.switch_to_block(cont);
                 fb.seal_block(cont);
@@ -9226,13 +9239,7 @@ fn lower_simple_op_arms(
                 let word = fb.inst_results(call)[0];
                 let se = signal_target_for_site(fb, signal_exit, handlers, pending, stack, reps);
                 let cont = fb.create_block();
-                let tag = band_imm_p(fb, word, TAG_MASK as i64);
-                let is_signal = icmp_imm_p(
-                    fb,
-                    IntCC::Equal,
-                    tag,
-                    dispatch::VALUE_SHIM_SIGNAL & TAG_MASK as i64,
-                );
+                let is_signal = icmp_imm_p(fb, IntCC::Equal, word, dispatch::VALUE_SHIM_SIGNAL);
                 fb.ins().brif(is_signal, se, &[], cont, &[]);
                 fb.switch_to_block(cont);
                 fb.seal_block(cont);

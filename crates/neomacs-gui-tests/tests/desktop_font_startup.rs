@@ -31,8 +31,20 @@ fn command_line_font_drives_the_first_native_allocation() {
     // Native CSD must not shift the base used to snap inner dimensions.
     // This font requests 35 text rows plus menu/tool bars: 952 pixels.
     assert!(initial.contains("emacs_pixels=1072x952"), "{initial}");
+    // The host allocation is the outer window: 1072x952, including the
+    // menu/tool band.  GNU's Gtk+ native height excludes that band
+    // (src/frame.c:4401-4418), so the Lisp native frame is 952 - the
+    // realized 77 px band = 875.  The old assertion compared the native
+    // height to the host window and encoded the pre-GNU divergence.
     assert_eq!(state["native_width"], 1072);
-    assert_eq!(state["native_height"], 952);
+    assert_eq!(state["outer_width"], 1072);
+    assert_eq!(state["outer_height"], 952);
+    assert_eq!(state["native_height"], 875);
+    assert_eq!(
+        state["native_height"].as_u64().unwrap() + 77,
+        state["outer_height"].as_u64().unwrap(),
+        "native height plus the realized menu/tool band is the host window"
+    );
 }
 
 #[test]
@@ -82,6 +94,28 @@ fn hidpi_scale_change_never_shrinks_the_logical_frame() {
 }
 
 fn check_desktop_font_startup(output: WaylandOutput, scenario: &str) {
+    let root = neomacs_infra::workspace_root();
+    // This fixture requires svg-tag-mode before registering its exit timer.
+    // Prepare its pinned packages in this worktree, independently of suite order.
+    let packages: Vec<_> = [
+        ("NEOMACS_GUI_SVG_LIB_DIR", "svg-lib"),
+        ("NEOMACS_GUI_SVG_TAG_MODE_DIR", "svg-tag-mode"),
+    ]
+    .into_iter()
+    .filter_map(|(variable, package)| std::env::var_os(variable).is_none().then_some(package))
+    .collect();
+    if !packages.is_empty() {
+        let status = Command::new("bash")
+            .arg(root.join("scripts/ci/setup-gui-test-packages.sh"))
+            .args(packages)
+            .current_dir(&root)
+            .status()
+            .expect("run pinned desktop-font SVG package setup");
+        assert!(
+            status.success(),
+            "pinned desktop-font SVG package setup failed: {status}"
+        );
+    }
     check_fixture(output, scenario, "desktop-font-startup.el");
 }
 
@@ -283,13 +317,25 @@ fn check_fixture_with_font(
     let result = plan
         .run_with(
             &mut ProcessGuiCommandRunner,
-            // The presentation fixture has four independently bounded 12s
-            // stages. Leave room for those plus startup/teardown at 8K.
+            // The presentation fixture advances only on compositor receipts;
+            // 60 s bounds all four stages plus startup/teardown at 8K.
             GuiRunOptions::with_timeout(Duration::from_secs(60)),
         )
         .unwrap();
-    assert!(!result.timed_out, "{result:#?}");
-    assert_eq!(result.exit_code, Some(0), "{result:#?}");
-    assert_eq!(result.status, GuiRunStatus::Passed, "{result:#?}");
+    let editor_state = neomacs_gui_tests::last_editor_state_line(&result.artifacts.stderr);
+    assert!(
+        !result.timed_out,
+        "{result:#?}\nlast editor state: {editor_state}"
+    );
+    assert_eq!(
+        result.exit_code,
+        Some(0),
+        "{result:#?}\nlast editor state: {editor_state}"
+    );
+    assert_eq!(
+        result.status,
+        GuiRunStatus::Passed,
+        "{result:#?}\nlast editor state: {editor_state}"
+    );
     result
 }

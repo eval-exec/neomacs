@@ -324,6 +324,20 @@ pub enum BlockedWait {
     Select { deadline: Instant },
 }
 
+/// The kind of GNU `wait_condvar` a thread is waiting on: a contended mutex
+/// (`src/thread.c:231-235`), a condition (`:460-463`) or another thread's end
+/// (`:1109-1113`). It is set from the moment the thread enters the wait until
+/// the thread itself resumes, including after a wake while it is not yet
+/// running. `thread-signal` to such a thread ends with the sender's own
+/// `post_acquire_global_lock` (`:974-982`, `:1029-1030`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[doc(hidden)]
+pub enum WaitCondvar {
+    Mutex,
+    Condition,
+    Join,
+}
+
 /// Whether `run_thread` has installed its top-level handler.
 ///
 /// GNU `run_thread` calls `acquire_global_lock` (`src/thread.c:805`) before
@@ -363,6 +377,8 @@ pub struct ThreadNativeState {
     pub(crate) executing: bool,
     /// `run_thread`'s top-level handler (`src/thread.c:810-815`).
     pub(crate) handlerlist: HandlerList,
+    /// The `wait_condvar` this thread waits on, until it resumes.
+    pub(crate) wait_condvar: Option<WaitCondvar>,
 }
 
 impl ThreadNativeState {
@@ -376,6 +392,7 @@ impl ThreadNativeState {
             woken: false,
             executing: false,
             handlerlist: HandlerList::Absent,
+            wait_condvar: None,
         }
     }
 }
@@ -439,6 +456,7 @@ impl ThreadPayload {
             woken: _,
             executing: _,
             handlerlist: _,
+            wait_condvar: _,
         } = native;
         children.visit_children(visit);
     }
@@ -897,6 +915,16 @@ impl ThreadNativeState {
     #[doc(hidden)]
     pub fn handlerlist_mut(&mut self) -> &mut HandlerList {
         &mut self.handlerlist
+    }
+    #[inline]
+    #[doc(hidden)]
+    pub fn wait_condvar(&self) -> Option<WaitCondvar> {
+        self.wait_condvar
+    }
+    #[inline]
+    #[doc(hidden)]
+    pub fn wait_condvar_mut(&mut self) -> &mut Option<WaitCondvar> {
+        &mut self.wait_condvar
     }
 }
 

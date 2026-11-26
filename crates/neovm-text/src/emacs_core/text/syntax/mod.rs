@@ -168,6 +168,9 @@ thread_local! {
     static SYNTAX_CODE_OBJECTS_HEAP: Cell<usize> = const { Cell::new(0) };
 }
 
+#[doc(hidden)]
+pub mod retirement;
+
 /// Clear cached thread-local syntax table (must be called when heap changes).
 pub fn reset_syntax_thread_locals() {
     STANDARD_SYNTAX_TABLE_OBJECT.with(|slot| *slot.borrow_mut() = None);
@@ -539,15 +542,17 @@ impl std::ops::BitOrAssign for SyntaxFlags {
 /// A single entry in a syntax table: the class, an optional matching
 /// character (for parens/string delimiters), and comment/prefix flags.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct SyntaxEntry {
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) struct SyntaxEntry {
     pub class: SyntaxClass,
-    pub matching_char: Option<char>,
+    pub(crate) matching_char: Option<char>,
     pub flags: SyntaxFlags,
 }
 
 impl SyntaxEntry {
     /// Create a simple entry with no matching char or flags.
-    pub fn simple(class: SyntaxClass) -> Self {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn simple(class: SyntaxClass) -> Self {
         Self {
             class,
             matching_char: None,
@@ -556,7 +561,8 @@ impl SyntaxEntry {
     }
 
     /// Create an entry with a matching character (for open/close parens).
-    pub fn with_match(class: SyntaxClass, matching: char) -> Self {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn with_match(class: SyntaxClass, matching: char) -> Self {
         Self {
             class,
             matching_char: Some(matching),
@@ -571,7 +577,8 @@ impl SyntaxEntry {
 
 /// Parse an Emacs syntax descriptor string (e.g., `" "`, `"w"`, `"()"`,
 /// `". 12"`) into a `SyntaxEntry`.
-pub fn string_to_syntax(s: &str) -> Result<SyntaxEntry, String> {
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn string_to_syntax(s: &str) -> Result<SyntaxEntry, String> {
     let chars: Vec<char> = s.chars().collect();
     let descriptor = chars.first().copied().unwrap_or('\0');
     let class = SyntaxClass::from_char(descriptor)
@@ -658,7 +665,8 @@ fn materialize_syntax_entry(entry: &SyntaxEntry, object_reuse: LispSyntaxObjectR
 
 /// Convert a `SyntaxEntry` using GNU's ordinary `string-to-syntax` policy:
 /// reuse the canonical object for a bare, unflagged syntax code.
-pub fn syntax_entry_to_value(entry: &SyntaxEntry) -> Value {
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn syntax_entry_to_value(entry: &SyntaxEntry) -> Value {
     materialize_syntax_entry(entry, LispSyntaxObjectReuse::CanonicalBare)
 }
 
@@ -691,7 +699,7 @@ fn syntax_code_object(code: usize) -> Option<Value> {
     }
     ensure_syntax_code_objects()
         .as_vector_data()
-        .and_then(|values| values.get(code).copied())
+        .and_then(|values| values.get(code))
 }
 
 // ===========================================================================
@@ -779,7 +787,8 @@ impl SyntaxTable {
     /// Materializes the chartable on first call via
     /// `ensure_standard_syntax_table_object()` — the same one installed
     /// on new buffers by `current_buffer_syntax_table_object_in_buffers`.
-    pub fn new_standard() -> Self {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn new_standard() -> Self {
         match ensure_standard_syntax_table_object() {
             Ok(table) => Self { chartable: table },
             // If we can't build the chartable (no thread-local state),
@@ -791,11 +800,12 @@ impl SyntaxTable {
         }
     }
 
+    #[cfg(test)]
     /// Same as `new_standard` — GNU's `make-syntax-table` with nil parent
     /// creates a fresh, empty chartable whose parent is the standard
     /// table. The distinction is handled at the chartable level by
     /// `builtin_make_syntax_table`.
-    pub fn make_syntax_table() -> Self {
+    pub(crate) fn make_syntax_table() -> Self {
         Self::new_standard()
     }
 
@@ -809,11 +819,13 @@ impl SyntaxTable {
         }
     }
 
+    #[cfg(feature = "test-support")]
     /// Install an isolated copy of the standard chartable on `buf` so
     /// subsequent `modify_syntax_entry` calls don't leak into the
     /// shared standard. Returns the new `SyntaxTable`. Mirrors the
     /// GNU idiom `(set-syntax-table (copy-syntax-table))`.
-    pub fn isolate_for_buffer(buf: &mut neovm_edit::buffer::buffer::Buffer) -> Self {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn isolate_for_buffer(buf: &mut neovm_edit::buffer::buffer::Buffer) -> Self {
         use neovm_edit::buffer::buffer::BUFFER_SLOT_SYNTAX_TABLE;
         let slot = buf.slots()[BUFFER_SLOT_SYNTAX_TABLE.index()];
         let source = if slot.is_nil() {
@@ -830,10 +842,11 @@ impl SyntaxTable {
         Self { chartable: own }
     }
 
+    #[cfg(test)]
     /// Deep-copy the backing chartable, matching GNU `copy-syntax-table`
     /// (`syntax.c:265-282`). The copy is independent: mutations to
     /// either table do not affect the other.
-    pub fn copy_syntax_table(&self) -> Self {
+    pub(crate) fn copy_syntax_table(&self) -> Self {
         if self.chartable.is_nil() {
             return *self;
         }
@@ -855,7 +868,8 @@ impl SyntaxTable {
     /// `SYNTAX_ENTRY(c)`. Falls back to the standard chartable when
     /// the wrapper is nil-backed (handled by `syntax_entry_at_char`).
     #[inline(always)]
-    pub fn get_entry(&self, ch: char) -> Option<SyntaxEntry> {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn get_entry(&self, ch: char) -> Option<SyntaxEntry> {
         self.get_entry_code(ch as u32)
     }
 
@@ -864,7 +878,7 @@ impl SyntaxTable {
     /// (`0..=MAX_CHAR`), not by Unicode scalar values; keep this path
     /// available for callers such as `char-syntax`.
     #[inline(always)]
-    pub fn get_entry_code(&self, code: u32) -> Option<SyntaxEntry> {
+    pub(crate) fn get_entry_code(&self, code: u32) -> Option<SyntaxEntry> {
         syntax_entry_at_char_code(&self.chartable, code)
     }
 
@@ -906,7 +920,9 @@ impl SyntaxTable {
     /// the table is a `NIL` placeholder — the evaluator's
     /// `modify-syntax-entry` builtin routes through the chartable
     /// directly for that case.
-    pub fn modify_syntax_entry(&mut self, ch: char, entry: SyntaxEntry) {
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn modify_syntax_entry(&mut self, ch: char, entry: SyntaxEntry) {
         if self.chartable.is_nil() {
             return;
         }
@@ -932,11 +948,13 @@ impl Default for SyntaxTable {
 // Motion functions (operate on a Buffer + SyntaxTable)
 // ===========================================================================
 
+#[cfg(any(test, feature = "test-support"))]
 /// Move forward over `count` words.  Returns the resulting Emacs byte position.
 ///
 /// A "word" is a maximal run of characters with syntax class `Word`.
 /// Between words, non-word characters are skipped.
-pub fn forward_word(buf: &Buffer, table: &SyntaxTable, count: i64) -> EmacsBytePos {
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn forward_word(buf: &Buffer, table: &SyntaxTable, count: i64) -> EmacsBytePos {
     forward_word_with_options(
         buf,
         table,
@@ -1451,8 +1469,9 @@ pub fn forward_word_with_options(
     (buffer_char_to_emacs_byte_pos(buf, abs_char), true)
 }
 
+#[cfg(test)]
 /// Move backward over `count` words.  Returns the resulting Emacs byte position.
-pub fn backward_word(buf: &Buffer, table: &SyntaxTable, count: i64) -> EmacsBytePos {
+pub(crate) fn backward_word(buf: &Buffer, table: &SyntaxTable, count: i64) -> EmacsBytePos {
     backward_word_with_options(
         buf,
         table,
@@ -1795,10 +1814,11 @@ fn backward_word_with_options(
     (buffer_char_to_emacs_byte_pos(buf, abs_char), true)
 }
 
+#[cfg(test)]
 /// Skip forward over characters whose syntax class matches any character in
 /// `syntax_chars` (each character in the string names a syntax class,
 /// e.g., `"w_"` matches Word and Symbol).  Returns the resulting byte position.
-pub fn skip_syntax_forward(
+pub(crate) fn skip_syntax_forward(
     buf: &Buffer,
     table: &SyntaxTable,
     syntax_chars: &str,
@@ -1859,9 +1879,10 @@ fn skip_syntax_forward_with_options(
     buffer_char_to_emacs_byte_pos(buf, abs_char).get()
 }
 
+#[cfg(test)]
 /// Skip backward over characters whose syntax class matches any character in
 /// `syntax_chars`.  Returns the resulting byte position.
-pub fn skip_syntax_backward(
+pub(crate) fn skip_syntax_backward(
     buf: &Buffer,
     table: &SyntaxTable,
     syntax_chars: &str,
@@ -1976,12 +1997,13 @@ impl SkipSyntaxClasses {
     }
 }
 
+#[cfg(test)]
 /// Scan for balanced expressions (sexps).
 ///
 /// Starting from byte position `from`, scan `count` sexps forward (positive
 /// count) or backward (negative count).  Returns the byte position after the
 /// last sexp, or an error if unbalanced.
-pub fn scan_sexps(
+pub(crate) fn scan_sexps(
     buf: &Buffer,
     table: &SyntaxTable,
     from: usize,
@@ -2999,6 +3021,7 @@ pub(crate) fn builtin_make_syntax_table(args: Vec<Value>) -> EvalResult {
     Ok(table)
 }
 
+#[cfg(any(test, feature = "test-support"))]
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// `(copy-syntax-table &optional TABLE)` — return a fresh copy of TABLE.
 pub(crate) fn builtin_copy_syntax_table(args: Vec<Value>) -> EvalResult {
@@ -3808,34 +3831,8 @@ impl<'a> SyntaxPropByteRun<'a> {
         // in the test-support build too.
         #[cfg(any(test, feature = "test-support"))]
         SYNTAX_BYTE_RUN_REFILLS.with(|c| c.set(c.get() + 1));
-        // Byte-run memo: a hit answers with zero conversions and no interval
-        // lookup. Only sound when the resolver's coalescing preconditions
-        // hold (no aliases / no default fallback) — the same guard the
-        // char-side coalescing uses.
-        let coalesce = resolver.supports_presence_coalescing();
-        if coalesce && let Some((start, end, value)) = buf.syntax_byte_run_memo_lookup(byte_pos) {
-            self.run.set(start as usize, end as usize, value);
-            return value;
-        }
-        let char_pos = buf.emacs_byte_pos_to_char_pos_clamped(byte_pos);
-        let (plist, start, _end) = buf.interval_plist_run_at_char_pos(char_pos);
-        let value = plist.and_then(|plist| resolver.resolve_interval_plist(plist));
-        // See `coalesced_syntax_run_end`: extend over face-only splits.
-        let end = coalesced_syntax_run_end(buf, char_pos, &resolver);
-        let end_byte = buffer_char_to_emacs_byte_pos(buf, end).get();
-        // The run starts where the interval does, as the char-addressed twin's
-        // does. Starting it at the position that missed made every step of a
-        // BACKWARD walk (`forward-comment` with a negative count, `char_quoted`,
-        // regexp look-behind) miss again: elb-smie refilled 6M times.
-        let start_byte = if start < char_pos {
-            buffer_char_to_emacs_byte_pos(buf, start).get()
-        } else {
-            byte_pos.get()
-        };
+        let (start_byte, end_byte, value) = buf.resolve_syntax_byte_run(byte_pos, &resolver);
         self.run.set(start_byte, end_byte, value);
-        if coalesce {
-            buf.syntax_byte_run_memo_store(start_byte as u64, end_byte as u64, value);
-        }
         value
     }
 }
@@ -4939,67 +4936,10 @@ impl<'a> SyntaxPropRange<'a> {
         pos: usize,
         resolver: CharPropertyResolver<'_>,
     ) -> Option<Value> {
-        // Cross-scan memo first: font-lock and indentation drive thousands of
-        // SHORT parses per command over the same region, and every scan's
-        // per-scan cache starts cold. A hit hands back the resolved run with
-        // no interval descent and no coalescing walk — the same amortization
-        // the byte-addressed refill already has. Guarded by the resolver's
-        // coalescing preconditions like the byte side.
-        let coalesce = resolver.supports_presence_coalescing();
-        if coalesce && let Some((start, end, value)) = buf.syntax_char_run_memo_lookup(pos) {
-            self.run.set(start as usize, end as usize, value);
-            self.note_descriptor(pos, value);
-            return value;
-        }
-        let char_pos = offset_char_pos(CharPos0::ZERO, pos);
-        let (plist, start, _end) = buf.interval_plist_run_at_char_pos(char_pos);
-        let value = plist.and_then(|plist| resolver.resolve_interval_plist(plist));
-        let end = coalesced_syntax_run_end(buf, char_pos, &resolver);
-        self.run.set(start.get(), end.get(), value);
-        if coalesce {
-            buf.syntax_char_run_memo_store(start.get() as u64, end.get() as u64, value);
-        }
+        let (start, end, value) = buf.resolve_syntax_char_run(pos, &resolver);
+        self.run.set(start, end, value);
         self.note_descriptor(pos, value);
         value
-    }
-}
-
-/// End of the run over which the resolved `syntax-table` property is provably
-/// constant from `char_pos`: walk interval boundaries comparing only the keys
-/// resolution reads (the property, `category`, and its aliases), bounded to a
-/// fixed lookahead. Font-lock splits buffers into dense `face`-only intervals,
-/// so the RESOLVED run is typically far longer than the raw interval — this
-/// turns a per-interval root descent into a per-lookahead cursor walk.
-fn coalesced_syntax_run_end(
-    buf: &Buffer,
-    char_pos: CharPos0,
-    resolver: &CharPropertyResolver<'_>,
-) -> CharPos0 {
-    const COALESCE_LOOKAHEAD_CHARS: usize = 4096;
-    let total = buf.accessible_char_region().end();
-    let cap = CharPos0::new(
-        char_pos
-            .get()
-            .saturating_add(COALESCE_LOOKAHEAD_CHARS)
-            .min(total.get()),
-    );
-    let end = if resolver.supports_presence_coalescing() {
-        // Common case: race through `face`-only intervals on the cached
-        // presence bit; prop-bearing intervals are never merged.
-        buf.syntax_prop_free_run_end_at_char_pos(char_pos, cap)
-    } else {
-        // Aliases widen the key set and `default-text-properties` makes a
-        // key-free interval resolve differently from a gap: fall back to the
-        // raw single-interval run.
-        let (_, _, end) = buf.interval_plist_run_at_char_pos(char_pos);
-        end
-    };
-    // Degenerate cap (scan sitting at the region end): keep the run non-empty
-    // so the per-char fast path cannot loop on refills.
-    if end <= char_pos {
-        CharPos0::new(char_pos.get() + 1)
-    } else {
-        end
     }
 }
 

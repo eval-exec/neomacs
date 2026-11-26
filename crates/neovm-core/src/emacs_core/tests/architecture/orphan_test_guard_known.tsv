@@ -1,0 +1,4 @@
+# Recorded orphan-test debt. The guard fails when this set changes.
+# The previous 18 rows were removed by the debt triage: 13 display-protocol
+# copies were superseded by a reached namesake, and 5 files were wired.
+# path	class

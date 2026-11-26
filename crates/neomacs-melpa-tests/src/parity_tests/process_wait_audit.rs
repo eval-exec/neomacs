@@ -72,6 +72,12 @@ const PROCESS_WAIT_AUDIT: &[(&str, usize, ProcessWaitVerdict, &str)] = &[
         "the child writes nothing and agitjo-test-events is never called",
     ),
     (
+        "app_monochrome_themes",
+        1,
+        CausalWitness,
+        "bounds the compiler; the pin waits for the Compilation finished annotation and signals if a diagnostic has no face",
+    ),
+    (
         "ast_grep",
         1,
         NeedsAudit,
@@ -190,12 +196,6 @@ const PROCESS_WAIT_AUDIT: &[(&str, usize, ProcessWaitVerdict, &str)] = &[
         1,
         Teardown,
         "confirms a forcibly disposed process died",
-    ),
-    (
-        "treemacs_magit",
-        1,
-        CausalWitness,
-        "asserts the post-commit hook produced exactly one new idle timer",
     ),
     (
         "zeal_at_point",

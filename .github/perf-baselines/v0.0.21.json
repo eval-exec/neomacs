@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "version": "v0.0.21",
+  "git_commit": "7b3fa9d698ba41fdbabccd9bd3e547a0afa7164a",
+  "target": "x86_64-unknown-linux-gnu",
+  "release_asset": {
+    "name": "neomacs-0.0.21-x86_64-unknown-linux-gnu.tar.gz",
+    "url": "https://github.com/eval-exec/neomacs/releases/download/v0.0.21/neomacs-0.0.21-x86_64-unknown-linux-gnu.tar.gz",
+    "size_bytes": 157667088,
+    "sha256": "7c72abbd66640dcf1686a78049204217bc862a439e9c403a8dd769b1eabd627c"
+  },
+  "binary": {
+    "archive_path": "neomacs-0.0.21-x86_64-unknown-linux-gnu/bin/neomacs",
+    "size_bytes": 80904232,
+    "sha256": "9cf559ca5ab3a2b5af92cd2e037beb61583c7a0e01401f122914aa29e624ec35"
+  },
+  "pdump": {
+    "archive_path": "neomacs-0.0.21-x86_64-unknown-linux-gnu/libexec/neomacs/0.0.21/x86_64-unknown-linux-gnu/neomacs.pdump",
+    "relative_to_binary": "../libexec/neomacs/0.0.21/x86_64-unknown-linux-gnu/neomacs.pdump",
+    "size_bytes": 21203691,
+    "sha256": "a851b9a45cb3fb34f54c022a215d8a9830cc6eb07b257e161694e74e6fc1993c"
+  }
+}

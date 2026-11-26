@@ -158,6 +158,7 @@ impl ParkedJit {
         if context.jit_root_stack_top == 0
             && super::cache::native_depth() == 0
             && !super::cache::green_has_native_state()
+            && !super::cache::has_redefined_pins()
         {
             return Ok(Self {
                 owner,
@@ -225,14 +226,27 @@ impl ParkedJit {
         scratch.frames.clear();
         let called = &scratch.called;
         let roots = &mut scratch.roots;
-        super::cache::trace_redefined_pins(
+        let sources = &mut scratch.sources;
+        super::cache::visit_redefined_pins_for_heap(
             context.tagged_heap.tagged_heap_identity(),
             &|symbol| {
                 called
                     .binary_search_by_key(&symbol.to_raw(), |s| s.to_raw())
                     .is_ok()
             },
-            &mut |function| roots.push(function),
+            &mut |symbol, function| {
+                roots.push(function);
+                if !sources
+                    .iter()
+                    .any(|s| s.symbol == symbol && s.function.bits() == function.bits())
+                {
+                    sources.push(NamedSource {
+                        symbol,
+                        function,
+                        _confined: PhantomData,
+                    });
+                }
+            },
         );
         // The called-symbol temporary ended at prepare's return originally.
         // Retain allocations only; no stale frame word or symbol list survives.
@@ -272,8 +286,9 @@ impl ParkedJit {
             return Err(AdmissionError::ReturningOwner);
         }
         begin_owner_turn();
+        let heap = self.heap.0.get();
         for source in self.sources.drain(..) {
-            super::cache::pin_redefined_function(source.symbol, source.function);
+            super::cache::pin_redefined_function_for_heap(heap, source.symbol, source.function);
         }
         if self.function_epoch != FunctionEpoch(context.obarray.function_epoch()) {
             super::cache::retire_green_inline_dependents();

@@ -175,6 +175,7 @@ fn image_margin_tokens_hash_and_compare_by_row_local_geometry() {
             source_rect: crate::ImageSourceRect::FULL,
             margins,
             opaque_background: crate::ImageOpaqueBackground::default(),
+            presentation: crate::ImageGlyphPresentation::Texture,
         };
         row.glyphs[GlyphArea::Text.index()].push(glyph);
         row
@@ -209,6 +210,7 @@ fn display_state_reports_image_dependencies_without_materializing() {
             source_rect: crate::ImageSourceRect::FULL,
             margins,
             opaque_background: crate::ImageOpaqueBackground::default(),
+            presentation: crate::ImageGlyphPresentation::Texture,
         };
         row.glyphs[GlyphArea::Text.index()].push(glyph);
     }
@@ -780,6 +782,7 @@ fn glyph_type_kind_codes_match_gnu_glyph_type() {
             width_cols: 1,
             margins: image_margins,
             opaque_background: crate::ImageOpaqueBackground::default(),
+            presentation: crate::ImageGlyphPresentation::Texture,
         }
         .gnu_kind(),
         GlyphTypeKind::Image
@@ -2583,6 +2586,7 @@ fn frame_chrome_materializes_nonzero_tab_origin_once() {
         width_cols: 2,
         margins: image_margins,
         opaque_background: crate::ImageOpaqueBackground::default(),
+        presentation: crate::ImageGlyphPresentation::Texture,
     };
     image.box_vertical_edges = crate::face::BoxVerticalEdges::Left;
     tab_row.glyphs[GlyphArea::Text.index()].push(image.with_pixel_geometry(16.0, 16.0, 14.0));
@@ -2775,6 +2779,70 @@ fn materialize_mixed_grid_and_nongrid_items() {
 }
 
 #[test]
+fn materialize_emits_fringe_backgrounds_after_face_fills_and_before_fringe_bitmaps() {
+    use crate::frame_glyphs::FringeBitmapData;
+    use crate::glyph_matrix::FringeBitmapInfo;
+
+    let mut state = state_with_text("A");
+    let window_bg = Color::WHITE;
+    let fringe_bg = Color::from_pixel(0x00F2F2F2);
+    let mut face = Face::new(FaceId::new(1));
+    face.background = window_bg;
+    state.faces.insert(FaceId::new(1), face);
+    state.backgrounds.push(BackgroundItem {
+        bounds: Rect::new(0.0, 0.0, 80.0, 40.0),
+        color: window_bg,
+    });
+    state.face_fills.push(FaceFillItem {
+        window_id: DisplayWindowId::new(1),
+        row_role: GlyphRowRole::Text,
+        clip_rect: Some(Rect::new(0.0, 0.0, 80.0, 40.0)),
+        bounds: Rect::new(0.0, 0.0, 80.0, 40.0),
+        face_id: FaceId::new(1),
+    });
+    state.fringe_backgrounds.push(BackgroundItem {
+        bounds: Rect::new(0.0, 0.0, 8.0, 40.0),
+        color: fringe_bg,
+    });
+    state.fringe_bitmaps.insert(
+        1,
+        FringeBitmapData {
+            bits: vec![0xFF00],
+            width: 8,
+            height: 1,
+            period: 0,
+            align: 0,
+        },
+    );
+    crate::glyph_matrix::MatrixRow::make_mut(&mut state.window_matrices[0].matrix.rows[0])
+        .left_fringe_bitmap = Some(FringeBitmapInfo {
+        bitmap_index: 1,
+        face_id: FaceId::new(1),
+    });
+
+    let buf = state.materialize();
+    assert!(matches!(
+        buf.glyphs[0],
+        FrameGlyph::Background { color, .. } if color == window_bg
+    ));
+    assert!(matches!(
+        buf.glyphs[1],
+        FrameGlyph::Background { color, .. } if color == window_bg
+    ));
+    assert!(matches!(
+        buf.glyphs[2],
+        FrameGlyph::Background { bounds, color }
+            if bounds == Rect::new(0.0, 0.0, 8.0, 40.0) && color == fringe_bg
+    ));
+    let fringe_bmp_idx = buf
+        .glyphs
+        .iter()
+        .position(|g| matches!(g, FrameGlyph::FringeBitmap { .. }))
+        .expect("fringe bitmap glyph");
+    assert!(fringe_bmp_idx > 2);
+}
+
+#[test]
 fn materialize_emits_left_fringe_bitmap_glyph_from_row() {
     // A buffer-text row that carries a left-fringe bitmap (magit section-heading
     // fold arrow) must materialize one FrameGlyph::FringeBitmap positioned in the
@@ -2940,6 +3008,7 @@ fn resolved_fonts_survive_materialize_and_round_trip() {
             descent_px: 3.0,
             space_advance_px: 8.0,
             glyph_advance: Default::default(),
+            spacing: None,
         },
     );
 

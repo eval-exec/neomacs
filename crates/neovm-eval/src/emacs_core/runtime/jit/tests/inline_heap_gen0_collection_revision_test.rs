@@ -293,7 +293,7 @@ fn gen0_aset_vector_shim_invalidates_collection_read_certificates() {
     let owner = Value::vector(vec![Value::NIL]);
     let roots = context.save_specpdl_roots();
     context.push_specpdl_root(owner);
-    let (_, reads) = capture(|| owner.as_vector_data().map(|items| items[0]));
+    let (_, reads) = capture(|| owner.as_vector_data().map(|items| items.at(0)));
     let value = Value::make_int(7);
     // SAFETY: the test frame supplies the live `ctx` and argument words; the shim contract holds.
     let result = unsafe {

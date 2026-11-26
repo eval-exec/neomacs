@@ -275,12 +275,16 @@ impl DisplayReplacementStringRowSession {
         replacement_source: BufferDisplayReplacementSource,
         pointer_appearance: Option<DisplayPointerAppearance>,
         box_boundaries: DisplayStringBoxBoundaries,
+        string_roots: crate::string_property_snapshot::StringSourceRootScope,
     ) -> Option<Self> {
         let face_scope = request.face_scope;
         let source = request
             .source_request(replacement_source, pointer_appearance)
             .with_box_boundaries(box_boundaries)
-            .into_source(request.replacement_base_face.as_ref()?.face_id())?;
+            .into_source(
+                request.replacement_base_face.as_ref()?.face_id(),
+                string_roots,
+            )?;
         let item_policy = request.string_item_measurer();
         let base_face = request.replacement_base_face?;
         Some(Self {
@@ -660,15 +664,18 @@ impl DisplayReplacementItemAppendTemplate {
     }
 
     fn from_stretch(item: DisplayReplacementStretchSourceItem) -> Option<Self> {
-        (item.width_px() > 0.0).then(|| {
-            Self::active_face(
-                item.display_item_kind(),
-                DisplayReplacementItemRowGeometryUpdate::BeforeAppendGlyphMetrics {
-                    height_px: item.height_px(),
-                    ascent_px: item.ascent_px(),
-                },
-            )
-        })
+        // A zero-width stretch is not nothing: GNU sets `it->ascent` and
+        // `it->descent` from its `:height`/`:ascent` even though it appends no
+        // glyph (`produce_stretch_glyph`, xdisp.c:32988-33002).  Keep the
+        // row-geometry update and let the row builder drop the zero-width
+        // glyph; only the covered source characters disappear.
+        Some(Self::active_face(
+            item.display_item_kind(),
+            DisplayReplacementItemRowGeometryUpdate::BeforeAppendGlyphMetrics {
+                height_px: item.height_px(),
+                ascent_px: item.ascent_px(),
+            },
+        ))
     }
 
     fn from_media_resolution(item: DisplayReplacementMediaSourceResolution) -> Self {
@@ -1186,6 +1193,7 @@ impl DisplayPropertyReplacementAppendPlan {
                     replacement_source,
                     pointer_appearance,
                     box_boundaries,
+                    state.string_source_root_scope(),
                 ) else {
                     return DisplayPropertyReplacementRowRender::Applied(
                         DisplayPropertyReplacementAppendOutcome::new(
@@ -1629,7 +1637,7 @@ impl<'a> DisplayReplacementAppendContext<'a> {
     ) -> DisplayRowPosition {
         let Some(mut source) =
             BufferDisplayReplacementStringRequest::new(source_id.raw(), value, replacement_source)
-                .into_source(self.single_item.face_id())
+                .into_source(self.single_item.face_id(), state.string_source_root_scope())
         else {
             return position;
         };

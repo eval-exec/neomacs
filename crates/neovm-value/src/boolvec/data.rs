@@ -9,7 +9,7 @@ pub struct BoolVectorView<'a>(&'a BoolVectorObj);
 impl<'a> BoolVectorView<'a> {
     /// The view of `value`, or `None` when it is not a bool-vector.
     #[inline]
-    pub fn of(value: &Value) -> Option<BoolVectorView<'static>> {
+    pub fn of(value: &Value) -> Option<BoolVectorView<'_>> {
         value.as_bool_vector_obj().map(BoolVectorView)
     }
 

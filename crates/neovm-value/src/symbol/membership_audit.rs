@@ -114,7 +114,7 @@ impl Obarray {
                 stack.push(value.cons_car());
                 stack.push(value.cons_cdr());
             } else if let Some(data) = value.as_vector_data() {
-                stack.extend(data.as_slice().iter().copied());
+                stack.extend(data.iter());
             }
         }
     }

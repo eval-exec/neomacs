@@ -14,7 +14,7 @@ use std::path::Path;
 /// GNU `openp` treats an executable/searchable directory as `EISDIR`, not as
 /// a runnable program, so perform that check after a successful `faccessat`.
 #[cfg(unix)]
-pub fn executable_path_access(path: &Path) -> Result<(), libc::c_int> {
+pub(crate) fn executable_path_access(path: &Path) -> Result<(), libc::c_int> {
     match rustix::fs::accessat(
         rustix::fs::CWD,
         path,
@@ -28,7 +28,7 @@ pub fn executable_path_access(path: &Path) -> Result<(), libc::c_int> {
 }
 
 #[cfg(not(unix))]
-pub fn executable_path_access(path: &Path) -> Result<(), libc::c_int> {
+pub(crate) fn executable_path_access(path: &Path) -> Result<(), libc::c_int> {
     if path.is_dir() {
         Err(libc::EISDIR)
     } else if path.exists() {

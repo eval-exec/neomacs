@@ -14,7 +14,7 @@ paths, generated code or layouts.
 | `tests/model/mod.rs`, `tests/rendezvous.rs` | Keeper and owner control transitions; frozen identities; request/ACK/trace/resume; allocation loans; queued requests; native entry/return; registration, retirement and poisoning |
 | `tests/visibility.rs` | Independent atomic publication of root/log payloads before ACK, and collector responses before resume |
 | `tests/readers.rs` | Reader admission, explicit finish, Closing publications, Busy retry, abandonment, identity/generation checks and retirement |
-| `tests/wait_graph.rs` | Declared keeper/owner/resource dependencies involving the Baton, control mutex and allocator |
+| `tests/wait_graph.rs` | Declared keeper/owner/resource dependencies involving the Baton, control mutex, allocator and owner entries, including the stopped keeper's blocking gate wait and bounded entry wait |
 | `tests/poison.rs` | Event-driven poison, gate holder identity, Condvar owner transfer and exact lost-wake/self-lock controls |
 | `tests/cons_catalog.rs` | Keeper-side catalog detach/restore: transition exclusion of new run admissions and loan refusals around the cold window |
 | `tests/cons_tails.rs` | Owner-exclusive cons tails: lent-range charges, tail publication back to the catalog, and slice-close hand-in ordering |
@@ -73,6 +73,42 @@ races, publication failure, loans, stale records, notifications and poisoning.
 Each logical owner has one scripted actor. The helper `Owner` factory and its
 thread-confined wrapper are **not** a proof of unique production admission or
 of a globally unique token for a key; the scripts assume that uniqueness.
+
+## Owner run admission after resume drain
+
+`tests/rendezvous/resume_drain.rs` extends the control model with a cold
+owner-side predicate wait. A restored owner admits under the gate only at
+Idle; DrainingResumes waits on the same condvar as final debt completion;
+Stopping and Tracing refuse immediately so the owner can participate in the
+stop. A still-unrestored owner refuses rather than parking on its own debt.
+Poison wakes the waiter without restoring its peer or granting a run loan.
+The returned model-only run loan releases the gate before caller code, and
+its drop ends that loan. Existing allocation histories remain unchanged.
+
+Both the unconstrained final-restorer race and a forced already-parked
+interleaving run. A completed-before-admission case checks that notifications
+need not be remembered when the gated predicate already says Idle. The
+forced interleaving observes DrainingResumes under the mutex before allowing
+the final actor to take that mutex; it cannot substitute a harness signal for
+the product debt notification. The negative removes that abstract notification
+and requires Loom's own deadlock detection, captured verbatim by an isolated
+child before blocked-runtime destructor unwinding. Its dedicated exit code
+and blocked/terminated actor shape reject successful completion. An unrelated
+first panic (including an assertion or branch exhaustion) exits immediately
+with a different failure status, so a secondary destructor panic cannot hide
+it. This new control intentionally uses a real Loom deadlock; earlier
+finite-oracle negatives still require their exact invariant panics.
+
+This is an independent mutex/condvar model, not execution of the production
+API or its atomic admission instructions. The existing `admission` target
+covers the separate atomic admission pair. Production currently notifies in
+both the finish_debt wrapper and the restoration/completion callers, so the
+single model notification represents their combined logical wake edge:
+deleting only one redundant production notify need not fail. Production
+phase-word publication occurs on RegistryGuard drop while the mutex is still
+held. Notification before that publication under the same mutex is safe:
+a woken owner cannot reacquire until publication and unlock complete. No
+negative claims that this safe ordering loses a wake.
 
 ## Native, visibility and retirement boundaries
 
@@ -157,9 +193,11 @@ tests, a successful run exhausts the explored schedules at that configured
 bound. Negative controls stop at their first required counterexample, so their
 iteration counts describe search to a witness, not exhaustion. Their matching
 `LOOM_WITNESS <test> <message>` receipt confirms the exact expected assertion.
-An unrelated panic, branch-limit failure or Loom deadlock cannot satisfy the
-negative harness. Expected-panic output in a successful negative test is
-intentional; preserve it as evidence.
+An unrelated panic or branch-limit failure cannot satisfy a negative harness.
+Existing finite-oracle negatives reject Loom deadlock; the isolated-child
+resume-drain control specifically requires the actual Loom deadlock payload.
+Expected-panic output in a successful negative test is intentional; preserve
+it as evidence.
 
 Verified bounds, per-test iteration counts and witness names are recorded in
 `RESULTS.md`; full logs and the handoff report are retained under the lane's

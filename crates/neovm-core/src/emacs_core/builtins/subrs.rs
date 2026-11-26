@@ -16,8 +16,11 @@ use crate::emacs_core::display_entries::{
 use crate::emacs_core::frame::{builtin_next_frame, builtin_previous_frame};
 use crate::emacs_core::gnutls_entries as gnutls;
 use crate::emacs_core::kill_buffer::builtin_kill_buffer;
+// W-REG R1: short spelling for the stage-call grammar (the owner manifest
+// is keyed by the registrar module path).
 #[cfg(test)]
 use crate::emacs_core::subr::SubrBatch;
+use neovm_system::emacs_core::stages::SubrSegment;
 
 /// Localized declaration batches, in their current startup order.
 ///
@@ -25,33 +28,61 @@ use crate::emacs_core::subr::SubrBatch;
 /// `SubrBatch` values; this catalog records their reviewed relative order. The
 /// legacy declarations below remain the explicit compatibility exception until
 /// their owning subsystems adopt a batch.
+///
+/// W-REG R1: the SYSTEM stages are crate-private in `neovm-system`, so their
+/// batches join this list through the crate's single test-support accessor.
+/// The order below is the manifest's install order: the same legacy batch
+/// calls as before with each SYSTEM stage inserted where its core stage call
+/// sits.
 #[cfg(test)]
-const LOCALIZED_SUBR_CATALOG: &[SubrBatch] = &[
+pub(crate) fn localized_subr_catalog() -> Vec<SubrBatch> {
+    use neovm_system::emacs_core::stages::{SubrSegment, startup_stages_for_test};
+    let stage = |segment: SubrSegment| {
+        startup_stages_for_test()
+            .iter()
+            .find(|(id, _, _)| *id == segment)
+            .map(|(_, _, batch)| **batch)
+            .expect("the SYSTEM stage table carries every segment")
+    };
+    let mut batches: Vec<SubrBatch> = Vec::new();
     #[cfg(windows)]
-    crate::emacs_core::w32::subrs::SUBRS,
+    batches.push(crate::emacs_core::w32::subrs::SUBRS);
     #[cfg(neomacs_have_lcms2)]
-    lcms::SUBRS,
-    crate::emacs_core::data::SUBRS,
-    crate::emacs_core::eval::SUBRS,
-    crate::emacs_core::neo::terminal::SUBRS,
-    crate::emacs_core::shader_surface::SUBRS,
-    crate::emacs_core::video::SUBRS,
+    batches.push(lcms::SUBRS);
+    batches.push(crate::emacs_core::data::SUBRS);
+    batches.push(crate::emacs_core::eval::SUBRS);
+    batches.push(stage(SubrSegment::Stage01));
+    batches.push(crate::emacs_core::neo::terminal::SUBRS);
+    batches.push(crate::emacs_core::shader_surface::SUBRS);
+    batches.push(crate::emacs_core::video::SUBRS);
     #[cfg(feature = "xwidgets")]
-    crate::emacs_core::xwidget::SUBRS,
+    batches.push(crate::emacs_core::xwidget::SUBRS);
+    batches.push(stage(SubrSegment::Stage02));
+    batches.push(stage(SubrSegment::Stage03));
+    batches.push(stage(SubrSegment::Stage04));
+    batches.push(stage(SubrSegment::Stage05));
+    batches.push(stage(SubrSegment::Stage06));
+    batches.push(stage(SubrSegment::Stage07));
+    batches.push(stage(SubrSegment::Stage08));
+    batches.push(stage(SubrSegment::Stage09));
+    batches.push(stage(SubrSegment::Stage10));
+    batches.push(stage(SubrSegment::Stage11));
     #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
-    file_notify::SUBRS,
+    batches.push(file_notify::SUBRS);
     #[cfg(neomacs_have_dbus)]
-    crate::emacs_core::dbusbind::SUBRS,
-    crate::emacs_core::sqlite::SUBRS,
-    crate::emacs_core::font::SUBRS,
-    crate::emacs_core::neo::effects::SUBRS,
-    crate::emacs_core::neo::modifiers::SUBRS,
-    crate::emacs_core::neo::chrome::SUBRS,
-];
-
-#[cfg(test)]
-pub(crate) const fn localized_subr_catalog() -> &'static [SubrBatch] {
-    LOCALIZED_SUBR_CATALOG
+    batches.push(crate::emacs_core::dbusbind::SUBRS);
+    batches.push(stage(SubrSegment::Stage12));
+    batches.push(crate::emacs_core::sqlite::SUBRS);
+    batches.push(crate::emacs_core::font::SUBRS);
+    batches.push(crate::emacs_core::neo::effects::SUBRS);
+    batches.push(crate::emacs_core::neo::modifiers::SUBRS);
+    batches.push(crate::emacs_core::neo::chrome::SUBRS);
+    batches.push(stage(SubrSegment::Stage13));
+    batches.push(stage(SubrSegment::Stage14));
+    batches.push(stage(SubrSegment::Stage15));
+    batches.push(stage(SubrSegment::Stage16));
+    batches.push(stage(SubrSegment::Stage17));
+    batches
 }
 
 // These states encode the reviewed Neomacs compatibility order around the
@@ -145,11 +176,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
         .register_data(ctx)
         .register_ordinary_eval(ctx)
         .register_fboundp(ctx);
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "getenv-internal",
-        NativeFn::ContextVec(crate::emacs_core::process::builtin_getenv_internal),
-        SubrArity::new(1, Some(2)),
-    )));
+    neovm_system::emacs_core::stages::register_subrs(ctx, SubrSegment::Stage01);
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "run-window-configuration-change-hook",
         NativeFn::ContextVec(
@@ -319,344 +346,13 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
         ))
         .requires_eval_state(),
     );
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "insert-file-contents",
-        NativeFn::ContextVec(crate::emacs_core::fileio::builtin_insert_file_contents),
-        SubrArity::new(1, Some(5)),
-    )));
-    ctx.register_subr(
-        crate::emacs_core::subr::world_subr!(SubrSpec::new(
-            "write-region",
-            NativeFn::ContextVec(crate::emacs_core::fileio::builtin_write_region),
-            SubrArity::new(3, Some(7)),
-        ))
-        .interactive(
-            crate::emacs_core::interactive::BuiltinInteractiveSpec::String(
-                "r\nFWrite region to file: \ni\ni\ni\np",
-            ),
-        ),
-    );
+    neovm_system::emacs_core::stages::register_subrs(ctx, SubrSegment::Stage02);
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "file-name-completion",
         NativeFn::ContextVec(crate::emacs_core::dired::builtin_file_name_completion),
         SubrArity::new(2, Some(3)),
     )));
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "set-visited-file-modtime",
-        NativeFn::ContextVec(crate::emacs_core::fileio::builtin_set_visited_file_modtime),
-        SubrArity::new(0, Some(1)),
-    )));
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "print--preprocess",
-        NativeFn::ContextVec(crate::emacs_core::process::builtin_print_preprocess),
-        SubrArity::new(1, Some(1)),
-    )));
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "format-network-address",
-        NativeFn::ContextVec(crate::emacs_core::process::builtin_format_network_address),
-        SubrArity::new(1, Some(2)),
-    )));
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "network-interface-list",
-        NativeFn::ContextVec(crate::emacs_core::process::builtin_network_interface_list),
-        SubrArity::new(0, Some(2)),
-    )));
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "network-interface-info",
-        NativeFn::ContextVec(crate::emacs_core::process::builtin_network_interface_info),
-        SubrArity::new(1, Some(1)),
-    )));
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "signal-names",
-        NativeFn::ContextVec(crate::emacs_core::process::builtin_signal_names),
-        SubrArity::new(0, Some(0)),
-    )));
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "accept-process-output",
-        NativeFn::ContextVec(crate::emacs_core::process::builtin_accept_process_output),
-        SubrArity::new(0, Some(4)),
-    )));
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "list-system-processes",
-        NativeFn::ContextVec(crate::emacs_core::process::builtin_list_system_processes),
-        SubrArity::new(0, Some(0)),
-    )));
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "num-processors",
-        NativeFn::ContextVec(crate::emacs_core::process::builtin_num_processors),
-        SubrArity::new(0, Some(1)),
-    )));
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "make-process",
-        NativeFn::ContextVec(crate::emacs_core::process::builtin_make_process),
-        SubrArity::new(0, None),
-    )));
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "make-network-process",
-        NativeFn::ContextVec(crate::emacs_core::process::builtin_make_network_process),
-        SubrArity::new(0, None),
-    )));
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "neomacs-open-tls-stream",
-        NativeFn::ContextVec(crate::emacs_core::process::builtin_neomacs_open_tls_stream),
-        SubrArity::new(4, Some(4)),
-    )));
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "neomacs-tls-available-p",
-        NativeFn::ContextVec(|_ctx, args| {
-            crate::emacs_core::tls::builtin_neomacs_tls_available_p(args)
-        }),
-        SubrArity::new(0, Some(0)),
-    )));
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "make-pipe-process",
-        NativeFn::ContextVec(crate::emacs_core::process::builtin_make_pipe_process),
-        SubrArity::new(0, None),
-    )));
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "gnutls-boot",
-        NativeFn::ContextVec(crate::emacs_core::process::builtin_gnutls_boot),
-        SubrArity::new(3, Some(3)),
-    )));
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "make-serial-process",
-        NativeFn::ContextVec(crate::emacs_core::process::builtin_make_serial_process),
-        SubrArity::new(0, None),
-    )));
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "serial-process-configure",
-        NativeFn::ContextVec(crate::emacs_core::process::builtin_serial_process_configure),
-        SubrArity::new(0, None),
-    )));
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "call-process",
-        NativeFn::ContextVec(crate::emacs_core::process::builtin_call_process),
-        SubrArity::new(1, None),
-    )));
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "call-process-region",
-        NativeFn::ContextVec(crate::emacs_core::process::builtin_call_process_region),
-        SubrArity::new(3, None),
-    )));
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "continue-process",
-        NativeFn::ContextVec(crate::emacs_core::process::builtin_continue_process),
-        SubrArity::new(0, Some(2)),
-    )));
-    ctx.register_subr(
-        crate::emacs_core::subr::world_subr!(SubrSpec::new(
-            "delete-process",
-            NativeFn::ContextVec(crate::emacs_core::process::builtin_delete_process),
-            SubrArity::new(0, Some(1)),
-        ))
-        .interactive(
-            crate::emacs_core::interactive::BuiltinInteractiveSpec::Form(
-                delete_process_interactive_spec,
-            ),
-        ),
-    );
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "interrupt-process",
-        NativeFn::ContextVec(crate::emacs_core::process::builtin_interrupt_process),
-        SubrArity::new(0, Some(2)),
-    )));
-    ctx.register_subr(
-        crate::emacs_core::subr::world_subr!(SubrSpec::new(
-            "kill-process",
-            NativeFn::ContextVec(crate::emacs_core::process::builtin_kill_process),
-            SubrArity::new(0, Some(2)),
-        ))
-        .interactive(
-            crate::emacs_core::interactive::BuiltinInteractiveSpec::Form(
-                kill_process_interactive_spec,
-            ),
-        ),
-    );
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "quit-process",
-        NativeFn::ContextVec(crate::emacs_core::process::builtin_quit_process),
-        SubrArity::new(0, Some(2)),
-    )));
-    ctx.register_subr(
-        crate::emacs_core::subr::world_subr!(SubrSpec::new(
-            "signal-process",
-            NativeFn::ContextVec(crate::emacs_core::process::builtin_signal_process),
-            SubrArity::new(2, Some(3)),
-        ))
-        .interactive(
-            crate::emacs_core::interactive::BuiltinInteractiveSpec::Form(
-                signal_process_interactive_spec,
-            ),
-        ),
-    );
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "stop-process",
-        NativeFn::ContextVec(crate::emacs_core::process::builtin_stop_process),
-        SubrArity::new(0, Some(2)),
-    )));
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "get-process",
-        NativeFn::ContextVec(crate::emacs_core::process::builtin_get_process),
-        SubrArity::new(1, Some(1)),
-    )));
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "get-buffer-process",
-        NativeFn::ContextVec(crate::emacs_core::process::builtin_get_buffer_process),
-        SubrArity::new(1, Some(1)),
-    )));
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "process-attributes",
-        NativeFn::ContextVec(crate::emacs_core::process::builtin_process_attributes),
-        SubrArity::new(1, Some(1)),
-    )));
-    // No `start-process' / `start-file-process' /
-    // `start-process-shell-command' / `start-file-process-shell-command':
-    // GNU has no C DEFUN for any of them.  All four are Lisp over
-    // `make-process' -- lisp/subr.el:3466, lisp/simple.el:5249,
-    // lisp/subr.el:5063 and lisp/subr.el:5076 -- and `loadup.el' preloads
-    // both files, so a Rust subr here could only ever answer in unit tests.
-    // DIVERGENCES.md 149.
-
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "processp",
-        NativeFn::ContextVec(crate::emacs_core::process::builtin_processp),
-        SubrArity::new(1, Some(1)),
-    )));
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "process-id",
-        NativeFn::ContextVec(crate::emacs_core::process::builtin_process_id),
-        SubrArity::new(1, Some(1)),
-    )));
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "process-command",
-        NativeFn::ContextVec(crate::emacs_core::process::builtin_process_command),
-        SubrArity::new(1, Some(1)),
-    )));
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "process-contact",
-        NativeFn::ContextVec(crate::emacs_core::process::builtin_process_contact),
-        SubrArity::new(1, Some(3)),
-    )));
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "process-filter",
-        NativeFn::ContextVec(crate::emacs_core::process::builtin_process_filter),
-        SubrArity::new(1, Some(1)),
-    )));
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "set-process-filter",
-        NativeFn::ContextVec(crate::emacs_core::process::builtin_set_process_filter),
-        SubrArity::new(2, Some(2)),
-    )));
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "process-sentinel",
-        NativeFn::ContextVec(crate::emacs_core::process::builtin_process_sentinel),
-        SubrArity::new(1, Some(1)),
-    )));
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "set-process-sentinel",
-        NativeFn::ContextVec(crate::emacs_core::process::builtin_set_process_sentinel),
-        SubrArity::new(2, Some(2)),
-    )));
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "process-coding-system",
-        NativeFn::ContextVec(crate::emacs_core::process::builtin_process_coding_system),
-        SubrArity::new(1, Some(1)),
-    )));
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "process-datagram-address",
-        NativeFn::ContextVec(crate::emacs_core::process::builtin_process_datagram_address),
-        SubrArity::new(1, Some(1)),
-    )));
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "set-process-buffer",
-        NativeFn::ContextVec(crate::emacs_core::process::builtin_set_process_buffer),
-        SubrArity::new(2, Some(2)),
-    )));
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "set-process-thread",
-        NativeFn::ContextVec(crate::emacs_core::process::builtin_set_process_thread),
-        SubrArity::new(2, Some(2)),
-    )));
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "set-process-window-size",
-        NativeFn::ContextVec(crate::emacs_core::process::builtin_set_process_window_size),
-        SubrArity::new(3, Some(3)),
-    )));
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "process-tty-name",
-        NativeFn::ContextVec(crate::emacs_core::process::builtin_process_tty_name),
-        SubrArity::new(1, Some(2)),
-    )));
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "process-plist",
-        NativeFn::ContextVec(crate::emacs_core::process::builtin_process_plist),
-        SubrArity::new(1, Some(1)),
-    )));
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "set-process-plist",
-        NativeFn::ContextVec(crate::emacs_core::process::builtin_set_process_plist),
-        SubrArity::new(2, Some(2)),
-    )));
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "process-mark",
-        NativeFn::ContextVec(crate::emacs_core::process::builtin_process_mark),
-        SubrArity::new(1, Some(1)),
-    )));
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "process-type",
-        NativeFn::ContextVec(crate::emacs_core::process::builtin_process_type),
-        SubrArity::new(1, Some(1)),
-    )));
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "process-thread",
-        NativeFn::ContextVec(crate::emacs_core::process::builtin_process_thread),
-        SubrArity::new(1, Some(1)),
-    )));
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "process-running-child-p",
-        NativeFn::ContextVec(crate::emacs_core::process::builtin_process_running_child_p),
-        SubrArity::new(0, Some(1)),
-    )));
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "process-send-region",
-        NativeFn::ContextVec(crate::emacs_core::process::builtin_process_send_region),
-        SubrArity::new(3, Some(3)),
-    )));
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "process-send-eof",
-        NativeFn::ContextVec(crate::emacs_core::process::builtin_process_send_eof),
-        SubrArity::new(0, Some(1)),
-    )));
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "process-send-string",
-        NativeFn::ContextVec(crate::emacs_core::process::builtin_process_send_string),
-        SubrArity::new(2, Some(2)),
-    )));
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "process-status",
-        NativeFn::ContextVec(crate::emacs_core::process::builtin_process_status),
-        SubrArity::new(1, Some(1)),
-    )));
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "process-exit-status",
-        NativeFn::ContextVec(crate::emacs_core::process::builtin_process_exit_status),
-        SubrArity::new(1, Some(1)),
-    )));
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "process-list",
-        NativeFn::ContextVec(crate::emacs_core::process::builtin_process_list),
-        SubrArity::new(0, Some(0)),
-    )));
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "process-name",
-        NativeFn::ContextVec(crate::emacs_core::process::builtin_process_name),
-        SubrArity::new(1, Some(1)),
-    )));
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "process-buffer",
-        NativeFn::ContextVec(crate::emacs_core::process::builtin_process_buffer),
-        SubrArity::new(1, Some(1)),
-    )));
+    neovm_system::emacs_core::stages::register_subrs(ctx, SubrSegment::Stage03);
     ctx.register_subr(neovm_eval::emacs_core::builtins::misc_eval::SLEEP_FOR_SUBR);
     ctx.register_subr(neovm_eval::emacs_core::builtins::misc_eval::SET_SYNTAX_TABLE_SUBR);
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
@@ -1010,168 +706,13 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
         crate::emacs_core::editfns::builtin_following_char_0,
     )));
     crate::emacs_core::display_subrs::register_face_font(ctx);
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "access-file",
-        NativeFn::ContextVec(crate::emacs_core::fileio::builtin_access_file),
-        SubrArity::new(2, Some(2)),
-    )));
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "expand-file-name",
-        NativeFn::ContextVec(crate::emacs_core::fileio::builtin_expand_file_name),
-        SubrArity::new(1, Some(2)),
-    )));
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "delete-file-internal",
-        NativeFn::ContextVec(crate::emacs_core::fileio::builtin_delete_file_internal),
-        SubrArity::new(1, Some(1)),
-    )));
-    ctx.register_subr(
-        crate::emacs_core::subr::world_subr!(SubrSpec::new(
-            "rename-file",
-            NativeFn::ContextVec(crate::emacs_core::fileio::builtin_rename_file),
-            SubrArity::new(2, Some(3)),
-        ))
-        .requires_eval_state()
-        .interactive(
-            crate::emacs_core::interactive::BuiltinInteractiveSpec::String(
-                "fRename file: \nGRename %s to file: \np",
-            ),
-        ),
-    );
-    ctx.register_subr(
-        crate::emacs_core::subr::world_subr!(SubrSpec::new(
-            "copy-file",
-            NativeFn::ContextVec(crate::emacs_core::fileio::builtin_copy_file),
-            SubrArity::new(2, Some(6)),
-        ))
-        .requires_eval_state()
-        .interactive(
-            crate::emacs_core::interactive::BuiltinInteractiveSpec::String(
-                "fCopy file: \nGCopy %s to file: \np\nP",
-            ),
-        ),
-    );
-    ctx.register_subr(
-        crate::emacs_core::subr::world_subr!(SubrSpec::new(
-            "add-name-to-file",
-            NativeFn::ContextVec(crate::emacs_core::fileio::builtin_add_name_to_file),
-            SubrArity::new(2, Some(3)),
-        ))
-        .interactive(
-            crate::emacs_core::interactive::BuiltinInteractiveSpec::String(
-                "fAdd name to file: \nGName to add to %s: \np",
-            ),
-        ),
-    );
-    ctx.register_subr(
-        crate::emacs_core::subr::world_subr!(SubrSpec::new(
-            "make-symbolic-link",
-            NativeFn::ContextVec(crate::emacs_core::fileio::builtin_make_symbolic_link),
-            SubrArity::new(2, Some(3)),
-        ))
-        .interactive(
-            crate::emacs_core::interactive::BuiltinInteractiveSpec::String(
-                "FMake symbolic link to file: \nGMake symbolic link to file %s: \np",
-            ),
-        ),
-    );
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "directory-files",
-        NativeFn::ContextVec(crate::emacs_core::fileio::builtin_directory_files),
-        SubrArity::new(1, Some(5)),
-    )));
+    neovm_system::emacs_core::stages::register_subrs(ctx, SubrSegment::Stage04);
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "file-attributes",
         NativeFn::ContextVec(crate::emacs_core::dired::builtin_file_attributes),
         SubrArity::new(1, Some(2)),
     )));
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "file-exists-p",
-        NativeFn::ContextVec(crate::emacs_core::fileio::builtin_file_exists_p),
-        SubrArity::new(1, Some(1)),
-    )));
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "file-readable-p",
-        NativeFn::ContextVec(crate::emacs_core::fileio::builtin_file_readable_p),
-        SubrArity::new(1, Some(1)),
-    )));
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "file-writable-p",
-        NativeFn::ContextVec(crate::emacs_core::fileio::builtin_file_writable_p),
-        SubrArity::new(1, Some(1)),
-    )));
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "file-acl",
-        NativeFn::ContextVec(crate::emacs_core::fileio::builtin_file_acl),
-        SubrArity::new(1, Some(1)),
-    )));
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "file-executable-p",
-        NativeFn::ContextVec(crate::emacs_core::fileio::builtin_file_executable_p),
-        SubrArity::new(1, Some(1)),
-    )));
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "file-locked-p",
-        NativeFn::ContextVec(crate::emacs_core::filelock::builtin_file_locked_p),
-        SubrArity::new(1, Some(1)),
-    )));
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "file-selinux-context",
-        NativeFn::ContextVec(crate::emacs_core::fileio::builtin_file_selinux_context),
-        SubrArity::new(1, Some(1)),
-    )));
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "file-system-info",
-        NativeFn::ContextVec(crate::emacs_core::fileio::builtin_file_system_info),
-        SubrArity::new(1, Some(1)),
-    )));
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "file-directory-p",
-        NativeFn::ContextVec(crate::emacs_core::fileio::builtin_file_directory_p),
-        SubrArity::new(1, Some(1)),
-    )));
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "file-regular-p",
-        NativeFn::ContextVec(crate::emacs_core::fileio::builtin_file_regular_p),
-        SubrArity::new(1, Some(1)),
-    )));
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "file-symlink-p",
-        NativeFn::ContextVec(crate::emacs_core::fileio::builtin_file_symlink_p),
-        SubrArity::new(1, Some(1)),
-    )));
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "file-modes",
-        NativeFn::ContextVec(crate::emacs_core::fileio::builtin_file_modes),
-        SubrArity::new(1, Some(2)),
-    )));
-    ctx.register_subr(
-        crate::emacs_core::subr::world_subr!(SubrSpec::new(
-            "set-file-modes",
-            NativeFn::ContextVec(crate::emacs_core::fileio::builtin_set_file_modes),
-            SubrArity::new(2, Some(3)),
-        ))
-        .interactive(
-            crate::emacs_core::interactive::BuiltinInteractiveSpec::Form(
-                set_file_modes_interactive_spec,
-            ),
-        ),
-    );
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "set-file-times",
-        NativeFn::ContextVec(crate::emacs_core::fileio::builtin_set_file_times),
-        SubrArity::new(1, Some(3)),
-    )));
-    // No `macrop' here: GNU has no DEFUN of that name.  It is a `defun' at
-    // lisp/subr.el:4793 over `indirect-function', which IS in C
-    // (src/data.c:2557) -- DIVERGENCES.md 148.
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "set-process-inherit-coding-system-flag",
-        NativeFn::ContextVec(
-            crate::emacs_core::process::builtin_set_process_inherit_coding_system_flag,
-        ),
-        SubrArity::new(2, Some(2)),
-    )));
+    neovm_system::emacs_core::stages::register_subrs(ctx, SubrSegment::Stage05);
     crate::emacs_core::display_subrs::register_frame_parameter(ctx);
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "read-char",
@@ -1220,103 +761,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     crate::emacs_core::display_subrs::register_internal_lisp_face_p(ctx);
     ctx.register_subr(neovm_eval::emacs_core::builtins::misc_eval::COPY_SYNTAX_TABLE_SUBR);
     ctx.register_subr(neovm_eval::emacs_core::builtins::misc_pure::STANDARD_SYNTAX_TABLE_SUBR);
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "current-time",
-        NativeFn::ContextVec(crate::emacs_core::timefns::builtin_current_time_in_context),
-        SubrArity::new(0, Some(0)),
-    )));
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "float-time",
-        NativeFn::ContextVec(|_ctx, args| crate::emacs_core::timefns::builtin_float_time(args)),
-        SubrArity::new(0, Some(1)),
-    )));
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "file-name-directory",
-        NativeFn::ContextVec(crate::emacs_core::fileio::builtin_file_name_directory),
-        SubrArity::new(1, Some(1)),
-    )));
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "file-name-nondirectory",
-        NativeFn::ContextVec(crate::emacs_core::fileio::builtin_file_name_nondirectory),
-        SubrArity::new(1, Some(1)),
-    )));
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "file-name-as-directory",
-        NativeFn::ContextVec(crate::emacs_core::fileio::builtin_file_name_as_directory),
-        SubrArity::new(1, Some(1)),
-    )));
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "directory-file-name",
-        NativeFn::ContextVec(crate::emacs_core::fileio::builtin_directory_file_name),
-        SubrArity::new(1, Some(1)),
-    )));
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "file-name-concat",
-        NativeFn::ContextVec(|_ctx, args| {
-            crate::emacs_core::fileio::builtin_file_name_concat(args)
-        }),
-        SubrArity::new(1, None),
-    )));
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "file-name-absolute-p",
-        NativeFn::ContextVec(|_ctx, args| {
-            crate::emacs_core::fileio::builtin_file_name_absolute_p(args)
-        }),
-        SubrArity::new(1, Some(1)),
-    )));
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "directory-name-p",
-        NativeFn::ContextVec(|_ctx, args| {
-            crate::emacs_core::fileio::builtin_directory_name_p(args)
-        }),
-        SubrArity::new(1, Some(1)),
-    )));
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "substitute-in-file-name",
-        NativeFn::ContextVec(crate::emacs_core::fileio::builtin_substitute_in_file_name),
-        SubrArity::new(1, Some(1)),
-    )));
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "set-file-acl",
-        NativeFn::ContextVec(crate::emacs_core::fileio::builtin_set_file_acl),
-        SubrArity::new(2, Some(2)),
-    )));
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "set-file-selinux-context",
-        NativeFn::ContextVec(crate::emacs_core::fileio::builtin_set_file_selinux_context),
-        SubrArity::new(2, Some(2)),
-    )));
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "visited-file-modtime",
-        NativeFn::ContextVec(crate::emacs_core::fileio::builtin_visited_file_modtime),
-        SubrArity::new(0, Some(0)),
-    )));
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "make-temp-name",
-        NativeFn::ContextVec(|ctx, args| {
-            crate::emacs_core::fileio::builtin_make_temp_name(ctx, args)
-        }),
-        SubrArity::new(1, Some(1)),
-    )));
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "next-read-file-uses-dialog-p",
-        NativeFn::ContextVec(|_ctx, args| {
-            crate::emacs_core::fileio::builtin_next_read_file_uses_dialog_p(args)
-        }),
-        SubrArity::new(0, Some(0)),
-    )));
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "unhandled-file-name-directory",
-        NativeFn::ContextVec(crate::emacs_core::fileio::builtin_unhandled_file_name_directory_eval),
-        SubrArity::new(1, Some(1)),
-    )));
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "set-binary-mode",
-        NativeFn::ContextVec(|_ctx, args| {
-            crate::emacs_core::process::builtin_set_binary_mode(args)
-        }),
-        SubrArity::new(2, Some(2)),
-    )));
+    neovm_system::emacs_core::stages::register_subrs(ctx, SubrSegment::Stage06);
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "group-gid",
         NativeFn::ContextVec(
@@ -1353,14 +798,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
         ),
         SubrArity::new(3, Some(3)),
     )));
-    ctx.register_subr(
-        crate::emacs_core::subr::world_subr!(SubrSpec::new(
-            "do-auto-save",
-            NativeFn::ContextVec(crate::emacs_core::fileio::builtin_do_auto_save),
-            SubrArity::new(0, Some(2)),
-        ))
-        .interactive(crate::emacs_core::interactive::BuiltinInteractiveSpec::String("")),
-    );
+    neovm_system::emacs_core::stages::register_subrs(ctx, SubrSegment::Stage07);
     ctx.register_subr(
         crate::emacs_core::subr::world_subr!(SubrSpec::new(
             "describe-buffer-bindings",
@@ -1418,26 +856,13 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
         NativeFn::ContextVec(|_ctx, args| gnutls::builtin_gnutls_available_p(args)),
         SubrArity::new(0, Some(0)),
     )));
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "gnutls-asynchronous-parameters",
-        NativeFn::ContextVec(crate::emacs_core::process::builtin_gnutls_asynchronous_parameters),
-        SubrArity::new(2, Some(2)),
-    )));
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "gnutls-bye",
-        NativeFn::ContextVec(crate::emacs_core::process::builtin_gnutls_bye),
-        SubrArity::new(2, Some(2)),
-    )));
+    neovm_system::emacs_core::stages::register_subrs(ctx, SubrSegment::Stage08);
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "gnutls-ciphers",
         NativeFn::ContextVec(|_ctx, args| gnutls::builtin_gnutls_ciphers(args)),
         SubrArity::new(0, Some(0)),
     )));
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "gnutls-deinit",
-        NativeFn::ContextVec(crate::emacs_core::process::builtin_gnutls_deinit),
-        SubrArity::new(1, Some(1)),
-    )));
+    neovm_system::emacs_core::stages::register_subrs(ctx, SubrSegment::Stage09);
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "gnutls-digests",
         NativeFn::ContextVec(|_ctx, args| gnutls::builtin_gnutls_digests(args)),
@@ -1463,11 +888,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
         NativeFn::ContextVec(|_ctx, args| gnutls::builtin_gnutls_format_certificate(args)),
         SubrArity::new(1, Some(1)),
     )));
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "gnutls-get-initstage",
-        NativeFn::ContextVec(crate::emacs_core::process::builtin_gnutls_get_initstage),
-        SubrArity::new(1, Some(1)),
-    )));
+    neovm_system::emacs_core::stages::register_subrs(ctx, SubrSegment::Stage10);
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "gnutls-hash-digest",
         NativeFn::ContextVec(|ctx, args| {
@@ -1485,11 +906,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
         NativeFn::ContextVec(|_ctx, args| gnutls::builtin_gnutls_macs(args)),
         SubrArity::new(0, Some(0)),
     )));
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "gnutls-peer-status",
-        NativeFn::ContextVec(crate::emacs_core::process::builtin_gnutls_peer_status),
-        SubrArity::new(1, Some(1)),
-    )));
+    neovm_system::emacs_core::stages::register_subrs(ctx, SubrSegment::Stage11);
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "gnutls-peer-status-warning-describe",
         NativeFn::ContextVec(|ctx, args| {
@@ -1715,26 +1132,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
         _ => {}
     }
     crate::emacs_core::dbusbind::register_subrs(ctx);
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "lock-buffer",
-        NativeFn::ContextVec(crate::emacs_core::filelock::builtin_lock_buffer),
-        SubrArity::new(0, Some(1)),
-    )));
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "lock-file",
-        NativeFn::ContextVec(crate::emacs_core::filelock::builtin_lock_file),
-        SubrArity::new(1, Some(1)),
-    )));
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "unlock-buffer",
-        NativeFn::ContextVec(crate::emacs_core::filelock::builtin_unlock_buffer),
-        SubrArity::new(0, Some(0)),
-    )));
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "unlock-file",
-        NativeFn::ContextVec(crate::emacs_core::filelock::builtin_unlock_file),
-        SubrArity::new(1, Some(1)),
-    )));
+    neovm_system::emacs_core::stages::register_subrs(ctx, SubrSegment::Stage12);
     crate::emacs_core::display_subrs::register_window_bottom_divider_width(ctx);
     crate::emacs_core::sqlite::register_subrs(ctx);
     // GNU emacs.c sequences font.c immediately after sqlite.c.
@@ -1759,20 +1157,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
         NativeFn::ContextVec(|_ctx, args| builtin_ntake(args)),
         SubrArity::new(2, Some(2)),
     )));
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "default-file-modes",
-        NativeFn::ContextVec(|_ctx, args| {
-            crate::emacs_core::fileio::builtin_default_file_modes(args)
-        }),
-        SubrArity::new(0, Some(0)),
-    )));
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "set-default-file-modes",
-        NativeFn::ContextVec(|_ctx, args| {
-            crate::emacs_core::fileio::builtin_set_default_file_modes(args)
-        }),
-        SubrArity::new(1, Some(1)),
-    )));
+    neovm_system::emacs_core::stages::register_subrs(ctx, SubrSegment::Stage13);
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "window-configuration-p",
         NativeFn::ContextVec(|_ctx, args| {
@@ -1822,110 +1207,19 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
         .interactive(crate::emacs_core::interactive::BuiltinInteractiveSpec::String("")),
     );
     crate::emacs_core::display_subrs::register_window_text_pixel_size(ctx);
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "delete-directory-internal",
-        NativeFn::ContextVec(crate::emacs_core::fileio::builtin_delete_directory_internal),
-        SubrArity::new(1, Some(1)),
-    )));
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "make-directory-internal",
-        NativeFn::ContextVec(crate::emacs_core::fileio::builtin_make_directory_internal),
-        SubrArity::new(1, Some(1)),
-    )));
+    neovm_system::emacs_core::stages::register_subrs(ctx, SubrSegment::Stage14);
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "directory-files-and-attributes",
         NativeFn::ContextVec(crate::emacs_core::dired::builtin_directory_files_and_attributes),
         SubrArity::new(1, Some(6)),
     )));
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "find-file-name-handler",
-        NativeFn::ContextVec(crate::emacs_core::fileio::builtin_find_file_name_handler),
-        SubrArity::new(2, Some(2)),
-    )));
+    neovm_system::emacs_core::stages::register_subrs(ctx, SubrSegment::Stage15);
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "file-name-all-completions",
         NativeFn::ContextVec(crate::emacs_core::dired::builtin_file_name_all_completions),
         SubrArity::new(2, Some(2)),
     )));
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "file-accessible-directory-p",
-        NativeFn::ContextVec(crate::emacs_core::fileio::builtin_file_accessible_directory_p),
-        SubrArity::new(1, Some(1)),
-    )));
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "file-name-case-insensitive-p",
-        NativeFn::ContextVec(crate::emacs_core::fileio::builtin_file_name_case_insensitive_p),
-        SubrArity::new(1, Some(1)),
-    )));
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "file-newer-than-file-p",
-        NativeFn::ContextVec(crate::emacs_core::fileio::builtin_file_newer_than_file_p),
-        SubrArity::new(2, Some(2)),
-    )));
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "verify-visited-file-modtime",
-        NativeFn::ContextVec(crate::emacs_core::fileio::builtin_verify_visited_file_modtime),
-        SubrArity::new(0, Some(1)),
-    )));
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "internal-default-interrupt-process",
-        NativeFn::ContextVec(
-            crate::emacs_core::process::builtin_internal_default_interrupt_process,
-        ),
-        SubrArity::new(0, Some(2)),
-    )));
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "internal-default-process-filter",
-        NativeFn::ContextVec(crate::emacs_core::process::builtin_internal_default_process_filter),
-        SubrArity::new(2, Some(2)),
-    )));
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "internal-default-process-sentinel",
-        NativeFn::ContextVec(crate::emacs_core::process::builtin_internal_default_process_sentinel),
-        SubrArity::new(2, Some(2)),
-    )));
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "internal-default-signal-process",
-        NativeFn::ContextVec(crate::emacs_core::process::builtin_internal_default_signal_process),
-        SubrArity::new(2, Some(3)),
-    )));
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "network-lookup-address-info",
-        NativeFn::ContextVec(crate::emacs_core::process::builtin_network_lookup_address_info),
-        SubrArity::new(1, Some(3)),
-    )));
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "set-network-process-option",
-        NativeFn::ContextVec(crate::emacs_core::process::builtin_set_network_process_option),
-        SubrArity::new(3, Some(4)),
-    )));
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "process-query-on-exit-flag",
-        NativeFn::ContextVec(crate::emacs_core::process::builtin_process_query_on_exit_flag),
-        SubrArity::new(1, Some(1)),
-    )));
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "set-process-query-on-exit-flag",
-        NativeFn::ContextVec(crate::emacs_core::process::builtin_set_process_query_on_exit_flag),
-        SubrArity::new(2, Some(2)),
-    )));
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "process-inherit-coding-system-flag",
-        NativeFn::ContextVec(
-            crate::emacs_core::process::builtin_process_inherit_coding_system_flag,
-        ),
-        SubrArity::new(1, Some(1)),
-    )));
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "set-process-coding-system",
-        NativeFn::ContextVec(crate::emacs_core::process::builtin_set_process_coding_system),
-        SubrArity::new(1, Some(3)),
-    )));
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "set-process-datagram-address",
-        NativeFn::ContextVec(crate::emacs_core::process::builtin_set_process_datagram_address),
-        SubrArity::new(2, Some(2)),
-    )));
+    neovm_system::emacs_core::stages::register_subrs(ctx, SubrSegment::Stage16);
     crate::emacs_core::display_subrs::register_active_minibuffer_window(ctx);
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "minor-mode-key-binding",
@@ -2107,62 +1401,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     )));
 
     // -- Time/date --
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "time-add",
-        NativeFn::ContextVec(|_ctx, args| crate::emacs_core::timefns::builtin_time_add(args)),
-        SubrArity::new(2, Some(2)),
-    )));
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "time-subtract",
-        NativeFn::ContextVec(|_ctx, args| crate::emacs_core::timefns::builtin_time_subtract(args)),
-        SubrArity::new(2, Some(2)),
-    )));
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "time-less-p",
-        NativeFn::ContextVec(|_ctx, args| crate::emacs_core::timefns::builtin_time_less_p(args)),
-        SubrArity::new(2, Some(2)),
-    )));
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "time-equal-p",
-        NativeFn::ContextVec(|_ctx, args| crate::emacs_core::timefns::builtin_time_equal_p(args)),
-        SubrArity::new(2, Some(2)),
-    )));
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "current-time-string",
-        NativeFn::ContextVec(|_ctx, args| {
-            crate::emacs_core::timefns::builtin_current_time_string(args)
-        }),
-        SubrArity::new(0, Some(2)),
-    )));
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "current-time-zone",
-        NativeFn::ContextVec(|_ctx, args| {
-            crate::emacs_core::timefns::builtin_current_time_zone(args)
-        }),
-        SubrArity::new(0, Some(2)),
-    )));
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "encode-time",
-        NativeFn::ContextVec(|_ctx, args| crate::emacs_core::timefns::builtin_encode_time(args)),
-        SubrArity::new(1, None),
-    )));
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "decode-time",
-        NativeFn::ContextVec(|_ctx, args| crate::emacs_core::timefns::builtin_decode_time(args)),
-        SubrArity::new(0, Some(3)),
-    )));
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "time-convert",
-        NativeFn::ContextVec(crate::emacs_core::timefns::builtin_time_convert_in_context),
-        SubrArity::new(1, Some(2)),
-    )));
-    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
-        "set-time-zone-rule",
-        NativeFn::ContextVec(|_ctx, args| {
-            crate::emacs_core::timefns::builtin_set_time_zone_rule(args)
-        }),
-        SubrArity::new(1, Some(1)),
-    )));
+    neovm_system::emacs_core::stages::register_subrs(ctx, SubrSegment::Stage17);
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "format-time-string",
         NativeFn::ContextVec(|_ctx, args| {
@@ -2363,14 +1602,16 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     #[cfg(not(any(windows, target_os = "macos")))]
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "x-frame-edges",
-        NativeFn::ContextVec(|_ctx, args| crate::emacs_core::display::builtin_x_frame_edges(args)),
+        NativeFn::ContextVec(|ctx, args| {
+            crate::emacs_core::display::builtin_x_frame_edges(ctx, args)
+        }),
         SubrArity::new(0, Some(2)),
     )));
     #[cfg(not(any(windows, target_os = "macos")))]
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "x-frame-geometry",
-        NativeFn::ContextVec(|_ctx, args| {
-            crate::emacs_core::display::builtin_x_frame_geometry(args)
+        NativeFn::ContextVec(|ctx, args| {
+            crate::emacs_core::display::builtin_x_frame_geometry(ctx, args)
         }),
         SubrArity::new(0, Some(1)),
     )));
@@ -2579,8 +1820,8 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     crate::emacs_core::display_subrs::register_move_to_window_line(ctx);
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "long-line-optimizations-p",
-        NativeFn::ContextVec(|_ctx, args| {
-            crate::emacs_core::xdisp::builtin_long_line_optimizations_p(args)
+        NativeFn::ContextVec(|ctx, args| {
+            crate::emacs_core::xdisp::builtin_long_line_optimizations_p(ctx, args)
         }),
         SubrArity::new(0, Some(0)),
     )));

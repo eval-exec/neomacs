@@ -158,7 +158,7 @@ fn aot_pure_arith_leaf_matches_jit_via_dlopen() {
     for a in [0i64, 1, 7, -3, 1000] {
         let arg = Value::make_int(a);
         // JIT result.
-        let jit = match jit_leaf.call(ctx_ptr, &[arg]) {
+        let jit = match unsafe { jit_leaf.call(ctx_ptr, &[arg]) } {
             crate::emacs_core::jit::compile::NativeRun::Ok(bits) => bits as i64,
             other => panic!("JIT did not return Ok: {other:?}"),
         };
@@ -266,6 +266,140 @@ fn content_hash_stable_and_discriminating() {
     assert!(sym.contains(&format!("{h1:032x}")));
 }
 
+/// `value_vec_slice_offsets` is baked into AOT code and is not a const the
+/// ABI salt can see. The unit index serves only a file named for this
+/// binary's pdump fingerprint. A legacy tag-only name, a foreign
+/// fingerprint, and a wrong tag are left for the JIT.
+#[test]
+fn aot_unit_index_skips_a_stale_build_fingerprint() {
+    let hash: u128 = 0x0123_4567_89ab_cdef_0123_4567_89ab_cdef;
+    let dir = tempfile::tempdir().expect("tempdir");
+    let current_name = aot_unit_file_name(hash);
+    let running = crate::emacs_core::pdump::fingerprint_hex();
+    assert!(
+        current_name.contains(running),
+        "the unit name carries the running fingerprint"
+    );
+    let legacy_name = format!("{hash:032x}_{ABI_TAG:08x}.so");
+    assert_ne!(current_name, legacy_name);
+    let stale_name = format!("{hash:032x}_{ABI_TAG:08x}_{}.so", "00".repeat(32));
+    let wrong_tag_name = format!("{hash:032x}_{:08x}_{running}.so", ABI_TAG ^ 1);
+    for name in [&current_name, &legacy_name, &stale_name, &wrong_tag_name] {
+        std::fs::write(dir.path().join(name), b"not a real object").expect("write");
+    }
+    let indexed = super::index_aot_dir(dir.path());
+    assert_eq!(indexed.len(), 1, "only this build's unit is indexed");
+    assert_eq!(
+        indexed
+            .get(&hash)
+            .and_then(|path| path.file_name())
+            .and_then(|n| n.to_str()),
+        Some(current_name.as_str())
+    );
+}
+
+/// A test binary is unstamped, so its pdump fingerprint is the shared
+/// placeholder. A unit named with that fingerprint but another
+/// `value_vec_slice_offsets` pair must not be indexed: those offsets are
+/// baked into the object.
+#[test]
+fn aot_unit_index_refuses_a_placeholder_fingerprint_with_foreign_vec_offsets() {
+    let hash: u128 = 0xfedc_ba98_7654_3210_fedc_ba98_7654_3210;
+    let dir = tempfile::tempdir().expect("tempdir");
+    let running = crate::emacs_core::pdump::fingerprint_hex();
+    assert!(
+        crate::emacs_core::pdump::fingerprint_is_placeholder(),
+        "this binary is unstamped, so the fingerprint is the placeholder"
+    );
+    let live = aot_unit_file_name(hash);
+    let fingerprint_only = format!("{hash:032x}_{ABI_TAG:08x}_{running}.so");
+    assert_ne!(
+        live, fingerprint_only,
+        "the slice offsets are part of an unstamped unit name"
+    );
+    let (pointer, length) = super::super::compile::jit_layout::heap::value_vec_slice_offsets()
+        .expect("this host publishes one slice pair");
+    let foreign = format!(
+        "{hash:032x}_{ABI_TAG:08x}_{running}_{:x}_{:x}.so",
+        pointer.wrapping_add(1),
+        length.wrapping_add(1),
+    );
+    assert_ne!(live, foreign);
+    for name in [&live, &fingerprint_only, &foreign] {
+        std::fs::write(dir.path().join(name), b"not a real object").expect("write");
+    }
+    let indexed = super::index_aot_dir(dir.path());
+    assert_eq!(indexed.len(), 1, "only the live slice pair is indexed");
+    assert_eq!(
+        indexed
+            .get(&hash)
+            .and_then(|path| path.file_name())
+            .and_then(|n| n.to_str()),
+        Some(live.as_str())
+    );
+}
+
+/// Two builds can share a pdump fingerprint and still disagree on
+/// `value_vec_slice_offsets`. The preload interlock carries that token.
+/// A foreign token, and a manifest that omits it, are refused.
+#[test]
+fn preload_interlock_refuses_a_foreign_vec_layout() {
+    let running = crate::emacs_core::pdump::fingerprint_hex();
+    let live = vec_slice_layout_token();
+    let foreign = match super::super::compile::jit_layout::heap::value_vec_slice_offsets() {
+        Some((pointer, length)) => {
+            format!("{:x}_{:x}", pointer.wrapping_add(1), length.wrapping_add(1))
+        }
+        None => "foreign".to_string(),
+    };
+    assert_ne!(live, foreign);
+
+    let manifest = |layout: Option<&str>| {
+        let mut text = format!(
+            "version {PRELOAD_MANIFEST_VERSION}\nabi_tag {ABI_TAG:08x}\nfingerprint {running}\n"
+        );
+        if let Some(layout) = layout {
+            text.push_str(&format!("vec_layout {layout}\n"));
+        }
+        text.push_str("leaves 1\n");
+        text.push_str(&manifest_leaf_line(
+            PreloadClass::Prewarm,
+            3,
+            1,
+            0xabc,
+            "member",
+        ));
+        text
+    };
+
+    let live_text = manifest(Some(&live));
+    assert!(
+        manifest_interlock_ok(&parse_preload_manifest(&live_text)),
+        "the running layout is admitted"
+    );
+    let mut seen = Vec::new();
+    assert!(for_each_manifest_member(&live_text, |name, _| {
+        seen.push(name.to_string())
+    }));
+    assert_eq!(seen, vec!["member".to_string()]);
+
+    let foreign_text = manifest(Some(&foreign));
+    assert!(
+        !manifest_interlock_ok(&parse_preload_manifest(&foreign_text)),
+        "a foreign slice pair is refused when the fingerprint matches"
+    );
+    let mut stale = Vec::new();
+    assert!(!for_each_manifest_member(&foreign_text, |name, _| {
+        stale.push(name.to_string())
+    }));
+    assert!(stale.is_empty());
+
+    assert!(
+        !manifest_interlock_ok(&parse_preload_manifest(&manifest(None))),
+        "a manifest with no layout token is refused"
+    );
+}
+
 /// The LIVE reloc set a test must pass to `load_leaf_from_unit` (audit #A):
 /// the function's own constant objects, re-collected in emit-time order.
 #[cfg(target_os = "linux")]
@@ -287,9 +421,7 @@ fn assert_aot_matches_interp_and_jit(ops: &[Op], constants: &[Value], nargs: usi
         .expect("compile ok")
         .expect("pure subset → Some");
     let dir = tempfile::tempdir().expect("tempdir");
-    let so_path = dir
-        .path()
-        .join(format!("{content_hash:032x}_{ABI_TAG:08x}.so"));
+    let so_path = dir.path().join(aot_unit_file_name(content_hash));
     link_object_to_so(&obj, &so_path).expect("link .so");
     // SAFETY: dlopen a `.so` we just emitted; pure leaf has no shim imports.
     let lib = unsafe { libloading::Library::new(&so_path) }.expect("dlopen");
@@ -317,10 +449,10 @@ fn assert_aot_matches_interp_and_jit(ops: &[Op], constants: &[Value], nargs: usi
         optional: Vec::new(),
         rest: None,
     });
-    f.lexical = true;
-    f.ops = ops.to_vec();
-    f.constants = constants.to_vec().into();
-    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
+    f.set_lexical(true);
+    f.set_ops(ops.to_vec());
+    f.set_constants(constants.to_vec().into());
+    f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
 
     let ctx_ptr = &mut eval as *mut Context as *mut u8;
     // For a 1-arg body sweep `args`; otherwise call once with the first
@@ -340,11 +472,11 @@ fn assert_aot_matches_interp_and_jit(ops: &[Op], constants: &[Value], nargs: usi
             let mut vm = Vm::from_context(&mut eval);
             vm.execute(&f, call.clone()).expect("interp").bits()
         };
-        let aot = match aot_leaf.call(ctx_ptr, &call) {
+        let aot = match unsafe { aot_leaf.call(ctx_ptr, &call) } {
             crate::emacs_core::jit::compile::NativeRun::Ok(b) => b,
             other => panic!("AOT not Ok: {other:?}"),
         };
-        let jit = match jit_leaf.call(ctx_ptr, &call) {
+        let jit = match unsafe { jit_leaf.call(ctx_ptr, &call) } {
             crate::emacs_core::jit::compile::NativeRun::Ok(b) => b,
             other => panic!("JIT not Ok: {other:?}"),
         };
@@ -480,9 +612,7 @@ fn aot_symbol_const_relocs_by_name_not_baked_sym_id() {
         panic!("symbol-bearing shim-free leaf must be AOT-runnable");
     };
     let dir = tempfile::tempdir().expect("tempdir");
-    let so_path = dir
-        .path()
-        .join(format!("{content_hash:032x}_{ABI_TAG:08x}.so"));
+    let so_path = dir.path().join(aot_unit_file_name(content_hash));
     link_object_to_so(&obj, &so_path).expect("link");
 
     // Grow the intern table BEFORE loading, so an emit-time-baked SymId for
@@ -525,7 +655,7 @@ fn aot_symbol_const_relocs_by_name_not_baked_sym_id() {
     // And the leaf returns the RIGHT symbol per branch, by IDENTITY (eq):
     // the rebuilt symbol must be the live obarray's 'aot-yes/'aot-no.
     let ctx_ptr = &mut eval as *mut crate::emacs_core::eval::Context as *mut u8;
-    let call = |arg: Value| match aot_leaf.call(ctx_ptr, &[arg]) {
+    let call = |arg: Value| match unsafe { aot_leaf.call(ctx_ptr, &[arg]) } {
         crate::emacs_core::jit::compile::NativeRun::Ok(b) => unsafe {
             /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
             Value::from_bits(b)
@@ -617,9 +747,7 @@ fn aot_reloc_bearing_leaf_rebuilds_string_const() {
         .expect("compile ok")
         .expect("reloc-bearing shim-free leaf → Some");
     let dir = tempfile::tempdir().expect("tempdir");
-    let so_path = dir
-        .path()
-        .join(format!("{content_hash:032x}_{ABI_TAG:08x}.so"));
+    let so_path = dir.path().join(aot_unit_file_name(content_hash));
     link_object_to_so(&obj, &so_path).expect("link .so");
     let lib = unsafe { libloading::Library::new(&so_path) }.expect("dlopen");
     let unit = std::sync::Arc::new(super::super::compile::LoadedUnit::new(lib));
@@ -645,7 +773,7 @@ fn aot_reloc_bearing_leaf_rebuilds_string_const() {
 
     // Calling the AOT leaf returns that exact "hello" object.
     let ctx_ptr = &mut eval as *mut crate::emacs_core::eval::Context as *mut u8;
-    let bits = match aot_leaf.call(ctx_ptr, &[Value::make_int(0)]) {
+    let bits = match unsafe { aot_leaf.call(ctx_ptr, &[Value::make_int(0)]) } {
         crate::emacs_core::jit::compile::NativeRun::Ok(b) => b,
         other => panic!("AOT reloc leaf not Ok: {other:?}"),
     };
@@ -694,9 +822,7 @@ fn aot_two_reloc_consts_rebuild_in_index_order() {
         return;
     };
     let dir = tempfile::tempdir().expect("tempdir");
-    let so_path = dir
-        .path()
-        .join(format!("{content_hash:032x}_{ABI_TAG:08x}.so"));
+    let so_path = dir.path().join(aot_unit_file_name(content_hash));
     link_object_to_so(&obj, &so_path).expect("link");
     let lib = unsafe { libloading::Library::new(&so_path) }.expect("dlopen");
     let unit = std::sync::Arc::new(super::super::compile::LoadedUnit::new(lib));
@@ -717,7 +843,7 @@ fn aot_two_reloc_consts_rebuild_in_index_order() {
 
     // And each branch returns the right rebuilt string.
     let ctx_ptr = &mut eval as *mut crate::emacs_core::eval::Context as *mut u8;
-    let call = |arg: Value| match aot_leaf.call(ctx_ptr, &[arg]) {
+    let call = |arg: Value| match unsafe { aot_leaf.call(ctx_ptr, &[arg]) } {
         crate::emacs_core::jit::compile::NativeRun::Ok(b) => unsafe {
             /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
             Value::from_bits(b)
@@ -784,10 +910,10 @@ fn aot_reloc_const_is_gc_rooted_via_compiled_walk() {
         optional: Vec::new(),
         rest: None,
     });
-    f.lexical = true;
-    f.ops = ops.clone();
-    f.constants = constants.clone().into();
-    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
+    f.set_lexical(true);
+    f.set_ops(ops.clone());
+    f.set_constants(constants.clone().into());
+    f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
 
     // Drive try_run_compiled so the AOT leaf is cached.
     let id = f.jit_runtime().compiled_id_or_assign();
@@ -825,7 +951,7 @@ fn aot_reloc_const_is_gc_rooted_via_compiled_walk() {
         "the AOT leaf's rebuilt reloc const must be a GC root (COMPILED walk)"
     );
 
-    super::super::cache::clear();
+    super::super::cache::clear_with_serial_receipt().expect("serial jit grace");
     test_support::reset();
 }
 
@@ -896,10 +1022,10 @@ fn aot_hit_serves_without_jitting_through_cache() {
         optional: Vec::new(),
         rest: None,
     });
-    f.lexical = true;
-    f.ops = ops.clone();
-    f.constants = constants.clone().into();
-    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
+    f.set_lexical(true);
+    f.set_ops(ops.clone());
+    f.set_constants(constants.clone().into());
+    f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
 
     let id = f.jit_runtime().compiled_id_or_assign();
     // SAFETY: `ctx` is the live `Context` this test owns; the call runs in this thread under the dormant-Context contract.
@@ -921,7 +1047,7 @@ fn aot_hit_serves_without_jitting_through_cache() {
         "cached leaf must be AOT-backed (served without JITing)"
     );
 
-    super::super::cache::clear();
+    super::super::cache::clear_with_serial_receipt().expect("serial jit grace");
     test_support::reset();
 }
 
@@ -945,10 +1071,10 @@ fn r2_enumerate_loadup_leaves_finds_d0_candidates() {
         optional: Vec::new(),
         rest: None,
     });
-    a.lexical = true;
-    a.ops = vec![Op::Constant(0), Op::Add, Op::Return];
-    a.constants = vec![Value::make_int(5)].into();
-    a.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
+    a.set_lexical(true);
+    a.set_ops(vec![Op::Constant(0), Op::Add, Op::Return]);
+    a.set_constants(vec![Value::make_int(5)].into());
+    a.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
     let a_id = neovm_value::intern::intern("r2-cand-add5");
     ev.obarray
         .set_symbol_function_id(a_id, Value::make_bytecode(a));
@@ -962,9 +1088,9 @@ fn r2_enumerate_loadup_leaves_finds_d0_candidates() {
         optional: vec![unsafe { SymId::from_raw(2) }],
         rest: None,
     });
-    b.lexical = true;
-    b.ops = vec![Op::StackRef(0), Op::Return];
-    b.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
+    b.set_lexical(true);
+    b.set_ops(vec![Op::StackRef(0), Op::Return]);
+    b.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
     let b_id = neovm_value::intern::intern("r2-noncand-optional");
     ev.obarray
         .set_symbol_function_id(b_id, Value::make_bytecode(b));
@@ -1079,10 +1205,10 @@ fn r2_prepopulate_native_from_call_1_and_survives_gc() {
         optional: Vec::new(),
         rest: None,
     });
-    a.lexical = true;
-    a.ops = ops.clone();
-    a.constants = constants.clone().into();
-    a.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
+    a.set_lexical(true);
+    a.set_ops(ops.clone());
+    a.set_constants(constants.clone().into());
+    a.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
     let sym = neovm_value::intern::intern("r2-prepop-add5");
     ev.obarray
         .set_symbol_function_id(sym, Value::make_bytecode(a));
@@ -1151,7 +1277,7 @@ fn r2_prepopulate_native_from_call_1_and_survives_gc() {
         "prepopulated leaf must still be AOT-backed after a GC"
     );
 
-    super::super::cache::clear();
+    super::super::cache::clear_with_serial_receipt().expect("serial jit grace");
     test_support::reset();
 }
 
@@ -1174,10 +1300,10 @@ fn r2_prepopulate_skips_on_preload_miss() {
         optional: Vec::new(),
         rest: None,
     });
-    a.lexical = true;
-    a.ops = vec![Op::Constant(0), Op::Add, Op::Return];
-    a.constants = vec![Value::make_int(5)].into();
-    a.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
+    a.set_lexical(true);
+    a.set_ops(vec![Op::Constant(0), Op::Add, Op::Return]);
+    a.set_constants(vec![Value::make_int(5)].into());
+    a.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
     let sym = neovm_value::intern::intern("r2-prepop-miss-add5");
     ev.obarray
         .set_symbol_function_id(sym, Value::make_bytecode(a));
@@ -1204,7 +1330,7 @@ fn r2_prepopulate_skips_on_preload_miss() {
         "a preload miss must leave the fn uncompiled (it will JIT normally)"
     );
 
-    super::super::cache::clear();
+    super::super::cache::clear_with_serial_receipt().expect("serial jit grace");
     test_support::reset();
 }
 
@@ -1239,10 +1365,10 @@ fn r2_prepopulate_never_overwrites_existing_jit_leaf() {
         optional: Vec::new(),
         rest: None,
     });
-    a.lexical = true;
-    a.ops = vec![Op::Constant(0), Op::Add, Op::Return];
-    a.constants = vec![Value::make_int(5)].into();
-    a.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
+    a.set_lexical(true);
+    a.set_ops(vec![Op::Constant(0), Op::Add, Op::Return]);
+    a.set_constants(vec![Value::make_int(5)].into());
+    a.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
     let sym = neovm_value::intern::intern("r2-prepop-nooverwrite-add5");
     ev.obarray
         .set_symbol_function_id(sym, Value::make_bytecode(a));
@@ -1317,15 +1443,15 @@ fn r2_prepopulate_never_overwrites_existing_jit_leaf() {
                 optional: Vec::new(),
                 rest: None,
             });
-            b.lexical = true;
-            b.ops = vec![Op::Constant(0), Op::Sub, Op::Return];
-            b.constants = vec![Value::make_int(1)].into();
-            b.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
+            b.set_lexical(true);
+            b.set_ops(vec![Op::Constant(0), Op::Sub, Op::Return]);
+            b.set_constants(vec![Value::make_int(1)].into());
+            b.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
             b
         }),
     );
 
-    super::super::cache::clear();
+    super::super::cache::clear_with_serial_receipt().expect("serial jit grace");
     test_support::reset();
 }
 
@@ -1446,10 +1572,10 @@ fn build_and_link_preload_writes_v2_prekey_manifest() {
             optional,
             rest: None,
         });
-        f.lexical = true;
-        f.ops = ops;
-        f.constants = consts.into();
-        f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
+        f.set_lexical(true);
+        f.set_ops(ops);
+        f.set_constants(consts.into());
+        f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
         f.seal_hand_assembled_ops();
         f
     };
@@ -1521,6 +1647,11 @@ fn build_and_link_preload_writes_v2_prekey_manifest() {
         Some(crate::emacs_core::pdump::fingerprint_hex()),
         "manifest carries the running fingerprint (stale interlock)"
     );
+    assert_eq!(
+        parsed.vec_layout.as_deref(),
+        Some(vec_slice_layout_token().as_str()),
+        "manifest carries the live Vec slice layout"
+    );
     let map = parsed
         .prekeys
         .expect("v2 manifest carries a well-formed pre-key map");
@@ -1585,10 +1716,10 @@ fn prepopulate_manifest_prefilter_skips_nonmember_without_hashing() {
             optional: Vec::new(),
             rest: None,
         });
-        f.lexical = true;
-        f.ops = ops;
-        f.constants = consts.into();
-        f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
+        f.set_lexical(true);
+        f.set_ops(ops);
+        f.set_constants(consts.into());
+        f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
         f.seal_hand_assembled_ops();
         f
     };
@@ -1649,7 +1780,7 @@ fn prepopulate_manifest_prefilter_skips_nonmember_without_hashing() {
         control.missed >= 1,
         "nonmember misses in control; got {control:?}"
     );
-    super::super::cache::clear();
+    super::super::cache::clear_with_serial_receipt().expect("serial jit grace");
 
     // FILTERED: inject the v2 pre-keys — `m` for the member, verified `x`
     // for the nonmember.
@@ -1705,7 +1836,7 @@ fn prepopulate_manifest_prefilter_skips_nonmember_without_hashing() {
         "nonmember stays uncompiled (it will JIT normally)"
     );
 
-    super::super::cache::clear();
+    super::super::cache::clear_with_serial_receipt().expect("serial jit grace");
     test_support::reset();
 }
 
@@ -1729,10 +1860,10 @@ fn prepopulate_prekey_mismatch_fails_closed_to_hash_path() {
         optional: Vec::new(),
         rest: None,
     });
-    f.lexical = true;
-    f.ops = ops.clone();
-    f.constants = consts.clone().into();
-    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
+    f.set_lexical(true);
+    f.set_ops(ops.clone());
+    f.set_constants(consts.clone().into());
+    f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
     let sym = neovm_value::intern::intern("pf-fc-add5");
     ev.obarray
         .set_symbol_function_id(sym, Value::make_bytecode(f));
@@ -1787,7 +1918,7 @@ fn prepopulate_prekey_mismatch_fails_closed_to_hash_path() {
         Some(true)
     );
 
-    super::super::cache::clear();
+    super::super::cache::clear_with_serial_receipt().expect("serial jit grace");
     test_support::reset();
 }
 
@@ -1803,10 +1934,15 @@ fn pgo_pred_body(callee: &str) -> crate::emacs_core::bytecode::ByteCodeFunction 
         optional: Vec::new(),
         rest: None,
     });
-    f.lexical = true;
-    f.ops = vec![Op::Constant(0), Op::StackRef(1), Op::Call(1), Op::Return];
-    f.constants = vec![Value::symbol(intern(callee))].into();
-    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
+    f.set_lexical(true);
+    f.set_ops(vec![
+        Op::Constant(0),
+        Op::StackRef(1),
+        Op::Call(1),
+        Op::Return,
+    ]);
+    f.set_constants(vec![Value::symbol(intern(callee))].into());
+    f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
     f
 }
 
@@ -1846,6 +1982,7 @@ fn pgo_runtime_emit_is_byte_identical_across_sessions_and_default_off() {
     for i in 0..40 {
         let _ = intern(&format!("pgo-eq-drift1-{i}"));
     }
+    let parked_c1 = c1.park_for_test();
     let mut c2 = Context::new(crate::test_utils::unit_runtime());
     for i in 0..123 {
         let _ = intern(&format!("pgo-eq-drift2-{i}"));
@@ -1853,10 +1990,14 @@ fn pgo_runtime_emit_is_byte_identical_across_sessions_and_default_off() {
     pgo_alias(&mut c2, "pgo-eq-callee", "recordp");
 
     let f = pgo_pred_body("pgo-eq-callee");
-    let (o1, h1) = compile_leaf_to_object(&f.ops, &f.constants, 1, Some(&c1.obarray))
+    let parked_c2 = c2.park_for_test();
+    let c1 = parked_c1.resume_for_test().expect("resume first session");
+    let (o1, h1) = compile_leaf_to_object(f.ops(), f.constants(), 1, Some(&c1.obarray))
         .expect("emit1 ok")
         .expect("emit1 some");
-    let (o2, h2) = compile_leaf_to_object(&f.ops, &f.constants, 1, Some(&c2.obarray))
+    drop(c1);
+    let c2 = parked_c2.resume_for_test().expect("resume second session");
+    let (o2, h2) = compile_leaf_to_object(f.ops(), f.constants(), 1, Some(&c2.obarray))
         .expect("emit2 ok")
         .expect("emit2 some");
     assert_eq!(h1, h2, "content hash must be session-independent");
@@ -1875,7 +2016,7 @@ fn pgo_drain_cap_bounds_count_and_exists_skips() {
     use neovm_value::intern::intern;
 
     let dir = tempfile::tempdir().expect("tempdir");
-    super::super::cache::clear();
+    super::super::cache::clear_with_serial_receipt().expect("serial jit grace");
     // A bare `(callee x)` is call-dominated → decline the JIT profit gate so it
     // enters the JIT set as the drain's spec-bearing source.
     super::super::compile::force_profit_gate_for_test(false);
@@ -1927,7 +2068,7 @@ fn pgo_drain_cap_bounds_count_and_exists_skips() {
         ".exists() skip → re-drain no-op"
     );
     assert_eq!(count_so(dir.path()), 2);
-    super::super::cache::clear();
+    super::super::cache::clear_with_serial_receipt().expect("serial jit grace");
 }
 
 /// `jit_compiled_ids` reports the proven-hot JIT set; a NON-compilable body is
@@ -1939,7 +2080,7 @@ fn pgo_jit_set_and_wrapper_default_off() {
     use neovm_value::intern::intern;
 
     let dir = tempfile::tempdir().expect("tempdir");
-    super::super::cache::clear();
+    super::super::cache::clear_with_serial_receipt().expect("serial jit grace");
     super::super::compile::force_profit_gate_for_test(false);
     let mut c = Context::new(crate::test_utils::unit_runtime());
     pgo_alias(&mut c, "pgo-set-callee", "recordp");
@@ -1976,7 +2117,7 @@ fn pgo_jit_set_and_wrapper_default_off() {
         1,
         "the core drains the same hot leaf when explicitly targeted"
     );
-    super::super::cache::clear();
+    super::super::cache::clear_with_serial_receipt().expect("serial jit grace");
 }
 
 /// An AOT leaf carries no GNU byte-offset map, so a `switch` jump table's

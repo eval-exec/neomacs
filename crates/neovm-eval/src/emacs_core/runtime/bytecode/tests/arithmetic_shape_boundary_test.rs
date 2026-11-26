@@ -62,8 +62,8 @@ fn function(name: &str, verified: bool) -> ByteCodeFunction {
     let nargs = usize::from(!matches!(name, "add1" | "sub1")) + 1;
     let descriptor = (nargs | (nargs << 8)) as i64;
     let mut function = ByteCodeFunction::new(parse_arglist_descriptor(descriptor));
-    function.ops = vec![opcode(name), Op::Return];
-    function.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(nargs);
+    function.set_ops(vec![opcode(name), Op::Return]);
+    function.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(nargs));
     function.seal_hand_assembled_ops_for_test();
     assert!(function.executes_sealed_ops());
     assert!(
@@ -228,7 +228,7 @@ fn arithmetic_shape_dynamic_native_and_precise_deopt_match_gnu() {
         let args = arguments(&mut ctx, &case);
         let function = &functions[case.operation];
         let ctx_ptr = &mut ctx as *mut Context as *mut u8;
-        let result = match leaves[case.operation].call(ctx_ptr, &args) {
+        let result = match unsafe { leaves[case.operation].call(ctx_ptr, &args) } {
             NativeRun::Ok(bits) => {
                 native_answers += 1;
                 Ok(unsafe {

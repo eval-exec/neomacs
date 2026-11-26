@@ -1,0 +1,11 @@
+error[E0200]: the trait `PublicationPayload` requires an `unsafe impl` declaration
+  --> tests/heap_capability_ui/c13_publication_payload_needs_unsafe_impl.rs:11:1
+   |
+11 | impl PublicationPayload for SafePayload {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: the trait `PublicationPayload` enforces invariants that the compiler can't check. Review the trait documentation and make sure this implementation upholds those invariants before adding the `unsafe` keyword
+help: add `unsafe` to this trait implementation
+   |
+11 | unsafe impl PublicationPayload for SafePayload {
+   | ++++++

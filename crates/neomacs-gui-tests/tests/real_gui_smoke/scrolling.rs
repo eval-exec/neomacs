@@ -29,13 +29,11 @@ fn assert_banner_round_trip(scenario: &str, image_height: u32) {
         return;
     };
     let root = super::workspace_root();
-    fs::create_dir_all(root.join("target/neomacs-gui-tests")).expect("GUI artifact root");
     // Never accept a screenshot or acknowledgement left by an earlier run.
-    let artifacts = root.join(format!(
+    let artifacts = neomacs_gui_tests::fresh_artifact_dir(root.join(format!(
         "target/neomacs-gui-tests/{scenario}-{}",
         std::process::id()
-    ));
-    fs::create_dir(&artifacts).expect("fresh scrolling artifact directory");
+    )));
     let session = DisplayHarness::for_backend(backend)
         .start_session(&artifacts)
         .expect("start GUI display");

@@ -9,7 +9,7 @@
 //! on the owner thread), `!Clone` (duplication is the named
 //! `duplicate_for_view`), and the fat-`Arc` size. Production mints are
 //! the evaluator's two World-construction paths, which go through
-//! `WorldLease::erase`; see the PROMOTION-LEDGER rows.
+//! `WorldLease::erase`.
 
 use std::fmt;
 use std::sync::Arc;

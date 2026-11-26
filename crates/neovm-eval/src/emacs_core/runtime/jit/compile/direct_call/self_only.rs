@@ -55,7 +55,11 @@ impl SelfSourceScope {
 
 /// The expected materialized callee is of the compiler's source. Lazy
 /// pdump stubs decline rather than materializing during this proof.
-pub(crate) fn expected_is_source(expected: u64, source: usize) -> bool {
+///
+/// # Safety
+/// `expected` must be the valid tagged bits of a live `Value` rooted by the
+/// active compilation snapshot.
+pub(crate) unsafe fn expected_is_source(expected: u64, source: usize) -> bool {
     unsafe {
         /* SAFETY: JIT constant-pool word */
         Value::from_bits(expected as usize)

@@ -19,7 +19,7 @@ fn org_fold_core_region_copy_narrow_edit_recovery_combo() {
           (org-fold-show-context-detail
            '((default . lineage)
              (isearch . lineage)
-             (bookmark-jump . lineage)))))
+             (bookmark-jump . lineage))))
       (org-mode)
       (insert "#+STARTUP: content hideblocks\n")
       (insert "* Alpha\n")
@@ -146,7 +146,7 @@ fn org_fold_core_region_copy_narrow_edit_recovery_combo() {
                 (split-string
                  (buffer-substring-no-properties
                   (point-min) (point-max))
-                 "\n" t))))))"##,
+                 "\n" t)))))))"##,
         expect,
     );
 }

@@ -773,3 +773,41 @@ fn tty_face_lifecycle_global_default_merge_forces_cached_default() {
     );
     terminal.finish();
 }
+
+/// GNU xfaces.c:3671-3698 validates an ordinary :font for FRAME=t but
+/// neither realizes nor stores it when the selected reference frame is a TTY.
+/// Reset sentinels still reach the separate ASET arm.
+#[test]
+fn tty_new_frame_font_defaults_validate_without_storing() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+    let terminal = TestTerminal::new();
+    let form = r##"(progn
+  (select-frame (make-terminal-frame
+    (list (cons 'tty (getenv "FACECACHE_TEST_TTY")) '(tty-type . "xterm-256color"))))
+  (let ((before-font (face-attribute 'default :font t))
+        (before-family (face-attribute 'default :family t)) rows)
+    (dolist (entry (list (cons 'named-string "Monospace-12")
+                        (cons 'missing-family-spec
+                          (font-spec :family "Neomacs Missing Family TTY" :size 14))
+                        (cons 'invalid-number 42)
+                        (cons 'invalid-nil nil)))
+      (let ((status (condition-case err
+                      (progn (set-face-attribute 'default t :font (cdr entry)) 'ok)
+                    (error (car err)))))
+        (push (list (car entry) status
+                    (equal before-font (face-attribute 'default :font t))
+                    (equal before-family (face-attribute 'default :family t))) rows)))
+    (set-face-attribute 'default t :font 'unspecified)
+    (list (null (window-system))
+          (equal (frame-parameter nil 'tty) (getenv "FACECACHE_TEST_TTY"))
+          (nreverse rows)
+          (face-attribute 'default :font t)
+          (equal before-family (face-attribute 'default :family t)))))"##;
+    common::assert_oracle_parity_with_env_expect(
+        form,
+        &[("FACECACHE_TEST_TTY", &terminal.name)],
+        expect_test::expect![[
+            r#""OK (t t ((named-string ok t t) (missing-family-spec ok t t) (invalid-number error t t) (invalid-nil error t t)) unspecified t)""#
+        ]],
+    );
+}

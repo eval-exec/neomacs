@@ -1,0 +1,5 @@
+error[E0599]: no associated function or constant named `new` found for struct `neovm_value::tagged::gc::heap_transfer::RestoredHeapBacking` in the current scope
+ --> tests/pentry_e2_loan_ui/transfer_restored_has_no_constructor.rs
+  |
+  |     let _value = RestoredHeapBacking::new();
+  |                                       ^^^ associated function or constant not found in `neovm_value::tagged::gc::heap_transfer::RestoredHeapBacking`

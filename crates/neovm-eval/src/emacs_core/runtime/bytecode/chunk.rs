@@ -43,6 +43,19 @@ pub(crate) fn lazy_gnu_decode_count_for_test() -> usize {
     LAZY_GNU_DECODE_COUNT.load(Ordering::Relaxed)
 }
 
+/// The published proof still describes this function. A missing proof
+/// does not. Callers that have not decoded yet must not use this as a
+/// reason to skip the decode.
+fn lazy_proof_matches_live_frame(func: &ByteCodeFunction, lazy: &LazyGnuCode) -> bool {
+    let Some(proof) = lazy.proof() else {
+        return false;
+    };
+    proof.max_stack() == func.max_stack().get()
+        && func
+            .verifier_entry_depth()
+            .is_some_and(|depth| proof.proves_depth(0, depth))
+}
+
 /// The upper cold decode boundary: it names the decoder/verifier and is the
 /// only place the lazy algorithm runs. The hot path calls it only on a
 /// `decoded_ready()` miss; the storage layer owns the cells and the inline
@@ -109,6 +122,19 @@ const _: () = assert!(
         == std::mem::size_of::<crate::emacs_core::jit::Runtime>()
 );
 
+/// What a function's lazy iterative admission says without being written
+/// ([`ByteCodeFunctionExt::peek_lazy_iterative_admission`]).
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum LazyAdmissionPeek {
+    /// Eager code: no lazy contract; the eager predicate decides.
+    Eager,
+    /// The answer, with nothing written.
+    Known(bool),
+    /// Only initializing the shared admission cell can answer.
+    Unknown,
+}
+
 /// Upper policy methods on the lowered bytecode storage (T1 storage cut).
 ///
 /// The storage definitions live in the value layer; decoding, verification,
@@ -139,6 +165,13 @@ pub(crate) trait ByteCodeFunctionExt {
     /// on the impl (required trait methods take no inline attribute).
     fn lazy_iterative_admission(&self, nargs: usize) -> Option<bool>;
 
+    /// What [`Self::lazy_iterative_admission`] can answer without writing:
+    /// every answer it would give, except the one that initializes the
+    /// shared admission cell, which is [`LazyAdmissionPeek::Unknown`]. A
+    /// caller that must not mutate a function another owner may be running
+    /// (a parallel owner's call classifier) reads this and never the probe.
+    fn peek_lazy_iterative_admission(&self, nargs: usize) -> LazyAdmissionPeek;
+
     /// Initialize the immutable iterative-admission proof on a lazy miss.
     ///
     /// UPPER policy: it reads the eager/lazy shape policy and, transitively,
@@ -156,8 +189,10 @@ pub(crate) trait ByteCodeFunctionExt {
     #[allow(dead_code)]
     fn disassemble(&self) -> String;
 
-    /// Resolve a switch hit through the standing proof.
-    fn verified_switch_pc(&self, raw: i64) -> Option<Option<usize>>;
+    /// Resolve a switch hit through the standing proof using the switch's
+    /// fall-through instruction index (`pc + 1`), whose proven depth equals
+    /// that switch's post-pop depth.
+    fn verified_switch_pc(&self, fallthrough_pc: usize, raw: i64) -> Option<Option<usize>>;
 
     /// Recompute the eager-instruction stack proof.
     fn refresh_stack_verification(&mut self);
@@ -203,7 +238,7 @@ impl ByteCodeFunctionExt for ByteCodeFunction {
     #[cfg(feature = "jit")]
     #[inline(always)]
     fn jit_constant_base(&self) -> *const neovm_value::value::Value {
-        self.constants.as_ptr()
+        self.constants().as_ptr()
     }
     /// Release already-validated GNU decoded IR until it is first needed.
     /// The original byte string remains the single source of truth.
@@ -212,29 +247,29 @@ impl ByteCodeFunctionExt for ByteCodeFunction {
             return;
         }
         assert!(
-            self.gnu_bytecode_bytes.is_some(),
+            self.gnu_bytecode_bytes().is_some(),
             "deferred GNU decode requires original bytecode bytes"
         );
-        self.ops = Vec::new();
+        self.set_ops(Vec::new());
         self.reset_to_deferred_gnu();
-        self.gnu_byte_offset_map = None;
+        self.set_gnu_byte_offset_map(None);
     }
     /// Operand-stack entry depth the verifier must assume, mirroring
     /// `run_frame`'s argument staging exactly: params-on-stack conventions
     /// seed `nonrest` slots plus one `&rest` list slot; pure dynamic-binding
     /// functions enter with an empty operand stack.
     fn verifier_entry_depth(&self) -> Option<usize> {
-        let params_on_stack = match &self.params {
+        let params_on_stack = match self.params() {
             FunctionParams::Stack(_) => true,
             FunctionParams::Dynamic(_) => false,
             FunctionParams::Named(_) => {
-                self.lexical
-                    || self.env.is_some()
-                    || matches!(self.arglist.kind(), ValueKind::Fixnum(_))
+                self.lexical()
+                    || self.env().is_some()
+                    || matches!(self.arglist().kind(), ValueKind::Fixnum(_))
             }
         };
         if params_on_stack {
-            self.params.stack_shape()?.entry_depth().ok()
+            self.params().stack_shape()?.entry_depth().ok()
         } else {
             Some(0)
         }
@@ -248,14 +283,41 @@ impl ByteCodeFunctionExt for ByteCodeFunction {
     /// prototype's admission, or consume admission from that prototype.
     #[inline(always)]
     fn lazy_iterative_admission(&self, nargs: usize) -> Option<bool> {
-        let lazy = self.lazy_gnu_code().as_ref()?;
-        if self.env.is_some() {
-            return Some(false);
+        match self.peek_lazy_iterative_admission(nargs) {
+            LazyAdmissionPeek::Eager => None,
+            LazyAdmissionPeek::Known(admitted) => Some(admitted),
+            LazyAdmissionPeek::Unknown => Some(self.initialize_lazy_iterative_admission(nargs)),
+        }
+    }
+
+    /// The cached projection, then the pure refusals the cold initializer
+    /// makes before it decodes or publishes anything (no stack shape, or
+    /// `nargs` outside `required..=nonrest`). Only what remains needs the
+    /// write.
+    #[inline(always)]
+    fn peek_lazy_iterative_admission(&self, nargs: usize) -> LazyAdmissionPeek {
+        let Some(lazy) = self.lazy_gnu_code().as_ref() else {
+            return LazyAdmissionPeek::Eager;
+        };
+        if self.env().is_some() {
+            return LazyAdmissionPeek::Known(false);
         }
         if let Some(range) = lazy.iterative_admission() {
-            return Some((*range).is_some_and(|range| range.accepts(nargs)));
+            // Published against the proof's max_stack. set_max_stack keeps
+            // the cell, so another live limit must not reuse the range.
+            let same_limit = lazy
+                .proof()
+                .is_some_and(|proof| proof.max_stack() == self.max_stack().get());
+            return LazyAdmissionPeek::Known(
+                same_limit && (*range).is_some_and(|range| range.accepts(nargs)),
+            );
         }
-        Some(self.initialize_lazy_iterative_admission(nargs))
+        match self.params().stack_shape() {
+            Some(shape) if shape.required() <= nargs && nargs <= shape.nonrest() => {
+                LazyAdmissionPeek::Unknown
+            }
+            _ => LazyAdmissionPeek::Known(false),
+        }
     }
 
     /// Initialize the immutable admission proof without imposing a save frame
@@ -267,8 +329,8 @@ impl ByteCodeFunctionExt for ByteCodeFunction {
             .lazy_gnu_code()
             .as_ref()
             .expect("lazy admission initialization needs GNU metadata");
-        debug_assert!(self.env.is_none());
-        let Some(shape) = self.params.stack_shape() else {
+        debug_assert!(self.env().is_none());
+        let Some(shape) = self.params().stack_shape() else {
             return false;
         };
         let required = shape.required();
@@ -279,17 +341,22 @@ impl ByteCodeFunctionExt for ByteCodeFunction {
         if nargs < required || nargs > nonrest {
             return false;
         }
-        let params_on_stack = match &self.params {
+        // A clone whose live shape is not this proof must not publish a
+        // refusal over the prototype's cell. A later matching call still can.
+        if lazy.proof().is_some() && !lazy_proof_matches_live_frame(self, lazy) {
+            return false;
+        }
+        let params_on_stack = match self.params() {
             FunctionParams::Stack(_) => true,
             FunctionParams::Dynamic(_) => false,
             FunctionParams::Named(_) => {
-                self.lexical || matches!(self.arglist.kind(), ValueKind::Fixnum(_))
+                self.lexical() || matches!(self.arglist().kind(), ValueKind::Fixnum(_))
             }
         };
         let range = if !shape.rest().is_present()
             && (nonrest == 0 || params_on_stack)
-            && nonrest <= self.max_stack.get()
-            && self.max_stack <= StackDepth::ITERATIVE_FRAME_LIMIT
+            && nonrest <= self.max_stack().get()
+            && self.max_stack() <= StackDepth::ITERATIVE_FRAME_LIMIT
             && self.executes_sealed_ops()
             && self.executes_verified_ops()
         {
@@ -310,41 +377,59 @@ impl ByteCodeFunctionExt for ByteCodeFunction {
     }
 
     /// Whether `executable_ops` returns instructions with a standing
-    /// `verify_stack_effects` proof. Resolves the lazy decode if needed —
-    /// callers are classification-time, never the dispatch hot path.
+    /// `verify_stack_effects` proof for this function's live entry depth
+    /// and `max_stack`. Resolves the lazy decode if needed — callers are
+    /// classification-time, never the dispatch hot path.
     fn executes_verified_ops(&self) -> bool {
         match &self.lazy_gnu_code() {
             Some(lazy) => {
-                if let Some(decoded) = lazy.decoded_ready() {
-                    return decoded.stack_verified();
-                }
-                let raw_bytes = self
-                    .gnu_bytecode_bytes
-                    .as_deref()
-                    .expect("lazy GNU bytecode lost its original bytes");
-                decode_lazy_gnu_code(
-                    lazy,
-                    raw_bytes,
-                    self.constants.len(),
-                    || (self.verifier_entry_depth(), self.constants.as_slice()),
-                    self.max_stack.get(),
-                )
-                .stack_verified()
+                let verified = if let Some(decoded) = lazy.decoded_ready() {
+                    decoded.stack_verified()
+                } else {
+                    let raw_bytes = self
+                        .gnu_bytecode_bytes()
+                        .map(|bytes| bytes.as_slice())
+                        .expect("lazy GNU bytecode lost its original bytes");
+                    decode_lazy_gnu_code(
+                        lazy,
+                        raw_bytes,
+                        self.constants().len(),
+                        || (self.verifier_entry_depth(), self.constants().as_slice()),
+                        self.max_stack().get(),
+                    )
+                    .stack_verified()
+                };
+                // The flag is the decode's answer. A setter can keep the
+                // cell after params, env, or max_stack change.
+                verified && lazy_proof_matches_live_frame(self, lazy)
             }
             None => self.stack_verified(),
         }
     }
     /// Resolve a switch hit through the standing proof, if this function has
-    /// one. All its reachable switches share the post-pop depth recorded at
-    /// verification, so this needs no live depth from the dispatch arm.
-    /// A mutated table may name any instruction proven at that fixed depth.
-    /// Admitted values use the pre-resolved table; only new values search
-    /// the byte-offset map on the cold path.
+    /// one.
+    ///
+    /// Soundness invariant: at the moment `Op::Switch` executes at instruction
+    /// `pc`, `fallthrough_pc == pc + 1` and the live operand depth after
+    /// popping the switch's two operands equals `proof.proven_depth(pc + 1)`
+    /// (proven by `verify_stack_effects_with_tables` on the fall-through edge;
+    /// `seal_ops` guarantees `pc + 1 < ops.len()`). Requiring
+    /// `proof.proves_depth(target, depth)` therefore ensures that even when a
+    /// jump table is mutated at runtime (`puthash`), the jump can land only on
+    /// an instruction whose proven depth equals THIS switch's exact post-pop
+    /// depth. This is strictly stronger than a single function-wide
+    /// `switch_depth` check: a mutated table at Switch A (depth `d1`) cannot
+    /// jump to a target proven only at Switch B's depth (`d2 != d1`).
+    /// Admitted values use the pre-resolved table; only new values search the
+    /// byte-offset map on the cold path.
     ///
     /// The outer `None` leaves unverified/eager functions with the checked
     /// resolver's existing behavior. `Some(None)` rejects an unsafe target.
+    /// The verified driver reaches this only when the live shape still
+    /// matches the proof. The checked driver does not use this target; it
+    /// keeps its own operand checks.
     #[inline(never)]
-    fn verified_switch_pc(&self, raw: i64) -> Option<Option<usize>> {
+    fn verified_switch_pc(&self, fallthrough_pc: usize, raw: i64) -> Option<Option<usize>> {
         let lazy = self.lazy_gnu_code().as_ref()?;
         let decoded = lazy.decoded_ready()?;
         if !decoded.stack_verified() {
@@ -355,7 +440,7 @@ impl ByteCodeFunctionExt for ByteCodeFunction {
                 Some(target) => target,
                 None => decoded.unadmitted_switch_target(raw)?,
             };
-            let depth = proof.switch_depth()?;
+            let depth = proof.proven_depth(fallthrough_pc)?;
             proof.proves_depth(target, depth).then_some(target)
         }))
     }
@@ -364,7 +449,7 @@ impl ByteCodeFunctionExt for ByteCodeFunction {
     /// (params/lexical/arglist/env/max_stack) has its final value.
     fn refresh_stack_verification(&mut self) {
         let stack_verified = self.verifier_entry_depth().is_some_and(|depth| {
-            super::decode::verify_stack_effects(&self.ops, depth, self.max_stack.get())
+            super::decode::verify_stack_effects(self.ops(), depth, self.max_stack().get())
         });
         unsafe { self.set_stack_verified(stack_verified) };
     }
@@ -375,13 +460,15 @@ impl ByteCodeFunctionExt for ByteCodeFunction {
     /// `ops` and `constants` are both in place; no-op for GNU-backed or
     /// already-sealed functions.
     fn seal_hand_assembled_ops(&mut self) {
-        if self.executes_sealed_ops() || self.gnu_bytecode_bytes.is_some() {
+        if self.executes_sealed_ops() || self.gnu_bytecode_bytes().is_some() {
             return;
         }
-        self.ops = super::decode::seal_ops(std::mem::take(&mut self.ops), self.constants.len());
+        let constants_len = self.constants().len();
+        let ops = super::decode::seal_ops(std::mem::take(self.ops_mut()), constants_len);
+        self.set_ops(ops);
         unsafe { self.mark_ops_sealed() };
         let stack_verified = self.verifier_entry_depth().is_some_and(|depth| {
-            super::decode::verify_stack_effects(&self.ops, depth, self.max_stack.get())
+            super::decode::verify_stack_effects(self.ops(), depth, self.max_stack().get())
         });
         unsafe { self.set_stack_verified(stack_verified) };
     }
@@ -400,27 +487,34 @@ impl ByteCodeFunctionExt for ByteCodeFunction {
     /// invalid empty eager function.
     fn restore_gnu_decode_policy(&mut self) -> Result<(), super::decode::DecodeError> {
         self.clear_lazy_gnu_code();
+        // Hold the original bytes in a local. The decoder also needs a
+        // mutable constant pool, and that borrow covers the whole function.
         let raw_bytes = self
-            .gnu_bytecode_bytes
-            .as_deref()
+            .take_gnu_bytecode_bytes()
             .expect("restored GNU bytecode requires original bytes");
-        if eager_gnu_bytecode() {
-            let (ops, byte_offset_map) = super::decode::decode_gnu_bytecode_with_offset_map(
-                raw_bytes,
-                &mut self.constants.ensure_owned(),
-            )?;
-            self.ops = ops;
-            unsafe { self.mark_ops_sealed() };
-            let stack_verified = self.verifier_entry_depth().is_some_and(|depth| {
-                super::decode::verify_stack_effects(&self.ops, depth, self.max_stack.get())
-            });
-            unsafe { self.set_stack_verified(stack_verified) };
-            self.gnu_byte_offset_map = Some(byte_offset_map);
+        let decoded = if eager_gnu_bytecode() {
+            super::decode::decode_gnu_bytecode_with_offset_map(
+                raw_bytes.as_slice(),
+                &mut self.constants_mut().ensure_owned(),
+            )
+            .map(Some)
         } else {
-            self.ops.clear();
+            Ok(None)
+        };
+        self.set_gnu_bytecode_bytes(Some(raw_bytes));
+        let Some((ops, byte_offset_map)) = decoded? else {
+            self.ops_mut().clear();
             self.reset_to_deferred_gnu();
-            self.gnu_byte_offset_map = None;
-        }
+            self.set_gnu_byte_offset_map(None);
+            return Ok(());
+        };
+        self.set_ops(ops);
+        unsafe { self.mark_ops_sealed() };
+        let stack_verified = self.verifier_entry_depth().is_some_and(|depth| {
+            super::decode::verify_stack_effects(self.ops(), depth, self.max_stack().get())
+        });
+        unsafe { self.set_stack_verified(stack_verified) };
+        self.set_gnu_byte_offset_map(Some(byte_offset_map));
         Ok(())
     }
     /// Executable instructions, decoding a cold GNU byte string on first use.
@@ -432,21 +526,21 @@ impl ByteCodeFunctionExt for ByteCodeFunction {
                     Some(decoded) => decoded,
                     None => {
                         let raw_bytes = self
-                            .gnu_bytecode_bytes
-                            .as_deref()
+                            .gnu_bytecode_bytes()
+                            .map(|bytes| bytes.as_slice())
                             .expect("lazy GNU bytecode lost its original bytes");
                         decode_lazy_gnu_code(
                             lazy,
                             raw_bytes,
-                            self.constants.len(),
-                            || (self.verifier_entry_depth(), self.constants.as_slice()),
-                            self.max_stack.get(),
+                            self.constants().len(),
+                            || (self.verifier_entry_depth(), self.constants().as_slice()),
+                            self.max_stack().get(),
                         )
                     }
                 };
                 decoded.ops()
             }
-            None => &self.ops,
+            None => self.ops(),
         }
     }
     /// GNU byte offsets corresponding to [`Self::executable_ops`].
@@ -458,22 +552,22 @@ impl ByteCodeFunctionExt for ByteCodeFunction {
                     Some(decoded) => decoded,
                     None => {
                         let raw_bytes = self
-                            .gnu_bytecode_bytes
-                            .as_deref()
+                            .gnu_bytecode_bytes()
+                            .map(|bytes| bytes.as_slice())
                             .expect("lazy GNU bytecode lost its original bytes");
                         decode_lazy_gnu_code(
                             lazy,
                             raw_bytes,
-                            self.constants.len(),
-                            || (self.verifier_entry_depth(), self.constants.as_slice()),
-                            self.max_stack.get(),
+                            self.constants().len(),
+                            || (self.verifier_entry_depth(), self.constants().as_slice()),
+                            self.max_stack().get(),
                         )
                     }
                 };
                 let map = decoded.byte_offset_map();
                 (!map.is_empty()).then_some(map)
             }
-            None => self.gnu_byte_offset_map.as_deref(),
+            None => self.gnu_byte_offset_map(),
         }
     }
     /// Disassemble to a human-readable string.
@@ -483,14 +577,14 @@ impl ByteCodeFunctionExt for ByteCodeFunction {
         out.push_str(&format!(
             "bytecode function ({} ops, {} constants, stack {})\n",
             ops.len(),
-            self.constants.len(),
-            self.max_stack
+            self.constants().len(),
+            self.max_stack()
         ));
 
         out.push_str("constants:\n");
         // Same GNU `prin1` (print-escape-newlines t) the code lines use,
         // never the value layer's `<Value>` Display placeholder.
-        for (i, c) in self.constants.iter().enumerate() {
+        for (i, c) in self.constants().iter().enumerate() {
             out.push_str(&format!(
                 "  {}: {}\n",
                 i,
@@ -505,7 +599,7 @@ impl ByteCodeFunctionExt for ByteCodeFunction {
             out.push_str(&format!(
                 "  {:4}: {}\n",
                 i,
-                op.disasm_in(&self.constants, ops.get(i + 1))
+                op.disasm_in(self.constants(), ops.get(i + 1))
             ));
         }
         out

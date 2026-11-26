@@ -14,6 +14,11 @@ use neovm_edit::buffer::{BufferId, BufferManager, LispCharPos1};
 use neovm_value::value::Value;
 use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 
+/// Canonical NS frames reserve two internal pixels on every edge
+/// (GNU nsfns.m:1348); the GTK3 profile defaults to zero.
+pub(crate) const GUI_DEFAULT_INTERNAL_BORDER_WIDTH: u32 =
+    if cfg!(target_os = "macos") { 2 } else { 0 };
+
 pub(crate) mod body;
 mod chrome;
 pub use chrome::WindowChromePresence;
@@ -63,7 +68,7 @@ pub(crate) use size::{
     HorizontalScroll, SplitSizeError, SplitSizes, WindowPixelOperation, WindowPixels,
     WindowSizeError,
 };
-pub use size::{NewTotalUpdate, WindowPixelStage, WindowTotal};
+pub(crate) use size::{NewTotalUpdate, WindowPixelStage, WindowTotal};
 pub mod split;
 mod string_property_input;
 mod word_wrap;
@@ -78,33 +83,32 @@ pub use part::{
     WindowPartGeometry,
 };
 use sibling_layout::{ChildExtent, sibling_bounds};
-pub use split::{CombinationLimit, DeleteOutcome, DeleteResize, ParentSeal, SplitAttachment};
+pub(crate) use split::{CombinationLimit, DeleteOutcome, DeleteResize, SplitAttachment};
 
 mod display_ext;
+pub(crate) use display_ext::DisplayFrameManagerCrateExt;
 #[cfg(test)]
 pub(crate) use display_ext::DisplayFrameTestExt;
+pub(crate) use display_ext::DisplayWindowTreeExt;
 #[doc(hidden)]
 pub use display_ext::resize_pixelwise_with_buffer_constraints;
-pub use display_ext::{
-    DisplayFrameExt, DisplayFrameManagerExt, DisplayWindowExt, DisplayWindowTreeExt,
-};
+pub use display_ext::{DisplayFrameExt, DisplayFrameManagerExt, DisplayWindowExt};
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) use display_ext::{
     commit_redisplay_cache_for_test, prepare_and_activate_display_presentation_for_test,
     replace_redisplay_cache_for_test,
 };
 
-pub use display::{WindowBufferDisplayDefaults, WindowFringeDefaults, WindowScrollBarDefaults};
-pub(crate) use display::{frame_config_scroll_bar_height, frame_config_scroll_bar_width};
-pub use frame_params::{
-    CursorTypeSymbol, FrameFullscreen, FrameParam, FrameParamKey, FrameToolBarPosition,
-    FrameZGroup, GNU_FRAME_PARAM_COUNT, GNU_FRAME_PARAMS,
+pub(crate) use display::{
+    WindowBufferDisplayDefaults, WindowFringeDefaults, WindowScrollBarDefaults,
 };
+pub(crate) use display::{frame_config_scroll_bar_height, frame_config_scroll_bar_width};
+pub use frame_params::{CursorTypeSymbol, FrameFullscreen, FrameParam, FrameParamKey};
 pub(crate) use neovm_eval::emacs_core::eval::data::window_layout_query::WindowLayoutQueryAdapter;
 pub use neovm_eval::emacs_core::eval::data::window_state::WindowScrollBarGeometry;
-pub use scroll_bar::{
-    HorizontalScrollBarType, VerticalScrollBarType, is_valid_horizontal_scroll_bar_value,
-    is_valid_vertical_scroll_bar_value,
+pub use scroll_bar::{HorizontalScrollBarType, VerticalScrollBarType};
+pub(crate) use scroll_bar::{
+    is_valid_horizontal_scroll_bar_value, is_valid_vertical_scroll_bar_value,
 };
 
 // ---------------------------------------------------------------------------
@@ -128,10 +132,12 @@ pub(crate) use neovm_eval::emacs_core::eval::data::window_state::{
 
 static_assertions::assert_eq_size!(WindowSequenceOrigin, WindowId);
 
-pub use neovm_value::display_vocab::FrameId;
+pub use neovm_value::display_vocab::{FrameId, GuiResizeRequestId};
 
 pub(crate) use neovm_eval::emacs_core::eval::data::window_state::GuiResizeDelivery;
-pub use neovm_eval::emacs_core::eval::data::window_state::{GuiBarPresentation, PendingGuiResize};
+pub use neovm_eval::emacs_core::eval::data::window_state::{
+    FrameCreationPhase, GuiBarPresentation, PendingGuiResize,
+};
 
 pub mod frame_alpha;
 
@@ -157,8 +163,8 @@ pub(crate) use neovm_eval::emacs_core::eval::data::window_state::{
 pub struct RenderFrameNode {
     pub frame_id: FrameId,
     pub parent_id: Option<FrameId>,
-    pub origin_in_root_x: f32,
-    pub origin_in_root_y: f32,
+    pub(crate) origin_in_root_x: f32,
+    pub(crate) origin_in_root_y: f32,
     pub z_order: i32,
 }
 
@@ -187,13 +193,13 @@ pub use neovm_value::display_vocab::RenderFrameVisibility;
 pub use neovm_value::display_vocab::FRAME_ID_BASE;
 
 /// GNU `DEFAULT_TOOL_BAR_LABEL_SIZE` in `src/dispextern.h`.
-pub const DEFAULT_TOOL_BAR_LABEL_SIZE: f32 = 14.0;
+pub(crate) const DEFAULT_TOOL_BAR_LABEL_SIZE: f32 = 14.0;
 /// GNU `DEFAULT_TOOL_BAR_BUTTON_MARGIN` in `src/dispextern.h`.
-pub const DEFAULT_TOOL_BAR_BUTTON_MARGIN: f32 = 4.0;
+pub(crate) const DEFAULT_TOOL_BAR_BUTTON_MARGIN: f32 = 4.0;
 /// GNU `DEFAULT_TOOL_BAR_BUTTON_RELIEF` in `src/dispextern.h`.
-pub const DEFAULT_TOOL_BAR_BUTTON_RELIEF: f32 = 1.0;
+pub(crate) const DEFAULT_TOOL_BAR_BUTTON_RELIEF: f32 = 1.0;
 /// GNU `DEFAULT_TOOL_BAR_IMAGE_HEIGHT` in `src/dispextern.h`.
-pub const DEFAULT_TOOL_BAR_IMAGE_HEIGHT: f32 = 24.0;
+pub(crate) const DEFAULT_TOOL_BAR_IMAGE_HEIGHT: f32 = 24.0;
 
 pub fn default_gui_tool_bar_line_height(font_pixel_size: f32) -> u32 {
     let scale = if font_pixel_size.is_finite() && font_pixel_size > 0.0 {
@@ -239,8 +245,8 @@ impl SplitPlacement {
 // ---------------------------------------------------------------------------
 
 pub use neovm_eval::emacs_core::eval::data::window_state::{
-    LogicalCursorDimensions, WindowCursorKind, WindowCursorPos, WindowCursorSnapshot,
-    WindowDisplayState, WindowRedisplayOutput, WindowVisibleBufferSpan,
+    GnuWindowAccuracy, LogicalCursorDimensions, WindowCursorKind, WindowCursorPos,
+    WindowCursorSnapshot, WindowDisplayState, WindowRedisplayOutput, WindowVisibleBufferSpan,
 };
 
 /// Explicit live redisplay/update session for one window.
@@ -263,7 +269,7 @@ impl<'a> WindowOutputUpdate<'a> {
         self.display.begin_window_output_update();
     }
 
-    pub fn output_cursor_to(&mut self, pos: WindowCursorPos) {
+    pub(crate) fn output_cursor_to(&mut self, pos: WindowCursorPos) {
         self.display.output_cursor_to(pos);
     }
 
@@ -282,18 +288,12 @@ impl<'a> WindowOutputUpdate<'a> {
         }
     }
 
-    pub fn install_logical_cursor(&mut self, cursor: Option<WindowCursorPos>) {
+    pub(crate) fn install_logical_cursor(&mut self, cursor: Option<WindowCursorPos>) {
         self.display.install_logical_cursor(cursor);
     }
 
-    pub fn apply_physical_cursor_snapshot(&mut self, cursor: Option<WindowCursorSnapshot>) {
+    pub(crate) fn apply_physical_cursor_snapshot(&mut self, cursor: Option<WindowCursorSnapshot>) {
         self.display.apply_physical_cursor_snapshot(cursor);
-    }
-
-    fn fallback_output_cursor_from_snapshot(&mut self, snapshot: &WindowDisplaySnapshot) {
-        if self.display.output_cursor.is_none() {
-            self.replay_output_rows(&snapshot.rows);
-        }
     }
 
     pub fn finalize_live_update(
@@ -306,19 +306,7 @@ impl<'a> WindowOutputUpdate<'a> {
         self.commit();
     }
 
-    pub fn finalize_with_output_fallback(
-        &mut self,
-        logical_cursor: Option<WindowCursorPos>,
-        phys_cursor: Option<WindowCursorSnapshot>,
-        output_fallback: &WindowDisplaySnapshot,
-    ) {
-        self.install_logical_cursor(logical_cursor);
-        self.apply_physical_cursor_snapshot(phys_cursor);
-        self.fallback_output_cursor_from_snapshot(output_fallback);
-        self.commit();
-    }
-
-    pub fn replay_snapshot(&mut self, snapshot: &WindowDisplaySnapshot) {
+    pub(crate) fn replay_snapshot(&mut self, snapshot: &WindowDisplaySnapshot) {
         self.begin_update();
         self.install_logical_cursor(snapshot.logical_cursor_pos());
         self.replay_output_rows(&snapshot.rows);
@@ -414,6 +402,7 @@ fn window_redisplay_output_from_snapshot(
     window_end: WindowEndRecord,
 ) -> WindowRedisplayOutput {
     WindowRedisplayOutput {
+        gnu_accuracy: None,
         generation,
         window_end,
         visible_span: snapshot.visible_buffer_span(),
@@ -550,7 +539,7 @@ static_assertions::assert_impl_all!(WindowDisplaySnapshot: Send, Sync, Clone, st
 static_assertions::assert_not_impl_any!(WindowDisplaySnapshot: Copy);
 
 pub use neovm_eval::emacs_core::eval::data::window_state::{
-    BodyRedisplayRevision, ForcedBodyRedisplay,
+    BodyRedisplayRevision, ForcedBodyRedisplay, RedisplayOptimizationsRevision,
 };
 
 /// Canonical logical input identity for one speculative layout leaf.
@@ -626,9 +615,9 @@ impl WindowLayoutAttemptFreshness {
 /// The variants encode GNU redisplay's ordering contract.  Buffer-body Lisp
 /// runs while rows are still being produced, so every logical input must stay
 /// unchanged.  Window chrome runs after GNU has completed the body
-/// (`redisplay_window` -> `display_mode_lines`, xdisp.c): status-line helpers
-/// may populate window-local caches or lazily load functions without making
-/// the body GNU would publish invalid.
+/// (`redisplay_window` -> `display_mode_lines`, xdisp.c). Late source edits
+/// do not rewind that completed body. Ownership, physical layout and realized
+/// resources must still match; admission does not refresh its reuse certificate.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WindowLayoutLispBoundary {
     BufferBody,
@@ -655,26 +644,60 @@ impl WindowLayoutAttemptFreshness {
     /// given GNU redisplay boundary.
     ///
     /// Keep this projection closed over the complete freshness value: newly
-    /// added fields participate in the final equality automatically.  The two
-    /// assignments below are the only explicitly permitted late-chrome
-    /// mutations.
+    /// added fields participate in the final equality automatically. Late
+    /// source changes are admitted only after body production. The original
+    /// token still describes the producer's inputs and must remain the row
+    /// reuse certificate; this check never rebases it to the callback's state.
     pub fn remains_valid_across(&self, after: &Self, boundary: WindowLayoutLispBoundary) -> bool {
         match boundary {
             WindowLayoutLispBoundary::BufferBody => self == after,
             WindowLayoutLispBoundary::WindowChrome => {
                 let mut expected_after = self.clone();
-                // GNU tab-line.el writes window-local caches such as
-                // `tab-line-buffers` while `display_mode_lines` is formatting
-                // chrome.  Face filters observe the new identity on the next
-                // redisplay; GNU does not rewind the body already produced.
+                // GNU finishes body rows before display_mode_lines, and reacts
+                // there to chrome height changes rather than source revisions
+                // (xdisp.c:21419-21483 at the pinned oracle commit). Keep both
+                // buffer owners: an echo source is not always the live buffer.
+                expected_after.live_buffer =
+                    Self::late_chrome_source(&self.live_buffer, &after.live_buffer);
+                expected_after.source_buffer =
+                    Self::late_chrome_source(&self.source_buffer, &after.source_buffer);
+                expected_after.source_layout_variables = after.source_layout_variables;
+                // Late edits can move the existing start/point markers. Scroll
+                // settings, partitions and allocated capacity remain strict.
+                expected_after.window.window_start = after.window.window_start;
+                expected_after.window.point = after.window.point;
                 expected_after.window.window_parameters_generation =
                     after.window.window_parameters_generation;
-                // Chrome evaluation can autoload its formatter.  The emitted
-                // chrome already used the loaded definition, while the body
-                // precedes this phase in GNU and is not replayed.
+                expected_after.window.char_table_mutation_epoch =
+                    after.window.char_table_mutation_epoch;
+                // A formatter may autoload while producing the shown chrome.
                 expected_after.function_epoch = after.function_epoch;
                 &expected_after == after
             }
+        }
+    }
+
+    fn late_chrome_source(
+        before: &WindowBufferLayoutInputState,
+        after: &WindowBufferLayoutInputState,
+    ) -> WindowBufferLayoutInputState {
+        // Enumerate source fields so extending this record requires an explicit
+        // admission audit. A changed identity still fails final full equality.
+        WindowBufferLayoutInputState {
+            id: before.id,
+            modified_tick: after.modified_tick,
+            chars_modified_tick: after.chars_modified_tick,
+            props_modified_tick: after.props_modified_tick,
+            overlay_modified_tick: after.overlay_modified_tick,
+            accessible_chars: after.accessible_chars,
+            accessible_bytes: after.accessible_bytes,
+            total_chars: after.total_chars,
+            total_emacs_bytes: after.total_emacs_bytes,
+            fontification_functions: after.fontification_functions.clone(),
+            prefixes: after.prefixes.clone(),
+            invisibility: after.invisibility.clone(),
+            display_table: after.display_table.clone(),
+            word_wrap_policy: after.word_wrap_policy.clone(),
         }
     }
 }
@@ -715,7 +738,7 @@ impl FrameDivider {
     }
 }
 
-pub use neovm_eval::emacs_core::eval::data::window_state::{Frame, FrameManager};
+pub use neovm_eval::emacs_core::eval::data::window_state::{Frame, FrameManager, ToolkitToolBar};
 
 pub use neovm_eval::emacs_core::eval::data::window_state::FrameCoordinateHit;
 
@@ -1317,7 +1340,7 @@ fn find_first_child_in_tree(
 }
 
 /// Return the parent of WINDOW-ID inside FRAME, if any.
-pub fn window_parent_id(frame: &Frame, window_id: WindowId) -> Option<WindowId> {
+pub(crate) fn window_parent_id(frame: &Frame, window_id: WindowId) -> Option<WindowId> {
     if frame.minibuffer_window == Some(window_id) {
         return None;
     }
@@ -1325,7 +1348,7 @@ pub fn window_parent_id(frame: &Frame, window_id: WindowId) -> Option<WindowId> 
 }
 
 /// Return the first child of WINDOW-ID when it is combined in DIRECTION.
-pub fn window_first_child_id(
+pub(crate) fn window_first_child_id(
     frame: &Frame,
     window_id: WindowId,
     direction: SplitDirection,
@@ -1337,7 +1360,7 @@ pub fn window_first_child_id(
 }
 
 /// Return the next sibling of WINDOW-ID, if any.
-pub fn window_next_sibling_id(frame: &Frame, window_id: WindowId) -> Option<WindowId> {
+pub(crate) fn window_next_sibling_id(frame: &Frame, window_id: WindowId) -> Option<WindowId> {
     if frame.minibuffer_window == Some(window_id) {
         return None;
     }
@@ -1348,7 +1371,7 @@ pub fn window_next_sibling_id(frame: &Frame, window_id: WindowId) -> Option<Wind
 }
 
 /// Return the previous sibling of WINDOW-ID, if any.
-pub fn window_prev_sibling_id(frame: &Frame, window_id: WindowId) -> Option<WindowId> {
+pub(crate) fn window_prev_sibling_id(frame: &Frame, window_id: WindowId) -> Option<WindowId> {
     if frame.minibuffer_window == Some(window_id) {
         return frame
             .minibuffer_leaf
@@ -1576,7 +1599,7 @@ pub fn window_resize_check(
 /// Apply only character-grid sizes and edges, like GNU window_resize_apply_total.
 /// Pixel geometry was already committed by window_resize_apply and must not
 /// be reconstructed from rounded cell counts.
-pub fn window_resize_apply_total(
+pub(crate) fn window_resize_apply_total(
     tree: &mut WindowTree,
     id: WindowId,
     horflag: bool,

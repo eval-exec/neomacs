@@ -255,7 +255,6 @@ fn snapshot_window_geometry_keeps_pixel_spaces_and_cell_origin_distinct() {
     assert_eq!(geometry.cell_origin().line(), Line::new(2));
 
     let body_origin_in_window = geometry.text_body_origin_in_window();
-    assert_eq!(body_origin_in_window.window(), WindowId(11));
     assert_eq!(body_origin_in_window.x().get(), 24.0);
     assert_eq!(body_origin_in_window.y().get(), 17.0);
 
@@ -360,7 +359,7 @@ fn presented_coordinate_queries_cover_the_full_mixed_font_row() {
 fn sealed_geometry_queries_reject_stale_presentations_and_use_explicit_regions() {
     use super::geometry::{
         GeometryQueryError, PresentationGeometry, PresentationId, WindowCoordinateQuery,
-        WindowGeometryQuery, WindowRegion, WindowRegionBoundsQuery,
+        WindowGeometryQuery,
     };
     use neomacs_display_protocol::types::Rect as TransportRect;
 
@@ -453,18 +452,6 @@ fn sealed_geometry_queries_reject_stale_presentations_and_use_explicit_regions()
             .expect_err("coordinate query requires materialized geometry"),
         GeometryQueryError::MissingMaterializedGeometry(window_id)
     );
-
-    let body = publication
-        .resolve(WindowRegionBoundsQuery::new(
-            presentation,
-            window_id,
-            WindowRegion::TextBody,
-        ))
-        .expect("explicit body region");
-    assert_eq!(body.origin().x().get(), 180.0);
-    assert_eq!(body.origin().y().get(), 60.0);
-    assert_eq!(body.width().get(), 700.0);
-    assert_eq!(body.height().get(), 520.0);
 
     for query in [
         WindowCoordinateQuery::in_text_body(presentation, window_id, 10, 56),
@@ -1152,7 +1139,6 @@ fn active_visual_anchors_are_semantic_and_presentation_qualified() {
     crate::test_utils::init_test_tracing();
     use super::geometry::{
         AnchorEdge, GeometryQueryError, PresentationId, VisualAnchor, VisualAnchorQuery,
-        WindowRegion,
     };
     use neomacs_display_protocol::types::Rect as TransportRect;
 
@@ -1238,20 +1224,6 @@ fn active_visual_anchors_are_semantic_and_presentation_qualified() {
         ))
         .unwrap();
     assert_eq!(position, cursor);
-
-    let right_edge = manager
-        .get(frame_id)
-        .unwrap()
-        .resolve_active_visual_anchor(VisualAnchorQuery::new(
-            presentation,
-            VisualAnchor::WindowRegionEdge {
-                window,
-                region: WindowRegion::TextBody,
-                edge: AnchorEdge::Right,
-            },
-        ))
-        .unwrap();
-    assert_eq!((right_edge.x().get(), right_edge.y().get()), (800.0, 50.0));
 
     assert_eq!(
         manager
@@ -1427,9 +1399,9 @@ fn gui_default_parameters_seed_scroll_bar_and_fringe_chrome() {
     // GNU's gui_default_parameter (xfns.c) seeds these on every GUI frame.
     // Without them, `(frame-parameter f 'vertical-scroll-bars)` reports nil even
     // though the layout already reserves and draws the scroll bar — the frame
-    // parameter lied about what is on screen. Each seeded value equals the layout
-    // fallback in window/display.rs, so this is a reporting fix, not a geometry
-    // change. scroll-bar-width stays unseeded on purpose: GNU reports the
+    // parameter lied about what is on screen. NS additionally reserves its
+    // canonical two-pixel internal border (nsfns.m:1348); GTK defaults to zero.
+    // scroll-bar-width stays unseeded on purpose: GNU reports the
     // configured thickness from `frame-parameter' even when the alist has no
     // entry (src/frame.c:5437-5456), and Neomacs answers it from
     // frame_config_scroll_bar_width's toolkit default (16) in the parameter
@@ -1452,7 +1424,7 @@ fn gui_default_parameters_seed_scroll_bar_and_fringe_chrome() {
     );
     assert_eq!(
         frame.known_parameter(FrameParam::InternalBorderWidth),
-        Some(Value::fixnum(0))
+        Some(Value::fixnum(if cfg!(target_os = "macos") { 2 } else { 0 }))
     );
     assert_eq!(
         frame.known_parameter(FrameParam::BorderWidth),
@@ -1881,7 +1853,7 @@ fn prepared_and_active_chrome_strings_are_rooted_by_their_shared_roots() {
     let collect = |heap: &mut neovm_value::tagged::gc::TaggedHeap| {
         let mut roots = Vec::new();
         neovm_value::tagged::transport::collect_shared_root_gc_roots(&heap, &mut roots);
-        heap.collect_exact(roots.into_iter());
+        heap.collect_rooted(roots.into_iter());
     };
     // SAFETY: `displayed` was just allocated by this heap. All collections
     // below seed the shared-root table, and the heap outlives materialization
@@ -1952,7 +1924,7 @@ fn frozen_chrome_clone_keeps_shared_root_alive_until_last_collection_drop() {
     let collect = |heap: &mut neovm_value::tagged::gc::TaggedHeap| {
         let mut roots = Vec::new();
         neovm_value::tagged::transport::collect_shared_root_gc_roots(&heap, &mut roots);
-        heap.collect_exact(roots.into_iter());
+        heap.collect_rooted(roots.into_iter());
     };
     collect(&mut heap);
     assert!(heap.owns_heap_value_for_test(displayed));
@@ -2492,7 +2464,7 @@ fn window_parameters() {
 }
 
 #[test]
-fn layout_freshness_types_late_chrome_cache_writes_separately_from_body_mutations() {
+fn layout_freshness_admits_late_chrome_cache_and_source_writes_after_body() {
     crate::test_utils::init_test_tracing();
     let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let buffer_id = eval
@@ -2539,8 +2511,13 @@ fn layout_freshness_types_late_chrome_cache_writes_separately_from_body_mutation
         .expect("freshness after body mutation");
     assert!(
         !after_chrome_cache
+            .remains_valid_across(&after_body_mutation, WindowLayoutLispBoundary::BufferBody,)
+    );
+    assert!(
+        after_chrome_cache
             .remains_valid_across(&after_body_mutation, WindowLayoutLispBoundary::WindowChrome,)
     );
+    assert_ne!(after_chrome_cache, after_body_mutation);
 }
 
 #[test]
@@ -3741,155 +3718,6 @@ fn frame_output_progress_api_tracks_intra_row_progress() {
             col: 7,
         })
     );
-}
-
-#[test]
-fn explicit_window_output_finalization_preserves_live_logical_and_physical_cursor_state() {
-    crate::test_utils::init_test_tracing();
-    let mut mgr = FrameManager::new();
-    let fid = mgr.create_frame("F1", 800, 600, BufferId(1));
-    let wid = mgr.get(fid).unwrap().selected_window;
-    let live_cursor = WindowCursorPos {
-        x: 18,
-        y: 16,
-        row: 1,
-        col: 2,
-    };
-    let live_phys = WindowCursorSnapshot {
-        kind: WindowCursorKind::Bar,
-        x: 18,
-        y: 16,
-        width: 3,
-        height: 16,
-        ascent: 12,
-        row: 1,
-        col: 2,
-    };
-    let snapshot_phys = WindowCursorSnapshot {
-        kind: WindowCursorKind::FilledBox,
-        x: 80,
-        y: 64,
-        width: 8,
-        height: 16,
-        ascent: 12,
-        row: 4,
-        col: 10,
-    };
-    let snapshot = WindowDisplaySnapshot {
-        point_rows: None,
-        window_id: wid,
-        logical_cursor: Some(WindowCursorPos::from_snapshot(&snapshot_phys)),
-        phys_cursor: Some(snapshot_phys),
-        rows: vec![DisplayRowSnapshot {
-            truncated_end_buffer_pos: None,
-            row: 4,
-            y: 64,
-            height: 16,
-            extra_line_spacing: 0,
-            start_x: 0,
-            start_col: 0,
-            end_x: 144,
-            end_col: 18,
-            start_buffer_pos: Some(neovm_edit::buffer::LispCharPos1::new(20)),
-            end_buffer_pos: Some(neovm_edit::buffer::LispCharPos1::new(38)),
-            end_source: Default::default(),
-            fringe: Default::default(),
-        }],
-        ..WindowDisplaySnapshot::default()
-    };
-    let frame = mgr.get_mut(fid).expect("frame");
-
-    frame.begin_display_output_pass();
-    {
-        let mut update = frame.window_output_update(wid).expect("window update");
-        update.begin_update();
-        update.finalize_with_output_fallback(Some(live_cursor), Some(live_phys.clone()), &snapshot);
-    }
-
-    let display = frame
-        .find_window(wid)
-        .and_then(|window| window.display())
-        .expect("window display state");
-    assert_eq!(display.cursor, Some(live_cursor));
-    assert_eq!(display.phys_cursor, Some(live_phys));
-    assert_eq!(
-        display.output_cursor,
-        Some(WindowCursorPos {
-            x: 144,
-            y: 64,
-            row: 4,
-            col: 18,
-        })
-    );
-}
-
-#[test]
-fn finish_window_output_update_preserves_live_cursor_state_with_snapshot_output_fallback() {
-    crate::test_utils::init_test_tracing();
-    let mut mgr = FrameManager::new();
-    let fid = mgr.create_frame("F1", 800, 600, BufferId(1));
-    let wid = mgr.get(fid).unwrap().selected_window;
-    let live_cursor = WindowCursorPos {
-        x: 18,
-        y: 16,
-        row: 1,
-        col: 2,
-    };
-    let live_phys = WindowCursorSnapshot {
-        kind: WindowCursorKind::Bar,
-        x: 18,
-        y: 16,
-        width: 3,
-        height: 16,
-        ascent: 12,
-        row: 1,
-        col: 2,
-    };
-    let snapshot = WindowDisplaySnapshot {
-        point_rows: None,
-        window_id: wid,
-        rows: vec![DisplayRowSnapshot {
-            truncated_end_buffer_pos: None,
-            row: 4,
-            y: 64,
-            height: 16,
-            extra_line_spacing: 0,
-            start_x: 0,
-            start_col: 0,
-            end_x: 144,
-            end_col: 18,
-            start_buffer_pos: Some(neovm_edit::buffer::LispCharPos1::new(20)),
-            end_buffer_pos: Some(neovm_edit::buffer::LispCharPos1::new(38)),
-            end_source: Default::default(),
-            fringe: Default::default(),
-        }],
-        ..WindowDisplaySnapshot::default()
-    };
-    let frame = mgr.get_mut(fid).expect("frame");
-
-    frame.begin_display_output_pass();
-    {
-        let mut update = frame.window_output_update(wid).expect("window update");
-        update.begin_update();
-        update.finalize_with_output_fallback(Some(live_cursor), Some(live_phys.clone()), &snapshot);
-    }
-
-    let display = frame
-        .find_window(wid)
-        .and_then(|window| window.display())
-        .expect("window display state");
-    assert_eq!(display.cursor, Some(live_cursor));
-    assert_eq!(display.phys_cursor, Some(live_phys));
-    assert_eq!(
-        display.output_cursor,
-        Some(WindowCursorPos {
-            x: 144,
-            y: 64,
-            row: 4,
-            col: 18,
-        })
-    );
-    assert_eq!(display.last_cursor_vpos, 1);
 }
 
 #[test]

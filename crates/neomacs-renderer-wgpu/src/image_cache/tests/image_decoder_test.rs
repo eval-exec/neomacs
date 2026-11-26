@@ -48,7 +48,8 @@ fn metadata_before_gpu_adopts_the_same_decoded_pixels_once() {
         .unwrap()
         .unwrap();
     assert_eq!(metadata.layout, ImageLayoutExtent::new(2, 1));
-    assert_eq!(metadata.mask, ImageMaskKind::Clipping);
+    // Native RGBA alpha is not a GNU PNG mask (image.c:8407-8423).
+    assert_eq!(metadata.mask, ImageMaskKind::AlphaChannel);
     // A later renderer command must adopt this job, even after it completed.
     submit(
         &client,
@@ -112,7 +113,7 @@ fn newer_decode_and_retirement_reject_delayed_generations_and_release_pixels() {
     // An in-flight worker completing after retirement cannot resurrect metadata.
     DecodeOutputSink::Shared(Arc::clone(&client.shared)).publish(WorkerDecodeOutcome::Failed {
         load: current,
-        diagnostic: ImageDiagnostic::NotDrawable,
+        failure: ImageDecodeFailure::new(ImageDiagnostic::NotDrawable),
     });
     assert!(client.wait_for_terminal(current, Duration::ZERO).is_none());
     submit(&client, current, png(), ImageSizeLimit::UNLIMITED);
@@ -160,7 +161,10 @@ fn cpu_metadata_requires_full_decode_and_preserves_size_admission() {
     );
     assert!(matches!(
         client.wait_for_terminal(oversized, Duration::from_secs(5)),
-        Some(Err(ImageDiagnostic::InvalidSize))
+        Some(Err(ImageDecodeFailure {
+            diagnostic: ImageDiagnostic::InvalidSize,
+            ..
+        }))
     ));
 }
 
@@ -260,5 +264,65 @@ fn retirement_before_deferred_submission_cannot_resurrect_identity() {
             .wait_for_terminal(fresh, Duration::from_secs(5))
             .unwrap()
             .is_ok()
+    );
+}
+
+/// A wholesale clear carries an admission ticket. Decodes submitted after
+/// that ticket (an eager CPU job for a load requested after the clear) must
+/// survive the renderer's physical clear, while pre-cutoff jobs are retired.
+/// This is the shared-decoder boundary GNU's synchronous clear leaves behind.
+#[test]
+fn clear_through_retires_only_jobs_admitted_before_the_cutoff() {
+    let decoder = ImageDecoder::new();
+    let client = decoder.client();
+    let before = token(301, 1);
+    submit(&client, before, png(), ImageSizeLimit::UNLIMITED);
+    let cutoff = client.admission_ticket();
+    assert!(client.accepts(before), "the pre-clear decode is current");
+    let after = token(302, 1);
+    submit(&client, after, png(), ImageSizeLimit::UNLIMITED);
+    assert!(client.accepts(after));
+
+    client.clear_through(cutoff, &[]);
+    assert!(
+        !client.accepts(before),
+        "a decode admitted before the clear must be retired"
+    );
+    assert!(
+        client.accepts(after),
+        "a decode admitted after the clear ticket must survive"
+    );
+
+    let full = client.admission_ticket();
+    client.clear_through(full, &[]);
+    assert!(
+        !client.accepts(after),
+        "a clear at the last ticket retires every decode"
+    );
+}
+
+/// A load the renderer starts itself is older than the clear command even
+/// when its CPU submission carries a newer ticket. The clear must retire it
+/// by renderer admission, while leaving an unrelated later submission alone.
+#[test]
+fn clear_through_retires_a_renderer_admitted_load_newer_than_the_cutoff() {
+    let decoder = ImageDecoder::new();
+    let client = decoder.client();
+    let cutoff = client.admission_ticket();
+    let renderer_load = token(303, 1);
+    submit(&client, renderer_load, png(), ImageSizeLimit::UNLIMITED);
+    let unrelated = token(304, 1);
+    submit(&client, unrelated, png(), ImageSizeLimit::UNLIMITED);
+    assert!(client.accepts(renderer_load));
+    assert!(client.accepts(unrelated));
+
+    client.clear_through(cutoff, &[renderer_load.image()]);
+    assert!(
+        !client.accepts(renderer_load),
+        "a renderer-admitted load predates the clear command"
+    );
+    assert!(
+        client.accepts(unrelated),
+        "an unrelated decode requested after the clear must survive"
     );
 }

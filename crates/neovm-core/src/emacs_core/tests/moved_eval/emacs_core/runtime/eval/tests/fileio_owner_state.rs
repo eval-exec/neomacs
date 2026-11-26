@@ -140,6 +140,7 @@ fn auto_save_native_policy_is_reconstructed_as_ordinary_after_dump() {
     let directory = tempfile::tempdir().expect("dump directory");
     let path = directory.path().join("fileio-owner.pdump");
     dump_to_file(&context, &path).expect("dump while native policy is active");
+    let parked_context = context.park_for_test();
     let mut loaded = load_from_dump(&path).expect("reconstruct fresh Context from actual dump");
     assert_eq!(
         loaded.auto_save_native_write_policy(),
@@ -161,6 +162,10 @@ fn auto_save_native_policy_is_reconstructed_as_ordinary_after_dump() {
         AutoSaveNativeWritePolicy::Ordinary { preserved_mode: 0 },
         "the first reconstructed owner slab must start at C-static zero",
     );
+    drop(loaded);
+    let context = parked_context
+        .resume_for_test()
+        .expect("resume source owner after dump load");
     assert_eq!(
         context.auto_save_native_write_policy(),
         AutoSaveNativeWritePolicy::Active {

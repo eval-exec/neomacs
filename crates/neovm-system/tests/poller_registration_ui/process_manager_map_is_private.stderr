@@ -1,0 +1,17 @@
+error[E0616]: field `processes` of struct `ProcessManager` is private
+ --> $WORKSPACE/crates/neovm-system/tests/poller_registration_ui/process_manager_map_is_private.rs
+  |
+  |     let _ = pm.processes.remove(&1);
+  |                ^^^^^^^^^ private field
+
+error[E0616]: field `processes` of struct `ProcessManager` is private
+ --> $WORKSPACE/crates/neovm-system/tests/poller_registration_ui/process_manager_map_is_private.rs
+  |
+  |     pm.processes.clear();
+  |        ^^^^^^^^^ private field
+
+error[E0616]: field `deleted_processes` of struct `ProcessManager` is private
+ --> $WORKSPACE/crates/neovm-system/tests/poller_registration_ui/process_manager_map_is_private.rs
+  |
+  |     pm.deleted_processes.clear();
+  |        ^^^^^^^^^^^^^^^^^ private field

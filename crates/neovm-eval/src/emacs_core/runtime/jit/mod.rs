@@ -189,6 +189,8 @@ pub(crate) mod vframe;
 /// calls ([`cache::try_run_compiled`]). Only built with the `jit` feature.
 #[cfg(feature = "jit")]
 pub mod cache;
+#[cfg(feature = "jit")]
+pub(crate) mod source_suspension;
 
 /// Bytecode-level inlining (see the module docs).
 #[cfg(feature = "jit")]
@@ -261,7 +263,10 @@ pub(crate) mod tier2;
 pub mod stats;
 
 #[cfg(feature = "jit")]
-pub use cache::{note_seam_interp_fallback, try_run_compiled};
+pub(crate) use cache::note_seam_interp_fallback;
+#[cfg(feature = "jit")]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) use cache::try_run_compiled;
 /// T1-pre: the per-function runtime data now lives in the value layer. These
 /// re-exports keep the historical `emacs_core::jit::*` paths and every upper
 /// impl (which stays in this module) resolving to the same types and layout.
@@ -566,6 +571,7 @@ impl FeedbackVecExt for FeedbackVec {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
 enum HofCallerBit {
+    #[allow(dead_code)] // discriminant 0 sentinel of the u8 bit codec.
     Unknown = 0,
     No = 1,
     Yes = 2,
@@ -585,7 +591,7 @@ static NEXT_COMPILED_ID: AtomicU64 = AtomicU64::new(0);
 /// proportionally more interpreted calls before it is paid. Defaults to
 /// [`RuntimeState::SIZE_UNIT`]; `NEOVM_JIT_SIZE_UNIT` overrides it (`0`
 /// disables the scaling — every body tiers at the flat threshold).
-pub fn size_unit() -> u32 {
+pub(crate) fn size_unit() -> u32 {
     static UNIT: OnceLock<u32> = OnceLock::new();
     *UNIT.get_or_init(|| {
         std::env::var("NEOVM_JIT_SIZE_UNIT")
@@ -637,7 +643,7 @@ static RETIER_HEAT_CACHE: AtomicU64 = AtomicU64::new(0);
 /// heat crossing either: the T1 leaf's countdown requests the re-tier
 /// instead (`tier2`).
 #[inline]
-pub fn retier_heat() -> Option<u32> {
+pub(crate) fn retier_heat() -> Option<u32> {
     #[cfg(all(test, feature = "jit"))]
     if let Some(at) = retier_heat_test_override() {
         return at;
@@ -654,7 +660,7 @@ pub fn retier_heat() -> Option<u32> {
 
 /// `NEOVM_JIT_RETIER_FACTOR` ([`RuntimeState::RETIER_FACTOR`] unset); `0`
 /// turns the re-tier off, under either trigger.
-pub fn retier_factor() -> u32 {
+pub(crate) fn retier_factor() -> u32 {
     static FACTOR: OnceLock<u32> = OnceLock::new();
     *FACTOR.get_or_init(|| {
         std::env::var("NEOVM_JIT_RETIER_FACTOR")
@@ -702,7 +708,7 @@ fn retier_heat_init() -> Option<u32> {
 /// Largest body (in ops) the JIT tiers up at all; bigger bodies stay on the
 /// interpreter. Defaults to [`RuntimeState::MAX_TIER_OPS`]; `NEOVM_JIT_MAX_OPS`
 /// overrides it (`0` = no cap).
-pub fn max_tier_ops() -> u32 {
+pub(crate) fn max_tier_ops() -> u32 {
     static CAP: OnceLock<u32> = OnceLock::new();
     *CAP.get_or_init(|| {
         std::env::var("NEOVM_JIT_MAX_OPS")
@@ -730,7 +736,7 @@ pub fn hot_threshold() -> u32 {
 /// (heat counts calls), so a hot loop in a rarely-called function stayed in the
 /// interpreter forever. `NEOVM_JIT_LOOP_HEAT` overrides it; **`=0` disables
 /// loop heat** — the pre-loop-heat behavior and the A/B baseline.
-pub fn loop_heat_per_wrap() -> u32 {
+pub(crate) fn loop_heat_per_wrap() -> u32 {
     static V: OnceLock<u32> = OnceLock::new();
     *V.get_or_init(|| {
         std::env::var("NEOVM_JIT_LOOP_HEAT")
@@ -750,7 +756,8 @@ pub fn loop_heat_per_wrap() -> u32 {
 /// binary can run pure-interpreter or JIT-backed. Default on; `NEOVM_JIT=0`
 /// (also `off`/`false`/`no`) forces the interpreter — a kill switch and the
 /// A/B-measurement knob (no more `NEOVM_JIT_THRESHOLD=<huge>` hack).
-pub fn jit_runtime_enabled() -> bool {
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn jit_runtime_enabled() -> bool {
     #[cfg(any(test, feature = "test-support"))]
     if jit_forced_off_for_test() {
         return false;
@@ -826,7 +833,7 @@ pub fn force_call_feedback_for_test(on: bool) {
 /// call cache still stays UNPOPULATED. Isolates the dispatcher's per-call cost
 /// from the cache-miss cost. Functions called only through Bcall can no longer
 /// tier up while this is set.
-pub fn jit_bcall_tier_skipped() -> bool {
+pub(crate) fn jit_bcall_tier_skipped() -> bool {
     static V: OnceLock<bool> = OnceLock::new();
     *V.get_or_init(|| std::env::var("NEOVM_JIT_BCALL_TIER").as_deref() == Ok("off"))
 }
@@ -838,7 +845,7 @@ pub fn jit_bcall_tier_skipped() -> bool {
 /// takes the cached fast path and reaches neither the resolver nor the tier
 /// dispatcher. Isolates the cache-miss + re-resolve cost. Cached callees stop
 /// accumulating Bcall heat while this is set.
-pub fn jit_bcall_cache_forced() -> bool {
+pub(crate) fn jit_bcall_cache_forced() -> bool {
     static V: OnceLock<bool> = OnceLock::new();
     *V.get_or_init(|| std::env::var("NEOVM_JIT_BCALL_CACHE").as_deref() == Ok("on"))
 }
@@ -849,7 +856,7 @@ pub fn jit_bcall_cache_forced() -> bool {
 /// records the targets of its NON-constant call sites into the source's
 /// call-site table ([`feedback::CallSites`]), not this per-op word.
 #[inline]
-pub fn call_feedback_collection_enabled() -> bool {
+pub(crate) fn call_feedback_collection_enabled() -> bool {
     #[cfg(test)]
     if let Some(o) = CALL_FEEDBACK_TEST_OVERRIDE.with(|c| c.get()) {
         return o;
@@ -867,7 +874,7 @@ pub fn call_feedback_collection_enabled() -> bool {
 /// marshals its live operand and binding stacks into a native OSR entry.
 /// Handler/save operations and nonlexical functions remain ineligible.
 /// Off ⇒ the back-edge stays a pure interpreter loop, zero added cost.
-pub fn jit_osr_on() -> bool {
+pub(crate) fn jit_osr_on() -> bool {
     #[cfg(any(test, feature = "test-support"))]
     if let Some(o) = OSR_TEST_OVERRIDE.with(|c| c.get()) {
         return o;
@@ -1164,10 +1171,7 @@ pub(crate) trait RuntimeStateTieringExt {
     fn note_deopt_history(&self, pc: usize, ops_len: usize) -> u8;
     /// Precise deopts ever counted at `pc` of this source, across all of its
     /// leaves (0 before the first; a read never allocates).
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "consumer: the T2 retreat (P2.1 C9-C11)")
-    )]
+    #[cfg_attr(not(any(test, feature = "test-support")), allow(dead_code))]
     fn deopt_history(&self, pc: usize) -> u8;
     /// Stop serving this source as AOT-prewarmed: `dispatch_sized` would
     /// otherwise answer `Compiled` from call 1 and skip a re-profile window.
@@ -1767,10 +1771,7 @@ impl RuntimeStateTieringExt for RuntimeState {
 
     /// Precise deopts ever counted at `pc` of this source, across all of its
     /// leaves (0 before the first; a read never allocates).
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "consumer: the T2 retreat (P2.1 C9-C11)")
-    )]
+    #[cfg_attr(not(any(test, feature = "test-support")), allow(dead_code))]
     #[inline]
     fn deopt_history(&self, pc: usize) -> u8 {
         self.site_retreat()
@@ -1836,6 +1837,14 @@ mod green_release_tests;
 #[cfg(all(test, feature = "jit", not(feature = "gc-memory-telemetry")))]
 #[path = "tests/p3sym_functions_test.rs"]
 mod p3sym_functions_tests;
+
+#[cfg(all(test, feature = "jit"))]
+#[path = "tests/n5_clear_inside_entry_test.rs"]
+mod n5_clear_inside_entry_tests;
+
+#[cfg(all(test, feature = "jit", feature = "release-native-depth"))]
+#[path = "tests/n5_release_extent_test.rs"]
+mod n5_release_extent_tests;
 
 /// Debug-only carrier TLS fingerprint for the JIT subsystem.
 #[cfg(debug_assertions)]

@@ -149,7 +149,12 @@ fn set_frame_size_keeps_resize_pending_until_geometry_queries_force_sync() {
         )
         .expect("set-frame-size without geometry query should succeed");
     let values = neovm_value::value::list_to_vec(&result).expect("result list");
-    assert_eq!(values, vec![Value::fixnum(79), Value::fixnum(36)]);
+    // GNU frame.c:4135-4148 reports requested text dimensions while the
+    // native resize is pending. The paired GTK receipt after set-frame-size
+    // likewise reports the new width/height before the next event-loop turn.
+    assert_eq!(values, vec![Value::fixnum(132), Value::fixnum(42)]);
+    let frame = ev.frame_manager().get(fid).expect("frame");
+    assert_eq!((frame.width, frame.height), (1300, 1188));
 
     let requests = resized.borrow();
     assert_eq!(requests.len(), 1);

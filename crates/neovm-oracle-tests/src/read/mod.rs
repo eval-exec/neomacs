@@ -8,3 +8,4 @@ mod print;
 mod print_advanced;
 mod print_comprehensive;
 mod stream_and_standard_input_semantics;
+mod substitute_object_in_subtree;

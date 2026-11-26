@@ -597,7 +597,7 @@ impl CallInteractivelyPlan {
 }
 
 /// The cold argument-acquisition upcall implemented by the core command layer.
-pub type CallInteractivelyResolver =
+pub(crate) type CallInteractivelyResolver =
     fn(&mut Context, &mut CallInteractivelyPlan) -> Result<(Value, Vec<Value>), Flow>;
 
 /// PC2 table: one process-lifetime resolver descriptor installed by core.
@@ -643,7 +643,7 @@ pub(crate) fn install_call_interactively_hooks(
 }
 
 /// The installed table, if core has run one of the two pinned install seams.
-pub fn call_interactively_hooks() -> Option<&'static CallInteractivelyHooks> {
+pub(crate) fn call_interactively_hooks() -> Option<&'static CallInteractivelyHooks> {
     CALL_INTERACTIVELY_HOOKS.get()
 }
 
@@ -653,7 +653,7 @@ pub fn call_interactively_hooks() -> Option<&'static CallInteractivelyHooks> {
 /// unreachable after construction (`Context::new_inner` and
 /// `Context::from_dump` install the table before any form can evaluate), so
 /// reaching it means the construction path itself is broken.
-pub fn resolve_call_interactively_target_and_args(
+pub(crate) fn resolve_call_interactively_target_and_args(
     eval: &mut Context,
     plan: &mut CallInteractivelyPlan,
 ) -> Result<(Value, Vec<Value>), Flow> {

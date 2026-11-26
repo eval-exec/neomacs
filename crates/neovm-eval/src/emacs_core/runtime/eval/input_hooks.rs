@@ -24,18 +24,27 @@ pub enum CommandInputWaitOutcome {
 }
 
 /// Apply GNU's command-loop interrupt policy to one special input event.
-pub type InterruptForInputEvent =
+pub(crate) type InterruptForInputEvent =
     fn(&mut Context, super::keyboard::InputEvent) -> Result<bool, Flow>;
 /// Whether a pending OS signal is latched.
-pub type OsSignalPending = fn() -> bool;
+pub(crate) type OsSignalPending = fn() -> bool;
 /// Take the latched termination signal, if any.
-pub type TakeTerminationSignal = fn() -> Option<i32>;
+pub(crate) type TakeTerminationSignal = fn() -> Option<i32>;
 /// Drain pending OS signals through the evaluator.
-pub type DrainPendingOsSignals = fn(&mut Context) -> Result<(), Flow>;
+pub(crate) type DrainPendingOsSignals = fn(&mut Context) -> Result<(), Flow>;
 /// The process-lifetime signal self-pipe read end for evaluator wait pollers.
-pub type SignalWakePipeReadFd = fn() -> Option<i32>;
+pub(crate) type SignalWakePipeReadFd = fn() -> Option<i32>;
 /// Drain one wake byte from the signal self-pipe.
-pub type DrainSignalWakePipe = fn(i32);
+pub(crate) type DrainSignalWakePipe = fn(i32);
+/// Run GNU's controlling-TTY 2nd-`C-g` emergency escape when an active
+/// controlling terminal is present (`src/keyboard.c:12622-12711`).
+pub(crate) type TryControllingTtyEmergencyEscape = fn(&mut Context) -> bool;
+/// Emit GNU `shut_down_emacs`'s `"Fatal error 6: Aborted\n"` diagnostic on the
+/// foreground controlling TTY's stderr (`src/emacs.c:3112-3147`).
+pub(crate) type WriteFatalAbortDiagnostic = fn();
+/// Finish GNU `emacs_abort ()` (`src/sysdep.c:2401`, `src/emacs.c:464-483`):
+/// optionally print a backtrace, then raise `SIGABRT` with `SIG_DFL`.
+pub(crate) type TerminateWithAbort = fn(bool) -> !;
 
 /// How an OS signal wakes an evaluator wait.
 ///
@@ -64,16 +73,23 @@ pub struct InputHooks {
     take_termination_signal: TakeTerminationSignal,
     drain_pending_os_signals: DrainPendingOsSignals,
     signal_wake: SignalWakeSource,
+    try_controlling_tty_emergency_escape: TryControllingTtyEmergencyEscape,
+    write_fatal_abort_diagnostic: WriteFatalAbortDiagnostic,
+    terminate_with_abort: TerminateWithAbort,
 }
 
 impl InputHooks {
     /// Build the one canonical descriptor core publishes.
+    #[allow(clippy::too_many_arguments)]
     pub const fn new(
         interrupt_for_input_event_if_requested: InterruptForInputEvent,
         os_signal_pending: OsSignalPending,
         take_termination_signal: TakeTerminationSignal,
         drain_pending_os_signals: DrainPendingOsSignals,
         signal_wake: SignalWakeSource,
+        try_controlling_tty_emergency_escape: TryControllingTtyEmergencyEscape,
+        write_fatal_abort_diagnostic: WriteFatalAbortDiagnostic,
+        terminate_with_abort: TerminateWithAbort,
     ) -> Self {
         Self {
             interrupt_for_input_event_if_requested,
@@ -81,6 +97,9 @@ impl InputHooks {
             take_termination_signal,
             drain_pending_os_signals,
             signal_wake,
+            try_controlling_tty_emergency_escape,
+            write_fatal_abort_diagnostic,
+            terminate_with_abort,
         }
     }
 }
@@ -147,8 +166,25 @@ pub fn signal_wake_pipe_read_fd() -> Option<i32> {
 }
 
 /// Drain one wake byte from the signal self-pipe. An absent source has no byte.
-pub fn drain_signal_wake_pipe(fd: i32) {
+pub(crate) fn drain_signal_wake_pipe(fd: i32) {
     if let SignalWakeSource::SelfPipe { drain, .. } = input_hooks().signal_wake {
         drain(fd);
     }
+}
+
+/// Run GNU's controlling-TTY 2nd-`C-g` emergency escape when an active
+/// controlling TTY terminal is present (`src/keyboard.c:12622-12711`).
+pub(crate) fn try_controlling_tty_emergency_escape(ctx: &mut Context) -> bool {
+    (input_hooks().try_controlling_tty_emergency_escape)(ctx)
+}
+
+/// Emit GNU `shut_down_emacs`'s `"Fatal error 6: Aborted\n"` diagnostic on
+/// foreground controlling-TTY stderr (`src/emacs.c:3112-3147`).
+pub(crate) fn write_fatal_abort_diagnostic() {
+    (input_hooks().write_fatal_abort_diagnostic)()
+}
+
+/// Finish GNU `emacs_abort ()` (`src/sysdep.c:2401`, `src/emacs.c:464-483`).
+pub(crate) fn terminate_with_abort(print_backtrace: bool) -> ! {
+    (input_hooks().terminate_with_abort)(print_backtrace)
 }

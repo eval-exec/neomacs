@@ -8,6 +8,7 @@
 pub mod abi;
 #[doc(hidden)]
 pub mod publication;
+mod sync;
 
 use std::mem::MaybeUninit;
 use std::num::{NonZeroU64, NonZeroUsize};

@@ -572,7 +572,7 @@ fn a_contained_framed_panic_detaches_three_args_before_gc_and_caller_healing() {
         with_cached_leaf_for_test(leaf_id, |leaf| {
             assert_eq!(leaf_entry_shape_name_for_test(leaf), "Framed");
             assert!(leaf_has_binds_for_test(leaf) && !leaf_has_handlers_for_test(leaf), "a binding extent parks the marker across its cleanup");
-            let constants = callee.get_bytecode_data().expect("bytecode").constants.as_ptr();
+            let constants = callee.get_bytecode_data().expect("bytecode").constants().as_ptr();
             let depth0 = ev.depth_for_test();
             let spec0 = ev.specpdl().len();
             let frames0 = bc_frames_len_for_test(&ev);

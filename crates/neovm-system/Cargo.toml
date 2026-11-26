@@ -38,7 +38,6 @@ num_enum.workspace = true
 os_pipe.workspace = true
 polling.workspace = true
 portable-pty.workspace = true
-regex.workspace = true
 rusqlite = { workspace = true, optional = true }
 rustc-hash.workspace = true
 rustix.workspace = true

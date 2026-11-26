@@ -37,7 +37,7 @@ impl Default for ScrollMargin {
 impl ScrollMargin {
     /// GNU's default when `maximum-scroll-margin` is not a float
     /// (src/xdisp.c:38576).
-    pub const DEFAULT_MAXIMUM_FRACTION: f64 = 0.25;
+    pub(crate) const DEFAULT_MAXIMUM_FRACTION: f64 = 0.25;
 
     /// Build from the raw Lisp values.
     ///

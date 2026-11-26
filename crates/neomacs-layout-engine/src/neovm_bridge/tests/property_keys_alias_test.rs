@@ -212,16 +212,34 @@ fn property_keys_preserve_category_alias_default_nil_overlay_and_extent_order() 
     }
     let buffer = eval.buffer_manager().get(buffer_id).unwrap();
     let snapshot = LayoutBufferSnapshot::from_buffer_with_obarray(buffer, eval.variables());
-    // A snapshot owns cloned overlays and preserves their precedence serials.
-    // Property-source identity must name that snapshot's object.
+    // Default (`Live`) snapshot reads the live overlay object directly without
+    // cloning, preserving GNU's `eq` object identity.
     let snapshot_overlays = snapshot
         .layout_overlays()
         .overlays_at_emacs_byte_pos(EmacsBytePos::new(4));
     assert_eq!(snapshot_overlays.len(), 1);
     let snapshot_overlay = snapshot_overlays[0];
-    assert_ne!(snapshot_overlay.bits(), overlay.bits());
+    assert_eq!(snapshot_overlay.bits(), overlay.bits());
+    // Explicit `Captured` fallback still clones overlays while preserving
+    // precedence serials, flags, plists, and bounds.
+    let captured_snapshot = LayoutBufferSnapshot::from_buffer_for_window_with_symbols_and_source(
+        buffer,
+        eval.variables(),
+        None,
+        None,
+        crate::display_property::DisplayPropertyTarget::Terminal,
+        neovm_core::tagged::SymbolMode::Bare,
+        &eval.owned_root_retainer(),
+        OverlaySourceMode::Captured,
+    );
+    let captured_overlays = captured_snapshot
+        .layout_overlays()
+        .overlays_at_emacs_byte_pos(EmacsBytePos::new(4));
+    assert_eq!(captured_overlays.len(), 1);
+    let captured_overlay = captured_overlays[0];
+    assert_ne!(captured_overlay.bits(), overlay.bits());
     let original = overlay.as_overlay_data().unwrap();
-    let captured = snapshot_overlay.as_overlay_data().unwrap();
+    let captured = captured_overlay.as_overlay_data().unwrap();
     assert_eq!(
         (
             captured.serial,
@@ -238,15 +256,15 @@ fn property_keys_preserve_category_alias_default_nil_overlay_and_extent_order() 
     );
     assert_eq!(captured.plist, original.plist);
     assert_eq!(
-        snapshot
+        captured_snapshot
             .layout_overlays()
-            .overlay_start_emacs_byte_pos(snapshot_overlay),
+            .overlay_start_emacs_byte_pos(captured_overlay),
         buffer.overlays().overlay_start_emacs_byte_pos(overlay)
     );
     assert_eq!(
-        snapshot
+        captured_snapshot
             .layout_overlays()
-            .overlay_end_emacs_byte_pos(snapshot_overlay),
+            .overlay_end_emacs_byte_pos(captured_overlay),
         buffer.overlays().overlay_end_emacs_byte_pos(overlay)
     );
     let bounds = EmacsByteRange::new(

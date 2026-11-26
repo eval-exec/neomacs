@@ -163,7 +163,7 @@ fn sim(shape: &str, n: usize) {
                 )
                 .unwrap();
             assert!(report.major);
-            assert_eq!(report.frozen_owners, 0);
+            assert_eq!(report.frozen_owners(), 0);
             era.with_stopped_heap_for_test(&stopped, |heap| {
                 let head = root.materialize(heap).unwrap();
                 verify_list(heap, head.value(), warm + n);

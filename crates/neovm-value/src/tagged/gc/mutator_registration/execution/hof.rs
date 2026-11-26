@@ -101,8 +101,10 @@ fn load(
     run.owner
         .local
         .as_ref()
-        .and_then(|local| local.root_scratch.get(home.index))
-        .map(|word| word.value())
+        .and_then(|local| local.root_slot_word(home.index))
+        // SAFETY: `check_home` verified this slot belongs to the active
+        // owning mutator thread's live root bank.
+        .map(|word| unsafe { word.value() })
         .ok_or(RegistrationError::StaleRegistration)
 }
 fn store(
@@ -111,15 +113,14 @@ fn store(
     value: TaggedValue,
 ) -> Result<(), RegistrationError> {
     check_home(run, home)?;
-    let destination = run
-        .owner
-        .local
-        .as_mut()
-        .and_then(|local| local.root_scratch.get_mut(home.index))
-        .ok_or(RegistrationError::StaleRegistration)?;
     // Stop-all is the only collector in an era. Both source and destination
     // remain resident owner roots; no managed-container barrier is bypassed.
-    *destination = MarkWord::of(value);
+    // SAFETY: `value` belongs to this active owner's heap under the era protocol.
+    run.owner
+        .local
+        .as_mut()
+        .and_then(|local| unsafe { local.set_root_slot(home.index, value) })
+        .ok_or(RegistrationError::StaleRegistration)?;
     Ok(())
 }
 
@@ -200,15 +201,16 @@ impl<'era> ExecutionActivation<'_, '_, 'era> {
         // mapc's original list permits aliases to mutate it afterward; this
         // one-shot input can never be reused to trust its captured element.
         check_home(self.run, &self.result)?;
-        let destination = self
+        let local = self
             .run
             .owner
             .local
             .as_mut()
-            .and_then(|local| local.root_scratch.get_mut(self.result.index))
+            .filter(|local| self.result.index < local.root_scratch_len())
             .ok_or(RegistrationError::StaleRegistration)?;
         input.state = SingletonState::Consumed;
-        *destination = MarkWord::of(result);
+        // SAFETY: `result` was loaded from this active owner's live root bank.
+        let _ = unsafe { local.set_root_slot(self.result.index, result) };
         Ok(FunctionSelection::Selected)
     }
 }

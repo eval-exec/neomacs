@@ -39,6 +39,8 @@ pub(crate) struct Pipelines {
     #[cfg(feature = "video")]
     pub(crate) bi_planar_video: wgpu::RenderPipeline,
     #[cfg(feature = "video")]
+    pub(crate) packed_video_copy: wgpu::RenderPipeline,
+    #[cfg(feature = "video")]
     pub(crate) bi_planar_video_copy: wgpu::RenderPipeline,
     pub(crate) opaque_image: wgpu::RenderPipeline,
     pub(crate) stencil_background_rect: wgpu::RenderPipeline,

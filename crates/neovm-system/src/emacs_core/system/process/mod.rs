@@ -155,15 +155,16 @@ enum ProcessInputEndpoint {
 
 impl ProcessInputEndpoint {
     pub fn select(proc: &Process) -> Option<Self> {
-        if proc.live_io.pty_writer.is_some() {
+        let io = proc.live_io();
+        if io.pty_writer().is_some() {
             Some(Self::Pty)
-        } else if proc.live_io.child.has_pipe_child() && proc.live_io.child.stdin().is_some() {
+        } else if io.child().has_pipe_child() && io.child().stdin().is_some() {
             Some(Self::ChildPipe)
-        } else if proc.live_io.tls_stream.is_some() {
+        } else if io.tls_stream().is_some() {
             Some(Self::Tls)
-        } else if proc.live_io.network_socket.is_some() {
+        } else if io.network_socket().is_some() {
             Some(Self::Network)
-        } else if proc.live_io.serial_port.is_some() {
+        } else if io.serial_port().is_some() {
             Some(Self::Serial)
         } else {
             None
@@ -172,9 +173,9 @@ impl ProcessInputEndpoint {
 
     fn write_once(self, proc: &mut Process, bytes: &[u8]) -> Option<std::io::Result<usize>> {
         match self {
-            Self::Pty => Some(proc.live_io.pty_writer.as_mut()?.write(bytes)),
+            Self::Pty => Some(proc.pty_writer_mut()?.write(bytes)),
             Self::ChildPipe => {
-                let stdin = proc.live_io.child.stdin_mut()?;
+                let stdin = proc.live_io_mut().child_mut().stdin_mut()?;
                 #[cfg(unix)]
                 {
                     use std::os::unix::io::AsRawFd;
@@ -184,23 +185,22 @@ impl ProcessInputEndpoint {
                 Some(stdin.write(bytes))
             }
             Self::Tls => Some(
-                proc.live_io
-                    .tls_stream
-                    .as_mut()?
+                proc.live_io_mut()
+                    .tls_stream_mut()?
                     .write_process_input_once(bytes),
             ),
             Self::Network => {
                 let datagram_address = proc.datagram_socket_addr;
                 #[cfg(unix)]
                 let datagram_unix_path = proc.datagram_unix_path.clone();
-                proc.live_io.network_socket.as_mut()?.write_input_once(
+                proc.live_io().network_socket()?.write_input_once(
                     bytes,
                     datagram_address,
                     #[cfg(unix)]
                     datagram_unix_path,
                 )
             }
-            Self::Serial => Some(proc.live_io.serial_port.as_mut()?.write(bytes)),
+            Self::Serial => Some(proc.live_io_mut().serial_port_mut()?.write(bytes)),
         }
     }
 
@@ -211,16 +211,14 @@ impl ProcessInputEndpoint {
     /// [`ProcessInputDisposition::Disconnected`] disables future sends while
     /// retaining the resource for remaining output, just like GNU leaves
     /// `p->infd` alive after setting `p->outfd = -1`.
-    fn disconnect(self, poller: Option<&polling::Poller>, proc: &mut Process) {
+    fn disconnect(self, proc: &mut Process) {
         match self {
             Self::Pty => {
-                proc.live_io.pty_writer = None;
+                proc.set_pty_writer(None);
             }
             Self::ChildPipe => {
-                if let (Some(poller), Some(stdin)) = (poller, proc.live_io.child.stdin()) {
-                    ProcessManager::unregister_child_stdin_writable_from_poller(poller, stdin);
-                }
-                let _ = proc.live_io.child.close_stdin();
+                // `PollRegistration<File>` unregisters child `stdin` on drop.
+                let _ = proc.live_io_mut().child_mut().close_stdin();
             }
             Self::Tls | Self::Network | Self::Serial => {}
         }
@@ -229,130 +227,39 @@ impl ProcessInputEndpoint {
 }
 
 pub(crate) trait NetworkSocketIo {
-    fn register_readable(&self, poller: &polling::Poller, id: ProcessId) -> Result<(), String>;
-    fn register_writable(&self, poller: &polling::Poller, id: ProcessId) -> Result<(), String>;
-    fn unregister_readable(&self, poller: &polling::Poller);
-    fn read_stream_output(&mut self, buf: &mut [u8]) -> Option<std::io::Result<usize>>;
+    fn read_stream_output(&self, buf: &mut [u8]) -> Option<std::io::Result<usize>>;
     fn write_input_once(
-        &mut self,
+        &self,
         bytes: &[u8],
         datagram_addr: Option<SocketAddr>,
         #[cfg(unix)] datagram_unix_path: Option<std::path::PathBuf>,
     ) -> Option<std::io::Result<usize>>;
-    fn modify_interest(
-        &self,
-        poller: &polling::Poller,
-        id: ProcessId,
-        event: polling::Event,
-    ) -> Result<(), String>;
     fn shutdown_write(&self) -> Option<std::io::Result<()>>;
     fn take_pending_connect_error(&self) -> Option<std::io::Result<Option<std::io::Error>>>;
+    fn is_listener(&self) -> bool;
 }
 
 impl NetworkSocketIo for NetworkSocket {
-    fn register_readable(&self, poller: &polling::Poller, id: ProcessId) -> Result<(), String> {
+    fn is_listener(&self) -> bool {
         match self {
-            Self::TcpStream(stream) => ProcessManager::register_readable_source(poller, stream, id),
-            Self::TcpListener(listener) => {
-                ProcessManager::register_readable_source(poller, listener, id)
-            }
-            Self::UdpSocket(socket) => ProcessManager::register_readable_source(poller, socket, id),
+            Self::TcpListener(_) => true,
             #[cfg(unix)]
-            Self::SeqpacketStream(socket) => {
-                ProcessManager::register_readable_source(poller, socket, id)
-            }
-            #[cfg(unix)]
-            Self::SeqpacketListener(socket) => {
-                ProcessManager::register_readable_source(poller, socket, id)
-            }
-            #[cfg(unix)]
-            Self::UnixStream(stream) => {
-                ProcessManager::register_readable_source(poller, stream, id)
-            }
-            #[cfg(unix)]
-            Self::UnixListener(listener) => {
-                ProcessManager::register_readable_source(poller, listener, id)
-            }
-            #[cfg(unix)]
-            Self::UnixDatagram(socket) => {
-                ProcessManager::register_readable_source(poller, socket, id)
-            }
+            Self::SeqpacketListener(_) | Self::UnixListener(_) => true,
+            _ => false,
         }
     }
 
-    fn register_writable(&self, poller: &polling::Poller, id: ProcessId) -> Result<(), String> {
+    fn read_stream_output(&self, buf: &mut [u8]) -> Option<std::io::Result<usize>> {
         match self {
-            Self::TcpStream(stream) => ProcessManager::register_writable_source(poller, stream, id),
-            Self::TcpListener(_) => Err("Listener sockets are not writable process sources".into()),
-            Self::UdpSocket(socket) => ProcessManager::register_writable_source(poller, socket, id),
-            #[cfg(unix)]
-            Self::SeqpacketStream(socket) => {
-                ProcessManager::register_writable_source(poller, socket, id)
-            }
-            #[cfg(unix)]
-            Self::SeqpacketListener(_) => {
-                Err("Listener sockets are not writable process sources".into())
-            }
-            #[cfg(unix)]
-            Self::UnixStream(stream) => {
-                ProcessManager::register_writable_source(poller, stream, id)
-            }
-            #[cfg(unix)]
-            Self::UnixListener(_) => {
-                Err("Listener sockets are not writable process sources".into())
-            }
-            #[cfg(unix)]
-            Self::UnixDatagram(socket) => {
-                ProcessManager::register_writable_source(poller, socket, id)
-            }
-        }
-    }
-
-    fn unregister_readable(&self, poller: &polling::Poller) {
-        match self {
-            Self::TcpStream(stream) => {
-                let _ = poller.delete(stream);
-            }
-            Self::TcpListener(listener) => {
-                let _ = poller.delete(listener);
-            }
-            Self::UdpSocket(socket) => {
-                let _ = poller.delete(socket);
-            }
-            #[cfg(unix)]
-            Self::SeqpacketStream(socket) => {
-                let _ = poller.delete(socket);
-            }
-            #[cfg(unix)]
-            Self::SeqpacketListener(socket) => {
-                let _ = poller.delete(socket);
-            }
-            #[cfg(unix)]
-            Self::UnixStream(stream) => {
-                let _ = poller.delete(stream);
-            }
-            #[cfg(unix)]
-            Self::UnixListener(listener) => {
-                let _ = poller.delete(listener);
-            }
-            #[cfg(unix)]
-            Self::UnixDatagram(socket) => {
-                let _ = poller.delete(socket);
-            }
-        }
-    }
-
-    fn read_stream_output(&mut self, buf: &mut [u8]) -> Option<std::io::Result<usize>> {
-        match self {
-            Self::TcpStream(stream) => Some(stream.read(buf)),
+            Self::TcpStream(stream) => Some((&*stream).read(buf)),
             Self::TcpListener(_) => None,
             Self::UdpSocket(_) => None,
             #[cfg(unix)]
-            Self::SeqpacketStream(socket) => Some(socket.read(buf)),
+            Self::SeqpacketStream(socket) => Some((&*socket).read(buf)),
             #[cfg(unix)]
             Self::SeqpacketListener(_) => None,
             #[cfg(unix)]
-            Self::UnixStream(stream) => Some(stream.read(buf)),
+            Self::UnixStream(stream) => Some((&*stream).read(buf)),
             #[cfg(unix)]
             Self::UnixListener(_) => None,
             #[cfg(unix)]
@@ -361,13 +268,13 @@ impl NetworkSocketIo for NetworkSocket {
     }
 
     fn write_input_once(
-        &mut self,
+        &self,
         bytes: &[u8],
         datagram_addr: Option<SocketAddr>,
         #[cfg(unix)] datagram_unix_path: Option<std::path::PathBuf>,
     ) -> Option<std::io::Result<usize>> {
         match self {
-            Self::TcpStream(stream) => Some(stream.write(bytes)),
+            Self::TcpStream(stream) => Some((&*stream).write(bytes)),
             Self::TcpListener(_) => None,
             Self::UdpSocket(socket) => Some(match datagram_addr {
                 Some(addr) => socket.send_to(bytes, addr),
@@ -377,11 +284,11 @@ impl NetworkSocketIo for NetworkSocket {
                 )),
             }),
             #[cfg(unix)]
-            Self::SeqpacketStream(socket) => Some(socket.write(bytes)),
+            Self::SeqpacketStream(socket) => Some((&*socket).write(bytes)),
             #[cfg(unix)]
             Self::SeqpacketListener(_) => None,
             #[cfg(unix)]
-            Self::UnixStream(stream) => Some(stream.write(bytes)),
+            Self::UnixStream(stream) => Some((&*stream).write(bytes)),
             #[cfg(unix)]
             Self::UnixListener(_) => None,
             #[cfg(unix)]
@@ -392,43 +299,6 @@ impl NetworkSocketIo for NetworkSocket {
                     "No datagram address",
                 )),
             }),
-        }
-    }
-
-    fn modify_interest(
-        &self,
-        poller: &polling::Poller,
-        id: ProcessId,
-        event: polling::Event,
-    ) -> Result<(), String> {
-        match self {
-            Self::TcpStream(stream) => ProcessManager::modify_poll_source(poller, stream, event),
-            Self::TcpListener(listener) => ProcessManager::modify_poll_source(
-                poller,
-                listener,
-                polling::Event::readable(id as usize),
-            ),
-            Self::UdpSocket(socket) => ProcessManager::modify_poll_source(poller, socket, event),
-            #[cfg(unix)]
-            Self::SeqpacketStream(socket) => {
-                ProcessManager::modify_poll_source(poller, socket, event)
-            }
-            #[cfg(unix)]
-            Self::SeqpacketListener(socket) => ProcessManager::modify_poll_source(
-                poller,
-                socket,
-                polling::Event::readable(id as usize),
-            ),
-            #[cfg(unix)]
-            Self::UnixStream(stream) => ProcessManager::modify_poll_source(poller, stream, event),
-            #[cfg(unix)]
-            Self::UnixListener(listener) => ProcessManager::modify_poll_source(
-                poller,
-                listener,
-                polling::Event::readable(id as usize),
-            ),
-            #[cfg(unix)]
-            Self::UnixDatagram(socket) => ProcessManager::modify_poll_source(poller, socket, event),
         }
     }
 
@@ -494,7 +364,7 @@ pub mod types;
 // was a no-op that the VIS coverage scan still attributed to the next named
 // re-export, keeping a false ledger row alive (lead #1052 retirement).
 pub use types::*;
-pub(crate) use types::{swap_world_state, world_state_placeholder};
+pub(crate) use types::{ChildPipePollerExt, swap_world_state, world_state_placeholder};
 
 /// Test-support entry points for the option-A re-homed core process tests.
 #[cfg(any(test, feature = "test-support"))]

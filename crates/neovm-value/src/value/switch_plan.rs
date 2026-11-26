@@ -180,13 +180,8 @@ pub struct InlineSwitchKey {
 /// A key node's bits as an inline immediate, or `None` for a heap object's
 /// identity (an `eq`/`eql` key), whose address JIT code must not bake.
 fn inline_immediate(bits: usize) -> Option<InlineKeyNode> {
-    (bits & TAG_MASK == TAG_SYMBOL
-        || unsafe {
-            /* SAFETY: value-internal construction from a real Value */
-            Value::from_bits(bits)
-        }
-        .is_fixnum())
-    .then_some(InlineKeyNode::Imm(bits))
+    (bits & TAG_MASK == TAG_SYMBOL || Value::bits_are_fixnum(bits))
+        .then_some(InlineKeyNode::Imm(bits))
 }
 
 /// How a planned table answers; for tracing and tests.
@@ -362,7 +357,13 @@ impl LispHashTable {
                 .index
                 .iter()
                 .filter_map(|entry| Some((entry, self.data.entry_at(entry.slot)?)))
-                .any(|(entry, stored)| stored.key.to_hash_key(&self.test) != entry.key)
+                .any(|(entry, stored)| {
+                    // A truncated key does not describe its key object, and
+                    // walking that object again is the very expansion the
+                    // budget exists to prevent.
+                    !entry.key.contains_truncation()
+                        && stored.key.to_hash_key(&self.test) != entry.key
+                })
     }
 
     /// The table has no plan yet: the first dispatch only notes that it
@@ -551,6 +552,9 @@ impl PlanSlot {
             // An `equal` table compares the LIVE key object (GNU
             // `hash_find_with_hash`), so a key object mutated since it was
             // stored no longer matches its snapshot either: not planned.
+            if hash_key.contains_truncation() {
+                return PlanSlot::Generic;
+            }
             if entry.key.to_hash_key(&test) != *hash_key {
                 return PlanSlot::Generic;
             }

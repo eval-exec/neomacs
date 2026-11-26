@@ -470,10 +470,10 @@ fn face_frame_class_uses_live_terminal_output_kind() {
     use crate::face::realization::{FrameFaceClass, frame_face_class};
     struct Host;
     impl TerminalHost for Host {
-        fn suspend_tty(&mut self) -> Result<(), String> {
+        fn suspend_tty(&mut self, _reset_strings: &[u8]) -> Result<(), String> {
             Ok(())
         }
-        fn resume_tty(&mut self) -> Result<(), String> {
+        fn resume_tty(&mut self, _set_strings: &[u8]) -> Result<(), String> {
             Ok(())
         }
     }
@@ -699,10 +699,10 @@ fn realization_miss_roots_the_source_table_through_the_frame_lease() {
     use crate::emacs_core::terminal::pure::{self, TerminalHost, TerminalRuntimeConfig};
     struct Host;
     impl TerminalHost for Host {
-        fn suspend_tty(&mut self) -> Result<(), String> {
+        fn suspend_tty(&mut self, _reset_strings: &[u8]) -> Result<(), String> {
             Ok(())
         }
-        fn resume_tty(&mut self) -> Result<(), String> {
+        fn resume_tty(&mut self, _set_strings: &[u8]) -> Result<(), String> {
             Ok(())
         }
     }

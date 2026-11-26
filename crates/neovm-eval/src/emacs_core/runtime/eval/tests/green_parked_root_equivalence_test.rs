@@ -95,8 +95,8 @@ fn parked_roots_equal_full_census_without_world_plus_parked_tls() {
         use neovm_value::value::LambdaParams;
         let called = Value::symbol("g3f-census-redefined");
         let mut source = ByteCodeFunction::new(LambdaParams::simple(Vec::new()));
-        source.ops = vec![Op::Constant(0), Op::Return];
-        source.constants = vec![Value::NIL].into();
+        source.set_ops(vec![Op::Constant(0), Op::Return]);
+        source.set_constants(vec![Value::NIL].into());
         source.seal_hand_assembled_ops();
         let source = Value::make_bytecode(source);
         owner.specpdl.push(SpecBinding::Backtrace1 {

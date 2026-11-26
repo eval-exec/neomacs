@@ -8,12 +8,38 @@ on:
     branches:
       - main
   workflow_dispatch:
+    inputs:
+      job:
+        description: >-
+          Job id to run, or all. Choices are all, plus jobs that have no
+          needs, and neomacs-display-tests. That display job has needs, so
+          selecting it also starts neomacs-test-runtime and
+          neomacs-workspace-test-archive. Every other job that needs another
+          job runs only when this is all. Push, pull request, and schedule
+          ignore this and run the suite.
+        type: choice
+        default: all
+        options:
+          - all
+          - neomacs-workspace-test-archive
+          - neomacs-melpa-direct-windows-tests
+          - compile-contracts
+          - neovm-eval-tests
+          - compile-contracts-macos
+          - gnu-emacs-oracle
+          - gnu-emacs-oracle-macos
+          - neomacs-macos-test-build
+          - neomacs-test-runtime
+          - neomacs-display-tests
+          - neomacs-xwidget-webview-gui
+          - doom-install-compatibility-macos
+          - loom-models
   schedule:
     - cron: "17 5 * * 0"
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 permissions:
   contents: read
@@ -21,6 +47,7 @@ permissions:
 jobs:
   neomacs-workspace-test-archive:
     name: workspace test archive (linux x86_64)
+    if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.job == 'all' || github.event.inputs.job == 'neomacs-workspace-test-archive' || github.event.inputs.job == 'neomacs-display-tests' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     env:
@@ -124,6 +151,7 @@ jobs:
 
   neomacs-daemon-lifecycle:
     name: daemon lifecycle (linux, matching debug runtime)
+    if: ${{ !cancelled() && (github.event_name != 'workflow_dispatch' || github.event.inputs.job == 'all') && (needs.gnu-emacs-oracle.result == 'success') }}
     needs: gnu-emacs-oracle
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -156,7 +184,7 @@ jobs:
 
   neomacs-melpa-direct-windows-tests:
     name: MELPA direct adapter Job Object contracts (windows x86_64)
-    if: ${{ github.event_name != 'schedule' }}
+    if: ${{ github.event_name != 'schedule' && (github.event_name != 'workflow_dispatch' || github.event.inputs.job == 'all' || github.event.inputs.job == 'neomacs-melpa-direct-windows-tests') }}
     runs-on: windows-latest
     timeout-minutes: 30
     env:
@@ -195,7 +223,7 @@ jobs:
           --no-fail-fast
 
   neovm-core-tests:
-    if: ${{ github.event_name != 'schedule' }}
+    if: ${{ !cancelled() && github.event_name != 'schedule' && (github.event_name != 'workflow_dispatch' || github.event.inputs.job == 'all') && ((needs.neomacs-test-runtime.result == 'success' && needs.neomacs-workspace-test-archive.result == 'success' && needs.gnu-emacs-oracle.result == 'success')) }}
     # The core shards spawn GNU directly in their parity tests, so they need
     # the pinned oracle. Depending on the warming job also means they restore
     # its cached build instead of compiling Emacs twenty times in parallel.
@@ -204,43 +232,53 @@ jobs:
     with:
       suite: core
 
-  # The Darwin arm of the same suite.  A separate job, not a matrix arm,
-  # because it shares nothing with Linux beyond the test sources: the runtime
-  # and test binaries are compiled on the Mac, and the oracle is an NS GNU
-  # built by the recipe's Darwin profile (setup-gnu-emacs-macos).  It runs the neovm-core package and then the
-  # host-hermetic oracle-parity families -- the org/divergence/file/process
-  # selection of package neovm-oracle-tests whose expectations hold on both
-  # hosts after the macOS-keyed fixes -- in Verify mode, so those
-  # expectations are proven in CI and not only on a developer's Mac.  The
-  # unfiltered package still carries Linux-keyed lib expectation families
-  # (cus_start_platform, defvar_*, fontset, file acl, trigonometry, ...);
-  # making those host-hermetic is a separate expectation project, and this
-  # job states its boundary rather than skipping them silently.  The
-  # selection is unsharded because a macOS runner has three cores; the job
-  # keeps its 150-minute timeout and the measured wall time is recorded in
-  # the commit that added the second suite.  The GNU build itself is warmed
-  # by the separate `gnu-emacs-oracle-macos` job (below), so a cancelled test
-  # job cannot lose it.
-  neovm-core-tests-macos:
-    name: neovm-core tests (macos aarch64)
-    if: ${{ github.event_name != 'schedule' }}
-    needs: [gnu-emacs-oracle-macos]
+  # The Darwin arm of the neovm-core suite and of the host-hermetic
+  # oracle-parity families.  These jobs are separate from the Linux shards, not
+  # matrix arms, because they share nothing with Linux beyond the test sources:
+  # the runtime and test binaries are compiled on the Mac, and the oracle is an
+  # NS GNU built by the recipe's Darwin profile (setup-gnu-emacs-macos).
+  #
+  # BUILD ONCE, RUN FROM THE ARCHIVE.  The macOS jobs are shaped like the
+  # Linux suites (neomacs-test-runtime + neomacs-workspace-test-archive feeding
+  # nextest-shards.yml): neomacs-macos-test-build compiles the runtime and the
+  # test binaries once, and the consumers below unpack them and run nextest
+  # from the archive.  Before this, on main run 44786267593, every job compiled
+  # for itself: the core job (fresh-build plus the test build plus the run)
+  # took 38 minutes, each of the three oracle-family shards spent 14-26
+  # minutes on a cold fresh-build of its own before a 24-25 minute test run,
+  # and GitHub's macOS concurrency limit queued the core job ~40 minutes behind
+  # the shards, so the suite's macOS wall time stayed ~100 minutes even after
+  # the families were sharded.  Now one build runs in parallel with the GNU
+  # warmer, and four consumers that build no Rust test binaries follow it (the
+  # core job's trybuild contract runner still compiles its scratch fixture,
+  # as it does on the Linux core shards).
+  #
+  # The build is a harness build, never shipped: a hosted macOS runner has
+  # ~7 GB of RAM and this workspace's shipping profile is fat LTO with a link
+  # that needs far more, so the runtime builds with LTO off and 16 codegen
+  # units (the Linux archive job makes the same trade, and no neovm-core or
+  # oracle assertion is about the runtime binary's optimization level).  The
+  # test binaries use the default test profile, the one `cargo nextest run`
+  # used when each job built its own.
+  #
+  # A Mac lane reproduces the core job locally with
+  # scripts/ci/run-neovm-core-macos-job.sh, which builds in place and runs the
+  # same checks the core consumer runs from this archive.
+  neomacs-macos-test-build:
+    name: macOS test build (macos aarch64)
+    if: ${{ github.event_name != 'schedule' && (github.event_name != 'workflow_dispatch' || github.event.inputs.job == 'all' || github.event.inputs.job == 'neomacs-macos-test-build') }}
     runs-on: macos-latest
-    timeout-minutes: 150
+    timeout-minutes: 120
     env:
       CARGO_TERM_COLOR: always
       RUST_BACKTRACE: "1"
+      CARGO_PROFILE_RELEASE_LTO: "false"
+      CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "16"
       TMPDIR: ${{ github.workspace }}/tmp
     steps:
       - *checkout
       - *prepare_workspace_tmp
       - uses: ./.github/actions/install-build-deps
-
-      # Build the pinned GNU once per (mirror commit, recipe hash); the smoke
-      # step inside fails the job if the cache produced the wrong oracle.
-      - name: Set up the pinned GNU Emacs oracle
-        id: oracle
-        uses: ./.github/actions/setup-gnu-emacs-macos
 
       - name: Set up Rust tooling
         uses: ./.github/actions/setup-rust
@@ -254,43 +292,267 @@ jobs:
           # would be restored and the improved save silently skipped.
           cache-shared-key: macos-aarch64-release-ws
           # fresh-build and the test targets recompile the workspace's own
-          # crates on every commit, which is ~33 min of the job on a 3-core
+          # crates on every commit, which was ~33 min of a job on a 3-core
           # runner.  The release-profile inputs are stable enough to cache
-          # them; the Doom job restores/saves the same shared entry and
-          # enables this too, so the two jobs never race different contents
-          # under one key.
+          # them.  This job is the ONE saver of the shared entry: the Doom
+          # job and gui-tests-macos.yml restore it with workspace crates
+          # enabled but never save, so no other job can race different
+          # contents (or the slower dependency-only shape) under this key.
           cache-workspace-crates: "true"
           cache-save-if: ${{ github.ref == 'refs/heads/main' }}
           install-nextest: true
           target: aarch64-apple-darwin
 
-      # The job is a file so a lane can run exactly this on a Mac:
-      # scripts/ci/run-neovm-core-macos-job.sh.  It fails on a missing or
-      # unpinned oracle, proves the nil-`text-quoting-style` locale cases
-      # against it, and runs the suite with the attested resolver pointed at
-      # the same binary.
-      - name: Run the macOS neovm-core parity job
+      - name: Build the runtime under test
+        run: cargo xtask fresh-build --release
+
+      # One archive for every macOS consumer.  Cargo's target-selection flags
+      # apply to every selected package, so `--lib --test oracle` here would
+      # also strip neovm-core down to its lib; the packages' default test
+      # targets are already the exact sets the consumers run: every test
+      # target of neovm-core (what `cargo nextest run -p neovm-core` built),
+      # and neovm-oracle-tests' lib plus its one `oracle` binary
+      # (autotests = false, a single [[test]]).  Building both packages in one
+      # invocation does not change neovm-core's resolved features: `cargo
+      # tree -e features` over neovm-core's closure is identical with and
+      # without neovm-oracle-tests selected.
+      - name: Build and archive the macOS test binaries
         run: |
-          scripts/ci/run-neovm-core-macos-job.sh \
+          cargo nextest archive \
+            --package neovm-core \
+            --package neovm-oracle-tests \
+            --archive-file neomacs-macos-tests.tar.zst
+
+      - name: Package the macOS test runtime
+        run: |
+          test -x target/release/neomacs
+          test -x target/release/neomacsclient
+          test -f target/release/neomacs.pdump
+          test -f lisp/international/charscript.el
+          test -f lisp/international/charprop.el
+          test -d etc/charsets
+          # The fresh-build stamp attests the binary to the Lisp tree; the
+          # oracle harnesses refuse a runtime without it.  Package it with the
+          # pair it belongs to.
+          test -f target/release/neomacs.fresh-build-stamp
+          tar czf neomacs-test-runtime-macos-aarch64.tar.gz \
+            target/release/neomacs \
+            target/release/neomacsclient \
+            target/release/neomacs.pdump \
+            target/release/neomacs.fresh-build-stamp \
+            lisp \
+            etc
+
+      - name: Upload the macOS test runtime
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: neomacs-test-runtime-macos-aarch64
+          path: neomacs-test-runtime-macos-aarch64.tar.gz
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: Upload the macOS test archive
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: neomacs-macos-tests-nextest-archive-macos-aarch64
+          path: neomacs-macos-tests.tar.zst
+          if-no-files-found: error
+          retention-days: 1
+
+  # The neovm-core package on macOS (unit and integration tests, including the
+  # parity families that spawn GNU), run from neomacs-macos-test-build's
+  # archive against the pinned NS GNU.  The host-hermetic oracle-parity
+  # families -- the org/divergence/file/process selection of package
+  # neovm-oracle-tests whose expectations hold on both hosts after the
+  # macOS-keyed fixes -- run in Verify mode in neovm-oracle-families-macos
+  # (below), three hash shards in parallel, so those expectations are proven
+  # in CI and not only on a developer's Mac.  The unfiltered package still
+  # carries Linux-keyed lib expectation families (cus_start_platform,
+  # defvar_*, fontset, file acl, trigonometry, ...); making those
+  # host-hermetic is a separate expectation project, and the shard job states
+  # its boundary rather than skipping them silently.  The GNU build itself is
+  # warmed by the separate `gnu-emacs-oracle-macos` job (below), so a
+  # cancelled test job cannot lose it.
+  #
+  # The steps are scripts/ci/run-neovm-core-macos-job.sh's sequence with the
+  # build replaced by the shared archive: prove the oracle, prove the
+  # nil-`text-quoting-style` locale cases against it, run the package.
+  neovm-core-tests-macos:
+    name: neovm-core tests (macos aarch64)
+    if: ${{ !cancelled() && github.event_name != 'schedule' && (github.event_name != 'workflow_dispatch' || github.event.inputs.job == 'all') && (needs.gnu-emacs-oracle-macos.result == 'success' && needs.neomacs-macos-test-build.result == 'success') }}
+    needs: [gnu-emacs-oracle-macos, neomacs-macos-test-build]
+    runs-on: macos-latest
+    timeout-minutes: 120
+    env:
+      CARGO_TERM_COLOR: always
+      RUST_BACKTRACE: "1"
+      # The archived binaries find the unpacked runtime the way the Linux
+      # core shards do (nextest-shards.yml).  thread_soak resolves its editor
+      # from NEOVM_BINARY_PATH / NEOMACS_BIN.
+      NEOVM_BINARY_PATH: ${{ github.workspace }}/target/release/neomacs
+      NEOMACS_BIN: ${{ github.workspace }}/target/release/neomacs
+      NEOMACS_RUNTIME_ROOT: ${{ github.workspace }}
+      TMPDIR: ${{ github.workspace }}/tmp
+    steps:
+      - *checkout
+      - *prepare_workspace_tmp
+      # The runtime's Homebrew tooling, and the toolchain the contract
+      # runners' trybuild scratch builds need.
+      - uses: ./.github/actions/install-build-deps
+
+      # Restores the build the warmer saved; the smoke step inside fails the
+      # job if the cache produced the wrong oracle.
+      - name: Set up the pinned GNU Emacs oracle
+        id: oracle
+        uses: ./.github/actions/setup-gnu-emacs-macos
+
+      - name: Set up Rust tooling
+        uses: ./.github/actions/setup-rust
+        with:
+          # This job compiles nothing of its own: the test binaries come from
+          # the archive.  Like the Linux shards, it caches nothing.
+          cache: "false"
+          cache-key: ci-neovm-core-tests-macos
+          install-nextest: true
+
+      # The core filter includes neovm-core's compile-fail contract targets
+      # (mint_seal_contracts runs without the contract-fixtures feature).
+      # trybuild invokes `cargo --offline` on a scratch project that copies
+      # this workspace's Cargo.lock and [patch.crates-io] table, so the
+      # locked crates must already be in CARGO_HOME -- the same step the
+      # Linux core shards run.
+      - name: Fetch locked crates for trybuild's offline builds
+        run: cargo fetch --locked
+
+      - &macos_download_runtime
+        name: Download the macOS test runtime
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: neomacs-test-runtime-macos-aarch64
+          path: .
+
+      - &macos_unpack_runtime
+        name: Unpack the macOS test runtime
+        run: |
+          tar xzf neomacs-test-runtime-macos-aarch64.tar.gz
+          chmod +x target/release/neomacs target/release/neomacsclient
+          test -f lisp/international/charscript.el
+          test -f lisp/international/charprop.el
+          test -f target/release/neomacs.fresh-build-stamp
+
+      - &macos_download_archive
+        name: Download the macOS test archive
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: neomacs-macos-tests-nextest-archive-macos-aarch64
+          path: .
+
+      # The oracle is the environment seam: prove it is the pinned build
+      # before running anything.  A cache miss that produced a TTY-less,
+      # native-comp or otherwise different GNU fails here, not inside a
+      # hundred parity tests.
+      - name: Check the pinned GNU Emacs oracle
+        run: |
+          scripts/ci/check-gnu-oracle.sh \
             "${{ steps.oracle.outputs.emacs }}" \
-            "${{ steps.oracle.outputs.manifest }}" \
             "${{ steps.oracle.outputs.version }}" \
+            "${{ steps.oracle.outputs.manifest }}" \
+            "${{ steps.oracle.outputs.commit }}"
+
+      # The nil-`text-quoting-style' locale resolution, the one input this
+      # job can check end to end (batch, no pty): C locale is grave, UTF-8 is
+      # curve, and the display-table backtick entry is grave, agreeing with
+      # the pinned GNU byte for byte (the script cites the GNU lines).
+      - name: Check the text-quoting-style locale cases
+        run: |
+          scripts/ci/check-text-quoting-locale.sh \
+            "$GITHUB_WORKSPACE/target/release/neomacs" \
+            "${{ steps.oracle.outputs.emacs }}"
+
+      # Oracle families resolve GNU through the attested resolver
+      # (neomacs-test-oracle) from NEOVM_FORCE_ORACLE_PATH, and a missing
+      # oracle panics inside them rather than skipping.
+      - name: Run the macOS neovm-core suite
+        env:
+          NEOVM_FORCE_ORACLE_PATH: ${{ steps.oracle.outputs.emacs }}
+        run: |
+          cargo nextest run \
+            --archive-file neomacs-macos-tests.tar.zst \
+            --extract-to "$TMPDIR/nextest" \
+            --workspace-remap "$GITHUB_WORKSPACE" \
+            -E 'package(neovm-core)' \
+            --test-threads 16 \
+            --no-fail-fast
+
+  # The host-hermetic oracle-parity families on macOS, split from
+  # neovm-core-tests-macos into three hash partitions.  The selection spawns
+  # the pinned GNU for every case, and on one 3-core runner it ran ~62 minutes
+  # after the ~40 minutes of the core job.  Each shard runs its partition from
+  # neomacs-macos-test-build's archive and runtime (the oracle tests need
+  # NEOVM_BINARY_PATH), so no shard compiles; nextest's hash partition is
+  # disjoint, exhaustive and deterministic, so every selected case still runs
+  # exactly once.
+  neovm-oracle-families-macos:
+    name: neovm-oracle families (macos aarch64) shard ${{ matrix.partition }}/3
+    if: ${{ !cancelled() && github.event_name != 'schedule' && (github.event_name != 'workflow_dispatch' || github.event.inputs.job == 'all') && (needs.gnu-emacs-oracle-macos.result == 'success' && needs.neomacs-macos-test-build.result == 'success') }}
+    needs: [gnu-emacs-oracle-macos, neomacs-macos-test-build]
+    runs-on: macos-latest
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        partition: [1, 2, 3]
+    env:
+      CARGO_TERM_COLOR: always
+      RUST_BACKTRACE: "1"
+      TMPDIR: ${{ github.workspace }}/tmp
+    steps:
+      - *checkout
+      - *prepare_workspace_tmp
+      - uses: ./.github/actions/install-build-deps
+
+      - name: Set up the pinned GNU Emacs oracle
+        id: oracle
+        uses: ./.github/actions/setup-gnu-emacs-macos
+
+      - name: Set up Rust tooling
+        uses: ./.github/actions/setup-rust
+        with:
+          # The shard runs prebuilt binaries out of the archive and caches
+          # nothing, like the Linux shards.
+          cache: "false"
+          cache-key: ci-neovm-oracle-families-macos
+          install-nextest: true
+
+      - *macos_download_runtime
+      - *macos_unpack_runtime
+      - *macos_download_archive
+
+      - name: Check the pinned GNU Emacs oracle
+        run: |
+          scripts/ci/check-gnu-oracle.sh \
+            "${{ steps.oracle.outputs.emacs }}" \
+            "${{ steps.oracle.outputs.version }}" \
+            "${{ steps.oracle.outputs.manifest }}" \
             "${{ steps.oracle.outputs.commit }}"
 
       # The host-hermetic oracle-parity families, on the Darwin runner
-      # against the same attested GNU and the runtime `fresh-build` just
+      # against the same attested GNU and the runtime neomacs-macos-test-build
       # produced.  Verify mode runs the local GNU for every case and compares
       # it with the checked-in expectation, then requires Neomacs to match
       # that same live GNU: the live-comparison cases that Snapshot mode can
       # only check against a recorded value execute here, and a macOS-keyed
       # expectation is proven in CI rather than only on a lane's Mac.
       #
-      # The -E selection is the set proven host-hermetic end to end on the
-      # macmini (9652/9652 in Verify).  The rest of the package's lib
+      # The test(...) selection is the set proven host-hermetic end to end on
+      # the macmini (9652/9652 in Verify).  The rest of the package's lib
       # expectations are still GNU/Linux-keyed (cus_start_platform,
       # defvar_*, fontset, ...); running them here would be red for reasons a
       # workflow change cannot fix, so they stay on the Linux shards until
-      # their families get the same macOS-keyed treatment.
+      # their families get the same macOS-keyed treatment.  The archive also
+      # carries neovm-core, so package(neovm-oracle-tests) keeps the selection
+      # to what `-p neovm-oracle-tests --test oracle --lib` selected: that
+      # package's archived binaries are exactly its lib and `oracle`.
       - name: Run the macOS oracle-parity families
         if: ${{ !cancelled() }}
         env:
@@ -311,9 +573,12 @@ jobs:
           NEOMACS_RUNTIME_ROOT: ${{ github.workspace }}
           NEOVM_LIBFAKETIME_SO: ${{ steps.oracle.outputs.libfaketime }}
         run: >-
-          cargo nextest run -p neovm-oracle-tests --test oracle --lib
-          -E 'test(/org_mode/) | test(/orgexport_/) | test(~process_attributes) | test(/oracle_harness/) | test(/system_info/) | test(/user_env_load_locale_state/) | test(/misc_strict_edge_semantics/) | test(/case_428/) | test(/case_444/) | test(/file_name_runtime/) | test(/file_remote_tramp/) | test(/file_ops_deep/) | test(/float_operations_comprehensive/) | test(/member_alist_semantics/) | test(/jit_flonum_semantics/) | test(/conversion_format_semantics/) | test(/merge_ordered_lists_semantics/) | test(/oracle_command_line_max_length_is_derived_from_this_editors_stack_rlimit/) | test(/file::attributes_strict_edge_semantics/) | test(/load_history_semantics/) | test(/load_suffixes_semantics/) | test(/name_case_insensitive_strict_edge_semantics/) | test(/snarf_documentation_last_writer/) | test(/^trigonometry::/) | test(/^platform_host_semantics::/) | test(/^compare::case_table::/) | test(/^oracle_divergence::divergence::coding_process::/) | test(/^oracle_divergence_combo_complex::divergence_combo_complex::case_083::/) | test(/^oracle_combination::combination::signal_processing_advanced::/) | test(/^file::acl_strict_edge_semantics::/) | test(/^inotify_public_semantics::/) | test(/^oracle_divergence::divergence::process_async_extra_runtime::/) | test(/^oracle_divergence::divergence::unicode_normalization::/) | test(/^process::wait_semantics::/) | test(/^string::comparison_comprehensive::/) | test(/^oracle_combination::combination::/)'
-          --no-fail-fast
+          cargo nextest run
+          --archive-file neomacs-macos-tests.tar.zst
+          --extract-to "$TMPDIR/nextest"
+          --workspace-remap "$GITHUB_WORKSPACE"
+          -E 'package(neovm-oracle-tests) and (test(/^oracle_backend_quit_binding::/) | test(/org_mode/) | test(/orgexport_/) | test(~process_attributes) | test(/oracle_harness/) | test(/system_info/) | test(/user_env_load_locale_state/) | test(/misc_strict_edge_semantics/) | test(/case_428/) | test(/case_444/) | test(/file_name_runtime/) | test(/file_remote_tramp/) | test(/file_ops_deep/) | test(/float_operations_comprehensive/) | test(/member_alist_semantics/) | test(/jit_flonum_semantics/) | test(/conversion_format_semantics/) | test(/merge_ordered_lists_semantics/) | test(/oracle_command_line_max_length_is_derived_from_this_editors_stack_rlimit/) | test(/file::attributes_strict_edge_semantics/) | test(/load_history_semantics/) | test(/load_suffixes_semantics/) | test(/name_case_insensitive_strict_edge_semantics/) | test(/snarf_documentation_last_writer/) | test(/^trigonometry::/) | test(/^platform_host_semantics::/) | test(/^compare::case_table::/) | test(/^oracle_divergence::divergence::coding_process::/) | test(/^oracle_divergence_combo_complex::divergence_combo_complex::case_083::/) | test(/^oracle_combination::combination::signal_processing_advanced::/) | test(/^file::acl_strict_edge_semantics::/) | test(/^inotify_public_semantics::/) | test(/^oracle_divergence::divergence::process_async_extra_runtime::/) | test(/^oracle_divergence::divergence::unicode_normalization::/) | test(/^process::wait_semantics::/) | test(/^process::pty_output_vs_exit_semantics::/) | test(/^string::comparison_comprehensive::/) | test(/^oracle_combination::combination::/))'
+          --partition hash:${{ matrix.partition }}/3 --no-fail-fast
 
   # The compile-fail contracts build only with the `contract-fixtures`
   # feature, so the default suites and the shard matrix never run them and
@@ -324,6 +589,7 @@ jobs:
   # watchdog sized for a fixture crate build instead of a unit test.
   compile-contracts:
     name: compile contracts (linux x86_64)
+    if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.job == 'all' || github.event.inputs.job == 'compile-contracts' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     env:
@@ -378,10 +644,14 @@ jobs:
       # The runners are compiled only with the `contract-fixtures` feature
       # (41eaff923a moved them off #[ignore]). Without it the test targets
       # build empty and nextest runs nothing, so the job also counts
-      # the runners that actually passed: p0s3 1, p1rv 3, thread_safety 12
-      # (its own, sole-owner, p2ht, pentry, nmjit N1, three host-effect
-      # tests, intern-shared, P15, split T2 and obarray_view_swap_compile_contracts),
-      # chartable_write 1, and mint_seal 1 (the mint-seal trybuild fixtures);
+      # the runners that actually passed: p0s3 1, p1rv 3, thread_safety 17
+      # (its own, sole-owner, p2ht, pentry, pentry E2 loan, pentry E2 heap
+      # transfer, pentry E2 cold receipt, nmjit N1, three host-effect
+      # tests, intern-shared, P15, split T2, jit grace, the E5.1 serial
+      # turn, and obarray_view_swap_compile_contracts),
+      # chartable_write 1, mint_seal 1 (the mint-seal trybuild fixtures),
+      # heap_capability 1 (U1 collect and sweep-protocol E0133), and
+      # retained_leaf 1 (the retained-leaf trybuild fixtures);
       # check_compile_contracts.py enforces these per-target counts and the
       # summary. The nmjit N1 runner drives the isolated
       # nmjit-type-contracts workspace through its own nested nextest run.
@@ -400,9 +670,38 @@ jobs:
             env -u TRYBUILD cargo nextest run -p neovm-core --features contract-fixtures --no-fail-fast \
               --test p0s3_contracts --test p1rv_contracts \
               --test thread_safety_contracts --test chartable_write_contracts \
-              --test mint_seal_contracts
+              --test mint_seal_contracts --test heap_capability_contracts \
+              --test retained_leaf_contracts
           } 2>&1 | tee "$RUNNER_TEMP/contracts.log"
           python3 scripts/check_compile_contracts.py "$RUNNER_TEMP/contracts.log"
+
+  # release-native-depth is not a default feature, and the workspace archive
+  # must not enable it: the rest of the eval harness asserts the test counter.
+  # This job is the eval test that runs the release reading of the mint.
+  neovm-eval-tests:
+    name: neovm-eval release native depth (linux x86_64)
+    if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.job == 'all' || github.event.inputs.job == 'neovm-eval-tests' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      CARGO_TERM_COLOR: always
+      RUST_BACKTRACE: 1
+      TMPDIR: ${{ github.workspace }}/tmp
+    steps:
+      - *checkout
+      - *prepare_workspace_tmp
+      - uses: ./.github/actions/install-build-deps
+
+      - name: Set up Rust tooling
+        uses: ./.github/actions/setup-rust
+        with:
+          cache-key: ci-neovm-eval-release-native-depth-linux-x86_64
+          cache-shared-key: linux-x86_64-dev
+          cache-save-if: ${{ github.ref == 'refs/heads/main' }}
+          install-nextest: true
+
+      - name: Run the release-native-depth mint regressions
+        run: cargo nextest run -p neovm-eval --lib --features release-native-depth -E 'test(n5_release_)'
 
   # The same contracts on the arm64 macOS toolchain. rustc on aarch64-apple-darwin
   # orders and caps its E0277/E0599 notes differently, so the suite keeps
@@ -412,7 +711,7 @@ jobs:
   # bless rewrote 9 of them). This job is their gate.
   compile-contracts-macos:
     name: compile contracts (macos aarch64)
-    if: ${{ github.event_name != 'schedule' }}
+    if: ${{ github.event_name != 'schedule' && (github.event_name != 'workflow_dispatch' || github.event.inputs.job == 'all' || github.event.inputs.job == 'compile-contracts-macos') }}
     runs-on: macos-latest
     timeout-minutes: 120
     env:
@@ -458,12 +757,14 @@ jobs:
             env -u TRYBUILD cargo nextest run -p neovm-core --features contract-fixtures --no-fail-fast \
               --test p0s3_contracts --test p1rv_contracts \
               --test thread_safety_contracts --test chartable_write_contracts \
-              --test mint_seal_contracts
+              --test mint_seal_contracts --test heap_capability_contracts \
+              --test retained_leaf_contracts
           } 2>&1 | tee "$RUNNER_TEMP/contracts.log"
           python3 scripts/check_compile_contracts.py "$RUNNER_TEMP/contracts.log"
 
   gnu-emacs-oracle:
     name: GNU Emacs oracle (linux x86_64)
+    if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.job == 'all' || github.event.inputs.job == 'gnu-emacs-oracle' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
@@ -481,6 +782,7 @@ jobs:
 
   gnu-emacs-oracle-macos:
     name: GNU Emacs oracle (macos aarch64)
+    if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.job == 'all' || github.event.inputs.job == 'gnu-emacs-oracle-macos' }}
     runs-on: macos-latest
     timeout-minutes: 60
     steps:
@@ -504,6 +806,7 @@ jobs:
 
   neomacs-test-runtime:
     name: Packaged Neomacs Runtime (linux x86_64)
+    if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.job == 'all' || github.event.inputs.job == 'neomacs-test-runtime' || github.event.inputs.job == 'neomacs-display-tests' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 150
     env:
@@ -518,7 +821,9 @@ jobs:
         uses: ./.github/actions/setup-rust
         with:
           cache-key: ci-shared-runtime-linux-x86_64
-          cache-shared-key: linux-x86_64-release
+          # Host compilers only. linux-x86_64-release was written by the
+          # xwidget nix shell, whose PKG_CONFIG poisons a restored target.
+          cache-shared-key: linux-x86_64-release-2
           cache-save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Build fresh release runtime
@@ -756,14 +1061,14 @@ jobs:
           retention-days: 1
 
   neovm-oracle-tests:
-    if: ${{ github.event_name != 'schedule' }}
+    if: ${{ !cancelled() && github.event_name != 'schedule' && (github.event_name != 'workflow_dispatch' || github.event.inputs.job == 'all') && ((needs.neomacs-test-runtime.result == 'success' && needs.neomacs-workspace-test-archive.result == 'success' && needs.gnu-emacs-oracle.result == 'success')) }}
     needs: [neomacs-test-runtime, neomacs-workspace-test-archive, gnu-emacs-oracle]
     uses: ./.github/workflows/nextest-shards.yml
     with:
       suite: oracle
 
   neomacs-tui-tests:
-    if: ${{ github.event_name != 'schedule' }}
+    if: ${{ !cancelled() && github.event_name != 'schedule' && (github.event_name != 'workflow_dispatch' || github.event.inputs.job == 'all') && ((needs.neomacs-test-runtime.result == 'success' && needs.neomacs-workspace-test-archive.result == 'success' && needs.gnu-emacs-oracle.result == 'success')) }}
     needs: [neomacs-test-runtime, neomacs-workspace-test-archive, gnu-emacs-oracle]
     uses: ./.github/workflows/nextest-shards.yml
     with:
@@ -776,7 +1081,7 @@ jobs:
     # watchers key per-job baselines on it (tmp/v10x/ci/ci-watch.sh), and a
     # renamed job would lose its baseline.
     name: MELPA ${{ matrix.suite }} compatibility and GNU parity (linux x86_64)
-    if: ${{ github.event_name != 'schedule' }}
+    if: ${{ !cancelled() && github.event_name != 'schedule' && (github.event_name != 'workflow_dispatch' || github.event.inputs.job == 'all') && ((needs.neomacs-test-runtime.result == 'success' && needs.neomacs-workspace-test-archive.result == 'success' && needs.gnu-emacs-oracle.result == 'success')) }}
     needs: [neomacs-test-runtime, neomacs-workspace-test-archive, gnu-emacs-oracle]
     runs-on: ubuntu-24.04
     timeout-minutes: 30
@@ -913,7 +1218,7 @@ jobs:
 
   neomacs-display-tests:
     name: display stack tests (linux x86_64)
-    if: ${{ github.event_name != 'schedule' }}
+    if: ${{ !cancelled() && github.event_name != 'schedule' && (github.event_name != 'workflow_dispatch' || github.event.inputs.job == 'all' || github.event.inputs.job == 'neomacs-display-tests') && ((needs.neomacs-test-runtime.result == 'success' && needs.neomacs-workspace-test-archive.result == 'success')) }}
     # The layout-engine tests bootstrap GNU Lisp through neovm-core, which
     # reads the workspace's lisp/ tree.  The checkout has the tracked sources
     # but not the generated ones (lisp/international/charscript.el,
@@ -930,6 +1235,7 @@ jobs:
       TMPDIR: ${{ github.workspace }}/tmp
       NEOMACS_BINARY_PATH: ${{ github.workspace }}/target/release/neomacs
       NEOMACS_RUNTIME_ROOT: ${{ github.workspace }}
+      NEOMACS_FONT_FIXTURE_CACHE: ${{ github.workspace }}/tmp/font-fixtures
       NEXTEST_FILTER: "package(neomacs-display-protocol)|package(neomacs-display-runtime)|package(neomacs-layout-engine)|package(neomacs-renderer-wgpu)"
     steps:
       - *checkout
@@ -960,6 +1266,26 @@ jobs:
       # --extract-to tree. Prepare the pinned image without compiling Rust.
       - name: Prepare pinned image fixtures
         run: python3 scripts/ci/prefetch-image-fixtures.py --workspace "$GITHUB_WORKSPACE"
+
+      # Nine files only: eight desktop faces plus Noto Sans Arabic. The
+      # cache key is the hash of those pins, not the full font-fixtures set.
+      # A restored directory is re-hashed by the provisioner; a partial
+      # desktop-fonts directory is not treated as a hit.
+      - name: Hash pinned display font fixtures
+        id: display-font-pins
+        run: |
+          set -euo pipefail
+          key=$(python3 scripts/ci/prefetch-display-font-fixtures.py --workspace "$GITHUB_WORKSPACE" --print-cache-key)
+          echo "key=${key}" >> "$GITHUB_OUTPUT"
+
+      - name: Restore pinned display font fixtures
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: tmp/font-fixtures
+          key: display-font-fixtures-${{ steps.display-font-pins.outputs.key }}
+
+      - name: Prepare pinned display font fixtures
+        run: python3 scripts/ci/prefetch-display-font-fixtures.py --workspace "$GITHUB_WORKSPACE"
 
       - name: Run display stack tests
         run: |
@@ -993,7 +1319,7 @@ jobs:
 
   neomacs-prefix-face-tui-parity:
     name: GNU prefix face TUI parity (linux x86_64)
-    if: ${{ github.event_name != 'schedule' }}
+    if: ${{ !cancelled() && github.event_name != 'schedule' && (github.event_name != 'workflow_dispatch' || github.event.inputs.job == 'all') && ((needs.neomacs-test-runtime.result == 'success' && needs.neomacs-workspace-test-archive.result == 'success' && needs.gnu-emacs-oracle.result == 'success')) }}
     needs: [neomacs-test-runtime, neomacs-workspace-test-archive, gnu-emacs-oracle]
     runs-on: ubuntu-24.04
     timeout-minutes: 30
@@ -1045,7 +1371,7 @@ jobs:
 
   neomacs-gui-tests:
     name: real GUI tests (linux x86_64, X11 + Wayland)
-    if: ${{ github.event_name != 'schedule' }}
+    if: ${{ !cancelled() && github.event_name != 'schedule' && (github.event_name != 'workflow_dispatch' || github.event.inputs.job == 'all') && ((needs.neomacs-test-runtime.result == 'success' && needs.neomacs-workspace-test-archive.result == 'success' && needs.gnu-emacs-oracle.result == 'success')) }}
     needs: [neomacs-test-runtime, neomacs-workspace-test-archive, gnu-emacs-oracle]
     runs-on: ubuntu-24.04
     timeout-minutes: 60
@@ -1056,6 +1382,13 @@ jobs:
       NEOMACS_GUI_TEST_BACKEND: x11
       NEOMACS_GUI_TEST_BINARY: ${{ github.workspace }}/target/release/neomacs
       NEOMACS_GUI_TEST_GNU_EMACS: /opt/gnu-emacs-oracle/bin/emacs
+      # display_line_numbers::native_line_number_gui_matrix_capacity_matches_attested_gnu
+      # compares live X11 getters with the attested GNU GUI oracle and states
+      # that requirement as NEOVM_ORACLE_MODE=verify + NEOVM_FORCE_ORACLE_PATH
+      # (the same pair nextest-shards uses). Supply them rather than weaken
+      # the test's "unsupported setup is a failure, never a skip" contract.
+      NEOVM_ORACLE_MODE: verify
+      NEOVM_FORCE_ORACLE_PATH: /opt/gnu-emacs-oracle/bin/emacs
     steps:
       - *checkout
       - *prepare_workspace_tmp
@@ -1100,26 +1433,42 @@ jobs:
       # from the same archive; native_display itself is already part of
       # package(neomacs-gui-tests).
       #
-      # Two passes over the same archive.  The native-menu scenarios drive
-      # real pointer and keyboard input through a compositor and the
-      # presentation-latency cases assert input-to-present budgets: both are
-      # measurements of a live compositor, and a sibling test sharing the
-      # runner's four cores invalidates them (input injected into a menu that
-      # has not finished its first frame is dropped; a software rasterizer
-      # competing with a dozen of its siblings misses the 120 Hz budget).
-      # The live desktop-font stages have the same shape: they wait for the
-      # GSettings change to reach the editor and fail the stage if it has not
-      # arrived when the 20-second budget expires (measured at 22 s under
-      # load ~40, d4d009ae90).  On 2026-10-29 four siblings on four cores
-      # pushed every desktop_font_startup/updates stage, including GNU's own
-      # `gnu_*` variants, to the deadline.  Run them, and the display
-      # scroll-input units, one at a time, ahead of the bulk pass.
+      # Two passes over the same archive.  The remaining serial pass holds
+      # only tests whose assertions are measurements of a live compositor:
+      # the input-to-presentation latency rows, the resize/presentation pixel
+      # rows, the calibrated Wayland font raster rows, and the display-runtime
+      # scroll-input units.  A sibling sharing the runner's cores invalidates
+      # those budgets.
+      #
+      # native_menus and the live desktop-font suites are receipt-gated and
+      # run in the bulk pass: menu input starts only after the primary
+      # surface's first presentation (no fixed settle), and the desktop-font
+      # stages wait for the observed GSettings change plus the native
+      # presentation receipt, capped only by the 60 s process timeout.  They
+      # no longer depend on a 20 s per-stage budget, so concurrency no longer
+      # turns load into a failure.
+      #
+      # The two `continuous_120hz_` scenarios are NOT in this pass. They are
+      # calibrated performance gates: native_scrolling/budget.rs judges the
+      # scroll response budget against recorded software-renderer capacity and
+      # deliberately fails on any host outside the recorded tiers. A shared
+      # GitHub runner is not such a host -- the same AMD EPYC 9V74 model has
+      # measured a 2.8 ms and a 4.0 ms llvmpipe median on different runs (the
+      # Xeon 8370C runner measured 3.7 ms), so no frozen tier can hold. Run
+      # them on a calibrated host instead:
+      #
+      #   NEOMACS_GUI_TEST_BACKEND=x11 NEOMACS_GUI_TEST_BINARY=target/release/neomacs \
+      #     cargo nextest run -p neomacs-gui-tests -E 'test(continuous_120hz_)'
+      #
+      # Both scenarios passed there (2026-11-18, i9-14900K, llvmpipe median
+      # 2.9-3.3 ms, tier SoftwareVulkanFast). The dispatch-only
+      # scroll120-cohort workflow covers the same scenarios' analysis.
       - name: Run serialized input and presentation-budget scenarios
         run: |
           cargo nextest run \
             --archive-file neomacs-workspace-tests.tar.zst \
             --extract-to "$TMPDIR/nextest" \
-            -E '(package(neomacs-gui-tests) and (test(~native_menus::) or test(~continuous_120hz_) or test(~presents_while_command_is_stalled) or test(~presents_resolved_destination_while_command_is_stalled) or test(~presents_pixels_while_evaluator_is_stalled) or test(~have_confirmed_input_latency) or test(~resize_presentation::) or test(~desktop_font_startup::) or test(~desktop_font_updates::))) or (package(neomacs-display-runtime) and test(scroll_input))' \
+            -E '(package(neomacs-gui-tests) and (test(~presents_while_command_is_stalled) or test(~presents_resolved_destination_while_command_is_stalled) or test(~presents_pixels_while_evaluator_is_stalled) or test(~have_confirmed_input_latency) or test(~resize_presentation::) or test(~wayland_font_raster::))) or (package(neomacs-display-runtime) and test(scroll_input))' \
             --workspace-remap "$GITHUB_WORKSPACE" \
             --test-threads 1 \
             --no-fail-fast
@@ -1131,7 +1480,7 @@ jobs:
             --archive-file neomacs-workspace-tests.tar.zst \
             --extract-to "$TMPDIR/nextest" \
             --extract-overwrite \
-            -E 'package(neomacs-gui-tests) and not (test(~native_menus::) or test(~continuous_120hz_) or test(~presents_while_command_is_stalled) or test(~presents_resolved_destination_while_command_is_stalled) or test(~presents_pixels_while_evaluator_is_stalled) or test(~have_confirmed_input_latency) or test(~resize_presentation::) or test(~desktop_font_startup::) or test(~desktop_font_updates::))' \
+            -E 'package(neomacs-gui-tests) and not (test(~continuous_120hz_) or test(~presents_while_command_is_stalled) or test(~presents_resolved_destination_while_command_is_stalled) or test(~presents_pixels_while_evaluator_is_stalled) or test(~have_confirmed_input_latency) or test(~resize_presentation::) or test(~wayland_font_raster::))' \
             --workspace-remap "$GITHUB_WORKSPACE" \
             --test-threads 4 \
             --no-fail-fast
@@ -1219,9 +1568,88 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
 
+  # The default Linux production runtime omits `webview` (Cargo.toml's
+  # production capabilities keep the WPE/WKWebView layer off by default), so
+  # the two oversized-xwidget page-composition regressions have no xwidget
+  # backend in the GUI job above and skip there by an explicit runtime probe.
+  # This job is the place they RUN: it builds the same workspace from source
+  # with `--features webview` inside the pinned Nix dev shell (the flake's
+  # nix-wpe-webkit cache supplies WebKit WPE 2.52.x) and drives both tests
+  # with NEOMACS_GUI_TEST_WEBVIEW=1, including the deterministic magenta WPE
+  # pixel proof. Verified locally against a webview fresh-build: both pass
+  # in ~4.05 s each (2026-11-18, WPE WebKit 2.52.3). The same WPE shell runs
+  # `cargo nextest run -p neomacs-webview --features webview --lib`: the
+  # Linux create/load/destroy regression is compiled only with that feature,
+  # and the test sets G_DEBUG=fatal-criticals itself.
+  neomacs-xwidget-webview-gui:
+    name: xwidget webview page composition (linux x86_64, X11)
+    if: ${{ github.event_name != 'schedule' && (github.event_name != 'workflow_dispatch' || github.event.inputs.job == 'all' || github.event.inputs.job == 'neomacs-xwidget-webview-gui') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      CARGO_TERM_COLOR: always
+      RUST_BACKTRACE: 1
+      TMPDIR: ${{ github.workspace }}/tmp
+      NEOMACS_GUI_TEST_BACKEND: x11
+      NEOMACS_GUI_TEST_BINARY: ${{ github.workspace }}/target/release/neomacs
+      NEOMACS_GUI_TEST_WEBVIEW: "1"
+    steps:
+      - *checkout
+      - *prepare_workspace_tmp
+      - name: Configure fast APT mirror
+        uses: ./.github/actions/configure-apt-mirror
+      - name: Install Linux ecosystem dependencies
+        run: scripts/ci/setup-linux.sh ecosystem
+      - name: Set up Rust tooling
+        uses: ./.github/actions/setup-rust
+        with:
+          cache-key: ci-xwidget-webview-gui
+          # Nix WPE shell. A shared key with the host release jobs restored
+          # this PKG_CONFIG into their target and broke the packaged runtime.
+          cache-shared-key: linux-x86_64-release-nix-wpe
+          cache-save-if: ${{ github.ref == 'refs/heads/main' }}
+          install-nextest: true
+      - name: Set up Nix for the pinned WPE WebKit toolchain
+        uses: ./.github/actions/setup-nix
+      - name: Build the webview runtime
+        run: |
+          nix develop --accept-flake-config --command bash -c "
+            set -euo pipefail
+            cd \"${GITHUB_WORKSPACE:-$PWD}\"
+            CC=gcc CXX=g++ cargo xtask fresh-build --release --features webview
+          "
+      - name: Run the xwidget page-composition regression
+        run: |
+          nix develop --accept-flake-config --command bash -c "
+            set -euo pipefail
+            cd \"${GITHUB_WORKSPACE:-$PWD}\"
+            cargo nextest run -p neomacs-gui-tests \
+              -E 'test(~oversized_xwidget_) or test(~static_xwidget_)' \
+              --no-fail-fast
+          "
+      - name: Run neomacs-webview lib tests with the webview feature
+        if: ${{ !cancelled() }}
+        run: |
+          nix develop --accept-flake-config --command bash -c "
+            set -euo pipefail
+            cd \"${GITHUB_WORKSPACE:-$PWD}\"
+            CC=gcc CXX=g++ cargo nextest run -p neomacs-webview --features webview --lib
+          "
+
+      # Failure-only. A green run keeps no screenshots. The directory holds
+      # the linux-x11 stderr, stdout, json, and png from the GUI harness.
+      - name: Upload xwidget GUI artifacts
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: xwidget-webview-linux-x11-${{ github.run_id }}-${{ github.run_attempt }}
+          path: target/neomacs-gui-tests/linux-x11/
+          if-no-files-found: warn
+          retention-days: 3
+
   doom-install-compatibility:
     name: doom install compatibility (linux x86_64)
-    if: ${{ github.event_name != 'schedule' }}
+    if: ${{ !cancelled() && github.event_name != 'schedule' && (github.event_name != 'workflow_dispatch' || github.event.inputs.job == 'all') && (needs.neomacs-test-runtime.result == 'success') }}
     needs: neomacs-test-runtime
     runs-on: ubuntu-24.04
     timeout-minutes: 60
@@ -1240,15 +1668,16 @@ jobs:
         run: ./scripts/test-doom-install.sh
 
   # A separate job rather than a second matrix arm, because the darwin side
-  # shares nothing with Linux beyond the script itself. There is no packaged
-  # darwin runtime to restore: the shared artifact is linux-x86_64 by
-  # construction and a Linux binary cannot run on darwin, so this arm compiles
-  # what it tests. A matrix would also force it to `needs:
+  # shares nothing with Linux beyond the script itself. The shared Linux
+  # artifact is linux-x86_64 by construction and a Linux binary cannot run on
+  # darwin, and neomacs-macos-test-build's darwin runtime is an LTO-off
+  # harness build, so this arm compiles the shipping-profile runtime it
+  # tests. A matrix would also force it to `needs:
   # neomacs-test-runtime` -- waiting up to 150 minutes on a Linux artifact it
   # never reads, for no ordering benefit.
   doom-install-compatibility-macos:
     name: doom install compatibility (macos aarch64)
-    if: ${{ github.event_name != 'schedule' }}
+    if: ${{ github.event_name != 'schedule' && (github.event_name != 'workflow_dispatch' || github.event.inputs.job == 'all' || github.event.inputs.job == 'doom-install-compatibility-macos') }}
     runs-on: macos-latest
     timeout-minutes: 120
     env:
@@ -1260,20 +1689,21 @@ jobs:
       - *prepare_workspace_tmp
       - uses: ./.github/actions/install-build-deps
 
-      # Share the macOS release cache with the neovm-core macOS job: same
-      # workspace, release profile and target, both running fresh-build.  Save
-      # only on main so PRs do not write a multi-GB PR-scoped copy.
+      # Restore the macOS release cache neomacs-macos-test-build saves: same
+      # workspace, release profile and target, both running fresh-build.
       - name: Set up Rust tooling
         uses: ./.github/actions/setup-rust
         with:
           cache-key: doom-install-macos
-          # Must match the neovm-core macOS job: both restore and save the ONE
-          # `macos-aarch64-release-ws` entry, and whatever rust-cache saves
-          # under this key must include the workspace crates in both jobs or
-          # the first saver would pin the shared entry to the slower shape.
+          # Restore-only.  neomacs-macos-test-build is the ONE saver of the
+          # `macos-aarch64-release-ws` entry, so two jobs never race different
+          # contents under the key.  This job builds the shipping profile (LTO
+          # on), whose artifacts the saver's LTO-off build does not share; a
+          # second saver would only let whichever job finished first decide
+          # what the entry holds.
           cache-shared-key: macos-aarch64-release-ws
           cache-workspace-crates: "true"
-          cache-save-if: ${{ github.ref == 'refs/heads/main' }}
+          cache-save-if: "false"
           target: aarch64-apple-darwin
 
       - name: Build the runtime this job installs Doom into
@@ -1281,3 +1711,161 @@ jobs:
 
       - name: Install unmodified Doom with Neomacs
         run: ./scripts/test-doom-install.sh
+
+  # Standalone Loom models are not workspace members: each has its own
+  # Cargo.toml and Cargo.lock. Three live under tests/ (ctrace-slot-loom,
+  # p74-cell-loom, pentry-keeper-loom); the rest live under crates/.
+  # scripts/ci/run-loom-models.sh globs both homes, prints the list, and fails
+  # closed if fewer than its floor are found. Push, pull_request and
+  # workflow_dispatch run every crate once, at preemption bound 2, in one job.
+  # The Sunday 05:17 UTC schedule is bound 3, one job per discovered crate:
+  # one p1rv test took 2788s, so a shared 180-minute job cannot cover a
+  # second crate of that size. Each Sunday job has a 360-minute timeout.
+  loom-models:
+    name: standalone loom models bound 2 (linux x86_64)
+    if: ${{ github.event_name != 'schedule' && (github.event_name != 'workflow_dispatch' || github.event.inputs.job == 'all' || github.event.inputs.job == 'loom-models') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    env:
+      CARGO_TERM_COLOR: always
+      RUST_BACKTRACE: 1
+      BOUND: "2"
+    steps:
+      - *checkout
+      - name: Set up Rust tooling
+        uses: ./.github/actions/setup-rust
+        with:
+          cache-key: ci-loom-models-linux-x86_64
+          cache-save-if: ${{ github.ref == 'refs/heads/main' }}
+          install-nextest: true
+      - name: Run standalone loom models
+        run: bash scripts/ci/run-loom-models.sh
+
+  loom-models-discover:
+    name: list standalone loom models
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      crates: ${{ steps.list.outputs.crates }}
+    steps:
+      - *checkout
+      - id: list
+        name: Discover loom crates
+        run: |
+          crates=$(bash scripts/ci/run-loom-models.sh --list)
+          {
+            echo "crates<<EOF"
+            echo "$crates"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+  loom-models-bound3:
+    name: loom bound 3 ${{ matrix.crate }}
+    needs: loom-models-discover
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      matrix:
+        crate: ${{ fromJSON(needs.loom-models-discover.outputs.crates) }}
+    env:
+      CARGO_TERM_COLOR: always
+      RUST_BACKTRACE: 1
+      BOUND: "3"
+    steps:
+      - *checkout
+      - name: Set up Rust tooling
+        uses: ./.github/actions/setup-rust
+        with:
+          cache-key: ci-loom-models-b3-${{ strategy.job-index }}
+          cache-save-if: ${{ github.ref == 'refs/heads/main' }}
+          install-nextest: true
+      - name: Run one loom model at bound 3
+        run: bash scripts/ci/run-loom-models.sh --crate "${{ matrix.crate }}"
+
+  # A red packaged runtime skips every job that needs it, and those jobs
+  # never appear on the run page. This job names the gated suites that did
+  # not run. !cancelled() still runs when a dependency failed or was
+  # skipped, and it does not run after cancel-in-progress kills the run.
+  # always() would mark every superseded run red. It fails on push, pull
+  # request, and job=all when one of them was skipped or cancelled. A
+  # single-job dispatch fails only for the suite that input names.
+  # neomacs-display-tests is the gated suite that can be selected alone.
+  # The weekly schedule excludes these suites with its own if, so a skip
+  # there is not a dependency failure.
+  suite-skip-summary:
+    name: gated suite skip summary
+    if: ${{ !cancelled() }}
+    needs:
+      - neovm-core-tests
+      - neovm-oracle-tests
+      - neomacs-tui-tests
+      - neomacs-melpa-tests
+      - neomacs-display-tests
+      - neomacs-prefix-face-tui-parity
+      - neomacs-gui-tests
+      - doom-install-compatibility
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Fail when a gated suite did not run
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          DISPATCH_JOB: ${{ github.event.inputs.job }}
+          R_CORE: ${{ needs.neovm-core-tests.result }}
+          R_ORACLE: ${{ needs.neovm-oracle-tests.result }}
+          R_TUI: ${{ needs.neomacs-tui-tests.result }}
+          R_MELPA: ${{ needs.neomacs-melpa-tests.result }}
+          R_DISPLAY: ${{ needs.neomacs-display-tests.result }}
+          R_PREFIX: ${{ needs.neomacs-prefix-face-tui-parity.result }}
+          R_GUI: ${{ needs.neomacs-gui-tests.result }}
+          R_DOOM: ${{ needs.doom-install-compatibility.result }}
+        run: |
+          set -euo pipefail
+          single_dispatch=0
+          if [ "$EVENT_NAME" = "workflow_dispatch" ] && [ "$DISPATCH_JOB" != "all" ]; then
+            single_dispatch=1
+          fi
+          missing=0
+          if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+            {
+              echo "## Gated suite results"
+              echo
+              echo "| suite | result | expected |"
+              echo "| --- | --- | --- |"
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+          set -- \
+            "neovm-core-tests ${R_CORE}" \
+            "neovm-oracle-tests ${R_ORACLE}" \
+            "neomacs-tui-tests ${R_TUI}" \
+            "neomacs-melpa-tests ${R_MELPA}" \
+            "neomacs-display-tests ${R_DISPLAY}" \
+            "neomacs-prefix-face-tui-parity ${R_PREFIX}" \
+            "neomacs-gui-tests ${R_GUI}" \
+            "doom-install-compatibility ${R_DOOM}"
+          for entry in "$@"; do
+            name="${entry%% *}"
+            result="${entry#* }"
+            expected=yes
+            if [ "$EVENT_NAME" = "schedule" ]; then
+              expected=no
+            elif [ "$single_dispatch" -eq 1 ] && [ "$DISPATCH_JOB" != "$name" ]; then
+              expected=no
+            fi
+            echo "suite ${name}: result=${result} expected=${expected}"
+            if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+              echo "| ${name} | ${result} | ${expected} |" >> "$GITHUB_STEP_SUMMARY"
+            fi
+            if [ "$expected" = "yes" ] && { [ "$result" = "skipped" ] || [ "$result" = "cancelled" ]; }; then
+              echo "DID NOT RUN: ${name}"
+              missing=1
+            fi
+          done
+          if [ "$missing" -eq 1 ]; then
+            echo "gated suites did not run because a dependency failed"
+            exit 1
+          fi
+          echo "every expected gated suite ran"

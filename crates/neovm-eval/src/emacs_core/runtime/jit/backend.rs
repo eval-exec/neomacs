@@ -15,9 +15,13 @@
 //! (The earlier note here about cross-checking against a `neovm-compiler` crate
 //! is obsolete: that crate was deleted from the workspace on 2026-07-03.)
 
+#[cfg(test)]
 use cranelift_codegen::ir::{AbiParam, Function, InstBuilder, Signature, UserFuncName, types};
+#[cfg(test)]
 use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext};
+#[cfg(test)]
 use cranelift_jit::{JITBuilder, JITModule};
+#[cfg(test)]
 use cranelift_module::{Linkage, Module, default_libcall_names};
 
 /// Failures that can arise while building or finalizing native code.
@@ -53,7 +57,8 @@ impl std::error::Error for BackendError {}
 /// parameter, an entry block, `iconst` + `iadd`, `return`, `finalize_definitions`,
 /// and a real indirect call into freshly-committed executable memory. A success
 /// (`Ok(arg + addend)`) is the proof that Cranelift codegen is usable here.
-pub fn smoke_compile_add(arg: i64, addend: i64) -> Result<i64, BackendError> {
+#[cfg(test)]
+pub(crate) fn smoke_compile_add(arg: i64, addend: i64) -> Result<i64, BackendError> {
     // 1. Build the JIT module — it owns the executable-memory allocator and the
     //    native ISA selected for the host.
     let builder = JITBuilder::new(default_libcall_names())
@@ -75,12 +80,13 @@ pub fn smoke_compile_add(arg: i64, addend: i64) -> Result<i64, BackendError> {
     // 6. Fetch the finalized code pointer and call it.
     let code_ptr = module.get_finalized_function(fid);
     // SAFETY: `code_ptr` points at freshly-finalized native code whose ABI is
-    // exactly `extern "C" fn(i64) -> i64` — it matches the Cranelift signature
-    // built above (one i64 param, one i64 return, platform call conv). `module`
-    // owns the executable memory and is kept alive until after the call returns,
+    // exactly `unsafe extern "C" fn(i64) -> i64` — it matches the Cranelift
+    // signature built above (one i64 param, one i64 return, platform call
+    // conv). The call is unsafe because that pointer type is. `module` owns
+    // the executable memory and is kept alive until after the call returns,
     // so the code is not unmapped while we are running it.
     let result = unsafe {
-        let f: extern "C" fn(i64) -> i64 = core::mem::transmute(code_ptr);
+        let f: unsafe extern "C" fn(i64) -> i64 = core::mem::transmute(code_ptr);
         f(arg)
     };
 
@@ -98,12 +104,13 @@ pub fn smoke_compile_add(arg: i64, addend: i64) -> Result<i64, BackendError> {
 ///   * `builder.symbol(...)`   — for AOT becomes a `Linkage::Import` + dlopen.
 ///   * `finalize_definitions`  — for AOT becomes `ObjectModule::finish()`.
 ///   * `get_finalized_function`— for AOT becomes a `dlsym` lookup.
+#[cfg(test)]
 fn build_smoke_fn<M: Module>(
     module: &mut M,
     addend: i64,
 ) -> Result<cranelift_module::FuncId, BackendError> {
     // The platform C calling convention (SystemV on Linux x86-64), which matches
-    // the `extern "C" fn` type the JIT wrapper transmutes the finalized pointer
+    // the `unsafe extern "C" fn` type the JIT wrapper transmutes the finalized pointer
     // to. Derived from the module's own target config, so it is correct for both
     // the JIT host ISA and any AOT target ISA.
     let frontend_config = module.target_config();

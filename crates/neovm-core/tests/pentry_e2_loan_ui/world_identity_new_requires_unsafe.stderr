@@ -1,0 +1,7 @@
+error[E0133]: call to unsafe function `neovm_value::tagged::gc::WorldIdentity::new` is unsafe and requires unsafe block
+ --> tests/pentry_e2_loan_ui/world_identity_new_requires_unsafe.rs:4:21
+  |
+4 |     let _identity = WorldIdentity::new(0);
+  |                     ^^^^^^^^^^^^^^^^^^^^^ call to unsafe function
+  |
+  = note: consult the function's documentation for information on how to avoid undefined behavior

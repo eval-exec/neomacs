@@ -33,8 +33,9 @@ description: >-
 inputs:
   cache-version:
     description: >-
-      Bump when the configure flags, dependency lists, or build script change.
-      Comment and description edits must not invalidate the cached oracle.
+      Extra bump for dependency-list changes that are outside the recipe
+      scripts. The cache key also hashes scripts/ci/build-gnu-oracle.sh and
+      scripts/ci/check-gnu-oracle.sh, so a recipe edit rebuilds the oracle.
     required: false
     default: "3"
 
@@ -67,10 +68,11 @@ runs:
       uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: /opt/gnu-emacs-oracle
-        # Keyed on the GNU commit and an explicit version. Bump cache-version
-        # when the configure flags, dependency lists, or build script change;
-        # do not invalidate the 60 MB entry for a comment edit.
-        key: gnu-emacs-oracle-${{ runner.os }}-${{ runner.arch }}-${{ steps.pin.outputs.commit }}-v${{ inputs.cache-version }}
+        # The GNU commit names the source. The recipe hash names what that
+        # source was configured and checked with, so a host-dependent flag
+        # such as --disable-acl cannot reuse an older cache entry. Bump
+        # cache-version for dependency-list changes outside those scripts.
+        key: gnu-emacs-oracle-${{ runner.os }}-${{ runner.arch }}-${{ steps.pin.outputs.commit }}-${{ hashFiles('scripts/ci/build-gnu-oracle.sh', 'scripts/ci/check-gnu-oracle.sh') }}-v${{ inputs.cache-version }}
 
     - name: Install the oracle's runtime dependencies
       shell: bash
@@ -129,10 +131,9 @@ runs:
         # local oracle is the CI oracle by construction and the configure
         # flags have exactly one definition.
         #
-        # The cache key carries inputs.cache-version, not a hash of this file
-        # or the script; bump cache-version when the recipe changes (the
-        # input's description says so), so a comment edit does not throw away
-        # the 60 MB cache.
+        # The cache key hashes build-gnu-oracle.sh and check-gnu-oracle.sh
+        # plus inputs.cache-version. A recipe edit misses the cache and
+        # rebuilds. Bump cache-version when the apt dependency list changes.
         set -euo pipefail
         # Runtime libraries are installed above; the build tools were
         # installed by the miss-only step immediately before this one, so a

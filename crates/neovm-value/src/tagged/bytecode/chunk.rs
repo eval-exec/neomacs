@@ -220,7 +220,10 @@ pub struct ByteCodeFunction {
     /// Runtime identity of the source code object, preserved by `make-closure`.
     pub(crate) source_id: u64,
     /// The bytecode instructions.
-    pub ops: Vec<Op>,
+    ///
+    /// Private. [`Self::set_ops`] and [`Self::ops_mut`] clear `ops_sealed`
+    /// and `stack_verified`. `Clone` and the make-closure image copy both.
+    ops: Vec<Op>,
     /// Whether `ops` is `seal_ops`-normalized (trailing `Return`, in-bounds
     /// branch targets, in-range `Constant` indices). Set exclusively by the
     /// decode installers; the unchecked-fetch driver refuses eager
@@ -236,21 +239,44 @@ pub struct ByteCodeFunction {
     /// Constant pool: values referenced by Constant/VarRef/VarSet/etc.
     /// `LispValueVec` so a pdump load can alias the pool directly in the
     /// mapped image instead of materializing an owned Vec per function.
-    pub constants: crate::tagged::header::LispValueVec,
+    ///
+    /// Private. [`Self::set_constants`] and [`Self::constants_mut`] clear
+    /// `ops_sealed` and `stack_verified`. `Clone` copies both; the
+    /// make-closure image copies them and installs the instance pool.
+    constants: crate::tagged::header::LispValueVec,
     /// Maximum stack depth needed (for pre-allocation).
-    pub max_stack: StackDepth,
+    ///
+    /// Private. [`Self::set_max_stack`] clears `ops_sealed` and
+    /// `stack_verified`. `Clone` and the make-closure image copy both.
+    max_stack: StackDepth,
     /// Parameter specification.
-    pub params: FunctionParams,
+    ///
+    /// Private. [`Self::set_params`] clears the execution certificate.
+    /// Entry depth depends on this value. `Clone` and the make-closure
+    /// image copy it and keep the certificate.
+    params: FunctionParams,
     /// Original GNU byte-code slot 0 value.
     ///
     /// Lexical byte-code uses an integer arg descriptor here, while old-style
     /// dynamic byte-code uses an arglist.  Bytecomp's inliner distinguishes
     /// those cases through `(aref fn 0)`, so this must round-trip exactly.
-    pub arglist: Value,
+    ///
+    /// Private. [`Self::set_arglist`] clears the execution certificate.
+    /// A fixnum arglist selects params-on-stack entry depth.
+    arglist: Value,
     /// Whether the function was compiled with lexical binding enabled.
-    pub lexical: bool,
+    ///
+    /// Private. [`Self::set_lexical`] clears the execution certificate.
+    /// Lexical binding changes verifier entry depth.
+    lexical: bool,
     /// For closures: captured lexical environment as a cons alist.
-    pub env: Option<Value>,
+    ///
+    /// Private. [`Self::set_env`] clears the execution certificate.
+    /// A present environment changes verifier entry depth. The make-closure
+    /// image writes this place directly and keeps the certificate: lexical
+    /// prototypes already have params on the stack, so the captured env does
+    /// not change entry depth.
+    env: Option<Value>,
     /// GNU `.elc` bytecode stores branch targets as byte offsets.
     /// Decoded runtime uses instruction indices, so GNU-decoded functions
     /// retain a sorted byte-offset -> instruction-index table for `switch`.
@@ -258,14 +284,20 @@ pub struct ByteCodeFunction {
     /// GNU does not allocate a hash table for this: it executes directly from
     /// the byte string.  Keep Neomacs' bridge representation compact and cheap
     /// to restore; `Bswitch` is the only runtime user.
-    pub gnu_byte_offset_map: Option<Vec<GnuByteOffsetMapEntry>>,
+    ///
+    /// Crate-private. A write cannot change a shared lazy cell: its map is
+    /// decoded from the byte string, and this Vec is cloned per value.
+    pub(crate) gnu_byte_offset_map: Option<Vec<GnuByteOffsetMapEntry>>,
     /// Original GNU-format bytecode bytes from the .elc file or `make-byte-code`
     /// call.  NeoVM normally executes from `ops` (decoded IR), but elisp code
     /// like `byte-compile-make-closure` does `(aref FUN 1)` to read the raw
     /// bytecode string and pass it to `make-byte-code` for closure prototype
     /// generation.  Without preserving the original bytes, those round-trips
     /// produce empty bytecode functions.
-    pub gnu_bytecode_bytes: Option<crate::tagged::header::LispByteVec>,
+    ///
+    /// Private. [`Self::set_gnu_bytecode_bytes`] replaces a shared lazy cell
+    /// with a cold one, so a clone's bytes are not decoded into the prototype.
+    gnu_bytecode_bytes: Option<crate::tagged::header::LispByteVec>,
     /// Optional docstring.
     pub docstring: Option<LispString>,
     /// Optional documentation form (e.g., oclosure type symbol in slot 4).
@@ -313,6 +345,60 @@ impl ByteCodeFunction {
     #[doc(hidden)]
     pub const fn offset_of_lazy_gnu_code() -> usize {
         std::mem::offset_of!(Self, lazy_gnu_code)
+    }
+
+    /// Layout pin. The field is private; the certificate accessors own it.
+    #[doc(hidden)]
+    pub const fn offset_of_ops() -> usize {
+        std::mem::offset_of!(Self, ops)
+    }
+
+    /// Layout pin. The field is private; the certificate accessors own it.
+    #[doc(hidden)]
+    pub const fn offset_of_constants() -> usize {
+        std::mem::offset_of!(Self, constants)
+    }
+
+    /// Layout pin. The field is private; the certificate accessors own it.
+    #[doc(hidden)]
+    pub const fn offset_of_max_stack() -> usize {
+        std::mem::offset_of!(Self, max_stack)
+    }
+
+    /// Layout pin. The field is private; the certificate accessors own it.
+    #[doc(hidden)]
+    pub const fn offset_of_params() -> usize {
+        std::mem::offset_of!(Self, params)
+    }
+
+    /// Layout pin. The field is private; the certificate accessors own it.
+    #[doc(hidden)]
+    pub const fn offset_of_arglist() -> usize {
+        std::mem::offset_of!(Self, arglist)
+    }
+
+    /// Layout pin. The field is private; the certificate accessors own it.
+    #[doc(hidden)]
+    pub const fn offset_of_lexical() -> usize {
+        std::mem::offset_of!(Self, lexical)
+    }
+
+    /// Layout pin. The field is private; the certificate accessors own it.
+    #[doc(hidden)]
+    pub const fn offset_of_env() -> usize {
+        std::mem::offset_of!(Self, env)
+    }
+
+    /// Layout pin. The field is private; [`Self::set_gnu_bytecode_bytes`] owns it.
+    #[doc(hidden)]
+    pub const fn offset_of_gnu_bytecode_bytes() -> usize {
+        std::mem::offset_of!(Self, gnu_bytecode_bytes)
+    }
+
+    /// Layout pin. The field is crate-private; [`Self::set_gnu_byte_offset_map`] assigns it.
+    #[doc(hidden)]
+    pub const fn offset_of_gnu_byte_offset_map() -> usize {
+        std::mem::offset_of!(Self, gnu_byte_offset_map)
     }
 }
 
@@ -526,8 +612,7 @@ impl ByteCodeFunction {
     /// Test-only forge of the saved-image marker shape: no resident ops and
     /// the sealed marker set. Callers go through
     /// `neovm_value::test_support::authority::forge_pdump_marker_ops_for_test`.
-    #[cfg(any(test, feature = "test-support"))]
-    pub(crate) fn forge_pdump_marker_ops_for_test(&mut self) {
+    pub fn forge_pdump_marker_ops_for_test(&mut self) {
         self.ops.clear();
         self.ops_sealed = true;
     }
@@ -711,7 +796,9 @@ impl ByteCodeFunction {
             }
         }
         let idx = self.constants.len() as u16;
+        self.clear_execution_certificate();
         self.constants.ensure_owned().push(value);
+        self.reinstall_lazy_gnu_code();
         idx
     }
 
@@ -726,7 +813,9 @@ impl ByteCodeFunction {
 
     /// Emit an instruction.
     pub fn emit(&mut self, op: Op) {
+        self.clear_execution_certificate();
         self.ops.push(op);
+        self.reinstall_lazy_gnu_code();
     }
 
     /// Current instruction count (used for jump target calculation).
@@ -750,10 +839,201 @@ impl ByteCodeFunction {
             }
             _ => panic!("patch_jump on non-jump instruction at {}", idx),
         }
+        // The borrow of `ops` ends with the match. A retarget is a new
+        // instruction vector for the seal and the stack proof.
+        self.clear_execution_certificate();
+        self.reinstall_lazy_gnu_code();
     }
 }
 
 impl ByteCodeFunction {
+    fn clear_execution_certificate(&mut self) {
+        self.ops_sealed = false;
+        self.stack_verified = false;
+    }
+
+    /// Replace a shared lazy decode with a cold cell. Eager code has none.
+    /// `set_env` and a decoded `set_max_stack` do not call this: those keep
+    /// the Arc, and the live shape is checked against the proof at use.
+    fn reinstall_lazy_gnu_code(&mut self) {
+        if self.lazy_gnu_code.is_some() {
+            self.lazy_gnu_code = Some(std::sync::Arc::new(LazyGnuCode::new()));
+        }
+    }
+
+    /// Instruction vector. The unchecked driver reads this only after
+    /// [`Self::executes_sealed_ops`] and the stack proof.
+    #[inline(always)]
+    pub fn ops(&self) -> &Vec<Op> {
+        &self.ops
+    }
+
+    /// Replace the instruction vector and drop the execution certificate.
+    #[inline]
+    pub fn set_ops(&mut self, ops: Vec<Op>) {
+        self.clear_execution_certificate();
+        self.ops = ops;
+        self.reinstall_lazy_gnu_code();
+    }
+
+    /// Mutable instruction vector. Clears `ops_sealed` and `stack_verified`.
+    #[inline]
+    pub fn ops_mut(&mut self) -> &mut Vec<Op> {
+        self.clear_execution_certificate();
+        self.reinstall_lazy_gnu_code();
+        &mut self.ops
+    }
+
+    /// Constant pool.
+    #[inline(always)]
+    pub fn constants(&self) -> &crate::tagged::header::LispValueVec {
+        &self.constants
+    }
+
+    /// Replace the constant pool and drop the execution certificate.
+    #[inline]
+    pub fn set_constants(&mut self, constants: crate::tagged::header::LispValueVec) {
+        self.clear_execution_certificate();
+        self.constants = constants;
+        self.reinstall_lazy_gnu_code();
+    }
+
+    /// Mutable constant pool. Clears `ops_sealed` and `stack_verified`.
+    #[inline]
+    pub fn constants_mut(&mut self) -> &mut crate::tagged::header::LispValueVec {
+        self.clear_execution_certificate();
+        self.reinstall_lazy_gnu_code();
+        &mut self.constants
+    }
+
+    /// Replace leading constant values. The pool length, the ops, the lazy
+    /// cell, and the execution certificate stay.
+    ///
+    /// Constant values never enter that certificate. `seal_ops` reads only
+    /// the pool length, and the stack proof is op arithmetic. The exception
+    /// is a switch jump table: the verified driver re-checks the table at
+    /// run time and signals unless the target's depth is already proved.
+    pub fn overwrite_constant_prefix(&mut self, values: &[crate::value::Value]) {
+        debug_assert!(values.len() <= self.constants.len());
+        for (i, value) in values.iter().enumerate() {
+            self.constants[i] = *value;
+        }
+    }
+
+    /// Declared operand-stack depth.
+    #[inline(always)]
+    pub fn max_stack(&self) -> StackDepth {
+        self.max_stack
+    }
+
+    /// Replace the declared stack depth and drop the execution certificate.
+    #[inline]
+    pub fn set_max_stack(&mut self, max_stack: StackDepth) {
+        self.clear_execution_certificate();
+        self.max_stack = max_stack;
+        // A decoded cell stays shared so a resume clone still sees one Arc.
+        // A cold cell would publish this limit into every other clone.
+        if self
+            .lazy_gnu_code
+            .as_ref()
+            .is_some_and(|lazy| lazy.decoded_ready().is_none())
+        {
+            self.reinstall_lazy_gnu_code();
+        }
+    }
+
+    /// Parameter specification. Entry depth reads this through the getter.
+    #[inline(always)]
+    pub fn params(&self) -> &FunctionParams {
+        &self.params
+    }
+
+    /// Replace the parameter specification and drop the execution certificate.
+    #[inline]
+    pub fn set_params(&mut self, params: FunctionParams) {
+        self.clear_execution_certificate();
+        self.params = params;
+        self.reinstall_lazy_gnu_code();
+    }
+
+    /// GNU byte-code slot 0. `Value` is `Copy`.
+    #[inline(always)]
+    pub fn arglist(&self) -> Value {
+        self.arglist
+    }
+
+    /// Replace slot 0 and drop the execution certificate.
+    #[inline]
+    pub fn set_arglist(&mut self, arglist: Value) {
+        self.clear_execution_certificate();
+        self.arglist = arglist;
+        self.reinstall_lazy_gnu_code();
+    }
+
+    /// Whether this function was compiled with lexical binding.
+    #[inline(always)]
+    pub fn lexical(&self) -> bool {
+        self.lexical
+    }
+
+    /// Replace the lexical-binding flag and drop the execution certificate.
+    #[inline]
+    pub fn set_lexical(&mut self, lexical: bool) {
+        self.clear_execution_certificate();
+        self.lexical = lexical;
+        self.reinstall_lazy_gnu_code();
+    }
+
+    /// Captured lexical environment, if this value is a closure.
+    #[inline(always)]
+    pub fn env(&self) -> Option<Value> {
+        self.env
+    }
+
+    /// Replace the captured environment and drop the execution certificate.
+    #[inline]
+    pub fn set_env(&mut self, env: Option<Value>) {
+        self.clear_execution_certificate();
+        self.env = env;
+    }
+
+    /// Original GNU byte string, when this function was loaded from one.
+    #[inline(always)]
+    pub fn gnu_bytecode_bytes(&self) -> Option<&crate::tagged::header::LispByteVec> {
+        self.gnu_bytecode_bytes.as_ref()
+    }
+
+    /// Replace the original GNU byte string. A shared lazy cell becomes a
+    /// cold cell on this value only, so these bytes are not decoded into
+    /// the prototype's cell.
+    #[inline]
+    pub fn set_gnu_bytecode_bytes(&mut self, bytes: Option<crate::tagged::header::LispByteVec>) {
+        self.gnu_bytecode_bytes = bytes;
+        self.reinstall_lazy_gnu_code();
+    }
+
+    /// Remove the original GNU byte string and drop a shared lazy cell.
+    #[inline]
+    pub fn take_gnu_bytecode_bytes(&mut self) -> Option<crate::tagged::header::LispByteVec> {
+        let bytes = self.gnu_bytecode_bytes.take();
+        self.reinstall_lazy_gnu_code();
+        bytes
+    }
+
+    /// Eager GNU byte-offset table. A lazy cell ignores this Vec.
+    #[inline(always)]
+    pub fn gnu_byte_offset_map(&self) -> Option<&[GnuByteOffsetMapEntry]> {
+        self.gnu_byte_offset_map.as_deref()
+    }
+
+    /// Replace the eager GNU byte-offset table. Does not reinstall a lazy
+    /// cell: the cell's map is decoded from the byte string, and this Vec is
+    /// not shared with that cell.
+    #[inline]
+    pub fn set_gnu_byte_offset_map(&mut self, map: Option<Vec<GnuByteOffsetMapEntry>>) {
+        self.gnu_byte_offset_map = map;
+    }
+
     #[inline]
     #[doc(hidden)]
     pub fn lazy_gnu_code(&self) -> &Option<std::sync::Arc<LazyGnuCode>> {
@@ -782,6 +1062,72 @@ impl ByteCodeFunction {
     pub unsafe fn ops_sealed_ptr(this: *mut Self) -> *mut bool {
         // SAFETY: the caller guarantees `this` is a valid object.
         unsafe { &raw mut (*this).ops_sealed }
+    }
+    /// Place of `ops` for an initializer that writes the field before the
+    /// object is a live value. Writing the place does not clear the
+    /// execution certificate: there is no `&mut self`, and the caller sets
+    /// `ops_sealed` itself.
+    ///
+    /// # Safety
+    /// `this` is aligned for `ByteCodeFunction` and the `ops` place is valid to write.
+    #[doc(hidden)]
+    pub unsafe fn ops_ptr(this: *mut Self) -> *mut Vec<Op> {
+        // SAFETY: the caller guarantees the place.
+        unsafe { &raw mut (*this).ops }
+    }
+    /// Place of `constants`. Same contract as [`Self::ops_ptr`].
+    ///
+    /// # Safety
+    /// `this` is aligned for `ByteCodeFunction` and the `constants` place is valid to write.
+    #[doc(hidden)]
+    pub unsafe fn constants_ptr(this: *mut Self) -> *mut crate::tagged::header::LispValueVec {
+        // SAFETY: the caller guarantees the place.
+        unsafe { &raw mut (*this).constants }
+    }
+    /// Place of `params` for the pdump stub initializer. Writing the place
+    /// does not clear the execution certificate: there is no `&mut self`.
+    ///
+    /// # Safety
+    /// `this` is aligned for `ByteCodeFunction` and the `params` place is valid to write.
+    #[doc(hidden)]
+    pub unsafe fn params_ptr(this: *mut Self) -> *mut FunctionParams {
+        // SAFETY: the caller guarantees the place.
+        unsafe { &raw mut (*this).params }
+    }
+    /// Place of `env`. Same contract as [`Self::params_ptr`].
+    ///
+    /// # Safety
+    /// `this` is aligned for `ByteCodeFunction` and the `env` place is valid to write.
+    #[doc(hidden)]
+    pub unsafe fn env_ptr(this: *mut Self) -> *mut Option<Value> {
+        // SAFETY: the caller guarantees the place.
+        unsafe { &raw mut (*this).env }
+    }
+    /// Place of `gnu_bytecode_bytes` for the pdump stub initializer.
+    /// Writing the place does not reinstall a lazy cell: there is no
+    /// `&mut self`.
+    ///
+    /// # Safety
+    /// `this` is aligned for `ByteCodeFunction` and the place is valid to write.
+    #[doc(hidden)]
+    pub unsafe fn gnu_bytecode_bytes_ptr(
+        this: *mut Self,
+    ) -> *mut Option<crate::tagged::header::LispByteVec> {
+        // SAFETY: the caller guarantees the place.
+        unsafe { &raw mut (*this).gnu_bytecode_bytes }
+    }
+    /// Place of `gnu_byte_offset_map` for the pdump stub initializer.
+    /// Writing the place does not reinstall a lazy cell: there is no
+    /// `&mut self`.
+    ///
+    /// # Safety
+    /// `this` is aligned for `ByteCodeFunction` and the place is valid to write.
+    #[doc(hidden)]
+    pub unsafe fn gnu_byte_offset_map_ptr(
+        this: *mut Self,
+    ) -> *mut Option<Vec<GnuByteOffsetMapEntry>> {
+        // SAFETY: the caller guarantees the place.
+        unsafe { &raw mut (*this).gnu_byte_offset_map }
     }
     #[cfg(feature = "jit")]
     #[inline]
@@ -910,6 +1256,153 @@ impl ByteCodeFunction {
             lazy_gnu_code: None,
         }
     }
+
+    /// Field-by-field copy `make-closure` writes into an arena slot.
+    ///
+    /// Built before the slot is claimed, so a panic while cloning does not
+    /// leave a half-initialized object. The image keeps `ops_sealed` and
+    /// `stack_verified`. The instance's constant pool is supplied at
+    /// [`ByteCodeInstanceImage::write`], not copied from the prototype.
+    /// The destructure is exhaustive: a new field fails here until the image
+    /// carries it.
+    /// Inlined so the image struct can dissolve into `make-closure` instead
+    /// of a forced out-of-line temporary. The field clones stay: the closure
+    /// owns its own instruction vector.
+    #[inline]
+    pub(crate) fn instance_image(&self) -> ByteCodeInstanceImage {
+        debug_assert!(
+            !self.is_pdump_stub(),
+            "instantiating an unmaterialized pdump stub"
+        );
+        #[cfg(any(test, feature = "test-support"))]
+        note_bytecode_function_clone_for_test();
+        let Self {
+            source_id,
+            ops,
+            ops_sealed,
+            stack_verified,
+            constants: _,
+            max_stack,
+            params,
+            arglist,
+            lexical,
+            env,
+            gnu_byte_offset_map,
+            gnu_bytecode_bytes,
+            docstring,
+            doc_form,
+            interactive,
+            closure_slot_count,
+            extra_slots,
+            #[cfg(feature = "jit")]
+            runtime,
+            lazy_gnu_code,
+        } = self;
+        ByteCodeInstanceImage {
+            source_id: *source_id,
+            ops: ops.clone(),
+            ops_sealed: *ops_sealed,
+            stack_verified: *stack_verified,
+            max_stack: *max_stack,
+            params: params.clone(),
+            arglist: *arglist,
+            lexical: *lexical,
+            env: *env,
+            gnu_byte_offset_map: gnu_byte_offset_map.clone(),
+            gnu_bytecode_bytes: gnu_bytecode_bytes.clone(),
+            docstring: docstring.clone(),
+            doc_form: *doc_form,
+            interactive: *interactive,
+            closure_slot_count: *closure_slot_count,
+            extra_slots: extra_slots.clone(),
+            #[cfg(feature = "jit")]
+            runtime: runtime.clone(),
+            lazy_gnu_code: lazy_gnu_code.clone(),
+        }
+    }
+}
+
+/// Owned `make-closure` image. See [`ByteCodeFunction::instance_image`].
+pub(crate) struct ByteCodeInstanceImage {
+    source_id: u64,
+    ops: Vec<Op>,
+    ops_sealed: bool,
+    stack_verified: bool,
+    max_stack: StackDepth,
+    params: FunctionParams,
+    arglist: Value,
+    lexical: bool,
+    env: Option<Value>,
+    gnu_byte_offset_map: Option<Vec<GnuByteOffsetMapEntry>>,
+    gnu_bytecode_bytes: Option<crate::tagged::header::LispByteVec>,
+    docstring: Option<LispString>,
+    doc_form: Option<Value>,
+    interactive: Option<Value>,
+    closure_slot_count: usize,
+    extra_slots: Vec<Value>,
+    #[cfg(feature = "jit")]
+    runtime: Option<Runtime>,
+    lazy_gnu_code: Option<std::sync::Arc<LazyGnuCode>>,
+}
+
+impl ByteCodeInstanceImage {
+    /// # Safety
+    /// `data` is uninitialized `ByteCodeFunction` storage. Every field is
+    /// written exactly once through a raw field pointer. The caller must not
+    /// read `data` until this returns, and must write the header before the
+    /// value becomes reachable.
+    pub(crate) unsafe fn write(
+        self,
+        data: *mut ByteCodeFunction,
+        constants: crate::tagged::header::LispValueVec,
+    ) {
+        let Self {
+            source_id,
+            ops,
+            ops_sealed,
+            stack_verified,
+            max_stack,
+            params,
+            arglist,
+            lexical,
+            env,
+            gnu_byte_offset_map,
+            gnu_bytecode_bytes,
+            docstring,
+            doc_form,
+            interactive,
+            closure_slot_count,
+            extra_slots,
+            #[cfg(feature = "jit")]
+            runtime,
+            lazy_gnu_code,
+        } = self;
+        // SAFETY: the caller guarantees `data` is uninitialized storage that
+        // is not read until every field below has been written.
+        unsafe {
+            use std::ptr::addr_of_mut;
+            addr_of_mut!((*data).source_id).write(source_id);
+            addr_of_mut!((*data).ops).write(ops);
+            addr_of_mut!((*data).ops_sealed).write(ops_sealed);
+            addr_of_mut!((*data).stack_verified).write(stack_verified);
+            addr_of_mut!((*data).constants).write(constants);
+            addr_of_mut!((*data).max_stack).write(max_stack);
+            addr_of_mut!((*data).params).write(params);
+            addr_of_mut!((*data).arglist).write(arglist);
+            addr_of_mut!((*data).lexical).write(lexical);
+            addr_of_mut!((*data).env).write(env);
+            addr_of_mut!((*data).gnu_byte_offset_map).write(gnu_byte_offset_map);
+            addr_of_mut!((*data).gnu_bytecode_bytes).write(gnu_bytecode_bytes);
+            addr_of_mut!((*data).docstring).write(docstring);
+            addr_of_mut!((*data).doc_form).write(doc_form);
+            addr_of_mut!((*data).interactive).write(interactive);
+            addr_of_mut!((*data).closure_slot_count).write(closure_slot_count);
+            addr_of_mut!((*data).extra_slots).write(extra_slots);
+            #[cfg(feature = "jit")]
+            addr_of_mut!((*data).runtime).write(runtime);
+            addr_of_mut!((*data).lazy_gnu_code).write(lazy_gnu_code);
+        }
+    }
 }
 
 impl DecodedGnuCode {
@@ -924,5 +1417,58 @@ impl DecodedGnuCode {
             byte_offset_map,
             stack_verified,
         }
+    }
+}
+
+#[cfg(test)]
+mod certificate_tests {
+    use super::*;
+
+    fn certified() -> ByteCodeFunction {
+        let mut original = ByteCodeFunction::new(LambdaParams::simple(vec![]));
+        original.set_ops(vec![Op::Return]);
+        original.set_max_stack(StackDepth::for_test(1));
+        unsafe { original.mark_ops_sealed() };
+        unsafe { original.set_stack_verified(true) };
+        assert!(original.ops_sealed() && original.stack_verified());
+        original
+    }
+
+    fn assert_dropped(func: &ByteCodeFunction, label: &str) {
+        assert!(
+            !func.ops_sealed() && !func.stack_verified(),
+            "{label} kept the certificate: sealed={} stack_verified={}",
+            func.ops_sealed(),
+            func.stack_verified()
+        );
+    }
+
+    /// A `make-closure` clone copies the execution certificate. Each mutating
+    /// accessor must drop both flags. The red row assigned `ops` in place and
+    /// observed `sealed=true stack_verified=true`.
+    #[test]
+    fn mutating_ops_after_clone_drops_the_execution_certificate() {
+        let original = certified();
+
+        let mut cloned = original.clone();
+        assert!(cloned.ops_sealed() && cloned.stack_verified());
+        cloned.set_ops(vec![Op::List(255), Op::Return]);
+        assert_dropped(&cloned, "set_ops");
+
+        let mut cloned = original.clone();
+        cloned.set_constants(Vec::<Value>::new().into());
+        assert_dropped(&cloned, "set_constants");
+
+        let mut cloned = original.clone();
+        cloned.set_max_stack(StackDepth::for_test(2));
+        assert_dropped(&cloned, "set_max_stack");
+
+        let mut cloned = original.clone();
+        cloned.ops_mut().push(Op::List(255));
+        assert_dropped(&cloned, "ops_mut");
+
+        let mut cloned = original.clone();
+        let _ = cloned.constants_mut();
+        assert_dropped(&cloned, "constants_mut");
     }
 }

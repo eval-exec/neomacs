@@ -15,12 +15,10 @@ use neovm_edit::buffer::{
 use neovm_edit::emacs_core::display_metrics::GuiFrameGeometryHints;
 use neovm_edit::emacs_core::display_metrics::{Rect, WindowId, WindowMargins};
 use neovm_edit::emacs_core::textprop::WindowBufferLookup;
-#[cfg(any(test, feature = "test-support"))]
-use neovm_value::display_vocab::WindowSystemKind;
 use neovm_value::display_vocab::{
     ChangeStamp, FRAME_ID_BASE, FrameId, FrameParam, FrameQueryParam, FrameVisibility,
-    RenderFrameVisibility, SourcePreloadWindowRetirementRefusal, SplitDirection,
-    WindowHistoryState, WindowLayoutVariable,
+    GuiResizeRequestId, RenderFrameVisibility, SourcePreloadWindowRetirementRefusal,
+    SplitDirection, WindowHistoryState, WindowLayoutVariable, WindowSystemKind,
 };
 use neovm_value::gc_trace::GcTrace;
 use neovm_value::intern::SymId;
@@ -109,11 +107,6 @@ impl ChromeDirty {
         self.all_generation
     }
 
-    /// Whether WINDOW carries its own mark (GNU `w->update_mode_line`).
-    pub fn is_window_marked(&self, window: WindowId) -> bool {
-        self.windows.contains(&window)
-    }
-
     /// Whether WINDOW must re-generate its chrome this redisplay.
     pub fn is_dirty(&self, window: WindowId) -> bool {
         self.windows.contains(&window)
@@ -127,7 +120,8 @@ impl ChromeDirty {
     /// this answers the question for windows redisplay has already visited.
     /// [`Self::is_dirty`] is the per-window authority and does treat an
     /// unknown window as dirty.
-    pub fn is_any_dirty(&self) -> bool {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn is_any_dirty(&self) -> bool {
         !self.windows.is_empty()
             || self
                 .acknowledged
@@ -145,13 +139,6 @@ impl ChromeDirty {
     pub fn note_chrome_generated(&mut self, window: WindowId) {
         self.windows.remove(&window);
         self.acknowledged.insert(window, self.all_generation);
-    }
-
-    /// Drop a deleted window's acknowledgement so the table does not grow
-    /// without bound across a session's window churn.
-    pub fn forget_window(&mut self, window: WindowId) {
-        self.windows.remove(&window);
-        self.acknowledged.remove(&window);
     }
 }
 
@@ -362,7 +349,7 @@ pub struct CharTableLayoutRevision(u64);
 
 impl CharTableLayoutRevision {
     /// Wrap one evaluator-thread char-table mutation counter value.
-    pub const fn from_counter(counter: u64) -> Self {
+    pub(crate) const fn from_counter(counter: u64) -> Self {
         Self(counter)
     }
 }
@@ -380,15 +367,15 @@ pub struct WindowLayoutInputState {
     pub preserve_vscroll_p: bool,
     pub glyph_matrix_row_scale: neomacs_display_protocol::glyph_matrix_capacity::GlyphMatrixInput,
     pub margins: WindowMargins,
-    pub display_table_identity: usize,
+    pub(crate) display_table_identity: usize,
     pub char_table_mutation_epoch: CharTableLayoutRevision,
     pub window_parameters_generation: u64,
     pub left_fringe_width: i32,
     pub right_fringe_width: i32,
     pub fringes_outside_margins: bool,
-    pub left_scroll_bar_width: i64,
-    pub right_scroll_bar_width: i64,
-    pub horizontal_scroll_bar_height: i64,
+    pub(crate) left_scroll_bar_width: i64,
+    pub(crate) right_scroll_bar_width: i64,
+    pub(crate) horizontal_scroll_bar_height: i64,
 }
 
 /// Zero-based glyph-matrix row coordinate.
@@ -453,11 +440,13 @@ impl WindowEndRecord {
         )
     }
 
-    pub const fn char_offset_from_z(self) -> CharLen {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) const fn char_offset_from_z(self) -> CharLen {
         self.char_offset_from_z
     }
 
-    pub const fn byte_offset_from_z(self) -> EmacsByteLen {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) const fn byte_offset_from_z(self) -> EmacsByteLen {
         self.byte_offset_from_z
     }
 
@@ -482,7 +471,8 @@ impl WindowEndRecord {
     }
 
     /// Recover the byte companion of [`Self::charpos_from_z`].
-    pub const fn bytepos_from_z(self, buffer_z_byte: EmacsBytePos) -> EmacsBytePos {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) const fn bytepos_from_z(self, buffer_z_byte: EmacsBytePos) -> EmacsBytePos {
         buffer_z_byte.saturating_sub_len(self.byte_offset_from_z)
     }
 }
@@ -519,7 +509,8 @@ impl WindowEndState {
     }
 
     /// Recover the byte companion of [`Self::charpos_from_z`].
-    pub fn bytepos_from_z(self, buffer_z_byte: EmacsBytePos) -> EmacsBytePos {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn bytepos_from_z(self, buffer_z_byte: EmacsBytePos) -> EmacsBytePos {
         self.record()
             .map_or(buffer_z_byte, |record| record.bytepos_from_z(buffer_z_byte))
     }
@@ -804,10 +795,48 @@ pub struct WindowCursorSnapshot {
 #[derive(Clone, Debug, PartialEq)]
 pub struct WindowRedisplayOutput {
     pub generation: PresentationId,
+    /// GNU's post-callback accuracy, independent of the original row inputs.
+    /// None retains the legacy synthetic-snapshot admission used by fixtures.
+    pub gnu_accuracy: Option<GnuWindowAccuracy>,
     pub window_end: WindowEndRecord,
     pub visible_span: Option<WindowVisibleBufferSpan>,
     pub logical_cursor: Option<WindowCursorPos>,
     pub phys_cursor: Option<WindowCursorSnapshot>,
+}
+
+/// GNU `last_modified`/`last_overlay_modified` and accepted matrix restriction.
+/// This admits current-matrix queries, never replay of the rows' source data.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct GnuWindowAccuracy {
+    pub buffer_id: BufferId,
+    pub modified_tick: i64,
+    pub overlay_modified_tick: i64,
+    pub accessible_chars: neovm_edit::buffer::CharRange,
+    pub redisplay_optimizations: RedisplayOptimizationsRevision,
+}
+
+impl GnuWindowAccuracy {
+    /// GNU `window_outdated` compares source ticks only. Hover and the
+    /// other-window redisplay signal do not use the stronger matrix gate.
+    pub fn source_is_current_for(
+        self,
+        buffer_id: BufferId,
+        modified_tick: i64,
+        overlay_modified_tick: i64,
+    ) -> bool {
+        self.buffer_id == buffer_id
+            && self.modified_tick >= modified_tick
+            && self.overlay_modified_tick >= overlay_modified_tick
+    }
+
+    pub fn is_current_for(self, current: Self) -> bool {
+        self.source_is_current_for(
+            current.buffer_id,
+            current.modified_tick,
+            current.overlay_modified_tick,
+        ) && self.accessible_chars == current.accessible_chars
+            && self.redisplay_optimizations == current.redisplay_optimizations
+    }
 }
 
 impl WindowRedisplayOutput {
@@ -921,12 +950,6 @@ impl WindowDisplayState {
         self.redisplay_output.as_ref()
     }
 
-    pub fn clear_cursor_state(&mut self) {
-        self.cursor = None;
-        self.clear_output_cursor_state();
-        self.clear_physical_cursor_state();
-    }
-
     /// Start a new output pass for this window.
     ///
     /// The last committed output cursor remains authoritative until redisplay
@@ -1011,21 +1034,6 @@ impl WindowVisibleBufferSpan {
 
     pub const fn end(self) -> LispCharPos1 {
         self.end
-    }
-
-    /// Convert the inclusive redisplay span into GNU's Lisp-visible
-    /// `window-end` position.
-    ///
-    /// Published row ends normally identify the last displayed character, so
-    /// `window-end` is the following insertion position. Redisplay also
-    /// publishes Z itself for a visible EOB insertion slot; that boundary is
-    /// already a Lisp position and must not be advanced past `point-max`.
-    pub fn lisp_window_end(self, buffer_z: LispCharPos1) -> LispCharPos1 {
-        if self.end >= buffer_z {
-            buffer_z
-        } else {
-            LispCharPos1::new(self.end.as_i64().saturating_add(1))
-        }
     }
 }
 
@@ -1292,6 +1300,7 @@ pub enum GuiBarPresentation {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PendingGuiResize {
+    pub request_id: GuiResizeRequestId,
     pub width_cols: i64,
     pub total_lines: i64,
     pub delivery: GuiResizeDelivery,
@@ -1300,8 +1309,10 @@ pub struct PendingGuiResize {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[doc(hidden)]
 pub enum GuiResizeDelivery {
+    /// Intent not yet handed to the native layer survives native allocation.
     Queued,
-    Requested { width: u32, height: u32, wait: bool },
+    /// A native allocation or this request's exact completion retires intent.
+    Sent { width: u32, height: u32, wait: bool },
 }
 
 // --- E5-FM-3a snapshot/row records (stage-4 W2/E5) ---
@@ -1729,7 +1740,7 @@ pub enum PresentationPositions {
 
 /// Immutable numeric descriptors and maps with one thread-safe vector cache.
 /// Concurrent readers publish once; no Lisp state or snapshot object is retained.
-pub(crate) struct DeferredPositions {
+pub struct DeferredPositions {
     pub(crate) rows: DisplayPointRows,
     pub(crate) body_rows: HashMap<i64, PresentedBodyRowSnapshot>,
     pub(crate) row_heights: HashMap<i64, i64>,
@@ -1991,16 +2002,6 @@ impl Window {
         }
     }
 
-    /// Mutable counterpart of [`Window::children`], for the structural edits
-    /// -- push, remove, reorder -- that [`WindowTree`] performs on behalf of
-    /// split and delete.  `None` for a leaf, which has no child list to edit.
-    pub fn children_mut(&mut self) -> Option<&mut Vec<WindowId>> {
-        match self {
-            Window::Leaf { .. } => None,
-            Window::Internal { children, .. } => Some(children),
-        }
-    }
-
     /// Character-line top edge. GNU `w->top_line` (`WINDOW_TOP_EDGE_LINE`).
     pub fn top_line(&self) -> i64 {
         match self {
@@ -2223,14 +2224,6 @@ impl Window {
         }
     }
 
-    /// Set the lower bound for automatic horizontal scrolling
-    /// (`w->min_hscroll`). No-op for internal nodes.
-    pub fn set_min_hscroll(&mut self, value: usize) {
-        if let Window::Leaf { min_hscroll, .. } = self {
-            *min_hscroll = value;
-        }
-    }
-
     /// Whether automatic horizontal scrolling is currently suspended
     /// (`w->suspend_auto_hscroll`).
     pub fn suspend_auto_hscroll(&self) -> bool {
@@ -2360,7 +2353,8 @@ impl Window {
         }
     }
 
-    pub fn redisplay_output(&self) -> Option<&WindowRedisplayOutput> {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn redisplay_output(&self) -> Option<&WindowRedisplayOutput> {
         self.display()?.redisplay_output()
     }
 
@@ -2379,6 +2373,51 @@ impl Window {
             *window_end = WindowEndState::Current(output.window_end());
             display.redisplay_output = Some(output);
         }
+    }
+
+    /// GNU text hover requires a valid end and source ticks, independently of
+    /// clip/prevent-optimization flags (xdisp.c:37105-37112). Unstamped legacy
+    /// fixtures retain their existing caller admission; dead owners refuse.
+    pub fn gnu_text_hover_is_current(&self, buffers: &BufferManager) -> Option<bool> {
+        let accuracy = self.display()?.redisplay_output()?.gnu_accuracy?;
+        let Some(buffer) = self.buffer_id().and_then(|id| buffers.get(id)) else {
+            return Some(false);
+        };
+        Some(
+            self.window_end_valid() == Some(true)
+                && accuracy.source_is_current_for(
+                    buffer.id(),
+                    buffer.modified_tick(),
+                    buffer.overlay_modified_tick(),
+                ),
+        )
+    }
+
+    /// Stamp only the output committed by this exact completed presentation.
+    /// Queries, geometry-only publications and older output cannot gain it.
+    #[doc(hidden)]
+    pub fn set_gnu_redisplay_accuracy(
+        &mut self,
+        generation: PresentationId,
+        accuracy: GnuWindowAccuracy,
+    ) -> bool {
+        let Some(buffer_id) = self.buffer_id() else {
+            return false;
+        };
+        if buffer_id != accuracy.buffer_id {
+            return false;
+        }
+        let Some(output) = self
+            .display_mut()
+            .and_then(|display| display.redisplay_output.as_mut())
+        else {
+            return false;
+        };
+        if output.generation != generation {
+            return false;
+        }
+        output.gnu_accuracy = Some(accuracy);
+        true
     }
 
     /// Return a mutable reference to this leaf window's display state.
@@ -2489,13 +2528,6 @@ impl Window {
         }
     }
 
-    /// Stamp this window with the epoch that has just been recorded.
-    pub fn set_change_stamp(&mut self, stamp: ChangeStamp) {
-        if let Window::Leaf { change_stamp, .. } = self {
-            *change_stamp = Some(stamp);
-        }
-    }
-
     pub fn buffer_id(&self) -> Option<BufferId> {
         match self {
             Window::Leaf { buffer_id, .. } => Some(*buffer_id),
@@ -2564,7 +2596,8 @@ impl Window {
     }
 
     /// Stored byte-position `window-end` for this leaf window.
-    pub fn window_end_bytepos(&self, buffer_z_byte: EmacsBytePos) -> Option<EmacsBytePos> {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn window_end_bytepos(&self, buffer_z_byte: EmacsBytePos) -> Option<EmacsBytePos> {
         match self {
             Window::Leaf { window_end, .. } => Some(window_end.bytepos_from_z(buffer_z_byte)),
             Window::Internal { .. } => None,
@@ -2775,7 +2808,8 @@ impl WindowTree {
         self.nodes.values()
     }
 
-    pub fn nodes_mut(&mut self) -> impl Iterator<Item = &mut Window> {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn nodes_mut(&mut self) -> impl Iterator<Item = &mut Window> {
         self.nodes.values_mut()
     }
 
@@ -2986,6 +3020,40 @@ impl BodyRedisplayRevision {
     }
 }
 
+/// Per-buffer revision of GNU's `prevent_redisplay_optimizations_p`.
+///
+/// GNU raises that flag from the Lisp entry points that force a chrome
+/// redisplay without changing text — `set-buffer-redisplay`
+/// (src/xdisp.c:929) and both `force-mode-line-update` branches
+/// (src/buffer.c:1538-1545) — and clears it only when a redisplay finished
+/// accurately (`mark_window_display_accurate_1`, src/xdisp.c:18295-18297).
+/// The matrix-reuse predicate reads it (src/xdisp.c:20557-20565).
+///
+/// Neomacs records each raise as a per-buffer revision in the same map as
+/// [`BodyRedisplayRevision`].  The redisplay gate refuses reuse while the
+/// retained matrix predates the buffer's current revision; recording the
+/// value beside the retained matrix (outside its equality key) is how an
+/// accepted display consumes the raise, like GNU clearing the flag.  It is
+/// deliberately NOT the body revision: chrome-only work must never relayout
+/// body text.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub struct RedisplayOptimizationsRevision(u64);
+
+impl RedisplayOptimizationsRevision {
+    #[doc(hidden)]
+    pub const fn new(value: u64) -> Self {
+        Self(value)
+    }
+}
+
+/// The two per-buffer redisplay counters kept in one map entry: the body
+/// revision component and the GNU prevent-optimizations revision.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct BufferRedisplayRevisions {
+    pub(crate) body: u64,
+    pub(crate) prevent: u64,
+}
+
 /// Which window bodies an explicit `force-window-update` invalidated.
 ///
 /// Mirrors the three branches of GNU `Fforce_window_update`
@@ -3111,7 +3179,8 @@ impl WindowPresentationSnapshot {
     }
 
     /// A snapshot kept only as renderer and interaction geometry.
-    pub fn geometry_only(snapshot: WindowDisplaySnapshot) -> Self {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn geometry_only(snapshot: WindowDisplaySnapshot) -> Self {
         Self::GeometryOnly(std::sync::Arc::new(snapshot))
     }
 
@@ -3242,6 +3311,21 @@ pub struct PendingContentTransitionIntents {
     pub frames: PendingIntentLedger<FrameId>,
 }
 
+/// One deleted window's records, held aside while a full collection decides
+/// whether its owning frame object is still reachable.
+pub(crate) struct DeletedFrameWindowRecord {
+    pub(crate) window: WindowId,
+    pub(crate) record: DeletedWindowRecord,
+    pub(crate) parameters: Option<WindowParameters>,
+}
+
+/// Window records of one deleted frame, taken out of the traced maps for a
+/// single explicit full collection.
+pub(crate) struct DeletedFrameGcRecord {
+    pub(crate) frame_id: u64,
+    pub(crate) windows: Vec<DeletedFrameWindowRecord>,
+}
+
 /// What a deleted window remembers on the window object GNU keeps alive.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct DeletedWindowRecord {
@@ -3317,6 +3401,33 @@ impl std::fmt::Display for WindowSequenceNumber {
 
 // --- E5-FM-3b Frame + FrameManager (stage-4 W2/E5) ---
 
+/// GNU's `after_make_frame` lifecycle is independent of native visibility.
+/// Creation-time font and chrome changes must keep the requested text grid.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FrameCreationPhase {
+    BeforeMakeFrame,
+    Made,
+}
+
+/// Per-frame toolkit tool bar. Linux uses this for both the explicit-size
+/// request and the pixels layout reserves.
+///
+/// GNU stores the widget height in `FRAME_TOOLBAR_HEIGHT`, which stays 0
+/// until `update_frame_tool_bar` packs items (`gtkutil.c:6149-6160`), and
+/// records that pack in `f->tool_bar_resized` (`gtkutil.c:6158-6160`).
+/// `Unallocated { explicit_size_omitted: true }` is only the gap after an
+/// explicit size left the bar out of this frame's window. Layout withholds
+/// the band in that gap, so `frame-height` stays the requested row count
+/// until the first item-bearing redisplay. A creation window that already
+/// contains the band stays `explicit_size_omitted: false` and still reserves
+/// `tool_bar_height`. `free_frame_tool_bar` (`gtkutil.c:6168-6206`) returns
+/// the frame to `Unallocated { explicit_size_omitted: false }`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ToolkitToolBar {
+    Unallocated { explicit_size_omitted: bool },
+    Allocated,
+}
+
 /// A frame (top-level window/screen).
 pub struct Frame {
     /// GNU `f->change_stamp`: the epoch bumped each time the window change
@@ -3337,6 +3448,15 @@ pub struct Frame {
     /// later font can replace it. The base face value is not recorded either,
     /// so an explicit `normal` stays distinct from the unset default.
     pub explicit_default_font_attrs: u32,
+    /// GNU `struct frame.default_face_done_p`: whether this frame's default
+    /// face has been realized once.  `realize_default_face` passes it to
+    /// `set_lface_from_font` as FORCE_P, so the first realization fills only
+    /// unspecified slots while every later one replaces all font-derived
+    /// slots with the opened frame font's values.  `set_font_frame_param`
+    /// clears it before `gui_set_font`'s recompute (src/xfaces.c:3974,6029),
+    /// which makes that immediate realization non-forcing and the next
+    /// redisplay realization forcing.
+    pub default_face_done: bool,
     /// GNU `struct frame.icon_name`: explicit icon name, or nil.
     pub icon_name: Value,
     /// GNU `struct frame.focus_frame`: frame receiving this frame's keystrokes,
@@ -3349,6 +3469,7 @@ pub struct Frame {
     /// GNU `FRAME_INITIAL_P`: bootstrap placeholder frame that exists before
     /// a real terminal or window-system frame is installed.
     pub initial: bool,
+    pub creation_phase: FrameCreationPhase,
     /// This frame's window tree.
     ///
     /// Private: reach the root through [`Frame::root_window`] and windows
@@ -3427,8 +3548,20 @@ pub struct Frame {
     pub gui_bar_presentation: GuiBarPresentation,
     /// Menu bar height in pixels.
     pub menu_bar_height: u32,
-    /// Tool bar height in pixels.
+    /// Stored tool-bar height in pixels. Layout and Lisp geometry report
+    /// [`Self::reserved_tool_bar_height`], which drops this value on Linux
+    /// only while [`ToolkitToolBar::Unallocated`] records that an explicit
+    /// size left the bar out of the host window.
     pub tool_bar_height: u32,
+    /// Linux toolkit allocation for this frame. See [`ToolkitToolBar`].
+    pub toolkit_tool_bar: ToolkitToolBar,
+    /// GNU `f->n_tool_bar_items` survives `free_frame_tool_bar`
+    /// (`gtkutil.c:6168-6206`). A later positive line count calls
+    /// `update_frame_tool_bar` immediately (`xfns.c:1902-1908`), and that
+    /// update packs when the count is still non-zero (`gtkutil.c:6149-6155`).
+    /// This flag is that surviving count. It starts false, so a frame that
+    /// has never packed a bar stays unallocated.
+    pub tool_bar_items_packed: bool,
     /// Compact bar height in pixels.
     pub compact_bar_height: u32,
     /// Tab bar height in pixels.
@@ -3455,13 +3588,11 @@ pub struct Frame {
     /// `neovm_bridge` uses for them (`font_ascent = char_height`); they display
     /// no images, so the split is unobservable there.
     pub font_ascent: f32,
-    /// One-shot guard used when a live default-font change updates the frame's
-    /// character metrics before GNU would commit the follow-up width/height
-    /// window-system resize.
-    pub defer_next_gui_parameter_resize: bool,
     /// Logical GUI resize requested via frame parameters but not yet committed
     /// to the live host window.
     pub pending_gui_resize: Option<PendingGuiResize>,
+    /// Monotonic owner-local serial; clearing or rejecting intent never resets it.
+    last_gui_resize_request_id: Option<GuiResizeRequestId>,
     /// Authoritative last-redisplay geometry keyed by live leaf window.
     ///
     /// Window audit Medium 10 / Medium 11 in
@@ -3521,6 +3652,53 @@ pub struct Frame {
     pub buried_buffer_list: Vec<BufferId>,
 }
 
+/// Output method kept for a frame after it leaves the live map.
+///
+/// GNU `delete_frame` clears `f->terminal` (frame.c:2940) and does not
+/// touch `output_method`. `Fframep` (frame.c:300-316) still switches on
+/// that field, so a deleted frame answers `t` or its window system.
+/// `frame-live-p` stays nil. The value is copied from the frame's own
+/// output-method field at deletion, not from a frame parameter.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DeletedFrameTombstone {
+    output: DeletedFrameOutput,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DeletedFrameOutput {
+    Text,
+    Window(WindowSystemKind),
+}
+
+impl DeletedFrameTombstone {
+    /// Text tombstone for an eval-crate test that arms a deleted frame
+    /// without the display frame builder.
+    #[cfg(test)]
+    pub(crate) fn text_for_test() -> Self {
+        Self {
+            output: DeletedFrameOutput::Text,
+        }
+    }
+
+    fn from_frame(frame: &Frame) -> Self {
+        let output = match frame
+            .effective_window_system()
+            .and_then(|value| WindowSystemKind::from_symbol_value(&value))
+        {
+            Some(kind) => DeletedFrameOutput::Window(kind),
+            None => DeletedFrameOutput::Text,
+        };
+        Self { output }
+    }
+
+    fn lisp_value(self) -> Value {
+        match self.output {
+            DeletedFrameOutput::Text => Value::T,
+            DeletedFrameOutput::Window(kind) => Value::symbol(kind.name()),
+        }
+    }
+}
+
 pub struct FrameManager {
     pub frames: HashMap<FrameId, Frame>,
     /// Called on each newly built Frame before it is inserted. The Lisp
@@ -3548,6 +3726,9 @@ pub struct FrameManager {
     /// window from the tree, so the buffer has to be recorded here instead --
     /// a set of ids alone cannot answer the question.
     pub deleted_windows: HashMap<WindowId, DeletedWindowRecord>,
+    /// Output method of each deleted frame, keyed by the frame id the Lisp
+    /// object still carries. Live lookup does not consult this map.
+    pub deleted_frames: HashMap<FrameId, DeletedFrameTombstone>,
     pub deleted_window_parameters: HashMap<WindowId, WindowParameters>,
     pub window_select_count: i64,
     pub next_navigation_intent_generation: std::num::NonZeroU64,
@@ -3863,12 +4044,9 @@ impl WindowDisplaySnapshot {
         &mut self.points
     }
 
-    pub fn clear_point_rows(&mut self) {
-        self.point_rows = None;
-    }
-
     /// Replace the flat points and invalidate any previous shared representation.
-    pub fn set_points(&mut self, points: Vec<DisplayPointSnapshot>) {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn set_points(&mut self, points: Vec<DisplayPointSnapshot>) {
         self.point_rows = None;
         self.points = points;
     }
@@ -3887,13 +4065,13 @@ impl WindowDisplaySnapshot {
 
     /// Convert a redisplay Y relative to the window top into GNU's text-area
     /// coordinate space used by text `posn` values.
-    pub fn text_area_relative_y(&self, window_relative_y: i64) -> i64 {
+    pub(crate) fn text_area_relative_y(&self, window_relative_y: i64) -> i64 {
         window_relative_y.saturating_sub(self.top_chrome_height())
     }
 
     /// Convert a redisplay row relative to the window top into GNU's text-area
     /// row used by text `posn` values.
-    pub fn text_area_relative_row(&self, window_relative_row: i64) -> i64 {
+    pub(crate) fn text_area_relative_row(&self, window_relative_row: i64) -> i64 {
         window_relative_row.saturating_sub(self.top_chrome_rows())
     }
 
@@ -4113,7 +4291,8 @@ impl WindowDisplaySnapshot {
     /// Making it a variant rather than a `None` is what forces
     /// [`Self::point_at_coords`] to decide, instead of reporting GNU's ZV
     /// answer as no answer at all.
-    pub fn row_at_y(&self, y: i64) -> WindowSnapshotRowAtY<'_> {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn row_at_y(&self, y: i64) -> WindowSnapshotRowAtY<'_> {
         if let Some(row) = self
             .rows
             .iter()
@@ -4407,34 +4586,134 @@ impl Default for WindowDisplaySnapshot {
 }
 
 impl PendingGuiResize {
+    /// A completion terminates only the dispatched request that produced it.
+    /// Queued intent has not been sent and cannot have a native completion.
+    pub(crate) fn after_request_completion(self, request_id: GuiResizeRequestId) -> Option<Self> {
+        if self.request_id == request_id && matches!(self.delivery, GuiResizeDelivery::Sent { .. })
+        {
+            None
+        } else {
+            Some(self)
+        }
+    }
+
     pub fn is_queued(&self) -> bool {
         matches!(self.delivery, GuiResizeDelivery::Queued)
     }
 
-    /// Geometry queries may wait once for a newly sent request. An observation
-    /// consumes that wait without implying which native request produced it.
+    /// Geometry queries may wait once for a newly sent request.
     pub fn take_native_wait(&mut self) -> bool {
         match &mut self.delivery {
             GuiResizeDelivery::Queued => false,
-            GuiResizeDelivery::Requested { wait, .. } => std::mem::take(wait),
+            GuiResizeDelivery::Sent { wait, .. } => std::mem::take(wait),
         }
     }
 
-    pub fn after_native_observation(mut self, width: u32, height: u32) -> Option<Self> {
-        if let GuiResizeDelivery::Requested {
-            width: target_width,
-            height: target_height,
-            wait,
-        } = &mut self.delivery
-        {
-            if (width, height) == (*target_width, *target_height) {
-                return None;
-            }
-            *wait = false;
+    pub(crate) fn after_native_size_applied(self) -> Option<Self> {
+        // GNU change_frame_size_1 (dispnew.c:6714-6728) consumes pending size
+        // before applying actual native geometry, even if a request was
+        // rejected or another allocation arrived first. Unsent intent remains
+        // ours to dispatch; it cannot have been answered by the native layer.
+        match self.delivery {
+            GuiResizeDelivery::Queued => Some(self),
+            GuiResizeDelivery::Sent { .. } => None,
         }
-        // Actual allocation is always installed independently. Until the latest
-        // target is attained, a later font change retains the requested grid.
-        Some(self)
+    }
+}
+
+#[cfg(test)]
+mod gui_resize_request_tests {
+    use super::*;
+
+    fn dispatched(request_id: GuiResizeRequestId) -> PendingGuiResize {
+        PendingGuiResize {
+            request_id,
+            width_cols: 101,
+            total_lines: 40,
+            delivery: GuiResizeDelivery::Sent {
+                width: 1042,
+                height: 690,
+                wait: true,
+            },
+        }
+    }
+
+    #[test]
+    fn completion_retires_only_the_current_dispatched_request() {
+        let first = GuiResizeRequestId::FIRST;
+        let latest = dispatched(first.next());
+        assert_eq!(latest.after_request_completion(first), Some(latest));
+        assert_eq!(latest.after_request_completion(latest.request_id), None);
+    }
+
+    #[test]
+    fn duplicate_targets_remain_distinct_requests() {
+        let first = dispatched(GuiResizeRequestId::FIRST);
+        let duplicate = dispatched(first.request_id.next());
+        assert_eq!(first.delivery, duplicate.delivery);
+        assert_eq!(
+            duplicate.after_request_completion(first.request_id),
+            Some(duplicate)
+        );
+        assert_eq!(
+            duplicate.after_request_completion(duplicate.request_id),
+            None
+        );
+    }
+
+    #[test]
+    fn completion_does_not_retire_queued_intent_even_with_the_same_id() {
+        let queued = PendingGuiResize {
+            delivery: GuiResizeDelivery::Queued,
+            ..dispatched(GuiResizeRequestId::FIRST)
+        };
+        assert_eq!(
+            queued.after_request_completion(queued.request_id),
+            Some(queued)
+        );
+    }
+
+    #[test]
+    fn authoritative_native_size_retires_sent_intent_even_when_rejected() {
+        let pending = dispatched(GuiResizeRequestId::FIRST);
+        // GNU dispnew.c:6714-6728 clears pending size on every applied
+        // allocation. Equality with the requested target is not required.
+        assert_eq!(pending.after_native_size_applied(), None);
+    }
+
+    #[test]
+    fn authoritative_native_size_preserves_unsent_queued_intent() {
+        let queued = PendingGuiResize {
+            delivery: GuiResizeDelivery::Queued,
+            ..dispatched(GuiResizeRequestId::FIRST)
+        };
+        assert_eq!(queued.after_native_size_applied(), Some(queued));
+    }
+
+    #[test]
+    fn request_serials_are_monotonic_and_local_to_each_frame() {
+        crate::test_utils::init_test_tracing();
+        let frame = |id| {
+            Frame::new(
+                FrameId(id),
+                Value::NIL,
+                1,
+                800,
+                600,
+                Window::new_leaf(WindowId(id), BufferId(1), Rect::new(0.0, 0.0, 800.0, 584.0)),
+                WindowId(id + 1),
+            )
+        };
+        let mut first = frame(10);
+        let mut other = frame(20);
+        let a = first.allocate_gui_resize_request_id();
+        let b = first.allocate_gui_resize_request_id();
+        assert_eq!(a, GuiResizeRequestId::FIRST);
+        assert_eq!(b, a.next());
+        assert_eq!(other.allocate_gui_resize_request_id(), a);
+        first.pending_gui_resize = None;
+        assert_eq!(first.allocate_gui_resize_request_id(), b.next());
+        assert!(GuiResizeRequestId::new(0).is_none());
     }
 }
 
@@ -4471,6 +4750,7 @@ impl Default for FrameManager {
             window_sequence_origin: WindowSequenceOrigin(FIRST_WINDOW_ID),
             old_selected_window: None,
             deleted_windows: HashMap::default(),
+            deleted_frames: HashMap::default(),
             deleted_window_parameters: HashMap::default(),
             window_select_count: 0,
             next_navigation_intent_generation: std::num::NonZeroU64::MIN,
@@ -4833,7 +5113,8 @@ impl WindowRegions {
     pub const fn right_margin_columns(self) -> i64 {
         self.right_margin_columns
     }
-    pub fn matches_transport(self, regions: &PresentedWindowRegions) -> bool {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn matches_transport(self, regions: &PresentedWindowRegions) -> bool {
         Self::from_transport(regions).is_ok_and(|other| other == self)
     }
     pub const fn left_margin(self) -> Option<PixelRect<FrameLogicalSpace>> {
@@ -4934,7 +5215,7 @@ impl WindowChromeLine {
 
 impl WindowPart {
     /// The chrome line this part is, if it is one.
-    pub const fn chrome_line(self) -> Option<WindowChromeLine> {
+    pub(crate) const fn chrome_line(self) -> Option<WindowChromeLine> {
         match self {
             Self::TabLine => Some(WindowChromeLine::TabLine),
             Self::HeaderLine => Some(WindowChromeLine::HeaderLine),
@@ -4952,7 +5233,8 @@ impl WindowPart {
     /// witness, but only by holding a classification that says "text area",
     /// so no route reaches the buffer-position lookup with a mode-line or
     /// header-line coordinate.
-    pub const fn text_area_coordinate(
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) const fn text_area_coordinate(
         self,
         text_area_x: i64,
         window_y: i64,
@@ -5450,7 +5732,7 @@ impl Frame {
         let base_width = width_inc.saturating_add(self.horizontal_non_text_width().max(0) as u32);
         let base_height = height_inc.saturating_add(
             self.menu_bar_height
-                .saturating_add(self.tool_bar_height)
+                .saturating_add(self.reserved_tool_bar_height())
                 .saturating_add(self.compact_bar_height)
                 .saturating_add(self.tab_bar_height),
         );
@@ -5501,7 +5783,8 @@ impl Frame {
     /// [`WindowPresentationSnapshot::LiveWindow`]. Keeping the domain attached
     /// to the snapshot prevents a hit and an unrelated boolean from drifting
     /// apart as they pass through interaction code.
-    pub fn active_window_presentation(
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn active_window_presentation(
         &self,
         window: WindowId,
     ) -> Option<&WindowPresentationSnapshot> {
@@ -5528,16 +5811,24 @@ impl Frame {
     /// GNU's tree (`make_frame` links them, src/frame.c) and so is visited by
     /// the same walk. That is why a Y one row below a window with no mode line
     /// answers the MINIBUFFER's position rather than nothing.
-    pub fn coordinate_hit(&self, x: i64, y: i64) -> Option<FrameCoordinateHit> {
+    pub(crate) fn coordinate_hit(&self, x: i64, y: i64) -> Option<FrameCoordinateHit> {
         self.coordinate_hit_with(x, y, None)
     }
 }
 
 impl FrameManager {
     /// The only conversion from native identity to GNU's printable sequence.
-    pub fn window_sequence_number(&self, window: WindowId) -> WindowSequenceNumber {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn window_sequence_number(&self, window: WindowId) -> WindowSequenceNumber {
         self.window_sequence_origin
             .sequence_number(window, WindowId(self.next_window_id))
+    }
+
+    /// `framep` of a deleted frame. Live frames are not stored here.
+    pub fn deleted_frame_output(&self, id: FrameId) -> Option<Value> {
+        self.deleted_frames
+            .get(&id)
+            .map(|tombstone| tombstone.lisp_value())
     }
 
     /// Get a frame by ID.
@@ -5855,7 +6146,8 @@ impl Frame {
             .is_some()
     }
 
-    pub fn retire_display_presentation(&mut self, presentation: PresentationId) -> bool {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn retire_display_presentation(&mut self, presentation: PresentationId) -> bool {
         if self
             .presentation_state
             .active
@@ -6000,7 +6292,8 @@ impl FrameManager {
     /// (`pdumper.c:2996-3002`) and recreates the initial root at sequence one
     /// (`window.c:9143-9178`). Keep native IDs and deleted-window records intact:
     /// an escaped preload handle must never alias the runtime's new root.
-    pub fn retire_source_preload_window_sequences(
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn retire_source_preload_window_sequences(
         &mut self,
     ) -> Result<(), SourcePreloadWindowRetirementRefusal> {
         if !self.frames.is_empty() {
@@ -6067,6 +6360,8 @@ impl FrameManager {
             })
             .flatten();
         if let Some(frame) = self.frames.remove(&id) {
+            self.deleted_frames
+                .insert(id, DeletedFrameTombstone::from_frame(&frame));
             let terminal_id = frame.terminal_id;
             self.pending_content_transition_intents.frames.remove(id);
             for wid in frame.window_list() {
@@ -6207,7 +6502,7 @@ impl FrameManager {
     /// Commit the global selected-window history at GNU's window-change
     /// recording boundary. Selection itself must not advance this history:
     /// callers can observe the previous window until the next redisplay.
-    pub fn record_selected_window_after_redisplay(&mut self) -> Option<WindowId> {
+    pub(crate) fn record_selected_window_after_redisplay(&mut self) -> Option<WindowId> {
         let selected = self.selected_frame().map(|frame| frame.selected_window);
         self.old_selected_window = selected;
         selected
@@ -6628,6 +6923,15 @@ pub const GUI_SCROLL_BAR_DEFAULT_WIDTH_PX: u32 = 16;
 // --- E5-K2 data accessors (stage-4 W2/E5) ---
 
 impl Frame {
+    /// Allocate within this frame, independently of other frames or processes.
+    pub fn allocate_gui_resize_request_id(&mut self) -> GuiResizeRequestId {
+        let request_id = self
+            .last_gui_resize_request_id
+            .map_or(GuiResizeRequestId::FIRST, GuiResizeRequestId::next);
+        self.last_gui_resize_request_id = Some(request_id);
+        request_id
+    }
+
     pub fn new(
         id: FrameId,
         name: Value,
@@ -6675,11 +6979,15 @@ impl Frame {
             name,
             explicit_name: false,
             explicit_default_font_attrs: 0,
+            default_face_done: false,
             icon_name: Value::NIL,
             focus_frame: Value::NIL,
             parent_frame: Value::NIL,
             terminal_id,
             initial: false,
+            // Logical/TTY creation is complete here (GNU frame.c:1472).
+            // The GUI constructor explicitly re-enters its configuration phase.
+            creation_phase: FrameCreationPhase::Made,
             tree: WindowTree::new(root_window),
             selected_window: selected,
             // GNU `make_frame_without_minibuffer` leaves
@@ -6728,6 +7036,10 @@ impl Frame {
             gui_bar_presentation: GuiBarPresentation::Separate,
             menu_bar_height: 0,
             tool_bar_height: 0,
+            toolkit_tool_bar: ToolkitToolBar::Unallocated {
+                explicit_size_omitted: false,
+            },
+            tool_bar_items_packed: false,
             compact_bar_height: 0,
             tab_bar_height: 0,
             font_pixel_size: 16.0,
@@ -6738,8 +7050,8 @@ impl Frame {
             // equal to `char_height` for every consumer (see `font_ascent`).
             font_ascent: 16.0,
             device_scale_factor: 1.0,
-            defer_next_gui_parameter_resize: false,
             pending_gui_resize: None,
+            last_gui_resize_request_id: None,
             presentation_state: FramePresentationState::default(),
             redisplay_cache: HashMap::default(),
             tty_posn_pool: None,
@@ -6792,14 +7104,14 @@ impl Frame {
         self.parameters.remove(&key)
     }
 
-    pub fn default_left_fringe_width(&self) -> i64 {
+    pub(crate) fn default_left_fringe_width(&self) -> i64 {
         self.known_parameter(FrameParam::LeftFringe)
             .and_then(|v| v.as_int())
             .unwrap_or(8)
             .max(0)
     }
 
-    pub fn default_right_fringe_width(&self) -> i64 {
+    pub(crate) fn default_right_fringe_width(&self) -> i64 {
         self.known_parameter(FrameParam::RightFringe)
             .and_then(|v| v.as_int())
             .unwrap_or(8)
@@ -7058,7 +7370,7 @@ impl FrameManager {
             .filter(|parent| self.frames.contains_key(parent))
     }
 
-    pub fn frame_ancestors_visible_p(&self, id: FrameId) -> bool {
+    pub(crate) fn frame_ancestors_visible_p(&self, id: FrameId) -> bool {
         let mut current = Some(id);
         let mut seen = HashSet::default();
         while let Some(frame_id) = current {
@@ -7090,6 +7402,118 @@ impl FrameManager {
         let a_z = self.frames.get(&a).map(|frame| frame.z_order).unwrap_or(0);
         let b_z = self.frames.get(&b).map(|frame| frame.z_order).unwrap_or(0);
         a_z.cmp(&b_z).then_with(|| a.0.cmp(&b.0))
+    }
+
+    /// Pull dead-frame window records out of the traced maps for one explicit
+    /// full collection.
+    ///
+    /// The set of frames is the tombstone map. Grouping `deleted_windows` by
+    /// owner would skip a deleted frame that has no window record, and that
+    /// frame would stay an unconditional registry root. A tombstone is armed
+    /// with whatever fields it has, including an empty list.
+    ///
+    /// A dead frame that owns any materialized window object is not armed.
+    /// GNU `mark_window` marks `w->frame`, and the window registry keeps that
+    /// window object for the session, so the frame stays an ordinary root and
+    /// its parameter records stay in the traced maps. Windows deleted from a
+    /// frame that is still live stay in the maps as well.
+    pub(crate) fn take_deleted_frames_for_gc(
+        &mut self,
+        window_materialized: impl Fn(u64) -> bool,
+    ) -> (Vec<(u64, Vec<Value>)>, Vec<DeletedFrameGcRecord>) {
+        let frame_ids: Vec<FrameId> = self.deleted_frames.keys().copied().collect();
+        let mut ephemerons = Vec::new();
+        let mut taken = Vec::new();
+        for frame_id in frame_ids {
+            if self.frames.contains_key(&frame_id) {
+                continue;
+            }
+            let windows: Vec<WindowId> = self
+                .deleted_windows
+                .iter()
+                .filter_map(|(wid, record)| (record.owner == Some(frame_id)).then_some(*wid))
+                .collect();
+            if windows.iter().any(|wid| window_materialized(wid.0)) {
+                continue;
+            }
+            let mut fields = Vec::new();
+            let mut records = Vec::new();
+            for wid in windows {
+                let Some(record) = self.deleted_windows.remove(&wid) else {
+                    continue;
+                };
+                let parameters = self.deleted_window_parameters.remove(&wid);
+                if let Some(params) = parameters.as_ref() {
+                    for (key, value) in params {
+                        fields.push(*key);
+                        fields.push(*value);
+                    }
+                }
+                records.push(DeletedFrameWindowRecord {
+                    window: wid,
+                    record,
+                    parameters,
+                });
+            }
+            ephemerons.push((frame_id.0, fields));
+            taken.push(DeletedFrameGcRecord {
+                frame_id: frame_id.0,
+                windows: records,
+            });
+        }
+        (ephemerons, taken)
+    }
+
+    /// Put an uncommitted batch back. A panicking collection calls this from
+    /// its drop guard so the records are not lost.
+    pub(crate) fn restore_deleted_frame_records(&mut self, taken: Vec<DeletedFrameGcRecord>) {
+        for frame in taken {
+            self.put_back_deleted_frame_windows(frame.windows);
+        }
+    }
+
+    fn put_back_deleted_frame_windows(&mut self, windows: Vec<DeletedFrameWindowRecord>) {
+        for window in windows {
+            self.deleted_windows.insert(window.window, window.record);
+            if let Some(parameters) = window.parameters {
+                self.deleted_window_parameters
+                    .insert(window.window, parameters);
+            }
+        }
+    }
+
+    /// Drop the output-method tombstone for a frame whose heap object this
+    /// collection reclaimed. `framep` then has nothing to answer with.
+    pub(crate) fn forget_reclaimed_frame(&mut self, frame_id: FrameId) {
+        self.deleted_frames.remove(&frame_id);
+    }
+
+    /// Apply one collection's reclaimed frame ids.
+    ///
+    /// Reached frames get their window records back. A reclaimed frame drops
+    /// `deleted_windows` and `deleted_window_parameters` only for windows that
+    /// have no materialized window object. A materialized window keeps its
+    /// records even if its frame id was reported reclaimed.
+    pub(crate) fn commit_reclaimed_deleted_frames(
+        &mut self,
+        taken: Vec<DeletedFrameGcRecord>,
+        reclaimed: &[u64],
+        window_materialized: impl Fn(u64) -> bool,
+    ) {
+        let reclaimed: HashSet<u64> = reclaimed.iter().copied().collect();
+        for frame in taken {
+            if reclaimed.contains(&frame.frame_id) {
+                self.forget_reclaimed_frame(FrameId(frame.frame_id));
+                let (keep, drop_these): (Vec<_>, Vec<_>) = frame
+                    .windows
+                    .into_iter()
+                    .partition(|window| window_materialized(window.window.0));
+                drop(drop_these);
+                self.put_back_deleted_frame_windows(keep);
+            } else {
+                self.put_back_deleted_frame_windows(frame.windows);
+            }
+        }
     }
 
     /// What a window should remember once it is deleted.
@@ -7193,14 +7617,49 @@ impl Frame {
             .unwrap_or(0)
     }
 
+    /// Tool-bar pixels layout, native height, and `tool-bar-size` reserve.
+    ///
+    /// The stored [`Self::tool_bar_height`] stays put so a later allocation
+    /// can grow by it. Linux reports 0 only while an explicit size has left
+    /// that band out of the window, matching `FRAME_TOOLBAR_HEIGHT` == 0
+    /// before the first item-bearing update (`gtkutil.c:1181-1182`).
+    pub fn reserved_tool_bar_height(&self) -> u32 {
+        #[cfg(target_os = "linux")]
+        if matches!(
+            self.toolkit_tool_bar,
+            ToolkitToolBar::Unallocated {
+                explicit_size_omitted: true
+            }
+        ) {
+            return 0;
+        }
+        self.tool_bar_height
+    }
+
     pub fn chrome_top_height(&self) -> f32 {
         self.menu_bar_height
-            .saturating_add(self.tool_bar_height)
+            .saturating_add(self.reserved_tool_bar_height())
             .saturating_add(self.compact_bar_height)
             .saturating_add(self.tab_bar_height) as f32
     }
 
-    pub fn default_vertical_scroll_bar_side(&self) -> Option<&'static str> {
+    /// Height of the menu and tool bar band Neomacs paints at the top of its
+    /// window, in pixels.
+    ///
+    /// GNU's Gtk+ and NS builds keep the menu bar and tool bar outside the
+    /// native frame (`Fframe_native_height`'s doc in src/frame.c:4401-4418:
+    /// the native height "does not include the tool bar or menu bar"), so
+    /// `frame-pixel-height` must not count them.  The tab bar stays inside
+    /// the native frame: `frame-inner-height` subtracts it separately
+    /// (lisp/frame.el:1913).  `compact_bar_height` is Neomacs' exclusive
+    /// replacement for the menu/tool band, so it belongs to the same group.
+    pub fn external_bar_height(&self) -> u32 {
+        self.menu_bar_height
+            .saturating_add(self.reserved_tool_bar_height())
+            .saturating_add(self.compact_bar_height)
+    }
+
+    pub(crate) fn default_vertical_scroll_bar_side(&self) -> Option<&'static str> {
         let raw = self
             .known_parameter(FrameParam::VerticalScrollBars)
             .unwrap_or_else(|| {
@@ -7218,7 +7677,7 @@ impl Frame {
         }
     }
 
-    pub fn default_vertical_scroll_bar_width(&self) -> i64 {
+    pub(crate) fn default_vertical_scroll_bar_width(&self) -> i64 {
         i64::from(frame_config_scroll_bar_width(self))
     }
 }
@@ -7275,6 +7734,7 @@ impl FrameManager {
             window_sequence_origin: WindowSequenceOrigin(FIRST_WINDOW_ID),
             old_selected_window: None,
             deleted_windows: HashMap::default(),
+            deleted_frames: HashMap::default(),
             deleted_window_parameters: HashMap::default(),
             window_select_count: 0,
             next_navigation_intent_generation: std::num::NonZeroU64::MIN,
@@ -7300,7 +7760,7 @@ impl Frame {
 
 impl FrameManager {
     /// Install the hook run on every newly created frame.
-    pub fn set_frame_init_hook(&mut self, hook: fn(&mut Frame)) {
+    pub(crate) fn set_frame_init_hook(&mut self, hook: fn(&mut Frame)) {
         self.frame_init_hook = Some(hook);
     }
 }

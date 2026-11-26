@@ -131,7 +131,23 @@ fn daemon_identity_and_initialization_are_host_owned_and_one_shot() {
         eval.eval_str("(daemonp)").unwrap().as_utf8_str(),
         Some("work")
     );
+    drop(eval);
     let mut unnamed = neovm_core::emacs_core::eval_hook_installers::new_context();
     unnamed.configure_daemon(None, None);
     assert_eq!(unnamed.eval_str("(daemonp)").unwrap(), Value::T);
+}
+
+#[test]
+#[deny(unused_unsafe)]
+fn daemon_prepare_and_startup_run_require_unsafe_single_threaded_contract() {
+    // Fails to compile if either `daemon::prepare` or `startup::run` reverts to
+    // a safe fn despite mutating the process environment / calling `fork()`.
+    // SAFETY: `prepare(None)` returns immediately without touching env or fork.
+    assert!(unsafe { prepare(None) }.expect("None options").is_none());
+    if std::hint::black_box(false) {
+        // SAFETY: unreachable; exercises `startup::run`'s unsafe signature.
+        unsafe {
+            super::super::run(super::super::RuntimeMode::Raw);
+        }
+    }
 }

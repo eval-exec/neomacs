@@ -11,6 +11,8 @@
 use super::terminal_capabilities::StringCapability;
 use super::terminal_capabilities::TerminalCapabilityDatabase;
 use super::{FrontendKind, StartupOptions};
+use std::fmt;
+
 use neomacs_display_protocol::tty_capabilities::TtyAttributeCapabilities;
 use neomacs_display_runtime::tty_input::{
     TerminalCellSize, TerminalColumns, TerminalRows, TerminalSizeQuery,
@@ -122,14 +124,7 @@ pub fn detect_term_caps() -> neomacs_display_runtime::backend::tty::rif::TermCap
 }
 
 pub(crate) fn default_controlling_tty_name() -> &'static str {
-    #[cfg(windows)]
-    {
-        "CONOUT$"
-    }
-    #[cfg(not(windows))]
-    {
-        "/dev/tty"
-    }
+    neovm_core::emacs_core::terminal::pure::CONTROLLING_DEV_TTY_NAME
 }
 
 pub fn detect_tty_name(_startup: &StartupOptions) -> String {
@@ -278,6 +273,179 @@ pub fn query_terminal_size_cells() -> Option<(u32, u32)> {
     query_terminal_size_cells_with(&TerminalSizeQuery::new()).map(legacy_terminal_columns_rows)
 }
 
+/// GNU `init_tty` picks this text when the controlling terminal cannot be
+/// used (`term.c:4464-4470`). `open_failed` is `fd < 0`. The other arm is an
+/// fd that opened and then failed `isatty`. `name` is `DEV_TTY`, `/dev/tty`
+/// (`keyboard.c:94`). The initial terminal passes `must_succeed`, so `vfatal`
+/// prints `emacs: ` and this string.
+pub(crate) fn initial_tty_open_diagnostic(open_failed: bool) -> &'static str {
+    if open_failed {
+        "Could not open file: /dev/tty"
+    } else {
+        "Not a tty device: /dev/tty"
+    }
+}
+
+/// `None` when `/dev/tty` opened and is a terminal.
+///
+/// GNU's initial terminal is `init_tty` with a null name, so it opens
+/// `dev_tty` and fatals on failure (`term.c:4404-4470`). A later
+/// `make-terminal-frame` does not use this check.
+pub(crate) fn initial_tty_open_failure() -> Option<&'static str> {
+    #[cfg(unix)]
+    {
+        match open_dev_tty() {
+            Err(_) => Some(initial_tty_open_diagnostic(true)),
+            Ok(file) => {
+                let fd = std::os::fd::AsRawFd::as_raw_fd(&file);
+                // SAFETY: `fd` is owned by `file` for this call. `isatty`
+                // does not retain it.
+                let is_tty = unsafe { libc::isatty(fd) } == 1;
+                if is_tty {
+                    None
+                } else {
+                    Some(initial_tty_open_diagnostic(false))
+                }
+            }
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        None
+    }
+}
+
+#[cfg(unix)]
+fn open_dev_tty() -> std::io::Result<std::fs::File> {
+    use std::os::unix::fs::OpenOptionsExt;
+    std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .custom_flags(libc::O_NOCTTY)
+        .open("/dev/tty")
+}
+
+/// Winsize for a root `make-terminal-frame` on the initial terminal.
+///
+/// GNU `get_tty_size` (`src/sysdep.c:1396-1408`) is one `TIOCGWINSZ` on the
+/// initial terminal's input fd (`/dev/tty`, opened by `init_tty`). Failure
+/// and a successful 0×0 are both `(0, 0)`. There is no crossterm or `tput`
+/// fallback. The frame clamp turns that into a live frame.
+pub fn initial_tty_winsize_cells() -> (u32, u32) {
+    #[cfg(unix)]
+    {
+        let Ok(file) = std::fs::File::open("/dev/tty") else {
+            return (0, 0);
+        };
+        winsize_from_fd(std::os::fd::AsRawFd::as_raw_fd(&file))
+    }
+    #[cfg(not(unix))]
+    {
+        (0, 0)
+    }
+}
+
+/// One `TIOCGWINSZ` on `fd`. Same shape as the secondary terminal's raw read:
+/// a failed ioctl is `(0, 0)`, and a successful 0×0 stays `(0, 0)`.
+#[cfg(unix)]
+fn winsize_from_fd(fd: std::os::fd::RawFd) -> (u32, u32) {
+    let mut size = unsafe { std::mem::zeroed::<libc::winsize>() };
+    // SAFETY: `fd` is borrowed for this call. `TIOCGWINSZ` writes only the
+    // zeroed `winsize` and keeps no pointer. A failed call leaves `size` zero,
+    // and the branch below discards it.
+    if unsafe { libc::ioctl(fd, libc::TIOCGWINSZ as _, &mut size) } == 0 {
+        (u32::from(size.ws_col), u32::from(size.ws_row))
+    } else {
+        (0, 0)
+    }
+}
+
+/// GNU `init_tty` refuses this screen (`term.c:4810-4814`, `vfatal` at 4936).
+///
+/// `cols` and `rows` are the signed sizes after the `co`/`li` fallback, in
+/// that order. `tgetnum` returns -1 when the capability is missing, and the
+/// message prints that value.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct InitialTtySizeError {
+    cols: i32,
+    rows: i32,
+}
+
+impl fmt::Display for InitialTtySizeError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "Screen size {}x{} is too small",
+            self.cols, self.rows
+        )
+    }
+}
+
+/// Initial-terminal cells from an ioctl report and termcap `co`/`li`.
+///
+/// GNU `init_tty` (`term.c:4800-4814`) keeps a positive ioctl side and, only
+/// when that side is `<= 0`, replaces it with `tgetnum("co")` or
+/// `tgetnum("li")`. Either side below 3 is fatal. This is the initial frame
+/// only. `make-terminal-frame` keeps [`initial_tty_winsize_cells`], including
+/// a raw `(0, 0)`.
+pub(crate) fn initial_tty_cells_from_ioctl(
+    ioctl_cols: i32,
+    ioctl_rows: i32,
+    co: i32,
+    li: i32,
+) -> Result<(u32, u32), InitialTtySizeError> {
+    let cols = if ioctl_cols > 0 { ioctl_cols } else { co };
+    let rows = if ioctl_rows > 0 { ioctl_rows } else { li };
+    if cols < 3 || rows < 3 {
+        return Err(InitialTtySizeError { cols, rows });
+    }
+    Ok((
+        u32::try_from(cols).unwrap_or(u32::MAX),
+        u32::try_from(rows).unwrap_or(u32::MAX),
+    ))
+}
+
+/// Size of the initial interactive terminal.
+///
+/// A positive ioctl wins, so an 80×24 pty stays 80×24. A non-positive side
+/// reads `co` or `li` through neomacs-terminfo (`tgetnum`). A missing number
+/// is -1, the same answer GNU's `tgetnum` gives, and then fails the 3×3 check.
+pub(crate) fn initial_tty_startup_cells() -> Result<(u32, u32), InitialTtySizeError> {
+    let (ioctl_cols, ioctl_rows) = initial_tty_winsize_cells();
+    let ioctl_cols = reported_tty_dimension(ioctl_cols);
+    let ioctl_rows = reported_tty_dimension(ioctl_rows);
+    let (co, li) = if ioctl_cols <= 0 || ioctl_rows <= 0 {
+        termcap_co_li()
+    } else {
+        (0, 0)
+    };
+    initial_tty_cells_from_ioctl(ioctl_cols, ioctl_rows, co, li)
+}
+
+fn reported_tty_dimension(value: u32) -> i32 {
+    i32::try_from(value).unwrap_or(i32::MAX)
+}
+
+/// Termcap `co` and `li` for `TERM`, or -1 when the name or the number is absent.
+fn termcap_co_li() -> (i32, i32) {
+    let Some(term) = detect_tty_type() else {
+        return (-1, -1);
+    };
+    let Ok(database) = neomacs_terminfo::Database::load(
+        &term,
+        &[
+            neomacs_terminfo::Query::TermcapNumber("co"),
+            neomacs_terminfo::Query::TermcapNumber("li"),
+        ],
+    ) else {
+        return (-1, -1);
+    };
+    (
+        database.termcap_number("co").unwrap_or(-1),
+        database.termcap_number("li").unwrap_or(-1),
+    )
+}
+
 fn legacy_terminal_columns_rows(size: TerminalCellSize) -> (u32, u32) {
     (u32::from(size.columns()), u32::from(size.rows()))
 }
@@ -329,6 +497,156 @@ pub(crate) fn tty_leave_sequence() -> &'static [u8] {
     b"\x1b[0m\x1b[?25h\x1b[?2004l\x1b[?1l\x1b>\x1b[?1049l"
 }
 
+/// Ordered byte chunks for entering Windows VT mode with `tty-mode-set-strings`
+/// emitted last, suppressing the hardcoded `\x1b[?2004h` when `set_strings`
+/// already enables bracketed paste (e.g. via `lisp/term/xterm.el`).
+#[cfg(any(windows, test))]
+pub(crate) fn tty_vt_enter_chunks<'a>(set_strings: &'a [u8]) -> [&'a [u8]; 3] {
+    let enter = tty_enter_sequence();
+    let bp_enable = b"\x1b[?2004h";
+    if set_strings.windows(bp_enable.len()).any(|w| w == bp_enable)
+        && let Some(pos) = enter.windows(bp_enable.len()).position(|w| w == bp_enable)
+    {
+        [&enter[..pos], &enter[pos + bp_enable.len()..], set_strings]
+    } else {
+        [enter, b"", set_strings]
+    }
+}
+
+/// Ordered byte chunks for leaving Windows VT mode with `tty-mode-reset-strings`
+/// emitted first, suppressing the hardcoded `\x1b[?2004l` when `reset_strings`
+/// already disables bracketed paste (e.g. via `lisp/term/xterm.el`).
+#[cfg(any(windows, test))]
+pub(crate) fn tty_vt_leave_chunks<'a>(reset_strings: &'a [u8]) -> [&'a [u8]; 3] {
+    let leave = tty_leave_sequence();
+    let bp_disable = b"\x1b[?2004l";
+    if reset_strings
+        .windows(bp_disable.len())
+        .any(|w| w == bp_disable)
+        && let Some(pos) = leave
+            .windows(bp_disable.len())
+            .position(|w| w == bp_disable)
+    {
+        [
+            reset_strings,
+            &leave[..pos],
+            &leave[pos + bp_disable.len()..],
+        ]
+    } else {
+        [reset_strings, leave, b""]
+    }
+}
+
+#[repr(u8)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PrimaryTtyState {
+    Uninitialized = 0,
+    Active = 1,
+    Suspended = 2,
+}
+
+impl PrimaryTtyState {
+    fn from_u8(raw: u8) -> Self {
+        match raw {
+            0 => Self::Uninitialized,
+            1 => Self::Active,
+            2 => Self::Suspended,
+            other => unreachable!("invalid PrimaryTtyState discriminant: {other}"),
+        }
+    }
+}
+
+struct AtomicPrimaryTtyState(std::sync::atomic::AtomicU8);
+
+impl AtomicPrimaryTtyState {
+    const fn new(initial: PrimaryTtyState) -> Self {
+        Self(std::sync::atomic::AtomicU8::new(initial as u8))
+    }
+
+    fn load(&self, ordering: std::sync::atomic::Ordering) -> PrimaryTtyState {
+        PrimaryTtyState::from_u8(self.0.load(ordering))
+    }
+
+    fn store(&self, state: PrimaryTtyState, ordering: std::sync::atomic::Ordering) {
+        self.0.store(state as u8, ordering);
+    }
+
+    fn swap(
+        &self,
+        state: PrimaryTtyState,
+        ordering: std::sync::atomic::Ordering,
+    ) -> PrimaryTtyState {
+        PrimaryTtyState::from_u8(self.0.swap(state as u8, ordering))
+    }
+
+    fn compare_exchange(
+        &self,
+        current: PrimaryTtyState,
+        new: PrimaryTtyState,
+        success: std::sync::atomic::Ordering,
+        failure: std::sync::atomic::Ordering,
+    ) -> Result<PrimaryTtyState, PrimaryTtyState> {
+        self.0
+            .compare_exchange(current as u8, new as u8, success, failure)
+            .map(PrimaryTtyState::from_u8)
+            .map_err(PrimaryTtyState::from_u8)
+    }
+}
+
+static PRIMARY_TTY_STATE: AtomicPrimaryTtyState =
+    AtomicPrimaryTtyState::new(PrimaryTtyState::Uninitialized);
+
+/// Whether the primary interactive TTY is currently active (entered and not suspended).
+pub fn is_primary_tty_active() -> bool {
+    PRIMARY_TTY_STATE.load(std::sync::atomic::Ordering::Acquire) == PrimaryTtyState::Active
+}
+
+#[cfg(unix)]
+fn drain_stdout_tty() {
+    // GNU `reset_sys_modes` (`src/sysdep.c:1536`) drains buffered output before
+    // restoring termios so escape sequences are not lost on mode change.
+    loop {
+        // SAFETY: `STDOUT_FILENO` is a valid process descriptor; `tcdrain`
+        // blocks until output is transmitted or fails with EINTR/ENOTTY.
+        let rc = unsafe { libc::tcdrain(libc::STDOUT_FILENO) };
+        if rc == 0 || std::io::Error::last_os_error().kind() != std::io::ErrorKind::Interrupted {
+            break;
+        }
+    }
+}
+
+fn write_primary_enter(set_strings: &[u8]) -> std::io::Result<()> {
+    #[cfg(windows)]
+    {
+        super::tty_output::windows::enter_with(set_strings)
+    }
+    #[cfg(not(windows))]
+    {
+        super::tty_output::primary()
+            .map_err(std::io::Error::other)
+            .and_then(|caps| {
+                let mut stdout = std::io::stdout();
+                let (_, height) = query_terminal_size_cells().unwrap_or((80, 24));
+                caps.enter_with(height as usize, set_strings)
+                    .write_to(&mut stdout, caps)
+            })
+    }
+}
+
+fn write_primary_leave(reset_strings: &[u8]) {
+    #[cfg(windows)]
+    if let Err(error) = super::tty_output::windows::leave_with(reset_strings) {
+        tracing::warn!(%error, "could not restore console output");
+    }
+    #[cfg(not(windows))]
+    if let Ok(caps) = super::tty_output::primary() {
+        let mut stdout = std::io::stdout();
+        let _ = caps.leave_with(reset_strings).write_to(&mut stdout, caps);
+        #[cfg(unix)]
+        drain_stdout_tty();
+    }
+}
+
 /// Set up the terminal for the TtyRif direct-rendering path:
 /// raw mode, alternate screen buffer, GNU input modes, hidden cursor.
 pub fn tty_init_terminal() -> Result<(), String> {
@@ -347,17 +665,11 @@ pub fn tty_init_terminal() -> Result<(), String> {
     );
 
     crossterm::terminal::enable_raw_mode().map_err(|error| error.to_string())?;
-    #[cfg(windows)]
-    let result = super::tty_output::windows::enter();
-    #[cfg(not(windows))]
-    let result = super::tty_output::primary()
-        .map_err(std::io::Error::other)
-        .and_then(|caps| {
-            let mut stdout = std::io::stdout();
-            let (_, height) = query_terminal_size_cells().unwrap_or((80, 24));
-            caps.enter(height as usize).write_to(&mut stdout, caps)
-        });
-    if let Err(error) = result {
+    PRIMARY_TTY_STATE.store(
+        PrimaryTtyState::Active,
+        std::sync::atomic::Ordering::Release,
+    );
+    if let Err(error) = write_primary_enter(&[]) {
         tty_shutdown_terminal();
         return Err(format!("could not initialize TTY output: {error}"));
     }
@@ -365,18 +677,183 @@ pub fn tty_init_terminal() -> Result<(), String> {
     Ok(())
 }
 
+/// Temporarily restore the primary TTY for `suspend-tty` / `suspend-emacs`,
+/// emitting `tty-mode-reset-strings` first as in GNU `tty_reset_terminal_modes`.
+pub fn tty_suspend_terminal(reset_strings: &[u8]) {
+    if PRIMARY_TTY_STATE
+        .compare_exchange(
+            PrimaryTtyState::Active,
+            PrimaryTtyState::Suspended,
+            std::sync::atomic::Ordering::AcqRel,
+            std::sync::atomic::Ordering::Acquire,
+        )
+        .is_err()
+    {
+        return;
+    }
+    write_primary_leave(reset_strings);
+    if let Err(e) = crossterm::terminal::disable_raw_mode() {
+        tracing::warn!("tty_suspend_terminal: disable_raw_mode failed: {}", e);
+    }
+}
+
+/// Re-enter raw mode and terminal modes for `resume-tty` / `suspend-emacs`
+/// resume, emitting `tty-mode-set-strings` last as in GNU `tty_set_terminal_modes`.
+pub fn tty_resume_terminal(set_strings: &[u8]) -> Result<(), String> {
+    if PRIMARY_TTY_STATE
+        .compare_exchange(
+            PrimaryTtyState::Suspended,
+            PrimaryTtyState::Active,
+            std::sync::atomic::Ordering::AcqRel,
+            std::sync::atomic::Ordering::Acquire,
+        )
+        .is_err()
+    {
+        return Ok(());
+    }
+    if let Err(error) = crossterm::terminal::enable_raw_mode() {
+        PRIMARY_TTY_STATE.store(
+            PrimaryTtyState::Suspended,
+            std::sync::atomic::Ordering::Release,
+        );
+        return Err(format!("could not re-enable TTY raw mode: {error}"));
+    }
+    if let Err(error) = write_primary_enter(set_strings) {
+        tty_suspend_terminal(&[]);
+        return Err(format!("could not resume TTY output: {error}"));
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn stuff_tty_input(stuff: &[u8]) {
+    // GNU `stuff_buffered_input` (`src/keyboard.c:12485-12512`): push each byte
+    // plus `\n` back into the terminal input queue via `TIOCSTI`, silently
+    // stopping if the kernel refuses (e.g. `dev.tty.legacy_tiocsti=0`).
+    // Limitation: unlike GNU, bytes already read ahead into Neomacs's internal
+    // keyboard queue are not re-stuffed into the TTY before suspending.
+    for &byte in stuff.iter().chain(std::iter::once(&b'\n')) {
+        let ch = byte as libc::c_char;
+        // SAFETY: `&ch` points to one initialized `libc::c_char` read by
+        // `TIOCSTI`; if `STDIN_FILENO` is closed or not a TTY, the kernel
+        // rejects the ioctl with `-1` (`EBADF`/`ENOTTY`).
+        if unsafe { libc::ioctl(libc::STDIN_FILENO, libc::TIOCSTI as _, &ch) } < 0 {
+            break;
+        }
+    }
+}
+
+/// RAII guard mirroring GNU `save_signal_handlers` / `restore_signal_handlers`
+/// around `sys_subshell`'s `wait_for_termination` (`src/sysdep.c:674-688,747-753`).
+///
+/// Installed in the parent AFTER spawning the subshell (so the child does not
+/// inherit `SIG_IGN` across `exec`), and restored on drop.
+#[cfg(unix)]
+struct SubshellSignalGuard {
+    saved: [(libc::c_int, libc::sigaction); 4],
+    count: usize,
+}
+
+#[cfg(unix)]
+impl SubshellSignalGuard {
+    fn ignore_subshell_signals() -> Self {
+        const SIGNALS: [libc::c_int; 4] = [libc::SIGINT, libc::SIGQUIT, libc::SIGTERM, libc::SIGIO];
+        // SAFETY: `sigaction` is a plain C struct; zero-initialization is valid
+        // storage before `sigaction(2)` populates each saved slot.
+        let mut saved: [(libc::c_int, libc::sigaction); 4] = unsafe { std::mem::zeroed() };
+        let mut count = 0;
+        for sig in SIGNALS {
+            // SAFETY: initialize `ignore` with `SIG_IGN` and an empty mask.
+            let mut ignore: libc::sigaction = unsafe { std::mem::zeroed() };
+            ignore.sa_sigaction = libc::SIG_IGN;
+            unsafe { libc::sigemptyset(&mut ignore.sa_mask) };
+            ignore.sa_flags = 0;
+            // SAFETY: `sig` is a valid POSIX signal, `ignore` is initialized,
+            // and `saved[count].1` is valid writable storage.
+            if unsafe { libc::sigaction(sig, &ignore, &mut saved[count].1) } == 0 {
+                saved[count].0 = sig;
+                count += 1;
+            }
+        }
+        Self { saved, count }
+    }
+}
+
+#[cfg(unix)]
+impl Drop for SubshellSignalGuard {
+    fn drop(&mut self) {
+        for &(sig, ref prev) in &self.saved[..self.count] {
+            // SAFETY: each `(sig, prev)` was populated by a successful
+            // `sigaction(2)` call in `ignore_subshell_signals`.
+            unsafe {
+                libc::sigaction(sig, prev, std::ptr::null_mut());
+            }
+        }
+    }
+}
+
+/// Stop the process group with `SIGTSTP`, or spawn `$SHELL` when
+/// `cannot_suspend` is set, after the primary interactive TTY has been
+/// suspended (GNU `sys_suspend` / `sys_subshell`, `src/sysdep.c:629-754`).
+pub fn tty_sys_suspend(
+    stuffstring: Option<&[u8]>,
+    cannot_suspend: bool,
+    cwd: Option<&std::path::Path>,
+) -> Result<(), String> {
+    if PRIMARY_TTY_STATE.load(std::sync::atomic::Ordering::Acquire) != PrimaryTtyState::Suspended {
+        return Ok(());
+    }
+    #[cfg(unix)]
+    if let Some(stuff) = stuffstring {
+        stuff_tty_input(stuff);
+    }
+    #[cfg(not(unix))]
+    let _ = stuffstring;
+
+    if cannot_suspend {
+        let shell = std::env::var_os("SHELL")
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| std::ffi::OsString::from("sh"));
+        let mut command = std::process::Command::new(&shell);
+        if let Some(dir) = cwd {
+            command.current_dir(dir);
+        }
+        let mut child = command
+            .spawn()
+            .map_err(|_| "Can't spawn subshell".to_owned())?;
+        #[cfg(unix)]
+        let _signal_guard = SubshellSignalGuard::ignore_subshell_signals();
+        return child
+            .wait()
+            .map(|_| ())
+            .map_err(|_| "Can't spawn subshell".to_owned());
+    }
+    #[cfg(unix)]
+    // SAFETY: `kill(0, SIGTSTP)` sends SIGTSTP to the caller's process group,
+    // matching GNU `sys_suspend` (`src/sysdep.c:633`).
+    unsafe {
+        libc::kill(0, libc::SIGTSTP);
+    }
+    Ok(())
+}
+
 /// Restore the terminal to its original state: show cursor, leave alt screen,
 /// reset SGR, disable raw mode.
 pub fn tty_shutdown_terminal() {
-    #[cfg(windows)]
-    if let Err(error) = super::tty_output::windows::leave() {
-        tracing::warn!(%error, "could not restore console output");
+    tty_shutdown_terminal_with(&[]);
+}
+
+/// Restore the primary TTY on exit or `delete-terminal`, emitting
+/// `tty-mode-reset-strings` first when the terminal is still active.
+pub fn tty_shutdown_terminal_with(reset_strings: &[u8]) {
+    let previous = PRIMARY_TTY_STATE.swap(
+        PrimaryTtyState::Uninitialized,
+        std::sync::atomic::Ordering::AcqRel,
+    );
+    if previous != PrimaryTtyState::Active {
+        return;
     }
-    #[cfg(not(windows))]
-    if let Ok(caps) = super::tty_output::primary() {
-        let mut stdout = std::io::stdout();
-        let _ = caps.leave().write_to(&mut stdout, caps);
-    }
+    write_primary_leave(reset_strings);
 
     // Restore raw mode
     if let Err(e) = crossterm::terminal::disable_raw_mode() {
@@ -390,6 +867,14 @@ pub fn tty_shutdown_terminal() {
 /// not a GUI frontend).
 pub fn should_enable_live_tty_io(startup: &StartupOptions) -> bool {
     startup.frontend == FrontendKind::Tty && !startup.noninteractive && startup.daemon.is_none()
+}
+
+/// GNU `init_display` returns before `init_tty` when `IS_DAEMON`
+/// (`dispnew.c:7222-7237`). The initial `/dev/tty` open, winsize, and
+/// termcap `co`/`li` check are that `init_tty` path (`term.c:4464-4470`,
+/// `4800-4814`). `--daemon` and `--fg-daemon` both skip it. Batch does too.
+pub(crate) fn initial_tty_fatal_checks_apply(noninteractive: bool, daemon: bool) -> bool {
+    !noninteractive && !daemon
 }
 
 #[cfg(test)]

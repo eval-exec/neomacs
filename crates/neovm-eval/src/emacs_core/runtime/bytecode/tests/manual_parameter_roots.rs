@@ -13,17 +13,17 @@ fn p6_manual_execute_roots_parameters_after_formal_binding_and_body_gc() {
     let mut code = ByteCodeFunction::new(FunctionParams::try_from(parameter_list).unwrap());
     // Both fields are independently observable public Rust API. The code is
     // never published as a heap function, nor are its children scratch roots.
-    code.arglist = observable_arglist;
+    code.set_arglist(observable_arglist);
     let garbage_collect = code.add_constant(Value::from_sym_id(intern("garbage-collect")));
     let answer = code.add_constant(Value::fixnum(42));
-    code.ops = vec![
+    code.set_ops(vec![
         Op::Constant(garbage_collect),
         Op::Call(0),
         Op::Pop,
         Op::Constant(answer),
         Op::Return,
-    ];
-    code.max_stack = StackDepth::for_test(1);
+    ]);
+    code.set_max_stack(StackDepth::for_test(1));
     let collections_before = eval.gc_count;
     let result = {
         let mut vm = Vm::from_context(&mut eval);

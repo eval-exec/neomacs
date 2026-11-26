@@ -6875,8 +6875,151 @@ fn line_number_display_width_uses_byte_newline_count_not_char_pos_scan() {
 #[test]
 fn test_long_line_optimizations_p() {
     crate::test_utils::init_test_tracing();
-    let result = builtin_long_line_optimizations_p(vec![]).unwrap();
-    assert!(result.is_nil());
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
+    eval.eval_str("(setq long-line-threshold 50000)")
+        .expect("set the long-line threshold");
+    // No redisplay has scanned this short buffer yet: GNU's flag starts nil.
+    assert!(
+        builtin_long_line_optimizations_p(&mut eval, vec![])
+            .unwrap()
+            .is_nil()
+    );
+    let buffer = eval
+        .edit
+        .buffers
+        .current_buffer()
+        .expect("current buffer")
+        .id();
+    eval.edit
+        .buffers
+        .get_mut(buffer)
+        .expect("buffer")
+        .insert(&"a".repeat(1_200_000));
+    // The redisplay fontification entry runs GNU's long-line scan.
+    ensure_fontified_for_redisplay(&mut eval, buffer, 0, 10).expect("fontify");
+    assert_eq!(
+        builtin_long_line_optimizations_p(&mut eval, vec![]).unwrap(),
+        Value::T
+    );
+}
+
+/// GNU `handle_fontified_prop` (`src/xdisp.c:4702-4786`) calls
+/// `fontification-functions` at the iterator's stop and moves on when the
+/// text is still unfontified afterwards: "This avoids an endless loop if they
+/// failed to fontify the text."  A hook that never sets `fontified` must
+/// therefore bound the Lisp calls by the requested stop, not by the region's
+/// character count.
+#[test]
+fn declining_fontification_function_is_not_retried_over_the_run() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
+    let buffer = eval
+        .edit
+        .buffers
+        .current_buffer()
+        .expect("current buffer")
+        .id();
+    eval.edit
+        .buffers
+        .get_mut(buffer)
+        .expect("buffer")
+        .insert(&"a".repeat(10_000));
+    install_declining_fontification_hook(&mut eval, "p640-declining-calls");
+    ensure_fontified_for_redisplay(&mut eval, buffer, 0, 10_000)
+        .expect("a declining hook must terminate");
+    assert_eq!(
+        recorded_fontification_positions(&mut eval, "p640-declining-calls"),
+        vec![1],
+        "one request must enter the declining hook once, not once per character"
+    );
+}
+
+/// Install a fontification function that declines (`fontified` stays nil)
+/// and records every position it is entered at.
+///
+/// The display unit runtime has neither subr.el nor the upper-layer subrs
+/// (`propertize`, `insert`, `reverse`, ...), so the hook value is built from
+/// evaluator special forms and core subrs (`list`, `lambda`, `cons`) and the
+/// variable is stored from Rust.  No `make-local-variable`/`set` needed.
+fn install_declining_fontification_hook(eval: &mut Context, variable: &str) {
+    eval.eval_str(&format!("(defvar {variable} nil)"))
+        .expect("defvar the call log");
+    eval.eval_str(&format!("(setq {variable} nil)"))
+        .expect("reset the call log");
+    let hook = eval
+        .eval_str(&format!(
+            "(list (lambda (pos) (setq {variable} (cons pos {variable})) nil))"
+        ))
+        .expect("build the declining hook");
+    eval.store_variable_by_name("fontification-functions", hook);
+}
+
+/// The hook's recorded positions in entry order (the hook conses, so the
+/// list reads newest-first; reverse it in Rust rather than with the
+/// upper-layer `reverse` subr).
+fn recorded_fontification_positions(eval: &mut Context, variable: &str) -> Vec<i64> {
+    let value = eval.eval_str(variable).expect("read the call log");
+    let mut positions: Vec<i64> = neovm_value::value::list_to_vec(&value)
+        .expect("the call log is a list")
+        .into_iter()
+        .map(|entry| entry.as_int().expect("fixnum position"))
+        .collect();
+    positions.reverse();
+    positions
+}
+
+/// With an interval tree present GNU's `compute_stop_pos`
+/// (`src/xdisp.c:4371-4461`) advances the iterator to the automatic-composition
+/// delimiter clamp: the first space, TAB, newline, or formfeed in
+/// `[POS + 100, POS + 1000]`.  A declining hook is entered at each of those
+/// stops, never twice at one position.  The properties are irrelevant to
+/// `it_props`, so the newlines (not the property edges) are the stops.
+#[test]
+fn declining_fontification_hook_advances_by_gnu_property_stops() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
+    let buffer = eval
+        .edit
+        .buffers
+        .current_buffer()
+        .expect("current buffer")
+        .id();
+    // `insert`/`propertize` are upper-layer subrs the display unit runtime
+    // does not install, so build the text and its interval tree from Rust.
+    let line = format!("{}\n", "a".repeat(150));
+    eval.edit
+        .buffers
+        .get_mut(buffer)
+        .expect("buffer")
+        .insert(&line.repeat(8));
+    for index in 0..8i64 {
+        let start = index * 151 + 1;
+        let end = start + 150;
+        neovm_edit::emacs_core::textprop::builtin_put_text_property(
+            &mut eval,
+            vec![
+                Value::fixnum(start),
+                Value::fixnum(end),
+                Value::symbol("p640"),
+                Value::fixnum(index),
+            ],
+        )
+        .expect("put the p640 text property");
+    }
+    install_declining_fontification_hook(&mut eval, "p640-stop-calls");
+    let total = eval
+        .edit
+        .buffers
+        .get(buffer)
+        .expect("buffer")
+        .total_char_len()
+        .get() as i64;
+    ensure_fontified_for_redisplay(&mut eval, buffer, 0, total).expect("fontify");
+    assert_eq!(
+        recorded_fontification_positions(&mut eval, "p640-stop-calls"),
+        vec![1, 151, 302, 453, 604, 755, 906, 1057, 1208],
+        "the declining hook must follow GNU's newline stops, not every character"
+    );
 }
 
 // Test wrong arity errors
@@ -7890,6 +8033,3164 @@ fn window_text_pixel_size_reports_gnus_negative_width_for_a_retracted_from_row()
         probe_text_region("abcd\n", true, Some(5), Some(5), Value::NIL, Value::NIL),
         (-40, 20),
         "GNU: (-36 . 20)"
+    );
+}
+
+/// GNU `handle_single_display_spec` (`src/xdisp.c:6380-6475`) consumes the
+/// text covered by `(left-fringe BITMAP [FACE])` and `(right-fringe BITMAP
+/// [FACE])` even on non-window/batch/TTY frames (and when BITMAP is nil or
+/// unknown), contributing zero inline width and zero baseline height
+/// (`src/xdisp.c:32397-32405`).  Specs without a cons cdr such as
+/// `(left-fringe)` or `(left-fringe . left-arrow)` fail `CONSP (XCDR (spec))`
+/// and leave the covered text intact.
+#[test]
+fn test_window_text_pixel_size_consumes_fringe_display_specs() {
+    crate::test_utils::init_test_tracing();
+    let sym = Value::symbol;
+    let measure_text_prop = |text: &str, start: i64, end: i64, spec: Value| -> (i64, i64) {
+        let (mut eval, selected_window) = pixel_size_tty_context();
+        let buf_id = eval
+            .edit
+            .buffers
+            .current_buffer()
+            .expect("current buffer")
+            .id();
+        eval.edit
+            .buffers
+            .get_mut(buf_id)
+            .expect("buffer")
+            .insert(text);
+        neovm_edit::emacs_core::textprop::builtin_put_text_property(
+            &mut eval,
+            vec![
+                Value::fixnum(start),
+                Value::fixnum(end),
+                sym("display"),
+                spec,
+            ],
+        )
+        .expect("put-text-property");
+        let res = builtin_window_text_pixel_size_ctx(
+            &mut eval,
+            vec![Value::make_window(selected_window as u64)],
+        )
+        .expect("window-text-pixel-size");
+        (
+            res.cons_car().as_int().expect("width"),
+            res.cons_cdr().as_int().expect("height"),
+        )
+    };
+
+    let left_arrow = Value::list(vec![sym("left-fringe"), sym("left-arrow")]);
+    let right_arrow_bold = Value::list(vec![sym("right-fringe"), sym("right-arrow"), sym("bold")]);
+    let list_wrapped = Value::list(vec![left_arrow]);
+    let vector_wrapped = Value::vector(vec![
+        Value::list(vec![sym("raise"), Value::make_float(0.5)]),
+        left_arrow,
+    ]);
+    let fringe_nil = Value::list(vec![sym("left-fringe"), Value::NIL]);
+    let fringe_unknown = Value::list(vec![sym("left-fringe"), sym("no-such-bitmap-xyz")]);
+    let fringe_int = Value::list(vec![sym("left-fringe"), Value::fixnum(123)]);
+    let fringe_no_cdr = Value::list(vec![sym("left-fringe")]);
+    let fringe_dotted = Value::cons(sym("left-fringe"), sym("left-arrow"));
+    let space3 = Value::list(vec![sym("space"), sym(":width"), Value::fixnum(3)]);
+    let fringe_then_space = Value::list(vec![left_arrow, space3]);
+    let space_then_fringe = Value::list(vec![space3, left_arrow]);
+    let when_expr_t = Value::cons(
+        sym("when"),
+        Value::cons(
+            Value::list(vec![sym("eq"), Value::fixnum(1), Value::fixnum(1)]),
+            left_arrow,
+        ),
+    );
+    let when_expr_nil = Value::cons(
+        sym("when"),
+        Value::cons(
+            Value::list(vec![sym("eq"), Value::fixnum(1), Value::fixnum(2)]),
+            left_arrow,
+        ),
+    );
+    let when_t = Value::cons(sym("when"), Value::cons(Value::T, left_arrow));
+    let disable_eval_fringe = Value::list(vec![sym("disable-eval"), left_arrow]);
+    let disable_eval_when_t = Value::list(vec![sym("disable-eval"), when_t]);
+    let disable_eval_when_expr = Value::list(vec![sym("disable-eval"), when_expr_t]);
+
+    assert_eq!(measure_text_prop("hello", 1, 2, left_arrow), (4, 1));
+    assert_eq!(measure_text_prop("hello", 1, 2, right_arrow_bold), (4, 1));
+    assert_eq!(measure_text_prop("hello", 1, 2, list_wrapped), (4, 1));
+    assert_eq!(measure_text_prop("hello", 1, 2, vector_wrapped), (4, 1));
+    assert_eq!(measure_text_prop("hello", 1, 3, fringe_nil), (3, 1));
+    assert_eq!(measure_text_prop("hello", 1, 2, fringe_unknown), (4, 1));
+    assert_eq!(measure_text_prop("hello", 1, 2, fringe_int), (4, 1));
+    assert_eq!(measure_text_prop("hello", 1, 2, fringe_no_cdr), (5, 1));
+    assert_eq!(measure_text_prop("hello", 1, 2, fringe_dotted), (5, 1));
+    assert_eq!(measure_text_prop("ab", 1, 3, left_arrow), (0, 0));
+    assert_eq!(measure_text_prop("ab\n", 1, 3, left_arrow), (0, 1));
+    assert_eq!(measure_text_prop("ab\ncd", 1, 4, left_arrow), (2, 1));
+    assert_eq!(measure_text_prop("hello", 1, 2, fringe_then_space), (4, 1));
+    assert_eq!(measure_text_prop("hello", 1, 2, space_then_fringe), (7, 1));
+    assert_eq!(measure_text_prop("hello", 1, 2, when_expr_t), (4, 1));
+    assert_eq!(measure_text_prop("hello", 1, 2, when_expr_nil), (5, 1));
+    assert_eq!(
+        measure_text_prop("hello", 1, 2, disable_eval_fringe),
+        (4, 1)
+    );
+    assert_eq!(
+        measure_text_prop("hello", 1, 2, disable_eval_when_t),
+        (4, 1)
+    );
+    assert_eq!(
+        measure_text_prop("hello", 1, 2, disable_eval_when_expr),
+        (5, 1)
+    );
+
+    // Overlay `display` and overlay `before-string` carrying `((left-fringe ...))`
+    // (diff-hl's exact shape).
+    {
+        let (mut eval, selected_window) = pixel_size_tty_context();
+        let buf_id = eval
+            .edit
+            .buffers
+            .current_buffer()
+            .expect("current buffer")
+            .id();
+        eval.edit
+            .buffers
+            .get_mut(buf_id)
+            .expect("buffer")
+            .insert("hello");
+        let ov = neovm_edit::emacs_core::buffer::builtin_make_overlay(
+            &mut eval.edit.buffers,
+            vec![Value::fixnum(1), Value::fixnum(3)],
+        )
+        .expect("make-overlay");
+        neovm_edit::emacs_core::buffer::builtin_overlay_put(
+            &mut eval,
+            vec![ov, sym("display"), left_arrow],
+        )
+        .expect("overlay-put");
+        let res = builtin_window_text_pixel_size_ctx(
+            &mut eval,
+            vec![Value::make_window(selected_window as u64)],
+        )
+        .expect("window-text-pixel-size");
+        assert_eq!(
+            (
+                res.cons_car().as_int().expect("width"),
+                res.cons_cdr().as_int().expect("height"),
+            ),
+            (3, 1)
+        );
+    }
+
+    for (buf_text, expected) in [("hello", (5, 1)), ("", (0, 0))] {
+        let (mut eval, selected_window) = pixel_size_tty_context();
+        let buf_id = eval
+            .edit
+            .buffers
+            .current_buffer()
+            .expect("current buffer")
+            .id();
+        if !buf_text.is_empty() {
+            eval.edit
+                .buffers
+                .get_mut(buf_id)
+                .expect("buffer")
+                .insert(buf_text);
+        }
+        let before = Value::string("XX");
+        set_string_text_properties_for_value(
+            before,
+            vec![StringTextPropertyRun {
+                start: 0,
+                end: 2,
+                plist: Value::list(vec![sym("display"), list_wrapped]),
+            }],
+        );
+        let ov = neovm_edit::emacs_core::buffer::builtin_make_overlay(
+            &mut eval.edit.buffers,
+            vec![Value::fixnum(1), Value::fixnum(1)],
+        )
+        .expect("make-overlay");
+        neovm_edit::emacs_core::buffer::builtin_overlay_put(
+            &mut eval,
+            vec![ov, sym("before-string"), before],
+        )
+        .expect("overlay-put");
+        let res = builtin_window_text_pixel_size_ctx(
+            &mut eval,
+            vec![Value::make_window(selected_window as u64)],
+        )
+        .expect("window-text-pixel-size");
+        assert_eq!(
+            (
+                res.cons_car().as_int().expect("width"),
+                res.cons_cdr().as_int().expect("height"),
+            ),
+            expected,
+            "overlay before-string fringe spec with buf_text={buf_text:?}"
+        );
+    }
+}
+
+/// GNU `handle_display_spec` / `handle_single_display_spec`
+/// (`src/xdisp.c:5999-6650`) models display strings in spec order: the first
+/// valid replacing spec wins (`("XY" (left-fringe ...))` and
+/// `("XY" (space :width 3))` both display `"XY"`, while
+/// `((left-fringe ...) "XY")` consumes the text and `((space :width 3) "XY")`
+/// displays the stretch).  Inside a display string, recursive replacing
+/// `display` properties are ignored (`string_from_display_prop_p`,
+/// `src/xdisp.c:6338`).
+#[test]
+fn test_window_text_pixel_size_models_display_strings() {
+    crate::test_utils::init_test_tracing();
+    let sym = Value::symbol;
+    let measure_text_prop = |text: &str, start: i64, end: i64, spec: Value| -> (i64, i64) {
+        let (mut eval, selected_window) = pixel_size_tty_context();
+        let buf_id = eval
+            .edit
+            .buffers
+            .current_buffer()
+            .expect("current buffer")
+            .id();
+        eval.edit
+            .buffers
+            .get_mut(buf_id)
+            .expect("buffer")
+            .insert(text);
+        neovm_edit::emacs_core::textprop::builtin_put_text_property(
+            &mut eval,
+            vec![
+                Value::fixnum(start),
+                Value::fixnum(end),
+                sym("display"),
+                spec,
+            ],
+        )
+        .expect("put-text-property");
+        let res = builtin_window_text_pixel_size_ctx(
+            &mut eval,
+            vec![Value::make_window(selected_window as u64)],
+        )
+        .expect("window-text-pixel-size");
+        (
+            res.cons_car().as_int().expect("width"),
+            res.cons_cdr().as_int().expect("height"),
+        )
+    };
+
+    let xy = Value::string("XY");
+    let empty = Value::string("");
+    let left_arrow = Value::list(vec![sym("left-fringe"), sym("left-arrow")]);
+    let fringe_no_cdr = Value::list(vec![sym("left-fringe")]);
+    let space3 = Value::list(vec![sym("space"), sym(":width"), Value::fixnum(3)]);
+    let raise_half = Value::list(vec![sym("raise"), Value::make_float(0.5)]);
+    let img_tty_invalid = Value::list(vec![
+        sym("image"),
+        sym(":type"),
+        sym("png"),
+        sym(":data"),
+        empty,
+    ]);
+
+    let xy_then_fringe = Value::list(vec![xy, left_arrow]);
+    let xy_then_space = Value::list(vec![xy, space3]);
+    let fringe_then_xy = Value::list(vec![left_arrow, xy]);
+    let space_then_xy = Value::list(vec![space3, xy]);
+    let xy_then_zzz = Value::list(vec![xy, Value::string("ZZZ")]);
+    let empty_then_space = Value::list(vec![empty, space3]);
+    let raise_then_xy = Value::list(vec![raise_half, xy]);
+    let vec_raise_xy = Value::vector(vec![raise_half, xy]);
+    let malformed_fringe_then_xy = Value::list(vec![fringe_no_cdr, xy]);
+    let img_tty_then_xy = Value::list(vec![img_tty_invalid, xy]);
+    let when_expr_t = Value::cons(
+        sym("when"),
+        Value::cons(
+            Value::list(vec![sym("eq"), Value::fixnum(1), Value::fixnum(1)]),
+            xy,
+        ),
+    );
+    let when_expr_nil = Value::cons(
+        sym("when"),
+        Value::cons(
+            Value::list(vec![sym("eq"), Value::fixnum(1), Value::fixnum(2)]),
+            xy,
+        ),
+    );
+    let when_list_xy = Value::list(vec![sym("when"), Value::T, xy]);
+    let when_t_xy = Value::cons(sym("when"), Value::cons(Value::T, xy));
+    let disable_eval_xy = Value::list(vec![sym("disable-eval"), xy]);
+    let disable_eval_when_t = Value::list(vec![sym("disable-eval"), when_t_xy]);
+    let disable_eval_when_expr = Value::list(vec![sym("disable-eval"), when_expr_t]);
+
+    // Nested replacing `display` property inside a display string must be ignored.
+    let nested_display = Value::string("XY");
+    set_string_text_properties_for_value(
+        nested_display,
+        vec![StringTextPropertyRun {
+            start: 0,
+            end: 2,
+            plist: Value::list(vec![sym("display"), Value::string("ZZZZZ")]),
+        }],
+    );
+    let nested_fringe = Value::string("XY");
+    set_string_text_properties_for_value(
+        nested_fringe,
+        vec![StringTextPropertyRun {
+            start: 0,
+            end: 2,
+            plist: Value::list(vec![sym("display"), left_arrow]),
+        }],
+    );
+
+    assert_eq!(measure_text_prop("hello", 1, 2, xy), (6, 1));
+    assert_eq!(measure_text_prop("hello", 1, 2, empty), (4, 1));
+    assert_eq!(measure_text_prop("ab", 1, 3, empty), (0, 0));
+    assert_eq!(measure_text_prop("ab\n", 1, 3, empty), (0, 1));
+    assert_eq!(measure_text_prop("hello", 1, 2, xy_then_fringe), (6, 1));
+    assert_eq!(measure_text_prop("hello", 1, 2, xy_then_space), (6, 1));
+    assert_eq!(measure_text_prop("hello", 1, 2, fringe_then_xy), (4, 1));
+    assert_eq!(measure_text_prop("hello", 1, 2, space_then_xy), (7, 1));
+    assert_eq!(measure_text_prop("hello", 1, 2, xy_then_zzz), (6, 1));
+    assert_eq!(measure_text_prop("hello", 1, 2, empty_then_space), (4, 1));
+    assert_eq!(measure_text_prop("hello", 1, 2, raise_then_xy), (6, 1));
+    assert_eq!(measure_text_prop("hello", 1, 2, vec_raise_xy), (6, 1));
+    assert_eq!(
+        measure_text_prop("hello", 1, 2, malformed_fringe_then_xy),
+        (6, 1)
+    );
+    assert_eq!(measure_text_prop("hello", 1, 2, img_tty_then_xy), (6, 1));
+    assert_eq!(measure_text_prop("hello", 1, 2, when_expr_t), (6, 1));
+    assert_eq!(measure_text_prop("hello", 1, 2, when_expr_nil), (5, 1));
+    assert_eq!(measure_text_prop("hello", 1, 2, when_list_xy), (5, 1));
+    assert_eq!(measure_text_prop("hello", 1, 2, disable_eval_xy), (6, 1));
+    assert_eq!(
+        measure_text_prop("hello", 1, 2, disable_eval_when_t),
+        (6, 1)
+    );
+    assert_eq!(
+        measure_text_prop("hello", 1, 2, disable_eval_when_expr),
+        (5, 1)
+    );
+    assert_eq!(
+        measure_text_prop("xhello", 2, 3, Value::string("AB\nCD")),
+        (6, 2)
+    );
+    assert_eq!(measure_text_prop("xh", 2, 3, Value::string("ab\n")), (3, 1));
+    assert_eq!(
+        measure_text_prop("xhello", 2, 3, Value::string("a\tb")),
+        (13, 1)
+    );
+    assert_eq!(measure_text_prop("hello", 1, 2, nested_display), (6, 1));
+    assert_eq!(measure_text_prop("hello", 1, 2, nested_fringe), (6, 1));
+
+    // Overlay `display` and overlay `before-string` with display-string specs.
+    {
+        let (mut eval, selected_window) = pixel_size_tty_context();
+        let buf_id = eval
+            .edit
+            .buffers
+            .current_buffer()
+            .expect("current buffer")
+            .id();
+        eval.edit
+            .buffers
+            .get_mut(buf_id)
+            .expect("buffer")
+            .insert("hello");
+        let ov = neovm_edit::emacs_core::buffer::builtin_make_overlay(
+            &mut eval.edit.buffers,
+            vec![Value::fixnum(1), Value::fixnum(3)],
+        )
+        .expect("make-overlay");
+        neovm_edit::emacs_core::buffer::builtin_overlay_put(
+            &mut eval,
+            vec![ov, sym("display"), xy_then_fringe],
+        )
+        .expect("overlay-put");
+        let res = builtin_window_text_pixel_size_ctx(
+            &mut eval,
+            vec![Value::make_window(selected_window as u64)],
+        )
+        .expect("window-text-pixel-size");
+        assert_eq!(
+            (
+                res.cons_car().as_int().expect("width"),
+                res.cons_cdr().as_int().expect("height"),
+            ),
+            (5, 1)
+        );
+    }
+
+    {
+        let (mut eval, selected_window) = pixel_size_tty_context();
+        let buf_id = eval
+            .edit
+            .buffers
+            .current_buffer()
+            .expect("current buffer")
+            .id();
+        eval.edit
+            .buffers
+            .get_mut(buf_id)
+            .expect("buffer")
+            .insert("hello");
+        let before = Value::string("a");
+        set_string_text_properties_for_value(
+            before,
+            vec![StringTextPropertyRun {
+                start: 0,
+                end: 1,
+                plist: Value::list(vec![sym("display"), xy_then_space]),
+            }],
+        );
+        let ov = neovm_edit::emacs_core::buffer::builtin_make_overlay(
+            &mut eval.edit.buffers,
+            vec![Value::fixnum(1), Value::fixnum(1)],
+        )
+        .expect("make-overlay");
+        neovm_edit::emacs_core::buffer::builtin_overlay_put(
+            &mut eval,
+            vec![ov, sym("before-string"), before],
+        )
+        .expect("overlay-put");
+        let res = builtin_window_text_pixel_size_ctx(
+            &mut eval,
+            vec![Value::make_window(selected_window as u64)],
+        )
+        .expect("window-text-pixel-size");
+        assert_eq!(
+            (
+                res.cons_car().as_int().expect("width"),
+                res.cons_cdr().as_int().expect("height"),
+            ),
+            (7, 1)
+        );
+    }
+}
+
+/// GNU `handle_single_display_spec` (`src/xdisp.c:6477-6562`) treats
+/// `((margin left-margin|right-margin) VALUE)` with valid `VALUE` (string,
+/// `(space ...)`, or GUI image/xwidget) as a replacing spec in the marginal
+/// area: it consumes covered text in the text area with zero inline width
+/// (folding baseline height when the margin content produces glyphs) and
+/// blocks later replacing specs in the same list/vector.  `((margin nil) VALUE)`
+/// and `((margin) VALUE)` render `VALUE` inline in `TEXT_AREA`; an invalid
+/// area or invalid content does not replace and falls through to later specs.
+#[test]
+fn test_window_text_pixel_size_models_margin_display_specs() {
+    crate::test_utils::init_test_tracing();
+    let sym = Value::symbol;
+    let measure_text_prop = |text: &str, start: i64, end: i64, spec: Value| -> (i64, i64) {
+        let (mut eval, selected_window) = pixel_size_tty_context();
+        let buf_id = eval
+            .edit
+            .buffers
+            .current_buffer()
+            .expect("current buffer")
+            .id();
+        eval.edit
+            .buffers
+            .get_mut(buf_id)
+            .expect("buffer")
+            .insert(text);
+        neovm_edit::emacs_core::textprop::builtin_put_text_property(
+            &mut eval,
+            vec![
+                Value::fixnum(start),
+                Value::fixnum(end),
+                sym("display"),
+                spec,
+            ],
+        )
+        .expect("put-text-property");
+        let res = builtin_window_text_pixel_size_ctx(
+            &mut eval,
+            vec![Value::make_window(selected_window as u64)],
+        )
+        .expect("window-text-pixel-size");
+        (
+            res.cons_car().as_int().expect("width"),
+            res.cons_cdr().as_int().expect("height"),
+        )
+    };
+
+    let lmargin = |v: Value| {
+        Value::list(vec![
+            Value::list(vec![sym("margin"), sym("left-margin")]),
+            v,
+        ])
+    };
+    let rmargin = |v: Value| {
+        Value::list(vec![
+            Value::list(vec![sym("margin"), sym("right-margin")]),
+            v,
+        ])
+    };
+    let margin_nil = |v: Value| Value::list(vec![Value::list(vec![sym("margin"), Value::NIL]), v]);
+    let margin_short = |v: Value| Value::list(vec![Value::list(vec![sym("margin")]), v]);
+    let margin_bogus =
+        |v: Value| Value::list(vec![Value::list(vec![sym("margin"), sym("bogus")]), v]);
+
+    let m_str = Value::string("M");
+    let xy = Value::string("XY");
+    let empty = Value::string("");
+    let space3 = Value::list(vec![sym("space"), sym(":width"), Value::fixnum(3)]);
+    let space5 = Value::list(vec![sym("space"), sym(":width"), Value::fixnum(5)]);
+    let left_arrow = Value::list(vec![sym("left-fringe"), sym("left-arrow")]);
+    let img_tty = Value::list(vec![
+        sym("image"),
+        sym(":type"),
+        sym("png"),
+        sym(":data"),
+        empty,
+    ]);
+    let invis_m = Value::string("M");
+    set_string_text_properties_for_value(
+        invis_m,
+        vec![StringTextPropertyRun {
+            start: 0,
+            end: 1,
+            plist: Value::list(vec![sym("invisible"), Value::T]),
+        }],
+    );
+
+    assert_eq!(measure_text_prop("hello", 1, 2, lmargin(m_str)), (4, 1));
+    assert_eq!(
+        measure_text_prop("hello", 1, 2, Value::list(vec![lmargin(m_str), xy])),
+        (4, 1)
+    );
+    assert_eq!(
+        measure_text_prop("hello", 1, 2, Value::list(vec![rmargin(m_str), xy])),
+        (4, 1)
+    );
+    assert_eq!(
+        measure_text_prop("hello", 1, 2, Value::list(vec![lmargin(space5), xy])),
+        (4, 1)
+    );
+    assert_eq!(measure_text_prop("hello", 1, 2, margin_nil(xy)), (6, 1));
+    assert_eq!(measure_text_prop("hello", 1, 2, margin_nil(space3)), (7, 1));
+    assert_eq!(
+        measure_text_prop(
+            "hello",
+            1,
+            2,
+            Value::list(vec![margin_nil(xy), Value::string("ZZZZ")])
+        ),
+        (6, 1)
+    );
+    assert_eq!(
+        measure_text_prop("hello", 1, 2, Value::list(vec![margin_bogus(m_str), xy])),
+        (6, 1)
+    );
+    assert_eq!(
+        measure_text_prop("hello", 1, 2, Value::list(vec![lmargin(left_arrow), xy])),
+        (6, 1)
+    );
+    assert_eq!(
+        measure_text_prop("hello", 1, 2, Value::list(vec![lmargin(img_tty), xy])),
+        (6, 1)
+    );
+    assert_eq!(measure_text_prop("hello", 1, 2, margin_short(xy)), (6, 1));
+    assert_eq!(measure_text_prop("ab", 1, 3, lmargin(m_str)), (0, 1));
+    assert_eq!(measure_text_prop("ab", 1, 3, lmargin(empty)), (0, 0));
+    assert_eq!(measure_text_prop("ab", 1, 3, lmargin(space5)), (0, 1));
+    assert_eq!(measure_text_prop("ab", 1, 3, lmargin(invis_m)), (0, 0));
+}
+
+/// GNU `handle_invisible_prop` (`src/xdisp.c:5206-5234`) honors `invisible`
+/// text properties inside both display strings and overlay strings under the
+/// buffer's `buffer-invisibility-spec`, eliding hidden spans and rendering an
+/// ellipsis (`...`) for `(PROP . t)` entries.
+#[test]
+fn test_window_text_pixel_size_honors_invisible_inside_display_strings() {
+    crate::test_utils::init_test_tracing();
+    let sym = Value::symbol;
+    let measure = |invis_spec: Option<Value>, text: &str, start: i64, end: i64, spec: Value| {
+        let (mut eval, selected_window) = pixel_size_tty_context();
+        let buf_id = eval
+            .edit
+            .buffers
+            .current_buffer()
+            .expect("current buffer")
+            .id();
+        eval.edit
+            .buffers
+            .get_mut(buf_id)
+            .expect("buffer")
+            .insert(text);
+        if let Some(invis_spec) = invis_spec {
+            let buf = eval.edit.buffers.get_mut(buf_id).expect("buffer");
+            buf.set_buffer_local("buffer-invisibility-spec", invis_spec);
+        }
+        neovm_edit::emacs_core::textprop::builtin_put_text_property(
+            &mut eval,
+            vec![
+                Value::fixnum(start),
+                Value::fixnum(end),
+                sym("display"),
+                spec,
+            ],
+        )
+        .expect("put-text-property");
+        let res = builtin_window_text_pixel_size_ctx(
+            &mut eval,
+            vec![Value::make_window(selected_window as u64)],
+        )
+        .expect("window-text-pixel-size");
+        (
+            res.cons_car().as_int().expect("width"),
+            res.cons_cdr().as_int().expect("height"),
+        )
+    };
+
+    let invis_xyz = Value::string("XYZ");
+    set_string_text_properties_for_value(
+        invis_xyz,
+        vec![StringTextPropertyRun {
+            start: 0,
+            end: 3,
+            plist: Value::list(vec![sym("invisible"), Value::T]),
+        }],
+    );
+    let partial_invis = Value::string("ABBBC");
+    set_string_text_properties_for_value(
+        partial_invis,
+        vec![StringTextPropertyRun {
+            start: 1,
+            end: 4,
+            plist: Value::list(vec![sym("invisible"), Value::T]),
+        }],
+    );
+    let invis_foo = Value::string("XYZ");
+    set_string_text_properties_for_value(
+        invis_foo,
+        vec![StringTextPropertyRun {
+            start: 0,
+            end: 3,
+            plist: Value::list(vec![sym("invisible"), sym("foo")]),
+        }],
+    );
+
+    assert_eq!(measure(None, "hello", 1, 2, invis_xyz), (4, 1));
+    assert_eq!(measure(None, "hello", 1, 2, partial_invis), (6, 1));
+    assert_eq!(
+        measure(
+            Some(Value::list(vec![sym("foo")])),
+            "hello",
+            1,
+            2,
+            invis_foo
+        ),
+        (4, 1)
+    );
+    assert_eq!(
+        measure(
+            Some(Value::list(vec![Value::cons(sym("foo"), Value::T)])),
+            "hello",
+            1,
+            2,
+            invis_foo
+        ),
+        (7, 1)
+    );
+    assert_eq!(
+        measure(
+            Some(Value::list(vec![sym("bar")])),
+            "hello",
+            1,
+            2,
+            invis_foo
+        ),
+        (7, 1)
+    );
+    assert_eq!(measure(Some(Value::NIL), "hello", 1, 2, invis_xyz), (7, 1));
+    assert_eq!(measure(None, "ab", 1, 3, invis_xyz), (0, 0));
+}
+
+/// GNU `window_text_pixel_size` (`src/xdisp.c:11867-11912`) rewinds via
+/// `move_it_by_lines (&it, 0)` -> `move_it_vertically_backward (&it, 0)`
+/// (`src/xdisp.c:11268-11347, 11511-11528`).  When `FROM` is not immediately
+/// preceded by a visible buffer newline (`FROM == BEGV` or mid-line) and
+/// carries a display string containing a visible newline, that display string
+/// is consumed as part of the rewound display-line prefix before `start_x` is
+/// recorded, whereas a newline display string at the start of a subsequent
+/// buffer line (after a buffer `\n`) starts at `start_x = 0` and opens rows.
+#[test]
+fn test_window_text_pixel_size_newline_display_string_at_from() {
+    crate::test_utils::init_test_tracing();
+    let sym = Value::symbol;
+    let measure = |text: &str,
+                   prop_start: i64,
+                   prop_end: i64,
+                   disp: &str,
+                   from: Option<i64>,
+                   to: Option<i64>| {
+        let (mut eval, selected_window) = pixel_size_tty_context();
+        let buf_id = eval
+            .edit
+            .buffers
+            .current_buffer()
+            .expect("current buffer")
+            .id();
+        eval.edit
+            .buffers
+            .get_mut(buf_id)
+            .expect("buffer")
+            .insert(text);
+        neovm_edit::emacs_core::textprop::builtin_put_text_property(
+            &mut eval,
+            vec![
+                Value::fixnum(prop_start),
+                Value::fixnum(prop_end),
+                sym("display"),
+                Value::string(disp),
+            ],
+        )
+        .expect("put-text-property");
+        let res = builtin_window_text_pixel_size_ctx(
+            &mut eval,
+            vec![
+                Value::make_window(selected_window as u64),
+                from.map(Value::fixnum).unwrap_or(Value::NIL),
+                to.map(Value::fixnum).unwrap_or(Value::NIL),
+            ],
+        )
+        .expect("window-text-pixel-size");
+        (
+            res.cons_car().as_int().expect("width"),
+            res.cons_cdr().as_int().expect("height"),
+        )
+    };
+
+    assert_eq!(measure("hello", 1, 2, "\n", None, None), (4, 1));
+    assert_eq!(measure("hello", 1, 2, "AB\nCD", None, None), (4, 1));
+    assert_eq!(measure("hello", 1, 2, "AB\n", None, None), (4, 1));
+    assert_eq!(measure("hello", 1, 2, "\nCD", None, None), (4, 1));
+    assert_eq!(measure("h", 1, 2, "AB\n", None, None), (0, 0));
+    assert_eq!(measure("h", 1, 2, "AB\nCD", None, None), (0, 1));
+    assert_eq!(measure("hello", 1, 2, "A\nB\nC", None, None), (4, 1));
+    assert_eq!(measure("xhello", 2, 3, "AB\nCD", Some(2), None), (4, 1));
+    assert_eq!(measure("xhello", 2, 3, "\n", Some(2), None), (4, 1));
+    assert_eq!(measure("ab\nhello", 4, 5, "AB\nCD", Some(4), None), (6, 2));
+    assert_eq!(measure("ab\nhello", 4, 5, "\n", Some(4), None), (4, 2));
+    assert_eq!(measure("hello", 1, 3, "AB\nCD", None, None), (3, 1));
+    assert_eq!(measure("hello", 1, 2, "AB\nCD", Some(1), Some(2)), (0, 1));
+    assert_eq!(measure("hello", 1, 2, "AB\nCD", Some(1), Some(3)), (1, 1));
+    assert_eq!(measure("hello", 1, 3, "AB\nCD", Some(2), None), (3, 1));
+    assert_eq!(measure("h\ncd", 1, 2, "AB\nCD", None, None), (2, 2));
+    assert_eq!(measure("h\nc", 1, 2, "ABCD\nEFG", None, None), (1, 2));
+}
+
+/// GNU `window_text_pixel_size` (`src/xdisp.c:11867-11912`) rewinds via
+/// `move_it_by_lines (&it, 0)` across newline-bearing overlay strings
+/// (`before-string` / `after-string`) anchored at `FROM` when `FROM` is at
+/// `BEGV` or mid-line (not immediately preceded by a buffer `\n`), resetting
+/// `it.current_x = 0` (`src/xdisp.c:11868`) while retaining any baseline height
+/// produced after the newline.  When `FROM` is mid-line (`FROM > line_start`),
+/// even a single-line overlay string at `FROM` is part of the `start_x` prefix
+/// (`src/xdisp.c:11875`).  After a buffer `\n`, `move_it_by_lines` stops at
+/// `FROM` before the overlay string so it opens rows normally.
+#[test]
+fn test_window_text_pixel_size_newline_overlay_string_at_from() {
+    crate::test_utils::init_test_tracing();
+    let sym = Value::symbol;
+    let measure_ov = |text: &str,
+                      ov_start: i64,
+                      ov_end: i64,
+                      prop: &'static str,
+                      ov_str: Value,
+                      from: Option<i64>,
+                      to: Option<i64>| {
+        let (mut eval, selected_window) = pixel_size_tty_context();
+        let buf_id = eval
+            .edit
+            .buffers
+            .current_buffer()
+            .expect("current buffer")
+            .id();
+        if !text.is_empty() {
+            eval.edit
+                .buffers
+                .get_mut(buf_id)
+                .expect("buffer")
+                .insert(text);
+        }
+        let ov = neovm_edit::emacs_core::buffer::builtin_make_overlay(
+            &mut eval.edit.buffers,
+            vec![Value::fixnum(ov_start), Value::fixnum(ov_end)],
+        )
+        .expect("make-overlay");
+        neovm_edit::emacs_core::buffer::builtin_overlay_put(&mut eval, vec![ov, sym(prop), ov_str])
+            .expect("overlay-put");
+        let res = builtin_window_text_pixel_size_ctx(
+            &mut eval,
+            vec![
+                Value::make_window(selected_window as u64),
+                from.map(Value::fixnum).unwrap_or(Value::NIL),
+                to.map(Value::fixnum).unwrap_or(Value::NIL),
+            ],
+        )
+        .expect("window-text-pixel-size");
+        (
+            res.cons_car().as_int().expect("width"),
+            res.cons_cdr().as_int().expect("height"),
+        )
+    };
+
+    assert_eq!(
+        measure_ov(
+            "hello",
+            1,
+            1,
+            "before-string",
+            Value::string("\n"),
+            None,
+            None
+        ),
+        (5, 1)
+    );
+    assert_eq!(
+        measure_ov(
+            "hello",
+            1,
+            1,
+            "before-string",
+            Value::string("AB\nCD"),
+            None,
+            None
+        ),
+        (5, 1)
+    );
+    assert_eq!(
+        measure_ov(
+            "hello",
+            1,
+            1,
+            "before-string",
+            Value::string("AB\n"),
+            None,
+            None
+        ),
+        (5, 1)
+    );
+    assert_eq!(
+        measure_ov(
+            "hello",
+            1,
+            1,
+            "before-string",
+            Value::string("\nCD"),
+            None,
+            None
+        ),
+        (5, 1)
+    );
+    assert_eq!(
+        measure_ov(
+            "hello",
+            1,
+            1,
+            "before-string",
+            Value::string("A\nB\nC"),
+            None,
+            None
+        ),
+        (5, 1)
+    );
+    assert_eq!(
+        measure_ov(
+            "",
+            1,
+            1,
+            "before-string",
+            Value::string("AB\nCD"),
+            None,
+            None
+        ),
+        (0, 1)
+    );
+    assert_eq!(
+        measure_ov("", 1, 1, "before-string", Value::string("AB\n"), None, None),
+        (0, 0)
+    );
+    assert_eq!(
+        measure_ov(
+            "hello",
+            1,
+            1,
+            "before-string",
+            Value::string("XX"),
+            None,
+            None
+        ),
+        (7, 1)
+    );
+    assert_eq!(
+        measure_ov(
+            "xhello",
+            2,
+            2,
+            "before-string",
+            Value::string("AB\nCD"),
+            Some(2),
+            None
+        ),
+        (5, 1)
+    );
+    assert_eq!(
+        measure_ov(
+            "xhello",
+            2,
+            2,
+            "before-string",
+            Value::string("XX"),
+            Some(2),
+            None
+        ),
+        (5, 1)
+    );
+    assert_eq!(
+        measure_ov(
+            "ab\nhello",
+            4,
+            4,
+            "before-string",
+            Value::string("AB\nCD"),
+            Some(4),
+            None
+        ),
+        (7, 2)
+    );
+    assert_eq!(
+        measure_ov(
+            "ab\nhello",
+            4,
+            4,
+            "before-string",
+            Value::string("\n"),
+            Some(4),
+            None
+        ),
+        (5, 2)
+    );
+    assert_eq!(
+        measure_ov(
+            "xhello",
+            1,
+            2,
+            "after-string",
+            Value::string("AB\nCD"),
+            Some(2),
+            None
+        ),
+        (5, 1)
+    );
+    assert_eq!(
+        measure_ov(
+            "ab\nhello",
+            1,
+            4,
+            "after-string",
+            Value::string("AB\nCD"),
+            Some(4),
+            None
+        ),
+        (7, 2)
+    );
+    assert_eq!(
+        measure_ov(
+            "h\ncd",
+            1,
+            1,
+            "before-string",
+            Value::string("AB\nCD"),
+            None,
+            None
+        ),
+        (2, 2)
+    );
+    assert_eq!(
+        measure_ov(
+            "h\nc",
+            1,
+            1,
+            "before-string",
+            Value::string("ABCD\nEFG"),
+            None,
+            None
+        ),
+        (1, 2)
+    );
+    assert_eq!(
+        measure_ov(
+            "hello",
+            1,
+            1,
+            "before-string",
+            Value::string("AB\nCD"),
+            Some(1),
+            Some(2)
+        ),
+        (1, 1)
+    );
+    assert_eq!(
+        measure_ov(
+            "hello",
+            2,
+            2,
+            "before-string",
+            Value::string("AB\nCD"),
+            None,
+            None
+        ),
+        (6, 2)
+    );
+    assert_eq!(
+        measure_ov(
+            "M-x ",
+            5,
+            5,
+            "before-string",
+            Value::string("\ncand1\ncand2"),
+            None,
+            None
+        ),
+        (5, 3)
+    );
+
+    // Invisible newline inside a before-string at FROM does not trigger rewind.
+    let invis_nl = Value::string("A\nB");
+    set_string_text_properties_for_value(
+        invis_nl,
+        vec![StringTextPropertyRun {
+            start: 1,
+            end: 2,
+            plist: Value::list(vec![sym("invisible"), Value::T]),
+        }],
+    );
+    assert_eq!(
+        measure_ov("hello", 1, 1, "before-string", invis_nl, None, None),
+        (7, 1)
+    );
+
+    // Two before-strings at FROM: priority 1 ("AB\n") is rewound, priority 2 ("ZZ") stays measured.
+    {
+        let (mut eval, selected_window) = pixel_size_tty_context();
+        let buf_id = eval
+            .edit
+            .buffers
+            .current_buffer()
+            .expect("current buffer")
+            .id();
+        eval.edit
+            .buffers
+            .get_mut(buf_id)
+            .expect("buffer")
+            .insert("hello");
+        let o1 = neovm_edit::emacs_core::buffer::builtin_make_overlay(
+            &mut eval.edit.buffers,
+            vec![Value::fixnum(1), Value::fixnum(1)],
+        )
+        .expect("o1");
+        neovm_edit::emacs_core::buffer::builtin_overlay_put(
+            &mut eval,
+            vec![o1, sym("priority"), Value::fixnum(1)],
+        )
+        .expect("prio1");
+        neovm_edit::emacs_core::buffer::builtin_overlay_put(
+            &mut eval,
+            vec![o1, sym("before-string"), Value::string("AB\n")],
+        )
+        .expect("bstr1");
+        let o2 = neovm_edit::emacs_core::buffer::builtin_make_overlay(
+            &mut eval.edit.buffers,
+            vec![Value::fixnum(1), Value::fixnum(1)],
+        )
+        .expect("o2");
+        neovm_edit::emacs_core::buffer::builtin_overlay_put(
+            &mut eval,
+            vec![o2, sym("priority"), Value::fixnum(2)],
+        )
+        .expect("prio2");
+        neovm_edit::emacs_core::buffer::builtin_overlay_put(
+            &mut eval,
+            vec![o2, sym("before-string"), Value::string("ZZ")],
+        )
+        .expect("bstr2");
+        let res = builtin_window_text_pixel_size_ctx(
+            &mut eval,
+            vec![Value::make_window(selected_window as u64)],
+        )
+        .expect("window-text-pixel-size");
+        assert_eq!(
+            (
+                res.cons_car().as_int().expect("width"),
+                res.cons_cdr().as_int().expect("height"),
+            ),
+            (7, 1)
+        );
+    }
+}
+
+#[test]
+fn window_text_pixel_size_hotpath_textget_fallbacks_and_from_defer() {
+    crate::test_utils::init_test_tracing();
+    let sym = Value::symbol;
+    let run_case =
+        |setup: &dyn Fn(&mut neovm_eval::emacs_core::eval::Context, BufferId)| -> (i64, i64) {
+            let (mut eval, selected_window) = pixel_size_tty_context();
+            eval.eval_str(
+                "(progn \
+               (put 'n5dcat 'invisible t) \
+               (put 'n5dcatd 'display \"QQQQQQQQ\"))",
+            )
+            .expect("define category symbols");
+            let buf_id = eval
+                .edit
+                .buffers
+                .current_buffer()
+                .expect("current buffer")
+                .id();
+            setup(&mut eval, buf_id);
+            let res = builtin_window_text_pixel_size_ctx(
+                &mut eval,
+                vec![Value::make_window(selected_window as u64)],
+            )
+            .expect("window-text-pixel-size");
+            (
+                res.cons_car().as_int().expect("width"),
+                res.cons_cdr().as_int().expect("height"),
+            )
+        };
+    let put_prop = |eval: &mut neovm_eval::emacs_core::eval::Context,
+                    start: i64,
+                    end: i64,
+                    prop: &'static str,
+                    val: Value| {
+        neovm_edit::emacs_core::textprop::builtin_put_text_property(
+            eval,
+            vec![
+                Value::fixnum(start),
+                Value::fixnum(end),
+                Value::symbol(prop),
+                val,
+            ],
+        )
+        .expect("put-text-property");
+    };
+    let add_before_string =
+        |eval: &mut neovm_eval::emacs_core::eval::Context, start: i64, end: i64, s: Value| {
+            let ov = neovm_edit::emacs_core::buffer::builtin_make_overlay(
+                &mut eval.edit.buffers,
+                vec![Value::fixnum(start), Value::fixnum(end)],
+            )
+            .expect("make-overlay");
+            neovm_edit::emacs_core::buffer::builtin_overlay_put(
+                eval,
+                vec![ov, Value::symbol("before-string"), s],
+            )
+            .expect("overlay-put");
+        };
+
+    // F1: `category` fallback in buffer intervals, overlay strings, and display strings (G1-G5).
+    assert_eq!(
+        run_case(&|eval, buf_id| {
+            eval.edit.buffers.get_mut(buf_id).unwrap().insert("hello");
+            put_prop(eval, 1, 3, "category", sym("n5dcat"));
+        }),
+        (3, 1),
+        "G1: buffer category invisible t"
+    );
+    assert_eq!(
+        run_case(&|eval, buf_id| {
+            eval.edit.buffers.get_mut(buf_id).unwrap().insert("hello");
+            put_prop(eval, 1, 3, "category", sym("n5dcatd"));
+        }),
+        (11, 1),
+        "G2: buffer category display string"
+    );
+    assert_eq!(
+        run_case(&|eval, buf_id| {
+            eval.edit.buffers.get_mut(buf_id).unwrap().insert("hello");
+            let s = Value::string("XABC");
+            set_string_text_properties_for_value(
+                s,
+                vec![StringTextPropertyRun {
+                    start: 1,
+                    end: 4,
+                    plist: Value::list(vec![sym("category"), sym("n5dcat")]),
+                }],
+            );
+            add_before_string(eval, 1, 1, s);
+        }),
+        (6, 1),
+        "G3: overlay before-string category invisible"
+    );
+    assert_eq!(
+        run_case(&|eval, buf_id| {
+            eval.edit.buffers.get_mut(buf_id).unwrap().insert("xA");
+            let disp = Value::string("ABCDE");
+            set_string_text_properties_for_value(
+                disp,
+                vec![StringTextPropertyRun {
+                    start: 2,
+                    end: 4,
+                    plist: Value::list(vec![sym("category"), sym("n5dcat")]),
+                }],
+            );
+            put_prop(eval, 2, 3, "display", disp);
+        }),
+        (4, 1),
+        "G4: display string category invisible"
+    );
+    assert_eq!(
+        run_case(&|eval, buf_id| {
+            eval.edit.buffers.get_mut(buf_id).unwrap().insert("hello");
+            let s = Value::string("XABC");
+            set_string_text_properties_for_value(
+                s,
+                vec![StringTextPropertyRun {
+                    start: 1,
+                    end: 4,
+                    plist: Value::list(vec![sym("category"), sym("n5dcatd")]),
+                }],
+            );
+            add_before_string(eval, 1, 1, s);
+        }),
+        (14, 1),
+        "G5: overlay before-string category display"
+    );
+
+    // F2: `default-text-properties` fallback on propertyless buffers and strings (D3, D4, D19).
+    assert_eq!(
+        run_case(&|eval, buf_id| {
+            eval.edit.buffers.get_mut(buf_id).unwrap().insert("hello");
+            eval.eval_str("(setq default-text-properties '(invisible t))")
+                .expect("setq default-text-properties");
+        }),
+        (0, 0),
+        "D3: buffer default-text-properties invisible"
+    );
+    assert_eq!(
+        run_case(&|eval, buf_id| {
+            eval.edit.buffers.get_mut(buf_id).unwrap().insert("hello");
+            eval.eval_str("(setq default-text-properties '(display \"Q\"))")
+                .expect("setq default-text-properties");
+        }),
+        (1, 1),
+        "D4: buffer default-text-properties display"
+    );
+    assert_eq!(
+        run_case(&|eval, buf_id| {
+            eval.edit.buffers.get_mut(buf_id).unwrap().insert("hello");
+            eval.eval_str("(setq default-text-properties '(invisible t))")
+                .expect("setq default-text-properties");
+            add_before_string(eval, 1, 1, Value::string("ABC"));
+        }),
+        (0, 0),
+        "D19: propertyless before-string honors default-text-properties invisible"
+    );
+
+    // F3: refresh cached property env even when `(when FORM . SPEC)` returns nil (E2, E4, overlay string).
+    assert_eq!(
+        run_case(&|eval, buf_id| {
+            let buf = eval.edit.buffers.get_mut(buf_id).unwrap();
+            buf.insert("abcdef");
+            buf.set_buffer_local("buffer-invisibility-spec", Value::NIL);
+            let when_spec = eval
+                .eval_str("'(when (progn (setq buffer-invisibility-spec t) nil) . \"Q\")")
+                .expect("when spec");
+            put_prop(eval, 4, 5, "display", when_spec);
+            put_prop(eval, 5, 6, "invisible", Value::T);
+        }),
+        (5, 1),
+        "E2: when-nil enables buffer-invisibility-spec"
+    );
+    assert_eq!(
+        run_case(&|eval, buf_id| {
+            eval.edit.buffers.get_mut(buf_id).unwrap().insert("abcdef");
+            let when_spec = eval
+                .eval_str(
+                    "'(when (progn (setq char-property-alias-alist '((invisible myinv))) nil) . \"Q\")",
+                )
+                .expect("when spec");
+            put_prop(eval, 4, 5, "display", when_spec);
+            put_prop(eval, 5, 6, "myinv", Value::T);
+        }),
+        (5, 1),
+        "E4: when-nil sets char-property-alias-alist"
+    );
+    assert_eq!(
+        run_case(&|eval, buf_id| {
+            let buf = eval.edit.buffers.get_mut(buf_id).unwrap();
+            buf.insert("abc");
+            buf.set_buffer_local("buffer-invisibility-spec", Value::NIL);
+            let when_spec = eval
+                .eval_str("'(when (progn (setq buffer-invisibility-spec t) nil) . \"Q\")")
+                .expect("when spec");
+            let s = Value::string("XYW");
+            set_string_text_properties_for_value(
+                s,
+                vec![
+                    StringTextPropertyRun {
+                        start: 1,
+                        end: 2,
+                        plist: Value::list(vec![sym("display"), when_spec]),
+                    },
+                    StringTextPropertyRun {
+                        start: 2,
+                        end: 3,
+                        plist: Value::list(vec![sym("invisible"), Value::T]),
+                    },
+                ],
+            );
+            add_before_string(eval, 1, 1, s);
+        }),
+        (5, 1),
+        "overlay string when-nil enables buffer-invisibility-spec for later string char"
+    );
+
+    // F4: `keep_before_origin_for_display` must follow resolved display element, not raw newline bytes (F1-F3).
+    assert_eq!(
+        run_case(&|eval, buf_id| {
+            eval.edit.buffers.get_mut(buf_id).unwrap().insert("hello");
+            let disp = Value::string("A\nB");
+            set_string_text_properties_for_value(
+                disp,
+                vec![StringTextPropertyRun {
+                    start: 1,
+                    end: 2,
+                    plist: Value::list(vec![sym("invisible"), Value::T]),
+                }],
+            );
+            put_prop(eval, 1, 2, "display", disp);
+            add_before_string(eval, 1, 1, Value::string("ZZ"));
+        }),
+        (8, 1),
+        "F1: invisible newline in display string at FROM must not swallow before-string"
+    );
+    assert_eq!(
+        run_case(&|eval, buf_id| {
+            eval.edit.buffers.get_mut(buf_id).unwrap().insert("hello");
+            let when_nil = eval.eval_str("'(when nil . \"A\\nB\")").expect("when nil");
+            put_prop(eval, 1, 2, "display", when_nil);
+            add_before_string(eval, 1, 1, Value::string("ZZ"));
+        }),
+        (7, 1),
+        "F2: false when display string at FROM must not swallow before-string"
+    );
+    assert_eq!(
+        run_case(&|eval, buf_id| {
+            eval.edit.buffers.get_mut(buf_id).unwrap().insert("hello");
+            let margin_nl = Value::list(vec![
+                Value::list(vec![sym("margin"), sym("left-margin")]),
+                Value::string("A\nB"),
+            ]);
+            put_prop(eval, 1, 2, "display", margin_nl);
+            add_before_string(eval, 1, 1, Value::string("ZZ"));
+        }),
+        (6, 1),
+        "F3: margin display string with newline at FROM must not swallow before-string"
+    );
+}
+
+#[test]
+fn window_text_pixel_size_from_rewind_f5_and_nits() {
+    crate::test_utils::init_test_tracing();
+    let sym = Value::symbol;
+    let run_case = |from: Option<i64>,
+                    to: Option<i64>,
+                    setup: &dyn Fn(&mut neovm_eval::emacs_core::eval::Context, BufferId)|
+     -> (i64, i64) {
+        let (mut eval, selected_window) = pixel_size_tty_context();
+        let buf_id = eval
+            .edit
+            .buffers
+            .current_buffer()
+            .expect("current buffer")
+            .id();
+        setup(&mut eval, buf_id);
+        let res = builtin_window_text_pixel_size_ctx(
+            &mut eval,
+            vec![
+                Value::make_window(selected_window as u64),
+                from.map(Value::fixnum).unwrap_or(Value::NIL),
+                to.map(Value::fixnum).unwrap_or(Value::NIL),
+            ],
+        )
+        .expect("window-text-pixel-size");
+        (
+            res.cons_car().as_int().expect("width"),
+            res.cons_cdr().as_int().expect("height"),
+        )
+    };
+    let put_prop = |eval: &mut neovm_eval::emacs_core::eval::Context,
+                    start: i64,
+                    end: i64,
+                    prop: &'static str,
+                    val: Value| {
+        neovm_edit::emacs_core::textprop::builtin_put_text_property(
+            eval,
+            vec![
+                Value::fixnum(start),
+                Value::fixnum(end),
+                Value::symbol(prop),
+                val,
+            ],
+        )
+        .expect("put-text-property");
+    };
+    let add_ov = |eval: &mut neovm_eval::emacs_core::eval::Context,
+                  start: i64,
+                  end: i64,
+                  props: &[(&'static str, Value)]| {
+        let ov = neovm_edit::emacs_core::buffer::builtin_make_overlay(
+            &mut eval.edit.buffers,
+            vec![Value::fixnum(start), Value::fixnum(end)],
+        )
+        .expect("make-overlay");
+        for &(k, v) in props {
+            neovm_edit::emacs_core::buffer::builtin_overlay_put(
+                eval,
+                vec![ov, Value::symbol(k), v],
+            )
+            .expect("overlay-put");
+        }
+    };
+
+    // F5 A1: mid-string newline in priority 1 before-string fails IT_POS_VALID_AFTER_MOVE_P,
+    // so GNU move_it_to(FROM + 0) pops priority 2 "ZZ" too -> (5 . 1).
+    assert_eq!(
+        run_case(None, None, &|eval, buf_id| {
+            eval.edit.buffers.get_mut(buf_id).unwrap().insert("hello");
+            add_ov(
+                eval,
+                1,
+                1,
+                &[
+                    ("priority", Value::fixnum(1)),
+                    ("before-string", Value::string("AB\nCD")),
+                ],
+            );
+            add_ov(
+                eval,
+                1,
+                1,
+                &[
+                    ("priority", Value::fixnum(2)),
+                    ("before-string", Value::string("ZZ")),
+                ],
+            );
+        }),
+        (5, 1),
+        "A1: mid-string newline pops subsequent overlay string"
+    );
+
+    // F5 A14: trailing newline in prio 1, mid-string newline in prio 2 pops prio 3 "ZZ" -> (5 . 1).
+    assert_eq!(
+        run_case(None, None, &|eval, buf_id| {
+            eval.edit.buffers.get_mut(buf_id).unwrap().insert("hello");
+            add_ov(
+                eval,
+                1,
+                1,
+                &[
+                    ("priority", Value::fixnum(1)),
+                    ("before-string", Value::string("AB\n")),
+                ],
+            );
+            add_ov(
+                eval,
+                1,
+                1,
+                &[
+                    ("priority", Value::fixnum(2)),
+                    ("before-string", Value::string("C\nDDDD")),
+                ],
+            );
+            add_ov(
+                eval,
+                1,
+                1,
+                &[
+                    ("priority", Value::fixnum(3)),
+                    ("before-string", Value::string("ZZ")),
+                ],
+            );
+        }),
+        (5, 1),
+        "A14: three-overlay mix pops trailing ZZ after mid-string newline"
+    );
+
+    // F5 A11: wrapping single-line before-string (>199 usable cols on 200-col TTY frame)
+    // fails IT_POS_VALID_AFTER_MOVE_P -> popped before buffer text -> (5 . 1).
+    for len in [200usize, 250usize] {
+        assert_eq!(
+            run_case(None, None, &|eval, buf_id| {
+                eval.edit.buffers.get_mut(buf_id).unwrap().insert("hello");
+                add_ov(
+                    eval,
+                    1,
+                    1,
+                    &[("before-string", Value::string("a".repeat(len)))],
+                );
+            }),
+            (5, 1),
+            "A11: wrapping before-string (len={len}) at FROM"
+        );
+    }
+
+    // F5 A9: display string with newline inside overlay before-string sets
+    // string_from_display_prop_p = 1 -> move_it_to(FROM + 1) skips char 1 -> (4 . 1).
+    assert_eq!(
+        run_case(None, None, &|eval, buf_id| {
+            eval.edit.buffers.get_mut(buf_id).unwrap().insert("hello");
+            let q = Value::string("Q");
+            set_string_text_properties_for_value(
+                q,
+                vec![StringTextPropertyRun {
+                    start: 0,
+                    end: 1,
+                    plist: Value::list(vec![sym("display"), Value::string("AB\nCD")]),
+                }],
+            );
+            add_ov(eval, 1, 1, &[("before-string", q)]);
+        }),
+        (4, 1),
+        "A9: display-string newline inside before-string at FROM"
+    );
+
+    // F5 A17: mid-string newline in before-string at FROM + overlay display "Q" on 1..2 -> (4 . 1).
+    assert_eq!(
+        run_case(None, None, &|eval, buf_id| {
+            eval.edit.buffers.get_mut(buf_id).unwrap().insert("hello");
+            add_ov(
+                eval,
+                1,
+                2,
+                &[
+                    ("before-string", Value::string("AB\nCD")),
+                    ("display", Value::string("Q")),
+                ],
+            );
+        }),
+        (4, 1),
+        "A17: mid-string newline before-string + overlay display at FROM"
+    );
+
+    // F5 B8: mid-line FROM=2 with before-string "AB\nCD" + text-prop display "Q" -> (4 . 1).
+    assert_eq!(
+        run_case(Some(2), None, &|eval, buf_id| {
+            eval.edit.buffers.get_mut(buf_id).unwrap().insert("xhello");
+            put_prop(eval, 2, 3, "display", Value::string("Q"));
+            add_ov(eval, 2, 2, &[("before-string", Value::string("AB\nCD"))]);
+        }),
+        (4, 1),
+        "B8: mid-line FROM before-string newline + display Q"
+    );
+
+    // N1 H1: ((space :align-to 10) "A\nB") with before-string "ZZ" must see col 2 -> (14 . 1).
+    assert_eq!(
+        run_case(None, None, &|eval, buf_id| {
+            eval.edit.buffers.get_mut(buf_id).unwrap().insert("hello");
+            let spec = Value::list(vec![
+                Value::list(vec![sym("space"), sym(":align-to"), Value::fixnum(10)]),
+                Value::string("A\nB"),
+            ]);
+            put_prop(eval, 1, 2, "display", spec);
+            add_ov(eval, 1, 1, &[("before-string", Value::string("ZZ"))]);
+        }),
+        (14, 1),
+        "H1: space :align-to 10 after before-string ZZ"
+    );
+
+    // N2 J3/J4: 9 non-replacing (raise 0) specs before "A\nB" / "A\nBCDEFGH" + before-string "ZZ" -> (4 . 1).
+    for disp_str in ["A\nB", "A\nBCDEFGH"] {
+        assert_eq!(
+            run_case(None, None, &|eval, buf_id| {
+                eval.edit.buffers.get_mut(buf_id).unwrap().insert("hello");
+                let mut items: Vec<Value> = (0..9)
+                    .map(|_| Value::list(vec![sym("raise"), Value::fixnum(0)]))
+                    .collect();
+                items.push(Value::string(disp_str));
+                put_prop(eval, 1, 2, "display", Value::list(items));
+                add_ov(eval, 1, 1, &[("before-string", Value::string("ZZ"))]);
+            }),
+            (4, 1),
+            "J3/J4: long display list before newline string ({disp_str})"
+        );
+    }
+
+    // N3 K1: overlay string runs BEFORE buffer display at FROM, so a side-effecting `when`
+    // in the before-string that replaces pos 1's display with "Q" is observed -> (6 . 1).
+    assert_eq!(
+        run_case(None, None, &|eval, buf_id| {
+            eval.edit.buffers.get_mut(buf_id).unwrap().insert("hello");
+            put_prop(eval, 1, 2, "display", Value::string("A\nB"));
+            let when_spec = eval
+                .eval_str("'(when (progn (setq buffer-invisibility-spec t) nil) . \"X\")")
+                .expect("when spec");
+            // Also verify direct `put-text-property` mutation in oracle test K1; here verify
+            // overlay-first `when` ordering via `buffer-invisibility-spec` mutation:
+            // before-string `when` enables invisibility for the `\n` in pos 1's display "A\nB",
+            // so no rewind occurs: "Z" (1) + "AB" (2) + "ello" (4) = (7 . 1).
+            let buf = eval.edit.buffers.get_mut(buf_id).unwrap();
+            buf.set_buffer_local("buffer-invisibility-spec", Value::NIL);
+            let disp = Value::string("A\nB");
+            set_string_text_properties_for_value(
+                disp,
+                vec![StringTextPropertyRun {
+                    start: 1,
+                    end: 2,
+                    plist: Value::list(vec![sym("invisible"), Value::T]),
+                }],
+            );
+            put_prop(eval, 1, 2, "display", disp);
+            let z = Value::string("Z");
+            set_string_text_properties_for_value(
+                z,
+                vec![StringTextPropertyRun {
+                    start: 0,
+                    end: 1,
+                    plist: Value::list(vec![sym("display"), when_spec]),
+                }],
+            );
+            add_ov(eval, 1, 1, &[("before-string", z)]);
+        }),
+        (7, 1),
+        "N3: overlay string when runs before buffer display at FROM"
+    );
+}
+
+#[test]
+fn window_text_pixel_size_display_before_invisible_and_tty_fringe() {
+    crate::test_utils::init_test_tracing();
+    let sym = Value::symbol;
+    let run_case =
+        |setup: &dyn Fn(&mut neovm_eval::emacs_core::eval::Context, BufferId)| -> (i64, i64) {
+            let (mut eval, selected_window) = pixel_size_tty_context();
+            let buf_id = eval
+                .edit
+                .buffers
+                .current_buffer()
+                .expect("current buffer")
+                .id();
+            setup(&mut eval, buf_id);
+            let res = builtin_window_text_pixel_size_ctx(
+                &mut eval,
+                vec![Value::make_window(selected_window as u64)],
+            )
+            .expect("window-text-pixel-size");
+            (
+                res.cons_car().as_int().expect("width"),
+                res.cons_cdr().as_int().expect("height"),
+            )
+        };
+    let put_prop = |eval: &mut neovm_eval::emacs_core::eval::Context,
+                    start: i64,
+                    end: i64,
+                    prop: &'static str,
+                    val: Value| {
+        neovm_edit::emacs_core::textprop::builtin_put_text_property(
+            eval,
+            vec![
+                Value::fixnum(start),
+                Value::fixnum(end),
+                Value::symbol(prop),
+                val,
+            ],
+        )
+        .expect("put-text-property");
+    };
+    let add_ov = |eval: &mut neovm_eval::emacs_core::eval::Context,
+                  start: i64,
+                  end: i64,
+                  props: &[(&'static str, Value)]| {
+        let ov = neovm_edit::emacs_core::buffer::builtin_make_overlay(
+            &mut eval.edit.buffers,
+            vec![Value::fixnum(start), Value::fixnum(end)],
+        )
+        .expect("make-overlay");
+        for &(k, v) in props {
+            neovm_edit::emacs_core::buffer::builtin_overlay_put(
+                eval,
+                vec![ov, Value::symbol(k), v],
+            )
+            .expect("overlay-put");
+        }
+    };
+
+    // E5: display runs before invisible (GNU it_props[], src/xdisp.c:1018-1019),
+    // so a when-nil display spec that sets default-text-properties '(invisible t)
+    // falls through to invisible at the SAME position -> hides "d", "e", "f" -> (3 . 1).
+    assert_eq!(
+        run_case(&|eval, buf_id| {
+            eval.edit.buffers.get_mut(buf_id).unwrap().insert("abcdef");
+            let when_spec = eval
+                .eval_str(
+                    "'(when (progn (setq default-text-properties '(invisible t)) nil) . \"Q\")",
+                )
+                .expect("when spec");
+            put_prop(eval, 4, 5, "display", when_spec);
+        }),
+        (3, 1),
+        "E5: when-nil display setting default-text-properties hides current char too"
+    );
+
+    // F5: replacing display beats invisible at the same position (including FROM rewind).
+    assert_eq!(
+        run_case(&|eval, buf_id| {
+            eval.edit.buffers.get_mut(buf_id).unwrap().insert("hello");
+            put_prop(eval, 1, 2, "invisible", Value::T);
+            put_prop(eval, 1, 2, "display", Value::string("A\nB"));
+            add_ov(eval, 1, 1, &[("before-string", Value::string("ZZ"))]);
+        }),
+        (4, 1),
+        "F5: display A\\nB beats invisible t at FROM and rewinds ZZ"
+    );
+
+    // Replacing display beats invisible in mid-buffer (text-prop, overlay, partial overlap)
+    // and in overlay strings.
+    assert_eq!(
+        run_case(&|eval, buf_id| {
+            eval.edit.buffers.get_mut(buf_id).unwrap().insert("hello");
+            put_prop(eval, 2, 4, "invisible", Value::T);
+            put_prop(eval, 2, 4, "display", Value::string("QQQQQ"));
+        }),
+        (8, 1),
+        "display beats invisible (both text properties)"
+    );
+    assert_eq!(
+        run_case(&|eval, buf_id| {
+            eval.edit.buffers.get_mut(buf_id).unwrap().insert("hello");
+            put_prop(eval, 2, 4, "display", Value::string("QQQ"));
+            put_prop(eval, 2, 5, "invisible", Value::T);
+        }),
+        (5, 1),
+        "display covers 2..4 while invisible hides 4..5"
+    );
+    assert_eq!(
+        run_case(&|eval, buf_id| {
+            eval.edit.buffers.get_mut(buf_id).unwrap().insert("x");
+            let s = Value::string("ab");
+            set_string_text_properties_for_value(
+                s,
+                vec![StringTextPropertyRun {
+                    start: 0,
+                    end: 2,
+                    plist: Value::list(vec![
+                        sym("invisible"),
+                        Value::T,
+                        sym("display"),
+                        Value::string("QQQQQ"),
+                    ]),
+                }],
+            );
+            add_ov(eval, 1, 1, &[("before-string", s)]);
+        }),
+        (6, 1),
+        "overlay string display beats invisible at same char"
+    );
+
+    // F4: on a TTY frame, (left-fringe ...) / (right-fringe ...) advances directly
+    // to run_end without pushing (GNU src/xdisp.c:6387-6402), skipping overlay strings
+    // anchored at the start of the fringe run (while after-strings at run_end still show).
+    assert_eq!(
+        run_case(&|eval, buf_id| {
+            eval.edit.buffers.get_mut(buf_id).unwrap().insert("hello");
+            let spec = Value::list(vec![
+                Value::list(vec![sym("left-fringe"), sym("left-arrow")]),
+                Value::string("A\nB"),
+            ]);
+            put_prop(eval, 1, 2, "display", spec);
+            add_ov(eval, 1, 1, &[("before-string", Value::string("ZZ"))]);
+        }),
+        (4, 1),
+        "F4: TTY fringe spec advances past pos 1 without showing before-string ZZ"
+    );
+    assert_eq!(
+        run_case(&|eval, buf_id| {
+            eval.edit.buffers.get_mut(buf_id).unwrap().insert("hello");
+            let spec = Value::list(vec![sym("left-fringe"), sym("left-arrow")]);
+            put_prop(eval, 2, 3, "display", spec);
+            add_ov(eval, 1, 2, &[("after-string", Value::string("ZZ"))]);
+        }),
+        (4, 1),
+        "TTY fringe at pos 2 skips after-string anchored at pos 2"
+    );
+    assert_eq!(
+        run_case(&|eval, buf_id| {
+            eval.edit.buffers.get_mut(buf_id).unwrap().insert("hello");
+            let spec = Value::list(vec![sym("left-fringe"), sym("left-arrow")]);
+            put_prop(eval, 2, 3, "display", spec);
+            add_ov(eval, 2, 3, &[("after-string", Value::string("ZZ"))]);
+        }),
+        (6, 1),
+        "TTY fringe at pos 2..3 still shows after-string anchored at pos 3"
+    );
+    assert_eq!(
+        run_case(&|eval, buf_id| {
+            eval.edit.buffers.get_mut(buf_id).unwrap().insert("hello");
+            let spec = Value::list(vec![
+                Value::list(vec![sym("margin"), sym("left-margin")]),
+                Value::string("M"),
+            ]);
+            put_prop(eval, 1, 2, "display", spec);
+            add_ov(eval, 1, 1, &[("before-string", Value::string("ZZ"))]);
+        }),
+        (6, 1),
+        "control: margin spec still shows before-string ZZ"
+    );
+}
+
+#[test]
+fn window_text_pixel_size_unified_tty_fringe_when_and_space_list() {
+    crate::test_utils::init_test_tracing();
+    let sym = Value::symbol;
+    let put_prop = |eval: &mut neovm_eval::emacs_core::eval::Context,
+                    start: i64,
+                    end: i64,
+                    name: &'static str,
+                    value: Value| {
+        neovm_edit::emacs_core::textprop::builtin_put_text_property(
+            eval,
+            vec![Value::fixnum(start), Value::fixnum(end), sym(name), value],
+        )
+        .expect("put-text-property");
+    };
+    let add_ov = |eval: &mut neovm_eval::emacs_core::eval::Context,
+                  start: i64,
+                  end: i64,
+                  props: &[(&'static str, Value)]| {
+        let ov = neovm_edit::emacs_core::buffer::builtin_make_overlay(
+            &mut eval.edit.buffers,
+            vec![Value::fixnum(start), Value::fixnum(end)],
+        )
+        .expect("make-overlay");
+        for &(k, v) in props {
+            neovm_edit::emacs_core::buffer::builtin_overlay_put(eval, vec![ov, sym(k), v])
+                .expect("overlay-put");
+        }
+    };
+    let run_case = |setup: &dyn Fn(&mut neovm_eval::emacs_core::eval::Context, BufferId),
+                    from: Value,
+                    to: Value|
+     -> (i64, i64) {
+        let (mut eval, selected_window) = pixel_size_tty_context();
+        let buf_id = eval
+            .edit
+            .buffers
+            .current_buffer()
+            .expect("current buffer")
+            .id();
+        setup(&mut eval, buf_id);
+        let result = builtin_window_text_pixel_size_ctx(
+            &mut eval,
+            vec![Value::make_window(selected_window as u64), from, to],
+        )
+        .expect("window-text-pixel-size");
+        (
+            result.cons_car().as_int().expect("width"),
+            result.cons_cdr().as_int().expect("height"),
+        )
+    };
+
+    let fboundp_car = Value::list(vec![
+        sym("fboundp"),
+        Value::list(vec![sym("quote"), sym("car")]),
+    ]);
+    let fboundp_missing = Value::list(vec![
+        sym("fboundp"),
+        Value::list(vec![sym("quote"), sym("no-such-fn-n5g-xyz")]),
+    ]);
+    let left_fringe = Value::list(vec![sym("left-fringe"), sym("left-arrow")]);
+    let space_w2 = Value::list(vec![sym("space"), sym(":width"), Value::fixnum(2)]);
+    let space_align5 = Value::list(vec![sym("space"), sym(":align-to"), Value::fixnum(5)]);
+
+    // MEDIUM-1: Lisp-evaluated `when` before TTY fringe skips scan-anchored overlay strings.
+    assert_eq!(
+        run_case(
+            &|eval, buf_id| {
+                eval.edit.buffers.get_mut(buf_id).unwrap().insert("hello");
+                let spec = Value::list(vec![
+                    sym("when"),
+                    fboundp_car,
+                    sym("left-fringe"),
+                    sym("left-arrow"),
+                ]);
+                put_prop(eval, 1, 2, "display", spec);
+                add_ov(eval, 1, 1, &[("before-string", Value::string("ZZ"))]);
+            },
+            Value::NIL,
+            Value::NIL,
+        ),
+        (4, 1),
+        "MEDIUM-1: Lisp-evaluated when true -> TTY fringe skips before-string ZZ"
+    );
+    assert_eq!(
+        run_case(
+            &|eval, buf_id| {
+                eval.edit.buffers.get_mut(buf_id).unwrap().insert("hello");
+                let spec = Value::list(vec![
+                    sym("when"),
+                    fboundp_missing,
+                    sym("left-fringe"),
+                    sym("left-arrow"),
+                ]);
+                put_prop(eval, 1, 2, "display", spec);
+                add_ov(eval, 1, 1, &[("before-string", Value::string("ZZ"))]);
+            },
+            Value::NIL,
+            Value::NIL,
+        ),
+        (7, 1),
+        "MEDIUM-1 control: Lisp-evaluated when nil keeps before-string ZZ and covered char"
+    );
+    assert_eq!(
+        run_case(
+            &|eval, buf_id| {
+                eval.edit.buffers.get_mut(buf_id).unwrap().insert("hello");
+                let spec = Value::list(vec![
+                    sym("disable-eval"),
+                    Value::list(vec![
+                        sym("when"),
+                        fboundp_car,
+                        sym("left-fringe"),
+                        sym("left-arrow"),
+                    ]),
+                ]);
+                put_prop(eval, 1, 2, "display", spec);
+                add_ov(eval, 1, 1, &[("before-string", Value::string("ZZ"))]);
+            },
+            Value::NIL,
+            Value::NIL,
+        ),
+        (7, 1),
+        "MEDIUM-1 control: disable-eval blocks non-t when form"
+    );
+
+    // MEDIUM-2: `(space ...)` (and margin space) does not set `string_from_display_prop_p`,
+    // so a later TTY `(left-fringe ...)` in the same list/vector still advances `*position`,
+    // skipping scan-anchored overlay strings while keeping the stretch element.
+    assert_eq!(
+        run_case(
+            &|eval, buf_id| {
+                eval.edit.buffers.get_mut(buf_id).unwrap().insert("hello");
+                put_prop(
+                    eval,
+                    1,
+                    2,
+                    "display",
+                    Value::list(vec![space_w2, left_fringe]),
+                );
+                add_ov(eval, 1, 1, &[("before-string", Value::string("ZZ"))]);
+            },
+            Value::NIL,
+            Value::NIL,
+        ),
+        (6, 1),
+        "MEDIUM-2: ((space :width 2) (left-fringe left-arrow)) keeps space and skips ZZ at pos 1"
+    );
+    assert_eq!(
+        run_case(
+            &|eval, buf_id| {
+                eval.edit.buffers.get_mut(buf_id).unwrap().insert("hello");
+                put_prop(
+                    eval,
+                    1,
+                    2,
+                    "display",
+                    Value::vector(vec![space_w2, left_fringe]),
+                );
+                add_ov(eval, 1, 1, &[("before-string", Value::string("ZZ"))]);
+            },
+            Value::NIL,
+            Value::NIL,
+        ),
+        (6, 1),
+        "MEDIUM-2: vector [(space :width 2) (left-fringe left-arrow)] matches list"
+    );
+    assert_eq!(
+        run_case(
+            &|eval, buf_id| {
+                eval.edit.buffers.get_mut(buf_id).unwrap().insert("hello");
+                put_prop(
+                    eval,
+                    1,
+                    2,
+                    "display",
+                    Value::list(vec![left_fringe, space_w2]),
+                );
+                add_ov(eval, 1, 1, &[("before-string", Value::string("ZZ"))]);
+            },
+            Value::NIL,
+            Value::NIL,
+        ),
+        (4, 1),
+        "fringe before space: fringe replaces first and ignores later space"
+    );
+    assert_eq!(
+        run_case(
+            &|eval, buf_id| {
+                eval.edit.buffers.get_mut(buf_id).unwrap().insert("hello");
+                put_prop(
+                    eval,
+                    1,
+                    2,
+                    "display",
+                    Value::list(vec![Value::string("A"), left_fringe]),
+                );
+                add_ov(eval, 1, 1, &[("before-string", Value::string("ZZ"))]);
+            },
+            Value::NIL,
+            Value::NIL,
+        ),
+        (7, 1),
+        "Text before fringe sets string_from_display_prop_p so fringe does NOT run"
+    );
+    assert_eq!(
+        run_case(
+            &|eval, buf_id| {
+                eval.edit.buffers.get_mut(buf_id).unwrap().insert("hello");
+                let margin_str = Value::list(vec![
+                    Value::list(vec![sym("margin"), sym("left-margin")]),
+                    Value::string("M"),
+                ]);
+                put_prop(
+                    eval,
+                    1,
+                    2,
+                    "display",
+                    Value::list(vec![margin_str, left_fringe]),
+                );
+                add_ov(eval, 1, 1, &[("before-string", Value::string("ZZ"))]);
+            },
+            Value::NIL,
+            Value::NIL,
+        ),
+        (6, 1),
+        "margin string before fringe sets string_from_display_prop_p so ZZ stays"
+    );
+    assert_eq!(
+        run_case(
+            &|eval, buf_id| {
+                eval.edit.buffers.get_mut(buf_id).unwrap().insert("hello");
+                let margin_space = Value::list(vec![
+                    Value::list(vec![sym("margin"), sym("left-margin")]),
+                    space_w2,
+                ]);
+                put_prop(
+                    eval,
+                    1,
+                    2,
+                    "display",
+                    Value::list(vec![margin_space, left_fringe]),
+                );
+                add_ov(eval, 1, 1, &[("before-string", Value::string("ZZ"))]);
+            },
+            Value::NIL,
+            Value::NIL,
+        ),
+        (4, 1),
+        "margin space before fringe does not set string_from_display_prop_p so fringe skips ZZ"
+    );
+    assert_eq!(
+        run_case(
+            &|eval, buf_id| {
+                eval.edit.buffers.get_mut(buf_id).unwrap().insert("hello");
+                put_prop(eval, 1, 2, "display", space_align5);
+                add_ov(eval, 1, 1, &[("before-string", Value::string("ZZ"))]);
+            },
+            Value::NIL,
+            Value::NIL,
+        ),
+        (9, 1),
+        "space :align-to 5 after before-string ZZ aligns from live column 2 -> total 9"
+    );
+    assert_eq!(
+        run_case(
+            &|eval, buf_id| {
+                eval.edit.buffers.get_mut(buf_id).unwrap().insert("hello");
+                put_prop(
+                    eval,
+                    2,
+                    3,
+                    "display",
+                    Value::list(vec![space_align5, left_fringe]),
+                );
+                add_ov(eval, 3, 3, &[("before-string", Value::string("XX"))]);
+            },
+            Value::NIL,
+            Value::NIL,
+        ),
+        (8, 1),
+        "((space :align-to 5) (left-fringe ...)) loads run_end overlay XX before stretch -> 8"
+    );
+    assert_eq!(
+        run_case(
+            &|eval, buf_id| {
+                eval.edit.buffers.get_mut(buf_id).unwrap().insert("hello");
+                put_prop(
+                    eval,
+                    2,
+                    3,
+                    "display",
+                    Value::list(vec![space_w2, left_fringe]),
+                );
+                add_ov(eval, 3, 3, &[("before-string", Value::string("A\nBB"))]);
+            },
+            Value::NIL,
+            Value::NIL,
+        ),
+        (7, 2),
+        "((space :width 2) (left-fringe ...)) loads multiline run_end overlay before stretch -> (7, 2)"
+    );
+
+    // Spanning-FROM and ending-at-FROM non-consumed tty_fringe_direct_advance runs
+    // must keep `before_origin` active while `scan < FROM`, so neither the stretch
+    // nor `run_end` overlay strings leak into the measured output.
+    assert_eq!(
+        run_case(
+            &|eval, buf_id| {
+                eval.edit.buffers.get_mut(buf_id).unwrap().insert("abhello");
+                put_prop(
+                    eval,
+                    2,
+                    5,
+                    "display",
+                    Value::list(vec![space_w2, left_fringe]),
+                );
+            },
+            Value::fixnum(3),
+            Value::NIL,
+        ),
+        (3, 1),
+        "spanning-FROM 2..5 (FROM=3, no ov): pre-FROM stretch stays in prefix"
+    );
+    assert_eq!(
+        run_case(
+            &|eval, buf_id| {
+                eval.edit.buffers.get_mut(buf_id).unwrap().insert("abhello");
+                put_prop(
+                    eval,
+                    2,
+                    5,
+                    "display",
+                    Value::list(vec![space_w2, left_fringe]),
+                );
+                add_ov(eval, 5, 5, &[("before-string", Value::string("ZZ"))]);
+            },
+            Value::fixnum(3),
+            Value::NIL,
+        ),
+        (3, 1),
+        "spanning-FROM 2..5 (FROM=3, ov5 ZZ): pre-FROM stretch + run_end ov stay in prefix"
+    );
+    assert_eq!(
+        run_case(
+            &|eval, buf_id| {
+                eval.edit.buffers.get_mut(buf_id).unwrap().insert("abhello");
+                put_prop(
+                    eval,
+                    2,
+                    5,
+                    "display",
+                    Value::list(vec![space_w2, left_fringe]),
+                );
+                add_ov(eval, 5, 5, &[("before-string", Value::string("A\nBB"))]);
+            },
+            Value::fixnum(3),
+            Value::NIL,
+        ),
+        (3, 1),
+        "spanning-FROM 2..5 (FROM=3, multiline ov5): stays in prefix, height=1"
+    );
+    assert_eq!(
+        run_case(
+            &|eval, buf_id| {
+                eval.edit.buffers.get_mut(buf_id).unwrap().insert("abhello");
+                put_prop(
+                    eval,
+                    2,
+                    8,
+                    "display",
+                    Value::list(vec![space_w2, left_fringe]),
+                );
+                add_ov(eval, 8, 8, &[("before-string", Value::string("ZZ"))]);
+            },
+            Value::fixnum(3),
+            Value::NIL,
+        ),
+        (0, 1),
+        "spanning-FROM 2..8 to EOB (FROM=3, ov8 ZZ): stays in prefix -> (0, 1)"
+    );
+    assert_eq!(
+        run_case(
+            &|eval, buf_id| {
+                eval.edit.buffers.get_mut(buf_id).unwrap().insert("abhello");
+                put_prop(
+                    eval,
+                    2,
+                    3,
+                    "display",
+                    Value::list(vec![space_w2, left_fringe]),
+                );
+                add_ov(eval, 3, 3, &[("before-string", Value::string("ZZ"))]);
+            },
+            Value::fixnum(3),
+            Value::NIL,
+        ),
+        (5, 1),
+        "ending-at-FROM 2..3 (FROM=3, ov3 ZZ): pre-FROM stretch + ov3 stay in prefix -> (5, 1)"
+    );
+}
+
+fn pixel_size_tty_80_context() -> (Context, i64) {
+    let mut eval = crate::test_utils::xdisp_test_upper_layer_helpers::interactive_context(|| {
+        neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime())
+    });
+    let buf_id = eval
+        .edit
+        .buffers
+        .current_buffer()
+        .expect("current buffer")
+        .id();
+    let frame_id = eval
+        .frame_manager_mut()
+        .create_frame("xdisp-xlimit-rewind-80", 80, 24, buf_id);
+    {
+        let frame = eval.frame_manager_mut().get_mut(frame_id).expect("frame");
+        frame.char_width = 1.0;
+        frame.char_height = 1.0;
+        frame.font_pixel_size = 1.0;
+        frame.set_window_system(None);
+    }
+    let selected_window = eval
+        .frame_manager()
+        .get(frame_id)
+        .expect("frame")
+        .selected_window
+        .0 as i64;
+    (eval, selected_window)
+}
+
+fn run_x_limit_rewind_tty_case(
+    setup: &dyn Fn(&mut neovm_eval::emacs_core::eval::Context, BufferId),
+    from: Value,
+    to: Value,
+    x_limit: Value,
+    y_limit: Value,
+) -> (i64, i64) {
+    let (mut eval, selected_window) = pixel_size_tty_80_context();
+    let buf_id = eval
+        .edit
+        .buffers
+        .current_buffer()
+        .expect("current buffer")
+        .id();
+    setup(&mut eval, buf_id);
+    let result = builtin_window_text_pixel_size_ctx(
+        &mut eval,
+        vec![
+            Value::make_window(selected_window as u64),
+            from,
+            to,
+            x_limit,
+            y_limit,
+        ],
+    )
+    .expect("window-text-pixel-size");
+    (
+        result.cons_car().as_int().expect("width"),
+        result.cons_cdr().as_int().expect("height"),
+    )
+}
+
+fn x_limit_put_prop(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    start: i64,
+    end: i64,
+    name: &'static str,
+    value: Value,
+) {
+    neovm_edit::emacs_core::textprop::builtin_put_text_property(
+        eval,
+        vec![
+            Value::fixnum(start),
+            Value::fixnum(end),
+            Value::symbol(name),
+            value,
+        ],
+    )
+    .expect("put-text-property");
+}
+
+fn x_limit_add_ov(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    start: i64,
+    end: i64,
+    props: &[(&'static str, Value)],
+) {
+    let ov = neovm_edit::emacs_core::buffer::builtin_make_overlay(
+        &mut eval.edit.buffers,
+        vec![Value::fixnum(start), Value::fixnum(end)],
+    )
+    .expect("make-overlay");
+    for &(k, v) in props {
+        neovm_edit::emacs_core::buffer::builtin_overlay_put(eval, vec![ov, Value::symbol(k), v])
+            .expect("overlay-put");
+    }
+}
+
+#[test]
+fn window_text_pixel_size_x_limit_overlay_at_from_rewinds_at_body_edge() {
+    crate::test_utils::init_test_tracing();
+    let sym = Value::symbol;
+    let space_fringe = Value::list(vec![
+        Value::list(vec![sym("space"), sym(":width"), Value::fixnum(2)]),
+        Value::list(vec![sym("left-fringe"), sym("left-arrow")]),
+    ]);
+
+    // N5-g LOW-1: 3..4 space+fringe, ov4 "ZZZZ", FROM=3, X-LIMIT=4 -> GNU (4 . 3).
+    assert_eq!(
+        run_x_limit_rewind_tty_case(
+            &|eval, buf_id| {
+                eval.edit.buffers.get_mut(buf_id).unwrap().insert("abhello");
+                x_limit_put_prop(eval, 3, 4, "display", space_fringe);
+                x_limit_add_ov(eval, 4, 4, &[("before-string", Value::string("ZZZZ"))]);
+            },
+            Value::fixnum(3),
+            Value::NIL,
+            Value::fixnum(4),
+            Value::NIL,
+        ),
+        (4, 3),
+        "GNU: (4 . 3) for 3..4 space+fringe ov4 ZZZZ FROM=3 X-LIMIT=4"
+    );
+    // TO=4 variant -> GNU (4 . 2).
+    assert_eq!(
+        run_x_limit_rewind_tty_case(
+            &|eval, buf_id| {
+                eval.edit.buffers.get_mut(buf_id).unwrap().insert("abhello");
+                x_limit_put_prop(eval, 3, 4, "display", space_fringe);
+                x_limit_add_ov(eval, 4, 4, &[("before-string", Value::string("ZZZZ"))]);
+            },
+            Value::fixnum(3),
+            Value::fixnum(4),
+            Value::fixnum(4),
+            Value::NIL,
+        ),
+        (4, 2),
+        "GNU: (4 . 2) for 3..4 space+fringe ov4 ZZZZ FROM=3 TO=4 X-LIMIT=4"
+    );
+    // BEGV space+fringe variant -> GNU (3 . 4).
+    assert_eq!(
+        run_x_limit_rewind_tty_case(
+            &|eval, buf_id| {
+                eval.edit.buffers.get_mut(buf_id).unwrap().insert("hello");
+                x_limit_put_prop(eval, 1, 2, "display", space_fringe);
+                x_limit_add_ov(eval, 2, 2, &[("before-string", Value::string("ZZZZ"))]);
+            },
+            Value::fixnum(1),
+            Value::NIL,
+            Value::fixnum(3),
+            Value::NIL,
+        ),
+        (3, 4),
+        "GNU: (3 . 4) for 1..2 space+fringe ov2 ZZZZ FROM=1 X-LIMIT=3"
+    );
+    // Plain mid-line overlay at FROM=3 -> GNU (4 . 3) and TO=4 -> GNU (4 . 2).
+    assert_eq!(
+        run_x_limit_rewind_tty_case(
+            &|eval, buf_id| {
+                eval.edit.buffers.get_mut(buf_id).unwrap().insert("abhello");
+                x_limit_add_ov(eval, 3, 3, &[("before-string", Value::string("ZZZZ"))]);
+            },
+            Value::fixnum(3),
+            Value::NIL,
+            Value::fixnum(4),
+            Value::NIL,
+        ),
+        (4, 3),
+        "GNU: (4 . 3) for plain ov3 ZZZZ FROM=3 X-LIMIT=4"
+    );
+    assert_eq!(
+        run_x_limit_rewind_tty_case(
+            &|eval, buf_id| {
+                eval.edit.buffers.get_mut(buf_id).unwrap().insert("abhello");
+                x_limit_add_ov(eval, 3, 3, &[("before-string", Value::string("ZZZZ"))]);
+            },
+            Value::fixnum(3),
+            Value::fixnum(4),
+            Value::fixnum(4),
+            Value::NIL,
+        ),
+        (4, 2),
+        "GNU: (4 . 2) for plain ov3 ZZZZ FROM=3 TO=4 X-LIMIT=4"
+    );
+    // Plain BEGV overlay at FROM=1 -> GNU (3 . 3).
+    assert_eq!(
+        run_x_limit_rewind_tty_case(
+            &|eval, buf_id| {
+                eval.edit.buffers.get_mut(buf_id).unwrap().insert("hello");
+                x_limit_add_ov(eval, 1, 1, &[("before-string", Value::string("ZZZZ"))]);
+            },
+            Value::fixnum(1),
+            Value::NIL,
+            Value::fixnum(3),
+            Value::NIL,
+        ),
+        (3, 3),
+        "GNU: (3 . 3) for plain ov1 ZZZZ FROM=1 X-LIMIT=3"
+    );
+    // Multi-overlay at mid-line FROM=3 (F1): earlier overlay ends in `\n`
+    // (calling reset_after_from_rewind(false) and clearing before_origin()),
+    // then next overlay "ZZZZZ" must run with RewindBreakProbe active so its
+    // X-LIMIT=4 soft-wrap does not trigger a spurious MidOverlayString reset.
+    assert_eq!(
+        run_x_limit_rewind_tty_case(
+            &|eval, buf_id| {
+                eval.edit.buffers.get_mut(buf_id).unwrap().insert("abhello");
+                x_limit_add_ov(
+                    eval,
+                    3,
+                    3,
+                    &[
+                        ("priority", Value::fixnum(1)),
+                        ("before-string", Value::string("A\n")),
+                    ],
+                );
+                x_limit_add_ov(
+                    eval,
+                    3,
+                    3,
+                    &[
+                        ("priority", Value::fixnum(2)),
+                        ("before-string", Value::string("ZZZZZ")),
+                    ],
+                );
+            },
+            Value::fixnum(3),
+            Value::NIL,
+            Value::fixnum(4),
+            Value::NIL,
+        ),
+        (4, 3),
+        "GNU: (4 . 3) for multi-overlay o1=A\\n + o2=ZZZZZ at FROM=3 X-LIMIT=4"
+    );
+    assert_eq!(
+        run_x_limit_rewind_tty_case(
+            &|eval, buf_id| {
+                eval.edit.buffers.get_mut(buf_id).unwrap().insert("abhello");
+                x_limit_add_ov(
+                    eval,
+                    3,
+                    3,
+                    &[
+                        ("priority", Value::fixnum(1)),
+                        ("before-string", Value::string("A\n")),
+                    ],
+                );
+                x_limit_add_ov(
+                    eval,
+                    3,
+                    3,
+                    &[
+                        ("priority", Value::fixnum(2)),
+                        ("before-string", Value::string("ZZZZZ")),
+                    ],
+                );
+            },
+            Value::fixnum(3),
+            Value::fixnum(4),
+            Value::fixnum(4),
+            Value::NIL,
+        ),
+        (4, 2),
+        "GNU: (4 . 2) for multi-overlay o1=A\\n + o2=ZZZZZ at FROM=3 TO=4 X-LIMIT=4"
+    );
+    assert_eq!(
+        run_x_limit_rewind_tty_case(
+            &|eval, buf_id| {
+                eval.edit.buffers.get_mut(buf_id).unwrap().insert("abhello");
+                x_limit_add_ov(eval, 1, 3, &[("after-string", Value::string("A\n"))]);
+                x_limit_add_ov(eval, 3, 3, &[("before-string", Value::string("ZZZZZ"))]);
+            },
+            Value::fixnum(3),
+            Value::NIL,
+            Value::fixnum(4),
+            Value::NIL,
+        ),
+        (4, 3),
+        "GNU: (4 . 3) for after-string A\\n + before-string ZZZZZ at FROM=3 X-LIMIT=4"
+    );
+    // Multi-overlay control: o1="A\n" + o2=85*'Z' MUST still rewind at body_edge=79 -> GNU (4 . 2).
+    assert_eq!(
+        run_x_limit_rewind_tty_case(
+            &|eval, buf_id| {
+                eval.edit.buffers.get_mut(buf_id).unwrap().insert("abhello");
+                x_limit_add_ov(
+                    eval,
+                    3,
+                    3,
+                    &[
+                        ("priority", Value::fixnum(1)),
+                        ("before-string", Value::string("A\n")),
+                    ],
+                );
+                x_limit_add_ov(
+                    eval,
+                    3,
+                    3,
+                    &[
+                        ("priority", Value::fixnum(2)),
+                        ("before-string", Value::string("Z".repeat(85))),
+                    ],
+                );
+            },
+            Value::fixnum(3),
+            Value::NIL,
+            Value::fixnum(4),
+            Value::NIL,
+        ),
+        (4, 2),
+        "GNU: (4 . 2) control — multi-overlay o1=A\\n + o2=85*Z at FROM=3 X-LIMIT=4 still rewinds"
+    );
+}
+
+#[test]
+fn window_text_pixel_size_x_limit_display_string_at_from_rewinds_at_body_edge() {
+    crate::test_utils::init_test_tracing();
+    assert_eq!(
+        run_x_limit_rewind_tty_case(
+            &|eval, buf_id| {
+                eval.edit.buffers.get_mut(buf_id).unwrap().insert("abhello");
+                x_limit_put_prop(eval, 3, 4, "display", Value::string("ZZZZ"));
+            },
+            Value::fixnum(3),
+            Value::NIL,
+            Value::fixnum(4),
+            Value::NIL,
+        ),
+        (4, 3),
+        "GNU: (4 . 3) for display string ZZZZ at FROM=3 X-LIMIT=4"
+    );
+    assert_eq!(
+        run_x_limit_rewind_tty_case(
+            &|eval, buf_id| {
+                eval.edit.buffers.get_mut(buf_id).unwrap().insert("hello");
+                x_limit_put_prop(eval, 1, 2, "display", Value::string("ZZZZ"));
+            },
+            Value::fixnum(1),
+            Value::NIL,
+            Value::fixnum(3),
+            Value::NIL,
+        ),
+        (3, 3),
+        "GNU: (3 . 3) for display string ZZZZ at FROM=1 X-LIMIT=3"
+    );
+}
+
+#[test]
+fn window_text_pixel_size_x_limit_plain_prefix_switches_edge_at_origin() {
+    crate::test_utils::init_test_tracing();
+    // Prefix (5 cols) > X-LIMIT (4) stays on row 1 during rewind, then wraps at X-LIMIT=4.
+    assert_eq!(
+        run_x_limit_rewind_tty_case(
+            &|eval, buf_id| {
+                eval.edit
+                    .buffers
+                    .get_mut(buf_id)
+                    .unwrap()
+                    .insert("abcdefghij");
+            },
+            Value::fixnum(6),
+            Value::NIL,
+            Value::fixnum(4),
+            Value::NIL,
+        ),
+        (4, 3),
+        "GNU: (4 . 3) for plain prefix > X-LIMIT (abcdefghij FROM=6 X-LIMIT=4)"
+    );
+    // TO=7 variant -> GNU (4 . 2).
+    assert_eq!(
+        run_x_limit_rewind_tty_case(
+            &|eval, buf_id| {
+                eval.edit
+                    .buffers
+                    .get_mut(buf_id)
+                    .unwrap()
+                    .insert("abcdefghij");
+            },
+            Value::fixnum(6),
+            Value::fixnum(7),
+            Value::fixnum(4),
+            Value::NIL,
+        ),
+        (4, 2),
+        "GNU: (4 . 2) for plain prefix > X-LIMIT TO=7 (abcdefghij FROM=6 TO=7 X-LIMIT=4)"
+    );
+    // Exact origin switch proof on 80-col TTY (body_edge = 79):
+    // 1. 82 'a's wraps against body_edge=79 before origin (landing at origin_x=3 on row 2),
+    //    then switches to X-LIMIT=4 at origin for "bcdef":
+    //    - TO=85 ("bc"): row 1 = 3 + 'b' (4), row 2 = 'c' (1) -> (4 . 2)
+    //      (wrapping prefix at X-LIMIT=4 would give origin_x=2 -> (2 . 1)).
+    //    - TO=nil ("bcdef"): row 1 = 3 + 'b' (4), row 2 = "cdef" (4) -> (4 . 2)
+    //      (no pre-origin wrap would give origin_x=82 -> 3 rows (4 . 3)).
+    // 2. 85 'a's wraps against body_edge=79 before origin (origin_x=6 > X-LIMIT=4),
+    //    then switches to X-LIMIT=4 at origin for "bcdef" -> (4 . 3).
+    assert_eq!(
+        run_x_limit_rewind_tty_case(
+            &|eval, buf_id| {
+                let s = format!("{}bcdef", "a".repeat(82));
+                eval.edit.buffers.get_mut(buf_id).unwrap().insert(&s);
+            },
+            Value::fixnum(83),
+            Value::fixnum(85),
+            Value::fixnum(4),
+            Value::NIL,
+        ),
+        (4, 2),
+        "GNU: (4 . 2) for wrap before origin (82 a's at body_edge=79 -> col 3) + TO=85 at X-LIMIT=4"
+    );
+    assert_eq!(
+        run_x_limit_rewind_tty_case(
+            &|eval, buf_id| {
+                let s = format!("{}bcdef", "a".repeat(82));
+                eval.edit.buffers.get_mut(buf_id).unwrap().insert(&s);
+            },
+            Value::fixnum(83),
+            Value::NIL,
+            Value::fixnum(4),
+            Value::NIL,
+        ),
+        (4, 2),
+        "GNU: (4 . 2) for wrap before origin (82 a's at body_edge=79 -> col 3) + wider-than-X-LIMIT bcdef"
+    );
+    assert_eq!(
+        run_x_limit_rewind_tty_case(
+            &|eval, buf_id| {
+                let s = format!("{}bcdef", "a".repeat(85));
+                eval.edit.buffers.get_mut(buf_id).unwrap().insert(&s);
+            },
+            Value::fixnum(86),
+            Value::NIL,
+            Value::fixnum(4),
+            Value::NIL,
+        ),
+        (4, 3),
+        "GNU: (4 . 3) for wrap before origin (85 a's at body_edge=79 -> col 6) + wider-than-X-LIMIT run after origin"
+    );
+}
+
+#[test]
+fn window_text_pixel_size_x_limit_truncate_prefix_clamps_before_origin_sub() {
+    crate::test_utils::init_test_tracing();
+    // GNU clamps x <= max_x (4) before subtracting start_x (5) -> (-1 . 1).
+    assert_eq!(
+        run_x_limit_rewind_tty_case(
+            &|eval, buf_id| {
+                eval.edit
+                    .buffers
+                    .get_mut(buf_id)
+                    .unwrap()
+                    .insert("abcdefghij");
+                eval.set_variable("truncate-lines", Value::T);
+            },
+            Value::fixnum(6),
+            Value::NIL,
+            Value::fixnum(4),
+            Value::NIL,
+        ),
+        (-1, 1),
+        "GNU: (-1 . 1) for truncate-lines prefix > X-LIMIT (abcdefghij FROM=6 X-LIMIT=4)"
+    );
+    // N3: FROM == TO with origin_x >= X-LIMIT: wrapping -> (4 . 1), truncating -> (-1 . 1).
+    assert_eq!(
+        run_x_limit_rewind_tty_case(
+            &|eval, buf_id| {
+                eval.edit
+                    .buffers
+                    .get_mut(buf_id)
+                    .unwrap()
+                    .insert("abcdefghij");
+            },
+            Value::fixnum(6),
+            Value::fixnum(6),
+            Value::fixnum(4),
+            Value::NIL,
+        ),
+        (4, 1),
+        "GNU: (4 . 1) for N3 FROM==TO=6 wrapping X-LIMIT=4"
+    );
+    assert_eq!(
+        run_x_limit_rewind_tty_case(
+            &|eval, buf_id| {
+                eval.edit
+                    .buffers
+                    .get_mut(buf_id)
+                    .unwrap()
+                    .insert("abcdefghij");
+                eval.set_variable("truncate-lines", Value::T);
+            },
+            Value::fixnum(6),
+            Value::fixnum(6),
+            Value::fixnum(4),
+            Value::NIL,
+        ),
+        (-1, 1),
+        "GNU: (-1 . 1) for N3 FROM==TO=6 truncating X-LIMIT=4"
+    );
+}
+
+#[test]
+fn window_text_pixel_size_x_limit_from_rewind_controls_and_single_pass() {
+    crate::test_utils::init_test_tracing();
+    let sym = Value::symbol;
+    let space_fringe = Value::list(vec![
+        Value::list(vec![sym("space"), sym(":width"), Value::fixnum(2)]),
+        Value::list(vec![sym("left-fringe"), sym("left-arrow")]),
+    ]);
+
+    // Controls: 85 'Z's wraps past body_edge=79 and still triggers FROM-rewind under
+    // X-LIMIT=4, X-LIMIT=100, and X-LIMIT=t.
+    assert_eq!(
+        run_x_limit_rewind_tty_case(
+            &|eval, buf_id| {
+                eval.edit.buffers.get_mut(buf_id).unwrap().insert("abhello");
+                x_limit_add_ov(
+                    eval,
+                    3,
+                    3,
+                    &[("before-string", Value::string("Z".repeat(85)))],
+                );
+            },
+            Value::fixnum(3),
+            Value::NIL,
+            Value::fixnum(4),
+            Value::NIL,
+        ),
+        (4, 2),
+        "GNU: (4 . 2) control — 85 Z's ov at FROM=3 wraps body_edge=79 and resets under X-LIMIT=4"
+    );
+    assert_eq!(
+        run_x_limit_rewind_tty_case(
+            &|eval, buf_id| {
+                eval.edit.buffers.get_mut(buf_id).unwrap().insert("hello");
+                x_limit_add_ov(
+                    eval,
+                    1,
+                    1,
+                    &[("before-string", Value::string("Z".repeat(85)))],
+                );
+            },
+            Value::fixnum(1),
+            Value::NIL,
+            Value::fixnum(100),
+            Value::NIL,
+        ),
+        (5, 1),
+        "GNU: (5 . 1) control — 85 Z's ov at BEGV wraps body_edge=79 under X-LIMIT=100 (without rewind: (90 . 1))"
+    );
+    assert_eq!(
+        run_x_limit_rewind_tty_case(
+            &|eval, buf_id| {
+                eval.edit.buffers.get_mut(buf_id).unwrap().insert("hello");
+                x_limit_add_ov(
+                    eval,
+                    1,
+                    1,
+                    &[("before-string", Value::string("Z".repeat(85)))],
+                );
+            },
+            Value::fixnum(1),
+            Value::NIL,
+            Value::T,
+            Value::NIL,
+        ),
+        (5, 1),
+        "GNU: (5 . 1) control — 85 Z's ov at BEGV wraps body_edge=79 under X-LIMIT=t (without rewind: (90 . 1))"
+    );
+    assert_eq!(
+        run_x_limit_rewind_tty_case(
+            &|eval, buf_id| {
+                eval.edit.buffers.get_mut(buf_id).unwrap().insert("abhello");
+                x_limit_put_prop(eval, 3, 4, "display", Value::string("Z".repeat(85)));
+            },
+            Value::fixnum(3),
+            Value::NIL,
+            Value::fixnum(4),
+            Value::NIL,
+        ),
+        (4, 1),
+        "GNU: (4 . 1) control — 85 Z's display string at FROM=3 wraps body_edge=79 and resets"
+    );
+    // Explicit newline in run_end overlay still triggers FROM-rewind.
+    assert_eq!(
+        run_x_limit_rewind_tty_case(
+            &|eval, buf_id| {
+                eval.edit.buffers.get_mut(buf_id).unwrap().insert("abhello");
+                x_limit_put_prop(eval, 3, 4, "display", space_fringe);
+                x_limit_add_ov(eval, 4, 4, &[("before-string", Value::string("A\nZZZZ"))]);
+            },
+            Value::fixnum(3),
+            Value::NIL,
+            Value::fixnum(4),
+            Value::NIL,
+        ),
+        (4, 1),
+        "GNU: (4 . 1) control — A\\nZZZZ run_end ov still triggers FROM-rewind"
+    );
+    // Y-LIMIT + X-LIMIT combinations (with and without rewind breaks).
+    assert_eq!(
+        run_x_limit_rewind_tty_case(
+            &|eval, buf_id| {
+                eval.edit.buffers.get_mut(buf_id).unwrap().insert("abhello");
+                x_limit_put_prop(eval, 3, 4, "display", space_fringe);
+                x_limit_add_ov(eval, 4, 4, &[("before-string", Value::string("ZZZZ"))]);
+            },
+            Value::fixnum(3),
+            Value::NIL,
+            Value::fixnum(4),
+            Value::fixnum(1),
+        ),
+        (4, 1),
+        "GNU: (4 . 1) control — LOW-1 with X-LIMIT=4 Y-LIMIT=1"
+    );
+    assert_eq!(
+        run_x_limit_rewind_tty_case(
+            &|eval, buf_id| {
+                eval.edit.buffers.get_mut(buf_id).unwrap().insert("abhello");
+                x_limit_put_prop(eval, 3, 4, "display", space_fringe);
+                x_limit_add_ov(eval, 4, 4, &[("before-string", Value::string("ZZZZ"))]);
+            },
+            Value::fixnum(3),
+            Value::NIL,
+            Value::fixnum(4),
+            Value::fixnum(2),
+        ),
+        (4, 2),
+        "GNU: (4 . 2) control — LOW-1 with X-LIMIT=4 Y-LIMIT=2"
+    );
+    assert_eq!(
+        run_x_limit_rewind_tty_case(
+            &|eval, buf_id| {
+                eval.edit.buffers.get_mut(buf_id).unwrap().insert("ab");
+                x_limit_add_ov(
+                    eval,
+                    1,
+                    1,
+                    &[("before-string", Value::string("Z".repeat(85)))],
+                );
+            },
+            Value::fixnum(1),
+            Value::NIL,
+            Value::fixnum(10),
+            Value::fixnum(1),
+        ),
+        (2, 1),
+        "GNU: (2 . 1) control — BEGV 85 Z's ov with X-LIMIT=10 Y-LIMIT=1 still rewinds"
+    );
+    assert_eq!(
+        run_x_limit_rewind_tty_case(
+            &|eval, buf_id| {
+                eval.edit.buffers.get_mut(buf_id).unwrap().insert("ab");
+                x_limit_add_ov(
+                    eval,
+                    1,
+                    1,
+                    &[("before-string", Value::string("123456789012345\nBB"))],
+                );
+            },
+            Value::fixnum(1),
+            Value::NIL,
+            Value::fixnum(10),
+            Value::fixnum(1),
+        ),
+        (2, 1),
+        "GNU: (2 . 1) control — BEGV multiline ov with X-LIMIT=10 Y-LIMIT=1 still rewinds"
+    );
+
+    // Single-pass proof: an overlay string carrying a Lisp-evaluated `(when ...)` display
+    // spec at FROM under X-LIMIT=3 is evaluated exactly ONCE (RewindBreakProbe runs in
+    // lockstep in the single walk rather than re-walking the overlay string).
+    {
+        let (mut eval, selected_window) = pixel_size_tty_80_context();
+        let buf_id = eval
+            .edit
+            .buffers
+            .current_buffer()
+            .expect("current buffer")
+            .id();
+        eval.edit.buffers.get_mut(buf_id).unwrap().insert("hello");
+        eval.eval_str(
+            r#"(progn
+                 (setq neomacs--xlimit-eval-count 0)
+                 (let ((s (copy-sequence "x"))
+                       (ov (make-overlay 1 1)))
+                   (put-text-property
+                    0 1 'display
+                    '(when (progn (setq neomacs--xlimit-eval-count
+                                        (1+ neomacs--xlimit-eval-count))
+                                  t)
+                       . "ZZZZ")
+                    s)
+                   (overlay-put ov 'before-string s)))"#,
+        )
+        .expect("install counting overlay");
+        let result = builtin_window_text_pixel_size_ctx(
+            &mut eval,
+            vec![
+                Value::make_window(selected_window as u64),
+                Value::fixnum(1),
+                Value::NIL,
+                Value::fixnum(3),
+            ],
+        )
+        .expect("window-text-pixel-size");
+        assert_eq!(
+            (
+                result.cons_car().as_int().expect("width"),
+                result.cons_cdr().as_int().expect("height"),
+            ),
+            (3, 3),
+            "GNU: (3 . 3) for single-pass counting overlay at FROM=1 X-LIMIT=3"
+        );
+        let count = eval
+            .eval_str("neomacs--xlimit-eval-count")
+            .expect("read count")
+            .as_int()
+            .expect("fixnum count");
+        assert_eq!(
+            count, 1,
+            "RewindBreakProbe must evaluate Lisp overlay display spec in a single pass (got {count})"
+        );
+    }
+
+    // F4: Single-pass proof for a buffer `display` `(when ... . "ZZZZ")` at BEGV under X-LIMIT=3.
+    {
+        let (mut eval, selected_window) = pixel_size_tty_80_context();
+        let buf_id = eval
+            .edit
+            .buffers
+            .current_buffer()
+            .expect("current buffer")
+            .id();
+        eval.edit.buffers.get_mut(buf_id).unwrap().insert("hello");
+        eval.eval_str(
+            r#"(progn
+                 (setq neomacs--xlimit-buf-eval-count 0)
+                 (put-text-property
+                  1 2 'display
+                  '(when (progn (setq neomacs--xlimit-buf-eval-count
+                                      (1+ neomacs--xlimit-buf-eval-count))
+                                t)
+                     . "ZZZZ")))"#,
+        )
+        .expect("install counting buffer display");
+        let result = builtin_window_text_pixel_size_ctx(
+            &mut eval,
+            vec![
+                Value::make_window(selected_window as u64),
+                Value::fixnum(1),
+                Value::NIL,
+                Value::fixnum(3),
+            ],
+        )
+        .expect("window-text-pixel-size");
+        assert_eq!(
+            (
+                result.cons_car().as_int().expect("width"),
+                result.cons_cdr().as_int().expect("height"),
+            ),
+            (3, 3),
+            "GNU: (3 . 3) for single-pass counting buffer display at FROM=1 X-LIMIT=3"
+        );
+        let count = eval
+            .eval_str("neomacs--xlimit-buf-eval-count")
+            .expect("read count")
+            .as_int()
+            .expect("fixnum count");
+        assert_eq!(
+            count, 1,
+            "RewindBreakProbe must evaluate buffer display spec in a single pass (got {count})"
+        );
+    }
+
+    // F4: Single-pass proof for a frozen `y_limit_stop` overlay walk where `RewindBreakProbe`
+    // continues scanning a later `(when ... . "A\nBB")` span past column 10 under X-LIMIT=10, Y-LIMIT=1.
+    {
+        let (mut eval, selected_window) = pixel_size_tty_80_context();
+        let buf_id = eval
+            .edit
+            .buffers
+            .current_buffer()
+            .expect("current buffer")
+            .id();
+        eval.edit.buffers.get_mut(buf_id).unwrap().insert("ab");
+        eval.eval_str(
+            r#"(progn
+                 (setq neomacs--xlimit-ylim-eval-count 0)
+                 (let ((s (copy-sequence "123456789012x"))
+                       (ov (make-overlay 1 1)))
+                   (put-text-property
+                    12 13 'display
+                    '(when (progn (setq neomacs--xlimit-ylim-eval-count
+                                        (1+ neomacs--xlimit-ylim-eval-count))
+                                  t)
+                       . "A\nBB")
+                    s)
+                   (overlay-put ov 'before-string s)))"#,
+        )
+        .expect("install counting frozen y_limit overlay");
+        let result = builtin_window_text_pixel_size_ctx(
+            &mut eval,
+            vec![
+                Value::make_window(selected_window as u64),
+                Value::fixnum(1),
+                Value::NIL,
+                Value::fixnum(10),
+                Value::fixnum(1),
+            ],
+        )
+        .expect("window-text-pixel-size");
+        assert_eq!(
+            (
+                result.cons_car().as_int().expect("width"),
+                result.cons_cdr().as_int().expect("height"),
+            ),
+            (1, 1),
+            "GNU: (1 . 1) for frozen y_limit_stop overlay with late nested display (when ... . \"A\\nBB\") (string_from_display_prop_p == 1)"
+        );
+        let count = eval
+            .eval_str("neomacs--xlimit-ylim-eval-count")
+            .expect("read count")
+            .as_int()
+            .expect("fixnum count");
+        assert_eq!(
+            count, 1,
+            "Frozen y_limit_stop probe continuation must evaluate late (when ...) once (got {count})"
+        );
+    }
+    // Companion F4 check where the `\n` lives in the overlay string itself after `(when ... . "A")`:
+    // GNU returns `(2 . 1)` (`MidOverlayString`), and `RewindBreakProbe` evaluates `(when ...)` once.
+    {
+        let (mut eval, selected_window) = pixel_size_tty_80_context();
+        let buf_id = eval
+            .edit
+            .buffers
+            .current_buffer()
+            .expect("current buffer")
+            .id();
+        eval.edit.buffers.get_mut(buf_id).unwrap().insert("ab");
+        eval.eval_str(
+            r#"(progn
+                 (setq neomacs--xlimit-ylim2-eval-count 0)
+                 (let ((s (copy-sequence "123456789012x\nBB"))
+                       (ov (make-overlay 1 1)))
+                   (put-text-property
+                    12 13 'display
+                    '(when (progn (setq neomacs--xlimit-ylim2-eval-count
+                                        (1+ neomacs--xlimit-ylim2-eval-count))
+                                  t)
+                       . "A")
+                    s)
+                   (overlay-put ov 'before-string s)))"#,
+        )
+        .expect("install counting frozen y_limit overlay with outer newline");
+        let result = builtin_window_text_pixel_size_ctx(
+            &mut eval,
+            vec![
+                Value::make_window(selected_window as u64),
+                Value::fixnum(1),
+                Value::NIL,
+                Value::fixnum(10),
+                Value::fixnum(1),
+            ],
+        )
+        .expect("window-text-pixel-size");
+        assert_eq!(
+            (
+                result.cons_car().as_int().expect("width"),
+                result.cons_cdr().as_int().expect("height"),
+            ),
+            (2, 1),
+            "GNU: (2 . 1) for frozen y_limit_stop overlay with outer \\n after (when ... . \"A\")"
+        );
+        let count = eval
+            .eval_str("neomacs--xlimit-ylim2-eval-count")
+            .expect("read count")
+            .as_int()
+            .expect("fixnum count");
+        assert_eq!(
+            count, 1,
+            "Frozen y_limit_stop outer-newline probe must evaluate (when ...) once (got {count})"
+        );
+    }
+
+    // F5: `buffer-text-pixel-size` forwards `rewind_edge: body_edge` (matching GNU `Fbuffer_text_pixel_size`).
+    let run_buffer_pixel_size_tty_case =
+        |setup: &dyn Fn(&mut Context, BufferId), x_limit: Value| -> (i64, i64) {
+            let (mut eval, selected_window) = pixel_size_tty_80_context();
+            let buf_id = eval
+                .edit
+                .buffers
+                .current_buffer()
+                .expect("current buffer")
+                .id();
+            setup(&mut eval, buf_id);
+            let result = builtin_buffer_text_pixel_size(
+                &mut eval,
+                vec![
+                    Value::NIL,
+                    Value::make_window(selected_window as u64),
+                    x_limit,
+                ],
+            )
+            .expect("buffer-text-pixel-size");
+            (
+                result.cons_car().as_int().expect("width"),
+                result.cons_cdr().as_int().expect("height"),
+            )
+        };
+    assert_eq!(
+        run_buffer_pixel_size_tty_case(
+            &|eval, buf_id| {
+                eval.edit.buffers.get_mut(buf_id).unwrap().insert("hello");
+                x_limit_add_ov(eval, 1, 1, &[("before-string", Value::string("ZZZZ"))]);
+            },
+            Value::fixnum(3),
+        ),
+        (3, 3),
+        "GNU: (3 . 3) for buffer-text-pixel-size BEGV ov ZZZZ X-LIMIT=3"
+    );
+    assert_eq!(
+        run_buffer_pixel_size_tty_case(
+            &|eval, buf_id| {
+                eval.edit.buffers.get_mut(buf_id).unwrap().insert("hello");
+                x_limit_put_prop(eval, 1, 2, "display", Value::string("ZZZZ"));
+            },
+            Value::fixnum(3),
+        ),
+        (3, 3),
+        "GNU: (3 . 3) for buffer-text-pixel-size BEGV display ZZZZ X-LIMIT=3"
+    );
+    assert_eq!(
+        run_buffer_pixel_size_tty_case(
+            &|eval, buf_id| {
+                eval.edit.buffers.get_mut(buf_id).unwrap().insert("hello");
+                x_limit_add_ov(
+                    eval,
+                    1,
+                    1,
+                    &[("before-string", Value::string("Z".repeat(85)))],
+                );
+            },
+            Value::fixnum(4),
+        ),
+        (4, 2),
+        "GNU: (4 . 2) control — buffer-text-pixel-size BEGV 85 Z's ov X-LIMIT=4 still rewinds"
     );
 }
 

@@ -325,5 +325,6 @@ fn no_rust_subr_is_registered_for_the_eleven_names() {
         );
     }
     // And the booted runtime still answers through them.
+    drop(_eval);
     let _ = runtime_startup_context();
 }

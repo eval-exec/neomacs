@@ -19,10 +19,10 @@ fn function(ops: Vec<Op>, constants: Vec<Value>, arity: usize) -> ByteCodeFuncti
         optional: Vec::new(),
         rest: None,
     });
-    f.lexical = true;
-    f.ops = ops;
-    f.constants = constants.into();
-    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
+    f.set_lexical(true);
+    f.set_ops(ops);
+    f.set_constants(constants.into());
+    f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
     f
 }
 
@@ -169,7 +169,7 @@ fn a_leaf_call_admits_a_loop_into_the_mir_tier() {
                 .execute(&f, args.to_vec())
                 .expect("runs");
             ev.gc_stress = true;
-            let got = leaf.call(ctx, &args);
+            let got = unsafe { leaf.call(ctx, &args) };
             ev.gc_stress = false;
             assert_eq!(
                 got,
@@ -179,7 +179,7 @@ fn a_leaf_call_admits_a_loop_into_the_mir_tier() {
             assert_eq!(ev.jit_root_stack_top, 0);
             // `(nth 1 '(1 . 2))`: Bnth signals (listp 2) from inside the loop.
             assert_eq!(
-                leaf.call(ctx, &[improper, Value::make_int(3)]),
+                unsafe { leaf.call(ctx, &[improper, Value::make_int(3)]) },
                 NativeRun::Signal,
                 "effects={effects} {knob:?}"
             );
@@ -241,7 +241,7 @@ fn a_leaf_call_keeps_raw_values_raw() {
             super::super::lowering::untags_emitted(),
         ));
         assert_eq!(
-            leaf.call(ctx, &[list, Value::make_int(4)]),
+            unsafe { leaf.call(ctx, &[list, Value::make_int(4)]) },
             NativeRun::Ok(Value::make_int(25).bits())
         );
     }

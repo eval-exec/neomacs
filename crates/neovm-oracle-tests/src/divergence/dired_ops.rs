@@ -4,6 +4,8 @@
 //! get-filename at point, mark/unmark, mark-files-regexp, toggle-marks,
 //! map-over-marks collect, goto-file, rename/copy file, listing line count,
 //! dired-buffers-for-dir. Avoids interactive do-* (which block on EOF).
+//! Also the `dired-sort-set-mode-line' label rows (#833), as inline GNU
+//! expectations so they hold in snapshot mode too.
 
 use crate::common::assert_oracle_parity;
 use crate::common::return_if_neovm_enable_oracle_proptest_not_set;
@@ -200,3 +202,75 @@ diredt!(
           (with-current-buffer b (length dired-subdir-alist)))
       (ignore-errors (delete-directory dir t)))))"##
 );
+
+// `dired-sort-set-mode-line' picks its label with `string-match-p' on two regexps
+// built from `dired-ls-sorting-switches'.  These two rows carry an inline GNU
+// expectation (not `diredt!`) so snapshot mode also pins the labels: issue #833
+// reported the raw switches for "-l -a" as a Neomacs bug, and GNU 31.1 prints the
+// same.  The short-option branch of `dired-sort-by-name-regexp' is two adjacent
+// one-or-more classes (`-[^- tSXU]+[^- tSXU]+`, upstream f800f2300bf, Bug#80200),
+// so one dash needs at least two letters after it.  Emacs 30.2 had one class and
+// labels "-l -a" as "Dired by name"; the pin is 31.1.
+
+#[test]
+fn div_dired_sort_mode_line_labels() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+
+    let expect = expect_test::expect![[
+        r#""OK ((\"-ahl -v --group-directories-first\" \"Dired -ahl -v --group-directories-first\") (\"-ahlv --group-directories-first\" \"Dired by name\") (\"-l -a\" \"Dired -l -a\") (\"-la\" \"Dired by name\") (\"-al\" \"Dired by name\") (\"-l\" \"Dired -l\") (\"-l -a -h\" \"Dired -l -a -h\") (\"-lS\" \"Dired -lS\") (\"-l -S\" \"Dired -l -S\") (\"-lt\" \"Dired by date\") (\"-ltr\" \"Dired by date\") (\"-t\" \"Dired by date\") (\"-rt\" \"Dired by date\") (\"--sort=name -l\" \"Dired --sort=name -l\") (\"-ahl \\\"x y\\\"\" \"Dired by name\") (\"-l \\\"a b\\\" -h\" \"Dired -l \\\"a b\\\" -h\"))""#
+    ]];
+    crate::common::assert_oracle_parity_expect(
+        r#"(progn
+  (require 'dired)
+  (let (out)
+    (dolist (switches '("-ahl -v --group-directories-first"
+                        "-ahlv --group-directories-first"
+                        "-l -a"
+                        "-la"
+                        "-al"
+                        "-l"
+                        "-l -a -h"
+                        "-lS"
+                        "-l -S"
+                        "-lt"
+                        "-ltr"
+                        "-t"
+                        "-rt"
+                        "--sort=name -l"
+                        "-ahl \"x y\""
+                        "-l \"a b\" -h"))
+      (with-temp-buffer
+        (dired-mode)
+        (setq-local dired-switches-in-mode-line nil
+                    dired-actual-switches switches)
+        (dired-sort-set-mode-line)
+        (push (list switches mode-name) out)))
+    (nreverse out)))"#,
+        expect,
+    );
+}
+
+#[test]
+fn div_dired_sort_by_name_regexp_two_classes() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+
+    let expect = expect_test::expect![[
+        r#""OK ((t t nil nil nil nil nil) (t t t nil nil) (t t nil nil nil) (t t t t t))""#
+    ]];
+    crate::common::assert_oracle_parity_expect(
+        r#"(progn
+  (require 'dired)
+  (let ((case-fold-search nil))
+    (list
+     (mapcar (lambda (s) (and (string-match-p dired-sort-by-name-regexp s) t))
+             '("-ahlv --group-directories-first" "-la"
+               "-ahl -v --group-directories-first" "-l -a" "-l" "-lS" "-l -S"))
+     (mapcar (lambda (s) (and (string-match-p dired-sort-by-date-regexp s) t))
+             '("-lt" "-t" "-rt" "-l -a" "-la"))
+     (mapcar (lambda (s) (and (string-match-p "-[^- tSXU]+[^- tSXU]+" s) t))
+             '("-la" "-ahl -v" "-l -a" "-l" "-a"))
+     (mapcar (lambda (s) (and (string-match-p "-[^- tSXU]+" s) t))
+             '("-la" "-ahl -v" "-l -a" "-l" "-a")))))"#,
+        expect,
+    );
+}

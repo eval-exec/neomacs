@@ -115,7 +115,7 @@ const PRELUDE: &str = r####"
 (defun rustic419-test-write (relative contents &optional executable)
   (let ((file (expand-file-name relative rustic419-test-root)))
     (unless (and rustic419-test-root-owned
-                 (file-in-directory-p file rustic419-test-root))
+                 (neomacs-melpa-path-inside-p file rustic419-test-root))
       (error "Refusing Rustic write outside owned root: %S" file))
     (make-directory (file-name-directory file) t)
     (let ((coding-system-for-write 'utf-8-unix))
@@ -169,12 +169,24 @@ case \"${1-}\" in
     esac
     printf 'running 1 test\\ntest %s ... ok\\n\\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\\n' \"$name\" ;;
   build)
-    printf '   Compiling demo-界 v0.1.0 (%s)\\n' \"${RUSTIC419_PROJECT%/}\"
-    printf 'error[E0425]: cannot find function `missing_界` in this scope\\n'
-    printf ' --> src/lib.rs:2:5\\n'
-    printf '  |\\n2 |     missing_界();\\n  |     ^^^^^^^^^^^ not found in this scope\\n'
-    printf '\\nFor more information about this error, try `rustc --explain E0425`.\\n'
-    printf 'error: could not compile `demo-界` (lib) due to 1 previous error\\n'
+    # One write: compilation-mode parses each filter chunk with an incremental
+    # `compilation--parsed' marker (compile.el:1814-1841) that advances past the
+    # chunk before `compilation--parse-region' runs; its partial-line guard
+    # (compile.el:1663-1670) then cannot fire, so a chunk boundary inside this
+    # multi-line rustc diagnostic can scrub the `compilation-message' property
+    # and leave the line unparsed once the remainder arrives.  Both editors run
+    # that same Lisp, and a load-dependent failure to navigate this diagnostic
+    # is a scheduling race, not a Rustic behaviour.  Stage the block and `cat'
+    # it (a small file, one write), exactly as the rustfmt fixture below does.
+    {
+      printf '   Compiling demo-界 v0.1.0 (%s)\\n' \"${RUSTIC419_PROJECT%/}\"
+      printf 'error[E0425]: cannot find function `missing_界` in this scope\\n'
+      printf ' --> src/lib.rs:2:5\\n'
+      printf '  |\\n2 |     missing_界();\\n  |     ^^^^^^^^^^^ not found in this scope\\n'
+      printf '\\nFor more information about this error, try `rustc --explain E0425`.\\n'
+      printf 'error: could not compile `demo-界` (lib) due to 1 previous error\\n'
+    } > \"$RUSTIC419_STDIN.build\"
+    cat \"$RUSTIC419_STDIN.build\"
     exit 101 ;;
   check)
     printf '    Checking demo-界 v0.1.0 (%s)\\n' \"${RUSTIC419_PROJECT%/}\"
@@ -444,7 +456,7 @@ its buffer records only as much of the child's output as had been read"
   (seq-filter
    (lambda (buffer)
      (when-let ((file (buffer-local-value 'buffer-file-name buffer)))
-       (file-in-directory-p file rustic419-test-root)))
+       (neomacs-melpa-path-inside-p file rustic419-test-root)))
    (buffer-list)))
 
 (defun rustic419-test-window-state ()

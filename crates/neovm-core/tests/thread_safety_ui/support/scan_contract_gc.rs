@@ -34,6 +34,10 @@ impl TaggedHeap {
         unimplemented!()
     }
 
+    fn has_unfinished_concurrent_mark(&self) -> bool {
+        unimplemented!()
+    }
+
     fn record_termination_partial_words(
         &mut self,
         _: usize,
@@ -109,7 +113,7 @@ impl Chunk {
 
 struct MarkWord;
 impl MarkWord {
-    fn value(self) -> usize {
+    unsafe fn value(self) -> usize {
         unimplemented!()
     }
 }

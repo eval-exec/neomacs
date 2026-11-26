@@ -51,10 +51,10 @@ fn applyforces() -> ByteCodeFunction {
     ];
     let ops = decode_gnu_bytecode(&bytes, &mut constants).expect("GNU bytecode decodes");
     let mut f = ByteCodeFunction::new(parse_arglist_descriptor(771));
-    f.lexical = true;
-    f.ops = ops;
-    f.constants = constants.into();
-    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(18);
+    f.set_lexical(true);
+    f.set_ops(ops);
+    f.set_constants(constants.into());
+    f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(18));
     f
 }
 
@@ -117,7 +117,7 @@ fn system() -> Vec<Value> {
 }
 
 fn slot(body: Value, i: usize) -> f64 {
-    let v = body.as_vector_data().expect("a body vector")[i];
+    let v = body.as_vector_data().expect("a body vector").at(i);
     assert!(matches!(v.kind(), ValueKind::Float), "slot {i}: {v:?}");
     v.xfloat()
 }

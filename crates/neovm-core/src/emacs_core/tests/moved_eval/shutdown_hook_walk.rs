@@ -234,6 +234,12 @@ fn insert_live_tty_frame(ctx: &mut Context) {
     let frames = ctx.frame_manager_mut();
     let frame_id = neovm_value::display_vocab::FrameId(frames.next_frame_id);
     frames.next_frame_id += 1;
+    // Frame ids are not reused. Drop a tombstone anyway so a wrapped id
+    // cannot answer `framep` with a previous frame's output method.
+    frames.deleted_frames.remove(&frame_id);
+    // Frame creation is the mint. This helper inserts the Frame struct
+    // directly, so it mints the heap object the same way create_frame does.
+    let _frame_object = Value::mint_frame(frame_id.0);
     let window_id = WindowId(frames.next_window_id);
     frames.next_window_id += 1;
     let minibuffer_id = WindowId(frames.next_window_id);
@@ -303,6 +309,8 @@ fn last_terminal_disconnect_enters_dying_after_kill_emacs_hook() {
     let _recorder = install_last_terminal_hook(&mut ctx);
     ctx.handle_display_terminal_disconnect();
     assert_last_terminal_exit(&mut ctx);
+    drop(_recorder);
+    drop(ctx);
 
     // GNU's SIGHUP path calls `Fkill_emacs` again while the first call
     // is still on the stack (`emacs.c:453-460`). A disconnect during

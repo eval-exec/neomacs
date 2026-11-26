@@ -1,0 +1,21 @@
+error[E0133]: call to unsafe function `neovm_eval::emacs_core::eval::data::process_state::PollableResource::modify_on_poller` is unsafe and requires unsafe block
+ --> $WORKSPACE/crates/neovm-system/tests/poller_registration_ui/pollable_resource_plumbing_requires_unsafe.rs
+  |
+  |       let _ = pty.modify_on_poller(
+  |  _____________^
+  | |         poller,
+  | |         token,
+  | |         polling::Event::readable(1),
+  | |         polling::PollMode::Level,
+  | |     );
+  | |_____^ call to unsafe function
+  |
+  = note: consult the function's documentation for information on how to avoid undefined behavior
+
+error[E0133]: call to unsafe function `neovm_eval::emacs_core::eval::data::process_state::PollableResource::unregister_from_poller` is unsafe and requires unsafe block
+ --> $WORKSPACE/crates/neovm-system/tests/poller_registration_ui/pollable_resource_plumbing_requires_unsafe.rs
+  |
+  |     pty.unregister_from_poller(poller, token);
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ call to unsafe function
+  |
+  = note: consult the function's documentation for information on how to avoid undefined behavior

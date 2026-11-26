@@ -312,31 +312,62 @@ struct WindowsSession {
     output_generation: DecoderOutputGeneration,
 }
 
-pub(crate) struct WindowsDecoder {
-    // Runtime drops after sessions are explicitly shut down by Drop.
-    runtime: MediaFoundationRuntime,
-    bridge: WindowsGpuBridge,
-    capture: WindowsFrameCapture,
-    wake: VideoWake,
+struct RuntimeScoped<T, R> {
+    // Field order is significant: `resources` and every interface it owns drop
+    // before `_runtime` calls `MFShutdown` and `CoUninitialize`.
+    resources: T,
+    _runtime: R,
+}
+
+impl<T, R> RuntimeScoped<T, R> {
+    const fn new(resources: T, runtime: R) -> Self {
+        Self {
+            resources,
+            _runtime: runtime,
+        }
+    }
+}
+
+struct WindowsDecoderResources {
+    // Field order is significant: Media Engine sessions and queued frames drop
+    // before the capture pool and DXGI/D3D11On12 bridge they reference.
     sessions: HashMap<VideoId, WindowsSession>,
     pending: Vec<BackendEvent<WindowsFrame>>,
+    capture: WindowsFrameCapture,
+    bridge: WindowsGpuBridge,
+    wake: VideoWake,
+}
+
+pub(crate) struct WindowsDecoder {
+    // Keeps all Media Foundation, COM, and DXGI resources strictly ahead of
+    // `MediaFoundationRuntime` so future fields cannot land after shutdown.
+    scoped: RuntimeScoped<WindowsDecoderResources, MediaFoundationRuntime>,
 }
 
 impl WindowsDecoder {
-    fn new(
-        gpu: GpuVideoContext,
-        bridge: WindowsGpuBridge,
-        wake: VideoWake,
-    ) -> Result<Self, String> {
+    fn new(gpu: GpuVideoContext, wake: VideoWake) -> Result<Self, String> {
+        // Initialize COM and Media Foundation before creating the DXGI device
+        // manager, and keep `runtime` after `resources` so teardown runs in
+        // strict reverse order.
+        let runtime = MediaFoundationRuntime::start()?;
+        let bridge = WindowsGpuBridge::new(&gpu)?;
+        let capture = WindowsFrameCapture::new(gpu, bridge.clone());
         Ok(Self {
-            runtime: MediaFoundationRuntime::start()?,
-            capture: WindowsFrameCapture::new(gpu, bridge.clone()),
-            bridge,
-            wake,
-            sessions: HashMap::new(),
-            pending: Vec::new(),
+            scoped: RuntimeScoped::new(
+                WindowsDecoderResources {
+                    sessions: HashMap::new(),
+                    pending: Vec::new(),
+                    capture,
+                    bridge,
+                    wake,
+                },
+                runtime,
+            ),
         })
     }
+}
+
+impl WindowsDecoderResources {
 
     fn create_engine(
         &self,
@@ -775,12 +806,11 @@ fn geometry_from_media_engine(
     )
 }
 
-impl Drop for WindowsDecoder {
+impl Drop for WindowsDecoderResources {
     fn drop(&mut self) {
         for (_, session) in self.sessions.drain() {
             let _ = unsafe { session.engine.Shutdown() };
         }
-        let _ = &self.runtime;
     }
 }
 
@@ -788,18 +818,21 @@ impl DecoderBackend for WindowsDecoder {
     type Frame = WindowsFrame;
 
     fn command(&mut self, command: VideoCommand) -> Result<(), crate::VideoCommandError> {
+        let resources = &mut self.scoped.resources;
         match command {
             VideoCommand::Open {
                 id,
                 source,
                 initial_playback,
                 loop_mode,
-            } => self
+            } => resources
                 .open(id, source, initial_playback, loop_mode)
                 .map_err(Into::into),
-            VideoCommand::Playback { id, action } => self.playback(id, action).map_err(Into::into),
+            VideoCommand::Playback { id, action } => {
+                resources.playback(id, action).map_err(Into::into)
+            }
             VideoCommand::Presentation { id, visibility } => {
-                let session = self
+                let session = resources
                     .sessions
                     .get_mut(&id)
                     .ok_or_else(|| format!("video {} is not open", id.get()))?;
@@ -825,13 +858,13 @@ impl DecoderBackend for WindowsDecoder {
                 Ok(())
             }
             VideoCommand::Close { id } => {
-                let session = self
+                let session = resources
                     .sessions
                     .remove(&id)
                     .ok_or(crate::VideoCommandError::SessionNotOpen { id: id.get() })?;
                 unsafe { session.engine.Shutdown() }
                     .map_err(|error| format!("Media Foundation shutdown failed: {error}"))?;
-                self.pending.push(BackendEvent::StateChanged {
+                resources.pending.push(BackendEvent::StateChanged {
                     id,
                     state: VideoSessionState::Closed,
                 });
@@ -841,8 +874,8 @@ impl DecoderBackend for WindowsDecoder {
     }
 
     fn service(&mut self, _request: &crate::VideoServiceRequest) -> Vec<BackendEvent<Self::Frame>> {
-        self.poll_sessions();
-        std::mem::take(&mut self.pending)
+        self.scoped.resources.poll_sessions();
+        std::mem::take(&mut self.scoped.resources.pending)
     }
 
     fn reconfigure_after_import_failure(
@@ -850,11 +883,15 @@ impl DecoderBackend for WindowsDecoder {
         id: VideoId,
         rejection: &DecoderOutputRejection,
     ) -> Result<DecoderReconfiguration, String> {
-        WindowsDecoder::reconfigure_after_import_failure(self, id, rejection)
+        self.scoped
+            .resources
+            .reconfigure_after_import_failure(id, rejection)
     }
 
     fn next_service_deadline(&self, now: Instant) -> Option<Instant> {
-        self.sessions
+        self.scoped
+            .resources
+            .sessions
             .values()
             .any(|session| {
                 session.presented
@@ -868,19 +905,21 @@ impl DecoderBackend for WindowsDecoder {
 
     fn surface_pool_diagnostics(&self) -> Option<crate::VideoSurfacePoolDiagnostics> {
         Some(
-            self.capture
+            self.scoped
+                .resources
+                .capture
                 .surfaces
                 .diagnostics(crate::VideoSurfacePoolRole::CompositorImport),
         )
     }
 
     fn begin_measurement_epoch(&mut self) {
-        self.pending.retain(|event| {
+        self.scoped.resources.pending.retain(|event| {
             event
                 .measurement_epoch_disposition()
                 .retains_event()
         });
-        self.capture.surfaces.begin_measurement_epoch();
+        self.scoped.resources.capture.surfaces.begin_measurement_epoch();
     }
 }
 
@@ -1397,11 +1436,7 @@ impl ProductionPlatform for WindowsPlatform {
             policy,
             VideoCompositorImport::GpuBlit,
         )?;
-        let bridge = WindowsGpuBridge::new(&gpu).map_err(|message| VideoInitError::Backend {
-            backend: VideoDecodeBackend::MediaFoundation,
-            message,
-        })?;
-        let decoder = WindowsDecoder::new(gpu.clone(), bridge, wake).map_err(|message| {
+        let decoder = WindowsDecoder::new(gpu.clone(), wake).map_err(|message| {
             VideoInitError::Backend {
                 backend: VideoDecodeBackend::MediaFoundation,
                 message,

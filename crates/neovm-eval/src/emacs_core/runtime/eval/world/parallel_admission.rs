@@ -7,15 +7,15 @@ use super::Context;
 
 #[path = "parallel_admission/factory.rs"]
 mod factory;
+#[path = "parallel_admission/preparation.rs"]
+mod preparation;
 use crate::emacs_core::eval::green::GreenStartError;
 #[cfg(any(test, feature = "test-support"))]
 use factory::ProofPlan;
 #[cfg(any(test, feature = "test-support"))]
 use factory::WeakProofPlan;
 use factory::{AdmissionPlan, ProductionPlan};
-use neovm_value::tagged::gc::{
-    QuiescentCollector, RegistrationError, RendezvousError, clear_tagged_heap_root_if_installed,
-};
+use neovm_value::tagged::gc::{QuiescentCollector, RegistrationError, RendezvousError};
 use neovm_value::tagged::value::TaggedValue;
 use neovm_value::value::{HashTableTest, HashTableWeakness, LispHashTable};
 
@@ -148,59 +148,29 @@ impl Context {
             AdmissionScope<'heap>,
         ) -> (QuiescentCollector<'heap>, super::Baton, R),
     ) -> Result<R, OwnedParallelError> {
-        let retired = self.retire_empty_dead_windows_table();
-        let keeper = match self.issue_green_baton() {
-            Ok(keeper) => keeper,
-            Err(error) => {
-                self.recover_serial_context(retired);
-                return Err(map_start(error));
+        struct AbortOnPanic(&'static str);
+        impl Drop for AbortOnPanic {
+            fn drop(&mut self) {
+                if std::thread::panicking() {
+                    eprintln!(
+                        "fatal: panic while Context TLS heap is cleared in {}",
+                        self.0
+                    );
+                    std::process::abort();
+                }
             }
-        };
-        let frozen = match self.capture_parallel_legacy_roots(&keeper) {
-            Ok(frozen) => frozen,
-            Err(error) => {
-                drop(keeper);
-                self.recover_serial_context(retired);
-                return Err(map_rendezvous(error));
-            }
-        };
-        let heap = self.tagged_heap.heap_root().as_ptr();
-        // SAFETY: this thread is the sole serial owner. The keeper excludes
-        // concurrent mark and private roots were captured above. The legacy
-        // TLS facade stays installed for this drain so its reseed still sees
-        // the thread-local census; it is uninstalled before the body runs.
-        // The body cannot reach the Context or the heap.
-        let drained = unsafe {
-            (*heap).drain_to_quiescent(|heap| {
-                self.seed_registered_mutator_roots_world_stopped(heap);
-            })
-        };
-        let collector = match drained {
-            Ok(collector) => collector,
-            Err(_) => {
-                drop(frozen);
-                drop(keeper);
-                self.recover_serial_context(retired);
-                return Err(OwnedParallelError::Start);
-            }
-        };
-        clear_tagged_heap_root_if_installed(self.tagged_heap.heap_root());
-        let projection = match plan.admit(collector, keeper, frozen) {
-            Ok(projection) => projection,
-            Err(failure) => {
-                let reason = failure.reason;
-                drop(failure.collector);
-                drop(failure.keeper);
-                self.recover_serial_context(retired);
-                return Err(reason);
-            }
-        };
-        let (collector, keeper, output) =
-            body(projection, AdmissionScope(std::marker::PhantomData));
-        drop(collector);
-        drop(keeper);
-        self.recover_serial_context(retired);
-        Ok(output)
+        }
+        // SAFETY: `abort_on_unwind` arms immediately after
+        // `prepare_owned_admission` succeeds and is disarmed only after
+        // `recover_serial_context(recovery)` completes, so a panic inside
+        // `prepared.run` or recovery aborts the process rather than returning
+        // a cleared/abandoned `&mut Context` to a `catch_unwind` caller.
+        let prepared = unsafe { self.prepare_owned_admission()? };
+        let abort_on_unwind = AbortOnPanic("admit-owned-with");
+        let (recovery, result) = prepared.run(plan, body);
+        self.recover_serial_context(recovery);
+        std::mem::forget(abort_on_unwind);
+        result
     }
 
     /// Reclaim GNU's empty `window-dead-windows-table` so the strict admission
@@ -208,32 +178,32 @@ impl Context {
     /// and admission refuses it. Returns whether the original object was
     /// actually reclaimed; only then does serial recovery install a fresh
     /// empty weak-value table.
-    pub(crate) fn retire_empty_dead_windows_table(&mut self) -> bool {
+    pub(crate) fn retire_empty_dead_windows_table(&mut self) -> preparation::SerialRecovery {
         // The canonical variable read, not the evaluator: admission must not
         // run Lisp, and GNU stores this DEFVAR_LISP as one global value.
         let Some(value) = self.builtin_var_value_by_name("window-dead-windows-table") else {
-            return false;
+            return preparation::SerialRecovery::Unchanged;
         };
         if !is_empty_weak_value_eql(value) {
-            return false;
+            return preparation::SerialRecovery::Unchanged;
         }
         let saved = value;
         self.set_variable("window-dead-windows-table", TaggedValue::NIL);
         self.gc_collect_exact();
         if self.tagged_heap.retains_veclike(saved) {
             self.set_variable("window-dead-windows-table", saved);
-            return false;
+            return preparation::SerialRecovery::Unchanged;
         }
-        true
+        preparation::SerialRecovery::RecreateDeadWindows
     }
 
-    pub(crate) fn recover_serial_context(&mut self, retired_dead_windows: bool) {
+    pub(crate) fn recover_serial_context(&mut self, recovery: preparation::SerialRecovery) {
         // The original returning continuation owns the current receiver.
         // Retire parallel function publication before any serial allocation
         // or entry; never retain or refresh a parked admission-header pointer.
         self.obarray.refresh_admission();
         self.tagged_heap.install_tagged_heap();
-        if retired_dead_windows {
+        if matches!(recovery, preparation::SerialRecovery::RecreateDeadWindows) {
             self.install_empty_dead_windows_table();
         }
     }
@@ -281,7 +251,8 @@ fn map_registration(error: RegistrationError) -> OwnedParallelError {
         | RegistrationError::ResidualSatb
         | RegistrationError::Publication
         | RegistrationError::PendingRoots
-        | RegistrationError::PendingYoung => OwnedParallelError::Publication,
+        | RegistrationError::PendingYoung
+        | RegistrationError::OwnerReserveHeld => OwnedParallelError::Publication,
     }
 }
 
@@ -296,7 +267,8 @@ fn map_rendezvous(error: RendezvousError) -> OwnedParallelError {
         | RendezvousError::Generation
         | RendezvousError::Readers
         | RendezvousError::Capacity
-        | RendezvousError::Root => OwnedParallelError::Publication,
+        | RendezvousError::Root
+        | RendezvousError::TelemetryStoppedGcUnavailable => OwnedParallelError::Publication,
     }
 }
 
@@ -319,7 +291,7 @@ mod heapborrow_tests {
         let mut context = Context::new_minimal_vm_harness(crate::test_utils::unit_runtime());
         // Exercise the production installer and the immediate view-derived
         // allocation that used to invalidate its borrow-derived TLS pointer.
-        context.recover_serial_context(true);
+        context.recover_serial_context(super::preparation::SerialRecovery::RecreateDeadWindows);
         let value = TaggedValue::cons(TaggedValue::fixnum(41), TaggedValue::NIL);
         assert_eq!(value.cons_car(), TaggedValue::fixnum(41));
         assert!(

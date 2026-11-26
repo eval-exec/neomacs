@@ -11,10 +11,10 @@ fn function(ops: Vec<Op>) -> ByteCodeFunction {
         optional: Vec::new(),
         rest: None,
     });
-    f.lexical = true;
-    f.ops = ops;
-    f.constants = vec![Value::make_int(1)].into();
-    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(4);
+    f.set_lexical(true);
+    f.set_ops(ops);
+    f.set_constants(vec![Value::make_int(1)].into());
+    f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(4));
     f.seal_hand_assembled_ops();
     f
 }
@@ -33,19 +33,21 @@ fn chain_feedback_widens_inner_source_and_retires_physical_leaf() {
     // Cached and retired leaves remain allocated throughout this no-safepoint hook.
     let leaf = unsafe { &*physical_ptr };
     assert_eq!(
-        note_deopt_chain(
-            std::ptr::null(),
-            &physical,
-            &inner,
-            leaf,
-            LeafOrigin::Entry,
-            0,
-            DeoptEvent::Precise {
-                pc: 1,
-                stack: &[],
-                cause: Some(DeoptCause::ArithOperands(NumericFeedback::Float))
-            }
-        ),
+        unsafe {
+            note_deopt_chain(
+                std::ptr::null(),
+                &physical,
+                &inner,
+                leaf,
+                LeafOrigin::Entry,
+                0,
+                DeoptEvent::Precise {
+                    pc: 1,
+                    stack: &[],
+                    cause: Some(DeoptCause::ArithOperands(NumericFeedback::Float)),
+                },
+            )
+        },
         ReoptVerdict::Invalidated
     );
     assert_eq!(
@@ -80,19 +82,21 @@ fn chain_repeated_deopt_uses_physical_guard_pc_for_site_limit() {
     let leaf = unsafe { &*ptr };
     for count in 1..=knobs.site_limit {
         leaf.obs.note_deopt_at(0);
-        let verdict = note_deopt_chain(
-            std::ptr::null(),
-            &physical,
-            &inner,
-            leaf,
-            LeafOrigin::Entry,
-            0,
-            DeoptEvent::Precise {
-                pc: 1,
-                stack: &[],
-                cause: Some(DeoptCause::ArithOverflow),
-            },
-        );
+        let verdict = unsafe {
+            note_deopt_chain(
+                std::ptr::null(),
+                &physical,
+                &inner,
+                leaf,
+                LeafOrigin::Entry,
+                0,
+                DeoptEvent::Precise {
+                    pc: 1,
+                    stack: &[],
+                    cause: Some(DeoptCause::ArithOverflow),
+                },
+            )
+        };
         assert_eq!(
             verdict,
             if count < knobs.site_limit {
@@ -130,19 +134,21 @@ fn inline_identity_deopt_retires_the_physical_leaf_without_a_profile_window() {
     let leaf = unsafe { &*ptr };
     leaf.obs.note_deopt_at(0);
     assert_eq!(
-        note_deopt_chain(
-            std::ptr::null(),
-            &physical,
-            &inner,
-            leaf,
-            LeafOrigin::Entry,
-            0,
-            DeoptEvent::Precise {
-                pc: 1,
-                stack: &[],
-                cause: Some(DeoptCause::InlineIdentity),
-            },
-        ),
+        unsafe {
+            note_deopt_chain(
+                std::ptr::null(),
+                &physical,
+                &inner,
+                leaf,
+                LeafOrigin::Entry,
+                0,
+                DeoptEvent::Precise {
+                    pc: 1,
+                    stack: &[],
+                    cause: Some(DeoptCause::InlineIdentity),
+                },
+            )
+        },
         ReoptVerdict::Invalidated,
         "an identity mismatch is conclusive on its first exit"
     );

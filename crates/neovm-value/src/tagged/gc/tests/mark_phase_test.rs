@@ -7,7 +7,8 @@ struct SyntheticPhase<'a>(&'a mut TaggedHeap);
 impl Drop for SyntheticPhase<'_> {
     fn drop(&mut self) {
         self.0.mark_in_progress = false;
-        self.0.concurrent_mark_running = false;
+        // SAFETY: synthetic serial fixture cleanup; no worker runs.
+        unsafe { self.0.concurrent_mark_running.set(false) };
         self.0.sweep_in_progress = false;
     }
 }
@@ -24,11 +25,10 @@ fn mark_phase_classifies_every_reachable_flag_combination() {
         (MarkPhase::Sweeping, [false, false, true]),
     ] {
         let phase = SyntheticPhase(&mut heap);
-        [
-            phase.0.mark_in_progress,
-            phase.0.concurrent_mark_running,
-            phase.0.sweep_in_progress,
-        ] = flags;
+        phase.0.mark_in_progress = flags[0];
+        // SAFETY: synthetic serial fixture testing phase classifier; restored in Drop.
+        unsafe { phase.0.concurrent_mark_running.set(flags[1]) };
+        phase.0.sweep_in_progress = flags[2];
         let actual = phase.0.mark_phase();
         // Synthetic flags never describe a real job; restore before assertions
         // or Drop so failure cannot ask teardown to join a nonexistent worker.
@@ -47,11 +47,10 @@ fn mark_phase_rejects_every_invalid_worker_flag_combination() {
         [true, true, true],
     ] {
         let phase = SyntheticPhase(&mut heap);
-        [
-            phase.0.mark_in_progress,
-            phase.0.concurrent_mark_running,
-            phase.0.sweep_in_progress,
-        ] = flags;
+        phase.0.mark_in_progress = flags[0];
+        // SAFETY: synthetic serial fixture testing invalid phase rejection; restored in Drop.
+        unsafe { phase.0.concurrent_mark_running.set(flags[1]) };
+        phase.0.sweep_in_progress = flags[2];
         let result =
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| phase.0.mark_phase()));
         drop(phase);

@@ -1,3 +1,4 @@
+use crate::string_property_snapshot::StringSourceRootScope;
 #[path = "line_number_matrix_capacity_test.rs"]
 mod line_number_matrix_capacity_test;
 
@@ -6,6 +7,12 @@ mod category_word_wrap_test;
 
 #[path = "sparse_fontify_query_test.rs"]
 mod sparse_fontify_query_test;
+
+#[path = "probe_row_engine_test.rs"]
+mod probe_row_engine_test;
+
+#[path = "live_overlay_engine_test.rs"]
+mod live_overlay_engine_test;
 
 /// A surface point in a presentation composed with nothing in motion.
 ///
@@ -71,14 +78,35 @@ fn debug_logging_renders_mode_line_with_ellipsis_across_preview_byte_limit() {
     );
 }
 
+#[path = "composition_advance_cache_test.rs"]
+mod composition_advance_cache;
+
+#[path = "composition_retry_publication_test.rs"]
+mod composition_retry_publication;
+
+#[path = "leaf_cursor_checkpoint_test.rs"]
+mod leaf_cursor_checkpoint;
+
 #[path = "../../tests/engine_face_identity_test.rs"]
 mod face_identity;
 
 #[path = "../../tests/engine_font_selection_test.rs"]
 mod font_selection;
 
+#[path = "active_hover_accuracy_test.rs"]
+mod active_hover_accuracy_test;
+#[path = "exhausted_presentation_test.rs"]
+mod exhausted_presentation_test;
+#[path = "exhaustion_safety_net_test.rs"]
+mod exhaustion_safety_net_test;
 #[path = "../../tests/engine_line_spacing_test.rs"]
 mod line_spacing;
+#[path = "no_op_chrome_source_test.rs"]
+mod no_op_chrome_source;
+#[path = "no_safe_exhaustion_test.rs"]
+mod no_safe_exhaustion_test;
+#[path = "sparse_exhaustion_test.rs"]
+mod sparse_exhaustion_test;
 #[path = "../../tests/engine_trailing_whitespace_test.rs"]
 mod trailing_whitespace;
 
@@ -108,6 +136,11 @@ mod edit_sync_engine_test;
 mod edit_sync_prove_first_engine_test;
 #[path = "face_overlay_replay_test.rs"]
 mod face_overlay_replay_test;
+#[path = "issue_828_mode_line_pixel_test.rs"]
+mod issue_828_mode_line_pixel_test;
+
+#[path = "fontset_context_test.rs"]
+mod fontset_context_test;
 #[path = "../../tests/engine_layout_validity_test.rs"]
 mod layout_validity;
 #[path = "lazy_text_hit_test.rs"]
@@ -1895,6 +1928,7 @@ fn test_window_params() -> WindowParams {
         tab_stop_list: vec![],
         default_fg: 0xFFFFFF,
         frame_foreground: 0xFFFFFF,
+        frame_background: 0x000000,
         default_bg: 0x000000,
         char_width: 8.0,
         char_height: 16.0,
@@ -1940,6 +1974,7 @@ fn test_window_params() -> WindowParams {
         horizontal_scroll_bar: false,
         scroll_bar_pixel_width: 0.0,
         scroll_bar_pixel_height: 0.0,
+        bidi_paragraph_directions: Default::default(),
     }
 }
 
@@ -2076,7 +2111,7 @@ impl DisplayHost for RecordingImageDisplayHost {
         &self,
         _request: ImageResolveRequest,
         _limit: neovm_core::emacs_core::image_catalog::ImageSizeLimit,
-    ) -> Result<Option<ReadyImage>, String> {
+    ) -> neovm_core::emacs_core::image_catalog::ImageSyncResolution {
         panic!("layout must not use synchronous image resolution");
     }
 
@@ -2238,12 +2273,14 @@ fn render_buffer_text_source_shadow_row(
     ascent_px: f32,
     char_width_px: f32,
 ) -> GlyphRow {
-    let mut source = crate::buffer_source::text_source::BufferTextSourceCursor::new(
+    let mut source = crate::buffer_source::text_source::BufferTextSourceCursor::new_for_window(
         buf_id,
         snapshot,
+        None,
         CharPos0::ZERO,
         line_end,
         RenderFaceRef::FaceId(FaceId::new(0)),
+        StringSourceRootScope::CallbackFree,
     );
     let mut font_metrics = None;
     let mut renderer =
@@ -2269,7 +2306,13 @@ fn render_buffer_text_source_shadow_row(
         DisplayRowPosition::new(0.0, 0),
         DisplayRowMaxX::Bounded(width_px),
     ))
-    .render(&mut renderer, &mut source, &resolver, &mut face_ids)
+    .render(
+        &mut renderer,
+        &mut source,
+        &resolver,
+        &mut face_ids,
+        StringSourceRootScope::CallbackFree,
+    )
     .expect("typed buffer text source row")
     .into_row()
 }
@@ -3507,6 +3550,145 @@ fn layout_bench_warm() {
     );
 }
 
+/// Matched-path layout benchmark exercising BOTH prepass (`fontification-functions`)
+/// and mode-line `:eval` chrome evaluation on `LayoutPurpose::Redisplay`.
+/// Reports two steady-state medians (min/median over 60 iterations each):
+/// 1. `chrome_eval_only`: already-fontified buffer + forced mode-line `:eval`
+///    (verifies R1a `outcome.entered_callbacks() == false` and R1b `retry_count == 0`).
+/// 2. `prepass_plus_chrome`: 1-char edit triggering `fontification-functions`
+///    prepass + mode-line `:eval`.
+/// Run:
+///   cargo nextest run -p neomacs-layout-engine --features perf-probes \
+///     --release --no-capture layout_bench_prepass_and_chrome_eval
+#[test]
+#[cfg(feature = "perf-probes")]
+fn layout_bench_prepass_and_chrome_eval() {
+    use std::time::{Duration, Instant};
+    let text = "(defun example-helper (alpha beta) (let ((sum (+ alpha beta))) (* sum sum)))\n"
+        .repeat(120);
+    let (mut eval, frame_id, buf_id, _win) = incr_editing_frame(&text, 1000, 700);
+    realize_test_gui_frame(&mut eval, frame_id);
+    eval.eval_str(
+        r#"
+        (setq bench-fn-calls 0 bench-ml-calls 0
+              header-line-format nil tab-line-format nil
+              neomacs-test-fontify-face 'font-lock-keyword-face)
+        (setq fontification-functions
+              (list (lambda (start)
+                      (setq bench-fn-calls (1+ bench-fn-calls))
+                      (let ((end (min (point-max) (+ start 80))))
+                        (put-text-property start end 'fontified t)
+                        (put-text-property start end 'font-lock-face
+                                           neomacs-test-fontify-face)))))
+        (setq mode-line-format
+              '(" %b " (:eval (progn
+                                (setq bench-ml-calls (1+ bench-ml-calls))
+                                (format "ML:%d" bench-ml-calls)))))
+        "#,
+    )
+    .expect("install bench fontifier and mode-line :eval");
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
+    crate::font::metrics::test_catalog::enable_metrics(&mut engine);
+    // Warm up cold frame so buffer is fontified and faces/fonts are cached.
+    let _ = engine.redisplay_frame_attempt(&mut eval, frame_id);
+    let _ = engine.redisplay_frame_attempt(&mut eval, frame_id);
+
+    // 1. Prepass check (Unchanged) + mode-line :eval (force-mode-line-update each iter).
+    let ml_before_1 = eval
+        .eval_str("bench-ml-calls")
+        .unwrap()
+        .as_fixnum()
+        .unwrap();
+    let fn_before_1 = eval
+        .eval_str("bench-fn-calls")
+        .unwrap()
+        .as_fixnum()
+        .unwrap();
+    let mut samples_chrome: Vec<Duration> = Vec::with_capacity(60);
+    for _ in 0..60 {
+        eval.eval_str("(force-mode-line-update)").unwrap();
+        let t = Instant::now();
+        let outcome = engine.redisplay_frame_attempt(&mut eval, frame_id);
+        assert!(matches!(outcome, FrameLayoutAttempt::Prepared(_)));
+        samples_chrome.push(t.elapsed());
+    }
+    samples_chrome.sort_unstable();
+    let chrome_med = samples_chrome[samples_chrome.len() / 2];
+    let chrome_min = samples_chrome[0];
+    let ml_1 = eval
+        .eval_str("bench-ml-calls")
+        .unwrap()
+        .as_fixnum()
+        .unwrap()
+        - ml_before_1;
+    let fn_1 = eval
+        .eval_str("bench-fn-calls")
+        .unwrap()
+        .as_fixnum()
+        .unwrap()
+        - fn_before_1;
+    let stats_1 = engine.last_layout_stats().clone();
+
+    // 2. Active prepass fontification (1-char edit at byte 6) + mode-line :eval.
+    let ml_before_2 = eval
+        .eval_str("bench-ml-calls")
+        .unwrap()
+        .as_fixnum()
+        .unwrap();
+    let fn_before_2 = eval
+        .eval_str("bench-fn-calls")
+        .unwrap()
+        .as_fixnum()
+        .unwrap();
+    let mut samples_both: Vec<Duration> = Vec::with_capacity(60);
+    for i in 0..60 {
+        {
+            let buffer = eval.buffer_manager_mut().get_mut(buf_id).expect("buffer");
+            buffer.goto_emacs_byte_pos(EmacsBytePos::new(6));
+            if i % 2 == 0 {
+                buffer.insert("x");
+            } else {
+                buffer.delete_emacs_byte_range(neovm_core::buffer::EmacsByteRange::new(
+                    EmacsBytePos::new(6),
+                    EmacsBytePos::new(7),
+                ));
+            }
+        }
+        eval.eval_str("(force-mode-line-update)").unwrap();
+        let t = Instant::now();
+        let outcome = engine.redisplay_frame_attempt(&mut eval, frame_id);
+        assert!(matches!(outcome, FrameLayoutAttempt::Prepared(_)));
+        samples_both.push(t.elapsed());
+    }
+    samples_both.sort_unstable();
+    let both_med = samples_both[samples_both.len() / 2];
+    let both_min = samples_both[0];
+    let ml_2 = eval
+        .eval_str("bench-ml-calls")
+        .unwrap()
+        .as_fixnum()
+        .unwrap()
+        - ml_before_2;
+    let fn_2 = eval
+        .eval_str("bench-fn-calls")
+        .unwrap()
+        .as_fixnum()
+        .unwrap()
+        - fn_before_2;
+    let stats_2 = engine.last_layout_stats().clone();
+
+    panic!(
+        "BENCH prepass_and_chrome_eval 1000x700: \
+         chrome_only med={chrome_med:?} min={chrome_min:?} (ml={ml_1} fn={fn_1} relaid_chrome={} reused={}) | \
+         prepass+chrome med={both_med:?} min={both_min:?} (ml={ml_2} fn={fn_2} edit_wins={} relaid_body={} relaid_chrome={})",
+        stats_1.relaid_chrome_rows,
+        stats_1.reused_rows,
+        stats_2.edit_windows,
+        stats_2.relaid_body_rows,
+        stats_2.relaid_chrome_rows,
+    );
+}
+
 /// Phase 0a baseline (incremental-layout gate). With no fast path wired yet,
 /// every layout cycle is a full rebuild: even a no-op repaint relays every body
 /// row and reuses none. This pins that baseline so the Phase 1+ fast paths have
@@ -4133,6 +4315,8 @@ fn phase1_cursor_move_matches_full_rebuild_golden() {
     let mut ref_engine = crate::font::metrics::test_catalog::layout_engine();
     ref_engine.layout_frame_rust(&mut eval_ref, frame_ref);
     let reference = selected_window_layout_trace(&eval_ref, &ref_engine, frame_ref);
+    drop(ref_engine);
+    drop(eval_ref);
 
     // Incremental: warm at point 0, move to 10, second pass takes cursor-only.
     let (mut eval, frame_id, buf_id, _wi) = incr_editing_frame(&text, 800, 600);
@@ -4197,6 +4381,8 @@ fn relative_line_numbers_follow_point_across_incremental_redisplay() {
         &reference_engine,
         reference_frame,
     ));
+    drop(reference_engine);
+    drop(reference_eval);
 
     let (mut incremental_eval, incremental_frame, incremental_buffer, _) =
         incr_editing_frame(&text, 800, 600);
@@ -4791,6 +4977,8 @@ fn scroll_to_top_does_not_match_trailing_placeholder_row() {
     scroll_window_to(&mut eval, frame_id, win, buf_id, 1, 0);
     engine.layout_frame_rust(&mut eval, frame_id);
     let incremental = selected_window_layout_trace(&eval, &engine, frame_id);
+    drop(engine);
+    drop(eval);
 
     // Reference: fresh full rebuild at window_start 1.
     let (mut eval_ref, frame_ref, _br, _wr) = incr_editing_frame(&text, 800, 600);
@@ -4836,6 +5024,8 @@ fn phase2_scroll_matches_full_rebuild_golden() {
     let mut ref_engine = crate::font::metrics::test_catalog::layout_engine();
     ref_engine.layout_frame_rust(&mut eval_ref, frame_ref);
     let reference = selected_window_layout_trace(&eval_ref, &ref_engine, frame_ref);
+    drop(ref_engine);
+    drop(eval_ref);
 
     // Incremental: warm, scroll, second pass takes the pure-scroll path.
     let (mut eval, frame_id, buf_id, win) = incr_editing_frame(&text, 800, 600);
@@ -4937,6 +5127,9 @@ fn phase2_scroll_replay_keeps_the_selected_windows_phys_cursor() {
         win.0 as i64,
         "the frame's physical cursor must belong to the selected window"
     );
+    let cursor_at = (cursor.row, cursor.col, cursor.x, cursor.y);
+    drop(engine);
+    drop(eval);
 
     // And it must land where a full rebuild of the same state puts it.
     let (mut eval_ref, frame_ref, buf_ref, win_ref) = incr_editing_frame(&text, 800, 600);
@@ -4952,7 +5145,7 @@ fn phase2_scroll_replay_keeps_the_selected_windows_phys_cursor() {
     ref_engine.layout_frame_rust(&mut eval_ref, frame_ref);
     let reference = frame_phys_cursor(&ref_engine).expect("full rebuild publishes the cursor");
     assert_eq!(
-        (cursor.row, cursor.col, cursor.x, cursor.y),
+        cursor_at,
         (reference.row, reference.col, reference.x, reference.y),
         "the scroll replay's cursor must match a full rebuild's"
     );
@@ -5715,6 +5908,620 @@ fn layout_frame_rust_list_wrapped_left_fringe_spec_draws_in_fringe_not_inline() 
             .iter()
             .map(|g| g.glyph_type.clone())
             .collect::<Vec<_>>()
+    );
+}
+
+/// Face state shared by the #834 fringe-bitmap rows. GNU's `fringe` face has
+/// a background of its own (`grey95` on a light background, lisp/faces.el),
+/// the default face is black on white, and three probe faces set one
+/// attribute each. `c834-bmp-override` carries a `set-fringe-bitmap-face` face.
+const FRINGE_FACE_SETUP: &str = r##"(progn
+  (internal-make-lisp-face 'fringe)
+  (internal-set-lisp-face-attribute 'fringe :background "#f2f2f2" (selected-frame))
+  (internal-set-lisp-face-attribute 'default :foreground "#000000" (selected-frame))
+  (internal-set-lisp-face-attribute 'default :background "#ffffff" (selected-frame))
+  (internal-make-lisp-face 'c834-fg-only)
+  (internal-set-lisp-face-attribute 'c834-fg-only :foreground "#ff0000" (selected-frame))
+  (internal-make-lisp-face 'c834-override)
+  (internal-set-lisp-face-attribute 'c834-override :foreground "#0000ff" (selected-frame))
+  (internal-make-lisp-face 'c834-row-face)
+  (internal-set-lisp-face-attribute 'c834-row-face :foreground "#00ff00" (selected-frame))
+  (define-fringe-bitmap 'c834-bmp [255 255 255] nil nil 'center)
+  (define-fringe-bitmap 'c834-bmp-override [255 255 255] nil nil 'center)
+  (set-fringe-bitmap-face 'c834-bmp-override 'c834-override))"##;
+
+/// One buffer line of a #834 fringe row.
+struct FringeLine {
+    text: &'static str,
+    /// The `display` property that requests the fringe bitmap.
+    spec: &'static str,
+    /// A face for the line's own text.
+    face: Option<&'static str>,
+    /// Put SPEC on the line's first character (a text property) instead of on
+    /// a zero-width overlay's before-string.
+    on_text: bool,
+}
+
+impl FringeLine {
+    const fn overlay(text: &'static str, spec: &'static str) -> Self {
+        Self {
+            text,
+            spec,
+            face: None,
+            on_text: false,
+        }
+    }
+
+    const fn with_face(mut self, face: &'static str) -> Self {
+        self.face = Some(face);
+        self
+    }
+
+    const fn on_text(mut self) -> Self {
+        self.on_text = true;
+        self
+    }
+}
+
+/// Lay out one buffer line per [`FringeLine`] on a window-system frame and
+/// return, in row order, the fringe side, the registry index and the fg/bg
+/// colors of every USER fringe bitmap the frame materializes (standard
+/// indicator bitmaps such as the empty-line `~` are left out).
+///
+/// Unless `on_text` is set, a line is headed by the overlay diff-hl uses: a
+/// zero-width overlay whose before-string is one space carrying SPEC as its
+/// `display` property.
+fn fringe_bitmap_paint(setup: &str, lines: &[FringeLine]) -> Vec<(FringeSide, u16, Color, Color)> {
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
+    let buf_id = eval
+        .buffer_manager()
+        .current_buffer()
+        .expect("current buffer")
+        .id();
+    let frame_id = eval
+        .frame_manager_mut()
+        .create_frame("c834-fringe-face", 640, 200, buf_id);
+    // A window-system frame, so the fringes have width.
+    if let Some(frame) = eval.frame_manager_mut().get_mut(frame_id) {
+        frame.set_window_system(Some(Value::symbol("neo")));
+    }
+    assert!(eval.frame_manager_mut().select_frame(frame_id));
+    let selected_window_id = eval
+        .frame_manager()
+        .get(frame_id)
+        .expect("frame")
+        .selected_window;
+    eval.eval_str(setup).expect("fringe face setup");
+
+    let (insert, mark): (String, String) = {
+        let mut insert = String::new();
+        let mut mark = String::from("(progn (goto-char (point-min))");
+        let mut start = 1usize;
+        for line in lines {
+            insert.push_str(line.text);
+            insert.push('\n');
+            if line.on_text {
+                mark.push_str(&format!(
+                    "(put-text-property {start} {} 'display '{})",
+                    start + 1,
+                    line.spec
+                ));
+            } else {
+                mark.push_str(&format!(
+                    "(let ((p (point))) (overlay-put (make-overlay p p) 'before-string \
+                     (propertize \" \" 'display '{}))) (forward-line 1)",
+                    line.spec
+                ));
+            }
+            if let Some(face) = line.face {
+                mark.push_str(&format!(
+                    "(put-text-property {start} {} 'face '{face})",
+                    start + line.text.chars().count()
+                ));
+            }
+            start += line.text.chars().count() + 1;
+        }
+        mark.push(')');
+        (insert, mark)
+    };
+    {
+        let buf = eval.buffer_manager_mut().get_mut(buf_id).expect("buffer");
+        buf.insert(&insert);
+        buf.goto_emacs_byte_pos(EmacsBytePos::new(0));
+    }
+    eval.eval_str(&mark).expect("fringe specs");
+    let first_user_index = eval
+        .eval_str("(get 'c834-bmp 'fringe)")
+        .expect("fringe bitmap index property")
+        .as_fixnum()
+        .expect("fringe index") as u16;
+
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
+    engine.layout_frame_rust(&mut eval, frame_id);
+
+    let state = engine
+        .last_frame_display_state
+        .as_ref()
+        .expect("display state");
+    let target_window_id =
+        neomacs_display_protocol::types::DisplayWindowId::new(selected_window_id.0 as i64);
+    let mut paint = Vec::new();
+    state.for_each_glyph(|glyph| {
+        if let FrameGlyph::FringeBitmap {
+            window_id,
+            side,
+            bitmap_index,
+            face_id,
+            ..
+        } = glyph
+            && window_id == target_window_id
+            && bitmap_index >= first_user_index
+            && let Some(face) = state.faces.get(&face_id)
+        {
+            paint.push((side, bitmap_index, face.foreground, face.background));
+        }
+    });
+    paint
+}
+
+use neomacs_display_protocol::frame_glyphs::FringeSide;
+
+const RED: Color = Color::rgb(1.0, 0.0, 0.0);
+const BLUE: Color = Color::rgb(0.0, 0.0, 1.0);
+const BLACK: Color = Color::rgb(0.0, 0.0, 0.0);
+/// `grey95`, the `fringe` face background on a light background.
+fn grey95() -> Color {
+    Color::from_pixel(0x00F2F2F2)
+}
+
+fn assert_fringe_paint(
+    paint: &[(FringeSide, u16, Color, Color)],
+    expected: &[(FringeSide, Color, Color)],
+) {
+    let actual: Vec<(FringeSide, Color, Color)> = paint
+        .iter()
+        .map(|(side, _, fg, bg)| (*side, *fg, *bg))
+        .collect();
+    assert_eq!(
+        actual, expected,
+        "fringe bitmap (side, foreground, background) diverged from GNU"
+    );
+}
+
+/// Issue #834, GNU `handle_single_display_spec` (src/xdisp.c): a FACE in a
+/// `(left-fringe BITMAP FACE)` spec is looked up with
+/// `lookup_derived_face (FACE, FRINGE_FACE_ID)`, i.e. merged OVER the `fringe`
+/// face. A face that sets only `:foreground` therefore keeps the fringe
+/// background instead of the default face's.
+#[test]
+fn fringe_bitmap_spec_face_merges_over_the_fringe_face() {
+    let paint = fringe_bitmap_paint(
+        FRINGE_FACE_SETUP,
+        &[FringeLine::overlay(
+            "spec face, foreground only",
+            "((left-fringe c834-bmp c834-fg-only))",
+        )],
+    );
+    assert_fringe_paint(&paint, &[(FringeSide::Left, RED, grey95())]);
+}
+
+/// Issue #834, GNU `draw_fringe_bitmap_1` (src/fringe.c): with no FACE in the
+/// spec the row keeps the default face id and the bitmap is painted with the
+/// `fringe` face -- never with the face of the text beside it.
+#[test]
+fn fringe_bitmap_without_spec_face_uses_the_fringe_face_not_the_row_face() {
+    let paint = fringe_bitmap_paint(
+        FRINGE_FACE_SETUP,
+        &[
+            FringeLine::overlay("no spec face", "((left-fringe c834-bmp))")
+                .with_face("c834-row-face"),
+        ],
+    );
+    assert_fringe_paint(&paint, &[(FringeSide::Left, BLACK, grey95())]);
+}
+
+/// Issue #834, GNU `handle_single_display_spec`: a FACE written in the display
+/// spec resolves to a real face id, and `draw_fringe_bitmap_1` consults the
+/// bitmap's `set-fringe-bitmap-face` face ONLY when that id is the default
+/// one. The override never displaces a spec FACE.
+#[test]
+fn fringe_bitmap_spec_face_wins_over_set_fringe_bitmap_face() {
+    let paint = fringe_bitmap_paint(
+        FRINGE_FACE_SETUP,
+        &[FringeLine::overlay(
+            "spec face over an overridden bitmap",
+            "((left-fringe c834-bmp-override c834-fg-only))",
+        )],
+    );
+    assert_fringe_paint(&paint, &[(FringeSide::Left, RED, grey95())]);
+}
+
+/// Issue #834, GNU `draw_fringe_bitmap_1`: with no FACE in the spec, the
+/// bitmap's `set-fringe-bitmap-face` face applies, merged over `fringe`
+/// (`lookup_derived_face (face, FRINGE_FACE_ID, 0)`).
+#[test]
+fn fringe_bitmap_set_fringe_bitmap_face_merges_over_the_fringe_face() {
+    let paint = fringe_bitmap_paint(
+        FRINGE_FACE_SETUP,
+        &[FringeLine::overlay(
+            "override face only",
+            "((left-fringe c834-bmp-override))",
+        )],
+    );
+    assert_fringe_paint(&paint, &[(FringeSide::Left, BLUE, grey95())]);
+}
+
+/// Issue #834, GNU `handle_single_display_spec`: `lookup_derived_face` with
+/// `signal_p` false yields -1 for a name that is no face, so an unknown FACE
+/// leaves the row on the default face id and the bitmap falls back to its
+/// `set-fringe-bitmap-face` override (if any) or the `fringe` face.
+#[test]
+fn fringe_bitmap_unknown_spec_face_falls_back_to_the_fringe_face() {
+    let paint = fringe_bitmap_paint(
+        FRINGE_FACE_SETUP,
+        &[
+            FringeLine::overlay(
+                "no such face, no override",
+                "((left-fringe c834-bmp no-such-face-c834))",
+            ),
+            FringeLine::overlay(
+                "no such face, with override",
+                "((left-fringe c834-bmp-override no-such-face-c834))",
+            ),
+        ],
+    );
+    assert_fringe_paint(
+        &paint,
+        &[
+            (FringeSide::Left, BLACK, grey95()),
+            (FringeSide::Left, BLUE, grey95()),
+        ],
+    );
+}
+
+/// Issue #834: two zero-width overlays at the same position with equal
+/// priority and equal-text `" "` `before-string`s (carrying different
+/// `left-fringe` and `right-fringe` display properties) must BOTH render.
+/// Deduplicating overlay IDs by `Value::eq` (Lisp `equal`, which ignores
+/// string text properties) previously dropped one of the two overlays.
+#[test]
+fn fringe_bitmap_two_same_pos_zero_width_overlays_both_render() {
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
+    let buf_id = eval
+        .buffer_manager()
+        .current_buffer()
+        .expect("current buffer")
+        .id();
+    let frame_id = eval
+        .frame_manager_mut()
+        .create_frame("c834-both-fringes", 640, 200, buf_id);
+    if let Some(frame) = eval.frame_manager_mut().get_mut(frame_id) {
+        frame.set_window_system(Some(Value::symbol("neo")));
+    }
+    assert!(eval.frame_manager_mut().select_frame(frame_id));
+    let selected_window_id = eval
+        .frame_manager()
+        .get(frame_id)
+        .expect("frame")
+        .selected_window;
+    eval.eval_str(FRINGE_FACE_SETUP).expect("fringe face setup");
+    {
+        let buf = eval.buffer_manager_mut().get_mut(buf_id).expect("buffer");
+        buf.insert("both fringes\n");
+        buf.goto_emacs_byte_pos(EmacsBytePos::new(0));
+    }
+    eval.eval_str(
+        r#"(progn
+  (goto-char (point-min))
+  (let ((p (point)))
+    (overlay-put (make-overlay p p) 'before-string
+                 (propertize " " 'display '((left-fringe c834-bmp c834-fg-only))))
+    (overlay-put (make-overlay p p) 'before-string
+                 (propertize " " 'display '((right-fringe c834-bmp c834-override))))))"#,
+    )
+    .expect("two same-pos overlays");
+    let first_user_index = eval
+        .eval_str("(get 'c834-bmp 'fringe)")
+        .expect("fringe bitmap index property")
+        .as_fixnum()
+        .expect("fringe index") as u16;
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
+    engine.layout_frame_rust(&mut eval, frame_id);
+
+    let state = engine
+        .last_frame_display_state
+        .as_ref()
+        .expect("display state");
+    let target_window_id =
+        neomacs_display_protocol::types::DisplayWindowId::new(selected_window_id.0 as i64);
+    let mut paint = Vec::new();
+    state.for_each_glyph(|glyph| {
+        if let FrameGlyph::FringeBitmap {
+            window_id,
+            side,
+            bitmap_index,
+            face_id,
+            ..
+        } = glyph
+            && window_id == target_window_id
+            && bitmap_index >= first_user_index
+            && let Some(face) = state.faces.get(&face_id)
+        {
+            paint.push((side, bitmap_index, face.foreground, face.background));
+        }
+    });
+    assert_fringe_paint(
+        &paint,
+        &[
+            (FringeSide::Left, RED, grey95()),
+            (FringeSide::Right, BLUE, grey95()),
+        ],
+    );
+}
+
+/// Issue #834, GNU `handle_single_display_spec` (src/xdisp.c:6409-6421):
+/// `(left-fringe nil)` is still a fringe display spec — it draws no bitmap
+/// and consumes its covered character instead of leaving an inline space.
+#[test]
+fn fringe_bitmap_nil_bitmap_spec_consumes_covered_space_without_shift() {
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
+    let buf_id = eval
+        .buffer_manager()
+        .current_buffer()
+        .expect("current buffer")
+        .id();
+    {
+        let buf = eval.buffer_manager_mut().get_mut(buf_id).expect("buffer");
+        buf.insert("M\n");
+        buf.goto_emacs_byte_pos(EmacsBytePos::new(0));
+    }
+    eval.eval_str(
+        r#"(progn
+  (goto-char (point-min))
+  (let ((p (point)))
+    (overlay-put (make-overlay p p) 'before-string
+                 (propertize " " 'display '((left-fringe nil))))))"#,
+    )
+    .expect("nil fringe bitmap spec");
+    let frame_id = eval
+        .frame_manager_mut()
+        .create_frame("c834-nil-bmp", 48, 200, buf_id);
+    if let Some(frame) = eval.frame_manager_mut().get_mut(frame_id) {
+        frame.set_window_system(Some(Value::symbol("neo")));
+    }
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
+    engine.layout_frame_rust(&mut eval, frame_id);
+
+    let state = engine
+        .last_frame_display_state
+        .as_ref()
+        .expect("display state");
+    let row = &state.window_matrices[0].matrix.rows[0];
+    assert!(row.left_fringe_bitmap.is_none());
+    let first_char = row.glyphs[GlyphArea::Text.index()]
+        .iter()
+        .find_map(|g| match &g.glyph_type {
+            GlyphType::Char { ch } => Some(*ch),
+            _ => None,
+        });
+    assert_eq!(first_char, Some('M'));
+}
+
+/// Issue #834: the right fringe takes the same face rule.
+#[test]
+fn fringe_bitmap_right_fringe_spec_face_merges_over_the_fringe_face() {
+    let paint = fringe_bitmap_paint(
+        FRINGE_FACE_SETUP,
+        &[FringeLine::overlay(
+            "right fringe",
+            "((right-fringe c834-bmp c834-fg-only))",
+        )],
+    );
+    assert_fringe_paint(&paint, &[(FringeSide::Right, RED, grey95())]);
+}
+
+/// Issue #834: the text-property path (the `display` property on a buffer
+/// character, not on an overlay string) resolves the face the same way.
+#[test]
+fn fringe_bitmap_text_property_spec_face_merges_over_the_fringe_face() {
+    let paint = fringe_bitmap_paint(
+        FRINGE_FACE_SETUP,
+        &[
+            FringeLine::overlay(" x on the text", "((left-fringe c834-bmp c834-fg-only))")
+                .on_text(),
+        ],
+    );
+    assert_fringe_paint(&paint, &[(FringeSide::Left, RED, grey95())]);
+}
+
+/// Issue #834 (N2): empty fringe columns on a window-system frame emit
+/// background rectangles painted with the window's resolved `fringe` face
+/// background (including buffer-local `face-remapping-alist` remapping of
+/// `fringe`, matching GNU `draw_window_fringes` in `src/fringe.c`).
+#[test]
+fn fringe_empty_column_backgrounds_use_the_window_fringe_face() {
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
+    let buf_id = eval
+        .buffer_manager()
+        .current_buffer()
+        .expect("current buffer")
+        .id();
+    let frame_id = eval
+        .frame_manager_mut()
+        .create_frame("c834-empty-fringe-bg", 640, 200, buf_id);
+    if let Some(frame) = eval.frame_manager_mut().get_mut(frame_id) {
+        frame.set_window_system(Some(Value::symbol("neo")));
+    }
+    assert!(eval.frame_manager_mut().select_frame(frame_id));
+    eval.eval_str(FRINGE_FACE_SETUP).expect("fringe face setup");
+    {
+        let buf = eval.buffer_manager_mut().get_mut(buf_id).expect("buffer");
+        buf.insert("plain line without fringe bitmap\n");
+        buf.goto_emacs_byte_pos(EmacsBytePos::new(0));
+    }
+
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
+    engine.layout_frame_rust(&mut eval, frame_id);
+    let state = engine
+        .last_frame_display_state
+        .as_ref()
+        .expect("display state");
+    let left_rect = state
+        .fringe_backgrounds
+        .iter()
+        .find(|bg| bg.bounds.x == 0.0 && bg.bounds.y == 0.0)
+        .expect("left fringe column background");
+    assert_eq!(left_rect.color, grey95());
+    assert!(left_rect.bounds.width > 0.0 && left_rect.bounds.height > 0.0);
+    assert!(
+        state
+            .fringe_backgrounds
+            .iter()
+            .any(|bg| bg.bounds.x > left_rect.bounds.width
+                && bg.bounds.y == 0.0
+                && bg.color == grey95()),
+        "right fringe column background should also paint with grey95"
+    );
+
+    // Remapping `fringe` buffer-locally must update the empty fringe columns.
+    let cyan = Color::from_pixel(0x0000FFFF);
+    eval.eval_str(
+        r##"(set (make-local-variable 'face-remapping-alist) '((fringe (:background "#00ffff") fringe)))"##,
+    )
+    .expect("remap fringe");
+    engine.layout_frame_rust(&mut eval, frame_id);
+    let remapped = engine
+        .last_frame_display_state
+        .as_ref()
+        .expect("remapped display state");
+    let left_remapped = remapped
+        .fringe_backgrounds
+        .iter()
+        .find(|bg| bg.bounds.x == 0.0 && bg.bounds.y == 0.0)
+        .expect("remapped left fringe column background");
+    assert_eq!(left_remapped.color, cyan);
+}
+
+/// Issue #834 (N3b): when `fringe` is remapped buffer-locally, GNU's
+/// `lookup_derived_face (w, f, FACE, FRINGE_FACE_ID, false)` (src/xfaces.c:5350)
+/// still merges a spec FACE over the frame's unremapped `fringe` face, whereas
+/// a FACE-less bitmap falls back to the buffer-remapped `fringe` face
+/// (`lookup_named_face (w, f, Qfringe, false)`, src/fringe.c:608).
+#[test]
+fn fringe_bitmap_remapped_fringe_applies_to_fallback_not_derived_spec_base() {
+    let cyan = Color::from_pixel(0x0000FFFF);
+    let setup = format!(
+        r##"(progn {FRINGE_FACE_SETUP} (set (make-local-variable 'face-remapping-alist) '((fringe (:background "#00ffff") fringe))))"##
+    );
+    let paint = fringe_bitmap_paint(
+        &setup,
+        &[
+            FringeLine::overlay("no spec face", "((left-fringe c834-bmp))"),
+            FringeLine::overlay("fg-only spec face", "((left-fringe c834-bmp c834-fg-only))"),
+        ],
+    );
+    assert_fringe_paint(
+        &paint,
+        &[
+            (FringeSide::Left, BLACK, cyan),
+            (FringeSide::Left, RED, grey95()),
+        ],
+    );
+}
+
+/// Issue #834: a FACE setting both `:foreground` and `:background` (the issue's
+/// red-on-blue shape) paints both colors, and changing the face via
+/// `internal-set-lisp-face-attribute` refreshes on the next layout without
+/// stale color caching.
+#[test]
+fn fringe_bitmap_spec_face_with_fg_and_bg_refreshes_after_face_attribute_change() {
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
+    let buf_id = eval
+        .buffer_manager()
+        .current_buffer()
+        .expect("current buffer")
+        .id();
+    let frame_id = eval
+        .frame_manager_mut()
+        .create_frame("c834-fg-bg-refresh", 640, 200, buf_id);
+    if let Some(frame) = eval.frame_manager_mut().get_mut(frame_id) {
+        frame.set_window_system(Some(Value::symbol("neo")));
+    }
+    assert!(eval.frame_manager_mut().select_frame(frame_id));
+    let selected_window_id = eval
+        .frame_manager()
+        .get(frame_id)
+        .expect("frame")
+        .selected_window;
+    eval.eval_str(
+        r##"(progn
+  (internal-make-lisp-face 'fringe)
+  (internal-set-lisp-face-attribute 'fringe :background "#f2f2f2" (selected-frame))
+  (internal-make-lisp-face 'c834-fg-bg)
+  (internal-set-lisp-face-attribute 'c834-fg-bg :foreground "#ff0000" (selected-frame))
+  (internal-set-lisp-face-attribute 'c834-fg-bg :background "#0000ff" (selected-frame))
+  (define-fringe-bitmap 'c834-bmp [255 255 255] nil 4 'center))"##,
+    )
+    .expect("setup");
+    {
+        let buf = eval.buffer_manager_mut().get_mut(buf_id).expect("buffer");
+        buf.insert("red on blue\n");
+        buf.goto_emacs_byte_pos(EmacsBytePos::new(0));
+    }
+    eval.eval_str(
+        r#"(progn
+  (goto-char (point-min))
+  (overlay-put (make-overlay (point) (point)) 'before-string
+               (propertize " " 'display '((left-fringe c834-bmp c834-fg-bg)))))"#,
+    )
+    .expect("overlay");
+    let bmp_index = eval
+        .eval_str("(get 'c834-bmp 'fringe)")
+        .expect("index")
+        .as_fixnum()
+        .expect("fixnum") as u16;
+    let target_window_id =
+        neomacs_display_protocol::types::DisplayWindowId::new(selected_window_id.0 as i64);
+
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
+    let sample = |engine: &mut LayoutEngine, eval: &mut neovm_core::emacs_core::Context| {
+        engine.layout_frame_rust(eval, frame_id);
+        let state = engine.last_frame_display_state.as_ref().expect("state");
+        let mut out = Vec::new();
+        state.for_each_glyph(|glyph| {
+            if let FrameGlyph::FringeBitmap {
+                window_id,
+                side,
+                bitmap_index,
+                face_id,
+                ..
+            } = glyph
+                && window_id == target_window_id
+                && bitmap_index == bmp_index
+                && let Some(face) = state.faces.get(&face_id)
+            {
+                out.push((side, bitmap_index, face.foreground, face.background));
+            }
+        });
+        out
+    };
+
+    assert_fringe_paint(
+        &sample(&mut engine, &mut eval),
+        &[(FringeSide::Left, RED, BLUE)],
+    );
+
+    let green = Color::rgb(0.0, 1.0, 0.0);
+    let yellow = Color::from_pixel(0x00FFFF00);
+    eval.eval_str(
+        r##"(progn
+  (internal-set-lisp-face-attribute 'c834-fg-bg :foreground "#00ff00" (selected-frame))
+  (internal-set-lisp-face-attribute 'c834-fg-bg :background "#ffff00" (selected-frame)))"##,
+    )
+    .expect("update face");
+    assert_fringe_paint(
+        &sample(&mut engine, &mut eval),
+        &[(FringeSide::Left, green, yellow)],
     );
 }
 
@@ -6534,6 +7341,353 @@ fn layout_frame_rust_collapses_consecutive_invisible_runs_to_one_ellipsis() {
     assert!(
         rendered.contains("AAA") && rendered.contains("CCC"),
         "visible text around the fold must render, rendered={rendered:?}"
+    );
+}
+
+/// A clipped invisible ellipsis under `truncate-lines nil` and `word-wrap nil`
+/// splits per glyph across visual rows, keeping the dots that fit on row 0 and
+/// resuming the remaining dots on row 1 with the saved face from before the
+/// hidden span (GNU `setup_for_ellipsis`, src/xdisp.c:5653-5672;
+/// `next_element_from_display_vector`, xdisp.c:9258; `init_from_display_pos`,
+/// xdisp.c:4115-4121).
+///
+/// An 88px frame lays out 10 buffer cells
+/// (`p45_word_wrap_break_shadow_pins_the_c9_corpora`). Nine `a`s leave one
+/// cell, so GNU keeps 1 dot on row 0 and continues the remaining 2 dots before
+/// `TAIL` on row 1, advancing row 0's `end_charpos` past the hidden span.
+#[test]
+fn clipped_invisible_ellipsis_continues_on_the_next_fresh_row() {
+    let prefix = "aaaaaaaaa";
+    let hidden = "hidden";
+    let tail = "TAIL";
+    let text = format!("{prefix}{hidden}{tail}\n");
+    let hidden_start = prefix.len();
+    let hidden_end = hidden_start + hidden.len();
+    let trace = layout_trace_with_buffer_setup(&text, 88, 240, |buffer, _, _| {
+        buffer.set_buffer_local("truncate-lines", Value::NIL);
+        buffer.set_buffer_local("word-wrap", Value::NIL);
+        buffer.set_buffer_local(
+            "buffer-invisibility-spec",
+            Value::list(vec![Value::cons(Value::symbol("outline"), Value::T)]),
+        );
+        assert!(buffer.put_text_property(
+            0,
+            hidden_start,
+            Value::symbol("face"),
+            Value::list(vec![Value::keyword("foreground"), Value::string("#cc3311"),]),
+        ));
+        assert!(buffer.put_text_property(
+            hidden_start,
+            hidden_end,
+            Value::symbol("invisible"),
+            Value::symbol("outline"),
+        ));
+    });
+
+    // Attested on GNU Emacs 31.1 oracle: 1 dot fits on row 0, remaining 2 dots
+    // precede TAIL on row 1, and continued dots keep the pre-span face.
+    let rows = row_texts(&trace);
+    assert!(
+        rows.len() >= 2,
+        "expected wrapped ellipsis across two rows, rows={rows:?}"
+    );
+    assert_eq!(
+        rows[0],
+        format!("{prefix}.\\"),
+        "row 0 must keep the exact 1 dot that fits before TTY continuation marker, rows={rows:?}"
+    );
+    let prefix_dots = rows[0].matches('.').count();
+    let continued_dots = rows[1].chars().take_while(|ch| *ch == '.').count();
+    assert_eq!(prefix_dots, 1, "expected 1 dot on row 0, rows={rows:?}");
+    assert_eq!(continued_dots, 2, "expected 2 dots on row 1, rows={rows:?}");
+    assert!(
+        rows[1][continued_dots..].starts_with(tail),
+        "the continued ellipsis dots must immediately precede the visible tail, rows={rows:?}"
+    );
+    let text_rows: Vec<_> = trace
+        .matrix_rows
+        .iter()
+        .filter(|row| {
+            row.enabled && row.role == neomacs_display_protocol::frame_glyphs::GlyphRowRole::Text
+        })
+        .collect();
+    assert!(
+        text_rows.len() >= 2,
+        "expected at least two text rows for continued ellipsis, got {}",
+        text_rows.len()
+    );
+    assert_eq!(
+        text_rows[0].end_charpos, text_rows[1].start_charpos,
+        "the row before a continued invisible ellipsis must advance end_charpos past the skipped hidden span"
+    );
+    assert_eq!(text_rows[0].end_charpos, hidden_end);
+
+    // GNU `setup_for_ellipsis` saves the active face from before the hidden
+    // span (`it->saved_face_id`): both row 0's dot and row 1's continued dots
+    // must carry the prefix face rather than the following tail's default face.
+    let row0_glyphs =
+        &text_rows[0].glyph_areas[neomacs_display_protocol::glyph_matrix::GlyphArea::Text.index()];
+    let row1_glyphs =
+        &text_rows[1].glyph_areas[neomacs_display_protocol::glyph_matrix::GlyphArea::Text.index()];
+    let prefix_face = &row0_glyphs[0].face;
+    let row0_dot_face = &row0_glyphs
+        .iter()
+        .find(|g| matches!(g.kind, GlyphKindTrace::Char('.')))
+        .expect("row 0 dot glyph")
+        .face;
+    let row1_dot_faces: Vec<_> = row1_glyphs.iter().take(2).map(|g| &g.face).collect();
+    let tail_face = &row1_glyphs[2].face;
+    assert_ne!(
+        prefix_face, tail_face,
+        "fixture must distinguish prefix and tail faces"
+    );
+    assert_eq!(
+        row0_dot_face, prefix_face,
+        "row 0 dot must keep pre-span face"
+    );
+    assert_eq!(
+        row1_dot_faces,
+        vec![prefix_face, prefix_face],
+        "continued ellipsis dots on row 1 must keep pre-span saved face"
+    );
+}
+
+#[test]
+fn clipped_invisible_ellipsis_truncates_without_wrapping_when_truncate_lines_is_t() {
+    let prefix = "aaaaaaaaa";
+    let hidden = "hidden";
+    let tail = "TAIL";
+    let next = "NEXT";
+    let text = format!("{prefix}{hidden}{tail}\n{next}\n");
+    let hidden_start = prefix.len();
+    let hidden_end = hidden_start + hidden.len();
+    let trace = layout_trace_with_buffer_setup(&text, 88, 240, |buffer, _, _| {
+        buffer.set_buffer_local("truncate-lines", Value::T);
+        buffer.set_buffer_local("word-wrap", Value::NIL);
+        buffer.set_buffer_local(
+            "buffer-invisibility-spec",
+            Value::list(vec![Value::cons(Value::symbol("outline"), Value::T)]),
+        );
+        assert!(buffer.put_text_property(
+            hidden_start,
+            hidden_end,
+            Value::symbol("invisible"),
+            Value::symbol("outline"),
+        ));
+    });
+
+    // Attested on GNU Emacs 31.1 oracle: under `truncate-lines t`, a clipped
+    // invisible ellipsis keeps the partial dot(s) that fit and truncates in
+    // place with no continuation row, so NEXT lands on screen row 1.
+    let rows = row_texts(&trace);
+    assert!(
+        rows.len() >= 2,
+        "expected truncated line plus NEXT row, rows={rows:?}"
+    );
+    assert_eq!(
+        rows[0],
+        format!("{prefix}.$"),
+        "row 0 must keep the partial dot before TTY truncation marker, rows={rows:?}"
+    );
+    assert!(
+        rows[1].trim_end() == next,
+        "truncated ellipsis must not open a continuation row; NEXT must land on row 1, rows={rows:?}"
+    );
+    let text_rows: Vec<_> = trace
+        .matrix_rows
+        .iter()
+        .filter(|row| {
+            row.enabled && row.role == neomacs_display_protocol::frame_glyphs::GlyphRowRole::Text
+        })
+        .collect();
+    assert!(
+        !text_rows[0].continued,
+        "a truncated ellipsis row must not be marked continued"
+    );
+    assert_eq!(
+        text_rows[1].start_charpos,
+        hidden_end + tail.len() + 1,
+        "row 1 must start at NEXT"
+    );
+}
+
+#[test]
+fn clipped_invisible_ellipsis_under_word_wrap_rewinds_to_word_boundary() {
+    let run_case = |prefix: &str, hidden: &str, tail: &str| {
+        let text = format!("{prefix}{hidden}{tail}\nNEXT\n");
+        let hidden_start = prefix.len();
+        let hidden_end = hidden_start + hidden.len();
+        let trace = layout_trace_with_buffer_setup(&text, 88, 240, |buffer, _, _| {
+            buffer.set_buffer_local("truncate-lines", Value::NIL);
+            buffer.set_buffer_local("word-wrap", Value::T);
+            buffer.set_buffer_local(
+                "buffer-invisibility-spec",
+                Value::list(vec![Value::cons(Value::symbol("outline"), Value::T)]),
+            );
+            assert!(buffer.put_text_property(
+                hidden_start,
+                hidden_end,
+                Value::symbol("invisible"),
+                Value::symbol("outline"),
+            ));
+        });
+        (trace, hidden_start, hidden_end)
+    };
+
+    // Case 1 (word before hidden): GNU `wrap_row_used > 0` / `goto back_to_wrap`
+    // (xdisp.c:26379-26406) rewinds to the space so the preceding word moves
+    // down together with the whole `...` ellipsis instead of splitting dots.
+    let (trace, _hs, _he) = run_case("aa bbbbbb", "hidden", "T");
+    let rows = row_texts(&trace);
+    assert!(
+        rows.len() >= 3,
+        "expected wrapped line + NEXT, rows={rows:?}"
+    );
+    assert_eq!(
+        rows[0].trim_end(),
+        "aa",
+        "word-wrap must break at the space before the word + ellipsis, rows={rows:?}"
+    );
+    assert_eq!(
+        rows[1].trim_end(),
+        "bbbbbb...T",
+        "the preceding word and whole ellipsis must move together to row 1, rows={rows:?}"
+    );
+    assert_eq!(
+        rows[2].trim_end(),
+        "NEXT",
+        "NEXT must land on row 2, rows={rows:?}"
+    );
+    let text_rows: Vec<_> = trace
+        .matrix_rows
+        .iter()
+        .filter(|row| {
+            row.enabled && row.role == neomacs_display_protocol::frame_glyphs::GlyphRowRole::Text
+        })
+        .collect();
+    assert_eq!(text_rows[0].end_charpos, 3, "row 0 ends after 'aa '");
+    assert_eq!(text_rows[1].start_charpos, 3, "row 1 starts at first 'b'");
+
+    // Case 2 (space immediately before hidden): GNU moves all 3 dots onto
+    // row 1 with 0 dots on row 0 and advances row 0's end past the hidden span.
+    let (trace, _hs, hidden_end) = run_case("aaaaaaaa ", "hidden", "TAIL");
+    let rows = row_texts(&trace);
+    assert!(
+        rows.len() >= 3,
+        "expected wrapped line + NEXT, rows={rows:?}"
+    );
+    assert_eq!(
+        rows[0].trim_end(),
+        "aaaaaaaa",
+        "space immediately before hidden must leave 0 dots on row 0, rows={rows:?}"
+    );
+    assert_eq!(
+        rows[1].trim_end(),
+        "...TAIL",
+        "all three ellipsis dots must start row 1 before TAIL, rows={rows:?}"
+    );
+    let text_rows: Vec<_> = trace
+        .matrix_rows
+        .iter()
+        .filter(|row| {
+            row.enabled && row.role == neomacs_display_protocol::frame_glyphs::GlyphRowRole::Text
+        })
+        .collect();
+    assert_eq!(
+        text_rows[0].end_charpos, hidden_end,
+        "row 0 end_charpos must match GNU post-skip charpos"
+    );
+    assert_eq!(text_rows[1].start_charpos, hidden_end);
+
+    // Case 3 (no space on row under word-wrap t): no break candidate exists, so
+    // GNU falls back to per-glyph ellipsis splitting.
+    let (trace, _hs, hidden_end) = run_case("aaaaaaaaa", "hidden", "TAIL");
+    let rows = row_texts(&trace);
+    assert_eq!(rows[0], "aaaaaaaaa.\\", "rows={rows:?}");
+    assert_eq!(rows[1].trim_end(), "..TAIL", "rows={rows:?}");
+    let text_rows: Vec<_> = trace
+        .matrix_rows
+        .iter()
+        .filter(|row| {
+            row.enabled && row.role == neomacs_display_protocol::frame_glyphs::GlyphRowRole::Text
+        })
+        .collect();
+    assert_eq!(text_rows[0].end_charpos, hidden_end);
+    assert_eq!(text_rows[1].start_charpos, hidden_end);
+}
+
+/// Deterministic, font-metric-independent regression for `window_end_bytepos`:
+/// when the bottom visible text row ends right before a skipped invisible span
+/// (so the walk's `byte_idx` has moved past the hidden span while `row->end`
+/// stays anchored at the last drawn buffer glyph), `window_end_bytepos` must
+/// still match the byte offset of `window_end_pos` (GNU `adjust_window_ends`,
+/// `src/xdisp.c:3066-3067`) on both ASCII and multibyte buffers.
+#[test]
+fn bottom_row_skipped_invisible_span_keeps_window_end_bytepos_anchored_to_end_char() {
+    // 88px wide (10 cells) x 48px tall (3 TTY rows: 1 body text row + 1
+    // mode-line + 1 echo area) guarantees row 0 is the bottom visible text row
+    // on every platform.
+    let ascii = "aaaaaaaa hiddenTAIL\nNEXT\n";
+    let hidden_start = 9usize;
+    let hidden_end = hidden_start + "hidden".len();
+    let trace = layout_trace_with_buffer_setup(ascii, 88, 48, |buffer, _, _| {
+        buffer.set_buffer_local("truncate-lines", Value::NIL);
+        buffer.set_buffer_local("word-wrap", Value::T);
+        buffer.set_buffer_local(
+            "buffer-invisibility-spec",
+            Value::list(vec![Value::cons(Value::symbol("outline"), Value::T)]),
+        );
+        assert!(buffer.put_text_property(
+            hidden_start,
+            hidden_end,
+            Value::symbol("invisible"),
+            Value::symbol("outline"),
+        ));
+    });
+    let text_rows: Vec<_> = trace
+        .matrix_rows
+        .iter()
+        .filter(|row| {
+            row.enabled && row.role == neomacs_display_protocol::frame_glyphs::GlyphRowRole::Text
+        })
+        .collect();
+    assert_eq!(
+        text_rows.len(),
+        1,
+        "fixture must place the skipped invisible span on the sole/bottom visible text row"
+    );
+    assert_eq!(
+        trace.window_end_bytepos, trace.window_end_pos,
+        "ASCII window_end_bytepos must equal window_end_pos (not drift by len(\"hidden\"))"
+    );
+
+    // Multibyte control: 8 two-byte chars (`é`) + space + hidden + TAIL.
+    let mb_prefix = "éééééééé ";
+    let mb = format!("{mb_prefix}hiddenTAIL\nNEXT\n");
+    let mb_hidden_start_chars = mb_prefix.chars().count();
+    let mb_hidden_end_chars = mb_hidden_start_chars + "hidden".len();
+    let mb_trace = layout_trace_with_buffer_setup(&mb, 88, 48, |buffer, _, _| {
+        buffer.set_buffer_local("truncate-lines", Value::NIL);
+        buffer.set_buffer_local("word-wrap", Value::T);
+        buffer.set_buffer_local(
+            "buffer-invisibility-spec",
+            Value::list(vec![Value::cons(Value::symbol("outline"), Value::T)]),
+        );
+        assert!(buffer.put_text_property(
+            mb_hidden_start_chars,
+            mb_hidden_end_chars,
+            Value::symbol("invisible"),
+            Value::symbol("outline"),
+        ));
+    });
+    let total_chars = mb.chars().count();
+    let total_bytes = mb.len();
+    let end_char0 = total_chars - mb_trace.window_end_pos;
+    let expected_end_byte0: usize = mb.chars().take(end_char0).map(char::len_utf8).sum();
+    assert_eq!(
+        mb_trace.window_end_bytepos,
+        total_bytes - expected_end_byte0,
+        "multibyte window_end_bytepos must match Z_BYTE - bytepos(window_end_char)"
     );
 }
 
@@ -12589,6 +13743,114 @@ fn layout_frame_rust_renders_line_prefix_through_row_builder() {
             "line-prefix glyphs must use the buffer-remapped default background"
         );
     }
+}
+
+#[test]
+fn layout_frame_rust_renders_overlay_line_prefix_like_a_text_property_one() {
+    // GNU reads `line-prefix` through `get_it_property` ->
+    // `Fget_char_property` (overlays first, then text properties), so an
+    // overlay prefix is drawn exactly like a text-property prefix.
+    let (_eval, _buffer, _frame, rows, _cw, _ch) =
+        layout_main_text_rows_with("", |eval, buffer| {
+            eval.buffer_manager_mut().set_current(buffer);
+            eval.eval_str(
+                "(progn
+                   (insert \"A-plain\\n\")
+                   (let ((b (point)))
+                     (insert \"B-overlay-line-prefix\\n\")
+                     (overlay-put (make-overlay b (point)) 'line-prefix \">>>>\"))
+                   (let ((b (point)))
+                     (insert \"C-textprop-line-prefix\\n\")
+                     (put-text-property b (point) 'line-prefix \"####\"))
+                   (goto-char (point-min)))",
+            )
+            .expect("overlay and text-property line-prefix buffer");
+        });
+    let texts: Vec<String> = rows
+        .iter()
+        .map(|row| glyphs_logical_text(&row.glyphs[1]))
+        .collect();
+    let row_containing = |needle: &str| {
+        texts
+            .iter()
+            .find(|text| text.contains(needle))
+            .unwrap_or_else(|| panic!("no row contains {needle:?}: {texts:?}"))
+    };
+
+    assert!(
+        row_containing("A-plain").starts_with("A-plain"),
+        "a line without a prefix stays unprefixed: {texts:?}"
+    );
+    assert!(
+        row_containing("B-overlay-line-prefix").starts_with(">>>>B-overlay-line-prefix"),
+        "an overlay line-prefix must be drawn before its line: {texts:?}"
+    );
+    assert!(
+        row_containing("C-textprop-line-prefix").starts_with("####C-textprop-line-prefix"),
+        "a text-property line-prefix keeps being drawn: {texts:?}"
+    );
+}
+
+#[test]
+fn layout_frame_rust_scopes_overlay_line_prefix_to_its_window_property() {
+    // GNU `get_char_property_and_overlay` skips an overlay whose `window`
+    // property names another window (`overlay_matches_window`), so a
+    // `line-prefix` overlay bound to the left window must not be drawn in a
+    // right window showing the same buffer.
+    let (mut eval, frame_id, buf_id, left_window) =
+        incr_editing_frame("first-line\nsecond-line\n", 800, 600);
+    let right_window = eval
+        .frame_manager_mut()
+        .split_window(
+            frame_id,
+            left_window,
+            neovm_core::window::SplitDirection::Horizontal,
+            buf_id,
+            None,
+            neovm_core::window::SplitPlacement::AfterTarget,
+        )
+        .expect("split window onto the same buffer");
+    eval.buffer_manager_mut().set_current(buf_id);
+    let overlay = eval
+        .eval_str("(let ((o (make-overlay 1 11))) (overlay-put o 'line-prefix \">>>>\") o)")
+        .expect("make line-prefix overlay");
+    eval.eval_form(Value::list(vec![
+        Value::symbol("overlay-put"),
+        Value::list(vec![Value::symbol("quote"), overlay]),
+        Value::list(vec![Value::symbol("quote"), Value::symbol("window")]),
+        Value::make_window(left_window.0),
+    ]))
+    .expect("bind overlay to the left window");
+
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
+    engine.layout_frame_rust(&mut eval, frame_id);
+    let state = engine
+        .last_frame_display_state
+        .as_ref()
+        .expect("display state");
+    let texts_for = |window: neovm_core::window::WindowId| {
+        enabled_window_row_texts(
+            state
+                .window_matrices
+                .iter()
+                .find(|entry| entry.window_id.get() == window.0 as i64)
+                .expect("window matrix"),
+        )
+    };
+    let left = texts_for(left_window);
+    let right = texts_for(right_window);
+    assert!(
+        left.iter().any(|text| text.starts_with(">>>>first-line")),
+        "the overlay's own window draws its prefix: {left:?}"
+    );
+    assert!(
+        right.iter().any(|text| text.contains("first-line")),
+        "the other window still shows the line: {right:?}"
+    );
+    assert!(
+        !right.iter().any(|text| text.contains(">>>>")),
+        "a window-bound overlay prefix must not leak into another window: {right:?}"
+    );
 }
 
 #[test]
@@ -22774,7 +24036,13 @@ fn render_buffer_plain_item_source_shadow_row(
         DisplayRowPosition::new(0.0, 0),
         DisplayRowMaxX::Bounded(width_px),
     ))
-    .render(&mut renderer, &mut source, &resolver, &mut face_ids)
+    .render(
+        &mut renderer,
+        &mut source,
+        &resolver,
+        &mut face_ids,
+        StringSourceRootScope::CallbackFree,
+    )
     .expect("ascii item source row")
     .into_row()
 }
@@ -22854,7 +24122,13 @@ fn render_buffer_plain_item_prefix_shadow_row_at(
         start_position,
         DisplayRowMaxX::Bounded(width_px),
     ))
-    .render(&mut renderer, &mut source, &resolver, &mut face_ids)
+    .render(
+        &mut renderer,
+        &mut source,
+        &resolver,
+        &mut face_ids,
+        StringSourceRootScope::CallbackFree,
+    )
     .expect("ascii item prefix shadow row")
     .into_row()
 }
@@ -24435,7 +25709,13 @@ fn assert_segmented_plain_shadow_row(
         DisplayRowPosition::new(0.0, 0),
         DisplayRowMaxX::Bounded(640.0),
     ))
-    .render(&mut renderer, &mut source, &resolver, &mut face_ids)
+    .render(
+        &mut renderer,
+        &mut source,
+        &resolver,
+        &mut face_ids,
+        StringSourceRootScope::Rooted(eval.owned_root_retainer()),
+    )
     .expect("segmented ascii item source row")
     .into_row();
 
@@ -25640,11 +26920,14 @@ fn display_string_replacement_row_routes_and_matches_pipeline() {
 
     // Pipeline side: point inside row 0 refuses the route (PointInRow), so
     // the buffer pipeline renders the replacement row.
-    let (_eval_pipeline, _buf_pipeline, _fid_p, rows_pipeline, _cw_p, _ch_p) =
+    let (eval_pipeline, _buf_pipeline, _fid_p, rows_pipeline, _cw_p, _ch_p) =
         layout_main_text_rows_with(text, |eval, buf_id| {
             put_replacement(eval, buf_id);
             eval.eval_str("(goto-char 2)").expect("point on row 0");
         });
+    // The routed layout installs its own heap. The pipeline rows stay
+    // allocated on this parked heap.
+    let _parked_pipeline = eval_pipeline.park_for_test();
     assert_eq!(
         glyphs_logical_text(&rows_pipeline[0].glyphs[1]),
         "abSTRcd ",
@@ -25766,7 +27049,7 @@ fn space_width_spec_row_routes_and_matches_pipeline() {
     };
 
     // Pipeline side: point inside row 0 refuses the route.
-    let (_e_p, _b_p, _f_p, rows_pipeline, char_width, _c_p) =
+    let (eval_p, _b_p, _f_p, rows_pipeline, char_width, _c_p) =
         layout_main_text_rows_with(text, |eval, buf_id| {
             put_spec(eval, buf_id);
             eval.eval_str("(goto-char 2)").expect("point on row 0");
@@ -25780,6 +27063,9 @@ fn space_width_spec_row_routes_and_matches_pipeline() {
         3.0 * char_width,
         "(space :width 3) must stretch exactly three canonical char widths"
     );
+    // The pipeline glyphs outlive this context. Park so the routed
+    // constructor is the only active Context; dropping would free them.
+    let _parked_pipeline = eval_p.park_for_test();
 
     // Routed side: point at end-of-buffer (row 1).
     let routed_before = crate::buffer_source::row_route::ROUTED_REPLACEMENT_ROW_COUNT
@@ -31754,6 +33040,8 @@ fn phase3_plain_edit_matches_full_rebuild_golden() {
     let mut ref_engine = crate::font::metrics::test_catalog::layout_engine();
     ref_engine.layout_frame_rust(&mut eval_ref, frame_ref);
     let reference = selected_window_layout_trace(&eval_ref, &ref_engine, frame_ref);
+    drop(ref_engine);
+    drop(eval_ref);
 
     let (mut eval, frame_id, buf_id, _wi) = incr_editing_frame(&text, 800, 600);
     let mut engine = crate::font::metrics::test_catalog::layout_engine();
@@ -31798,6 +33086,8 @@ fn phase3_insert_into_empty_line_matches_full_rebuild_golden() {
     let mut reference_engine = crate::font::metrics::test_catalog::layout_engine();
     reference_engine.layout_frame_rust(&mut eval_ref, frame_ref);
     let reference = selected_window_layout_trace(&eval_ref, &reference_engine, frame_ref);
+    drop(reference_engine);
+    drop(eval_ref);
 
     let (mut eval, frame_id, buf_id, _incremental_window) = incr_editing_frame(text, 800, 600);
     {
@@ -32035,6 +33325,8 @@ fn edit_below_reuse_shifts_trailing_placeholder_to_new_zv() {
     let mut ref_engine = crate::font::metrics::test_catalog::layout_engine();
     ref_engine.layout_frame_rust(&mut eval_ref, frame_ref);
     let reference = selected_window_layout_trace(&eval_ref, &ref_engine, frame_ref);
+    drop(ref_engine);
+    drop(eval_ref);
 
     // Incremental: warm layout, edit, relay through below-reuse.
     let (mut eval, frame_id, buf_id, _win) = incr_editing_frame(text, 800, 600);
@@ -32139,6 +33431,8 @@ fn edit_fast_path_reuses_empty_line_and_placeholder_rows() {
     let mut ref_engine = crate::font::metrics::test_catalog::layout_engine();
     ref_engine.layout_frame_rust(&mut eval_ref, frame_ref);
     let reference = selected_window_layout_trace(&eval_ref, &ref_engine, frame_ref);
+    drop(ref_engine);
+    drop(eval_ref);
 
     // Incremental: warm layout, edit, relay. Must take the edit fast path and
     // relay only the edited line (the empty line and placeholder are reused).
@@ -32201,6 +33495,8 @@ fn edit_fast_path_shifts_indicate_empty_lines_fillers_to_zv() {
     let mut ref_engine = crate::font::metrics::test_catalog::layout_engine();
     ref_engine.layout_frame_rust(&mut eval_ref, frame_ref);
     let reference = selected_window_layout_trace(&eval_ref, &ref_engine, frame_ref);
+    drop(ref_engine);
+    drop(eval_ref);
 
     // Incremental: warm layout with fillers on, edit, relay via the fast path.
     let (mut eval, frame_id, buf_id, _win) = incr_editing_frame(text, 800, 600);
@@ -32299,6 +33595,8 @@ fn phase5_fast_paths_emit_row_damage() {
         }
     }
     assert!(reused_body > 0, "expected reused body rows");
+    drop(engine);
+    drop(eval);
 
     // --- scroll: reused rows ReusedShifted with a nonzero dvpos ---
     let line = "(defun f (a b) (+ a b))\n";
@@ -32497,6 +33795,8 @@ fn phase3_below_reuse_matches_full_rebuild_golden() {
     let mut ref_engine = crate::font::metrics::test_catalog::layout_engine();
     ref_engine.layout_frame_rust(&mut eval_ref, frame_ref);
     let reference = selected_window_layout_trace(&eval_ref, &ref_engine, frame_ref);
+    drop(ref_engine);
+    drop(eval_ref);
 
     let (mut eval, frame_id, buf_id, _wi) = incr_editing_frame(&text, 800, 600);
     let mut engine = crate::font::metrics::test_catalog::layout_engine();
@@ -32540,6 +33840,8 @@ fn below_reuse_bail_golden_stats(insert_text: &str) -> LayoutStats {
     let mut ref_engine = crate::font::metrics::test_catalog::layout_engine();
     ref_engine.layout_frame_rust(&mut eval_ref, frame_ref);
     let reference = selected_window_layout_trace(&eval_ref, &ref_engine, frame_ref);
+    drop(ref_engine);
+    drop(eval_ref);
 
     let (mut eval, frame_id, buf_id, _wi) = incr_editing_frame(&text, 800, 600);
     let mut engine = crate::font::metrics::test_catalog::layout_engine(); // allow_below_reuse defaults to true
@@ -32628,6 +33930,8 @@ fn no_change_relayout_matches_full_rebuild_golden() {
     let mut ref_engine = crate::font::metrics::test_catalog::layout_engine();
     ref_engine.layout_frame_rust(&mut eval_ref, frame_ref);
     let reference = selected_window_layout_trace(&eval_ref, &ref_engine, frame_ref);
+    drop(ref_engine);
+    drop(eval_ref);
 
     let (mut eval, frame_id, _bi, _wi) = incr_editing_frame(&text, 800, 600);
     let mut engine = crate::font::metrics::test_catalog::layout_engine();
@@ -32710,6 +34014,8 @@ fn multi_window_edit_matches_full_rebuild_for_both_windows() {
     ref_engine.layout_frame_rust(&mut eval_ref, frame_ref);
     let ref_left = window_layout_trace(&eval_ref, &ref_engine, frame_ref, lw_ref);
     let ref_right = window_layout_trace(&eval_ref, &ref_engine, frame_ref, rw_ref);
+    drop(ref_engine);
+    drop(eval_ref);
 
     // Incremental: warm, edit the left buffer, measured.
     let (mut eval, frame_id, left_buf, lw, rw) = setup();
@@ -37957,6 +39263,8 @@ fn hscroll_cursor_publication_preserves_clipping_visible_text_and_eol() {
 #[path = "prepared_viewport_test.rs"]
 mod prepared_viewport_test;
 
+#[path = "auxiliary_coverage_test.rs"]
+mod auxiliary_coverage_test;
 #[path = "offscreen_row_test.rs"]
 mod offscreen_row_test;
 
@@ -38148,10 +39456,39 @@ fn ligature_rule_composes_through_the_font_shape_driver() {
         crate::font::metrics::test_catalog::metrics_service(),
     ));
     let driver_metrics = metrics.clone();
-    eval.font_shape_fn = Some(Box::new(move |_eval, mut gstring, direction| {
-        let mut metrics = driver_metrics.lock().expect("driver metrics");
-        metrics.shape_gstring_through_font(&mut gstring, direction)
-    }));
+    struct TestShapeDriver(
+        std::sync::Arc<std::sync::Mutex<crate::font::metrics::FontMetricsService>>,
+    );
+    impl neovm_core::emacs_core::font::FontDriver for TestShapeDriver {
+        fn shape_gstring(
+            &mut self,
+            _eval: &mut Context,
+            mut gstring: Value,
+            direction: Value,
+        ) -> neovm_core::emacs_core::font::GstringShapeOutcome {
+            let mut metrics = self.0.lock().expect("driver metrics");
+            metrics.shape_gstring_through_font(&mut gstring, direction)
+        }
+
+        fn glyph_text_metrics(
+            &mut self,
+            _font: Value,
+            _ch: u32,
+        ) -> Option<neovm_core::display_vocab::GlyphTextMetrics> {
+            None
+        }
+
+        fn realized_fontset(
+            &mut self,
+            _eval: &mut Context,
+            _frame_id: neovm_core::window::FrameId,
+            _window_id: neovm_core::window::WindowId,
+            _lisp_pos: i64,
+        ) -> Option<(u32, u64)> {
+            None
+        }
+    }
+    eval.font_driver = Some(Box::new(TestShapeDriver(driver_metrics)));
 
     let frame_id = eval
         .frame_manager_mut()
@@ -38590,3 +39927,82 @@ mod divider_corner_review_test;
 
 #[path = "wrapped_line_recenter_test.rs"]
 mod wrapped_line_recenter_test;
+
+/// R1 (#702): a window-range overlay view must follow the span the walk
+/// consumes. Invisible overlays (magit-section/hideshow collapse) can make a
+/// window show text far past any fixed visible-char budget; the attempt that
+/// reads past the view must be retried with the whole-buffer view so a
+/// trailing before-string/face still renders.
+#[test]
+fn invisible_growth_past_the_overlay_view_retries_with_the_whole_buffer() {
+    let text: String = (0..4_000)
+        .map(|line| format!("line {line:04} abcdefghij\n"))
+        .collect();
+    let (mut eval, frame, _buf_id, _window) = incr_editing_frame(&text, 800, 600);
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
+    engine.layout_frame_rust(&mut eval, frame);
+    eval.eval_str("(overlay-put (make-overlay 30 31) 'before-string \"CTRL\")")
+        .unwrap();
+    engine.layout_frame_rust(&mut eval, frame);
+    let ctrl_trace = selected_window_layout_trace(&eval, &engine, frame);
+    let ctrl_body = backend_trace_text_area_text(&ctrl_trace);
+    assert!(
+        ctrl_body.contains("CTRL"),
+        "control before-string missing: {ctrl_body:?}"
+    );
+
+    // Hide about 60 KB of text; the window's visible text now starts around
+    // byte 60000, far past window_start + 4 screenfuls. The trailing overlay
+    // carries both a face and a before-string.
+    eval.eval_str(
+        "(progn
+           (let ((hidden (make-overlay 10 60000)))
+             (overlay-put hidden 'invisible t))
+           (setq i702-trailing (make-overlay 60400 60401))
+           (overlay-put i702-trailing 'face 'bold)
+           (overlay-put i702-trailing 'before-string \"TRAILING\"))",
+    )
+    .unwrap();
+    engine.layout_frame_rust(&mut eval, frame);
+    let trace = selected_window_layout_trace(&eval, &engine, frame);
+    let body = backend_trace_text_area_text(&trace);
+    assert!(
+        body.contains("TRAILING"),
+        "a trailing overlay past the range view was dropped; body={body:?}"
+    );
+
+    // Modifying the trailing overlay must invalidate the retained window, not
+    // leave a stale matrix (the whole-buffer digest covers it).
+    eval.eval_str("(overlay-put i702-trailing 'before-string \"UPDATED\")")
+        .unwrap();
+    engine.layout_frame_rust(&mut eval, frame);
+    let trace = selected_window_layout_trace(&eval, &engine, frame);
+    let body = backend_trace_text_area_text(&trace);
+    assert!(
+        body.contains("UPDATED"),
+        "the changed trailing overlay did not reach the display; body={body:?}"
+    );
+}
+
+/// R1 (#702): a truncated line's overlay past the window edge is outside the
+/// consumed span and must neither render nor force a stale full-buffer answer.
+#[test]
+fn truncated_line_overlay_past_the_window_edge_stays_out_of_the_consumed_span() {
+    let text = format!("{}\n", "x".repeat(5_000));
+    let (mut eval, frame, _buf_id, _window) = incr_editing_frame(&text, 800, 600);
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
+    eval.eval_str("(setq truncate-lines t)").unwrap();
+    eval.eval_str(
+        "(let ((o (make-overlay 2000 2001)))
+           (overlay-put o 'face 'bold)
+           (overlay-put o 'before-string \"PAST-EDGE\"))",
+    )
+    .unwrap();
+    engine.layout_frame_rust(&mut eval, frame);
+    let trace = selected_window_layout_trace(&eval, &engine, frame);
+    let body = backend_trace_text_area_text(&trace);
+    assert!(
+        !body.contains("PAST-EDGE"),
+        "a truncated line's off-screen overlay rendered; body={body:?}"
+    );
+}

@@ -1,0 +1,5 @@
+error[E0599]: no associated function or constant named `new` found for struct `neovm_value::heap_registry::detachment::RegistryRestoreFailure<T>` in the current scope
+ --> tests/pentry_e2_loan_ui/receipt_restore_failure_has_no_constructor.rs
+  |
+  |     let _failure = RegistryRestoreFailure::<String>::new();
+  |                                                      ^^^ associated function or constant not found in `neovm_value::heap_registry::detachment::RegistryRestoreFailure<std::string::String>`

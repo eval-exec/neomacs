@@ -416,7 +416,10 @@ fn fixnum_align_to_in_align_mode_writes_column_offset() {
 #[test]
 fn image_operand_uses_resolved_image_width() {
     let mut ctx = test_ctx();
-    let (_c, prop) = parse(r#"(- center (0.5 . (image :type png :file "x.png")))"#);
+    let (c, prop) = parse(r#"(- center (0.5 . (image :type png :file "x.png")))"#);
+    // The image form is a second Context. Park the first so its value stays
+    // allocated on a heap that is no longer the active Context.
+    let _parked = c.park_for_test();
     let (_c2, image) = parse(r#"(image :type png :file "x.png")"#);
     ctx.image_sizes.insert(image, 400.0, 300.0);
 

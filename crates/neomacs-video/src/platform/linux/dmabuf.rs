@@ -8,7 +8,8 @@ use std::sync::Arc;
 use ash::vk;
 
 use super::frame::DmaBufSurface;
-use crate::sampling::GpuFrameRelease;
+use crate::sampling::{GpuFrameRelease, SubmittedWorkRetirement};
+use crate::{BiPlanarVideoFormat, PackedVideoFormat, VideoFrameFormat, VideoGeometry};
 
 struct ImportParams<'a> {
     /// Unique DMA-BUF memory objects supplied by the producer.
@@ -17,8 +18,246 @@ struct ImportParams<'a> {
     plane_object_indices: Vec<usize>,
     strides: Vec<u32>,
     offsets: Vec<u32>,
-    fourcc: u32,
     modifier: u64,
+}
+
+/// One description shared by capability discovery and raw image creation.
+/// In particular, extended usage is a union across compatible view formats;
+/// each actual sampling view still needs its own modifier feature check.
+struct ImportPlan {
+    vk_format: vk::Format,
+    wgpu_format: wgpu::TextureFormat,
+    extent: vk::Extent3D,
+    flags: vk::ImageCreateFlags,
+    usage: vk::ImageUsageFlags,
+    view_formats: &'static [vk::Format],
+}
+
+impl ImportPlan {
+    fn new(
+        fourcc: u32,
+        geometry: VideoGeometry,
+        format: VideoFrameFormat,
+        disjoint: bool,
+    ) -> Result<Self, String> {
+        validate_surface_layout(fourcc, geometry, format)?;
+        let (vk_format, wgpu_format) = sampled_format(fourcc)
+            .ok_or_else(|| format!("DRM format {fourcc:#010x} is not sampleable"))?;
+        let view_formats: &'static [vk::Format] = match format {
+            VideoFrameFormat::Packed(_) => &[],
+            VideoFrameFormat::BiPlanar420(BiPlanarVideoFormat::Nv12) => {
+                &[vk::Format::R8_UNORM, vk::Format::R8G8_UNORM]
+            }
+            VideoFrameFormat::BiPlanar420(BiPlanarVideoFormat::P010) => {
+                &[vk::Format::R16_UNORM, vk::Format::R16G16_UNORM]
+            }
+        };
+        let mut flags = if disjoint {
+            vk::ImageCreateFlags::DISJOINT
+        } else {
+            vk::ImageCreateFlags::empty()
+        };
+        if !view_formats.is_empty() {
+            flags |= vk::ImageCreateFlags::MUTABLE_FORMAT | vk::ImageCreateFlags::EXTENDED_USAGE;
+        }
+        Ok(Self {
+            vk_format,
+            wgpu_format,
+            extent: vk::Extent3D {
+                width: geometry.coded_width,
+                height: geometry.coded_height,
+                depth: 1,
+            },
+            flags,
+            usage: vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::TRANSFER_SRC,
+            // Vulkan 1.4.341 VUID10062: list plane-compatible formats only,
+            // never the base multi-planar format. DRM mutable images require
+            // a nonempty list (02353).
+            view_formats,
+        })
+    }
+
+    fn check_support(
+        &self,
+        hal: &wgpu_hal::vulkan::Device,
+        modifier: u64,
+        max_texture_dimension: u32,
+    ) -> Result<u32, String> {
+        let instance = hal.shared_instance().raw_instance();
+        let physical = hal.raw_physical_device();
+        // SAFETY: the borrowed HAL device supplies a matching live instance
+        // and physical-device pair; this immutable query is core Vulkan 1.0.
+        let physical_properties = unsafe { instance.get_physical_device_properties(physical) };
+        let api = physical_properties
+            .api_version
+            .min(hal.shared_instance().instance_api_version());
+        // The core properties2 and disjoint binding entry points below must
+        // exist. Supporting 1.0 would require their complete KHR dispatch.
+        if api < vk::API_VERSION_1_1 {
+            return Err("native DMA-BUF import requires Vulkan 1.1".into());
+        }
+        let extensions = hal.enabled_device_extensions();
+        for extension in [
+            ash::khr::external_memory_fd::NAME,
+            ash::ext::external_memory_dma_buf::NAME,
+            ash::ext::image_drm_format_modifier::NAME,
+            ash::ext::queue_family_foreign::NAME,
+        ] {
+            if !extensions.contains(&extension) {
+                return Err(format!("Vulkan device did not enable {extension:?}"));
+            }
+        }
+        if !self.view_formats.is_empty()
+            && api < vk::API_VERSION_1_2
+            && !extensions.contains(&ash::khr::image_format_list::NAME)
+        {
+            return Err(
+                "native video planes require Vulkan 1.2 or VK_KHR_image_format_list".into(),
+            );
+        }
+        if self.extent.width > max_texture_dimension || self.extent.height > max_texture_dimension {
+            return Err("DMA-BUF exceeds the enabled wgpu texture dimension limit".into());
+        }
+        // SAFETY: the same live pair is used after core 1.1 and the DRM
+        // modifier extension have been admitted above.
+        let properties =
+            unsafe { modifier_properties(instance, physical, self.vk_format, modifier) }
+                .ok_or_else(|| {
+                    format!(
+                        "DRM modifier {modifier:#x} is unavailable for {:?}",
+                        self.vk_format
+                    )
+                })?;
+        let count = properties.drm_format_modifier_plane_count;
+        if count == 0 || count > 4 {
+            return Err(format!(
+                "Vulkan reported invalid modifier plane count {count}"
+            ));
+        }
+        if self.flags.contains(vk::ImageCreateFlags::DISJOINT)
+            && !properties
+                .drm_format_modifier_tiling_features
+                .contains(vk::FormatFeatureFlags::DISJOINT)
+        {
+            return Err("DRM modifier does not support disjoint memory binding".into());
+        }
+        // COPY_SRC is an image operation. Extended usage support borrowed
+        // from a view does not establish the image's copy-format features.
+        if !properties
+            .drm_format_modifier_tiling_features
+            .contains(vk::FormatFeatureFlags::TRANSFER_SRC)
+        {
+            return Err("DRM image modifier does not support transfer-source usage".into());
+        }
+        let sampling_formats = if self.view_formats.is_empty() {
+            std::slice::from_ref(&self.vk_format)
+        } else {
+            self.view_formats
+        };
+        for &format in sampling_formats {
+            // SAFETY: the pair and query capabilities are unchanged; these
+            // are immutable properties of each actual compatible view format.
+            let view = unsafe { modifier_properties(instance, physical, format, modifier) }
+                .ok_or_else(|| {
+                    format!(
+                        "DRM modifier {modifier:#x} is unavailable for sampling view {format:?}"
+                    )
+                })?;
+            if !view.drm_format_modifier_tiling_features.contains(
+                vk::FormatFeatureFlags::SAMPLED_IMAGE
+                    | vk::FormatFeatureFlags::SAMPLED_IMAGE_FILTER_LINEAR,
+            ) {
+                return Err(format!(
+                    "DRM sampling view {format:?} does not support linear sampling"
+                ));
+            }
+        }
+        let mut drm = vk::PhysicalDeviceImageDrmFormatModifierInfoEXT::default()
+            .drm_format_modifier(modifier)
+            .sharing_mode(vk::SharingMode::EXCLUSIVE);
+        let mut external = vk::PhysicalDeviceExternalImageFormatInfo::default()
+            .handle_type(vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT);
+        let mut views = vk::ImageFormatListCreateInfo::default().view_formats(self.view_formats);
+        let mut query = vk::PhysicalDeviceImageFormatInfo2::default()
+            .format(self.vk_format)
+            .ty(vk::ImageType::TYPE_2D)
+            .tiling(vk::ImageTiling::DRM_FORMAT_MODIFIER_EXT)
+            .usage(self.usage)
+            .flags(self.flags)
+            .push_next(&mut drm)
+            .push_next(&mut external);
+        if !self.view_formats.is_empty() {
+            query = query.push_next(&mut views);
+        }
+        let mut external_properties = vk::ExternalImageFormatProperties::default();
+        let mut result = vk::ImageFormatProperties2::default().push_next(&mut external_properties);
+        // SAFETY: all chained input/output structs and plane formats remain
+        // live for this synchronous query. The instance/physical pair and the
+        // required core/extension entry points were validated above.
+        unsafe {
+            instance.get_physical_device_image_format_properties2(physical, &query, &mut result)
+        }
+        .map_err(|error| {
+            format!("unsupported DMA-BUF image/DRM modifier/view-format tuple: {error:?}")
+        })?;
+        let limits = result.image_format_properties;
+        if self.extent.width > limits.max_extent.width
+            || self.extent.height > limits.max_extent.height
+            || self.extent.depth > limits.max_extent.depth
+            || limits.max_mip_levels < 1
+            || limits.max_array_layers < 1
+            || !limits.sample_counts.contains(vk::SampleCountFlags::TYPE_1)
+        {
+            return Err("DMA-BUF dimensions exceed the exact image-format limits".into());
+        }
+        let external = external_properties.external_memory_properties;
+        self.check_external_support(external)?;
+        Ok(count)
+    }
+
+    fn check_external_support(&self, external: vk::ExternalMemoryProperties) -> Result<(), String> {
+        if self.flags.contains(vk::ImageCreateFlags::DISJOINT)
+            && external
+                .external_memory_features
+                .contains(vk::ExternalMemoryFeatureFlags::DEDICATED_ONLY)
+        {
+            // A dedicated allocation may not name a DISJOINT image (01797).
+            return Err("disjoint DMA-BUF images cannot require dedicated allocation".into());
+        }
+        if !external
+            .external_memory_features
+            .contains(vk::ExternalMemoryFeatureFlags::IMPORTABLE)
+            || !external
+                .compatible_handle_types
+                .contains(vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT)
+        {
+            return Err("exact DRM image tuple is not DMA-BUF importable".into());
+        }
+        Ok(())
+    }
+}
+
+pub(super) fn validate_surface_layout(
+    fourcc: u32,
+    geometry: VideoGeometry,
+    format: VideoFrameFormat,
+) -> Result<usize, String> {
+    let (_, actual) = sampled_format(fourcc)
+        .ok_or_else(|| format!("DRM format {fourcc:#010x} is not sampleable"))?;
+    let expected = match format {
+        VideoFrameFormat::Packed(PackedVideoFormat::Bgra8) => wgpu::TextureFormat::Bgra8UnormSrgb,
+        VideoFrameFormat::Packed(PackedVideoFormat::Rgba8) => wgpu::TextureFormat::Rgba8UnormSrgb,
+        VideoFrameFormat::BiPlanar420(BiPlanarVideoFormat::Nv12) => wgpu::TextureFormat::NV12,
+        VideoFrameFormat::BiPlanar420(BiPlanarVideoFormat::P010) => wgpu::TextureFormat::P010,
+    };
+    if actual != expected {
+        return Err(format!(
+            "DRM format {fourcc:#010x} disagrees with decoded format {format:?}"
+        ));
+    }
+    format
+        .allocation_bytes(geometry)
+        .map_err(|error| error.to_string())
 }
 
 struct ImportedResources {
@@ -26,6 +265,9 @@ struct ImportedResources {
     image: vk::Image,
     memories: Vec<vk::DeviceMemory>,
     queue_family: u32,
+    // Keep the owning `wgpu::Device` alive until after `Drop::drop` destroys
+    // the raw `vk::Image` and `vk::DeviceMemory` handles.
+    wgpu_device: wgpu::Device,
 }
 
 impl Drop for ImportedResources {
@@ -42,9 +284,19 @@ impl Drop for ImportedResources {
 struct ForeignRelease(Arc<ImportedResources>);
 
 impl GpuFrameRelease for ForeignRelease {
-    fn record(&self, encoder: &mut wgpu::CommandEncoder) {
+    fn record(&self, device: &wgpu::Device, encoder: &mut wgpu::CommandEncoder) {
         let resources = &self.0;
+        // SAFETY: `device` is verified to match `resources.device` and `encoder`
+        // is a fresh raw-only Vulkan encoder owned by `GpuVideoContext`.
         unsafe {
+            let hal_device = device
+                .as_hal::<wgpu::hal::api::Vulkan>()
+                .expect("DMA-BUF release requires wgpu's Vulkan backend");
+            assert_eq!(
+                hal_device.raw_device().handle(),
+                resources.device.handle(),
+                "DMA-BUF release encoder must belong to the owning Vulkan device"
+            );
             encoder.as_hal_mut::<wgpu::hal::api::Vulkan, _, _>(|hal| {
                 let hal = hal.expect("DMA-BUF release requires a Vulkan command encoder");
                 let barrier = vk::ImageMemoryBarrier {
@@ -77,19 +329,30 @@ impl GpuFrameRelease for ForeignRelease {
 /// FOREIGN ownership and every retired frame must release it again.
 pub(super) struct ImportedDmaBufSurface {
     resources: Arc<ImportedResources>,
+    queue: wgpu::Queue,
 }
 
 impl ImportedDmaBufSurface {
-    pub(super) fn acquire(&self, device: &wgpu::Device, queue: &wgpu::Queue) -> Result<(), String> {
+    pub(super) fn acquire(&self) -> Result<(), String> {
+        // SAFETY: `self.resources` owns `wgpu_device`, `device`, `image`, and
+        // `queue_family` from the same Vulkan device as `self.queue`, and the
+        // completion callback below keeps `self.resources` alive until the
+        // submitted barrier finishes.
         unsafe {
             submit_foreign_acquire(
-                device,
-                queue,
+                &self.resources.wgpu_device,
+                &self.queue,
                 &self.resources.device,
                 self.resources.queue_family,
                 self.resources.image,
-            )
+            )?;
         }
+        // Retain the imported image and memory until the raw acquire barrier
+        // finishes executing on the GPU queue (VUID-vkDestroyImage-image-01000).
+        let retirement = SubmittedWorkRetirement::new(Arc::clone(&self.resources));
+        self.queue
+            .on_submitted_work_done(retirement.into_completion_callback());
+        Ok(())
     }
 
     pub(super) fn release(&self) -> Box<dyn GpuFrameRelease> {
@@ -99,9 +362,10 @@ impl ImportedDmaBufSurface {
 
 pub(super) fn import_dmabuf(
     device: &wgpu::Device,
+    queue: &wgpu::Queue,
     surface: &DmaBufSurface,
-    width: u32,
-    height: u32,
+    geometry: VideoGeometry,
+    format: VideoFrameFormat,
 ) -> Result<(wgpu::Texture, ImportedDmaBufSurface), String> {
     let modifier = surface
         .objects
@@ -113,7 +377,7 @@ pub(super) fn import_dmabuf(
         .iter()
         .any(|object| object.modifier != modifier)
     {
-        return Err("packed DMA-BUF objects disagree on their DRM modifier".to_owned());
+        return Err("DMA-BUF objects disagree on their DRM modifier".to_owned());
     }
     let params = ImportParams {
         fds: surface
@@ -128,11 +392,13 @@ pub(super) fn import_dmabuf(
             .collect(),
         strides: surface.planes.iter().map(|plane| plane.stride).collect(),
         offsets: surface.planes.iter().map(|plane| plane.offset).collect(),
-        fourcc: surface.fourcc,
         modifier,
     };
     if params.fds.is_empty() || params.fds.len() > 4 {
-        return Err(format!("invalid DMA-BUF plane count {}", params.fds.len()));
+        return Err(format!(
+            "invalid DMA-BUF memory-object count {}",
+            params.fds.len()
+        ));
     }
     if params
         .plane_object_indices
@@ -141,47 +407,41 @@ pub(super) fn import_dmabuf(
     {
         return Err("DMA-BUF plane refers to a missing memory object".to_owned());
     }
-    let (vk_format, wgpu_format) = sampled_format(params.fourcc)
-        .ok_or_else(|| format!("DRM format {:#010x} is not sampleable", params.fourcc))?;
+    let disjoint = unsafe { fds_are_disjoint(&params.fds) };
+    let plan = ImportPlan::new(surface.fourcc, geometry, format, disjoint)?;
 
     use wgpu::hal::api::Vulkan;
+    // SAFETY: all raw calls use the native handles of this exact borrowed
+    // wgpu device. Object creation follows the exact support query; successful
+    // imports move into ImportedResources before HAL wrapping, and the drop
+    // callback retains them instead of giving destruction ownership to HAL.
     unsafe {
         let hal = device
             .as_hal::<Vulkan>()
             .ok_or_else(|| "DMA-BUF import requires wgpu's Vulkan backend".to_string())?;
         let raw_device = hal.raw_device();
-        let physical_device = hal.raw_physical_device();
         let instance = hal.shared_instance().raw_instance();
-        if !hal
-            .enabled_device_extensions()
-            .contains(&ash::ext::queue_family_foreign::NAME)
-        {
-            return Err("Vulkan adapter lacks VK_EXT_queue_family_foreign".into());
-        }
-        let required_feature = match wgpu_format {
-            wgpu::TextureFormat::NV12 => Some(wgpu::Features::TEXTURE_FORMAT_NV12),
-            wgpu::TextureFormat::P010 => Some(wgpu::Features::TEXTURE_FORMAT_P010),
-            _ => None,
+        let required_feature = match format {
+            VideoFrameFormat::BiPlanar420(BiPlanarVideoFormat::Nv12) => {
+                wgpu::Features::TEXTURE_FORMAT_NV12
+            }
+            VideoFrameFormat::BiPlanar420(BiPlanarVideoFormat::P010) => {
+                wgpu::Features::TEXTURE_FORMAT_P010 | wgpu::Features::TEXTURE_FORMAT_16BIT_NORM
+            }
+            VideoFrameFormat::Packed(_) => wgpu::Features::empty(),
         };
-        if required_feature.is_some_and(|feature| !device.features().contains(feature)) {
+        if !device.features().contains(required_feature) {
             return Err(format!(
-                "Vulkan adapter did not enable the wgpu feature for {wgpu_format:?} video textures"
+                "Vulkan adapter did not enable the wgpu feature for {:?} video textures",
+                plan.wgpu_format
             ));
         }
+        let modifier_plane_count = plan.check_support(
+            &hal,
+            params.modifier,
+            device.limits().max_texture_dimension_2d,
+        )?;
         let external_memory_fd = ash::khr::external_memory_fd::Device::new(instance, raw_device);
-        let modifier_plane_count =
-            modifier_plane_count(instance, physical_device, vk_format, params.modifier)
-                .ok_or_else(|| {
-                    format!(
-                        "Vulkan adapter cannot sample DRM modifier {:#x} for {vk_format:?}",
-                        params.modifier
-                    )
-                })?;
-        if modifier_plane_count == 0 || modifier_plane_count > 4 {
-            return Err(format!(
-                "Vulkan reported invalid modifier plane count {modifier_plane_count}"
-            ));
-        }
 
         let layouts = plane_layouts(&params, modifier_plane_count)?;
         let mut modifier_info = vk::ImageDrmFormatModifierExplicitCreateInfoEXT {
@@ -195,30 +455,26 @@ pub(super) fn import_dmabuf(
             handle_types: vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT,
             ..Default::default()
         };
-        let disjoint = fds_are_disjoint(&params.fds);
-        let image_info = vk::ImageCreateInfo {
+        let mut view_list =
+            vk::ImageFormatListCreateInfo::default().view_formats(plan.view_formats);
+        let mut image_info = vk::ImageCreateInfo {
             p_next: (&mut external_info as *mut _) as *mut std::ffi::c_void,
-            flags: if disjoint {
-                vk::ImageCreateFlags::DISJOINT
-            } else {
-                vk::ImageCreateFlags::empty()
-            },
+            flags: plan.flags,
             image_type: vk::ImageType::TYPE_2D,
-            format: vk_format,
-            extent: vk::Extent3D {
-                width,
-                height,
-                depth: 1,
-            },
+            format: plan.vk_format,
+            extent: plan.extent,
             mip_levels: 1,
             array_layers: 1,
             samples: vk::SampleCountFlags::TYPE_1,
             tiling: vk::ImageTiling::DRM_FORMAT_MODIFIER_EXT,
-            usage: vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::TRANSFER_SRC,
+            usage: plan.usage,
             sharing_mode: vk::SharingMode::EXCLUSIVE,
             initial_layout: vk::ImageLayout::UNDEFINED,
             ..Default::default()
         };
+        if !plan.view_formats.is_empty() {
+            image_info = image_info.push_next(&mut view_list);
+        }
         let image = raw_device
             .create_image(&image_info, None)
             .map_err(|error| format!("vkCreateImage for DMA-BUF failed: {error:?}"))?;
@@ -245,24 +501,26 @@ pub(super) fn import_dmabuf(
             image,
             memories,
             queue_family: hal.queue_family_index(),
+            wgpu_device: device.clone(),
         });
         let hal_desc = wgpu_hal::TextureDescriptor {
             label: Some("Neomacs imported video DMA-BUF"),
             size: wgpu::Extent3d {
-                width,
-                height,
+                width: plan.extent.width,
+                height: plan.extent.height,
                 depth_or_array_layers: 1,
             },
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: wgpu_format,
-            usage: wgpu::TextureUses::RESOURCE,
+            format: plan.wgpu_format,
+            usage: wgpu::TextureUses::RESOURCE | wgpu::TextureUses::COPY_SRC,
             memory_flags: wgpu_hal::MemoryFlags::empty(),
             view_formats: Vec::new(),
         };
         let imported = ImportedDmaBufSurface {
             resources: Arc::clone(&resources),
+            queue: queue.clone(),
         };
         let mut resources = Some(resources);
         let drop_callback: wgpu_hal::DropCallback = Box::new(move || drop(resources.take()));
@@ -280,10 +538,12 @@ pub(super) fn import_dmabuf(
                 mip_level_count: 1,
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
-                format: wgpu_format,
+                format: plan.wgpu_format,
                 usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_SRC,
                 view_formats: &[],
             },
+            // Initial tracked state, not allowed usage. Foreign acquire
+            // establishes SHADER_READ_ONLY_OPTIMAL before sampling.
             wgpu::TextureUses::RESOURCE,
         );
         Ok((texture, imported))
@@ -316,12 +576,14 @@ fn sampled_format(fourcc: u32) -> Option<(vk::Format, wgpu::TextureFormat)> {
 #[path = "dmabuf/tests/dmabuf_test.rs"]
 mod tests;
 
-unsafe fn modifier_plane_count(
+// SAFETY: instance and physical_device must belong to the same live HAL
+// adapter, with core Vulkan 1.1 and image_drm_format_modifier enabled.
+unsafe fn modifier_properties(
     instance: &ash::Instance,
     physical_device: vk::PhysicalDevice,
     format: vk::Format,
     modifier: u64,
-) -> Option<u32> {
+) -> Option<vk::DrmFormatModifierPropertiesEXT> {
     let mut list = vk::DrmFormatModifierPropertiesListEXT::default();
     let mut properties = vk::FormatProperties2 {
         p_next: (&mut list as *mut _) as *mut std::ffi::c_void,
@@ -345,7 +607,7 @@ unsafe fn modifier_plane_count(
     entries
         .iter()
         .find(|entry| entry.drm_format_modifier == modifier)
-        .map(|entry| entry.drm_format_modifier_plane_count)
+        .copied()
 }
 
 fn plane_layouts(
@@ -395,7 +657,7 @@ unsafe fn bind_shared(
     let memory = unsafe {
         import_memory(
             device,
-            image,
+            Some(image),
             params.fds[0],
             requirements.size,
             requirements.memory_type_bits,
@@ -422,28 +684,51 @@ unsafe fn bind_disjoint(
             params.plane_object_indices.len()
         ));
     }
-    let mut memories = Vec::with_capacity(plane_count as usize);
-    for plane in 0..plane_count {
-        let aspect = plane_aspect(plane)?;
-        let mut plane_info = vk::ImagePlaneMemoryRequirementsInfo::default().plane_aspect(aspect);
+    // Complete every fallible metadata lookup before importing any memory.
+    // Later loops cannot lose earlier allocations through an input `?`.
+    let plane_fds = params.plane_object_indices[..plane_count as usize]
+        .iter()
+        .enumerate()
+        .map(|(plane, &object_index)| {
+            params.fds.get(object_index).copied().ok_or_else(|| {
+                format!("DMA-BUF plane {plane} refers to missing object {object_index}")
+            })
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    let mut plane_infos = (0..plane_count)
+        .map(|plane| Ok(vk::BindImagePlaneMemoryInfo::default().plane_aspect(plane_aspect(plane)?)))
+        .collect::<Result<Vec<_>, String>>()?;
+    let mut plane_requirements = Vec::with_capacity(plane_count as usize);
+    for (plane, binding) in plane_infos.iter().enumerate() {
+        let mut plane_info =
+            vk::ImagePlaneMemoryRequirementsInfo::default().plane_aspect(binding.plane_aspect);
         let requirements_info = vk::ImageMemoryRequirementsInfo2 {
             p_next: (&mut plane_info as *mut _) as *mut std::ffi::c_void,
             image,
             ..Default::default()
         };
-        let mut requirements = vk::MemoryRequirements2::default();
+        let mut dedicated = vk::MemoryDedicatedRequirements::default();
+        let mut requirements = vk::MemoryRequirements2::default().push_next(&mut dedicated);
         unsafe { device.get_image_memory_requirements2(&requirements_info, &mut requirements) };
-        let object_index = params.plane_object_indices[plane as usize];
-        let fd = *params.fds.get(object_index).ok_or_else(|| {
-            format!("DMA-BUF plane {plane} refers to missing object {object_index}")
-        })?;
+        let requirements = requirements.memory_requirements;
+        // DRM modifiers may require dedication independently of the external
+        // format query. A disjoint image cannot meet that requirement.
+        if dedicated.requires_dedicated_allocation != vk::FALSE {
+            return Err(format!(
+                "disjoint DMA-BUF plane {plane} requires dedicated allocation"
+            ));
+        }
+        plane_requirements.push(requirements);
+    }
+    let mut memories = Vec::with_capacity(plane_count as usize);
+    for (requirements, fd) in plane_requirements.into_iter().zip(plane_fds) {
         let memory = match unsafe {
             import_memory(
                 device,
-                image,
+                None,
                 fd,
-                requirements.memory_requirements.size,
-                requirements.memory_requirements.memory_type_bits,
+                requirements.size,
+                requirements.memory_type_bits,
                 external_memory_fd,
             )
         } {
@@ -457,9 +742,6 @@ unsafe fn bind_disjoint(
         };
         memories.push(memory);
     }
-    let mut plane_infos: Vec<_> = (0..plane_count)
-        .map(|plane| Ok(vk::BindImagePlaneMemoryInfo::default().plane_aspect(plane_aspect(plane)?)))
-        .collect::<Result<_, String>>()?;
     let bindings: Vec<_> = memories
         .iter()
         .enumerate()
@@ -482,7 +764,7 @@ unsafe fn bind_disjoint(
 
 unsafe fn import_memory(
     device: &ash::Device,
-    image: vk::Image,
+    dedicated_image: Option<vk::Image>,
     fd: BorrowedFd<'_>,
     allocation_size: u64,
     image_memory_types: u32,
@@ -509,16 +791,16 @@ unsafe fn import_memory(
         ..Default::default()
     };
     let mut dedicated = vk::MemoryDedicatedAllocateInfo {
-        p_next: (&mut import as *mut _) as *mut std::ffi::c_void,
-        image,
+        image: dedicated_image.unwrap_or_default(),
         ..Default::default()
     };
-    let allocate = vk::MemoryAllocateInfo {
-        p_next: (&mut dedicated as *mut _) as *mut std::ffi::c_void,
-        allocation_size,
-        memory_type_index,
-        ..Default::default()
-    };
+    let mut allocate = vk::MemoryAllocateInfo::default()
+        .allocation_size(allocation_size)
+        .memory_type_index(memory_type_index)
+        .push_next(&mut import);
+    if dedicated_image.is_some() {
+        allocate = allocate.push_next(&mut dedicated);
+    }
     match unsafe { device.allocate_memory(&allocate, None) } {
         Ok(memory) => {
             let _ = owned.into_raw_fd();
@@ -528,6 +810,14 @@ unsafe fn import_memory(
     }
 }
 
+/// Record and submit a `QUEUE_FAMILY_FOREIGN_EXT` -> `queue_family` acquire
+/// barrier for `image` in a fresh raw Vulkan command encoder.
+///
+/// # Safety
+/// `wgpu_device`, `queue`, `device`, and `queue_family` must belong to the same
+/// live Vulkan device with `VK_EXT_queue_family_foreign` enabled, `image` must
+/// be a live `vk::Image` owned by that device, and the caller must keep `image`
+/// alive until the submitted work completes on `queue`.
 unsafe fn submit_foreign_acquire(
     wgpu_device: &wgpu::Device,
     queue: &wgpu::Queue,
@@ -592,4 +882,161 @@ fn plane_aspect(plane: u32) -> Result<vk::ImageAspectFlags, String> {
         3 => Ok(vk::ImageAspectFlags::MEMORY_PLANE_3_EXT),
         _ => Err(format!("unsupported DMA-BUF memory plane {plane}")),
     }
+}
+
+#[cfg(feature = "native-validation-fixtures")]
+#[path = "dmabuf/validation_fixture.rs"]
+mod validation_fixture;
+
+#[cfg(feature = "native-validation-fixtures")]
+pub(crate) fn assert_native_dmabuf_plane_validation(format: BiPlanarVideoFormat) {
+    validation_fixture::exercise(format);
+}
+
+#[cfg(test)]
+fn block_on_test<F: std::future::Future>(future: F) -> F::Output {
+    use std::pin::pin;
+    use std::task::{Context, Poll, Wake, Waker};
+    use std::time::{Duration, Instant};
+
+    struct ThreadWake(std::thread::Thread);
+    impl Wake for ThreadWake {
+        fn wake(self: Arc<Self>) {
+            self.0.unpark();
+        }
+    }
+
+    let mut future = pin!(future);
+    let waker = Waker::from(Arc::new(ThreadWake(std::thread::current())));
+    let mut cx = Context::from_waker(&waker);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        match future.as_mut().poll(&mut cx) {
+            Poll::Ready(val) => return val,
+            Poll::Pending => {
+                assert!(Instant::now() < deadline, "wgpu test future timed out");
+                std::thread::park_timeout(Duration::from_millis(10));
+            }
+        }
+    }
+}
+
+/// Whether the environment requires headless Vulkan GPU video rows to execute
+/// rather than silently returning when `VK_EXT_queue_family_foreign` is absent.
+#[cfg(test)]
+pub(crate) fn require_gpu_video_tests() -> bool {
+    matches!(
+        std::env::var("NEOMACS_REQUIRE_GPU_VIDEO_TESTS").as_deref(),
+        Ok("1" | "true" | "TRUE")
+    )
+}
+
+/// Open a headless Vulkan `wgpu::Device` with `VK_EXT_queue_family_foreign`
+/// enabled (matching the production renderer's interop device setup) so tests
+/// can execute real `ImportedDmaBufSurface::acquire()` and
+/// `ForeignRelease::record()` barriers under wgpu-core validation.
+#[cfg(test)]
+pub(crate) fn open_test_vulkan_foreign_device(
+    label: &'static str,
+) -> Option<(wgpu::Instance, wgpu::Adapter, wgpu::Device, wgpu::Queue)> {
+    let mut instance_desc = wgpu::InstanceDescriptor::new_without_display_handle();
+    instance_desc.backends = wgpu::Backends::VULKAN;
+    let instance = wgpu::Instance::new(instance_desc);
+    let adapter = block_on_test(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
+        .ok()?;
+    let descriptor = wgpu::DeviceDescriptor {
+        label: Some(label),
+        required_features: wgpu::Features::empty(),
+        required_limits: wgpu::Limits::downlevel_defaults(),
+        ..Default::default()
+    };
+    // SAFETY: `adapter` is the exact Vulkan adapter adopted below; we only add
+    // `VK_EXT_queue_family_foreign` after checking physical-device support.
+    let (device, queue) = unsafe {
+        let hal = adapter.as_hal::<wgpu::hal::api::Vulkan>()?;
+        let foreign_ext = ash::ext::queue_family_foreign::NAME;
+        if !hal
+            .physical_device_capabilities()
+            .supports_extension(foreign_ext)
+        {
+            return None;
+        }
+        let opened = hal
+            .open_with_callback(
+                descriptor.required_features,
+                &descriptor.required_limits,
+                &descriptor.memory_hints,
+                Some(Box::new(move |args| {
+                    if !args.extensions.contains(&foreign_ext) {
+                        args.extensions.push(foreign_ext);
+                    }
+                })),
+            )
+            .ok()?;
+        adapter.create_device_from_hal(opened, &descriptor).ok()?
+    };
+    Some((instance, adapter, device, queue))
+}
+
+#[cfg(test)]
+fn create_test_imported_resources(device: &wgpu::Device) -> Option<Arc<ImportedResources>> {
+    // SAFETY: `device` is a live Vulkan `wgpu::Device`; image creation, memory
+    // allocation, and binding stay valid for the lifetime of `ImportedResources`
+    // because `ImportedResources.wgpu_device` retains `device`.
+    unsafe {
+        let hal = device.as_hal::<wgpu::hal::api::Vulkan>()?;
+        let raw_device = hal.raw_device().clone();
+        let image_info = vk::ImageCreateInfo::default()
+            .image_type(vk::ImageType::TYPE_2D)
+            .format(vk::Format::R8_UNORM)
+            .extent(vk::Extent3D {
+                width: 4,
+                height: 4,
+                depth: 1,
+            })
+            .mip_levels(1)
+            .array_layers(1)
+            .samples(vk::SampleCountFlags::TYPE_1)
+            .tiling(vk::ImageTiling::OPTIMAL)
+            .usage(vk::ImageUsageFlags::SAMPLED)
+            .sharing_mode(vk::SharingMode::EXCLUSIVE)
+            .initial_layout(vk::ImageLayout::UNDEFINED);
+        let image = raw_device
+            .create_image(&image_info, None)
+            .expect("create Vulkan test image");
+        let requirements = raw_device.get_image_memory_requirements(image);
+        let memory_type_index =
+            first_memory_type(requirements.memory_type_bits).expect("compatible test memory type");
+        let alloc_info = vk::MemoryAllocateInfo::default()
+            .allocation_size(requirements.size)
+            .memory_type_index(memory_type_index);
+        let memory = raw_device
+            .allocate_memory(&alloc_info, None)
+            .expect("allocate Vulkan test image memory");
+        raw_device
+            .bind_image_memory(image, memory, 0)
+            .expect("bind Vulkan test image memory");
+        Some(Arc::new(ImportedResources {
+            device: raw_device,
+            image,
+            memories: vec![memory],
+            queue_family: hal.queue_family_index(),
+            wgpu_device: device.clone(),
+        }))
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn create_test_foreign_surface_release(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+) -> Result<Box<dyn GpuFrameRelease>, String> {
+    let resources = create_test_imported_resources(device)
+        .ok_or_else(|| "test device is not Vulkan".to_owned())?;
+    let surface = ImportedDmaBufSurface {
+        resources,
+        queue: queue.clone(),
+    };
+    surface.acquire()?;
+    Ok(surface.release())
 }

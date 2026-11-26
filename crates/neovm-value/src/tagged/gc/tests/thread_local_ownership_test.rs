@@ -19,6 +19,9 @@ fn gc_tls_ownership_activation_clears_weak_barrier_owner_words() {
     let owner = first.alloc_cons(TaggedValue::NIL, TaggedValue::NIL);
     let slot = barrier_cache_slot(owner.bits());
     first.current_mutator_gc_mut().remembered_cache[slot] = owner.bits();
+    // SAFETY: bare `TaggedHeap` unit test clearing `first` before seeding the
+    // dirty SATB cache word and installing `second`.
+    unsafe { clear_tagged_heap_if_installed(&first) };
     TAGGED_HEAP_SATB_CACHE.with(|slots| slots[slot].set(owner.bits()));
 
     let mut second = Box::new(TaggedHeap::new());
@@ -45,6 +48,9 @@ fn gc_tls_ownership_activation_clears_weak_barrier_owner_words() {
 fn gc_tls_ownership_heap_activation_rederives_barrier_mirrors() {
     let mut first = Box::new(TaggedHeap::new());
     set_tagged_heap(&mut first);
+    // SAFETY: bare `TaggedHeap` unit test clearing `first` before seeding dirty
+    // mirrors so `set_tagged_heap(&mut second)` must still re-derive every mirror.
+    unsafe { clear_tagged_heap_if_installed(&first) };
     // Simulate previously published mirrors without launching a background
     // collector. Activation must derive them from the new heap's state.
     TAGGED_HEAP_PARTITION_ACTIVE.with(|active| active.set(true));
@@ -77,6 +83,10 @@ fn gc_tls_ownership_allocation_view_metadata_rejects_pointer_reuse() {
     TAGGED_HEAP.with(|pointer| pointer.set(std::ptr::dangling_mut()));
     assert_eq!(current_tagged_heap_identity(), Some(original_identity));
     assert!(!tagged_heap_is_current(&second));
+    // Reset the manually-corrupted raw slot before installing `second` through
+    // the legacy `&mut TaggedHeap` setter (avoiding passing a `&mut`-derived
+    // Box pointer to `set_tagged_heap_root`).
+    TAGGED_HEAP.with(|pointer| pointer.set(std::ptr::null_mut()));
     set_tagged_heap(&mut second);
     assert!(tagged_heap_is_current(&second));
     drop(first);
@@ -132,8 +142,8 @@ fn gc_tls_hash_activation_follows_real_launch_join_and_termination() {
             heap.reseed_runtime_and_remembered_roots();
             heap.seed_root(owner);
             heap.incremental_drain_all();
-            heap.incremental_finish(heap.live_bytes(), std::time::Instant::now());
-            heap.finish_incremental_sweep_now();
+            heap.incremental_finish_for_test(heap.live_bytes(), std::time::Instant::now());
+            heap.finish_incremental_sweep_now_for_test();
             assert!(heap.concurrent_hash_snapshot().is_none());
             assert!(!concurrent_hash_mutation_active());
             drop(heap);
@@ -151,12 +161,18 @@ fn gc_tls_hash_activation_survives_displaced_heap_join_and_reinstallation() {
     assert!(concurrent_hash_mutation_active());
 
     let mut second = heap_with_hash_claims(true);
+    // SAFETY: bare `TaggedHeap` unit test clearing `first` before installing
+    // `second`; seed `TAGGED_HEAP_CONCURRENT_HASH_ACTIVE` true so installing
+    // `second` must still clear Tier-H activation.
+    unsafe { clear_tagged_heap_if_installed(&first) };
+    TAGGED_HEAP_CONCURRENT_HASH_ACTIVE.with(|active| active.set(true));
     set_tagged_heap(&mut second);
     assert!(!concurrent_hash_mutation_active());
     second.concurrent_begin();
     second.launch_concurrent_mark();
     assert!(concurrent_hash_mutation_active());
-    clear_tagged_heap_if_installed(&first);
+    // SAFETY: bare `TaggedHeap` unit test verifying non-current clear leaves `second` installed.
+    unsafe { clear_tagged_heap_if_installed(&first) };
     assert!(concurrent_hash_mutation_active());
 
     // The first heap's teardown calls join even though another heap owns TLS.
@@ -180,8 +196,8 @@ fn gc_tls_hash_activation_survives_displaced_heap_join_and_reinstallation() {
     assert!(!concurrent_hash_mutation_active());
     second.reseed_runtime_and_remembered_roots();
     second.incremental_drain_all();
-    second.incremental_finish(second.live_bytes(), std::time::Instant::now());
-    second.finish_incremental_sweep_now();
+    second.incremental_finish_for_test(second.live_bytes(), std::time::Instant::now());
+    second.finish_incremental_sweep_now_for_test();
     drop(second);
     assert!(!concurrent_hash_mutation_active());
 }

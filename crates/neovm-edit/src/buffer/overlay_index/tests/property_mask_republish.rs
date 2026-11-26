@@ -13,8 +13,9 @@ fn set_property_names(overlay: Value, names: &[Value]) {
 }
 
 fn put_property_names(index: &mut OverlayIndex, overlay: Value, names: &[Value]) {
+    let previous_keys = index.property_keys_before_write(overlay);
     set_property_names(overlay, names);
-    index.overlay_properties_changed(overlay);
+    index.overlay_properties_changed(overlay, previous_keys);
     index.assert_invariants();
 }
 
@@ -51,7 +52,8 @@ fn indexed_overlays(count: usize) -> (OverlayIndex, Vec<Value>) {
     for (i, overlay) in overlays.iter().enumerate() {
         assert!(index.attach(*overlay, range(i * 4 + 1, i * 4 + 3)));
     }
-    // Publish the endpoint index: only a published index tracks masks.
+    // Property sweeps publish endpoints; basic geometric queries do not.
+    index.publish_endpoints();
     assert_eq!(
         index.next_boundary_after(EmacsBytePos::new(0), EmacsBytePos::new(100_000)),
         Some(EmacsBytePos::new(1))
@@ -136,8 +138,9 @@ fn property_mask_change_republishes_filters_without_a_full_summary_refresh() {
     crate::test_utils::init_test_tracing();
     let (mut index, overlays) = indexed_overlays(300);
     let carrier = overlays[150];
-    let endpoints = index.endpoints.get().expect("endpoint index is published");
-    endpoints.records.reset_summary_refresh_count();
+    index
+        .with_published_endpoints(|endpoints| endpoints.records.reset_summary_refresh_count())
+        .expect("endpoint index is published");
 
     // Diagnostic churn puts a few new names on each fresh overlay. Each new
     // name changes only the conservative filter class, never a position.
@@ -149,10 +152,63 @@ fn property_mask_change_republishes_filters_without_a_full_summary_refresh() {
     );
     put_property_names(&mut index, carrier, &[Value::symbol("help-echo")]);
 
-    let endpoints = index.endpoints.get().expect("endpoint index is published");
+    let refreshes = index
+        .with_published_endpoints(|endpoints| endpoints.records.summary_refresh_count())
+        .expect("endpoint index is published");
     assert_eq!(
-        endpoints.records.summary_refresh_count(),
-        0,
+        refreshes, 0,
         "a filter-mask change rebuilt position summaries"
     );
+}
+
+#[test]
+fn direct_property_counts_balance_duplicate_keys_and_remaining_carriers() {
+    crate::test_utils::init_test_tracing();
+    let category = Value::symbol("category");
+    let face = Value::symbol("face");
+    let first = overlay(1, 3);
+    let second = overlay(5, 7);
+    set_property_names(first, &[category, category]);
+    set_property_names(second, &[category]);
+    let mut index = OverlayIndex::new();
+    assert!(index.attach(first, range(1, 3)));
+    assert!(index.attach(second, range(5, 7)));
+    assert!(index.may_contain_property(category));
+    put_property_names(&mut index, first, &[face]);
+    assert!(index.may_contain_property(category));
+    assert!(index.detach(second).is_some());
+    assert!(!index.may_contain_property(category));
+    assert!(index.may_contain_property(face));
+    assert!(index.detach(first).is_some());
+    assert!(!index.may_contain_property(face));
+    index.assert_invariants();
+}
+
+#[cfg(debug_assertions)]
+#[test]
+#[should_panic(expected = "property token crossed an attachment change")]
+fn property_key_token_refuses_detach_and_reattach() {
+    crate::test_utils::init_test_tracing();
+    let owner = overlay(1, 3);
+    let mut index = OverlayIndex::new();
+    assert!(index.attach(owner, range(1, 3)));
+    let previous = index.property_keys_before_write(owner);
+    assert!(index.detach(owner).is_some());
+    assert!(index.attach(owner, range(1, 3)));
+    index.overlay_properties_changed(owner, previous);
+}
+
+#[cfg(debug_assertions)]
+#[test]
+#[should_panic(expected = "property token crossed an index owner")]
+fn property_key_token_refuses_a_foreign_index() {
+    crate::test_utils::init_test_tracing();
+    let owner = overlay(1, 3);
+    let mut first = OverlayIndex::new();
+    let mut second = OverlayIndex::new();
+    assert!(first.attach(owner, range(1, 3)));
+    let previous = first.property_keys_before_write(owner);
+    assert!(first.detach(owner).is_some());
+    assert!(second.attach(owner, range(1, 3)));
+    second.overlay_properties_changed(owner, previous);
 }

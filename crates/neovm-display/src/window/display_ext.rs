@@ -22,6 +22,7 @@ use neovm_eval::emacs_core::eval::data::window_state::{
 use neovm_eval::emacs_core::eval::data::window_state::{
     horizontal_scroll_bar_area_height, horizontal_scroll_bar_lines, vertical_scroll_bar_area_width,
 };
+use neovm_value::display_vocab::GuiResizeRequestId;
 use neovm_value::intern::intern;
 use neovm_value::value::Value;
 use neovm_value::value::eq_value;
@@ -59,7 +60,7 @@ impl DisplayWindowExt for Window {
 }
 
 /// Window-tree behaviour that binds the sibling layout algorithm.
-pub trait DisplayWindowTreeExt {
+pub(crate) trait DisplayWindowTreeExt {
     fn sibling_bounds_of(&self, parent: WindowId, bounds: Rect) -> Vec<Rect>;
     fn redistribute_bounds(&mut self, parent: WindowId, bounds: Rect);
 }
@@ -158,16 +159,12 @@ pub trait DisplayFrameExt {
 
     fn face_hash_table(&self) -> Value;
 
-    fn defer_next_gui_parameter_resize(&mut self);
-
-    fn should_defer_gui_parameter_resize(&self) -> bool;
-
     fn queue_pending_gui_resize(
         &mut self,
         width_cols: i64,
         total_lines: i64,
         host_target: Option<(u32, u32)>,
-    );
+    ) -> GuiResizeRequestId;
 
     fn clear_pending_gui_resize(&mut self);
 
@@ -486,10 +483,10 @@ impl DisplayFrameExt for Frame {
         // and friends report nil even though the layout already reserves and draws
         // the corresponding chrome — the frame parameter lies about what is on screen.
         //
-        // Each value equals the fallback the layout (window/display.rs) already
-        // applies for the missing parameter, so seeding them changes reporting only,
-        // never geometry: GTK builds default vertical scroll bars to the right,
-        // horizontal off, the standard 8px fringes, and a zero internal/outer border.
+        // GTK builds default vertical scroll bars to the right, horizontal off,
+        // standard 8px fringes, and zero internal/outer borders. NS instead
+        // reserves a two-pixel internal border (nsfns.m:1348); construction
+        // and parameter reporting must use that same default.
         // scroll-bar-width/height are intentionally left unset: their shared
         // fallback is GNU's toolkit default (16 px, xfns.c:2393-2438), which does
         // not follow the frame font either; `frame-parameter` reports that same
@@ -498,8 +495,21 @@ impl DisplayFrameExt for Frame {
         self.set_known_parameter(FrameParam::HorizontalScrollBars, Value::NIL);
         self.set_known_parameter(FrameParam::LeftFringe, Value::fixnum(8));
         self.set_known_parameter(FrameParam::RightFringe, Value::fixnum(8));
-        self.set_known_parameter(FrameParam::InternalBorderWidth, Value::fixnum(0));
+        self.set_known_parameter(
+            FrameParam::InternalBorderWidth,
+            Value::fixnum(i64::from(super::GUI_DEFAULT_INTERNAL_BORDER_WIDTH)),
+        );
         self.set_known_parameter(FrameParam::BorderWidth, Value::fixnum(0));
+        // GNU's `allocate_frame` initializes `tool-bar-position` to `top`
+        // (src/frame.c:1167 `fset_tool_bar_position (f, Qtop)`), and GTK frame
+        // creation passes that initialized value through
+        // `gui_default_parameter (... Qtool_bar_position,
+        // FRAME_TOOL_BAR_POSITION (f), ...)` (src/xfns.c:5298-5299), whether
+        // or not the tool bar is enabled.  Neo draws the bar at the top and
+        // frame-geometry already reports that fallback, so seeding the
+        // parameter makes the frame parameter agree with what is on screen
+        // instead of answering nil.
+        self.set_known_parameter(FrameParam::ToolBarPosition, Value::symbol("top"));
     }
 
     fn parameter(&self, key: &str) -> Option<Value> {
@@ -545,36 +555,29 @@ impl DisplayFrameExt for Frame {
         self.face_hash_table
     }
 
-    fn defer_next_gui_parameter_resize(&mut self) {
-        self.defer_next_gui_parameter_resize = true;
-    }
-
-    fn should_defer_gui_parameter_resize(&self) -> bool {
-        self.defer_next_gui_parameter_resize || self.pending_gui_resize.is_some()
-    }
-
     fn queue_pending_gui_resize(
         &mut self,
         width_cols: i64,
         total_lines: i64,
         host_target: Option<(u32, u32)>,
-    ) {
-        self.defer_next_gui_parameter_resize = false;
+    ) -> GuiResizeRequestId {
+        let request_id = self.allocate_gui_resize_request_id();
         self.pending_gui_resize = Some(PendingGuiResize {
+            request_id,
             width_cols,
             total_lines,
             delivery: host_target.map_or(GuiResizeDelivery::Queued, |(width, height)| {
-                GuiResizeDelivery::Requested {
+                GuiResizeDelivery::Sent {
                     width,
                     height,
                     wait: true,
                 }
             }),
         });
+        request_id
     }
 
     fn clear_pending_gui_resize(&mut self) {
-        self.defer_next_gui_parameter_resize = false;
         self.pending_gui_resize = None;
     }
 
@@ -800,6 +803,31 @@ impl DisplayFrameExt for Frame {
                 self.menu_bar_height = 0;
                 self.tool_bar_height = 0;
                 self.compact_bar_height = self.compact_bar_pixel_height_from_parameters();
+            }
+        }
+        // GNU `free_frame_tool_bar` zeroes `FRAME_TOOLBAR_*` when the line
+        // count goes to 0 (gtkutil.c:6168-6206) and does not clear
+        // `n_tool_bar_items`. Compact presentation stores a 0 height while
+        // `tool-bar-lines` stays 1, and that must not clear an allocation.
+        // A positive count calls `update_frame_tool_bar` before the next
+        // redisplay (xfns.c:1902-1908). Height is projected above, so the
+        // restored allocation is what the following explicit size includes.
+        #[cfg(target_os = "linux")]
+        {
+            use neovm_eval::emacs_core::eval::data::window_state::ToolkitToolBar;
+            if self
+                .known_frame_parameter_int(FrameParam::ToolBarLines)
+                .unwrap_or(0)
+                <= 0
+            {
+                if matches!(self.toolkit_tool_bar, ToolkitToolBar::Allocated) {
+                    self.tool_bar_items_packed = true;
+                }
+                self.toolkit_tool_bar = ToolkitToolBar::Unallocated {
+                    explicit_size_omitted: false,
+                };
+            } else if self.tool_bar_items_packed {
+                self.toolkit_tool_bar = ToolkitToolBar::Allocated;
             }
         }
         self.sync_window_area_bounds();
@@ -1344,10 +1372,8 @@ impl DisplayFrameExt for Frame {
     /// outstanding explicit resize intent must remain available to flush/wait.
     fn refresh_geometry_for_changed_font(&mut self, buffers: &BufferManager) {
         let pending = self.pending_gui_resize.take();
-        let defer = self.defer_next_gui_parameter_resize;
         self.resize_pixelwise_with_buffer_constraints(buffers, self.width, self.height);
         self.pending_gui_resize = pending;
-        self.defer_next_gui_parameter_resize = defer;
     }
 
     /// Apply a live physical frame resize while honoring Lisp-visible window
@@ -1825,17 +1851,6 @@ pub trait DisplayFrameManagerExt {
         placement: SplitPlacement,
     ) -> Option<WindowId>;
 
-    fn split_window_with_combination_limit(
-        &mut self,
-        frame_id: FrameId,
-        window_id: WindowId,
-        direction: SplitDirection,
-        new_buffer_id: BufferId,
-        size: Option<i64>,
-        placement: SplitPlacement,
-        combination_limit: CombinationLimit,
-    ) -> Option<WindowId>;
-
     fn apply_staged_split_sizes(
         &mut self,
         frame_id: FrameId,
@@ -1846,13 +1861,6 @@ pub trait DisplayFrameManagerExt {
     ) -> Option<()>;
 
     fn delete_window(&mut self, frame_id: FrameId, window_id: WindowId) -> bool;
-
-    fn delete_window_with_resize(
-        &mut self,
-        frame_id: FrameId,
-        window_id: WindowId,
-        resize: DeleteResize,
-    ) -> bool;
 
     fn keep_only_window_in_subtree(
         &mut self,
@@ -1886,19 +1894,6 @@ pub trait DisplayFrameManagerExt {
     fn window_new_total(&self, window_id: WindowId) -> Option<i64>;
 
     fn window_new_normal(&self, window_id: WindowId) -> Value;
-
-    fn set_window_new_pixel(
-        &mut self,
-        window_id: WindowId,
-        size: WindowPixelStage,
-    ) -> WindowPixelStage;
-
-    fn set_window_new_total(
-        &mut self,
-        window_id: WindowId,
-        size: WindowTotal,
-        update: NewTotalUpdate,
-    ) -> Result<WindowTotal, neovm_value::tagged::value::FixnumRangeError>;
 
     fn set_window_new_normal(&mut self, window_id: WindowId, value: Value);
 
@@ -1964,16 +1959,6 @@ pub trait DisplayFrameManagerExt {
         horizontal_type: Value,
         persistent: bool,
     ) -> bool;
-
-    fn apply_set_window_buffer_state(
-        &mut self,
-        window_id: WindowId,
-        buffer_id: BufferId,
-        window_start: LispCharPos1,
-        point: LispCharPos1,
-        preserve_display_state: bool,
-        defaults: WindowBufferDisplayDefaults,
-    );
 
     fn live_window_parameters(&self, window_id: WindowId) -> Option<&[(Value, Value)]>;
 
@@ -2239,6 +2224,13 @@ impl DisplayFrameManagerExt for FrameManager {
     ) -> FrameId {
         let frame_id = FrameId(self.next_frame_id);
         self.next_frame_id += 1;
+        // Frame ids are not reused. Drop a tombstone anyway so a wrapped id
+        // cannot answer `framep` with a previous frame's output method.
+        self.deleted_frames.remove(&frame_id);
+        // The heap object exists from the moment the frame does.
+        // `Value::make_frame` never mints: a later missing registry entry
+        // means the id was reclaimed or never created.
+        let _frame_object = Value::mint_frame(frame_id.0);
 
         let window_id = self.next_window_id();
         let bounds = Rect::new(0.0, 0.0, width as f32, height as f32);
@@ -2384,6 +2376,19 @@ impl DisplayFrameManagerExt for FrameManager {
             let Some(buffer) = window.buffer_id().and_then(|id| buffers.get(id)) else {
                 return false;
             };
+            if let Some(accuracy) = window
+                .display()
+                .and_then(|display| display.redisplay_output())
+                .and_then(|output| output.gnu_accuracy)
+            {
+                // GNU accepted post-callback ticks may be current while Neo's
+                // original produced-row inputs and dirty spans remain stale.
+                return !accuracy.source_is_current_for(
+                    buffer.id(),
+                    buffer.modified_tick(),
+                    buffer.overlay_modified_tick(),
+                );
+            }
             if buffer.changed_char_range().is_some() {
                 return true;
             }
@@ -2674,65 +2679,6 @@ impl DisplayFrameManagerExt for FrameManager {
         )
     }
 
-    /// Split a window, honoring the caller's `window-combination-limit`.
-    ///
-    /// [`Self::split_window`] is the same operation with the variable's
-    /// default (`nil`) policy. Only the Lisp entry point
-    /// (`split-window-internal`) has a dynamic binding to pass here; GNU reads
-    /// it as `Vwindow_combination_limit` in `Fsplit_window_internal`
-    /// (`src/window.c:5426`).
-    #[allow(clippy::too_many_arguments)] // mirrors GNU's split parameter set
-    fn split_window_with_combination_limit(
-        &mut self,
-        frame_id: FrameId,
-        window_id: WindowId,
-        direction: SplitDirection,
-        new_buffer_id: BufferId,
-        size: Option<i64>,
-        placement: SplitPlacement,
-        combination_limit: CombinationLimit,
-    ) -> Option<WindowId> {
-        let internal_id = self.alloc_window_id();
-        let new_id = self.alloc_window_id();
-        let frame = self.frames.get_mut(&frame_id)?;
-
-        // GNU decides "interpose a new parent" vs "splice into the existing
-        // combination" *before* touching the tree, from the dynamic variable
-        // plus the target's position in it (`src/window.c:5423-5431`).
-        let parent = parent_combination_of(frame.tree(), window_id)?;
-        let attachment = SplitAttachment::decide(combination_limit, parent, direction);
-
-        split_window_in_tree(
-            frame.tree_mut(),
-            window_id,
-            direction,
-            internal_id,
-            new_id,
-            new_buffer_id,
-            size,
-            placement,
-            attachment,
-        )?;
-
-        // Character edges are NOT re-derived here, and that is deliberate.
-        //
-        // GNU assigns them at resize-apply points -- `Fwindow_resize_apply_total`
-        // sets `r->top_line = FRAME_TOP_MARGIN (f)` and the recursive pass flows
-        // rows to children (`src/window.c:5020`) -- rather than maintaining them
-        // as an invariant over the pixel bounds.  They are therefore legitimately
-        // path-dependent in GNU: with two side windows GNU reports the ROOT at
-        // character row 1 and its CHILD at row 0, both with pixel top 0.
-        //
-        // Syncing here looks more coherent and is measurably wrong: it pulls
-        // side-window leaves down a line, which is what the earlier warning
-        // about `sync_window_area_bounds` was describing, and a
-        // character-edge-only sync does it just the same.
-        frame.recalculate_minibuffer_bounds();
-        frame.tty_posn_adjust_current_matrices();
-        self.mark_window_topology_changed();
-        Some(new_id)
-    }
-
     /// Commit the sizes `window.el` staged for the combination that just
     /// gained `new_window_id`.
     ///
@@ -2790,78 +2736,11 @@ impl DisplayFrameManagerExt for FrameManager {
     /// Delete a window from a frame. Cannot delete the last window.
     ///
     /// The freed space is spread over the remaining siblings. Callers coming
-    /// from Lisp must use [`Self::delete_window_with_resize`] with
-    /// [`DeleteResize::ApplyStaged`] instead, so that the sizes `window.el`
+    /// from Lisp must use `delete_window_with_resize` with
+    /// `DeleteResize::ApplyStaged` instead, so that the sizes `window.el`
     /// already staged are honored.
     fn delete_window(&mut self, frame_id: FrameId, window_id: WindowId) -> bool {
         self.delete_window_with_resize(frame_id, window_id, DeleteResize::Redistribute)
-    }
-
-    /// Delete a window, reclaiming its space per `resize`.
-    ///
-    /// Mirrors GNU `Fdelete_window_internal`, which unlinks the window and then
-    /// commits the staged sizes with `window_resize_apply`.
-    fn delete_window_with_resize(
-        &mut self,
-        frame_id: FrameId,
-        window_id: WindowId,
-        resize: DeleteResize,
-    ) -> bool {
-        let Some(frame) = self.frames.get_mut(&frame_id) else {
-            return false;
-        };
-        if frame.tree().leaf_count() <= 1 {
-            return false; // Can't delete last window
-        }
-
-        let deleted_windows = &mut self.deleted_windows;
-        let deleted_parameters = &mut self.deleted_window_parameters;
-        // A promotion at the very top has no grandparent to merge into, so the
-        // outcome collapses to "was it removed" here.
-        let cells = body::WindowBodyCellSize::new(frame.char_width, frame.char_height);
-        let removed = delete_window_in_tree(frame.tree_mut(), window_id, resize, cells, |window| {
-            let id = window.id();
-            let record = Self::deletion_record(Some(frame_id), Some(&window));
-            let parameters = match window {
-                Window::Leaf { parameters, .. } | Window::Internal { parameters, .. } => parameters,
-            };
-            deleted_windows.insert(id, record);
-            deleted_parameters.insert(id, parameters);
-        })
-        .removed();
-        if removed {
-            // No character-edge resync here either; see the note in
-            // `split_window_with_combination_limit`.  GNU assigns those rows at
-            // resize-apply points, so a survivor keeps its old row until
-            // `window-resize-apply-total` runs -- which is what `window.el`
-            // does on the paths GNU allows into this code at all.
-            frame.recalculate_minibuffer_bounds();
-            frame.tty_posn_adjust_current_matrices();
-        }
-
-        // Deleting an INTERNAL window takes its whole subtree with it, so the
-        // selected window can die without being the one named -- `delete-window`
-        // on a member of an atomic window deletes the atom's ROOT, killing every
-        // leaf beneath it.  Testing `selected_window == window_id` missed that
-        // and left the frame pointing at a dead window, which the next
-        // `window-normalize-window ... t` reported as
-        // "#<window N> is not a live window".  Ask the tree instead.
-        if removed && frame.find_window(frame.selected_window).is_none() {
-            // Select the first remaining leaf. We do NOT touch
-            // `old_selected_window` here — that field is recorded
-            // by `window_change_record` (GNU
-            // `src/window.c:3954-3990`) at redisplay time, not
-            // immediately on deletion.
-            if let Some(first) = frame.tree().leaf_ids().first() {
-                frame.selected_window = *first;
-            }
-        }
-
-        if removed {
-            self.mark_window_topology_changed();
-        }
-
-        removed
     }
 
     /// Replace ROOT with its descendant WINDOW, deleting the other windows in
@@ -3136,41 +3015,6 @@ impl DisplayFrameManagerExt for FrameManager {
         self.lookup_window(window_id)
             .map(Window::new_normal)
             .unwrap_or(Value::NIL)
-    }
-
-    /// Store a checked GNU staging result before the window is mutated.
-    /// Live geometry separately requires a validated WindowPixels.
-    fn set_window_new_pixel(
-        &mut self,
-        window_id: WindowId,
-        size: WindowPixelStage,
-    ) -> WindowPixelStage {
-        if let Some(window) = self.lookup_window_mut(window_id) {
-            window.set_new_pixel(Some(i64::from(size)));
-        }
-        size
-    }
-
-    /// Store the canonical GNU fixnum total, replacing the staged value or
-    /// adding to it (`Fset_window_new_total`). Fails only when a staged total
-    /// outside the fixnum range would have to be added to.
-    fn set_window_new_total(
-        &mut self,
-        window_id: WindowId,
-        size: WindowTotal,
-        update: NewTotalUpdate,
-    ) -> Result<WindowTotal, neovm_value::tagged::value::FixnumRangeError> {
-        let Some(window) = self.lookup_window_mut(window_id) else {
-            return Ok(size);
-        };
-        let stored = match update {
-            NewTotalUpdate::Replace => size,
-            NewTotalUpdate::Add => {
-                WindowTotal::try_from(window.new_total().unwrap_or(0))?.gnu_added(size)
-            }
-        };
-        window.set_new_total(Some(i64::from(stored)));
-        Ok(stored)
     }
 
     /// Write `w->new_normal`. Mirrors GNU `Fset_window_new_normal`.
@@ -3491,104 +3335,6 @@ impl DisplayFrameManagerExt for FrameManager {
         self.window_scroll_bars(window_id) != previous
     }
 
-    /// Apply the window-owned state changes that GNU performs during
-    /// `set_window_buffer`.
-    fn apply_set_window_buffer_state(
-        &mut self,
-        window_id: WindowId,
-        buffer_id: BufferId,
-        window_start: LispCharPos1,
-        point: LispCharPos1,
-        preserve_display_state: bool,
-        defaults: WindowBufferDisplayDefaults,
-    ) {
-        let Some(frame_id) = self.find_window_frame_id(window_id) else {
-            return;
-        };
-        let (fringes_persistent, scroll_bars_persistent) = self
-            .get(frame_id)
-            .and_then(|frame| frame.find_window(window_id))
-            .and_then(Window::display)
-            .map(|display| (display.fringes_persistent, display.scroll_bars_persistent))
-            .unwrap_or((false, false));
-
-        if let Some(Window::Leaf {
-            buffer_id: leaf_buffer_id,
-            mode_line_base,
-            window_start: leaf_window_start,
-            position_markers,
-            window_end,
-            point: leaf_point,
-            old_point,
-            hscroll,
-            min_hscroll,
-            suspend_auto_hscroll,
-            vscroll,
-            preserve_vscroll_p,
-            margins,
-            ..
-        }) = self
-            .get_mut(frame_id)
-            .and_then(|frame| frame.find_window_mut(window_id))
-        {
-            // GNU wset_buffer invalidates the numeric line base for every
-            // install, including the same buffer and identity round trips.
-            *mode_line_base = None;
-            *leaf_buffer_id = buffer_id;
-            *leaf_window_start = window_start.max(LispCharPos1::ONE);
-            *position_markers = super::WindowPositionMarkerState::Detached;
-            // GNU `set_window_buffer` zeroes `w->window_end_pos` and
-            // `w->window_end_vpos` for every buffer install, same buffer or
-            // not (src/window.c:4360-4361): the recorded end is an offset
-            // from Z and describes rows of the buffer that produced it.  An
-            // unrecorded end reads back as Z, which is GNU's zero offset.
-            // Kept across a buffer switch, the old buffer's end was
-            // reinterpreted in the new one and told the viewport policy
-            // that point lay hundreds of lines below the window, so a
-            // `set-window-start` NOFORCE near EOB was recentered where
-            // GNU's "same window start" branch (src/xdisp.c:20972) keeps it.
-            *window_end = super::WindowEndState::Unrecorded;
-            *leaf_point = point.max(LispCharPos1::ONE);
-            if !preserve_display_state {
-                *old_point = point.max(LispCharPos1::ONE);
-                *hscroll = 0;
-                // GNU resets the auto-hscroll lower bound and clears the
-                // suspend flag on buffer switch (src/window.c:4368).
-                *min_hscroll = 0;
-                *suspend_auto_hscroll = false;
-                *vscroll = 0;
-                *preserve_vscroll_p = false;
-            }
-            if let Some(next_margins) = defaults.margins {
-                *margins = next_margins;
-            }
-        }
-
-        if let Some(next_fringes) = defaults.fringes
-            && !fringes_persistent
-        {
-            let _ = self.set_window_fringes(
-                window_id,
-                next_fringes.left_width,
-                next_fringes.right_width,
-                next_fringes.outside_margins,
-                false,
-            );
-        }
-        if let Some(next_scroll_bars) = defaults.scroll_bars
-            && !scroll_bars_persistent
-        {
-            let _ = self.set_window_scroll_bars(
-                window_id,
-                next_scroll_bars.vertical_width,
-                next_scroll_bars.vertical_type,
-                next_scroll_bars.horizontal_height,
-                next_scroll_bars.horizontal_type,
-                false,
-            );
-        }
-    }
-
     fn live_window_parameters(&self, window_id: WindowId) -> Option<&[(Value, Value)]> {
         self.frames
             .values()
@@ -3736,6 +3482,317 @@ impl DisplayFrameManagerExt for FrameManager {
     /// Return the old selected window, when tracked.
     fn old_selected_window(&self) -> Option<WindowId> {
         self.old_selected_window
+    }
+}
+
+/// Crate-local FrameManager operations whose parameters are display-only
+/// types.
+///
+/// These live here rather than on the public [`DisplayFrameManagerExt`] so a
+/// `pub` trait method cannot name a `pub(crate)` type (`private_interfaces`).
+/// Every caller is in this crate; the cross-crate surface keeps only the
+/// methods whose signatures name public types.
+pub(crate) trait DisplayFrameManagerCrateExt {
+    fn split_window_with_combination_limit(
+        &mut self,
+        frame_id: FrameId,
+        window_id: WindowId,
+        direction: SplitDirection,
+        new_buffer_id: BufferId,
+        size: Option<i64>,
+        placement: SplitPlacement,
+        combination_limit: CombinationLimit,
+    ) -> Option<WindowId>;
+
+    fn delete_window_with_resize(
+        &mut self,
+        frame_id: FrameId,
+        window_id: WindowId,
+        resize: DeleteResize,
+    ) -> bool;
+
+    fn set_window_new_pixel(
+        &mut self,
+        window_id: WindowId,
+        size: WindowPixelStage,
+    ) -> WindowPixelStage;
+
+    fn set_window_new_total(
+        &mut self,
+        window_id: WindowId,
+        size: WindowTotal,
+        update: NewTotalUpdate,
+    ) -> Result<WindowTotal, neovm_value::tagged::value::FixnumRangeError>;
+
+    fn apply_set_window_buffer_state(
+        &mut self,
+        window_id: WindowId,
+        buffer_id: BufferId,
+        window_start: LispCharPos1,
+        point: LispCharPos1,
+        preserve_display_state: bool,
+        defaults: WindowBufferDisplayDefaults,
+    );
+}
+
+impl DisplayFrameManagerCrateExt for FrameManager {
+    /// Split a window, honoring the caller's `window-combination-limit`.
+    ///
+    /// [`DisplayFrameManagerExt::split_window`] is the same operation with the variable's
+    /// default (`nil`) policy. Only the Lisp entry point
+    /// (`split-window-internal`) has a dynamic binding to pass here; GNU reads
+    /// it as `Vwindow_combination_limit` in `Fsplit_window_internal`
+    /// (`src/window.c:5426`).
+    #[allow(clippy::too_many_arguments)] // mirrors GNU's split parameter set
+    fn split_window_with_combination_limit(
+        &mut self,
+        frame_id: FrameId,
+        window_id: WindowId,
+        direction: SplitDirection,
+        new_buffer_id: BufferId,
+        size: Option<i64>,
+        placement: SplitPlacement,
+        combination_limit: CombinationLimit,
+    ) -> Option<WindowId> {
+        let internal_id = self.alloc_window_id();
+        let new_id = self.alloc_window_id();
+        let frame = self.frames.get_mut(&frame_id)?;
+
+        // GNU decides "interpose a new parent" vs "splice into the existing
+        // combination" *before* touching the tree, from the dynamic variable
+        // plus the target's position in it (`src/window.c:5423-5431`).
+        let parent = parent_combination_of(frame.tree(), window_id)?;
+        let attachment = SplitAttachment::decide(combination_limit, parent, direction);
+
+        split_window_in_tree(
+            frame.tree_mut(),
+            window_id,
+            direction,
+            internal_id,
+            new_id,
+            new_buffer_id,
+            size,
+            placement,
+            attachment,
+        )?;
+
+        // Character edges are NOT re-derived here, and that is deliberate.
+        //
+        // GNU assigns them at resize-apply points -- `Fwindow_resize_apply_total`
+        // sets `r->top_line = FRAME_TOP_MARGIN (f)` and the recursive pass flows
+        // rows to children (`src/window.c:5020`) -- rather than maintaining them
+        // as an invariant over the pixel bounds.  They are therefore legitimately
+        // path-dependent in GNU: with two side windows GNU reports the ROOT at
+        // character row 1 and its CHILD at row 0, both with pixel top 0.
+        //
+        // Syncing here looks more coherent and is measurably wrong: it pulls
+        // side-window leaves down a line, which is what the earlier warning
+        // about `sync_window_area_bounds` was describing, and a
+        // character-edge-only sync does it just the same.
+        frame.recalculate_minibuffer_bounds();
+        frame.tty_posn_adjust_current_matrices();
+        self.mark_window_topology_changed();
+        Some(new_id)
+    }
+
+    /// Delete a window, reclaiming its space per `resize`.
+    ///
+    /// Mirrors GNU `Fdelete_window_internal`, which unlinks the window and then
+    /// commits the staged sizes with `window_resize_apply`.
+    fn delete_window_with_resize(
+        &mut self,
+        frame_id: FrameId,
+        window_id: WindowId,
+        resize: DeleteResize,
+    ) -> bool {
+        let Some(frame) = self.frames.get_mut(&frame_id) else {
+            return false;
+        };
+        if frame.tree().leaf_count() <= 1 {
+            return false; // Can't delete last window
+        }
+
+        let deleted_windows = &mut self.deleted_windows;
+        let deleted_parameters = &mut self.deleted_window_parameters;
+        // A promotion at the very top has no grandparent to merge into, so the
+        // outcome collapses to "was it removed" here.
+        let cells = body::WindowBodyCellSize::new(frame.char_width, frame.char_height);
+        let removed = delete_window_in_tree(frame.tree_mut(), window_id, resize, cells, |window| {
+            let id = window.id();
+            let record = Self::deletion_record(Some(frame_id), Some(&window));
+            let parameters = match window {
+                Window::Leaf { parameters, .. } | Window::Internal { parameters, .. } => parameters,
+            };
+            deleted_windows.insert(id, record);
+            deleted_parameters.insert(id, parameters);
+        })
+        .removed();
+        if removed {
+            // No character-edge resync here either; see the note in
+            // `split_window_with_combination_limit`.  GNU assigns those rows at
+            // resize-apply points, so a survivor keeps its old row until
+            // `window-resize-apply-total` runs -- which is what `window.el`
+            // does on the paths GNU allows into this code at all.
+            frame.recalculate_minibuffer_bounds();
+            frame.tty_posn_adjust_current_matrices();
+        }
+
+        // Deleting an INTERNAL window takes its whole subtree with it, so the
+        // selected window can die without being the one named -- `delete-window`
+        // on a member of an atomic window deletes the atom's ROOT, killing every
+        // leaf beneath it.  Testing `selected_window == window_id` missed that
+        // and left the frame pointing at a dead window, which the next
+        // `window-normalize-window ... t` reported as
+        // "#<window N> is not a live window".  Ask the tree instead.
+        if removed && frame.find_window(frame.selected_window).is_none() {
+            // Select the first remaining leaf. We do NOT touch
+            // `old_selected_window` here — that field is recorded
+            // by `window_change_record` (GNU
+            // `src/window.c:3954-3990`) at redisplay time, not
+            // immediately on deletion.
+            if let Some(first) = frame.tree().leaf_ids().first() {
+                frame.selected_window = *first;
+            }
+        }
+
+        if removed {
+            self.mark_window_topology_changed();
+        }
+
+        removed
+    }
+
+    /// Store a checked GNU staging result before the window is mutated.
+    /// Live geometry separately requires a validated WindowPixels.
+    fn set_window_new_pixel(
+        &mut self,
+        window_id: WindowId,
+        size: WindowPixelStage,
+    ) -> WindowPixelStage {
+        if let Some(window) = self.lookup_window_mut(window_id) {
+            window.set_new_pixel(Some(i64::from(size)));
+        }
+        size
+    }
+
+    /// Store the canonical GNU fixnum total, replacing the staged value or
+    /// adding to it (`Fset_window_new_total`). Fails only when a staged total
+    /// outside the fixnum range would have to be added to.
+    fn set_window_new_total(
+        &mut self,
+        window_id: WindowId,
+        size: WindowTotal,
+        update: NewTotalUpdate,
+    ) -> Result<WindowTotal, neovm_value::tagged::value::FixnumRangeError> {
+        let Some(window) = self.lookup_window_mut(window_id) else {
+            return Ok(size);
+        };
+        let stored = match update {
+            NewTotalUpdate::Replace => size,
+            NewTotalUpdate::Add => {
+                WindowTotal::try_from(window.new_total().unwrap_or(0))?.gnu_added(size)
+            }
+        };
+        window.set_new_total(Some(i64::from(stored)));
+        Ok(stored)
+    }
+
+    /// Apply the window-owned state changes that GNU performs during
+    /// `set_window_buffer`.
+    fn apply_set_window_buffer_state(
+        &mut self,
+        window_id: WindowId,
+        buffer_id: BufferId,
+        window_start: LispCharPos1,
+        point: LispCharPos1,
+        preserve_display_state: bool,
+        defaults: WindowBufferDisplayDefaults,
+    ) {
+        let Some(frame_id) = self.find_window_frame_id(window_id) else {
+            return;
+        };
+        let (fringes_persistent, scroll_bars_persistent) = self
+            .get(frame_id)
+            .and_then(|frame| frame.find_window(window_id))
+            .and_then(Window::display)
+            .map(|display| (display.fringes_persistent, display.scroll_bars_persistent))
+            .unwrap_or((false, false));
+
+        if let Some(Window::Leaf {
+            buffer_id: leaf_buffer_id,
+            mode_line_base,
+            window_start: leaf_window_start,
+            position_markers,
+            window_end,
+            point: leaf_point,
+            old_point,
+            hscroll,
+            min_hscroll,
+            suspend_auto_hscroll,
+            vscroll,
+            preserve_vscroll_p,
+            margins,
+            ..
+        }) = self
+            .get_mut(frame_id)
+            .and_then(|frame| frame.find_window_mut(window_id))
+        {
+            // GNU wset_buffer invalidates the numeric line base for every
+            // install, including the same buffer and identity round trips.
+            *mode_line_base = None;
+            *leaf_buffer_id = buffer_id;
+            *leaf_window_start = window_start.max(LispCharPos1::ONE);
+            *position_markers = super::WindowPositionMarkerState::Detached;
+            // GNU `set_window_buffer` zeroes `w->window_end_pos` and
+            // `w->window_end_vpos` for every buffer install, same buffer or
+            // not (src/window.c:4360-4361): the recorded end is an offset
+            // from Z and describes rows of the buffer that produced it.  An
+            // unrecorded end reads back as Z, which is GNU's zero offset.
+            // Kept across a buffer switch, the old buffer's end was
+            // reinterpreted in the new one and told the viewport policy
+            // that point lay hundreds of lines below the window, so a
+            // `set-window-start` NOFORCE near EOB was recentered where
+            // GNU's "same window start" branch (src/xdisp.c:20972) keeps it.
+            *window_end = super::WindowEndState::Unrecorded;
+            *leaf_point = point.max(LispCharPos1::ONE);
+            if !preserve_display_state {
+                *old_point = point.max(LispCharPos1::ONE);
+                *hscroll = 0;
+                // GNU resets the auto-hscroll lower bound and clears the
+                // suspend flag on buffer switch (src/window.c:4368).
+                *min_hscroll = 0;
+                *suspend_auto_hscroll = false;
+                *vscroll = 0;
+                *preserve_vscroll_p = false;
+            }
+            if let Some(next_margins) = defaults.margins {
+                *margins = next_margins;
+            }
+        }
+
+        if let Some(next_fringes) = defaults.fringes
+            && !fringes_persistent
+        {
+            let _ = self.set_window_fringes(
+                window_id,
+                next_fringes.left_width,
+                next_fringes.right_width,
+                next_fringes.outside_margins,
+                false,
+            );
+        }
+        if let Some(next_scroll_bars) = defaults.scroll_bars
+            && !scroll_bars_persistent
+        {
+            let _ = self.set_window_scroll_bars(
+                window_id,
+                next_scroll_bars.vertical_width,
+                next_scroll_bars.vertical_type,
+                next_scroll_bars.horizontal_height,
+                next_scroll_bars.horizontal_type,
+                false,
+            );
+        }
     }
 }
 

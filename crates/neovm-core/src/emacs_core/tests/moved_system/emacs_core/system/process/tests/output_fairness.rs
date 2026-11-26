@@ -71,11 +71,13 @@ fn ready_process(eval: &mut Context, name: &str, chunks: usize) -> (ProcessId, A
     let (processes, buffers) = eval.processes_and_buffers_mut();
     processes.sync_process_mark(buffers, id).unwrap();
     let reads = Arc::new(AtomicUsize::new(0));
-    eval.processes_mut().get_mut(id).unwrap().live_io.pty_reader =
-        Some(PtyOutputReader::new(Box::new(ReadyChunks {
+    eval.processes_mut()
+        .get_mut(id)
+        .unwrap()
+        .set_pty_reader(Some(PtyOutputReader::new(Box::new(ReadyChunks {
             remaining: chunks,
             reads: Arc::clone(&reads),
-        })));
+        }))));
     (id, reads)
 }
 
@@ -156,8 +158,9 @@ fn accept_process_output_drains_a_ready_burst_in_one_call() {
             let process = eval.processes_mut().get_mut(id).unwrap();
             process.kind = ProcessKind::Pipe;
             process.childp = Value::NIL;
-            process.live_io.pty_reader = None;
-            process.live_io.child_stdout = Some(ChildOutputReader::Shared(reader));
+            let io = process.live_io_mut();
+            io.set_pty_reader(None);
+            io.set_child_stdout(Some(ChildOutputReader::Shared(reader)));
             writers.push(writer);
         }
         eval.set_variable("accept-burst-process", Value::make_process(hot));
@@ -233,8 +236,9 @@ fn completed_accept_yields_after_a_bounded_minimum_drain() {
         let process = eval.processes_mut().get_mut(hot).unwrap();
         process.kind = ProcessKind::Pipe;
         process.childp = Value::NIL;
-        process.live_io.pty_reader = None;
-        process.live_io.child_stdout = Some(ChildOutputReader::Shared(reader));
+        let io = process.live_io_mut();
+        io.set_pty_reader(None);
+        io.set_child_stdout(Some(ChildOutputReader::Shared(reader)));
     }
     eval.set_variable("bounded-drain-process", Value::make_process(hot));
     eval.eval_str("(set-process-sentinel bounded-drain-process (lambda (_p _event) nil))")

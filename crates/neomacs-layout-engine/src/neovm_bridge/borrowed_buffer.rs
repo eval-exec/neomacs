@@ -88,6 +88,10 @@ impl LayoutBufferView for BorrowedLayoutBuffer<'_> {
         self.buffer.point_max_char_pos()
     }
 
+    fn layout_long_line_optimizations_p(&self) -> bool {
+        self.buffer.long_line_optimizations_p()
+    }
+
     fn layout_total_emacs_byte_len(&self) -> EmacsByteLen {
         self.buffer.total_emacs_byte_len()
     }
@@ -213,8 +217,8 @@ impl LayoutBufferView for BorrowedLayoutBuffer<'_> {
         self.buffer.text_props_is_empty()
     }
 
-    fn layout_overlays(&self) -> &OverlayList {
-        self.buffer.overlays()
+    fn layout_overlays(&self) -> super::LayoutOverlays<'_> {
+        super::LayoutOverlays::Snapshot(self.buffer.overlays())
     }
 
     fn layout_display_target(&self) -> crate::display_property::DisplayPropertyTarget {

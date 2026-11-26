@@ -28,6 +28,7 @@ pub(crate) fn position_buffer_rows(
     window_id: u64,
     window_bounds: neomacs_display_protocol::types::Rect,
     matrix_ncols: usize,
+    paragraph_direction: crate::bidi::ParagraphDirection,
     #[cfg(any(test, feature = "redisplay-test-policy"))]
     mode: neovm_core::window::PosnObjectExtentMode,
 ) -> Result<PreparedBody, RowProgramError> {
@@ -54,7 +55,9 @@ pub(crate) fn position_buffer_rows(
         else {
             return Err(RowProgramError::Unsupported);
         };
-        if buffer_id != end_buffer || end <= start {
+        let allow_zero_buffer_advance =
+            matches!(computed.end_kind, ComputedRowEnd::OverlayContinuation(_));
+        if buffer_id != end_buffer || end < start || (end == start && !allow_zero_buffer_advance) {
             return Err(RowProgramError::Unsupported);
         }
         let row_index = (text_row_base + index) as i64;
@@ -103,14 +106,26 @@ pub(crate) fn position_buffer_rows(
             computed.end.x_px().round() as i64,
         );
         // A complete physical line's last consumed character is its newline.
-        if computed.end_kind == ComputedRowEnd::Newline {
-            geometry.note_row_terminator(DisplayRowTerminator::new(
-                LispCharPos1::from_one_based_usize(end.get()),
-                DisplayRowTerminatorCell::new(
-                    computed.terminator_width,
-                    computed.terminator_height,
-                ),
-            ));
+        match computed.end_kind {
+            ComputedRowEnd::Newline => {
+                geometry.note_row_terminator(DisplayRowTerminator::new(
+                    LispCharPos1::from_one_based_usize(end.get()),
+                    DisplayRowTerminatorCell::new(
+                        computed.terminator_width,
+                        computed.terminator_height,
+                    ),
+                ));
+            }
+            ComputedRowEnd::Continuation => {}
+            ComputedRowEnd::OverlayContinuation(kind) => {
+                geometry.note_overlay_string_row_end(
+                    LispCharPos1::from_one_based_usize(end.get() + 1),
+                    kind,
+                );
+            }
+            ComputedRowEnd::Truncated { .. } => {
+                geometry.note_truncated_end(LispCharPos1::from_one_based_usize(end.get()));
+            }
         }
         geometry.push_text_row(DisplayTextRowMetrics {
             y,
@@ -120,21 +135,29 @@ pub(crate) fn position_buffer_rows(
         });
         computed.row.pixel_y = y - window_top;
         computed.row.start_charpos = start.get();
-        computed.row.end_charpos =
-            end.get() - usize::from(computed.end_kind == ComputedRowEnd::Newline);
+        computed.row.end_charpos = match computed.end_kind {
+            ComputedRowEnd::Newline => end.get() - 1,
+            ComputedRowEnd::Continuation | ComputedRowEnd::OverlayContinuation(_) => end.get(),
+            ComputedRowEnd::Truncated { visible_end } => visible_end,
+        };
         crate::display_row::finalizer::GlyphRowFinalizationContext::new(
             window_id,
             text_row_base + index,
             window_bounds,
         )
+        .with_bidi_paragraph_direction(paragraph_direction)
         .finalize_row(&mut computed.row, matrix_ncols, None);
         // Decoration depends on the finalized paragraph direction. Resolve
         // it after bidi, just as the visible window's fringe pass does.
         if let Some(fringe) = &computed.fringe {
             fringe.decorate_row(
                 &mut computed.row,
-                computed.end_kind == ComputedRowEnd::Continuation,
+                matches!(
+                    computed.end_kind,
+                    ComputedRowEnd::Continuation | ComputedRowEnd::OverlayContinuation(_)
+                ),
                 computed.continuation,
+                matches!(computed.end_kind, ComputedRowEnd::Truncated { .. }),
             );
         }
         computed.row.hash = computed.row.compute_hash();

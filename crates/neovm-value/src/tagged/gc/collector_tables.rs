@@ -151,7 +151,9 @@ impl TaggedHeap {
 
     /// Collector accounting must inspect table backing under the same seal as
     /// mark/sweep. Allocation retains its existing serial static helper.
-    pub(super) fn collector_object_bytes(&self, header: *const GcHeader) -> usize {
+    /// # Safety
+    /// `header` must point to a live, initialized GC object header.
+    pub(super) unsafe fn collector_object_bytes(&self, header: *const GcHeader) -> usize {
         // SAFETY: callers already require a live initialized object header.
         unsafe {
             if (*header).kind == HeapObjectKind::VecLike

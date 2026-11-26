@@ -1,0 +1,23 @@
+error[E0599]: the associated function or constant `check` exists for struct `RequireCopy<neovm_value::tagged::collection_reads::ObservationPlaceholderGuard>`, but its trait bounds were not satisfied
+ --> tests/pentry_e2_loan_ui/transfer_observation_guard_not_copy.rs
+  |
+  |     loan_bounds::RequireCopy::<ObservationPlaceholderGuard>::check();
+  |                                                              ^^^^^ associated function or constant cannot be called due to unsatisfied trait bounds
+  |
+ ::: $WORKSPACE/crates/neovm-value/src/tagged/collection_reads.rs
+  |
+  | pub struct ObservationPlaceholderGuard {
+  | -------------------------------------- doesn't satisfy `_: Copy`
+  |
+ ::: tests/pentry_e2_loan_ui/support/loan_bounds.rs
+  |
+  | pub struct RequireCopy<T>(PhantomData<T>);
+  | ------------------------- associated function or constant `check` not found for this struct
+  |
+note: trait bound `neovm_value::tagged::collection_reads::ObservationPlaceholderGuard: Copy` was not satisfied
+ --> tests/pentry_e2_loan_ui/support/loan_bounds.rs
+  |
+  | impl<T: Copy> RequireCopy<T> {
+  |         ^^^^  --------------
+  |         |
+  |         unsatisfied trait bound introduced here

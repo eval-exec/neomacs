@@ -1,0 +1,7 @@
+error[E0609]: no field `float` on type `neovm_value::tagged::gc::OwnerRegionRefund`
+ --> tests/heap_capability_ui/a4_owner_region_refund_no_float_field.rs:8:20
+  |
+8 |     let _ = refund.float;
+  |                    ^^^^^ unknown field
+  |
+  = note: available field is: `cons`

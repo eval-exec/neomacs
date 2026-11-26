@@ -229,6 +229,12 @@ fn ccl_symbol_plist(symbol: SymId) -> Option<Value> {
     Some(unsafe { (hooks.symbol_plist)(hooks.raw, symbol) })
 }
 
+mod registry_detach;
+#[doc(hidden)]
+pub use registry_detach::detach_ccl_registry;
+#[doc(hidden)]
+pub mod source_scope;
+
 thread_local! {
     static CCL_REGISTRY: HeapRegistrySlot<CclRegistry> = HeapRegistrySlot::new(CclRegistry::with_defaults());
 }
@@ -440,7 +446,6 @@ fn compiled_ccl_words(designator: Value, mode: SymbolMode) -> Result<Vec<i32>, F
         .as_vector_data()
         .expect("validated CCL program is a vector")
         .iter()
-        .copied()
         .map(|word| resolve_ccl_word(word, mode))
         .map(|resolved| {
             // GNU `resolve_symbol_ccl_program` requires every word to be a C
@@ -523,7 +528,7 @@ fn checked_lisp_translation_hash_lookup(id: i64, key: i64) -> Option<Translation
     let Some(index) = usize::try_from(id).ok() else {
         return Some(TranslationHashLookup::Invalid);
     };
-    let Some(slot) = data.get(index).copied() else {
+    let Some(slot) = data.get(index) else {
         return Some(TranslationHashLookup::Invalid);
     };
     let table = if slot.is_cons() {
@@ -559,7 +564,7 @@ fn lisp_vector_slot(name: &str, id: i64) -> Option<Value> {
     let vector = ccl_value_by_name(name)?;
     let data = vector.as_vector_data()?;
     let index = usize::try_from(id).ok()?;
-    data.get(index).copied()
+    data.get(index)
 }
 
 fn write_embedded_characters(
@@ -1528,7 +1533,8 @@ pub fn builtin_ccl_execute_on_string_impl_with_symbols(
             *register = integer;
         }
     }
-    let initial_instruction = status[8]
+    let initial_instruction = status
+        .at(8)
         .as_int()
         .and_then(|instruction| usize::try_from(instruction).ok());
     let input = ccl_string_input(string);

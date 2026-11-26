@@ -135,6 +135,16 @@ const NOTO_SANS_HEBREW_VARIABLE_NAME: &str = "NotoSansHebrew-variable.ttf";
 const NOTO_SANS_HEBREW_VARIABLE_URL: &str = "https://raw.githubusercontent.com/google/fonts/142c8963e7606b510c93a644c82a4c4cdeae6ef9/ofl/notosanshebrew/NotoSansHebrew%5Bwdth,wght%5D.ttf";
 const NOTO_SANS_HEBREW_VARIABLE_SHA256: &str =
     "7ef36a2c3593758cdb622e1bdef4f84523e92fbc3ccc667438dd80ff54c2de88";
+// The Arabic and Devanagari coverage of issue #785 in ONE serif face.  Pinned
+// from GNU's own mirror rather than a distro rebuild: the member's bytes are
+// the exact file the GNU oracle rows were produced against, so both engines
+// shape the same outlines under a private fontconfig.
+const FREEFONT_ARCHIVE_NAME: &str = "freefont-ttf-20120503.zip";
+const FREEFONT_ARCHIVE_URL: &str = "https://ftp.gnu.org/gnu/freefont/freefont-ttf-20120503.zip";
+const FREEFONT_ARCHIVE_SHA256: &str =
+    "7c85baf1bf82a1a1845d1322112bc6ca982221b484e3b3925022e25b5cae89af";
+const FREE_SERIF_NAME: &str = "FreeSerif-20120503.ttf";
+const FREE_SERIF_SHA256: &str = "658563c732eafdc851de2b3f38b27d0afcde5674b2f93440971b9693438c6494";
 
 // The Linux GUI CI job installs fonts-ubuntu 0.869+git20240321 and
 // fonts-dejavu-core 2.37 from noble; the desktop-font fixtures capture pixel
@@ -232,8 +242,11 @@ static LXGW_NERD_REGULAR_FIXTURE: OnceLock<PathBuf> = OnceLock::new();
 static MPLUS_1_CODE_THIN_FIXTURE: OnceLock<PathBuf> = OnceLock::new();
 static NOTO_SANS_MONO_VARIABLE_FIXTURE: OnceLock<PathBuf> = OnceLock::new();
 static NOTO_SANS_ARABIC_VARIABLE_FIXTURE: OnceLock<PathBuf> = OnceLock::new();
+static NOTO_SANS_ARABIC_VARIABLE_CACHED_FIXTURE: OnceLock<PathBuf> = OnceLock::new();
+static DESKTOP_FONTS_CACHED_FIXTURE: OnceLock<DesktopFontFixtures> = OnceLock::new();
 static NOTO_SERIF_VARIABLE_FIXTURE: OnceLock<PathBuf> = OnceLock::new();
 static NOTO_SANS_HEBREW_VARIABLE_FIXTURE: OnceLock<PathBuf> = OnceLock::new();
+static FREE_SERIF_FIXTURE: OnceLock<PathBuf> = OnceLock::new();
 static NOTO_COLOR_EMOJI_FIXTURE: OnceLock<PathBuf> = OnceLock::new();
 static NOTO_COLOR_EMOJI_COLRV1_FIXTURE: OnceLock<PathBuf> = OnceLock::new();
 static NABLA_FIXTURE: OnceLock<PathBuf> = OnceLock::new();
@@ -490,6 +503,107 @@ pub fn noto_sans_arabic_variable() -> &'static Path {
             )
         })
         .as_path()
+}
+
+/// Cached-only Noto Sans Arabic for compatibility suites that must not touch
+/// the network at test runtime.
+///
+/// Provision the shared cache once with `cargo xtask font-fixtures`. A missing
+/// or SHA-256-mismatched file panics (`FIXTURE-MISSING:`), which fails the
+/// test instead of downloading or skipping.
+#[must_use]
+pub fn noto_sans_arabic_variable_cached() -> &'static Path {
+    NOTO_SANS_ARABIC_VARIABLE_CACHED_FIXTURE
+        .get_or_init(|| {
+            require_cached_pinned_file(
+                NOTO_SANS_ARABIC_VARIABLE_NAME,
+                NOTO_SANS_ARABIC_VARIABLE_SHA256,
+            )
+        })
+        .as_path()
+}
+
+/// GNU FreeFont's FreeSerif regular face (2012 release), carrying the Arabic
+/// and Devanagari coverage of issue #785 in one file.
+///
+/// The zip is fetched from GNU's own mirror and the member is verified, so
+/// every host shapes the same outlines as the pinned GNU oracle reference.
+#[must_use]
+pub fn free_serif() -> &'static Path {
+    FREE_SERIF_FIXTURE
+        .get_or_init(|| {
+            prepare_free_serif().unwrap_or_else(|error| {
+                panic_fixture_fetch(FREEFONT_ARCHIVE_URL, FREEFONT_ARCHIVE_SHA256, &error)
+            })
+        })
+        .as_path()
+}
+
+fn prepare_free_serif() -> Result<PathBuf, FixtureError> {
+    const ENTRY: &str = "freefont-20120503/FreeSerif.ttf";
+    let root = font_fixture_cache_root();
+    create_dir_all(&root)?;
+    let lock_path = root.join(".freefont-ttf-20120503.lock");
+    let lock = open_lock(&lock_path)?;
+    lock.lock().map_err(|source| FixtureError::Io {
+        path: lock_path.clone(),
+        source,
+    })?;
+    let result = (|| {
+        let destination = root.join(FREE_SERIF_NAME);
+        if destination.exists() && verify_sha256(&destination, FREE_SERIF_SHA256).is_ok() {
+            return Ok(destination);
+        }
+        let archive = neomacs_infra::pinned::pinned_file_with_limit(
+            FREEFONT_ARCHIVE_NAME,
+            FREEFONT_ARCHIVE_URL,
+            FREEFONT_ARCHIVE_SHA256,
+            16 * 1024 * 1024,
+        )
+        .map_err(|source| FixtureError::Fixture {
+            name: FREEFONT_ARCHIVE_NAME.to_owned(),
+            url: FREEFONT_ARCHIVE_URL,
+            sha256: FREEFONT_ARCHIVE_SHA256,
+            source,
+        })?;
+        extract_verified_zip_member(Path::new(&archive), ENTRY, &destination, FREE_SERIF_SHA256)?;
+        Ok(destination)
+    })();
+    FileExt::unlock(&lock).map_err(|source| FixtureError::Io {
+        path: lock_path,
+        source,
+    })?;
+    result
+}
+
+/// Cached-only DesktopFontFixtures directory, verified file by file.
+///
+/// Same deterministic-provisioning contract as
+/// [`noto_sans_arabic_variable_cached`].
+#[must_use]
+pub fn desktop_fonts_cached() -> &'static DesktopFontFixtures {
+    DESKTOP_FONTS_CACHED_FIXTURE.get_or_init(|| {
+        let directory = font_fixture_cache_root().join("desktop-fonts");
+        match desktop_font_files_match(&directory) {
+            Ok(true) => DesktopFontFixtures { directory },
+            Ok(false) | Err(_) => panic!(
+                "FIXTURE-MISSING: cached desktop fonts are absent or do not match their pinned SHA-256 in {}; run `cargo xtask font-fixtures` before this suite",
+                directory.display()
+            ),
+        }
+    })
+}
+
+/// Return an already-provisioned fixture file without any network access.
+fn require_cached_pinned_file(name: &'static str, sha256: &'static str) -> PathBuf {
+    let path = font_fixture_cache_root().join(name);
+    if path.is_file() && verify_sha256(&path, sha256).is_ok() {
+        return path;
+    }
+    panic!(
+        "FIXTURE-MISSING: pinned fixture {name} is absent or its SHA-256 does not match {sha256} in {}; run `cargo xtask font-fixtures` before this suite",
+        path.display()
+    );
 }
 
 /// Pinned Hebrew shaping face used alongside the Arabic, CJK, Latin and
@@ -1201,6 +1315,7 @@ pub fn prefetch_all_fixtures() {
     std::hint::black_box(noto_sans_arabic_variable());
     std::hint::black_box(noto_sans_hebrew_variable());
     std::hint::black_box(noto_serif_variable());
+    std::hint::black_box(free_serif());
     std::hint::black_box(desktop_fonts());
     std::hint::black_box(lxgw_wenkai_nerd_regular_1_522());
     std::hint::black_box(noto_sans_variable());

@@ -622,3 +622,186 @@ fn direct_reader_delivers_with_unused_legacy_receiver_dropped_then_stops() {
         "a disconnected unused display queue must not close the direct publisher"
     );
 }
+
+#[test]
+fn direct_reader_pause_releases_input_fd_until_guard_drops() {
+    use std::io::Read as _;
+
+    let hooks = Hooks::new();
+    let pty = NativePty::new();
+    let (emacs, render) = ThreadComms::new().split();
+    drop(emacs.input_rx);
+    let (tx, rx) = crossbeam_channel::unbounded();
+    let attempts = Arc::new(Mutex::new(Vec::new()));
+    let publisher = TestPublisher {
+        output: tx,
+        attempts,
+    };
+    let pause = TtyInputPause::new();
+    let reader = TtyInputReader::spawn_primary_with_test_source_and_pause(
+        render,
+        pty.slave.try_clone().expect("direct reader slave lease"),
+        pty.size_query(),
+        publisher,
+        pause.clone(),
+        Some(hooks.callback()),
+    )
+    .expect("spawn direct reader with pause handle");
+
+    let mut master = pty.master;
+    master.write_all(b"A").expect("write before pause");
+    let first = rx
+        .recv_timeout(DEADLOCK_CAP)
+        .expect("deliver input before pause");
+    assert_eq!(first, Fact::Bytes(b"A".to_vec()));
+
+    // Pause synchronously parks tty-input-raw outside poll/read on the slave fd.
+    let guard = pause.pause();
+    master.write_all(b"yn\n").expect("write during pause");
+    let mut direct_slave = File::from(pty.slave.try_clone().expect("direct slave read"));
+    let mut direct_buf = [0u8; 3];
+    direct_slave
+        .read_exact(&mut direct_buf)
+        .expect("caller must read all bytes written while reader is paused");
+    assert_eq!(&direct_buf, b"yn\n");
+    assert!(
+        rx.try_recv().is_err(),
+        "paused reader must not publish bytes consumed by emergency escape"
+    );
+
+    // Dropping the guard resumes normal acquisition.
+    drop(guard);
+    master.write_all(b"Z").expect("write after resume");
+    let after = rx
+        .recv_timeout(DEADLOCK_CAP)
+        .expect("deliver input after resume");
+    assert_eq!(after, Fact::Bytes(b"Z".to_vec()));
+
+    let _ = emacs
+        .cmd_tx
+        .send(RenderCommand::Lifecycle(LifecycleCommand::Shutdown));
+    reader.join();
+}
+
+#[test]
+fn direct_reader_suspend_pauses_reads_and_resume_restarts_at_size_query() {
+    let mut fixture = DirectFixture::start(Hooks::new());
+    fixture.pty.send(b"A");
+    assert_eq!(fixture.recv(), Fact::Bytes(b"A".to_vec()));
+
+    let suspended = fixture.hooks.arm(Checkpoint::SuspendedObserved);
+    fixture
+        .commands
+        .as_ref()
+        .unwrap()
+        .send(RenderCommand::Lifecycle(LifecycleCommand::SuspendTty))
+        .unwrap();
+    fixture.hooks.wait_gate(Checkpoint::SuspendedObserved);
+
+    let before_poll = fixture.hooks.arm(Checkpoint::BeforePoll);
+    drop(suspended);
+    fixture.hooks.wait_gate(Checkpoint::BeforePoll);
+
+    // Resize and write bytes while the reader is suspended. Because Paused
+    // passes fd=-1 to poll, the reader must neither consume bytes nor report
+    // input readiness until ResumeTty arrives.
+    let resized = TerminalCellSize::new(96.into(), 30.into());
+    fixture.pty.resize(resized);
+    fixture.pty.send(b"B");
+    let after_poll = fixture.hooks.arm(Checkpoint::AfterPoll {
+        wake_readable: false,
+        input_readable: false,
+        timed_out: true,
+    });
+    drop(before_poll);
+    fixture.hooks.wait_gate(Checkpoint::AfterPoll {
+        wake_readable: false,
+        input_readable: false,
+        timed_out: true,
+    });
+    assert_eq!(
+        *fixture.attempts.lock().unwrap(),
+        vec![Fact::Bytes(b"A".to_vec())],
+        "suspended reader must not read or publish PTY input while paused"
+    );
+
+    let resumed = fixture.hooks.arm(Checkpoint::ResumedObserved);
+    fixture
+        .commands
+        .as_ref()
+        .unwrap()
+        .send(RenderCommand::Lifecycle(LifecycleCommand::ResumeTty))
+        .unwrap();
+    drop(after_poll);
+    fixture.hooks.wait_gate(Checkpoint::ResumedObserved);
+
+    let size_query = fixture.hooks.arm(Checkpoint::BeforeSizeQuery);
+    drop(resumed);
+    fixture.hooks.wait_gate(Checkpoint::BeforeSizeQuery);
+    drop(size_query);
+
+    assert_eq!(fixture.recv(), Fact::Resize(resized));
+    assert_eq!(fixture.recv(), Fact::Bytes(b"B".to_vec()));
+    assert!(fixture.finish().is_empty());
+}
+
+#[test]
+fn direct_reader_owner_stop_while_suspended_exits_cleanly() {
+    let fixture = DirectFixture::start(Hooks::new());
+    let suspended = fixture.hooks.arm(Checkpoint::SuspendedObserved);
+    fixture
+        .commands
+        .as_ref()
+        .unwrap()
+        .send(RenderCommand::Lifecycle(LifecycleCommand::SuspendTty))
+        .unwrap();
+    fixture.hooks.wait_gate(Checkpoint::SuspendedObserved);
+
+    fixture.request_stop();
+    let owner_stop = fixture.hooks.arm(Checkpoint::OwnerStopObserved);
+    drop(suspended);
+    fixture.hooks.wait_gate(Checkpoint::OwnerStopObserved);
+    drop(owner_stop);
+
+    let history_owner = Arc::clone(&fixture.hooks.state);
+    assert!(fixture.finish().is_empty());
+    let history = history_owner.history.lock().unwrap();
+    assert!(
+        history
+            .iter()
+            .any(|event| event.checkpoint == Checkpoint::AcquisitionStopped)
+    );
+}
+
+#[test]
+fn direct_reader_shutdown_while_suspended_exits_cleanly() {
+    let fixture = DirectFixture::start(Hooks::new());
+    let suspended = fixture.hooks.arm(Checkpoint::SuspendedObserved);
+    fixture
+        .commands
+        .as_ref()
+        .unwrap()
+        .send(RenderCommand::Lifecycle(LifecycleCommand::SuspendTty))
+        .unwrap();
+    fixture.hooks.wait_gate(Checkpoint::SuspendedObserved);
+
+    fixture
+        .commands
+        .as_ref()
+        .unwrap()
+        .send(RenderCommand::Lifecycle(LifecycleCommand::Shutdown))
+        .unwrap();
+    let shutdown = fixture.hooks.arm(Checkpoint::ShutdownObserved);
+    drop(suspended);
+    fixture.hooks.wait_gate(Checkpoint::ShutdownObserved);
+    drop(shutdown);
+
+    let history_owner = Arc::clone(&fixture.hooks.state);
+    assert!(fixture.finish().is_empty());
+    let history = history_owner.history.lock().unwrap();
+    assert!(
+        history
+            .iter()
+            .any(|event| event.checkpoint == Checkpoint::AcquisitionStopped)
+    );
+}

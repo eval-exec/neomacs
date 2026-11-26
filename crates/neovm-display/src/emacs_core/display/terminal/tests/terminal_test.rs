@@ -69,15 +69,15 @@ impl TtyFrameHostFactory for DeferredRedisplayFactory {
 }
 
 impl TerminalHost for FailingDeleteTerminalHost {
-    fn suspend_tty(&mut self) -> Result<(), String> {
+    fn suspend_tty(&mut self, _reset_strings: &[u8]) -> Result<(), String> {
         Ok(())
     }
 
-    fn resume_tty(&mut self) -> Result<(), String> {
+    fn resume_tty(&mut self, _set_strings: &[u8]) -> Result<(), String> {
         Ok(())
     }
 
-    fn delete_terminal(&mut self) -> Result<(), String> {
+    fn delete_terminal(&mut self, _reset_strings: &[u8]) -> Result<(), String> {
         Err("terminal already disappeared".to_string())
     }
 }
@@ -1002,6 +1002,80 @@ fn make_terminal_frame_without_a_device_reuses_the_selected_secondary_terminal()
     );
 }
 
+/// A second root frame on a secondary terminal reads that terminal's fd,
+/// not the cells stored on the frame the open path created.
+#[test]
+fn make_terminal_frame_on_a_secondary_terminal_reads_that_terminals_winsize() {
+    crate::test_utils::init_test_tracing();
+    reset_terminal_thread_locals();
+    configure_terminal_runtime(TerminalRuntimeConfig::window_system(
+        neomacs_display_protocol::GraphicalDisplayIdentity::named(
+            neomacs_display_protocol::GraphicalBackend::X11,
+            ":0",
+        )
+        .unwrap(),
+    ));
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
+    let scratch = eval.edit.buffers.create_buffer("*scratch*");
+    eval.edit.buffers.set_current(scratch);
+    eval.set_tty_frame_host_factory(Box::new(ReportingWinsizeFactory));
+    let params = Value::list(vec![
+        Value::cons(Value::symbol("tty"), Value::string("/dev/pts/42")),
+        Value::cons(Value::symbol("tty-type"), Value::string("xterm-256color")),
+    ]);
+    let first = crate::emacs_core::frame::builtin_make_terminal_frame(&mut eval, vec![params])
+        .expect("open secondary terminal");
+    let first_id = crate::window::FrameId(first.as_frame_id().expect("first frame id"));
+    let (first_terminal, first_size) = {
+        let first_frame = eval.frame_manager().get(first_id).expect("first frame");
+        (
+            first_frame.terminal_id,
+            (first_frame.width, first_frame.height),
+        )
+    };
+    assert_eq!(first_size, (132, 43));
+
+    let second = crate::emacs_core::frame::builtin_make_terminal_frame(&mut eval, vec![Value::NIL])
+        .expect("reuse selected secondary terminal");
+    let second_id = crate::window::FrameId(second.as_frame_id().expect("second frame id"));
+    let second_frame = eval.frame_manager().get(second_id).expect("second frame");
+    assert_eq!(second_frame.terminal_id, first_terminal);
+    assert_eq!((second_frame.width, second_frame.height), (20, 10));
+}
+
+struct ReportingWinsizeHost;
+
+impl TerminalHost for ReportingWinsizeHost {
+    fn suspend_tty(&mut self, _reset_strings: &[u8]) -> Result<(), String> {
+        Ok(())
+    }
+
+    fn resume_tty(&mut self, _set_strings: &[u8]) -> Result<(), String> {
+        Ok(())
+    }
+
+    fn delete_terminal(&mut self, _reset_strings: &[u8]) -> Result<(), String> {
+        Ok(())
+    }
+
+    fn tty_winsize_cells(&mut self) -> Option<(u32, u32)> {
+        Some((20, 10))
+    }
+}
+
+struct ReportingWinsizeFactory;
+
+impl TtyFrameHostFactory for ReportingWinsizeFactory {
+    fn open_tty(&mut self, _request: TtyFrameOpenRequest) -> Result<OpenedTtyFrameHost, String> {
+        Ok(OpenedTtyFrameHost::new(
+            TtyFrameSize::new(132, 43).expect("open size"),
+            neomacs_display_protocol::tty_capabilities::TtyAttributeCapabilities::full_with_color_cells(256),
+            127,
+            Box::new(ReportingWinsizeHost),
+        ))
+    }
+}
+
 #[test]
 fn make_terminal_frame_reuses_an_active_tty_already_open_on_the_named_device() {
     crate::test_utils::init_test_tracing();
@@ -1237,6 +1311,729 @@ fn frame_initial_p_still_answers_for_frames() {
 /// state the ANSWER it expects and report the raise it got instead.
 fn frame_initial_p(eval: &mut Context, designator: Value) -> Result<Value, String> {
     builtin_frame_initial_p(eval, vec![designator]).map_err(|flow| format!("{flow:?}"))
+}
+
+fn winsize_zero() -> (u32, u32) {
+    (0, 0)
+}
+
+fn winsize_eighty_by_twenty_four() -> (u32, u32) {
+    (80, 24)
+}
+
+fn winsize_other() -> (u32, u32) {
+    (7, 9)
+}
+
+fn install_initial_winsize(query: fn() -> (u32, u32)) {
+    set_initial_terminal_winsize_query(query).expect("install the terminal's winsize query");
+}
+
+/// GNU `Fmake_terminal_frame` sizes a root frame from `TIOCGWINSZ`, then
+/// `adjust_frame_size`'s safe floor (`frame.c:1861-1863`, `frame.c:562-570`).
+/// Attested on the pinned oracle, menu bar on, 0x0 pty: the new frame is live,
+/// `frame-width` 2, `frame-height` 3. The selected frame is a different size
+/// so a copy of that record cannot satisfy the assertion.
+#[test]
+fn make_terminal_frame_on_zero_winsize_stays_live_at_the_safe_floor() {
+    let mut eval = tty_root_frame_context();
+    install_initial_winsize(winsize_zero);
+    let scratch = eval.edit.buffers.create_buffer("*scratch*");
+    eval.edit.buffers.set_current(scratch);
+    eval.frame_manager_mut().create_frame("F1", 40, 12, scratch);
+
+    let made = crate::emacs_core::frame::builtin_make_terminal_frame(&mut eval, vec![Value::NIL])
+        .expect("a 0x0 winsize must not panic");
+    let made = made_frame(&eval, made);
+    assert_eq!(made.width, 2);
+    assert_eq!(
+        crate::emacs_core::window_cmds::frame_realized_lines(made),
+        3
+    );
+    assert_eq!(made.height, 4);
+}
+
+/// Menu bar off, 0x0 pty. Attested GNU `frame-width` 2, `frame-height` 2.
+#[test]
+fn make_terminal_frame_on_zero_winsize_without_a_menu_bar_uses_the_text_floor() {
+    let mut eval = tty_root_frame_context();
+    eval.set_variable("menu-bar-mode", Value::NIL);
+    install_initial_winsize(winsize_zero);
+    let scratch = eval.edit.buffers.create_buffer("*scratch*");
+    eval.edit.buffers.set_current(scratch);
+    eval.frame_manager_mut().create_frame("F1", 40, 12, scratch);
+
+    let made = crate::emacs_core::frame::builtin_make_terminal_frame(&mut eval, vec![Value::NIL])
+        .expect("a 0x0 winsize must not panic");
+    let made = made_frame(&eval, made);
+    assert_eq!(made.width, 2);
+    assert_eq!(
+        crate::emacs_core::window_cmds::frame_realized_lines(made),
+        2
+    );
+    assert_eq!(made.height, 2);
+}
+
+/// An 80x24 winsize is above the floor. Attested `frame-height` is 23 because
+/// the menu bar occupies one of the 24 rows (`frame.c:1862`).
+#[test]
+fn make_terminal_frame_on_eighty_by_twenty_four_keeps_the_winsize() {
+    let mut eval = tty_root_frame_context();
+    install_initial_winsize(winsize_eighty_by_twenty_four);
+    let scratch = eval.edit.buffers.create_buffer("*scratch*");
+    eval.edit.buffers.set_current(scratch);
+    eval.frame_manager_mut().create_frame("F1", 40, 12, scratch);
+
+    let made = crate::emacs_core::frame::builtin_make_terminal_frame(&mut eval, vec![Value::NIL])
+        .expect("80x24 make-frame");
+    let made = made_frame(&eval, made);
+    assert_eq!(made.width, 80);
+    assert_eq!(made.height, 24);
+    assert_eq!(
+        crate::emacs_core::window_cmds::frame_realized_lines(made),
+        23
+    );
+}
+
+/// The query is publish-once on the terminal record. The same function is
+/// idempotent. A different function is a typed refusal.
+#[test]
+fn a_different_initial_winsize_query_is_refused() {
+    crate::test_utils::init_test_tracing();
+    reset_terminal_thread_locals();
+    assert_eq!(
+        set_initial_terminal_winsize_query(winsize_zero),
+        Ok(WinsizeQueryInstall::Installed)
+    );
+    assert_eq!(
+        set_initial_terminal_winsize_query(winsize_zero),
+        Ok(WinsizeQueryInstall::AlreadyInstalled)
+    );
+    assert_eq!(
+        set_initial_terminal_winsize_query(winsize_other),
+        Err(WinsizeQueryError::DifferentQuery)
+    );
+}
+
+fn tty_root_frame_context() -> Context {
+    crate::test_utils::init_test_tracing();
+    reset_terminal_thread_locals();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
+    super::pure::mark_selected_terminal_usable_for_test(&eval);
+    eval.set_variable("noninteractive", Value::NIL);
+    eval.set_variable("menu-bar-mode", Value::T);
+    eval.set_variable("tab-bar-mode", Value::NIL);
+    eval
+}
+
+fn made_frame(eval: &Context, made: Value) -> &crate::window::Frame {
+    let id = crate::window::FrameId(made.as_frame_id().expect("frame id"));
+    eval.frame_manager().get(id).expect("new frame is live")
+}
+
+struct EmergencyEscapeProbeHost {
+    calls: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    trigger_auto_save: bool,
+    recorded_mode_strings: Option<Rc<RefCell<Vec<(Vec<u8>, Vec<u8>)>>>>,
+}
+
+impl TerminalHost for EmergencyEscapeProbeHost {
+    fn suspend_tty(&mut self, _reset_strings: &[u8]) -> Result<(), String> {
+        Ok(())
+    }
+
+    fn resume_tty(&mut self, _set_strings: &[u8]) -> Result<(), String> {
+        Ok(())
+    }
+
+    fn run_emergency_escape(
+        &mut self,
+        reset_strings: &[u8],
+        ops: &mut dyn EmergencyEscapeOps,
+    ) -> bool {
+        self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        if self.trigger_auto_save {
+            ops.auto_save();
+        }
+        if let Some(recorded) = &self.recorded_mode_strings {
+            recorded
+                .borrow_mut()
+                .push((reset_strings.to_vec(), ops.tty_mode_set_strings()));
+        }
+        true
+    }
+}
+
+fn interactive_controlling_tty_context() -> Context {
+    let eval = tty_root_frame_context();
+    configure_terminal_runtime(
+        TerminalRuntimeConfig::interactive(
+            Some("xterm-256color".to_string()),
+            neomacs_display_protocol::tty_capabilities::TtyAttributeCapabilities::full_with_color_cells(
+                256,
+            ),
+        )
+        .with_name("/dev/tty"),
+    );
+    eval
+}
+
+#[test]
+fn controlling_tty_second_quit_interrupt_triggers_emergency_escape() {
+    let mut eval = interactive_controlling_tty_context();
+    let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let recorded_mode_strings = Rc::new(RefCell::new(Vec::new()));
+    set_terminal_host(Box::new(EmergencyEscapeProbeHost {
+        calls: std::sync::Arc::clone(&calls),
+        trigger_auto_save: true,
+        recorded_mode_strings: Some(Rc::clone(&recorded_mode_strings)),
+    }));
+    builtin_set_terminal_parameter(
+        &mut eval,
+        vec![
+            Value::NIL,
+            Value::symbol("tty-mode-reset-strings"),
+            Value::list(vec![Value::string("<R1>"), Value::string("<R2>")]),
+        ],
+    )
+    .expect("set tty-mode-reset-strings");
+    builtin_set_terminal_parameter(
+        &mut eval,
+        vec![
+            Value::NIL,
+            Value::symbol("tty-mode-set-strings"),
+            Value::list(vec![Value::string("<S1>"), Value::string("<S2>")]),
+        ],
+    )
+    .expect("set tty-mode-set-strings");
+    eval.set_variable("inhibit-quit", Value::T);
+
+    // 1st C-g sets quit-flag without entering emergency escape.
+    eval.record_quit_interrupts(1);
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+    assert!(eval.quit_flag_value().is_truthy());
+    assert!(eval.inhibit_quit.is_truthy());
+
+    // 2nd C-g while quit-flag is non-nil enters controlling-TTY emergency escape
+    // instead of incrementing force_quit_count or clearing inhibit-quit, and
+    // forwards GNU's tty-mode-reset-strings / tty-mode-set-strings.
+    eval.record_quit_interrupts(1);
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+    assert!(eval.quit_flag_value().is_truthy());
+    assert!(eval.inhibit_quit.is_truthy());
+    assert_eq!(
+        recorded_mode_strings.borrow().as_slice(),
+        &[(b"<R1><R2>".to_vec(), b"<S1><S2>".to_vec())]
+    );
+
+    // A 3rd C-g still enters emergency escape rather than clearing inhibit-quit.
+    eval.record_quit_interrupts(1);
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 2);
+    assert!(eval.quit_flag_value().is_truthy());
+    assert!(eval.inhibit_quit.is_truthy());
+
+    // Batched presses (3 at once from quit-flag == nil): press 1 sets
+    // quit-flag, presses 2 and 3 both invoke emergency escape without dropping
+    // the trailing press.
+    eval.set_quit_flag_value(Value::NIL);
+    eval.record_quit_interrupts(3);
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 4);
+    assert!(eval.quit_flag_value().is_truthy());
+    assert!(eval.inhibit_quit.is_truthy());
+
+    reset_terminal_host();
+}
+
+#[test]
+fn suspended_or_non_tty_terminal_falls_back_to_force_quit_count() {
+    let mut eval = interactive_controlling_tty_context();
+    let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    set_terminal_host(Box::new(EmergencyEscapeProbeHost {
+        calls: std::sync::Arc::clone(&calls),
+        trigger_auto_save: false,
+        recorded_mode_strings: None,
+    }));
+    // GNU get_named_terminal(dev_tty) returns NULL when the controlling tty
+    // is suspended (src/terminal.c:274 TERMINAL_ACTIVE_P).
+    builtin_suspend_tty(&mut eval, vec![]).expect("suspend controlling tty");
+    eval.set_variable("inhibit-quit", Value::T);
+
+    eval.record_quit_interrupts(1);
+    eval.record_quit_interrupts(1);
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+    assert!(eval.inhibit_quit.is_truthy());
+
+    // 3rd C-g clears inhibit-quit via force_quit_count == 3.
+    eval.record_quit_interrupts(1);
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+    assert!(eval.inhibit_quit.is_nil());
+
+    // A secondary termcap TTY (name != "/dev/tty") must NOT trigger
+    // controlling-TTY emergency escape even if its host implements it.
+    configure_terminal_runtime(
+        TerminalRuntimeConfig::interactive(
+            Some("xterm-256color".to_string()),
+            neomacs_display_protocol::tty_capabilities::TtyAttributeCapabilities::full_with_color_cells(
+                256,
+            ),
+        )
+        .with_name("/dev/pts/9"),
+    );
+    eval.set_quit_flag_value(Value::NIL);
+    eval.set_variable("inhibit-quit", Value::T);
+    eval.record_quit_interrupts(3);
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+    assert!(eval.inhibit_quit.is_nil());
+
+    // Window-system terminal falls back to force_quit_count == 3.
+    configure_terminal_runtime(TerminalRuntimeConfig::window_system(
+        neomacs_display_protocol::GraphicalDisplayIdentity::named(
+            neomacs_display_protocol::GraphicalBackend::X11,
+            ":0",
+        )
+        .expect("X11 display identity"),
+    ));
+    eval.set_quit_flag_value(Value::NIL);
+    eval.set_variable("inhibit-quit", Value::T);
+    eval.record_quit_interrupts(3);
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+    assert!(eval.inhibit_quit.is_nil());
+
+    // Inactive/batch (non-termcap) initial terminal also falls back.
+    reset_terminal_thread_locals();
+    // rt A3: a Context heap cannot be installed while another is installed on
+    // this thread. Suspend the interactive Context (consuming park) before
+    // constructing the batch one; the parked value is not evaluated again.
+    let _parked_eval = eval.park_for_test();
+    let mut batch_eval = Context::new(crate::test_utils::unit_runtime());
+    set_terminal_host(Box::new(EmergencyEscapeProbeHost {
+        calls: std::sync::Arc::clone(&calls),
+        trigger_auto_save: false,
+        recorded_mode_strings: None,
+    }));
+    batch_eval.set_variable("inhibit-quit", Value::T);
+    batch_eval.record_quit_interrupts(3);
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+    assert!(batch_eval.inhibit_quit.is_nil());
+
+    reset_terminal_host();
+}
+
+#[test]
+fn tty_mode_strings_forwarded_on_suspend_resume_suspend_emacs_and_delete() {
+    crate::test_utils::init_test_tracing();
+    reset_terminal_thread_locals();
+
+    struct ModeRecordingHost {
+        events: Rc<RefCell<Vec<(&'static str, Vec<u8>)>>>,
+        suspend_requests: Rc<RefCell<Vec<(Option<Vec<u8>>, bool, Option<std::path::PathBuf>)>>>,
+    }
+    impl TerminalHost for ModeRecordingHost {
+        fn suspend_tty(&mut self, reset_strings: &[u8]) -> Result<(), String> {
+            self.events
+                .borrow_mut()
+                .push(("suspend", reset_strings.to_vec()));
+            Ok(())
+        }
+        fn resume_tty(&mut self, set_strings: &[u8]) -> Result<(), String> {
+            self.events
+                .borrow_mut()
+                .push(("resume", set_strings.to_vec()));
+            Ok(())
+        }
+        fn delete_terminal(&mut self, reset_strings: &[u8]) -> Result<(), String> {
+            self.events
+                .borrow_mut()
+                .push(("delete", reset_strings.to_vec()));
+            Ok(())
+        }
+        fn sys_suspend(&mut self, request: SuspendRequest<'_>) -> Result<(), String> {
+            self.events.borrow_mut().push(("sys_suspend", Vec::new()));
+            self.suspend_requests.borrow_mut().push((
+                request.stuffstring.map(|s| s.to_vec()),
+                request.cannot_suspend,
+                request.cwd.map(|p| p.to_path_buf()),
+            ));
+            Ok(())
+        }
+    }
+
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
+    configure_terminal_runtime(TerminalRuntimeConfig::interactive(
+        Some("xterm-256color".to_string()),
+        neomacs_display_protocol::tty_capabilities::TtyAttributeCapabilities::full_with_color_cells(
+            256,
+        ),
+    ));
+    let events = Rc::new(RefCell::new(Vec::new()));
+    let suspend_requests = Rc::new(RefCell::new(Vec::new()));
+    set_terminal_host(Box::new(ModeRecordingHost {
+        events: Rc::clone(&events),
+        suspend_requests: Rc::clone(&suspend_requests),
+    }));
+
+    // Mix strings, non-strings, and improper list tail; GNU walks car-to-cdr,
+    // emits only STRINGP elements verbatim, and stops on non-cons tails.
+    let reset_list = Value::cons(
+        Value::string("<R1>"),
+        Value::cons(
+            Value::fixnum(42),
+            Value::cons(Value::string("<R2>"), Value::string("tail-ignored")),
+        ),
+    );
+    let set_list = Value::list(vec![
+        Value::string("<S1>"),
+        Value::NIL,
+        Value::string("<S2>"),
+    ]);
+    builtin_set_terminal_parameter(
+        &mut eval,
+        vec![
+            Value::NIL,
+            Value::symbol("tty-mode-reset-strings"),
+            reset_list,
+        ],
+    )
+    .unwrap();
+    builtin_set_terminal_parameter(
+        &mut eval,
+        vec![Value::NIL, Value::symbol("tty-mode-set-strings"), set_list],
+    )
+    .unwrap();
+
+    builtin_suspend_tty(&mut eval, vec![]).unwrap();
+    builtin_resume_tty(&mut eval, vec![]).unwrap();
+    eval.set_variable("cannot-suspend", Value::T);
+    eval.set_variable("default-directory", Value::string("/tmp"));
+    builtin_suspend_emacs(&mut eval, vec![Value::string("echo hi")]).unwrap();
+    builtin_delete_terminal(&mut eval, vec![Value::NIL, Value::T]).unwrap();
+
+    assert_eq!(
+        events.borrow().as_slice(),
+        &[
+            ("suspend", b"<R1><R2>".to_vec()),
+            ("resume", b"<S1><S2>".to_vec()),
+            ("suspend", b"<R1><R2>".to_vec()),
+            ("sys_suspend", Vec::new()),
+            ("resume", b"<S1><S2>".to_vec()),
+            ("delete", b"<R1><R2>".to_vec()),
+        ]
+    );
+    assert_eq!(
+        suspend_requests.borrow().as_slice(),
+        &[(
+            Some(b"echo hi".to_vec()),
+            true,
+            Some(std::path::PathBuf::from("/tmp")),
+        )]
+    );
+}
+
+#[test]
+fn suspend_emacs_rejects_bad_stuffstring_and_suspended_other_tty() {
+    crate::test_utils::init_test_tracing();
+    reset_terminal_thread_locals();
+
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
+    configure_terminal_runtime(TerminalRuntimeConfig::interactive(
+        Some("xterm-256color".to_string()),
+        neomacs_display_protocol::tty_capabilities::TtyAttributeCapabilities::full_with_color_cells(
+            256,
+        ),
+    ));
+    let log = Rc::new(RefCell::new(Vec::new()));
+    set_terminal_host(Box::new(RecordingTerminalHost {
+        log: Rc::clone(&log),
+    }));
+    eval.eval_str(
+        r#"
+(setq suspend-events nil)
+(setq suspend-hook (list (lambda () (setq suspend-events (cons 'suspend suspend-events)))))
+(setq suspend-resume-hook (list (lambda () (setq suspend-events (cons 'resume suspend-events)))))
+"#,
+    )
+    .expect("install suspend hooks");
+
+    // Non-string stuffstring must signal wrong-type-argument before suspend-hook runs.
+    match builtin_suspend_emacs(&mut eval, vec![Value::fixnum(123)]).kinded() {
+        Err(FlowKind::Signal(sig)) => {
+            assert_eq!(sig.symbol_name(), "wrong-type-argument");
+            assert_eq!(sig.data, vec![Value::symbol("stringp"), Value::fixnum(123)]);
+        }
+        other => panic!("expected wrong-type-argument, got {other:?}"),
+    }
+    assert_eq!(
+        eval.eval_str("suspend-events").unwrap(),
+        Value::NIL,
+        "bad stuffstring must error before suspend-hook runs"
+    );
+
+    // Open a second Termcap TTY via make-terminal-frame and suspend it; GNU
+    // checks `tty_list && tty_list->next` across ALL live TTYs (including
+    // suspended ones).
+    eval.set_variable("noninteractive", Value::NIL);
+    let scratch = eval.edit.buffers.create_buffer("*scratch*");
+    eval.edit.buffers.set_current(scratch);
+    let sec_requests = Rc::new(RefCell::new(Vec::new()));
+    let sec_log = Rc::new(RefCell::new(Vec::new()));
+    eval.set_tty_frame_host_factory(Box::new(RecordingTtyFrameHostFactory {
+        requests: Rc::clone(&sec_requests),
+        lifecycle: Rc::clone(&sec_log),
+    }));
+    let sec_params = Value::list(vec![
+        Value::cons(Value::symbol("tty"), Value::string("/dev/pts/7")),
+        Value::cons(Value::symbol("tty-type"), Value::string("xterm-256color")),
+    ]);
+    let sec_frame =
+        crate::emacs_core::frame::builtin_make_terminal_frame(&mut eval, vec![sec_params])
+            .expect("open secondary tty");
+    let secondary = builtin_frame_terminal(&mut eval, vec![sec_frame]).expect("secondary terminal");
+    builtin_suspend_tty(&mut eval, vec![secondary]).unwrap();
+    match builtin_suspend_emacs(&mut eval, vec![]).kinded() {
+        Err(FlowKind::Signal(sig)) => {
+            assert_eq!(sig.symbol_name(), "error");
+            assert_eq!(
+                sig.data,
+                vec![Value::string(
+                    "There are other tty frames open; close them before suspending Emacs"
+                )]
+            );
+        }
+        other => panic!("expected other tty error, got {other:?}"),
+    }
+    assert_eq!(
+        eval.eval_str("suspend-events").unwrap(),
+        Value::NIL,
+        "other tty error must signal before suspend-hook runs"
+    );
+
+    // Deleting the suspended second TTY without `force` must succeed while the
+    // primary TTY is still active (GNU `src/terminal.c:395-403`), after which
+    // suspend-emacs runs hooks in order.
+    builtin_delete_terminal(&mut eval, vec![secondary]).unwrap();
+    assert_eq!(
+        builtin_suspend_emacs(&mut eval, vec![]).unwrap(),
+        Value::NIL
+    );
+    assert_eq!(
+        format!("{}", eval.eval_str("(nreverse suspend-events)").unwrap()),
+        "(suspend resume)"
+    );
+}
+
+#[test]
+fn suspend_emacs_resizes_selected_frame_before_resume_hook_when_tty_resized() {
+    crate::test_utils::init_test_tracing();
+    reset_terminal_thread_locals();
+
+    struct ResizingSuspendHost {
+        size: Rc<Cell<(u32, u32)>>,
+        resized_to: (u32, u32),
+    }
+    impl TerminalHost for ResizingSuspendHost {
+        fn suspend_tty(&mut self, _reset_strings: &[u8]) -> Result<(), String> {
+            Ok(())
+        }
+        fn resume_tty(&mut self, _set_strings: &[u8]) -> Result<(), String> {
+            Ok(())
+        }
+        fn sys_suspend(&mut self, _request: SuspendRequest<'_>) -> Result<(), String> {
+            // Simulate the terminal resizing while Emacs is stopped.
+            self.size.set(self.resized_to);
+            Ok(())
+        }
+        fn tty_winsize_cells(&mut self) -> Option<(u32, u32)> {
+            Some(self.size.get())
+        }
+    }
+
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
+    eval.set_variable("noninteractive", Value::NIL);
+    eval.set_variable("menu-bar-mode", Value::NIL);
+    eval.set_variable("tab-bar-mode", Value::NIL);
+    configure_terminal_runtime(TerminalRuntimeConfig::interactive(
+        Some("xterm-256color".to_string()),
+        neomacs_display_protocol::tty_capabilities::TtyAttributeCapabilities::full_with_color_cells(
+            256,
+        ),
+    ));
+    let scratch = eval.edit.buffers.create_buffer("*scratch*");
+    eval.edit.buffers.set_current(scratch);
+    let frame_id = eval.frame_manager_mut().create_frame("F1", 80, 24, scratch);
+    {
+        let frame = eval.frame_manager_mut().get_mut(frame_id).expect("frame");
+        frame.char_width = 1.0;
+        frame.char_height = 1.0;
+        frame.set_window_system(None);
+    }
+    let _ = eval.frame_manager_mut().select_frame(frame_id);
+
+    let size = Rc::new(Cell::new((80, 24)));
+    set_terminal_host(Box::new(ResizingSuspendHost {
+        size: Rc::clone(&size),
+        resized_to: (100, 32),
+    }));
+
+    eval.eval_str(
+        r#"
+(setq observed-resume-dims nil)
+(setq observed-resume-hook-count 0)
+(setq suspend-resume-hook
+      (list (lambda ()
+              (setq observed-resume-hook-count (1+ observed-resume-hook-count))
+              (setq observed-resume-dims
+                    (list (frame-parameter nil 'width)
+                          (frame-parameter nil 'height))))))
+"#,
+    )
+    .expect("install suspend-resume-hook");
+
+    builtin_suspend_emacs(&mut eval, vec![]).expect("suspend-emacs");
+    let frame = eval.frame_manager().get(frame_id).expect("frame");
+    assert_eq!((frame.width, frame.height), (100, 32));
+    assert_eq!(
+        format!("{}", eval.eval_str("observed-resume-dims").unwrap()),
+        "(100 32)",
+        "suspend-resume-hook must observe the post-resume TTY dimensions (GNU src/keyboard.c:12470-12474)"
+    );
+    assert_eq!(
+        format!("{}", eval.eval_str("observed-resume-hook-count").unwrap()),
+        "1",
+        "suspend-resume-hook must run exactly once on post-resume resize"
+    );
+}
+
+#[test]
+fn suspend_emacs_ignores_zero_or_missing_post_resume_winsize() {
+    crate::test_utils::init_test_tracing();
+
+    struct OptionalSizeSuspendHost {
+        size: Rc<Cell<Option<(u32, u32)>>>,
+        post_resume_size: Option<(u32, u32)>,
+    }
+    impl TerminalHost for OptionalSizeSuspendHost {
+        fn suspend_tty(&mut self, _reset_strings: &[u8]) -> Result<(), String> {
+            Ok(())
+        }
+        fn resume_tty(&mut self, _set_strings: &[u8]) -> Result<(), String> {
+            Ok(())
+        }
+        fn sys_suspend(&mut self, _request: SuspendRequest<'_>) -> Result<(), String> {
+            self.size.set(self.post_resume_size);
+            Ok(())
+        }
+        fn tty_winsize_cells(&mut self) -> Option<(u32, u32)> {
+            self.size.get()
+        }
+    }
+
+    for post_resume_size in [Some((0, 0)), None] {
+        reset_terminal_thread_locals();
+        let mut eval = Context::new(crate::test_utils::unit_runtime());
+        eval.set_variable("noninteractive", Value::NIL);
+        eval.set_variable("menu-bar-mode", Value::NIL);
+        eval.set_variable("tab-bar-mode", Value::NIL);
+        configure_terminal_runtime(TerminalRuntimeConfig::interactive(
+            Some("xterm-256color".to_string()),
+            neomacs_display_protocol::tty_capabilities::TtyAttributeCapabilities::full_with_color_cells(
+                256,
+            ),
+        ));
+        let scratch = eval.edit.buffers.create_buffer("*scratch*");
+        eval.edit.buffers.set_current(scratch);
+        let frame_id = eval.frame_manager_mut().create_frame("F1", 80, 24, scratch);
+        {
+            let frame = eval.frame_manager_mut().get_mut(frame_id).expect("frame");
+            frame.char_width = 1.0;
+            frame.char_height = 1.0;
+            frame.set_window_system(None);
+        }
+        let _ = eval.frame_manager_mut().select_frame(frame_id);
+
+        let size = Rc::new(Cell::new(Some((80, 24))));
+        set_terminal_host(Box::new(OptionalSizeSuspendHost {
+            size: Rc::clone(&size),
+            post_resume_size,
+        }));
+
+        eval.eval_str(
+            r#"
+(setq observed-resume-dims nil)
+(setq observed-resume-hook-count 0)
+(setq suspend-resume-hook
+      (list (lambda ()
+              (setq observed-resume-hook-count (1+ observed-resume-hook-count))
+              (setq observed-resume-dims
+                    (list (frame-parameter nil 'width)
+                          (frame-parameter nil 'height))))))
+"#,
+        )
+        .expect("install suspend-resume-hook");
+
+        builtin_suspend_emacs(&mut eval, vec![]).expect("suspend-emacs");
+        let frame = eval.frame_manager().get(frame_id).expect("frame");
+        assert_eq!(
+            (frame.width, frame.height),
+            (80, 24),
+            "post-resume size {post_resume_size:?} must leave frame size unchanged"
+        );
+        assert_eq!(
+            format!("{}", eval.eval_str("observed-resume-dims").unwrap()),
+            "(80 24)",
+            "suspend-resume-hook must still see original size for {post_resume_size:?}"
+        );
+        assert_eq!(
+            format!("{}", eval.eval_str("observed-resume-hook-count").unwrap()),
+            "1",
+            "suspend-resume-hook must run exactly once for {post_resume_size:?}"
+        );
+    }
+}
+
+#[test]
+fn tty_mode_strings_circular_list_terminates_without_hanging() {
+    crate::test_utils::init_test_tracing();
+    reset_terminal_thread_locals();
+
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
+    let pure_cycle = eval
+        .eval_str(r#"(let ((x (list "<A>" "<B>"))) (setcdr (cdr x) x) x)"#)
+        .expect("build pure circular list");
+    builtin_set_terminal_parameter(
+        &mut eval,
+        vec![
+            Value::NIL,
+            Value::symbol("tty-mode-reset-strings"),
+            pure_cycle,
+        ],
+    )
+    .expect("set pure circular tty-mode-reset-strings");
+
+    // Deliberate safety divergence from GNU `tty_send_additional_strings`
+    // (which has no cycle guard and loops indefinitely): collection must
+    // terminate deterministically via Floyd's cycle detector.
+    let pure_bytes = terminal_mode_strings_bytes(TERMINAL_ID, "tty-mode-reset-strings");
+    assert_eq!(
+        pure_bytes, b"<A><B><A><B>",
+        "Floyd cycle guard must terminate after 4 steps on 2-node cycle"
+    );
+
+    // Also verify a lasso/rho-shaped list with a non-cyclic prefix (`A -> B -> C -> B -> ...`).
+    let lasso = eval
+        .eval_str(
+            r#"(let* ((loop (list "<B>" "<C>")) (head (cons "<A>" loop))) (setcdr (cdr loop) loop) head)"#,
+        )
+        .expect("build lasso circular list");
+    builtin_set_terminal_parameter(
+        &mut eval,
+        vec![Value::NIL, Value::symbol("tty-mode-set-strings"), lasso],
+    )
+    .expect("set lasso circular tty-mode-set-strings");
+    let lasso_bytes = terminal_mode_strings_bytes(TERMINAL_ID, "tty-mode-set-strings");
+    assert_eq!(
+        lasso_bytes, b"<A><B><C><B>",
+        "Floyd cycle guard must terminate deterministically on lasso-shaped list"
+    );
 }
 
 #[path = "gc_heap_ownership_test.rs"]

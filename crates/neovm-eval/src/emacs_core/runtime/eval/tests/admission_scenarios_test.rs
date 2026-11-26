@@ -226,10 +226,19 @@ fn a_late_admission_matches_an_owner_admitted_from_the_start() {
     };
     let steps = knob("TRND_STEPS", 64);
     let seeds = knob("TRND_SEEDS", 256) as u64;
+    let park = |arm: Arm| (arm.ev.park_for_test(), arm.frames);
+    let resume = |(ev, frames): (
+        super::super::parked_context::ParkedContext,
+        Vec<(usize, bool)>,
+    )| Arm {
+        ev: ev.resume_for_test().expect("resume admission arm"),
+        frames,
+    };
     for seed in 1..=seeds {
         let history = ops(seed, steps);
         let admit_at = (seed as usize * 7) % steps;
-        let mut eager = Arm::new(true);
+        let eager = Arm::new(true);
+        let mut parked_eager = park(eager);
         let mut late = Arm::new(false);
         let mut log = Vec::new();
         for (step, op) in history.iter().copied().enumerate() {
@@ -238,38 +247,67 @@ fn a_late_admission_matches_an_owner_admitted_from_the_start() {
                     .admit_threads()
                     .unwrap_or_else(|error| panic!("seed {seed}: late admission: {error}"));
                 log.push("ADMIT".to_string());
+                let late_canonical = late.canonical();
+                let parked_late = park(late);
+                let mut eager = resume(parked_eager);
+                let eager_canonical = eager.canonical();
+                parked_eager = park(eager);
+                late = resume(parked_late);
                 assert_eq!(
-                    late.canonical(),
-                    eager.canonical(),
+                    late_canonical, eager_canonical,
                     "seed {seed}, admitted at {step}: canonical storage\n{log:#?}"
                 );
             }
+            let parked_late = park(late);
+            let mut eager = resume(parked_eager);
             eager.apply(op);
+            parked_eager = park(eager);
+            late = resume(parked_late);
             late.apply(op);
             log.push(format!("{op:?}"));
+            let late_observed = late.observe();
+            let parked_late = park(late);
+            let mut eager = resume(parked_eager);
+            let eager_observed = eager.observe();
+            parked_eager = park(eager);
+            late = resume(parked_late);
             assert_eq!(
-                late.observe(),
-                eager.observe(),
+                late_observed, eager_observed,
                 "seed {seed}, step {step}, admitted at {admit_at}\n{log:#?}"
             );
             if step >= admit_at {
+                let late_canonical = late.canonical();
+                let parked_late = park(late);
+                let mut eager = resume(parked_eager);
+                let eager_canonical = eager.canonical();
+                parked_eager = park(eager);
+                late = resume(parked_late);
                 assert_eq!(
-                    late.canonical(),
-                    eager.canonical(),
+                    late_canonical, eager_canonical,
                     "seed {seed}, step {step}: canonical storage\n{log:#?}"
                 );
             }
         }
-        eager.ev.setup_thread_locals();
+        let parked_late = park(late);
+        let mut eager = resume(parked_eager);
         eager.ev.unbind_to(0);
-        late.ev.setup_thread_locals();
+        let parked_eager = park(eager);
+        let mut late = resume(parked_late);
         late.ev.unbind_to(0);
+        let late_observed = late.observe();
+        let parked_late = park(late);
+        let mut eager = resume(parked_eager);
+        let eager_observed = eager.observe();
+        let parked_eager = park(eager);
+        let mut late = resume(parked_late);
         assert_eq!(
-            late.observe(),
-            eager.observe(),
+            late_observed, eager_observed,
             "seed {seed}: after unwinding\n{log:#?}"
         );
-        assert_eq!(late.canonical(), eager.canonical(), "seed {seed}: unwound");
+        let late_canonical = late.canonical();
+        drop(late);
+        let mut eager = resume(parked_eager);
+        assert_eq!(late_canonical, eager.canonical(), "seed {seed}: unwound");
     }
 }
 
@@ -309,15 +347,22 @@ fn with_admit_subr(mode: ThreadingMode) -> Context {
 /// Green World must have admitted.
 fn assert_transparent(setup: &str, forms: &[&str]) {
     let mut sim = with_admit_subr(ThreadingMode::Sim);
-    let mut green = with_admit_subr(ThreadingMode::Green);
     eval(&mut sim, setup);
+    let mut parked_sim = sim.park_for_test();
+    let mut green = with_admit_subr(ThreadingMode::Green);
     eval(&mut green, setup);
     for form in forms {
+        let parked_green = green.park_for_test();
+        let mut sim = parked_sim.resume_for_test().expect("resume sim");
         let expected = eval(&mut sim, form);
         assert!(!expected.starts_with("ERR"), "{form} => {expected}");
+        parked_sim = sim.park_for_test();
+        green = parked_green.resume_for_test().expect("resume green");
         assert_eq!(eval(&mut green, form), expected, "{form}");
     }
     assert!(green.threads_admitted(), "the forms admitted");
+    drop(green);
+    let sim = parked_sim.resume_for_test().expect("resume sim");
     assert!(!sim.threads_admitted());
 }
 
@@ -486,9 +531,11 @@ fn a_backtrace_eval_in_progress_rewinds_after_admission() {
 fn a_second_worlds_sync_collection_completes_while_the_first_marks() {
     let (done_tx, done_rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
-        let mut first = Context::new(crate::test_utils::unit_runtime());
-        let mut second = Context::new(crate::test_utils::unit_runtime());
-        first.setup_thread_locals();
+        let first = Context::new(crate::test_utils::unit_runtime());
+        let parked_first = first.park_for_test();
+        let second = Context::new(crate::test_utils::unit_runtime());
+        let parked_second = second.park_for_test();
+        let mut first = parked_first.resume_for_test().expect("resume first");
         let mut started = false;
         // A generational heap runs up to 64 minors before a concurrent major.
         for _ in 0..4096 {
@@ -504,7 +551,8 @@ fn a_second_worlds_sync_collection_completes_while_the_first_marks() {
         }
         assert!(started, "the first World never launched a concurrent mark");
         // The first World's mutator moves on without stopping its job.
-        second.setup_thread_locals();
+        let _parked_first = first.park_for_test();
+        let mut second = parked_second.resume_for_test().expect("resume second");
         second.gc_collect_from_current_roots_impl(true);
         let _ = done_tx.send(());
     });

@@ -44,21 +44,24 @@ fn gc_scratch_root_slots_preserve_each_live_heaps_roots() {
     let a = first.eval_str("(vector 'first)").unwrap();
     let slot = push_scratch_gc_root_slot(a);
     push_scratch_gc_roots(&[a]);
+    let parked_first = first.park_for_test();
     let mut second = Context::new(crate::test_utils::unit_runtime());
     let b = second.eval_str("(vector 'second)").unwrap();
     push_scratch_gc_roots(&[b]);
     assert_eq!(scratch_roots(&second), vec![b]);
-    first.setup_thread_locals();
+    let parked_second = second.park_for_test();
+    let mut first = parked_first.resume_for_test().expect("resume first");
     let replacement = first.eval_str("(vector 'replacement)").unwrap();
     set_scratch_gc_root(slot, replacement);
     assert_eq!(scratch_roots(&first), vec![replacement, a]);
     first.gc_collect_exact();
-    second.setup_thread_locals();
+    let _parked_first = first.park_for_test();
+    let mut second = parked_second.resume_for_test().expect("resume second");
     second.gc_collect_exact();
-    assert_eq!(a.as_vector_data().unwrap()[0], Value::symbol("first"));
-    assert_eq!(b.as_vector_data().unwrap()[0], Value::symbol("second"));
+    assert_eq!(a.as_vector_data().unwrap().at(0), Value::symbol("first"));
+    assert_eq!(b.as_vector_data().unwrap().at(0), Value::symbol("second"));
     assert_eq!(
-        replacement.as_vector_data().unwrap()[0],
+        replacement.as_vector_data().unwrap().at(0),
         Value::symbol("replacement")
     );
     restore_scratch_gc_roots(saved);

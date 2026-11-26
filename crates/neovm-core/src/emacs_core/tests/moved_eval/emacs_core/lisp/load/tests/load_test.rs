@@ -94,13 +94,15 @@ fn load_name_equal_matches_lisp_equal_without_tagged_heap_allocation() {
     let unibyte = neovm_value::heap_types::LispString::from_unibyte(b"same-name.el".to_vec());
     let multibyte = neovm_value::heap_types::LispString::from_utf8("same-name.el");
     let different = neovm_value::heap_types::LispString::from_unibyte(b"other-name.el".to_vec());
-    let before = neovm_value::tagged::gc::with_tagged_heap(|heap| heap.total_allocated_bytes());
+    let before =
+        unsafe { neovm_value::tagged::gc::with_tagged_heap(|heap| heap.total_allocated_bytes()) };
 
     assert!(load_name_equal(&unibyte, &multibyte));
     assert!(load_name_equal(&multibyte, &unibyte));
     assert!(!load_name_equal(&unibyte, &different));
 
-    let after = neovm_value::tagged::gc::with_tagged_heap(|heap| heap.total_allocated_bytes());
+    let after =
+        unsafe { neovm_value::tagged::gc::with_tagged_heap(|heap| heap.total_allocated_bytes()) };
     assert_eq!(
         after, before,
         "comparing borrowed load names must not allocate tagged heap objects",
@@ -743,6 +745,7 @@ fn dump_emacs_portable_writes_reloadable_snapshot() {
         vec![Value::string(dump_path.to_string_lossy().into_owned())],
     )
     .expect("dump-emacs-portable should succeed");
+    drop(eval);
 
     let loaded = crate::emacs_core::load_boot::load_from_dump(&dump_path)
         .expect("reloading dumped snapshot should succeed");
@@ -774,6 +777,7 @@ fn dump_emacs_portable_overwrites_existing_target() {
         vec![Value::string(dump_path.to_string_lossy().into_owned())],
     )
     .expect("second dump-emacs-portable should overwrite");
+    drop(eval);
 
     let loaded = crate::emacs_core::load_boot::load_from_dump(&dump_path)
         .expect("reloading overwritten snapshot should succeed");
@@ -809,6 +813,7 @@ fn dump_emacs_portable_expands_relative_target_against_default_directory() {
         dump_path.exists(),
         "dump-emacs-portable should expand relative names against default-directory"
     );
+    drop(eval);
 
     let loaded = crate::emacs_core::load_boot::load_from_dump(&dump_path)
         .expect("reloading relative dump snapshot should succeed");
@@ -944,6 +949,7 @@ fn dump_emacs_portable_succeeds_after_finalizer_is_collected() {
         vec![Value::string(dump_path.to_string_lossy().into_owned())],
     )
     .expect("dump-emacs-portable should succeed once the finalizer is collected");
+    drop(eval);
 
     let loaded = crate::emacs_core::load_boot::load_from_dump(&dump_path)
         .expect("reloading the post-finalizer snapshot should succeed");
@@ -1590,6 +1596,7 @@ fn runtime_image_loader_falls_back_to_fingerprinted_candidate_when_primary_is_mi
     eval.set_variable("runtime-image-candidate-test-var", Value::fixnum(42));
     crate::emacs_core::pdump::dump_to_file(&eval, &dump_path)
         .expect("write fingerprinted runtime image");
+    drop(eval);
 
     let loaded = load_runtime_image_with_features_for_executable(
         RuntimeImageRole::Final,
@@ -1623,10 +1630,12 @@ fn runtime_image_loader_stops_on_primary_fingerprint_mismatch() {
     primary_bytes[fingerprint_start] ^= 0x01;
     fs::write(&primary, primary_bytes).expect("corrupt primary fingerprint");
 
+    drop(stale);
     let mut fresh = crate::test_utils::new_context();
     fresh.set_variable("runtime-image-candidate-test-var", Value::fixnum(2));
     crate::emacs_core::pdump::dump_to_file(&fresh, &fallback)
         .expect("write fallback runtime image");
+    drop(fresh);
 
     let err = match load_runtime_image_with_features_for_executable(
         RuntimeImageRole::Final,
@@ -3625,6 +3634,7 @@ fn pdump_roundtrip_preserves_partial_bootstrap_subr_prefix_maps() {
     let dir = tempfile::tempdir().expect("tempdir");
     let dump_path = dir.path().join("partial-subr-prefixes.pdump");
     crate::emacs_core::pdump::dump_to_file(&eval, &dump_path).expect("dump should succeed");
+    drop(eval);
 
     let mut loaded =
         crate::emacs_core::load_boot::load_from_dump(&dump_path).expect("load should succeed");
@@ -7526,6 +7536,45 @@ fn bootstrap_runtime_setup_default_fontset_preserves_gnu_han_order() {
     );
 }
 
+/// `setup-default-fontset` tries Han as GB2312 and kana as JISX0208.
+///
+/// GNU `fontset.el` lists those registries first (han at the GB2312 entry,
+/// kana at the JISX0208 entry). Rendering walks that order and lets the
+/// opened font's glyph coverage decide. `fontset-font` is the encoding
+/// filter: 検 (U+691C) is not in GB2312, so its first public pattern is
+/// JISX0208, the same registry kana uses. A bare Han character does not
+/// invent `lang=ja`; the GB2312 spec still carries `zh-cn`.
+#[test]
+fn bootstrap_runtime_setup_default_fontset_splits_han_and_kana_on_the_line() {
+    crate::test_utils::init_test_tracing();
+    let mut eval =
+        create_bootstrap_evaluator_with_features(&["neomacs"]).expect("fresh bootstrap evaluator");
+    let rendered = eval_rendered(
+        &mut eval,
+        r#"(progn
+             (setup-default-fontset)
+             (list (aref char-script-table ?検)
+                   (aref char-script-table ?リ)
+                   (mapcar (lambda (ch) (car (fontset-font t ch t))) '(?検 ?リ ?ピ))))"#,
+    );
+    assert_eq!(
+        rendered,
+        "OK (han kana ((nil . \"jisx0208*\") (nil . \"jisx0208*\") (nil . \"jisx0208*\")))"
+    );
+
+    let first_registry = |ch| {
+        matching_entries_for_fontset(DEFAULT_FONTSET_NAME, ch)
+            .into_iter()
+            .find_map(|entry| match entry {
+                FontSpecEntry::Font(spec) => spec.registry.map(|sym| resolve_sym(sym).to_string()),
+                FontSpecEntry::ExplicitNone => None,
+            })
+    };
+    assert_eq!(first_registry('検').as_deref(), Some("gb2312.1980-0"));
+    assert_eq!(first_registry('リ').as_deref(), Some("jisx0208*"));
+    assert_eq!(first_registry('ピ').as_deref(), Some("jisx0208*"));
+}
+
 #[test]
 fn bootstrap_runtime_fontset_font_for_han_matches_gnu_order() {
     crate::test_utils::init_test_tracing();
@@ -10312,6 +10361,7 @@ fn builtin_load_records_preloaded_files_only_while_purifying() {
         "a dumping load records the requested name, never an absolute path"
     );
 
+    drop(purifying);
     let mut plain = crate::test_utils::new_context();
     plain.set_variable("load-path", load_path);
     plain.set_variable("purify-flag", Value::NIL);
@@ -16395,6 +16445,7 @@ fn runtime_image_loads_from_path_exec_when_nothing_sits_beside_the_executable() 
         &libexec.join(RuntimeImageRole::Final.fingerprinted_image_file_name()),
     )
     .expect("write archlib runtime image");
+    drop(eval);
 
     let loaded = load_runtime_image_with_features_for_executable(
         RuntimeImageRole::Final,
@@ -16424,6 +16475,7 @@ fn final_runtime_image_activation_restores_the_gnu_eval_depth() {
     let mut eval = crate::test_utils::new_context();
     eval.set_variable("max-lisp-eval-depth", Value::fixnum(4200));
     crate::emacs_core::pdump::dump_to_file(&eval, &image).expect("write final runtime image");
+    drop(eval);
 
     let loaded = load_runtime_image_with_features_for_executable(
         RuntimeImageRole::Final,
@@ -16646,6 +16698,7 @@ fn dump_emacs_portable_keeps_an_existing_targets_mode() {
         & 0o777;
     assert_eq!(mode, 0o600, "an existing 0600 dump must stay 0600");
     // The path really holds the new dump, not the stale bytes.
+    drop(eval);
     crate::emacs_core::load_boot::load_from_dump(&dump_path)
         .expect("reloading the redump should succeed");
 }
@@ -16679,6 +16732,7 @@ fn dump_emacs_portable_writes_through_a_symlink() {
         std::fs::read_link(&link).expect("read link"),
         std::path::PathBuf::from("real.pdump")
     );
+    drop(eval);
     crate::emacs_core::load_boot::load_from_dump(&target)
         .expect("the symlink target must hold the new dump");
 }
@@ -16708,6 +16762,7 @@ fn dump_emacs_portable_creates_through_a_dangling_symlink() {
             .is_symlink(),
         "the dangling symlink must survive the dump"
     );
+    drop(eval);
     crate::emacs_core::load_boot::load_from_dump(&target)
         .expect("the created link target must hold the dump");
 }
@@ -16807,6 +16862,7 @@ fn dump_emacs_portable_drops_setuid_like_gnu() {
         mode, expected,
         "the kernel's setid write rule decides the final mode (GNU non-root 4755 -> 0755)"
     );
+    drop(eval);
     crate::emacs_core::load_boot::load_from_dump(&dump_path)
         .expect("reloading the redump should succeed");
 }
@@ -17076,40 +17132,9 @@ fn dump_emacs_portable_enospc_worker() {
 #[test]
 #[cfg(target_os = "linux")]
 fn dump_emacs_portable_reports_enospc_with_gnus_write_action() {
-    use std::ffi::CString;
-    use std::os::unix::ffi::OsStrExt;
-    use std::os::unix::process::CommandExt;
-
     crate::test_utils::init_test_tracing();
     let mount_dir = tempdir().expect("tmpfs mount point");
-    let exe = std::env::current_exe().expect("current test binary");
-    let target = CString::new(mount_dir.path().as_os_str().as_bytes())
-        .expect("tempdir path contains no NUL");
-
-    let mut command = Command::new(&exe);
-    command
-        .env(DUMP_ENOSPC_MOUNT_ENV, mount_dir.path())
-        .arg(DUMP_ENOSPC_WORKER_TEST)
-        .arg("--nocapture");
-    // SAFETY: `pre_exec` runs the closure between fork and exec; the closure
-    // makes only raw syscalls / raw-fd writes and changes namespaces only in
-    // the forked child.
-    unsafe {
-        command.pre_exec(move || match preexec_setup_tiny_tmpfs(&target) {
-            Ok(()) => Ok(()),
-            Err(error) => {
-                // SAFETY: raw write to the inherited stdout pipe; the static
-                // marker bytes need no allocation.
-                unsafe {
-                    let marker = DUMP_ENOSPC_SETUP_FAILED.as_bytes();
-                    libc::write(1, marker.as_ptr().cast(), marker.len());
-                    libc::write(1, b"\n".as_ptr().cast(), 1);
-                }
-                Err(error)
-            }
-        });
-    }
-    let output = command.output().expect("spawn the ENOSPC worker");
+    let output = spawn_enospc_worker(mount_dir.path(), false);
     let stdout = String::from_utf8_lossy(&output.stdout);
     if stdout.contains(DUMP_ENOSPC_SETUP_FAILED) {
         eprintln!("skipping the ENOSPC parity test: unprivileged user namespaces unavailable");
@@ -17127,4 +17152,83 @@ fn dump_emacs_portable_reports_enospc_with_gnus_write_action() {
         "worker marker missing; the spawned filter probably matched no test\nstdout:\n{stdout}"
     );
     eprintln!("ENOSPC parity exercised on a one-page tmpfs");
+}
+
+/// Spawn this test binary as the ENOSPC worker, installing the tiny tmpfs in
+/// the forked child. A host that refuses unprivileged user namespaces must
+/// still produce a capturable [`std::process::Output`]: the child writes the
+/// skip marker and exits successfully instead of returning `Err` from
+/// `pre_exec`, which would make `Command::output` fail before the parent can
+/// read the marker.
+#[cfg(target_os = "linux")]
+fn spawn_enospc_worker(
+    mount_dir: &std::path::Path,
+    force_setup_failure: bool,
+) -> std::process::Output {
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+    use std::os::unix::process::CommandExt;
+
+    let exe = std::env::current_exe().expect("current test binary");
+    let target =
+        CString::new(mount_dir.as_os_str().as_bytes()).expect("tempdir path contains no NUL");
+
+    let mut command = Command::new(&exe);
+    command
+        .env(DUMP_ENOSPC_MOUNT_ENV, mount_dir)
+        .arg(DUMP_ENOSPC_WORKER_TEST)
+        .arg("--nocapture");
+    // SAFETY: `pre_exec` runs between fork and exec; the closure makes only
+    // raw syscalls / raw-fd writes. The failure arm exits the forked child
+    // without running any Rust destructor.
+    unsafe {
+        command.pre_exec(move || {
+            let setup = if force_setup_failure {
+                Err(std::io::Error::from_raw_os_error(libc::EACCES))
+            } else {
+                preexec_setup_tiny_tmpfs(&target)
+            };
+            match setup {
+                Ok(()) => Ok(()),
+                Err(_error) => {
+                    // SAFETY: raw write to the inherited stdout pipe; the
+                    // static marker bytes need no allocation.
+                    unsafe {
+                        let marker = DUMP_ENOSPC_SETUP_FAILED.as_bytes();
+                        libc::write(1, marker.as_ptr().cast(), marker.len());
+                        libc::write(1, b"\n".as_ptr().cast(), 1);
+                        libc::_exit(0);
+                    }
+                }
+            }
+        });
+    }
+    command.output().expect("spawn the ENOSPC worker")
+}
+
+/// Regression for the skip path: when the namespace setup fails (as it does on
+/// the CI runner, which refuses unprivileged user namespaces), the parent must
+/// observe the marker and skip. Before this, the failure arm returned `Err`,
+/// so `Command::output().expect(...)` panicked instead of skipping.
+#[test]
+#[cfg(target_os = "linux")]
+fn dump_emacs_portable_enospc_setup_failure_is_a_clean_skip() {
+    crate::test_utils::init_test_tracing();
+    let mount_dir = tempdir().expect("tmpfs mount point");
+    let output = spawn_enospc_worker(mount_dir.path(), true);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains(DUMP_ENOSPC_SETUP_FAILED),
+        "setup-failure arm must publish the skip marker\nstdout:\n{stdout}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stderr),
+    );
+    assert!(
+        !stdout.contains(DUMP_ENOSPC_WORKER_OK),
+        "the forced-failure worker must not run the ENOSPC body"
+    );
+    assert!(
+        output.status.success(),
+        "skip path must exit successfully: {:?}",
+        output.status
+    );
 }

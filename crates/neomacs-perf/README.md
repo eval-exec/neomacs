@@ -396,6 +396,28 @@ dedicated whole-process startup-counter comparison, and uploads all run,
 comparison, and suite artifacts for 90 days. Hosted shared runners are
 deliberately excluded from regression decisions.
 
+A dedicated `org-editing-guard` suite (`perf suite org-editing-guard`) gates
+`org-editing` and `org-editing-heavy` directly on retired user-space
+instructions (`MetricName::Instructions`) with a `+1.0%` maximum regression
+budget against the frozen `v0.0.21` release asset pinned in
+`.github/perf-baselines/v0.0.21.json`. Both `--hardware-counters` and
+`--baseline-manifest .github/perf-baselines/v0.0.21.json` are required at the
+`SuiteRequest` level (omitting either rejects the suite before launching any
+editor, and any sample missing `MetricName::Instructions` is rejected rather
+than falling back to wall time). The manifest verifies the SHA-256 and byte
+size of both the baseline binary and its sibling portable dump before running,
+threads canonical absolute paths for BOTH baseline and candidate editors
+through verify, provenance, and execution, binds `--counter-scope` strictly to
+`edit-loop`, resolves `perf` (and `taskset` when `--cpu` is set) to
+unambiguous canonical absolute paths while rejecting `PATH` shadowing,
+constructs a closed empty inherited environment for BOTH baseline and
+candidate arms (no `LD_LIBRARY_PATH`, `PATH`, `NEOMACS_RUNTIME_ROOT`, or
+`NEOVM_*`/`NEOMACS_*` knobs forwarded), and set-compares the full recorded
+`passthrough_environment` alongside canonical executable paths, baseline
+executable SHA-256/size, and loaded portable dump SHA-256/size on every
+sample. `SuiteId::Standard` keeps its existing `2.0%` wall-time drift ratchet
+and environment forwarding untouched.
+
 ## `rust-lsp-typing`
 
 This workload reproduces the heavy Rust edit path that originally exposed
@@ -492,6 +514,50 @@ native sampling. Use a smaller `--iterations` value for a smoke test. This is
 an interpreter-core micro-workload inside the whole-editor harness: it is
 useful for attributing VM call/return regressions, but it does not represent
 redisplay, package, or interactive editing performance.
+
+## `cjk-font-lock-pulse`
+
+A GUI frame shows a font-locked buffer of sixty distinct CJK characters.
+Each iteration applies `pulse-iterations` calls to `set-face-background`
+(10, the default in `lisp/pulse.el`) and calls `redisplay` after each
+write, so layout sees the face change. `pulse-tick` does those writes
+from a timer; this row applies them synchronously and forces the
+redisplay in the timed lambda. The run is rejected unless font-lock time
+is positive, the buffer still has at least sixty distinct CJK characters,
+the face-write count and the redisplay count are each iterations times
+10, and `pos-visible-in-window-p` showed a CJK character after every
+redisplay.
+
+This row is not in the standard suite. It has no measured baseline, and
+an unmeasured row would move the board's geometric mean. It does not
+report a fallback-key count.
+
+## `process-output-carryover`
+
+Complements `process-output` (which uses synchronous `call-process` over
+one complete block) by covering asynchronous `make-process` pipe I/O,
+Lisp `:filter` dispatch, sticky EOL resolution (`utf-8` -> `utf-8-dos`),
+and partial-run carryover (`coding->carryover`).
+
+Before the timed window opens, the fixture builds a ~255 KiB UTF-8/CRLF
+byte stream and slices it into 64 deterministic unibyte chunks, each
+`<= 4096` bytes (`PIPE_BUF` atomic write size) so every chunk lands in
+one `read_process_output` call. The 63 chunk boundaries cycle across
+split 2-byte (`é`), 3-byte (`あ`), and 4-byte (`😀`) UTF-8 sequences
+plus trailing-CR DOS EOL lookahead (`\r | \n` once chunk 0 locks
+`utf-8-dos`). Each iteration spawns a pipe `cat` subprocess with
+`process-adaptive-read-buffering` bound to `nil`, streams the 64 chunks
+in lockstep (`process-send-string` + `accept-process-output` until the
+filter receives that chunk's exact expected character count and inserts
+it into a temporary buffer), and verifies `last-coding-system-used`,
+decoded character count, and buffer MD5 against the reference decode.
+
+The run is rejected unless `type-phase-time` is positive,
+`process-filter-calls` equals `iterations * 64`,
+`process-carryover-boundaries` equals `iterations * 63`, and
+`process-carryover-verified` is true. This row stays out of the standard
+suite until it has a measured baseline so it does not move the board's
+geometric mean.
 
 ## Adding a workload
 

@@ -13,10 +13,10 @@ fn function(ops: Vec<Op>, constants: Vec<Value>, arity: usize) -> ByteCodeFuncti
         optional: Vec::new(),
         rest: None,
     });
-    f.lexical = true;
-    f.ops = ops;
-    f.constants = constants.into();
-    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
+    f.set_lexical(true);
+    f.set_ops(ops);
+    f.set_constants(constants.into());
+    f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
     f.seal_hand_assembled_ops();
     f
 }
@@ -82,7 +82,7 @@ fn mir_inline_identity_rechecks_after_a_variable_watcher() {
     let leaf = compile_bytecode_function_with(&f, Some(&ev.obarray)).unwrap();
     assert_eq!(leaf.tier, leaf::LeafTier::Mir);
     let _ = ev.debug_on_next_call_is_armed();
-    let result = leaf.call(&mut ev as *mut Context as *mut u8, &[Value::make_int(5)]);
+    let result = unsafe { leaf.call(&mut ev as *mut Context as *mut u8, &[Value::make_int(5)]) };
     let NativeRun::DeoptAt(frame) = &result else {
         panic!("{result:?}")
     };
@@ -144,7 +144,8 @@ fn mir_inline_identity_honors_debug_override_quit_and_depth() {
         }
         let epoch = ev.obarray.function_epoch();
         let _ = ev.debug_on_next_call_is_armed();
-        let result = leaf.call(&mut ev as *mut Context as *mut u8, &[Value::make_int(5)]);
+        let result =
+            unsafe { leaf.call(&mut ev as *mut Context as *mut u8, &[Value::make_int(5)]) };
         let NativeRun::DeoptAt(frame) = result else {
             panic!("{variable}: {result:?}")
         };
@@ -204,7 +205,7 @@ fn mir_inline_identity_deopts_on_each_asynchronous_source() {
         let _ = ev.debug_on_next_call_is_armed();
         let ctx = &mut ev as *mut Context as *mut u8;
         assert_eq!(
-            leaf.call(ctx, &[Value::make_int(5)]),
+            unsafe { leaf.call(ctx, &[Value::make_int(5)]) },
             NativeRun::Ok(Value::make_int(5).bits()),
             "{source}: the inlined call runs while nothing is pending"
         );
@@ -216,7 +217,7 @@ fn mir_inline_identity_deopts_on_each_asynchronous_source() {
             "os-signal" => ASYNC_ATTENTION.raise(AsyncSource::OsSignal),
             _ => other.request(),
         }
-        let result = leaf.call(ctx, &[Value::make_int(5)]);
+        let result = unsafe { leaf.call(ctx, &[Value::make_int(5)]) };
         match source {
             "profiler-tick" => {
                 ASYNC_ATTENTION.take(AsyncSource::ProfilerTick);
@@ -277,7 +278,7 @@ fn mir_inline_guard_reconstructs_a_virtual_argument() {
     let leaf = compile_bytecode_function_with(&f, Some(&ev.obarray)).unwrap();
     assert_eq!(leaf.tier, leaf::LeafTier::Mir);
     let _ = ev.debug_on_next_call_is_armed();
-    let result = leaf.call(&mut ev as *mut Context as *mut u8, &[Value::make_int(5)]);
+    let result = unsafe { leaf.call(&mut ev as *mut Context as *mut u8, &[Value::make_int(5)]) };
     let NativeRun::DeoptAt(frame) = &result else {
         panic!("{result:?}")
     };
@@ -322,7 +323,7 @@ fn mir_inline_keeps_a_callees_non_fixnum_feedback_on_the_native_call_path() {
         );
         callee
             .jit_runtime()
-            .record_numeric(2, callee.ops.len(), feedback);
+            .record_numeric(2, callee.ops().len(), feedback);
         ev.obarray.set_symbol_function_id(
             sym.as_bare_symbol_id().unwrap(),
             Value::make_bytecode(callee),
@@ -350,10 +351,12 @@ fn mir_inline_keeps_a_callees_non_fixnum_feedback_on_the_native_call_path() {
         assert_eq!(leaf.tier, leaf::LeafTier::Mir, "{feedback:?}");
         assert_eq!(leaf.spec_slots.len(), 1, "retain the ordinary native call");
         assert!(leaf.inline_epoch().is_none());
-        let result = leaf.call(
-            &mut ev as *mut Context as *mut u8,
-            &[Value::make_int(5), Value::make_float(0.5)],
-        );
+        let result = unsafe {
+            leaf.call(
+                &mut ev as *mut Context as *mut u8,
+                &[Value::make_int(5), Value::make_float(0.5)],
+            )
+        };
         let NativeRun::Ok(bits) = result else {
             panic!("{feedback:?}: {result:?}")
         };

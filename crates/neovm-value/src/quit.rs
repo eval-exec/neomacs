@@ -16,7 +16,7 @@
 
 use std::cell::RefCell;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicU32, Ordering};
 
 /// A process-wide asynchronous poll source: GNU's `pending_signals`
 /// (src/keyboard.c:105) generalized to the things that arrive from other
@@ -119,28 +119,56 @@ pub struct QuitRequest(Arc<QuitRequestCell>);
 
 #[derive(Debug)]
 struct QuitRequestCell {
-    raised: AtomicBool,
+    /// Count of unread cross-thread C-g interrupts since the evaluator last
+    /// drained them. Nonzero iff this cell holds one `QUIT_REQUEST_UNIT` in
+    /// [`ASYNC_ATTENTION`].
+    pending_count: AtomicU32,
+    /// GNU `force_quit_count` (`src/keyboard.c:12601,12715-12719`): consecutive
+    /// quit interrupts while `quit-flag` stayed non-nil; reaching 3 clears
+    /// `inhibit-quit`.
+    force_quit_count: AtomicU32,
 }
 
 impl QuitRequest {
     /// A lowered request.
     pub fn new() -> Self {
         Self(Arc::new(QuitRequestCell {
-            raised: AtomicBool::new(false),
+            pending_count: AtomicU32::new(0),
+            force_quit_count: AtomicU32::new(0),
         }))
     }
 
-    /// Raise the request (the input-bridge threads, on a C-g).
+    /// Raise the request `count` times (the input-bridge threads, on one or
+    /// more `C-g` presses).
     ///
-    /// The flag goes up before the count, so a safe point that sees the
-    /// count finds the flag; one that polls in between notices the request
+    /// The count goes up before the attention unit, so a safe point that sees
+    /// the unit finds the count; one that polls in between notices the request
     /// at its next poll, which is GNU's own latency ("the next maybe_quit").
-    pub fn request(&self) {
-        if !self.0.raised.swap(true, Ordering::AcqRel) {
+    /// Each press increments `pending_count` so rapid triple-C-g presses (and
+    /// multi-0x07 `RawTtyBytes` chunks) are preserved for GNU's
+    /// `force_quit_count == 3` rule, while adding at most one
+    /// `QUIT_REQUEST_UNIT` per raised cell in [`ASYNC_ATTENTION`].
+    pub fn request_n(&self, count: u32) {
+        if count == 0 {
+            return;
+        }
+        let prev = self
+            .0
+            .pending_count
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |n| {
+                Some(n.saturating_add(count))
+            })
+            .unwrap_or_else(|n| n);
+        if prev == 0 {
             ASYNC_ATTENTION
                 .word
                 .fetch_add(QUIT_REQUEST_UNIT, Ordering::Release);
         }
+    }
+
+    /// Raise the request once (the input-bridge threads, on a C-g).
+    pub fn request(&self) {
+        self.request_n(1);
     }
 
     /// Whether the request is raised, without consuming it.
@@ -150,23 +178,82 @@ impl QuitRequest {
     #[doc(hidden)]
     #[inline(always)]
     pub fn is_requested(&self) -> bool {
-        self.0.raised.load(Ordering::Relaxed)
+        self.0.pending_count.load(Ordering::Relaxed) != 0
     }
 
-    /// Consume the request on the evaluator thread: true when it was raised.
+    /// Consume one pending cross-thread quit press when `read_char` reads the
+    /// corresponding queued input event, releasing the [`ASYNC_ATTENTION`]
+    /// unit if the pending count drops to zero. Returns `true` if a bridge
+    /// press was pending and consumed.
+    ///
+    /// Signed exact-caller row: `Context::request_quit_from_keyboard_input`.
+    #[doc(hidden)]
+    #[inline]
+    pub fn consume_one(&self) -> bool {
+        match self
+            .0
+            .pending_count
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |n| n.checked_sub(1))
+        {
+            Ok(1) => {
+                ASYNC_ATTENTION
+                    .word
+                    .fetch_sub(QUIT_REQUEST_UNIT, Ordering::Release);
+                true
+            }
+            Ok(_) => true,
+            Err(_) => false,
+        }
+    }
+
+    /// Current GNU `force_quit_count` value for tests.
+    #[doc(hidden)]
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn force_quit_count_for_test(&self) -> u32 {
+        self.0.force_quit_count.load(Ordering::Relaxed)
+    }
+
+    /// Consume all pending cross-thread quit presses on the evaluator thread,
+    /// returning how many C-g presses were queued since the last drain.
     ///
     /// Signed exact-caller row: `Context::maybe_quit_slow`.
     #[doc(hidden)]
     #[inline]
-    pub fn take(&self) -> bool {
-        if self.0.raised.swap(false, Ordering::AcqRel) {
+    pub fn take_count(&self) -> u32 {
+        let count = self.0.pending_count.swap(0, Ordering::AcqRel);
+        if count != 0 {
             ASYNC_ATTENTION
                 .word
                 .fetch_sub(QUIT_REQUEST_UNIT, Ordering::Release);
-            true
-        } else {
-            false
         }
+        count
+    }
+
+    /// Consume the request on the evaluator thread: true when it was raised.
+    ///
+    /// Signed exact-caller row: `Context::maybe_quit_slow` and quit tests.
+    #[doc(hidden)]
+    #[inline]
+    pub fn take(&self) -> bool {
+        self.take_count() != 0
+    }
+
+    /// Advance GNU's `force_quit_count` (`src/keyboard.c:12715-12716`) for one
+    /// quit-character interrupt on the evaluator thread and return the new
+    /// count.
+    #[doc(hidden)]
+    #[inline]
+    pub fn record_force_quit_press(&self, quit_flag_is_nil: bool) -> u32 {
+        let count = if quit_flag_is_nil {
+            1
+        } else {
+            self.0
+                .force_quit_count
+                .load(Ordering::Relaxed)
+                .saturating_add(1)
+        };
+        self.0.force_quit_count.store(count, Ordering::Relaxed);
+        count
     }
 
     /// Lower the request without looking at it.
@@ -175,7 +262,8 @@ impl QuitRequest {
     #[doc(hidden)]
     #[inline]
     pub fn clear(&self) {
-        let _ = self.take();
+        let _ = self.take_count();
+        self.0.force_quit_count.store(0, Ordering::Relaxed);
     }
 }
 
@@ -189,7 +277,7 @@ impl Drop for QuitRequestCell {
     /// The last handle is gone while the request is raised: nobody can take
     /// it any more, so release its unit of [`ASYNC_ATTENTION`].
     fn drop(&mut self) {
-        if *self.raised.get_mut() {
+        if *self.pending_count.get_mut() != 0 {
             ASYNC_ATTENTION
                 .word
                 .fetch_sub(QUIT_REQUEST_UNIT, Ordering::Release);
@@ -276,3 +364,17 @@ pub fn install_quit_requested_for_test(pending: bool) -> QuitRequest {
 pub fn clear_quit_requested_for_test() {
     QUIT_REQUESTED_TLS.with(|cell| *cell.borrow_mut() = None);
 }
+
+/// Hold a reader on the quit slot for the closure. The source-shell refusal
+/// test uses this to prove a live loan retains the original Context.
+#[doc(hidden)]
+#[cfg(any(test, feature = "test-support"))]
+pub fn with_quit_requested_slot_borrowed_for_test<R>(body: impl FnOnce() -> R) -> R {
+    QUIT_REQUESTED_TLS.with(|slot| {
+        let _reader = slot.borrow();
+        body()
+    })
+}
+
+#[doc(hidden)]
+pub mod quit_detach;

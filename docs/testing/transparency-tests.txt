@@ -3,7 +3,7 @@ cpu neovm-core emacs_core::eval::idle_redisplay_tests::a_forced_idle_redisplay_l
 cpu neovm-core emacs_core::eval::idle_redisplay_tests::an_idle_redisplay_skips_layout_but_runs_pre_redisplay_function
 cpu neovm-core emacs_core::eval::idle_redisplay_tests::background_alpha_repaints_an_idle_gui_frame
 cpu neovm-core emacs_core::eval::idle_redisplay_tests::background_alpha_repaints_an_unselected_idle_child
-cpu neovm-core emacs_core::eval::idle_redisplay_tests::category_symbol_writes_invalidate_idle_redisplay
+cpu neovm-core emacs_core::eval::idle_redisplay_tests::category_symbol_writes_leave_idle_redisplay_idle
 cpu neovm-core emacs_core::eval::idle_redisplay_tests::window_old_point_follows_its_marker_across_redisplays
 cpu neovm-core emacs_core::eval::tests::native_unwind_scope_runs_lower_cleanups_after_a_cleanup_error
 cpu neovm-core emacs_core::eval::tests::runtime_projection_mask_matches_the_comparison_chain

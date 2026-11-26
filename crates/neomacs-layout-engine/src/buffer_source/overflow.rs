@@ -554,12 +554,13 @@ impl BufferSourceWordWrapAction {
     }
 
     pub(crate) fn restore_row_output_progress(self, output_emitter: &mut WindowOutputEmitter) {
-        output_emitter.truncate_display_points(self.break_candidate.display_point_count());
-        let (row_first_display_pos, row_last_display_pos) =
-            self.break_candidate.row_display_positions();
-        output_emitter
-            .restore_current_row_display_positions(row_first_display_pos, row_last_display_pos);
-        output_emitter.restore_current_row_pen(self.break_candidate.row_position());
+        output_emitter.restore_row_progress(
+            crate::window_output::RowOutputProgressCheckpoint::from_parts(
+                self.break_candidate.display_point_count(),
+                self.break_candidate.row_display_positions(),
+                self.break_candidate.row_position(),
+            ),
+        );
     }
 
     pub(crate) fn source_position(self) -> DisplaySourceTextPosition {

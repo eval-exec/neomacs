@@ -269,7 +269,7 @@ pub fn builtin_read_impl(
         ResolvedReadStream::String(stream) => {
             // Read from string
             let result = read_from_string_impl_inner(
-                ctx.variables(),
+                ctx,
                 vec![stream],
                 symbol_position_mode,
                 shorthands.as_ref(),
@@ -279,7 +279,7 @@ pub fn builtin_read_impl(
             match result.kind() {
                 ValueKind::Cons => {
                     let pair_car = result.cons_car();
-                    ctx.obarray_mut().intern_member_symbols_in(pair_car);
+                    crate::emacs_core::reader::publish_read_symbols(ctx, pair_car);
                     Ok(pair_car)
                 }
                 _ => Ok(result),
@@ -329,7 +329,10 @@ pub fn builtin_read_impl(
                         // A marker identifies its cursor but GNU does not add
                         // buffer line/column context to reader signals for it.
                         // Keep marker errors source-less, like string streams.
-                        (Err(signal_reader_error_from_string(error)), new_position)
+                        (Err({
+                            crate::emacs_core::reader::reset_obarray_after_reader_error(ctx, &error);
+                            signal_reader_error_from_string(error)
+                        }), new_position)
                     }
                 }
             };
@@ -344,7 +347,7 @@ pub fn builtin_read_impl(
             )?;
             let value =
                 read_result?.ok_or_else(|| ReadSourceObject::Anonymous.end_of_file_error())?;
-            ctx.obarray_mut().intern_member_symbols_in(value);
+            crate::emacs_core::reader::publish_read_symbols(ctx, value);
             Ok(value)
         }
         ResolvedReadStream::Buffer(buf_id) => {
@@ -401,6 +404,7 @@ pub fn builtin_read_impl(
                         .edit
                         .buffers
                         .goto_buffer_emacs_byte_pos(buf_id, stopped_at);
+                    crate::emacs_core::reader::reset_obarray_after_reader_error(ctx, &error);
                     return Err(signal_reader_error_from_buffer(ctx, buf_id, error));
                 }
             };
@@ -409,7 +413,7 @@ pub fn builtin_read_impl(
             let value = maybe_value.ok_or_else(|| {
                 ReadSourceObject::Buffer(Value::make_buffer(buf_id)).end_of_file_error()
             })?;
-            ctx.obarray_mut().intern_member_symbols_in(value);
+            crate::emacs_core::reader::publish_read_symbols(ctx, value);
             Ok(value)
         }
         ResolvedReadStream::ActiveLoadCursor => {
@@ -429,7 +433,7 @@ pub fn builtin_read_impl(
             let prompt = Value::string("Lisp expression: ");
             let input = builtin_read_from_minibuffer(ctx, vec![prompt])?;
             let result = read_from_string_impl_inner(
-                ctx.variables(),
+                ctx,
                 vec![input],
                 symbol_position_mode,
                 shorthands.as_ref(),
@@ -438,7 +442,7 @@ pub fn builtin_read_impl(
             match result.kind() {
                 ValueKind::Cons => {
                     let pair_car = result.cons_car();
-                    ctx.obarray_mut().intern_member_symbols_in(pair_car);
+                    crate::emacs_core::reader::publish_read_symbols(ctx, pair_car);
                     Ok(pair_car)
                 }
                 _ => Ok(result),

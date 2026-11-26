@@ -224,6 +224,44 @@ pub enum ImageDiagnostic {
     NotDrawable,
 }
 
+/// Terminal payload of a failed image decode.
+///
+/// Carries GNU's diagnostic text together with any partial loader metadata
+/// captured before the failure (such as multi-page TIFF `(count N)`,
+/// `src/image.c:9570-9580`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ImageDecodeFailure {
+    pub diagnostic: ImageDiagnostic,
+    pub embedded: crate::image::ImageEmbeddedMetadata,
+}
+
+impl ImageDecodeFailure {
+    #[must_use]
+    pub const fn new(diagnostic: ImageDiagnostic) -> Self {
+        Self {
+            diagnostic,
+            embedded: crate::image::ImageEmbeddedMetadata::EMPTY,
+        }
+    }
+
+    #[must_use]
+    pub const fn with_embedded(
+        diagnostic: ImageDiagnostic,
+        embedded: crate::image::ImageEmbeddedMetadata,
+    ) -> Self {
+        Self {
+            diagnostic,
+            embedded,
+        }
+    }
+}
+
+impl From<ImageDiagnostic> for ImageDecodeFailure {
+    fn from(diagnostic: ImageDiagnostic) -> Self {
+        Self::new(diagnostic)
+    }
+}
+
 impl ImageDiagnostic {
     /// GNU's `image_size_error` text, verbatim from `src/image.c:1434`.
     pub const INVALID_SIZE_MESSAGE: &'static str = "Invalid image size (see `max-image-size')";

@@ -1,0 +1,17 @@
+warning: unreachable call
+ --> tests/pentry_e2_loan_ui/transfer_restored_into_source_parts_requires_unsafe.rs
+  |
+  |     let _parts = RestoredHeapBacking::into_source_parts(todo!());
+  |                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ ------- any code following this expression is unreachable
+  |                  |
+  |                  unreachable call
+  |
+  = note: `#[warn(unreachable_code)]` (part of `#[warn(unused)]`) on by default
+
+error[E0133]: call to unsafe function `neovm_value::tagged::gc::heap_transfer::RestoredHeapBacking::into_source_parts` is unsafe and requires unsafe block
+ --> tests/pentry_e2_loan_ui/transfer_restored_into_source_parts_requires_unsafe.rs
+  |
+  |     let _parts = RestoredHeapBacking::into_source_parts(todo!());
+  |                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ call to unsafe function
+  |
+  = note: consult the function's documentation for information on how to avoid undefined behavior

@@ -20,10 +20,10 @@ fn assert_store_semantic(store: Op) {
         optional: Vec::new(),
         rest: None,
     });
-    f.lexical = true;
-    f.ops = vec![Op::Constant(0), Op::Constant(1), store, Op::Return];
-    f.constants = vec![cell, Value::make_int(1)].into();
-    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(4);
+    f.set_lexical(true);
+    f.set_ops(vec![Op::Constant(0), Op::Constant(1), store, Op::Return]);
+    f.set_constants(vec![cell, Value::make_int(1)].into());
+    f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(4));
     f.seal_hand_assembled_ops_for_test();
     let id = cache::compile_and_cache_jit_leaf(&f, None).expect("store body compiles");
     let pointer = cache::compiled_leaf_ptr_for_test(id).expect("cached store body");
@@ -44,30 +44,34 @@ fn assert_store_semantic(store: Op) {
             },
         ] {
             assert_eq!(
-                classify(
-                    std::ptr::null(),
-                    f.executable_ops(),
-                    leaf,
-                    origin,
-                    2,
-                    &stack
-                ),
+                unsafe {
+                    classify(
+                        std::ptr::null(),
+                        f.executable_ops(),
+                        leaf,
+                        origin,
+                        2,
+                        &stack,
+                    )
+                },
                 cause,
             );
             for _ in 0..3 {
                 leaf.obs.note_deopt_at(2);
                 assert_eq!(
-                    note_deopt(
-                        std::ptr::null(),
-                        &f,
-                        leaf,
-                        origin,
-                        DeoptEvent::Precise {
-                            pc: 2,
-                            stack: &stack,
-                            cause: None
-                        }
-                    ),
+                    unsafe {
+                        note_deopt(
+                            std::ptr::null(),
+                            &f,
+                            leaf,
+                            origin,
+                            DeoptEvent::Precise {
+                                pc: 2,
+                                stack: &stack,
+                                cause: None,
+                            },
+                        )
+                    },
                     ReoptVerdict::Kept,
                     "{cause:?} must not retire speculation at the one-event limit",
                 );

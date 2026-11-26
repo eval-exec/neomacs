@@ -256,7 +256,16 @@ fn marked_batch_case_id(
 
 /// Lisp that defines the shared normalizer used by every oracle transport.
 pub fn oracle_normalizer_elisp() -> &'static str {
-    r##"(defun neomacs--test-oracle-normalize-string (value)
+    r##"(defvar neomacs--test-oracle-strip-fontified nil
+             "When non-nil, drop `fontified' properties whose value is nil.
+Redisplay decides whether a string carries `(fontified nil)' before a
+probe's value is printed, and that is not part of a package's contract:
+the same probe can record the property or not depending on whether any
+jit-lock/redisplay step ran first.  A snapshot cannot pin it, so a
+transport that opts in removes only nil-valued `fontified' properties.
+`(fontified t)' is real font-lock evidence and is kept.  The default nil
+keeps every transport byte-identical unless it binds this variable.")
+           (defun neomacs--test-oracle-normalize-string (value)
              (dolist
                  (root
                   (list
@@ -290,6 +299,22 @@ pub fn oracle_normalizer_elisp() -> &'static str {
                     "\\(/tmp/[^/[:space:]]*\\)-[[:alnum:]]\\{6\\}\\>"
                     "\\1-XXXXXX"
                     value t))
+             ;; `replace-regexp-in-string' returns VALUE itself when no
+             ;; replacement happened, so an unmatched string keeps its text
+             ;; properties while a matched one loses all of them.  Strip the
+             ;; nil-valued `fontified' property explicitly, and only that one,
+             ;; so the contract does not depend on which branch ran.
+             (when (and neomacs--test-oracle-strip-fontified
+                        (> (length value) 0))
+               (let ((position 0)
+                     (end (length value)))
+                 (while (< position end)
+                   (let ((next (next-single-property-change
+                                position 'fontified value end)))
+                     (when (null (get-text-property position 'fontified value))
+                       (remove-text-properties
+                        position next '(fontified nil) value))
+                     (setq position next)))))
              value)
            (defun neomacs--test-oracle-built-artifact (value)
              ;; A payload inventory entry of the shape (NAME SIZE CONTENT),
@@ -400,6 +425,20 @@ pub fn oracle_normalizer_elisp() -> &'static str {
 /// `NEOMACS_TEST_WORKSPACE_ROOT` and `NEOMACS_TEST_SANDBOX_ROOT` environment
 /// variables.
 pub fn wrap_elisp_outcome(setup: &str, probe: &str, marker: &str) -> String {
+    wrap_elisp_outcome_with_normalizer_bindings(setup, probe, marker, "")
+}
+
+/// As [`wrap_elisp_outcome`], with `normalizer_bindings` (a Lisp binding list
+/// such as `(neomacs--test-oracle-strip-fontified t)`) dynamically bound
+/// around normalization.  The bindings are empty for transports that must
+/// stay byte-identical; a transport that records a documented normalizer
+/// contract opts in here rather than redefining the shared normalizer.
+pub fn wrap_elisp_outcome_with_normalizer_bindings(
+    setup: &str,
+    probe: &str,
+    marker: &str,
+    normalizer_bindings: &str,
+) -> String {
     let marker = elisp_string(marker);
     format!(
         r##"(let ((print-circle t)
@@ -408,6 +447,14 @@ pub fn wrap_elisp_outcome(setup: &str, probe: &str, marker: &str) -> String {
                   (print-escape-newlines t)
                   (print-escape-control-characters t))
            {normalizer}
+           ;; The bindings wrap only the normalization, never the probe.  An
+           ;; extra enclosing form would add one `eval' frame to the probe's
+           ;; dynamic depth, and packages that exhaust `max-lisp-eval-depth'
+           ;; on purpose (alt-codes' 383-clause pcase expansion) then signal
+           ;; from a different guard: eval.c's `excessive-lisp-nesting' at a
+           ;; shallower frame vs bytecode.c's plain `error' at one frame
+           ;; deeper.  Keeping the probe's frame budget identical to the
+           ;; pre-normalizer contract is part of the transport contract.
            (condition-case neomacs--oracle-error
                (let ((neomacs--oracle-result
                       (progn
@@ -417,8 +464,9 @@ pub fn wrap_elisp_outcome(setup: &str, probe: &str, marker: &str) -> String {
                  (princ {marker} 'external-debugging-output)
                  (princ "OK " 'external-debugging-output)
                  (prin1
-                  (neomacs--test-oracle-normalized
-                   neomacs--oracle-result)
+                  (let ({normalizer_bindings})
+                    (neomacs--test-oracle-normalized
+                     neomacs--oracle-result))
                   'external-debugging-output)
                  (terpri 'external-debugging-output))
              (error
@@ -426,11 +474,13 @@ pub fn wrap_elisp_outcome(setup: &str, probe: &str, marker: &str) -> String {
               (princ {marker} 'external-debugging-output)
               (princ "ERR " 'external-debugging-output)
               (prin1
-               (neomacs--test-oracle-normalized
-                neomacs--oracle-error)
+               (let ({normalizer_bindings})
+                 (neomacs--test-oracle-normalized
+                  neomacs--oracle-error))
                'external-debugging-output)
               (terpri 'external-debugging-output))))"##,
         normalizer = oracle_normalizer_elisp(),
+        normalizer_bindings = normalizer_bindings,
         setup = setup,
         probe = probe,
         marker = marker,
@@ -462,6 +512,32 @@ pub fn wrap_elisp_batch_outcomes(
     completion_marker: &str,
     outcome_marker: &str,
 ) -> Result<String, String> {
+    wrap_elisp_batch_outcomes_with_normalizer_bindings(
+        setup,
+        cases,
+        begin_marker,
+        completion_marker,
+        outcome_marker,
+        "",
+    )
+}
+
+/// As [`wrap_elisp_batch_outcomes`], with `normalizer_bindings` dynamically
+/// bound around each case's normalization so every probe in the batch records
+/// the same documented normalizer contract.
+///
+/// The bindings deliberately do not enclose the probes: an extra enclosing
+/// form would change the probe's `lisp_eval_depth', and a package that
+/// exhausts `max-lisp-eval-depth' on purpose can then signal from a different
+/// guard (eval.c `excessive-lisp-nesting' vs bytecode.c's plain `error').
+pub fn wrap_elisp_batch_outcomes_with_normalizer_bindings(
+    setup: &str,
+    cases: &[BatchProbe<'_>],
+    begin_marker: &str,
+    completion_marker: &str,
+    outcome_marker: &str,
+    normalizer_bindings: &str,
+) -> Result<String, String> {
     if cases.is_empty() {
         return Err("batch outcomes require at least one probe".into());
     }
@@ -491,8 +567,9 @@ pub fn wrap_elisp_batch_outcomes(
                  (princ ":" 'external-debugging-output)
                  (princ "OK " 'external-debugging-output)
                  (prin1
-                  (neomacs--test-oracle-normalized
-                   neomacs--oracle-result)
+                  (let ({bindings})
+                    (neomacs--test-oracle-normalized
+                     neomacs--oracle-result))
                   'external-debugging-output)
                  (terpri 'external-debugging-output))
              (error
@@ -502,8 +579,9 @@ pub fn wrap_elisp_batch_outcomes(
               (princ ":" 'external-debugging-output)
               (princ "ERR " 'external-debugging-output)
               (prin1
-               (neomacs--test-oracle-normalized
-                neomacs--oracle-error)
+               (let ({bindings})
+                 (neomacs--test-oracle-normalized
+                  neomacs--oracle-error))
                'external-debugging-output)
               (terpri 'external-debugging-output)))
            (neomacs--test-oracle-case-complete {id})
@@ -511,6 +589,7 @@ pub fn wrap_elisp_batch_outcomes(
             probe = case.probe,
             marker = outcome_marker_lit,
             id = id_lit,
+            bindings = normalizer_bindings,
         ));
     }
 

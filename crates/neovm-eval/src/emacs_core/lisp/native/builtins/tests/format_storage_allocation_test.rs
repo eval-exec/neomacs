@@ -69,7 +69,6 @@ fn format_initial_storage_retains_vector_ownership_and_live_null_failure() {
             let mut bytes =
                 allocate_format_bytes(FormatStorageBytes::try_from(capacity).unwrap()).unwrap();
             bytes.extend_from_slice(canonical);
-            let pointer = bytes.as_ptr();
             let storage = FormatResultStorage::new(bytes, encoding).unwrap();
             let bytes = match (encoding, storage) {
                 (FormatStringEncoding::Unibyte, FormatResultStorage::Unibyte(bytes))
@@ -77,11 +76,11 @@ fn format_initial_storage_retains_vector_ownership_and_live_null_failure() {
                 _ => panic!("final storage must retain the validated encoding"),
             };
             assert_eq!(bytes.as_slice(), expected);
-            assert!(bytes.len() < bytes.capacity());
-            if spare_terminator {
-                assert_eq!(bytes.as_ptr(), pointer, "adequate storage must be retained");
-                assert_eq!(bytes.capacity(), capacity);
-            }
+            assert_eq!(
+                bytes.capacity(),
+                bytes.len() + 1,
+                "final storage is an exact len + NUL payload"
+            );
         }
     }
 
@@ -105,4 +104,49 @@ fn format_initial_storage_retains_vector_ownership_and_live_null_failure() {
         panic!("null allocation must retain GNU OOM delivery policy");
     };
     assert_eq!(binding.original(), original);
+}
+
+#[test]
+fn format_result_storage_copies_the_working_buffer_to_an_exact_payload() {
+    crate::test_utils::init_test_tracing();
+
+    // The builder reserves the control string's bound for an unknown output
+    // length; final storage copies the finished bytes once into a payload of
+    // exactly `len + 1` (GNU's make_specified_string copy, editfns.c:4285),
+    // so a retained result never keeps the growth slack.
+    let mut output = FormatOutput::new(116, FormatStringEncoding::Unibyte).unwrap();
+    output
+        .append(&[b'x'; 94])
+        .expect("append a candidate-sized field");
+    let working_ptr = output.bytes.as_ptr();
+    assert_eq!(output.bytes.capacity(), 116);
+    let bytes = output.into_bytes();
+    assert_eq!(
+        bytes.as_ptr(),
+        working_ptr,
+        "the builder returns its buffer"
+    );
+    assert_eq!(bytes.capacity(), 116, "the working buffer keeps its bound");
+
+    let storage = FormatResultStorage::new(bytes, FormatStringEncoding::Unibyte).unwrap();
+    let payload = match storage {
+        FormatResultStorage::Unibyte(bytes) => bytes,
+        _ => panic!("final storage must retain the validated encoding"),
+    };
+    assert_eq!(payload.len(), 94);
+    assert_eq!(payload.capacity(), 95, "payload must be len + NUL");
+
+    // A large width or precision is one reserve and one fill, not a loop of
+    // small appends.
+    let mut padded = FormatOutput::new(0, FormatStringEncoding::Unibyte).unwrap();
+    padded.append_fill(b' ', 1_000_000).expect("fill the field");
+    assert_eq!(padded.bytes.len(), 1_000_000);
+    assert!(padded.bytes.iter().all(|&byte| byte == b' '));
+    let storage = FormatResultStorage::new(padded.into_bytes(), FormatStringEncoding::Unibyte)
+        .expect("validated padded storage");
+    let payload = match storage {
+        FormatResultStorage::Unibyte(bytes) => bytes,
+        _ => panic!("final storage must retain the validated encoding"),
+    };
+    assert_eq!((payload.len(), payload.capacity()), (1_000_000, 1_000_001));
 }

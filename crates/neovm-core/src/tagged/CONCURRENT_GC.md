@@ -456,24 +456,128 @@ the newest block or page's bump tail, else a fresh one).
 
 ## The adaptive pacer
 
-After each sweep the heap recomputes `live_bytes` EXACTLY (cons + object +
-arena-page + mapped live bytes) and resets `bytes_since_gc`. `should_collect()`
+After each sweep the heap recomputes `live_bytes` from runtime conses, objects
+and arena survivors, plus runtime-owned hash backing behind mapped and
+loader-stamped image headers, then resets `bytes_since_gc`. Image object
+storage is excluded, including before first-cycle promotion and from the
+ordinary-old byte total. Ordinary-old runtime survivors remain included.
+`should_collect()`
 is simply `bytes_since_gc >= gc_threshold`. The evaluator's
-`effective_gc_threshold_bytes` sets the threshold to the MAX of three terms,
-clamped to `[1, GC_HI_THRESHOLD_BYTES]`:
+`effective_gc_threshold_bytes` uses GNU's `consing_threshold` formula, shared
+with GC-inhibited hash callbacks, and caps it at `GC_HI_THRESHOLD_BYTES`:
 
 1. `gc-cons-threshold` (elisp), floored at `GC_THRESHOLD_FLOOR_BYTES` — the
    GNU floor.
-2. the `gc-cons-percentage` term: `(live_bytes + bytes_since_gc/2) *
-   percentage`, clamped to `GC_HI` — the GNU proportional model.
-3. an internal live-proportional growth term: `live_bytes *
-   GC_LIVE_GROWTH_NUM/GC_LIVE_GROWTH_DEN`, clamped to `GC_HI`, so the O(live)
-   full-mark cost amortizes as the heap grows.
+2. If `gc-cons-percentage` is a Lisp float, raise the budget to
+    `(live_bytes + symbol_bytes + bytes_since_gc/2) * percentage` when larger.
+    `symbol_bytes` uses the World-owned last-GC symbol count and Neo's actual
+    `LispSymbol` size, including its fixed seed array. The multiplication
+   uses the original double and truncates toward zero. NaN and negative values
+   leave the byte budget in force; positive infinity selects `GC_HI`.
 
-The elisp-derived value (1–2) is a FLOOR term 3 never lowers (user settings
-and defaults keep their meaning as minimum budgets); an explicit
+There is no internal live-proportional growth floor: that would change
+`gcs-done` and `post-gc-hook` frequency independently of Lisp's settings. The
+host's startup ceiling and opt-in profiling cap can lower the budget; an explicit
 `set_gc_threshold` override bypasses all of this (only the pacer value flows
 through `set_gc_threshold_from_runtime`).
+
+`live_bytes` in GC traces, collection reports and published GC statistics is
+the heap portion of this census; the evaluator adds symbol bytes at the normal
+and GC-inhibited threshold entry points. Full heap memory inventory retains mapped/image-resident
+objects. The layout diagnostic `managed_live_bytes` adds
+mapped object storage and subsequent allocation to the collectible census;
+page backing and payload capacities are reported separately. These quantities
+describe managed storage, not allocator-resident memory or process RSS.
+
+Hash backing uses the index's usable capacity and the slot/free-vector
+capacities, excluding parked decoded image entries. Neo materializes index and slots together on
+first access; GNU thaws hash/next/index eagerly and counts key/value storage
+only after growth. This representation difference is an explicit approximation.
+Serial hydration and capacity growth charge their positive storage delta once.
+The unmetered inactive entry remains available to sealed owners, which charge
+their own state around it. Generic serial edits use the metered entry to the
+same mutation body. Ownership, promotion, and physical promotion telemetry
+remain unchanged by the image-byte exclusion.
+
+Typed serial insertion and fixed-length string edits report allocation only
+from the branch that materializes or grows storage. An existing-key overwrite
+or owned byte edit takes no backing snapshot or owner-heap lookup. Detached
+builders receive no serial reporter; sealed table edits retain their own sole
+billing. Unrestricted hash mutation snapshots raw capacities at its edit
+boundary and computes the saturating total byte delta only when they change.
+A pending table keeps one completion guard across hydration and the callback,
+so replacement and unwinding retain the same positive net contract. The charge
+guard outlives the debug mutation-closure guard. The unrestricted string helper
+and its identity observer are gated behind test support; production string
+mutation is available only through the typed operations.
+
+The typed Value accessor completes the existing charged read-access hydration
+before constructing a scoped, table-bound `HydratedHashTable` witness. Its safe
+mutation entry shares revision/type/write-barrier preparation and the verified
+loan, with no pending-callback arm. Generic and sealed callers retain their
+pending entry. The unmetered verified extent constructs no optional charge
+object; the metered extent still drops its charge after the debug loan guard.
+Removal uses the single canonical free-list push. Only actual free-list growth
+invokes the cold net-byte calculation, reconstructing the pre-erase index/free
+capacities with the unchanged slot capacity and original saturation rules.
+Rust's [`Vec` allocation guarantees](https://doc.rust-lang.org/std/vec/struct.Vec.html#guarantees)
+define the push's spare-capacity behavior; the caller observes its result rather
+than adding another admission check or an unchecked push.
+
+The typed constructor adapter and the index clear adapter keep their forwarding
+bodies available for inlining. An opaque constructor closure adds an environment
+and result ABI to every typed write; an opaque index clear hides its field effects
+from the generic capacity comparison. Keep the terminal native callbacks and the
+complete clear in that same operation extent: inlining only an intermediate
+adapter can move the opaque boundary to its caller or callback. Rust's [inlining attributes](https://doc.rust-lang.org/reference/attributes/codegen.html#the-inline-attribute)
+remain compiler hints, so release verification must inspect every executed callee
+and measure the complete operation. The generic guard still compares all three
+capacities and charges the original positive total net delta, including usable
+index capacity changes after tombstones clear.
+
+Follow-up `N-gc-mutation-capability` remains owned by gcpace, queued behind the
+E4 GC prerequisite work assigned after R4.
+Extend the typed insert/grow/COW operations into a capability with explicit
+replacement and growth publication. Once every production mutation uses those
+operations, remove both generic completion guards and the initial/final
+backing ABA limitation. Until then, preserve the generic replacement contract.
+The same follow-up should evaluate GNU's preallocated `next[]` free chain
+(`fns.c:5161-5196`), which makes removal allocation-free. Neo currently grows a
+separate reusable-slot Vec lazily. Preallocating it requires a capacity invariant
+across constructors, clone, reserve, insertion and dump hydration, and changes
+real backing bytes and their census. R4 retains that allocation policy and bills
+only the positive net materialized delta on a removal whose free-list push can
+allocate; tombstone-driven index-capacity decreases remain in the same net domain.
+
+The internal design follows Rust's [slice views](https://doc.rust-lang.org/book/ch04-03-slices.html)
+and [disjoint borrowing](https://doc.rust-lang.org/nomicon/borrow-splitting.html):
+expose only the fixed byte extent when resizing is forbidden, and project the
+allocation counter independently of the live payload loan. The language-level
+budget remains defined by pinned GNU `alloc.c`, not by these internal choices.
+
+The image-hash census visits only a dedicated cold registry populated at
+owned image stamping and mapped hash registration, and removes owned entries
+before reclamation. Ordinary minor cycles never filter all owned or mapped
+headers. Tests and `NEOVM_GC_VERIFY_PARTITION=1` compare this registry with the
+full provenance walk before reading its table pointers.
+
+The `(garbage-collect)` return rows use a separate, cold snapshot requested by
+the eval and bytecode entry points. Completed-cycle publication captures USED,
+FREE, bytes and slots together before finalizers, `post-gc-hook`, and the
+return-list allocation. Reading the rows does not walk or modify the heap;
+automatic cycles do not gain an inventory walk. Activation initializes the
+fallback snapshot before the first requested collection.
+
+The snapshot excludes mapped and loader-stamped image residents, including
+before promotion, while retaining ordinary-old objects and visiting retired
+arena pages by their allocation bitmaps.
+It counts owned boxed vectorlikes as well as arena objects. String bytes are
+logical bytes without a NUL; ordinary vector slots include the header word.
+The symbol row counts the fixed Neo seed and post-activation symbol births,
+using existing allocation counters without rewriting them. Native/image
+activation establishes the World-owned baseline; Neo's retained uninterned
+IDs remain counted. Interval/buffer definitions and allocator free capacities
+remain independent of physical image inventory.
 
 ## Insertion coverage & the precise-rooting precondition (task 01 / #17)
 

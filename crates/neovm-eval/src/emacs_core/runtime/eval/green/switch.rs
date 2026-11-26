@@ -5,7 +5,7 @@
 //! collection run by another owner traces them there, and never reads the
 //! parked Context, which stays exclusively its own thread's.
 
-use super::super::world::Baton;
+use super::super::world::{Baton, TurnRight};
 use super::super::{Context, Flow, Value};
 use super::carrier::CarrierJob;
 use super::host_service::{
@@ -17,6 +17,8 @@ use super::scheduler::{
     ThreadKey, Wait, Wake,
 };
 use crate::host_effect::contracts::OwnedNativeData;
+use crate::host_effect::native_outcome::{CancelReason, NativeOutcome, NativeReply};
+use crate::host_effect::selection::{SelectionReply, SelectionRequest};
 use crate::host_effect::wake::native_wait::{NativeWaitHandoff, RealWaitPermit};
 use neovm_value::error::LispCondition;
 use neovm_value::error::signal;
@@ -27,6 +29,59 @@ use std::time::{Duration, Instant};
 
 #[doc(hidden)]
 pub use crate::host_effect::wake::SelectTurn;
+
+/// A selection request's terminal, decoded on the requesting owner.
+enum SelectionTerminal {
+    Reply(SelectionReply),
+    Interrupted(CancelReason),
+    HostClosed,
+}
+
+/// Decode the native settlement of a selection host request. The service's
+/// executor sends exactly one `SelectionReply`; any other payload at this
+/// point is a service invariant violation, not a Lisp condition.
+fn decode_selection_settlement(
+    _owner: &RestoredHostOwner<'_>,
+    settlement: &NativeSettlement,
+) -> Result<SelectionTerminal, Flow> {
+    let outcome = match settlement {
+        NativeSettlement::Completed(outcome) => outcome,
+        NativeSettlement::CompletedAfterCancellation { outcome, .. } => outcome,
+    };
+    match outcome {
+        NativeOutcome::Reply(NativeReply::Returned(OwnedNativeData::SelectionReply(reply))) => {
+            Ok(SelectionTerminal::Reply(reply.clone()))
+        }
+        NativeOutcome::Reply(NativeReply::LispError(OwnedNativeData::SelectionReply(
+            SelectionReply::HostError(message),
+        ))) => Ok(SelectionTerminal::Reply(SelectionReply::HostError(
+            message.clone(),
+        ))),
+        NativeOutcome::Interrupted(reason) => Ok(SelectionTerminal::Interrupted(*reason)),
+        NativeOutcome::HostClosed => Ok(SelectionTerminal::HostClosed),
+        other => {
+            tracing::error!(
+                ?other,
+                "selection settlement carried a foreign native payload"
+            );
+            Err(selection_internal_error(
+                "selection settlement payload does not match the request",
+            ))
+        }
+    }
+}
+
+/// The existing invariant-violation shape: a debug assertion, an error log,
+/// and a signal that names itself internal, so it cannot be read as GNU
+/// behavior.
+fn selection_internal_error(message: &str) -> Flow {
+    debug_assert!(false, "selection host invariant: {message}");
+    tracing::error!(message, "selection host invariant violated");
+    signal(
+        LispCondition::Error,
+        vec![Value::string(format!("neovm internal error: {message}"))],
+    )
+}
 
 /// What the scheduler concluded when no owner could run.
 enum DeadlockVerdict {
@@ -104,13 +159,13 @@ enum OwnerRestore {
 }
 
 struct RestoringTurn {
-    baton: Baton,
+    baton: TurnRight,
     disposition: OwnerRestore,
 }
 
 impl RestoringTurn {
     #[doc(hidden)]
-    pub fn ordinary(baton: Baton) -> Self {
+    pub fn ordinary(baton: TurnRight) -> Self {
         Self {
             baton,
             disposition: OwnerRestore::Ordinary,
@@ -119,7 +174,7 @@ impl RestoringTurn {
 
     /// Initial carrier entry and an ordinary native input wait cannot consume
     /// another invocation's intermediate owner continuation.
-    pub(crate) fn into_ordinary_baton(self) -> Baton {
+    pub(crate) fn into_ordinary_baton(self) -> TurnRight {
         match self.disposition {
             OwnerRestore::Ordinary => self.baton,
             OwnerRestore::Intermediate(_) => std::process::abort(),
@@ -129,7 +184,7 @@ impl RestoringTurn {
 
 /// Holds native/scheduler ownership only while main's Context is published.
 enum MainWaitAuthority {
-    Held(Baton),
+    Held(TurnRight),
     Released(NativeRelease),
     Transition,
 }
@@ -140,6 +195,10 @@ pub struct MainNativeHandoff<'native> {
     receiver: &'native mut OwnerReceive,
     wait_end: Instant,
     authority: MainWaitAuthority,
+    /// The display host main attached, if any. Native waits run unhosted too
+    /// (batch select/sleep), so this is optional; a hosted session keeps it
+    /// available across the wait so a worker's service turn can be served.
+    host: Option<&'native mut (dyn crate::emacs_core::eval::protocol::DisplayHost + 'static)>,
 }
 
 impl NativeWaitHandoff for MainNativeHandoff<'_> {
@@ -165,8 +224,14 @@ impl NativeWaitHandoff for MainNativeHandoff<'_> {
         let wake = self
             .control
             .reacquire_main_wait(release, self.receiver.as_channel());
+        let MainNativeHandoff {
+            control,
+            receiver,
+            host,
+            ..
+        } = self;
         self.authority = MainWaitAuthority::Held(
-            receive_owner_turn(ThreadKey::Main, wake, self.control, self.receiver)
+            receive_owner_turn(ThreadKey::Main, wake, control, receiver, host)
                 .into_ordinary_baton(),
         );
     }
@@ -185,12 +250,37 @@ impl NativeWaitHandoff for MainNativeHandoff<'_> {
 }
 
 impl MainNativeHandoff<'_> {
-    pub(crate) fn into_baton(self) -> Baton {
+    pub(crate) fn into_baton(self) -> TurnRight {
         match self.authority {
             MainWaitAuthority::Held(baton) => baton,
             MainWaitAuthority::Released(_) | MainWaitAuthority::Transition => std::process::abort(),
         }
     }
+}
+
+/// Proof that a seated Green `Context` has parked its host bindings, JIT pins,
+/// and private-root `RootBatchLease` into `GreenRuntime::parked`.
+#[derive(Debug)]
+pub(crate) struct WorldSeatParkedRoots {
+    parked: super::super::ParkedOwner,
+    #[cfg(feature = "jit")]
+    jit: crate::emacs_core::jit::green_owner::ParkedJit,
+    pub(crate) key: ThreadKey,
+}
+
+static_assertions::assert_not_impl_any!(WorldSeatParkedRoots: Send, Sync, Clone, Copy);
+
+/// Why `Context::park_world_seat_with_roots` refused before stowing World
+/// carriers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum WorldSeatRootError {
+    Unseated,
+    Retention,
+    #[cfg(feature = "jit")]
+    JitPrepare,
+    BatchPrepare,
+    BatchFinalize,
+    BatchPublish,
 }
 
 /// A Lisp thread's place in its Green runtime, kept in its owner slab.
@@ -200,7 +290,7 @@ pub struct GreenSeat {
     pub(super) control: Arc<Control>,
     receiver: Option<OwnerReceive>,
     /// The World's Baton, while this thread runs.
-    baton: Option<Baton>,
+    baton: Option<TurnRight>,
     /// A constant or native forwarder refused a rebind. Deliver this after
     /// condition-wait retakes its mutex. The owner slab traces a forwarded
     /// error's offending Lisp value, including while this owner is running.
@@ -219,13 +309,16 @@ pub struct GreenSeat {
 }
 
 impl GreenSeat {
-    pub(crate) fn take_owner_step_baton(&mut self) -> Result<Baton, host_service::HostRootError> {
+    pub(crate) fn take_owner_step_baton(
+        &mut self,
+    ) -> Result<TurnRight, host_service::HostRootError> {
         self.baton
             .take()
             .ok_or(host_service::HostRootError::BatonRequired)
     }
 
-    pub(crate) fn restore_owner_step_baton(&mut self, baton: Baton) {
+    pub(crate) fn restore_owner_step_baton(&mut self, baton: TurnRight) {
+        self.control.debug_assert_turn_authority(&baton);
         if self.baton.is_some() {
             tracing::error!("owner step attempted to duplicate its Green Baton");
             std::process::abort();
@@ -245,6 +338,10 @@ impl GreenSeat {
 // Wake envelopes change only the cold channel payload, never the owner slot.
 static_assertions::const_assert_eq!(
     std::mem::size_of::<mpsc::Receiver<Baton>>(),
+    std::mem::size_of::<mpsc::Receiver<Wake>>()
+);
+static_assertions::const_assert_eq!(
+    std::mem::size_of::<mpsc::Receiver<TurnRight>>(),
     std::mem::size_of::<mpsc::Receiver<Wake>>()
 );
 
@@ -289,14 +386,24 @@ impl Context {
         self.green_seat().map(|seat| seat.key)
     }
 
+    /// Whether this owner is a non-main Green worker. Read-only: no seat,
+    /// receiver or Baton access, so a builtin selector can call it.
+    pub(crate) fn is_green_worker_owner(&self) -> bool {
+        self.owner
+            .slab()
+            .and_then(|slab| slab.green_seat())
+            .is_some_and(|seat| seat.key != ThreadKey::Main)
+    }
+
     /// Seat this owner, which holds BATON, in the runtime CONTROL as KEY.
     pub(crate) fn take_green_seat(
         &mut self,
         key: ThreadKey,
         control: Arc<Control>,
         receiver: mpsc::Receiver<Wake>,
-        baton: Baton,
+        baton: TurnRight,
     ) {
+        control.debug_assert_turn_authority(&baton);
         self.ensure_owner_slab()
             .install_green_seat(Box::new(GreenSeat {
                 key,
@@ -310,6 +417,46 @@ impl Context {
                 #[cfg(feature = "jit")]
                 parked_jit_scratch: Default::default(),
             }));
+    }
+
+    /// Seat a test worker during an open parallel era where the keeper holds
+    /// the World's `Baton`.
+    #[cfg(test)]
+    pub(super) fn take_green_seat_without_baton_for_test(
+        &mut self,
+        key: ThreadKey,
+        control: Arc<Control>,
+        receiver: mpsc::Receiver<Wake>,
+    ) {
+        self.ensure_owner_slab()
+            .install_green_seat(Box::new(GreenSeat {
+                key,
+                control,
+                receiver: Some(OwnerReceive::new(key, receiver)),
+                baton: None,
+                binding_resume_error: None,
+                condition_wait: super::condition_wait::ConditionWait::Completed,
+                parked_roots_buffer: Vec::new(),
+                parked_root_batch: None,
+                #[cfg(feature = "jit")]
+                parked_jit_scratch: Default::default(),
+            }));
+    }
+
+    /// Install the hosted main's real native adapter on this owner's pump.
+    /// False when this owner is not the seated main (a worker, or no Green
+    /// runtime yet); the caller degrades to `HostClosed` rather than aborting.
+    pub(crate) fn install_main_host_effects(&mut self) -> bool {
+        let Some(seat) = self.green_seat() else {
+            return false;
+        };
+        if seat.key != ThreadKey::Main {
+            return false;
+        }
+        let Some(receiver) = seat.receiver.as_mut() else {
+            return false;
+        };
+        receiver.install_host_effects()
     }
 
     /// Copy every root only this owner holds: its private execution state
@@ -392,7 +539,7 @@ impl Context {
         &mut self,
         operation: impl FnOnce(
             &mut host_service::HostRegistry,
-            &Baton,
+            &TurnRight,
             &neovm_value::tagged::gc::TaggedHeap,
             ThreadKey,
         ) -> Result<R, host_service::HostRootError>,
@@ -491,10 +638,6 @@ impl Context {
 
     /// One suspendable routed turn. The immutable terminal decoder is invoked
     /// only when native semantic completion has actually settled the parent.
-    #[allow(
-        dead_code,
-        reason = "owned host adapters are installed in a later range"
-    )]
     #[cold]
     pub(crate) fn green_host_call_turn<R>(
         &mut self,
@@ -538,6 +681,78 @@ impl Context {
         )
     }
 
+    /// Route one selection host request from a non-main owner to the owning
+    /// main owner and decode its settlement. The request is already converted
+    /// (arity, nil/string/other, result and error construction stay on this
+    /// caller); no Lisp value crosses and the published root batch is empty.
+    ///
+    /// GNU raises a pending `thread-signal` when the global lock is
+    /// reacquired (`post_acquire_global_lock`, src/thread.c:141-154); this
+    /// call therefore raises it before returning a value. A signal that the
+    /// cancellation reported but that is no longer pending is an internal
+    /// invariant violation, never a Lisp error.
+    #[cold]
+    pub(crate) fn green_host_selection(
+        &mut self,
+        request: SelectionRequest,
+    ) -> Result<SelectionReply, Flow> {
+        // SAFETY: no Lisp value crosses; this original owner holds the Baton
+        // and the sole mutator, and the extent publishes no roots (capacity
+        // 0). No Lisp, collection or ownership handoff runs here.
+        let call = match unsafe { self.green_prepare_host_call(&[]) } {
+            Ok(call) => call,
+            Err(error) => {
+                tracing::error!(?error, "selection host request was not prepared");
+                return Err(signal(
+                    LispCondition::Error,
+                    vec![Value::string(error.to_string())],
+                ));
+            }
+        };
+        let turn = self.green_host_call_turn(
+            call,
+            OwnedNativeData::SelectionRequest(request),
+            decode_selection_settlement,
+        )?;
+        match turn {
+            HostOwnerTurn::Final(SelectionTerminal::Reply(reply)) => Ok(reply),
+            HostOwnerTurn::Final(SelectionTerminal::HostClosed) => Err(signal(
+                LispCondition::Error,
+                vec![Value::string("Display host is closed")],
+            )),
+            HostOwnerTurn::Final(SelectionTerminal::Interrupted(reason)) => match reason {
+                CancelReason::TargetSignal => {
+                    let key = self.green_key().expect("a routed owner is seated");
+                    self.green_raise_pending_signal(key)?;
+                    // A cancellation that reports a target signal while no
+                    // signal is pending is an internal inconsistency; a Lisp
+                    // error here would be mistaken for GNU behavior.
+                    Err(selection_internal_error(
+                        "target signal vanished before its delivery point",
+                    ))
+                }
+                // A target quit is not a pending thread signal: GNU delivers
+                // it as a quit at the target's next quit check, so surface the
+                // quit flow instead of the signal-pending check.
+                CancelReason::TargetQuit => Err(signal(LispCondition::Quit, vec![])),
+                CancelReason::OwnerEnded => Err(signal(
+                    LispCondition::Error,
+                    vec![Value::string("Host request interrupted: owner ended")],
+                )),
+                CancelReason::SessionClosing => Err(signal(
+                    LispCondition::Error,
+                    vec![Value::string("Host request interrupted: session closing")],
+                )),
+            },
+            HostOwnerTurn::NeedOwner(_) => {
+                tracing::error!(
+                    "selection host request produced an owner step, but its direct body runs no Lisp"
+                );
+                std::process::abort()
+            }
+        }
+    }
+
     pub(crate) fn green_park_impl<R>(
         &mut self,
         request: ParkRequest,
@@ -556,13 +771,20 @@ impl Context {
         };
         let key = seat.key;
         let control = Arc::clone(&seat.control);
+        let is_era_park = seat.baton.as_ref().is_some_and(TurnRight::is_era);
         if let Some(refusal) = switch_refusal(self) {
             self.abandon_unpublished_park_request(request)?;
             return Err(signal("error", vec![Value::string(refusal)]));
         }
         // A failed retirement kept the restored owner's lease in the World.
         // Finish that obligation before publishing another census for this key.
-        if let Err(error) = self.finish_retained_parked_roots(key) {
+        // Inside an open era, use the Q2 non-marking phase guard without
+        // `drain_to_quiescent` and close open bump-allocation regions so
+        // stopped collections or era exit never see `OpenRegion`.
+        if is_era_park {
+            self.try_retire_world_seat_parked_roots(key);
+            self.tagged_heap.close_alloc_regions();
+        } else if let Err(error) = self.finish_retained_parked_roots(key) {
             self.abandon_unpublished_park_request(request)?;
             return Err(error);
         }
@@ -649,7 +871,7 @@ impl Context {
         // can be cleared and retained before another owner receives the Baton.
         self.return_parked_root_buffer(roots);
         let seat = self.green_seat().expect("seated above");
-        let baton = seat
+        let mut baton = seat
             .baton
             .take()
             .expect("the running thread holds the Baton");
@@ -658,16 +880,29 @@ impl Context {
         // while this one is parked: its current buffer and its errors.
         let current = self.edit.buffers.current_buffer_id();
         self.threads.set_thread_current_buffer(key.id(), current);
-        self.restore_deferred_error(&baton, key);
         if let Some(runtime) = baton.green_runtime().as_ref() {
             runtime.outgoing_constant_error.set(
                 self.failed_constant_owner_binding(true)
                     .map(|symbol| (key, symbol)),
             );
         }
-        stow_owner_state(self, &baton);
-        stow_carried_state(&baton);
-        self.publish_parked_roots(&baton, key, publication);
+        let parked_era_tls = baton.is_era();
+        {
+            let _era_stow_guard = parked_era_tls.then_some(EraTransitionAbortOnPanic("era-park"));
+            stow_owner_state(self, &baton);
+            stow_carried_state(&baton);
+            if parked_era_tls {
+                self.publish_parked_roots_retaining(&baton, key, publication);
+                // SAFETY: owner state and carried World state are stowed above and no
+                // TLS heap loan is live; the prologue resets carrier TLS before reuse.
+                unsafe { super::carrier_tls::park_carrier_tls() };
+                let proof =
+                    super::super::parallel_entry::world_seat::prove_stowed_for_era_switch(self);
+                baton.set_stowed_for_return(proof);
+            } else {
+                self.publish_parked_roots(&baton, key, publication);
+            }
+        }
         // All World/registry borrows have ended before the unique Baton moves.
         let (outcome, host_resume, native_resume) = match request {
             ParkRequest::Ordinary(wait) => (
@@ -681,6 +916,9 @@ impl Context {
                     receiver: &mut receiver,
                     wait_end,
                     authority: MainWaitAuthority::Held(baton),
+                    host: self.display_host.as_mut().map(|host| {
+                        &mut **host as &mut dyn crate::emacs_core::eval::protocol::DisplayHost
+                    }),
                 };
                 let result = wait.wait_with(&mut handoff);
                 (Ok(Wake::Resume(handoff.into_baton())), None, Some(result))
@@ -717,67 +955,85 @@ impl Context {
         };
         // A service turn must not restore main's Lisp continuation, JIT pins,
         // bindings or TLS, or consume its original semantic Wait.
-        let RestoringTurn { baton, disposition } =
-            receive_owner_turn(key, wake, &control, &mut receiver);
-        // Only the returning continuation refreshes its private dispatch
-        // header from canonical cells. A peer's function write updates its own
-        // header, so comparing our stale header would miss that redefinition.
-        self.obarray.refresh_admission();
-        // Invalidate shared leaf slots before dispatch or owner mirror work,
-        // and restore old-source pins while the immutable batch still roots them.
-        #[cfg(feature = "jit")]
-        {
-            let mut scratch =
-                std::mem::take(&mut self.green_seat().expect("seated above").parked_jit_scratch);
-            let resumed = parked_jit.resume_reusing(self, &mut scratch);
-            self.green_seat().expect("seated above").parked_jit_scratch = scratch;
-            resumed.expect("the original owner resumes in its own heap");
-        }
-        unstow_carried_state(&baton);
-        unstow_owner_state(self, &baton);
-        let changed_owner = self.threads.current_thread_id() != key.id();
-        let outgoing_error = baton
-            .green_runtime()
-            .as_ref()
-            .and_then(|runtime| runtime.outgoing_constant_error.take())
-            .filter(|(previous, _)| *previous != key)
-            .map(|(_, symbol)| symbol);
-        let returning_error = changed_owner
-            .then(|| self.failed_constant_owner_binding(false))
-            .flatten();
-        self.threads.enter_thread(key.id());
-        let (exit, case_table) = baton
-            .green_runtime()
-            .as_ref()
-            .map(|runtime| {
-                (
-                    runtime.exit_for(key, &control),
-                    runtime.standard_case_table.get(),
-                )
-            })
-            .unwrap_or((None, self.cached_standard_case_table));
-        let seat = self.green_seat().expect("seated above");
-        seat.receiver = Some(receiver);
-        // GNU enters this owner before unbinding the previous one. Its
-        // failure wins over this owner's own rebind, and condition-wait
-        // still retakes its mutex before either error is delivered.
-        if let Some(symbol) = outgoing_error.or(returning_error) {
-            self.green_defer_binding_resume_error(symbol);
-        }
-        // GNU `post_acquire_global_lock` sets the thread's buffer again: a
-        // thread that killed it moved this one to another, which the
-        // owner's mirrors must read from as they come back.
-        let moved = self
-            .threads
-            .thread_current_buffer(key.id())
-            .filter(|buffer| current != Some(*buffer) && self.edit.buffers.get(*buffer).is_some());
-        if let Some(buffer) = moved {
-            let _ = self.edit.buffers.switch_current_unrecorded(buffer);
-        }
-        let case_table_changed =
-            case_table.map(Value::bits) != self.cached_standard_case_table.map(Value::bits);
-        self.cached_standard_case_table = case_table;
-        self.resume_owner(parked);
+        let mut host = self
+            .display_host
+            .as_mut()
+            .map(|host| &mut **host as &mut dyn crate::emacs_core::eval::protocol::DisplayHost);
+        let RestoringTurn {
+            mut baton,
+            disposition,
+        } = receive_owner_turn(key, wake, &control, &mut receiver, &mut host);
+        let resumed_era = parked_era_tls || baton.is_era();
+        let (exit, case_table_changed, moved, case_table) = {
+            let _era_resume_guard = resumed_era.then_some(EraTransitionAbortOnPanic("era-resume"));
+            if resumed_era {
+                baton.clear_stowed_for_return();
+                super::carrier_tls::reset_carrier_tls();
+            }
+            // Only the returning continuation refreshes its private dispatch
+            // header from canonical cells. A peer's function write updates its own
+            // header, so comparing our stale header would miss that redefinition.
+            self.obarray.refresh_admission();
+            // Invalidate shared leaf slots before dispatch or owner mirror work,
+            // and restore old-source pins while the immutable batch still roots them.
+            #[cfg(feature = "jit")]
+            {
+                let mut scratch = std::mem::take(
+                    &mut self.green_seat().expect("seated above").parked_jit_scratch,
+                );
+                let resumed = parked_jit.resume_reusing(self, &mut scratch);
+                self.green_seat().expect("seated above").parked_jit_scratch = scratch;
+                resumed.expect("the original owner resumes in its own heap");
+            }
+            unstow_carried_state(&baton);
+            unstow_owner_state(self, &baton);
+            let changed_owner = self.threads.current_thread_id() != key.id();
+            let outgoing_error = baton
+                .green_runtime()
+                .as_ref()
+                .and_then(|runtime| runtime.outgoing_constant_error.take())
+                .filter(|(previous, _)| *previous != key)
+                .map(|(_, symbol)| symbol);
+            let returning_error = changed_owner
+                .then(|| self.failed_constant_owner_binding(false))
+                .flatten();
+            self.threads.enter_thread(key.id());
+            let (exit, case_table) = baton
+                .green_runtime()
+                .as_ref()
+                .map(|runtime| {
+                    (
+                        runtime.exit_for(key, &control),
+                        runtime.standard_case_table.get(),
+                    )
+                })
+                .unwrap_or((None, self.cached_standard_case_table));
+            let seat = self.green_seat().expect("seated above");
+            seat.receiver = Some(receiver);
+            // GNU enters this owner before unbinding the previous one. Its
+            // failure wins over this owner's own rebind, and condition-wait
+            // still retakes its mutex before either error is delivered.
+            if let Some(symbol) = outgoing_error.or(returning_error) {
+                self.green_defer_binding_resume_error(symbol);
+            }
+            // GNU `post_acquire_global_lock` sets the thread's buffer again: a
+            // thread that killed it moved this one to another, which the
+            // owner's mirrors must read from as they come back.
+            let moved = self
+                .threads
+                .thread_current_buffer(key.id())
+                .filter(|buffer| {
+                    current != Some(*buffer) && self.edit.buffers.get(*buffer).is_some()
+                });
+            if let Some(buffer) = moved {
+                let _ = self.edit.buffers.switch_current_unrecorded(buffer);
+            }
+            let case_table_changed =
+                case_table.map(Value::bits) != self.cached_standard_case_table.map(Value::bits);
+            self.cached_standard_case_table = case_table;
+            self.resume_owner(parked);
+            (exit, case_table_changed, moved, case_table)
+        };
         if case_table_changed {
             neovm_text::emacs_core::casetab::activate_casetab_thread_locals(case_table);
         }
@@ -811,7 +1067,12 @@ impl Context {
             },
         };
         self.green_seat().expect("restored owner is seated").baton = Some(baton);
-        let retirement = self.retire_parked_roots(key);
+        let retirement = if resumed_era {
+            self.try_retire_world_seat_parked_roots(key);
+            Ok(())
+        } else {
+            self.retire_parked_roots(key)
+        };
         if let Some(request) = exit {
             // The process exits: like GNU's `exit`, no cleanup form of this
             // thread runs on the way out.
@@ -1168,13 +1429,9 @@ impl Context {
         {
             return self.green_wait(Wait::Runnable);
         }
-        // A newborn's signal was deferred until it installed handlers.
-        // Its first yield delivers it even when every peer is blocked.
-        let deferred =
-            self.with_green_runtime(|runtime| runtime.deferred_errors.borrow_mut().remove(&key));
-        if let Some((symbol, data)) = deferred {
-            self.threads.restore_thread_error(key.id(), symbol, data);
-        }
+        // GNU's yield reacquires the lock even when no peer runs
+        // (src/thread.c:724-732), and that `post_acquire_global_lock` raises
+        // a pending error, such as one signalled before this thread ran.
         self.green_raise_pending_signal(key)
     }
 
@@ -1239,22 +1496,90 @@ impl Context {
         }
     }
 
-    /// KEY's error held since its start is pending again
-    /// (`GreenRuntime::deferred_errors`).
-    pub(crate) fn restore_deferred_error(&mut self, baton: &Baton, key: ThreadKey) {
-        let deferred = baton
-            .green_runtime()
+    /// Test-only: borrow this seated owner's `Control` handle.
+    #[cfg(test)]
+    pub(crate) fn green_control_for_test(&self) -> Option<Arc<Control>> {
+        self.owner
+            .slab()
+            .and_then(|slab| slab.green_seat())
+            .map(|seat| Arc::clone(&seat.control))
+    }
+
+    /// Test-only: seat this main owner without a Solo Baton while an era is open.
+    #[cfg(test)]
+    pub(crate) fn seat_green_main_without_baton_for_test(&mut self, control: Arc<Control>) {
+        let (_tx, rx) = mpsc::channel();
+        self.take_green_seat_without_baton_for_test(ThreadKey::Main, control, rx);
+    }
+
+    /// Test-only: drain carrier pool, retire seated era main's Context, close
+    /// alloc regions, stow World carriers, park carrier TLS, and return its
+    /// final `TurnRight::Era` carrying `StowedForReturn`.
+    #[cfg(test)]
+    pub(crate) fn retire_seated_era_main_for_test(mut self) -> TurnRight {
+        self.with_green_runtime(|runtime| runtime.carriers.drain());
+        if let Some(key) = self.green_key() {
+            self.try_retire_world_seat_parked_roots(key);
+        }
+        self.clear_cached_parked_root_batch_for_test();
+        self.tagged_heap.close_alloc_regions();
+        let mut baton = self
+            .green_seat()
+            .expect("seated era main")
+            .baton
+            .take()
+            .expect("seated era main holds TurnRight::Era");
+        stow_owner_state(&mut self, &baton);
+        self.green_release_seat();
+        self.retire_green_owner();
+        stow_carried_state(&baton);
+        // SAFETY: the seat is released and retired and World state is stowed, so no
+        // TLS heap loan is live; the prologue resets carrier TLS before reuse.
+        unsafe { super::carrier_tls::park_carrier_tls() };
+        let proof =
+            super::super::parallel_entry::world_seat::prove_retired_worker_stowed_for_era(&baton);
+        baton.set_stowed_for_return(proof);
+        baton
+    }
+
+    /// Whether this seated owner's `ThreadKey` currently has an active parked
+    /// `RootBatchLease` published in `GreenRuntime::parked` (MEDIUM-1 / P1).
+    pub(in crate::emacs_core::eval) fn has_published_parked_roots_for_seat(&self) -> bool {
+        let Some(key) = self
+            .owner
+            .slab()
+            .and_then(|slab| slab.green_seat())
+            .map(|seat| seat.key)
+        else {
+            return false;
+        };
+        self.green_runtime_ref()
             .as_ref()
-            .and_then(|runtime| runtime.deferred_errors.borrow_mut().remove(&key));
-        if let Some((symbol, data)) = deferred {
-            self.threads.restore_thread_error(key.id(), symbol, data);
+            .is_some_and(|runtime| runtime.parked.borrow().contains_key(&key))
+    }
+
+    /// Keep ROOTS traced while KEY is parked inside an open era, preserving any
+    /// previously deferred lease in `retained` rather than panicking (Q2).
+    fn publish_parked_roots_retaining(
+        &self,
+        baton: &TurnRight,
+        key: ThreadKey,
+        publication: neovm_value::tagged::transport::RootBatchLease,
+    ) {
+        let runtime = baton.green_runtime();
+        let Some(runtime) = runtime.as_ref() else {
+            return;
+        };
+        let mut parked = runtime.parked.borrow_mut();
+        if let Some(previous) = parked.insert(key, publication) {
+            parked.push_retained(previous);
         }
     }
 
     /// Keep ROOTS traced while KEY is parked.
     pub(crate) fn publish_parked_roots(
         &self,
-        baton: &Baton,
+        baton: &TurnRight,
         key: ThreadKey,
         publication: neovm_value::tagged::transport::RootBatchLease,
     ) {
@@ -1295,15 +1620,33 @@ impl Context {
     }
 
     pub(crate) fn finish_retained_parked_roots(&mut self, key: ThreadKey) -> Result<(), Flow> {
-        if !self.with_green_runtime(|runtime| runtime.parked.borrow().contains_key(&key)) {
+        let (has_own_key, has_retained) = self.with_green_runtime(|runtime| {
+            let parked = runtime.parked.borrow();
+            (parked.contains_key(&key), parked.has_retained())
+        });
+        if !has_own_key && !has_retained {
             return Ok(());
         }
-        self.prepare_parked_root_retirement()?;
-        let retained = self.with_green_runtime(|runtime| runtime.parked.borrow_mut().remove(&key));
-        match retained {
-            Some(publication) => self.finish_restored_publication(key, publication),
-            None => Ok(()),
+        if has_own_key {
+            self.prepare_parked_root_retirement()?;
+            if let Some(publication) =
+                self.with_green_runtime(|runtime| runtime.parked.borrow_mut().remove(&key))
+            {
+                self.finish_restored_publication(key, publication)?;
+            }
         }
+        // Drain stale duplicate leases in `WorldRootRegistry::retained`
+        // best-effort: never force `drain_to_quiescent` for an unrelated
+        // owner's stuck lease and never turn a still-live reader into a Lisp
+        // error (over-rooting is safe, matching `try_retire_world_seat_parked_roots`).
+        if has_retained && (has_own_key || self.world_seat_retirement_phase_is_safe()) {
+            self.with_green_runtime(|runtime| {
+                runtime.parked.borrow_mut().drain_retained_with(|lease| {
+                    super::root_registry::finish(lease).map_err(|failure| failure.into_parts().0)
+                });
+            });
+        }
+        Ok(())
     }
 
     pub(crate) fn finish_restored_publication(
@@ -1373,6 +1716,463 @@ impl Context {
         seat.parked_roots_buffer = roots;
     }
 
+    /// Whether this seated owner's heap is in a safe non-marking phase for
+    /// retiring a duplicate parked `RootBatchLease` under a live `WorldTurn`
+    /// without calling `drain_to_quiescent` (L6.7b b4 Q2 ruling).
+    fn world_seat_retirement_phase_is_safe(&self) -> bool {
+        !self.gc_driver_active
+            && matches!(
+                self.tagged_heap.mark_phase(),
+                MarkPhase::Idle | MarkPhase::Sweeping
+            )
+            && !self.tagged_heap.gc_locks_poisoned()
+    }
+
+    /// Best-effort fail-closed retirement of this owner's parked lease (and
+    /// any previously deferred leases) under the Q2 non-marking phase guard.
+    /// Over-rooting is safe: if the guard fails or a reader is held, the lease
+    /// stays live in `GreenRuntime::parked` and retires at a later safe point.
+    #[cold]
+    #[inline(never)]
+    pub(crate) fn try_retire_world_seat_parked_roots(&mut self, key: ThreadKey) {
+        if !self.world_seat_retirement_phase_is_safe() {
+            return;
+        }
+        let publication =
+            self.with_green_runtime(|runtime| runtime.parked.borrow_mut().remove(&key));
+        if let Some(publication) = publication {
+            match publication.try_recycle() {
+                Ok(prepared) => {
+                    let seat = self.green_seat().expect("a returning owner is seated");
+                    if seat.parked_root_batch.is_none() {
+                        seat.parked_root_batch = Some(prepared);
+                    }
+                }
+                Err(failure) => {
+                    let (publication, _) = failure.into_parts();
+                    if let Err(failure) = super::root_registry::finish(publication) {
+                        let (publication, _) = failure.into_parts();
+                        self.with_green_runtime(|runtime| {
+                            if let Some(existing) =
+                                runtime.parked.borrow_mut().insert(key, publication)
+                            {
+                                runtime.parked.borrow_mut().push_retained(existing);
+                            }
+                        });
+                    }
+                }
+            }
+        }
+        self.with_green_runtime(|runtime| {
+            runtime.parked.borrow_mut().drain_retained_with(|lease| {
+                super::root_registry::finish(lease).map_err(|failure| failure.into_parts().0)
+            });
+        });
+    }
+
+    /// Park a seated Green `Context`'s private roots and JIT pins into the
+    /// World's `GreenRuntime::parked` table before stowing World carriers.
+    ///
+    /// Keeps `world_seat.rs` `#![forbid(unsafe_code)]` while sharing Green's
+    /// exact census + `RootBatchLease` publication contract.
+    #[cold]
+    #[inline(never)]
+    pub(crate) fn park_world_seat_with_roots(
+        &mut self,
+        retention: Option<&neovm_value::tagged::gc::FacadeEpochRetention>,
+    ) -> Result<
+        (
+            WorldSeatParkedRoots,
+            neovm_value::tagged::gc::FacadeEpochRetention,
+        ),
+        WorldSeatRootError,
+    > {
+        let (key, seat_retention) = {
+            let Some(seat) = self.green_seat() else {
+                return Err(WorldSeatRootError::Unseated);
+            };
+            let key = seat.key;
+            let retained = match retention {
+                Some(existing) => existing
+                    .retain()
+                    .map_err(|_| WorldSeatRootError::Retention)?,
+                None => match seat.baton.as_ref() {
+                    Some(baton) => baton
+                        .parallel_epoch_retention()
+                        .map_err(|_| WorldSeatRootError::Retention)?,
+                    None => return Err(WorldSeatRootError::Retention),
+                },
+            };
+            (key, retained)
+        };
+        // Opportunistically retire any previously deferred lease for this key
+        // before publishing a fresh census. If retirement still refuses (e.g.
+        // a held reader), preserve the old lease in `retained` below so zero
+        // live leases are dropped.
+        self.try_retire_world_seat_parked_roots(key);
+        // Close any open bump-allocation regions before the World turn ends so
+        // stopped collections never trip `ImageError::RegionsOpen`.
+        self.tagged_heap.close_alloc_regions();
+        #[cfg(feature = "jit")]
+        let parked_jit = {
+            let mut scratch =
+                std::mem::take(&mut self.green_seat().expect("seated above").parked_jit_scratch);
+            let prepared =
+                crate::emacs_core::jit::green_owner::ParkedJit::prepare_reusing(self, &mut scratch);
+            self.green_seat().expect("seated above").parked_jit_scratch = scratch;
+            prepared.map_err(|_| WorldSeatRootError::JitPrepare)?
+        };
+        let parked = self.park_owner();
+        #[allow(unused_mut)]
+        let mut roots = self.collect_parked_roots();
+        #[cfg(feature = "jit")]
+        roots.extend_from_slice(parked_jit.roots());
+        macro_rules! rollback_park {
+            ($err:expr) => {{
+                self.return_parked_root_buffer(roots);
+                #[cfg(feature = "jit")]
+                parked_jit.return_scratch(
+                    &mut self.green_seat().expect("seated above").parked_jit_scratch,
+                );
+                self.resume_owner(parked);
+                return Err($err);
+            }};
+        }
+        let prepared = self
+            .green_seat()
+            .expect("seated above")
+            .parked_root_batch
+            .take();
+        let prepared = match prepared {
+            Some(mut prepared) => match prepared.ensure_capacity(roots.len()) {
+                Ok(()) => Ok(prepared),
+                Err(_) => {
+                    self.green_seat().expect("seated above").parked_root_batch = Some(prepared);
+                    Err(WorldSeatRootError::BatchPrepare)
+                }
+            },
+            None => match seat_retention.retain() {
+                Ok(batch_epoch) => {
+                    neovm_value::tagged::transport::PreparedRootBatch::reserve_retained(
+                        &self.tagged_heap,
+                        batch_epoch,
+                        roots.len(),
+                    )
+                    .map_err(|_| WorldSeatRootError::BatchPrepare)
+                }
+                Err(_) => Err(WorldSeatRootError::Retention),
+            },
+        };
+        let prepared = match prepared {
+            Ok(prepared) => prepared,
+            Err(err) => rollback_park!(err),
+        };
+        // SAFETY: this seated owner holds exclusive World access after
+        // `park_owner` completed. The census was copied from this heap's live
+        // roots; no GC, Lisp or handoff occurs between collection,
+        // finalization and publication.
+        let finalized = match unsafe { prepared.finalize(&roots) } {
+            Ok(finalized) => finalized,
+            Err(failure) => {
+                let (prepared, _) = failure.into_parts();
+                self.green_seat().expect("seated above").parked_root_batch = Some(prepared);
+                rollback_park!(WorldSeatRootError::BatchFinalize);
+            }
+        };
+        let publication = match finalized.publish_finalized_root_batch() {
+            Ok(publication) => publication,
+            Err(failure) => {
+                let (finalized, _) = failure.into_parts();
+                drop(finalized);
+                rollback_park!(WorldSeatRootError::BatchPublish);
+            }
+        };
+        self.return_parked_root_buffer(roots);
+        self.with_green_runtime(|runtime| {
+            let mut parked_map = runtime.parked.borrow_mut();
+            if let Some(previous) = parked_map.insert(key, publication) {
+                parked_map.push_retained(previous);
+            }
+        });
+        Ok((
+            WorldSeatParkedRoots {
+                parked,
+                #[cfg(feature = "jit")]
+                jit: parked_jit,
+                key,
+            },
+            seat_retention,
+        ))
+    }
+
+    /// Restore a seated Green `Context`'s JIT pins and host bindings FIRST,
+    /// then retire its parked `RootBatchLease` under the Q2 non-marking phase
+    /// guard without calling `drain_to_quiescent`.
+    #[cold]
+    #[inline(never)]
+    pub(crate) fn resume_world_seat_with_roots(&mut self, parked_roots: WorldSeatParkedRoots) {
+        self.obarray.refresh_admission();
+        #[cfg(feature = "jit")]
+        {
+            let mut scratch = std::mem::take(
+                &mut self
+                    .green_seat()
+                    .expect("returning owner is seated")
+                    .parked_jit_scratch,
+            );
+            let resumed = parked_roots.jit.resume_reusing(self, &mut scratch);
+            self.green_seat()
+                .expect("returning owner is seated")
+                .parked_jit_scratch = scratch;
+            resumed.expect("the original seated owner resumes in its own heap");
+        }
+        self.resume_owner(parked_roots.parked);
+        self.try_retire_world_seat_parked_roots(parked_roots.key);
+    }
+
+    /// True when this Context is seated in a Green runtime and currently holds
+    /// an open parallel-era turn right (`TurnRight::Era`, QD1).
+    ///
+    /// Cold-path check only (never called from `gc_safe_point_exact_should_collect`).
+    #[inline]
+    pub(crate) fn green_seat_holds_era_turn(&self) -> bool {
+        self.owner
+            .slab()
+            .and_then(|slab| slab.green_seat())
+            .and_then(|seat| seat.baton.as_ref())
+            .is_some_and(super::super::world::TurnRight::is_era)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn green_era_turn_epoch_for_test(&self) -> Option<std::num::NonZeroU64> {
+        self.owner
+            .slab()
+            .and_then(|slab| slab.green_seat())
+            .and_then(|seat| seat.baton.as_ref())
+            .and_then(super::super::world::TurnRight::era_turn_epoch_for_test)
+    }
+
+    /// L6.7b b4.4: run a synchronous collection from a seated Baton thread
+    /// inside an open parallel era via `ActiveWorldSeat::exit` ->
+    /// `Control::collect_era_interval` -> `ParkedWorldSeat::enter`.
+    ///
+    /// Called strictly BEFORE `gc_driver_active = true` (Q2: the keeper is the
+    /// GC driver, so `ParkedWorldSeat::enter` can recycle its parked
+    /// `RootBatchLease` immediately on resume). Never falls through to direct
+    /// `TaggedHeap` collection on refusal.
+    #[cold]
+    #[inline(never)]
+    pub(crate) fn gc_collect_era_interval(&mut self, _force_complete: bool) -> Result<(), Flow> {
+        use super::super::parallel_entry::world_seat::ActiveWorldSeat;
+        use super::super::world::{EraTurnRight, TurnRight};
+
+        debug_assert!(
+            !self.gc_driver_active,
+            "b4.4 Q2: gc_driver_active must remain false across era collection"
+        );
+        // 1. Pre-stop World prep while this Baton thread holds the World and
+        //    heap TLS (GNU `src/alloc.c:5796-5800`).
+        neovm_edit::emacs_core::undo::compact_buffers_for_gc(self);
+        let start = std::time::Instant::now();
+        self.lexenv_assq_cache.clear();
+        self.lexenv_special_cache.clear();
+
+        // 2. Take the active `TurnRight::Era` and `Control` from `GreenSeat`.
+        let (control, era_right) = {
+            let seat = self
+                .green_seat()
+                .expect("green_seat_holds_era_turn verified an active GreenSeat");
+            let control = Arc::clone(&seat.control);
+            let right = seat
+                .baton
+                .take()
+                .expect("green_seat_holds_era_turn verified TurnRight::Era");
+            let era_right = match right.into_era() {
+                Ok(era) => era,
+                Err(solo) => {
+                    seat.baton = Some(solo);
+                    unreachable!("green_seat_holds_era_turn verified TurnRight::Era");
+                }
+            };
+            (control, era_right)
+        };
+
+        // 3. Decompose `EraTurnRight` (`into_parts` restores `World::baton_holder`
+        //    to the keeper thread, HIGH-1) and adopt into `ActiveWorldSeat` so
+        //    `ActiveWorldSeat::exit` mints `StowedForReturn` strictly via
+        //    `world_seat` (Nit 6).
+        let (turn, lend, world_handle) = era_right.into_parts();
+        let seat_retention = match world_handle.parallel_epoch_retention() {
+            Ok(retention) => retention,
+            Err(error) => {
+                let restored = TurnRight::Era(Box::new(
+                    EraTurnRight::from_parts(turn, lend, world_handle)
+                        .expect("turn and world_handle came from the same EraTurnRight"),
+                ));
+                restored.enter();
+                self.green_seat().expect("seated").baton = Some(restored);
+                return Err(signal(
+                    LispCondition::Error,
+                    vec![Value::string(format!(
+                        "era collection metadata retention refused: {error:?}"
+                    ))],
+                ));
+            }
+        };
+        let active = match ActiveWorldSeat::from_active_green_seat(self, turn, lend, seat_retention)
+        {
+            Ok(active) => active,
+            Err((turn, lend, retention, refusal)) => {
+                drop(retention);
+                let restored = TurnRight::Era(Box::new(
+                    EraTurnRight::from_parts(turn, lend, world_handle)
+                        .expect("turn and world_handle came from the same EraTurnRight"),
+                ));
+                restored.enter();
+                self.green_seat().expect("seated").baton = Some(restored);
+                return Err(signal(
+                    LispCondition::Error,
+                    vec![Value::string(format!(
+                        "era collection seat adoption refused: {refusal:?}"
+                    ))],
+                ));
+            }
+        };
+
+        // 4. Exit the Baton-group interval: closes open alloc regions, parks
+        //    host bindings + JIT pins, publishes parked roots into
+        //    `GreenRuntime::parked`, stows World carriers to
+        //    `CarriedHolder::Stowed`, parks carrier TLS, and mints
+        //    `WorldReturned` via `WorldReturned::from_stowed_seat`.
+        // SAFETY: the active seat is the caller-owned `self` turn, its World carriers
+        // are stowed by `exit` itself under the same contract as `switch_out`, and the
+        // returned lend is consumed before this frame yields.
+        let (parked, lend, returned) = unsafe { active.exit(self) };
+
+        // 5. Ask the keeper to collect first in its next stop and re-lend the
+        //    World to this Baton group at ring HEAD. `Control::collect_era_interval`
+        //    holds `GroupTurn::Collecting` unlocked across `GroupPort::collect`
+        //    so sibling wakes join FIFO without emitting a duplicate request.
+        //
+        //    Fail-closed policy (LOW-2, matching b4.3's poisoned-era abort in
+        //    `Control::await_era_world_with_port` / `EraTransitionAbortOnPanic`):
+        //    once `WorldReturn` is in flight (`GroupPort::collect` cleared
+        //    `lend.armed`), carrier TLS is parked and `parked` holds a retained
+        //    `RootBatchLease` in `GreenRuntime::parked`. Unwinding a Baton
+        //    thread without a `WorldTurn` would leak that lease and leave a
+        //    half-parked seat, so a refusal or closed report channel aborts the
+        //    process cleanly rather than panicking or falling through to direct
+        //    `TaggedHeap` collection.
+        let (report_tx, report_rx) = mpsc::sync_channel(1);
+        let (turn2, _epoch2, lend2) = match control.collect_era_interval(
+            lend,
+            returned,
+            Some(report_tx),
+        ) {
+            Ok(resumed) => resumed,
+            Err(refusal) => {
+                tracing::error!(
+                    ?refusal,
+                    "era collection refused by keeper driver while seat is parked; aborting per b4.3 poisoned-era policy"
+                );
+                std::process::abort();
+            }
+        };
+        let report = match report_rx.recv() {
+            Ok(Ok(report)) => report,
+            Ok(Err(refusal)) => {
+                tracing::error!(
+                    ?refusal,
+                    "era collection report refused after re-grant while seat is parked; aborting per b4.3 poisoned-era policy"
+                );
+                std::process::abort();
+            }
+            Err(_) => {
+                tracing::error!(
+                    "era collection report channel closed after re-grant while seat is parked; aborting per b4.3 poisoned-era policy"
+                );
+                std::process::abort();
+            }
+        };
+
+        // 6. Re-enter the seated Baton Context on the re-granted WorldTurn
+        //    (restores carrier TLS, unstows World carriers, resumes JIT + host
+        //    bindings, and retires parked `RootBatchLease` under Q2).
+        let resumed = parked
+            .enter(self, turn2, lend2)
+            .expect("re-entering seated Baton Context after keeper collection must succeed");
+        let (turn2, lend2, retention2) = resumed.into_active_green_parts();
+        drop(retention2);
+        let new_right = TurnRight::Era(Box::new(
+            EraTurnRight::from_parts(turn2, lend2, world_handle)
+                .expect("keeper re-granted WorldTurn must match this World's heap identity"),
+        ));
+        new_right.enter();
+        self.green_seat().expect("seated Baton Context").baton = Some(new_right);
+
+        // 7. Post-collection bookkeeping on the resumed Baton thread sourced
+        //    from the keeper's completed collection (no second local scan).
+        self.finish_keeper_collection(&report, start)
+    }
+
+    /// Test-only helper: admit a detached reader on this seated owner's parked
+    /// `RootBatchLease` to exercise Q2 `ReadersOutstanding` deferral.
+    #[cfg(test)]
+    pub(crate) fn admit_parked_root_reader_for_test(
+        &self,
+    ) -> Result<
+        neovm_value::tagged::transport::HeldRootBatchReaderForTest,
+        neovm_value::tagged::transport::RootBatchError,
+    > {
+        let key = self
+            .owner
+            .slab()
+            .and_then(|slab| slab.green_seat())
+            .expect("seated owner")
+            .key;
+        self.with_green_runtime(|runtime| {
+            let parked = runtime.parked.borrow();
+            let lease = parked
+                .owner_lease_for_test(&key)
+                .expect("parked owner has an active RootBatchLease");
+            lease.admit_detached_reader_for_test(&self.tagged_heap)
+        })
+    }
+
+    /// Test-only helper: finish an already-started stopped mark extent into
+    /// `MarkPhase::Sweeping` so `#![forbid(unsafe_code)]` tests can exercise
+    /// the Q2 `StoppedMarking -> Sweeping` transition.
+    #[cfg(test)]
+    pub(crate) fn finish_stopped_mark_into_sweep_for_test(&mut self) {
+        let heap: *mut neovm_value::tagged::gc::TaggedHeap = self.tagged_heap.heap_root().as_ptr();
+        // SAFETY: sole owner in a single-threaded unit test; no concurrent
+        // collector, callback, or handoff runs during this root seed.
+        unsafe { self.seed_registered_mutator_roots_world_stopped(heap) };
+        self.tagged_heap.incremental_drain_all();
+        let bytes = self.tagged_heap.live_bytes();
+        self.tagged_heap
+            .incremental_finish_for_test(bytes, std::time::Instant::now());
+    }
+
+    /// Test-only helper: whether this seated owner holds a recycled
+    /// `PreparedRootBatch` cached on its `GreenSeat` (proving retirement took
+    /// the `RootBatchLease::try_recycle` fast path rather than the
+    /// `root_registry::finish` fallback).
+    #[cfg(test)]
+    pub(crate) fn parked_root_batch_is_cached_for_test(&mut self) -> bool {
+        self.green_seat()
+            .is_some_and(|seat| seat.parked_root_batch.is_some())
+    }
+
+    /// Test-only helper: drop any cached recycled `PreparedRootBatch` on this
+    /// seated owner's `GreenSeat` before teardown.
+    #[cfg(test)]
+    pub(crate) fn clear_cached_parked_root_batch_for_test(&mut self) {
+        if let Some(seat) = self.green_seat() {
+            seat.parked_root_batch = None;
+        }
+    }
+
     /// GNU `make-thread` (ARGS: FUNCTION, NAME, BUFFER-DISPOSITION) in a
     /// Green World: a Lisp thread on its own OS thread, starting in this
     /// thread's current buffer and running in its turn. This thread keeps
@@ -1440,7 +2240,15 @@ impl Context {
         let control = self.with_green_runtime(|runtime| Arc::clone(&runtime.control));
         control.install_select(crate::emacs_core::eval::process_hooks::select_handle(self));
         let receiver = control.register_main();
-        self.take_green_seat(ThreadKey::Main, control, receiver, baton);
+        self.take_green_seat(ThreadKey::Main, control, receiver, baton.into());
+        // A host attached before Green start marks the World hosted; seat
+        // main's adapter now that the pump exists. Without a host this is a
+        // no-op and every host request settles closed.
+        if self.in_hosted_green_session() && !self.install_main_host_effects() {
+            tracing::warn!(
+                "hosted Green session started without a native host adapter; host requests will settle closed"
+            );
+        }
         Ok(())
     }
 
@@ -1458,16 +2266,19 @@ fn receive_owner_turn(
     mut wake: Wake,
     control: &Control,
     receiver: &mut OwnerReceive,
+    host: &mut Option<&mut (dyn crate::emacs_core::eval::protocol::DisplayHost + 'static)>,
 ) -> RestoringTurn {
     let _abort_on_panic = AbortOnPanic;
     loop {
         wake = control.intercept_acquire(key, wake, receiver.as_channel());
         let result = match wake {
             Wake::Resume(baton) => {
+                control.debug_assert_turn_authority(&baton);
                 baton.enter();
                 return RestoringTurn::ordinary(baton);
             }
             Wake::OwnerStep { key: parent, baton } => {
+                control.debug_assert_turn_authority(&baton);
                 return restoring_owner_step(key, parent, baton);
             }
             Wake::ContinuationTurn { key: parent, baton } => {
@@ -1475,7 +2286,12 @@ fn receive_owner_turn(
                     tracing::error!(?key, "native continuation addressed a non-main owner");
                     std::process::abort();
                 }
-                receiver.continue_owner_step(parent, baton, control)
+                receiver.continue_owner_step(
+                    parent,
+                    baton,
+                    control,
+                    host.as_mut().map(|host| &mut **host),
+                )
             }
             Wake::ServiceTurn {
                 key: request,
@@ -1485,24 +2301,31 @@ fn receive_owner_turn(
                     tracing::error!(?key, "native service addressed a non-main owner");
                     std::process::abort();
                 }
-                receiver.serve(request, baton, control)
+                receiver.serve(
+                    request,
+                    baton,
+                    control,
+                    host.as_mut().map(|host| &mut **host),
+                )
             }
             Wake::NativePump { baton } => {
                 if key != ThreadKey::Main {
                     tracing::error!(?key, "native pump addressed a non-main owner");
                     std::process::abort();
                 }
-                receiver.drive(baton, control)
+                receiver.drive(baton, control, host.as_mut().map(|host| &mut **host))
             }
         };
         match result {
             // Already qualified by the native scheduler. Re-intercepting would
             // steal a ready original main turn merely because A remains pending.
             ServiceReturn::ResumeMain(baton) => {
+                control.debug_assert_turn_authority(&baton);
                 baton.enter();
                 return RestoringTurn::ordinary(baton);
             }
             ServiceReturn::ResumeOwnerStep { key: parent, baton } => {
+                control.debug_assert_turn_authority(&baton);
                 return restoring_owner_step(key, parent, baton);
             }
             ServiceReturn::Sent => {
@@ -1518,7 +2341,11 @@ fn receive_owner_turn(
 /// An OwnerStep wake carries no execution authority. Resolve the durable
 /// expected step under the Baton; heap materialization happens only after the
 /// original owner's JIT/carried/binding restoration has completed.
-fn restoring_owner_step(owner: ThreadKey, parent: HostRequestKey, baton: Baton) -> RestoringTurn {
+fn restoring_owner_step(
+    owner: ThreadKey,
+    parent: HostRequestKey,
+    baton: TurnRight,
+) -> RestoringTurn {
     baton.enter();
     let step = {
         let runtime = baton.green_runtime();
@@ -1592,13 +2419,17 @@ pub(super) fn run_carrier_job(
         neovm_value::tagged::gc::carrier_heap_is_acceptable_for_job_start(),
         "carrier job starts with a stale TAGGED_HEAP TLS pointer"
     );
-    let mut baton = receive_owner_turn(key, wake, &control, &mut receiver).into_ordinary_baton();
+    let mut no_host: Option<&mut (dyn crate::emacs_core::eval::protocol::DisplayHost + 'static)> =
+        None;
+    let mut baton =
+        receive_owner_turn(key, wake, &control, &mut receiver, &mut no_host).into_ordinary_baton();
+    baton.clear_stowed_for_return();
     baton.enter();
     set_job_thread_name(key);
     #[cfg(feature = "jit")]
     crate::emacs_core::jit::green_owner::begin_owner_turn();
     unstow_carried_state(&baton);
-    let mut owner = Context::new_green_owner(&baton);
+    let mut owner = Context::new_green_owner_with_turn(&baton);
     unstow_owner_state(&mut owner, &baton);
     let completion_id = match owner.threads.get_thread(key.id()) {
         Some(thread) => thread.id(),
@@ -1616,6 +2447,9 @@ pub(super) fn run_carrier_job(
         if let Some(runtime) = baton.green_runtime().as_ref() {
             runtime.pending_starts.borrow_mut().remove(&key);
         }
+        if baton.is_era() {
+            owner.tagged_heap.close_alloc_regions();
+        }
         stow_owner_state(&mut owner, &baton);
         owner.retire_green_owner();
         stow_carried_state(&baton);
@@ -1624,7 +2458,17 @@ pub(super) fn run_carrier_job(
         // Park before publishing the exit: no other Lisp thread holds the
         // Baton until `finish` hands it on, so the idle registration is
         // visible to any dispatcher that runs after `exited` is observed.
-        super::carrier_tls::park_carrier_tls();
+        // SAFETY: `owner` is stowed and retired, carried World state is stowed,
+        // no TLS heap loan is live, and the carrier prologue runs
+        // `reset_carrier_tls()` before reusing this OS thread.
+        unsafe { super::carrier_tls::park_carrier_tls() };
+        if baton.is_era() {
+            let proof =
+                super::super::parallel_entry::world_seat::prove_retired_worker_stowed_for_era(
+                    &baton,
+                );
+            baton.set_stowed_for_return(proof);
+        }
         let parked = pool.park(carrier);
         let retired = baton.retire_thread_completion(completion);
         control.finish(retired, baton);
@@ -1643,15 +2487,16 @@ pub(super) fn run_carrier_job(
         owner.restore_current_buffer_if_live(buffer);
     }
     owner.threads.start_thread(key.id());
-    // GNU raises an error signalled into a thread that has not run yet at
-    // its first switch, once it has handlers.
-    let deferred = owner.threads.take_thread_error(key.id());
-    let function = baton.green_runtime().as_ref().and_then(|runtime| {
-        if let Some(error) = deferred {
-            runtime.deferred_errors.borrow_mut().insert(key, error);
-        }
-        runtime.pending_starts.borrow_mut().remove(&key)
-    });
+    // An error signalled into this thread before it ran stays pending: GNU's
+    // first acquire comes before the thread has handlers, so
+    // `post_acquire_global_lock` (src/thread.c:146-154) does not raise it
+    // there, but leaves it in `error_symbol`. Nothing raises before the
+    // function runs. Inside it, every wait sees the pending error and every
+    // delivery point raises it.
+    let function = baton
+        .green_runtime()
+        .as_ref()
+        .and_then(|runtime| runtime.pending_starts.borrow_mut().remove(&key));
     owner.take_green_seat(
         key,
         Arc::clone(&control),
@@ -1698,7 +2543,6 @@ pub(super) fn run_carrier_job(
         .baton
         .take()
         .expect("a finishing thread holds the Baton");
-    owner.restore_deferred_error(&baton, key);
     if let Some(runtime) = baton.green_runtime().as_ref() {
         // GNU clears prev_thread when a thread exits: no outgoing unbind.
         runtime.outgoing_constant_error.set(None);
@@ -1712,6 +2556,9 @@ pub(super) fn run_carrier_job(
         runtime.exit.set(Some(request));
         control.prioritize(ThreadKey::Main);
     }
+    if baton.is_era() {
+        owner.tagged_heap.close_alloc_regions();
+    }
     stow_owner_state(&mut owner, &baton);
     owner.retire_green_owner();
     stow_carried_state(&baton);
@@ -1719,7 +2566,15 @@ pub(super) fn run_carrier_job(
     // no heap or World object before it may be registered idle. Idle
     // registration precedes the exit publication so a dispatcher that runs
     // after `exited` is observed always finds the slot parked.
-    super::carrier_tls::park_carrier_tls();
+    // SAFETY: `owner` is stowed and retired, carried World state is stowed,
+    // no TLS heap loan is live, and the carrier prologue runs
+    // `reset_carrier_tls()` before reusing this OS thread.
+    unsafe { super::carrier_tls::park_carrier_tls() };
+    if baton.is_era() {
+        let proof =
+            super::super::parallel_entry::world_seat::prove_retired_worker_stowed_for_era(&baton);
+        baton.set_stowed_for_return(proof);
+    }
     let parked = pool.park(carrier);
     let retired = baton.retire_thread_completion(completion);
     control.finish(retired, baton);
@@ -1728,21 +2583,27 @@ pub(super) fn run_carrier_job(
 
 /// The World's thread-local state leaves this OS thread with the Baton
 /// (`carried`).
-fn stow_carried_state(baton: &Baton) {
+fn stow_carried_state(baton: &TurnRight) {
     if let Some(runtime) = baton.green_runtime().as_ref() {
         runtime.carried.borrow_mut().stow();
+        runtime.carried_holder.set(super::CarriedHolder::Stowed);
     }
 }
 
 /// The World's thread-local state arrives on this OS thread with the Baton.
-fn unstow_carried_state(baton: &Baton) {
+fn unstow_carried_state(baton: &TurnRight) {
     if let Some(runtime) = baton.green_runtime().as_ref() {
+        assert_eq!(
+            runtime.carried_holder.get(),
+            super::CarriedHolder::Stowed,
+            "A-1: World carried TLS must be stowed before unstowing onto a Green owner"
+        );
         runtime.carried.borrow_mut().unstow();
     }
 }
 
 /// The warm GNU-global state leaves OWNER with the Baton (`owner_carried`).
-fn stow_owner_state(owner: &mut Context, baton: &Baton) {
+fn stow_owner_state(owner: &mut Context, baton: &TurnRight) {
     if let Some(runtime) = baton.green_runtime().as_ref() {
         let mut slot = runtime.owner_carried.borrow_mut();
         assert!(slot.is_none(), "the World's warm state is in two places");
@@ -1751,10 +2612,25 @@ fn stow_owner_state(owner: &mut Context, baton: &Baton) {
 }
 
 /// The warm GNU-global state arrives in OWNER with the Baton.
-fn unstow_owner_state(owner: &mut Context, baton: &Baton) {
-    if let Some(runtime) = baton.green_runtime().as_ref()
-        && let Some(state) = runtime.owner_carried.borrow_mut().take()
-    {
+fn unstow_owner_state(owner: &mut Context, baton: &TurnRight) {
+    let owner_slab = super::OwnerSlabId::from_slab(owner.ensure_owner_slab());
+    let state = {
+        let runtime = baton.green_runtime();
+        let Some(runtime) = runtime.as_ref() else {
+            return;
+        };
+        assert_eq!(
+            runtime.carried_holder.get(),
+            super::CarriedHolder::Stowed,
+            "A-1: World warm carriers must be stowed before unstowing onto a Green owner"
+        );
+        runtime.carried_holder.set(super::CarriedHolder::Held {
+            slab: owner_slab,
+            thread: std::thread::current().id(),
+        });
+        runtime.owner_carried.borrow_mut().take()
+    };
+    if let Some(state) = state {
         state.put(owner);
     }
 }
@@ -1799,6 +2675,23 @@ pub(crate) fn carrier_job_threads_for_test() -> Vec<(u64, std::thread::ThreadId)
         .lock()
         .unwrap_or_else(|poison| poison.into_inner())
         .clone()
+}
+
+/// Aborts the process when a panic unwinds midway through `green_park_impl`'s
+/// era stow/TLS-park or TLS-reset/unstow windows (matching `world_seat.rs`,
+/// LOW-2).
+struct EraTransitionAbortOnPanic(&'static str);
+
+impl Drop for EraTransitionAbortOnPanic {
+    fn drop(&mut self) {
+        if std::thread::panicking() {
+            tracing::error!(
+                step = self.0,
+                "a seated Green era transition panicked between stow/TLS steps; aborting"
+            );
+            std::process::abort();
+        }
+    }
 }
 
 /// Aborts the process when dropped by a panic.

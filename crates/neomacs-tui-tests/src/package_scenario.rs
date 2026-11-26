@@ -202,8 +202,8 @@ impl StartingPackageTuiPair {
             &neo_identity,
             env::var_os("UPDATE_EXPECT").as_deref() == Some(OsStr::new("1")),
         )?;
-        let gnu_sandbox = MelpaSandbox::new(&format!("{label}-tui-gnu"))?;
-        let neo_sandbox = MelpaSandbox::new(&format!("{label}-tui-neo"))?;
+        let gnu_sandbox = MelpaSandbox::new_with_short_home(&format!("{label}-tui-gnu"))?;
+        let neo_sandbox = MelpaSandbox::new_with_short_home(&format!("{label}-tui-neo"))?;
         let gnu_startup_file = packages.write_startup_file(gnu_sandbox.root())?;
         let neo_startup_file = packages.write_startup_file(neo_sandbox.root())?;
         let gnu_git = create_git_fixture(&gnu_sandbox, git_fixture)?;

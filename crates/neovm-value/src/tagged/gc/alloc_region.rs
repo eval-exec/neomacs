@@ -42,6 +42,12 @@ use super::*;
 const CONS_RECORDING_INACTIVE: usize = 2;
 const CONS_RECORDING_MIXED: usize = 4;
 
+#[path = "owner_era_reserve.rs"]
+pub(super) mod owner_era_reserve;
+pub(super) use owner_era_reserve::{
+    GrantOutcome, MeasuredInterval, OwnerEraReserve, RefillDisclosure, ReserveError,
+};
+
 /// The most cells one cons region takes (2 KiB).
 pub(super) const CONS_REGION_MAX_CELLS: usize = 128;
 /// The most slots one float region takes (2 KiB of slots, 1.5 KiB charged:
@@ -296,7 +302,8 @@ impl TaggedHeap {
         };
         let color = if self.allocates_black() {
             let base = ConsBlock::block_base_for_ptr(first);
-            ConsBlock::mark_run_at(base, ConsBlock::index_of_ptr(first), n, true);
+            // SAFETY: `base` is an owned live `ConsBlock` and the marked slot run lies within its payload cells.
+            unsafe { ConsBlock::mark_run_at(base, ConsBlock::index_of_ptr(first), n, true) };
             self.note_black_cons_region_start(first);
             RegionColor::Black
         } else {
@@ -458,12 +465,26 @@ impl TaggedHeap {
     fn refill_float_region(&mut self) -> *mut FloatObj {
         self.close_float_region();
         let want = self.region_budget(size_of::<FloatObj>(), FLOAT_REGION_MAX_SLOTS);
-        let run = self.float_arena.reserve_run(want);
+        // SAFETY: the loop immediately below writes a full initialized `FloatObj`
+        // header and payload into every slot in `0..run.count` before yielding.
+        let run = unsafe { self.float_arena.reserve_run(want) };
         debug_assert!(run.count >= 1 && run.count <= want);
         let parity = self.mark_parity;
         let page = &self.float_arena.pages[run.page];
+        assert!(
+            run.first
+                .checked_add(run.count)
+                .is_some_and(|end| end <= ObjectPage::<FloatObj>::SLOTS),
+            "reserved float run {}..+{} exceeds page SLOTS {}",
+            run.first,
+            run.count,
+            ObjectPage::<FloatObj>::SLOTS
+        );
+        let first = page.slot_ptr(run.first);
         for i in 0..run.count {
-            let slot = page.slot_ptr(run.first + i);
+            // SAFETY: `run.first + run.count <= SLOTS` was verified once above,
+            // so `first + i * FLOAT_SLOT` stays within the 64KB page storage.
+            let slot = unsafe { (first as *mut u8).add(i * FLOAT_SLOT).cast::<FloatObj>() };
             // SAFETY: a reserved slot of an owned page. FULL-HEADER WRITE:
             // never partially reuse prior slot bytes (see `alloc_float`).
             unsafe {
@@ -476,7 +497,6 @@ impl TaggedHeap {
                 );
             }
         }
-        let first = page.slot_ptr(run.first);
         if self.generational.enabled {
             self.note_black_float_region_start(first);
         }
@@ -580,12 +600,13 @@ impl TaggedHeap {
         let base = ConsBlock::block_base_for_ptr(first);
         let start = ConsBlock::index_of_ptr(first);
         if self.region_book.cons_color() == RegionColor::Black {
-            ConsBlock::mark_run_at(base, start, unused, false);
+            // SAFETY: `base` is an owned live `ConsBlock` and the marked slot run lies within its payload cells.
+            unsafe { ConsBlock::mark_run_at(base, start, unused, false) };
         }
         if let ConsRegionSource::BlockTail { block } = source
             && let Some(owner) = self.cons_blocks.get_mut(block)
             && owner.base_addr() == base
-            && owner.next_index as usize == start + unused
+            && owner.next_index() == start + unused
         {
             owner.rewind_tail(start);
             return;

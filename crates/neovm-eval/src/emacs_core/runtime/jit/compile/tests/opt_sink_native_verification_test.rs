@@ -62,13 +62,13 @@ impl Drop for Roots {
 fn plan(f: &ByteCodeFunction) -> ir::Func {
     let cfg = analyze_cfg(
         f.executable_ops(),
-        &f.constants,
+        f.constants(),
         f.executable_gnu_byte_offset_map(),
         1,
     )
     .unwrap();
     let constants = f
-        .constants
+        .constants()
         .iter()
         .copied()
         .map(ir::ValueBits::from_value)
@@ -90,7 +90,7 @@ fn plan(f: &ByteCodeFunction) -> ir::Func {
 fn lower(f: &ByteCodeFunction, plan: &ir::Func) -> Result<CompiledLeaf, CompileError> {
     lower_opt_ir_for_test(
         f.executable_ops(),
-        &f.constants,
+        f.constants(),
         1,
         f.executable_gnu_byte_offset_map(),
         plan,
@@ -148,11 +148,13 @@ fn independent(
     assert_eq!(pair(reference), expected);
     assert_eq!(ctx.gc_count - before, 1);
     let before = ctx.gc_count;
-    let outcome = leaf.call_consts(
-        ctx as *mut Context as *mut u8,
-        f.constants.as_ptr(),
-        &[flag],
-    );
+    let outcome = unsafe {
+        leaf.call_consts(
+            ctx as *mut Context as *mut u8,
+            f.constants().as_ptr(),
+            &[flag],
+        )
+    };
     let NativeRun::Ok(bits) = outcome else {
         panic!("actual native source success required: {outcome:?}")
     };
@@ -235,7 +237,7 @@ fn opt_sink_native_final_validation_rejects_poison_and_checks_recipes_once() {
         ],
         1,
     );
-    roots.add(&f.constants);
+    roots.add(f.constants());
     let original = plan(&f);
     original.verify().unwrap();
     // Direct IR lowering does not publish the source feedback itself. Train
@@ -273,7 +275,7 @@ fn opt_sink_native_final_validation_rejects_poison_and_checks_recipes_once() {
         independent(&f, &original, &baseline, &mut ctx, flag, &roots);
     }
     let mut selected = original.clone();
-    let hints = super::array_snapshot::admission(f.executable_ops().len(), &f.constants, 0);
+    let hints = super::array_snapshot::admission(f.executable_ops().len(), f.constants(), 0);
     let mut proofs = array_reads::ArrayReadProofs::default();
     let arrays = array_reads::lift(&mut selected, &mut proofs, &hints).unwrap();
     assert_eq!(arrays.reads_lifted, 2, "two actual guarded source reads");

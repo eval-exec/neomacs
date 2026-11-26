@@ -33,6 +33,16 @@ fn prepared_package_set_exports_one_reusable_startup_contract() {
     assert!(startup.contains("compat"));
     assert!(startup.contains("30.1.0.0"));
     assert!(startup.contains("NEOMACS_PACKAGE_SOURCE"));
+    let defun = startup
+        .find("(defun neomacs-melpa-path-inside-p ")
+        .expect("startup defines the shared truename containment helper");
+    let prelude = startup
+        .find("(setq example-test-ready t)")
+        .expect("prelude is present");
+    assert!(
+        defun < prelude,
+        "the helper must be defined before a fixture prelude calls it"
+    );
 }
 
 #[test]

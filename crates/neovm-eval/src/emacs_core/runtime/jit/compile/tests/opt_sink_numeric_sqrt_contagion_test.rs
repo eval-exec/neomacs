@@ -45,7 +45,7 @@ fn opt_sink_numeric_sqrt_contagion_keeps_replay_and_uses_proven_float_paths() {
         vec![Value::symbol("not-a-number")],
     ])
     .collect::<Vec<_>>();
-    roots.add(&f.constants);
+    roots.add(f.constants());
     for args in &cases {
         roots.add(args);
         let result = tier0(&mut ctx, &f, args);

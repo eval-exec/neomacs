@@ -90,7 +90,7 @@ error[E0277]: `NonNull<ConsCell>` cannot be sent between threads safely
 4 |     require_send::<SymbolMut<'static, 'static, 'static>>();
   |                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `NonNull<ConsCell>` cannot be sent between threads safely
   |
-  = help: within `mutator_registration::image::OwnerGcState`, the trait `Send` is not implemented for `NonNull<ConsCell>`
+  = help: within `neovm_core::tagged::gc::mutator_registration::image::OwnerGcState`, the trait `Send` is not implemented for `NonNull<ConsCell>`
 note: required because it appears within the type `gc::cons_storage::CatalogRegion`
  --> $WORKSPACE/crates/neovm-value/src/tagged/gc/cons_storage.rs
   |
@@ -101,18 +101,18 @@ note: required because it appears within the type `Option<gc::cons_storage::Cata
   |
   | pub enum Option<T> {
   |          ^^^^^^
-note: required because it appears within the type `mutator_registration::image::OwnerGcState`
+note: required because it appears within the type `neovm_core::tagged::gc::mutator_registration::image::OwnerGcState`
  --> $WORKSPACE/crates/neovm-value/src/tagged/gc/mutator_registration/image.rs
   |
   | pub(in crate::tagged::gc) struct OwnerGcState {
   |                                  ^^^^^^^^^^^^
-  = note: required for `std::ptr::Unique<mutator_registration::image::OwnerGcState>` to implement `Send`
-note: required because it appears within the type `std::boxed::Box<mutator_registration::image::OwnerGcState>`
+  = note: required for `std::ptr::Unique<neovm_core::tagged::gc::mutator_registration::image::OwnerGcState>` to implement `Send`
+note: required because it appears within the type `std::boxed::Box<neovm_core::tagged::gc::mutator_registration::image::OwnerGcState>`
  --> $RUST/alloc/src/boxed.rs
   |
   | pub struct Box<
   |            ^^^
-note: required because it appears within the type `Option<std::boxed::Box<mutator_registration::image::OwnerGcState>>`
+note: required because it appears within the type `Option<std::boxed::Box<neovm_core::tagged::gc::mutator_registration::image::OwnerGcState>>`
  --> $RUST/core/src/option.rs
   |
   | pub enum Option<T> {
@@ -146,7 +146,7 @@ error[E0277]: `*mut GcHeader` cannot be sent between threads safely
 4 |     require_send::<SymbolMut<'static, 'static, 'static>>();
   |                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `*mut GcHeader` cannot be sent between threads safely
   |
-  = help: within `mutator_registration::image::OwnerGcState`, the trait `Send` is not implemented for `*mut GcHeader`
+  = help: within `neovm_core::tagged::gc::mutator_registration::image::OwnerGcState`, the trait `Send` is not implemented for `*mut GcHeader`
 note: required because it appears within the type `PhantomData<*mut GcHeader>`
  --> $RUST/core/src/marker.rs
   |
@@ -167,18 +167,160 @@ note: required because it appears within the type `gc::mutator_gc::MutatorGcStat
   |
   | pub(super) struct MutatorGcState {
   |                   ^^^^^^^^^^^^^^
-note: required because it appears within the type `mutator_registration::image::OwnerGcState`
+note: required because it appears within the type `neovm_core::tagged::gc::mutator_registration::image::OwnerGcState`
  --> $WORKSPACE/crates/neovm-value/src/tagged/gc/mutator_registration/image.rs
   |
   | pub(in crate::tagged::gc) struct OwnerGcState {
   |                                  ^^^^^^^^^^^^
-  = note: required for `std::ptr::Unique<mutator_registration::image::OwnerGcState>` to implement `Send`
-note: required because it appears within the type `std::boxed::Box<mutator_registration::image::OwnerGcState>`
+  = note: required for `std::ptr::Unique<neovm_core::tagged::gc::mutator_registration::image::OwnerGcState>` to implement `Send`
+note: required because it appears within the type `std::boxed::Box<neovm_core::tagged::gc::mutator_registration::image::OwnerGcState>`
  --> $RUST/alloc/src/boxed.rs
   |
   | pub struct Box<
   |            ^^^
-note: required because it appears within the type `Option<std::boxed::Box<mutator_registration::image::OwnerGcState>>`
+note: required because it appears within the type `Option<std::boxed::Box<neovm_core::tagged::gc::mutator_registration::image::OwnerGcState>>`
+ --> $RUST/core/src/option.rs
+  |
+  | pub enum Option<T> {
+  |          ^^^^^^
+note: required because it appears within the type `Mutator<'static>`
+ --> $WORKSPACE/crates/neovm-value/src/tagged/gc/mutator_registration/token.rs
+  |
+  | pub struct Mutator<'era> {
+  |            ^^^^^^^
+  = note: required because it appears within the type `&'static mut Mutator<'static>`
+note: required because it appears within the type `RunAccess<'static, 'static>`
+ --> $WORKSPACE/crates/neovm-value/src/tagged/gc/mutator_registration/token.rs
+  |
+  | pub struct RunAccess<'owner, 'era> {
+  |            ^^^^^^^^^
+  = note: required because it appears within the type `&'static mut RunAccess<'static, 'static>`
+note: required because it appears within the type `SymbolMut<'static, 'static, 'static>`
+ --> $WORKSPACE/crates/neovm-value/src/tagged/gc/mutator_registration/symbol_authority.rs
+  |
+  | pub struct SymbolMut<'lease, 'owner, 'era> {
+  |            ^^^^^^^^^
+note: required by a bound in `require_send`
+ --> tests/p1rv_ui/p3sym_guard_send.rs:2:20
+  |
+2 | fn require_send<T: Send>() {}
+  |                    ^^^^ required by this bound in `require_send`
+
+error[E0277]: `*mut u8` cannot be sent between threads safely
+ --> tests/p1rv_ui/p3sym_guard_send.rs:4:20
+  |
+4 |     require_send::<SymbolMut<'static, 'static, 'static>>();
+  |                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `*mut u8` cannot be sent between threads safely
+  |
+  = help: within `neovm_core::tagged::gc::mutator_registration::image::OwnerGcState`, the trait `Send` is not implemented for `*mut u8`
+note: required because it appears within the type `gc::cons_storage::numeric_storage::runs::RawPage`
+ --> $WORKSPACE/crates/neovm-value/src/tagged/gc/cons_storage/numeric_storage/runs.rs
+  |
+  | pub(super) struct RawPage {
+  |                   ^^^^^^^
+note: required because it appears within the type `gc::cons_storage::numeric_storage::runs::RunCore`
+ --> $WORKSPACE/crates/neovm-value/src/tagged/gc/cons_storage/numeric_storage/runs.rs
+  |
+  | pub(super) struct RunCore {
+  |                   ^^^^^^^
+note: required because it appears within the type `gc::cons_storage::numeric_storage::runs::FloatRun`
+ --> $WORKSPACE/crates/neovm-value/src/tagged/gc/cons_storage/numeric_storage/runs.rs
+  |
+  | pub(in crate::tagged::gc) struct FloatRun {
+  |                                  ^^^^^^^^
+note: required because it appears within the type `mutator_registration::numeric_allocation::RunBook<gc::cons_storage::numeric_storage::runs::FloatRun>`
+ --> $WORKSPACE/crates/neovm-value/src/tagged/gc/mutator_registration/numeric_allocation.rs
+  |
+  | enum RunBook<R> {
+  |      ^^^^^^^
+note: required because it appears within the type `mutator_registration::numeric_allocation::NumericOwnerBook`
+ --> $WORKSPACE/crates/neovm-value/src/tagged/gc/mutator_registration/numeric_allocation.rs
+  |
+  | pub(super) struct NumericOwnerBook {
+  |                   ^^^^^^^^^^^^^^^^
+note: required because it appears within the type `neovm_core::tagged::gc::mutator_registration::image::OwnerGcState`
+ --> $WORKSPACE/crates/neovm-value/src/tagged/gc/mutator_registration/image.rs
+  |
+  | pub(in crate::tagged::gc) struct OwnerGcState {
+  |                                  ^^^^^^^^^^^^
+  = note: required for `std::ptr::Unique<neovm_core::tagged::gc::mutator_registration::image::OwnerGcState>` to implement `Send`
+note: required because it appears within the type `std::boxed::Box<neovm_core::tagged::gc::mutator_registration::image::OwnerGcState>`
+ --> $RUST/alloc/src/boxed.rs
+  |
+  | pub struct Box<
+  |            ^^^
+note: required because it appears within the type `Option<std::boxed::Box<neovm_core::tagged::gc::mutator_registration::image::OwnerGcState>>`
+ --> $RUST/core/src/option.rs
+  |
+  | pub enum Option<T> {
+  |          ^^^^^^
+note: required because it appears within the type `Mutator<'static>`
+ --> $WORKSPACE/crates/neovm-value/src/tagged/gc/mutator_registration/token.rs
+  |
+  | pub struct Mutator<'era> {
+  |            ^^^^^^^
+  = note: required because it appears within the type `&'static mut Mutator<'static>`
+note: required because it appears within the type `RunAccess<'static, 'static>`
+ --> $WORKSPACE/crates/neovm-value/src/tagged/gc/mutator_registration/token.rs
+  |
+  | pub struct RunAccess<'owner, 'era> {
+  |            ^^^^^^^^^
+  = note: required because it appears within the type `&'static mut RunAccess<'static, 'static>`
+note: required because it appears within the type `SymbolMut<'static, 'static, 'static>`
+ --> $WORKSPACE/crates/neovm-value/src/tagged/gc/mutator_registration/symbol_authority.rs
+  |
+  | pub struct SymbolMut<'lease, 'owner, 'era> {
+  |            ^^^^^^^^^
+note: required by a bound in `require_send`
+ --> tests/p1rv_ui/p3sym_guard_send.rs:2:20
+  |
+2 | fn require_send<T: Send>() {}
+  |                    ^^^^ required by this bound in `require_send`
+
+error[E0277]: `*mut usize` cannot be sent between threads safely
+ --> tests/p1rv_ui/p3sym_guard_send.rs:4:20
+  |
+4 |     require_send::<SymbolMut<'static, 'static, 'static>>();
+  |                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `*mut usize` cannot be sent between threads safely
+  |
+  = help: within `neovm_core::tagged::gc::mutator_registration::image::OwnerGcState`, the trait `Send` is not implemented for `*mut usize`
+note: required because it appears within the type `gc::cons_storage::numeric_storage::runs::RawPage`
+ --> $WORKSPACE/crates/neovm-value/src/tagged/gc/cons_storage/numeric_storage/runs.rs
+  |
+  | pub(super) struct RawPage {
+  |                   ^^^^^^^
+note: required because it appears within the type `gc::cons_storage::numeric_storage::runs::RunCore`
+ --> $WORKSPACE/crates/neovm-value/src/tagged/gc/cons_storage/numeric_storage/runs.rs
+  |
+  | pub(super) struct RunCore {
+  |                   ^^^^^^^
+note: required because it appears within the type `gc::cons_storage::numeric_storage::runs::FloatRun`
+ --> $WORKSPACE/crates/neovm-value/src/tagged/gc/cons_storage/numeric_storage/runs.rs
+  |
+  | pub(in crate::tagged::gc) struct FloatRun {
+  |                                  ^^^^^^^^
+note: required because it appears within the type `mutator_registration::numeric_allocation::RunBook<gc::cons_storage::numeric_storage::runs::FloatRun>`
+ --> $WORKSPACE/crates/neovm-value/src/tagged/gc/mutator_registration/numeric_allocation.rs
+  |
+  | enum RunBook<R> {
+  |      ^^^^^^^
+note: required because it appears within the type `mutator_registration::numeric_allocation::NumericOwnerBook`
+ --> $WORKSPACE/crates/neovm-value/src/tagged/gc/mutator_registration/numeric_allocation.rs
+  |
+  | pub(super) struct NumericOwnerBook {
+  |                   ^^^^^^^^^^^^^^^^
+note: required because it appears within the type `neovm_core::tagged::gc::mutator_registration::image::OwnerGcState`
+ --> $WORKSPACE/crates/neovm-value/src/tagged/gc/mutator_registration/image.rs
+  |
+  | pub(in crate::tagged::gc) struct OwnerGcState {
+  |                                  ^^^^^^^^^^^^
+  = note: required for `std::ptr::Unique<neovm_core::tagged::gc::mutator_registration::image::OwnerGcState>` to implement `Send`
+note: required because it appears within the type `std::boxed::Box<neovm_core::tagged::gc::mutator_registration::image::OwnerGcState>`
+ --> $RUST/alloc/src/boxed.rs
+  |
+  | pub struct Box<
+  |            ^^^
+note: required because it appears within the type `Option<std::boxed::Box<neovm_core::tagged::gc::mutator_registration::image::OwnerGcState>>`
  --> $RUST/core/src/option.rs
   |
   | pub enum Option<T> {
@@ -212,7 +354,7 @@ error[E0277]: `*const ()` cannot be sent between threads safely
 4 |     require_send::<SymbolMut<'static, 'static, 'static>>();
   |                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `*const ()` cannot be sent between threads safely
   |
-  = help: within `mutator_registration::image::OwnerGcState`, the trait `Send` is not implemented for `*const ()`
+  = help: within `neovm_core::tagged::gc::mutator_registration::image::OwnerGcState`, the trait `Send` is not implemented for `*const ()`
 note: required because it appears within the type `PhantomData<*const ()>`
  --> $RUST/core/src/marker.rs
   |
@@ -243,18 +385,18 @@ note: required because it appears within the type `gc::mutator_gc::MutatorGcStat
   |
   | pub(super) struct MutatorGcState {
   |                   ^^^^^^^^^^^^^^
-note: required because it appears within the type `mutator_registration::image::OwnerGcState`
+note: required because it appears within the type `neovm_core::tagged::gc::mutator_registration::image::OwnerGcState`
  --> $WORKSPACE/crates/neovm-value/src/tagged/gc/mutator_registration/image.rs
   |
   | pub(in crate::tagged::gc) struct OwnerGcState {
   |                                  ^^^^^^^^^^^^
-  = note: required for `std::ptr::Unique<mutator_registration::image::OwnerGcState>` to implement `Send`
-note: required because it appears within the type `std::boxed::Box<mutator_registration::image::OwnerGcState>`
+  = note: required for `std::ptr::Unique<neovm_core::tagged::gc::mutator_registration::image::OwnerGcState>` to implement `Send`
+note: required because it appears within the type `std::boxed::Box<neovm_core::tagged::gc::mutator_registration::image::OwnerGcState>`
  --> $RUST/alloc/src/boxed.rs
   |
   | pub struct Box<
   |            ^^^
-note: required because it appears within the type `Option<std::boxed::Box<mutator_registration::image::OwnerGcState>>`
+note: required because it appears within the type `Option<std::boxed::Box<neovm_core::tagged::gc::mutator_registration::image::OwnerGcState>>`
  --> $RUST/core/src/option.rs
   |
   | pub enum Option<T> {

@@ -21,21 +21,19 @@
 //! Additional native Darwin/BSD or Windows queries belong behind these same
 //! functions.
 
-use std::ffi::CStr;
-
 /// Native Darwin attributes, matching GNU `sysdep.c:4273-4459`. Every query
 /// owns its buffers; snapshots contain no shared or thread-confined state.
 #[cfg(target_os = "macos")]
 #[derive(Debug)]
-pub struct DarwinProcessSnapshot {
-    pub euid: u32,
+pub(crate) struct DarwinProcessSnapshot {
+    pub(crate) euid: u32,
     /// GNU reports the saved group ID (`e_pcred.p_svgid`) on Darwin.
-    pub egid: u32,
+    pub(crate) egid: u32,
     pub comm: String,
     pub state: String,
     pub ppid: i64,
-    pub pgrp: i64,
-    pub tpgid: i64,
+    pub(crate) pgrp: i64,
+    pub(crate) tpgid: i64,
     pub nice: i64,
     pub start: DarwinStartTime,
     pub tty_name: Option<String>,
@@ -47,19 +45,19 @@ pub struct DarwinProcessSnapshot {
 /// An epoch timestamp; unlike `/proc` start ticks, this needs no boot time.
 #[cfg(target_os = "macos")]
 #[derive(Debug)]
-pub struct DarwinStartTime {
+pub(crate) struct DarwinStartTime {
     pub seconds: i64,
-    pub microseconds: u32,
+    pub(crate) microseconds: u32,
 }
 
 /// CPU duration in nanoseconds, preserving libproc's precision.
 #[cfg(target_os = "macos")]
 #[derive(Clone, Copy, Debug)]
-pub struct DarwinCpuTime(u64);
+pub(crate) struct DarwinCpuTime(u64);
 
 #[cfg(target_os = "macos")]
 impl DarwinCpuTime {
-    pub fn seconds_and_nanoseconds(self) -> (u64, u32) {
+    pub(crate) fn seconds_and_nanoseconds(self) -> (u64, u32) {
         (self.0 / 1_000_000_000, (self.0 % 1_000_000_000) as u32)
     }
 
@@ -70,17 +68,17 @@ impl DarwinCpuTime {
 
 #[cfg(target_os = "macos")]
 #[derive(Debug)]
-pub struct DarwinProcessUsage {
+pub(crate) struct DarwinProcessUsage {
     pub user: DarwinCpuTime,
     pub system: DarwinCpuTime,
-    pub pageins: u64,
+    pub(crate) pageins: u64,
 }
 
 #[cfg(target_os = "macos")]
 #[derive(Debug)]
-pub struct DarwinProcessMemory {
-    pub virtual_kilobytes: u64,
-    pub resident_kilobytes: u64,
+pub(crate) struct DarwinProcessMemory {
+    pub(crate) virtual_kilobytes: u64,
+    pub(crate) resident_kilobytes: u64,
     pub threads: i32,
 }
 
@@ -155,7 +153,7 @@ fn darwin_tty_name(device: u32) -> Option<String> {
 /// optional facilities remain absent as in GNU. libproc can deny BSD info for
 /// another user's process, unlike GNU's sysctl implementation.
 #[cfg(target_os = "macos")]
-pub fn darwin_process_snapshot(pid: i64) -> Option<DarwinProcessSnapshot> {
+pub(crate) fn darwin_process_snapshot(pid: i64) -> Option<DarwinProcessSnapshot> {
     let pid = libc::pid_t::try_from(pid).ok()?;
     let info = darwin_bsd_info(pid)?;
     let mut path = [0u8; libc::PROC_PIDPATHINFO_MAXSIZE as usize];
@@ -310,28 +308,28 @@ mod darwin_tests;
 /// units the kernel reports. The parent converts ticks/pages to the Lisp
 /// `process-attributes` representation.
 #[derive(Clone, Debug)]
-pub struct ProcStatSnapshot {
+pub(crate) struct ProcStatSnapshot {
     pub comm: String,
     pub state: String,
     pub ppid: i64,
-    pub pgrp: i64,
+    pub(crate) pgrp: i64,
     pub sess: i64,
-    pub tpgid: i64,
-    pub minflt: i64,
-    pub majflt: i64,
-    pub cminflt: i64,
-    pub cmajflt: i64,
-    pub utime_ticks: i64,
-    pub stime_ticks: i64,
-    pub cutime_ticks: i64,
-    pub cstime_ticks: i64,
-    pub pri: i64,
+    pub(crate) tpgid: i64,
+    pub(crate) minflt: i64,
+    pub(crate) majflt: i64,
+    pub(crate) cminflt: i64,
+    pub(crate) cmajflt: i64,
+    pub(crate) utime_ticks: i64,
+    pub(crate) stime_ticks: i64,
+    pub(crate) cutime_ticks: i64,
+    pub(crate) cstime_ticks: i64,
+    pub(crate) pri: i64,
     pub nice: i64,
-    pub thcount: i64,
-    pub start_ticks: i64,
-    pub vsize: i64,
+    pub(crate) thcount: i64,
+    pub(crate) start_ticks: i64,
+    pub(crate) vsize: i64,
     pub rss: i64,
-    pub ttname: String,
+    pub(crate) ttname: String,
 }
 
 impl ProcStatSnapshot {
@@ -367,7 +365,7 @@ impl ProcStatSnapshot {
 /// Enumerate the PIDs of every process on the host (unsorted; the caller
 /// orders them). Empty on unsupported hosts without `/proc`.
 #[cfg(not(target_os = "macos"))]
-pub fn list_process_ids() -> Vec<i64> {
+pub(crate) fn list_process_ids() -> Vec<i64> {
     std::fs::read_dir("/proc")
         .ok()
         .into_iter()
@@ -379,7 +377,7 @@ pub fn list_process_ids() -> Vec<i64> {
 /// Native Darwin enumeration, analogous to GNU's KERN_PROC_ALL query
 /// (`sysdep.c:3349-3388`), without duplicating the SDK kinfo_proc ABI.
 #[cfg(target_os = "macos")]
-pub fn list_process_ids() -> Vec<i64> {
+pub(crate) fn list_process_ids() -> Vec<i64> {
     // SAFETY: a null buffer queries the number of process IDs.
     let count = unsafe { libc::proc_listallpids(std::ptr::null_mut(), 0) };
     let Some(capacity) = usize::try_from(count)
@@ -434,14 +432,14 @@ fn page_size_kb() -> i64 {
 }
 
 #[cfg(not(target_os = "windows"))]
-pub fn clock_ticks_per_second() -> i64 {
+pub(crate) fn clock_ticks_per_second() -> i64 {
     // SAFETY: `sysconf(_SC_CLK_TCK)` has no additional preconditions.
     let ticks = unsafe { libc::sysconf(libc::_SC_CLK_TCK) };
     if ticks <= 0 { 100 } else { ticks as i64 }
 }
 
 #[cfg(target_os = "windows")]
-pub fn clock_ticks_per_second() -> i64 {
+pub(crate) fn clock_ticks_per_second() -> i64 {
     100
 }
 
@@ -498,7 +496,7 @@ fn procfs_ttyname(rdev: i64) -> String {
 /// The process's command line from `/proc/<pid>/cmdline`, NUL-separated
 /// arguments rendered with whitespace/backslash escaped and joined by spaces.
 /// Falls back to `[comm]` when the command line is empty (kernel threads).
-pub fn process_cmdline(pid: i64, comm: &str) -> String {
+pub(crate) fn process_cmdline(pid: i64, comm: &str) -> String {
     let bytes = match std::fs::read(format!("/proc/{pid}/cmdline")) {
         Ok(bytes) => bytes,
         Err(_) => return String::new(),
@@ -527,7 +525,7 @@ pub fn process_cmdline(pid: i64, comm: &str) -> String {
 }
 
 /// The host boot time in epoch seconds, from `/proc/stat`'s `btime` line.
-pub fn boot_time_secs() -> Option<i64> {
+pub(crate) fn boot_time_secs() -> Option<i64> {
     let stat = std::fs::read_to_string("/proc/stat").ok()?;
     for line in stat.lines() {
         if let Some(rest) = line.strip_prefix("btime ") {
@@ -538,7 +536,7 @@ pub fn boot_time_secs() -> Option<i64> {
 }
 
 /// Total physical memory in kilobytes, from `/proc/meminfo`'s `MemTotal` line.
-pub fn total_memory_kb() -> Option<i64> {
+pub(crate) fn total_memory_kb() -> Option<i64> {
     let meminfo = std::fs::read_to_string("/proc/meminfo").ok()?;
     for line in meminfo.lines() {
         if let Some(rest) = line.strip_prefix("MemTotal:") {
@@ -553,7 +551,7 @@ pub fn total_memory_kb() -> Option<i64> {
 /// may itself contain spaces, so it is extracted between the first `(` and last
 /// `)` before the remaining space-separated fields are indexed.
 #[cfg(not(target_os = "macos"))]
-pub fn process_stat(pid: i64) -> Option<ProcStatSnapshot> {
+pub(crate) fn process_stat(pid: i64) -> Option<ProcStatSnapshot> {
     let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
     let open_paren = stat.find('(')?;
     let close_paren = stat.rfind(')')?;
@@ -619,7 +617,7 @@ pub fn process_stat(pid: i64) -> Option<ProcStatSnapshot> {
 /// GNU Darwin's state letters (`sysdep.c:4337-4363`). libproc supplies the same
 /// kernel `p_stat` without duplicating the SDK's `kinfo_proc` layout in Rust.
 #[cfg(target_os = "macos")]
-pub fn process_stat(pid: i64) -> Option<ProcStatSnapshot> {
+pub(crate) fn process_stat(pid: i64) -> Option<ProcStatSnapshot> {
     let pid = libc::pid_t::try_from(pid).ok()?;
     let info = darwin_bsd_info(pid)?;
     let mut snapshot = ProcStatSnapshot::fallback(i64::from(pid));
@@ -629,7 +627,7 @@ pub fn process_stat(pid: i64) -> Option<ProcStatSnapshot> {
 
 /// The process's effective `(uid, gid)` from `/proc/<pid>/status`' `Uid:` /
 /// `Gid:` lines (field index 1 is the effective id).
-pub fn process_effective_ids(pid: i64) -> Option<(u32, u32)> {
+pub(crate) fn process_effective_ids(pid: i64) -> Option<(u32, u32)> {
     let status = std::fs::read_to_string(format!("/proc/{pid}/status")).ok()?;
     let mut euid = None;
     let mut egid = None;
@@ -652,52 +650,10 @@ pub fn process_effective_ids(pid: i64) -> Option<(u32, u32)> {
     Some((euid?, egid?))
 }
 
-#[cfg(not(target_os = "windows"))]
-pub fn user_name(uid: u32) -> Option<String> {
-    // SAFETY: libc returns either null or a valid passwd struct pointer.
-    let user = unsafe { libc::getpwuid(uid as libc::uid_t) };
-    if user.is_null() {
-        return None;
-    }
-    // SAFETY: `user` is non-null and `pw_name` is a valid C string pointer.
-    let name_ptr = unsafe { (*user).pw_name };
-    if name_ptr.is_null() {
-        return None;
-    }
-    // SAFETY: `name_ptr` is a valid NUL-terminated C string.
-    Some(
-        unsafe { CStr::from_ptr(name_ptr) }
-            .to_string_lossy()
-            .into_owned(),
-    )
+pub(crate) fn user_name(uid: u32) -> Option<String> {
+    neovm_value::system_vocab::posix_lookup::lookup_user_name(uid)
 }
 
-#[cfg(target_os = "windows")]
-pub fn user_name(_uid: u32) -> Option<String> {
-    None
-}
-
-#[cfg(not(target_os = "windows"))]
 pub fn group_name(gid: u32) -> Option<String> {
-    // SAFETY: libc returns either null or a valid group struct pointer.
-    let group = unsafe { libc::getgrgid(gid as libc::gid_t) };
-    if group.is_null() {
-        return None;
-    }
-    // SAFETY: `group` is non-null and `gr_name` is a valid C string pointer.
-    let name_ptr = unsafe { (*group).gr_name };
-    if name_ptr.is_null() {
-        return None;
-    }
-    // SAFETY: `name_ptr` is a valid NUL-terminated C string.
-    Some(
-        unsafe { CStr::from_ptr(name_ptr) }
-            .to_string_lossy()
-            .into_owned(),
-    )
-}
-
-#[cfg(target_os = "windows")]
-pub fn group_name(_gid: u32) -> Option<String> {
-    None
+    neovm_value::system_vocab::posix_lookup::lookup_group_name(gid)
 }

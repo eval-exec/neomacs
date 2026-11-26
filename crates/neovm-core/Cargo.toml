@@ -209,6 +209,9 @@ contract-fixtures = ["neovm-eval/contract-fixtures"]
 test-support = []
 
 [dev-dependencies]
+# W-GEN: the architecture freshness guard runs the same ledger generator
+# xtask uses; a dev edge keeps it out of product builds.
+neovm-gnu-ledgers.workspace = true
 # Peer ruling A2 + TEST-SUPPORT-DESIGN rev 2: a provider's test surface is
 # enabled only by a dev edge from a crate above it, never for normal builds.
 # Each edge below enables one lower provider's surface for core's test units.
@@ -244,7 +247,6 @@ proc-macro2 = { version = "1", features = ["span-locations"] }
 [build-dependencies]
 flate2.workspace = true
 pkg-config.workspace = true
-sha2.workspace = true
 
 [[test]]
 name = "thread_safety_contracts"
@@ -265,6 +267,11 @@ path = "tests/p1rv_contracts.rs"
 [[test]]
 name = "mint_seal_contracts"
 path = "tests/mint_seal_contracts.rs"
+
+[[test]]
+name = "heap_capability_contracts"
+path = "tests/heap_capability_contracts.rs"
+required-features = ["contract-fixtures"]
 
 # Runs its checks on a child process's MAIN thread, which libtest never
 # offers; the file answers the libtest CLI subset nextest uses.
@@ -310,3 +317,9 @@ path = "tests/core.rs"
 name = "retained_leaf_contracts"
 path = "tests/retained_leaf_contracts.rs"
 required-features = ["jit", "contract-fixtures"]
+
+# Dedicated Miri registration: the source reuses the real core era fixture
+# and allocation shells, and is empty outside cfg(miri).
+[[test]]
+name = "numeric_storage_miri"
+path = "tests/numeric_storage_miri.rs"

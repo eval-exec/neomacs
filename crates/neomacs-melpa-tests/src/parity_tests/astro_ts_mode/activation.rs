@@ -245,7 +245,7 @@ fn inherited_html_comment_and_syntax_behavior_remains_practical() -> ParityBatch
            (char-syntax ?<)
            (char-syntax ?>)))"##,
         expect![[
-            r#"OK ("<!-- " " -->" #("<section>\n<!-- Hello -->\n</section>" 0 10 (fontified nil) 10 11 (syntax-table (2097163) fontified nil) 11 15 (fontified nil) 15 20 (fontified nil) 20 23 (fontified nil) 23 24 (syntax-table (2097164) fontified nil) 24 35 (fontified nil)) nil 40 41)"#
+            r#"OK ("<!-- " " -->" #("<section>\n<!-- Hello -->\n</section>" 10 11 (syntax-table (2097163)) 23 24 (syntax-table (2097164))) nil 40 41)"#
         ]],
     )
 }

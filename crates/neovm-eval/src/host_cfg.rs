@@ -99,6 +99,19 @@ impl HostCfgClass {
         })
     }
 
+    /// Eval owns these cargo features. Their absent-layer stand-ins are
+    /// compiled in every build, with no `#[cfg(feature)]`, so an including
+    /// crate cannot disagree with this predicate. [`Self::is_active`] is the
+    /// only selector.
+    pub const fn standin_ignores_feature_cfg(self) -> bool {
+        matches!(self, Self::Sqlite | Self::Xwidgets | Self::VmProfile)
+    }
+
+    /// Comment prefix the upper-subr generator writes for
+    /// [`Self::standin_ignores_feature_cfg`] classes. The snapshot parser
+    /// reads `// host-cfg: <label>` back. It is not a rustc cfg.
+    pub const STANDIN_CFG_COMMENT_PREFIX: &str = "// host-cfg: ";
+
     /// Whether the label vocabulary is self-consistent: every class in
     /// [`Self::ALL`] parses back from its own [`Self::label`].
     ///

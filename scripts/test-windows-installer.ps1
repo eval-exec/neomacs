@@ -57,6 +57,137 @@ function Wait-ForExitOrKill {
   }
 }
 
+function Test-RegistryKeyPresent {
+  param(
+    [Microsoft.Win32.RegistryKey]$Root,
+    [string]$Path
+  )
+
+  $key = $Root.OpenSubKey($Path)
+  if ($null -eq $key) {
+    return $false
+  }
+  $key.Dispose()
+  return $true
+}
+
+function Test-ProcessStartedAfter {
+  param(
+    $Created,
+    [datetime]$StartedAfter
+  )
+
+  if ($Created -isnot [datetime]) {
+    return $false
+  }
+  return $Created -ge $StartedAfter.AddSeconds(-2)
+}
+
+function Test-RelaunchedUninstallerProcess {
+  param(
+    $Process,
+    [int]$StubProcessId,
+    [datetime]$StartedAfter,
+    [string]$InstallDirPrefix
+  )
+
+  $processId = [int]$Process.ProcessId
+  if ($processId -eq $StubProcessId) {
+    return $false
+  }
+  $parentId = [int]$Process.ParentProcessId
+  $name = [string]$Process.Name
+  $executablePath = [string]$Process.ExecutablePath
+  $commandLine = [string]$Process.CommandLine
+  $recent = Test-ProcessStartedAfter -Created $Process.CreationDate -StartedAfter $StartedAfter
+  $pointsAtInstall = $commandLine.IndexOf($InstallDirPrefix) -ge 0
+  $nsisCopy = ($executablePath -match '(?i)\\~nsu[^\\]*\.tmp\\') -or ($commandLine -match '(?i)\\~nsu[^\\]*\.tmp\\')
+  $legacyCopy = $name -like 'Au_*'
+  $childUnExe = ($name -eq 'Un.exe') -and ($parentId -eq $StubProcessId)
+  $explicitRelaunch = ($commandLine.IndexOf('_?=') -ge 0) -and $pointsAtInstall
+  if (-not ($nsisCopy -or $legacyCopy -or $childUnExe -or $explicitRelaunch)) {
+    return $false
+  }
+  if (-not $recent -and -not $childUnExe) {
+    return $false
+  }
+  return $true
+}
+
+function Wait-ForRelaunchedUninstaller {
+  param(
+    [int]$StubProcessId,
+    [datetime]$StartedAfter,
+    [string]$InstallDir,
+    [string]$UninstallerPath,
+    [string]$UninstallKeyPath,
+    [int]$TimeoutSeconds = 120
+  )
+
+  # uninstall.exe /S without _?= is the Apps & Features path. NSIS copies
+  # that process to %TEMP%\~nsuN.tmp\Un.exe (older builds: Au_.exe), starts
+  # the copy with _?=$INSTDIR\, and the process we launched exits without
+  # waiting. The copy deletes the payload and only then the Apps & Features
+  # key. RMDir $INSTDIR is not recursive, and this contract leaves
+  # created-after-install.txt in the install directory, so that directory
+  # stays. If the copy cannot be identified, wait until uninstall.exe is
+  # gone (the last generated delete, immediately before RMDir $INSTDIR) and
+  # then until the key is gone.
+  $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+  $installDirPrefix = $InstallDir.TrimEnd('\')
+  $seenProcess = $false
+
+  while ((Get-Date) -lt $deadline) {
+    $queried = $true
+    $processes = @()
+    try {
+      $processes = @(Get-CimInstance -ClassName Win32_Process -ErrorAction Stop)
+    } catch {
+      $queried = $false
+    }
+    if ($queried) {
+      $running = $false
+      foreach ($candidate in $processes) {
+        $isRelaunch = Test-RelaunchedUninstallerProcess `
+          -Process $candidate `
+          -StubProcessId $StubProcessId `
+          -StartedAfter $StartedAfter `
+          -InstallDirPrefix $installDirPrefix
+        if ($isRelaunch) {
+          $seenProcess = $true
+          $running = $true
+          break
+        }
+      }
+      if ($running) {
+        Start-Sleep -Milliseconds 200
+        continue
+      }
+      if ($seenProcess) {
+        return
+      }
+    }
+
+    $directoryGone = -not (Test-Path -LiteralPath $InstallDir)
+    $payloadGone = -not (Test-Path -LiteralPath $UninstallerPath)
+    $keyGone = -not (Test-RegistryKeyPresent -Root ([Microsoft.Win32.Registry]::CurrentUser) -Path $UninstallKeyPath)
+    if (($directoryGone -or $payloadGone) -and $keyGone) {
+      return
+    }
+    Start-Sleep -Milliseconds 200
+  }
+
+  if ($seenProcess) {
+    throw "relaunch uninstaller did not exit within $TimeoutSeconds seconds"
+  }
+  $directoryGone = -not (Test-Path -LiteralPath $InstallDir)
+  $payloadGone = -not (Test-Path -LiteralPath $UninstallerPath)
+  if (-not $directoryGone -and -not $payloadGone) {
+    throw 'uninstaller deadline: $INSTDIR was not removed'
+  }
+  throw 'uninstaller deadline: Apps & Features key was not removed'
+}
+
 function Invoke-Installer {
   param([string]$Path)
 
@@ -268,6 +399,7 @@ try {
     [Microsoft.Win32.RegistryValueKind]::ExpandString
   )
 
+  $uninstallStartedAt = Get-Date
   $process = Start-Process -FilePath $uninstaller -ArgumentList "/S" -PassThru
   Wait-ForExitOrKill -Process $process -TimeoutSeconds 120 -Description "uninstaller $uninstaller"
   if ($process.ExitCode -ne 0) {
@@ -275,9 +407,13 @@ try {
   }
   $installed = $false
 
-  for ($attempt = 0; $attempt -lt 50 -and (Test-Path (Join-Path $binDir "neomacs.exe")); $attempt++) {
-    Start-Sleep -Milliseconds 100
-  }
+  Wait-ForRelaunchedUninstaller `
+    -StubProcessId $process.Id `
+    -StartedAfter $uninstallStartedAt `
+    -InstallDir $installDir `
+    -UninstallerPath $uninstaller `
+    -UninstallKeyPath $uninstallKeyPath `
+    -TimeoutSeconds 120
 
   Assert-Equal -Actual (Read-RawRegistryValue -Key $userEnvironment -Name "Path") `
     -Expected $postInstallUserPath `
@@ -320,8 +456,16 @@ try {
   Remove-Item $installDir -Force
 } finally {
   if ($installed -and (Test-Path $uninstaller -PathType Leaf)) {
+    $cleanupStartedAt = Get-Date
     $cleanup = Start-Process -FilePath $uninstaller -ArgumentList "/S" -PassThru
     Wait-ForExitOrKill -Process $cleanup -TimeoutSeconds 120 -Description "cleanup uninstaller $uninstaller"
+    Wait-ForRelaunchedUninstaller `
+      -StubProcessId $cleanup.Id `
+      -StartedAfter $cleanupStartedAt `
+      -InstallDir $installDir `
+      -UninstallerPath $uninstaller `
+      -UninstallKeyPath $uninstallKeyPath `
+      -TimeoutSeconds 120
   }
 
   if ($originalUserPathExists) {

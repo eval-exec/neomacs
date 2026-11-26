@@ -116,7 +116,7 @@ const PRELUDE: &str = r####"
                  (null delete)
                  (equal (car destination) t)
                  (stringp error-file)
-                 (file-in-directory-p error-file temporary-file-directory)
+                 (neomacs-melpa-path-inside-p error-file temporary-file-directory)
                  (equal (file-name-directory error-file)
                         temporary-file-directory)
                  (file-regular-p error-file)
@@ -126,7 +126,7 @@ const PRELUDE: &str = r####"
                  (equal (format399-test-normalize
                          (copy-tree args) format399-test-root)
                         expected-args)
-                 (file-in-directory-p default-directory format399-test-root))
+                 (neomacs-melpa-path-inside-p default-directory format399-test-root))
       (error "Unexpected formatter call: %S"
              (list start end program delete destination display args step
                    default-directory)))

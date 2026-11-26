@@ -51,6 +51,7 @@ fn test_pdump_bytecode_round_trips_image_resident() {
     let dir = tempfile::tempdir().unwrap();
     let dump_path = dir.path().join("bcarena.pdump");
     dump_to_file(&eval, &dump_path).expect("dump should succeed");
+    drop(eval);
     let mut restored = load_from_dump(&dump_path).expect("load should succeed");
 
     let post = restored
@@ -115,6 +116,7 @@ fn test_pdump_rejects_stub_layout_witness_mismatch() {
     let dir = tempfile::tempdir().unwrap();
     let dump_path = dir.path().join("witness-mismatch.pdump");
     dump_to_file(&eval, &dump_path).expect("dump should succeed");
+    drop(eval);
 
     // The witness is the LAST u64 of the header; corrupting it models an
     // image dumped by a binary whose ByteCodeFunction layout differs. The
@@ -167,23 +169,23 @@ fn lazy_stub_survives_gc_and_materializes_on_first_call() {
         optional: vec![neovm_value::intern::intern("pdump-lazy-b")],
         rest: Some(neovm_value::intern::intern("pdump-lazy-c")),
     });
-    function.ops = vec![Op::Constant(0), Op::Return];
-    function.constants = vec![secret_hash].into();
+    function.set_ops(vec![Op::Constant(0), Op::Return]);
+    function.set_constants(vec![secret_hash].into());
     function.extra_slots = vec![extra_hash];
-    function.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(8);
-    function.lexical = true;
+    function.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(8));
+    function.set_lexical(true);
     function.docstring = Some(neovm_value::heap_types::LispString::from_unibyte(
         b"Lazy stub docstring.".to_vec(),
     ));
     function.interactive = Some(Value::string("p"));
-    function.gnu_byte_offset_map = Some(vec![
+    function.set_gnu_byte_offset_map(Some(vec![
         GnuByteOffsetMapEntry::new(0, 0),
         GnuByteOffsetMapEntry::new(1, 1),
-    ]);
-    // Bconstant0 (0xC0), Breturn (0x87).
-    function.gnu_bytecode_bytes = Some(neovm_value::tagged::header::LispByteVec::owned(vec![
-        0xC0, 0x87,
     ]));
+    // Bconstant0 (0xC0), Breturn (0x87).
+    function.set_gnu_bytecode_bytes(Some(neovm_value::tagged::header::LispByteVec::owned(vec![
+        0xC0, 0x87,
+    ])));
     let func_val = Value::make_bytecode(function);
     eval.obarray_mut()
         .set_symbol_value("pdump-lazy-probe", func_val);
@@ -191,6 +193,7 @@ fn lazy_stub_survives_gc_and_materializes_on_first_call() {
     let dir = tempfile::tempdir().unwrap();
     let dump_path = dir.path().join("lazy.pdump");
     dump_to_file(&eval, &dump_path).expect("dump should succeed");
+    drop(eval);
 
     let mut loaded = load_from_dump(&dump_path).expect("load should succeed");
     let func = loaded
@@ -247,12 +250,12 @@ fn lazy_stub_survives_gc_and_materializes_on_first_call() {
             .bytecode_data_if_materialized()
             .expect("the call must have materialized the stub");
         assert_eq!(
-            neovm_value::intern::resolve_sym(data.params.named().unwrap().required[0]),
+            neovm_value::intern::resolve_sym(data.params().named().unwrap().required[0]),
             "pdump-lazy-a",
             "param symbols must resolve after the fallback-path id rewrite"
         );
         assert_eq!(
-            data.params
+            data.params()
                 .named()
                 .unwrap()
                 .rest

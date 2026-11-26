@@ -54,6 +54,46 @@ fn compose_string_internal_sets_composition_property() {
     assert!(prop.cons_cdr().is_nil());
 }
 
+/// Attested by review on Emacs 31.1 `a360712c9d`: two `compose-string` calls
+/// with equal components do not leave `eq` composition objects. `compose-string`
+/// is the Lisp wrapper around this subr, which is the write.
+#[test]
+fn second_compose_string_internal_replaces_equal_composition() {
+    crate::test_utils::init_test_tracing();
+    let s = Value::string("ab");
+    let components = Value::string("x");
+    compose_string_internal(vec![
+        s,
+        Value::fixnum(0),
+        Value::fixnum(2),
+        components,
+        Value::NIL,
+    ])
+    .expect("first compose");
+    let first = get_string_text_properties_table_for_value(s)
+        .expect("composition table")
+        .get_property_at_char_pos(CharPos0::new(0), Value::symbol("composition"))
+        .expect("first composition");
+
+    compose_string_internal(vec![
+        s,
+        Value::fixnum(0),
+        Value::fixnum(2),
+        components,
+        Value::NIL,
+    ])
+    .expect("second compose");
+    let second = get_string_text_properties_table_for_value(s)
+        .expect("composition table")
+        .get_property_at_char_pos(CharPos0::new(0), Value::symbol("composition"))
+        .expect("second composition");
+
+    assert!(
+        !neovm_value::value::eq_value(&first, &second),
+        "an equal composition must replace the previous object"
+    );
+}
+
 #[test]
 fn compose_string_internal_uses_gnu_subarray_bounds() {
     crate::test_utils::init_test_tracing();

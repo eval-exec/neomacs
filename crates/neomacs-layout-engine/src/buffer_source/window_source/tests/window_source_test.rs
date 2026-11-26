@@ -45,6 +45,7 @@ fn window_params() -> WindowParams {
         tab_stop_list: vec![],
         default_fg: 0x00ff_ffff,
         frame_foreground: 0x00ff_ffff,
+        frame_background: 0,
         default_bg: 0,
         char_width: 8.0,
         char_height: 16.0,
@@ -90,6 +91,7 @@ fn window_params() -> WindowParams {
         horizontal_scroll_bar: false,
         scroll_bar_pixel_width: 0.0,
         scroll_bar_pixel_height: 0.0,
+        bidi_paragraph_directions: Default::default(),
     }
 }
 
@@ -579,7 +581,7 @@ impl crate::neovm_bridge::LayoutBufferView for PositionReadCounter<'_> {
         self.buffer
             .layout_previous_syntax_prop_state_run_start_char_pos(pos)
     }
-    fn layout_overlays(&self) -> &neovm_core::buffer::overlay::OverlayList {
+    fn layout_overlays(&self) -> crate::neovm_bridge::LayoutOverlays<'_> {
         self.buffer.layout_overlays()
     }
 }

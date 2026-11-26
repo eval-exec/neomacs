@@ -10,8 +10,12 @@
 (defvar neomacs-menu-test-map nil)
 (defun neomacs-menu-record (event)
   (push event neomacs-menu-events)
-  (with-temp-file (expand-file-name "events.json" neomacs-menu-directory)
-    (insert (json-encode (vconcat (reverse neomacs-menu-events))))))
+  ;; Publish atomically: the harness polls this file from another process,
+  ;; and a partial insert must never read as the empty command list.
+  (with-temp-file (expand-file-name "events.pending" neomacs-menu-directory)
+    (insert (json-encode (vconcat (reverse neomacs-menu-events)))))
+  (rename-file (expand-file-name "events.pending" neomacs-menu-directory)
+               (expand-file-name "events.json" neomacs-menu-directory) t))
 (defun neomacs-menu-choose () (interactive) (neomacs-menu-record "choose"))
 (defun neomacs-menu-nested () (interactive) (neomacs-menu-record "nested"))
 (defun neomacs-menu-other () (interactive) (neomacs-menu-record "other"))

@@ -309,3 +309,94 @@ pub fn reset_carrier_tls() {
 pub fn carrier_tls_fingerprint(h: &mut u64) {
     crate::tls_fingerprint::mix(h, EPOCH.with(|slot| slot.get() as u64));
 }
+
+/// Discard the matching string and raw byte pointer. The mutation epoch stays
+/// monotone. A foreign owner is preserved, cache and all.
+#[doc(hidden)]
+pub fn retire_string_pos_cache_for_heap(
+    heap: crate::tagged::gc::HeapIdentity,
+) -> crate::heap_registry::text_retirement::TextCacheRetirement {
+    use crate::heap_registry::text_retirement::TextCacheRetirement;
+    CACHE_HEAP.with(|owner| {
+        if owner.get() != heap.get() {
+            return TextCacheRetirement::AlreadyInactive(heap);
+        }
+        CACHE.with(|cache| cache.set(None));
+        owner.set(0);
+        CACHE_COLLECTION_EPOCH.with(|epoch| epoch.set(None));
+        TextCacheRetirement::Retired(heap)
+    })
+}
+
+#[cfg(test)]
+mod retirement_tests {
+    use super::*;
+    use crate::heap_registry::text_retirement::TextCacheRetirement;
+    use crate::tagged::gc::HeapIdentity;
+
+    fn heap(word: usize) -> HeapIdentity {
+        HeapIdentity::from_legacy_word(word).expect("non-zero")
+    }
+
+    fn install(word: usize, string: Value) {
+        CACHE_HEAP.with(|owner| owner.set(word));
+        CACHE.with(|cache| {
+            cache.set(Some(Entry {
+                string,
+                data: std::ptr::null(),
+                sbytes: 1,
+                epoch: 3,
+                char_pos: GnuStringCharPos::new(1),
+                byte_pos: 1,
+            }))
+        });
+        CACHE_COLLECTION_EPOCH.with(|epoch| epoch.set(Some(9)));
+    }
+
+    #[test]
+    fn pentry_e2b_text_retire_string_discards_value_and_raw_data() {
+        let identity = heap(11);
+        install(11, Value::fixnum(1));
+        let epoch = EPOCH.with(Cell::get);
+        assert_eq!(
+            retire_string_pos_cache_for_heap(identity),
+            TextCacheRetirement::Retired(identity)
+        );
+        assert!(CACHE.with(Cell::get).is_none());
+        assert_eq!(CACHE_HEAP.with(Cell::get), 0);
+        assert_eq!(CACHE_COLLECTION_EPOCH.with(Cell::get), None);
+        assert_eq!(EPOCH.with(Cell::get), epoch);
+    }
+
+    #[test]
+    fn pentry_e2b_text_retire_string_preserves_foreign_cache() {
+        install(22, Value::fixnum(2));
+        let before = CACHE.with(Cell::get).unwrap();
+        let foreign = heap(11);
+        assert_eq!(
+            retire_string_pos_cache_for_heap(foreign),
+            TextCacheRetirement::AlreadyInactive(foreign)
+        );
+        let after = CACHE.with(Cell::get).unwrap();
+        assert_eq!(after.string, before.string);
+        assert_eq!(after.data, before.data);
+        assert_eq!(after.char_pos, before.char_pos);
+        assert_eq!(after.byte_pos, before.byte_pos);
+        assert_eq!(CACHE_HEAP.with(Cell::get), 22);
+        assert_eq!(CACHE_COLLECTION_EPOCH.with(Cell::get), Some(9));
+    }
+
+    #[test]
+    fn pentry_e2b_text_retire_string_repeat_is_inactive_and_epoch_stays() {
+        let identity = heap(11);
+        EPOCH.with(|slot| slot.set(41));
+        install(11, Value::fixnum(1));
+        retire_string_pos_cache_for_heap(identity);
+        assert_eq!(
+            retire_string_pos_cache_for_heap(identity),
+            TextCacheRetirement::AlreadyInactive(identity)
+        );
+        assert!(CACHE.with(Cell::get).is_none());
+        assert_eq!(EPOCH.with(Cell::get), 41);
+    }
+}

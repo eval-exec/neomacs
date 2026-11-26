@@ -1,4 +1,4 @@
-use crate::display_item::{DisplayItem, DisplayItemKind};
+use crate::display_item::{DisplayItem, DisplayItemKind, DisplayTextComposition};
 use crate::display_row::append_context::DisplayRowAppendFrame;
 use crate::display_row::builder::DisplayRowItemMeasurement;
 use crate::display_row::render_policy::DisplayRowRenderPolicy;
@@ -36,6 +36,18 @@ impl DisplayRowRenderPolicy for ResolvedSourceAdvanceRenderPolicy {
         _font_metrics: &mut Option<FontMetricsService>,
     ) -> DisplayRowItemMeasurement {
         match &item.kind {
+            // One automatic composition contributes its shaped gstring's whole
+            // width, not a per-character advance.  The resolved plan is uniform
+            // (the same advance for every character), so leaving it in place
+            // would multiply the head cluster's advance by the composition's
+            // character count.  Return no plan: the row writer then measures
+            // the composite text through the real font service, while prepared
+            // worker rows keep replaying their own captured shaped plan.
+            DisplayItemKind::TextRun(run)
+                if matches!(run.composition, DisplayTextComposition::Automatic(_)) =>
+            {
+                DisplayRowItemMeasurement::Default
+            }
             DisplayItemKind::TextRun(run) => self.measurement_for_text(&run.text),
             DisplayItemKind::SourceMappedText(text) => self.measurement_for_text(&text.text),
             _ => DisplayRowItemMeasurement::Default,

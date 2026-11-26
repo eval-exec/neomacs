@@ -194,13 +194,16 @@ fn into_kind_transfers_the_pin_until_the_owned_payload_drops() {
 #[test]
 fn clone_keeps_the_original_context_registry_after_activation_changes() {
     crate::test_utils::init_test_tracing();
-    let _first = crate::test_utils::new_context();
+    let first = crate::test_utils::new_context();
     let first_registry = current_in_flight_registry_handle();
     let first_before = registry_state(&first_registry);
     let original = signal(
         LispCondition::Error,
         vec![Value::string("original context")],
     );
+    // The signal stays allocated on the first heap while the second Context
+    // is the active one. Parking clears the slot without freeing that heap.
+    let _parked_first = first.park_for_test();
     let _second = crate::test_utils::new_context();
     let second_registry = current_in_flight_registry_handle();
     let second_before = registry_state(&second_registry);

@@ -1,0 +1,23 @@
+error[E0505]: cannot move out of `heap` because it is borrowed
+ --> tests/heap_capability_ui/u1_heap_ref_blocks_drop_and_shutdown.rs:8:10
+  |
+6 | fn borrow_across_drop(heap: TaggedHeap, v: Value) {
+  |                       ---- binding `heap` declared here
+7 |     let items = v.vector_data_in(heap.heap_ref()).unwrap();
+  |                                  ---- borrow of `heap` occurs here
+8 |     drop(heap);
+  |          ^^^^ move out of `heap` occurs here
+9 |     let _ = items.len();
+  |             ----- borrow later used here
+
+error[E0505]: cannot move out of `heap` because it is borrowed
+  --> tests/heap_capability_ui/u1_heap_ref_blocks_drop_and_shutdown.rs:14:13
+   |
+12 | fn borrow_across_shutdown(heap: TaggedHeap, v: Value) {
+   |                           ---- binding `heap` declared here
+13 |     let items = v.vector_data_in(heap.heap_ref()).unwrap();
+   |                                  ---- borrow of `heap` occurs here
+14 |     let _ = heap.shutdown();
+   |             ^^^^ move out of `heap` occurs here
+15 |     let _ = items.len();
+   |             ----- borrow later used here

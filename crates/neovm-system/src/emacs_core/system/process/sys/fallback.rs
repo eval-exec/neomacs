@@ -9,32 +9,14 @@
 
 use neovm_eval::emacs_core::eval::data::process_state::Source;
 
-use crate::emacs_core::process::ProcessId;
 use crate::emacs_core::process::{
     HostInterfaceEntry, NetworkAddressFamily, derive_network_interface_info_broadcast,
     derive_network_interface_list_broadcast, int_vector, zero_network_address,
 };
 use neovm_value::value::Value;
 
-
-
 pub fn open(_pid: u32) -> Option<Source> {
     None
-}
-
-pub(crate) trait SourceIo {
-    fn register(&self, _poller: &polling::Poller, _id: ProcessId);
-    fn unregister(&self, _poller: &polling::Poller);
-}
-
-impl SourceIo for Source {
-    fn register(&self, _poller: &polling::Poller, _id: ProcessId) {
-        match *self {}
-    }
-
-    fn unregister(&self, _poller: &polling::Poller) {
-        match *self {}
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -81,7 +63,7 @@ fn heuristic_network_interface_flags(addr: &network_interface::Addr) -> Value {
     Value::list(flags)
 }
 
-pub fn interface_snapshot() -> Option<Vec<HostInterfaceEntry>> {
+pub(crate) fn interface_snapshot() -> Option<Vec<HostInterfaceEntry>> {
     use network_interface::{Addr, NetworkInterface, NetworkInterfaceConfig};
 
     let interfaces = NetworkInterface::show().ok()?;

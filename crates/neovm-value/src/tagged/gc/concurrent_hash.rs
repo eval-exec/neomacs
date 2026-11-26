@@ -160,8 +160,10 @@ impl HashTableScanSnapshot {
             HashTableScanEntry {
                 slots,
                 slots_len,
+                // SAFETY: callbacks were read from this live hash table on the
+                // heap at the start handshake and stay live until join.
                 callbacks: [table.user_cmp_function, table.user_hash_function]
-                    .map(|callback| callback.map(MarkWord::of)),
+                    .map(|callback| callback.map(|value| unsafe { MarkWord::of(value) })),
                 reader: AtomicU8::new(AVAILABLE),
                 cow: AtomicU8::new(UNTOUCHED),
                 dirty: AtomicBool::new(false),
@@ -187,7 +189,7 @@ impl HashTableScanSnapshot {
     pub(crate) fn lock_mutation(&self, owner: usize) -> Option<HashTableMutationGuard<'_>> {
         let entry = self.get(owner)?;
         assert!(!self.is_poisoned(), "Tier-H snapshot poisoned");
-        Some(entry.lock_mutation(&self.poisoned, self.policy))
+        Some(entry.lock_mutation(owner, &self.poisoned, self.policy))
     }
 
     /// Elect a reader before claiming its header, retaining the same mutex
@@ -286,6 +288,7 @@ impl HashTableScanEntry {
     #[inline(never)]
     fn lock_mutation<'a>(
         &'a self,
+        owner: usize,
         poisoned: &'a AtomicBool,
         policy: HashTableScanPolicy,
     ) -> HashTableMutationGuard<'a> {
@@ -308,6 +311,7 @@ impl HashTableScanEntry {
             }
         }
         HashTableMutationGuard {
+            owner,
             entry: self,
             poisoned,
             policy,
@@ -359,7 +363,9 @@ impl HashTableReadGuard<'_> {
             push(entry.value);
         }
         for callback in self.entry.callbacks.into_iter().flatten() {
-            push(callback.value());
+            // SAFETY: Tier-H reader scan runs inside an active concurrent mark
+            // cycle where the captured snapshot keeps callback values live.
+            push(unsafe { callback.value() });
         }
         self.scan_complete = true;
     }
@@ -386,6 +392,7 @@ impl Drop for HashTableReadGuard<'_> {
 }
 
 pub(crate) struct HashTableMutationGuard<'a> {
+    owner: usize,
     entry: &'a HashTableScanEntry,
     poisoned: &'a AtomicBool,
     policy: HashTableScanPolicy,
@@ -403,6 +410,11 @@ impl Drop for HashTableMutationGuard<'_> {
 }
 
 impl HashTableMutationGuard<'_> {
+    #[inline]
+    pub(crate) fn owner(&self) -> usize {
+        self.owner
+    }
+
     /// Detach on the cycle's first write and transfer ownership before READY.
     /// The returned original must remain in this mutator's log until the
     /// coordinator completes termination after joining all snapshot readers.

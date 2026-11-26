@@ -1,8 +1,8 @@
 //! Signed display authority fence (peer 19:36Z follow-up).
 //!
 //! The three DisplayFrameExt test fixtures are cfg-gated trait methods used
-//! by the re-homed load/reader oracles and by display/eval tests. Each has
-//! one AUTHORITY-ITEMS row; these delegates are the signed fence path. The
+//! by the re-homed load/reader oracles and by display/eval tests. These
+//! delegates are the fence path. The
 //! trait methods keep their bodies and cfg gate unchanged (the N17 extension
 //! trait cannot expose pub(crate) inherent methods on the eval-owned Frame).
 

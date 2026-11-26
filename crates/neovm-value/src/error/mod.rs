@@ -1441,3 +1441,9 @@ impl InFlightRootPin {
         self.slot
     }
 }
+
+mod registry_detach;
+#[doc(hidden)]
+pub use registry_detach::{
+    SourceShellInFlightReceipt, SourceShellInFlightRefusal, detach_source_shell_in_flight,
+};

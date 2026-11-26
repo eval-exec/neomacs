@@ -112,7 +112,7 @@ const PRELUDE: &str = r####"
 (defun tsl411-test-write-file (file contents)
   (unless (and tsl411-test-root
                (file-name-absolute-p file)
-               (file-in-directory-p file tsl411-test-root))
+               (neomacs-melpa-path-inside-p file tsl411-test-root))
     (error "Refusing Tree-sitter Languages write outside owned root: %s" file))
   (make-directory (file-name-directory file) t)
   (let ((file-name-handler-alist nil))
@@ -131,7 +131,7 @@ const PRELUDE: &str = r####"
                  (stringp url)
                  (string= url
                           "https://github.com/emacs-tree-sitter/tree-sitter-langs/releases/download/0.13.75/tree-sitter-grammars.x86_64-unknown-linux-gnu.v0.13.75.tar.gz")
-                 (file-in-directory-p absolute-destination tsl411-test-root)
+                 (neomacs-melpa-path-inside-p absolute-destination tsl411-test-root)
                  (equal (file-name-directory absolute-destination)
                         (file-name-as-directory default-directory))
                  (eq ok-if-exists 'ok-if-already-exists))
@@ -159,7 +159,7 @@ const PRELUDE: &str = r####"
                  (functionp (plist-get arguments :filter))
                  (not (plist-member arguments :buffer))
                  (stringp bundle)
-                 (file-in-directory-p bundle tsl411-test-root)
+                 (neomacs-melpa-path-inside-p bundle tsl411-test-root)
                  (equal (file-truename default-directory)
                         (file-truename bin-dir))
                  (equal (tsl411-test-file-sha256 bundle)
@@ -187,7 +187,7 @@ const PRELUDE: &str = r####"
 
 (defun tsl411-test-delete-file (file &optional _trash)
   (let ((absolute-file (expand-file-name file default-directory)))
-    (unless (and (file-in-directory-p absolute-file tsl411-test-root)
+    (unless (and (neomacs-melpa-path-inside-p absolute-file tsl411-test-root)
                  (equal (file-name-directory absolute-file)
                         (file-name-as-directory default-directory))
                  (file-regular-p absolute-file)
@@ -506,7 +506,7 @@ fn public_require_discovers_owned_grammar_and_caches_language() -> ParityBatchCa
                :registered (copy-tree tree-sitter-languages)
                :load-path
                (mapcar (lambda (path)
-                         (if (file-in-directory-p path root)
+                         (if (neomacs-melpa-path-inside-p path root)
                              (tsl411-test-relative path)
                            path))
                        tree-sitter-load-path)

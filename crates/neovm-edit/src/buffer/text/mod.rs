@@ -13,9 +13,11 @@ mod snapshot;
 pub(in crate::buffer) use edit::TextExtentDelta;
 #[cfg(any(test, feature = "test-support"))]
 pub use edit::TextExtentDelta;
-pub use edit::{
-    TextChange, TextEditRange, TextExtent, TextInsertion, TextReplacement, TextTransposition,
-};
+pub use edit::{TextChange, TextEditRange, TextExtent};
+#[cfg(not(feature = "test-support"))]
+pub(crate) use edit::{TextInsertion, TextReplacement, TextTransposition};
+#[cfg(feature = "test-support")]
+pub use edit::{TextInsertion, TextReplacement, TextTransposition};
 #[cfg(feature = "test-support")]
 pub use emacs_bytes::emacs_char_to_byte_in_slice;
 #[cfg(not(feature = "test-support"))]

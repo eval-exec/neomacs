@@ -146,3 +146,29 @@ fn logcount_wrong_type() {
 fn install_test_runtime() {
     // Tagged heap is auto-created in test mode; no manual setup needed.
 }
+
+#[cfg(all(unix, not(miri)))]
+#[test]
+fn c2_editfns_lookup_group_name_concurrent_matches_baseline() {
+    let egid = unsafe { libc::getegid() } as u32;
+    let missing = u32::MAX - 1;
+    let expected = lookup_group_name(egid);
+    let expected_missing = lookup_group_name(missing);
+
+    let handles: Vec<_> = (0..8)
+        .map(|_| {
+            let expected = expected.clone();
+            let expected_missing = expected_missing.clone();
+            std::thread::spawn(move || {
+                for _ in 0..150 {
+                    assert_eq!(lookup_group_name(egid), expected);
+                    assert_eq!(lookup_group_name(missing), expected_missing);
+                }
+            })
+        })
+        .collect();
+
+    for handle in handles {
+        handle.join().expect("worker thread panicked");
+    }
+}

@@ -60,7 +60,7 @@ pub enum WriteCodingFallback {
 /// 1. `coding-system-for-write` (if bound and non-nil)
 /// 2. the buffer's visible `buffer-file-coding-system`
 /// 3. the caller's operation-specific fallback
-pub fn resolve_write_coding_system(
+pub(crate) fn resolve_write_coding_system(
     eval: &crate::emacs_core::eval::Context,
     buffer_id: neovm_edit::buffer::BufferId,
     fallback: WriteCodingFallback,

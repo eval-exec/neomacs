@@ -49,6 +49,26 @@ impl FrozenLegacyRoots {
     pub(crate) fn heap_identity(&self) -> HeapIdentity {
         self.heap
     }
+
+    pub(crate) fn words(&self) -> &[TaggedValue] {
+        &self.words
+    }
+
+    /// Test-only census observation. The words stay private, and this grants
+    /// no decoding right. The real source remains closed.
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn contains_for_test(&self, word: TaggedValue) -> bool {
+        self.words.contains(&word)
+    }
+
+    pub(crate) fn function_roots(&self) -> FrozenFunctionRoots {
+        if self.functions_quiescent {
+            FrozenFunctionRoots::Quiescent
+        } else {
+            FrozenFunctionRoots::MayBeActive
+        }
+    }
     /// Copies opaque words into `out`. Decoding still requires stopped
     /// authority for this heap. The stored vec stays private.
     #[cfg_attr(feature = "test-support", visibility::make(pub))]

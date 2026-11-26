@@ -130,17 +130,22 @@ pub(crate) fn register_bootstrap_vars(obarray: &mut neovm_value::symbol::Obarray
     obarray.define_special_variable("frame-title-format", title_format);
     obarray.define_special_variable("icon-title-format", title_format);
     obarray.seed_value("focus-follows-mouse", Value::NIL);
-    // frame.c:7636 DEFVAR_LISP. GNU's GUI default when the tool bar is drawn
-    // by Emacs itself (not an external GTK/NS toolkit bar) is
-    // (tab-bar-lines tool-bar-lines): adding/removing those bars does not
-    // implicitly resize the frame. Neomacs draws its own bars, so it takes
-    // the same branch.
-    obarray.define_special_variable(
-        "frame-inhibit-implied-resize",
-        Value::list(vec![
+    // GNU frame.c:7684-7692 selects this by compiled window-system profile,
+    // even in batch mode. The canonical Linux GTK3 and macOS NS references
+    // inhibit only tab-bar changes; Neomacs drawing its own tool bar does not
+    // change that observable default. Other graphical profiles retain the
+    // non-GTK/NS branch.
+    let inhibited_resize_parameters = if cfg!(any(target_os = "linux", target_os = "macos")) {
+        vec![Value::symbol("tab-bar-lines")]
+    } else {
+        vec![
             Value::symbol("tab-bar-lines"),
             Value::symbol("tool-bar-lines"),
-        ]),
+        ]
+    };
+    obarray.define_special_variable(
+        "frame-inhibit-implied-resize",
+        Value::list(inhibited_resize_parameters),
     );
     // frame.c:7475 DEFVAR_LISP, zero-init nil; assigned at terminal init.
     obarray.define_special_variable("terminal-frame", Value::NIL);

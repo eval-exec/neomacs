@@ -20,7 +20,8 @@ pub(crate) fn registration(error: &RegistrationError) -> Retry {
         | RegistrationError::ResidualSatb
         | RegistrationError::Publication
         | RegistrationError::PendingRoots
-        | RegistrationError::PendingYoung => Retry::Refuse,
+        | RegistrationError::PendingYoung
+        | RegistrationError::OwnerReserveHeld => Retry::Refuse,
     }
 }
 
@@ -63,6 +64,7 @@ pub fn rendezvous(error: &RendezvousError) -> Retry {
         | RendezvousError::Readers
         | RendezvousError::Capacity
         | RendezvousError::Root
-        | RendezvousError::Registration(_) => Retry::Refuse,
+        | RendezvousError::Registration(_)
+        | RendezvousError::TelemetryStoppedGcUnavailable => Retry::Refuse,
     }
 }

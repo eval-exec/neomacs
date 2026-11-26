@@ -396,6 +396,10 @@ fn convert_single_display_event(event: &DisplayEvent) -> Option<KbInputEvent> {
         } else {
             KbInputEvent::raw_tty_bytes(bytes.clone(), *emacs_frame_id)
         }),
+        DisplayEvent::ApplicationQuit { emacs_frame_id } => Some(KbInputEvent::NativeNonKey {
+            kind: keyboard::NativeNonKeyKind::PowerOff,
+            emacs_frame_id: *emacs_frame_id,
+        }),
         DisplayEvent::Key {
             key,
             modifiers,
@@ -509,6 +513,13 @@ fn convert_single_display_event(event: &DisplayEvent) -> Option<KbInputEvent> {
                 emacs_frame_id: *emacs_frame_id,
             })
         }
+        DisplayEvent::WindowResizeRequestCompleted {
+            request_id,
+            emacs_frame_id,
+        } => Some(KbInputEvent::ResizeRequestCompleted {
+            request_id: *request_id,
+            emacs_frame_id: *emacs_frame_id,
+        }),
         DisplayEvent::WindowClose { emacs_frame_id } => Some(KbInputEvent::WindowClose {
             emacs_frame_id: *emacs_frame_id,
         }),

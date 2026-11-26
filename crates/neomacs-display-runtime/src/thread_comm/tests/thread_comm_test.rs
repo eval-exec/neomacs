@@ -611,6 +611,51 @@ fn input_event_window_resize_construction() {
 }
 
 #[test]
+fn resize_request_completion_is_a_non_lossy_terminal_event() {
+    let (emacs, render) = ThreadComms::new().split();
+    let event = InputEvent::WindowResizeRequestCompleted {
+        request_id: GuiResizeRequestId::FIRST,
+        emacs_frame_id: 99,
+    };
+    assert!(!RenderComms::is_lossy_input_event(&event));
+    assert!(RenderComms::should_log_delivery(&event));
+    assert_eq!(
+        RenderComms::event_name(&event),
+        "window-resize-request-completed"
+    );
+    render.send_input(event);
+    assert!(matches!(
+        emacs.input_rx.try_recv().unwrap(),
+        InputEvent::WindowResizeRequestCompleted {
+            request_id,
+            emacs_frame_id: 99,
+        } if request_id == GuiResizeRequestId::FIRST
+    ));
+}
+
+#[test]
+fn application_quit_transport_preserves_frame_and_non_lossy_identity() {
+    let (emacs, render) = ThreadComms::new().split();
+    for frame in [0, 42, 0x1_0000_0000] {
+        let event = InputEvent::ApplicationQuit {
+            emacs_frame_id: frame,
+        };
+        assert!(!RenderComms::is_lossy_input_event(&event));
+        assert!(RenderComms::should_log_delivery(&event));
+        assert_eq!(RenderComms::event_name(&event), "application-quit");
+        render.send_input(event);
+        match emacs
+            .input_rx
+            .try_recv()
+            .expect("application Quit delivery")
+        {
+            InputEvent::ApplicationQuit { emacs_frame_id } => assert_eq!(emacs_frame_id, frame),
+            other => panic!("application Quit changed transport identity: {other:?}"),
+        }
+    }
+}
+
+#[test]
 fn input_event_window_close_construction() {
     let event = InputEvent::WindowClose {
         emacs_frame_id: 123,
@@ -1084,6 +1129,7 @@ fn render_command_resize_window() {
         width: 1024,
         height: 768,
         geometry_hints,
+        resize_request_id: GuiResizeRequestId::new(7),
     });
     match cmd {
         RenderCommand::Window(WindowCommand::ResizeWindow {
@@ -1091,11 +1137,13 @@ fn render_command_resize_window() {
             width,
             height,
             geometry_hints: actual_hints,
+            resize_request_id,
         }) => {
             assert_eq!(frame.raw_id(), 99);
             assert_eq!(width, 1024);
             assert_eq!(height, 768);
             assert_eq!(actual_hints, geometry_hints);
+            assert_eq!(resize_request_id, GuiResizeRequestId::new(7));
         }
         other => panic!("Expected ResizeWindow, got {:?}", other),
     }

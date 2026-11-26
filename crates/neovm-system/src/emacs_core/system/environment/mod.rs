@@ -294,14 +294,6 @@ impl ChildEnvironment {
     ) {
         command.set_exact_env(std::sync::Arc::clone(&self.entries));
     }
-
-    #[cfg(unix)]
-    pub(crate) fn apply_to_pty_command(&self, command: &mut portable_pty::CommandBuilder) {
-        command.env_clear();
-        for (name, value) in self.entries.iter() {
-            command.env(name, value);
-        }
-    }
 }
 
 /// Search an Emacs environment list using GNU's first-match semantics.

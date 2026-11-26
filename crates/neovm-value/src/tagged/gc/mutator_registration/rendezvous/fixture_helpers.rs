@@ -8,7 +8,8 @@ use super::super::EraKeeper;
 use super::*;
 pub(crate) use crate::tagged::gc::ProofEra as ParallelHeapEra;
 pub(crate) use crate::tagged::value::TaggedValue;
-pub(crate) use std::sync::mpsc::{self, Receiver};
+pub(crate) use std::sync::mpsc;
+pub(crate) use std::sync::mpsc::Receiver;
 pub(crate) use std::thread;
 pub(crate) use std::time::Duration;
 
@@ -56,6 +57,22 @@ pub enum RootedRendezvousCase {
     KeeperStartingOwnerWaitsRefuseUntilBootstrapOpens,
     AlreadyPublishedOwnerWaitRequestRefuses,
     KeeperResumeDebtRefusesNextStopUntilOwnerApplies,
+    FirstRestoredOwnerWaitsForTheFinalPeerDebt,
+    PoisonWakesARestoredOwnerWaitingForPeerDebt,
+    StopAndUnrestoredOwnerRefuseInsteadOfWaitingForThemselves,
+    NativeReceiptOutlastsAGateHolderAfterTheCommit,
+    StoppedKeeperWaitsOutABriefGateHolder,
+    KeeperTraceWaitsOutABriefGateHolder,
+    KeeperCompleteWaitsOutABriefGateHolder,
+    KeeperCompleteRetriesAnEntryHeldThroughTheReaderScan,
+    KeeperTakesSummariesThroughItsStop,
+    ABrokenCensusUnderAStopIsNotBusy,
+    KeeperWorldRootCheckWaitsOutABriefGateHolder,
+    KeeperRootReaderWaitsOutAnOwnerMomentOnItsEntry,
+    KeeperReenteringAnEntryItHoldsRefusesAtOnce,
+    KeeperGrantsTheSerialHeadOnlyInsideItsTracedStop,
+    KeeperBoundedStopPendsAndKeepsItsEpoch,
+    KeeperRoutesABatonGroupHeadAndGrantsItAlone,
 }
 
 impl RootedRendezvousCase {
@@ -92,6 +109,22 @@ impl RootedRendezvousCase {
         Self::KeeperStartingOwnerWaitsRefuseUntilBootstrapOpens,
         Self::AlreadyPublishedOwnerWaitRequestRefuses,
         Self::KeeperResumeDebtRefusesNextStopUntilOwnerApplies,
+        Self::FirstRestoredOwnerWaitsForTheFinalPeerDebt,
+        Self::PoisonWakesARestoredOwnerWaitingForPeerDebt,
+        Self::StopAndUnrestoredOwnerRefuseInsteadOfWaitingForThemselves,
+        Self::NativeReceiptOutlastsAGateHolderAfterTheCommit,
+        Self::StoppedKeeperWaitsOutABriefGateHolder,
+        Self::KeeperTraceWaitsOutABriefGateHolder,
+        Self::KeeperCompleteWaitsOutABriefGateHolder,
+        Self::KeeperCompleteRetriesAnEntryHeldThroughTheReaderScan,
+        Self::KeeperTakesSummariesThroughItsStop,
+        Self::ABrokenCensusUnderAStopIsNotBusy,
+        Self::KeeperWorldRootCheckWaitsOutABriefGateHolder,
+        Self::KeeperRootReaderWaitsOutAnOwnerMomentOnItsEntry,
+        Self::KeeperReenteringAnEntryItHoldsRefusesAtOnce,
+        Self::KeeperGrantsTheSerialHeadOnlyInsideItsTracedStop,
+        Self::KeeperBoundedStopPendsAndKeepsItsEpoch,
+        Self::KeeperRoutesABatonGroupHeadAndGrantsItAlone,
     ];
 }
 
@@ -135,15 +168,26 @@ pub(crate) fn activate<'era>(
     }
 }
 
-pub(crate) fn apply(mut image: ResumeGcImage<'_, '_>) {
-    loop {
-        match image.apply() {
-            Ok(()) => return,
-            Err(failure) if failure.reason == RendezvousError::Busy => {
-                image = failure.into_image();
-                thread::yield_now();
-            }
-            Err(failure) => panic!("unexpected resume refusal: {:?}", failure.reason),
+pub(crate) fn apply(image: ResumeGcImage<'_, '_>) {
+    // Use the product's ownership-preserving admission policy. A Busy refusal
+    // precedes restoration; this never retries a predicate wait or assertion.
+    image.apply_wait().unwrap();
+}
+
+/// Serial histories and intervals whose actors are already paused must succeed
+/// on the first admission. Existing concurrent callers retain their old policy;
+/// their activation, ACK and retirement admission gaps are audited separately.
+#[derive(Clone, Copy)]
+pub(crate) enum ObservationAdmission {
+    Once,
+    ExistingConcurrentRetry,
+}
+
+impl ObservationAdmission {
+    fn attempt<T>(self, mut operation: impl FnMut() -> Result<T, RendezvousError>) -> T {
+        match self {
+            Self::Once => operation().unwrap(),
+            Self::ExistingConcurrentRetry => retry(operation),
         }
     }
 }
@@ -213,7 +257,15 @@ pub(crate) fn seed(owner: &mut Mutator<'_>, marker: i64) {
 }
 
 pub(crate) fn read_words(stopped: &AllStopped<'_>, key: MutatorKey) -> Vec<usize> {
-    retry(|| {
+    read_words_at(ObservationAdmission::ExistingConcurrentRetry, stopped, key)
+}
+
+pub(crate) fn read_words_at(
+    admission: ObservationAdmission,
+    stopped: &AllStopped<'_>,
+    key: MutatorKey,
+) -> Vec<usize> {
+    admission.attempt(|| {
         stopped.with_root_reader(key, |reader| {
             let mut words = Vec::new();
             reader.append_words(&mut words);
@@ -224,15 +276,23 @@ pub(crate) fn read_words(stopped: &AllStopped<'_>, key: MutatorKey) -> Vec<usize
 }
 
 pub(crate) fn trace_owners(stopped: &mut AllStopped<'_>, keys: &[MutatorKey]) -> Vec<Vec<usize>> {
-    retry(|| {
+    trace_owners_at(ObservationAdmission::ExistingConcurrentRetry, stopped, keys)
+}
+
+pub(crate) fn trace_owners_at(
+    admission: ObservationAdmission,
+    stopped: &mut AllStopped<'_>,
+    keys: &[MutatorKey],
+) -> Vec<Vec<usize>> {
+    admission.attempt(|| {
         stopped.trace(|guard, _proof| {
             let mut result = Vec::new();
             for key in keys {
-                let words = read_words(guard, *key);
+                let words = read_words_at(admission, guard, *key);
                 assert_eq!(words.len(), 1);
                 assert_ne!(words[0], 0);
                 result.push(words);
-                retry(|| {
+                admission.attempt(|| {
                     guard.with_owner_image(*key, |image| {
                         assert!(image.roots_empty());
                         assert!(image.young_empty());

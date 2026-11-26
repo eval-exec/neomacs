@@ -1,5 +1,5 @@
-//! Tests for the GNU-style minibuffer teardown boundary
-//! (`teardown_minibuffer_level_in_state`).
+//! Tests for the phased minibuffer teardown boundary
+//! (`teardown_expired_minibuffer_phased`).
 //!
 //! These assert the two teardown invariants neomacs previously dropped: after
 //! the boundary runs at the outermost level, the expired ` *Minibuf-N*` has
@@ -7,15 +7,14 @@
 //! minibuffer window is exactly one line tall (the analogue of GNU's
 //! unconditional `resize_mini_window (minibuf_window, 0)` at unwind).
 //!
-//! Frame creation and `grow_mini_window` are display traits. The teardown
-//! function stays private in this crate; the cfg(test) delegate is the route.
-//! The context is the bare constructor (`new_context`), the same one
-//! `Context::new(unit_runtime())` was. Assertions are unchanged.
+//! The test drives the production sequence: erase, then inactive mode with no
+//! frame or buffer field borrow live, then restore and resize. The context is
+//! the bare constructor (`new_context`). Assertions are unchanged.
 
 use crate::emacs_core::eval::Context;
 use crate::emacs_core::minibuffer::{
     activate_minibuffer_window_in_state, find_or_create_minibuffer_buffer_in_state,
-    teardown_minibuffer_level_in_state_for_test,
+    teardown_expired_minibuffer_phased,
 };
 use crate::window::{DisplayFrameExt, DisplayFrameManagerExt};
 use neovm_value::minibuffer_state::MinibufferEntryLevel;
@@ -108,20 +107,9 @@ fn run_teardown_and_collect(
     };
 
     // Outermost teardown: depth_after_pop == 0 (no nested minibuffer remains).
-    let outcome = {
-        let (frames, buffers, minibuffer_selected_window, active_minibuffer_window) =
-            ev.frame_manager_buffers_and_minibuffer_selection_mut();
-        teardown_minibuffer_level_in_state_for_test(
-            frames,
-            buffers,
-            minibuffer_selected_window,
-            active_minibuffer_window,
-            minibuf_id,
-            0,
-            saved,
-            || Ok(Value::NIL),
-        )
-    };
+    // Inactive mode is unbound on this bare context, so the phased path's
+    // mode step returns nil without running Lisp.
+    let outcome = teardown_expired_minibuffer_phased(ev, minibuf_id, 0, saved);
     assert!(
         outcome.inactive_mode_result.is_ok(),
         "teardown inactive-mode hook should succeed"

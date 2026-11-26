@@ -1,8 +1,8 @@
 //! UI overlay rendering methods for WgpuRenderer.
 
 use super::super::glyph_atlas::{
-    AnyAtlasEntry, GlyphAtlasHandle, GlyphKey, GlyphMaterialKind, SubpixelRequest, WgpuGlyphAtlas,
-    glyph_font_identity,
+    AnyAtlasEntry, ComposedGlyphLookup, GlyphAtlasHandle, GlyphKey, GlyphMaterialKind,
+    SubpixelRequest, WgpuGlyphAtlas, glyph_font_identity,
 };
 use super::super::vertex::{GlyphVertex, RectVertex, RoundedRectVertex, Uniforms};
 use super::TitleFadeEntry;
@@ -38,6 +38,34 @@ pub(super) fn toolbar_texture_id(
     icon_textures
         .get(&style.realize(image.clone(), scale))
         .copied()
+}
+
+/// Physical device-pixel quad for one toolbar icon.
+///
+/// The texture's own physical extent is the quad extent, so the sampled icon is
+/// 1:1: a themed vector has already been realized at exactly this extent, and a
+/// GNU image keeps its resolved (never upscaled) extent.  The quad is centered
+/// on the item and snapped to whole device pixels, so a fractional window scale
+/// never lands a stroke edge on a half pixel.
+pub(super) fn toolbar_icon_quad(
+    bounds: neomacs_display_protocol::types::Rect,
+    raster: neomacs_display_protocol::ImageRasterExtent,
+    scale: DeviceScale,
+) -> (f32, f32, f32, f32) {
+    let (width, height) = raster.dimensions();
+    let scale = scale.get();
+    let physical_width = width as f32;
+    let physical_height = height as f32;
+    let center_x = (bounds.x + bounds.width / 2.0) * scale;
+    let center_y = (bounds.y + bounds.height / 2.0) * scale;
+    // Snap in device space, then return to the logical space the overlay shader
+    // maps through the surface scale.
+    (
+        (center_x - physical_width / 2.0).round() / scale,
+        (center_y - physical_height / 2.0).round() / scale,
+        physical_width / scale,
+        physical_height / scale,
+    )
 }
 
 impl WgpuRenderer {
@@ -83,8 +111,14 @@ impl WgpuRenderer {
             let tex_u_max = uv.max()[0];
             let tex_v_min = uv.min()[1];
             let tex_v_max = uv.max()[1];
-            let glyph_x = *x + metrics.bearing_x / sf;
-            let glyph_y = *y + font_ascent - metrics.bearing_y / sf;
+            let (glyph_x, glyph_y) = super::snap_overlay_glyph_origin(
+                *x,
+                *y,
+                metrics.bearing_x,
+                metrics.bearing_y,
+                font_ascent,
+                sf,
+            );
             let glyph_w = content_rect.width() as f32 / sf;
             let glyph_h = content_rect.height() as f32 / sf;
 
@@ -378,7 +412,10 @@ impl WgpuRenderer {
                 multiview_mask: None,
             });
             pass.set_pipeline(&self.pipelines.glyph);
-            pass.set_bind_group(0, self.frame_parameters().binding(), &[]);
+            let Ok(frame_params) = self.frame_parameters() else {
+                return;
+            };
+            pass.set_bind_group(0, frame_params.binding(), &[]);
             pass.set_vertex_buffer(0, buffer.buffer_slice());
 
             let mut vert_idx = 0u32;
@@ -436,7 +473,9 @@ impl WgpuRenderer {
             _pivot_padding: 0.0,
             content_pivot: [0.0; 2],
         };
-        let draw = self.parameters(uniforms.screen_size, uniforms.time);
+        let Ok(draw) = self.parameters(uniforms.screen_size, uniforms.time) else {
+            return;
+        };
 
         let tb_h = titlebar_height;
         let btn_w = 46.0_f32;
@@ -723,7 +762,9 @@ impl WgpuRenderer {
             _pivot_padding: 0.0,
             content_pivot: [0.0; 2],
         };
-        let draw = self.parameters(uniforms.screen_size, uniforms.time);
+        let Ok(draw) = self.parameters(uniforms.screen_size, uniforms.time) else {
+            return;
+        };
 
         let mut rect_vertices: Vec<RectVertex> = Vec::new();
         let indicator_width = 3.0_f32;
@@ -863,14 +904,16 @@ impl WgpuRenderer {
             _pivot_padding: 0.0,
             content_pivot: [0.0; 2],
         };
-        let draw = self.parameters(uniforms.screen_size, uniforms.time);
+        let Ok(draw) = self.parameters(uniforms.screen_size, uniforms.time) else {
+            return;
+        };
 
         let font_size_bits = 0.0_f32.to_bits();
         // A preedit update is one replaceable Unicode text run.  Shape it as
         // a whole, just like ordinary frame text: advancing once per Rust
         // `char` is incorrect for fallback CJK fonts, combining marks,
         // ligatures, emoji sequences, and bidirectional scripts.
-        let shaped_preedit = glyph_atlas.get_or_create_composed_atlas(
+        let shaped_preedit = glyph_atlas.get_or_create_composed_atlas_lookup(
             &self.device,
             &self.queue,
             preedit_text,
@@ -881,14 +924,21 @@ impl WgpuRenderer {
             SubpixelBin::Zero,
             SubpixelRequest::Disabled,
         );
-        let preedit_width = shaped_preedit.as_ref().map_or_else(
-            || preedit_text.chars().count() as f32 * glyph_atlas.default_char_width(),
-            |handles| {
-                handles
+        let (shaped_preedit, preedit_width) = match shaped_preedit {
+            Some(ComposedGlyphLookup::Ink(handles)) => {
+                let width = handles
                     .first()
-                    .map_or(0.0, |handle| handle.advance_width / self.scale_factor)
-            },
-        );
+                    .map_or(0.0, |handle| handle.advance_width / self.scale_factor);
+                (handles, width)
+            }
+            Some(ComposedGlyphLookup::Empty { advance_width }) => {
+                (Vec::new(), advance_width / self.scale_factor)
+            }
+            None => (
+                Vec::new(),
+                preedit_text.chars().count() as f32 * glyph_atlas.default_char_width(),
+            ),
+        };
 
         // Background and underline rects
         let bg_color = Color::new(0.15, 0.15, 0.2, 0.95).srgb_to_linear();
@@ -953,13 +1003,9 @@ impl WgpuRenderer {
             [c.r, c.g, c.b, c.a]
         };
         let mut overlay_glyphs: Vec<(GlyphAtlasHandle, f32, f32, [f32; 4])> = shaped_preedit
-            .map(|handles| {
-                handles
-                    .into_iter()
-                    .map(|handle| (handle, px + 2.0, py, text_color))
-                    .collect()
-            })
-            .unwrap_or_default();
+            .into_iter()
+            .map(|handle| (handle, px + 2.0, py, text_color))
+            .collect();
         self.render_overlay_glyphs(view, &mut overlay_glyphs, glyph_atlas, &draw);
     }
 
@@ -985,7 +1031,9 @@ impl WgpuRenderer {
             _pivot_padding: 0.0,
             content_pivot: [0.0; 2],
         };
-        let draw = self.parameters(uniforms.screen_size, uniforms.time);
+        let Ok(draw) = self.parameters(uniforms.screen_size, uniforms.time) else {
+            return;
+        };
 
         // Filled rounded rect covering the whole frame with alpha=1 inside, 0 outside.
         // border_width=0 triggers filled mode in the shader.
@@ -1079,7 +1127,9 @@ impl WgpuRenderer {
         frame_glyphs: &FrameGlyphBuffer,
         glyph_atlas: &mut WgpuGlyphAtlas,
     ) {
-        let draw = self.frame_parameters();
+        let Ok(draw) = self.frame_parameters() else {
+            return;
+        };
         if !self.effects.breadcrumb.enabled {
             return;
         }
@@ -1384,7 +1434,9 @@ impl WgpuRenderer {
         glyph_atlas: &mut WgpuGlyphAtlas,
         wpm: f32,
     ) {
-        let draw = self.frame_parameters();
+        let Ok(draw) = self.frame_parameters() else {
+            return;
+        };
         // Find the selected window (non-minibuffer)
         let selected = frame_glyphs
             .window_infos
@@ -1512,7 +1564,9 @@ impl WgpuRenderer {
             _pivot_padding: 0.0,
             content_pivot: [0.0; 2],
         };
-        let draw = self.parameters(uniforms.screen_size, uniforms.time);
+        let Ok(draw) = self.parameters(uniforms.screen_size, uniforms.time) else {
+            return;
+        };
 
         let char_width = glyph_atlas.default_char_width();
         let line_height = glyph_atlas.default_line_height();
@@ -1622,7 +1676,9 @@ impl WgpuRenderer {
             _pivot_padding: 0.0,
             content_pivot: [0.0; 2],
         };
-        let draw = self.parameters(uniforms.screen_size, uniforms.time);
+        let Ok(draw) = self.parameters(uniforms.screen_size, uniforms.time) else {
+            return;
+        };
 
         // Semi-transparent white overlay in linear space
         let flash_color = Color::new(1.0, 1.0, 1.0, alpha).srgb_to_linear();
@@ -1699,7 +1755,9 @@ impl WgpuRenderer {
             _pivot_padding: 0.0,
             content_pivot: [0.0; 2],
         };
-        let draw = self.parameters(uniforms.screen_size, uniforms.time);
+        let Ok(draw) = self.parameters(uniforms.screen_size, uniforms.time) else {
+            return;
+        };
 
         let bg_color = Color::new(bg.0, bg.1, bg.2, 1.0).srgb_to_linear();
 
@@ -1813,7 +1871,11 @@ impl WgpuRenderer {
                         (handle, bounds.x + positioned.padding(), text_y, text_color)
                     }))
                 }
-                Err(error) => tracing::warn!(?error, "menu heading rasterization failed"),
+                Err(error) => {
+                    if !error.is_stable_raster_failure() {
+                        tracing::warn!(?error, "menu heading rasterization failed");
+                    }
+                }
             }
         }
         self.render_overlay_glyphs(view, &mut overlay_glyphs, glyph_atlas, &draw);
@@ -1844,7 +1906,6 @@ impl WgpuRenderer {
         let menu_fg = rgb(content.menu_foreground());
         let menu_bg = rgb(content.menu_background());
         let tool_fg = rgb(content.tool_foreground());
-        let icon_size = content.icon_size();
         let padding = content.padding();
         let icon_style = content.icon_style();
         let device_scale = DeviceScale::new(self.scale_factor).expect("validated renderer scale");
@@ -1859,10 +1920,11 @@ impl WgpuRenderer {
             _pivot_padding: 0.0,
             content_pivot: [0.0; 2],
         };
-        let draw = self.parameters(uniforms.screen_size, uniforms.time);
+        let Ok(draw) = self.parameters(uniforms.screen_size, uniforms.time) else {
+            return;
+        };
 
         let bg_color = Color::new(menu_bg.0, menu_bg.1, menu_bg.2, 1.0).srgb_to_linear();
-        let icon_sz = icon_size as f32;
         let pad = padding as f32;
 
         let mut rect_verts: Vec<RectVertex> = Vec::new();
@@ -2016,7 +2078,11 @@ impl WgpuRenderer {
                         (handle, bounds.x + positioned.padding(), text_y, text_color)
                     }))
                 }
-                Err(error) => tracing::warn!(?error, "menu heading rasterization failed"),
+                Err(error) => {
+                    if !error.is_stable_raster_failure() {
+                        tracing::warn!(?error, "menu heading rasterization failed");
+                    }
+                }
             }
         }
         self.render_overlay_glyphs(view, &mut overlay_glyphs, glyph_atlas, &draw);
@@ -2030,8 +2096,6 @@ impl WgpuRenderer {
                 if item.is_separator() {
                     continue;
                 }
-                let icon_x = bounds.x + (bounds.width - icon_sz) / 2.0;
-                let icon_y = bounds.y + (bounds.height - icon_sz) / 2.0;
                 let alpha = if item.enabled { 1.0 } else { 0.4 };
                 let tint = [1.0, 1.0, 1.0, alpha];
                 if let Some(image) = item.image.as_ref()
@@ -2040,6 +2104,8 @@ impl WgpuRenderer {
                     && let Some(cached) = self.caches.image.get(image_id)
                 {
                     let bg = cached.bind_group.clone();
+                    let (icon_x, icon_y, icon_w, icon_h) =
+                        toolbar_icon_quad(bounds, cached.raster, device_scale);
                     let verts = [
                         GlyphVertex {
                             position: [icon_x, icon_y],
@@ -2047,12 +2113,12 @@ impl WgpuRenderer {
                             color: tint,
                         },
                         GlyphVertex {
-                            position: [icon_x + icon_sz, icon_y],
+                            position: [icon_x + icon_w, icon_y],
                             tex_coords: [1.0, 0.0],
                             color: tint,
                         },
                         GlyphVertex {
-                            position: [icon_x + icon_sz, icon_y + icon_sz],
+                            position: [icon_x + icon_w, icon_y + icon_h],
                             tex_coords: [1.0, 1.0],
                             color: tint,
                         },
@@ -2062,12 +2128,12 @@ impl WgpuRenderer {
                             color: tint,
                         },
                         GlyphVertex {
-                            position: [icon_x + icon_sz, icon_y + icon_sz],
+                            position: [icon_x + icon_w, icon_y + icon_h],
                             tex_coords: [1.0, 1.0],
                             color: tint,
                         },
                         GlyphVertex {
-                            position: [icon_x, icon_y + icon_sz],
+                            position: [icon_x, icon_y + icon_h],
                             tex_coords: [0.0, 1.0],
                             color: tint,
                         },
@@ -2148,7 +2214,6 @@ impl WgpuRenderer {
         let rgb = |color: Color| (color.r, color.g, color.b);
         let fg = rgb(content.foreground());
         let bg = rgb(content.background());
-        let icon_size = content.icon_size();
         let padding = content.padding();
         let icon_style = content.icon_style();
         let device_scale = DeviceScale::new(self.scale_factor).expect("validated renderer scale");
@@ -2163,10 +2228,11 @@ impl WgpuRenderer {
             _pivot_padding: 0.0,
             content_pivot: [0.0; 2],
         };
-        let draw = self.parameters(uniforms.screen_size, uniforms.time);
+        let Ok(draw) = self.parameters(uniforms.screen_size, uniforms.time) else {
+            return;
+        };
 
         let bg_color = Color::new(bg.0, bg.1, bg.2, 1.0).srgb_to_linear();
-        let icon_sz = icon_size as f32;
         let pad = padding as f32;
 
         // --- Pass 1: Background bar + item highlights ---
@@ -2290,8 +2356,6 @@ impl WgpuRenderer {
                 if item.is_separator() {
                     continue;
                 }
-                let icon_x = bounds.x + (bounds.width - icon_sz) / 2.0;
-                let icon_y = bounds.y + (bounds.height - icon_sz) / 2.0;
                 let alpha = if item.enabled { 1.0 } else { 0.4 };
                 let tint = [1.0, 1.0, 1.0, alpha];
                 if let Some(image) = item.image.as_ref()
@@ -2300,6 +2364,8 @@ impl WgpuRenderer {
                     && let Some(cached) = self.caches.image.get(image_id)
                 {
                     let bg = cached.bind_group.clone();
+                    let (icon_x, icon_y, icon_w, icon_h) =
+                        toolbar_icon_quad(bounds, cached.raster, device_scale);
                     let verts = [
                         GlyphVertex {
                             position: [icon_x, icon_y],
@@ -2307,12 +2373,12 @@ impl WgpuRenderer {
                             color: tint,
                         },
                         GlyphVertex {
-                            position: [icon_x + icon_sz, icon_y],
+                            position: [icon_x + icon_w, icon_y],
                             tex_coords: [1.0, 0.0],
                             color: tint,
                         },
                         GlyphVertex {
-                            position: [icon_x + icon_sz, icon_y + icon_sz],
+                            position: [icon_x + icon_w, icon_y + icon_h],
                             tex_coords: [1.0, 1.0],
                             color: tint,
                         },
@@ -2322,12 +2388,12 @@ impl WgpuRenderer {
                             color: tint,
                         },
                         GlyphVertex {
-                            position: [icon_x + icon_sz, icon_y + icon_sz],
+                            position: [icon_x + icon_w, icon_y + icon_h],
                             tex_coords: [1.0, 1.0],
                             color: tint,
                         },
                         GlyphVertex {
-                            position: [icon_x, icon_y + icon_sz],
+                            position: [icon_x, icon_y + icon_h],
                             tex_coords: [0.0, 1.0],
                             color: tint,
                         },

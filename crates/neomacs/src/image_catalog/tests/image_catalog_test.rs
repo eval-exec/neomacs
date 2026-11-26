@@ -3,7 +3,6 @@ use neomacs_display_protocol::image_diagnostic::ImageDiagnostic;
 use neomacs_display_protocol::{ImageFrameIndex, ImageRealization};
 use neomacs_display_runtime::render_thread::ImageRenderState;
 use neomacs_display_runtime::render_thread::{ImageProbeSource, probe_image_layout};
-use neovm_core::emacs_core::Context;
 use neovm_core::emacs_core::Value;
 use neovm_core::emacs_core::image::image_load_identity;
 use neovm_core::emacs_core::image_catalog::ImageSizeLimit;
@@ -14,10 +13,6 @@ use neovm_core::emacs_core::image_catalog::{
 use neovm_core::emacs_core::value::list_to_vec;
 use std::sync::Arc;
 use std::time::Instant;
-
-thread_local! {
-    static IMAGE_SPEC_TEST_CONTEXT: Context = neovm_core::emacs_core::eval_hook_installers::new_context();
-}
 
 use neomacs_display_protocol::ImageAnimationPolicy;
 
@@ -36,16 +31,14 @@ fn test_catalog(
     )
 }
 
-fn file_request(path: &str) -> ImageResolveRequest {
-    let spec = IMAGE_SPEC_TEST_CONTEXT.with(|_| {
-        Value::list(vec![
-            Value::symbol("image"),
-            Value::keyword(":type"),
-            Value::symbol("png"),
-            Value::keyword(":file"),
-            Value::string(path),
-        ])
-    });
+fn file_request_on_active_heap(path: &str) -> ImageResolveRequest {
+    let spec = Value::list(vec![
+        Value::symbol("image"),
+        Value::keyword(":type"),
+        Value::symbol("png"),
+        Value::keyword(":file"),
+        Value::string(path),
+    ]);
     let items = list_to_vec(&spec).expect("test image spec is a list");
     ImageResolveRequest {
         spec: ImageSpecIdentity::from_lisp_spec(&spec).expect("test image spec"),
@@ -58,7 +51,13 @@ fn file_request(path: &str) -> ImageResolveRequest {
         animation: ImageAnimationPolicy::disabled(),
         frame: Default::default(),
         realization: Default::default(),
+        failed_extent: Default::default(),
     }
+}
+
+fn file_request(path: &str) -> ImageResolveRequest {
+    let _ctx = neovm_core::emacs_core::eval_hook_installers::new_context();
+    file_request_on_active_heap(path)
 }
 
 /// These tests exercise scheduling, not the size bound: every lookup here
@@ -194,9 +193,11 @@ fn invalidating_dependency_retires_old_identity_and_next_lookup_reloads() {
     ));
 
     catalog.invalidate(ImageInvalidation::Dependency(request.source.clone()));
+    // The flushed identity is freed immediately (GNU `uncache_image`), not
+    // merely marked for presentation-safe retirement.
     assert!(matches!(
         cmd_rx.try_recv().expect("old image identity retired"),
-        RenderCommand::Asset(AssetCommand::ImageRetire { image }) if image == first
+        RenderCommand::Asset(AssetCommand::ImageFlush { image }) if image == first
     ));
 
     let second = lookup(&catalog, request).placement().image_id();
@@ -210,10 +211,11 @@ fn invalidating_dependency_retires_old_identity_and_next_lookup_reloads() {
 
 #[test]
 fn invalidating_spec_preserves_other_spec_that_uses_same_dependency() {
+    let _ctx = neovm_core::emacs_core::eval_hook_installers::new_context();
     let (cmd_tx, cmd_rx) = neomacs_display_runtime::thread_comm::RenderCommandSender::unbounded();
     let metadata = Arc::new(ImageRenderState::default());
     let catalog = test_catalog(cmd_tx, None, metadata, None);
-    let first = file_request("/tmp/multi-page.png");
+    let first = file_request_on_active_heap("/tmp/multi-page.png");
     let mut second = first.clone();
     let second_spec = Value::list(vec![
         Value::symbol("image"),
@@ -235,9 +237,13 @@ fn invalidating_spec_preserves_other_spec_that_uses_same_dependency() {
     catalog.invalidate(ImageInvalidation::Spec {
         spec: first.spec.clone(),
     });
+    // GNU `image-flush` -> `uncache_image` frees the matching images at once,
+    // so the retired identity is materialized by the immediate-flush command
+    // rather than a presentation-safe retirement; every identity assertion
+    // below is unchanged.
     assert!(matches!(
         cmd_rx.try_recv().expect("only exact spec identity freed"),
-        RenderCommand::Asset(AssetCommand::ImageRetire { image }) if image == first_id
+        RenderCommand::Asset(AssetCommand::ImageFlush { image }) if image == first_id
     ));
     assert!(cmd_rx.try_recv().is_err());
 
@@ -446,7 +452,7 @@ fn pending_geometry_resolves_from_the_header_before_any_pixel_exists() {
         Some(RedisplayWaker::new(redisplay)),
     );
     let fixture = neomacs_infra::workspace_root().join("test/data/image/blank-100x200.png");
-    let mut request = file_request(fixture.to_str().expect("utf8 fixture path"));
+    let mut request = file_request_on_active_heap(fixture.to_str().expect("utf8 fixture path"));
     // 100x200 with only a width clamp: the decoded layout is 50x100, where the
     // pre-header placeholder reserves the clamp square 50x50 instead.
     request.size = ImageSizeSpec::new(AxisSize::AtMost(50), AxisSize::Native);
@@ -454,13 +460,25 @@ fn pending_geometry_resolves_from_the_header_before_any_pixel_exists() {
     let ImageLookup::Pending(placeholder) = lookup(&catalog, request.clone()) else {
         panic!("a new image lookup begins pending");
     };
+    // The header probe runs off-thread, so it can publish 50x100 between the
+    // catalog reserving this slot and this lookup returning it: lookup_inner
+    // adopts header geometry that landed since the reservation.  Both
+    // observations are the same reservation, so pin the request's placeholder
+    // value directly and accept either slot here.  What this test exists for
+    // is the refinement below, while no pixel exists.
     assert_eq!(
-        (
-            placeholder.placement().width(),
-            placeholder.placement().height()
-        ),
+        placeholder_image_extent(&request).dimensions(),
         (50, 50),
-        "the slot starts on the request's pinned placeholder"
+        "the request pins the clamp-square placeholder"
+    );
+    let initial = (
+        placeholder.placement().width(),
+        placeholder.placement().height(),
+    );
+    assert!(
+        matches!(initial, (50, 50) | (50, 100)),
+        "a new slot holds the pinned placeholder or the header geometry the \
+         off-thread probe already published, got {initial:?}"
     );
     let RenderCommand::Asset(AssetCommand::ImageLoadFile { load, .. }) =
         cmd_rx.try_recv().expect("image load command")
@@ -671,7 +689,7 @@ fn each_lookup_carries_the_bound_it_was_made_under() {
     });
     catalog.lookup(request, ImageSizeLimit::from_axis_pixels(4096));
 
-    // The first load, the retirement of its identity, then the reload.
+    // The first load, the immediate flush of its identity, then the reload.
     assert!(matches!(
         cmd_rx.try_recv().expect("first load"),
         RenderCommand::Asset(AssetCommand::ImageLoadFile { limit, .. })
@@ -679,7 +697,7 @@ fn each_lookup_carries_the_bound_it_was_made_under() {
     ));
     assert!(matches!(
         cmd_rx.try_recv().expect("retirement"),
-        RenderCommand::Asset(AssetCommand::ImageRetire { .. })
+        RenderCommand::Asset(AssetCommand::ImageFlush { .. })
     ));
     assert!(matches!(
         cmd_rx.try_recv().expect("reload"),
@@ -733,7 +751,11 @@ fn a_refused_load_is_a_failed_lookup_carrying_gnus_diagnostic() {
 
     metadata.publish_terminal(
         load,
-        ImageDecodeTerminal::Failed(ImageDiagnostic::InvalidSize),
+        ImageDecodeTerminal::Failed(
+            neomacs_display_protocol::image_diagnostic::ImageDecodeFailure::new(
+                ImageDiagnostic::InvalidSize,
+            ),
+        ),
     );
 
     let ImageLookup::Failed(failed) = catalog.lookup(request, ImageSizeLimit::UNLIMITED) else {
@@ -742,10 +764,11 @@ fn a_refused_load_is_a_failed_lookup_carrying_gnus_diagnostic() {
     assert_eq!(failed.load(), load);
     assert_eq!(failed.error, ImageDiagnostic::InvalidSize);
     assert_eq!(failed.error.message(), OversizedImage::MESSAGE);
+    assert_eq!(failed.placement().image_id(), slot.image_id());
     assert_eq!(
         failed.placement().dimensions(),
-        slot.dimensions(),
-        "the reserved slot survives the refusal, so the frame does not move"
+        (30, 30),
+        "a failed image adopts GNU's 30x30 placeholder geometry"
     );
 }
 
@@ -766,10 +789,11 @@ fn public_catalog_invalidation_retires_cpu_metadata_before_gpu_admission() {
     let mut request = file_request(path.to_str().expect("UTF-8 image fixture"));
     request.size = ImageSizeSpec::default();
 
-    let queried = catalog
-        .resolve_sync(request.clone(), ImageSizeLimit::UNLIMITED)
-        .expect("CPU metadata query must finish without a GPU")
-        .expect("valid PNG has metadata");
+    let ImageSyncResolution::Ready(queried) =
+        catalog.resolve_sync(request.clone(), ImageSizeLimit::UNLIMITED)
+    else {
+        panic!("valid PNG must resolve as Ready");
+    };
     assert_eq!(
         queried.metadata.layout,
         neomacs_display_protocol::ImageLayoutExtent::new(100, 200)
@@ -803,4 +827,127 @@ fn public_catalog_invalidation_retires_cpu_metadata_before_gpu_admission() {
         old.load().image(),
         "a retired source identity cannot be reused by the next lookup"
     );
+}
+
+#[test]
+fn tiff_pages_keep_independent_known_geometry() {
+    use neomacs_display_protocol::image_diagnostic::{ImageFormatName, ImageLoadIdentity};
+    let (tx, _rx) = neomacs_display_runtime::thread_comm::RenderCommandSender::unbounded();
+    let metadata = Arc::new(ImageRenderState::default());
+    let catalog = test_catalog(tx, None, metadata, None);
+    let mut first = file_request("pages.tiff");
+    first.identity =
+        ImageLoadIdentity::new(ImageFormatName::Tiff, first.identity.subject().clone());
+    let mut second = first.clone();
+    second.frame = ImageFrameIndex::new(1);
+    catalog.remember_geometry(&first, ImageLayoutExtent::new(2, 1));
+    assert_eq!(catalog.known_geometry(&second), None);
+    catalog.remember_geometry(&second, ImageLayoutExtent::new(3, 2));
+    assert_eq!(
+        catalog.known_geometry(&first),
+        Some(ImageLayoutExtent::new(2, 1))
+    );
+    assert_eq!(
+        catalog.known_geometry(&second),
+        Some(ImageLayoutExtent::new(3, 2))
+    );
+}
+
+#[test]
+fn animation_bookkeeping_mutations_hit_existing_catalog_entry_for_file_and_data() {
+    use neovm_core::emacs_core::image_catalog::{EncodedBytes, ImageDataSource};
+
+    // One active Context for the whole test; the specs below allocate on its heap.
+    let _ctx = neovm_core::emacs_core::eval_hook_installers::new_context();
+
+    let (cmd_tx, cmd_rx) = neomacs_display_runtime::thread_comm::RenderCommandSender::unbounded();
+    let metadata = Arc::new(ImageRenderState::default());
+    let catalog = test_catalog(cmd_tx, None, metadata, None);
+
+    let make_data_request = |tardiness: f64| {
+        let spec = Value::list(vec![
+            Value::symbol("image"),
+            Value::keyword(":type"),
+            Value::symbol("gif"),
+            Value::keyword(":data"),
+            Value::string("GIF89a"),
+            Value::keyword(":index"),
+            Value::fixnum(0),
+            Value::keyword(":animate-tardiness"),
+            Value::make_float(tardiness),
+        ]);
+        let items = list_to_vec(&spec).expect("test data spec is a list");
+        ImageResolveRequest {
+            spec: ImageSpecIdentity::from_lisp_spec(&spec).expect("data spec identity"),
+            identity: image_load_identity(&spec, &items),
+            source: ImageResolveSource::Data(ImageDataSource::Isolated(EncodedBytes::copy_of(
+                b"GIF89a",
+            ))),
+            size: ImageSizeSpec::default(),
+            rotation: Default::default(),
+            colors: ImageColorContext::default(),
+            mask: Default::default(),
+            animation: ImageAnimationPolicy::disabled(),
+            frame: ImageFrameIndex::new(0),
+            realization: Default::default(),
+            failed_extent: Default::default(),
+        }
+    };
+
+    let first = match lookup(&catalog, make_data_request(0.0)) {
+        ImageLookup::Pending(pending) => pending.load(),
+        other => panic!("expected initial pending load, got {other:?}"),
+    };
+    let second = match lookup(&catalog, make_data_request(0.45)) {
+        ImageLookup::Pending(pending) => pending.load(),
+        other => panic!("expected cache hit on mutated :animate-tardiness, got {other:?}"),
+    };
+    assert_eq!(
+        first, second,
+        "mutating :animate-tardiness on a :data image must hit the same catalog entry"
+    );
+    let mut queued_loads = 0;
+    while cmd_rx.try_recv().is_ok() {
+        queued_loads += 1;
+    }
+    assert_eq!(
+        queued_loads, 1,
+        "mutating :animate-tardiness must not schedule a second load command"
+    );
+}
+
+#[test]
+fn resolve_sync_records_diagnostics_and_returns_load_failed_on_repeated_queries() {
+    let decoder = neomacs_display_runtime::render_thread::ImageDecoder::new();
+    let client = decoder.client();
+    let (cmd_tx, _cmd_rx) = neomacs_display_runtime::thread_comm::RenderCommandSender::unbounded();
+    let catalog = AsyncImageCatalog::new(
+        cmd_tx,
+        None,
+        Arc::new(ImageRenderState::default()),
+        None,
+        client,
+    );
+    let request = file_request("/nonexistent/neomacs-resolve-sync-837.png");
+    let expected = ImageDiagnostic::FileNotFound {
+        file: "/nonexistent/neomacs-resolve-sync-837.png".to_owned(),
+    };
+
+    for attempt in 1..=2 {
+        let ImageSyncResolution::LoadFailed(failed) =
+            catalog.resolve_sync(request.clone(), ImageSizeLimit::UNLIMITED)
+        else {
+            panic!("attempt {attempt} must return LoadFailed without signalling an error");
+        };
+        assert_eq!(failed.error, expected);
+        assert_eq!(
+            failed.failed_extent(),
+            neomacs_display_protocol::FailedImageExtent::default()
+        );
+        assert_eq!(
+            catalog.take_pending_diagnostics(),
+            vec![expected.message()],
+            "attempt {attempt} must record the GNU diagnostic for *Messages*"
+        );
+    }
 }

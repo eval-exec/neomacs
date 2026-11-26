@@ -106,12 +106,18 @@ fn div_cx444_minibuffer_depth() {
 #[test]
 fn div_cx444_ewoc_ops() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK t""#]];
+    let expect = expect_test::expect![[r#""ERR (void-function ewoc-empty-p)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn (require 'ewoc)
   (with-temp-buffer
-    (let ((ewoc (ewoc-create 'identity))))
-      (fboundp 'ewoc-enter-first)))
+    (let ((ewoc (ewoc-create (lambda (node) (insert (format "%s;" node))))))
+      (ewoc-enter-first ewoc :a)
+      (ewoc-enter-first ewoc :b)
+      (ewoc-enter-last ewoc :c)
+      (ewoc-refresh ewoc)
+      (list (buffer-string)
+            (ewoc-empty-p ewoc)
+            (eq (ewoc-get-buffer ewoc) (current-buffer))))))
 "##,
         expect,
     );

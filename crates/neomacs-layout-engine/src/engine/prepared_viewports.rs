@@ -29,19 +29,47 @@ const MAX_GLYPHS: usize = 65_536;
 struct PreparedViewport {
     frame: neovm_core::window::FrameId,
     window: DisplayWindowId,
-    retained: RetainedWindowMatrix,
-    faces: PreparedFaceSnapshot,
+    // The complete export source has one identity. A mutation detaches it
+    // while an export receipt retains the old matrix, faces and read proof.
+    payload: std::rc::Rc<PreparedViewportPayload>,
     rows: usize,
     glyphs: usize,
     computed: bool,
     // Partial worker pages may extend coverage, but cannot replace a viewport.
     complete_viewport: bool,
+}
+
+#[derive(Clone)]
+struct PreparedViewportPayload {
+    retained: RetainedWindowMatrix,
+    faces: PreparedFaceSnapshot,
     // The authority belongs to these original rows, not the latest viewport.
     cursor_sources: Option<CursorSourceDependencies>,
     query_freshness: Option<neovm_core::window::WindowDisplaySnapshotFreshness>,
 }
 
+impl std::ops::Deref for PreparedViewport {
+    type Target = PreparedViewportPayload;
+
+    fn deref(&self) -> &Self::Target {
+        &self.payload
+    }
+}
+
 impl PreparedViewport {
+    fn export_eligible(
+        &self,
+        frame: neovm_core::window::FrameId,
+        window: DisplayWindowId,
+        key: &RetainedWindowKey,
+    ) -> bool {
+        self.computed
+            && self.frame == frame
+            && self.window == window
+            && self.dependencies_valid()
+            && RetainedWindowKey::row_content_eligible(&self.retained.key, key)
+    }
+
     fn dependencies_valid(&self) -> bool {
         self.retained.key.fontset_generation
             == neovm_core::emacs_core::fontset::fontset_generation()
@@ -63,6 +91,7 @@ struct ExportedCoverage {
     // surface. Only a certified epoch may be renewed: a re-keyed epoch that
     // never exported anything has nothing retained to keep alive.
     certified: bool,
+    last_export: Option<export::CoverageExportInputs>,
     backward_start: Option<CharPos0>,
     // Placement hint for eviction, updated even when the content epoch is
     // unchanged. It grants no authority to reuse source or geometry.
@@ -205,14 +234,16 @@ impl PreparedViewports {
         self.entries.push_back(PreparedViewport {
             frame,
             window,
-            retained,
-            faces,
+            payload: std::rc::Rc::new(PreparedViewportPayload {
+                retained,
+                faces,
+                cursor_sources: Some(cursor_sources),
+                query_freshness,
+            }),
             rows,
             glyphs,
             computed: true,
             complete_viewport,
-            cursor_sources: Some(cursor_sources),
-            query_freshness,
         });
         self.trim();
         // Removing only the newly appended entry leaves both payloads and
@@ -383,10 +414,12 @@ impl PreparedViewports {
             let mut candidate = entry.retained.clone();
             candidate.key.window_start = key.window_start;
             candidate.key.vscroll = key.vscroll;
-            candidate.matrix.resize(
-                geometry.display_text_row_base + geometry.max_rows,
-                candidate.matrix.ncols,
-            );
+            // The destination was resized to this viewport. The cursor replay
+            // still requires an exact key match, so the built matrix must name
+            // the capacity it actually holds.
+            candidate.key.viewport_rows = key.viewport_rows;
+            let capacity = geometry.display_text_row_base + geometry.matrix_body_rows;
+            candidate.matrix.resize(capacity, candidate.matrix.ncols);
             candidate.presented_cursor = None;
             let snapshot = std::sync::Arc::make_mut(&mut candidate.display_snapshot);
             snapshot.logical_cursor = None;
@@ -425,18 +458,37 @@ impl PreparedViewports {
                     *row = neomacs_display_protocol::glyph_matrix::MatrixRow::new(disabled);
                 }
             }
+            let mut placed_index = None;
+            let mut placed_bottom = 0.0;
             for (index, row) in above {
-                // A fractional offset can reduce the destination's row
-                // capacity while the retained prefix still includes its old
-                // bottom row. Such a prefix cannot be completed here.
-                let destination = candidate.matrix.rows.get_mut(*index)?;
+                // A fractional offset can shrink the destination below the old
+                // prefix. Rows past that capacity are below the new body; the
+                // rows that still fit keep the page.
+                if *index >= capacity {
+                    break;
+                }
+                let Some(destination) = candidate.matrix.rows.get_mut(*index) else {
+                    break;
+                };
                 if RetainedWindowMatrix::is_chrome_role(destination.role) {
                     return None;
                 }
+                placed_bottom = row.pixel_y + row.height_px;
+                placed_index = Some(*index);
                 *destination = row.clone();
             }
-            let mut index = last_index + 1;
-            let mut y = last_row.pixel_y + last_row.height_px;
+            let Some(placed_index) = placed_index else {
+                return None;
+            };
+            snapshot.rows.retain(|row| row.row <= placed_index as i64);
+            if let Some(points) = snapshot.point_rows.as_mut() {
+                points.rows.retain(|row| row.row() <= placed_index as i64);
+            }
+            snapshot
+                .points
+                .retain(|point| point.row <= placed_index as i64);
+            let mut index = placed_index + 1;
+            let mut y = placed_bottom;
             let bottom = snapshot.regions.text_body.bottom() - snapshot.regions.outer.y;
             let mut next = seam;
             let mut remap = rustc_hash::FxHashMap::default();
@@ -451,7 +503,7 @@ impl PreparedViewports {
                 if row.start_charpos != next {
                     return None;
                 }
-                if y >= bottom || index >= geometry.display_text_row_base + geometry.max_rows {
+                if y >= bottom || index >= capacity {
                     break;
                 }
                 let destination = candidate.matrix.rows.get_mut(index)?;
@@ -470,9 +522,9 @@ impl PreparedViewports {
                 index += 1;
             }
             // Any row intersecting the body is laid out in full, then clipped.
-            if (y < bottom && index < geometry.display_text_row_base + geometry.max_rows)
-                || index == last_index + 1
-            {
+            // A prefix that already fills the shorter viewport is complete
+            // without appending a prepared row below it.
+            if y < bottom && index < capacity {
                 return None;
             }
             snapshot.rows.extend(
@@ -665,14 +717,16 @@ impl PreparedViewports {
             self.entries.push_back(PreparedViewport {
                 frame,
                 window,
-                retained,
-                faces: faces.prepared_snapshot(),
+                payload: std::rc::Rc::new(PreparedViewportPayload {
+                    retained,
+                    faces: faces.prepared_snapshot(),
+                    cursor_sources,
+                    query_freshness: None,
+                }),
                 rows,
                 glyphs,
                 computed: false,
                 complete_viewport: true,
-                cursor_sources,
-                query_freshness: None,
             });
         }
         self.trim();

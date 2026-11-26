@@ -89,3 +89,73 @@ fn successful_open_normalizes_nonpositive_ascent_descent_sum() {
     assert!(!connection.observe_opened_font_metrics(10, 4));
     assert_eq!(connection.smallest_opened_font_height(), 1);
 }
+
+#[test]
+fn desktop_render_preferences_are_shared_by_connection_clones_and_coalesce_duplicates() {
+    use crate::{
+        DesktopFontAntialias, DesktopFontHinting, DesktopFontRenderOptions,
+        DesktopFontSubpixelOrder,
+    };
+    let connection = GraphicalDisplayIdentity::anonymous_connection(GraphicalBackend::Wayland);
+    let clone = connection.clone();
+    let initial = DesktopFontRenderOptions::default();
+    assert_eq!(connection.font_render_options(), Some(initial));
+    assert!(!connection.observe_font_render_options(initial));
+    let updated = DesktopFontRenderOptions {
+        antialias: DesktopFontAntialias::Subpixel,
+        hinting: DesktopFontHinting::Slight,
+        subpixel_order: DesktopFontSubpixelOrder::Bgr,
+    };
+    assert!(connection.observe_font_render_options(updated));
+    assert_eq!(clone.font_render_options(), Some(updated));
+    assert!(!clone.observe_font_render_options(updated));
+    assert!(clone.observe_font_render_options(initial));
+    assert_eq!(connection.font_render_options(), Some(initial));
+    assert!(!connection.observe_font_render_options(initial));
+}
+
+#[test]
+fn equal_wayland_labels_keep_independent_render_preference_snapshots() {
+    use crate::{DesktopFontHinting, DesktopFontRenderOptions};
+    let first =
+        GraphicalDisplayIdentity::named(GraphicalBackend::Wayland, "wayland-fixture").unwrap();
+    let second =
+        GraphicalDisplayIdentity::named(GraphicalBackend::Wayland, "wayland-fixture").unwrap();
+    assert_eq!(first, second);
+    let full = DesktopFontRenderOptions {
+        hinting: DesktopFontHinting::Full,
+        ..Default::default()
+    };
+    let slight = DesktopFontRenderOptions {
+        hinting: DesktopFontHinting::Slight,
+        ..Default::default()
+    };
+    assert!(first.observe_font_render_options(full));
+    assert_eq!(
+        second.font_render_options(),
+        Some(DesktopFontRenderOptions::default())
+    );
+    assert!(second.observe_font_render_options(slight));
+    assert_eq!(first.font_render_options(), Some(full));
+    assert_eq!(second.font_render_options(), Some(slight));
+    assert_eq!(first, second, "preferences do not rename a connection");
+}
+
+#[test]
+fn x11_and_other_backends_ignore_pgtk_render_preferences() {
+    use crate::{DesktopFontHinting, DesktopFontRenderOptions};
+    let options = DesktopFontRenderOptions {
+        hinting: DesktopFontHinting::Full,
+        ..Default::default()
+    };
+    for backend in GraphicalBackend::iter().filter(|backend| *backend != GraphicalBackend::Wayland)
+    {
+        let connection = GraphicalDisplayIdentity::anonymous_connection(backend);
+        assert_eq!(connection.font_render_options(), None, "{backend:?}");
+        assert!(
+            !connection.observe_font_render_options(options),
+            "{backend:?}"
+        );
+        assert_eq!(connection.font_render_options(), None, "{backend:?}");
+    }
+}

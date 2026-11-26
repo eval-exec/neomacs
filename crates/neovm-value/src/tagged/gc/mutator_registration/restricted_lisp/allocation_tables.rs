@@ -237,7 +237,12 @@ pub(super) fn a6_ht_b7_make_copy_collect_resume_and_reclaim<H: HostParts>(host: 
                     let gate = retry_reg(|| era.registry().lock());
                     for entry in gate.entries.iter().skip(1) {
                         let state = entry.state.lock().unwrap();
-                        let summary = state.image.as_ref().unwrap().summary();
+                        let summary = state
+                            .image
+                            .as_ref_for(entry.key.heap, entry.young)
+                            .unwrap()
+                            .unwrap()
+                            .summary();
                         assert_eq!(summary.allocated_count, 5);
                         assert_eq!(
                             summary.memory_use_counts
@@ -459,7 +464,7 @@ pub(super) fn a6_ht_b7_copy_active_test_starts_quiescent_and_bad_home_is_atomic<
             let dst = run.root_slot(&nil)?;
             // SAFETY: both words are the live root slots this run just bound.
             let source_value = unsafe { TaggedValue::from_bits(src.word_for_test(run)) };
-            let hold = TableRef::enter(run, source_value)?.hold_user_test()?;
+            let hold = TableRef::enter(run, source_value)?.hold_user_test(run, &src)?;
             run.copy_hash_table_into(&src, &dst)?;
             let copy_value = unsafe { TaggedValue::from_bits(dst.word_for_test(run)) };
             assert_ne!(source_value, copy_value);
@@ -503,6 +508,210 @@ pub(super) fn a6_ht_b7_copy_active_test_starts_quiescent_and_bad_home_is_atomic<
         era.return_cons_storage(&stopped).unwrap();
         era.collect_stopped(&mut stopped, roots).unwrap();
         complete(stopped);
+        owner.retire_rooted(&[]).unwrap();
+    });
+}
+
+/// value-gc C9 (G1/G2): while a `UserTestHold` is alive, wrong-slot minting
+/// is refused (`Publication`) and both root clearing and owner `finish` refuse
+/// with `OutstandingLoan`, keeping the table rooted until the hold drops.
+pub(super) fn c9_user_test_hold_refuses_clear_and_finish_while_held<H: HostParts>(host: &mut H) {
+    let table = host
+        .eval_form("(make-hash-table :test 'eq :size 16)")
+        .unwrap_or_else(|error| panic!("c9 refusal setup: {error}"));
+    let source = host.share_value(table);
+    let nil = host.share_value(TaggedValue::NIL);
+    host.admit_era("admit", "finish", |era| {
+        let mut owner = era
+            .register(9901, 3)
+            .unwrap()
+            .activate(era.heap_identity(), 9901)
+            .unwrap();
+        let (src, dst, source_value) = with_run(&mut owner, |run| {
+            let src = run.root_slot(&source)?;
+            let dst = run.root_slot(&nil)?;
+            // SAFETY: `src` was just bound to the live shared hash table.
+            let source_value = unsafe { TaggedValue::from_bits(src.word_for_test(run)) };
+            // A root slot that does not hold this table must be rejected without
+            // bumping `test_depth`.
+            assert_eq!(
+                TableRef::enter(run, source_value)?
+                    .hold_user_test(run, &dst)
+                    .err(),
+                Some(RegistrationError::Publication)
+            );
+            assert_eq!(TableRef::enter(run, source_value)?.user_test_depth(), 0);
+            Ok((src, dst, source_value))
+        })
+        .unwrap();
+
+        let hold = with_run(&mut owner, |run| {
+            let hold = TableRef::enter(run, source_value)?.hold_user_test(run, &src)?;
+            assert_eq!(TableRef::enter(run, source_value)?.user_test_depth(), 1);
+            assert_eq!(
+                run.clear_root_slots(),
+                Err(RegistrationError::OutstandingLoan)
+            );
+            assert_eq!(src.word_for_test(run), source_value.bits());
+            assert_eq!(dst.word_for_test(run), TaggedValue::NIL.bits());
+            Ok(hold)
+        })
+        .unwrap();
+
+        let epoch = std::num::NonZeroU64::new(1).unwrap();
+        let failed = owner
+            .finish(epoch)
+            .expect_err("finish must refuse with OutstandingLoan while UserTestHold is live");
+        assert_eq!(failed.reason, RegistrationError::OutstandingLoan);
+        let mut owner = failed.into_owner();
+
+        drop(hold);
+        with_run(&mut owner, |run| {
+            run.clear_root_slots()?;
+            Ok(())
+        })
+        .unwrap();
+        owner.finish(epoch).unwrap();
+    });
+}
+
+/// value-gc C9 (G1/G2): dropping `UserTestHold` decrements both `test_depth`
+/// and the owner hold loan, releasing both `clear_root_slots` and `finish`.
+pub(super) fn c9_user_test_hold_drop_releases_clear_and_finish<H: HostParts>(host: &mut H) {
+    let table = host
+        .eval_form("(make-hash-table :test 'eq :size 16)")
+        .unwrap_or_else(|error| panic!("c9 release setup: {error}"));
+    let source = host.share_value(table);
+    host.admit_era("admit", "finish", |era| {
+        let mut owner = era
+            .register(9902, 2)
+            .unwrap()
+            .activate(era.heap_identity(), 9902)
+            .unwrap();
+        with_run(&mut owner, |run| {
+            let src = run.root_slot(&source)?;
+            // SAFETY: `src` was just bound to the live shared hash table.
+            let source_value = unsafe { TaggedValue::from_bits(src.word_for_test(run)) };
+            let hold = TableRef::enter(run, source_value)?.hold_user_test(run, &src)?;
+            assert_eq!(TableRef::enter(run, source_value)?.user_test_depth(), 1);
+            assert_eq!(
+                run.clear_root_slots(),
+                Err(RegistrationError::OutstandingLoan)
+            );
+            drop(hold);
+            assert_eq!(TableRef::enter(run, source_value)?.user_test_depth(), 0);
+            run.clear_root_slots()?;
+            Ok(())
+        })
+        .unwrap();
+        let epoch = std::num::NonZeroU64::new(1).unwrap();
+        owner.finish(epoch).unwrap();
+    });
+}
+
+/// value-gc C9 (G1/G2): while a `UserTestHold` is live, `enter_native` and
+/// `retire_rooted` refuse with `RendezvousError::Loan`; and while an owner is
+/// parked via `enter_native`, `run_access` refuses with `Busy` until
+/// `leave_native` restores it (blocking the `enter_native -> run_access ->
+/// hold_user_test -> retire_rooted` UAF bypass).
+pub(super) fn c9_user_test_hold_refuses_retire_rooted_and_native_run_access<H: HostParts>(
+    host: &mut H,
+) {
+    let table = host
+        .eval_form("(make-hash-table :test 'eq :size 16)")
+        .unwrap_or_else(|error| panic!("c9 retire refusal setup: {error}"));
+    let source = host.share_value(table);
+    host.admit_era("admit", "finish", |era| {
+        let mut owner = era
+            .register(9903, 2)
+            .unwrap()
+            .activate(era.heap_identity(), 9903)
+            .unwrap();
+
+        // First verify the native-stopped guard in both directions:
+        // `enter_native` -> `run_access()` refuses `Busy`; `leave_native` ->
+        // `run_access()` succeeds again.
+        owner.enter_native(&[]).unwrap();
+        assert_eq!(
+            owner.run_access().err(),
+            Some(RegistrationError::Busy),
+            "run_access must refuse while owner is parked in NativeStopped"
+        );
+        owner.leave_native().unwrap();
+
+        let (src, source_value) = with_run(&mut owner, |run| {
+            let src = run.root_slot(&source)?;
+            // SAFETY: `src` was just bound to the live shared hash table.
+            let source_value = unsafe { TaggedValue::from_bits(src.word_for_test(run)) };
+            Ok((src, source_value))
+        })
+        .unwrap();
+
+        let hold = with_run(&mut owner, |run| {
+            Ok(TableRef::enter(run, source_value)?.hold_user_test(run, &src)?)
+        })
+        .unwrap();
+
+        assert_eq!(
+            owner.enter_native(&[]),
+            Err(crate::tagged::gc::RendezvousError::Loan),
+            "enter_native must refuse with Loan while UserTestHold is live"
+        );
+        let failed = owner
+            .retire_rooted(&[])
+            .expect_err("retire_rooted must refuse with Loan while UserTestHold is live");
+        assert_eq!(failed.reason, crate::tagged::gc::RendezvousError::Loan);
+        let mut owner = failed.into_owner();
+
+        drop(hold);
+        with_run(&mut owner, |run| {
+            assert_eq!(TableRef::enter(run, source_value)?.user_test_depth(), 0);
+            run.clear_root_slots()?;
+            Ok(())
+        })
+        .unwrap();
+        owner.retire_rooted(&[]).unwrap();
+    });
+}
+
+/// value-gc C9 (G1/G2): dropping `UserTestHold` releases `retire_rooted` so
+/// the owner retires cleanly once the hold ends.
+pub(super) fn c9_user_test_hold_drop_releases_retire_rooted<H: HostParts>(host: &mut H) {
+    let table = host
+        .eval_form("(make-hash-table :test 'eq :size 16)")
+        .unwrap_or_else(|error| panic!("c9 retire release setup: {error}"));
+    let source = host.share_value(table);
+    host.admit_era("admit", "finish", |era| {
+        let mut owner = era
+            .register(9904, 2)
+            .unwrap()
+            .activate(era.heap_identity(), 9904)
+            .unwrap();
+        let (src, source_value) = with_run(&mut owner, |run| {
+            let src = run.root_slot(&source)?;
+            // SAFETY: `src` was just bound to the live shared hash table.
+            let source_value = unsafe { TaggedValue::from_bits(src.word_for_test(run)) };
+            Ok((src, source_value))
+        })
+        .unwrap();
+
+        let hold = with_run(&mut owner, |run| {
+            Ok(TableRef::enter(run, source_value)?.hold_user_test(run, &src)?)
+        })
+        .unwrap();
+        let failed = owner
+            .retire_rooted(&[])
+            .expect_err("retire_rooted must refuse while held");
+        assert_eq!(failed.reason, crate::tagged::gc::RendezvousError::Loan);
+        let mut owner = failed.into_owner();
+
+        drop(hold);
+        with_run(&mut owner, |run| {
+            assert_eq!(TableRef::enter(run, source_value)?.user_test_depth(), 0);
+            run.clear_root_slots()?;
+            Ok(())
+        })
+        .unwrap();
         owner.retire_rooted(&[]).unwrap();
     });
 }

@@ -2593,11 +2593,15 @@ fn manager_create_and_query_marker() {
     // Insert some text so there is room for a marker.
     mgr.insert_into_buffer(id, "abcdef").expect("insert text");
 
-    let mid = neovm_edit::buffer::MarkerRef::new(mgr.create_marker_at_emacs_byte_pos(
-        id,
-        EmacsBytePos::new(3),
-        InsertionType::After,
-    ));
+    // SAFETY: the pointer is the live node just returned. Nothing collects
+    // before `MarkerRef::new` returns. The chain is weak and is not a root.
+    let mid = unsafe {
+        neovm_edit::buffer::MarkerRef::new(mgr.create_marker_at_emacs_byte_pos(
+            id,
+            EmacsBytePos::new(3),
+            InsertionType::After,
+        ))
+    };
     assert_eq!(
         mgr.marker_emacs_byte_pos(mid).map(EmacsBytePos::get),
         Some(3)
@@ -2611,11 +2615,15 @@ fn manager_marker_clamped_to_buffer_len() {
     let mut mgr = BufferManager::new();
     let id = mgr.create_buffer("m");
     // Buffer is empty (len = 0), marker at 100 should be clamped.
-    let mid = neovm_edit::buffer::MarkerRef::new(mgr.create_marker_at_emacs_byte_pos(
-        id,
-        EmacsBytePos::new(100),
-        InsertionType::Before,
-    ));
+    // SAFETY: the pointer is the live node just returned. Nothing collects
+    // before `MarkerRef::new` returns. The chain is weak and is not a root.
+    let mid = unsafe {
+        neovm_edit::buffer::MarkerRef::new(mgr.create_marker_at_emacs_byte_pos(
+            id,
+            EmacsBytePos::new(100),
+            InsertionType::Before,
+        ))
+    };
     assert_eq!(
         mgr.marker_emacs_byte_pos(mid).map(EmacsBytePos::get),
         Some(0)
@@ -2710,12 +2718,12 @@ fn saved_labeled_restrictions_round_trip_and_drop_on_killed_buffer() {
         .expect("restriction state should save");
     // Outermost bounds plus the user label.
     let restrictions = saved
-        .labeled_restrictions
+        .labeled_restrictions()
         .as_slice()
         .expect("the labeled stack was saved");
     assert_eq!(restrictions.len(), 2);
     assert_eq!(saved.clone(), saved);
-    let copy = saved.labeled_restrictions.clone();
+    let copy = saved.labeled_restrictions().clone();
     assert_eq!(copy.into_inner().map(|stack| stack.len()), Some(2));
 
     // Restoring into a killed buffer discards the saved stack through the
@@ -3427,7 +3435,9 @@ fn marker_chain_lookup_for_test(
     buf: &Buffer,
     marker: &Value,
 ) -> Option<(usize, usize, InsertionType)> {
-    let marker = neovm_edit::buffer::MarkerRef::from_value(marker).expect("marker value");
+    // SAFETY: `marker` is the live Value that roots this MarkerObj.
+    let marker =
+        unsafe { neovm_edit::buffer::MarkerRef::from_value(marker) }.expect("marker value");
     buf.marker_chain_anchor_lookup(marker)
         .map(|(anchor, insertion_type)| {
             (
@@ -3452,7 +3462,10 @@ fn register_marker_for_test(buf: &mut Buffer, pos: usize, insertion_type: Insert
         .as_veclike_ptr()
         .expect("freshly allocated marker should have a veclike ptr")
         as *mut neovm_value::tagged::header::MarkerObj;
-    buf.register_marker_at_emacs_byte_pos(marker_ptr, EmacsBytePos::new(pos), insertion_type);
+    // SAFETY: `marker_value` was just allocated and roots `marker_ptr`.
+    unsafe {
+        buf.register_marker_at_emacs_byte_pos(marker_ptr, EmacsBytePos::new(pos), insertion_type);
+    }
     marker_value
 }
 

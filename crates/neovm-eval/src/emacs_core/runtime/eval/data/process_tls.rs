@@ -20,7 +20,7 @@
 use std::io::{Read, Write};
 use std::net::TcpStream;
 
-pub type RustlsClientStream = rustls::StreamOwned<rustls::ClientConnection, TcpStream>;
+pub(crate) type RustlsClientStream = rustls::StreamOwned<rustls::ClientConnection, TcpStream>;
 
 pub struct RustlsTlsStream {
     pub inner: RustlsClientStream,
@@ -43,6 +43,17 @@ impl TlsStream {
     pub fn tcp_stream(&self) -> &TcpStream {
         match self {
             Self::Rustls(stream) => &stream.inner.sock,
+        }
+    }
+
+    /// Strip the TLS layer and return ownership of the underlying TCP stream.
+    ///
+    /// Used by `gnutls-deinit` to mirror GNU `emacs_gnutls_deinit`
+    /// (`src/gnutls.c:939-977`), which tears down only TLS credentials and
+    /// session state while keeping the process's network descriptor open.
+    pub fn into_tcp_stream(self) -> TcpStream {
+        match self {
+            Self::Rustls(stream) => stream.inner.sock,
         }
     }
 

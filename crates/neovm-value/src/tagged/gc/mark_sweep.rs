@@ -5,6 +5,12 @@
 
 use super::*;
 
+/// Weak-table entries the weak pass's fixpoint has examined, summed over
+/// every table and round (test-only cost probe).
+#[cfg(any(test, feature = "test-support"))]
+pub(super) static WEAK_ENTRY_VISITS: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
 /// Where [`TaggedHeap::for_each_veclike_child`] sends children: one at a
 /// time, or a run at once, which a vector collects with one reservation.
 pub(super) trait ChildSink {
@@ -38,23 +44,103 @@ impl TaggedHeap {
     /// Run a full mark-sweep garbage collection.
     ///
     /// `roots` must yield every reachable `TaggedValue`.
-    pub fn collect(&mut self, roots: impl Iterator<Item = TaggedValue>) {
-        self.collect_exact(roots);
+    ///
+    /// # Safety
+    ///
+    /// The caller has exclusive use of this heap: no alias from
+    /// `with_tagged_heap` or a mutation guard is live, and `roots` names
+    /// every value that must survive. Safe code collects through
+    /// `Context::gc_collect_exact`, which holds `&mut Context`. That safe
+    /// entry is sound only after Phase 1 stops handing out `&'static`
+    /// payload borrows. Until then a Rust local can keep a freed object.
+    pub unsafe fn collect(&mut self, roots: impl Iterator<Item = TaggedValue>) {
+        // SAFETY: `collect` forwards the caller's exclusive heap and roots.
+        unsafe { self.collect_exact(roots) }
     }
 
     /// Run a full mark-sweep collection using only the explicit roots provided.
-    pub fn collect_exact(&mut self, roots: impl Iterator<Item = TaggedValue>) {
-        self.begin_stw_collection();
-        for root in roots {
-            self.seed_root(root);
+    ///
+    /// # Safety
+    ///
+    /// Same contract as [`Self::collect`].
+    pub unsafe fn collect_exact(&mut self, roots: impl Iterator<Item = TaggedValue>) {
+        // SAFETY: the caller of this unsafe entry supplied the roots and
+        // holds the heap. `seed_root` does not free; the two sweep entries do.
+        unsafe {
+            self.begin_stw_collection();
+            for root in roots {
+                self.seed_root(root);
+            }
+            self.complete_collection();
         }
-        self.complete_collection();
+    }
+
+    /// Test-support collection. Production code uses [`Self::collect_exact`].
+    ///
+    /// Compiled only on the test-support surface, so a production build has
+    /// no safe path to `collect`. This wrapper is deliberately unsound: it
+    /// does not protect an unrooted `&'static` borrow the test still holds.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn collect_rooted(&mut self, roots: impl Iterator<Item = TaggedValue>) {
+        // Test-only. Not a discharge of `collect_exact`'s safety contract.
+        unsafe { self.collect_exact(roots) }
+    }
+
+    /// Test-only sweep entries. Same deliberate unsoundness as [`Self::collect_rooted`].
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn begin_stw_collection_for_test(&mut self) {
+        unsafe { self.begin_stw_collection() }
+    }
+
+    /// Test-only. Does not protect an unrooted borrow.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn complete_collection_for_test(&mut self) {
+        unsafe { self.complete_collection() }
+    }
+
+    /// Test-only. Does not protect an unrooted borrow.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn begin_minor_collection_for_test(
+        &mut self,
+    ) -> Result<(), super::generational::MinorCollectionAdmissionError> {
+        unsafe { self.begin_minor_collection() }
+    }
+
+    /// Test-only. Does not protect an unrooted borrow.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn complete_minor_collection_for_test(&mut self) {
+        unsafe { self.complete_minor_collection() }
+    }
+
+    /// Test-only. Does not protect an unrooted borrow.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn incremental_finish_for_test(&mut self, bytes_before: usize, pause: std::time::Instant) {
+        unsafe { self.incremental_finish(bytes_before, pause) }
+    }
+
+    /// Test-only. Does not protect an unrooted borrow.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn incremental_sweep_slice_for_test(&mut self, budget: usize) -> bool {
+        unsafe { self.incremental_sweep_slice(budget) }
+    }
+
+    /// Test-only. Does not protect an unrooted borrow.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn finish_incremental_sweep_now_for_test(&mut self) {
+        unsafe { self.finish_incremental_sweep_now() }
     }
 
     /// # Safety
     /// The heap must be exclusively borrowed and quiescent: the call asserts
     /// that no concurrent marker is running and starts a major cycle.
     pub(crate) unsafe fn begin_collection(&mut self) {
+        // Refuse before changing the cycle. The delegated entry also serves
+        // direct STW and minor callers, so it needs its own guard below.
+        self.assert_no_owner_cons_reserves();
+        assert!(
+            !self.has_unfinished_concurrent_mark(),
+            "begin_collection requires an explicit successful marker finish"
+        );
         self.generational.cycle = generational::GenerationCycle::Major;
         self.begin_collection_with(false);
     }
@@ -63,8 +149,9 @@ impl TaggedHeap {
     /// (`begin_stw_collection`) called it: only that entry pre-marks the
     /// image for a first partition cycle (`premark_mapped_image`).
     pub(super) fn begin_collection_with(&mut self, stw_entry: bool) {
+        self.assert_no_owner_cons_reserves();
         assert!(
-            !self.concurrent_mark_running,
+            !self.has_unfinished_concurrent_mark(),
             "collection requires an explicit successful marker finish"
         );
         #[cfg(any(test, debug_assertions, feature = "test-support"))]
@@ -116,6 +203,9 @@ impl TaggedHeap {
             !self.sweep_in_progress,
             "begin_collection while a deferred sweep is in progress"
         );
+        // The context-root seed runs after this entry and overwrites the zero.
+        // A collection that never seeds must not reprint the previous cycle.
+        self.note_context_seed_us(0);
         // YOUNG NON-CONS PARITY FLIP (task #7 stage 2b): this single store
         // un-marks the entire young non-cons generation — everything the last
         // cycle marked has bit == old parity, which the new parity reads as
@@ -421,7 +511,7 @@ impl TaggedHeap {
             for page in &mut arena.pages {
                 let mut all_resident = true;
                 for word_index in 0..ObjectPage::<T>::ALLOC_WORDS {
-                    let mut bits = page.alloc_bits[word_index];
+                    let mut bits = page.alloc_bits()[word_index];
                     while bits != 0 {
                         let bit = bits.trailing_zeros() as usize;
                         bits &= bits - 1;
@@ -447,10 +537,8 @@ impl TaggedHeap {
                 // any page with a runtime survivor stays sweepable so its
                 // dead slots are reclaimed. A full page has an empty free
                 // list and is off the partial chain by construction.
-                if all_resident && page.allocated == ObjectPage::<T>::SLOTS {
-                    debug_assert!(!page.on_partial, "full page on the partial chain");
-                    debug_assert_eq!(page.free_head, PAGE_NONE);
-                    page.retired = true;
+                if all_resident && page.allocated() == ObjectPage::<T>::SLOTS {
+                    page.retire_full();
                 }
             }
         }
@@ -478,7 +566,8 @@ impl TaggedHeap {
             .map(|o| o.header)
             .collect();
         for ptr in veclike {
-            if self.veclike_has_young_child(ptr) {
+            // SAFETY: object header was walked from `self`'s live arena/boxed partition during world-stopped GC.
+            if unsafe { self.veclike_has_young_child(ptr) } {
                 let value = unsafe { TaggedValue::from_veclike_ptr(ptr as *const VecLikeHeader) };
                 self.remember_owner(value);
             }
@@ -532,7 +621,8 @@ impl TaggedHeap {
             out
         };
         for header in tenured {
-            self.remember_tenured_owner_if_collectible_children(header);
+            // SAFETY: object header was walked from `self`'s live arena/boxed partition during world-stopped GC.
+            unsafe { self.remember_tenured_owner_if_collectible_children(header) };
         }
         // -- PAGE-TENURED objects (stage 3): the arenas' tenured slots are on
         //    no intrusive list, so the walk above never sees them. They MUST
@@ -550,7 +640,8 @@ impl TaggedHeap {
         //    oracle — retired pages included — so `record_heap_write` keeps
         //    remembering mutated page-tenured owners. --
         for header in self.collect_tenured_page_slot_headers() {
-            self.remember_tenured_owner_if_collectible_children(header);
+            // SAFETY: `collect_tenured_page_slot_headers` returns live allocated page slots.
+            unsafe { self.remember_tenured_owner_if_collectible_children(header) };
         }
     }
 
@@ -563,12 +654,22 @@ impl TaggedHeap {
     /// (or mapped) owner never traces again, and an ordinary-old owner is
     /// black during a minor (GEN1), so a missed edge would let the sweep free
     /// a live child.
-    pub(super) fn remember_tenured_owner_if_collectible_children(&mut self, header: *mut GcHeader) {
+    ///
+    /// # Safety
+    /// `header` must point to a live, initialized GC object owned by this heap
+    /// while the mutator world is stopped for collector inspection.
+    pub(super) unsafe fn remember_tenured_owner_if_collectible_children(
+        &mut self,
+        header: *mut GcHeader,
+    ) {
         let kind = unsafe { (*header).kind };
         let has_collectible = match kind {
-            HeapObjectKind::VecLike => self.veclike_has_young_child(header as *mut VecLikeHeader),
-            HeapObjectKind::String => self
-                .heap_object_children(header)
+            // SAFETY: caller guarantees `header` points to a live tenured `GcHeader` owned by `self`.
+            HeapObjectKind::VecLike => unsafe {
+                self.veclike_has_young_child(header as *mut VecLikeHeader)
+            },
+            // SAFETY: caller guarantees `header` points to a live tenured `GcHeader` owned by `self`.
+            HeapObjectKind::String => unsafe { self.heap_object_children(header) }
                 .iter()
                 .any(|c| self.permanent_child_needs_trace(*c)),
             HeapObjectKind::Float => false,
@@ -591,17 +692,24 @@ impl TaggedHeap {
     /// ([`Self::is_heap_young`]). Visits the children in place: collecting
     /// them into a vector per owner cost an allocation and a push per child
     /// for each of the ~12K image veclikes the first cycle's promotion scans.
-    fn veclike_has_young_child(&self, ptr: *mut VecLikeHeader) -> bool {
+    ///
+    /// # Safety
+    /// `ptr` must point to a live, initialized veclike object whose payload is
+    /// readable under collector exclusivity.
+    unsafe fn veclike_has_young_child(&self, ptr: *mut VecLikeHeader) -> bool {
         let mut young = false;
-        Self::for_each_veclike_child(
-            self.collector_tables(),
-            ptr,
-            &mut VisitChild(|child| {
-                if !young && self.permanent_child_needs_trace(child) {
-                    young = true;
-                }
-            }),
-        );
+        // SAFETY: caller guarantees `ptr` points to a live `VecLikeHeader` owned by `self`.
+        unsafe {
+            Self::for_each_veclike_child(
+                self.collector_tables(),
+                ptr,
+                &mut VisitChild(|child| {
+                    if !young && self.permanent_child_needs_trace(child) {
+                        young = true;
+                    }
+                }),
+            );
+        }
         young
     }
 
@@ -872,7 +980,9 @@ impl TaggedHeap {
                 // verifier never sees an unmarked weak child. This mirrors GNU's
                 // `mark_object` PVEC_HASH_TABLE (alloc.c): weak tables register
                 // themselves and do NOT mark their contents.
-                if let Some(weak_children) = self.register_weak_hash_table_for_sweep(ptr) {
+                // SAFETY: `ptr` was decoded from a live `VecLike` `TaggedValue` during marking.
+                if let Some(weak_children) = unsafe { self.register_weak_hash_table_for_sweep(ptr) }
+                {
                     for child in weak_children {
                         self.mark_or_push_child(child, origin);
                     }
@@ -882,13 +992,16 @@ impl TaggedHeap {
                     // dump-partition verifier require every heap child of a
                     // permanent owner to be marked, or it is swept while still
                     // referenced (UAF).
-                    Self::for_each_veclike_child(
-                        self.collector_tables(),
-                        ptr as *mut VecLikeHeader,
-                        &mut VisitChild(|child| {
-                            self.mark_or_push_child(child, origin);
-                        }),
-                    );
+                    // SAFETY: `ptr` was decoded from a live `VecLike` `TaggedValue` during marking.
+                    unsafe {
+                        Self::for_each_veclike_child(
+                            self.collector_tables(),
+                            ptr as *mut VecLikeHeader,
+                            &mut VisitChild(|child| {
+                                self.mark_or_push_child(child, origin);
+                            }),
+                        );
+                    }
                 }
             }
         } else if owner.is_string()
@@ -1044,7 +1157,8 @@ impl TaggedHeap {
             .collect();
         for (ptr, ty) in veclike {
             let owner = format!("{ty:?}");
-            for child in self.collect_veclike_children(ptr) {
+            // SAFETY: object header was walked from `self`'s live arena/boxed partition during world-stopped GC.
+            for child in unsafe { self.collect_veclike_children(ptr) } {
                 if child.is_heap_object() && !self.is_value_marked(child) {
                     record(&owner, child);
                 }
@@ -1115,7 +1229,8 @@ impl TaggedHeap {
             } else {
                 format!("tenured:{kind:?}@{header:p}")
             };
-            let children: Vec<TaggedValue> = self.heap_object_children(header);
+            // SAFETY: object header was walked from `self`'s live arena/boxed partition during world-stopped GC.
+            let children: Vec<TaggedValue> = unsafe { self.heap_object_children(header) };
             for child in children {
                 if child.is_heap_object() && !self.is_value_marked(child) {
                     record(&owner, child);
@@ -1142,7 +1257,8 @@ impl TaggedHeap {
             } else {
                 format!("tenured-page:{kind:?}@{header:p}")
             };
-            for child in self.heap_object_children(header) {
+            // SAFETY: object header was walked from `self`'s live arena/boxed partition during world-stopped GC.
+            for child in unsafe { self.heap_object_children(header) } {
                 if child.is_heap_object() && !self.is_value_marked(child) {
                     record(&owner, child);
                 }
@@ -1154,7 +1270,7 @@ impl TaggedHeap {
         // catches a missed old-to-young edge before the young child is freed.
         if self.generational.enabled {
             for block in &self.cons_blocks {
-                for i in 0..block.next_index as usize {
+                for i in 0..block.next_index() {
                     if !block.trailer().is_old(i)
                         || (!self.is_minor_collection() && !block.trailer().is_marked(i))
                     {
@@ -1218,7 +1334,8 @@ impl TaggedHeap {
         };
         for header in young {
             let kind = unsafe { (*header).kind };
-            let children: Vec<TaggedValue> = self.heap_object_children(header);
+            // SAFETY: object header was walked from `self`'s live arena/boxed partition during world-stopped GC.
+            let children: Vec<TaggedValue> = unsafe { self.heap_object_children(header) };
             let owner = format!("young:{kind:?}");
             for child in children {
                 if child.is_heap_object() && !self.is_value_marked(child) {
@@ -1237,7 +1354,8 @@ impl TaggedHeap {
         for header in self.collect_young_marked_page_slot_headers() {
             let kind = unsafe { (*header).kind };
             let owner = format!("young-page:{kind:?}");
-            for child in self.heap_object_children(header) {
+            // SAFETY: object header was walked from `self`'s live arena/boxed partition during world-stopped GC.
+            for child in unsafe { self.heap_object_children(header) } {
                 if child.is_heap_object() && !self.is_value_marked(child) {
                     *violations.entry(owner.clone()).or_insert(0) += 1;
                     sample.get_or_insert(child.0);
@@ -1249,7 +1367,7 @@ impl TaggedHeap {
         let blocks: Vec<(*mut ConsCell, usize)> = self
             .cons_blocks
             .iter()
-            .map(|b| (b.cells_ptr(), b.next_index as usize))
+            .map(|b| (b.cells_ptr(), b.next_index()))
             .collect();
         for (cells, count) in blocks {
             for i in 0..count {
@@ -1284,9 +1402,16 @@ impl TaggedHeap {
     /// Direct heap children of any owned non-cons object by header, for the
     /// verifiers and the promotion-time permanents scan: veclike slots,
     /// string text-property interval roots, floats none.
-    pub(super) fn heap_object_children(&self, header: *mut GcHeader) -> Vec<TaggedValue> {
+    ///
+    /// # Safety
+    /// `header` must point to a live, initialized GC object owned by this heap
+    /// whose payload is readable without concurrent mutation.
+    pub(super) unsafe fn heap_object_children(&self, header: *mut GcHeader) -> Vec<TaggedValue> {
         match unsafe { (*header).kind } {
-            HeapObjectKind::VecLike => self.collect_veclike_children(header as *mut VecLikeHeader),
+            // SAFETY: caller guarantees `ptr` points to a live `VecLikeHeader` owned by `self`.
+            HeapObjectKind::VecLike => unsafe {
+                self.collect_veclike_children(header as *mut VecLikeHeader)
+            },
             HeapObjectKind::String => {
                 let mut roots = Vec::new();
                 let intervals = unsafe { (*(header as *const StringObj)).data.intervals() };
@@ -1396,7 +1521,10 @@ impl TaggedHeap {
     /// mark never re-touches because it is permanent-black — still be swept every
     /// full collection, matching GNU (whose non-generational mark re-encounters
     /// every live weak table every GC and rebuilds `weak_hash_tables`).
-    pub(super) fn register_weak_hash_table_for_sweep(
+    /// # Safety
+    /// `ptr` must point to a live, initialized veclike object and the heap must
+    /// be exclusively owned for marking.
+    pub(super) unsafe fn register_weak_hash_table_for_sweep(
         &mut self,
         ptr: *const VecLikeHeader,
     ) -> Option<Vec<TaggedValue>> {
@@ -1433,9 +1561,21 @@ impl TaggedHeap {
     }
 
     /// Direct children of a mapped vectorlike object (read-only) for the verifier.
-    pub(super) fn collect_veclike_children(&self, ptr: *mut VecLikeHeader) -> Vec<TaggedValue> {
+    ///
+    /// `test-support` publishes this read so a core test can check the same
+    /// edge the collector walks. Product builds keep it `pub(super)`.
+    ///
+    /// # Safety
+    /// `ptr` must point to a live, initialized veclike object whose slots are
+    /// readable without concurrent mutation.
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(super) unsafe fn collect_veclike_children(
+        &self,
+        ptr: *mut VecLikeHeader,
+    ) -> Vec<TaggedValue> {
         let mut out = Vec::new();
-        Self::for_each_veclike_child(self.collector_tables(), ptr, &mut out);
+        // SAFETY: forwarded from caller.
+        unsafe { Self::for_each_veclike_child(self.collector_tables(), ptr, &mut out) };
         out
     }
 
@@ -1443,7 +1583,12 @@ impl TaggedHeap {
     /// without collecting them: the remembered-set rescan and the SATB log
     /// visit ~80K children twice per cycle, and building a vector per owner
     /// cost more than the visits (jemalloc growth was most of it).
-    pub(super) fn for_each_veclike_child(
+    ///
+    /// # Safety
+    /// `ptr` must point to a live, initialized veclike object matching its
+    /// `type_tag`, and `tables` must remain valid for inspecting hash tables
+    /// during the visit.
+    pub(super) unsafe fn for_each_veclike_child(
         tables: collector_tables::CollectorTables,
         ptr: *mut VecLikeHeader,
         sink: &mut impl ChildSink,
@@ -1527,12 +1672,12 @@ impl TaggedHeap {
                         );
                         return;
                     }
-                    sink.child(data.arglist);
-                    if let Some(child) = data.params.heap_child() {
+                    sink.child(data.arglist());
+                    if let Some(child) = data.params().heap_child() {
                         sink.child(child);
                     }
-                    sink.children(data.constants.iter().copied());
-                    if let Some(env) = data.env {
+                    sink.children(data.constants().iter().copied());
+                    if let Some(env) = data.env() {
                         sink.child(env);
                     }
                     if let Some(doc_form) = data.doc_form {
@@ -1637,8 +1782,15 @@ impl TaggedHeap {
         let roots: Vec<(TaggedValue, &'static str)> = self
             .buffer_registry
             .iter()
-            .flatten()
-            .map(|value| (*value, "buffer-registry"))
+            .enumerate()
+            .filter(|(idx, _)| {
+                self.ephemeron_records.killed_buffer_ephemerons.is_empty()
+                    || !self
+                        .ephemeron_records
+                        .killed_buffer_ephemerons
+                        .contains_key(&crate::value::buffer_vocab::BufferId(*idx as u64))
+            })
+            .filter_map(|(_, value)| value.map(|value| (value, "buffer-registry")))
             .chain(
                 self.window_registry
                     .values()
@@ -1646,8 +1798,15 @@ impl TaggedHeap {
             )
             .chain(
                 self.frame_registry
-                    .values()
-                    .map(|value| (*value, "frame-registry")),
+                    .iter()
+                    .filter(|(id, _)| {
+                        self.ephemeron_records.deleted_frame_ephemerons.is_empty()
+                            || !self
+                                .ephemeron_records
+                                .deleted_frame_ephemerons
+                                .contains_key(*id)
+                    })
+                    .map(|(_, value)| (*value, "frame-registry")),
             )
             .chain(
                 self.timer_registry
@@ -1656,8 +1815,14 @@ impl TaggedHeap {
             )
             .chain(
                 self.process_registry
-                    .values()
-                    .map(|value| (*value, "process-registry")),
+                    .iter()
+                    .filter(|(id, _)| {
+                        !self
+                            .ephemeron_records
+                            .retired_process_ephemerons
+                            .contains_key(id)
+                    })
+                    .map(|(_, value)| (*value, "process-registry")),
             )
             .chain(
                 self.canonical_empty_strings
@@ -1672,6 +1837,14 @@ impl TaggedHeap {
                     .iter()
                     .map(|value| (*value, "doomed-finalizer-function")),
             )
+            .chain(
+                self.published_payload_roots
+                    .values()
+                    .flatten()
+                    .flatten()
+                    .copied()
+                    .map(|value| (value, "published-payload-root")),
+            )
             .collect();
 
         // Handshake instrumentation: enumeration volume + wall cost, routed to
@@ -1684,10 +1857,16 @@ impl TaggedHeap {
         self.last_runtime_seed_us = seed_t0.elapsed().as_micros() as u64;
     }
 
+    /// # Safety
+    ///
+    /// Sweeps and frees unmarked objects. The caller has finished marking
+    /// and holds the only live heap borrow. No pointer the sweep can free
+    /// is live across the call.
     #[doc(hidden)]
-    pub fn complete_collection(&mut self) {
+    pub unsafe fn complete_collection(&mut self) {
+        self.assert_no_owner_cons_reserves();
         assert!(
-            !self.concurrent_mark_running,
+            !self.has_unfinished_concurrent_mark(),
             "sweeping requires an explicit successful marker finish"
         );
         // Collector code never sees an open allocation region
@@ -1702,16 +1881,10 @@ impl TaggedHeap {
         //    so heap access is exclusive (no concurrency hazard here). --
         let mark_t0 = std::time::Instant::now();
         self.mark_all_on_gc_thread();
-        // Queue doomed finalizers before the weak sweep (GNU
-        // `queue_doomed_finalizers` runs before
-        // `mark_and_sweep_weak_table_contents` in `garbage_collect`): their
-        // functions are re-marked so both the weak sweep and the object sweep
-        // see them as live.
-        self.mark_and_queue_doomed_finalizers();
-        // Resolve weak hash tables now that the main mark has drained. Both the
-        // sync and concurrent paths converge here with the mutator stopped, so
-        // this is single-threaded and path-agnostic.
-        self.mark_and_sweep_weak_tables();
+        // Ephemeron fixpoint, doomed finalizers, weak sweep, and the three
+        // explicit reclaims. The order lives in one method so the incremental
+        // termination cannot drop the reclaims.
+        let _ = self.finish_stopped_mark_adapters();
         let mark_us = mark_t0.elapsed().as_micros() as u64;
 
         // The mark has drained and the sweep has not started: the one moment
@@ -1729,15 +1902,57 @@ impl TaggedHeap {
         self.finalize_collection(mark_us, bytes_before, t0);
     }
 
+    /// Post-mark adapters shared by `complete_collection` and
+    /// `incremental_finish`.
+    ///
+    /// The order is fixed: ephemeron fixpoint, doomed finalizers, fixpoint,
+    /// weak sweep, then the three explicit reclaims. This method is the only
+    /// caller of those steps, except the era path's test permit, which still
+    /// calls `mark_and_sweep_weak_tables` by itself.
+    ///
+    /// Does not run `mark_all_on_gc_thread` or `finalize_collection`. Does
+    /// not run queued Lisp finalizers or host destroy. Empty explicit maps
+    /// reclaim nothing.
+    ///
+    /// Returns the microseconds spent in the finalizer scan and the weak
+    /// sweep, so incremental termination can keep its handshake split. The
+    /// ephemeron fixpoints and the reclaims sit outside those two timers.
+    pub(super) fn finish_stopped_mark_adapters(&mut self) -> (u64, u64) {
+        assert!(
+            !self.has_unfinished_concurrent_mark(),
+            "finish_stopped_mark_adapters cannot run while a concurrent mark is unfinished"
+        );
+        self.mark_reached_ephemeron_records_to_fixpoint();
+        // Queue doomed finalizers before the weak sweep (GNU
+        // `queue_doomed_finalizers` runs before
+        // `mark_and_sweep_weak_table_contents` in `garbage_collect`): their
+        // functions are re-marked so both the weak sweep and the object sweep
+        // see them as live.
+        let finalizer_t0 = std::time::Instant::now();
+        self.mark_and_queue_doomed_finalizers();
+        let finalizer_us = finalizer_t0.elapsed().as_micros() as u64;
+        self.mark_reached_ephemeron_records_to_fixpoint();
+        // Resolve weak hash tables now that the main mark has drained. Both
+        // the sync and incremental paths converge here with the mutator
+        // stopped, so this is single-threaded.
+        let weak_t0 = std::time::Instant::now();
+        self.mark_and_sweep_weak_tables();
+        let weak_us = weak_t0.elapsed().as_micros() as u64;
+        self.reclaim_unreached_retired_processes();
+        self.reclaim_unreached_killed_buffers();
+        self.reclaim_unreached_deleted_frames();
+        (finalizer_us, weak_us)
+    }
+
     /// Queue the functions of finalizer objects this cycle found unreachable —
-    /// GNU `queue_doomed_finalizers` + `mark_finalizers` (alloc.c). Must run
-    /// at BOTH mark terminations (`complete_collection` and
-    /// `incremental_finish`), after the main mark drains and before the weak
-    /// sweep. A doomed finalizer leaves the registry and is swept normally;
-    /// only its `function` is queued, re-marked transitively (same marking
-    /// helpers as the weak-table fixpoint) so the imminent sweep keeps
-    /// everything it needs. Still-marked finalizers stay registered.
-    pub(super) fn mark_and_queue_doomed_finalizers(&mut self) {
+    /// GNU `queue_doomed_finalizers` + `mark_finalizers` (alloc.c). Runs only
+    /// from `finish_stopped_mark_adapters`, after the main mark drains and
+    /// before the weak sweep. A doomed finalizer leaves the registry and is
+    /// swept normally; only its `function` is queued, re-marked transitively
+    /// (same marking helpers as the weak-table fixpoint) so the imminent sweep
+    /// keeps everything it needs. Still-marked finalizers stay registered.
+    /// The queued functions are not called here.
+    fn mark_and_queue_doomed_finalizers(&mut self) {
         if self.finalizer_registry.is_empty() {
             return;
         }
@@ -1784,6 +1999,22 @@ impl TaggedHeap {
         std::mem::take(&mut self.doomed_finalizer_functions)
     }
 
+    /// Put functions taken by [`Self::take_doomed_finalizer_functions`] back
+    /// at the FRONT of the queue after a non-local exit stopped the batch.
+    /// GNU `run_finalizers` unchains one finalizer at a time, so the ones a
+    /// throw did not reach stay on `doomed_finalizers` for a later
+    /// collection; functions a nested collection queued during the run follow
+    /// them. The queue is an internal runtime root, so requeueing here roots
+    /// every returned function for the next cycle.
+    pub fn requeue_doomed_finalizer_functions(
+        &mut self,
+        functions: impl IntoIterator<Item = TaggedValue>,
+    ) {
+        let mut requeued: Vec<TaggedValue> = functions.into_iter().collect();
+        requeued.append(&mut self.doomed_finalizer_functions);
+        self.doomed_finalizer_functions = requeued;
+    }
+
     /// Number of live finalizer objects still registered. `dump-emacs-portable`
     /// consults this after its pre-dump collection: the portable dump cannot
     /// represent finalizer objects (the writer arms refuse them), so a
@@ -1813,7 +2044,7 @@ impl TaggedHeap {
     /// survives per its table's weakness — iterate to stability because a value
     /// in one weak table may be a key in another — then non-surviving entries
     /// are removed.
-    pub(super) fn mark_and_sweep_weak_tables(&mut self) {
+    fn mark_and_sweep_weak_tables(&mut self) {
         // Seed the always-swept weak-table registry into this cycle's worklist.
         // It covers image-permanent and collectible runtime-tenured tables. The
         // main mark can skip these owners, but their entries still need weak
@@ -1821,11 +2052,26 @@ impl TaggedHeap {
         // collectible table from the registry before freeing its storage.
         // Young tables join this cycle's worklist through `trace_veclike` /
         // `register_weak_hash_table_for_sweep`.
-        for &tptr in &self.always_swept_weak_tables {
-            if self.weak_hash_tables_set.insert(tptr) {
-                self.weak_hash_tables.push(tptr);
+        //
+        // A minor seeds none of them. Every minor survivor is promoted, so an
+        // old table can gain a young key or value only through a store, and
+        // the store logs the table (`remember_owner`); the remembered seed
+        // then registered it above. At the end of the first partition cycle,
+        // `scan_permanents_for_young_children` remembers every tenured table
+        // that holds a collectible child, so the next minor registers those
+        // the same way. An unwritten old table holds only old, permanent or
+        // immediate children, all black by generation here
+        // (`is_value_marked`): each entry survives and marks nothing, so
+        // scanning it cannot change the result.
+        if !self.is_minor_collection() {
+            for &tptr in &self.always_swept_weak_tables {
+                if self.weak_hash_tables_set.insert(tptr) {
+                    self.weak_hash_tables.push(tptr);
+                }
             }
         }
+
+        self.mark_reached_ephemeron_records_to_fixpoint();
 
         if self.weak_hash_tables.is_empty() {
             return;
@@ -1850,6 +2096,8 @@ impl TaggedHeap {
                     tables.inspect(tptr, |ht| {
                         let weakness = ht.weakness;
                         for entry in ht.data.entries_in_slot_order() {
+                            #[cfg(any(test, feature = "test-support"))]
+                            WEAK_ENTRY_VISITS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                             let (key, value) = (entry.key, entry.value);
                             let key_survives = self.is_value_marked(key);
                             let value_survives = self.is_value_marked(value);
@@ -1867,6 +2115,9 @@ impl TaggedHeap {
                     })
                 };
             }
+            marked |= self.mark_reached_retired_processes();
+            marked |= self.mark_reached_killed_buffers();
+            marked |= self.mark_reached_deleted_frames();
             // Drain whatever those surviving entries reached, then re-check.
             self.mark_all();
             if !marked {
@@ -1893,6 +2144,133 @@ impl TaggedHeap {
                     });
                 })
             };
+        }
+    }
+
+    /// Mark retired-process, killed-buffer, and deleted-frame fields to one
+    /// joint fixpoint. A field of any kind can reach the key object of
+    /// another, so the three ephemeron sets are drained together rather than
+    /// one after another.
+    fn mark_reached_ephemeron_records_to_fixpoint(&mut self) {
+        loop {
+            let processes = self.mark_reached_retired_processes();
+            let buffers = self.mark_reached_killed_buffers();
+            let frames = self.mark_reached_deleted_frames();
+            if !(processes || buffers || frames) {
+                break;
+            }
+            self.mark_all();
+        }
+    }
+
+    /// Mark fields of retired processes whose process objects were reached.
+    /// Returns true when it adds work to the gray queue; the caller drains and
+    /// repeats so chains of retired processes reach a fixpoint.
+    fn mark_reached_retired_processes(&mut self) -> bool {
+        let reached: Vec<_> = self
+            .ephemeron_records
+            .retired_process_ephemerons
+            .keys()
+            .copied()
+            .filter(|id| {
+                self.process_registry
+                    .get(id)
+                    .is_some_and(|value| self.is_value_marked(*value))
+            })
+            .collect();
+        for id in &reached {
+            let fields = self
+                .ephemeron_records
+                .retired_process_ephemerons
+                .remove(id)
+                .unwrap_or_default();
+            for field in fields {
+                self.mark_or_push_child(field, "retired-process-field");
+            }
+        }
+        !reached.is_empty()
+    }
+
+    /// Drop registry roots for retired processes that no other root reached.
+    fn reclaim_unreached_retired_processes(&mut self) {
+        let unreached = std::mem::take(&mut self.ephemeron_records.retired_process_ephemerons);
+        for id in unreached.into_keys() {
+            self.process_registry.remove(&id);
+            self.ephemeron_records.reclaimed_process_ids.push(id);
+        }
+    }
+
+    /// Mark fields of killed buffers whose buffer objects were reached.
+    /// Returns true when it adds work to the gray queue; the caller drains and
+    /// repeats so chains of killed buffers reach a fixpoint.
+    fn mark_reached_killed_buffers(&mut self) -> bool {
+        let reached: Vec<_> = self
+            .ephemeron_records
+            .killed_buffer_ephemerons
+            .keys()
+            .copied()
+            .filter(|id| {
+                self.buffer_value(*id)
+                    .is_some_and(|value| self.is_value_marked(value))
+            })
+            .collect();
+        for id in &reached {
+            let fields = self
+                .ephemeron_records
+                .killed_buffer_ephemerons
+                .remove(id)
+                .unwrap_or_default();
+            for field in fields {
+                self.mark_or_push_child(field, "killed-buffer-field");
+            }
+        }
+        !reached.is_empty()
+    }
+
+    /// Drop registry roots for killed buffers that no other root reached.
+    fn reclaim_unreached_killed_buffers(&mut self) {
+        let unreached = std::mem::take(&mut self.ephemeron_records.killed_buffer_ephemerons);
+        for id in unreached.into_keys() {
+            if let Some(slot) = self.buffer_registry.get_mut(id.0 as usize) {
+                *slot = None;
+            }
+            self.ephemeron_records.reclaimed_buffer_ids.push(id);
+        }
+    }
+
+    /// Mark fields of deleted frames whose frame objects were reached.
+    /// Returns true when it adds work to the gray queue; the caller drains and
+    /// repeats so a chain that alternates kinds reaches one fixpoint.
+    fn mark_reached_deleted_frames(&mut self) -> bool {
+        let reached: Vec<_> = self
+            .ephemeron_records
+            .deleted_frame_ephemerons
+            .keys()
+            .copied()
+            .filter(|id| {
+                self.frame_value(*id)
+                    .is_some_and(|value| self.is_value_marked(value))
+            })
+            .collect();
+        for id in &reached {
+            let fields = self
+                .ephemeron_records
+                .deleted_frame_ephemerons
+                .remove(id)
+                .unwrap_or_default();
+            for field in fields {
+                self.mark_or_push_child(field, "deleted-frame-field");
+            }
+        }
+        !reached.is_empty()
+    }
+
+    /// Drop registry roots for deleted frames that no other root reached.
+    fn reclaim_unreached_deleted_frames(&mut self) {
+        let unreached = std::mem::take(&mut self.ephemeron_records.deleted_frame_ephemerons);
+        for id in unreached.into_keys() {
+            self.frame_registry.remove(&id);
+            self.ephemeron_records.reclaimed_frame_ids.push(id);
         }
     }
 
@@ -1923,6 +2301,11 @@ impl TaggedHeap {
         bytes_before: usize,
         t0: std::time::Instant,
     ) {
+        self.assert_no_owner_cons_reserves();
+        assert!(
+            !self.has_unfinished_concurrent_mark(),
+            "finalize_collection cannot sweep while a concurrent mark is unfinished"
+        );
         // The generation census reads the final marks before the sweep (no-op
         // unless `NEOVM_GC_CENSUS`).
         if self.census.is_some() {
@@ -1991,12 +2374,11 @@ impl TaggedHeap {
         if self.generational.major_in_progress {
             self.recompute_old_bytes_world_stopped();
         }
-        let mapped_object_live_bytes = self.mapped_non_cons_live_bytes();
         self.live_bytes = cons_live_bytes
             .saturating_add(object_live_bytes)
             .saturating_add(page_live_bytes)
-            .saturating_add(mapped_object_live_bytes)
-            .saturating_add(self.old_noncons_bytes());
+            .saturating_add(self.old_noncons_bytes())
+            .saturating_add(self.image_hash_table_storage_bytes());
         self.reset_bytes_since_gc();
         self.trace_region_stats();
         // Pacer: a stop-the-world cycle has no concurrent mark window; drop
@@ -2045,24 +2427,25 @@ impl TaggedHeap {
             let dump_cons: usize = self.mapped_cons_ranges.iter().map(|range| range.len).sum();
             let dump_float: usize = self.mapped_float_ranges.iter().map(|range| range.len).sum();
             eprintln!(
-                "NEOVM_GC gc#{} {:.2}ms [clear={}us mark={}us sweep={}us] \
-                 cons_live={} heap_noncons={} dump_marked={}/{} \
-                 dump[cons={} vec={} str={} float={}] dirty_owners={} live={}B",
-                self.gc_collections,
-                elapsed.as_micros() as f64 / 1000.0,
-                self.last_clear_us,
-                mark_us,
-                sweep_us,
-                self.cons_live_count,
-                self.non_cons_object_addrs.len(),
-                mapped_marked,
-                mapped_total,
-                dump_cons,
-                self.mapped_veclike_objects.len(),
-                self.mapped_string_objects.len(),
-                dump_float,
-                self.dirty_owners.len(),
-                self.live_bytes,
+                "{}",
+                super::incremental::format_eager_gc_trace_line(
+                    self.gc_collections,
+                    elapsed.as_micros() as f64 / 1000.0,
+                    self.last_clear_us,
+                    mark_us,
+                    sweep_us,
+                    self.cons_live_count,
+                    self.non_cons_object_addrs.len(),
+                    mapped_marked,
+                    mapped_total,
+                    dump_cons,
+                    self.mapped_veclike_objects.len(),
+                    self.mapped_string_objects.len(),
+                    dump_float,
+                    self.dirty_owners.len(),
+                    self.live_bytes,
+                    self.context_seed_us(),
+                )
             );
         }
         tracing::debug!(
@@ -2134,7 +2517,9 @@ impl TaggedHeap {
     pub(super) fn mark_all_on_gc_thread(&mut self) {
         let (done_tx, done_rx) = std::sync::mpsc::channel();
         let ptr = self as *mut TaggedHeap;
-        send_to_collector(self.identity, GcRequest::MarkAll(HeapPtr(ptr), done_tx));
+        // SAFETY: `self` is exclusively borrowed and this call blocks on
+        // `done_rx` until the collector finishes `mark_all()`.
+        unsafe { send_to_collector(self.identity, GcRequest::MarkAll(HeapPtr(ptr), done_tx)) };
         // Block until the GC thread has finished marking on the shared heap.
         done_rx.recv().expect("neovm-gc thread did not respond");
     }
@@ -2212,3 +2597,15 @@ mod generation_tests;
 #[cfg(test)]
 #[path = "tests/permanent_box_chain_test.rs"]
 mod permanent_box_chain_tests;
+
+/// The serial stop and the stopped major yield one queued doomed finalizer
+/// function through the same runtime-root seed.
+#[cfg(test)]
+#[path = "tests/doomed_finalizer_seed_test.rs"]
+mod doomed_finalizer_seed_tests;
+
+/// The serial stop keeps each weak-table weakness, including the cross-table
+/// fixpoint, through the collection it already runs.
+#[cfg(test)]
+#[path = "tests/weak_sweep_pin_test.rs"]
+mod weak_sweep_pin_tests;

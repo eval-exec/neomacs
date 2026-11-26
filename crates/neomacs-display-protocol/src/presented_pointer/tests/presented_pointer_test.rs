@@ -967,6 +967,44 @@ fn presented_hit_index_rejects_string_position_outside_its_typed_chrome_area() {
     );
 }
 
+/// Fractional display scales leave a real glyph edge a fraction of an f32 ulp
+/// past the chrome region computed for it: a 12-physical-pixel glyph on a
+/// 1.75-scale output is 6.857142857 logical pixels wide, so the last glyph of
+/// a right-aligned mode line lands at 1069.000366 in f32 while its region ends
+/// at 1069.0. A rejected presentation is never displayed, so this sub-pixel
+/// rounding must not fail the containment check.
+#[test]
+fn presented_hit_index_accepts_string_position_within_subpixel_rounding_error() {
+    use crate::{
+        DisplayWindowId, GlyphStringId, PresentedHitIndex, PresentedHitRegion, PresentedRegionKind,
+        PresentedStringPosition, PresentedWindowChromeArea, frame_chrome::PresentationId,
+    };
+
+    let presentation = PresentationId::new(44);
+    let window = DisplayWindowId::new(8);
+    let index = PresentedHitIndex::from_parts_with_strings(
+        presentation,
+        vec![PresentedHitRegion::new(
+            Some(window),
+            PresentedRegionKind::ModeLine,
+            rect(160.0, 1178.0, 909.0, 17.0),
+            20,
+        )],
+        Vec::new(),
+        vec![PresentedStringPosition::new(
+            window,
+            PresentedWindowChromeArea::ModeLine,
+            // 1062.1431884765625 + 6.857142925262451 == 1069.0003662109375
+            // in f32, i.e. 0.000366 past the region's 1069.0 right edge.
+            rect(1062.1431884765625, 1178.0, 6.857142925262451, 17.0),
+            GlyphStringId::new(3),
+            0,
+        )],
+    )
+    .unwrap();
+    assert_eq!(index.string_positions().len(), 1);
+}
+
 #[test]
 fn presented_hit_index_uses_half_open_edges_z_order_and_rejects_stale_queries() {
     use crate::{

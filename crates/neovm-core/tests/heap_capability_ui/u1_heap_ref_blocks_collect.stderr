@@ -1,0 +1,9 @@
+error[E0502]: cannot borrow `*ctx` as mutable because it is also borrowed as immutable
+ --> tests/heap_capability_ui/u1_heap_ref_blocks_collect.rs:8:5
+  |
+7 |     let items = v.vector_data_in(ctx.heap_ref()).unwrap();
+  |                                  --- immutable borrow occurs here
+8 |     ctx.gc_collect_exact();
+  |     ^^^^^^^^^^^^^^^^^^^^^^ mutable borrow occurs here
+9 |     let _ = items.len();
+  |             ----- immutable borrow later used here

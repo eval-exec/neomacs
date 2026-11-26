@@ -16,6 +16,10 @@ publish = false
 # again; nextest runs every test in its own process.
 autotests = false
 
+[features]
+# A real DMA-BUF/validation-layer tier, selected explicitly by the hardware gate.
+native-video-validation = ["dep:neomacs-video"]
+
 [[test]]
 name = "gui"
 path = "tests/gui.rs"
@@ -62,6 +66,9 @@ rustix.workspace = true
 wayland-client.workspace = true
 wayland-protocols.workspace = true
 wayland-protocols-wlr = { version = "0.3.12", features = ["client"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+neomacs-video = { workspace = true, optional = true, features = ["native-validation-fixtures"] }
 
 [target.'cfg(windows)'.dev-dependencies]
 windows-sys = { workspace = true, features = ["Win32_UI_WindowsAndMessaging"] }

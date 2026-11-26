@@ -24,7 +24,7 @@ macro_rules! eval_absent_layer_slots {
             use $crate::emacs_core::eval::data::window_state::{
                 Frame, FrameManager, MiniWindowResize, PresentationGeometry, PresentationId, WindowDomain, WindowRegions, WindowTree,
             };
-            use $crate::emacs_core::eval::keyboard::{FrontendWebViewEvent, IdleTransitionPolicy, InputEvent};
+            use $crate::emacs_core::eval::keyboard::{FrontendWebViewEvent, IdleTransitionPolicy, InputEvent, ReadCharRedisplayPhase};
             use $crate::emacs_core::eval::input_hooks::CommandInputWaitOutcome;
             use $crate::emacs_core::eval::call_interactively::CallInteractivelyPlan;
             use $crate::emacs_core::eval::data::process_state::{ChildOwnership, WaitNotifier};
@@ -412,6 +412,20 @@ macro_rules! eval_absent_layer_slots {
                 absent_layer_panic("ABSENT-LAYER display::terminal.frame_terminal");
             }
 
+            pub(crate) fn terminal_suspend_emacs(_ctx: &mut Context, args: Vec<Value>) -> EvalResult {
+                neovm_value::error::expect_args_range("suspend-emacs", &args, 0, 1)?;
+                if let Some(&stuff) = args.first()
+                    && !stuff.is_nil()
+                    && !stuff.is_string()
+                {
+                    return Err(neovm_value::error::signal(
+                        neovm_value::error::LispCondition::WrongTypeArgument,
+                        vec![Value::symbol("stringp"), stuff],
+                    ));
+                }
+                Ok(Value::NIL)
+            }
+
             pub(crate) fn terminal_print_handle(_value: &Value) -> Option<String> {
                 // F-2: None is the exact answer only while the terminal
                 // registry is empty; a record can exist (ensure_terminal(7)),
@@ -482,6 +496,32 @@ macro_rules! eval_absent_layer_slots {
             /// need not be empty; neither display destination can exist here.
             pub(crate) fn terminal_install_owner_registry_handle(handle: &TerminalRegistryHandle) {
                 absent_layer_unlinked("ABSENT-LAYER display::terminal.install_owner_registry_handle");
+            }
+
+            /// Display's terminal slot is not linked. The local slot is never
+            /// installed, so the receipt is AlreadyInactive and retains the handle.
+            pub(crate) fn terminal_detach_registry(
+                handle: &TerminalRegistryHandle,
+            ) -> Result<
+                neovm_value::heap_registry::detachment::DetachedRegistry<
+                    $crate::emacs_core::eval::data::terminal_state::TerminalLispRegistry,
+                >,
+                neovm_value::heap_registry::detachment::RegistryDetachFailure<
+                    $crate::emacs_core::eval::data::terminal_state::TerminalLispRegistry,
+                >,
+            > {
+                // A local slot is never installed. No thread-local is added:
+                // the receipt is AlreadyInactive and retains the handle.
+                let slot = neovm_value::heap_registry::HeapRegistrySlot::new(
+                    $crate::emacs_core::eval::data::terminal_state::TerminalLispRegistry::default(),
+                );
+                // SAFETY: no display slot exists in this runtime.
+                unsafe {
+                    slot.detach(
+                        handle,
+                        $crate::emacs_core::eval::data::terminal_state::TerminalLispRegistry::default(),
+                    )
+                }
             }
 
             pub(crate) fn fontset_alias_alist_startup_value() -> Value {
@@ -595,6 +635,32 @@ macro_rules! eval_absent_layer_slots {
 
             pub(crate) fn xfaces_install_registry_handle(handle: &FontRegistryHandle) {
                 absent_layer_unlinked("ABSENT-LAYER display::xfaces.install_registry_handle");
+            }
+
+            /// Display's face slot is not linked. The local slot is never
+            /// installed, so the receipt is AlreadyInactive and retains the handle.
+            pub(crate) fn xfaces_detach_registry(
+                handle: &FontRegistryHandle,
+            ) -> Result<
+                neovm_value::heap_registry::detachment::DetachedRegistry<
+                    $crate::emacs_core::eval::data::face_registry::FaceAttrState,
+                >,
+                neovm_value::heap_registry::detachment::RegistryDetachFailure<
+                    $crate::emacs_core::eval::data::face_registry::FaceAttrState,
+                >,
+            > {
+                // A local slot is never installed. No thread-local is added:
+                // the receipt is AlreadyInactive and retains the handle.
+                let slot = neovm_value::heap_registry::HeapRegistrySlot::new(
+                    $crate::emacs_core::eval::data::face_registry::FaceAttrState::default(),
+                );
+                // SAFETY: no display slot exists in this runtime.
+                unsafe {
+                    slot.detach(
+                        handle,
+                        $crate::emacs_core::eval::data::face_registry::FaceAttrState::default(),
+                    )
+                }
             }
 
             pub(crate) fn timefns_reset() {
@@ -746,6 +812,10 @@ macro_rules! eval_absent_layer_slots {
                 absent_layer_panic("ABSENT-LAYER display::display_window.invisible_source_run_end");
             }
 
+            pub(crate) fn display_window_composition_font_or_frame_at(ctx: &mut Context, pos: i64, string: Value) -> Option<Value> {
+                absent_layer_panic("ABSENT-LAYER display::display_window.composition_font_or_frame_at");
+            }
+
             pub(crate) fn perf_record(op: PerfOp, elapsed: std::time::Duration) {
                 absent_layer_panic("ABSENT-LAYER system::perf.record (no unit path: the unit SET has perf_enabled=false)");
             }
@@ -763,11 +833,11 @@ macro_rules! eval_absent_layer_slots {
                 neovm_value::tls_fingerprint::mix(acc, 0);
             }
 
-            pub(crate) fn wait_service_input_pending_with_timers(ctx: &mut Context) -> Result<(), Flow> {
+            pub(crate) fn wait_service_input_pending_with_timers(ctx: &mut Context) -> Result<$crate::emacs_core::eval::GuiBoundaryServiceActivity, Flow> {
                 absent_layer_panic("ABSENT-LAYER core::wait.service_input_pending_with_timers");
             }
 
-            pub(crate) fn wait_service_read_char_preliminary_redisplay(ctx: &mut Context, idle_policy: IdleTransitionPolicy) -> Result<(), Flow> {
+            pub(crate) fn wait_service_read_char_preliminary_redisplay(ctx: &mut Context, idle_policy: IdleTransitionPolicy, redisplay_phase: ReadCharRedisplayPhase) -> Result<(), Flow> {
                 absent_layer_panic("ABSENT-LAYER core::wait.service_read_char_preliminary_redisplay");
             }
 

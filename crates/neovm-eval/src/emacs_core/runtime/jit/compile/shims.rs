@@ -14,7 +14,7 @@ use super::*;
 /// through [`register_shims`], so the only effect of `no_mangle` is an exported
 /// symbol name. All shims the MIR tier can emit ([`MIR_SHIM_NAMES`]) carry it.
 #[unsafe(no_mangle)]
-pub extern "C" fn neovm_jit_gc_save() -> i64 {
+pub(crate) extern "C" fn neovm_jit_gc_save() -> i64 {
     save_scratch_gc_roots() as i64
 }
 
@@ -27,8 +27,13 @@ pub extern "C" fn neovm_jit_gc_save() -> i64 {
 /// them anyway — and avoids the thread-local push for the many symbol/fixnum
 /// operands the JIT roots before calls. `gc_restore` truncates to the saved
 /// depth, so a variable push count is fine.
+///
+/// # Safety
+/// `bits` is a live `Value` word owned by the calling mutator. Rebuilding a
+/// value from any other word and reading its header is undefined behavior.
 #[unsafe(no_mangle)]
-pub extern "C" fn neovm_jit_gc_push(bits: i64) {
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) unsafe extern "C" fn neovm_jit_gc_push(bits: i64) {
     let v = unsafe {
         /* SAFETY: JIT constant-pool word */
         Value::from_bits(bits as usize)
@@ -51,7 +56,7 @@ pub extern "C" fn neovm_jit_gc_push(bits: i64) {
 /// `ptr` addresses exactly `count` tagged-bits words the generated code
 /// wrote immediately before this call (its residual buffer); `count >= 0`.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn neovm_jit_gc_push_many(ptr: *const i64, count: i64) {
+pub(crate) unsafe extern "C" fn neovm_jit_gc_push_many(ptr: *const i64, count: i64) {
     for i in 0..count {
         // SAFETY: the generated code wrote `count` tagged words at `ptr`.
         let v = unsafe {
@@ -65,15 +70,27 @@ pub unsafe extern "C" fn neovm_jit_gc_push_many(ptr: *const i64, count: i64) {
 }
 
 /// Pop the scratch roots back to a saved depth.
+///
+/// # Safety
+/// `saved` is a depth this thread obtained from [`neovm_jit_gc_save`] and has
+/// not already restored past. Every root pushed after that depth belongs to
+/// the caller that is now finished with it. A smaller depth drops roots an
+/// outer frame still needs, and a later collection can free values the
+/// generated code still holds.
 #[unsafe(no_mangle)]
-pub extern "C" fn neovm_jit_gc_restore(saved: i64) {
+pub(crate) unsafe extern "C" fn neovm_jit_gc_restore(saved: i64) {
     restore_scratch_gc_roots(saved as usize);
 }
 
 /// Allocate `(cons car cdr)`. Roots car+cdr across the allocation itself; the
 /// caller roots any *other* live values first.
+///
+/// # Safety
+/// `car` and `cdr` are live `Value` words owned by the calling mutator.
+/// Rebuilding a value from any other word and reading its header is
+/// undefined behavior.
 #[unsafe(no_mangle)]
-pub extern "C" fn neovm_jit_cons(car: i64, cdr: i64) -> i64 {
+pub(crate) unsafe extern "C" fn neovm_jit_cons(car: i64, cdr: i64) -> i64 {
     // No rooting: `Value::cons` is pure allocation (`alloc_cons` — free-list
     // pop or block bump, allocate-black under a concurrent cycle) and never
     // reaches a GC safe point, so nothing can collect while `car`/`cdr` are
@@ -98,8 +115,12 @@ pub extern "C" fn neovm_jit_cons(car: i64, cdr: i64) -> i64 {
 /// concurrent cycle) and never reaches a GC safe point, so nothing can collect
 /// while the caller's other values sit in native slots.
 #[unsafe(no_mangle)]
-pub extern "C" fn neovm_jit_make_float(value: f64) -> i64 {
-    neovm_value::tagged::gc::with_tagged_heap(|heap| heap.alloc_float_inline(value)).bits() as i64
+pub(crate) extern "C" fn neovm_jit_make_float(value: f64) -> i64 {
+    // SAFETY: pure arena slot allocation (`alloc_float_inline`); never
+    // collects, sweeps, re-enters `with_tagged_heap`, mints capability tokens,
+    // or mutates existing payloads.
+    unsafe { neovm_value::tagged::gc::with_tagged_heap(|heap| heap.alloc_float_inline(value)) }
+        .bits() as i64
 }
 
 /// Cold overflow path of the JIT residual-root window (see
@@ -109,7 +130,7 @@ pub extern "C" fn neovm_jit_make_float(value: f64) -> i64 {
 /// The vmctx contract (see `neovm_jit_call`); pure Vec growth — no lisp,
 /// no GC, no safe point.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn neovm_jit_rootwin_grow(ctx: *mut u8, need: i64) {
+pub(crate) unsafe extern "C" fn neovm_jit_rootwin_grow(ctx: *mut u8, need: i64) {
     // SAFETY: see neovm_jit_call's function-level contract.
     // SAFETY (owner chain): Context work here uses this owner or its
     // typed reborrows; no older-raw callback intervenes before its last use
@@ -137,7 +158,7 @@ pub unsafe extern "C" fn neovm_jit_rootwin_grow(ctx: *mut u8, need: i64) {
 /// The vmctx contract (see `neovm_jit_call`).
 #[unsafe(no_mangle)]
 #[cold]
-pub unsafe extern "C" fn neovm_jit_stack_check(ctx: *mut u8) -> i64 {
+pub(crate) unsafe extern "C" fn neovm_jit_stack_check(ctx: *mut u8) -> i64 {
     if crate::emacs_core::eval::native_stack::native_stack_exhausted() {
         0
     } else {
@@ -154,20 +175,22 @@ std::thread_local! {
 }
 
 /// Native return code: success, result bits written through `out`.
-pub const STATUS_OK: i64 = 1;
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) const STATUS_OK: i64 = 1;
 /// Native return code: a speculation guard failed before any side effect ran —
 /// rerun the body on the Tier-0 interpreter.
-pub const STATUS_DEOPT: i64 = 0;
+pub(crate) const STATUS_DEOPT: i64 = 0;
 /// Native return code: a runtime call raised a non-local `Flow`; take it with
 /// [`take_pending_flow`] and propagate.
-pub const STATUS_SIGNAL: i64 = 2;
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) const STATUS_SIGNAL: i64 = 2;
 
 /// Native return code: a speculation guard failed at a PRECISE bytecode pc —
 /// the live operand stack was spilled into the leaf's deopt buffer and the
 /// frame's binds/handlers were left REGISTERED (no frame unwind): the caller
 /// resumes the Tier-0 interpreter mid-function via `Vm::run_resumed_frame`.
 /// Unlike [`STATUS_DEOPT`], this is sound even after side effects ran.
-pub const STATUS_DEOPT_AT: i64 = 3;
+pub(crate) const STATUS_DEOPT_AT: i64 = 3;
 /// Native return code: a compiled leaf's entry stack guard measured the
 /// native stack below its red zone. The callee did NOT run; the caller must
 /// re-run this call on the Tier-0 interpreter, whose probes grow stacker
@@ -186,7 +209,8 @@ pub(crate) const STATUS_STACK_FALLBACK: i64 = 5;
 /// like the other STATUS codes (`aot::compute_abi_tag`), although AOT leaves
 /// can never contain subr spec sites (speculation requires `Some(obarray)`;
 /// AOT compiles at `None`).
-pub const STATUS_NEED_GENERIC: i64 = 4;
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) const STATUS_NEED_GENERIC: i64 = 4;
 
 /// Test/debug-build counter of speculated direct-call shim entries (evidence
 /// that `find_spec_sites` + the spec lowering actually engage). Release unit
@@ -343,7 +367,8 @@ pub(crate) fn cbsym_spec_generic_count_for_test() -> u64 {
 /// thread's re-dispatch is abandoned along with the rest of that extent and
 /// the panic error is what propagates. Accepted, documented trade-off.
 #[inline(never)]
-pub fn take_pending_flow() -> Option<Flow> {
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn take_pending_flow() -> Option<Flow> {
     let flow = PENDING_FLOW.with(|p| p.borrow_mut().take());
     match PENDING_SHIM_PANIC.with(|p| p.borrow_mut().take()) {
         Some(message) => Some(signal("error", vec![Value::string(&message)])),
@@ -397,6 +422,130 @@ pub(crate) fn stash_pending_flow(flow: Flow) {
 // (abort at the `extern "C"` boundary).
 // ---------------------------------------------------------------------------
 
+/// One word of native-extent state in [`CURRENT_LEAF_BASES`].
+///
+/// `0` is outside native code. `1` ([`Self::LIVE_NO_BASES`]) means native
+/// code is on the stack and no framed snapshot is published. Any other value
+/// is an aligned pointer to a live [`JitLeafBases`]. The tag uses the
+/// alignment niche, so the cell stays one `usize`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(transparent)]
+pub(crate) struct NativeExtent(usize);
+
+impl NativeExtent {
+    pub(crate) const OUTSIDE: Self = Self(0);
+    /// Native code is live and no framed bases are published.
+    pub(crate) const LIVE_NO_BASES: Self = Self(1);
+
+    /// A framed snapshot. The pointer is non-null and aligned, so it is
+    /// distinct from [`Self::OUTSIDE`] and [`Self::LIVE_NO_BASES`].
+    ///
+    /// # Safety
+    /// `ptr` must be aligned (`addr & 1 == 0`) and point to a live
+    /// [`JitLeafBases`] for as long as the resulting `NativeExtent` is
+    /// published in `CURRENT_LEAF_BASES`.
+    pub(crate) unsafe fn framed(ptr: std::ptr::NonNull<JitLeafBases>) -> Self {
+        let addr = ptr.as_ptr() as usize;
+        debug_assert_ne!(addr, 0);
+        debug_assert_eq!(addr & 1, 0);
+        Self(addr)
+    }
+
+    pub(crate) fn is_outside(self) -> bool {
+        self.0 == 0
+    }
+
+    pub(crate) fn is_inside(self) -> bool {
+        self.0 != 0
+    }
+
+    /// The framed snapshot, or `None` for outside and for the live tag.
+    /// Those two states are not pointers and must not be dereferenced.
+    pub(crate) fn bases(self) -> Option<std::ptr::NonNull<JitLeafBases>> {
+        if self.0 & 1 == 0 && self.0 != 0 {
+            // SAFETY: `framed` stores only a non-null aligned `JitLeafBases`
+            // address. `0` and `1` are excluded above.
+            Some(unsafe { std::ptr::NonNull::new_unchecked(self.0 as *mut JitLeafBases) })
+        } else {
+            None
+        }
+    }
+}
+
+/// RAII guard restoring `CURRENT_LEAF_BASES` after an unframed armed leaf call.
+pub(crate) struct ArmedExtentGuard {
+    saved: Option<NativeExtent>,
+}
+
+impl Drop for ArmedExtentGuard {
+    #[inline(always)]
+    fn drop(&mut self) {
+        if let Some(saved) = self.saved {
+            CURRENT_LEAF_BASES.with(|slot| slot.set(saved));
+        }
+    }
+}
+
+/// RAII guard restoring `CURRENT_LEAF_BASES` after a framed native leaf call.
+pub(crate) struct PublishedExtentGuard {
+    outer: NativeExtent,
+}
+
+impl Drop for PublishedExtentGuard {
+    #[inline(always)]
+    fn drop(&mut self) {
+        CURRENT_LEAF_BASES.with(|slot| slot.set(self.outer));
+    }
+}
+
+/// Whether this thread is currently inside a native JIT extent.
+#[inline(always)]
+pub(crate) fn is_inside_native_extent() -> bool {
+    CURRENT_LEAF_BASES.with(|slot| slot.get().is_inside())
+}
+
+/// Mark this thread inside native code (`LIVE_NO_BASES`) when currently
+/// outside, restoring on drop without hiding an enclosing framed snapshot.
+#[inline(always)]
+pub(crate) fn enter_armed_live_extent() -> ArmedExtentGuard {
+    CURRENT_LEAF_BASES.with(|slot| {
+        let current = slot.get();
+        if current.is_outside() {
+            slot.set(NativeExtent::LIVE_NO_BASES);
+            ArmedExtentGuard {
+                saved: Some(current),
+            }
+        } else {
+            ArmedExtentGuard { saved: None }
+        }
+    })
+}
+
+/// Publish a frame-resident [`JitLeafBases`] snapshot (or `LIVE_NO_BASES` when
+/// `None`) for the lifetime of the returned guard.
+///
+/// # Safety
+/// When `ptr` is `Some(p)`, `p` must remain valid and live until the returned
+/// [`PublishedExtentGuard`] is dropped (including on unwind).
+#[inline(always)]
+pub(crate) unsafe fn publish_leaf_bases(
+    ptr: Option<std::ptr::NonNull<JitLeafBases>>,
+) -> PublishedExtentGuard {
+    let next = match ptr {
+        // SAFETY: caller guarantees `p` remains live until the guard drops.
+        Some(p) => unsafe { NativeExtent::framed(p) },
+        None => NativeExtent::LIVE_NO_BASES,
+    };
+    let outer = CURRENT_LEAF_BASES.with(|slot| slot.replace(next));
+    PublishedExtentGuard { outer }
+}
+
+/// Reset `CURRENT_LEAF_BASES` to `OUTSIDE` (test teardown helper).
+#[cfg(test)]
+pub(crate) fn clear_current_leaf_bases() {
+    CURRENT_LEAF_BASES.with(|slot| slot.set(NativeExtent::OUTSIDE));
+}
+
 std::thread_local! {
     /// Message of a panic contained at a shim boundary, pending
     /// materialization into a `Flow` by [`take_pending_flow`]. A Rust
@@ -424,21 +573,24 @@ std::thread_local! {
     /// names the innermost leaf). Read only by the contained-panic healing
     /// points; `None` outside any native extent.
     ///
-    /// A POINTER into `invoke_native`'s stack frame, not the value: the
-    /// snapshot is ~100 bytes, and value-swapping it through the Cell twice
-    /// per native call was 42% of a recursion benchmark's CPU once the spec
-    /// fast path made per-call costs the bottleneck. SAFETY (pointee
-    /// liveness): the pointer is published immediately before the native
-    /// entry call and restored to the outer value immediately after, so it
-    /// only ever names a frame that is live for that whole window; the only
-    /// readers (contain_jit_shim_panic, heal_shim_panic_residue_before_match)
-    /// run inside shims during that window, on the same single Lisp thread.
-    /// Shim panics are contained INSIDE the shim (the leaf exits via its
-    /// STATUS_SIGNAL path and `invoke_native` continues), and a re-raised
-    /// panic aborts at the extern "C" boundary — no path unwinds through
-    /// `invoke_native` leaving a stale pointer published.
-    pub(crate) static CURRENT_LEAF_BASES: std::cell::Cell<Option<std::ptr::NonNull<JitLeafBases>>> =
-        const { std::cell::Cell::new(None) };
+    /// One word. Null is outside native code. `1` (`LIVE_NO_BASES`) means
+    /// native code is live and no framed snapshot is published (the
+    /// outermost `run_armed_leaf` mark, and a null-vmctx framed call). Any
+    /// other value is an aligned pointer to a `JitLeafBases` in
+    /// `invoke_native_frame`'s stack. The cell stays one `usize`: the
+    /// framed pointer uses the alignment niche, so the tag does not grow it.
+    ///
+    /// SAFETY (pointee liveness): a framed pointer is published before the
+    /// native entry call and restored by a Drop guard when
+    /// `invoke_native_frame` returns, including on unwind, so it only names
+    /// a frame that is still live. The cold tail is inside that window.
+    /// Readers that need a snapshot match [`NativeExtent::bases`] and do
+    /// not dereference the tag. A nested framed call replaces this word
+    /// and its own guard restores it. `run_armed_leaf` publishes the tag
+    /// only when the word is outside, so a raw callee does not hide the
+    /// enclosing framed pointer.
+    static CURRENT_LEAF_BASES: std::cell::Cell<NativeExtent> =
+        const { std::cell::Cell::new(NativeExtent::OUTSIDE) };
 
     /// Scratch-GC-root depth a contained panic left dead pushes above (the
     /// panicked extent's skipped pops — including the shim body's own).
@@ -474,6 +626,11 @@ impl JitLeafBases {
     }
 }
 
+const _: () = {
+    assert!(std::mem::size_of::<NativeExtent>() == std::mem::size_of::<usize>());
+    assert!(std::mem::align_of::<JitLeafBases>() >= 2);
+};
+
 /// Whether a shim panic was contained and its residue not yet healed/taken.
 pub(crate) fn shim_panic_pending() -> bool {
     PENDING_SHIM_PANIC.with(|p| p.borrow().is_some())
@@ -495,14 +652,19 @@ pub(crate) fn shim_panic_pending() -> bool {
 /// the healing points instead — see the section comment): this keeps the
 /// wrapper's happy path free of per-call snapshot work. It never runs lisp
 /// and never allocates on the Lisp heap.
+/// # Safety
+/// `ctx` must be null or point to the dormant owner-thread [`Context`] for the
+/// active JIT shim invocation.
 #[cold]
 #[inline(never)]
-pub(crate) fn contain_jit_shim_panic(
+pub(crate) unsafe fn contain_jit_shim_panic(
     ctx: *mut u8,
     payload: Box<dyn std::any::Any + Send>,
 ) -> Result<(), Box<dyn std::any::Any + Send>> {
     let blocked = if ctx.is_null() {
-        neovm_value::tagged::gc::with_tagged_heap(|h| h.gc_locks_poisoned())
+        // SAFETY: read-only GC lock-poison probe; never collects, re-enters
+        // `with_tagged_heap`, mints capability tokens, or mutates payloads.
+        unsafe { neovm_value::tagged::gc::with_tagged_heap(|h| h.gc_locks_poisoned()) }
     } else {
         // SAFETY: seam-provided dormant Context (the shim's own vmctx
         // contract); the probe only reads two flags.
@@ -518,11 +680,14 @@ pub(crate) fn contain_jit_shim_panic(
         return Err(payload);
     }
     // Arm the root sweep for the leaf exit: the panicked extent's skipped
-    // pops all sit at or above the innermost leaf's entry depth. (No bases
-    // means no native extent — direct-call tests; nothing to sweep.)
-    if let Some(bases_ptr) = CURRENT_LEAF_BASES.with(|b| b.get()) {
-        // SAFETY: published for the dynamic extent of the innermost native
-        // call, whose `invoke_native` frame owns the pointee (thread_local doc).
+    // pops all sit at or above the innermost leaf's entry depth. Outside
+    // and the live tag have no framed pointer, so there is no entry floor
+    // to sweep against. That is the same skip an outermost raw call had
+    // when the cell was empty.
+    if let Some(bases_ptr) = CURRENT_LEAF_BASES.with(|b| b.get().bases()) {
+        // SAFETY: `bases()` is `None` for outside and for the live tag. A
+        // `Some` pointer is published for the dynamic extent of the innermost
+        // `invoke_native_frame`, whose frame owns the pointee.
         let bases = unsafe { *bases_ptr.as_ptr() };
         PENDING_ROOT_SWEEP_FLOOR.with(|f| {
             let floor = f.get().map_or(bases.roots(), |cur| cur.min(bases.roots()));
@@ -549,12 +714,12 @@ pub(crate) fn contain_jit_shim_panic(
 /// dispatch block's live roots are on top (see the floor doc).
 #[cold]
 pub(crate) fn heal_shim_panic_residue_before_match(ctx: &mut Context, ours: usize) {
-    let Some(bases_ptr) = CURRENT_LEAF_BASES.with(|b| b.get()) else {
+    let Some(bases_ptr) = CURRENT_LEAF_BASES.with(|b| b.get().bases()) else {
         return;
     };
-    // SAFETY: published for the dynamic extent of the innermost native call,
-    // whose `invoke_native` frame owns the pointee (thread_local doc); the
-    // match shim runs inside that extent.
+    // SAFETY: as `contain_jit_shim_panic` — only a framed pointer, still owned
+    // by the innermost `invoke_native_frame`. The live tag is not a pointer.
+    // The match shim runs inside that extent.
     let bases = unsafe { *bases_ptr.as_ptr() };
     ctx.restore_jit_shim_boundary(&bases.snap, bases.snap.condition_len() + ours);
 }
@@ -588,7 +753,8 @@ macro_rules! jit_shim_contain {
         let args_raw: *const i64 = $args_ptr;
         match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| $body)) {
             Ok(v) => v,
-            Err(payload) => match contain_jit_shim_panic(ctx_raw, payload) {
+            // SAFETY: `ctx_raw` is either null or the calling JIT shim's live `Context` pointer.
+            Err(payload) => match unsafe { contain_jit_shim_panic(ctx_raw, payload) } {
                 Ok(()) => {
                     // SAFETY: the seam-provided dormant Context (the shim's
                     // vmctx contract), and `args_raw` is the shim's own
@@ -611,7 +777,9 @@ macro_rules! jit_shim_contain {
     (no_ctx, $sentinel:expr, $body:expr) => {{
         match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| $body)) {
             Ok(v) => v,
-            Err(payload) => match contain_jit_shim_panic(core::ptr::null_mut(), payload) {
+            // SAFETY: `ctx_raw` is either null or the calling JIT shim's live `Context` pointer.
+            Err(payload) => match unsafe { contain_jit_shim_panic(core::ptr::null_mut(), payload) }
+            {
                 Ok(()) => $sentinel,
                 Err(payload) => std::panic::resume_unwind(payload),
             },
@@ -621,7 +789,8 @@ macro_rules! jit_shim_contain {
         let ctx_raw: *mut u8 = $ctx;
         match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| $body)) {
             Ok(v) => v,
-            Err(payload) => match contain_jit_shim_panic(ctx_raw, payload) {
+            // SAFETY: `ctx_raw` is either null or the calling JIT shim's live `Context` pointer.
+            Err(payload) => match unsafe { contain_jit_shim_panic(ctx_raw, payload) } {
                 Ok(()) => $sentinel,
                 Err(payload) => std::panic::resume_unwind(payload),
             },
@@ -659,7 +828,7 @@ pub(crate) use jit_shim_contain;
 /// The call comes from generated code holding the frame, or from a Rust
 /// caller that upholds this contract.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn neovm_jit_call(
+pub(crate) unsafe extern "C" fn neovm_jit_call(
     ctx: *mut u8,
     func_bits: i64,
     args_ptr: *const i64,
@@ -692,22 +861,25 @@ pub unsafe extern "C" fn neovm_jit_call(
                 && ctx_ref.maybe_quit_hot_ok()
                 // SAFETY: `args_ptr` is the generated code's call-args slot,
                 // holding `nargs` words for the whole call.
-                && let Some(outcome) =
+                && let Some(outcome) = unsafe {
                     Vm::call_armed_bytecode_value_native(ctx_ref, func_val, args_ptr, nargs)
+                }
             {
-                return native_call_status(outcome, out);
+                // SAFETY: `out` is the calling JIT frame's writable `i64` result slot.
+                return unsafe { native_call_status(outcome, out) };
             }
         }
-        neovm_jit_call_general(ctx, func_val, args_ptr, nargs, out)
+        // SAFETY: `ctx`/`ctx_ref` is the live `Context`, `args_ptr` addresses `nargs` live tagged words, and `out` is writable.
+        unsafe { neovm_jit_call_general(ctx, func_val, args_ptr, nargs, out) }
     })
 }
 
 /// Deliver a native-to-native call's outcome to the generated code.
 ///
-/// SAFETY: `out` is the generated code's result stack slot (the call-shim
-/// contract).
+/// # Safety
+/// `out` must point to a writable `i64` result slot owned by the caller.
 #[inline(always)]
-fn native_call_status(
+unsafe fn native_call_status(
     outcome: crate::emacs_core::jit::cache::NativeCallOutcome,
     out: *mut i64,
 ) -> i64 {
@@ -728,9 +900,14 @@ fn native_call_status(
 }
 
 /// [`neovm_jit_call`] for every call its native-to-native path declines,
-/// inside the shim's panic containment. Same contract.
+/// inside the shim's panic containment.
+///
+/// # Safety
+/// Same contract as [`neovm_jit_call`]: `ctx` is the live dormant owner
+/// [`Context`], `args_ptr` addresses `nargs` readable tagged words, and `out`
+/// points to a writable `i64` result slot.
 #[inline(never)]
-fn neovm_jit_call_general(
+unsafe fn neovm_jit_call_general(
     ctx: *mut u8,
     func_val: Value,
     args_ptr: *const i64,
@@ -754,9 +931,12 @@ fn neovm_jit_call_general(
             // code.
             if nargs >= 2
                 && func_val.as_bare_symbol_id() == Some(Vm::apply_builtin_id())
-                && let Some(outcome) = Vm::call_apply_native(ctx_ref, func_val, args_ptr, nargs)
+                && let Some(outcome) =
+                    // SAFETY: `out` is the calling JIT frame's writable `i64` result slot.
+                    unsafe { Vm::call_apply_native(ctx_ref, func_val, args_ptr, nargs) }
             {
-                return native_call_status(outcome, out);
+                // SAFETY: `out` is the calling JIT frame's writable `i64` result slot.
+                return unsafe { native_call_status(outcome, out) };
             }
             let args_start = ctx_ref.bc_buf.len();
             // SAFETY: generated code stored `nargs` words at args_ptr, and
@@ -766,10 +946,14 @@ fn neovm_jit_call_general(
             });
             if func_val.is_bare_symbol()
                 && let Some(res) =
-                    Vm::call_builtin_symbol_for_jit(ctx_ref, func_val, args_start, nargs)
+                    /* SAFETY: this shim just staged nargs words at bc_buf[args_start..]. */
+                    unsafe {
+                        Vm::call_builtin_symbol_for_jit(ctx_ref, func_val, args_start, nargs)
+                    }
             {
                 ctx_ref.bc_buf.truncate(args_start);
-                return jit_call_status(res, out);
+                // SAFETY: `out` is the calling JIT frame's writable `i64` result slot.
+                return unsafe { jit_call_status(res, out) };
             }
             // `maybe_quit_hot_ok` above tested exactly `maybe_quit`'s
             // fast-path condition (the same loads, the asynchronous word
@@ -782,10 +966,10 @@ fn neovm_jit_call_general(
             // already rooted on bc_buf.
             push_scratch_gc_root(func_val);
             let mut vm = Vm::from_context(ctx_ref);
-            let res = vm.call_for_jit_stack(func_val, args_start, nargs);
+            let res = /* SAFETY: this shim just staged nargs words at bc_buf[args_start..]. */ unsafe { vm.call_for_jit_stack(func_val, args_start, nargs) };
             vm.bc_buf_truncate(args_start);
             restore_scratch_gc_roots(saved);
-            return jit_call_status(res, out);
+            return unsafe { jit_call_status(res, out) };
         }
     }
     let saved = save_scratch_gc_roots();
@@ -816,9 +1000,9 @@ fn neovm_jit_call_general(
                 core::slice::from_raw_parts(args_ptr as *const Value, nargs)
             });
             let mut vm = Vm::from_context(ctx);
-            let res = vm.call_for_jit_stack(func_val, args_start, nargs);
+            let res = /* SAFETY: this shim just staged nargs words at bc_buf[args_start..]. */ unsafe { vm.call_for_jit_stack(func_val, args_start, nargs) };
             vm.bc_buf_truncate(args_start);
-            jit_call_status(res, out)
+            unsafe { jit_call_status(res, out) }
         }
     };
     restore_scratch_gc_roots(saved);
@@ -828,10 +1012,11 @@ fn neovm_jit_call_general(
 /// Deliver a call shim's result to the generated code: the value bits through
 /// its result slot, or the `Flow` stashed for the seam to re-raise.
 ///
-/// SAFETY: `out` is the generated code's result stack slot, valid for a write
-/// for the duration of the shim call (the call-shim contract).
+/// # Safety
+/// `out` must point to a writable `i64` result slot valid for the duration of
+/// the call.
 #[inline]
-fn jit_call_status(res: Result<Value, Flow>, out: *mut i64) -> i64 {
+unsafe fn jit_call_status(res: Result<Value, Flow>, out: *mut i64) -> i64 {
     match res {
         Ok(value) => {
             unsafe { *out = value.bits() as i64 };
@@ -856,7 +1041,7 @@ fn jit_call_status(res: Result<Value, Flow>, out: *mut i64) -> i64 {
 /// The call comes from generated code holding the frame, or from a Rust
 /// caller that upholds this contract.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn neovm_jit_apply(
+pub(crate) unsafe extern "C" fn neovm_jit_apply(
     ctx: *mut u8,
     func_bits: i64,
     args_ptr: *const i64,
@@ -1265,7 +1450,7 @@ thread_local! {
 /// # Safety
 /// Same vmctx contract as [`neovm_jit_call`], but only a shared read.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn neovm_jit_eq_slow(ctx: *mut u8, a: i64, b: i64) -> i64 {
+pub(crate) unsafe extern "C" fn neovm_jit_eq_slow(ctx: *mut u8, a: i64, b: i64) -> i64 {
     #[cfg(test)]
     EQ_SLOW_CALLS.with(|c| c.set(c.get() + 1));
     let a = unsafe {
@@ -1302,7 +1487,7 @@ pub unsafe extern "C" fn neovm_jit_eq_slow(ctx: *mut u8, a: i64, b: i64) -> i64 
 /// # Safety
 /// Same read-only vmctx contract as [`neovm_jit_eq_slow`].
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn neovm_jit_symbolp_slow(ctx: *mut u8, v: i64) -> i64 {
+pub(crate) unsafe extern "C" fn neovm_jit_symbolp_slow(ctx: *mut u8, v: i64) -> i64 {
     #[cfg(test)]
     SYMBOLP_SLOW_CALLS.with(|c| c.set(c.get() + 1));
     let v = unsafe {
@@ -1357,7 +1542,7 @@ pub(crate) fn var_shim_calls() -> (usize, usize, usize, usize) {
 /// The call comes from generated code holding the frame, or from a Rust
 /// caller that upholds this contract.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn neovm_jit_varref(ctx: *mut u8, sym: i64, out: *mut i64) -> i64 {
+pub(crate) unsafe extern "C" fn neovm_jit_varref(ctx: *mut u8, sym: i64, out: *mut i64) -> i64 {
     #[cfg(any(test, feature = "test-support"))]
     VARREF_SHIM_CALLS.with(|c| c.set(c.get() + 1));
     jit_shim_contain!(ctx, STATUS_SIGNAL, {
@@ -1417,7 +1602,11 @@ pub unsafe extern "C" fn neovm_jit_varref(ctx: *mut u8, sym: i64, out: *mut i64)
 /// The call comes from generated code holding the frame, or from a Rust
 /// caller that upholds this contract.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn neovm_jit_varset_collection(ctx: *mut u8, sym: i64, val: i64) -> i64 {
+pub(crate) unsafe extern "C" fn neovm_jit_varset_collection(
+    ctx: *mut u8,
+    sym: i64,
+    val: i64,
+) -> i64 {
     #[cfg(any(test, feature = "test-support"))]
     VARSET_SHIM_CALLS.with(|c| c.set(c.get() + 1));
     jit_shim_contain!(ctx, STATUS_SIGNAL, {
@@ -1471,7 +1660,7 @@ pub unsafe extern "C" fn neovm_jit_varset_collection(ctx: *mut u8, sym: i64, val
 /// The call comes from generated code holding the frame, or from a Rust
 /// caller that upholds this contract.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn neovm_jit_varset(ctx: *mut u8, sym: i64, val: i64) -> i64 {
+pub(crate) unsafe extern "C" fn neovm_jit_varset(ctx: *mut u8, sym: i64, val: i64) -> i64 {
     #[cfg(any(test, feature = "test-support"))]
     VARSET_SHIM_CALLS.with(|c| c.set(c.get() + 1));
     jit_shim_contain!(ctx, STATUS_SIGNAL, {
@@ -1523,7 +1712,11 @@ pub unsafe extern "C" fn neovm_jit_varset(ctx: *mut u8, sym: i64, val: i64) -> i
 /// # Safety
 /// Same vmctx contract as [`neovm_jit_call`].
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn neovm_jit_varbind_collection(ctx: *mut u8, sym: i64, val: i64) -> i64 {
+pub(crate) unsafe extern "C" fn neovm_jit_varbind_collection(
+    ctx: *mut u8,
+    sym: i64,
+    val: i64,
+) -> i64 {
     #[cfg(any(test, feature = "test-support"))]
     VARBIND_SHIM_CALLS.with(|c| c.set(c.get() + 1));
     jit_shim_contain!(ctx, STATUS_SIGNAL, {
@@ -1579,7 +1772,7 @@ pub unsafe extern "C" fn neovm_jit_varbind_collection(ctx: *mut u8, sym: i64, va
 /// The call comes from generated code holding the frame, or from a Rust
 /// caller that upholds this contract.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn neovm_jit_varbind(ctx: *mut u8, sym: i64, val: i64) -> i64 {
+pub(crate) unsafe extern "C" fn neovm_jit_varbind(ctx: *mut u8, sym: i64, val: i64) -> i64 {
     #[cfg(any(test, feature = "test-support"))]
     VARBIND_SHIM_CALLS.with(|c| c.set(c.get() + 1));
     jit_shim_contain!(ctx, STATUS_SIGNAL, {
@@ -1638,7 +1831,7 @@ pub unsafe extern "C" fn neovm_jit_varbind(ctx: *mut u8, sym: i64, val: i64) -> 
 /// The call comes from generated code holding the frame, or from a Rust
 /// caller that upholds this contract.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn neovm_jit_unbind_collection(ctx: *mut u8, n: i64) -> i64 {
+pub(crate) unsafe extern "C" fn neovm_jit_unbind_collection(ctx: *mut u8, n: i64) -> i64 {
     #[cfg(any(test, feature = "test-support"))]
     UNBIND_SHIM_CALLS.with(|c| c.set(c.get() + 1));
     // SAFETY: see neovm_jit_call's function-level contract.
@@ -1689,7 +1882,7 @@ pub unsafe extern "C" fn neovm_jit_unbind_collection(ctx: *mut u8, n: i64) -> i6
 /// The call comes from generated code holding the frame, or from a Rust
 /// caller that upholds this contract.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn neovm_jit_unbind(ctx: *mut u8, n: i64) -> i64 {
+pub(crate) unsafe extern "C" fn neovm_jit_unbind(ctx: *mut u8, n: i64) -> i64 {
     #[cfg(any(test, feature = "test-support"))]
     UNBIND_SHIM_CALLS.with(|c| c.set(c.get() + 1));
     // SAFETY: see neovm_jit_call's function-level contract.
@@ -1733,14 +1926,14 @@ pub unsafe extern "C" fn neovm_jit_unbind(ctx: *mut u8, n: i64) -> i64 {
 }
 
 // Selected array observer; no change to main exports or registration order.
-pub use super::array_profile::neovm_jit_t2_record_array_use;
-pub use super::sqrt_binding::neovm_jit_sqrt_binding_valid;
+pub(crate) use super::array_profile::neovm_jit_t2_record_array_use;
+pub(crate) use super::sqrt_binding::neovm_jit_sqrt_binding_valid;
 
 /// Carrier park: drop shim scratch and pending panic state.
 pub(crate) fn reset_carrier_tls() {
     PENDING_FLOW.with(|slot| *slot.borrow_mut() = None);
     PENDING_SHIM_PANIC.with(|slot| *slot.borrow_mut() = None);
-    CURRENT_LEAF_BASES.with(|slot| slot.set(None));
+    CURRENT_LEAF_BASES.with(|slot| slot.set(NativeExtent::OUTSIDE));
     PENDING_ROOT_SWEEP_FLOOR.with(|slot| slot.set(None));
 }
 
@@ -1749,7 +1942,7 @@ pub(crate) fn reset_carrier_tls() {
 pub(crate) fn carrier_tls_fingerprint(h: &mut u64) {
     neovm_value::tls_fingerprint::mix(
         h,
-        CURRENT_LEAF_BASES.with(|slot| slot.get().is_some() as u64),
+        CURRENT_LEAF_BASES.with(|slot| u64::from(slot.get().is_inside())),
     );
     neovm_value::tls_fingerprint::mix(h, PENDING_FLOW.with(|slot| slot.borrow().is_some() as u64));
     neovm_value::tls_fingerprint::mix(
@@ -1760,4 +1953,21 @@ pub(crate) fn carrier_tls_fingerprint(h: &mut u64) {
         h,
         PENDING_SHIM_PANIC.with(|slot| slot.borrow().is_some() as u64),
     );
+}
+
+#[cfg(test)]
+mod native_extent_soundness_tests {
+    use super::*;
+
+    /// JIT B6: constructing a pointer-carrying `NativeExtent::framed` must
+    /// require `unsafe`.
+    #[test]
+    #[deny(unused_unsafe)]
+    fn native_extent_framed_requires_unsafe() {
+        let ptr = std::ptr::NonNull::<JitLeafBases>::dangling();
+        // SAFETY: test only inspects `bases()` equality and never dereferences `ptr`.
+        let extent = unsafe { NativeExtent::framed(ptr) };
+        assert_eq!(extent.bases(), Some(ptr));
+        assert!(extent.is_inside());
+    }
 }

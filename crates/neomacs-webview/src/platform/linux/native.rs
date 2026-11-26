@@ -367,9 +367,19 @@ unsafe extern "C" fn preferred_buffer_formats(
         "get-preferred-buffer-formats",
         std::ptr::null_mut(),
         || unsafe {
-            delegate(display).map_or(std::ptr::null_mut(), |delegate| {
-                plat::wpe_display_get_preferred_buffer_formats(delegate)
-            })
+            let Some(delegate) = delegate(display) else {
+                return std::ptr::null_mut();
+            };
+            // `WPEDisplay::get_preferred_buffer_formats` stores this vfunc's
+            // return with `adoptGRef` (transfer full). The delegate getter is
+            // transfer none, so return one new ref and leave the delegate's
+            // ref in place. Returning the borrowed pointer makes display
+            // finalize unref an object the delegate already released.
+            let formats = plat::wpe_display_get_preferred_buffer_formats(delegate);
+            if !formats.is_null() {
+                plat::g_object_ref(formats.cast());
+            }
+            formats
         },
     )
 }
@@ -437,6 +447,13 @@ pub(super) unsafe fn is_custom_view(view: *mut plat::WPEView) -> bool {
         ) != 0
 }
 
+/// Install the Rust render-buffer callback on a `NeomacsWpeView` instance.
+///
+/// # Safety
+/// - `view` must be either null or a valid `WPEView` GObject owned on the
+///   current reactor thread.
+/// - `user_data` must remain valid for every invocation of `callback` until
+///   [`clear_render_buffer_callback`] returns `true` or `view` is finalized.
 pub(super) unsafe fn set_render_buffer_callback(
     view: *mut plat::WPEView,
     callback: RenderBufferCallback,
@@ -454,6 +471,52 @@ pub(super) unsafe fn set_render_buffer_callback(
         user_data,
     });
     true
+}
+
+/// Clear the render-buffer callback on a `NeomacsWpeView` instance.
+///
+/// Returns `true` if the sink is cleared (or `view` is not a custom view), and
+/// `false` if the sink `RefCell` is currently borrowed and could not be
+/// cleared. Callers must fail closed (e.g. leak callback userdata) when this
+/// returns `false`.
+///
+/// # Safety
+/// `view` must be either null or a valid `WPEView` GObject owned on the current
+/// reactor thread.
+pub(super) unsafe fn clear_render_buffer_callback(view: *mut plat::WPEView) -> bool {
+    if !is_custom_view(view) {
+        return true;
+    }
+    let instance = &*(view as *mut <view_imp::NeomacsWpeView as ObjectSubclass>::Instance);
+    let Ok(mut sink) = instance.imp().sink.try_borrow_mut() else {
+        return false;
+    };
+    *sink = None;
+    true
+}
+
+#[cfg(test)]
+pub(super) unsafe fn with_borrowed_render_buffer_sink<R>(
+    view: *mut plat::WPEView,
+    body: impl FnOnce() -> R,
+) -> R {
+    assert!(is_custom_view(view), "expected NeomacsWpeView");
+    let instance = &*(view as *mut <view_imp::NeomacsWpeView as ObjectSubclass>::Instance);
+    let _guard = instance.imp().sink.borrow();
+    body()
+}
+
+#[cfg(test)]
+pub(super) unsafe fn has_render_buffer_callback(view: *mut plat::WPEView) -> bool {
+    if !is_custom_view(view) {
+        return false;
+    }
+    let instance = &*(view as *mut <view_imp::NeomacsWpeView as ObjectSubclass>::Instance);
+    instance
+        .imp()
+        .sink
+        .try_borrow()
+        .is_ok_and(|sink| sink.is_some())
 }
 
 #[cfg(test)]

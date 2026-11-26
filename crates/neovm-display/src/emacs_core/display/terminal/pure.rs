@@ -28,10 +28,18 @@ thread_local! {
         HeapRegistrySlot::new(TerminalLispRegistry::default());
 }
 
+#[path = "lisp_state_detach.rs"]
+mod lisp_state_detach;
+#[doc(hidden)]
+pub use lisp_state_detach::detach_terminal_registry;
+
 fn ensure_current_terminal_registry() {
     let heap_identity =
         neovm_value::tagged::gc::current_tagged_heap_identity().unwrap_or_else(|| {
-            neovm_value::tagged::gc::with_tagged_heap(|heap| heap.tagged_heap_identity())
+            // SAFETY: reads the installed heap's identity word only; never
+            // collects, re-enters `with_tagged_heap`, mints capability tokens,
+            // or mutates any Lisp payload.
+            unsafe { neovm_value::tagged::gc::with_tagged_heap(|heap| heap.tagged_heap_identity()) }
         });
     TERMINAL_LISP_STATE.with(|slot| {
         if slot.current().heap_identity() != heap_identity {
@@ -117,7 +125,7 @@ fn with_terminal_manager<R>(f: impl FnOnce(&RefCell<TerminalManager>) -> R) -> R
 }
 
 pub(crate) const TERMINAL_NAME: &str = "initial_terminal";
-pub(crate) use neovm_eval::emacs_core::eval::protocol::tty_host::TERMINAL_ID;
+pub use neovm_eval::emacs_core::eval::protocol::tty_host::TERMINAL_ID;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct TerminalRuntime {
@@ -158,7 +166,8 @@ impl TerminalRuntime {
 pub use super::config::{TerminalRuntimeConfig, TtyTerminalConfig};
 
 pub use neovm_eval::emacs_core::eval::protocol::tty_host::{
-    OpenedTtyFrameHost, TerminalHost, TtyFrameHostFactory, TtyFrameOpenRequest, TtyFrameSize,
+    CONTROLLING_DEV_TTY_NAME, EmergencyEscapeOps, OpenedTtyFrameHost, SuspendRequest, TerminalHost,
+    TtyFrameHostFactory, TtyFrameOpenRequest, TtyFrameSize,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -210,7 +219,7 @@ impl DeleteTerminalMode {
 /// comparison against this type: `t->type == output_initial`
 /// (src/terminal.c:499).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum TerminalOutputMethod {
+pub(crate) enum TerminalOutputMethod {
     /// GNU `output_initial`: the bootstrap terminal used during daemon mode,
     /// batch mode and the early stages of startup, and which holds the initial
     /// frame.
@@ -242,6 +251,13 @@ struct TerminalRecord {
     window_system: Option<neovm_value::display_vocab::WindowSystemKind>,
     deleted: bool,
     host: Option<Box<dyn TerminalHost>>,
+    /// This terminal's own winsize, installed once. `(0, 0)` is a failed
+    /// ioctl or a successful 0×0, which GNU `get_tty_size` stores either way
+    /// (`src/sysdep.c:1403-1408`). A different function is refused.
+    winsize_query: Option<fn() -> (u32, u32)>,
+    /// Cells reported when this terminal was opened. Used only when it has
+    /// no live query and its host has no input fd.
+    opened_cells: Option<(u32, u32)>,
 }
 
 impl TerminalRecord {
@@ -256,6 +272,8 @@ impl TerminalRecord {
             window_system: None,
             deleted: false,
             host: None,
+            winsize_query: None,
+            opened_cells: None,
         }
     }
 
@@ -346,10 +364,9 @@ impl TerminalManager {
         self.terminals.iter().filter(|terminal| terminal.is_live())
     }
 
-    fn active_live_terminal_count(&self) -> usize {
+    fn has_other_active_terminal(&self, terminal_id: u64) -> bool {
         self.live_terminals()
-            .filter(|terminal| terminal.is_active())
-            .count()
+            .any(|terminal| terminal.id != terminal_id && terminal.is_active())
     }
 
     fn live_terminal_ids_in_keyboard_poll_order(&self) -> Vec<u64> {
@@ -386,6 +403,8 @@ impl TerminalManager {
             window_system,
             deleted: false,
             host: None,
+            winsize_query: None,
+            opened_cells: None,
         });
         self.terminals.last_mut().expect("terminal present")
     }
@@ -407,6 +426,84 @@ pub fn configure_terminal_runtime(config: impl Into<TerminalRuntimeConfig>) {
     // record. Publish it to the Context registry before a display callback
     // reactivates the owner and reconciles native records against that registry.
     terminal_handle_for_id(TERMINAL_ID);
+}
+
+/// Outcome of installing one terminal's winsize query.
+#[doc(hidden)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WinsizeQueryInstall {
+    Installed,
+    AlreadyInstalled,
+}
+
+/// A terminal already has a different winsize query.
+#[doc(hidden)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WinsizeQueryError {
+    DifferentQuery,
+}
+
+/// Install the initial terminal's winsize query on that terminal's record.
+///
+/// The same function is idempotent. A different function is refused and the
+/// resident query stays. This is not a process-global hook.
+#[doc(hidden)]
+pub fn set_initial_terminal_winsize_query(
+    query: fn() -> (u32, u32),
+) -> Result<WinsizeQueryInstall, WinsizeQueryError> {
+    with_terminal_manager(|slot| {
+        let mut manager = slot.borrow_mut();
+        let terminal = manager.ensure_initial_terminal();
+        match terminal.winsize_query {
+            None => {
+                terminal.winsize_query = Some(query);
+                Ok(WinsizeQueryInstall::Installed)
+            }
+            Some(installed) if std::ptr::fn_addr_eq(installed, query) => {
+                Ok(WinsizeQueryInstall::AlreadyInstalled)
+            }
+            Some(_) => Err(WinsizeQueryError::DifferentQuery),
+        }
+    })
+}
+
+/// Winsize of `terminal_id`'s own input.
+///
+/// Order: the query installed on this record, then the host's fd, then the
+/// size stored when the terminal was opened. `None` means this terminal has
+/// none of those. `(0, 0)` is a real answer and is not turned into `None`.
+pub(crate) fn terminal_winsize_cells(terminal_id: u64) -> Option<(u32, u32)> {
+    let stored = with_terminal_manager(|slot| {
+        let manager = slot.borrow();
+        let terminal = manager.get(terminal_id)?;
+        if !terminal.is_live() {
+            return None;
+        }
+        Some((
+            terminal.winsize_query,
+            terminal.opened_cells,
+            terminal.host.is_some(),
+        ))
+    })?;
+    if let Some(query) = stored.0 {
+        return Some(query());
+    }
+    if stored.2
+        && let Some(cells) = terminal_host_winsize_cells(terminal_id)
+    {
+        return Some(cells);
+    }
+    stored.1
+}
+
+fn terminal_host_winsize_cells(terminal_id: u64) -> Option<(u32, u32)> {
+    with_terminal_manager(|slot| {
+        let mut manager = slot.borrow_mut();
+        manager
+            .get_mut(terminal_id)
+            .and_then(|terminal| terminal.host.as_deref_mut())
+            .and_then(|host| host.tty_winsize_cells())
+    })
 }
 
 /// GNU `struct terminal.type` for a graphical backend. The backend symbols
@@ -457,7 +554,9 @@ fn terminal_configuration_parts(
                 attribute_capabilities: config.attribute_capabilities,
             };
             (
-                config.name.unwrap_or_else(|| "/dev/tty".into()),
+                config
+                    .name
+                    .unwrap_or_else(|| CONTROLLING_DEV_TTY_NAME.into()),
                 TerminalOutputMethod::Termcap,
                 runtime,
                 None,
@@ -550,6 +649,7 @@ pub(crate) fn install_opened_tty(
             None,
         );
         terminal.host = Some(opened.host);
+        terminal.opened_cells = Some((size.columns(), size.rows()));
     });
     if crate::face::realization::enabled() {
         // Color callbacks can reactivate the Context. Publish the opened
@@ -607,7 +707,7 @@ pub(crate) fn terminal_runtime_attribute_capabilities() -> TtyAttributeCapabilit
     terminal_runtime().attribute_capabilities
 }
 
-/// Clear cached terminal thread-locals (called from `reset_display_thread_locals`).
+/// Clear cached terminal thread-locals (the eval lifecycle's heap-reset hook).
 #[doc(hidden)]
 pub fn reset_terminal_thread_locals() {
     ensure_current_terminal_registry();
@@ -1047,6 +1147,42 @@ fn terminal_params_for_id(id: u64) -> Vec<(Value, Value)> {
     })
 }
 
+/// Collect raw bytes from a terminal parameter list (`tty-mode-reset-strings`
+/// or `tty-mode-set-strings`), matching GNU `tty_send_additional_strings`
+/// (`src/term.c:169-199`).
+///
+/// Walks the parameter value as a cons list in car-to-cdr order, appending raw
+/// string bytes verbatim and ignoring non-string elements or improper tails.
+/// Never signals or quits. Deliberate safety divergence from GNU: terminates on
+/// circular lists via Floyd's cycle detector (GNU's loop does not guard against
+/// cycles and would hang indefinitely).
+pub fn terminal_mode_strings_bytes(terminal_id: u64, param_name: &'static str) -> Vec<u8> {
+    let key = Value::symbol(param_name);
+    let value = lookup_terminal_parameter_value(&terminal_params_for_id(terminal_id), &key);
+    collect_mode_strings_bytes(value)
+}
+
+fn collect_mode_strings_bytes(mut list: Value) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    let mut slow = list;
+    let mut advance_slow = false;
+    while list.is_cons() {
+        let car = list.cons_car();
+        if let Some(lisp_str) = car.as_lisp_string() {
+            bytes.extend_from_slice(lisp_str.as_bytes());
+        }
+        list = list.cons_cdr();
+        if advance_slow {
+            slow = slow.cons_cdr();
+            if list == slow {
+                break;
+            }
+        }
+        advance_slow = !advance_slow;
+    }
+    bytes
+}
+
 fn update_terminal_param(id: u64, key: Value, value: Value) -> Value {
     terminal_handle_for_id(id);
     TERMINAL_LISP_STATE.with(|slot| {
@@ -1087,6 +1223,102 @@ fn with_terminal_host_for_id<R>(
         };
         f(host).map_err(|message| signal("error", vec![Value::string(message)]))
     })
+}
+
+/// GNU `get_named_terminal (dev_tty)` (`src/terminal.c:263-277`): matches only
+/// a live, non-suspended (`TERMINAL_ACTIVE_P`) termcap terminal whose name is
+/// `dev_tty` (`CONTROLLING_DEV_TTY_NAME`), never secondary TTYs opened via
+/// `make-terminal-frame` or `emacsclient -t`.
+fn is_active_controlling_tty_for_emergency_escape(terminal: &TerminalRecord) -> bool {
+    terminal.output_method == TerminalOutputMethod::Termcap
+        && terminal.name == CONTROLLING_DEV_TTY_NAME
+        && terminal.is_active()
+        && terminal.host.is_some()
+}
+
+/// GNU `handle_interrupt` controlling-TTY emergency escape
+/// (`src/keyboard.c:12622-12711`, `src/terminal.c:263-277`).
+///
+/// Looks up an active, live, non-suspended controlling termcap terminal named
+/// `"/dev/tty"`, temporarily takes its host so `TERMINAL_MANAGER` is not
+/// borrowed across Lisp `auto-save-hook`, runs
+/// [`TerminalHost::run_emergency_escape`], restores the host via RAII drop
+/// guard, and invalidates redisplay when handled.
+pub fn try_run_controlling_tty_emergency_escape(
+    ctx: &mut neovm_eval::emacs_core::eval::Context,
+) -> bool {
+    let taken = with_terminal_manager(|slot| {
+        let mut manager = slot.borrow_mut();
+        let terminal = manager
+            .terminals
+            .iter_mut()
+            .find(|terminal| is_active_controlling_tty_for_emergency_escape(terminal))?;
+        let id = terminal.id;
+        let host = terminal.host.take()?;
+        Some((id, host))
+    });
+    let Some((id, host)) = taken else {
+        return false;
+    };
+
+    struct RestoreHost {
+        id: u64,
+        host: Option<Box<dyn TerminalHost>>,
+    }
+    impl Drop for RestoreHost {
+        fn drop(&mut self) {
+            if let Some(host) = self.host.take() {
+                with_terminal_manager(|slot| {
+                    let mut manager = slot.borrow_mut();
+                    if let Some(terminal) = manager.get_mut(self.id)
+                        && terminal.host.is_none()
+                    {
+                        terminal.host = Some(host);
+                    }
+                });
+            }
+        }
+    }
+
+    struct ContextEmergencyEscapeOps<'a> {
+        ctx: &'a mut neovm_eval::emacs_core::eval::Context,
+        terminal_id: u64,
+    }
+
+    impl EmergencyEscapeOps for ContextEmergencyEscapeOps<'_> {
+        fn auto_save(&mut self) {
+            self.ctx.run_emergency_auto_save();
+        }
+
+        fn abort_orderly(&mut self) -> ! {
+            self.ctx.run_emergency_abort()
+        }
+
+        fn tty_mode_set_strings(&self) -> Vec<u8> {
+            terminal_mode_strings_bytes(self.terminal_id, "tty-mode-set-strings")
+        }
+    }
+
+    let reset_strings = terminal_mode_strings_bytes(id, "tty-mode-reset-strings");
+    let mut guard = RestoreHost {
+        id,
+        host: Some(host),
+    };
+    let handled = {
+        let mut ops = ContextEmergencyEscapeOps {
+            ctx,
+            terminal_id: id,
+        };
+        guard
+            .host
+            .as_deref_mut()
+            .is_some_and(|host| host.run_emergency_escape(&reset_strings, &mut ops))
+    };
+    drop(guard);
+    if handled {
+        ctx.invalidate_redisplay();
+    }
+    handled
 }
 
 fn delete_terminal_record(id: u64) {
@@ -1541,7 +1773,8 @@ pub fn builtin_suspend_tty(
     let hook_sym =
         neovm_eval::emacs_core::hook_runtime::hook_symbol_by_name(eval, "suspend-tty-functions");
     let _ = neovm_eval::emacs_core::hook_runtime::run_named_hook(eval, hook_sym, &[terminal])?;
-    with_terminal_host_for_id(terminal_id, |host| host.suspend_tty())?;
+    let reset_strings = terminal_mode_strings_bytes(terminal_id, "tty-mode-reset-strings");
+    with_terminal_host_for_id(terminal_id, |host| host.suspend_tty(&reset_strings))?;
     with_terminal_manager(|slot| {
         let mut manager = slot.borrow_mut();
         if let Some(terminal) = manager.get_mut(terminal_id) {
@@ -1580,7 +1813,8 @@ pub fn builtin_resume_tty(
         return Ok(Value::NIL);
     }
 
-    with_terminal_host_for_id(terminal_id, |host| host.resume_tty())?;
+    let set_strings = terminal_mode_strings_bytes(terminal_id, "tty-mode-set-strings");
+    with_terminal_host_for_id(terminal_id, |host| host.resume_tty(&set_strings))?;
     with_terminal_manager(|slot| {
         let mut manager = slot.borrow_mut();
         if let Some(terminal) = manager.get_mut(terminal_id) {
@@ -1598,6 +1832,118 @@ pub fn builtin_resume_tty(
     Ok(Value::NIL)
 }
 
+/// `(suspend-emacs &optional STUFFSTRING)` -> nil.
+///
+/// Mirrors GNU `Fsuspend_emacs` (`src/keyboard.c:12427-12476`): rejects when
+/// more than one live TTY terminal exists (including suspended TTYs, matching
+/// GNU `tty_list && tty_list->next`), validates `stuffstring`, runs
+/// `suspend-hook`, resets active TTY modes (including
+/// `tty-mode-reset-strings`), suspends or spawns a subshell (`cannot-suspend`)
+/// with optional `stuffstring`, re-initializes active TTY modes (including
+/// `tty-mode-set-strings`), invalidates redisplay, and runs
+/// `suspend-resume-hook`.
+///
+/// When no live hosted Termcap terminal exists (batch, GUI, daemon, or unit
+/// tests), hooks still run and OS suspend/subshell is skipped rather than
+/// aborting on a null `CURTTY()` as GNU does in `--batch`.
+#[doc(hidden)]
+pub fn builtin_suspend_emacs(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    expect_args_range("suspend-emacs", &args, 0, 1)?;
+    // GNU `keyboard.c:12446`: `if (tty_list && tty_list->next)` counts every
+    // live TTY terminal, including suspended ones.
+    let live_tty_count = with_terminal_manager(|slot| {
+        slot.borrow()
+            .live_terminals()
+            .filter(|t| t.output_method == TerminalOutputMethod::Termcap)
+            .count()
+    });
+    if live_tty_count > 1 {
+        return Err(signal(
+            "error",
+            vec![Value::string(
+                "There are other tty frames open; close them before suspending Emacs",
+            )],
+        ));
+    }
+    let stuffstring = match args.first().copied() {
+        None => None,
+        Some(v) if v.is_nil() => None,
+        Some(v) => match v.as_lisp_string() {
+            Some(s) => Some(s.as_bytes().to_vec()),
+            None => {
+                return Err(signal(
+                    LispCondition::WrongTypeArgument,
+                    vec![Value::symbol("stringp"), v],
+                ));
+            }
+        },
+    };
+
+    let suspend_hook =
+        neovm_eval::emacs_core::hook_runtime::hook_symbol_by_name(eval, "suspend-hook");
+    let _ = neovm_eval::emacs_core::hook_runtime::run_named_hook(eval, suspend_hook, &[])?;
+
+    let cannot_suspend = eval
+        .eval_symbol_by_id(neovm_value::intern::intern("cannot-suspend"))
+        .is_ok_and(|value| !value.is_nil());
+    let cwd = eval
+        .eval_symbol_by_id(neovm_value::intern::intern("default-directory"))
+        .ok()
+        .and_then(|value| value.as_lisp_string().map(|s| s.as_bytes().to_vec()))
+        .and_then(|bytes| String::from_utf8(bytes).ok())
+        .map(std::path::PathBuf::from);
+
+    let active_hosted_tty = with_terminal_manager(|slot| {
+        slot.borrow()
+            .live_terminals()
+            .find(|t| {
+                t.output_method == TerminalOutputMethod::Termcap
+                    && t.is_active()
+                    && t.host.is_some()
+            })
+            .map(|t| t.id)
+    });
+    if let Some(terminal_id) = active_hosted_tty {
+        let old_size = terminal_winsize_cells(terminal_id);
+        let reset_strings = terminal_mode_strings_bytes(terminal_id, "tty-mode-reset-strings");
+        with_terminal_host_for_id(terminal_id, |host| host.suspend_tty(&reset_strings))?;
+        let request = SuspendRequest {
+            stuffstring: stuffstring.as_deref(),
+            cannot_suspend,
+            cwd: cwd.as_deref(),
+        };
+        let suspend_result =
+            with_terminal_host_for_id(terminal_id, |host| host.sys_suspend(request));
+        // Mirror GNU's `record_unwind_protect_void (init_all_sys_modes)`:
+        // always restore TTY modes after `sys_suspend` / `sys_subshell` returns.
+        let set_strings = terminal_mode_strings_bytes(terminal_id, "tty-mode-set-strings");
+        let resume_result =
+            with_terminal_host_for_id(terminal_id, |host| host.resume_tty(&set_strings));
+        suspend_result?;
+        resume_result?;
+        // Mirror GNU `Fsuspend_emacs` (`src/keyboard.c:12455,12470-12472`):
+        // re-query TTY size after resuming and resize the selected frame
+        // synchronously before `suspend-resume-hook` runs.
+        let new_size = terminal_winsize_cells(terminal_id);
+        if let (Some((old_w, old_h)), Some((new_w, new_h))) = (old_size, new_size)
+            && (new_w != old_w || new_h != old_h)
+            && new_w > 0
+            && new_h > 0
+        {
+            eval.apply_resize_input_event(new_w, new_h, 1.0, 0, false)?;
+        }
+        eval.invalidate_redisplay();
+    }
+
+    let resume_hook =
+        neovm_eval::emacs_core::hook_runtime::hook_symbol_by_name(eval, "suspend-resume-hook");
+    let _ = neovm_eval::emacs_core::hook_runtime::run_named_hook(eval, resume_hook, &[])?;
+    Ok(Value::NIL)
+}
+
 // ---------------------------------------------------------------------------
 // Builtins moved from builtins.rs
 // ---------------------------------------------------------------------------
@@ -1607,9 +1953,12 @@ pub(crate) fn delete_terminal_owned(
     terminal_id: u64,
     mode: DeleteTerminalMode,
 ) -> EvalResult {
-    let active_live_count =
-        with_terminal_manager(|slot| slot.borrow().active_live_terminal_count());
-    if !mode.bypasses_active_terminal_check() && active_live_count <= 1 {
+    // GNU `Fdelete_terminal` (`src/terminal.c:395-403`) refuses only when no
+    // OTHER active display terminal remains, so deleting a suspended terminal
+    // while another active terminal exists is permitted without `force`.
+    let has_other_active =
+        with_terminal_manager(|slot| slot.borrow().has_other_active_terminal(terminal_id));
+    if !mode.bypasses_active_terminal_check() && !has_other_active {
         return Err(signal(
             "error",
             vec![Value::string(
@@ -1628,6 +1977,7 @@ pub(crate) fn delete_terminal_owned(
     } else {
         eval.queue_pending_safe_hook("delete-terminal-functions", &[terminal]);
     }
+    let reset_strings = terminal_mode_strings_bytes(terminal_id, "tty-mode-reset-strings");
     let host_delete = with_terminal_manager(|slot| {
         let mut manager = slot.borrow_mut();
         let Some(host) = manager
@@ -1636,7 +1986,7 @@ pub(crate) fn delete_terminal_owned(
         else {
             return Ok(());
         };
-        host.delete_terminal()
+        host.delete_terminal(&reset_strings)
     });
     if let Err(message) = host_delete {
         if mode.ignore_host_delete_errors() {

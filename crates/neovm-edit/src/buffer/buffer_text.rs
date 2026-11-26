@@ -8,9 +8,8 @@
 use std::cell::{Cell, OnceCell, RefCell};
 use std::collections::{HashMap, HashSet};
 use std::fmt;
-use std::rc::Rc;
+use std::rc::{Rc, Weak};
 
-use neovm_value::gc_trace::GcTrace;
 use neovm_value::value::Value;
 
 use super::buffer::{Buffer, BufferId, InsertionType};
@@ -121,32 +120,31 @@ struct SyntaxRunMemoEntry {
 
 /// Byte-coordinate twin of [`SyntaxRunMemoEntry`], carrying the RESOLVED
 /// `syntax-table` value for the run so the byte-addressed scanners' refill
-/// needs no byte<->char conversions and no interval lookup on a hit. The
-/// value bits are only handed out while (epoch, tick) match, and a live
-/// value is rooted by the interval plist it came from.
+/// needs no byte<->char conversions and no interval lookup on a hit. Live
+/// entries (matching `(epoch, tick)`) are traced as GC roots by
+/// `BufferText::trace_text_prop_roots_with` and only populated when the
+/// buffer resolves syntax properties directly without `category` / alias /
+/// default fallbacks.
 #[derive(Clone, Copy, Default)]
 struct SyntaxByteRunMemoEntry {
     epoch: u64,
     tick: u64,
     start: u64,
     end: u64,
-    value_bits: u64,
-    value_present: bool,
+    value: Option<Value>,
 }
 
 /// Char-coordinate twin of [`SyntaxByteRunMemoEntry`], for the char-indexed
 /// parse loop's `SyntaxPropRange`: a hit hands the resolved run to a fresh
-/// scan with no interval descent and no coalescing walk. Same soundness
-/// contract: value bits only leave while (epoch, tick) match, and a live
-/// value is rooted by the interval plist it came from.
+/// scan with no interval descent and no coalescing walk. Same GC-rooting and
+/// direct-property memoization contract as [`SyntaxByteRunMemoEntry`].
 #[derive(Clone, Copy, Default)]
 struct SyntaxCharRunMemoEntry {
     epoch: u64,
     tick: u64,
     start: u64,
     end: u64,
-    value_bits: u64,
-    value_present: bool,
+    value: Option<Value>,
 }
 
 /// One content mutation, in the terms the char<->byte position anchors need to
@@ -296,6 +294,10 @@ struct BufferTextStorage {
     virtual_gap: GapCompatState,
     modified_tick: i64,
     chars_modified_tick: i64,
+    /// GNU `BUF_UNCHANGED_MODIFIED` (`src/buffer.c:634`, `src/xdisp.c:18303`):
+    /// initialized to 1 and snapped to `modified_tick` at each accurate
+    /// redisplay ack in [`BufferText::reset_unchanged_region`].
+    unchanged_modified: i64,
     /// Tracks `modified_tick` at the last text-PROPERTY change (GNU has no
     /// direct analog; mirrors `chars_modified_tick` for char edits). Lets
     /// redisplay distinguish "appearance changed" (face/display/invisible
@@ -403,6 +405,10 @@ pub struct BufferTextStorage {
     virtual_gap: GapCompatState,
     modified_tick: i64,
     chars_modified_tick: i64,
+    /// GNU `BUF_UNCHANGED_MODIFIED` (`src/buffer.c:634`, `src/xdisp.c:18303`):
+    /// initialized to 1 and snapped to `modified_tick` at each accurate
+    /// redisplay ack in [`BufferText::reset_unchanged_region`].
+    unchanged_modified: i64,
     /// Tracks `modified_tick` at the last text-PROPERTY change (GNU has no
     /// direct analog; mirrors `chars_modified_tick` for char edits). Lets
     /// redisplay distinguish "appearance changed" (face/display/invisible
@@ -572,6 +578,7 @@ fn emacs_multibyte_candidate_len(lead: u8) -> usize {
     }
 }
 
+#[cfg(test)]
 fn multibyte_chunk_contains_char_code(chunk: &[u8], code: u32, carry: &mut Vec<u8>) -> bool {
     let mut pos = 0;
     if !carry.is_empty() {
@@ -647,6 +654,7 @@ impl Clone for BufferTextStorage {
             virtual_gap: self.virtual_gap,
             modified_tick: self.modified_tick,
             chars_modified_tick: self.chars_modified_tick,
+            unchanged_modified: self.unchanged_modified,
             props_modified_tick: self.props_modified_tick,
             beg_unchanged: self.beg_unchanged,
             end_unchanged: self.end_unchanged,
@@ -664,10 +672,12 @@ impl Clone for BufferTextStorage {
             anchor_cache_cursor: Cell::new(anchor_cache_cursor),
             syntax_run_memo: self.syntax_run_memo.clone(),
             syntax_run_memo_cursor: self.syntax_run_memo_cursor.clone(),
-            syntax_byte_run_memo: self.syntax_byte_run_memo.clone(),
-            syntax_byte_run_memo_cursor: self.syntax_byte_run_memo_cursor.clone(),
-            syntax_char_run_memo: self.syntax_char_run_memo.clone(),
-            syntax_char_run_memo_cursor: self.syntax_char_run_memo_cursor.clone(),
+            // Snapshots do not trace syntax-run memos as GC roots; start empty
+            // so no snapshot can retain untraced `Value`s.
+            syntax_byte_run_memo: RefCell::new([SyntaxByteRunMemoEntry::default(); 4]),
+            syntax_byte_run_memo_cursor: Cell::new(0),
+            syntax_char_run_memo: RefCell::new([SyntaxCharRunMemoEntry::default(); 4]),
+            syntax_char_run_memo_cursor: Cell::new(0),
             // A snapshot starts without the index; it is rebuilt on demand.
             syntax_safe_positions: RefCell::new(SyntaxSafePositions::default()),
             text_index,
@@ -686,7 +696,7 @@ impl Clone for BufferTextStorage {
 mod source_authority;
 #[cfg(any(test, feature = "test-support"))]
 pub mod source_authority;
-pub use source_authority::{BufferContentRevision, BufferSourceAuthority, BufferSourceReadLease};
+pub use source_authority::{BufferSourceAuthority, BufferSourceReadLease};
 
 #[cfg(not(any(test, feature = "test-support")))]
 pub struct BufferText {
@@ -807,6 +817,7 @@ impl BufferText {
                 virtual_gap,
                 modified_tick: 1,
                 chars_modified_tick: 1,
+                unchanged_modified: 1,
                 props_modified_tick: 1,
                 beg_unchanged: i64::MAX,
                 end_unchanged: i64::MAX,
@@ -1085,7 +1096,8 @@ impl BufferText {
         ))
     }
 
-    pub fn try_new_with_backend_kind(
+    #[cfg(test)]
+    pub(crate) fn try_new_with_backend_kind(
         kind: BufferTextBackendKind,
     ) -> Result<Self, BufferTextBackendKind> {
         Ok(Self::new_with_backend_kind(kind.try_into()?))
@@ -1102,13 +1114,16 @@ impl BufferText {
         ))
     }
 
-    pub fn try_from_str_with_backend_kind(
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn try_from_str_with_backend_kind(
         text: &str,
         kind: BufferTextBackendKind,
     ) -> Result<Self, BufferTextBackendKind> {
         Ok(Self::from_str_with_backend_kind(text, kind.try_into()?))
     }
 
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn from_str_with_backend_kind(
         text: &str,
         kind: ImplementedBufferTextBackendKind,
@@ -1118,16 +1133,6 @@ impl BufferText {
 
     pub fn from_lisp_string(text: &neovm_value::heap_types::LispString) -> Self {
         Self::from_lisp_string_with_backend_kind(text, ImplementedBufferTextBackendKind::GAP_BUFFER)
-    }
-
-    pub fn try_from_lisp_string_with_backend_kind(
-        text: &neovm_value::heap_types::LispString,
-        kind: BufferTextBackendKind,
-    ) -> Result<Self, BufferTextBackendKind> {
-        Ok(Self::from_lisp_string_with_backend_kind(
-            text,
-            kind.try_into()?,
-        ))
     }
 
     pub(crate) fn from_lisp_string_with_backend_kind(
@@ -1149,7 +1154,8 @@ impl BufferText {
         self.storage.borrow().backend.kind()
     }
 
-    pub fn try_convert_backend_kind(
+    #[cfg(test)]
+    pub(crate) fn try_convert_backend_kind(
         &self,
         kind: BufferTextBackendKind,
     ) -> Result<(), BufferTextBackendKind> {
@@ -1176,7 +1182,7 @@ impl BufferText {
         self.storage.borrow().backend.is_multibyte()
     }
 
-    pub fn set_multibyte(&self, multibyte: bool) {
+    pub(crate) fn set_multibyte(&self, multibyte: bool) {
         let mut storage = self.storage.borrow_mut();
         if storage.backend.is_multibyte() == multibyte {
             return;
@@ -1228,6 +1234,10 @@ impl BufferText {
         self.storage.borrow().chars_modified_tick
     }
 
+    pub fn unchanged_modified_tick(&self) -> i64 {
+        self.storage.borrow().unchanged_modified
+    }
+
     pub fn props_modified_tick(&self) -> i64 {
         self.storage.borrow().props_modified_tick
     }
@@ -1236,7 +1246,7 @@ impl BufferText {
         self.storage.borrow().save_modified_tick
     }
 
-    pub fn byte_at_emacs_byte_pos(&self, pos: EmacsBytePos) -> u8 {
+    pub(crate) fn byte_at_emacs_byte_pos(&self, pos: EmacsBytePos) -> u8 {
         self.storage.borrow().backend.byte_at_emacs_byte_pos(pos)
     }
 
@@ -1650,7 +1660,7 @@ impl BufferText {
         );
     }
 
-    pub fn shared_clone(&self) -> Self {
+    pub(crate) fn shared_clone(&self) -> Self {
         Self {
             storage: Rc::clone(&self.storage),
         }
@@ -1693,19 +1703,19 @@ impl BufferText {
         storage.save_modified_tick = save_modified_tick;
     }
 
-    pub fn set_modified_tick(&self, tick: i64) {
+    pub(crate) fn set_modified_tick(&self, tick: i64) {
         self.storage.borrow_mut().modified_tick = tick;
     }
 
-    pub fn set_save_modified_tick(&self, tick: i64) {
+    pub(crate) fn set_save_modified_tick(&self, tick: i64) {
         self.storage.borrow_mut().save_modified_tick = tick;
     }
 
-    pub fn increment_modified_tick(&self, delta: i64) {
+    pub(crate) fn increment_modified_tick(&self, delta: i64) {
         self.storage.borrow_mut().modified_tick += delta;
     }
 
-    pub fn record_char_modification(&self, delta: i64) {
+    pub(crate) fn record_char_modification(&self, delta: i64) {
         let mut storage = self.storage.borrow_mut();
         storage.modified_tick += delta;
         storage.chars_modified_tick = storage.modified_tick;
@@ -1715,7 +1725,8 @@ impl BufferText {
     /// rejoins `props_modified_tick` to it, leaving `chars_modified_tick`
     /// untouched. The single choke point for the props tick; mirrors
     /// [`Self::record_char_modification`] for char edits.
-    pub fn record_text_property_modification(&self) {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn record_text_property_modification(&self) {
         let mut storage = self.storage.borrow_mut();
         storage.modified_tick += 1;
         storage.props_modified_tick = storage.modified_tick;
@@ -1727,7 +1738,7 @@ impl BufferText {
     /// before the edit. The prefix `[0, start)` and suffix `[end, old_z)` remain
     /// unchanged; their lengths compose by `min` across multiple edits, so the
     /// accumulated dirty span is the union of every edit since the last ack.
-    pub fn note_changed_char_region(&self, start: i64, end: i64, old_z: i64) {
+    pub(crate) fn note_changed_char_region(&self, start: i64, end: i64, old_z: i64) {
         let mut storage = self.storage.borrow_mut();
         storage.beg_unchanged = storage.beg_unchanged.min(start.max(0));
         storage.end_unchanged = storage.end_unchanged.min((old_z - end).max(0));
@@ -1736,7 +1747,7 @@ impl BufferText {
     /// Record the start of a non-empty text-PROPERTY change for the GNU
     /// `BEG_UNCHANGED` accounting (see `prop_beg_unchanged`). The caller also
     /// folds the change into the ordinary accumulator.
-    pub fn note_changed_property_start(&self, start: i64) {
+    pub(crate) fn note_changed_property_start(&self, start: i64) {
         let mut storage = self.storage.borrow_mut();
         storage.prop_beg_unchanged = storage.prop_beg_unchanged.min(start.max(0));
     }
@@ -1744,8 +1755,11 @@ impl BufferText {
     /// Reset the unchanged-region accumulator to "fully unchanged" — the
     /// redisplay ack, performed at the committed (accepted) layout break, NOT on
     /// a retry/`continue` (which would under-invalidate, spec §6).
+    /// Also snaps `unchanged_modified` to `modified_tick`, matching GNU
+    /// `mark_window_display_accurate_1` (`src/xdisp.c:18303`).
     pub fn reset_unchanged_region(&self) {
         let mut storage = self.storage.borrow_mut();
+        storage.unchanged_modified = storage.modified_tick;
         storage.beg_unchanged = i64::MAX;
         storage.end_unchanged = i64::MAX;
         storage.prop_beg_unchanged = i64::MAX;
@@ -1793,6 +1807,7 @@ impl BufferText {
         Some((start, end))
     }
 
+    #[cfg(test)]
     pub(crate) fn emacs_byte_range_contains_char_code(
         &self,
         range: EmacsByteRange,
@@ -1842,6 +1857,19 @@ impl BufferText {
         self.storage.borrow().text_props.is_empty()
     }
 
+    /// GNU `buffer_intervals (buffer) != NULL`: the interval tree exists,
+    /// even when it currently carries no properties. Sticky across property
+    /// removal; cleared only where GNU sets the tree to NULL.
+    pub fn text_props_tree_present(&self) -> bool {
+        self.storage.borrow().text_props.interval_tree_present()
+    }
+
+    /// GNU `set_buffer_intervals (buffer, NULL)` for the whole-text-delete
+    /// site (`src/intervals.c:1324-1328`).
+    pub(crate) fn clear_text_prop_tree_presence(&self) {
+        Rc::make_mut(&mut self.storage.borrow_mut().text_props).clear_interval_tree_presence();
+    }
+
     pub fn text_props_snapshot(&self) -> TextPropertyTable {
         // Callers here (transpose-regions, pdump, buffer-copy) want an owned,
         // independent table, so deep-clone the shared inner table -- not the Rc.
@@ -1853,8 +1881,12 @@ impl BufferText {
     /// publish a standalone live property edit: table-local mutation numbers
     /// can collide. Live callers must pair it with the existing content epoch;
     /// the test-only raw replacement helper intentionally bypasses that rule.
-    pub fn text_props_replace(&self, table: TextPropertyTable) {
+    pub fn text_props_replace(&self, mut table: TextPropertyTable) {
         let mut storage = self.storage.borrow_mut();
+        // GNU's interval tree is persistent across edits; a table rebuilt
+        // from runs must not drop the presence bit.  The explicit
+        // whole-text-delete clear runs after the replacement.
+        table.inherit_interval_tree_presence(&storage.text_props);
         storage.text_props = Rc::new(table);
         // A swapped-in table carries its own mutation-tick lineage, which can
         // collide with the memo's stored ticks — drop the memo outright.
@@ -1986,7 +2018,13 @@ impl BufferText {
         *self.storage.borrow().syntax_safe_positions.borrow_mut() = index;
     }
 
-    pub fn replace_storage(&self, text: &str, multibyte: bool, text_props: TextPropertyTable) {
+    #[cfg(test)]
+    pub(crate) fn replace_storage(
+        &self,
+        text: &str,
+        multibyte: bool,
+        text_props: TextPropertyTable,
+    ) {
         let bytes = crate::buffer::storage_string::storage_string_to_buffer_bytes(text, multibyte);
         let string = if multibyte {
             neovm_value::heap_types::LispString::from_emacs_bytes(bytes)
@@ -1995,7 +2033,7 @@ impl BufferText {
         };
         self.replace_lisp_string(&string, text_props);
     }
-    pub fn replace_lisp_string(
+    pub(crate) fn replace_lisp_string(
         &self,
         text: &neovm_value::heap_types::LispString,
         text_props: TextPropertyTable,
@@ -2059,7 +2097,10 @@ impl BufferText {
     /// keeps those two coordinates together on `struct Lisp_Marker`; Neomacs
     /// uses `TextPositionAnchor` at this semantic boundary so callers cannot
     /// accidentally update one coordinate without the other.
-    pub fn remap_marker_anchors<F>(&self, mut remap: F)
+    ///
+    /// The closure must not run Lisp or collect. The next link is copied out
+    /// before the call, and a collection could free that node.
+    pub(crate) fn remap_marker_anchors<F>(&self, mut remap: F)
     where
         F: FnMut(TextPositionAnchor) -> TextPositionAnchor,
     {
@@ -2071,10 +2112,14 @@ impl BufferText {
         // chain link or null.
         unsafe {
             while !curr.is_null() {
-                let data = &mut (*curr).data;
-                let new_position = remap(marker_data_anchor(data));
-                set_marker_data_anchor(data, new_position);
-                curr = data.next_marker_ptr();
+                // Copy the anchor and the next link out before the closure.
+                // The closure may read this marker through another `MarkerRef`,
+                // and that read must not alias a live `&mut` of the same node.
+                let old_position = marker_data_anchor(&(*curr).data);
+                let next = (*curr).data.next_marker_ptr();
+                let new_position = remap(old_position);
+                set_marker_data_anchor(&mut (*curr).data, new_position);
+                curr = next;
             }
         }
     }
@@ -2275,10 +2320,10 @@ impl BufferText {
         end
     }
 
-    /// Byte-run memo lookup for the byte-addressed syntax scanners: on a hit
+    /// Byte-run memo lookup for `Buffer::resolve_syntax_byte_run`: on a hit
     /// the refill needs no conversion and no interval lookup. Returns
     /// `(start_byte, end_byte, resolved_value)`.
-    pub fn syntax_byte_run_memo_lookup(
+    pub(crate) fn syntax_byte_run_memo_lookup(
         &self,
         byte_pos: EmacsBytePos,
     ) -> Option<(u64, u64, Option<Value>)> {
@@ -2288,18 +2333,17 @@ impl BufferText {
         let pos = byte_pos.get() as u64;
         for entry in storage.syntax_byte_run_memo.borrow().iter() {
             if entry.epoch == epoch && entry.tick == tick && pos >= entry.start && pos < entry.end {
-                let value = entry.value_present.then(|| unsafe {
-                    /* SAFETY: buffer text word */
-                    Value::from_bits(entry.value_bits as usize)
-                });
-                return Some((entry.start, entry.end, value));
+                return Some((entry.start, entry.end, entry.value));
             }
         }
         None
     }
 
     /// Store a computed byte run (see `syntax_byte_run_memo_lookup`).
-    pub fn syntax_byte_run_memo_store(&self, start: u64, end: u64, value: Option<Value>) {
+    /// Crate-private: external callers must go through
+    /// `Buffer::resolve_syntax_byte_run`, which enforces direct-property
+    /// memoization preconditions.
+    pub(crate) fn syntax_byte_run_memo_store(&self, start: u64, end: u64, value: Option<Value>) {
         if end <= start {
             return;
         }
@@ -2313,34 +2357,34 @@ impl BufferText {
             tick,
             start,
             end,
-            value_bits: value.map_or(0, |v| v.bits() as u64),
-            value_present: value.is_some(),
+            value,
         };
         storage.syntax_byte_run_memo_cursor.set(slot + 1);
     }
 
-    /// Char-run memo lookup for the char-indexed parse loop (see
+    /// Char-run memo lookup for `Buffer::resolve_syntax_char_run` (see
     /// [`Self::syntax_byte_run_memo_lookup`] — same contract in char
     /// coordinates). Returns `(start_char, end_char, resolved_value)`.
-    pub fn syntax_char_run_memo_lookup(&self, pos: usize) -> Option<(u64, u64, Option<Value>)> {
+    pub(crate) fn syntax_char_run_memo_lookup(
+        &self,
+        pos: usize,
+    ) -> Option<(u64, u64, Option<Value>)> {
         let storage = self.storage.borrow();
         let epoch = storage.content_epoch;
         let tick = storage.text_props.syntax_prop_tick();
         let pos = pos as u64;
         for entry in storage.syntax_char_run_memo.borrow().iter() {
             if entry.epoch == epoch && entry.tick == tick && pos >= entry.start && pos < entry.end {
-                let value = entry.value_present.then(|| unsafe {
-                    /* SAFETY: buffer text word */
-                    Value::from_bits(entry.value_bits as usize)
-                });
-                return Some((entry.start, entry.end, value));
+                return Some((entry.start, entry.end, entry.value));
             }
         }
         None
     }
 
     /// Store a computed char run (see [`Self::syntax_char_run_memo_lookup`]).
-    pub fn syntax_char_run_memo_store(&self, start: u64, end: u64, value: Option<Value>) {
+    /// Crate-private: external callers must go through
+    /// `Buffer::resolve_syntax_char_run`.
+    pub(crate) fn syntax_char_run_memo_store(&self, start: u64, end: u64, value: Option<Value>) {
         if end <= start {
             return;
         }
@@ -2354,8 +2398,7 @@ impl BufferText {
             tick,
             start,
             end,
-            value_bits: value.map_or(0, |v| v.bits() as u64),
-            value_present: value.is_some(),
+            value,
         };
         storage.syntax_char_run_memo_cursor.set(slot + 1);
     }
@@ -2379,7 +2422,7 @@ impl BufferText {
             .get_properties_at_char_pos(pos.start())
     }
 
-    pub fn text_props_get_properties_ordered_at_emacs_byte_pos(
+    pub(crate) fn text_props_get_properties_ordered_at_emacs_byte_pos(
         &self,
         pos: EmacsBytePos,
     ) -> Vec<(Value, Value)> {
@@ -2390,7 +2433,7 @@ impl BufferText {
             .get_properties_ordered_at_char_pos(pos.start())
     }
 
-    pub fn text_props_get_properties_plist_value_at_emacs_byte_pos(
+    pub(crate) fn text_props_get_properties_plist_value_at_emacs_byte_pos(
         &self,
         pos: EmacsBytePos,
     ) -> Value {
@@ -2401,7 +2444,7 @@ impl BufferText {
             .get_properties_plist_value_at_char_pos(pos.start())
     }
 
-    pub fn text_props_range_has_all_properties_in_emacs_byte_range(
+    pub(crate) fn text_props_range_has_all_properties_in_emacs_byte_range(
         &self,
         byte_range: EmacsByteRange,
         properties: &[(Value, Value)],
@@ -2413,7 +2456,7 @@ impl BufferText {
             .range_has_all_properties_in_char_range(range, properties)
     }
 
-    pub fn text_props_range_has_any_property_named_in_emacs_byte_range(
+    pub(crate) fn text_props_range_has_any_property_named_in_emacs_byte_range(
         &self,
         byte_range: EmacsByteRange,
         names: &[Value],
@@ -2425,7 +2468,7 @@ impl BufferText {
             .range_has_any_property_named_in_char_range(range, names)
     }
 
-    pub fn text_props_range_has_any_interval_in_emacs_byte_range(
+    pub(crate) fn text_props_range_has_any_interval_in_emacs_byte_range(
         &self,
         byte_range: EmacsByteRange,
     ) -> bool {
@@ -2436,7 +2479,9 @@ impl BufferText {
             .range_has_any_interval_in_char_range(range)
     }
 
-    pub fn text_props_remove_property_in_emacs_byte_range(
+    #[cfg(feature = "test-support")]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn text_props_remove_property_in_emacs_byte_range(
         &self,
         byte_range: EmacsByteRange,
         name: Value,
@@ -2447,7 +2492,7 @@ impl BufferText {
         })
     }
 
-    pub fn text_props_remove_properties_in_emacs_byte_range(
+    pub(crate) fn text_props_remove_properties_in_emacs_byte_range(
         &self,
         byte_range: EmacsByteRange,
         names: &[Value],
@@ -2458,14 +2503,7 @@ impl BufferText {
         })
     }
 
-    pub fn text_props_remove_all_in_emacs_byte_range(&self, byte_range: EmacsByteRange) {
-        let range = self.byte_range_to_char_range(byte_range);
-        self.mutate_text_props(range.start(), |props| {
-            props.remove_all_properties_in_char_range(range)
-        });
-    }
-
-    pub fn text_props_set_properties_in_emacs_byte_range(
+    pub(crate) fn text_props_set_properties_in_emacs_byte_range(
         &self,
         byte_range: EmacsByteRange,
         plist: Vec<(Value, Value)>,
@@ -2482,7 +2520,7 @@ impl BufferText {
     /// already know the char range -- e.g. `insert`, which knows point and the
     /// inserted char length -- should use this to avoid re-deriving it (a
     /// per-insert cost that shows up heavily during byte-compilation).
-    pub fn text_props_set_properties_in_char_range(
+    pub(crate) fn text_props_set_properties_in_char_range(
         &self,
         range: CharRange,
         plist: Vec<(Value, Value)>,
@@ -2494,7 +2532,7 @@ impl BufferText {
     }
 
     /// [`TextPropertyTable::first_char_pos_where`] over `range`.
-    pub fn text_props_first_char_pos_where(
+    pub(crate) fn text_props_first_char_pos_where(
         &self,
         range: CharRange,
         differs: impl FnMut(Value) -> bool,
@@ -2524,7 +2562,7 @@ impl BufferText {
     /// [`Self::text_props_next_change_after_emacs_byte_pos`] bounded by the
     /// character position `bound` (see
     /// `TextPropertyTable::next_property_change_after_char_pos_before`).
-    pub fn text_props_next_change_after_emacs_byte_pos_before(
+    pub(crate) fn text_props_next_change_after_emacs_byte_pos_before(
         &self,
         pos: EmacsBytePos,
         bound: CharPos0,
@@ -2652,7 +2690,7 @@ impl BufferText {
 
     /// See `TextPropertyTable::for_each_interval_from_char_pos`.  The callback
     /// runs under the storage borrow, so it must not touch this buffer's text.
-    pub fn text_props_for_each_interval_from_char_pos<F>(&self, pos: CharPos0, f: F)
+    pub(crate) fn text_props_for_each_interval_from_char_pos<F>(&self, pos: CharPos0, f: F)
     where
         F: FnMut(CharPos0, CharPos0, Value) -> bool,
     {
@@ -2662,7 +2700,7 @@ impl BufferText {
             .for_each_interval_from_char_pos(pos, f)
     }
 
-    pub fn text_props_next_interval_boundary_after_emacs_byte_pos(
+    pub(crate) fn text_props_next_interval_boundary_after_emacs_byte_pos(
         &self,
         pos: EmacsBytePos,
     ) -> Option<EmacsBytePos> {
@@ -2678,22 +2716,7 @@ impl BufferText {
         next.map(|next| self.char_pos_to_emacs_byte_pos(next))
     }
 
-    pub fn text_props_first_interval_pos_with_property_eq_in_emacs_byte_range(
-        &self,
-        byte_range: EmacsByteRange,
-        name: Value,
-        value: Value,
-    ) -> Option<EmacsBytePos> {
-        let range = self.byte_range_to_char_range(byte_range);
-        let pos = self
-            .storage
-            .borrow()
-            .text_props
-            .first_interval_pos_with_property_eq_in_char_range(range, name, value)?;
-        Some(self.char_pos_to_emacs_byte_pos(pos))
-    }
-
-    pub fn text_props_previous_interval_boundary_before_emacs_byte_pos(
+    pub(crate) fn text_props_previous_interval_boundary_before_emacs_byte_pos(
         &self,
         pos: EmacsBytePos,
     ) -> Option<EmacsBytePos> {
@@ -2709,7 +2732,7 @@ impl BufferText {
         prev.map(|prev| self.char_pos_to_emacs_byte_pos(prev))
     }
 
-    pub fn text_props_append_shifted_at_emacs_byte_pos(
+    pub(crate) fn text_props_append_shifted_at_emacs_byte_pos(
         &self,
         other: &TextPropertyTable,
         byte_pos: EmacsBytePos,
@@ -2722,7 +2745,7 @@ impl BufferText {
         });
     }
 
-    pub fn text_props_merge_missing_shifted_at_emacs_byte_pos(
+    pub(crate) fn text_props_merge_missing_shifted_at_emacs_byte_pos(
         &self,
         other: &TextPropertyTable,
         byte_pos: EmacsBytePos,
@@ -2736,7 +2759,7 @@ impl BufferText {
         });
     }
 
-    pub fn text_props_merge_adjacent_equal_around_emacs_byte_range(
+    pub(crate) fn text_props_merge_adjacent_equal_around_emacs_byte_range(
         &self,
         byte_range: EmacsByteRange,
     ) {
@@ -2748,7 +2771,7 @@ impl BufferText {
         });
     }
 
-    pub fn text_props_slice_emacs_byte_range(
+    pub(crate) fn text_props_slice_emacs_byte_range(
         &self,
         byte_range: EmacsByteRange,
     ) -> TextPropertyTable {
@@ -2756,7 +2779,7 @@ impl BufferText {
         self.storage.borrow().text_props.slice_char_range(range)
     }
 
-    pub fn text_props_intervals_snapshot(&self) -> Vec<PropertyInterval> {
+    pub(crate) fn text_props_intervals_snapshot(&self) -> Vec<PropertyInterval> {
         self.storage.borrow().text_props.intervals_snapshot()
     }
 
@@ -2895,12 +2918,37 @@ impl BufferText {
             .adjust_for_replace_at_char_pos(start, old_len, new_len);
     }
 
-    pub fn trace_text_prop_roots(&self, roots: &mut Vec<Value>) {
-        self.storage.borrow().text_props.trace_roots(roots);
+    pub(crate) fn weak_text_property_table(&self) -> Weak<TextPropertyTable> {
+        Rc::downgrade(&self.storage.borrow().text_props)
+    }
+
+    pub(crate) fn text_property_table_identity(&self) -> usize {
+        Rc::as_ptr(&self.storage.borrow().text_props) as usize
     }
 
     pub(crate) fn trace_text_prop_roots_with(&self, visit: &mut dyn FnMut(Value)) {
-        self.storage.borrow().text_props.for_each_root(visit);
+        let storage = self.storage.borrow();
+        storage.text_props.for_each_root(&mut *visit);
+        let epoch = storage.content_epoch;
+        let tick = storage.text_props.syntax_prop_tick();
+        for entry in storage.syntax_byte_run_memo.borrow_mut().iter_mut() {
+            if entry.epoch == epoch && entry.tick == tick {
+                if let Some(value) = entry.value {
+                    visit(value);
+                }
+            } else {
+                *entry = SyntaxByteRunMemoEntry::default();
+            }
+        }
+        for entry in storage.syntax_char_run_memo.borrow_mut().iter_mut() {
+            if entry.epoch == epoch && entry.tick == tick {
+                if let Some(value) = entry.value {
+                    visit(value);
+                }
+            } else {
+                *entry = SyntaxCharRunMemoEntry::default();
+            }
+        }
     }
 
     /// Register a marker in this buffer. Updates `LispMarker` fields
@@ -2939,7 +2987,8 @@ impl BufferText {
                 .data
                 .set_insertion_type(insertion_type == InsertionType::After);
         }
-        self.chain_splice_at_head(marker_ptr);
+        // SAFETY: `register_marker`'s contract is this splice's contract.
+        unsafe { self.chain_splice_at_head(marker_ptr) };
     }
 
     /// Walk the chain and invoke `f` with each node's raw pointer. The pdump
@@ -2950,7 +2999,7 @@ impl BufferText {
     /// `storage.markers_head` until null; each `(*curr).data` reference
     /// stays valid for the duration of the call because the GC sweep
     /// runs `unchain_dead_markers` between mark and free.
-    pub fn chain_walk_nodes<F: FnMut(*mut neovm_value::tagged::header::MarkerObj)>(
+    pub(crate) fn chain_walk_nodes<F: FnMut(*mut neovm_value::tagged::header::MarkerObj)>(
         &self,
         mut f: F,
     ) {
@@ -2966,7 +3015,7 @@ impl BufferText {
 
     /// Return GNU `record_marker_adjustments` entries for markers whose
     /// Lisp character positions are in the deleted range `[from, to]`.
-    pub fn marker_adjustments_for_delete(
+    pub(crate) fn marker_adjustments_for_delete(
         &self,
         range: TextEditRange,
     ) -> Vec<(neovm_value::value::Value, i64)> {
@@ -2999,7 +3048,10 @@ impl BufferText {
 
     /// GNU `attach_marker's position write (src/marker.c): `m->charpos' and
     /// `m->bytepos', and nothing else.
-    pub(crate) fn move_marker_ptr_to_anchor(
+    /// # Safety
+    /// `marker` is a live `MarkerObj` on this buffer's chain. The caller
+    /// roots it for the duration of the write.
+    pub(crate) unsafe fn move_marker_ptr_to_anchor(
         &self,
         marker: *mut neovm_value::tagged::header::MarkerObj,
         position: TextPositionAnchor,
@@ -3016,7 +3068,10 @@ impl BufferText {
     /// Read a chained marker's position anchor and insertion type directly
     /// from its payload. `None` when the marker is detached from every chain
     /// (GNU `marker_position` reports nil for an unchained marker).
-    pub fn marker_chain_anchor_of(
+    /// # Safety
+    /// `marker` is null, or it is a live `MarkerObj` the caller roots for
+    /// the duration of the read.
+    pub(crate) unsafe fn marker_chain_anchor_of(
         &self,
         marker: *mut neovm_value::tagged::header::MarkerObj,
     ) -> Option<(TextPositionAnchor, InsertionType)> {
@@ -3047,7 +3102,10 @@ impl BufferText {
     /// mark and sweep phases.
     ///
     /// Returns whether the marker was found.
-    pub fn remove_marker_ptr(&self, marker: *mut neovm_value::tagged::header::MarkerObj) -> bool {
+    pub(crate) fn remove_marker_ptr(
+        &self,
+        marker: *mut neovm_value::tagged::header::MarkerObj,
+    ) -> bool {
         let mut storage = self.storage.borrow_mut();
         let mut prev: *mut neovm_value::tagged::header::MarkerObj = std::ptr::null_mut();
         let mut curr = storage.markers_head;
@@ -3076,10 +3134,14 @@ impl BufferText {
         false
     }
 
+    #[cfg(feature = "test-support")]
     /// Return true iff `marker` is currently spliced into this buffer's chain.
     /// Used by BufferManager to pick the correct buffer when updating
     /// insertion type across buffers.
-    pub fn has_marker_ptr(&self, marker: *mut neovm_value::tagged::header::MarkerObj) -> bool {
+    pub(crate) fn has_marker_ptr(
+        &self,
+        marker: *mut neovm_value::tagged::header::MarkerObj,
+    ) -> bool {
         let storage = self.storage.borrow();
         let mut curr = storage.markers_head;
         // SAFETY: chain walks live chain-owned MarkerObj pointers until null.
@@ -3253,7 +3315,7 @@ impl BufferText {
     /// indirects, so every marker on the shared chain matches) and the
     /// kill-indirect case (killed_set is just the dying indirect; root
     /// and sibling-indirect markers stay attached).
-    pub fn remove_markers_for_buffers(&self, killed: &std::collections::HashSet<BufferId>) {
+    pub(crate) fn remove_markers_for_buffers(&self, killed: &std::collections::HashSet<BufferId>) {
         let mut storage = self.storage.borrow_mut();
         storage.mode_line_clipped.retain(|id| !killed.contains(id));
         let mut prev: *mut neovm_value::tagged::header::MarkerObj = std::ptr::null_mut();
@@ -3317,7 +3379,10 @@ impl BufferText {
     /// Used by `TaggedHeap::unchain_dead_markers` to splice unmarked
     /// MarkerObj nodes out of the intrusive per-buffer chain before
     /// `sweep_objects` frees them.
-    pub unsafe fn markers_head_slot_raw(&self) -> *mut *mut neovm_value::tagged::header::MarkerObj {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) unsafe fn markers_head_slot_raw(
+        &self,
+    ) -> *mut *mut neovm_value::tagged::header::MarkerObj {
         let storage_ptr: *mut BufferTextStorage = self.storage.as_ptr();
         unsafe { &mut (*storage_ptr).markers_head as *mut _ }
     }
@@ -3330,7 +3395,14 @@ impl BufferText {
     /// **Precondition:** `marker.next_marker` must be null (marker is not
     /// currently on any chain). Violating this silently truncates the
     /// other chain. `debug_assert!` enforces it in debug builds.
-    pub(crate) fn chain_splice_at_head(&self, marker: *mut neovm_value::tagged::header::MarkerObj) {
+    /// # Safety
+    /// `marker` is a live `MarkerObj` allocated by `TaggedHeap::alloc_marker`,
+    /// not currently on any chain, and not collected during this call.
+    /// `next_marker` is null; a non-null link truncates the other chain.
+    pub(crate) unsafe fn chain_splice_at_head(
+        &self,
+        marker: *mut neovm_value::tagged::header::MarkerObj,
+    ) {
         let mut storage = self.storage.borrow_mut();
         let old_head = storage.markers_head;
         unsafe {
@@ -3679,7 +3751,7 @@ impl BufferText {
     /// (and at or past which it is the end); `None` once any character is
     /// multibyte. One borrow, for a caller converting many positions at once.
     #[inline]
-    pub fn single_byte_chars_end(&self) -> Option<EmacsBytePos> {
+    pub(crate) fn single_byte_chars_end(&self) -> Option<EmacsBytePos> {
         let metrics = self.storage.borrow().metrics;
         (metrics.char_len().get() == metrics.emacs_byte_len().get())
             .then(|| metrics.emacs_byte_end())
@@ -3730,6 +3802,8 @@ impl BufferText {
     }
 
     fn emacs_byte_pos_to_char_pos_multibyte(&self, target: EmacsBytePos) -> CharPos0 {
+        #[cfg(test)]
+        MULTIBYTE_BYTE_TO_CHAR_CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let storage = self.storage.borrow();
         let metrics = storage.metrics;
         let content_epoch = storage.content_epoch;
@@ -3855,6 +3929,11 @@ impl BufferText {
         if let Some(span) = SingleBytePositionSpan::from_bounds(storage.content_epoch, bounds) {
             storage.single_byte_span.set(span);
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn multibyte_byte_to_char_calls_for_test() -> usize {
+        MULTIBYTE_BYTE_TO_CHAR_CALLS.load(std::sync::atomic::Ordering::Relaxed)
     }
 
     #[cfg(test)]
@@ -4186,6 +4265,10 @@ fn scan_backward_bytes(
         .is_some_and(|b| (b & 0xC0) == 0x80);
     cp.saturating_sub_len(CharLen::new(starts + usize::from(inside_char)))
 }
+
+#[cfg(test)]
+static MULTIBYTE_BYTE_TO_CHAR_CALLS: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
 
 #[cfg(test)]
 #[path = "buffer_text/tests/buffer_text_test.rs"]

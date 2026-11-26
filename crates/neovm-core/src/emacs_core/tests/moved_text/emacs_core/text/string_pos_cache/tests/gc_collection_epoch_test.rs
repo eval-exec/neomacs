@@ -127,7 +127,7 @@ fn gc_collection_epoch_string_pos_partial_sweep_activation_discards_swept_entry(
         "activation retained an entry reclaimed before cycle completion"
     );
     assert_eq!(heap.gc_collections(), initial_epoch);
-    heap.finish_incremental_sweep_now();
+    heap.finish_incremental_sweep_now_for_test();
 }
 
 #[test]
@@ -148,7 +148,7 @@ fn gc_collection_epoch_string_pos_partial_sweep_root_scan_discards_swept_entry()
     );
     assert!(CACHE.with(Cell::get).is_none());
     assert_eq!(heap.gc_collections(), initial_epoch);
-    heap.finish_incremental_sweep_now();
+    heap.finish_incremental_sweep_now_for_test();
 }
 
 #[test]
@@ -288,13 +288,13 @@ fn partly_swept_cached_string() -> (Box<TaggedHeap>, Value, usize) {
         heap.alloc_cons(Value::NIL, Value::NIL);
     }
     let initial_epoch = heap.gc_collections();
-    heap.begin_stw_collection();
+    heap.begin_stw_collection_for_test();
     let bytes_before = heap.live_bytes();
     heap.incremental_drain_all();
-    heap.incremental_finish(bytes_before, std::time::Instant::now());
+    heap.incremental_finish_for_test(bytes_before, std::time::Instant::now());
     assert!(heap.sweep_in_progress());
     assert!(
-        !heap.incremental_sweep_slice(1),
+        !heap.incremental_sweep_slice_for_test(1),
         "one slice must leave another cons block pending"
     );
     assert!(heap.sweep_in_progress());

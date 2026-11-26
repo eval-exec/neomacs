@@ -48,15 +48,30 @@ fn device_glyph_character_cache_is_partitioned_by_scale_and_cleared_on_font_refr
     let first = service.char_width_for_realized_face('\u{f48a}', selection);
     assert_eq!(first, 8.0, "GNU pinned 14px font: native glyph advance");
     let original_key = (service.realized_face_font_cache_key(selection), '\u{f48a}');
-    assert_eq!(service.char_cache.get(&original_key), Some(&first));
+    assert_eq!(
+        service
+            .char_cache
+            .get(&original_key)
+            .map(|entry| entry.value),
+        Some(first)
+    );
     service.set_device_scale(neomacs_display_protocol::geometry::DeviceScale::new(1.75).unwrap());
     let scaled_key = (service.realized_face_font_cache_key(selection), '\u{f48a}');
     assert_ne!(original_key, scaled_key);
     assert!(!service.char_cache.contains_key(&scaled_key));
     let scaled = service.char_width_for_realized_face('\u{f48a}', selection);
     assert_eq!(scaled, service.char_width_for_realized_face(' ', selection));
-    assert_eq!(service.char_cache.get(&original_key), Some(&first));
-    assert_eq!(service.char_cache.get(&scaled_key), Some(&scaled));
+    assert_eq!(
+        service
+            .char_cache
+            .get(&original_key)
+            .map(|entry| entry.value),
+        Some(first)
+    );
+    assert_eq!(
+        service.char_cache.get(&scaled_key).map(|entry| entry.value),
+        Some(scaled)
+    );
     service.clear_caches();
     assert!(service.char_cache.is_empty());
     assert_eq!(

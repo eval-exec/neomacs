@@ -1,8 +1,9 @@
 //! Regeneration of the GNU DEFSYM boot-membership table.
 //!
-//! The generator is source-only and lives in neovm-value's `build_support` so
-//! that the checked-in ledger can be re-extracted, rendered and drift-checked
-//! with one implementation. `cargo xtask gnu-defsyms --source <GNU checkout>`
+//! The generator lives in the plain `neovm-gnu-ledgers` library so that the
+//! checked-in ledger can be re-extracted, rendered and drift-checked with one
+//! implementation shared by xtask and the core architecture guard.
+//! `cargo xtask gnu-defsyms --source <GNU checkout>`
 //! rewrites `gnu_defsyms.snapshot.tsv` and `gnu_defsyms.generated.rs`;
 //! `--check` fails when the tracked generated file no longer matches the
 //! ledger, and (with `--source`, or `GNU_EMACS_SOURCE` set) when the ledger no
@@ -11,8 +12,7 @@
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
-#[path = "../../neovm-value/build_support/gnu_defsyms.rs"]
-mod generator;
+use neovm_gnu_ledgers as generator;
 
 pub(super) fn run(repo_root: &Path, args: impl IntoIterator<Item = OsString>) -> super::Result<()> {
     let mut check = false;

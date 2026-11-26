@@ -21,7 +21,8 @@ use neovm_value::value::{Value, ValueKind};
 
 /// Errors that can occur during GNU bytecode decoding.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum DecodeError {
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) enum DecodeError {
     /// Unknown or unimplemented opcode byte.
     UnknownOpcode(u8, usize),
     /// Premature end of bytecode stream while reading operand.
@@ -76,7 +77,8 @@ impl std::error::Error for DecodeError {}
 /// GNU bytecode strings are unibyte — each char maps to one byte (0–255).
 /// After NeoVM's parser processes octal escapes, each char in the Rust string
 /// can be directly cast to `u8`.
-pub fn string_value_to_bytes(s: &str) -> Vec<u8> {
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn string_value_to_bytes(s: &str) -> Vec<u8> {
     s.chars().map(|c| c as u8).collect()
 }
 
@@ -88,7 +90,8 @@ pub fn string_value_to_bytes(s: &str) -> Vec<u8> {
 ///
 /// Returns the decoded instruction sequence with jump targets resolved
 /// to instruction indices.
-pub fn decode_gnu_bytecode(
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn decode_gnu_bytecode(
     bytecodes: &[u8],
     constants: &mut Vec<Value>,
 ) -> Result<Vec<Op>, DecodeError> {
@@ -102,7 +105,8 @@ pub fn decode_gnu_bytecode(
 /// constants. NeoVM executes decoded bytecode by instruction index, so
 /// GNU-decoded functions must preserve the original byte-offset ->
 /// instruction-index map for runtime translation of `Bswitch`.
-pub fn decode_gnu_bytecode_with_offset_map(
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn decode_gnu_bytecode_with_offset_map(
     bytecodes: &[u8],
     constants: &mut Vec<Value>,
 ) -> Result<(Vec<Op>, Vec<GnuByteOffsetMapEntry>), DecodeError> {
@@ -120,7 +124,7 @@ pub fn decode_gnu_bytecode_with_offset_map(
 /// The deferred-decode path cannot lend its Lisp constants mutably merely to
 /// decode IR; the decoder is known not to extend the pool (asserted below),
 /// so the published pool length is enough to seal `Constant` indices.
-pub fn decode_gnu_bytecode_for_published_pool(
+pub(crate) fn decode_gnu_bytecode_for_published_pool(
     bytecodes: &[u8],
     published_constants_len: usize,
 ) -> Result<(Vec<Op>, Vec<GnuByteOffsetMapEntry>), DecodeError> {
@@ -233,6 +237,113 @@ pub(crate) struct SwitchTables<'a> {
     pub(crate) offset_map: Option<&'a [GnuByteOffsetMapEntry]>,
 }
 
+/// Minimum operand count for one instruction.
+///
+/// This is the `min` half of the fall-through table in
+/// [`verify_stack_effects_with_tables`]. The unverified driver checks it at
+/// fetch. `Return` is 0: an empty frame returns nil and must not pop the
+/// caller. `Throw` is 2 even though it does not fall through.
+pub(crate) fn opcode_min_operands(op: &Op) -> usize {
+    match op {
+        Op::Constant(_)
+        | Op::Nil
+        | Op::True
+        | Op::VarRef(_)
+        | Op::MakeClosure(_)
+        | Op::Goto(_)
+        | Op::Return
+        | Op::TrapOutOfRangeConstant(_)
+        | Op::Unbind(_)
+        | Op::PopHandler
+        | Op::SaveCurrentBuffer
+        | Op::SaveExcursion
+        | Op::SaveRestriction
+        | Op::PushConditionCase(_) => 0,
+        Op::Dup
+        | Op::Pop
+        | Op::VarSet(_)
+        | Op::VarBind(_)
+        | Op::UnwindProtectPop
+        | Op::Add1
+        | Op::Sub1
+        | Op::Negate
+        | Op::Car
+        | Op::Cdr
+        | Op::CarSafe
+        | Op::CdrSafe
+        | Op::Length
+        | Op::Symbolp
+        | Op::Consp
+        | Op::Stringp
+        | Op::Listp
+        | Op::Integerp
+        | Op::Numberp
+        | Op::Null
+        | Op::Not
+        | Op::Nreverse
+        | Op::SymbolValue
+        | Op::SymbolFunction
+        | Op::SaveWindowExcursion
+        | Op::GotoIfNil(_)
+        | Op::GotoIfNotNil(_)
+        | Op::GotoIfNilElsePop(_)
+        | Op::GotoIfNotNilElsePop(_)
+        | Op::PushCatch(_)
+        | Op::PushConditionCaseRaw(_) => 1,
+        Op::StackRef(n) | Op::StackSet(n) => *n as usize + 1,
+        Op::DiscardN(raw) => {
+            let n = (*raw & 0x7F) as usize;
+            if n == 0 {
+                0
+            } else if *raw & 0x80 != 0 {
+                n + 1
+            } else {
+                n
+            }
+        }
+        Op::Call(n) => *n as usize + 1,
+        Op::Apply(n) => {
+            let n = *n as usize;
+            if n == 0 { 1 } else { n + 1 }
+        }
+        Op::CallBuiltin(_, n) | Op::CallBuiltinSym(_, n) => *n as usize,
+        Op::List(n) | Op::Concat(n) => *n as usize,
+        Op::Add
+        | Op::Sub
+        | Op::Mul
+        | Op::Div
+        | Op::Rem
+        | Op::Eqlsign
+        | Op::Gtr
+        | Op::Lss
+        | Op::Leq
+        | Op::Geq
+        | Op::Max
+        | Op::Min
+        | Op::Cons
+        | Op::Nth
+        | Op::Nthcdr
+        | Op::Setcar
+        | Op::Setcdr
+        | Op::Elt
+        | Op::Nconc
+        | Op::Member
+        | Op::Memq
+        | Op::Assq
+        | Op::Eq
+        | Op::Equal
+        | Op::StringEqual
+        | Op::StringLessp
+        | Op::Aref
+        | Op::Set
+        | Op::Fset
+        | Op::Get
+        | Op::Switch
+        | Op::Throw => 2,
+        Op::Aset | Op::Put | Op::Substring => 3,
+    }
+}
+
 /// Statically prove a sealed instruction stream's operand-stack behavior.
 ///
 /// GNU trusts the compiler's declared `max_stack` blindly (`PUSH` is an
@@ -254,11 +365,11 @@ pub(crate) struct SwitchTables<'a> {
 ///   ([`switch_static_targets`]);
 /// - the switch has two operands (table, dispatch value) and every target,
 ///   like the fall-through (no match), is entered at `depth - 2`;
-/// - all reachable switches share one post-pop depth, so target validation
-///   needs no live stack depth from the dispatch arm;
-/// - the per-instruction depths are recorded ([`StackProof`]), so a table
-///   mutated after sealing cannot steer the unchecked driver to an
-///   instruction at an unproven depth.
+/// - the per-instruction depths are recorded ([`StackProof`]), so each switch
+///   site's fall-through `depths[pc + 1]` records its exact proven post-pop
+///   depth `depth - 2`. Different switches in the same function may sit at
+///   different stack depths, while a table mutated after sealing still cannot
+///   steer the unchecked driver to an instruction proven at another depth.
 ///
 /// Other deliberately conservative refusals: a depth inconsistency at a join,
 /// or an effect the table below cannot bound.
@@ -283,7 +394,6 @@ pub(crate) fn verify_stack_effects_with_tables(
     if entry_depth > max_stack || ops.is_empty() {
         return None;
     }
-    let mut switch_depth = None;
     let mut switch_targets: Vec<(i64, u32)> = Vec::new();
     let mut depths: Vec<Option<usize>> = vec![None; ops.len()];
     depths[0] = Some(entry_depth);
@@ -398,13 +508,17 @@ pub(crate) fn verify_stack_effects_with_tables(
                     }
                     switch_targets.push((raw, target as u32));
                 }
-                if switch_depth.is_some_and(|proven| proven != depth - 2) {
-                    return None;
-                }
-                switch_depth = Some(depth - 2);
                 (2, -2)
             }
-            Op::Return | Op::Throw | Op::TrapOutOfRangeConstant(_) => continue,
+            Op::Return | Op::Throw | Op::TrapOutOfRangeConstant(_) => {
+                // Terminal ops do not fall through. Throw still consumes two
+                // operands; accepting it at a shallower depth would certify a
+                // body the verified driver then pops below the frame.
+                if depth < opcode_min_operands(&ops[pc]) {
+                    return None;
+                }
+                continue;
+            }
             // In-place unary rewrites.
             Op::Add1
             | Op::Sub1
@@ -495,6 +609,7 @@ pub(crate) fn verify_stack_effects_with_tables(
                 (0, 0)
             }
         };
+        debug_assert_eq!(min, opcode_min_operands(&ops[pc]));
         if depth < min {
             return None;
         }
@@ -512,19 +627,19 @@ pub(crate) fn verify_stack_effects_with_tables(
             return None;
         }
     }
-    let depths = if switch_depth.is_some() {
-        depths
-            .iter()
-            .map(|depth| depth.map_or(StackProof::UNREACHABLE, |depth| depth as u32))
-            .collect()
-    } else {
-        Vec::new()
-    };
+    // Every admitted stream keeps its depth table. Resume checks one entry,
+    // in O(1), and a switch still uses the same table after a mutated jump
+    // table retargets. Dropping the table for non-switch bodies made that
+    // resume check fail closed and left every deopt on the checked driver.
+    let depths = depths
+        .iter()
+        .map(|depth| depth.map_or(StackProof::UNREACHABLE, |depth| depth as u32))
+        .collect();
     switch_targets.sort_unstable();
     switch_targets.dedup_by_key(|entry| entry.0);
     Some(unsafe {
         /* SAFETY: the proof must be the verifier's result for exactly these ops */
-        StackProof::from_parts(switch_depth, switch_targets.into_boxed_slice(), depths)
+        StackProof::from_parts(switch_targets.into_boxed_slice(), depths, max_stack)
     })
 }
 
@@ -1289,12 +1404,14 @@ fn buffer_op_info(byte: u8) -> (&'static str, u8) {
 /// Preserve GNU's full signed integer descriptor without allocating names.
 /// Mandatory is bits0..6, rest is bit7, and nonrest is the full signed value
 /// shifted right by8. Host-sized stack shape is checked only when needed.
-pub fn parse_arglist_descriptor(descriptor: i64) -> super::FunctionParams {
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn parse_arglist_descriptor(descriptor: i64) -> super::FunctionParams {
     super::FunctionParams::Stack(descriptor.into())
 }
 
 /// Validate the outer slot domain. GNU defers cons contents to invocation.
-pub fn parse_arglist_value(
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn parse_arglist_value(
     arglist: &Value,
 ) -> Result<super::FunctionParams, super::BytecodeSlotError> {
     super::FunctionParams::try_from(*arglist)

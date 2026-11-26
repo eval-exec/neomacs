@@ -615,6 +615,13 @@ fn async_shell_command_wrappers_use_dynamic_shell_variables_like_gnu() {
                     (let ((p (start-process-shell-command "shell-start" buf "payload")))
                       (while (process-live-p p)
                         (accept-process-output p 0.1))
+                      ;; The loop can exit once the child's status was
+                      ;; recorded outside a wait (ledger 180); GNU drains an
+                      ;; exited process only inside accept-process-output
+                      ;; (process.c:5559-5598), so this is the wait that
+                      ;; reads the output. `if` is a special form.
+                      (if (memq p (process-list))
+                          (accept-process-output p 0.1))
                       (with-current-buffer buf
                         (not (null (string-match-p "--switch:payload" (buffer-string))))))
                   (ignore-errors (kill-buffer buf))))
@@ -623,6 +630,10 @@ fn async_shell_command_wrappers_use_dynamic_shell_variables_like_gnu() {
                     (let ((p (start-file-process-shell-command "shell-file" buf "payload")))
                       (while (process-live-p p)
                         (accept-process-output p 0.1))
+                      ;; Same window as the sibling above: the wait that GNU
+                      ;; drains an exited process in.
+                      (if (memq p (process-list))
+                          (accept-process-output p 0.1))
                       (with-current-buffer buf
                         (not (null (string-match-p "--switch:payload" (buffer-string))))))
                   (ignore-errors (kill-buffer buf))))))"#
@@ -658,17 +669,15 @@ fn epipe_closes_the_exact_selected_pty_writer() {
         vec![],
         crate::emacs_core::process::ProcessCodingSystems::gnu_make_process_initial(),
     );
-    pm.processes
-        .get_mut(&id)
+    pm.get_mut(id)
         .expect("process")
-        .live_io
-        .pty_writer = Some(Box::new(BrokenPipeWriter));
+        .set_pty_writer(Some(Box::new(BrokenPipeWriter)));
 
     assert!(pm.write_process_input_once(id, b"x").is_err());
 
-    let process = pm.processes.get(&id).expect("process remains live");
+    let process = pm.get(id).expect("process remains live");
     assert!(
-        process.live_io.pty_writer.is_none(),
+        process.live_io().pty_writer().is_none(),
         "EPIPE must close the selected PTY endpoint, not an unrelated child stdin"
     );
     assert_eq!(
@@ -701,7 +710,7 @@ fn send_eof_after_epipe_installs_discard_sink_and_clears_queued_input() {
         vec![],
         crate::emacs_core::process::ProcessCodingSystems::gnu_make_process_initial(),
     );
-    let proc = pm.processes.get_mut(&id).expect("process");
+    let proc = pm.get_mut(id).expect("process");
     proc.input_disposition = ProcessInputDisposition::Disconnected;
     proc.write_queue = write_queue_push(
         Value::NIL,
@@ -709,7 +718,7 @@ fn send_eof_after_epipe_installs_discard_sink_and_clears_queued_input() {
         false,
     );
 
-    send_eof_to_process(pm.processes.get_mut(&id).expect("process"))
+    send_eof_to_process(pm.get_mut(id).expect("process"))
         .expect("GNU installs /dev/null even when the old outfd is already -1");
 
     assert_eq!(
@@ -738,10 +747,7 @@ fn sends_after_epipe_do_not_accumulate_unsendable_input() {
         vec![],
         crate::emacs_core::process::ProcessCodingSystems::gnu_make_process_initial(),
     );
-    pm.processes
-        .get_mut(&id)
-        .expect("process")
-        .input_disposition = ProcessInputDisposition::Disconnected;
+    pm.get_mut(id).expect("process").input_disposition = ProcessInputDisposition::Disconnected;
 
     pm.send_input(id, &LispString::from_utf8("one"))
         .expect("process still exists");
@@ -2065,6 +2071,55 @@ fn make_process_pipe_merges_stderr_into_the_main_output_channel() {
     );
 }
 
+/// GNU `create_process` enlarges a subprocess's stdout pipe to the process's
+/// `readmax` when the requested `read-process-output-max` exceeds the system
+/// pipe capacity (`src/process.c:2223-2227`).  Without that, a read can never
+/// return more than the 64 KiB default pipe holds, so a consumer that raises
+/// `read-process-output-max` (consult sets 1 MiB for its async pipeline) gets
+/// one filter call per 64 KiB instead of one per buffer: consult's filter,
+/// refresh and vertico re-filtering then run 16 times as often for the same
+/// output, which is #625's unusably slow, growing full-text search.  A read on
+/// an enlarged pipe fills the requested buffer, so the largest single filter
+/// chunk exceeds the old 64 KiB cap.
+#[cfg(any(target_os = "linux", target_os = "android"))]
+#[test]
+fn child_stdout_pipe_is_enlarged_to_read_process_output_max() {
+    crate::test_utils::init_test_tracing();
+    let sh = find_bin("sh");
+    let result = eval_one(&format!(
+        r#"(let ((read-process-output-max (* 1024 1024))
+                  (chunks 0)
+                  (maxlen 0))
+             (let ((p (make-process
+                       :name "readmax-pipe"
+                       :connection-type 'pipe
+                       :command '("{sh}" "-c"
+                                  "dd if=/dev/zero bs=1048576 count=2 2>/dev/null")
+                       :noquery t
+                       :filter (lambda (_p out)
+                                 (setq chunks (1+ chunks))
+                                 (setq maxlen (max maxlen (length out)))))))
+               (while (process-live-p p)
+                 (accept-process-output p 0.1))
+               (accept-process-output nil 0.1))
+             (list maxlen chunks))"#
+    ));
+    let fields = result
+        .strip_prefix("OK (")
+        .and_then(|rest| rest.strip_suffix(')'))
+        .unwrap_or_else(|| panic!("unexpected evaluation result: {result}"));
+    let maxlen: usize = fields
+        .split_whitespace()
+        .next()
+        .expect("maxlen in result")
+        .parse()
+        .expect("maxlen is an integer");
+    assert!(
+        maxlen > 65536,
+        "child stdout pipe stayed at the 64 KiB default: largest filter chunk was {maxlen} bytes"
+    );
+}
+
 #[test]
 fn make_process_stderr_pipe_name_preserves_raw_unibyte_owner_bytes() {
     crate::test_utils::init_test_tracing();
@@ -2345,8 +2400,8 @@ fn stderr_pipe_uses_child_stdout_as_its_live_source() {
     );
     assert!(pm.get(stderr_id).is_some_and(|proc| {
         proc.kind == ProcessKind::Pipe
-            && proc.live_io.child_stdout.is_some()
-            && !proc.live_io.child.has_child()
+            && proc.live_io().child_stdout().is_some()
+            && !proc.live_io().child().has_child()
     }));
     assert!(pm.live_process_ids().contains(&stderr_id));
     assert!(pm.live_process_ids().contains(&owner_id));
@@ -2433,8 +2488,7 @@ fn stderr_pipe_wait_notifies_a_pending_owner_stop_first() {
     eval.processes_mut()
         .get_mut(stderr_id)
         .expect("stderr pipe")
-        .live_io
-        .stderr_pipe_owner = Some(owner_id);
+        .set_stderr_pipe_owner(Some(owner_id));
 
     let mut outcome = ProcessOutputServiceOutcome::default();
     let pipe_may_notify = eval
@@ -3705,6 +3759,14 @@ fn reaped_pty_process_releases_live_io_but_preserves_stale_status() {
                             :connection-type 'pty)))
                  (while (eq (process-status proc) 'run)
                    (accept-process-output proc 0.1))
+                 ;; The SIGCHLD record can settle the status before the
+                 ;; loop's first check (ledger 180), leaving the terminal
+                 ;; process retained because no wait ran `status_notify'.
+                 ;; This wait is where GNU takes the
+                 ;; `delete-exited-processes' decision (process.c:7926-7937).
+                 ;; `if` is a special form; `when` is subr.el, absent here.
+                 (if (memq proc (process-list))
+                     (accept-process-output proc 0.1))
                  (list (process-status proc)
                        (get-process "reaped-pty-resource-owner")))"#
         ),
@@ -3722,31 +3784,66 @@ fn reaped_pty_process_releases_live_io_but_preserves_stale_status() {
 #[test]
 fn terminal_pty_process_releases_live_io_when_exit_record_is_retained() {
     crate::test_utils::init_test_tracing();
+    // The SIGCHLD latch is what lets `process-status` publish `exit` with no
+    // wait. GNU installs it before any child is forked (process.c:8640-8643).
+    crate::emacs_core::os_signal::install();
     let sh = find_bin("sh");
     let mut ev = crate::emacs_core::eval_hook_installers::new_context();
     let baseline_ptmx = open_ptmx_descriptor_count();
 
-    let result = eval_one_in_context(
+    // Spawn only. `process-id` does not call `update_status`, so the child
+    // can exit and stay unreaped while the master is still open.
+    let spawned = eval_one_in_context(
         &mut ev,
         &format!(
-            r#"(let ((delete-exited-processes nil)
-                     (proc (make-process
-                            :name "retained-terminal-pty-resource-owner"
-                            :command (list "{sh}" "-c" "exit 0")
-                            :connection-type 'pty)))
-                 (while (eq (process-status proc) 'run)
-                   (accept-process-output proc 0.1))
-                 (list (process-status proc)
-                       (eq proc
-                           (get-process "retained-terminal-pty-resource-owner"))))"#
+            r#"(progn
+                 (setq delete-exited-processes nil)
+                 (process-id
+                  (make-process
+                   :name "retained-terminal-pty-resource-owner"
+                   :command (list "{sh}" "-c" "exit 0")
+                   :connection-type 'pty)))"#
         ),
     );
+    let os_pid: u32 = spawned
+        .strip_prefix("OK ")
+        .and_then(|text| text.trim().parse().ok())
+        .unwrap_or_else(|| panic!("spawn must return the child pid, got {spawned}"));
 
-    assert_eq!(result, "OK (exit t)");
+    // Kernel control, same rule as ledger 187: the child has exited and nobody
+    // has waitpid'd it, so `status_notify` has not run and has not closed the
+    // master. A loaded machine used to win this race inside the old
+    // `(while (eq (process-status proc) 'run) (accept-process-output ...))`
+    // loop; this wait makes that schedule the only one.
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline && !pw187_is_zombie(os_pid, 0) {
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    assert!(
+        pw187_is_zombie(os_pid, 0),
+        "control: the child must be exited and unreaped before process-status observes it"
+    );
+
+    // `process-status` only publishes the exit (GNU `update_status`,
+    // process.c:1188-1189). The master stays open until one wait runs
+    // `status_notify`, which deactivates and, with `delete-exited-processes`
+    // nil, leaves the record listed (process.c:7926-7930).
+    let result = eval_one_in_context(
+        &mut ev,
+        r#"(let ((proc (get-process "retained-terminal-pty-resource-owner")))
+             (let ((observed (process-status proc)))
+               (accept-process-output proc 0.1)
+               (list observed
+                     (process-status proc)
+                     (eq proc
+                         (get-process "retained-terminal-pty-resource-owner")))))"#,
+    );
+
+    assert_eq!(result, "OK (exit exit t)");
     assert_eq!(
         open_ptmx_descriptor_count(),
         baseline_ptmx,
-        "terminal status must deactivate live PTY I/O even when the Lisp record is retained"
+        "status_notify must release the PTY master while the retained record stays listed"
     );
 }
 
@@ -7340,6 +7437,7 @@ fn accept_process_output_defers_pty_status_after_explicit_coding() {
     let echo = find_bin("echo");
     let mut ev = crate::emacs_core::eval_hook_installers::new_context();
 
+    let started = Instant::now();
     let result = eval_one_in_context(
         &mut ev,
         &format!(
@@ -7356,6 +7454,7 @@ fn accept_process_output_defers_pty_status_after_explicit_coding() {
                      (kill-buffer buf))))"#
         ),
     );
+    let darwin_drain = cfg!(target_os = "macos") && started.elapsed() >= Duration::from_millis(550);
 
     // Whether the child's exit has been observed by the time the wait returns
     // is a race in GNU too (measured: `emacs --batch` gives `run` in ~2/3 of
@@ -7364,9 +7463,22 @@ fn accept_process_output_defers_pty_status_after_explicit_coding() {
     // output ("hello\n" reached the buffer first) and the status is one of
     // run/exit. Pinning `run` here would pin the pre-observation-decode
     // masking that GNU does not have.
+    //
+    // macOS host-keyed arm: if the wait covered the Darwin tty drain (the
+    // ~600 ms last-slave-close stall measured on macmini macOS 27.0.1 with
+    // ptyprobe.c), the unread output is discarded before the read.  GNU closes
+    // the parent's slave the same way Neo does (src/process.c:2313-2314;
+    // types.rs:5259-5261), and attested GNU-macOS loses the same output, so
+    // `(exit nil)` is the faithful answer only for a wait that covered the
+    // drain.  A port that never reads before the child exits would always
+    // cover the drain and be accepted here; the guard for that class is the
+    // delay-0 paired row in `process::pty_output_vs_exit_semantics`, selected
+    // on the macOS oracle-families job.
     assert!(
-        result == "OK (run t)" || result == "OK (exit t)",
-        "unexpected pty status/output after explicit coding: {result}"
+        result == "OK (run t)"
+            || result == "OK (exit t)"
+            || (darwin_drain && result == "OK (exit nil)"),
+        "unexpected pty status/output after explicit coding: {result} (darwin_drain={darwin_drain})"
     );
 }
 
@@ -7451,6 +7563,7 @@ fn accept_process_output_decodes_multibyte_before_explicit_coding_status() {
     let printf = find_bin("printf");
     let mut ev = crate::emacs_core::eval_hook_installers::new_context();
 
+    let started = Instant::now();
     let result = eval_one_in_context(
         &mut ev,
         &format!(
@@ -7468,6 +7581,7 @@ fn accept_process_output_decodes_multibyte_before_explicit_coding_status() {
                      (kill-buffer buf))))"#
         ),
     );
+    let darwin_drain = cfg!(target_os = "macos") && started.elapsed() >= Duration::from_millis(550);
 
     // GNU's own answer here is NOT determinate, and the neighbouring
     // `accept_process_output_direct_pty_*` pin already says so for the same
@@ -7483,10 +7597,22 @@ fn accept_process_output_decodes_multibyte_before_explicit_coding_status() {
     // multibyte output is present, and it is present BEFORE any status
     // message.  Ledger 200 widened the assertion after making the whole-alist
     // walk unconditional moved this port from the 1/10 arm to the 9/10 arm.
+    //
+    // macOS host-keyed arm: the Darwin tty drain discards unread slave output
+    // when the last slave closes, so if the wait covered the ~600 ms drain
+    // (measured on macmini macOS 27.0.1 with the peer's ptyprobe.c) the
+    // GNU-faithful answer is the status message alone.  GNU and Neo close the
+    // parent's slave identically (src/process.c:2313-2314; types.rs:5259-5261)
+    // and the attested GNU-macOS oracle loses the same output after a 1.5 s
+    // delay.  A port that never reads before the child exits would always
+    // cover the drain and be accepted here; the guard for that class is the
+    // delay-0 paired row in `process::pty_output_vs_exit_semantics`, selected
+    // on the macOS oracle-families job.
     assert!(
         result == "OK (\"café世界\" 11 6)"
-            || result == "OK (\"café世界\nProcess apio-pty-coding-mb finished\n\" 48 43)",
-        "unexpected multibyte output/status after accept-process-output: {result}"
+            || result == "OK (\"café世界\nProcess apio-pty-coding-mb finished\n\" 48 43)"
+            || (darwin_drain && result == "OK (\"\nProcess apio-pty-coding-mb finished\n\" 37 37)"),
+        "unexpected multibyte output/status after accept-process-output: {result} (darwin_drain={darwin_drain})"
     );
 }
 
@@ -7496,6 +7622,7 @@ fn accept_process_output_with_temp_buffer_defers_explicit_coding_status() {
     let echo = find_bin("echo");
     let mut ev = crate::emacs_core::eval_hook_installers::new_context();
 
+    let started = Instant::now();
     let result = eval_one_in_context(
         &mut ev,
         &format!(
@@ -7511,6 +7638,7 @@ fn accept_process_output_with_temp_buffer_defers_explicit_coding_status() {
                    (kill-buffer buf)))"#
         ),
     );
+    let darwin_drain = cfg!(target_os = "macos") && started.elapsed() >= Duration::from_millis(550);
 
     // As above: GNU is not determinate here.  Measured, `-Q --batch`, GNU
     // Emacs 31.0.90, 10 runs of this exact form:
@@ -7519,10 +7647,24 @@ fn accept_process_output_with_temp_buffer_defers_explicit_coding_status() {
     //     4/10   "hello\n\nProcess apio-pty-coding-temp finished\n"
     //
     // The invariant is that the child's output is complete and comes first.
+    //
+    // macOS host-keyed arm: when the child writes and exits before the first
+    // read, the last slave-fd close blocks ~600 ms in the Darwin tty drain
+    // and then discards the unread bytes.  GNU closes the parent's `pty_tty`
+    // after fork (src/process.c:2313-2314) exactly as Neo drops the slave
+    // (process/types.rs:5259-5261), and the attested GNU-macOS oracle loses
+    // the same output after a 1.5 s delay.  So the status-only arm is the
+    // GNU-faithful macOS answer, and it is accepted only when the measured
+    // wait covered the drain (>= 550 ms).  A port that never reads before the
+    // child exits would always cover the drain and be accepted here; the guard
+    // for that class is the delay-0 paired row in
+    // `process::pty_output_vs_exit_semantics`, selected on the macOS
+    // oracle-families job.
     assert!(
         result == "OK \"hello\n\""
-            || result == "OK \"hello\n\nProcess apio-pty-coding-temp finished\n\"",
-        "unexpected output/status after accept-process-output: {result}"
+            || result == "OK \"hello\n\nProcess apio-pty-coding-temp finished\n\""
+            || (darwin_drain && result == "OK \"\nProcess apio-pty-coding-temp finished\n\""),
+        "unexpected output/status after accept-process-output: {result} (darwin_drain={darwin_drain})"
     );
 }
 
@@ -7580,6 +7722,14 @@ fn process_live_p_loop_runs_pending_default_sentinel() {
                    (set-process-query-on-exit-flag proc nil)
                    (while (apio-live-p proc)
                      (accept-process-output proc 1))
+                   ;; GNU's SIGCHLD handler can settle `process-status'
+                   ;; before the loop's first check (ledger 180), so the loop
+                   ;; may exit before any wait ran `status_notify'. The
+                   ;; explicit wait is the status_notify this row asserts:
+                   ;; it drains XMIDY and then runs the default sentinel.
+                   ;; `if` is a special form; `when` is subr.el, absent here.
+                   (if (memq proc (process-list))
+                       (accept-process-output proc 0.1))
                    (prog1 (progn (set-buffer buf) (buffer-string))
                      (fmakunbound 'apio-live-p)
                      (kill-buffer buf))))"#
@@ -9201,12 +9351,12 @@ fn make_network_process_nowait_hostname_dns_failure_is_async_like_gnu() {
         ProcessKeyword::Nowait.value(),
         Value::T,
     ]);
-    proc.live_io.pending_network_connect = Some(PendingNetworkConnect::Dns(PendingDnsRequest {
+    proc.set_pending_network_connect(Some(PendingNetworkConnect::Dns(PendingDnsRequest {
         host: "-bad.example".to_string(),
         receiver,
         ready: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
         socket_options: Vec::new(),
-    }));
+    })));
 
     let outcome = eval
         .wait_for_process_output(ProcessOutputWaitRequest::new(
@@ -9429,10 +9579,10 @@ fn process_contact_no_block_returns_nil_for_pending_nowait_network_like_gnu() {
             Value::fixnum(9),
         ]),
     ]);
-    proc.live_io.pending_network_connect = Some(PendingNetworkConnect::Tcp {
+    proc.set_pending_network_connect(Some(PendingNetworkConnect::Tcp {
         remaining_addrs: Vec::new(),
         socket_options: Vec::new(),
-    });
+    }));
     let process = Value::make_process(id);
 
     assert_eq!(
@@ -9653,6 +9803,112 @@ fn make_network_process_stop_client_still_allows_send_like_gnu() {
     assert_eq!(
         results[0],
         "OK ((stop (stop) \"hello-stop-client\") open (open listen connect stop) \"hello-stop-client\")"
+    );
+}
+
+/// The keys the process manager's poller reports ready right now.
+#[cfg(unix)]
+fn ready_poller_keys(pm: &ProcessManager) -> Vec<usize> {
+    let poller = pm.wait_backend.poller().expect("poller");
+    let mut events = polling::Events::new();
+    poller
+        .wait(&mut events, Some(Duration::ZERO))
+        .expect("poll without blocking");
+    events.iter().map(|event| event.key).collect()
+}
+
+/// A network process whose socket holds unread input, registered for reading.
+#[cfg(unix)]
+fn readable_network_process(
+    pm: &mut ProcessManager,
+    name: &str,
+    stopped: bool,
+) -> (u64, std::os::unix::net::UnixStream) {
+    use std::io::Write;
+
+    let id = pm.create_process_with_kind(
+        name.into(),
+        Value::NIL,
+        "network".into(),
+        vec![],
+        ProcessKindWithoutDevice::Network,
+        crate::emacs_core::process::ProcessCodingSystems::gnu_make_process_initial(),
+    );
+    let (socket, mut peer) = std::os::unix::net::UnixStream::pair().expect("socket pair");
+    let proc = pm.get_mut(id).expect("connection record");
+    proc.live_io_mut().set_network_socket(Some(
+        neovm_eval::emacs_core::eval::data::process_state::NetworkSocket::UnixStream(socket),
+    ));
+    if stopped {
+        // What `make-network-process :stop t` stores before it registers.
+        proc.command = Value::T;
+    }
+    pm.register_socket_fd(id).expect("register the connection");
+    peer.write_all(b"unread").expect("leave input unread");
+    (id, peer)
+}
+
+/// GNU `Fstop_process` drops a connection's descriptor from the read set
+/// (`delete_read_fd`, src/process.c:7273-7275), nothing re-adds it while
+/// `p->command' is t (`Fset_process_filter` :1390-1397), and
+/// `Fcontinue_process` adds it back (:7301-7305).  A stopped connection
+/// left registered level-triggered with unread input makes every wait
+/// return at once with nothing to read, so the wait spins to its deadline.
+#[cfg(unix)]
+#[test]
+fn stopped_connection_with_unread_input_is_not_polled_until_continued() {
+    crate::test_utils::init_test_tracing();
+    let _ctx = crate::test_utils::new_context();
+    let mut pm = ProcessManager::new();
+    let buffers = neovm_edit::buffer::BufferManager::new();
+    let (id, _peer) = readable_network_process(&mut pm, "stopped-connection", false);
+    let process = Value::make_process(id);
+    let key = id as usize;
+    assert!(
+        ready_poller_keys(&pm).contains(&key),
+        "a running connection is polled"
+    );
+
+    builtin_stop_process_impl(&mut pm, &buffers, vec![process]).expect("stop-process");
+    assert!(
+        !ready_poller_keys(&pm).contains(&key),
+        "stop-process left the connection's descriptor in the read set"
+    );
+    builtin_set_process_filter_impl(&mut pm, vec![process, Value::T]).expect("filter t");
+    builtin_set_process_filter_impl(&mut pm, vec![process, Value::NIL]).expect("filter nil");
+    assert!(
+        !ready_poller_keys(&pm).contains(&key),
+        "resuming the filter re-armed a stopped connection's reads"
+    );
+
+    builtin_continue_process_impl(&mut pm, &buffers, vec![process]).expect("continue-process");
+    assert!(
+        ready_poller_keys(&pm).contains(&key),
+        "continue-process did not resume reading"
+    );
+}
+
+/// GNU `connect_network_socket` does not add a `:stop t` connection to the
+/// read set (src/process.c:3751-3753); `continue-process` starts reading it.
+#[cfg(unix)]
+#[test]
+fn connection_created_stopped_is_not_polled_until_continued() {
+    crate::test_utils::init_test_tracing();
+    let _ctx = crate::test_utils::new_context();
+    let mut pm = ProcessManager::new();
+    let buffers = neovm_edit::buffer::BufferManager::new();
+    let (id, _peer) = readable_network_process(&mut pm, "created-stopped", true);
+    let key = id as usize;
+    assert!(
+        !ready_poller_keys(&pm).contains(&key),
+        "a `:stop t` connection was registered for reading"
+    );
+
+    builtin_continue_process_impl(&mut pm, &buffers, vec![Value::make_process(id)])
+        .expect("continue-process");
+    assert!(
+        ready_poller_keys(&pm).contains(&key),
+        "continue-process did not start reading a `:stop t` connection"
     );
 }
 
@@ -11024,18 +11280,487 @@ fn adaptive_read_buffering_updates_delay_with_gnu_thresholds() {
     );
     let process = processes.get_mut(id).expect("process");
 
+    // src/process.c:6283-6306. A read under 256 bytes adds 2*INCREMENT
+    // (20ms) up to MAX_MAX (70ms). A full-buffer read subtracts one
+    // INCREMENT (10ms). Skip is set exactly while the delay is non-zero.
     update_process_adaptive_read_buffering(process, 42, false);
     assert_eq!(process.read_output_delay, Duration::from_millis(20));
     assert!(process.read_output_skip);
 
-    process.read_output_skip = false;
-    update_process_adaptive_read_buffering(process, 1024, true);
-    assert_eq!(process.read_output_delay, Duration::from_millis(10));
+    update_process_adaptive_read_buffering(process, 42, false);
+    assert_eq!(process.read_output_delay, Duration::from_millis(40));
+    update_process_adaptive_read_buffering(process, 42, false);
+    assert_eq!(process.read_output_delay, Duration::from_millis(60));
+    update_process_adaptive_read_buffering(process, 42, false);
+    assert_eq!(process.read_output_delay, Duration::from_millis(70));
     assert!(process.read_output_skip);
 
+    // src/process.c:6283 returns before touching the delay when nbytes is 0
+    // or adaptive buffering is off. At 70ms a no-op is distinct from a reset.
+    update_process_adaptive_read_buffering(process, 0, false);
+    assert_eq!(process.read_output_delay, Duration::from_millis(70));
+    assert!(process.read_output_skip);
+    process.adaptive_read_buffering = 0;
+    update_process_adaptive_read_buffering(process, 42, false);
+    assert_eq!(process.read_output_delay, Duration::from_millis(70));
+    assert!(process.read_output_skip);
+    process.adaptive_read_buffering = 1;
+
+    update_process_adaptive_read_buffering(process, 42, false);
+    assert_eq!(process.read_output_delay, Duration::from_millis(70));
+
+    process.read_output_skip = false;
+    update_process_adaptive_read_buffering(process, 1024, true);
+    assert_eq!(process.read_output_delay, Duration::from_millis(60));
+    assert!(process.read_output_skip);
+    for expected in [50, 40, 30, 20, 10] {
+        update_process_adaptive_read_buffering(process, 1024, true);
+        assert_eq!(process.read_output_delay, Duration::from_millis(expected));
+        assert!(process.read_output_skip);
+    }
     update_process_adaptive_read_buffering(process, 1024, true);
     assert_eq!(process.read_output_delay, Duration::ZERO);
     assert!(!process.read_output_skip);
+}
+
+/// Byte integrity and order of eight 7-byte lines, for adaptive nil and t.
+///
+/// Chunk counts are not the contract. Under CPU starvation GNU Emacs 31.1
+/// also delivers one read per line for both settings, because the writer is
+/// starved and the 10ms gaps outlast the 20-70ms delay
+/// (src/process.c:254-256, :6283-6306). The delay transitions and the
+/// minimum-delay skip wait are pinned separately. This test keeps the
+/// delivery those do not: both arms receive `line-0` through `line-7` in
+/// order, 56 bytes.
+#[test]
+fn adaptive_read_buffering_coalesces_spaced_short_writes_like_gnu() {
+    let result = runtime_startup_eval_one(
+        r#"
+(let ((expected "")
+      rows)
+  (dotimes (i 8)
+    (setq expected (concat expected (format "line-%d\n" i))))
+  (dolist (adaptive '(nil t))
+    (setq process-adaptive-read-buffering adaptive)
+    (let ((text "")
+          (chunks nil)
+          (done nil))
+      (let ((process
+             (make-process
+              :name "adaptive-coalesce-probe"
+              :command '("sh" "-c"
+                         "i=0; while [ $i -lt 8 ]; do printf 'line-%s\n' $i; sleep 0.01; i=$((i+1)); done")
+              :buffer nil
+              :connection-type 'pipe
+              :noquery t
+              :filter (lambda (_process string)
+                        (setq text (concat text string))
+                        (push (length string) chunks))
+              :sentinel (lambda (_process _event) (setq done t)))))
+        (let ((deadline (+ (float-time) 10)))
+          (while (and (not done) (< (float-time) deadline))
+            (accept-process-output nil 0.05)))
+        (when (process-live-p process) (delete-process process)))
+      (push (list adaptive
+                  (string= text expected)
+                  (= (length text) 56)
+                  (length text)
+                  (length chunks)
+                  (replace-regexp-in-string "\n" "|" text))
+            rows)))
+  (setq process-adaptive-read-buffering nil)
+  (let* ((ordered (nreverse rows))
+         (nil-row (nth 0 ordered))
+         (t-row (nth 1 ordered)))
+    (list (nth 1 nil-row)
+          (nth 2 nil-row)
+          (nth 1 t-row)
+          (nth 2 t-row)
+          (string= (nth 5 nil-row) (nth 5 t-row))
+          (nth 3 nil-row)
+          (nth 4 nil-row)
+          (nth 3 t-row)
+          (nth 4 t-row)
+          (nth 5 nil-row)
+          (nth 5 t-row))))
+"#,
+    );
+
+    let body = result
+        .strip_prefix("OK (")
+        .and_then(|rest| rest.strip_suffix(')'))
+        .unwrap_or(result.as_str());
+    let mut words = body.split_whitespace();
+    let flags: Vec<&str> = words.by_ref().take(5).collect();
+    let raw: Vec<&str> = words.collect();
+    assert_eq!(
+        flags.as_slice(),
+        ["t", "t", "t", "t", "t"].as_slice(),
+        "nil-bytes={} nil-chunks={} t-bytes={} t-chunks={} nil-text={} t-text={} raw={result}",
+        raw.first().copied().unwrap_or("?"),
+        raw.get(1).copied().unwrap_or("?"),
+        raw.get(2).copied().unwrap_or("?"),
+        raw.get(3).copied().unwrap_or("?"),
+        raw.get(4).copied().unwrap_or("?"),
+        raw.get(5).copied().unwrap_or("?"),
+    );
+}
+
+struct KillChildren(Vec<u32>);
+
+impl Drop for KillChildren {
+    fn drop(&mut self) {
+        for pid in &self.0 {
+            let _ = std::process::Command::new("kill")
+                .args(["-KILL", &pid.to_string()])
+                .status();
+        }
+    }
+}
+
+fn arm_skipping_sleeper(ev: &mut Context, name: &str, delay_ms: u64) -> (ProcessId, u32) {
+    let sh = find_bin("sh");
+    let value = ev
+        .eval_str(&format!(
+            r#"(make-process :name "{name}" :buffer nil :connection-type 'pipe :noquery t :command '("{sh}" "-c" "read _"))"#
+        ))
+        .unwrap_or_else(|err| panic!("spawn {name}: {err:?}"));
+    let id = value.as_process_id().expect("process id");
+    {
+        let proc = ev.processes_mut().get_mut(id).expect("process record");
+        proc.adaptive_read_buffering = 1;
+        proc.read_output_delay = Duration::from_millis(delay_ms);
+        proc.read_output_skip = true;
+    }
+    let pid = ev
+        .processes()
+        .get(id)
+        .and_then(|proc| proc.os_pid)
+        .expect("child pid");
+    (id, pid)
+}
+
+/// A successful send clears the delay only when adaptive buffering is t.
+///
+/// src/process.c:6875-6880 resets `read_output_delay` and the skip flag when
+/// `adaptive_read_buffering == 1`. Any other non-nil value keeps the delay.
+#[test]
+fn adaptive_read_send_resets_delay_only_when_adaptive_is_t() {
+    crate::test_utils::init_test_tracing();
+    let mut ev = crate::emacs_core::eval_hook_installers::new_context();
+    let (t_id, t_pid) = arm_skipping_sleeper(&mut ev, "adaptive-send-t", 20);
+    let (other_id, other_pid) = arm_skipping_sleeper(&mut ev, "adaptive-send-other", 20);
+    let _kill = KillChildren(vec![t_pid, other_pid]);
+    {
+        let proc = ev.processes_mut().get_mut(other_id).expect("other");
+        proc.adaptive_read_buffering = 2;
+    }
+    ev.eval_str("(process-send-string \"adaptive-send-t\" \"x\\n\")")
+        .expect("send to t");
+    ev.eval_str("(process-send-string \"adaptive-send-other\" \"x\\n\")")
+        .expect("send to other");
+    let t_proc = ev.processes().get(t_id).expect("t");
+    assert_eq!(t_proc.read_output_delay, Duration::ZERO);
+    assert!(!t_proc.read_output_skip);
+    let other = ev.processes().get(other_id).expect("other");
+    assert_eq!(other.read_output_delay, Duration::from_millis(20));
+    assert!(other.read_output_skip);
+    assert_eq!(other.adaptive_read_buffering, 2);
+}
+
+/// Ready output on a skipping process waits out its delay, then arrives as one chunk.
+///
+/// src/process.c:5694-5703 `FD_CLR`s a skipping channel, so bytes already in
+/// the pipe are not read until that wait ends. Naming a process in
+/// `accept-process-output` sets `check_delay` to 0 (src/process.c:5605-5610
+/// and :5626), so this wait names no process.
+#[test]
+fn adaptive_read_skip_holds_ready_output_for_the_delay() {
+    crate::test_utils::init_test_tracing();
+    let marker_dir = tempfile::tempdir().expect("marker dir");
+    let marker = marker_dir.path().join("ready");
+    let marker_display = marker.display().to_string();
+    assert!(
+        !marker_display.contains('\''),
+        "marker path must be a single shell word"
+    );
+    let sh = find_bin("sh");
+    let mut ev = crate::emacs_core::eval_hook_installers::new_context();
+    ev.eval_str("(setq process-adaptive-read-buffering t)")
+        .expect("enable adaptive read buffering");
+    ev.eval_str(
+        r#"(progn
+            (setq held-first-delay nil)
+            (setq held-text "")
+            (setq held-nchunks 0)
+            (setq held-first-chunk nil)
+            (setq held-start nil))"#,
+    )
+    .expect("held vars");
+    let spawned = ev
+        .eval_str(&format!(
+            r#"(make-process :name "adaptive-held" :buffer nil :connection-type 'pipe :noquery t :command '("{sh}" "-c" "printf 'a\\n'; printf 'b\\n'; : > '{marker_display}'; read _"))"#
+        ))
+        .expect("spawn held");
+    let id = spawned.as_process_id().expect("process id");
+    let pid = ev
+        .processes()
+        .get(id)
+        .and_then(|proc| proc.os_pid)
+        .expect("child pid");
+    let _kill = KillChildren(vec![pid]);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !marker.is_file() {
+        assert!(
+            Instant::now() < deadline,
+            "child did not publish the marker; both writes must already be in the pipe"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    {
+        let proc = ev.processes_mut().get_mut(id).expect("held");
+        proc.adaptive_read_buffering = 1;
+        proc.read_output_delay = Duration::from_millis(40);
+        proc.read_output_skip = true;
+    }
+    ev.eval_str(
+        r#"(set-process-filter
+           (get-process "adaptive-held")
+           (lambda (_process string)
+             (if held-first-delay
+                 nil
+               (setq held-first-delay (- (float-time) held-start)))
+             (setq held-nchunks (1+ held-nchunks))
+             (setq held-text (concat held-text string))
+             (if held-first-chunk
+                 nil
+               (setq held-first-chunk string))))"#,
+    )
+    .expect("filter");
+    ev.eval_str("(progn (setq held-start (float-time)) (accept-process-output nil 0.25))")
+        .expect("accept");
+    let delay = ev
+        .eval_symbol("held-first-delay")
+        .expect("first delay")
+        .as_float()
+        .expect("first delay is a float");
+    assert!(
+        delay >= 0.039,
+        "first filter at {delay}s; ready output must wait out the 40ms skip"
+    );
+    let chunks = ev
+        .eval_symbol("held-nchunks")
+        .expect("chunk count")
+        .as_int()
+        .expect("chunk count is an int");
+    assert_eq!(chunks, 1, "the two writes arrive as one read");
+    let text = ev.eval_symbol("held-text").expect("text");
+    assert_eq!(text.as_runtime_string_owned().as_deref(), Some("a\nb\n"));
+    let first = ev.eval_symbol("held-first-chunk").expect("first chunk");
+    assert_eq!(first.as_runtime_string_owned().as_deref(), Some("a\nb\n"));
+}
+
+/// Two skipping processes cost one wait bounded by the shorter delay.
+///
+/// GNU `FD_CLR`s every skipping channel and sets the select timeout to the
+/// minimum `read_output_delay` (src/process.c:5690-5709). Sleeping once per
+/// process in the service loop makes the wait entry itself cost the sum.
+#[test]
+fn adaptive_read_two_skippers_share_one_wait() {
+    crate::test_utils::init_test_tracing();
+    let mut ev = crate::emacs_core::eval_hook_installers::new_context();
+    ev.eval_str("(setq process-adaptive-read-buffering t)")
+        .expect("enable adaptive read buffering");
+    let (_slow, slow_pid) = arm_skipping_sleeper(&mut ev, "adaptive-skip-slow", 50);
+    let (_fast, fast_pid) = arm_skipping_sleeper(&mut ev, "adaptive-skip-fast", 40);
+    let _kill = KillChildren(vec![slow_pid, fast_pid]);
+
+    let entered = std::sync::Arc::new(std::sync::Mutex::new(None));
+    let slot = std::sync::Arc::clone(&entered);
+    let started = Instant::now();
+    ev.processes_mut()
+        .before_next_backend_wait_for_test(move |entry| {
+            *slot.lock().expect("wait entry") =
+                Some((started.elapsed(), entry.requested_timeout()));
+        });
+    builtin_accept_process_output(&mut ev, vec![Value::NIL, Value::make_float(0.25)])
+        .expect("accept-process-output");
+
+    let (elapsed, timeout) = entered
+        .lock()
+        .expect("wait entry")
+        .expect("the accept entered one backend wait");
+    assert!(
+        elapsed < Duration::from_millis(75),
+        "two skippers delayed the wait entry by {elapsed:?}; GNU spends one delay inside the wait"
+    );
+    assert_eq!(
+        timeout,
+        Duration::from_millis(40),
+        "the shared wait is the minimum skip delay"
+    );
+}
+
+/// Output from a process that is not skipping is serviced before the adaptive
+/// delay of the skippers ends (src/process.c:5701 leaves every other fd in
+/// the select set).
+#[test]
+fn adaptive_read_other_process_output_wakes_before_delay() {
+    crate::test_utils::init_test_tracing();
+    let mut ev = crate::emacs_core::eval_hook_installers::new_context();
+    ev.eval_str("(setq process-adaptive-read-buffering t)")
+        .expect("enable adaptive read buffering");
+    ev.eval_str("(setq adaptive-peer-text \"\")")
+        .expect("peer text");
+    let sh = find_bin("sh");
+    let peer = ev
+        .eval_str(&format!(
+            r#"(make-process :name "adaptive-peer" :buffer nil :connection-type 'pipe :noquery t :filter (lambda (_ text) (setq adaptive-peer-text (concat adaptive-peer-text text))) :command '("{sh}" "-c" "IFS= read -r line; printf '%s\\n' \"$line\""))"#
+        ))
+        .expect("spawn peer");
+    let peer_id = peer.as_process_id().expect("peer id");
+    let peer_pid = ev
+        .processes()
+        .get(peer_id)
+        .and_then(|proc| proc.os_pid)
+        .expect("peer pid");
+    let mut peer_input = ev
+        .processes()
+        .get(peer_id)
+        .expect("peer")
+        .live_io()
+        .child()
+        .stdin()
+        .expect("peer stdin")
+        .try_clone()
+        .expect("clone peer stdin");
+    let (_slow, slow_pid) = arm_skipping_sleeper(&mut ev, "adaptive-peer-skip-a", 50);
+    let (_fast, fast_pid) = arm_skipping_sleeper(&mut ev, "adaptive-peer-skip-b", 50);
+    let _kill = KillChildren(vec![peer_pid, slow_pid, fast_pid]);
+
+    ev.processes_mut()
+        .before_next_backend_wait_for_test(move |_entry| {
+            use std::io::Write;
+            peer_input.write_all(b"ready\n").expect("write peer stdin");
+            peer_input.flush().expect("flush peer stdin");
+        });
+    let started = Instant::now();
+    let outcome = builtin_accept_process_output(&mut ev, vec![Value::NIL, Value::make_float(0.25)])
+        .expect("accept-process-output");
+    let elapsed = started.elapsed();
+    let peer_text = ev
+        .eval_symbol("adaptive-peer-text")
+        .expect("peer text variable");
+    assert_eq!(
+        peer_text.as_runtime_string_owned().as_deref(),
+        Some("ready\n"),
+        "peer text {peer_text:?} as {:?} after {elapsed:?} outcome {outcome:?}",
+        peer_text.as_runtime_string_owned()
+    );
+    assert!(
+        elapsed < Duration::from_millis(75),
+        "peer output waited out the skippers: {elapsed:?}"
+    );
+}
+
+/// A timer due during the adaptive delay fires on that deadline. GNU runs
+/// `timer_check` and lets the timer shorten the select (src/process.c:5489
+/// and :5720-5729); a per-process sleep in front of the wait holds the timer
+/// until every skipper has slept.
+#[test]
+fn adaptive_read_timer_fires_during_skip_delay() {
+    crate::test_utils::init_test_tracing();
+    let mut ev = crate::emacs_core::eval_hook_installers::new_context();
+    ev.eval_str(
+        r#"(progn
+            (setq process-adaptive-read-buffering t)
+            (fset 'timer-event-handler
+                  (lambda (timer)
+                    (setq timer-list (delq timer timer-list))
+                    (apply (aref timer 5) (aref timer 6))))
+            (fset 'adaptive-timer-fired
+                  (lambda ()
+                    (setq adaptive-timer-ran t)
+                    (setq adaptive-timer-delay (- (float-time) adaptive-timer-start))
+                    (setq adaptive-timer-on-time
+                          (let ((delay adaptive-timer-delay))
+                            (and (> delay 0.005) (< delay 0.060))))))
+            (setq adaptive-timer-on-time nil)
+            (setq adaptive-timer-ran nil)
+            (setq adaptive-timer-delay nil))"#,
+    )
+    .expect("timer handler");
+    let (_slow, slow_pid) = arm_skipping_sleeper(&mut ev, "adaptive-timer-skip-a", 50);
+    let (_fast, fast_pid) = arm_skipping_sleeper(&mut ev, "adaptive-timer-skip-b", 50);
+    let _kill = KillChildren(vec![slow_pid, fast_pid]);
+    ev.eval_str("(setq adaptive-timer-start (float-time))")
+        .expect("timer start");
+    ev.set_variable(
+        "timer-list",
+        Value::list(vec![gnu_timer_after(
+            Duration::from_millis(20),
+            "adaptive-timer-fired",
+        )]),
+    );
+
+    let started = Instant::now();
+    let outcome = builtin_accept_process_output(&mut ev, vec![Value::NIL, Value::make_float(0.25)])
+        .expect("accept-process-output");
+    let elapsed = started.elapsed();
+    let on_time = ev
+        .eval_symbol("adaptive-timer-on-time")
+        .expect("timer stamp");
+    let ran = ev.eval_symbol("adaptive-timer-ran").expect("timer ran");
+    let delay = ev.eval_symbol("adaptive-timer-delay").expect("timer delay");
+    assert_eq!(
+        on_time,
+        Value::T,
+        "timer did not fire inside the adaptive delay (ran={ran:?} delay={delay:?} elapsed={elapsed:?} outcome={outcome:?})"
+    );
+}
+
+/// Pending keyboard input wakes a command wait that is also deferring
+/// skipping processes. GNU skips the select when input is already pending
+/// and keeps the keyboard fd in the set otherwise (src/process.c:5656-5671
+/// and :5623-5624). The input harness publishes one key when the backend
+/// wait is entered.
+#[test]
+fn adaptive_read_command_input_wakes_during_skip_delay() {
+    use crate::test_utils::input_wait::{InputGateOwner, WaitWitness};
+    crate::test_utils::init_test_tracing();
+    let mut ev = crate::emacs_core::eval_hook_installers::new_context();
+    ev.eval_str("(setq process-adaptive-read-buffering t)")
+        .expect("enable adaptive read buffering");
+    let (_slow, slow_pid) = arm_skipping_sleeper(&mut ev, "adaptive-key-skip-a", 50);
+    let (_fast, fast_pid) = arm_skipping_sleeper(&mut ev, "adaptive-key-skip-b", 50);
+    let _kill = KillChildren(vec![slow_pid, fast_pid]);
+
+    let input_owner = InputGateOwner::install(&mut ev);
+    let (gate, publication) = input_owner.gate(vec![
+        neovm_eval::emacs_core::eval::keyboard::InputEvent::key_press(
+            neovm_eval::emacs_core::eval::keyboard::KeyEvent::char('z'),
+        ),
+    ]);
+    gate.arm(&mut ev, WaitWitness::InputWaitEntered);
+
+    let started = Instant::now();
+    let completion = ev.wait_for_command_input(Some(Instant::now() + Duration::from_secs(1)));
+    let elapsed = started.elapsed();
+    assert_eq!(
+        publication
+            .finish()
+            .expect("keyboard wait was entered")
+            .witness,
+        WaitWitness::InputWaitEntered
+    );
+    assert_eq!(
+        completion.expect("command input"),
+        CommandInputWaitOutcome::InputPending
+    );
+    assert!(
+        elapsed < Duration::from_millis(75),
+        "keyboard input waited out the skippers: {elapsed:?}"
+    );
 }
 
 #[test]
@@ -11169,6 +11894,12 @@ fn process_reaching_terminal_status_dirties_chrome() {
              (while (and (< n 100) (eq (process-status p) 'run))
                (accept-process-output p 0.1)
                (setq n (+ n 1)))
+             ;; GNU's SIGCHLD record can settle the status before the
+             ;; loop's first check (ledger 180); the mode-line dirty flag is
+             ;; set by `status_notify' (process.c:7940), so the row needs the
+             ;; wait that runs it. `if` is a special form; `when` is subr.el.
+             (if (memq p (process-list))
+                 (accept-process-output p 0.1))
              (symbol-name (process-status p)))"#,
     );
     assert!(result.is_ok(), "the child must run: {result:?}");
@@ -11333,18 +12064,18 @@ fn wait_for_stderr_fixture_exit(eval: &mut Context, owner: Value) {
     eval.processes_mut()
         .get_mut(id)
         .expect("fixture process exists")
-        .live_io
-        .child
+        .live_io_mut()
+        .child_mut()
         .stdin_mut()
         .expect("fixture uses pipe stdin")
         .write_all(b"ready\n")
         .expect("release fixture child");
-    let child = &eval
+    let child = eval
         .processes()
         .get(id)
         .expect("fixture process exists")
-        .live_io
-        .child;
+        .live_io()
+        .child();
     let pid = child
         .pid_if_unreaped()
         .expect("fixture owns a live child pid");
@@ -11385,7 +12116,7 @@ fn with_stderr_fixture_child<T>(
     let id = owner.as_process_id().expect("fixture owner is a process");
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| body(eval)));
     if let Some(process) = eval.processes_mut().get_mut(id) {
-        let child = &mut process.live_io.child;
+        let child = process.live_io_mut().child_mut();
         child.poll_status();
         if child.pid_if_unreaped().is_some() {
             child.kill_handle();
@@ -11433,8 +12164,8 @@ fn stderr_fixture_assertion_failure_kills_and_reaps_its_owned_child() {
         eval.processes()
             .get(id)
             .expect("fixture process exists")
-            .live_io
-            .child
+            .live_io()
+            .child()
             .pid_if_unreaped()
             .is_none(),
         "fixture child must be reaped"
@@ -14818,7 +15549,7 @@ fn signal_process_reads_an_integer_as_an_os_pid_like_gnu() {
             assert_eq!(id, expected_id);
             let record = processes.get(id).expect("our synthetic process record");
             assert!(record.os_pid.is_none());
-            assert!(!record.live_io.child.has_child());
+            assert!(!record.live_io().child().has_child());
 
             let pid = i64::try_from(id).expect("small ProcessId fits literal PID domain");
             let literal = Value::fixnum(pid);
@@ -14848,6 +15579,7 @@ fn signal_process_reads_an_integer_as_an_os_pid_like_gnu() {
             }
         }
     }
+    drop(_ctx);
 
     let sh = find_bin("sh");
     let result = eval_one(&format!(
@@ -15422,79 +16154,33 @@ fn a_process_may_hold_a_buffer_that_is_not_live_like_gnu() {
     );
 }
 
-/// GNU records a changed child status ASYNCHRONOUSLY, and since ledger 193
-/// so does this port -- the divergence, closed.
+/// GNU records a changed child status asynchronously; the observation reaps.
 ///
-/// `handle_child_signal` (src/process.c:7691) is GNU's SIGCHLD handler.  It
-/// walks `FOR_EACH_PROCESS` itself (:7734) and, for every process that is
-/// `p->alive` and whose `child_status_changed (p->pid, &status,
-/// WUNTRACED | WCONTINUED)` reports a transition (:7741-7742), stamps
-/// `p->tick`, `p->raw_status` and `p->raw_status_new` (:7745-7747).  Its own
-/// header states the contract: *"All we do is change the status; we do not
-/// run sentinels or print notifications"* (:7669-7671).  `Fprocess_status`
-/// (:1188-1189) and `Fprocess_exit_status` (:1212-1213) then decode that
-/// record with `update_status`, and `process-live-p` is
-/// `(memq (process-status process) '(run open listen connect stop))`
-/// (lisp/subr.el:3538-3540).
+/// `handle_child_signal` (src/process.c:7691) reaps the child with
+/// `child_status_changed` -> `waitpid` and stamps `raw_status` /
+/// `raw_status_new` (:7741-7747); its own header says it runs no sentinel
+/// (:7668-7671). `process-status` and `process-exit-status` decode that record
+/// with `update_status`, and `process-live-p` is `(memq (process-status p)
+/// '(run open listen connect stop))` (lisp/subr.el:3538-3540).
 ///
-/// Measured, `-Q --batch`, GNU Emacs 31.0.90 against this port, with the
-/// wait taken out of the probe entirely -- the spin is `float-time` and
-/// `process-attributes`, never `accept-process-output`:
+/// This port has no SIGCHLD handler, so the same per-child probe runs at the
+/// observation: `ProcessManager::observe` calls `reap_observed_child` for the
+/// four asynchronously-recorded sites, and the OS-pid observers
+/// (`process-attributes`, `signal-process`) do the same after their lookup.
+/// It records only; the sentinel still runs from `status_notify` inside a
+/// wait, which is GNU's division of work. `maybe_quit` still records nothing
+/// (the sibling test).
 ///
-/// ```text
-///                           GNU 31.0.90   this port
-///   (process-status p)         exit       run
-///   (process-exit-status p)    7          0
-///   (process-live-p p)         nil        (run open listen connect stop)
-///   (get-process "...")        t          t
-///   (memq p (process-list))    t          t
-/// ```
-///
-/// The last two agree and must keep agreeing: `handle_child_signal` never
-/// rewrites `Vprocess_alist`.  Only `remove_process` (:957-966) does, and
-/// `status_notify` (:7926-7927) is what calls it -- which has not run here.
-///
-/// **This is a PINNED DIVERGENCE, and it was briefly not one.**  Ledger 193
-/// closed it by draining the record at `Context::maybe_quit`, and ledger 198
-/// reverses that: GNU's `process_pending_signals` is
-/// `pending_signals = false; handle_async_input (); do_pending_atimers ();`
-/// (src/keyboard.c:8367-8372) and notifies nothing -- `grep -c status_notify`
-/// over it is 0 -- while GNU's SIGCHLD never sets `pending_signals` in the
-/// first place (`grep -n 'pending_signals = ' src/*.c` has no hit in
-/// `process.c`).  All five `status_notify` calls are subrs that wrote the
-/// status themselves (:1129, :1149, :7181) or the wait (:5554, :5854), so
-/// **every status GNU discovers asynchronously is notified from the wait.**
-///
-/// Recording at `maybe_quit` therefore published a status with its sentinel
-/// unrun, and programs that bind a variable around their await loop broke:
-/// `magit-run-post-commit-hook` is keyed on `last-command`, and
-/// `treemacs_magit_package_batch`'s
-/// `extending_a_real_commit_schedules_the_same_project_refresh` failed with
-/// `(error "Treemacs-Magit idle update was not scheduled")` -- exactly what
-/// ledger 180 measured when it declined the synchronous sweep.
-/// `a_sentinel_runs_inside_the_wait_while_the_callers_let_is_live_like_gnu`
-/// is the probe: GNU 294/294, this port 261/300 with the drain at
-/// `maybe_quit`.
-///
-/// So the record went where GNU keeps it -- inside
-/// `wait_reading_process_output` -- and this row went back to being a
-/// divergence.  **The port cannot have both**, because the only safe point
-/// that closes it is GNU's own (the handler), and a Rust port cannot walk a
-/// `HashMap` owned by the Lisp thread there.  Ledger 187 §8.1(b) asked for "a
-/// safe point that is not a Lisp observation"; GNU has none either.
-///
-/// The second half of the pin is what keeps it from hiding a total breakage:
-/// after the spin, ONE `accept-process-output` must produce GNU's answer.
-/// A pin that only asserted the stale column would pass just as happily if
-/// child statuses stopped being recorded at all.
-///
-/// **The control is the child's own last act**: it touches a marker file
-/// immediately before exiting, and `child-ran` is the evidence.  A run in
-/// which nothing had started would fail there rather than agreeing with
-/// itself.
+/// The child's own last act -- touching a marker file -- is the control that
+/// it really ran, and the after-one-wait column keeps the probe from passing
+/// if child statuses stopped being recorded at all.
+
 #[test]
-fn a_child_that_exited_with_nobody_waiting_is_still_run_here_and_exit_in_gnu() {
+fn a_child_that_exited_with_nobody_waiting_is_exit_like_gnu() {
     crate::test_utils::init_test_tracing();
+    // GNU installs its SIGCHLD handler from init_process_emacs;
+    // this port latches the delivery for the observation reap.
+    crate::emacs_core::os_signal::install();
     let sh = find_bin("sh");
     // Under the repo's own `target/`, never /tmp (this project's
     // standing rule), and named per pin so two tests cannot collide.
@@ -15541,62 +16227,30 @@ fn a_child_that_exited_with_nobody_waiting_is_still_run_here_and_exit_in_gnu() {
 
     assert_eq!(
         result,
-        "OK ((before (child-ran . t) (status . run) (exit-status . 0) (live-p . t) \
+        "OK ((before (child-ran . t) (status . exit) (exit-status . 7) (live-p) \
          (get-process . t) (in-process-list . t)) \
          (after-one-wait (status . exit) (exit-status . 7)))"
     );
 }
 
-/// The REAPING half of the same divergence, and it is PINNED with it: GNU's
-/// handler calls `waitpid`, so GNU's exited child is gone from the OS and
-/// this port's is a zombie until something waits (ledger 184's rows 2 and 3).
+/// The reap and the record are the same observation-side call.
 ///
-/// `handle_child_signal` reaches the OS through `child_status_changed
-/// (p->pid, &status, WUNTRACED | WCONTINUED)` (src/process.c:7741-7742), and
-/// `child_status_changed` is `waitpid` -- so the record and the REAP happen
-/// in the same call, microseconds after the child dies and with nobody
-/// having waited.  Two Lisp answers see that and neither is an
-/// `update_status` consumer, which is why ledger 180's wired sweep left both
-/// of them divergent (`divergent=2` of 27 rows):
-///
-/// ```text
-///                                                   GNU 31.0.90   this port
-///   (cdr (assq 'state (process-attributes pid)))       nil          "Z"
-///   (signal-process p 0)                               -1           0
-/// ```
-///
-/// GNU answers `nil` because `/proc` has forgotten the pid, and `-1` because
-/// `kill (pid, 0)` fails `ESRCH`.  This port answers `"Z"` and `0` because
-/// the child is a zombie: reaped by nothing, so still a process to the
-/// kernel.  3 runs each, `-Q --batch`, GNU Emacs 31.0.90 against
-/// `target/release/neomacs`, byte-identical on both sides.
-///
-/// **Why it is still open, after 180, 184, 187 and 193 each took a turn.**
-/// 180 §9.1 priced it as an owner problem, and 187 paid that price: `waitpid`
-/// has exactly one owner and the compiler enforces it.  193 then closed the
-/// rows by reaping at `Context::maybe_quit` -- and 198 reversed that, because
-/// the same drain published a status with its sentinel unrun and broke
-/// `treemacs-magit`; see the sibling pin for the citations and the 294/294
-/// against 261/300.
-///
-/// The reap and the record are the same call here (`child_status_changed` is
-/// `waitpid`), so moving the record to GNU's site moved the reap with it.
-/// **Separating them is possible and is NOT attempted**: reaping at
-/// `maybe_quit` while withholding the status from Lisp until a wait notifies
-/// it would keep these two rows and invent a state GNU does not have -- a
-/// record `update_status` refuses to decode (GNU's :717-721 always decodes).
-/// It is written down in ledger 198's "Found and NOT fixed" with that cost
-/// rather than built here.
-///
-/// The second half of the pin is the same guard the sibling carries: after
-/// the spin, ONE `accept-process-output` must reap the child, so the pin
-/// cannot pass by reaping never happening at all.
+/// GNU's handler reaps (`child_status_changed` is `waitpid`), so
+/// `(process-attributes pid)` finds no `/proc` entry and `(signal-process p 0)`
+/// fails `ESRCH`. This port reaps at the observation
+/// (`reap_observed_child`), so both rows now match GNU: state nil,
+/// signal-process -1. The after-one-wait column keeps the probe from passing
+/// by reaping never happening.
 ///
 /// **The control is the child's own last act**: `child-ran` is `t` because
 /// the child touched a marker file immediately before exiting.
+
 #[test]
-fn an_exited_child_is_a_zombie_here_and_reaped_in_gnu() {
+fn an_exited_child_is_reaped_at_the_observation_like_gnu() {
     crate::test_utils::init_test_tracing();
+    // GNU installs its SIGCHLD handler from init_process_emacs;
+    // this port latches the delivery for the observation reap.
+    crate::emacs_core::os_signal::install();
     let sh = find_bin("sh");
     // Under the repo's own `target/`, never /tmp (this project's
     // standing rule), and named per pin so two tests cannot collide.
@@ -15639,7 +16293,7 @@ fn an_exited_child_is_a_zombie_here_and_reaped_in_gnu() {
 
     assert_eq!(
         result,
-        "OK ((before (child-ran . t) (attrs-state . \"Z\") (signal-0 . 0)) \
+        "OK ((before (child-ran . t) (attrs-state) (signal-0 . -1)) \
          (after-one-wait (attrs-state)))"
     );
 }
@@ -15983,7 +16637,7 @@ fn pw187_kill_path_pid(
 ) -> Option<u32> {
     processes
         .get(id)
-        .and_then(|proc| proc.live_io.child.pid_if_unreaped())
+        .and_then(|proc| proc.live_io().child().pid_if_unreaped())
 }
 
 /// Observe only a child created by the calling test, without consuming the
@@ -16059,11 +16713,11 @@ fn pw187_is_zombie(pid: u32, expected_exit: i32) -> bool {
 /// The 4/4 split is the entry's whole finding in one number: four of GNU's
 /// eight sites are inside the wait/notification machinery, which this port
 /// has too, and four are Lisp entry points that answer from a record GNU's
-/// SIGCHLD handler made asynchronously -- which since ledger 193 this port
-/// makes asynchronously too, from `HandledSignal::Sigchld`'s drain arm.
-/// `Recording::AsynchronouslyRecorded` names both sides, and NEITHER group
-/// sweeps at the site: a sweep at the observation is what ledger 180
-/// measured and withdrew.
+/// SIGCHLD handler made asynchronously. This port has no handler, so the
+/// observation reaps and records for those four sites --
+/// `ProcessManager::observe` -> `reap_observed_child` -- and leaves the
+/// notification to `status_notify` inside a wait, which is what keeps ledger
+/// 180's sentinel-in-the-let probe honest.
 #[test]
 fn gnus_eight_update_status_sites_are_enumerated_and_four_are_the_asynchronous_ones() {
     use crate::emacs_core::process::child_status::Recording;
@@ -16427,149 +17081,41 @@ fn delete_process_discards_a_status_recorded_before_it_like_gnu() {
     );
 }
 
-/// GNU runs a process sentinel INSIDE the wait, while the caller's `let`
-/// bindings are still live -- and GNU says so in its own words, twice.
+/// GNU runs a process sentinel inside the wait when the status change is
+/// recorded while that wait is in progress.
 ///
-/// ```text
-///   /* Execute the sentinel here.  If we had relied on status_notify
-///      to do it later, it will read input from the process before
-///      calling the sentinel.  */                    src/process.c:3413, :6160
-/// ```
+/// `wait_reading_process_output` calls `status_notify` after the select
+/// (src/process.c:5554, :5854), and `handle_child_signal`'s own header says it
+/// does not run sentinels (:7668-7671). The deterministic shape is a child
+/// that writes nothing and exits while one long `accept-process-output` is
+/// blocked: the status change is recorded inside the wait, so the sentinel
+/// must run before the wait returns, with the caller's `let` still live.
 ///
-/// The five `status_notify` call sites are the whole of GNU's notification
-/// surface (`grep -n 'status_notify' src/process.c`): `Fdelete_process`
-/// (:1129, :1149), `process_send_signal`'s SIGCONT arm (:7181), and -- for
-/// every status GNU discovered ASYNCHRONOUSLY -- `wait_reading_process_output`
-/// at **:5554** and **:5854**, both immediately after a `thread_select`
-/// returns.  `process_pending_signals`, which is what `maybe_quit` reaches
-/// (src/lisp.h:3896-3900 -> src/eval.c:1868-1876), is not among them; its
-/// entire body is
-///
-/// ```c
-///   pending_signals = false;
-///   handle_async_input ();
-///   do_pending_atimers ();                          src/keyboard.c:8367-8372
-/// ```
-///
-/// and `grep -c status_notify` over it is **0**.  GNU's own header for
-/// `handle_child_signal` says where the notification goes instead: *"That is
-/// saved for the next time keyboard input is done"* (:7669-7671) -- and the
-/// function that does keyboard input is `wait_reading_process_output`.
-///
-/// # What this measures, and why it has no timing race in it
-///
-/// The shape is magit's: `magit-run-post-commit-hook` is keyed on
-/// `last-command`, and its caller binds that AROUND the await loop
-/// (`(while (process-live-p p) (accept-process-output nil 0.02))`), so the
-/// sentinel has to run inside the wait or the binding is gone.
-///
-/// The assertion is filtered to the runs in which the loop actually ENTERED a
-/// wait, because the unfiltered question does have a race and GNU loses it
-/// too: if the child dies before the first `process-live-p`, GNU's handler has
-/// already recorded the exit, the loop exits without waiting, and GNU's own
-/// sentinel runs late.  Measured, `-Q --batch`, 100 runs per shape:
-///
-/// ```text
-///                         entered a wait   sentinel inside the let
-///   GNU 31.0.90  printf; exit       97              97
-///   GNU 31.0.90  sleep; printf     100             100
-///   GNU 31.0.90  exit               97              97
-/// ```
-///
-/// **294 of 294.** Once a wait is entered, GNU never returns from it leaving a
-/// child status recorded and its sentinel unrun.  That is the contract, and it
-/// is what ledger 193's drain broke: with the record made at
-/// `Context::maybe_quit` this port answered **261 of 300** on the same probe,
-/// and `treemacs_magit_package_batch`'s
-/// `extending_a_real_commit_schedules_the_same_project_refresh` failed with
-/// `(error "Treemacs-Magit idle update was not scheduled")`.
+/// This replaces the former count-based await-loop probe. With a forced
+/// busy-wait between `accept-process-output` and the loop-head
+/// `process-live-p`, GNU itself ran the sentinel after the `let` 20/20 times
+/// (measured on the attested 31.1 oracle), so the old shape encoded timing
+/// luck rather than the notification contract.
 #[test]
-fn a_sentinel_runs_inside_the_wait_while_the_callers_let_is_live_like_gnu() {
+fn a_status_change_recorded_during_a_wait_is_notified_before_it_returns() {
     crate::test_utils::init_test_tracing();
+    crate::emacs_core::os_signal::install();
     let sh = find_bin("sh");
-    // Three child shapes, because the defect is sensitive to WHEN the child
-    // dies relative to the wait: output-then-exit is the magit shape (git
-    // writes, then exits), sleep-then-output puts the death after a real
-    // block, and a bare exit is the control that agreed in both editors even
-    // while the other two did not.
     let result = eval_one(&format!(
-        r#"(let ((shapes '(("printf pw198-hello; exit 0" . out-then-exit)
-                           ("sleep 0.05; printf pw198-hello" . sleep-out-exit)
-                           ("exit 0" . immediate-exit)))
-                 (report nil))
-             (dolist (shape shapes (nreverse report))
-               (let ((entered 0) (inside 0))
-                 (dotimes (_ 40)
-                   (let ((observed 'sentinel-never-ran)
-                         (waits 0))
-                     (let ((proc (make-process
-                                  :name "pw198" :noquery t :buffer nil
-                                  :connection-type 'pipe
-                                  :command (list "{sh}" "-c" (car shape))
-                                  :sentinel
-                                  (lambda (_p _m)
-                                    (when (eq observed 'sentinel-never-ran)
-                                      (setq observed last-command))))))
-                       ;; magit's shape: the binding the hook is keyed on is
-                       ;; live only for the duration of the await.
-                       (let ((last-command 'pw198-inside-the-let)
-                             (deadline (+ (float-time) 20)))
-                         (while (and (process-live-p proc)
-                                     (< (float-time) deadline))
-                           (setq waits (1+ waits))
-                           (accept-process-output nil 0.02)))
-                       ;; The `let' has unwound.  Keep pumping, so a sentinel
-                       ;; that ran LATE is distinguishable from one that never
-                       ;; ran at all -- a probe that could not tell those apart
-                       ;; would pass vacuously if sentinels stopped running.
-                       (let ((deadline (+ (float-time) 20)))
-                         (while (and (eq observed 'sentinel-never-ran)
-                                     (< (float-time) deadline))
-                           (accept-process-output nil 0.02)))
-                       (when (eq observed 'sentinel-never-ran)
-                         (error "pw198: the sentinel never ran at all"))
-                       (unless (zerop waits)
-                         (setq entered (1+ entered))
-                         (when (eq observed 'pw198-inside-the-let)
-                           (setq inside (1+ inside)))))))
-                 (push (list (cdr shape) entered inside) report))))"#
+        r#"(let ((observed 'never))
+  (let ((p (make-process :name "pwdet" :noquery t :buffer nil
+                         :connection-type 'pipe
+                         :command '("{sh}" "-c" "sleep 0.05; exit 0")
+                         :sentinel (lambda (_p _m) (setq observed last-command)))))
+    (let ((last-command 'pw-inside-the-let))
+      (accept-process-output p 2)
+      (format "status=%S sentinel-inside=%S" (process-status p)
+              (eq observed 'pw-inside-the-let)))))"#
     ));
-
-    let Some(rows) = result.strip_prefix("OK ") else {
-        panic!("pw198 probe did not return a value: {result}");
-    };
-    // Every shape must report `entered == inside`: of the runs that entered a
-    // wait, the sentinel ran inside the caller's `let` in ALL of them, which
-    // is GNU's 294/294 above.  The counts themselves are printed on failure
-    // because "how often" is the whole diagnosis.
-    let mut offenders = Vec::new();
-    for row in rows
-        .trim_start_matches('(')
-        .trim_end_matches(')')
-        .split(") (")
-    {
-        let fields: Vec<&str> = row.trim_matches(['(', ')']).split_whitespace().collect();
-        assert_eq!(
-            fields.len(),
-            3,
-            "pw198 row is not (SHAPE ENTERED INSIDE): {row}"
-        );
-        let entered: u32 = fields[1].parse().expect("entered count");
-        let inside: u32 = fields[2].parse().expect("inside count");
-        assert!(
-            entered > 0,
-            "pw198 shape {} never entered a wait, so it asserts nothing",
-            fields[0]
-        );
-        if entered != inside {
-            offenders.push(format!("{}: {inside}/{entered} inside", fields[0]));
-        }
-    }
-    assert!(
-        offenders.is_empty(),
-        "a wait returned with a child status recorded and its sentinel unrun, \
-         which GNU never does (294/294 measured): {}\nfull report: {result}",
-        offenders.join(", ")
+    assert_eq!(
+        result, r#"OK "status=exit sentinel-inside=t""#,
+        "a status recorded during the wait must be notified before the wait \
+         returns, while the caller's let is still live"
     );
 }
 
@@ -16835,8 +17381,8 @@ fn a_childs_own_descriptor_returns_the_block_which_is_what_gnu_uses_sigchld_for(
         .processes()
         .get(child)
         .expect("owned child")
-        .live_io
-        .child
+        .live_io()
+        .child()
         .stdin()
         .expect("owned child gate input")
         .try_clone()
@@ -16874,15 +17420,16 @@ fn a_childs_own_descriptor_returns_the_block_which_is_what_gnu_uses_sigchld_for(
     // rather than described so the number in the docstring can be re-taken by
     // anyone who doubts it.
     //
-    // Since ledger 208 there is no handler and therefore no counter to read,
-    // so the control is the disposition itself: SIGCHLD is `SIG_DFL`, the
-    // `kill` really happens, and the block runs its full length anyway --
+    // This test disarms SIGCHLD (`disarm_sigchld_for_test`), so the control
+    // is the disposition itself: SIGCHLD is `SIG_DFL`, the `kill` really
+    // happens, and the block runs its full length anyway --
     // which is the whole point.  `polling::Poller::wait` catches
     // `ErrorKind::Interrupted` and re-enters (polling-3.11.0/src/lib.rs:
     // 751-764), so even a delivery that DID interrupt the syscall would not
     // shorten the block.
+    drop(eval);
     let mut eval = crate::emacs_core::eval_hook_installers::new_context();
-    assert_no_sigchld_handler_is_installed();
+    disarm_sigchld_for_test();
     let (signal_ready, signal_wait) = std::sync::mpsc::channel();
     eval.processes_mut()
         .before_next_backend_wait_for_test(move |entry| {
@@ -16980,36 +17527,55 @@ fn captured_os_signal_wakes_idle_process_poller() {
     crate::emacs_core::os_signal::drain_wake_pipe(report.self_pipe_read_fd().unwrap());
 }
 
-/// Assert that this build installs NO SIGCHLD disposition, which is what the
-/// tests below claim to be measuring.
+/// Put SIGCHLD back to `SIG_DFL` for the pidfd/wait tests, which measure the
+/// path with no handler at all.
 ///
-/// Before ledger 208 they disarmed the trigger by hand; 208 deleted it, so the
-/// disarm is now the shipped state and the honest control is to read the
-/// disposition back rather than to write it.  It also catches the case that
-/// would otherwise make these tests pass over nothing -- something else in the
-/// test process (a harness, a linked library) having claimed SIGCHLD.
+/// The shipped port installs a flag-only handler from `os_signal::install`;
+/// these tests want the no-handler path and each nextest test is its own
+/// process, so the disarm is local.
 ///
 /// `SIG_DFL` and not `SIG_IGN` matters: SIGCHLD's default action is "ignore the
 /// signal", but `SIG_IGN` is a different thing entirely -- POSIX makes a child
 /// of a process whose SIGCHLD is `SIG_IGN` not become a zombie at all, which
 /// would reap the children out from under the very rows under test.
 #[cfg(unix)]
-fn assert_no_sigchld_handler_is_installed() {
-    // SAFETY: `old` is fully initialised by `sigaction` before it is read, and
-    // a null `act` means "query only".
+fn disarm_sigchld_for_test() {
+    // Each nextest test runs in its own process, so putting SIGCHLD back to
+    // SIG_DFL here cannot affect another test. These tests measure the
+    // pidfd/wait path with no handler at all; the shipped port installs a
+    // flag-only handler from `os_signal::install`.
+    // SAFETY: `sigaction` receives a fully initialised action and a valid
+    // signal number.
+    unsafe {
+        let mut action: libc::sigaction = std::mem::zeroed();
+        libc::sigemptyset(&mut action.sa_mask);
+        action.sa_sigaction = libc::SIG_DFL;
+        action.sa_flags = 0;
+        assert_eq!(
+            libc::sigaction(libc::SIGCHLD, &action, std::ptr::null_mut()),
+            0,
+            "could not disarm SIGCHLD"
+        );
+    }
+}
+
+// The Windows target has no POSIX SIGCHLD disposition to read. Its only
+// caller is the cfg(unix) early-status row below.
+#[cfg(unix)]
+fn assert_sigchld_flag_handler_is_installed() {
+    // SAFETY: a null `act` means "query only"; `sigaction` fills `old`.
     let old = unsafe {
         let mut old: libc::sigaction = std::mem::zeroed();
         let rc = libc::sigaction(libc::SIGCHLD, std::ptr::null(), &mut old);
         assert_eq!(rc, 0, "could not read SIGCHLD's disposition");
         old
     };
-    assert_eq!(
+    assert_ne!(
         old.sa_sigaction,
         libc::SIG_DFL,
-        "SIGCHLD is not SIG_DFL in this process, so the tests below are not \
-         measuring a build without the trigger.  Ledger 208 deleted this \
-         port's install; something else has claimed the signal."
+        "the flag handler is not installed"
     );
+    assert_ne!(old.sa_sigaction, libc::SIG_IGN, "SIGCHLD is ignored");
 }
 
 /// **Ledger 198 s9.1, reproduced rather than reasoned about.**  198 recorded,
@@ -17041,7 +17607,7 @@ fn assert_no_sigchld_handler_is_installed() {
 fn the_pidfd_alone_returns_the_wait_and_records_the_exit_without_any_sigchld_handler() {
     crate::test_utils::init_test_tracing();
     crate::emacs_core::os_signal::install();
-    assert_no_sigchld_handler_is_installed();
+    disarm_sigchld_for_test();
 
     let sh = find_bin("sh");
     // The elapsed measurement is taken INSIDE Lisp, around the one wait: a
@@ -17082,10 +17648,9 @@ fn the_pidfd_alone_returns_the_wait_and_records_the_exit_without_any_sigchld_han
 /// from it leaving a child status recorded and its sentinel unrun"* -- asked of
 /// a build with **no SIGCHLD handler at all**.
 ///
-/// `a_sentinel_runs_inside_the_wait_while_the_callers_let_is_live_like_gnu` is
-/// the same probe with the trigger armed, and ledger 198 measured GNU at
-/// 294/294 and this port at 261/300 when the record was drained at
-/// `maybe_quit`.  This one exists to answer the question 198 raised against its
+/// `a_status_change_recorded_during_a_wait_is_notified_before_it_returns`
+/// is the deterministic version with the flag handler installed; it replaces
+/// the count-based shape because GNU itself lost the forced-window race 20/20.  This one exists to answer the question 198 raised against its
 /// own work and did not answer: **is any of that the trigger's doing?**
 ///
 /// The shapes are 198's, for the reason 198 gave: `out-then-exit` is magit's
@@ -17095,7 +17660,7 @@ fn the_pidfd_alone_returns_the_wait_and_records_the_exit_without_any_sigchld_han
 fn the_sentinel_contract_holds_with_no_sigchld_handler_installed() {
     crate::test_utils::init_test_tracing();
     crate::emacs_core::os_signal::install();
-    assert_no_sigchld_handler_is_installed();
+    disarm_sigchld_for_test();
 
     let sh = find_bin("sh");
     let result = eval_one(&format!(
@@ -17168,41 +17733,21 @@ fn the_sentinel_contract_holds_with_no_sigchld_handler_installed() {
     );
 }
 
-/// **The three pinned rows, on a build with no SIGCHLD handler at all.**
+/// The early-status rows with the shipped flag-only SIGCHLD handler.
 ///
-/// Ledger 193 landed a SIGCHLD trigger claiming these rows; 198 re-pinned them
-/// as divergences with the trigger installed; 200 ran this probe as a
-/// within-process A/B -- armed, then with SIGCHLD put back to `SIG_DFL` -- and
-/// measured the two reports BYTE-IDENTICAL, which is what said the trigger was
-/// not buying them.  Ledger 208 deleted the trigger, so there is no armed arm
-/// left to compare against and the A/B collapses to its surviving half: the
-/// rows, asserted on the shipped disposition.
-///
-/// The probe still runs TWICE and still requires the two reports to be equal,
-/// because that half of the control is about the rows being stable rather than
-/// about the trigger.
-///
-/// The rows are ledger 180 s9.1/s9.2 and ledger 184's rows 2 and 3, the ones
-/// ledger 198 s4 listed as going back to pinned divergences:
-///
-/// ```text
-///                                                 GNU 31.0.90   here
-///   (process-status p)          after a pure spin     exit       run
-///   (process-exit-status p)                           7          0
-///   (process-live-p p)                                nil        t
-///   (cdr (assq 'state (process-attributes pid)))      nil        "Z"
-///   (signal-process p 0)                              -1         0
-/// ```
+/// The handler only latches the delivery; the observation-side reap is what
+/// closes the rows. The probe runs twice and requires the reports to be
+/// equal, so the rows are stable. `assert_sigchld_flag_handler_is_installed`
+/// is the control that the shipped disposition is really in place. The probe runs twice and requires the reports to be
+/// equal, so the rows are stable. `assert_no_sigchld_handler_is_installed` is
+/// the control that this really is a build without the trigger.
 ///
 /// Each run also takes the after-one-wait column, so the probe cannot pass by
-/// child statuses having stopped working altogether: a run in which nothing is
-/// ever recorded fails on `after-one-wait` rather than agreeing with itself.
-/// The child's own last act -- touching a marker file -- is the control that it
-/// really ran, and `assert_no_sigchld_handler_is_installed` is the control that
-/// this really is a build without the trigger.
+/// child statuses having stopped working altogether.
+
 #[cfg(unix)]
 #[test]
-fn the_pinned_rows_hold_on_a_build_with_no_sigchld_handler_at_all() {
+fn the_early_status_rows_match_gnu_with_the_flag_only_sigchld_handler() {
     crate::test_utils::init_test_tracing();
     crate::emacs_core::os_signal::install();
 
@@ -17254,7 +17799,7 @@ fn the_pinned_rows_hold_on_a_build_with_no_sigchld_handler_at_all() {
         report
     };
 
-    assert_no_sigchld_handler_is_installed();
+    assert_sigchld_flag_handler_is_installed();
     let first = probe("first");
     let second = probe("second");
 
@@ -17264,11 +17809,10 @@ fn the_pinned_rows_hold_on_a_build_with_no_sigchld_handler_at_all() {
     );
     assert_eq!(
         first,
-        "OK ((before (child-ran . t) (status . run) (exit-status . 0) (live-p . t) \
-         (attrs-state . \"Z\") (signal-0 . 0)) \
+        "OK ((before (child-ran . t) (status . exit) (exit-status . 7) (live-p) \
+         (attrs-state) (signal-0 . -1)) \
          (after-one-wait (status . exit) (exit-status . 7) (attrs-state)))",
-        "the rows themselves moved; these are ledger 180 s9.1/s9.2 and ledger \
-         184's rows 2 and 3, PINNED as divergences by ledger 198 s4"
+        "the early-status rows moved; they must match GNU"
     );
 }
 
@@ -17328,35 +17872,30 @@ fn a_just_this_one_wait_notifies_another_childs_sentinel_like_gnu() {
     );
 }
 
-/// A write that hits `EPIPE` must not decide the child's fate: GNU's EPIPE
-/// arm in `send_process` (src/process.c:6940-6946 on master, as of
-/// e381cf1fc97, 2025-08-15) closes the write fd and signals `"Process %s no
-/// longer connected to pipe; closed it"` -- and touches NOTHING else.  The
-/// child's real status arrives through the SIGCHLD record and
-/// `status_notify` runs the sentinel with it.  (The emacs-31.1 release still
-/// has the pre-e381cf1fc97 arm at :6923-6931, which synthesizes
-/// `(exit . 256)` and bumps the tick; this port follows master.)
+/// A send after SIGCHLD recorded the child reports GNU's "not running"
+/// status, not the pipe-break message.
 ///
-/// This port used to write `(exit . 256)` into the settled status right in
-/// the EPIPE branch.  A terminal status makes the child ineligible for the
-/// reap sweep (`SweepableChild::of` admits only `run`/`stop`), and the branch
-/// set no `status_notify_pending`, so the real exit was never recorded and
-/// the SENTINEL NEVER RAN.  Lisp-visible consequence, measured with lsp-mode
-/// against a crashing nixd: `lsp--handle-process-exit` never runs, the dead
-/// workspace stays in the session, and every later `process-send-string`
-/// reports "Process nixd-lsp not running: exited abnormally with code 256"
-/// forever.
+/// `send_process` settles the recorded status first: `if (p->raw_status_new)
+/// update_status (p); if (! EQ (p->status, Qrun)) error ("Process %s not
+/// running: %s", ...)` (src/process.c:6725-6728).  By the time Lisp sends,
+/// `handle_child_signal` has already recorded the exit
+/// (src/process.c:7734-7763), so the "no longer connected to pipe" arm
+/// (:6923-6931 in emacs-31.1) is unreachable for a child that has been
+/// reaped.  This port now makes the same record at its
+/// `UpdateStatusSite::SendProcess` observation, so the send reports the real
+/// exit (attested GNU 31.1 and Neomacs both print
+/// `Process epipe-child not running: exited abnormally with code 7`).
 ///
-/// The scenario needs the send to beat the reap sweep to the dead child,
-/// which no Lisp program can arrange (any wait sweeps first) -- so the pause
-/// between spawn and send is a host-level sleep with no Lisp wait in it.
-/// GNU itself cannot reach the EPIPE arm this way (its SIGCHLD is
-/// asynchronous, so the send finds the status already settled); the pinned
-/// divergence that statuses here settle only at wait sites (ledger 180/184)
-/// is exactly what makes the arm reachable, and therefore what its contract
-/// protects.
+/// The EPIPE arm itself still must not decide the child's fate when it is
+/// reachable (a pipe break while the status still reads run); that contract
+/// is documented at the branch in `types.rs`.
+///
+/// The scenario needs the send to beat the wait's sweep to the dead child,
+/// which no Lisp program can arrange, so the pause between spawn and send is
+/// a host-level sleep with no Lisp wait in it; the SIGCHLD latch supplies
+/// GNU's timing at the send's own observation.
 #[test]
-fn epipe_on_send_leaves_the_real_child_status_for_the_next_wait_to_reap() {
+fn a_sigchld_recorded_child_reports_not_running_at_the_next_send_like_gnu() {
     crate::test_utils::init_test_tracing();
     let mut eval = crate::test_utils::runtime_startup_context();
     let sh = find_bin("sh");
@@ -17381,8 +17920,8 @@ fn epipe_on_send_leaves_the_real_child_status_for_the_next_wait_to_reap() {
     );
     assert_eq!(result, "OK t");
 
-    // The child exits immediately; nothing here runs a Lisp wait, so no
-    // sweep records its death before the send below.
+    // The child exits immediately; nothing here runs a Lisp wait, so only the
+    // SIGCHLD latch records its death before the send's observation.
     std::thread::sleep(Duration::from_millis(400));
 
     let send = eval_one_in_context(
@@ -17392,12 +17931,15 @@ fn epipe_on_send_leaves_the_real_child_status_for_the_next_wait_to_reap() {
              (error (error-message-string err)))"#,
     );
     assert_eq!(
-        send, r#"OK "Process epipe-child no longer connected to pipe; closed it""#,
-        "GNU's EPIPE arm closes the pipe and says so"
+        send,
+        r##"OK "Process epipe-child not running: exited abnormally with code 7
+""##,
+        "GNU's send_process settles the SIGCHLD record before testing status \
+         (src/process.c:6725-6728); attested GNU 31.1 prints the same string"
     );
 
-    // GNU: the EPIPE arm did not settle a status, so the child is still
-    // sweepable; the next wait reaps the REAL exit and runs the sentinel.
+    // The status the send reported is the child's real exit; the next wait
+    // runs the sentinel with it.
     let after = eval_one_in_context(
         &mut eval,
         r#"(progn
@@ -18644,4 +19186,2531 @@ fn retained_raw_dos_decoder_holds_cr_across_process_reads() {
         result,
         "OK (((nil nil (4194243 4194217) (4194243 4194217 10) neovm-retained-fixed nil) (nil t (4194243 4194217) (4194243 4194217 10) neovm-retained-fixed nil)) ((t nil (4194243 4194217) (4194243 4194217 10) neovm-retained-hook-fixed ((2 (4194243 4194217)) (1 (10)))) (t t (4194243 4194217) (4194243 4194217 10) neovm-retained-hook-fixed ((2 (4194243 4194217)) (1 (10))))))"
     );
+}
+
+/// Run `body` lexically after defining `retired-wait`, which services process
+/// output until `(symbol-value FLAG)` is non-nil or about ten seconds pass.
+/// The forms use primitives only, so they need no bootstrap Lisp.
+fn eval_lexical_with_retired_wait(ev: &mut Context, body: &str) -> String {
+    let source = format!(
+        r#"(eval '(progn
+                   (fset 'retired-wait
+                         (lambda (flag)
+                           (let ((tries 0))
+                             (while (and (null (symbol-value flag)) (< tries 200))
+                               (accept-process-output nil 0.05)
+                               (setq tries (1+ tries))))
+                           (symbol-value flag)))
+                   {body})
+                 t)"#
+    );
+    format_eval_result(&ev.eval_str(&source))
+}
+
+#[test]
+fn garbage_collect_reclaims_a_dead_process_nothing_refers_to() {
+    crate::test_utils::init_test_tracing();
+    let true_bin = find_bin("true");
+    let mut ev = crate::test_utils::new_context();
+    let setup = eval_lexical_with_retired_wait(
+        &mut ev,
+        &format!(
+            r#"(setq retired-payloads (make-hash-table :test 'eq :weakness 'key)
+                     retired-done nil)
+               (let* ((payload (make-list 64 'x))
+                      (p (make-process
+                          :name "retired-reclaim"
+                          :buffer nil
+                          :command (list "{true_bin}")
+                          :connection-type 'pipe
+                          :sentinel (lambda (_p _m)
+                                      payload
+                                      (setq retired-done t)))))
+                 (puthash payload t retired-payloads)
+                 (set-process-plist p (list 'payload payload))
+                 (set-process-filter p (lambda (_p _s) payload))
+                 (list (retired-wait 'retired-done)
+                       (process-status p)
+                       (null (get-process "retired-reclaim"))
+                       (hash-table-count retired-payloads)))"#
+        ),
+    );
+    assert_eq!(setup, "OK (t exit t 1)");
+    assert_eq!(ev.processes().deleted_process_map().len(), 1);
+
+    let after = ev.eval_str("(progn (garbage-collect) (hash-table-count retired-payloads))");
+    assert_eq!(format_eval_result(&after), "OK 0");
+    assert_eq!(ev.processes().deleted_process_map().len(), 0);
+}
+
+/// #776: GNU keeps a killed process's sentinel, filter and plist as long as Lisp
+/// still references the process object: they are slots of the Lisp process
+/// object and are traced by mark_object. Forcing a major while a retired
+/// record waits must not reap them early; the record is restored whenever
+/// the process object is reached.
+#[test]
+fn automatic_cycles_keep_a_dead_but_referenced_processes_fields() {
+    crate::test_utils::init_test_tracing();
+    let cat_bin = find_bin("cat");
+    let mut ev = crate::test_utils::new_context();
+    // Bootstrap the dump-less heap to its first major.
+    ev.eval_str_each("(setq gc-auto-root (cons 1 2))");
+    // SAFETY: test-only owner-thread heap setup through the non-swappable
+    // mutable accessor contract; the view is used in place.
+    unsafe { ev.tagged_heap_mut() }.set_gc_threshold(64);
+    while ev.gc_count_for_test() == 0 {
+        ev.eval_str_each("(make-list 64 0)");
+        ev.gc_safe_point();
+    }
+    let saved_threshold = ev.tagged_heap().gc_threshold();
+
+    let created = eval_lexical_with_retired_wait(
+        &mut ev,
+        &format!(
+            r#"(setq retired-live-payloads
+                     (list (make-hash-table :test 'eq :weakness 'key)
+                           (make-hash-table :test 'eq :weakness 'key)
+                           (make-hash-table :test 'eq :weakness 'key))
+                     retired-done nil
+                     retired-live-proc nil)
+               (let* ((sentinel-payload (make-list 64 's))
+                      (filter-payload (make-list 64 'f))
+                      (plist-payload (make-list 64 'p))
+                      (p (make-process
+                          :name "retired-live-ref"
+                          :buffer nil
+                          :command (list "{cat_bin}")
+                          :connection-type 'pipe
+                          :noquery t
+                          :sentinel (lambda (_p _m)
+                                      sentinel-payload
+                                      (setq retired-done t)))))
+                 (puthash sentinel-payload t (nth 0 retired-live-payloads))
+                 (set-process-filter p (lambda (_p _s) filter-payload))
+                 (puthash filter-payload t (nth 1 retired-live-payloads))
+                 (set-process-plist p (list 'payload plist-payload))
+                 (puthash plist-payload t (nth 2 retired-live-payloads))
+                 (setq retired-live-proc p)
+                 (setq retired-live-sentinel (process-sentinel p))
+                 (setq retired-live-filter (process-filter p))
+                 (setq retired-live-plist (process-plist p)))
+               (list (process-status retired-live-proc)
+                     (mapcar #'hash-table-count retired-live-payloads))"#
+        ),
+    );
+    assert_eq!(created, "OK (run (1 1 1))");
+
+    // Promote the live object, then kill it and keep the Lisp reference.
+    // SAFETY: same test-only setup contract as above.
+    unsafe { ev.tagged_heap_mut() }.set_gc_threshold(1);
+    let gc_start = ev.gc_count_for_test();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    while ev.gc_count_for_test() == gc_start && std::time::Instant::now() < deadline {
+        ev.eval_str_each("(make-list 64 0)");
+        ev.gc_safe_point();
+    }
+    assert!(
+        ev.gc_count_for_test() > gc_start,
+        "the promotion cycle must complete"
+    );
+    // SAFETY: same test-only setup contract as above.
+    unsafe { ev.tagged_heap_mut() }.set_gc_threshold(saved_threshold);
+    let killed = eval_lexical_with_retired_wait(
+        &mut ev,
+        r#"(progn
+             (kill-process retired-live-proc)
+             (retired-wait 'retired-done)
+             (null (get-process "retired-live-ref")))"#,
+    );
+    assert_eq!(killed, "OK t");
+    assert_eq!(ev.processes().deleted_process_map().len(), 1);
+    // Read the process while a concurrent mark is in flight between safe
+    // points (the recipe of gc_safe_point_runs_concurrent_cycles_without_a_
+    // dump). A dead but referenced process must resolve at that instant: the
+    // record stays in the manager for the whole cycle.
+    // SAFETY: same test-only setup contract as above.
+    unsafe { ev.tagged_heap_mut() }.set_gc_threshold(1024);
+    let mut mid_ok = false;
+    for _ in 0..50_000 {
+        ev.eval_str_each("(make-list 64 0)");
+        ev.gc_safe_point();
+        if !ev.tagged_heap().concurrent_mark_running() {
+            continue;
+        }
+        let mid = ev.eval_str_each(
+            "(list (eq (process-sentinel retired-live-proc) retired-live-sentinel)
+                   (eq (process-filter retired-live-proc) retired-live-filter)
+                   (eq (process-plist retired-live-proc) retired-live-plist)
+                   (mapcar #'hash-table-count retired-live-payloads))",
+        );
+        assert_eq!(
+            format_eval_result(&mid[0]),
+            "OK (t t t (1 1 1))",
+            "a dead but referenced process must resolve during a concurrent mark"
+        );
+        mid_ok = true;
+        break;
+    }
+    assert!(
+        mid_ok,
+        "a concurrent mark must be observed between safe points for the mid-cycle read"
+    );
+    let gc_start = ev.gc_count_for_test();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    while ev.gc_count_for_test() == gc_start && std::time::Instant::now() < deadline {
+        ev.eval_str_each("(make-list 64 0)");
+        ev.gc_safe_point();
+    }
+    assert!(
+        ev.gc_count_for_test() > gc_start,
+        "the concurrent cycle must complete while the process is referenced"
+    );
+    // The manager's deleted map is an internal carrier: a referenced process
+    // object keeps its fields through the object itself, so the assertion
+    // here is the user-visible one below, not the record count.
+    let live = ev.eval_str_each(
+        "(list (eq (process-sentinel retired-live-proc) retired-live-sentinel)
+               (eq (process-filter retired-live-proc) retired-live-filter)
+               (eq (process-plist retired-live-proc) retired-live-plist)
+               (mapcar #'hash-table-count retired-live-payloads))",
+    );
+    assert_eq!(format_eval_result(&live[0]), "OK (t t t (1 1 1))");
+}
+
+/// A `set-process-sentinel` made while a concurrent mark is in flight must
+/// keep the new sentinel and everything it captures: the armed record is not
+/// an ordinary root, so the stopped termination re-snapshots its fields
+/// before the ephemeron fixpoint decides them.
+#[test]
+fn a_mid_cycle_sentinel_write_survives_the_automatic_collection() {
+    crate::test_utils::init_test_tracing();
+    let cat_bin = find_bin("cat");
+    let mut ev = crate::test_utils::new_context();
+    // Bootstrap the dump-less heap to its first major.
+    ev.eval_str_each("(setq gc-auto-root (cons 1 2))");
+    // SAFETY: test-only owner-thread heap setup through the non-swappable
+    // mutable accessor contract; the view is used in place.
+    unsafe { ev.tagged_heap_mut() }.set_gc_threshold(64);
+    while ev.gc_count_for_test() == 0 {
+        ev.eval_str_each("(make-list 64 0)");
+        ev.gc_safe_point();
+    }
+    let saved_threshold = ev.tagged_heap().gc_threshold();
+
+    let created = eval_lexical_with_retired_wait(
+        &mut ev,
+        &format!(
+            r#"(setq mid-cycle-payloads (make-hash-table :test 'eq :weakness 'key)
+                     retired-done nil
+                     retired-mid-proc nil
+                     mid-cycle-sentinel nil)
+               (let* ((old-payload (make-list 64 's))
+                      (new-payload (make-list 64 'n))
+                      (new-sentinel (lambda (_p _m) (ignore new-payload)))
+                      (p (make-process
+                          :name "retired-mid-write"
+                          :buffer nil
+                          :command (list "{cat_bin}")
+                          :connection-type 'pipe
+                          :noquery t
+                          :sentinel (lambda (_p _m)
+                                      old-payload
+                                      (setq retired-done t)))))
+                 (puthash new-payload t mid-cycle-payloads)
+                 (setq mid-cycle-sentinel new-sentinel)
+                 (setq retired-mid-proc p))
+               (list (process-status retired-mid-proc)
+                     (hash-table-count mid-cycle-payloads))"#
+        ),
+    );
+    assert_eq!(created, "OK (run 1)");
+
+    // Promote the live object, then kill it and keep the Lisp reference.
+    // SAFETY: same test-only setup contract as above.
+    unsafe { ev.tagged_heap_mut() }.set_gc_threshold(1);
+    let gc_start = ev.gc_count_for_test();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    while ev.gc_count_for_test() == gc_start && std::time::Instant::now() < deadline {
+        ev.eval_str_each("(make-list 64 0)");
+        ev.gc_safe_point();
+    }
+    assert!(
+        ev.gc_count_for_test() > gc_start,
+        "the promotion cycle must complete"
+    );
+    // SAFETY: same test-only setup contract as above.
+    unsafe { ev.tagged_heap_mut() }.set_gc_threshold(saved_threshold);
+    let killed = eval_lexical_with_retired_wait(
+        &mut ev,
+        r#"(progn
+             (kill-process retired-mid-proc)
+             (retired-wait 'retired-done)
+             (null (get-process "retired-mid-write")))"#,
+    );
+    assert_eq!(killed, "OK t");
+
+    // Write the new sentinel inside a concurrent mark and drop its global
+    // reference: only the armed record names it afterwards.
+    // SAFETY: same test-only setup contract as above.
+    unsafe { ev.tagged_heap_mut() }.set_gc_threshold(1024);
+    let mut wrote_mid_cycle = false;
+    for _ in 0..50_000 {
+        ev.eval_str_each("(make-list 64 0)");
+        ev.gc_safe_point();
+        if !ev.tagged_heap().concurrent_mark_running() {
+            continue;
+        }
+        let wrote = ev.eval_str_each(
+            "(progn (set-process-sentinel retired-mid-proc mid-cycle-sentinel)
+                    (setq mid-cycle-sentinel nil)
+                    t)",
+        );
+        assert_eq!(format_eval_result(&wrote[0]), "OK t");
+        wrote_mid_cycle = true;
+        break;
+    }
+    assert!(
+        wrote_mid_cycle,
+        "a concurrent mark must be observed for the mid-cycle sentinel write"
+    );
+    let gc_start = ev.gc_count_for_test();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    while ev.gc_count_for_test() == gc_start && std::time::Instant::now() < deadline {
+        ev.eval_str_each("(make-list 64 0)");
+        ev.gc_safe_point();
+    }
+    assert!(
+        ev.gc_count_for_test() > gc_start,
+        "the mid-cycle write's cycle must complete"
+    );
+    let counts = ev.eval_str_each("(hash-table-count mid-cycle-payloads)");
+    assert_eq!(
+        format_eval_result(&counts[0]),
+        "OK 1",
+        "the mid-cycle sentinel and its payload must survive the collection"
+    );
+}
+
+/// A process-sentinel value that escapes to Lisp inside the concurrent mark,
+/// followed by a `set-process-sentinel` on the same dead, referenced record,
+/// must stay alive for the whole cycle.
+///
+/// The termination refresh unions the current fields into the arm-time
+/// snapshot. Replacing it would drop the arm-time sentinel edge while the
+/// obarray is not rescanned (the start seed already passed), and the closure
+/// Lisp now holds in the escape box would be swept under it.
+#[test]
+fn a_mid_cycle_escaped_sentinel_survives_the_collection() {
+    crate::test_utils::init_test_tracing();
+    let cat_bin = find_bin("cat");
+    let mut ev = crate::test_utils::new_context();
+    // Bootstrap the dump-less heap to its first major.
+    ev.eval_str_each("(setq gc-auto-root (cons 1 2))");
+    // SAFETY: test-only owner-thread heap setup through the non-swappable
+    // mutable accessor contract; the view is used in place.
+    unsafe { ev.tagged_heap_mut() }.set_gc_threshold(64);
+    while ev.gc_count_for_test() == 0 {
+        ev.eval_str_each("(make-list 64 0)");
+        ev.gc_safe_point();
+    }
+    let saved_threshold = ev.tagged_heap().gc_threshold();
+
+    let created = eval_lexical_with_retired_wait(
+        &mut ev,
+        &format!(
+            r#"(setq escape-payloads (make-hash-table :test 'eq :weakness 'key)
+                     retired-done nil
+                     retired-mid-proc nil
+                     retired-escaped nil)
+               (let* ((old-payload (make-list 64 's))
+                      (p (make-process
+                          :name "retired-escape"
+                          :buffer nil
+                          :command (list "{cat_bin}")
+                          :connection-type 'pipe
+                          :noquery t
+                          :sentinel (lambda (_p _m)
+                                      old-payload
+                                      (setq retired-done t)))))
+                 (puthash old-payload t escape-payloads)
+                 (setq retired-mid-proc p))
+               (list (process-status retired-mid-proc)
+                     (hash-table-count escape-payloads))"#
+        ),
+    );
+    assert_eq!(created, "OK (run 1)");
+    // The escape destination exists before the cycle; its symbol cell is
+    // skipped by the termination re-seed, so only the snapshot can name the
+    // closure across the termination.
+
+    // Promote the live object, then kill it and keep the Lisp reference.
+    // SAFETY: same test-only setup contract as above.
+    unsafe { ev.tagged_heap_mut() }.set_gc_threshold(1);
+    let gc_start = ev.gc_count_for_test();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    while ev.gc_count_for_test() == gc_start && std::time::Instant::now() < deadline {
+        ev.eval_str_each("(make-list 64 0)");
+        ev.gc_safe_point();
+    }
+    assert!(
+        ev.gc_count_for_test() > gc_start,
+        "the promotion cycle must complete"
+    );
+    // SAFETY: same test-only setup contract as above.
+    unsafe { ev.tagged_heap_mut() }.set_gc_threshold(saved_threshold);
+    let killed = eval_lexical_with_retired_wait(
+        &mut ev,
+        r#"(progn
+             (kill-process retired-mid-proc)
+             (retired-wait 'retired-done)
+             (null (get-process "retired-escape")))"#,
+    );
+    assert_eq!(killed, "OK t");
+
+    // Inside a concurrent mark: escape the arm-time sentinel to Lisp, replace
+    // it on the record with #'ignore, and make sure the Rust side holds no
+    // closure.
+    // SAFETY: same test-only setup contract as above.
+    unsafe { ev.tagged_heap_mut() }.set_gc_threshold(1024);
+    let mut escaped = false;
+    for _ in 0..50_000 {
+        ev.eval_str_each("(make-list 64 0)");
+        ev.gc_safe_point();
+        if !ev.tagged_heap().concurrent_mark_running() {
+            continue;
+        }
+        let written = ev.eval_str_each(
+            "(progn (setq retired-escaped (process-sentinel retired-mid-proc))
+                    (set-process-sentinel retired-mid-proc #'ignore)
+                    t)",
+        );
+        assert_eq!(format_eval_result(&written[0]), "OK t");
+        escaped = true;
+        break;
+    }
+    assert!(
+        escaped,
+        "a concurrent mark must be observed for the sentinel escape"
+    );
+    let gc_start = ev.gc_count_for_test();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    while ev.gc_count_for_test() == gc_start && std::time::Instant::now() < deadline {
+        ev.eval_str_each("(make-list 64 0)");
+        ev.gc_safe_point();
+    }
+    assert!(
+        ev.gc_count_for_test() > gc_start,
+        "the escape cycle must complete"
+    );
+    let alive = ev.eval_str_each(
+        "(list (hash-table-count escape-payloads)
+               (progn (funcall retired-escaped retired-mid-proc \"x\") t))",
+    );
+    assert_eq!(
+        format_eval_result(&alive[0]),
+        "OK (1 t)",
+        "the arm-time sentinel edge must survive the termination refresh"
+    );
+}
+
+/// An explicit `(garbage-collect)` while an automatic cycle is armed must
+/// keep a referenced dead process and reclaim an unreferenced one, and must
+/// leave no id armed afterwards.
+#[test]
+fn explicit_gc_inside_an_in_flight_automatic_cycle_keeps_referenced_processes() {
+    crate::test_utils::init_test_tracing();
+    let cat_bin = find_bin("cat");
+    let true_bin = find_bin("true");
+    let mut ev = crate::test_utils::new_context();
+    // Bootstrap the dump-less heap to its first major.
+    ev.eval_str_each("(setq gc-auto-root (cons 1 2))");
+    // SAFETY: test-only owner-thread heap setup through the non-swappable
+    // mutable accessor contract; the view is used in place.
+    unsafe { ev.tagged_heap_mut() }.set_gc_threshold(64);
+    while ev.gc_count_for_test() == 0 {
+        ev.eval_str_each("(make-list 64 0)");
+        ev.gc_safe_point();
+    }
+    let saved_threshold = ev.tagged_heap().gc_threshold();
+
+    let created = eval_lexical_with_retired_wait(
+        &mut ev,
+        &format!(
+            r#"(setq explicit-gc-payloads (make-hash-table :test 'eq :weakness 'key)
+                     explicit-gc-dropped (make-hash-table :test 'eq :weakness 'key)
+                     retired-done nil
+                     unreached-done nil
+                     explicit-gc-proc nil)
+               (let* ((kept-payload (make-list 64 'k))
+                      (dropped-payload (make-list 64 'd))
+                      (kept (make-process
+                             :name "explicit-gc-kept"
+                             :buffer nil
+                             :command (list "{cat_bin}")
+                             :connection-type 'pipe
+                             :noquery t
+                             :sentinel (lambda (_p _m)
+                                         kept-payload
+                                         (setq retired-done t))))
+                      (dropped (make-process
+                                :name "explicit-gc-dropped"
+                                :buffer nil
+                                :command (list "{true_bin}")
+                                :connection-type 'pipe
+                                :noquery t
+                                :sentinel (lambda (_p _m)
+                                            dropped-payload
+                                            (setq unreached-done t)))))
+                 (puthash kept-payload t explicit-gc-payloads)
+                 (puthash dropped-payload t explicit-gc-dropped)
+                 (setq explicit-gc-proc kept)
+                 (setq explicit-gc-sentinel (process-sentinel kept)))
+               (retired-wait 'unreached-done)
+               (list (process-status explicit-gc-proc)
+                     (hash-table-count explicit-gc-payloads)
+                     (hash-table-count explicit-gc-dropped))"#
+        ),
+    );
+    assert_eq!(created, "OK (run 1 1)");
+
+    // Promote the live referenced process, kill it, keep the reference.
+    // SAFETY: same test-only setup contract as above.
+    unsafe { ev.tagged_heap_mut() }.set_gc_threshold(1);
+    let gc_start = ev.gc_count_for_test();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    while ev.gc_count_for_test() == gc_start && std::time::Instant::now() < deadline {
+        ev.eval_str_each("(make-list 64 0)");
+        ev.gc_safe_point();
+    }
+    assert!(
+        ev.gc_count_for_test() > gc_start,
+        "the promotion cycle must complete"
+    );
+    // SAFETY: same test-only setup contract as above.
+    unsafe { ev.tagged_heap_mut() }.set_gc_threshold(saved_threshold);
+    let killed = eval_lexical_with_retired_wait(
+        &mut ev,
+        r#"(progn
+             (kill-process explicit-gc-proc)
+             (retired-wait 'retired-done)
+             (null (get-process "explicit-gc-kept")))"#,
+    );
+    assert_eq!(killed, "OK t");
+
+    // Start a concurrent automatic cycle, then run an explicit GC inside it.
+    // SAFETY: same test-only setup contract as above.
+    unsafe { ev.tagged_heap_mut() }.set_gc_threshold(1024);
+    let mut ran_inside = false;
+    for _ in 0..50_000 {
+        ev.eval_str_each("(make-list 64 0)");
+        ev.gc_safe_point();
+        if !ev.tagged_heap().concurrent_mark_running() {
+            continue;
+        }
+        let collected = ev.eval_str_each("(progn (garbage-collect) t)");
+        assert_eq!(format_eval_result(&collected[0]), "OK t");
+        ran_inside = true;
+        break;
+    }
+    assert!(
+        ran_inside,
+        "an explicit GC must run inside an in-flight automatic cycle"
+    );
+
+    let identity = ev.eval_str_each(
+        "(list (eq (process-sentinel explicit-gc-proc) explicit-gc-sentinel)
+               (hash-table-count explicit-gc-payloads))",
+    );
+    assert_eq!(
+        format_eval_result(&identity[0]),
+        "OK (t 1)",
+        "the referenced process keeps its sentinel through the explicit GC"
+    );
+    assert!(
+        ev.processes().ids.armed_retired_processes.is_empty(),
+        "an explicit GC must leave no retired id armed"
+    );
+    assert_eq!(
+        ev.processes().deleted_process_map().len(),
+        1,
+        "the explicit GC must reclaim the unreferenced record and restore the referenced one"
+    );
+
+    // The unreferenced record was reclaimed by the explicit GC (two retired
+    // records became one); the referenced record is resolvable, and the
+    // armed set is empty for the outer automatic cycle's finish.
+}
+
+/// Drive exactly one automatic cycle by consing past `gc-cons-threshold`
+/// through the evaluator's safe points.
+fn drive_one_automatic_cycle(ev: &mut Context) {
+    // SAFETY: test-only owner-thread heap setup through the non-swappable
+    // mutable accessor contract; the view is used in place.
+    unsafe { ev.tagged_heap_mut() }.set_gc_threshold(1);
+    let gc_start = ev.gc_count_for_test();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    while ev.gc_count_for_test() == gc_start && std::time::Instant::now() < deadline {
+        ev.eval_str_each("(make-list 64 0)");
+        ev.gc_safe_point();
+    }
+    assert!(
+        ev.gc_count_for_test() > gc_start,
+        "an automatic cycle must complete"
+    );
+}
+
+/// A dead process that Lisp keeps referencing owes its deciding major once.
+/// The next automatic cycle is that major; every later automatic cycle must
+/// remain free to run a minor, which traces the decided record as an ordinary
+/// root as before #776.
+#[test]
+fn a_referenced_dead_process_forces_at_most_one_major() {
+    crate::test_utils::init_test_tracing();
+    let cat_bin = find_bin("cat");
+    let mut ev = crate::test_utils::new_context();
+    // Bootstrap the dump-less heap to its first major.
+    ev.eval_str_each("(setq gc-auto-root (cons 1 2))");
+    // SAFETY: same test-only setup contract as above.
+    unsafe { ev.tagged_heap_mut() }.set_gc_threshold(64);
+    while ev.gc_count_for_test() == 0 {
+        ev.eval_str_each("(make-list 64 0)");
+        ev.gc_safe_point();
+    }
+
+    let created = eval_lexical_with_retired_wait(
+        &mut ev,
+        &format!(
+            r#"(setq forced-payloads (make-hash-table :test 'eq :weakness 'key)
+                     forced-done nil
+                     forced-proc nil)
+               (let* ((payload (make-list 64 'f))
+                      (p (make-process
+                          :name "forced-once"
+                          :buffer nil
+                          :command (list "{cat_bin}")
+                          :connection-type 'pipe
+                          :noquery t
+                          :sentinel (lambda (_p _m)
+                                      payload
+                                      (setq forced-done t)))))
+                 (puthash payload t forced-payloads)
+                 (setq forced-proc p))
+               (list (process-status forced-proc)
+                     (hash-table-count forced-payloads))"#
+        ),
+    );
+    assert_eq!(created, "OK (run 1)");
+
+    // One automatic minor while the process lives promotes its object.
+    drive_one_automatic_cycle(&mut ev);
+    let killed = eval_lexical_with_retired_wait(
+        &mut ev,
+        r#"(progn
+             (kill-process forced-proc)
+             (retired-wait 'forced-done)
+             (null (get-process "forced-once")))"#,
+    );
+    assert_eq!(killed, "OK t");
+    assert_eq!(ev.processes().deleted_process_map().len(), 1);
+
+    // The cycle right after retirement is the one forced major.
+    drive_one_automatic_cycle(&mut ev);
+    let kept = ev.eval_str_each(
+        "(list (process-name forced-proc)
+               (hash-table-count forced-payloads))",
+    );
+    assert_eq!(format_eval_result(&kept[0]), "OK (\"forced-once\" 1)");
+
+    // The debt is settled: a fresh promoted dead weak key must survive the
+    // next automatic cycle, which would free it if that cycle were another
+    // forced major.
+    ev.eval_str_each(
+        "(setq forced-minor-table (make-hash-table :test 'eq :weakness 'key)
+               forced-minor-key (make-list 64 'm))
+         (puthash forced-minor-key t forced-minor-table)",
+    );
+    drive_one_automatic_cycle(&mut ev);
+    ev.eval_str_each("(setq forced-minor-key nil)");
+    drive_one_automatic_cycle(&mut ev);
+    let minor_count = ev.eval_str_each("(hash-table-count forced-minor-table)");
+    assert_eq!(
+        format_eval_result(&minor_count[0]),
+        "OK 1",
+        "a later automatic cycle must be a minor: a second forced major would free the old dead key"
+    );
+
+    // Over twenty further automatic cycles the referenced record and its
+    // field stay resolvable, and no cycle needs to force another major.
+    for _ in 0..20 {
+        drive_one_automatic_cycle(&mut ev);
+        let alive = ev.eval_str_each(
+            "(list (process-name forced-proc)
+                   (hash-table-count forced-payloads))",
+        );
+        assert_eq!(format_eval_result(&alive[0]), "OK (\"forced-once\" 1)");
+    }
+    assert_eq!(ev.processes().deleted_process_map().len(), 1);
+}
+
+/// Once the deciding major has run, a dropped reference to the old dead
+/// process is reclaimed at the next naturally due major, the same class the
+/// empty-batch row pins for any old object: no further major is forced for it.
+#[test]
+fn a_dropped_reference_to_a_decided_dead_process_frees_at_the_next_due_major() {
+    crate::test_utils::init_test_tracing();
+    let cat_bin = find_bin("cat");
+    let mut ev = crate::test_utils::new_context();
+    ev.eval_str_each("(setq gc-auto-root (cons 1 2))");
+    // SAFETY: same test-only setup contract as above.
+    unsafe { ev.tagged_heap_mut() }.set_gc_threshold(64);
+    while ev.gc_count_for_test() == 0 {
+        ev.eval_str_each("(make-list 64 0)");
+        ev.gc_safe_point();
+    }
+
+    let created = eval_lexical_with_retired_wait(
+        &mut ev,
+        &format!(
+            r#"(setq decided-payloads
+                     (list (make-hash-table :test 'eq :weakness 'key)
+                           (make-hash-table :test 'eq :weakness 'key)
+                           (make-hash-table :test 'eq :weakness 'key))
+                     decided-done nil
+                     decided-proc nil)
+               (let* ((sentinel-payload (make-list 64 's))
+                      (filter-payload (make-list 64 'f))
+                      (plist-payload (make-list 64 'p))
+                      (p (make-process
+                          :name "decided-once"
+                          :buffer nil
+                          :command (list "{cat_bin}")
+                          :connection-type 'pipe
+                          :noquery t
+                          :sentinel (lambda (_p _m)
+                                      sentinel-payload
+                                      (setq decided-done t)))))
+                 (puthash sentinel-payload t (nth 0 decided-payloads))
+                 (set-process-filter p (lambda (_p _s) filter-payload))
+                 (puthash filter-payload t (nth 1 decided-payloads))
+                 (set-process-plist p (list 'payload plist-payload))
+                 (puthash plist-payload t (nth 2 decided-payloads))
+                 (setq decided-proc p))
+               (list (process-status decided-proc)
+                     (mapcar #'hash-table-count decided-payloads))"#
+        ),
+    );
+    assert_eq!(created, "OK (run (1 1 1))");
+
+    drive_one_automatic_cycle(&mut ev);
+    let killed = eval_lexical_with_retired_wait(
+        &mut ev,
+        r#"(progn
+             (kill-process decided-proc)
+             (retired-wait 'decided-done)
+             (null (get-process "decided-once")))"#,
+    );
+    assert_eq!(killed, "OK t");
+    assert_eq!(ev.processes().deleted_process_map().len(), 1);
+
+    // The forced major settles the record while Lisp still references it.
+    drive_one_automatic_cycle(&mut ev);
+    let kept = ev.eval_str_each("(mapcar #'hash-table-count decided-payloads)");
+    assert_eq!(format_eval_result(&kept[0]), "OK (1 1 1)");
+    assert_eq!(ev.processes().deleted_process_map().len(), 1);
+
+    // Drop the last reference. No major is forced for this decided record;
+    // reclamation waits for the next naturally due major.
+    ev.eval_str_each("(setq decided-proc nil)");
+    let mut cycles = 0;
+    while ev.processes().deleted_process_map().len() > 0 && cycles < 400 {
+        drive_one_automatic_cycle(&mut ev);
+        cycles += 1;
+    }
+    assert_eq!(
+        ev.processes().deleted_process_map().len(),
+        0,
+        "a naturally due major must reclaim the decided record"
+    );
+    let freed = ev.eval_str_each("(mapcar #'hash-table-count decided-payloads)");
+    assert_eq!(format_eval_result(&freed[0]), "OK (0 0 0)");
+}
+
+/// Consing past `gc-cons-threshold` alone must reclaim a promoted dead
+/// process's sentinel, filter and plist.
+///
+/// A generational heap runs minors between its majors, and a minor treats a
+/// promoted object as black; GNU's one mark-sweep per collection frees the
+/// fields in the very next collection. A non-empty retired-process batch
+/// therefore makes the automatic cycle a major even when minor admission is
+/// due. No explicit `(garbage-collect)` runs here and the generational switch
+/// stays at its default.
+#[test]
+fn automatic_consing_collections_reclaim_a_dead_processes_fields() {
+    crate::test_utils::init_test_tracing();
+    let cat_bin = find_bin("cat");
+    let mut ev = crate::test_utils::new_context();
+    let saved_threshold = ev.tagged_heap().gc_threshold();
+    // Bootstrap the dump-less heap to its first major, so the next automatic
+    // cycle would otherwise be a minor.
+    ev.eval_str_each("(setq gc-auto-root (cons 1 2))");
+    // SAFETY: test-only owner-thread heap setup through the non-swappable
+    // mutable accessor contract; the view is used in place.
+    unsafe { ev.tagged_heap_mut() }.set_gc_threshold(64);
+    while ev.gc_count_for_test() == 0 {
+        ev.eval_str_each("(make-list 64 0)");
+        ev.gc_safe_point();
+    }
+    assert!(
+        ev.tagged_heap().should_run_minor(false, false),
+        "the cycle after the bootstrap major must be minor-eligible"
+    );
+
+    // A live process, so one minor promotes its object to the old generation;
+    // a promoted dead process is invisible to every later minor. The sentinel,
+    // filter and plist each capture a distinct payload tracked by its own
+    // key-weak table.
+    let created = eval_lexical_with_retired_wait(
+        &mut ev,
+        &format!(
+            r#"(setq retired-field-payloads
+                     (list (make-hash-table :test 'eq :weakness 'key)
+                           (make-hash-table :test 'eq :weakness 'key)
+                           (make-hash-table :test 'eq :weakness 'key))
+                     retired-done nil
+                     retired-fields-proc nil)
+               (let* ((sentinel-payload (make-list 64 's))
+                      (filter-payload (make-list 64 'f))
+                      (plist-payload (make-list 64 'p))
+                      (p (make-process
+                          :name "retired-fields-auto"
+                          :buffer nil
+                          :command (list "{cat_bin}")
+                          :connection-type 'pipe
+                          :noquery t
+                          :sentinel (lambda (_p _m)
+                                      sentinel-payload
+                                      (setq retired-done t)))))
+                 (puthash sentinel-payload t (nth 0 retired-field-payloads))
+                 (set-process-filter p (lambda (_p _s) filter-payload))
+                 (puthash filter-payload t (nth 1 retired-field-payloads))
+                 (set-process-plist p (list 'payload plist-payload))
+                 (puthash plist-payload t (nth 2 retired-field-payloads))
+                 (setq retired-fields-proc p))
+               (list (process-status retired-fields-proc)
+                     (mapcar #'hash-table-count retired-field-payloads))"#
+        ),
+    );
+    assert_eq!(created, "OK (run (1 1 1))");
+
+    // One automatic cycle while the process is still alive: its object is a
+    // survivor and is promoted to the old generation.
+    // SAFETY: same test-only setup contract as above.
+    unsafe { ev.tagged_heap_mut() }.set_gc_threshold(1);
+    let gc_start = ev.gc_count_for_test();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    while ev.gc_count_for_test() == gc_start && std::time::Instant::now() < deadline {
+        ev.eval_str_each("(make-list 64 0)");
+        ev.gc_safe_point();
+    }
+    assert!(
+        ev.gc_count_for_test() > gc_start,
+        "consing past gc-cons-threshold must complete the promotion cycle"
+    );
+    let status = ev.eval_str_each("(process-status retired-fields-proc)");
+    assert_eq!(format_eval_result(&status[0]), "OK run");
+
+    // While the program still references the dead process, an automatic
+    // cycle must keep its record and fields resolvable: GNU keeps the process
+    // on Vprocess_alist until the last reference is gone.
+    // SAFETY: same test-only setup contract as above.
+    unsafe { ev.tagged_heap_mut() }.set_gc_threshold(usize::MAX / 4);
+    let killed = eval_lexical_with_retired_wait(
+        &mut ev,
+        r#"(progn
+             (kill-process retired-fields-proc)
+             (retired-wait 'retired-done)
+             (list (null (get-process "retired-fields-auto"))
+                   (process-name retired-fields-proc)
+                   (mapcar #'hash-table-count retired-field-payloads)))"#,
+    );
+    assert_eq!(killed, "OK (t \"retired-fields-auto\" (1 1 1))");
+    ev.eval_str_each("(setq retired-fields-proc nil)");
+    assert_eq!(ev.processes().deleted_process_map().len(), 1);
+
+    // Only automatic collections from here: a tiny threshold plus consing,
+    // driven through the evaluator's safe points. No `garbage-collect`.
+    // SAFETY: same test-only setup contract as above.
+    unsafe { ev.tagged_heap_mut() }.set_gc_threshold(1);
+    let gc_start = ev.gc_count_for_test();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    while ev.gc_count_for_test() == gc_start && std::time::Instant::now() < deadline {
+        ev.eval_str_each("(make-list 64 0)");
+        ev.gc_safe_point();
+    }
+    assert!(
+        ev.gc_count_for_test() > gc_start,
+        "consing past gc-cons-threshold must complete the automatic cycle"
+    );
+
+    let counts = ev.eval_str_each("(mapcar #'hash-table-count retired-field-payloads)");
+    assert_eq!(format_eval_result(&counts[0]), "OK (0 0 0)");
+    let advanced = ev.eval_str_each("(> gcs-done 0)");
+    assert_eq!(format_eval_result(&advanced[0]), "OK t");
+    assert_eq!(
+        ev.processes().deleted_process_map().len(),
+        0,
+        "the automatic cycle must drop the retired record"
+    );
+    // SAFETY: same test-only setup contract as above.
+    unsafe { ev.tagged_heap_mut() }.set_gc_threshold(saved_threshold);
+}
+
+/// The forced major is conditional on a retired-process batch: with an empty
+/// batch the automatic driver must keep selecting generational minors, or
+/// ordinary consing would silently lose the minor path. A promoted (old) dead
+/// weak key survives a minor and is freed by a major, so it observes the
+/// selected kind without a new test API.
+#[test]
+fn automatic_cycles_without_a_retired_process_still_run_minors() {
+    crate::test_utils::init_test_tracing();
+    let mut ev = crate::test_utils::new_context();
+    // Bootstrap the dump-less heap to its first major.
+    ev.eval_str_each("(setq gc-auto-root (cons 1 2))");
+    // SAFETY: test-only owner-thread heap setup through the non-swappable
+    // mutable accessor contract; the view is used in place.
+    unsafe { ev.tagged_heap_mut() }.set_gc_threshold(64);
+    while ev.gc_count_for_test() == 0 {
+        ev.eval_str_each("(make-list 64 0)");
+        ev.gc_safe_point();
+    }
+
+    // Promote a survivor with one automatic minor while it is rooted.
+    ev.eval_str_each(
+        "(setq auto-minor-table (make-hash-table :test 'eq :weakness 'key)
+               auto-minor-key (make-list 64 'k))
+         (puthash auto-minor-key t auto-minor-table)",
+    );
+    // SAFETY: same test-only setup contract as above.
+    unsafe { ev.tagged_heap_mut() }.set_gc_threshold(1);
+    let gc_start = ev.gc_count_for_test();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    while ev.gc_count_for_test() == gc_start && std::time::Instant::now() < deadline {
+        ev.eval_str_each("(make-list 64 0)");
+        ev.gc_safe_point();
+    }
+    assert!(
+        ev.gc_count_for_test() > gc_start,
+        "the promotion cycle must complete"
+    );
+    assert!(
+        ev.tagged_heap().should_run_minor(false, false),
+        "with no retired batch the next automatic cycle is still minor-eligible"
+    );
+
+    // Drop the strong reference: only the weak table names the old key.
+    ev.eval_str_each("(setq auto-minor-key nil)");
+    // SAFETY: same test-only setup contract as above.
+    unsafe { ev.tagged_heap_mut() }.set_gc_threshold(1);
+    let gc_start = ev.gc_count_for_test();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    while ev.gc_count_for_test() == gc_start && std::time::Instant::now() < deadline {
+        ev.eval_str_each("(make-list 64 0)");
+        ev.gc_safe_point();
+    }
+    assert!(
+        ev.gc_count_for_test() > gc_start,
+        "the empty-batch automatic cycle must complete"
+    );
+
+    let count = ev.eval_str_each("(hash-table-count auto-minor-table)");
+    assert_eq!(
+        format_eval_result(&count[0]),
+        "OK 1",
+        "an empty retired batch must keep the automatic cycle a minor: a major would free the old dead key"
+    );
+}
+
+/// #776 residual: the automatic safe-point collector, not only the explicit
+/// `(garbage-collect)`, must reclaim a dead process nothing refers to.
+///
+/// A dump-less heap's first automatic cycle is the synchronous STW path once
+/// generational minors are disabled, so one safe-point call runs a full
+/// cycle. The manager must stop tracing the retired record as a root for that
+/// cycle, exactly as the explicit path already does.
+#[test]
+fn an_automatic_collection_reclaims_a_dead_process_nothing_refers_to() {
+    crate::test_utils::init_test_tracing();
+    let true_bin = find_bin("true");
+    let mut ev = crate::test_utils::new_context();
+    let setup = eval_lexical_with_retired_wait(
+        &mut ev,
+        &format!(
+            r#"(setq retired-payloads (make-hash-table :test 'eq :weakness 'key)
+                     retired-done nil)
+               (let* ((payload (make-list 64 'x))
+                      (p (make-process
+                          :name "retired-auto-reclaim"
+                          :buffer nil
+                          :command (list "{true_bin}")
+                          :connection-type 'pipe
+                          :sentinel (lambda (_p _m)
+                                      payload
+                                      (setq retired-done t)))))
+                 (puthash payload t retired-payloads)
+                 (set-process-plist p (list 'payload payload))
+                 (set-process-filter p (lambda (_p _s) payload))
+                 (list (retired-wait 'retired-done)
+                       (process-status p)
+                       (null (get-process "retired-auto-reclaim"))
+                       (hash-table-count retired-payloads)))"#
+        ),
+    );
+    assert_eq!(setup, "OK (t exit t 1)");
+    assert_eq!(ev.processes().deleted_process_map().len(), 1);
+
+    // SAFETY: the fixture Context is between evaluations and this test holds
+    // it exclusively; no callback or collector runs across the switch.
+    unsafe {
+        neovm_value::test_support::authority::set_generational_enabled_for_test(
+            ev.tagged_heap_mut(),
+            false,
+        )
+    };
+    ev.gc_collect_from_current_roots();
+
+    let after = ev.eval_str("(hash-table-count retired-payloads)");
+    assert_eq!(format_eval_result(&after), "OK 0");
+    assert_eq!(
+        ev.processes().deleted_process_map().len(),
+        0,
+        "the automatic cycle must drop the retired record"
+    );
+}
+
+#[test]
+fn a_dead_process_lisp_still_holds_keeps_every_field_across_garbage_collect() {
+    crate::test_utils::init_test_tracing();
+    let true_bin = find_bin("true");
+    let mut ev = crate::test_utils::new_context();
+    let result = eval_lexical_with_retired_wait(
+        &mut ev,
+        &format!(
+            r#"(setq retired-done nil)
+               (setq retired-held
+                     (make-process
+                      :name "retired-held"
+                      :buffer nil
+                      :command (list "{true_bin}")
+                      :connection-type 'pipe
+                      :sentinel (lambda (_p _m) (setq retired-done t))))
+               (set-process-filter retired-held (lambda (_p _s) 'filter))
+               (set-process-plist retired-held (list 'payload (list 'kept "payload")))
+               (retired-wait 'retired-done)
+               (list (process-status retired-held)
+                     (process-exit-status retired-held)
+                     (process-name retired-held)
+                     (plist-get (process-plist retired-held) 'payload)
+                     (funcall (process-filter retired-held) nil nil)
+                     (functionp (process-sentinel retired-held))
+                     (eq retired-held retired-held))"#
+        ),
+    );
+    assert_eq!(
+        result,
+        r#"OK (exit 0 "retired-held" (kept "payload") filter t t)"#
+    );
+    let orphan = eval_lexical_with_retired_wait(
+        &mut ev,
+        &format!(
+            r#"(setq retired-orphan-done nil)
+               (let* ((payload (make-list 32 'orphan))
+                      (p (make-process
+                          :name "retired-orphan"
+                          :buffer nil
+                          :command (list "{true_bin}")
+                          :connection-type 'pipe
+                          :sentinel (lambda (_p _m)
+                                      payload
+                                      (setq retired-orphan-done t)))))
+                 (set-process-plist p (list 'payload payload))
+                 (retired-wait 'retired-orphan-done))
+               t"#
+        ),
+    );
+    assert_eq!(orphan, "OK t");
+    let after = ev.eval_str("(progn (garbage-collect) t)");
+    assert_eq!(format_eval_result(&after), "OK t");
+    let fields_after = ev.eval_str(
+        r#"(list (process-status retired-held)
+                 (process-exit-status retired-held)
+                 (process-name retired-held)
+                 (plist-get (process-plist retired-held) 'payload)
+                 (funcall (process-filter retired-held) nil nil)
+                 (functionp (process-sentinel retired-held))
+                 (eq retired-held retired-held))"#,
+    );
+    assert_eq!(format_eval_result(&fields_after), result);
+    assert_eq!(ev.processes().deleted_process_map().len(), 1);
+}
+
+#[test]
+fn garbage_collect_reclaims_a_dead_process_whose_own_fields_refer_to_it() {
+    crate::test_utils::init_test_tracing();
+    let true_bin = find_bin("true");
+    let mut ev = crate::test_utils::new_context();
+    let setup = eval_lexical_with_retired_wait(
+        &mut ev,
+        &format!(
+            r#"(setq retired-payloads (make-hash-table :test 'eq :weakness 'key)
+                     retired-done nil)
+               (let* ((payload (make-list 64 'x))
+                      (cell (list nil))
+                      (p (make-process
+                          :name "retired-cycle"
+                          :buffer nil
+                          :command (list "{true_bin}")
+                          :connection-type 'pipe
+                          :sentinel (lambda (_p _m)
+                                      (list payload cell)
+                                      (setq retired-done t)))))
+                 ;; The sentinel's closure and the plist both reach P.
+                 (setcar cell p)
+                 (set-process-plist p (list 'self p))
+                 (puthash payload t retired-payloads)
+                 (retired-wait 'retired-done))"#
+        ),
+    );
+    assert_eq!(setup, "OK t");
+    assert_eq!(ev.processes().deleted_process_map().len(), 1);
+
+    let after = ev.eval_str("(progn (garbage-collect) (hash-table-count retired-payloads))");
+    assert_eq!(format_eval_result(&after), "OK 0");
+    assert_eq!(ev.processes().deleted_process_map().len(), 0);
+}
+
+#[test]
+fn a_dead_process_reached_only_through_another_dead_process_is_kept_with_it() {
+    crate::test_utils::init_test_tracing();
+    let true_bin = find_bin("true");
+    let mut ev = crate::test_utils::new_context();
+    let result = eval_lexical_with_retired_wait(
+        &mut ev,
+        &format!(
+            r#"(setq retired-done-inner nil retired-done-outer nil
+                     retired-orphan-done nil
+                     retired-orphans (make-hash-table :test 'eq :weakness 'key))
+               (let ((inner (make-process
+                             :name "retired-inner"
+                             :buffer nil
+                             :command (list "{true_bin}")
+                             :connection-type 'pipe
+                             :sentinel (lambda (_p _m) (setq retired-done-inner t)))))
+                 (set-process-plist inner (list 'payload (list "inner payload")))
+                 (retired-wait 'retired-done-inner)
+                 (setq retired-outer
+                       (make-process
+                        :name "retired-outer"
+                        :buffer nil
+                        :command (list "{true_bin}")
+                        :connection-type 'pipe
+                        :sentinel (lambda (_p _m) (setq retired-done-outer t))))
+                 ;; INNER is reachable only through OUTER's plist.
+                 (set-process-plist retired-outer (list 'inner inner))
+                 (retired-wait 'retired-done-outer)
+                 (let* ((payload (make-list 32 'orphan))
+                        (orphan (make-process
+                                 :name "retired-unrelated"
+                                 :buffer nil
+                                 :command (list "{true_bin}")
+                                 :connection-type 'pipe
+                                 :sentinel (lambda (_p _m)
+                                             payload
+                                             (setq retired-orphan-done t)))))
+                   (puthash payload t retired-orphans)
+                   (set-process-plist orphan (list 'payload payload))
+                   (retired-wait 'retired-orphan-done)))
+               (garbage-collect)
+               (let ((inner (plist-get (process-plist retired-outer) 'inner)))
+                 (list (process-name inner)
+                       (process-status inner)
+                       (plist-get (process-plist inner) 'payload)
+                       (hash-table-count retired-orphans)))"#
+        ),
+    );
+    assert_eq!(result, r#"OK ("retired-inner" exit ("inner payload") 0)"#);
+    assert_eq!(ev.processes().deleted_process_map().len(), 2);
+
+    let after = ev.eval_str("(progn (setq retired-outer nil) (garbage-collect) t)");
+    assert_eq!(format_eval_result(&after), "OK t");
+    assert_eq!(ev.processes().deleted_process_map().len(), 0);
+}
+
+#[test]
+fn a_thousand_short_lived_processes_leave_nothing_retired_after_garbage_collect() {
+    crate::test_utils::init_test_tracing();
+    let true_bin = find_bin("true");
+    let mut ev = crate::test_utils::new_context();
+    let result = eval_lexical_with_retired_wait(
+        &mut ev,
+        &format!(
+            r#"(setq retired-payloads (make-hash-table :test 'eq :weakness 'key)
+                     retired-finished 0)
+               (let ((batch 0))
+                 (while (< batch 20)
+                   (let ((batch-done nil) (pending 50) (i 0) (tries 0))
+                     (while (< i 50)
+                       (let* ((payload (make-list 32 'x))
+                              (p (make-process
+                                  :name "retired-burst"
+                                  :buffer nil
+                                  :command (list "{true_bin}")
+                                  :connection-type 'pipe
+                                  :sentinel (lambda (_p _m)
+                                              payload
+                                              (setq retired-finished (1+ retired-finished))
+                                              (setq pending (1- pending))
+                                              (if (= pending 0)
+                                                  (setq batch-done t))))))
+                         (puthash payload t retired-payloads)
+                         (set-process-plist p (list 'payload payload)))
+                       (setq i (1+ i)))
+                     (while (and (null batch-done) (< tries 400))
+                       (accept-process-output nil 0.05)
+                       (setq tries (1+ tries))))
+                   (setq batch (1+ batch))))
+               (list retired-finished (hash-table-count retired-payloads))"#
+        ),
+    );
+    // All thousand processes exited. Some payloads may ALREADY be gone before
+    // the explicit collection: an automatic safe-point cycle reclaims retired
+    // processes now (#776), so the pre-GC live count and manager size are
+    // upper-bounded at 1000 rather than pinned there. The explicit collection
+    // below must still leave nothing retired.
+    assert!(
+        result.starts_with("OK (1000 "),
+        "every process must have exited: {result}"
+    );
+    let alive_before: usize = result
+        .trim_start_matches("OK (1000 ")
+        .trim_end_matches(')')
+        .parse()
+        .expect("payload count from the retired-wait result");
+    assert!(alive_before <= 1000, "payloads alive: {alive_before}");
+    assert!(ev.processes().deleted_process_map().len() <= 1000);
+
+    let after = ev.eval_str("(progn (garbage-collect) (hash-table-count retired-payloads))");
+    assert_eq!(format_eval_result(&after), "OK 0");
+    assert_eq!(ev.processes().deleted_process_map().len(), 0);
+}
+
+/// Behavioural epoll regression for B5 (b) (`process-send-eof`):
+/// keeping a `dup` (`try_clone`) of the child stdin pipe open across
+/// `process-send-eof` keeps the kernel open file description alive in Linux
+/// epoll unless `poller.delete(stdin)` ran BEFORE closing `stdin`.
+#[cfg(target_os = "linux")]
+#[test]
+fn b5_process_send_eof_unregisters_stdin_from_poller_before_closing() {
+    crate::test_utils::init_test_tracing();
+    let sleep = find_bin("sleep");
+    let mut eval = crate::emacs_core::eval_hook_installers::new_context();
+    let proc_val = eval
+        .eval_str(&format!(
+            r#"(make-process :name "b5-eof-poller" :command '("{sleep}" "5") :connection-type 'pipe)"#,
+        ))
+        .expect("spawn sleep");
+    let id = proc_val.as_process_id().expect("process id");
+    let poller = eval.processes().wait_backend.poller_arc().expect("poller");
+    let keep_open = {
+        let stdin = eval
+            .processes()
+            .get(id)
+            .expect("proc")
+            .live_io()
+            .child()
+            .stdin()
+            .expect("pipe stdin");
+        stdin
+            .register(
+                &poller,
+                polling::Event::writable(id as usize),
+                polling::PollMode::Level,
+            )
+            .expect("register pipe stdin writable");
+        stdin.try_clone().expect("dup stdin")
+    };
+
+    let mut events = polling::Events::new();
+    poller
+        .wait(&mut events, Some(Duration::from_millis(200)))
+        .expect("poll before eof");
+    assert!(
+        events.iter().any(|ev| ev.key == id as usize),
+        "registered pipe stdin must report writable before process-send-eof"
+    );
+
+    eval.obarray_mut().set_symbol_value("b5-eof-proc", proc_val);
+    eval.eval_str("(process-send-eof b5-eof-proc)")
+        .expect("process-send-eof");
+
+    events.clear();
+    poller
+        .wait(&mut events, Some(Duration::ZERO))
+        .expect("poll after eof");
+    assert!(
+        events.iter().all(|ev| ev.key != id as usize),
+        "stale epoll event remained after process-send-eof: stdin was not unregistered before close"
+    );
+
+    drop(keep_open);
+    eval.eval_str("(delete-process b5-eof-proc)")
+        .expect("delete-process");
+}
+
+/// Behavioural epoll regression for B5 (a) (`gnutls-deinit`) and F3.4
+/// (`gnutls-boot` failure): keeping a `dup` (`try_clone`) of the TCP socket
+/// open proves `poller.delete` ran BEFORE dropping the socket.
+#[cfg(target_os = "linux")]
+#[test]
+fn b5_gnutls_deinit_and_boot_failure_unregister_socket_before_dropping() {
+    use crate::emacs_core::moved_system::tls_tests_runtime_test_rs::loopback;
+    use std::net::{TcpListener, TcpStream};
+
+    crate::test_utils::init_test_tracing();
+    let mut eval = crate::emacs_core::eval_hook_installers::new_context();
+    let poller = eval.processes().wait_backend.poller_arc().expect("poller");
+
+    // --- Part 1: gnutls-deinit unregisters TLS TCP socket before drop ---
+    let tls_peer = loopback::TlsPeer::spawn(1, Duration::ZERO, false);
+    let id1 = eval.processes_mut().create_process_with_kind(
+        "b5-tls-deinit".into(),
+        Value::NIL,
+        "network".into(),
+        vec![],
+        ProcessKindWithoutDevice::Network,
+        crate::emacs_core::process::ProcessCodingSystems::gnu_make_process_initial(),
+    );
+    let client1 = TcpStream::connect(("127.0.0.1", tls_peer.port)).expect("connect tls loopback");
+    let keep_open1 = client1.try_clone().expect("dup client1");
+    {
+        let proc = eval.processes_mut().get_mut(id1).expect("proc1");
+        proc.live_io_mut()
+            .set_network_socket(Some(NetworkSocket::TcpStream(client1)));
+    }
+    eval.obarray_mut()
+        .set_symbol_value("b5-tls-p1", Value::make_process(id1));
+    eval.eval_str(&format!(
+        r#"(gnutls-boot b5-tls-p1 'gnutls-x509pki '(:hostname "localhost" :trustfiles ("{}") :complete-negotiation t))"#,
+        loopback::resources().join("ca.pem").display()
+    ))
+    .expect("gnutls-boot completes handshake against loopback TlsPeer");
+    // Ensure writable interest is active so epoll reports ready immediately.
+    {
+        let tls = eval
+            .processes()
+            .get(id1)
+            .expect("proc1")
+            .live_io()
+            .tls_stream()
+            .expect("tls stream");
+        let _ = tls.modify(
+            &poller,
+            polling::Event::all(id1 as usize),
+            polling::PollMode::Level,
+        );
+    }
+
+    let mut events = polling::Events::new();
+    poller
+        .wait(&mut events, Some(Duration::from_millis(200)))
+        .expect("poll before gnutls-deinit");
+    assert!(
+        events.iter().any(|ev| ev.key == id1 as usize),
+        "registered TLS socket must report writable before gnutls-deinit"
+    );
+
+    let deinit_ret = eval
+        .eval_str("(gnutls-deinit b5-tls-p1)")
+        .expect("gnutls-deinit");
+    assert!(deinit_ret.is_truthy());
+
+    // `gnutls-deinit` unregisters the old TLS `Event::all` registration via
+    // `PollRegistration::into_inner`, unwraps the TCP socket into
+    // `PollRegistration<NetworkSocket>`, and re-registers read-only interest
+    // (`Event::readable`).  The old writable interest must be gone immediately
+    // (though `readable` may fire because `TlsPeer` sends data/EOF), and
+    // `delete-process` must unregister the restored socket before drop even
+    // while `keep_open1` holds the underlying file description open.
+    {
+        let proc = eval.processes().get(id1).expect("proc1 still open");
+        assert!(proc.live_io().tls_stream().is_none());
+        assert!(proc.live_io().network_socket().is_some());
+    }
+    events.clear();
+    poller
+        .wait(&mut events, Some(Duration::ZERO))
+        .expect("poll after gnutls-deinit");
+    assert!(
+        events
+            .iter()
+            .all(|ev| ev.key != id1 as usize || !ev.writable),
+        "stale writable epoll event remained after gnutls-deinit: old TLS PollRegistration was not unregistered"
+    );
+
+    eval.eval_str("(delete-process b5-tls-p1)")
+        .expect("delete-process after gnutls-deinit");
+    events.clear();
+    poller
+        .wait(&mut events, Some(Duration::ZERO))
+        .expect("poll after delete-process");
+    assert!(
+        events.iter().all(|ev| ev.key != id1 as usize),
+        "stale epoll event remained after delete-process on unwrapped socket: socket was not unregistered before drop"
+    );
+    drop(keep_open1);
+
+    // --- Part 2: gnutls-boot failure unregisters plain TCP socket before drop ---
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+    let addr = listener.local_addr().expect("local addr");
+    let id2 = eval.processes_mut().create_process_with_kind(
+        "b5-tls-boot-fail".into(),
+        Value::NIL,
+        "network".into(),
+        vec![],
+        ProcessKindWithoutDevice::Network,
+        crate::emacs_core::process::ProcessCodingSystems::gnu_make_process_initial(),
+    );
+    let client2 = TcpStream::connect(addr).expect("connect loopback 2");
+    let _server2 = listener.accept().expect("accept loopback 2");
+    let keep_open2 = client2.try_clone().expect("dup client2");
+    {
+        let proc = eval.processes_mut().get_mut(id2).expect("proc2");
+        proc.live_io_mut()
+            .set_network_socket(Some(NetworkSocket::TcpStream(client2)));
+    }
+    eval.processes()
+        .register_socket_writable_fd(id2)
+        .expect("register plain tcp socket writable");
+
+    events.clear();
+    poller
+        .wait(&mut events, Some(Duration::from_millis(200)))
+        .expect("poll before failed gnutls-boot");
+    assert!(
+        events.iter().any(|ev| ev.key == id2 as usize),
+        "registered plain TCP socket must report writable before failed gnutls-boot"
+    );
+
+    eval.obarray_mut()
+        .set_symbol_value("b5-tls-p2", Value::make_process(id2));
+    assert!(
+        eval.eval_str(
+            r#"(gnutls-boot b5-tls-p2 'gnutls-x509pki '(:hostname "bad host with spaces"))"#
+        )
+        .is_err(),
+        "invalid hostname must fail gnutls-boot"
+    );
+
+    events.clear();
+    poller
+        .wait(&mut events, Some(Duration::ZERO))
+        .expect("poll after failed gnutls-boot");
+    assert!(
+        events.iter().all(|ev| ev.key != id2 as usize),
+        "stale epoll event remained after failed gnutls-boot: socket was not unregistered before drop"
+    );
+    drop(keep_open2);
+}
+
+#[cfg(unix)]
+fn drive_rustls_server_handshake(
+    server: &mut rustls::ServerConnection,
+    stream: &mut std::net::TcpStream,
+) {
+    use std::io::Write;
+    stream
+        .set_read_timeout(Some(Duration::from_secs(3)))
+        .expect("set read timeout");
+    stream
+        .set_write_timeout(Some(Duration::from_secs(3)))
+        .expect("set write timeout");
+    while server.is_handshaking() {
+        while server.wants_write() {
+            server.write_tls(stream).expect("write server tls");
+        }
+        stream.flush().expect("flush server tls");
+        if server.wants_read() {
+            let n = server.read_tls(stream).expect("read client tls");
+            assert!(n > 0, "unexpected EOF during server handshake");
+            server.process_new_packets().expect("process tls packets");
+        }
+    }
+    while server.wants_write() {
+        server.write_tls(stream).expect("flush final server tls");
+    }
+    stream.flush().expect("flush server stream");
+}
+
+#[cfg(unix)]
+fn build_loopback_rustls_server_config() -> std::sync::Arc<rustls::ServerConfig> {
+    use crate::emacs_core::moved_system::tls_tests_runtime_test_rs::loopback;
+    use rustls_pki_types::{CertificateDer, PrivateKeyDer, pem::PemObject};
+    let resources = loopback::resources();
+    let cert = CertificateDer::from_pem_file(resources.join("server.pem")).expect("server.pem");
+    let key =
+        PrivateKeyDer::from_pem_file(resources.join("server-key.pem")).expect("server-key.pem");
+    let mut cfg = rustls::ServerConfig::builder()
+        .with_no_client_auth()
+        .with_single_cert(vec![cert], key)
+        .expect("server config");
+    cfg.send_tls13_tickets = 0;
+    std::sync::Arc::new(cfg)
+}
+
+/// Regression (#14597 / #14600): `gnutls-deinit` must unwrap the underlying
+/// `TcpStream` back into a live, poller-registered `PollRegistration<NetworkSocket>`
+/// so plaintext `process-send-string` and `accept-process-output` both work,
+/// a second `gnutls-deinit` returns `nil` without disturbing the socket, and
+/// `delete-process` unregisters the unwrapped socket from epoll before closing
+/// while `(gnutls-get-initstage p)` still returns `3`.
+#[cfg(unix)]
+#[test]
+fn gnutls_deinit_unwraps_and_registers_plaintext_socket_and_ignores_second_deinit() {
+    use crate::emacs_core::moved_system::tls_tests_runtime_test_rs::loopback;
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+
+    crate::test_utils::init_test_tracing();
+    let server_cfg = build_loopback_rustls_server_config();
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+    let port = listener.local_addr().expect("local addr").port();
+
+    let (done_tx, done_rx) = std::sync::mpsc::channel::<()>();
+    let server_handle = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().expect("accept client");
+        let mut server = rustls::ServerConnection::new(server_cfg).expect("server conn");
+        drive_rustls_server_handshake(&mut server, &mut stream);
+
+        let mut ping = Vec::new();
+        while !ping.ends_with(b"\n") {
+            let n = server.read_tls(&mut stream).expect("read tls ping");
+            assert!(n > 0, "eof waiting for encrypted PING1");
+            server.process_new_packets().expect("process tls ping");
+            let mut tmp = [0u8; 256];
+            loop {
+                match server.reader().read(&mut tmp) {
+                    Ok(0) => break,
+                    Ok(k) => ping.extend_from_slice(&tmp[..k]),
+                    Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
+                    Err(e) => panic!("tls reader error: {e}"),
+                }
+            }
+        }
+        assert_eq!(ping, b"PING1\n");
+        server.writer().write_all(b"PONG1\n").expect("write PONG1");
+        while server.wants_write() {
+            server.write_tls(&mut stream).expect("flush PONG1");
+        }
+        stream.flush().expect("flush tcp PONG1");
+        drop(server);
+
+        let mut plain1 = Vec::new();
+        let mut tmp = [0u8; 64];
+        while !plain1.ends_with(b"\n") {
+            let n = stream.read(&mut tmp).expect("read plaintext 1");
+            assert!(n > 0, "EOF after gnutls-deinit: client closed TCP socket");
+            plain1.extend_from_slice(&tmp[..n]);
+        }
+        assert_eq!(plain1, b"PLAIN1\n");
+        stream.write_all(b"ECHO1\n").expect("write ECHO1");
+        stream.flush().expect("flush ECHO1");
+
+        let mut plain2 = Vec::new();
+        while !plain2.ends_with(b"\n") {
+            let n = stream.read(&mut tmp).expect("read plaintext 2");
+            assert!(n > 0, "EOF after second gnutls-deinit");
+            plain2.extend_from_slice(&tmp[..n]);
+        }
+        assert_eq!(plain2, b"PLAIN2\n");
+        stream.write_all(b"ECHO2\n").expect("write ECHO2");
+        stream.flush().expect("flush ECHO2");
+        let _ = done_rx.recv_timeout(Duration::from_secs(3));
+    });
+
+    let mut eval = crate::emacs_core::eval_hook_installers::new_context();
+    let poller = eval.processes().wait_backend.poller_arc().expect("poller");
+    let ca_pem = loopback::resources().join("ca.pem");
+
+    let proc_val = eval
+        .eval_str(&format!(
+            r#"(progn
+                 (setq test-tls-b (get-buffer-create " *gnutls-deinit-ab*"))
+                 (setq test-tls-p
+                       (make-network-process :name "gnutls-deinit-ab"
+                                             :host "127.0.0.1"
+                                             :service {port}
+                                             :buffer test-tls-b
+                                             :noquery t)))"#
+        ))
+        .expect("make-network-process");
+    let id = proc_val.as_process_id().expect("process id");
+    let keep_open = {
+        let proc = eval.processes().get(id).expect("proc");
+        let sock = proc.live_io().network_socket().expect("tcp socket");
+        match &**sock {
+            NetworkSocket::TcpStream(tcp) => tcp.try_clone().expect("dup client socket"),
+            _ => panic!("expected TcpStream"),
+        }
+    };
+
+    let boot_res = eval
+        .eval_str(&format!(
+            r#"(let ((b (gnutls-boot test-tls-p 'gnutls-x509pki '(:hostname "localhost" :trustfiles ("{}") :complete-negotiation t))))
+                 (process-send-string test-tls-p "PING1\n")
+                 (accept-process-output test-tls-p 1)
+                 (set-buffer test-tls-b)
+                 (let ((pong (prog1 (buffer-string) (erase-buffer))))
+                   (list b (gnutls-get-initstage test-tls-p) pong)))"#,
+            ca_pem.display()
+        ))
+        .expect("boot + ping1");
+    assert_eq!(
+        crate::emacs_core::print::print_value(&boot_res),
+        "(t 9 \"PONG1\n\")"
+    );
+
+    let d1 = eval
+        .eval_str(r#"(list (gnutls-deinit test-tls-p) (gnutls-get-initstage test-tls-p) (process-status test-tls-p))"#)
+        .expect("first gnutls-deinit");
+    assert_eq!(crate::emacs_core::print::print_value(&d1), "(t 3 open)");
+
+    {
+        let proc = eval.processes().get(id).expect("proc after deinit");
+        assert!(proc.live_io().tls_stream().is_none());
+        assert!(proc.live_io().network_socket().is_some());
+    }
+
+    eval.eval_str(r#"(process-send-string test-tls-p "PLAIN1\n")"#)
+        .expect("send PLAIN1");
+    let mut events = polling::Events::new();
+    poller
+        .wait(&mut events, Some(Duration::from_secs(2)))
+        .expect("poll unwrapped plaintext socket for ECHO1");
+    assert!(
+        events.iter().any(|ev| ev.key == id as usize && ev.readable),
+        "unwrapped plaintext socket must be registered on poller after gnutls-deinit"
+    );
+
+    let r1 = eval
+        .eval_str(r#"(progn (accept-process-output test-tls-p 1) (set-buffer test-tls-b) (prog1 (buffer-string) (erase-buffer)))"#)
+        .expect("read ECHO1");
+    assert_eq!(crate::emacs_core::print::print_value(&r1), "\"ECHO1\n\"");
+
+    let d2 = eval
+        .eval_str(
+            r#"(let ((res (gnutls-deinit test-tls-p)))
+                 (process-send-string test-tls-p "PLAIN2\n")
+                 (accept-process-output test-tls-p 1)
+                 (set-buffer test-tls-b)
+                 (list res (gnutls-get-initstage test-tls-p) (process-status test-tls-p)
+                       (buffer-string)))"#,
+        )
+        .expect("second gnutls-deinit + PLAIN2");
+    assert_eq!(
+        crate::emacs_core::print::print_value(&d2),
+        "(nil 3 open \"ECHO2\n\")"
+    );
+
+    eval.eval_str("(delete-process test-tls-p)")
+        .expect("delete-process");
+    let st_after_delete = eval
+        .eval_str("(gnutls-get-initstage test-tls-p)")
+        .expect("gnutls-get-initstage after delete-process");
+    assert_eq!(crate::emacs_core::print::print_value(&st_after_delete), "3");
+    events.clear();
+    poller
+        .wait(&mut events, Some(Duration::ZERO))
+        .expect("poll after delete-process");
+    assert!(
+        events.iter().all(|ev| ev.key != id as usize),
+        "stale poller event remained after delete-process on unwrapped socket"
+    );
+    drop(keep_open);
+    let _ = done_tx.send(());
+    server_handle
+        .join()
+        .expect("server thread finished cleanly");
+}
+
+/// Regression (#14600 condition 3, GNU `src/gnutls.c:2083`): after
+/// `gnutls-deinit` (or directly on an already-`Ready` TLS process), calling
+/// `gnutls-boot` again allocates fresh TLS credentials on the same TCP socket
+/// and completes a new encrypted session.
+#[cfg(unix)]
+#[test]
+fn gnutls_deinit_clears_boot_state_and_allows_fresh_reboot() {
+    use crate::emacs_core::moved_system::tls_tests_runtime_test_rs::loopback;
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+
+    crate::test_utils::init_test_tracing();
+    let server_cfg = build_loopback_rustls_server_config();
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+    let port = listener.local_addr().expect("local addr").port();
+
+    let (done_tx, done_rx) = std::sync::mpsc::channel::<()>();
+    let server_handle = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().expect("accept client");
+        for (expected, reply) in [
+            (b"PING1\n", b"PONG1\n"),
+            (b"PING2\n", b"PONG2\n"),
+            (b"PING3\n", b"PONG3\n"),
+        ] {
+            let mut server =
+                rustls::ServerConnection::new(std::sync::Arc::clone(&server_cfg)).expect("server");
+            drive_rustls_server_handshake(&mut server, &mut stream);
+            let mut got = Vec::new();
+            while !got.ends_with(b"\n") {
+                let n = server.read_tls(&mut stream).expect("read tls");
+                assert!(n > 0, "eof during tls session");
+                server.process_new_packets().expect("process packets");
+                let mut tmp = [0u8; 256];
+                loop {
+                    match server.reader().read(&mut tmp) {
+                        Ok(0) => break,
+                        Ok(k) => got.extend_from_slice(&tmp[..k]),
+                        Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
+                        Err(e) => panic!("tls read err: {e}"),
+                    }
+                }
+            }
+            assert_eq!(got, expected);
+            server.writer().write_all(reply).expect("write reply");
+            while server.wants_write() {
+                server.write_tls(&mut stream).expect("flush reply");
+            }
+            stream.flush().expect("flush tcp");
+        }
+        let _ = done_rx.recv_timeout(Duration::from_secs(3));
+    });
+
+    let ca_pem = loopback::resources().join("ca.pem");
+    let result = eval_one(&format!(
+        r#"
+(let* ((buf (generate-new-buffer " *gnutls-reboot*"))
+       (p (make-network-process :name "reb" :host "127.0.0.1" :service {port} :buffer buf :noquery t :sentinel #'ignore)))
+  (unwind-protect
+      (let* ((b1 (gnutls-boot p 'gnutls-x509pki '(:hostname "localhost" :trustfiles ("{ca}") :complete-negotiation t)))
+             (_ (process-send-string p "PING1\n"))
+             (_ (accept-process-output p 1))
+             (r1 (with-current-buffer buf (prog1 (buffer-string) (erase-buffer))))
+             (d1 (gnutls-deinit p))
+             ;; Re-boot after explicit gnutls-deinit
+             (b2 (gnutls-boot p 'gnutls-x509pki '(:hostname "localhost" :trustfiles ("{ca}") :complete-negotiation t)))
+             (_ (process-send-string p "PING2\n"))
+             (_ (accept-process-output p 1))
+             (r2 (with-current-buffer buf (prog1 (buffer-string) (erase-buffer))))
+             ;; Direct re-boot on an already-Ready TLS process (GNU gnutls.c:2083)
+             (b3 (gnutls-boot p 'gnutls-x509pki '(:hostname "localhost" :trustfiles ("{ca}") :complete-negotiation t)))
+             (_ (process-send-string p "PING3\n"))
+             (_ (accept-process-output p 1))
+             (r3 (with-current-buffer buf (buffer-string))))
+        (list b1 r1 d1 b2 r2 b3 (gnutls-get-initstage p) r3))
+    (ignore-errors (delete-process p))
+    (kill-buffer buf)))
+"#,
+        port = port,
+        ca = ca_pem.display()
+    ));
+    let _ = done_tx.send(());
+    server_handle.join().expect("server thread finished");
+    assert_eq!(result, "OK (t \"PONG1\n\" t t \"PONG2\n\" t 9 \"PONG3\n\")");
+}
+
+/// Regression (#14696 MEDIUM-1): `gnutls-deinit` must NEVER flush queued
+/// TLS-pending writes in plaintext over the unwrapped TCP socket.
+#[cfg(unix)]
+#[test]
+fn gnutls_deinit_does_not_flush_pending_tls_write_queue_in_plaintext() {
+    use crate::emacs_core::moved_system::tls_tests_runtime_test_rs::loopback;
+    use std::io::Read;
+    use std::net::TcpListener;
+
+    crate::test_utils::init_test_tracing();
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind silent peer");
+    let port = listener.local_addr().expect("local addr").port();
+
+    let server_handle = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().expect("accept client");
+        stream
+            .set_read_timeout(Some(Duration::from_secs(3)))
+            .expect("read timeout");
+        let mut received = Vec::new();
+        let mut tmp = [0u8; 512];
+        loop {
+            match stream.read(&mut tmp) {
+                Ok(0) => break,
+                Ok(n) => received.extend_from_slice(&tmp[..n]),
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
+                Err(e) => panic!("read from client: {e}"),
+            }
+        }
+        assert!(
+            !received
+                .windows(b"SECRET-NEVER-PLAINTEXT".len())
+                .any(|w| w == b"SECRET-NEVER-PLAINTEXT"),
+            "gnutls-deinit leaked queued TLS-pending data in plaintext!"
+        );
+    });
+
+    let ca_pem = loopback::resources().join("ca.pem");
+    let result = eval_one(&format!(
+        r#"
+(require 'timer)
+(let* ((p (make-network-process :name "secret-p" :host "127.0.0.1" :service {port} :noquery t :sentinel #'ignore))
+       (timer (run-with-timer 0.03 nil
+                (lambda ()
+                  (process-send-string p "SECRET-NEVER-PLAINTEXT\n")
+                  (gnutls-deinit p)))))
+  (unwind-protect
+      (condition-case nil
+          (progn
+            (gnutls-boot p 'gnutls-x509pki '(:hostname "localhost" :trustfiles ("{ca}") :complete-negotiation t))
+            'unexpected-ok)
+        (error 'aborted))
+    (cancel-timer timer)
+    (ignore-errors (delete-process p))))
+"#,
+        port = port,
+        ca = ca_pem.display()
+    ));
+    server_handle.join().expect("server thread finished");
+    assert_eq!(result, "OK aborted");
+}
+
+/// Regression (CASE C): `gnutls-deinit` during an incomplete non-blocking
+/// handshake (`stage == 8`, `TlsHandshakeOwner::NonBlockingAsync`) unwraps
+/// the TCP socket to plaintext, lowers stage 8 -> 3, and allows plaintext I/O.
+#[cfg(unix)]
+#[test]
+fn gnutls_deinit_during_incomplete_handshake_restores_plaintext_socket() {
+    use crate::emacs_core::moved_system::tls_tests_runtime_test_rs::loopback;
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+
+    crate::test_utils::init_test_tracing();
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind silent peer");
+    let port = listener.local_addr().expect("local addr").port();
+
+    let server_handle = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().expect("accept client");
+        stream
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .expect("read timeout");
+        let mut buf = Vec::new();
+        let mut chunk = [0u8; 512];
+        while !buf.windows(b"PLAIN\n".len()).any(|w| w == b"PLAIN\n") {
+            let n = stream.read(&mut chunk).expect("read from client");
+            assert!(n > 0, "client closed before sending plaintext");
+            buf.extend_from_slice(&chunk[..n]);
+        }
+        stream
+            .write_all(b"PLAIN_OK\n")
+            .expect("write plaintext reply");
+        stream.flush().expect("flush plaintext reply");
+    });
+
+    let ca_pem = loopback::resources().join("ca.pem");
+    let result = eval_one(&format!(
+        r#"
+(let* ((buf (generate-new-buffer "*tls-case-c*"))
+       (p (make-network-process :name "case-c" :buffer buf :host "127.0.0.1" :service {port} :nowait t :noquery t :sentinel #'ignore)))
+  (unwind-protect
+      (progn
+        (while (eq (process-status p) 'connect)
+          (accept-process-output p 0.1))
+        (let* ((boot-ret (gnutls-boot p 'gnutls-x509pki '(:hostname "localhost" :trustfiles ("{ca}"))))
+               (stage-before (gnutls-get-initstage p))
+               (deinit-1 (gnutls-deinit p))
+               (stage-after (gnutls-get-initstage p))
+               (deinit-2 (gnutls-deinit p))
+               (status-after (process-status p)))
+          (process-send-string p "PLAIN\n")
+          (let ((deadline (+ (float-time) 3.0)))
+            (while (and (< (float-time) deadline)
+                        (with-current-buffer buf
+                          (not (string-match-p "PLAIN_OK" (buffer-string)))))
+              (accept-process-output p 0.1)))
+          (list boot-ret stage-before deinit-1 stage-after deinit-2 status-after
+                (with-current-buffer buf (buffer-string)))))
+    (ignore-errors (delete-process p))
+    (ignore-errors (kill-buffer buf))))
+"#,
+        port = port,
+        ca = ca_pem.display()
+    ));
+    server_handle.join().expect("server thread finished");
+    assert_eq!(result, "OK (gnutls-e-again 8 t 3 nil open \"PLAIN_OK\n\")");
+}
+
+/// Regression (CASE E + MEDIUM-1): non-blocking `gnutls-boot` advances to stage
+/// 9 inside `accept-process-output` and `process-send-string`, runs the GNU
+/// `"open\n"` sentinel, and delivers encrypted application data.
+#[cfg(unix)]
+#[test]
+fn gnutls_boot_nonblocking_advances_in_accept_process_output_and_delivers_data() {
+    use crate::emacs_core::moved_system::tls_tests_runtime_test_rs::loopback;
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+
+    crate::test_utils::init_test_tracing();
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind delayed TLS peer");
+    let port = listener.local_addr().expect("local addr").port();
+
+    let (done_tx, done_rx) = std::sync::mpsc::channel::<()>();
+    let server_cfg = build_loopback_rustls_server_config();
+    let server_handle = std::thread::spawn(move || {
+        let mut keep_alive = Vec::new();
+        for expected in [b"PING\n".as_slice(), b"EARLY\n".as_slice()] {
+            let (stream, _) = listener.accept().expect("accept client");
+            std::thread::sleep(Duration::from_millis(60));
+            let conn = rustls::ServerConnection::new(std::sync::Arc::clone(&server_cfg))
+                .expect("server conn");
+            let mut tls = rustls::StreamOwned::new(conn, stream);
+            let mut buf = [0u8; 64];
+            let n = tls.read(&mut buf).expect("read encrypted payload");
+            assert_eq!(&buf[..n], expected);
+            let reply = if expected == b"PING\n" {
+                b"PONG\n".as_slice()
+            } else {
+                b"EARLY_OK\n".as_slice()
+            };
+            tls.write_all(reply).expect("write encrypted reply");
+            tls.flush().expect("flush encrypted reply");
+            keep_alive.push(tls);
+        }
+        let _ = done_rx.recv_timeout(Duration::from_secs(5));
+        drop(keep_alive);
+    });
+
+    let ca_pem = loopback::resources().join("ca.pem");
+    let result = eval_one(&format!(
+        r#"
+(let* ((events1 nil)
+       (buf1 (generate-new-buffer "*tls-case-e1*"))
+       (p1 (make-network-process
+            :name "case-e1" :buffer buf1 :host "127.0.0.1" :service {port} :nowait t :noquery t
+            :sentinel (lambda (_proc ev) (push ev events1))))
+       (events2 nil)
+       (buf2 (generate-new-buffer "*tls-case-e2*"))
+       (p2 (make-network-process
+            :name "case-e2" :buffer buf2 :host "127.0.0.1" :service {port} :nowait t :noquery t
+            :sentinel (lambda (_proc ev) (push ev events2)))))
+  (unwind-protect
+      (progn
+        (while (eq (process-status p1) 'connect)
+          (accept-process-output p1 0.1))
+        (setq events1 nil)
+        (let ((boot1 (gnutls-boot p1 'gnutls-x509pki '(:hostname "localhost" :trustfiles ("{ca}")))))
+          (let ((deadline (+ (float-time) 3.0)))
+            (while (and (< (float-time) deadline) (< (gnutls-get-initstage p1) 9))
+              (accept-process-output p1 0.1)))
+          (process-send-string p1 "PING\n")
+          (let ((deadline (+ (float-time) 3.0)))
+            (while (and (< (float-time) deadline)
+                        (with-current-buffer buf1 (not (string-match-p "PONG" (buffer-string)))))
+              (accept-process-output p1 0.1)))
+          (while (eq (process-status p2) 'connect)
+            (accept-process-output p2 0.1))
+          (setq events2 nil)
+          (let ((boot2 (gnutls-boot p2 'gnutls-x509pki '(:hostname "localhost" :trustfiles ("{ca}")))))
+            ;; Send directly while still at stage 8: `send_process` waits for
+            ;; async TLS negotiation, fires `"open\n"`, then transmits.
+            (process-send-string p2 "EARLY\n")
+            (let ((deadline (+ (float-time) 3.0)))
+              (while (and (< (float-time) deadline)
+                          (with-current-buffer buf2 (not (string-match-p "EARLY_OK" (buffer-string)))))
+                (accept-process-output p2 0.1)))
+            (list boot1 (gnutls-get-initstage p1) (nreverse events1)
+                  (with-current-buffer buf1 (buffer-string))
+                  boot2 (gnutls-get-initstage p2) (nreverse events2)
+                  (with-current-buffer buf2 (buffer-string))))))
+    (ignore-errors (delete-process p1))
+    (ignore-errors (delete-process p2))
+    (ignore-errors (kill-buffer buf1))
+    (ignore-errors (kill-buffer buf2))))
+"#,
+        port = port,
+        ca = ca_pem.display()
+    ));
+    let _ = done_tx.send(());
+    server_handle.join().expect("server thread finished");
+    assert_eq!(
+        result,
+        "OK (gnutls-e-again 9 (\"open\n\") \"PONG\n\" gnutls-e-again 9 (\"open\n\") \"EARLY_OK\n\")"
+    );
+}
+
+/// Regression (CASE F): calling `gnutls-boot` directly on a process still in
+/// non-blocking stage 8 (`TlsHandshakeOwner::NonBlockingAsync`) implicitly
+/// deinits the previous session and completes a fresh handshake.
+#[cfg(unix)]
+#[test]
+fn gnutls_boot_direct_reboot_from_nonblocking_stage_8() {
+    use crate::emacs_core::moved_system::tls_tests_runtime_test_rs::loopback;
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+
+    crate::test_utils::init_test_tracing();
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind reboot peer");
+    let port = listener.local_addr().expect("local addr").port();
+
+    let server_handle = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().expect("accept client");
+        stream
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .expect("read timeout");
+        // Drain the first ClientHello bytes from the abandoned non-blocking boot.
+        let mut discard = [0u8; 2048];
+        let _ = stream
+            .read(&mut discard)
+            .expect("read abandoned ClientHello");
+        std::thread::sleep(Duration::from_millis(80));
+        let server_cfg = build_loopback_rustls_server_config();
+        let conn = rustls::ServerConnection::new(server_cfg).expect("server conn");
+        let mut tls = rustls::StreamOwned::new(conn, stream);
+        let mut buf = [0u8; 64];
+        let n = tls.read(&mut buf).expect("read reboot payload");
+        assert_eq!(&buf[..n], b"REBOOT\n");
+        tls.write_all(b"REBOOT_OK\n").expect("write reboot reply");
+        tls.flush().expect("flush reboot reply");
+    });
+
+    let ca_pem = loopback::resources().join("ca.pem");
+    let result = eval_one(&format!(
+        r#"
+(let* ((buf (generate-new-buffer "*tls-case-f*"))
+       (p (make-network-process :name "case-f" :buffer buf :host "127.0.0.1" :service {port} :nowait t :noquery t :sentinel #'ignore)))
+  (unwind-protect
+      (progn
+        (while (eq (process-status p) 'connect)
+          (accept-process-output p 0.1))
+        (let* ((b1 (gnutls-boot p 'gnutls-x509pki '(:hostname "localhost" :trustfiles ("{ca}"))))
+               (s1 (gnutls-get-initstage p))
+               (_ (sleep-for 0.04))
+               (b2 (gnutls-boot p 'gnutls-x509pki '(:hostname "localhost" :trustfiles ("{ca}") :complete-negotiation t)))
+               (s2 (gnutls-get-initstage p)))
+          (process-send-string p "REBOOT\n")
+          (let ((deadline (+ (float-time) 3.0)))
+            (while (and (< (float-time) deadline)
+                        (with-current-buffer buf (not (string-match-p "REBOOT_OK" (buffer-string)))))
+              (accept-process-output p 0.1)))
+          (list b1 s1 b2 s2 (with-current-buffer buf (buffer-string)))))
+    (ignore-errors (delete-process p))
+    (ignore-errors (kill-buffer buf))))
+"#,
+        port = port,
+        ca = ca_pem.display()
+    ));
+    server_handle.join().expect("server thread finished");
+    assert_eq!(result, "OK (gnutls-e-again 8 t 9 \"REBOOT_OK\n\")");
+}
+
+/// Regression (#14790 HIGH-1): `process-send-string` and `process-send-region`
+/// on a process whose non-blocking TLS handshake fails mid-wait MUST signal
+/// `"Process <name> not running: failed with code TLS negotiation failed\n"`,
+/// never return `nil` and silently drop user data.
+#[cfg(unix)]
+#[test]
+fn gnutls_nonblocking_send_during_failing_handshake_signals_not_drops() {
+    use crate::emacs_core::moved_system::tls_tests_runtime_test_rs::loopback;
+    use std::io::Write;
+    use std::net::TcpListener;
+
+    crate::test_utils::init_test_tracing();
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind failing peer");
+    let port = listener.local_addr().expect("local addr").port();
+
+    let server_handle = std::thread::spawn(move || {
+        for _ in 0..2 {
+            let (mut stream, _) = listener.accept().expect("accept client");
+            std::thread::sleep(Duration::from_millis(60));
+            let _ = stream.write_all(b"NOT_TLS_GARBAGE\r\n");
+            let _ = stream.flush();
+            std::thread::sleep(Duration::from_millis(80));
+        }
+    });
+
+    let ca_pem = loopback::resources().join("ca.pem");
+    let result = eval_one(&format!(
+        r#"
+(let* ((p1 (make-network-process :name "fail-send" :host "127.0.0.1" :service {port} :nowait t :noquery t :sentinel #'ignore))
+       (p2 (make-network-process :name "fail-region" :host "127.0.0.1" :service {port} :nowait t :noquery t :sentinel #'ignore)))
+  (unwind-protect
+      (progn
+        (while (eq (process-status p1) 'connect) (accept-process-output p1 0.1))
+        (let* ((b1 (gnutls-boot p1 'gnutls-x509pki '(:hostname "localhost" :trustfiles ("{ca}"))))
+               (e1 (condition-case err
+                       (progn (process-send-string p1 "hello\n") 'unexpected-nil)
+                     (error err))))
+          (while (eq (process-status p2) 'connect) (accept-process-output p2 0.1))
+          (let* ((b2 (gnutls-boot p2 'gnutls-x509pki '(:hostname "localhost" :trustfiles ("{ca}"))))
+                 (e2 (with-temp-buffer
+                       (insert "hello-region\n")
+                       (condition-case err
+                           (progn (process-send-region p2 (point-min) (point-max)) 'unexpected-nil)
+                         (error err)))))
+            (list b1 e1 (process-status p1) (process-exit-status p1)
+                  b2 e2 (process-status p2) (process-exit-status p2)))))
+    (ignore-errors (delete-process p1))
+    (ignore-errors (delete-process p2))))
+"#,
+        port = port,
+        ca = ca_pem.display()
+    ));
+    server_handle.join().expect("server thread finished");
+    assert_eq!(
+        result,
+        "OK (gnutls-e-again (error \"Process fail-send not running: failed with code TLS negotiation failed\n\") failed \"TLS negotiation failed\" gnutls-e-again (error \"Process fail-region not running: failed with code TLS negotiation failed\n\") failed \"TLS negotiation failed\")"
+    );
+}
+
+/// Regression (#14790 HIGH-2): async TLS handshake failure in
+/// `wait_reading_process_output` deactivates the process without deleting it
+/// from `(process-list)` / `(get-process)`, lowers initstage 8 -> 3, sets
+/// status `(failed "TLS negotiation failed")` (`process-exit-status` returns
+/// `"TLS negotiation failed"`), fires NO sentinel, and leaves a subsequent
+/// `(delete-process p)` able to transition to `closed` and fire `"deleted\n"`.
+#[cfg(unix)]
+#[test]
+fn gnutls_nonblocking_handshake_failure_deactivates_without_deleting_and_preserves_state() {
+    use crate::emacs_core::moved_system::tls_tests_runtime_test_rs::loopback;
+    use std::io::Write;
+    use std::net::TcpListener;
+
+    crate::test_utils::init_test_tracing();
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind failing peer");
+    let port = listener.local_addr().expect("local addr").port();
+
+    let server_handle = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().expect("accept client");
+        std::thread::sleep(Duration::from_millis(60));
+        let _ = stream.write_all(b"NOT_TLS_GARBAGE\r\n");
+        let _ = stream.flush();
+        std::thread::sleep(Duration::from_millis(80));
+    });
+
+    let ca_pem = loopback::resources().join("ca.pem");
+    let result = eval_one(&format!(
+        r#"
+(let* ((events nil)
+       (p (make-network-process
+           :name "fail-state" :host "127.0.0.1" :service {port} :nowait t :noquery t
+           :sentinel (lambda (_proc ev) (push ev events)))))
+  (unwind-protect
+      (progn
+        (while (eq (process-status p) 'connect) (accept-process-output p 0.1))
+        (setq events nil)
+        (let ((boot (gnutls-boot p 'gnutls-x509pki '(:hostname "localhost" :trustfiles ("{ca}")))))
+          (let ((deadline (+ (float-time) 3.0)))
+            (while (and (< (float-time) deadline) (eq (process-status p) 'open))
+              (accept-process-output p 0.1)))
+          (let ((in-list-after-fail (not (null (memq p (process-list)))))
+                (get-proc-after-fail (eq (get-process "fail-state") p))
+                (stage-after-fail (gnutls-get-initstage p))
+                (status-after-fail (process-status p))
+                (exit-after-fail (process-exit-status p))
+                (events-after-fail (nreverse events)))
+            (setq events nil)
+            (delete-process p)
+            (list boot
+                  in-list-after-fail
+                  get-proc-after-fail
+                  stage-after-fail
+                  status-after-fail
+                  exit-after-fail
+                  events-after-fail
+                  (process-status p)
+                  (nreverse events)
+                  (not (null (memq p (process-list))))))))
+    (ignore-errors (delete-process p))))
+"#,
+        port = port,
+        ca = ca_pem.display()
+    ));
+    server_handle.join().expect("server thread finished");
+    assert_eq!(
+        result,
+        "OK (gnutls-e-again t t 3 failed \"TLS negotiation failed\" nil closed (\"deleted\n\") nil)"
+    );
+}
+
+/// Regression (#14790 HIGH-2 Flow propagation): a `throw` (non-local `Flow`)
+/// from the `"open\n"` sentinel run on async TLS `8 -> 9` completion must
+/// propagate out of `accept-process-output` instead of being swallowed.
+#[cfg(unix)]
+#[test]
+fn gnutls_nonblocking_open_sentinel_propagates_throw_and_quit() {
+    use crate::emacs_core::moved_system::tls_tests_runtime_test_rs::loopback;
+    use std::net::TcpListener;
+
+    crate::test_utils::init_test_tracing();
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind delayed TLS peer");
+    let port = listener.local_addr().expect("local addr").port();
+
+    let server_handle = std::thread::spawn(move || {
+        let (stream, _) = listener.accept().expect("accept client");
+        std::thread::sleep(Duration::from_millis(50));
+        let server_cfg = build_loopback_rustls_server_config();
+        let conn = rustls::ServerConnection::new(server_cfg).expect("server conn");
+        let mut tls = rustls::StreamOwned::new(conn, stream);
+        let _ = tls.conn.complete_io(&mut tls.sock);
+        std::thread::sleep(Duration::from_millis(60));
+    });
+
+    let ca_pem = loopback::resources().join("ca.pem");
+    let result = eval_one(&format!(
+        r#"
+(let* ((armed nil)
+       (p (make-network-process
+           :name "throw-sentinel" :host "127.0.0.1" :service {port} :nowait t :noquery t
+           :sentinel (lambda (proc ev)
+                       (when armed
+                         (throw 'tls-open-tag
+                                (list (process-status proc) ev (gnutls-get-initstage proc))))))))
+  (unwind-protect
+      (progn
+        (while (eq (process-status p) 'connect) (accept-process-output p 0.1))
+        (let ((boot (gnutls-boot p 'gnutls-x509pki '(:hostname "localhost" :trustfiles ("{ca}")))))
+          (setq armed t)
+          (let ((caught
+                 (catch 'tls-open-tag
+                   (let ((deadline (+ (float-time) 3.0)))
+                     (while (< (float-time) deadline)
+                       (accept-process-output p 0.1)))
+                   'not-thrown)))
+            (list boot caught))))
+    (setq armed nil)
+    (ignore-errors (delete-process p))))
+"#,
+        port = port,
+        ca = ca_pem.display()
+    ));
+    server_handle.join().expect("server thread finished");
+    assert_eq!(result, "OK (gnutls-e-again (open \"open\n\" 9))");
+}
+
+/// Regression (#14790 HIGH-3): a pending non-blocking TLS handshake
+/// (`StillPending`) must NEVER mark the wait pass as serviced, otherwise
+/// `wait_for_command_input` busy-spins at 100% CPU without ever sleeping in
+/// `epoll_wait`.
+#[cfg(unix)]
+#[test]
+fn gnutls_nonblocking_pending_handshake_does_not_busy_spin_command_input_wait() {
+    use crate::emacs_core::moved_system::tls_tests_runtime_test_rs::loopback;
+    use std::net::TcpListener;
+
+    crate::test_utils::init_test_tracing();
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind silent peer");
+    let port = listener.local_addr().expect("local addr").port();
+
+    let (done_tx, done_rx) = std::sync::mpsc::channel::<()>();
+    let server_handle = std::thread::spawn(move || {
+        let (_stream, _) = listener.accept().expect("accept client");
+        let _ = done_rx.recv_timeout(Duration::from_secs(5));
+    });
+
+    let ca_pem = loopback::resources().join("ca.pem");
+    let mut ev = crate::emacs_core::eval_hook_installers::new_context();
+    let boot = ev
+        .eval_str(&format!(
+            r#"
+(let ((p (make-network-process :name "idle-tls" :host "127.0.0.1" :service {port} :nowait t :noquery t)))
+  (while (eq (process-status p) 'connect)
+    (accept-process-output p 0.05))
+  (setq test-idle-tls-proc p)
+  (gnutls-boot p 'gnutls-x509pki '(:hostname "localhost" :trustfiles ("{ca}"))))
+"#,
+            port = port,
+            ca = ca_pem.display()
+        ))
+        .expect("start non-blocking gnutls-boot");
+    assert_eq!(boot, Value::symbol("gnutls-e-again"));
+
+    let id = ev
+        .eval_str("test-idle-tls-proc")
+        .expect("read test-idle-tls-proc")
+        .as_process_id()
+        .expect("process id");
+    let request = ProcessOutputServiceRequest::target_only(id);
+    let service_outcome = ev
+        .poll_process_output_for_service_request(&request)
+        .expect("poll while handshake pending");
+    assert!(
+        !service_outcome.has_any_process_activity(),
+        "StillPending non-blocking TLS handshake must not mark service outcome active"
+    );
+
+    let started = Instant::now();
+    let wait_outcome = ev
+        .wait_for_command_input(Some(Instant::now() + Duration::from_millis(60)))
+        .expect("wait_for_command_input");
+    let elapsed = started.elapsed();
+    assert_eq!(
+        wait_outcome,
+        CommandInputWaitOutcome::DeadlineElapsed,
+        "command input wait must sleep until deadline instead of spinning on StillPending TLS"
+    );
+    assert!(
+        elapsed >= Duration::from_millis(40),
+        "command input wait returned too quickly ({elapsed:?}), indicating a busy-spin"
+    );
+
+    let _ = ev.eval_str("(delete-process test-idle-tls-proc)");
+    let _ = done_tx.send(());
+    server_handle.join().expect("server thread finished");
+}
+
+/// Regression (#14790 MEDIUM-2): initial non-blocking `gnutls-boot` against a
+/// non-TLS peer returns GNU's protocol error code `-15`
+/// (`GNUTLS_E_UNEXPECTED_PACKET`), leaves the process open at stage 8, and a
+/// subsequent `(process-send-string p ...)` without `gnutls-deinit` fails
+/// promptly with GNU's `"TLS negotiation failed"` error instead of hanging.
+#[cfg(unix)]
+#[test]
+fn gnutls_boot_nonblocking_handshake_failure_returns_protocol_error_and_send_does_not_hang() {
+    use crate::emacs_core::moved_system::tls_tests_runtime_test_rs::loopback;
+    use std::io::Write;
+    use std::net::TcpListener;
+
+    crate::test_utils::init_test_tracing();
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind non-TLS peer");
+    let port = listener.local_addr().expect("local addr").port();
+
+    let server_handle = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().expect("accept client");
+        let _ = stream.write_all(b"NOT_TLS_GARBAGE\r\n");
+        let _ = stream.flush();
+        std::thread::sleep(Duration::from_millis(200));
+    });
+
+    let ca_pem = loopback::resources().join("ca.pem");
+    let result = eval_one(&format!(
+        r#"
+(let ((p (make-network-process :name "fail-boot-send" :host "127.0.0.1" :service {port} :nowait t :noquery t :filter t :sentinel #'ignore)))
+  (unwind-protect
+      (progn
+        (while (eq (process-status p) 'connect) (accept-process-output p 0.1))
+        (sleep-for 0.05)
+        (let* ((ret (gnutls-boot p 'gnutls-x509pki '(:hostname "localhost" :trustfiles ("{ca}"))))
+               (errp (gnutls-errorp ret))
+               (fatalp (gnutls-error-fatalp ret))
+               (errstr (gnutls-error-string ret))
+               (stage-after-boot (gnutls-get-initstage p))
+               (status-after-boot (process-status p))
+               (send-err (condition-case err
+                             (progn (process-send-string p "hello\n") 'unexpected-ok)
+                           (error err))))
+          (list ret errp fatalp errstr stage-after-boot status-after-boot
+                send-err (process-status p) (process-exit-status p) (gnutls-get-initstage p))))
+    (ignore-errors (delete-process p))))
+"#,
+        port = port,
+        ca = ca_pem.display()
+    ));
+    server_handle.join().expect("server thread finished");
+    assert_eq!(
+        result,
+        "OK (-15 t t \"An unexpected TLS packet was received.\" 8 open (error \"Process fail-boot-send not running: failed with code TLS negotiation failed\n\") failed \"TLS negotiation failed\" 3)"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn plain_pty_child_matches_gnu_signal_dispositions() {
+    crate::test_utils::init_test_tracing();
+
+    struct SigActionGuard(Vec<(libc::c_int, libc::sigaction)>);
+    impl Drop for SigActionGuard {
+        fn drop(&mut self) {
+            for (sig, old) in self.0.drain(..).rev() {
+                // SAFETY: restoring previously queried `sigaction` for `sig`.
+                unsafe {
+                    libc::sigaction(sig, &old, std::ptr::null_mut());
+                }
+            }
+        }
+    }
+
+    let reset_signals = [libc::SIGINT, libc::SIGQUIT, libc::SIGPROF];
+    let preserved_signals = [libc::SIGHUP, libc::SIGTERM, libc::SIGALRM];
+    let all_signals = [
+        libc::SIGHUP,
+        libc::SIGINT,
+        libc::SIGQUIT,
+        libc::SIGPROF,
+        libc::SIGTERM,
+        libc::SIGALRM,
+    ];
+
+    let _guard = {
+        let mut saved = Vec::with_capacity(all_signals.len());
+        // SAFETY: `libc::sigaction` is a C POD struct; zero-init clears `sa_flags`.
+        let mut ign: libc::sigaction = unsafe { std::mem::zeroed() };
+        ign.sa_sigaction = libc::SIG_IGN;
+        // SAFETY: `ign.sa_mask` is a valid writable `sigset_t`.
+        assert_eq!(unsafe { libc::sigemptyset(&mut ign.sa_mask) }, 0);
+        for sig in all_signals {
+            // SAFETY: `old` is an out-pointer initialized by `sigaction`.
+            let mut old: libc::sigaction = unsafe { std::mem::zeroed() };
+            // SAFETY: `sig` is a valid catchable signal.
+            assert_eq!(unsafe { libc::sigaction(sig, &ign, &mut old) }, 0);
+            saved.push((sig, old));
+        }
+        SigActionGuard(saved)
+    };
+
+    let sleep_bin = find_bin("sleep");
+
+    // 1. GNU resets SIGINT, SIGQUIT, SIGPROF to SIG_DFL in plain PTY children.
+    for sig in reset_signals {
+        let result = eval_one(&format!(
+            r#"(let ((proc (make-process
+                            :name "pty-sig-reset"
+                            :buffer nil
+                            :command '("{sleep_bin}" "60")
+                            :connection-type 'pty
+                            :noquery t)))
+                 (unwind-protect
+                     (progn
+                       (signal-process proc {sig})
+                       (let ((i 0))
+                         (while (and (eq (process-status proc) 'run) (< i 40))
+                           (accept-process-output proc 0.05)
+                           (setq i (1+ i))))
+                       (list (process-status proc) (process-exit-status proc)))
+                   (if (process-live-p proc) (delete-process proc))))"#
+        ));
+        assert_eq!(
+            result,
+            format!("OK (signal {sig})"),
+            "plain PTY child must reset ignored signal {sig} to SIG_DFL (GNU src/callproc.c:1632-1642)"
+        );
+    }
+
+    // 2. GNU preserves non-default ignored signals (SIGHUP, SIGTERM, SIGALRM).
+    for sig in preserved_signals {
+        let result = eval_one(&format!(
+            r#"(let ((proc (make-process
+                            :name "pty-sig-preserve"
+                            :buffer nil
+                            :command '("{sleep_bin}" "60")
+                            :connection-type 'pty
+                            :noquery t)))
+                 (unwind-protect
+                     (progn
+                       (signal-process proc {sig})
+                       (let ((i 0))
+                         (while (and (eq (process-status proc) 'run) (< i 6))
+                           (accept-process-output proc 0.05)
+                           (setq i (1+ i))))
+                       (process-status proc))
+                   (if (process-live-p proc) (delete-process proc))))"#
+        ));
+        assert_eq!(
+            result, "OK run",
+            "plain PTY child must preserve ignored signal {sig} instead of resetting it to SIG_DFL"
+        );
+    }
+
+    // 3. Parent's own dispositions remain untouched.
+    for sig in all_signals {
+        // SAFETY: querying current disposition into zeroed C POD struct.
+        let mut cur: libc::sigaction = unsafe { std::mem::zeroed() };
+        assert_eq!(
+            unsafe { libc::sigaction(sig, std::ptr::null(), &mut cur) },
+            0
+        );
+        assert_eq!(
+            cur.sa_sigaction,
+            libc::SIG_IGN,
+            "spawning plain PTY child mutated parent disposition for signal {sig}"
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn plain_pty_child_unblocks_blocked_signals_without_mutating_parent() {
+    crate::test_utils::init_test_tracing();
+
+    struct SigMaskGuard(libc::sigset_t);
+    impl Drop for SigMaskGuard {
+        fn drop(&mut self) {
+            // SAFETY: restoring previously queried thread signal mask.
+            unsafe {
+                libc::pthread_sigmask(libc::SIG_SETMASK, &self.0, std::ptr::null_mut());
+            }
+        }
+    }
+
+    let blocked = [libc::SIGINT, libc::SIGQUIT];
+    let _guard = {
+        let mut set = std::mem::MaybeUninit::<libc::sigset_t>::uninit();
+        let mut old = std::mem::MaybeUninit::<libc::sigset_t>::uninit();
+        // SAFETY: `set` and `old` are valid stack `sigset_t` buffers; `pthread_sigmask`
+        // is well-defined in multithreaded processes.
+        unsafe {
+            assert_eq!(libc::sigemptyset(set.as_mut_ptr()), 0);
+            for sig in blocked {
+                assert_eq!(libc::sigaddset(set.as_mut_ptr(), sig), 0);
+            }
+            assert_eq!(
+                libc::pthread_sigmask(libc::SIG_BLOCK, set.as_ptr(), old.as_mut_ptr()),
+                0
+            );
+            SigMaskGuard(old.assume_init())
+        }
+    };
+
+    let sleep_bin = find_bin("sleep");
+    let result = eval_one(&format!(
+        r#"(let ((proc (make-process
+                        :name "pty-sig-unblock"
+                        :buffer nil
+                        :command '("{sleep_bin}" "60")
+                        :connection-type 'pty
+                        :noquery t)))
+             (unwind-protect
+                 (progn
+                   (quit-process proc)
+                   (let ((i 0))
+                     (while (and (eq (process-status proc) 'run) (< i 40))
+                       (accept-process-output proc 0.05)
+                       (setq i (1+ i))))
+                   (list (process-status proc) (process-exit-status proc)))
+               (if (process-live-p proc) (delete-process proc))))"#
+    ));
+    assert_eq!(
+        result,
+        format!("OK (signal {})", libc::SIGQUIT),
+        "plain PTY child must clear blocked signal mask"
+    );
+
+    let mut cur = std::mem::MaybeUninit::<libc::sigset_t>::uninit();
+    // SAFETY: querying current thread signal mask into valid `sigset_t`.
+    let cur = unsafe {
+        assert_eq!(
+            libc::pthread_sigmask(libc::SIG_SETMASK, std::ptr::null(), cur.as_mut_ptr()),
+            0
+        );
+        cur.assume_init()
+    };
+    for sig in blocked {
+        // SAFETY: `cur` was initialized by `pthread_sigmask`.
+        assert_eq!(
+            unsafe { libc::sigismember(&cur, sig) },
+            1,
+            "spawning plain PTY child altered parent signal mask for signal {sig}"
+        );
+    }
 }

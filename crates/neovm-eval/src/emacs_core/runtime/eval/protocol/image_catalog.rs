@@ -10,9 +10,9 @@ use neomacs_display_protocol::ImageRealization as ResolvedImageRealization;
 use neomacs_display_protocol::image::EncodedBytes;
 use neomacs_display_protocol::image_diagnostic::{ImageDiagnostic, ImageLoadIdentity};
 use neomacs_display_protocol::{
-    ImageAnimationPolicy, ImageColorContext, ImageEmbeddedMetadata, ImageFrameIndex, ImageId,
-    ImageLayoutExtent, ImageLoadToken, ImageMaskKind, ImageMaskPolicy, ImageReportedExtent,
-    ImageRotation, ImageSizeLimit, ImageSizeSpec, ImageStateEvent,
+    FailedImageExtent, ImageAnimationPolicy, ImageColorContext, ImageEmbeddedMetadata,
+    ImageFrameIndex, ImageId, ImageLayoutExtent, ImageLoadToken, ImageMaskKind, ImageMaskPolicy,
+    ImageReportedExtent, ImageRotation, ImageSizeLimit, ImageSizeSpec, ImageStateEvent,
 };
 use neovm_value::heap_types::{LispString, LispStringStorageKind};
 use neovm_value::image_identity::ImageSpecIdentity;
@@ -143,7 +143,7 @@ pub enum ImageResolveSource {
 
 static_assertions::assert_impl_all!(ImageResolveSource: Send, Sync, Clone, std::fmt::Debug, Eq, std::hash::Hash);
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug)]
 pub struct ImageResolveRequest {
     /// Full Lisp-spec identity. Parsed fields below are the materialization
     /// recipe; they are intentionally not used as a substitute for the spec.
@@ -171,8 +171,48 @@ pub struct ImageResolveRequest {
     /// Derived from the same specification the rest of this request is, so it
     /// cannot disagree with it; it travels here rather than being recomputed
     /// at the failure site because only this side can print a `:data` image's
-    /// specification the way GNU does.
+    /// specification the way GNU does. Excluded from cache-key equality and
+    /// hashing because `:data` diagnostic text prints `:animate-*` bookkeeping
+    /// that GNU `filter_image_spec` excludes from the cache key (#823).
     pub identity: ImageLoadIdentity,
+    /// GNU `lookup_image` failed-load geometry (`src/image.c:3573-3583`,
+    /// `src/dispextern.h:3295-3296`): explicit fixnum `:width`/`:height` or
+    /// 30×30. Computed once when building this request so every consumer
+    /// (`image-size`, `image_element_extent`, redisplay, hollow-box renderer)
+    /// reads one authoritative failed geometry from [`FailedImage`].
+    pub failed_extent: FailedImageExtent,
+}
+
+impl PartialEq for ImageResolveRequest {
+    fn eq(&self, other: &Self) -> bool {
+        self.spec == other.spec
+            && self.source == other.source
+            && self.size == other.size
+            && self.rotation == other.rotation
+            && self.colors == other.colors
+            && self.mask == other.mask
+            && self.frame == other.frame
+            && self.animation == other.animation
+            && self.realization == other.realization
+            && self.failed_extent == other.failed_extent
+    }
+}
+
+impl Eq for ImageResolveRequest {}
+
+impl std::hash::Hash for ImageResolveRequest {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.spec.hash(state);
+        self.source.hash(state);
+        self.size.hash(state);
+        self.rotation.hash(state);
+        self.colors.hash(state);
+        self.mask.hash(state);
+        self.frame.hash(state);
+        self.animation.hash(state);
+        self.realization.hash(state);
+        self.failed_extent.hash(state);
+    }
 }
 
 static_assertions::assert_impl_all!(ImageResolveRequest: Send, Sync, Clone, std::fmt::Debug, Eq, std::hash::Hash);
@@ -255,7 +295,8 @@ impl ResolvedImageMetadata {
 
     /// Build metadata from logical layout + realization report scale.
     #[must_use]
-    pub fn from_layout(
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn from_layout(
         layout: ImageLayoutExtent,
         realization: ResolvedImageRealization,
         background: u32,
@@ -275,7 +316,8 @@ impl ResolvedImageMetadata {
     /// Attach decoder-owned metadata without making plain-image constructors
     /// fabricate animation state.
     #[must_use]
-    pub fn with_embedded(mut self, embedded: ImageEmbeddedMetadata) -> Self {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn with_embedded(mut self, embedded: ImageEmbeddedMetadata) -> Self {
         self.embedded = embedded;
         self
     }
@@ -349,15 +391,21 @@ pub struct PendingImage {
     placement: ImagePlacement,
 }
 
-/// Stable failed state retaining the slot that was allocated while pending.
+/// Failed image state carrying GNU's authoritative failed-load geometry
+/// (`src/image.c:3568-3583`), diagnostic, and any partial loader metadata
+/// (such as multi-page TIFF `(count N)`, `src/image.c:9570-9580`).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FailedImage {
     load: ImageLoadToken,
     placement: ImagePlacement,
+    failed_extent: FailedImageExtent,
     /// GNU's diagnostic for the failure.  It is a value with its own text
     /// rather than a message string, so a consumer cannot hold the failure
     /// without also holding what to say about it.
     pub error: ImageDiagnostic,
+    /// Partial format metadata captured before load failure (e.g., multi-page
+    /// TIFF `(count N)`). Empty (`nil` in Lisp) for all other formats.
+    pub embedded: ImageEmbeddedMetadata,
 }
 
 impl PendingImage {
@@ -381,10 +429,26 @@ impl PendingImage {
 
     #[must_use]
     pub fn failed(self, error: ImageDiagnostic) -> FailedImage {
+        self.failed_with(
+            error,
+            FailedImageExtent::default(),
+            ImageEmbeddedMetadata::EMPTY,
+        )
+    }
+
+    #[must_use]
+    pub fn failed_with(
+        self,
+        error: ImageDiagnostic,
+        failed_extent: FailedImageExtent,
+        embedded: ImageEmbeddedMetadata,
+    ) -> FailedImage {
         FailedImage {
             load: self.load,
-            placement: self.placement,
+            placement: ImagePlacement::new(self.load.image(), failed_extent.placement_extent()),
+            failed_extent,
             error,
+            embedded,
         }
     }
 }
@@ -399,17 +463,44 @@ impl FailedImage {
     pub const fn placement(&self) -> ImagePlacement {
         self.placement
     }
+
+    #[must_use]
+    pub const fn failed_extent(&self) -> FailedImageExtent {
+        self.failed_extent
+    }
 }
 
 /// Result of a nonblocking image catalog lookup.
 ///
-/// Every non-ready state retains stable placement geometry, so asynchronous
-/// completion or failure never changes a published frame in place.
+/// Pending images retain provisional placement geometry until decode finishes;
+/// failed images carry GNU's failed-load geometry (explicit fixnum
+/// `:width`/`:height` or 30×30).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ImageLookup {
     Ready(ReadyImage),
     Pending(PendingImage),
     Failed(FailedImage),
+}
+
+/// Result of a synchronous image query (`image-size`, `image-mask-p`,
+/// `image-metadata`, `neomacs-image-extent`).
+///
+/// Matches GNU `lookup_image` (`src/image.c:3568-3583`): a valid specification
+/// whose load or decode fails (`LoadFailed`) carries GNU's failed geometry,
+/// diagnostic, and any partial metadata; a synchronous wait deadline is its own
+/// typed `TimedOut` arm rather than an untyped error string.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ImageSyncResolution {
+    /// Decoded metadata is ready.
+    Ready(ReadyImage),
+    /// The specification is valid, but loading or decoding failed
+    /// (`img->load_failed_p`). Callers return GNU's failed-image fallback and
+    /// drain pending diagnostics to `*Messages*` without signalling.
+    LoadFailed(FailedImage),
+    /// Synchronous wait for the background CPU decoder exceeded its deadline.
+    TimedOut { image_id: ImageId },
+    /// This display host has no synchronous image decoder.
+    Unsupported,
 }
 
 impl ImageLookup {

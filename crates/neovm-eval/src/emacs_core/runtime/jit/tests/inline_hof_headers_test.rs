@@ -50,10 +50,10 @@ impl Drop for Knobs {
 
 fn function(ops: Vec<Op>, constants: Vec<Value>) -> ByteCodeFunction {
     let mut function = ByteCodeFunction::new(LambdaParams::simple(vec![intern("hof-header-arg")]));
-    function.lexical = true;
-    function.ops = ops;
-    function.constants = constants.into();
-    function.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
+    function.set_lexical(true);
+    function.set_ops(ops);
+    function.set_constants(constants.into());
+    function.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
     function.seal_hand_assembled_ops_for_test();
     function.jit_runtime().set_hot_for_test();
     function
@@ -104,7 +104,9 @@ fn inline_hof_headers_refresh_captured_cell_after_a_serviced_poll() {
     let _ = ctx.debug_on_next_call_is_armed();
     ctx.gc_stress = true;
     reset_bytecode_branch_poll_count();
-    let NativeRun::Ok(bits) = leaf.call(&mut ctx as *mut Context as *mut u8, &[sequence]) else {
+    let NativeRun::Ok(bits) =
+        (unsafe { leaf.call(&mut ctx as *mut Context as *mut u8, &[sequence]) })
+    else {
         panic!("guarded capture stores remain native across a serviced poll")
     };
     assert_eq!(

@@ -228,6 +228,10 @@ impl ExternalBuffer for SharedMemoryBuffer {
 /// video frames and WebKit surfaces on Linux.
 ///
 /// This struct supports multi-plane formats (e.g., YUV), with up to 4 planes.
+///
+/// Fields are private so safe code cannot forge or mutate plane descriptors,
+/// dimensions, or strides after construction. Construct via the `unsafe`
+/// constructors [`DmaBufBuffer::new`] or [`DmaBufBuffer::single_plane`].
 #[cfg(target_os = "linux")]
 #[derive(Debug)]
 pub struct DmaBufBuffer {
@@ -236,21 +240,21 @@ pub struct DmaBufBuffer {
     /// `None` marks an unused plane slot. Each `OwnedFd` closes on drop, so the
     /// buffer is the sole owner of its descriptors — hence this type is not
     /// `Clone` (cloning would alias, then double-close, the fds).
-    pub fds: [Option<OwnedFd>; 4],
+    fds: [Option<OwnedFd>; 4],
     /// Number of bytes per row per plane.
-    pub strides: [u32; 4],
+    strides: [u32; 4],
     /// Byte offset per plane.
-    pub offsets: [u32; 4],
+    offsets: [u32; 4],
     /// Number of planes.
-    pub num_planes: u32,
+    num_planes: u32,
     /// Width in pixels.
-    pub width: u32,
+    width: u32,
     /// Height in pixels.
-    pub height: u32,
+    height: u32,
     /// DRM fourcc format code (e.g., DRM_FORMAT_ARGB8888).
-    pub fourcc: u32,
+    fourcc: u32,
     /// DRM modifier (for tiled/compressed formats).
-    pub modifier: u64,
+    modifier: u64,
 }
 
 #[cfg(target_os = "linux")]
@@ -259,7 +263,17 @@ impl DmaBufBuffer {
     ///
     /// Only the first `num_planes` slots are expected to be `Some`; the rest
     /// stay `None`. Ownership of each fd transfers into the buffer.
-    pub fn new(
+    ///
+    /// # Safety
+    /// - Every `Some` fd in `0..num_planes` must be a valid DMA-BUF (or linear
+    ///   shared-memory fd when falling back to mmap) whose backing allocation
+    ///   covers every byte in `offset..offset + stride * height` for its plane.
+    /// - No concurrent truncation or unsynchronized producer write may race
+    ///   with a subsequent GPU or mmap import of this buffer.
+    /// - `width`, `height`, `strides`, `offsets`, `fourcc`, and `modifier` must
+    ///   accurately describe the underlying allocation.
+    #[allow(clippy::too_many_arguments)]
+    pub unsafe fn new(
         fds: [Option<OwnedFd>; 4],
         strides: [u32; 4],
         offsets: [u32; 4],
@@ -282,7 +296,10 @@ impl DmaBufBuffer {
     }
 
     /// Create a simple single-plane DmaBufBuffer, taking ownership of `fd`.
-    pub fn single_plane(
+    ///
+    /// # Safety
+    /// Same contract as [`DmaBufBuffer::new`] for a single plane at offset `0`.
+    pub unsafe fn single_plane(
         fd: OwnedFd,
         width: u32,
         height: u32,
@@ -300,6 +317,31 @@ impl DmaBufBuffer {
             fourcc,
             modifier,
         }
+    }
+
+    /// DRM fourcc format code.
+    pub fn fourcc(&self) -> u32 {
+        self.fourcc
+    }
+
+    /// DRM format modifier.
+    pub fn modifier(&self) -> u64 {
+        self.modifier
+    }
+
+    /// Number of declared planes.
+    pub fn num_planes(&self) -> u32 {
+        self.num_planes
+    }
+
+    /// Row strides per plane.
+    pub fn strides(&self) -> &[u32; 4] {
+        &self.strides
+    }
+
+    /// Byte offsets per plane.
+    pub fn offsets(&self) -> &[u32; 4] {
+        &self.offsets
     }
 
     #[cfg(any(feature = "video-dmabuf", feature = "webview"))]
@@ -355,7 +397,12 @@ impl DmaBufBuffer {
         #[cfg(any(feature = "video-dmabuf", feature = "webview"))]
         {
             let params = self.import_params()?;
-            if let Some(texture) = crate::vulkan_dmabuf::import_dmabuf(device, queue, &params) {
+            // SAFETY: `DmaBufBuffer` can only be constructed through its unsafe
+            // constructors, whose contract establishes valid DMA-BUF fds,
+            // geometry, and synchronization.
+            if let Some(texture) =
+                unsafe { crate::vulkan_dmabuf::import_dmabuf(device, queue, &params) }
+            {
                 tracing::debug!(
                     "DmaBufBuffer: texture import succeeded ({} planes)",
                     self.num_planes
@@ -385,7 +432,10 @@ impl DmaBufBuffer {
         queue: &wgpu::Queue,
     ) -> Option<wgpu::Texture> {
         let params = self.import_params()?;
-        crate::vulkan_dmabuf::import_dmabuf_external(device, queue, &params)
+        // SAFETY: `DmaBufBuffer` can only be constructed through its unsafe
+        // constructors, whose contract establishes valid DMA-BUF fds, geometry,
+        // and synchronization.
+        unsafe { crate::vulkan_dmabuf::import_dmabuf_external(device, queue, &params) }
     }
 
     /// Get dimensions of this buffer.

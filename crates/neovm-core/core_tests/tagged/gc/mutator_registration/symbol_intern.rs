@@ -8,6 +8,8 @@
 use super::*;
 #[path = "symbol_intern/fixture.rs"]
 mod fixture;
+#[path = "symbol_intern/tests/n1_controls.rs"]
+mod n1_controls;
 #[path = "symbol_intern/tests/publication.rs"]
 mod publication;
 #[path = "symbol_intern/tests/table_failures.rs"]

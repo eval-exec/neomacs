@@ -36,7 +36,7 @@ const SHAPES: &[(&str, &str)] = &[
 fn fixture() -> Context {
     use crate::emacs_core::defvar_bool::ByteBooleanVars;
     let mut ev = Context::new(crate::test_utils::unit_runtime());
-    crate::emacs_core::jit::cache::clear();
+    crate::emacs_core::jit::cache::clear_with_serial_receipt().expect("serial jit grace");
     ev.obarray.intern_member("tpj-obj");
     ev.obarray
         .install_objfwd(intern("tpj-obj"), alloc_objfwd(Value::fixnum(4343)));
@@ -60,10 +60,10 @@ fn function(name: &str) -> ByteCodeFunction {
         optional: Vec::new(),
         rest: None,
     });
-    f.lexical = true;
-    f.ops = OPS.to_vec();
-    f.constants = vec![Value::from_sym_id(intern(name))].into();
-    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(4);
+    f.set_lexical(true);
+    f.set_ops(OPS.to_vec());
+    f.set_constants(vec![Value::from_sym_id(intern(name))].into());
+    f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(4));
     f
 }
 
@@ -96,7 +96,7 @@ fn compile_inline(ev: &Context, name: &str) -> CompiledLeaf {
 fn run(ev: &mut Context, leaf: &CompiledLeaf) -> (String, usize) {
     VARREF_SHIM_CALLS.with(|c| c.set(0));
     let ctx = ev as *mut Context as *mut u8;
-    let got = match leaf.call(ctx, &[]) {
+    let got = match unsafe { leaf.call(ctx, &[]) } {
         NativeRun::Ok(bits) => print_value(&unsafe {
             /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
             Value::from_bits(bits)
@@ -185,8 +185,8 @@ fn write_constants(name: &str) -> [Value; 3] {
 
 fn write_function(name: &str) -> ByteCodeFunction {
     let mut f = function(name);
-    f.ops = WRITE_OPS.to_vec();
-    f.constants = write_constants(name).to_vec().into();
+    f.set_ops(WRITE_OPS.to_vec());
+    f.set_constants(write_constants(name).to_vec().into());
     f
 }
 

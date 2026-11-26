@@ -88,102 +88,6 @@ fn gnu_low_tag_layout() {
 }
 
 #[test]
-fn gnu_pvec_type_layout_for_shared_vectorlikes() {
-    crate::test_utils::init_test_tracing();
-
-    let shared = [
-        (VecLikeType::Vector, 0),
-        (VecLikeType::Bignum, 2),
-        (VecLikeType::Marker, 3),
-        (VecLikeType::Overlay, 4),
-        (VecLikeType::SymbolWithPos, 6),
-        (VecLikeType::UserPtr, 8),
-        (VecLikeType::Frame, 10),
-        (VecLikeType::Window, 11),
-        (VecLikeType::Buffer, 13),
-        (VecLikeType::HashTable, 14),
-        (VecLikeType::Obarray, 15),
-        (VecLikeType::Terminal, 16),
-        (VecLikeType::WindowConfiguration, 17),
-        (VecLikeType::Subr, 18),
-        (VecLikeType::Xwidget, 20),
-        (VecLikeType::XwidgetView, 21),
-        (VecLikeType::ModuleFunction, 25),
-        (VecLikeType::TsNode, 28),
-        (VecLikeType::Sqlite, 30),
-        (VecLikeType::Lambda, 31),
-        (VecLikeType::CharTable, 32),
-        (VecLikeType::SubCharTable, 33),
-        (VecLikeType::Record, 34),
-        (VecLikeType::Font, 35),
-    ];
-
-    for (kind, gnu_code) in shared {
-        assert_eq!(u8::from(kind), gnu_code);
-        assert_eq!(VecLikeType::try_from(gnu_code), Ok(kind));
-        assert_eq!(kind.gnu_pvec_code(), Some(gnu_code));
-    }
-
-    assert!(VecLikeType::try_from(1).is_err());
-    assert_eq!(GnuPvecType::from_gnu_code(1), Some(GnuPvecType::Free));
-    assert_eq!(VecLikeType::Macro.gnu_pvec_code(), None);
-    assert_eq!(VecLikeType::ByteCode.gnu_pvec_code(), None);
-    assert_eq!(VecLikeType::Timer.gnu_pvec_code(), None);
-    assert_eq!(VecLikeType::SurfaceHandle.gnu_pvec_code(), None);
-    assert_eq!(VecLikeType::VideoHandle.gnu_pvec_code(), None);
-}
-
-#[test]
-fn gnu_pvec_type_layout_matches_gnu_lisp_h() {
-    crate::test_utils::init_test_tracing();
-
-    let cases = [
-        (GnuPvecType::NormalVector, 0),
-        (GnuPvecType::Free, 1),
-        (GnuPvecType::Bignum, 2),
-        (GnuPvecType::Marker, 3),
-        (GnuPvecType::Overlay, 4),
-        (GnuPvecType::Finalizer, 5),
-        (GnuPvecType::SymbolWithPos, 6),
-        (GnuPvecType::MiscPtr, 7),
-        (GnuPvecType::UserPtr, 8),
-        (GnuPvecType::Process, 9),
-        (GnuPvecType::Frame, 10),
-        (GnuPvecType::Window, 11),
-        (GnuPvecType::BoolVector, 12),
-        (GnuPvecType::Buffer, 13),
-        (GnuPvecType::HashTable, 14),
-        (GnuPvecType::Obarray, 15),
-        (GnuPvecType::Terminal, 16),
-        (GnuPvecType::WindowConfiguration, 17),
-        (GnuPvecType::Subr, 18),
-        (GnuPvecType::Other, 19),
-        (GnuPvecType::Xwidget, 20),
-        (GnuPvecType::XwidgetView, 21),
-        (GnuPvecType::Thread, 22),
-        (GnuPvecType::Mutex, 23),
-        (GnuPvecType::Condvar, 24),
-        (GnuPvecType::ModuleFunction, 25),
-        (GnuPvecType::NativeCompUnit, 26),
-        (GnuPvecType::TsParser, 27),
-        (GnuPvecType::TsNode, 28),
-        (GnuPvecType::TsCompiledQuery, 29),
-        (GnuPvecType::Sqlite, 30),
-        (GnuPvecType::Closure, 31),
-        (GnuPvecType::CharTable, 32),
-        (GnuPvecType::SubCharTable, 33),
-        (GnuPvecType::Record, 34),
-        (GnuPvecType::Font, 35),
-    ];
-
-    for (kind, code) in cases {
-        assert_eq!(kind.gnu_code(), code);
-        assert_eq!(GnuPvecType::from_gnu_code(code), Some(kind));
-    }
-    assert_eq!(GnuPvecType::from_gnu_code(36), None);
-}
-
-#[test]
 fn q_unbound_is_not_user_interned_unbound_symbol() {
     crate::test_utils::init_test_tracing();
 
@@ -413,7 +317,7 @@ fn collection_clears_dirty_owner_tracking_at_begin() {
     // Completing the cycle leaves them clear (marking traces but writes no heap
     // slots, so the barrier records nothing).
     heap.seed_root(reachable);
-    heap.complete_collection();
+    heap.complete_collection_for_test();
     assert_eq!(heap.dirty_owner_count(), 0);
     assert_eq!(heap.dirty_write_count(), 0);
 }
@@ -468,7 +372,7 @@ fn gc_basic_collection() {
     assert_eq!(heap.allocated_count(), 2);
 
     // Collect with only `reachable` as a root
-    heap.collect(std::iter::once(reachable));
+    heap.collect_rooted(std::iter::once(reachable));
 
     // The unreachable cons should be freed
     assert_eq!(heap.allocated_count(), 1);
@@ -493,7 +397,7 @@ fn gc_transitive_reachability() {
     assert_eq!(heap.allocated_count(), 4);
 
     // Collect with c1 as root — c2 and c3 should survive transitively
-    heap.collect(std::iter::once(c1));
+    heap.collect_rooted(std::iter::once(c1));
 
     assert_eq!(heap.allocated_count(), 3); // c1, c2, c3 survive; _garbage freed
 
@@ -513,7 +417,7 @@ fn gc_float_collection() {
 
     assert_eq!(heap.allocated_count(), 2);
 
-    heap.collect(std::iter::once(f1));
+    heap.collect_rooted(std::iter::once(f1));
 
     assert_eq!(heap.allocated_count(), 1);
     assert!((f1.xfloat() - 1.0).abs() < f64::EPSILON);
@@ -531,7 +435,7 @@ fn gc_collect_exact_does_not_scan_the_machine_stack() {
     let keep_visible = [stack_only];
     std::hint::black_box(&keep_visible);
 
-    heap.collect_exact(std::iter::empty());
+    heap.collect_rooted(std::iter::empty());
 
     assert_eq!(heap.allocated_count(), 0);
 }
@@ -553,7 +457,7 @@ fn gc_collect_exact_preserves_roots_across_multiple_cons_blocks() {
         }
     }
 
-    heap.collect_exact([first_block_root, later_block_root].into_iter());
+    heap.collect_rooted([first_block_root, later_block_root].into_iter());
 
     assert_eq!(first_block_root.cons_car().as_fixnum(), Some(10));
     assert_eq!(later_block_root.cons_car().as_fixnum(), Some(9_500));

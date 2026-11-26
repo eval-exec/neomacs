@@ -227,7 +227,8 @@ impl SymbolFlags {
     /// projection.  One byte test, since `Plainval` and `Untrapped` are both
     /// the zero encoding.
     #[inline(always)]
-    pub fn is_plain_untrapped_unprojected(&self) -> bool {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn is_plain_untrapped_unprojected(&self) -> bool {
         self.load() & (Self::REDIRECT_MASK | Self::TRAPPED_WRITE_MASK | Self::RUNTIME_PROJECTED_BIT)
             == 0
     }
@@ -437,9 +438,9 @@ impl CellWord {
     /// The word stored under `Forwarded` by [`Self::forwarded`].
     #[inline(always)]
     fn read_forwarded(&self) -> FwdRef {
-        // Only `CellWord::forwarded` stores under this tag, and it stores a
-        // live descriptor's header address.
-        FwdRef::from_address(self.load())
+        // SAFETY: only `CellWord::forwarded` stores under this tag, and it
+        // stores a live non-null `LispFwd` descriptor header address from `FwdRef::of`.
+        unsafe { FwdRef::from_address(self.load()) }
     }
 
     /// Decode under the tag the word was stored with.
@@ -479,11 +480,17 @@ pub struct LispSymbol {
     /// The value cell's word, read under `flags`' redirect.
     val: CellWord,
     /// Function slot. `Value::NIL` is the unbound sentinel (GNU `Qnil` in
-    /// `struct Lisp_Symbol::s.function`, `lisp.h:820`).
-    pub function: AtomicTaggedValue,
+    /// `struct Lisp_Symbol::s.function`, `lisp.h:820`). Crate-private so
+    /// cross-crate code cannot bypass `Obarray`'s SATB barrier and function
+    /// epoch bumps through a shared `&LispSymbol`; read via
+    /// [`Self::function`].
+    pub(crate) function: AtomicTaggedValue,
     /// Property list as a Lisp cons list (NIL = empty). Matches GNU
-    /// `struct Lisp_Symbol::s.plist` (`lisp.h:820`).
-    pub plist: AtomicTaggedValue,
+    /// `struct Lisp_Symbol::s.plist` (`lisp.h:820`). Crate-private so
+    /// cross-crate code cannot bypass [`store_plist_head`]'s SATB barrier and
+    /// plist epoch bumps through a shared `&LispSymbol`; read via
+    /// [`Self::plist`].
+    pub(crate) plist: AtomicTaggedValue,
     /// Whether this symbol is interned in the global obarray.
     pub(super) interned_global: bool,
     /// Whether `fmakunbound` explicitly masked the symbol's fallback function.
@@ -510,6 +517,10 @@ pub const LISP_SYMBOL_FLAGS_OFFSET: usize = std::mem::offset_of!(LispSymbol, fla
 /// `Plainval`).
 #[doc(hidden)]
 pub const LISP_SYMBOL_VAL_OFFSET: usize = std::mem::offset_of!(LispSymbol, val);
+/// Byte offset of a symbol's function cell (`LispSymbol::function`, one
+/// `Value` word): what a named call's callee is read from.
+#[doc(hidden)]
+pub const LISP_SYMBOL_FUNCTION_OFFSET: usize = std::mem::offset_of!(LispSymbol, function);
 /// Byte offset of a symbol's `interned_global` flag: the byte right after the
 /// flags byte (const-asserted in the obarray module), so compiled code and the
 /// cached variable tiers read `flags | interned_global << 8` as one 16-bit
@@ -543,6 +554,8 @@ const _: () = {
     assert!(align_of::<Value>() >= align_of::<usize>());
 };
 
+static_assertions::assert_not_impl_any!(LispSymbol: Clone, Copy, Send, Sync);
+
 impl std::fmt::Debug for LispSymbol {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("LispSymbol")
@@ -557,13 +570,24 @@ impl std::fmt::Debug for LispSymbol {
     }
 }
 
-// Hand-written because `name: AtomicU32` is not `Clone`-derivable. A cloned
-// obarray is never concurrently scanned, so a `Relaxed` load of the source name
-// is sufficient. The clone's cell names the SAME BLV record or descriptor as
-// the source; `Obarray::clone` re-homes both before the copy is used
+// Hand-written because `name: AtomicU32` is not `Clone`-derivable. Kept
+// crate-private (never `impl Clone for LispSymbol`): a `Localized` cell holds
+// a raw `BlvPtr` owned by its enclosing `Obarray`, so cloning a symbol outside
+// `Obarray::clone` would decouple that pointer from `Obarray::drop` and turn
+// later BLV reads into a use-after-free. `Obarray::clone` immediately
+// deep-copies and re-homes both BLV records and stateful forwarders
 // ([`LocalizedArm::rehome`], [`ForwardedArm::forward_to`]).
-impl Clone for LispSymbol {
-    fn clone(&self) -> Self {
+impl LispSymbol {
+    /// Clone a symbol slot for [`super::Obarray::clone`].
+    ///
+    /// # Safety
+    ///
+    /// The returned `LispSymbol` aliases the source's raw `BlvPtr` (for a
+    /// `Localized` cell) and stateful `FwdRef` (for a `Forwarded` cell). The
+    /// caller must immediately re-home every `Localized` cell and stateful
+    /// `Forwarded` cell in the cloned obarray before the source obarray is
+    /// mutated or dropped, and must never expose the un-rehomed slot.
+    pub(super) unsafe fn clone_for_obarray(&self) -> Self {
         Self {
             name: AtomicU32::new(self.name.load(Ordering::Relaxed)),
             flags: self.flags.clone(),
@@ -599,16 +623,19 @@ pub enum DumpedCell {
 
 /// Universal plist-head publication clock (P10).
 ///
-/// Process-global rather than an `Obarray` field: the one head-store seam
-/// below must also run from cell construction and pdump reconstruction, which
-/// have no `Obarray`.  A bump before an era is published is harmless because
-/// nothing reads the clock yet; afterwards it is the snapshot-invalidation
-/// clock (P10-a2).  It is not TLS.
+/// A static rather than an `Obarray` field: the one head-store seam below
+/// must also run from cell construction and pdump reconstruction, which have
+/// no `Obarray`.  A runtime store bumps it.  A construction store does not.
+/// Production code does not read it yet; afterwards it is the
+/// snapshot-invalidation clock (P10-a2).  It is not TLS.
+///
+/// The construction equality assertion is sound because nextest gives each
+/// test its own process, and nothing in that test does a runtime store after
+/// `before` is read.
 static PLIST_EPOCH: AtomicU64 = AtomicU64::new(0);
 
-/// The current plist-head epoch.  One Acquire load is the per-signal freshness
-/// check of the P10 snapshot store; in P10-a1 only the tests read it.
-#[cfg(any(test, feature = "test-support"))]
+/// The current plist-head epoch. One Acquire load. The condition-snapshot
+/// mint reads it once before the plist-head reads. It is not TLS.
 #[inline(always)]
 pub(crate) fn plist_epoch() -> u64 {
     PLIST_EPOCH.load(Ordering::Acquire)
@@ -621,17 +648,72 @@ fn note_plist_head_store() {
     PLIST_EPOCH.fetch_add(1, Ordering::Release);
 }
 
+/// Which plist-head store this is.
+///
+/// [`PlistStore::Runtime`] bumps the clock on every store. Same-head
+/// suppression is not this rule. [`PlistStore::Construction`] never bumps.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum PlistStore {
+    Runtime,
+    Construction,
+}
+
 /// The ONE production store of a symbol's plist head.
 ///
-/// Publishes the head through the cell's atomic contract and advances the
-/// universal clock.  The architecture guard requires `plist.store_atomic(` to
-/// appear in production only inside this function: the `put`/`setplist`
-/// primitives, `replace_symbol_plist_id`, construction (`publish_fill`) and
-/// pdump reconstruction (`from_dump`) all route through it.
+/// Publishes the head through the cell's atomic contract.  A runtime store
+/// notes the pre-image through the SATB barrier before that store, then
+/// bumps the clock on every call.  Same-head suppression is not this rule.
+///
+/// A construction store does not bump, and it skips the note.
+/// [`LispSymbol::empty`] builds the plist as `NIL`, and
+/// [`LispSymbol::from_dump`] installs `NIL` before this store, so the
+/// pre-image is nil.  [`note_root_overwrite`](crate::tagged::gc::note_root_overwrite)
+/// returns immediately unless the pre-image is a heap object or a Symbol.
+/// Nil is neither, so the call would be a no-op.  The
+/// `debug_assert` on this arm is that proof in tests.  Skipping the call
+/// keeps the note, the concurrent-mark thread-local read, and that path's
+/// panic out of the cold publishers (`publish_fresh_slot`,
+/// `publish_fresh_slot_admitted`, `from_dump`).
+///
+/// [`SymbolPropertyRevision::changed`](crate::symbol::SymbolPropertyRevision::changed)
+/// stays at the four runtime writers (`put_property`, `put_property_id`,
+/// `replace_symbol_plist_id`, `set_symbol_plist_id`).  It is the memo TLS
+/// revision keyed by `SymId`.  Construction has no observers, and this
+/// function has no obarray and no id with which to fire it.
+///
+/// The architecture guard requires `plist.store_atomic(` to appear in
+/// production only inside this function: the `put`/`setplist` primitives,
+/// `replace_symbol_plist_id`, construction (`publish_fill`) and pdump
+/// reconstruction (`from_dump`) all route through it.
 #[inline]
-pub(crate) fn store_plist_head(symbol: &mut LispSymbol, plist: Value) {
+pub(crate) fn store_plist_head(symbol: &mut LispSymbol, plist: Value, kind: PlistStore) {
+    let previous = symbol.plist.get();
+    match kind {
+        PlistStore::Runtime => {
+            crate::tagged::gc::note_root_overwrite(previous);
+        }
+        PlistStore::Construction => {
+            debug_assert!(previous.is_nil());
+        }
+    }
     symbol.plist.store_atomic(plist);
-    note_plist_head_store();
+    match kind {
+        PlistStore::Runtime => note_plist_head_store(),
+        PlistStore::Construction => {}
+    }
+}
+
+/// Runtime head store: bump the clock on every call.
+#[inline]
+pub(crate) fn store_runtime_plist_head(symbol: &mut LispSymbol, plist: Value) {
+    store_plist_head(symbol, plist, PlistStore::Runtime);
+}
+
+/// Construction head store: publish the head, skip the nil SATB note, and
+/// leave the clock alone.
+#[inline]
+pub(crate) fn store_construction_plist_head(symbol: &mut LispSymbol, plist: Value) {
+    store_plist_head(symbol, plist, PlistStore::Construction);
 }
 
 impl LispSymbol {
@@ -712,7 +794,7 @@ impl LispSymbol {
             interned_global: false,
             function_unbound: false,
         };
-        store_plist_head(&mut sym, plist);
+        store_construction_plist_head(&mut sym, plist);
         sym
     }
 
@@ -724,6 +806,24 @@ impl LispSymbol {
     #[inline]
     pub fn name(&self) -> NameId {
         NameId(self.name.load(Ordering::Relaxed))
+    }
+
+    /// The symbol's function cell (`Value::NIL` when unbound).
+    ///
+    /// Mutations must go through `Obarray` setters so the SATB write barrier,
+    /// function epoch, and JIT eviction stay in sync.
+    #[inline]
+    pub fn function(&self) -> Value {
+        self.function.get()
+    }
+
+    /// The symbol's property list head (`Value::NIL` when empty).
+    ///
+    /// Mutations must go through `Obarray` setters so the SATB write barrier
+    /// and plist epoch stay in sync.
+    #[inline]
+    pub fn plist(&self) -> Value {
+        self.plist.get()
     }
 
     /// Presence predicate for the single mutator and stop-the-world callers
@@ -750,7 +850,7 @@ impl LispSymbol {
         self.flags = src.flags.clone();
         self.val = src.val.clone();
         self.function = src.function;
-        store_plist_head(self, plist);
+        store_construction_plist_head(self, plist);
         self.interned_global = src.interned_global;
         self.function_unbound = src.function_unbound;
         // Terminal Release: publishes the arm writes above to the GC scan's
@@ -954,7 +1054,7 @@ impl LispSymbol {
 /// }
 /// ```
 #[cfg(doctest)]
-pub struct ValueCellCompileContract;
+pub(crate) struct ValueCellCompileContract;
 
 // ===========================================================================
 // Writing a cell

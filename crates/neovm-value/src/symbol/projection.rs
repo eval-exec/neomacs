@@ -547,14 +547,19 @@ impl Obarray {
         let blv_ptr = blv.blv().as_ptr();
         match buffer {
             Some(buffer) => {
-                let target_buf = crate::tagged::gc::with_tagged_heap(|heap| {
-                    heap.buffer_value(buffer.buffer_id())
-                });
+                // SAFETY: read-only buffer-handle registry lookup; never
+                // collects, re-enters `with_tagged_heap`, mints capability
+                // tokens, or mutates any Lisp payload.
+                let target_buf = unsafe {
+                    crate::tagged::gc::with_tagged_heap(|heap| {
+                        heap.buffer_value(buffer.buffer_id())
+                    })
+                };
                 match target_buf {
                     // SAFETY: a projection's localized arm names a record this
                     // obarray's BLV pool owns (it was the cell's record when the
-                    // variable was projected or revealed), and no reference to it
-                    // is held across the call.
+                    // variable was projected or revealed). Cache flags are
+                    // cells, so a shared borrow of the record may be live.
                     Some(target_buf) => unsafe {
                         Self::read_blv_with_lookup(blv_ptr, target_buf, || {
                             buffer.local_binding_cell(id).unwrap_or(Value::NIL)
@@ -569,14 +574,14 @@ impl Obarray {
                         // same release ordering.
                         unsafe {
                             (*blv_ptr).set_where(Value::NIL);
-                            (*blv_ptr).found = found;
+                            (*blv_ptr).found.set(found);
                             let valcell = if found {
                                 found_cell
                             } else {
                                 (*blv_ptr).defcell.get()
                             };
                             (*blv_ptr).valcell.store_atomic(valcell);
-                            (*blv_ptr).alist_epoch = super::blv_alist_epoch();
+                            (*blv_ptr).alist_epoch.set(super::blv_alist_epoch());
                             valcell.cons_cdr()
                         }
                     }

@@ -155,10 +155,18 @@ impl Drop for WpePlatformDisplay {
     }
 }
 
-/// Check if a WPEBuffer is a DMA-BUF buffer and return its info
+/// Check if a WPEBuffer is a DMA-BUF buffer and return its info.
 ///
-/// Returns (fourcc, n_planes, modifier, fd, stride, offset) if it's a DMA-BUF buffer
-pub fn buffer_dmabuf_info(buffer: *mut plat::WPEBuffer) -> Option<DmaBufInfo> {
+/// Returns `None` if `buffer` is null, is not a `WPEBufferDMABuf`, or reports
+/// an invalid plane count.
+///
+/// # Safety
+/// If non-null, `buffer` must point to a live GObject (`GTypeInstance`) valid
+/// for the duration of this call; non-`WPEBufferDMABuf` instances are rejected
+/// via `g_type_check_instance_is_a` before any DMA-BUF getter runs. When
+/// `buffer` is a `WPEBufferDMABuf`, this must be called on the thread that owns
+/// the buffer (the WPE reactor thread) so DMA-BUF getters observe valid state.
+pub unsafe fn buffer_dmabuf_info(buffer: *mut plat::WPEBuffer) -> Option<DmaBufInfo> {
     unsafe {
         if buffer.is_null() {
             return None;

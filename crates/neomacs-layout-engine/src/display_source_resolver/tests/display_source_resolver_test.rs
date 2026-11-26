@@ -1,5 +1,6 @@
 use super::*;
 use crate::neovm_bridge::LayoutBufferSnapshot;
+use crate::string_property_snapshot::StringSourceRootScope;
 use neovm_core::buffer::CharPos0;
 use neovm_core::emacs_core::Context;
 use neovm_core::face::{Color as NeoColor, Face as NeoFace, FaceTable};
@@ -83,12 +84,14 @@ fn repeated_source_resolution_reuses_unchanged_base_face_storage() {
         ImageScaleEnvironment::default(),
     );
     let end = snapshot.layout_point_max_char_pos();
-    let mut source = BufferTextSourceCursor::new(
+    let mut source = BufferTextSourceCursor::new_for_window(
         neovm_core::buffer::BufferId(1),
         &snapshot,
+        None,
         CharPos0::ZERO,
         end,
         RenderFaceRef::FaceId(FaceId::new(0)),
+        StringSourceRootScope::CallbackFree,
     );
     // A declined batched run is consumed character by character during wrap.
     source.set_char_granularity_end(Some(end));
@@ -476,6 +479,7 @@ fn resolve_display_replacement_returns_direct_xwidget_media() {
         ImageScaleEnvironment::default(),
         None,
         0,
+        0,
     );
 
     assert_eq!(resolved, Some(ResolvedDisplayReplacement::Media(media)));
@@ -494,6 +498,7 @@ fn resolve_display_replacement_uses_media_placeholder_without_host() {
         DisplayRowFallbackMetrics::from_default_face_extents(8.0, 16.0, 12.0),
         ImageScaleEnvironment::default(),
         None,
+        0,
         0,
     );
 

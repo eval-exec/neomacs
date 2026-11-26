@@ -5,7 +5,7 @@ mod resources_test;
 use super::*;
 use crate::emacs_core::dispnew::pure::{
     builtin_internal_show_cursor, builtin_internal_show_cursor_p, builtin_open_termscript,
-    builtin_redraw_frame, builtin_send_string_to_terminal, reset_dispnew_thread_locals,
+    builtin_redraw_frame, builtin_send_string_to_terminal,
 };
 use crate::emacs_core::terminal::pure::{
     TerminalOutputMethod, builtin_controlling_tty_p, builtin_frame_terminal, builtin_resume_tty,
@@ -808,7 +808,6 @@ fn eval_send_string_to_terminal_accepts_live_frame_designator() {
 #[test]
 fn internal_show_cursor_tracks_visibility_state() {
     crate::test_utils::init_test_tracing();
-    reset_dispnew_thread_locals();
     let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let default_visible = builtin_internal_show_cursor_p(&mut eval, vec![]).unwrap();
     assert_eq!(default_visible, Value::T);
@@ -855,7 +854,6 @@ fn eval_internal_show_cursor_p_accepts_live_window_designator() {
 #[test]
 fn eval_internal_show_cursor_tracks_per_window_state() {
     crate::test_utils::init_test_tracing();
-    reset_dispnew_thread_locals();
     let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let _ = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval);
     let selected =
@@ -2484,7 +2482,7 @@ fn x_geometry_fonts_and_resource_batch_semantics() {
 #[test]
 fn x_property_and_frame_arg_batch_semantics() {
     crate::test_utils::init_test_tracing();
-    for args in [vec![], vec![Value::NIL], vec![Value::make_frame(1)]] {
+    for args in [vec![], vec![Value::NIL], vec![Value::mint_frame(1)]] {
         match builtin_x_backspace_delete_keys_p(args).kinded() {
             Err(FlowKind::Signal(sig)) => {
                 assert_eq!(sig.symbol_name(), "error");
@@ -2606,7 +2604,7 @@ fn x_coordinate_sync_and_message_batch_semantics() {
     for args in [
         vec![Value::NIL],
         vec![Value::NIL, Value::NIL],
-        vec![Value::make_frame(1)],
+        vec![Value::mint_frame(1)],
         vec![Value::fixnum(1), Value::NIL],
         vec![Value::string("x"), Value::NIL],
         vec![term, Value::NIL],
@@ -2637,7 +2635,7 @@ fn x_coordinate_sync_and_message_batch_semantics() {
         }
         other => panic!("expected error signal, got {other:?}"),
     }
-    match builtin_x_translate_coordinates(vec![Value::make_frame(1)]).kinded() {
+    match builtin_x_translate_coordinates(vec![Value::mint_frame(1)]).kinded() {
         Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "error");
             assert_eq!(
@@ -2703,7 +2701,7 @@ fn x_coordinate_sync_and_message_batch_semantics() {
         }
         other => panic!("expected error signal, got {other:?}"),
     }
-    match builtin_x_frame_list_z_order(vec![Value::make_frame(1)]).kinded() {
+    match builtin_x_frame_list_z_order(vec![Value::mint_frame(1)]).kinded() {
         Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "error");
             assert_eq!(
@@ -2765,7 +2763,7 @@ fn x_coordinate_sync_and_message_batch_semantics() {
         other => panic!("expected error signal, got {other:?}"),
     }
     match builtin_x_send_client_message(vec![
-        Value::make_frame(1),
+        Value::mint_frame(1),
         Value::NIL,
         Value::NIL,
         Value::NIL,
@@ -2866,7 +2864,7 @@ fn x_popup_dialog_and_menu_batch_semantics() {
         }
         other => panic!("expected wrong-type-argument signal, got {other:?}"),
     }
-    match builtin_x_popup_dialog_batch(vec![Value::make_frame(1), Value::NIL]).kinded() {
+    match builtin_x_popup_dialog_batch(vec![Value::mint_frame(1), Value::NIL]).kinded() {
         Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(sig.data, vec![Value::symbol("stringp"), Value::NIL]);
@@ -2874,7 +2872,7 @@ fn x_popup_dialog_and_menu_batch_semantics() {
         other => panic!("expected wrong-type-argument signal, got {other:?}"),
     }
     match builtin_x_popup_dialog_batch(vec![
-        Value::make_frame(1),
+        Value::mint_frame(1),
         Value::list(vec![Value::string("A")]),
     ])
     .kinded()
@@ -2887,7 +2885,7 @@ fn x_popup_dialog_and_menu_batch_semantics() {
     }
     assert!(
         builtin_x_popup_dialog_batch(vec![
-            Value::make_frame(1),
+            Value::mint_frame(1),
             Value::list(vec![
                 Value::string("Title"),
                 Value::cons(Value::string("Yes"), Value::T),
@@ -2909,7 +2907,7 @@ fn x_popup_dialog_and_menu_batch_semantics() {
     );
     assert!(
         builtin_x_popup_dialog_batch(vec![
-            Value::make_frame(1),
+            Value::mint_frame(1),
             Value::list(vec![Value::string("A"), Value::fixnum(1)]),
         ])
         .unwrap()
@@ -2962,7 +2960,7 @@ fn x_popup_dialog_and_menu_batch_semantics() {
             .is_nil()
     );
     for pos in [
-        Value::make_frame(1),
+        Value::mint_frame(1),
         Value::string("x"),
         Value::fixnum(1),
         term,
@@ -3372,11 +3370,182 @@ fn x_popup_menu_accepts_keymap_menus_like_gnu() {
     );
 }
 
+/// GNU's old-fashioned `(TITLE PANE...)` menu (src/menu.c:1354-1364 ->
+/// `list_of_panes` :496-515 -> `list_of_items` :459-484): the title and
+/// pane names are labels, a string item is a disabled line, a
+/// `(LABEL . VALUE)` item returns VALUE, and a non-cons item is a
+/// left/right boundary.  The interactive `x-popup-menu` path displayed
+/// none of this before: it resolved only a single keymap and sent the
+/// list form to the batch validator, which returned nil.
+#[test]
+fn x_popup_menu_old_fashioned_list_decodes_panes_and_values() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
+    let menu = eval
+        .eval_str(
+            r#"'("Repro Title"
+                 ("Pane" "plain line" ("Choose Item" . choose) 42
+                  ("Other Item" . (nested value))))"#,
+        )
+        .expect("menu literal");
+    let resolved = crate::emacs_core::menu::resolve_popup(&mut eval, menu, false, true).unwrap();
+    let rows: Vec<_> = resolved
+        .entries()
+        .iter()
+        .map(|entry| (entry.label.clone(), entry.kind))
+        .collect();
+    assert_eq!(rows.len(), 6);
+    assert_eq!(rows[0].0, "Repro Title");
+    assert!(matches!(
+        rows[0].1,
+        neomacs_display_protocol::menu::MenuItemKind::Label
+    ));
+    assert_eq!(rows[1].0, "Pane");
+    assert!(matches!(
+        rows[1].1,
+        neomacs_display_protocol::menu::MenuItemKind::Label
+    ));
+    assert_eq!(rows[2].0, "plain line");
+    assert!(matches!(
+        rows[2].1,
+        neomacs_display_protocol::menu::MenuItemKind::Label
+    ));
+    assert_eq!(rows[3].0, "Choose Item");
+    assert!(matches!(
+        rows[3].1,
+        neomacs_display_protocol::menu::MenuItemKind::Command { .. }
+    ));
+    assert!(matches!(
+        rows[4].1,
+        neomacs_display_protocol::menu::MenuItemKind::Separator
+    ));
+    assert_eq!(rows[5].0, "Other Item");
+    let print = neovm_eval::emacs_core::print::print_value;
+    assert_eq!(print(&resolved.events()[0]), "nil");
+    assert_eq!(print(&resolved.events()[1]), "nil");
+    assert_eq!(print(&resolved.events()[2]), "nil");
+    assert_eq!(print(&resolved.events()[3]), "choose");
+    assert_eq!(print(&resolved.events()[4]), "nil");
+    assert_eq!(print(&resolved.events()[5]), "(nested value)");
+}
+
+/// GNU's list-of-keymaps branch (src/menu.c:1322-1350): every element is
+/// resolved with the erroring `get_keymap`, the first prompt becomes the
+/// menu title AND the first pane's name, and every keymap makes one pane.
+#[test]
+fn x_popup_menu_keymap_list_decodes_one_pane_per_keymap() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
+    // Submenu bindings keep the shortcut resolver -- an ABSENT-LAYER in
+    // this display-only runtime -- out of the walk; the pane structure and
+    // event paths are what this test pins.
+    let menu = eval
+        .eval_str(
+            r#"(let ((context (make-sparse-keymap "Context"))
+                     (context-child (make-sparse-keymap))
+                     (other (make-sparse-keymap "Other"))
+                     (other-child (make-sparse-keymap)))
+                 (define-key context-child [action] '(menu-item "Context Action"))
+                 (define-key other-child [action] '(menu-item "Other Action"))
+                 (define-key context [choose] (list 'menu-item "Repro Choose" context-child))
+                 (define-key other [other] (list 'menu-item "Other Choose" other-child))
+                 (list context other))"#,
+        )
+        .expect("keymap list");
+    let resolved = crate::emacs_core::menu::resolve_popup(&mut eval, menu, false, true).unwrap();
+    let labels: Vec<_> = resolved
+        .entries()
+        .iter()
+        .map(|entry| entry.label.clone())
+        .collect();
+    assert_eq!(
+        labels,
+        [
+            "Context",
+            "Repro Choose",
+            "Context Action",
+            "Other",
+            "Other Choose",
+            "Other Action"
+        ]
+    );
+    let print = neovm_eval::emacs_core::print::print_value;
+    assert_eq!(print(&resolved.events()[1]), "(choose)");
+    assert_eq!(print(&resolved.events()[2]), "(choose action)");
+    assert_eq!(print(&resolved.events()[4]), "(other)");
+    assert_eq!(print(&resolved.events()[5]), "(other action)");
+
+    // `get_keymap (XCAR (tem), 1, 0)` signals on a non-keymap element.
+    let bad = eval.eval_str("(list (make-sparse-keymap) 42)").unwrap();
+    let error = crate::emacs_core::menu::resolve_popup(&mut eval, bad, false, true).kinded();
+    match error {
+        Err(FlowKind::Signal(signal)) => {
+            assert_eq!(signal.symbol_name(), "wrong-type-argument");
+            assert_eq!(
+                signal.data,
+                vec![Value::symbol("keymapp"), Value::fixnum(42)]
+            );
+        }
+        Err(other) => panic!("expected keymapp signal, got {other:?}"),
+        Ok(_) => panic!("expected keymapp signal, got a resolved menu"),
+    }
+}
+
+/// POSITION `t` is GNU's `get_current_pos_p`: x-popup-menu uses the mouse's
+/// current position (src/menu.c:1145-1148, 1182-1235), starting from (0, 0)
+/// when no position was recorded.  Neomacs fell back to (0, 0) for every
+/// non-list position, so a `t` popup opened at the frame origin instead of
+/// at the pointer.
+#[test]
+fn x_popup_menu_t_position_uses_the_recorded_mouse_position() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
+    eval.record_mouse_pixel_position(None, 60, 120);
+    let origin = super::popup_menu_position(&mut eval, Value::T).estimated_origin();
+    assert_eq!(origin, neomacs_display_protocol::Point::new(60.0, 120.0));
+
+    drop(eval);
+    let mut fresh = Context::new(crate::test_utils::unit_runtime());
+    let origin = super::popup_menu_position(&mut fresh, Value::T).estimated_origin();
+    assert_eq!(origin, neomacs_display_protocol::Point::ZERO);
+}
+
+/// A keymap pane's synthesized name is a title row only for a true popup.
+/// GNU's TTY Help menu starts directly with its first item (the active
+/// heading is marked in the menu-bar row), and a toolkit menu-bar dropdown
+/// has no in-menu title either; the GUI `x-popup-menu` popup does render
+/// the pane name.
+#[test]
+fn x_popup_menu_keymap_pane_title_is_suppressed_for_tty_and_menu_bar() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
+    let menu = eval
+        .eval_str(
+            r#"(let ((map (make-sparse-keymap "Context")))
+                 (define-key map [choose] '(menu-item "Choose"))
+                 map)"#,
+        )
+        .expect("keymap");
+    let with_title = crate::emacs_core::menu::resolve_popup(&mut eval, menu, true, true).unwrap();
+    assert_eq!(with_title.entries()[0].label, "Context");
+    assert_eq!(with_title.entries()[1].label, "Choose");
+
+    let without_title =
+        crate::emacs_core::menu::resolve_popup(&mut eval, menu, true, false).unwrap();
+    assert_eq!(without_title.entries().len(), 1);
+    assert_eq!(without_title.entries()[0].label, "Choose");
+    assert_eq!(
+        without_title.events(),
+        &with_title.events()[1..],
+        "suppressing the title must not change the item events"
+    );
+}
+
 #[test]
 fn x_clipboard_input_context_batch_semantics() {
     crate::test_utils::init_test_tracing();
     let term = terminal_handle_value();
-    let frame = Value::make_frame(1);
+    let frame = Value::mint_frame(1);
 
     let assert_wrong_type =
         |result: EvalResult, pred: &'static str, arg: Value| match result.kinded() {
@@ -3775,7 +3944,7 @@ fn x_frame_mouse_and_dnd_batch_semantics() {
     for args in [
         vec![],
         vec![Value::NIL],
-        vec![Value::make_frame(1)],
+        vec![Value::mint_frame(1)],
         vec![Value::NIL, Value::NIL],
     ] {
         match builtin_x_export_frames(args).kinded() {
@@ -3836,19 +4005,37 @@ fn x_frame_mouse_and_dnd_batch_semantics() {
         other => panic!("expected wrong-number-of-arguments signal, got {other:?}"),
     }
 
-    assert!(builtin_x_frame_edges(vec![]).unwrap().is_nil());
-    assert!(builtin_x_frame_edges(vec![Value::NIL]).unwrap().is_nil());
+    // A terminal frame has no window-system rectangle; nil FRAME selects it.
     assert!(
-        builtin_x_frame_edges(vec![Value::make_frame(1)])
+        builtin_x_frame_edges(&mut focus_eval, vec![])
             .unwrap()
             .is_nil()
     );
     assert!(
-        builtin_x_frame_edges(vec![Value::NIL, Value::NIL])
+        builtin_x_frame_edges(&mut focus_eval, vec![Value::NIL])
             .unwrap()
             .is_nil()
     );
-    match builtin_x_frame_edges(vec![Value::fixnum(1)]).kinded() {
+    assert!(
+        builtin_x_frame_edges(&mut focus_eval, vec![Value::NIL, Value::NIL])
+            .unwrap()
+            .is_nil()
+    );
+    // GNU `frame_geometry` starts with `decode_live_frame (frame)`
+    // (src/xfns.c:6783): a frame value whose id was never registered is dead,
+    // so it signals instead of reporting no edges.  The pre-edges stub
+    // answered nil here.
+    match builtin_x_frame_edges(&mut focus_eval, vec![Value::mint_frame(1)]).kinded() {
+        Err(FlowKind::Signal(sig)) => {
+            assert_eq!(sig.symbol_name(), "wrong-type-argument");
+            assert_eq!(
+                sig.data,
+                vec![Value::symbol("frame-live-p"), Value::mint_frame(1)]
+            );
+        }
+        other => panic!("expected wrong-type-argument signal, got {other:?}"),
+    }
+    match builtin_x_frame_edges(&mut focus_eval, vec![Value::fixnum(1)]).kinded() {
         Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(
@@ -3858,7 +4045,7 @@ fn x_frame_mouse_and_dnd_batch_semantics() {
         }
         other => panic!("expected wrong-type-argument signal, got {other:?}"),
     }
-    match builtin_x_frame_edges(vec![Value::string("x")]).kinded() {
+    match builtin_x_frame_edges(&mut focus_eval, vec![Value::string("x")]).kinded() {
         Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(
@@ -3868,19 +4055,37 @@ fn x_frame_mouse_and_dnd_batch_semantics() {
         }
         other => panic!("expected wrong-type-argument signal, got {other:?}"),
     }
-    match builtin_x_frame_edges(vec![Value::NIL, Value::NIL, Value::NIL]).kinded() {
+    match builtin_x_frame_edges(&mut focus_eval, vec![Value::NIL, Value::NIL, Value::NIL]).kinded()
+    {
         Err(FlowKind::Signal(sig)) => assert_eq!(sig.symbol_name(), "wrong-number-of-arguments"),
         other => panic!("expected wrong-number-of-arguments signal, got {other:?}"),
     }
 
-    assert!(builtin_x_frame_geometry(vec![]).unwrap().is_nil());
-    assert!(builtin_x_frame_geometry(vec![Value::NIL]).unwrap().is_nil());
     assert!(
-        builtin_x_frame_geometry(vec![Value::make_frame(1)])
+        builtin_x_frame_geometry(&mut focus_eval, vec![])
             .unwrap()
             .is_nil()
     );
-    match builtin_x_frame_geometry(vec![Value::fixnum(1)]).kinded() {
+    assert!(
+        builtin_x_frame_geometry(&mut focus_eval, vec![Value::NIL])
+            .unwrap()
+            .is_nil()
+    );
+    // GNU `frame_geometry` starts with `decode_live_frame (frame)`
+    // (src/xfns.c:6783): a frame value whose id was never registered is dead,
+    // so it signals instead of reporting no geometry.  The pre-geometry stub
+    // answered nil here.
+    match builtin_x_frame_geometry(&mut focus_eval, vec![Value::mint_frame(1)]).kinded() {
+        Err(FlowKind::Signal(sig)) => {
+            assert_eq!(sig.symbol_name(), "wrong-type-argument");
+            assert_eq!(
+                sig.data,
+                vec![Value::symbol("frame-live-p"), Value::mint_frame(1)]
+            );
+        }
+        other => panic!("expected wrong-type-argument signal, got {other:?}"),
+    }
+    match builtin_x_frame_geometry(&mut focus_eval, vec![Value::fixnum(1)]).kinded() {
         Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(
@@ -3890,7 +4095,7 @@ fn x_frame_mouse_and_dnd_batch_semantics() {
         }
         other => panic!("expected wrong-type-argument signal, got {other:?}"),
     }
-    match builtin_x_frame_geometry(vec![Value::string("x")]).kinded() {
+    match builtin_x_frame_geometry(&mut focus_eval, vec![Value::string("x")]).kinded() {
         Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(
@@ -3900,7 +4105,7 @@ fn x_frame_mouse_and_dnd_batch_semantics() {
         }
         other => panic!("expected wrong-type-argument signal, got {other:?}"),
     }
-    match builtin_x_frame_geometry(vec![Value::NIL, Value::NIL]).kinded() {
+    match builtin_x_frame_geometry(&mut focus_eval, vec![Value::NIL, Value::NIL]).kinded() {
         Err(FlowKind::Signal(sig)) => assert_eq!(sig.symbol_name(), "wrong-number-of-arguments"),
         other => panic!("expected wrong-number-of-arguments signal, got {other:?}"),
     }
@@ -3938,7 +4143,7 @@ fn x_frame_mouse_and_dnd_batch_semantics() {
 
     for args in [
         vec![Value::NIL],
-        vec![Value::make_frame(1)],
+        vec![Value::mint_frame(1)],
         vec![Value::fixnum(1)],
         vec![terminal_handle_value()],
         vec![Value::NIL, Value::NIL],
@@ -5245,7 +5450,7 @@ fn old_style_menu_help_keeps_the_real_submenu_definition() {
         definition,
         neovm_value::tagged::SymbolMode::Bare,
     );
-    let resolved = crate::emacs_core::menu::resolve(&mut eval, menu, true).unwrap();
+    let resolved = crate::emacs_core::menu::resolve_popup(&mut eval, menu, true, true).unwrap();
     let entry = &resolved.entries()[0];
 
     assert_eq!(entry.help.as_deref(), Some("Open child choices"));
@@ -5301,13 +5506,15 @@ fn tty_frame_uses_terminal_capabilities_even_with_a_frontend_host() {
     // screen-256color: bold, dim, underline and standout, but no `sitm' and no
     // `smxx'.
     crate::emacs_core::terminal::pure::configure_terminal_runtime(
-        crate::emacs_core::terminal::pure::TerminalRuntimeConfig::interactive(Some("screen-256color".to_string()), neomacs_display_protocol::tty_capabilities::TtyAttributeCapabilities::full_with_color_cells(256))
-        .with_attribute_capabilities(TtyAttributeCapabilities {
-            italic_sequence: None,
-            strike_through_sequence: None,
-            styled_underline: None,
-            ..TtyAttributeCapabilities::full()
-        }),
+        crate::emacs_core::terminal::pure::TerminalRuntimeConfig::interactive(
+            Some("screen-256color".to_string()),
+            TtyAttributeCapabilities {
+                italic_sequence: None,
+                strike_through_sequence: None,
+                styled_underline: None,
+                ..TtyAttributeCapabilities::full()
+            },
+        ),
     );
 
     let supported = |eval: &mut neovm_eval::emacs_core::eval::Context, attrs: Vec<Value>| -> bool {

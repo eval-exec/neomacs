@@ -3,6 +3,13 @@ mod dmabuf;
 mod frame;
 mod importer;
 
+#[cfg(feature = "native-validation-fixtures")]
+pub(crate) use dmabuf::assert_native_dmabuf_plane_validation;
+#[cfg(test)]
+pub(crate) use dmabuf::{
+    create_test_foreign_surface_release, open_test_vulkan_foreign_device, require_gpu_video_tests,
+};
+
 use crate::backend::{Platform, ProductionPlatform};
 use crate::sampling::GpuVideoContext;
 use crate::{FrameImportPolicy, GpuVideoFrame, VideoDecodeBackend, VideoInitError, VideoWake};

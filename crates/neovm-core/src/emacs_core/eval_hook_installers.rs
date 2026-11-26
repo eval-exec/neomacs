@@ -31,6 +31,10 @@ static CANONICAL_EVAL_HOOK_SET: OnceLock<EvalHookSet> = OnceLock::new();
 /// refusal, which this process-level entry treats as a fatal invariant
 /// violation (two canonical sets can never exist).
 pub fn install_eval_hooks() -> EvalHooksInstalled {
+    // Beside the sqlite finalizer slot below. Every runtime boot publishes
+    // the system module-scope probe here, so a linked neovm-system cannot
+    // leave source entry unregistered.
+    install_source_module_scope_probe_for_eval_hooks();
     let set = CANONICAL_EVAL_HOOK_SET.get_or_init(|| {
         EvalHookSet::new(
             crate::emacs_core::lifecycle_hooks::canonical_lifecycle_hooks(),
@@ -71,6 +75,13 @@ fn install_sqlite_finalizer_hook_for_eval_hooks() -> Result<HookInstallStatus, H
     Ok(HookInstallStatus::Installed)
 }
 
+fn install_source_module_scope_probe_for_eval_hooks() {
+    match crate::emacs_core::dynamic_module::register_source_module_scope_probe() {
+        Ok(HookInstallStatus::Installed | HookInstallStatus::AlreadyInstalled) => {}
+        Err(_) => panic!("a different source-module scope probe is already installed"),
+    }
+}
+
 // The wait/timer/frontend/display slots call the upper-layer service
 // implementations in place. They run per command boundary / per frontend
 // event, never on the evaluator hot path.
@@ -82,15 +93,16 @@ use crate::window::display::WindowDisplayContextExt;
 
 fn wait_service_input_pending_with_timers(
     ctx: &mut crate::emacs_core::eval::Context,
-) -> Result<(), neovm_value::error::Flow> {
+) -> Result<crate::emacs_core::eval::GuiBoundaryServiceActivity, neovm_value::error::Flow> {
     ctx.service_input_pending_with_timers()
 }
 
 fn wait_service_read_char_preliminary_redisplay(
     ctx: &mut crate::emacs_core::eval::Context,
     idle_policy: crate::emacs_core::eval::keyboard::IdleTransitionPolicy,
+    redisplay_phase: crate::emacs_core::eval::keyboard::ReadCharRedisplayPhase,
 ) -> Result<(), neovm_value::error::Flow> {
-    ctx.service_read_char_preliminary_redisplay(idle_policy)
+    ctx.service_read_char_preliminary_redisplay(idle_policy, redisplay_phase)
 }
 
 fn wait_service_timers_without_redisplay(

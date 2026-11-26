@@ -1,0 +1,13 @@
+error[E0133]: call to unsafe function `ConcurrentMarkResult::from_parts` is unsafe and requires unsafe block
+  --> tests/heap_capability_ui/c2_concurrent_mark_result_from_parts_needs_unsafe.rs:16:13
+   |
+16 |       let _ = concurrent_mark_result::ConcurrentMarkResult::from_parts(
+   |  _____________^
+17 | |         HeapIdentity(1),
+18 | |         Vec::new(),
+19 | |         Vec::new(),
+20 | |         Vec::new(),
+21 | |     );
+   | |_____^ call to unsafe function
+   |
+   = note: consult the function's documentation for information on how to avoid undefined behavior

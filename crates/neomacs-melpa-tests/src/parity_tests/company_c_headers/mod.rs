@@ -59,7 +59,7 @@ const COMPANY_C_HEADERS_TEST_PRELUDE: &str = r####"
                  (not (string-prefix-p "../" relative-file)))
       (error "COMPANY-C-HEADERS fixture escaped owned root: %s" file))
     (make-directory (file-name-directory file) t)
-    (unless (file-in-directory-p (file-truename file) (file-truename root))
+    (unless (neomacs-melpa-path-inside-p (file-truename file) (file-truename root))
       (error "COMPANY-C-HEADERS fixture resolved outside owned root: %s" file))
     (write-region contents nil file nil 'silent)
     file))

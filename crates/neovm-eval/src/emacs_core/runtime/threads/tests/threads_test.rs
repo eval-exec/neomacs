@@ -1083,14 +1083,22 @@ fn thread_signal_to_main_queues_a_thread_event() {
 ///
 /// Lisp execution cannot reach this — the signalling evaluator is by
 /// construction the mutator whose heap its thread installed — so the test
-/// builds the mismatch deliberately: constructing a second Context installs
-/// its heap on this thread and makes the first one foreign.
+/// builds the mismatch deliberately: park each Context before switching,
+/// then nest the second heap while checking the first Context's transport.
 #[test]
 fn thread_event_sharing_reports_a_foreign_heap_as_a_lisp_error() {
     crate::test_utils::init_test_tracing();
     let first = Context::new(crate::test_utils::unit_runtime());
     let sender = Value::string("sender");
-    let _second = Context::new(crate::test_utils::unit_runtime());
+    let parked_first = first.park_for_test();
+    let second = Context::new(crate::test_utils::unit_runtime());
+    let second_heap = second.tagged_heap.heap_root();
+    let _parked_second = second.park_for_test();
+    let first = parked_first.resume_for_test().expect("resume first");
+    // SAFETY: `_parked_second` owns `second_heap` and `first` owns the
+    // displaced root; both outlive `_nested`.
+    let _nested =
+        unsafe { neovm_value::tagged::gc::NestedTaggedHeapInstall::install_bare(second_heap) };
     // SAFETY: `first` and `sender` outlive the call, and the identity check
     // fails before either value is touched.
     let result = unsafe { InFlightThreadEvent::share(&first, sender, Value::NIL, Value::NIL) };
@@ -1573,6 +1581,201 @@ fn test_builtin_condition_wait_noop() {
     assert!(locked_again.is_ok());
     let unlock = builtin_mutex_unlock(&mut eval, vec![mx]);
     assert!(unlock.is_ok());
+}
+
+/// A worker `condition-wait` inside `with-mutex` must park. Returning at
+/// once reads the flag before main sets it (GNU `Fcondition_wait` parks,
+/// src/thread.c:446-501). The `unwind-protect` cleanup stays parked and
+/// unlocks once, after the resume relocks.
+#[test]
+fn test_worker_condition_wait_inside_with_mutex_parks() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
+    let value = eval
+        .eval_str(
+            r#"(eval
+                 '(progn
+                    (defvar e8s-park-flag nil)
+                    (setq e8s-park-flag nil)
+                    (let* ((m (make-mutex))
+                           (c (make-condition-variable m))
+                           (ready nil)
+                           (th (make-thread
+                                (lambda ()
+                                  ;; `with-mutex` is a Lisp macro. This is its
+                                  ;; expansion: the cleanup is an unwind-protect.
+                                  (let ((sym m))
+                                    (mutex-lock sym)
+                                    (unwind-protect
+                                        (progn
+                                          (setq ready t)
+                                          (condition-notify c t)
+                                          (condition-wait c)
+                                          e8s-park-flag)
+                                      (mutex-unlock sym))))
+                                "park-waiter")))
+                      (let ((sym m))
+                        (mutex-lock sym)
+                        (unwind-protect
+                            (while (eq ready nil) (condition-wait c))
+                          (mutex-unlock sym)))
+                      (setq e8s-park-flag t)
+                      (let ((sym m))
+                        (mutex-lock sym)
+                        (unwind-protect
+                            (condition-notify c t)
+                          (mutex-unlock sym)))
+                      (thread-join th)))
+                 t)"#,
+        )
+        .expect("worker parks inside with-mutex until notify");
+    assert!(
+        value.is_truthy(),
+        "waiter saw the flag main set while it was parked, got {value:?}"
+    );
+}
+
+/// A `while` that blocks in `condition-wait` must run the rest of that
+/// iteration and enter the `while` again. The `let` of `rounds` is a
+/// lexical frame GNU keeps live across the wait (eval.c:1151). One
+/// notify, then a broadcast once `go` is set, returns from the wait twice.
+#[test]
+fn test_worker_while_reenters_after_condition_wait() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
+    let value = eval
+        .eval_str(
+            r#"(eval
+                 '(progn
+                    (let* ((m (make-mutex))
+                           (c (make-condition-variable m))
+                           (gate (make-condition-variable m))
+                           (ready nil)
+                           (go nil)
+                           (returns 0)
+                           (th (make-thread
+                                (lambda ()
+                                  (let ((sym m))
+                                    (mutex-lock sym)
+                                    (unwind-protect
+                                        (progn
+                                          (setq ready t)
+                                          (condition-notify gate t)
+                                          (let ((rounds 0))
+                                            (while (and (eq go nil) (< rounds 20))
+                                              (condition-wait c)
+                                              (setq returns (1+ returns))
+                                              (setq rounds (1+ rounds)))
+                                            (list 'ok rounds)))
+                                      (mutex-unlock sym))))
+                                "rewait")))
+                      (let ((sym m))
+                        (mutex-lock sym)
+                        (unwind-protect
+                            (while (eq ready nil) (condition-wait gate))
+                          (mutex-unlock sym)))
+                      (let ((sym m))
+                        (mutex-lock sym)
+                        (unwind-protect
+                            (condition-notify c)
+                          (mutex-unlock sym)))
+                      (let ((spins 0))
+                        (while (eq returns 0)
+                          (setq spins (1+ spins))
+                          (thread-yield)
+                          (if (> spins 100000) (setq returns -1))))
+                      (let ((after returns))
+                        (setq go t)
+                        (let ((sym m))
+                          (mutex-lock sym)
+                          (unwind-protect
+                              (condition-notify c t)
+                            (mutex-unlock sym)))
+                        (list after (thread-join th) returns))))
+                 t)"#,
+        )
+        .expect("while re-enters after condition-wait");
+    let printed = crate::emacs_core::print::print_value(&value);
+    assert_eq!(printed, "(1 (ok 2) 2)", "got {printed}");
+}
+
+/// Many simulated workers parked in `condition-wait` must not add their
+/// `lisp-eval-depth` together. GNU stores the counter in the thread state
+/// (`src/thread.h` `m_lisp_eval_depth`), so a switch of `current_thread`
+/// switches the counter and a new worker starts at 0. Nesting every parked
+/// waiter on one counter trips `max-lisp-eval-depth` (the cache floor is
+/// 100) before the readiness notify, and main then reports the readiness
+/// condvar. This is `soak_many_gated.el` at N=300 with the default limit
+/// of 1600.
+#[test]
+fn test_sim_gated_workers_keep_separate_lisp_eval_depth() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
+    let value = eval
+        .eval_str(
+            r#"(eval
+                 '(progn
+                    (setq max-lisp-eval-depth 100)
+                    (let* ((n 24)
+                           (m (make-mutex))
+                           (c (make-condition-variable m))
+                           (rm (make-mutex))
+                           (rc (make-condition-variable rm))
+                           (ready 0)
+                           (go nil)
+                           (ths nil)
+                           (i 0))
+                      (while (< i n)
+                        (let ((id i))
+                          (setq ths
+                                (cons
+                                 (make-thread
+                                  (lambda ()
+                                    (let ((sym m))
+                                      (mutex-lock sym)
+                                      (unwind-protect
+                                          (progn
+                                            (let ((rs rm))
+                                              (mutex-lock rs)
+                                              (unwind-protect
+                                                  (progn
+                                                    (setq ready (1+ ready))
+                                                    (condition-notify rc t))
+                                                (mutex-unlock rs)))
+                                            (let ((rounds 0))
+                                              (while (and (eq go nil) (< rounds 5))
+                                                (setq rounds (1+ rounds))
+                                                (condition-wait c))))
+                                        (mutex-unlock sym)))
+                                    (+ id 1))
+                                  "mg")
+                                 ths)))
+                        (setq i (1+ i)))
+                      (let ((sym rm))
+                        (mutex-lock sym)
+                        (unwind-protect
+                            (let ((rounds 0))
+                              (while (and (< ready n) (< rounds 50))
+                                (setq rounds (1+ rounds))
+                                (condition-wait rc)))
+                          (mutex-unlock sym)))
+                      (let ((sym m))
+                        (mutex-lock sym)
+                        (unwind-protect
+                            (progn
+                              (setq go t)
+                              (condition-notify c t))
+                          (mutex-unlock sym)))
+                      (let ((sum 0))
+                        (while ths
+                          (setq sum (+ sum (thread-join (car ths))))
+                          (setq ths (cdr ths)))
+                        (list ready sum))))
+                 t)"#,
+        )
+        .expect("gated workers park without sharing lisp-eval-depth");
+    let printed = crate::emacs_core::print::print_value(&value);
+    assert_eq!(printed, "(24 300)", "got {printed}");
 }
 
 #[test]
@@ -2298,7 +2501,7 @@ fn p15_gc_thread_payload_fields_have_only_object_edges() {
         let thread = eval.threads.thread_handle(native).unwrap();
         let probes: [Value; 7] =
             std::array::from_fn(|index| Value::vector(vec![Value::fixnum(index as i64)]));
-        neovm_value::tagged::gc::with_tagged_heap(|heap| {
+        let update = |heap: &mut neovm_value::tagged::gc::TaggedHeap| {
             // SAFETY: the live registration roots this same-World ThreadObj.
             // The test retains exclusive World authority; this closure only
             // copies prepared words, without allocating, collecting or yielding.
@@ -2324,7 +2527,8 @@ fn p15_gc_thread_payload_fields_have_only_object_edges() {
                 })
             }
             .expect("same-World thread payload")
-        });
+        };
+        unsafe { neovm_value::tagged::gc::with_tagged_heap(update) };
         (native, thread, probes)
     });
     let check = |eval: &Context| {
@@ -2338,7 +2542,7 @@ fn p15_gc_thread_payload_fields_have_only_object_edges() {
         // Check membership for every vector before decoding any payload.
         for (index, probe) in probes.into_iter().enumerate() {
             assert_eq!(
-                probe.as_vector_data().unwrap().as_slice(),
+                probe.as_vector_data().unwrap(),
                 &[Value::fixnum(index as i64)]
             );
         }
@@ -2402,7 +2606,7 @@ fn p15_gc_old_thread_payload_remembers_young_children() {
 
     let child = eval.with_gc_inhibited(|_eval| {
         let child = Value::vector(vec![Value::fixnum(1515)]);
-        neovm_value::tagged::gc::with_tagged_heap(|heap| {
+        let update = |heap: &mut neovm_value::tagged::gc::TaggedHeap| {
             assert!(heap.owns_heap_value_for_test(child));
             assert!(!heap.value_is_old_for_test(child));
             // SAFETY: this ordinary World Context owns the installed heap,
@@ -2415,7 +2619,8 @@ fn p15_gc_old_thread_payload_remembers_young_children() {
                 })
             }
             .expect("same-World old thread payload");
-        });
+        };
+        unsafe { neovm_value::tagged::gc::with_tagged_heap(update) };
         child
     });
     let check = |eval: &Context| {
@@ -2426,10 +2631,7 @@ fn p15_gc_old_thread_payload_remembers_young_children() {
         );
         // Membership precedes both the payload projection and vector decoding.
         assert_eq!(eval.threads.thread_result(native).bits(), child.bits());
-        assert_eq!(
-            child.as_vector_data().unwrap().as_slice(),
-            &[Value::fixnum(1515)]
-        );
+        assert_eq!(child.as_vector_data().unwrap(), &[Value::fixnum(1515)]);
     };
 
     let completed = eval.gc_count;

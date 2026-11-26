@@ -18,10 +18,10 @@ fn lexical(required: usize, ops: Vec<Op>, constants: Vec<Value>) -> ByteCodeFunc
         optional: Vec::new(),
         rest: None,
     });
-    f.lexical = true;
-    f.ops = ops;
-    f.constants = constants.into();
-    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
+    f.set_lexical(true);
+    f.set_ops(ops);
+    f.set_constants(constants.into());
+    f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
     f.seal_hand_assembled_ops_for_test();
     f.jit_runtime().set_hot_for_test();
     f
@@ -54,9 +54,9 @@ fn fuse(f: &ByteCodeFunction, mode: Inline2Mode) -> Option<FusedBody> {
     compile::force_inline2_for_test(Some(mode));
     let body = fuse_calls_v2(
         f.executable_ops(),
-        &f.constants,
+        f.constants(),
         None,
-        f.params
+        f.params()
             .stack_shape()
             .expect("fixture stack parameters")
             .required(),
@@ -79,7 +79,7 @@ fn inline_v2_hof_only_body_keeps_calls_and_roots_callback_constants() {
         assert!(body.regions.is_empty());
         assert_eq!(
             body.constants,
-            vec![f.constants[0], callback, Value::make_int(2), callback]
+            vec![f.constants()[0], callback, Value::make_int(2), callback]
         );
         let site = body.admitted_hof_at(3).expect("Call2 annotation");
         assert_eq!(site.callback, callback);
@@ -225,7 +225,7 @@ fn inline_v2_hof_profit_credit_amortizes_a_retained_closure_maker() {
     );
     assert!(compile::body_is_call_heavy(
         f.executable_ops(),
-        &f.constants
+        f.constants()
     ));
     let body = std::rc::Rc::new(fuse(&f, Inline2Mode::Hof).unwrap());
     {
@@ -250,7 +250,7 @@ fn inline_v2_constant_chain_admission_allows_guarded_stores_above_legacy_size() 
         vec![callee],
     );
     let feedback = vec![NumericFeedback::FixnumOnly; f.executable_ops().len()];
-    assert!(fuse_calls(f.executable_ops(), &f.constants, None, 1, &feedback).is_none());
+    assert!(fuse_calls(f.executable_ops(), f.constants(), None, 1, &feedback).is_none());
     let body = fuse(&f, Inline2Mode::Closure).expect("v2 chain resumes past committed stores");
     assert_eq!(
         body.v2.as_ref().unwrap().region_kind[0],

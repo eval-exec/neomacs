@@ -19,10 +19,7 @@ use neovm_value::tagged::gc::{
     PlainSymbolBacking, RegistrationError, RunAccess, SymbolHandle,
 };
 use neovm_value::tagged::value::TaggedValue;
-use neovm_value::test_support::authority::{
-    Deadline, Retry, nil_root_for_test, rendezvous, retry_owned, take_legacy_roots_for_test,
-};
-use std::ops::ControlFlow;
+use neovm_value::test_support::authority::{nil_root_for_test, take_legacy_roots_for_test};
 
 /// Pin the GEN1 heap mode for the fixture's minimal World and restore the
 /// ambient setting on drop.
@@ -158,16 +155,9 @@ pub(crate) fn with_test_prepared_cell_execution<P>(
                     .run_access()
                     .and_then(|mut run| run.clear_root_slots())
                     .map_err(|reason| format!("activation fixture roots: {reason:?}"))?;
-                retry_owned(
-                    Deadline::contention(),
-                    owner,
-                    |owner| owner.retire_rooted(&[]),
-                    |failure| match rendezvous(&failure.reason) {
-                        Retry::Busy => ControlFlow::Continue(failure.into_owner()),
-                        Retry::Refuse => ControlFlow::Break(failure),
-                    },
-                )
-                .map_err(|failure| format!("activation fixture retirement: {failure:?}"))
+                owner
+                    .retire_rooted(&[])
+                    .map_err(|failure| format!("activation fixture retirement: {failure:?}"))
             })();
             drop(admission);
             match seed {

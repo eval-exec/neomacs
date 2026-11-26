@@ -45,7 +45,7 @@ pub(in crate::tagged::gc::mutator_registration) fn check_home(
     home.check_binding(
         run.owner.entry.key,
         local.root_slot_generation,
-        local.root_scratch.len(),
+        local.root_scratch_len(),
     )
 }
 
@@ -87,15 +87,16 @@ impl super::intern::InitialObarrayMut<'_, '_, '_> {
             .local
             .as_mut()
             .ok_or(RegistrationError::StaleRegistration)?;
-        let value = local
-            .root_scratch
-            .get(usize::from(name_index))
-            .ok_or(RegistrationError::StaleRegistration)?
-            .value();
-        let dst = local
-            .root_scratch
-            .get_mut(usize::from(dst_index))
+        let word = local
+            .root_slot_word(usize::from(name_index))
             .ok_or(RegistrationError::StaleRegistration)?;
+        // SAFETY: `self.run` is an active thread-checked run on the owning
+        // mutator; this root slot stays live in its resident root bank.
+        let value = unsafe { word.value() };
+        let dst_slot = usize::from(dst_index);
+        if dst_slot >= local.root_scratch_len() {
+            return Err(RegistrationError::StaleRegistration.into());
+        }
         let authority = SymbolWriteToken {
             _word: &registry.symbols.word,
             _thread: PhantomData,
@@ -105,7 +106,6 @@ impl super::intern::InitialObarrayMut<'_, '_, '_> {
             &registry.symbols,
             registry.heap,
             value,
-            dst,
             &mut charged,
             &authority,
         );
@@ -115,14 +115,20 @@ impl super::intern::InitialObarrayMut<'_, '_, '_> {
             .hot
             .bytes_since_gc
             .saturating_add(usize::from(charged));
-        result
+        let answer = result?;
+        // SAFETY: `answer` is a bare symbol produced by `publish_initial` for
+        // this active era; `dst_slot` was validated resident above.
+        unsafe { local.set_root_slot(dst_slot, answer) }
+            .ok_or(RegistrationError::StaleRegistration)?;
+        Ok(())
     }
 }
 
 impl<'era> RunAccess<'_, 'era> {
     /// A void error leaves dst unchanged. The loaded value becomes a root
     /// before the counted-reader lease is released, including heap pointers.
-    pub fn sym_value_into(
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn sym_value_into(
         &mut self,
         symbol: &SymbolHandle,
         dst: &mut OwnerRootSlot<'era>,
@@ -131,7 +137,8 @@ impl<'era> RunAccess<'_, 'era> {
         self.symbol_ref(symbol)?.copy_into(dst.index, false)
     }
 
-    pub fn sym_boundp_into(
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn sym_boundp_into(
         &mut self,
         symbol: &SymbolHandle,
         dst: &mut OwnerRootSlot<'era>,
@@ -153,21 +160,21 @@ impl SymbolRef<'_, '_, '_> {
 
     fn copy_into(&mut self, index: usize, boundp: bool) -> Result<(), GlobalError> {
         let registry = self.run.owner.registry;
-        // Obtain the destination before loading: no fallible work or poll is
+        // Validate destination slot before loading: no fallible work or poll is
         // permitted between the load and root installation.
-        let dst = self
+        let local = self
             .run
             .owner
             .local
             .as_mut()
-            .and_then(|local| local.root_scratch.get_mut(index))
+            .filter(|local| index < local.root_scratch_len())
             .ok_or(RegistrationError::StaleRegistration)?;
         let authority = SymbolReadToken {
             _word: &registry.symbols.word,
             _thread: PhantomData,
         };
         // SAFETY: this lease validates identity and holds the real reader word;
-        // World/backing is retained, and dst belongs to this resident owner.
+        // World/backing is retained, and index belongs to this resident owner.
         let value = unsafe {
             registry
                 .symbols
@@ -182,7 +189,10 @@ impl SymbolRef<'_, '_, '_> {
         } else {
             value
         };
-        *dst = MarkWord::of(answer);
+        // SAFETY: `answer` came from this active era's retained backing under
+        // `SymbolRef` and is installed into this owner's validated root slot.
+        unsafe { local.set_root_slot(index, answer) }
+            .ok_or(RegistrationError::StaleRegistration)?;
         Ok(())
     }
 }
@@ -191,7 +201,9 @@ static_assertions::assert_not_impl_any!(SymbolReadToken<'static>: Send, Sync, Cl
 
 impl<'era> RunAccess<'_, 'era> {
     /// Validate both homes before authority; aliases load the source first.
-    pub fn sym_set_into(
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn sym_set_into(
         &mut self,
         symbol: &SymbolHandle,
         src: &OwnerRootSlot<'era>,
@@ -199,13 +211,15 @@ impl<'era> RunAccess<'_, 'era> {
     ) -> Result<(), GlobalError> {
         check_home(self, src)?;
         check_home(self, dst)?;
-        let value = self
+        let word = self
             .owner
             .local
             .as_ref()
-            .and_then(|local| local.root_scratch.get(src.index))
-            .ok_or(RegistrationError::StaleRegistration)?
-            .value();
+            .and_then(|local| local.root_slot_word(src.index))
+            .ok_or(RegistrationError::StaleRegistration)?;
+        // SAFETY: `check_home` verified this slot belongs to the active
+        // owning mutator thread's live root bank.
+        let value = unsafe { word.value() };
         if value.is_unbound() {
             // UNBOUND is internal storage state, never a Lisp set operand.
             return Err(RegistrationError::Publication.into());
@@ -213,7 +227,9 @@ impl<'era> RunAccess<'_, 'era> {
         self.symbol_mut(symbol)?.store_into(dst.index, value, value)
     }
 
-    pub fn sym_makunbound_into(
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn sym_makunbound_into(
         &mut self,
         symbol: &SymbolHandle,
         dst: &mut OwnerRootSlot<'era>,
@@ -233,25 +249,30 @@ impl SymbolMut<'_, '_, '_> {
         shape: super::functions::CallShape,
     ) -> Result<(), FunctionError> {
         let registry = self.run.owner.registry;
-        let dst = self
+        let dst_slot = usize::from(index);
+        let local = self
             .run
             .owner
             .local
             .as_mut()
-            .and_then(|local| local.root_scratch.get_mut(usize::from(index)))
+            .filter(|local| dst_slot < local.root_scratch_len())
             .ok_or(RegistrationError::StaleRegistration)?;
         let authority = SymbolWriteToken {
             _word: &registry.symbols.word,
             _thread: PhantomData,
         };
-        functions::write::publish(
+        let answer = functions::write::publish(
             &registry.symbols,
             self.key.symbol,
             update,
-            dst,
             &authority,
             shape,
-        )
+        )?;
+        // SAFETY: `answer` belongs to this active era's heap/symbol table and
+        // `dst_slot` was validated resident above.
+        unsafe { local.set_root_slot(dst_slot, answer) }
+            .ok_or(RegistrationError::StaleRegistration)?;
+        Ok(())
     }
 
     fn store_into(&mut self, index: usize, value: Value, answer: Value) -> Result<(), GlobalError> {
@@ -261,10 +282,7 @@ impl SymbolMut<'_, '_, '_> {
             .owner
             .local
             .as_mut()
-            .ok_or(RegistrationError::StaleRegistration)?;
-        let dst = local
-            .root_scratch
-            .get_mut(index)
+            .filter(|local| index < local.root_scratch_len())
             .ok_or(RegistrationError::StaleRegistration)?;
         let authority = SymbolWriteToken {
             _word: &registry.symbols.word,
@@ -287,7 +305,10 @@ impl SymbolMut<'_, '_, '_> {
             registry.symbols.poison();
         }
         result?;
-        *dst = MarkWord::of(answer);
+        // SAFETY: `answer` came from this owner's validated root bank or symbol
+        // ID and stays live under the active era protocol.
+        unsafe { local.set_root_slot(index, answer) }
+            .ok_or(RegistrationError::StaleRegistration)?;
         Ok(())
     }
 }

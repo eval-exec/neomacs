@@ -913,6 +913,16 @@ crate::emacs_core::subr::define_subrs! {
         SubrArity::new(1, Some(3)),
     )),
     crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "neomacs-make-parallel-thread",
+        NativeFn::ContextVec(crate::emacs_core::threads::builtin_neomacs_make_parallel_thread),
+        SubrArity::new(1, Some(3)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "neomacs-thread-parallel-p",
+        NativeFn::ContextVec(crate::emacs_core::threads::builtin_neomacs_thread_parallel_p),
+        SubrArity::new(1, Some(1)),
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "thread-join",
         NativeFn::ContextVec(crate::emacs_core::threads::builtin_thread_join),
         SubrArity::new(1, Some(1)),
@@ -3396,7 +3406,7 @@ crate::emacs_core::subr::define_subrs! {
     )),
     crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "event-convert-list",
-        NativeFn::ContextVec(|ctx, args| builtin_event_convert_list(args, ctx.symbol_mode())),
+        NativeFn::ContextVec(|ctx, args| builtin_event_convert_list(ctx, args)),
         SubrArity::new(1, Some(1)),
     )),
     crate::emacs_core::subr::world_subr!(SubrSpec::new(
@@ -3518,12 +3528,14 @@ crate::emacs_core::subr::define_subrs! {
     ),
     crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "iso-charset",
-        NativeFn::ContextVec(|_ctx, args| builtin_iso_charset(args)),
+        NativeFn::ContextVec(|_ctx, args| {
+            neovm_text::emacs_core::charset::builtin_iso_charset(args)
+        }),
         SubrArity::new(3, Some(3)),
     )),
     crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "lread--substitute-object-in-subtree",
-        NativeFn::ContextVec(|_ctx, args| builtin_lread_substitute_object_in_subtree(args)),
+        NativeFn::ContextVec(builtin_lread_substitute_object_in_subtree),
         SubrArity::new(3, Some(3)),
     )),
     crate::emacs_core::subr::world_subr!(SubrSpec::new(
@@ -3585,7 +3597,7 @@ crate::emacs_core::subr::define_subrs! {
     )),
     crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "open-font",
-        NativeFn::ContextVec(|ctx, args| builtin_open_font(args, ctx.symbol_mode())),
+        NativeFn::ContextVec(builtin_open_font),
         SubrArity::new(1, Some(3)),
     )),
     crate::emacs_core::subr::world_subr!(SubrSpec::new(
@@ -3676,7 +3688,7 @@ crate::emacs_core::subr::define_subrs! {
     )),
     crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "sort-charsets",
-        NativeFn::ContextVec(|_ctx, args| builtin_sort_charsets(args)),
+        NativeFn::ContextVec(neovm_text::emacs_core::charset::builtin_sort_charsets_in_state),
         SubrArity::new(1, Some(1)),
     )),
     crate::emacs_core::subr::world_subr!(SubrSpec::new(
@@ -3701,7 +3713,7 @@ crate::emacs_core::subr::define_subrs! {
     )),
     crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "suspend-emacs",
-        NativeFn::ContextVec(|_ctx, args| builtin_suspend_emacs(args)),
+        NativeFn::ContextVec(builtin_suspend_emacs),
         SubrArity::new(0, Some(1)),
     ))
     .placeholder(NoEvalPlaceholder::Nil)
@@ -3931,7 +3943,7 @@ crate::emacs_core::subr::define_subrs! {
     )),
     crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "neomacs-frame-geometry",
-        NativeFn::ContextVec(|_ctx, args| builtin_neomacs_frame_geometry(args)),
+        NativeFn::ContextVec(builtin_neomacs_frame_geometry),
         SubrArity::new(0, None),
     )),
     crate::emacs_core::subr::world_subr!(SubrSpec::new(
@@ -4633,7 +4645,7 @@ impl Context {
             crate::emacs_core::subr::leaf::record_subr_leaf(intern(spec.name()), spec.leaf_spec());
         if change == crate::emacs_core::subr::leaf::LeafChange::Replaced {
             #[cfg(feature = "jit")]
-            crate::emacs_core::jit::cache::clear();
+            crate::emacs_core::jit::cache::clear_with_serial_receipt().expect("serial jit grace");
         }
 
         if spec.command_default() == crate::emacs_core::subr::CommandDefault::Disabled {

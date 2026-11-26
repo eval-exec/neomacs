@@ -67,7 +67,7 @@ fn minor_seeds_symbol_cells_and_buffer_local_slots() {
     assert_eq!(symbol_root.cons_car(), Value::fixnum(11));
     assert_eq!(symbol_root.cons_cdr(), Value::fixnum(22));
     assert_eq!(
-        local_root.as_vector_data().unwrap().as_slice(),
+        local_root.as_vector_data().unwrap(),
         &[Value::fixnum(33), Value::fixnum(44)]
     );
     assert!(context.tagged_heap().value_is_old_for_test(symbol_root));
@@ -85,10 +85,7 @@ fn minor_seeds_vm_and_specpdl_root_frames() {
     context.push_vm_frame_root(vm_payload);
 
     run_minor(&mut context);
-    assert_eq!(
-        vm_payload.as_vector_data().unwrap().as_slice(),
-        &[Value::fixnum(37)]
-    );
+    assert_eq!(vm_payload.as_vector_data().unwrap(), &[Value::fixnum(37)]);
     assert_eq!(spec_payload.cons_car(), Value::fixnum(41));
     assert!(context.tagged_heap().value_is_old_for_test(vm_payload));
     assert!(context.tagged_heap().value_is_old_for_test(spec_payload));
@@ -178,15 +175,15 @@ fn compiled_old_cons_stores_remember_young_children_each_cycle() {
             optional: Vec::new(),
             rest: None,
         });
-        function.lexical = true;
-        function.ops = vec![Op::StackRef(1), Op::StackRef(1), op, Op::Return];
-        function.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(8);
+        function.set_lexical(true);
+        function.set_ops(vec![Op::StackRef(1), Op::StackRef(1), op, Op::Return]);
+        function.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(8));
         let leaf = compile_bytecode_function(&function).expect("cons store compiles");
         let child_roots = context.save_specpdl_roots();
         let child = Value::cons(Value::fixnum(71 + index as i64), Value::NIL);
         context.push_specpdl_root(child);
         let context_ptr = &mut context as *mut Context as *mut u8;
-        let result = leaf.call(context_ptr, &[owner, child]);
+        let result = unsafe { leaf.call(context_ptr, &[owner, child]) };
         // SAFETY: the engine returned this exact word from the child value it
         // just ran; reconstructing the tagged value for comparison is sound.
         assert!(

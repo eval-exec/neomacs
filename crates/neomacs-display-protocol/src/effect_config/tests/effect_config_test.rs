@@ -51,16 +51,16 @@ fn cursor_color_cycle_rate_round_trips_through_the_effect_registry() {
 }
 
 #[test]
-fn cursor_color_cycle_opt_in_survives_updates_and_reset_restores_opt_out() {
+fn cursor_color_cycle_opt_out_survives_updates_and_reset_restores_default_on() {
     let defaults = VisualConfig::default();
-    assert!(!defaults.effects.cursor_color_cycle.enabled);
-    let enabled = defaults
+    assert!(defaults.effects.cursor_color_cycle.enabled);
+    let disabled = defaults
         .apply_effects(&[EffectOperation::set(
             "cursor-color-cycle",
-            [("enabled", EffectValue::Bool(true))],
+            [("enabled", EffectValue::Bool(false))],
         )])
         .unwrap();
-    let updated = enabled
+    let updated = disabled
         .apply_effects(&[EffectOperation::set(
             "cursor-color-cycle",
             [("fps", EffectValue::Integer(12))],
@@ -68,18 +68,18 @@ fn cursor_color_cycle_opt_in_survives_updates_and_reset_restores_opt_out() {
         .unwrap();
     let restored: VisualConfig =
         serde_json::from_value(serde_json::to_value(&updated).unwrap()).unwrap();
-    assert!(restored.effects.cursor_color_cycle.enabled);
+    assert!(!restored.effects.cursor_color_cycle.enabled);
     assert_eq!(restored.effects.cursor_color_cycle.fps.get(), 12);
     assert!(
         restored
             .effect_values("cursor-color-cycle")
             .unwrap()
-            .contains(&("enabled".to_owned(), EffectValue::Bool(true)))
+            .contains(&("enabled".to_owned(), EffectValue::Bool(false)))
     );
     let reset = restored
         .apply_effects(&[EffectOperation::reset("cursor-color-cycle")])
         .unwrap();
-    assert!(!reset.effects.cursor_color_cycle.enabled);
+    assert!(reset.effects.cursor_color_cycle.enabled);
     assert_eq!(reset.effects.cursor_color_cycle.fps.get(), 24);
 }
 
@@ -611,8 +611,8 @@ fn cursor_candle_flame_defaults() {
 #[test]
 fn cursor_color_cycle_defaults() {
     let c = CursorColorCycleConfig::default();
-    assert!(!c.enabled);
-    // Explicit opt-in retains the 24 Hz cap rather than display-rate updates.
+    assert!(c.enabled);
+    // The product default keeps the 24 Hz cap rather than display-rate updates.
     assert_eq!(c.fps.get(), 24);
     assert_eq!(c.speed, 0.5);
     assert_eq!(c.saturation, 0.8);
@@ -2449,10 +2449,14 @@ fn all_opacity_defaults_are_in_zero_to_one() {
 /// 4. Issue #750 restores opt-in deliberately: even capped compositor-only
 ///    animation creates standing demand in an otherwise idle focused editor.
 ///    Users can still enable it explicitly at the same 24 Hz default rate.
+/// 5. 2026-11-22: the owner turned it back ON as a product default, with
+///    the same bounds as item 3 (24 Hz cap, compositor-only, withdrawn while
+///    unfocused, blinked off, or hollow). `:enabled nil` opts out.
 ///
-/// So default-off here is a decision, not a leaked default. Flipping it in
-/// either direction is a product change: change this assertion deliberately
-/// or not at all. The generated Custom option reads this Rust default;
+/// So default-on here is a decision, not a leaked default, and it is the
+/// only decorative effect enabled by default. Flipping it in either
+/// direction is a product change: change this assertion deliberately or
+/// not at all. The generated Custom option reads this Rust default;
 /// avoid adding a separate literal Lisp default that can drift from it.
 #[test]
 fn default_enabled_fields_match_product_defaults() {
@@ -2479,7 +2483,6 @@ fn default_enabled_fields_match_product_defaults() {
         ec.cursor_aurora_borealis.enabled,
         ec.cursor_bubble.enabled,
         ec.cursor_candle_flame.enabled,
-        ec.cursor_color_cycle.enabled,
         ec.cursor_comet.enabled,
         ec.cursor_compass.enabled,
         ec.cursor_compass_needle.enabled,
@@ -2610,6 +2613,8 @@ fn default_enabled_fields_match_product_defaults() {
     for (i, &e) in enabled_flags.iter().enumerate() {
         assert!(!e, "enabled flag at index {} was true", i);
     }
+    // The one decorative effect that is on by default (item 5 above).
+    assert!(ec.cursor_color_cycle.enabled);
 }
 
 // ═══════════════════════════════════════════════════════════════════

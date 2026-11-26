@@ -67,7 +67,7 @@ fn lower(f: &ByteCodeFunction, entry: NativeEntry) -> (CompiledLeaf, RootCounts)
         leaf = Some(
             lower_leaf_full_osr(
                 f.executable_ops(),
-                &f.constants,
+                f.constants(),
                 JitParamShape::try_from(f)
                     .expect("fixture has valid native parameter slots")
                     .required(),
@@ -144,11 +144,13 @@ fn assert_successor_census(entry: NativeEntry) {
         vm.force_interpreter_only_for_test();
         vm.execute(&f, args.to_vec()).expect("Tier-0 answer")
     };
-    let NativeRun::Ok(bits) = leaf.call_consts(
-        &mut ctx as *mut Context as *mut u8,
-        f.constants.as_ptr(),
-        &args,
-    ) else {
+    let NativeRun::Ok(bits) = (unsafe {
+        leaf.call_consts(
+            &mut ctx as *mut Context as *mut u8,
+            f.constants().as_ptr(),
+            &args,
+        )
+    }) else {
         panic!("the successor must finish natively")
     };
     assert_eq!(

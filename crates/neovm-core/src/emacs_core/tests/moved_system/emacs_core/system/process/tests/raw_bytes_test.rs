@@ -82,7 +82,7 @@ fn builtin_make_process_preserves_raw_unibyte_command_argument_storage() {
 #[test]
 fn spawn_child_with_environment_uses_process_environment_list() {
     crate::test_utils::init_test_tracing();
-    let _ctx = crate::test_utils::new_context();
+    let ctx = crate::test_utils::new_context();
     let shell = find_bin("sh");
     let mut processes = ProcessManager::new();
     let pid = processes.create_process_lisp(
@@ -95,6 +95,9 @@ fn spawn_child_with_environment_uses_process_environment_list() {
         ],
         crate::emacs_core::process::ProcessCodingSystems::gnu_make_process_initial(),
     );
+    // The process command strings were allocated on `ctx`. Park it so they
+    // stay alive and this constructor is not a second active Context.
+    let _parked_ctx = ctx.park_for_test();
     let mut eval = crate::emacs_core::eval_hook_installers::new_context();
     eval.obarray_mut().set_symbol_value(
         "process-environment",

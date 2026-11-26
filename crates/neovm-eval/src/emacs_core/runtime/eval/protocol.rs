@@ -14,12 +14,13 @@ use neovm_edit::buffer::BufferId;
 
 use super::data::face::{Face, FaceHeight};
 use super::{
-    FontEntityMetricsRequest, FontListError, FontListFilter, FontOtfCapability, FontPxProbeResult,
-    FontSpecListQuery, FontSpecResolveRequest, GuiFrameHostRequest, GuiFrameHostSize,
-    ListedFontEntity, PopupMenuRequest, ResolvedFontEntityMetrics, ResolvedFontMatch,
-    ResolvedFontSpecMatch, ResolvedFrameFont, ResolvedSurface, ResolvedVideo, ResolvedWebKit,
-    ShaderSurfaceCreateRequest, ShaderSurfaceLanguage, ShaderSurfaceUniformInit,
-    SurfaceResolveRequest, VideoResolveRequest, WebKitResolveRequest,
+    FontEntityMetricsRequest, FontListError, FontListFilter, FontOpenEntityRequest,
+    FontOtfCapability, FontPxProbeResult, FontSpecListQuery, FontSpecResolveRequest,
+    GuiFrameHostRequest, GuiFrameHostSize, ListedFontEntity, PopupMenuRequest,
+    ResolvedFontEntityMetrics, ResolvedFontMatch, ResolvedFontSpecMatch, ResolvedFrameFont,
+    ResolvedSurface, ResolvedVideo, ResolvedWebKit, ShaderSurfaceCreateRequest,
+    ShaderSurfaceLanguage, ShaderSurfaceUniformInit, SurfaceResolveRequest, VideoResolveRequest,
+    WebKitResolveRequest,
 };
 use neomacs_display_protocol::font::ResolvedFontIdentity;
 use neomacs_display_protocol::{
@@ -176,7 +177,7 @@ impl FrameFontSize {
         PositiveFontScalar::new(value).map(Self::Relative)
     }
 
-    pub fn from_face_height(height: FaceHeight) -> Option<Self> {
+    pub(crate) fn from_face_height(height: FaceHeight) -> Option<Self> {
         match height {
             FaceHeight::Absolute(tenths) => Self::points(f64::from(tenths) / 10.0),
             FaceHeight::Relative(scale) => Self::relative(scale),
@@ -294,6 +295,12 @@ pub struct FontResolveRequest {
     pub character: EmacsChar,
     /// Fully merged face attributes; family-less fontset rules inherit this family.
     pub face: Face,
+    /// Face id redisplay sealed for this buffer position. `None` when the
+    /// position has no sealed face, or the caller has no buffer position
+    /// (string `font-at`, named `face-font`).
+    pub realized_face_id: Option<u32>,
+    /// Arena epoch that keys `realized_face_id`. Absent together with the id.
+    pub realized_face_epoch: Option<u64>,
 }
 
 pub trait DisplayHost {
@@ -577,6 +584,28 @@ pub trait DisplayHost {
     ) -> Result<FontCoverage, String> {
         Ok(FontCoverage::NeedsOpening)
     }
+    /// GNU `font_pixel_size` for a point size on the selected frame: the
+    /// frame's resolution converts points to pixels. `None` when the host has
+    /// no window frame (GNU returns 1 for a non-window frame).
+    fn font_opening_pixel_size(&mut self, _size: FontOpeningSize) -> Result<Option<u32>, String> {
+        Ok(None)
+    }
+    /// GNU `font_open_entity`: open the exact entity published by the font
+    /// catalog at `request.size` and return its opaque font-object Value.
+    /// `None` when the host is not graphical, the handle is stale, or the
+    /// driver cannot open that face.
+    fn open_font_entity(
+        &mut self,
+        _request: FontOpenEntityRequest,
+    ) -> Result<Option<neovm_value::value::Value>, String> {
+        Ok(None)
+    }
+    /// GNU `POINT_TO_PIXEL` for `open-font`'s float size argument: the frame
+    /// resolution turns points into an `intmax_t` pixel operand *before* the
+    /// zero-to-120 rule.  `None` when the host has no frame resolution.
+    fn font_open_point_pixels(&mut self, _points: f64) -> Result<Option<i64>, String> {
+        Ok(None)
+    }
     fn probe_font_px_metrics(
         &mut self,
         _file: &str,
@@ -629,8 +658,8 @@ pub trait DisplayHost {
         &self,
         _request: image_catalog::ImageResolveRequest,
         _limit: ImageSizeLimit,
-    ) -> Result<Option<image_catalog::ReadyImage>, String> {
-        Ok(None)
+    ) -> image_catalog::ImageSyncResolution {
+        image_catalog::ImageSyncResolution::Unsupported
     }
     /// Nonblocking image catalog used by redisplay. Synchronous Lisp image
     /// queries use `resolve_image_sync`; redisplay must use this catalog instead.
@@ -796,6 +825,10 @@ pub trait DisplayHost {
     ) -> Result<(), String> {
         Ok(())
     }
+    /// Mirror GNU's live `ns-confirm-quit` value to the native application.
+    /// This scalar crosses threads; native callbacks must never read Lisp state.
+    fn set_ns_confirm_quit(&mut self, _enabled: bool) {}
+
     /// Publish the compiled NS modifier policy to the display backend.
     ///
     /// GNU's `nsterm.m` reads `ns-command-modifier' and friends at every
@@ -829,6 +862,16 @@ pub trait DisplayHost {
 pub struct FrameFontRequest {
     face: Face,
     size: FrameFontSize,
+    selection: FrameFontSelection,
+}
+
+/// Face attributes are preferences; an explicit font specification constrains
+/// native discovery. GNU only permits an unconstrained family pass for the
+/// former (`font_find_for_lface`, font.c).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FrameFontSelection {
+    FacePreferences,
+    FontSpecification,
 }
 
 impl FrameFontRequest {
@@ -838,12 +881,29 @@ impl FrameFontRequest {
             .take()
             .and_then(FrameFontSize::from_face_height)
             .unwrap_or(FrameFontSize::Default);
-        Self { face, size }
+        Self {
+            face,
+            size,
+            selection: FrameFontSelection::FacePreferences,
+        }
     }
 
     pub fn with_size(mut face: Face, size: FrameFontSize) -> Self {
         face.height = None;
-        Self { face, size }
+        Self {
+            face,
+            size,
+            selection: FrameFontSelection::FacePreferences,
+        }
+    }
+
+    pub fn for_font_specification(mut self) -> Self {
+        self.selection = FrameFontSelection::FontSpecification;
+        self
+    }
+
+    pub const fn selection(&self) -> FrameFontSelection {
+        self.selection
     }
 
     pub const fn face(&self) -> &Face {

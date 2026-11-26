@@ -1,6 +1,7 @@
 use super::*;
 use crate::display_source::DisplaySourceContext;
 use crate::neovm_bridge::LayoutBufferSnapshot;
+use crate::string_property_snapshot::StringSourceRootScope;
 use neovm_core::buffer::CharLen;
 use neovm_core::emacs_core::Context;
 
@@ -30,7 +31,14 @@ fn producer<'a>(
     buffer_id: BufferId,
     snapshot: &'a LayoutBufferSnapshot,
 ) -> BufferElementProducer<'a, LayoutBufferSnapshot> {
-    BufferElementProducer::new(buffer_id, snapshot, 0, 0)
+    BufferElementProducer::new_for_window(
+        buffer_id,
+        snapshot,
+        None,
+        0,
+        0,
+        StringSourceRootScope::CallbackFree,
+    )
 }
 
 /// Consume one element, advancing the walk position the way the render loop

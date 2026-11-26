@@ -104,17 +104,6 @@ pub(crate) trait DeviceIo {
     fn read_attributes(&self) -> Result<Attributes, SerialDeviceFailure>;
     /// GNU `SetCommState (hnd, &dcb)`, src/w32.c:11281-11282.
     fn write_attributes(&self, attributes: &Attributes) -> Result<(), SerialDeviceFailure>;
-    fn register_readable(
-        &self,
-        poller: &polling::Poller,
-        id: ProcessId,
-    ) -> Result<(), String>;
-    fn modify_interest(
-        &self,
-        poller: &polling::Poller,
-        event: polling::Event,
-    ) -> Result<(), String>;
-    fn unregister(&self, poller: &polling::Poller);
 }
 
 impl DeviceIo for Device {
@@ -159,57 +148,6 @@ impl DeviceIo for Device {
             return Err(device_failure(SerialConfigureStep::SetCommState));
         }
         Ok(())
-    }
-
-    fn register_readable(
-        &self,
-        poller: &polling::Poller,
-        id: ProcessId,
-    ) -> Result<(), String> {
-        // Arm the read-ahead first: a registered but never-armed event would
-        // be an edge that can never fire. GNU does the same before waiting:
-        // sys_select kicks the reader thread when it takes the fd into its
-        // wait set (src/w32proc.c:3175-3187).
-        if !self.post_serial_read_ahead() {
-            return Err("Failed to arm serial read-ahead".to_owned());
-        }
-        let event = self.serial_read_event_raw();
-        // SAFETY: the event handle is owned by this Device, which the Process
-        // record keeps alive until `unregister` removes it from the poller
-        // (the same discipline as every registered fd on the unix side).
-        unsafe {
-            poller
-                .add_waitable(
-                    event,
-                    polling::Event::readable(id as usize),
-                    polling::PollMode::Level,
-                )
-                .map_err(|err| format!("Failed to register serial read event: {err}"))
-        }
-    }
-
-    fn modify_interest(
-        &self,
-        poller: &polling::Poller,
-        event: polling::Event,
-    ) -> Result<(), String> {
-        // `modify_waitable` takes an owned-handle wrapper (`AsWaitable`), not a
-        // raw HANDLE, so it borrows the read-ahead's event rather than the raw
-        // handle `add_waitable` accepts.
-        self.with_serial_read_event(|read_event| {
-            poller
-                .modify_waitable(read_event, event, polling::PollMode::Level)
-                .map_err(|err| format!("Failed to modify serial read event interest: {err}"))
-        })
-    }
-
-    fn unregister(&self, poller: &polling::Poller) {
-        // Cancel the posted read-ahead before dropping the registration: the
-        // poller stops watching the event either way, but a still-pending
-        // overlapped read must not complete into a Device being torn down
-        // (GNU's delete_child teardown, src/w32proc.c:1910-1935).
-        self.cancel_serial_read_ahead();
-        let _ = self.with_serial_read_event(|read_event| poller.remove_waitable(read_event));
     }
 }
 

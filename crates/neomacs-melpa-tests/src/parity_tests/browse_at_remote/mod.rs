@@ -63,7 +63,7 @@ const BROWSE_AT_REMOTE_TEST_PRELUDE: &str = r####"
   (let* ((path (expand-file-name relative root))
          (parent (file-name-directory path)))
     (make-directory parent t)
-    (unless (file-in-directory-p (file-truename parent)
+    (unless (neomacs-melpa-path-inside-p (file-truename parent)
                                  (file-truename root))
       (error "Browse At Remote fixture escaped owned root: %s" path))
     path))
@@ -81,7 +81,7 @@ const BROWSE_AT_REMOTE_TEST_PRELUDE: &str = r####"
                (file-executable-p bar355-test-git-program))
     (error "Browse At Remote has no absolute executable Git"))
   (unless (and (file-directory-p directory)
-               (file-in-directory-p (file-truename directory)
+               (neomacs-melpa-path-inside-p (file-truename directory)
                                      (file-truename bar355-test-world-root)))
     (error "Browse At Remote Git cwd is not owned: %S" directory))
   (unless (seq-every-p #'stringp args)
@@ -365,7 +365,7 @@ const BROWSE_AT_REMOTE_TEST_PRELUDE: &str = r####"
                       (integerp exit))
            (error "Browse At Remote incomplete Git Trace2 session: %S" record))
          (when worktree
-           (unless (file-in-directory-p (file-truename worktree)
+           (unless (neomacs-melpa-path-inside-p (file-truename worktree)
                                         (file-truename root))
              (error "Browse At Remote Git escaped owned root: %S" worktree)))
          (list :argv
@@ -517,7 +517,7 @@ const BROWSE_AT_REMOTE_TEST_PRELUDE: &str = r####"
                             (not (memq buffer buffer-baseline))
                             (stringp directory)
                             (file-directory-p directory)
-                            (file-in-directory-p (file-truename directory)
+                            (neomacs-melpa-path-inside-p (file-truename directory)
                                                  (file-truename root)))
                      (error "refusing to stop unowned process: name=%S command=%S buffer=%S directory=%S"
                             (process-name process) command buffer directory)))
@@ -571,11 +571,11 @@ const BROWSE_AT_REMOTE_TEST_PRELUDE: &str = r####"
                           (semantically-owned
                            (or (and (stringp file)
                                     (file-exists-p file)
-                                    (file-in-directory-p
+                                    (neomacs-melpa-path-inside-p
                                      (file-truename file) root-truename))
                                (and (stringp directory)
                                     (file-directory-p directory)
-                                    (file-in-directory-p
+                                    (neomacs-melpa-path-inside-p
                                      (file-truename directory)
                                      root-truename)))))
                      (when semantically-owned

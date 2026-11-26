@@ -55,7 +55,7 @@ pub(crate) fn lambda_closure_length(value: &Value) -> Option<i64> {
 ///   [0]=ARGS  [1]=BODY  [2]=ENV  [(3)=nil, (4)=DOCSTRING/TYPE, (5)=INTERACTIVE]
 /// Slot count is observable and slot 5's presence is significant even when
 /// its value is nil.
-pub fn lambda_to_closure_vector(value: &Value) -> Vec<Value> {
+pub(crate) fn lambda_to_closure_vector(value: &Value) -> Vec<Value> {
     value
         .closure_slots()
         .map(|slots| slots.to_vec())
@@ -86,6 +86,16 @@ pub(crate) fn closure_vector_length(value: &Value) -> Option<i64> {
 #[inline(never)]
 pub(crate) fn bytecode_closure_slot(value: &Value, idx: usize) -> Option<Value> {
     use neovm_value::tagged::header::{ByteCodeSlotObject, CLOSURE_CODE, CLOSURE_CONSTANTS};
+    // Once the reader's substitution walk has stored a slot back, the
+    // installed GNU slot vector is the observable source for every index:
+    // GNU's closure slots are one array, and the walk rewrites them with
+    // `ASET`.  Until then every slot derives from `data` as before.
+    if let Some(neovm_value::tagged::header::ClosureSlotSource::Materialized(slots)) =
+        value.bytecode_slot_source()
+        && let Some(item) = slots.as_vector_data().and_then(|items| items.get(idx))
+    {
+        return Some(item);
+    }
     // Every byte-code object has at least the four mandatory slots, so
     // slots 1 and 2 need no bounds check.
     match idx {
@@ -98,8 +108,8 @@ pub(crate) fn bytecode_closure_slot(value: &Value, idx: usize) -> Option<Value> 
         return None;
     }
     Some(match idx {
-        neovm_value::tagged::header::CLOSURE_ARGLIST => bc.arglist,
-        neovm_value::tagged::header::CLOSURE_STACK_DEPTH => bc.max_stack.value(),
+        neovm_value::tagged::header::CLOSURE_ARGLIST => bc.arglist(),
+        neovm_value::tagged::header::CLOSURE_STACK_DEPTH => bc.max_stack().value(),
         neovm_value::tagged::header::CLOSURE_DOC_STRING => bc
             .doc_form
             .or_else(|| bc.docstring.as_ref().map(|d| Value::heap_string(d.clone())))
@@ -136,6 +146,34 @@ pub(crate) fn bytecode_to_closure_vector(value: &Value) -> Vec<Value> {
     result
 }
 
+/// Car of a value whose kind is [`ValueKind::Cons`].
+///
+/// # Safety
+///
+/// `value.is_cons()` is true. `ValueKind::Cons` is that tag.
+#[inline(always)]
+unsafe fn proven_scan_car<const OBSERVED: bool>(value: Value) -> Value {
+    if OBSERVED {
+        unsafe { value.cons_car_unchecked() }
+    } else {
+        unsafe { value.cons_car_unobserved_unchecked() }
+    }
+}
+
+/// Cdr of a value whose kind is [`ValueKind::Cons`].
+///
+/// # Safety
+///
+/// Same as [`proven_scan_car`].
+#[inline(always)]
+unsafe fn proven_scan_cdr<const OBSERVED: bool>(value: Value) -> Value {
+    if OBSERVED {
+        unsafe { value.cons_cdr_unchecked() }
+    } else {
+        unsafe { value.cons_cdr_unobserved_unchecked() }
+    }
+}
+
 /// Semantic view used by Lisp list-cell accessors.
 ///
 /// GNU represents interpreted functions as `PVEC_CLOSURE`, not cons cells.
@@ -152,9 +190,11 @@ impl From<Value> for ConsCellView {
     fn from(value: Value) -> Self {
         match value.kind() {
             ValueKind::Nil => Self::Empty,
+            // SAFETY: `kind()` yields `Cons` only for `TAG_CONS` (`is_cons`).
+            // The discriminant does not dominate the accessor's tag compare.
             ValueKind::Cons => Self::Cell {
-                car: value.cons_car(),
-                cdr: value.cons_cdr(),
+                car: unsafe { value.cons_car_unchecked() },
+                cdr: unsafe { value.cons_cdr_unchecked() },
             },
             _ => Self::NonList(value),
         }
@@ -495,7 +535,9 @@ pub(crate) fn builtin_nth_values(n_value: Value, list: Value) -> EvalResult {
 fn builtin_nth_values_scan<const OBSERVED: bool>(n_value: Value, list: Value) -> EvalResult {
     let tail = nthcdr_impl_scan::<OBSERVED>(n_value, list)?;
     match tail.kind() {
-        ValueKind::Cons => Ok(scan_car::<OBSERVED>(tail)),
+        // SAFETY: `ValueKind::Cons` is `TAG_CONS`, the same proof as
+        // `ConsCellView`. The kind discriminant does not delete the compare.
+        ValueKind::Cons => Ok(unsafe { proven_scan_car::<OBSERVED>(tail) }),
         ValueKind::Nil => Ok(Value::NIL),
         _ => Err(signal(
             LispCondition::WrongTypeArgument,
@@ -592,7 +634,9 @@ fn nthcdr_impl_scan<const OBSERVED: bool>(n_value: Value, list: Value) -> EvalRe
         for _ in 0..(*n as usize) {
             match tail.kind() {
                 ValueKind::Cons => {
-                    tail = scan_cdr::<OBSERVED>(tail);
+                    // SAFETY: `ValueKind::Cons` is `TAG_CONS`. `kind()` does not
+                    // dominate the compare inside `scan_cdr`.
+                    tail = unsafe { proven_scan_cdr::<OBSERVED>(tail) };
                 }
                 ValueKind::Nil => return Ok(Value::NIL),
                 _ => {
@@ -760,7 +804,7 @@ fn builtin_append_slice_impl(args: &[Value]) -> EvalResult {
                 ValueKind::Cons => append_proper_list(&mut result, &mut last, *arg)?,
                 ValueKind::Veclike(VecLikeType::Lambda) => {
                     if let Some(slots) = arg.closure_slots() {
-                        for item in slots.as_slice().iter().copied() {
+                        for item in slots.iter() {
                             append_element(&mut result, &mut last, item);
                         }
                     }
@@ -778,7 +822,7 @@ fn builtin_append_slice_impl(args: &[Value]) -> EvalResult {
                 }
                 ValueKind::Veclike(VecLikeType::Vector) => {
                     if let Some(items) = arg.as_vector_data() {
-                        for item in items.as_slice().iter().copied() {
+                        for item in items.iter() {
                             append_element(&mut result, &mut last, item);
                         }
                     }

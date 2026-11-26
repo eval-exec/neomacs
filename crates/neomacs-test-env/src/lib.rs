@@ -688,6 +688,16 @@ impl CanonicalEnvironment {
 /// and are applied after the pins by construction.
 ///
 /// [`env`]: Self::env
+/// Inherited signal disposition for a spawned test child process.
+#[cfg(unix)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SignalDisposition {
+    /// Restore the kernel default action (`SIG_DFL`).
+    Default,
+    /// Ignore the signal (`SIG_IGN`).
+    Ignore,
+}
+
 pub struct PinnedCommand {
     command: Command,
 }
@@ -817,6 +827,37 @@ impl PinnedCommand {
         unsafe {
             self.command.pre_exec(|| {
                 if libc::setsid() < 0 || libc::ioctl(0, libc::TIOCSCTTY as _, 0) < 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+        self
+    }
+
+    /// Set the child's inherited `SIGTTOU` disposition between fork and exec.
+    ///
+    /// Runs only async-signal-safe `sigemptyset` and `sigaction` on `SIGTTOU`
+    /// in the forked child without mutating the test runner's process-global
+    /// signal dispositions.
+    #[cfg(unix)]
+    pub fn set_sigttou_disposition(&mut self, disposition: SignalDisposition) -> &mut Self {
+        use std::os::unix::process::CommandExt;
+        let handler = match disposition {
+            SignalDisposition::Default => libc::SIG_DFL,
+            SignalDisposition::Ignore => libc::SIG_IGN,
+        };
+        // Safety: `pre_exec` runs between fork and exec; `sigemptyset` and
+        // `sigaction` are async-signal-safe and the closure captures only
+        // `handler`.
+        unsafe {
+            self.command.pre_exec(move || {
+                let mut action: libc::sigaction = std::mem::zeroed();
+                action.sa_sigaction = handler;
+                if libc::sigemptyset(&raw mut action.sa_mask) != 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                if libc::sigaction(libc::SIGTTOU, &raw const action, std::ptr::null_mut()) != 0 {
                     return Err(std::io::Error::last_os_error());
                 }
                 Ok(())

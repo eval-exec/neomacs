@@ -97,6 +97,19 @@ pub(crate) fn clear_loaded_dump_stats() {
     PDUMP_RUNTIME_STATE.with(|state| state.borrow_mut().loaded_dump = None);
 }
 
+#[derive(Clone, Debug)]
+pub(crate) struct SavedLoadedDumpStats(Option<LoadedDumpStats>);
+
+pub(crate) fn snapshot_loaded_dump_stats() -> SavedLoadedDumpStats {
+    SavedLoadedDumpStats(PDUMP_RUNTIME_STATE.with(|state| state.borrow().loaded_dump.clone()))
+}
+
+pub(crate) fn restore_loaded_dump_stats(saved: SavedLoadedDumpStats) {
+    PDUMP_RUNTIME_STATE.with(|state| {
+        state.borrow_mut().loaded_dump = saved.0;
+    });
+}
+
 pub(crate) fn record_loaded_dump(path: &Path, elapsed: Duration) {
     let dump_file_name = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
     PDUMP_RUNTIME_STATE.with(|state| {

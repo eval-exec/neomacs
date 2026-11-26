@@ -1105,11 +1105,14 @@ pub trait WaitContextExt {
 
     fn service_input_pending_without_timers(&mut self) -> Result<(), Flow>;
 
-    fn service_input_pending_with_timers(&mut self) -> Result<(), Flow>;
+    fn service_input_pending_with_timers(
+        &mut self,
+    ) -> Result<neovm_eval::emacs_core::eval::GuiBoundaryServiceActivity, Flow>;
 
     fn service_read_char_preliminary_redisplay(
         &mut self,
         idle_policy: neovm_eval::emacs_core::eval::keyboard::IdleTransitionPolicy,
+        redisplay_phase: neovm_eval::emacs_core::eval::keyboard::ReadCharRedisplayPhase,
     ) -> Result<(), Flow>;
 
     #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
@@ -1228,6 +1231,22 @@ pub trait WaitContextExt {
     fn wait_block(&self, request: &WaitRequest, wait_time: Duration) -> WaitBlock;
 }
 
+/// After-select notification owns its redraw before a bounded wait can
+/// return DeadlineElapsed. Folding the activity into completion afterward
+/// cannot repair a callback's display debt (GNU process.c:5554-5555, 5854-5855).
+/// Keep the sealed notification-site token required by the underlying call.
+fn record_notify_and_redisplay_status_changes(
+    context: &mut neovm_eval::emacs_core::eval::Context,
+    request: &WaitRequest,
+    site: WaitStatusNotifySite,
+) -> Result<ProcessOutputServiceOutcome, Flow> {
+    let notified = context.record_and_notify_status_changes(request, site)?;
+    if request.redisplay && notified.has_serviced_activity() {
+        context.redisplay()?;
+    }
+    Ok(notified)
+}
+
 impl WaitContextExt for neovm_eval::emacs_core::eval::Context {
     fn service_wait_request_once(&mut self, request: &WaitRequest) -> Result<(), Flow> {
         let _ = self.service_wait_request_once_outcome(request)?;
@@ -1238,8 +1257,25 @@ impl WaitContextExt for neovm_eval::emacs_core::eval::Context {
         self.service_wait_request_once(&WaitRequest::input_pending_without_timers())
     }
 
-    fn service_input_pending_with_timers(&mut self) -> Result<(), Flow> {
-        self.service_wait_request_once(&WaitRequest::input_pending_with_timers())
+    fn service_input_pending_with_timers(
+        &mut self,
+    ) -> Result<neovm_eval::emacs_core::eval::GuiBoundaryServiceActivity, Flow> {
+        use neovm_eval::emacs_core::eval::GuiBoundaryServiceActivity;
+        // timer_check also drains safe callbacks. Preserve their display
+        // opportunity without branding them as fired timers for wait completion.
+        let safe_callbacks_pending = self.has_pending_safe_funcalls();
+        let outcome =
+            self.service_wait_request_once_outcome(&WaitRequest::input_pending_with_timers())?;
+        Ok(
+            if safe_callbacks_pending
+                || outcome.has_timer_activity()
+                || outcome.ran_process_callbacks()
+            {
+                GuiBoundaryServiceActivity::CallbacksRan
+            } else {
+                GuiBoundaryServiceActivity::Idle
+            },
+        )
     }
 
     /// GNU read_char checks for pending input with timer service before its
@@ -1249,12 +1285,21 @@ impl WaitContextExt for neovm_eval::emacs_core::eval::Context {
     fn service_read_char_preliminary_redisplay(
         &mut self,
         idle_policy: neovm_eval::emacs_core::eval::keyboard::IdleTransitionPolicy,
+        redisplay_phase: neovm_eval::emacs_core::eval::keyboard::ReadCharRedisplayPhase,
     ) -> Result<(), Flow> {
         // GNU's initial-frame and inhibit guards are inside redisplay, not
         // around timer-aware detection (xdisp.c:17369-17387). Neither guard
         // suppresses this timer-only pass; it preserves the current idle epoch.
-        self.service_timers_without_redisplay()?;
-        self.redisplay_for_input_wait()?;
+        let timers = self.service_wait_request_once_outcome(&WaitRequest::timer_service(false))?;
+        // A native maintenance deadline resumes this read; it is not GNU's
+        // next read_char entry. Actual timer callbacks still own a redisplay.
+        // The caller retains the preliminary phase for deferred safe Lisp.
+        if redisplay_phase
+            == neovm_eval::emacs_core::eval::keyboard::ReadCharRedisplayPhase::Preliminary
+            || timers.has_timer_activity()
+        {
+            self.redisplay_for_input_wait()?;
+        }
 
         // Initial batch frames suppress display, including redisplay caused
         // by service, while retaining the input/process service pass.
@@ -1365,7 +1410,7 @@ impl WaitContextExt for neovm_eval::emacs_core::eval::Context {
         // sleeping to its deadline.
         self.stage_pending_thread_events()?;
         let mut outcome = WaitServiceOutcome::default();
-        let special_input = if request.services_special_input() {
+        let mut special_input = if request.services_special_input() {
             self.service_wait_request_special_input_events_with_idle_policy(request.idle_policy)?
         } else {
             SpecialInputServiceOutcome::default()
@@ -1388,7 +1433,15 @@ impl WaitContextExt for neovm_eval::emacs_core::eval::Context {
             // catches `error` signals only).  `?` returns the throw up through
             // `accept-process-output` to the VM `catch`, e.g. the
             // `jsonrpc-request` catch tag completed by a zero-delay timer.
+            // timer_check also drains deferred frame/terminal hooks before
+            // checking timers (GNU keyboard.c:4763-4769). Those callbacks
+            // can mutate displayed buffers without firing a timer. Retain
+            // their display debt without changing wait completion activity.
+            let safe_callbacks_pending = self.has_pending_safe_funcalls();
             outcome.record_timer_activity(self.service_pending_timers_with_wait_policy(false)?);
+            if safe_callbacks_pending {
+                special_input = special_input.after_callback();
+            }
         }
 
         // A timer may request quit while inhibit-quit is temporarily bound.
@@ -1473,6 +1526,18 @@ impl WaitContextExt for neovm_eval::emacs_core::eval::Context {
         &mut self,
         request: &WaitRequest,
     ) -> Result<WaitServiceOutcome, Flow> {
+        // GNU's MINIMUM pass is a loop-top status_notify (:5554) and a
+        // non-running wait_proc drain (:5561-5600), then a zero-timeout
+        // select whose `nfds == 0` arm notifies again (:5854) before the
+        // `wait < TIMEOUT` break (:5866). The two record+notify calls below
+        // are that pair: a child that exits after writing its last bytes is
+        // notified inside the same wait instead of at the caller's next
+        // observation.
+        let notified = record_notify_and_redisplay_status_changes(
+            self,
+            request,
+            WaitStatusNotifySite::after_the_block(),
+        )?;
         let activity = if self.processes().has_wait_notification_backend() {
             let events = self
                 .processes()
@@ -1482,7 +1547,15 @@ impl WaitContextExt for neovm_eval::emacs_core::eval::Context {
         } else {
             WaitBlockActivity::poll()
         };
-        self.service_wait_request_block_activity(request, activity, true)
+        let mut serviced = self.service_wait_request_block_activity(request, activity, true)?;
+        serviced.absorb_process_activity(notified);
+        let late = record_notify_and_redisplay_status_changes(
+            self,
+            request,
+            WaitStatusNotifySite::after_the_block(),
+        )?;
+        serviced.absorb_process_activity(late);
+        Ok(serviced)
     }
 
     fn complete_wait_after_required_minimum_drain(
@@ -1592,11 +1665,25 @@ impl WaitContextExt for neovm_eval::emacs_core::eval::Context {
         // invariant -- deleting it from both of GNU's wait sites leaves GNU
         // correct, because `status_notify`'s body is guarded per process at
         // :7892.
-        let _stamped = self.processes_mut().record_child_status_changes(site);
         // GNU `status_notify (NULL, wait_proc)` (:5554, :5854), over the
         // processes whose own tick moved -- from ANY of GNU's eight sites, not
         // just the walk above.
-        self.notify_processes_with_unnotified_status_change(target)
+        //
+        // A delivery that races the walk sets the latch again after its poll.
+        // GNU's wait does not return in that state: its handler records the
+        // child before the wait's `status_notify` reads, and the read loop
+        // rechecks child status before returning. Re-walk and notify while the
+        // latch is set (bounded) so the sentinel runs inside the same wait,
+        // which is ledger 180's sentinel-in-the-let contract.
+        let mut outcome = ProcessOutputServiceOutcome::default();
+        for _ in 0..4 {
+            let _stamped = self.processes_mut().record_child_status_changes(site);
+            outcome.absorb(self.notify_processes_with_unnotified_status_change(target)?);
+            if !crate::emacs_core::os_signal::child_signal_seen() {
+                break;
+            }
+        }
+        Ok(outcome)
     }
 
     fn wait_for_tls_handshake(&mut self, id: ProcessId) -> Result<(), Flow> {
@@ -1639,7 +1726,23 @@ impl WaitContextExt for neovm_eval::emacs_core::eval::Context {
         // before anything blocks, notify any status that changed while Lisp
         // was busy.  Here that means running `handle_child_signal`'s walk
         // first, because this port could not run it in the handler.
+        // A zero-timeout wait never reaches the blocking select. GNU still
+        // clears `read_output_skip` for that select (src/process.c:5702-5709)
+        // without reading the skipped channels, so the next accept reads them.
+        // Snapshot the ids first: the pass may arm a new skip on a channel it
+        // does read.
+        let zero_poll_skips = if matches!(request.deadline, WaitDeadline::Poll)
+            && request.target_process().is_none()
+        {
+            self.processes().skipping_adaptive_read_ids()
+        } else {
+            Vec::new()
+        };
         let mut outcome = self.service_wait_request_first_pass(&request)?;
+        if !zero_poll_skips.is_empty() {
+            self.processes_mut()
+                .clear_adaptive_read_skips(&zero_poll_skips);
+        }
         if let Some(completion) =
             self.complete_wait_after_required_minimum_drain(&request, outcome)?
         {
@@ -1671,6 +1774,17 @@ impl WaitContextExt for neovm_eval::emacs_core::eval::Context {
             }
 
             let wait_timeout = self.next_wait_request_timeout(&request, now);
+            // A zero-time block does not enter the poller, and its following
+            // service walks every live process. Leave the skip flags set
+            // across that walk so the deferred channels are not read in the
+            // same turn, then clear the snapshot. A positive wait clears the
+            // flags inside `block_for_wait_request` after the poll returns.
+            let zero_wait_skips =
+                if wait_timeout.duration.is_zero() && request.target_process().is_none() {
+                    self.processes().skipping_adaptive_read_ids()
+                } else {
+                    Vec::new()
+                };
             let activity = self.block_for_wait_request(&request, wait_timeout.duration)?;
             // Service cross-thread eval-tasks (e.g. a diagnostics profile
             // capture) here: a `Poller::notify()` wakes this inner block without
@@ -1695,19 +1809,42 @@ impl WaitContextExt for neovm_eval::emacs_core::eval::Context {
             // SIGCHLD recorded is not necessarily in it -- GNU's
             // `status_notify` walks the whole alist and has no such
             // restriction.
-            let notified = self.record_and_notify_status_changes(
+            let notified = record_notify_and_redisplay_status_changes(
+                self,
                 &request,
                 WaitStatusNotifySite::after_the_block(),
             )?;
             outcome = self.service_wait_request_block_activity(&request, activity, run_timers)?;
             outcome.absorb_process_activity(notified);
+            if !zero_wait_skips.is_empty() {
+                self.processes_mut()
+                    .clear_adaptive_read_skips(&zero_wait_skips);
+            }
 
             if let Some(completion) =
                 self.complete_wait_after_required_minimum_drain(&request, outcome)?
             {
+                // GNU's wait rechecks child status before it returns (the
+                // loop-top status_notify at :5554 and the break's at :5854),
+                // so the sentinel runs inside the wait that saw the exit.
+                // Do it unconditionally: a status change recorded by the
+                // walk just above must not be left to the caller's next
+                // observation.
+                let late = record_notify_and_redisplay_status_changes(
+                    self,
+                    &request,
+                    WaitStatusNotifySite::after_the_block(),
+                )?;
+                outcome.absorb_process_activity(late);
                 return Ok(completion);
             }
             if self.wait_request_target_terminated(&request) {
+                let late = record_notify_and_redisplay_status_changes(
+                    self,
+                    &request,
+                    WaitStatusNotifySite::after_the_block(),
+                )?;
+                outcome.absorb_process_activity(late);
                 return Ok(WaitCompletion::TargetProcessTerminated);
             }
         }
@@ -1806,7 +1943,21 @@ impl WaitContextExt for neovm_eval::emacs_core::eval::Context {
         // chance to run created workers and resume unblocked waiters.
         // Green and no-thread cases are a single flag test inside.
         self.sim_release_point(neovm_eval::emacs_core::threads::SimReleasePoint::Select)?;
-        match self.wait_block(request, wait_time) {
+        // GNU FD_CLRs skipping channels for this one select and bounds that
+        // select by the minimum `read_output_delay` (src/process.c:5684-5709).
+        // `next_wait_request_timeout` already applied the minimum. A
+        // level-triggered poller still reports a readable skipped fd at once,
+        // so the fd has to leave the poll set for the wait. N skippers share
+        // this one wait. The flags are cleared when it returns.
+        let defer_adaptive = request.services_process_output()
+            && request.target_process().is_none()
+            && !wait_time.is_zero();
+        let suspended = if defer_adaptive {
+            super::process::types::suspend_skipping_adaptive_reads(self.processes())
+        } else {
+            Vec::new()
+        };
+        let blocked = match self.wait_block(request, wait_time) {
             WaitBlock::Poll => Ok(WaitBlockActivity::poll()),
             WaitBlock::Poller(interest) => {
                 // Mirror GNU: while blocked reading a command key,
@@ -1821,13 +1972,9 @@ impl WaitContextExt for neovm_eval::emacs_core::eval::Context {
                 self.end_waiting_for_user_input(restore);
                 Ok(WaitBlockActivity::from_source_events(events))
             }
-            WaitBlock::HostInputChannel => {
-                let _ = self.wait_for_next_host_input_event(
-                    wait_time,
-                    request.sets_waiting_for_user_input(),
-                )?;
-                Ok(WaitBlockActivity::poll())
-            }
+            WaitBlock::HostInputChannel => self
+                .wait_for_next_host_input_event(wait_time, request.sets_waiting_for_user_input())
+                .map(|_| WaitBlockActivity::poll()),
             WaitBlock::ProcessOutputSleep => {
                 let events = self.processes().wait_for_process_events(wait_time);
                 Ok(WaitBlockActivity::from_source_events(events))
@@ -1836,7 +1983,14 @@ impl WaitContextExt for neovm_eval::emacs_core::eval::Context {
                 std::thread::sleep(wait_time);
                 Ok(WaitBlockActivity::ready_processes(Vec::new()))
             }
+        };
+        if defer_adaptive {
+            super::process::types::restore_skipping_adaptive_reads(
+                self.processes_mut(),
+                &suspended,
+            );
         }
+        blocked
     }
 
     /// Decode readiness only after the Green owner reacquired the Baton.

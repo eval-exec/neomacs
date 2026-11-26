@@ -51,7 +51,8 @@ impl InputRoute {
         match self {
             Self::Tty => {}
             Self::Gui { primary_frame } => {
-                if let KbInputEvent::Resize { emacs_frame_id, .. } = &mut event
+                if let KbInputEvent::Resize { emacs_frame_id, .. }
+                | KbInputEvent::ResizeRequestCompleted { emacs_frame_id, .. } = &mut event
                     && *emacs_frame_id == 0
                 {
                     let primary = *primary_frame
@@ -73,11 +74,21 @@ impl InputRoute {
 /// attention accounting remain encapsulated by QuitRequest::request.
 pub(crate) trait PublicationQuit: Send + fmt::Debug {
     fn request(&self);
+
+    fn request_n(&self, count: u32) {
+        for _ in 0..count {
+            self.request();
+        }
+    }
 }
 
 impl PublicationQuit for QuitRequest {
     fn request(&self) {
         QuitRequest::request(self);
+    }
+
+    fn request_n(&self, count: u32) {
+        QuitRequest::request_n(self, count);
     }
 }
 
@@ -175,8 +186,9 @@ impl<Q: PublicationQuit> InputPublisher<Q> {
 
     /// One definition of early quit and the application ordering witness.
     fn prepare_enqueue(&self, input: &KbInputEvent) {
-        if input.requests_default_quit() {
-            self.quit_requested.request();
+        let quit_count = input.default_quit_count();
+        if quit_count != 0 {
+            self.quit_requested.request_n(quit_count);
         }
         #[cfg(test)]
         self.before_enqueue.observe(input);

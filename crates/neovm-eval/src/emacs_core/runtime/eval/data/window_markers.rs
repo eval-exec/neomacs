@@ -91,11 +91,18 @@ fn create_rooted_marker_at_anchor(
 ) -> (neovm_edit::buffer::MarkerRef, Value) {
     let marker_ptr = bm.create_marker_at_anchor(buffer_id, position, insertion_type);
     // SAFETY: `create_marker_at_anchor` returned the live MarkerObj it just
-    // allocated and chained; the Value is the window's GC root for it.
+    // allocated. Nothing collects before this conversion. The Value is the
+    // window's precise GC root. The marker chain is weak and is not a root.
     let gc_root = unsafe {
         Value::from_veclike_ptr(marker_ptr as *const neovm_value::tagged::header::VecLikeHeader)
     };
-    (neovm_edit::buffer::MarkerRef::new(marker_ptr), gc_root)
+    // SAFETY: `marker_ptr` is that same live node. Nothing collects before
+    // `MarkerRef::new` returns. `gc_root` above is the window's precise root;
+    // the marker chain is weak and is not.
+    (
+        unsafe { neovm_edit::buffer::MarkerRef::new(marker_ptr) },
+        gc_root,
+    )
 }
 
 /// Attach the complete GNU position-marker set to one leaf window.
@@ -135,7 +142,7 @@ pub fn attach_window_position_markers(bm: &mut BufferManager, window: &mut Windo
     remove_attached_markers(bm, old.attached());
 }
 
-pub fn unchain_window_markers(bm: &mut BufferManager, window: &mut Window) {
+pub(crate) fn unchain_window_markers(bm: &mut BufferManager, window: &mut Window) {
     let Window::Leaf {
         position_markers, ..
     } = window

@@ -7,7 +7,7 @@ use crate::common::return_if_neovm_enable_oracle_proptest_not_set;
 #[test]
 fn div_cx150_mega_buflocal_textprop_overlay_marker_undo_narrow_process_env_timer() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""ERR (void-variable buf)""#]];
+    let expect = expect_test::expect![[r#""ERR (args-out-of-range 1 1)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (let ((timer-fired nil)
@@ -19,7 +19,7 @@ fn div_cx150_mega_buflocal_textprop_overlay_marker_undo_narrow_process_env_timer
                    (process-exit-status p))))
   (run-with-timer 0 nil (lambda () (setq timer-fired :t)))
   (sit-for 0.01)
-  (let ((buf (get-buffer-create " *neo-cx150-mega-1*"))))
+  (let ((buf (get-buffer-create " *neo-cx150-mega-1*")))
     (with-current-buffer buf
       (buffer-enable-undo)
       (setq-local neo-cx150-counter 0)
@@ -49,7 +49,7 @@ fn div_cx150_mega_buflocal_textprop_overlay_marker_undo_narrow_process_env_timer
           (undo) (undo)
           (widen)
           (kill-buffer buf)
-          (list state)))))
+          (list state))))))
 "##,
         expect,
     );

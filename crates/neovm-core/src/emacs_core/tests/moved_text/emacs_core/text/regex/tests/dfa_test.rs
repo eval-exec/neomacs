@@ -154,8 +154,9 @@ fn classes_agree_with_the_matcher_tests_on_every_sample_character() {
                         for (before, after) in [(&b"x"[..], &b"y"[..]), (&b""[..], &b" "[..])] {
                             let text = [before, sample.as_slice(), after].concat();
                             let d = before.len();
-                            let (class, len) =
-                                classes.class_at(&nfa, &compiled, &text, d, &base).unwrap();
+                            let (class, len) = classes
+                                .class_at(&nfa, &compiled, &text[..], d, &base)
+                                .unwrap();
                             assert_eq!(len, sample.len());
                             ids.push(class);
                             let key = classes.key(class).clone();
@@ -169,7 +170,7 @@ fn classes_agree_with_the_matcher_tests_on_every_sample_character() {
                                 );
                                 checked += 1;
                             }
-                            let (ch, _) = re_text_char(&text, d, multibyte).unwrap();
+                            let (ch, _) = re_text_char(&text[..], d, multibyte).unwrap();
                             let class_syntax = syntax.emacs_char_syntax_at(ch, d);
                             let mask = nfa.fact_mask();
                             let word = class_syntax == SyntaxClass::Word;
@@ -221,8 +222,12 @@ fn a_context_change_empties_only_the_character_maps() {
     let context = ClassContext::of_search(&compiled, &nfa, &DefaultSyntaxLookup).unwrap();
     classes.sync(context);
     let base = BaseTableView(&DefaultSyntaxLookup);
-    let (a, _) = classes.class_at(&nfa, &compiled, b"a-", 0, &base).unwrap();
-    let (dash, _) = classes.class_at(&nfa, &compiled, b"a-", 1, &base).unwrap();
+    let (a, _) = classes
+        .class_at(&nfa, &compiled, &b"a-"[..], 0, &base)
+        .unwrap();
+    let (dash, _) = classes
+        .class_at(&nfa, &compiled, &b"a-"[..], 1, &base)
+        .unwrap();
     assert_ne!(a, dash);
     classes.sync(context);
     assert_eq!(classes.resets(), 0);
@@ -234,7 +239,7 @@ fn a_context_change_empties_only_the_character_maps() {
     // Under the custom table `-` is a word constituent: `a`'s class.
     let custom_base = BaseTableView(&CustomTableLookup);
     let (dash_now, _) = classes
-        .class_at(&nfa, &compiled, b"a-", 1, &custom_base)
+        .class_at(&nfa, &compiled, &b"a-"[..], 1, &custom_base)
         .unwrap();
     assert_eq!(dash_now, a);
     assert_eq!(classes.len(), 2);
@@ -428,7 +433,7 @@ fn a_rejected_candidate_stays_within_the_overflow_bound() {
             let found = re_match_internal(
                 &mut scratch,
                 &compiled,
-                &text,
+                &text[..],
                 p,
                 text.len(),
                 &MatchSyntax::new(&syntax),
@@ -997,7 +1002,7 @@ fn inline_first_step_rejects_and_success_fallback_agree_with_verify() {
                 _ => panic!("primed slot should be live"),
             };
             let entries = matcher_entry_count();
-            assert!(lease.try_inline_first_step_skip(&compiled, text, 1, text.len(), 0));
+            assert!(lease.try_inline_first_step_skip(&compiled, &text[..], 1, text.len(), 0));
             assert_eq!(matcher_entry_count(), entries);
             let DfaSlot::Live(live) = &*lease.slot() else {
                 panic!("a cached rejection keeps the slot live");
@@ -1006,13 +1011,13 @@ fn inline_first_step_rejects_and_success_fallback_agree_with_verify() {
             assert_eq!(live.decisions(), before_decisions + 1);
             assert_eq!(lease.skipped(), 1);
             // The real match falls through exactly once, with full registers.
-            assert!(!lease.try_inline_first_step_skip(&compiled, text, 7, text.len(), 0));
+            assert!(!lease.try_inline_first_step_skip(&compiled, &text[..], 7, text.len(), 0));
             let mut scratch = MatchScratch::default();
             let mut registers = MatchRegisters::default();
             let end = lease.candidate::<false>(
                 &mut scratch,
                 &compiled,
-                text,
+                &text[..],
                 7,
                 text.len(),
                 &MatchSyntax::new(&syntax),
@@ -1792,14 +1797,14 @@ fn cached_prefix_rejections_respect_every_consumed_boundary() {
     );
     assert!(!dfa.cached_first_step_dead(&compiled, text, 0, text.len(), 0));
     let probe = |dfa: &ExistenceDfa, stop, safe_span| {
-        dfa.cached_prefix_rejection(&compiled, text, 0, stop, 0, safe_span)
+        dfa.cached_prefix_rejection(&compiled, &text[..], 0, stop, 0, safe_span)
     };
     assert_eq!(probe(&dfa, text.len(), usize::MAX), Some(2));
     assert_eq!(probe(&dfa, 2, usize::MAX), None);
     assert_eq!(probe(&dfa, text.len(), 2), None);
     assert_eq!(probe(&dfa, text.len(), 3), Some(2));
     assert_eq!(
-        dfa.cached_prefix_rejection(&compiled, b"zzq", 0, 3, 0, usize::MAX),
+        dfa.cached_prefix_rejection(&compiled, &b"zzq"[..], 0, 3, 0, usize::MAX),
         None,
         "an unknown byte must resume the classifier"
     );
@@ -1822,11 +1827,11 @@ fn cached_prefix_rejections_respect_every_consumed_boundary() {
         );
     });
     assert_eq!(
-        dfa.cached_prefix_rejection(&at_point, b"zzq", 0, 3, 99, usize::MAX),
+        dfa.cached_prefix_rejection(&at_point, &b"zzq"[..], 0, 3, 99, usize::MAX),
         Some(2)
     );
     assert_eq!(
-        dfa.cached_prefix_rejection(&at_point, b"zzq", 0, 3, 2, usize::MAX),
+        dfa.cached_prefix_rejection(&at_point, &b"zzq"[..], 0, 3, 2, usize::MAX),
         None
     );
     assert_eq!(
@@ -1847,7 +1852,7 @@ fn cached_prefix_rejections_respect_every_consumed_boundary() {
         );
     });
     assert_eq!(
-        dfa.cached_prefix_rejection(&word, b"zz-", 0, 3, 0, usize::MAX),
+        dfa.cached_prefix_rejection(&word, &b"zz-"[..], 0, 3, 0, usize::MAX),
         Some(2)
     );
     let property = PropertyRunLookup::new(
@@ -1857,7 +1862,7 @@ fn cached_prefix_rejections_respect_every_consumed_boundary() {
     dfa.begin_search(&word, &property);
     neovm_text::test_support::authority::set_existence_dfa_plain(&mut dfa, 0..2);
     assert_eq!(
-        dfa.cached_prefix_rejection(&word, b"zz-", 0, 3, 0, usize::MAX),
+        dfa.cached_prefix_rejection(&word, &b"zz-"[..], 0, 3, 0, usize::MAX),
         None
     );
     assert_eq!(
@@ -1881,7 +1886,7 @@ fn cached_prefix_rejections_respect_every_consumed_boundary() {
     dfa.begin_search(&word, &frontier);
     neovm_text::test_support::authority::set_existence_dfa_plain(&mut dfa, 0..usize::MAX);
     assert_eq!(
-        dfa.cached_prefix_rejection(&word, b"zz-", 0, 3, 0, usize::MAX),
+        dfa.cached_prefix_rejection(&word, &b"zz-"[..], 0, 3, 0, usize::MAX),
         None
     );
     assert_eq!(
@@ -1922,14 +1927,14 @@ fn inline_cached_prefix_keeps_consumed_accounting_and_captures() {
             neovm_text::test_support::authority::set_live_dfa_overflow_free_span_for_test(
                 &mut lease, 2,
             );
-            assert!(!lease.try_inline_first_step_skip(&compiled, text, 0, text.len(), 0));
+            assert!(!lease.try_inline_first_step_skip(&compiled, &text[..], 0, text.len(), 0));
             neovm_text::test_support::authority::set_live_dfa_overflow_free_span_for_test(
                 &mut lease, safe_span,
             );
             let before = neovm_text::test_support::authority::live_dfa_counters_for_test(&lease)
                 .expect("guarded rejection should stay live");
             let entries = matcher_entry_count();
-            assert!(lease.try_inline_first_step_skip(&compiled, text, 0, text.len(), 0));
+            assert!(lease.try_inline_first_step_skip(&compiled, &text[..], 0, text.len(), 0));
             assert_eq!(matcher_entry_count(), entries);
             let after = neovm_text::test_support::authority::live_dfa_counters_for_test(&lease)
                 .expect("cached rejection should stay live");

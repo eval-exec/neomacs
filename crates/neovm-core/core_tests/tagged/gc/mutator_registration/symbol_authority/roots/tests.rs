@@ -125,9 +125,9 @@ fn root_families(backing: PlainSymbolBacking) {
             let blv = unsafe { &*blv.as_ptr() };
             roots.push(ExpectedRoot::new(
                 RootFamily::Localized,
-                blv.defcell.load_atomic(),
+                blv.defcell_atomic(),
             ));
-            assert_eq!(blv.defcell.load_atomic(), blv.valcell.load_atomic());
+            assert_eq!(blv.defcell_atomic(), blv.valcell_atomic());
             assert_eq!(blv.where_buf.load_atomic(), TaggedValue::NIL);
             // Only the parked keyboard owns this managed word. The active
             // slot is NIL, and the expected ledger below retains bits only.
@@ -256,7 +256,7 @@ fn root_families(backing: PlainSymbolBacking) {
             } in receipts
             {
                 assert!(report.major);
-                assert_eq!(report.frozen_owners, 0);
+                assert_eq!(report.frozen_owners(), 0);
                 assert!(
                     census
                         .iter()

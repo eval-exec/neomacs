@@ -1,6 +1,7 @@
 //! Portable-dump identity comes from the editor, not filename conventions or
 //! `--fingerprint`: a compatible executable can silently start without a dump.
 
+use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -9,7 +10,7 @@ use std::time::Duration;
 use neomacs_melpa_test_support::{MelpaSandbox, output_with_timeout};
 use serde::Deserialize;
 
-use crate::harness::{configure_benchmark_environment, sha256_file};
+use crate::harness::{configure_benchmark_environment_from, sha256_file};
 use crate::{EditorProvenance, PortableDumpProvenance};
 
 // A tag line followed by the verbatim filename avoids loading JSON Lisp and
@@ -25,12 +26,13 @@ const STATUS_EXPRESSION: &str = r#"(if (not (fboundp 'pdumper-stats))
           (error "pdumper-stats returned no absolute dump filename"))
         (concat "loaded\n" file)))))"#;
 
-pub(crate) fn probe(
+pub(crate) fn probe_with_environment(
     editor: &Path,
     sandbox: &MelpaSandbox,
+    environment: impl IntoIterator<Item = (String, OsString)>,
 ) -> Result<PortableDumpProvenance, String> {
     let mut command = Command::new(editor);
-    configure_benchmark_environment(&mut command, sandbox);
+    configure_benchmark_environment_from(&mut command, sandbox, environment);
     command.args(["--batch", "-Q", "--eval"]);
     command.arg(format!("(princ {STATUS_EXPRESSION})"));
     let output = output_with_timeout(&mut command, Duration::from_secs(30))

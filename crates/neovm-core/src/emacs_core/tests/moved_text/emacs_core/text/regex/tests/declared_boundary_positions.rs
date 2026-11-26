@@ -212,16 +212,16 @@ fn syntax_free_patterns_do_not_query_boundary_coordinates() {
 fn physical_match_plan_keeps_symbol_lookup_order_and_short_circuit() {
     let lookup = PhysicalReads::default();
     let plan = MatchSyntax::new(&lookup);
-    re_boundary_syntax(SyntaxAssertion::SymbolBeginning, b"c!", 1, true, &plan);
+    re_boundary_syntax(SyntaxAssertion::SymbolBeginning, &b"c!"[..], 1, true, &plan);
     assert_eq!(*lookup.0.borrow(), [1]);
     lookup.0.borrow_mut().clear();
-    re_boundary_syntax(SyntaxAssertion::SymbolBeginning, b"cd", 1, true, &plan);
+    re_boundary_syntax(SyntaxAssertion::SymbolBeginning, &b"cd"[..], 1, true, &plan);
     assert_eq!(*lookup.0.borrow(), [1, 0]);
     lookup.0.borrow_mut().clear();
-    re_boundary_syntax(SyntaxAssertion::SymbolEnd, b"!c", 1, true, &plan);
+    re_boundary_syntax(SyntaxAssertion::SymbolEnd, &b"!c"[..], 1, true, &plan);
     assert_eq!(*lookup.0.borrow(), [0]);
     lookup.0.borrow_mut().clear();
-    re_boundary_syntax(SyntaxAssertion::SymbolEnd, b"_!", 1, true, &plan);
+    re_boundary_syntax(SyntaxAssertion::SymbolEnd, &b"_!"[..], 1, true, &plan);
     assert_eq!(*lookup.0.borrow(), [0, 1]);
 }
 

@@ -3,15 +3,17 @@ use crate::tagged::value::TaggedValue;
 use std::mem::{align_of, offset_of, size_of};
 use std::sync::{Arc, Barrier};
 
-fn word(ordinal: usize) -> MarkWord {
-    MarkWord::of(TaggedValue::fixnum(ordinal as i64))
+fn push_word(buffer: &mut SatbBuffer, ordinal: usize, handoff: &SatbHandoff) {
+    // SAFETY: immediate fixnum value pushed into this test's local SATB handoff.
+    unsafe { buffer.push(TaggedValue::fixnum(ordinal as i64), handoff) };
 }
 
 fn values(chunks: Vec<SatbChunk>) -> Vec<usize> {
     chunks
         .into_iter()
         .flat_map(SatbChunk::into_words)
-        .map(|word| word.value().as_fixnum().unwrap() as usize)
+        // SAFETY: immediate fixnum words constructed on this test thread.
+        .map(|word| unsafe { word.value() }.as_fixnum().unwrap() as usize)
         .collect()
 }
 
@@ -22,7 +24,7 @@ fn satb_boundaries_preserve_exact_words_and_fixed_capacity() {
         let mut buffer = SatbBuffer::new();
         let initial_capacity = buffer.words.capacity();
         for ordinal in 0..count {
-            buffer.push(word(ordinal), &handoff);
+            push_word(&mut buffer, ordinal, &handoff);
         }
         assert_eq!(buffer.words.capacity(), initial_capacity);
         let usage = handoff.storage_usage().unwrap();
@@ -41,7 +43,7 @@ fn satb_boundaries_preserve_exact_words_and_fixed_capacity() {
 fn satb_retire_delivers_nonempty_partial_exactly_once() {
     let handoff = SatbHandoff::new();
     let mut buffer = SatbBuffer::new();
-    buffer.push(word(71), &handoff);
+    push_word(&mut buffer, 71, &handoff);
     buffer.retire(&handoff).unwrap().acknowledge();
     assert_eq!(values(handoff.take_all().unwrap()), vec![71]);
     assert!(handoff.take_all().unwrap().is_empty());
@@ -52,7 +54,7 @@ fn satb_pending_and_chunks_agree_under_the_publish_lock() {
     let handoff = SatbHandoff::new();
     let mut buffer = SatbBuffer::new();
     for ordinal in 0..SATB_CHUNK_WORDS * 3 + 1 {
-        buffer.push(word(ordinal), &handoff);
+        push_word(&mut buffer, ordinal, &handoff);
     }
     {
         let chunks = handoff.chunks.lock().unwrap();
@@ -87,7 +89,7 @@ fn satb_k_mutators_publish_concurrently_without_loss_or_duplicate_words() {
             let mut buffer = SatbBuffer::new();
             start.wait();
             for ordinal in 0..WORDS {
-                buffer.push(word(mutator * WORDS + ordinal), &handoff);
+                push_word(&mut buffer, mutator * WORDS + ordinal, &handoff);
             }
             buffer.retire(&handoff).unwrap().acknowledge();
         }));
@@ -113,7 +115,7 @@ fn satb_k_stopped_partials_and_midway_retirement_are_all_delivered() {
     let proof = StoppedMutatorsProof::for_test();
     let mut mutators: Vec<_> = (0..4).map(|_| Some(SatbBuffer::new())).collect();
     for (id, buffer) in mutators.iter_mut().enumerate() {
-        buffer.as_mut().unwrap().push(word(id * 10), &handoff);
+        push_word(buffer.as_mut().unwrap(), id * 10, &handoff);
     }
     mutators[1]
         .take()
@@ -123,7 +125,7 @@ fn satb_k_stopped_partials_and_midway_retirement_are_all_delivered() {
         .acknowledge();
     for (id, buffer) in mutators.iter_mut().enumerate() {
         if let Some(buffer) = buffer {
-            buffer.push(word(id * 10 + 1), &handoff);
+            push_word(buffer, id * 10 + 1, &handoff);
         }
     }
     let mut actual = values(handoff.take_all().unwrap());
@@ -153,7 +155,7 @@ fn satb_poison_is_reported_even_when_pending_is_zero() {
 fn satb_abandonment_is_lock_free_even_with_a_poisoned_handoff() {
     let handoff = SatbHandoff::new();
     let mut buffer = SatbBuffer::new();
-    buffer.push(word(5), &handoff);
+    push_word(&mut buffer, 5, &handoff);
     handoff.poison_for_test();
     let _locked = handoff.chunks.lock().unwrap_err().into_inner();
     buffer.abandon();
@@ -201,7 +203,7 @@ fn satb_unretired_nonempty_buffer_trips_debug_drop_check() {
     let handoff = SatbHandoff::new();
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let mut buffer = SatbBuffer::new();
-        buffer.push(word(1), &handoff);
+        push_word(&mut buffer, 1, &handoff);
         drop(buffer);
     }));
     assert!(result.is_err());
@@ -212,7 +214,7 @@ fn satb_buffer_drop_during_unwind_never_panics_twice() {
     let handoff = SatbHandoff::new();
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let mut buffer = SatbBuffer::new();
-        buffer.push(word(1), &handoff);
+        push_word(&mut buffer, 1, &handoff);
         panic!("fixture owner unwinding");
     }));
     assert!(result.is_err());

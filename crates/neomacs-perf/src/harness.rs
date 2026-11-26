@@ -54,6 +54,8 @@ pub struct RunRequest {
     journal_file: Option<PathBuf>,
     execution_overrides: crate::ExecutionOverrides,
     inherited_environment: BTreeMap<String, std::ffi::OsString>,
+    resolved_taskset: Option<PathBuf>,
+    resolved_perf: Option<PathBuf>,
 }
 
 impl RunRequest {
@@ -71,6 +73,8 @@ impl RunRequest {
             journal_file: None,
             execution_overrides: crate::ExecutionOverrides::default(),
             inherited_environment: benchmark_passthrough_environment().into_iter().collect(),
+            resolved_taskset: None,
+            resolved_perf: None,
         }
     }
 
@@ -125,6 +129,24 @@ impl RunRequest {
     ) -> Self {
         self.inherited_environment = environment;
         self
+    }
+
+    pub(crate) fn with_resolved_tools(
+        mut self,
+        taskset: Option<PathBuf>,
+        perf: Option<PathBuf>,
+    ) -> Self {
+        self.resolved_taskset = taskset;
+        self.resolved_perf = perf;
+        self
+    }
+
+    pub(crate) fn resolved_taskset(&self) -> Option<&Path> {
+        self.resolved_taskset.as_deref()
+    }
+
+    pub(crate) fn resolved_perf(&self) -> Option<&Path> {
+        self.resolved_perf.as_deref()
     }
 
     /// One request-owned environment supplies both execution and provenance.
@@ -239,6 +261,36 @@ pub enum PerfError {
     SerializeArtifact(serde_json::Error),
     #[error("invalid previous performance suite {path}: {message}")]
     InvalidSuiteHistory { path: PathBuf, message: String },
+    #[error(
+        "suite `{suite}` gates on hardware instruction counts ({scenarios:?}) and requires --hardware-counters"
+    )]
+    HardwareCountersRequired {
+        suite: crate::SuiteId,
+        scenarios: Vec<ScenarioId>,
+    },
+    #[error(
+        "suite `{suite}` requires --baseline-manifest pointing to a frozen baseline manifest JSON"
+    )]
+    BaselineManifestRequired { suite: crate::SuiteId },
+    #[error("invalid performance baseline manifest {path}: {message}")]
+    InvalidBaselineManifest { path: PathBuf, message: String },
+    #[error("baseline manifest {manifest} verification failed for {subject} at {path}: {reason}")]
+    BaselineManifestMismatch {
+        manifest: PathBuf,
+        subject: &'static str,
+        path: PathBuf,
+        reason: String,
+    },
+    #[error("guard host tool `{tool}` resolution failed: {reason}")]
+    GuardToolPathViolation { tool: &'static str, reason: String },
+    #[error("invalid candidate editor {path}: {reason}")]
+    CandidateEditorInvalid { path: PathBuf, reason: String },
+    #[error("suite `{suite}` requires --counter-scope {expected:?}, got {actual:?}")]
+    CounterScopeMismatch {
+        suite: crate::SuiteId,
+        expected: CounterScope,
+        actual: CounterScope,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -434,9 +486,10 @@ impl PerfHarness {
                 &prepared,
                 bench_session.as_ref(),
             );
-            let mut counters = request
-                .counters()
-                .map(|scope| PerfStatCapture::new(&context.directory, scope, request.timeout()));
+            let mut counters = request.counters().map(|scope| {
+                PerfStatCapture::new(&context.directory, scope, request.timeout())
+                    .with_perf_program(request.resolved_perf())
+            });
             let mut command = match profile.as_deref_mut() {
                 Some(profile) => match profile.wrap(frontend, capture_route) {
                     Ok(command) => command,
@@ -666,10 +719,12 @@ impl PerfHarness {
             | ScenarioId::MagitStatusHeavy
             | ScenarioId::FileOpen
             | ScenarioId::ProcessOutput
+            | ScenarioId::ProcessOutputCarryover
             | ScenarioId::LargeFileEditing
             | ScenarioId::Indentation
             | ScenarioId::LspJsonRpc
-            | ScenarioId::RegexSearch => {
+            | ScenarioId::RegexSearch
+            | ScenarioId::CjkFontLockPulse => {
                 scenarios::editor_workload::prepare(&self.workspace_root, request, run_directory)
             }
             ScenarioId::OrgJournalOpen | ScenarioId::OrgJournalOpenCompiled => {
@@ -1394,10 +1449,14 @@ fn frontend_command(
     display_environment: Option<&neomacs_infra::display::WestonBenchSession>,
 ) -> Command {
     let frontend = request.frontend();
+    let taskset_program = request
+        .resolved_taskset()
+        .map(Path::as_os_str)
+        .unwrap_or_else(|| std::ffi::OsStr::new("taskset"));
     let mut command = match frontend {
         Frontend::Batch => {
             let mut command = if let Some(cpu) = request.machine_policy().cpu {
-                let mut command = Command::new("taskset");
+                let mut command = Command::new(taskset_program);
                 command.arg("-c").arg(cpu.to_string()).arg(request.editor());
                 command
             } else {
@@ -1417,7 +1476,7 @@ fn frontend_command(
         }
         Frontend::Gui { .. } if prepared.uses_native_display() => {
             let mut command = if let Some(cpu) = request.machine_policy().cpu {
-                let mut command = Command::new("taskset");
+                let mut command = Command::new(taskset_program);
                 command.arg("-c").arg(cpu.to_string()).arg(request.editor());
                 command
             } else {
@@ -1431,7 +1490,7 @@ fn frontend_command(
         }
         Frontend::Gui { .. } => {
             let mut command = if let Some(cpu) = request.machine_policy().cpu {
-                let mut command = Command::new("taskset");
+                let mut command = Command::new(taskset_program);
                 command.arg("-c").arg(cpu.to_string()).arg(request.editor());
                 command
             } else {
@@ -1515,11 +1574,12 @@ fn adapter_timeout(outer_timeout: Duration) -> String {
     format!("{:.3}", outer_timeout.saturating_sub(grace).as_secs_f64())
 }
 
+#[cfg(test)]
 pub(crate) fn configure_benchmark_environment(command: &mut Command, sandbox: &MelpaSandbox) {
     configure_benchmark_environment_from(command, sandbox, benchmark_passthrough_environment());
 }
 
-fn configure_benchmark_environment_from(
+pub(crate) fn configure_benchmark_environment_from(
     command: &mut Command,
     sandbox: &MelpaSandbox,
     environment: impl IntoIterator<Item = (String, std::ffi::OsString)>,
@@ -1533,6 +1593,18 @@ pub(crate) fn collect_editor_provenance(
     editor: &Path,
     sandbox: &MelpaSandbox,
 ) -> Result<EditorProvenance, String> {
+    collect_editor_provenance_with_environment(
+        editor,
+        sandbox,
+        benchmark_passthrough_environment().into_iter().collect(),
+    )
+}
+
+pub(crate) fn collect_editor_provenance_with_environment(
+    editor: &Path,
+    sandbox: &MelpaSandbox,
+    environment: BTreeMap<String, std::ffi::OsString>,
+) -> Result<EditorProvenance, String> {
     let metadata = fs::metadata(editor)
         .map_err(|error| format!("failed to inspect editor {}: {error}", editor.display()))?;
     let canonical_path = fs::canonicalize(editor).map_err(|error| {
@@ -1541,8 +1613,8 @@ pub(crate) fn collect_editor_provenance(
             editor.display()
         )
     })?;
-    let version = editor_identity_value(editor, "--version", sandbox)?;
-    let capabilities = editor_capabilities(editor, sandbox)?;
+    let version = editor_identity_value(editor, "--version", sandbox, &environment)?;
+    let capabilities = editor_capabilities(editor, sandbox, &environment)?;
     let lowercase_version = version.to_ascii_lowercase();
     let kind = if lowercase_version.contains("neomacs") {
         EditorKind::Neomacs
@@ -1555,8 +1627,12 @@ pub(crate) fn collect_editor_provenance(
         path: canonical_path.to_string_lossy().into_owned(),
         executable_sha256: sha256_file(editor)?,
         executable_size_bytes: metadata.len(),
-        pdump_fingerprint: editor_identity_value(editor, "--fingerprint", sandbox)?,
-        portable_dump: crate::portable_dump::probe(editor, sandbox)?,
+        pdump_fingerprint: editor_identity_value(editor, "--fingerprint", sandbox, &environment)?,
+        portable_dump: crate::portable_dump::probe_with_environment(
+            editor,
+            sandbox,
+            environment.clone(),
+        )?,
         version,
         kind,
         capabilities,
@@ -1566,9 +1642,10 @@ pub(crate) fn collect_editor_provenance(
 fn editor_capabilities(
     editor: &Path,
     sandbox: &MelpaSandbox,
+    environment: &BTreeMap<String, std::ffi::OsString>,
 ) -> Result<EditorCapabilities, String> {
     let mut command = Command::new(editor);
-    configure_benchmark_environment(&mut command, sandbox);
+    configure_benchmark_environment_from(&mut command, sandbox, environment.clone());
     command.args([
         "--batch",
         "-Q",
@@ -1616,9 +1693,10 @@ fn editor_identity_value(
     editor: &Path,
     argument: &str,
     sandbox: &MelpaSandbox,
+    environment: &BTreeMap<String, std::ffi::OsString>,
 ) -> Result<String, String> {
     let mut command = Command::new(editor);
-    configure_benchmark_environment(&mut command, sandbox);
+    configure_benchmark_environment_from(&mut command, sandbox, environment.clone());
     command.arg(argument);
     let output = command.output().map_err(|error| {
         format!(
@@ -1862,10 +1940,14 @@ fn parse_scenario_result(
         | ScenarioId::MagitStatusHeavy
         | ScenarioId::FileOpen
         | ScenarioId::ProcessOutput
+        | ScenarioId::ProcessOutputCarryover
         | ScenarioId::LargeFileEditing
         | ScenarioId::Indentation
         | ScenarioId::LspJsonRpc
-        | ScenarioId::RegexSearch => serde_json::from_str(raw).map(ScenarioResult::EditorWorkload),
+        | ScenarioId::RegexSearch
+        | ScenarioId::CjkFontLockPulse => {
+            serde_json::from_str(raw).map(ScenarioResult::EditorWorkload)
+        }
         ScenarioId::OrgJournalOpen | ScenarioId::OrgJournalOpenCompiled => {
             serde_json::from_str(raw).map(ScenarioResult::OrgJournalOpen)
         }

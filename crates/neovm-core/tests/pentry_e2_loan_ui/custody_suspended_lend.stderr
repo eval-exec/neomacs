@@ -1,0 +1,5 @@
+error[E0599]: no method named `lend_serial` found for struct `neovm_core::pentry_e2_custody::SuspendedKeeper<'s, 'era>` in the current scope
+ --> tests/pentry_e2_loan_ui/custody_suspended_lend.rs:5:20
+  |
+5 |     let _ = keeper.lend_serial(request);
+  |                    ^^^^^^^^^^^ method not found in `neovm_core::pentry_e2_custody::SuspendedKeeper<'static, 'static>`

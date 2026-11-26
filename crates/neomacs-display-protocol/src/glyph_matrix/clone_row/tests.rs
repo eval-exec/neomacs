@@ -24,6 +24,7 @@ fn nonowning_types() -> Vec<GlyphType> {
             source_rect: ImageSourceRect::new(0.1, 0.2, 0.5, 0.4).unwrap(),
             margins: GlyphImageMarginsId::from_index(0).unwrap(),
             opaque_background: ImageOpaqueBackground::new(Some(0x12_34_56)),
+            presentation: crate::ImageGlyphPresentation::Texture,
         },
         GlyphType::Video {
             video_id: VideoId::new(23),

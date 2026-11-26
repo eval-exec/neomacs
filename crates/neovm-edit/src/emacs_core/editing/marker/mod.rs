@@ -94,16 +94,19 @@ pub fn make_registered_buffer_marker(
         .as_veclike_ptr()
         .map(|p| p as *mut neovm_value::tagged::header::MarkerObj)
     {
-        let _ = buffers.register_marker_at_emacs_byte_pos(
-            marker_ptr,
-            buffer_id,
-            byte_pos,
-            if insertion_type {
-                InsertionType::After
-            } else {
-                InsertionType::Before
-            },
-        );
+        // SAFETY: `make_marker_value` just allocated this MarkerObj.
+        let _ = unsafe {
+            buffers.register_marker_at_emacs_byte_pos(
+                marker_ptr,
+                buffer_id,
+                byte_pos,
+                if insertion_type {
+                    InsertionType::After
+                } else {
+                    InsertionType::Before
+                },
+            )
+        };
     }
 
     marker
@@ -124,7 +127,10 @@ pub fn make_registered_point_marker(
     let anchor = buffers.get(buffer_id)?.point_anchor();
     let marker = make_marker_value(None, None, false);
     let marker_ptr = marker.as_veclike_ptr()? as *mut neovm_value::tagged::header::MarkerObj;
-    buffers.register_marker_at_anchor(marker_ptr, buffer_id, anchor, InsertionType::Before)?;
+    // SAFETY: `make_marker_value` just allocated this MarkerObj.
+    unsafe {
+        buffers.register_marker_at_anchor(marker_ptr, buffer_id, anchor, InsertionType::Before)
+    }?;
     Some(marker)
 }
 
@@ -219,7 +225,8 @@ pub fn unchain_marker(buffers: &mut BufferManager, marker: &Value) {
     else {
         return;
     };
-    let marker_ref = crate::buffer::MarkerRef::new(ptr);
+    // SAFETY: `ptr` is the veclike payload of the live marker `Value`.
+    let marker_ref = unsafe { crate::buffer::MarkerRef::new(ptr) };
     if let Some(buffer_id) = marker_ref.buffer_id() {
         let _ = buffers.unlink_marker_ptr(buffer_id, ptr);
         let _ = marker.with_marker_data_mut(|data| data.detach());
@@ -624,7 +631,8 @@ fn register_marker_in_buffers(
     else {
         return;
     };
-    let marker_ref = crate::buffer::MarkerRef::new(ptr);
+    // SAFETY: `ptr` is the veclike payload of the live marker `Value`.
+    let marker_ref = unsafe { crate::buffer::MarkerRef::new(ptr) };
     let ins_type = marker_ref.insertion_type();
 
     // GNU `attach_marker' (src/marker.c) always writes the position and only
@@ -635,7 +643,8 @@ fn register_marker_in_buffers(
         && MarkerAttach::classify(marker_ref, buf_id) == MarkerAttach::InPlace
         && let Some(byte_pos) = buffers.get(buf_id).map(|buf| lisp_pos_to_byte(buf, pos))
     {
-        let _ = buffers.move_marker_ptr_to_emacs_byte_pos(buf_id, ptr, byte_pos);
+        // SAFETY: `ptr` is the live marker Value's object, classified as chained.
+        let _ = unsafe { buffers.move_marker_ptr_to_emacs_byte_pos(buf_id, ptr, byte_pos) };
         return;
     }
 
@@ -651,7 +660,9 @@ fn register_marker_in_buffers(
     if let (Some(buf_id), Some(pos)) = (buffer_id, position)
         && let Some(byte_pos) = buffers.get(buf_id).map(|buf| lisp_pos_to_byte(buf, pos))
     {
-        let _ = buffers.register_marker_at_emacs_byte_pos(ptr, buf_id, byte_pos, ins_type);
+        // SAFETY: `ptr` is the live marker Value, unchained above when it was attached.
+        let _ =
+            unsafe { buffers.register_marker_at_emacs_byte_pos(ptr, buf_id, byte_pos, ins_type) };
     }
 }
 
@@ -732,7 +743,8 @@ pub fn builtin_mark_marker(buffers: &mut BufferManager, args: Vec<Value>) -> Eva
             .as_veclike_ptr()
             .expect("freshly allocated marker should have a veclike ptr")
             as *mut neovm_value::tagged::header::MarkerObj;
-        buf.mark_marker = crate::buffer::MarkerRef::new(ptr);
+        // SAFETY: `ptr` is the marker Value just allocated above.
+        buf.mark_marker = unsafe { crate::buffer::MarkerRef::new(ptr) };
         return Ok(marker);
     }
     buf.mark_marker

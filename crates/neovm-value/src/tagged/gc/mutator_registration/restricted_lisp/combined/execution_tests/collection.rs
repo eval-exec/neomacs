@@ -210,13 +210,13 @@ where
         stopped
             .with_owner_image(key, |image| {
                 image.visit_work(|work| match work {
-                    PublishedGcWork::Root(word) => roots.push(WordIdentity(word.value().bits())),
+                    PublishedGcWork::Root(bits) => roots.push(WordIdentity(bits)),
                     PublishedGcWork::YoungBlock(_) => {
                         result.young_owners.push(OwnerId(key.owner()))
                     }
-                    PublishedGcWork::ConsWrite(word) => result
+                    PublishedGcWork::ConsWrite(bits) => result
                         .cons_writes
-                        .push((OwnerId(key.owner()), WordIdentity(word.value().bits()))),
+                        .push((OwnerId(key.owner()), WordIdentity(bits))),
                     PublishedGcWork::Remembered(_)
                     | PublishedGcWork::MappedOwner(_)
                     | PublishedGcWork::BlackHeader(_)
@@ -254,12 +254,9 @@ where
     K: crate::tagged::gc::mutator_registration::EraKeeper,
     W: WorldRoots<K>,
 {
-    let mut stopped = contention::retry(
-        Deadline::contention(),
-        || era.stop(),
-        contention::rendezvous,
-    )
-    .unwrap();
+    // Every existing Parked receipt came from inside a native extent;
+    // its command receiver still holds the owner until this stop completes.
+    let mut stopped = era.stop().unwrap();
     // Main's stopped reconciliation is the only legacy function-cache boundary.
     // The root enumeration itself uses the production KeeperSymbols path.
     let mut before_journal = Vec::new();
@@ -596,6 +593,7 @@ fn cohort<H: CombinedParts>(
                                 frame: FrameState::Empty,
                             }),
                             receipt: Rc::clone(&receipt),
+                            invocation: CleanupInvocation::ConcurrentOwners,
                         };
                         let body = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                             let worker = match &mut guard.resources {

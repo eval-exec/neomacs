@@ -84,7 +84,9 @@ const _: () = {
 /// `base == 0` is a generational-off snapshot and does nothing. The two
 /// stores match [`CardTable::mark`]: Relaxed, idempotent, no catalog lock.
 #[inline(always)]
-pub(super) fn mark_published(base: usize, owner_addr: usize) {
+/// # Safety
+/// `base` must be 0 or the base address of a live `CardTable`.
+pub(super) unsafe fn mark_published(base: usize, owner_addr: usize) {
     if base == 0 {
         return;
     }

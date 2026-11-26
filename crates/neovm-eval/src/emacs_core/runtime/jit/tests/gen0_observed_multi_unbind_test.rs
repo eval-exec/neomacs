@@ -34,8 +34,8 @@ fn loaded_local(context: &Context, name: &str) -> Value {
     // Obarray::blv is the public reader of this symbol's BLV record. Fixture
     // lookup loaded this buffer's actual local pair; nothing here writes it.
     let blv = context.obarray().blv(id).expect("localized");
-    assert!(blv.found);
-    blv.valcell.get()
+    assert!(blv.found.get());
+    blv.valcell()
 }
 
 fn observe_bound_cells(context: &mut Context) -> EvalResult {

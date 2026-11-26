@@ -32,6 +32,8 @@ pub(super) struct DecodeShared {
 
 struct DecodeState {
     entries: HashMap<ImageId, DecodeEntry>,
+    /// Last admission ticket handed out; zero before any submission.
+    next_admission: u64,
     outcomes: VecDeque<WorkerDecodeOutcome>,
     owner_alive: bool,
     retired_sequences: HashSet<ImageSequenceId>,
@@ -43,6 +45,7 @@ impl Default for DecodeState {
     fn default() -> Self {
         Self {
             entries: HashMap::new(),
+            next_admission: 0,
             outcomes: VecDeque::new(),
             owner_alive: true,
             retired_sequences: HashSet::new(),
@@ -69,11 +72,15 @@ struct DecodeEntry {
     load: ImageLoadToken,
     sequence: Option<ImageSequenceId>,
     status: DecodeStatus,
+    /// Monotonic admission ticket assigned when this decode was submitted.
+    /// A wholesale clear carries the last ticket issued before it, so jobs
+    /// submitted later survive the clear (GNU frees what existed then).
+    admission: u64,
 }
 
 enum DecodeStatus {
     Pending,
-    Complete(Result<ImageMetadata, ImageDiagnostic>),
+    Complete(Result<ImageMetadata, ImageDecodeFailure>),
     Retired,
 }
 
@@ -120,7 +127,7 @@ impl DecodeOutputSink {
                 let terminal = match &outcome {
                     WorkerDecodeOutcome::Band { .. } => None,
                     WorkerDecodeOutcome::Ready(decoded) => Some(Ok(decoded.metadata.clone())),
-                    WorkerDecodeOutcome::Failed { diagnostic, .. } => Some(Err(diagnostic.clone())),
+                    WorkerDecodeOutcome::Failed { failure, .. } => Some(Err(failure.clone())),
                 };
                 if let Some(terminal) = terminal {
                     state
@@ -250,12 +257,15 @@ impl ImageDecodeClient {
                     .outcomes
                     .retain(|outcome| outcome.load().image() != load.image());
             }
+            state.next_admission = state.next_admission.wrapping_add(1);
+            let admission = state.next_admission;
             state.entries.insert(
                 load.image(),
                 DecodeEntry {
                     load,
                     sequence,
                     status: DecodeStatus::Pending,
+                    admission,
                 },
             );
             self.shared.changed.notify_all();
@@ -264,7 +274,7 @@ impl ImageDecodeClient {
             DecodeOutputSink::Shared(Arc::clone(&self.shared)).publish(
                 WorkerDecodeOutcome::Failed {
                     load,
-                    diagnostic: ImageDiagnostic::NotDrawable,
+                    failure: ImageDecodeFailure::new(ImageDiagnostic::NotDrawable),
                 },
             );
         }
@@ -347,7 +357,7 @@ impl ImageDecodeClient {
         &self,
         load: ImageLoadToken,
         timeout: Duration,
-    ) -> Option<Result<ImageMetadata, ImageDiagnostic>> {
+    ) -> Option<Result<ImageMetadata, ImageDecodeFailure>> {
         let started = Instant::now();
         let mut state = self.shared.state.lock().unwrap_or_else(|e| e.into_inner());
         loop {
@@ -427,12 +437,47 @@ impl ImageDecodeClient {
         self.shared.changed.notify_all();
     }
 
-    pub(super) fn clear(&self) {
+    /// The admission ticket most recently issued by this shared decoder.
+    /// Taken before a wholesale clear so the renderer can free exactly the
+    /// jobs admitted up to that point and leave later submissions alone.
+    #[must_use]
+    pub fn admission_ticket(&self) -> u64 {
+        let state = self.shared.state.lock().unwrap_or_else(|e| e.into_inner());
+        state.next_admission
+    }
+
+    /// Retire every decode admitted at or before `through`, plus every image
+    /// the renderer has already admitted in `renderer_admitted`.
+    ///
+    /// Jobs submitted after the ticket (an eager CPU decode issued after the
+    /// clear was requested) survive, which is what GNU's synchronous clear
+    /// leaves behind. The second clause covers loads the renderer starts
+    /// itself -- toolbar icons and ID-less `load_image_*` calls: their CPU
+    /// submission can carry a newer ticket, but their render command already
+    /// preceded the clear in renderer order, so GNU's clear frees them too.
+    /// Without it their outcome could never be admitted again after
+    /// `ImageCache::clear` drops the load lifecycle, leaking the pixels.
+    ///
+    /// A caller that wants every decode retired passes the current
+    /// [`Self::admission_ticket`]; no production path passes a synthetic
+    /// maximum.
+    pub(super) fn clear_through(&self, through: u64, renderer_admitted: &[ImageId]) {
         let mut state = self.shared.state.lock().unwrap_or_else(|e| e.into_inner());
-        for entry in state.entries.values_mut() {
-            entry.status = DecodeStatus::Retired;
+        let retired: HashSet<_> = state
+            .entries
+            .iter()
+            .filter_map(|(image, entry)| {
+                (entry.admission <= through || renderer_admitted.contains(image)).then_some(*image)
+            })
+            .collect();
+        for image in &retired {
+            if let Some(entry) = state.entries.get_mut(image) {
+                entry.status = DecodeStatus::Retired;
+            }
         }
-        state.outcomes.clear();
+        state
+            .outcomes
+            .retain(|outcome| !retired.contains(&outcome.load().image()));
         self.shared.changed.notify_all();
     }
 }
