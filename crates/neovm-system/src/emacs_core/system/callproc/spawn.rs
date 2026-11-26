@@ -1041,6 +1041,7 @@ mod posix {
                     .parent_end
                     .take()
                     .map(neovm_eval::emacs_core::eval::data::process_state::PollRegistration::new),
+                stdin_nonblocking: false,
                 stdout: stdout.parent_end.take(),
                 stderr: stderr.parent_end.take(),
                 backend: ChildBackend::Pid { status: None },

@@ -175,13 +175,16 @@ impl ProcessInputEndpoint {
         match self {
             Self::Pty => Some(proc.pty_writer_mut()?.write(bytes)),
             Self::ChildPipe => {
-                let stdin = proc.live_io_mut().child_mut().stdin_mut()?;
                 #[cfg(unix)]
-                {
+                if !proc.live_io().child().is_stdin_nonblocking() {
                     use std::os::unix::io::AsRawFd;
+                    let stdin = proc.live_io().child().stdin()?;
                     let fd = stdin.as_raw_fd();
-                    let _ = sys::set_fd_nonblocking(fd);
+                    if sys::set_fd_nonblocking(fd).is_ok() {
+                        proc.live_io_mut().child_mut().mark_stdin_nonblocking();
+                    }
                 }
+                let stdin = proc.live_io_mut().child_mut().stdin_mut()?;
                 Some(stdin.write(bytes))
             }
             Self::Tls => Some(

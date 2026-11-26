@@ -559,6 +559,12 @@ fn defer_child(child: ReapableChild) {
     }
 }
 
+/// Whether any deleted child is currently awaiting the wait-safe-point
+/// `WNOHANG` fallback sweep.
+pub(super) fn has_safe_point_fallback() -> bool {
+    HAS_SAFE_POINT_FALLBACK.load(Ordering::Acquire)
+}
+
 /// Only native-source failures need the ordinary wait's WNOHANG fallback.
 /// Native-managed children add no locks or syscalls to zero-timeout Lisp polls.
 pub(super) fn collect_deferred_child_status_changes() {
@@ -672,6 +678,12 @@ pub trait ChildOwnershipIo {
     /// Some(child) = ...` this port's write path used to spell against the
     /// handle itself.
     fn has_pipe_child(&self) -> bool;
+    /// Cached `O_NONBLOCK` state of the pipe child's `stdin`.
+    #[cfg(unix)]
+    fn is_stdin_nonblocking(&self) -> bool;
+    /// Record that the pipe child's `stdin` descriptor is nonblocking.
+    #[cfg(unix)]
+    fn mark_stdin_nonblocking(&mut self);
     /// GNU's `process-send-eof` for a pipe child: close stdin.  Answers
     /// whether there was a pipe child to close it on.
     fn close_stdin(&mut self) -> bool;
@@ -767,6 +779,28 @@ impl ChildOwnershipIo for ChildOwnership {
         )
     }
 
+    #[cfg(unix)]
+    fn is_stdin_nonblocking(&self) -> bool {
+        matches!(
+            self,
+            Self::Unreaped(ReapableChild {
+                handle: ChildHandle::Pipe(child),
+                ..
+            }) if child.stdin_nonblocking
+        )
+    }
+
+    #[cfg(unix)]
+    fn mark_stdin_nonblocking(&mut self) {
+        if let Self::Unreaped(ReapableChild {
+            handle: ChildHandle::Pipe(child),
+            ..
+        }) = self
+        {
+            child.stdin_nonblocking = true;
+        }
+    }
+
     /// GNU's `process-send-eof` for a pipe child: close stdin.  Answers
     /// whether there was a pipe child to close it on.
     fn close_stdin(&mut self) -> bool {
@@ -776,6 +810,7 @@ impl ChildOwnershipIo for ChildOwnership {
                 ..
             }) => {
                 // `PollRegistration<File>` unregisters `stdin` on drop.
+                child.stdin_nonblocking = false;
                 drop(child.stdin.take());
                 true
             }
