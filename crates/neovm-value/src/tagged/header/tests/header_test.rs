@@ -303,7 +303,9 @@ fn miri_0c_collect_inside_with_vector_data_mut_panics_in_release() {
     crate::tagged::mutate::with_vector_data_mut(v, |_| {
         let collected = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
             crate::tagged::gc::with_tagged_heap(|h| {
-                h.collect_exact(std::iter::once(v));
+                crate::tagged::gc::StoppedWorldProof::with_stopped_world(h, |h, stopped| {
+                    h.collect_exact(stopped, std::iter::once(v))
+                });
             });
         }));
         assert!(

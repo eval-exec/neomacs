@@ -173,6 +173,12 @@ impl fmt::Debug for AllStopped<'_> {
     }
 }
 
+impl AllStopped<'_> {
+    pub(in crate::tagged::gc) fn stopped_heap_identity(&self) -> super::super::HeapIdentity {
+        self.registry.heap
+    }
+}
+
 #[must_use = "recover the stopped guard or retain the poisoned epoch"]
 pub struct AllStoppedFailure<'era> {
     pub reason: RendezvousError,

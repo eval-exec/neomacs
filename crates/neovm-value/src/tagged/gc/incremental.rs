@@ -108,14 +108,17 @@ impl TaggedHeap {
     /// # Safety
     ///
     /// Publishes mark termination and arms the sweep that frees unmarked
-    /// objects. Marking is already at a fixpoint. The caller holds the only
-    /// live heap borrow.
+    /// objects. Marking is already at a fixpoint. The caller supplies a live
+    /// [`StoppedWorldProof`] bound to this heap and holds the only live heap
+    /// borrow.
     #[doc(hidden)]
     pub unsafe fn incremental_finish(
         &mut self,
+        stopped: &StoppedWorldProof<'_>,
         bytes_before: usize,
         _pause_t0: std::time::Instant,
     ) {
+        stopped.assert_stopped(self, "incremental_finish");
         self.assert_no_owner_cons_reserves();
         assert!(
             !self.has_unfinished_concurrent_mark(),
@@ -185,7 +188,7 @@ impl TaggedHeap {
         // Begin the deferred sweep. Detach the young non-cons list (new non-cons
         // allocations link onto a fresh `all_objects` and are not swept this
         // cycle) and withhold cons lists (published only after each block is swept).
-        self.begin_old_sweep_world_stopped();
+        self.begin_old_sweep_world_stopped(stopped);
         self.sweep_noncons_pending = self.all_objects;
         self.all_objects = std::ptr::null_mut();
         self.sweep_cons_cursor = 0;
@@ -316,10 +319,16 @@ impl TaggedHeap {
     /// block never reclaims a live new cell.
     /// # Safety
     ///
-    /// Frees unmarked objects in this slice. The caller holds the only live
-    /// heap borrow, and no pointer this slice can free is live across the call.
+    /// Frees unmarked objects in this slice. The caller supplies a live
+    /// [`StoppedWorldProof`] bound to this heap, holds the only live heap
+    /// borrow, and no pointer this slice can free is live across the call.
     #[doc(hidden)]
-    pub unsafe fn incremental_sweep_slice(&mut self, budget: usize) -> bool {
+    pub unsafe fn incremental_sweep_slice(
+        &mut self,
+        stopped: &StoppedWorldProof<'_>,
+        budget: usize,
+    ) -> bool {
+        stopped.assert_stopped(self, "incremental_sweep_slice");
         self.assert_no_owner_cons_reserves();
         assert!(
             !self.has_unfinished_concurrent_mark(),
@@ -426,7 +435,7 @@ impl TaggedHeap {
         let noncons_budget = budget.saturating_mul(256);
         let mut processed = 0usize;
         let mut noncons_freed = if self.generational.major_in_progress {
-            self.sweep_old_objects_slice(noncons_budget)
+            self.sweep_old_objects_slice(stopped, noncons_budget)
         } else {
             0
         };
@@ -504,7 +513,7 @@ impl TaggedHeap {
             );
         }
         if done {
-            self.finish_incremental_sweep();
+            self.finish_incremental_sweep(stopped);
         }
         if has_collection_observations() {
             // A slice can free/reuse slots before the entire sweep completes.
@@ -521,21 +530,24 @@ impl TaggedHeap {
     /// the next mark / a stop-the-world collection can begin).
     /// # Safety
     ///
-    /// Drains the sweep and frees every remaining unmarked object. The
-    /// caller holds the only live heap borrow.
+    /// Drains the sweep and frees every remaining unmarked object. The caller
+    /// supplies a live [`StoppedWorldProof`] bound to this heap and holds the
+    /// only live heap borrow.
     #[doc(hidden)]
-    pub unsafe fn finish_incremental_sweep_now(&mut self) {
+    pub unsafe fn finish_incremental_sweep_now(&mut self, stopped: &StoppedWorldProof<'_>) {
+        stopped.assert_stopped(self, "finish_incremental_sweep_now");
         self.assert_no_owner_cons_reserves();
         while self.sweep_in_progress {
-            // SAFETY: this entry is the draining sweep.
-            unsafe { self.incremental_sweep_slice(usize::MAX) };
+            // SAFETY: this entry is the draining sweep and forwards `stopped`.
+            unsafe { self.incremental_sweep_slice(stopped, usize::MAX) };
         }
     }
 
     /// Finalize the deferred sweep: GEN1 consumes publication-time freed-cell
     /// deltas; GEN0 retains its bitmap recount. Both account for allocate-black
     /// births, fix allocation counters, and emit the completed cycle trace.
-    pub(super) fn finish_incremental_sweep(&mut self) {
+    pub(super) fn finish_incremental_sweep(&mut self, stopped: &StoppedWorldProof<'_>) {
+        stopped.assert_stopped(self, "finish_incremental_sweep");
         assert!(
             !self.has_unfinished_concurrent_mark(),
             "finish_incremental_sweep cannot run while a concurrent mark is unfinished"

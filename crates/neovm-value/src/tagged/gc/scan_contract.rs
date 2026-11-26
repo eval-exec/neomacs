@@ -157,12 +157,32 @@ static_assertions::assert_not_impl_any!(StoppedMutatorsProof: Send, Sync, Copy, 
 #[derive(Debug)]
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(in crate::tagged::gc) struct ParallelStoppedMutatorsProof<'epoch> {
+    heap_identity: super::HeapIdentity,
     legacy: StoppedMutatorsProof,
     _epoch: PhantomData<&'epoch ()>,
 }
 impl<'epoch> ParallelStoppedMutatorsProof<'epoch> {
-    pub(in crate::tagged::gc) fn from_all_stopped(_: &'epoch super::AllStopped<'_>) -> Self {
+    pub(in crate::tagged::gc) fn from_all_stopped(stopped: &'epoch super::AllStopped<'_>) -> Self {
         Self {
+            heap_identity: stopped.stopped_heap_identity(),
+            legacy: StoppedMutatorsProof {
+                _owner: PhantomData,
+            },
+            _epoch: PhantomData,
+        }
+    }
+    pub(in crate::tagged::gc) fn heap_identity(&self) -> super::HeapIdentity {
+        self.heap_identity
+    }
+    /// `cfg(test)` only: a parallel proof for an identity, without an
+    /// `AllStopped`, so `StoppedWorldProof::with_all_stopped`'s identity
+    /// refusal has a row. Absent from production and `test-support`.
+    #[cfg(test)]
+    pub(in crate::tagged::gc) fn for_heap_identity_test(
+        heap_identity: super::HeapIdentity,
+    ) -> Self {
+        Self {
+            heap_identity,
             legacy: StoppedMutatorsProof {
                 _owner: PhantomData,
             },

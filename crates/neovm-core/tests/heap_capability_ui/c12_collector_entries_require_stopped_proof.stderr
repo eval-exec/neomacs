@@ -1,0 +1,143 @@
+error[E0061]: this method takes 2 arguments but 1 argument was supplied
+ --> tests/heap_capability_ui/c12_collector_entries_require_stopped_proof.rs:9:14
+  |
+9 |         heap.collect(std::iter::empty());
+  |              ^^^^^^^ ------------------ argument #1 of type `&neovm_value::tagged::gc::StoppedWorldProof<'_>` is missing
+  |
+note: method defined here
+ --> $WORKSPACE/crates/neovm-value/src/tagged/gc/mark_sweep.rs
+  |
+  |     pub unsafe fn collect(
+  |                   ^^^^^^^
+help: provide the argument
+  |
+9 |         heap.collect(/* &neovm_value::tagged::gc::StoppedWorldProof<'_> */, std::iter::empty());
+  |                      ++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+error[E0061]: this method takes 2 arguments but 1 argument was supplied
+  --> tests/heap_capability_ui/c12_collector_entries_require_stopped_proof.rs:10:14
+   |
+10 |         heap.collect_exact(std::iter::empty());
+   |              ^^^^^^^^^^^^^ ------------------ argument #1 of type `&neovm_value::tagged::gc::StoppedWorldProof<'_>` is missing
+   |
+note: method defined here
+  --> $WORKSPACE/crates/neovm-value/src/tagged/gc/mark_sweep.rs
+   |
+   |     pub unsafe fn collect_exact(
+   |                   ^^^^^^^^^^^^^
+help: provide the argument
+   |
+10 |         heap.collect_exact(/* &neovm_value::tagged::gc::StoppedWorldProof<'_> */, std::iter::empty());
+   |                            ++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+error[E0061]: this method takes 1 argument but 0 arguments were supplied
+  --> tests/heap_capability_ui/c12_collector_entries_require_stopped_proof.rs:11:14
+   |
+11 |         heap.begin_stw_collection();
+   |              ^^^^^^^^^^^^^^^^^^^^-- argument #1 of type `&neovm_value::tagged::gc::StoppedWorldProof<'_>` is missing
+   |
+note: method defined here
+  --> $WORKSPACE/crates/neovm-value/src/tagged/gc/concurrent.rs
+   |
+   |     pub unsafe fn begin_stw_collection(&mut self, stopped: &StoppedWorldProof<'_>) {
+   |                   ^^^^^^^^^^^^^^^^^^^^
+help: provide the argument
+   |
+11 |         heap.begin_stw_collection(/* &neovm_value::tagged::gc::StoppedWorldProof<'_> */);
+   |                                   +++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+error[E0061]: this method takes 1 argument but 0 arguments were supplied
+  --> tests/heap_capability_ui/c12_collector_entries_require_stopped_proof.rs:12:14
+   |
+12 |         heap.complete_collection();
+   |              ^^^^^^^^^^^^^^^^^^^-- argument #1 of type `&neovm_value::tagged::gc::StoppedWorldProof<'_>` is missing
+   |
+note: method defined here
+  --> $WORKSPACE/crates/neovm-value/src/tagged/gc/mark_sweep.rs
+   |
+   |     pub unsafe fn complete_collection(&mut self, stopped: &StoppedWorldProof<'_>) {
+   |                   ^^^^^^^^^^^^^^^^^^^
+help: provide the argument
+   |
+12 |         heap.complete_collection(/* &neovm_value::tagged::gc::StoppedWorldProof<'_> */);
+   |                                  +++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+error[E0061]: this method takes 1 argument but 0 arguments were supplied
+  --> tests/heap_capability_ui/c12_collector_entries_require_stopped_proof.rs:13:22
+   |
+13 |         let _ = heap.begin_minor_collection();
+   |                      ^^^^^^^^^^^^^^^^^^^^^^-- argument #1 of type `&neovm_value::tagged::gc::StoppedWorldProof<'_>` is missing
+   |
+note: method defined here
+  --> $WORKSPACE/crates/neovm-value/src/tagged/gc/generational.rs
+   |
+   |     pub unsafe fn begin_minor_collection(
+   |                   ^^^^^^^^^^^^^^^^^^^^^^
+help: provide the argument
+   |
+13 |         let _ = heap.begin_minor_collection(/* &neovm_value::tagged::gc::StoppedWorldProof<'_> */);
+   |                                             +++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+error[E0061]: this method takes 1 argument but 0 arguments were supplied
+  --> tests/heap_capability_ui/c12_collector_entries_require_stopped_proof.rs:14:14
+   |
+14 |         heap.complete_minor_collection();
+   |              ^^^^^^^^^^^^^^^^^^^^^^^^^-- argument #1 of type `&neovm_value::tagged::gc::StoppedWorldProof<'_>` is missing
+   |
+note: method defined here
+  --> $WORKSPACE/crates/neovm-value/src/tagged/gc/generational.rs
+   |
+   |     pub unsafe fn complete_minor_collection(&mut self, stopped: &StoppedWorldProof<'_>) {
+   |                   ^^^^^^^^^^^^^^^^^^^^^^^^^
+help: provide the argument
+   |
+14 |         heap.complete_minor_collection(/* &neovm_value::tagged::gc::StoppedWorldProof<'_> */);
+   |                                        +++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+error[E0061]: this method takes 3 arguments but 2 arguments were supplied
+  --> tests/heap_capability_ui/c12_collector_entries_require_stopped_proof.rs:15:14
+   |
+15 |         heap.incremental_finish(0, std::time::Instant::now());
+   |              ^^^^^^^^^^^^^^^^^^ - argument #1 of type `&neovm_value::tagged::gc::StoppedWorldProof<'_>` is missing
+   |
+note: method defined here
+  --> $WORKSPACE/crates/neovm-value/src/tagged/gc/incremental.rs
+   |
+   |     pub unsafe fn incremental_finish(
+   |                   ^^^^^^^^^^^^^^^^^^
+help: provide the argument
+   |
+15 |         heap.incremental_finish(/* &neovm_value::tagged::gc::StoppedWorldProof<'_> */, 0, std::time::Instant::now());
+   |                                 ++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+error[E0061]: this method takes 2 arguments but 1 argument was supplied
+  --> tests/heap_capability_ui/c12_collector_entries_require_stopped_proof.rs:16:22
+   |
+16 |         let _ = heap.incremental_sweep_slice(1);
+   |                      ^^^^^^^^^^^^^^^^^^^^^^^ - argument #1 of type `&neovm_value::tagged::gc::StoppedWorldProof<'_>` is missing
+   |
+note: method defined here
+  --> $WORKSPACE/crates/neovm-value/src/tagged/gc/incremental.rs
+   |
+   |     pub unsafe fn incremental_sweep_slice(
+   |                   ^^^^^^^^^^^^^^^^^^^^^^^
+help: provide the argument
+   |
+16 |         let _ = heap.incremental_sweep_slice(/* &neovm_value::tagged::gc::StoppedWorldProof<'_> */, 1);
+   |                                              ++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+error[E0061]: this method takes 1 argument but 0 arguments were supplied
+  --> tests/heap_capability_ui/c12_collector_entries_require_stopped_proof.rs:17:14
+   |
+17 |         heap.finish_incremental_sweep_now();
+   |              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^-- argument #1 of type `&neovm_value::tagged::gc::StoppedWorldProof<'_>` is missing
+   |
+note: method defined here
+  --> $WORKSPACE/crates/neovm-value/src/tagged/gc/incremental.rs
+   |
+   |     pub unsafe fn finish_incremental_sweep_now(&mut self, stopped: &StoppedWorldProof<'_>) {
+   |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: provide the argument
+   |
+17 |         heap.finish_incremental_sweep_now(/* &neovm_value::tagged::gc::StoppedWorldProof<'_> */);
+   |                                           +++++++++++++++++++++++++++++++++++++++++++++++++++++

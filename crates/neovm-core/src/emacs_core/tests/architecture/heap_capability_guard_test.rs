@@ -440,7 +440,10 @@ impl<'ast> Visit<'ast> for Scanner<'_> {
         // arguments `(stopped, roots)`. A one-argument `KeeperEra::collect_requested`
         // delegates to the allowlisted Baton adapter in `keeper_service.rs`.
         let era_collect = ERA_COLLECT_METHODS.contains(&name.as_str()) && call.args.len() == 2;
-        let collect = name == "collect_exact" || (name == "collect" && call.args.len() == 1);
+        // `Iterator::collect()` takes 0 args; `port.collect(lend, returned, reply)` takes 3 args.
+        // `TaggedHeap::collect` takes 2 args `(stopped, roots)` (1 arg in legacy synthetic fixtures).
+        let collect =
+            name == "collect_exact" || (name == "collect" && matches!(call.args.len(), 1 | 2));
         if collect
             || (sweep && !self.sweep_caller_allowed())
             || (era_collect && !self.era_collect_caller_allowed())
@@ -455,6 +458,7 @@ impl<'ast> Visit<'ast> for Scanner<'_> {
 
     fn visit_expr_call(&mut self, call: &'ast syn::ExprCall) {
         let mut entered_tls_call = false;
+        let mut is_stopped_world_scope = false;
         if let Expr::Path(path) = &*call.func {
             if let Some(name) = heap_path_method(&path.path) {
                 let sweep = is_sweep_method(&name);
@@ -465,6 +469,9 @@ impl<'ast> Visit<'ast> for Scanner<'_> {
                 && !self.era_collect_caller_allowed()
             {
                 self.note_call(&name, path.path.span().start().line);
+            }
+            if is_stopped_world_scope_call(&path.path, call.args.len()) {
+                is_stopped_world_scope = true;
             }
             if let Some(last) = path.path.segments.last() {
                 let ident = last.ident.to_string();
@@ -477,7 +484,33 @@ impl<'ast> Visit<'ast> for Scanner<'_> {
                 }
             }
         }
-        if entered_tls_call {
+        if is_stopped_world_scope {
+            // `StoppedWorldProof::with_stopped_world(heap, |heap, stopped| body)`
+            // and `with_all_stopped(heap, parallel, |heap, stopped| body)` are
+            // synchronous HRTB scope combinators whose closure (the last
+            // argument) runs inline and cannot escape. Visit the direct
+            // closure body under the enclosing function's safety and allowlist
+            // identity; any nested closure inside `body` still visits
+            // `visit_expr_closure` and resets `unsafe_fn` to 0.
+            self.visit_expr(&call.func);
+            let args: Vec<&Expr> = call.args.iter().collect();
+            let (body, leading) = args.split_last().expect("scope call has a closure");
+            for arg in leading {
+                self.visit_expr(arg);
+            }
+            if let Expr::Closure(closure) = body {
+                for attr in &closure.attrs {
+                    self.visit_attribute(attr);
+                }
+                for pat in &closure.inputs {
+                    self.visit_pat(pat);
+                }
+                self.visit_return_type(&closure.output);
+                self.visit_expr(&closure.body);
+            } else {
+                self.visit_expr(body);
+            }
+        } else if entered_tls_call {
             self.visit_expr(&call.func);
             self.in_with_tagged_heap_arg += 1;
             for arg in &call.args {
@@ -548,6 +581,19 @@ fn type_is_tagged_heap(ty: &Type) -> bool {
         Type::Paren(paren) => type_is_tagged_heap(&paren.elem),
         _ => false,
     }
+}
+
+fn is_stopped_world_scope_call(path: &syn::Path, arg_count: usize) -> bool {
+    let mut rev = path.segments.iter().rev();
+    let Some(method) = rev.next() else {
+        return false;
+    };
+    let Some(ty) = rev.next() else {
+        return false;
+    };
+    ty.ident == "StoppedWorldProof"
+        && ((method.ident == "with_stopped_world" && arg_count == 2)
+            || (method.ident == "with_all_stopped" && arg_count == 3))
 }
 
 fn heap_path_method(path: &syn::Path) -> Option<String> {
@@ -3574,5 +3620,708 @@ fn slice_view_unsafe_budget_fence_rejects_violations() {
             && p.contains("Pat::Verbatim")
             && p.contains("TypeParamBound::Verbatim"),
         "Verbatim AST nodes must fail closed:\n{p}"
+    );
+}
+
+const C12_STOPPED_WORLD_PROOF_FILE: &str = "neovm-value/src/tagged/gc/stopped_world_proof.rs";
+
+const C12_PROOF_GATED_ENTRIES: &[&str] = &[
+    // 9 pub unsafe fn collector-protocol entries:
+    "collect",
+    "collect_exact",
+    "begin_stw_collection",
+    "complete_collection",
+    "begin_minor_collection",
+    "complete_minor_collection",
+    "incremental_finish",
+    "incremental_sweep_slice",
+    "finish_incremental_sweep_now",
+    // 6 internal collector-phase helpers:
+    "finalize_collection",
+    "begin_collection_with",
+    "begin_parallel_minor_collection",
+    "finish_incremental_sweep",
+    "begin_old_sweep_world_stopped",
+    "sweep_old_objects_slice",
+];
+
+/// Exact `(file, fn)` allowlist for production serial
+/// `StoppedWorldProof::with_stopped_world` call sites (deny-by-default: any
+/// other function, even in an allowlisted file, fails the guard).
+const C12_ALLOWED_MINT_CALLERS: &[(&str, &str)] = &[
+    (
+        "neovm-eval/src/emacs_core/runtime/eval/command_loop.rs",
+        "gc_collect_from_current_roots_body",
+    ),
+    (
+        "neovm-eval/src/emacs_core/runtime/eval/command_loop.rs",
+        "terminate_concurrent_mark",
+    ),
+    (
+        "neovm-value/src/tagged/gc/facade_mark.rs",
+        "drain_to_quiescent",
+    ),
+    (
+        "neovm-value/src/tagged/gc/concurrent.rs",
+        "raw_concurrent_begin",
+    ),
+];
+
+/// Exact `(file, fn)` allowlist for the parallel `with_all_stopped` mint: the
+/// only holder of a `ParallelStoppedMutatorsProof` borrowed from `AllStopped`.
+const C12_ALLOWED_PARALLEL_MINT_CALLERS: &[(&str, &str)] = &[(
+    "neovm-value/src/tagged/gc/mutator_registration/collection.rs",
+    "run",
+)];
+
+/// Permitted `StoppedWorldProof` constructors: `(name, must_be_unsafe,
+/// must_borrow_parallel_proof)`. Neither may take a raw pointer (value-gc C12
+/// v2's `*const TaggedHeap` aliased the body's `&mut TaggedHeap`).
+const C12_PERMITTED_CONSTRUCTORS: &[(&str, bool, bool)] = &[
+    ("StoppedWorldProof::with_stopped_world", true, false),
+    ("StoppedWorldProof::with_all_stopped", false, true),
+];
+
+fn c12_is_parallel_proof_ref(ty: &Type) -> bool {
+    let Type::Reference(r) = ty else {
+        return false;
+    };
+    let Type::Path(p) = &*r.elem else {
+        return false;
+    };
+    p.path
+        .segments
+        .last()
+        .is_some_and(|seg| seg.ident == "ParallelStoppedMutatorsProof")
+}
+
+fn c12_mentions_raw_pointer(ty: &Type) -> bool {
+    struct PtrFinder(bool);
+    impl<'ast> Visit<'ast> for PtrFinder {
+        fn visit_type_ptr(&mut self, node: &'ast syn::TypePtr) {
+            self.0 = true;
+            visit::visit_type_ptr(self, node);
+        }
+    }
+    let mut finder = PtrFinder(false);
+    finder.visit_type(ty);
+    finder.0
+}
+
+/// `(takes_parallel_proof, takes_raw_pointer)` for a constructor signature.
+fn c12_constructor_inputs(sig: &syn::Signature) -> (bool, bool) {
+    let typed = sig.inputs.iter().filter_map(|arg| match arg {
+        syn::FnArg::Typed(pat) => Some(&*pat.ty),
+        syn::FnArg::Receiver(_) => None,
+    });
+    typed.fold((false, false), |(parallel, raw), ty| {
+        (
+            parallel || c12_is_parallel_proof_ref(ty),
+            raw || c12_mentions_raw_pointer(ty),
+        )
+    })
+}
+
+fn c12_is_stopped_world_proof_ref(ty: &Type) -> bool {
+    let Type::Reference(r) = ty else {
+        return false;
+    };
+    let Type::Path(p) = &*r.elem else {
+        return false;
+    };
+    p.path
+        .segments
+        .last()
+        .is_some_and(|seg| seg.ident == "StoppedWorldProof")
+}
+
+fn c12_type_mentions_stopped_world_proof(ty: &Type, self_is_proof: bool) -> bool {
+    struct TypeMentionFinder {
+        self_is_proof: bool,
+        found: bool,
+    }
+    impl<'ast> Visit<'ast> for TypeMentionFinder {
+        fn visit_type_path(&mut self, node: &'ast syn::TypePath) {
+            if node.path.segments.iter().any(|seg| {
+                seg.ident == "StoppedWorldProof" || (self.self_is_proof && seg.ident == "Self")
+            }) {
+                self.found = true;
+            }
+            visit::visit_type_path(self, node);
+        }
+    }
+    let mut finder = TypeMentionFinder {
+        self_is_proof,
+        found: false,
+    };
+    finder.visit_type(ty);
+    finder.found
+}
+
+#[derive(Default)]
+struct C12Audit {
+    found_entries: std::collections::BTreeMap<String, (String, bool)>,
+    constructors: Vec<C12Constructor>,
+    problems: Vec<String>,
+}
+
+struct C12Constructor {
+    file: String,
+    name: String,
+    is_unsafe: bool,
+    takes_parallel_proof: bool,
+    takes_raw_pointer: bool,
+}
+
+fn c12_audit_file(rel_path: &str, ast: &syn::File, audit: &mut C12Audit) {
+    struct C12Visitor<'a> {
+        rel_path: &'a str,
+        excluded: u32,
+        fn_stack: Vec<String>,
+        in_proof_impl: bool,
+        in_tagged_heap_impl: bool,
+        current_fn_constructs_proof: bool,
+        audit: &'a mut C12Audit,
+    }
+
+    impl<'ast> Visit<'ast> for C12Visitor<'_> {
+        fn visit_item_mod(&mut self, item: &'ast syn::ItemMod) {
+            let ex = production_excluded(&item.attrs);
+            if ex {
+                self.excluded += 1;
+            }
+            visit::visit_item_mod(self, item);
+            if ex {
+                self.excluded -= 1;
+            }
+        }
+
+        fn visit_item_impl(&mut self, item: &'ast ItemImpl) {
+            let ex = production_excluded(&item.attrs);
+            if ex {
+                self.excluded += 1;
+            }
+            let prev_proof = self.in_proof_impl;
+            let prev_heap = self.in_tagged_heap_impl;
+            if let Type::Path(self_ty) = &*item.self_ty
+                && let Some(seg) = self_ty.path.segments.last()
+            {
+                self.in_proof_impl = seg.ident == "StoppedWorldProof";
+                self.in_tagged_heap_impl = item.trait_.is_none() && seg.ident == "TaggedHeap";
+            }
+            visit::visit_item_impl(self, item);
+            self.in_proof_impl = prev_proof;
+            self.in_tagged_heap_impl = prev_heap;
+            if ex {
+                self.excluded -= 1;
+            }
+        }
+
+        fn visit_item_fn(&mut self, item: &'ast syn::ItemFn) {
+            let ex = production_excluded(&item.attrs);
+            if ex {
+                self.excluded += 1;
+            }
+            let name = item.sig.ident.to_string();
+            let prev_constructs = self.current_fn_constructs_proof;
+            self.current_fn_constructs_proof = false;
+            self.fn_stack.push(name.clone());
+            visit::visit_item_fn(self, item);
+            self.fn_stack.pop();
+            if self.excluded == 0 && self.current_fn_constructs_proof {
+                let (takes_parallel_proof, takes_raw_pointer) = c12_constructor_inputs(&item.sig);
+                self.audit.constructors.push(C12Constructor {
+                    file: self.rel_path.to_owned(),
+                    name,
+                    is_unsafe: matches!(item.sig.safety, syn::Safety::Unsafe(_)),
+                    takes_parallel_proof,
+                    takes_raw_pointer,
+                });
+            }
+            self.current_fn_constructs_proof = prev_constructs;
+            if ex {
+                self.excluded -= 1;
+            }
+        }
+
+        fn visit_impl_item_fn(&mut self, item: &'ast syn::ImplItemFn) {
+            let ex = production_excluded(&item.attrs);
+            if ex {
+                self.excluded += 1;
+            }
+            let name = item.sig.ident.to_string();
+            if self.excluded == 0
+                && self.in_tagged_heap_impl
+                && C12_PROOF_GATED_ENTRIES.contains(&name.as_str())
+            {
+                let has_proof = item.sig.inputs.iter().any(|arg| match arg {
+                    syn::FnArg::Typed(pat) => c12_is_stopped_world_proof_ref(&pat.ty),
+                    syn::FnArg::Receiver(_) => false,
+                });
+                self.audit
+                    .found_entries
+                    .insert(name.clone(), (self.rel_path.to_owned(), has_proof));
+            }
+            if self.excluded == 0 && self.in_tagged_heap_impl && name == "begin_collection" {
+                self.audit.problems.push(format!(
+                    "{}: TaggedHeap::begin_collection must be test/test-support gated in production",
+                    self.rel_path
+                ));
+            }
+            let prev_constructs = self.current_fn_constructs_proof;
+            self.current_fn_constructs_proof = false;
+            self.fn_stack.push(name.clone());
+            visit::visit_impl_item_fn(self, item);
+            self.fn_stack.pop();
+            if self.excluded == 0 {
+                let returns_proof = match &item.sig.output {
+                    syn::ReturnType::Default => false,
+                    syn::ReturnType::Type(_, ty) => {
+                        c12_type_mentions_stopped_world_proof(ty, self.in_proof_impl)
+                    }
+                };
+                if self.current_fn_constructs_proof || (self.in_proof_impl && returns_proof) {
+                    let qualified = if self.in_proof_impl {
+                        format!("StoppedWorldProof::{name}")
+                    } else {
+                        name
+                    };
+                    let (takes_parallel_proof, takes_raw_pointer) =
+                        c12_constructor_inputs(&item.sig);
+                    self.audit.constructors.push(C12Constructor {
+                        file: self.rel_path.to_owned(),
+                        name: qualified,
+                        is_unsafe: matches!(item.sig.safety, syn::Safety::Unsafe(_)),
+                        takes_parallel_proof,
+                        takes_raw_pointer,
+                    });
+                }
+            }
+            self.current_fn_constructs_proof = prev_constructs;
+            if ex {
+                self.excluded -= 1;
+            }
+        }
+
+        fn visit_expr_struct(&mut self, expr: &'ast syn::ExprStruct) {
+            if self.excluded == 0
+                && let Some(last) = expr.path.segments.last()
+                && (last.ident == "StoppedWorldProof"
+                    || (self.in_proof_impl && last.ident == "Self"))
+            {
+                self.current_fn_constructs_proof = true;
+            }
+            visit::visit_expr_struct(self, expr);
+        }
+
+        fn visit_expr_call(&mut self, call: &'ast syn::ExprCall) {
+            if self.excluded == 0
+                && let Expr::Path(path) = &*call.func
+                && let Some(seg) = path.path.segments.last()
+                && let Some((mint, allowlist)) = match seg.ident.to_string().as_str() {
+                    "with_stopped_world" => Some(("with_stopped_world", C12_ALLOWED_MINT_CALLERS)),
+                    "with_all_stopped" => {
+                        Some(("with_all_stopped", C12_ALLOWED_PARALLEL_MINT_CALLERS))
+                    }
+                    _ => None,
+                }
+            {
+                let enclosing_fn = self
+                    .fn_stack
+                    .last()
+                    .map(String::as_str)
+                    .unwrap_or("<module>");
+                let allowed = allowlist
+                    .iter()
+                    .any(|&(file, func)| file == self.rel_path && func == enclosing_fn);
+                if !allowed {
+                    let line = path.path.span().start().line;
+                    self.audit.problems.push(format!(
+                        "{}:{line}: non-allowlisted production `{mint}` mint in `{enclosing_fn}`",
+                        self.rel_path
+                    ));
+                }
+            }
+            visit::visit_expr_call(self, call);
+        }
+    }
+
+    let mut visitor = C12Visitor {
+        rel_path,
+        excluded: 0,
+        fn_stack: Vec::new(),
+        in_proof_impl: false,
+        in_tagged_heap_impl: false,
+        current_fn_constructs_proof: false,
+        audit,
+    };
+    visitor.visit_file(ast);
+}
+
+fn c12_finish_audit(audit: &C12Audit) -> Vec<String> {
+    let mut problems = audit.problems.clone();
+    for &entry in C12_PROOF_GATED_ENTRIES {
+        match audit.found_entries.get(entry) {
+            None => problems.push(format!("missing TaggedHeap::{entry} definition")),
+            Some((file, false)) => problems.push(format!(
+                "{file}: TaggedHeap::{entry} is missing a `&StoppedWorldProof` parameter"
+            )),
+            Some((_, true)) => {}
+        }
+    }
+    let mut seen = std::collections::BTreeSet::new();
+    for ctor in &audit.constructors {
+        let C12Constructor {
+            file,
+            name,
+            is_unsafe,
+            takes_parallel_proof,
+            takes_raw_pointer,
+        } = ctor;
+        let permitted = C12_PERMITTED_CONSTRUCTORS
+            .iter()
+            .find(|(permitted, ..)| file == C12_STOPPED_WORLD_PROOF_FILE && name == permitted);
+        let Some(&(_, must_be_unsafe, must_borrow_parallel)) = permitted else {
+            let safety = if *is_unsafe { "unsafe fn" } else { "safe fn" };
+            problems.push(format!(
+                "{file}: unexpected StoppedWorldProof constructor `{name}` ({safety}); only `with_stopped_world` and `with_all_stopped` are permitted"
+            ));
+            continue;
+        };
+        seen.insert(name.as_str());
+        if *is_unsafe != must_be_unsafe {
+            let want = if must_be_unsafe {
+                "`unsafe fn`"
+            } else {
+                "a safe fn"
+            };
+            problems.push(format!("{file}: {name} must be {want}"));
+        }
+        if *takes_parallel_proof != must_borrow_parallel {
+            let want = if must_borrow_parallel {
+                "must"
+            } else {
+                "must not"
+            };
+            problems.push(format!(
+                "{file}: {name} {want} borrow a `&ParallelStoppedMutatorsProof`"
+            ));
+        }
+        if *takes_raw_pointer {
+            problems.push(format!(
+                "{file}: {name} must not take a raw pointer; borrow the heap and pass it to `body`"
+            ));
+        }
+    }
+    for (name, ..) in C12_PERMITTED_CONSTRUCTORS {
+        if !seen.contains(name) {
+            problems.push(format!("missing {name} constructor"));
+        }
+    }
+    problems
+}
+
+/// value-gc C12: every collector-protocol entry and internal phase helper on
+/// `TaggedHeap` must carry a `&StoppedWorldProof` parameter; `StoppedWorldProof`
+/// has exactly the two constructors in `C12_PERMITTED_CONSTRUCTORS` (serial
+/// `unsafe fn with_stopped_world`, parallel safe `with_all_stopped` borrowing
+/// the parallel proof; neither takes a raw pointer; any other constructor is
+/// denied); and every production mint sits in its exact `(file, fn)` allowlist.
+#[test]
+fn c12_collector_protocol_entries_require_stopped_world_proof() {
+    let mut audit = C12Audit::default();
+    for file in architecture_production_source_roots::production_source_files() {
+        if file.is_test_path() {
+            continue;
+        }
+        let content = std::fs::read_to_string(&file.path)
+            .unwrap_or_else(|error| panic!("read {}: {error}", file.path.display()));
+        let rel_path = display_path(&file);
+        let ast = syn::parse_file(&content).expect("production source parses");
+        c12_audit_file(&rel_path, &ast, &mut audit);
+    }
+    let problems = c12_finish_audit(&audit);
+    assert!(
+        problems.is_empty(),
+        "value-gc C12 stopped-world proof contract violated:\n{}",
+        problems.join("\n")
+    );
+}
+
+/// The two permitted constructors, in their real shape; `{serial}`,
+/// `{parallel_safety}`, `{parallel}` and `{extra}` are replaced per row to
+/// plant one defect at a time.
+const C12_CANONICAL_CONSTRUCTORS: &str = r#"
+    impl<'stop> StoppedWorldProof<'stop> {
+        pub unsafe fn with_stopped_world<R>(
+            {serial},
+            body: impl FnOnce(&mut TaggedHeap, &StoppedWorldProof<'_>) -> R,
+        ) -> R {
+            let p = StoppedWorldProof { heap_identity: 1, _scope: PhantomData };
+            body(todo!(), &p)
+        }
+        pub(super) {parallel_safety} fn with_all_stopped<R>(
+            heap: &mut TaggedHeap,
+            {parallel},
+            body: impl FnOnce(&mut TaggedHeap, &StoppedWorldProof<'stop>) -> R,
+        ) -> R {
+            let p = Self { heap_identity: 1, _scope: PhantomData };
+            body(heap, &p)
+        }
+        {extra}
+    }
+"#;
+
+fn c12_constructor_problems(
+    serial: &str,
+    parallel_safety: &str,
+    parallel: &str,
+    extra: &str,
+) -> String {
+    let source = C12_CANONICAL_CONSTRUCTORS
+        .replace("{serial}", serial)
+        .replace("{parallel_safety}", parallel_safety)
+        .replace("{parallel}", parallel)
+        .replace("{extra}", extra);
+    let mut audit = C12Audit::default();
+    c12_audit_file(
+        C12_STOPPED_WORLD_PROOF_FILE,
+        &syn::parse_file(&source).expect("parses"),
+        &mut audit,
+    );
+    // Entry rows are out of scope here; keep only constructor problems.
+    c12_finish_audit(&audit)
+        .into_iter()
+        .filter(|p| !p.contains("TaggedHeap::"))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+#[test]
+fn c12_deny_by_default_rejects_extra_constructors_and_non_allowlisted_fns() {
+    const HEAP: &str = "heap: &mut TaggedHeap";
+    const PARALLEL: &str = "parallel: &'stop ParallelStoppedMutatorsProof<'stop>";
+    // 0. Positive control: the real two-constructor shape has no problem.
+    let canonical = c12_constructor_problems(HEAP, "", PARALLEL, "");
+    assert!(
+        canonical.is_empty(),
+        "canonical constructors must pass:\n{canonical}"
+    );
+
+    // 1./2. A third constructor, safe or unsafe, is denied by default.
+    let safe_extra = c12_constructor_problems(
+        HEAP,
+        "",
+        PARALLEL,
+        "pub(super) fn from_parallel() -> StoppedWorldProof<'static> { \
+         StoppedWorldProof { heap_identity: 1, _scope: PhantomData } }",
+    );
+    assert!(
+        safe_extra.contains(
+            "unexpected StoppedWorldProof constructor `StoppedWorldProof::from_parallel` (safe fn)"
+        ),
+        "a third safe constructor must be denied:\n{safe_extra}"
+    );
+    let unsafe_extra = c12_constructor_problems(
+        HEAP,
+        "",
+        PARALLEL,
+        "pub(super) unsafe fn forge_for_heap() -> Self { Self { heap_identity: 2, _scope: PhantomData } }",
+    );
+    assert!(
+        unsafe_extra.contains("unexpected StoppedWorldProof constructor `StoppedWorldProof::forge_for_heap` (unsafe fn)"),
+        "a third unsafe constructor must be denied:\n{unsafe_extra}"
+    );
+
+    // 3. The v2 shape: a raw heap pointer that `body` aliases through `&mut`.
+    let raw = c12_constructor_problems("heap: *const TaggedHeap", "", PARALLEL, "");
+    assert!(
+        raw.contains("StoppedWorldProof::with_stopped_world must not take a raw pointer"),
+        "a raw-pointer serial constructor must be denied:\n{raw}"
+    );
+
+    // 4./5. The parallel mint must borrow the parallel proof and stay safe.
+    let unborrowed = c12_constructor_problems(HEAP, "", "id: HeapIdentity", "");
+    assert!(
+        unborrowed.contains(
+            "StoppedWorldProof::with_all_stopped must borrow a `&ParallelStoppedMutatorsProof`"
+        ),
+        "a parallel mint without the parallel proof must be denied:\n{unborrowed}"
+    );
+    let unsafe_parallel = c12_constructor_problems(HEAP, "unsafe", PARALLEL, "");
+    assert!(
+        unsafe_parallel.contains("StoppedWorldProof::with_all_stopped must be a safe fn"),
+        "the parallel mint's authority is its borrow, not an unsafe contract:\n{unsafe_parallel}"
+    );
+
+    // 6./7. Mints outside the exact `(file, fn)` allowlists fail, per mint.
+    for (file, mint, call) in [
+        (
+            "neovm-eval/src/emacs_core/runtime/eval/command_loop.rs",
+            "with_stopped_world",
+            "unsafe { StoppedWorldProof::with_stopped_world(heap, |_, _s| {}) }",
+        ),
+        (
+            "neovm-value/src/tagged/gc/mutator_registration/collection.rs",
+            "with_all_stopped",
+            "StoppedWorldProof::with_all_stopped(heap, parallel, |_, _s| {})",
+        ),
+    ] {
+        let source = format!("impl Context {{ fn sneaky_helper(&mut self) {{ {call}; }} }}");
+        let mut audit = C12Audit::default();
+        c12_audit_file(file, &syn::parse_file(&source).expect("parses"), &mut audit);
+        let problems = audit.problems.join("\n");
+        assert!(
+            problems.contains(&format!(
+                "non-allowlisted production `{mint}` mint in `sneaky_helper`"
+            )),
+            "{mint} outside its allowlist must be rejected:\n{problems}"
+        );
+    }
+}
+
+#[test]
+fn c12_stopped_world_scope_preserves_enclosing_safety_and_flags_nested_closures() {
+    let safe_caller = survey_file(
+        r#"
+        struct TaggedHeap;
+        impl TaggedHeap {
+            pub unsafe fn collect(&mut self, _s: &StoppedWorldProof<'_>, _r: i32) {}
+            pub unsafe fn collect_exact(&mut self, _s: &StoppedWorldProof<'_>, _r: i32) {}
+            pub unsafe fn alloc_user_ptr(&mut self) {}
+            pub unsafe fn alloc_module_function(&mut self) {}
+            pub unsafe fn begin_stw_collection(&mut self, _s: &StoppedWorldProof<'_>) {}
+            pub unsafe fn complete_collection(&mut self, _s: &StoppedWorldProof<'_>) {}
+            pub unsafe fn begin_minor_collection(&mut self, _s: &StoppedWorldProof<'_>) {}
+            pub unsafe fn complete_minor_collection(&mut self, _s: &StoppedWorldProof<'_>) {}
+            pub unsafe fn incremental_finish(&mut self, _s: &StoppedWorldProof<'_>) {}
+            pub unsafe fn incremental_sweep_slice(&mut self, _s: &StoppedWorldProof<'_>) {}
+            pub unsafe fn finish_incremental_sweep_now(&mut self, _s: &StoppedWorldProof<'_>) {}
+        }
+        pub unsafe fn set_tagged_heap_root() {}
+        pub unsafe fn with_tagged_heap() {}
+        pub fn sneaky_safe(heap: &mut TaggedHeap) {
+            unsafe {
+                StoppedWorldProof::with_stopped_world(heap, |heap, stopped| {
+                    heap.begin_stw_collection(stopped);
+                });
+            }
+        }
+        "#,
+        "sneaky.rs",
+    );
+    let safe_problems = capability_problems(&safe_caller).join("\n");
+    assert!(
+        safe_problems.contains("safe `sneaky_safe` calls `begin_stw_collection`"),
+        "safe non-allowlisted fn must still be flagged through with_stopped_world:\n{safe_problems}"
+    );
+
+    // `with_all_stopped`'s closure is its THIRD argument; it inherits the
+    // enclosing fn's identity too, so the finding names the fn, not
+    // `<closure>` (fails if the scope rule only knows the 2-arg mint).
+    let parallel_caller = survey_file(
+        &r#"
+        struct TaggedHeap;
+        impl TaggedHeap {
+            pub unsafe fn collect(&mut self, _s: &StoppedWorldProof<'_>, _r: i32) {}
+            pub unsafe fn collect_exact(&mut self, _s: &StoppedWorldProof<'_>, _r: i32) {}
+            pub unsafe fn alloc_user_ptr(&mut self) {}
+            pub unsafe fn alloc_module_function(&mut self) {}
+            pub unsafe fn begin_stw_collection(&mut self, _s: &StoppedWorldProof<'_>) {}
+            pub unsafe fn complete_collection(&mut self, _s: &StoppedWorldProof<'_>) {}
+            pub unsafe fn begin_minor_collection(&mut self, _s: &StoppedWorldProof<'_>) {}
+            pub unsafe fn complete_minor_collection(&mut self, _s: &StoppedWorldProof<'_>) {}
+            pub unsafe fn incremental_finish(&mut self, _s: &StoppedWorldProof<'_>) {}
+            pub unsafe fn incremental_sweep_slice(&mut self, _s: &StoppedWorldProof<'_>) {}
+            pub unsafe fn finish_incremental_sweep_now(&mut self, _s: &StoppedWorldProof<'_>) {}
+        }
+        pub unsafe fn set_tagged_heap_root() {}
+        pub unsafe fn with_tagged_heap() {}
+        pub fn sneaky_safe(heap: &mut TaggedHeap) {
+            unsafe {
+                StoppedWorldProof::with_stopped_world(heap, |heap, stopped| {
+                    heap.begin_stw_collection(stopped);
+                });
+            }
+        }
+        "#
+        .replace(
+            "StoppedWorldProof::with_stopped_world(heap, |heap, stopped| {",
+            "StoppedWorldProof::with_all_stopped(heap, parallel, |heap, stopped| {",
+        ),
+        "parallel.rs",
+    );
+    let parallel_problems = capability_problems(&parallel_caller).join("\n");
+    assert!(
+        parallel_problems.contains("safe `sneaky_safe` calls `begin_stw_collection`")
+            && !parallel_problems.contains("`<closure>`"),
+        "with_all_stopped's closure must inherit the enclosing fn:\n{parallel_problems}"
+    );
+
+    let nested_closure = survey_file(
+        r#"
+        struct TaggedHeap;
+        impl TaggedHeap {
+            pub unsafe fn collect(&mut self, _s: &StoppedWorldProof<'_>, _r: i32) {}
+            pub unsafe fn collect_exact(&mut self, _s: &StoppedWorldProof<'_>, _r: i32) {}
+            pub unsafe fn alloc_user_ptr(&mut self) {}
+            pub unsafe fn alloc_module_function(&mut self) {}
+            pub unsafe fn begin_stw_collection(&mut self, _s: &StoppedWorldProof<'_>) {}
+            pub unsafe fn complete_collection(&mut self, _s: &StoppedWorldProof<'_>) {}
+            pub unsafe fn begin_minor_collection(&mut self, _s: &StoppedWorldProof<'_>) {}
+            pub unsafe fn complete_minor_collection(&mut self, _s: &StoppedWorldProof<'_>) {}
+            pub unsafe fn incremental_finish(&mut self, _s: &StoppedWorldProof<'_>) {}
+            pub unsafe fn incremental_sweep_slice(&mut self, _s: &StoppedWorldProof<'_>) {}
+            pub unsafe fn finish_incremental_sweep_now(&mut self, _s: &StoppedWorldProof<'_>) {}
+        }
+        pub unsafe fn set_tagged_heap_root() {}
+        pub unsafe fn with_tagged_heap() {}
+        pub unsafe fn unsafe_with_nested_closure(heap: &mut TaggedHeap) {
+            StoppedWorldProof::with_stopped_world(heap, |heap, stopped| {
+                let _escaped = || unsafe {
+                    heap.begin_stw_collection(stopped);
+                };
+            });
+        }
+        "#,
+        "nested.rs",
+    );
+    let nested_problems = capability_problems(&nested_closure).join("\n");
+    assert!(
+        nested_problems.contains("safe `<closure>` calls `begin_stw_collection`"),
+        "nested closure inside with_stopped_world must still be flagged:\n{nested_problems}"
+    );
+
+    let direct_unsafe = survey_file(
+        r#"
+        struct TaggedHeap;
+        impl TaggedHeap {
+            pub unsafe fn collect(&mut self, _s: &StoppedWorldProof<'_>, _r: i32) {}
+            pub unsafe fn collect_exact(&mut self, _s: &StoppedWorldProof<'_>, _r: i32) {}
+            pub unsafe fn alloc_user_ptr(&mut self) {}
+            pub unsafe fn alloc_module_function(&mut self) {}
+            pub unsafe fn begin_stw_collection(&mut self, _s: &StoppedWorldProof<'_>) {}
+            pub unsafe fn complete_collection(&mut self, _s: &StoppedWorldProof<'_>) {}
+            pub unsafe fn begin_minor_collection(&mut self, _s: &StoppedWorldProof<'_>) {}
+            pub unsafe fn complete_minor_collection(&mut self, _s: &StoppedWorldProof<'_>) {}
+            pub unsafe fn incremental_finish(&mut self, _s: &StoppedWorldProof<'_>) {}
+            pub unsafe fn incremental_sweep_slice(&mut self, _s: &StoppedWorldProof<'_>) {}
+            pub unsafe fn finish_incremental_sweep_now(&mut self, _s: &StoppedWorldProof<'_>) {}
+        }
+        pub unsafe fn set_tagged_heap_root() {}
+        pub unsafe fn with_tagged_heap() {}
+        pub unsafe fn direct_unsafe_caller(heap: &mut TaggedHeap) {
+            StoppedWorldProof::with_stopped_world(heap, |heap, stopped| {
+                heap.begin_stw_collection(stopped);
+            });
+        }
+        "#,
+        "direct.rs",
+    );
+    let direct_problems = capability_problems(&direct_unsafe);
+    assert!(
+        direct_problems.is_empty(),
+        "direct unsafe fn using with_stopped_world should pass:\n{}",
+        direct_problems.join("\n")
     );
 }

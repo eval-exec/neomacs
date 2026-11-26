@@ -1,0 +1,11 @@
+error[E0451]: fields `heap_identity`, `mark_launch_epoch` and `_scope` of struct `StoppedWorldProof` are private
+  --> tests/heap_capability_ui/c12_stopped_world_proof_fields_private.rs:60:9
+   |
+59 |     let _ = stopped_world_proof::StoppedWorldProof {
+   |             -------------------------------------- in this type
+60 |         heap_identity: HeapIdentity(1),
+   |         ^^^^^^^^^^^^^ private field
+61 |         mark_launch_epoch: 0,
+   |         ^^^^^^^^^^^^^^^^^ private field
+62 |         _scope: std::marker::PhantomData,
+   |         ^^^^^^ private field

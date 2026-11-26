@@ -118,7 +118,15 @@ impl MarkWord {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct HeapIdentity(usize);
+
 pub struct AllStopped<'a>(PhantomData<&'a ()>);
+impl AllStopped<'_> {
+    pub(crate) fn stopped_heap_identity(&self) -> HeapIdentity {
+        HeapIdentity(1)
+    }
+}
 pub struct ConsBlock;
 
 pub mod satb {

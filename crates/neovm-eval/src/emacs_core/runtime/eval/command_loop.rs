@@ -1702,9 +1702,12 @@ impl Context {
         // True only when a whole mark+sweep cycle finishes in this call, gating
         // the once-per-collection bookkeeping below.
         let cycle_completed;
-        // SAFETY: GC is stop-the-world with exclusive `&mut self`. Root
-        // enumeration only reads Context state while seeding the collector via
-        // the raw heap pointer, which aliases `self.tagged_heap`.
+        // SAFETY: `heap_ptr` is `self`'s live `TaggedHeap` held under `&mut self`.
+        // Root enumeration only reads Context state while seeding the collector
+        // via the raw heap pointer, which aliases `self.tagged_heap`.
+        // `StoppedWorldProof` is minted ONLY inside the narrow branches below
+        // where no concurrent marker is running (never across
+        // `MarkPhase::ConcurrentRunning` or `start_concurrent_mark`).
         unsafe {
             if force_complete {
                 // Explicit GC: drive any in-flight cycle to completion, then run
@@ -1716,9 +1719,26 @@ impl Context {
                         // Joining is idempotent. Both running and explicitly
                         // joined workers leave a mark to terminate and promote.
                         self.terminate_concurrent_mark(heap_ptr);
-                        (*heap_ptr).finish_incremental_sweep_now();
+                        // SAFETY: `terminate_concurrent_mark` just joined the
+                        // concurrent marker; `&mut self` holds exclusive
+                        // stopped-world ownership for draining the sweep.
+                        neovm_value::tagged::gc::StoppedWorldProof::with_stopped_world(
+                            &mut *heap_ptr,
+                            |heap, stopped| {
+                                heap.finish_incremental_sweep_now(stopped);
+                            },
+                        );
                     }
-                    MarkPhase::Sweeping => (*heap_ptr).finish_incremental_sweep_now(),
+                    MarkPhase::Sweeping => {
+                        // SAFETY: `MarkPhase::Sweeping` has no running marker
+                        // and `&mut self` holds exclusive stopped-world access.
+                        neovm_value::tagged::gc::StoppedWorldProof::with_stopped_world(
+                            &mut *heap_ptr,
+                            |heap, stopped| {
+                                heap.finish_incremental_sweep_now(stopped);
+                            },
+                        );
+                    }
                     MarkPhase::PublishingSweep => {
                         debug_assert!(
                             false,
@@ -1731,7 +1751,7 @@ impl Context {
                 // cycle, so apply its retired-process batch before this
                 // explicit collection takes a fresh one.
                 // SAFETY: `heap_ptr` is `self`'s live `TaggedHeap` held exclusively during this GC cycle.
-                unsafe { self.finish_automatic_retired_process_cycle(heap_ptr) };
+                self.finish_automatic_retired_process_cycle(heap_ptr);
                 // Pin frame objects named by bare ids (queued input, the last
                 // event frame, mouse position) before this collection can
                 // reclaim a deleted frame. The pins are ordinary roots.
@@ -1784,9 +1804,17 @@ impl Context {
                 // Disarms a concurrent first cycle drained above, so this
                 // cycle traces the whole image before it promotes (see
                 // `begin_stw_collection`).
-                (*heap_ptr).begin_stw_collection();
-                self.seed_registered_mutator_roots_world_stopped(heap_ptr);
-                (*heap_ptr).complete_collection();
+                // SAFETY: any prior cycle was drained above (`MarkPhase::Idle`),
+                // no concurrent marker is running, and `&mut self` holds the
+                // exclusive stop-the-world extent across mark+sweep.
+                neovm_value::tagged::gc::StoppedWorldProof::with_stopped_world(
+                    &mut *heap_ptr,
+                    |heap, stopped| {
+                        heap.begin_stw_collection(stopped);
+                        self.seed_registered_mutator_roots_world_stopped(&raw mut *heap);
+                        heap.complete_collection(stopped);
+                    },
+                );
                 // Take every reclaimed-id list before commit. Commit uses
                 // the manager pointers; this heap use does not overlap that.
                 let reclaimed_frames = (*heap_ptr).take_reclaimed_frame_ids();
@@ -1818,10 +1846,25 @@ impl Context {
                         // counts half the consing since the last cycle could still
                         // double every cycle.
                         let overdue = (*heap_ptr).bytes_since_gc() > (*heap_ptr).gc_threshold();
-                        if overdue {
-                            (*heap_ptr).finish_incremental_sweep_now();
-                            cycle_completed = true;
-                        } else if (*heap_ptr).incremental_sweep_slice(INCREMENTAL_SWEEP_BUDGET) {
+                        // SAFETY: `MarkPhase::Sweeping` has no running marker
+                        // and `&mut self` holds exclusive stopped-world access
+                        // for this sweep slice.
+                        let drained =
+                            neovm_value::tagged::gc::StoppedWorldProof::with_stopped_world(
+                                &mut *heap_ptr,
+                                |heap, stopped| {
+                                    if overdue {
+                                        heap.finish_incremental_sweep_now(stopped);
+                                        true
+                                    } else {
+                                        heap.incremental_sweep_slice(
+                                            stopped,
+                                            INCREMENTAL_SWEEP_BUDGET,
+                                        )
+                                    }
+                                },
+                            );
+                        if drained {
                             cycle_completed = true; // sweep drained -> cycle done
                         } else {
                             return Ok(self.bank_gc_cycle_time(start)); // more sweep to do; defer bookkeeping
@@ -1879,7 +1922,7 @@ impl Context {
                         // #776: settle the previous cycle before deciding this
                         // one; an abandoned batch is restored here.
                         // SAFETY: `heap_ptr` is `self`'s live `TaggedHeap` held exclusively during this GC cycle.
-                        unsafe { self.finish_automatic_retired_process_cycle(heap_ptr) };
+                        self.finish_automatic_retired_process_cycle(heap_ptr);
                         // A retired process record is decided by a major: a
                         // generational minor treats a promoted object as black
                         // and would keep the dead process's fields until a
@@ -1901,39 +1944,61 @@ impl Context {
                         // a minor arms none and keeps decided records in the
                         // ordinary root walk, as before #776.
                         // SAFETY: `heap_ptr` is `self`'s live `TaggedHeap` held exclusively during this GC cycle.
-                        unsafe { self.begin_automatic_retired_process_cycle(heap_ptr, !minor) };
+                        self.begin_automatic_retired_process_cycle(heap_ptr, !minor);
                         if stress_cycle {
                             // A fresh automatic stress cycle is synchronous. Choose its
                             // generation before advancing the next-cycle stride; an
                             // explicit full collection and every continuation took the
                             // earlier branches and never advance this counter here.
                             (*heap_ptr).note_generation_stress_cycle_started();
-                            if minor {
-                                (*heap_ptr).begin_minor_collection().expect(
-                        "scheduler drained the preceding mark and sweep before minor admission",
-                    );
-                                self.seed_registered_mutator_roots_world_stopped(heap_ptr);
-                                (*heap_ptr).complete_minor_collection();
-                                (*heap_ptr).finish_incremental_sweep_now();
-                            } else {
-                                (*heap_ptr).begin_stw_collection();
-                                self.seed_registered_mutator_roots_world_stopped(heap_ptr);
-                                (*heap_ptr).complete_collection();
-                            }
+                            // SAFETY: `MarkPhase::Idle` has no concurrent
+                            // marker running and `&mut self` holds exclusive
+                            // stopped-world ownership for this synchronous cycle.
+                            neovm_value::tagged::gc::StoppedWorldProof::with_stopped_world(
+                                &mut *heap_ptr,
+                                |heap, stopped| {
+                                    if minor {
+                                        heap.begin_minor_collection(stopped).expect(
+                                            "scheduler drained the preceding mark and sweep before minor admission",
+                                        );
+                                        self.seed_registered_mutator_roots_world_stopped(
+                                            &raw mut *heap,
+                                        );
+                                        heap.complete_minor_collection(stopped);
+                                        heap.finish_incremental_sweep_now(stopped);
+                                    } else {
+                                        heap.begin_stw_collection(stopped);
+                                        self.seed_registered_mutator_roots_world_stopped(
+                                            &raw mut *heap,
+                                        );
+                                        heap.complete_collection(stopped);
+                                    }
+                                },
+                            );
                             cycle_completed = true;
                         } else if minor {
                             // Minor marking stops every registered mutator and visits
                             // their roots. Promotion completes before mutating resumes;
                             // the existing sweep continuation records cycle completion.
-                            (*heap_ptr).begin_minor_collection().expect(
-                    "scheduler drained the preceding mark and sweep before minor admission",
-                );
-                            self.seed_registered_mutator_roots_world_stopped(heap_ptr);
-                            (*heap_ptr).complete_minor_collection();
+                            // SAFETY: `MarkPhase::Idle` has no concurrent
+                            // marker running and `&mut self` holds exclusive
+                            // stopped-world ownership for this minor cycle.
+                            neovm_value::tagged::gc::StoppedWorldProof::with_stopped_world(
+                                &mut *heap_ptr,
+                                |heap, stopped| {
+                                    heap.begin_minor_collection(stopped).expect(
+                                        "scheduler drained the preceding mark and sweep before minor admission",
+                                    );
+                                    self.seed_registered_mutator_roots_world_stopped(
+                                        &raw mut *heap,
+                                    );
+                                    heap.complete_minor_collection(stopped);
+                                },
+                            );
                             // The minor's termination ran the reclaim; this
                             // branch returns without the completion block.
                             // SAFETY: `heap_ptr` is `self`'s live `TaggedHeap` held exclusively during this GC cycle.
-                            unsafe { self.finish_automatic_retired_process_cycle(heap_ptr) };
+                            self.finish_automatic_retired_process_cycle(heap_ptr);
                             return Ok(self.bank_gc_cycle_time(start));
                         } else {
                             let concurrent_kind = if (*heap_ptr).should_run_concurrent() {
@@ -1945,29 +2010,31 @@ impl Context {
                             };
                             if let Some(kind) = concurrent_kind {
                                 match self.start_concurrent_mark(heap_ptr, kind) {
-                        Ok(()) => return Ok(self.bank_gc_cycle_time(start)),
-                        Err(neovm_value::tagged::gc::ConcurrentMarkAdmissionError::Excluded(_)) => {
-                            // Held facade roots choose exact synchronous GC.
-                        }
-                        Err(neovm_value::tagged::gc::ConcurrentMarkAdmissionError::ForeignHeap {
-                            ..
-                        }) => {
-                            // An exchanged heap cannot use this owner's old
-                            // census. Keep the incomplete cycle for explicit
-                            // owner recovery rather than tracing foreign roots.
-                            // No cycle started, so restore the batch we took.
-                            // SAFETY: `heap_ptr` is `self`'s live `TaggedHeap` held exclusively during this GC cycle.
-                            unsafe { self.finish_automatic_retired_process_cycle(heap_ptr) };
-                            return Ok(self.bank_gc_cycle_time(start));
-                        }
-                        Err(
-                            neovm_value::tagged::gc::ConcurrentMarkAdmissionError::CollectorBusy
-                            | neovm_value::tagged::gc::ConcurrentMarkAdmissionError::NotStarted,
-                        ) => {
-                            // A dropped or rejected capture keeps its gray work;
-                            // the synchronous recovery below must finish it.
-                        }
-                    }
+                                    Ok(()) => {
+                                        return Ok(self.bank_gc_cycle_time(start));
+                                    }
+                                    Err(neovm_value::tagged::gc::ConcurrentMarkAdmissionError::Excluded(_)) => {
+                                        // Held facade roots choose exact synchronous GC.
+                                    }
+                                    Err(neovm_value::tagged::gc::ConcurrentMarkAdmissionError::ForeignHeap {
+                                        ..
+                                    }) => {
+                                        // An exchanged heap cannot use this owner's old
+                                        // census. Keep the incomplete cycle for explicit
+                                        // owner recovery rather than tracing foreign roots.
+                                        // No cycle started, so restore the batch we took.
+                                        // SAFETY: `heap_ptr` is `self`'s live `TaggedHeap` held exclusively during this GC cycle.
+                                        self.finish_automatic_retired_process_cycle(heap_ptr);
+                                        return Ok(self.bank_gc_cycle_time(start));
+                                    }
+                                    Err(
+                                        neovm_value::tagged::gc::ConcurrentMarkAdmissionError::CollectorBusy
+                                        | neovm_value::tagged::gc::ConcurrentMarkAdmissionError::NotStarted,
+                                    ) => {
+                                        // A dropped or rejected capture keeps its gray work;
+                                        // the synchronous recovery below must finish it.
+                                    }
+                                }
                             }
                             match (*heap_ptr).mark_phase() {
                                 MarkPhase::StoppedMarking => {
@@ -1998,9 +2065,19 @@ impl Context {
                                 }
                                 MarkPhase::Idle => {
                                     // No concurrent state has been armed on exclusion rejection.
-                                    (*heap_ptr).begin_stw_collection();
-                                    self.seed_registered_mutator_roots_world_stopped(heap_ptr);
-                                    (*heap_ptr).complete_collection();
+                                    // SAFETY: `MarkPhase::Idle` confirms no
+                                    // concurrent marker was launched and `&mut self`
+                                    // holds exclusive stopped-world ownership.
+                                    neovm_value::tagged::gc::StoppedWorldProof::with_stopped_world(
+                                        &mut *heap_ptr,
+                                        |heap, stopped| {
+                                            heap.begin_stw_collection(stopped);
+                                            self.seed_registered_mutator_roots_world_stopped(
+                                                &raw mut *heap,
+                                            );
+                                            heap.complete_collection(stopped);
+                                        },
+                                    );
                                 }
                                 MarkPhase::ConcurrentRunning
                                 | MarkPhase::PublishingSweep
@@ -2591,7 +2668,16 @@ impl Context {
             let pause_t0 = std::time::Instant::now();
             (*heap_ptr).incremental_drain_all();
             drain_us = pause_t0.elapsed().as_micros();
-            (*heap_ptr).incremental_finish(bytes_before, pause_t0);
+            // SAFETY: `join_concurrent_mark` above joined the background
+            // marker; SATB and residual gray work are drained. This serial
+            // driver is the heap's only writer: no TLS-aliased writer,
+            // callback or safepoint runs inside the closure.
+            neovm_value::tagged::gc::StoppedWorldProof::with_stopped_world(
+                &mut *heap_ptr,
+                |heap, stopped| {
+                    heap.incremental_finish(stopped, bytes_before, pause_t0);
+                },
+            );
         }
         // Pause work done; stats bookkeeping + probes below are off-pause.
         #[cfg(feature = "jit")]

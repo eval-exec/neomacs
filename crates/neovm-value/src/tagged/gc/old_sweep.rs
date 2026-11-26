@@ -6,7 +6,8 @@ impl TaggedHeap {
     /// keeps newly promoted Boxes outside the cursor whose marks we reset.
     #[cold]
     #[inline(never)]
-    pub(super) fn begin_old_sweep_world_stopped(&mut self) {
+    pub(super) fn begin_old_sweep_world_stopped(&mut self, stopped: &StoppedWorldProof<'_>) {
+        stopped.assert_stopped(self, "begin_old_sweep_world_stopped");
         assert!(
             !self.has_unfinished_concurrent_mark(),
             "begin_old_sweep_world_stopped cannot run while a concurrent mark is unfinished"
@@ -20,7 +21,12 @@ impl TaggedHeap {
 
     #[cold]
     #[inline(never)]
-    pub(super) fn sweep_old_objects_slice(&mut self, budget: usize) -> usize {
+    pub(super) fn sweep_old_objects_slice(
+        &mut self,
+        stopped: &StoppedWorldProof<'_>,
+        budget: usize,
+    ) -> usize {
+        stopped.assert_stopped(self, "sweep_old_objects_slice");
         assert!(
             !self.has_unfinished_concurrent_mark(),
             "sweep_old_objects_slice cannot free objects while a concurrent mark is unfinished"

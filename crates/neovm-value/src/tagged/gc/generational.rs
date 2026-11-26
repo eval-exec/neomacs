@@ -251,9 +251,14 @@ impl TaggedHeap {
     /// # Safety
     ///
     /// Starts a minor cycle that later frees unmarked young objects. The
-    /// caller has stopped every mutator and holds the only live heap borrow.
+    /// caller supplies a live [`StoppedWorldProof`] bound to this heap and
+    /// holds the only live heap borrow.
     #[doc(hidden)]
-    pub unsafe fn begin_minor_collection(&mut self) -> Result<(), MinorCollectionAdmissionError> {
+    pub unsafe fn begin_minor_collection(
+        &mut self,
+        stopped: &StoppedWorldProof<'_>,
+    ) -> Result<(), MinorCollectionAdmissionError> {
+        stopped.assert_stopped(self, "begin_minor_collection");
         // Admission precedes EVERY mutation, even for a GEN0 heap. Joining a
         // worker alone does not finish its major's residual mark or sweep.
         self.check_minor_admission()?;
@@ -290,7 +295,7 @@ impl TaggedHeap {
                     .expect("minor capture uses this heap canonical registry");
             })
             .expect("minor admission returned every young-only loan");
-        self.begin_captured_minor_marking();
+        self.begin_captured_minor_marking(stopped);
         Ok(())
     }
 
@@ -309,9 +314,11 @@ impl TaggedHeap {
     #[cold]
     pub(super) fn begin_parallel_minor_collection(
         &mut self,
+        stopped: &StoppedWorldProof<'_>,
         capture: super::cons_allocator::CapturedParallelYoung,
         _proof: &scan_contract::ParallelStoppedMutatorsProof<'_>,
     ) -> Result<(), ParallelMinorAdmissionError> {
+        stopped.assert_stopped(self, "begin_parallel_minor_collection");
         self.check_minor_admission()?;
         capture.check_heap(self.heap_identity())?;
         if self.generational.verify {
@@ -332,18 +339,18 @@ impl TaggedHeap {
                 },
             )??;
         }
-        self.begin_captured_minor_marking();
+        self.begin_captured_minor_marking(stopped);
         Ok(())
     }
 
     #[inline(always)]
-    fn begin_captured_minor_marking(&mut self) {
+    fn begin_captured_minor_marking(&mut self, stopped: &StoppedWorldProof<'_>) {
         self.generational.cycle = GenerationCycle::Minor;
         self.generational.promo.clear();
         self.incremental_mark_us = 0;
         self.pace_mark_start = None;
         self.pace_mark_start_bytes = self.bytes_since_gc();
-        self.begin_collection_with(false);
+        self.begin_collection_with(stopped, false);
         self.mark_in_progress = true;
     }
 
@@ -355,17 +362,19 @@ impl TaggedHeap {
     /// # Safety
     ///
     /// Promotes survivors and starts the sweep that frees the rest. The
-    /// caller holds the only live heap borrow from the matching
+    /// caller supplies a live [`StoppedWorldProof`] bound to this heap and
+    /// holds the only live heap borrow from the matching
     /// [`Self::begin_minor_collection`].
     #[doc(hidden)]
-    pub unsafe fn complete_minor_collection(&mut self) {
+    pub unsafe fn complete_minor_collection(&mut self, stopped: &StoppedWorldProof<'_>) {
+        stopped.assert_stopped(self, "complete_minor_collection");
         self.assert_no_owner_cons_reserves();
         assert!(self.generational.cycle == GenerationCycle::Minor);
         self.close_alloc_regions();
         let bytes_before = self.live_bytes;
         self.incremental_drain_all();
-        // SAFETY: this entry owns the minor cycle's sweep.
-        unsafe { self.incremental_finish(bytes_before, std::time::Instant::now()) };
+        // SAFETY: this entry owns the minor cycle's sweep and forwards `stopped`.
+        unsafe { self.incremental_finish(stopped, bytes_before, std::time::Instant::now()) };
     }
 
     #[inline]

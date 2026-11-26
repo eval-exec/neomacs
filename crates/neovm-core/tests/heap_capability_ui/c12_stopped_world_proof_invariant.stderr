@@ -1,0 +1,15 @@
+error: lifetime may not live long enough
+ --> tests/heap_capability_ui/c12_stopped_world_proof_invariant.rs:9:5
+  |
+6 | fn coerce_lifetime<'short, 'long: 'short>(
+  |                    ------  ----- lifetime `'long` defined here
+  |                    |
+  |                    lifetime `'short` defined here
+...
+9 |     proof
+  |     ^^^^^ function was supposed to return data with lifetime `'long` but it is returning data with lifetime `'short`
+  |
+  = help: consider adding the following bound: `'short: 'long`
+  = note: requirement occurs because of the type `neovm_value::tagged::gc::StoppedWorldProof<'_>`, which makes the generic argument `'_` invariant
+  = note: the struct `neovm_value::tagged::gc::StoppedWorldProof<'stop>` is invariant over the parameter `'stop`
+  = help: see <https://doc.rust-lang.org/nomicon/subtyping.html> for more information about variance

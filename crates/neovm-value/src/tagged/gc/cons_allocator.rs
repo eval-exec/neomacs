@@ -1940,6 +1940,14 @@ pub(super) struct CapturedParallelYoung {
     _confined: std::marker::PhantomData<std::rc::Rc<()>>,
 }
 impl CapturedParallelYoung {
+    /// `cfg(test)` only, for the C12 gated-entry rows.
+    #[cfg(test)]
+    pub(super) fn for_heap_test(heap: HeapIdentity) -> Self {
+        Self {
+            heap,
+            _confined: std::marker::PhantomData,
+        }
+    }
     pub(super) fn check_heap(self, heap: HeapIdentity) -> Result<(), YoungRegistryError> {
         if self.heap != heap {
             return Err(YoungRegistryError::WrongHeap);

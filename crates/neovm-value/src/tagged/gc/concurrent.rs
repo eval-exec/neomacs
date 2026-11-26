@@ -169,10 +169,12 @@ impl TaggedHeap {
     /// # Safety
     ///
     /// Starts a stop-the-world cycle whose later sweep frees unmarked
-    /// objects. The caller has joined any concurrent marker and holds the
-    /// only live heap borrow.
+    /// objects. The caller supplies a live [`StoppedWorldProof`] bound to this
+    /// heap, has joined any concurrent marker, and holds the only live heap
+    /// borrow.
     #[doc(hidden)]
-    pub unsafe fn begin_stw_collection(&mut self) {
+    pub unsafe fn begin_stw_collection(&mut self, stopped: &StoppedWorldProof<'_>) {
+        stopped.assert_stopped(self, "begin_stw_collection");
         self.assert_no_owner_cons_reserves();
         assert!(
             !self.has_unfinished_concurrent_mark(),
@@ -196,7 +198,7 @@ impl TaggedHeap {
         }
         // A stop-the-world first partition cycle pre-marks the image before
         // its flat seed (`premark_mapped_image`).
-        self.begin_collection_with(true);
+        self.begin_collection_with(stopped, true);
     }
 
     /// True while the background GC thread is marking (between the start and
@@ -211,6 +213,12 @@ impl TaggedHeap {
     /// heap. Cold consumer-side gate protecting finish, sweep, collection
     /// start, and drop against whole-field overwrites or swaps of
     /// `concurrent_mark_running` / `gc_exited`.
+    /// Count of concurrent-mark launches on this heap (see `mark_launch_epoch`).
+    #[inline]
+    pub(super) fn mark_launch_epoch(&self) -> u64 {
+        self.mark_launch_epoch
+    }
+
     #[inline]
     pub(super) fn has_unfinished_concurrent_mark(&self) -> bool {
         self.concurrent_mark_running()
@@ -241,9 +249,15 @@ impl TaggedHeap {
         // start slots filled below.
         self.last_remembered_seed_us = 0;
         self.last_remembered_seed_roots = 0;
-        // SAFETY: this entry point is the stop-the-world start; the caller
-        // holds the stopped world and no concurrent marker runs.
-        unsafe { self.begin_collection() };
+        self.generational.cycle = generational::GenerationCycle::Major;
+        // SAFETY: `raw_concurrent_begin` is the stop-the-world start of a
+        // concurrent cycle before the worker thread launches; `proof` vouches
+        // for exclusive stopped admission and no concurrent marker is running.
+        unsafe {
+            StoppedWorldProof::with_stopped_world(self, |heap, stopped| {
+                heap.begin_collection_with(stopped, false)
+            })
+        };
         // Route this handshake's `begin_collection` phase costs to the START
         // slots (this entry point is exclusively the concurrent start).
         self.handshake.start_count += 1;
@@ -536,6 +550,7 @@ impl TaggedHeap {
         self.close_alloc_regions();
         // SAFETY: see above; lockstep start handshake before sending the job.
         unsafe { self.concurrent_mark_running.set(true) };
+        self.mark_launch_epoch += 1;
         // Keep the write-barrier fast path reaching `record_heap_write` so the
         // SATB log fires even with owner-tracking Disabled / no partition:
         // the window becomes ALL.

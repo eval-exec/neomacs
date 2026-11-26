@@ -957,75 +957,89 @@ impl<'heap, 'stop, 'era> StoppedCollectorJob<'heap, 'stop, 'era> {
         }
         let bytes_before = heap.live_bytes();
         let started = std::time::Instant::now();
-        match captured {
-            // SAFETY: the stopped job holds the heap loan and has joined markers.
-            YoungCapture::Major => unsafe { heap.begin_stw_collection() },
-            YoungCapture::Minor(capture) => heap
-                .begin_parallel_minor_collection(capture, self._proof)
-                .map_err(minor_admission)?,
-        }
-        // SAFETY: the matching Baton produced stable frozen World slots;
-        // all buffer/owner borrows ended before the complete stopped job.
-        unsafe {
-            heap.set_marker_chain_head_slots(heads);
-        }
-        for root in roots {
-            heap.seed_root(root);
-        }
-        // Count at the seed site: this is the number of frozen owner root
-        // words the collector actually seeds, not merely the number it read.
-        let mut frozen_root_words = 0usize;
-        for word in words {
-            heap.seed_root(unsafe {
-                /* SAFETY: value-internal construction from a real Value */
-                TaggedValue::from_bits(word)
-            });
-            frozen_root_words += 1;
-        }
-        for item in &images.work {
-            trace_work(heap, item);
-        }
-        // E3.2: the stopped job must not run a native finalizer or SQLite
-        // teardown while it holds the stopped heap loan. The sweep detaches
-        // such payloads into the heap's pending-native batch; the stopped
-        // completion drains it after the loan and before owners resume (the
-        // evaluator's completed-cycle block is the serial backstop).
-        heap.begin_native_deferral();
-        match self.kind {
-            GenerationCycle::Major => {
-                // This scoped keeper job never sends/clones a live heap borrow.
-                // Existing worker MarkAll remains exclusively on its serial path.
-                let mark_started = std::time::Instant::now();
-                heap.mark_all();
-                // E3 slice 1: the same post-mark adapters the serial stop and
-                // incremental termination run. Ephemeron fixpoint, F, fixpoint,
-                // W, then the three explicit reclaims, all before the sweep.
-                // The test `WeakSweepPermit` no longer gates this call, because
-                // admission already accepted the registries this job must
-                // finish. `finish_stopped_mark_adapters` is the one production
-                // order (see the architecture guard).
-                let _ = heap.finish_stopped_mark_adapters();
-                // The weak fixpoint consumes every table it registered; the
-                // serial stop relies on the same post-condition. A leftover
-                // list would mean the sweep never reached fixpoint.
-                debug_assert!(
-                    heap.weak_hash_tables.is_empty(),
-                    "the stopped weak sweep must consume every registered weak table"
-                );
-                heap.finalize_collection(
-                    mark_started.elapsed().as_micros() as u64,
-                    bytes_before,
-                    started,
-                );
-            }
-            GenerationCycle::Minor => {
-                // SAFETY: this stopped job owns the minor cycle it just began.
-                unsafe {
-                    heap.complete_minor_collection();
-                    heap.finish_incremental_sweep_now();
+        // Safe mint: the authority is the borrowed `ParallelStoppedMutatorsProof`
+        // (from `AllStopped`, held by `AllStopped::trace` across this job); the
+        // constructor checks its identity against `heap` and refuses an
+        // unfinished concurrent mark. `collect_stopped_kind` already refused a
+        // busy heap through `CollectorQuiescence::check`.
+        let frozen_root_words = super::super::StoppedWorldProof::with_all_stopped(
+            heap,
+            self._proof,
+            |heap, stopped_proof| {
+                match captured {
+                    // SAFETY: the stopped job holds the heap loan; no marker is
+                    // running (admission refused a busy heap, the mint checked).
+                    YoungCapture::Major => unsafe { heap.begin_stw_collection(stopped_proof) },
+                    YoungCapture::Minor(capture) => heap
+                        .begin_parallel_minor_collection(stopped_proof, capture, self._proof)
+                        .map_err(minor_admission)?,
                 }
-            }
-        }
+                // SAFETY: the matching Baton produced stable frozen World slots;
+                // all buffer/owner borrows ended before the complete stopped job.
+                unsafe {
+                    heap.set_marker_chain_head_slots(heads);
+                }
+                for root in roots {
+                    heap.seed_root(root);
+                }
+                // Count at the seed site: this is the number of frozen owner root
+                // words the collector actually seeds, not merely the number it read.
+                let mut frozen_root_words = 0usize;
+                for word in words {
+                    heap.seed_root(unsafe {
+                        /* SAFETY: value-internal construction from a real Value */
+                        TaggedValue::from_bits(word)
+                    });
+                    frozen_root_words += 1;
+                }
+                for item in &images.work {
+                    trace_work(heap, item);
+                }
+                // E3.2: the stopped job must not run a native finalizer or SQLite
+                // teardown while it holds the stopped heap loan. The sweep detaches
+                // such payloads into the heap's pending-native batch; the stopped
+                // completion drains it after the loan and before owners resume (the
+                // evaluator's completed-cycle block is the serial backstop).
+                heap.begin_native_deferral();
+                match self.kind {
+                    GenerationCycle::Major => {
+                        // This scoped keeper job never sends/clones a live heap borrow.
+                        // Existing worker MarkAll remains exclusively on its serial path.
+                        let mark_started = std::time::Instant::now();
+                        heap.mark_all();
+                        // E3 slice 1: the same post-mark adapters the serial stop and
+                        // incremental termination run. Ephemeron fixpoint, F, fixpoint,
+                        // W, then the three explicit reclaims, all before the sweep.
+                        // The test `WeakSweepPermit` no longer gates this call, because
+                        // admission already accepted the registries this job must
+                        // finish. `finish_stopped_mark_adapters` is the one production
+                        // order (see the architecture guard).
+                        let _ = heap.finish_stopped_mark_adapters();
+                        // The weak fixpoint consumes every table it registered; the
+                        // serial stop relies on the same post-condition. A leftover
+                        // list would mean the sweep never reached fixpoint.
+                        debug_assert!(
+                            heap.weak_hash_tables.is_empty(),
+                            "the stopped weak sweep must consume every registered weak table"
+                        );
+                        heap.finalize_collection(
+                            stopped_proof,
+                            mark_started.elapsed().as_micros() as u64,
+                            bytes_before,
+                            started,
+                        );
+                    }
+                    GenerationCycle::Minor => {
+                        // SAFETY: this stopped job owns the minor cycle it just began.
+                        unsafe {
+                            heap.complete_minor_collection(stopped_proof);
+                            heap.finish_incremental_sweep_now(stopped_proof);
+                        }
+                    }
+                }
+                Ok::<usize, RendezvousError>(frozen_root_words)
+            },
+        )?;
         facade_mark::CollectorQuiescence::check(heap).map_err(|_| RendezvousError::Publication)?;
         let allocated_count = heap.current_mutator_gc().allocated_count;
         let memory_use_counts = heap.memory_use_counts_snapshot();

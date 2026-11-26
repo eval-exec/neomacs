@@ -1007,6 +1007,11 @@ pub struct TaggedHeap {
     /// True between a concurrent mark's start and termination handshakes — the
     /// mutator runs while the GC thread marks.
     concurrent_mark_running: ConcurrentMarkFlag,
+    /// Monotonic count of concurrent-mark launches on this heap. A
+    /// `StoppedWorldProof` snapshots it at mint, so a marker launched and
+    /// finished inside a proof's body (ABA on `concurrent_mark_running`) still
+    /// fails the proof's next use.
+    mark_launch_epoch: u64,
 
     // --- Incremental sweep state (step 8). After a mark terminates, the sweep
     // is deferred and drained in bounded slices at later safe points, so the
@@ -1254,6 +1259,7 @@ impl TaggedHeap {
             mark_in_progress: false,
             incremental_mark_us: 0,
             concurrent_mark_running: ConcurrentMarkFlag::new(),
+            mark_launch_epoch: 0,
             satb_handoff: std::sync::Arc::new(SatbHandoff::new()),
             _satb_owner_layout_reserve: FxHashSet::default(),
             _satb_layout_reserve: mutator_gc::MutatorSatbSlot::new(identity),
@@ -2500,6 +2506,9 @@ mod mark_word;
 use mark_word::{MarkStack, MarkWord};
 mod satb;
 use satb::SatbHandoff;
+mod stopped_world_proof;
+#[doc(hidden)]
+pub use stopped_world_proof::StoppedWorldProof;
 pub(crate) mod mapped_veclike_scan;
 #[cfg(test)]
 #[path = "gc/tests/mutator_registry_test.rs"]

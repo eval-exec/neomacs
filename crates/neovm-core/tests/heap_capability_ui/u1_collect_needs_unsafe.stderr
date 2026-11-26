@@ -1,7 +1,7 @@
 error[E0133]: call to unsafe function `mark_sweep::<impl TaggedHeap>::collect` is unsafe and requires unsafe block
- --> tests/heap_capability_ui/u1_collect_needs_unsafe.rs:6:5
+ --> tests/heap_capability_ui/u1_collect_needs_unsafe.rs:5:5
   |
-6 |     heap.collect(std::iter::empty());
-  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ call to unsafe function
+5 |     heap.collect(stopped, std::iter::empty());
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ call to unsafe function
   |
   = note: consult the function's documentation for information on how to avoid undefined behavior

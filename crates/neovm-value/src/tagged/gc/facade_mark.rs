@@ -567,12 +567,24 @@ impl TaggedHeap {
             let bytes_before = self.live_bytes();
             let pause = std::time::Instant::now();
             self.incremental_drain_all();
-            // SAFETY: quiescence joined the marker. This sweep frees unmarked objects.
-            unsafe { self.incremental_finish(bytes_before, pause) };
+            // SAFETY: `finish_concurrent_mark` above joined the marker and
+            // caller holds closed stopped-world admission for `self`. This
+            // sweep frees unmarked objects.
+            unsafe {
+                StoppedWorldProof::with_stopped_world(self, |heap, stopped| {
+                    heap.incremental_finish(stopped, bytes_before, pause)
+                });
+            }
         }
         if self.sweep_in_progress {
-            // SAFETY: same quiescence. Drain the sweep before the image is reused.
-            unsafe { self.finish_incremental_sweep_now() };
+            // SAFETY: `finish_concurrent_mark` above joined any marker and
+            // caller holds closed stopped-world admission for `self`. Drain
+            // the sweep before the image is reused.
+            unsafe {
+                StoppedWorldProof::with_stopped_world(self, |heap, stopped| {
+                    heap.finish_incremental_sweep_now(stopped)
+                });
+            }
         }
         self.finish_first_partition_cycle();
         self.close_alloc_regions();

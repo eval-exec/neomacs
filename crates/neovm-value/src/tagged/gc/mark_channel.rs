@@ -367,7 +367,16 @@ mod tests {
             );
             assert!(
                 std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    heap.finalize_collection(0, 0, std::time::Instant::now())
+                    // SAFETY: serial fixture probing finalize_collection refusal on
+                    // poisoned mark channel (`concurrent_mark_running` is false).
+                    unsafe {
+                        super::super::StoppedWorldProof::with_unchecked_admission_for_test(
+                            &mut heap,
+                            |heap, stopped| {
+                                heap.finalize_collection(stopped, 0, 0, std::time::Instant::now())
+                            },
+                        )
+                    }
                 }))
                 .is_err(),
                 "finalize_collection must refuse while concurrent mark is unfinished"
@@ -501,21 +510,40 @@ mod tests {
         );
         assert!(
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                heap.finish_incremental_sweep()
+                // SAFETY: serial fixture probing finish_incremental_sweep refusal on
+                // poisoned mark channel (`concurrent_mark_running` is false).
+                unsafe {
+                    super::super::StoppedWorldProof::with_unchecked_admission_for_test(
+                        &mut heap,
+                        |heap, stopped| heap.finish_incremental_sweep(stopped),
+                    )
+                }
             }))
             .is_err(),
             "finish_incremental_sweep must fail closed"
         );
         assert!(
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                heap.begin_old_sweep_world_stopped()
+                // SAFETY: serial fixture probing begin_old_sweep_world_stopped refusal.
+                unsafe {
+                    super::super::StoppedWorldProof::with_unchecked_admission_for_test(
+                        &mut heap,
+                        |heap, stopped| heap.begin_old_sweep_world_stopped(stopped),
+                    )
+                }
             }))
             .is_err(),
             "begin_old_sweep_world_stopped must fail closed"
         );
         assert!(
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                heap.sweep_old_objects_slice(1)
+                // SAFETY: serial fixture probing sweep_old_objects_slice refusal.
+                unsafe {
+                    super::super::StoppedWorldProof::with_unchecked_admission_for_test(
+                        &mut heap,
+                        |heap, stopped| heap.sweep_old_objects_slice(stopped, 1),
+                    )
+                }
             }))
             .is_err(),
             "sweep_old_objects_slice must fail closed"
@@ -589,8 +617,14 @@ mod tests {
             Err(CollectorQuiescenceError::CollectorBusy)
         ));
         assert!(matches!(
-            // SAFETY: serial fixture probing minor admission refusal.
-            unsafe { heap.begin_minor_collection() },
+            // SAFETY: serial fixture probing minor admission refusal
+            // (`concurrent_mark_running` is false).
+            unsafe {
+                super::super::StoppedWorldProof::with_unchecked_admission_for_test(
+                    &mut heap,
+                    |heap, stopped| heap.begin_minor_collection(stopped),
+                )
+            },
             Err(MinorCollectionAdmissionError::CollectorBusy)
         ));
         assert!(matches!(

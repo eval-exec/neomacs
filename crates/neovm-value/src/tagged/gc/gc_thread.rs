@@ -2083,6 +2083,37 @@ pub fn tagged_heap_is_current(heap: &TaggedHeap) -> bool {
         && TAGGED_HEAP_ID.with(|identity| identity.get() == Some(heap.tagged_heap_identity()))
 }
 
+/// Entry guard of a `StoppedWorldProof` mint, held for the whole proof body.
+///
+/// - Refuses a mint inside a live `with_*_mut` mutation closure (GEN-5): the
+///   closure holds a borrow into heap storage that a collector entry may move
+///   or free.
+/// - While held, the thread's TLS heap slot is null if it named this heap, so
+///   a `with_tagged_heap` re-entry inside the body cannot mint a second
+///   `&mut TaggedHeap` aliasing the body's borrow (production builds panic on
+///   a null slot). The slot is restored on drop, including on unwind.
+#[must_use = "the stopped-world entry guard must live for the proof body"]
+pub(super) struct StoppedWorldEntry {
+    suspended: Option<*mut TaggedHeap>,
+}
+
+impl StoppedWorldEntry {
+    pub(super) fn enter(heap: &TaggedHeap) -> Self {
+        crate::tagged::mutate::assert_no_heap_mut_closure();
+        let suspended = tagged_heap_is_current(heap)
+            .then(|| TAGGED_HEAP.with(|slot| slot.replace(std::ptr::null_mut())));
+        Self { suspended }
+    }
+}
+
+impl Drop for StoppedWorldEntry {
+    fn drop(&mut self) {
+        if let Some(ptr) = self.suspended {
+            TAGGED_HEAP.with(|slot| slot.set(ptr));
+        }
+    }
+}
+
 /// Return the current thread's tagged heap identity, if one is installed.
 ///
 /// This is used only for runtime side tables that must avoid retaining Lisp

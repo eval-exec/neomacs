@@ -53,9 +53,14 @@ impl TaggedHeap {
     /// `Context::gc_collect_exact`, which holds `&mut Context`. That safe
     /// entry is sound only after Phase 1 stops handing out `&'static`
     /// payload borrows. Until then a Rust local can keep a freed object.
-    pub unsafe fn collect(&mut self, roots: impl Iterator<Item = TaggedValue>) {
-        // SAFETY: `collect` forwards the caller's exclusive heap and roots.
-        unsafe { self.collect_exact(roots) }
+    pub unsafe fn collect(
+        &mut self,
+        stopped: &StoppedWorldProof<'_>,
+        roots: impl Iterator<Item = TaggedValue>,
+    ) {
+        stopped.assert_stopped(self, "collect");
+        // SAFETY: `collect` forwards the caller's stopped-world proof, exclusive heap, and roots.
+        unsafe { self.collect_exact(stopped, roots) }
     }
 
     /// Run a full mark-sweep collection using only the explicit roots provided.
@@ -63,15 +68,21 @@ impl TaggedHeap {
     /// # Safety
     ///
     /// Same contract as [`Self::collect`].
-    pub unsafe fn collect_exact(&mut self, roots: impl Iterator<Item = TaggedValue>) {
-        // SAFETY: the caller of this unsafe entry supplied the roots and
-        // holds the heap. `seed_root` does not free; the two sweep entries do.
+    pub unsafe fn collect_exact(
+        &mut self,
+        stopped: &StoppedWorldProof<'_>,
+        roots: impl Iterator<Item = TaggedValue>,
+    ) {
+        stopped.assert_stopped(self, "collect_exact");
+        // SAFETY: the caller of this unsafe entry supplied the stopped-world
+        // proof, roots, and exclusive heap. `seed_root` does not free; the two
+        // sweep entries do.
         unsafe {
-            self.begin_stw_collection();
+            self.begin_stw_collection(stopped);
             for root in roots {
                 self.seed_root(root);
             }
-            self.complete_collection();
+            self.complete_collection(stopped);
         }
     }
 
@@ -82,20 +93,36 @@ impl TaggedHeap {
     /// does not protect an unrooted `&'static` borrow the test still holds.
     #[cfg(any(test, feature = "test-support"))]
     pub fn collect_rooted(&mut self, roots: impl Iterator<Item = TaggedValue>) {
-        // Test-only. Not a discharge of `collect_exact`'s safety contract.
-        unsafe { self.collect_exact(roots) }
+        // SAFETY: test-only wrapper; caller owns `&mut self` in a serial test
+        // harness with no concurrent marker. Deliberately does not guard
+        // unrooted `&'static` test borrows.
+        unsafe {
+            StoppedWorldProof::with_stopped_world(self, |heap, stopped| {
+                heap.collect_exact(stopped, roots)
+            })
+        }
     }
 
     /// Test-only sweep entries. Same deliberate unsoundness as [`Self::collect_rooted`].
     #[cfg(any(test, feature = "test-support"))]
     pub fn begin_stw_collection_for_test(&mut self) {
-        unsafe { self.begin_stw_collection() }
+        // SAFETY: test-only serial harness entry; see `collect_rooted`.
+        unsafe {
+            StoppedWorldProof::with_stopped_world(self, |heap, stopped| {
+                heap.begin_stw_collection(stopped)
+            })
+        }
     }
 
     /// Test-only. Does not protect an unrooted borrow.
     #[cfg(any(test, feature = "test-support"))]
     pub fn complete_collection_for_test(&mut self) {
-        unsafe { self.complete_collection() }
+        // SAFETY: test-only serial harness entry; see `collect_rooted`.
+        unsafe {
+            StoppedWorldProof::with_stopped_world(self, |heap, stopped| {
+                heap.complete_collection(stopped)
+            })
+        }
     }
 
     /// Test-only. Does not protect an unrooted borrow.
@@ -103,36 +130,89 @@ impl TaggedHeap {
     pub fn begin_minor_collection_for_test(
         &mut self,
     ) -> Result<(), super::generational::MinorCollectionAdmissionError> {
-        unsafe { self.begin_minor_collection() }
+        // Check admission BEFORE minting `StoppedWorldProof`, so tests probing
+        // minor refusal while a concurrent marker is running observe
+        // `Err(CollectorBusy)` without minting a stopped-world proof under a
+        // live concurrent marker.
+        self.check_minor_admission()?;
+        // SAFETY: test-only serial harness entry; `check_minor_admission`
+        // above proved collector quiescence (`!concurrent_mark_running()`).
+        // See `collect_rooted`.
+        unsafe {
+            StoppedWorldProof::with_stopped_world(self, |heap, stopped| {
+                heap.begin_minor_collection(stopped)
+            })
+        }
     }
 
     /// Test-only. Does not protect an unrooted borrow.
     #[cfg(any(test, feature = "test-support"))]
     pub fn complete_minor_collection_for_test(&mut self) {
-        unsafe { self.complete_minor_collection() }
+        // SAFETY: test-only serial harness entry; see `collect_rooted`.
+        unsafe {
+            StoppedWorldProof::with_stopped_world(self, |heap, stopped| {
+                heap.complete_minor_collection(stopped)
+            })
+        }
     }
 
     /// Test-only. Does not protect an unrooted borrow.
     #[cfg(any(test, feature = "test-support"))]
     pub fn incremental_finish_for_test(&mut self, bytes_before: usize, pause: std::time::Instant) {
-        unsafe { self.incremental_finish(bytes_before, pause) }
+        // SAFETY: test-only serial harness entry; see `collect_rooted`.
+        unsafe {
+            StoppedWorldProof::with_stopped_world(self, |heap, stopped| {
+                heap.incremental_finish(stopped, bytes_before, pause)
+            })
+        }
     }
 
     /// Test-only. Does not protect an unrooted borrow.
     #[cfg(any(test, feature = "test-support"))]
     pub fn incremental_sweep_slice_for_test(&mut self, budget: usize) -> bool {
-        unsafe { self.incremental_sweep_slice(budget) }
+        // SAFETY: test-only serial harness entry; see `collect_rooted`.
+        unsafe {
+            StoppedWorldProof::with_stopped_world(self, |heap, stopped| {
+                heap.incremental_sweep_slice(stopped, budget)
+            })
+        }
     }
 
     /// Test-only. Does not protect an unrooted borrow.
     #[cfg(any(test, feature = "test-support"))]
     pub fn finish_incremental_sweep_now_for_test(&mut self) {
-        unsafe { self.finish_incremental_sweep_now() }
+        // SAFETY: test-only serial harness entry; see `collect_rooted`.
+        unsafe {
+            StoppedWorldProof::with_stopped_world(self, |heap, stopped| {
+                heap.finish_incremental_sweep_now(stopped)
+            })
+        }
     }
 
+    /// Test-only helper for `#![deny(unsafe_code)]` unit tests inside `tagged::gc`.
+    #[cfg(test)]
+    pub(super) fn finalize_collection_for_test(
+        &mut self,
+        mark_us: u64,
+        bytes_before: usize,
+        t0: std::time::Instant,
+    ) {
+        // SAFETY: test-only serial harness entry; see `collect_rooted`.
+        unsafe {
+            StoppedWorldProof::with_stopped_world(self, |heap, stopped| {
+                heap.finalize_collection(stopped, mark_us, bytes_before, t0)
+            })
+        }
+    }
+
+    /// Test/test-support helper starting a major cycle directly. Production
+    /// callers go through `begin_stw_collection` or `raw_concurrent_begin`
+    /// with a [`StoppedWorldProof`].
+    ///
     /// # Safety
     /// The heap must be exclusively borrowed and quiescent: the call asserts
     /// that no concurrent marker is running and starts a major cycle.
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) unsafe fn begin_collection(&mut self) {
         // Refuse before changing the cycle. The delegated entry also serves
         // direct STW and minor callers, so it needs its own guard below.
@@ -142,13 +222,24 @@ impl TaggedHeap {
             "begin_collection requires an explicit successful marker finish"
         );
         self.generational.cycle = generational::GenerationCycle::Major;
-        self.begin_collection_with(false);
+        // SAFETY: caller holds exclusive quiescent `&mut self` in a test
+        // harness with no concurrent marker running.
+        unsafe {
+            StoppedWorldProof::with_stopped_world(self, |heap, stopped| {
+                heap.begin_collection_with(stopped, false)
+            })
+        };
     }
 
     /// [`Self::begin_collection`], told whether the stop-the-world entry
     /// (`begin_stw_collection`) called it: only that entry pre-marks the
     /// image for a first partition cycle (`premark_mapped_image`).
-    pub(super) fn begin_collection_with(&mut self, stw_entry: bool) {
+    pub(super) fn begin_collection_with(
+        &mut self,
+        stopped: &StoppedWorldProof<'_>,
+        stw_entry: bool,
+    ) {
+        stopped.assert_stopped(self, "begin_collection_with");
         self.assert_no_owner_cons_reserves();
         assert!(
             !self.has_unfinished_concurrent_mark(),
@@ -1871,11 +1962,13 @@ impl TaggedHeap {
 
     /// # Safety
     ///
-    /// Sweeps and frees unmarked objects. The caller has finished marking
-    /// and holds the only live heap borrow. No pointer the sweep can free
-    /// is live across the call.
+    /// Sweeps and frees unmarked objects. The caller supplies a live
+    /// [`StoppedWorldProof`] bound to this heap, has finished marking, and
+    /// holds the only live heap borrow. No pointer the sweep can free is live
+    /// across the call.
     #[doc(hidden)]
-    pub unsafe fn complete_collection(&mut self) {
+    pub unsafe fn complete_collection(&mut self, stopped: &StoppedWorldProof<'_>) {
+        stopped.assert_stopped(self, "complete_collection");
         self.assert_no_owner_cons_reserves();
         assert!(
             !self.has_unfinished_concurrent_mark(),
@@ -1911,7 +2004,7 @@ impl TaggedHeap {
             );
         }
 
-        self.finalize_collection(mark_us, bytes_before, t0);
+        self.finalize_collection(stopped, mark_us, bytes_before, t0);
     }
 
     /// Post-mark adapters shared by `complete_collection` and
@@ -2309,10 +2402,12 @@ impl TaggedHeap {
     /// the marker chain heads are installed.
     pub(super) fn finalize_collection(
         &mut self,
+        stopped: &StoppedWorldProof<'_>,
         mark_us: u64,
         bytes_before: usize,
         t0: std::time::Instant,
     ) {
+        stopped.assert_stopped(self, "finalize_collection");
         self.assert_no_owner_cons_reserves();
         assert!(
             !self.has_unfinished_concurrent_mark(),
@@ -2357,8 +2452,8 @@ impl TaggedHeap {
         // -- Sweep phase --
         let cons_live_bytes = self.sweep_cons();
         if self.generational.major_in_progress {
-            self.begin_old_sweep_world_stopped();
-            self.sweep_old_objects_slice(usize::MAX);
+            self.begin_old_sweep_world_stopped(stopped);
+            self.sweep_old_objects_slice(stopped, usize::MAX);
         }
         let object_live_bytes = self.sweep_objects();
         // Object arena pages: the intrusive-list sweep above never sees page

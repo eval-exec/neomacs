@@ -1,0 +1,25 @@
+error[E0521]: borrowed data escapes outside of closure
+  --> tests/heap_capability_ui/c12_stopped_world_proof_cannot_escape.rs:11:13
+   |
+ 8 |     let mut escaped: Option<&StoppedWorldProof<'_>> = None;
+   |         ----------- `escaped` declared here, outside of the closure body
+ 9 |     unsafe {
+10 |         StoppedWorldProof::with_stopped_world(heap, |_heap, stopped| {
+   |                                                             ------- `stopped` is a reference that is only valid in the closure body
+11 |             escaped = Some(stopped);
+   |             ^^^^^^^^^^^^^^^^^^^^^^^ `stopped` escapes the closure body here
+
+error[E0521]: borrowed data escapes outside of closure
+  --> tests/heap_capability_ui/c12_stopped_world_proof_cannot_escape.rs:11:13
+   |
+ 8 |     let mut escaped: Option<&StoppedWorldProof<'_>> = None;
+   |         ----------- `escaped` declared here, outside of the closure body
+ 9 |     unsafe {
+10 |         StoppedWorldProof::with_stopped_world(heap, |_heap, stopped| {
+   |                                                             ------- `stopped` is a reference that is only valid in the closure body
+11 |             escaped = Some(stopped);
+   |             ^^^^^^^^^^^^^^^^^^^^^^^ `stopped` escapes the closure body here
+   |
+   = note: requirement occurs because of the type `neovm_value::tagged::gc::StoppedWorldProof<'_>`, which makes the generic argument `'_` invariant
+   = note: the struct `neovm_value::tagged::gc::StoppedWorldProof<'stop>` is invariant over the parameter `'stop`
+   = help: see <https://doc.rust-lang.org/nomicon/subtyping.html> for more information about variance

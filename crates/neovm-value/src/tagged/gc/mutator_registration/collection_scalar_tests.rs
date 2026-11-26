@@ -105,7 +105,7 @@ fn stopped_scalar_fold_preserves_history_and_rebases_real_live_credits_once() {
     heap.begin_stw_collection_for_test();
     heap.seed_root(live);
     heap.mark_all();
-    heap.finalize_collection(0, bytes, started);
+    heap.finalize_collection_for_test(0, bytes, started);
     let after_count = heap.current_mutator_gc().allocated_count;
     assert_eq!(after_count, 1, "dead physical objects must debit the union");
     assert_eq!(heap.total_allocated_bytes(), before_bytes);
@@ -155,7 +155,7 @@ fn stopped_scalar_fold_preserves_history_and_rebases_real_live_credits_once() {
     heap.begin_stw_collection_for_test();
     heap.seed_root(live);
     heap.mark_all();
-    heap.finalize_collection(0, bytes, started);
+    heap.finalize_collection_for_test(0, bytes, started);
     assert_eq!(heap.total_allocated_bytes(), before_bytes);
     assert_eq!(heap.current_mutator_gc().allocated_count, after_count);
 }
