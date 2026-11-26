@@ -97,9 +97,10 @@ pub(crate) fn new_child_command_calls_for_test() -> usize {
 ///
 /// On Unix we therefore `setsid` the child (new session: own process group AND
 /// no controlling terminal), which fixes both. On Windows we give it its own
-/// process group (`CREATE_NEW_PROCESS_GROUP`). Children that genuinely need a
-/// controlling terminal (M-x shell/term) are spawned via portable_pty, which
-/// sets up the pty as their controlling terminal — they do not use this path.
+/// process group (`CREATE_NEW_PROCESS_GROUP`). Unix PTY children (M-x
+/// shell/term) also go through this path via `ChildCommand::into_forking_command`
+/// and chain `sys::establish_pty_controlling_terminal` to acquire the PTY slave
+/// as their controlling terminal.
 pub(crate) fn new_child_command<S: AsRef<std::ffi::OsStr>>(program: S) -> ChildCommand {
     // The re-homed editfns test asserts this counter, so it must move in the
     // test-support build too.
@@ -125,9 +126,9 @@ pub(super) const CHILD_DEFAULT_SIGNALS: &[libc::c_int] = &[
 ];
 
 /// Apply the platform's "own process group" isolation and GNU child signal
-/// hygiene to an already-built command. Split out so callers that need
-/// portable_pty (which already `setsid`s the child) or a pre-configured command
-/// can opt in explicitly.
+/// hygiene to an already-built `std::process::Command`. Used by
+/// `ChildCommand::forking_command` for both non-Linux-glibc pipe spawns and
+/// Unix PTY spawns (`into_forking_command`).
 pub(crate) fn isolate_child_command(command: &mut Command) {
     #[cfg(unix)]
     {
@@ -153,10 +154,20 @@ pub(crate) fn isolate_child_command(command: &mut Command) {
         // `posix_spawnattr_setsigmask` at `src/callproc.c:1413`), where
         // `oldset` is empty because `init_keyboard` (`src/keyboard.c:13277`)
         // cleared Emacs's own mask with `pthread_sigmask(SIG_SETMASK, &empty_mask, 0)`
-        // at startup. Because Neomacs does not clear its own inherited process
-        // mask at startup, clearing the child mask explicitly here matches
-        // both GNU's observable child `SigBlk == 0` and Neomacs's Linux-glibc
-        // `posix::Attributes::gnu` (`spawn.rs:851-885`).
+        // at startup.
+        //
+        // Startup-mask decision (recorded here rather than changed in `main.rs`):
+        // Neomacs does not currently clear its own inherited process signal mask
+        // at startup (unlike GNU `init_keyboard`), so clearing the child mask
+        // explicitly here is what keeps child `SigBlk == 0` matching GNU and
+        // Neomacs's Linux-glibc `posix::Attributes::gnu` (`spawn.rs:851-885`).
+        // If startup is later changed to match GNU `init_keyboard` (clearing the
+        // main thread's mask alongside `install_job_control_signal_hygiene` in
+        // `crates/neomacs/src/main.rs` while single-threaded), keep this explicit
+        // empty-mask clear in both `isolate_child_command` and `Attributes::gnu`
+        // as defense-in-depth for `tty_frontend` temporary `SIG_BLOCK` scopes
+        // and library/unit-test callers that do not run `main()`, and update this
+        // note accordingly.
         //
         // SAFETY: the closure runs in the forked child before exec and calls
         // only async-signal-safe POSIX functions (`setsid`, `sigemptyset`,

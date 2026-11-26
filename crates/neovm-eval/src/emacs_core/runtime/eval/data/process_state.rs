@@ -1637,20 +1637,20 @@ impl ChildOwnership {
 /// `portable_pty::Child::try_wait` are each a `waitpid` -- which is exactly
 /// why neither may be reachable from anywhere else.
 pub enum ChildHandle {
-    /// `std::process::Child`: the pipe spawn, and the pty spawn whose
-    /// `:stderr` split goes through `pre_exec`.
+    /// `SpawnedChild` (`posix_spawn` or `std::process::Command`): every live
+    /// pipe and Unix PTY spawn (plain PTY and `:stderr`-split PTY alike).
     Pipe(Box<SpawnedChild>),
-    /// `portable_pty`'s child handle.
+    /// `portable_pty`'s trait-object child handle (retained for deferred-reap
+    /// mock-child unit tests).
     Pty(Box<dyn portable_pty::Child + Send + Sync>),
 }
 
 /// A child this port spawned and has **not** reaped: GNU's `p->alive == 1`,
 /// carrying the pid that authorises `waitpid` and `kill` on it.
 ///
-/// The fields are private and the only constructors are
-/// [`ChildOwnership::of_pipe_child`] and [`ChildOwnership::of_pty_child`], so
-/// the handles whose `try_wait` is a reap are not reachable from outside this
-/// module.
+/// Production code constructs this exclusively via
+/// `ChildOwnership::of_pipe_child`, so the handles whose `try_wait` is a reap
+/// are not reachable from outside this module.
 pub struct ReapableChild {
     /// GNU's `p->pid` as a CAPABILITY.
     ///

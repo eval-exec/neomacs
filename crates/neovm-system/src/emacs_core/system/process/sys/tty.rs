@@ -110,7 +110,12 @@ pub(crate) unsafe fn establish_pty_controlling_terminal(
         unsafe { libc::close(slave) };
         return Err(err);
     }
-    if slave > libc::STDERR_FILENO {
+    let keep_max = if merge_stderr {
+        libc::STDERR_FILENO
+    } else {
+        libc::STDOUT_FILENO
+    };
+    if slave > keep_max {
         unsafe { libc::close(slave) };
     }
     Ok(())

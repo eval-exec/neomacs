@@ -647,23 +647,15 @@ pub(crate) enum ChildStatusChange {
 
 #[doc(hidden)]
 pub trait ChildOwnershipIo {
-    /// Take ownership of a freshly spawned `std::process::Child`.
+    /// Take ownership of a freshly spawned `SpawnedChild` (both pipe and Unix
+    /// PTY spawns go through `ChildCommand` -> `SpawnedChild`).
     fn of_pipe_child(child: SpawnedChild) -> Self;
-    /// Take ownership of a freshly spawned `portable_pty` child.
-    ///
-    /// A child `portable_pty` cannot name a pid for is [`Self::NotAChild`],
-    /// because a pidless child is exactly what `eassert (child > 0)` rejects
-    /// one frame below GNU's own sweep.
-    fn of_pty_child(child: Box<dyn portable_pty::Child + Send + Sync>) -> Self;
     /// GNU's `p->alive`: the pid, and only while this port still owns it.
     ///
     /// Every `kill(2)` aimed at one of this port's own children goes through
     /// here, so `record_kill_process`'s `if (p->alive)` is not a test anyone
     /// has to remember to write.
     fn pid_if_unreaped(&self) -> Option<u32>;
-    /// The spawn stored a `portable_pty` handle rather than a
-    /// `std::process::Child`.
-    fn is_pty_handle(&self) -> bool;
     /// The child's stdin while it exists.  Not a reap, and the only reason the
     /// handle is reachable at all.
     fn stdin_mut(
@@ -711,27 +703,12 @@ pub trait ChildOwnershipIo {
 }
 
 impl ChildOwnershipIo for ChildOwnership {
-    /// Take ownership of a freshly spawned `std::process::Child`.
+    /// Take ownership of a freshly spawned `SpawnedChild` (pipe or Unix PTY).
     fn of_pipe_child(child: SpawnedChild) -> Self {
         Self::Unreaped(ReapableChild {
             pid: child.id(),
             handle: ChildHandle::Pipe(Box::new(child)),
         })
-    }
-
-    /// Take ownership of a freshly spawned `portable_pty` child.
-    ///
-    /// A child `portable_pty` cannot name a pid for is [`Self::NotAChild`],
-    /// because a pidless child is exactly what `eassert (child > 0)` rejects
-    /// one frame below GNU's own sweep.
-    fn of_pty_child(child: Box<dyn portable_pty::Child + Send + Sync>) -> Self {
-        match child.process_id() {
-            Some(pid) => Self::Unreaped(ReapableChild {
-                pid,
-                handle: ChildHandle::Pty(child),
-            }),
-            None => Self::NotAChild,
-        }
     }
 
     /// GNU's `p->alive`: the pid, and only while this port still owns it.
@@ -744,18 +721,6 @@ impl ChildOwnershipIo for ChildOwnership {
             Self::Unreaped(child) => Some(child.pid),
             Self::NotAChild | Self::Reaped | Self::Deferred => None,
         }
-    }
-
-    /// The spawn stored a `portable_pty` handle rather than a
-    /// `std::process::Child`.
-    fn is_pty_handle(&self) -> bool {
-        matches!(
-            self,
-            Self::Unreaped(ReapableChild {
-                handle: ChildHandle::Pty(_),
-                ..
-            })
-        )
     }
 
     /// The child's stdin while it exists.  Not a reap, and the only reason the

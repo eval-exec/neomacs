@@ -3122,11 +3122,10 @@ pub(super) fn process_status_is_exit_or_signal(status: &Value) -> bool {
 
 pub(super) fn process_defers_pty_status_after_explicit_coding(proc: &Process) -> bool {
     proc.coding_explicitly_set
-        && (proc.live_io().child().is_pty_handle()
-            || proc
-                .live_io()
-                .pty_reader()
-                .is_some_and(PtyOutputReader::is_monitored))
+        && proc
+            .live_io()
+            .pty_reader()
+            .is_some_and(PtyOutputReader::is_monitored)
 }
 
 pub(super) fn process_defers_status_poll_while_readable_pty(proc: &Process) -> bool {
@@ -4889,9 +4888,10 @@ impl SystemProcessExt for ProcessManager {
 
     /// Spawn an OS child process for a tracked process record.
     ///
-    /// When `use_pty` is true (and on Unix), the child is spawned on a
-    /// pseudo-terminal via `portable-pty`. Otherwise the traditional
-    /// pipe-based `std::process::Command` path is used.
+    /// When `use_pty` is true (and on Unix), the child is attached to a
+    /// pseudo-terminal (opened via `portable-pty`, spawned via
+    /// `ChildCommand::into_forking_command`). Otherwise the pipe-based
+    /// `ChildCommand` path is used.
     fn spawn_child(&mut self, id: ProcessId, use_pty: bool) -> Result<(), String> {
         self.spawn_child_with_environment(id, use_pty, None)
             .map(|_| ())
@@ -5112,7 +5112,9 @@ impl SystemProcessExt for ProcessManager {
         }
     }
 
-    /// PTY-based child spawn via `portable-pty`.
+    /// PTY-based child spawn: allocates the master/slave pair via `portable-pty`
+    /// and spawns the child via `ChildCommand::into_forking_command` +
+    /// `sys::establish_pty_controlling_terminal`.
     ///
     /// The child is attached to a pseudo-terminal. The master side provides
     /// a single combined I/O stream (PTY merges stdout and stderr) — UNLESS a
@@ -5181,8 +5183,8 @@ impl SystemProcessExt for ProcessManager {
             return Err(format!("Failed to configure PTY child tty: {error}"));
         }
 
-        // GNU's `emacs_perror` names the program that could not be exec'd, so
-        // keep it before `CommandBuilder::from_argv` consumes the argv.
+        // GNU's `emacs_perror` names the program that could not be exec'd;
+        // retain it for the `ExecFailed` diagnostic path below.
         let program_os = argv_os[0].clone();
         let mut outcome = ChildSpawnOutcome::Spawned;
 
