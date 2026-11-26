@@ -13,11 +13,22 @@
 //!   fallback classification.
 //! - Live per-symbol, per-turn `watched_or_retired: AtomicBool` and live
 //!   `current_shape: AtomicU64` are single-writer at serial turns (`Release`
-//!   store) and lock-free readers from parallel owners (`Acquire` load).
-//!   Because every other entry field is frozen at publication and serial turns
-//!   are serialized by the Baton, `Release`/`Acquire` on each atomic provides
-//!   a clean happens-before edge with zero torn reads and zero locks on the
-//!   owner read path.
+//!   store / `AcqRel` bump) and lock-free readers from parallel owners
+//!   (`Acquire` load):
+//!   - **Production ordering boundary (`AllStopped` rendezvous):** production
+//!     serial turns (`WorldTurn` / `Baton`) execute exclusively under
+//!     `AllStopped` — every parallel owner has dropped `OwnerSlabLease` /
+//!     `RunAccess` and parked at the rendezvous barrier before the turn runs,
+//!     and observes the rendezvous `Release`->`Acquire` handoff on resume.
+//!     No parallel owner reads `watched_or_retired` concurrently with a
+//!     serial-turn flip in production, so the stop/resume rendezvous guarantees
+//!     immediate post-turn `true` visibility (no stale-false decision).
+//!   - **Defense-in-depth atomics (`Release`/`Acquire`):** keeping both fields
+//!     atomic makes `&PlainAdmissionTable` soundly `Sync` without a `Mutex` on
+//!     the owner read path and race-free even under unit-level concurrent
+//!     probes (`s2_real_thread_serial_turn_watched_bit_flip_visible_lock_free_under_tsan`),
+//!     while the production stop/resume boundary is proven separately by
+//!     `s3_turn_boundary_shared_root_intervening_gc_and_fresh_canonical_plain_reacquire`.
 //! - [`CanonicalPlain`] composes C1's exclusive [`OwnerSlabLease`] (reusing
 //!   `OwnerSlab`'s real binding-record LIFO per C2) with `&PlainAdmissionTable`.
 //!   It is `!Send` / `!Sync` / `!Clone` / `!Copy`, dormant (no serial

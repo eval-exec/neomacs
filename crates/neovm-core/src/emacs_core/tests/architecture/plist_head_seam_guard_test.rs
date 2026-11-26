@@ -396,3 +396,6 @@ fn plist_head_seam_guard_controls_detect_synthetic_bypasses() {
 
 #[path = "overlay_position_handle_guard_test.rs"]
 mod overlay_position_handle_guard_test;
+
+#[path = "owner_slab_lease_seam_guard_test.rs"]
+mod owner_slab_lease_seam_guard_test;

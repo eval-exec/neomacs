@@ -26,9 +26,10 @@ use super::frames::{FrameArena, SlotRecord};
 use super::vm::VmPlain;
 use crate::emacs_core::eval::owner_bindings::{Channel, SlotState, SlotValue, UndoTarget};
 use crate::emacs_core::eval::world::poll::PollOutcome;
-use crate::emacs_core::eval::world::{WorldProofEra, WorldProofEraExt};
+use crate::emacs_core::eval::world::{Baton, WorldProofEra, WorldProofEraExt};
 use crate::emacs_core::eval::{Context, ThreadingMode};
 use neovm_value::tagged::gc::{RegistrationError, RendezvousError};
+use neovm_value::tagged::transport::SharedRoot;
 use std::num::NonZeroU32;
 
 fn finish_epoch() -> NonZeroU64 {
@@ -866,4 +867,338 @@ fn s2_real_thread_serial_turn_watched_bit_flip_visible_lock_free_under_tsan() {
         }
         reader.join().expect("join phase 2 reader");
     });
+}
+
+/// E4-P2 Slice 3 (`#13957` turn-boundary / re-acquire + `#15719` Note 1
+/// immediate-visibility real-thread proof row):
+///
+/// Proves the full parallel-to-serial-to-parallel sequence over real OS threads:
+/// 1. Owner enters `RunAccess`, mints `OwnerSlabLease` + `CanonicalPlain`, and
+///    binds a Plain variable in its owner slab.
+/// 2. Owner drops `CanonicalPlain` (`OwnerSlabLease`) and `RunAccess`, calls
+///    `mutator.enter_native(&[])` (`Mode::NativeStopped`), and proves
+///    `mutator.run_access()` refuses with `RegistrationError::Busy` while
+///    `NativeStopped` (no `OwnerSlabLease` / `CanonicalPlain` mintable).
+/// 3. Keeper enters `AllStopped`, simulates a serial turn flipping
+///    `watched_or_retired` (`Release`) + bumping `ShapeGeneration` (`AcqRel`),
+///    and runs a REAL stopped collection (`era.collect_stopped`) WHILE the
+///    owner is still `Mode::NativeStopped` — proving `SharedRoot` keeps a
+///    newly returned heap string alive across the `live.end() -> leave_native()`
+///    gap (`#13957`) and `OwnerSlabRegistry::trace_roots_for_heap` traces the
+///    owner's slab safely.
+/// 4. Owner calls `mutator.leave_native()` (`Mode::Running`), enters a fresh
+///    `RunAccess`, re-acquires a fresh `OwnerSlabLease` + `CanonicalPlain`,
+///    and IMMEDIATELY observes `unbind_needs_serial == true` and
+///    `PlainRefusal::NotPlain` (never stale-false, closing `#15719` Note 1),
+///    materializes the surviving `SharedRoot` string into its slab, and drops
+///    the `SharedRoot`.
+/// 5. A second `enter_native` -> `AllStopped` `collect_stopped` -> `leave_native`
+///    -> fresh `CanonicalPlain` round proves the slab-owned string survives GC
+///    after `SharedRoot` is dropped.
+#[test]
+fn s3_turn_boundary_shared_root_intervening_gc_and_fresh_canonical_plain_reacquire() {
+    const PAYLOAD_TEXT: &str = "e4p2-s3-turn-payload-survives-gc";
+
+    let mut ctx =
+        Context::new_with_threading(ThreadingMode::Green, crate::test_utils::unit_runtime());
+    ctx.setup_thread_locals();
+    // Reclaim GNU's default weak window table serially (matching
+    // `collection_fixture_context`) so stopped-world collection admission is
+    // attributable solely to this fixture's roots and objects.
+    ctx.set_variable("window-dead-windows-table", Value::NIL);
+    let heap = ctx.tagged_heap.heap_identity();
+    let (sym_val, tls_val) =
+        project_plain_var(&mut ctx, "e4p2-s3-turn-val", Some(Value::fixnum(10)));
+    let (sym_watch, tls_watch) =
+        project_plain_var(&mut ctx, "e4p2-s3-turn-watch", Some(Value::fixnum(20)));
+
+    // Allocate a heap string protected ONLY by `SharedRoot` (never stored in
+    // `ctx.lexenv` or any obarray).
+    let payload_val = Value::string(PAYLOAD_TEXT);
+    // SAFETY: `ctx`'s heap is installed on this thread, `payload_val` was just
+    // allocated on it, and `collect_stopped` traces the shared-root table.
+    let shared_payload =
+        unsafe { SharedRoot::from_current_heap(payload_val) }.expect("mint SharedRoot");
+
+    ctx.gc_collect_exact();
+    // Allocate unrooted garbage AFTER the setup GC so the intervening stopped GC
+    // during `NativeStopped` actually reclaims a live heap object.
+    let unrooted_garbage_bits = Value::string("e4p2-s3-unrooted-garbage").bits();
+    ctx.tagged_heap.close_alloc_regions();
+    let bootstrap = ctx.capture_green_bootstrap_for_test();
+
+    let keeper = ctx.issue_green_baton().expect("issue baton");
+    let frozen = ctx
+        .capture_parallel_legacy_roots(&keeper)
+        .expect("capture frozen legacy roots");
+    keeper.install_stowed_green_runtime_for_test(bootstrap);
+    let world_handle = keeper.test_world_handle_for_test();
+    let heap_ptr: *mut neovm_value::tagged::gc::TaggedHeap = ctx.tagged_heap.heap_root().as_ptr();
+    // SAFETY: `ctx.tagged_heap` is an `AliasableBox<TaggedHeap>` whose raw root
+    // remains valid across `&mut ctx` in `seed_registered_mutator_roots_world_stopped`
+    // (which writes through the closure `heap` argument and never dereferences
+    // `self.tagged_heap`). Sole serial fixture before era admission.
+    let collector = unsafe {
+        (*heap_ptr).drain_to_quiescent(|heap| {
+            ctx.seed_registered_mutator_roots_world_stopped(heap);
+        })
+    }
+    .expect("drain to quiescent");
+    // SAFETY: `ctx` is suspended for the entire era and never evaluated while
+    // `era` holds the collector loan; clear the serial TLS heap view on the
+    // keeper thread before admitting the era.
+    unsafe {
+        neovm_value::tagged::gc::clear_tagged_heap_root_if_installed(ctx.tagged_heap.heap_root());
+    }
+    let era = WorldProofEra::admit_rooted(collector, keeper, frozen).expect("admit proof era");
+
+    let h_val = era.admit_plain_symbol(sym_val).expect("admit val");
+    let h_watch = era.admit_plain_symbol(sym_watch).expect("admit watch");
+
+    let mut builder = PlainAdmissionTableBuilder::new();
+    builder.insert(h_val, Some(tls_val), false, false).insert(
+        h_watch,
+        Some(tls_watch),
+        false,
+        false,
+    );
+    let table = Arc::new(builder.build(EraId::new(11), ShapeGeneration::new(1)));
+
+    let permit = era.register(1, 8).expect("register owner");
+    let in_native_1 = Arc::new(Barrier::new(2));
+    let turn_1_done = Arc::new(Barrier::new(2));
+    let in_native_2 = Arc::new(Barrier::new(2));
+    let turn_2_done = Arc::new(Barrier::new(2));
+
+    std::thread::scope(|scope| {
+        let table_o = Arc::clone(&table);
+        let in_native_1_o = Arc::clone(&in_native_1);
+        let turn_1_done_o = Arc::clone(&turn_1_done);
+        let in_native_2_o = Arc::clone(&in_native_2);
+        let turn_2_done_o = Arc::clone(&turn_2_done);
+
+        let owner_thread = scope.spawn(move || {
+            let (mut owner_ctx, retention) = world_handle.spawn_seated_context_for_test(1);
+            // Stow carried World state so the seated owner is dormant before
+            // entering its parallel stretch (matching production `live.end()`).
+            assert!(
+                owner_ctx.stow_serial_world_state(),
+                "stow World carried state before parallel stretch"
+            );
+            let mut handle = owner_ctx
+                .take_parallel_owner_slab_handle()
+                .expect("extract owner slab handle");
+            let mut mutator = permit.activate(heap, 1).expect("activate owner");
+
+            // Stretch 1 (Mode::Running): mint CanonicalPlain and push a local binding.
+            let initial_record = {
+                let mut run = mutator.run_access().expect("stretch 1 run_access");
+                let lease = handle.lease(&mut run).expect("stretch 1 lease");
+                let mut plain = CanonicalPlain::new(lease, &table_o);
+
+                assert!(
+                    !plain.unbind_needs_serial(sym_watch),
+                    "before serial turn, watched bit is false and shape matches"
+                );
+                assert_eq!(
+                    plain.admission(sym_watch),
+                    PlainAdmission::Mint {
+                        sym: sym_watch,
+                        slot: tls_watch,
+                    }
+                );
+                let key_val = EffectivePlainKey::from_admission(
+                    &plain.admission(sym_val),
+                    EraId::new(11),
+                    ShapeGeneration::new(1),
+                )
+                .expect("mint key_val in stretch 1");
+                let rec = effective_plain_bind(&mut plain, &key_val, Value::fixnum(123));
+                assert_eq!(
+                    effective_plain_read(&mut plain, &key_val),
+                    Ok(EffectiveRead::OwnerBound(Value::fixnum(123)))
+                );
+                rec
+                // `plain` (`OwnerSlabLease`) and `run` (`RunAccess`) drop here.
+            };
+
+            // Enter Mode::NativeStopped before serial turn.
+            mutator
+                .enter_native(&[])
+                .expect("enter Mode::NativeStopped for turn 1");
+            // While NativeStopped, `run_access()` MUST refuse (no lease mintable).
+            assert!(
+                matches!(mutator.run_access(), Err(RegistrationError::Busy)),
+                "Mode::NativeStopped must refuse RunAccess (and therefore OwnerSlabLease)"
+            );
+            in_native_1_o.wait();
+
+            // Keeper holds AllStopped, flips watched bit + bumps shape, and runs
+            // real `collect_stopped` GC while this owner stays Mode::NativeStopped.
+            turn_1_done_o.wait();
+
+            // #13957: leave_native() BEFORE re-acquiring fresh OwnerSlabLease / CanonicalPlain.
+            mutator
+                .leave_native()
+                .expect("leave Mode::NativeStopped -> Mode::Running after turn 1");
+
+            // Stretch 2 (Mode::Running): fresh CanonicalPlain MUST immediately see
+            // post-turn watched bit + shape bump AND surviving SharedRoot string.
+            {
+                let mut run = mutator.run_access().expect("stretch 2 run_access");
+                let lease = handle.lease(&mut run).expect("stretch 2 lease");
+                let mut plain = CanonicalPlain::new(lease, &table_o);
+
+                // Note 1 (#15719): immediate post-turn visibility (never stale-false).
+                assert!(
+                    table_o.unbind_needs_serial(sym_watch, EraId::new(11), ShapeGeneration::new(1)),
+                    "post-turn read must immediately see old shape mismatch + watched bit"
+                );
+                assert!(
+                    plain.unbind_needs_serial(sym_watch),
+                    "even at the new shape, post-turn read must immediately see watched_or_retired=true"
+                );
+                assert_eq!(
+                    plain.admission(sym_watch),
+                    PlainAdmission::Refuse(PlainRefusal::NotPlain),
+                    "watched symbol must immediately refuse Plain admission after turn"
+                );
+                assert_eq!(
+                    plain.generation(),
+                    (EraId::new(11), ShapeGeneration::new(2)),
+                    "live ShapeGeneration bump must be immediately visible"
+                );
+
+                // Materialize the SharedRoot return value on the same-heap owner,
+                // verify it survived the intervening GC intact, write it into the
+                // owner's slab, and drop the SharedRoot.
+                let materialized = shared_payload
+                    .materialize(&owner_ctx.tagged_heap)
+                    .expect("materialize SharedRoot on seated same-heap owner")
+                    .value();
+                assert_eq!(
+                    materialized.as_utf8_str(),
+                    Some(PAYLOAD_TEXT),
+                    "SharedRoot payload must survive intervening stopped GC while NativeStopped"
+                );
+                let key_val = EffectivePlainKey::from_admission(
+                    &plain.admission(sym_val),
+                    EraId::new(11),
+                    ShapeGeneration::new(2),
+                )
+                .expect("mint key_val in stretch 2");
+                assert_eq!(
+                    effective_plain_write(&mut plain, &key_val, materialized),
+                    Ok(EffectiveWrite::OwnerSlot)
+                );
+                drop(shared_payload);
+
+                // Verify slab now holds the materialized string after SharedRoot dropped.
+                match effective_plain_read(&mut plain, &key_val) {
+                    Ok(EffectiveRead::OwnerBound(v)) => {
+                        assert_eq!(v.as_utf8_str(), Some(PAYLOAD_TEXT));
+                    }
+                    other => panic!("expected materialized string in slab, got {other:?}"),
+                }
+            }
+
+            // Round 2: enter_native -> second real stopped GC (now ONLY the owner
+            // slab roots the string; SharedRoot is already gone!) -> leave_native ->
+            // fresh CanonicalPlain verifies slab-rooted string survived GC and unbinds.
+            mutator
+                .enter_native(&[])
+                .expect("enter Mode::NativeStopped for round 2 GC");
+            in_native_2_o.wait();
+            turn_2_done_o.wait();
+            mutator
+                .leave_native()
+                .expect("leave Mode::NativeStopped after round 2 GC");
+
+            {
+                let mut run = mutator.run_access().expect("stretch 3 run_access");
+                let lease = handle.lease(&mut run).expect("stretch 3 lease");
+                let mut plain = CanonicalPlain::new(lease, &table_o);
+
+                let key_val = EffectivePlainKey::from_admission(
+                    &plain.admission(sym_val),
+                    EraId::new(11),
+                    ShapeGeneration::new(2),
+                )
+                .expect("mint key_val in stretch 3");
+                match effective_plain_read(&mut plain, &key_val) {
+                    Ok(EffectiveRead::OwnerBound(v)) => {
+                        assert_eq!(
+                            v.as_utf8_str(),
+                            Some(PAYLOAD_TEXT),
+                            "slab-rooted string must survive GC after SharedRoot was dropped"
+                        );
+                    }
+                    other => panic!("expected slab-rooted string after GC 2, got {other:?}"),
+                }
+
+                // Unbind initial record cleanly via C2 slab LIFO.
+                assert_eq!(
+                    effective_plain_unbind_checked(&mut plain, initial_record),
+                    Ok(PlainUnbind::Done)
+                );
+                assert_eq!(
+                    effective_plain_read(&mut plain, &key_val),
+                    Ok(EffectiveRead::Canonical(Value::fixnum(10)))
+                );
+            }
+
+            mutator
+                .retire_rooted(&[])
+                .expect("retire rendezvous-participating mutator");
+            drop(handle);
+            drop(retention);
+            owner_ctx.retire_green_owner();
+        });
+
+        // Keeper Turn 1: wait for owner in NativeStopped -> AllStopped -> flip
+        // watched bit & bump shape -> run real stopped GC -> complete turn.
+        in_native_1.wait();
+        {
+            let mut stopped = era.stop().expect("keeper stop 1 while owner NativeStopped");
+            assert!(table.set_symbol_watched_or_retired(sym_watch, true));
+            assert_eq!(table.bump_shape_generation(), ShapeGeneration::new(2));
+            let report = era
+                .collect_stopped(&mut stopped, Baton::collect_parallel_world_roots)
+                .expect("intervening stopped GC 1 while owner NativeStopped");
+            assert!(report.major, "intervening stopped GC 1 ran a major cycle");
+            let garbage_retained = era
+                .with_stopped_heap_for_test(&stopped, |heap| {
+                    // SAFETY: `unrooted_garbage_bits` is the exact `Value::bits()` of the
+                    // unrooted string allocated on this heap; `owns_heap_value_for_test`
+                    // checks heap membership without dereferencing freed memory.
+                    let v = unsafe { Value::from_bits(unrooted_garbage_bits) };
+                    heap.owns_heap_value_for_test(v)
+                })
+                .expect("inspect stopped heap after GC 1");
+            assert!(
+                !garbage_retained,
+                "intervening stopped GC 1 must reclaim unrooted garbage while SharedRoot survives"
+            );
+            stopped.complete().expect("complete stop 1");
+        }
+        turn_1_done.wait();
+
+        // Keeper Turn 2: second stopped GC after SharedRoot dropped, proving
+        // OwnerSlabRegistry traces the slab value cleanly.
+        in_native_2.wait();
+        {
+            let mut stopped = era.stop().expect("keeper stop 2 while owner NativeStopped");
+            era.collect_stopped(&mut stopped, Baton::collect_parallel_world_roots)
+                .expect("intervening stopped GC 2 after SharedRoot drop");
+            stopped.complete().expect("complete stop 2");
+        }
+        turn_2_done.wait();
+
+        owner_thread.join().expect("join slice 3 owner thread");
+    });
+
+    let (collector, keeper) = era.finish().expect("finish era");
+    keeper.uninstall_green_runtime_for_test();
+    drop(collector);
+    drop(keeper);
 }
