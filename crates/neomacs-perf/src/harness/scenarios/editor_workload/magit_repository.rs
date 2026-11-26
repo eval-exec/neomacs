@@ -68,6 +68,28 @@ fn magit_fixture_file(name: &str, revision: u32, lines: u32) -> String {
     out
 }
 
+/// Ambient `GIT_*` variables that redirect git at another repository, index,
+/// object store, template, or config override. Stripped before applying
+/// `MAGIT_FIXTURE_GIT_ENV` so fixture commands cannot escape their sandbox.
+pub(super) const MAGIT_FIXTURE_GIT_ENV_LEAKS: &[&str] = &[
+    "GIT_DIR",
+    "GIT_WORK_TREE",
+    "GIT_INDEX_FILE",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    "GIT_COMMON_DIR",
+    "GIT_CEILING_DIRECTORIES",
+    "GIT_DISCOVERY_ACROSS_FILESYSTEM",
+    "GIT_NAMESPACE",
+    "GIT_REPLACE_REF_BASE",
+    "GIT_CONFIG",
+    "GIT_CONFIG_SYSTEM",
+    "GIT_CONFIG_COUNT",
+    "GIT_CONFIG_PARAMETERS",
+    "GIT_TEMPLATE_DIR",
+    "GIT_TEST_MAINT_AUTO_DETACH",
+];
+
 /// Every git invocation that builds the Magit fixture runs in this one
 /// environment, so the repository is a function of the workload alone.
 ///
@@ -77,7 +99,7 @@ fn magit_fixture_file(name: &str, revision: u32, lines: u32) -> String {
 /// the work it did to render it) differed between the arms of one A/B and
 /// between machines. The host's global and system git config are shut out for
 /// the same reason (`commit.gpgsign`, `init.defaultBranch`, hooks, ...).
-const MAGIT_FIXTURE_GIT_ENV: [(&str, &str); 8] = [
+pub(super) const MAGIT_FIXTURE_GIT_ENV: [(&str, &str); 8] = [
     ("GIT_CONFIG_NOSYSTEM", "1"),
     ("GIT_CONFIG_GLOBAL", "/dev/null"),
     ("GIT_AUTHOR_NAME", "neomacs-perf"),
@@ -88,18 +110,71 @@ const MAGIT_FIXTURE_GIT_ENV: [(&str, &str); 8] = [
     ("GIT_COMMITTER_DATE", "2026-01-01T00:00:00+0000"),
 ];
 
-fn run_git(repository: &Path, arguments: &[&str]) -> Result<(), String> {
-    let output = Command::new("git")
-        .args(arguments)
-        .current_dir(repository)
+/// Per-invocation git configuration overrides that disable background
+/// maintenance, auto-gc, and hooks before any subcommand runs.
+///
+/// Git 2.54 switched `git maintenance` to the `geometric` strategy by default
+/// (`maintenance.geometric-repack.auto = 100`, estimated as `>= 2` loose
+/// objects in `.git/objects/17`). Without disabling `maintenance.auto` and
+/// `gc.auto`, `git commit` forks a detached `git maintenance run --auto
+/// --quiet --detach` (`git repack -d -l --geometric=2 --write-midx`) mid-build
+/// at revision 22 of `MagitStatusHeavy`; under CPU contention that background
+/// repack unlinks loose objects while the next `git commit` resolves `HEAD`,
+/// failing with `fatal: could not parse HEAD` and leaving non-deterministic
+/// packfile/MIDX state in the benchmark repository.
+const MAGIT_FIXTURE_GIT_CONFIG_ARGS: &[&str] = &[
+    "-c",
+    "maintenance.auto=false",
+    "-c",
+    "maintenance.autoDetach=false",
+    "-c",
+    "gc.auto=0",
+    "-c",
+    "gc.autoDetach=false",
+    "-c",
+    "core.hooksPath=/dev/null",
+];
+
+/// Configure a `git` `Command` to run hermetically against `repository`:
+/// clear redirecting `GIT_*` leaks, pin the fixture environment, and prepend
+/// the maintenance/GC/hooks disable flags.
+pub(super) fn configure_magit_fixture_git_command(command: &mut Command, repository: &Path) {
+    command.current_dir(repository);
+    for leak in MAGIT_FIXTURE_GIT_ENV_LEAKS {
+        command.env_remove(leak);
+    }
+    command
         .envs(MAGIT_FIXTURE_GIT_ENV)
+        .args(MAGIT_FIXTURE_GIT_CONFIG_ARGS);
+}
+
+pub(super) fn magit_fixture_git_command(repository: &Path) -> Command {
+    let mut command = Command::new("git");
+    configure_magit_fixture_git_command(&mut command, repository);
+    command
+}
+
+fn run_git(repository: &Path, arguments: &[&str]) -> Result<(), String> {
+    let output = magit_fixture_git_command(repository)
+        .args(arguments)
         .output()
         .map_err(|error| format!("failed to launch git for Magit fixture: {error}"))?;
     if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = stderr.trim();
+        let stdout = stdout.trim();
+        let detail = match (stderr.is_empty(), stdout.is_empty()) {
+            (false, true) => stderr.to_owned(),
+            (true, false) => format!("stdout: {stdout}"),
+            (false, false) => format!("{stderr} (stdout: {stdout})"),
+            (true, true) => "<no output>".to_owned(),
+        };
         return Err(format!(
-            "failed to prepare Magit fixture repository ({}): {}",
+            "failed to prepare Magit fixture repository ({}, status {}): {}",
             arguments.join(" "),
-            String::from_utf8_lossy(&output.stderr).trim()
+            output.status,
+            detail
         ));
     }
     Ok(())
@@ -130,21 +205,31 @@ pub(super) fn prepare_magit_repository(
             repository.display()
         )
     })?;
-    run_git(&repository, &["init", "--quiet", "--initial-branch=main"])?;
-    // Pin everything about `git diff` that the HOST could otherwise decide.
+    run_git(
+        &repository,
+        &["init", "--quiet", "--initial-branch=main", "--template="],
+    )?;
+    // Pin everything about `git diff`, maintenance, GC, and hooks that the
+    // HOST could otherwise decide.
     //
     // Magit renders a section per hunk, and how many hunks a change becomes is
     // `diff.context`: a developer machine with `diff.context = 30` merges what
     // git's default `-U3` reports as forty hunks into one, so the same fixture
     // would hand Magit forty times fewer sections to build there than on CI.
-    // That is a property of whoever ran the benchmark, not of the workload, so
-    // the repository states it and stops inheriting it.
+    // Writing `maintenance.auto=false` and `gc.auto=0` into local config also
+    // ensures Magit's own `git` subprocesses during a benchmark run cannot
+    // spawn background repacks.
     for (key, value) in [
         ("diff.context", "3"),
         ("diff.algorithm", "myers"),
         ("diff.noprefix", "false"),
         ("diff.renames", "true"),
         ("core.autocrlf", "false"),
+        ("maintenance.auto", "false"),
+        ("maintenance.autoDetach", "false"),
+        ("gc.auto", "0"),
+        ("gc.autoDetach", "false"),
+        ("core.hooksPath", "/dev/null"),
     ] {
         run_git(&repository, &["config", key, value])?;
     }
