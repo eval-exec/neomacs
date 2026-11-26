@@ -41,7 +41,7 @@
 //!
 //! # Reproducing `eol_decode_matrix_gnu31.tsv`
 //!
-//! The 2,858-line checked-in reference table (`<case-id>\t<gnu-31.1-result>`)
+//! The 2,898-line checked-in reference table (`<case-id>\t<gnu-31.1-result>`)
 //! is generated from the attested GNU Emacs 31.1 oracle (`scripts/ci/check-gnu-oracle.sh`):
 //!
 //! ```text
@@ -53,23 +53,25 @@
 //! executes against the live attested GNU Emacs 31.1 oracle and asserts zero
 //! drift between live GNU Emacs 31.1 and the checked-in GNU expectations.
 //!
-//! # Tracked Pre-Existing Main Divergences (Ratchet Ceilings)
+//! # Tracked Divergences (Ratchet Ceilings)
 //!
-//! On `main 9ca34ffd1c`, 2,250 / 2,858 cases match GNU Emacs 31.1 and
-//! 608 / 2,858 diverge across exactly 4 tracked root-cause classes (18 cases
-//! overlap Class A & Class B and 34 cases overlap Class A & Class C so that
-//! fixing any single issue never increases another class's counter; 0
-//! unexplained residuals):
+//! On `77h` (`e57c8d8b7c`, after 77g `f41b3eacc7` closed Classes B & D and 77h
+//! `cc67b23c64` closed Class C), 2,556 / 2,898 cases match GNU Emacs 31.1 and
+//! 342 / 2,898 diverge across exactly 2 remaining tracked classes (0 unexplained
+//! residuals):
 //! - Class A (#846): 324 cases — missing `(charset iso-8859-1)` on `iso-latin-1*` / `undecided*` decode
-//! - Class B (#847): 217 cases — source `(foo bar)` text-property leak into destination buffer / `dst=t`
-//! - Class C (#848):  98 cases — decode of non-ASCII into unibyte buffer truncates instead of UTF-8 bytes
-//! - Class D (#849):  21 cases — `coding-system = nil` `dst=nil` vs `dst=t` vs buffer semantics
+//! - Class B (#847):   0 cases — fixed in 77g (`f41b3eacc7`, tightened 217 -> 0)
+//! - Class C (#848):   0 cases — fixed in 77h (`cc67b23c64`, tightened 98 -> 0)
+//! - Class D (#849):   0 cases — fixed in 77g (`f41b3eacc7`, tightened 21 -> 0)
+//! - Class E (#854):  18 cases — `vietnamese-viqr` conversion-hook buffer-dst fast-path guard
+//!   (`encoding.rs:5695`, 16 ASCII buffer-dst rows) and unibyte-buffer `:post-read-conversion`
+//!   multibyteness (`src/coding.c:8155-8197`, 2 `uni-viqr-mixed` `buf-uni` rows)
 //!
-//! All 608 cases are guarded by:
+//! All tracked cases are guarded by:
 //! - the always-on `coding_matrix_known_divergence_ratchet` (fails if any
 //!   class ceiling or total grows, or if any unclassified divergence appears), and
-//! - the opt-in `--features coding-known-divergences` suite (4 strict GNU-expected
-//!   rows, zero `#[ignore]`, red today until each issue is fixed).
+//! - the opt-in `--features coding-known-divergences` suite (strict GNU-expected
+//!   per-issue rows, zero `#[ignore]`).
 
 use std::collections::BTreeMap;
 
@@ -77,15 +79,16 @@ use crate::common;
 
 const GNU_31_TABLE_TSV: &str = include_str!("eol_decode_matrix_gnu31.tsv");
 
-// Ratchet ceilings on `main 9ca34ffd1c` (18 cases overlap Class A & Class B;
-// 34 cases overlap Class A & Class C: 324 + 217 - 18 + 98 - 34 + 21 = 608
-// total distinct diverging cases). Orthogonal overlap marking guarantees
-// monotonicity regardless of which issue (#846/#847/#848/#849) lands first.
-const RATCHET_MAX_TOTAL: usize = 608;
+// Tightened orthogonal ratchet ceilings on `77h` (`e57c8d8b7c`):
+// Classes B (#847), C (#848), and D (#849) are closed at 0; only Class A (#846,
+// 324 cases) and Class E (#854, 18 `vietnamese-viqr` buffer-dst cases) remain
+// (324 + 18 = 342 total distinct diverging cases).
+const RATCHET_MAX_TOTAL: usize = 342;
 const RATCHET_MAX_CLASS_A_846: usize = 324;
-const RATCHET_MAX_CLASS_B_847: usize = 217;
-const RATCHET_MAX_CLASS_C_848: usize = 98;
-const RATCHET_MAX_CLASS_D_849: usize = 21;
+const RATCHET_MAX_CLASS_B_847: usize = 0;
+const RATCHET_MAX_CLASS_C_848: usize = 0;
+const RATCHET_MAX_CLASS_D_849: usize = 0;
+const RATCHET_MAX_CLASS_E_854: usize = 18;
 
 const ELISP_PREAMBLE: &str = r#"
   (define-coding-system-alias 'cm-alias-utf8-dos 'utf-8-dos)
@@ -105,7 +108,10 @@ const ELISP_PREAMBLE: &str = r#"
              ('uni-utf8-crlf (unibyte-string #xc3 #xa9 ?\r ?\n))
              ('mb-utf8-lf (concat (string #xe9) "\n"))
              ('uni-latin1-crlf (unibyte-string #xe9 ?\r ?\n))
-             ('uni-latin1-lf (unibyte-string #xe9 ?\n)))))
+             ('uni-latin1-lf (unibyte-string #xe9 ?\n))
+             ('uni-viqr-ascii (unibyte-string ?V ?i ?e ?^ ?. ?t))
+             ('mb-viqr-ascii (string-to-multibyte "Vie^.t"))
+             ('uni-viqr-mixed (unibyte-string ?V ?i ?e ?^ ?. ?t #xc3 #xa9)))))
       (propertize raw 'foo 'bar)))
 
   (defun cm-props (str-or-buf)
@@ -204,7 +210,23 @@ const FULL_MATRIX_BODY: &str = r#"
           (dolist (dst '(nil t buf-mb buf-uni))
             (princ (format "%S\t%S\n"
                            (list 'encode cs sk nc dst nil)
-                           (cm-run-one 'encode cs sk nc dst nil))))))))
+                           (cm-run-one 'encode cs sk nc dst nil)))))))
+    ;; Conversion-hook (`vietnamese-viqr`) fast-path vs buffer-destination matrix:
+    ;; covers string dst (fast path skips hook, src/coding.c:9610-9629),
+    ;; buffer dst (`buf-mb`/`buf-uni`, hook runs, src/coding.c:8155-8197),
+    ;; and `uni-viqr-mixed` separating decoder UTF-8 bytes from hook truncation.
+    (dolist (sk '(uni-viqr-ascii mb-viqr-ascii uni-viqr-mixed))
+      (dolist (nc '(nil t))
+        (dolist (dst '(nil t buf-mb buf-uni))
+          (princ (format "%S\t%S\n"
+                         (list 'decode 'vietnamese-viqr sk nc dst nil)
+                         (cm-run-one 'decode 'vietnamese-viqr sk nc dst nil))))))
+    (dolist (sk '(uni-viqr-ascii mb-viqr-ascii))
+      (dolist (nc '(nil t))
+        (dolist (dst '(nil t buf-mb buf-uni))
+          (princ (format "%S\t%S\n"
+                         (list 'encode 'vietnamese-viqr sk nc dst nil)
+                         (cm-run-one 'encode 'vietnamese-viqr sk nc dst nil)))))))
   t
 "#;
 
@@ -224,8 +246,8 @@ fn load_gnu_table() -> BTreeMap<String, String> {
     let table = parse_tsv_map(GNU_31_TABLE_TSV);
     assert_eq!(
         table.len(),
-        2858,
-        "eol_decode_matrix_gnu31.tsv must contain all 2,858 attested GNU 31.1 cases"
+        2898,
+        "eol_decode_matrix_gnu31.tsv must contain all 2,898 attested GNU 31.1 cases"
     );
     table
 }
@@ -291,11 +313,16 @@ struct DiffClassification {
     class_b_847: bool,
     class_c_848: bool,
     class_d_849: bool,
+    class_e_854: bool,
 }
 
 impl DiffClassification {
     fn is_classified(self) -> bool {
-        self.class_a_846 || self.class_b_847 || self.class_c_848 || self.class_d_849
+        self.class_a_846
+            || self.class_b_847
+            || self.class_c_848
+            || self.class_d_849
+            || self.class_e_854
     }
 }
 
@@ -324,9 +351,9 @@ fn extract_plist_field<'a>(plist: &'a str, key: &str) -> Option<&'a str> {
     }
 }
 
-/// Classify a live `(case_id, gnu_result, neo_result)` mismatch into the four
-/// tracked GitHub issues (`#846`, `#847`, `#848`, `#849`). Any mismatch that
-/// does not fit one of these four exact root-cause signatures returns all-false
+/// Classify a live `(case_id, gnu_result, neo_result)` mismatch into the five
+/// tracked GitHub issues (`#846`, `#847`, `#848`, `#849`, `#854`). Any mismatch
+/// that does not fit one of these exact root-cause signatures returns all-false
 /// and fails the ratchet immediately as an unclassified regression.
 fn classify_divergence(case_id: &str, gnu: &str, neo: &str) -> DiffClassification {
     let parts: Vec<&str> = case_id
@@ -355,10 +382,26 @@ fn classify_divergence(case_id: &str, gnu: &str, neo: &str) -> DiffClassificatio
         class_b_847: false,
         class_c_848: false,
         class_d_849: false,
+        class_e_854: false,
     };
 
     // Fail closed if a mid-buffer destination ever drops its pre-existing `(keep yes)` property.
     if g_props.contains("(keep yes)") && !n_props.contains("(keep yes)") {
+        return out;
+    }
+
+    // Class E (#854): conversion-hook (`vietnamese-viqr`) buffer-destination
+    // fast-path omission (`encoding.rs:5695`) and unibyte-buffer `:post-read-conversion`
+    // multibyteness (`src/coding.c:8155-8197`). String destinations (`nil`/`t`)
+    // and any metadata/property divergence deliberately remain unclassified.
+    if cs == "vietnamese-viqr"
+        && (dst == "buf-mb" || dst == "buf-uni")
+        && !diff_fields.contains(&":pt-same")
+        && !diff_fields.contains(&":mb")
+        && !diff_fields.contains(&":props")
+        && !diff_fields.contains(&":last")
+    {
+        out.class_e_854 = true;
         return out;
     }
 
@@ -856,16 +899,123 @@ fn coding_matrix_inhibit_eol_and_match_data_and_region() {
     );
 }
 
-/// Row 5 (RATCHET): Runs ALL 2,858 cases of the full coding/EOL matrix on
+/// Row 5: `vietnamese-viqr` string-destination ASCII fast path and mixed
+/// non-ASCII conversion-hook parity (`src/coding.c:9610-9630, 8155-8197`).
+///
+/// Pins GNU's contract that string destinations (`nil`/`t`) on pure-ASCII input
+/// take the fast path and skip `:post-read-conversion` / `:pre-write-conversion`
+/// (guarding against an over-corrected fast-path check), while non-ASCII input
+/// (`uni-viqr-mixed`) runs the hook on string and multibyte-buffer destinations.
+#[test]
+fn coding_matrix_viqr_string_dst_fast_path_skips_hook() {
+    const EXPECTED: &[(&str, &str)] = &[
+        // String destinations on pure-ASCII VIQR escape MUST stay unchanged (fast path skips hook):
+        (
+            "(decode vietnamese-viqr uni-viqr-ascii nil nil nil)",
+            "(ok :eq nil :mb t :bytes (86 105 101 94 46 116) :props nil :last vietnamese-viqr)",
+        ),
+        (
+            "(decode vietnamese-viqr uni-viqr-ascii nil t nil)",
+            "(ok :eq nil :mb t :bytes (86 105 101 94 46 116) :props nil :last vietnamese-viqr)",
+        ),
+        (
+            "(decode vietnamese-viqr uni-viqr-ascii t nil nil)",
+            "(ok :eq t :mb nil :bytes (86 105 101 94 46 116) :props ((0 6 (foo bar))) :last vietnamese-viqr)",
+        ),
+        (
+            "(decode vietnamese-viqr uni-viqr-ascii t t nil)",
+            "(ok :eq t :mb nil :bytes (86 105 101 94 46 116) :props ((0 6 (foo bar))) :last vietnamese-viqr)",
+        ),
+        (
+            "(decode vietnamese-viqr mb-viqr-ascii nil nil nil)",
+            "(ok :eq nil :mb t :bytes (86 105 101 94 46 116) :props nil :last vietnamese-viqr)",
+        ),
+        (
+            "(decode vietnamese-viqr mb-viqr-ascii nil t nil)",
+            "(ok :eq nil :mb t :bytes (86 105 101 94 46 116) :props nil :last vietnamese-viqr)",
+        ),
+        (
+            "(decode vietnamese-viqr mb-viqr-ascii t nil nil)",
+            "(ok :eq t :mb t :bytes (86 105 101 94 46 116) :props ((0 6 (foo bar))) :last vietnamese-viqr)",
+        ),
+        (
+            "(decode vietnamese-viqr mb-viqr-ascii t t nil)",
+            "(ok :eq t :mb t :bytes (86 105 101 94 46 116) :props ((0 6 (foo bar))) :last vietnamese-viqr)",
+        ),
+        (
+            "(encode vietnamese-viqr uni-viqr-ascii nil nil nil)",
+            "(ok :eq nil :mb nil :bytes (86 105 101 94 46 116) :props nil :last vietnamese-viqr)",
+        ),
+        (
+            "(encode vietnamese-viqr uni-viqr-ascii nil t nil)",
+            "(ok :eq nil :mb nil :bytes (86 105 101 94 46 116) :props nil :last vietnamese-viqr)",
+        ),
+        (
+            "(encode vietnamese-viqr uni-viqr-ascii t nil nil)",
+            "(ok :eq t :mb nil :bytes (86 105 101 94 46 116) :props ((0 6 (foo bar))) :last vietnamese-viqr)",
+        ),
+        (
+            "(encode vietnamese-viqr uni-viqr-ascii t t nil)",
+            "(ok :eq t :mb nil :bytes (86 105 101 94 46 116) :props ((0 6 (foo bar))) :last vietnamese-viqr)",
+        ),
+        (
+            "(encode vietnamese-viqr mb-viqr-ascii nil nil nil)",
+            "(ok :eq nil :mb nil :bytes (86 105 101 94 46 116) :props nil :last vietnamese-viqr)",
+        ),
+        (
+            "(encode vietnamese-viqr mb-viqr-ascii nil t nil)",
+            "(ok :eq nil :mb nil :bytes (86 105 101 94 46 116) :props nil :last vietnamese-viqr)",
+        ),
+        (
+            "(encode vietnamese-viqr mb-viqr-ascii t nil nil)",
+            "(ok :eq t :mb t :bytes (86 105 101 94 46 116) :props ((0 6 (foo bar))) :last vietnamese-viqr)",
+        ),
+        (
+            "(encode vietnamese-viqr mb-viqr-ascii t t nil)",
+            "(ok :eq t :mb t :bytes (86 105 101 94 46 116) :props ((0 6 (foo bar))) :last vietnamese-viqr)",
+        ),
+        // Non-ASCII mixed source (`"Vie^.t"` + UTF-8 `é`) bypasses fast path and runs hook:
+        (
+            "(decode vietnamese-viqr uni-viqr-mixed nil nil nil)",
+            "(ok :eq nil :mb t :bytes (86 105 7879 116 233) :props nil :last vietnamese-viqr)",
+        ),
+        (
+            "(decode vietnamese-viqr uni-viqr-mixed nil t nil)",
+            "(ok :eq nil :mb t :bytes (86 105 7879 116 233) :props nil :last vietnamese-viqr)",
+        ),
+        (
+            "(decode vietnamese-viqr uni-viqr-mixed t nil nil)",
+            "(ok :eq nil :mb t :bytes (86 105 7879 116 233) :props nil :last vietnamese-viqr)",
+        ),
+        (
+            "(decode vietnamese-viqr uni-viqr-mixed t t nil)",
+            "(ok :eq nil :mb t :bytes (86 105 7879 116 233) :props nil :last vietnamese-viqr)",
+        ),
+        (
+            "(decode vietnamese-viqr uni-viqr-mixed nil buf-mb nil)",
+            "(ok :ret 5 :pt-same t :mb t :bytes (86 105 7879 116 233) :props nil :last vietnamese-viqr)",
+        ),
+        (
+            "(decode vietnamese-viqr uni-viqr-mixed t buf-mb nil)",
+            "(ok :ret 5 :pt-same t :mb t :bytes (86 105 7879 116 233) :props nil :last vietnamese-viqr)",
+        ),
+    ];
+    let form = build_named_cases_form(EXPECTED);
+    assert_named_cases_match_gnu(
+        "coding_matrix_viqr_string_dst_fast_path_skips_hook",
+        &form,
+        EXPECTED,
+    );
+}
+
+/// Row 6 (RATCHET): Runs ALL 2,898 cases of the full coding/EOL matrix on
 /// Neomacs (and verifies `eol_decode_matrix_gnu31.tsv` against live attested
 /// GNU Emacs 31.1 under `NEOVM_ORACLE_MODE=verify|live`), asserting that:
 /// - zero unclassified divergences exist,
 /// - no tracked divergence class exceeds its ratchet ceiling
-///   (Class A #846 <= 324, Class B #847 <= 217, Class C #848 <= 98, Class D #849 <= 21),
-/// - total divergences <= 608.
-///
-/// Any regression (including splitperf `a152723324`'s 13 DOS/Mac property leaks)
-/// immediately exceeds the Class B + total ratchet and prints the regressing cases.
+///   (Class A #846 <= 324, Class B #847 <= 0, Class C #848 <= 0, Class D #849 <= 0,
+///    Class E #854 <= 18),
+/// - total divergences <= 342.
 #[test]
 fn coding_matrix_known_divergence_ratchet() {
     let (gnu_table, neo_live) = run_full_matrix();
@@ -875,6 +1025,7 @@ fn coding_matrix_known_divergence_ratchet() {
     let mut class_b = Vec::new();
     let mut class_c = Vec::new();
     let mut class_d = Vec::new();
+    let mut class_e = Vec::new();
     let mut unexpected = Vec::new();
 
     for (case_id, gnu_val) in &gnu_table {
@@ -896,6 +1047,9 @@ fn coding_matrix_known_divergence_ratchet() {
         }
         if cls.class_d_849 {
             class_d.push(detail.clone());
+        }
+        if cls.class_e_854 {
+            class_e.push(detail.clone());
         }
         if !cls.is_classified() {
             unexpected.push(detail);
@@ -962,14 +1116,27 @@ fn coding_matrix_known_divergence_ratchet() {
             .join("\n")
     );
     assert!(
+        class_e.len() <= RATCHET_MAX_CLASS_E_854,
+        "Class E (#854, conversion-hook buffer-dst fast-path / unibyte hook multibyteness) grew: {} > {}\n{}",
+        class_e.len(),
+        RATCHET_MAX_CLASS_E_854,
+        class_e
+            .iter()
+            .take(25)
+            .cloned()
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
+    assert!(
         total <= RATCHET_MAX_TOTAL,
-        "Total coding/EOL divergences grew: {} > {} (A={}, B={}, C={}, D={})",
+        "Total coding/EOL divergences grew: {} > {} (A={}, B={}, C={}, D={}, E={})",
         total,
         RATCHET_MAX_TOTAL,
         class_a.len(),
         class_b.len(),
         class_c.len(),
-        class_d.len()
+        class_d.len(),
+        class_e.len()
     );
 }
 
@@ -1043,7 +1210,7 @@ mod exhaustive {
     fn coding_matrix_exhaustive_decode_string_dst() {
         assert_exhaustive_slice(
             "coding_matrix_exhaustive_decode_string_dst",
-            926,
+            938,
             |op, _cs, _sk, _nc, dst, inh| {
                 op == "decode" && inh == "nil" && (dst == "nil" || dst == "t")
             },
@@ -1054,7 +1221,7 @@ mod exhaustive {
     fn coding_matrix_exhaustive_decode_buffer_dst() {
         assert_exhaustive_slice(
             "coding_matrix_exhaustive_decode_buffer_dst",
-            704,
+            706,
             |op, _cs, _sk, _nc, dst, inh| {
                 op == "decode"
                     && inh == "nil"
@@ -1076,7 +1243,7 @@ mod exhaustive {
     fn coding_matrix_exhaustive_encode_all_dst() {
         assert_exhaustive_slice(
             "coding_matrix_exhaustive_encode_all_dst",
-            518,
+            526,
             |op, _cs, _sk, _nc, _dst, _inh| op == "encode",
         );
     }
@@ -1136,9 +1303,17 @@ mod known_divergences {
         assert_class_zero_divergences("Class C (#848)", |c| c.class_c_848);
     }
 
-    /// Issue #849: `coding-system = nil` mishandles `dst = nil` vs `dst = t` vs buffer (21 cases on 9ca34ffd1c).
+    /// Issue #849: `coding-system = nil` mishandles `dst = nil` vs `dst = t` vs buffer (0 cases on 77h).
     #[test]
     fn coding_matrix_known_div_class_d_nil_coding_dst_semantics_issue_849() {
         assert_class_zero_divergences("Class D (#849)", |c| c.class_d_849);
+    }
+
+    /// Issue #854: `vietnamese-viqr` conversion-hook buffer-destination fast-path omission
+    /// (`encoding.rs:5695`, 16 ASCII buffer-dst rows) and unibyte-buffer `:post-read-conversion`
+    /// multibyteness (`src/coding.c:8155-8197`, 2 `uni-viqr-mixed` `buf-uni` rows).
+    #[test]
+    fn coding_matrix_known_div_class_e_conversion_hook_buffer_dst_issue_854() {
+        assert_class_zero_divergences("Class E (#854)", |c| c.class_e_854);
     }
 }
