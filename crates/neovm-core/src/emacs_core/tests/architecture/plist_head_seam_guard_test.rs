@@ -23,6 +23,9 @@ use super::architecture_production_source_roots::production_source_files;
 #[path = "keeper_world_designator_seam_guard_test.rs"]
 mod keeper_world_designator_seam_guard_test;
 
+#[path = "erased_callable_pair_guard_test.rs"]
+mod erased_callable_pair_guard_test;
+
 #[path = "mint_seal_guard_test.rs"]
 mod mint_seal_guard_test;
 
