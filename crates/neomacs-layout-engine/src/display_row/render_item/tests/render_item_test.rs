@@ -12,6 +12,7 @@ fn image_margin_expands_the_slot_but_keeps_media_bounds_on_image_content() {
         horizontal_margin: 3.0,
         vertical_margin: 2.0,
         opaque_background: Some(0x12_34_56),
+        presentation: neomacs_display_protocol::ImageGlyphPresentation::Texture,
     });
     assert_eq!(replacement.width, 26.0);
     assert_eq!(replacement.height, 14.0);
@@ -40,6 +41,7 @@ fn media_replacement_remains_one_authoritative_row_item() {
         horizontal_margin: 3.0,
         vertical_margin: 2.0,
         opaque_background: Some(0x12_34_56),
+        presentation: neomacs_display_protocol::ImageGlyphPresentation::Texture,
     });
     let source = DisplayItem {
         span: SourceSpan::synthetic(1, 0, 1),
@@ -156,6 +158,7 @@ fn media_source_item(image_id: i32, width: f32, height: f32) -> DisplayItem {
             horizontal_margin: 0.0,
             vertical_margin: 0.0,
             opaque_background: None,
+            presentation: neomacs_display_protocol::ImageGlyphPresentation::Texture,
         })),
         layout: Default::default(),
         pointer_appearance: None,

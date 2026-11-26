@@ -129,7 +129,9 @@ impl EraScope {
         self.control.poison();
         // A forgotten permit can still name this heap. Comparing addresses
         // is safe here; reconstructing a shared heap reference is not.
-        super::super::super::clear_tagged_heap_root_if_installed(self.root);
+        // SAFETY: poisoned era teardown; no active `Context` can evaluate on
+        // this retired era root.
+        unsafe { super::super::super::clear_tagged_heap_root_if_installed(self.root) };
     }
 
     fn refuse(self, reason: ScopedEraError) -> ScopedEraFailure {
@@ -220,7 +222,9 @@ impl EraScope {
         if foreign {
             return Err(self.refuse(ScopedEraError::Transfer(TransferError::InstalledTls)));
         }
-        if let Err(reason) = super::retire_transfer_tls(self.root) {
+        // SAFETY: the era frame has completed and all participants have retired,
+        // while `self` still retains the sole backing allocation for `self.root`.
+        if let Err(reason) = unsafe { super::retire_transfer_tls(self.root) } {
             return Err(self.refuse(ScopedEraError::Transfer(reason)));
         }
         let owner = ManuallyDrop::into_inner(self.owner.take().expect("returned era owner"));

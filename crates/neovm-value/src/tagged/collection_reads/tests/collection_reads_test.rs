@@ -145,6 +145,22 @@ fn lost_mutation_history_refuses_reuse() {
 }
 
 #[test]
+fn empty_capture_remains_valid_across_journal_overflow() {
+    let unrelated = Value::cons(Value::NIL, Value::NIL);
+    let (_, reads) = capture(|| ());
+    let reads = reads.expect("empty capture should produce a certificate");
+    assert!(reads.reads_empty_for_test());
+    for _ in 0..=JOURNAL_SIZE {
+        unrelated.set_car(Value::T);
+    }
+    assert!(
+        reads.unchanged(),
+        "an empty dependency set cannot be invalidated by unrelated writes"
+    );
+    assert!(reads.unchanged_and_observe());
+}
+
+#[test]
 fn observation_budget_and_unwind_restore_the_outer_scope() {
     let values: Vec<_> = (0..=MAX_READS)
         .map(|_| Value::cons(Value::NIL, Value::NIL))

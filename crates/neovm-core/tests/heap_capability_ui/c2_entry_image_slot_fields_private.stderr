@@ -1,0 +1,5 @@
+error[E0616]: field `0` of struct `EntryImageSlot` is private
+  --> tests/heap_capability_ui/c2_entry_image_slot_fields_private.rs:46:10
+   |
+46 |     slot.0 = Some(PublishedGcImage(YoungRegistrationId(1)));
+   |          ^ private field

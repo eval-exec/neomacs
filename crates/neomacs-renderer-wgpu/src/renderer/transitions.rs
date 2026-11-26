@@ -124,7 +124,9 @@ impl WgpuRenderer {
         else {
             return;
         };
-        let draw = self.parameters([w, h], 0.0);
+        let Ok(draw) = self.parameters([w, h], 0.0) else {
+            return;
+        };
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -179,7 +181,9 @@ impl WgpuRenderer {
         else {
             return;
         };
-        let draw = self.parameters([w, h], 0.0);
+        let Ok(draw) = self.parameters([w, h], 0.0) else {
+            return;
+        };
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -346,7 +350,10 @@ impl WgpuRenderer {
             render_pass.set_scissor_rect(sx, sy, sw, sh);
             // Replace the previous scene within this scissor with (1-t)*old.
             render_pass.set_pipeline(&self.pipelines.surface_copy);
-            render_pass.set_bind_group(0, self.frame_parameters().binding(), &[]);
+            let Ok(frame_params) = self.frame_parameters() else {
+                return;
+            };
+            render_pass.set_bind_group(0, frame_params.binding(), &[]);
 
             // Draw old with fading alpha
             if let Some(ref upload) = old_upload {
@@ -489,7 +496,10 @@ impl WgpuRenderer {
 
             render_pass.set_scissor_rect(sx, sy, sw, sh);
             render_pass.set_pipeline(&self.pipelines.composition);
-            render_pass.set_bind_group(0, self.frame_parameters().binding(), &[]);
+            let Ok(frame_params) = self.frame_parameters() else {
+                return;
+            };
+            render_pass.set_bind_group(0, frame_params.binding(), &[]);
 
             // Draw old texture sliding out
             if let Some(ref upload) = old_upload {
@@ -890,7 +900,11 @@ impl WgpuRenderer {
                 .arenas
                 .rect
                 .upload(&self.device, &self.queue, &vertices)?;
-            Some((upload, vertices.len() as u32, self.parameters([w, h], 0.0)))
+            Some((
+                upload,
+                vertices.len() as u32,
+                self.parameters([w, h], 0.0).ok()?,
+            ))
         });
         // The coverage stencil must match the color target, which may be a
         // composition picture rather than the installed surface.
@@ -946,7 +960,10 @@ impl WgpuRenderer {
                     TransitionComposition::WeightedPictures => &self.pipelines.crossfade_add,
                 });
             }
-            rp.set_bind_group(0, self.frame_parameters().binding(), &[]);
+            let Ok(frame_params) = self.frame_parameters() else {
+                return;
+            };
+            rp.set_bind_group(0, frame_params.binding(), &[]);
 
             if let Some(ref upload) = old_upload {
                 rp.set_bind_group(1, old_bind_group, &[]);

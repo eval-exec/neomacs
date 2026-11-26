@@ -860,11 +860,17 @@ pub fn define_coding_system_internal(
     args: Vec<Value>,
 ) -> EvalResult {
     let mode = eval.symbol_mode();
-    let result = neovm_text::emacs_core::coding::builtin_define_coding_system_internal(
-        &mut eval.coding_systems,
-        args.clone(),
-        mode,
-    )?;
+    // GNU routes `error()` templates through doprnt, which follows the
+    // current text-quoting-style (doprnt.c:493-499).
+    let quoting_style =
+        neovm_text::emacs_core::coding::effective_text_quoting_style(eval.variables(), mode);
+    let result =
+        neovm_text::emacs_core::coding::builtin_define_coding_system_internal_with_quoting_style(
+            &mut eval.coding_systems,
+            args.clone(),
+            mode,
+            quoting_style,
+        )?;
     // SAFETY: the completed coding-system registration is recorded in
     // symbol value/property cells and in obarray membership (GNU interns the
     // `make_subsidiaries` names). This helper is noncalling and preserves

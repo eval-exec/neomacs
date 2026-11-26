@@ -121,10 +121,10 @@ fn interpret(ev: &mut Context, prog: &Prog, var: &str, args: &[Value]) -> String
         optional: Vec::new(),
         rest: None,
     });
-    f.lexical = true;
-    f.ops = prog.ops.clone();
-    f.constants = constants(var).into();
-    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(8);
+    f.set_lexical(true);
+    f.set_ops(prog.ops.clone());
+    f.set_constants(constants(var).into());
+    f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(8));
     seal_hand_assembled_ops_for_test(&mut f);
     let mut vm = Vm::from_context(ev);
     match vm.execute(&f, args.to_vec()) {
@@ -174,7 +174,7 @@ fn shims_since(before: Shims) -> Shims {
 fn run(ev: &mut Context, leaf: &CompiledLeaf, args: &[Value]) -> (String, Shims) {
     let before = shims();
     let ctx = ev as *mut Context as *mut u8;
-    let answer = match leaf.call(ctx, args) {
+    let answer = match unsafe { leaf.call(ctx, args) } {
         NativeRun::Ok(bits) => print_value(&unsafe {
             /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
             Value::from_bits(bits)
@@ -336,6 +336,9 @@ fn cached_shapes_take_no_shim_and_answer_as_the_interpreter() {
             warm(&mut ev, VARS);
             let want = interpret(&mut ev, prog, var, args);
             let want_after = observe(&mut ev, var);
+            // The answers are owned strings. Drop this fixture before the
+            // next one: a second `let` would leave the first Context active.
+            drop(ev);
             let mut ev = neovm_value::test_support::authority::with_legacy_gc(fixture);
             warm(&mut ev, VARS);
             reset_inline_var_sites_for_test();
@@ -420,6 +423,7 @@ fn a_class_change_after_compile_takes_the_shim() {
             let want = interpret(&mut ev, prog, "ivt-plain", args);
             let want_after = observe(&mut ev, "ivt-plain");
             let want_log = eval(&mut ev, "(prog1 (reverse ivt-log) (setq ivt-log nil))");
+            drop(ev);
             let mut ev = neovm_value::test_support::authority::with_legacy_gc(fixture);
             // Compiled while the variable was a plain special.
             let leaf = compile(&ev, ALL, prog, "ivt-plain");
@@ -624,6 +628,7 @@ fn let_bodies_that_change_the_world_unbind_as_the_interpreter() {
             let want = interpret(&mut ev, &Prog::let_call(), var, &[Value::make_int(9)]);
             let want_after = observe(&mut ev, var);
             let want_log = eval(&mut ev, "(reverse ivt-log)");
+            drop(ev);
             let mut ev = fixture();
             warm(&mut ev, &[var]);
             eval_ok(&mut ev, &setup);
@@ -767,15 +772,17 @@ fn binding_sum(nested: bool) -> ByteCodeFunction {
         optional: vec![],
         rest: None,
     });
-    f.lexical = true;
-    f.constants = vec![
-        Value::make_int(0),
-        Value::make_int(3),
-        Value::symbol("osr-bound"),
-        Value::make_int(7),
-    ]
-    .into();
-    f.ops = vec![
+    f.set_lexical(true);
+    f.set_constants(
+        vec![
+            Value::make_int(0),
+            Value::make_int(3),
+            Value::symbol("osr-bound"),
+            Value::make_int(7),
+        ]
+        .into(),
+    );
+    f.set_ops(vec![
         Op::Constant(1),
         Op::VarBind(2),
         Op::Constant(0),
@@ -784,14 +791,14 @@ fn binding_sum(nested: bool) -> ByteCodeFunction {
         Op::StackRef(3),
         Op::Lss,
         Op::GotoIfNil(0),
-    ];
+    ]);
     if nested {
-        f.ops.extend([Op::Constant(3), Op::VarBind(2)]);
+        f.ops_mut().extend([Op::Constant(3), Op::VarBind(2)]);
     }
-    f.ops
+    f.ops_mut()
         .extend([Op::StackRef(1), Op::VarRef(2), Op::Add, Op::StackSet(2)]);
     if nested {
-        f.ops.extend([
+        f.ops_mut().extend([
             Op::Unbind(1),
             Op::StackRef(1),
             Op::VarRef(2),
@@ -799,11 +806,12 @@ fn binding_sum(nested: bool) -> ByteCodeFunction {
             Op::StackSet(2),
         ]);
     }
-    f.ops
+    f.ops_mut()
         .extend([Op::StackRef(0), Op::Add1, Op::StackSet(1), Op::Goto(4)]);
-    f.ops[7] = Op::GotoIfNil(f.ops.len() as u32);
-    f.ops.extend([Op::StackRef(1), Op::Unbind(1), Op::Return]);
-    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
+    f.ops_mut()[7] = Op::GotoIfNil(f.ops().len() as u32);
+    f.ops_mut()
+        .extend([Op::StackRef(1), Op::Unbind(1), Op::Return]);
+    f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
     f
 }
 

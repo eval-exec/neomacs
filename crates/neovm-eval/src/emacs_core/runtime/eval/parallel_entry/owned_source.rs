@@ -494,8 +494,10 @@ impl OwnedSourceTextRetired {
             SourceWithdrawalStep::HeapPreparation,
             |source, keeper| {
                 validate_serial_source_entry(source).map_err(SourceCensusRefusal::Entry)?;
-                source
-                    .close_owned_source_heap_tls(keeper)
+                // SAFETY: `source` is owned inside the fail-closed `SourceFrame`
+                // (`ManuallyDrop<Box<Context>>`); no caller can re-enter it
+                // without explicit full recovery.
+                unsafe { source.close_owned_source_heap_tls(keeper) }
                     .map_err(SourceCensusRefusal::Heap)
             },
         )?;
@@ -545,10 +547,13 @@ impl OwnedSourceRegistries {
             .advance(SourceWithdrawalStep::ObservationEntry, |source| {
                 validate_serial_source_entry(source).map(|()| ObservationEntryChecked)
             })?;
-        let frame = frame.advance_with_keeper(
-            SourceWithdrawalStep::Observations,
-            Context::withdraw_owned_source_observations,
-        )?;
+        let frame =
+            frame.advance_with_keeper(SourceWithdrawalStep::Observations, |source, keeper| {
+                // SAFETY: `source` is owned inside the fail-closed `SourceFrame`
+                // (`ManuallyDrop<Box<Context>>`); no caller can re-enter it
+                // without explicit full recovery.
+                unsafe { source.withdraw_owned_source_observations(keeper) }
+            })?;
         Ok(OwnedSourceObservationClosed { _frame: frame })
     }
 }
@@ -733,6 +738,14 @@ impl OwnedSourceBackendClosed {
 }
 
 mod bootstrap;
+mod keeper_service;
+
+/// The keeper era the L6.7 driver serves on.
+pub(in crate::emacs_core::eval::parallel_entry) use keeper_service::KeeperEra;
+
+/// The live-era fixture the bootstrap rows and the E5.2 rows share.
+#[cfg(test)]
+pub(in crate::emacs_core::eval::parallel_entry) use bootstrap::era_fixture;
 
 #[cfg(test)]
 #[path = "tests/owned_source_jit_compiler_test.rs"]

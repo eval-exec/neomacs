@@ -37,10 +37,10 @@ fn body(ops: Vec<Op>, constants: Vec<Value>, arity: usize, shape: Shape) -> Byte
         optional,
         rest: None,
     });
-    f.lexical = true;
-    f.ops = ops;
-    f.constants = constants.into();
-    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(8);
+    f.set_lexical(true);
+    f.set_ops(ops);
+    f.set_constants(constants.into());
+    f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(8));
     f.seal_hand_assembled_ops();
     f
 }
@@ -93,7 +93,7 @@ fn interpret(eval: &mut Context, f: &ByteCodeFunction, args: &[Value]) -> Value 
 fn native(ctx_ptr: *mut u8, leaf: &CompiledLeaf, args: &[Value]) -> (Value, usize, usize) {
     EQ_SLOW_CALLS.with(|c| c.set(0));
     SYMBOLP_SLOW_CALLS.with(|c| c.set(0));
-    let answer = match leaf.call(ctx_ptr, args) {
+    let answer = match unsafe { leaf.call(ctx_ptr, args) } {
         NativeRun::Ok(bits) => unsafe {
             /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
             Value::from_bits(bits)

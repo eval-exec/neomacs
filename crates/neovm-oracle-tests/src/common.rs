@@ -1535,6 +1535,115 @@ pub(crate) fn assert_oracle_parity_expect(form: &str, expected: expect_test::Exp
     assert_oracle_parity_expect_with_sandbox(form, expected, &sandbox, EvalProgram::Normalized);
 }
 
+#[cfg(unix)]
+fn run_batch_editor_eval_with_sigttou(
+    sandbox: &OracleSandbox,
+    eval_program: EvalProgram,
+    engine: OracleEngine,
+    disposition: neomacs_test_env::SignalDisposition,
+) -> Result<CapturedEvaluation, String> {
+    let mut cmd = batch_editor_command(sandbox, eval_program, engine);
+    cmd.set_sigttou_disposition(disposition);
+    let label = engine.as_env_value();
+    let output = cmd
+        .output()
+        .map_err(|error| format!("failed to run batch editor ({label}): {error}"))?;
+
+    if !output.status.success() {
+        return Err(format!(
+            "batch editor ({label}) failed: status={}\nstdout:\n{}\nstderr:\n{}",
+            output.status,
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        ));
+    }
+
+    CapturedEvaluation::from_marked_streams(
+        &String::from_utf8_lossy(&output.stdout),
+        &String::from_utf8_lossy(&output.stderr),
+        ORACLE_OUTCOME_MARKER,
+    )
+    .map_err(|error| {
+        format!(
+            "batch editor ({label}) emitted an invalid marked outcome: {error}\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        )
+    })
+}
+
+/// Evaluate `form` in GNU Emacs and Neomacs with an explicit parent `SIGTTOU`
+/// disposition (`SIG_DFL` or `SIG_IGN`) applied in the child between fork and
+/// exec, honoring `OracleMode` (`snapshot`, `verify`, `refresh`, `live`).
+#[cfg(unix)]
+pub(crate) fn assert_oracle_parity_with_sigttou_expect(
+    form: &str,
+    disposition: neomacs_test_env::SignalDisposition,
+    expected: expect_test::Expect,
+) {
+    ensure_nonempty_form(form).expect("form should not be empty");
+    let sandbox = oracle_sandbox(form, &[], &project_lisp_dir());
+    let eval_program = EvalProgram::Normalized;
+
+    match OracleMode::from_env() {
+        OracleMode::Snapshot => {
+            let neovm = run_batch_editor_eval_with_sigttou(
+                &sandbox,
+                eval_program,
+                OracleEngine::Neomacs,
+                disposition,
+            )
+            .expect("neomacs binary eval should run");
+            expected.assert_eq(&inline_expect_payload(&neovm));
+        }
+        OracleMode::Verify => {
+            let oracle = run_batch_editor_eval_with_sigttou(
+                &sandbox,
+                eval_program,
+                OracleEngine::Gnu,
+                disposition,
+            )
+            .expect("oracle eval should run");
+            let neovm = run_batch_editor_eval_with_sigttou(
+                &sandbox,
+                eval_program,
+                OracleEngine::Neomacs,
+                disposition,
+            )
+            .expect("neomacs binary eval should run");
+            expected.assert_eq(&inline_expect_payload(&oracle));
+            assert_neovm_oracle_parity(&neovm, &oracle, form);
+        }
+        OracleMode::Refresh => {
+            let oracle = run_batch_editor_eval_with_sigttou(
+                &sandbox,
+                eval_program,
+                OracleEngine::Gnu,
+                disposition,
+            )
+            .expect("oracle eval should run");
+            expected.assert_eq(&inline_expect_payload(&oracle));
+        }
+        OracleMode::Live => {
+            let oracle = run_batch_editor_eval_with_sigttou(
+                &sandbox,
+                eval_program,
+                OracleEngine::Gnu,
+                disposition,
+            )
+            .expect("oracle eval should run");
+            let neovm = run_batch_editor_eval_with_sigttou(
+                &sandbox,
+                eval_program,
+                OracleEngine::Neomacs,
+                disposition,
+            )
+            .expect("neomacs binary eval should run");
+            assert_neovm_oracle_parity(&neovm, &oracle, form);
+        }
+    }
+}
+
 /// Parity of the batch stderr `do-auto-save` writes through `message1`.
 ///
 /// The harness outcome marker and the blank line it prints ahead of that

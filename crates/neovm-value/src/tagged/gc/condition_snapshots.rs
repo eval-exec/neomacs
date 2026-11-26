@@ -110,7 +110,11 @@ impl ConditionPayload {
     }
 }
 
-impl PublicationPayload for ConditionPayload {
+// SAFETY: `self.table` is a heap-allocated `Box<ConditionSnapshotTable>`, so
+// the pointee address returned by `published_address` is deterministic,
+// immutable to shared readers, and stays valid and stable when
+// `ConditionPayload` moves into the predecessor vector until drop.
+unsafe impl PublicationPayload for ConditionPayload {
     type Error = ();
     type Generation = u64;
 
@@ -177,7 +181,7 @@ impl PublishedConditionSnapshots {
         let id = heap.register_payload_publisher();
         let initial = ConditionPayload::capture(obarray);
         match PublicationLedger::create_noting(initial, limits, |payload| {
-            heap.append_payload_roots(id, payload);
+            heap.append_payload_roots(id, payload)
         }) {
             Ok(ledger) => Ok(Self {
                 ledger,
@@ -191,7 +195,7 @@ impl PublishedConditionSnapshots {
     }
 
     pub(crate) fn refresh(
-        &mut self,
+        &self,
         heap: &mut TaggedHeap,
         obarray: &Obarray,
     ) -> Result<PublicationChange<u64>, PublicationError<()>> {
@@ -201,6 +205,13 @@ impl PublishedConditionSnapshots {
             if admission.current().same_snapshot(&next) {
                 return Ok(RefreshPlan::Keep);
             }
+            // One predecessor, before the quote, and only at the retiree cap.
+            // A live view skips this; `admit` then returns `NeedGrace`.
+            let extra = next.retained_bytes().get();
+            admission.reclaim_oldest_predecessor(extra, |generation| {
+                heap.reclaim_payload_generation(id, generation)
+                    .expect("the oldest predecessor generation is still registered");
+            });
             admission.admit(next.retained_bytes())?;
             Ok(RefreshPlan::Replace(next))
         });
@@ -238,8 +249,8 @@ impl PublishedConditionSnapshots {
     ) -> &'a ConditionSnapshotTable {
         let address = view.published_address();
         // SAFETY: the view retains the loaded address for its own lifetime,
-        // per its must_use contract, and publication never reclaims a payload
-        // today.
+        // and reclaim does not run while any view of that ledger is alive.
+        // The address does not escape `table_at`.
         unsafe { &*address.cast::<ConditionSnapshotTable>() }
     }
 
@@ -390,11 +401,15 @@ mod tests {
     use crate::tagged::gc::TestHeap;
     use crate::value::{HashTableTest, HashTableWeakness, LispHashTable};
 
-    fn retired_once() -> RetentionLimits {
+    fn retired(count: usize) -> RetentionLimits {
         RetentionLimits::new(
             RetentionLimits::DEFAULT_BYTES,
-            super::super::publication::RetiredCount::new(1),
+            super::super::publication::RetiredCount::new(count),
         )
+    }
+
+    fn retired_once() -> RetentionLimits {
+        retired(1)
     }
 
     fn pair(heap: &mut TaggedHeap, prop: TaggedValue, value: TaggedValue) -> TaggedValue {
@@ -416,7 +431,7 @@ mod tests {
         obarray.set_symbol_plist_id(bare, TaggedValue::fixnum(5));
         assert!(!obarray.is_global_member(symbol));
 
-        let mut published =
+        let published =
             PublishedConditionSnapshots::mint(&mut heap, &obarray, retired_once()).unwrap();
         let (before_address, before_epoch) = {
             let view = published.view();
@@ -434,7 +449,7 @@ mod tests {
             );
 
             obarray.set_symbol_plist_id(symbol, new_head);
-            heap.collect_exact(std::iter::once(new_head));
+            heap.collect_rooted(std::iter::once(new_head));
             assert!(heap.owns_heap_value_for_test(old_head));
             assert!(heap.owns_heap_value_for_test(new_head));
             assert!(!heap.owns_heap_value_for_test(garbage));
@@ -494,7 +509,7 @@ mod tests {
         let refused = pair(&mut heap, prop, TaggedValue::fixnum(3));
         obarray.set_symbol_plist_id(symbol, first);
 
-        let mut published =
+        let published =
             PublishedConditionSnapshots::mint(&mut heap, &obarray, retired_once()).unwrap();
         let first_epoch = {
             let view = published.view();
@@ -510,12 +525,16 @@ mod tests {
             let current = PublishedConditionSnapshots::table_at(&view);
             (view.published_address() as usize, current.epoch())
         };
+        // The cap reclaims one predecessor when no view is alive. This view
+        // is what keeps the third refresh at `NeedGrace`.
+        let held = published.view();
         obarray.set_symbol_plist_id(symbol, refused);
         let error = published.refresh(&mut heap, &obarray).unwrap_err();
         assert_eq!(
             error,
             PublicationError::NeedGrace(super::super::publication::RetentionLimit::Retired)
         );
+        assert_eq!(held.published_address() as usize, current_address);
         {
             let view = published.view();
             assert_eq!(view.published_address() as usize, current_address);
@@ -524,9 +543,10 @@ mod tests {
                 current_epoch
             );
         }
+        drop(held);
         assert_eq!(published.registry_len(&heap), 2);
 
-        heap.collect_exact(std::iter::empty());
+        heap.collect_rooted(std::iter::empty());
         assert!(heap.owns_heap_value_for_test(first));
         assert!(heap.owns_heap_value_for_test(second));
         assert!(!heap.owns_heap_value_for_test(refused));
@@ -575,7 +595,7 @@ mod tests {
             PublishedConditionSnapshots::mint(&mut heap, &obarray, RetentionLimits::production())
                 .unwrap();
         obarray.set_symbol_plist_id(symbol, TaggedValue::NIL);
-        heap.collect_exact(std::iter::once(table));
+        heap.collect_rooted(std::iter::once(table));
         assert_eq!(table.as_hash_table().unwrap().data.len(), 1);
         assert!(heap.owns_heap_value_for_test(head));
         {
@@ -592,7 +612,7 @@ mod tests {
         }
         published.unregister(&mut heap);
 
-        heap.collect_exact(std::iter::once(table));
+        heap.collect_rooted(std::iter::once(table));
         assert_eq!(table.as_hash_table().unwrap().data.len(), 0);
         assert!(!heap.owns_heap_value_for_test(head));
     }
@@ -609,7 +629,7 @@ mod tests {
         let head = pair(&mut heap, prop, TaggedValue::fixnum(11));
         let garbage = heap.alloc_cons(TaggedValue::fixnum(99), TaggedValue::NIL);
 
-        let mut published =
+        let published =
             PublishedConditionSnapshots::mint(&mut heap, &obarray, RetentionLimits::production())
                 .unwrap();
         assert_eq!(published.registry_len(&heap), 0);
@@ -630,8 +650,8 @@ mod tests {
         assert_eq!(heap.handshake.last_term_runtime_roots, start_roots + 1);
         let bytes_before = heap.live_bytes();
         heap.incremental_drain_all();
-        heap.incremental_finish(bytes_before, std::time::Instant::now());
-        heap.finish_incremental_sweep_now();
+        heap.incremental_finish_for_test(bytes_before, std::time::Instant::now());
+        heap.finish_incremental_sweep_now_for_test();
         assert!(!heap.sweep_in_progress());
         assert!(heap.owns_heap_value_for_test(head));
         assert!(!heap.owns_heap_value_for_test(garbage));
@@ -648,5 +668,297 @@ mod tests {
             );
         }
         published.unregister(&mut heap);
+    }
+
+    /// Section 2. After one reclaim, a head that only the freed descriptor
+    /// walked is collectable. A head that current or a kept predecessor still
+    /// yields stays owned, including a head that also sat in the freed vec.
+    #[test]
+    fn reclaiming_one_predecessor_keeps_only_heads_a_live_descriptor_walks() {
+        let mut heap = TestHeap::new();
+        let mut obarray = Obarray::new();
+        let freed_symbol = make_uninterned_symbol("p10-b-freed");
+        let shared_symbol = make_uninterned_symbol("p10-b-shared");
+        let kept_symbol = make_uninterned_symbol("p10-b-kept");
+        let live_symbol = make_uninterned_symbol("p10-b-live");
+        let prop = TaggedValue::from_sym_id(intern("p10-b-prop"));
+        let freed = pair(&mut heap, prop, TaggedValue::fixnum(1));
+        let shared = pair(&mut heap, prop, TaggedValue::fixnum(2));
+        let kept = pair(&mut heap, prop, TaggedValue::fixnum(3));
+        let live = pair(&mut heap, prop, TaggedValue::fixnum(4));
+        let current_head = pair(&mut heap, prop, TaggedValue::fixnum(5));
+        let garbage = heap.alloc_cons(TaggedValue::fixnum(9), TaggedValue::NIL);
+
+        obarray.set_symbol_plist_id(freed_symbol, freed);
+        obarray.set_symbol_plist_id(shared_symbol, shared);
+        let published = PublishedConditionSnapshots::mint(&mut heap, &obarray, retired(2)).unwrap();
+
+        obarray.set_symbol_plist_id(freed_symbol, TaggedValue::NIL);
+        obarray.set_symbol_plist_id(kept_symbol, kept);
+        assert!(matches!(
+            published.refresh(&mut heap, &obarray).unwrap(),
+            PublicationChange::Published { .. }
+        ));
+
+        obarray.set_symbol_plist_id(kept_symbol, TaggedValue::NIL);
+        obarray.set_symbol_plist_id(live_symbol, live);
+        assert!(matches!(
+            published.refresh(&mut heap, &obarray).unwrap(),
+            PublicationChange::Published { .. }
+        ));
+
+        obarray.set_symbol_plist_id(live_symbol, current_head);
+        assert!(matches!(
+            published.refresh(&mut heap, &obarray).unwrap(),
+            PublicationChange::Published { .. }
+        ));
+
+        heap.collect_rooted(std::iter::empty());
+        assert!(
+            !heap.owns_heap_value_for_test(freed),
+            "a head only the freed descriptor walked stays owned"
+        );
+        assert!(
+            heap.owns_heap_value_for_test(shared),
+            "a head a kept generation still yields was collected"
+        );
+        assert!(
+            heap.owns_heap_value_for_test(kept),
+            "a kept predecessor's head was collected"
+        );
+        assert!(
+            heap.owns_heap_value_for_test(live),
+            "a kept predecessor's head was collected"
+        );
+        assert!(
+            heap.owns_heap_value_for_test(current_head),
+            "the current descriptor's head was collected"
+        );
+        assert!(!heap.owns_heap_value_for_test(garbage));
+        assert_eq!(
+            published.registry_len(&heap),
+            published.committed_root_count()
+        );
+        published.unregister(&mut heap);
+    }
+
+    /// The retiree cap still refuses while a view is alive. Dropping the view
+    /// lets the next replace reclaim one predecessor and publish.
+    #[test]
+    fn need_grace_while_a_view_holds_the_exhausted_retiree_cap() {
+        let mut heap = TestHeap::new();
+        let mut obarray = Obarray::new();
+        let symbol = make_uninterned_symbol("p10-b-view-cap");
+        let prop = TaggedValue::from_sym_id(intern("p10-b-view-prop"));
+        let first = pair(&mut heap, prop, TaggedValue::fixnum(1));
+        let second = pair(&mut heap, prop, TaggedValue::fixnum(2));
+        let refused = pair(&mut heap, prop, TaggedValue::fixnum(3));
+        obarray.set_symbol_plist_id(symbol, first);
+        let published =
+            PublishedConditionSnapshots::mint(&mut heap, &obarray, retired_once()).unwrap();
+
+        let held = published.view();
+        obarray.set_symbol_plist_id(symbol, second);
+        assert!(matches!(
+            published.refresh(&mut heap, &obarray).unwrap(),
+            PublicationChange::Published { .. }
+        ));
+        let current_address = {
+            let view = published.view();
+            view.published_address() as usize
+        };
+        obarray.set_symbol_plist_id(symbol, refused);
+        let error = published.refresh(&mut heap, &obarray).unwrap_err();
+        assert_eq!(
+            error,
+            PublicationError::NeedGrace(super::super::publication::RetentionLimit::Retired)
+        );
+        {
+            let view = published.view();
+            assert_eq!(view.published_address() as usize, current_address);
+        }
+        assert_eq!(published.registry_len(&heap), 2);
+        drop(held);
+
+        heap.collect_rooted(std::iter::empty());
+        assert!(heap.owns_heap_value_for_test(first));
+        assert!(heap.owns_heap_value_for_test(second));
+        assert!(!heap.owns_heap_value_for_test(refused));
+
+        assert!(matches!(
+            published.refresh(&mut heap, &obarray).unwrap(),
+            PublicationChange::Published { .. }
+        ));
+        heap.collect_rooted(std::iter::empty());
+        assert!(
+            !heap.owns_heap_value_for_test(first),
+            "dropping the view let reclaim free the oldest head"
+        );
+        assert!(heap.owns_heap_value_for_test(second));
+        assert!(heap.owns_heap_value_for_test(refused));
+        published.unregister(&mut heap);
+    }
+
+    /// Begin, publish a predecessor during the cycle, reclaim it, then reseed.
+    /// Termination reads the post-reclaim map: the live head is owned and the
+    /// reclaimed head is not.
+    #[test]
+    fn reseed_after_reclaim_traces_the_live_head_and_not_the_freed_one() {
+        let mut heap = TestHeap::new();
+        // SAFETY: this thread is the only mutator. No other mutator runs.
+        unsafe { heap.publish_barrier_window_for_test() };
+        heap.install();
+        let mut obarray = Obarray::new();
+        let symbol = make_uninterned_symbol("p10-b-reseed");
+        let prop = TaggedValue::from_sym_id(intern("p10-b-reseed-prop"));
+        let freed = pair(&mut heap, prop, TaggedValue::fixnum(1));
+        let kept = pair(&mut heap, prop, TaggedValue::fixnum(2));
+        let live = pair(&mut heap, prop, TaggedValue::fixnum(3));
+        let garbage = heap.alloc_cons(TaggedValue::fixnum(99), TaggedValue::NIL);
+
+        // No heap head yet, so begin does not gray `freed`.
+        obarray.set_symbol_plist_id(symbol, TaggedValue::fixnum(1));
+        let published =
+            PublishedConditionSnapshots::mint(&mut heap, &obarray, retired_once()).unwrap();
+        assert_eq!(published.registry_len(&heap), 0);
+        heap.concurrent_begin();
+        let start_roots = heap.handshake.last_start_runtime_roots;
+
+        obarray.set_symbol_plist_id(symbol, freed);
+        assert!(matches!(
+            published.refresh(&mut heap, &obarray).unwrap(),
+            PublicationChange::Published { .. }
+        ));
+        obarray.set_symbol_plist_id(symbol, kept);
+        assert!(matches!(
+            published.refresh(&mut heap, &obarray).unwrap(),
+            PublicationChange::Published { .. }
+        ));
+        obarray.set_symbol_plist_id(symbol, live);
+        assert!(matches!(
+            published.refresh(&mut heap, &obarray).unwrap(),
+            PublicationChange::Published { .. }
+        ));
+        assert_eq!(published.registry_len(&heap), 2);
+
+        heap.launch_concurrent_mark();
+        while !heap.concurrent_mark_done() {
+            std::thread::yield_now();
+        }
+        heap.join_concurrent_mark();
+        heap.reseed_runtime_and_remembered_roots();
+        assert_eq!(heap.handshake.last_term_runtime_roots, start_roots + 2);
+        let bytes_before = heap.live_bytes();
+        heap.incremental_drain_all();
+        heap.incremental_finish_for_test(bytes_before, std::time::Instant::now());
+        heap.finish_incremental_sweep_now_for_test();
+        assert!(!heap.sweep_in_progress());
+        assert!(
+            heap.owns_heap_value_for_test(live),
+            "termination reseed missed the live head"
+        );
+        assert!(
+            heap.owns_heap_value_for_test(kept),
+            "termination reseed missed the kept predecessor"
+        );
+        assert!(
+            !heap.owns_heap_value_for_test(freed),
+            "termination reseed traced the reclaimed predecessor"
+        );
+        assert!(!heap.owns_heap_value_for_test(garbage));
+        published.unregister(&mut heap);
+    }
+
+    /// A stale id, and an id another publisher minted, must not remove a
+    /// generation that is still live. The live head stays a traced root.
+    #[test]
+    fn stale_or_foreign_generation_cannot_drop_a_live_head() {
+        let mut heap = TestHeap::new();
+        let prop = TaggedValue::from_sym_id(intern("p10-b-gen-prop"));
+        let only_live = pair(&mut heap, prop, TaggedValue::fixnum(1));
+        let freed = pair(&mut heap, prop, TaggedValue::fixnum(2));
+        let kept = pair(&mut heap, prop, TaggedValue::fixnum(3));
+        let only_symbol = make_uninterned_symbol("p10-b-gen-only");
+        let freed_symbol = make_uninterned_symbol("p10-b-gen-freed");
+        let kept_symbol = make_uninterned_symbol("p10-b-gen-kept");
+
+        let mut only_obarray = Obarray::new();
+        only_obarray.set_symbol_plist_id(only_symbol, only_live);
+        let only_id = heap.register_payload_publisher();
+        let only_generation =
+            heap.append_payload_roots(only_id, &ConditionPayload::capture(&only_obarray));
+        only_obarray.set_symbol_plist_id(only_symbol, TaggedValue::NIL);
+
+        let mut stacked_obarray = Obarray::new();
+        stacked_obarray.set_symbol_plist_id(freed_symbol, freed);
+        let stacked_id = heap.register_payload_publisher();
+        let freed_generation =
+            heap.append_payload_roots(stacked_id, &ConditionPayload::capture(&stacked_obarray));
+        stacked_obarray.set_symbol_plist_id(freed_symbol, TaggedValue::NIL);
+        stacked_obarray.set_symbol_plist_id(kept_symbol, kept);
+        let kept_generation =
+            heap.append_payload_roots(stacked_id, &ConditionPayload::capture(&stacked_obarray));
+        stacked_obarray.set_symbol_plist_id(kept_symbol, TaggedValue::NIL);
+
+        // Ids are heap-wide, so each publisher's generations are absent from
+        // the other's list. Neither direction may remove a live generation.
+        assert!(
+            !removed_generation(&mut heap, stacked_id, only_generation),
+            "another publisher's generation reclaimed a slot"
+        );
+        assert_eq!(heap.payload_root_count_for_test(stacked_id), 2);
+        assert!(
+            !removed_generation(&mut heap, only_id, freed_generation),
+            "another publisher's generation reclaimed a slot"
+        );
+        assert_eq!(heap.payload_root_count_for_test(only_id), 1);
+        assert!(
+            !removed_generation(&mut heap, only_id, kept_generation),
+            "another publisher's generation reclaimed a slot"
+        );
+        assert_eq!(heap.payload_root_count_for_test(only_id), 1);
+
+        heap.reclaim_payload_generation(stacked_id, freed_generation)
+            .expect("the freed generation is still registered");
+        assert_eq!(heap.payload_root_count_for_test(stacked_id), 1);
+        assert!(
+            !removed_generation(&mut heap, stacked_id, freed_generation),
+            "a stale generation reclaimed a slot"
+        );
+        assert_eq!(heap.payload_root_count_for_test(stacked_id), 1);
+
+        heap.collect_rooted(std::iter::empty());
+        assert!(
+            heap.owns_heap_value_for_test(only_live),
+            "another publisher's generation dropped a live head"
+        );
+        assert!(
+            heap.owns_heap_value_for_test(kept),
+            "a stale generation dropped a live head"
+        );
+        assert!(
+            !heap.owns_heap_value_for_test(freed),
+            "the reclaimed generation's head stayed owned"
+        );
+        heap.unregister_payload_publisher(only_id);
+        heap.unregister_payload_publisher(stacked_id);
+    }
+
+    /// `true` when reclaim removed a generation. A debug assert on an absent
+    /// id unwinds; that is still a refusal, and the roots are unchanged
+    /// because the assert runs before the removal.
+    fn removed_generation(
+        heap: &mut TestHeap,
+        id: super::super::publication_roots::PublisherId,
+        generation: super::super::publication::PayloadGeneration,
+    ) -> bool {
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            heap.reclaim_payload_generation(id, generation)
+        }));
+        match outcome {
+            Err(_) => false,
+            Ok(Err(_)) => false,
+            Ok(Ok(())) => true,
+        }
     }
 }

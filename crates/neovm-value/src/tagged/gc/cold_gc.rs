@@ -279,6 +279,7 @@ const _: () = {
                 + size_of::<super::memory_registry::EphemeronRecords>()
                 + size_of::<super::cycle_time_bank::GcCycleTimeBank>()
                 + size_of::<super::publication_roots::PublishedPayloadRoots>()
+                + size_of::<Option<super::native_deferred::PendingNativeDestroys>>()
     );
     assert!(align_of::<TaggedHeap>() == 8);
     assert!(offset_of!(TaggedHeap, mutator_gc) == 24);
@@ -348,7 +349,7 @@ mod tests {
         let carrier = &**heap.census.as_ref().unwrap() as *const GenCensus;
         let root = heap.alloc_cons(TaggedValue::fixnum(5), TaggedValue::NIL);
         for _ in 0..2 {
-            heap.collect_exact(std::iter::once(root));
+            heap.collect_rooted(std::iter::once(root));
             assert_eq!(heap.last_census_for_test(), None);
             assert!(heap.census_state().is_none());
             assert!(heap.concurrent_claims());

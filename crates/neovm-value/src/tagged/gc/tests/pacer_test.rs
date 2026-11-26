@@ -66,8 +66,8 @@ fn allocation_during_an_incremental_cycle_is_not_counted_live() {
     heap.seed_root(rooted);
     let before = heap.live_bytes();
     heap.incremental_drain_all();
-    heap.incremental_finish(before, std::time::Instant::now());
-    while !heap.incremental_sweep_slice(8) {}
+    heap.incremental_finish_for_test(before, std::time::Instant::now());
+    while !heap.incremental_sweep_slice_for_test(8) {}
     let settled = heap.live_bytes();
 
     // SAFETY: serial fixture heap; the caller holds the only heap view and no
@@ -80,12 +80,12 @@ fn allocation_during_an_incremental_cycle_is_not_counted_live() {
         let _ = heap.alloc_float(i as f64);
     }
     let before = heap.live_bytes();
-    heap.incremental_finish(before, std::time::Instant::now());
+    heap.incremental_finish_for_test(before, std::time::Instant::now());
     // ...and during the sweep.
     for i in 0..100_000 {
         let _ = heap.alloc_float(i as f64);
     }
-    while !heap.incremental_sweep_slice(8) {}
+    while !heap.incremental_sweep_slice_for_test(8) {}
     let floats = 200_000 * size_of::<FloatObj>();
     assert!(
         heap.live_bytes() < settled + floats / 10,

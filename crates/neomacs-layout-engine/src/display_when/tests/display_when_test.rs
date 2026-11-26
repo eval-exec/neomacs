@@ -1,5 +1,6 @@
 use super::*;
 use neovm_core::buffer::EmacsByteRange;
+use neovm_core::emacs_core::value::get_string_text_properties_table_for_value;
 use neovm_core::window::DisplayFrameManagerExt;
 
 fn read(eval: &mut Context, src: &str) -> Value {
@@ -1080,4 +1081,124 @@ fn a_recorded_site_survives_a_collection_between_the_walk_and_its_evaluation() {
         "the FORM evaluated after the collection is the recorded one"
     );
     neovm_core::emacs_core::eval::restore_scratch_gc_roots(saved_roots);
+}
+
+fn prefix_discovery_allocated_intervals() -> i64 {
+    use neovm_value::tagged::gc::MemoryUseCountSlot;
+    Value::memory_use_counts_snapshot()[MemoryUseCountSlot::Intervals.index()]
+}
+
+/// Discovery reads the prefix's live properties without running its WHEN
+/// forms. Unlike the frame's retained string-property snapshot, this collector
+/// consumes the table synchronously and returns only the discovered sites.
+fn assert_prefix_string_when_discovery_allocates_no_intervals(interval_count: usize) {
+    use neovm_core::emacs_core::value::{
+        StringTextPropertyRun, borrow_string_text_properties_table_for_value,
+    };
+    use neovm_value::value::text_props::text_property_table_clones_for_test;
+
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
+    eval.eval_str("(setq dw-prefix-discovery-ran nil)")
+        .expect("reset discovery sentinel");
+    let first = read(
+        &mut eval,
+        "(when (progn (setq dw-prefix-discovery-ran 'first) t) . \"FIRST\")",
+    );
+    let _first_roots = eval.retain_gc_roots([first]);
+    let second = read(
+        &mut eval,
+        "(when (progn (setq dw-prefix-discovery-ran 'second) t) . \"SECOND\")",
+    );
+    let _second_roots = eval.retain_gc_roots([second]);
+    let face = Value::symbol("face");
+    let display = Value::symbol("display");
+    let middle = interval_count / 2;
+    let prefix = Value::string_with_text_properties(
+        "x".repeat(interval_count * 2),
+        (0..interval_count)
+            .map(|index| {
+                // Alternating faces retain every generated interval, while
+                // sparse DISPLAY sites test the actual discovery output.
+                let mut items = vec![face, Value::fixnum((index & 1) as i64)];
+                if index == 0 || index == interval_count - 1 {
+                    items.extend([display, first]);
+                } else if index == middle {
+                    items.extend([display, second]);
+                }
+                StringTextPropertyRun {
+                    start: index * 2,
+                    end: (index + 1) * 2,
+                    plist: Value::list(items),
+                }
+            })
+            .collect(),
+    );
+    let _prefix_roots = eval.retain_gc_roots([prefix]);
+    assert_eq!(
+        borrow_string_text_properties_table_for_value(prefix)
+            .expect("propertized prefix")
+            .interval_plist_runs_for_test()
+            .len(),
+        interval_count,
+        "the fixture must retain all intervals before measuring discovery"
+    );
+
+    let mut sites = Vec::new();
+    let before_intervals = prefix_discovery_allocated_intervals();
+    let before_tables = text_property_table_clones_for_test();
+    collect_prefix_string_when_forms(prefix, 37, &mut sites);
+    let allocated_intervals = prefix_discovery_allocated_intervals() - before_intervals;
+    let table_clones = text_property_table_clones_for_test() - before_tables;
+
+    assert_eq!(sites.len(), 3, "all sparse WHEN runs must be discovered");
+    for (site, (index, property)) in
+        sites
+            .iter()
+            .zip([(0, first), (middle, second), (interval_count - 1, first)])
+    {
+        assert_eq!(site.site.object.bits(), prefix.bits());
+        assert_eq!(site.site.property, property);
+        assert_eq!(when_form(site.site.property, 0), when_form(property, 0));
+        assert_eq!(site.site.position, (index * 2) as i64);
+        assert_eq!(site.end, ((index + 1) * 2) as i64);
+        assert_eq!(site.site.buffer_position, 37);
+    }
+    assert!(
+        eval.eval_str("dw-prefix-discovery-ran")
+            .expect("discovery sentinel")
+            .is_nil(),
+        "discovering WHEN forms must not execute them"
+    );
+    assert_eq!(
+        allocated_intervals, 0,
+        "read-only prefix discovery must not copy {interval_count} interval nodes; \
+         observed {table_clones} table clones"
+    );
+}
+
+#[test]
+fn prefix_string_when_discovery_allocates_no_intervals_2k() {
+    assert_prefix_string_when_discovery_allocates_no_intervals(2_048);
+}
+
+#[test]
+fn prefix_string_when_discovery_allocates_no_intervals_16k() {
+    assert_prefix_string_when_discovery_allocates_no_intervals(16_384);
+}
+
+#[test]
+fn prefix_string_when_discovery_allocates_no_intervals_64k() {
+    assert_prefix_string_when_discovery_allocates_no_intervals(65_536);
+}
+
+#[test]
+fn empty_and_propertyless_prefix_discovery_allocates_no_intervals() {
+    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
+    for prefix in [Value::string(""), Value::string("plain prefix")] {
+        let mut sites = Vec::new();
+        let before = prefix_discovery_allocated_intervals();
+        collect_prefix_string_when_forms(prefix, 37, &mut sites);
+        assert!(sites.is_empty());
+        assert_eq!(prefix_discovery_allocated_intervals() - before, 0);
+    }
 }

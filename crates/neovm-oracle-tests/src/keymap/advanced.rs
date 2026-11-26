@@ -10,6 +10,77 @@ use crate::common::return_if_neovm_enable_oracle_proptest_not_set;
 use crate::common::{assert_ok_eq, assert_oracle_parity, eval_oracle_and_neovm};
 
 // ---------------------------------------------------------------------------
+// define-key stores the definition without interning its symbols
+// ---------------------------------------------------------------------------
+
+#[test]
+fn oracle_prop_define_key_does_not_publish_definition_symbols() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+
+    // GNU Fdefine_key stores the definition object. The only names it
+    // interns are the event symbols apply_modifiers derives (keyboard.c:
+    // 7800-7830), not anything reachable from DEF. Neomacs walks DEF to
+    // publish canonical symbols; the walk must never change what a Lisp
+    // caller observes here, and it must not cost one graph walk per
+    // definition (#590).
+    let form = r#"(let* ((custom (obarray-make 1))
+                      (custom-sym (intern "zz-def-custom-only" custom))
+                      (uninterned (make-symbol "zz-def-uninterned"))
+                      (list-sym (intern "zz-def-list-sym"))
+                      (def (list 'ignore list-sym custom-sym uninterned))
+                      (map (make-sparse-keymap)))
+  (define-key map [f1] def)
+  (list (and (intern-soft "zz-def-custom-only") t)
+        (and (intern-soft "zz-def-uninterned") t)
+        (and (intern-soft "zz-def-list-sym") t)
+        (eq (lookup-key map [f1]) def)))"#;
+    let expect = expect_test::expect![[r#""OK (nil nil t t)""#]];
+    crate::common::assert_oracle_parity_expect(form, expect);
+}
+
+#[test]
+fn oracle_prop_event_convert_list_publishes_the_derived_symbol() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+
+    // GNU Fevent_convert_list derives the event name in apply_modifiers,
+    // which interns it (keyboard.c:7800-7830). The symbol must be a member
+    // whether or not the caller hands it to define-key; the define-key
+    // definition no longer walks stored values (#590).
+    let form = r#"(list (progn (event-convert-list '(control meta f1))
+                          (and (intern-soft "C-M-f1") t))
+                    (let ((m (make-sparse-keymap)))
+                      (define-key m [x] (event-convert-list '(control meta f1)))
+                      (and (intern-soft "C-M-f1") t))
+                    (let ((m (make-sparse-keymap)))
+                      (define-key m [x] (event-convert-list '(shift tab)))
+                      (and (intern-soft "S-tab") t)))"#;
+    let expect = expect_test::expect![[r#""OK (t t t)""#]];
+    crate::common::assert_oracle_parity_expect(form, expect);
+}
+
+#[test]
+fn oracle_prop_loaded_file_define_key_with_derived_event_is_a_member() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+
+    // The census item: a loaded package that define-keys a Rust-produced
+    // event symbol must leave that symbol a member, without define-key
+    // walking the stored definition (#590).
+    let form = r#"(let ((file (make-temp-file "zzpkg-events" nil ".el")))
+  (unwind-protect
+      (progn
+        (with-temp-file file
+          (insert "(progn\n"
+                  "  (define-key (make-sparse-keymap) [x]\n"
+                  "    (event-convert-list '(control meta f1))))"))
+        (load file nil t)
+        (list (and (intern-soft "C-M-f1") t)
+              (and (intern-soft "S-tab") t)))
+    (delete-file file)))"#;
+    let expect = expect_test::expect![[r#""OK (t t)""#]];
+    crate::common::assert_oracle_parity_expect(form, expect);
+}
+
+// ---------------------------------------------------------------------------
 // make-keymap vs make-sparse-keymap differences
 // ---------------------------------------------------------------------------
 

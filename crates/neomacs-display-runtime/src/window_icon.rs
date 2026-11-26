@@ -110,7 +110,12 @@ impl WindowIconService {
     }
 
     /// Apply the Neomacs window icon to a winit window.
-    pub(crate) fn apply(&mut self, window: &dyn Window) {
+    pub(crate) fn apply(
+        &mut self,
+        window: &dyn Window,
+        #[cfg_attr(not(target_os = "linux"), allow(unused_variables))]
+        display: winit::event_loop::OwnedDisplayHandle,
+    ) {
         let Some(icon) = self.icon.as_ref() else {
             return;
         };
@@ -120,7 +125,7 @@ impl WindowIconService {
         }
 
         #[cfg(target_os = "linux")]
-        if let Err(error) = self.wayland.apply(window, icon) {
+        if let Err(error) = self.wayland.apply(window, display, icon) {
             tracing::warn!(%error, "failed to set native Wayland toplevel icon");
         }
     }

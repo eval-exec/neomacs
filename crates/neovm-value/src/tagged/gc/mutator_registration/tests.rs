@@ -348,12 +348,7 @@ fn panic_abandonment_poison_retains_owner_state_and_world_authority<
                 .unwrap()
                 .activate(era.heap_identity(), 1)
                 .unwrap();
-            token
-                .local
-                .as_mut()
-                .unwrap()
-                .root_scratch
-                .push(MarkWord::of(TaggedValue::NIL));
+            token.local.as_mut().unwrap().push_nil_root_slot();
             panic!("owner failed before publication");
         }));
         assert!(result.is_err());
@@ -446,18 +441,21 @@ fn pending_root_retirement_failure_preserves_entry_and_allows_explicit_transfer<
             .unwrap()
             .activate(era.heap_identity(), 1)
             .unwrap();
-        token
-            .local
-            .as_mut()
-            .unwrap()
-            .root_scratch
-            .push(MarkWord::of(TaggedValue::NIL));
+        token.local.as_mut().unwrap().push_nil_root_slot();
         token.finish(epoch(1)).unwrap();
         let failed = era.finish().unwrap_err();
         assert_eq!(failed.reason, RegistrationError::PendingRoots);
         let gate = failed.era.registry().lock().unwrap();
-        let mut state = gate.entries[1].state.lock().unwrap();
-        let retained = state.image.as_mut().unwrap().take_root_scratch();
+        let entry = &gate.entries[1];
+        let mut state = entry.state.lock().unwrap();
+        let mut image = state
+            .image
+            .take_for(entry.key.heap, entry.young)
+            .unwrap()
+            .unwrap();
+        let retained = image.take_root_scratch_bits_for_test();
+        // SAFETY: reinstalling the exact verified image just taken from `entry`.
+        unsafe { state.image.install(entry.key.heap, entry.young, image) }.unwrap();
         assert_eq!(retained.len(), 1);
         // NIL is immediate; no heap referent is released by this transfer.
         drop(retained);

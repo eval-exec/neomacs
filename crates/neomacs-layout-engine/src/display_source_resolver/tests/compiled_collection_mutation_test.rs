@@ -74,10 +74,12 @@ fn gen0_compiled_face_plist_mutation_rebuilds_cached_realization() {
     let first_size = state.resolved_face(face_id(first)).unwrap().font_size;
 
     let replacement = Value::fixnum(180);
-    match leaf.call(
-        &mut context as *mut Context as *mut u8,
-        &[cell, replacement],
-    ) {
+    match unsafe {
+        leaf.call(
+            &mut context as *mut Context as *mut u8,
+            &[cell, replacement],
+        )
+    } {
         NativeRun::Ok(bits) => assert_eq!(bits, replacement.bits()),
         other => panic!("the face-plist setter must execute natively: {other:?}"),
     }

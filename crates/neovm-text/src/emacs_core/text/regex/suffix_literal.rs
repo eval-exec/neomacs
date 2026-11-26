@@ -124,10 +124,10 @@ pub(super) fn derive(pattern: &CompiledPattern, on: bool) -> Option<SuffixLitera
 impl SuffixLiteral {
     #[inline]
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
-    pub(super) fn search(
+    pub(super) fn search<H: super::Haystack + ?Sized>(
         &self,
         pattern: &CompiledPattern,
-        text: &[u8],
+        text: &H,
         start: usize,
         stop: usize,
     ) -> SuffixSearch {
@@ -145,14 +145,16 @@ impl SuffixLiteral {
         let Some(sources) = sources else {
             return SuffixSearch::Unavailable;
         };
+        let find_suffix = |chunk: &[u8]| match sources {
+            SparseAsciiFastmap::One(b0) => memchr::memchr(b0, chunk),
+            SparseAsciiFastmap::Two(b0, b1) => memchr::memchr2(b0, b1, chunk),
+            SparseAsciiFastmap::Three(b0, b1, b2) => memchr::memchr3(b0, b1, b2, chunk),
+        };
         let mut next = start;
         while next < stop {
-            let window = &text[next..stop];
-            let found = match sources {
-                SparseAsciiFastmap::One(b0) => memchr::memchr(b0, window),
-                SparseAsciiFastmap::Two(b0, b1) => memchr::memchr2(b0, b1, window),
-                SparseAsciiFastmap::Three(b0, b1, b2) => memchr::memchr3(b0, b1, b2, window),
-            };
+            let (first, second) = text.chunks(next, stop);
+            let found = find_suffix(first)
+                .or_else(|| find_suffix(second).map(|relative| first.len() + relative));
             let Some(relative) = found else {
                 return SuffixSearch::Finished(None);
             };
@@ -161,7 +163,7 @@ impl SuffixLiteral {
             // The first canonical character is non-ASCII. Under AsciiOnly
             // its source must be non-ASCII too: suffix-dense ASCII stretches
             // can therefore reject each hit without decoding or translating.
-            if suffix_at == 0 || text[suffix_at - 1] < 0x80 {
+            if suffix_at == 0 || text.byte(suffix_at - 1) < 0x80 {
                 // Skip the whole ASCII run in word-sized steps. Repeated
                 // memchr calls for each q in q^N would cost more than the
                 // original first-character fastmap scan. The next possible
@@ -282,21 +284,29 @@ impl SuffixLiteral {
 /// `from` follows an ASCII suffix, so the next high-bit byte is a character
 /// boundary in multibyte text, including Emacs raw-byte C0/C1 forms.
 #[inline]
-fn next_non_ascii(text: &[u8], from: usize, stop: usize) -> usize {
+fn next_non_ascii<H: super::Haystack + ?Sized>(text: &H, from: usize, stop: usize) -> usize {
     const HIGH_BITS: u64 = 0x8080_8080_8080_8080;
-    let mut at = from;
-    while stop - at >= 8 {
-        let word = u64::from_le_bytes(text[at..at + 8].try_into().unwrap());
-        let high = word & HIGH_BITS;
-        if high != 0 {
-            return at + (high.trailing_zeros() as usize / 8);
+    let (first, second) = text.chunks(from, stop);
+    let mut offset = from;
+    for chunk in [first, second] {
+        let mut at = 0;
+        while chunk.len() - at >= 8 {
+            let word = u64::from_le_bytes(chunk[at..at + 8].try_into().unwrap());
+            let high = word & HIGH_BITS;
+            if high != 0 {
+                return offset + at + (high.trailing_zeros() as usize / 8);
+            }
+            at += 8;
         }
-        at += 8;
+        while at < chunk.len() && chunk[at] < 0x80 {
+            at += 1;
+        }
+        if at < chunk.len() {
+            return offset + at;
+        }
+        offset += chunk.len();
     }
-    while at < stop && text[at] < 0x80 {
-        at += 1;
-    }
-    at
+    stop
 }
 
 /// Read the translation Exactn would use, preserving an unfilled byte slot.

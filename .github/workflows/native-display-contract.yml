@@ -85,6 +85,16 @@ jobs:
         run: cargo nextest run --locked -p neomacs-display-runtime --lib -E 'test(scroll_input)'
       - name: Build matching executable and runtime image
         run: cargo xtask fresh-build --release
+      - name: macOS application Quit and confirmation policy
+        if: runner.os == 'macOS'
+        # Pure policy, transport and evaluator tests need no synthesized
+        # desktop input or Automation permission on the hosted runner.
+        run: |
+          cargo check --locked -p neomacs-display-runtime -p neomacs --all-targets
+          cargo nextest run --locked -p neomacs-display-runtime --lib -E 'test(application_quit::tests::)|test(application_quit_transport_preserves_frame_and_non_lossy_identity)|test(native_quit_confirmation_accepts_only_the_first_button)|test(native_quit_confirmation_reply_matches_gnu)'
+          cargo nextest run --locked -p neomacs --bin neomacs -E 'test(application_quit_preserves_native_nonkey_provenance_and_source_frame)|test(physical_super_q_remains_distinct_from_application_quit)|test(neo_preload_ns_power_off_is_non_key_and_independent_of_super_q)'
+          cargo nextest run --locked -p neovm-eval --lib -E 'test(root_owner_ns_confirm_quit_bindings_publish_and_restore_host_projection)|test(native_nonkey_keeps_its_frame_alive_without_requesting_control_g)|test(every_transport_variant_has_locked_down_semantics)'
+          cargo nextest run --locked -p neovm-core --lib -E 'test(native_nonkey_)|test(ns_confirm_quit_)|test(runtime_projection_mask_matches_the_comparison_chain)'
       - name: Public Lisp resource, geometry and frame focus contracts
         # Startup contexts need the generated Unicode tables and load definitions.
         run: cargo nextest run --locked -p neovm-core --lib -E 'test(resources_test)|test(frame_resize_test)|test(frame_focus_input_tests)|test(cycling_test)'

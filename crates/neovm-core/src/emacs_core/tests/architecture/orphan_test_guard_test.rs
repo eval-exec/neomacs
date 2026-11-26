@@ -42,8 +42,11 @@ struct Scanner {
 }
 
 pub(crate) fn orphan_test_files(root: &Path) -> Vec<String> {
+    // Visits and candidates are canonical. A root that still contains a
+    // symlink makes `strip_prefix` reject every file.
+    let root = normalize(root);
     let mut scanner = Scanner {
-        root: root.to_path_buf(),
+        root: root.clone(),
         reached: std::collections::BTreeSet::new(),
         trybuild: std::collections::BTreeSet::new(),
         string_fixtures: std::collections::BTreeSet::new(),
@@ -51,15 +54,15 @@ pub(crate) fn orphan_test_files(root: &Path) -> Vec<String> {
         cargo_roots: std::collections::BTreeSet::new(),
     };
     let mut roots = Vec::new();
-    walk_manifests(root, &mut roots);
+    walk_manifests(&root, &mut roots);
     for path in &roots {
-        scanner.cargo_roots.insert(path.clone());
+        scanner.cargo_roots.insert(normalize(path));
     }
     for path in roots {
         scanner.visit(&path, path.parent().unwrap_or(&path).to_path_buf(), 0);
     }
     let mut orphans = Vec::new();
-    let mut stack = vec![root.to_path_buf()];
+    let mut stack = vec![root];
     while let Some(dir) = stack.pop() {
         let Ok(entries) = fs::read_dir(&dir) else {
             continue;
@@ -75,8 +78,11 @@ pub(crate) fn orphan_test_files(root: &Path) -> Vec<String> {
                 stack.push(path);
                 continue;
             }
-            if path.extension().is_some_and(|ext| ext == "rs") && scanner.is_candidate(&path) {
-                orphans.push(rel_string(&scanner.root, &path));
+            if path.extension().is_some_and(|ext| ext == "rs") {
+                let path = normalize(&path);
+                if scanner.is_candidate(&path) {
+                    orphans.push(rel_string(&scanner.root, &path));
+                }
             }
         }
     }

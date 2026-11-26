@@ -239,6 +239,19 @@ impl FontsetData {
 
     fn entries_for_char(&self, code: u32, purpose: FontsetLookupPurpose) -> Vec<FontSpecEntry> {
         // `fontset-font` reports entries in definition order, as GNU does.
+        let (mut specific, fallback) = self.groups_for_char(code, purpose);
+        specific.extend(fallback);
+        specific
+    }
+
+    /// Character-specific entries and the fallback group, each already filtered
+    /// for `purpose`. Rendering keeps them separate so a found fallback can
+    /// move to the front of its own group without disturbing the specific one.
+    fn groups_for_char(
+        &self,
+        code: u32,
+        purpose: FontsetLookupPurpose,
+    ) -> (Vec<FontSpecEntry>, Vec<FontSpecEntry>) {
         let (specific, fallback) = match purpose {
             FontsetLookupPurpose::Rendering => (
                 self.specific_in_charset_order(code),
@@ -251,11 +264,10 @@ impl FontsetData {
                 self.fallback.clone().unwrap_or_default(),
             ),
         };
-        specific
-            .iter()
-            .chain(fallback.iter())
-            .filter_map(|entry| entry.original().for_lookup(code, purpose))
-            .collect()
+        (
+            lookup_group(&specific, code, purpose),
+            lookup_group(&fallback, code, purpose),
+        )
     }
 
     fn update_target(&mut self, target: FontsetTarget, entry: FontSpecEntry, add: FontsetAddMode) {
@@ -960,6 +972,33 @@ pub(crate) fn resolve_fontset_name_arg(value: &Value) -> Result<String, Flow> {
 
 pub fn matching_entries_for_char(ch: char) -> Vec<FontSpecEntry> {
     matching_entries_for_fontset(DEFAULT_FONTSET_NAME, ch)
+}
+
+/// The default fontset's rendering chain, split into the character-specific
+/// group and the fallback group. Each group is in charset order. Callers that
+/// move a found fallback keep that permutation themselves.
+pub fn rendering_groups_for_char(ch: char) -> (Vec<FontSpecEntry>, Vec<FontSpecEntry>) {
+    let name = fontset_name_spelling(DEFAULT_FONTSET_NAME);
+    registry()
+        .read()
+        .map(|slot| {
+            slot.fontsets
+                .get(&name)
+                .map(|data| data.groups_for_char(ch as u32, FontsetLookupPurpose::Rendering))
+                .unwrap_or_default()
+        })
+        .unwrap_or_default()
+}
+
+fn lookup_group(
+    entries: &SharedFontsetEntries,
+    code: u32,
+    purpose: FontsetLookupPurpose,
+) -> Vec<FontSpecEntry> {
+    entries
+        .iter()
+        .filter_map(|entry| entry.original().for_lookup(code, purpose))
+        .collect()
 }
 
 #[cfg_attr(feature = "test-support", visibility::make(pub))]

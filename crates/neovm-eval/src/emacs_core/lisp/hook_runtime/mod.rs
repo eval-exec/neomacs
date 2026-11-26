@@ -952,6 +952,10 @@ mod hook_walk_authorization_tests {
         assert!(flow.is_signal());
         assert_eq!(ordinary.calls, 1);
         assert_eq!(ordinary.ctx.shutdown_phase, ShutdownPhase::Dying);
+        // The ordinary runtime is finished. Drop it before the next
+        // constructor: a second Context on this thread refuses while the
+        // first heap is still installed.
+        drop(ordinary);
 
         let mut safe = CountingRuntime {
             ctx: Context::new(crate::test_utils::unit_runtime()),

@@ -34,32 +34,32 @@ fn source(op: Op, arity: usize) -> ByteCodeFunction {
         optional: Vec::new(),
         rest: None,
     });
-    function.lexical = true;
-    function.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
-    function.ops = if arity == 1 {
+    function.set_lexical(true);
+    function.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
+    function.set_ops(if arity == 1 {
         vec![Op::StackRef(0), op, Op::Return]
     } else {
         vec![Op::StackRef(1), Op::StackRef(1), op, Op::Return]
-    };
+    });
     function.seal_hand_assembled_ops_for_test();
     function
 }
 
 fn plan(source: &ByteCodeFunction) -> ir::Func {
     let arity = source
-        .params
+        .params()
         .stack_shape()
         .expect("fixture stack parameters")
         .required();
     let cfg = crate::emacs_core::jit::compile::analyze_cfg(
         source.executable_ops(),
-        &source.constants,
+        source.constants(),
         source.executable_gnu_byte_offset_map(),
         arity,
     )
     .expect("source CFG");
     let constants = source
-        .constants
+        .constants()
         .iter()
         .copied()
         .map(ir::ValueBits::from_value)

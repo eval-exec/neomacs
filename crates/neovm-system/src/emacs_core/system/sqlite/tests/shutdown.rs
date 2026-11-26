@@ -62,7 +62,7 @@ fn explicit_heap_shutdown_reclaims_sqlite_resources() {
 #[test]
 fn ordinary_sweep_reclaims_sqlite_resources() {
     let (mut heap, database_id, statement_id) = register_heap_sqlite_pair();
-    heap.collect_exact(std::iter::empty());
+    heap.collect_rooted(std::iter::empty());
     DB_HANDLES.with(|handles| assert!(!handles.borrow().contains_key(&database_id)));
     RESULT_SETS.with(|sets| assert!(!sets.borrow().contains_key(&statement_id)));
     heap.shutdown().unwrap();
@@ -78,10 +78,12 @@ fn explicit_shutdown_unwind_does_not_repeat_foreign_finalizers() {
 
     let (mut heap, database_id, statement_id) = register_heap_sqlite_pair();
     let count = std::sync::atomic::AtomicUsize::new(0);
-    heap.alloc_user_ptr(
-        std::ptr::from_ref(&count).cast_mut().cast(),
-        Some(count_finalizer),
-    );
+    unsafe {
+        heap.alloc_user_ptr(
+            std::ptr::from_ref(&count).cast_mut().cast(),
+            Some(count_finalizer),
+        )
+    };
     DB_HANDLES.with(|handles| {
         let mut held = handles.borrow_mut();
         // The user pointer runs first, followed by statement cleanup, then

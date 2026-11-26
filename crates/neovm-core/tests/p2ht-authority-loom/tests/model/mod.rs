@@ -10,7 +10,7 @@
 use std::marker::PhantomData;
 use std::rc::Rc;
 
-use loom::sync::atomic::{AtomicU8, AtomicU64, AtomicUsize, Ordering};
+use loom::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, AtomicUsize, Ordering};
 
 /// Bit 63: a writer holds the table. Low bits: in-flight sealed readers.
 pub const WRITER: u64 = 1 << 63;
@@ -46,6 +46,14 @@ pub struct Table {
     pub live_gen: AtomicUsize,
     /// Highest backing generation the (modeled) allocator has freed.
     pub freed_gen: AtomicUsize,
+    /// Payload generation. Even: the payload is stable. Odd: a writer is
+    /// between the two stores of a replace. A reader loads this only after
+    /// `reader_enter` or while it holds WRITER.
+    pub pending: AtomicU64,
+    /// Stands for `needs_hydration`. The real flag is a plain payload field.
+    /// This atomic stands in so the model can assert the load's protocol
+    /// instead of racing a non-atomic.
+    pub needs_hydration: AtomicBool,
 }
 
 impl Table {
@@ -58,6 +66,8 @@ impl Table {
             val_word: AtomicUsize::new(V1),
             live_gen: AtomicUsize::new(1),
             freed_gen: AtomicUsize::new(0),
+            pending: AtomicU64::new(0),
+            needs_hydration: AtomicBool::new(false),
         }
     }
 
@@ -121,6 +131,64 @@ impl Table {
 
     pub fn writer_exit(&self) {
         self.authority.store(0, Ordering::Release);
+    }
+
+    /// Load the payload generation. Legal only under the reader count or
+    /// WRITER, and the generation must be even: the odd window is the
+    /// replace's unsynchronized middle, which those holds exclude.
+    pub fn observe_pending(&self) -> u64 {
+        let word = self.authority.load(Ordering::Acquire);
+        let under_reader = word & WRITER == 0 && word & COUNT_MASK > 0;
+        let under_writer = word & WRITER != 0 && word & COUNT_MASK == 0;
+        assert!(
+            under_reader || under_writer,
+            "payload generation loaded without a word"
+        );
+        let generation = self.pending.load(Ordering::Acquire);
+        assert_eq!(generation % 2, 0, "payload generation observed mid-replace");
+        generation
+    }
+
+    /// Reader enter for an unhydrated table. The pending flag is read only
+    /// under the reader count. Hydration runs under WRITER, then the reader
+    /// count is taken again and dropped before return so a concurrent
+    /// writer's drain can finish.
+    pub fn reader_enter_hydrating(&self) {
+        let mut passes = 0;
+        loop {
+            passes += 1;
+            assert!(passes <= 3, "hydration enter did not settle");
+            self.reader_enter();
+            let _generation = self.observe_pending();
+            if !self.needs_hydration.load(Ordering::Acquire) {
+                self.reader_exit();
+                return;
+            }
+            self.reader_exit();
+            self.writer_enter();
+            let _generation = self.observe_pending();
+            if self.needs_hydration.load(Ordering::Acquire) {
+                self.replace_payload();
+            }
+            self.writer_exit();
+        }
+    }
+
+    /// Payload replace under WRITER. The odd generation is the window a
+    /// reader that skips the word can observe. The published payload is
+    /// hydrated, so a concurrent enter settles in one extra pass.
+    pub fn replace_payload(&self) {
+        let word = self.authority.load(Ordering::Acquire);
+        assert_ne!(word & WRITER, 0, "replace without WRITER");
+        assert_eq!(word & COUNT_MASK, 0, "replace with readers");
+        let generation = self.pending.load(Ordering::Acquire);
+        assert_eq!(generation % 2, 0, "replace started mid-replace");
+        self.pending.store(generation + 1, Ordering::Release);
+        loom::thread::yield_now();
+        self.key_word.store(K2, Ordering::Release);
+        self.val_word.store(V2, Ordering::Release);
+        self.needs_hydration.store(false, Ordering::Release);
+        self.pending.store(generation + 2, Ordering::Release);
     }
 
     /// Publish the (K2, V2) mutation under WRITER, with the before+after

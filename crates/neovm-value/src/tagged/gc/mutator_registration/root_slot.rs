@@ -39,7 +39,7 @@ impl OwnerRootSlot<'_> {
         self.check_binding(
             run.owner.entry.key,
             local.root_slot_generation,
-            local.root_scratch.len(),
+            local.root_scratch_len(),
         )
     }
 
@@ -65,9 +65,12 @@ impl OwnerRootSlot<'_> {
     #[doc(hidden)]
     pub fn word_for_test(&self, run: &RunAccess<'_, '_>) -> usize {
         self.check(run).unwrap();
-        run.owner.local.as_ref().unwrap().root_scratch[self.index]
-            .value()
-            .bits()
+        run.owner
+            .local
+            .as_ref()
+            .unwrap()
+            .root_slot_bits(self.index)
+            .unwrap()
     }
 }
 
@@ -82,19 +85,23 @@ impl RootSlotOps for OwnerRootSlot<'_> {
             .local
             .as_ref()
             .expect("validated owner roots")
-            .root_scratch[self.index]
-            .value()
-            .bits()
+            .root_slot_bits(self.index)
+            .expect("validated owner root index")
     }
     #[inline]
     fn install(&mut self, run: &mut RunAccess<'_, '_>, value: TaggedValue, _: ConsRootSeal) {
         // Validation preceded allocation. The allocation core cannot resize,
         // clear, publish or otherwise change the root bank, and runs no Lisp.
-        run.owner
-            .local
-            .as_mut()
-            .expect("validated owner roots")
-            .root_scratch[self.index] = super::super::mark_word::MarkWord::of(value);
+        // SAFETY: `ConsRootSeal` proves `value` was allocated/rooted on this
+        // owner's heap under the active era protocol.
+        unsafe {
+            run.owner
+                .local
+                .as_mut()
+                .expect("validated owner roots")
+                .set_root_slot(self.index, value)
+                .expect("validated owner root index");
+        }
     }
 }
 impl RootedSlot for OwnerRootSlot<'_> {}
@@ -114,14 +121,20 @@ impl<'owner, 'era> RunAccess<'owner, 'era> {
         if self.symbol_loan {
             return Err(RegistrationError::OutstandingLoan);
         }
-        symbol_authority::check_owner_home_for_test(self, home)?;
-        let destination = self
+        if self
             .owner
             .local
+            .as_ref()
+            .is_some_and(|local| local.user_test_holds.load(Ordering::Relaxed) > 0)
+        {
+            return Err(RegistrationError::OutstandingLoan);
+        }
+        symbol_authority::check_owner_home_for_test(self, home)?;
+        self.owner
+            .local
             .as_mut()
-            .and_then(|local| local.root_scratch.get_mut(home.index))
+            .and_then(|local| local.set_root_slot_nil(home.index))
             .ok_or(RegistrationError::StaleRegistration)?;
-        *destination = super::super::mark_word::MarkWord::of(TaggedValue::NIL);
         Ok(())
     }
 
@@ -146,12 +159,15 @@ impl<'owner, 'era> RunAccess<'owner, 'era> {
             .local
             .as_mut()
             .ok_or(RegistrationError::StaleRegistration)?;
+        if local.user_test_holds.load(Ordering::Relaxed) > 0 {
+            return Err(RegistrationError::OutstandingLoan);
+        }
         let next = local
             .root_slot_generation
             .checked_add(1)
             .ok_or(RegistrationError::Exhausted)?;
         local.root_slot_generation = next;
-        local.root_scratch.clear();
+        local.clear_root_scratch();
         Ok(())
     }
 
@@ -169,13 +185,11 @@ impl<'owner, 'era> RunAccess<'owner, 'era> {
             .local
             .as_mut()
             .ok_or(RegistrationError::StaleRegistration)?;
-        let index = local.root_scratch.len();
-        if index >= local.root_slot_limit || index >= local.root_scratch.capacity() {
+        let index = local.root_scratch_len();
+        if index >= local.root_slot_limit || index >= local.root_scratch_capacity() {
             return Err(RegistrationError::Capacity);
         }
-        local
-            .root_scratch
-            .push(super::super::mark_word::MarkWord::of(TaggedValue::NIL));
+        local.push_nil_root_slot();
         Ok(OwnerRootSlot {
             key: self.owner.entry.key,
             generation: local.root_slot_generation,
@@ -186,25 +200,25 @@ impl<'owner, 'era> RunAccess<'owner, 'era> {
     }
 
     /// Only the sealed transport bridge can admit a live source word.
-    pub(crate) fn admit_root_slot(
+    ///
+    /// # Safety
+    /// `word` must encode a live `TaggedValue` belonging to this run's heap.
+    pub(crate) unsafe fn admit_root_slot(
         &mut self,
         word: usize,
         _: ConsRootSeal,
     ) -> Result<OwnerRootSlot<'era>, RegistrationError> {
         self.owner.check_thread()?;
         let local = self.owner.local.as_mut().expect("resident owner roots");
-        if local.root_scratch.len() >= local.root_slot_limit {
+        if local.root_scratch_len() >= local.root_slot_limit {
             return Err(RegistrationError::Capacity);
         }
-        let index = local.root_scratch.len();
+        let index = local.root_scratch_len();
         // register(root_capacity) reserved this bank once. Never grow it here.
-        debug_assert!(local.root_scratch.capacity() >= local.root_slot_limit);
-        local
-            .root_scratch
-            .push(super::super::mark_word::MarkWord::of(unsafe {
-                /* SAFETY: value-internal construction from a real Value */
-                TaggedValue::from_bits(word)
-            }));
+        debug_assert!(local.root_scratch_capacity() >= local.root_slot_limit);
+        // SAFETY: caller guarantees `word` encodes a live `TaggedValue` on
+        // this run's heap.
+        unsafe { local.push_root_slot(TaggedValue::from_bits(word)) };
         Ok(OwnerRootSlot {
             key: self.owner.entry.key,
             generation: local.root_slot_generation,
@@ -224,12 +238,15 @@ impl<'owner, 'era> RunAccess<'owner, 'era> {
     pub(crate) fn clear_root_slots(&mut self) -> Result<(), RegistrationError> {
         self.owner.check_thread()?;
         let local = self.owner.local.as_mut().expect("resident owner roots");
+        if local.user_test_holds.load(Ordering::Relaxed) > 0 {
+            return Err(RegistrationError::OutstandingLoan);
+        }
         let next = local
             .root_slot_generation
             .checked_add(1)
             .ok_or(RegistrationError::Exhausted)?;
         local.root_slot_generation = next;
-        local.root_scratch.clear();
+        local.clear_root_scratch();
         Ok(())
     }
 }

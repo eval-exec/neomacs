@@ -43,6 +43,7 @@ fn primitive_undo_is_lisp_only_like_gnu() {
         crate::emacs_core::print::print_value(&bare.eval_str("(fboundp 'primitive-undo)").unwrap()),
         "nil"
     );
+    drop(bare);
 
     // After loadup: simple.el's definition, and it is not a subr.
     assert_eq!(

@@ -105,7 +105,7 @@ use std::num::NonZeroUsize;
 /// The adapter's view loads through this module. The owner's mutex is the
 /// nested backend below; `TryLockError` there stays real `std`.
 mod sync {
-    pub use loom::sync::atomic::{AtomicPtr, Ordering};
+    pub use loom::sync::atomic::{AtomicPtr, AtomicU32, Ordering};
 }
 
 /// Generic owner. Its `sync` is the same Loom backend, so the root store and
@@ -117,7 +117,7 @@ pub mod tagged {
         #[allow(dead_code)]
         pub mod publication {
             mod sync {
-                pub use loom::sync::atomic::{AtomicPtr, Ordering};
+                pub use loom::sync::atomic::{AtomicPtr, AtomicU32, Ordering};
                 pub use loom::sync::{Mutex, MutexGuard};
                 pub use std::sync::TryLockError;
             }

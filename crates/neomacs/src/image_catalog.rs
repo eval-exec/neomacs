@@ -14,10 +14,10 @@
 //! GPU acquisition and texture residency do not gate full image validation.
 
 use std::cell::{Cell, RefCell};
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, TryLockError};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use neomacs_display_protocol::image_diagnostic::ImageDiagnostic;
 use neomacs_display_protocol::{
@@ -25,14 +25,14 @@ use neomacs_display_protocol::{
 };
 use neomacs_display_runtime::render_thread::{
     ImageDecodeClient, ImageDecodeTerminal, ImageProbeSource, ImageTerminalProbe,
-    SharedImageRenderState, probe_image_layout,
+    SharedImageRenderState, probe_image_layout_for_frame,
 };
-use neomacs_display_runtime::thread_comm::{AssetCommand, RenderCommand};
+use neomacs_display_runtime::thread_comm::{AssetCommand, RenderCommand, SendTimeoutOutcome};
 use neovm_core::emacs_core::image_catalog::{
     FailedImage, ImageAnimationInvalidation, ImageCatalog, ImageFileName, ImageId,
     ImageInvalidation, ImageInvalidationResult, ImageLayoutExtent, ImageLoadAttempt,
     ImageLoadToken, ImageLookup, ImagePlacement, ImageResolveRequest, ImageResolveSource,
-    ImageSizeLimit, ImageStateEvent, PendingImage, ReadyImage,
+    ImageSizeLimit, ImageStateEvent, ImageSyncResolution, PendingImage, ReadyImage,
 };
 use neovm_core::emacs_core::image_path::ImageFileRequest;
 use neovm_core::emacs_core::load::image_data_directory;
@@ -152,6 +152,30 @@ pub(super) struct AsyncImageCatalog {
     /// else is a geometry disagreement being paid for by a frame.
     slot_moves: Cell<u64>,
     sequence_ids: RefCell<HashMap<ImageResolveSource, ImageSequenceId>>,
+    /// An invalidation or animation prune has been queued, so the published
+    /// usage snapshot is known stale.  The first `image-cache-size` after it
+    /// waits for the render thread to execute the ordered invalidation
+    /// commands and publish the post-invalidation total; ordinary reads stay
+    /// snapshot-only.
+    usage_sync_pending: Cell<bool>,
+    /// The pending sync covers a whole-cache clear. GNU frees that cache on
+    /// the caller's thread, so its post state is zero even when the renderer
+    /// cannot answer (exited, or wedged past the read's bound).
+    usage_sync_clear_all: Cell<bool>,
+    /// Ordered invalidation commands admitted but not yet committed (the
+    /// renderer did not make room before the bound). They are retried in FIFO
+    /// order before the next publish, so a slow renderer cannot turn an
+    /// invalidation into a permanently stale total; an exited renderer clears
+    /// the queue because no later delivery is possible.
+    pending_invalidations: RefCell<VecDeque<QueuedRenderWork>>,
+    /// A resolution-requiring load handed to the image-command submission
+    /// worker. While it is set no later queued work may be sent: the worker
+    /// commits the load and acknowledges, preserving queue order.
+    ordered_in_flight: RefCell<Option<std::sync::mpsc::Receiver<()>>>,
+    /// Loads that were already in flight when the last whole-cache clear was
+    /// admitted. Their late terminal reports describe images the clear freed,
+    /// so they must not re-add bytes to the known post-clear zero.
+    pre_clear_loads: RefCell<Vec<ImageLoadToken>>,
     next_load_attempt: Cell<u64>,
     next_sequence_id: Cell<u64>,
     /// The `max-image-size` bound the most recent lookup resolved.
@@ -207,6 +231,11 @@ impl AsyncImageCatalog {
             geometry_layouts: Mutex::new(HashMap::new()),
             slot_moves: Cell::new(0),
             sequence_ids: RefCell::new(HashMap::new()),
+            usage_sync_pending: Cell::new(false),
+            usage_sync_clear_all: Cell::new(false),
+            pending_invalidations: RefCell::new(VecDeque::new()),
+            ordered_in_flight: RefCell::new(None),
+            pre_clear_loads: RefCell::new(Vec::new()),
             next_load_attempt: Cell::new(0),
             next_sequence_id: Cell::new(0),
             size_limit: Cell::new(ImageSizeLimit::default()),
@@ -307,13 +336,7 @@ impl AsyncImageCatalog {
             let command =
                 image_load_command(&request, load, self.sequence_id(&request.source), limit);
             let pending = PendingImage::new(load, self.renew_header_layout(&request, load));
-            *state = match schedule_image_command(
-                &self.cmd_tx,
-                self.render_waker.as_ref(),
-                command,
-                resolution.as_ref(),
-                &self.image_decode_client,
-            ) {
+            *state = match self.schedule_image_command_ordered(command, resolution.as_ref()) {
                 Ok(()) => CatalogEntry::Pending(pending),
                 Err(error) => {
                     tracing::warn!(
@@ -321,7 +344,11 @@ impl AsyncImageCatalog {
                         %error,
                         "failed to re-queue image decode after display reset"
                     );
-                    CatalogEntry::Failed(pending.failed(ImageDiagnostic::NotDrawable))
+                    CatalogEntry::Failed(pending.failed_with(
+                        ImageDiagnostic::NotDrawable,
+                        request.failed_extent,
+                        neomacs_display_protocol::ImageEmbeddedMetadata::EMPTY,
+                    ))
                 }
             };
         }
@@ -331,16 +358,18 @@ impl AsyncImageCatalog {
         &self,
         request: ImageResolveRequest,
         limit: ImageSizeLimit,
-    ) -> Result<Option<ReadyImage>, String> {
+    ) -> ImageSyncResolution {
+        let failed_extent = request.failed_extent;
+        let lookup_key = request.clone();
         let pending = match self.lookup_inner(request, limit) {
-            ImageLookup::Ready(image) => return Ok(Some(image)),
+            ImageLookup::Ready(image) => return ImageSyncResolution::Ready(image),
             ImageLookup::Pending(image) => image,
             ImageLookup::Failed(failed) => {
-                // `image-size` asks about one image and GNU logs every time it
-                // is asked, so this path reports even a failure the display
-                // side has already reported.
+                // Synchronous queries (`image-size`, `image-mask-p`,
+                // `image-metadata`) invoke `lookup_image` in GNU, which logs
+                // on every query even if the display path already reported it.
                 self.record_failure_always(&failed);
-                return Err(failed.error.message());
+                return ImageSyncResolution::LoadFailed(failed);
             }
         };
         let placement = pending.placement();
@@ -349,18 +378,19 @@ impl AsyncImageCatalog {
             .image_decode_client
             .wait_for_terminal(pending.load(), Duration::from_secs(1))
         else {
-            // Bounded wait: do not invent dimensions. Callers (image-size, etc.)
-            // surface this as a failed resolve rather than a wrong pixel size.
-            return Err(format!(
-                "Timed out waiting for image decode (id {})",
-                placement.image_id()
-            ));
+            // Bounded wait: do not invent dimensions. Callers surface a typed
+            // timeout rather than fabricating a placeholder size.
+            return ImageSyncResolution::TimedOut {
+                image_id: placement.image_id(),
+            };
         };
         // CPU decoding answers Lisp metadata queries independently of texture
-        // upload. Leave the catalog's residency pending until the renderer's
-        // normal completion event reconciles it.
+        // upload. Leave Ready residency pending until the renderer's normal
+        // completion event reconciles it; a Failed load will never gain a GPU
+        // texture, so publish Failed immediately so redisplay and measurement
+        // observe GNU's failed geometry right away.
         match terminal {
-            Ok(metadata) => Ok(Some(ReadyImage {
+            Ok(metadata) => ImageSyncResolution::Ready(ReadyImage {
                 load: pending.load(),
                 metadata: neovm_core::emacs_core::image_catalog::ResolvedImageMetadata {
                     layout: metadata.layout,
@@ -370,9 +400,426 @@ impl AsyncImageCatalog {
                     mask: metadata.mask,
                     embedded: metadata.embedded,
                 },
-            })),
-            Err(error) => Err(error.message()),
+            }),
+            Err(failure) => {
+                let failed =
+                    pending.failed_with(failure.diagnostic, failed_extent, failure.embedded);
+                let (classified_key, _) = self.classify_request(lookup_key);
+                if let Some(entry) = self.entries.borrow_mut().get_mut(&classified_key)
+                    && matches!(entry, CatalogEntry::Pending(current) if current.load() == failed.load())
+                {
+                    *entry = CatalogEntry::Failed(failed.clone());
+                }
+                self.record_failure_always(&failed);
+                ImageSyncResolution::LoadFailed(failed)
+            }
         }
+    }
+}
+
+/// How a post-invalidation cache-size read obtained its answer.
+enum CacheUsageSync {
+    /// The renderer published the post-invalidation total.
+    Synchronized,
+    /// The renderer has no GPU yet, so it can retain no image bytes: the
+    /// catalog's own snapshot (or the known post-clear zero) is the answer.
+    BeforeRenderer,
+    /// The renderer exited or the command channel disconnected. No
+    /// acknowledgement can arrive.
+    RenderThreadGone,
+    /// A live renderer did not answer before the read's bound.
+    TimedOut,
+}
+
+/// Poll interval for the publish acknowledgement. It is also the worst-case
+/// delay before an evaluator already waiting notices that the renderer
+/// exited.
+const CACHE_USAGE_SYNC_POLL: Duration = Duration::from_millis(10);
+/// Overall bound for one read. A live renderer may legitimately be inside a
+/// synchronous device-loss reinstall or a blocking surface operation, so the
+/// bound is generous; it exists so a wedged renderer cannot stall Lisp
+/// forever. A whole-cache clear still answers with GNU's post-clear zero.
+const CACHE_USAGE_SYNC_DEADLINE: Duration = Duration::from_secs(10);
+
+/// One ordered render command and, for an image load, the off-thread
+/// `:file` resolution it needs. Invalidations carry no resolution.
+struct QueuedRenderWork {
+    command: RenderCommand,
+    resolution: Option<ImageFileRequest>,
+}
+
+/// Where an ordered invalidation stands after an admission attempt.
+enum InvalidationDelivery {
+    /// Every queued invalidation, including this one, is committed.
+    Committed,
+    /// This invalidation is queued for retry on the next sync: a live
+    /// renderer did not make room before the bound.
+    Queued,
+    /// The renderer is gone; no queued invalidation can ever be delivered.
+    Unavailable,
+}
+
+impl AsyncImageCatalog {
+    /// Ask the render thread to publish its retained-image usage now and wait
+    /// for the acknowledgement.
+    ///
+    /// A successful return proves the published total is the
+    /// post-invalidation state because the ordered invalidation commands sit
+    /// ahead of the publish in the same FIFO. GNU frees the cache
+    /// synchronously on the caller's thread; a renderer that is slow must
+    /// delay the read, not let it observe the pre-invalidation total.
+    ///
+    /// The wait is liveness-plumbed rather than unbounded: before the GPU
+    /// exists there is nothing to wait for, and after the renderer exits an
+    /// acknowledgement still queued behind the evaluator's sender clones can
+    /// never arrive.
+    fn synchronize_cache_usage(&self) -> CacheUsageSync {
+        if self.image_metadata.renderer_exited() {
+            return CacheUsageSync::RenderThreadGone;
+        }
+        if !self.image_metadata.renderer_can_retain_images() {
+            return CacheUsageSync::BeforeRenderer;
+        }
+        let (ack, wait) = std::sync::mpsc::sync_channel(1);
+        let mut command = RenderCommand::Asset(AssetCommand::PublishImageCacheUsage { ack });
+        let deadline = Instant::now() + CACHE_USAGE_SYNC_DEADLINE;
+        // A publish must sit behind every invalidation issued before it. A
+        // queued invalidation the renderer still has no room for makes this
+        // read time out (bounded) instead of letting the publish jump it and
+        // observe a pre-invalidation total.
+        match self.flush_pending_invalidations(deadline) {
+            InvalidationDelivery::Unavailable => return CacheUsageSync::RenderThreadGone,
+            InvalidationDelivery::Queued => return CacheUsageSync::TimedOut,
+            InvalidationDelivery::Committed => {}
+        }
+        loop {
+            if self.image_metadata.renderer_exited() {
+                return CacheUsageSync::RenderThreadGone;
+            }
+            let now = Instant::now();
+            if now >= deadline {
+                return CacheUsageSync::TimedOut;
+            }
+            let slice = CACHE_USAGE_SYNC_POLL.min(deadline.saturating_duration_since(now));
+            match self.cmd_tx.send_timeout(command, slice) {
+                SendTimeoutOutcome::Sent => break,
+                SendTimeoutOutcome::TimedOut(returned) => command = returned,
+                SendTimeoutOutcome::Disconnected(_) => {
+                    return CacheUsageSync::RenderThreadGone;
+                }
+            }
+        }
+        if let Some(waker) = self.render_waker.as_ref() {
+            waker.wake();
+        }
+        loop {
+            match wait.recv_timeout(CACHE_USAGE_SYNC_POLL) {
+                Ok(()) => return CacheUsageSync::Synchronized,
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                    return CacheUsageSync::RenderThreadGone;
+                }
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                    if self.image_metadata.renderer_exited() {
+                        return CacheUsageSync::RenderThreadGone;
+                    }
+                    if Instant::now() >= deadline {
+                        return CacheUsageSync::TimedOut;
+                    }
+                }
+            }
+        }
+    }
+
+    /// Wait until the submission worker has committed the work item it was
+    /// handed, or the deadline elapses. Returns Queued while the item is
+    /// still in flight: later work must not be sent before it, or FIFO order
+    /// breaks.
+    fn wait_for_ordered_in_flight(&self, deadline: Instant) -> Result<(), InvalidationDelivery> {
+        loop {
+            if self.image_metadata.renderer_exited() {
+                // The worker may still hold the item, but no delivery can
+                // follow: drop the gate receiver (so a completion sender can
+                // observe the cancellation) and stop waiting immediately.
+                self.ordered_in_flight.borrow_mut().take();
+                return Err(InvalidationDelivery::Unavailable);
+            }
+            let mut in_flight = self.ordered_in_flight.borrow_mut();
+            let Some(wait) = in_flight.as_ref() else {
+                return Ok(());
+            };
+            let now = Instant::now();
+            if now >= deadline {
+                return Err(InvalidationDelivery::Queued);
+            }
+            let slice = CACHE_USAGE_SYNC_POLL.min(deadline.saturating_duration_since(now));
+            match wait.recv_timeout(slice) {
+                Ok(()) | Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                    *in_flight = None;
+                }
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                    // Keep waiting: the worker may be resolving a relative
+                    // path; only the caller's overall deadline ends the wait,
+                    // and the next iteration re-checks renderer exit.
+                }
+            }
+        }
+    }
+
+    fn abandon_ordered_queue(&self) {
+        self.pending_invalidations.borrow_mut().clear();
+        *self.ordered_in_flight.borrow_mut() = None;
+    }
+
+    /// Try to commit every queued item in FIFO order, up to `deadline`.
+    /// Commands stay queued when a live renderer does not make room; an item
+    /// whose `:file` needs off-thread resolution is handed to the submission
+    /// worker and blocks the queue behind its completion acknowledgement. An
+    /// exited or disconnected renderer clears the queue because no later
+    /// delivery is possible.
+    fn flush_pending_invalidations(&self, deadline: Instant) -> InvalidationDelivery {
+        loop {
+            if self.image_metadata.renderer_exited() {
+                self.abandon_ordered_queue();
+                return InvalidationDelivery::Unavailable;
+            }
+            if let Err(state) = self.wait_for_ordered_in_flight(deadline) {
+                if matches!(state, InvalidationDelivery::Unavailable) {
+                    self.abandon_ordered_queue();
+                }
+                return state;
+            }
+            let Some(work) = self.pending_invalidations.borrow_mut().pop_front() else {
+                return InvalidationDelivery::Committed;
+            };
+            let now = Instant::now();
+            if now >= deadline {
+                self.pending_invalidations.borrow_mut().push_front(work);
+                return InvalidationDelivery::Queued;
+            }
+            if work
+                .resolution
+                .as_ref()
+                .is_some_and(ImageFileRequest::needs_off_thread)
+            {
+                let (sent, wait) = std::sync::mpsc::sync_channel(1);
+                if defer_render_command_with_completion(
+                    &self.cmd_tx,
+                    self.render_waker.as_ref(),
+                    work.command,
+                    work.resolution,
+                    &self.image_decode_client,
+                    Some(sent),
+                )
+                .is_err()
+                {
+                    self.abandon_ordered_queue();
+                    return InvalidationDelivery::Unavailable;
+                }
+                *self.ordered_in_flight.borrow_mut() = Some(wait);
+                continue;
+            }
+            let slice = CACHE_USAGE_SYNC_POLL.min(deadline.saturating_duration_since(now));
+            match self.cmd_tx.send_timeout(work.command, slice) {
+                SendTimeoutOutcome::Sent => {
+                    if let Some(waker) = self.render_waker.as_ref() {
+                        waker.wake();
+                    }
+                }
+                SendTimeoutOutcome::TimedOut(returned) => {
+                    self.pending_invalidations
+                        .borrow_mut()
+                        .push_front(QueuedRenderWork {
+                            command: returned,
+                            resolution: work.resolution,
+                        });
+                }
+                SendTimeoutOutcome::Disconnected(_) => {
+                    self.abandon_ordered_queue();
+                    return InvalidationDelivery::Unavailable;
+                }
+            }
+        }
+    }
+
+    /// Non-blocking flush used on lookup: drain what the channel accepts right
+    /// now, hand at most one resolution-requiring item to the submission
+    /// worker, and return without ever sleeping. Ordering is preserved by the
+    /// in-flight acknowledgement gate.
+    fn try_flush_pending_invalidations(&self) {
+        loop {
+            if self.image_metadata.renderer_exited() {
+                self.abandon_ordered_queue();
+                return;
+            }
+            {
+                let mut in_flight = self.ordered_in_flight.borrow_mut();
+                if let Some(wait) = in_flight.as_ref() {
+                    let completed =
+                        !matches!(wait.try_recv(), Err(std::sync::mpsc::TryRecvError::Empty));
+                    if !completed {
+                        return;
+                    }
+                    *in_flight = None;
+                }
+            }
+            let Some(work) = self.pending_invalidations.borrow_mut().pop_front() else {
+                return;
+            };
+            if work
+                .resolution
+                .as_ref()
+                .is_some_and(ImageFileRequest::needs_off_thread)
+            {
+                let (sent, wait) = std::sync::mpsc::sync_channel(1);
+                match defer_render_command_with_completion(
+                    &self.cmd_tx,
+                    self.render_waker.as_ref(),
+                    work.command,
+                    work.resolution,
+                    &self.image_decode_client,
+                    Some(sent),
+                ) {
+                    Ok(()) => *self.ordered_in_flight.borrow_mut() = Some(wait),
+                    Err(_) => self.abandon_ordered_queue(),
+                }
+                return;
+            }
+            match self.cmd_tx.try_send(work.command) {
+                Ok(()) => {
+                    if let Some(waker) = self.render_waker.as_ref() {
+                        waker.wake();
+                    }
+                }
+                Err(crossbeam_channel::TrySendError::Full(command)) => {
+                    // The head cannot be sent now: hand it to the submission
+                    // worker so it is retried autonomously, and gate every
+                    // later item on its completion.
+                    let (sent, wait) = std::sync::mpsc::sync_channel(1);
+                    if defer_render_command_with_completion(
+                        &self.cmd_tx,
+                        self.render_waker.as_ref(),
+                        command,
+                        work.resolution,
+                        &self.image_decode_client,
+                        Some(sent),
+                    )
+                    .is_err()
+                    {
+                        // The submission worker thread is gone: no later
+                        // delivery is possible.
+                        self.abandon_ordered_queue();
+                        return;
+                    }
+                    *self.ordered_in_flight.borrow_mut() = Some(wait);
+                    return;
+                }
+                Err(crossbeam_channel::TrySendError::Disconnected(_)) => {
+                    self.abandon_ordered_queue();
+                    return;
+                }
+            }
+        }
+    }
+
+    /// Admit an image load without letting it overtake a queued
+    /// invalidation. A load issued after a whole-cache clear must be
+    /// processed after it: if the clear is waiting in the retry queue and the
+    /// load went straight to the renderer, replaying the clear later would
+    /// evict the newer load, which GNU's synchronous clear never would.
+    fn schedule_image_command_ordered(
+        &self,
+        command: RenderCommand,
+        resolution: Option<&ImageFileRequest>,
+    ) -> Result<(), String> {
+        // A `:file` needing off-thread resolution ALWAYS goes through the
+        // ordered queue and its completion gate, even when nothing else is
+        // queued: its command reaches the renderer asynchronously from the
+        // submission worker, so without the gate a later publish could
+        // overtake it and observe a pre-load total.
+        let needs_worker = resolution.is_some_and(ImageFileRequest::needs_off_thread);
+        if !needs_worker
+            && self.pending_invalidations.borrow().is_empty()
+            && self.ordered_in_flight.borrow().is_none()
+        {
+            // Uncontended already-resolved load: send it now. If the channel
+            // is full, fall through to the ordered queue instead of the
+            // untracked deferral path: a deferred load must carry the
+            // completion gate or a later publish can overtake it.
+            submit_image_decode(&self.image_decode_client, &command);
+            match self.cmd_tx.try_send(command) {
+                Ok(()) => {
+                    if let Some(waker) = self.render_waker.as_ref() {
+                        waker.wake();
+                    }
+                    return Ok(());
+                }
+                Err(crossbeam_channel::TrySendError::Full(command)) => {
+                    // Full channel: the submission worker retries the send
+                    // autonomously. The completion gate keeps later loads and
+                    // publishes behind this load.
+                    let (sent, wait) = std::sync::mpsc::sync_channel(1);
+                    if defer_render_command_with_completion(
+                        &self.cmd_tx,
+                        self.render_waker.as_ref(),
+                        command,
+                        resolution.cloned(),
+                        &self.image_decode_client,
+                        Some(sent),
+                    )
+                    .is_err()
+                    {
+                        return Err("failed to defer image load command".to_owned());
+                    }
+                    *self.ordered_in_flight.borrow_mut() = Some(wait);
+                    return Ok(());
+                }
+                Err(crossbeam_channel::TrySendError::Disconnected(_)) => {
+                    return Err("failed to queue image load: channel disconnected".to_owned());
+                }
+            }
+        }
+        if self.image_metadata.renderer_exited() {
+            return Err("renderer exited with the image load still queued".to_owned());
+        }
+        // Queue behind every pending invalidation without blocking the
+        // lookup. Other loads start decoding now; the submission worker
+        // resolves a `:file` and then commits its command under the gate.
+        if !needs_worker {
+            submit_image_decode(&self.image_decode_client, &command);
+        }
+        self.pending_invalidations
+            .borrow_mut()
+            .push_back(QueuedRenderWork {
+                command,
+                resolution: resolution.cloned(),
+            });
+        self.try_flush_pending_invalidations();
+        Ok(())
+    }
+
+    /// Admit a cache-invalidation command on the ordered path.
+    ///
+    /// The decoder deferral path can reorder a command behind the publish that
+    /// is supposed to observe it, so invalidation commands and the publish
+    /// come through here: direct FIFO with each other. Admission is
+    /// liveness-bounded under the same policy as the acknowledgement wait: a
+    /// full channel with a wedged renderer must not hang `clear-image-cache`
+    /// in Lisp forever. A command that does not fit before the bound stays
+    /// queued for the next sync instead of being dropped, so the catalog's
+    /// entries and the renderer's bytes cannot diverge until some future read
+    /// happens to repair it.
+    fn send_ordered_cache_command(
+        &self,
+        command: RenderCommand,
+        deadline: Instant,
+    ) -> InvalidationDelivery {
+        self.pending_invalidations
+            .borrow_mut()
+            .push_back(QueuedRenderWork {
+                command,
+                resolution: None,
+            });
+        self.flush_pending_invalidations(deadline)
     }
 }
 
@@ -401,6 +848,20 @@ impl ImageCatalog for AsyncImageCatalog {
                 ImageInvalidation::Dependency(self.classify_source(source).0)
             }
             other => other,
+        };
+        // Snapshot the in-flight load tokens before the entries are removed:
+        // their late terminals describe images this clear frees.
+        let pre_clear_loads: Vec<ImageLoadToken> = if matches!(&target, ImageInvalidation::All) {
+            self.entries
+                .borrow()
+                .values()
+                .filter_map(|state| match state {
+                    CatalogEntry::Pending(pending) => Some(pending.load()),
+                    _ => None,
+                })
+                .collect()
+        } else {
+            Vec::new()
         };
         let (removed, invalidated) = {
             let mut entries = self.entries.borrow_mut();
@@ -449,11 +910,80 @@ impl ImageCatalog for AsyncImageCatalog {
         } else {
             ImageInvalidationResult::Changed
         };
-        self.retire_image_ids(removed);
+        // One deadline for the whole invalidation: a wedged renderer costs at
+        // most one bounded wait, not one per flushed image plus the clear.
+        let ordered_deadline = Instant::now() + CACHE_USAGE_SYNC_DEADLINE;
+        self.flush_image_ids_ordered(removed, ordered_deadline);
+        // GNU `clear-image-cache` frees every window frame's image cache, and
+        // the frame cache holds chrome icons as well as editor images.  The
+        // wholesale command therefore runs even when the catalog itself had no
+        // matching entry; the published total changes either way.
+        let clears_everything = matches!(&target, ImageInvalidation::All);
+        if clears_everything {
+            // Free only what existed when the clear was issued: an eager CPU
+            // decode submitted after this ticket belongs to a later load and
+            // must not be retired by this physical clear.
+            let through = self.image_decode_client.admission_ticket();
+            let command = RenderCommand::Asset(AssetCommand::ClearImageCache { through });
+            let _delivery = self.send_ordered_cache_command(command, ordered_deadline);
+        }
+        if clears_everything || matches!(result, ImageInvalidationResult::Changed) {
+            self.usage_sync_pending.set(true);
+        }
+        if clears_everything {
+            // A whole-cache clear's post state is zero whether the command is
+            // committed now, queued for retry ahead of every later publish, or
+            // undeliverable because the renderer is gone (its owned cache went
+            // with it). Admitting a later load does NOT invalidate this zero:
+            // a source that never becomes drawable charges 0 in GNU. Only a
+            // post-clear load that actually becomes READY does (see
+            // note_terminal_after_clear).
+            self.usage_sync_clear_all.set(true);
+            *self.pre_clear_loads.borrow_mut() = pre_clear_loads;
+        }
         result
     }
 
     fn cached_size_bytes(&self) -> i64 {
+        // GNU's cache is freed on the caller's thread, so the next
+        // `image-cache-size` sees the post-invalidation state. This catalog's
+        // cache lives on the render thread; when an invalidation made the
+        // published snapshot stale, wait for the ordered invalidation to be
+        // executed and the post-invalidation total published, then read it.
+        if self.usage_sync_pending.get() {
+            let cleared_everything = self.usage_sync_clear_all.get();
+            match self.synchronize_cache_usage() {
+                CacheUsageSync::Synchronized => {
+                    self.usage_sync_pending.set(false);
+                    self.usage_sync_clear_all.set(false);
+                    self.pre_clear_loads.borrow_mut().clear();
+                }
+                CacheUsageSync::BeforeRenderer => {
+                    // No renderer-owned bytes exist yet; the queued clear
+                    // publishes the same zero when the GPU installs.
+                    self.usage_sync_pending.set(false);
+                    self.usage_sync_clear_all.set(false);
+                    self.pre_clear_loads.borrow_mut().clear();
+                    if cleared_everything {
+                        return 0;
+                    }
+                }
+                CacheUsageSync::RenderThreadGone | CacheUsageSync::TimedOut => {
+                    // Never report the stale pre-invalidation total for a
+                    // whole-cache clear: GNU's synchronous free leaves zero.
+                    if cleared_everything {
+                        return 0;
+                    }
+                    // Named Invariant-7 exception: for a partial invalidation
+                    // (image flush or animation retire) the post-invalidation
+                    // total exists only in the renderer's published
+                    // accounting; with the renderer gone or wedged the
+                    // catalog cannot compute it, so it returns the last
+                    // published total and keeps the pending flag for a later
+                    // retry instead of fabricating a value.
+                }
+            }
+        }
         i64::try_from(self.image_metadata.cached_size_bytes()).unwrap_or(i64::MAX)
     }
 
@@ -478,14 +1008,14 @@ impl ImageCatalog for AsyncImageCatalog {
             }
         };
         let command = RenderCommand::Asset(AssetCommand::ImageSequenceRetire { retirement });
-        if let Err(error) = schedule_image_command(
-            &self.cmd_tx,
-            self.render_waker.as_ref(),
-            command,
-            None,
-            &self.image_decode_client,
+        // Decoded-sequence bytes are part of `image-cache-size`; wait for the
+        // retire's publish when the retire is committed or queued for retry.
+        let deadline = Instant::now() + CACHE_USAGE_SYNC_DEADLINE;
+        if matches!(
+            self.send_ordered_cache_command(command, deadline),
+            InvalidationDelivery::Committed | InvalidationDelivery::Queued
         ) {
-            tracing::warn!(%error, "failed to retire image sequence cache entry");
+            self.usage_sync_pending.set(true);
         }
         ImageInvalidationResult::Changed
     }
@@ -512,7 +1042,9 @@ impl ImageCatalog for AsyncImageCatalog {
                 let Some(terminal) = self.image_metadata.terminal(load) else {
                     return;
                 };
-                let resolved = image_lookup_from_terminal(pending.clone(), terminal);
+                self.note_terminal_after_clear(load, &terminal);
+                let resolved =
+                    image_lookup_from_terminal(pending.clone(), request.failed_extent, terminal);
                 self.report_header_disagreement(request, &resolved);
                 *state = CatalogEntry::from_lookup(resolved);
             }
@@ -525,6 +1057,29 @@ impl ImageCatalog for AsyncImageCatalog {
 }
 
 impl AsyncImageCatalog {
+    /// Record a terminal state against a pending whole-cache clear.
+    ///
+    /// A source that fails or never becomes drawable charges nothing in GNU,
+    /// so it must not invalidate the clear's known zero. A load that becomes
+    /// READY adds bytes and does invalidate it (its exact byte count is the
+    /// evaluator-ledger case). A terminal for a pre-clear load describes an
+    /// image the clear freed and is discarded.
+    fn note_terminal_after_clear(&self, load: ImageLoadToken, terminal: &ImageDecodeTerminal) {
+        if !self.usage_sync_clear_all.get() {
+            return;
+        }
+        {
+            let mut pre_clear = self.pre_clear_loads.borrow_mut();
+            if let Some(position) = pre_clear.iter().position(|token| *token == load) {
+                pre_clear.remove(position);
+                return;
+            }
+        }
+        if matches!(terminal, ImageDecodeTerminal::Ready(_)) {
+            self.usage_sync_clear_all.set(false);
+        }
+    }
+
     /// Report a failure unless this load attempt has already been reported.
     fn record_failure(&self, failed: &FailedImage) {
         let image = failed.load().image();
@@ -552,6 +1107,9 @@ impl AsyncImageCatalog {
     }
 
     fn lookup_inner(&self, request: ImageResolveRequest, limit: ImageSizeLimit) -> ImageLookup {
+        // Every lookup advances queued ordered work, including one for an
+        // existing entry that will not schedule a new load.
+        self.try_flush_pending_invalidations();
         self.size_limit.set(limit);
         let (request, resolution) = self.classify_request(request);
         let mut entries = self.entries.borrow_mut();
@@ -566,20 +1124,18 @@ impl AsyncImageCatalog {
             let pending = PendingImage::new(load, layout);
             let command =
                 image_load_command(&request, load, self.sequence_id(&request.source), limit);
-            let state = match schedule_image_command(
-                &self.cmd_tx,
-                self.render_waker.as_ref(),
-                command,
-                resolution.as_ref(),
-                &self.image_decode_client,
-            ) {
+            let state = match self.schedule_image_command_ordered(command, resolution.as_ref()) {
                 Ok(()) => CatalogEntry::Pending(pending),
                 Err(error) => {
                     // Not a decode failure: the render thread could not be
                     // handed the job at all. GNU has no sentence for this,
                     // because it has no second thread to lose.
                     tracing::warn!(%error, "image load command could not be scheduled");
-                    CatalogEntry::Failed(pending.failed(ImageDiagnostic::NotDrawable))
+                    CatalogEntry::Failed(pending.failed_with(
+                        ImageDiagnostic::NotDrawable,
+                        request.failed_extent,
+                        neomacs_display_protocol::ImageEmbeddedMetadata::EMPTY,
+                    ))
                 }
             };
             entries.insert(request.clone(), state);
@@ -596,20 +1152,18 @@ impl AsyncImageCatalog {
             let pending = PendingImage::new(load, placement.layout());
             let command =
                 image_load_command(&request, load, self.sequence_id(&request.source), limit);
-            *state = match schedule_image_command(
-                &self.cmd_tx,
-                self.render_waker.as_ref(),
-                command,
-                resolution.as_ref(),
-                &self.image_decode_client,
-            ) {
+            *state = match self.schedule_image_command_ordered(command, resolution.as_ref()) {
                 Ok(()) => CatalogEntry::Pending(pending),
                 Err(error) => {
                     // Not a decode failure: the render thread could not be
                     // handed the job at all. GNU has no sentence for this,
                     // because it has no second thread to lose.
                     tracing::warn!(%error, "image load command could not be scheduled");
-                    CatalogEntry::Failed(pending.failed(ImageDiagnostic::NotDrawable))
+                    CatalogEntry::Failed(pending.failed_with(
+                        ImageDiagnostic::NotDrawable,
+                        request.failed_extent,
+                        neomacs_display_protocol::ImageEmbeddedMetadata::EMPTY,
+                    ))
                 }
             };
             self.schedule_header_probe(&request, resolution.as_ref(), load);
@@ -647,7 +1201,8 @@ impl AsyncImageCatalog {
         let Some(terminal) = terminal else {
             return state.as_lookup().expect("pending state is observable");
         };
-        let resolved = image_lookup_from_terminal(pending.clone(), terminal);
+        self.note_terminal_after_clear(load, &terminal);
+        let resolved = image_lookup_from_terminal(pending.clone(), request.failed_extent, terminal);
         self.report_header_disagreement(&request, &resolved);
         *state = CatalogEntry::from_lookup(resolved);
         state
@@ -800,7 +1355,12 @@ impl AsyncImageCatalog {
         }
     }
 
-    fn retire_image_ids(&self, removed: Vec<ImageId>) {
+    /// Flush images on the ordered path: free each immediately, sending the
+    /// command directly and blocking for channel space (never through the
+    /// decoder deferral path), so a later `PublishImageCacheUsage` on the same
+    /// channel lands after it.  GNU `uncache_image` frees the pixmaps
+    /// synchronously.
+    fn flush_image_ids_ordered(&self, removed: Vec<ImageId>, deadline: Instant) {
         {
             let mut reported = self.reported_failures.borrow_mut();
             for image in &removed {
@@ -808,28 +1368,31 @@ impl AsyncImageCatalog {
             }
         }
         for image in removed {
-            let command = RenderCommand::Asset(AssetCommand::ImageRetire { image });
-            if let Err(error) = schedule_image_command(
-                &self.cmd_tx,
-                self.render_waker.as_ref(),
-                command,
-                None,
-                &self.image_decode_client,
-            ) {
-                tracing::warn!(image = %image, %error, "failed to schedule invalidated image release");
-            }
+            self.image_decode_client.retire_image(image);
+            let command = RenderCommand::Asset(AssetCommand::ImageFlush { image });
+            // A flush that cannot be committed is not applied; the read that
+            // follows falls back under the Invariant-7 policy below.
+            let _ = self.send_ordered_cache_command(command, deadline);
         }
     }
 }
 
-fn image_lookup_from_terminal(pending: PendingImage, terminal: ImageDecodeTerminal) -> ImageLookup {
+fn image_lookup_from_terminal(
+    pending: PendingImage,
+    failed_extent: neomacs_display_protocol::FailedImageExtent,
+    terminal: ImageDecodeTerminal,
+) -> ImageLookup {
     let load = pending.load();
     match terminal {
         // Intermediate: the decode is still running, so the slot keeps the
         // geometry the header gave it and stays pending until `Ready` lands.
         ImageDecodeTerminal::Band(_) => ImageLookup::Pending(pending),
         ImageDecodeTerminal::Ready(metadata) => ImageLookup::Ready(ReadyImage { load, metadata }),
-        ImageDecodeTerminal::Failed(error) => ImageLookup::Failed(pending.failed(error)),
+        ImageDecodeTerminal::Failed(failure) => ImageLookup::Failed(pending.failed_with(
+            failure.diagnostic,
+            failed_extent,
+            failure.embedded,
+        )),
     }
 }
 
@@ -926,7 +1489,13 @@ fn probe_layout(probe: &HeaderProbeRequest) -> Option<ImageLayoutExtent> {
         }
         ImageResolveSource::Data(data) => ImageProbeSource::Data(data.bytes()),
     };
-    probe_image_layout(source, request.size, request.rotation, request.realization)
+    probe_image_layout_for_frame(
+        source,
+        request.frame,
+        request.size,
+        request.rotation,
+        request.realization,
+    )
 }
 
 fn probed_layout(
@@ -946,6 +1515,10 @@ struct DeferredRenderCommand {
     /// or `None` for `:data` loads and inline-resolved absolute paths.
     resolution: Option<ImageFileRequest>,
     decoder: ImageDecodeClient,
+    /// Signals that the command has been committed to the renderer (or the
+    /// channel is gone). An ordered queue waits on this before sending the
+    /// next item, so an off-thread `:file` resolution cannot reorder.
+    sent: Option<std::sync::mpsc::SyncSender<()>>,
 }
 
 fn deferred_render_command_sender() -> &'static crossbeam_channel::Sender<DeferredRenderCommand> {
@@ -956,13 +1529,25 @@ fn deferred_render_command_sender() -> &'static crossbeam_channel::Sender<Deferr
             .name("neomacs-image-command-submit".to_owned())
             .spawn(move || {
                 while let Ok(deferred) = rx.recv() {
-                    let command =
-                        resolve_deferred_image_path(deferred.command, deferred.resolution.as_ref());
-                    submit_image_decode(&deferred.decoder, &command);
-                    if deferred.target.send(command).is_ok()
-                        && let Some(waker) = deferred.waker
-                    {
+                    let DeferredRenderCommand {
+                        target,
+                        waker,
+                        command,
+                        resolution,
+                        decoder,
+                        sent,
+                    } = deferred;
+                    let command = resolve_deferred_image_path(command, resolution.as_ref());
+                    submit_image_decode(&decoder, &command);
+                    let committed = target.send(command).is_ok();
+                    if committed && let Some(waker) = waker {
                         waker.wake();
+                    }
+                    if let Some(sent) = sent {
+                        // A disconnected target committed nothing, but the
+                        // queue must still move on (it then observes the
+                        // disconnect); signal either way.
+                        let _ = sent.try_send(());
                     }
                 }
             });
@@ -970,42 +1555,13 @@ fn deferred_render_command_sender() -> &'static crossbeam_channel::Sender<Deferr
     })
 }
 
-/// Hand a load command to the renderer, deferring to the submission worker when
-/// the `:file` needs off-thread resolution (relative search, `~user` NSS) or
-/// when the renderer channel is full.
-fn schedule_image_command(
-    target: &neomacs_display_runtime::thread_comm::RenderCommandSender,
-    waker: Option<&GuiEventLoopWaker>,
-    command: RenderCommand,
-    resolution: Option<&ImageFileRequest>,
-    decoder: &ImageDecodeClient,
-) -> Result<(), String> {
-    if resolution.is_some_and(ImageFileRequest::needs_off_thread) {
-        return defer_render_command(target, waker, command, resolution.cloned(), decoder);
-    }
-    submit_image_decode(decoder, &command);
-    match target.try_send(command) {
-        Ok(()) => {
-            if let Some(waker) = waker {
-                waker.wake();
-            }
-            Ok(())
-        }
-        Err(crossbeam_channel::TrySendError::Full(command)) => {
-            defer_render_command(target, waker, command, resolution.cloned(), decoder)
-        }
-        Err(crossbeam_channel::TrySendError::Disconnected(_)) => {
-            Err("failed to queue image load: channel disconnected".to_owned())
-        }
-    }
-}
-
-fn defer_render_command(
+fn defer_render_command_with_completion(
     target: &neomacs_display_runtime::thread_comm::RenderCommandSender,
     waker: Option<&GuiEventLoopWaker>,
     command: RenderCommand,
     resolution: Option<ImageFileRequest>,
     decoder: &ImageDecodeClient,
+    sent: Option<std::sync::mpsc::SyncSender<()>>,
 ) -> Result<(), String> {
     deferred_render_command_sender()
         .send(DeferredRenderCommand {
@@ -1014,6 +1570,7 @@ fn defer_render_command(
             command,
             resolution,
             decoder: decoder.clone(),
+            sent,
         })
         .map_err(|error| format!("failed to defer image load command: {error}"))
 }
@@ -1095,7 +1652,8 @@ fn submit_image_decode(decoder: &ImageDecodeClient, command: &RenderCommand) {
                 *limit,
             );
         }
-        RenderCommand::Asset(AssetCommand::ImageRetire { image }) => decoder.retire_image(*image),
+        RenderCommand::Asset(AssetCommand::ImageRetire { image })
+        | RenderCommand::Asset(AssetCommand::ImageFlush { image }) => decoder.retire_image(*image),
         RenderCommand::Asset(AssetCommand::ImageSequenceRetire { retirement }) => {
             decoder.retire_sequence(*retirement)
         }
@@ -1185,11 +1743,18 @@ fn placeholder_image_extent(request: &ImageResolveRequest) -> ImageLayoutExtent 
 /// The request a resolved geometry is keyed on: everything the header probe
 /// reads except the animation frame.
 ///
-/// Frames of a raster source composite onto the canvas its header names, so the
-/// probe's answer cannot depend on which frame is selected. Keying without the
-/// frame is what lets an animation resolve its geometry once instead of once
-/// per frame — see [`AsyncImageCatalog::geometry_layouts`].
+/// Animated raster frames composite onto one canvas, so they can share a
+/// resolved extent. TIFF pages keep their index because each directory can
+/// describe different dimensions. See [`AsyncImageCatalog::geometry_layouts`].
 fn geometry_key(request: &ImageResolveRequest) -> ImageResolveRequest {
+    // TIFF :index selects independent pages, whose dimensions can differ.
+    // Animated formats share a compositing canvas across every frame instead.
+    if matches!(
+        request.identity.format(),
+        neomacs_display_protocol::image_diagnostic::ImageFormatName::Tiff
+    ) {
+        return request.clone();
+    }
     ImageResolveRequest {
         frame: Default::default(),
         ..request.clone()
@@ -1223,3 +1788,7 @@ mod tests;
 #[cfg(test)]
 #[path = "image_catalog/tests/image_band_terminal_test.rs"]
 mod band_terminal_tests;
+
+#[cfg(test)]
+#[path = "image_catalog/tests/cache_liveness_test.rs"]
+mod cache_liveness_test;

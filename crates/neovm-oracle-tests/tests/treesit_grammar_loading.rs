@@ -208,3 +208,150 @@ fn incompatible_grammar_reports_language_version_mismatch() {
         "(nil language-grammar-version-mismatch)"
     );
 }
+
+#[test]
+fn language_remap_alist_query_capture_matches_gnu_31() {
+    let gnu = EmacsRuntime::gnu_emacs();
+    let json = grammar_case("json").prepare().unwrap();
+    let python = grammar_case("python").prepare().unwrap();
+    let sandbox = MelpaSandbox::new("treesit-language-remap").unwrap();
+    let destination = sandbox.home().join(".emacs.d/tree-sitter");
+    copy_grammar(&json, &destination);
+    copy_grammar(&python, &destination);
+    let form = r#"(progn
+      (require 'treesit)
+      (setq user-emacs-directory "~/.emacs.d/" treesit-extra-load-path nil)
+      (with-temp-buffer
+        (insert "{\"k\": 1}")
+        (let* ((buf-local (local-variable-if-set-p 'treesit-language-remap-alist))
+               (buf-isolation
+                (let ((b1 (generate-new-buffer " *remap-b1*"))
+                      (b2 (generate-new-buffer " *remap-b2*")))
+                  (unwind-protect
+                      (progn
+                        (with-current-buffer b1
+                          (setq treesit-language-remap-alist '((alias-json . json))))
+                        (list (buffer-local-value 'treesit-language-remap-alist b1)
+                              (buffer-local-value 'treesit-language-remap-alist b2)))
+                    (kill-buffer b1)
+                    (kill-buffer b2))))
+               (unremapped-queries
+                (let ((treesit-language-remap-alist '((alias-json . json))))
+                  (list (treesit-language-available-p 'alias-json)
+                        (treesit-language-abi-version 'alias-json)
+                        (treesit-grammar-location 'alias-json))))
+               (bad-parser
+                (let ((treesit-language-remap-alist '((foo . 123))))
+                  (condition-case err (treesit-parser-create 'foo) (error err))))
+               (bad-query
+                (let ((treesit-language-remap-alist '((foo . 123))))
+                  (condition-case err (treesit-query-compile 'foo "(string) @s" t) (error err))))
+               (circular-remap
+                (let ((c (list (cons 'a 'b))))
+                  (setcdr c c)
+                  (let ((treesit-language-remap-alist c))
+                    (list
+                     (condition-case err (treesit-parser-create 'z) (error (car err)))
+                     (condition-case err (treesit-query-compile 'z "(string) @s" t) (error (car err)))))))
+               (improper-remap
+                (let ((treesit-language-remap-alist '((a . b) . 42)))
+                  (list
+                   (condition-case err (treesit-parser-create 'c) (error err))
+                   (condition-case err (treesit-query-compile 'c "(string) @s" t) (error err)))))
+               (p (let ((treesit-language-remap-alist '((alias-json . json))))
+                    (treesit-parser-create 'alias-json)))
+               (plang (treesit-parser-language p))
+               (cap-in-remap
+                (let ((treesit-language-remap-alist '((alias-json . json))))
+                  (mapcar (lambda (c) (cons (car c) (treesit-node-text (cdr c) t)))
+                          (treesit-query-capture p "(string) @s"))))
+               (cap-after-nil
+                (let ((treesit-language-remap-alist nil))
+                  (mapcar (lambda (c) (cons (car c) (treesit-node-text (cdr c) t)))
+                          (treesit-query-capture p "(string) @s"))))
+               (cap-after-python-remap
+                (let ((treesit-language-remap-alist '((alias-json . python))))
+                  (mapcar (lambda (c) (cons (car c) (treesit-node-text (cdr c) t)))
+                          (treesit-query-capture p "(string) @s"))))
+               (cap-sexp-after-python-remap
+                (let ((treesit-language-remap-alist '((alias-json . python))))
+                  (mapcar (lambda (c) (cons (car c) (treesit-node-text (cdr c) t)))
+                          (treesit-query-capture p '((string) @s)))))
+               (q-json (treesit-query-compile 'json "(string) @s" t))
+               (cap-same-tslang-diff-sym
+                (mapcar (lambda (c) (cons (car c) (treesit-node-text (cdr c) t)))
+                        (treesit-query-capture p q-json))))
+          (prin1 (list buf-local
+                       buf-isolation
+                       unremapped-queries
+                       bad-parser
+                       bad-query
+                       circular-remap
+                       improper-remap
+                       plang
+                       cap-in-remap
+                       cap-after-nil
+                       cap-after-python-remap
+                       cap-sexp-after-python-remap
+                       cap-same-tslang-diff-sym)))))"#;
+    let expected = run_lisp(&gnu, &sandbox, form);
+    assert_eq!(
+        expected,
+        r#"(t (((alias-json . json)) nil) (nil nil nil) (wrong-type-argument symbolp 123) (treesit-query-error "Invalid language symbol" 123) (circular-list circular-list) ((wrong-type-argument listp ((a . b) . 42)) (wrong-type-argument listp ((a . b) . 42))) alias-json ((s . "\"k\"")) ((s . "\"k\"")) ((s . "\"k\"")) ((s . "\"k\"")) ((s . "\"k\"")))"#
+    );
+    assert_eq!(run_lisp(&EmacsRuntime::neomacs(), &sandbox, form), expected);
+}
+
+#[test]
+fn compiled_query_rejects_mismatched_loaded_tslanguage_across_remap() {
+    // When `treesit-language-remap-alist` changes between `treesit-parser-create`
+    // and `treesit-query-compile`, the parser and compiled query share the same
+    // unremapped Lisp symbol (`alias-lang`) while holding different `TSLanguage`
+    // grammars (`json` vs `python`).
+    //
+    // Note: GNU Emacs 31.1 (`src/treesit.c:3955-3964`) performs no `TSLanguage`
+    // check on pre-compiled queries and silently executes `ts_query_cursor_exec`
+    // across mismatched grammars (producing bogus symbol-ID collisions such as
+    // Python `identifier` matching JSON `"{"`). Neomacs intentionally validates
+    // loaded `TSLanguage` equality before `EmacsQuery::matches` to preserve its
+    // language-compatibility safety invariant and reject cross-grammar queries
+    // with `treesit-query-error`.
+    let json = grammar_case("json").prepare().unwrap();
+    let python = grammar_case("python").prepare().unwrap();
+    let sandbox = MelpaSandbox::new("treesit-cross-tslanguage-remap").unwrap();
+    let destination = sandbox.home().join(".emacs.d/tree-sitter");
+    copy_grammar(&json, &destination);
+    copy_grammar(&python, &destination);
+    let form = r#"(progn
+      (require 'treesit)
+      (setq user-emacs-directory "~/.emacs.d/" treesit-extra-load-path nil)
+      (with-temp-buffer
+        (insert "{\"k\": 1}")
+        (let* ((p (let ((treesit-language-remap-alist '((alias-lang . json))))
+                    (treesit-parser-create 'alias-lang)))
+               (q-eager-remapped
+                (let ((treesit-language-remap-alist '((alias-lang . python))))
+                  (treesit-query-compile 'alias-lang "(identifier) @x" t)))
+               (q-lazy-remapped
+                (treesit-query-compile 'alias-lang "(identifier) @x"))
+               (q-direct-python
+                (treesit-query-compile 'python "(identifier) @x" t))
+               (res-eager
+                (condition-case err
+                    (list 'ok (treesit-query-capture p q-eager-remapped))
+                  (error (car err))))
+               (res-lazy
+                (let ((treesit-language-remap-alist '((alias-lang . python))))
+                  (condition-case err
+                      (list 'ok (treesit-query-capture p q-lazy-remapped))
+                    (error (car err)))))
+               (res-direct
+                (condition-case err
+                    (list 'ok (treesit-query-capture p q-direct-python))
+                  (error (car err)))))
+          (prin1 (list res-eager res-lazy res-direct)))))"#;
+    assert_eq!(
+        run_lisp(&EmacsRuntime::neomacs(), &sandbox, form),
+        "(treesit-query-error treesit-query-error treesit-query-error)"
+    );
+}

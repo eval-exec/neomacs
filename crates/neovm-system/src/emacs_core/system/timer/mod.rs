@@ -67,23 +67,33 @@ impl PendingGnuTimer {
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
 fn pending_gnu_timer(timer: Value) -> Option<PendingGnuTimer> {
     let slots = timer.as_vector_data()?;
-    if slots.len() != 10 || !slots[0].is_nil() || !slots[7].is_nil() {
+    if slots.len() != 10 || !slots.at(0).is_nil() || !slots.at(7).is_nil() {
         return None;
     }
 
     Some(PendingGnuTimer {
-        when: GnuTimerTimestamp::from_components(slots[1], slots[2], slots[3], slots[8])?,
+        when: GnuTimerTimestamp::from_components(
+            slots.at(1),
+            slots.at(2),
+            slots.at(3),
+            slots.at(8),
+        )?,
     })
 }
 
 fn pending_gnu_idle_timer(timer: Value) -> Option<PendingGnuTimer> {
     let slots = timer.as_vector_data()?;
-    if slots.len() != 10 || !slots[0].is_nil() || slots[7].is_nil() {
+    if slots.len() != 10 || !slots.at(0).is_nil() || slots.at(7).is_nil() {
         return None;
     }
 
     Some(PendingGnuTimer {
-        when: GnuTimerTimestamp::from_components(slots[1], slots[2], slots[3], slots[8])?,
+        when: GnuTimerTimestamp::from_components(
+            slots.at(1),
+            slots.at(2),
+            slots.at(3),
+            slots.at(8),
+        )?,
     })
 }
 

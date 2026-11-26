@@ -186,7 +186,14 @@ fn vm_make_frame_uses_gui_creation_path_when_display_host_is_active() {
     let requests = requests.borrow();
     assert_eq!(requests.len(), 1);
     assert_eq!(requests[0].width, 800);
-    assert_eq!(requests[0].height, 500);
+    // 25×20 text. On Linux the creation request also adds the menu bar and
+    // leaves the still-empty tool bar out (`gtkutil.c:1181-1182`,
+    // `:1680-1681`, `:6149-6160`). `menu-bar-mode` and `tool-bar-mode` both
+    // default on (`xfns.c:5278-5289`), so this frame's `tool-bar-lines` is 1,
+    // but creation has no items and that line is not in the pixel height.
+    // The menu bar is one character row here (20). Other ports keep the text box.
+    let expected_height = if cfg!(target_os = "linux") { 520 } else { 500 };
+    assert_eq!(requests[0].height, expected_height);
 }
 
 #[test]

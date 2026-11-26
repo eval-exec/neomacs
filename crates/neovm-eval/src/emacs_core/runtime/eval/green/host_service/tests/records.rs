@@ -13,7 +13,7 @@ fn green() -> Context {
 
 fn prepare(
     registry: &mut HostRegistry,
-    baton: &Baton,
+    baton: &TurnRight,
     heap: &TaggedHeap,
     owner: ThreadKey,
     roots: &[Value],
@@ -25,7 +25,7 @@ fn prepare(
 
 // Unit fixtures exercise registry transitions without seating the scheduler.
 // Actual restore provenance is checked by after_restore and switch integration.
-fn restored<'a>(owner: &'a Context, baton: &'a Baton, key: ThreadKey) -> RestoredHostOwner<'a> {
+fn restored<'a>(owner: &'a Context, baton: &'a TurnRight, key: ThreadKey) -> RestoredHostOwner<'a> {
     RestoredHostOwner {
         context: owner,
         baton,
@@ -33,7 +33,7 @@ fn restored<'a>(owner: &'a Context, baton: &'a Baton, key: ThreadKey) -> Restore
     }
 }
 
-fn published(baton: &Baton, heap: &TaggedHeap, roots: &[Value]) -> RootBatchLease {
+fn published(baton: &TurnRight, heap: &TaggedHeap, roots: &[Value]) -> RootBatchLease {
     let prepared = baton.prepare_parked_batch(heap, roots.len()).unwrap();
     // SAFETY: this test's original same-heap owner holds its unique Baton;
     // no GC, callback or handoff occurs while publishing the live root slice.
@@ -47,7 +47,7 @@ fn published(baton: &Baton, heap: &TaggedHeap, roots: &[Value]) -> RootBatchLeas
 fn host_only_roots_are_visible_to_collection_and_world_drop() {
     let mut owner = green();
     let live = owner.world_lifetime_probe_for_test();
-    let baton = owner.start_green_runtime().unwrap();
+    let baton = TurnRight::from(owner.start_green_runtime().unwrap());
     let value = Value::string("host record is its only root");
     let key = owner.with_green_runtime(|runtime| {
         let call = prepare(
@@ -85,7 +85,7 @@ fn host_only_roots_are_visible_to_collection_and_world_drop() {
 #[test]
 fn ready_requires_the_ordinary_parked_owner_publication() {
     let mut owner = green();
-    let baton = owner.start_green_runtime().unwrap();
+    let baton = TurnRight::from(owner.start_green_runtime().unwrap());
     owner.with_green_runtime(|runtime| {
         let mut registry = runtime.parked.borrow_mut();
         let call = prepare(
@@ -108,7 +108,7 @@ fn ready_requires_the_ordinary_parked_owner_publication() {
 #[test]
 fn terminal_and_owner_acknowledgement_are_distinct_from_root_retirement() {
     let mut owner = green();
-    let baton = owner.start_green_runtime().unwrap();
+    let baton = TurnRight::from(owner.start_green_runtime().unwrap());
     let value = Value::string("retire only after restored-owner acknowledgement");
     owner.with_green_runtime(|runtime| {
         let mut registry = runtime.parked.borrow_mut();
@@ -172,7 +172,7 @@ fn drain_blocked_retains_allocation_without_granting_execution_authority() {
 #[test]
 fn different_world_sessions_never_share_a_request_key() {
     let mut first = green();
-    let first_baton = first.start_green_runtime().unwrap();
+    let first_baton = TurnRight::from(first.start_green_runtime().unwrap());
     let first_key = first.with_green_runtime(|runtime| {
         prepare(
             runtime.parked.borrow_mut().hosts(),
@@ -186,7 +186,7 @@ fn different_world_sessions_never_share_a_request_key() {
     drop(first_baton);
     drop(first);
     let mut second = green();
-    let second_baton = second.start_green_runtime().unwrap();
+    let second_baton = TurnRight::from(second.start_green_runtime().unwrap());
     let second_key = second.with_green_runtime(|runtime| {
         prepare(
             runtime.parked.borrow_mut().hosts(),
@@ -212,7 +212,7 @@ fn terminal_root_case<K: RegisteredRecord>(
 ) {
     use crate::host_effect::contracts::{MessageArguments, MessagePlan, OwnedNativeData};
     let mut owner = green();
-    let baton = owner.start_green_runtime().unwrap();
+    let baton = TurnRight::from(owner.start_green_runtime().unwrap());
     let argument = Value::string("arguments live until owner acknowledgement");
     let result = Value::string("terminal result/error/signal roots stay live");
     let key = owner.with_green_runtime(|runtime| {
@@ -326,7 +326,7 @@ fn registered_thread_signals_are_world_rooted_until_owner_ack() {
 fn foreign_record_and_heap_refusals_preserve_registered_roots() {
     use crate::host_effect::contracts::MessageArguments;
     let mut owner = green();
-    let baton = owner.start_green_runtime().unwrap();
+    let baton = TurnRight::from(owner.start_green_runtime().unwrap());
     let value = Value::string("foreign refusals keep this root");
     owner.with_green_runtime(|runtime| {
         let mut registry = runtime.parked.borrow_mut();
@@ -399,7 +399,7 @@ fn foreign_record_and_heap_refusals_preserve_registered_roots() {
 #[test]
 fn retirement_failure_preserves_acknowledgement_and_root_ownership() {
     let mut owner = green();
-    let baton = owner.start_green_runtime().unwrap();
+    let baton = TurnRight::from(owner.start_green_runtime().unwrap());
     let value = Value::string("retry keeps the acknowledgement and its roots");
     owner.with_green_runtime(|runtime| {
         let mut registry = runtime.parked.borrow_mut();
@@ -434,7 +434,7 @@ fn retirement_failure_preserves_acknowledgement_and_root_ownership() {
 #[test]
 fn an_unseated_context_cannot_mint_restored_owner_authority() {
     let mut owner = green();
-    let baton = owner.start_green_runtime().unwrap();
+    let baton = TurnRight::from(owner.start_green_runtime().unwrap());
     assert!(matches!(
         RestoredHostOwner::after_restore(&mut owner, &baton),
         Err(HostRootError::ForeignOwner)

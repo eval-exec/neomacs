@@ -104,7 +104,11 @@ impl Context {
         let mut obarray = obarray;
         let core_eval_symbols = install_core_eval_symbols(&mut obarray, false);
         let tagged_heap = tagged_heap;
-        neovm_value::tagged::gc::set_tagged_heap_root(tagged_heap.root());
+        // SAFETY: the reconstructed Context owns this AliasableBox. The root
+        // stays live until that Context clears it, and no heap reference is live yet.
+        unsafe {
+            neovm_value::tagged::gc::install_tagged_heap_root_refusing_foreign(tagged_heap.root())
+        };
         let noninteractive = obarray
             .canonical_value_or_nil(
                 CanonicalAccess::DUMP,
@@ -257,7 +261,8 @@ impl Context {
             redisplay_fn: None,
             mode_line_display_flow: None,
             redisplay_prepare_fn: None,
-            font_shape_fn: None,
+            font_driver: None,
+            no_safe_handled_frame: None,
             gstring_shape_cache: world.global.gstring_shape_cache,
             display_idle_maintenance_fn: None,
             scroll_preview_fn: None,
@@ -358,6 +363,7 @@ impl Context {
             frame_and_buffer_state: None,
             retained_frame_pins: Vec::new(),
             condition_snapshots: super::ConditionSnapshotAdmission::Dormant,
+            automatic_retired_processes: None,
         };
         ev.setup_thread_locals();
 
@@ -366,10 +372,10 @@ impl Context {
         // surface, so restore that surface immediately afterward.
         super::hooks_proof::register_core_subrs(&mut ev);
         for (sym_id, symbol) in dumped_function_surface.iter_symbols() {
-            if !symbol.function.get().is_nil() {
+            if !symbol.function().is_nil() {
                 ev.obarray.set_symbol_function_id_for(
                     sym_id,
-                    symbol.function.get(),
+                    symbol.function(),
                     neovm_value::symbol::FunctionEpochBump::PdumpRestore,
                 );
             } else if dumped_function_surface.is_function_unbound_id(sym_id) {

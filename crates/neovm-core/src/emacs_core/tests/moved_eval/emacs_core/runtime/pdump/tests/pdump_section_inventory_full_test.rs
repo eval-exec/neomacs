@@ -28,6 +28,7 @@ fn file_pdump_stores_symbol_table_in_raw_mmap_section() {
     let dir = tempfile::tempdir().unwrap();
     let dump_path = dir.path().join("symbol-table-section.pdump");
     dump_to_file(&eval, &dump_path).expect("dump should succeed");
+    drop(eval);
 
     let image = mmap_image::load_image(&dump_path).expect("load raw mmap image");
     let inventory = neovm_eval::test_support::raw_section_inventory_for_test(&image);

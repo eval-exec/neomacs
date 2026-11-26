@@ -52,48 +52,66 @@ impl TestEnv {
 
 impl Drop for TestEnv {
     fn drop(&mut self) {
-        unsafe {
-            finalize_storage(&mut self.priv_.storage);
-        }
+        finalize_storage(&mut self.priv_.storage);
     }
 }
 
-/// `ModuleContextGuard` must restore the PREVIOUS context on drop —
+/// `with_module_context` must restore the PREVIOUS context on return —
 /// nested module→elisp→module calls depend on the outer pointer coming
-/// back — and must do the same when its scope unwinds.
+/// back rather than being cleared to null — and must do the same when its
+/// scope unwinds.
 #[test]
 fn module_context_guard_restores_previous_on_drop_and_panic() {
-    // Fake, never-dereferenced pointers: the guard only moves them in
-    // and out of the MODULE_CTX cell.
-    let outer = 0x1000 as *mut Context;
-    let inner = 0x2000 as *mut Context;
-    let current = || MODULE_CTX.with(|c| c.get());
+    let mut ctx = crate::test_utils::new_context();
+    let ctx_ptr: *mut Context = std::ptr::from_mut(&mut ctx);
+    let current = current_module_context_for_test;
 
     assert!(current().is_null());
-    {
-        let _outer_guard = ModuleContextGuard::install(outer);
-        assert_eq!(current(), outer);
-        {
-            let _inner_guard = ModuleContextGuard::install(inner);
-            assert_eq!(current(), inner);
-        }
+    with_module_context(&mut ctx, || {
+        assert_eq!(current(), ctx_ptr);
+        // Simulate a nested module->elisp->module re-entry on the active
+        // Context: returning must restore `ctx_ptr`, not null.
+        // SAFETY: `ctx_ptr` is the live active `Context` installed by the outer
+        // `with_module_context`; no other reference to it is active here.
+        let inner_ctx = unsafe { &mut *current() };
+        with_module_context(inner_ctx, || {
+            assert_eq!(current(), ctx_ptr);
+        });
         assert_eq!(
             current(),
-            outer,
-            "inner drop must restore the outer context"
+            ctx_ptr,
+            "inner return must restore the outer context rather than null"
         );
         let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let _guard = ModuleContextGuard::install(inner);
-            panic!("boom under module context");
+            // SAFETY: same active `Context` re-entry as above; unwind restores `ctx_ptr`.
+            let inner_ctx = unsafe { &mut *current() };
+            with_module_context(inner_ctx, || {
+                assert_eq!(current(), ctx_ptr);
+                panic!("boom under module context");
+            });
         }));
         assert!(panicked.is_err());
         assert_eq!(
             current(),
-            outer,
+            ctx_ptr,
             "unwinding must restore the previous context"
         );
-    }
+    });
     assert!(current().is_null());
+
+    // Top-level unwind must also restore null.
+    let outer_panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        with_module_context(&mut ctx, || {
+            assert_eq!(current(), ctx_ptr);
+            panic!("outer boom under module context");
+        });
+    }));
+    assert!(outer_panicked.is_err());
+    assert!(current().is_null());
+
+    // Also verify restoration of a *distinct* prior pointer address on both
+    // normal return and panic unwind while keeping MODULE_CTX private.
+    verify_with_module_context_restores_distinct_previous_for_test(&mut ctx);
 }
 
 #[test]
@@ -115,7 +133,7 @@ fn module_make_interactive_wraps_specs_like_gnu() {
     unsafe {
         module_make_interactive(env, func, lisp_to_value(env, Value::NIL));
     }
-    let form = value_to_lisp(func)
+    let form = unsafe { value_to_lisp(func) }
         .as_module_function()
         .unwrap()
         .interactive_form;
@@ -124,11 +142,11 @@ fn module_make_interactive_wraps_specs_like_gnu() {
         vec![Value::symbol("interactive")]
     );
 
-    let spec = lisp_to_value(env, Value::string("p"));
+    let spec = unsafe { lisp_to_value(env, Value::string("p")) };
     unsafe {
         module_make_interactive(env, func, spec);
     }
-    let form = value_to_lisp(func)
+    let form = unsafe { value_to_lisp(func) }
         .as_module_function()
         .unwrap()
         .interactive_form;
@@ -145,14 +163,14 @@ fn active_module_environment_values_are_gc_roots() {
     let env = fixture.env_ptr();
     let priv_ptr = fixture.priv_ptr();
     let rooted = Value::string("module-local-root");
-    let _value = lisp_to_value(env, rooted);
+    let _value = unsafe { lisp_to_value(env, rooted) };
     unsafe {
         (*priv_ptr).pending_non_local_exit = emacs_funcall_exit::Signal;
         (*priv_ptr).non_local_exit_symbol = Value::symbol("error");
         (*priv_ptr).non_local_exit_data = Value::list(vec![rooted]);
     }
 
-    let active = ActiveModuleEnv::push(priv_ptr);
+    let active = unsafe { ActiveModuleEnv::push(priv_ptr) };
     let mut roots = Vec::new();
     collect_dynamic_module_gc_roots(
         &mut roots,
@@ -170,9 +188,9 @@ fn module_big_integer_zero_and_null_outputs_match_gnu() {
     let env = fixture.env_ptr();
 
     let zero = unsafe { module_make_big_integer(env, 0, 0, std::ptr::null()) };
-    assert_eq!(value_to_lisp(zero), Value::fixnum(0));
+    assert_eq!(unsafe { value_to_lisp(zero) }, Value::fixnum(0));
 
-    let zero_value = lisp_to_value(env, Value::fixnum(0));
+    let zero_value = unsafe { lisp_to_value(env, Value::fixnum(0)) };
     let ok = unsafe {
         module_extract_big_integer(
             env,
@@ -195,7 +213,7 @@ fn module_extract_big_integer_reports_too_small_buffer() {
     let mut fixture = TestEnv::new();
     let env = fixture.env_ptr();
     let large = Value::make_integer(Integer::from(1u64) << 80u32);
-    let value = lisp_to_value(env, large);
+    let value = unsafe { lisp_to_value(env, large) };
     let mut sign = 0;
     let mut count = 1;
     let mut magnitude = [0_u64; 1];
@@ -259,16 +277,18 @@ fn install_module_function(
     name: &str,
     func: unsafe extern "C" fn(*mut emacs_env, isize, *mut emacs_value, *mut c_void) -> emacs_value,
 ) {
-    let value = neovm_value::tagged::gc::with_tagged_heap(|h| {
-        h.alloc_module_function(
-            0,
-            0,
-            func as *const c_void,
-            std::ptr::null_mut(),
-            Value::NIL,
-            Value::NIL,
-        )
-    });
+    let value = unsafe {
+        neovm_value::tagged::gc::with_tagged_heap(|h| {
+            h.alloc_module_function(
+                0,
+                0,
+                func as *const c_void,
+                std::ptr::null_mut(),
+                Value::NIL,
+                Value::NIL,
+            )
+        })
+    };
     ev.obarray_view_mut().set_symbol_function(name, value);
 }
 
@@ -280,7 +300,7 @@ fn module_guard_converts_panic_to_pending_error() {
     let mut fixture = TestEnv::new();
     let env = fixture.env_ptr();
 
-    let out = module_guard(env, 17_i64, || panic!("guard-probe-text"));
+    let out = unsafe { module_guard(env, 17_i64, || panic!("guard-probe-text")) };
     assert_eq!(out, 17);
 
     let priv_ = unsafe { &*fixture.priv_ptr() };
@@ -305,7 +325,9 @@ fn module_guard_preserves_earlier_pending_exit() {
         set_pending_signal(env, "wrong-type-argument", Value::NIL);
     }
 
-    module_guard(env, (), || panic!("later panic"));
+    unsafe {
+        module_guard(env, (), || panic!("later panic"));
+    }
 
     let priv_ = unsafe { &*fixture.priv_ptr() };
     assert_eq!(
@@ -322,11 +344,11 @@ fn module_guard_preserves_earlier_pending_exit() {
 #[test]
 fn module_guard_re_raises_on_poisoned_gc_locks_without_ctx() {
     crate::test_utils::init_test_tracing();
-    neovm_value::tagged::gc::with_tagged_heap(|h| h.poison_gc_locks_for_test());
+    unsafe { neovm_value::tagged::gc::with_tagged_heap(|h| h.poison_gc_locks_for_test()) };
     let mut fixture = TestEnv::new();
     let env = fixture.env_ptr();
 
-    let caught = std::panic::catch_unwind(AssertUnwindSafe(|| {
+    let caught = std::panic::catch_unwind(AssertUnwindSafe(|| unsafe {
         module_guard(env, 17_i64, || panic!("guard-poison-flee"))
     }));
     let payload = caught.expect_err("poisoned GC locks must re-raise, not contain");

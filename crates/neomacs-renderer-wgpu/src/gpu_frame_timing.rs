@@ -47,6 +47,21 @@ impl PendingGpuFrameTiming {
         }
     }
 
+    pub(crate) fn resolve_frame_encoder(
+        &self,
+        encoder: &mut crate::video_cache::FrameCommandEncoder,
+    ) {
+        encoder.resolve_query_set(&self.slot.query_set, 0..QUERY_COUNT, &self.slot.resolved, 0);
+        encoder.copy_buffer_to_buffer(
+            &self.slot.resolved,
+            0,
+            &self.slot.readback,
+            0,
+            QUERY_BUFFER_BYTES,
+        );
+    }
+
+    #[cfg(test)]
     pub(crate) fn resolve(&self, encoder: &mut wgpu::CommandEncoder) {
         encoder.resolve_query_set(&self.slot.query_set, 0..QUERY_COUNT, &self.slot.resolved, 0);
         encoder.copy_buffer_to_buffer(

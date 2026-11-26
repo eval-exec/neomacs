@@ -1111,6 +1111,8 @@ pub fn chars_in_multibyte(bytes: &[u8]) -> usize {
 /// content this computes the same count without the walk.
 #[inline]
 fn count_lead_bytes(bytes: &[u8]) -> usize {
+    #[cfg(any(test, feature = "test-support"))]
+    record_position_conversion_walked_bytes(bytes.len());
     bytes.iter().filter(|&&b| (b & 0xC0) != 0x80).count()
 }
 
@@ -1148,6 +1150,22 @@ pub use data::unibyte_case_fold_match_len;
 thread_local! {
     static POSITION_CONVERSION_SCAN_STEPS: std::cell::Cell<usize> =
         const { std::cell::Cell::new(0) };
+    static POSITION_CONVERSION_WALKED_BYTES: std::cell::Cell<usize> =
+        const { std::cell::Cell::new(0) };
+}
+
+/// Count optimized lead-count and conversion-loop visits, including repeated
+/// block probes. Debug-only semantic decoder cross-checks are not included.
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn record_position_conversion_walked_bytes(bytes: usize) {
+    POSITION_CONVERSION_WALKED_BYTES.with(|walked| walked.set(walked.get() + bytes));
+}
+
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn position_conversion_walked_bytes_for_test() -> usize {
+    POSITION_CONVERSION_WALKED_BYTES.with(std::cell::Cell::get)
 }
 
 #[cfg(any(test, feature = "test-support"))]
@@ -1192,6 +1210,8 @@ pub fn char_to_byte_pos(bytes: &[u8], char_idx: usize) -> usize {
         base += BLOCK;
     }
     for (i, &b) in bytes[base..].iter().enumerate() {
+        #[cfg(any(test, feature = "test-support"))]
+        record_position_conversion_walked_bytes(1);
         if (b & 0xC0) != 0x80 {
             remaining -= 1;
             if remaining == 0 {
@@ -1201,7 +1221,11 @@ pub fn char_to_byte_pos(bytes: &[u8], char_idx: usize) -> usize {
                 return start
                     + bytes[start + 1..]
                         .iter()
-                        .position(|&b| (b & 0xC0) != 0x80)
+                        .position(|&b| {
+                            #[cfg(any(test, feature = "test-support"))]
+                            record_position_conversion_walked_bytes(1);
+                            (b & 0xC0) != 0x80
+                        })
                         .map_or(bytes.len() - start, |n| n + 1);
             }
         }
@@ -1233,6 +1257,8 @@ pub(crate) fn char_to_byte_pos_from_end(bytes: &[u8], chars_before_end: usize) -
         end -= BLOCK;
     }
     for pos in (0..end).rev() {
+        #[cfg(any(test, feature = "test-support"))]
+        record_position_conversion_walked_bytes(1);
         if (bytes[pos] & 0xC0) != 0x80 {
             remaining -= 1;
             if remaining == 0 {

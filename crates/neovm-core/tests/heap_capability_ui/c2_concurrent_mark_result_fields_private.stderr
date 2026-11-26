@@ -1,0 +1,13 @@
+error[E0451]: fields `heap`, `deferred`, `promo` and `symbols` of struct `ConcurrentMarkResult` are private
+  --> tests/heap_capability_ui/c2_concurrent_mark_result_fields_private.rs:16:9
+   |
+15 |     let _forged = concurrent_mark_result::ConcurrentMarkResult {
+   |                   -------------------------------------------- in this type
+16 |         heap: HeapIdentity(1),
+   |         ^^^^ private field
+17 |         deferred: Vec::new(),
+   |         ^^^^^^^^ private field
+18 |         promo: Vec::new(),
+   |         ^^^^^ private field
+19 |         symbols: Vec::new(),
+   |         ^^^^^^^ private field

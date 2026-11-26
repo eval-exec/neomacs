@@ -33,7 +33,8 @@ impl CollectorQuiescence {
     pub(super) fn check(heap: &mut TaggedHeap) -> Result<Self, CollectorQuiescenceError> {
         // Do not mint stopped SATB access while a worker can still read this
         // epoch, or mutate any collector/young state before admission succeeds.
-        if heap.concurrent_mark_running
+        if heap.has_owner_cons_reserves()
+            || heap.has_unfinished_concurrent_mark()
             || heap.mark_in_progress
             || heap.generational.major_in_progress
             || heap.sweep_in_progress
@@ -469,10 +470,14 @@ impl TaggedHeap {
     }
 
     fn check_concurrent_capture(&self) -> Result<(), ConcurrentMarkAdmissionError> {
+        if self.has_owner_cons_reserves() {
+            return Err(ConcurrentMarkAdmissionError::CollectorBusy);
+        }
         if self.facade_mark_is_excluded() {
             return Err(ConcurrentMarkAdmissionError::Excluded(self.heap_identity()));
         }
-        if !self.mark_in_progress || self.concurrent_mark_running || self.sweep_in_progress {
+        if !self.mark_in_progress || self.has_unfinished_concurrent_mark() || self.sweep_in_progress
+        {
             return Err(ConcurrentMarkAdmissionError::NotStarted);
         }
         Ok(())
@@ -498,6 +503,11 @@ impl TaggedHeap {
         &mut self,
         reseed: impl FnOnce(&mut TaggedHeap),
     ) -> Result<QuiescentCollector<'_>, CollectorQuiescenceError> {
+        // A closed or forgotten reserve still owns whole blocks. Refuse
+        // before joining, callbacks, or any collector/transport mutation.
+        if self.has_owner_cons_reserves() {
+            return Err(CollectorQuiescenceError::CollectorBusy);
+        }
         // Refuse before joining a marker, invoking root reseeding, draining
         // SATB or changing any collector state. Parking does not return an
         // owned young payload; this owner-confined all-owner counter is O(1).
@@ -509,8 +519,9 @@ impl TaggedHeap {
         if self.gc_locks_poisoned() {
             return Err(CollectorQuiescenceError::PoisonedCollectorState);
         }
-        let had_cycle =
-            self.concurrent_mark_running || self.mark_in_progress || self.sweep_in_progress;
+        let had_cycle = self.has_unfinished_concurrent_mark()
+            || self.mark_in_progress
+            || self.sweep_in_progress;
         if self.first_cycle_concurrent && !had_cycle {
             // Dropping an armed but unbegun permit has traced nothing; it
             // cannot turn the mapped image permanent by minting quiescence.
@@ -556,14 +567,16 @@ impl TaggedHeap {
             let bytes_before = self.live_bytes();
             let pause = std::time::Instant::now();
             self.incremental_drain_all();
-            self.incremental_finish(bytes_before, pause);
+            // SAFETY: quiescence joined the marker. This sweep frees unmarked objects.
+            unsafe { self.incremental_finish(bytes_before, pause) };
         }
         if self.sweep_in_progress {
-            self.finish_incremental_sweep_now();
+            // SAFETY: same quiescence. Drain the sweep before the image is reused.
+            unsafe { self.finish_incremental_sweep_now() };
         }
         self.finish_first_partition_cycle();
         self.close_alloc_regions();
-        if self.concurrent_mark_running
+        if self.has_unfinished_concurrent_mark()
             || self.mark_in_progress
             || self.sweep_in_progress
             || self.generational.major_in_progress
@@ -593,7 +606,6 @@ impl TaggedHeap {
             || self.staged_mapped_cons_scan.is_some()
             || self.staged_mapped_veclikes.is_some()
             || self.concurrent_hash_snapshot().is_some()
-            || self.gc_exited.is_some()
             || !self.retired_vector_buffers.is_empty()
         {
             return Err(CollectorQuiescenceError::PendingSnapshot);
@@ -619,12 +631,13 @@ mod tests {
     fn heapborrow_r5_clear_tls_preserves_collector_loan() {
         let heap = aliasable::AliasableBox::new(TaggedHeap::new());
         let root = heap.root();
-        set_tagged_heap_root(root);
+        unsafe { set_tagged_heap_root(root) };
         // SAFETY: sole stopped owner, no live mark or external roots. Clearing
         // TLS must compare only the root address while this loan is retained.
         let identity = heap.heap_identity();
         let collector = unsafe { (*root.as_ptr()).drain_to_quiescent(|_| {}) }.unwrap();
-        clear_tagged_heap_root_if_installed(root);
+        // SAFETY: standalone `TestHeap` fixture detached for quiescent collector check.
+        unsafe { clear_tagged_heap_root_if_installed(root) };
         assert!(!tagged_heap_is_installed());
         assert_eq!(collector.heap_identity(), identity);
         drop(collector);
@@ -720,7 +733,7 @@ mod tests {
         ));
         assert_eq!(heap.mark_parity, parity);
         assert_eq!(heap.handshake.start_count, starts);
-        assert!(!heap.mark_in_progress && !heap.concurrent_mark_running);
+        assert!(!heap.mark_in_progress && !heap.concurrent_mark_running());
         assert!(!heap.first_cycle_concurrent && !heap.dump_blackened);
         assert!(heap.pending_obarray_scan.is_none());
         assert!(heap.staged_mapped_cons_scan.is_none());
@@ -755,7 +768,7 @@ mod tests {
         assert!(
             matches!(capture.launch(), Err(ConcurrentMarkAdmissionError::ForeignHeap { expected, .. }) if expected == admitted_identity)
         );
-        assert!(!heap.concurrent_mark_running);
+        assert!(!heap.concurrent_mark_running());
         assert_eq!(heap.handshake.start_count, 0);
         assert_eq!(foreign.heap_identity(), admitted_identity);
         // SAFETY: the swapped-out admitted heap is still exclusively owned;
@@ -802,7 +815,7 @@ mod tests {
             capture.heap_mut().seed_root(root);
             drop(capture);
             assert!(heap.mark_in_progress);
-            assert!(!heap.concurrent_mark_running);
+            assert!(!heap.concurrent_mark_running());
             assert!(!heap.gray_queue.is_empty());
             let mut reseeded = false;
             // SAFETY: root is this heap's complete external root set. The
@@ -817,7 +830,7 @@ mod tests {
             assert!(reseeded);
             let exclusion = idle.exclude_concurrent_mark().unwrap();
             assert!(!heap.mark_in_progress && !heap.sweep_in_progress);
-            assert!(!heap.concurrent_mark_running);
+            assert!(!heap.concurrent_mark_running());
             assert!(heap.gray_queue.is_empty());
             assert!(!heap.owns_non_cons_object(garbage_address));
             assert!(heap.owns_non_cons_object(child.as_float_ptr().unwrap().cast::<u8>()));
@@ -835,7 +848,7 @@ mod tests {
         capture.heap_mut().seed_root(root);
         capture.launch().unwrap();
         heap.finish_concurrent_mark().unwrap();
-        assert!(!heap.concurrent_mark_running);
+        assert!(!heap.concurrent_mark_running());
         assert!(heap.mark_in_progress);
         assert!(matches!(
             admit(&mut heap),
@@ -885,7 +898,7 @@ mod tests {
         let exclusion = quiescent(&mut heap).exclude_concurrent_mark().unwrap();
         let state = Arc::as_ptr(heap.census.as_ref().unwrap().facade_mark.as_ref().unwrap());
         for _ in 0..2 {
-            heap.collect_exact(std::iter::once(root));
+            heap.collect_rooted(std::iter::once(root));
             assert!(heap.last_census_for_test().is_some());
             assert_eq!(
                 Arc::as_ptr(heap.census.as_ref().unwrap().facade_mark.as_ref().unwrap()),
@@ -910,7 +923,7 @@ mod tests {
         capture.heap_mut().seed_root(root);
         drop(capture);
         heap.incremental_drain_all();
-        heap.incremental_finish(heap.live_bytes(), std::time::Instant::now());
+        heap.incremental_finish_for_test(heap.live_bytes(), std::time::Instant::now());
         assert!(!heap.mark_in_progress && heap.sweep_in_progress);
         assert!(matches!(
             admit(&mut heap),
@@ -980,3 +993,7 @@ pub(super) use cons_suspend::SuspendedConsCollector;
 pub mod heap_transfer;
 
 mod source_observations;
+
+#[cfg(all(test, miri))]
+#[path = "facade_mark/numeric_storage_miri.rs"]
+mod numeric_storage_miri;

@@ -1,7 +1,10 @@
+use super::super::super::shims::{
+    clear_current_leaf_bases, enter_armed_live_extent, is_inside_native_extent, publish_leaf_bases,
+};
 use super::super::{PERSISTENT_TEST_OVERRIDE, SHARED_JIT, SharedJit};
 use super::{
-    CURRENT_LEAF_BASES, DetachedSourceBackend, PENDING_FLOW, PENDING_ROOT_SWEEP_FLOOR,
-    PENDING_SHIM_PANIC, SourceBackendError, SourceBackendSlot,
+    DetachedSourceBackend, PENDING_FLOW, PENDING_ROOT_SWEEP_FLOOR, PENDING_SHIM_PANIC,
+    SourceBackendError, SourceBackendSlot,
 };
 use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::eval::Context;
@@ -16,12 +19,12 @@ fn function() -> crate::emacs_core::bytecode::ByteCodeFunction {
         optional: Vec::new(),
         rest: None,
     });
-    function.ops = vec![
+    function.set_ops(vec![
         crate::emacs_core::bytecode::opcode::Op::Constant(0),
         crate::emacs_core::bytecode::opcode::Op::Return,
-    ];
-    function.constants = vec![Value::fixnum(73)].into();
-    function.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
+    ]);
+    function.set_constants(vec![Value::fixnum(73)].into());
+    function.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
     function
 }
 
@@ -29,7 +32,7 @@ fn fixture() -> DetachedSourceCache {
     crate::emacs_core::jit::cache::reset_carrier_tls();
     PENDING_FLOW.with(|slot| *slot.borrow_mut() = None);
     PENDING_SHIM_PANIC.with(|slot| *slot.borrow_mut() = None);
-    CURRENT_LEAF_BASES.with(|slot| slot.set(None));
+    clear_current_leaf_bases();
     PENDING_ROOT_SWEEP_FLOOR.with(|slot| slot.set(None));
     let mut source = Box::new(Context::new_minimal_vm_harness(
         crate::test_utils::unit_harness(),
@@ -50,7 +53,8 @@ fn fixture() -> DetachedSourceCache {
     assert_eq!(compiled.unwrap(), Some(Value::fixnum(73).bits()));
     assert!(SHARED_JIT.with(|cell| cell.borrow().is_some()));
     let owner = SourceCacheOwner::for_context(&source);
-    neovm_value::tagged::gc::clear_tagged_heap_if_installed(&source.tagged_heap);
+    // SAFETY: `source` is immediately wrapped in `ManuallyDrop` and never evaluated again.
+    unsafe { neovm_value::tagged::gc::clear_tagged_heap_if_installed(&source.tagged_heap) };
     let _source = ManuallyDrop::new(source);
     // SAFETY: isolated sole-source fixture. Execution, store, and collector
     // frames have returned, the original Context is retained, and no
@@ -152,16 +156,25 @@ fn pentry_e2b_source_jit_backend_native_frame_publication_is_not_cleared() {
     let cache = fixture();
     let original = address();
     // Refusal only examines the published marker and never dereferences it.
-    let marker = std::ptr::NonNull::dangling();
-    CURRENT_LEAF_BASES.with(|slot| slot.set(Some(marker)));
-    assert_eq!(
-        withdraw(&cache).unwrap_err(),
-        SourceBackendError::NativeFramePublished
-    );
-    assert_eq!(
-        CURRENT_LEAF_BASES.with(|slot| slot.replace(None)),
-        Some(marker)
-    );
+    {
+        // SAFETY: `withdraw` only inspects `is_inside_native_extent` and never
+        // dereferences the dangling pointer before `_framed` restores `OUTSIDE`.
+        let _framed = unsafe { publish_leaf_bases(Some(std::ptr::NonNull::dangling())) };
+        assert_eq!(
+            withdraw(&cache).unwrap_err(),
+            SourceBackendError::NativeFramePublished
+        );
+        assert!(is_inside_native_extent());
+    }
+    {
+        let _live = enter_armed_live_extent();
+        assert_eq!(
+            withdraw(&cache).unwrap_err(),
+            SourceBackendError::NativeFramePublished
+        );
+        assert!(is_inside_native_extent());
+    }
+    assert!(!is_inside_native_extent());
     assert_eq!(address(), original);
 }
 

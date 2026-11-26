@@ -57,6 +57,88 @@ fn oracle_read_from_string_malformed_error_payloads() {
 }
 
 #[test]
+fn oracle_read_symbols_intern_into_the_current_obarray() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+
+    // GNU's reader interns every symbol token into the current `Vobarray`
+    // while reading (`lread.c:4217-4249`), so a `let`-bound custom `obarray`
+    // receives the symbols the read returns: the object that obarray already
+    // holds for a spelling, otherwise a fresh symbol. A non-obarray value
+    // signals `wrong-type-argument` at the token, while reader-inserted
+    // constants (`quote`), `#:` uninterned symbols and the global spelling
+    // stay outside the custom obarray.
+    let form = r###"
+(list
+ (let* ((ob (obarray-make)) (s (let ((obarray ob)) (read "peer-oracle-a"))))
+   (list (eq s (intern "peer-oracle-a")) (eq s (intern "peer-oracle-a" ob))))
+ (let* ((ob (obarray-make)) (pre (intern "peer-oracle-b" ob))
+        (s (let ((obarray ob)) (read "peer-oracle-b"))))
+   (eq s pre))
+ (condition-case err (let ((obarray 42)) (read "peer-oracle-c"))
+   (error (list (car err) (cdr err))))
+ (let* ((ob (obarray-make)) (s (let ((obarray ob)) (read "nil"))))
+   (list (eq s nil) (eq s (intern "nil" ob))))
+ (let* ((ob (obarray-make)) (v (let ((obarray ob)) (read "(a (b . c))"))))
+   (list (eq (car v) (intern "a" ob)) (eq (car (cadr v)) (intern "b" ob))
+         (eq (cdr (cadr v)) (intern "c" ob)) (eq (car v) (intern "a"))))
+ (let* ((ob (obarray-make)) (s (let ((obarray ob)) (read "#:peer-oracle-u"))))
+   (list (intern-soft "peer-oracle-u" ob) (symbol-name s)))
+ (let* ((ob (obarray-make))
+        (r (let ((obarray ob)) (read-from-string "peer-oracle-r"))))
+   (list (eq (car r) (intern "peer-oracle-r" ob))
+         (eq (car r) (intern "peer-oracle-r"))))
+ (let* ((ob (obarray-make)) (v (let ((obarray ob)) (read "'peer-oracle-q"))))
+   (list (intern-soft "quote" ob) (eq (car v) 'quote)))
+ (let* ((ob (obarray-make)) (s (let ((obarray ob)) (read "##"))))
+   (list (symbol-name s) (eq s (intern "" ob)) (eq s (intern ""))))
+ (let* ((ob (obarray-make))
+        (s (let ((obarray ob))
+             (let ((read-symbol-shorthands '(("pre-" . "post-"))))
+               (read "#_pre-x")))))
+   (list (symbol-name s) (eq s (intern "pre-x" ob))))
+ (let ((obarray 42)) (read "42"))
+ (condition-case err (let ((obarray 42)) (read "("))
+   (error (list (car err) (cdr err))))
+ (let ((obarray 42))
+   (condition-case e (read "peer-oracle-z")
+     (error (list e (eq obarray 42) (obarrayp obarray)))))
+ (let ((obarray 42))
+   (condition-case e (intern "peer-oracle-z")
+     (error (list e (eq obarray 42) (obarrayp obarray)))))
+ (let* ((ob (obarray-make))
+        (chars (string-to-list "peer-live-sym"))
+        (i 0)
+        (fn (lambda (&optional c)
+              (cond ((characterp c) (setq i (1- i)) nil)
+                    ((< i (length chars))
+                     (prog1 (nth i chars) (setq i (1+ i))))
+                    (t nil)))))
+   (let ((s (let ((obarray ob)) (read fn))))
+     (list (eq s (intern "peer-live-sym" ob))
+           (eq s (intern "peer-live-sym")))))
+ (let* ((a (vector 1 nil)) (b (vector 1 nil)))
+   (let ((obarray a))
+     (condition-case e (intern "peer-prec-x" b)
+       (error (list (car e) (car (cdr e))
+                    (equal (car (cddr e)) b)
+                    (eq obarray a))))))
+ (let* ((ob (obarray-make))
+        (fn (lambda (&optional c)
+              (signal 'wrong-type-argument (list 'obarrayp ob)))))
+   (let ((obarray ob))
+     (condition-case e (read fn)
+       (error (list (car e) (car (cdr e))
+                    (eq (car (cddr e)) ob)
+                    (eq obarray ob)))))))
+"###;
+
+    let expect = expect_test::expect![[
+        r#""OK ((nil t) t (wrong-type-argument (obarrayp 42)) (nil t) (t t t nil) (nil \"peer-oracle-u\") (t nil) (nil t) (\"\" t nil) (\"pre-x\" t) 42 (end-of-file nil) ((wrong-type-argument obarrayp 42) nil t) ((wrong-type-argument obarrayp 42) nil t) (t nil) (wrong-type-argument obarrayp t t) (wrong-type-argument obarrayp t t))""#
+    ]];
+    crate::common::assert_oracle_parity_expect(form, expect);
+}
+
+#[test]
 fn oracle_read_from_string_hash_skip_lazy_string_semantics() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 

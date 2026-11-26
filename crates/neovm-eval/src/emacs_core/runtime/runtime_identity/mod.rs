@@ -81,29 +81,17 @@ std::cfg_select! {
         #[cfg(not(miri))]
         fn lookup_passwd_by_uid(uid: i64) -> Option<PasswdEntry> {
             let uid = libc::uid_t::try_from(uid).ok()?;
-            let mut buffer_len = 1024usize;
-            loop {
-                let mut buffer = vec![0u8; buffer_len];
-                let mut passwd = unsafe { std::mem::zeroed::<libc::passwd>() };
-                let mut result = std::ptr::null_mut();
-                let status = unsafe {
-                    libc::getpwuid_r(
-                        uid,
-                        &mut passwd,
-                        buffer.as_mut_ptr().cast(),
-                        buffer.len(),
-                        &mut result,
-                    )
-                };
-                if status == 0 {
-                    return (!result.is_null())
-                        .then(|| passwd_entry_from_raw(&passwd))
-                        .flatten();
-                }
-                if status != libc::ERANGE || buffer_len >= 1 << 20 {
-                    return None;
-                }
-                buffer_len *= 2;
+            // SAFETY: `libc::passwd` is a C POD struct; `getpwuid_r` populates
+            // `entry` and writes string storage into `buf` when it returns `0`
+            // with a non-null `result`.
+            unsafe {
+                neovm_value::system_vocab::posix_lookup::retry_erange_lookup::<
+                    libc::passwd,
+                    PasswdEntry,
+                >(
+                    |entry, buf, len, result| libc::getpwuid_r(uid, entry, buf, len, result),
+                    passwd_entry_from_raw,
+                )
             }
         }
 
@@ -115,29 +103,20 @@ std::cfg_select! {
         #[cfg(not(miri))]
         fn lookup_passwd_by_login(login: &str) -> Option<PasswdEntry> {
             let login = CString::new(login).ok()?;
-            let mut buffer_len = 1024usize;
-            loop {
-                let mut buffer = vec![0u8; buffer_len];
-                let mut passwd = unsafe { std::mem::zeroed::<libc::passwd>() };
-                let mut result = std::ptr::null_mut();
-                let status = unsafe {
-                    libc::getpwnam_r(
-                        login.as_ptr(),
-                        &mut passwd,
-                        buffer.as_mut_ptr().cast(),
-                        buffer.len(),
-                        &mut result,
-                    )
-                };
-                if status == 0 {
-                    return (!result.is_null())
-                        .then(|| passwd_entry_from_raw(&passwd))
-                        .flatten();
-                }
-                if status != libc::ERANGE || buffer_len >= 1 << 20 {
-                    return None;
-                }
-                buffer_len *= 2;
+            // SAFETY: `libc::passwd` is a C POD struct; `login` is a valid
+            // NUL-terminated C string; `getpwnam_r` populates `entry` and
+            // writes string storage into `buf` when it returns `0` with a
+            // non-null `result`.
+            unsafe {
+                neovm_value::system_vocab::posix_lookup::retry_erange_lookup::<
+                    libc::passwd,
+                    PasswdEntry,
+                >(
+                    |entry, buf, len, result| {
+                        libc::getpwnam_r(login.as_ptr(), entry, buf, len, result)
+                    },
+                    passwd_entry_from_raw,
+                )
             }
         }
 

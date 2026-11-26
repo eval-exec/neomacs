@@ -170,6 +170,10 @@ fn frozen_long_chain_reaches_specific_then_fallback_winner_after_thirty_two_entr
     let (live, live_scopes) = resolver(LAST_WINNER);
     let expected = resolve(&live).expect("live long-chain winner");
     assert_eq!(*live_scopes.lock().unwrap(), expected_long_chain());
+    // The live walk moved the winner to the front of the shared fallback
+    // order. This row checks that a fresh order still walks every captured
+    // entry; the shared promotion has its own row.
+    crate::font::fallback_order::clear_fallback_orders();
     let (mut worker, scopes) = resolver(LAST_WINNER);
     worker.install_worker_policy(policy);
     assert_eq!(resolve(&worker), Some(expected));

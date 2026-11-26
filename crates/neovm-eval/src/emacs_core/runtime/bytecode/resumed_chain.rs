@@ -448,7 +448,8 @@ impl<'a> Vm<'a> {
             } else {
                 &inlined[i - 1].frame
             };
-            if frame.stack.len() > code.max_stack.get() || frame.pc >= code.executable_ops().len() {
+            if frame.stack.len() > code.max_stack().get() || frame.pc >= code.executable_ops().len()
+            {
                 return None;
             }
         }
@@ -498,7 +499,7 @@ impl<'a> Vm<'a> {
             fun: frame.function,
         });
         // Validated: frame_base + max_stack bounds the frame.
-        let frame_limit = frame_base + code.max_stack.get();
+        let frame_limit = frame_base + code.max_stack().get();
         if self.ctx.bc_buf.capacity() < frame_limit {
             if let Err(error) = self
                 .ctx
@@ -522,6 +523,18 @@ impl<'a> Vm<'a> {
             handlers.push(Handler::Condition);
         }
         let mut bind_stack: BindStack = frame.binds.iter().copied().collect();
+        // A shortfall is not depth 0. Depth 0 is a real proof entry, so a
+        // saturating subtract would fail open wherever that entry is proven.
+        let trust_stack_proof = self
+            .ctx
+            .bc_buf
+            .len()
+            .checked_sub(frame_base)
+            .is_some_and(|depth| Self::resume_trusts_stack_proof(code, pc, depth, frame.handlers));
+        #[cfg(test)]
+        if trust_stack_proof {
+            super::VERIFIED_RESUME_ENTRIES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
         let result = match entry {
             ChainFrameEntry::Run => self.run_loop(
                 code,
@@ -530,8 +543,13 @@ impl<'a> Vm<'a> {
                 &mut handlers,
                 &mut bind_stack,
                 false,
+                trust_stack_proof,
             ),
             ChainFrameEntry::Raise(flow) => {
+                // Trust belongs to the (pc, depth) above. `resume_nonlocal`
+                // moves both before this restart. An empty handler stack
+                // cannot return `Ok` here, and a restarted frame must not
+                // inherit the old proof.
                 match self.resume_nonlocal(code, &mut pc, &mut handlers, &mut bind_stack, flow) {
                     Ok(()) => self.run_loop(
                         code,
@@ -539,6 +557,7 @@ impl<'a> Vm<'a> {
                         &mut pc,
                         &mut handlers,
                         &mut bind_stack,
+                        false,
                         false,
                     ),
                     Err(flow) => Err(flow),

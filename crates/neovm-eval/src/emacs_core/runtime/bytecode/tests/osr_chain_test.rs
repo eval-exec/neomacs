@@ -15,10 +15,10 @@ fn code(nargs: usize, ops: Vec<Op>, constants: Vec<Value>) -> Value {
             .map(|n| intern(&format!("osr-chain-arg-{n}")))
             .collect(),
     ));
-    code.lexical = true;
-    code.ops = ops;
-    code.constants = constants.into();
-    code.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
+    code.set_lexical(true);
+    code.set_ops(ops);
+    code.set_constants(constants.into());
+    code.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
     code.seal_hand_assembled_ops_for_test();
     Value::make_bytecode(code)
 }
@@ -100,6 +100,7 @@ fn osr_chain_in_place_returns_the_call_result_without_running_the_physical_tail(
         &mut pc,
         &mut HandlerStack::new(),
         &mut BindStack::new(),
+        true,
         true,
     );
     let result = vm.cleanup_bytecode_frame(result, 0, 0, 1).unwrap();
@@ -326,6 +327,7 @@ fn osr_chain_in_place_error_is_offered_to_the_existing_physical_handler() {
         &mut handlers,
         &mut binds,
         true,
+        true,
     );
     assert_eq!(
         vm.cleanup_bytecode_frame(result, 0, 0, 0).unwrap(),
@@ -438,7 +440,7 @@ fn osr_hof_chain_in_place_resumes_the_current_callback_and_mapping_once() {
         .load(std::sync::atomic::Ordering::Relaxed);
     let mut vm = Vm::from_context(&mut ctx);
     let mut aux = InterpreterFrameAuxStack::new(HandlerStack::new(), BindStack::new());
-    let outcome = vm.osr_transfer(physical.get_bytecode_data().unwrap(), 0, 0, &mut aux);
+    let outcome = vm.osr_transfer::<false>(physical.get_bytecode_data().unwrap(), 0, 0, &mut aux);
     let OsrOutcome::Interpret { pc: next, .. } = outcome else {
         panic!("a callback overflow must hand the physical frame back in place");
     };
@@ -463,10 +465,228 @@ fn osr_hof_chain_in_place_resumes_the_current_callback_and_mapping_once() {
         &mut HandlerStack::new(),
         &mut BindStack::new(),
         true,
+        true,
     );
     assert_eq!(vm.cleanup_bytecode_frame(result, 0, 0, 0).unwrap(), mapped);
     assert!(vm.ctx.bc_buf.is_empty());
     assert!(vm.ctx.bc_frames.is_empty());
     compile::force_inline2_for_test(None);
     crate::emacs_core::jit::inline::force_inline_for_test(None);
+}
+
+/// An eager physical body has no lazy proof, so this verified precise deopt
+/// stays on the checked driver. It would still pass if `proves_depth`
+/// returned true unconditionally. The lazy body that does install in place
+/// is [`verified_osr_hof_lazy_body_installs_in_place`].
+#[cfg(feature = "jit")]
+#[test]
+fn verified_osr_precise_deopt_finishes_on_the_checked_driver() {
+    use crate::emacs_core::jit::compile::{self, Inline2Mode};
+    let _mode =
+        crate::emacs_core::jit::bg::TestModeScope::enter(crate::emacs_core::jit::bg::BgMode::Sync);
+    crate::emacs_core::jit::inline::force_inline_for_test(Some(true));
+    compile::force_inline2_for_test(Some(Inline2Mode::Hof));
+    compile::force_deopt_for_test(false);
+    let mut ctx = context();
+    crate::emacs_core::jit::force_jit_off_for_test(false);
+    let inner = code(1, vec![Op::StackRef(0), Op::Add1, Op::Return], vec![]);
+    inner
+        .get_bytecode_data()
+        .unwrap()
+        .jit_runtime()
+        .set_hot_for_test();
+    let physical = code(
+        1,
+        vec![
+            Op::Constant(0),
+            Op::Constant(1),
+            Op::StackRef(2),
+            Op::Call(2),
+            Op::Return,
+        ],
+        vec![Value::symbol("mapcar"), inner],
+    );
+    let maximum = Value::fixnum(Value::MOST_POSITIVE_FIXNUM);
+    let sequence = Value::list_from_slice(&[maximum, Value::fixnum(5)]);
+    ctx.bc_buf.push(sequence);
+    park_physical(&mut ctx, physical, 0);
+    let mut vm = Vm::from_context(&mut ctx);
+    let mut aux = InterpreterFrameAuxStack::new(HandlerStack::new(), BindStack::new());
+    let outcome = vm.osr_transfer::<true>(physical.get_bytecode_data().unwrap(), 0, 0, &mut aux);
+    let mapped = match outcome {
+        OsrOutcome::Returned(mapped) => mapped,
+        OsrOutcome::Interpret { pc, .. } => {
+            panic!("verified precise deopt resumed in place at pc {pc}")
+        }
+        OsrOutcome::Exited => panic!("verified precise deopt exited instead of returning"),
+    };
+    assert!(mapped.cons_car().is_bignum());
+    assert_eq!(mapped.cons_cdr().cons_car(), Value::fixnum(6));
+    assert!(mapped.cons_cdr().cons_cdr().is_nil());
+    compile::force_inline2_for_test(None);
+    crate::emacs_core::jit::inline::force_inline_for_test(None);
+}
+
+/// Lazy mapcar body whose `Dup` is proven at the same depth as `Call(2)`.
+///
+/// Bytes are constant, constant, stack-ref 2, dup, pop, call 2, return.
+/// Entry depth is the one required argument (fixnum descriptor 257). Dup
+/// and the call are both depth 4; the pop between them is depth 5, so the
+/// instruction after Dup is not the post-call depth.
+#[cfg(feature = "jit")]
+fn lazy_hof_physical(inner: Value) -> Value {
+    let params = crate::emacs_core::bytecode::FunctionParams::try_from(Value::fixnum(257))
+        .expect("fixnum arglist 257");
+    let mut func = ByteCodeFunction::new(params);
+    // OSR compiles only a lexical body. The fixnum descriptor already puts
+    // the argument on the stack, so this flag does not change entry depth.
+    func.set_lexical(true);
+    func.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(8));
+    func.set_constants(vec![Value::symbol("mapcar"), inner].into());
+    func.set_gnu_bytecode_bytes(Some(neovm_value::tagged::header::LispByteVec::owned(vec![
+        192, 193, 2, 137, 136, 34, 135,
+    ])));
+    func.defer_gnu_decode();
+    let value = Value::make_bytecode(func);
+    let data = value.get_bytecode_data().expect("bytecode");
+    assert!(
+        data.lazy_gnu_code().is_some(),
+        "the physical body must keep a lazy GNU cell"
+    );
+    assert!(data.executes_verified_ops(), "the lazy body must verify");
+    assert_eq!(
+        data.executable_ops(),
+        &[
+            Op::Constant(0),
+            Op::Constant(1),
+            Op::StackRef(2),
+            Op::Dup,
+            Op::Pop,
+            Op::Call(2),
+            Op::Return,
+        ]
+    );
+    let proof = data
+        .lazy_gnu_code()
+        .as_ref()
+        .and_then(|lazy| lazy.proof())
+        .expect("published stack proof");
+    assert!(proof.proves_depth(3, 4), "Dup is proven at the call depth");
+    assert!(proof.proves_depth(5, 4), "Call(2) is proven at depth 4");
+    assert!(
+        !proof.proves_depth(4, 2),
+        "the instruction after Dup is not the post-call depth"
+    );
+    assert!(proof.proves_depth(6, 2), "Return is the post-call depth");
+    value
+}
+
+#[cfg(feature = "jit")]
+fn arm_hof_osr() {
+    crate::emacs_core::jit::inline::force_inline_for_test(Some(true));
+    crate::emacs_core::jit::compile::force_inline2_for_test(Some(
+        crate::emacs_core::jit::compile::Inline2Mode::Hof,
+    ));
+    crate::emacs_core::jit::compile::force_deopt_for_test(false);
+    crate::emacs_core::jit::force_jit_off_for_test(false);
+}
+
+#[cfg(feature = "jit")]
+fn disarm_hof_osr() {
+    crate::emacs_core::jit::compile::force_inline2_for_test(None);
+    crate::emacs_core::jit::inline::force_inline_for_test(None);
+}
+
+/// The verified driver installs a real lazy HOF deopt in place. The op at
+/// the recorded pc is `Call(2)`, and the proof at `pc + 1` is `len - 2`.
+#[cfg(feature = "jit")]
+#[test]
+fn verified_osr_hof_lazy_body_installs_in_place() {
+    let _mode =
+        crate::emacs_core::jit::bg::TestModeScope::enter(crate::emacs_core::jit::bg::BgMode::Sync);
+    let mut ctx = context();
+    arm_hof_osr();
+    let inner = code(1, vec![Op::StackRef(0), Op::Add1, Op::Return], vec![]);
+    inner
+        .get_bytecode_data()
+        .unwrap()
+        .jit_runtime()
+        .set_hot_for_test();
+    let physical = lazy_hof_physical(inner);
+    let maximum = Value::fixnum(Value::MOST_POSITIVE_FIXNUM);
+    let sequence = Value::list_from_slice(&[maximum, Value::fixnum(5)]);
+    ctx.bc_buf.push(sequence);
+    park_physical(&mut ctx, physical, 0);
+    let before = super::super::VERIFIED_RESUME_ENTRIES.load(std::sync::atomic::Ordering::Relaxed);
+    let mut vm = Vm::from_context(&mut ctx);
+    let mut aux = InterpreterFrameAuxStack::new(HandlerStack::new(), BindStack::new());
+    let outcome = vm.osr_transfer::<true>(physical.get_bytecode_data().unwrap(), 0, 0, &mut aux);
+    let OsrOutcome::Interpret { pc: next, .. } = outcome else {
+        let kind = match outcome {
+            OsrOutcome::Returned(_) => "returned",
+            OsrOutcome::Exited => "exited",
+            OsrOutcome::Interpret { .. } => "interpret",
+        };
+        panic!("a verified lazy HOF deopt must install in place ({kind})");
+    };
+    assert_eq!(
+        next, 6,
+        "in place continues at the instruction after Call(2)"
+    );
+    assert_eq!(
+        super::super::VERIFIED_RESUME_ENTRIES.load(std::sync::atomic::Ordering::Relaxed),
+        before + 1,
+        "the in-place verified resume must count"
+    );
+    assert_eq!(vm.ctx.depth, 1);
+    assert!(vm.ctx.specpdl.is_empty());
+    assert_eq!(vm.ctx.bc_frames.len(), 1);
+    let mapped = vm.ctx.bc_buf[1];
+    assert!(mapped.cons_car().is_bignum());
+    assert_eq!(mapped.cons_cdr().cons_car(), Value::fixnum(6));
+    assert!(mapped.cons_cdr().cons_cdr().is_nil());
+    disarm_hof_osr();
+}
+
+/// A deopt map that names `Dup` at the call's proven depth must not install
+/// the verified driver at `pc + 1` with `len - 2`. That point is a `Pop`
+/// proven at depth 5. The resume stays off the verified counter.
+#[cfg(feature = "jit")]
+#[test]
+fn verified_osr_hof_non_call_pc_does_not_install_in_place() {
+    let _mode =
+        crate::emacs_core::jit::bg::TestModeScope::enter(crate::emacs_core::jit::bg::BgMode::Sync);
+    let mut ctx = context();
+    arm_hof_osr();
+    let inner = code(1, vec![Op::StackRef(0), Op::Add1, Op::Return], vec![]);
+    inner
+        .get_bytecode_data()
+        .unwrap()
+        .jit_runtime()
+        .set_hot_for_test();
+    let physical = lazy_hof_physical(inner);
+    let maximum = Value::fixnum(Value::MOST_POSITIVE_FIXNUM);
+    let sequence = Value::list_from_slice(&[maximum, Value::fixnum(5)]);
+    ctx.bc_buf.push(sequence);
+    park_physical(&mut ctx, physical, 0);
+    let before = super::super::VERIFIED_RESUME_ENTRIES.load(std::sync::atomic::Ordering::Relaxed);
+    // Dup is proven at depth 4, the same depth the call's deopt stack has.
+    super::super::HOF_DEOPT_PC_OVERRIDE.with(|slot| slot.set(Some(3)));
+    let mut vm = Vm::from_context(&mut ctx);
+    let mut aux = InterpreterFrameAuxStack::new(HandlerStack::new(), BindStack::new());
+    let outcome = vm.osr_transfer::<true>(physical.get_bytecode_data().unwrap(), 0, 0, &mut aux);
+    if let OsrOutcome::Interpret { pc, .. } = outcome {
+        panic!("a non-Call HOF pc must not install in place at pc {pc}");
+    }
+    assert_eq!(
+        super::super::VERIFIED_RESUME_ENTRIES.load(std::sync::atomic::Ordering::Relaxed),
+        before,
+        "a rejected HOF in-place resume must not count as verified"
+    );
+    assert_eq!(
+        vm.ctx.bc_buf.as_slice(),
+        &[sequence],
+        "a rejected HOF resume must not replace the parked frame in place"
+    );
+    disarm_hof_osr();
 }

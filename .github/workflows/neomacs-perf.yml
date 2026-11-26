@@ -3,9 +3,22 @@ name: neomacs performance suite
 on:
   workflow_dispatch:
     inputs:
+      suite:
+        description: Which performance job(s) to run
+        required: false
+        default: all
+        type: choice
+        options:
+          - all
+          - standard
+          - org-editing-guard
       baseline_editor:
-        description: Absolute path to the immutable GNU Emacs or Neomacs baseline
-        required: true
+        description: Absolute path to the immutable GNU Emacs or Neomacs baseline for the standard suite
+        required: false
+        type: string
+      guard_baseline_editor:
+        description: Absolute path to the extracted immutable v0.0.21 Neomacs binary for org-editing-guard (overrides NEOMACS_PERF_V0021_BASELINE_EDITOR)
+        required: false
         type: string
       cpu:
         description: Isolated logical CPU assigned to editor processes
@@ -39,6 +52,7 @@ permissions:
 jobs:
   standard:
     name: Standard suite on controlled Linux host
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.suite != 'org-editing-guard' }}
     runs-on: [self-hosted, linux, x64, neomacs-perf]
     timeout-minutes: 360
     env:
@@ -111,6 +125,87 @@ jobs:
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: neomacs-perf-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            tmp/perf/
+            tmp/perf-comparisons/
+            tmp/perf-suites/
+          if-no-files-found: warn
+          retention-days: 90
+
+  # Informational until .github/perf-baselines/v0.0.21.json is re-pinned to a
+  # same-profile (`cargo xtask fresh-build --release`) v0.0.21 baseline built on
+  # the controlled runner (the official GitHub Release asset uses
+  # `--profile release-pgo`). Do NOT make this job a required check until
+  # apple-to-apple headroom is measured and recorded.
+  org-editing-guard:
+    name: Org-editing frozen-v0.0.21 instruction guard (+1.0%)
+    needs: [standard]
+    if: ${{ !cancelled() && (github.event_name != 'workflow_dispatch' || inputs.suite != 'standard') }}
+    runs-on: [self-hosted, linux, x64, neomacs-perf]
+    timeout-minutes: 120
+    env:
+      CARGO_TERM_COLOR: always
+      RUST_BACKTRACE: "1"
+      PERF_GUARD_BASELINE: ${{ inputs.guard_baseline_editor || vars.NEOMACS_PERF_V0021_BASELINE_EDITOR }}
+      PERF_CPU: ${{ inputs.cpu || vars.NEOMACS_PERF_CPU }}
+      PERF_GOVERNOR: ${{ inputs.governor || vars.NEOMACS_PERF_GOVERNOR }}
+      PERF_SAMPLES: ${{ inputs.samples || vars.NEOMACS_PERF_SAMPLES || '9' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Verify frozen v0.0.21 baseline and host contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          scripts/ci/verify-perf-baseline.sh \
+            --manifest .github/perf-baselines/v0.0.21.json \
+            --env-var NEOMACS_PERF_V0021_BASELINE_EDITOR \
+            -- "$PERF_GUARD_BASELINE"
+          test -n "$PERF_CPU"
+          test -n "$PERF_GOVERNOR"
+          command -v perf
+          command -v taskset
+          command -v makeinfo
+          command -v install-info
+
+      - name: Set up Rust tooling
+        uses: ./.github/actions/setup-rust
+        with:
+          cache-key: neomacs-perf-controlled-linux-x86_64
+          cache-shared-key: linux-x86_64-release-2
+          cache-save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Build candidate
+        run: cargo xtask fresh-build --release
+
+      - name: Run frozen-baseline org-editing instruction guard (+1.0% budget)
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Scrub loader overrides and every NEOMACS_*/NEOVM_* runtime knob so
+          # both candidate and baseline run under one explicit, recorded
+          # environment (neomacs-perf also constructs an empty arm environment
+          # and pins canonical absolute perf/taskset paths).
+          unset LD_LIBRARY_PATH LD_PRELOAD LD_AUDIT DYLD_LIBRARY_PATH DYLD_FALLBACK_LIBRARY_PATH
+          for var in $(compgen -e | grep -E '^(NEOMACS_|NEOVM_)' || true); do
+            unset "$var"
+          done
+          cargo xtask perf suite org-editing-guard \
+            --baseline-editor "$PERF_GUARD_BASELINE" \
+            --baseline-manifest .github/perf-baselines/v0.0.21.json \
+            --candidate-editor "$PWD/target/release/neomacs" \
+            --samples "$PERF_SAMPLES" \
+            --cpu "$PERF_CPU" \
+            --require-governor "$PERF_GOVERNOR" \
+            --hardware-counters \
+            --counter-scope edit-loop
+
+      - name: Upload immutable org-editing-guard artifacts
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: neomacs-perf-org-guard-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             tmp/perf/
             tmp/perf-comparisons/

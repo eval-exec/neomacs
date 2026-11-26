@@ -32,6 +32,7 @@ const SYNTHETIC_SOURCE_SELECTIVE_ELLIPSIS: u64 = 5;
 pub(crate) struct SyntheticTextSource {
     source_id: u64,
     text: Box<str>,
+    start_offset: usize,
 }
 
 #[derive(Clone, Debug)]
@@ -113,6 +114,7 @@ impl SyntheticTextSource {
         Self {
             source_id,
             text: text.into(),
+            start_offset: 0,
         }
     }
 
@@ -130,6 +132,7 @@ impl SyntheticTextSource {
         Self {
             source_id: marker.source_id(),
             text: marker.text().into(),
+            start_offset: 0,
         }
     }
 
@@ -141,13 +144,39 @@ impl SyntheticTextSource {
             Some(text) if !text.is_empty() => Self {
                 source_id: marker.source_id(),
                 text: text.into(),
+                start_offset: 0,
             },
             _ => Self::marker(marker),
         }
     }
 
+    fn marker_with_text_from_offset(
+        marker: SyntheticTextMarker,
+        text: Option<&str>,
+        start_offset: usize,
+    ) -> Option<Self> {
+        let full = match text {
+            Some(text) if !text.is_empty() => text,
+            _ => marker.text(),
+        };
+        let byte_offset = full
+            .char_indices()
+            .nth(start_offset)
+            .map(|(byte, _)| byte)?;
+        Some(Self {
+            source_id: marker.source_id(),
+            text: full[byte_offset..].into(),
+            start_offset,
+        })
+    }
+
     fn into_item_source(self, face_id: FaceId) -> SyntheticTextItemSource {
-        SyntheticTextItemSource::new(self.source_id, self.text, RenderFaceRef::FaceId(face_id), 0)
+        SyntheticTextItemSource::new(
+            self.source_id,
+            self.text,
+            RenderFaceRef::FaceId(face_id),
+            self.start_offset,
+        )
     }
 }
 
@@ -183,6 +212,21 @@ impl SyntheticTextAppendRequest {
             source: SyntheticTextSource::marker_with_text(marker, text),
             face: SyntheticTextAppendFace::ActiveFace,
         }
+    }
+
+    /// Build a resumed marker request starting at character `start_offset`
+    /// (GNU `dpvec_index` continuation across visual rows).
+    pub(crate) fn active_marker_with_text_from_offset(
+        position: DisplayRowPosition,
+        marker: SyntheticTextMarker,
+        text: Option<&str>,
+        start_offset: usize,
+    ) -> Option<Self> {
+        Some(Self {
+            position,
+            source: SyntheticTextSource::marker_with_text_from_offset(marker, text, start_offset)?,
+            face: SyntheticTextAppendFace::ActiveFace,
+        })
     }
 
     #[cfg(test)]
@@ -363,6 +407,10 @@ impl<'a> BufferSyntheticTextRenderContext<'a> {
             metrics,
             face_attempt,
         }
+    }
+
+    pub(crate) fn wraps(&self) -> bool {
+        self.append_surface.line_wrap().wraps()
     }
 
     pub(crate) fn active_face(&self) -> &'a DisplayRowActiveFaceState {

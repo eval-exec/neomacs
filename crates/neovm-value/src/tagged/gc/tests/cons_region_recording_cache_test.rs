@@ -38,12 +38,12 @@ fn counts(heap: &TaggedHeap) -> (u64, usize, usize, usize) {
 }
 
 fn minor(heap: &mut TaggedHeap, roots: &[TaggedValue]) {
-    heap.begin_minor_collection().unwrap();
+    heap.begin_minor_collection_for_test().unwrap();
     for &root in roots {
         heap.seed_root(root);
     }
-    heap.complete_minor_collection();
-    heap.finish_incremental_sweep_now();
+    heap.complete_minor_collection_for_test();
+    heap.finish_incremental_sweep_now_for_test();
     heap.gc_threshold = usize::MAX / 4;
 }
 
@@ -186,7 +186,7 @@ fn assert_loan_refusal_refunds_cached_grant(heap: &mut TaggedHeap, prior: &[Tagg
     let used_before: usize = heap
         .cons_blocks
         .iter()
-        .map(|block| block.next_index as usize)
+        .map(|block| block.next_index())
         .sum();
     let loan = {
         // SAFETY: this fixture is the exclusive parked owner; no collector or
@@ -203,7 +203,7 @@ fn assert_loan_refusal_refunds_cached_grant(heap: &mut TaggedHeap, prior: &[Tagg
     let used_after: usize = heap
         .cons_blocks
         .iter()
-        .map(|block| block.next_index as usize)
+        .map(|block| block.next_index())
         .sum();
     // Return the actual loan before assertions can unwind the fixture.
     {
@@ -377,8 +377,8 @@ fn recording_cache_black_grants_log_only_handed_prefixes_and_refund_marks() {
     );
     // SAFETY: serial test heap; no concurrent marker has been launched and none can run during the call.
     unsafe { heap.set_concurrent_active_for_test(false) };
-    heap.complete_collection();
-    heap.finish_incremental_sweep_now();
+    heap.complete_collection_for_test();
+    heap.finish_incremental_sweep_now_for_test();
     assert!(
         cells
             .iter()
@@ -433,6 +433,7 @@ fn recording_cache_faults_cannot_be_hidden_by_prior_recording() {
     // skipped second grant must not publish a reusable recording certificate.
     assert_eq!(logged(&mut heap).len(), 1);
     minor(&mut heap, &prior);
+    drop(heap);
 
     let mut corrupt = new_heap();
     let _prior = exhaust_tail(&mut corrupt);
@@ -440,7 +441,9 @@ fn recording_cache_faults_cannot_be_hidden_by_prior_recording() {
         let _fault = ConsAllocatorFaultGuard::inject(ConsAllocatorFault::CorruptAvailable);
         corrupt.alloc_cons(TaggedValue::fixnum(7069), TaggedValue::NIL);
     }
-    let rejected = catch_unwind(AssertUnwindSafe(|| corrupt.begin_minor_collection()));
+    let rejected = catch_unwind(AssertUnwindSafe(|| {
+        corrupt.begin_minor_collection_for_test()
+    }));
     assert!(
         rejected.is_err(),
         "the repeated grant must still reach the real canonical fault site"

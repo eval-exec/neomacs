@@ -24,6 +24,10 @@ const GUI_PROBE: &str = r####"
           (set-window-buffer (selected-window) buffer)
           (with-current-buffer buffer
             (redisplay t)
+            ;; ebox refits mounted viewports through its settle timer after a
+            ;; buffer/window change; the settled rows are the observable ones
+            ;; (the package's own scenarios sleep ebox-viewport-settle-delay).
+            (sleep-for 0.25)
             (let ((window (get-buffer-window buffer t)))
               (list :labs (etaf-algo-lab-labs)
                     :text (buffer-substring-no-properties (point-min) (point-max))
@@ -45,9 +49,10 @@ const GUI_PROBE: &str = r####"
 // TaggedValue::to_equal_key_depth_swp (the stored equal key of a shared
 // structure); both laboratories aborted at 4, 8 and 32 GB address-space
 // limits, so it was unbounded work, not a memory budget.  The stored key walk
-// is now node-budgeted.  This strict parity test reports the remaining
-// divergences as failures: the U+200B line prefix, a 100 vs 101 default
-// height, and 594 vs 581 pixels for the same 34 body lines.
+// is now node-budgeted.  The page height and default height this probe used to
+// report as divergences (GNU 572/101, Neomacs 726/100) now match: the settled
+// ebox viewport is laid out under the same pinned font as GNU's, and the
+// realized default face exposes GNU's `:height`.
 #[test]
 fn etaf_algo_lab_real_gui_workspace_matches_gnu() {
     let oracle = CachedMelpaOracle::new(("etaf-algo-lab", "0.1.1"), "etaf-algo-lab.el")
@@ -61,7 +66,7 @@ fn etaf_algo_lab_real_gui_workspace_matches_gnu() {
     .expect("run real graphical GNU Emacs and Neomacs sequentially");
 
     let expected_gnu = expect![[
-        r#"OK (:labs (pathfinding sorting) :text " \n 算法实验室  寻路实验台   排序实验台   \n   \n 排序实验台 准备就绪  \n   \n 每一列的高度就是一个数字，最下面一行是它的值。  \n 黄色 = 正在比较，紫色 = 正在写回，绿色 = 已经排好。  \n   \n   \n   开始/继续   暂停   单步   跳到完成    \n     \n   重置   批量对比    \n     \n  速度  慢速   正常   快速    \n     \n  算法  冒泡   插入   选择   归并    \n   \n   \n   \n  比较 0 次 · 写入 0 次   \n     \n  跑完后这里记住每种算法比较了多少次。   \n   \n   \n    \n                                                                                      \n                                                                                      \n                                                                                      \n                                                                                      \n                                                                                      \n                                                                                      \n                                                                                      \n                                                                                      \n                                                                                      " :pixel-size (800 . 581) :body-width 100 :body-height 34 :default-family "DejaVu Sans Mono" :default-height 101 :frame-width 100 :frame-height 35)"#
+        r#"OK (:labs (pathfinding sorting) :text "​ \n​ 算法实验室  寻路实验台   排序实验台   \n​   \n​ 排序实验台 准备就绪  \n​   \n​ 每一列的高度就是一个数字，最下面一行是它的值。  \n​ 黄色 = 正在比较，紫色 = 正在写回，绿色 = 已经排好。  \n​   \n​   \n​   开始/继续   暂停   单步   跳到完成    \n​     \n​   重置   批量对比    \n​     \n​  速度  慢速   正常   快速    \n​     \n​  算法  冒泡   插入   选择   归并    \n​   \n​   \n​   \n​  比较 0 次 · 写入 0 次   \n​     \n​  跑完后这里记住每种算法比较了多少次。   \n​   \n​   \n​    \n​                                                                                      " :pixel-size (800 . 572) :body-width 100 :body-height 34 :default-family "DejaVu Sans Mono" :default-height 101 :frame-width 100 :frame-height 35)"#
     ]];
     expected_gnu.assert_eq(&pair.gnu_behavior.to_string());
     // Strict parity: the probe must produce GNU's exact observation.  There

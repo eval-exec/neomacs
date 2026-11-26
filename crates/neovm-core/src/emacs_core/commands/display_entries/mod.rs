@@ -406,6 +406,14 @@ pub(crate) fn builtin_frame_after_make_frame(
         args.first(),
         FrameDomain::Live,
     )?;
+    if let Some(frame) = eval.frame_manager_mut().get_mut(frame_id) {
+        frame.creation_phase = if args[1].is_truthy() {
+            crate::window::FrameCreationPhase::Made
+        } else {
+            crate::window::FrameCreationPhase::BeforeMakeFrame
+        };
+        tracing::debug!(frame_id = frame_id.0, phase = ?frame.creation_phase, "frame creation phase");
+    }
     if args[1].is_truthy() {
         let request = eval.frame_manager().get(frame_id).and_then(|frame| {
             (frame.effective_window_system().is_some()
@@ -419,7 +427,7 @@ pub(crate) fn builtin_frame_after_make_frame(
                 .map_err(|message| signal("error", vec![Value::string(message)]))?;
         }
     }
-    Ok(Value::NIL)
+    Ok(args[1])
 }
 
 pub(crate) fn builtin_frame_font_cache(

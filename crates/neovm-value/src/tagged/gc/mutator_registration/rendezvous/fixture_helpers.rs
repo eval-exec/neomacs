@@ -60,6 +60,19 @@ pub enum RootedRendezvousCase {
     FirstRestoredOwnerWaitsForTheFinalPeerDebt,
     PoisonWakesARestoredOwnerWaitingForPeerDebt,
     StopAndUnrestoredOwnerRefuseInsteadOfWaitingForThemselves,
+    NativeReceiptOutlastsAGateHolderAfterTheCommit,
+    StoppedKeeperWaitsOutABriefGateHolder,
+    KeeperTraceWaitsOutABriefGateHolder,
+    KeeperCompleteWaitsOutABriefGateHolder,
+    KeeperCompleteRetriesAnEntryHeldThroughTheReaderScan,
+    KeeperTakesSummariesThroughItsStop,
+    ABrokenCensusUnderAStopIsNotBusy,
+    KeeperWorldRootCheckWaitsOutABriefGateHolder,
+    KeeperRootReaderWaitsOutAnOwnerMomentOnItsEntry,
+    KeeperReenteringAnEntryItHoldsRefusesAtOnce,
+    KeeperGrantsTheSerialHeadOnlyInsideItsTracedStop,
+    KeeperBoundedStopPendsAndKeepsItsEpoch,
+    KeeperRoutesABatonGroupHeadAndGrantsItAlone,
 }
 
 impl RootedRendezvousCase {
@@ -99,6 +112,19 @@ impl RootedRendezvousCase {
         Self::FirstRestoredOwnerWaitsForTheFinalPeerDebt,
         Self::PoisonWakesARestoredOwnerWaitingForPeerDebt,
         Self::StopAndUnrestoredOwnerRefuseInsteadOfWaitingForThemselves,
+        Self::NativeReceiptOutlastsAGateHolderAfterTheCommit,
+        Self::StoppedKeeperWaitsOutABriefGateHolder,
+        Self::KeeperTraceWaitsOutABriefGateHolder,
+        Self::KeeperCompleteWaitsOutABriefGateHolder,
+        Self::KeeperCompleteRetriesAnEntryHeldThroughTheReaderScan,
+        Self::KeeperTakesSummariesThroughItsStop,
+        Self::ABrokenCensusUnderAStopIsNotBusy,
+        Self::KeeperWorldRootCheckWaitsOutABriefGateHolder,
+        Self::KeeperRootReaderWaitsOutAnOwnerMomentOnItsEntry,
+        Self::KeeperReenteringAnEntryItHoldsRefusesAtOnce,
+        Self::KeeperGrantsTheSerialHeadOnlyInsideItsTracedStop,
+        Self::KeeperBoundedStopPendsAndKeepsItsEpoch,
+        Self::KeeperRoutesABatonGroupHeadAndGrantsItAlone,
     ];
 }
 

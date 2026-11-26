@@ -1,7 +1,7 @@
 use crate::{
-    ImageCacheUsage, ImageColorContext, ImageId, ImageLoadAttempt, ImageLoadToken,
-    ImageNativeExtent, ImageRealization, ImageRgb, ImageRotation, ImageSequenceId, ImageSizeSpec,
-    ImageStateEvent,
+    ImageBackgroundPolicy, ImageCacheUsage, ImageColorContext, ImageId, ImageLoadAttempt,
+    ImageLoadToken, ImageNativeExtent, ImageRealization, ImageRgb, ImageRotation, ImageSequenceId,
+    ImageSizeSpec, ImageStateEvent,
 };
 
 #[test]
@@ -75,18 +75,63 @@ fn image_color_context_keeps_foreground_and_background_roles_distinct() {
             .rgb8(),
         [0xab, 0xcd, 0xef]
     );
+    assert_eq!(colors.frame_background().rgb24(), 0x65_43_21);
+    assert_eq!(colors.specified_background(), None);
+    let with_frame_and_spec = colors
+        .with_frame_background(0x00_fe_dc_ba)
+        .with_specified_background(0x00_11_22_33);
+    assert_eq!(
+        with_frame_and_spec.frame_background().rgb8(),
+        [0xfe, 0xdc, 0xba]
+    );
+    assert_eq!(
+        with_frame_and_spec
+            .specified_background()
+            .map(ImageRgb::rgb8),
+        Some([0x11, 0x22, 0x33])
+    );
+}
+
+#[test]
+fn gif_background_helpers_follow_gnu_frame_and_specified_background_precedence() {
+    let base = ImageColorContext::from_pixels(0x00_10_20_30, 0x00_aa_bb_cc)
+        .with_frame_background(0x00_ee_dd_cc);
+    assert_eq!(base.gif_frame_background_rgba8(), [0xee, 0xdd, 0xcc, 0xff]);
+    assert_eq!(
+        base.gif_transparent_background_rgba8(),
+        [0xee, 0xdd, 0xcc, 0xff],
+        "without :background, GIF transparency uses frame background rather than face background"
+    );
+
+    let with_spec = base.with_specified_background(0x00_11_22_33);
+    assert_eq!(
+        with_spec.gif_frame_background_rgba8(),
+        [0xee, 0xdd, 0xcc, 0xff],
+        "borders outside frame 0 still use frame background even when :background is specified"
+    );
+    assert_eq!(
+        with_spec.gif_transparent_background_rgba8(),
+        [0x11, 0x22, 0x33, 0xff],
+        "explicit :background overrides frame background for transparent GIF pixels"
+    );
+
+    let chrome = with_spec.with_background_policy(ImageBackgroundPolicy::Transparent);
+    assert_eq!(chrome.gif_frame_background_rgba8(), [0, 0, 0, 0]);
+    assert_eq!(chrome.gif_transparent_background_rgba8(), [0, 0, 0, 0]);
 }
 
 /// Issue #556: an absent `frame_foreground` on the wire means the face
 /// foreground, as `from_pixels` documents -- not black, which a plain
-/// `#[serde(default)]` field silently produced.
+/// `#[serde(default)]` field silently produced. Likewise an absent
+/// `frame_background` reads as the face background.
 #[test]
 fn an_absent_wire_frame_foreground_reads_as_the_face_foreground() {
     let colors = ImageColorContext::from_pixels(0x00_11_22_33, 0x00_44_55_66);
     let mut wire = serde_json::to_value(colors).expect("serialize");
-    wire.as_object_mut()
-        .expect("an object")
-        .remove("frame_foreground");
+    let map = wire.as_object_mut().expect("an object");
+    map.remove("frame_foreground");
+    map.remove("frame_background");
+    map.remove("specified_background");
 
     let decoded: ImageColorContext = serde_json::from_value(wire).expect("deserialize");
     assert_eq!(decoded.foreground().rgb24(), 0x11_22_33);
@@ -96,13 +141,21 @@ fn an_absent_wire_frame_foreground_reads_as_the_face_foreground() {
         "the absence means the face foreground, not black"
     );
     assert_eq!(decoded.background().rgb24(), 0x44_55_66);
+    assert_eq!(
+        decoded.frame_background().rgb24(),
+        0x44_55_66,
+        "the absence means the face background, not black"
+    );
+    assert_eq!(decoded.specified_background(), None);
 }
 
-/// With the field present, the value survives the round trip.
+/// With the fields present, the values survive the round trip.
 #[test]
 fn an_explicit_wire_frame_foreground_survives_the_round_trip() {
     let colors = ImageColorContext::from_pixels(0x00_11_22_33, 0x00_44_55_66)
-        .with_frame_foreground(0x00_12_34_56);
+        .with_frame_foreground(0x00_12_34_56)
+        .with_frame_background(0x00_65_43_21)
+        .with_specified_background(0x00_aa_bb_cc);
 
     let json = serde_json::to_string(&colors).expect("serialize");
     let decoded: ImageColorContext = serde_json::from_str(&json).expect("deserialize");

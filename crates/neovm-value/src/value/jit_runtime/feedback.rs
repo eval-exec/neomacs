@@ -1,8 +1,10 @@
 //! Per-source call/arith feedback data (T1-pre).
 //!
-//! Moved definitions from `emacs_core::jit::feedback`; the lattice logic and
-//! every implementation stay in the upper module. The data holds integers,
-//! `SymId`s, `Weak<RuntimeState>` (as `Weak::into_raw`), and no Lisp `Value`.
+//! Moved definitions from `emacs_core::jit::feedback`; the lattice logic
+//! stays in the upper module. The source slots' publication protocol
+//! ([`CallSiteFeedback::claim_source`]) lives here, beside the raw slots it
+//! owns. The data holds integers, `SymId`s, `Weak<RuntimeState>` (as
+//! `Weak::into_raw`), and no Lisp `Value`.
 
 use super::{FeedbackVec, RuntimeState};
 /// One source's feedback (see the module docs).
@@ -57,8 +59,9 @@ pub struct CallSiteFeedback {
     /// (`n << 3 | TAG_POLY`) or `STATE_MEGA`.
     pub(crate) state: AtomicU64,
     /// The sources seen, as `Weak::into_raw` (null = none): each keeps its
-    /// allocation reserved while the site lives. Written before the state
-    /// that names them.
+    /// allocation reserved while the site lives. A slot is published once,
+    /// by compare and swap ([`CallSiteFeedback::claim_source`]), before any
+    /// state that counts it, and only `Drop` releases it.
     pub(crate) sources: [AtomicPtr<RuntimeState>; POLY],
     /// Executions counted by compiled code's recording call shims
     /// (saturating; the interpreter counts none).
@@ -130,16 +133,23 @@ impl CallSites {
     }
 }
 
+/// Where [`CallSiteFeedback::claim_source`] left a source.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[doc(hidden)]
+pub enum SourceClaim {
+    /// This call published the source in this slot.
+    Published(usize),
+    /// This slot already held it: an earlier or a concurrent recorder
+    /// published it.
+    Held(usize),
+    /// Every slot holds another source.
+    Full,
+}
+
 impl CallSiteFeedback {
-    /// # Safety
-    /// No concurrent swap/release of a source slot may overlap a borrowed
-    /// load of that slot. Background compile reads vs mutator recording have
-    /// a known pre-existing gap: see post-split item FEEDBACK-UAF. The caller
-    /// must uphold this exclusion; this extraction preserves existing bodies
-    /// and orderings and does not claim to repair the gap.
     #[doc(hidden)]
     #[inline]
-    pub unsafe fn new_storage(pc: u32, shape: SiteShape, initial_state: u64) -> Self {
+    pub fn new_storage(pc: u32, shape: SiteShape, initial_state: u64) -> Self {
         Self {
             state: AtomicU64::new(initial_state),
             sources: std::array::from_fn(|_| AtomicPtr::new(std::ptr::null_mut())),
@@ -150,53 +160,59 @@ impl CallSiteFeedback {
         }
     }
 
-    /// # Safety
-    /// No concurrent swap/release of a source slot may overlap a borrowed
-    /// load of that slot. Background compile reads vs mutator recording have
-    /// a known pre-existing gap: see post-split item FEEDBACK-UAF. The caller
-    /// must uphold this exclusion; this extraction preserves existing bodies
-    /// and orderings and does not claim to repair the gap.
+    /// Find `source` among the slots, or publish it in the first empty one.
+    ///
+    /// A slot moves from null to a `Weak::into_raw` once, by compare and
+    /// swap, and only `Drop` releases it, so a recorder that loses the race
+    /// for a slot keeps its own unpublished `Weak` and moves on. Slots fill
+    /// in index order: a recorder tries slot `i` only after it saw every
+    /// lower slot filled, so the first empty slot ends the search.
     #[doc(hidden)]
-    #[inline]
-    pub unsafe fn install_source(&self, i: usize, source: Weak<RuntimeState>) {
-        let weak = Weak::into_raw(source);
-        let old = self.sources[i].swap(weak.cast_mut(), Ordering::Relaxed);
-        if !old.is_null() {
-            // SAFETY: every non-null slot holds a `Weak::into_raw`.
-            drop(unsafe { Weak::from_raw(old) });
-        }
-    }
-
-    /// # Safety
-    /// No concurrent swap/release of a source slot may overlap a borrowed
-    /// load of that slot. Background compile reads vs mutator recording have
-    /// a known pre-existing gap: see post-split item FEEDBACK-UAF. The caller
-    /// must uphold this exclusion; this extraction preserves existing bodies
-    /// and orderings and does not claim to repair the gap.
-    #[doc(hidden)]
-    #[inline]
-    pub unsafe fn source_matches(&self, n: usize, source: &Arc<RuntimeState>) -> bool {
+    pub fn claim_source(&self, source: &Arc<RuntimeState>) -> SourceClaim {
         let ptr = Arc::as_ptr(source);
-        self.sources[..n.min(POLY)]
-            .iter()
-            .any(|s| std::ptr::eq(s.load(Ordering::Relaxed), ptr))
+        let mut ours: Option<Weak<RuntimeState>> = None;
+        for (i, slot) in self.sources.iter().enumerate() {
+            // Acquire, here and on a lost exchange, pairs with the winning
+            // exchange's Release: the slot's source is initialized before
+            // this recorder publishes a word that counts the slot.
+            let mut current = slot.load(Ordering::Acquire);
+            if current.is_null() {
+                let weak = ours.take().unwrap_or_else(|| Arc::downgrade(source));
+                let raw = Weak::into_raw(weak).cast_mut();
+                match slot.compare_exchange(
+                    std::ptr::null_mut(),
+                    raw,
+                    Ordering::Release,
+                    Ordering::Acquire,
+                ) {
+                    Ok(_) => return SourceClaim::Published(i),
+                    Err(actual) => {
+                        // SAFETY: `raw` came from `Weak::into_raw` just above
+                        // and the exchange failed, so it was never published.
+                        ours = Some(unsafe { Weak::from_raw(raw) });
+                        current = actual;
+                    }
+                }
+            }
+            if std::ptr::eq(current, ptr) {
+                return SourceClaim::Held(i);
+            }
+        }
+        SourceClaim::Full
     }
 
-    /// # Safety
-    /// No concurrent swap/release of a source slot may overlap a borrowed
-    /// load of that slot. Background compile reads vs mutator recording have
-    /// a known pre-existing gap: see post-split item FEEDBACK-UAF. The caller
-    /// must uphold this exclusion; this extraction preserves existing bodies
-    /// and orderings and does not claim to repair the gap.
+    /// Slot `i`'s source, if it is still alive.
     #[doc(hidden)]
     #[inline]
-    pub unsafe fn upgrade_source(&self, i: usize) -> Option<Arc<RuntimeState>> {
-        let ptr = self.sources[i].load(Ordering::Relaxed);
+    pub fn upgrade_source(&self, i: usize) -> Option<Arc<RuntimeState>> {
+        // Acquire pairs with `claim_source`'s publishing exchange, so the
+        // source's initialization happens before this upgrade reads it.
+        let ptr = self.sources[i].load(Ordering::Acquire);
         if ptr.is_null() {
             return None;
         }
-        // SAFETY: a `Weak::into_raw` this site still owns; borrowed,
-        // not dropped.
+        // SAFETY: a non-null slot holds a `Weak::into_raw` this site owns
+        // until `Drop`, which `&self` excludes. Borrowed, not dropped.
         let weak = std::mem::ManuallyDrop::new(unsafe { Weak::from_raw(ptr) });
         weak.upgrade()
     }

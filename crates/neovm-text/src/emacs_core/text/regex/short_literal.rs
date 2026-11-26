@@ -102,10 +102,10 @@ impl Literal {
     /// cold. Unsupported representations and backward search use the old
     /// matcher. The outer Option distinguishes fallback from a failed search.
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
-    pub(super) fn search(
+    pub(super) fn search<H: super::Haystack + ?Sized>(
         &self,
         pattern: &CompiledPattern,
-        text: &[u8],
+        text: &H,
         start: usize,
         range: isize,
     ) -> Option<Option<(usize, MatchRegisters)>> {
@@ -122,7 +122,7 @@ impl Literal {
         let mut candidate = start;
         while candidate < stop {
             // Match starts, as in re_search, must be character boundaries.
-            if text[candidate] & 0xc0 == 0x80 {
+            if text.byte(candidate) & 0xc0 == 0x80 {
                 candidate += 1;
                 continue;
             }

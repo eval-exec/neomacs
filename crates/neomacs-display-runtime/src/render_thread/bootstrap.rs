@@ -18,16 +18,89 @@ use winit::window::Window;
 use x11_dl::xlib;
 
 impl RenderApp {
+    /// Record the installed adapter when it fails with no surface submission yet.
+    /// A later loss keeps the same adapter so a shader-surface TDR can rebuild it.
+    pub(super) fn note_pre_present_adapter_failure(&mut self) {
+        if super::frame_stats::SURFACE_SUBMISSIONS.load(std::sync::atomic::Ordering::Relaxed) != 0 {
+            return;
+        }
+        let Some(gpu) = self.gpu.as_ref() else {
+            return;
+        };
+        let identity = super::gpu_startup::AdapterIdentity::from_info(&gpu.adapter.get_info());
+        tracing::warn!(
+            adapter = %identity.name,
+            "adapter failed before the first present; the next startup skips it"
+        );
+        self.startup_adapter_choice.record_failure(identity);
+    }
+
+    fn request_startup_device(
+        &mut self,
+        adapters: &[wgpu::Adapter],
+        surface: &wgpu::Surface<'_>,
+        window: &Arc<dyn Window>,
+        adapter: wgpu::Adapter,
+    ) -> Option<(wgpu::Adapter, wgpu::Device, wgpu::Queue)> {
+        let mut adapter = adapter;
+        loop {
+            match pollster::block_on(neomacs_renderer_wgpu::request_renderer_device(
+                &adapter,
+                "Neomacs Render Thread Device",
+            )) {
+                Ok((device, queue)) => return Some((adapter, device, queue)),
+                Err(error) => {
+                    if super::frame_stats::SURFACE_SUBMISSIONS
+                        .load(std::sync::atomic::Ordering::Relaxed)
+                        != 0
+                    {
+                        tracing::error!("Failed to create wgpu device: {error}");
+                        return None;
+                    }
+                    let failed =
+                        super::gpu_startup::AdapterIdentity::from_info(&adapter.get_info());
+                    tracing::error!(
+                        adapter = %failed.name,
+                        %error,
+                        "renderer device request failed before the first present"
+                    );
+                    self.startup_adapter_choice.record_failure(failed.clone());
+                    if self.startup_adapter_choice.exclusion_len() >= adapters.len() {
+                        self.startup_adapter_exhausted = true;
+                        tracing::error!("device request failed and no alternate adapter remains");
+                        return None;
+                    }
+                    let choice = self.startup_adapter_choice.clone();
+                    let Some(next) = super::gpu_startup::select_adapter(
+                        adapters.to_vec(),
+                        surface,
+                        window.as_ref(),
+                        &choice,
+                    ) else {
+                        self.startup_adapter_exhausted = true;
+                        tracing::error!("device request failed and no alternate adapter remains");
+                        return None;
+                    };
+                    if super::gpu_startup::AdapterIdentity::from_info(&next.get_info()) == failed {
+                        self.startup_adapter_exhausted = true;
+                        tracing::error!(
+                            %error,
+                            "device request failed and the same adapter was selected again"
+                        );
+                        return None;
+                    }
+                    adapter = next;
+                }
+            }
+        }
+    }
+
     pub(super) fn init_wgpu(&mut self, event_loop: &dyn ActiveEventLoop, window: Arc<dyn Window>) {
         tracing::info!("Initializing wgpu for render thread");
 
         let instance_descriptor =
             crate::wgpu_instance_descriptor_with_display(event_loop.owned_display_handle());
-        tracing::info!(
-            "wgpu requested backends: {:?}",
-            instance_descriptor.backends
-        );
-        let instance = wgpu::Instance::new(instance_descriptor);
+        let (instance, adapters) = super::gpu_startup::open_startup_instance(instance_descriptor);
 
         let surface = match instance.create_surface(window.clone()) {
             Ok(s) => s,
@@ -36,26 +109,28 @@ impl RenderApp {
                 return;
             }
         };
-
-        let adapters = pollster::block_on(instance.enumerate_adapters(wgpu::Backends::all()));
-        let Some(adapter) = super::gpu_startup::select_adapter(adapters, &surface, window.as_ref())
-        else {
+        let Some(adapter) = super::gpu_startup::select_adapter(
+            adapters.clone(),
+            &surface,
+            window.as_ref(),
+            &self.startup_adapter_choice,
+        ) else {
             tracing::error!(
                 "Failed to find suitable GPU adapter: none supports the native surface"
             );
+            if matches!(
+                self.startup_adapter_choice,
+                super::gpu_startup::StartupAdapterChoice::SkipFailed { .. }
+            ) {
+                self.startup_adapter_exhausted = true;
+            }
             return;
         };
 
-        let (device, queue) =
-            match pollster::block_on(neomacs_renderer_wgpu::request_renderer_device(
-                &adapter,
-                "Neomacs Render Thread Device",
-            )) {
-                Ok((d, q)) => (d, q),
-                Err(e) => {
-                    tracing::error!("Failed to create wgpu device: {e}");
-                    return;
-                }
+        let (adapter, device, queue) =
+            match self.request_startup_device(&adapters, &surface, &window, adapter) {
+                Some(ready) => ready,
+                None => return,
             };
 
         self.install_wgpu(super::gpu_startup::PreparedGpu {
@@ -224,6 +299,9 @@ impl RenderApp {
         }
         self.renderer = Some(renderer);
         self.publish_image_cache_usage();
+        // From here the renderer can process image commands and retain
+        // bytes; a synchronous cache read may wait for its published total.
+        self.image_metadata.mark_renderer_ready();
         #[cfg(feature = "video")]
         if !self.pending_video_recovery.is_empty()
             && let Some(renderer) = self.renderer.as_mut()
@@ -289,7 +367,13 @@ impl RenderApp {
                 }
             } else {
                 match neomacs_webview::WebViewSystem::new(config, self.webview_wake.clone()) {
-                    Ok(system) => self.webview_system = Some(system),
+                    Ok(system) => {
+                        self.webview_system = Some(system);
+                        // GNU re-claims SIGCHLD after WebKit/Glib touch it
+                        // (src/xwidget.c:382, :3128, :4281, :4303); the WPE
+                        // stack is Neo's corresponding claim point.
+                        neovm_core::emacs_core::reclaim_child_signal();
+                    }
                     Err(error) => {
                         tracing::warn!(?error, "failed to initialize the WebView system");
                     }
@@ -325,11 +409,17 @@ impl RenderApp {
         if let Some(renderer) = self.renderer.as_ref() {
             self.pending_video_recovery = renderer.video_recovery_manifests();
         }
+        let disposition = super::device_loss::gpu_recovery_disposition();
         if let Some(renderer) = self.renderer.take() {
             // CPU decoding and pending pixels belong to the image pipeline,
             // whose metadata client outlives this device and its textures.
             debug_assert!(self.comms.image_decoder.is_none());
-            self.comms.image_decoder = Some(renderer.into_image_decoder());
+            self.comms.image_decoder = Some(match disposition {
+                super::device_loss::GpuExitDisposition::Abandon => {
+                    renderer.abandon_keeping_decoder()
+                }
+                super::device_loss::GpuExitDisposition::Release => renderer.into_image_decoder(),
+            });
         }
         self.publish_image_cache_usage();
         #[cfg(feature = "video")]
@@ -348,10 +438,19 @@ impl RenderApp {
         // re-uploads the icons into the new renderer.
         self.toolbar.forget_after_device_loss();
 
-        // Old instance/adapter/device/queue handles. The old per-window
-        // surfaces still hold internal references; they die as they are
-        // replaced below.
-        self.gpu = None;
+        // Old instance/adapter/device/queue handles. A lost device must not
+        // be dropped into the wedged driver. Live release is the other arm
+        // of the same helper. Per-window surfaces are replaced below.
+        match disposition {
+            super::device_loss::GpuExitDisposition::Abandon => {
+                if let Some(gpu) = self.gpu.take() {
+                    std::mem::forget(gpu);
+                }
+            }
+            super::device_loss::GpuExitDisposition::Release => {
+                self.gpu = None;
+            }
+        }
 
         let Some(primary_window) = self
             .frame_windows
@@ -368,9 +467,16 @@ impl RenderApp {
         // primary glyph atlas (cleared above). populate_primary_native is
         // replace-safe: it re-keys the same winit window id and preserves
         // the Active lifecycle's IME/mouse state.
+        self.startup_adapter_exhausted = false;
         self.init_wgpu(event_loop, primary_window);
 
         if self.gpu.is_none() {
+            if self.startup_adapter_exhausted {
+                tracing::error!(
+                    "device-loss recovery: no alternate adapter remains; not rearming the loss latch"
+                );
+                return;
+            }
             // The driver may still be resetting. Leave the latch set so the
             // next event-loop pass retries; no explicit wake, so this cannot
             // busy-spin.
@@ -527,6 +633,40 @@ pub(crate) fn run_render_loop_with_event_loop(
     .map_err(|error| error.to_string())
 }
 
+/// Retire the renderer's admitted command obligations on every exit path.
+///
+/// A command that carries an acknowledgement (`PublishImageCacheUsage`) is
+/// answered only if the renderer executes it. When the renderer exits with
+/// such a command still buffered, crossbeam keeps the message (and its ack
+/// sender) alive for as long as the evaluator's `RenderCommandSender` clones
+/// exist, so dropping the receiver alone would let a waiter block forever.
+/// Dropping on exit: publish the exit to waiters first (they abort on their
+/// next poll), then drain the raw channel so every buffered ack sender drops.
+/// Runs via RAII so an unwind from the event loop is covered too.
+pub(crate) struct RenderExitCancellation {
+    pub(crate) image_metadata: SharedImageRenderState,
+    pub(crate) commands: crossbeam_channel::Receiver<crate::thread_comm::RenderCommand>,
+}
+
+impl Drop for RenderExitCancellation {
+    fn drop(&mut self) {
+        retire_render_command_obligations(&self.image_metadata, &self.commands);
+    }
+}
+
+/// The single retirement routine shared by the event-loop exit guard and
+/// `RenderApp::handle_exiting`: publish the exit (waiters abort on their next
+/// poll), then drop every buffered command so each queued ack sender drops.
+pub(crate) fn retire_render_command_obligations(
+    image_metadata: &SharedImageRenderState,
+    commands: &crossbeam_channel::Receiver<crate::thread_comm::RenderCommand>,
+) {
+    image_metadata.mark_renderer_exited();
+    while let Ok(command) = commands.try_recv() {
+        drop(command);
+    }
+}
+
 fn run_render_loop_with_startup(
     event_loop: EventLoop,
     comms: RenderComms,
@@ -555,9 +695,16 @@ fn run_render_loop_with_startup(
     };
 
     tracing::info!("Render thread entering winit event loop");
+    let font_raster_options = crate::display_scale::observe_font_raster_options(&event_loop);
     let preparation_proxy = event_loop.create_proxy();
     let exit_input = comms.input_tx.clone();
     let command_rx = comms.cmd_rx.clone();
+    // Retires admitted ack-bearing commands and publishes the exit to any
+    // waiter before the loop's own notice and before teardown can block.
+    let exit_cancellation = RenderExitCancellation {
+        image_metadata: Arc::clone(&image_metadata),
+        commands: command_rx.clone(),
+    };
     let result = startup::run(
         event_loop,
         initial,
@@ -576,6 +723,10 @@ fn run_render_loop_with_startup(
                 shared_terminals,
             );
             let mut app = app;
+            app.font_raster_options = font_raster_options;
+            app.frame_windows
+                .set_font_raster_options(font_raster_options);
+            app.tooltips.set_font_raster_options(font_raster_options);
             match super::frame_preparation::FramePreparation::spawn(
                 app.comms.frame_rx.clone(),
                 move || preparation_proxy.wake_up(),
@@ -594,6 +745,7 @@ fn run_render_loop_with_startup(
             app
         },
     );
+    drop(exit_cancellation);
     if let Err(ref e) = result {
         tracing::error!("Event loop error: {:?}", e);
     }

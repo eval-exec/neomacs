@@ -60,7 +60,7 @@ fn converted_literal(context: &mut Context, size: Value, data: Value) -> Value {
     ])
     .expect("constant-return byte-code construction");
     push_scratch_gc_root(function);
-    let stored = function.get_bytecode_data().unwrap().constants[0];
+    let stored = function.get_bytecode_data().unwrap().constants()[0];
     assert_eq!(stored, constant, "constructor preserves the reader object");
     stored
 }

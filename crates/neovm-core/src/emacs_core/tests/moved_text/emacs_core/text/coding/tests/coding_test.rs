@@ -800,36 +800,79 @@ fn context_eol_conversion_reads_the_defvar_bool_dynamically() {
     assert_eq!(eval.eol_conversion(), EolConversion::Inhibited);
 }
 
-/// `:ascii-compatible-p` of a `define-coding-system-internal` system is
-/// computed from its charsets, so defining that charset AFTER the plist was
-/// memoized must change the next answer: the charset writers drop the memo.
+/// GNU checks every explicit `:charset-list` entry with
+/// `CHECK_CHARSET_GET_CHARSET` before the coding system is registered
+/// (coding.c:11044-11049), then derives `:ascii-compatible-p` for a
+/// `charset`-type system from the listed charsets (coding.c:11119-11129).
 #[test]
-fn defining_a_charset_drops_the_coding_system_memo() {
+fn an_undefined_charset_list_entry_signals_and_a_defined_one_computes_ascii_compat() {
     let mut ev = crate::test_utils::new_context();
     let read = |ev: &mut crate::emacs_core::eval::Context| {
         ev.eval_str("(plist-get (coding-system-plist 'memo-test-cs) :ascii-compatible-p)")
             .map(|v| crate::emacs_core::print::print_value(&v))
             .expect("plist")
     };
-    ev.eval_str(
-        "(define-coding-system-internal 'memo-test-cs ?x 'charset '(memo-test-charset)
-            nil nil nil nil nil nil nil '(:name memo-test-cs :docstring \"\") nil)",
-    )
-    .expect("define coding system");
-    assert_eq!(
-        read(&mut ev),
-        "nil",
-        "an unknown charset is not ASCII-compatible"
-    );
+    let define_cs = "(define-coding-system-internal 'memo-test-cs ?x 'charset '(memo-test-charset)
+            nil nil nil nil nil nil nil '(:name memo-test-cs :docstring \"\") nil)";
+    match ev.eval_str(define_cs).unwrap_err() {
+        neovm_value::error::EvalError::Signal { symbol, data, .. } => {
+            assert_eq!(symbol, neovm_value::intern::intern("wrong-type-argument"));
+            assert_eq!(
+                data,
+                vec![
+                    Value::symbol("charsetp"),
+                    Value::symbol("memo-test-charset")
+                ],
+                "an undefined charset-list entry signals before registration"
+            );
+        }
+        other => panic!("expected wrong-type-argument charsetp, got {other:?}"),
+    }
     ev.eval_str(
         "(define-charset-internal 'memo-test-charset 1 [33 126 0 0 0 0 0 0]
             nil nil nil nil nil t nil nil 0 nil nil nil nil nil)",
     )
     .expect("define charset");
+    ev.eval_str(define_cs).expect("define coding system");
     assert_eq!(
         read(&mut ev),
         "t",
-        "the memo was dropped by the charset definition"
+        "an ASCII-compatible listed charset makes the system ASCII-compatible"
+    );
+
+    // F2: the attribute is stored at define time; a later charset
+    // redefinition does not change it (attested GNU answers (t t)).
+    ev.eval_str(
+        "(define-charset-internal 'memo-test-charset 1 [33 126 0 0 0 0 0 0]
+            nil nil nil nil nil nil nil nil 0 nil nil nil nil nil)",
+    )
+    .expect("redefine charset without ASCII compatibility");
+    assert_eq!(
+        read(&mut ev),
+        "t",
+        "GNU keeps the value stored at define time"
+    );
+
+    drop(ev);
+    // Symmetric: defined nil, the charset becomes ASCII-compatible later,
+    // and the coding system keeps saying nil.
+    let mut ev = crate::test_utils::new_context();
+    ev.eval_str(
+        "(define-charset-internal 'memo-test-charset 1 [33 126 0 0 0 0 0 0]
+            nil nil nil nil nil nil nil nil 0 nil nil nil nil nil)",
+    )
+    .expect("define non-ascii charset");
+    ev.eval_str(define_cs).expect("define coding system");
+    assert_eq!(read(&mut ev), "nil");
+    ev.eval_str(
+        "(define-charset-internal 'memo-test-charset 1 [33 126 0 0 0 0 0 0]
+            nil nil nil nil nil t nil nil 0 nil nil nil nil nil)",
+    )
+    .expect("redefine charset ascii-compatible");
+    assert_eq!(
+        read(&mut ev),
+        "nil",
+        "GNU does not re-read the charset for an existing coding system"
     );
 }
 

@@ -1,23 +1,28 @@
 //! A sole cons survives a stop only when the owner scan is acknowledged.
 //!
-//! The five sources of one arena each hold one cons. Setup publishes that
+//! The four sources of one arena each hold one cons. Setup publishes that
 //! scan while this thread is still the mutator. The owner thread then
 //! acknowledges the published batch and drops it, so the collection's only
 //! root for those conses is the batch `collect_stopped` already traces.
+//!
+//! The record LIFO is not a source: an owner binding entry names the slab
+//! record that stores the binding's values (C2, one record, two views), and
+//! the collector's root phase traces every registered slab
+//! (`OwnerSlabRegistry::trace_roots`, owner_bindings.rs:788-800), not this
+//! scan.
 
-use super::super::owner_bindings::{BindingKind, Channel, SlotValue, UndoTarget};
 use super::frames::*;
 use crate::emacs_core::eval::Context;
 use crate::emacs_core::eval::world::{ParallelHeapEraWorldCollectExt, WorldProofEra};
-use neovm_value::forward::TlsIndex;
-use neovm_value::intern::NIL_SYM_ID;
 use neovm_value::tagged::gc::{
-    AllStopped, HeapIdentity, Mutator, MutatorKey, MutatorPermit, RegistrationError,
-    RendezvousError, Request,
+    AllStopped, HeapIdentity, MeasuredInterval, Mutator, MutatorKey, MutatorPermit,
+    OwnerEraReserve, RegistrationError, RendezvousError, Request, TaggedHeap,
 };
+use neovm_value::tagged::header::ConsCell;
 use neovm_value::tagged::transport::SharedRoot;
 use neovm_value::test_support::authority::begin_restore_retry_for_test;
 use neovm_value::value::Value;
+use std::mem::size_of;
 use std::num::NonZeroU32;
 use std::sync::mpsc;
 use std::thread;
@@ -32,7 +37,6 @@ struct SoleRoots {
     frame: usize,
     operand: usize,
     handler: usize,
-    binding: usize,
     registry: usize,
 }
 
@@ -58,13 +62,12 @@ fn cons(context: &mut Context, tag: i64) -> (Value, SharedRoot) {
     (value, root)
 }
 
-fn publish_five(context: &mut Context) -> SoleRoots {
+fn publish_four(context: &mut Context) -> SoleRoots {
     context.set_gc_stress_for_test(false);
     context.tagged_heap.set_gc_threshold(usize::MAX);
     let (frame, frame_root) = cons(context, 101);
     let (operand, operand_root) = cons(context, 102);
     let (handler, handler_root) = cons(context, 103);
-    let (binding, binding_root) = cons(context, 104);
     let (registry, registry_root) = cons(context, 105);
     let mut arena = FrameArena::new(4);
     let id = arena
@@ -99,14 +102,6 @@ fn publish_five(context: &mut Context) -> SoleRoots {
         id,
         OwnerRecordMark::EMPTY,
     ));
-    arena.bindings_mut().push(SlotRecord::new(
-        NIL_SYM_ID,
-        TlsIndex::VOID,
-        Channel::Default,
-        BindingKind::Let,
-        UndoTarget::Previous(SlotValue::new(binding)),
-        SlotGeneration::new(NonZeroU32::MIN),
-    ));
     arena
         .roots_mut()
         .push(RootGroup::Misc, registry)
@@ -117,17 +112,10 @@ fn publish_five(context: &mut Context) -> SoleRoots {
         .expect("owner scan");
     SoleRoots {
         scratch,
-        keepers: vec![
-            frame_root,
-            operand_root,
-            handler_root,
-            binding_root,
-            registry_root,
-        ],
+        keepers: vec![frame_root, operand_root, handler_root, registry_root],
         frame: frame.bits(),
         operand: operand.bits(),
         handler: handler.bits(),
-        binding: binding.bits(),
         registry: registry.bits(),
     }
 }
@@ -314,7 +302,7 @@ fn publish_and_ack(
 
 #[test]
 fn sole_root_in_each_owner_source_survives_only_through_the_joined_scan() {
-    Context::with_test_collection_era(publish_five, |era, mut roots| {
+    Context::with_test_collection_era(publish_four, |era, mut roots| {
         drop(roots.keepers);
         let heap = era.heap_identity();
         let rendezvous = era.rendezvous();
@@ -342,7 +330,6 @@ fn sole_root_in_each_owner_source_survives_only_through_the_joined_scan() {
                 ("frame", roots.frame),
                 ("operand", roots.operand),
                 ("handler", roots.handler),
-                ("binding", roots.binding),
                 ("registry", roots.registry),
             ]
             .into_iter()
@@ -447,6 +434,211 @@ fn refreshed_scan_is_acknowledged_after_the_escape_stand_in() {
                 !context.tagged_heap.owns_heap_value_for_test(prior),
                 "the prior cons stayed owned after its batch lease was finished"
             );
+        },
+    );
+}
+
+struct GrantedPair {
+    scratch: Vec<SharedRoot>,
+    kept: usize,
+    control: usize,
+    kept_tail: usize,
+    control_tail: usize,
+}
+
+fn cons_at(addr: usize) -> Value {
+    let cell = addr as *const ConsCell;
+    // SAFETY: `addr` is a cell the owner's reserve just carved and has not
+    // published. The stores finish before the tagged value is rooted.
+    unsafe {
+        (*cell).set_car(Value::NIL);
+        (*cell).set_cdr(Value::NIL);
+        Value::from_cons_ptr(cell)
+    }
+}
+
+fn probe_bits(addr: usize) -> usize {
+    let cell = addr as *const ConsCell;
+    // SAFETY: the address is the cell after a handed cons in a block the
+    // reserve still holds. The probe does not read or write the cell.
+    unsafe { Value::from_cons_ptr(cell).bits() }
+}
+
+fn publish_two_owner_grants(heap: &mut TaggedHeap, stopped: &AllStopped<'_>) -> GrantedPair {
+    heap.close_alloc_regions();
+
+    let mut reserve_a = OwnerEraReserve::new();
+    let mut reserve_b = OwnerEraReserve::new();
+    let mut arena_a = FrameArena::new(1);
+    let mut arena_b = FrameArena::new(1);
+    reserve_a
+        .grant_at_stop(stopped, heap, true, MeasuredInterval::zero())
+        .expect("owner A grant");
+    reserve_b
+        .grant_at_stop(stopped, heap, true, MeasuredInterval::zero())
+        .expect("owner B grant");
+    arena_a
+        .carve_granted_cons(heap, &mut reserve_a)
+        .expect("carve A");
+    arena_b
+        .carve_granted_cons(heap, &mut reserve_b)
+        .expect("carve B");
+    let addr_a = arena_a.take_cons_cell().expect("cell A");
+    let addr_b = arena_b.take_cons_cell().expect("cell B");
+    let kept = cons_at(addr_a);
+    let control = cons_at(addr_b);
+    let kept_tail = probe_bits(addr_a + size_of::<ConsCell>());
+    let control_tail = probe_bits(addr_b + size_of::<ConsCell>());
+
+    // An open book is not a stop publication, so this collection is not entered.
+    let mut refused = Vec::new();
+    assert_eq!(
+        arena_a.publish_scan(heap, &mut refused),
+        Err(RendezvousError::Publication)
+    );
+    assert!(refused.is_empty(), "an open book must not publish a root");
+    assert_eq!(
+        arena_b.publish_scan(heap, &mut refused),
+        Err(RendezvousError::Publication)
+    );
+    assert!(refused.is_empty());
+
+    arena_a
+        .close_granted_reserve(heap, &mut reserve_a)
+        .expect("close A before return");
+    arena_b
+        .close_granted_reserve(heap, &mut reserve_b)
+        .expect("close B before return");
+    reserve_a
+        .return_unused_before_sweep(stopped, heap)
+        .expect("return A before the sweep");
+    reserve_b
+        .return_unused_before_sweep(stopped, heap)
+        .expect("return B before the sweep");
+    assert!(!reserve_a.holds_reserve());
+    assert!(!reserve_b.holds_reserve());
+    assert!(heap.owns_heap_value_for_test(kept));
+    assert!(heap.owns_heap_value_for_test(control));
+    assert!(!heap.owns_heap_value_for_test(value_bits(kept_tail)));
+    assert!(!heap.owns_heap_value_for_test(value_bits(control_tail)));
+    assert_eq!(heap.jit_cons_window_for_test(), (0, 0));
+    assert_eq!(heap.jit_float_window_for_test(), (0, 0));
+
+    arena_a
+        .roots_mut()
+        .push(RootGroup::Misc, kept)
+        .expect("joined root");
+    let mut scratch = Vec::new();
+    arena_a
+        .publish_scan(heap, &mut scratch)
+        .expect("closed book publishes");
+    assert_eq!(scratch.len(), 1);
+
+    // These post-image grants have been returned, so only their scalar
+    // pacing charge remains on the shell. The next epoch restores the actual
+    // legacy image; no worker or young log owns an outstanding reservation.
+    heap.clear_inter_collection_cons_charge_for_test();
+
+    GrantedPair {
+        scratch,
+        kept: kept.bits(),
+        control: control.bits(),
+        kept_tail,
+        control_tail,
+    }
+}
+
+fn value_bits(bits: usize) -> Value {
+    // SAFETY: `bits` is `Value::bits` of a cons address in this heap. The
+    // ownership probe rejects a cell the reserve returned.
+    unsafe { Value::from_bits(bits) }
+}
+
+#[test]
+fn two_owner_regions_keep_only_the_joined_scan_and_refuse_an_open_book() {
+    Context::with_test_collection_era(
+        |context| {
+            context.set_gc_stress_for_test(false);
+            context.tagged_heap.set_gc_threshold(usize::MAX);
+            context.tagged_heap.close_alloc_regions();
+            // SAFETY: setup holds the sole serial Context, before admission.
+            // Post-image cons grants must not append to the detached legacy
+            // young log. The stopped fixture exercises major collection.
+            unsafe {
+                neovm_value::test_support::authority::set_generational_enabled_for_test(
+                    &mut context.tagged_heap,
+                    false,
+                );
+            }
+            context.tagged_heap.heap_root().as_ptr() as usize
+        },
+        |era, heap_addr| {
+            // Grant only under the real first AllStopped capability. Sweep first,
+            // then initialize and return both reserves before ending this epoch.
+            let stopped = stop(&era);
+            let mut ticket = super::poll_tests::lend(&era, stopped);
+            super::poll_tests::collect(&mut ticket);
+            // SAFETY: the address names this fixture's suspended Context heap.
+            // No participant has activated, and its stopped collector call above
+            // has ended. This borrow ends before the stopped epoch completes.
+            let mut roots = unsafe {
+                publish_two_owner_grants(
+                    &mut *(heap_addr as *mut TaggedHeap),
+                    ticket.stopped_proof(),
+                )
+            };
+            super::poll_tests::end_epoch(ticket);
+            let heap = era.heap_identity();
+            let rendezvous = era.rendezvous();
+            let permit = era.register(OWNER, 0).expect("register the owner");
+            let (tx, rx) = mpsc::channel();
+            let scratch = std::mem::take(&mut roots.scratch);
+            thread::scope(|scope| {
+                scope.spawn(move || {
+                    let mut owner = activate(permit, heap);
+                    let published = publish_and_ack(&mut owner, rendezvous, scratch);
+                    tx.send(published).expect("owner acknowledged");
+                    restore(&mut owner);
+                    retire(owner);
+                });
+                let published = rx
+                    .recv_timeout(ADMISSION_DEADLINE)
+                    .expect("owner reaches the acknowledgement");
+                let mut stopped = stop(&era);
+                assert!(
+                    owns(&era, &stopped, roots.kept),
+                    "the handed cons was reclaimed before the stop"
+                );
+                assert!(
+                    owns(&era, &stopped, roots.control),
+                    "the control was reclaimed before the stop"
+                );
+                assert!(!owns(&era, &stopped, roots.kept_tail));
+                assert!(!owns(&era, &stopped, roots.control_tail));
+                let report = retry_busy("collect", || {
+                    ParallelHeapEraWorldCollectExt::collect_stopped(&era, &mut stopped)
+                });
+                assert!(report.major);
+                assert!(
+                    owns(&era, &stopped, roots.kept),
+                    "the joined scan lost owner A's handed cons"
+                );
+                assert!(
+                    !owns(&era, &stopped, roots.control),
+                    "owner B's cons survived without a root"
+                );
+                assert!(
+                    !owns(&era, &stopped, roots.kept_tail),
+                    "the unhanded tail was treated as a live root"
+                );
+                assert!(!owns(&era, &stopped, roots.control_tail));
+                let reader = reader_words(&stopped, published.key);
+                assert_eq!(reader, published.words);
+                assert!(reader.contains(&roots.kept));
+                assert!(!reader.contains(&roots.control));
+                stopped.complete().expect("complete");
+            });
+            finish(era);
         },
     );
 }

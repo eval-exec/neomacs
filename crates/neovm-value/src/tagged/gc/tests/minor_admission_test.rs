@@ -68,7 +68,7 @@ impl CollectionSnapshot {
             cycle: heap.generational.cycle,
             major: heap.generational.major_in_progress,
             marking: heap.mark_in_progress,
-            concurrent: heap.concurrent_mark_running,
+            concurrent: heap.concurrent_mark_running(),
             sweeping: heap.sweep_in_progress,
             parity: heap.mark_parity,
             promo: heap
@@ -88,7 +88,7 @@ impl CollectionSnapshot {
                 .cons_blocks
                 .iter()
                 .map(|block| {
-                    (0..cons_mark_words(block.next_index as usize))
+                    (0..cons_mark_words(block.next_index()))
                         .map(|word| block.mark_word(word).load(Ordering::Relaxed))
                         .collect()
                 })
@@ -97,7 +97,7 @@ impl CollectionSnapshot {
                 .cons_blocks
                 .iter()
                 .map(|block| {
-                    (0..cons_mark_words(block.next_index as usize))
+                    (0..cons_mark_words(block.next_index()))
                         .map(|word| block.trailer().old_word(word))
                         .collect()
                 })
@@ -222,7 +222,7 @@ fn minor_and_major_admissions_reject_each_independent_busy_state() {
                 );
                 assert_eq!(CollectionSnapshot::capture(busy.heap, &[root]), before);
                 assert_eq!(
-                    busy.heap.begin_minor_collection(),
+                    busy.heap.begin_minor_collection_for_test(),
                     Err(MinorCollectionAdmissionError::CollectorBusy),
                     "GEN1={enabled}, {state:?}"
                 );
@@ -266,7 +266,7 @@ fn reject_and_recover(
     ));
     assert_eq!(CollectionSnapshot::capture(heap, &[child, garbage]), before);
     assert_eq!(
-        heap.begin_minor_collection(),
+        heap.begin_minor_collection_for_test(),
         Err(MinorCollectionAdmissionError::CollectorBusy)
     );
     assert_eq!(CollectionSnapshot::capture(heap, &[child, garbage]), before);
@@ -311,7 +311,7 @@ fn minor_rejects_joined_major_without_changing_collection_state() {
             heap.generational.cycle,
             heap.generational.major_in_progress,
             heap.mark_in_progress,
-            heap.concurrent_mark_running,
+            heap.concurrent_mark_running(),
             heap.mark_parity,
         );
         assert!(heap.concurrent_mark_running());
@@ -322,7 +322,7 @@ fn minor_rejects_joined_major_without_changing_collection_state() {
             Err(ConcurrentMarkAdmissionError::CollectorBusy)
         ));
         assert_eq!(
-            heap.begin_minor_collection(),
+            heap.begin_minor_collection_for_test(),
             Err(MinorCollectionAdmissionError::CollectorBusy)
         );
         assert_eq!(
@@ -330,7 +330,7 @@ fn minor_rejects_joined_major_without_changing_collection_state() {
                 heap.generational.cycle,
                 heap.generational.major_in_progress,
                 heap.mark_in_progress,
-                heap.concurrent_mark_running,
+                heap.concurrent_mark_running(),
                 heap.mark_parity,
             ),
             phase
@@ -360,8 +360,13 @@ fn minor_rejects_dropped_major_capture_without_changing_collection_state() {
         capture.heap_mut().note_root_overwrite_value(orphan);
         drop(capture);
         assert_eq!(
-            heap.current_mutator_satb().satb.words_for_test(),
-            &[MarkWord::of(orphan)]
+            heap.current_mutator_satb()
+                .satb
+                .words_for_test()
+                .iter()
+                .map(|word| word.bits())
+                .collect::<Vec<_>>(),
+            vec![orphan.bits()]
         );
         reject_and_recover(&mut heap, root, child, garbage);
         assert!(heap.owns_heap_value_for_test(orphan));
@@ -375,7 +380,7 @@ fn minor_rejects_quiescent_gen0_without_changing_collection_state() {
     let value = heap.alloc_float(11.5);
     let before = CollectionSnapshot::capture(&heap, &[value]);
     assert_eq!(
-        heap.begin_minor_collection(),
+        heap.begin_minor_collection_for_test(),
         Err(MinorCollectionAdmissionError::GenerationalDisabled)
     );
     assert_eq!(CollectionSnapshot::capture(&heap, &[value]), before);
@@ -387,10 +392,10 @@ fn minor_accepts_quiescent_gen1_and_completes() {
     let child = heap.alloc_float(9.5);
     let root = heap.alloc_cons(child, TaggedValue::NIL);
     let garbage = heap.alloc_float(10.5);
-    heap.begin_minor_collection().unwrap();
+    heap.begin_minor_collection_for_test().unwrap();
     heap.seed_root(root);
-    heap.complete_minor_collection();
-    heap.finish_incremental_sweep_now();
+    heap.complete_minor_collection_for_test();
+    heap.finish_incremental_sweep_now_for_test();
     assert!(!heap.mark_in_progress());
     assert!(!heap.sweep_in_progress());
     assert!(heap.value_is_old_for_test(root));
@@ -413,13 +418,13 @@ fn inject_satb_preimage(heap: &mut TaggedHeap, source: SatbResidualSource, value
     let handoff = heap.satb_handoff.clone();
     match source {
         SatbResidualSource::OwnerPartial => {
-            heap.current_mutator_satb_mut()
-                .satb
-                .push(MarkWord::of(value), &handoff);
+            // SAFETY: `value` was allocated on `heap` for this test.
+            unsafe { heap.current_mutator_satb_mut().satb.push(value, &handoff) };
         }
         SatbResidualSource::PublishedChunk => {
             let owner = heap.current_mutator_satb_mut();
-            owner.satb.push(MarkWord::of(value), &handoff);
+            // SAFETY: `value` was allocated on `heap` for this test.
+            unsafe { owner.satb.push(value, &handoff) };
             owner.satb.publish_partial(&handoff).unwrap();
         }
         SatbResidualSource::RegisteredOwnerPartial | SatbResidualSource::RetiredOwnerPublished => {
@@ -427,11 +432,14 @@ fn inject_satb_preimage(heap: &mut TaggedHeap, source: SatbResidualSource, value
             // have no launched worker, TLS aliases, callbacks or safepoints.
             let mut world = unsafe { scan_contract::SingleMutatorWorld::from_heap(heap) };
             let id = world.register_mutator_gc_for_test();
-            world
-                .mutator_gc_for_test(id)
-                .satb
-                .satb
-                .push(MarkWord::of(value), &handoff);
+            // SAFETY: `value` was allocated on `heap` for this test.
+            unsafe {
+                world
+                    .mutator_gc_for_test(id)
+                    .satb
+                    .satb
+                    .push(value, &handoff);
+            }
             if matches!(source, SatbResidualSource::RetiredOwnerPublished) {
                 world.retire_mutator_gc_for_test(id).unwrap().acknowledge();
             }
@@ -449,7 +457,7 @@ fn assert_both_admissions_preserve(heap: &mut TaggedHeap, headers: &[TaggedValue
     ));
     assert_eq!(CollectionSnapshot::capture(heap, headers), before);
     assert_eq!(
-        heap.begin_minor_collection(),
+        heap.begin_minor_collection_for_test(),
         Err(MinorCollectionAdmissionError::CollectorBusy)
     );
     assert_eq!(CollectionSnapshot::capture(heap, headers), before);
@@ -463,7 +471,7 @@ fn minor_and_major_admissions_reject_satb_residuals_before_collection_mutations(
             let orphan = heap.alloc_float(317.5);
             inject_satb_preimage(&mut heap, source, orphan);
             assert!(!heap.mark_in_progress && !heap.generational.major_in_progress);
-            assert!(!heap.concurrent_mark_running && !heap.sweep_in_progress);
+            assert!(!heap.concurrent_mark_running() && !heap.sweep_in_progress);
             assert!(heap.gray_queue.is_empty());
             let before = CollectionSnapshot::capture(&heap, &[orphan]);
             let words = before.satb_published.as_ref().unwrap().len()
@@ -494,8 +502,13 @@ fn minor_and_major_admissions_reject_poisoned_satb_without_collection_mutations(
         heap.satb_handoff.poison_for_test();
         assert_both_admissions_preserve(&mut heap, &[orphan]);
         assert_eq!(
-            heap.current_mutator_satb().satb.words_for_test(),
-            &[MarkWord::of(orphan)]
+            heap.current_mutator_satb()
+                .satb
+                .words_for_test()
+                .iter()
+                .map(|word| word.bits())
+                .collect::<Vec<_>>(),
+            vec![orphan.bits()]
         );
         // Poisoned state is terminal: this fixture does not fabricate a drain
         // or clear poison. Heap Drop abandons its owner buffers explicitly.

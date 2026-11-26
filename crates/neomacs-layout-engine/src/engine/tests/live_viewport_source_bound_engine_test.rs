@@ -94,3 +94,56 @@ fn bounded_live_source_keeps_the_cursor_only_replay() {
         "the cursor-only replay must reach its attempt: {stats:?}"
     );
 }
+
+/// Regression for #823: `image-mode` covers an entire multi-megabyte raw file
+/// buffer with one `'display` text property. Driving the full window layout
+/// loop with a small initial viewport copy allowance must jump directly to
+/// the replacement's end byte offset with zero viewport read retries.
+#[test]
+fn whole_buffer_display_replacement_jumps_past_viewport_allowance_with_zero_retries() {
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
+    let buf_id = eval
+        .buffer_manager()
+        .current_buffer()
+        .expect("current buffer")
+        .id();
+    let raw = "x".repeat(64 * 1024);
+    eval.buffer_manager_mut()
+        .get_mut(buf_id)
+        .expect("buffer")
+        .insert(&raw);
+    eval.eval_str("(put-text-property (point-min) (point-max) 'display \"[IMG]\")")
+        .expect("set display property");
+    let frame_id =
+        eval.frame_manager_mut()
+            .create_frame("display-replacement-zero-retries", 640, 160, buf_id);
+    let mut baseline_engine = crate::font::metrics::test_catalog::layout_engine();
+    baseline_engine.layout_frame_rust(&mut eval, frame_id);
+    let baseline = selected_window_layout_trace(&eval, &baseline_engine, frame_id);
+
+    reset_viewport_read_retries_for_test();
+    let _guard = AllowanceGuard::set(64);
+    let mut bounded_engine = crate::font::metrics::test_catalog::layout_engine();
+    bounded_engine.layout_frame_rust(&mut eval, frame_id);
+    let retries = viewport_read_retries_for_test();
+    let bounded = selected_window_layout_trace(&eval, &bounded_engine, frame_id);
+
+    assert_eq!(
+        retries, 0,
+        "whole-buffer display replacement must jump directly over covered bytes without retrying"
+    );
+    let rendered = backend_trace_text_area_text(&bounded);
+    assert!(
+        rendered.contains("[IMG]"),
+        "replacement text must be displayed: {rendered:?}"
+    );
+    assert!(
+        !rendered.contains("xxxx"),
+        "covered buffer bytes must not leak: {rendered:?}"
+    );
+    assert_eq!(
+        rendered,
+        backend_trace_text_area_text(&baseline),
+        "bounded pass must match the unbounded baseline"
+    );
+}

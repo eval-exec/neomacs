@@ -14,12 +14,12 @@ fn cons_young_minor_preserves_old_only_marks_and_visits_only_new_carve_block() {
     let roots: Vec<_> = (0..CONS_BLOCK_SIZE)
         .map(|_| heap.alloc_cons(TaggedValue::T, TaggedValue::NIL))
         .collect();
-    heap.begin_minor_collection().unwrap();
+    heap.begin_minor_collection_for_test().unwrap();
     for &root in &roots {
         heap.seed_root(root);
     }
-    heap.complete_minor_collection();
-    heap.finish_incremental_sweep_now();
+    heap.complete_minor_collection_for_test();
+    heap.finish_incremental_sweep_now_for_test();
     let old_base = ConsBlock::block_base_for_ptr(roots[0].xcons_ptr());
     assert_eq!(heap.cons_blocks.len(), 1);
     assert_eq!(heap.generational.old_cons_count, CONS_BLOCK_SIZE);
@@ -28,19 +28,19 @@ fn cons_young_minor_preserves_old_only_marks_and_visits_only_new_carve_block() {
     let young = heap.alloc_cons(TaggedValue::T, TaggedValue::NIL);
     let young_base = ConsBlock::block_base_for_ptr(young.xcons_ptr());
     assert_ne!(old_base, young_base, "old block is full");
-    heap.begin_minor_collection().unwrap();
+    heap.begin_minor_collection_for_test().unwrap();
     let old_index = heap.cons_block_index_by_base[&old_base];
     assert!(
         heap.cons_blocks[old_index].is_marked_ptr(roots[0].xcons_ptr()),
         "minor clear must leave old-only mark words untouched"
     );
     heap.seed_root(young);
-    heap.complete_minor_collection();
+    heap.complete_minor_collection_for_test();
     assert_eq!(
         heap.sweep_cons_end, 1,
         "minor sweep includes only the new carve block"
     );
-    heap.finish_incremental_sweep_now();
+    heap.finish_incremental_sweep_now_for_test();
     assert_eq!(heap.sweep_cons_blocks_swept, 1);
     assert_eq!(heap.generational.old_cons_count, CONS_BLOCK_SIZE + 1);
     assert_eq!(heap.cons_live_count_exact(), CONS_BLOCK_SIZE + 1);

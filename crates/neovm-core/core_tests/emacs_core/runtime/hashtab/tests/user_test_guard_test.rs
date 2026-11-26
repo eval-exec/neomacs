@@ -6,11 +6,14 @@ use crate::emacs_core::value::HashTableTest;
 /// The Rev R2 nesting count as seen by assertions: 0 outside any user test,
 /// one per in-flight activation on the table.
 fn depth(table: Value) -> u8 {
-    table
-        .as_hash_table()
-        .unwrap()
-        .test_depth
-        .load(std::sync::atomic::Ordering::Acquire)
+    let object = table.as_veclike_ptr().expect("hash table")
+        as *const neovm_value::tagged::header::HashTableObj;
+    // SAFETY: the fixture retains this live hash table; the byte is object metadata.
+    unsafe {
+        (*object)
+            .test_depth
+            .load(std::sync::atomic::Ordering::Acquire)
+    }
 }
 
 /// The accounting entry point is context-free so the hash-table module does

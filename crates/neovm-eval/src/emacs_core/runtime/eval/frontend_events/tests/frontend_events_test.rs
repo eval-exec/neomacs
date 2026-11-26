@@ -1,4 +1,5 @@
 use super::*;
+use crate::emacs_core::eval::keyboard::NativeNonKeyKind;
 
 // Behavior expectations, independent of the production scheduling enum.
 #[derive(Debug, PartialEq, Eq)]
@@ -127,6 +128,79 @@ fn assert_policy(
 }
 
 #[test]
+fn native_nonkey_keeps_its_frame_alive_without_requesting_control_g() {
+    for frame in [0, 42, 0x1_0000_0000] {
+        let event = InputEvent::NativeNonKey {
+            kind: NativeNonKeyKind::PowerOff,
+            emacs_frame_id: frame,
+        };
+        let mut retained = Vec::new();
+        event.retained_frame_ids(&mut retained);
+        assert_eq!(retained, if frame == 0 { vec![] } else { vec![frame] });
+        assert!(!event.requests_default_quit());
+    }
+}
+
+#[test]
+fn font_rendering_notification_is_wait_service_not_command_or_quit_input() {
+    use neomacs_display_protocol::{GraphicalBackend, GraphicalDisplayIdentity};
+    for backend in [GraphicalBackend::Wayland, GraphicalBackend::X11] {
+        let event = InputEvent::SystemFontRenderingChanged {
+            display: GraphicalDisplayIdentity::anonymous_connection(backend),
+        };
+        let mut retained = Vec::new();
+        event.retained_frame_ids(&mut retained);
+        assert!(retained.is_empty(), "a display notification owns no frame");
+        assert!(!event.requests_default_quit());
+        assert_policy(
+            event,
+            FrontendEventClass::LispSpecial,
+            PendingPolicy::Never,
+            false,
+            true,
+        );
+    }
+}
+
+#[test]
+fn unbound_wayland_font_rendering_notification_still_invalidates_redisplay() {
+    use neomacs_display_protocol::{GraphicalBackend, GraphicalDisplayIdentity};
+    let mut eval = crate::emacs_core::Context::new(crate::test_utils::unit_runtime());
+    eval.eval_str("(setq special-event-map nil)").unwrap();
+    let signature = eval.redisplay_signature();
+    *eval.last_redisplay_signature = Some(signature);
+    let before = eval.redisplay_generation();
+    assert!(
+        eval.handle_system_font_rendering_input_event(
+            GraphicalDisplayIdentity::named(GraphicalBackend::Wayland, "wayland-raster-test")
+                .unwrap()
+        )
+        .unwrap()
+    );
+    assert_eq!(eval.redisplay_generation(), before.wrapping_add(1));
+    assert!(eval.last_redisplay_signature.is_none());
+}
+
+#[test]
+fn x11_font_rendering_notification_does_not_invalidate_redisplay() {
+    use neomacs_display_protocol::{GraphicalBackend, GraphicalDisplayIdentity};
+    let mut eval = crate::emacs_core::Context::new(crate::test_utils::unit_runtime());
+    eval.eval_str("(setq special-event-map nil)").unwrap();
+    let signature = eval.redisplay_signature();
+    *eval.last_redisplay_signature = Some(signature);
+    let before = eval.redisplay_generation();
+    assert!(
+        !eval
+            .handle_system_font_rendering_input_event(
+                GraphicalDisplayIdentity::named(GraphicalBackend::X11, ":359").unwrap()
+            )
+            .unwrap()
+    );
+    assert_eq!(eval.redisplay_generation(), before);
+    assert!(eval.last_redisplay_signature.is_some());
+}
+
+#[test]
 fn every_transport_variant_has_locked_down_semantics() {
     use crate::emacs_core::eval::keyboard::{KeyEvent, Modifiers, MouseButton};
 
@@ -141,6 +215,10 @@ fn every_transport_variant_has_locked_down_semantics() {
             target: crate::emacs_core::eval::keyboard::TtyInputTarget::SelectedFrame,
         },
         InputEvent::key_press(KeyEvent::char('k')),
+        InputEvent::NativeNonKey {
+            kind: NativeNonKeyKind::PowerOff,
+            emacs_frame_id: 0,
+        },
         InputEvent::MousePress {
             button: MouseButton::Left,
             x: 0.0,

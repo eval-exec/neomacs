@@ -24,6 +24,24 @@ fn green() -> Context {
 }
 
 #[test]
+fn a_further_owner_holds_no_main_seat_so_drop_skips_main_teardown() {
+    let mut main = green();
+    let baton = main.start_green_runtime().expect("start the Green runtime");
+    let (to_main, from_worker) = mpsc::channel();
+    let worker = std::thread::spawn(move || {
+        baton.enter();
+        let mut owner = Context::new_green_owner(&baton);
+        let seated = owner.green_seat().is_some();
+        owner.retire_green_owner();
+        to_main.send((baton, seated)).expect("the Baton comes back");
+    });
+    let (baton, seated) = from_worker.recv().expect("the Baton comes back");
+    baton.enter();
+    worker.join().expect("the further owner finished");
+    assert!(!seated, "an E6-P owner holds no Green seat");
+}
+
+#[test]
 fn a_further_owner_shares_the_world_and_keeps_its_own_bindings() {
     let mut main = green();
     eval(

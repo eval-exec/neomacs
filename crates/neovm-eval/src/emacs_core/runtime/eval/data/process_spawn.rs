@@ -17,6 +17,8 @@
 use std::fs::File;
 use std::process::ExitStatus;
 
+use super::process_state::PollRegistration;
+
 /// One standard descriptor of the child, mirroring `std::process::Stdio`.
 pub enum ChildStdio {
     /// Share the editor's descriptor.
@@ -71,7 +73,7 @@ fn pipe_reader_into_file(reader: os_pipe::PipeReader) -> File {
 /// descriptors, and the handle that waits for or kills it.
 pub struct SpawnedChild {
     pub pid: u32,
-    pub stdin: Option<File>,
+    pub stdin: Option<PollRegistration<File>>,
     pub stdout: Option<File>,
     pub stderr: Option<File>,
     pub backend: ChildBackend,
@@ -93,7 +95,10 @@ impl SpawnedChild {
     /// Adopt a child spawned through `std::process::Command`, moving its
     /// piped descriptors onto this handle.
     pub fn from_std(mut child: std::process::Child) -> Self {
-        let stdin = child.stdin.take().map(std_pipe_into_file);
+        let stdin = child
+            .stdin
+            .take()
+            .map(|pipe| PollRegistration::new(std_pipe_into_file(pipe)));
         let stdout = child.stdout.take().map(std_pipe_into_file);
         let stderr = child.stderr.take().map(std_pipe_into_file);
         Self {

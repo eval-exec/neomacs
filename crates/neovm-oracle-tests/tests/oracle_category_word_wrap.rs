@@ -58,6 +58,44 @@ fn category_word_wrap_custom_ascii_table_obeys_kinsoku() {
     assert_interactive_parity(&form, expect_test::expect![["(15 24 24 23 24 23)"]]);
 }
 
+#[test]
+fn invisible_ellipsis_wrap_matches_gnu_with_word_wrap_on_and_off() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+    let form = r#"(progn
+(defun invis-wrap-probe (ww trunc prefix)
+ (with-current-buffer (get-buffer-create "*invis-wrap-probe*")
+  (erase-buffer)
+  (setq-local word-wrap ww truncate-lines trunc truncate-partial-width-windows nil)
+  (setq-local buffer-invisibility-spec '((outline . t)))
+  (insert prefix)
+  (let ((hs (point)))
+   (insert "hidden")
+   (put-text-property hs (point) 'invisible 'outline))
+  (let ((ts (point)))
+   (insert "TAIL\nNEXT\n")
+   (goto-char 1)
+   (set-window-start (selected-window) 1 t)
+   (switch-to-buffer (current-buffer))
+   (let ((noninteractive nil))
+    (redisplay t)
+    (let ((vm1 (save-excursion (goto-char 1) (vertical-motion 1) (point)))
+          (pt-a (posn-col-row (posn-at-point (1+ ts))))
+          (pt-next (posn-col-row (posn-at-point (+ ts 5)))))
+     (list vm1 pt-a pt-next))))))
+(list (window-body-width)
+      (invis-wrap-probe nil nil (make-string 22 ?a))
+      (invis-wrap-probe t nil (concat (make-string 14 ?a) " " (make-string 7 ?b)))
+      (invis-wrap-probe t nil (concat (make-string 21 ?a) " "))
+      (invis-wrap-probe t nil (make-string 22 ?a))
+      (invis-wrap-probe nil t (make-string 22 ?a))))"#;
+    assert_interactive_parity(
+        form,
+        expect_test::expect![[
+            "(24 (29 (3 . 1) (0 . 2)) (16 (11 . 1) (0 . 2)) (29 (4 . 1) (0 . 2)) (29 (3 . 1) (0 . 2)) (34 (23 . 0) (0 . 1)))"
+        ]],
+    );
+}
+
 // GNU --batch does not perform interactive word wrapping, even if a form
 // creates a terminal frame. Reuse the owned PTY/drainer and run each editor's
 // actual event loop; the Lisp probe writes its result independently of ANSI.

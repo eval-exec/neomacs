@@ -30,13 +30,13 @@ const _: () = assert!(std::mem::size_of::<CacheScope>() == 0);
 impl CacheScope {
     #[doc(hidden)]
     pub fn enter() -> Self {
-        cache::clear();
+        cache::clear_with_serial_receipt().expect("serial jit grace");
         Self(std::marker::PhantomData)
     }
 }
 impl Drop for CacheScope {
     fn drop(&mut self) {
-        cache::clear();
+        cache::clear_with_serial_receipt().expect("serial jit grace");
     }
 }
 
@@ -99,16 +99,20 @@ fn opt_require_osr_normal_only_sources_keep_numeric_mir_and_list_legacy_clif() {
             if list {
                 let pair = pair();
                 assert_eq!(
-                    guarded.call(
-                        &mut ctx as *mut Context as *mut u8,
-                        &[pair, Value::make_int(4)]
-                    ),
+                    unsafe {
+                        guarded.call(
+                            &mut ctx as *mut Context as *mut u8,
+                            &[pair, Value::make_int(4)],
+                        )
+                    },
                     NativeRun::Ok(Value::make_int(4).bits())
                 );
                 assert_eq!(pair.cons_car(), Value::make_int(3));
             } else {
                 assert_eq!(
-                    guarded.call(&mut ctx as *mut Context as *mut u8, &[Value::make_int(4)]),
+                    unsafe {
+                        guarded.call(&mut ctx as *mut Context as *mut u8, &[Value::make_int(4)])
+                    },
                     NativeRun::Ok(Value::make_int(4).bits())
                 );
             }
@@ -156,10 +160,10 @@ fn opt_require_osr_ready_list_osr_then_normal_cache_selects_opt_and_runs_mutatio
         Some(Value::make_int(6).bits())
     );
     assert_eq!(pair.cons_car(), Value::make_int(5));
-    let entry = cache::resolve_compiled_leaf_ptr(&mut ctx, &source).unwrap();
+    let entry = unsafe { cache::resolve_compiled_leaf_ptr(&mut ctx, &source) }.unwrap();
     assert_eq!(unsafe { &*entry }.selected_tier(), SelectedTier::Opt);
     assert_eq!(ctx.jit_root_stack_top, 0);
-    cache::clear();
+    cache::clear_with_serial_receipt().expect("serial jit grace");
 }
 
 fn numeric_then_list() -> ByteCodeFunction {
@@ -248,14 +252,16 @@ fn opt_require_osr_numeric_header_cannot_qualify_separate_list_backedge() {
     let selected = compile(&ctx, &source, CompileTier::T1);
     assert_eq!(selected.selected_tier(), SelectedTier::Opt);
     assert_eq!(
-        selected.call(
-            &mut ctx as *mut Context as *mut u8,
-            &[pair, Value::make_int(6)]
-        ),
+        unsafe {
+            selected.call(
+                &mut ctx as *mut Context as *mut u8,
+                &[pair, Value::make_int(6)],
+            )
+        },
         NativeRun::Ok(Value::make_int(6).bits())
     );
     assert_eq!(pair.cons_car(), Value::make_int(5));
-    cache::clear();
+    cache::clear_with_serial_receipt().expect("serial jit grace");
 }
 
 #[test]

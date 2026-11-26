@@ -76,5 +76,13 @@ error[E0599]: the associated function or constant `transfer` exists for struct `
           which is required by `ParallelHeapEra<'static, Baton>: Send`
           `NonNull<[Cell<usize>; 8192]>: Send`
           which is required by `ParallelHeapEra<'static, Baton>: Send`
+          `*mut UserPtrObj: Send`
+          which is required by `ParallelHeapEra<'static, Baton>: Send`
+          `*mut c_void: Send`
+          which is required by `ParallelHeapEra<'static, Baton>: Send`
+          `*mut ModuleFunctionObj: Send`
+          which is required by `ParallelHeapEra<'static, Baton>: Send`
+          `*mut SqliteObj: Send`
+          which is required by `ParallelHeapEra<'static, Baton>: Send`
           `Rc<collection_reads::store_state::WorldObservations>: Send`
           which is required by `ParallelHeapEra<'static, Baton>: Send`

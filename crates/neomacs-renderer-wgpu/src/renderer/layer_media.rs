@@ -83,24 +83,27 @@ impl PreparedInlineVideos<'_> {
 
     pub(super) fn draw(
         &self,
-        render_pass: &mut wgpu::RenderPass<'_>,
+        render_pass: &mut super::frame_pass::FrameRenderPass<'_>,
         upload: &super::dynamic_buffer::VertexUpload,
         packed_pipeline: &wgpu::RenderPipeline,
         bi_planar_pipeline: &wgpu::RenderPipeline,
     ) {
-        render_pass.set_vertex_buffer(0, upload.buffer_slice());
+        let Some(video_pass) = render_pass.as_video_pass_mut() else {
+            return;
+        };
+        video_pass.set_vertex_buffer(0, upload.buffer_slice());
         for (index, quad) in self.quads.iter().enumerate() {
             if let Some(frame) = self.draws.get(quad.id) {
-                render_pass.set_pipeline(match frame.sample_kind() {
+                video_pass.set_pipeline(match frame.sample_kind() {
                     neomacs_video::VideoSampleKind::Packed => packed_pipeline,
                     neomacs_video::VideoSampleKind::BiPlanar => bi_planar_pipeline,
                 });
-                render_pass.set_bind_group(1, frame.bind_group(), &[]);
-                render_pass.draw((index * 6) as u32..(index * 6 + 6) as u32, 0..1);
+                frame.bind_to_pass(video_pass, 1);
+                video_pass.draw((index * 6) as u32..(index * 6 + 6) as u32, 0..1);
             }
         }
         // Later media phases intentionally inherit the canonical image path.
-        render_pass.set_pipeline(packed_pipeline);
+        video_pass.set_pipeline(packed_pipeline);
     }
 }
 
@@ -311,7 +314,76 @@ pub(super) fn prepare_inline_videos<'a>(
     });
     let draws = cache.prepare_draws(ids)?;
     let quads = collect_prepared_video_quads(glyphs, offset_x, offset_y, &draws);
-    (!quads.is_empty()).then_some(PreparedInlineVideos { draws, quads })
+    Some(PreparedInlineVideos { draws, quads })
+}
+
+/// Emit the 1px hollow outline GNU's `x_draw_image_foreground` / `x_draw_rectangle`
+/// (`src/xterm.c:10283-10286`, `6737-6752`) draws for an image that failed to load.
+pub(super) fn append_clipped_hollow_box(
+    vertices: &mut Vec<RectVertex>,
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+    color: neomacs_display_protocol::Color,
+    clip: Option<&Rect>,
+) {
+    if width <= 0.0 || height <= 0.0 {
+        return;
+    }
+    let color_arr = [color.r, color.g, color.b, color.a];
+    let mut push_clipped = |rx: f32, ry: f32, rw: f32, rh: f32| {
+        if rw <= 0.0 || rh <= 0.0 {
+            return;
+        }
+        let (mut x0, mut y0, mut x1, mut y1) = (rx, ry, rx + rw, ry + rh);
+        if let Some(clip) = clip {
+            x0 = x0.max(clip.x);
+            y0 = y0.max(clip.y);
+            x1 = x1.min(clip.x + clip.width);
+            y1 = y1.min(clip.y + clip.height);
+            if x1 <= x0 || y1 <= y0 {
+                return;
+            }
+        }
+        vertices.push(RectVertex {
+            position: [x0, y0],
+            color: color_arr,
+        });
+        vertices.push(RectVertex {
+            position: [x1, y0],
+            color: color_arr,
+        });
+        vertices.push(RectVertex {
+            position: [x0, y1],
+            color: color_arr,
+        });
+        vertices.push(RectVertex {
+            position: [x1, y0],
+            color: color_arr,
+        });
+        vertices.push(RectVertex {
+            position: [x1, y1],
+            color: color_arr,
+        });
+        vertices.push(RectVertex {
+            position: [x0, y1],
+            color: color_arr,
+        });
+    };
+    let top_h = height.min(1.0);
+    push_clipped(x, y, width, top_h);
+    if height > 1.0 {
+        push_clipped(x, y + height - 1.0, width, 1.0);
+    }
+    if height > 2.0 {
+        let side_h = height - 2.0;
+        let left_w = width.min(1.0);
+        push_clipped(x, y + 1.0, left_w, side_h);
+        if width > 1.0 {
+            push_clipped(x + width - 1.0, y + 1.0, 1.0, side_h);
+        }
+    }
 }
 
 impl WgpuRenderer {
@@ -332,10 +404,28 @@ impl WgpuRenderer {
                 width,
                 height,
                 clip_rect,
+                face_id,
+                presentation,
                 ..
             } = glyph
             {
                 let effective_clip = *clip_rect;
+                if matches!(
+                    presentation,
+                    neomacs_display_protocol::ImageGlyphPresentation::FailedPlaceholder
+                ) {
+                    let rf = frame_glyphs.resolved_face(*face_id);
+                    append_clipped_hollow_box(
+                        &mut relief_vertices,
+                        *x,
+                        *y,
+                        *width,
+                        *height,
+                        rf.fg,
+                        effective_clip.as_ref(),
+                    );
+                    continue;
+                }
                 let (
                     draw_x,
                     draw_y,
@@ -485,20 +575,21 @@ impl WgpuRenderer {
         // phase that follows inherits this pipeline state.
         let render_pass = &mut ctx.pass;
         render_pass.set_pipeline(&self.pipelines.image);
-        let Some(upload) = upload else {
-            return;
-        };
-        render_pass.set_vertex_buffer(0, upload.buffer_slice());
-        for (i, quad) in quads.iter().enumerate() {
-            if let Some(cached) = self.caches.image.get(quad.id) {
-                render_pass.set_bind_group(1, &cached.bind_group, &[]);
-                render_pass.draw((i * 6) as u32..(i * 6 + 6) as u32, 0..1);
+        if let Some(upload) = upload {
+            render_pass.set_vertex_buffer(0, upload.buffer_slice());
+            for (i, quad) in quads.iter().enumerate() {
+                if let Some(cached) = self.caches.image.get(quad.id) {
+                    render_pass.set_bind_group(1, &cached.bind_group, &[]);
+                    render_pass.draw((i * 6) as u32..(i * 6 + 6) as u32, 0..1);
+                }
             }
         }
-        self.draw_rect_vertex_layer(&mut ctx.pass, &relief_vertices);
-        // Feature-gated video rendering intentionally inherits the image
-        // pipeline from this phase, so restore it after relief edges.
-        ctx.pass.set_pipeline(&self.pipelines.image);
+        if !relief_vertices.is_empty() {
+            self.draw_rect_vertex_layer(&mut ctx.pass, &relief_vertices);
+            // Feature-gated video rendering intentionally inherits the image
+            // pipeline from this phase, so restore it after relief/box edges.
+            ctx.pass.set_pipeline(&self.pipelines.image);
+        }
     }
 
     /// Draw inline videos (inherits the image pipeline set by the inline
@@ -511,6 +602,9 @@ impl WgpuRenderer {
         else {
             return Vec::new();
         };
+        if prepared.quads.is_empty() {
+            return Vec::new();
+        }
         self.media_budget.touch(
             crate::media_budget::MediaType::Video,
             crate::video_cache::VIDEO_GPU_POOL_ACCOUNTING_ID,

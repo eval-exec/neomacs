@@ -68,6 +68,7 @@ fn terminal_face_for_flags_and_font(
         descent_px: 4.0,
         space_advance_px: 10.0,
         glyph_advance: ResolvedFontAdvance::fixed_cell(10.0),
+        spacing: None,
     };
     let mut default_face = Face::new(FaceId::new(0));
     default_face.default_resolved_font_id = Some(font_id);

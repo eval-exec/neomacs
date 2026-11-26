@@ -60,11 +60,15 @@ fn frame_bar_parameters_survive_startup_and_gui_redisplay() {
         assert_eq!(state["menu"], menu, "{state}");
         assert_eq!(state["tool"], 0, "{state}");
         assert_eq!(state["mode"], mode, "{state}");
-        if menu == 0 {
-            assert_eq!(state["top"], 0, "hidden frame bar reserves no row: {state}");
-        } else {
-            assert!(state["top"].as_u64().unwrap() > 0, "{state}");
-        }
+        // `window-pixel-top` is window-area-relative.  GNU's Gtk+ build keeps
+        // the menu bar outside the native frame, so the oracle reports 0 with
+        // the bar shown and hidden alike (src/frame.c:4401-4418); Neomacs
+        // still paints the bar inside its window, which the rendered root
+        // geometry below checks.
+        assert_eq!(
+            state["top"], 0,
+            "the Lisp window area starts at the frame top whatever the menu bar: {state}"
+        );
         let snapshot: serde_json::Value = serde_json::from_slice(
             &std::fs::read(format!(
                 "{}.{tag}",

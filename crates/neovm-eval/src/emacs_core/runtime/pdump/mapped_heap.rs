@@ -129,9 +129,14 @@ pub(crate) struct MappedBytes {
 }
 
 impl MappedHeapView {
-    #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
-    #[doc(hidden)]
-    pub fn from_slice(bytes: &[u8]) -> Self {
+    /// Build a read-only view over a test backing slice.
+    ///
+    /// # Safety
+    /// `MappedHeapView` is `Copy` and erases the slice lifetime. The caller
+    /// must guarantee `bytes` remains live and unmoved (with no conflicting
+    /// mutable borrows) for as long as any copy of the returned view is used.
+    #[cfg(test)]
+    pub(crate) unsafe fn from_slice(bytes: &[u8]) -> Self {
         Self {
             ptr: bytes.as_ptr().cast_mut(),
             len: bytes.len(),
@@ -139,9 +144,14 @@ impl MappedHeapView {
         }
     }
 
-    #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
-    #[doc(hidden)]
-    pub fn from_mut_slice(bytes: &mut [u8]) -> Self {
+    /// Build a writable view over a test backing slice.
+    ///
+    /// # Safety
+    /// `MappedHeapView` is `Copy` and erases the slice lifetime. The caller
+    /// must guarantee `bytes` remains live, unmoved, and free of conflicting
+    /// references for as long as any copy of the returned view is used.
+    #[cfg(test)]
+    pub(crate) unsafe fn from_mut_slice(bytes: &mut [u8]) -> Self {
         Self {
             ptr: bytes.as_mut_ptr(),
             len: bytes.len(),
@@ -149,6 +159,13 @@ impl MappedHeapView {
         }
     }
 
+    /// Build a view over a raw heap-image mapping.
+    ///
+    /// # Safety
+    /// `ptr` must be valid for reads (and writes when `writable` is `true`)
+    /// across `len` contiguous bytes for as long as any copy of the returned
+    /// `MappedHeapView` or any mapped object pointer derived from it is used,
+    /// with provenance derived from a mutable mapping when `writable` is `true`.
     #[doc(hidden)]
     pub unsafe fn from_raw_parts(ptr: *mut u8, len: usize, writable: bool) -> Self {
         Self { ptr, len, writable }
@@ -837,9 +854,9 @@ pub(crate) fn baked_stub_template(extras_len: usize) -> Box<[u8]> {
         // stack_verified, max_stack, arglist = Value::NIL = 0, lexical) and
         // the pointer-niched Nones (runtime, lazy_gnu_code: None = null
         // word) stay at the template's zeros.
-        addr_of_mut!((*p).ops).write(Vec::new());
+        ByteCodeFunction::ops_ptr(p).write(Vec::new());
         ByteCodeFunction::ops_sealed_ptr(p).write(true);
-        addr_of_mut!((*p).constants).write(Vec::new().into());
+        ByteCodeFunction::constants_ptr(p).write(Vec::new().into());
         // SAFETY: FunctionParams has repr(C, u8), with first variant
         // Stack's tag equal to zero; ArgTemplate is repr(transparent) i64.
         // All-zero bytes therefore represent the concrete Stack(0) variant.
@@ -847,19 +864,23 @@ pub(crate) fn baked_stub_template(extras_len: usize) -> Box<[u8]> {
         // never interpreted. Writing bytes keeps inactive payload and padding
         // deterministic without forming a transient invalid enum reference.
         std::ptr::write_bytes(
-            addr_of_mut!((*p).params).cast::<u8>(),
+            ByteCodeFunction::params_ptr(p).cast::<u8>(),
             0,
             std::mem::size_of::<crate::emacs_core::bytecode::FunctionParams>(),
         );
         addr_of_mut!((*p).closure_slot_count).write(extras_len);
         addr_of_mut!((*p).extra_slots).write(Vec::new());
-        write_canonical_none(addr_of_mut!((*p).env), None, Option::is_none);
+        write_canonical_none(ByteCodeFunction::env_ptr(p), None, Option::is_none);
         write_canonical_none(
-            addr_of_mut!((*p).gnu_byte_offset_map),
+            ByteCodeFunction::gnu_byte_offset_map_ptr(p),
             None,
             Option::is_none,
         );
-        write_canonical_none(addr_of_mut!((*p).gnu_bytecode_bytes), None, Option::is_none);
+        write_canonical_none(
+            ByteCodeFunction::gnu_bytecode_bytes_ptr(p),
+            None,
+            Option::is_none,
+        );
         write_canonical_none(addr_of_mut!((*p).docstring), None, Option::is_none);
         write_canonical_none(addr_of_mut!((*p).doc_form), None, Option::is_none);
         write_canonical_none(addr_of_mut!((*p).interactive), None, Option::is_none);
@@ -877,19 +898,19 @@ pub(crate) fn baked_stub_template(extras_len: usize) -> Box<[u8]> {
         );
         assert_eq!(stub.source_id(), 0);
         assert!(!stub.stack_verified());
-        assert!(stub.constants.as_slice().is_empty());
+        assert!(stub.constants().as_slice().is_empty());
         assert_eq!(
-            stub.max_stack,
+            stub.max_stack(),
             crate::emacs_core::bytecode::StackDepth::ZERO
         );
         assert!(
-            matches!(stub.params, crate::emacs_core::bytecode::FunctionParams::Stack(template) if template.raw() == 0)
+            matches!(stub.params(), crate::emacs_core::bytecode::FunctionParams::Stack(template) if template.raw() == 0)
         );
-        assert_eq!(stub.arglist.bits(), neovm_value::value::Value::NIL.bits());
-        assert!(!stub.lexical);
-        assert!(stub.env.is_none());
-        assert!(stub.gnu_byte_offset_map.is_none());
-        assert!(stub.gnu_bytecode_bytes.is_none());
+        assert_eq!(stub.arglist().bits(), neovm_value::value::Value::NIL.bits());
+        assert!(!stub.lexical());
+        assert!(stub.env().is_none());
+        assert!(stub.gnu_byte_offset_map().is_none());
+        assert!(stub.gnu_bytecode_bytes().is_none());
         assert!(stub.docstring.is_none());
         assert!(stub.doc_form.is_none());
         assert!(stub.interactive.is_none());

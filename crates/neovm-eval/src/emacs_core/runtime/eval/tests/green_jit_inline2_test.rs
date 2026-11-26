@@ -86,10 +86,10 @@ fn fixture(action: impl FnOnce(&mut Context)) {
 fn bytecode(ops: Vec<Op>, constants: Vec<Value>) -> ByteCodeFunction {
     let mut function =
         ByteCodeFunction::new(LambdaParams::simple(vec![intern("g2-inline-argument")]));
-    function.lexical = true;
-    function.ops = ops;
-    function.constants = constants.into();
-    function.max_stack = StackDepth::for_test(32);
+    function.set_lexical(true);
+    function.set_ops(ops);
+    function.set_constants(constants.into());
+    function.set_max_stack(StackDepth::for_test(32));
     function.seal_hand_assembled_ops_for_test();
     function.jit_runtime().set_hot_for_test();
     function
@@ -147,16 +147,6 @@ fn yield_native(context: &mut Context) -> EvalResult {
     handoff(context)
 }
 
-fn frame_function(entry: &SpecBinding) -> Option<Value> {
-    match entry {
-        SpecBinding::Backtrace { function, .. }
-        | SpecBinding::Backtrace1 { function, .. }
-        | SpecBinding::Backtrace2 { function, .. }
-        | SpecBinding::BacktraceNative { function, .. } => Some(*function),
-        _ => None,
-    }
-}
-
 fn signal_hook(context: &mut Context, symbol: Value, _data: Value) -> EvalResult {
     assert_eq!(symbol, Value::symbol("wrong-type-argument"));
     assert_eq!(
@@ -169,7 +159,7 @@ fn signal_hook(context: &mut Context, symbol: Value, _data: Value) -> EvalResult
         context
             .specpdl
             .iter()
-            .filter_map(frame_function)
+            .filter_map(SpecBinding::backtrace_function)
             .any(|function| function == callee),
         "the inlined callee is already a real backtrace frame"
     );
@@ -246,7 +236,7 @@ fn physical_caller_handoff(context: &mut Context, admit: bool) {
     let argument = Value::cons(Value::fixnum(456), Value::string("inline2-root"));
     context.set_variable("g2-inline-kept", argument);
     assert_eq!(
-        leaf.call(context as *mut Context as *mut u8, &[argument]),
+        unsafe { leaf.call(context as *mut Context as *mut u8, &[argument]) },
         NativeRun::Ok(Value::fixnum(456).bits()),
         "the original inline2-capable native caller continues after handoff"
     );
@@ -311,7 +301,7 @@ fn materialized_callee_handoff(context: &mut Context, admit: bool) {
         "g2-inline-admit-in-hook",
         if admit { Value::T } else { Value::NIL },
     );
-    let run = leaf.call(context as *mut Context as *mut u8, &[argument]);
+    let run = unsafe { leaf.call(context as *mut Context as *mut u8, &[argument]) };
     let NativeRun::DeoptAt(resume) = run else {
         panic!("the virtual Car guard must precisely exit: {run:?}")
     };

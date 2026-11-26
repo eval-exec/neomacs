@@ -55,8 +55,8 @@ fn reader() -> ByteCodeFunction {
         optional: Vec::new(),
         rest: None,
     });
-    f.lexical = true;
-    f.ops = vec![Op::VarRef(0), Op::Return];
+    f.set_lexical(true);
+    f.set_ops(vec![Op::VarRef(0), Op::Return]);
     f
 }
 
@@ -64,8 +64,8 @@ fn reader() -> ByteCodeFunction {
 /// `lookup_var_id`): the printed value or the signal's symbol.
 fn vm_read(ev: &mut Context, name: &'static str) -> String {
     let mut f = reader();
-    f.constants = vec![Value::from_sym_id(intern(name))].into();
-    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(4);
+    f.set_constants(vec![Value::from_sym_id(intern(name))].into());
+    f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(4));
     let mut vm = Vm::from_context(ev);
     match vm.execute(&f, vec![]) {
         Ok(value) => print_value(&value),
@@ -311,11 +311,12 @@ fn canonical_plain_word_survives_collection() {
 #[test]
 fn obarray_clone_normalizes_projections() {
     let mut ev = fixture();
-    let unprojected = fixture();
     for &(name, _) in SHAPES {
         project(&mut ev, name);
     }
     let mut copy = ev.obarray.clone();
+    let parked_ev = ev.park_for_test();
+    let unprojected = fixture();
     for &(name, _) in SHAPES {
         let id = intern(name);
         let sym = copy.get_by_id(id).expect("symbol");
@@ -338,6 +339,8 @@ fn obarray_clone_normalizes_projections() {
             "{name}: default"
         );
     }
+    drop(unprojected);
+    let mut ev = parked_ev.resume_for_test().expect("resume projected");
     copy.set_symbol_value_id(intern("tpr-plain"), Value::fixnum(1));
     copy.set_symbol_value_id(intern("tpr-obj"), Value::fixnum(2));
     assert_eq!(
@@ -353,17 +356,26 @@ fn obarray_clone_normalizes_projections() {
 fn pdump_writes_the_projected_variable() {
     use crate::emacs_core::pdump::convert::dumped_symbol_value_for_test;
     let mut ev = fixture();
-    let unprojected = fixture();
     for &(name, _) in SHAPES {
         project(&mut ev, name);
     }
+    let mut parked_ev = ev.park_for_test();
+    let mut unprojected = fixture();
     for &(name, _) in SHAPES {
         let id = intern(name);
+        let expected =
+            dumped_symbol_value_for_test(unprojected.obarray.get_by_id(id).expect("symbol"));
+        let parked_unprojected = unprojected.park_for_test();
+        let ev = parked_ev.resume_for_test().expect("resume projected");
         assert_eq!(
             dumped_symbol_value_for_test(ev.obarray.get_by_id(id).expect("symbol")),
-            dumped_symbol_value_for_test(unprojected.obarray.get_by_id(id).expect("symbol")),
+            expected,
             "{name}"
         );
+        parked_ev = ev.park_for_test();
+        unprojected = parked_unprojected
+            .resume_for_test()
+            .expect("resume unprojected");
     }
 }
 
@@ -384,8 +396,9 @@ fn projected_localized_read_allocates_nothing_without_the_buffer_object() {
         .buffers
         .set_buffer_local_property_by_sym_id(buffer_id, id, Value::fixnum(4547))
         .expect("the local binding is written");
-    let buffer_object =
-        || neovm_value::tagged::gc::with_tagged_heap(|heap| heap.buffer_value(buffer_id));
+    let buffer_object = || unsafe {
+        neovm_value::tagged::gc::with_tagged_heap(|heap| heap.buffer_value(buffer_id))
+    };
     assert!(buffer_object().is_none(), "the buffer object starts absent");
     let allocated = ev.tagged_heap.allocated_count();
 
@@ -467,13 +480,16 @@ fn projected_localized_generic_view_keeps_cache_hits_lazy() {
     unsafe {
         let cache = &*blv.blv().as_ptr();
         assert_eq!(cache.where_buf.get(), object);
-        assert_eq!(cache.where_buf_id, buffer_id.0);
-        assert!(cache.found);
+        assert_eq!(cache.where_buf_id.get(), buffer_id.0);
+        assert!(cache.found.get());
         assert_eq!(
-            Some(cache.valcell.get()),
+            Some(cache.valcell()),
             view.buffer.local_variable_binding_cell(id)
         );
-        assert_eq!(cache.alist_epoch, neovm_value::symbol::blv_alist_epoch());
+        assert_eq!(
+            cache.alist_epoch.get(),
+            neovm_value::symbol::blv_alist_epoch()
+        );
     }
     assert_eq!(
         ev.obarray.read_projected_localized(id, blv, Some(&view)),
@@ -489,7 +505,7 @@ fn projected_localized_generic_view_keeps_cache_hits_lazy() {
     // SAFETY: same owned BLV; the preceding bufferless read has completed.
     unsafe {
         assert_eq!((*blv.blv().as_ptr()).where_buf.get(), object);
-        assert!((*blv.blv().as_ptr()).found);
+        assert!((*blv.blv().as_ptr()).found.get());
     }
     assert_eq!(ev.tagged_heap.allocated_count(), allocated);
 }
@@ -520,10 +536,13 @@ fn projected_localized_generic_view_keeps_unregistered_cache_locus_nil() {
             unsafe {
                 let cache = &*blv.blv().as_ptr();
                 assert!(cache.where_buf.get().is_nil());
-                assert_eq!(cache.where_buf_id, neovm_value::symbol::NO_WHERE_BUF);
-                assert!(!cache.found);
-                assert_eq!(cache.valcell.get(), cache.defcell.get());
-                assert_eq!(cache.alist_epoch, neovm_value::symbol::blv_alist_epoch());
+                assert_eq!(cache.where_buf_id.get(), neovm_value::symbol::NO_WHERE_BUF);
+                assert!(!cache.found.get());
+                assert_eq!(cache.valcell(), cache.defcell());
+                assert_eq!(
+                    cache.alist_epoch.get(),
+                    neovm_value::symbol::blv_alist_epoch()
+                );
             }
         }
     }
@@ -545,16 +564,20 @@ fn projected_localized_generic_view_keeps_unregistered_cache_locus_nil() {
     unsafe {
         let cache = &*blv.blv().as_ptr();
         assert!(cache.where_buf.get().is_nil());
-        assert_eq!(cache.where_buf_id, neovm_value::symbol::NO_WHERE_BUF);
-        assert!(cache.found);
+        assert_eq!(cache.where_buf_id.get(), neovm_value::symbol::NO_WHERE_BUF);
+        assert!(cache.found.get());
         assert_eq!(
-            Some(cache.valcell.get()),
+            Some(cache.valcell()),
             view.buffer.local_variable_binding_cell(id)
         );
-        assert_eq!(cache.alist_epoch, neovm_value::symbol::blv_alist_epoch());
+        assert_eq!(
+            cache.alist_epoch.get(),
+            neovm_value::symbol::blv_alist_epoch()
+        );
     }
     assert!(
-        neovm_value::tagged::gc::with_tagged_heap(|heap| heap.buffer_value(buffer_id)).is_none()
+        unsafe { neovm_value::tagged::gc::with_tagged_heap(|heap| heap.buffer_value(buffer_id)) }
+            .is_none()
     );
     assert_eq!(ev.tagged_heap.allocated_count(), allocated);
 }

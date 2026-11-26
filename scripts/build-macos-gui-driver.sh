@@ -6,7 +6,11 @@ if [[ $(uname -s) != Darwin ]]; then
   exit 1
 fi
 root=$PWD
-app="$root/target/gui-driver/NeomacsGuiDriver.app"
+app="${NEOMACS_GUI_DRIVER_APP:-$root/target/gui-driver/NeomacsGuiDriver.app}"
+if [[ $app != /* ]]; then
+  echo 'NEOMACS_GUI_DRIVER_APP must be an absolute app bundle path.' >&2
+  exit 1
+fi
 mkdir -p "$app/Contents/MacOS" "$root/tmp/gui-driver/swift-cache"
 export TMPDIR="$root/tmp"
 cat > "$app/Contents/Info.plist" <<'PLIST'
@@ -29,4 +33,4 @@ swiftc -parse-as-library -swift-version 5 -O \
   -o "$app/Contents/MacOS/NeomacsGuiDriver"
 codesign --force --sign "${NEOMACS_GUI_DRIVER_SIGN_IDENTITY:--}" --identifier org.neomacs.GuiDriver "$app"
 printf 'Built %s\n' "$app"
-printf 'Launch in the logged-in desktop: open -n %q --args %q\n' "$app" "$root/tmp/gui-driver.sock"
+printf 'Launch in the logged-in desktop: open -n %q --args %q\n' "$app" "${NEOMACS_GUI_DRIVER_SOCKET:-$root/tmp/gui-driver.sock}"

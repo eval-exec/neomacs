@@ -102,11 +102,11 @@ fn observed_gc_rebuild_keeps_non_native_ledger_and_only_native_geometry() {
     let reads = reads.expect("retained owners supply a real certificate");
     let _ = capture(|| {
         assert_eq!(
-            discarded.as_vector_data().unwrap()[0],
+            discarded.as_vector_data().unwrap().at(0),
             TaggedValue::make_int(7)
         )
     });
-    heap.collect_exact([retained, reference].into_iter());
+    heap.collect_rooted([retained, reference].into_iter());
     assert!(heap.owns_heap_value_for_test(retained));
     assert!(heap.owns_heap_value_for_test(reference));
     assert!(!heap.owns_heap_value_for_test(discarded));

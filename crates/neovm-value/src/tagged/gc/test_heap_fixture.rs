@@ -15,7 +15,7 @@ impl TestHeap {
 
     /// Finish address-independent setup before installing a custom heap.
     pub(crate) fn from_heap(heap: TaggedHeap) -> Self {
-        let fixture = Self {
+        let mut fixture = Self {
             owner: AliasableBox::new(heap),
         };
         fixture.install();
@@ -28,8 +28,22 @@ impl TestHeap {
     }
 
     /// Refresh TLS from the root after a phase/barrier-window change.
-    pub fn install(&self) {
-        set_tagged_heap_root(self.root());
+    ///
+    /// Refuses with a cold panic if a different live heap is already installed
+    /// on this thread (rt A3 N5).
+    pub fn install(&mut self) {
+        // SAFETY: this fixture owns the AliasableBox root it installs;
+        // `&mut self` excludes any live shared reference to the heap while
+        // `sync_heap_tls_mirrors` writes through `&mut *root`.
+        unsafe { install_tagged_heap_root_refusing_foreign(self.root()) }
+    }
+
+    /// Safe test collection. Production [`TaggedHeap::collect_exact`] is unsafe.
+    pub fn collect_rooted(
+        &mut self,
+        roots: impl Iterator<Item = crate::tagged::value::TaggedValue>,
+    ) {
+        TaggedHeap::collect_rooted(self.deref_mut(), roots)
     }
 
     #[cfg(test)]

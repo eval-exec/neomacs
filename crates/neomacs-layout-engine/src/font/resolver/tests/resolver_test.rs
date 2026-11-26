@@ -605,6 +605,8 @@ fn equal_score_entities_keep_their_own_discovery_order() {
             queried_family: Some("Fixture"),
             size: selection_size(),
         },
+        EqualScoreTie::Discovery,
+        &[],
     )
     .expect("equal-score entity");
 
@@ -1024,7 +1026,7 @@ fn captured_character_policy_selects_on_a_thread_without_evaluator_state() {
         );
         let resolver = FontResolver::new(Box::new(CandidateBackend { candidates }));
         resolver
-            .resolve_from_policy(&policy, true)
+            .resolve_from_policy(&policy, true, CatalogPass::All)
             .expect("captured selection")
     })
     .join()
@@ -1405,3 +1407,787 @@ mod accepted_listing_review_test;
 #[cfg(target_os = "linux")]
 #[path = "named_listing_weight_review_test.rs"]
 mod named_listing_weight_review_test;
+
+#[test]
+fn face_family_preferences_try_foundry_before_relaxing_style() {
+    let mut foreign = candidate("Foreign Sans", 400, FontSlant::Normal, 0);
+    foreign.matched.metadata.foundry = Some("Other".into());
+    let mut preferred = candidate("Preferred Sans", 700, FontSlant::Normal, 0);
+    preferred.matched.metadata.foundry = Some("PfEd".into());
+    let resolver = FontResolver::new(Box::new(ScopedListingBackend {
+        candidates: vec![foreign, preferred],
+    }));
+    let selected = resolver
+        .resolve_face_font(
+            "Unavailable Family",
+            Some("pfed"),
+            400,
+            FontSlant::Normal,
+            FontWidth::Normal,
+            selection_size(),
+        )
+        .expect("unconstrained family pass with the face's foundry preference");
+    assert_eq!(selected.family(), "Preferred Sans");
+    assert_eq!(selected.weight(), Some(700));
+}
+
+#[test]
+fn face_family_preferences_relax_foundry_without_a_monospace_bias() {
+    let resolver = FontResolver::new(Box::new(ScopedListingBackend {
+        candidates: vec![
+            candidate("First Sans", 400, FontSlant::Normal, 0),
+            candidate("Second Mono", 400, FontSlant::Normal, 100),
+        ],
+    }));
+    for foundry in [None, Some("Unavailable Foundry")] {
+        let selected = resolver
+            .resolve_face_font(
+                "Unavailable Family",
+                foundry,
+                400,
+                FontSlant::Normal,
+                FontWidth::Normal,
+                selection_size(),
+            )
+            .expect("all native candidates after relaxing an unavailable foundry");
+        assert_eq!(
+            selected.family(),
+            "First Sans",
+            "native order breaks equal style scores"
+        );
+    }
+}
+
+#[test]
+fn face_family_alternatives_precede_the_unconstrained_pass() {
+    let mut preferred = candidate("Alternative", 700, FontSlant::Normal, 0);
+    preferred.matched.metadata.foundry = Some("Other".into());
+    let mut unrelated = candidate("Native First", 400, FontSlant::Normal, 100);
+    unrelated.matched.metadata.foundry = Some("PfEd".into());
+    let resolver = FontResolver::new(Box::new(ScopedListingBackend {
+        candidates: vec![unrelated, preferred],
+    }));
+    let families = CapturedFontFamilyPolicy::Inherited(
+        ["Unavailable Family".into(), "Alternative".into()]
+            .into_iter()
+            .collect(),
+    );
+    let selected = resolver
+        .resolve_face_policy(
+            &families,
+            Some("PfEd"),
+            400,
+            FontSlant::Normal,
+            FontWidth::Normal,
+            selection_size(),
+        )
+        .expect("the named alternative wins after its own foundry relaxation");
+    assert_eq!(selected.family(), "Alternative");
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn native_open_by_spec_rejects_an_unavailable_family() {
+    use crate::font::metrics::test_catalog::TestFontCatalog;
+    let service = TestFontCatalog::from_files(&[neomacs_test_fonts::dejavu_2_37().mono_regular()])
+        .expect("pinned DejaVu face")
+        .to_native_fontconfig()
+        .metrics_service();
+    for family in ["Unavailable Family Alpha", "Unavailable Family Beta"] {
+        let query = FontEntityQuery::new(FontFamilyName::new(family))
+            .with_selection(FontSpecSelection::OpenBySpec);
+        assert!(
+            service.resolve_font_entity(&query).is_none(),
+            "FcFontMatch's unrelated fallback is not a mandatory family match"
+        );
+    }
+    let known = FontEntityQuery::new(FontFamilyName::new("DejaVu Sans Mono"))
+        .with_selection(FontSpecSelection::OpenBySpec);
+    assert!(service.resolve_font_entity(&known).is_some());
+}
+
+/// Two equal-score fallbacks whose discovery order flips with the character.
+/// GNU `fontset_find_font` reuses an opened font that covers the next character
+/// (`src/fontset.c`) before it lists candidates again.
+struct TieOrderBackend {
+    listings: Arc<AtomicUsize>,
+    first: FontCandidate,
+    second: FontCandidate,
+    first_misses: Vec<char>,
+    /// Answer only the unconstrained fallback scope, so the tie is
+    /// `EqualScoreTie::Fallback` rather than the named-family discovery tie.
+    fallback_only: bool,
+}
+
+impl TieOrderBackend {
+    fn covers(&self, identity: &ResolvedFontIdentity, ch: char) -> bool {
+        if identity == &self.first.matched.identity {
+            !self.first_misses.contains(&ch)
+        } else if identity == &self.second.matched.identity {
+            true
+        } else {
+            false
+        }
+    }
+
+    fn covering(&self, ch: char) -> Vec<FontCandidate> {
+        // `検` is the reuse-on-tie row. `ア` is the skip row's first character.
+        // Every other character lists the second face first, so a fresh search
+        // would not pick the face the skip row expects to reuse.
+        let lead_with_first = ch == '検' || ch == 'ア';
+        let ordered: [&FontCandidate; 2] = if lead_with_first {
+            [&self.first, &self.second]
+        } else {
+            [&self.second, &self.first]
+        };
+        ordered
+            .into_iter()
+            .filter(|candidate| self.covers(&candidate.matched.identity, ch))
+            .cloned()
+            .collect()
+    }
+}
+
+impl FontBackend for TieOrderBackend {
+    fn kind(&self) -> FontBackendKind {
+        FontBackendKind::Fontconfig
+    }
+
+    fn list_families(&self) -> Vec<FontFamilyName> {
+        Vec::new()
+    }
+
+    fn resolve_family(&self, family: &str) -> String {
+        family.to_owned()
+    }
+
+    fn family_prefers_monospace(&self, _family: &str) -> bool {
+        false
+    }
+
+    fn list_candidates(&self, query: &FontCandidateQuery) -> Vec<FontCandidate> {
+        if self.fallback_only && !matches!(query.scope, FontCandidateScope::NativeFallback { .. }) {
+            return Vec::new();
+        }
+        self.listings.fetch_add(1, Ordering::Relaxed);
+        query
+            .required
+            .single_char()
+            .map(|ch| self.covering(ch))
+            .unwrap_or_default()
+    }
+
+    fn list_candidates_for_identity(
+        &self,
+        query: &FontCandidateQuery,
+        identity: &ResolvedFontIdentity,
+    ) -> Vec<FontCandidate> {
+        let Some(ch) = query.required.single_char() else {
+            return Vec::new();
+        };
+        if !self.covers(identity, ch) {
+            return Vec::new();
+        }
+        self.covering(ch)
+            .into_iter()
+            .filter(|candidate| candidate.matched.identity == *identity)
+            .collect()
+    }
+
+    fn advance_catalog_generation(&mut self) {}
+
+    fn poll_catalog_change(&mut self) -> crate::font::catalog::FontCatalogChange {
+        crate::font::catalog::FontCatalogChange::Unchanged
+    }
+}
+
+fn resolve_tie(resolver: &FontResolver, ch: char) -> PlatformFontMatch {
+    resolver
+        .resolve_for_char(
+            "IBM Plex Mono",
+            ch,
+            400,
+            FontSlant::Normal,
+            FontWidth::Normal,
+            selection_size(),
+        )
+        .unwrap_or_else(|| panic!("fallback for {ch}"))
+}
+
+#[test]
+fn opened_fallback_is_reused_when_a_later_character_ties() {
+    let listings = Arc::new(AtomicUsize::new(0));
+    let resolver = FontResolver::new(Box::new(TieOrderBackend {
+        listings: Arc::clone(&listings),
+        first: candidate("Noto Sans Mono CJK JP", 400, FontSlant::Normal, 0),
+        second: candidate("Cica", 400, FontSlant::Normal, 0),
+        first_misses: Vec::new(),
+        fallback_only: true,
+    }));
+
+    let kanji = resolve_tie(&resolver, '検');
+    let kana = resolve_tie(&resolver, 'リ');
+
+    assert_eq!(
+        kanji.family(),
+        "Noto Sans Mono CJK JP",
+        "the unconstrained fallback keeps list order; Noto is listed first for this character"
+    );
+    assert_eq!(
+        kana.family(),
+        kanji.family(),
+        "an opened fallback that covers the next character is reused"
+    );
+    assert_eq!(
+        listings.load(Ordering::Relaxed),
+        1,
+        "the second character must not list candidates again"
+    );
+}
+
+#[test]
+fn opened_fallback_skips_a_font_that_does_not_cover_the_character() {
+    let listings = Arc::new(AtomicUsize::new(0));
+    let resolver = FontResolver::new(Box::new(TieOrderBackend {
+        listings: Arc::clone(&listings),
+        first: candidate("Cica", 400, FontSlant::Normal, 0),
+        second: candidate("Noto Sans Mono CJK JP", 400, FontSlant::Normal, 0),
+        first_misses: vec!['リ'],
+        // The face family must miss. Otherwise the named-family pass selects
+        // before reuse, and this row never reaches the opened-font list.
+        fallback_only: true,
+    }));
+
+    // No fontset is installed. Every character shares the generic fallback
+    // group. ア lists Cica first; a fresh search for ピ would list Noto first.
+    let kana = resolve_tie(&resolver, 'ア');
+    let missing = resolve_tie(&resolver, 'リ');
+    let later = resolve_tie(&resolver, 'ピ');
+
+    assert_eq!(kana.family(), "Cica");
+    assert_eq!(missing.family(), "Noto Sans Mono CJK JP");
+    assert_eq!(
+        later.family(),
+        kana.family(),
+        "a later character uses the first opened font that covers it"
+    );
+    assert_eq!(listings.load(Ordering::Relaxed), 2);
+}
+
+/// The second fallback spec's font covers `検` and `リ`. The first covers
+/// only `リ`. GNU moves the found fallback to the front of that group
+/// (`src/fontset.c`, the `found:` label), so `リ` must use the second font.
+struct FallbackGroupBackend;
+
+impl FontBackend for FallbackGroupBackend {
+    fn kind(&self) -> FontBackendKind {
+        FontBackendKind::Fontconfig
+    }
+
+    fn list_families(&self) -> Vec<FontFamilyName> {
+        Vec::new()
+    }
+
+    fn resolve_family(&self, family: &str) -> String {
+        family.to_owned()
+    }
+
+    fn family_prefers_monospace(&self, _family: &str) -> bool {
+        false
+    }
+
+    fn list_candidates(&self, query: &FontCandidateQuery) -> Vec<FontCandidate> {
+        let Some(ch) = query.required.single_char() else {
+            return Vec::new();
+        };
+        let Some(family) = query.scope.queried_family() else {
+            return Vec::new();
+        };
+        let covers = match family {
+            "OnlyC2" => ch == 'リ',
+            "CoversBoth" => matches!(ch, '検' | 'リ' | 'ア' | 'ピ'),
+            "SpecA" | "SpecB" => matches!(ch, 'ア' | 'イ'),
+            "SpecC" => ch == 'ウ',
+            "CoversSecondOnly" => ch == 'ピ',
+            // 検 is listed and then `finalize_match` refuses it. リ opens,
+            // so a later character can show whether the failed entry moved.
+            "FailsFinalize" => matches!(ch, '検' | 'リ'),
+            "AfterFail" => ch == '検',
+            "Between" => ch == 'リ',
+            // Epoch collision: P and Q both cover リ, and only one of them
+            // covers the character that promotes it.
+            "EpochP" => matches!(ch, 'ピ' | 'リ'),
+            "EpochQ" => matches!(ch, 'リ' | '検'),
+            "EpochR" => ch == 'ウ',
+            _ => false,
+        };
+        if !covers {
+            return Vec::new();
+        }
+        // The failed spec opens for リ under a different family so the
+        // assertion can see that it stayed behind Between.
+        let opened = if family == "FailsFinalize" && ch == 'リ' {
+            "FailsThenOpens"
+        } else {
+            family
+        };
+        vec![candidate(opened, 400, FontSlant::Normal, 0)]
+    }
+
+    fn list_candidates_for_identity(
+        &self,
+        query: &FontCandidateQuery,
+        identity: &ResolvedFontIdentity,
+    ) -> Vec<FontCandidate> {
+        self.list_candidates(query)
+            .into_iter()
+            .filter(|candidate| candidate.matched.identity == *identity)
+            .collect()
+    }
+
+    fn advance_catalog_generation(&mut self) {}
+
+    fn poll_catalog_change(&mut self) -> crate::font::catalog::FontCatalogChange {
+        crate::font::catalog::FontCatalogChange::Unchanged
+    }
+
+    fn finalize_match(&self, matched: PlatformFontCandidate) -> Option<PlatformFontMatch> {
+        if matched.metadata.family == "FailsFinalize" {
+            return None;
+        }
+        matched.into_file_match()
+    }
+}
+
+fn hold_fontset(script: &str) -> neovm_core::Context {
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
+    eval.eval_str(script).expect("fontset script");
+    eval
+}
+
+fn fallback_family(resolver: &FontResolver, ch: char, weight: u16) -> String {
+    resolver
+        .resolve_for_char(
+            "DejaVu Sans",
+            ch,
+            weight,
+            FontSlant::Normal,
+            FontWidth::Normal,
+            selection_size(),
+        )
+        .unwrap_or_else(|| panic!("no fallback for {ch}"))
+        .family()
+        .to_string()
+}
+
+#[test]
+fn fallback_group_tries_the_last_found_font_first() {
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
+    eval.eval_str(
+        r#"(progn
+            (set-fontset-font t nil "OnlyC2")
+            (set-fontset-font t nil "CoversBoth" nil 'append))"#,
+    )
+    .expect("two fallback specs");
+    let resolver = FontResolver::new(Box::new(FallbackGroupBackend));
+    let resolve = |ch| {
+        resolver
+            .resolve_for_char(
+                "DejaVu Sans",
+                ch,
+                400,
+                FontSlant::Normal,
+                FontWidth::Normal,
+                selection_size(),
+            )
+            .unwrap_or_else(|| panic!("fallback for {ch}"))
+    };
+
+    let han = resolve('検');
+    assert_eq!(
+        han.family(),
+        "CoversBoth",
+        "検 is covered only by the second spec"
+    );
+    let kana = resolve('リ');
+    assert_eq!(
+        kana.family(),
+        "CoversBoth",
+        "the fallback found for 検 moves to the front, so リ uses it, got {}",
+        kana.family()
+    );
+    drop(eval);
+}
+
+#[test]
+fn fallback_order_is_per_face() {
+    let _eval = hold_fontset(
+        r#"(progn
+            (set-fontset-font t nil "OnlyC2")
+            (set-fontset-font t nil "CoversBoth" nil 'append))"#,
+    );
+    let resolver = FontResolver::new(Box::new(FallbackGroupBackend));
+    assert_eq!(fallback_family(&resolver, '検', 400), "CoversBoth");
+    assert_eq!(
+        fallback_family(&resolver, 'リ', 700),
+        "OnlyC2",
+        "a heavier face keeps charset order; weight 400's promotion is not its order"
+    );
+}
+
+#[test]
+fn set_fontset_font_resets_the_fallback_order() {
+    let mut eval = hold_fontset(
+        r#"(progn
+            (set-fontset-font t nil "OnlyC2")
+            (set-fontset-font t nil "CoversBoth" nil 'append))"#,
+    );
+    let resolver = FontResolver::new(Box::new(FallbackGroupBackend));
+    assert_eq!(fallback_family(&resolver, '検', 400), "CoversBoth");
+    eval.eval_str(r#"(set-fontset-font t nil "Unused" nil 'append)"#)
+        .expect("generation bump");
+    assert_eq!(
+        fallback_family(&resolver, 'リ', 400),
+        "OnlyC2",
+        "set-fontset-font frees the realized order and the new generation starts at charset order"
+    );
+}
+
+#[test]
+fn seen_character_follows_a_later_fallback_move() {
+    let _eval = hold_fontset(
+        r#"(progn
+            (set-fontset-font t nil "OnlyC2")
+            (set-fontset-font t nil "CoversBoth" nil 'append))"#,
+    );
+    let resolver = FontResolver::new(Box::new(FallbackGroupBackend));
+    assert_eq!(fallback_family(&resolver, 'リ', 400), "OnlyC2");
+    assert_eq!(fallback_family(&resolver, '検', 400), "CoversBoth");
+    assert_eq!(
+        fallback_family(&resolver, 'リ', 400),
+        "CoversBoth",
+        "a character resolved before the move follows the new front"
+    );
+}
+
+fn fontset_family(
+    resolver: &FontResolver,
+    fontset: crate::font::fallback_order::FaceFontsetId,
+    ch: char,
+) -> String {
+    resolver
+        .resolve_character(
+            "DejaVu Sans",
+            ch,
+            400,
+            FontSlant::Normal,
+            FontWidth::Normal,
+            selection_size(),
+            fontset,
+        )
+        .font
+        .unwrap_or_else(|| panic!("no fallback for {ch}"))
+        .family()
+        .to_string()
+}
+
+#[test]
+fn fallback_order_is_per_realized_fontset() {
+    let _eval = hold_fontset(
+        r#"(progn
+            (set-fontset-font t nil "OnlyC2")
+            (set-fontset-font t nil "CoversBoth" nil 'append))"#,
+    );
+    let resolver = FontResolver::new(Box::new(FallbackGroupBackend));
+    let face = crate::font::fallback_order::FaceFontsetId {
+        frame: 1,
+        face: 1,
+        face_epoch: 1,
+    };
+    assert_eq!(fontset_family(&resolver, face, '検'), "CoversBoth");
+    assert_eq!(
+        fontset_family(&resolver, face, 'リ'),
+        "CoversBoth",
+        "検 moves CoversBoth to the front of this realized fontset"
+    );
+    for other in [
+        crate::font::fallback_order::FaceFontsetId {
+            frame: 1,
+            face: 2,
+            face_epoch: 1,
+        },
+        crate::font::fallback_order::FaceFontsetId {
+            frame: 2,
+            face: 1,
+            face_epoch: 1,
+        },
+        crate::font::fallback_order::FaceFontsetId {
+            frame: 1,
+            face: 1,
+            face_epoch: 2,
+        },
+    ] {
+        assert_eq!(
+            fontset_family(&resolver, other, 'リ'),
+            "OnlyC2",
+            "another face, frame, or face epoch keeps charset order"
+        );
+    }
+}
+
+#[test]
+fn one_fontset_move_does_not_lock_another_fontsets_cached_fallback() {
+    let _eval = hold_fontset(
+        r#"(progn
+            (set-fontset-font t nil "OnlyC2")
+            (set-fontset-font t nil "CoversBoth" nil 'append))"#,
+    );
+    let resolver = FontResolver::new(Box::new(FallbackGroupBackend));
+    let face_a = crate::font::fallback_order::FaceFontsetId {
+        frame: 1,
+        face: 1,
+        face_epoch: 1,
+    };
+    let face_b = crate::font::fallback_order::FaceFontsetId {
+        frame: 1,
+        face: 2,
+        face_epoch: 1,
+    };
+    assert_eq!(fontset_family(&resolver, face_a, 'リ'), "OnlyC2");
+    assert_eq!(fontset_family(&resolver, face_a, 'リ'), "OnlyC2");
+    let warm = crate::font::fallback_order::fallback_order_lock_count();
+    assert_eq!(fontset_family(&resolver, face_b, '検'), "CoversBoth");
+    let moved = crate::font::fallback_order::fallback_order_lock_count();
+    assert!(
+        moved > warm,
+        "the other fontset's first walk takes the order lock"
+    );
+    assert_eq!(fontset_family(&resolver, face_a, 'リ'), "OnlyC2");
+    assert_eq!(
+        crate::font::fallback_order::fallback_order_lock_count(),
+        moved,
+        "a warm fontset keeps its fast path when another fontset moves"
+    );
+}
+
+#[test]
+fn fallback_move_to_front_keeps_the_unmoved_prefix() {
+    let _eval = hold_fontset(
+        r#"(progn
+            (set-fontset-font t nil "SpecA")
+            (set-fontset-font t nil "SpecB" nil 'append)
+            (set-fontset-font t nil "SpecC" nil 'append))"#,
+    );
+    let resolver = FontResolver::new(Box::new(FallbackGroupBackend));
+    assert_eq!(fallback_family(&resolver, 'ウ', 400), "SpecC");
+    assert_eq!(
+        fallback_family(&resolver, 'ア', 400),
+        "SpecA",
+        "moving SpecC to the front keeps SpecA ahead of SpecB (memmove, not a swap)"
+    );
+}
+
+#[test]
+fn specific_group_keeps_charset_order_after_a_later_entry_matches() {
+    let _eval = hold_fontset(
+        r#"(progn
+            (set-fontset-font t '(#x30A2 . #x30D4) "CoversSecondOnly")
+            (set-fontset-font t '(#x30A2 . #x30D4) "CoversBoth" nil 'append))"#,
+    );
+    let resolver = FontResolver::new(Box::new(FallbackGroupBackend));
+    assert_eq!(fallback_family(&resolver, 'ア', 400), "CoversBoth");
+    assert_eq!(
+        fallback_family(&resolver, 'ピ', 400),
+        "CoversSecondOnly",
+        "the character-specific group stays in charset order"
+    );
+}
+
+#[test]
+fn failed_open_does_not_move_the_fallback_and_tries_the_next() {
+    let _eval = hold_fontset(
+        r#"(progn
+            (set-fontset-font t nil "Between")
+            (set-fontset-font t nil "FailsFinalize" nil 'append)
+            (set-fontset-font t nil "AfterFail" nil 'append))"#,
+    );
+    let resolver = FontResolver::new(Box::new(FallbackGroupBackend));
+    assert_eq!(
+        fallback_family(&resolver, '検', 400),
+        "AfterFail",
+        "a failed open is skipped and the next entry is tried"
+    );
+    assert_eq!(
+        fallback_family(&resolver, 'リ', 400),
+        "Between",
+        "the failed entry stays behind Between; only AfterFail moved to the front"
+    );
+}
+
+#[test]
+fn specific_group_tries_the_next_entry_after_a_failed_finalize() {
+    let _eval = hold_fontset(
+        r#"(progn
+            (set-fontset-font t ?検 "FailsFinalize")
+            (set-fontset-font t ?検 "AfterFail" nil 'append))"#,
+    );
+    let resolver = FontResolver::new(Box::new(FallbackGroupBackend));
+    assert_eq!(
+        fallback_family(&resolver, '検', 400),
+        "AfterFail",
+        "a failed open in the specific group continues to the next entry"
+    );
+}
+
+#[test]
+fn cached_fallback_misses_when_a_cleared_order_reuses_its_epoch() {
+    let _eval = hold_fontset(
+        r#"(progn
+            (set-fontset-font t nil "EpochP")
+            (set-fontset-font t nil "EpochQ" nil 'append)
+            (set-fontset-font t nil "EpochR" nil 'append))"#,
+    );
+    let resolver = FontResolver::new(Box::new(FallbackGroupBackend));
+    assert_eq!(fallback_family(&resolver, 'ウ', 400), "EpochR");
+    assert_eq!(fallback_family(&resolver, '検', 400), "EpochQ");
+    assert_eq!(fallback_family(&resolver, 'リ', 400), "EpochQ");
+    crate::font::fallback_order::clear_fallback_orders();
+    assert_eq!(fallback_family(&resolver, '検', 400), "EpochQ");
+    assert_eq!(fallback_family(&resolver, 'ピ', 400), "EpochP");
+    assert_eq!(
+        fallback_family(&resolver, 'リ', 400),
+        "EpochP",
+        "a new history that reaches the same epoch with a different front must not reuse the cached font"
+    );
+}
+
+#[test]
+fn worker_and_main_pick_the_same_fallback_after_different_first_characters() {
+    let _eval = hold_fontset(
+        r#"(progn
+            (set-fontset-font t nil "OnlyC2")
+            (set-fontset-font t nil "CoversBoth" nil 'append))"#,
+    );
+    let policies = FrozenCharacterPolicies::capture(
+        &[
+            ("DejaVu Sans", '検', 400, false, selection_size()),
+            ("DejaVu Sans", 'リ', 400, false, selection_size()),
+        ],
+        64 * 1024,
+    )
+    .expect("frozen fontset");
+    let main = FontResolver::new(Box::new(FallbackGroupBackend));
+    let mut worker = FontResolver::new(Box::new(FallbackGroupBackend));
+    worker.install_worker_policy(Arc::new(policies));
+
+    assert_eq!(fallback_family(&main, 'リ', 400), "OnlyC2");
+    assert_eq!(fallback_family(&worker, '検', 400), "CoversBoth");
+    assert_eq!(
+        fallback_family(&worker, 'リ', 400),
+        "CoversBoth",
+        "the worker applies the same move-to-front as the live walk"
+    );
+    assert_eq!(
+        fallback_family(&main, 'リ', 400),
+        "CoversBoth",
+        "the worker's promotion is the order the next main resolution uses"
+    );
+}
+
+#[test]
+fn empty_sort_ranks_keep_list_order() {
+    let request = equal_score_request();
+    let chosen = select_best_candidate(
+        vec![
+            candidate("Noto Sans CJK JP", 400, FontSlant::Normal, 0),
+            candidate("Cica", 400, FontSlant::Normal, 0),
+        ],
+        &request,
+        EqualScoreTie::Fallback,
+        &[],
+    )
+    .expect("list-order tie");
+    assert_eq!(
+        chosen.family(),
+        "Noto Sans CJK JP",
+        "with no sort ranks the driver's list order wins, not the family name"
+    );
+}
+
+#[test]
+fn han_without_a_fontset_language_does_not_invent_japanese() {
+    assert_eq!(tie_break_language('検'), None);
+    assert_eq!(tie_break_language('リ'), Some("ja"));
+    assert_eq!(tie_break_language('피'), Some("ko"));
+}
+
+fn equal_score_request() -> SelectionRequest<'static> {
+    SelectionRequest {
+        weight: 400,
+        slant: FontSlant::Normal,
+        width: Some(FontWidth::Normal),
+        spacing: None,
+        prefer_monospace: false,
+        queried_family: Some("IBM Plex Mono"),
+        size: selection_size(),
+    }
+}
+
+#[test]
+fn equal_score_tie_breaks_by_sort_rank_then_family_name() {
+    let request = equal_score_request();
+    let by_name = select_best_candidate(
+        vec![
+            candidate("Noto Sans CJK JP", 400, FontSlant::Normal, 0),
+            candidate("Cica", 400, FontSlant::Normal, 0),
+        ],
+        &request,
+        EqualScoreTie::Fallback,
+        &[],
+    )
+    .expect("family-name tie break");
+    assert_eq!(
+        by_name.family(),
+        "Noto Sans CJK JP",
+        "with no FcFontSort rank the driver's list order wins"
+    );
+
+    let by_rank = select_best_candidate(
+        vec![
+            candidate("Cica", 400, FontSlant::Normal, 0),
+            candidate("Noto Sans CJK JP", 400, FontSlant::Normal, 0),
+        ],
+        &request,
+        EqualScoreTie::Fallback,
+        &[Some(1), Some(0)],
+    )
+    .expect("FcFontSort tie break");
+    assert_eq!(
+        by_rank.family(),
+        "Noto Sans CJK JP",
+        "an earlier FcFontSort rank wins over family name and discovery order"
+    );
+
+    let mut later_path = candidate("Cica", 400, FontSlant::Normal, 0);
+    let mut earlier_path = candidate("Cica", 400, FontSlant::Normal, 0);
+    replace_file_identity(
+        &mut later_path,
+        ResolvedFontIdentity::from_file("/fixture/z.ttf", 0, None),
+    );
+    replace_file_identity(
+        &mut earlier_path,
+        ResolvedFontIdentity::from_file("/fixture/a.ttf", 0, None),
+    );
+    let by_path = select_best_candidate(
+        vec![later_path, earlier_path],
+        &request,
+        EqualScoreTie::Fallback,
+        &[Some(0), Some(0)],
+    )
+    .expect("path tie break");
+    assert_eq!(
+        by_path.file_path(),
+        Some("/fixture/a.ttf"),
+        "equal FcFontSort ranks break by file path"
+    );
+}

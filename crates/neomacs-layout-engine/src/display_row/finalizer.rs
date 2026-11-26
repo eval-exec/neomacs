@@ -6,6 +6,7 @@
 //! completed row is installed. Keeping both phases here gives display sources
 //! one narrow destination without mixing source acquisition into row policy.
 
+use crate::bidi::ParagraphDirection;
 use crate::display_cursor::cursor_window_matches_current;
 use crate::display_item::{DisplayLineHeightPolicy, DisplayRowBreak};
 use crate::display_row::builder::DisplayRowVerticalMetrics;
@@ -195,8 +196,13 @@ impl DisplayRowLineEndFinalizer {
             ascent_px: ascent_px.max(0.0).min(height_px),
             fill_char_width: extend_face
                 .map(|face| {
-                    face.metrics
-                        .char_width_px(self.fallback_metrics.char_width())
+                    // GNU extends with the selected face (xdisp.c:24389–24412).
+                    // Keep its concrete font unit for column accounting too;
+                    // logical-cell rows still use the frame grid lower bound.
+                    face.metrics.char_width_for_mode(
+                        self.fallback_metrics.char_width(),
+                        self.measurement_mode,
+                    )
                 })
                 .unwrap_or_else(|| self.fallback_metrics.char_width()),
             indicator_char_width: self.fallback_metrics.char_width(),
@@ -451,6 +457,11 @@ pub(crate) struct GlyphRowFinalizationContext {
     pub(crate) window_id: u64,
     pub(crate) row: usize,
     pub(crate) window_pixel_bounds: Rect,
+    /// The displayed buffer's paragraph direction (GNU
+    /// `it->paragraph_embedding`, `src/xdisp.c:3600-3611`).
+    pub(crate) paragraph_direction: ParagraphDirection,
+    /// Terminal cells or graphical pixels for cursor geometry.
+    pub(crate) text_geometry_units: neomacs_display_protocol::glyph_matrix::TextGeometryUnits,
 }
 
 impl GlyphRowFinalizationContext {
@@ -459,7 +470,26 @@ impl GlyphRowFinalizationContext {
             window_id,
             row,
             window_pixel_bounds,
+            paragraph_direction: ParagraphDirection::Auto,
+            text_geometry_units: neomacs_display_protocol::glyph_matrix::TextGeometryUnits::default(
+            ),
         }
+    }
+
+    pub(crate) fn with_bidi_paragraph_direction(
+        mut self,
+        paragraph_direction: ParagraphDirection,
+    ) -> Self {
+        self.paragraph_direction = paragraph_direction;
+        self
+    }
+
+    pub(crate) fn with_text_geometry_units(
+        mut self,
+        units: neomacs_display_protocol::glyph_matrix::TextGeometryUnits,
+    ) -> Self {
+        self.text_geometry_units = units;
+        self
     }
 
     pub(crate) fn finalize_row(
@@ -503,7 +533,11 @@ impl<'cursor> GlyphRowFinalizer<'cursor> {
             .filter(|cursor| self.context.cursor_matches(cursor))
             .map(|cursor| cursor.col);
 
-        let remapped_cursor_col = crate::glyph_row_writer::reorder_row_bidi(row, phys_cursor_col);
+        let remapped_cursor_col = crate::glyph_row_writer::reorder_row_bidi_with_direction(
+            row,
+            phys_cursor_col,
+            self.context.paragraph_direction,
+        );
         let char_width = if self.matrix_ncols > 0 {
             self.context.window_pixel_bounds.width / self.matrix_ncols as f32
         } else {
@@ -536,14 +570,34 @@ impl<'cursor> GlyphRowFinalizer<'cursor> {
             // glyph advances. `col * char_w` assumes every glyph is one frame
             // cell wide, so a bidi row holding another face's font, a wide
             // glyph, or a stretch put the caret off the glyph it decorates.
-            let geometry = neomacs_display_protocol::glyph_matrix::TextRowGeometry::new(
+            use neomacs_display_protocol::glyph_matrix::{
+                TextGeometryUnits, TextRowGeometry, VisualTextGlyphIndex,
+            };
+            let units = self.context.text_geometry_units;
+            let geometry = TextRowGeometry::new_with_units(
                 row,
                 self.context.window_pixel_bounds,
                 char_w,
+                units,
+                neomacs_display_protocol::glyph_matrix::TerminalCharWidths::new(
+                    neovm_core::encoding::char_width,
+                ),
             );
-            if let Some(x) = geometry
-                .x_at_glyph(neomacs_display_protocol::glyph_matrix::VisualTextGlyphIndex::new(col))
-            {
+            // A terminal places the cursor by materialized cell, where an RTL
+            // run's first source character owns its last visual cell.  A GUI
+            // row is positioned by shaped advances, not a char-width grid, so
+            // it keeps the glyph-index mapping; its painted cursor cell is
+            // paired with GNU's in bidi_gui_cursor_785_oracle.
+            let x = match units {
+                // `col` is a GLYPH-ARRAY index; x_at_slot indexes materialized
+                // cells.  Convert explicitly: a tab, an image, a wide glyph or
+                // a multi-cell composition makes the two numbers diverge.
+                TextGeometryUnits::TerminalCells => geometry
+                    .slot_of_glyph(VisualTextGlyphIndex::new(col))
+                    .and_then(|slot| geometry.x_at_slot(slot)),
+                TextGeometryUnits::Pixels => geometry.x_at_glyph(VisualTextGlyphIndex::new(col)),
+            };
+            if let Some(x) = x {
                 cursor.x = x;
             }
         }

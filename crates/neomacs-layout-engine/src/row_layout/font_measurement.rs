@@ -58,6 +58,18 @@ struct MeasurementRevision {
     catalog: FontCatalogGeneration,
     fontset: u64,
     scale_bits: u32,
+    frame: u64,
+    face_epoch: u64,
+}
+
+impl MeasurementRevision {
+    /// Catalog, fontset generation, and scale rebuild the worker service.
+    /// Frame and face epoch are installed as context on every prepare, so a
+    /// frame switch must not construct a fresh service: that service's first
+    /// Unicode install clears the process-wide fallback orders.
+    fn rebuild_key(self) -> (FontCatalogGeneration, u64, u32) {
+        (self.catalog, self.fontset, self.scale_bits)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -299,6 +311,7 @@ impl FontMeasurementSnapshot {
                         face.font_weight,
                         face.italic,
                         face.font_size.max(1.0),
+                        face.face_id.get(),
                     );
                     if !requests.contains(&request) {
                         if requests.len() == 128 {
@@ -314,17 +327,25 @@ impl FontMeasurementSnapshot {
         // changes GNU's display-wide matrix allocation even if this row
         // attempt is later discarded. Worker-local caches must not publish
         // that mutable connection input from a background measurement.
-        for &(family, ch, weight, italic, size) in &requests {
-            let _ = fonts.resolved_font_for_char(ch, family, weight, italic, size);
+        let (frame, face_epoch) = fonts.realized_fontset_context();
+        for &(family, ch, weight, italic, size, face) in &requests {
+            let selection =
+                crate::font::metrics::RealizedFaceFontSelection::new(family, weight, italic, size)
+                    .with_fontset(frame, face, face_epoch);
+            let _ = fonts.resolved_font_for_realized_face_char(ch, selection);
         }
-        let policy = fonts
-            .capture_worker_font_policy(&requests, budget.capture_bytes.saturating_sub(bytes))?;
+        let policy = fonts.capture_worker_font_policy_for_faces(
+            &requests,
+            budget.capture_bytes.saturating_sub(bytes),
+        )?;
         bytes += policy.bytes();
         let snapshot = Self {
             revision: MeasurementRevision {
                 catalog: fonts.font_catalog_generation(),
                 fontset: neovm_core::emacs_core::fontset::fontset_generation(),
                 scale_bits: fonts.device_scale().get().to_bits(),
+                frame,
+                face_epoch,
             },
             receipts,
             policy,
@@ -402,6 +423,20 @@ pub(crate) struct WorkerFontMeasurements {
     cache_rebuilds: usize,
 }
 
+#[cfg(test)]
+impl WorkerFontMeasurements {
+    pub(crate) fn cache_rebuilds(&self) -> usize {
+        self.cache_rebuilds
+    }
+
+    pub(crate) fn entries_at_face_epoch(&self, epoch: u64) -> usize {
+        self.service
+            .as_ref()
+            .map(|service| service.entries_at_face_epoch(epoch))
+            .unwrap_or(0)
+    }
+}
+
 impl WorkerFontMeasurements {
     pub(crate) fn prepare(
         &mut self,
@@ -433,7 +468,11 @@ impl WorkerFontMeasurements {
             .is_some_and(|service| service.test_catalog() != snapshot.catalog);
         #[cfg(not(test))]
         let catalog_changed = false;
-        if self.revision != Some(snapshot.revision)
+        if let Some(service) = self.service.as_mut() {
+            service.discard_stale_worker_queries(snapshot.revision.face_epoch);
+        }
+        if self.revision.map(MeasurementRevision::rebuild_key)
+            != Some(snapshot.revision.rebuild_key())
             || catalog_changed
             || self.faces.len() + new_faces.len() > MAX_CACHED_FACES
             || self.service.as_ref().is_none_or(|service| {
@@ -460,6 +499,10 @@ impl WorkerFontMeasurements {
             .service
             .as_mut()
             .ok_or(RowProgramError::MissingMeasurement)?;
+        // Frozen character keys carry this frame and face epoch. Measuring
+        // before this assignment looks up a different fontset than the one
+        // the snapshot opened.
+        service.set_realized_fontset_context(snapshot.revision.frame, snapshot.revision.face_epoch);
         service.set_device_scale(
             DeviceScale::new(f32::from_bits(snapshot.revision.scale_bits))
                 .map_err(|_| RowProgramError::Unsupported)?,
@@ -497,6 +540,8 @@ impl WorkerFontMeasurements {
                 self.faces.push(key);
             }
         }
+        // The worker keeps opened fallbacks until `clear_caches`, the same
+        // lifetime as the main thread.
         service.install_worker_font_policy(&snapshot.policy);
         Ok(service)
     }

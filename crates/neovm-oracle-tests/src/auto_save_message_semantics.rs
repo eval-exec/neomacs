@@ -1330,3 +1330,41 @@ fn auto_save_write_region_handler_oracle_shutdown_original_matched_throw() {
         ("handled-save", None),
     ]);
 }
+
+// GNU `Fdo_auto_save` saves and clears `Vquit_flag` before running
+// `auto-save-hook` (`src/fileio.c:6355-6356`) and restores it on normal return
+// (`src/fileio.c:6512`).
+#[test]
+fn do_auto_save_clears_and_restores_quit_flag_on_normal_return() {
+    let form = r##"(let ((inhibit-quit t)
+      (auto-save-list-file-name nil)
+      (auto-save-hook nil)
+      (seen nil))
+  (add-hook 'auto-save-hook (lambda () (setq seen (list quit-flag))))
+  (setq quit-flag t)
+  (do-auto-save t)
+  (let ((after quit-flag))
+    (setq quit-flag nil)
+    (list seen after)))"##;
+    crate::common::assert_oracle_parity_expect(form, expect_test::expect![[r#""OK ((nil) t)""#]]);
+}
+
+// GNU `Fdo_auto_save` does not record `oquit` on the specpdl unwind stack
+// (`src/fileio.c:6355-6356,6512`), so a nonlocal `throw` out of
+// `auto-save-hook` leaves `quit-flag` nil.
+#[test]
+fn do_auto_save_leaves_quit_flag_nil_on_nonlocal_hook_throw() {
+    let form = r##"(let ((inhibit-quit t)
+      (auto-save-list-file-name nil)
+      (auto-save-hook nil))
+  (add-hook 'auto-save-hook (lambda () (throw 'as-escape 'escaped)))
+  (setq quit-flag t)
+  (let ((caught (catch 'as-escape (do-auto-save t)))
+        (after quit-flag))
+    (setq quit-flag nil)
+    (list caught after)))"##;
+    crate::common::assert_oracle_parity_expect(
+        form,
+        expect_test::expect![[r#""OK (escaped nil)""#]],
+    );
+}

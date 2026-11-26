@@ -48,6 +48,18 @@ fn thread_safety_compile_contracts() {
 fn obarray_view_swap_compile_contracts() {
     let cases = trybuild::TestCases::new();
     cases.compile_fail("tests/thread_safety_ui/obarray_view_cannot_be_swapped.rs");
+    // E0499: the nest borrows the outer Context for the whole scope.
+    cases.compile_fail("tests/thread_safety_ui/nest_foreign_heap_borrows_the_context.rs");
+}
+
+// rt A3 2c (d): non-swappable BufferManagerMut / EditRuntimeMut capabilities.
+// Kept in its own runner so local golden blesses cannot touch other suites.
+#[test]
+#[cfg(feature = "contract-fixtures")]
+fn buffer_manager_view_compile_contracts() {
+    let cases = trybuild::TestCases::new();
+    cases.pass("tests/buffer_manager_view_pass/*.rs");
+    cases.compile_fail("tests/buffer_manager_view_ui/*.rs");
 }
 
 // The sole-owner eval phase's fixtures sit next to its unit tests, but the
@@ -72,6 +84,9 @@ mod pentry_contracts;
 
 #[path = "pentry_e2_loan_contracts.rs"]
 mod pentry_e2_loan_contracts;
+
+#[path = "e51_turn_contracts.rs"]
+mod e51_turn_contracts;
 
 #[cfg(feature = "contract-fixtures")]
 #[test]
@@ -98,6 +113,12 @@ mod host_effect_contracts;
 
 #[path = "intern_shared_contracts.rs"]
 mod intern_shared_contracts;
+
+#[path = "jit_grace_contracts.rs"]
+mod jit_grace_contracts;
+
+#[path = "poller_registration_contracts.rs"]
+mod poller_registration_contracts;
 
 #[test]
 #[cfg(feature = "contract-fixtures")]

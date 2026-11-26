@@ -145,6 +145,18 @@ impl<K: EraKeeper> EraCore<'_, K> {
         }
         if install {
             let mut active = collector.take().ok_or(RegistrationError::Publication)?;
+            // Only borrow the heap after the blocked phase and admission scan
+            // exclude every slice. No storage changed yet: a held reserve can
+            // refuse by completing this reversible transition normally.
+            // The lease clears only when the stop session collects or the
+            // owner returns the book. Retrying resume cannot discharge it.
+            if active.registration_heap_mut().has_owner_cons_reserves() {
+                *collector = Some(active);
+                drop(suspended);
+                drop(collector);
+                attempt.finish()?;
+                return Err(RegistrationError::OwnerReserveHeld);
+            }
             // SAFETY: transition excludes every new run, all prior run/worker
             // loans were checked, and activation supplied no heap authority.
             let result = unsafe {

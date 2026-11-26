@@ -62,12 +62,13 @@ struct MarkPhase {
 }
 impl MarkPhase {
     fn synthetic(heap: &mut TaggedHeap) -> Self {
-        assert!(!heap.concurrent_mark_running);
+        assert!(!heap.concurrent_mark_running());
         heap.concurrent_begin();
         // No worker owns gray in this fixture; make the owner's SATB scratch
         // satisfy its actual concurrent contract without fabricating a job.
         heap.gray_queue.clear();
-        heap.concurrent_mark_running = true;
+        // SAFETY: synthetic serial fixture, no live worker; mirrors set below.
+        unsafe { heap.concurrent_mark_running.set(true) };
         set_tagged_heap(heap);
         Self {
             heap,
@@ -85,7 +86,7 @@ impl MarkPhase {
         first_partition: bool,
         obarray: Option<&Obarray>,
     ) -> Self {
-        assert!(!heap.concurrent_mark_running);
+        assert!(!heap.concurrent_mark_running());
         // SAFETY: this fixture is the heap and matching obarray's sole writer.
         // No callback, safepoint or ownership handoff occurs through publication.
         let mut permit = unsafe { heap.permit_concurrent_mark() }.unwrap();
@@ -118,7 +119,8 @@ impl MarkPhase {
         assert!(self.kind == PhaseKind::Synthetic);
         assert_eq!(self.heap, heap as *mut TaggedHeap);
         heap.close_alloc_regions();
-        heap.concurrent_mark_running = false;
+        // SAFETY: synthetic serial fixture cleanup; mirrors updated below.
+        unsafe { heap.concurrent_mark_running.set(false) };
         set_tagged_heap(heap);
     }
 }
@@ -127,20 +129,25 @@ impl Drop for MarkPhase {
         // SAFETY: the heap is declared before this guard and remains at its
         // stable stack address until the guard is dropped on either path.
         let heap = unsafe { &mut *self.heap };
-        if self.kind == PhaseKind::Worker && heap.concurrent_mark_running {
+        if self.kind == PhaseKind::Worker && heap.concurrent_mark_running() {
             heap.join_concurrent_mark();
         }
         heap.close_alloc_regions();
-        heap.concurrent_mark_running = false;
+        // SAFETY: worker (if any) was joined above; fixture teardown.
+        unsafe { heap.concurrent_mark_running.set(false) };
         heap.mark_in_progress = false;
         heap.generational.major_in_progress = false;
         set_tagged_heap(heap);
-        clear_tagged_heap_if_installed(heap);
+        // SAFETY: teardown of bare `TaggedHeap` unit-test fixture.
+        unsafe { clear_tagged_heap_if_installed(heap) };
     }
 }
 
-fn satb(heap: &TaggedHeap) -> Vec<TaggedValue> {
+fn satb(heap: &TaggedHeap) -> Vec<usize> {
     heap.satb_words_for_test()
+        .into_iter()
+        .map(MarkWord::bits)
+        .collect()
 }
 
 fn special_immediates() -> [TaggedValue; 4] {
@@ -221,7 +228,7 @@ fn major_symbol_root_overwrite_gates_keep_exact_kind_and_symbol_with_pos_paths()
             note_root_overwrite(value);
             note_root_overwrite_while_marking(value);
         }
-        assert_eq!(satb(&heap), [positioned]);
+        assert_eq!(satb(&heap), [positioned.bits()]);
         let expected = if enabled {
             vec![id(public), id(checked)]
         } else {
@@ -295,7 +302,7 @@ fn runtime_plist_head_store_notes_a_heap_preimage_through_the_seam() {
         "installing the head before the mark must not log"
     );
     obarray.set_symbol_plist_id(owner, TaggedValue::NIL);
-    assert_eq!(satb(&heap), [cons]);
+    assert_eq!(satb(&heap), [cons.bits()]);
     assert!(heap.current_mutator_gc().major_symbol_preimages.is_empty());
     assert!(obarray.symbol_plist_id(owner).is_nil());
 }
@@ -354,9 +361,9 @@ fn major_symbol_live_root_batches_filter_special_immediates_and_keep_heap_values
             key,
         ]);
         let expected = if enabled {
-            vec![key, positioned, key]
+            vec![key.bits(), positioned.bits(), key.bits()]
         } else {
-            vec![positioned]
+            vec![positioned.bits()]
         };
         assert_eq!(satb(&heap), expected);
         assert!(heap.current_mutator_gc().major_symbol_preimages.is_empty());
@@ -379,11 +386,15 @@ fn major_symbol_raw_interval_choke_points_retain_plists_once_and_ignore_nil_gaps
         unsafe {
             (*ptr).data.intervals_mut();
         }
-        assert_eq!(satb(&heap), [plist]);
+        assert_eq!(satb(&heap), [plist.bits()]);
         unsafe {
             (*ptr).data.clear_intervals();
         }
-        assert_eq!(satb(&heap), [plist], "the same string is deduplicated");
+        assert_eq!(
+            satb(&heap),
+            [plist.bits()],
+            "the same string is deduplicated"
+        );
         assert_eq!(
             heap.current_mutator_satb().satb_string_preimage_addrs.len(),
             1
@@ -437,7 +448,7 @@ fn major_symbol_join_merges_worker_and_mutator_results_after_publication_stops()
             assert!(heap.marked_symbols.contains(id(owner)));
         }
         heap.join_concurrent_mark();
-        assert!(!heap.concurrent_mark_running);
+        assert!(!heap.concurrent_mark_running());
         assert!(!concurrent_mark_active());
         assert!(
             heap.current_mutator_gc().major_symbol_preimages.is_empty(),
@@ -505,7 +516,7 @@ fn major_symbol_generic_cons_write_retraces_current_children_before_sweep() {
             let owner = roots.keep(heap.alloc_cons(TaggedValue::NIL, TaggedValue::NIL));
             // A real completed collection establishes ordinary-old status for
             // GEN1. GEN0 preserves its existing cons tracing behavior.
-            heap.collect_exact([owner].into_iter());
+            heap.collect_rooted([owner].into_iter());
             if enabled {
                 assert!(heap.value_is_old_for_test(owner));
             }
@@ -549,8 +560,8 @@ fn major_symbol_generic_cons_write_retraces_current_children_before_sweep() {
             heap.reseed_runtime_and_remembered_roots();
             heap.seed_root(owner);
             heap.incremental_drain_all();
-            heap.incremental_finish(heap.live_bytes(), std::time::Instant::now());
-            heap.finish_incremental_sweep_now();
+            heap.incremental_finish_for_test(heap.live_bytes(), std::time::Instant::now());
+            heap.finish_incremental_sweep_now_for_test();
             assert!(heap.owns_heap_value_for_test(owner));
             assert_eq!(heap.marked_symbols.contains(id(key)), enabled);
         }
@@ -581,13 +592,9 @@ fn atomic_forwarder_stores_keep_root_preimages_before_publication() {
         assert!(object.get().is_nil());
         assert_eq!(keyboard.get().bits(), TaggedValue::T.bits());
         let old_roots = satb(&heap);
-        assert!(old_roots.iter().any(|value| value.bits() == first.bits()));
-        assert!(old_roots.iter().any(|value| value.bits() == second.bits()));
-        assert!(
-            old_roots
-                .iter()
-                .any(|value| value.bits() == integer_old.bits())
-        );
+        assert!(old_roots.contains(&first.bits()));
+        assert!(old_roots.contains(&second.bits()));
+        assert!(old_roots.contains(&integer_old.bits()));
         phase.stop_synthetic(&mut heap);
         drop(phase);
     }

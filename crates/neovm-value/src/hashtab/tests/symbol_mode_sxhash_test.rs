@@ -1,9 +1,10 @@
 //! Positioned symbols hash as their underlying symbol only in the owning
 //! Context's transparent mode (GNU fns.c sxhash_obj / maybe_remove_pos).
 use super::*;
+use std::hash::{Hash, Hasher};
 
 fn positioned(symbol: Value, pos: i64) -> Value {
-    with_tagged_heap(|heap| heap.alloc_symbol_with_pos(symbol, Value::fixnum(pos)))
+    unsafe { with_tagged_heap(|heap| heap.alloc_symbol_with_pos(symbol, Value::fixnum(pos))) }
 }
 
 #[test]
@@ -94,4 +95,70 @@ fn treesit_node_sxhash_keeps_private_slot_hash_direct_nested_and_fallback() {
             }
         }
     }
+}
+
+fn symbol_name_fallback_hash(name: &str) -> u64 {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    4_u8.hash(&mut hasher);
+    name.hash(&mut hasher);
+    hasher.finish() & SXHASH_FALLBACK_NONNEG_MASK
+}
+
+fn raw_symbol_name_fallback_hash(bytes: &[u8]) -> u64 {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    4_u8.hash(&mut hasher);
+    bytes.hash(&mut hasher);
+    hasher.finish() & SXHASH_FALLBACK_NONNEG_MASK
+}
+
+/// A repeated equal-hash of a UTF-8 symbol must reuse the recorded `&str`.
+/// `as_utf8_str` is `from_utf8` over the whole name, and
+/// `resolve_sym_lisp_string` reads the registry only on a miss.
+#[test]
+fn repeated_equal_hash_of_a_utf8_symbol_skips_name_validation() {
+    crate::test_utils::init_test_tracing();
+    let symbol = Value::symbol("equal-hash-utf8-cache-probe");
+    let expected = symbol_name_fallback_hash("equal-hash-utf8-cache-probe");
+    assert_eq!(
+        fallback_sxhash_emacs_uint(&symbol, HashTableTest::Equal, SymbolMode::Bare),
+        expected
+    );
+
+    reset_symbol_equal_hash_name_validations();
+    crate::intern::reset_resolve_sym_lisp_string_registry_reads();
+    for _ in 0..64 {
+        assert_eq!(
+            fallback_sxhash_emacs_uint(&symbol, HashTableTest::Equal, SymbolMode::Bare),
+            expected
+        );
+    }
+    assert_eq!(symbol_equal_hash_name_validations(), 0);
+    assert_eq!(crate::intern::resolve_sym_lisp_string_registry_reads(), 0);
+}
+
+/// A raw-byte name hashes its bytes. After the first record, repeats must
+/// not scan those bytes with `from_utf8` or re-read the registry.
+#[test]
+fn repeated_equal_hash_of_a_raw_symbol_skips_name_validation() {
+    crate::test_utils::init_test_tracing();
+    let bytes = [0xFF, 0xFE, 0x80];
+    let name = crate::heap_types::LispString::from_unibyte(bytes.to_vec());
+    let id = crate::intern::intern_lisp_string(&name);
+    let symbol = Value::from_sym_id(id);
+    let expected = raw_symbol_name_fallback_hash(&bytes);
+    assert_eq!(
+        fallback_sxhash_emacs_uint(&symbol, HashTableTest::Equal, SymbolMode::Bare),
+        expected
+    );
+
+    reset_symbol_equal_hash_name_validations();
+    crate::intern::reset_resolve_sym_lisp_string_registry_reads();
+    for _ in 0..64 {
+        assert_eq!(
+            fallback_sxhash_emacs_uint(&symbol, HashTableTest::Equal, SymbolMode::Bare),
+            expected
+        );
+    }
+    assert_eq!(symbol_equal_hash_name_validations(), 0);
+    assert_eq!(crate::intern::resolve_sym_lisp_string_registry_reads(), 0);
 }

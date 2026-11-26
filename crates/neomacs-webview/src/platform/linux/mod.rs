@@ -36,6 +36,8 @@ mod view;
 
 use reactor::{ReactorEvent, WpeReactorHandle};
 
+pub(crate) use reactor::configure_before_threads;
+
 use self::sys::{platform as plat, webkit as wk};
 
 use crate::backend::{

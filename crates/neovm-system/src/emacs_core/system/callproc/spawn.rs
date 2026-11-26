@@ -868,7 +868,7 @@ mod posix {
                 // through valid pointers; both sets are then fully initialized.
                 unsafe {
                     libc::sigemptyset(defaults.as_mut_ptr());
-                    for signal in [libc::SIGINT, libc::SIGQUIT, libc::SIGPIPE, libc::SIGPROF] {
+                    for &signal in super::super::super::CHILD_DEFAULT_SIGNALS {
                         libc::sigaddset(defaults.as_mut_ptr(), signal);
                     }
                     libc::sigemptyset(empty.as_mut_ptr());
@@ -1037,7 +1037,10 @@ mod posix {
 
             Ok(SpawnedChild {
                 pid: pid as u32,
-                stdin: stdin.parent_end.take(),
+                stdin: stdin
+                    .parent_end
+                    .take()
+                    .map(neovm_eval::emacs_core::eval::data::process_state::PollRegistration::new),
                 stdout: stdout.parent_end.take(),
                 stderr: stderr.parent_end.take(),
                 backend: ChildBackend::Pid { status: None },

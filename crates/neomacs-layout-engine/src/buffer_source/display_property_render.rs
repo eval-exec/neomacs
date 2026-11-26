@@ -24,6 +24,12 @@ use crate::types::WindowParams;
 pub(crate) struct BufferDisplayPropertyTextReplacementOutcome {
     pub(crate) replacement: DisplayPropertyReplacementAppendOutcome,
     pub(crate) skip_to: i64,
+    /// Exact byte offset in `text` corresponding to `skip_to` when known from
+    /// the replacement's Emacs byte span (`end_byte_pos - text_start_byte`).
+    /// Lets `skip_covered_buffer_text` jump over multi-megabyte replaced spans
+    /// (such as `image-mode` buffers) in O(1) instead of UTF-8-decoding every
+    /// covered byte (#823).
+    pub(crate) skip_to_byte_idx: Option<usize>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -232,6 +238,7 @@ impl<'a, 'face> BufferDisplayPropertyTextReplacementRenderContext<'a, 'face> {
                     return BufferDisplayPropertyTextReplacementApplyOutcome::RefusedWhole;
                 }
                 self.apply_rendered_outcome(
+                    buffer,
                     outcome,
                     progress,
                     cursor_info,
@@ -245,6 +252,10 @@ impl<'a, 'face> BufferDisplayPropertyTextReplacementRenderContext<'a, 'face> {
                 BufferDisplayPropertyTextReplacementOutcome {
                     replacement: session.opening_slot(),
                     skip_to: self.request.replacement.descriptor().resume_charpos(),
+                    skip_to_byte_idx: self
+                        .request
+                        .replacement
+                        .end_byte_idx(self.request.text_start_byte),
                 }
                 .capture_cursor_info_if_point(
                     cursor_info,
@@ -265,8 +276,9 @@ impl<'a, 'face> BufferDisplayPropertyTextReplacementRenderContext<'a, 'face> {
         }
     }
 
-    fn apply_rendered_outcome(
+    fn apply_rendered_outcome<B: LayoutBufferView>(
         &self,
+        buffer: &B,
         outcome: BufferDisplayPropertyTextReplacementOutcome,
         progress: &mut DisplaySourceProgressState<'_>,
         cursor_info: &mut CursorCaptureState,
@@ -274,29 +286,65 @@ impl<'a, 'face> BufferDisplayPropertyTextReplacementRenderContext<'a, 'face> {
         point_charpos: i64,
         line_numbers: &mut LineNumberRenderState,
     ) {
-        outcome.apply_to_progress_and_cursor(
-            self.request.text,
-            progress,
+        outcome.capture_cursor_info_if_point(
             cursor_info,
             self.request.active_face_state,
             row_geometry,
             point_charpos,
             self.start_charpos,
+            progress.byte_idx(),
+        );
+        let text_start_byte = self.request.text_start_byte;
+        let text = self.request.text;
+        outcome.apply_to_progress_with_newline_counter(
+            text,
+            progress,
             line_numbers,
+            |start_byte, end_byte| {
+                if let Some(slice) = text.get(start_byte..end_byte) {
+                    memchr::memchr_iter(b'\n', slice).count() as i64
+                } else {
+                    crate::neovm_bridge::RustBufferAccess::new(buffer).count_lines(
+                        text_start_byte.saturating_add(start_byte) as i64,
+                        text_start_byte.saturating_add(end_byte) as i64,
+                    )
+                }
+            },
         );
     }
 
-    pub(crate) fn apply_completed_string(
+    pub(crate) fn apply_completed_string<B: LayoutBufferView>(
         &self,
+        buffer: &B,
         replacement: DisplayPropertyReplacementAppendOutcome,
         progress: &mut DisplaySourceProgressState<'_>,
         line_numbers: &mut LineNumberRenderState,
     ) {
+        let text_start_byte = self.request.text_start_byte;
+        let text = self.request.text;
         BufferDisplayPropertyTextReplacementOutcome {
             replacement,
             skip_to: self.request.replacement.descriptor().resume_charpos(),
+            skip_to_byte_idx: self
+                .request
+                .replacement
+                .end_byte_idx(self.request.text_start_byte),
         }
-        .apply_to_progress(self.request.text, progress, line_numbers);
+        .apply_to_progress_with_newline_counter(
+            text,
+            progress,
+            line_numbers,
+            |start_byte, end_byte| {
+                if let Some(slice) = text.get(start_byte..end_byte) {
+                    memchr::memchr_iter(b'\n', slice).count() as i64
+                } else {
+                    crate::neovm_bridge::RustBufferAccess::new(buffer).count_lines(
+                        text_start_byte.saturating_add(start_byte) as i64,
+                        text_start_byte.saturating_add(end_byte) as i64,
+                    )
+                }
+            },
+        );
     }
 }
 
@@ -354,6 +402,7 @@ impl<'a, 'face> BufferDisplayPropertyTextReplacementRenderRequest<'a, 'face> {
                     BufferDisplayPropertyTextReplacementOutcome {
                         replacement: outcome,
                         skip_to: self.replacement.descriptor().resume_charpos(),
+                        skip_to_byte_idx: self.replacement.end_byte_idx(self.text_start_byte),
                     },
                 )
             }
@@ -391,11 +440,9 @@ impl<'a, 'face> BufferDisplayPropertyTextReplacementRenderRequest<'a, 'face> {
         // Attach the fringe bitmap (if this is a `(left-fringe …)` spec) to the
         // current row BEFORE rendering the empty inline replacement. The text
         // area still shows nothing; only the fringe column gains the bitmap.
-        state.source_render.record_fringe_bitmap_for_descriptor(
-            descriptor,
-            state.face_ids,
-            self.active_face_state,
-        );
+        state
+            .source_render
+            .record_fringe_bitmap_for_descriptor(descriptor, state.face_ids);
         let append_request = state
             .source_render
             .resolve_display_property_replacement_row_request(
@@ -435,6 +482,16 @@ impl BufferDisplayPropertyTextReplacementOutcome {
     }
 
     fn skip_covered_buffer_text(self, text: &[u8], position: &mut DisplaySourceTextPosition) {
+        if let Some(end_byte_idx) = self.skip_to_byte_idx
+            && end_byte_idx >= position.byte_idx()
+            && self.skip_to >= position.charpos()
+        {
+            // Complete display elements may jump past a bounded viewport copy
+            // (`loop_render.rs`: `exhausted_window_horizon` only retries when
+            // `charpos < accessible_end` and another visible row needs source).
+            position.advance_to(end_byte_idx, self.skip_to);
+            return;
+        }
         position.skip_chars_until(text, self.skip_to);
     }
 
@@ -495,6 +552,7 @@ impl BufferDisplayPropertyTextReplacementOutcome {
             .cursor_info(active_face_state, position, preceding_charpos)
     }
 
+    #[cfg(test)]
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn apply_to_progress_and_cursor(
         self,
@@ -515,22 +573,30 @@ impl BufferDisplayPropertyTextReplacementOutcome {
             start_charpos,
             progress.byte_idx(),
         );
-        self.apply_to_progress(text, progress, line_numbers);
+        self.apply_to_progress_with_newline_counter(
+            text,
+            progress,
+            line_numbers,
+            |start_byte, end_byte| {
+                text.get(start_byte..end_byte)
+                    .map_or(0, |slice| memchr::memchr_iter(b'\n', slice).count() as i64)
+            },
+        );
     }
 
-    fn apply_to_progress(
+    fn apply_to_progress_with_newline_counter(
         self,
         text: &[u8],
         progress: &mut DisplaySourceProgressState<'_>,
         line_numbers: &mut LineNumberRenderState,
+        count_newlines: impl FnOnce(usize, usize) -> i64,
     ) {
         let start_byte = progress.byte_idx();
         let walk_update = self.walk_update(text, progress.source_position());
         progress.apply_row_position(walk_update.row_position());
         progress.apply_source_position(walk_update.source_position());
         if line_numbers.is_enabled() {
-            let buffer_newlines =
-                memchr::memchr_iter(b'\n', &text[start_byte..progress.byte_idx()]).count() as i64;
+            let buffer_newlines = count_newlines(start_byte, progress.byte_idx());
             line_numbers.resume_after_replacement(buffer_newlines);
         }
     }

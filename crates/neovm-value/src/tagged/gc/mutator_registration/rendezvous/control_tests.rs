@@ -186,3 +186,502 @@ fn exhaustion_duplicate_membership_and_terminal_poison_do_not_discharge_obligati
     assert_eq!(native.mode, Mode::Resuming);
     assert_eq!(native.image_takes, 0);
 }
+
+fn ring_keys() -> [MutatorKey; 3] {
+    let heap = HeapIdentity::issue();
+    std::array::from_fn(|index| MutatorKey {
+        heap,
+        world: heap,
+        owner: index as u64 + 1,
+        registration: NonZeroU64::new(index as u64 + 1).unwrap(),
+        generation: NonZeroU64::new(index as u64 + 1).unwrap(),
+    })
+}
+
+fn ring_generation() -> NonZeroU64 {
+    NonZeroU64::new(11).unwrap()
+}
+
+fn running(keys: &[MutatorKey]) -> Vec<(MutatorKey, Mode)> {
+    keys.iter().map(|key| (*key, Mode::Running)).collect()
+}
+
+/// A stop that activates while requests are queued keeps their order and
+/// loses none of them; the grant itself happens only once the stop is
+/// traced (`ring_grant_in_stop_needs_the_callers_tracing_epoch`).
+#[test]
+fn ring_stop_activation_keeps_order_and_every_requester() {
+    let mut state = State::new();
+    let keys = ring_keys();
+    let generation = ring_generation();
+    let a = state.enqueue_serial(keys[0], generation).unwrap();
+    let _b = state.enqueue_serial(keys[1], generation).unwrap();
+    let _epoch = requested(&mut state, &running(&keys));
+    assert!(matches!(state.phase, Phase::Stopping(_)));
+    assert_eq!(state.ring_head(), Some(a), "the stop does not reorder");
+    assert_eq!(state.ring_len(), 2, "the stop loses no requester");
+}
+
+#[test]
+fn ring_request_id_wrap_is_a_typed_refusal() {
+    let mut state = State::new();
+    let keys = ring_keys();
+    state.next_request = u64::MAX;
+    assert_eq!(
+        state.enqueue_serial(keys[0], ring_generation()),
+        Err(RendezvousError::Generation)
+    );
+    assert_eq!(state.ring_len(), 0, "the refused enqueue changed nothing");
+
+    state.next_request = u64::MAX - 1;
+    let last = state.enqueue_serial(keys[0], ring_generation()).unwrap();
+    assert_eq!(last.get(), u64::MAX);
+    assert_eq!(
+        state.enqueue_serial(keys[1], ring_generation()),
+        Err(RendezvousError::Generation)
+    );
+}
+
+#[test]
+fn ring_refuses_a_duplicate_owner() {
+    let mut state = State::new();
+    let keys = ring_keys();
+    let a = state.enqueue_serial(keys[0], ring_generation()).unwrap();
+    assert_eq!(
+        state.enqueue_serial(keys[0], ring_generation()),
+        Err(RendezvousError::Identity),
+        "one ring entry per client (Baton group = one ring client)"
+    );
+    assert_eq!(state.ring_len(), 1);
+    assert_eq!(state.ring_head(), Some(a));
+    // Retirement frees the owner to enqueue again.
+    state.retire_serial(a).unwrap();
+    let again = state.enqueue_serial(keys[0], ring_generation()).unwrap();
+    assert_eq!(state.ring_head(), Some(again));
+}
+
+/// Members after the stop: every owner acknowledged.
+fn stopped_members(keys: &[MutatorKey]) -> Vec<(MutatorKey, Mode)> {
+    keys.iter().map(|key| (*key, Mode::Stopped)).collect()
+}
+
+/// The keeper's grant happens inside its own stop (L6.7 K3): only
+/// `Tracing(epoch)` for the caller's epoch grants, and only once.
+#[test]
+fn ring_grant_in_stop_needs_the_callers_tracing_epoch() {
+    let mut state = State::new();
+    let keys = ring_keys();
+    let a = state.enqueue_serial(keys[0], ring_generation()).unwrap();
+    let b = state.enqueue_serial(keys[1], ring_generation()).unwrap();
+    let any = NonZeroU64::new(1).unwrap();
+    assert_eq!(
+        state.grant_head_in_stop(any, |_| true),
+        Err(RendezvousError::Publication),
+        "no grant outside a stop"
+    );
+    let epoch = requested(&mut state, &running(&keys));
+    assert_eq!(
+        state.grant_head_in_stop(epoch, |_| true),
+        Err(RendezvousError::Publication),
+        "no grant before the trace"
+    );
+    state.begin_trace(epoch, &stopped_members(&keys)).unwrap();
+    let other = NonZeroU64::new(epoch.get() + 1).unwrap();
+    assert_eq!(
+        state.grant_head_in_stop(other, |_| true),
+        Err(RendezvousError::Publication),
+        "another stop's epoch grants nothing"
+    );
+    assert_eq!(state.grant_head_in_stop(epoch, |_| true), Ok(Some(a)));
+    assert_eq!(
+        state.grant_head_in_stop(epoch, |_| true),
+        Ok(None),
+        "one ticket out: the granted head is not granted again"
+    );
+    state.retire_serial(a).unwrap();
+    assert_eq!(state.grant_head_in_stop(epoch, |_| true), Ok(Some(b)));
+    assert_eq!(state.ring_head(), Some(b));
+}
+
+/// FIFO: an unready head blocks the grant; the entry behind it is not
+/// granted ahead of it.
+#[test]
+fn ring_grant_in_stop_never_skips_an_unready_head() {
+    let mut state = State::new();
+    let keys = ring_keys();
+    let a = state.enqueue_serial(keys[0], ring_generation()).unwrap();
+    let _b = state.enqueue_serial(keys[1], ring_generation()).unwrap();
+    let epoch = requested(&mut state, &running(&keys));
+    state.begin_trace(epoch, &stopped_members(&keys)).unwrap();
+    let mut asked = Vec::new();
+    assert_eq!(
+        state.grant_head_in_stop(epoch, |entry| {
+            asked.push(entry.id());
+            false
+        }),
+        Ok(None)
+    );
+    assert_eq!(asked, [a], "only the head is asked");
+    assert_eq!(state.ring_head_granted, None);
+    assert_eq!(state.grant_head_in_stop(epoch, |_| true), Ok(Some(a)));
+}
+
+/// Poison refuses the grant; the granted head still retires exactly once.
+#[test]
+fn ring_grant_in_stop_refuses_after_poison_and_keeps_retire() {
+    let mut state = State::new();
+    let keys = ring_keys();
+    let a = state.enqueue_serial(keys[0], ring_generation()).unwrap();
+    let epoch = requested(&mut state, &running(&keys));
+    state.begin_trace(epoch, &stopped_members(&keys)).unwrap();
+    assert_eq!(state.grant_head_in_stop(epoch, |_| true), Ok(Some(a)));
+    state.poison();
+    assert_eq!(
+        state.grant_head_in_stop(epoch, |_| true),
+        Err(RendezvousError::Poisoned)
+    );
+    assert_eq!(
+        state.enqueue_serial(keys[1], ring_generation()),
+        Err(RendezvousError::Poisoned)
+    );
+    assert_eq!(state.ring_head(), Some(a), "the granted ticket is retained");
+    state.retire_serial(a).unwrap();
+    assert_eq!(state.retire_serial(a), Err(RendezvousError::Identity));
+    assert_eq!(state.ring_len(), 0);
+}
+
+/// Owner exit or a sent-back publication cancels a queued entry; a granted
+/// entry is not cancelled (its ticket is out).
+#[test]
+fn ring_cancel_queued_removes_only_a_queued_entry() {
+    let mut state = State::new();
+    let keys = ring_keys();
+    let a = state.enqueue_serial(keys[0], ring_generation()).unwrap();
+    let b = state.enqueue_serial(keys[1], ring_generation()).unwrap();
+    let epoch = requested(&mut state, &running(&keys));
+    state.begin_trace(epoch, &stopped_members(&keys)).unwrap();
+    assert_eq!(state.grant_head_in_stop(epoch, |_| true), Ok(Some(a)));
+    assert_eq!(
+        state.cancel_queued(SerialClient::Owner(keys[0])),
+        Err(RendezvousError::Identity),
+        "a granted entry is not cancelled"
+    );
+    state.cancel_queued(SerialClient::Owner(keys[1])).unwrap();
+    assert_eq!(state.ring_len(), 1);
+    assert_eq!(
+        state.cancel_queued(SerialClient::Owner(keys[1])),
+        Err(RendezvousError::Identity),
+        "a cancel happens once"
+    );
+    assert_eq!(
+        state.cancel_queued(SerialClient::Owner(keys[2])),
+        Err(RendezvousError::Identity),
+        "an owner with no entry"
+    );
+    state.retire_serial(a).unwrap();
+    assert_eq!(state.ring_head(), None);
+    let _ = b;
+}
+
+/// A grant must be retired before its stop completes (lead #13911 M1): no
+/// grant outlives the stop that issued it.
+#[test]
+fn ring_complete_refuses_while_a_grant_is_out() {
+    let mut state = State::new();
+    let keys = ring_keys();
+    let a = state.enqueue_serial(keys[0], ring_generation()).unwrap();
+    let epoch = requested(&mut state, &running(&keys));
+    let stopped = stopped_members(&keys);
+    state.begin_trace(epoch, &stopped).unwrap();
+    assert_eq!(state.grant_head_in_stop(epoch, |_| true), Ok(Some(a)));
+    assert_eq!(
+        state.complete(epoch, &stopped),
+        Err(RendezvousError::Publication),
+        "the grant is still out"
+    );
+    assert_eq!(
+        state.phase,
+        Phase::Tracing(epoch),
+        "the refusal changed nothing"
+    );
+    state.retire_serial(a).unwrap();
+    state.complete(epoch, &stopped).unwrap();
+    let b = state.enqueue_serial(keys[1], ring_generation()).unwrap();
+    assert_eq!(state.phase, Phase::DrainingResumes);
+    assert_eq!(
+        state.grant_head_in_stop(epoch, |_| true),
+        Err(RendezvousError::Publication),
+        "no grant once the stop completed: the Idle/DrainingResumes grant is gone (b2)"
+    );
+    assert_eq!(state.ring_head(), Some(b));
+}
+
+/// L6.7b b1 (lead #14000): the Baton group is one ring client. Its entry
+/// takes its place in commit order between owners, and each grant happens
+/// under the caller's stop.
+#[test]
+fn ring_fifo_holds_across_owner_and_baton_group_clients() {
+    let mut state = State::new();
+    let keys = ring_keys();
+    let a = state.enqueue_serial(keys[0], ring_generation()).unwrap();
+    let group = state.enqueue_baton_group().unwrap();
+    let b = state.enqueue_serial(keys[1], ring_generation()).unwrap();
+    let epoch = requested(&mut state, &running(&keys));
+    state.begin_trace(epoch, &stopped_members(&keys)).unwrap();
+    let mut order = Vec::new();
+    while let Some(id) = state.grant_head_in_stop(epoch, |_| true).unwrap() {
+        order.push((id, state.ring_head_entry().map(|entry| entry.client())));
+        state.retire_serial(id).unwrap();
+    }
+    assert_eq!(
+        order,
+        [
+            (
+                a,
+                Some(RingClient::Owner {
+                    key: keys[0],
+                    generation: ring_generation(),
+                })
+            ),
+            (group, Some(RingClient::BatonGroup)),
+            (
+                b,
+                Some(RingClient::Owner {
+                    key: keys[1],
+                    generation: ring_generation(),
+                })
+            ),
+        ],
+        "grants follow commit order across client kinds"
+    );
+}
+
+/// The Baton group holds at most one entry, queued or granted: a second
+/// request from the group is a typed refusal, not a second position.
+#[test]
+fn ring_refuses_a_second_baton_group_entry() {
+    let mut state = State::new();
+    let keys = ring_keys();
+    let group = state.enqueue_baton_group().unwrap();
+    assert_eq!(
+        state.enqueue_baton_group(),
+        Err(RendezvousError::Identity),
+        "queued: one entry"
+    );
+    let epoch = requested(&mut state, &running(&keys));
+    state.begin_trace(epoch, &stopped_members(&keys)).unwrap();
+    assert_eq!(state.grant_head_in_stop(epoch, |_| true), Ok(Some(group)));
+    assert_eq!(
+        state.enqueue_baton_group(),
+        Err(RendezvousError::Identity),
+        "granted: still one entry"
+    );
+    assert_eq!(state.ring_len(), 1);
+    state.retire_serial(group).unwrap();
+    assert!(
+        state.enqueue_baton_group().is_ok(),
+        "retired: it may queue again"
+    );
+}
+
+/// The Baton group's turn is granted only under the caller's traced stop,
+/// like an owner's (K3): never outside a stop or before its trace. The rule
+/// does not read the entry's kind; this row pins that a group entry gets no
+/// exemption from it (lead #14011 nit).
+#[test]
+fn ring_grants_the_baton_group_only_inside_a_traced_stop() {
+    let mut state = State::new();
+    let keys = ring_keys();
+    let group = state.enqueue_baton_group().unwrap();
+    let any = NonZeroU64::new(1).unwrap();
+    assert_eq!(
+        state.grant_head_in_stop(any, |_| true),
+        Err(RendezvousError::Publication),
+        "no grant outside a stop"
+    );
+    let epoch = requested(&mut state, &running(&keys));
+    assert_eq!(
+        state.grant_head_in_stop(epoch, |_| true),
+        Err(RendezvousError::Publication),
+        "no grant before the trace"
+    );
+    state.begin_trace(epoch, &stopped_members(&keys)).unwrap();
+    assert_eq!(state.grant_head_in_stop(epoch, |_| true), Ok(Some(group)));
+}
+
+/// A granted Baton-group entry is retired exactly once, also after poison,
+/// so a turn that was out when the era died is not lost (L6 f). Retire does
+/// not read the entry's kind either; the row pins the group to the same
+/// once-only retire (lead #14011 nit).
+#[test]
+fn ring_retires_a_granted_baton_group_once_after_poison() {
+    let mut state = State::new();
+    let keys = ring_keys();
+    let group = state.enqueue_baton_group().unwrap();
+    let epoch = requested(&mut state, &running(&keys));
+    state.begin_trace(epoch, &stopped_members(&keys)).unwrap();
+    assert_eq!(state.grant_head_in_stop(epoch, |_| true), Ok(Some(group)));
+    state.poison();
+    assert_eq!(state.retire_serial(group), Ok(()));
+    assert_eq!(
+        state.retire_serial(group),
+        Err(RendezvousError::Identity),
+        "retire happens once"
+    );
+    assert_eq!(state.enqueue_baton_group(), Err(RendezvousError::Poisoned));
+}
+
+/// L6.7b b3 (lead #14011 M1 condition): no grant outlives its stop, and a
+/// Baton-group grant is no exception. The stop completes once the group's
+/// turn is retired.
+#[test]
+fn ring_complete_refuses_while_a_baton_group_grant_is_out() {
+    let mut state = State::new();
+    let keys = ring_keys();
+    let group = state.enqueue_baton_group().unwrap();
+    let epoch = requested(&mut state, &running(&keys));
+    let stopped = stopped_members(&keys);
+    state.begin_trace(epoch, &stopped).unwrap();
+    assert_eq!(
+        state.grant_head_in_stop(epoch, |entry| entry.client() == RingClient::BatonGroup),
+        Ok(Some(group))
+    );
+    assert_eq!(
+        state.complete(epoch, &stopped),
+        Err(RendezvousError::Publication),
+        "the group's turn is still out"
+    );
+    assert_eq!(
+        state.phase,
+        Phase::Tracing(epoch),
+        "the refusal changed nothing"
+    );
+    state.retire_serial(group).unwrap();
+    state.complete(epoch, &stopped).unwrap();
+}
+
+/// L6.7b b3: the Baton group leaving the era cancels its queued entry and
+/// no owner's. A granted group entry is not cancelled: its turn is out and
+/// only the grant's retire ends it.
+#[test]
+fn ring_cancel_queued_removes_only_the_baton_group_entry() {
+    let mut state = State::new();
+    let keys = ring_keys();
+    let a = state.enqueue_serial(keys[0], ring_generation()).unwrap();
+    state.enqueue_baton_group().unwrap();
+    let b = state.enqueue_serial(keys[1], ring_generation()).unwrap();
+    state.cancel_queued(SerialClient::BatonGroup).unwrap();
+    let left: Vec<_> = state.serial_ring.iter().map(|entry| entry.id()).collect();
+    assert_eq!(left, [a, b], "only the group's entry left the ring");
+    assert_eq!(
+        state.cancel_queued(SerialClient::BatonGroup),
+        Err(RendezvousError::Identity),
+        "a cancel happens once"
+    );
+    state.cancel_queued(SerialClient::Owner(keys[0])).unwrap();
+    state.cancel_queued(SerialClient::Owner(keys[1])).unwrap();
+    let group = state.enqueue_baton_group().unwrap();
+    let epoch = requested(&mut state, &running(&keys));
+    state.begin_trace(epoch, &stopped_members(&keys)).unwrap();
+    assert_eq!(state.grant_head_in_stop(epoch, |_| true), Ok(Some(group)));
+    assert_eq!(
+        state.cancel_queued(SerialClient::BatonGroup),
+        Err(RendezvousError::Identity),
+        "a granted group entry is not cancelled"
+    );
+    state.retire_serial(group).unwrap();
+}
+
+/// L6.7b b5: the group's turn came back asking for a collection, so its
+/// request goes back at the HEAD, ahead of an owner queued during its
+/// interval. One group entry at a time, and never ahead of a turn that is
+/// out.
+#[test]
+fn ring_requeues_the_baton_group_at_the_head() {
+    let mut state = State::new();
+    let keys = ring_keys();
+    let group = state.enqueue_baton_group().unwrap();
+    let epoch = requested(&mut state, &running(&keys));
+    let stopped = stopped_members(&keys);
+    state.begin_trace(epoch, &stopped).unwrap();
+    assert_eq!(state.grant_head_in_stop(epoch, |_| true), Ok(Some(group)));
+    let a = state.enqueue_serial(keys[0], ring_generation()).unwrap();
+    assert_eq!(
+        state.requeue_baton_group_at_head(),
+        Err(RendezvousError::Identity),
+        "the granted group entry is still the group's one entry"
+    );
+    state.retire_serial(group).unwrap();
+    let again = state.requeue_baton_group_at_head().unwrap();
+    assert_eq!(
+        state.ring_head(),
+        Some(again),
+        "the group is back at the head"
+    );
+    let order: Vec<_> = state.serial_ring.iter().map(|entry| entry.id()).collect();
+    assert_eq!(order, [again, a], "ahead of the owner queued behind it");
+    assert_eq!(state.grant_head_in_stop(epoch, |_| true), Ok(Some(again)));
+    state.retire_serial(again).unwrap();
+    assert_eq!(state.grant_head_in_stop(epoch, |_| true), Ok(Some(a)));
+    assert_eq!(
+        state.requeue_baton_group_at_head(),
+        Err(RendezvousError::Publication),
+        "never ahead of a turn that is out"
+    );
+}
+
+/// L6.7c (c): an owner's turn came back asking for a collection, so its
+/// next request, under its new publication, goes in at the HEAD, ahead of an
+/// owner queued during its turn. One entry per owner, and never ahead of a
+/// turn that is out.
+#[test]
+fn ring_requeues_a_collecting_owner_at_the_head() {
+    let mut state = State::new();
+    let keys = ring_keys();
+    let first = state.enqueue_serial(keys[0], ring_generation()).unwrap();
+    let epoch = requested(&mut state, &running(&keys));
+    let stopped = stopped_members(&keys);
+    state.begin_trace(epoch, &stopped).unwrap();
+    assert_eq!(state.grant_head_in_stop(epoch, |_| true), Ok(Some(first)));
+    let behind = state.enqueue_serial(keys[1], ring_generation()).unwrap();
+    let republished = NonZeroU64::new(12).unwrap();
+    assert_eq!(
+        state.requeue_serial_at_head(keys[0], republished),
+        Err(RendezvousError::Identity),
+        "the granted entry is still the owner's one entry"
+    );
+    state.retire_serial(first).unwrap();
+    let again = state.requeue_serial_at_head(keys[0], republished).unwrap();
+    assert_eq!(
+        state.ring_head(),
+        Some(again),
+        "the owner is back at the head"
+    );
+    let order: Vec<_> = state.serial_ring.iter().map(|entry| entry.id()).collect();
+    assert_eq!(
+        order,
+        [again, behind],
+        "ahead of the owner queued behind it"
+    );
+    assert_eq!(
+        state.ring_head_entry().map(|entry| entry.client()),
+        Some(RingClient::Owner {
+            key: keys[0],
+            generation: republished,
+        }),
+        "under the publication it made after its turn"
+    );
+    assert_eq!(
+        state.requeue_serial_at_head(keys[0], republished),
+        Err(RendezvousError::Identity),
+        "one entry per owner"
+    );
+    assert_eq!(state.grant_head_in_stop(epoch, |_| true), Ok(Some(again)));
+    state.retire_serial(again).unwrap();
+    assert_eq!(state.grant_head_in_stop(epoch, |_| true), Ok(Some(behind)));
+    assert_eq!(
+        state.requeue_serial_at_head(keys[2], ring_generation()),
+        Err(RendezvousError::Publication),
+        "never ahead of a turn that is out"
+    );
+}

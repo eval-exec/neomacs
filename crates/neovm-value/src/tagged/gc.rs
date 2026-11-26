@@ -60,6 +60,7 @@ mod publication;
 #[cfg(test)]
 mod publication_owner_seam;
 mod publication_roots;
+pub use super::heap_ref::{HeapMut, HeapRef};
 #[doc(hidden)]
 pub use cache_root_scan::CacheRootScan;
 
@@ -494,7 +495,7 @@ pub struct TaggedHeap {
     canonical_empty_strings: CanonicalEmptyStrings,
     /// Receives when the GC thread has exited its mark loop (so the mutator's
     /// termination can safely take over the gray queue). Set at start.
-    gc_exited: Option<std::sync::mpsc::Receiver<ConcurrentMarkResult>>,
+    gc_exited: MarkExitSlot,
     /// Collector-owned generation state; mutator logs live in MutatorGcState.
     generational: generational::GenState,
     /// Cons cell block allocator.
@@ -774,7 +775,8 @@ pub struct TaggedHeap {
 
     /// GC threshold in approximate Lisp heap bytes.
     gc_threshold: usize,
-    /// Approximate bytes retained by the live heap after the last sweep.
+    /// Runtime-owned live bytes after the last sweep, for Lisp GC pacing.
+    /// Image object storage is excluded; owned hash backing still counts.
     live_bytes: usize,
 
     /// Mark-start pacing state — INSTRUMENTATION ONLY. The reactive
@@ -1004,7 +1006,7 @@ pub struct TaggedHeap {
     mark_in_progress: bool,
     /// True between a concurrent mark's start and termination handshakes — the
     /// mutator runs while the GC thread marks.
-    concurrent_mark_running: bool,
+    concurrent_mark_running: ConcurrentMarkFlag,
 
     // --- Incremental sweep state (step 8). After a mark terminates, the sweep
     // is deferred and drained in bounded slices at later safe points, so the
@@ -1091,6 +1093,12 @@ pub struct TaggedHeap {
     cycle_time_bank: cycle_time_bank::GcCycleTimeBank,
     /// Heads published by payload owners, keyed by a minted id.
     published_payload_roots: publication_roots::PublishedPayloadRoots,
+    /// Native payloads a stopped sweep detached instead of reclaiming inline;
+    /// `Some` while a stopped job's records are owed. The stopped completion
+    /// drains the batch after the heap loan and before owners resume; the
+    /// evaluator's completed-cycle block is the serial backstop (E3.2).
+    /// Trailing, so no pinned offset moves.
+    pending_native_destroys: Option<native_deferred::PendingNativeDestroys>,
 }
 
 impl Default for TaggedHeap {
@@ -1225,6 +1233,7 @@ impl TaggedHeap {
             ephemeron_records: memory_registry::EphemeronRecords::default(),
             cycle_time_bank: cycle_time_bank::GcCycleTimeBank::default(),
             published_payload_roots: publication_roots::PublishedPayloadRoots::default(),
+            pending_native_destroys: None,
             dirty_owner_bits: FxHashSet::default(),
             dirty_writes: Vec::new(),
             gc_collections: 0,
@@ -1244,7 +1253,7 @@ impl TaggedHeap {
             mark_parity: MarkParity::Two,
             mark_in_progress: false,
             incremental_mark_us: 0,
-            concurrent_mark_running: false,
+            concurrent_mark_running: ConcurrentMarkFlag::new(),
             satb_handoff: std::sync::Arc::new(SatbHandoff::new()),
             _satb_owner_layout_reserve: FxHashSet::default(),
             _satb_layout_reserve: mutator_gc::MutatorSatbSlot::new(identity),
@@ -1262,7 +1271,7 @@ impl TaggedHeap {
             _satb_string_layout_reserve: FxHashSet::default(),
             gc_stop: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             gc_wake: std::sync::Arc::new((std::sync::Mutex::new(()), std::sync::Condvar::new())),
-            gc_exited: None,
+            gc_exited: MarkExitSlot::empty(),
             pending_obarray_scan: None,
             concurrent_obarray_start_slots: None,
             retired_vector_buffers: Vec::new(),
@@ -1622,7 +1631,7 @@ impl TaggedHeap {
         #[cfg(debug_assertions)]
         self.debug_assert_remembered_membership(record.owner);
         if self.generational.enabled {
-            if self.concurrent_mark_running && self.generational.major_in_progress {
+            if self.concurrent_mark_running() && self.generational.major_in_progress {
                 if record.owner.is_cons() {
                     // A claimed cons can gain an existing white old object;
                     // SATB preimages and allocate-black births do not cover it.
@@ -1644,7 +1653,8 @@ impl TaggedHeap {
             }
             // Concurrent majors use SATB plus P-all. Persistent image-owner
             // additions still log locally; ordinary R resumes after termination.
-            if self.concurrent_mark_running || record.value.is_none_or(|value| !value.is_fixnum()) {
+            if self.concurrent_mark_running() || record.value.is_none_or(|value| !value.is_fixnum())
+            {
                 self.remember_owner(record.owner);
             }
         } else if self.partition_dump
@@ -1658,7 +1668,7 @@ impl TaggedHeap {
         // owner's current children are its PRE-overwrite values; logging them
         // keeps the start-of-cycle snapshot live. Nothing is re-read later, so
         // the concurrent GC thread never touches a reallocated owner.
-        if self.concurrent_mark_running {
+        if self.concurrent_mark_running() {
             // The background GC thread is marking — log overwritten children to
             // the shared buffer it drains (not the local gray queue, which
             // belongs to the GC thread for the duration). This SATB barrier keeps
@@ -1880,10 +1890,6 @@ impl TaggedHeap {
             .saturating_mul(size_of::<TaggedValue>())
     }
 
-    fn string_object_bytes(obj: &StringObj) -> usize {
-        size_of::<StringObj>().saturating_add(obj.data.byte_len())
-    }
-
     fn hash_table_object_bytes(obj: &HashTableObj) -> usize {
         size_of::<HashTableObj>().saturating_add(obj.table.data.known_storage_bytes())
     }
@@ -1901,11 +1907,11 @@ impl TaggedHeap {
         size_of::<ByteCodeObj>()
             .saturating_add(data.resident_ops_capacity().saturating_mul(size_of::<Op>()))
             .saturating_add(
-                data.constants
+                data.constants()
                     .owned_capacity()
                     .saturating_mul(size_of::<TaggedValue>()),
             )
-            .saturating_add(data.params.named().map_or(0, |params| {
+            .saturating_add(data.params().named().map_or(0, |params| {
                 params
                     .required
                     .capacity()
@@ -1917,8 +1923,7 @@ impl TaggedHeap {
                     .saturating_mul(size_of::<GnuByteOffsetMapEntry>()),
             )
             .saturating_add(
-                data.gnu_bytecode_bytes
-                    .as_ref()
+                data.gnu_bytecode_bytes()
                     .map_or(0, |bytes| bytes.owned_bytes()),
             )
             .saturating_add(Self::vector_storage_bytes(&data.extra_slots))
@@ -1953,7 +1958,9 @@ impl TaggedHeap {
         size_of::<ObarrayObj>().saturating_add(Self::lisp_value_vec_storage_bytes(&obj.buckets))
     }
 
-    fn object_bytes_from_header(header: *const GcHeader) -> usize {
+    /// # Safety
+    /// `header` must point to a live, initialized GC object header.
+    unsafe fn object_bytes_from_header(header: *const GcHeader) -> usize {
         unsafe {
             match (*header).kind {
                 HeapObjectKind::String => Self::string_object_bytes(&*(header as *const StringObj)),
@@ -2090,17 +2097,17 @@ impl TaggedHeap {
         };
         stats = stats.add(PayloadLayout {
             logical_bytes: data
-                .constants
+                .constants()
                 .len()
                 .saturating_mul(size_of::<TaggedValue>()),
             capacity_bytes: data
-                .constants
+                .constants()
                 .owned_capacity()
                 .saturating_mul(size_of::<TaggedValue>()),
-            owned: data.constants.owned_capacity() > 0,
+            owned: data.constants().owned_capacity() > 0,
             mapped: false,
         });
-        if let Some(params) = data.params.named() {
+        if let Some(params) = data.params().named() {
             stats = stats.add(Self::lambda_params_payload_layout(params));
         }
         if let Some(offsets) = data.resident_gnu_byte_offset_map() {
@@ -2113,7 +2120,7 @@ impl TaggedHeap {
                 mapped: false,
             });
         }
-        if let Some(bytes) = &data.gnu_bytecode_bytes {
+        if let Some(bytes) = data.gnu_bytecode_bytes() {
             stats = stats.add(PayloadLayout {
                 logical_bytes: bytes.len(),
                 capacity_bytes: bytes.owned_bytes(),
@@ -2147,7 +2154,9 @@ impl TaggedHeap {
         stats
     }
 
-    fn boxed_class(header: *const GcHeader) -> &'static str {
+    /// # Safety
+    /// `header` must point to a live, initialized GC object header.
+    unsafe fn boxed_class(header: *const GcHeader) -> &'static str {
         unsafe {
             match (*header).kind {
                 HeapObjectKind::String => "string",
@@ -2193,13 +2202,16 @@ impl TaggedHeap {
         }
     }
 
-    fn note_boxed_list_layout(
+    /// # Safety
+    /// `header` must be null or the head of a valid linked list of initialized GC objects.
+    unsafe fn note_boxed_list_layout(
         &self,
         mut header: *const GcHeader,
         stats: &mut Vec<BoxedKindLayoutStats>,
     ) {
         while !header.is_null() {
-            let class = Self::boxed_class(header);
+            // SAFETY: `header` is a live node on `self`'s boxed object list visited with exclusive heap access.
+            let class = unsafe { Self::boxed_class(header) };
             let index = stats
                 .iter()
                 .position(|item| item.class == class)
@@ -2214,164 +2226,12 @@ impl TaggedHeap {
             item.objects += 1;
             item.known_bytes = item
                 .known_bytes
-                .saturating_add(self.collector_object_bytes(header));
+                // SAFETY: `header` is a live node on `self`'s boxed object list visited with exclusive heap access.
+                .saturating_add(unsafe { self.collector_object_bytes(header) });
             unsafe {
                 item.tenured_objects += usize::from((*header).tenured);
                 header = (*header).gc_link();
             }
-        }
-    }
-
-    /// Snapshot allocator-backed GC page occupancy and the directly-owned
-    /// payload capacities of live objects. This does not attempt to reproduce
-    /// process RSS: symbol registries, evaluator stacks, display caches,
-    /// allocator metadata, and nested hash-key allocations live outside this
-    /// accounting and are intentionally exposed as the RSS remainder.
-    #[doc(hidden)]
-    pub fn layout_stats(&self) -> HeapLayoutStats {
-        // The free-list walk below would miss an open region's cells and
-        // `cons_live_count` would count them: callers close first.
-        debug_assert!(
-            !self.alloc_regions_open(),
-            "layout_stats with an open allocation region"
-        );
-        let mut free_cells_by_block = vec![0usize; self.cons_blocks.len()];
-        let bumped_cons_slots: usize = self
-            .cons_blocks
-            .iter()
-            .map(|block| block.next_index as usize)
-            .sum();
-        let mut free_count = 0usize;
-        for (base, count) in self.cons_allocator.free_counts() {
-            if let Some(&block_index) = self.cons_block_index_by_base.get(&base.addr()) {
-                free_cells_by_block[block_index] = count;
-            }
-            free_count += count;
-        }
-        debug_assert!(free_count <= bumped_cons_slots);
-
-        let mut cons = ConsLayoutStats {
-            pages: self.cons_blocks.len(),
-            page_bytes: CONS_BLOCK_BYTES,
-            capacity_slots: self.cons_blocks.len().saturating_mul(CONS_BLOCK_SIZE),
-            bumped_slots: bumped_cons_slots,
-            live_slots: bumped_cons_slots.saturating_sub(free_count),
-            reclaimed_slots: free_count,
-            never_used_slots: self
-                .cons_blocks
-                .len()
-                .saturating_mul(CONS_BLOCK_SIZE)
-                .saturating_sub(bumped_cons_slots),
-            ..ConsLayoutStats::default()
-        };
-        for (block, reclaimed) in self.cons_blocks.iter().zip(free_cells_by_block) {
-            let live = (block.next_index as usize).saturating_sub(reclaimed);
-            if live == 0 {
-                cons.empty_pages += 1;
-            } else if live == CONS_BLOCK_SIZE {
-                cons.full_pages += 1;
-            } else {
-                cons.partial_pages += 1;
-            }
-        }
-        cons.occupied_bytes = cons.live_slots.saturating_mul(size_of::<ConsCell>());
-        debug_assert_eq!(cons.live_slots, self.cons_live_count);
-
-        let arenas = vec![
-            self.float_arena.layout_stats(|_| PayloadLayout::default()),
-            self.string_arena
-                .layout_stats(|object| Self::string_payload_layout(&object.data)),
-            self.vector_arena
-                .layout_stats(|object| Self::value_vec_payload_layout(&object.data)),
-            self.bytecode_arena
-                .layout_stats(Self::bytecode_payload_layout),
-            self.lambda_arena.layout_stats(|object| {
-                Self::closure_payload_layout(&object.data, object.parsed_params.get())
-            }),
-            self.macro_arena.layout_stats(|object| {
-                Self::closure_payload_layout(&object.data, object.parsed_params.get())
-            }),
-            self.record_arena
-                .layout_stats(|object| Self::value_vec_payload_layout(&object.data)),
-            self.symbol_with_pos_arena
-                .layout_stats(|_| PayloadLayout::default()),
-            self.marker_arena.layout_stats(|_| PayloadLayout::default()),
-            self.bignum_arena
-                .layout_stats(|object| Self::bignum_payload_layout(&object.value)),
-        ];
-
-        let mapped_conses = self.mapped_cons_ranges.iter().map(|range| range.len).sum();
-        let mapped_floats = self.mapped_float_ranges.iter().map(|range| range.len).sum();
-        let mut mapped = MappedLayoutStats {
-            conses: mapped_conses,
-            floats: mapped_floats,
-            strings: self.mapped_string_objects.len(),
-            veclikes: self.mapped_veclike_objects.len(),
-            object_image_bytes: mapped_conses
-                .saturating_mul(size_of::<ConsCell>())
-                .saturating_add(mapped_floats.saturating_mul(size_of::<FloatObj>()))
-                .saturating_add(
-                    self.mapped_string_objects
-                        .iter()
-                        .map(|object| object.byte_len)
-                        .sum::<usize>(),
-                )
-                .saturating_add(
-                    self.mapped_veclike_objects
-                        .iter()
-                        .map(|object| object.byte_len)
-                        .sum::<usize>(),
-                ),
-            ..MappedLayoutStats::default()
-        };
-        for object in &self.mapped_string_objects {
-            let payload = unsafe { Self::string_payload_layout(&(*object.ptr).data) };
-            if payload.owned {
-                mapped.copied_string_payloads += 1;
-                mapped.copied_string_capacity_bytes = mapped
-                    .copied_string_capacity_bytes
-                    .saturating_add(payload.capacity_bytes);
-            }
-        }
-        for object in &self.mapped_veclike_objects {
-            let payload = Self::veclike_payload_layout(object.header);
-            if payload.owned {
-                mapped.copied_veclike_payloads += 1;
-                mapped.copied_veclike_capacity_bytes = mapped
-                    .copied_veclike_capacity_bytes
-                    .saturating_add(payload.capacity_bytes);
-            }
-        }
-
-        let mut boxed = Vec::new();
-        self.note_boxed_list_layout(self.all_objects, &mut boxed);
-        self.note_boxed_list_layout(self.tenured_objects, &mut boxed);
-        self.note_boxed_list_layout(self.generational.old_objects, &mut boxed);
-        self.note_boxed_list_layout(self.generational.old_sweep_pending, &mut boxed);
-        boxed.sort_by_key(|layout| std::cmp::Reverse(layout.known_bytes));
-
-        let page_backing_bytes = cons
-            .pages
-            .saturating_mul(cons.page_bytes)
-            .saturating_add(arenas.iter().map(|arena| arena.page_bytes).sum::<usize>());
-        let known_payload_capacity_bytes = arenas
-            .iter()
-            .map(|arena| arena.payload_capacity_bytes)
-            .sum::<usize>()
-            .saturating_add(mapped.copied_string_capacity_bytes)
-            .saturating_add(mapped.copied_veclike_capacity_bytes);
-
-        HeapLayoutStats {
-            allocated_objects: self.mutators().map(|state| state.allocated_count).sum(),
-            // `live_bytes` is what the last sweep counted, so add what has been
-            // allocated since to keep reporting the current managed size.
-            managed_live_bytes: self.live_bytes.saturating_add(self.bytes_since_gc()),
-            page_backing_bytes,
-            known_payload_capacity_bytes,
-            cons,
-            arenas,
-            mapped,
-            boxed,
         }
     }
 
@@ -2437,7 +2297,9 @@ impl TaggedHeap {
     }
 
     /// Link a veclike object into the all_objects list.
-    fn link_veclike(&mut self, header: *mut VecLikeHeader) {
+    /// # Safety
+    /// `header` must point to a freshly allocated, initialized `VecLikeHeader`.
+    unsafe fn link_veclike(&mut self, header: *mut VecLikeHeader) {
         unsafe {
             (*header).gc.next = self.all_objects;
             (*header).gc.flags = (*header).gc.flags.with_boxed();
@@ -2496,6 +2358,14 @@ mod slot_store_tests;
 #[cfg(test)]
 #[path = "gc/tests/pacer_test.rs"]
 mod pacer_tests;
+
+#[cfg(test)]
+#[path = "gc/tests/string_pacing_census_test.rs"]
+mod string_pacing_census_tests;
+
+#[cfg(test)]
+#[path = "gc/tests/string_interval_clear_test.rs"]
+mod string_interval_clear_tests;
 
 #[cfg(any(test, feature = "test-support"))]
 #[path = "gc/tests/ownership_test.rs"]
@@ -2597,11 +2467,19 @@ pub mod mark_sweep;
 
 mod alloc_bytes;
 mod cycle_time_bank;
+mod gc_statistics;
 #[cfg(feature = "gc-memory-telemetry")]
 mod memory_inventory;
 mod memory_registry;
+mod pacing_census;
+mod string_pacing;
+pub(crate) use pacing_census::{SerialHashTableStorageCharge, note_serial_backing_growth};
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) use string_pacing::SerialStringStorageCharge;
+pub(crate) use string_pacing::note_string_backing_allocation_in_store;
 #[cfg(feature = "gc-memory-telemetry")]
 pub mod memory_telemetry;
+mod native_deferred;
 
 mod birth_logs;
 mod concurrent;
@@ -2613,6 +2491,8 @@ pub use concurrent::MarkFinishError;
 pub use concurrent::MarkPhase;
 mod heap_identity;
 pub use heap_identity::HeapIdentity;
+mod mark_channel;
+use mark_channel::{ConcurrentMarkFlag, MarkExitSlot};
 mod mark_word;
 use mark_word::{MarkStack, MarkWord};
 mod satb;
@@ -2637,6 +2517,9 @@ use mapped_veclike_scan::MappedVeclikeScanSnapshot;
 #[cfg(test)]
 #[path = "gc/tests/shutdown_tests.rs"]
 mod shutdown_tests;
+#[cfg(test)]
+#[path = "gc/tests/telemetry_default_feature_test.rs"]
+mod telemetry_default_feature_test;
 #[doc(hidden)]
 pub use concurrent::concurrent_hash_snapshot;
 pub(crate) use concurrent::prepare_concurrent_hash_write;
@@ -2778,6 +2661,8 @@ pub use facade_mark::{
     QuiescentCollector, heap_transfer,
 };
 pub use mutator_registration::FunctionCallCache;
+#[cfg(any(test, feature = "test-support"))]
+pub use mutator_registration::HeapWord;
 pub use mutator_registration::KeeperTableMut;
 pub use mutator_registration::MutatorPermit;
 pub use mutator_registration::NativeRoots;
@@ -2797,14 +2682,15 @@ pub use mutator_registration::TableRef;
 pub(crate) use mutator_registration::symbol_functions::boundary as function_boundary_testkit;
 pub use mutator_registration::{
     AllStopped, CollectionError, CollectionReport, FunctionActivation, FunctionError,
-    FunctionSelection, KeeperSymbols, MinorCollectionError, Mode, Mutator, OwnerRootSlot,
-    ParallelExecutionAdmission, ParallelHeapEra, Phase, PlainSymbolBacking, RegistrationError,
-    RendezvousError, Request, RunAccess, RunSlice, Snapshot, SymbolHandle,
+    FunctionSelection, KeeperSymbols, MinorCollectionError, Mode, Mutator, NumericAllocError,
+    NumericClass, OwnerRootSlot, ParallelExecutionAdmission, ParallelHeapEra, Phase,
+    PlainSymbolBacking, PollOutcome, RegistrationError, RendezvousError, Request, RunAccess,
+    RunSlice, Snapshot, SymbolHandle,
 };
 pub use mutator_registration::{
     AllStoppedFailure, MutatorEntry, MutatorFinishFailure, MutatorStartFailure, NativeReturn,
-    RegistrationCensus, ResumeGcImageFailure, RootedRetireFailure, StoppedSummaries,
-    YoungWorkerLoan,
+    RegistrationCensus, ResumeGcImageFailure, RingClient, RootedRetireFailure, SerialClient,
+    SerialGrant, StopAttempt, StopPending, StoppedSummaries, YoungWorkerLoan,
 };
 pub use mutator_registration::{
     FunctionStep, GlobalError, InitialInternError, MutatorKey, Rendezvous,
@@ -2837,11 +2723,14 @@ pub(crate) use mutator_registration::{
 };
 
 mod alloc_region;
+mod owner_alloc_region;
 use alloc_region::RegionBook;
 #[cfg(not(feature = "test-support"))]
 use alloc_region::RegionStats;
 #[cfg(feature = "test-support")]
 pub use alloc_region::RegionStats;
+#[doc(hidden)]
+pub use alloc_region::owner_era_reserve::*;
 #[cfg(any(test, feature = "test-support"))]
 use alloc_region::{CONS_REGION_MAX_CELLS, ConsRegionSource, FLOAT_REGION_MAX_SLOTS};
 #[cfg(any(test, feature = "test-support"))]
@@ -2852,6 +2741,8 @@ pub use jit_state::{
     FLOAT_SLOT_BYTES, HEAP_JIT_BARRIER_LEN, HEAP_JIT_BARRIER_LO, HEAP_JIT_CONS_CUR,
     HEAP_JIT_CONS_LIM, HEAP_JIT_FLOAT_CUR, HEAP_JIT_FLOAT_LIM, JitHeapState,
 };
+#[doc(hidden)]
+pub use owner_alloc_region::{ConsTailRefund, OwnerAllocRegion, OwnerRegionRefund};
 /// Allocation regions: sources, give-back, exact counters, black across
 /// the phase flags, and the close at every collector entry.
 #[cfg(test)]

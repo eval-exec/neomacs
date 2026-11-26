@@ -75,7 +75,7 @@ pub(crate) fn map_sequence_element(sequence: Value, index: usize) -> Result<Valu
             })
         }
         ValueKind::Veclike(VecLikeType::Vector) => {
-            Ok(sequence.as_vector_data().expect("vector")[index])
+            Ok(sequence.as_vector_data().expect("vector").at(index))
         }
         ValueKind::Veclike(VecLikeType::Lambda) => {
             super::cons_list::lambda_to_closure_vector(&sequence)
@@ -1336,7 +1336,7 @@ fn sort_vector_values(
         runtime.root_sort_value(key_fn);
         let mut keys = Vec::with_capacity(len);
         for index in 0..len {
-            let value = vector.as_vector_data().unwrap()[index];
+            let value = vector.as_vector_data().unwrap().at(index);
             let key = runtime.call_sort_function1(key_fn, value)?;
             runtime.root_sort_value(key);
             keys.push(key);

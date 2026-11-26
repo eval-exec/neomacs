@@ -221,18 +221,25 @@ impl OwnedSourceCompilerClosed {
     }
 }
 
+impl ReturnedEraEnd {
+    /// Build the reference-free end from a finished scoped-era transfer.
+    ///
+    /// The keeper service returns the transfer only after its local era,
+    /// collector and callback frames have ended.
+    pub(crate) fn from_transfer(
+        transfer: PreparedHeapTransfer,
+    ) -> Result<Self, RetainedTransferFailure> {
+        transfer
+            .return_to_source()
+            .map(|transfer| Self { transfer })
+    }
+}
+
 impl PreparedEraStart {
     /// Hand the affine transfer to a later scoped-era adapter.
     ///
     /// The transfer retains its backing. This does not expose a collector or
     /// a manager view.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "E2 L4 dormant era start has no production adapter yet"
-        )
-    )]
     pub(crate) fn into_heap_transfer(self) -> PreparedHeapTransfer {
         self.transfer
     }
@@ -245,9 +252,7 @@ impl PreparedEraStart {
         )
     )]
     pub(crate) fn return_to_main(self) -> Result<ReturnedEraEnd, RetainedTransferFailure> {
-        self.transfer
-            .return_to_source()
-            .map(|transfer| ReturnedEraEnd { transfer })
+        ReturnedEraEnd::from_transfer(self.transfer)
     }
 }
 
@@ -281,3 +286,7 @@ impl SuspendedMain {
 #[cfg(test)]
 #[path = "../tests/bootstrap_test.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "../tests/era_fixture.rs"]
+pub(in crate::emacs_core::eval::parallel_entry) mod era_fixture;

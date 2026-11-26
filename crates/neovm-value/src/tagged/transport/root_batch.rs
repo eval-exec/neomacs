@@ -577,6 +577,32 @@ impl RootBatchLease {
         RootBatchReader::admit(ownership, heap)
     }
 
+    /// Test-only detached reader modeling an outstanding registry reader across
+    /// a retirement attempt without borrowing `&self` or `&TaggedHeap`.
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn admit_detached_reader_for_test(
+        &self,
+        heap: &TaggedHeap,
+    ) -> Result<HeldRootBatchReaderForTest, RootBatchError> {
+        let ownership = self.ownership.as_ref().ok_or(RootBatchError::Retired)?;
+        let mut reader = RootBatchReader::admit(ownership, heap)?;
+        let control = Arc::clone(&reader.control);
+        let payload = Arc::clone(&reader.payload);
+        let epoch = reader._epoch.take();
+        // Transfer the active reader obligation to `HeldRootBatchReaderForTest`
+        // and let `reader` drop normally so it releases its Arc clones without
+        // decrementing `readers` or triggering abandonment.
+        reader.obligation = ReadObligation::Finished;
+        drop(reader);
+        Ok(HeldRootBatchReaderForTest {
+            control,
+            _payload: payload,
+            _epoch: epoch,
+            finished: false,
+        })
+    }
+
     /// Retire a restored owner's publication and reserve the next generation,
     /// reusing its control and initialized storage. The caller needs the same
     /// restored-owner and serialized-collector proofs as `try_finish`.
@@ -887,6 +913,50 @@ impl fmt::Debug for RootBatchReader<'_> {
             .field("roots", &self.payload.used)
             .field("obligation", &self.obligation)
             .finish()
+    }
+}
+
+/// Test-only detached root-batch reader handle that holds `control.readers`
+/// incremented until [`Self::finish`] is called.
+#[cfg(any(test, feature = "test-support"))]
+#[doc(hidden)]
+#[must_use = "finish the held test reader before retiring the batch"]
+pub struct HeldRootBatchReaderForTest {
+    control: Arc<BatchControl>,
+    _payload: Arc<ImmutableRootBatch>,
+    _epoch: Option<FacadeEpochRetention>,
+    finished: bool,
+}
+
+#[cfg(any(test, feature = "test-support"))]
+impl HeldRootBatchReaderForTest {
+    pub fn finish(mut self) -> Result<(), RootBatchError> {
+        self.control
+            .readers
+            .fetch_update(Ordering::Release, Ordering::Relaxed, |readers| {
+                readers.checked_sub(1)
+            })
+            .map_err(|_| RootBatchError::ReaderCompletion)?;
+        self.finished = true;
+        Ok(())
+    }
+}
+
+#[cfg(any(test, feature = "test-support"))]
+impl Drop for HeldRootBatchReaderForTest {
+    fn drop(&mut self) {
+        if !self.finished {
+            let _ = self.control.abandoned.fetch_update(
+                Ordering::Release,
+                Ordering::Relaxed,
+                |abandoned| abandoned.checked_add(1),
+            );
+            let _ = self.control.readers.fetch_update(
+                Ordering::Release,
+                Ordering::Relaxed,
+                |readers| readers.checked_sub(1),
+            );
+        }
     }
 }
 

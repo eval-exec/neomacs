@@ -85,7 +85,7 @@ fn fail_stack_depth_stays_within_the_overflow_bound() {
             let _ = re_match_internal(
                 &mut scratch,
                 &compiled,
-                &text,
+                &text[..],
                 pos,
                 text.len(),
                 &MatchSyntax::new(&syntax),

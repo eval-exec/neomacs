@@ -256,20 +256,60 @@ gamekit adapter contract are covered. `etaf-telega` requires the unpinned
 covered.
 
 The GUI probes run both editors on one X11 display with a fixed DejaVu Sans
-Mono 10pt face, so pixel values do not move with the host's font, and assert
-**strict parity**: each probe's GNU observation is pinned, and Neomacs must
-produce the identical observation. There is deliberately no pinned Neomacs
-outcome, so a divergence cannot be blessed by re-recording it. The GUI shard
-is therefore red until these known bugs are fixed (they are failures, not
-expected results):
+Mono 10pt face **and one private `FONTCONFIG_FILE` for both engines**: a
+per-pair directory holding the pinned DejaVu/Ubuntu faces plus
+`noto_sans_cjk_variable`, with a private cache. The host's installed fonts are
+invisible to either engine, so the Han fallback that decides
+`ebox--row-strut` (and therefore every line's U+200B prefix and height) is the
+same pinned face on every host, and pixel values do not move with the host's
+fontconfig. Each probe's GNU observation is pinned and Neomacs must produce the
+identical observation; there is deliberately no pinned Neomacs outcome, so a
+divergence cannot be blessed by re-recording it.
 
-- a posframe anchored at `(cells 1 1)` lands at top 17 in GNU and top 68 here;
-- one default line is 17 px in GNU and 18 px here (a 12-line page is 245 vs
-  256 px tall);
-- a face set to `:height 100` reports 101 in GNU and 100 here, and scaled
-  heading heights differ by 2;
-- every ETAF-mounted buffer line here (previews, panels, the desktop canvas)
-  starts with U+200B.
+The ebox pages mount their viewport before the frame is displayed and refit it
+through `ebox-viewport-settle-delay` (0.12 s); each ETAF probe sleeps 0.25 s
+after the first redisplay so it samples the settled layout the packages' own
+scenarios present.
+
+These rows were red under the pinned fonts; all of them now match, and the fix
+for each is a GNU behavior, not a re-recorded value:
+
+- a face set to `:height 100` reads 101 after redisplay in GNU
+  (`PIXEL_TO_POINT` of the opened 14 px font at 100 dpi). GNU's
+  `realize_default_face` passes `default_face_done_p` as FORCE_P to
+  `set_lface_from_font` (src/xfaces.c:6029), so a realized default face forces
+  the opened font's family and height over an explicit slot; Neomacs carries
+  that flag and applies the same rule.
+- `font-get :spacing` on an opened font object is the matched entity's
+  FONT_SPACING_INDEX (src/font.c:226): 100 for DejaVu Sans Mono (XLFD `m`), nil
+  for the proportional CJK face (XLFD `*`).
+- a posframe anchored at `(cells 1 1)` lands at top 17 in both engines:
+  `window-pixel-top` is window-area-relative (the Gtk+ menu and tool bars are
+  outside the native frame), and `frame-native-height` excludes that same band
+  while keeping the tab bar.
+- the etaf-algo-lab page is 572 px in both engines: the settled viewport above,
+  not the 726 px of the unsettled first layout.
+- the desktop canvas measures 96 px in both engines: a valid explicit
+  `(space :width 0)` keeps GNU's zero advance and its `:height`
+  (src/xdisp.c:32832,32911,32917), and thin space is 1 px, not a quarter cell
+  (`THIN_SPACE_WIDTH`, src/xdisp.c:1120).
+
+The `gui_font_hermeticity_test` pair probe is the input contract for those
+rows: `fc-match :charset=6c49` must resolve to the pinned Noto Sans CJK
+fixture, `fc-list` under the pair's file must expose only the pair's own font
+directory, and both engines' `font-at`/`font-info` for `0` and `汉` must agree
+with GNU's pinned metrics.
+
+`gui_frame_chrome_geometry_test` is the separate bars-ON row: with the menu bar
+and tool bar explicitly enabled it asserts `window-pixel-top`,
+`window-inside-pixel-edges`, `frame-inner-height` and the `(cells 1 1)`
+posframe anchor against live GNU. It also records GNU's live `frame-geometry`
+under two tool-bar styles (outer 661 -> 678, `menu-bar-size` (832 . 25),
+`tool-bar-size` 41 -> 58, inner height unchanged) and checks an
+engine-relative contract on both engines: `frame-outer-height` still counts
+the realized menu/tool band, and the bar sizes are the frame's own. The
+absolute bar heights are toolkit chrome and are not compared; painting the
+bars inside the Neomacs window does not change the Lisp geometry.
 
 `frame-live-p` reports each backend's terminal type (`x` in GNU, `neo` here),
 as GNU's `Fframep`-based contract requires; the posframe probe records the
@@ -283,15 +323,14 @@ it; the core dump showed unbounded recursion in `neovm_value`'s
 laboratories abort at 4, 8 and 32 GB limits, so it was unbounded work, not a
 memory budget). The stored-key walk is now node-budgeted and membership still
 compares live key objects, so GNU's observable behavior is unchanged.
-`etaf_algo_lab_real_gui_workspace_matches_gnu` is a strict parity test and is
-red for the remaining observations plus 594 vs 581 pixels for the same 34 body
-lines.
+`etaf_algo_lab_real_gui_workspace_matches_gnu` is a strict parity test with no
+pinned Neomacs outcome.
 
-The etaf-desktop GUI test is also red for a separate reason: GNU's own
-`etaf-desktop-mount` comes back with an empty buffer in this environment, and
-the probe's stale match data then raises `args-out-of-range 0 0`; the Neomacs
-side still renders the canvas. That is a probe/environment issue to fix, not a
-Neomacs divergence.
+The earlier etaf-desktop failure (GNU's `etaf-desktop-mount` returning an empty
+buffer and the probe raising `args-out-of-range 0 0`) was the host CJK
+fallback: with no pinned Han face the desktop layout could not measure its
+rows. Under the pair's pinned `FONTCONFIG_FILE` GNU renders the canvas, and the
+canvas width now matches the oracle.
 
 When MELPA publishes a new version, update only the hard-coded version next to
 the package name in `DASH_MELPA_PIN`, `S_MELPA_PIN`, or the relevant package

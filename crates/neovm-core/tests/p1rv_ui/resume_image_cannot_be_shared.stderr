@@ -48,5 +48,9 @@ error[E0599]: the associated function or constant `check` exists for struct `Thr
           which is required by `ResumeGcImage<'static, 'static>: std::marker::Sync`
           `*mut GcHeader: std::marker::Sync`
           which is required by `ResumeGcImage<'static, 'static>: std::marker::Sync`
+          `*mut u8: std::marker::Sync`
+          which is required by `ResumeGcImage<'static, 'static>: std::marker::Sync`
+          `*mut usize: std::marker::Sync`
+          which is required by `ResumeGcImage<'static, 'static>: std::marker::Sync`
           `*const (): std::marker::Sync`
           which is required by `ResumeGcImage<'static, 'static>: std::marker::Sync`

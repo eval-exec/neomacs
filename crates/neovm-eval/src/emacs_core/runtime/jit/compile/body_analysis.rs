@@ -216,9 +216,9 @@ impl<'s> CompileBody<'s> {
         let function = view.function;
         let prefix = function.jit_runtime().patched_prefix();
         let constants: Cow<'s, [Value]> = if prefix > 0 {
-            Cow::Owned(mask_dynamic_prefix(&function.constants, prefix))
+            Cow::Owned(mask_dynamic_prefix(function.constants(), prefix))
         } else {
-            Cow::Borrowed(&function.constants)
+            Cow::Borrowed(function.constants())
         };
         Self {
             ops: view.ops,

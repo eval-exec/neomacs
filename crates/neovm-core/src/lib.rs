@@ -11,6 +11,7 @@ pub(crate) use crate::emacs_core::eval::frontend_events;
 #[cfg(any(test, feature = "fuzzing"))]
 #[doc(hidden)]
 pub mod fuzz_support;
+pub use neovm_value::display_vocab;
 pub use neovm_value::gc_trace;
 #[cfg(not(test))]
 pub use neovm_value::heap_types;

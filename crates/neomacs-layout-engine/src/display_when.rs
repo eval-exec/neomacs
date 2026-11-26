@@ -34,7 +34,7 @@ use neovm_core::emacs_core::Context;
 use neovm_core::emacs_core::display_spec::{DisplayPropertySpecs, display_spec_when_parts};
 use neovm_core::emacs_core::display_when::{DisplayWhenSite, DisplayWhenSiteKey};
 use neovm_core::emacs_core::intern::WellKnown;
-use neovm_core::emacs_core::value::{Value, get_string_text_properties_table_for_value};
+use neovm_core::emacs_core::value::{Value, borrow_string_text_properties_table_for_value};
 use rustc_hash::FxHashMap;
 
 use crate::neovm_bridge::{LayoutBufferView, RustTextPropAccess};
@@ -198,6 +198,20 @@ pub enum DisplayWhenVerdict {
 }
 
 impl DisplayWhenConditions {
+    /// The initial answers' captured FORM and object identities. The snapshot
+    /// registers these at attachment; recorded visits have their own frame
+    /// scratch roots and do not need a second registration here.
+    pub(crate) fn gc_roots(&self) -> impl Iterator<Item = Value> + '_ {
+        let answers = match self {
+            Self::Structural => None,
+            Self::Evaluated(answers) => Some(answers),
+        };
+        answers.into_iter().flat_map(|answers| {
+            std::iter::once(answers.buffer)
+                .chain(answers.exact.keys().flat_map(|key| [key.form, key.object]))
+        })
+    }
+
     pub fn structural() -> Self {
         Self::Structural
     }
@@ -969,7 +983,9 @@ fn collect_prefix_string_when_forms(
     let Some(lisp_string) = string.as_lisp_string() else {
         return;
     };
-    let Some(props) = get_string_text_properties_table_for_value(string) else {
+    // Discovery only copies existing form values into `sites`; it runs no
+    // Lisp or GC. The table borrow ends before those forms are evaluated.
+    let Some(props) = borrow_string_text_properties_table_for_value(string) else {
         return;
     };
     let display = Value::symbol(&crate::fixed_symbols::DISPLAY);

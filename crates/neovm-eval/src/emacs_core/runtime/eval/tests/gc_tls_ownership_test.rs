@@ -10,6 +10,7 @@ fn storefast_world_certificate_survives_another_worlds_journal_wrap() {
     let (_, certificate) = capture(|| source.cons_car());
     let certificate = certificate.expect("a stable source can be certified");
 
+    let parked_first = first.park_for_test();
     let mut second = Context::new(crate::test_utils::unit_runtime());
     assert!(
         certificate.unchanged(),
@@ -23,7 +24,8 @@ fn storefast_world_certificate_survives_another_worlds_journal_wrap() {
         unrelated.set_car(Value::T);
     }
 
-    first.setup_thread_locals();
+    let _parked_second = second.park_for_test();
+    let mut first = parked_first.resume_for_test().expect("resume first");
     assert!(
         certificate.unchanged(),
         "another World's writes must not consume this World's journal"
@@ -42,16 +44,20 @@ fn storefast_world_capture_rejects_a_local_world_switch_without_stranding_its_gu
     let mut first = Context::new(crate::test_utils::unit_runtime());
     let source = Value::cons(Value::NIL, Value::NIL);
     first.set_variable("storefast-source", source);
+    let mut first_slot = Some(first);
     let (_, certificate) = capture(|| {
         source.cons_car();
+        let parked = first_slot.take().unwrap().park_for_test();
         let mut second = Context::new(crate::test_utils::unit_runtime());
         let second_source = Value::cons(Value::NIL, Value::NIL);
         let (_, local) = capture(|| second_source.cons_car());
         assert!(local.unwrap().unchanged());
         second.gc_collect_exact();
+        drop(second);
+        first_slot = Some(parked.resume_for_test().expect("resume first"));
     });
     assert!(certificate.is_none());
-    first.setup_thread_locals();
+    let mut first = first_slot.take().unwrap();
     let (_, certificate) = capture(|| source.cons_car());
     assert!(certificate.unwrap().unchanged());
 }
@@ -63,17 +69,26 @@ fn storefast_world_capture_rejects_foreign_reads_after_return_to_its_owner() {
     let mut first = Context::new(crate::test_utils::unit_runtime());
     let first_source = Value::cons(Value::NIL, Value::NIL);
     first.set_variable("storefast-source", first_source);
+    let parked_first = first.park_for_test();
     let mut second = Context::new(crate::test_utils::unit_runtime());
     let second_source = Value::cons(Value::NIL, Value::NIL);
     second.set_variable("storefast-source", second_source);
+    let mut second_slot = Some(second.park_for_test());
+    let mut first_slot = Some(parked_first.resume_for_test().expect("resume first"));
 
-    first.setup_thread_locals();
     let (_, certificate) = capture(|| {
         first_source.cons_car();
-        second.setup_thread_locals();
+        let parked_first = first_slot.take().unwrap().park_for_test();
+        let mut second = second_slot
+            .take()
+            .unwrap()
+            .resume_for_test()
+            .expect("resume second");
         second_source.cons_car();
-        first.setup_thread_locals();
+        second_slot = Some(second.park_for_test());
+        first_slot = Some(parked_first.resume_for_test().expect("resume first"));
     });
+    let mut first = first_slot.take().unwrap();
     assert!(
         certificate.is_none(),
         "a World-local certificate must not omit foreign dependency reads"
@@ -82,25 +97,78 @@ fn storefast_world_capture_rejects_foreign_reads_after_return_to_its_owner() {
     assert!(local.unwrap().unchanged());
 }
 
+fn clear_heap_only(ctx: &Context) {
+    // SAFETY: unit test explicitly clearing the heap slot while leaving the
+    // other Context's CCL registry in TLS so the next reactivating door must
+    // reinstall its own registries on the empty slot.
+    unsafe { neovm_value::tagged::gc::clear_tagged_heap_if_installed(&ctx.tagged_heap) };
+}
+
+/// Clear `ctx`'s heap slot (leaving `!tagged_heap_is_current`), then collect
+/// `ctx`. The collector's `!tagged_heap_is_current` arm (command_loop) must
+/// reactivate `ctx` on the empty slot without touching a parked foreign heap.
+fn collect_from_empty_slot(ctx: &mut Context, exact: bool) {
+    clear_heap_only(ctx);
+    assert!(!neovm_value::tagged::gc::tagged_heap_is_current(
+        &ctx.tagged_heap
+    ));
+    if exact {
+        ctx.gc_collect_exact();
+    } else {
+        ctx.gc_collect_from_current_roots();
+    }
+    assert!(neovm_value::tagged::gc::tagged_heap_is_current(
+        &ctx.tagged_heap
+    ));
+}
+
+fn two_heaps() -> (
+    super::parked_context::ParkedContext,
+    super::parked_context::ParkedContext,
+) {
+    let first = Context::new(crate::test_utils::unit_runtime());
+    let parked_first = first.park_for_test();
+    let second = Context::new(crate::test_utils::unit_runtime());
+    let parked_second = second.park_for_test();
+    (parked_first, parked_second)
+}
+
 #[test]
 fn gc_tls_ownership_exact_collection_uses_the_collecting_heap() {
-    let mut first = Context::new(crate::test_utils::unit_runtime());
-    let mut second = Context::new(crate::test_utils::unit_runtime());
-    // Deliberately leave the second allocation heap installed. This exercises
-    // the real collector rather than prechecking a side-table root vector.
-    first.gc_collect_exact();
-    second.gc_collect_exact();
-    // A second cycle also checks values allocated by post-GC bookkeeping.
-    first.gc_collect_exact();
-    second.gc_collect_exact();
+    let (parked_first, parked_second) = two_heaps();
+    let mut parked_first = Some(parked_first);
+    let mut parked_second = Some(parked_second);
+    // Two rounds, each starting with `!tagged_heap_is_current` on an empty
+    // slot while the other World stays parked. The collector's activation arm
+    // must install and collect `self.tagged_heap`.
+    for _ in 0..2 {
+        let mut first = parked_first
+            .take()
+            .unwrap()
+            .resume_for_test()
+            .expect("resume first");
+        collect_from_empty_slot(&mut first, true);
+        parked_first = Some(first.park_for_test());
+        let mut second = parked_second
+            .take()
+            .unwrap()
+            .resume_for_test()
+            .expect("resume second");
+        collect_from_empty_slot(&mut second, true);
+        parked_second = Some(second.park_for_test());
+    }
 }
 
 #[test]
 fn gc_tls_ownership_safe_point_uses_the_collecting_heap() {
-    let mut first = Context::new(crate::test_utils::unit_runtime());
-    let mut second = Context::new(crate::test_utils::unit_runtime());
-    first.gc_collect_from_current_roots();
-    second.gc_collect_from_current_roots();
+    let (parked_first, parked_second) = two_heaps();
+    let mut first = parked_first.resume_for_test().expect("resume first");
+    collect_from_empty_slot(&mut first, false);
+    let parked_first = first.park_for_test();
+    let mut second = parked_second.resume_for_test().expect("resume second");
+    collect_from_empty_slot(&mut second, false);
+    drop(parked_first);
+    drop(second);
 }
 
 #[test]
@@ -131,10 +199,15 @@ fn registered_public_entry_contexts() -> (Context, Context) {
     first
         .eval_str("(register-ccl-program 'gc-tls-public-first [0 0 0])")
         .unwrap();
+    clear_heap_only(&first);
     let mut second = Context::new(crate::test_utils::unit_runtime());
     second
         .eval_str("(register-ccl-program 'gc-tls-public-second [0 0 0])")
         .unwrap();
+    // Heap-only clear. The slot is empty and second's CCL registry is still
+    // the TLS one. The next door has to install its own registry.
+    // `resume_for_test` would do that install before the door.
+    clear_heap_only(&second);
     (first, second)
 }
 
@@ -161,9 +234,10 @@ fn gc_tls_ownership_eval_str_activates_its_context_registries() {
             .eval_str("(ccl-program-p 'gc-tls-public-first)")
             .unwrap()
             .is_t(),
-        "eval_str used the previously active Context's CCL registry"
+        "eval_str activated this Context's CCL registry"
     );
     assert_ccl_registry_programs(&["gc-tls-public-first"], &["gc-tls-public-second"]);
+    clear_heap_only(&first);
     assert!(
         second
             .eval_str("(ccl-program-p 'gc-tls-public-second)")
@@ -180,8 +254,9 @@ fn gc_tls_ownership_eval_str_activates_its_context_registries() {
             .unwrap()
             .is_nil()
     );
-    first.gc_collect_exact();
     second.gc_collect_exact();
+    clear_heap_only(&second);
+    first.gc_collect_exact();
 }
 
 #[test]
@@ -193,15 +268,18 @@ fn gc_tls_ownership_eval_form_activates_its_context_registries() {
     let form = first
         .eval_str("'(ccl-program-p 'gc-tls-public-first)")
         .unwrap();
+    clear_heap_only(&first);
     let mut second = Context::new(crate::test_utils::unit_runtime());
     second
         .eval_str("(register-ccl-program 'gc-tls-public-second [0 0 0])")
         .unwrap();
+    clear_heap_only(&second);
     assert!(
         first.eval_form(form).unwrap().is_t(),
-        "eval_form used the previously active Context's CCL registry"
+        "eval_form activated this Context's CCL registry"
     );
     assert_ccl_registry_programs(&["gc-tls-public-first"], &["gc-tls-public-second"]);
+    clear_heap_only(&first);
     assert!(
         second
             .eval_str("(ccl-program-p 'gc-tls-public-second)")
@@ -212,8 +290,9 @@ fn gc_tls_ownership_eval_form_activates_its_context_registries() {
         &["gc-tls-public-second"],
         &["gc-tls-public-first", "gc-tls-public-extra"],
     );
-    first.gc_collect_exact();
     second.gc_collect_exact();
+    clear_heap_only(&second);
+    first.gc_collect_exact();
 }
 
 #[test]
@@ -225,13 +304,19 @@ fn gc_tls_ownership_eval_value_activates_its_context_registries() {
     let form = first
         .eval_str("'(ccl-program-p 'gc-tls-public-first)")
         .unwrap();
+    clear_heap_only(&first);
     let mut second = Context::new(crate::test_utils::unit_runtime());
     second
         .eval_str("(register-ccl-program 'gc-tls-public-second [0 0 0])")
         .unwrap();
-    assert!(first.eval_value(&form).unwrap().is_t());
+    clear_heap_only(&second);
+    assert!(
+        first.eval_value(&form).unwrap().is_t(),
+        "eval_value activated this Context's CCL registry"
+    );
     assert_ccl_registry_programs(&["gc-tls-public-first"], &["gc-tls-public-second"]);
     first.gc_collect_exact();
+    clear_heap_only(&first);
     second.gc_collect_exact();
 }
 
@@ -246,13 +331,14 @@ fn gc_tls_ownership_eval_str_each_activates_its_context_registries() {
     assert_eq!(results.len(), 3);
     assert!(
         results[0].as_ref().unwrap().is_t(),
-        "eval_str_each used the previously active Context's CCL registry"
+        "eval_str_each activated this Context's CCL registry"
     );
     assert!(results[2].as_ref().unwrap().is_t());
     assert_ccl_registry_programs(
         &["gc-tls-public-first", "gc-tls-public-extra"],
         &["gc-tls-public-second"],
     );
+    clear_heap_only(&first);
     assert!(
         second
             .eval_str("(ccl-program-p 'gc-tls-public-second)")
@@ -270,6 +356,7 @@ fn gc_tls_ownership_eval_str_each_activates_its_context_registries() {
             .is_nil(),
         "eval_str_each registered a program in another Context"
     );
-    first.gc_collect_exact();
     second.gc_collect_exact();
+    clear_heap_only(&second);
+    first.gc_collect_exact();
 }

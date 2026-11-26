@@ -127,7 +127,8 @@ impl<'owner, 'era> RunAccess<'owner, 'era> {
         source: &SharedRoot,
     ) -> Result<crate::tagged::gc::OwnerRootSlot<'era>, RegistrationError> {
         source.validate(self, ConsRootSeal { _private: () })?;
-        self.admit_root_slot(SharedRoot::word(source), ConsRootSeal { _private: () })
+        // SAFETY: `source` was validated against `self`'s heap immediately above.
+        unsafe { self.admit_root_slot(SharedRoot::word(source), ConsRootSeal { _private: () }) }
     }
 }
 
@@ -154,4 +155,64 @@ impl SharedRoot {
         cons_into(run, car, cdr, &mut result)?;
         Ok(result)
     }
+}
+
+/// Only this bridge can prove a destination before numeric initialization.
+/// Borrowing the home prevents it from disappearing during the operation.
+pub(crate) struct RootedNumericDestination<'home> {
+    heap: HeapIdentity,
+    _home: PhantomData<&'home mut ()>,
+}
+
+impl RootedNumericDestination<'_> {
+    pub(crate) fn heap_identity(&self) -> HeapIdentity {
+        self.heap
+    }
+}
+
+static_assertions::assert_not_impl_any!(RootedNumericDestination<'static>: Clone, Copy);
+
+#[inline]
+fn numeric_destination<'home, R: RootedSlot>(
+    run: &RunAccess<'_, '_>,
+    result: &'home mut R,
+) -> Result<RootedNumericDestination<'home>, RegistrationError> {
+    result.validate(run, ConsRootSeal { _private: () })?;
+    Ok(RootedNumericDestination {
+        heap: run.heap_identity(),
+        _home: PhantomData,
+    })
+}
+
+#[inline]
+pub(crate) fn float_into<R: RootedSlot>(
+    run: &mut RunAccess<'_, '_>,
+    number: f64,
+    result: &mut R,
+) -> Result<(), crate::tagged::gc::NumericAllocError> {
+    let (_, value) = {
+        let destination = numeric_destination(run, result)?;
+        let initialized = run.allocate_float(&destination, number)?;
+        initialized.into_root_parts(ConsRootSeal { _private: () })
+    };
+    // The initialized token was consumed, ending its unique run borrow.
+    // The destination proof also expired, releasing the home.
+    // No fallible work, callback, poll, bank resize, or allocation intervenes.
+    result.install(run, value, ConsRootSeal { _private: () });
+    Ok(())
+}
+
+#[inline]
+pub(crate) fn bignum_into<R: RootedSlot>(
+    run: &mut RunAccess<'_, '_>,
+    number: malachite::integer::Integer,
+    result: &mut R,
+) -> Result<(), crate::tagged::gc::NumericAllocError> {
+    let (_, value) = {
+        let destination = numeric_destination(run, result)?;
+        let initialized = run.allocate_bignum(&destination, number)?;
+        initialized.into_root_parts(ConsRootSeal { _private: () })
+    };
+    result.install(run, value, ConsRootSeal { _private: () });
+    Ok(())
 }

@@ -1,5 +1,6 @@
 //! Mutable output window state owned while layout builds a frame snapshot.
 
+use crate::bidi::{ParagraphDirection, ParagraphDirections};
 use crate::display_cursor::{CursorVisualColumnResolutionContext, CursorVisualColumnRows};
 use crate::display_row::finalizer::GlyphRowFinalizationContext;
 use crate::output::row_request::{
@@ -11,8 +12,14 @@ use crate::output::window_request::{OutputWindowLifecycleRequest, OutputWindowRo
 use neomacs_display_protocol::frame_glyphs::GlyphRowRole;
 use neomacs_display_protocol::frame_glyphs::PhysCursor;
 use neomacs_display_protocol::glyph_matrix::MatrixRow;
-use neomacs_display_protocol::glyph_matrix::{GlyphMatrix, GlyphRow, WindowMatrixEntry};
+use neomacs_display_protocol::glyph_matrix::{
+    GlyphMatrix, GlyphRow, TextGeometryUnits, WindowMatrixEntry,
+};
 use neomacs_display_protocol::types::{DisplayWindowId, Rect};
+
+#[cfg(test)]
+#[path = "window_state/tests/bidi_role_selection_test.rs"]
+mod bidi_role_selection_tests;
 
 /// Owned by one exclusive frame-build attempt, never shared across mutators.
 /// Numeric publication boundary and inactive-window geometry saved before an
@@ -25,6 +32,8 @@ pub(crate) struct OutputSourceWindowCheckpoint {
     current_text_clip_bounds: Rect,
     current_selected: bool,
     current_row: usize,
+    current_bidi_paragraph_directions: ParagraphDirections,
+    current_text_geometry_units: TextGeometryUnits,
 }
 
 /// Completed GNU automatic-mini observation, owned only by this output attempt.
@@ -54,6 +63,12 @@ pub(crate) struct OutputWindowBuildState {
     current_text_clip_bounds: Rect,
     current_selected: bool,
     current_row: usize,
+    /// The paragraph direction of the window being built (GNU
+    /// `it->paragraph_embedding` read from the displayed buffer's
+    /// `bidi-display-reordering` / `bidi-paragraph-direction`).
+    current_bidi_paragraph_directions: ParagraphDirections,
+    /// Terminal-cell or pixel geometry for this window's cursor math.
+    current_text_geometry_units: TextGeometryUnits,
 }
 
 impl OutputWindowBuildState {
@@ -67,6 +82,8 @@ impl OutputWindowBuildState {
             current_text_clip_bounds: Rect::new(0.0, 0.0, 0.0, 0.0),
             current_selected: false,
             current_row: 0,
+            current_bidi_paragraph_directions: ParagraphDirections::default(),
+            current_text_geometry_units: TextGeometryUnits::default(),
         }
     }
 
@@ -84,6 +101,8 @@ impl OutputWindowBuildState {
             current_text_clip_bounds: self.current_text_clip_bounds,
             current_selected: self.current_selected,
             current_row: self.current_row,
+            current_bidi_paragraph_directions: self.current_bidi_paragraph_directions,
+            current_text_geometry_units: self.current_text_geometry_units,
         }
     }
 
@@ -98,6 +117,22 @@ impl OutputWindowBuildState {
             checkpoint.windows_len,
             "source horizon retry must precede completed window publication"
         );
+        self.restore_leaf_attempt_checkpoint(checkpoint);
+    }
+
+    /// Reject one leaf even when its tail already closed the speculative grid.
+    /// Previously completed siblings retain their original row ownership.
+    #[cold]
+    #[inline(never)]
+    pub(crate) fn restore_leaf_attempt_checkpoint(
+        &mut self,
+        checkpoint: OutputSourceWindowCheckpoint,
+    ) {
+        assert!(
+            self.windows.len() >= checkpoint.windows_len,
+            "a leaf attempt must not remove completed sibling windows"
+        );
+        self.windows.truncate(checkpoint.windows_len);
         self.current_row_grid = None;
         self.current_window_id = checkpoint.current_window_id;
         self.current_pixel_bounds = checkpoint.current_pixel_bounds;
@@ -105,6 +140,8 @@ impl OutputWindowBuildState {
         self.current_text_clip_bounds = checkpoint.current_text_clip_bounds;
         self.current_selected = checkpoint.current_selected;
         self.current_row = checkpoint.current_row;
+        self.current_bidi_paragraph_directions = checkpoint.current_bidi_paragraph_directions;
+        self.current_text_geometry_units = checkpoint.current_text_geometry_units;
     }
 
     /// The window owning the currently open (unpublished) row grid, if any.
@@ -138,6 +175,8 @@ impl OutputWindowBuildState {
         self.current_window_id = 0;
         self.current_selected = false;
         self.current_row = 0;
+        self.current_bidi_paragraph_directions = ParagraphDirections::default();
+        self.current_text_geometry_units = TextGeometryUnits::default();
     }
 
     pub(crate) fn install_window_lifecycle(&mut self, request: OutputWindowLifecycleRequest) {
@@ -153,6 +192,8 @@ impl OutputWindowBuildState {
                 self.current_text_clip_bounds = begin.text_clip_bounds;
                 self.current_selected = begin.selected;
                 self.current_row = 0;
+                self.current_bidi_paragraph_directions = begin.bidi_paragraph_directions;
+                self.current_text_geometry_units = begin.text_geometry_units;
             }
             OutputWindowLifecycleRequest::End => {
                 if let Some(grid) = self.current_row_grid.take() {
@@ -255,6 +296,10 @@ impl OutputWindowBuildState {
 
     pub(crate) fn current_window_text_pixel_bounds(&self) -> Rect {
         self.current_text_pixel_bounds
+    }
+
+    pub(crate) fn current_text_geometry_units(&self) -> TextGeometryUnits {
+        self.current_text_geometry_units
     }
 
     pub(crate) fn cursor_visual_column_context(&self) -> CursorVisualColumnResolutionContext<'_> {
@@ -408,12 +453,34 @@ impl OutputWindowBuildState {
     }
 
     fn finalize_output_row(&mut self, row: usize, phys_cursor: Option<&mut PhysCursor>) {
+        // Buffer text (and the minibuffer's own text) resolves under the
+        // displayed buffer's paragraph direction.  Chrome rows are strings
+        // drawn by `display_mode_line` / `display_tab_bar`, which GNU pins to
+        // L2R (`src/xdisp.c:28165`, `14727`) and reorders only while the
+        // DEFAULT `bidi-display-reordering` is non-nil.
+        let directions = self.current_bidi_paragraph_directions;
+        let paragraph_direction = match self
+            .current_row_grid
+            .as_ref()
+            .and_then(|grid| grid.row(row))
+            .map(|row| row.role)
+        {
+            Some(
+                GlyphRowRole::ModeLine
+                | GlyphRowRole::HeaderLine
+                | GlyphRowRole::TabLine
+                | GlyphRowRole::TabBar,
+            ) => directions.chrome,
+            _ => directions.text,
+        };
         if let Some(grid) = self.current_row_grid.as_mut() {
             grid.finalize_row(
                 self.current_window_id,
                 row,
                 self.current_pixel_bounds,
                 phys_cursor,
+                paragraph_direction,
+                self.current_text_geometry_units,
             );
         }
     }
@@ -731,6 +798,8 @@ impl OutputWindowRowGrid {
         row: usize,
         pixel_bounds: Rect,
         phys_cursor: Option<&mut PhysCursor>,
+        paragraph_direction: ParagraphDirection,
+        text_geometry_units: TextGeometryUnits,
     ) {
         // Reorder exactly once per row. A redundant trailing-row `Finalize`
         // (see `finalized_rows`) is a true no-op, not a second reorder.
@@ -741,11 +810,10 @@ impl OutputWindowRowGrid {
         let Some(matrix_row) = self.row_mut(row) else {
             return;
         };
-        GlyphRowFinalizationContext::new(window_id, row, pixel_bounds).finalize_row(
-            matrix_row,
-            matrix_ncols,
-            phys_cursor,
-        );
+        GlyphRowFinalizationContext::new(window_id, row, pixel_bounds)
+            .with_bidi_paragraph_direction(paragraph_direction)
+            .with_text_geometry_units(text_geometry_units)
+            .finalize_row(matrix_row, matrix_ncols, phys_cursor);
     }
 }
 

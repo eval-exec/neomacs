@@ -93,6 +93,7 @@ struct UnresolvedDisplayImageRequest {
     /// parses the same specification the evaluator does and must not name it
     /// differently, so both ask [`neovm_core::emacs_core::image::image_load_identity`].
     identity: ImageLoadIdentity,
+    failed_extent: neomacs_display_protocol::FailedImageExtent,
 }
 
 /// Active-face metrics used by GNU image dimensions `(N . em/ch/cw)`.
@@ -354,6 +355,7 @@ impl DisplayImageLayout {
             frame: self.request.frame,
             realization: environment.resolve(self.scale),
             identity: self.request.identity,
+            failed_extent: self.request.failed_extent,
         }
     }
 }
@@ -447,7 +449,8 @@ pub(crate) enum DisplayFringeSide {
 /// Parsed `(left-fringe BITMAP FACE)` / `(right-fringe BITMAP FACE)` display
 /// spec. The bitmap is kept as the raw symbol `Value` (resolved to a registry
 /// index later, where the evaluator is available); FACE is the optional face
-/// symbol the spec requests (a `set-fringe-bitmap-face` override wins over it).
+/// symbol the spec requests (a resolved spec FACE wins over
+/// `set-fringe-bitmap-face`, matching GNU `xdisp.c` / `fringe.c`).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct DisplayFringeLayout {
     pub(crate) bitmap: Value,
@@ -467,11 +470,11 @@ pub(crate) fn parse_display_fringe_layout(value: &Value) -> Option<DisplayFringe
         _ => return None,
     };
     let items = list_to_vec(value)?;
-    // items[0] = head, items[1] = BITMAP, items[2] = optional FACE.
+    // items[0] = head, items[1] = BITMAP, items[2] = optional FACE. A present
+    // BITMAP that names no bitmap (nil, a non-symbol, an undefined symbol) is
+    // still a fringe spec: GNU's `handle_single_display_spec` finds no bitmap,
+    // returns 1, and the text carrying the property is replaced by nothing.
     let bitmap = *items.get(1)?;
-    if bitmap.is_nil() {
-        return None;
-    }
     let face = items.get(2).copied().filter(|face| !face.is_nil());
     Some(DisplayFringeLayout { bitmap, side, face })
 }
@@ -479,13 +482,14 @@ pub(crate) fn parse_display_fringe_layout(value: &Value) -> Option<DisplayFringe
 /// `face_fg`/`face_bg` are the face this image is displayed under (the
 /// specification's own `:foreground`/`:background` override them);
 /// `frame_foreground` is GNU's `FRAME_FOREGROUND_PIXEL` -- the frame's
-/// `foreground-color` (src/image.c:6518) -- which a decoder that must paint an
-/// unresolvable color key with something reads instead (issue #550).
+/// `foreground-color` (src/image.c:6518) -- and `frame_background` is GNU's
+/// `FRAME_BACKGROUND_PIXEL` (src/image.c:10092-10118).
 pub(crate) fn parse_display_image_layout(
     prop_val: &Value,
     face_fg: u32,
     face_bg: u32,
     frame_foreground: u32,
+    frame_background: u32,
 ) -> Option<DisplayImageLayout> {
     let items = list_to_vec(prop_val)?;
     if items.first()?.as_bare_symbol_name() != Some(DisplaySpecHead::Image.into()) {
@@ -507,6 +511,7 @@ pub(crate) fn parse_display_image_layout(
     let mut margin = DisplayImageMargin::default();
     let mut fg_color = face_fg;
     let mut bg_color = face_bg;
+    let mut specified_bg = None;
 
     let mut i = 1usize;
     while i + 1 < items.len() {
@@ -563,11 +568,19 @@ pub(crate) fn parse_display_image_layout(
             Some(ImageSpecKey::Background) => {
                 if let Some(pixel) = parse_image_color_pixel(value) {
                     bg_color = pixel;
+                    specified_bg = Some(pixel);
                 }
             }
             _ => {}
         }
         i += 2;
+    }
+
+    let mut colors = ImageColorContext::from_pixels(fg_color, bg_color)
+        .with_frame_foreground(frame_foreground)
+        .with_frame_background(frame_background);
+    if let Some(pixel) = specified_bg {
+        colors = colors.with_specified_background(pixel);
     }
 
     Some(DisplayImageLayout {
@@ -579,12 +592,12 @@ pub(crate) fn parse_display_image_layout(
                 height: DisplayImageAxisSize::resolve_precedence(height, max_height),
             },
             rotation,
-            colors: ImageColorContext::from_pixels(fg_color, bg_color)
-                .with_frame_foreground(frame_foreground),
+            colors,
             mask: image_mask_policy_from_items(&items),
             animation,
             frame,
             identity,
+            failed_extent: neovm_core::emacs_core::image::failed_image_extent_from_items(&items),
         },
         scale,
         ascent,
@@ -798,12 +811,11 @@ fn parse_surface_uniform_entry(entry: Value) -> Option<(String, [u32; 4], u8)> {
         bits[0] = scalar.to_bits();
         count = 1u8;
     } else if let Some(elements) = value.as_vector_data() {
-        let elements = elements.as_slice();
         if elements.is_empty() || elements.len() > 4 {
             return None;
         }
         for (slot, element) in elements.iter().enumerate() {
-            bits[slot] = number(*element)?.to_bits();
+            bits[slot] = number(element)?.to_bits();
         }
         count = elements.len() as u8;
     } else {

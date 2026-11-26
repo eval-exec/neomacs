@@ -2,7 +2,7 @@
 //!
 //! No native settings handles cross into the evaluator or rendering protocol.
 
-use neomacs_display_protocol::GraphicalBackend;
+use neomacs_display_protocol::{Dpi, GraphicalBackend};
 use neovm_core::emacs_core::display_host::SystemFonts;
 
 mod policy;
@@ -21,7 +21,13 @@ cfg_select! {
 /// retains this observer until shutdown; only owned observations enter input.
 pub struct FontDefaultsObserver {
     initial: GuiFontDefaults,
+    initial_text_dpi: Option<Dpi>,
     changes: crossbeam_channel::Receiver<SystemFonts>,
+    #[cfg(target_os = "linux")]
+    initial_raster_options: neomacs_font_materializer::fontconfig::SurfaceFontOptions,
+    #[cfg(target_os = "linux")]
+    raster_changes:
+        crossbeam_channel::Receiver<neomacs_font_materializer::fontconfig::SurfaceFontOptions>,
     _subscription: NativeSubscription,
 }
 
@@ -37,7 +43,12 @@ impl FontDefaultsObserver {
     fn unsupported(initial: GuiFontDefaults) -> Self {
         Self {
             initial,
+            initial_text_dpi: None,
             changes: crossbeam_channel::never(),
+            #[cfg(target_os = "linux")]
+            initial_raster_options: Default::default(),
+            #[cfg(target_os = "linux")]
+            raster_changes: crossbeam_channel::never(),
             _subscription: NativeSubscription::Unsupported,
         }
     }
@@ -46,10 +57,35 @@ impl FontDefaultsObserver {
         &self.initial
     }
 
+    /// Startup logical text DPI, before compositor backing scale is applied.
+    /// Font-name subscriptions remain independent of this initial observation.
+    pub fn initial_text_dpi(&self) -> Option<Dpi> {
+        self.initial_text_dpi
+    }
+
     /// The input bridge is the sole consumer. Unsupported subscriptions never
     /// become ready, so selecting this receiver cannot spin on disconnection.
     pub fn take_changes(&mut self) -> crossbeam_channel::Receiver<SystemFonts> {
         std::mem::replace(&mut self.changes, crossbeam_channel::never())
+    }
+
+    /// PGTK's startup font-rendering preferences. Only the Wayland owner applies
+    /// these; X11 takes its surface policy from X resources instead.
+    #[cfg(target_os = "linux")]
+    pub fn initial_raster_options(
+        &self,
+    ) -> neomacs_font_materializer::fontconfig::SurfaceFontOptions {
+        self.initial_raster_options
+    }
+
+    /// One owned observation per native changed signal, independent of the
+    /// font-name channel. Equal effective options still require a Lisp event.
+    #[cfg(target_os = "linux")]
+    pub fn take_raster_changes(
+        &mut self,
+    ) -> crossbeam_channel::Receiver<neomacs_font_materializer::fontconfig::SurfaceFontOptions>
+    {
+        std::mem::replace(&mut self.raster_changes, crossbeam_channel::never())
     }
 }
 

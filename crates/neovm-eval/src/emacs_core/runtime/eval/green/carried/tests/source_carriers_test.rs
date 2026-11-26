@@ -10,11 +10,12 @@ fn receipt() -> (
     let _hooks = crate::test_utils::unit_harness();
     let heap =
         neovm_value::tagged::gc::AliasableBox::new(neovm_value::tagged::gc::TaggedHeap::new());
-    neovm_value::tagged::gc::set_tagged_heap_root(heap.root());
+    unsafe { neovm_value::tagged::gc::set_tagged_heap_root(heap.root()) };
     // SAFETY: the fixture owns this heap. No collector, mutator, or store view
     // is live, and the drain callback does not re-enter the heap.
     let mut collector = unsafe { (*heap.root().as_ptr()).drain_to_quiescent(|_| {}) }.unwrap();
-    neovm_value::tagged::gc::clear_tagged_heap_root_if_installed(heap.root());
+    // SAFETY: standalone `TestHeap` fixture detached for quiescent collector test.
+    unsafe { neovm_value::tagged::gc::clear_tagged_heap_root_if_installed(heap.root()) };
     let receipt = collector.detach_source_observations().unwrap();
     drop(collector);
     (heap, receipt)

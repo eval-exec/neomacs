@@ -49,12 +49,25 @@ fn production_calls(source: &str) -> Vec<(String, usize)> {
     let code = code_only(source);
     let ranges = test_gated_ranges(&code);
     let mut offsets = vec![0];
-    offsets.extend(source.match_indices('\n').map(|(offset, _)| offset + 1));
+    // `code_only` strips comments/literals while preserving every `\n` 1-for-1,
+    // so line numbers match `source` while byte offsets must come from `code`
+    // to share coordinate space with `test_gated_ranges(&code)`.
+    offsets.extend(code.match_indices('\n').map(|(offset, _)| offset + 1));
+    assert_eq!(
+        offsets.len(),
+        source.bytes().filter(|&b| b == b'\n').count() + 1,
+        "code_only must preserve line count 1-for-1"
+    );
     scanner.calls.retain(|(_, line)| {
-        let offset = offsets[line - 1];
+        let line_start = offsets[line - 1];
+        let line_end = offsets.get(*line).copied().unwrap_or(code.len());
+        let first_code = code[line_start..line_end]
+            .bytes()
+            .position(|b| !b.is_ascii_whitespace())
+            .map_or(line_start, |delta| line_start + delta);
         !ranges
             .iter()
-            .any(|(start, end)| *start <= offset && offset <= *end)
+            .any(|(start, end)| *start <= first_code && first_code <= *end)
     });
     scanner.calls
 }
@@ -95,6 +108,32 @@ fn overlay_position_handle_guard_refuses_other_files_and_functions() {
     );
     assert_eq!(
         production_calls("// OverlayPositionHandle::new(o, s);\nfn wrong() {} ").len(),
+        0
+    );
+    // Regression: comments shrink `code_only(source)` relative to `source`, so
+    // `production_calls` must compare offsets and `test_gated_ranges` in the
+    // same `code` coordinate space. Here a production call sits between two
+    // `#[cfg(test)]` items after a long comment block; computing line offsets
+    // from `source` would skew the production call's offset into the trailing
+    // `#[cfg(test)]` range in `code` space and falsely drop it.
+    let comment = format!("// {}\n", "c".repeat(200));
+    let skewed = format!(
+        "{comment}\
+         #[cfg(test)]\n\
+         fn before() {{ let _ = 1; }}\n\
+         fn real_mint() {{ OverlayPositionHandle::new(o, s); }}\n\
+         #[cfg(test)]\n\
+         fn after() {{ let _ = {}; }}\n",
+        "1 + ".repeat(80) + "0"
+    );
+    assert_eq!(
+        production_calls(&skewed),
+        vec![("real_mint".to_string(), 4)],
+        "production call between #[cfg(test)] items after comments must still be seen"
+    );
+    assert_eq!(
+        production_calls("    #[cfg(test)] fn indented() { OverlayPositionHandle::new(o, s); }")
+            .len(),
         0
     );
 }

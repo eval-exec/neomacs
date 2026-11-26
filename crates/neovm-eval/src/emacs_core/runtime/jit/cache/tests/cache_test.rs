@@ -12,9 +12,9 @@ fn nullary_fn(ops: Vec<Op>, constants: Vec<Value>) -> ByteCodeFunction {
         optional: Vec::new(),
         rest: None,
     });
-    f.ops = ops;
-    f.constants = constants.into();
-    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
+    f.set_ops(ops);
+    f.set_constants(constants.into());
+    f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
     f
 }
 
@@ -53,7 +53,7 @@ fn rejected_body_is_remembered_on_its_runtime() {
         matches!(rt.dispatch_sized(len), Plan::Interpret),
         "the verdict is remembered: no more seam trips"
     );
-    clear();
+    clear_with_serial_receipt().expect("serial jit grace");
     assert!(
         matches!(rt.dispatch_sized(len), Plan::Compiled),
         "the cache forgot its verdicts, so the dispatcher probes again"
@@ -130,7 +130,7 @@ fn retier_unlinks_the_fast_leaf_from_callers_spec_slots() {
         vec![Op::Constant(0), Op::Call(0), Op::Return],
         vec![Value::from_sym_id(callee_sym)],
     );
-    caller.lexical = true;
+    caller.set_lexical(true);
     let caller = Value::make_bytecode(caller);
     crate::emacs_core::eval::push_scratch_gc_root(callee);
     crate::emacs_core::eval::push_scratch_gc_root(caller);
@@ -296,10 +296,10 @@ fn length_body_is_tier_b_profitable_and_not_call_heavy() {
         vec![Value::string("abc")],
     );
     assert!(matches!(
-        compile::calls::named_builtin_call(&f.ops[1]).map(|call| call.kind),
+        compile::calls::named_builtin_call(&f.ops()[1]).map(|call| call.kind),
         Some(compile::SpecCalleeKind::CbsymTierB)
     ));
-    assert!(!compile::body_is_call_heavy(&f.ops, &f.constants));
+    assert!(!compile::body_is_call_heavy(f.ops(), f.constants()));
     let leaf = compile::compile_bytecode_function_with(&f, Some(&ev.obarray))
         .expect("the original length body passes the enforced profitability gate");
     assert!(!leaf.profit_gate_bypassed);
@@ -541,9 +541,9 @@ fn runs_with_args_and_rejects_arity_mismatch() {
         optional: Vec::new(),
         rest: None,
     });
-    f.lexical = true;
-    f.ops = vec![Op::StackRef(1), Op::StackRef(1), Op::Add, Op::Return];
-    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
+    f.set_lexical(true);
+    f.set_ops(vec![Op::StackRef(1), Op::StackRef(1), Op::Add, Op::Return]);
+    f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
     // Correct arity -> native result.
     assert_eq!(
         crate::emacs_core::jit::test_support::run_compiled(
@@ -576,10 +576,10 @@ fn unary_add_one() -> ByteCodeFunction {
         optional: Vec::new(),
         rest: None,
     });
-    f.lexical = true;
-    f.ops = vec![Op::StackRef(0), Op::Constant(0), Op::Add, Op::Return];
-    f.constants = vec![Value::make_int(1)].into();
-    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
+    f.set_lexical(true);
+    f.set_ops(vec![Op::StackRef(0), Op::Constant(0), Op::Add, Op::Return]);
+    f.set_constants(vec![Value::make_int(1)].into());
+    f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
     f
 }
 
@@ -653,7 +653,7 @@ fn jit_obs_clear_folds_counts_into_dropped_totals() {
     let id = f.jit_runtime().compiled_id().expect("compiled");
     let (rows, dropped0) = leaf_report_rows();
     assert!(rows.iter().any(|r| r.id == id));
-    clear();
+    clear_with_serial_receipt().expect("serial jit grace");
     let (rows, dropped) = leaf_report_rows();
     assert!(!rows.iter().any(|r| r.id == id), "cleared");
     assert_eq!(dropped.leaves, dropped0.leaves + 1);
@@ -667,7 +667,7 @@ fn jit_obs_clear_folds_counts_into_dropped_totals() {
 /// only a later whole-cache clear folds those counters into dropped totals.
 #[test]
 fn jit_obs_evict_compiled_retires_osr_counts_until_clear() {
-    clear();
+    clear_with_serial_receipt().expect("serial jit grace");
     let mut leaf = super::super::compile::lower_nullary_leaf(
         &[Op::Constant(0), Op::Nil, Op::Add, Op::Return],
         &[Value::make_int(5)],
@@ -719,14 +719,14 @@ fn jit_obs_evict_compiled_retires_osr_counts_until_clear() {
 
     let mut expected = dropped0;
     expected.add(&observations);
-    clear();
+    clear_with_serial_receipt().expect("serial jit grace");
     let (rows, dropped) = leaf_report_rows();
     assert!(!rows.iter().any(|r| r.id == id));
     assert_eq!(
         dropped, expected,
         "clear folds the retained leaf exactly once"
     );
-    clear();
+    clear_with_serial_receipt().expect("serial jit grace");
     assert_eq!(
         leaf_report_rows().1,
         expected,
@@ -775,25 +775,37 @@ fn jit_obs_name_hint_rejects_mismatched_frame() {
         .jit_runtime()
         .compiled_id_or_assign();
     let ctx = &ev as *const Context;
-    assert_eq!(callee_name_hint(ctx, id), None, "no frame at all");
+    assert_eq!(
+        unsafe { callee_name_hint(ctx, id) },
+        None,
+        "no frame at all"
+    );
     ev.push_backtrace_frame(sym, &[Value::make_int(1)]);
     let ctx = &ev as *const Context;
-    assert_eq!(callee_name_hint(ctx, id), Some(sym_id), "its own frame");
+    assert_eq!(
+        unsafe { callee_name_hint(ctx, id) },
+        Some(sym_id),
+        "its own frame"
+    );
     ev.push_backtrace_frame(other, &[Value::make_int(1)]);
     let ctx = &ev as *const Context;
     assert_eq!(
-        callee_name_hint(ctx, id),
+        unsafe { callee_name_hint(ctx, id) },
         None,
         "the innermost frame is another function's"
     );
     stats::perf_map::set_pending_callee(sym_id);
     assert_eq!(
-        callee_name_hint(ctx, id),
+        unsafe { callee_name_hint(ctx, id) },
         Some(sym_id),
         "a speculated callee's symbol wins"
     );
-    assert_eq!(callee_name_hint(ctx, id), None, "the pending hint is taken");
-    assert_eq!(callee_name_hint(std::ptr::null(), id), None);
+    assert_eq!(
+        unsafe { callee_name_hint(ctx, id) },
+        None,
+        "the pending hint is taken"
+    );
+    assert_eq!(unsafe { callee_name_hint(std::ptr::null(), id) }, None);
 }
 
 /// Leaves are bound to the obarray they were compiled against (P1.4 §3.6): a
@@ -805,18 +817,18 @@ fn a_different_obarray_generation_clears_the_cache() {
     let c = Value::make_int(7);
     let f = nullary_fn(vec![Op::Constant(0), Op::Return], vec![c]);
     let id = compile_and_cache_jit_leaf(&f, Some(&obarray)).expect("compiles");
-    sync_cache_to_obarray(obarray.generation());
+    sync_cache_to_obarray(obarray.generation()).expect("serial jit grace");
     assert!(is_compiled_for_test(id), "same obarray: the leaf stays");
     let other = Obarray::new();
     assert_ne!(other.generation(), obarray.generation());
-    sync_cache_to_obarray(other.generation());
+    sync_cache_to_obarray(other.generation()).expect("serial jit grace");
     assert!(
         !is_compiled_for_test(id),
         "another obarray: the cache is dropped"
     );
     // The next compile pins the new obarray.
     let id = compile_and_cache_jit_leaf(&f, Some(&other)).expect("compiles");
-    sync_cache_to_obarray(other.generation());
+    sync_cache_to_obarray(other.generation()).expect("serial jit grace");
     assert!(is_compiled_for_test(id));
 }
 
@@ -896,10 +908,10 @@ fn lexical_fn(ops: Vec<Op>, constants: Vec<Value>, arity: usize) -> ByteCodeFunc
         optional: Vec::new(),
         rest: None,
     });
-    f.lexical = true;
-    f.ops = ops;
-    f.constants = constants.into();
-    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
+    f.set_lexical(true);
+    f.set_ops(ops);
+    f.set_constants(constants.into());
+    f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
     f.seal_hand_assembled_ops();
     f
 }
@@ -949,7 +961,8 @@ fn unlink_spec_slots_to_clears_only_bytecode_slots_caching_the_dead_leaf() {
         .expect("compiles");
     let dead_ptr: *const CompiledLeaf = &dead;
     let slot = &leaf.spec_slots[0];
-    slot.arm_leaf(dead_ptr, std::ptr::null(), false, false, false);
+    // SAFETY: `dead` stays live for the entire test; never called.
+    unsafe { slot.arm_leaf(dead_ptr, std::ptr::null(), false, false, false) };
     assert_eq!(
         leaf.unlink_spec_slots_to(std::ptr::null()),
         0,
@@ -962,7 +975,8 @@ fn unlink_spec_slots_to_clears_only_bytecode_slots_caching_the_dead_leaf() {
     // cleared too (P2.1 C5).
     leaf.spec_slot_kinds = Box::new([SpecSlotKind::Source]);
     leaf.spec_slots[0].clear_leaf();
-    leaf.spec_slots[0].arm_leaf(dead_ptr, std::ptr::null(), false, false, false);
+    // SAFETY: `dead` stays live for the entire test; never called.
+    unsafe { leaf.spec_slots[0].arm_leaf(dead_ptr, std::ptr::null(), false, false, false) };
     assert_eq!(leaf.unlink_spec_slots_to(dead_ptr), 1);
     assert!(
         leaf.spec_slots[0].leaf_ptr().is_null(),
@@ -972,7 +986,8 @@ fn unlink_spec_slots_to_clears_only_bytecode_slots_caching_the_dead_leaf() {
     for kind in [SpecSlotKind::Subr] {
         leaf.spec_slot_kinds = Box::new([kind]);
         leaf.spec_slots[0].clear_leaf();
-        leaf.spec_slots[0].arm_leaf(dead_ptr, std::ptr::null(), false, false, false);
+        // SAFETY: `dead` stays live for the entire test; never called.
+        unsafe { leaf.spec_slots[0].arm_leaf(dead_ptr, std::ptr::null(), false, false, false) };
         assert_eq!(leaf.unlink_spec_slots_to(dead_ptr), 0);
         assert_eq!(
             leaf.spec_slots[0].leaf_ptr(),

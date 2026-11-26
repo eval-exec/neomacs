@@ -17,5 +17,8 @@ error[E0308]: mismatched types
 note: method defined here
   --> tests/p15_threading_ui/../p15_threading_support/../../../neovm-eval/src/emacs_core/runtime/eval/green/scheduler/completion_exit.rs
    |
-   |     pub fn finish(&self, completion: crate::emacs_core::threads::RetiredCompletion, baton: Baton) {
-   |            ^^^^^^        ---------------------------------------------------------
+   |     pub fn finish(
+   |            ^^^^^^
+   |         &self,
+   |         completion: crate::emacs_core::threads::RetiredCompletion,
+   |         ---------------------------------------------------------

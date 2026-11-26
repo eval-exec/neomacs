@@ -4,6 +4,7 @@
 #[cfg(test)]
 #[path = "tests/cursor_source_dependencies_test.rs"]
 mod tests;
+use crate::string_property_snapshot::{StringPropertySnapshot, StringSourceRootScope};
 use neovm_core::{
     emacs_core::{
         Context, Value,
@@ -245,7 +246,16 @@ impl Capture {
     }
     /// Seal original rooted observations after callbacks and row admission.
     /// Unknown/overflowed captures cannot become an empty absence certificate.
-    pub(crate) fn finish(self) -> Option<CursorSourceDependencies> {
+    pub(crate) fn finish(mut self) -> Option<CursorSourceDependencies> {
+        self.seal_completed_body()
+    }
+
+    /// Transfer complete original body observations before entering chrome.
+    /// Later mutations invalidate the returned dependencies without changing
+    /// their read origin. Keep this guard alive until the leaf ends: Drop
+    /// restores the enclosing capture, while chrome itself observes no body
+    /// sources. A consumed or incomplete capture cannot seal another body.
+    pub(crate) fn seal_completed_body(&mut self) -> Option<CursorSourceDependencies> {
         if !self.unchanged() {
             return None;
         }
@@ -324,17 +334,22 @@ pub(crate) fn observe_projection<T>(value: Value, project: impl FnOnce() -> T) -
 /// Property-less competing strings may gain `cursor` independently of ticks.
 pub(crate) fn string_properties(
     value: Value,
-) -> Option<neovm_core::emacs_core::value::text_props::TextPropertyTable> {
+    scope: &StringSourceRootScope,
+) -> StringPropertySnapshot {
     let mut requires_selection = false;
     let properties = observe_projection(value, || {
+        // Rooted callers keep the originating evaluator active throughout
+        // this synchronous capture. Retirement violates that caller contract;
+        // it must not be interpreted as an absent property table.
+        let properties = scope
+            .capture(value)
+            .expect("display string source root scope retired before capture");
         let mut chars = 0;
         if let Some(string) = value.as_lisp_string() {
             let _ = string.as_bytes();
             let _ = string.is_multibyte();
             chars = string.schars();
         }
-        let properties =
-            neovm_core::emacs_core::value::get_string_text_properties_table_for_value(value);
         // Observe the ORIGINAL interval lookup while its collection scope is
         // active. Category-derived behavior remains conservatively unproven.
         requires_selection = properties.as_ref().is_some_and(|props| {

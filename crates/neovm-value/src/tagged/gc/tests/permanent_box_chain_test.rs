@@ -26,13 +26,13 @@ fn every_boxed_image_resident_keeps_its_cons_child_after_partition() {
     // Keep the children's block allocated even if one edge is missed, so
     // the ownership probe observes a freed cell rather than address reuse.
     let anchor = heap.alloc_cons(TaggedValue::fixnum(303), TaggedValue::NIL);
-    heap.collect_exact(owners.into_iter().chain([anchor]));
+    heap.collect_rooted(owners.into_iter().chain([anchor]));
     assert!(heap.dump_blackened);
 
     // These roots keep only the image owners and the block anchor. Image
     // owners are black; their children depend on the initial edge scan.
     for cycle in 0..3 {
-        heap.collect_exact(owners.into_iter().chain([anchor]));
+        heap.collect_rooted(owners.into_iter().chain([anchor]));
         for child in children {
             assert!(
                 heap.owns_heap_value_for_test(child),
@@ -52,7 +52,7 @@ fn every_boxed_image_resident_keeps_its_cons_child_after_partition() {
             );
         });
     }
-    heap.collect_exact(owners.into_iter().chain([anchor]));
+    heap.collect_rooted(owners.into_iter().chain([anchor]));
     for child in children {
         assert!(heap.owns_heap_value_for_test(child));
     }

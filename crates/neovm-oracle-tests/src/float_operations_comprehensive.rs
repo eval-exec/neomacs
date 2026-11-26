@@ -461,6 +461,72 @@ fn oracle_prop_float_comparison_edge_cases() {
 }
 
 // ---------------------------------------------------------------------------
+// A NaN against a non-number.  GNU `arithcompare` (src/data.c:2760-2773,
+// 2814, 2847, 2850) settles the other operand's type before its NaN rule:
+// the isnan test sits inside the bignum arm, and anything that is neither a
+// number nor a marker signals `wrong-type-argument number-or-marker-p` with
+// that operand, whichever side the NaN is on.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn oracle_nan_compared_with_a_non_number_signals() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+
+    let form = r#"(let ((nan (/ 0.0 0.0)))
+                    (list (condition-case e (= nan nil) (error e))
+                          (condition-case e (< nan nil) (error e))
+                          (condition-case e (> nan nil) (error e))
+                          (condition-case e (<= nan nil) (error e))
+                          (condition-case e (>= nan nil) (error e))
+                          (condition-case e (/= nan nil) (error e))
+                          (condition-case e (= nil nan) (error e))
+                          (condition-case e (< nil nan) (error e))
+                          (condition-case e (< nan t) (error e))
+                          (condition-case e (< nan "s") (error e))
+                          ;; Not comparisons, same operand rule.
+                          (condition-case e (max nan nil) (error e))
+                          (condition-case e (+ nan nil) (error e))
+                          ;; A float that is not a NaN, same rule.
+                          (condition-case e (< 1.0 nil) (error e))))"#;
+    let expect = expect_test::expect![[
+        r#""OK ((wrong-type-argument number-or-marker-p nil) (wrong-type-argument number-or-marker-p nil) (wrong-type-argument number-or-marker-p nil) (wrong-type-argument number-or-marker-p nil) (wrong-type-argument number-or-marker-p nil) (wrong-type-argument number-or-marker-p nil) (wrong-type-argument number-or-marker-p nil) (wrong-type-argument number-or-marker-p nil) (wrong-type-argument number-or-marker-p t) (wrong-type-argument number-or-marker-p \"s\") (wrong-type-argument number-or-marker-p nil) (wrong-type-argument number-or-marker-p nil) (wrong-type-argument number-or-marker-p nil))""#
+    ]];
+    crate::common::assert_oracle_parity_expect(form, expect);
+}
+
+#[test]
+fn oracle_nan_compared_with_a_number_or_marker_is_false() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+
+    // Every relation is false against a fixnum, a bignum or a marker, on
+    // either side; only `/=` passes.
+    let form = r#"(let ((nan (/ 0.0 0.0)))
+                    (list (< nan 0) (< 0 nan) (= nan nan) (/= nan 0)
+                          (< nan (1+ most-positive-fixnum))
+                          (< (1+ most-positive-fixnum) nan)
+                          (with-temp-buffer
+                            (insert "abc")
+                            (list (< nan (point-marker))
+                                  (< (point-marker) nan)
+                                  (= nan (point-marker))))))"#;
+    let expect = expect_test::expect![[r#""OK (nil nil nil t nil nil (nil nil nil))""#]];
+    crate::common::assert_oracle_parity_expect(form, expect);
+}
+
+#[test]
+fn oracle_nan_max_min_with_a_float_stay_nan() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+
+    // The NaN's sign bit is host hardware, so the result is classified.
+    let form = r#"(let ((nan (/ 0.0 0.0)))
+                    (list (isnan (max nan 0.0))
+                          (isnan (max 0.0 nan))
+                          (isnan (min 0.0 nan))))"#;
+    let expect = expect_test::expect![[r#""OK (t t t)""#]];
+    crate::common::assert_oracle_parity_expect(form, expect);
+}
+
+// ---------------------------------------------------------------------------
 // Chained float rounding combined with arithmetic
 // ---------------------------------------------------------------------------
 

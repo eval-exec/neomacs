@@ -57,6 +57,11 @@ impl RegistrationCensus {
 pub struct StoppedSummaries<'era> {
     registry: &'era Registry,
     gate: RegistryGuard<'era>,
+    /// True when minted through `AllStopped::summaries` (`under_stop`), where
+    /// unactivated `StartingStopped` permits outside `gate.rendezvous.frozen`
+    /// have no image and zero debt, matching `verify_stopped` and
+    /// `ImageSession::take`.
+    under_stop: bool,
     _thread: PhantomData<Rc<()>>,
 }
 
@@ -71,13 +76,61 @@ impl std::fmt::Debug for StoppedSummaries<'_> {
 impl<'era> StoppedSummaries<'era> {
     pub(super) fn new(registry: &'era Registry) -> Result<Self, RegistrationError> {
         let gate = registry.lock()?;
-        // Do not filter out Running, Starting, loaned or missing entries.
+        // The keeper holding a stop takes its census through
+        // `AllStopped::summaries`, whose borrow keeps `trace` and `complete`
+        // from running while this guard holds the gate. Here nothing would:
+        // a `complete` under this guard refuses, and that refusal poisons.
+        if std::thread::current().id() == registry.keeper_thread
+            && matches!(
+                gate.rendezvous.phase,
+                super::rendezvous::control::Phase::Stopping(_)
+                    | super::rendezvous::control::Phase::Tracing(_)
+            )
+        {
+            return Err(RegistrationError::WrongThread);
+        }
+        Self::from_gate(registry, gate, false)
+    }
+
+    /// The census taken by the keeper under its stop (`AllStopped::summaries`).
+    pub(super) fn under_stop(registry: &'era Registry) -> Result<Self, RegistrationError> {
+        let gate = registry.lock_for_keeper()?;
+        Self::from_gate(registry, gate, true)
+    }
+
+    fn is_unactivated_under_stop(
+        gate: &RegistryState,
+        entry: &MutatorEntry,
+        state: &EntryState,
+    ) -> bool {
+        entry.key.owner != 0
+            && !gate.rendezvous.frozen.contains(&entry.key)
+            && state.phase == EntryPhase::Starting
+            && state.rendezvous.mode == rendezvous::Mode::StartingStopped
+            && state.image.is_none()
+            && !state.run_loan
+            && !state.worker_loan
+            && !entry.admitted()
+    }
+
+    fn from_gate(
+        registry: &'era Registry,
+        gate: RegistryGuard<'era>,
+        under_stop: bool,
+    ) -> Result<Self, RegistrationError> {
+        // Outside a stop, do not filter out Running, Starting, loaned or
+        // missing entries. Under a stop, an unactivated `StartingStopped`
+        // permit outside `frozen` has never run, holds no image, and has zero
+        // debt (matching `verify_stopped` and `ImageSession::take`).
         for entry in &gate.entries {
             if entry.cancelled_start.load(Ordering::Acquire) {
                 continue;
             }
             registry.validate(&gate, entry.key)?;
             let state = lock_entry(registry, entry)?;
+            if under_stop && Self::is_unactivated_under_stop(&gate, entry, &state) {
+                continue;
+            }
             if !matches!(
                 state.phase,
                 EntryPhase::Frozen | EntryPhase::Published | EntryPhase::Retiring
@@ -87,12 +140,27 @@ impl<'era> StoppedSummaries<'era> {
             if state.run_loan || state.worker_loan {
                 return Err(RegistrationError::OutstandingLoan);
             }
-            let image = state.image.as_ref().ok_or(RegistrationError::Publication)?;
+            let image = state
+                .image
+                .as_ref_for(registry.heap, entry.young)
+                .map_err(|_| RegistrationError::Publication)?
+                .ok_or(RegistrationError::Publication)?;
             if image.young_id() != entry.young {
                 return Err(RegistrationError::Publication);
             }
+            // A peer that enters `Mode::NativeStopped` (or retires from it)
+            // before any stop has completed publishes at `completed == 0`
+            // (`rendezvous/owner.rs`). Its `publication_generation` is nonzero
+            // and its root batch carries `publication_epoch == 0`; stop #1
+            // advances `coverage_epoch` while leaving `epoch == 0` so
+            // `prepare_finish` keeps matching the batch identity.
+            let pre_stop_native = state.rendezvous.mode == rendezvous::Mode::NativeStopped
+                && state
+                    .roots
+                    .as_ref()
+                    .is_some_and(|roots| roots.identity().publication_epoch() == 0);
             if state.phase != EntryPhase::Frozen
-                && (state.publication_generation == 0 || state.epoch == 0)
+                && (state.publication_generation == 0 || (state.epoch == 0 && !pre_stop_native))
             {
                 return Err(RegistrationError::Publication);
             }
@@ -100,6 +168,7 @@ impl<'era> StoppedSummaries<'era> {
         Ok(Self {
             registry,
             gate,
+            under_stop,
             _thread: PhantomData,
         })
     }
@@ -116,7 +185,14 @@ impl<'era> StoppedSummaries<'era> {
                 continue;
             }
             let state = lock_entry(self.registry, entry)?;
-            let image = state.image.as_ref().ok_or(RegistrationError::Publication)?;
+            if self.under_stop && Self::is_unactivated_under_stop(&self.gate, entry, &state) {
+                continue;
+            }
+            let image = state
+                .image
+                .as_ref_for(self.registry.heap, entry.young)
+                .map_err(RegistrationError::from)?
+                .ok_or(RegistrationError::Publication)?;
             visit(entry.key, state.phase, image);
         }
         Ok(())
@@ -214,11 +290,15 @@ impl<'era> StoppedSummaries<'era> {
             return Err(RegistrationError::StaleRegistration);
         }
         let mut state = lock_entry(self.registry, &entry)?;
-        let image = state.image.as_mut().ok_or(RegistrationError::Publication)?;
-        if image.young_id() != young {
+        let log = state
+            .image
+            .young_mut_for(self.registry.heap, young)
+            .map_err(|_| RegistrationError::Publication)?
+            .ok_or(RegistrationError::Publication)?;
+        if log.id() != young {
             return Err(RegistrationError::Publication);
         }
-        Ok(use_log(image.young_mut()))
+        Ok(use_log(log))
     }
 }
 

@@ -294,6 +294,11 @@ case $(uname -s) in
             --without-selinux
             --without-gpm
             --without-sqlite3
+            # ACL is auto unless disabled (m4/acl.m4). CI and the main box
+            # have no libacl, so their feature line omits ACL. A host with
+            # libacl would otherwise build a different oracle, and file-acl
+            # rows diverge. check-gnu-oracle.sh forbids ACL on linux-gtk3.
+            --disable-acl
         )
         ;;
 esac

@@ -2,6 +2,36 @@ use std::io::{Read, Seek, SeekFrom, Write};
 
 use super::*;
 
+/// Write through the anywhere-map section pointer and read it back.
+/// Native Rust does not check provenance. Miri does: `as_ptr().cast_mut()`
+/// on `MmapMut` is `<[u8]>::as_ptr`, and the write is UB under Stacked Borrows.
+#[test]
+fn anywhere_section_mut_ptr_write_uses_the_mutable_mapping() {
+    let file = tempfile::tempfile().unwrap();
+    file.set_len(64).unwrap();
+    let mmap = unsafe { MmapOptions::new().map_copy(&file) }.unwrap();
+    let mut image = LoadedMmapImage {
+        mmap: ImageMapping::Anywhere(mmap),
+        sections: vec![DumpImageSection {
+            kind: u32::from(DumpSectionKind::HeapImage),
+            flags: 0,
+            offset: 8,
+            len: 16,
+            reserved: 0,
+        }],
+        fixed_at_planned_base: false,
+        planned_base: 0,
+    };
+    let (ptr, len) = image
+        .section_mut_ptr(DumpSectionKind::HeapImage)
+        .expect("heap section");
+    assert_eq!(len, 16);
+    unsafe { ptr.write_volatile(0x5A) };
+    let base = image.mmap.as_mut_ptr();
+    assert_eq!(unsafe { base.add(8).read_volatile() }, 0x5A);
+    assert_eq!(ptr, unsafe { base.add(8) });
+}
+
 #[test]
 fn write_and_load_sections_from_mmap() {
     let dir = tempfile::tempdir().unwrap();

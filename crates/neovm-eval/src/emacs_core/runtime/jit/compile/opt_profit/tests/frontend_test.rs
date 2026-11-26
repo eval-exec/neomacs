@@ -120,7 +120,7 @@ fn opt_profit_selected_retier_matches_the_interpreter() {
             .execute(&f, args.to_vec())
             .unwrap();
         assert_eq!(
-            leaf.call(&mut context as *mut super::super::Context as *mut u8, &args),
+            unsafe { leaf.call(&mut context as *mut super::super::Context as *mut u8, &args) },
             super::super::NativeRun::Ok(expected.bits()),
         );
     }
@@ -256,6 +256,6 @@ fn opt_profit_osr_cache_matches_interpreter_and_legacy_entry_guards() {
         assert_eq!(frame.pc, 1);
         assert_eq!(frame.stack.as_slice(), &bad);
         assert_eq!(context.jit_root_stack_top, 0);
-        cache::clear();
+        cache::clear_with_serial_receipt().expect("serial jit grace");
     }
 }

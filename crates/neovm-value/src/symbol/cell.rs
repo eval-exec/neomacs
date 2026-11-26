@@ -438,9 +438,9 @@ impl CellWord {
     /// The word stored under `Forwarded` by [`Self::forwarded`].
     #[inline(always)]
     fn read_forwarded(&self) -> FwdRef {
-        // Only `CellWord::forwarded` stores under this tag, and it stores a
-        // live descriptor's header address.
-        FwdRef::from_address(self.load())
+        // SAFETY: only `CellWord::forwarded` stores under this tag, and it
+        // stores a live non-null `LispFwd` descriptor header address from `FwdRef::of`.
+        unsafe { FwdRef::from_address(self.load()) }
     }
 
     /// Decode under the tag the word was stored with.
@@ -480,11 +480,17 @@ pub struct LispSymbol {
     /// The value cell's word, read under `flags`' redirect.
     val: CellWord,
     /// Function slot. `Value::NIL` is the unbound sentinel (GNU `Qnil` in
-    /// `struct Lisp_Symbol::s.function`, `lisp.h:820`).
-    pub function: AtomicTaggedValue,
+    /// `struct Lisp_Symbol::s.function`, `lisp.h:820`). Crate-private so
+    /// cross-crate code cannot bypass `Obarray`'s SATB barrier and function
+    /// epoch bumps through a shared `&LispSymbol`; read via
+    /// [`Self::function`].
+    pub(crate) function: AtomicTaggedValue,
     /// Property list as a Lisp cons list (NIL = empty). Matches GNU
-    /// `struct Lisp_Symbol::s.plist` (`lisp.h:820`).
-    pub plist: AtomicTaggedValue,
+    /// `struct Lisp_Symbol::s.plist` (`lisp.h:820`). Crate-private so
+    /// cross-crate code cannot bypass [`store_plist_head`]'s SATB barrier and
+    /// plist epoch bumps through a shared `&LispSymbol`; read via
+    /// [`Self::plist`].
+    pub(crate) plist: AtomicTaggedValue,
     /// Whether this symbol is interned in the global obarray.
     pub(super) interned_global: bool,
     /// Whether `fmakunbound` explicitly masked the symbol's fallback function.
@@ -511,6 +517,10 @@ pub const LISP_SYMBOL_FLAGS_OFFSET: usize = std::mem::offset_of!(LispSymbol, fla
 /// `Plainval`).
 #[doc(hidden)]
 pub const LISP_SYMBOL_VAL_OFFSET: usize = std::mem::offset_of!(LispSymbol, val);
+/// Byte offset of a symbol's function cell (`LispSymbol::function`, one
+/// `Value` word): what a named call's callee is read from.
+#[doc(hidden)]
+pub const LISP_SYMBOL_FUNCTION_OFFSET: usize = std::mem::offset_of!(LispSymbol, function);
 /// Byte offset of a symbol's `interned_global` flag: the byte right after the
 /// flags byte (const-asserted in the obarray module), so compiled code and the
 /// cached variable tiers read `flags | interned_global << 8` as one 16-bit
@@ -544,6 +554,8 @@ const _: () = {
     assert!(align_of::<Value>() >= align_of::<usize>());
 };
 
+static_assertions::assert_not_impl_any!(LispSymbol: Clone, Copy, Send, Sync);
+
 impl std::fmt::Debug for LispSymbol {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("LispSymbol")
@@ -558,13 +570,24 @@ impl std::fmt::Debug for LispSymbol {
     }
 }
 
-// Hand-written because `name: AtomicU32` is not `Clone`-derivable. A cloned
-// obarray is never concurrently scanned, so a `Relaxed` load of the source name
-// is sufficient. The clone's cell names the SAME BLV record or descriptor as
-// the source; `Obarray::clone` re-homes both before the copy is used
+// Hand-written because `name: AtomicU32` is not `Clone`-derivable. Kept
+// crate-private (never `impl Clone for LispSymbol`): a `Localized` cell holds
+// a raw `BlvPtr` owned by its enclosing `Obarray`, so cloning a symbol outside
+// `Obarray::clone` would decouple that pointer from `Obarray::drop` and turn
+// later BLV reads into a use-after-free. `Obarray::clone` immediately
+// deep-copies and re-homes both BLV records and stateful forwarders
 // ([`LocalizedArm::rehome`], [`ForwardedArm::forward_to`]).
-impl Clone for LispSymbol {
-    fn clone(&self) -> Self {
+impl LispSymbol {
+    /// Clone a symbol slot for [`super::Obarray::clone`].
+    ///
+    /// # Safety
+    ///
+    /// The returned `LispSymbol` aliases the source's raw `BlvPtr` (for a
+    /// `Localized` cell) and stateful `FwdRef` (for a `Forwarded` cell). The
+    /// caller must immediately re-home every `Localized` cell and stateful
+    /// `Forwarded` cell in the cloned obarray before the source obarray is
+    /// mutated or dropped, and must never expose the un-rehomed slot.
+    pub(super) unsafe fn clone_for_obarray(&self) -> Self {
         Self {
             name: AtomicU32::new(self.name.load(Ordering::Relaxed)),
             flags: self.flags.clone(),
@@ -783,6 +806,24 @@ impl LispSymbol {
     #[inline]
     pub fn name(&self) -> NameId {
         NameId(self.name.load(Ordering::Relaxed))
+    }
+
+    /// The symbol's function cell (`Value::NIL` when unbound).
+    ///
+    /// Mutations must go through `Obarray` setters so the SATB write barrier,
+    /// function epoch, and JIT eviction stay in sync.
+    #[inline]
+    pub fn function(&self) -> Value {
+        self.function.get()
+    }
+
+    /// The symbol's property list head (`Value::NIL` when empty).
+    ///
+    /// Mutations must go through `Obarray` setters so the SATB write barrier
+    /// and plist epoch stay in sync.
+    #[inline]
+    pub fn plist(&self) -> Value {
+        self.plist.get()
     }
 
     /// Presence predicate for the single mutator and stop-the-world callers

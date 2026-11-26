@@ -22,16 +22,16 @@ fn function(ops: &[Op], constants: &[Value], shape: ParamShape) -> ByteCodeFunct
             .collect(),
         rest: shape.has_rest.then(|| intern("opt-reference-rest")),
     });
-    function.lexical = true;
-    function.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(128);
-    function.ops = ops.to_vec();
-    function.constants = constants.to_vec().into();
+    function.set_lexical(true);
+    function.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(128));
+    function.set_ops(ops.to_vec());
+    function.set_constants(constants.to_vec().into());
     function
 }
 
 fn ir(function: &ByteCodeFunction, prefix: usize) -> Func {
     let shape = function
-        .params
+        .params()
         .stack_shape()
         .expect("fixture stack parameters");
     let shape = ParamShape {
@@ -41,13 +41,13 @@ fn ir(function: &ByteCodeFunction, prefix: usize) -> Func {
     };
     let cfg = crate::emacs_core::jit::compile::analyze_cfg(
         function.executable_ops(),
-        &function.constants,
+        function.constants(),
         function.executable_gnu_byte_offset_map(),
         shape.native_arity(),
     )
     .expect("source CFG");
     let constants = function
-        .constants
+        .constants()
         .iter()
         .copied()
         .map(ValueBits::from_value)
@@ -84,21 +84,21 @@ fn traced(
     let trace = Value::symbol("opt-reference-trace");
     ctx.eval_str("(setq opt-reference-trace nil)")
         .expect("trace variable");
-    let mut output = function(&[], &source.constants, ir.arity);
+    let mut output = function(&[], source.constants(), ir.arity);
     let trace_index = output.add_constant(trace);
     let printer = intern("prin1-to-string");
-    let mut relocated = vec![0_u32; source.ops.len()];
+    let mut relocated = vec![0_u32; source.ops().len()];
     let mut original_sites = Vec::new();
-    for (pc, op) in source.ops.iter().enumerate() {
-        relocated[pc] = output.ops.len() as u32;
+    for (pc, op) in source.ops().iter().enumerate() {
+        relocated[pc] = output.ops().len() as u32;
         if let Some(state) = &ir.source_states[pc] {
             let depth = state.pre.len();
             let index = output.add_constant(Value::fixnum(pc as i64));
-            output.ops.push(Op::Constant(index));
+            output.ops_mut().push(Op::Constant(index));
             for _ in 0..depth {
-                output.ops.push(Op::StackRef(depth as u16));
+                output.ops_mut().push(Op::StackRef(depth as u16));
             }
-            output.ops.extend([
+            output.ops_mut().extend([
                 Op::List(depth as u16),
                 Op::CallBuiltinSym(printer, 1),
                 Op::Cons,
@@ -107,11 +107,11 @@ fn traced(
                 Op::VarSet(trace_index),
             ]);
         }
-        original_sites.push(output.ops.len());
-        output.ops.push(op.clone());
+        original_sites.push(output.ops().len());
+        output.ops_mut().push(op.clone());
     }
     for site in original_sites {
-        match &mut output.ops[site] {
+        match &mut output.ops_mut()[site] {
             Op::Goto(target)
             | Op::GotoIfNil(target)
             | Op::GotoIfNotNil(target)
@@ -125,7 +125,7 @@ fn traced(
     // Keep the original tables and their printed values intact. Relocate the
     // resolver's GNU-byte-offset map, so Switch still uses real source keys.
     use crate::emacs_core::bytecode::chunk::GnuByteOffsetMapEntry;
-    output.gnu_byte_offset_map = Some(match source.executable_gnu_byte_offset_map() {
+    output.set_gnu_byte_offset_map(Some(match source.executable_gnu_byte_offset_map() {
         Some(map) => map
             .iter()
             .map(|entry| GnuByteOffsetMapEntry {
@@ -141,7 +141,7 @@ fn traced(
                 instruction_index: pc as usize,
             })
             .collect(),
-    });
+    }));
     let result = tier0(ctx, &output, args);
     let mut trace_value = ctx.eval_str("opt-reference-trace").expect("read trace");
     let mut steps = Vec::new();
@@ -161,7 +161,7 @@ fn traced(
 
 fn compare(ctx: &mut Context, function: &ByteCodeFunction, args: &[Value]) -> Func {
     let roots_base = ctx.bc_buf.len();
-    ctx.bc_buf.extend_from_slice(&function.constants);
+    ctx.bc_buf.extend_from_slice(function.constants());
     ctx.bc_buf.extend_from_slice(args);
     let ir = ir(function, 0);
     let expected = tier0(ctx, function, args);
@@ -425,7 +425,7 @@ fn opt_reference_patched_prefix_is_read_from_the_current_instance() {
     let ir = ir(&source, 1);
     for captured in [Value::fixnum(11), Value::fixnum(22)] {
         let mut actual = source.clone();
-        actual.constants.ensure_owned()[0] = captured;
+        actual.constants_mut().ensure_owned()[0] = captured;
         let expected = tier0(&mut ctx, &actual, &[]);
         let run = evaluate(
             &ir,
@@ -481,7 +481,7 @@ fn opt_reference_switch_resolves_gnu_offsets_and_equal_keys_like_tier0() {
             ..ParamShape::default()
         },
     );
-    function.gnu_byte_offset_map = Some(
+    function.set_gnu_byte_offset_map(Some(
         [0, 1, 2, 30, 40, 50, 60, 70, 80]
             .into_iter()
             .enumerate()
@@ -490,7 +490,7 @@ fn opt_reference_switch_resolves_gnu_offsets_and_equal_keys_like_tier0() {
                 instruction_index,
             })
             .collect(),
-    );
+    ));
     for argument in [
         symbol,
         Value::list(vec![symbol, Value::fixnum(7)]),
@@ -568,7 +568,7 @@ fn opt_reference_failed_type_guard_reads_exact_pre_operation_frame() {
     assert_eq!(frame.pc, 1);
     assert_eq!(frame.stack, vec![ValueBits::from_value(argument); 2]);
     let mut stopped = function.clone();
-    stopped.ops = vec![Op::StackRef(0), Op::Return];
+    stopped.set_ops(vec![Op::StackRef(0), Op::Return]);
     let stopped_ir = ir(&stopped, 0);
     let (_, trace) = traced(&mut ctx, &stopped, &stopped_ir, &[argument]);
     assert_eq!((frame.pc, frame.printed_stack), trace[1]);

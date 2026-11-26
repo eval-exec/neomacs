@@ -1569,7 +1569,6 @@ fn eip_bench_ns(rounds: u32, inner: u32, mut f: impl FnMut() -> bool) -> f64 {
 #[test]
 #[cfg(feature = "perf-probes")]
 fn equal_including_properties_bench() {
-    use neovm_edit::buffer::text_props::TextPropertyTable;
     use neovm_value::value::{
         StringTextPropertyRun, get_string_text_properties_table_for_value,
         set_string_text_properties_for_value, try_equal_value_including_properties,
@@ -1623,9 +1622,10 @@ fn equal_including_properties_bench() {
     // Before/after decomposition of the property-walk sub-path this change
     // touched, using only public APIs (no second build). "Removed" is the exact
     // per-compare work the string arm no longer does: for a propertied compare,
-    // the two interval-tree CLONES it used to make; for a propertyless compare,
-    // the None/None interval walk it now short-circuits.  So the pre-change cost
-    // of case (c) was ~= c_ns + removed_clone, and case (b) ~= b_ns + removed_none.
+    // the two interval-tree CLONES it used to make.  So the pre-change cost of
+    // case (c) was ~= c_ns + removed_clone.  The propertyless None/None walk is
+    // no longer measured here: its function is private to neovm-value since the
+    // crate split, so this crate cannot call it.
     let removed_clone_ns = eip_bench_ns(50, 5_000, || {
         let l = get_string_text_properties_table_for_value(p1);
         let r = get_string_text_properties_table_for_value(p2);
@@ -1634,9 +1634,6 @@ fn equal_including_properties_bench() {
         std::hint::black_box(&r);
         used
     });
-    let removed_none_ns = eip_bench_ns(50, 5_000, || {
-        TextPropertyTable::equal_including_property_values(None, None, 1024)
-    });
 
     panic!(
         "BENCH equal-including-properties (ns/call, min of 50): \
@@ -1644,53 +1641,9 @@ fn equal_including_properties_bench() {
          (b) propertyless =1KiB strings {b_ns:.1} | \
          (c) propertied =64B strings {c_ns:.1} | \
          (d) deep =200-list {d_ns:.1} || \
-         clone-elim removed/compare: propertied 2x-clone {removed_clone_ns:.1} (c before~={:.1}), \
-         propertyless None-walk {removed_none_ns:.1} (b before~={:.1})",
+         clone-elim removed/compare: propertied 2x-clone {removed_clone_ns:.1} (c before~={:.1})",
         c_ns + removed_clone_ns,
-        b_ns + removed_none_ns,
     );
-}
-
-/// Macro datapoint (Ladder Task 2): wall-time of the byte-compile workload that
-/// records `equal-including-properties` at 38% of builtin calls (mirrors
-/// `vm_subr_mix_byte_compile` but interpreted+timed, no vm-profile). Run:
-///   cargo nextest run -p neovm-core --release --run-ignored ignored-only \
-///     --no-capture equal_including_properties_byte_compile_macro_bench
-#[test]
-#[cfg(feature = "perf-probes")]
-fn equal_including_properties_byte_compile_macro_bench() {
-    crate::test_utils::init_test_tracing();
-    // SAFETY: nextest runs each test in its own process; set before the VM
-    // reads the JIT gate so the byte-compiler stays interpreted.
-    unsafe { std::env::set_var("NEOVM_JIT", "0") };
-    let mut ev = crate::test_utils::runtime_startup_context();
-    let mut body = String::new();
-    for i in 0..30 {
-        body.push_str(&format!(
-            "(setq acc (cons (list {i} (format \"s%d\" n) (assq 'k tbl)) acc)) \
-             (when (> (length acc) 40) (setq acc (nthcdr 2 acc))) \
-             (setq s (concat s (substring (symbol-name 'sym{i}) 0 2))) ",
-        ));
-    }
-    let defun = format!(
-        "(progn (defun sm-work (n) \
-           (let ((acc nil) (s \"\") (tbl '((k . 1) (j . 2)))) {body} (list acc s))) t)"
-    );
-    ev.eval_str(&defun).expect("defun sm-work");
-    // Warm the byte-compiler.
-    ev.eval_str("(progn (byte-compile 'sm-work) t)")
-        .expect("warm byte-compile");
-
-    let rounds = 8u32;
-    let mut best = std::time::Duration::MAX;
-    for _ in 0..rounds {
-        let t = std::time::Instant::now();
-        ev.eval_str(&defun).expect("re-defun sm-work");
-        ev.eval_str("(progn (byte-compile 'sm-work) t)")
-            .expect("byte-compile sm-work");
-        best = best.min(t.elapsed());
-    }
-    panic!("BENCH byte-compile sm-work (min of {rounds} defun+compile cycles): {best:?}");
 }
 
 #[test]

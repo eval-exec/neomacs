@@ -19,7 +19,7 @@ use crate::tagged::value::TaggedValue;
 
 use super::super::{
     EraWorldLoan, FrozenFunctionRoots, FrozenLegacyRoots, Gen1Admission, HeapIdentity, WorldLoan,
-    clear_tagged_heap_if_installed, tagged_heap_is_installed,
+    clear_tagged_heap_root_if_installed, tagged_heap_is_installed,
 };
 use super::QuiescentCollector;
 
@@ -441,7 +441,9 @@ static_assertions::assert_not_impl_any!(LocalHeapScope: Send, Sync, Clone, Copy)
 impl LocalHeapScope {
     fn retire_tls(&self) -> Result<(), TransferError> {
         let transfer = self.transfer.as_ref().expect("local retained transfer");
-        retire_transfer_tls(transfer.root.as_non_null())
+        // SAFETY: `LocalHeapScope` retains the sole backing for `transfer.root`
+        // and only retires TLS after the callback/collector frame has returned or unwound.
+        unsafe { retire_transfer_tls(transfer.root.as_non_null()) }
     }
 
     fn into_transfer(mut self) -> (PreparedHeapTransfer, Result<(), TransferError>) {
@@ -468,7 +470,14 @@ impl Drop for LocalHeapScope {
 /// Only after the complete collector or era frame has returned and every
 /// participant has retired. A refusal that can still hold a heap loan clears
 /// TLS by address and does not call this.
-fn retire_transfer_tls(root: NonNull<super::super::TaggedHeap>) -> Result<(), TransferError> {
+///
+/// # Safety
+/// `root` must point to a live `TaggedHeap` whose backing is retained by the
+/// caller, and every callback, collector, or era frame borrowing that heap
+/// must have returned or unwound with no outstanding mutable alias.
+unsafe fn retire_transfer_tls(
+    root: NonNull<super::super::TaggedHeap>,
+) -> Result<(), TransferError> {
     let installed = super::super::TAGGED_HEAP.with(|slot| slot.get() == root.as_ptr());
     // SAFETY: the caller's complete callback, collector, or era frame has
     // returned, or unwound. The scope retains the sole original backing and
@@ -477,7 +486,15 @@ fn retire_transfer_tls(root: NonNull<super::super::TaggedHeap>) -> Result<(), Tr
     if installed {
         heap.preflight_source_store_retirement()
             .map_err(TransferError::Observations)?;
-        clear_tagged_heap_if_installed(heap);
+        heap.detach_store_protocol();
+        // SAFETY: `retire_transfer_tls`'s caller uniquely retains the live
+        // backing at `root` and every callback, collector, or era frame has
+        // returned or unwound, so no other live `TaggedHeap` can share
+        // `root`'s address. Detaching store protocol above and clearing by
+        // address retires both normal `set_tagged_heap` installs and
+        // address-only test fault injection (`poke_installed_heap_address`)
+        // without failing on an unpopulated `TAGGED_HEAP_ID`.
+        unsafe { clear_tagged_heap_root_if_installed(root) };
     }
     heap.retire_source_observation_membership()
         .map_err(TransferError::Observations)
@@ -1065,8 +1082,15 @@ static_assertions::assert_not_impl_any!(SourceRecoveryFailure: Send, Sync, Clone
 
 /// Address-only fault injection for the transfer tests. Writes the existing
 /// heap slot. This is not a new thread-local and not a production entry.
+///
+/// # Safety
+///
+/// Writes an arbitrary raw pointer directly into `TAGGED_HEAP` without mirror
+/// synchronization or foreign-heap refusal. Caller must ensure no live
+/// `Context` or TLS-derived heap loan reads the corrupted slot and must clean
+/// up TLS before returning control to normal evaluation.
 #[cfg(any(test, feature = "test-support"))]
 #[doc(hidden)]
-pub fn poke_installed_heap_address(root: *mut super::super::TaggedHeap) {
+pub unsafe fn poke_installed_heap_address(root: *mut super::super::TaggedHeap) {
     super::super::TAGGED_HEAP.with(|slot| slot.set(root));
 }

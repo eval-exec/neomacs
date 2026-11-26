@@ -329,6 +329,7 @@ fn renderer_reopens_the_exact_physical_bitmap_strike_without_rescaling() {
         descent_px: metrics.descent_px,
         space_advance_px: metrics.space_advance_px,
         glyph_advance: Default::default(),
+        spacing: None,
     };
 
     let mut cache = BitmapFontReplayCache::new().expect("renderer bitmap replay cache");
@@ -437,7 +438,7 @@ fn glyph_font_identity_discriminates_resolved_font_id() {
     assert_ne!(glyph_font_identity(Some(&a)), glyph_font_identity(Some(&b)));
 }
 
-fn try_test_device_and_atlas() -> Option<(wgpu::Device, wgpu::Queue, WgpuGlyphAtlas)> {
+pub(super) fn try_test_device_and_atlas() -> Option<(wgpu::Device, wgpu::Queue, WgpuGlyphAtlas)> {
     let instance =
         wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
     let adapter =
@@ -577,6 +578,7 @@ fn macos_resolved_cluster_applies_backing_scale() {
         descent_px: 4.0,
         space_advance_px: 8.0,
         glyph_advance: Default::default(),
+        spacing: None,
     };
     atlas.install_frame_fonts(
         &Default::default(),
@@ -613,7 +615,10 @@ fn macos_resolved_cluster_applies_backing_scale() {
                 SubpixelBin::Zero,
                 false,
             )
-            .and_then(|mut parts| (parts.len() == 1).then(|| parts.remove(0)))
+            .and_then(|outcome| match outcome {
+                super::Rasterized::Ink(mut parts) if parts.len() == 1 => Ok(parts.remove(0)),
+                _ => Err(GlyphAtlasError::RasterizeFailed),
+            })
             .expect("rasterize the installed Monaco glyph")
     };
     let at_one = rasterize(&mut atlas);
@@ -653,6 +658,82 @@ fn frame_font_installation_invalidates_atlas_on_catalog_generation_change() {
     frame.font_catalog_generation = initial.next();
     atlas.set_current_frame_fonts(frame.font_bindings());
     assert!(atlas.eviction_generation() > established);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn frame_binding_restores_captured_pgtk_policy_across_cache_and_catalog_clears() {
+    use neomacs_display_protocol::{
+        DesktopFontAntialias, DesktopFontHinting, DesktopFontRenderOptions,
+        DesktopFontSubpixelOrder,
+    };
+    use neomacs_font_materializer::fontconfig::SurfaceFontOptions;
+    let (_, _, mut atlas) = try_test_device_and_atlas()
+        .expect("PGTK frame-policy regression requires a real GPU adapter");
+    let captured = DesktopFontRenderOptions {
+        antialias: DesktopFontAntialias::Grayscale,
+        hinting: DesktopFontHinting::Slight,
+        subpixel_order: DesktopFontSubpixelOrder::Bgr,
+    };
+    let expected = SurfaceFontOptions::from_desktop_options(captured);
+    let newer = SurfaceFontOptions::from_desktop_options(DesktopFontRenderOptions {
+        hinting: DesktopFontHinting::Full,
+        ..captured
+    });
+    let mut frame = neomacs_display_protocol::FrameGlyphBuffer::default();
+    frame.desktop_font_render_options = Some(captured);
+    atlas.set_font_surface_options(newer);
+    atlas.set_current_frame_fonts(frame.font_bindings());
+    assert_eq!(
+        atlas.native_rasterizer.surface_options(),
+        expected,
+        "draw the captured metric policy even if newer settings have arrived"
+    );
+    let established = atlas.eviction_generation();
+    atlas.set_current_frame_fonts(frame.font_bindings());
+    assert_eq!(atlas.eviction_generation(), established);
+    atlas.clear();
+    assert_eq!(atlas.native_rasterizer.surface_options(), expected);
+    atlas.set_font_surface_options(newer);
+    frame.font_catalog_generation = frame.font_catalog_generation.next();
+    atlas.set_current_frame_fonts(frame.font_bindings());
+    assert_eq!(
+        atlas.native_rasterizer.surface_options(),
+        expected,
+        "a catalog rebuild must install the frame's options before its fonts"
+    );
+    frame.desktop_font_render_options = Some(DesktopFontRenderOptions::default());
+    let before_default = atlas.eviction_generation();
+    atlas.set_current_frame_fonts(frame.font_bindings());
+    assert_eq!(
+        atlas.native_rasterizer.surface_options(),
+        SurfaceFontOptions::default()
+    );
+    assert!(atlas.eviction_generation() > before_default);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn frame_without_desktop_options_preserves_xlib_surface_policy() {
+    use neomacs_font_materializer::fontconfig::{
+        SurfaceFontOptions, SurfaceSubpixelOrder, XftResources,
+    };
+    let (_, _, mut atlas) = try_test_device_and_atlas()
+        .expect("Xlib frame-policy regression requires a real GPU adapter");
+    let xlib = SurfaceFontOptions::from_xlib_resources(
+        XftResources {
+            hintstyle: Some("hintfull"),
+            ..Default::default()
+        },
+        SurfaceSubpixelOrder::Bgr,
+    );
+    atlas.set_font_surface_options(xlib);
+    let frame = neomacs_display_protocol::FrameGlyphBuffer::default();
+    atlas.set_current_frame_fonts(frame.font_bindings());
+    assert_eq!(atlas.native_rasterizer.surface_options(), xlib);
+    atlas.clear();
+    atlas.set_current_frame_fonts(frame.font_bindings());
+    assert_eq!(atlas.native_rasterizer.surface_options(), xlib);
 }
 
 #[test]
@@ -744,6 +825,7 @@ fn renderer_keeps_missing_ascii_on_primary_font() {
         descent_px: 2.0,
         space_advance_px: 5.0,
         glyph_advance: Default::default(),
+        spacing: None,
     };
     atlas.install_frame_fonts(
         &Default::default(),
@@ -762,7 +844,7 @@ fn renderer_keeps_missing_ascii_on_primary_font() {
         atlas.try_fast_single_char_glyph(' ', Some(&face)),
         Some(SingleCharGlyph::MissingPrimaryAscii { advance_width: 5.0 })
     ));
-    let result = atlas
+    let super::Rasterized::Ink(result) = atlas
         .rasterize_glyph(
             ' ',
             Some(&face),
@@ -770,7 +852,10 @@ fn renderer_keeps_missing_ascii_on_primary_font() {
             SubpixelBin::Zero,
             false,
         )
-        .expect("missing ASCII renders GNU's empty box");
+        .expect("missing ASCII renders GNU's empty box")
+    else {
+        panic!("missing ASCII must draw a visible empty box");
+    };
     assert_eq!(result.width, 5);
     assert_eq!(result.advance_width, 5.0);
     assert_eq!(result.height, 10);
@@ -852,6 +937,7 @@ fn renderer_replays_named_instance_weight_on_the_exact_raw_face() {
         descent_px: 0.0,
         space_advance_px: 0.0,
         glyph_advance: Default::default(),
+        spacing: None,
     };
 
     let attrs = atlas
@@ -903,6 +989,7 @@ fn renderer_exact_attrs_reject_an_unopenable_identity() {
         descent_px: 0.0,
         space_advance_px: 0.0,
         glyph_advance: Default::default(),
+        spacing: None,
     };
 
     assert!(atlas.exact_attrs_for_resolved_font(&font).is_none());
@@ -935,6 +1022,7 @@ fn renderer_replays_the_same_decoded_woff_face_as_layout() {
         descent_px: 4.0,
         space_advance_px: 8.0,
         glyph_advance: Default::default(),
+        spacing: None,
     };
     atlas.install_frame_fonts(
         &Default::default(),
@@ -1011,6 +1099,7 @@ fn renderer_replays_a_native_memory_asset_in_its_own_font_system() {
         descent_px: 4.0,
         space_advance_px: 8.0,
         glyph_advance: Default::default(),
+        spacing: None,
     };
     atlas.install_frame_fonts(
         &Default::default(),
@@ -1075,6 +1164,7 @@ fn reused_resolved_font_id_invalidates_renderer_identity_caches() {
             descent_px: 0.0,
             space_advance_px: 0.0,
             glyph_advance: Default::default(),
+            spacing: None,
         }
     };
     let mut first = ResolvedFontTable::default();
@@ -1138,6 +1228,7 @@ fn install_colrv1_memory_face(atlas: &mut WgpuGlyphAtlas) -> (ResolvedFontId, Re
         descent_px: 4.0,
         space_advance_px: 8.0,
         glyph_advance: Default::default(),
+        spacing: None,
     };
     let mut fonts = ResolvedFontTable::default();
     fonts.insert(id, font.clone());
@@ -1229,6 +1320,7 @@ fn install_nabla_memory_face(
         descent_px: 4.0,
         space_advance_px: 8.0,
         glyph_advance: Default::default(),
+        spacing: None,
     };
     let mut fonts = ResolvedFontTable::default();
     fonts.insert(resolved_id, font.clone());
@@ -1389,6 +1481,7 @@ fn colrv1_file_face_paints_through_a_derived_asset() {
             cosmic_text::SubpixelBin::Zero,
             None,
         )
+        .expect("the color source opens")
         .expect("a file face paints through a derived asset");
     assert_eq!(image.content, super::RasterContent::Color);
 }
@@ -1501,6 +1594,7 @@ fn mask_glyph_identities_ignore_the_foreground() {
         descent_px: 4.0,
         space_advance_px: 8.0,
         glyph_advance: Default::default(),
+        spacing: None,
     };
     let mut fonts = ResolvedFontTable::default();
     fonts.insert(color_id, atlas.frame_fonts.get(&color_id).unwrap().clone());

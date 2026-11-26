@@ -34,6 +34,7 @@ fn test_pdump_round_trip_basic() {
     crate::emacs_core::pdump::dump_to_file(&eval, &dump_path).expect("dump should succeed");
 
     // Load from dump
+    drop(eval);
     let loaded =
         crate::emacs_core::load_boot::load_from_dump(&dump_path).expect("load should succeed");
 
@@ -58,6 +59,7 @@ fn pdump_round_trip_rebuilds_native_boolean_forwarders() {
     let dir = tempfile::tempdir().unwrap();
     let dump_path = dir.path().join("native-boolean.pdump");
     crate::emacs_core::pdump::dump_to_file(&eval, &dump_path).expect("dump should succeed");
+    drop(eval);
     let mut loaded =
         crate::emacs_core::load_boot::load_from_dump(&dump_path).expect("load should succeed");
 
@@ -89,6 +91,7 @@ fn pdump_round_trip_preserves_selected_global_map_separately_from_lisp_variable(
     let dir = tempfile::tempdir().unwrap();
     let dump_path = dir.path().join("selected-global-map.pdump");
     crate::emacs_core::pdump::dump_to_file(&eval, &dump_path).expect("dump should succeed");
+    drop(eval);
     let mut loaded =
         crate::emacs_core::load_boot::load_from_dump(&dump_path).expect("load should succeed");
 
@@ -127,6 +130,7 @@ fn pdump_round_trip_preserves_buffer_text_backend_kind() {
         let dir = tempfile::tempdir().unwrap();
         let dump_path = dir.path().join(format!("{backend}-text-backend.pdump"));
         crate::emacs_core::pdump::dump_to_file(&eval, &dump_path).expect("dump should succeed");
+        drop(eval);
 
         let mut loaded =
             crate::emacs_core::load_boot::load_from_dump(&dump_path).expect("load should succeed");
@@ -196,6 +200,7 @@ fn file_pdump_round_trips_marker_positions_insertion_types_and_mark() {
     let dir = tempfile::tempdir().unwrap();
     let dump_path = dir.path().join("marker-roundtrip.pdump");
     crate::emacs_core::pdump::dump_to_file(&eval, &dump_path).expect("dump should succeed");
+    drop(eval);
     let mut loaded =
         crate::emacs_core::load_boot::load_from_dump(&dump_path).expect("load should succeed");
 
@@ -299,6 +304,7 @@ fn a_mapped_marker_set_into_a_buffer_keeps_tracking_edits_across_gcs() {
     let dir = tempfile::tempdir().unwrap();
     let dump_path = dir.path().join("chained-marker.pdump");
     crate::emacs_core::pdump::dump_to_file(&eval, &dump_path).expect("dump should succeed");
+    drop(eval);
     let mut loaded =
         crate::emacs_core::load_boot::load_from_dump(&dump_path).expect("load should succeed");
     let value = loaded
@@ -346,6 +352,7 @@ fn pdump_dumps_default_value_for_active_dynamic_plain_binding() {
     let dir = tempfile::tempdir().unwrap();
     let dump_path = dir.path().join("dynamic-plain.pdump");
     crate::emacs_core::pdump::dump_to_file(&eval, &dump_path).expect("dump should succeed");
+    drop(eval);
 
     let loaded =
         crate::emacs_core::load_boot::load_from_dump(&dump_path).expect("load should succeed");
@@ -372,7 +379,9 @@ fn restoring_the_live_runtime_after_a_clone_rebuilds_the_terminal_in_the_live_he
     crate::emacs_core::pdump::restore_active_runtime(&mut eval, &live_runtime);
     let handle = crate::emacs_core::terminal::pure::terminal_handle_value();
     assert!(
-        neovm_value::tagged::gc::with_tagged_heap(|heap| heap.owns_heap_value_for_test(handle)),
+        unsafe {
+            neovm_value::tagged::gc::with_tagged_heap(|heap| heap.owns_heap_value_for_test(handle))
+        },
         "the terminal handle must live in the reinstalled heap"
     );
     drop(cloned);
@@ -462,6 +471,7 @@ fn test_pdump_rejects_fingerprint_mismatch() {
     let fingerprint_start = 16 + 4 + 4 + 4 + 4;
     bytes[fingerprint_start] ^= 0x01;
     std::fs::write(&dump_path, bytes).expect("rewrite dump bytes");
+    drop(eval);
 
     match crate::emacs_core::load_boot::load_from_dump(&dump_path) {
         Err(crate::emacs_core::pdump::DumpError::FingerprintMismatch { expected, found }) => {
@@ -766,11 +776,12 @@ fn test_restore_snapshot_isolated_between_clones() {
     crate::test_utils::init_test_tracing();
     let template = crate::emacs_core::load_boot::create_bootstrap_evaluator_cached()
         .expect("bootstrap template should succeed");
+    let proof = template.hooks_installed();
     let snapshot = crate::emacs_core::pdump::snapshot_evaluator(&template);
+    drop(template);
 
-    let mut first =
-        crate::emacs_core::pdump::restore_snapshot(&snapshot, template.hooks_installed())
-            .expect("first clone should succeed");
+    let mut first = crate::emacs_core::pdump::restore_snapshot(&snapshot, proof)
+        .expect("first clone should succeed");
     let setup = crate::emacs_core::value_reader::read_all(
         "(progn
            (setq compat-pdump-clone-smoke 'first)
@@ -788,10 +799,10 @@ fn test_restore_snapshot_isolated_between_clones() {
         crate::emacs_core::print::print_value_with_buffers(&first_result, &first.edit.buffers),
         "first"
     );
+    let _parked_first = first.park_for_test();
 
-    let mut second =
-        crate::emacs_core::pdump::restore_snapshot(&snapshot, template.hooks_installed())
-            .expect("second clone should succeed");
+    let mut second = crate::emacs_core::pdump::restore_snapshot(&snapshot, proof)
+        .expect("second clone should succeed");
     let probe = crate::emacs_core::value_reader::read_all(
         "(boundp 'compat-pdump-clone-smoke)",
         crate::emacs_core::eval::VariableView::canonical(
@@ -981,6 +992,7 @@ fn pdump_round_trip_relinks_an_indirect_buffers_visited_file_modtime() {
     let dir = tempfile::tempdir().unwrap();
     let dump_path = dir.path().join("indirect-modtime.pdump");
     crate::emacs_core::pdump::dump_to_file(&eval, &dump_path).expect("dump should succeed");
+    drop(eval);
     let mut loaded =
         crate::emacs_core::load_boot::load_from_dump(&dump_path).expect("load should succeed");
 
@@ -1021,6 +1033,7 @@ fn pdump_round_trip_keeps_the_well_known_symbol_table_identity() {
     let dir = tempfile::tempdir().unwrap();
     let dump_path = dir.path().join("well-known-table.pdump");
     crate::emacs_core::pdump::dump_to_file(&eval, &dump_path).expect("dump should succeed");
+    drop(eval);
     let loaded =
         crate::emacs_core::load_boot::load_from_dump(&dump_path).expect("load should succeed");
 
@@ -1096,6 +1109,7 @@ fn pdump_round_trip_preserves_auto_save_failure_time() {
     let dir = tempfile::tempdir().unwrap();
     let dump_path = dir.path().join("auto-save-failure-time.pdump");
     crate::emacs_core::pdump::dump_to_file(&eval, &dump_path).expect("dump should succeed");
+    drop(eval);
     let loaded =
         crate::emacs_core::load_boot::load_from_dump(&dump_path).expect("load should succeed");
     assert_eq!(

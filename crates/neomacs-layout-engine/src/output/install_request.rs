@@ -82,6 +82,10 @@ pub(crate) enum OutputFrameArtifactInstallRequest {
         color: Color,
     },
     FaceFill(FaceFillItem),
+    FringeBackground {
+        bounds: Rect,
+        color: Color,
+    },
     Border {
         window_id: DisplayWindowId,
         x: f32,

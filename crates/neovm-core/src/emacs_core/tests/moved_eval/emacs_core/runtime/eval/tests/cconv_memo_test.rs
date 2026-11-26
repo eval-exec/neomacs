@@ -81,12 +81,41 @@ fn stats_mode_builds_the_same_closures_as_off() {
         "(let ((a 1) (b 2)) (lambda () 'nothing))",
         "(let ((a 1)) (lambda (x) \"doc\" (+ a x)))",
     ];
-    let mut off = startup(CconvMemoMode::Off);
-    let mut stats = startup(CconvMemoMode::Stats);
+    // Both contexts stay alive and alternate per form, so a process-global
+    // memo cannot hide by running one mode to completion first. Park empties
+    // the slot; the door then runs on that context's own heap.
+    let off = startup(CconvMemoMode::Off);
+    let mut parked_off = Some(off.park_for_test());
+    let stats = startup(CconvMemoMode::Stats);
+    let mut parked_stats = Some(stats.park_for_test());
     for form in forms {
-        assert_eq!(printed(&mut off, form), printed(&mut stats, form), "{form}");
+        let mut off = parked_off
+            .take()
+            .unwrap()
+            .resume_for_test()
+            .expect("resume off");
+        let off_printed = printed(&mut off, form);
+        parked_off = Some(off.park_for_test());
+        let mut stats = parked_stats
+            .take()
+            .unwrap()
+            .resume_for_test()
+            .expect("resume stats");
+        assert_eq!(printed(&mut stats, form), off_printed, "{form}");
+        parked_stats = Some(stats.park_for_test());
     }
+    let off = parked_off
+        .take()
+        .unwrap()
+        .resume_for_test()
+        .expect("resume off");
     assert_eq!(count(&off, CconvMemoEvent::Call), 0);
+    let _parked_off = off.park_for_test();
+    let stats = parked_stats
+        .take()
+        .unwrap()
+        .resume_for_test()
+        .expect("resume stats");
     assert_eq!(count(&stats, CconvMemoEvent::Trim), forms.len() as u64);
 }
 
@@ -509,7 +538,7 @@ fn constant_symbols(function: Value) -> Vec<Value> {
     let mut stack: Vec<Value> = function
         .get_bytecode_data()
         .expect("byte-code")
-        .constants
+        .constants()
         .iter()
         .copied()
         .collect();
@@ -520,9 +549,9 @@ fn constant_symbols(function: Value) -> Vec<Value> {
             stack.push(value.cons_car());
             stack.push(value.cons_cdr());
         } else if let Some(code) = value.get_bytecode_data() {
-            stack.extend(code.constants.iter().copied());
+            stack.extend(code.constants().iter().copied());
         } else if let Some(items) = value.as_vector_data() {
-            stack.extend(items.iter().copied());
+            stack.extend(items.iter());
         }
     }
     out
@@ -839,6 +868,9 @@ fn facts_changes_between_creations_miss() {
     let misses = count(&eval, CconvMemoEvent::MissFacts);
     let after_defvar = printed(&mut eval, "(cm-facts)");
     assert_eq!(count(&eval, CconvMemoEvent::MissFacts), misses + 1);
+    // The off-mode startup installs its own heap. Park the on-mode context
+    // so that install is not a second active Context, then resume it.
+    let parked_eval = eval.park_for_test();
     let mut off = startup(CconvMemoMode::Off);
     eval_ok(
         &mut off,
@@ -847,6 +879,10 @@ fn facts_changes_between_creations_miss() {
     assert_eq!(first, printed(&mut off, "(cm-facts)"));
     eval_ok(&mut off, "(defvar cm-later-special 0)");
     assert_eq!(after_defvar, printed(&mut off, "(cm-facts)"));
+    drop(off);
+    let mut eval = parked_eval
+        .resume_for_test()
+        .expect("cconv eval resumes on an empty slot");
 
     // A head that becomes a macro, a compiler macro, or an autoloaded macro.
     for (change, undo) in [
@@ -935,6 +971,7 @@ fn lexical_binding_of_the_current_buffer_is_part_of_the_key() {
     let mut off = startup(CconvMemoMode::Off);
     eval_ok(&mut off, form);
     let expected = printed(&mut off, probe);
+    drop(off);
     let mut on = startup(CconvMemoMode::On);
     eval_ok(&mut on, form);
     assert_eq!(printed(&mut on, probe), expected);
@@ -962,12 +999,16 @@ fn unmemoizable_and_mutated_bodies() {
                        (progn (setcar (cdr (car (aref (cm-u4) 1))) 'b) (cm-u4))
                        (cm-u4))";
     let mut off = startup(CconvMemoMode::Off);
-    let mut on = startup(CconvMemoMode::On);
     for form in forms {
         eval_ok(&mut off, form);
-        eval_ok(&mut on, form);
     }
     let expected = printed(&mut off, probe);
+    // The on-mode startup installs its own heap. The expected print is owned.
+    drop(off);
+    let mut on = startup(CconvMemoMode::On);
+    for form in forms {
+        eval_ok(&mut on, form);
+    }
     assert_eq!(printed(&mut on, probe), expected);
     assert!(
         count(&on, CconvMemoEvent::MissShape) >= 1,
@@ -1022,6 +1063,7 @@ fn creation_near_the_depth_limit_matches_the_lisp() {
         expected.contains("ok") && expected.contains("excessive-lisp-nesting"),
         "{expected}"
     );
+    drop(off);
     let mut on = startup(CconvMemoMode::On);
     eval_ok(&mut on, setup);
     eval_ok(&mut on, "(cm-deep 0)");
@@ -1043,26 +1085,58 @@ fn creation_near_the_depth_limit_matches_the_lisp() {
 #[test]
 fn memo_survives_garbage_collection() {
     crate::test_utils::init_test_tracing();
-    let mut eval = startup(CconvMemoMode::On);
+    let defun = "(defun cm-gc (v) (let ((a v) (b 2)) (lambda () (list a))))";
+    let eval = startup(CconvMemoMode::On);
+    let mut parked_on = Some(eval.park_for_test());
     let mut off = startup(CconvMemoMode::Off);
-    for ctx in [&mut eval, &mut off] {
-        eval_ok(
-            ctx,
-            "(defun cm-gc (v) (let ((a v) (b 2)) (lambda () (list a))))",
-        );
-    }
+    eval_ok(&mut off, defun);
+    let mut parked_off = Some(off.park_for_test());
+    let mut eval = parked_on
+        .take()
+        .unwrap()
+        .resume_for_test()
+        .expect("resume on");
+    eval_ok(&mut eval, defun);
     let probe = "(let (out) (dotimes (i 20) (push (cm-gc i) out) (garbage-collect)) out)";
-    assert_eq!(printed(&mut eval, probe), printed(&mut off, probe));
+    let on_probe = printed(&mut eval, probe);
+    parked_on = Some(eval.park_for_test());
+    let mut off = parked_off
+        .take()
+        .unwrap()
+        .resume_for_test()
+        .expect("resume off");
+    assert_eq!(on_probe, printed(&mut off, probe));
     // Fresh bodies each time (read anew), created and dropped under GC.
+    // On runs first, then off, matching the old both-live interleave.
     let fresh = "(let (out) (dotimes (i 20)
                    (push (funcall (eval (read \"(lambda (v) (let ((a v) (b 2)) (lambda () (list a b))))\") t) i) out)
                    (garbage-collect)) out)";
-    assert_eq!(printed(&mut eval, fresh), printed(&mut off, fresh));
+    parked_off = Some(off.park_for_test());
+    let mut eval = parked_on
+        .take()
+        .unwrap()
+        .resume_for_test()
+        .expect("resume on");
+    let on_fresh = printed(&mut eval, fresh);
+    parked_on = Some(eval.park_for_test());
+    let mut off = parked_off
+        .take()
+        .unwrap()
+        .resume_for_test()
+        .expect("resume off");
+    assert_eq!(on_fresh, printed(&mut off, fresh));
+    parked_off = Some(off.park_for_test());
+    let eval = parked_on
+        .take()
+        .unwrap()
+        .resume_for_test()
+        .expect("resume on");
     assert!(
         count(&eval, CconvMemoEvent::Served) >= 19,
         "{}",
         eval.cconv_memo_report()
     );
+    drop(parked_off);
 }
 
 /// A collection that completes while the memo observes a Lisp run (here a
@@ -1206,6 +1280,7 @@ fn fast_untrimmed_path_builds_what_the_lisp_builds() {
         "{}",
         fast.cconv_memo_report()
     );
+    drop(fast);
     let mut verify = startup_fast(CconvMemoMode::Verify);
     assert_eq!(untrimmed_transcript(&mut verify), expected);
     assert!(
@@ -1243,10 +1318,18 @@ fn fast_untrimmed_path_leaves_edge_cases_to_the_lisp() {
                    (dotimes (i 60)
                      (push (condition-case err (progn (cm-e-deep (+ 150 i)) 'ok) (error (car err))) out))
                    (nreverse out))";
+    // Off-mode startup installs its own heap. Park the fast context, then
+    // resume it once the off-mode probe string is owned.
+    let parked_eval = eval.park_for_test();
     let mut off = startup(CconvMemoMode::Off);
     eval_ok(&mut off, setup);
+    let off_probe = printed(&mut off, probe);
+    drop(off);
+    let mut eval = parked_eval
+        .resume_for_test()
+        .expect("cconv eval resumes on an empty slot");
     eval_ok(&mut eval, setup);
-    assert_eq!(printed(&mut eval, probe), printed(&mut off, probe));
+    assert_eq!(printed(&mut eval, probe), off_probe);
     assert!(
         count(&eval, CconvMemoEvent::FastRefused) > 0,
         "{}",
@@ -1295,11 +1378,13 @@ fn verify_soak_on_gnu_sources() {
         "{report}"
     );
     tracing::info!("verify soak: {report}");
+    drop(verify);
 
     let mut off = startup(CconvMemoMode::Off);
     eval_ok(&mut off, load);
     let expected = printed(&mut off, work);
     assert_eq!(verified, expected);
+    drop(off);
     let mut on = startup_fast(CconvMemoMode::On);
     eval_ok(&mut on, load);
     assert_eq!(printed(&mut on, work), expected);

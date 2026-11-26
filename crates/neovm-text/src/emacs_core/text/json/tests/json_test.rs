@@ -804,8 +804,8 @@ fn parse_nested_hash_tables_during_concurrent_gen1_mark() {
     let nested = member(parsed, "nested");
     let objects = nested.as_vector_data().unwrap();
     assert_eq!(objects.len(), 2);
-    let inner = objects[0];
-    let empty = objects[1];
+    let inner = objects.at(0);
+    let empty = objects.at(1);
     let replacement = member(inner, "drop");
     let number = member(inner, "number");
     let fraction = member(inner, "fraction");
@@ -834,8 +834,8 @@ fn parse_nested_hash_tables_during_concurrent_gen1_mark() {
     heap.reseed_runtime_and_remembered_roots();
     heap.seed_root(holder);
     heap.incremental_drain_all();
-    heap.incremental_finish(heap.live_bytes(), Instant::now());
-    heap.finish_incremental_sweep_now();
+    heap.incremental_finish_for_test(heap.live_bytes(), Instant::now());
+    heap.finish_incremental_sweep_now_for_test();
     assert!(!gc::concurrent_hash_mutation_active());
 
     for value in [
@@ -865,7 +865,7 @@ fn parse_nested_hash_tables_during_concurrent_gen1_mark() {
         Some(parsed),
     );
 
-    heap.collect(std::iter::empty());
+    heap.collect_rooted(std::iter::empty());
     for value in [
         holder,
         parsed,
@@ -896,7 +896,7 @@ fn parse_nested_hash_error_releases_inactive_guard_before_collection() {
     }
     // This collector entry asserts that the complete inactive parser extent
     // unwound its debug guard, including the recursively nested object.
-    heap.collect(std::iter::empty());
+    heap.collect_rooted(std::iter::empty());
 }
 
 #[test]

@@ -138,7 +138,7 @@ fn partitioned_heap_owners(heap: &mut TaggedHeap) -> Owners {
         ImageStamp::Stamped
     );
     // The first partition cycle makes image residents permanent (tenured).
-    heap.collect_exact(std::iter::once(root));
+    heap.collect_rooted(std::iter::once(root));
     assert!(heap.value_is_tenured(tenured_vector));
     assert!(heap.value_is_tenured(remembered_vector));
     // One write remembers this owner.
@@ -303,7 +303,7 @@ fn the_window_is_republished_at_every_writer_of_its_inputs() {
 
     let root = heap.alloc_cons(TaggedValue::fixnum(1), TaggedValue::NIL);
     // The first partition cycle is stop-the-world; the second is concurrent.
-    heap.collect_exact(std::iter::once(root));
+    heap.collect_rooted(std::iter::once(root));
     heap.concurrent_begin();
     heap.seed_root(root);
     assert_eq!(published_barrier_window(), wider, "before the launch");
@@ -318,22 +318,29 @@ fn the_window_is_republished_at_every_writer_of_its_inputs() {
     heap.seed_root(root);
     let bytes_before = heap.live_bytes();
     heap.incremental_drain_all();
-    heap.incremental_finish(bytes_before, std::time::Instant::now());
-    heap.finish_incremental_sweep_now();
+    heap.incremental_finish_for_test(bytes_before, std::time::Instant::now());
+    heap.finish_incremental_sweep_now_for_test();
     assert_eq!(published_barrier_window(), wider, "after the sweep");
 
     // Installing another heap re-derives its window; reinstalling this one
     // re-derives this one's; uninstalling clears it.
     let mut other = legacy_gate_heap();
+    // SAFETY: bare `TaggedHeap` unit test switching to `other`; seed the prior
+    // window so `set_tagged_heap(&mut other)` must still re-derive `NONE`.
+    unsafe { clear_tagged_heap_if_installed(&heap) };
+    TAGGED_HEAP_BARRIER_WINDOW.with(|w| w.set(wider));
     set_tagged_heap(&mut other);
     assert_eq!(
         published_barrier_window(),
         BarrierWindow::NONE,
         "other heap"
     );
+    // SAFETY: bare `TaggedHeap` unit test switching back to `heap`.
+    unsafe { clear_tagged_heap_if_installed(&other) };
     set_tagged_heap(&mut heap);
     assert_eq!(published_barrier_window(), wider, "reinstalled");
-    clear_tagged_heap_if_installed(&heap);
+    // SAFETY: bare `TaggedHeap` unit test checking barrier-window reset on clear.
+    unsafe { clear_tagged_heap_if_installed(&heap) };
     assert_eq!(
         published_barrier_window(),
         BarrierWindow::NONE,
@@ -378,7 +385,7 @@ fn the_remembered_bit_is_set_exactly_when_the_owner_is_remembered() {
     for owner in [image, quiet, parent] {
         assert!(!header_remembered(owner), "{owner:?} starts unremembered");
     }
-    heap.collect_exact(std::iter::once(root));
+    heap.collect_rooted(std::iter::once(root));
 
     // Promotion: the scan remembers the tenured owner holding a young cons.
     assert!(heap.value_is_tenured(parent));

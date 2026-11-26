@@ -22,3 +22,15 @@ path = "tests/keeper.rs"
 [[test]]
 name = "lifetime_contracts"
 path = "tests/lifetime_contracts.rs"
+
+[[test]]
+name = "safety_gate"
+path = "tests/safety_gate.rs"
+
+[[test]]
+name = "seam"
+path = "tests/seam.rs"
+
+[[test]]
+name = "tsan_scaffold"
+path = "tests/tsan_scaffold.rs"

@@ -518,6 +518,7 @@ fn bidi_identity_preserves_media_gaps_orphan_padding_and_empty_composite() {
         source_rect: neomacs_display_protocol::ImageSourceRect::FULL,
         margins,
         opaque_background: neomacs_display_protocol::ImageOpaqueBackground::new(Some(0x123456)),
+        presentation: neomacs_display_protocol::ImageGlyphPresentation::Texture,
     };
     let mut empty = Glyph::char('?', FaceId::new(2), 103);
     empty.glyph_type = GlyphType::Composite { text: "".into() };

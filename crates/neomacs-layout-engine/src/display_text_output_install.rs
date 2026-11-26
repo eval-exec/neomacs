@@ -37,6 +37,8 @@ pub(crate) struct DisplayOutputTextWindowBeginInstallRequest {
     text_clip_bounds: Rect,
     selected: bool,
     row_capacity: crate::output::window_request::OutputWindowRowCapacity,
+    bidi_paragraph_directions: crate::bidi::ParagraphDirections,
+    text_geometry_units: neomacs_display_protocol::glyph_matrix::TextGeometryUnits,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -82,7 +84,26 @@ impl DisplayOutputTextWindowBeginInstallRequest {
             text_clip_bounds,
             selected,
             row_capacity: crate::output::window_request::OutputWindowRowCapacity::Fixed,
+            bidi_paragraph_directions: crate::bidi::ParagraphDirections::default(),
+            text_geometry_units: neomacs_display_protocol::glyph_matrix::TextGeometryUnits::default(
+            ),
         }
+    }
+
+    pub(crate) fn with_bidi_paragraph_directions(
+        mut self,
+        direction: crate::bidi::ParagraphDirections,
+    ) -> Self {
+        self.bidi_paragraph_directions = direction;
+        self
+    }
+
+    pub(crate) fn with_text_geometry_units(
+        mut self,
+        units: neomacs_display_protocol::glyph_matrix::TextGeometryUnits,
+    ) -> Self {
+        self.text_geometry_units = units;
+        self
     }
 
     pub(crate) fn with_row_capacity(
@@ -104,7 +125,9 @@ impl DisplayOutputTextWindowBeginInstallRequest {
                 self.text_clip_bounds,
                 self.selected,
             )
-            .with_row_capacity(self.row_capacity),
+            .with_row_capacity(self.row_capacity)
+            .with_bidi_paragraph_directions(self.bidi_paragraph_directions)
+            .with_text_geometry_units(self.text_geometry_units),
         );
     }
 }

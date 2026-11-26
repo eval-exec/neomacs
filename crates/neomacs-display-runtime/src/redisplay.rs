@@ -20,6 +20,7 @@ use neomacs_layout_engine::engine::{
 use neomacs_layout_engine::font::metrics::FontMetricsService;
 use neomacs_layout_engine::font::sizing::FontSizing;
 use neovm_core::emacs_core::eval::Context;
+use neovm_core::emacs_core::{Value, error::EvalResult};
 use neovm_core::window::geometry::{PresentationActivateError, PresentationId};
 use neovm_core::window::{FrameId, WindowId, WindowLayoutQueryOutcome};
 
@@ -134,6 +135,15 @@ pub struct RedisplayRuntime {
     display_identity: RefCell<Option<GraphicalDisplayIdentity>>,
 }
 
+/// Transport outcome when delivering a native auxiliary scroll-coverage
+/// snapshot from the evaluator thread to the render thread.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AuxiliaryCoverageDelivery {
+    Delivered,
+    QueueFull,
+    Disconnected,
+}
+
 impl RedisplayRuntime {
     pub fn resolved_scroll_preview(
         &self,
@@ -151,19 +161,85 @@ impl RedisplayRuntime {
     pub fn maintain_scroll_coverage(
         &self,
         evaluator: &Context,
-    ) -> (Option<std::time::Duration>, bool) {
+    ) -> neovm_core::emacs_core::eval::DisplayMaintenanceOutcome {
+        self.maintain_scroll_coverage_with_delivery(evaluator, |_| {
+            AuxiliaryCoverageDelivery::Disconnected
+        })
+    }
+
+    pub fn maintain_scroll_coverage_with_delivery(
+        &self,
+        evaluator: &Context,
+        mut deliver: impl FnMut(
+            neomacs_display_protocol::scroll_coverage::AuxiliaryScrollCoverage,
+        ) -> AuxiliaryCoverageDelivery,
+    ) -> neovm_core::emacs_core::eval::DisplayMaintenanceOutcome {
+        use neomacs_layout_engine::engine::AuxiliaryPreparation;
+        use neovm_core::emacs_core::eval::{
+            DisplayMaintenanceOutcome, DisplayMaintenancePublication,
+        };
         let Ok(mut engine) = self.engine.try_borrow_mut() else {
-            return (None, false);
+            return DisplayMaintenanceOutcome::default();
         };
         let started = std::time::Instant::now();
-        let (progress, publish) = maintenance::run_budgeted(
+        let (progress, actionable) = maintenance::run_budgeted(
             || {
                 let progress = engine.maintain_scroll_coverage(evaluator);
-                (progress, engine.take_scroll_coverage_publication())
+                let actionable = engine.has_actionable_scroll_coverage_publication(evaluator);
+                (progress, actionable)
             },
             || started.elapsed(),
         );
-        (progress.map(|progress| progress.next_wake()), publish)
+        let mut next_wake = progress.map(|progress| progress.next_wake());
+        if !actionable {
+            return DisplayMaintenanceOutcome {
+                next_wake,
+                publication: DisplayMaintenancePublication::Idle,
+            };
+        }
+        match engine.prepare_auxiliary_scroll_coverage(evaluator) {
+            AuxiliaryPreparation::Ready(prepared) => {
+                let update = prepared.clone_update();
+                match deliver(update) {
+                    AuxiliaryCoverageDelivery::Delivered => {
+                        let withdrawal_after_refusal = prepared.refusal_reason().is_some();
+                        engine.commit_auxiliary_scroll_coverage(prepared);
+                        DisplayMaintenanceOutcome {
+                            next_wake,
+                            publication: if withdrawal_after_refusal {
+                                DisplayMaintenancePublication::Deferred
+                            } else {
+                                DisplayMaintenancePublication::PublishedNatively
+                            },
+                        }
+                    }
+                    AuxiliaryCoverageDelivery::QueueFull => {
+                        engine.defer_auxiliary_scroll_coverage(evaluator, prepared, false);
+                        let retry = std::time::Duration::from_millis(4);
+                        next_wake = Some(next_wake.map_or(retry, |delay| delay.min(retry)));
+                        DisplayMaintenanceOutcome {
+                            next_wake,
+                            publication: DisplayMaintenancePublication::Deferred,
+                        }
+                    }
+                    AuxiliaryCoverageDelivery::Disconnected => {
+                        engine.defer_auxiliary_scroll_coverage(evaluator, prepared, true);
+                        DisplayMaintenanceOutcome {
+                            next_wake,
+                            publication: DisplayMaintenancePublication::Deferred,
+                        }
+                    }
+                }
+            }
+            AuxiliaryPreparation::NoChange => DisplayMaintenanceOutcome {
+                next_wake,
+                publication: DisplayMaintenancePublication::Idle,
+            },
+            AuxiliaryPreparation::Refused(_) => DisplayMaintenanceOutcome {
+                next_wake,
+                publication: DisplayMaintenancePublication::Deferred,
+            },
+        }
     }
 
     /// Construct a runtime without the expensive scalable-font database.
@@ -257,6 +333,58 @@ impl RedisplayRuntime {
         )
     }
 
+    /// The installed `font->driver->text_extents` seam (GNU
+    /// `font_fill_lglyph_metrics`): encoded code and unshaped extents for
+    /// one character of an opened font object.  Uses the same disjoint
+    /// shaping-metrics instance the shaping driver uses, so a call from a
+    /// gstring constructor during a layout/redisplay borrow cannot conflict
+    /// with the engine.
+    pub fn glyph_text_metrics(
+        &self,
+        font: neovm_core::Value,
+        ch: u32,
+    ) -> Option<neovm_core::display_vocab::GlyphTextMetrics> {
+        let (family, pixel_size) =
+            neovm_core::emacs_core::font::font_object_family_and_pixel_size(&font)?;
+        let ch = char::from_u32(ch)?;
+        let selection = neomacs_layout_engine::font::metrics::RealizedFaceFontSelection::new(
+            &family,
+            400,
+            false,
+            pixel_size as f32,
+        );
+        let metrics = self
+            .shaping_metrics
+            .borrow_mut()
+            .gstring_glyph_metrics_for_realized_face_char(ch, selection)?;
+        Some(neovm_core::display_vocab::GlyphTextMetrics {
+            code: metrics.code,
+            width: metrics.extents.advance_px as i64,
+            lbearing: metrics.extents.lbearing_px as i64,
+            rbearing: metrics.extents.rbearing_px as i64,
+            ascent: metrics.extents.ascent_px as i64,
+            descent: metrics.extents.descent_px as i64,
+        })
+    }
+
+    /// Face id and arena epoch redisplay sealed for a buffer position.
+    ///
+    /// `font-at` can run while redisplay still holds the engine (a mode line,
+    /// for example). That borrow must miss instead of panicking: the caller
+    /// keeps the implicit fontset until the sealed arena is free to read.
+    pub fn realized_fontset_for_lisp_pos(
+        &self,
+        evaluator: &mut Context,
+        frame: FrameId,
+        window: WindowId,
+        lisp_pos: i64,
+    ) -> Option<(u32, u64)> {
+        let Ok(mut engine) = self.engine.try_borrow_mut() else {
+            return None;
+        };
+        engine.realized_fontset_for_lisp_pos(evaluator, frame, window, lisp_pos)
+    }
+
     /// Produce one logical frame through the presentation engine.
     pub fn prepare_frame(
         &self,
@@ -291,19 +419,40 @@ impl RedisplayRuntime {
         }
     }
 
-    /// Prepare only mini/echo geometry before the owned hook pass. This uses
-    /// the exclusively borrowed idle presentation engine, publishes no paint
-    /// ticket, and carries a callback Flow to the enclosing transaction.
+    /// Answer a nested preparation using the geometry already committed in
+    /// Context. The caller has stored the echo text; an active producer must
+    /// keep its window bounds and starts stable until its walk finishes.
+    ///
+    /// Nil is the ordinary unchanged-height result. The next complete
+    /// redisplay still requests mini geometry and runs the full producer.
+    /// A whole-pass lease can use this answer without borrowing its engine.
+    pub fn retain_committed_minibuffer_geometry() -> EvalResult {
+        Ok(Value::NIL)
+    }
+
+    /// Prepare only mini/echo geometry before the owned hook pass. An idle
+    /// engine runs the full producer; a nested request keeps committed
+    /// geometry. Neither answer publishes a paint ticket. Producer Flow still
+    /// belongs to the enclosing transaction.
     pub fn prepare_minibuffer_geometry(
         &self,
         evaluator: &mut Context,
         request: neovm_core::emacs_core::eval::RedisplayMiniGeometryRequest,
     ) -> Result<neovm_core::emacs_core::Value, neovm_core::emacs_core::error::Flow> {
-        let mut engine = self.engine.try_borrow_mut().map_err(|_| {
-            evaluator.failed_redisplay_mini_preparation(
-                neovm_core::emacs_core::eval::RedisplayMiniPreparationFailure::PresentationBorrowed,
-            )
-        })?;
+        let Ok(mut engine) = self.engine.try_borrow_mut() else {
+            // A fontification callback in a synchronous window-end query can
+            // rebind inhibit-redisplay and call message. GNU accepts a
+            // same-height message here; a Rust borrow conflict is not a Lisp
+            // error and cannot authorize a second preparatory row walk.
+            // A taller message remains a known divergence: GNU grows the mini
+            // window synchronously, echo_area_display runs redisplay_internal,
+            // and dsafe__call throws to top-level so window-end never returns.
+            // This committed answer returns without growing. Follow-up
+            // N-mini-taller-message pairs a two-line message with
+            // resize-mini-windows=t, records mini height inside the callback,
+            // and distinguishes top-level exit from normal query completion.
+            return Self::retain_committed_minibuffer_geometry();
+        };
         engine.prepare_minibuffer_geometry(evaluator, request)
     }
 

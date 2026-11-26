@@ -21,7 +21,7 @@ impl ToolbarImageStore for TestImages {
 
 fn key(size: u32, fg: Color, bg: Color, scale: f32, path: &str) -> ToolBarIconKey {
     ToolBarIconStyle::from_chrome_face(size, fg, bg).realize(
-        ToolBarImageSource::File { path: path.into() },
+        ToolBarImageSource::ThemedVector { path: path.into() },
         DeviceScale::new(scale).unwrap(),
     )
 }

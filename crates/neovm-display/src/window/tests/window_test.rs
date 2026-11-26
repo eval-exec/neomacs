@@ -1399,9 +1399,9 @@ fn gui_default_parameters_seed_scroll_bar_and_fringe_chrome() {
     // GNU's gui_default_parameter (xfns.c) seeds these on every GUI frame.
     // Without them, `(frame-parameter f 'vertical-scroll-bars)` reports nil even
     // though the layout already reserves and draws the scroll bar — the frame
-    // parameter lied about what is on screen. Each seeded value equals the layout
-    // fallback in window/display.rs, so this is a reporting fix, not a geometry
-    // change. scroll-bar-width stays unseeded on purpose: GNU reports the
+    // parameter lied about what is on screen. NS additionally reserves its
+    // canonical two-pixel internal border (nsfns.m:1348); GTK defaults to zero.
+    // scroll-bar-width stays unseeded on purpose: GNU reports the
     // configured thickness from `frame-parameter' even when the alist has no
     // entry (src/frame.c:5437-5456), and Neomacs answers it from
     // frame_config_scroll_bar_width's toolkit default (16) in the parameter
@@ -1424,7 +1424,7 @@ fn gui_default_parameters_seed_scroll_bar_and_fringe_chrome() {
     );
     assert_eq!(
         frame.known_parameter(FrameParam::InternalBorderWidth),
-        Some(Value::fixnum(0))
+        Some(Value::fixnum(if cfg!(target_os = "macos") { 2 } else { 0 }))
     );
     assert_eq!(
         frame.known_parameter(FrameParam::BorderWidth),
@@ -1853,7 +1853,7 @@ fn prepared_and_active_chrome_strings_are_rooted_by_their_shared_roots() {
     let collect = |heap: &mut neovm_value::tagged::gc::TaggedHeap| {
         let mut roots = Vec::new();
         neovm_value::tagged::transport::collect_shared_root_gc_roots(&heap, &mut roots);
-        heap.collect_exact(roots.into_iter());
+        heap.collect_rooted(roots.into_iter());
     };
     // SAFETY: `displayed` was just allocated by this heap. All collections
     // below seed the shared-root table, and the heap outlives materialization
@@ -1924,7 +1924,7 @@ fn frozen_chrome_clone_keeps_shared_root_alive_until_last_collection_drop() {
     let collect = |heap: &mut neovm_value::tagged::gc::TaggedHeap| {
         let mut roots = Vec::new();
         neovm_value::tagged::transport::collect_shared_root_gc_roots(&heap, &mut roots);
-        heap.collect_exact(roots.into_iter());
+        heap.collect_rooted(roots.into_iter());
     };
     collect(&mut heap);
     assert!(heap.owns_heap_value_for_test(displayed));
@@ -2464,7 +2464,7 @@ fn window_parameters() {
 }
 
 #[test]
-fn layout_freshness_types_late_chrome_cache_writes_separately_from_body_mutations() {
+fn layout_freshness_admits_late_chrome_cache_and_source_writes_after_body() {
     crate::test_utils::init_test_tracing();
     let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let buffer_id = eval
@@ -2511,8 +2511,13 @@ fn layout_freshness_types_late_chrome_cache_writes_separately_from_body_mutation
         .expect("freshness after body mutation");
     assert!(
         !after_chrome_cache
+            .remains_valid_across(&after_body_mutation, WindowLayoutLispBoundary::BufferBody,)
+    );
+    assert!(
+        after_chrome_cache
             .remains_valid_across(&after_body_mutation, WindowLayoutLispBoundary::WindowChrome,)
     );
+    assert_ne!(after_chrome_cache, after_body_mutation);
 }
 
 #[test]

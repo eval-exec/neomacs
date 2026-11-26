@@ -80,12 +80,13 @@ pub(crate) fn smoke_compile_add(arg: i64, addend: i64) -> Result<i64, BackendErr
     // 6. Fetch the finalized code pointer and call it.
     let code_ptr = module.get_finalized_function(fid);
     // SAFETY: `code_ptr` points at freshly-finalized native code whose ABI is
-    // exactly `extern "C" fn(i64) -> i64` — it matches the Cranelift signature
-    // built above (one i64 param, one i64 return, platform call conv). `module`
-    // owns the executable memory and is kept alive until after the call returns,
+    // exactly `unsafe extern "C" fn(i64) -> i64` — it matches the Cranelift
+    // signature built above (one i64 param, one i64 return, platform call
+    // conv). The call is unsafe because that pointer type is. `module` owns
+    // the executable memory and is kept alive until after the call returns,
     // so the code is not unmapped while we are running it.
     let result = unsafe {
-        let f: extern "C" fn(i64) -> i64 = core::mem::transmute(code_ptr);
+        let f: unsafe extern "C" fn(i64) -> i64 = core::mem::transmute(code_ptr);
         f(arg)
     };
 
@@ -109,7 +110,7 @@ fn build_smoke_fn<M: Module>(
     addend: i64,
 ) -> Result<cranelift_module::FuncId, BackendError> {
     // The platform C calling convention (SystemV on Linux x86-64), which matches
-    // the `extern "C" fn` type the JIT wrapper transmutes the finalized pointer
+    // the `unsafe extern "C" fn` type the JIT wrapper transmutes the finalized pointer
     // to. Derived from the module's own target config, so it is correct for both
     // the JIT host ISA and any AOT target ISA.
     let frontend_config = module.target_config();

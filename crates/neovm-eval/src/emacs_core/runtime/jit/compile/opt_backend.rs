@@ -459,7 +459,7 @@ pub(super) fn build_census(f: &ByteCodeFunction, fused: Option<&inline::FusedBod
         has_rest: shape.rest().is_present(),
     };
     let prefix = f.jit_runtime().patched_prefix();
-    let masked = mask_dynamic_prefix(&f.constants, prefix);
+    let masked = mask_dynamic_prefix(f.constants(), prefix);
     let (ops, constants, offsets) = match fused {
         Some(body) => (
             body.ops.as_slice(),

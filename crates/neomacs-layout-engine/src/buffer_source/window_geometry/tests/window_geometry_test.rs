@@ -48,6 +48,7 @@ fn window_params() -> WindowParams {
         tab_stop_list: vec![],
         default_fg: 0x00ff_ffff,
         frame_foreground: 0x00ff_ffff,
+        frame_background: 0,
         default_bg: 0,
         char_width: 8.0,
         char_height: 16.0,
@@ -93,6 +94,7 @@ fn window_params() -> WindowParams {
         horizontal_scroll_bar: false,
         scroll_bar_pixel_width: 0.0,
         scroll_bar_pixel_height: 0.0,
+        bidi_paragraph_directions: Default::default(),
     }
 }
 
@@ -772,5 +774,23 @@ fn semantic_matrix_exhaustion_is_independent_of_fixed_viewport_limits() {
         !context
             .with_desired_matrix_rows(None)
             .glyph_matrix_capacity_exhausted(&row(9, 60.0))
+    );
+}
+
+#[test]
+fn widen_body_for_shorter_face_widens_for_one_pixel_shorter_face() {
+    let mut params = window_params();
+    params.bounds.height = 565.0;
+    params.text_bounds.height = 565.0;
+    params.char_height = 19.0;
+    params.smallest_opened_font_height = None;
+    let request = geometry_request(&params, 10.0, 19.0, 0.0, 0.0, 0.0);
+    let mut geometry = request.into_geometry(LineNumberFieldLayout::new(0, params.char_width));
+    assert_eq!(geometry.matrix_body_rows, 30);
+    geometry.widen_body_for_shorter_face(18.0);
+    assert!(
+        geometry.matrix_body_rows >= 32,
+        "a 1px shorter face (18px vs 19px) saves >1 row across a 565px viewport; got {}",
+        geometry.matrix_body_rows
     );
 }

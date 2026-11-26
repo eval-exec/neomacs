@@ -214,6 +214,9 @@ fn point_min_and_max_markers_follow_narrowing() {
     let max_marker = builtin_point_max_marker_in_buffers(&mut eval.edit.buffers, vec![])
         .expect("point-max-marker");
 
+    // The position helper installs its own context. Park this one so the
+    // marker values stay allocated on a heap that is no longer active.
+    let _parked = eval.park_for_test();
     assert_eq!(
         call_marker_position(vec![min_marker]).unwrap(),
         Value::fixnum(2)
@@ -240,6 +243,7 @@ fn mark_marker_follows_cached_mark_char_position() {
     );
 
     let marker = builtin_mark_marker(&mut eval.edit.buffers, vec![]).expect("mark-marker");
+    let _parked = eval.park_for_test();
     assert_eq!(
         call_marker_position(vec![marker]).unwrap(),
         Value::fixnum(2)
@@ -258,6 +262,7 @@ fn mark_marker_with_no_mark_returns_detached() {
     let mut eval = crate::test_utils::new_context();
     // Don't set a mark; default buffer has no mark.
     let marker = builtin_mark_marker(&mut eval.edit.buffers, vec![]).expect("mark-marker");
+    let _parked = eval.park_for_test();
     assert!(
         call_marker_buffer(vec![marker]).unwrap().is_nil(),
         "(marker-buffer (mark-marker)) should be nil when mark is unset"

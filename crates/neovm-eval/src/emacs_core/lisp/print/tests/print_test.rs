@@ -565,10 +565,10 @@ fn print_default_handles_self_referential_bytecode_constants() {
     let _harness = crate::test_utils::unit_harness();
     let mut function =
         crate::emacs_core::bytecode::ByteCodeFunction::new(LambdaParams::simple(vec![]));
-    function.constants.ensure_owned().push(Value::NIL);
+    function.constants_mut().ensure_owned().push(Value::NIL);
     let bytecode = Value::make_bytecode(function);
     neovm_value::test_support::authority::with_bytecode_data_mut_for_test(bytecode, |data| {
-        data.constants[0] = bytecode
+        data.constants_mut()[0] = bytecode
     });
 
     assert_eq!(print_value(&bytecode), "#[nil nil [#0] 0]");
@@ -587,7 +587,7 @@ fn print_default_uses_gnu_depth_for_nested_bytecode_backrefs() {
     let record = Value::make_record(vec![Value::symbol("foo"), Value::NIL]);
     let mut function =
         crate::emacs_core::bytecode::ByteCodeFunction::new(LambdaParams::simple(vec![]));
-    function.constants.ensure_owned().push(record);
+    function.constants_mut().ensure_owned().push(record);
     let bytecode = Value::make_bytecode(function);
     record.with_record_data_mut(|slots| slots[1] = bytecode);
 

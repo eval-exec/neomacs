@@ -445,12 +445,7 @@ struct WpeRuntime {
 ///    (verified on a Raptor Lake + RTX 4070 Max-Q machine).
 /// 3. Nothing — single-GPU machines and unknown topologies keep WebKit's
 ///    own inference.
-fn select_wpe_device() -> Option<String> {
-    if let Some(path) =
-        std::env::var_os("WPE_DRM_RENDER_NODE").or_else(|| std::env::var_os("WPE_DRM_DEVICE"))
-    {
-        return Some(path.to_string_lossy().into_owned());
-    }
+fn scan_drm_render_nodes() -> Option<Vec<(String, String)>> {
     let mut enumerator = udev::Enumerator::new().ok()?;
     enumerator.match_subsystem("drm").ok()?;
     let mut nodes: Vec<(String, String)> = Vec::new();
@@ -466,12 +461,28 @@ fn select_wpe_device() -> Option<String> {
         }
         nodes.push((name, drm_node_driver(&device)));
     }
+    Some(nodes)
+}
+
+fn select_wpe_device_with(
+    scan_nodes: impl FnOnce() -> Option<Vec<(String, String)>>,
+) -> Option<String> {
+    if let Some(path) =
+        std::env::var_os("WPE_DRM_RENDER_NODE").or_else(|| std::env::var_os("WPE_DRM_DEVICE"))
+    {
+        return Some(path.to_string_lossy().into_owned());
+    }
+    let nodes = scan_nodes()?;
     // No driver could be determined at all: let WebKit's inference decide
     // rather than blindly pinning the first node.
     if nodes.iter().all(|(_, driver)| driver.is_empty()) {
         return None;
     }
     pick_render_node(nodes).map(|name| format!("/dev/dri/{name}"))
+}
+
+fn select_wpe_device() -> Option<String> {
+    select_wpe_device_with(scan_drm_render_nodes)
 }
 
 /// Kernel driver name of a DRM node, walked up to its PCI ancestor: the
@@ -509,6 +520,37 @@ fn pick_render_node(mut nodes: Vec<(String, String)>) -> Option<String> {
         .map(|(name, _)| name)
 }
 
+/// Select and export the WPE DRM render node into the process environment
+/// before any worker threads exist.
+///
+/// WebKit's web process is spawned as a child process and inherits
+/// `WPE_DRM_DEVICE` / `WPE_DRM_RENDER_NODE` from the parent environment.
+/// Mutating the environment on the reactor thread races concurrent C
+/// `getenv`/`environ` readers on other threads, so this must run once while
+/// the process is still single-threaded.
+///
+/// # Safety
+/// The caller must ensure no other threads exist in the current process.
+pub(crate) unsafe fn configure_before_threads() {
+    // SAFETY: caller guarantees this process is single-threaded.
+    unsafe { configure_before_threads_with(scan_drm_render_nodes) };
+}
+
+/// # Safety
+/// The caller must ensure no other threads exist in the current process.
+unsafe fn configure_before_threads_with(
+    scan_nodes: impl FnOnce() -> Option<Vec<(String, String)>>,
+) {
+    if let Some(path) = select_wpe_device_with(scan_nodes) {
+        // SAFETY: caller guarantees this process is single-threaded.
+        unsafe {
+            std::env::set_var("WPE_DRM_DEVICE", &path);
+            std::env::set_var("WPE_DRM_RENDER_NODE", &path);
+        }
+        tracing::info!("neomacs-webview: pre-thread WPE DRM device = {path}");
+    }
+}
+
 impl WpeRuntime {
     unsafe fn new(
         config: WebViewSystemConfig,
@@ -516,24 +558,27 @@ impl WpeRuntime {
         mailbox: Arc<ReactorMailbox>,
         wake: WebViewWake,
     ) -> Result<Self, String> {
+        Self::new_with_device_selector(config, sender, mailbox, wake, select_wpe_device)
+    }
+
+    unsafe fn new_with_device_selector(
+        config: WebViewSystemConfig,
+        sender: ReactorSender,
+        mailbox: Arc<ReactorMailbox>,
+        wake: WebViewWake,
+        device_selector: impl FnOnce() -> Option<String>,
+    ) -> Result<Self, String> {
         // WebKit's headless backend infers a DRM device when none is given,
         // and on multi-GPU machines it can pick the node whose buffers the
         // importer cannot import (gbm_bo_import failure in
         // AcceleratedBackingStore, then a WebKit crash).  Resolve the device
-        // explicitly: WPE_DRM_RENDER_NODE / WPE_DRM_DEVICE overrides first,
-        // then the automatic policy below.
-        let selected_device = select_wpe_device();
+        // explicitly (read-only: `WPE_DRM_RENDER_NODE` / `WPE_DRM_DEVICE`
+        // overrides first, then udev).  Pre-thread callers export those keys
+        // via `configure_before_threads` so WebKit's child process inherits
+        // the same node without mutating the environment from this thread.
+        let selected_device = device_selector();
         let backend = match &selected_device {
             Some(path) => {
-                // Export the decision so WebKit's web process — a child of
-                // this process — inherits the same node for its own buffer
-                // allocation instead of inferring one itself.
-                // SAFETY: the reactor owns this process's environment; the
-                // spawn happens before any other thread reads these keys.
-                unsafe {
-                    std::env::set_var("WPE_DRM_DEVICE", path);
-                    std::env::set_var("WPE_DRM_RENDER_NODE", path);
-                }
                 tracing::info!("WpeRuntime: WPE DRM device = {path}");
                 WpeBackend::new_with_device(std::ptr::null_mut(), Some(path))
             }
@@ -568,16 +613,16 @@ impl WpeRuntime {
         self.backend.main_context()
     }
 
-    fn session(
+    fn ensure_session(
         &mut self,
         storage: &crate::StoragePartition,
-    ) -> Result<std::ptr::NonNull<super::sys::webkit::WebKitNetworkSession>, String> {
+    ) -> Result<LinuxProfileKey, String> {
         let key = LinuxProfileKey::from(storage);
         if !self.profiles.contains_key(&key) {
             let session = NetworkSession::create(storage, self.profile_root.as_deref())?;
             self.profiles.insert(key, session);
         }
-        Ok(self.profiles.get(&key).expect("profile was inserted").raw())
+        Ok(key)
     }
 
     fn navigate(view: &mut WpeWebView, target: &NavigationTarget) -> Result<(), String> {
@@ -595,15 +640,18 @@ impl WpeRuntime {
     }
 
     fn create(&mut self, request: PlatformCreateRequest) -> Result<(), String> {
-        let session = self.session(request.storage())?;
+        let session_key = self.ensure_session(request.storage())?;
+        let session = self
+            .profiles
+            .get(&session_key)
+            .expect("profile was inserted");
         let display = self.backend.platform_display();
         let related_view = match request.relationship() {
             crate::BrowsingRelationship::Independent => None,
             crate::BrowsingRelationship::Related(id) => Some(
                 self.views
                     .get(id)
-                    .ok_or_else(|| format!("related WebView {id} is not ready"))?
-                    .native(),
+                    .ok_or_else(|| format!("related WebView {id} is not ready"))?,
             ),
         };
         let mut view = WpeWebView::new(WpeViewCreation {

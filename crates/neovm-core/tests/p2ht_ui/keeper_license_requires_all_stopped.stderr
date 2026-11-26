@@ -11,5 +11,5 @@ error[E0308]: mismatched types
 note: associated function defined here
  --> $WORKSPACE/crates/neovm-value/src/tagged/gc/mutator_registration/table_authority.rs
   |
-  |     pub fn enter(
+  |     pub fn enter<'stop>(
   |            ^^^^^

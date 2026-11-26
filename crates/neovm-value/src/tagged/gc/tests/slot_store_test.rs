@@ -150,7 +150,7 @@ fn slot_stores_during_a_concurrent_mark_keep_both_values() {
     let old_closure_child = heap.alloc_vector(vec![TaggedValue::fixnum(3)]);
     let lambda = heap.alloc_lambda(vec![old_closure_child, TaggedValue::NIL, TaggedValue::NIL]);
     let root = heap.alloc_cons(record, lambda);
-    heap.collect_exact(std::iter::once(root));
+    heap.collect_rooted(std::iter::once(root));
     assert!(heap.should_run_concurrent());
 
     heap.concurrent_begin();
@@ -168,8 +168,8 @@ fn slot_stores_during_a_concurrent_mark_keep_both_values() {
     heap.seed_root(root);
     let bytes_before = heap.live_bytes();
     heap.incremental_drain_all();
-    heap.incremental_finish(bytes_before, std::time::Instant::now());
-    heap.finish_incremental_sweep_now();
+    heap.incremental_finish_for_test(bytes_before, std::time::Instant::now());
+    heap.finish_incremental_sweep_now_for_test();
 
     assert_eq!(slot(record, 0), new_child);
     assert_eq!(slot(lambda, 0), new_closure_child);

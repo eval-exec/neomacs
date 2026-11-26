@@ -81,7 +81,7 @@ fn graph(context: &mut Context) -> Graph {
         let property = Value::symbol("p15-stopped-name-child");
         let thread_name = Value::heap_string(named("thread", property, children[7]));
         let thread_name = PayloadThreadName::from_value(thread_name).unwrap();
-        with_tagged_heap(|heap| {
+        let update = |heap: &mut neovm_value::tagged::gc::TaggedHeap| {
             // SAFETY: the live map roots this same-World object. Setup holds
             // exclusive serial World access; the closure copies prepared words
             // without allocating, collecting, invoking Lisp or yielding.
@@ -107,7 +107,8 @@ fn graph(context: &mut Context) -> Graph {
                 })
             }
             .expect("same-World thread mutation")
-        });
+        };
+        unsafe { with_tagged_heap(update) };
         let mutex = context
             .threads
             .create_mutex(Some(named("mutex", property, children[8])))

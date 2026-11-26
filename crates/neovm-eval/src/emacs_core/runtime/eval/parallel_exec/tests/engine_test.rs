@@ -1,18 +1,25 @@
 //! Stage-1 harness stepper. The sealed-ops impl reads only conses this
 //! harness allocated. It does not read a shared object.
 
-use super::super::owner_bindings::{Channel, SlotState, SlotValue};
+use super::super::owner_bindings::{
+    BindingKind, Channel, OwnerBindingRecord, OwnerRecordId, OwnerSlab, SlotState, SlotValue,
+    UndoTarget,
+};
 use super::dispatch::primitive_slot_by_name;
 use super::effective::{
     EffectivePlainKey, EffectiveRead, EffectiveWrite, EraId, OwnerSlots, OwnerSlotsMut,
-    ShapeGeneration,
+    PlainAccess, PlainAdmission, PlainRefusal, ShapeGeneration, take_top_binding,
 };
 use super::engine::{
-    CoreOutcome, EngineFault, EscapeClass, EscapeRequest, SealedOps, SerialEscape, Stage1,
-    StepOutcome, apply_one, apply_slice, apply_vec,
+    CoreOutcome, EngineFault, EscapeClass, EscapeRequest, OwnerPoll, PlainStop, SealedOps,
+    SerialEscape, Stage1, StepOutcome, apply_one, apply_slice, apply_vec,
 };
 use super::frames::{
-    FrameArena, HandlerMark, InterpFrame, OwnerRecordMark, PollBudget, RootRevokeError,
+    FrameArena, HandlerMark, InterpFrame, OwnerRecordMark, OwnerScanJoin, PollBudget,
+    RootRevokeError,
+};
+use super::poll_tests::{
+    OWNER, activate, collect, end_epoch, finish, lend, recv, request_stop, retire, retry,
 };
 use crate::emacs_core::builtins::{
     builtin_arrayp, builtin_car_1, builtin_car_safe_1, builtin_cdr_1, builtin_cdr_safe_1,
@@ -24,6 +31,10 @@ use crate::emacs_core::builtins_extra::{
     builtin_byte_code_function_p, builtin_closurep, builtin_subrp,
 };
 use crate::emacs_core::eval::Context;
+use crate::emacs_core::eval::world::poll::{
+    PollOutcome, poll_interp_back_edge, poll_interp_call_entry, poll_serial_request,
+};
+use crate::emacs_core::eval::world::serial_gate::stop_for_test;
 use crate::emacs_core::subr::effect_catalog::inventory;
 use crate::emacs_core::subr::effect_schema::{
     CatalogKind, ParallelArm, SealedAuthority, WorldSplit,
@@ -38,9 +49,14 @@ use neovm_value::boolvec::builtin_bool_vector_p;
 use neovm_value::error::Flow;
 use neovm_value::forward::TlsIndex;
 use neovm_value::intern::NIL_SYM_ID;
-use neovm_value::value::{Value, eq_value};
+use neovm_value::tagged::SymbolMode;
+use neovm_value::tagged::gc::{Mutator, RendezvousError, TaggedHeap};
+use neovm_value::tagged::transport::SharedRoot;
+use neovm_value::value::{Value, eq_value, symbol_id};
 use std::cell::Cell;
 use std::num::NonZeroU32;
+use std::sync::mpsc;
+use std::thread;
 
 struct RecordingEscape {
     requests: Vec<EscapeRequest>,
@@ -57,6 +73,239 @@ impl RecordingEscape {
 impl SerialEscape for RecordingEscape {
     fn escape(&mut self, request: EscapeRequest) {
         self.requests.push(request);
+    }
+}
+
+/// The wired poll edges. Order inside one stepper is observable.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PollEdge {
+    InterpCallEntry,
+    InterpBackEdge,
+    SerialRequest,
+}
+
+/// A poll double that records the edge and can refuse one call, either on the
+/// next edge of any kind or on a chosen edge.
+struct RecordingPoll {
+    edges: Vec<PollEdge>,
+    refusal: Option<RendezvousError>,
+    refuse_on: Option<PollEdge>,
+}
+
+impl RecordingPoll {
+    fn new() -> Self {
+        Self {
+            edges: Vec::new(),
+            refusal: None,
+            refuse_on: None,
+        }
+    }
+
+    fn refusing(error: RendezvousError) -> Self {
+        Self {
+            edges: Vec::new(),
+            refusal: Some(error),
+            refuse_on: None,
+        }
+    }
+
+    /// The refusal fires on the first call of `edge` only.
+    fn refusing_on(edge: PollEdge, error: RendezvousError) -> Self {
+        Self {
+            edges: Vec::new(),
+            refusal: Some(error),
+            refuse_on: Some(edge),
+        }
+    }
+
+    fn poll(&mut self, edge: PollEdge) -> Result<PollOutcome, RendezvousError> {
+        self.edges.push(edge);
+        if self.refuse_on.is_some_and(|wanted| wanted != edge) {
+            return Ok(PollOutcome::Continue);
+        }
+        match self.refusal.take() {
+            Some(error) => Err(error),
+            None => Ok(PollOutcome::Continue),
+        }
+    }
+
+    fn edge_count(&self, edge: PollEdge) -> usize {
+        self.edges.iter().filter(|seen| **seen == edge).count()
+    }
+}
+
+impl OwnerPoll for RecordingPoll {
+    fn interp_call_entry(&mut self, _arena: &FrameArena) -> Result<PollOutcome, RendezvousError> {
+        self.poll(PollEdge::InterpCallEntry)
+    }
+
+    fn interp_back_edge(&mut self, _arena: &FrameArena) -> Result<PollOutcome, RendezvousError> {
+        self.poll(PollEdge::InterpBackEdge)
+    }
+
+    fn serial_request(&mut self, _arena: &FrameArena) -> Result<PollOutcome, RendezvousError> {
+        self.poll(PollEdge::SerialRequest)
+    }
+}
+
+/// The pre-era fixture. `forms` and `heap` cross to the owner thread as plain
+/// numbers; `keep` roots the era-heap form list until the era finishes.
+struct EraInput {
+    forms: usize,
+    heap: usize,
+    _keep: Vec<SharedRoot>,
+}
+
+/// Build the form list in the era heap before the era is admitted, like
+/// `hold_cons` in `poll_test`. Every value a frame can trace is then in the
+/// heap the owner publishes to.
+fn era_input(context: &mut Context, forms: Vec<Value>) -> EraInput {
+    context.set_gc_stress_for_test(false);
+    context.tagged_heap.set_gc_threshold(usize::MAX);
+    context.tagged_heap.close_alloc_regions();
+    let forms = Value::list(forms);
+    // SAFETY: setup is the sole serial mutator; the root keeps the form list
+    // reachable until the owner scan publishes or the era finishes.
+    let root = unsafe { SharedRoot::new(&context.tagged_heap, forms) };
+    EraInput {
+        forms: forms.bits(),
+        heap: context.tagged_heap.heap_root().as_ptr() as usize,
+        _keep: vec![root],
+    }
+}
+
+/// The honest chain: the engine calls the real wrapper, which calls
+/// `Mutator::poll`, which publishes `arena.publish_scan` to the era keeper.
+///
+/// `gate` is test sequencing only: after the real wrapper returns on a chosen
+/// edge (after `skip` earlier calls of that edge), the owner reports the edge
+/// and waits for the keeper side to request a stop, so the next poll is
+/// deterministically the parked one. The parked poll itself is the real
+/// wrapper.
+struct EraGate {
+    edge: PollEdge,
+    skip: usize,
+    reached: mpsc::Sender<()>,
+    go: mpsc::Receiver<()>,
+}
+
+struct EraPoll<'era> {
+    owner: Mutator<'era>,
+    heap: usize,
+    edges: Vec<PollEdge>,
+    build_calls: usize,
+    call_entry_builds: usize,
+    back_edge_builds: usize,
+    serial_builds: usize,
+    gate: Option<EraGate>,
+}
+
+impl<'era> EraPoll<'era> {
+    fn new(owner: Mutator<'era>, heap: usize) -> Self {
+        Self {
+            owner,
+            heap,
+            edges: Vec::new(),
+            build_calls: 0,
+            call_entry_builds: 0,
+            back_edge_builds: 0,
+            serial_builds: 0,
+            gate: None,
+        }
+    }
+
+    fn with_gate(
+        mut self,
+        edge: PollEdge,
+        skip: usize,
+        reached: mpsc::Sender<()>,
+        go: mpsc::Receiver<()>,
+    ) -> Self {
+        self.gate = Some(EraGate {
+            edge,
+            skip,
+            reached,
+            go,
+        });
+        self
+    }
+
+    fn edge_count(&self, edge: PollEdge) -> usize {
+        self.edges.iter().filter(|seen| **seen == edge).count()
+    }
+
+    fn run_gate(&mut self, edge: PollEdge) {
+        let Some(gate) = self.gate.as_mut() else {
+            return;
+        };
+        if gate.edge != edge {
+            return;
+        }
+        if gate.skip > 0 {
+            gate.skip -= 1;
+            return;
+        }
+        let Some(gate) = self.gate.take() else {
+            return;
+        };
+        gate.reached.send(()).expect("gate reached");
+        recv(&gate.go);
+    }
+}
+
+impl OwnerPoll for EraPoll<'_> {
+    fn interp_call_entry(&mut self, arena: &FrameArena) -> Result<PollOutcome, RendezvousError> {
+        self.edges.push(PollEdge::InterpCallEntry);
+        let builds = &mut self.build_calls;
+        let edge_builds = &mut self.call_entry_builds;
+        let heap = self.heap;
+        let outcome = poll_interp_call_entry(&mut self.owner, || {
+            *builds += 1;
+            *edge_builds += 1;
+            // SAFETY: `heap` is the era provenance root captured before
+            // admission. `publish_scan` only reads the arena, and the keeper
+            // cannot sweep while this owner is inside `Mutator::poll`.
+            let heap = unsafe { &*(heap as *const TaggedHeap) };
+            let mut batch = Vec::new();
+            arena.publish_scan(heap, &mut batch)?;
+            Ok(batch)
+        });
+        self.run_gate(PollEdge::InterpCallEntry);
+        outcome
+    }
+
+    fn interp_back_edge(&mut self, arena: &FrameArena) -> Result<PollOutcome, RendezvousError> {
+        self.edges.push(PollEdge::InterpBackEdge);
+        let builds = &mut self.build_calls;
+        let edge_builds = &mut self.back_edge_builds;
+        let heap = self.heap;
+        let outcome = poll_interp_back_edge(&mut self.owner, || {
+            *builds += 1;
+            *edge_builds += 1;
+            // SAFETY: see `interp_call_entry`.
+            let heap = unsafe { &*(heap as *const TaggedHeap) };
+            let mut batch = Vec::new();
+            arena.publish_scan(heap, &mut batch)?;
+            Ok(batch)
+        });
+        self.run_gate(PollEdge::InterpBackEdge);
+        outcome
+    }
+
+    fn serial_request(&mut self, arena: &FrameArena) -> Result<PollOutcome, RendezvousError> {
+        self.edges.push(PollEdge::SerialRequest);
+        let builds = &mut self.build_calls;
+        let serial_builds = &mut self.serial_builds;
+        let heap = self.heap;
+        poll_serial_request(&mut self.owner, || {
+            *builds += 1;
+            *serial_builds += 1;
+            // SAFETY: see `interp_call_entry`.
+            let heap = unsafe { &*(heap as *const TaggedHeap) };
+            let mut batch = Vec::new();
+            arena.publish_scan(heap, &mut batch)?;
+            Ok(batch)
+        })
     }
 }
 
@@ -124,19 +373,51 @@ impl SealedOps for HarnessSealed {
 
 struct TestSlots {
     state: SlotState,
+    admission: PlainAdmission,
+    canonical: Value,
+    canonical_reads: Cell<usize>,
+    canonical_writes: Cell<usize>,
+    /// The binding-record LIFO, on a real slab: the stepper of this harness
+    /// binds nothing, so the trait's record half is the slab's own API.
+    records: OwnerSlab,
 }
 
 impl TestSlots {
-    fn empty() -> Self {
+    fn with_state(state: SlotState, admission: PlainAdmission) -> Self {
         Self {
-            state: SlotState::NoBinding,
+            state,
+            admission,
+            canonical: Value::NIL,
+            canonical_reads: Cell::new(0),
+            canonical_writes: Cell::new(0),
+            records: OwnerSlab::new(0),
         }
     }
 
+    fn empty() -> Self {
+        Self::with_state(
+            SlotState::NoBinding,
+            PlainAdmission::refuse(PlainRefusal::NotPlain),
+        )
+    }
+
     fn bound(value: Value) -> Self {
-        Self {
-            state: SlotState::Bound(SlotValue::new(value)),
-        }
+        Self::with_state(
+            SlotState::Bound(SlotValue::new(value)),
+            PlainAdmission::refuse(PlainRefusal::NotPlain),
+        )
+    }
+
+    fn bound_with_admission(value: Value, admission: PlainAdmission) -> Self {
+        Self::with_state(SlotState::Bound(SlotValue::new(value)), admission)
+    }
+
+    fn refused(admission: PlainAdmission) -> Self {
+        Self::with_state(SlotState::NoBinding, admission)
+    }
+
+    fn canonical_reads(&self) -> usize {
+        self.canonical_reads.get()
     }
 }
 
@@ -152,6 +433,59 @@ impl OwnerSlotsMut for TestSlots {
     }
 }
 
+impl PlainAccess for TestSlots {
+    fn admission(&self, sym: neovm_value::intern::SymId) -> PlainAdmission {
+        match self.admission {
+            PlainAdmission::Mint { sym: admitted, .. } if admitted == sym => self.admission,
+            refusal @ PlainAdmission::Refuse(_) => refusal,
+            _ => PlainAdmission::refuse(PlainRefusal::StaleBacking),
+        }
+    }
+
+    fn canonical_read(&self, _sym: neovm_value::intern::SymId) -> Value {
+        self.canonical_reads.set(self.canonical_reads.get() + 1);
+        self.canonical
+    }
+
+    fn canonical_write(&mut self, _sym: neovm_value::intern::SymId, value: Value) {
+        self.canonical_writes.set(self.canonical_writes.get() + 1);
+        self.canonical = value;
+    }
+
+    fn canonical_bound(&self, _sym: neovm_value::intern::SymId) -> bool {
+        true
+    }
+
+    /// This double models no watchers, no retired projection and no dead
+    /// channel: every owner binding is undone on the owner.
+    fn unbind_needs_serial(&self, _sym: neovm_value::intern::SymId) -> bool {
+        false
+    }
+
+    fn record_live(&self, record: super::super::owner_bindings::OwnerRecordId) -> bool {
+        self.records.record(record).is_some()
+    }
+
+    fn top_record(&self) -> Option<super::super::owner_bindings::OwnerRecordId> {
+        self.records.top_record_id()
+    }
+
+    fn push_binding(
+        &mut self,
+        sym: neovm_value::intern::SymId,
+        slot: TlsIndex,
+        channel: Channel,
+        undo: UndoTarget,
+    ) -> OwnerRecordId {
+        self.records
+            .push_record(sym, slot, BindingKind::Let, channel, undo)
+    }
+
+    fn pop_binding(&mut self, id: OwnerRecordId) -> Option<OwnerBindingRecord> {
+        take_top_binding(&mut self.records, id)
+    }
+}
+
 fn multibyte_string_p(ctx: &mut Context, arg: Value) -> neovm_value::error::EvalResult {
     builtin_multibyte_string_p_1(ctx, arg)
 }
@@ -160,11 +494,12 @@ fn context() -> Context {
     Context::new(unit_runtime())
 }
 
-fn engine(slots: TestSlots) -> Stage1<TestSlots, RecordingEscape, HarnessSealed> {
+fn engine(slots: TestSlots) -> Stage1<TestSlots, RecordingEscape, HarnessSealed, RecordingPoll> {
     Stage1::new(
         slots,
         RecordingEscape::new(),
         HarnessSealed,
+        RecordingPoll::new(),
         EraId::new(3),
         ShapeGeneration::new(7),
     )
@@ -213,19 +548,20 @@ fn signal_key(flow: &Flow) -> (String, Vec<Value>) {
     (data.symbol_name().to_string(), data.data.clone())
 }
 
-fn assert_clear<O: SealedOps>(engine: &Stage1<TestSlots, RecordingEscape, O>) {
+fn assert_clear<O: SealedOps, P: OwnerPoll>(engine: &Stage1<TestSlots, RecordingEscape, O, P>) {
     assert_eq!(engine.arena_depth(), 0, "arena depth");
     assert_eq!(engine.live_root_count(), 0, "live roots");
 }
 
-fn done_value<O: SealedOps>(
-    engine: &mut Stage1<TestSlots, RecordingEscape, O>,
+fn done_value<O: SealedOps, P: OwnerPoll>(
+    engine: &mut Stage1<TestSlots, RecordingEscape, O, P>,
     outcome: StepOutcome,
 ) -> Value {
     match outcome {
         StepOutcome::Done { pending, .. } => engine.take(pending).expect("done root"),
         StepOutcome::Escaped(request) => panic!("escaped {:?}", request.class),
         StepOutcome::Signaled(flow) => panic!("signaled {}", signal_key(&flow).0),
+        StepOutcome::VoidVariable { .. } => panic!("void variable"),
         StepOutcome::MissingCore { name } => panic!("missing core {name}"),
         StepOutcome::Suspended { .. } => panic!("suspended"),
         StepOutcome::Fault(_) => panic!("fault"),
@@ -568,11 +904,83 @@ fn effective_read_write_and_bound_use_the_pure_rule() {
         called.set(true);
         Value::fixnum(1)
     });
+    let PlainStop::Escape(request) = stale.expect_err("stale era") else {
+        panic!("a stale key is an escape, not a poll refusal");
+    };
+    assert_eq!(request.class, EscapeClass::StaleEffectiveKey);
+    assert!(!called.get());
+    assert_eq!(stepper.escape_handler().requests.len(), 1);
     assert_eq!(
-        stale.expect_err("stale era").class,
+        stepper.poll_handler().edge_count(PollEdge::SerialRequest),
+        1,
+        "the plain access polls before the stale-key escape"
+    );
+}
+
+/// A valid plain key is not a safepoint: the caller may hold an unrooted
+/// value on the Rust stack (`write_plain`'s `value`). Only a stale key polls,
+/// once, immediately before the escape it records.
+#[test]
+fn plain_access_polls_only_the_stale_key_path() {
+    let mut stepper = engine(TestSlots::empty());
+    stepper
+        .read_plain(&key(), || Value::fixnum(1))
+        .expect("a valid key reads");
+    stepper
+        .write_plain(&key(), Value::fixnum(2), |_| {})
+        .expect("a valid key writes");
+    assert!(
+        stepper
+            .bound_plain(&key(), || true)
+            .expect("a valid key is bound")
+    );
+    assert_eq!(
+        stepper.poll_handler().edge_count(PollEdge::SerialRequest),
+        0,
+        "a valid plain access must not reach a safepoint"
+    );
+    assert!(stepper.escape_handler().requests.is_empty());
+
+    let mut stepper = engine(TestSlots::empty());
+    let called = Cell::new(false);
+    let stale_read = stepper.read_plain(&stale_key(), || {
+        called.set(true);
+        Value::fixnum(1)
+    });
+    assert!(matches!(stale_read, Err(PlainStop::Escape(_))));
+    assert!(!called.get(), "a stale key does not read");
+    assert_eq!(
+        stepper.poll_handler().edge_count(PollEdge::SerialRequest),
+        1,
+        "the stale-key poll runs once, before the escape"
+    );
+    assert_eq!(stepper.escape_handler().requests.len(), 1);
+    assert_eq!(
+        stepper.escape_handler().requests[0].class,
         EscapeClass::StaleEffectiveKey
     );
-    assert!(!called.get());
+
+    let mut stepper = engine(TestSlots::empty());
+    let stale_write = stepper.write_plain(&stale_key(), Value::fixnum(3), |_| {
+        panic!("a stale key does not write")
+    });
+    assert!(
+        matches!(stale_write, Err(PlainStop::Escape(_))),
+        "the unrooted write value is abandoned, never stored"
+    );
+    assert_eq!(
+        stepper.poll_handler().edge_count(PollEdge::SerialRequest),
+        1
+    );
+    assert_eq!(stepper.escape_handler().requests.len(), 1);
+
+    let mut stepper = engine(TestSlots::empty());
+    let stale_bound = stepper.bound_plain(&stale_key(), || panic!("a stale key does not bound"));
+    assert!(matches!(stale_bound, Err(PlainStop::Escape(_))));
+    assert_eq!(
+        stepper.poll_handler().edge_count(PollEdge::SerialRequest),
+        1
+    );
     assert_eq!(stepper.escape_handler().requests.len(), 1);
 }
 
@@ -614,6 +1022,7 @@ fn every_outcome_reports_depth_and_live_roots() {
         TestSlots::empty(),
         RecordingEscape::new(),
         MissingSealed,
+        RecordingPoll::new(),
         EraId::new(3),
         ShapeGeneration::new(7),
     );
@@ -685,6 +1094,7 @@ fn every_scalar_primitive_matches_serial_eval_on_the_sample_matrix() {
                     Err(signal_key(&flow))
                 }
                 StepOutcome::Escaped(request) => panic!("{name} escaped {:?}", request.class),
+                StepOutcome::VoidVariable { .. } => panic!("{name} produced a void variable"),
                 StepOutcome::MissingCore { .. } => panic!("{name} has no shared core"),
                 StepOutcome::Suspended { .. } => panic!("{name} suspended"),
                 StepOutcome::Fault(_) => panic!("{name} faulted"),
@@ -742,4 +1152,908 @@ fn header_word_integerp_does_not_escape() {
     );
     assert_eq!(done_value(&mut stepper, outcome), Value::T);
     assert!(stepper.escape_handler().requests.is_empty());
+}
+
+/// Test 1: the wired return-boundary poll parks against the real keeper and
+/// resumes the SAME frame, with the harness budget and its root untouched.
+#[test]
+fn wired_interp_call_entry_parks_and_resumes_the_same_frame() {
+    Context::with_test_collection_era(
+        |context| era_input(context, vec![Value::fixnum(1), Value::fixnum(2)]),
+        |era, input| {
+            let permit = era.register(OWNER, 0).expect("register");
+            let heap = era.heap_identity();
+            let rendezvous = era.rendezvous();
+            let forms_bits = input.forms;
+            let heap_addr = input.heap;
+            let (suspended_tx, suspended_rx) = mpsc::channel();
+            let (go_tx, go_rx) = mpsc::channel::<()>();
+            let (gate_tx, gate_rx) = mpsc::channel::<()>();
+            let (gate_go_tx, gate_go_rx) = mpsc::channel::<()>();
+            let (done_tx, done_rx) = mpsc::channel();
+            thread::scope(|scope| {
+                scope.spawn(move || {
+                    let owner = activate(permit, heap, OWNER);
+                    let mut ctx = Context::new(unit_runtime());
+                    let mut stepper = Stage1::new(
+                        TestSlots::empty(),
+                        RecordingEscape::new(),
+                        HarnessSealed,
+                        // B1 runs during `start`; gate B2, the body step that
+                        // runs inside `resume`, so the stop lands before the
+                        // second form-return poll.
+                        EraPoll::new(owner, heap_addr).with_gate(
+                            PollEdge::InterpBackEdge,
+                            1,
+                            gate_tx,
+                            gate_go_rx,
+                        ),
+                        EraId::new(3),
+                        ShapeGeneration::new(7),
+                    );
+                    let forms = unsafe { Value::from_bits(forms_bits) };
+                    let first = stepper.start(&mut ctx, forms, NonZeroU32::MIN);
+                    let StepOutcome::Suspended { frame, .. } = first else {
+                        panic!("the completed first form must suspend through the budget");
+                    };
+                    suspended_tx
+                        .send((frame, stepper.arena_depth(), stepper.frame_is_live(frame)))
+                        .expect("suspended report");
+                    recv(&go_rx);
+                    // The stop was requested at the body step during this
+                    // resume, so the after_form poll at the second form's
+                    // return is the one that parks.
+                    let finished = stepper.resume(&mut ctx);
+                    let StepOutcome::Done {
+                        frame: done_frame,
+                        pending,
+                    } = finished
+                    else {
+                        panic!("the parked run must finish");
+                    };
+                    let value = stepper.take(pending).expect("done root");
+                    let value_ok = eq_value(&value, &Value::fixnum(2));
+                    let depth = stepper.arena_depth();
+                    let roots = stepper.live_root_count();
+                    let poll = stepper.into_poll();
+                    let interp_edges = poll.edge_count(PollEdge::InterpCallEntry);
+                    let back_edges = poll.edge_count(PollEdge::InterpBackEdge);
+                    let serial_edges = poll.edge_count(PollEdge::SerialRequest);
+                    let call_entry_builds = poll.call_entry_builds;
+                    let back_edge_builds = poll.back_edge_builds;
+                    let builds = poll.build_calls;
+                    done_tx
+                        .send((
+                            done_frame,
+                            value_ok,
+                            depth,
+                            roots,
+                            interp_edges,
+                            back_edges,
+                            serial_edges,
+                            call_entry_builds,
+                            back_edge_builds,
+                            builds,
+                        ))
+                        .expect("done report");
+                    retire(poll.owner);
+                });
+                let (frame, depth, live) = recv(&suspended_rx);
+                assert!(live, "the suspended frame must stay live");
+                assert_eq!(depth, 1, "one frame before the stop");
+                go_tx.send(()).expect("resume");
+                recv(&gate_rx);
+                request_stop(rendezvous);
+                gate_go_tx.send(()).expect("gate go");
+                let stopped = retry("stop", || stop_for_test(&era));
+                let mut ticket = lend(&era, stopped);
+                collect(&mut ticket);
+                end_epoch(ticket);
+                let (
+                    done_frame,
+                    value_ok,
+                    depth,
+                    roots,
+                    interp_edges,
+                    back_edges,
+                    serial_edges,
+                    call_entry_builds,
+                    back_edge_builds,
+                    builds,
+                ) = recv(&done_rx);
+                assert_eq!(done_frame, frame, "resume must continue the same FrameId");
+                assert!(value_ok, "the parked frame must keep its accumulator");
+                assert_eq!(depth, 0, "the done frame is popped");
+                assert_eq!(roots, 0, "the done root is revoked");
+                assert_eq!(
+                    interp_edges, 2,
+                    "one return-boundary poll per completed form"
+                );
+                assert_eq!(back_edges, 2, "one body step per fetched form");
+                assert_eq!(serial_edges, 0, "no serial escape on this path");
+                assert_eq!(
+                    call_entry_builds, 1,
+                    "the parked poll is the after_form return boundary"
+                );
+                assert_eq!(
+                    back_edge_builds, 0,
+                    "the gated body step ran on the fast path"
+                );
+                assert!(builds >= 1, "the parked poll must publish a scan batch");
+            });
+            drop(input);
+            finish(era);
+        },
+    );
+}
+
+/// Test 4: an admissible phase word keeps the batch closure unbuilt.
+#[test]
+fn wired_interp_call_entry_fast_path_builds_no_batch() {
+    Context::with_test_collection_era(
+        |context| era_input(context, vec![Value::fixnum(1), Value::fixnum(2)]),
+        |era, input| {
+            let permit = era.register(OWNER, 0).expect("register");
+            let heap = era.heap_identity();
+            let forms_bits = input.forms;
+            let heap_addr = input.heap;
+            thread::scope(|scope| {
+                scope.spawn(move || {
+                    let owner = activate(permit, heap, OWNER);
+                    let mut ctx = Context::new(unit_runtime());
+                    let mut stepper = Stage1::new(
+                        TestSlots::empty(),
+                        RecordingEscape::new(),
+                        HarnessSealed,
+                        EraPoll::new(owner, heap_addr),
+                        EraId::new(3),
+                        ShapeGeneration::new(7),
+                    );
+                    let forms = unsafe { Value::from_bits(forms_bits) };
+                    let outcome = stepper.start(&mut ctx, forms, wide());
+                    let StepOutcome::Done { pending, .. } = outcome else {
+                        panic!("an admissible run must finish");
+                    };
+                    assert_eq!(stepper.take(pending).expect("done root"), Value::fixnum(2));
+                    let poll = stepper.into_poll();
+                    assert_eq!(
+                        poll.build_calls, 0,
+                        "the fast path must not call the roots closure"
+                    );
+                    assert_eq!(poll.edge_count(PollEdge::InterpCallEntry), 2);
+                    retire(poll.owner);
+                });
+            });
+            drop(input);
+            finish(era);
+        },
+    );
+}
+
+/// Test 5: the serial-request poll runs before the escape, parks against the
+/// real keeper, and the escape is recorded once after resume.
+#[test]
+fn wired_serial_request_parks_before_the_escape() {
+    Context::with_test_collection_era(
+        |context| {
+            era_input(
+                context,
+                vec![Value::list(vec![
+                    Value::symbol("+"),
+                    Value::fixnum(1),
+                    Value::fixnum(2),
+                ])],
+            )
+        },
+        |era, input| {
+            let permit = era.register(OWNER, 0).expect("register");
+            let heap = era.heap_identity();
+            let rendezvous = era.rendezvous();
+            let forms_bits = input.forms;
+            let heap_addr = input.heap;
+            let (ready_tx, ready_rx) = mpsc::channel();
+            let (go_tx, go_rx) = mpsc::channel::<()>();
+            let (gate_tx, gate_rx) = mpsc::channel::<()>();
+            let (gate_go_tx, gate_go_rx) = mpsc::channel::<()>();
+            let (done_tx, done_rx) = mpsc::channel();
+            thread::scope(|scope| {
+                scope.spawn(move || {
+                    let owner = activate(permit, heap, OWNER);
+                    let mut ctx = Context::new(unit_runtime());
+                    let mut stepper = Stage1::new(
+                        TestSlots::empty(),
+                        RecordingEscape::new(),
+                        HarnessSealed,
+                        // Gate the compound-form entry poll so the stop lands
+                        // after it and before `record`'s serial request.
+                        EraPoll::new(owner, heap_addr).with_gate(
+                            PollEdge::InterpCallEntry,
+                            0,
+                            gate_tx,
+                            gate_go_rx,
+                        ),
+                        EraId::new(3),
+                        ShapeGeneration::new(7),
+                    );
+                    let forms = unsafe { Value::from_bits(forms_bits) };
+                    ready_tx.send(()).expect("ready");
+                    recv(&go_rx);
+                    // The stop was requested at the call-entry edge, so the
+                    // poll inside `record` parks, then the escape is recorded.
+                    let outcome = stepper.start(&mut ctx, forms, wide());
+                    let StepOutcome::Escaped(request) = outcome else {
+                        panic!("a World arm must escape after the poll");
+                    };
+                    let world = matches!(request.class, EscapeClass::World(_));
+                    let recorded = stepper.escape_handler().requests.len();
+                    let roots = stepper.live_root_count();
+                    let depth = stepper.arena_depth();
+                    let poll = stepper.into_poll();
+                    let serial_edges = poll.edge_count(PollEdge::SerialRequest);
+                    let interp_edges = poll.edge_count(PollEdge::InterpCallEntry);
+                    let back_edges = poll.edge_count(PollEdge::InterpBackEdge);
+                    let serial_builds = poll.serial_builds;
+                    let call_entry_builds = poll.call_entry_builds;
+                    let back_edge_builds = poll.back_edge_builds;
+                    let builds = poll.build_calls;
+                    done_tx
+                        .send((
+                            world,
+                            recorded,
+                            roots,
+                            depth,
+                            serial_edges,
+                            interp_edges,
+                            back_edges,
+                            serial_builds,
+                            call_entry_builds,
+                            back_edge_builds,
+                            builds,
+                        ))
+                        .expect("done report");
+                    retire(poll.owner);
+                });
+                recv(&ready_rx);
+                go_tx.send(()).expect("go");
+                recv(&gate_rx);
+                request_stop(rendezvous);
+                gate_go_tx.send(()).expect("gate go");
+                let stopped = retry("stop", || stop_for_test(&era));
+                let mut ticket = lend(&era, stopped);
+                collect(&mut ticket);
+                end_epoch(ticket);
+                let (
+                    world,
+                    recorded,
+                    roots,
+                    depth,
+                    serial_edges,
+                    interp_edges,
+                    back_edges,
+                    serial_builds,
+                    call_entry_builds,
+                    back_edge_builds,
+                    builds,
+                ) = recv(&done_rx);
+                assert!(world, "the form reached the World arm");
+                assert_eq!(recorded, 1, "exactly one escape is recorded");
+                assert_eq!(roots, 0, "the escape pushes no root");
+                assert_eq!(depth, 1, "the escape keeps its top frame");
+                assert_eq!(serial_edges, 1, "one serial-request poll before the escape");
+                assert_eq!(interp_edges, 1, "only the compound-form entry poll");
+                assert_eq!(back_edges, 1, "one body step fetched the form");
+                assert_eq!(serial_builds, 1, "the serial-request poll parked");
+                assert_eq!(call_entry_builds, 0, "the entry poll ran on the fast path");
+                assert_eq!(back_edge_builds, 0, "the body step ran on the fast path");
+                assert!(builds >= 1, "the parked poll must publish a scan batch");
+            });
+            drop(input);
+            finish(era);
+        },
+    );
+}
+
+/// Test 3: a local form crosses the wired edges without a serial escape; a
+/// World form records exactly one escape after its poll.
+#[test]
+fn wired_poll_edges_do_not_dispatch_serially() {
+    let mut ctx = context();
+
+    let mut stepper = engine(TestSlots::empty());
+    let outcome = stepper.start(
+        &mut ctx,
+        body(&[Value::fixnum(1), Value::fixnum(2)]),
+        wide(),
+    );
+    assert_eq!(done_value(&mut stepper, outcome), Value::fixnum(2));
+    assert!(stepper.escape_handler().requests.is_empty());
+    assert_eq!(
+        stepper.poll_handler().edge_count(PollEdge::InterpCallEntry),
+        2
+    );
+    assert_eq!(
+        stepper.poll_handler().edge_count(PollEdge::SerialRequest),
+        0
+    );
+
+    let mut stepper = engine(TestSlots::empty());
+    let form = call("+", &[Value::fixnum(1), Value::fixnum(2)]);
+    let outcome = stepper.start(&mut ctx, body(&[form]), wide());
+    let StepOutcome::Escaped(request) = outcome else {
+        panic!("+ is a World arm");
+    };
+    assert!(matches!(request.class, EscapeClass::World(_)));
+    assert!(eq_value(&request.form, &form));
+    assert_eq!(stepper.escape_handler().requests.len(), 1);
+    assert_eq!(
+        stepper.poll_handler().edge_count(PollEdge::SerialRequest),
+        1,
+        "the poll runs before the escape"
+    );
+    assert_eq!(
+        stepper.poll_handler().edge_count(PollEdge::InterpCallEntry),
+        1,
+        "one compound-form entry poll; the form never returned a value"
+    );
+    assert_eq!(
+        stepper.poll_handler().edge_count(PollEdge::InterpBackEdge),
+        1,
+        "one body step fetched the form"
+    );
+}
+
+/// Test 2: every terminal outcome leaves no live root.
+#[test]
+fn wired_outcomes_leave_no_live_roots() {
+    let mut ctx = context();
+
+    let mut stepper = engine(TestSlots::empty());
+    let outcome = stepper.start(&mut ctx, body(&[Value::fixnum(1)]), wide());
+    let StepOutcome::Done { pending, .. } = outcome else {
+        panic!("a fixnum finishes");
+    };
+    assert_eq!(stepper.take(pending).expect("done root"), Value::fixnum(1));
+    assert_clear(&stepper);
+
+    let mut stepper = engine(TestSlots::empty());
+    let outcome = stepper.start(&mut ctx, body(&[call("car", &[Value::fixnum(1)])]), wide());
+    assert!(matches!(outcome, StepOutcome::Signaled(_)));
+    assert_clear(&stepper);
+
+    let mut stepper = Stage1::new(
+        TestSlots::empty(),
+        RecordingEscape::new(),
+        MissingSealed,
+        RecordingPoll::new(),
+        EraId::new(3),
+        ShapeGeneration::new(7),
+    );
+    let outcome = stepper.start(&mut ctx, body(&[call("car", &[Value::NIL])]), wide());
+    assert!(matches!(outcome, StepOutcome::MissingCore { .. }));
+    assert_clear(&stepper);
+
+    let mut stepper = engine(TestSlots::empty());
+    let outcome = stepper.start(
+        &mut ctx,
+        body(&[call("cons", &[Value::NIL, Value::NIL])]),
+        wide(),
+    );
+    assert!(matches!(outcome, StepOutcome::Escaped(_)));
+    assert_eq!(stepper.live_root_count(), 0, "an escape publishes no root");
+    assert_eq!(stepper.arena_depth(), 1, "an escape keeps its top frame");
+}
+
+/// libeval's extra row: a poll refusal unwinds to Idle, leaves no root, and
+/// the stepper accepts a fresh run.
+#[test]
+fn poll_fault_unwinds_to_idle_and_the_engine_restarts() {
+    let mut ctx = context();
+
+    let mut stepper = Stage1::new(
+        TestSlots::empty(),
+        RecordingEscape::new(),
+        HarnessSealed,
+        RecordingPoll::refusing(RendezvousError::Publication),
+        EraId::new(3),
+        ShapeGeneration::new(7),
+    );
+    let outcome = stepper.start(&mut ctx, body(&[Value::fixnum(1)]), wide());
+    assert!(
+        matches!(
+            outcome,
+            StepOutcome::Fault(EngineFault::Poll(RendezvousError::Publication))
+        ),
+        "a non-Busy refusal is a Poll fault"
+    );
+    assert_clear(&stepper);
+    let again = stepper.start(&mut ctx, body(&[Value::fixnum(2)]), wide());
+    assert_eq!(done_value(&mut stepper, again), Value::fixnum(2));
+    assert_clear(&stepper);
+
+    // The stale-key poll surfaces the same refusal without touching state and
+    // without recording the escape it preempted.
+    let mut stepper = Stage1::new(
+        TestSlots::empty(),
+        RecordingEscape::new(),
+        HarnessSealed,
+        RecordingPoll::refusing(RendezvousError::Capacity),
+        EraId::new(3),
+        ShapeGeneration::new(7),
+    );
+    let plain = stepper.read_plain(&stale_key(), || Value::fixnum(9));
+    let PlainStop::Poll(RendezvousError::Capacity) = plain.expect_err("poll refusal") else {
+        panic!("the stale-key poll refusal must surface");
+    };
+    assert!(
+        stepper.escape_handler().requests.is_empty(),
+        "a refused poll records no escape"
+    );
+    assert_clear(&stepper);
+    let again = stepper.start(&mut ctx, body(&[Value::fixnum(3)]), wide());
+    assert_eq!(done_value(&mut stepper, again), Value::fixnum(3));
+}
+
+/// Site A honest chain: the compound-form entry poll parks against the real
+/// keeper, the keeper collects at that park, and the post-resume `car` reads
+/// the era-heap call form (including its quoted payload) and returns 1.
+#[test]
+fn wired_call_entry_parks_and_resumes_the_same_form() {
+    Context::with_test_collection_era(
+        |context| {
+            era_input(
+                context,
+                vec![Value::list(vec![
+                    Value::symbol("car"),
+                    Value::list(vec![
+                        Value::symbol("quote"),
+                        Value::list(vec![Value::fixnum(1), Value::fixnum(2)]),
+                    ]),
+                ])],
+            )
+        },
+        |era, input| {
+            let permit = era.register(OWNER, 0).expect("register");
+            let heap = era.heap_identity();
+            let rendezvous = era.rendezvous();
+            let forms_bits = input.forms;
+            let heap_addr = input.heap;
+            let (gate_tx, gate_rx) = mpsc::channel::<()>();
+            let (gate_go_tx, gate_go_rx) = mpsc::channel::<()>();
+            let (done_tx, done_rx) = mpsc::channel();
+            thread::scope(|scope| {
+                scope.spawn(move || {
+                    let owner = activate(permit, heap, OWNER);
+                    let mut ctx = Context::new(unit_runtime());
+                    let mut stepper = Stage1::new(
+                        TestSlots::empty(),
+                        RecordingEscape::new(),
+                        HarnessSealed,
+                        // Gate the body step that fetches the call form, so the
+                        // stop lands before the compound-form entry poll.
+                        EraPoll::new(owner, heap_addr).with_gate(
+                            PollEdge::InterpBackEdge,
+                            0,
+                            gate_tx,
+                            gate_go_rx,
+                        ),
+                        EraId::new(3),
+                        ShapeGeneration::new(7),
+                    );
+                    let forms = unsafe { Value::from_bits(forms_bits) };
+                    let outcome = stepper.start(&mut ctx, forms, wide());
+                    let StepOutcome::Done { pending, .. } = outcome else {
+                        panic!("the parked call must finish");
+                    };
+                    let value = stepper.take(pending).expect("done root");
+                    let value_ok = eq_value(&value, &Value::fixnum(1));
+                    let depth = stepper.arena_depth();
+                    let roots = stepper.live_root_count();
+                    let poll = stepper.into_poll();
+                    let interp_edges = poll.edge_count(PollEdge::InterpCallEntry);
+                    let back_edges = poll.edge_count(PollEdge::InterpBackEdge);
+                    let call_entry_builds = poll.call_entry_builds;
+                    let back_edge_builds = poll.back_edge_builds;
+                    done_tx
+                        .send((
+                            value_ok,
+                            depth,
+                            roots,
+                            interp_edges,
+                            back_edges,
+                            call_entry_builds,
+                            back_edge_builds,
+                        ))
+                        .expect("done report");
+                    retire(poll.owner);
+                });
+                recv(&gate_rx);
+                request_stop(rendezvous);
+                gate_go_tx.send(()).expect("gate go");
+                let stopped = retry("stop", || stop_for_test(&era));
+                let mut ticket = lend(&era, stopped);
+                collect(&mut ticket);
+                end_epoch(ticket);
+                let (
+                    value_ok,
+                    depth,
+                    roots,
+                    interp_edges,
+                    back_edges,
+                    call_entry_builds,
+                    back_edge_builds,
+                ) = recv(&done_rx);
+                assert!(value_ok, "the post-resume car must read the collected form");
+                assert_eq!(depth, 0, "the done frame is popped");
+                assert_eq!(roots, 0, "the done root is revoked");
+                assert_eq!(
+                    interp_edges, 2,
+                    "the parked entry poll plus the return boundary"
+                );
+                assert_eq!(back_edges, 1, "one body step fetched the call form");
+                assert_eq!(call_entry_builds, 1, "the compound-form entry poll parked");
+                assert_eq!(back_edge_builds, 0, "the gated body step stayed fast");
+            });
+            drop(input);
+            finish(era);
+        },
+    );
+}
+
+/// Site B honest chain: the `progn` body step parks, the keeper collects at
+/// that park, and the post-resume path reads the rest list and its quoted
+/// literal (`(car '(5 6))` -> 5).
+#[test]
+fn wired_back_edge_parks_and_resumes_the_same_frame() {
+    Context::with_test_collection_era(
+        |context| {
+            era_input(
+                context,
+                vec![
+                    Value::fixnum(1),
+                    Value::list(vec![
+                        Value::symbol("car"),
+                        Value::list(vec![
+                            Value::symbol("quote"),
+                            Value::list(vec![Value::fixnum(5), Value::fixnum(6)]),
+                        ]),
+                    ]),
+                ],
+            )
+        },
+        |era, input| {
+            let permit = era.register(OWNER, 0).expect("register");
+            let heap = era.heap_identity();
+            let rendezvous = era.rendezvous();
+            let forms_bits = input.forms;
+            let heap_addr = input.heap;
+            let (ready_tx, ready_rx) = mpsc::channel();
+            let (go_tx, go_rx) = mpsc::channel::<()>();
+            let (done_tx, done_rx) = mpsc::channel();
+            thread::scope(|scope| {
+                scope.spawn(move || {
+                    let owner = activate(permit, heap, OWNER);
+                    let mut ctx = Context::new(unit_runtime());
+                    let mut stepper = Stage1::new(
+                        TestSlots::empty(),
+                        RecordingEscape::new(),
+                        HarnessSealed,
+                        EraPoll::new(owner, heap_addr),
+                        EraId::new(3),
+                        ShapeGeneration::new(7),
+                    );
+                    let forms = unsafe { Value::from_bits(forms_bits) };
+                    ready_tx.send(()).expect("ready");
+                    recv(&go_rx);
+                    // The stop is already active: the first body step parks.
+                    let outcome = stepper.start(&mut ctx, forms, wide());
+                    let StepOutcome::Done { pending, .. } = outcome else {
+                        panic!("the parked run must finish");
+                    };
+                    let value = stepper.take(pending).expect("done root");
+                    let value_ok = eq_value(&value, &Value::fixnum(5));
+                    let depth = stepper.arena_depth();
+                    let roots = stepper.live_root_count();
+                    let poll = stepper.into_poll();
+                    let interp_edges = poll.edge_count(PollEdge::InterpCallEntry);
+                    let back_edges = poll.edge_count(PollEdge::InterpBackEdge);
+                    let call_entry_builds = poll.call_entry_builds;
+                    let back_edge_builds = poll.back_edge_builds;
+                    done_tx
+                        .send((
+                            value_ok,
+                            depth,
+                            roots,
+                            interp_edges,
+                            back_edges,
+                            call_entry_builds,
+                            back_edge_builds,
+                        ))
+                        .expect("done report");
+                    retire(poll.owner);
+                });
+                recv(&ready_rx);
+                request_stop(rendezvous);
+                go_tx.send(()).expect("go");
+                let stopped = retry("stop", || stop_for_test(&era));
+                let mut ticket = lend(&era, stopped);
+                collect(&mut ticket);
+                end_epoch(ticket);
+                let (
+                    value_ok,
+                    depth,
+                    roots,
+                    interp_edges,
+                    back_edges,
+                    call_entry_builds,
+                    back_edge_builds,
+                ) = recv(&done_rx);
+                assert!(
+                    value_ok,
+                    "the post-resume car must read the collected rest list"
+                );
+                assert_eq!(depth, 0, "the done frame is popped");
+                assert_eq!(roots, 0, "the done root is revoked");
+                assert_eq!(interp_edges, 3, "two return boundaries plus the car entry");
+                assert_eq!(back_edges, 2, "one body step per fetched form");
+                assert_eq!(back_edge_builds, 1, "the first body step parked");
+                assert_eq!(call_entry_builds, 0, "no call-entry poll parked");
+            });
+            drop(input);
+            finish(era);
+        },
+    );
+}
+
+/// Site A fast path: an admissible phase word never builds the batch.
+#[test]
+fn wired_call_entry_fast_path_builds_no_batch() {
+    Context::with_test_collection_era(
+        |context| {
+            era_input(
+                context,
+                vec![Value::list(vec![
+                    Value::symbol("car"),
+                    Value::list(vec![
+                        Value::symbol("quote"),
+                        Value::list(vec![Value::fixnum(1), Value::fixnum(2)]),
+                    ]),
+                ])],
+            )
+        },
+        |era, input| {
+            let permit = era.register(OWNER, 0).expect("register");
+            let heap = era.heap_identity();
+            let forms_bits = input.forms;
+            let heap_addr = input.heap;
+            thread::scope(|scope| {
+                scope.spawn(move || {
+                    let owner = activate(permit, heap, OWNER);
+                    let mut ctx = Context::new(unit_runtime());
+                    let mut stepper = Stage1::new(
+                        TestSlots::empty(),
+                        RecordingEscape::new(),
+                        HarnessSealed,
+                        EraPoll::new(owner, heap_addr),
+                        EraId::new(3),
+                        ShapeGeneration::new(7),
+                    );
+                    let forms = unsafe { Value::from_bits(forms_bits) };
+                    let outcome = stepper.start(&mut ctx, forms, wide());
+                    let StepOutcome::Done { pending, .. } = outcome else {
+                        panic!("an admissible run must finish");
+                    };
+                    assert_eq!(stepper.take(pending).expect("done root"), Value::fixnum(1));
+                    let poll = stepper.into_poll();
+                    assert!(
+                        poll.edge_count(PollEdge::InterpCallEntry) >= 1,
+                        "the call-entry edge ran"
+                    );
+                    assert_eq!(
+                        poll.call_entry_builds, 0,
+                        "the call-entry fast path must not build a batch"
+                    );
+                    assert_eq!(poll.back_edge_builds, 0);
+                    retire(poll.owner);
+                });
+            });
+            drop(input);
+            finish(era);
+        },
+    );
+}
+
+/// Site B fast path: an admissible phase word never builds the batch.
+#[test]
+fn wired_back_edge_fast_path_builds_no_batch() {
+    Context::with_test_collection_era(
+        |context| era_input(context, vec![Value::fixnum(1), Value::fixnum(2)]),
+        |era, input| {
+            let permit = era.register(OWNER, 0).expect("register");
+            let heap = era.heap_identity();
+            let forms_bits = input.forms;
+            let heap_addr = input.heap;
+            thread::scope(|scope| {
+                scope.spawn(move || {
+                    let owner = activate(permit, heap, OWNER);
+                    let mut ctx = Context::new(unit_runtime());
+                    let mut stepper = Stage1::new(
+                        TestSlots::empty(),
+                        RecordingEscape::new(),
+                        HarnessSealed,
+                        EraPoll::new(owner, heap_addr),
+                        EraId::new(3),
+                        ShapeGeneration::new(7),
+                    );
+                    let forms = unsafe { Value::from_bits(forms_bits) };
+                    let outcome = stepper.start(&mut ctx, forms, wide());
+                    let StepOutcome::Done { pending, .. } = outcome else {
+                        panic!("an admissible run must finish");
+                    };
+                    assert_eq!(stepper.take(pending).expect("done root"), Value::fixnum(2));
+                    let poll = stepper.into_poll();
+                    assert!(
+                        poll.edge_count(PollEdge::InterpBackEdge) >= 2,
+                        "every fetched form crossed the body step"
+                    );
+                    assert_eq!(
+                        poll.back_edge_builds, 0,
+                        "the body-step fast path must not build a batch"
+                    );
+                    assert_eq!(poll.call_entry_builds, 0);
+                    retire(poll.owner);
+                });
+            });
+            drop(input);
+            finish(era);
+        },
+    );
+}
+
+/// Edge order for `(progn 1)`: back edge, entry, back edge, the child's return
+/// boundary, the parent's Continued return boundary. The last two are both
+/// return boundaries, so no back-edge poll fires after after_form or a
+/// Continued return.
+#[test]
+fn wired_edge_order_is_call_entry_then_body_steps() {
+    let mut ctx = context();
+    let mut stepper = engine(TestSlots::empty());
+    let forms = body(&[Value::list(vec![Value::symbol("progn"), Value::fixnum(1)])]);
+    let outcome = stepper.start(&mut ctx, forms, wide());
+    assert_eq!(done_value(&mut stepper, outcome), Value::fixnum(1));
+    assert_eq!(
+        stepper.poll_handler().edges,
+        vec![
+            PollEdge::InterpBackEdge,
+            PollEdge::InterpCallEntry,
+            PollEdge::InterpBackEdge,
+            PollEdge::InterpCallEntry,
+            PollEdge::InterpCallEntry,
+        ],
+        "the body step poll must not double the return-boundary polls"
+    );
+}
+
+/// Site A refusal: the compound-form entry poll refuses, the run unwinds to
+/// Idle with no escape, and a fresh run is accepted.
+#[test]
+fn poll_refusal_at_call_entry_unwinds_and_restarts() {
+    let mut ctx = context();
+    let mut stepper = Stage1::new(
+        TestSlots::empty(),
+        RecordingEscape::new(),
+        HarnessSealed,
+        RecordingPoll::refusing_on(PollEdge::InterpCallEntry, RendezvousError::Publication),
+        EraId::new(3),
+        ShapeGeneration::new(7),
+    );
+    let outcome = stepper.start(
+        &mut ctx,
+        body(&[call("car", &[quote(Value::list(vec![Value::fixnum(1)]))])]),
+        wide(),
+    );
+    assert!(
+        matches!(
+            outcome,
+            StepOutcome::Fault(EngineFault::Poll(RendezvousError::Publication))
+        ),
+        "the call-entry refusal is a Poll fault"
+    );
+    assert!(stepper.escape_handler().requests.is_empty());
+    assert_clear(&stepper);
+    let again = stepper.start(&mut ctx, body(&[Value::fixnum(9)]), wide());
+    assert_eq!(done_value(&mut stepper, again), Value::fixnum(9));
+}
+
+/// Site B refusal: the body-step poll refuses, the run unwinds to Idle with no
+/// escape, and a fresh run is accepted.
+#[test]
+fn poll_refusal_at_back_edge_unwinds_and_restarts() {
+    let mut ctx = context();
+    let mut stepper = Stage1::new(
+        TestSlots::empty(),
+        RecordingEscape::new(),
+        HarnessSealed,
+        RecordingPoll::refusing_on(PollEdge::InterpBackEdge, RendezvousError::Capacity),
+        EraId::new(3),
+        ShapeGeneration::new(7),
+    );
+    let outcome = stepper.start(
+        &mut ctx,
+        body(&[Value::fixnum(1), Value::fixnum(2)]),
+        wide(),
+    );
+    assert!(
+        matches!(
+            outcome,
+            StepOutcome::Fault(EngineFault::Poll(RendezvousError::Capacity))
+        ),
+        "the body-step refusal is a Poll fault"
+    );
+    assert!(stepper.escape_handler().requests.is_empty());
+    assert_clear(&stepper);
+    let again = stepper.start(&mut ctx, body(&[Value::fixnum(8)]), wide());
+    assert_eq!(done_value(&mut stepper, again), Value::fixnum(8));
+}
+
+#[test]
+fn engine_reads_a_bound_plain_symbol() {
+    let mut ctx = context();
+    let sym = Value::symbol("pentry_plain_foo");
+    let id = symbol_id(&sym, SymbolMode::Bare).expect("interned test symbol");
+    let mut stepper = engine(TestSlots::bound_with_admission(
+        Value::fixnum(5),
+        PlainAdmission::mint(id, TlsIndex::VOID),
+    ));
+    let outcome = stepper.start(&mut ctx, body(&[sym]), wide());
+    assert_eq!(done_value(&mut stepper, outcome), Value::fixnum(5));
+    assert!(stepper.escape_handler().requests.is_empty());
+    assert_eq!(
+        stepper.slots().canonical_reads(),
+        0,
+        "an owner-bound read never touches canonical storage"
+    );
+    assert_clear(&stepper);
+}
+
+#[test]
+fn engine_owner_void_symbol_yields_a_typed_void_variable_outcome() {
+    let mut ctx = context();
+    let sym = Value::symbol("pentry_plain_void");
+    let id = symbol_id(&sym, SymbolMode::Bare).expect("interned test symbol");
+    let mut stepper = engine(TestSlots::bound_with_admission(
+        Value::UNBOUND,
+        PlainAdmission::mint(id, TlsIndex::VOID),
+    ));
+    let outcome = stepper.start(&mut ctx, body(&[sym]), wide());
+    match outcome {
+        StepOutcome::VoidVariable { symbol } => assert_eq!(symbol, sym),
+        _other => panic!("a local void Plain binding must be a typed void-variable outcome"),
+    }
+    assert!(
+        stepper.escape_handler().requests.is_empty(),
+        "a void variable is a signal, not an unsupported-form escape"
+    );
+    assert_clear(&stepper);
+}
+
+#[test]
+fn engine_localized_symbol_escapes_once_and_touches_no_slot() {
+    let mut ctx = context();
+    let sym = Value::symbol("pentry_plain_localized");
+    let mut stepper = engine(TestSlots::refused(PlainAdmission::refuse(
+        PlainRefusal::NotPlain,
+    )));
+    let outcome = stepper.start(&mut ctx, body(&[sym]), wide());
+    match outcome {
+        StepOutcome::Escaped(request) => assert_eq!(request.class, EscapeClass::UnsupportedForm),
+        _other => panic!("expected one escape"),
+    }
+    assert_eq!(stepper.escape_handler().requests.len(), 1);
+    assert_eq!(
+        stepper.slots().canonical_reads(),
+        0,
+        "a refused admission does not read canonical storage"
+    );
+    // An escape keeps the top frame (settle's Escaped arm), so the arena is
+    // not empty here; assert_clear applies to Done/Fault outcomes only.
 }

@@ -229,7 +229,7 @@ fn self_policy_baseline_requires_a_scoped_source_and_actual_call() {
         let map = executable_gnu_byte_offset_map_for_test(bc);
         lower_leaf_full(
             &ops,
-            &bc.constants,
+            bc.constants(),
             1,
             map.as_deref(),
             Some(ev.obarray()),

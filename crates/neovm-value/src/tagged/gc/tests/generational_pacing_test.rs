@@ -358,7 +358,7 @@ fn generational_pacing_real_minor_credits_promotion_and_major_resets_after_recla
     let roots = Roots(save_scratch_gc_roots());
     let owner = heap.alloc_cons(TaggedValue::NIL, TaggedValue::NIL);
     push_scratch_gc_root(owner);
-    heap.collect_exact([owner].into_iter());
+    heap.collect_rooted([owner].into_iter());
     assert_eq!(
         heap.generational.old_bytes_after_major,
         size_of::<ConsCell>()
@@ -366,23 +366,24 @@ fn generational_pacing_real_minor_credits_promotion_and_major_resets_after_recla
     let child = heap.alloc_string(LispString::from_utf8("minor promotion credit"));
     push_scratch_gc_root(child);
     let child_addr = TaggedHeap::value_heap_addr(child).unwrap();
-    let child_bytes = TaggedHeap::object_bytes_from_header(child_addr as *const GcHeader);
+    let child_bytes =
+        unsafe { TaggedHeap::object_bytes_from_header(child_addr as *const GcHeader) };
     assert!(crate::tagged::mutate::set_cons_car(owner, child));
-    heap.begin_minor_collection().unwrap();
+    heap.begin_minor_collection_for_test().unwrap();
     heap.seed_root(owner);
-    heap.complete_minor_collection();
+    heap.complete_minor_collection_for_test();
     assert_eq!(heap.current_mutator_gc().pacing.minors_since_major, 0);
     assert_eq!(
         heap.current_mutator_gc().pacing.promoted_since_major,
         child_bytes
     );
-    heap.finish_incremental_sweep_now();
+    heap.finish_incremental_sweep_now_for_test();
     assert_eq!(heap.current_mutator_gc().pacing.minors_since_major, 1);
     assert_eq!(
         heap.generational.old_bytes_after_major,
         size_of::<ConsCell>()
     );
-    heap.collect_exact([owner].into_iter());
+    heap.collect_rooted([owner].into_iter());
     assert!(heap.owns_heap_value_for_test(child));
     assert_eq!(
         heap.generational.old_bytes_after_major,
@@ -393,7 +394,7 @@ fn generational_pacing_real_minor_credits_promotion_and_major_resets_after_recla
         GenerationPacingCounters::default()
     );
     drop(roots);
-    heap.collect_exact(std::iter::empty());
+    heap.collect_rooted(std::iter::empty());
     assert!(!heap.owns_heap_value_for_test(owner));
     assert!(!heap.owns_heap_value_for_test(child));
     assert_eq!(heap.generational.old_bytes_after_major, 0);

@@ -65,19 +65,19 @@ impl Drop for Roots {
 
 fn plan(f: &ByteCodeFunction) -> ir::Func {
     let arity = f
-        .params
+        .params()
         .stack_shape()
         .expect("fixture stack parameters")
         .required();
     let cfg = analyze_cfg(
         f.executable_ops(),
-        &f.constants,
+        f.constants(),
         f.executable_gnu_byte_offset_map(),
         arity,
     )
     .unwrap();
     let constants = f
-        .constants
+        .constants()
         .iter()
         .copied()
         .map(ir::ValueBits::from_value)
@@ -101,8 +101,8 @@ fn lower(f: &ByteCodeFunction, plan: &ir::Func) -> CompiledLeaf {
     plan.verify().expect("the changed IR verifies");
     let leaf = lower_opt_ir_for_test(
         f.executable_ops(),
-        &f.constants,
-        f.params
+        f.constants(),
+        f.params()
             .stack_shape()
             .expect("fixture stack parameters")
             .required(),
@@ -137,7 +137,7 @@ fn reference(ctx: &mut Context, plan: &ir::Func, args: &[Value]) -> Value {
 }
 
 fn native(ctx: &mut Context, leaf: &CompiledLeaf, args: &[Value]) -> Value {
-    let NativeRun::Ok(bits) = leaf.call(ctx as *mut Context as *mut u8, args) else {
+    let NativeRun::Ok(bits) = (unsafe { leaf.call(ctx as *mut Context as *mut u8, args) }) else {
         panic!("native return")
     };
     unsafe {
@@ -201,7 +201,7 @@ fn opt_ir_lower_proven_cons_read_keeps_exact_failed_guard_frame() {
         assert_eq!(native(&mut ctx, &leaf, &[cell]), expected);
         for wrong in [Value::NIL, Value::fixnum(3)] {
             let NativeRun::DeoptAt(frame) =
-                leaf.call(&mut ctx as *mut Context as *mut u8, &[wrong])
+                (unsafe { leaf.call(&mut ctx as *mut Context as *mut u8, &[wrong]) })
             else {
                 panic!("failed CONS speculation must deopt")
             };
@@ -408,8 +408,8 @@ fn opt_ir_lower_numeric_truth_is_only_folded_with_bool_pass() {
         leaves.push(leaf);
     }
     for argument in [Value::fixnum(Value::MOST_NEGATIVE_FIXNUM), Value::NIL] {
-        let first = leaves[0].call(&mut ctx as *mut Context as *mut u8, &[argument]);
-        let second = leaves[1].call(&mut ctx as *mut Context as *mut u8, &[argument]);
+        let first = unsafe { leaves[0].call(&mut ctx as *mut Context as *mut u8, &[argument]) };
+        let second = unsafe { leaves[1].call(&mut ctx as *mut Context as *mut u8, &[argument]) };
         assert_eq!(first, second, "the arithmetic guard's exact frame survives");
         let NativeRun::DeoptAt(frame) = first else {
             panic!("Sub1 overflow or type rejection deopts precisely")
@@ -705,12 +705,14 @@ fn opt_ir_lower_guard_uses_its_frame_after_a_heap_effect() {
     let pair = Value::cons(Value::fixnum(1), Value::NIL);
     let args = [pair, Value::fixnum(19)];
     let _roots = Roots::new(&args);
-    let NativeRun::DeoptAt(frame) = leaf.call(&mut ctx as *mut Context as *mut u8, &args) else {
+    let NativeRun::DeoptAt(frame) =
+        (unsafe { leaf.call(&mut ctx as *mut Context as *mut u8, &args) })
+    else {
         panic!("list guard deopt")
     };
     assert_eq!(frame.pc, 4);
     assert_eq!(frame.stack.as_slice(), &args);
-    assert_eq!(pair.cons_car(), f.constants[0]);
+    assert_eq!(pair.cons_car(), f.constants()[0]);
 }
 
 #[test]
@@ -783,7 +785,9 @@ fn opt_ir_lower_deopt_terminator_spills_its_exact_frame() {
         panic!("reference deopt")
     };
     let leaf = lower(&f, &changed);
-    let NativeRun::DeoptAt(actual) = leaf.call(&mut ctx as *mut Context as *mut u8, &args) else {
+    let NativeRun::DeoptAt(actual) =
+        (unsafe { leaf.call(&mut ctx as *mut Context as *mut u8, &args) })
+    else {
         panic!("IR terminator deopt")
     };
     assert_eq!(actual.pc, expected.pc as usize);
@@ -808,7 +812,7 @@ fn opt_ir_lower_rejects_an_unimplemented_typed_opcode() {
     let index = opaque(&changed, &Op::Cons);
     changed.insts[index].op = ir::Opcode::AllocCons;
     changed.verify().unwrap();
-    let result = lower_opt_ir_for_test(f.executable_ops(), &f.constants, 0, None, &changed);
+    let result = lower_opt_ir_for_test(f.executable_ops(), f.constants(), 0, None, &changed);
     assert!(matches!(result, Err(CompileError::UnsupportedOp(_))));
 
     // Bool is a valid IR representation and a materializable framestate
@@ -848,7 +852,7 @@ fn opt_ir_lower_rejects_an_unimplemented_typed_opcode() {
     frame.stack[0] = flag;
     changed.insts[cons].frame = Some(changed.intern_frame(frame));
     changed.verify().expect("Bool framestates verify");
-    let result = lower_opt_ir_for_test(f.executable_ops(), &f.constants, 0, None, &changed);
+    let result = lower_opt_ir_for_test(f.executable_ops(), f.constants(), 0, None, &changed);
     assert!(matches!(
         result,
         Err(CompileError::UnsupportedOp("opt-emit:frame-representation"))
@@ -883,7 +887,7 @@ fn opt_ir_lower_rejects_an_unimplemented_typed_opcode() {
     let position = block.insts.iter().position(|id| *id == inst).unwrap();
     block.insts.insert(position + 1, guard);
     changed.verify().expect("Bool guards verify");
-    let result = lower_opt_ir_for_test(f.executable_ops(), &f.constants, 0, None, &changed);
+    let result = lower_opt_ir_for_test(f.executable_ops(), f.constants(), 0, None, &changed);
     assert!(matches!(
         result,
         Err(CompileError::UnsupportedOp("opt-emit:guard-representation"))
@@ -975,9 +979,9 @@ fn countdown() -> ByteCodeFunction {
 fn assert_terminal_poll_target(f: &ByteCodeFunction, plan: &ir::Func, clif: &str) {
     let cfg = analyze_cfg(
         f.executable_ops(),
-        &f.constants,
+        f.constants(),
         f.executable_gnu_byte_offset_map(),
-        f.params
+        f.params()
             .stack_shape()
             .expect("fixture stack parameters")
             .required(),
@@ -1210,7 +1214,7 @@ fn opt_ir_lower_poll_quit_matches_tier0_flow() {
 
     ctx.set_quit_flag_value(Value::T);
     reset_bytecode_branch_poll_count();
-    let actual = leaf.call(&mut ctx as *mut Context as *mut u8, &args);
+    let actual = unsafe { leaf.call(&mut ctx as *mut Context as *mut u8, &args) };
     ctx.set_quit_flag_value(Value::NIL);
     assert_eq!(actual, NativeRun::Signal);
     let actual = take_pending_flow().expect("native quit flow");

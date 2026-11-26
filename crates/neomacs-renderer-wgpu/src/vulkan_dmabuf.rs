@@ -36,9 +36,9 @@ pub mod drm_fourcc {
     pub const DRM_FORMAT_YUV420: u32 = 0x32315559; // YUV420
 
     /// Linear modifier (no tiling)
-    pub const DRM_FORMAT_MOD_LINEAR: u64 = 0;
+    pub const DRM_FORMAT_MOD_LINEAR: u64 = crate::dmabuf_validation::DRM_FORMAT_MOD_LINEAR;
     /// Invalid modifier
-    pub const DRM_FORMAT_MOD_INVALID: u64 = 0x00ffffffffffffff;
+    pub const DRM_FORMAT_MOD_INVALID: u64 = crate::dmabuf_validation::DRM_FORMAT_MOD_INVALID;
 }
 
 /// Convert DRM fourcc to wgpu format
@@ -65,7 +65,7 @@ pub fn drm_fourcc_to_wgpu_format(fourcc: u32) -> Option<wgpu::TextureFormat> {
 }
 
 /// Maximum number of DMA-BUF planes supported.
-pub const MAX_PLANES: usize = 4;
+pub const MAX_PLANES: usize = crate::dmabuf_validation::MAX_DMA_BUF_PLANES;
 
 /// Multi-plane DMA-BUF import parameters.
 ///
@@ -405,28 +405,6 @@ mod hal_import {
         }
     }
 
-    /// Build per-plane `VkSubresourceLayout` entries from import params.
-    ///
-    /// The `driver_plane_count` (from the modifier query) may exceed the number
-    /// of planes the buffer actually provides. Missing planes get zero layout.
-    fn build_plane_layouts(
-        params: &DmaBufImportParams<'_>,
-        driver_plane_count: u32,
-    ) -> Vec<vk::SubresourceLayout> {
-        (0..driver_plane_count)
-            .map(|i| {
-                let idx = i as usize;
-                vk::SubresourceLayout {
-                    offset: params.offsets.get(idx).copied().unwrap_or(0) as u64,
-                    size: 0, // Must be 0 — driver calculates it
-                    row_pitch: params.strides.get(idx).copied().unwrap_or(0) as u64,
-                    array_pitch: 0,
-                    depth_pitch: 0,
-                }
-            })
-            .collect()
-    }
-
     // ========================================================================
     // Memory allocation helpers
     // ========================================================================
@@ -589,10 +567,9 @@ mod hal_import {
                 }
             };
 
-            let fd_idx = (plane_idx as usize).min(params.fds.len() - 1);
             let memory = match import_fd_as_memory(
                 vk_device,
-                params.fds[fd_idx].as_raw_fd(),
+                params.fds[plane_idx as usize].as_raw_fd(),
                 image,
                 mem_req.size,
                 memory_type_index,
@@ -720,12 +697,32 @@ mod hal_import {
     /// 2. Creates a VkImage with the correct multi-plane layout
     /// 3. Detects disjoint vs non-disjoint fds and binds memory accordingly
     /// 4. Wraps as wgpu texture via HAL
-    pub fn import_dmabuf_hal(
+    ///
+    /// # Safety
+    /// Same contract as [`super::import_dmabuf_external`].
+    pub unsafe fn import_dmabuf_hal(
         device: &wgpu::Device,
         _queue: &wgpu::Queue,
         params: &DmaBufImportParams<'_>,
     ) -> Option<wgpu::Texture> {
         use wgpu::hal::api::Vulkan;
+
+        let plane_count = params.num_planes as usize;
+        if params.width == 0
+            || params.height == 0
+            || plane_count == 0
+            || plane_count > MAX_PLANES
+            || plane_count > params.fds.len()
+        {
+            tracing::warn!(
+                "import_dmabuf_hal: invalid geometry/planes ({}x{}, num_planes={}, fds={})",
+                params.width,
+                params.height,
+                params.num_planes,
+                params.fds.len()
+            );
+            return None;
+        }
 
         let vk_format = drm_fourcc_to_vk_format(params.fourcc)?;
         let wgpu_format = drm_fourcc_to_wgpu_format(params.fourcc)?;
@@ -737,26 +734,24 @@ mod hal_import {
             params.fourcc,
             params.modifier,
             params.num_planes,
-            &params.fds[..params.num_planes as usize]
+            &params.fds[..plane_count]
         );
 
-        unsafe {
-            let hal_device_guard = device.as_hal::<Vulkan>()?;
-            let hal_device = &*hal_device_guard;
-            let vk_device = hal_device.raw_device();
-            let physical_device = hal_device.raw_physical_device();
-            let instance = hal_device.shared_instance().raw_instance();
-            import_dmabuf_vulkan(
-                device,
-                hal_device,
-                vk_device,
-                instance,
-                physical_device,
-                params,
-                vk_format,
-                wgpu_format,
-            )
-        }
+        let hal_device_guard = device.as_hal::<Vulkan>()?;
+        let hal_device = &*hal_device_guard;
+        let vk_device = hal_device.raw_device();
+        let physical_device = hal_device.raw_physical_device();
+        let instance = hal_device.shared_instance().raw_instance();
+        import_dmabuf_vulkan(
+            device,
+            hal_device,
+            vk_device,
+            instance,
+            physical_device,
+            params,
+            vk_format,
+            wgpu_format,
+        )
     }
 
     /// Core Vulkan DMA-BUF import with modifier query and multi-plane support.
@@ -770,22 +765,52 @@ mod hal_import {
         vk_format: vk::Format,
         wgpu_format: wgpu::TextureFormat,
     ) -> Option<wgpu::Texture> {
-        // Step 1: Query driver for modifier plane count
+        // Step 1: Query driver for modifier plane count and sampling support
         let modifier_props =
             query_modifier_properties(instance, physical_device, vk_format, params.modifier)?;
 
-        let driver_plane_count = modifier_props.plane_count;
-        if driver_plane_count == 0 || driver_plane_count > MAX_PLANES as u32 {
+        if !modifier_props
+            .tiling_features
+            .contains(vk::FormatFeatureFlags::SAMPLED_IMAGE | vk::FormatFeatureFlags::TRANSFER_SRC)
+        {
             tracing::warn!(
-                "Driver reports invalid plane count {} for modifier {:#x}",
-                driver_plane_count,
-                params.modifier
+                "Modifier {:#x} lacks SAMPLED_IMAGE | TRANSFER_SRC features ({:?})",
+                params.modifier,
+                modifier_props.tiling_features
             );
             return None;
         }
 
+        let driver_plane_count = modifier_props.plane_count;
+        let bytes_per_pixel = wgpu_format.block_copy_size(None)?;
+        let plane_count = params.num_planes as usize;
+        let backing_lens: Vec<Option<u64>> = params
+            .fds
+            .iter()
+            .take(plane_count)
+            .map(|fd| backing_fd_len(fd.as_raw_fd()))
+            .collect();
+        let validated_planes = match crate::dmabuf_validation::validate_hal_import_layout(
+            params.width,
+            params.height,
+            bytes_per_pixel,
+            params.modifier,
+            params.num_planes,
+            driver_plane_count,
+            params.fds.len(),
+            &params.strides,
+            &params.offsets,
+            &backing_lens,
+        ) {
+            Ok(planes) => planes,
+            Err(error) => {
+                tracing::warn!("import_dmabuf_vulkan: rejected DMA-BUF layout: {error}");
+                return None;
+            }
+        };
+
         // Step 2: Determine if fds are disjoint (different DMA-BUF allocations)
-        let active_fds = &params.fds[..params.num_planes.min(driver_plane_count) as usize];
+        let active_fds = &params.fds[..driver_plane_count as usize];
         let disjoint = are_fds_disjoint(active_fds);
 
         tracing::debug!(
@@ -795,8 +820,17 @@ mod hal_import {
             disjoint
         );
 
-        // Step 3: Build plane layouts from import params
-        let plane_layouts = build_plane_layouts(params, driver_plane_count);
+        // Step 3: Build plane layouts from validated params
+        let plane_layouts: Vec<vk::SubresourceLayout> = validated_planes
+            .iter()
+            .map(|plane| vk::SubresourceLayout {
+                offset: plane.offset,
+                size: 0, // Must be 0 — driver calculates it
+                row_pitch: plane.row_pitch,
+                array_pitch: 0,
+                depth_pitch: 0,
+            })
+            .collect();
 
         // Step 4: Build pNext chain for image creation
         let mut drm_modifier_info = vk::ImageDrmFormatModifierExplicitCreateInfoEXT {
@@ -904,45 +938,126 @@ mod hal_import {
     }
 }
 
-/// Import DMA-BUF as wgpu texture — main entry point.
+/// Import DMA-BUF as an external zero-copy wgpu texture (Vulkan HAL only).
 ///
-/// Fallback chain:
-/// 1. Vulkan HAL zero-copy (queries driver for modifier support)
-/// 2. mmap + CPU upload (only for linear modifiers)
+/// # Safety
+/// - `params.fds[..params.num_planes]` must be valid Linux DMA-BUF descriptors
+///   whose backing allocations cover every byte described by `params.offsets`,
+///   `params.strides`, `params.width`, `params.height`, `params.fourcc`, and
+///   `params.modifier`.
+/// - The producer must have completed any writes visible to this import and
+///   must not recycle or truncate the backing memory while the returned
+///   texture is in use.
 #[cfg(target_os = "linux")]
-pub fn import_dmabuf_external(
+pub unsafe fn import_dmabuf_external(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
     params: &DmaBufImportParams<'_>,
 ) -> Option<wgpu::Texture> {
-    if let Some(texture) = hal_import::import_dmabuf_hal(device, queue, params) {
+    // SAFETY: caller upholds the DMA-BUF descriptor, layout, and sync contract.
+    if let Some(texture) = unsafe { hal_import::import_dmabuf_hal(device, queue, params) } {
         return Some(texture);
     }
     tracing::debug!("HAL DMA-BUF import failed");
     None
 }
 
+/// Import DMA-BUF as wgpu texture — main entry point.
+///
+/// Fallback chain:
+/// 1. Vulkan HAL zero-copy (queries driver for modifier support)
+/// 2. mmap + CPU upload (only for linear modifiers)
+///
+/// # Safety
+/// Same contract as [`import_dmabuf_external`] and [`import_dmabuf_via_mmap`].
 #[cfg(target_os = "linux")]
-pub fn import_dmabuf(
+pub unsafe fn import_dmabuf(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
     params: &DmaBufImportParams<'_>,
 ) -> Option<wgpu::Texture> {
-    if let Some(texture) = import_dmabuf_external(device, queue, params) {
+    // SAFETY: caller upholds the DMA-BUF descriptor, layout, and sync contract.
+    if let Some(texture) = unsafe { import_dmabuf_external(device, queue, params) } {
         return Some(texture);
     }
     tracing::debug!("falling back to linear DMA-BUF mmap import");
 
     // Fall back to mmap-based import (copies to CPU then GPU)
-    import_dmabuf_via_mmap(device, queue, params)
+    // SAFETY: caller upholds the linear mmap contract (no concurrent truncation
+    // or unsynchronized writes during the copy).
+    unsafe { import_dmabuf_via_mmap(device, queue, params) }
+}
+
+#[cfg(target_os = "linux")]
+struct ValidatedLinearMmap {
+    offset: libc::off_t,
+    byte_len: usize,
+}
+
+#[cfg(target_os = "linux")]
+fn backing_fd_len(fd: libc::c_int) -> Option<u64> {
+    // SAFETY: `libc::stat` is a plain C struct where an all-zero bit pattern
+    // is valid before `fstat` initializes it.
+    let mut stat: libc::stat = unsafe { std::mem::zeroed() };
+    // SAFETY: `fstat` writes to `&mut stat` and returns `-1` on invalid fds.
+    if unsafe { libc::fstat(fd, &mut stat) } == 0 && stat.st_size > 0 {
+        return u64::try_from(stat.st_size).ok();
+    }
+    // Some DMA-BUF implementations report st_size == 0 via fstat and expose
+    // the allocation length through lseek(SEEK_END). Query without clobbering
+    // the file offset when seekable.
+    // SAFETY: `lseek` on any file descriptor is memory-safe and reports `-1`
+    // (`EINVAL`/`ESPIPE`/`EBADF`) when unseekable or invalid.
+    let current = unsafe { libc::lseek(fd, 0, libc::SEEK_CUR) };
+    // SAFETY: same as above.
+    let end = unsafe { libc::lseek(fd, 0, libc::SEEK_END) };
+    if current >= 0 {
+        // SAFETY: restoring the offset returned by `SEEK_CUR` above.
+        let _ = unsafe { libc::lseek(fd, current, libc::SEEK_SET) };
+    }
+    if end >= 0 {
+        u64::try_from(end).ok()
+    } else {
+        None
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn validate_linear_mmap_region(
+    fd: libc::c_int,
+    width: u32,
+    height: u32,
+    stride: u32,
+    offset: u32,
+    bytes_per_pixel: u32,
+) -> Option<ValidatedLinearMmap> {
+    let region = crate::dmabuf_validation::validate_linear_region(
+        width,
+        height,
+        stride,
+        offset,
+        bytes_per_pixel,
+        backing_fd_len(fd),
+    )
+    .ok()?;
+    let offset = libc::off_t::try_from(region.offset).ok()?;
+    Some(ValidatedLinearMmap {
+        offset,
+        byte_len: region.byte_len,
+    })
 }
 
 /// Fallback: read DMA-BUF contents via mmap and create texture via CPU copy.
 ///
 /// Only works for linear (untiled) buffers. Tiled/compressed modifiers cannot
 /// be read as linear memory, so this will skip them.
+///
+/// # Safety
+/// - `params.fds[0]` must refer to a mappable linear buffer (DMA-BUF or shared
+///   memory) that is not concurrently truncated or mutated while this function
+///   copies its bytes out of the mapping.
 #[cfg(target_os = "linux")]
-pub fn import_dmabuf_via_mmap(
+pub unsafe fn import_dmabuf_via_mmap(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
     params: &DmaBufImportParams<'_>,
@@ -958,22 +1073,21 @@ pub fn import_dmabuf_via_mmap(
         return None;
     }
 
-    if params.fds.is_empty() {
+    if params.num_planes == 0 || params.fds.is_empty() {
         tracing::warn!("import_dmabuf_via_mmap: no fds provided");
         return None;
     }
 
     let wgpu_format = drm_fourcc_to_wgpu_format(params.fourcc)?;
+    let bytes_per_pixel = wgpu_format.block_copy_size(None)?;
 
     let stride = params.strides.first().copied().unwrap_or(0);
     let offset = params.offsets.first().copied().unwrap_or(0);
     // Borrowed view of the caller's fd; we dup() below and never close this one.
     let fd = params.fds[0].as_raw_fd();
 
-    let expected_size = (stride * params.height) as usize;
-
     // Dup the fd so we don't close the original. Own the dup so it is closed on
-    // every exit path (dup failure aside), including the mmap-failure return.
+    // every exit path (dup failure aside), including validation/mmap failures.
     let raw_dup = unsafe { libc::dup(fd) };
     if raw_dup < 0 {
         tracing::warn!("import_dmabuf_via_mmap: failed to dup fd");
@@ -981,15 +1095,34 @@ pub fn import_dmabuf_via_mmap(
     }
     let fd_dup = unsafe { OwnedFd::from_raw_fd(raw_dup) };
 
-    // mmap the DMA-BUF
+    let Some(region) = validate_linear_mmap_region(
+        fd_dup.as_raw_fd(),
+        params.width,
+        params.height,
+        stride,
+        offset,
+        bytes_per_pixel,
+    ) else {
+        tracing::warn!(
+            "import_dmabuf_via_mmap: invalid linear region ({}x{}, stride={}, offset={})",
+            params.width,
+            params.height,
+            stride,
+            offset
+        );
+        return None;
+    };
+
+    // mmap the linear buffer and copy through raw pointers without creating a
+    // shared Rust slice reference over MAP_SHARED memory.
     let data = unsafe {
         let ptr = libc::mmap(
             std::ptr::null_mut(),
-            expected_size,
+            region.byte_len,
             libc::PROT_READ,
             libc::MAP_SHARED,
             fd_dup.as_raw_fd(),
-            offset as i64,
+            region.offset,
         );
 
         if ptr == libc::MAP_FAILED {
@@ -998,10 +1131,11 @@ pub fn import_dmabuf_via_mmap(
             return None;
         }
 
-        let slice = std::slice::from_raw_parts(ptr as *const u8, expected_size);
-        let data = slice.to_vec();
+        let mut data = Vec::<u8>::with_capacity(region.byte_len);
+        std::ptr::copy_nonoverlapping(ptr.cast::<u8>(), data.as_mut_ptr(), region.byte_len);
+        data.set_len(region.byte_len);
 
-        libc::munmap(ptr, expected_size);
+        libc::munmap(ptr, region.byte_len);
 
         data
     };

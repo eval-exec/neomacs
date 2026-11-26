@@ -409,6 +409,11 @@ pub(crate) fn default_value_by_id(ctx: &Context, resolved: SymId) -> Option<Valu
     if let Some(binding) = ctx.owner_default_binding(resolved) {
         return binding.bound();
     }
+    // GNU's `*-consed` DEFVAR_INTs are live counters; the forwarded cell is
+    // only a cache refreshed on read.
+    if let Some(value) = ctx.derived_memory_use_read(resolved) {
+        return Some(value);
+    }
     default_value_in_state(
         ctx.obarray(),
         Some(&ctx.edit.buffers.buffer_defaults),

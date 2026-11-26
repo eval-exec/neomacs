@@ -514,7 +514,7 @@ impl HelpFormatter {
             }
             ValueKind::Veclike(VecLikeType::ByteCode) => {
                 if let Some(bc) = value.get_bytecode_data() {
-                    let params = match &bc.params {
+                    let params = match bc.params() {
                         crate::emacs_core::bytecode::FunctionParams::Named(params) => {
                             format_param_list(params)
                         }

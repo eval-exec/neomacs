@@ -1,6 +1,8 @@
 //! Exit publication after the native completion registration was retired.
 
-use super::{Baton, Control, NextOwner, PickNext, ThreadKey, Wait};
+use super::{
+    Control, EraState, GroupTurn, NextOwner, OwnerLocation, PickNext, ThreadKey, TurnRight, Wait,
+};
 
 impl Control {
     /// ME ended: hand the Baton to the next thread, wake its joiners, and
@@ -8,7 +10,11 @@ impl Control {
     /// closing: every waiting thread is woken (it signals) and gets the
     /// Baton in turn.
     #[doc(hidden)]
-    pub fn finish(&self, completion: crate::emacs_core::threads::RetiredCompletion, baton: Baton) {
+    pub fn finish(
+        &self,
+        completion: crate::emacs_core::threads::RetiredCompletion,
+        baton: TurnRight,
+    ) {
         let thread = completion.into_thread_id();
         if !baton.held_here() || thread.heap_identity() != baton.parallel_heap_identity() {
             std::process::abort();
@@ -22,6 +28,10 @@ impl Control {
         {
             let mut state = self.state();
             Self::remove_key(&mut state, me);
+        }
+        if baton.is_era() {
+            self.finish_era(baton);
+            return;
         }
         let next = match self.pick_next() {
             PickNext::Owner(next) => Some(next),
@@ -47,6 +57,242 @@ impl Control {
             }
             // Nothing else lives: the Baton and facade epoch end together.
             None => drop(baton),
+        }
+    }
+
+    /// Era-mode exit handoff: honor Case (ii) (`ring_waiter()` only when an
+    /// eligible Baton owner is ready, avoiding spurious empty round-trips —
+    /// MEDIUM-2) and Case (i) (end interval before blocking, respecting
+    /// `main_excluded` and running QD2 deadlock detection so surviving blocked
+    /// Baton threads wake cleanly and an already-parked carrier slot never
+    /// wedges — HIGH-2).
+    fn finish_era(&self, mut baton: TurnRight) {
+        const DEADLOCK_POLL: std::time::Duration = std::time::Duration::from_millis(5);
+        loop {
+            enum EraFinishStep {
+                CaseIi {
+                    requester: super::GroupRequestSender,
+                    port: Option<super::GroupPort>,
+                },
+                Dispatch(NextOwner),
+                EndToIdle,
+            }
+            let step = {
+                let mut state = self.state();
+                let eligible_now = self.has_eligible_owner_now(&mut state);
+                if self.era_ring_waiter(&state) {
+                    if eligible_now {
+                        let EraState::EraOpen(era) = &mut state.era else {
+                            std::process::abort();
+                        };
+                        let Some(requester) = era.requester.clone() else {
+                            std::process::abort();
+                        };
+                        era.turn = GroupTurn::Requested;
+                        EraFinishStep::CaseIi {
+                            requester,
+                            port: era.port.take(),
+                        }
+                    } else {
+                        let EraState::EraOpen(era) = &mut state.era else {
+                            std::process::abort();
+                        };
+                        era.turn = GroupTurn::Idle;
+                        EraFinishStep::EndToIdle
+                    }
+                } else if let Some(turn) = Self::pick_service(&mut state) {
+                    EraFinishStep::Dispatch(NextOwner::Native(turn))
+                } else {
+                    match Self::pick(&mut state) {
+                        Some((key, None)) => EraFinishStep::Dispatch(NextOwner::Resume(key)),
+                        Some((_, Some(_))) | None => {
+                            let EraState::EraOpen(era) = &mut state.era else {
+                                std::process::abort();
+                            };
+                            era.turn = GroupTurn::Idle;
+                            EraFinishStep::EndToIdle
+                        }
+                    }
+                }
+            };
+            match step {
+                EraFinishStep::CaseIi { requester, port } => {
+                    Self::give_back_era_turn(baton);
+                    if requester.request_tail().is_err() {
+                        return;
+                    }
+                    let Some(port) = port else {
+                        return;
+                    };
+                    baton = match self.await_era_world_with_port(port) {
+                        Ok(right) => right,
+                        Err(_) => return,
+                    };
+                    continue;
+                }
+                EraFinishStep::Dispatch(next) => {
+                    let (target, wake) = Self::wake_for(next, baton);
+                    self.send_wake(target, wake);
+                    return;
+                }
+                EraFinishStep::EndToIdle => {
+                    // Case (i): no eligible Baton thread right now; end the
+                    // interval before waiting.
+                    Self::give_back_era_turn(baton);
+                }
+            }
+
+            loop {
+                enum IdleAction {
+                    Done,
+                    AwaitWorld(super::GroupPort),
+                    WaitDeadline(std::time::Instant),
+                    CheckDeadlock,
+                }
+                let action = {
+                    let mut state = self.state();
+                    if state.senders.is_empty() {
+                        IdleAction::Done
+                    } else {
+                        let turn = match &state.era {
+                            EraState::EraOpen(era) => era.turn,
+                            _ => return,
+                        };
+                        match turn {
+                            GroupTurn::Holding | GroupTurn::Collecting => IdleAction::Done,
+                            GroupTurn::Requested => {
+                                match Self::take_era_port_if_requested(&mut state) {
+                                    Some(port) => IdleAction::AwaitWorld(port),
+                                    None => IdleAction::Done,
+                                }
+                            }
+                            GroupTurn::Idle => {
+                                let eligible_now = self.has_eligible_owner_now(&mut state);
+                                let now_requested = matches!(
+                                    &state.era,
+                                    EraState::EraOpen(era) if era.turn == GroupTurn::Requested
+                                );
+                                if now_requested {
+                                    match Self::take_era_port_if_requested(&mut state) {
+                                        Some(port) => IdleAction::AwaitWorld(port),
+                                        None => IdleAction::Done,
+                                    }
+                                } else if eligible_now {
+                                    Self::coalesce_request_locked(&mut state);
+                                    match Self::take_era_port_if_requested(&mut state) {
+                                        Some(port) => IdleAction::AwaitWorld(port),
+                                        None => IdleAction::Done,
+                                    }
+                                } else if state.physical.get(&ThreadKey::Main)
+                                    == Some(&OwnerLocation::NativeReleased)
+                                {
+                                    // Main's native wait owns reacquisition.
+                                    IdleAction::Done
+                                } else {
+                                    let main_excluded = Self::main_excluded(&state);
+                                    let next_deadline = state
+                                        .waits
+                                        .select_index
+                                        .keys()
+                                        .find(|d| !(d.key == ThreadKey::Main && main_excluded))
+                                        .map(|d| d.wait_end);
+                                    match next_deadline {
+                                        Some(deadline) => IdleAction::WaitDeadline(deadline),
+                                        None => IdleAction::CheckDeadlock,
+                                    }
+                                }
+                            }
+                        }
+                    }
+                };
+                match action {
+                    IdleAction::Done => return,
+                    IdleAction::AwaitWorld(port) => {
+                        baton = match self.await_era_world_with_port(port) {
+                            Ok(right) => right,
+                            Err(_) => return,
+                        };
+                        break;
+                    }
+                    IdleAction::WaitDeadline(deadline) => {
+                        let state = self.state();
+                        if state.senders.is_empty()
+                            || !matches!(
+                                &state.era,
+                                EraState::EraOpen(era) if era.turn == GroupTurn::Idle
+                            )
+                        {
+                            continue;
+                        }
+                        drop(
+                            self.metadata_changed
+                                .wait_timeout(
+                                    state,
+                                    deadline.saturating_duration_since(std::time::Instant::now()),
+                                )
+                                .unwrap_or_else(std::sync::PoisonError::into_inner),
+                        );
+                    }
+                    IdleAction::CheckDeadlock => {
+                        // QD2: if keeper confirms no live parallel owner and
+                        // empty ring, wake surviving blocked Baton threads and
+                        // hand off a fresh WorldTurn (matching non-era finish's
+                        // NoRunnable path) so the carrier never wedges.
+                        if self.query_era_idle_for_deadlock() {
+                            let port = {
+                                let mut state = self.state();
+                                let still_idle = matches!(
+                                    &state.era,
+                                    EraState::EraOpen(era) if era.turn == GroupTurn::Idle
+                                );
+                                let any_live_progress = Self::eligible_runnable_count(&state) > 0
+                                    || Self::queued_native_work(&state) == super::NativeWork::Ready
+                                    || state.waits.select_len() > 0
+                                    || state.physical.get(&ThreadKey::Main)
+                                        == Some(&OwnerLocation::NativeReleased);
+                                if still_idle && !any_live_progress && !state.senders.is_empty() {
+                                    state.closing = true;
+                                    let blocked: Vec<ThreadKey> = state
+                                        .waits
+                                        .iter()
+                                        .filter(|(_, wait)| !matches!(wait, Wait::Exited))
+                                        .map(|(key, _)| *key)
+                                        .collect();
+                                    for key in blocked {
+                                        Self::wake_locked(&mut state, key);
+                                    }
+                                    Self::coalesce_request_locked(&mut state);
+                                    Self::take_era_port_if_requested(&mut state)
+                                } else {
+                                    None
+                                }
+                            };
+                            if let Some(port) = port {
+                                baton = match self.await_era_world_with_port(port) {
+                                    Ok(right) => right,
+                                    Err(_) => return,
+                                };
+                                break;
+                            }
+                            continue;
+                        }
+                        let state = self.state();
+                        if state.senders.is_empty()
+                            || !matches!(
+                                &state.era,
+                                EraState::EraOpen(era) if era.turn == GroupTurn::Idle
+                            )
+                        {
+                            continue;
+                        }
+                        drop(
+                            self.metadata_changed
+                                .wait_timeout(state, DEADLOCK_POLL)
+                                .unwrap_or_else(std::sync::PoisonError::into_inner),
+                        );
+                    }
+                }
+            }
         }
     }
 }

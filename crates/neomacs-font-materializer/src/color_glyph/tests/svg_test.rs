@@ -277,7 +277,7 @@ fn one_document_serves_each_glyph_in_its_range() {
 }
 
 #[test]
-fn a_document_without_the_glyph_element_paints_nothing() {
+fn a_claimed_document_without_the_glyph_element_reports_failure() {
     let base = glyph('\u{2588}');
     let other = glyph('O');
     let font = fixture_with_tables(&[(
@@ -285,11 +285,24 @@ fn a_document_without_the_glyph_element_paints_nothing() {
         svg_table(&[(base, base, rect_document(other, "#2200ee"), false)]),
     )]);
     assert_eq!(
-        rasterize_at(&font, "synthetic:svg-missing", base, [0, 0, 0, 255], 100.0),
-        None,
-        "a document without the glyph element is not a description for the glyph"
+        super::test_support::rasterize_at_result(
+            &font,
+            "synthetic:svg-missing",
+            base,
+            [0, 0, 0, 255],
+            100.0
+        ),
+        Err(ColorGlyphError::Paint {
+            glyph_id: base,
+            paint_source: ColorGlyphSource::SvgDocuments,
+            reason: ColorPaintFailure::Malformed
+        }),
+        "a document claiming the glyph must contain its glyph<ID> description"
     );
 }
+
+#[path = "svg_outcome_test.rs"]
+mod outcomes;
 
 /// The pinned COLRv1 emoji fixture carries real SVG documents (723 of them,
 /// separate from its COLR graph); render one directly.
@@ -310,7 +323,9 @@ fn real_svg_documents_render_from_the_pinned_fixture() {
         px_size: 64.0,
         ..ColorGlyphRequest::default()
     };
-    let raster = super::svg::paint_svg_glyph(&face, &request).expect("the real document paints");
+    let raster = super::svg::paint_svg_glyph(&face, &request)
+        .expect("valid SVG source")
+        .expect("the real document paints");
     assert!(
         ink(&raster) > 100,
         "the real document must paint real ink: {} pixels",

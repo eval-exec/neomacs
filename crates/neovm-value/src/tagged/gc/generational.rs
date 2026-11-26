@@ -248,15 +248,21 @@ impl TaggedHeap {
     /// residual major after a worker joins or an unpublished capture drops.
     #[cold]
     #[inline(never)]
+    /// # Safety
+    ///
+    /// Starts a minor cycle that later frees unmarked young objects. The
+    /// caller has stopped every mutator and holds the only live heap borrow.
     #[doc(hidden)]
-    pub fn begin_minor_collection(&mut self) -> Result<(), MinorCollectionAdmissionError> {
+    pub unsafe fn begin_minor_collection(&mut self) -> Result<(), MinorCollectionAdmissionError> {
         // Admission precedes EVERY mutation, even for a GEN0 heap. Joining a
         // worker alone does not finish its major's residual mark or sweep.
         self.check_minor_admission()?;
+        assert!(
+            !self.has_unfinished_concurrent_mark(),
+            "minor stop-all excludes unfinished concurrent marking"
+        );
         debug_assert!(
-            !self.concurrent_mark_running
-                && !self.mark_in_progress
-                && !self.generational.major_in_progress,
+            !self.mark_in_progress && !self.generational.major_in_progress,
             "minor stop-all excludes concurrent and unfinished major marking"
         );
         self.close_alloc_regions();
@@ -346,13 +352,20 @@ impl TaggedHeap {
     /// tracing a survivor and setting its generation bit.
     #[cold]
     #[inline(never)]
+    /// # Safety
+    ///
+    /// Promotes survivors and starts the sweep that frees the rest. The
+    /// caller holds the only live heap borrow from the matching
+    /// [`Self::begin_minor_collection`].
     #[doc(hidden)]
-    pub fn complete_minor_collection(&mut self) {
+    pub unsafe fn complete_minor_collection(&mut self) {
+        self.assert_no_owner_cons_reserves();
         assert!(self.generational.cycle == GenerationCycle::Minor);
         self.close_alloc_regions();
         let bytes_before = self.live_bytes;
         self.incremental_drain_all();
-        self.incremental_finish(bytes_before, std::time::Instant::now());
+        // SAFETY: this entry owns the minor cycle's sweep.
+        unsafe { self.incremental_finish(bytes_before, std::time::Instant::now()) };
     }
 
     #[inline]
@@ -360,8 +373,10 @@ impl TaggedHeap {
         self.generational.cycle == GenerationCycle::Minor
     }
 
+    /// # Safety
+    /// `header` must point to a valid, live [`GcHeader`] owned by this heap.
     #[inline]
-    pub(super) fn note_minor_survivor(&mut self, header: *mut GcHeader) {
+    pub(super) unsafe fn note_minor_survivor(&mut self, header: *mut GcHeader) {
         if self.generational.enabled && !unsafe { (*header).tenured } {
             self.generational.promo.push(header);
         }
@@ -412,8 +427,16 @@ impl TaggedHeap {
                 if !header.tenured {
                     debug_assert!(header.is_marked_at(self.mark_parity));
                     header.promote_to_old_generation();
-                    let bytes = self.collector_object_bytes(ptr);
-                    self.generational.old_bytes = self.generational.old_bytes.saturating_add(bytes);
+                    let image_resident = header.flags.image_resident();
+                    // SAFETY: `ptr` is a live surviving object visited during world-stopped promotion.
+                    let bytes = unsafe { self.collector_object_bytes(ptr) };
+                    // Image provenance excludes this storage even before a
+                    // partition cycle makes it permanent. Runtime hash
+                    // backing joins the completed census separately.
+                    if !image_resident {
+                        self.generational.old_bytes =
+                            self.generational.old_bytes.saturating_add(bytes);
+                    }
                     newly_promoted_header_bytes = newly_promoted_header_bytes.saturating_add(bytes);
                 }
             }
@@ -752,7 +775,7 @@ impl TaggedHeap {
     #[inline(never)]
     pub(super) fn verify_old_cons_edge_cards_world_stopped(&self) {
         for block in &self.cons_blocks {
-            for word in 0..cons_mark_words(block.next_index as usize) {
+            for word in 0..cons_mark_words(block.next_index()) {
                 let mut old = block.trailer().old_word(word);
                 while old != 0 {
                     let index = word * CONS_MARK_BITS_PER_WORD + old.trailing_zeros() as usize;

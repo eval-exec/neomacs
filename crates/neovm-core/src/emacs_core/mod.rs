@@ -305,6 +305,9 @@ pub use neovm_system::emacs_core::host_input;
 #[path = "load_boot.rs"]
 pub mod load_boot;
 pub(crate) use neovm_system::emacs_core::os_signal;
+// The frontend's one seam into os_signal: GNU's xwidget re-claim of SIGCHLD
+// after WebKit/WPE init. The rest of the module stays crate-private.
+pub use neovm_system::emacs_core::os_signal::reclaim_child_signal;
 pub use neovm_system::emacs_core::path_exec;
 pub use neovm_system::emacs_core::perf_trace;
 pub(crate) use neovm_system::emacs_core::platform_facts;
@@ -488,6 +491,10 @@ mod architecture_oracle_form_empty_binding_guard_test;
 mod architecture_value_ref_guard_test;
 
 #[cfg(test)]
+#[path = "tests/architecture/heap_capability_guard_test.rs"]
+mod architecture_heap_capability_guard_test;
+
+#[cfg(test)]
 #[path = "tests/architecture/inline_boundary_test.rs"]
 mod architecture_inline_boundary_test;
 
@@ -516,6 +523,10 @@ mod architecture_host_effect_guard_test;
 mod architecture_unsafe_shim_guard_test;
 
 #[cfg(test)]
+#[path = "tests/architecture/dead_string_tag_guard_test.rs"]
+mod architecture_dead_string_tag_guard_test;
+
+#[cfg(test)]
 #[path = "tests/architecture/debug_assert_side_effect_guard_test.rs"]
 mod architecture_debug_assert_side_effect_guard_test;
 
@@ -534,6 +545,10 @@ mod architecture_leaf_slot_writer_guard_test;
 #[cfg(test)]
 #[path = "tests/architecture/obarray_writer_raw_symbol_guard_test.rs"]
 mod architecture_obarray_writer_raw_symbol_guard_test;
+
+#[cfg(test)]
+#[path = "tests/architecture/buffer_manager_view_ratchet_test.rs"]
+mod architecture_buffer_manager_view_ratchet_test;
 
 #[cfg(test)]
 #[path = "tests/architecture/value_display_hook_guard_test.rs"]
@@ -566,6 +581,9 @@ mod architecture_condition_snapshot_admission_guard_test;
 #[cfg(test)]
 #[path = "tests/heap_registry_cross_heap_test.rs"]
 mod heap_registry_cross_heap_test;
+#[cfg(test)]
+#[path = "tests/overlay_view_memo_gc_test.rs"]
+mod overlay_view_memo_gc_test;
 #[cfg(test)]
 #[path = "tests/plist_collection_capture_test.rs"]
 mod plist_collection_capture_test;

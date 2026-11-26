@@ -7,6 +7,7 @@ use crate::display_source::{
 };
 use crate::display_source_resolver::DisplaySourceFaceBasis;
 use crate::neovm_bridge::FaceResolver;
+use crate::string_property_snapshot::StringSourceRootScope;
 use neovm_core::emacs_core::value::StringTextPropertyRun;
 use neovm_core::emacs_core::{Context, Value};
 use neovm_core::face::FaceTable;
@@ -148,6 +149,7 @@ fn exhausted_structural_source_drains_emission_once_outside_output_slot() {
         value,
         RenderFaceRef::FaceId(FaceId::new(0)),
         LispStringSourceOrigin::Normal,
+        StringSourceRootScope::Rooted(_context.owned_root_retainer()),
     )
     .unwrap();
     let mut state = DisplayRowSourceState::frame_local();

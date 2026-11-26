@@ -20,7 +20,7 @@ pub fn range(start: usize, end: usize) -> EmacsByteRange {
 }
 
 fn assert_cold_and_published_queries(index: &OverlayIndex, endpoints: &[usize]) {
-    assert!(index.endpoints.get().is_none());
+    assert!(!index.is_endpoints_published());
     let queries = [
         (0, 20),
         (1, 2),
@@ -30,51 +30,95 @@ fn assert_cold_and_published_queries(index: &OverlayIndex, endpoints: &[usize]) 
         (5, 6),
         (6, 6),
         (6, 7),
+        (7, 6),
         (7, 12),
         (10, 12),
         (12, 20),
         (20, 12),
     ];
-    for (position, limit) in queries {
-        let expected = endpoints
+    let next_expected = |position, limit| {
+        endpoints
             .iter()
             .copied()
             .filter(|endpoint| position < *endpoint && *endpoint <= limit)
             .min()
-            .map(EmacsBytePos::new);
+            .map(EmacsBytePos::new)
+    };
+    let previous_expected = |position, limit| {
+        endpoints
+            .iter()
+            .copied()
+            .filter(|endpoint| limit <= *endpoint && *endpoint < position)
+            .max()
+            .map(EmacsBytePos::new)
+    };
+    let cold_next = queries.map(|(position, limit)| {
+        let actual = index
+            .next_boundary_after_no_alloc(EmacsBytePos::new(position), EmacsBytePos::new(limit));
         assert_eq!(
-            index.next_boundary_after_no_alloc(
-                EmacsBytePos::new(position),
-                EmacsBytePos::new(limit)
-            ),
-            expected,
-            "cold query ({position}, {limit}]"
+            actual,
+            next_expected(position, limit),
+            "cold next ({position}, {limit}]"
+        );
+        assert_eq!(
+            actual,
+            index.next_boundary_after(EmacsBytePos::new(position), EmacsBytePos::new(limit)),
+            "canonical cold next ({position}, {limit}]"
         );
         assert!(
-            index.endpoints.get().is_none(),
-            "borrowed query must not publish the allocating endpoint index"
+            !index.is_endpoints_published(),
+            "borrowed next query must not publish the allocating endpoint index"
+        );
+        actual
+    });
+    // Mirror every next-query position/limit pair. This includes equal and
+    // reversed limits, plus a real endpoint exactly at the inclusive lower limit.
+    let previous_queries = queries.map(|(position, limit)| (limit, position));
+    let cold_previous = previous_queries.map(|(position, limit)| {
+        let actual =
+            index.previous_boundary_before(EmacsBytePos::new(position), EmacsBytePos::new(limit));
+        assert_eq!(
+            actual,
+            previous_expected(position, limit),
+            "cold previous [{limit}, {position})"
+        );
+        assert!(
+            !index.is_endpoints_published(),
+            "borrowed previous query must not publish the allocating endpoint index"
+        );
+        actual
+    });
+    index.publish_endpoints();
+    assert!(index.is_endpoints_published());
+    for (i, (position, limit)) in queries.into_iter().enumerate() {
+        let actual = index
+            .next_boundary_after_no_alloc(EmacsBytePos::new(position), EmacsBytePos::new(limit));
+        assert_eq!(
+            actual,
+            next_expected(position, limit),
+            "published next ({position}, {limit}]"
+        );
+        assert_eq!(
+            actual, cold_next[i],
+            "cold/published next ({position}, {limit}]"
+        );
+        assert_eq!(
+            actual,
+            index.next_boundary_after(EmacsBytePos::new(position), EmacsBytePos::new(limit)),
+            "canonical published next ({position}, {limit}]"
         );
     }
-    // Only the canonical query may publish; both representations must agree.
-    for (position, limit) in queries {
+    for (i, (position, limit)) in previous_queries.into_iter().enumerate() {
+        let actual =
+            index.previous_boundary_before(EmacsBytePos::new(position), EmacsBytePos::new(limit));
         assert_eq!(
-            index.next_boundary_after_no_alloc(
-                EmacsBytePos::new(position),
-                EmacsBytePos::new(limit)
-            ),
-            index.next_boundary_after(EmacsBytePos::new(position), EmacsBytePos::new(limit)),
-            "canonical query ({position}, {limit}]"
+            actual,
+            previous_expected(position, limit),
+            "published previous [{limit}, {position})"
         );
-    }
-    assert!(index.endpoints.get().is_some());
-    for (position, limit) in queries {
         assert_eq!(
-            index.next_boundary_after_no_alloc(
-                EmacsBytePos::new(position),
-                EmacsBytePos::new(limit)
-            ),
-            index.next_boundary_after(EmacsBytePos::new(position), EmacsBytePos::new(limit)),
-            "published query ({position}, {limit}]"
+            actual, cold_previous[i],
+            "cold/published previous [{limit}, {position})"
         );
     }
 }
@@ -127,4 +171,17 @@ fn no_alloc_boundary_observes_deletion_clipping_without_publication() {
     assert_eq!(index.range(clipped), Some(range(4, 5)));
     assert_eq!(index.range(zero), Some(range(6, 6)));
     assert_cold_and_published_queries(&index, &[2, 8, 4, 5, 6, 6]);
+}
+
+#[test]
+fn no_alloc_previous_boundary_keeps_unique_empty_overlay_at_lower_limit() {
+    crate::test_utils::init_test_tracing();
+    let mut index = OverlayIndex::new();
+    for (start, end) in [(2, 12), (6, 6)] {
+        assert!(index.attach(overlay(start, end), range(start, end)));
+    }
+    // No nonempty overlay contributes an endpoint at 6. In particular,
+    // previous(7, 6) must return this empty overlay's endpoint at LIMIT;
+    // previous(6, 6) and the reversed previous(6, 7) must return None.
+    assert_cold_and_published_queries(&index, &[2, 12, 6, 6]);
 }

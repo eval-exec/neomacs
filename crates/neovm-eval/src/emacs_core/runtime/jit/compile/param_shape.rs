@@ -22,14 +22,14 @@ impl TryFrom<&ByteCodeFunction> for JitParamShape {
     #[inline]
     fn try_from(function: &ByteCodeFunction) -> Result<Self, Self::Error> {
         let shape = function
-            .params
+            .params()
             .stack_shape()
             .ok_or(CompileError::TakesArguments)?;
         let optional = shape.optional().ok_or(CompileError::TakesArguments)?;
         let entry_depth = shape
             .entry_depth()
             .map_err(|_| CompileError::TakesArguments)?;
-        if entry_depth > function.max_stack.get() {
+        if entry_depth > function.max_stack().get() {
             return Err(CompileError::TakesArguments);
         }
         // Opcode::Arg/OsrSlot carry u16 indices. Validate the last index before

@@ -4,7 +4,7 @@ use super::{
     SourceWithdrawalFailure, SourceWithdrawalStep,
 };
 
-fn ready() -> Option<Box<super::super::super::Context>> {
+fn ready() -> Box<super::super::super::Context> {
     install_inactive_source_module_probe_for_test();
     let mut source = Box::new(super::super::super::Context::new_minimal_vm_harness(
         crate::test_utils::unit_harness(),
@@ -12,12 +12,12 @@ fn ready() -> Option<Box<super::super::super::Context>> {
     source.setup_thread_locals();
     source.gc_collect_exact();
     if source.tagged_heap.tagged_heap_generational_enabled() {
-        return Some(source);
+        return source;
     }
     match capture(source) {
         Err(SourceWithdrawalFailure::BeforeEffects(failure)) => {
             assert_eq!(failure.reason, SourceEntryRefusal::GenerationalRequired);
-            None
+            panic!("these rows need a generational heap; NEOVM_GC_GENERATIONAL=0 disables it")
         }
         other => panic!("GEN0 must refuse before any effect: {:?}", other.err()),
     }
@@ -31,20 +31,18 @@ fn capture(
     unsafe { OwnedSourceRegistries::capture(source) }
 }
 
-fn observation_closed() -> Option<(impl Fn() -> bool, OwnedSourceObservationClosed)> {
-    let source = ready()?;
+fn observation_closed() -> (impl Fn() -> bool, OwnedSourceObservationClosed) {
+    let source = ready();
     let alive = source.world_lifetime_probe_for_test();
-    Some((
+    (
         alive,
         capture(source).unwrap().withdraw_observations().unwrap(),
-    ))
+    )
 }
 
 #[test]
 fn pentry_e2b_source_carriers_owned_source_preserves_exact_observation_placeholder() {
-    let Some((alive, source)) = observation_closed() else {
-        return;
-    };
+    let (alive, source) = observation_closed();
     assert!(
         source
             ._frame
@@ -78,9 +76,7 @@ fn pentry_e2b_source_carriers_owned_source_preserves_exact_observation_placehold
 
 #[test]
 fn pentry_e2b_source_carriers_owned_source_drop_never_restores_native_state() {
-    let Some((alive, source)) = observation_closed() else {
-        return;
-    };
+    let (alive, source) = observation_closed();
     drop(source.withdraw_carriers().unwrap());
     assert!(alive());
     assert!(!neovm_value::tagged::gc::tagged_heap_is_installed());
@@ -88,9 +84,7 @@ fn pentry_e2b_source_carriers_owned_source_drop_never_restores_native_state() {
 
 #[test]
 fn pentry_e2b_source_carriers_owned_source_forget_never_restores_native_state() {
-    let Some((alive, source)) = observation_closed() else {
-        return;
-    };
+    let (alive, source) = observation_closed();
     std::mem::forget(source.withdraw_carriers().unwrap());
     assert!(alive());
     assert!(!neovm_value::tagged::gc::tagged_heap_is_installed());
@@ -98,9 +92,7 @@ fn pentry_e2b_source_carriers_owned_source_forget_never_restores_native_state() 
 
 #[test]
 fn pentry_e2b_source_carriers_owned_source_catch_unwind_retains_native_state() {
-    let Some((alive, source)) = observation_closed() else {
-        return;
-    };
+    let (alive, source) = observation_closed();
     let closed = source.withdraw_carriers().unwrap();
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
         let _closed = closed;
@@ -113,12 +105,8 @@ fn pentry_e2b_source_carriers_owned_source_catch_unwind_retains_native_state() {
 
 #[test]
 fn pentry_e2b_source_carriers_foreign_heap_is_preserved_with_owned_refusal() {
-    let Some((alive, source)) = observation_closed() else {
-        return;
-    };
-    let Some(foreign) = ready() else {
-        return;
-    };
+    let (alive, source) = observation_closed();
+    let foreign = ready();
     let error = source
         .withdraw_carriers()
         .err()

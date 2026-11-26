@@ -22,6 +22,7 @@ use neovm_eval::emacs_core::eval::data::window_state::{
 use neovm_eval::emacs_core::eval::data::window_state::{
     horizontal_scroll_bar_area_height, horizontal_scroll_bar_lines, vertical_scroll_bar_area_width,
 };
+use neovm_value::display_vocab::GuiResizeRequestId;
 use neovm_value::intern::intern;
 use neovm_value::value::Value;
 use neovm_value::value::eq_value;
@@ -158,16 +159,12 @@ pub trait DisplayFrameExt {
 
     fn face_hash_table(&self) -> Value;
 
-    fn defer_next_gui_parameter_resize(&mut self);
-
-    fn should_defer_gui_parameter_resize(&self) -> bool;
-
     fn queue_pending_gui_resize(
         &mut self,
         width_cols: i64,
         total_lines: i64,
         host_target: Option<(u32, u32)>,
-    );
+    ) -> GuiResizeRequestId;
 
     fn clear_pending_gui_resize(&mut self);
 
@@ -486,10 +483,10 @@ impl DisplayFrameExt for Frame {
         // and friends report nil even though the layout already reserves and draws
         // the corresponding chrome — the frame parameter lies about what is on screen.
         //
-        // Each value equals the fallback the layout (window/display.rs) already
-        // applies for the missing parameter, so seeding them changes reporting only,
-        // never geometry: GTK builds default vertical scroll bars to the right,
-        // horizontal off, the standard 8px fringes, and a zero internal/outer border.
+        // GTK builds default vertical scroll bars to the right, horizontal off,
+        // standard 8px fringes, and zero internal/outer borders. NS instead
+        // reserves a two-pixel internal border (nsfns.m:1348); construction
+        // and parameter reporting must use that same default.
         // scroll-bar-width/height are intentionally left unset: their shared
         // fallback is GNU's toolkit default (16 px, xfns.c:2393-2438), which does
         // not follow the frame font either; `frame-parameter` reports that same
@@ -498,8 +495,21 @@ impl DisplayFrameExt for Frame {
         self.set_known_parameter(FrameParam::HorizontalScrollBars, Value::NIL);
         self.set_known_parameter(FrameParam::LeftFringe, Value::fixnum(8));
         self.set_known_parameter(FrameParam::RightFringe, Value::fixnum(8));
-        self.set_known_parameter(FrameParam::InternalBorderWidth, Value::fixnum(0));
+        self.set_known_parameter(
+            FrameParam::InternalBorderWidth,
+            Value::fixnum(i64::from(super::GUI_DEFAULT_INTERNAL_BORDER_WIDTH)),
+        );
         self.set_known_parameter(FrameParam::BorderWidth, Value::fixnum(0));
+        // GNU's `allocate_frame` initializes `tool-bar-position` to `top`
+        // (src/frame.c:1167 `fset_tool_bar_position (f, Qtop)`), and GTK frame
+        // creation passes that initialized value through
+        // `gui_default_parameter (... Qtool_bar_position,
+        // FRAME_TOOL_BAR_POSITION (f), ...)` (src/xfns.c:5298-5299), whether
+        // or not the tool bar is enabled.  Neo draws the bar at the top and
+        // frame-geometry already reports that fallback, so seeding the
+        // parameter makes the frame parameter agree with what is on screen
+        // instead of answering nil.
+        self.set_known_parameter(FrameParam::ToolBarPosition, Value::symbol("top"));
     }
 
     fn parameter(&self, key: &str) -> Option<Value> {
@@ -545,36 +555,29 @@ impl DisplayFrameExt for Frame {
         self.face_hash_table
     }
 
-    fn defer_next_gui_parameter_resize(&mut self) {
-        self.defer_next_gui_parameter_resize = true;
-    }
-
-    fn should_defer_gui_parameter_resize(&self) -> bool {
-        self.defer_next_gui_parameter_resize || self.pending_gui_resize.is_some()
-    }
-
     fn queue_pending_gui_resize(
         &mut self,
         width_cols: i64,
         total_lines: i64,
         host_target: Option<(u32, u32)>,
-    ) {
-        self.defer_next_gui_parameter_resize = false;
+    ) -> GuiResizeRequestId {
+        let request_id = self.allocate_gui_resize_request_id();
         self.pending_gui_resize = Some(PendingGuiResize {
+            request_id,
             width_cols,
             total_lines,
             delivery: host_target.map_or(GuiResizeDelivery::Queued, |(width, height)| {
-                GuiResizeDelivery::Requested {
+                GuiResizeDelivery::Sent {
                     width,
                     height,
                     wait: true,
                 }
             }),
         });
+        request_id
     }
 
     fn clear_pending_gui_resize(&mut self) {
-        self.defer_next_gui_parameter_resize = false;
         self.pending_gui_resize = None;
     }
 
@@ -800,6 +803,31 @@ impl DisplayFrameExt for Frame {
                 self.menu_bar_height = 0;
                 self.tool_bar_height = 0;
                 self.compact_bar_height = self.compact_bar_pixel_height_from_parameters();
+            }
+        }
+        // GNU `free_frame_tool_bar` zeroes `FRAME_TOOLBAR_*` when the line
+        // count goes to 0 (gtkutil.c:6168-6206) and does not clear
+        // `n_tool_bar_items`. Compact presentation stores a 0 height while
+        // `tool-bar-lines` stays 1, and that must not clear an allocation.
+        // A positive count calls `update_frame_tool_bar` before the next
+        // redisplay (xfns.c:1902-1908). Height is projected above, so the
+        // restored allocation is what the following explicit size includes.
+        #[cfg(target_os = "linux")]
+        {
+            use neovm_eval::emacs_core::eval::data::window_state::ToolkitToolBar;
+            if self
+                .known_frame_parameter_int(FrameParam::ToolBarLines)
+                .unwrap_or(0)
+                <= 0
+            {
+                if matches!(self.toolkit_tool_bar, ToolkitToolBar::Allocated) {
+                    self.tool_bar_items_packed = true;
+                }
+                self.toolkit_tool_bar = ToolkitToolBar::Unallocated {
+                    explicit_size_omitted: false,
+                };
+            } else if self.tool_bar_items_packed {
+                self.toolkit_tool_bar = ToolkitToolBar::Allocated;
             }
         }
         self.sync_window_area_bounds();
@@ -1344,10 +1372,8 @@ impl DisplayFrameExt for Frame {
     /// outstanding explicit resize intent must remain available to flush/wait.
     fn refresh_geometry_for_changed_font(&mut self, buffers: &BufferManager) {
         let pending = self.pending_gui_resize.take();
-        let defer = self.defer_next_gui_parameter_resize;
         self.resize_pixelwise_with_buffer_constraints(buffers, self.width, self.height);
         self.pending_gui_resize = pending;
-        self.defer_next_gui_parameter_resize = defer;
     }
 
     /// Apply a live physical frame resize while honoring Lisp-visible window
@@ -2350,6 +2376,19 @@ impl DisplayFrameManagerExt for FrameManager {
             let Some(buffer) = window.buffer_id().and_then(|id| buffers.get(id)) else {
                 return false;
             };
+            if let Some(accuracy) = window
+                .display()
+                .and_then(|display| display.redisplay_output())
+                .and_then(|output| output.gnu_accuracy)
+            {
+                // GNU accepted post-callback ticks may be current while Neo's
+                // original produced-row inputs and dirty spans remain stale.
+                return !accuracy.source_is_current_for(
+                    buffer.id(),
+                    buffer.modified_tick(),
+                    buffer.overlay_modified_tick(),
+                );
+            }
             if buffer.changed_char_range().is_some() {
                 return true;
             }

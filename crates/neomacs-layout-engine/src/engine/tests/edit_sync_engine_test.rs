@@ -614,6 +614,7 @@ fn source_budget_sync_edits_and_eob_match_complete_full_layouts() {
     ] {
         source_budget_step(&mut frame, form);
     }
+    drop(frame);
     let short = tabbed_source(12);
     let mut frame = SyncFrame::new(&short, 3);
     for form in [

@@ -62,6 +62,8 @@ pub(crate) type InvisibleStatusQuery = fn(&mut Context, Value) -> Result<Invisib
 /// End byte of the source run elided by the current invisibility spec.
 pub(crate) type InvisibleSourceRunEndQuery =
     fn(&mut Context, BufferId, usize, InvisibleRunContext) -> Result<Option<usize>, Flow>;
+/// GNU `autocmp_chars`'s native font/frame lookup (without invoking Lisp `font-at`).
+pub(crate) type CompositionFontOrFrameAt = fn(&mut Context, i64, Value) -> Option<Value>;
 
 /// Window/redisplay operations eval invokes at command/redisplay boundaries.
 ///
@@ -85,6 +87,7 @@ pub struct DisplayWindowHooks {
     window_hscroll: WindowHscrollQuery,
     invisible_status: InvisibleStatusQuery,
     invisible_source_run_end: InvisibleSourceRunEndQuery,
+    composition_font_or_frame_at: CompositionFontOrFrameAt,
 }
 
 impl DisplayWindowHooks {
@@ -105,6 +108,7 @@ impl DisplayWindowHooks {
         window_hscroll: WindowHscrollQuery,
         invisible_status: InvisibleStatusQuery,
         invisible_source_run_end: InvisibleSourceRunEndQuery,
+        composition_font_or_frame_at: CompositionFontOrFrameAt,
     ) -> Self {
         Self {
             ensure_selected_frame_id,
@@ -121,6 +125,7 @@ impl DisplayWindowHooks {
             window_hscroll,
             invisible_status,
             invisible_source_run_end,
+            composition_font_or_frame_at,
         }
     }
 
@@ -192,6 +197,11 @@ impl DisplayWindowHooks {
     #[doc(hidden)]
     pub fn invisible_source_run_end(&self) -> InvisibleSourceRunEndQuery {
         self.invisible_source_run_end
+    }
+
+    #[doc(hidden)]
+    pub(crate) fn composition_font_or_frame_at(&self) -> CompositionFontOrFrameAt {
+        self.composition_font_or_frame_at
     }
 }
 
@@ -404,4 +414,14 @@ pub fn window_regions_at(
     window: WindowId,
 ) -> Option<WindowRegions> {
     (installed_window_hooks().window_regions_at())(geometry, presentation, window)
+}
+
+/// Resolve GNU `autocmp_chars`'s font object (on GUI frames) or frame (on
+/// non-window frames) natively without invoking Lisp `font-at`.
+pub(crate) fn composition_font_or_frame_at(
+    eval: &mut Context,
+    pos: i64,
+    string: Value,
+) -> Option<Value> {
+    (installed_window_hooks().composition_font_or_frame_at())(eval, pos, string)
 }

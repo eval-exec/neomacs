@@ -19,10 +19,10 @@ fn function(ops: Vec<Op>, constants: Vec<Value>, arity: usize) -> ByteCodeFuncti
         optional: Vec::new(),
         rest: None,
     });
-    f.lexical = true;
-    f.ops = ops;
-    f.constants = constants.into();
-    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
+    f.set_lexical(true);
+    f.set_ops(ops);
+    f.set_constants(constants.into());
+    f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
     f.seal_hand_assembled_ops();
     f
 }
@@ -60,7 +60,7 @@ fn count_to() -> ByteCodeFunction {
 /// Compile `f` through the cache (the first-sight seam: no heat needed) and
 /// return its cached leaf.
 fn compile_cached(ctx: *mut Context, f: &ByteCodeFunction) -> &'static CompiledLeaf {
-    let ptr = cache::resolve_compiled_leaf_ptr(ctx, f).expect("compiles");
+    let ptr = unsafe { cache::resolve_compiled_leaf_ptr(ctx, f) }.expect("compiles");
     // SAFETY: a cached leaf stays allocated for the thread's life (retired
     // leaves are kept); tests never clear the cache under this reference.
     unsafe { &*ptr }
@@ -307,7 +307,7 @@ fn jit_shared_same_label_recompiles_and_osr_coexist() {
     // The OSR variant at the loop header (pc 1, operand depth 2).
     let osr = lower_leaf_full_osr(
         f.executable_ops(),
-        &f.constants,
+        f.constants(),
         1,
         None,
         Some(&ev.obarray),
@@ -321,7 +321,7 @@ fn jit_shared_same_label_recompiles_and_osr_coexist() {
         Value::make_int(9).bits() as i64,
         Value::make_int(4).bits() as i64,
     ];
-    match osr.call_premarshaled(ctx as *mut u8, seeded.as_ptr()) {
+    match unsafe { osr.call_premarshaled(ctx as *mut u8, seeded.as_ptr()) } {
         NativeRun::Ok(bits) => assert_eq!(
             unsafe {
                 /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
@@ -370,7 +370,7 @@ fn jit_shared_cache_clear_then_recompile() {
     let ctx = &mut ev as *mut Context;
     let f = add_k(7);
     assert_eq!(call1(compile_cached(ctx, &f), 1), Some(8));
-    cache::clear();
+    cache::clear_with_serial_receipt().expect("serial jit grace");
     let g = add_k(8);
     let leaf = compile_cached(ctx, &g);
     assert_eq!(call1(leaf, 1), Some(9));

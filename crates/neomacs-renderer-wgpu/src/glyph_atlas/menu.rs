@@ -25,9 +25,21 @@ impl WgpuGlyphAtlas {
                 y_bin: SubpixelBin::Zero,
             };
             self.get_or_create_atlas(device, queue, &key, face, SubpixelRequest::Disabled)
-                .map_or(space_advance, |glyph| {
-                    glyph.advance_width / self.scale_factor
-                })
+                .map_or_else(
+                    || {
+                        let cached = self
+                            .cached_glyph_key(&key, face, SubpixelRequest::Disabled)
+                            .ok()
+                            .and_then(|key| self.non_drawing_cache.get(&key));
+                        match cached {
+                            Some(super::NonDrawingOutcome::Empty { advance_width, .. }) => {
+                                *advance_width / self.scale_factor
+                            }
+                            _ => space_advance,
+                        }
+                    },
+                    |glyph| glyph.advance_width / self.scale_factor,
+                )
         })
     }
 }
@@ -63,19 +75,55 @@ impl WgpuGlyphAtlas {
             }
             return Ok(handles);
         }
+        match self.cached_non_drawing_composed(&cache_key) {
+            Some(NonDrawingOutcome::Empty { .. }) => return Ok(Vec::new()),
+            Some(NonDrawingOutcome::Failed(error)) => return Err(error),
+            None => {}
+        }
         if label.glyphs().is_empty() {
             return Ok(Vec::new());
         }
-        let results = self
-            .rasterize_resolved_cluster(
-                label.glyphs(),
-                None,
-                label.font_size(),
-                SubpixelBin::Zero,
-                SubpixelBin::Zero,
-                false,
-            )
-            .ok_or(GlyphAtlasError::RasterizeFailed)?;
+        match self.rasterize_menu_label_entries(label, device, queue, cache_key.clone()) {
+            Ok(Rasterized::Ink(handles)) => Ok(handles),
+            Ok(Rasterized::Empty { advance_width }) => {
+                self.remember_non_drawing_composed(
+                    cache_key,
+                    NonDrawingOutcome::Empty { advance_width },
+                );
+                Ok(Vec::new())
+            }
+            Err(error) if error.is_stable_raster_failure() => {
+                self.remember_non_drawing_composed(cache_key, NonDrawingOutcome::Failed(error));
+                tracing::warn!(err = ?error, glyph_stream = ?key.glyph_stream_identity,
+                    "menu label glyph atlas lookup failed");
+                Err(error)
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    fn rasterize_menu_label_entries(
+        &mut self,
+        label: &neomacs_display_protocol::frame_chrome::ResolvedMenuLabel,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        cache_key: super::CachedComposedGlyphKey,
+    ) -> super::Rasterization<Vec<super::GlyphAtlasHandle>> {
+        use super::*;
+        let outcome = self.rasterize_resolved_cluster(
+            label.glyphs(),
+            None,
+            label.font_size(),
+            SubpixelBin::Zero,
+            SubpixelBin::Zero,
+            false,
+        )?;
+        let results = match outcome {
+            Rasterized::Ink(results) => results,
+            Rasterized::Empty { advance_width } => {
+                return Ok(Rasterized::Empty { advance_width });
+            }
+        };
         let mut handles = Vec::new();
         for result in results {
             if result.width == 0 || result.height == 0 {
@@ -95,6 +143,6 @@ impl WgpuGlyphAtlas {
                 last_accessed: self.generation,
             },
         );
-        Ok(handles)
+        Ok(Rasterized::Ink(handles))
     }
 }

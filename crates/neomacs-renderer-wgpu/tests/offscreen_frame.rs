@@ -473,7 +473,7 @@ fn toolbar_icon_load_and_draw_share_face_alpha_and_fractional_scale() {
         eprintln!("SKIP: no GPU adapter");
         return;
     };
-    let source = ToolBarImageSource::File {
+    let source = ToolBarImageSource::ThemedVector {
         path: concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/tests/fixtures/toolbar-symbolic.svg"
@@ -690,6 +690,7 @@ fn primary_frame_inline_image_samples_only_its_source_slice() {
         height: 8.0,
         face_id: image_face_id,
         box_vertical_edges: BoxVerticalEdges::Both,
+        presentation: neomacs_display_protocol::ImageGlyphPresentation::Texture,
     });
 
     h.renderer.render_frame_glyphs(
@@ -787,6 +788,7 @@ fn unboxed_image_face_background_fills_the_glyph_box_extent() {
         height: 8.0,
         face_id: image_face_id,
         box_vertical_edges: BoxVerticalEdges::Both,
+        presentation: neomacs_display_protocol::ImageGlyphPresentation::Texture,
     });
 
     h.renderer.render_frame_glyphs(
@@ -1600,6 +1602,7 @@ fn composite_matches_full_render() {
             &vc,
             mapping_for(&frame, W, H).surface(),
         ))
+        .expect("live device draw parameters")
         .blit_retained(&bg);
     h.renderer
         .render_cursor_only(&vc, &frame, mapping_for(&frame, W, H), true, None, None);
@@ -1659,6 +1662,7 @@ fn popup_redraw_preserves_unchanged_main_frame_pixels() {
         );
         h.renderer
             .begin_draw(target)
+            .expect("live device draw parameters")
             .blit_retained(&retained_bind_group);
         read_tex(&h.renderer, &h.target)
     };
@@ -1711,6 +1715,7 @@ fn popup_redraw_preserves_unchanged_main_frame_pixels() {
                 &popup_view,
                 surface,
             ))
+            .expect("live device draw parameters")
             .paint_menu(&paint, &mut popup_atlas);
     }
     let after = draw(&mut h);
@@ -1779,6 +1784,7 @@ fn retained_static_reused_across_cursor_colors() {
             &vr,
             mapping_for(&frame_a, W, H).surface(),
         ))
+        .expect("live device draw parameters")
         .blit_retained(&bg);
     h.renderer
         .render_cursor_only(&vr, &frame_a, mapping_for(&frame_a, W, H), true, None, None);
@@ -1790,6 +1796,7 @@ fn retained_static_reused_across_cursor_colors() {
             &vb,
             mapping_for(&frame_b, W, H).surface(),
         ))
+        .expect("live device draw parameters")
         .blit_retained(&bg);
     h.renderer
         .render_cursor_only(&vb, &frame_b, mapping_for(&frame_b, W, H), true, None, None);
@@ -1945,6 +1952,7 @@ fn assert_filled_box_composite_matches_full_render(animated: Option<AnimatedCurs
             &vc,
             mapping_for(&frame, W, H).surface(),
         ))
+        .expect("live device draw parameters")
         .blit_retained(&bg);
     // Match the runtime sequence exactly: render_cursor_only draws the box
     // (cursor_bg) unscissored, then the scissored cell redraw adds box + char.
@@ -2634,6 +2642,7 @@ fn a_frame_drawn_mid_decode_shows_only_the_rows_that_have_arrived() {
         height: H as f32,
         face_id: image_face_id,
         box_vertical_edges: BoxVerticalEdges::Unboxed,
+        presentation: neomacs_display_protocol::ImageGlyphPresentation::Texture,
     });
 
     h.renderer.render_frame_glyphs(
@@ -2846,4 +2855,192 @@ fn repeated_adopted_image_load_preserves_ready_texture() {
         "repeated admission discarded the completed texture"
     );
     assert_eq!(h.renderer.get_image_size(load.image()), Some((1, 1)));
+}
+
+/// A themed vector is rasterized at the slot's exact physical extent, so a file
+/// authored at 16x16 renders identically to the same artwork authored at 24x24
+/// and a hard edge stays 1 physical pixel wide (no upscale blur).
+#[test]
+fn themed_vector_icons_render_one_to_one_at_any_authored_size() {
+    use neomacs_display_protocol::{
+        BandRect, ChromeAction, PositionedChromeItem, ToolBarContent, ToolBarImageSource,
+        ToolBarItem, ToolBarItemType,
+    };
+    let dir = tempfile::TempDir::new().expect("authored icon temp dir");
+    let svg = |size: u32| {
+        format!(
+            r##"<svg xmlns="http://www.w3.org/2000/svg" width="{size}" height="{size}" viewBox="0 0 24 24"><rect x="0" y="0" width="12" height="24" fill="#ff0000"/></svg>"##
+        )
+    };
+    let authored16 = dir.path().join("icon-16.svg");
+    let authored20 = dir.path().join("icon-20.svg");
+    let authored24 = dir.path().join("icon-24.svg");
+    std::fs::write(&authored16, svg(16)).expect("write 16x16 icon");
+    std::fs::write(&authored20, svg(20)).expect("write 20x20 icon");
+    std::fs::write(&authored24, svg(24)).expect("write 24x24 icon");
+
+    let render = |path: &std::path::Path, scale: f32| -> Option<Vec<u8>> {
+        let mut h = try_harness()?;
+        let source = ToolBarImageSource::ThemedVector {
+            path: path.to_string_lossy().into_owned(),
+        };
+        let item = ToolBarItem {
+            index: 0,
+            key: "open".into(),
+            image: Some(source.clone()),
+            label: String::new(),
+            help: String::new(),
+            enabled: true,
+            selected: false,
+            item_type: ToolBarItemType::Button,
+            wrap: false,
+        };
+        let content = ToolBarContent::new(
+            vec![PositionedChromeItem::new(
+                BandRect::new(0.0, 0.0, 32.0, 32.0).expect("item bounds"),
+                item,
+                ChromeAction::InvokeToolBarItem { index: 0 },
+            )],
+            Color::RED,
+            Color::GREEN,
+            24,
+            4,
+        );
+        h.renderer.set_scale_factor(scale);
+        let key = content
+            .icon_style()
+            .realize(source, DeviceScale::new(scale).expect("valid scale"));
+        let image = h.renderer.load_toolbar_icon(&key);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        while !h.renderer.is_image_ready(image) && std::time::Instant::now() < deadline {
+            h.renderer.process_pending_images();
+            std::thread::yield_now();
+        }
+        assert!(
+            h.renderer.is_image_ready(image),
+            "themed icon {path:?} did not decode"
+        );
+        let textures = std::collections::HashMap::from([(key, image)]);
+        h.renderer.render_toolbar(
+            &h.view,
+            &content,
+            // 48x32 logical stays inside the 96x64 surface at 1.7x (81.6x54.4).
+            FrameRect::new(0.0, 0.0, 48.0, 32.0).expect("band"),
+            &textures,
+            None,
+            None,
+            W,
+            H,
+        );
+        Some(read_back(&h))
+    };
+
+    for scale in [1.0_f32, 1.7] {
+        let Some(pixels16) = render(&authored16, scale) else {
+            eprintln!("SKIP: no GPU adapter");
+            return;
+        };
+        let pixels20 = render(&authored20, scale).expect("second offscreen harness");
+        let pixels24 = render(&authored24, scale).expect("reference offscreen harness");
+
+        // The slot is 24 logical px realized at ceil(24*scale) physical px,
+        // centered on the 32x32 item; the quad snaps to whole device pixels.
+        let physical = (24.0_f32 * scale).ceil() as i32;
+        let center = 16.0_f32 * scale;
+        let left = (center - physical as f32 / 2.0).round() as i32;
+        let top = left;
+        for (authored, pixels) in [(16, &pixels16), (20, &pixels20)] {
+            for y in top..top + physical {
+                for x in left..left + physical {
+                    assert_eq!(
+                        px(pixels, x as u32, y as u32),
+                        px(&pixels24, x as u32, y as u32),
+                        "authored {authored}px vector differs from the 24px reference at \
+                         ({x},{y}) at scale {scale}"
+                    );
+                }
+            }
+        }
+
+        // A hard edge may blend at most one physical pixel; more than that means
+        // the raster was stretched instead of sampled 1:1.
+        let mut blended = 0;
+        let mut red = 0;
+        let mut green = 0;
+        let row = (top + physical / 2) as u32;
+        for x in left..left + physical {
+            match px(&pixels16, x as u32, row) {
+                [255, 0, 0, 255] => red += 1,
+                [0, 255, 0, 255] => green += 1,
+                _ => blended += 1,
+            }
+        }
+        assert!(red > 0 && green > 0, "both halves of the icon must render");
+        assert!(
+            blended <= 1,
+            "icon edge blurred at scale {scale}: {blended} blended pixels \
+             (a 28px raster stretched to 41px gives more)"
+        );
+    }
+}
+
+/// GNU `image-flush` -> `uncache_image` frees the matching pixmaps before the
+/// next redisplay, so `image-cache-size` drops immediately.  A presentation-
+/// safe retirement is not enough: the texture must be gone (and its accounting
+/// released) the moment the flush is processed.
+#[test]
+fn flushing_one_image_frees_its_texture_immediately() {
+    use neomacs_display_protocol::{DeviceScale, ToolBarIconStyle, ToolBarImageSource};
+
+    let mut h = try_harness().expect("image flush test requires an offscreen GPU adapter");
+    let dir = tempfile::TempDir::new().expect("temp dir for flush images");
+    let svg = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"24\" height=\"24\"><rect width=\"24\" height=\"24\" fill=\"#123456\"/></svg>";
+    let first = dir.path().join("first.svg");
+    let second = dir.path().join("second.svg");
+    std::fs::write(&first, svg).expect("write first icon");
+    std::fs::write(&second, svg).expect("write second icon");
+
+    let style = ToolBarIconStyle::from_chrome_face(24, Color::WHITE, Color::BLACK);
+    let first_key = style.realize(
+        ToolBarImageSource::ThemedVector {
+            path: first.to_string_lossy().into_owned(),
+        },
+        DeviceScale::ONE,
+    );
+    let second_key = style.realize(
+        ToolBarImageSource::ThemedVector {
+            path: second.to_string_lossy().into_owned(),
+        },
+        DeviceScale::ONE,
+    );
+    let first_image = h.renderer.load_toolbar_icon(&first_key);
+    let second_image = h.renderer.load_toolbar_icon(&second_key);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+    while (!h.renderer.is_image_ready(first_image) || !h.renderer.is_image_ready(second_image))
+        && std::time::Instant::now() < deadline
+    {
+        h.renderer.process_pending_images();
+        std::thread::yield_now();
+    }
+    assert!(h.renderer.is_image_ready(first_image));
+    assert!(h.renderer.is_image_ready(second_image));
+
+    const ICON_BYTES: u64 = 24 * 24 * 4;
+    let before = h.renderer.image_cache_usage().texture_bytes();
+    assert!(before >= 2 * ICON_BYTES);
+    h.renderer.flush_image(first_image);
+    let after = h.renderer.image_cache_usage().texture_bytes();
+    assert_eq!(
+        after,
+        before - ICON_BYTES,
+        "flushing one image must release exactly its texture bytes immediately"
+    );
+    assert!(
+        !h.renderer.is_image_ready(first_image),
+        "a flushed image is no longer resident"
+    );
+    assert!(
+        h.renderer.is_image_ready(second_image),
+        "flushing one image must not disturb another"
+    );
 }

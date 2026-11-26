@@ -79,17 +79,17 @@ fn source() -> ByteCodeFunction {
 
 /// Exercise the same representation pipeline as a production Opt leaf.
 fn plan_entry(source: &ByteCodeFunction, osr_pc: Option<usize>) -> ir::Func {
-    let arity = source.params.stack_shape().unwrap().required();
+    let arity = source.params().stack_shape().unwrap().required();
     let cfg = analyze_cfg(
         source.executable_ops(),
-        &source.constants,
+        source.constants(),
         source.executable_gnu_byte_offset_map(),
         arity,
     )
     .unwrap();
     opt_backend::build_plan(
         source.executable_ops(),
-        &source.constants,
+        source.constants(),
         &cfg,
         ir::ParamShape {
             required: arity,
@@ -167,20 +167,22 @@ fn opt_switch_hoist_stale_entry_resumes_before_dispatch() {
     let _settings = SwitchSettings::enter();
     let mut ctx = Context::new_minimal_vm_harness(crate::test_utils::unit_runtime());
     let f = source();
-    let _roots = Roots::new(&f.constants);
+    let _roots = Roots::new(f.constants());
     let ir = plan(&f);
     let leaf = lower(&f, &ir);
     assert!(
-        leaf.reloc_values().contains(&f.constants[2]),
+        leaf.reloc_values().contains(&f.constants()[2]),
         "the immediate table must remain rooted by its leaf"
     );
     let args = [Value::fixnum(3), Value::fixnum(0)];
     let expected = tier0(&mut ctx, &f, &args).unwrap();
     assert_eq!(print_value(&expected), gnu_control_expect(0));
     assert_eq!(native_ok(&mut ctx, &leaf, &args), expected);
-    put(f.constants[2], Value::symbol("a"), 14);
+    put(f.constants()[2], Value::symbol("a"), 14);
     let expected = tier0(&mut ctx, &f, &args).unwrap();
-    let NativeRun::DeoptAt(resume) = leaf.call(&mut ctx as *mut Context as *mut u8, &args) else {
+    let NativeRun::DeoptAt(resume) =
+        (unsafe { leaf.call(&mut ctx as *mut Context as *mut u8, &args) })
+    else {
         panic!("stale preheader must exit");
     };
     assert_eq!(resume.pc, 1);
@@ -195,17 +197,19 @@ fn opt_switch_hoist_service_poll_mutation_resumes_current_stack() {
     let _settings = SwitchSettings::enter();
     let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let f = source();
-    let _roots = Roots::new(&f.constants);
+    let _roots = Roots::new(f.constants());
     let leaf = lower(&f, &plan(&f));
     ctx.obarray
-        .set_symbol_value("switch-hoist-table", f.constants[2]);
+        .set_symbol_value("switch-hoist-table", f.constants()[2]);
     ctx.eval_str("(setq post-gc-hook (list (lambda () (setq post-gc-hook nil) (puthash 'a 14 switch-hoist-table))))").unwrap();
     ctx.gc_stress = true;
     reset_bytecode_branch_poll_count();
-    let result = leaf.call(
-        &mut ctx as *mut Context as *mut u8,
-        &[Value::fixnum(300), Value::fixnum(0)],
-    );
+    let result = unsafe {
+        leaf.call(
+            &mut ctx as *mut Context as *mut u8,
+            &[Value::fixnum(300), Value::fixnum(0)],
+        )
+    };
     ctx.gc_stress = false;
     assert_eq!(bytecode_branch_poll_count(), 1);
     let NativeRun::DeoptAt(resume) = result else {
@@ -226,15 +230,17 @@ fn opt_switch_hoist_osr_stale_entry_checks_the_interpreter_stack() {
     let _settings = SwitchSettings::enter();
     let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let f = source();
-    let _roots = Roots::new(&f.constants);
+    let _roots = Roots::new(f.constants());
     let ir = plan_entry(&f, Some(1));
     let sites = switch_sites(&ir);
     let schedule = SwitchEpochGuards::build(&ir, &sites).unwrap();
     assert!(sites.iter().all(|&site| schedule.is_hoisted(site)));
     let leaf = lower(&f, &ir);
-    put(f.constants[2], Value::symbol("a"), 14);
+    put(f.constants()[2], Value::symbol("a"), 14);
     let args = [Value::fixnum(7), Value::fixnum(99)];
-    let NativeRun::DeoptAt(resume) = leaf.call(&mut ctx as *mut Context as *mut u8, &args) else {
+    let NativeRun::DeoptAt(resume) =
+        (unsafe { leaf.call(&mut ctx as *mut Context as *mut u8, &args) })
+    else {
         panic!("stale OSR entry must exit");
     };
     assert_eq!(resume.pc, 1);
@@ -354,22 +360,24 @@ fn opt_switch_hoist_symbols_with_pos_miss_still_uses_lookup() {
     let mut ctx = Context::new(crate::test_utils::unit_runtime());
     let mut f = source();
     // Replace the key constant with an argument, keeping a rooted static table.
-    f.ops[5] = Op::StackRef(2);
-    f.params = neovm_value::value::LambdaParams {
-        required: vec![
-            neovm_value::intern::intern("swp-key"),
-            neovm_value::intern::intern("swp-n"),
-            neovm_value::intern::intern("swp-acc"),
-        ],
-        optional: vec![],
-        rest: None,
-    }
-    .into();
+    f.ops_mut()[5] = Op::StackRef(2);
+    f.set_params(
+        neovm_value::value::LambdaParams {
+            required: vec![
+                neovm_value::intern::intern("swp-key"),
+                neovm_value::intern::intern("swp-n"),
+                neovm_value::intern::intern("swp-acc"),
+            ],
+            optional: vec![],
+            rest: None,
+        }
+        .into(),
+    );
     f.seal_hand_assembled_ops();
     let key = ctx
         .tagged_heap
         .alloc_symbol_with_pos(Value::symbol("a"), Value::fixnum(9));
-    let _roots = Roots::new(&[key, f.constants[2]]);
+    let _roots = Roots::new(&[key, f.constants()[2]]);
     let leaf = lower(&f, &plan(&f));
     for swp in [false, true] {
         ctx.symbols_with_pos_enabled = swp;
@@ -384,8 +392,8 @@ fn opt_switch_hoist_covers_both_sibling_backedge_polls() {
     let _harness = crate::test_utils::unit_harness();
     let _settings = SwitchSettings::enter();
     let mut f = source();
-    f.ops[4] = Op::GotoIfNil(22);
-    f.ops.splice(
+    f.ops_mut()[4] = Op::GotoIfNil(22);
+    f.ops_mut().splice(
         17..,
         [
             Op::StackRef(1),

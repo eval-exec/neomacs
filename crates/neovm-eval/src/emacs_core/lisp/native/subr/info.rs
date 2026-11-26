@@ -315,7 +315,7 @@ pub(crate) fn builtin_func_arity_ctx(
         ValueKind::Veclike(VecLikeType::ByteCode) => {
             let bc = function.get_bytecode_data().unwrap();
             use crate::emacs_core::bytecode::function_slots::FunctionParams;
-            match &bc.params {
+            match bc.params() {
                 FunctionParams::Stack(template) => Ok(Value::cons(
                     Value::fixnum(template.mandatory() as i64),
                     if template.rest().is_present() {

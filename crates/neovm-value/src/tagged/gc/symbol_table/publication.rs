@@ -191,7 +191,10 @@ struct SymbolPublication {
     table: OwnedSymbolTable,
 }
 
-impl crate::tagged::gc::publication::PublicationPayload for SymbolPublication {
+// SAFETY: `self.table` is an `OwnedSymbolTable` heap allocation whose raw
+// descriptor pointer remains valid and stable across moves into the
+// predecessor vector until `SymbolPublication` is dropped.
+unsafe impl crate::tagged::gc::publication::PublicationPayload for SymbolPublication {
     type Error = TableError;
     type Generation = PointerTableGeneration;
 
@@ -282,7 +285,8 @@ impl PublishedSymbolTables {
     }
 
     pub(crate) fn view(&self) -> TableView<'_> {
-        published_table(self.ledger.slot().load(Ordering::Acquire))
+        // SAFETY: `self.ledger` retains every published table for the lifetime of `self`.
+        unsafe { published_table(self.ledger.slot().load(Ordering::Acquire)) }
     }
 
     pub(crate) fn stats(&self) -> Result<TableStatistics, TablePublicationError> {
@@ -444,13 +448,18 @@ pub struct PublicationView<'owner> {
 }
 impl PublicationView<'_> {
     pub(crate) fn load(&self) -> TableView<'_> {
-        published_table(self.slot.load(Ordering::Acquire))
+        // SAFETY: `self.slot` holds a published `PublishedSymbolTable` pointer
+        // retained for at least the lifetime `'owner` of `self`.
+        unsafe { published_table(self.slot.load(Ordering::Acquire)) }
     }
 }
 const _: () = assert!(size_of::<PublicationView<'static>>() == size_of::<*const ()>());
 static_assertions::assert_not_impl_any!(PublicationView<'static>: Send, Sync, Clone, Copy);
 
-fn published_table<'owner>(pointer: *mut u8) -> TableView<'owner> {
+/// # Safety
+/// `pointer` must point to an initialized [`PublishedSymbolTable`] that remains
+/// alive and immutable for at least `'owner`.
+unsafe fn published_table<'owner>(pointer: *mut u8) -> TableView<'owner> {
     // SAFETY: construction publishes a fully initialized owned allocation
     // before returning the owner. Every replacement is retained before its
     // Release store; predecessors stay owned until that owner is dropped.

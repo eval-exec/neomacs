@@ -87,8 +87,16 @@ fn full_collection_resolves_nonempty_peer_young_and_promotes_before_response<K, 
             // two canonical entry images and the real heap catalog.
             let mut from = legacy.state.try_lock().unwrap();
             let mut to = peer.state.try_lock().unwrap();
-            let from = from.image.as_mut().unwrap().young_mut();
-            let to = to.image.as_mut().unwrap().young_mut();
+            let from = from
+                .image
+                .young_mut_for(legacy.key.heap, legacy.young)
+                .unwrap()
+                .unwrap();
+            let to = to
+                .image
+                .young_mut_for(peer.key.heap, peer.young)
+                .unwrap()
+                .unwrap();
             assert_eq!(to.id(), peer_id);
             // SAFETY: matching AllStopped, closed regions and no worker
             // loan; these are actual heap-owned setup blocks.
@@ -105,7 +113,8 @@ fn full_collection_resolves_nonempty_peer_young_and_promotes_before_response<K, 
                     .try_lock()
                     .unwrap()
                     .image
-                    .as_ref()
+                    .as_ref_for(legacy.key.heap, legacy.young)
+                    .unwrap()
                     .unwrap()
                     .young_empty()
             );
@@ -114,7 +123,8 @@ fn full_collection_resolves_nonempty_peer_young_and_promotes_before_response<K, 
                     .try_lock()
                     .unwrap()
                     .image
-                    .as_ref()
+                    .as_ref_for(peer.key.heap, peer.young)
+                    .unwrap()
                     .unwrap()
                     .young_empty()
             );
@@ -125,7 +135,11 @@ fn full_collection_resolves_nonempty_peer_young_and_promotes_before_response<K, 
     assert!(report.major);
     {
         let state = peer.state.try_lock().unwrap();
-        let image = state.image.as_ref().unwrap();
+        let image = state
+            .image
+            .as_ref_for(peer.key.heap, peer.young)
+            .unwrap()
+            .unwrap();
         assert_eq!(image.young_id(), peer_id);
         assert!(
             image.young_empty(),

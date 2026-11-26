@@ -230,6 +230,12 @@ pub(crate) struct TextWindowBegin {
     pub(crate) selected: bool,
     pub(crate) first_row: DisplayTextRowBegin,
     pub(crate) row_capacity: crate::output::window_request::OutputWindowRowCapacity,
+    /// The displayed buffer's paragraph direction (GNU
+    /// `it->paragraph_embedding`, `src/xdisp.c:3600-3611`).
+    pub(crate) bidi_paragraph_directions: crate::bidi::ParagraphDirections,
+    /// Whether this window's advances are terminal cells or graphical pixels
+    /// (cursor geometry inside an RTL run differs between them).
+    pub(crate) text_geometry_units: neomacs_display_protocol::glyph_matrix::TextGeometryUnits,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -242,6 +248,11 @@ pub(crate) struct TextWindowOutputBegin {
     pub(crate) text_clip_bounds: Rect,
     pub(crate) selected: bool,
     pub(crate) row_capacity: crate::output::window_request::OutputWindowRowCapacity,
+    /// The displayed buffer's paragraph direction (GNU
+    /// `it->paragraph_embedding`, `src/xdisp.c:3600-3611`).
+    pub(crate) bidi_paragraph_directions: crate::bidi::ParagraphDirections,
+    /// Whether this window's advances are terminal cells or graphical pixels.
+    pub(crate) text_geometry_units: neomacs_display_protocol::glyph_matrix::TextGeometryUnits,
 }
 
 impl From<TextWindowBegin> for TextWindowOutputBegin {
@@ -255,6 +266,8 @@ impl From<TextWindowBegin> for TextWindowOutputBegin {
             text_clip_bounds: request.text_clip_bounds,
             selected: request.selected,
             row_capacity: request.row_capacity,
+            bidi_paragraph_directions: request.bidi_paragraph_directions,
+            text_geometry_units: request.text_geometry_units,
         }
     }
 }
@@ -271,6 +284,8 @@ impl TextWindowOutputBegin {
             self.selected,
         )
         .with_row_capacity(self.row_capacity)
+        .with_bidi_paragraph_directions(self.bidi_paragraph_directions)
+        .with_text_geometry_units(self.text_geometry_units)
     }
 }
 
@@ -593,6 +608,7 @@ pub(crate) fn render_window_chrome_rows(
     request: WindowChromeRowsRenderRequest<'_, '_>,
     render_services: ChromeRowRenderServices<'_, '_>,
     memo: Option<&crate::incremental_layout::chrome_memo::ChromeMemo>,
+    eval_mode: crate::display_status_line::WindowChromeEvalMode<'_>,
 ) -> WindowChromeRowsRenderOutcome {
     request.render(&mut WindowChromeRowsRenderState::new(
         output,
@@ -600,6 +616,7 @@ pub(crate) fn render_window_chrome_rows(
         evaluator,
         render_services,
         memo,
+        eval_mode,
     ))
 }
 
@@ -696,14 +713,40 @@ fn finish_output_rows(
     }
 }
 
+/// Emitter-side progress snapshot for an in-flight text row, bundled so word
+/// wrap, routed-row speculation, and ellipsis rollback restore display points,
+/// row buffer bounds, and pen together.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct RowOutputProgressCheckpoint {
+    display_point_len: usize,
+    row_display_positions: (Option<LispCharPos1>, Option<LispCharPos1>),
+    row_position: crate::display_row::builder::DisplayRowPosition,
+}
+
+impl RowOutputProgressCheckpoint {
+    pub(crate) const fn from_parts(
+        display_point_len: usize,
+        row_display_positions: (Option<LispCharPos1>, Option<LispCharPos1>),
+        row_position: crate::display_row::builder::DisplayRowPosition,
+    ) -> Self {
+        Self {
+            display_point_len,
+            row_display_positions,
+            row_position,
+        }
+    }
+
+    pub(crate) const fn row_position(self) -> crate::display_row::builder::DisplayRowPosition {
+        self.row_position
+    }
+}
+
 pub(crate) struct TextWindowBodyOutputInstall<'a> {
     pub(crate) window_id: u64,
     pub(crate) window_start: i64,
     /// The walk's ZV (layout 0-based), see
     /// [`TextWindowRedisplayPositions::from_output_rows`].
     pub(crate) accessible_end: i64,
-    pub(crate) text_start_byte: usize,
-    pub(crate) byte_idx: usize,
     pub(crate) right_edge_markers: Option<TextWindowRightEdgeMarkers<'a>>,
 }
 
@@ -994,12 +1037,16 @@ pub(crate) type DisplayTextRowStoredMetrics = DisplayOutputRowStoredMetrics;
 impl TextWindowRedisplayPositions {
     /// `accessible_end` is the walk's ZV as a layout (0-based) position: the
     /// end a right-truncated last row reports is clamped to it.
+    ///
+    /// Derives the published byte companion directly from the chosen
+    /// `window_end_char` via `char_to_byte` (matching GNU `adjust_window_ends`,
+    /// `xdisp.c:3066-3067`), so skipping an invisible span or stopping a
+    /// bounded walk cannot leave a mismatched `(char_pos, byte_pos)` anchor.
     pub(crate) fn from_output_rows(
         output_emitter: &WindowOutputEmitter,
         window_start: i64,
         accessible_end: i64,
-        text_start_byte: usize,
-        byte_idx: usize,
+        char_to_byte: impl FnOnce(CharPos0) -> EmacsBytePos,
     ) -> Self {
         let window_start = layout_i64_char_pos_to_lisp_char_pos(window_start);
         // GNU's `row->end` is `it->current` when `display_line` is done with
@@ -1028,14 +1075,12 @@ impl TextWindowRedisplayPositions {
             .last()
             .map(|row| row.row.max(0) as usize)
             .unwrap_or(0);
+        let end_char = CharPos0::from_lisp(window_end_char);
 
         Self {
             window_start,
             window_end: TextWindowEndPosition {
-                anchor: TextPositionAnchor::new(
-                    CharPos0::from_lisp(window_end_char),
-                    EmacsBytePos::new(text_start_byte.saturating_add(byte_idx)),
-                ),
+                anchor: TextPositionAnchor::new(end_char, char_to_byte(end_char)),
                 matrix_row: MatrixRow0::new(window_end_row),
             },
         }
@@ -1051,10 +1096,6 @@ impl TextWindowRedisplayPositions {
 
     pub(crate) const fn window_end_position(self) -> TextWindowEndPosition {
         self.window_end
-    }
-
-    pub(crate) fn replace_window_end_anchor(&mut self, anchor: TextPositionAnchor) {
-        self.window_end.anchor = anchor;
     }
 
     pub(crate) fn display_range(self, window_id: u64) -> TextWindowDisplayRange {
@@ -1262,13 +1303,13 @@ pub(crate) fn install_text_window_body_output(
     output_emitter: &WindowOutputEmitter,
     request: TextWindowBodyOutputInstall<'_>,
     render_services: Option<ChromeRowRenderServices<'_, '_>>,
+    char_to_byte: impl FnOnce(CharPos0) -> EmacsBytePos,
 ) -> TextWindowRedisplayPositions {
     let redisplay_positions = TextWindowRedisplayPositions::from_output_rows(
         output_emitter,
         request.window_start,
         request.accessible_end,
-        request.text_start_byte,
-        request.byte_idx,
+        char_to_byte,
     );
     record_text_window_redisplay_positions(
         output.reborrow(),
@@ -1699,6 +1740,31 @@ impl WindowOutputEmitter {
             .restore_current_row_pen(position.x_px(), position.col());
     }
 
+    /// Capture the emitter's current-row progress (display points, row buffer
+    /// bounds, and pen) so a rolled-back row attempt restores all three
+    /// atomically instead of leaving stale `DisplayRowSnapshot` geometry.
+    pub(crate) fn capture_row_progress(
+        &self,
+        row_position: crate::display_row::builder::DisplayRowPosition,
+    ) -> RowOutputProgressCheckpoint {
+        RowOutputProgressCheckpoint {
+            display_point_len: self.display_point_len(),
+            row_display_positions: self.current_row_display_positions(),
+            row_position,
+        }
+    }
+
+    /// Restore the emitter's current-row display points, buffer bounds, and
+    /// pen to `checkpoint` atomically.
+    pub(crate) fn restore_row_progress(&mut self, checkpoint: RowOutputProgressCheckpoint) {
+        self.truncate_display_points(checkpoint.display_point_len);
+        self.restore_current_row_display_positions(
+            checkpoint.row_display_positions.0,
+            checkpoint.row_display_positions.1,
+        );
+        self.restore_current_row_pen(checkpoint.row_position);
+    }
+
     pub(crate) fn note_automatic_mini_row_truncation(&mut self) {
         self.current_automatic_mini_row_end = AutomaticMiniRowEnd::Truncated;
     }
@@ -1908,7 +1974,14 @@ impl WindowOutputEmitter {
         end_col: usize,
     ) {
         self.push_text_display_point(buffer_pos, glyph_x, glyph_y, width, height, row, start_col);
-        self.move_text_output_to(evaluator, row, end_col, row_y, glyph_x + width.max(0.0));
+        // A zero-advance span keeps its display point but must not move the
+        // output cursor.  Composition members are published at the composite
+        // glyph's start so their buffer positions stay addressable; moving the
+        // pen back there would shrink the finished row's end_x below the
+        // composite's own advance (issue #785: string-pixel-width "جا" = 0).
+        if width > 0.0 || end_col > start_col {
+            self.move_text_output_to(evaluator, row, end_col, row_y, glyph_x + width.max(0.0));
+        }
     }
 
     fn emit_text_output_span(&mut self, evaluator: &mut Context, span: TextOutputSpan) {

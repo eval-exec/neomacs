@@ -174,6 +174,12 @@ impl CarriedState {
         }
     }
 
+    /// Whether `pieces` holds the World's state. The running holder's
+    /// thread-locals hold it when this is false.
+    pub(super) fn holds_world(&self) -> bool {
+        self.holds_world
+    }
+
     /// Take the World's state out of this OS thread's thread-locals.
     #[cold]
     pub(crate) fn stow(&mut self) {

@@ -103,9 +103,21 @@ impl RowPositions {
     }
 }
 
+/// Direct row lookup requires the same unique output-row mapping used by
+/// the canonical producer. Ambiguous synthetic descriptors use the eager
+/// source rather than changing their legacy ordering or multiplicity.
+pub(super) fn has_unique_ordered_point_rows(snapshot: &WindowDisplaySnapshot) -> bool {
+    snapshot.point_rows.as_ref().is_some_and(|rows| {
+        rows.rows
+            .windows(2)
+            .all(|pair| pair[0].row() < pair[1].row())
+    })
+}
+
 impl RowWindowText {
-    /// Construction visits row descriptors only. Flat legacy/synthetic
-    /// snapshots return `None`, retaining the old frame materializer.
+    /// Construction visits row descriptors only. Flat or ambiguously ordered
+    /// snapshots return `None`, retaining the complete frame materializer.
+    /// Every constructed source has unique, ordered output-row descriptors.
     pub(super) fn new(
         window: DisplayWindowId,
         snapshot: Arc<WindowDisplaySnapshot>,
@@ -172,6 +184,12 @@ impl RowWindowText {
                 });
             }
         }
+        // Preserve the global geometry/body-owner checks above even when the
+        // descriptor ordering requires the complete materializer. Direct
+        // glyph precedence and fallback row lookup both need this invariant.
+        if !has_unique_ordered_point_rows(&snapshot) {
+            return Ok(None);
+        }
         rows.sort_by(|a, b| a.top.total_cmp(&b.top));
         let mut bottom = f32::NEG_INFINITY;
         for row in &mut rows {
@@ -184,6 +202,74 @@ impl RowWindowText {
             text_body,
             rows,
         }))
+    }
+
+    pub(super) fn validate_region(
+        &self,
+        window: DisplayWindowId,
+        bounds: FrameRect,
+        max_positions: usize,
+    ) -> neomacs_display_protocol::PresentedTextRegionValidation {
+        use neomacs_display_protocol::PresentedTextRegionValidation::{Unsupported, Validated};
+        // Descriptor order was established at construction and the shared
+        // snapshot cannot change; admission need not check it a second time.
+        if window != self.window || bounds.raw() != self.text_body {
+            return Unsupported;
+        }
+        // Integer cells clipped to small integral pixel bounds have exact
+        // endpoints and differences in f32, so reconstructing a rectangle
+        // cannot round its right/bottom edge outside the clipping body.
+        // Other valid geometry keeps the exact materialized admission path.
+        const MAX_EXACT_PIXEL: f32 = (1u32 << 20) as f32;
+        let body = self.text_body;
+        if [
+            body.x,
+            body.y,
+            body.width,
+            body.height,
+            body.right(),
+            body.bottom(),
+        ]
+        .iter()
+        .any(|value| value.fract() != 0.0 || !(0.0..=MAX_EXACT_PIXEL).contains(value))
+        {
+            return Unsupported;
+        }
+        let Some(point_rows) = self.snapshot.point_rows.as_ref() else {
+            return Unsupported;
+        };
+        let Some(mut upper_bound) = point_rows
+            .rows
+            .iter()
+            .try_fold(0usize, |count, row| count.checked_add(row.point_count()))
+        else {
+            return Unsupported;
+        };
+        if upper_bound > max_positions {
+            return Unsupported;
+        }
+        // Each glyph contributes at most one clipped position. Each fallback
+        // row contributes at most one gap per point plus a trailing span.
+        // Count every fallback-row occurrence: duplicate output rows must not
+        // make this an underestimate. Clipped points can make the bound loose;
+        // exceeding it requests exact materialization, never a rejection.
+        for row in &self.snapshot.rows {
+            if row.start_buffer_pos.or(row.end_buffer_pos).is_none() {
+                continue;
+            }
+            let points = point_rows.row(row.row).map_or(0, |row| row.point_count());
+            let Some(next) = upper_bound
+                .checked_add(points)
+                .and_then(|count| count.checked_add(1))
+            else {
+                return Unsupported;
+            };
+            upper_bound = next;
+            if upper_bound > max_positions {
+                return Unsupported;
+            }
+        }
+        Validated
     }
 
     pub(super) fn is_empty(&self) -> Option<bool> {

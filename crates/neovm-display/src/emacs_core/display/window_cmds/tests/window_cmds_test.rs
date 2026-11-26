@@ -80,9 +80,26 @@ fn alpha_lower_limit_variable_projects_without_replaying_alpha_policy() {
     let limits = host.alpha_limits.clone();
     let operations = host.alpha_operations.clone();
     ev.set_display_host(Box::new(host));
-    let results = ev.eval_str_each("(setq frame-alpha-lower-limit 20) (let ((frame-alpha-lower-limit 60)) (setq frame-alpha-lower-limit 70)) (defvaralias 'alpha-limit-alias 'frame-alpha-lower-limit) (set 'alpha-limit-alias 40)");
-    assert!(results.iter().all(Result::is_ok), "{results:?}");
-    assert_eq!(*limits.borrow(), vec![0.2, 0.6, 0.7, 0.2, 0.2, 0.4]);
+    // Each binding change publishes once: the default-binding storage writer
+    // publishes the unwind restoration, so unbinding must not publish it again.
+    // Aliasing an already-bound base does not store or republish its value.
+    let cases: [(&str, &[f32]); 4] = [
+        ("(setq frame-alpha-lower-limit 20)", &[0.2]),
+        (
+            "(let ((frame-alpha-lower-limit 60)) (setq frame-alpha-lower-limit 70))",
+            &[0.2, 0.6, 0.7, 0.2],
+        ),
+        (
+            "(defvaralias 'alpha-limit-alias 'frame-alpha-lower-limit)",
+            &[0.2, 0.6, 0.7, 0.2],
+        ),
+        ("(set 'alpha-limit-alias 40)", &[0.2, 0.6, 0.7, 0.2, 0.4]),
+    ];
+    for (form, expected) in cases {
+        let result = ev.eval_str(form);
+        assert!(result.is_ok(), "{form}: {result:?}");
+        assert_eq!(limits.borrow().as_slice(), expected, "{form}");
+    }
     assert!(operations.borrow().is_empty());
 }
 
@@ -1738,12 +1755,12 @@ fn window_cursor_info_returns_last_redisplay_cursor_geometry() {
     let out = super::builtin_window_cursor_info(&mut ev, vec![]).expect("window-cursor-info");
     let items = out.as_vector_data().expect("cursor-info vector");
     assert_eq!(items.len(), 6);
-    assert_eq!(items[0], Value::symbol("bar"));
-    assert_eq!(items[1], Value::fixnum(11));
-    assert_eq!(items[2], Value::fixnum(29));
-    assert_eq!(items[3], Value::fixnum(3));
-    assert_eq!(items[4], Value::fixnum(16));
-    assert_eq!(items[5], Value::fixnum(12));
+    assert_eq!(items.at(0), Value::symbol("bar"));
+    assert_eq!(items.at(1), Value::fixnum(11));
+    assert_eq!(items.at(2), Value::fixnum(29));
+    assert_eq!(items.at(3), Value::fixnum(3));
+    assert_eq!(items.at(4), Value::fixnum(16));
+    assert_eq!(items.at(5), Value::fixnum(12));
 }
 
 #[test]
@@ -1793,12 +1810,12 @@ fn window_cursor_info_hides_and_restores_live_cursor_geometry() {
     .expect("show cursor");
     let out = super::builtin_window_cursor_info(&mut ev, vec![]).expect("window-cursor-info");
     let items = out.as_vector_data().expect("cursor-info vector");
-    assert_eq!(items[0], Value::symbol("bar"));
-    assert_eq!(items[1], Value::fixnum(11));
-    assert_eq!(items[2], Value::fixnum(29));
-    assert_eq!(items[3], Value::fixnum(3));
-    assert_eq!(items[4], Value::fixnum(16));
-    assert_eq!(items[5], Value::fixnum(12));
+    assert_eq!(items.at(0), Value::symbol("bar"));
+    assert_eq!(items.at(1), Value::fixnum(11));
+    assert_eq!(items.at(2), Value::fixnum(29));
+    assert_eq!(items.at(3), Value::fixnum(3));
+    assert_eq!(items.at(4), Value::fixnum(16));
+    assert_eq!(items.at(5), Value::fixnum(12));
 }
 
 #[test]
@@ -3184,10 +3201,19 @@ fn modify_frame_parameters_font_reopens_the_initial_frame_font() {
 }
 
 #[test]
-fn modify_frame_parameters_font_keeps_explicit_default_face_attributes() {
-    // GNU `set_lface_from_font` only fills unspecified slots. A family set
-    // explicitly on the frame-local default face must survive a frame font
-    // change, while the Font slot still follows the opened font.
+fn font_change_realizes_the_opened_font_over_explicit_default_face_attributes() {
+    // GNU `realize_default_face` passes `f->default_face_done_p` as
+    // `set_lface_from_font`'s FORCE_P (src/xfaces.c:6029).  Once the default
+    // face has been realized, a frame font change replaces even explicitly
+    // set font-derived slots with the opened font's values; only the first
+    // realization fills unspecified slots.  The Font slot always follows the
+    // opened font.
+    //
+    // Oracle (linux-gtk3, Gtk3, Xvfb 100 dpi, pinned fonts): after
+    // `(set-face-attribute 'default nil :family "DejaVu Sans Mono" :height 100)`
+    // and `(modify-frame-parameters nil '((font . "Ubuntu Mono-16")))`,
+    // `(face-attribute 'default :family)` is "Ubuntu Mono" and `:height` is
+    // 159 (PIXEL_TO_POINT(22*10, 100)), not the explicit family or 100.
     crate::test_utils::init_test_tracing();
     let mut ev = Context::new(crate::test_utils::unit_runtime());
     let host = opened_noto_host();
@@ -3216,8 +3242,13 @@ fn modify_frame_parameters_font_keeps_explicit_default_face_attributes() {
     let default_face = table.merge_faces(&["default"]);
     assert_eq!(
         default_face.family,
-        Some(Value::string("Explicit Family")),
-        "an explicit default-face family must survive the font change"
+        Some(Value::string("Noto Sans Mono")),
+        "the realized default face must take the opened font's family"
+    );
+    assert_eq!(
+        default_face.height,
+        Some(crate::face::FaceHeight::Absolute(160)),
+        "the realized default face must take the opened font's point height"
     );
 
     let opened = ev
@@ -3261,6 +3292,49 @@ fn modify_frame_parameters_font_keeps_explicit_default_face_attributes() {
         default_face.family,
         Some(Value::string("Noto Sans Mono")),
         "an explicit unspecified family must not block the font-derived value"
+    );
+}
+
+#[test]
+fn set_face_attribute_height_adopts_the_realized_font_point_height() {
+    // GNU records `set_lface_from_font`'s
+    // PIXEL_TO_POINT(font->pixel_size * 10, FRAME_RES(f)) in the default
+    // face's `:height` slot (src/xfaces.c:2218,6029; src/font.h:579).  The
+    // caller's `:height 100` therefore survives on the synchronous path but
+    // is replaced by the opened font's point height at the next realization.
+    //
+    // Oracle (linux-gtk3, Xvfb 100 dpi, pinned fonts): DejaVu Sans Mono at
+    // :height 100 opens at 14 px, and `(face-attribute 'default :height)`
+    // reads 100 immediately after `set-face-attribute` and 101 after
+    // `(redisplay t)`.  The mock host records 160 for its Noto 16 pt face.
+    crate::test_utils::init_test_tracing();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
+    ev.set_display_host(Box::new(opened_noto_host()));
+    let fid = gui_frame_for_font_change(&mut ev);
+    ev.eval_str("(fset 'frame-windows-min-size (lambda (&rest _) 1))")
+        .expect("stub the absent window-minimum subr");
+    crate::emacs_core::xfaces::builtin_internal_set_lisp_face_attribute(
+        &mut ev,
+        vec![
+            Value::symbol("default"),
+            Value::keyword("height"),
+            Value::fixnum(100),
+            Value::make_frame(fid.0),
+        ],
+    )
+    .expect("set an explicit default-face height");
+
+    // The redisplay realization forces the opened font's derived height.
+    // `sync_runtime_face_table_from_frame_lisp_faces` is the redisplay entry
+    // point that calls `realize_default_lisp_face_for_frame` first; the raw
+    // table builder only re-derives the vectors it is given.
+    crate::emacs_core::xfaces::sync_runtime_face_table_from_frame_lisp_faces(&mut ev, fid);
+    let default_face = ev.face_table().merge_faces(&["default"]);
+    assert_eq!(
+        default_face.height,
+        Some(crate::face::FaceHeight::Absolute(160)),
+        "realization must replace the explicit height with the opened font's \
+         recorded point height"
     );
 }
 
@@ -3441,8 +3515,10 @@ fn modify_frame_parameters_font_keeps_each_frames_explicit_face() {
 #[test]
 fn modify_frame_parameters_font_updates_a_previously_seeded_family() {
     // A family written by opening a font is not a user setting. The next
-    // font must replace it. An explicit height equal to the face base must
-    // still survive, because that value was set on this frame.
+    // font must replace it. The frame has not realized its default face yet,
+    // so the first font change fills only unspecified slots (GNU FORCE_P is
+    // `default_face_done_p`, false here); that realization then sets the
+    // flag, so the following font change forces every font-derived slot.
     crate::test_utils::init_test_tracing();
     let mut ev = Context::new(crate::test_utils::unit_runtime());
     ev.set_display_host(Box::new(opened_noto_host()));
@@ -3506,9 +3582,15 @@ fn modify_frame_parameters_font_updates_a_previously_seeded_family() {
         Some(Value::string("Other Mono")),
         "a family seeded by the previous font must follow the new font"
     );
+    // The first font update completed this frame's default-face realization
+    // (GNU `realize_default_face` sets `default_face_done_p`), so the next
+    // font change is forcing and replaces the explicit height with the
+    // opened font's recorded point height.
     assert_eq!(
-        face.height, explicit_height,
-        "the explicit height must survive the second font"
+        face.height,
+        Some(crate::face::FaceHeight::Absolute(180)),
+        "after the first realization the opened font's height replaces the \
+         explicit slot"
     );
 }
 
@@ -3608,10 +3690,15 @@ fn modify_frame_parameters_font_honors_a_copied_default_face() {
         .eval_str_each(r#"(modify-frame-parameters (selected-frame) '((font . "Other Mono-18")))"#);
     assert!(out[0].is_ok(), "second font update failed: {:?}", out[0]);
     let face = face(&ev);
+    // This frame's default face was realized by the first font update, so
+    // the next font change forces its opened-font family over the copied
+    // one (GNU `set_lface_from_font` with `default_face_done_p` true;
+    // oracle: an explicit "DejaVu Sans Mono" is replaced by "Ubuntu Mono"
+    // after `(modify-frame-parameters nil '((font . "Ubuntu Mono-16")))`).
     assert_eq!(
         face.family,
-        Some(Value::string("Copied Family")),
-        "a family installed by copy-face must survive the next font"
+        Some(Value::string("Other Mono")),
+        "the realized default face takes the next opened font's family"
     );
     assert_eq!(
         face.height,
@@ -4101,7 +4188,17 @@ fn x_create_frame_realizes_the_gui_frame_make_frame_delegates_to() {
         .expect("created opening frame");
     assert_eq!(frame.effective_window_system(), Some(Value::symbol("neo")));
     assert_eq!(frame.width, 800);
-    assert_eq!(frame.height, 500);
+    // Linux adds the menu bar outside the 500px text box and leaves the
+    // still-empty tool bar out (gtkutil.c:1181-1182). Other ports keep the
+    // text box as the realized window.
+    let expected_height = if cfg!(target_os = "linux") {
+        500 + frame.menu_bar_height
+    } else {
+        500
+    };
+    assert_eq!(frame.height, expected_height);
+    #[cfg(target_os = "linux")]
+    assert_eq!(frame.reserved_tool_bar_height(), 0);
     assert_eq!(
         ev.frame_manager()
             .selected_frame()
@@ -4114,7 +4211,7 @@ fn x_create_frame_realizes_the_gui_frame_make_frame_delegates_to() {
     assert_eq!(requests.len(), 1);
     assert_eq!(requests[0].frame_id, created_id);
     assert_eq!(requests[0].width, 800);
-    assert_eq!(requests[0].height, 500);
+    assert_eq!(requests[0].height, expected_height);
 }
 
 #[test]
@@ -4888,10 +4985,16 @@ fn neomacs_frame_edges_return_numeric_gui_edges_like_gnu_toolkits() {
                (neomacs-frame-edges nil 'inner-edges))",
     );
     assert_eq!(results[0], "OK nil");
-    assert_eq!(
-        results[1],
+    // GNU GTK preserves the 800x600 text allocation when the uninhibited
+    // internal border grows from 0 to 4 (xfns.c:1998-2015, frame.c:889-925).
+    // The attested 31.1 GUI row gives native/outer 808x608 and inner 800x600.
+    // Chrome implied-resize policy is currently consumed only on Linux.
+    let expected = if cfg!(target_os = "linux") {
+        "OK ((0 0 808 608) (0 0 808 608) (0 0 808 608) (4 4 804 604))"
+    } else {
         "OK ((0 0 800 600) (0 0 800 600) (0 0 800 600) (4 4 796 596))"
-    );
+    };
+    assert_eq!(results[1], expected);
 }
 
 #[test]
@@ -5878,6 +5981,70 @@ fn gui_geometry_queries_distinguish_logical_layout_from_presented_output() {
 }
 
 #[test]
+fn gui_window_pixel_edges_are_relative_to_the_window_area() {
+    // GNU's root `w->pixel_top` is `FRAME_TOP_MARGIN_HEIGHT` and carries no
+    // internal-border offset (window.c:5077-5105; window-edges adds the
+    // border itself, lisp/window.el:3839).  A GTK3 frame's menu/tool bars are
+    // toolkit widgets outside the native frame, so the oracle reports
+    // `(window-pixel-top)` 0 with both bars on; Neomacs's own client-drawn
+    // bars and border sit inside its window and must not leak into the Lisp
+    // coordinate: a (cells 1 1) posframe anchor then lands at one character
+    // height in both engines instead of 68 px lower.
+    crate::test_utils::init_test_tracing();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
+    let buffer = ev.edit.buffers.create_buffer("*pixel-top-chrome*");
+    ev.edit.buffers.set_current(buffer);
+    let frame_id = ev.frame_manager_mut().create_frame("gui", 800, 600, buffer);
+    let window_id = ev
+        .frame_manager()
+        .get(frame_id)
+        .expect("frame")
+        .selected_window;
+    ev.eval_str("(modify-frame-parameters nil '((internal-border-width . 2)))")
+        .expect("set the frame's internal border");
+    {
+        // Set the realized bar heights after the parameter write: reprojecting
+        // bar geometry from parameters resets them to the frame's (absent)
+        // `menu-bar-lines`/`tool-bar-lines`.
+        let frame = ev.frame_manager_mut().get_mut(frame_id).expect("frame");
+        frame.set_window_system(Some(Value::symbol("neo")));
+        frame.menu_bar_height = 17;
+        frame.tool_bar_height = 34;
+        frame.tab_bar_height = 20;
+        frame.displays_chrome = true;
+    }
+    {
+        let frame = ev.frame_manager_mut().get_mut(frame_id).expect("frame");
+        // The window tree starts after the client-drawn chrome band
+        // (17 + 34 + 20) and the 2 px internal border.
+        frame
+            .find_window_mut(window_id)
+            .expect("window")
+            .set_bounds(crate::window::Rect::new(2.0, 73.0, 800.0, 500.0));
+    }
+    // GNU's window-area origin is `FRAME_TOP_MARGIN_HEIGHT`, which keeps the
+    // tab bar (20) but not the external menu/tool bars; the internal border is
+    // added by `window-edges`, not part of any window's pixel origin
+    // (lisp/window.el:3839).  So the root reports (0, 20) where the same
+    // window is stored 73 px below the frame's top edge here.
+    assert_eq!(
+        super::builtin_window_pixel_left(&mut ev, &vec![])
+            .expect("GUI window-pixel-left")
+            .as_int(),
+        Some(0),
+        "the 2 px internal border is not part of the window-area origin"
+    );
+    assert_eq!(
+        super::builtin_window_pixel_top(&mut ev, &vec![])
+            .expect("GUI window-pixel-top")
+            .as_int(),
+        Some(20),
+        "73 px from the frame origin is the 51 px external bar band plus the \
+         2 px border below GNU's tab-bar-only top margin"
+    );
+}
+
+#[test]
 fn graphical_logical_window_origin_is_available_before_first_presentation() {
     crate::test_utils::init_test_tracing();
     assert_eq!(
@@ -6466,6 +6633,7 @@ fn window_lines_pixel_dimensions_returns_nil_without_a_current_matrix() {
     assert!(wlpd(&mut ev, vec![Value::make_window(wid.0)]).is_nil());
     ev.set_variable("noninteractive", Value::NIL);
 
+    drop(ev);
     // A window whose rows were never committed.
     let mut fresh = Context::new(crate::test_utils::unit_runtime());
     let buf = fresh.edit.buffers.create_buffer("*empty*");

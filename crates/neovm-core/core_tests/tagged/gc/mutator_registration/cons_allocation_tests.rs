@@ -34,6 +34,46 @@ fn roots_era_impl(body: &mut dyn for<'e> FnMut(ProofEra<'e, Baton>, RootsFixture
     Context::with_test_collection_era(roots, |era, input| body(era, input));
 }
 
+fn numeric_roots_era_impl(body: &mut dyn for<'e> FnMut(ProofEra<'e, Baton>, RootsFixture)) {
+    Context::with_test_collection_era(
+        |context| {
+            let float = Value::make_float(17.25);
+            // SAFETY: serial setup owns this initialized float. Root it before
+            // allocating the other numeric fixture object.
+            let float = unsafe { SharedRoot::new(context.tagged_heap(), float) };
+            let bignum = Value::make_int(i64::MAX);
+            // SAFETY: serial setup owns this initialized bignum on this heap.
+            // Both roots are installed before the era is admitted.
+            unsafe {
+                (
+                    [float, SharedRoot::new(context.tagged_heap(), bignum)],
+                    SharedRoot::new(context.tagged_heap(), Value::NIL),
+                )
+            }
+        },
+        |era, input| body(era, input),
+    );
+}
+
+fn owner_reserve_gen1_roots_era_impl(
+    body: &mut dyn for<'e> FnMut(ProofEra<'e, Baton>, RootsFixture),
+) {
+    Context::with_test_collection_era(
+        |context| {
+            // SAFETY: setup owns the serial Context before era admission,
+            // with no marker, worker, or foreign heap loan.
+            unsafe {
+                neovm_value::test_support::authority::set_generational_enabled_for_test(
+                    context.tagged_heap_mut(),
+                    true,
+                );
+            }
+            roots(context)
+        },
+        |era, input| body(era, input),
+    );
+}
+
 fn empty_outer_era_impl(_flag: i64, body: &mut dyn for<'e> FnMut(ProofEra<'e, Baton>)) {
     Context::with_test_collection_era(|_| (), |era, ()| body(era));
 }
@@ -92,7 +132,14 @@ fn partial_era_then_impl(
 }
 
 fn run(case: ConsAllocationCase) {
-    let mut roots_era = roots_era_impl;
+    let mut roots_era: fn(&mut dyn for<'e> FnMut(ProofEra<'e, Baton>, RootsFixture)) =
+        if case == ConsAllocationCase::NumericStorageTransfersIntoEraAndRoundTripsAtStops {
+            numeric_roots_era_impl
+        } else if case == ConsAllocationCase::OwnerConsReserveAnOldStoreKeepsTheOwnerConsAndTheUnrootedConsIsReclaimed {
+            owner_reserve_gen1_roots_era_impl
+        } else {
+            roots_era_impl
+        };
     let mut empty_outer_era = empty_outer_era_impl;
     let mut roots_nested_era = roots_nested_era_impl;
     let mut roots_era_then_words = roots_era_then_words_impl;
@@ -127,9 +174,50 @@ shells! {
     collection_requires_returned_catalog_and_resume_requires_current_stop => CollectionRequiresReturnedCatalogAndResumeRequiresCurrentStop,
     earlier_tail_close_never_rewinds_through_another_owners_live_region => EarlierTailCloseNeverRewindsThroughAnotherOwnersLiveRegion,
     foreign_stop_cannot_return_or_resume_a_cons_catalog => ForeignStopCannotReturnOrResumeAConsCatalog,
-    return_cons_storage_preserves_busy_stop_validation_for_retry => ReturnConsStoragePreservesBusyStopValidationForRetry,
+    return_cons_storage_waits_out_a_brief_gate_holder => ReturnConsStorageWaitsOutABriefGateHolder,
+    collect_waits_out_an_owner_moment_in_its_reader_scan => CollectWaitsOutAnOwnerMomentInItsReaderScan,
     forgotten_open_cons_run_refuses_publication_native_and_finish_without_waiting => ForgottenOpenConsRunRefusesPublicationNativeAndFinishWithoutWaiting,
     partial_cons_grant_refunds_owner_and_global_credits_then_merges_history_once => PartialConsGrantRefundsOwnerAndGlobalCreditsThenMergesHistoryOnce,
+    numeric_storage_transfers_into_era_and_round_trips_at_stops => NumericStorageTransfersIntoEraAndRoundTripsAtStops,
+    two_owner_numeric_allocations_survive_interleaved_catalog_work => TwoOwnerNumericAllocationsSurviveInterleavedCatalogWork,
+    partial_numeric_page_reclaims_tail_without_stop => PartialNumericPageReclaimsTailWithoutStop,
+    numeric_mint_receipt_survives_failed_outer_finish => NumericMintReceiptSurvivesFailedOuterFinish,
+    numeric_partial_pool_survives_refill_and_swept_prefix_holes => NumericPartialPoolSurvivesRefillAndSweptPrefixHoles,
+    numeric_refusals_preserve_destinations_counters_and_requests => NumericRefusalsPreserveDestinationsCountersAndRequests,
+    dropping_open_numeric_run_poison_retains_backing => DroppingOpenNumericRunPoisonRetainsBacking,
+    forgotten_open_numeric_run_refuses_publication_native_and_finish => ForgottenOpenNumericRunRefusesPublicationNativeAndFinish,
+    poisoned_numeric_close_retains_runs_and_counters_on_repeat => PoisonedNumericCloseRetainsRunsAndCountersOnRepeat,
+    numeric_stopped_serial_allocations_rebase_both_class_frontiers => NumericStoppedSerialAllocationsRebaseBothClassFrontiers,
+    numeric_stopped_serial_allocations_fill_interior_holes_before_owner_tails => NumericStoppedSerialAllocationsFillInteriorHolesBeforeOwnerTails,
+    fully_dead_numeric_retained_pages_refreeze_with_full_capacity => FullyDeadNumericRetainedPagesRefreezeWithFullCapacity,
+    numeric_exhaustion_requests_are_once_per_owner_class_and_generation => NumericExhaustionRequestsAreOncePerOwnerClassAndGeneration,
+    numeric_request_epoch_does_not_repeat_after_an_unobserved_pool => NumericRequestEpochDoesNotRepeatAfterAnUnobservedPool,
+    owner_cons_reserve_refuses_use_after_heap_drop => OwnerConsReserveRefusesUseAfterHeapDrop,
+    owner_cons_reserve_grants_only_cons_storage => OwnerConsReserveGrantsOnlyConsStorage,
+    owner_cons_reserve_session_returns_closed_book_then_collects => OwnerConsReserveSessionReturnsClosedBookThenCollects,
+    owner_cons_reserve_refuses_foreign_book_without_mutation => OwnerConsReserveRefusesForeignBookWithoutMutation,
+    owner_cons_reserve_refuses_every_foreign_heap_operation => OwnerConsReserveRefusesEveryForeignHeapOperation,
+    owner_cons_reserve_drop_and_forget_keep_collection_excluded => OwnerConsReserveDropAndForgetKeepCollectionExcluded,
+    owner_cons_reserve_main_gc_returns_the_book_then_collects => OwnerConsReserveMainGcReturnsTheBookThenCollects,
+    owner_cons_reserve_ordinary_gc_refuses_a_live_lease => OwnerConsReserveOrdinaryGcRefusesALiveLease,
+    owner_cons_reserve_poisoned_allocator_is_publication => OwnerConsReservePoisonedAllocatorIsPublication,
+    owner_cons_reserve_leftover_count_is_publication => OwnerConsReserveLeftoverCountIsPublication,
+    owner_cons_reserve_ordinary_request_routes_through_stop => OwnerConsReserveOrdinaryRequestRoutesThroughStop,
+    owner_cons_reserve_resume_of_a_live_lease_is_not_busy => OwnerConsReserveResumeOfALiveLeaseIsNotBusy,
+    owner_cons_reserve_session_return_keeps_handed_cell_and_reclaims_tail => OwnerConsReserveSessionReturnKeepsHandedCellAndReclaimsTail,
+    owner_cons_reserve_retire_rooted_reclaims_one_registration => OwnerConsReserveRetireRootedReclaimsOneRegistration,
+    owner_cons_reserve_retire_queue_hygiene_skips_unleased_and_drains_at_stop => OwnerConsReserveRetireQueueHygieneSkipsUnleasedAndDrainsAtStop,
+    owner_cons_reserve_retire_requires_closed_book_and_reclaims_carved_tail => OwnerConsReserveRetireRequiresClosedBookAndReclaimsCarvedTail,
+    owner_cons_reserve_finish_refuses_live_lease_until_reclaimed => OwnerConsReserveFinishRefusesLiveLeaseUntilReclaimed,
+    owner_cons_reserve_reclaim_busy_requeues_for_later_apply => OwnerConsReserveReclaimBusyRequeuesForLaterApply,
+    owner_cons_reserve_reclaim_poisoned_allocator_requeues => OwnerConsReserveReclaimPoisonedAllocatorRequeues,
+    owner_cons_reserve_reclaim_refuses_wrong_thread => OwnerConsReserveReclaimRefusesWrongThread,
+    owner_cons_reserve_two_idle_stops_hold_no_reserve => OwnerConsReserveTwoIdleStopsHoldNoReserve,
+    owner_cons_reserve_pacing_charges_carved_cells_and_subtracts_the_open_tail => OwnerConsReservePacingChargesCarvedCellsAndSubtractsTheOpenTail,
+    owner_cons_reserve_the_cap_is_a_reserve_miss => OwnerConsReserveTheCapIsAReserveMiss,
+    owner_cons_reserve_two_owners_carve_disjoint_runs_without_moving_the_heap_window => OwnerConsReserveTwoOwnersCarveDisjointRunsWithoutMovingTheHeapWindow,
+    owner_cons_reserve_a_moved_block_tail_is_not_rewound => OwnerConsReserveAMovedBlockTailIsNotRewound,
+    owner_cons_reserve_an_old_store_keeps_the_owner_cons_and_the_unrooted_cons_is_reclaimed => OwnerConsReserveAnOldStoreKeepsTheOwnerConsAndTheUnrootedConsIsReclaimed,
 }
 
 #[test]

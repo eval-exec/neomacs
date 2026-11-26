@@ -432,3 +432,7 @@ pub(super) fn run(
 #[cfg(test)]
 #[path = "tests/startup_test.rs"]
 mod startup_test;
+
+#[cfg(test)]
+#[path = "tests/startup_cache_obligation_test.rs"]
+mod startup_cache_obligation_test;

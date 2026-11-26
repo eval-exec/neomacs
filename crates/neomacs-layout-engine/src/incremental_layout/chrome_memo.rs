@@ -489,7 +489,7 @@ impl PlainEncoder {
                 self.out.push(tag::VECTOR);
                 self.u64(elements.len() as u64);
                 for element in elements.iter() {
-                    self.value(*element, depth + 1)?;
+                    self.value(element, depth + 1)?;
                 }
                 Ok(())
             }

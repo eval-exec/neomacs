@@ -38,8 +38,9 @@ const POOL: &[(&str, bool)] = &[
 fn slow(eval: &mut Context, kind: ArithGenericKind, args: &[Value]) -> String {
     let args_start = eval.bc_buf.len();
     eval.bc_buf.extend_from_slice(args);
-    let result = Vm::call_arith_builtin_slow_on_context(eval, kind, args_start, args.len())
-        .expect("static arithmetic subr");
+    let result =
+        unsafe { Vm::call_arith_builtin_slow_on_context(eval, kind, args_start, args.len()) }
+            .expect("static arithmetic subr");
     eval.bc_buf.truncate(args_start);
     crate::emacs_core::format_eval_result(&result.map_err(crate::emacs_core::print::map_flow))
 }
@@ -182,9 +183,14 @@ fn arithmetic_opcodes_answer_integer_operands_directly() {
             optional: Vec::new(),
             rest: None,
         });
-        f.lexical = true;
-        f.ops = vec![Op::StackRef(1), Op::StackRef(1), op.clone(), Op::Return];
-        f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(8);
+        f.set_lexical(true);
+        f.set_ops(vec![
+            Op::StackRef(1),
+            Op::StackRef(1),
+            op.clone(),
+            Op::Return,
+        ]);
+        f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(8));
         let direct0 = crate::emacs_core::bytecode::vm::arith_integer_fast_count();
         let got = Vm::from_context(&mut eval)
             .execute(&f, vec![a, b])
@@ -228,9 +234,9 @@ fn division_opcode_preserves_fixnum_boundaries_and_slow_conditions() {
         optional: Vec::new(),
         rest: None,
     });
-    f.lexical = true;
-    f.ops = vec![Op::StackRef(1), Op::StackRef(1), Op::Div, Op::Return];
-    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(8);
+    f.set_lexical(true);
+    f.set_ops(vec![Op::StackRef(1), Op::StackRef(1), Op::Div, Op::Return]);
+    f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(8));
     for (lhs, rhs) in cases {
         let a = eval.eval_str(lhs).unwrap();
         let a = rooted(&mut eval, a);

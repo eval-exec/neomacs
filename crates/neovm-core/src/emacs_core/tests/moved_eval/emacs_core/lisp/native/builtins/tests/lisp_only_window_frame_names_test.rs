@@ -514,6 +514,7 @@ fn display_color_cells_went_with_the_seeding_that_kept_it() {
          DIVERGENCES.md 157 removed the bootstrap caller that kept the Rust \
          subr alive",
     );
+    drop(_eval);
 
     // 2. In the loaded runtime the cell holds frame.el's `defun', with GNU's
     //    arity, GNU's commandp and GNU's docstring -- and it byte-compiles to

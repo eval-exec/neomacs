@@ -8,6 +8,8 @@
 
 mod support;
 
+#[path = "bidi_paragraph_direction_tui_oracle.rs"]
+mod bidi_paragraph_direction_tui_oracle;
 mod buffer_local_completion;
 mod coding_detection;
 mod coding_save;
@@ -20,10 +22,13 @@ mod frame_bar_parameters;
 mod frame_focus;
 mod idle_timer_output;
 mod kill_emacs_shutdown;
+#[path = "minibuffer_quit_cleanup.rs"]
+mod minibuffer_quit_cleanup;
 mod pixel_measurement;
 mod process_plist_isolation;
 mod process_send_encoding;
 mod stalled_tls;
+mod tty_emergency_escape;
 
 #[cfg(test)]
 #[path = "mode_line_min_width_boundary_oracle.rs"]
@@ -35,6 +40,8 @@ mod redisplay_transitions;
 
 #[path = "overlay_face_render.rs"]
 mod overlay_face_render;
+#[path = "overlay_window_view_oracle.rs"]
+mod overlay_window_view_oracle;
 #[path = "package_tui/mod.rs"]
 mod package_tui;
 
@@ -78,6 +85,8 @@ mod input_methods;
 mod issue_140_hscroll;
 #[path = "issue_170_centered_buffer.rs"]
 mod issue_170_centered_buffer;
+#[path = "issue_249_special_key_bindings.rs"]
+mod issue_249_special_key_bindings;
 #[path = "issue_254.rs"]
 mod issue_254;
 #[path = "issue_383_dashboard_banner.rs"]
@@ -92,6 +101,9 @@ mod issue_446_align_to_hscroll;
 mod issue_470;
 #[path = "issue_621_mouse_drag_selection.rs"]
 mod issue_621_mouse_drag_selection;
+mod issue_640_long_lines;
+
+// N4 (peer 6163): paired TTY drop-down menu grid.
 #[path = "issue_654_centered_cursor.rs"]
 mod issue_654_centered_cursor;
 #[path = "issue_656_kill_minibuffer.rs"]
@@ -175,6 +187,15 @@ mod strict_grid;
 mod tty_color_index;
 #[path = "tty_input.rs"]
 mod tty_input;
+#[path = "tty_menu_grid_oracle.rs"]
+mod tty_menu_grid_oracle;
+#[path = "tty_mode_strings.rs"]
+mod tty_mode_strings;
+
+// N1 (peer 6385): the probe row after an overlay tick makes a window
+// outdated for GNU's matrix-reuse predicate.
+#[path = "p640n1_probe_row_oracle.rs"]
+mod p640n1_probe_row_oracle;
 #[cfg(test)]
 #[path = "tty_relay.rs"]
 mod tty_relay;
@@ -200,3 +221,6 @@ mod treesit_debug_mode_line;
 
 mod encoded_file;
 mod mode_line_element_attribution_oracle;
+
+#[path = "r2_real_cn_intervals_oracle.rs"]
+mod r2_real_cn_intervals_oracle;

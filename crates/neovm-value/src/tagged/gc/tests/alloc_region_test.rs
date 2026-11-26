@@ -73,7 +73,7 @@ fn regions_bump_a_block_tail_in_order() {
     assert_eq!(heap.region_stats.cons_refills(), 3);
     assert_eq!(heap.cons_blocks.len(), 1);
     assert_eq!(
-        heap.cons_blocks[0].next_index as usize,
+        heap.cons_blocks[0].next_index(),
         3 * CONS_REGION_MAX_CELLS,
         "the third region was used up exactly"
     );
@@ -87,7 +87,7 @@ fn a_full_block_rolls_over_into_a_fresh_block() {
         cons(&mut heap, i);
     }
     assert_eq!(heap.cons_blocks.len(), 1);
-    assert_eq!(heap.cons_blocks[0].next_index as usize, CONS_BLOCK_SIZE);
+    assert_eq!(heap.cons_blocks[0].next_index(), CONS_BLOCK_SIZE);
     let (cur, lim) = heap.cons_region_for_test();
     assert_eq!(cur, lim, "the region ended with the block");
     let next = cons(&mut heap, -1);
@@ -112,7 +112,7 @@ fn a_free_list_region_is_one_adjacent_run() {
         .filter(|(i, _)| *i < 10 || *i == 20 || *i >= 40)
         .map(|(_, c)| *c)
         .collect();
-    heap.collect_exact(kept.iter().copied());
+    heap.collect_rooted(kept.iter().copied());
     assert!(
         !heap.alloc_regions_open(),
         "the collection closed the region"
@@ -153,7 +153,7 @@ fn closing_gives_the_unused_tail_back_where_it_came_from() {
     heap.close_alloc_regions();
     assert!(!heap.alloc_regions_open());
     assert_eq!(heap.cons_region_for_test(), (0, 0));
-    assert_eq!(heap.cons_blocks[0].next_index, 2, "the bump tail rewound");
+    assert_eq!(heap.cons_blocks[0].next_index(), 2, "the bump tail rewound");
     let c = cons(&mut heap, 3);
     assert_eq!(cell_addr(c), cell_addr(a) + 2 * size_of::<ConsCell>());
 
@@ -166,7 +166,7 @@ fn closing_gives_the_unused_tail_back_where_it_came_from() {
         .filter(|(i, _)| !(3..8).contains(i))
         .map(|(_, c)| *c)
         .collect();
-    heap.collect_exact(kept.iter().copied());
+    heap.collect_rooted(kept.iter().copied());
     let before = free_list(&heap);
     let got = cons(&mut heap, 99);
     assert_eq!(cell_addr(got), cell_addr(cells[3]));
@@ -300,7 +300,7 @@ fn black_follows_the_region_across_the_phase_flags() {
     assert!(!is_black(&heap, after));
     // Bits at or above a block's cursor are never set.
     for block in &heap.cons_blocks {
-        let used = block.next_index as usize;
+        let used = block.next_index();
         let marked_at_or_above = (used..CONS_BLOCK_SIZE).any(|i| {
             let cell = unsafe { block.cells_ptr().add(i) };
             block.is_marked_ptr(cell)
@@ -322,7 +322,7 @@ fn every_collector_entry_closes_the_region() {
     };
 
     open(&mut heap);
-    heap.collect_exact(std::iter::once(root));
+    heap.collect_rooted(std::iter::once(root));
     assert!(!heap.alloc_regions_open(), "collect_exact");
 
     open(&mut heap);
@@ -348,14 +348,14 @@ fn every_collector_entry_closes_the_region() {
     heap.incremental_drain_all();
     open(&mut heap);
     let bytes_before = heap.live_bytes();
-    heap.incremental_finish(bytes_before, std::time::Instant::now());
+    heap.incremental_finish_for_test(bytes_before, std::time::Instant::now());
     assert!(!heap.alloc_regions_open(), "incremental_finish");
     assert!(heap.sweep_in_progress());
     open(&mut heap);
-    heap.incremental_sweep_slice(0);
+    heap.incremental_sweep_slice_for_test(0);
     assert!(!heap.alloc_regions_open(), "incremental_sweep_slice");
     open(&mut heap);
-    heap.finish_incremental_sweep_now();
+    heap.finish_incremental_sweep_now_for_test();
     assert!(!heap.alloc_regions_open(), "finish_incremental_sweep");
     assert!(!heap.sweep_in_progress());
     assert_eq!(
@@ -381,7 +381,7 @@ fn allocation_across_a_concurrent_cycle_keeps_every_live_cons() {
             root = heap.alloc_cons(TaggedValue::fixnum(i), root);
         }
     }
-    heap.collect_exact(std::iter::once(root)); // the bootstrap cycle
+    heap.collect_rooted(std::iter::once(root)); // the bootstrap cycle
     let mut live: Vec<TaggedValue> = Vec::new();
     let keep = |heap: &mut TaggedHeap, live: &mut Vec<TaggedValue>, n: i64| {
         for i in 0..n {
@@ -406,10 +406,10 @@ fn allocation_across_a_concurrent_cycle_keeps_every_live_cons() {
     }
     heap.incremental_drain_all();
     let bytes_before = heap.live_bytes();
-    heap.incremental_finish(bytes_before, std::time::Instant::now());
+    heap.incremental_finish_for_test(bytes_before, std::time::Instant::now());
     while heap.sweep_in_progress() {
         keep(&mut heap, &mut live, 50);
-        heap.incremental_sweep_slice(1);
+        heap.incremental_sweep_slice_for_test(1);
     }
     let addrs: std::collections::HashSet<usize> = live.iter().map(|c| cell_addr(*c)).collect();
     assert_eq!(addrs.len(), live.len(), "a live cell was handed out twice");
@@ -430,7 +430,7 @@ fn allocation_across_a_concurrent_cycle_keeps_every_live_cons() {
     // Everything live survives a full collection too.
     let mut roots = live.clone();
     roots.push(root);
-    heap.collect_exact(roots.into_iter());
+    heap.collect_rooted(roots.into_iter());
     for &c in &live {
         let car = unsafe { (*c.as_cons_ptr().unwrap()).load_car() };
         assert!(car.is_fixnum(), "survived the stop-the-world cycle");
@@ -476,8 +476,8 @@ fn float_regions_bump_a_page_tail_with_headers_written_at_grant() {
     assert_eq!(lim - float_addr(first), FLOAT_REGION_MAX_SLOTS * 32);
     assert_eq!(first.xfloat(), 1.5);
     let page = &heap.float_arena.pages[0];
-    assert_eq!(page.next_index, FLOAT_REGION_MAX_SLOTS);
-    assert_eq!(page.allocated, FLOAT_REGION_MAX_SLOTS);
+    assert_eq!(page.next_index(), FLOAT_REGION_MAX_SLOTS);
+    assert_eq!(page.allocated(), FLOAT_REGION_MAX_SLOTS);
     for index in 0..FLOAT_REGION_MAX_SLOTS {
         assert!(page.is_allocated(index));
         let header = unsafe { &*(page.slot_ptr(index) as *const GcHeader) };
@@ -507,8 +507,8 @@ fn closing_a_float_region_gives_its_tail_back() {
     heap.alloc_float(2.0);
     heap.close_alloc_regions();
     let page = &heap.float_arena.pages[0];
-    assert_eq!(page.next_index, 2, "the bump tail rewound");
-    assert_eq!(page.allocated, 2);
+    assert_eq!(page.next_index(), 2, "the bump tail rewound");
+    assert_eq!(page.allocated(), 2);
     assert!(!page.is_allocated(2));
     let c = heap.alloc_float(3.0);
     assert_eq!(float_addr(c), float_addr(a) + 64);
@@ -522,9 +522,9 @@ fn closing_a_float_region_gives_its_tail_back() {
         .filter(|(i, _)| !(4..10).contains(i))
         .map(|(_, f)| *f)
         .collect();
-    heap.collect_exact(kept.iter().copied());
+    heap.collect_rooted(kept.iter().copied());
     let page = &heap.float_arena.pages[0];
-    assert_eq!(page.free_head, 9, "the page list descends from its top");
+    assert_eq!(page.free_head(), 9, "the page list descends from its top");
     let got = heap.alloc_float(99.0);
     assert_eq!(
         float_addr(got),
@@ -537,9 +537,9 @@ fn closing_a_float_region_gives_its_tail_back() {
     assert_eq!(heap.float_arena.partial_head, PAGE_NONE, "the page drained");
     heap.close_alloc_regions();
     let page = &heap.float_arena.pages[0];
-    assert!(page.on_partial, "the page is back on the partial chain");
+    assert!(page.on_partial(), "the page is back on the partial chain");
     let mut list = Vec::new();
-    let mut slot = page.free_head;
+    let mut slot = page.free_head();
     while slot != PAGE_NONE {
         list.push(slot);
         slot = unsafe { page.free_link_ptr(slot).read() };
@@ -588,7 +588,7 @@ fn float_allocation_across_a_concurrent_cycle_keeps_every_live_float() {
             root = heap.alloc_cons(f, root);
         }
     }
-    heap.collect_exact(std::iter::once(root));
+    heap.collect_rooted(std::iter::once(root));
     let mut live: Vec<TaggedValue> = Vec::new();
     let keep = |heap: &mut TaggedHeap, live: &mut Vec<TaggedValue>, n: usize| {
         for _ in 0..n {
@@ -610,10 +610,10 @@ fn float_allocation_across_a_concurrent_cycle_keeps_every_live_float() {
     heap.seed_root(root);
     heap.incremental_drain_all();
     let bytes_before = heap.live_bytes();
-    heap.incremental_finish(bytes_before, std::time::Instant::now());
+    heap.incremental_finish_for_test(bytes_before, std::time::Instant::now());
     while heap.sweep_in_progress() {
         keep(&mut heap, &mut live, 20);
-        heap.incremental_sweep_slice(1);
+        heap.incremental_sweep_slice_for_test(1);
     }
     let addrs: std::collections::HashSet<usize> = live.iter().map(|f| float_addr(*f)).collect();
     assert_eq!(addrs.len(), live.len(), "a live float's slot was reused");
@@ -636,8 +636,8 @@ fn promotion_does_not_tenure_a_regions_reserved_slots() {
     heap.promote_and_blacken();
     assert!(!heap.alloc_regions_open());
     let page = &heap.float_arena.pages[0];
-    assert_eq!(page.allocated, 3, "only the handed-out floats remain");
-    assert!(!page.retired);
+    assert_eq!(page.allocated(), 3, "only the handed-out floats remain");
+    assert!(!page.is_retired());
     for f in &kept {
         // Runtime survivors: tenured old in GEN1, still young in GEN0.
         assert_eq!(

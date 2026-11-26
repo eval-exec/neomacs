@@ -24,8 +24,12 @@ const HOF_LIST_PREFLIGHT_MAX: i64 = 65_535;
 /// Threading: reads the caller-rooted sequence under the current mutator's
 /// existing cons-access contract, with no Lisp call or safepoint during the
 /// walk. It publishes no state; a concurrent collector may read the cells.
+///
+/// # Safety
+/// `sequence` is a live `Value` word owned by the calling mutator. Rebuilding
+/// a value from any other word and reading its header is undefined behavior.
 #[unsafe(no_mangle)]
-pub(crate) extern "C" fn neovm_jit_hof_length(sequence: i64) -> i64 {
+pub(crate) unsafe extern "C" fn neovm_jit_hof_length(sequence: i64) -> i64 {
     jit_shim_contain!(no_ctx, -1, {
         // The native loop reads list cells directly. Decline before mapping
         // entry whenever this mutator must record reads, so the shared builtin

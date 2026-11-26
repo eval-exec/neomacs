@@ -12,7 +12,10 @@ use crate::backend::{
 use crate::clock::PlaybackClock;
 use crate::mailbox::PresentationFrameQueue;
 use crate::platform::CurrentPlatform;
-use crate::sampling::{GpuVideoContext, PreparedVideoDraws, VideoSamplingResources};
+use crate::sampling::{
+    DrawRetirementGate, GpuVideoContext, GpuVideoFrame, PreparedVideoDraws, VideoCommandEncoder,
+    VideoSamplingResources,
+};
 use crate::{
     FrameImportPolicy, GpuGeneration, MediaTime, PlaybackAction, PlaybackEpoch, PlaybackRate,
     PresentationVisibility, VideoCommand, VideoCommandError, VideoDiagnostics, VideoEvent,
@@ -248,6 +251,7 @@ impl<F, S> Session<F, S> {
 pub struct VideoSystem {
     inner: VideoSystemImpl<CurrentPlatform>,
     gpu: GpuVideoContext,
+    retirement_gate: DrawRetirementGate<GpuVideoFrame>,
 }
 
 impl VideoSystem {
@@ -276,6 +280,7 @@ impl VideoSystem {
         Ok(Self {
             inner: VideoSystemImpl::new(decoder, importer, policy),
             gpu,
+            retirement_gate: DrawRetirementGate::default(),
         })
     }
 
@@ -338,8 +343,38 @@ impl VideoSystem {
         self.inner.open_from_manifest(id, manifest)
     }
 
+    /// Create a command encoder bound by type to this `VideoSystem`'s own
+    /// `wgpu::Device`, suitable for [`Self::submit_command_encoder`] or
+    /// [`Self::discard_command_encoder`].
+    pub fn create_command_encoder(
+        &self,
+        desc: &wgpu::CommandEncoderDescriptor<'_>,
+    ) -> VideoCommandEncoder {
+        VideoCommandEncoder::new(
+            self.retirement_gate.system_id(),
+            self.gpu.device().create_command_encoder(desc),
+        )
+    }
+
+    /// Current sampled frame geometry for metadata inspection without arming
+    /// draw-submission retirement gating.
+    pub fn frame_geometry(&self, id: VideoId) -> Option<crate::VideoGeometry> {
+        self.inner
+            .sampled(id)
+            .filter(|frame| frame.generation() == self.gpu.generation())
+            .map(GpuVideoFrame::geometry)
+    }
+
+    /// Snapshot generation-valid frames for recording into a
+    /// [`crate::VideoRenderPass`].
+    ///
+    /// Calling [`crate::PreparedVideoDraw::bind_to_pass`] arms a private
+    /// retirement hold inside the owning [`VideoCommandEncoder`] so subsequent
+    /// `service()`, `command()`, or `set_presentation()` calls cannot emit a
+    /// `FOREIGN` release barrier or return native leases before
+    /// [`Self::submit_command_encoder`] submits the encoder.
     pub fn prepare_draws(&self, ids: impl IntoIterator<Item = VideoId>) -> PreparedVideoDraws<'_> {
-        let frames = ids
+        let frames: HashMap<_, _> = ids
             .into_iter()
             .filter_map(|id| {
                 self.inner
@@ -348,7 +383,47 @@ impl VideoSystem {
                     .map(|frame| (id, frame))
             })
             .collect();
-        PreparedVideoDraws::new(frames)
+        PreparedVideoDraws::new(frames, self.retirement_gate.registry())
+    }
+
+    /// Submit a device-bound [`VideoCommandEncoder`] together with any private
+    /// draw-retirement hold attached to it. Any staged foreign-surface release
+    /// barriers are recorded in a separate raw-only encoder submitted right
+    /// after the draw buffer in the same `queue.submit` batch, and retired
+    /// frames stay alive until that submission completes on the GPU.
+    pub fn submit_command_encoder(
+        &mut self,
+        encoder: VideoCommandEncoder,
+    ) -> wgpu::SubmissionIndex {
+        assert_eq!(
+            encoder.system_id(),
+            self.retirement_gate.system_id(),
+            "VideoCommandEncoder belongs to a different VideoSystem"
+        );
+        let (buffer, token) = encoder.into_buffer_and_token();
+        // Invariant: `retired` must pass directly into `submit_buffer_with_retirements`
+        // in this same call; nothing may interleave between token release and
+        // queue submission, and `SubmittedWorkRetirement` holds the frames until
+        // GPU completion.
+        let retired = self.retirement_gate.finish_encoder_token(token);
+        self.gpu.submit_buffer_with_retirements(buffer, retired)
+    }
+
+    /// Abandon an unsubmitted [`VideoCommandEncoder`], destroying its private
+    /// `wgpu::CommandEncoder` before releasing its retirement hold and
+    /// immediately flushing any staged retirements if no other video-bearing
+    /// encoders remain live.
+    pub fn discard_command_encoder(&mut self, encoder: VideoCommandEncoder) {
+        assert_eq!(
+            encoder.system_id(),
+            self.retirement_gate.system_id(),
+            "VideoCommandEncoder belongs to a different VideoSystem"
+        );
+        let token = encoder.discard_and_take_token();
+        let retired = self.retirement_gate.finish_encoder_token(token);
+        if !retired.is_empty() {
+            self.gpu.retire_after_submitted_work(retired);
+        }
     }
 
     pub fn service(&mut self, now: Instant) -> VideoServiceResult {
@@ -362,16 +437,45 @@ impl VideoSystem {
     }
 
     fn retire_replaced_frames(&mut self) {
-        let retired = self.inner.take_retired();
+        let retired = self
+            .retirement_gate
+            .stage_or_retire(self.inner.take_retired());
         if !retired.is_empty() {
             self.gpu.retire_after_submitted_work(retired);
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_gpu(&self) -> &GpuVideoContext {
+        &self.gpu
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_make_prepared_draw<'a>(
+        &'a self,
+        frame: &'a GpuVideoFrame,
+    ) -> crate::PreparedVideoDraw<'a> {
+        crate::PreparedVideoDraw::new_for_test(frame, self.retirement_gate.registry())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_stage_retired_frame(&mut self, frame: GpuVideoFrame) {
+        let retired = self.retirement_gate.stage_or_retire(vec![frame]);
+        if !retired.is_empty() {
+            self.gpu.retire_after_submitted_work(retired);
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_pending_retirements(&self) -> usize {
+        self.retirement_gate.pending_len()
     }
 }
 
 impl Drop for VideoSystem {
     fn drop(&mut self) {
-        let retired = self.inner.take_all_sampled_for_retirement();
+        let mut retired = self.retirement_gate.take_all_on_drop();
+        retired.extend(self.inner.take_all_sampled_for_retirement());
         if !retired.is_empty() {
             // Teardown is also an ownership transition. In particular, a
             // Linux imported image must return to FOREIGN ownership after

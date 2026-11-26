@@ -36,6 +36,9 @@ const GUI_PROBE: &str = r####"
             (set-window-buffer (selected-window) buffer)
             (with-current-buffer buffer
               (redisplay t)
+              ;; ebox refits mounted viewports through its settle timer after
+              ;; a buffer/window change (ebox-viewport-settle-delay).
+              (sleep-for 0.25)
               (let* ((window (get-buffer-window buffer t))
                      (title-pos (save-excursion
                                   (goto-char (point-min))
@@ -70,7 +73,7 @@ fn etaf_desktop_real_gui_canvas_matches_gnu() {
     .expect("run real graphical GNU Emacs and Neomacs sequentially");
 
     let expected_gnu = expect![[
-        r##"OK (:text "  main     \n  \n  \n            \n   Hel   \n   lo              \n   des    Tas   \n   kto    k     \n   p     one   \n              \n               \n        \n         \n  \n  \n  \n  \n  \n  \n  \n  \n  ⊞ Appli   " :pixel-size (96 . 374) :body-width 100 :body-height 34 :title-face (:background "#D3DBE4") :default-family "DejaVu Sans Mono" :default-height 101 :default-foreground "black" :default-background "white" :frame-width 100 :frame-height 35)"##
+        r##"OK (:text "​  main     \n​  \n​  \n​            \n​   Hel   \n​   lo              \n​   des    Tas   \n​   kto    k     \n​   p     one   \n​              \n​               \n​        \n​         \n​  \n​  \n​  \n​  \n​  \n​  \n​  \n​  \n​  ⊞ Appli   " :pixel-size (96 . 484) :body-width 100 :body-height 34 :title-face (:background "#D3DBE4") :default-family "DejaVu Sans Mono" :default-height 101 :default-foreground "black" :default-background "white" :frame-width 100 :frame-height 35)"##
     ]];
     expected_gnu.assert_eq(&pair.gnu_behavior.to_string());
     // Strict parity: the probe must produce GNU's exact observation.  There

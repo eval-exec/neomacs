@@ -42,6 +42,8 @@ use super::coding::{CodingSystemManager, EolConversion};
 use crate::code_conversion_workspace::{CodeConversionBufferLease, ConversionBufferEncoding};
 use crate::encoding::{CodingEncoderState, RuntimeCodingSystem};
 
+pub use neovm_value::display_vocab::GlyphTextMetrics;
+
 pub trait TextHost: EditHost {
     /// The text phase opener: the owner's variable-read view, from DISJOINT
     /// field borrows. It is [`EditHost::Vars`] — there is no second view type
@@ -63,6 +65,13 @@ pub trait TextHost: EditHost {
     /// variable view (borrowck): close the view first. TEXT-HOST row.
     fn buffers_mut(&mut self) -> &mut BufferManager;
 
+    /// Non-swappable mutable buffer capability for a write phase. Cannot
+    /// coexist with a live variable view (borrowck): close the view first.
+    /// TEXT-HOST row.
+    fn buffers_view_mut(&mut self) -> neovm_edit::buffer::BufferManagerMut<'_> {
+        neovm_edit::buffer::BufferManagerMut::new(self.buffers_mut())
+    }
+
     // -------------------------------------------------------------------------
     // Text-specific services (cired2's 09:52Z GO batch; one TEXT-HOST row
     // each, or EDIT-HOST when it is a generic eval service)
@@ -72,6 +81,48 @@ pub trait TextHost: EditHost {
     /// pre-write/post-read hook bodies keep it exactly as today).
     /// TEXT-HOST row.
     fn eval_sub(&mut self, form: Value) -> EvalResult;
+
+    /// GNU `composition_gstring_lookup_cache` (src/composite.c): the shaped
+    /// gstring cached for HEADER, when one exists.  A hit carries a fixnum
+    /// LGSTRING_ID, so the automatic-composition search can skip the rule
+    /// call and reuse the shaped result.  TEXT-HOST row.
+    fn composition_gstring_cache_lookup(&mut self, header: Value) -> Option<Value> {
+        let _ = header;
+        None
+    }
+
+    /// GNU `clear-composition-cache`: reset the gstring table, then clear the
+    /// face cache (GNU returns `(clear-face-cache t)`).  TEXT-HOST row.
+    fn composition_gstring_cache_clear(&mut self) -> EvalResult {
+        Ok(Value::NIL)
+    }
+
+    /// GNU `composition_gstring_cache_clear_font`: drop every cached gstring
+    /// whose header references FONT (`close-font`).  TEXT-HOST row.
+    fn composition_gstring_cache_clear_font(&mut self, font: Value) {
+        let _ = font;
+    }
+
+    /// GNU `autocmp_chars`'s font/frame resolution (`src/composite.c:958-971`)
+    /// without invoking Lisp `font-at`.  Returns the displaying window's frame
+    /// on non-window (TTY/batch) frames, the resolved font object on graphical
+    /// frames, or `None` when automatic composition is inhibited or no font
+    /// object can be resolved.  TEXT-HOST row.
+    fn composition_font_or_frame_at(&mut self, pos: i64, string: Value) -> Option<Value> {
+        let _ = (pos, string);
+        None
+    }
+
+    /// GNU `font->driver->text_extents` for character CH of FONT-OBJECT,
+    /// with the driver's encoded font code.  `composition-get-gstring` fills
+    /// every glyph with these before any automatic-composition rule runs
+    /// (`fill_gstring_body`, src/composite.c).  `None` when no font driver is
+    /// installed (batch mode) or the font cannot encode CH; the caller then
+    /// keeps GNU's char-width-table fallback.  TEXT-HOST row.
+    fn font_glyph_text_metrics(&mut self, font: Value, ch: u32) -> Option<GlyphTextMetrics> {
+        let _ = (font, ch);
+        None
+    }
 
     /// GNU's `inhibit-eol-conversion` read at the point of conversion
     /// (`src/coding.c`). TEXT-HOST row; pure read (T5.3).

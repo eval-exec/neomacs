@@ -165,7 +165,7 @@ pub(crate) fn enter_lists48_osr_profile_for_test() -> impl Drop {
     static_assertions::assert_not_impl_any!(Guard: Send, Sync);
     impl Drop for Guard {
         fn drop(&mut self) {
-            crate::emacs_core::jit::cache::clear();
+            crate::emacs_core::jit::cache::clear_with_serial_receipt().expect("serial jit grace");
             TEST_PROFILE.with(|value| value.set(self.previous));
             super::force_opt_for_test(None, None);
             super::force_opt_profit_for_test(None);
@@ -193,7 +193,7 @@ pub(crate) fn enter_lists48_osr_profile_for_test() -> impl Drop {
     super::force_opt_require_osr_for_test(None);
     super::force_opt_early_for_test(None);
     super::force_opt_max_ops_for_test(None);
-    crate::emacs_core::jit::cache::clear();
+    crate::emacs_core::jit::cache::clear_with_serial_receipt().expect("serial jit grace");
     Guard {
         previous,
         _thread: std::marker::PhantomData,

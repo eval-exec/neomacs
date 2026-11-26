@@ -67,7 +67,9 @@ fn with_prepared_case(
                 FrozenLegacyRoots::new(heap, census.take(), FrozenFunctionRoots::Quiescent)
             };
             let root = owner.parallel_heap_root_designator();
-            heap_transfer_adapter::detach_source_heap(root.as_non_null());
+            // SAFETY: the closed source fixture is stopped with store protocol
+            // detached; no Context is active on this thread until recovery.
+            unsafe { heap_transfer_adapter::detach_source_heap(root.as_non_null()) };
             assert!(!neovm_value::tagged::gc::tagged_heap_is_installed());
             let mut admission = match Gen1Admission::check(collector) {
                 Ok(admission) => admission,
@@ -195,6 +197,58 @@ fn pentry_e2b_heap_transfer_os_thread_repeated_local_loans() {
 }
 
 #[test]
+fn e2_safety_miri_source_frame_ends_before_send() {
+    with_prepared(|pending, transfer| {
+        let source = std::thread::current().id();
+        let transfer = std::thread::spawn(move || {
+            assert_ne!(source, std::thread::current().id());
+            let (transfer, ()) = transfer
+                .with_collector(|admission| (admission.into_collector(), ()))
+                .expect("destination loan after the source frame ended");
+            transfer
+        })
+        .join()
+        .expect("destination thread");
+        eprintln!("PENTRY_MIRI case=source_frame_ends_before_send kind=PRODUCT");
+        finish(pending, transfer);
+    });
+}
+
+#[test]
+fn e2_safety_miri_designator_is_not_a_pointer() {
+    use neovm_value::tagged::gc::{SymbolRootDesignators, WorldIdentity};
+    use std::ptr::NonNull;
+    // The identity word is not a pointer permission. Miri must observe no
+    // read or write through it.
+    let address = 0x1000usize;
+    let first = unsafe { WorldIdentity::new(address) };
+    let second = unsafe { WorldIdentity::new(address) };
+    assert_eq!(first, second);
+    let roots = unsafe {
+        SymbolRootDesignators::new(
+            WorldIdentity::new(address),
+            NonNull::<()>::dangling(),
+            NonNull::<()>::dangling(),
+        )
+    };
+    assert_eq!(roots.world(), &first);
+    let _obarray = roots.obarray().as_ptr();
+    let _projections = roots.projections().as_ptr();
+    eprintln!("PENTRY_MIRI case=designator_is_not_a_pointer kind=PRODUCT");
+}
+
+#[test]
+fn e2_safety_miri_retained_owner_moves_once() {
+    with_prepared(|pending, transfer| {
+        let transfer = std::thread::spawn(move || transfer)
+            .join()
+            .expect("the prepared owner moves once");
+        eprintln!("PENTRY_MIRI case=retained_owner_moves_once kind=PRODUCT");
+        finish(pending, transfer);
+    });
+}
+
+#[test]
 fn pentry_e2b_heap_transfer_panic_poison_retains_canonical_debt() {
     with_prepared(|pending, transfer| {
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -246,7 +300,11 @@ fn pentry_e2b_heap_transfer_installed_tls_refuses_without_constructing_local_loa
     with_prepared(|pending, transfer| {
         let unrelated =
             neovm_value::tagged::gc::AliasableBox::new(neovm_value::tagged::gc::TaggedHeap::new());
-        neovm_value::tagged::gc::set_tagged_heap_root(unrelated.root());
+        // SAFETY: `unrelated` stays live until after `drop(nest)`, and no
+        // heap reference is live during the install or drop.
+        let nest = unsafe {
+            neovm_value::tagged::gc::NestedTaggedHeapInstall::install_bare(unrelated.root())
+        };
         let failure = match transfer.with_collector::<()>(|_| panic!("must refuse before callback"))
         {
             Ok((_, ())) => panic!("installed TLS accepted"),
@@ -254,7 +312,11 @@ fn pentry_e2b_heap_transfer_installed_tls_refuses_without_constructing_local_loa
         };
         assert_eq!(failure.reason(), TransferError::InstalledTls);
         assert!(neovm_value::tagged::gc::tagged_heap_is_current(&unrelated));
-        neovm_value::tagged::gc::clear_tagged_heap_if_installed(&unrelated);
+        drop(nest);
+        assert!(
+            !neovm_value::tagged::gc::tagged_heap_is_installed(),
+            "the nest restores the empty slot the transfer started from"
+        );
         assert!(failure.retains_backing());
         assert!(pending.is_poisoned());
     });
@@ -269,7 +331,11 @@ fn pentry_e2b_heap_transfer_panic_clears_original_tls_after_collector_drop() {
                 // Address-only fault injection. Installing through
                 // `set_tagged_heap_root` here would borrow the heap while
                 // admission owns its collector.
-                neovm_value::tagged::gc::heap_transfer::poke_installed_heap_address(root);
+                // SAFETY: test-only fault injection while collector is owned
+                // by this callback; transfer unwind clears TLS before returning.
+                unsafe {
+                    neovm_value::tagged::gc::heap_transfer::poke_installed_heap_address(root);
+                }
                 drop(admission.into_collector());
                 panic!("TRANSFER_INSTALLED_TLS_PANIC");
             });
@@ -324,7 +390,11 @@ fn pentry_e2b_heap_transfer_returned_collector_tls_restore_is_detached_before_re
         let failure = match transfer.with_collector(|admission| {
             // Address-only fault injection. Collector Drop restores the store
             // protocol before the owning local scope retires it.
-            neovm_value::tagged::gc::heap_transfer::poke_installed_heap_address(root);
+            // SAFETY: test-only fault injection; `with_collector` refuses and
+            // clears the poked TLS slot before returning.
+            unsafe {
+                neovm_value::tagged::gc::heap_transfer::poke_installed_heap_address(root);
+            }
             (admission.into_collector(), ())
         }) {
             Ok(_) => panic!("installed callback TLS accepted"),
@@ -561,7 +631,9 @@ fn closed_source_inputs() -> (
                 FrozenLegacyRoots::new(heap, census.take(), FrozenFunctionRoots::Quiescent)
             };
             let root = owner.parallel_heap_root_designator();
-            heap_transfer_adapter::detach_source_heap(root.as_non_null());
+            // SAFETY: the closed source fixture is stopped with store protocol
+            // detached; no Context is active on this thread until recovery.
+            unsafe { heap_transfer_adapter::detach_source_heap(root.as_non_null()) };
             assert!(!neovm_value::tagged::gc::tagged_heap_is_installed());
             let observations = collector
                 .detach_source_observations()
@@ -664,14 +736,15 @@ fn pentry_e2b_heap_transfer_closed_source_foreign_tls_refusal_keeps_original_inp
     let expected = owner.parallel_heap_identity();
     let unrelated =
         neovm_value::tagged::gc::AliasableBox::new(neovm_value::tagged::gc::TaggedHeap::new());
-    neovm_value::tagged::gc::set_tagged_heap_root(unrelated.root());
+    unsafe { neovm_value::tagged::gc::set_tagged_heap_root(unrelated.root()) };
     // SAFETY: the original source frames remain closed and retained. A
     // different TLS activation is introduced only to prove the refusal runs
     // before any heap dereference.
     let outcome =
         unsafe { PreparedHeapTransfer::prepare_closed_source(owner, roots, observations) };
     let current = neovm_value::tagged::gc::tagged_heap_is_current(&unrelated);
-    neovm_value::tagged::gc::clear_tagged_heap_if_installed(&unrelated);
+    // SAFETY: standalone `TestHeap` fixture torn down after checking `current`.
+    unsafe { neovm_value::tagged::gc::clear_tagged_heap_if_installed(&unrelated) };
     let failure = match outcome {
         Err(failure) => failure,
         Ok(_) => panic!("foreign TLS was accepted"),
@@ -1004,7 +1077,8 @@ fn pentry_e2b_heap_transfer_production_era_foreign_tls_entry_refusal() {
     assert!(neovm_value::tagged::gc::tagged_heap_is_current(
         &foreign.tagged_heap
     ));
-    neovm_value::tagged::gc::clear_tagged_heap_if_installed(&foreign.tagged_heap);
+    // SAFETY: `foreign` is torn down at end of test without further evaluation.
+    unsafe { neovm_value::tagged::gc::clear_tagged_heap_if_installed(&foreign.tagged_heap) };
     drop(failure);
     drop(pending);
 }

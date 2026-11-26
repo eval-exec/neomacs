@@ -57,7 +57,7 @@ fn native_parser_tag_survives(first: FirstCollection) {
     // Parser does not need a grammar until it parses input.
     assert!(record.set_record_slot(PARSER_SLOT_TAG, Value::NIL));
     assert_eq!(
-        record.as_record_data().unwrap()[PARSER_SLOT_TAG],
+        record.as_record_data().unwrap().at(PARSER_SLOT_TAG),
         Value::NIL
     );
     assert_eq!(manager.parser(id).unwrap().tag(), tag);
@@ -77,11 +77,11 @@ fn native_parser_tag_survives(first: FirstCollection) {
     });
     let roots: Vec<Value> = manager.roots().into_iter().chain([witness]).collect();
     match first {
-        FirstCollection::Full => heap.collect_exact(roots.into_iter()),
+        FirstCollection::Full => heap.collect_rooted(roots.into_iter()),
         FirstCollection::Minor => collect_minor_or_full(&mut heap, roots),
     }
     for _ in 0..3 {
-        heap.collect_exact(manager.roots().into_iter().chain([witness]));
+        heap.collect_rooted(manager.roots().into_iter().chain([witness]));
         assert_eq!(manager.parser(id).unwrap().tag(), tag);
         let table = witness.as_hash_table().unwrap();
         assert_eq!(
@@ -97,16 +97,16 @@ fn native_parser_tag_survives(first: FirstCollection) {
 
 fn collect_minor_or_full(heap: &mut TaggedHeap, roots: Vec<Value>) {
     if heap.tagged_heap_generational_enabled() {
-        heap.begin_minor_collection()
+        heap.begin_minor_collection_for_test()
             .expect("fresh GEN1 heap admits a minor");
         for root in roots {
             heap.seed_root(root);
         }
-        heap.complete_minor_collection();
-        heap.finish_incremental_sweep_now();
+        heap.complete_minor_collection_for_test();
+        heap.finish_incremental_sweep_now_for_test();
     } else {
         // GEN0 refuses minors and preserves the edge through a full cycle.
-        assert!(heap.begin_minor_collection().is_err());
-        heap.collect_exact(roots.into_iter());
+        assert!(heap.begin_minor_collection_for_test().is_err());
+        heap.collect_rooted(roots.into_iter());
     }
 }

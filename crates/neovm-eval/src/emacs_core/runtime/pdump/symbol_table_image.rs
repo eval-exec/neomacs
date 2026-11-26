@@ -238,7 +238,10 @@ fn with_symbol_table_section<R>(
             )));
         }
         let ptr = section[start..start + byte_len].as_ptr();
-        let name = unsafe { LispString::from_mapped_bytes(ptr, byte_len, size, entry.size_byte) };
+        let name = unsafe { LispString::from_mapped_bytes(ptr, byte_len, size, entry.size_byte) }
+            .map_err(|err| {
+            DumpError::ImageFormatError(format!("symbol name {idx} mapped bytes: {err}"))
+        })?;
         names.push(name);
     }
 

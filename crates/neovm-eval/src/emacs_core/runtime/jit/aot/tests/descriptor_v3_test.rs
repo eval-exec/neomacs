@@ -70,7 +70,7 @@ fn a_pooled_reloc_is_the_pool_element_at_its_index() {
     let unit = std::sync::Arc::new(super::super::compile::LoadedUnit::new(lib));
     let leaf = load_leaf_from_unit(&unit, hash, 1, &constants, None).expect("load");
     let ctx = &mut eval as *mut crate::emacs_core::eval::Context as *mut u8;
-    let bits = match leaf.call(ctx, &[Value::make_int(0)]) {
+    let bits = match unsafe { leaf.call(ctx, &[Value::make_int(0)]) } {
         crate::emacs_core::jit::compile::NativeRun::Ok(bits) => bits,
         other => panic!("AOT leaf: {other:?}"),
     };
@@ -112,7 +112,7 @@ fn the_preload_index_finds_every_emitted_leaf() {
     let lib = unsafe { libloading::Library::new(&so_path) }.expect("dlopen");
     let unit = super::super::compile::LoadedUnit::new(lib);
     let index = unit_leaf_index(&unit).expect("the preload exports an index");
-    assert_eq!(index.len, bodies.len());
+    assert_eq!(index.len(), bodies.len());
     for (ops, constants) in &bodies {
         let hash = leaf_content_hash(ops, constants, 1).unwrap();
         let (entry, desc) = index.lookup(hash).expect("indexed");

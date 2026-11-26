@@ -92,7 +92,7 @@ impl FeedbackSnapshot {
         rt.note_numeric_feedback_consumed();
         let mode = crate::emacs_core::jit::feedback::feedback_mode();
         let call_source = mode.records().then(|| {
-            rt.call_sites_for(ops, &f.constants);
+            rt.call_sites_for(ops, f.constants());
             rt.share_state()
         });
         FeedbackSnapshot {

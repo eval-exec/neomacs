@@ -92,12 +92,28 @@ impl SatbBuffer {
         }
     }
 
+    /// Record one overwritten pre-image into this thread-confined SATB buffer.
+    ///
+    /// Taking `!Send` [`crate::tagged::value::TaggedValue`] rather than
+    /// `Send` [`MarkWord`] prevents injecting a cross-thread word into this
+    /// mutator's buffer.
+    ///
+    /// # Safety
+    /// `value` must belong to the heap that owns `handoff` (or be an
+    /// immediate) and must remain live through the active mark cycle until
+    /// termination drains `handoff`.
     #[inline(always)]
-    pub(super) fn push(&mut self, word: MarkWord, handoff: &SatbHandoff) {
+    pub(super) unsafe fn push(
+        &mut self,
+        value: crate::tagged::value::TaggedValue,
+        handoff: &SatbHandoff,
+    ) {
         if self.words.len() == SATB_CHUNK_WORDS {
             self.publish_full(handoff);
         }
-        self.words.push(word);
+        // SAFETY: caller guarantees `value` belongs to `handoff`'s heap and
+        // stays live for the active mark cycle.
+        self.words.push(unsafe { MarkWord::of(value) });
     }
 
     #[cold]

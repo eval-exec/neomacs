@@ -648,7 +648,6 @@ fn command_modes_from_stored_interactive_spec(spec: Value, symbol_mode: SymbolMo
     };
     items
         .get(1)
-        .copied()
         .map(|value| unquote_command_modes_value(value, symbol_mode))
         .unwrap_or(Value::NIL)
 }

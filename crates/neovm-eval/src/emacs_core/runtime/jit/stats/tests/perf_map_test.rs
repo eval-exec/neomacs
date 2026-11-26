@@ -41,14 +41,16 @@ fn jit_perf_map_anon_fingerprint() {
         optional: Vec::new(),
         rest: None,
     });
-    f.constants = vec![
-        Value::make_int(1),
-        Value::symbol("car"),
-        Value::symbol("jit-anon-helper"),
-        Value::symbol("cdr"),
-    ]
-    .into();
+    f.set_constants(
+        vec![
+            Value::make_int(1),
+            Value::symbol("car"),
+            Value::symbol("jit-anon-helper"),
+            Value::symbol("cdr"),
+        ]
+        .into(),
+    );
     assert_eq!(&*anon_name(&f), "anon[car;jit-anon-helper]");
-    f.constants = vec![Value::make_int(1)].into();
+    f.set_constants(vec![Value::make_int(1)].into());
     assert_eq!(&*anon_name(&f), "anon");
 }

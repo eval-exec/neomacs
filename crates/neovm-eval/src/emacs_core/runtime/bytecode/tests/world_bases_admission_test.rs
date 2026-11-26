@@ -87,10 +87,12 @@ fn world_bases_admission_dedicated_nil_keeps_the_no_current_buffer_result() {
     context.edit.buffers = neovm_edit::buffer::BufferManager::new();
     let undo = intern("buffer-undo-list");
     let mut code = ByteCodeFunction::new(LambdaParams::simple(vec![]));
-    code.ops = vec![Op::VarRef(0), Op::Return];
-    code.constants = vec![Value::from_sym_id(undo)].into();
-    code.max_stack = super::super::function_slots::StackDepth::try_from(4usize)
-        .expect("valid fixture stack depth");
+    code.set_ops(vec![Op::VarRef(0), Op::Return]);
+    code.set_constants(vec![Value::from_sym_id(undo)].into());
+    code.set_max_stack(
+        super::super::function_slots::StackDepth::try_from(4usize)
+            .expect("valid fixture stack depth"),
+    );
     let mut vm = Vm::from_context(&mut context);
     #[cfg(feature = "jit")]
     vm.force_interpreter_only_for_test();

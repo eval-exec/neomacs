@@ -36,7 +36,8 @@ fn gc_tls_ownership_hash_alias_reset_discards_a_dropped_heap() {
 
 #[test]
 fn gc_tls_ownership_hash_alias_roots_exclude_another_live_heap() {
-    let mut first = Context::new(crate::test_utils::unit_runtime());
+    let first = Context::new(crate::test_utils::unit_runtime());
+    let parked_first = first.park_for_test();
     let mut second = Context::new(crate::test_utils::unit_runtime());
     let value = register_alias(&mut second);
     assert!(
@@ -44,7 +45,8 @@ fn gc_tls_ownership_hash_alias_roots_exclude_another_live_heap() {
             .iter()
             .any(|root| root.bits() == value.bits())
     );
-    first.setup_thread_locals();
+    let parked_second = second.park_for_test();
+    let mut first = parked_first.resume_for_test().expect("resume first");
     assert!(
         roots_for(&first)
             .iter()
@@ -52,7 +54,8 @@ fn gc_tls_ownership_hash_alias_roots_exclude_another_live_heap() {
         "custom hash functions from the second Context are roots of the first heap"
     );
     first.gc_collect_exact();
-    second.setup_thread_locals();
+    drop(first);
+    let mut second = parked_second.resume_for_test().expect("resume second");
     second.gc_collect_exact();
     assert_eq!(second.eval_str("(let ((h (make-hash-table :test 'gc-tls-custom))) (puthash 'x 42 h) (gethash 'x h))").unwrap(), Value::fixnum(42));
 }
@@ -61,9 +64,11 @@ fn gc_tls_ownership_hash_alias_roots_exclude_another_live_heap() {
 fn gc_tls_ownership_hash_aliases_follow_context_swaps() {
     let mut first = Context::new(crate::test_utils::unit_runtime());
     let a = register_alias(&mut first);
+    let parked_first = first.park_for_test();
     let mut second = Context::new(crate::test_utils::unit_runtime());
     let b = register_alias(&mut second);
-    first.setup_thread_locals();
+    let parked_second = second.park_for_test();
+    let mut first = parked_first.resume_for_test().expect("resume first");
     assert_eq!(
         lookup_hash_table_test_alias("gc-tls-custom")
             .unwrap()
@@ -73,7 +78,8 @@ fn gc_tls_ownership_hash_aliases_follow_context_swaps() {
         a.bits()
     );
     first.gc_collect_exact();
-    second.setup_thread_locals();
+    drop(first);
+    let mut second = parked_second.resume_for_test().expect("resume second");
     assert_eq!(
         lookup_hash_table_test_alias("gc-tls-custom")
             .unwrap()

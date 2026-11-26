@@ -14,10 +14,10 @@ fn loop_function(arity: usize, constants: Vec<Value>, ops: Vec<Op>) -> ByteCodeF
         optional: vec![],
         rest: None,
     });
-    f.lexical = true;
-    f.constants = constants.into();
-    f.ops = ops;
-    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(8);
+    f.set_lexical(true);
+    f.set_constants(constants.into());
+    f.set_ops(ops);
+    f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(8));
     f.seal_hand_assembled_ops();
     f
 }

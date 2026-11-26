@@ -78,6 +78,7 @@ pub enum FrameFontScalePolicy {
 #[non_exhaustive]
 pub enum FrameFontScaleSource {
     ExplicitPolicy,
+    DesktopTextSettings,
     XftResource,
     X11Geometry,
     GnuX11Fallback,
@@ -149,6 +150,10 @@ pub fn resolve_frame_font_scale(
         DisplayObservation::Wayland => ResolvedFrameFontScale {
             font_sizing: FontSizing::wayland(),
             source: FrameFontScaleSource::PlatformLogical,
+        },
+        DisplayObservation::WaylandWithTextDpi(dpi) => ResolvedFrameFontScale {
+            font_sizing: FontSizing::for_layout_dpi(dpi.get()),
+            source: FrameFontScaleSource::DesktopTextSettings,
         },
         DisplayObservation::Cocoa => ResolvedFrameFontScale {
             font_sizing: FontSizing::gnu_cocoa(),

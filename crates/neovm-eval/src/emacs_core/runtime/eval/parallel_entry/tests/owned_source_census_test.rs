@@ -6,7 +6,7 @@ use super::{
 use neovm_value::value::Value;
 use std::mem::ManuallyDrop;
 
-fn ready() -> Option<Box<super::super::super::Context>> {
+fn ready() -> Box<super::super::super::Context> {
     install_inactive_source_module_probe_for_test();
     let mut source = Box::new(super::super::super::Context::new_minimal_vm_harness(
         crate::test_utils::unit_harness(),
@@ -14,12 +14,12 @@ fn ready() -> Option<Box<super::super::super::Context>> {
     source.setup_thread_locals();
     source.gc_collect_exact();
     if source.tagged_heap.tagged_heap_generational_enabled() {
-        return Some(source);
+        return source;
     }
     match capture(source) {
         Err(SourceWithdrawalFailure::BeforeEffects(failure)) => {
             assert_eq!(failure.reason, SourceEntryRefusal::GenerationalRequired);
-            None
+            panic!("these rows need a generational heap; NEOVM_GC_GENERATIONAL=0 disables it")
         }
         other => panic!("GEN0 must refuse before any effect: {:?}", other.err()),
     }
@@ -35,9 +35,7 @@ fn capture(
 
 #[test]
 fn pentry_e2b_source_census_actual_keeper_and_original_box_stay_local() {
-    let Some(source) = ready() else {
-        return;
-    };
+    let source = ready();
     let address = std::ptr::from_ref(&*source);
     let heap = source.tagged_heap.heap_identity();
     let alive = source.world_lifetime_probe_for_test();
@@ -61,9 +59,7 @@ fn pentry_e2b_source_census_actual_keeper_and_original_box_stay_local() {
 
 #[test]
 fn pentry_e2b_source_census_private_frame_and_detached_registry_roots_are_captured() {
-    let Some(mut source) = ready() else {
-        return;
-    };
+    let mut source = ready();
     let private = Value::vector(vec![Value::fixnum(67)]);
     source.lexenv = private;
     let program = Value::vector(vec![Value::fixnum(0); 3]);
@@ -86,9 +82,7 @@ fn pentry_e2b_source_census_private_frame_and_detached_registry_roots_are_captur
 
 #[test]
 fn pentry_e2b_source_census_disposable_cache_word_is_retired_before_capture() {
-    let Some(source) = ready() else {
-        return;
-    };
+    let source = ready();
     let ephemeral = neovm_value::chartab::make_char_table_value(Value::NIL, Value::NIL);
     neovm_text::emacs_core::casetab::activate_casetab_thread_locals(Some(ephemeral));
     let mut roots = Vec::new();
@@ -111,16 +105,12 @@ fn pentry_e2b_source_census_disposable_cache_word_is_retired_before_capture() {
 
 #[test]
 fn pentry_e2b_source_census_drop_and_forget_retain_backing_without_tls_recovery() {
-    let Some(source) = ready() else {
-        return;
-    };
+    let source = ready();
     let alive = source.world_lifetime_probe_for_test();
     drop(capture(source).unwrap().prepare_census().unwrap());
     assert!(alive());
     assert!(!neovm_value::tagged::gc::tagged_heap_is_installed());
-    let Some(source) = ready() else {
-        return;
-    };
+    let source = ready();
     let second = source.world_lifetime_probe_for_test();
     std::mem::forget(capture(source).unwrap().prepare_census().unwrap());
     assert!(alive() && second());
@@ -129,9 +119,7 @@ fn pentry_e2b_source_census_drop_and_forget_retain_backing_without_tls_recovery(
 
 #[test]
 fn pentry_e2b_source_census_catch_unwind_never_recovers_source_activation() {
-    let Some(source) = ready() else {
-        return;
-    };
+    let source = ready();
     let alive = source.world_lifetime_probe_for_test();
     let drained = capture(source).unwrap().prepare_census().unwrap();
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
@@ -145,14 +133,16 @@ fn pentry_e2b_source_census_catch_unwind_never_recovers_source_activation() {
 
 #[test]
 fn pentry_e2b_source_census_rechecks_entry_before_the_actual_drain() {
-    let Some(source) = ready() else {
-        return;
-    };
+    let source = ready();
     let alive = source.world_lifetime_probe_for_test();
     let retired = capture(source).unwrap().retire_text().unwrap();
-    let Some(foreign) = ready() else {
-        return;
-    };
+    // Clear the retired source's heap slot so the foreign Context can install
+    // cleanly; the retired source is not entered again, only refused on TLS.
+    // SAFETY: `retired._frame.source` is retired and never evaluated again.
+    unsafe {
+        neovm_value::tagged::gc::clear_tagged_heap_if_installed(&retired._frame.source.tagged_heap);
+    }
+    let foreign = ready();
     // Production prepare_census has no gap between retirement and the drain.
     // This reaches the private recheck with another heap already current.
     let error = retired
@@ -175,21 +165,24 @@ fn pentry_e2b_source_census_rechecks_entry_before_the_actual_drain() {
 
 #[test]
 fn pentry_e2b_source_census_existing_keeper_from_another_world_refuses() {
-    let Some(source) = ready() else {
-        return;
-    };
+    let source = ready();
     let mut first = capture(source).unwrap();
-    let Some(foreign_source) = ready() else {
-        return;
-    };
+    // SAFETY: `first._frame.source` is captured/suspended and never evaluated again.
+    unsafe {
+        neovm_value::tagged::gc::clear_tagged_heap_if_installed(&first._frame.source.tagged_heap);
+    }
+    let foreign_source = ready();
     let foreign = capture(foreign_source).unwrap();
     // The shared preparation check rejects before it clears the installed heap.
-    let error = first
-        ._frame
-        .source
-        .close_owned_source_heap_tls(foreign._frame.effects.keeper())
-        .err()
-        .expect("another World's retained keeper is not admission");
+    // SAFETY: `first._frame.source` is captured/suspended and never evaluated again.
+    let error = unsafe {
+        first
+            ._frame
+            .source
+            .close_owned_source_heap_tls(foreign._frame.effects.keeper())
+    }
+    .err()
+    .expect("another World's retained keeper is not admission");
     assert_eq!(
         error,
         super::super::super::world::OwnedParallelError::Identity
@@ -203,9 +196,7 @@ fn pentry_e2b_source_census_existing_keeper_from_another_world_refuses() {
 #[test]
 fn pentry_e2b_source_census_preserves_unsupported_weak_table_without_preclean() {
     use neovm_value::value::{HashTableTest, HashTableWeakness, LispHashTable};
-    let Some(mut source) = ready() else {
-        return;
-    };
+    let mut source = ready();
     let table = source
         .tagged_heap
         .alloc_hash_table(LispHashTable::new_with_options(
@@ -264,6 +255,10 @@ pub(super) fn finish_returned_fixture(
     publication
         .try_finish()
         .expect("returned source is active before publication retirement");
+    assert!(
+        !source.tagged_heap.facade_mark_is_excluded(),
+        "F4: every RootBatchLease and FacadeEpochRetention must retire before World teardown so TaggedHeap::drop reclaims backing"
+    );
     drop(ManuallyDrop::into_inner(source));
 }
 

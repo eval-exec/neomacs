@@ -14,10 +14,10 @@ fn function(ops: Vec<Op>, constants: Vec<Value>) -> ByteCodeFunction {
         optional: vec![],
         rest: None,
     });
-    f.lexical = true;
-    f.ops = ops;
-    f.constants = constants.into();
-    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(32);
+    f.set_lexical(true);
+    f.set_ops(ops);
+    f.set_constants(constants.into());
+    f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(32));
     f.seal_hand_assembled_ops_for_test();
     f.jit_runtime().set_hot_for_test();
     f
@@ -41,7 +41,7 @@ fn fuse(ev: &Context, f: &ByteCodeFunction) -> Option<inline::FusedBody> {
     force_inline_for_test(Some(true));
     inline::fuse_named_calls_v2(
         f.executable_ops(),
-        &f.constants,
+        f.constants(),
         None,
         1,
         &vec![NumericFeedback::FixnumOnly; f.executable_ops().len()],
@@ -117,14 +117,14 @@ fn named_front_requires_matching_required_arity() {
     let symbol = Value::symbol("named-front-arity");
     let mut callee = function(vec![Op::StackRef(0), Op::Return], vec![]);
     let mut params = callee
-        .params
+        .params()
         .named()
         .expect("named fixture parameters")
         .clone();
     params
         .optional
         .push(neovm_value::intern::intern("named-front-extra"));
-    callee.params = params.into();
+    callee.set_params(params.into());
     ev.obarray.set_symbol_function_id(
         symbol.as_bare_symbol_id().unwrap(),
         Value::make_bytecode(callee),

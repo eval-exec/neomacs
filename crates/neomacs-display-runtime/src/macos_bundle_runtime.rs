@@ -51,10 +51,13 @@ impl MacOsBundleRuntime {
 /// Configure the private native runtime before any process thread is created.
 ///
 /// `std::env::set_var` is unsafe in a multithreaded Unix process.  The sole
-/// caller is deliberately the first statement in `main`, before Neomacs starts
+/// caller is deliberately at process entry in `main`, before Neomacs starts
 /// the evaluator, renderer, or decoder threads.
+///
+/// # Safety
+/// The caller must invoke this before any other thread exists in the process.
 #[cfg(target_os = "macos")]
-pub fn configure_before_threads() {
+pub unsafe fn configure_before_threads() {
     let Some(runtime) = std::env::current_exe()
         .ok()
         .and_then(|path| MacOsBundleRuntime::from_executable(&path))
@@ -62,9 +65,10 @@ pub fn configure_before_threads() {
         return;
     };
 
-    unsafe {
-        #[cfg(feature = "video")]
-        if runtime.media_is_complete() {
+    #[cfg(feature = "video")]
+    if runtime.media_is_complete() {
+        // SAFETY: caller guarantees this process is single-threaded.
+        unsafe {
             // Restrict packaged builds to the signed plug-ins inside the app.
             // The versioned names take precedence in GStreamer 1.x; the
             // unversioned scanner name retains compatibility with older 1.x
@@ -82,8 +86,12 @@ pub fn configure_before_threads() {
     }
 }
 
+/// Configure the private native runtime before any process thread is created.
+///
+/// # Safety
+/// The caller must invoke this before any other thread exists in the process.
 #[cfg(not(target_os = "macos"))]
-pub fn configure_before_threads() {}
+pub unsafe fn configure_before_threads() {}
 
 #[cfg(test)]
 #[path = "macos_bundle_runtime/tests/macos_bundle_runtime_test.rs"]

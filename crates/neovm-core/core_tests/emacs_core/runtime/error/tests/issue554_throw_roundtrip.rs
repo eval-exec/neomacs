@@ -80,7 +80,10 @@ fn issue554_cloned_owned_throw_roundtrip_preserves_policy_and_roots() {
             "identical tags match with either policy"
         );
         ctx.gc_collect_exact();
-        assert_eq!(thrown.value.as_vector_data().unwrap()[0], Value::fixnum(7));
+        assert_eq!(
+            thrown.value.as_vector_data().unwrap().at(0),
+            Value::fixnum(7)
+        );
         assert_eq!(thrown.tag.as_symbol_with_pos_sym(), Some(bare_tag));
         drop(roundtrip);
         let mut roots = Vec::new();
@@ -121,9 +124,9 @@ fn issue554_throw_policy_survives_bytecode_loader_frame() {
         ctx.eval_str(&format!("(fset 'issue554-loaded-form '(lambda () {body}))"))
             .expect("interpreted loaded form");
         let mut shim = ByteCodeFunction::new(LambdaParams::simple(vec![]));
-        shim.ops = vec![Op::Constant(0), Op::Call(0), Op::Return];
-        shim.constants = vec![Value::symbol("issue554-loaded-form")].into();
-        shim.max_stack = StackDepth::for_test(4);
+        shim.set_ops(vec![Op::Constant(0), Op::Call(0), Op::Return]);
+        shim.set_constants(vec![Value::symbol("issue554-loaded-form")].into());
+        shim.set_max_stack(StackDepth::for_test(4));
         seal_hand_assembled_ops_for_test(&mut shim);
         ctx.obarray_mut().set_symbol_function_id(
             intern("issue554-compiled-loader"),

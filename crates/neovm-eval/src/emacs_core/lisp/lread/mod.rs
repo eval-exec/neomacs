@@ -8,7 +8,7 @@ use neovm_value::error::LispCondition;
 use neovm_value::error::{EvalResult, Flow, signal};
 use neovm_value::error::{expect_max_args, expect_min_args};
 use neovm_value::heap_types::LispString;
-use neovm_value::intern::{intern, resolve_sym};
+use neovm_value::intern::{intern, resolve_sym_lisp_string};
 use neovm_value::value::*;
 
 // ---------------------------------------------------------------------------
@@ -42,7 +42,7 @@ fn lread_string_text(value: &Value) -> Option<String> {
 pub fn expect_lisp_string(value: &Value) -> Result<LispString, Flow> {
     match value.kind() {
         ValueKind::String => Ok(value.as_lisp_string().expect("checked string").clone()),
-        ValueKind::Symbol(id) => Ok(LispString::from_utf8(resolve_sym(id))),
+        ValueKind::Symbol(id) => Ok(resolve_sym_lisp_string(id).clone()),
         ValueKind::Nil => Ok(LispString::from_unibyte(b"nil".to_vec())),
         ValueKind::T => Ok(LispString::from_unibyte(b"t".to_vec())),
         _other => Err(signal(
@@ -124,7 +124,8 @@ fn signal_reader_error_for_eval_source(
             LispCondition::InvalidReadSyntax,
             vec![Value::string(format!("Read error: {}", e.message))],
         ),
-        super::value_reader::ReadErrorKind::Signal => signal(
+        super::value_reader::ReadErrorKind::Signal
+        | super::value_reader::ReadErrorKind::ObarrayRejected => signal(
             neovm_value::error::UserCondition::from(
                 e.signal_symbol.unwrap_or_else(|| intern("error")),
             ),
@@ -197,13 +198,22 @@ fn eval_forms_from_lisp_source_streaming(
             let shorthands = super::reader::current_read_symbol_shorthands(eval);
             let read_result = read_source
                 .read_one_with_shorthands(pos, eval.variables(), shorthands.as_ref())
-                .map_err(|error| signal_reader_error_for_eval_source(error, eof_source))?;
+                .map_err(|error| {
+                    super::reader::reset_obarray_after_reader_error(eval, &error);
+                    signal_reader_error_for_eval_source(error, eof_source)
+                })?;
             let Some((form, next_pos)) = read_result else {
                 break;
             };
             if let Some(cursor) = eval.load_read_cursors.last_mut() {
                 cursor.pos = next_pos;
             }
+            // GNU's readevalloop reads through `read`, which interns every
+            // symbol token into Vobarray as it reads (src/lread.c:4674-4709).
+            // This buffer loop reads the value directly, so publish the
+            // read form's canonical symbols before evaluating it, exactly as
+            // the file-loading streaming loops do.
+            super::reader::publish_read_symbols(eval, form);
 
             let eval_roots = eval.save_specpdl_roots();
             eval.push_specpdl_root(form);

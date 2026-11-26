@@ -133,6 +133,70 @@ pub fn start_weston_headless(
     start_weston_with_desktop(artifact_root, output, WestonDesktop::Solid)
 }
 
+/// Pixman Weston plus Xwayland.
+///
+/// The CI Weston build has no GL renderer. An X11 GTK Emacs needs the
+/// Xwayland display; a Wayland client uses the socket in the same session.
+pub fn start_weston_pixman_xwayland(artifact_root: &Path) -> io::Result<DisplaySession> {
+    let runtime_directory = RuntimeDirectory::new(artifact_root)?;
+    let runtime_dir = runtime_directory.address.clone();
+    fs::create_dir_all(artifact_root)?;
+    let log_path = artifact_root.join("weston-pixman-xwayland.log");
+    let socket = format!("neomacs-infra-weston-{}", std::process::id());
+    let mut child = Command::new("weston")
+        .arg("--config")
+        .arg(crate::crate_root!().join("fixtures/weston-headless.ini"))
+        .arg("--backend=headless")
+        .arg("--renderer=pixman")
+        .arg("--xwayland")
+        .arg(format!("--socket={socket}"))
+        .arg("--idle-time=0")
+        .arg("--width=1280")
+        .arg("--height=800")
+        .arg("--scale=1")
+        .arg(format!("--log={}", log_path.display()))
+        .env("XDG_RUNTIME_DIR", &runtime_dir)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()?;
+    let socket_path = runtime_dir.join(&socket);
+    if !wait_for_path(&socket_path, Duration::from_secs(5)) {
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err(io::Error::new(
+            io::ErrorKind::TimedOut,
+            format!(
+                "weston did not create Wayland socket {}; log: {}",
+                socket_path.display(),
+                read_log_tail(&log_path)
+            ),
+        ));
+    }
+    let Some(display) = wait_for_xwayland_display(&log_path, Duration::from_secs(5)) else {
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err(io::Error::new(
+            io::ErrorKind::TimedOut,
+            format!(
+                "weston did not report an Xwayland display; log: {}",
+                read_log_tail(&log_path)
+            ),
+        ));
+    };
+    Ok(DisplaySession {
+        child: Some(child),
+        env: vec![
+            ("XDG_RUNTIME_DIR".to_string(), path_to_string(&runtime_dir)),
+            ("WAYLAND_DISPLAY".to_string(), socket),
+            ("DISPLAY".to_string(), display),
+            locale_pin(),
+        ],
+        cleanup_dir: None,
+        runtime_directory: Some(runtime_directory),
+        _held_directory: None,
+    })
+}
+
 pub fn start_weston_with_desktop(
     artifact_root: &Path,
     output: WaylandOutput,

@@ -1,0 +1,27 @@
+error[E0277]: the trait bound `i32: AsSource` is not satisfied
+ --> $WORKSPACE/crates/neovm-system/tests/poller_registration_ui/register_readable_source_rejects_raw_fd.rs
+  |
+  |     let _ = unsafe { ProcessManager::register_readable_source(poller, -1i32, 1) };
+  |                      ----------------------------------------         ^^^^^ the trait `AsFd` is not implemented for `i32`
+  |                      |
+  |                      required by a bound introduced by this call
+  |
+  = help: the following other types implement trait `AsFd`:
+            &T
+            &mut T
+            Arc<T>
+            BorrowedFd<'_>
+            ChildOutputReader
+            ChildStderr
+            ChildStdin
+            ChildStdout
+          and $N others
+  = note: required for `i32` to implement `AsSource`
+note: required by a bound in `neovm_system::emacs_core::process::SystemProcessExt::register_readable_source`
+ --> $WORKSPACE/crates/neovm-system/src/emacs_core/system/process/types.rs
+  |
+  |     unsafe fn register_readable_source(
+  |               ------------------------ required by a bound in this associated function
+  |         poller: &polling::Poller,
+  |         source: impl polling::AsSource,
+  |                      ^^^^^^^^^^^^^^^^^ required by this bound in `SystemProcessExt::register_readable_source`

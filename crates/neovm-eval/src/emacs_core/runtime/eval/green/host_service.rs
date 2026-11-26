@@ -1,10 +1,12 @@
-//! World-owned host-call roots and dormant native transport.
+//! World-owned host-call roots and the serial native transport.
 //!
 //! Host endpoints carry metadata only. Every live root publication remains in
 //! the World's existing root owner, including when no Lisp owner is parked.
-//! This module installs no native adapter and does not admit hosted Green.
+//! The only installed adapter is the selection family (C4b): main borrows its
+//! display host and executes a typed request. The other families and hosted
+//! admission remain later cuts (C4c).
 
-use super::super::world::{Baton, WorldLease};
+use super::super::world::{TurnRight, WorldLease};
 use super::scheduler::ThreadKey;
 pub(super) use crate::host_effect::contracts::HostRequestKey;
 use crate::host_effect::contracts::{
@@ -28,6 +30,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 mod owner_steps;
 mod pending;
 mod registered_payload;
+mod selection;
 pub(super) use owner_steps::StepKey;
 use registered_payload::RegisteredPayload;
 mod pump;
@@ -38,6 +41,54 @@ pub(super) use scheduling::RealWaitPermit;
 pub(super) use scheduling::resume_owner_step;
 pub(super) use scheduling::{HostResume, dispatch_host};
 pub(super) use transport::NativeSettlement;
+
+/// Who asked the host service to run an effect, and therefore where the
+/// settlement must be delivered. H1 names only Green owners; H2 adds
+/// `Parallel(SerialTurnId)` without changing the Green completion path. This
+/// is deliberately not a third `ThreadKey` variant: a parallel owner has no
+/// Green seat, reservation or wake.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(super) enum HostRequester {
+    Green(ThreadKey),
+}
+
+/// The mechanism that receives the settled effect. `Green` is the existing
+/// scheduler route; H2 adds the keeper/turn target. The service actor chooses
+/// its dispatch path from this value, never from a raw `ThreadKey`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum CompletionTarget {
+    Green(ThreadKey),
+}
+
+impl HostRequester {
+    #[doc(hidden)]
+    pub(super) const fn green(owner: ThreadKey) -> Self {
+        Self::Green(owner)
+    }
+
+    /// The Green owner for H1's registry keys and scheduler comparisons.
+    #[doc(hidden)]
+    pub(super) const fn green_owner(self) -> ThreadKey {
+        match self {
+            Self::Green(owner) => owner,
+        }
+    }
+
+    #[doc(hidden)]
+    pub(super) const fn completion_target(self) -> CompletionTarget {
+        CompletionTarget::Green(self.green_owner())
+    }
+}
+
+impl CompletionTarget {
+    /// Main's local service path; every routed Green worker is non-local.
+    /// Used by the H1 rows and the H2 local/routed seam.
+    #[doc(hidden)]
+    #[cfg(any(test, feature = "test-support"))]
+    pub(super) const fn is_local(self) -> bool {
+        matches!(self, Self::Green(ThreadKey::Main))
+    }
+}
 
 /// Process-wide correlation allocation, not host authority or a TLS slot.
 struct SessionSequence(AtomicU64);
@@ -156,7 +207,7 @@ enum RecordOrigin {
 /// Its Context borrow prevents another park during acknowledgement.
 pub(super) struct RestoredHostOwner<'owner> {
     context: &'owner super::super::Context,
-    baton: &'owner Baton,
+    baton: &'owner TurnRight,
     owner: ThreadKey,
 }
 
@@ -171,7 +222,7 @@ impl std::fmt::Debug for RestoredHostOwner<'_> {
 impl<'owner> RestoredHostOwner<'owner> {
     pub(crate) fn after_restore(
         context: &'owner mut super::super::Context,
-        baton: &'owner Baton,
+        baton: &'owner TurnRight,
     ) -> Result<Self, HostRootError> {
         if !baton.held_here() {
             return Err(HostRootError::BatonRequired);
@@ -204,7 +255,7 @@ impl<'owner> RestoredHostOwner<'owner> {
 #[must_use = "publish or explicitly abandon the prepared host call"]
 pub(super) struct PreparedHostCall {
     key: HostRequestKey,
-    owner: ThreadKey,
+    requester: HostRequester,
     _confined: PhantomData<Rc<()>>,
 }
 
@@ -217,14 +268,14 @@ pub(super) struct AbandonedHostCall(PreparedHostCall);
 #[derive(Debug)]
 struct PublishedHostCall {
     key: HostRequestKey,
-    owner: ThreadKey,
+    requester: HostRequester,
 }
 
 /// Registry-owned linear scheduler registration, never sent through a channel.
 #[derive(Debug)]
 pub(super) struct HostParkRegistration {
     key: HostRequestKey,
-    owner: ThreadKey,
+    requester: HostRequester,
     _confined: PhantomData<Rc<()>>,
 }
 
@@ -232,7 +283,7 @@ impl PublishedHostCall {
     pub(crate) fn into_registration(self) -> HostParkRegistration {
         HostParkRegistration {
             key: self.key,
-            owner: self.owner,
+            requester: self.requester,
             _confined: PhantomData,
         }
     }
@@ -244,8 +295,16 @@ impl HostParkRegistration {
         self.key
     }
     #[doc(hidden)]
+    pub fn requester(&self) -> HostRequester {
+        self.requester
+    }
+    #[doc(hidden)]
+    pub fn completion_target(&self) -> CompletionTarget {
+        self.requester.completion_target()
+    }
+    #[doc(hidden)]
     pub fn owner(&self) -> ThreadKey {
-        self.owner
+        self.requester.green_owner()
     }
 }
 
@@ -254,6 +313,21 @@ impl PreparedHostCall {
     pub fn key(&self) -> HostRequestKey {
         self.key
     }
+
+    #[doc(hidden)]
+    pub fn requester(&self) -> HostRequester {
+        self.requester
+    }
+
+    #[doc(hidden)]
+    pub fn completion_target(&self) -> CompletionTarget {
+        self.requester.completion_target()
+    }
+
+    #[doc(hidden)]
+    pub fn owner(&self) -> ThreadKey {
+        self.requester.green_owner()
+    }
 }
 
 /// Registry-issued terminal observation; a transport notification cannot mint it.
@@ -261,7 +335,7 @@ impl PreparedHostCall {
 #[must_use = "deliver terminal settlement to its scheduler reservation"]
 pub(super) struct SettledHostCall {
     key: HostRequestKey,
-    owner: ThreadKey,
+    requester: HostRequester,
     _confined: PhantomData<Rc<()>>,
 }
 
@@ -271,8 +345,16 @@ impl SettledHostCall {
         self.key
     }
     #[doc(hidden)]
+    pub fn requester(&self) -> HostRequester {
+        self.requester
+    }
+    #[doc(hidden)]
+    pub fn completion_target(&self) -> CompletionTarget {
+        self.requester.completion_target()
+    }
+    #[doc(hidden)]
     pub fn owner(&self) -> ThreadKey {
-        self.owner
+        self.requester.green_owner()
     }
 }
 
@@ -346,6 +428,17 @@ impl DrainBlocked {
 #[derive(Debug)]
 pub(in crate::emacs_core::eval) struct WorldRootRegistry {
     owners: FxHashMap<ThreadKey, RootBatchLease>,
+    /// Active parked root leases for unseated parallel `SerialTurn` owners
+    /// parked across a mid-turn keeper collection (L6.7c (c) F4). Stored in
+    /// the World rather than solely on `DetachedOwner` so an abnormal owner
+    /// unwind never triggers `RootBatchLease::drop`'s `std::mem::forget`;
+    /// `GreenRuntime::finish_terminated_roots` retires any remaining lease at
+    /// World teardown.
+    serial_parked: FxHashMap<std::num::NonZeroU64, RootBatchLease>,
+    /// Previously deferred owner leases that could not retire before a later
+    /// park (e.g. due to a held reader or non-idle phase). Over-rooting is
+    /// safe; drained at the next safe retirement point or World teardown.
+    retained: Vec<RootBatchLease>,
     hosts: HostRegistry,
     pub(super) services: scheduling::ServiceRuntime,
 }
@@ -355,24 +448,69 @@ impl WorldRootRegistry {
     pub fn new(heap: HeapIdentity) -> Self {
         Self {
             owners: FxHashMap::default(),
+            serial_parked: FxHashMap::default(),
+            retained: Vec::new(),
             hosts: HostRegistry::new(heap),
             services: scheduling::ServiceRuntime::default(),
         }
     }
     #[doc(hidden)]
     pub fn is_empty(&self) -> bool {
-        self.owners.is_empty() && self.hosts.records.is_empty()
+        self.owners.is_empty()
+            && self.serial_parked.is_empty()
+            && self.retained.is_empty()
+            && self.hosts.records.is_empty()
     }
     #[doc(hidden)]
     pub fn len(&self) -> usize {
-        self.owners.len()
+        self.owners.len() + self.serial_parked.len() + self.retained.len()
     }
     #[doc(hidden)]
     pub fn values(&self) -> impl Iterator<Item = &RootBatchLease> {
-        self.owners.values()
+        self.owners
+            .values()
+            .chain(self.serial_parked.values())
+            .chain(self.retained.iter())
     }
     pub(crate) fn first_owner_key(&self) -> Option<ThreadKey> {
         self.owners.keys().next().copied()
+    }
+    pub(crate) fn first_serial_key(&self) -> Option<std::num::NonZeroU64> {
+        self.serial_parked.keys().next().copied()
+    }
+    pub(crate) fn insert_serial(
+        &mut self,
+        id: std::num::NonZeroU64,
+        roots: RootBatchLease,
+    ) -> Option<RootBatchLease> {
+        self.serial_parked.insert(id, roots)
+    }
+    pub(crate) fn remove_serial(&mut self, id: std::num::NonZeroU64) -> Option<RootBatchLease> {
+        self.serial_parked.remove(&id)
+    }
+    pub(crate) fn pop_retained(&mut self) -> Option<RootBatchLease> {
+        self.retained.pop()
+    }
+    pub(crate) fn has_retained(&self) -> bool {
+        !self.retained.is_empty()
+    }
+    pub(crate) fn push_retained(&mut self, roots: RootBatchLease) {
+        self.retained.push(roots);
+    }
+    pub(crate) fn drain_retained_with(
+        &mut self,
+        mut try_finish: impl FnMut(RootBatchLease) -> Result<(), RootBatchLease>,
+    ) {
+        let pending = std::mem::take(&mut self.retained);
+        for lease in pending {
+            if let Err(still_live) = try_finish(lease) {
+                self.retained.push(still_live);
+            }
+        }
+    }
+    #[cfg(test)]
+    pub(crate) fn owner_lease_for_test(&self, key: &ThreadKey) -> Option<&RootBatchLease> {
+        self.owners.get(key)
     }
     #[doc(hidden)]
     pub fn contains_key(&self, key: &ThreadKey) -> bool {
@@ -392,11 +530,11 @@ impl WorldRootRegistry {
         &mut self,
         prepared: PreparedHostCall,
     ) -> Result<HostRequestKey, HostRootError> {
-        if !self.owners.contains_key(&prepared.owner) {
+        if !self.owners.contains_key(&prepared.owner()) {
             return Err(HostRootError::OwnerNotParked);
         }
         let record = self.hosts.record_mut(prepared.key)?;
-        if record.owner != prepared.owner {
+        if record.owner != prepared.owner() {
             return Err(HostRootError::ForeignOwner);
         }
         match record.state {
@@ -410,7 +548,7 @@ impl WorldRootRegistry {
         record.state = RecordState::Published(
             PublishedHostCall {
                 key,
-                owner: prepared.owner,
+                requester: prepared.requester(),
             }
             .into_registration(),
         );
@@ -453,7 +591,7 @@ impl HostRegistry {
 
     /// Stop new admission while retaining already-published continuations.
     /// This is the cold close boundary; it grants no owner execution authority.
-    pub(crate) fn begin_closing(&mut self, baton: &Baton) -> Result<(), HostRootError> {
+    pub(crate) fn begin_closing(&mut self, baton: &TurnRight) -> Result<(), HostRootError> {
         if !baton.held_here() {
             return Err(HostRootError::BatonRequired);
         }
@@ -476,7 +614,10 @@ impl HostRegistry {
     /// Reflect the actor's FIFO close observation only after earlier individual
     /// cancellation observations have been recorded. Closing admission alone
     /// must not overtake an already enqueued requester intent.
-    pub(crate) fn observe_session_closing(&mut self, baton: &Baton) -> Result<(), HostRootError> {
+    pub(crate) fn observe_session_closing(
+        &mut self,
+        baton: &TurnRight,
+    ) -> Result<(), HostRootError> {
         self.begin_closing(baton)?;
         for record in self.records.values_mut() {
             match record.state {
@@ -524,13 +665,13 @@ impl HostRegistry {
     /// preflight. Dropping this handle retains the record for quiescent drain.
     pub(crate) fn abandon_prepared(
         &mut self,
-        baton: &Baton,
+        baton: &TurnRight,
         heap: &TaggedHeap,
         owner: ThreadKey,
         call: PreparedHostCall,
     ) -> Result<AbandonedHostCall, HostRootError> {
         self.validate_access(baton, heap)?;
-        if call.owner != owner {
+        if call.owner() != owner {
             return Err(HostRootError::ForeignOwner);
         }
         let record = self.record_mut(call.key)?;
@@ -551,14 +692,14 @@ impl HostRegistry {
     /// registry borrows. Never retire a lease directly from an active GC driver.
     pub(crate) fn retire_abandoned(
         &mut self,
-        baton: &Baton,
+        baton: &TurnRight,
         heap: &TaggedHeap,
         owner: ThreadKey,
         abandoned: AbandonedHostCall,
     ) -> Result<(), HostRootError> {
         self.validate_access(baton, heap)?;
         let call = abandoned.0;
-        if call.owner != owner {
+        if call.owner() != owner {
             return Err(HostRootError::ForeignOwner);
         }
         let record = self.record_mut(call.key)?;
@@ -594,7 +735,7 @@ impl HostRegistry {
     #[doc(hidden)]
     pub unsafe fn prepare(
         &mut self,
-        baton: &Baton,
+        baton: &TurnRight,
         heap: &TaggedHeap,
         owner: ThreadKey,
         roots: &[TaggedValue],
@@ -638,7 +779,7 @@ impl HostRegistry {
         );
         Ok(PreparedHostCall {
             key,
-            owner,
+            requester: HostRequester::green(owner),
             _confined: PhantomData,
         })
     }
@@ -652,7 +793,7 @@ impl HostRegistry {
     #[doc(hidden)]
     pub unsafe fn register<K: RegisteredRecord>(
         &mut self,
-        baton: &Baton,
+        baton: &TurnRight,
         heap: &TaggedHeap,
         owner: ThreadKey,
         key: HostRequestKey,
@@ -674,7 +815,7 @@ impl HostRegistry {
     /// Same live original-owner roots and no-GC extent as `register`.
     pub(crate) unsafe fn register_record<K: RegisteredRecord>(
         &mut self,
-        baton: &Baton,
+        baton: &TurnRight,
         heap: &TaggedHeap,
         owner: ThreadKey,
         key: HostRequestKey,
@@ -733,7 +874,7 @@ impl HostRegistry {
 
     pub(crate) fn validate_access(
         &self,
-        baton: &Baton,
+        baton: &TurnRight,
         heap: &TaggedHeap,
     ) -> Result<(), HostRootError> {
         if !baton.held_here() {
@@ -832,7 +973,7 @@ impl HostRegistry {
                 record.state = RecordState::TerminalAwaitingOwner;
                 Ok(SettledHostCall {
                     key,
-                    owner: record.owner,
+                    requester: HostRequester::green(record.owner),
                     _confined: PhantomData,
                 })
             }
@@ -928,7 +1069,7 @@ impl HostRegistry {
 /// intervene between decoding a registered reply and closing its root reader.
 pub(super) fn finish_owner_reply<R>(
     context: &mut super::super::Context,
-    baton: &Baton,
+    baton: &TurnRight,
     resume: HostResume,
     consume: impl FnOnce(&RestoredHostOwner<'_>, &NativeSettlement) -> Result<R, super::super::Flow>,
 ) -> Result<R, super::super::Flow> {
@@ -1031,3 +1172,7 @@ mod owner_runtime_tests;
 #[cfg(test)]
 #[path = "host_service/tests/prepublication.rs"]
 mod prepublication_tests;
+
+#[cfg(test)]
+#[path = "host_service/tests/requester.rs"]
+mod requester_tests;

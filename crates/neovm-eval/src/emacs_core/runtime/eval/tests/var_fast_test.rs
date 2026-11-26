@@ -184,10 +184,10 @@ fn run(ev: &mut Context, engine: Engine, prog: &Prog, var: &str, args: &[Value])
                 optional: Vec::new(),
                 rest: None,
             });
-            f.lexical = true;
-            f.ops = prog.ops.clone();
-            f.constants = constants.into();
-            f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(8);
+            f.set_lexical(true);
+            f.set_ops(prog.ops.clone());
+            f.set_constants(constants.into());
+            f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(8));
             let mut vm = Vm::from_context(ev);
             match vm.execute(&f, args.to_vec()) {
                 Ok(v) => print_value(&v),
@@ -213,7 +213,7 @@ fn run(ev: &mut Context, engine: Engine, prog: &Prog, var: &str, args: &[Value])
             }
             .expect("program lowers");
             let ctx = ev as *mut Context as *mut u8;
-            match leaf.call(ctx, args) {
+            match unsafe { leaf.call(ctx, args) } {
                 NativeRun::Ok(bits) => print_value(&unsafe {
                     /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
                     Value::from_bits(bits)
@@ -308,7 +308,7 @@ fn fixture() -> Context {
     // letting a GC root walk inside a JIT program find the heap changed.
     #[cfg(feature = "jit")]
     {
-        crate::emacs_core::jit::cache::clear();
+        crate::emacs_core::jit::cache::clear_with_serial_receipt().expect("serial jit grace");
         let _ = crate::emacs_core::jit::cache::prepopulate_aot_leaves(Vec::new());
     }
     for name in ["vft-obj", "vft-kbd", "vft-lobj"] {

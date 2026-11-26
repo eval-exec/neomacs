@@ -5,7 +5,7 @@ use super::{
 };
 use neovm_value::value::Value;
 
-fn ready() -> Option<Box<super::super::super::Context>> {
+fn ready() -> Box<super::super::super::Context> {
     install_inactive_source_module_probe_for_test();
     let mut source = Box::new(super::super::super::Context::new_minimal_vm_harness(
         crate::test_utils::unit_harness(),
@@ -13,12 +13,12 @@ fn ready() -> Option<Box<super::super::super::Context>> {
     source.setup_thread_locals();
     source.gc_collect_exact();
     if source.tagged_heap.tagged_heap_generational_enabled() {
-        return Some(source);
+        return source;
     }
     match capture(source) {
         Err(SourceWithdrawalFailure::BeforeEffects(failure)) => {
             assert_eq!(failure.reason, SourceEntryRefusal::GenerationalRequired);
-            None
+            panic!("these rows need a generational heap; NEOVM_GC_GENERATIONAL=0 disables it")
         }
         other => panic!("GEN0 must refuse before any effect: {:?}", other.err()),
     }
@@ -53,9 +53,7 @@ fn expect_observation_failure(
 
 #[test]
 fn pentry_e2b_source_observations_actual_source_census_and_rc_withdrawal() {
-    let Some(mut source) = ready() else {
-        return;
-    };
+    let mut source = ready();
     let private = Value::vector(vec![Value::fixnum(79)]);
     source.lexenv = private;
     let heap = source.tagged_heap.heap_identity();
@@ -78,9 +76,7 @@ fn pentry_e2b_source_observations_actual_source_census_and_rc_withdrawal() {
 
 #[test]
 fn pentry_e2b_source_observations_live_certificate_owns_failure_and_census() {
-    let Some(source) = ready() else {
-        return;
-    };
+    let source = ready();
     let alive = source.world_lifetime_probe_for_test();
     let registry = source.ccl_registry.downgrade();
     let captured = capture(source).unwrap();
@@ -99,9 +95,7 @@ fn pentry_e2b_source_observations_live_certificate_owns_failure_and_census() {
 
 #[test]
 fn pentry_e2b_source_observations_forgotten_certificate_never_grants_overlap() {
-    let Some(source) = ready() else {
-        return;
-    };
+    let source = ready();
     let alive = source.world_lifetime_probe_for_test();
     let captured = capture(source).unwrap();
     let (_, certificate) = neovm_value::tagged::collection_reads::capture(|| ());
@@ -114,9 +108,7 @@ fn pentry_e2b_source_observations_forgotten_certificate_never_grants_overlap() {
 
 #[test]
 fn pentry_e2b_source_observations_active_capture_refuses_actual_owner() {
-    let Some(source) = ready() else {
-        return;
-    };
+    let source = ready();
     let alive = source.world_lifetime_probe_for_test();
     let captured = capture(source).unwrap();
     let (failure, certificate) = neovm_value::tagged::collection_reads::capture(|| {
@@ -128,20 +120,18 @@ fn pentry_e2b_source_observations_active_capture_refuses_actual_owner() {
     assert!(!neovm_value::tagged::gc::tagged_heap_is_installed());
 }
 
-fn closed() -> Option<(impl Fn() -> bool, OwnedSourceObservationClosed)> {
-    let source = ready()?;
+fn closed() -> (impl Fn() -> bool, OwnedSourceObservationClosed) {
+    let source = ready();
     let alive = source.world_lifetime_probe_for_test();
-    Some((
+    (
         alive,
         capture(source).unwrap().withdraw_observations().unwrap(),
-    ))
+    )
 }
 
 #[test]
 fn pentry_e2b_source_observations_drop_retains_source_without_restoration() {
-    let Some((alive, closed)) = closed() else {
-        return;
-    };
+    let (alive, closed) = closed();
     drop(closed);
     assert!(alive());
     assert!(!neovm_value::tagged::gc::tagged_heap_is_installed());
@@ -149,9 +139,7 @@ fn pentry_e2b_source_observations_drop_retains_source_without_restoration() {
 
 #[test]
 fn pentry_e2b_source_observations_forget_retains_source_without_restoration() {
-    let Some((alive, closed)) = closed() else {
-        return;
-    };
+    let (alive, closed) = closed();
     std::mem::forget(closed);
     assert!(alive());
     assert!(!neovm_value::tagged::gc::tagged_heap_is_installed());
@@ -159,9 +147,7 @@ fn pentry_e2b_source_observations_forget_retains_source_without_restoration() {
 
 #[test]
 fn pentry_e2b_source_observations_catch_unwind_retains_source_without_restoration() {
-    let Some((alive, closed)) = closed() else {
-        return;
-    };
+    let (alive, closed) = closed();
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
         let _closed = closed;
         panic!("OWNED_SOURCE_OBSERVATIONS_UNWIND");
@@ -173,14 +159,16 @@ fn pentry_e2b_source_observations_catch_unwind_retains_source_without_restoratio
 
 #[test]
 fn pentry_e2b_source_observations_foreign_heap_refuses_before_withdrawal() {
-    let Some(source) = ready() else {
-        return;
-    };
+    let source = ready();
     let alive = source.world_lifetime_probe_for_test();
     let captured = capture(source).unwrap();
-    let Some(foreign) = ready() else {
-        return;
-    };
+    // SAFETY: `captured._frame.source` is captured/suspended and never evaluated again.
+    unsafe {
+        neovm_value::tagged::gc::clear_tagged_heap_if_installed(
+            &captured._frame.source.tagged_heap,
+        );
+    }
+    let foreign = ready();
     let error = captured
         .withdraw_observations()
         .err()

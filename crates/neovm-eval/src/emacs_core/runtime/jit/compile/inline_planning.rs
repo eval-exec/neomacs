@@ -91,8 +91,8 @@ pub(crate) fn hof_caller_selectable(source: &ByteCodeFunction) -> bool {
     if !super::knobs::jit_hof_inline()
         || jit_inline2_mode().enabled()
         || !inline::jit_inline_on()
-        || !inline::mentions_hof(&source.constants)
-        || !source.constants.iter().any(|constant| {
+        || !inline::mentions_hof(source.constants())
+        || !source.constants().iter().any(|constant| {
             constant
                 .get_bytecode_data()
                 .is_some_and(is_hof_callback_candidate)
@@ -107,7 +107,7 @@ pub(crate) fn hof_caller_selectable(source: &ByteCodeFunction) -> bool {
     let feedback = vec![crate::emacs_core::jit::NumericFeedback::FixnumOnly; ops.len()];
     inline::fuse_hof_calls_v2(
         ops,
-        &source.constants,
+        source.constants(),
         source.executable_gnu_byte_offset_map(),
         params.entry_depth(),
         &feedback,

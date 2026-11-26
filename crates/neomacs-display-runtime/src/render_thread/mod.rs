@@ -3,6 +3,8 @@
 //! Owns winit event loop, wgpu, GLib/WebKit. Runs at native VSync.
 
 mod app_handler;
+#[cfg(any(target_os = "macos", test))]
+mod application_quit;
 mod asset_commands;
 mod bootstrap;
 pub(crate) mod child_frames;
@@ -19,6 +21,9 @@ pub(crate) mod frame_stats;
 pub(crate) mod frame_windows;
 mod gpu_startup;
 mod input;
+#[cfg(test)]
+#[path = "tests/input_backpressure_test.rs"]
+mod input_backpressure_test;
 mod lifecycle;
 #[cfg(target_os = "macos")]
 mod macos_quit_redirect;
@@ -58,6 +63,7 @@ mod window_events;
 
 #[cfg(feature = "neo-term")]
 pub use bootstrap::run_render_loop_current_thread_with_terminals;
+pub(crate) use bootstrap::{RenderExitCancellation, retire_render_command_obligations};
 pub use bootstrap::{build_render_event_loop, run_render_loop, run_render_loop_current_thread};
 pub(crate) use lifecycle::PopupCommit;
 pub use startup::{
@@ -67,13 +73,15 @@ pub use startup::{
 use state::{FpsCounter, ImeCursorArea, RenderApp};
 pub use state::{
     ImageDecodeTerminal, ImageRenderState, ImageTerminalProbe, ImageTerminalPublication,
-    MonitorInfo, SharedImageRenderState, SharedMonitorInfo,
+    MonitorInfo, RendererPhase, SharedImageRenderState, SharedMonitorInfo,
 };
 pub use thread_handle::RenderThread;
 
 /// Header-only image geometry, for placing an image whose pixels have not been
 /// decoded yet (see `neomacs_renderer_wgpu::image_probe`).
-pub use neomacs_renderer_wgpu::image_probe::{ImageProbeSource, probe_image_layout};
+pub use neomacs_renderer_wgpu::image_probe::{
+    ImageProbeSource, probe_image_layout, probe_image_layout_for_frame,
+};
 
 /// Rows of an image whose decode is still running, as published by
 /// `ImageDecodeTerminal::Band`.
@@ -179,3 +187,15 @@ impl RenderEventLoopProxy {
 }
 
 // All GPU caches (image, video, webkit) are managed by WgpuRenderer
+
+/// Publish the evaluator's completed native quit-policy write.
+#[cfg(target_os = "macos")]
+pub fn set_ns_confirm_quit(enabled: bool) {
+    macos_quit_redirect::set_confirm_quit(enabled);
+}
+
+/// Publish the native root of the selected GUI frame for menu-key routing.
+#[cfg(target_os = "macos")]
+pub fn set_selected_gui_frame(frame: Option<u64>) {
+    macos_quit_redirect::set_selected_gui_frame(frame);
+}

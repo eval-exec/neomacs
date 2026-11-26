@@ -40,10 +40,10 @@ pub enum ImageDecodeTerminal {
     /// coordinates.
     Band(RowRange),
     Ready(ResolvedImageMetadata),
-    /// The decode ended without pixels.  It carries GNU's diagnostic rather
-    /// than a bare string, because the consumer that shows it to a user is the
-    /// same one that has to word it.
-    Failed(neomacs_display_protocol::image_diagnostic::ImageDiagnostic),
+    /// The decode ended without pixels.  Carries GNU's diagnostic together with
+    /// any partial loader metadata captured before failure (such as multi-page
+    /// TIFF `(count N)`).
+    Failed(neomacs_display_protocol::image_diagnostic::ImageDecodeFailure),
 }
 
 impl ImageDecodeTerminal {
@@ -111,12 +111,56 @@ impl Drop for ImageTerminalPublication<'_> {
 /// Cross-thread image facts published by the renderer and read by Elisp.
 ///
 /// Terminal decode results need a condition variable for bounded synchronous
-/// measurement. Cache usage is an independent lock-free snapshot: querying
-/// `image-cache-size` never waits for a decode or the render thread.
+/// measurement. Cache usage is an independent snapshot: an ordinary
+/// `image-cache-size` does not wait for a decode or the render thread, but a
+/// read after an invalidation waits for the render thread to execute the
+/// ordered invalidation and publish the post-invalidation total (GNU frees
+/// the cache synchronously on the caller's thread).
 pub struct ImageRenderState {
     terminals: Mutex<HashMap<ImageLoadToken, ImageDecodeTerminal>>,
     terminal_changed: Condvar,
     cache_bytes: AtomicU64,
+    /// Lifecycle of the renderer that owns the image cache. A synchronous
+    /// cache read must know whether there is a renderer that can retain
+    /// images at all (before the GPU exists it cannot, and waiting for a
+    /// publish would deadlock early init against first-frame readiness) and
+    /// whether it has exited (a queued acknowledgement can never arrive).
+    renderer_phase: std::sync::atomic::AtomicU8,
+}
+
+/// Lifecycle of the renderer that owns the image cache.
+///
+/// A synchronous cache read must know whether there is a renderer that can
+/// retain images at all (before the GPU exists it cannot, and waiting for a
+/// publish would deadlock early init against first-frame readiness) and
+/// whether it has exited (a queued acknowledgement can never arrive).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u8)]
+pub enum RendererPhase {
+    /// No GPU is installed: the renderer owns no image bytes yet, so a cache
+    /// read is answered from the catalog's own snapshot.
+    NotStarted = 0,
+    /// The renderer can process image commands and publish cache usage.
+    Ready = 1,
+    /// The renderer exited (or is exiting); no further acknowledgement will
+    /// come.
+    Exited = 2,
+}
+
+impl RendererPhase {
+    fn from_byte(byte: u8) -> Self {
+        match byte {
+            byte if byte == Self::NotStarted as u8 => Self::NotStarted,
+            byte if byte == Self::Ready as u8 => Self::Ready,
+            byte if byte == Self::Exited as u8 => Self::Exited,
+            other => {
+                debug_assert!(false, "unknown renderer phase byte {other}");
+                // Treat an unknown phase as final: a waiter must not hang on
+                // a state this build does not understand.
+                Self::Exited
+            }
+        }
+    }
 }
 
 impl Default for ImageRenderState {
@@ -125,6 +169,7 @@ impl Default for ImageRenderState {
             terminals: Mutex::new(HashMap::new()),
             terminal_changed: Condvar::new(),
             cache_bytes: AtomicU64::new(0),
+            renderer_phase: std::sync::atomic::AtomicU8::new(RendererPhase::NotStarted as u8),
         }
     }
 }
@@ -258,6 +303,46 @@ impl ImageRenderState {
     #[must_use]
     pub fn cached_size_bytes(&self) -> u64 {
         self.cache_bytes.load(Ordering::Acquire)
+    }
+
+    /// The renderer lifecycle state observed by waiters.
+    #[must_use]
+    pub fn renderer_phase(&self) -> RendererPhase {
+        RendererPhase::from_byte(self.renderer_phase.load(Ordering::Acquire))
+    }
+
+    /// Record that the renderer installed its GPU and can now process image
+    /// commands. Idempotent across device-loss reinstalls; an exit is final.
+    pub fn mark_renderer_ready(&self) {
+        let _ = self.renderer_phase.compare_exchange(
+            RendererPhase::NotStarted as u8,
+            RendererPhase::Ready as u8,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        );
+    }
+
+    /// Record that the renderer exited. Waiters stop waiting on the next
+    /// poll: any acknowledgement still queued behind the evaluator's sender
+    /// clones can never arrive. Called before teardown can block.
+    pub fn mark_renderer_exited(&self) {
+        self.renderer_phase
+            .store(RendererPhase::Exited as u8, Ordering::Release);
+    }
+
+    /// Whether the renderer has exited (or is exiting).
+    #[must_use]
+    pub fn renderer_exited(&self) -> bool {
+        self.renderer_phase() == RendererPhase::Exited
+    }
+
+    /// Whether the renderer has a GPU and can retain image bytes. False until
+    /// the first install, so a cache read during early init is answered
+    /// locally instead of waiting for a renderer that is itself waiting on
+    /// first-frame readiness.
+    #[must_use]
+    pub fn renderer_can_retain_images(&self) -> bool {
+        self.renderer_phase() == RendererPhase::Ready
     }
 }
 
@@ -891,6 +976,7 @@ pub(super) struct RenderGpuContext {
 }
 
 pub(super) struct RenderApp {
+    pub(super) font_raster_options: crate::display_raster::DisplayRasterOptions,
     pub(super) comms: RenderComms,
     pub(super) menus: crate::menus::MenuPresentation,
     pub(super) tooltips: crate::tooltips::Tooltips,
@@ -936,6 +1022,13 @@ pub(super) struct RenderApp {
     /// and the surface-acquire path; drained at the top of
     /// `handle_about_to_wait`, which runs `recover_from_device_loss`.
     pub(super) device_lost: super::device_loss::DeviceLossDetector,
+    /// Adapter choice for the next `init_wgpu`. `SkipFailed` lists every
+    /// adapter that failed before the first present. A later failure is
+    /// appended so an earlier exclusion is not retried.
+    pub(super) startup_adapter_choice: super::gpu_startup::StartupAdapterChoice,
+    /// Set when startup refused to select another adapter. Recovery must not
+    /// rearm the device-lost latch, or the excluded adapter is retried forever.
+    pub(super) startup_adapter_exhausted: bool,
 
     /// Shared media memory accounting. Fed from the asset-command choke
     /// point (`asset_commands.rs`); shader surfaces only so far — see the
@@ -1148,6 +1241,7 @@ impl RenderApp {
 
         Self {
             comms,
+            font_raster_options: Default::default(),
             window_icon: crate::window_icon::WindowIconService::new(),
             presentation_observer: crate::presentation_feedback::PresentationObserver::new(),
             clipboard: Err("clipboard is unavailable before display initialization".to_owned()),
@@ -1172,6 +1266,8 @@ impl RenderApp {
             backend_profile,
             render_policy,
             device_lost: super::device_loss::DeviceLossDetector::new(),
+            startup_adapter_choice: super::gpu_startup::StartupAdapterChoice::Ranked,
+            startup_adapter_exhausted: false,
             faces: rustc_hash::FxHashMap::default(),
             faces_signature: Vec::new(),
             modifiers: 0,

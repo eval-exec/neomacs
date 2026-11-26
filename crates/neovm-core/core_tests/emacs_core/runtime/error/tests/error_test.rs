@@ -383,7 +383,7 @@ fn raw_condition_inheriting_minibuffer_quit_does_not_take_down_session() {
 /// This is the cheap, direct pin for that class: build a signal whose payload
 /// is heap-allocated, drop every OTHER reference to it, collect, and require
 /// the payload to still be a live list. Before the fix the cons was on the
-/// free list, so its car read back as [`Value::DEAD`] — GNU's `dead_object`.
+/// free list, so its car read back as `DEAD` (`is_dead()`) — GNU's `dead_object`.
 #[test]
 fn in_flight_signal_payload_survives_a_collection() {
     crate::test_utils::init_test_tracing();
@@ -455,7 +455,7 @@ fn condition_case_binding_value_survives_a_collection() {
 /// `Flow::Throw` payload that is not a seeded root is reclaimed mid-unwind and
 /// `catch` returns a free-list cell.
 ///
-/// Red before the pin: the payload cons's car reads back as [`Value::DEAD`],
+/// Red before the pin: the payload cons's car reads back as `DEAD` (`is_dead()`),
 /// GNU's `dead_object` (src/alloc.c:6858) that `set_free_next` now writes.
 #[test]
 fn in_flight_throw_payload_survives_a_collection() {

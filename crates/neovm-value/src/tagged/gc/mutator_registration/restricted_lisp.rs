@@ -1397,7 +1397,7 @@ fn exec<'brand>(
                 let src = home_index(src, homes.len())?;
                 let dst = home_index(dst, homes.len())?;
                 let bits = home_bits(slice, &homes[src]);
-                slice.plant_word_for_test(&mut homes[dst], bits);
+                unsafe { slice.plant_word_for_test(&mut homes[dst], bits) };
                 machine.pc += 1;
             }
             Op::Add { dst, a, b } => {
@@ -1871,7 +1871,7 @@ fn plant_words<'era>(
         }
         for &(slot, bits) in words {
             let index = home_index(slot, homes.len())?;
-            slice.plant_word_for_test(&mut homes[index], bits);
+            unsafe { slice.plant_word_for_test(&mut homes[index], bits) };
         }
         Ok(())
     })
@@ -1902,7 +1902,7 @@ fn run_cb<'era>(
                 if machine.pc == 0 {
                     for &(slot, bits) in args {
                         let index = home_index(slot, homes.len())?;
-                        slice.plant_word_for_test(&mut homes[index], bits);
+                        unsafe { slice.plant_word_for_test(&mut homes[index], bits) };
                     }
                 }
                 exec(slice, &mut homes, ops, &mut machine, 0, None, 0)
@@ -1962,6 +1962,7 @@ fn refuse_in_user_test(owner: &mut Mutator<'_>, table_tv: TaggedValue) -> Result
 fn user_wanted_hash<'era>(
     owner: &mut Mutator<'era>,
     slots: &[OwnerRootSlot<'era>],
+    table_slot: &OwnerRootSlot<'era>,
     env: &HtEnv<'_>,
     prog: &UserTestProg<'_>,
     table_tv: TaggedValue,
@@ -1970,7 +1971,7 @@ fn user_wanted_hash<'era>(
 ) -> Result<i64, ExecError> {
     let hold = with_run(owner, |run| {
         let lease = TableRef::enter(run, table_tv)?;
-        Ok(lease.hold_user_test()?)
+        Ok(lease.hold_user_test(run, table_slot)?)
     })?;
     let out = run_cb(
         owner,
@@ -1992,6 +1993,7 @@ fn user_wanted_hash<'era>(
 fn user_keys_equal<'era>(
     owner: &mut Mutator<'era>,
     slots: &[OwnerRootSlot<'era>],
+    table_slot: &OwnerRootSlot<'era>,
     env: &HtEnv<'_>,
     prog: &UserTestProg<'_>,
     table_tv: TaggedValue,
@@ -2009,7 +2011,7 @@ fn user_keys_equal<'era>(
     }
     let hold = with_run(owner, |run| {
         let lease = TableRef::enter(run, table_tv)?;
-        Ok(lease.hold_user_test()?)
+        Ok(lease.hold_user_test(run, table_slot)?)
     })?;
     // B4: the one armed editor window. Phases 1→2 bracket the hold — the
     // editor's same-table edit attempt lands (refused by the §3.1 guard)
@@ -2065,6 +2067,7 @@ fn user_candidates(
 fn user_lookup<'era>(
     owner: &mut Mutator<'era>,
     slots: &[OwnerRootSlot<'era>],
+    table_slot: &OwnerRootSlot<'era>,
     env: &HtEnv<'_>,
     prog: &UserTestProg<'_>,
     table_tv: TaggedValue,
@@ -2072,7 +2075,8 @@ fn user_lookup<'era>(
     index: usize,
 ) -> Result<(usize, Option<usize>), ExecError> {
     for _ in 0..HT_RETRY_ROUNDS {
-        let wanted = user_wanted_hash(owner, slots, env, prog, table_tv, key_tv, index)?;
+        let wanted =
+            user_wanted_hash(owner, slots, table_slot, env, prog, table_tv, key_tv, index)?;
         let (before, candidates) = user_candidates(owner, table_tv, wanted)?;
         let mut matched: Option<usize> = None;
         for &(cand_bits, value_bits) in &candidates {
@@ -2085,6 +2089,7 @@ fn user_lookup<'era>(
             if user_keys_equal(
                 owner,
                 slots,
+                table_slot,
                 env,
                 prog,
                 table_tv,
@@ -2115,6 +2120,7 @@ fn user_lookup<'era>(
 fn user_scan<'era>(
     owner: &mut Mutator<'era>,
     slots: &[OwnerRootSlot<'era>],
+    table_slot: &OwnerRootSlot<'era>,
     env: &HtEnv<'_>,
     prog: &UserTestProg<'_>,
     table_tv: TaggedValue,
@@ -2122,7 +2128,8 @@ fn user_scan<'era>(
     index: usize,
 ) -> Result<Option<usize>, ExecError> {
     for _ in 0..HT_RETRY_ROUNDS {
-        let wanted = user_wanted_hash(owner, slots, env, prog, table_tv, key_tv, index)?;
+        let wanted =
+            user_wanted_hash(owner, slots, table_slot, env, prog, table_tv, key_tv, index)?;
         let (before, candidates) = user_candidates(owner, table_tv, wanted)?;
         let mut matched: Option<usize> = None;
         for &(cand_bits, _) in &candidates {
@@ -2135,6 +2142,7 @@ fn user_scan<'era>(
             if user_keys_equal(
                 owner,
                 slots,
+                table_slot,
                 env,
                 prog,
                 table_tv,
@@ -2329,6 +2337,7 @@ fn plain_count(
 fn user_put<'era>(
     owner: &mut Mutator<'era>,
     slots: &[OwnerRootSlot<'era>],
+    table_slot: &OwnerRootSlot<'era>,
     env: &HtEnv<'_>,
     prog: &UserTestProg<'_>,
     table_tv: TaggedValue,
@@ -2337,8 +2346,8 @@ fn user_put<'era>(
     index: usize,
 ) -> Result<(), ExecError> {
     refuse_in_user_test(owner, table_tv)?;
-    let wanted = user_wanted_hash(owner, slots, env, prog, table_tv, key_tv, index)?;
-    let matched = user_scan(owner, slots, env, prog, table_tv, key_tv, index)?;
+    let wanted = user_wanted_hash(owner, slots, table_slot, env, prog, table_tv, key_tv, index)?;
+    let matched = user_scan(owner, slots, table_slot, env, prog, table_tv, key_tv, index)?;
     with_run(owner, |run| {
         let mut lease = TableMut::enter(run, table_tv)?;
         if lease.user_test_mutation_refused() {
@@ -2371,6 +2380,7 @@ fn user_put<'era>(
 fn user_rem<'era>(
     owner: &mut Mutator<'era>,
     slots: &[OwnerRootSlot<'era>],
+    table_slot: &OwnerRootSlot<'era>,
     env: &HtEnv<'_>,
     prog: &UserTestProg<'_>,
     table_tv: TaggedValue,
@@ -2378,7 +2388,7 @@ fn user_rem<'era>(
     index: usize,
 ) -> Result<usize, ExecError> {
     refuse_in_user_test(owner, table_tv)?;
-    let matched = user_scan(owner, slots, env, prog, table_tv, key_tv, index)?;
+    let matched = user_scan(owner, slots, table_slot, env, prog, table_tv, key_tv, index)?;
     let removed = with_run(owner, |run| {
         let mut lease = TableMut::enter(run, table_tv)?;
         if lease.user_test_mutation_refused() {
@@ -2497,6 +2507,7 @@ fn ht_step<'era>(
         .map(|w| (w, index));
     // The B5 growth witness measures every plain put of a growth session.
     let growth = env.and_then(|env| env.growth).map(|g| (g, index));
+    let table_slot = &slots[usize::from(table)];
     match op {
         Op::HtGet {
             key, found, value, ..
@@ -2504,8 +2515,16 @@ fn ht_step<'era>(
             let key_tv = ht_operand(owner, slots, &[key])?[0];
             let (found_bits, value_bits) = match prog {
                 Some(prog) => {
-                    let (found_bits, matched) =
-                        user_lookup(owner, slots, env_of(), prog, table_tv, key_tv, index)?;
+                    let (found_bits, matched) = user_lookup(
+                        owner,
+                        slots,
+                        table_slot,
+                        env_of(),
+                        prog,
+                        table_tv,
+                        key_tv,
+                        index,
+                    )?;
                     (found_bits, matched.unwrap_or(TaggedValue::NIL.bits()))
                 }
                 None => plain_get(owner, table_tv, key_tv, test)?,
@@ -2520,6 +2539,7 @@ fn ht_step<'era>(
                 Some(prog) => user_put(
                     owner,
                     slots,
+                    table_slot,
                     env_of(),
                     prog,
                     table_tv,
@@ -2533,7 +2553,16 @@ fn ht_step<'era>(
         Op::HtRem { key, found, .. } => {
             let key_tv = ht_operand(owner, slots, &[key])?[0];
             let found_bits = match prog {
-                Some(prog) => user_rem(owner, slots, env_of(), prog, table_tv, key_tv, index)?,
+                Some(prog) => user_rem(
+                    owner,
+                    slots,
+                    table_slot,
+                    env_of(),
+                    prog,
+                    table_tv,
+                    key_tv,
+                    index,
+                )?,
                 None => plain_rem(owner, table_tv, key_tv, test)?,
             };
             with_run(owner, |run| plant_words(run, slots, &[(found, found_bits)]))
@@ -6339,10 +6368,10 @@ fn a6_ht_bounded_growth_many_owners<H: HostParts>(host: &mut H) {
 /// B5 row 3: memory overhead (§7 B5). One owner grows a table through 100
 /// inserts and shrinks it by 20 rems: the charge must be at least the
 /// final entry footprint (the backings really were allocated) and within
-/// the amortized 8× bound. The serial arm then proves the other half of
-/// Rev R3: the identical put loop on a fresh versus an already-grown
-/// table, in plain serial Sim, charges the heap identically — growth in
-/// Sim stays the current code path, byte for byte.
+/// the amortized 8× bound. The serial arm runs the identical put loop on a
+/// fresh and an already-grown table: their charge difference must equal
+/// the actual backing growth, once, matching GNU's hash_table_alloc_bytes
+/// consing counter (alloc.c:5370-5385).
 fn a6_ht_growth_memory_overhead<H: HostParts>(host: &mut H) {
     // slots: 0 table; 15 one; 16 value/count/found; 17 limit/key; 18 k;
     // 19 cond.
@@ -6350,10 +6379,19 @@ fn a6_ht_growth_memory_overhead<H: HostParts>(host: &mut H) {
     const NSLOTS: usize = 20;
     let puts: usize = 100;
     let rems: usize = 20;
+    let image_table = host
+        .eval_form("(setq a6-tM2 (make-hash-table :test 'eq))")
+        .unwrap_or_else(|error| panic!("image table setup: {error}"));
+    // The serial host is active and no sealed owner has been admitted. Use
+    // loader registration so provenance and the image-hash index agree.
+    // SAFETY: serial host setup with no live HeapRef payload borrows; only
+    // stamps image-resident metadata and never collects, re-enters
+    // `with_tagged_heap`, or mints capability tokens.
+    let stamp =
+        unsafe { crate::tagged::gc::with_tagged_heap(|heap| heap.note_image_object(image_table)) };
+    assert_eq!(stamp, crate::tagged::gc::ImageStamp::Stamped);
     let setup = HtSetup {
-        source: r#"(progn
-  (setq a6-tM2 (make-hash-table :test 'eq))
-  (list a6-tM2))"#,
+        source: "(list a6-tM2)",
         facts: vec![(TM, Abs::Table)],
         nslots: NSLOTS,
     };
@@ -6467,8 +6505,8 @@ fn a6_ht_growth_memory_overhead<H: HostParts>(host: &mut H) {
         "amortized bound: charged {charged} > 8x {entry_bytes}"
     );
 
-    // Serial arm: the same closure putting 100 fresh keys (growing) versus
-    // 100 overwrites (no growth) charges the serial heap identically.
+    // Serial arm: identical evaluator work differs by exactly the backing
+    // allocated for fresh keys, while overwriting keys does not grow storage.
     host.eval_form(
         r#"(progn
   (setq a6-tZ1 (make-hash-table :test 'eq))
@@ -6481,17 +6519,27 @@ fn a6_ht_growth_memory_overhead<H: HostParts>(host: &mut H) {
   (a6-arm a6-tZ2))"#,
     )
     .unwrap_or_else(|error| panic!("serial arm setup: {error}"));
+    let growing_table = host
+        .eval_form("a6-tZ1")
+        .unwrap_or_else(|error| panic!("growing table: {error}"));
+    let storage_before = test_support::serial_table_storage_bytes(host, growing_table);
     let before_growing = host.charged_bytes();
     host.eval_form("(a6-arm a6-tZ1)")
         .unwrap_or_else(|error| panic!("growing arm: {error}"));
     let growing = host.charged_bytes() - before_growing;
+    let storage_after = test_support::serial_table_storage_bytes(host, growing_table);
+    assert!(
+        storage_after > storage_before,
+        "fresh keys grow the backing"
+    );
     let before_steady = host.charged_bytes();
     host.eval_form("(a6-arm a6-tZ2)")
         .unwrap_or_else(|error| panic!("steady arm: {error}"));
     let steady = host.charged_bytes() - before_steady;
     assert_eq!(
-        growing, steady,
-        "serial growth stays uncharged: Sim is byte-for-byte the current path"
+        growing,
+        steady + storage_after - storage_before,
+        "serial and sealed edits both charge actual backing growth exactly once"
     );
 }
 
@@ -6718,6 +6766,20 @@ pub(crate) fn run_restricted_lisp_test<K, W>(
                 &mut host,
             )
         }
+        "c9_user_test_hold_refuses_clear_and_finish_while_held" => {
+            allocation_tables::c9_user_test_hold_refuses_clear_and_finish_while_held(&mut host)
+        }
+        "c9_user_test_hold_drop_releases_clear_and_finish" => {
+            allocation_tables::c9_user_test_hold_drop_releases_clear_and_finish(&mut host)
+        }
+        "c9_user_test_hold_refuses_retire_rooted_and_native_run_access" => {
+            allocation_tables::c9_user_test_hold_refuses_retire_rooted_and_native_run_access(
+                &mut host,
+            )
+        }
+        "c9_user_test_hold_drop_releases_retire_rooted" => {
+            allocation_tables::c9_user_test_hold_drop_releases_retire_rooted(&mut host)
+        }
         // The four b8 weak tests are not dispatcher arms. Their bodies stay in
         // weak_copy and weak_tables; eval's cfg(test) wrappers are the #[test] home.
         other => panic!("unknown restricted lisp test {other}"),
@@ -6732,6 +6794,9 @@ mod allocation_tables;
 
 #[path = "restricted_lisp/copy_oracle.rs"]
 mod copy_oracle;
+
+#[path = "restricted_lisp/test_support.rs"]
+mod test_support;
 
 mod weak_copy;
 mod weak_tables;

@@ -11,13 +11,18 @@
 //! returns that [`RootHandle`]. Resume continues the same [`FrameId`].
 //! This module starts no executor thread and is not reachable from serial
 //! dispatch.
+//!
+//! [`OwnerPoll`] is the production E2 safepoint capability: the stepper calls
+//! it at the form-return boundary (`poll_interp_call_entry`) and before every
+//! serial escape (`poll_serial_request`). It does not replace either existing
+//! suspension: the harness `PollBudget` and the [`SerialEscape`] record stay.
 
 #![allow(dead_code)]
 
 use super::dispatch::primitive_slot_by_name;
 use super::effective::{
-    EffectivePlainKey, EffectiveRead, EffectiveWrite, EraId, OwnerSlotsMut, ShapeGeneration,
-    bound_effective, read_effective, write_effective,
+    EffectivePlainKey, EffectiveRead, EffectiveWrite, EraId, PlainAccess, ShapeGeneration,
+    bound_effective, effective_plain_read, read_effective, write_effective,
 };
 use super::frames::{
     FrameArena, FrameId, FramePublishError, HandlerMark, InterpFrame, OwnerRecordMark, PollBudget,
@@ -29,18 +34,66 @@ use crate::emacs_core::builtins::{
     builtin_stringp_1, builtin_treesit_available_p,
 };
 use crate::emacs_core::builtins_extra::builtin_byteorder;
+use crate::emacs_core::bytecode::Op;
 use crate::emacs_core::eval::Context;
+use crate::emacs_core::eval::world::poll::PollOutcome;
 use crate::emacs_core::subr::effect_schema::{ParallelArm, SealedAuthority, WorldSplit};
 use neovm_text::emacs_core::xml::builtin_libxml_available_p;
 use neovm_text::emacs_core::zlib::builtin_zlib_available_p;
 use neovm_value::error::{EvalResult, Flow, expect_args};
 use neovm_value::tagged::SymbolMode;
-use neovm_value::value::Value;
+use neovm_value::tagged::gc::RendezvousError;
+use neovm_value::value::{Value, symbol_id};
 use std::num::NonZeroU32;
 
 /// One serial-escape request. The real production trait arrives with READY-E2B.
 pub(crate) trait SerialEscape {
     fn escape(&mut self, request: EscapeRequest);
+}
+
+/// Production E2 safepoint capability (E4-DESIGN §5).
+///
+/// The engine calls these at the edges it already crosses; the impl owns the
+/// [`Mutator`](neovm_value::tagged::gc::Mutator) and builds the whole
+/// `publish_scan` batch on the slow path. The methods return
+/// [`PollOutcome`] and never build or hold a root themselves.
+///
+/// [`Mutator::poll`](neovm_value::tagged::gc::Mutator::poll) retries `Busy`
+/// internally; an `Err` that reaches the engine is a genuine owner refusal
+/// and becomes [`EngineFault::Poll`].
+///
+/// # Publication invariant (R1)
+///
+/// At every call, each Lisp [`Value`] that must survive the poll is reachable
+/// either from the published [`FrameArena`] or from an owner record the
+/// production impl includes in its batch. A caller, or a production holder,
+/// must not carry an unrooted `Value` across the call.
+///
+/// The harness satisfies this by construction at its three sites: the form is
+/// the top frame's `cursor`, the previous body is the frame's `body`, and an
+/// escape's form is reachable from `cursor`. `Stage1`'s `slots`, `ops` and
+/// `escape` fields and the `&mut Context` argument are **outside**
+/// `publish_scan`; a production executor must publish them or prove them
+/// value-free at a poll.
+///
+/// One existing escape edge shows the boundary of the proof: `eval_arg_list`
+/// calls `record` (and so [`OwnerPoll::serial_request`]) while its
+/// `args` vector holds earlier arguments. That vector is abandoned on the
+/// escape path (the engine drops it without storing it), and every element is
+/// a quoted payload or a literal atom that is a sub-object of the frame's
+/// cursor form, so nothing in it needs to survive the poll. A caller may not
+/// generalize that: a value that is stored after the poll must be rooted
+/// before it.
+pub(crate) trait OwnerPoll {
+    /// Compound-form entry: every form `eval_call` receives, including the
+    /// `quote`/`progn` special cases.
+    fn interp_call_entry(&mut self, arena: &FrameArena) -> Result<PollOutcome, RendezvousError>;
+
+    /// The `progn` body step: one poll per form fetched into a frame's cursor.
+    fn interp_back_edge(&mut self, arena: &FrameArena) -> Result<PollOutcome, RendezvousError>;
+
+    /// The edge immediately before a serial escape is recorded.
+    fn serial_request(&mut self, arena: &FrameArena) -> Result<PollOutcome, RendezvousError>;
 }
 
 /// Why the harness refused to run a form.
@@ -90,6 +143,13 @@ pub(crate) trait SealedOps {
     fn read_header_word(&mut self, ctx: &mut Context, name: &str, args: &[Value]) -> CoreOutcome;
 }
 
+/// Which record LIFO an [`EngineFault::EscapeRecordContract`] names.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum RecordStack {
+    Bindings,
+    Handlers,
+}
+
 /// Why the stepper stopped before a Lisp value.
 #[derive(Debug)]
 pub(crate) enum EngineFault {
@@ -102,6 +162,44 @@ pub(crate) enum EngineFault {
     NoFrame,
     Frame(FramePublishError),
     Root(RootPublishError),
+    /// A [`OwnerPoll`] edge refused. `Busy` is retried inside `Mutator::poll`,
+    /// so this is a genuine refusal. [`Stage1::settle`] unwinds it to `Idle`.
+    Poll(RendezvousError),
+    /// A VM escape completion reported operand counts other than the
+    /// opcode's static stack effect (VM-EXECUTOR-DESIGN r1 R3). Nothing was
+    /// applied: the fault is raised before the record LIFOs or the segment.
+    EscapeStackEffect {
+        op: Op,
+        expected_consumed: u16,
+        expected_produced: u16,
+        got_consumed: u16,
+        got_produced: u16,
+    },
+    /// A VM escape completion consumes more operands than the frame's
+    /// segment holds. Nothing was applied.
+    EscapeStackUnderflow {
+        op: Op,
+        consumed: u16,
+        available: u16,
+    },
+    /// A VM escape completion's serial tokens are not the top run of the
+    /// named LIFO (r1 R1). Both LIFOs are checked before either is touched,
+    /// so nothing was applied.
+    EscapeRecordContract(RecordStack),
+    /// The dispatch table admitted an opcode, or an escape returned a
+    /// completion shape, this executor has no arm for.
+    DispatchContract(Op),
+}
+
+/// Why a plain slot access stopped before it touched the slot.
+#[derive(Debug)]
+pub(crate) enum PlainStop {
+    /// The key was stale. The same [`EscapeRequest`] was recorded with the
+    /// escape handler.
+    Escape(EscapeRequest),
+    /// The serial-request poll refused. The caller abandons the access; a
+    /// driving path unwinds through [`Stage1::settle`].
+    Poll(RendezvousError),
 }
 
 /// A finished step. `pending` is a [`RootHandle`] from [`RootRegistry::push`].
@@ -122,6 +220,15 @@ pub(crate) enum StepOutcome {
     },
     /// The serial core signaled. This is not an escape and not a substitute value.
     Signaled(Flow),
+    /// A bare Plain symbol whose owner slot is a local void binding.
+    ///
+    /// GNU's bare-symbol evaluation reaches `Fsymbol_value`, which signals
+    /// `void-variable` with the symbol as its only datum (`eval.c:2584-2592`,
+    /// `data.c:1645-1657`). This is a typed outcome, not an unsupported-form
+    /// escape; the caller raises the signal.
+    VoidVariable {
+        symbol: Value,
+    },
     Fault(EngineFault),
 }
 
@@ -156,13 +263,15 @@ enum FormStep {
 
 const DEPTH_LIMIT: u32 = 32;
 
-/// The harness stepper. `S` is the owner slot view. Tests supply the escape
-/// double and the sealed-ops impl.
-pub(crate) struct Stage1<S, E, O> {
+/// The harness stepper. `S` is the owner slot view, `P` the production poll
+/// capability. Tests supply the escape and poll doubles and the sealed-ops
+/// impl.
+pub(crate) struct Stage1<S, E, O, P> {
     arena: FrameArena,
     slots: S,
     escape: E,
     ops: O,
+    poll: P,
     era: EraId,
     shape: ShapeGeneration,
     interval: NonZeroU32,
@@ -170,18 +279,27 @@ pub(crate) struct Stage1<S, E, O> {
     state: RunState,
 }
 
-impl<S, E, O> Stage1<S, E, O>
+impl<S, E, O, P> Stage1<S, E, O, P>
 where
-    S: OwnerSlotsMut,
+    S: PlainAccess,
     E: SerialEscape,
     O: SealedOps,
+    P: OwnerPoll,
 {
-    pub(crate) fn new(slots: S, escape: E, ops: O, era: EraId, shape: ShapeGeneration) -> Self {
+    pub(crate) fn new(
+        slots: S,
+        escape: E,
+        ops: O,
+        poll: P,
+        era: EraId,
+        shape: ShapeGeneration,
+    ) -> Self {
         Self {
             arena: FrameArena::new(DEPTH_LIMIT),
             slots,
             escape,
             ops,
+            poll,
             era,
             shape,
             interval: NonZeroU32::MIN,
@@ -192,6 +310,20 @@ where
 
     pub(crate) fn escape_handler(&self) -> &E {
         &self.escape
+    }
+
+    pub(crate) fn poll_handler(&self) -> &P {
+        &self.poll
+    }
+
+    pub(crate) fn slots(&self) -> &S {
+        &self.slots
+    }
+
+    /// Release the poll capability. An owner-backed impl returns its
+    /// [`Mutator`](neovm_value::tagged::gc::Mutator) so the caller retires it.
+    pub(crate) fn into_poll(self) -> P {
+        self.poll
     }
 
     pub(crate) fn lookup_root(&mut self, handle: RootHandle) -> Option<Value> {
@@ -270,7 +402,7 @@ where
         &mut self,
         key: &EffectivePlainKey<'_>,
         canonical: impl FnOnce() -> Value,
-    ) -> Result<EffectiveRead, EscapeRequest> {
+    ) -> Result<EffectiveRead, PlainStop> {
         self.guard_key(key)?;
         Ok(read_effective(&self.slots, key, canonical))
     }
@@ -280,7 +412,7 @@ where
         key: &EffectivePlainKey<'_>,
         value: Value,
         canonical: impl FnOnce(Value),
-    ) -> Result<EffectiveWrite, EscapeRequest> {
+    ) -> Result<EffectiveWrite, PlainStop> {
         self.guard_key(key)?;
         Ok(write_effective(&mut self.slots, key, value, canonical))
     }
@@ -289,21 +421,29 @@ where
         &mut self,
         key: &EffectivePlainKey<'_>,
         canonical_bound: impl FnOnce() -> bool,
-    ) -> Result<bool, EscapeRequest> {
+    ) -> Result<bool, PlainStop> {
         self.guard_key(key)?;
         Ok(bound_effective(&self.slots, key, canonical_bound))
     }
 
-    fn guard_key(&mut self, key: &EffectivePlainKey<'_>) -> Result<(), EscapeRequest> {
+    /// Apply the pure key rule. A valid key never polls: its caller may hold
+    /// an unrooted value on the Rust stack (for example `write_plain`'s
+    /// `value`), and `publish_scan` cannot see it. Only the stale-key path
+    /// polls, immediately before recording the escape that abandons the
+    /// access; a refusal then records no escape.
+    fn guard_key(&mut self, key: &EffectivePlainKey<'_>) -> Result<(), PlainStop> {
         if key.is_valid_for(self.era, self.shape) {
             return Ok(());
+        }
+        if let Err(error) = self.poll.serial_request(&self.arena) {
+            return Err(PlainStop::Poll(error));
         }
         let request = EscapeRequest {
             class: EscapeClass::StaleEffectiveKey,
             form: Value::NIL,
         };
         self.escape.escape(request);
-        Err(request)
+        Err(PlainStop::Escape(request))
     }
 
     fn drive(&mut self, ctx: &mut Context) -> StepOutcome {
@@ -348,6 +488,12 @@ where
                     .is_none()
                 {
                     return StepOutcome::Fault(EngineFault::StaleFrame);
+                }
+                // The `progn` body step. Both live values were just stored on
+                // the top frame: `form` is its cursor, `rest` its body, and
+                // `publish_scan` walks both. Nothing else is live here.
+                if let Err(error) = self.poll.interp_back_edge(&self.arena) {
+                    return StepOutcome::Fault(EngineFault::Poll(error));
                 }
                 continue;
             }
@@ -405,8 +551,15 @@ where
         TopFinish::Continued { parent: parent_id }
     }
 
-    /// Poll after a completed form. A finished frame does not suspend.
+    /// Poll after a completed form, beside the harness suspension. A finished
+    /// frame does not suspend.
     fn after_form(&mut self, id: FrameId) -> Option<StepOutcome> {
+        // The production poll is unconditional and runs before the budget.
+        // A `Resumed` outcome continues this same frame with its budget
+        // untouched; the harness `PollBudget` below still owns suspension.
+        if let Err(error) = self.poll.interp_call_entry(&self.arena) {
+            return Some(StepOutcome::Fault(EngineFault::Poll(error)));
+        }
         let more = match self.arena.interp(id) {
             Some(frame) => !frame.body.is_nil(),
             None => return Some(StepOutcome::Fault(EngineFault::StaleFrame)),
@@ -469,12 +622,54 @@ where
             return self.eval_call(ctx, form);
         }
         if form.is_symbol(SymbolMode::Bare) && !form.is_nil() && form != Value::T {
-            return FormStep::Stop(self.record(EscapeClass::UnsupportedForm, form));
+            return self.eval_plain_symbol(form);
         }
         FormStep::Value(form)
     }
 
+    /// A bare symbol is a Plain variable read through the composed rule. A
+    /// refused admission is one serial escape; a local void binding is a
+    /// typed void-variable outcome; a missing symbol id cannot name an
+    /// admitted variable.
+    fn eval_plain_symbol(&mut self, form: Value) -> FormStep {
+        let Some(sym) = symbol_id(&form, SymbolMode::Bare) else {
+            return FormStep::Stop(self.record(EscapeClass::UnsupportedForm, form));
+        };
+        let admission = self.slots.admission(sym);
+        let key = match EffectivePlainKey::from_admission(&admission, self.era, self.shape) {
+            Ok(key) => key,
+            Err(_) => return FormStep::Stop(self.record(EscapeClass::UnsupportedForm, form)),
+        };
+        match self.read_plain_access(&key) {
+            Ok(EffectiveRead::OwnerBound(value) | EffectiveRead::Canonical(value)) => {
+                FormStep::Value(value)
+            }
+            Ok(EffectiveRead::OwnerVoid) => {
+                FormStep::Stop(StepOutcome::VoidVariable { symbol: form })
+            }
+            Err(PlainStop::Escape(request)) => FormStep::Stop(StepOutcome::Escaped(request)),
+            Err(PlainStop::Poll(error)) => {
+                FormStep::Stop(StepOutcome::Fault(EngineFault::Poll(error)))
+            }
+        }
+    }
+
+    /// Read through the composed owner access; only a stale cached key polls.
+    fn read_plain_access(
+        &mut self,
+        key: &EffectivePlainKey<'_>,
+    ) -> Result<EffectiveRead, PlainStop> {
+        self.guard_key(key)?;
+        Ok(effective_plain_read(&self.slots, key))
+    }
+
     fn eval_call(&mut self, ctx: &mut Context, form: Value) -> FormStep {
+        // Compound-form entry, before head resolution or argument evaluation.
+        // `form` is the top frame's cursor, so `publish_scan` already sees it;
+        // no argument vector exists yet.
+        if let Err(error) = self.poll.interp_call_entry(&self.arena) {
+            return FormStep::Stop(StepOutcome::Fault(EngineFault::Poll(error)));
+        }
         let head = form.cons_car();
         let tail = form.cons_cdr();
         let Some(name) = head.as_symbol_name(SymbolMode::Bare) else {
@@ -572,14 +767,19 @@ where
     }
 
     fn record(&mut self, class: EscapeClass, form: Value) -> StepOutcome {
+        // The serial-request poll runs first. It does not replace the escape:
+        // a successful poll still records exactly one `EscapeRequest`.
+        if let Err(error) = self.poll.serial_request(&self.arena) {
+            return StepOutcome::Fault(EngineFault::Poll(error));
+        }
         let request = EscapeRequest { class, form };
         self.escape.escape(request);
         StepOutcome::Escaped(request)
     }
 
     /// `Done` and `Suspended` already published their state. An escape keeps
-    /// the top frame. A signal, a missing core, or a fault drops every frame
-    /// and root this run pushed.
+    /// the top frame. A signal, a void variable, a missing core, or a fault
+    /// drops every frame and root this run pushed.
     fn settle(&mut self, outcome: StepOutcome) -> StepOutcome {
         match &outcome {
             StepOutcome::Done { .. } | StepOutcome::Suspended { .. } => {}
@@ -592,7 +792,10 @@ where
                 }
             }
             StepOutcome::Fault(EngineFault::Busy | EngineFault::Poisoned) => {}
-            StepOutcome::MissingCore { .. } | StepOutcome::Signaled(_) | StepOutcome::Fault(_) => {
+            StepOutcome::MissingCore { .. }
+            | StepOutcome::VoidVariable { .. }
+            | StepOutcome::Signaled(_)
+            | StepOutcome::Fault(_) => {
                 if let Err(fault) = self.unwind_to_idle() {
                     return StepOutcome::Fault(fault);
                 }

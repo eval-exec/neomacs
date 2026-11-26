@@ -182,13 +182,8 @@ pub struct InlineSwitchKey {
 /// A key node's bits as an inline immediate, or `None` for a heap object's
 /// identity (an `eq`/`eql` key), whose address JIT code must not bake.
 fn inline_immediate(bits: usize) -> Option<InlineKeyNode> {
-    (bits & TAG_MASK == TAG_SYMBOL
-        || unsafe {
-            /* SAFETY: value-internal construction from a real Value */
-            Value::from_bits(bits)
-        }
-        .is_fixnum())
-    .then_some(InlineKeyNode::Imm(bits))
+    (bits & TAG_MASK == TAG_SYMBOL || Value::bits_are_fixnum(bits))
+        .then_some(InlineKeyNode::Imm(bits))
 }
 
 /// How a planned table answers; for tracing and tests.

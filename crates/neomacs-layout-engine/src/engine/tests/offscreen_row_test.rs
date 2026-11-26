@@ -89,6 +89,7 @@ fn unseen_row_worker_glyphs_match_canonical_window_body() {
         context,
         &mut attempt,
         || false,
+        StringSourceRootScope::Rooted(eval.owned_root_retainer()),
     )
     .unwrap();
     let mut realizer = DisplayRowFaceRealizer::new(&mut engine.font_metrics);
@@ -170,6 +171,7 @@ fn unseen_row_worker_glyphs_match_canonical_window_body() {
             window.0,
             window_bounds,
             ncols,
+            crate::bidi::ParagraphDirection::Auto,
             mode,
         )
     })
@@ -353,6 +355,21 @@ fn first_visit_worker_page_resolves_overlay_category_faces() {
 }
 
 #[test]
+fn worker_overlay_category_shorter_face_matches_fresh_viewport_fill() {
+    first_visit_with_setup(
+        None,
+        "ordinary offscreen text\n",
+        None,
+        0,
+        5,
+        Some(
+            "(progn (put 'worker-short-overlay-cat 'face '(:height 80 :slant italic))
+                 (overlay-put (make-overlay 2761 3600) 'category 'worker-short-overlay-cat))",
+        ),
+    );
+}
+
+#[test]
 fn worker_capture_rejects_overlay_replacements_and_excessive_overlap() {
     use crate::row_layout::program::RowProgramError;
     for (setup, expected) in [
@@ -434,7 +451,7 @@ fn first_visit_with_setup(
     point_row: usize,
     setup: Option<&str>,
 ) {
-    first_visit_with_setup_and_gc(face, line, change, shift, point_row, setup, false);
+    let _ = first_visit_with_setup_and_gc(face, line, change, shift, point_row, setup, false);
 }
 
 fn first_visit_with_setup_and_gc(
@@ -445,7 +462,7 @@ fn first_visit_with_setup_and_gc(
     point_row: usize,
     setup: Option<&str>,
     collect: bool,
-) {
+) -> BackendLayoutTrace {
     let (mut eval, frame, buffer, window) = incr_editing_frame(&line.repeat(300), 800, 600);
     eval.frame_manager_mut()
         .get_mut(frame)
@@ -574,6 +591,7 @@ fn first_visit_with_setup_and_gc(
     let mut fresh = engine_with_pinned_catalog(&fonts);
     fresh.layout_frame_rust(&mut eval, frame);
     assert_eq!(actual, selected_window_layout_trace(&eval, &fresh, frame));
+    actual
 }
 
 #[test]
@@ -851,6 +869,60 @@ fn idle_worker_rows_cover_fractional_scroll_placement() {
 fn idle_worker_fractional_scroll_preserves_mixed_face_geometry() {
     for step in [0, 1, 3] {
         idle_first_visit_projected(false, false, Some(step), true, 4);
+    }
+}
+
+#[test]
+fn idle_worker_fractional_scroll_widens_for_shorter_face_at_window_start() {
+    let line = "ordinary offscreen text\n";
+    let (mut eval, frame, buffer, window) = incr_editing_frame(&line.repeat(300), 800, 600);
+    eval.frame_manager_mut()
+        .get_mut(frame)
+        .unwrap()
+        .window_system = Some(Value::symbol("neomacs"));
+    eval.eval_str(
+        "(progn
+            (put-text-property 1 70 'face '(:height 80))
+            (put-text-property 277 690 'face '(:height 80 :weight bold)))",
+    )
+    .unwrap();
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
+    engine.layout_frame_rust(&mut eval, frame);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while engine.maintain_scroll_coverage(&eval).is_some() {
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::yield_now();
+    }
+    for step in [0usize, 1] {
+        let start = step * line.len();
+        scroll_window_to(
+            &mut eval,
+            frame,
+            window,
+            buffer,
+            start as i64 + 1,
+            start + 5 * line.len(),
+        );
+        if let neovm_core::window::Window::Leaf {
+            force_start,
+            vscroll,
+            ..
+        } = eval
+            .frame_manager_mut()
+            .get_mut(frame)
+            .unwrap()
+            .find_window_mut(window)
+            .unwrap()
+        {
+            *force_start = true;
+            *vscroll = -4;
+        }
+        engine.layout_frame_rust(&mut eval, frame);
+        assert_eq!(engine.last_layout_stats().prepared_windows, 1);
+        let actual = selected_window_layout_trace(&eval, &engine, frame);
+        let mut fresh = crate::font::metrics::test_catalog::layout_engine();
+        fresh.layout_frame_rust(&mut eval, frame);
+        assert_eq!(actual, selected_window_layout_trace(&eval, &fresh, frame));
     }
 }
 
@@ -1185,6 +1257,19 @@ fn worker_page_is_rejected_after_category_symbol_properties_change() {
             "(progn (put 'worker-overlay-category 'face '(:height 125)) (overlay-put (make-overlay 2761 3100) 'category 'worker-overlay-category))",
         ),
     );
+}
+
+#[test]
+fn worker_shorter_face_page_fills_viewport_beyond_frame_font_rows() {
+    for face in ["(:height 70)", "(:family \"serif\" :height 70)"] {
+        first_visit_with_setup(Some(face), "ordinary offscreen text\n", None, 0, 2, None);
+    }
+}
+
+#[test]
+fn worker_prepares_right_truncated_rows_matching_fresh_layout() {
+    let line = format!("{}\n", "ordinary offscreen text ".repeat(6));
+    first_visit_with_setup(None, &line, None, 0, 2, Some("(setq truncate-lines t)"));
 }
 
 #[test]
@@ -2256,16 +2341,80 @@ fn worker_prepares_long_unicode_source_fragments() {
         "👩‍💻 words ",
     ] {
         for wrap in ["nil", "t"] {
+            // Each physical line can wrap into up to 8 tall (34px) rows under
+            // wider default fonts (e.g. macOS); physical line 1 stays fully
+            // inside the 600px viewport while line 2 can land on a partially
+            // clipped bottom row where `force_start` must decline replay.
             first_visit_with_setup(
                 None,
                 &format!("{}\n", text.repeat(30)),
                 None,
                 0,
-                2,
+                1,
                 Some(&format!("(setq word-wrap {wrap})")),
             );
         }
     }
+}
+
+#[test]
+fn forced_start_replay_declines_point_on_clipped_bottom_row() {
+    let line = "ordinary offscreen text\n";
+    let fonts = pinned_unicode_catalog();
+    let mut verified_clipped = false;
+    for height in [600, 605, 610] {
+        let (mut eval, frame, _buffer, window) = incr_editing_frame(&line.repeat(300), 800, height);
+        eval.frame_manager_mut()
+            .get_mut(frame)
+            .unwrap()
+            .window_system = Some(Value::symbol("neomacs"));
+        let start = 120 * line.len();
+        let mut engine = engine_with_pinned_catalog(&fonts);
+        engine.layout_frame_rust(&mut eval, frame);
+        engine
+            .request_scroll_coverage(&eval, frame, window, CharPos0::new(start))
+            .unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !engine
+            .scroll_coverage
+            .drain(&mut engine.prepared_viewports)
+            .expect("worker coverage failed")
+        {
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::yield_now();
+        }
+        let display_window = neomacs_display_protocol::types::DisplayWindowId::new(window.0 as i64);
+        let mut key = engine.retained_window_matrices[&display_window].key.clone();
+        key.window_start = start as i64;
+        key.point = (start + line.len()) as i64;
+        let (replay, _, _) = engine
+            .prepared_viewports
+            .replay(frame, display_window, &key, true)
+            .expect("fully visible interior row must replay under force_start");
+        let body = key.partition.text_body();
+        let outer_y = engine.retained_window_matrices[&display_window]
+            .display_snapshot
+            .regions
+            .outer
+            .y;
+        let last_row = &replay.body_rows.last().expect("prepared body rows").1;
+        if outer_y + last_row.pixel_y + last_row.height_px > body.y + body.height {
+            key.point = last_row.start_charpos as i64;
+            assert!(
+                engine
+                    .prepared_viewports
+                    .replay(frame, display_window, &key, true)
+                    .is_none(),
+                "force_start replay must decline a point on a partially clipped bottom row"
+            );
+            verified_clipped = true;
+            break;
+        }
+    }
+    assert!(
+        verified_clipped,
+        "at least one frame height must produce a partially clipped bottom row"
+    );
 }
 
 #[test]
@@ -2657,6 +2806,26 @@ fn worker_prepares_bounded_invisible_spans_and_ellipses() {
 }
 
 #[test]
+fn worker_splits_clipped_overlay_after_string_after_invisible_ellipsis() {
+    for prefix in [34, 38, 42, 46, 50, 54] {
+        let line = format!("{}hidden{}tail words\n", "W".repeat(prefix), " ".repeat(2));
+        let start = 120 * line.len() + 1;
+        let setup = format!(
+            r#"(progn (setq word-wrap nil buffer-invisibility-spec '((worker-hidden . t)))
+            (let ((p {start})) (while (< p {})
+                (let ((o (make-overlay (+ p {prefix}) (+ p {}))))
+                    (overlay-put o 'invisible 'worker-hidden)
+                    (overlay-put o 'after-string "edge-after-long-string"))
+                (setq p (+ p {})))))"#,
+            start + 12 * line.len(),
+            prefix + 6,
+            line.len()
+        );
+        first_visit_with_setup_and_gc(None, &line, None, 0, 2, Some(&setup), false);
+    }
+}
+
+#[test]
 fn worker_invisible_spans_preserve_wrapping_faces_and_boundary_strings() {
     for overlay in [false, true] {
         for wrap in ["nil", "t"] {
@@ -2693,6 +2862,138 @@ fn worker_invisible_spans_preserve_wrapping_faces_and_boundary_strings() {
                 true,
             );
         }
+    }
+}
+
+#[test]
+fn worker_word_wrapped_clipped_invisible_ellipsis_matches_fresh_layout() {
+    // Probe the 800px GUI window under the pinned catalog directly (works for
+    // both monospace macOS and proportional Linux NotoSans fonts) to find exact
+    // prefix lengths where `prefix` fits on row 0 and `prefix + "..."` clips.
+    let probe_fonts = pinned_unicode_catalog();
+    let fits_one_row = |sample: &str| -> bool {
+        let (mut eval, frame, _, _) = incr_editing_frame(sample, 800, 600);
+        eval.frame_manager_mut()
+            .get_mut(frame)
+            .unwrap()
+            .window_system = Some(Value::symbol("neomacs"));
+        eval.eval_str("(setq truncate-lines nil word-wrap nil)")
+            .unwrap();
+        let mut engine = engine_with_pinned_catalog(&probe_fonts);
+        engine.layout_frame_rust(&mut eval, frame);
+        let trace = selected_window_layout_trace(&eval, &engine, frame);
+        let text_rows: Vec<_> = trace
+            .matrix_rows
+            .iter()
+            .filter(|row| {
+                row.enabled
+                    && row.role == neomacs_display_protocol::frame_glyphs::GlyphRowRole::Text
+            })
+            .collect();
+        text_rows.len() == 1 && !text_rows[0].continued
+    };
+    let find_clipping_lead = |suffix: &str| -> String {
+        let mut lo = 1usize;
+        let mut hi = 200usize;
+        while lo < hi {
+            let mid = lo + (hi - lo).div_ceil(2);
+            if fits_one_row(&format!("{}{suffix}", "a".repeat(mid))) {
+                lo = mid;
+            } else {
+                hi = mid - 1;
+            }
+        }
+        let lead = "a".repeat(lo);
+        assert!(
+            fits_one_row(&format!("{lead}{suffix}")),
+            "prefix must fit on row 0 before ellipsis"
+        );
+        assert!(
+            !fits_one_row(&format!("{lead}{suffix}...")),
+            "prefix + ellipsis must clip row 0 (suffix={suffix:?}, lead_len={lo})"
+        );
+        lead
+    };
+
+    // Case 1: word before hidden span (`lead_word + " " + word` fits on row 0,
+    // `...` clips). Row 0 must break at the space with 0 dots and move
+    // `bbbbbbbb...TAIL` whole onto row 1.
+    // Case 2: space immediately before hidden span (`lead_space + " "` fits on
+    // row 0, `...` clips). Row 0 must have 0 dots, advance end_charpos past the
+    // hidden span, and start row 1 with `...TAIL`.
+    let word = "b".repeat(8);
+    let lead_word = find_clipping_lead(&format!(" {word}"));
+    let lead_space = find_clipping_lead(" ");
+    let hidden = "hidden";
+    let tail = "TAIL";
+    for (prefix, expected_row0, expected_row1, expected_end_offset) in [
+        (
+            format!("{lead_word} {word}"),
+            lead_word.clone(),
+            format!("{word}...{tail}"),
+            lead_word.len() + 1,
+        ),
+        (
+            format!("{lead_space} "),
+            lead_space.clone(),
+            format!("...{tail}"),
+            lead_space.len() + 1 + hidden.len(),
+        ),
+    ] {
+        let line = format!("{prefix}{hidden}{tail}\n");
+        let start_0 = 120 * line.len();
+        let start = start_0 + 1;
+        let hs = prefix.len();
+        let he = hs + hidden.len();
+        let trace = first_visit_with_setup_and_gc(
+            None,
+            &line,
+            None,
+            0,
+            2,
+            Some(&format!(
+                "(progn (setq truncate-lines nil word-wrap t buffer-invisibility-spec '((worker-hidden . t)))
+                (let ((p {start})) (while (< p {})
+                    (put-text-property (+ p {hs}) (+ p {he}) 'invisible 'worker-hidden)
+                    (setq p (+ p {})))))",
+                start + 40 * line.len(),
+                line.len(),
+            )),
+            false,
+        );
+        let rows = row_texts(&trace);
+        assert!(
+            rows.len() >= 2,
+            "expected wrapped rows on prepared GUI page, rows={rows:?}"
+        );
+        assert_eq!(
+            rows[0].trim_end(),
+            expected_row0,
+            "GUI worker/fresh row 0 must break at the word boundary with zero ellipsis dots, rows={rows:?}"
+        );
+        assert_eq!(
+            rows[1].trim_end(),
+            expected_row1,
+            "GUI worker/fresh row 1 must receive the whole moved word/ellipsis + tail, rows={rows:?}"
+        );
+        let text_rows: Vec<_> = trace
+            .matrix_rows
+            .iter()
+            .filter(|row| {
+                row.enabled
+                    && row.role == neomacs_display_protocol::frame_glyphs::GlyphRowRole::Text
+            })
+            .collect();
+        assert!(
+            text_rows[0].continued,
+            "GUI worker/fresh row 0 must be marked continued"
+        );
+        assert_eq!(
+            text_rows[0].end_charpos,
+            start_0 + expected_end_offset,
+            "GUI worker/fresh row 0 end_charpos must land at the GNU word-wrap boundary"
+        );
+        assert_eq!(text_rows[1].start_charpos, text_rows[0].end_charpos);
     }
 }
 
@@ -2839,6 +3140,261 @@ fn idle_worker_publishes_a_closed_prefix_before_full_page_capture() {
         "withdraw stale prefix"
     );
     assert!(!engine.prepared_viewports.has_computed(frame, owner));
+}
+
+#[test]
+fn idle_worker_prefix_publication_does_not_repeat_logical_redisplay() {
+    use std::cell::{Cell, RefCell};
+    use std::rc::Rc;
+
+    // Context callbacks own engine references. Remove them before dropping
+    // the engine's worker/root leases, then drop the heap-owning Context.
+    struct Fixture {
+        engine: Rc<RefCell<LayoutEngine>>,
+        eval: Context,
+    }
+    impl Drop for Fixture {
+        fn drop(&mut self) {
+            self.eval.display_idle_maintenance_fn = None;
+            self.eval.redisplay_fn = None;
+        }
+    }
+
+    let _policy = neovm_core::emacs_core::eval::RedisplayHookPolicyGuard::gnu();
+    let line = "ordinary offscreen text\n";
+    let (mut eval, frame, _, window) = incr_editing_frame(&line.repeat(300), 800, 600);
+    assert!(eval.frame_manager_mut().select_frame(frame));
+    eval.frame_manager_mut()
+        .get_mut(frame)
+        .unwrap()
+        .window_system = Some(Value::symbol("neomacs"));
+    eval.eval_str(
+        "(progn
+           (setq worker-raise-spec (list 'raise 0.25)
+                 worker-publication-pre-count 0
+                 worker-publication-mode-line-count 0
+                 timer-list nil timer-idle-list nil
+                 mode-line-format
+                 '((:eval (progn
+                            (setq worker-publication-mode-line-count
+                                  (1+ worker-publication-mode-line-count))
+                            \"aux-mode-line\")))
+                 pre-redisplay-function
+                 (lambda (_windows)
+                   (setq worker-publication-pre-count
+                         (1+ worker-publication-pre-count))))
+           (put-text-property 1 (point-max) 'display worker-raise-spec))",
+    )
+    .unwrap();
+    let mut fixture = Fixture {
+        engine: Rc::new(RefCell::new(
+            crate::font::metrics::test_catalog::layout_engine(),
+        )),
+        eval,
+    };
+    let producer_calls = Rc::new(Cell::new(0));
+    let produced = Rc::clone(&producer_calls);
+    let producer = Rc::clone(&fixture.engine);
+    fixture.eval.redisplay_fn = Some(Box::new(move |eval| {
+        produced.set(produced.get() + 1);
+        let mut engine = producer.borrow_mut();
+        // Count the actual renderer-facing frame producer, including its
+        // accepted GNU body state and real native presentation activation.
+        engine.layout_frame_rust(eval, frame);
+        activate_last_engine_presentation(eval, &engine, frame);
+    }));
+    fixture.eval.redisplay().expect("initial logical redisplay");
+    let pre_count = |eval: &Context| {
+        eval.builtin_var_value_by_name("worker-publication-pre-count")
+            .unwrap()
+            .as_fixnum()
+            .unwrap()
+    };
+    let mode_line_count = |eval: &Context| {
+        eval.builtin_var_value_by_name("worker-publication-mode-line-count")
+            .unwrap()
+            .as_fixnum()
+            .unwrap()
+    };
+    assert_eq!(producer_calls.get(), 1, "the initial producer actually ran");
+    assert_eq!(
+        pre_count(&fixture.eval),
+        1,
+        "the initial Lisp hook actually ran"
+    );
+    assert!(
+        mode_line_count(&fixture.eval) >= 1,
+        "the initial mode-line :eval counter actually ran"
+    );
+    assert!(fixture.eval.gnu_redisplay_hooks_accepted_serial() > 0);
+    let initial_presentation = fixture
+        .eval
+        .frame_manager()
+        .get(frame)
+        .unwrap()
+        .active_presentation()
+        .expect("the initial frame was activated");
+    let before = selected_window_layout_trace(&fixture.eval, &fixture.engine.borrow(), frame);
+    let initial_producer_calls = producer_calls.get();
+    let initial_pre_count = pre_count(&fixture.eval);
+    let initial_mode_line_count = mode_line_count(&fixture.eval);
+    let initial_redisplay_generation = fixture.eval.redisplay_generation();
+    let publications = Rc::new(Cell::new(0));
+    let published = Rc::clone(&publications);
+    let delivered_updates = Rc::new(RefCell::new(Vec::new()));
+    let delivered = Rc::clone(&delivered_updates);
+    let maintenance = Rc::clone(&fixture.engine);
+    fixture.eval.display_idle_maintenance_fn = Some(Box::new(move |eval| {
+        use neovm_core::emacs_core::eval::{
+            DisplayMaintenanceOutcome, DisplayMaintenancePublication,
+        };
+        let mut engine = maintenance.borrow_mut();
+        let progress = engine.maintain_scroll_coverage(eval);
+        let publication = if engine.has_actionable_scroll_coverage_publication(eval) {
+            match engine.prepare_auxiliary_scroll_coverage(eval) {
+                AuxiliaryPreparation::Ready(prepared) => {
+                    delivered.borrow_mut().push(prepared.clone_update());
+                    engine.commit_auxiliary_scroll_coverage(prepared);
+                    published.set(published.get() + 1);
+                    DisplayMaintenancePublication::PublishedNatively
+                }
+                AuxiliaryPreparation::NoChange => DisplayMaintenancePublication::Idle,
+                AuxiliaryPreparation::Refused(refusal) => {
+                    panic!("expected eligible native auxiliary publication, got {refusal:?}")
+                }
+            }
+        } else {
+            DisplayMaintenancePublication::Idle
+        };
+        DisplayMaintenanceOutcome {
+            next_wake: progress.map(|progress| progress.next_wake()),
+            publication,
+        }
+    }));
+
+    let owner = DisplayWindowId::new(window.0 as i64);
+    let mut frontiers = Vec::new();
+    let mut extra_logical_work = Vec::new();
+    // The worker first publishes four closed rows, then an eight-row prefix.
+    // Preserve both publications before asserting the cost invariant, so a
+    // failure can establish the +2/+2 cascade rather than just the first call.
+    for expected_publications in 1_usize..=2 {
+        let target_rows = expected_publications * 4;
+        for _ in 0..target_rows {
+            let captured = fixture
+                .engine
+                .borrow()
+                .scroll_coverage
+                .active_capture_progress_for_test()
+                .map_or(0, |(_, _, rows)| rows);
+            if captured >= target_rows {
+                break;
+            }
+            assert!(
+                fixture
+                    .engine
+                    .borrow_mut()
+                    .maintain_scroll_coverage(&fixture.eval)
+                    .is_some()
+            );
+        }
+        assert_eq!(
+            fixture
+                .engine
+                .borrow()
+                .scroll_coverage
+                .active_capture_progress_for_test()
+                .expect("the source page is still being acquired")
+                .2,
+            target_rows,
+            "the actual worker publication contains the growing closed prefix"
+        );
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        loop {
+            let ready = {
+                let mut engine = fixture.engine.borrow_mut();
+                let engine = &mut *engine;
+                engine
+                    .scroll_coverage
+                    .drain(&mut engine.prepared_viewports)
+                    .unwrap()
+            };
+            if ready {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the actual growing worker prefix must complete"
+            );
+            std::thread::yield_now();
+        }
+        assert!(
+            fixture
+                .engine
+                .borrow()
+                .prepared_viewports
+                .has_computed(frame, owner)
+        );
+        // Do not consume the publication bool here: the real command-input
+        // maintenance path must own its decision to publish newly ready rows.
+        fixture
+            .eval
+            .display_idle_maintenance_deadline(true, false)
+            .unwrap();
+        assert_eq!(publications.get(), expected_publications);
+        let engine = fixture.engine.borrow();
+        let coverage = engine
+            .published_scroll_coverage(frame, owner)
+            .expect("the actual prefix was published to the engine-owned coverage record");
+        frontiers.push(coverage.content.matrix.rows.last().unwrap().end_charpos);
+        let delivered = delivered_updates.borrow();
+        let latest_update = delivered.last().expect("delivered auxiliary update");
+        assert_eq!(latest_update.base.get(), initial_presentation.get());
+        assert!(
+            latest_update
+                .surfaces
+                .iter()
+                .any(|surface| surface.coverage().content.window_id == owner
+                    && surface.coverage().publication == coverage.publication),
+            "the newly published coverage passed actual surface admission"
+        );
+        assert!(
+            engine
+                .last_frame_display_state
+                .as_ref()
+                .unwrap()
+                .scroll_coverage
+                .is_empty(),
+            "auxiliary publication must not mutate the sealed base FrameDisplayState"
+        );
+        assert_eq!(
+            before,
+            selected_window_layout_trace(&fixture.eval, &engine, frame)
+        );
+        assert_eq!(
+            mode_line_count(&fixture.eval),
+            initial_mode_line_count,
+            "auxiliary coverage publication must not re-evaluate mode-line :eval forms"
+        );
+        assert_eq!(
+            fixture.eval.redisplay_generation(),
+            initial_redisplay_generation,
+            "auxiliary coverage publication must not bump redisplay_generation"
+        );
+        extra_logical_work.push((
+            pre_count(&fixture.eval) - initial_pre_count,
+            producer_calls.get() - initial_producer_calls,
+        ));
+    }
+    assert!(
+        frontiers[1] > frontiers[0],
+        "the second prefix genuinely grew"
+    );
+    assert_eq!(
+        extra_logical_work,
+        vec![(0, 0), (0, 0)],
+        "fresh worker coverage publication must not rerun Lisp or the full frame producer"
+    );
 }
 
 #[test]
@@ -3166,6 +3722,63 @@ fn urgent_backward_bridge_publishes_after_one_physical_line() {
 }
 
 #[test]
+fn urgent_wrapping_line_keeps_the_four_line_bridge() {
+    // Long enough that one physical line is taller than a 200px window.
+    let line = format!("{}\n", "wrapped offscreen text ".repeat(60));
+    let (mut eval, frame, buffer, window) = incr_editing_frame(&line.repeat(400), 320, 200);
+    eval.frame_manager_mut()
+        .get_mut(frame)
+        .unwrap()
+        .window_system = Some(Value::symbol("neomacs"));
+    let origin = 120 * line.len();
+    let point = eval
+        .buffer_manager()
+        .get(buffer)
+        .unwrap()
+        .char_pos_to_emacs_byte_pos_clamped(CharPos0::new(origin + 100))
+        .get();
+    scroll_window_to(&mut eval, frame, window, buffer, origin as i64 + 1, point);
+    let set_hidden = |eval: &mut Context, hidden: i32| {
+        if let neovm_core::window::Window::Leaf {
+            force_start,
+            vscroll,
+            ..
+        } = eval
+            .frame_manager_mut()
+            .get_mut(frame)
+            .unwrap()
+            .find_window_mut(window)
+            .unwrap()
+        {
+            *force_start = true;
+            *vscroll = -hidden;
+        }
+    };
+    set_hidden(&mut eval, 8);
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
+    engine.layout_frame_rust(&mut eval, frame);
+    engine.maintain_scroll_coverage(&eval);
+    set_hidden(&mut eval, 4);
+    engine.layout_frame_rust(&mut eval, frame);
+    let key = &engine.retained_window_matrices
+        [&neomacs_display_protocol::types::DisplayWindowId::new(window.0 as i64)]
+        .key;
+    let body = key.partition.text_body();
+    let columns = (body.width / key.char_width.max(1.0)) as usize;
+    let visual_rows = line.len().div_ceil(columns.max(1));
+    assert!(
+        (visual_rows as f32) * key.char_height >= body.height,
+        "the physical line must be taller than the viewport"
+    );
+    engine.maintain_scroll_coverage(&eval);
+    assert_eq!(
+        engine.scroll_coverage.pending_source_start_for_test(),
+        Some(origin - 4 * line.len()),
+        "low backward headroom keeps the four-line bridge when the physical line is taller than the viewport"
+    );
+}
+
+#[test]
 fn rich_fractional_reversal_starts_the_nearest_physical_bridge() {
     check_short_urgent_backward_bridge(true);
 }
@@ -3185,7 +3798,28 @@ fn backward_preparation_follows_a_published_bridge_without_viewport_motion() {
     check_fractional_reversal_prepared_edge(false, true);
 }
 
+#[test]
+fn cocoa_shorter_face_fills_viewport_and_publishes_backward_bridge() {
+    check_fractional_reversal_prepared_edge_with_sizing(
+        false,
+        true,
+        crate::font::sizing::FontSizing::gnu_cocoa(),
+    );
+}
+
 fn check_fractional_reversal_prepared_edge(idle: bool, extend_again: bool) {
+    check_fractional_reversal_prepared_edge_with_sizing(
+        idle,
+        extend_again,
+        crate::font::sizing::FontSizing::native_gui(),
+    );
+}
+
+fn check_fractional_reversal_prepared_edge_with_sizing(
+    idle: bool,
+    extend_again: bool,
+    sizing: crate::font::sizing::FontSizing,
+) {
     let line = "ordinary offscreen text\n";
     let (mut eval, frame, buffer, window) = incr_editing_frame(&line.repeat(400), 800, 600);
     eval.frame_manager_mut()
@@ -3222,6 +3856,7 @@ fn check_fractional_reversal_prepared_edge(idle: bool, extend_again: bool) {
     };
     hide(&mut eval, 8);
     let mut engine = crate::font::metrics::test_catalog::layout_engine();
+    engine.set_font_sizing(sizing);
     engine.layout_frame_rust(&mut eval, frame);
     engine.maintain_scroll_coverage(&eval);
     let mut prepared_start = origin - line.len();
@@ -3352,6 +3987,7 @@ fn check_fractional_reversal_prepared_edge(idle: bool, extend_again: bool) {
     }
     assert_eq!(visible, selected_window_layout_trace(&eval, &engine, frame));
     let mut fresh = crate::font::metrics::test_catalog::layout_engine();
+    fresh.set_font_sizing(sizing);
     fresh.layout_frame_rust(&mut eval, frame);
     assert_eq!(visible, selected_window_layout_trace(&eval, &fresh, frame));
 }

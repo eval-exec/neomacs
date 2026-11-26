@@ -167,6 +167,10 @@ pub fn hoist_reads() -> bool {
 #[inline]
 #[doc(hidden)]
 pub fn reads_need_observation() -> bool {
+    #[cfg(any(debug_assertions, feature = "test-support"))]
+    if FORBID_OBSERVED_READS.with(Cell::get) != 0 {
+        return true;
+    }
     let policy = CAPTURE_SCOPES.load(Ordering::Relaxed);
     if policy == 0 {
         return false;
@@ -191,6 +195,8 @@ const MAX_DEPTH: usize = 8;
 
 thread_local! {
     static ACTIVE: Cell<bool> = const { Cell::new(false) };
+    #[cfg(any(debug_assertions, feature = "test-support"))]
+    static FORBID_OBSERVED_READS: Cell<usize> = const { Cell::new(0) };
     static RECENT_READS: RecentReads = const { RecentReads::new() };
     static STATE: store_state::StateSlot = store_state::StateSlot::default();
     #[cfg(any(test, feature = "test-support"))]
@@ -450,9 +456,23 @@ impl CollectionReads {
     }
 
     pub fn unchanged(&self) -> bool {
-        self.reads
-            .dependencies()
-            .is_some_and(|(reads, revision)| unchanged_since(reads, revision, self.owner.store()))
+        self.reads.validate(self.owner.store())
+    }
+
+    /// Actual full mutation-journal validations performed by this lease.
+    /// The counter stays in its pooled heap storage, outside redisplay TLS.
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn full_validation_invocations_for_test(&self) -> usize {
+        self.reads.full_validation_invocations_for_test()
+    }
+
+    /// Total mutation-journal slots scanned by this lease across incremental
+    /// validations. The counter stays in pooled heap storage, outside TLS.
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn journal_slots_scanned_for_test(&self) -> usize {
+        self.reads.journal_slots_scanned_for_test()
     }
 
     /// A nested cache hit reads its original dependencies transitively.
@@ -487,19 +507,35 @@ impl Drop for CollectionReads {
     }
 }
 
-fn unchanged_since(
+/// Check whether any journal slot in `(after_sequence, target_sequence]`
+/// mutated a dependency in `reads`.
+///
+/// Returns `(unchanged, slots_scanned)`. Callers must enforce the bounded
+/// `JOURNAL_SIZE` horizon from the certificate's original capture revision;
+/// `delta <= JOURNAL_SIZE` is also checked here defensively.
+fn unchanged_in_range(
     reads: &FxHashSet<usize>,
-    revision: LispCollectionRevision,
+    after_sequence: u64,
+    target_sequence: u64,
     store: &StoreState,
-) -> bool {
-    let count = store.sequence().wrapping_sub(revision.sequence());
-    if count > JOURNAL_SIZE as u64 {
-        return false;
+) -> (bool, usize) {
+    // An observation that read zero mutable collections cannot be invalidated
+    // by unrelated writes in its own World even after the bounded journal wraps.
+    if reads.is_empty() {
+        return (true, 0);
     }
-    (1..=count).all(|offset| {
-        let slot = revision.sequence().wrapping_add(offset) as usize % JOURNAL_SIZE;
-        !reads.contains(&store.journal()[slot].get())
-    })
+    let delta = target_sequence.wrapping_sub(after_sequence);
+    if delta > JOURNAL_SIZE as u64 {
+        return (false, 0);
+    }
+    let journal = store.journal();
+    for offset in 1..=delta {
+        let slot = after_sequence.wrapping_add(offset) as usize % JOURNAL_SIZE;
+        if reads.contains(&journal[slot].get()) {
+            return (false, offset as usize);
+        }
+    }
+    (true, delta as usize)
 }
 
 /// Nested observations contribute reads to their enclosing observation too.
@@ -649,6 +685,12 @@ impl Drop for CollectionReadScope {
 
 #[inline]
 pub(crate) fn observe(value: TaggedValue) {
+    #[cfg(any(debug_assertions, feature = "test-support"))]
+    assert_eq!(
+        FORBID_OBSERVED_READS.with(Cell::get),
+        0,
+        "observed Lisp collection read inside assert_no_observed_reads scope"
+    );
     // This private membership is read afresh for each pointer projection. A
     // different mutator cannot change it, and no state is cached across reads
     // or callbacks. begin/take restore it before running any user code.
@@ -853,8 +895,11 @@ pub(crate) fn journal_since_for_test(start: LispCollectionRevision) -> Option<Ve
     })
 }
 
-pub(super) fn record_write(value: TaggedValue, revision: u64) {
-    with_store(|store| store.record(value.bits(), revision));
+/// Complete a write in the store that already supplied its revision.
+/// The caller retains that owner extent, with no callback or GC in between.
+#[inline]
+pub(super) fn record_write_in_store(store: &StoreState, value: TaggedValue, revision: u64) {
+    store.record(value.bits(), revision);
 }
 
 /// A string byte store retains its original journal-before-read order.
@@ -1245,6 +1290,41 @@ enum NativeWindowCollectionOwner {
     Slots,
 }
 
+/// Execute `body` while asserting (in debug and `test-support` builds) that
+/// no observed Lisp collection read occurs. Compiles to a direct call with
+/// zero overhead in release production builds.
+///
+/// Precondition: `body` must be synchronous and non-yielding (it must not park
+/// a carrier or switch worlds while the scope is active).
+///
+/// Lazy derived-index publishers (such as `publish_endpoints_for`) wrap their
+/// publication work in this scope so reintroducing a Lisp plist/heap walk
+/// fails immediately instead of silently exhausting `MAX_READS` during a
+/// caller's `collection_reads::capture`.
+#[inline]
+pub fn assert_no_observed_reads<R>(body: impl FnOnce() -> R) -> R {
+    #[cfg(any(debug_assertions, feature = "test-support"))]
+    {
+        struct Guard;
+        impl Drop for Guard {
+            fn drop(&mut self) {
+                FORBID_OBSERVED_READS.with(|depth| {
+                    let prev = depth.get();
+                    debug_assert!(prev > 0, "FORBID_OBSERVED_READS depth underflow");
+                    depth.set(prev.saturating_sub(1));
+                });
+            }
+        }
+        FORBID_OBSERVED_READS.with(|depth| depth.set(depth.get() + 1));
+        let _guard = Guard;
+        body()
+    }
+    #[cfg(not(any(debug_assertions, feature = "test-support")))]
+    {
+        body()
+    }
+}
+
 /// Observe reads made by `read`, rejecting reuse if its dependency budget or
 /// coherent mutation history cannot be retained. No Lisp object is rooted.
 pub fn capture<T>(read: impl FnOnce() -> T) -> (T, Option<CollectionReads>) {
@@ -1289,6 +1369,14 @@ pub(crate) mod allocation_tests;
 #[path = "collection_reads/tests/recent_clear_test.rs"]
 mod recent_clear_tests;
 
+#[cfg(test)]
+#[path = "collection_reads/tests/validation_cache_test.rs"]
+mod validation_cache_tests;
+
+#[cfg(test)]
+#[path = "collection_reads/tests/no_op_string_clear_test.rs"]
+mod no_op_string_clear_tests;
+
 /// Round 3w (plan-3w.md section 7, C1): this World state lives in a
 /// thread-local while its World's Baton holder runs, and in the World while
 /// it is parked; the Green runtime moves it at each park and resume, so
@@ -1332,6 +1420,8 @@ mod observed_sweep_amortization_tests;
 #[doc(hidden)]
 pub fn reset_carrier_tls() {
     ACTIVE.with(|slot| slot.set(false));
+    #[cfg(any(debug_assertions, feature = "test-support"))]
+    FORBID_OBSERVED_READS.with(|slot| slot.set(0));
     // Epoch 0 is the fresh-thread value (`RecentReads::new`), so the snapshot
     // probe can compare a parked carrier with a fresh one; any later lookup
     // validates against the live epoch and misses.
@@ -1343,6 +1433,7 @@ pub fn reset_carrier_tls() {
 #[doc(hidden)]
 pub fn carrier_tls_fingerprint(h: &mut u64) {
     crate::tls_fingerprint::mix(h, ACTIVE.with(|slot| slot.get() as u64));
+    crate::tls_fingerprint::mix(h, FORBID_OBSERVED_READS.with(|slot| slot.get() as u64));
     crate::tls_fingerprint::mix(
         h,
         RECENT_READS.with(|r| {

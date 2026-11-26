@@ -555,6 +555,12 @@ impl OwnerSlab {
         self.green.as_deref_mut()
     }
 
+    /// This owner's Green seat for a read-only classification (owner vs
+    /// main); no seat mutation or channel access.
+    pub(crate) fn green_seat(&self) -> Option<&super::green::GreenSeat> {
+        self.green.as_deref()
+    }
+
     /// A Context's cold retirement breaks the seat's Baton -> World cycle
     /// and cancels any unused root-batch reservation before heap destruction.
     pub(crate) fn take_green_seat(&mut self) -> Option<Box<super::green::GreenSeat>> {
@@ -681,6 +687,32 @@ impl OwnerSlab {
         }
     }
 
+    /// The id of the innermost live record.
+    ///
+    /// [`Self::take_record`] of the top pops it and trims trailing holes, and
+    /// a take below the top leaves the last slot live, so the last slot is
+    /// the top whenever any record remains. O(1).
+    pub(crate) fn top_record_id(&self) -> Option<OwnerRecordId> {
+        let record = self.records.last()?.as_ref()?;
+        let depth = u32::try_from(self.records.len())
+            .ok()
+            .and_then(NonZeroU32::new)?;
+        Some(OwnerRecordId {
+            depth,
+            generation: record.generation,
+        })
+    }
+
+    /// Take the record `id` names when it is the top, and nothing otherwise.
+    ///
+    /// A record below the top, or one already taken, leaves the stack as it
+    /// was. [`Self::take_record`] of a record below the top takes it and
+    /// leaves a hole, so the top check has to happen first.
+    pub(crate) fn take_top_record(&mut self, id: OwnerRecordId) -> Option<OwnerBindingRecord> {
+        let top = self.top_record_id()?;
+        (top == id).then(|| self.take_record(id)).flatten()
+    }
+
     /// The live records binding SYM, outermost first.
     pub(crate) fn records_of(&self, sym: SymId) -> impl Iterator<Item = &OwnerBindingRecord> {
         self.records
@@ -768,6 +800,13 @@ impl std::fmt::Debug for OwnerSlabRegistry {
 }
 
 impl OwnerSlabRegistry {
+    /// Number of owner slabs registered in this World (0 while Green/admission
+    /// is dormant).
+    #[cfg(test)]
+    pub(crate) fn len_for_test(&self) -> usize {
+        self.slabs.len()
+    }
+
     /// Allocate and register a slab for a new owner on HEAP.
     #[doc(hidden)]
     pub fn register(&mut self, heap: usize) -> NonNull<OwnerSlab> {
@@ -789,6 +828,31 @@ impl OwnerSlabRegistry {
             debug_assert_eq!(slab.heap, heap, "an owner slab traced for another heap");
             slab.trace_roots(visit);
         }
+    }
+
+    /// Visit every registered slab's values under `AllStopped` in a stowed
+    /// Green World, validating that `stopped` proves exclusive stopped-world
+    /// access for `heap` before reading any slab.
+    pub(crate) fn trace_roots_for_heap(
+        &self,
+        stopped: &neovm_value::tagged::gc::AllStopped<'_>,
+        heap: neovm_value::tagged::gc::HeapIdentity,
+        visit: &mut dyn FnMut(Value),
+    ) -> Result<(), neovm_value::tagged::gc::RendezvousError> {
+        stopped.check_world_roots(heap)?;
+        for slab in &self.slabs {
+            // SAFETY: the registry owns every registered slab until World drop,
+            // and `stopped.check_world_roots(heap)` proved `AllStopped` excludes
+            // every mutator on this heap from mutating any slab.
+            let slab = unsafe { slab.as_ref() };
+            debug_assert_eq!(
+                neovm_value::tagged::gc::HeapIdentity::from_legacy_word(slab.heap),
+                Some(heap),
+                "an owner slab traced for another heap"
+            );
+            slab.trace_roots(visit);
+        }
+        Ok(())
     }
 }
 
@@ -2268,7 +2332,7 @@ pub(super) fn canonical_bufferless_value(projection: &ThreadProjectionDescriptor
         CanonicalArm::Plain => projection.plain_value(),
         // SAFETY: a projection's localized arm names a live record of the
         // obarray's BLV pool; its default cell is only read.
-        CanonicalArm::Localized(blv) => unsafe { (*blv.blv().as_ptr()).defcell.get().cons_cdr() },
+        CanonicalArm::Localized(blv) => unsafe { (*blv.blv().as_ptr()).defcell().cons_cdr() },
         CanonicalArm::Forwarded(builtin) => return builtin.descriptor().load(),
     };
     (!value.is_unbound()).then_some(value)
@@ -2324,7 +2388,7 @@ impl Context {
                 // only the retained forwarder and default cons are copied.
                 let blv = unsafe { &*blv.blv().as_ptr() };
                 let cell = match channel {
-                    Channel::Default => blv.defcell.get(),
+                    Channel::Default => blv.defcell(),
                     Channel::BufferLocal(buffer) => self
                         .edit
                         .buffers
@@ -2373,5 +2437,57 @@ impl Context {
             ctx.obarray
                 .set_canonical_value(CanonicalAccess::STORAGE, base, value);
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use neovm_value::intern::NIL_SYM_ID;
+
+    fn push(slab: &mut OwnerSlab) -> OwnerRecordId {
+        slab.push_record(
+            NIL_SYM_ID,
+            TlsIndex::VOID,
+            BindingKind::Let,
+            Channel::Default,
+            UndoTarget::Retired,
+        )
+    }
+
+    #[test]
+    fn top_record_id_is_the_last_live_slot_and_take_top_refuses_below() {
+        let mut slab = OwnerSlab::new(1);
+        assert_eq!(slab.top_record_id(), None);
+
+        let outer = push(&mut slab);
+        assert_eq!(slab.top_record_id(), Some(outer));
+        let inner = push(&mut slab);
+        assert_eq!(slab.top_record_id(), Some(inner));
+        assert_eq!(outer.position(), 0);
+        assert_eq!(inner.position(), 1);
+
+        assert!(slab.take_top_record(outer).is_none());
+        assert_eq!(slab.top_record_id(), Some(inner));
+        assert_eq!(slab.live_records().count(), 2);
+
+        let holed = slab
+            .take_record_below(outer)
+            .expect("the record below the top");
+        assert!(matches!(holed.undo, UndoTarget::Retired));
+        assert_eq!(slab.top_record_id(), Some(inner));
+        assert_eq!(slab.live_records().count(), 1);
+
+        let taken = slab.take_top_record(inner).expect("the top record");
+        assert!(matches!(taken.undo, UndoTarget::Retired));
+        assert_eq!(slab.top_record_id(), None);
+        assert_eq!(slab.live_records().count(), 0);
+        assert!(slab.take_top_record(inner).is_none());
+
+        let again = push(&mut slab);
+        assert_eq!(again.position(), 0, "trailing holes are trimmed");
+        assert_ne!(again, inner);
+        assert!(slab.take_top_record(inner).is_none());
+        assert_eq!(slab.top_record_id(), Some(again));
     }
 }

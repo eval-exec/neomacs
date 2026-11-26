@@ -383,17 +383,17 @@ fn jit_final_report_collects_named_leaves_from_a_context() {
         optional: Vec::new(),
         rest: None,
     });
-    f.lexical = true;
-    f.ops = vec![
+    f.set_lexical(true);
+    f.set_ops(vec![
         Op::Constant(0),
         Op::StackRef(1),
         Op::Call(1),
         Op::Constant(1),
         Op::Add,
         Op::Return,
-    ];
-    f.constants = vec![Value::symbol("identity"), Value::make_int(1)].into();
-    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
+    ]);
+    f.set_constants(vec![Value::symbol("identity"), Value::make_int(1)].into());
+    f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
     f.seal_hand_assembled_ops();
     let sym = Value::symbol("jit-report-add");
     ev.obarray

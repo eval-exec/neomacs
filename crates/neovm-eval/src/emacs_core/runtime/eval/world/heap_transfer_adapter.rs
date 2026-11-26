@@ -19,6 +19,14 @@ use std::ptr::NonNull;
 
 /// Uninstall the ordinary heap slot for this provenance root. The collector
 /// loan, when one exists, stays with the caller.
+///
+/// # Safety
+///
+/// Same contract as [`clear_tagged_heap_root_if_installed`]: `root` is the
+/// caller's own heap root on its owning thread, its store protocol is already
+/// detached, no loan or reference derived from the TLS slot is live, and the
+/// owning `Context` stays dormant until reinstalled through the refusing
+/// predicate.
 #[cfg_attr(
     not(test),
     expect(
@@ -26,8 +34,9 @@ use std::ptr::NonNull;
         reason = "dormant until a later slice admits through the reference-free transfer; the heap-transfer tests are the caller"
     )
 )]
-pub(crate) fn detach_source_heap(root: NonNull<neovm_value::tagged::gc::TaggedHeap>) {
-    clear_tagged_heap_root_if_installed(root);
+pub(crate) unsafe fn detach_source_heap(root: NonNull<neovm_value::tagged::gc::TaggedHeap>) {
+    // SAFETY: caller upholds `clear_tagged_heap_root_if_installed`'s contract.
+    unsafe { clear_tagged_heap_root_if_installed(root) };
 }
 
 /// # Safety
@@ -99,13 +108,6 @@ pub(crate) unsafe fn recover_transferred_source(
 /// Value keeps the reference-free shell and does not name `Baton`. This is
 /// the same split as [`ParallelHeapEraWorldExt`]: the era type is value-layer
 /// data, and admitting it needs this World's keeper.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "E2 L4 dormant production era admission; no production caller enters it"
-    )
-)]
 pub(crate) trait PreparedHeapTransferProductionEra: Sized {
     fn with_production_era<R: HeapTransferCompletion>(
         self,

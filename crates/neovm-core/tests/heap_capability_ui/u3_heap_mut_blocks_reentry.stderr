@@ -1,0 +1,10 @@
+error[E0499]: cannot borrow `hm` as mutable more than once at a time
+ --> tests/heap_capability_ui/u3_heap_mut_blocks_reentry.rs:7:47
+  |
+7 |     let _ = v.with_hash_table_mut_in(&mut hm, |_outer| {
+  |               ---------------------- -------  ^^^^^^^^ second mutable borrow occurs here
+  |               |                      |
+  |               |                      first mutable borrow occurs here
+  |               first borrow later used by call
+8 |         let _ = v.with_hash_table_mut_in(&mut hm, |_inner| ());
+  |                                               -- second borrow occurs due to use of `hm` in closure

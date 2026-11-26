@@ -734,6 +734,20 @@ pub(crate) enum Discard {
     Stale(DiscardReason),
 }
 
+/// A ready job that did not install. The unpublished leaf stays owned so a
+/// nested probe can retire it instead of dropping it under a live frame.
+pub(crate) struct DiscardedLeaf {
+    pub reason: Discard,
+    pub leaf: CompiledLeaf,
+}
+
+fn take_unpublished(job: &mut PendingJob, reason: Discard) -> DiscardedLeaf {
+    DiscardedLeaf {
+        reason,
+        leaf: job.leaf.take().expect("a pending job holds its leaf"),
+    }
+}
+
 /// Install a ready job: its leaf with the backend's entry, or why not.
 /// `rt` (the function's runtime, when the caller has it) gets its tier-up
 /// deferral back, so the dispatcher enters the leaf from the next call; a
@@ -748,7 +762,7 @@ pub(crate) fn install(
     mut job: Box<PendingJob>,
     rt: Option<&RuntimeState>,
     ctx: Option<&Context>,
-) -> Result<CompiledLeaf, Discard> {
+) -> Result<CompiledLeaf, DiscardedLeaf> {
     let out = job.cell.take_out().expect("install only a ready job");
     // An entry's own parked runtime stands in when the caller has none (an
     // idle drain): its hold is restored either way.
@@ -767,7 +781,10 @@ pub(crate) fn install(
             rt.defer_tier_up(heat.saturating_mul(2).max(heat.saturating_add(1)));
         }
         job.settle(Settled::Discarded(DiscardReason::Dropped));
-        return Err(Discard::Stale(DiscardReason::Dropped));
+        return Err(take_unpublished(
+            &mut job,
+            Discard::Stale(DiscardReason::Dropped),
+        ));
     }
     let calls = rt.map(|rt| {
         rt.defer_tier_up(job.saved_hold);
@@ -802,12 +819,15 @@ pub(crate) fn install(
         Err(err) => {
             tracing::debug!(target: "neovm_jit::bg", %err, "background backend failed");
             job.settle(Settled::Discarded(DiscardReason::Failed));
-            return Err(Discard::Rejected);
+            return Err(take_unpublished(&mut job, Discard::Rejected));
         }
     };
     if job.heap != neovm_value::tagged::gc::current_tagged_heap_identity() {
         job.settle(Settled::Discarded(DiscardReason::HeapChanged));
-        return Err(Discard::Stale(DiscardReason::HeapChanged));
+        return Err(take_unpublished(
+            &mut job,
+            Discard::Stale(DiscardReason::HeapChanged),
+        ));
     }
     if let Some(ctx) = ctx {
         let epoch = ctx.obarray.function_epoch();
@@ -822,7 +842,10 @@ pub(crate) fn install(
             let id = job.id;
             EPOCH_DISCARDS.with(|m| *m.borrow_mut().entry(id).or_default() += 1);
             job.settle(Settled::Discarded(DiscardReason::EpochMoved));
-            return Err(Discard::Stale(DiscardReason::EpochMoved));
+            return Err(take_unpublished(
+                &mut job,
+                Discard::Stale(DiscardReason::EpochMoved),
+            ));
         }
         // The proven-fresh re-arm: a slot the front armed at an older epoch
         // whose binding still is the one it speculated on is current. The

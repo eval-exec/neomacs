@@ -145,7 +145,12 @@ pub(crate) fn write_padded(
         previous: unsafe { set_curterm(std::ptr::null_mut()) },
     };
     let mut error = 0;
-    let status = unsafe { setupterm(term.as_ptr(), fd, &mut error) };
+    // Block SIGTTOU across setupterm (the ncurses primitive tgetent wraps),
+    // matching GNU `init_tty` (`src/term.c:4485-4489`).
+    let status = {
+        let _tty_out_guard = TtyOutSignalGuard::block();
+        unsafe { setupterm(term.as_ptr(), fd, &mut error) }
+    };
     if status != 0 {
         return Err(io::Error::other("could not initialize padding terminal"));
     }

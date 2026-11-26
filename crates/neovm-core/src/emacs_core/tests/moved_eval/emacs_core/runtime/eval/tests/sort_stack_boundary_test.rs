@@ -260,7 +260,7 @@ fn native_sort_batches_at_sampled_depths_on_both_stack_placements() {
                         "{predicate:?} at {sampled:?} on {placement:?} journalled {revisions} moves"
                     );
                     for (ordinal, value) in vector.as_vector_data().unwrap().iter().enumerate() {
-                        predicate.assert_element(*value, ordinal);
+                        predicate.assert_element(value, ordinal);
                     }
                 }
             }

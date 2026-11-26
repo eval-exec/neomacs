@@ -1,14 +1,15 @@
-//! Slice 0 of the stopped-mark adapters (E3).
+//! E3 stopped-mark adapters: slice 0 extracted the shared adapter, slice 1 put
+//! the stopped major on it.
 //!
 //! `finish_stopped_mark_adapters` is the only production caller of the
-//! post-mark steps, except the era path. That path still calls
-//! `mark_and_sweep_weak_tables` under its test `WeakSweepPermit`, and slice 0
-//! does not change it. Privacy cannot say "every caller except that one",
-//! so this scan does.
+//! post-mark steps. The serial stop (`complete_collection`), incremental
+//! termination (`incremental_finish`), and the stopped major arm all call it;
+//! the era path no longer calls `mark_and_sweep_weak_tables` under its test
+//! `WeakSweepPermit`. Every step below the adapter is private, so the adapter
+//! is their only caller.
 //!
-//! `mark_and_queue_doomed_finalizers` and the three `reclaim_unreached_*`
-//! steps are private. The weak sweep stays `pub(super)` until the era path
-//! can call the adapter.
+//! `mark_and_queue_doomed_finalizers`, `mark_and_sweep_weak_tables`, and the
+//! three `reclaim_unreached_*` steps are private.
 
 use super::architecture_plist_head_seam_guard_test::code_only;
 use super::architecture_production_source_roots::production_source_files;
@@ -129,47 +130,22 @@ fn stopped_mark_adapters_have_one_production_order() {
         assert!(!found[0].test_path, "{needle}");
     }
 
+    // Slice 1: the stopped major arm calls the adapter, so the weak sweep has
+    // one production caller and no era-only call survives.
     let weak = hits(".mark_and_sweep_weak_tables(");
-    assert_eq!(weak.len(), 2, "{weak:?}");
+    assert_eq!(weak.len(), 1, "{weak:?}");
     assert!(
-        weak.iter().any(|hit| {
-            hit.workspace_relative.ends_with("tagged/gc/mark_sweep.rs")
-                && hit.enclosing == "finish_stopped_mark_adapters"
-                && !hit.test_path
-        }),
+        weak[0]
+            .workspace_relative
+            .ends_with("tagged/gc/mark_sweep.rs")
+            && weak[0].enclosing == "finish_stopped_mark_adapters"
+            && !weak[0].test_path,
         "{weak:?}"
-    );
-    let era = weak
-        .iter()
-        .find(|hit| {
-            hit.workspace_relative
-                .ends_with("mutator_registration/collection.rs")
-        })
-        .expect("era weak sweep");
-    assert_eq!(era.enclosing, "run");
-    assert!(!era.test_path);
-    let era_source = std::fs::read_to_string(
-        production_source_files()
-            .into_iter()
-            .find(|file| {
-                file.workspace_relative()
-                    .ends_with("mutator_registration/collection.rs")
-            })
-            .expect("collection.rs")
-            .path,
-    )
-    .expect("read collection.rs");
-    let era_lines: Vec<&str> = era_source.lines().collect();
-    let window_start = era.line.saturating_sub(25);
-    let window = era_lines[window_start..era.line].join("\n");
-    assert!(
-        window.contains("if self.weak_sweep"),
-        "the era call stays under the test permit:\n{window}"
     );
 
     let adapter = hits(".finish_stopped_mark_adapters(");
     let production: Vec<_> = adapter.iter().filter(|hit| !hit.test_path).collect();
-    assert_eq!(production.len(), 2, "{adapter:?}");
+    assert_eq!(production.len(), 3, "{adapter:?}");
     assert!(
         production.iter().any(|hit| {
             hit.workspace_relative.ends_with("tagged/gc/mark_sweep.rs")
@@ -184,6 +160,14 @@ fn stopped_mark_adapters_have_one_production_order() {
         }),
         "{production:?}"
     );
+    assert!(
+        production.iter().any(|hit| {
+            hit.workspace_relative
+                .ends_with("mutator_registration/collection.rs")
+                && hit.enclosing == "run"
+        }),
+        "{production:?}"
+    );
     let tests: Vec<_> = adapter
         .iter()
         .filter(|hit| hit.test_path)
@@ -191,7 +175,16 @@ fn stopped_mark_adapters_have_one_production_order() {
         .collect();
     assert_eq!(
         tests,
-        ["neovm-value/src/tagged/gc/tests/memory_inventory_test.rs"],
+        [
+            // observes post-fixpoint, pre-sweep marks (retired-process SATB
+            // union row: the arm-time field is only observable before sweep)
+            "neovm-value/src/tagged/gc/tests/ephemeron_cross_kind_test.rs",
+            // observes post-fixpoint, pre-sweep marks (inventory snapshot)
+            "neovm-value/src/tagged/gc/tests/memory_inventory_test.rs",
+            // post-overwrite negative test: proves finish_stopped_mark_adapters
+            // fails closed while ACTIVE_MARK_HEAPS records an unfinished mark
+            "neovm-value/src/tagged/gc/tests/shutdown_tests.rs",
+        ],
         "{adapter:?}"
     );
 
@@ -205,7 +198,7 @@ fn stopped_mark_adapters_have_one_production_order() {
     );
     let weak_def = definition_line("tagged/gc/mark_sweep.rs", "fn mark_and_sweep_weak_tables");
     assert!(
-        weak_def.contains("pub(super)"),
-        "weak sweep stays visible to the era path: {weak_def}"
+        !weak_def.contains("pub"),
+        "weak sweep is private to the adapter: {weak_def}"
     );
 }

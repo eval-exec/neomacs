@@ -5,7 +5,7 @@ use crate::tagged::gc::{
 
 fn fixture() -> AliasableBox<TaggedHeap> {
     let heap = AliasableBox::new(TaggedHeap::new());
-    set_tagged_heap_root(heap.root());
+    unsafe { set_tagged_heap_root(heap.root()) };
     heap
 }
 fn stopped(heap: &mut AliasableBox<TaggedHeap>) -> QuiescentCollector<'_> {
@@ -13,7 +13,8 @@ fn stopped(heap: &mut AliasableBox<TaggedHeap>) -> QuiescentCollector<'_> {
     // SAFETY: actual sole fixture owner, no marker, callbacks or live borrowed
     // store views. Only explicit observation handles may exist in refusal tests.
     let collector = unsafe { (*root.as_ptr()).drain_to_quiescent(|_| {}) }.unwrap();
-    clear_tagged_heap_root_if_installed(root);
+    // SAFETY: standalone `AliasableBox<TaggedHeap>` fixture detached for collector test.
+    unsafe { clear_tagged_heap_root_if_installed(root) };
     collector
 }
 fn detached(collector: &mut QuiescentCollector<'_>) -> SourceObservationsDetached {
@@ -48,7 +49,7 @@ fn pentry_e2b_observation_actual_collector_roundtrip_and_sole_owner() {
         Err(SourceObservationError::EscapedOwner)
     );
     drop(collector);
-    set_tagged_heap_root(heap.root());
+    unsafe { set_tagged_heap_root(heap.root()) };
     let value = heap.alloc_cons(TaggedValue::fixnum(73), TaggedValue::NIL);
     assert_eq!(value.cons_car(), TaggedValue::fixnum(73));
 }
@@ -323,7 +324,8 @@ fn pentry_e2b_observation_refuses_installed_heap_before_effect() {
     // to exercise refusal before any observation-owner effect.
     let mut collector = unsafe { (*root.as_ptr()).drain_to_quiescent(|_| {}) }.unwrap();
     assert_eq!(error(&mut collector), SourceObservationError::InstalledHeap);
-    clear_tagged_heap_root_if_installed(root);
+    // SAFETY: standalone `AliasableBox<TaggedHeap>` fixture detached for collector test.
+    unsafe { clear_tagged_heap_root_if_installed(root) };
 }
 #[test]
 fn pentry_e2b_observation_export_revalidates_new_alias() {

@@ -338,7 +338,8 @@ fn play_sound_data(data: &[u8], volume: f32, device: Option<&str>) -> Result<(),
 
 /// (play-sound-internal SOUND)
 #[cfg(feature = "sound")]
-pub(crate) fn builtin_play_sound_internal(args: Vec<Value>) -> EvalResult {
+#[doc(hidden)]
+pub fn builtin_play_sound_internal(args: Vec<Value>) -> EvalResult {
     neovm_eval::emacs_core::builtins::expect_args("play-sound-internal", &args, 1)?;
 
     let spec = parse_sound_spec(args[0])?;

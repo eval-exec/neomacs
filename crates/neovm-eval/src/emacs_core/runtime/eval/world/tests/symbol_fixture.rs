@@ -203,7 +203,8 @@ impl Context {
 
         let heap = AliasableBox::new(TaggedHeap::new());
         // Manager construction can allocate; install only the owning root.
-        neovm_value::tagged::gc::set_tagged_heap_root(heap.root());
+        // SAFETY: this fixture owns the AliasableBox root it installs.
+        unsafe { neovm_value::tagged::gc::set_tagged_heap_root(heap.root()) };
         let mut obarray = Obarray::new();
         let ids: Vec<_> = (0..kinds.len())
             .map(|index| {

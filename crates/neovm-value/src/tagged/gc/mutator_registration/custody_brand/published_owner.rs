@@ -71,7 +71,11 @@ fn current_native(
     if state.readers != 0 {
         return Err(RendezvousError::Readers);
     }
-    let image = state.image.as_ref().ok_or(RendezvousError::Publication)?;
+    let image = state
+        .image
+        .as_ref_for(registry.heap, entry.young)
+        .map_err(|_| RendezvousError::Identity)?
+        .ok_or(RendezvousError::Publication)?;
     let identity = state
         .roots
         .as_ref()
@@ -89,6 +93,18 @@ fn current_native(
 }
 
 impl PublishedOwner {
+    /// Owner tag, publication generation, and heap of this receipt.
+    ///
+    /// Copyable facts only. Not a loan, a resume right, or a second receipt.
+    #[doc(hidden)]
+    pub fn serial_facts(&self) -> (u64, std::num::NonZeroU64, crate::tagged::gc::HeapIdentity) {
+        (
+            self.identity.key().owner(),
+            self.identity.publication_generation(),
+            self.identity.heap_identity(),
+        )
+    }
+
     pub(in crate::tagged::gc::mutator_registration) fn validate_current(
         &self,
         registry: &Registry,
@@ -117,11 +133,31 @@ impl Mutator<'_> {
         roots: &[SharedRoot],
     ) -> Result<PublishedOwner, RendezvousError> {
         self.enter_native(roots)?;
-        let gate = self.registry.lock()?;
-        if !self.protocol.participating {
-            return Err(RendezvousError::Publication);
+        #[cfg(any(test, feature = "test-support"))]
+        if let Some(hook) = self.protocol.hooks.take_receipt() {
+            hook();
         }
-        let identity = current_native(self.registry, &gate, &self.entry, self.thread)?;
+        // The publication has committed: this owner is NativeStopped with its
+        // image and root lease installed, so a caller's retry of this whole
+        // call is refused. A contended gate or entry lock is transient here;
+        // the receipt read retries it, as the publication's commit loop does.
+        let identity = loop {
+            let attempt = (|| {
+                let gate = self.registry.lock()?;
+                if !self.protocol.participating {
+                    return Err(RendezvousError::Publication);
+                }
+                current_native(self.registry, &gate, &self.entry, self.thread)
+            })();
+            match attempt {
+                Err(RendezvousError::Busy) => {
+                    #[cfg(any(test, feature = "test-support"))]
+                    super::super::test_fences::note_gate_contention();
+                    std::thread::yield_now();
+                }
+                result => break result?,
+            }
+        };
         Ok(PublishedOwner {
             entry: Arc::clone(&self.entry),
             registry: RegistryAddress::of(self.registry),

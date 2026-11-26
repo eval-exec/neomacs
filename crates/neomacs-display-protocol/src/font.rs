@@ -497,6 +497,14 @@ pub struct ResolvedFont {
     /// The per-glyph, bitmap cell, or multi-cell outline advance contract.
     #[serde(default)]
     pub glyph_advance: ResolvedFontAdvance,
+    /// GNU/Fontconfig spacing code of the matched entity: proportional=0
+    /// (fontconfig normally omits the property), dual=90, mono=100,
+    /// charcell=110.  `font-get :spacing` and `font-xlfd-name` expose it:
+    /// GNU's opened DejaVu Sans Mono object carries 100 and its XLFD says
+    /// `m`, while a proportional face such as Noto Sans CJK carries nil and
+    /// the XLFD keeps `*` (oracle, pinned fonts).
+    #[serde(default)]
+    pub spacing: Option<i32>,
 }
 
 /// Resolved font table carried by frame state, keyed by [`ResolvedFontId`].
@@ -588,8 +596,9 @@ pub type CharFontTable = HashMap<FaceId, HashMap<char, ResolvedCharGlyph>>;
 /// One coherent, borrowed projection of every font binding needed to draw a
 /// frame.
 ///
-/// Keeping the catalog generation and all four lookup tables behind one type
-/// makes the render boundary compile-time visible: callers cannot accidentally
+/// Keeping the catalog generation, PGTK opening options and all four lookup
+/// tables behind one type makes the render boundary compile-time visible:
+/// callers cannot accidentally
 /// install a new face table while retaining an old generation or fallback
 /// table. The wire representation remains the individual fields on
 /// `FrameGlyphBuffer`; this is the typed view used once that snapshot is in
@@ -597,6 +606,9 @@ pub type CharFontTable = HashMap<FaceId, HashMap<char, ResolvedCharGlyph>>;
 #[derive(Clone, Copy, Debug)]
 pub struct FrameFontBindings<'a> {
     pub catalog_generation: FontCatalogGeneration,
+    /// PGTK options used to open the fonts and measure this exact frame.
+    /// None retains the renderer's independently captured Xlib policy.
+    pub desktop_font_render_options: Option<crate::DesktopFontRenderOptions>,
     pub faces: &'a FrameFaceMap,
     pub fonts: &'a ResolvedFontTable,
     pub char_fonts: &'a CharFontTable,

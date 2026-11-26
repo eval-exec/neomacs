@@ -50,6 +50,7 @@ fn assert_same(src: &str) -> Context {
         off, verify,
         "verify differs from the tree walker for:\n{src}"
     );
+    let parked_eval = eval.park_for_test();
     let (on, _) = run(TierIMode::On, src);
     assert_eq!(off, on, "on differs from the tree walker for:\n{src}");
     let (eager, _) = run_with(TierIMode::Verify, false, src);
@@ -57,6 +58,9 @@ fn assert_same(src: &str) -> Context {
         off, eager,
         "eager frames differ from the tree walker for:\n{src}"
     );
+    let eval = parked_eval
+        .resume_for_test()
+        .expect("resume verify context");
     assert!(
         tier_i_stats_for_test(&eval).count(TierIEvent::Run) > 0,
         "no compiled body ran: {}",

@@ -45,6 +45,9 @@ Body text for parity.
     (unwind-protect
         (with-current-buffer buffer
           (redisplay t)
+          ;; ebox refits mounted viewports through its settle timer after a
+          ;; buffer/window change (ebox-viewport-settle-delay).
+          (sleep-for 0.25)
           (let* ((window (get-buffer-window buffer t))
                  (title-pos (save-excursion
                               (goto-char (point-min))
@@ -88,7 +91,7 @@ fn etaf_md_real_gui_page_matches_gnu() {
     .expect("run real graphical GNU Emacs and Neomacs sequentially");
 
     let expected_gnu = expect![[
-        r##"OK (:text " \n Title  \n   \n    \n Body text for parity.  \n    \n Section  \n   \n    \n • one  \n • two  \n    \n " :has-window t :pixel-size (800 . 245) :body-width 100 :body-height 33 :title-face ((:height 202 :weight bold) (:foreground "#e6edf3") (:background "#191a1c")) :title-foreground "#e6edf3" :title-height 202 :title-weight bold :default-family "DejaVu Sans Mono" :default-height 101 :default-foreground "black" :default-background "white" :frame-width 100 :frame-height 35 :frame-background "white" :frame-foreground "black")"##
+        r##"OK (:text "​ \n​ Title  \n​   \n​    \n​ Body text for parity.  \n​    \n​ Section  \n​   \n​    \n​ • one  \n​ • two  \n​    \n​ " :has-window t :pixel-size (800 . 300) :body-width 100 :body-height 33 :title-face ((:height 202 :weight bold) (:foreground "#e6edf3") (:background "#191a1c")) :title-foreground "#e6edf3" :title-height 202 :title-weight bold :default-family "DejaVu Sans Mono" :default-height 101 :default-foreground "black" :default-background "white" :frame-width 100 :frame-height 35 :frame-background "white" :frame-foreground "black")"##
     ]];
     expected_gnu.assert_eq(&pair.gnu_behavior.to_string());
     // Strict parity: the probe must produce GNU's exact observation.  There

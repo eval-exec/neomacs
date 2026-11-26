@@ -17,8 +17,8 @@ use neovm_edit::emacs_core::display_metrics::{Rect, WindowId, WindowMargins};
 use neovm_edit::emacs_core::textprop::WindowBufferLookup;
 use neovm_value::display_vocab::{
     ChangeStamp, FRAME_ID_BASE, FrameId, FrameParam, FrameQueryParam, FrameVisibility,
-    RenderFrameVisibility, SourcePreloadWindowRetirementRefusal, SplitDirection,
-    WindowHistoryState, WindowLayoutVariable, WindowSystemKind,
+    GuiResizeRequestId, RenderFrameVisibility, SourcePreloadWindowRetirementRefusal,
+    SplitDirection, WindowHistoryState, WindowLayoutVariable, WindowSystemKind,
 };
 use neovm_value::gc_trace::GcTrace;
 use neovm_value::intern::SymId;
@@ -795,10 +795,48 @@ pub struct WindowCursorSnapshot {
 #[derive(Clone, Debug, PartialEq)]
 pub struct WindowRedisplayOutput {
     pub generation: PresentationId,
+    /// GNU's post-callback accuracy, independent of the original row inputs.
+    /// None retains the legacy synthetic-snapshot admission used by fixtures.
+    pub gnu_accuracy: Option<GnuWindowAccuracy>,
     pub window_end: WindowEndRecord,
     pub visible_span: Option<WindowVisibleBufferSpan>,
     pub logical_cursor: Option<WindowCursorPos>,
     pub phys_cursor: Option<WindowCursorSnapshot>,
+}
+
+/// GNU `last_modified`/`last_overlay_modified` and accepted matrix restriction.
+/// This admits current-matrix queries, never replay of the rows' source data.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct GnuWindowAccuracy {
+    pub buffer_id: BufferId,
+    pub modified_tick: i64,
+    pub overlay_modified_tick: i64,
+    pub accessible_chars: neovm_edit::buffer::CharRange,
+    pub redisplay_optimizations: RedisplayOptimizationsRevision,
+}
+
+impl GnuWindowAccuracy {
+    /// GNU `window_outdated` compares source ticks only. Hover and the
+    /// other-window redisplay signal do not use the stronger matrix gate.
+    pub fn source_is_current_for(
+        self,
+        buffer_id: BufferId,
+        modified_tick: i64,
+        overlay_modified_tick: i64,
+    ) -> bool {
+        self.buffer_id == buffer_id
+            && self.modified_tick >= modified_tick
+            && self.overlay_modified_tick >= overlay_modified_tick
+    }
+
+    pub fn is_current_for(self, current: Self) -> bool {
+        self.source_is_current_for(
+            current.buffer_id,
+            current.modified_tick,
+            current.overlay_modified_tick,
+        ) && self.accessible_chars == current.accessible_chars
+            && self.redisplay_optimizations == current.redisplay_optimizations
+    }
 }
 
 impl WindowRedisplayOutput {
@@ -1262,6 +1300,7 @@ pub enum GuiBarPresentation {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PendingGuiResize {
+    pub request_id: GuiResizeRequestId,
     pub width_cols: i64,
     pub total_lines: i64,
     pub delivery: GuiResizeDelivery,
@@ -1270,8 +1309,10 @@ pub struct PendingGuiResize {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[doc(hidden)]
 pub enum GuiResizeDelivery {
+    /// Intent not yet handed to the native layer survives native allocation.
     Queued,
-    Requested { width: u32, height: u32, wait: bool },
+    /// A native allocation or this request's exact completion retires intent.
+    Sent { width: u32, height: u32, wait: bool },
 }
 
 // --- E5-FM-3a snapshot/row records (stage-4 W2/E5) ---
@@ -2334,6 +2375,51 @@ impl Window {
         }
     }
 
+    /// GNU text hover requires a valid end and source ticks, independently of
+    /// clip/prevent-optimization flags (xdisp.c:37105-37112). Unstamped legacy
+    /// fixtures retain their existing caller admission; dead owners refuse.
+    pub fn gnu_text_hover_is_current(&self, buffers: &BufferManager) -> Option<bool> {
+        let accuracy = self.display()?.redisplay_output()?.gnu_accuracy?;
+        let Some(buffer) = self.buffer_id().and_then(|id| buffers.get(id)) else {
+            return Some(false);
+        };
+        Some(
+            self.window_end_valid() == Some(true)
+                && accuracy.source_is_current_for(
+                    buffer.id(),
+                    buffer.modified_tick(),
+                    buffer.overlay_modified_tick(),
+                ),
+        )
+    }
+
+    /// Stamp only the output committed by this exact completed presentation.
+    /// Queries, geometry-only publications and older output cannot gain it.
+    #[doc(hidden)]
+    pub fn set_gnu_redisplay_accuracy(
+        &mut self,
+        generation: PresentationId,
+        accuracy: GnuWindowAccuracy,
+    ) -> bool {
+        let Some(buffer_id) = self.buffer_id() else {
+            return false;
+        };
+        if buffer_id != accuracy.buffer_id {
+            return false;
+        }
+        let Some(output) = self
+            .display_mut()
+            .and_then(|display| display.redisplay_output.as_mut())
+        else {
+            return false;
+        };
+        if output.generation != generation {
+            return false;
+        }
+        output.gnu_accuracy = Some(accuracy);
+        true
+    }
+
     /// Return a mutable reference to this leaf window's display state.
     pub fn display_mut(&mut self) -> Option<&mut WindowDisplayState> {
         match self {
@@ -2934,6 +3020,40 @@ impl BodyRedisplayRevision {
     }
 }
 
+/// Per-buffer revision of GNU's `prevent_redisplay_optimizations_p`.
+///
+/// GNU raises that flag from the Lisp entry points that force a chrome
+/// redisplay without changing text — `set-buffer-redisplay`
+/// (src/xdisp.c:929) and both `force-mode-line-update` branches
+/// (src/buffer.c:1538-1545) — and clears it only when a redisplay finished
+/// accurately (`mark_window_display_accurate_1`, src/xdisp.c:18295-18297).
+/// The matrix-reuse predicate reads it (src/xdisp.c:20557-20565).
+///
+/// Neomacs records each raise as a per-buffer revision in the same map as
+/// [`BodyRedisplayRevision`].  The redisplay gate refuses reuse while the
+/// retained matrix predates the buffer's current revision; recording the
+/// value beside the retained matrix (outside its equality key) is how an
+/// accepted display consumes the raise, like GNU clearing the flag.  It is
+/// deliberately NOT the body revision: chrome-only work must never relayout
+/// body text.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub struct RedisplayOptimizationsRevision(u64);
+
+impl RedisplayOptimizationsRevision {
+    #[doc(hidden)]
+    pub const fn new(value: u64) -> Self {
+        Self(value)
+    }
+}
+
+/// The two per-buffer redisplay counters kept in one map entry: the body
+/// revision component and the GNU prevent-optimizations revision.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct BufferRedisplayRevisions {
+    pub(crate) body: u64,
+    pub(crate) prevent: u64,
+}
+
 /// Which window bodies an explicit `force-window-update` invalidated.
 ///
 /// Mirrors the three branches of GNU `Fforce_window_update`
@@ -3281,6 +3401,33 @@ impl std::fmt::Display for WindowSequenceNumber {
 
 // --- E5-FM-3b Frame + FrameManager (stage-4 W2/E5) ---
 
+/// GNU's `after_make_frame` lifecycle is independent of native visibility.
+/// Creation-time font and chrome changes must keep the requested text grid.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FrameCreationPhase {
+    BeforeMakeFrame,
+    Made,
+}
+
+/// Per-frame toolkit tool bar. Linux uses this for both the explicit-size
+/// request and the pixels layout reserves.
+///
+/// GNU stores the widget height in `FRAME_TOOLBAR_HEIGHT`, which stays 0
+/// until `update_frame_tool_bar` packs items (`gtkutil.c:6149-6160`), and
+/// records that pack in `f->tool_bar_resized` (`gtkutil.c:6158-6160`).
+/// `Unallocated { explicit_size_omitted: true }` is only the gap after an
+/// explicit size left the bar out of this frame's window. Layout withholds
+/// the band in that gap, so `frame-height` stays the requested row count
+/// until the first item-bearing redisplay. A creation window that already
+/// contains the band stays `explicit_size_omitted: false` and still reserves
+/// `tool_bar_height`. `free_frame_tool_bar` (`gtkutil.c:6168-6206`) returns
+/// the frame to `Unallocated { explicit_size_omitted: false }`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ToolkitToolBar {
+    Unallocated { explicit_size_omitted: bool },
+    Allocated,
+}
+
 /// A frame (top-level window/screen).
 pub struct Frame {
     /// GNU `f->change_stamp`: the epoch bumped each time the window change
@@ -3301,6 +3448,15 @@ pub struct Frame {
     /// later font can replace it. The base face value is not recorded either,
     /// so an explicit `normal` stays distinct from the unset default.
     pub explicit_default_font_attrs: u32,
+    /// GNU `struct frame.default_face_done_p`: whether this frame's default
+    /// face has been realized once.  `realize_default_face` passes it to
+    /// `set_lface_from_font` as FORCE_P, so the first realization fills only
+    /// unspecified slots while every later one replaces all font-derived
+    /// slots with the opened frame font's values.  `set_font_frame_param`
+    /// clears it before `gui_set_font`'s recompute (src/xfaces.c:3974,6029),
+    /// which makes that immediate realization non-forcing and the next
+    /// redisplay realization forcing.
+    pub default_face_done: bool,
     /// GNU `struct frame.icon_name`: explicit icon name, or nil.
     pub icon_name: Value,
     /// GNU `struct frame.focus_frame`: frame receiving this frame's keystrokes,
@@ -3313,6 +3469,7 @@ pub struct Frame {
     /// GNU `FRAME_INITIAL_P`: bootstrap placeholder frame that exists before
     /// a real terminal or window-system frame is installed.
     pub initial: bool,
+    pub creation_phase: FrameCreationPhase,
     /// This frame's window tree.
     ///
     /// Private: reach the root through [`Frame::root_window`] and windows
@@ -3391,8 +3548,20 @@ pub struct Frame {
     pub gui_bar_presentation: GuiBarPresentation,
     /// Menu bar height in pixels.
     pub menu_bar_height: u32,
-    /// Tool bar height in pixels.
+    /// Stored tool-bar height in pixels. Layout and Lisp geometry report
+    /// [`Self::reserved_tool_bar_height`], which drops this value on Linux
+    /// only while [`ToolkitToolBar::Unallocated`] records that an explicit
+    /// size left the bar out of the host window.
     pub tool_bar_height: u32,
+    /// Linux toolkit allocation for this frame. See [`ToolkitToolBar`].
+    pub toolkit_tool_bar: ToolkitToolBar,
+    /// GNU `f->n_tool_bar_items` survives `free_frame_tool_bar`
+    /// (`gtkutil.c:6168-6206`). A later positive line count calls
+    /// `update_frame_tool_bar` immediately (`xfns.c:1902-1908`), and that
+    /// update packs when the count is still non-zero (`gtkutil.c:6149-6155`).
+    /// This flag is that surviving count. It starts false, so a frame that
+    /// has never packed a bar stays unallocated.
+    pub tool_bar_items_packed: bool,
     /// Compact bar height in pixels.
     pub compact_bar_height: u32,
     /// Tab bar height in pixels.
@@ -3419,13 +3588,11 @@ pub struct Frame {
     /// `neovm_bridge` uses for them (`font_ascent = char_height`); they display
     /// no images, so the split is unobservable there.
     pub font_ascent: f32,
-    /// One-shot guard used when a live default-font change updates the frame's
-    /// character metrics before GNU would commit the follow-up width/height
-    /// window-system resize.
-    pub defer_next_gui_parameter_resize: bool,
     /// Logical GUI resize requested via frame parameters but not yet committed
     /// to the live host window.
     pub pending_gui_resize: Option<PendingGuiResize>,
+    /// Monotonic owner-local serial; clearing or rejecting intent never resets it.
+    last_gui_resize_request_id: Option<GuiResizeRequestId>,
     /// Authoritative last-redisplay geometry keyed by live leaf window.
     ///
     /// Window audit Medium 10 / Medium 11 in
@@ -4419,34 +4586,134 @@ impl Default for WindowDisplaySnapshot {
 }
 
 impl PendingGuiResize {
+    /// A completion terminates only the dispatched request that produced it.
+    /// Queued intent has not been sent and cannot have a native completion.
+    pub(crate) fn after_request_completion(self, request_id: GuiResizeRequestId) -> Option<Self> {
+        if self.request_id == request_id && matches!(self.delivery, GuiResizeDelivery::Sent { .. })
+        {
+            None
+        } else {
+            Some(self)
+        }
+    }
+
     pub fn is_queued(&self) -> bool {
         matches!(self.delivery, GuiResizeDelivery::Queued)
     }
 
-    /// Geometry queries may wait once for a newly sent request. An observation
-    /// consumes that wait without implying which native request produced it.
+    /// Geometry queries may wait once for a newly sent request.
     pub fn take_native_wait(&mut self) -> bool {
         match &mut self.delivery {
             GuiResizeDelivery::Queued => false,
-            GuiResizeDelivery::Requested { wait, .. } => std::mem::take(wait),
+            GuiResizeDelivery::Sent { wait, .. } => std::mem::take(wait),
         }
     }
 
-    pub(crate) fn after_native_observation(mut self, width: u32, height: u32) -> Option<Self> {
-        if let GuiResizeDelivery::Requested {
-            width: target_width,
-            height: target_height,
-            wait,
-        } = &mut self.delivery
-        {
-            if (width, height) == (*target_width, *target_height) {
-                return None;
-            }
-            *wait = false;
+    pub(crate) fn after_native_size_applied(self) -> Option<Self> {
+        // GNU change_frame_size_1 (dispnew.c:6714-6728) consumes pending size
+        // before applying actual native geometry, even if a request was
+        // rejected or another allocation arrived first. Unsent intent remains
+        // ours to dispatch; it cannot have been answered by the native layer.
+        match self.delivery {
+            GuiResizeDelivery::Queued => Some(self),
+            GuiResizeDelivery::Sent { .. } => None,
         }
-        // Actual allocation is always installed independently. Until the latest
-        // target is attained, a later font change retains the requested grid.
-        Some(self)
+    }
+}
+
+#[cfg(test)]
+mod gui_resize_request_tests {
+    use super::*;
+
+    fn dispatched(request_id: GuiResizeRequestId) -> PendingGuiResize {
+        PendingGuiResize {
+            request_id,
+            width_cols: 101,
+            total_lines: 40,
+            delivery: GuiResizeDelivery::Sent {
+                width: 1042,
+                height: 690,
+                wait: true,
+            },
+        }
+    }
+
+    #[test]
+    fn completion_retires_only_the_current_dispatched_request() {
+        let first = GuiResizeRequestId::FIRST;
+        let latest = dispatched(first.next());
+        assert_eq!(latest.after_request_completion(first), Some(latest));
+        assert_eq!(latest.after_request_completion(latest.request_id), None);
+    }
+
+    #[test]
+    fn duplicate_targets_remain_distinct_requests() {
+        let first = dispatched(GuiResizeRequestId::FIRST);
+        let duplicate = dispatched(first.request_id.next());
+        assert_eq!(first.delivery, duplicate.delivery);
+        assert_eq!(
+            duplicate.after_request_completion(first.request_id),
+            Some(duplicate)
+        );
+        assert_eq!(
+            duplicate.after_request_completion(duplicate.request_id),
+            None
+        );
+    }
+
+    #[test]
+    fn completion_does_not_retire_queued_intent_even_with_the_same_id() {
+        let queued = PendingGuiResize {
+            delivery: GuiResizeDelivery::Queued,
+            ..dispatched(GuiResizeRequestId::FIRST)
+        };
+        assert_eq!(
+            queued.after_request_completion(queued.request_id),
+            Some(queued)
+        );
+    }
+
+    #[test]
+    fn authoritative_native_size_retires_sent_intent_even_when_rejected() {
+        let pending = dispatched(GuiResizeRequestId::FIRST);
+        // GNU dispnew.c:6714-6728 clears pending size on every applied
+        // allocation. Equality with the requested target is not required.
+        assert_eq!(pending.after_native_size_applied(), None);
+    }
+
+    #[test]
+    fn authoritative_native_size_preserves_unsent_queued_intent() {
+        let queued = PendingGuiResize {
+            delivery: GuiResizeDelivery::Queued,
+            ..dispatched(GuiResizeRequestId::FIRST)
+        };
+        assert_eq!(queued.after_native_size_applied(), Some(queued));
+    }
+
+    #[test]
+    fn request_serials_are_monotonic_and_local_to_each_frame() {
+        crate::test_utils::init_test_tracing();
+        let frame = |id| {
+            Frame::new(
+                FrameId(id),
+                Value::NIL,
+                1,
+                800,
+                600,
+                Window::new_leaf(WindowId(id), BufferId(1), Rect::new(0.0, 0.0, 800.0, 584.0)),
+                WindowId(id + 1),
+            )
+        };
+        let mut first = frame(10);
+        let mut other = frame(20);
+        let a = first.allocate_gui_resize_request_id();
+        let b = first.allocate_gui_resize_request_id();
+        assert_eq!(a, GuiResizeRequestId::FIRST);
+        assert_eq!(b, a.next());
+        assert_eq!(other.allocate_gui_resize_request_id(), a);
+        first.pending_gui_resize = None;
+        assert_eq!(first.allocate_gui_resize_request_id(), b.next());
+        assert!(GuiResizeRequestId::new(0).is_none());
     }
 }
 
@@ -5465,7 +5732,7 @@ impl Frame {
         let base_width = width_inc.saturating_add(self.horizontal_non_text_width().max(0) as u32);
         let base_height = height_inc.saturating_add(
             self.menu_bar_height
-                .saturating_add(self.tool_bar_height)
+                .saturating_add(self.reserved_tool_bar_height())
                 .saturating_add(self.compact_bar_height)
                 .saturating_add(self.tab_bar_height),
         );
@@ -6656,6 +6923,15 @@ pub const GUI_SCROLL_BAR_DEFAULT_WIDTH_PX: u32 = 16;
 // --- E5-K2 data accessors (stage-4 W2/E5) ---
 
 impl Frame {
+    /// Allocate within this frame, independently of other frames or processes.
+    pub fn allocate_gui_resize_request_id(&mut self) -> GuiResizeRequestId {
+        let request_id = self
+            .last_gui_resize_request_id
+            .map_or(GuiResizeRequestId::FIRST, GuiResizeRequestId::next);
+        self.last_gui_resize_request_id = Some(request_id);
+        request_id
+    }
+
     pub fn new(
         id: FrameId,
         name: Value,
@@ -6703,11 +6979,15 @@ impl Frame {
             name,
             explicit_name: false,
             explicit_default_font_attrs: 0,
+            default_face_done: false,
             icon_name: Value::NIL,
             focus_frame: Value::NIL,
             parent_frame: Value::NIL,
             terminal_id,
             initial: false,
+            // Logical/TTY creation is complete here (GNU frame.c:1472).
+            // The GUI constructor explicitly re-enters its configuration phase.
+            creation_phase: FrameCreationPhase::Made,
             tree: WindowTree::new(root_window),
             selected_window: selected,
             // GNU `make_frame_without_minibuffer` leaves
@@ -6756,6 +7036,10 @@ impl Frame {
             gui_bar_presentation: GuiBarPresentation::Separate,
             menu_bar_height: 0,
             tool_bar_height: 0,
+            toolkit_tool_bar: ToolkitToolBar::Unallocated {
+                explicit_size_omitted: false,
+            },
+            tool_bar_items_packed: false,
             compact_bar_height: 0,
             tab_bar_height: 0,
             font_pixel_size: 16.0,
@@ -6766,8 +7050,8 @@ impl Frame {
             // equal to `char_height` for every consumer (see `font_ascent`).
             font_ascent: 16.0,
             device_scale_factor: 1.0,
-            defer_next_gui_parameter_resize: false,
             pending_gui_resize: None,
+            last_gui_resize_request_id: None,
             presentation_state: FramePresentationState::default(),
             redisplay_cache: HashMap::default(),
             tty_posn_pool: None,
@@ -7333,11 +7617,46 @@ impl Frame {
             .unwrap_or(0)
     }
 
+    /// Tool-bar pixels layout, native height, and `tool-bar-size` reserve.
+    ///
+    /// The stored [`Self::tool_bar_height`] stays put so a later allocation
+    /// can grow by it. Linux reports 0 only while an explicit size has left
+    /// that band out of the window, matching `FRAME_TOOLBAR_HEIGHT` == 0
+    /// before the first item-bearing update (`gtkutil.c:1181-1182`).
+    pub fn reserved_tool_bar_height(&self) -> u32 {
+        #[cfg(target_os = "linux")]
+        if matches!(
+            self.toolkit_tool_bar,
+            ToolkitToolBar::Unallocated {
+                explicit_size_omitted: true
+            }
+        ) {
+            return 0;
+        }
+        self.tool_bar_height
+    }
+
     pub fn chrome_top_height(&self) -> f32 {
         self.menu_bar_height
-            .saturating_add(self.tool_bar_height)
+            .saturating_add(self.reserved_tool_bar_height())
             .saturating_add(self.compact_bar_height)
             .saturating_add(self.tab_bar_height) as f32
+    }
+
+    /// Height of the menu and tool bar band Neomacs paints at the top of its
+    /// window, in pixels.
+    ///
+    /// GNU's Gtk+ and NS builds keep the menu bar and tool bar outside the
+    /// native frame (`Fframe_native_height`'s doc in src/frame.c:4401-4418:
+    /// the native height "does not include the tool bar or menu bar"), so
+    /// `frame-pixel-height` must not count them.  The tab bar stays inside
+    /// the native frame: `frame-inner-height` subtracts it separately
+    /// (lisp/frame.el:1913).  `compact_bar_height` is Neomacs' exclusive
+    /// replacement for the menu/tool band, so it belongs to the same group.
+    pub fn external_bar_height(&self) -> u32 {
+        self.menu_bar_height
+            .saturating_add(self.reserved_tool_bar_height())
+            .saturating_add(self.compact_bar_height)
     }
 
     pub(crate) fn default_vertical_scroll_bar_side(&self) -> Option<&'static str> {

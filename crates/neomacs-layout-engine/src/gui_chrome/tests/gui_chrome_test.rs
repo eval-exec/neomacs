@@ -1,6 +1,7 @@
 use super::*;
 use neomacs_display_protocol::frame_chrome::ChromeAction;
 use neomacs_display_protocol::types::Color;
+use neomacs_display_protocol::{AxisSize, DeviceScale, ImageSizeSpec};
 use neovm_core::emacs_core::Context;
 use neovm_core::emacs_core::load::apply_runtime_startup_state;
 use neovm_core::emacs_core::load_boot::create_bootstrap_evaluator_cached_with_features;
@@ -25,6 +26,88 @@ fn parse_tool_bar_item_preserves_raw_unibyte_label_and_help() {
     let item = parse_tool_bar_item(&mut eval, "raw-item", &def, 0).expect("tool-bar item");
     assert_eq!(item.label, expected);
     assert_eq!(item.help, expected);
+}
+
+#[test]
+/// GNU `parse_tool_bar_item` stores the `:filter` result as the binding and
+/// drops the item when that binding is a keymap (`keyboard.c:9988-9990`).
+#[test]
+fn parse_tool_bar_item_omits_item_when_filter_returns_keymap() {
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
+    eval.setup_thread_locals();
+    eval.eval_str("(fset 'n827-keymap-filter (lambda (_cmd) (make-sparse-keymap)))")
+        .expect("keymap filter");
+    let def = Value::list(vec![
+        Value::symbol("menu-item"),
+        Value::string("Submap"),
+        Value::symbol("ignore"),
+        Value::symbol(":filter"),
+        Value::symbol("n827-keymap-filter"),
+    ]);
+
+    assert!(
+        parse_tool_bar_item(&mut eval, "submap", &def, 0).is_none(),
+        "a keymap binding is not a tool-bar button"
+    );
+}
+
+/// GNU appends `where-is` of the filtered binding to the tooltip
+/// (`keyboard.c:10001-10015`). A missing `:help` uses the caption.
+#[test]
+fn parse_tool_bar_item_appends_where_is_of_the_filtered_binding_to_help() {
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
+    eval.setup_thread_locals();
+    eval.eval_str(
+        r#"(progn
+            (fset 'n827-help-cmd #'ignore)
+            (fset 'n827-help-other #'ignore)
+            (fset 'n827-help-filter (lambda (_cmd) 'n827-help-cmd))
+            (use-global-map (make-sparse-keymap))
+            (define-key (current-global-map) [3 120] 'n827-help-cmd))"#,
+    )
+    .expect("bind the filtered command");
+    let desc = eval
+        .eval_str("(key-description (where-is-internal 'n827-help-cmd nil t))")
+        .expect("describe the binding")
+        .as_runtime_string_owned()
+        .expect("key description");
+    assert!(!desc.is_empty(), "the filtered command has a key");
+    assert!(
+        eval.eval_str("(where-is-internal 'n827-help-other nil t)")
+            .expect("where-is of the original binding")
+            .is_nil(),
+        "the unfiltered command has no key"
+    );
+
+    let filtered = Value::list(vec![
+        Value::symbol("menu-item"),
+        Value::string("Save"),
+        Value::symbol("n827-help-other"),
+        Value::symbol(":filter"),
+        Value::symbol("n827-help-filter"),
+        Value::symbol(":help"),
+        Value::string("Write the file"),
+    ]);
+    let item = parse_tool_bar_item(&mut eval, "save", &filtered, 0).expect("filtered item");
+    assert_eq!(item.help, format!("Write the file  ({desc})"));
+
+    let caption = Value::list(vec![
+        Value::symbol("menu-item"),
+        Value::string("Caption"),
+        Value::symbol("n827-help-cmd"),
+    ]);
+    let item = parse_tool_bar_item(&mut eval, "caption", &caption, 0).expect("caption item");
+    assert_eq!(item.help, format!("Caption  ({desc})"));
+
+    let unbound = Value::list(vec![
+        Value::symbol("menu-item"),
+        Value::string("Plain"),
+        Value::symbol("n827-help-other"),
+        Value::symbol(":help"),
+        Value::string("No keys"),
+    ]);
+    let item = parse_tool_bar_item(&mut eval, "plain", &unbound, 0).expect("unbound item");
+    assert_eq!(item.help, "No keys");
 }
 
 #[test]
@@ -348,7 +431,6 @@ fn tty_menu_bar_keeps_all_items_with_gnu_one_cell_gutter() {
 
 #[test]
 fn toolbar_layout_publishes_face_and_font_derived_icon_geometry() {
-    use neomacs_display_protocol::{AxisSize, DeviceScale, ImageSizeSpec, ToolBarImageSource};
     let fg = Color::rgb(0.2, 0.4, 0.6);
     let bg = Color::rgb(0.6, 0.4, 0.2);
     let normal = layout_gui_tool_bar_content(vec![], 200.0, 34.0, fg, bg);
@@ -364,7 +446,7 @@ fn toolbar_layout_publishes_face_and_font_derived_icon_geometry() {
         bg,
     );
     assert_eq!(normal.icon_style(), compact.icon_style());
-    let source = ToolBarImageSource::File {
+    let source = ToolBarImageSource::ThemedVector {
         path: "open.svg".into(),
     };
     let original = normal
@@ -374,7 +456,8 @@ fn toolbar_layout_publishes_face_and_font_derived_icon_geometry() {
     assert_eq!(original.colors().background().rgb24(), 0x996633);
     assert_eq!(
         original.size_spec(),
-        ImageSizeSpec::new(AxisSize::AtMost(24), AxisSize::AtMost(24))
+        ImageSizeSpec::new(AxisSize::Exact(24), AxisSize::Exact(24)),
+        "a themed vector realizes at the exact slot size"
     );
     let larger_font = layout_gui_tool_bar_content(vec![], 200.0, 50.0, fg, bg);
     assert_ne!(
@@ -672,4 +755,117 @@ fn cjk_heading_bounds_and_popup_anchor_follow_real_font_advances() {
         }
     );
     assert!((anchor.width() - bounds.width).abs() < 0.01);
+}
+
+#[test]
+fn toolbar_source_carries_gnu_raster_provenance() {
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
+    eval.setup_thread_locals();
+    let spec = Value::list(vec![
+        Value::symbol("image"),
+        Value::symbol(":type"),
+        Value::symbol("xpm"),
+        Value::symbol(":file"),
+        Value::string("search.xpm"),
+    ]);
+    eval.eval_str("(setq neomacs-toolbar-icon-theme 'gnu)")
+        .expect("set GNU toolbar icon theme");
+    let source = tool_bar_image_source(&eval, &spec).expect("GNU image source");
+    assert!(
+        matches!(source, ToolBarImageSource::GnuRaster { .. }),
+        "GNU assets keep compute_image_size semantics: {source:#?}"
+    );
+    let key = neomacs_display_protocol::ToolBarIconStyle::from_chrome_face(
+        24,
+        Color::WHITE,
+        Color::BLACK,
+    )
+    .realize(source, DeviceScale::ONE);
+    assert_eq!(
+        key.size_spec(),
+        ImageSizeSpec::new(AxisSize::AtMost(24), AxisSize::AtMost(24))
+    );
+}
+
+/// Every authored size in a custom icon directory is a chrome vector: the
+/// decoder is asked for the slot's exact size, so 16/20/24-authored files all
+/// rasterize sharply instead of being stretched.
+#[test]
+fn custom_toolbar_icon_directory_marks_every_authored_size_as_a_vector() {
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
+    eval.setup_thread_locals();
+    let dir = std::env::temp_dir().join(format!("neomacs-toolbar-custom-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("create custom icon directory");
+    for size in [16, 20, 24] {
+        std::fs::write(
+            dir.join(format!("open{size}.svg")),
+            format!(
+                "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{size}\" height=\"{size}\" viewBox=\"0 0 {size} {size}\"><rect x=\"1\" y=\"1\" width=\"2\" height=\"2\"/></svg>"
+            ),
+        )
+        .expect("write custom icon");
+    }
+    eval.eval_str(&format!(
+        "(setq neomacs-toolbar-icon-directory {:?})",
+        dir.to_string_lossy()
+    ))
+    .expect("set custom icon directory");
+
+    for size in [16, 20, 24] {
+        let spec = Value::list(vec![
+            Value::symbol("image"),
+            Value::symbol(":type"),
+            Value::symbol("svg"),
+            Value::symbol(":file"),
+            Value::string(format!("open{size}.svg")),
+        ]);
+        let source = tool_bar_image_source(&eval, &spec).expect("custom image source");
+        assert!(
+            matches!(source, ToolBarImageSource::ThemedVector { .. }),
+            "authored {size}px custom SVG must be a themed vector: {source:#?}"
+        );
+        let key = neomacs_display_protocol::ToolBarIconStyle::from_chrome_face(
+            24,
+            Color::WHITE,
+            Color::BLACK,
+        )
+        .realize(source, DeviceScale::ONE);
+        assert_eq!(
+            key.size_spec(),
+            ImageSizeSpec::new(AxisSize::Exact(24), AxisSize::Exact(24))
+        );
+    }
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// A themed theme that has no asset for an icon falls back to the GNU image
+/// source, which keeps the clamp and is never upscaled.
+#[test]
+fn toolbar_theme_falls_back_to_gnu_raster_when_no_theme_asset_exists() {
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
+    eval.setup_thread_locals();
+    eval.eval_str("(setq neomacs-toolbar-icon-theme 'vscode-like)")
+        .expect("set themed toolbar icon theme");
+    let spec = Value::list(vec![
+        Value::symbol("image"),
+        Value::symbol(":type"),
+        Value::symbol("xpm"),
+        Value::symbol(":file"),
+        Value::string("neomacs-no-such-toolbar-icon-xyz.xpm"),
+    ]);
+    let source = tool_bar_image_source(&eval, &spec).expect("fallback image source");
+    assert!(
+        matches!(source, ToolBarImageSource::GnuRaster { .. }),
+        "a missing theme asset must fall back to GNU semantics: {source:#?}"
+    );
+    let key = neomacs_display_protocol::ToolBarIconStyle::from_chrome_face(
+        24,
+        Color::WHITE,
+        Color::BLACK,
+    )
+    .realize(source, DeviceScale::ONE);
+    assert_eq!(
+        key.size_spec(),
+        ImageSizeSpec::new(AxisSize::AtMost(24), AxisSize::AtMost(24))
+    );
 }

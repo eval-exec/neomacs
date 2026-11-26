@@ -200,12 +200,12 @@ use neovm_core::emacs_core::display_host::{
 #[cfg(feature = "video")]
 use neovm_core::emacs_core::eval::VideoResolveSource;
 use neovm_core::emacs_core::eval::{
-    FontEntityMetricsRequest, FontOtfCapability, FontSpecResolveRequest, GuiFrameHostSize,
-    ResolvedFontEntityMetrics, ResolvedFontMatch, ResolvedFontSpecMatch, ResolvedFrameFont,
-    ResolvedOpenedFont, ResolvedSurface, ResolvedVideo, ResolvedWebKit, ShaderSurfaceContent,
-    ShaderSurfaceCreateRequest, ShaderSurfaceLanguage, ShaderSurfaceUniformInit,
-    SurfaceChannelKind, SurfaceResolveRequest, VideoResolveRequest, WebKitResolveRequest,
-    WebKitResolveSource,
+    FontEntityMetricsRequest, FontOtfCapability, FontSpecResolveRequest, FrameFontSelection,
+    GuiFrameHostSize, ResolvedFontEntityMetrics, ResolvedFontMatch, ResolvedFontSpecMatch,
+    ResolvedFrameFont, ResolvedOpenedFont, ResolvedSurface, ResolvedVideo, ResolvedWebKit,
+    ShaderSurfaceContent, ShaderSurfaceCreateRequest, ShaderSurfaceLanguage,
+    ShaderSurfaceUniformInit, SurfaceChannelKind, SurfaceResolveRequest, VideoResolveRequest,
+    WebKitResolveRequest, WebKitResolveSource,
 };
 use neovm_core::emacs_core::image_catalog::{
     ImageCatalog, ImageResolveRequest, ImageSizeLimit, ReadyImage,
@@ -431,9 +431,19 @@ fn finish_gui_connection(
     let font_observer =
         neomacs_display_runtime::font_defaults::observe_font_defaults(identity.backend())
             .map_err(|error| format!("failed to observe desktop fonts: {error}"))?;
+    #[cfg(target_os = "linux")]
+    identity.observe_font_render_options(font_observer.initial_raster_options().desktop_options());
+    // Native Wayland consumes logical text DPI from the same settings owner
+    // that discovered the desktop fonts. Backing scale remains frame-local.
+    let observation = match (host.observation(), font_observer.initial_text_dpi()) {
+        (neomacs_display_protocol::DisplayObservation::Wayland, Some(dpi)) => {
+            neomacs_display_protocol::DisplayObservation::WaylandWithTextDpi(dpi)
+        }
+        (observation, _) => observation,
+    };
     let mut display = bootstrap_gui_display_config(
         interactivity,
-        gui_frame_font_scale_from_observation(host.observation()),
+        gui_frame_font_scale_from_observation(observation),
         identity,
     );
     display.font_defaults = font_observer.initial().clone();
@@ -2356,6 +2366,7 @@ impl DisplayHost for PrimaryWindowDisplayHost {
         self.send_render_command(
             RenderCommand::Window(WindowCommand::ResizeWindow {
                 frame,
+                resize_request_id: request.resize_request_id,
                 width: request.width,
                 height: request.height,
                 geometry_hints: request.geometry_hints,
@@ -2605,6 +2616,13 @@ impl DisplayHost for PrimaryWindowDisplayHost {
         )
     }
 
+    fn set_ns_confirm_quit(&mut self, enabled: bool) {
+        #[cfg(target_os = "macos")]
+        neomacs_display_runtime::render_thread::set_ns_confirm_quit(enabled);
+        #[cfg(not(target_os = "macos"))]
+        let _ = enabled;
+    }
+
     fn set_modifier_policy(
         &mut self,
         policy: neomacs_display_protocol::ModifierPolicy,
@@ -2654,11 +2672,14 @@ impl DisplayHost for PrimaryWindowDisplayHost {
             .synchronized_font_metrics()
             .select_font_for_realized_face_char(
                 character,
-                neomacs_layout_engine::font::metrics::RealizedFaceFontSelection::new(
+                neomacs_layout_engine::font::metrics::selection_for_realized_fontset(
                     requested_family,
                     requested_weight,
                     requested_italic,
                     font_size,
+                    request.frame_id.0,
+                    request.realized_face_id,
+                    request.realized_face_epoch,
                 ),
             );
         tracing::debug!(
@@ -2697,17 +2718,41 @@ impl DisplayHost for PrimaryWindowDisplayHost {
         let requested_family_storage = face.family_runtime_string_owned();
         let requested_family = requested_family_storage.as_deref().unwrap_or("Monospace");
         let requested_weight = face.weight.unwrap_or(FontWeight::NORMAL).css_weight();
-        let requested_italic = face.slant.map(|slant| slant.is_italic()).unwrap_or(false);
+        let requested_slant = face.slant.unwrap_or(neovm_core::face::FontSlant::Normal);
+        let requested_width = face.width.unwrap_or(neovm_core::face::FontWidth::Normal);
+        let foundry = face
+            .foundry
+            .as_ref()
+            .and_then(|value| value.as_lisp_string())
+            .map(|value| neovm_core::emacs_core::emacs_char::to_utf8_lossy(value.as_bytes()));
         let Some(font_size) = font_sizing.font_size_px_for_request(request.size()) else {
             return Ok(None);
         };
-        let selected = self.synchronized_font_metrics().select_font_for_char(
-            'M',
-            requested_family,
-            requested_weight,
-            requested_italic,
-            font_size.get(),
-        );
+        let pixel_size = (font_size.get().round() as u32).max(1);
+        let metrics = self.synchronized_font_metrics();
+        let selected = if request.selection() == FrameFontSelection::FontSpecification {
+            // An absent family retains this host's existing Monospace default;
+            // the request does not yet carry the old lface's inherited context.
+            let query = neomacs_layout_engine::font::resolver::FontEntityQuery::new(
+                neomacs_layout_engine::font_backend::FontFamilyName::new(requested_family),
+            )
+            .with_selection(neovm_core::emacs_core::eval::FontSpecSelection::OpenBySpec)
+            .with_weight(requested_weight)
+            .with_slant(requested_slant)
+            .with_width(requested_width);
+            metrics
+                .resolve_font_entity(&query)
+                .and_then(|entity| metrics.open_platform_match_font(&entity.matched, pixel_size))
+        } else {
+            metrics.open_face_font(
+                requested_family,
+                foundry.as_deref(),
+                requested_weight,
+                requested_slant,
+                requested_width,
+                pixel_size,
+            )
+        };
         let Some(font) = selected else {
             return Ok(None);
         };
@@ -2991,7 +3036,7 @@ impl DisplayHost for PrimaryWindowDisplayHost {
         &self,
         request: ImageResolveRequest,
         limit: ImageSizeLimit,
-    ) -> Result<Option<ReadyImage>, String> {
+    ) -> neovm_core::emacs_core::image_catalog::ImageSyncResolution {
         self.image_catalog.resolve_sync(request, limit)
     }
 
@@ -3771,6 +3816,7 @@ fn adopt_existing_primary_gui_frame(eval: &mut Context) -> Result<(), String> {
     };
     host.set_gui_frame_alpha(frame_id, alpha, limit)?;
     host.realize_gui_frame(GuiFrameHostRequest {
+        resize_request_id: None,
         frame_id,
         width,
         height,
@@ -3903,6 +3949,19 @@ fn throw_on_input_active(eval: &Context) -> bool {
 }
 
 fn sync_selected_gui_chrome_state(eval: &mut Context) {
+    #[cfg(target_os = "macos")]
+    {
+        // This runs even when the visible-frame forest is empty. AppKit's
+        // key/main window may be nil after iconifying every frame, while
+        // Lisp still has a selected frame (possibly a presented child).
+        let frames = eval.frame_manager();
+        let selected_root = frames
+            .selected_frame()
+            .filter(|frame| frame.effective_window_system().is_some())
+            .and_then(|frame| frames.root_frame_id(frame.id))
+            .map(|frame| frame.0);
+        neomacs_display_runtime::render_thread::set_selected_gui_frame(selected_root);
+    }
     // GUI chrome collection evaluates dynamic menu/tool-bar forms and this
     // host callback cannot propagate their non-local control flow. Preserve
     // the last snapshot until GNU's `while-no-input` scope has finished.
@@ -3939,11 +3998,13 @@ fn sync_selected_gui_chrome_state(eval: &mut Context) {
     } else {
         Vec::new()
     };
-    // The frame-context collector is the one GNU-shaped source
-    // (`update_tool_bar` selects the frame's window and buffer first); it
-    // also retains its result across frames until GNU's rebuild predicate
-    // fires, so the layout's own collection of the same frame is a cache hit.
-    let tool_items = if tool_enabled {
+    // Layout's collection is `update_tool_bar`. Doing it here as well re-runs
+    // item Lisp on a chrome-dirty window, because the collector skips its
+    // cache until layout acknowledges that flag. Compact mode is the
+    // exception: it has to know whether any item exists before choosing the
+    // presentation. The separate tool bar does not.
+    let compact_wanted = compact_bar_mode_enabled(eval);
+    let tool_items = if tool_enabled && compact_wanted {
         selected_gui_frame_id
             .map(|frame_id| collect_gui_tool_bar_items_for_frame(eval, frame_id))
             .unwrap_or_default()
@@ -4001,6 +4062,46 @@ fn sync_selected_gui_chrome_state(eval: &mut Context) {
         if let Some(host) = eval.display_host.as_mut() {
             let _ = host.set_gui_frame_geometry_hints(frame_id, hints);
         }
+    }
+}
+
+/// Allocate this frame's toolkit tool bar on the redisplay that has items.
+///
+/// GNU's `update_frame_tool_bar` runs per frame (`gtkutil.c:6149`), and
+/// `update_tool_bar` runs once (`xdisp.c`). Layout collects the items for
+/// drawing. This earlier pass exists only so a Linux frame whose bar is
+/// still unallocated, and whose pixel height is already non-zero, can see
+/// whether that redisplay has items. An allocated frame, a compact bar
+/// (`tool_bar_height` == 0), and every non-Linux frame return before the
+/// collector, so item Lisp is not run twice while the selected window is
+/// still chrome-dirty.
+fn note_redisplayed_linux_tool_bar(eval: &mut Context, frame_id: FrameId) {
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = (eval, frame_id);
+    }
+    #[cfg(target_os = "linux")]
+    {
+        if throw_on_input_active(eval) {
+            return;
+        }
+        let collect = eval.frame_manager().get(frame_id).is_some_and(|frame| {
+            frame.effective_window_system().is_some()
+                && matches!(
+                    frame.toolkit_tool_bar,
+                    neovm_core::window::ToolkitToolBar::Unallocated { .. }
+                )
+                && frame.tool_bar_height > 0
+        });
+        if !collect {
+            return;
+        }
+        let items = collect_gui_tool_bar_items_for_frame(eval, frame_id);
+        neovm_core::emacs_core::frame::note_linux_toolkit_tool_bar_allocation(
+            eval,
+            frame_id,
+            !items.is_empty(),
+        );
     }
 }
 
@@ -4237,6 +4338,23 @@ fn run_gui_main_thread(
 
     let comms = ThreadComms::new().with_image_decoder(image_decoder);
     let (emacs_comms, render_comms) = comms.split();
+    #[cfg(target_os = "linux")]
+    if matches!(&bootstrap_display.kind, BootstrapDisplayKind::Gui { identity, .. }
+        if identity.backend() == neomacs_display_protocol::GraphicalBackend::Wayland)
+    {
+        // Queue the startup snapshot before the native loop can paint. Font
+        // openings already see this same connection-owned preference value.
+        if let Err(error) =
+            emacs_comms
+                .cmd_tx
+                .send(RenderCommand::Config(ConfigCommand::SetFontRenderOptions(
+                    font_observer.initial_raster_options().desktop_options(),
+                )))
+        {
+            tracing::error!(%error, "failed to queue initial font rendering preferences");
+            return;
+        }
+    }
     let (startup_reply, startup_ready) =
         neomacs_display_runtime::render_thread::InitialWindowReply::channel(
             event_loop.create_proxy(),
@@ -4645,13 +4763,42 @@ fn run_gui_evaluator_worker(
     let secondary_ttys = secondary_tty::SecondaryTtyRegistry::default();
     let display_input_rx = emacs_comms.input_rx;
     let mut font_changes = font_observer.take_changes();
+    #[cfg(target_os = "linux")]
+    let mut font_render_changes = font_observer.take_raster_changes();
+    #[cfg(not(target_os = "linux"))]
+    let mut font_render_changes: crossbeam_channel::Receiver<
+        neomacs_display_protocol::DesktopFontRenderOptions,
+    > = crossbeam_channel::never();
+    let font_render_tx = emacs_comms.cmd_tx.clone();
+    let font_render_waker = render_waker.clone();
     let secondary_input_tx = input;
     let secondary_quit_requested = evaluator.quit_requested.clone();
     std::thread::Builder::new()
         .name("input-bridge".to_string())
         .spawn(move || {
+            let mut pending_font_render_options = None;
             loop {
+                // Both transport queues are bounded. Keep draining native
+                // input if the renderer is temporarily unable to accept a
+                // preference update; only the latest snapshot is needed.
+                if let Some(options) = pending_font_render_options.take() {
+                    match font_render_tx.try_send(RenderCommand::Config(
+                        ConfigCommand::SetFontRenderOptions(options),
+                    )) {
+                        Ok(()) => font_render_waker.wake(),
+                        Err(crossbeam_channel::TrySendError::Full(_)) => {
+                            pending_font_render_options = Some(options);
+                        }
+                        Err(crossbeam_channel::TrySendError::Disconnected(_)) => break,
+                    }
+                }
+                let font_render_retry = if pending_font_render_options.is_some() {
+                    crossbeam_channel::after(std::time::Duration::from_millis(10))
+                } else {
+                    crossbeam_channel::never()
+                };
                 let event = crossbeam_channel::select! {
+                    recv(font_render_retry) -> _ => continue,
                     recv(display_input_rx) -> event => match event {
                         Ok(event) => event,
                         Err(_) => break,
@@ -4664,6 +4811,31 @@ fn run_gui_evaluator_worker(
                         match input_publisher.publish_core(
                             neovm_core::keyboard::InputEvent::SystemFontsChanged {
                                 fonts,
+                                display: font_display.clone(),
+                            },
+                        ) {
+                            Publication::Delivered => {}
+                            Publication::ReceiverClosed => break,
+                        }
+                        continue;
+                    }
+                    recv(font_render_changes) -> options => {
+                        let Ok(options) = options else {
+                            font_render_changes = crossbeam_channel::never();
+                            continue;
+                        };
+                        #[cfg(target_os = "linux")]
+                        let options = options.desktop_options();
+                        if font_display.backend() != neomacs_display_protocol::GraphicalBackend::Wayland {
+                            continue;
+                        }
+                        if font_display.observe_font_render_options(options) {
+                            pending_font_render_options = Some(options);
+                        }
+                        // GNU emits font-render for every relevant settings
+                        // signal, even when its effective options are unchanged.
+                        match input_publisher.publish_core(
+                            neovm_core::keyboard::InputEvent::SystemFontRenderingChanged {
                                 display: font_display.clone(),
                             },
                         ) {
@@ -4720,7 +4892,26 @@ fn run_gui_evaluator_worker(
     }));
     frame_layout::install_frame_snapshot_fn(&mut evaluator);
     frame_layout::install_window_layout_query_fn(&mut evaluator);
-    frame_layout::install_font_shape_driver(&mut evaluator);
+    frame_layout::install_font_driver(&mut evaluator);
+    let aux_tx = emacs_comms.cmd_tx.clone();
+    let aux_slots = Arc::clone(&emacs_comms.auxiliary_scroll_coverage);
+    let aux_waker = render_waker.clone();
+    frame_layout::install_gui_display_idle_maintenance(&mut evaluator, move |update| match aux_tx
+        .publish_scroll_coverage(&aux_slots, update)
+    {
+        Ok(woken) => {
+            if woken {
+                aux_waker.wake();
+            }
+            neomacs_display_runtime::redisplay::AuxiliaryCoverageDelivery::Delivered
+        }
+        Err(crossbeam_channel::TrySendError::Full(_)) => {
+            neomacs_display_runtime::redisplay::AuxiliaryCoverageDelivery::QueueFull
+        }
+        Err(crossbeam_channel::TrySendError::Disconnected(_)) => {
+            neomacs_display_runtime::redisplay::AuxiliaryCoverageDelivery::Disconnected
+        }
+    });
     // Lisp's frame-initialize will create the first GUI frame. Publishing the
     // startup terminal as a GUI scene would expose the same premature frame.
 
@@ -4998,7 +5189,21 @@ fn maybe_start_diagnostics(
 
 /// Bootstrap the requested runtime and retain native hosting when graphical
 /// clients may need it, independently of the initial Lisp frame's frontend.
-pub fn run(mode: RuntimeMode) {
+///
+fn should_configure_webview_before_threads(mode: RuntimeMode, startup: &StartupOptions) -> bool {
+    mode == RuntimeMode::FinalRun
+        && !startup.noninteractive
+        && (startup.frontend == FrontendKind::Gui || startup.daemon.is_some())
+}
+
+/// Entrypoint for the Neomacs binary.
+///
+/// # Safety
+/// The caller must invoke this from process entry while the process is still
+/// single-threaded (required by `std::env::set_var`,
+/// `neomacs_webview::configure_before_threads`, and `daemon::prepare`'s
+/// `std::env::remove_var` / `libc::fork`).
+pub unsafe fn run(mode: RuntimeMode) {
     let process_started_at = Instant::now();
     let process_args = std::env::args_os().collect::<Vec<_>>();
 
@@ -5038,11 +5243,15 @@ pub fn run(mode: RuntimeMode) {
     // collation locale instead of defaulting to the "C" (code-point) locale.
     initialize_system_locale();
 
-    // Make the editor immune to a child process suspending it via job control
-    // (issue #132): children are spawned in their own process group
-    // (callproc::new_child_command), and we ignore SIGTTOU so terminal output
-    // from a momentarily-backgrounded neomacs never stops the whole editor.
-    install_job_control_signal_hygiene();
+    // Preserve the inherited `SIGTTOU` disposition, matching GNU Emacs 31.1
+    // (GNU never sets `SIGTTOU` to `SIG_IGN`; `src/sysdep.c:924-960` and
+    // `src/term.c:4354-4356,4485-4489` only temporarily block `SIGTTOU` with
+    // `pthread_sigmask` around `tcsetpgrp`, `TIOCNOTTY`, and `tgetent`).
+    // Issue #132 originally ignored `SIGTTOU` globally while children only
+    // called `setpgid(0, 0)`, which leaked `SIGTTOU = SIG_IGN` to every pipe
+    // and PTY subprocess; children now call `setsid()` in
+    // `callproc::isolate_child_command` and `neomacs-terminfo` blocks
+    // `SIGTTOU` around `tgetent`/`setupterm`.
 
     // Handle --help / --version with no logging side effects (so e.g.
     // `NEOMACS_LOG_TO_FILE=1 neomacs --help` does not create a stray
@@ -5072,12 +5281,26 @@ pub fn run(mode: RuntimeMode) {
         std::process::exit(1);
     });
 
+    // Export WPE DRM render-node overrides only for interactive GUI or daemon
+    // sessions (never for --batch, -nw, or build-time temacs/bootstrap runs,
+    // which must not leak WPE_DRM_* into Lisp `getenv` or subprocesses).
+    // Runs before `daemon::prepare` and `text_huge_pages` so the process is
+    // still single-threaded and a forked daemon inherits the chosen node.
+    if should_configure_webview_before_threads(mode, &startup) {
+        // SAFETY: `run`'s caller guarantees the process is single-threaded,
+        // and no threads or forks have occurred in `run` yet.
+        unsafe { neomacs_webview::configure_before_threads() };
+    }
+
     // Fork before tracing, display, evaluator, or worker threads exist. The
     // original invocation exits only when Lisp calls daemon-initialized.
-    let daemon_notifier = daemon::prepare(startup.daemon.as_ref()).unwrap_or_else(|error| {
-        eprintln!("neomacs: {error}");
-        std::process::exit(1);
-    });
+    // SAFETY: `run`'s caller guarantees the process is single-threaded, and no
+    // threads have been spawned in `run` yet.
+    let daemon_notifier =
+        unsafe { daemon::prepare(startup.daemon.as_ref()) }.unwrap_or_else(|error| {
+            eprintln!("neomacs: {error}");
+            std::process::exit(1);
+        });
 
     // Collapse after daemon::prepare so the post-fork serving process benefits;
     // the pre-fork parent would waste it. --help/--version already exited, so
@@ -5303,11 +5526,16 @@ pub fn run(mode: RuntimeMode) {
     let primary_window_size: SharedPrimaryWindowSize =
         Arc::new(Mutex::new(PrimaryWindowSize { width, height }));
     let tty_popup_force_full_redraw = Arc::new(AtomicBool::new(false));
+    let tty_input_pause = tty_frontend::TtyInputPause::new();
     let secondary_ttys = secondary_tty::SecondaryTtyRegistry::default();
     if tty_init::should_enable_live_tty_io(&startup) {
-        set_terminal_host(Box::new(tty_frontend::TtyTerminalHost::new(
-            emacs_comms.cmd_tx.clone(),
-        )));
+        set_terminal_host(Box::new(
+            tty_frontend::TtyTerminalHost::with_emergency_escape(
+                emacs_comms.cmd_tx.clone(),
+                tty_input_pause.clone(),
+                tty_popup_force_full_redraw.clone(),
+            ),
+        ));
         evaluator.set_display_host(Box::new(tty_frontend::TtyPopupDisplayHost::new(
             tty_popup_force_full_redraw.clone(),
         )));
@@ -5350,7 +5578,11 @@ pub fn run(mode: RuntimeMode) {
                 // No bridge owns this unused bounded receiver. RenderComms
                 // still owns the original command and native resource lives.
                 drop(emacs_comms.input_rx);
-                tty_frontend::TtyInputReader::spawn_primary(render_comms, input_publisher)
+                tty_frontend::TtyInputReader::spawn_primary_with_pause(
+                    render_comms,
+                    input_publisher,
+                    tty_input_pause,
+                )
             };
             #[cfg(not(unix))]
             let reader_result = {
@@ -5481,12 +5713,22 @@ pub fn run(mode: RuntimeMode) {
 
     // 11. Shutdown
     tracing::info!("Shutting down...");
+    let primary_reset_strings = neovm_core::emacs_core::terminal::pure::terminal_mode_strings_bytes(
+        neovm_core::emacs_core::terminal::pure::TERMINAL_ID,
+        "tty-mode-reset-strings",
+    );
+    daemon_tty_cleanup.close_all_with(|terminal_id| {
+        neovm_core::emacs_core::terminal::pure::terminal_mode_strings_bytes(
+            terminal_id,
+            "tty-mode-reset-strings",
+        )
+    });
     let _ = emacs_comms.cmd_tx.try_send(
         neomacs_display_runtime::thread_comm::RenderCommand::Lifecycle(LifecycleCommand::Shutdown),
     );
     frontend.join();
     if tty_init::should_enable_live_tty_io(&startup) {
-        tty_init::tty_shutdown_terminal();
+        tty_init::tty_shutdown_terminal_with(&primary_reset_strings);
     }
     log_clean_process_exit(process_started_at, &process_args);
 
@@ -5603,8 +5845,12 @@ fn register_workspace_carrier_tls() {
 }
 
 fn main() {
+    // SAFETY: first statement at process entry before any runtime threads are
+    // spawned (required by `std::env::set_var` in macOS bundle init).
+    unsafe {
+        neomacs_display_runtime::macos_bundle_runtime::configure_before_threads();
+    }
     register_workspace_carrier_tls();
-    neomacs_display_runtime::macos_bundle_runtime::configure_before_threads();
     #[cfg(feature = "gc-memory-telemetry")]
     neovm_core::tagged::gc::memory_telemetry::set_allocator_sampler(gc_memory_allocator::sample);
 
@@ -5624,7 +5870,11 @@ fn main() {
     // and so run this line too -- they must, because `fresh-build` drives them
     // across a tree whose `.elc` are mid-recompile.
     neovm_core::emacs_core::load::announce_shipped_editor_process();
-    run(runtime_mode_from_argv(std::env::args()));
+    // SAFETY: still single-threaded at process entry; no threads exist before
+    // `run` performs its early env/fork initialization.
+    unsafe {
+        run(runtime_mode_from_argv(std::env::args()));
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -6662,6 +6912,7 @@ fn publish_gui_frame(
         .into_iter()
         .flat_map(|tree| tree.frames_bottom_to_top)
     {
+        note_redisplayed_linux_tool_bar(evaluator, node.frame_id);
         let prepared = frame_layout::layout_frame_display_state(
             evaluator,
             node.frame_id,
@@ -6714,28 +6965,6 @@ fn increase_stack_limit() {
 
 #[cfg(not(unix))]
 fn increase_stack_limit() {}
-
-/// Job-control signal hygiene so a child process can never suspend the editor
-/// (issue #132). Mirrors GNU Emacs, which is never stopped by SIGTTOU.
-///
-/// Children are spawned in their own process group (callproc::new_child_command
-/// → setpgid), so a child's SIGTSTP stays in its own group. The remaining
-/// vector is SIGTTOU: when an interactive subprocess (`bash -i`) grabs the
-/// controlling terminal's foreground process group, neomacs's own terminal
-/// output (redisplay) from a momentarily-backgrounded state would raise SIGTTOU
-/// and stop the whole process. Ignoring SIGTTOU makes those writes succeed
-/// instead — exactly how a terminal editor must behave. SIGTSTP is left intact
-/// so deliberate `C-z` suspension still works.
-#[cfg(unix)]
-fn install_job_control_signal_hygiene() {
-    // SIG_IGN is idempotent and process-global; safe to set once at startup.
-    unsafe {
-        libc::signal(libc::SIGTTOU, libc::SIG_IGN);
-    }
-}
-
-#[cfg(not(unix))]
-fn install_job_control_signal_hygiene() {}
 
 /// Initialize the C library locale from the environment, matching GNU Emacs's
 /// `emacs.c` main(): it calls `setlocale (LC_ALL, "")` (unless `LC_ALL` is the

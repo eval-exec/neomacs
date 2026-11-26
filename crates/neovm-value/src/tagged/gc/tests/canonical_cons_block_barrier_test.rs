@@ -24,12 +24,12 @@ fn address(value: TaggedValue) -> usize {
 }
 
 fn minor(heap: &mut TaggedHeap, roots: &[TaggedValue]) {
-    heap.begin_minor_collection().unwrap();
+    heap.begin_minor_collection_for_test().unwrap();
     for &root in roots {
         heap.seed_root(root);
     }
-    heap.complete_minor_collection();
-    heap.finish_incremental_sweep_now();
+    heap.complete_minor_collection_for_test();
+    heap.finish_incremental_sweep_now_for_test();
     heap.gc_threshold = 1_000_000;
 }
 
@@ -249,7 +249,7 @@ fn canonical_block_black_partial_close_keeps_color_and_unmarks_only_refunded_tai
         assert_eq!(heap.region_book.cons_color(), RegionColor::Black);
         assert_eq!(heap.region_book.cons_block_and_color, 3);
         assert_eq!(counts(&heap), exact);
-        assert_eq!(heap.cons_blocks[0].next_index as usize, n);
+        assert_eq!(heap.cons_blocks[0].next_index(), n);
         assert!(handed.iter().all(|v| marked(&heap, v.bits() & !TAG_MASK)));
         assert!(tail.iter().all(|&a| !marked(&heap, a)));
 

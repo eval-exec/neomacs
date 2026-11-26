@@ -55,10 +55,10 @@ fn lexical_fn(nargs: u32, ops: Vec<Op>, constants: Vec<Value>) -> ByteCodeFuncti
         optional: Vec::new(),
         rest: None,
     });
-    f.lexical = true;
-    f.ops = ops;
-    f.constants = constants.into();
-    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(8);
+    f.set_lexical(true);
+    f.set_ops(ops);
+    f.set_constants(constants.into());
+    f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(8));
     f.seal_hand_assembled_ops();
     f
 }
@@ -256,7 +256,7 @@ fn tier2_spec_reached_leaf_upgrades_and_serves_the_work() {
     let mut ev = Context::new(crate::test_utils::unit_runtime());
     // Not lexical, so the MIR tier's pure inliner leaves the call a call.
     let mut callee = seven();
-    callee.lexical = false;
+    callee.set_lexical(false);
     let callee = Value::make_bytecode(callee);
     let callee_sym = intern("neovm--t2-x7-callee");
     ev.obarray.set_symbol_function_id(callee_sym, callee);
@@ -397,7 +397,7 @@ fn tier2_loop_credit_requests_inside_one_call_at_the_poll_cadence() {
         );
         let polls = bytecode_branch_poll_count();
         let state = current(&f).obs.t2.state.get();
-        cache::clear();
+        cache::clear_with_serial_receipt().expect("serial jit grace");
         (polls, state)
     };
     let (off_polls, off_state) = polls_with(Tier2Knob {
@@ -492,7 +492,7 @@ fn tier2_mapping_builtin_credits_its_sequence() {
         assert_eq!(current(&caller).obs.t2.state.get(), T2State::Idle);
         assert_eq!(run(&mut ev, &caller, &[identity, list]), Some(list));
         let state = current(&caller).obs.t2.state.get();
-        cache::clear();
+        cache::clear_with_serial_receipt().expect("serial jit grace");
         state
     };
     let before = stats().hof_credits;

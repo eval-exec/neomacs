@@ -2,7 +2,7 @@
 //! Binding consumes today's `AllStopped` proof; it does not replace `stop`.
 
 use super::super::RendezvousError;
-use super::super::rendezvous::AllStopped;
+use super::super::rendezvous::{AllStopped, AllStoppedFailure};
 use super::PublishedOwner;
 use std::marker::PhantomData;
 use std::rc::Rc;
@@ -64,14 +64,70 @@ impl<'s, 'era> StoppedInterval<'s, 'era> {
             .with_stopped_gate(|registry, gate| owner.validate_current(registry, gate))
     }
 
-    pub(super) fn heap_identity(&self) -> crate::tagged::gc::HeapIdentity {
+    /// The heap this stop is over.
+    #[doc(hidden)]
+    pub fn heap_identity(&self) -> crate::tagged::gc::HeapIdentity {
         self.stopped.heap_identity()
+    }
+
+    /// Stop epoch recorded on the proof. Not a loan and not a new stop.
+    #[doc(hidden)]
+    pub fn epoch(&self) -> std::num::NonZeroU64 {
+        self.stopped.epoch()
+    }
+
+    /// The serial ring's head under this stop: an owner with its queued
+    /// generation, or the Baton group.
+    #[doc(hidden)]
+    pub fn serial_head(
+        &self,
+    ) -> Result<Option<super::super::rendezvous::RingClient>, RendezvousError> {
+        self.stopped.serial_head()
+    }
+
+    /// Serial requests queued or granted under this stop.
+    #[doc(hidden)]
+    pub fn serial_ring_len(&self) -> Result<usize, RendezvousError> {
+        self.stopped.serial_ring_len()
+    }
+
+    /// L6.7 K3: grant the serial ring's head inside this stop.
+    #[doc(hidden)]
+    pub fn grant_serial_head(
+        &mut self,
+        ready: impl FnOnce(super::super::MutatorKey, std::num::NonZeroU64) -> bool,
+    ) -> Result<Option<super::super::rendezvous::SerialGrant>, RendezvousError> {
+        self.stopped.grant_serial_head(ready)
+    }
+
+    /// L6.7b b3: grant a Baton-group head inside this stop.
+    #[doc(hidden)]
+    pub fn grant_baton_group(
+        &mut self,
+    ) -> Result<Option<super::super::rendezvous::SerialGrant>, RendezvousError> {
+        self.stopped.grant_baton_group()
+    }
+
+    /// Retire a grant issued under this stop, exactly once.
+    #[doc(hidden)]
+    pub fn retire_serial_grant(
+        &mut self,
+        grant: super::super::rendezvous::SerialGrant,
+    ) -> Result<(), RendezvousError> {
+        self.stopped.retire_serial_grant(grant)
     }
 
     /// Move this proof into the dormant reservation. Not a second mint.
     #[doc(hidden)]
     pub fn into_unentered(self) -> super::reservation::UnenteredReservation<'s, 'era> {
         super::reservation::UnenteredReservation::from_interval(self)
+    }
+
+    /// Finish the already-traced epoch. This does not hand out `AllStopped`,
+    /// so there is no collector, loan, or resume API on the interval.
+    #[doc(hidden)]
+    pub fn complete_traced(self) -> Result<(), AllStoppedFailure<'era>> {
+        self.stopped.complete()
     }
 }
 

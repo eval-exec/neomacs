@@ -148,9 +148,28 @@ impl Context {
             AdmissionScope<'heap>,
         ) -> (QuiescentCollector<'heap>, super::Baton, R),
     ) -> Result<R, OwnedParallelError> {
-        let prepared = self.prepare_owned_admission()?;
+        struct AbortOnPanic(&'static str);
+        impl Drop for AbortOnPanic {
+            fn drop(&mut self) {
+                if std::thread::panicking() {
+                    eprintln!(
+                        "fatal: panic while Context TLS heap is cleared in {}",
+                        self.0
+                    );
+                    std::process::abort();
+                }
+            }
+        }
+        // SAFETY: `abort_on_unwind` arms immediately after
+        // `prepare_owned_admission` succeeds and is disarmed only after
+        // `recover_serial_context(recovery)` completes, so a panic inside
+        // `prepared.run` or recovery aborts the process rather than returning
+        // a cleared/abandoned `&mut Context` to a `catch_unwind` caller.
+        let prepared = unsafe { self.prepare_owned_admission()? };
+        let abort_on_unwind = AbortOnPanic("admit-owned-with");
         let (recovery, result) = prepared.run(plan, body);
         self.recover_serial_context(recovery);
+        std::mem::forget(abort_on_unwind);
         result
     }
 
@@ -232,7 +251,8 @@ fn map_registration(error: RegistrationError) -> OwnedParallelError {
         | RegistrationError::ResidualSatb
         | RegistrationError::Publication
         | RegistrationError::PendingRoots
-        | RegistrationError::PendingYoung => OwnedParallelError::Publication,
+        | RegistrationError::PendingYoung
+        | RegistrationError::OwnerReserveHeld => OwnedParallelError::Publication,
     }
 }
 
@@ -247,7 +267,8 @@ fn map_rendezvous(error: RendezvousError) -> OwnedParallelError {
         | RendezvousError::Generation
         | RendezvousError::Readers
         | RendezvousError::Capacity
-        | RendezvousError::Root => OwnedParallelError::Publication,
+        | RendezvousError::Root
+        | RendezvousError::TelemetryStoppedGcUnavailable => OwnedParallelError::Publication,
     }
 }
 

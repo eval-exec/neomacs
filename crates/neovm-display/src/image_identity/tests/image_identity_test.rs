@@ -46,3 +46,51 @@ fn image_identity_ignores_acyclic_sharing_and_tracks_nested_cycles() {
         ImageSpecIdentity::from_lisp_spec(&independent).unwrap()
     );
 }
+
+#[test]
+fn image_identity_filters_gnu_animation_bookkeeping_keys_only() {
+    // GNU `filter_image_spec` (src/image.c:2259-2288) strips :animate-buffer,
+    // :animate-tardiness, and :animate-position so `image-animate-timeout`
+    // does not bust the image cache on every tick (#823).
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
+    let base = eval
+        .eval_str("(list 'image :type 'gif :file \"anim.gif\" :index 0)")
+        .unwrap();
+    let with_bookkeeping = eval
+        .eval_str(
+            "(list 'image :type 'gif :file \"anim.gif\" :index 0 \
+                   :animate-buffer 'anim-buf \
+                   :animate-tardiness 0.125 \
+                   :animate-position (list 42))",
+        )
+        .unwrap();
+    let mutated_tardiness = eval
+        .eval_str(
+            "(list 'image :type 'gif :file \"anim.gif\" :index 0 \
+                   :animate-tardiness 1.75)",
+        )
+        .unwrap();
+    let next_frame = eval
+        .eval_str(
+            "(list 'image :type 'gif :file \"anim.gif\" :index 1 \
+                   :animate-tardiness 1.75)",
+        )
+        .unwrap();
+
+    let base_id = ImageSpecIdentity::from_lisp_spec(&base).unwrap();
+    assert_eq!(
+        base_id,
+        ImageSpecIdentity::from_lisp_spec(&with_bookkeeping).unwrap(),
+        "animation bookkeeping keys must not change image cache identity"
+    );
+    assert_eq!(
+        base_id,
+        ImageSpecIdentity::from_lisp_spec(&mutated_tardiness).unwrap(),
+        "mutating :animate-tardiness must keep the same cache identity"
+    );
+    assert_ne!(
+        base_id,
+        ImageSpecIdentity::from_lisp_spec(&next_frame).unwrap(),
+        "changing :index must still select a distinct frame identity"
+    );
+}

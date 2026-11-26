@@ -167,6 +167,7 @@ impl FrameFaceRealizationCacheExt for FrameFaceRealizationCache {
         self.default_lface = None;
         self.default_predecessor = None;
         self.default_lookup_position = DefaultLookupPosition::Shadowed;
+        self.opened_font_objects.clear();
     }
 
     /// Refresh definitions through the two audited recorded realization paths.
@@ -182,6 +183,7 @@ impl FrameFaceRealizationCacheExt for FrameFaceRealizationCache {
         self.root_lease = None;
         self.dirty_definitions.clear();
         self.definitions_all_dirty = false;
+        self.opened_font_objects.clear();
     }
 
     /// Test-only raw replacement fault seam; unavailable in production.
@@ -304,6 +306,7 @@ impl FrameFaceRealizationCacheExt for FrameFaceRealizationCache {
         self.default_lface = None;
         self.root_lease = None;
         self.definitions_all_dirty = true;
+        self.opened_font_objects.clear();
     }
 
     /// Carry an unchanged source through a frame-local global-counter bump.

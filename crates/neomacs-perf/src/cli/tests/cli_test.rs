@@ -311,6 +311,47 @@ fn suite_command_parses_regression_and_history_controls() {
             },
             counters: Some(CounterScope::EditLoop),
             previous_suite: Some(PathBuf::from("tmp/perf-suites/previous/suite.json")),
+            baseline_manifest: None,
+        }
+    );
+}
+
+#[test]
+fn suite_command_parses_org_editing_guard_with_baseline_manifest() {
+    assert_eq!(
+        parse(&[
+            "suite",
+            "org-editing-guard",
+            "--baseline-editor",
+            "/opt/neomacs-perf/v0.0.21/bin/neomacs",
+            "--baseline-manifest",
+            ".github/perf-baselines/v0.0.21.json",
+            "--candidate-editor",
+            "target/release/neomacs",
+            "--samples",
+            "9",
+            "--cpu",
+            "0",
+            "--require-governor",
+            "performance",
+            "--hardware-counters",
+            "--counter-scope",
+            "edit-loop",
+        ])
+        .expect("parse org-editing-guard suite"),
+        PerfCommand::Suite {
+            suite: SuiteId::OrgEditingGuard,
+            baseline_editor: PathBuf::from("/opt/neomacs-perf/v0.0.21/bin/neomacs"),
+            candidate_editor: PathBuf::from("target/release/neomacs"),
+            samples: ComparisonSampleCount::new(9).expect("valid sample count"),
+            timeout: Duration::from_secs(300),
+            machine: MachinePolicy {
+                cpu: Some(0),
+                required_governor: Some("performance".to_string()),
+            },
+            counters: Some(CounterScope::EditLoop),
+            previous_suite: None,
+            baseline_manifest: Some(PathBuf::from(".github/perf-baselines/v0.0.21.json")),
         }
     );
 }

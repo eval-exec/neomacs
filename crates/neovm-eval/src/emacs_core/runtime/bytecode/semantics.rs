@@ -18,7 +18,7 @@ use neovm_value::hashtab::{
 use neovm_value::heap_types::LispString;
 use neovm_value::tagged::SymbolMode;
 use neovm_value::value::{
-    ByteCodeKeyPart, EqualKind, EqualSeenPair, HashKey, Value, equal_value_inner,
+    ByteCodeKeyPart, EqualKeySeen, EqualKind, EqualSeenPair, HashKey, Value, equal_value_inner,
     try_equal_value_inner,
 };
 use std::collections::HashSet;
@@ -255,7 +255,7 @@ fn op_key_word(op: &Op) -> u64 {
 fn bytecode_to_equal_key(
     value: Value,
     depth: usize,
-    seen: &mut Vec<usize>,
+    seen: &mut EqualKeySeen,
     symbols_with_pos_enabled: bool,
     budget: &mut usize,
 ) -> HashKey {

@@ -7,7 +7,9 @@
 //! moves it.
 
 use super::*;
-use neomacs_display_protocol::image_diagnostic::{ImageDiagnostic, ImageFormatName};
+use neomacs_display_protocol::image_diagnostic::{
+    ImageDecodeFailure, ImageDiagnostic, ImageFormatName,
+};
 use neomacs_display_runtime::render_thread::{ImageDecodeTerminal, RowRange};
 use neovm_core::emacs_core::image_catalog::{
     ImageLayoutExtent, ImageLoadAttempt, ImageLookup, ImagePlacement, PendingImage,
@@ -35,7 +37,11 @@ fn a_band_leaves_the_slot_pending_on_its_header_geometry() {
     let load = load();
     let pending = PendingImage::new(load, ImageLayoutExtent::new(50, 100));
 
-    let lookup = image_lookup_from_terminal(pending.clone(), band(64));
+    let lookup = image_lookup_from_terminal(
+        pending.clone(),
+        neomacs_display_protocol::FailedImageExtent::default(),
+        band(64),
+    );
 
     let ImageLookup::Pending(still) = lookup else {
         panic!("rows of a decode still running must not resolve the slot");
@@ -52,9 +58,14 @@ fn the_terminal_state_after_bands_resolves_the_same_slot() {
     let load = load();
     let pending = PendingImage::new(load, ImageLayoutExtent::new(50, 50));
 
-    let _ = image_lookup_from_terminal(pending.clone(), band(8));
+    let _ = image_lookup_from_terminal(
+        pending.clone(),
+        neomacs_display_protocol::FailedImageExtent::default(),
+        band(8),
+    );
     let lookup = image_lookup_from_terminal(
         pending.clone(),
+        neomacs_display_protocol::FailedImageExtent::default(),
         ImageDecodeTerminal::Ready(ResolvedImageMetadata::layout_is_image_pixels(
             50,
             100,
@@ -79,19 +90,32 @@ fn a_failure_after_bands_fails_the_slot() {
     let load = load();
     let pending = PendingImage::new(load, ImageLayoutExtent::new(50, 50));
 
-    let _ = image_lookup_from_terminal(pending.clone(), band(8));
+    let _ = image_lookup_from_terminal(
+        pending.clone(),
+        neomacs_display_protocol::FailedImageExtent::default(),
+        band(8),
+    );
     let lookup = image_lookup_from_terminal(
         pending.clone(),
-        ImageDecodeTerminal::Failed(ImageDiagnostic::FormatError {
+        neomacs_display_protocol::FailedImageExtent::default(),
+        ImageDecodeTerminal::Failed(ImageDecodeFailure::new(ImageDiagnostic::FormatError {
             format: ImageFormatName::Png,
             detail: "Read error".to_owned(),
-        }),
+        })),
     );
 
     let ImageLookup::Failed(failed) = lookup else {
         panic!("a failed load is a failed slot");
     };
-    assert_eq!(failed.placement(), pending.placement());
+    assert_eq!(
+        failed.placement().image_id(),
+        pending.placement().image_id()
+    );
+    assert_eq!(failed.placement().dimensions(), (30, 30));
+    assert_eq!(
+        failed.failed_extent(),
+        neomacs_display_protocol::FailedImageExtent::default()
+    );
 }
 
 /// A band is not terminal. The distinction the whole seam rests on: `Ready` and
@@ -109,7 +133,10 @@ fn only_ready_and_failed_end_a_load() {
         ))
         .is_terminal()
     );
-    assert!(ImageDecodeTerminal::Failed(ImageDiagnostic::InvalidSize).is_terminal());
+    assert!(
+        ImageDecodeTerminal::Failed(ImageDecodeFailure::new(ImageDiagnostic::InvalidSize))
+            .is_terminal()
+    );
 }
 
 /// The placement a band publishes is the placement the load published, so a
@@ -121,7 +148,11 @@ fn a_bands_placement_is_the_pending_slots() {
     let pending = PendingImage::new(load, ImageLayoutExtent::new(300, 200));
 
     assert_eq!(pending.placement(), placement);
-    let ImageLookup::Pending(still) = image_lookup_from_terminal(pending, band(2)) else {
+    let ImageLookup::Pending(still) = image_lookup_from_terminal(
+        pending,
+        neomacs_display_protocol::FailedImageExtent::default(),
+        band(2),
+    ) else {
         panic!("still pending");
     };
     assert_eq!(still.placement().image_id(), placement.image_id());

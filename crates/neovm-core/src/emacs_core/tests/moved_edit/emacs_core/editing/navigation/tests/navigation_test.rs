@@ -156,6 +156,7 @@ fn test_pos_bol_forward_past_final_unterminated_line_returns_point_max() {
     eval_str(&mut ev, "(goto-char 9)"); // beginning of final line
     assert_eq!(eval_int(&mut ev, "(pos-bol 2)"), 14);
 
+    drop(ev);
     let mut single = eval_with_text("single");
     eval_str(&mut single, "(goto-char 1)");
     assert_eq!(eval_int(&mut single, "(pos-bol 2)"), 7);

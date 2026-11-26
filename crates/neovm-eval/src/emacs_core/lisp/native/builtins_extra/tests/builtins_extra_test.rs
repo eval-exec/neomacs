@@ -417,6 +417,7 @@ fn user_info() {
             .unwrap()
             .is_string()
     );
+    drop(ctx);
     let mut eval = super::super::eval::Context::new(crate::test_utils::unit_runtime());
     assert!(builtin_system_name(&mut eval, vec![]).unwrap().is_string());
     let system_configuration = system_configuration_value();
@@ -632,11 +633,24 @@ fn garbage_collect_cons_row_reports_live_cells() {
         conses[2].as_int().expect("USED is an integer")
     };
 
+    unsafe {
+        neovm_value::tagged::gc::with_tagged_heap(|heap| {
+            heap.request_gc_object_counts();
+            heap.collect_rooted(std::iter::empty());
+            heap.publish_gc_object_counts_if_requested(0);
+        })
+    };
     let before = row_used();
     let allocated_before = Value::memory_use_counts_snapshot()[0];
     let unreachable = Value::cons(Value::fixnum(1), Value::NIL);
     drop(unreachable);
-    neovm_value::tagged::gc::with_tagged_heap(|heap| heap.collect_exact(std::iter::empty()));
+    unsafe {
+        neovm_value::tagged::gc::with_tagged_heap(|heap| {
+            heap.request_gc_object_counts();
+            heap.collect_rooted(std::iter::empty());
+            heap.publish_gc_object_counts_if_requested(0);
+        })
+    };
 
     assert_eq!(
         Value::memory_use_counts_snapshot()[0],

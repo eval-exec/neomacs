@@ -10,6 +10,10 @@ use neovm_value::gc_trace::GcTrace;
 // ===========================================================================
 
 pub(crate) fn builtin_run_hooks(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
+    // Allocation is per frame, on that frame's first item-bearing redisplay.
+    // An erroring `window-setup-hook` must not leave the bar unallocated:
+    // GNU packs the bar from `update_frame_tool_bar`, not from this hook's
+    // return value (gtkutil.c:6149-6160).
     hook_runtime::run_named_hooks(eval, &args)
 }
 
@@ -271,9 +275,10 @@ pub fn window_configuration_parts_from_value(value: &Value) -> Option<(Value, i6
     if items.len() != 4 {
         return None;
     }
-    match (items[1].kind(), items[2].kind()) {
+    let frame = items.at(1);
+    match (frame.kind(), items.at(2).kind()) {
         (ValueKind::Veclike(VecLikeType::Frame), ValueKind::Fixnum(serial)) => {
-            Some((items[1], serial))
+            Some((frame, serial))
         }
         _ => None,
     }

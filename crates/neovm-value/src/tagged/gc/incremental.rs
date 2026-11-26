@@ -5,6 +5,57 @@
 
 use super::*;
 
+/// Incremental `NEOVM_GC` line. Existing fields stay in place; `seed_us` is appended.
+pub(super) fn format_incremental_gc_trace_line(
+    collections: usize,
+    mark_us: u64,
+    sweep_total_us: u64,
+    slices: usize,
+    blocks: usize,
+    noncons_freed: usize,
+    cons_live: usize,
+    heap_noncons: usize,
+    mapped_marked: usize,
+    mapped_total: usize,
+    live_bytes: usize,
+    seed_us: u64,
+) -> String {
+    format!(
+        "NEOVM_GC gc#{collections} [incremental mark={mark_us}us sweep_total={sweep_total_us}us \
+         slices={slices} blocks={blocks} noncons_freed={noncons_freed}] cons_live={cons_live} \
+         heap_noncons={heap_noncons} dump_marked={mapped_marked}/{mapped_total} \
+         live={live_bytes}B seed_us={seed_us}"
+    )
+}
+
+/// Eager stop-the-world `NEOVM_GC` line. Existing fields stay in place; `seed_us` is appended.
+pub(super) fn format_eager_gc_trace_line(
+    collections: usize,
+    elapsed_ms: f64,
+    clear_us: u64,
+    mark_us: u64,
+    sweep_us: u64,
+    cons_live: usize,
+    heap_noncons: usize,
+    mapped_marked: usize,
+    mapped_total: usize,
+    dump_cons: usize,
+    dump_vec: usize,
+    dump_str: usize,
+    dump_float: usize,
+    dirty_owners: usize,
+    live_bytes: usize,
+    seed_us: u64,
+) -> String {
+    format!(
+        "NEOVM_GC gc#{collections} {elapsed_ms:.2}ms [clear={clear_us}us mark={mark_us}us \
+         sweep={sweep_us}us] cons_live={cons_live} heap_noncons={heap_noncons} \
+         dump_marked={mapped_marked}/{mapped_total} dump[cons={dump_cons} vec={dump_vec} \
+         str={dump_str} float={dump_float}] dirty_owners={dirty_owners} live={live_bytes}B \
+         seed_us={seed_us}"
+    )
+}
+
 impl TaggedHeap {
     /// True while a mark is underway (between the start handshake and sweep).
     pub fn mark_in_progress(&self) -> bool {
@@ -54,10 +105,20 @@ impl TaggedHeap {
     /// The reclaim drains in bounded slices at later safe points
     /// (`incremental_sweep_slice`), so it is no longer part of the STW pause.
     /// Marking is complete here; the barrier is dropped.
+    /// # Safety
+    ///
+    /// Publishes mark termination and arms the sweep that frees unmarked
+    /// objects. Marking is already at a fixpoint. The caller holds the only
+    /// live heap borrow.
     #[doc(hidden)]
-    pub fn incremental_finish(&mut self, bytes_before: usize, _pause_t0: std::time::Instant) {
+    pub unsafe fn incremental_finish(
+        &mut self,
+        bytes_before: usize,
+        _pause_t0: std::time::Instant,
+    ) {
+        self.assert_no_owner_cons_reserves();
         assert!(
-            !self.concurrent_mark_running,
+            !self.has_unfinished_concurrent_mark(),
             "sweep publication requires an explicit successful marker finish"
         );
         // Before anything else: the free list is reset below, and a
@@ -167,6 +228,7 @@ impl TaggedHeap {
         self.sweep_bignum_page_end = self.bignum_arena.pages.len();
         self.sweep_noncons_live_bytes = 0;
         self.sweep_mark_us = self.incremental_mark_us;
+        self.snapshot_context_seed_for_sweep();
         self.sweep_bytes_before = bytes_before;
         self.sweep_slice_us_total = 0;
         self.sweep_slice_count = 0;
@@ -252,10 +314,15 @@ impl TaggedHeap {
     /// (and finalizes accounting) once the whole sweep is done. New conses
     /// allocated meanwhile are born black (see `alloc_cons`), so an unswept
     /// block never reclaims a live new cell.
+    /// # Safety
+    ///
+    /// Frees unmarked objects in this slice. The caller holds the only live
+    /// heap borrow, and no pointer this slice can free is live across the call.
     #[doc(hidden)]
-    pub fn incremental_sweep_slice(&mut self, budget: usize) -> bool {
+    pub unsafe fn incremental_sweep_slice(&mut self, budget: usize) -> bool {
+        self.assert_no_owner_cons_reserves();
         assert!(
-            !self.concurrent_mark_running,
+            !self.has_unfinished_concurrent_mark(),
             "sweeping requires an explicit successful marker finish"
         );
         // Collector code never sees an open allocation region
@@ -389,9 +456,11 @@ impl TaggedHeap {
                     // Survivor: relink onto the (fresh) young list.
                     (*current).next = self.all_objects;
                     self.all_objects = current;
-                    self.sweep_noncons_live_bytes = self
-                        .sweep_noncons_live_bytes
-                        .saturating_add(self.collector_object_bytes(current));
+                    if !(*current).flags.image_resident() {
+                        self.sweep_noncons_live_bytes = self
+                            .sweep_noncons_live_bytes
+                            .saturating_add(self.collector_object_bytes(current));
+                    }
                 } else {
                     self.non_cons_object_addrs.remove(&(current as usize));
                     self.unregister_vector_object(current);
@@ -450,10 +519,16 @@ impl TaggedHeap {
 
     /// Drive the deferred sweep to completion in one shot (forced GC, or before
     /// the next mark / a stop-the-world collection can begin).
+    /// # Safety
+    ///
+    /// Drains the sweep and frees every remaining unmarked object. The
+    /// caller holds the only live heap borrow.
     #[doc(hidden)]
-    pub fn finish_incremental_sweep_now(&mut self) {
+    pub unsafe fn finish_incremental_sweep_now(&mut self) {
+        self.assert_no_owner_cons_reserves();
         while self.sweep_in_progress {
-            self.incremental_sweep_slice(usize::MAX);
+            // SAFETY: this entry is the draining sweep.
+            unsafe { self.incremental_sweep_slice(usize::MAX) };
         }
     }
 
@@ -461,6 +536,10 @@ impl TaggedHeap {
     /// deltas; GEN0 retains its bitmap recount. Both account for allocate-black
     /// births, fix allocation counters, and emit the completed cycle trace.
     pub(super) fn finish_incremental_sweep(&mut self) {
+        assert!(
+            !self.has_unfinished_concurrent_mark(),
+            "finish_incremental_sweep cannot run while a concurrent mark is unfinished"
+        );
         // I1 (`sweep_in_progress` clears below) and I2 (the recount).
         self.close_alloc_regions();
         if self.generational.enabled {
@@ -504,11 +583,6 @@ impl TaggedHeap {
             self.recompute_old_bytes_world_stopped();
         }
 
-        let mapped_cons_live: usize = self
-            .mapped_cons_ranges
-            .iter()
-            .map(MappedConsRange::live_count)
-            .sum();
         // The live count the next threshold derives from comes from what the
         // sweep visited: the blocks and pages that existed at termination.
         // What they hold that was allocated during the mark window was born
@@ -522,15 +596,12 @@ impl TaggedHeap {
         // only paces the next cycle sooner.
         let cons_live_bytes = self
             .sweep_cons_live_cells
-            .saturating_add(mapped_cons_live)
             .saturating_mul(size_of::<ConsCell>());
-        let mapped_object_live_bytes = self.mapped_non_cons_live_bytes();
         self.live_bytes = cons_live_bytes
             .saturating_add(self.sweep_noncons_live_bytes)
-            .saturating_add(mapped_object_live_bytes)
             .saturating_add(self.old_noncons_bytes())
             .saturating_sub(self.sweep_mark_window_alloc_bytes)
-            .max(mapped_object_live_bytes);
+            .saturating_add(self.image_hash_table_storage_bytes());
 
         self.gc_collections += 1;
         self.sweep_lifetime_us += self.sweep_slice_us_total;
@@ -540,19 +611,21 @@ impl TaggedHeap {
         if std::env::var("NEOVM_GC_TRACE").as_deref() == Ok("1") {
             let (mapped_total, mapped_marked) = self.mapped_object_stats();
             eprintln!(
-                "NEOVM_GC gc#{} [incremental mark={}us sweep_total={}us slices={} blocks={} \
-                 noncons_freed={}] cons_live={} heap_noncons={} dump_marked={}/{} live={}B",
-                self.gc_collections,
-                self.sweep_mark_us,
-                self.sweep_slice_us_total,
-                self.sweep_slice_count,
-                self.sweep_cons_blocks_swept,
-                self.sweep_noncons_freed,
-                self.cons_live_count,
-                self.non_cons_object_addrs.len(),
-                mapped_marked,
-                mapped_total,
-                self.live_bytes,
+                "{}",
+                format_incremental_gc_trace_line(
+                    self.gc_collections,
+                    self.sweep_mark_us,
+                    self.sweep_slice_us_total,
+                    self.sweep_slice_count,
+                    self.sweep_cons_blocks_swept,
+                    self.sweep_noncons_freed,
+                    self.cons_live_count,
+                    self.non_cons_object_addrs.len(),
+                    mapped_marked,
+                    mapped_total,
+                    self.live_bytes,
+                    self.sweep_context_seed_us(),
+                )
             );
         }
         // Owner-tracking remembered-set precursor: NOT cleared at sweep
@@ -580,7 +653,7 @@ impl TaggedHeap {
         // the symbol is interned is a sweep-time question (`is_value_marked`),
         // not a mark-time one: asking `is_canonical_id` here cost an
         // epoch-checked thread-local lookup per symbol reference visited.
-        if self.concurrent_mark_running && self.generational.major_in_progress {
+        if self.concurrent_mark_running() && self.generational.major_in_progress {
             self.current_mutator_gc_mut()
                 .major_symbol_preimages
                 .push(id);
@@ -738,7 +811,8 @@ impl TaggedHeap {
             // first-cycle window of the type sim) before being classified.
             let addr = ptr as usize;
             if (addr >= self.dump_addr_lo && addr < self.dump_addr_hi)
-                || !self.owns_live_veclike_object(ptr as *const u8)
+                // SAFETY: `ptr` was decoded from a `VecLike` `TaggedValue` during incremental marking.
+                || !unsafe { self.owns_live_veclike_object(ptr as *const u8) }
             {
                 if self.mark_mapped_veclike(ptr) {
                     #[cfg(any(test, feature = "test-support"))]
@@ -1043,16 +1117,16 @@ impl TaggedHeap {
                     }
                     return;
                 }
-                self.mark_or_push_child(data.arglist, "bytecode-arglist");
-                if let Some(child) = data.params.heap_child() {
+                self.mark_or_push_child(data.arglist(), "bytecode-arglist");
+                if let Some(child) = data.params().heap_child() {
                     self.mark_or_push_child(child, "bytecode-parameter-arglist");
                 }
                 // Trace constants vector
-                for val in &data.constants {
+                for val in data.constants() {
                     self.mark_or_push_child(*val, "bytecode-constant");
                 }
                 // Trace captured lexical environment
-                if let Some(env) = data.env {
+                if let Some(env) = data.env() {
                     self.mark_or_push_child(env, "bytecode-env");
                 }
                 // Trace doc_form (can be a Value)
@@ -1179,6 +1253,10 @@ impl TaggedHeap {
 
     /// Sweep unmarked cons cells back to free lists.
     pub(super) fn sweep_cons(&mut self) -> usize {
+        assert!(
+            !self.has_unfinished_concurrent_mark(),
+            "sweep_cons cannot reclaim while a concurrent mark is unfinished"
+        );
         if self.generational.enabled && self.is_minor_collection() {
             return self.sweep_minor_cons();
         }
@@ -1218,14 +1296,7 @@ impl TaggedHeap {
             .saturating_add(new_live);
         let candidates = self.cons_allocator.take_empty_candidates();
         let _ = self.release_empty_cons_candidates(candidates);
-        let mapped_live: usize = self
-            .mapped_cons_ranges
-            .iter()
-            .map(MappedConsRange::live_count)
-            .sum();
-        new_live
-            .saturating_add(mapped_live)
-            .saturating_mul(size_of::<ConsCell>())
+        new_live.saturating_mul(size_of::<ConsCell>())
     }
 
     // Select once for the whole sweep, rather than checking the generation
@@ -1368,14 +1439,7 @@ impl TaggedHeap {
             .allocated_count
             .saturating_sub(old_live)
             .saturating_add(new_live);
-        let mapped_live = self
-            .mapped_cons_ranges
-            .iter()
-            .map(MappedConsRange::live_count)
-            .sum::<usize>();
-        new_live
-            .saturating_add(mapped_live)
-            .saturating_mul(size_of::<ConsCell>())
+        new_live.saturating_mul(size_of::<ConsCell>())
     }
 
     /// Complete GEN1 inventory from sweep deltas after every region closes.
@@ -1421,6 +1485,10 @@ impl TaggedHeap {
     /// Actual releases retain the memo's conditional O(all blocks) vector/index/
     /// card rebuild. All work cursors must be consumed before compaction.
     fn release_empty_cons_candidates(&mut self, candidates: Vec<ConsBlockBase>) -> usize {
+        assert!(
+            !self.has_unfinished_concurrent_mark(),
+            "release_empty_cons_candidates cannot free blocks while a concurrent mark is unfinished"
+        );
         debug_assert!(
             !self.alloc_regions_open(),
             "releasing blocks under a region"
@@ -1431,7 +1499,7 @@ impl TaggedHeap {
                 .cons_block_index_by_base
                 .get(&base.addr())
                 .expect("completed sweep candidate is still heap-owned");
-            let used = self.cons_blocks[index].next_index as usize;
+            let used = self.cons_blocks[index].next_index();
             let free = self
                 .cons_allocator
                 .free_count_for(base)
@@ -1498,6 +1566,10 @@ impl TaggedHeap {
     /// Call only after a complete eager or deferred sweep, when mark bits are
     /// the authoritative live-cell set and no sweep cursor remains active.
     pub(super) fn release_empty_cons_blocks(&mut self) -> usize {
+        assert!(
+            !self.has_unfinished_concurrent_mark(),
+            "release_empty_cons_blocks cannot free blocks while a concurrent mark is unfinished"
+        );
         debug_assert!(
             !self.alloc_regions_open(),
             "releasing blocks under a region"
@@ -1585,6 +1657,10 @@ impl TaggedHeap {
     /// Release every completely empty young arena page after a full sweep.
     /// Per-class indices and partial chains are rebuilt inside each arena.
     pub(super) fn release_empty_object_pages(&mut self) -> usize {
+        assert!(
+            !self.has_unfinished_concurrent_mark(),
+            "release_empty_object_pages cannot free pages while a concurrent mark is unfinished"
+        );
         debug_assert!(!self.alloc_regions_open(), "releasing pages under a region");
         self.float_arena.release_empty_pages()
             + self.string_arena.release_empty_pages()
@@ -1600,6 +1676,10 @@ impl TaggedHeap {
 
     /// Sweep non-cons objects: walk intrusive list, free unmarked, rebuild list.
     pub(super) fn sweep_objects(&mut self) -> usize {
+        assert!(
+            !self.has_unfinished_concurrent_mark(),
+            "sweep_objects cannot reclaim while a concurrent mark is unfinished"
+        );
         // Collector code never sees an open allocation region
         // (`alloc_region.rs`, invariant I2).
         self.close_alloc_regions();
@@ -1634,7 +1714,10 @@ impl TaggedHeap {
                 debug_assert!(!(*current).tenured, "tenured object on the young list");
                 if (*current).is_marked_at(parity) {
                     // Keep it — advance prev
-                    live_bytes = live_bytes.saturating_add(self.collector_object_bytes(current));
+                    if !(*current).flags.image_resident() {
+                        live_bytes =
+                            live_bytes.saturating_add(self.collector_object_bytes(current));
+                    }
                     prev = std::ptr::addr_of_mut!((*current).next);
                     current = next;
                 } else {
@@ -1674,6 +1757,10 @@ impl TaggedHeap {
     ///
     /// Returns `(survivor bytes, slots freed)` summed over the classes.
     pub(super) fn sweep_arena_pages_ranges(&mut self, ranges: ArenaSweepRanges) -> (usize, usize) {
+        assert!(
+            !self.has_unfinished_concurrent_mark(),
+            "sweep_arena_pages_ranges cannot sweep while a concurrent mark is unfinished"
+        );
         if self.generational.enabled {
             self.sweep_arena_pages_in_generation::<true>(ranges)
         } else {
@@ -1838,25 +1925,6 @@ impl TaggedHeap {
         )
     }
 
-    pub(super) fn mapped_non_cons_live_bytes(&self) -> usize {
-        self.mapped_float_ranges
-            .iter()
-            .map(|range| range.live_count().saturating_mul(size_of::<FloatObj>()))
-            .chain(
-                self.mapped_veclike_objects
-                    .iter()
-                    .filter(|object| object.marked)
-                    .map(|object| object.byte_len),
-            )
-            .chain(
-                self.mapped_string_objects
-                    .iter()
-                    .filter(|object| object.marked)
-                    .map(|object| object.byte_len),
-            )
-            .sum()
-    }
-
     /// Reclaim one detached residual Box according to its caller's lifecycle.
     ///
     /// # Safety
@@ -1891,6 +1959,7 @@ impl TaggedHeap {
                         drop(Box::from_raw(ptr as *mut BoolVectorObj))
                     },
                     VecLikeType::HashTable => unsafe {
+                        self.unregister_image_hash_table(ptr);
                         // A swept weak table must leave the always-swept
                         // registry, or the next cycle's weak worklist would
                         // inspect freed memory. Only registered tables are
@@ -1971,6 +2040,11 @@ impl TaggedHeap {
                         drop(Box::from_raw(ptr as *mut FinalizerObj))
                     },
                     VecLikeType::Sqlite => {
+                        if self.deferring_native_reclaims() {
+                            // SAFETY: unmarked boxed object was just unlinked from `self`'s live list for deferred finalization.
+                            unsafe { self.push_deferred_sqlite(ptr as *mut SqliteObj) };
+                            return;
+                        }
                         if mode == ReclamationMode::Explicit || !cfg!(feature = "sqlite") {
                             // SAFETY: this detached allocation owns its SQLite
                             // identity; explicit reclaim permits native close
@@ -1996,6 +2070,11 @@ impl TaggedHeap {
                     }
                     VecLikeType::UserPtr => {
                         let up = ptr as *mut UserPtrObj;
+                        if self.deferring_native_reclaims() {
+                            // SAFETY: unmarked boxed object was just unlinked from `self`'s live list for deferred finalization.
+                            unsafe { self.push_deferred_user_ptr(up) };
+                            return;
+                        }
                         if mode == ReclamationMode::Explicit {
                             // SAFETY: the detached initialized object exclusively
                             // owns its finalizer field. Remove it before invoking
@@ -2016,6 +2095,11 @@ impl TaggedHeap {
                     }
                     VecLikeType::ModuleFunction => {
                         let mf = ptr as *mut ModuleFunctionObj;
+                        if self.deferring_native_reclaims() {
+                            // SAFETY: unmarked boxed object was just unlinked from `self`'s live list for deferred finalization.
+                            unsafe { self.push_deferred_module_function(mf) };
+                            return;
+                        }
                         if mode == ReclamationMode::Explicit {
                             // SAFETY: this detached object exclusively owns the
                             // initialized field. Taking it prevents a second
@@ -2151,8 +2235,11 @@ impl TaggedHeap {
     /// ownership test that still hashed (P5: 0.9% of instructions). The
     /// general oracle keeps the probe, which is exact even for a dangling
     /// address.
+    /// # Safety
+    /// `ptr` must point to a live veclike object whose leading [`GcHeader`] is
+    /// readable when `ptr` is not on a heap chunk.
     #[inline(always)]
-    pub(super) fn owns_live_veclike_object(&self, ptr: *const u8) -> bool {
+    pub(super) unsafe fn owns_live_veclike_object(&self, ptr: *const u8) -> bool {
         let Some(map) = self.chunk_map.as_ref() else {
             return self.owns_veclike_object_by_registry(ptr);
         };
@@ -2486,7 +2573,7 @@ impl TaggedHeap {
             // The geometric oracle covers the whole block, including cells
             // never reserved from its bump tail and the open region's unused
             // tail. Neither is an initialized, handed-out cons.
-            if ConsBlock::index_of_ptr(ptr) >= block.next_index as usize
+            if ConsBlock::index_of_ptr(ptr) >= block.next_index()
                 || (self.jit.cons_cur.get()..self.jit.cons_lim.get()).contains(&(ptr as usize))
             {
                 return false;
@@ -2650,15 +2737,19 @@ impl TaggedHeap {
             );
             let page = &arena.pages[cursor];
             assert!(
-                page.on_partial,
+                page.on_partial(),
                 "chained page {cursor} not flagged on_partial"
             );
-            assert!(!page.retired, "retired page {cursor} on the partial chain");
+            assert!(
+                !page.is_retired(),
+                "retired page {cursor} on the partial chain"
+            );
             assert_ne!(
-                page.free_head, PAGE_NONE,
+                page.free_head(),
+                PAGE_NONE,
                 "chained page {cursor} has an empty free list",
             );
-            cursor = page.next_partial;
+            cursor = page.next_partial();
         }
         for (page_index, page) in arena.pages.iter().enumerate() {
             assert_eq!(
@@ -2669,34 +2760,34 @@ impl TaggedHeap {
                 T::CLASS,
             );
             assert_eq!(
-                page.on_partial,
+                page.on_partial(),
                 on_chain.contains(&page_index),
                 "page {page_index} on_partial flag disagrees with the chain",
             );
-            if page.retired {
+            if page.is_retired() {
                 // Retirement invariants: full, no free slots, off the chain.
                 assert_eq!(
-                    page.allocated,
+                    page.allocated(),
                     ObjectPage::<T>::SLOTS,
                     "retired {} page {page_index} is not full",
                     T::CLASS,
                 );
-                assert_eq!(page.free_head, PAGE_NONE, "retired page with free slots");
-                assert!(!page.on_partial, "retired page on the partial chain");
+                assert_eq!(page.free_head(), PAGE_NONE, "retired page with free slots");
+                assert!(!page.on_partial(), "retired page on the partial chain");
             }
             // Occupancy == bitmap popcount; every allocated slot is
             // bump-reached, answers OWNED via the page-span oracle, and is
             // NOT in the residual addr-set.
             let mut popcount = 0usize;
             for word_index in 0..ObjectPage::<T>::ALLOC_WORDS {
-                let mut bits = page.alloc_bits[word_index];
+                let mut bits = page.alloc_bits()[word_index];
                 popcount += bits.count_ones() as usize;
                 while bits != 0 {
                     let bit = bits.trailing_zeros() as usize;
                     bits &= bits - 1;
                     let index = word_index * usize::BITS as usize + bit;
                     assert!(
-                        index < page.next_index,
+                        index < page.next_index(),
                         "allocated bit beyond the bump cursor",
                     );
                     let addr = page.slot_ptr(index) as usize;
@@ -2713,17 +2804,18 @@ impl TaggedHeap {
                 }
             }
             assert_eq!(
-                page.allocated, popcount,
+                page.allocated(),
+                popcount,
                 "page {page_index} occupancy != bitmap popcount",
             );
             // Free list: entries bump-reached, bit-clear, duplicate-free,
             // NOT owned per the oracle, and together with the allocated
             // slots exactly cover the bumped span.
             let mut free_seen: HashSet<usize> = HashSet::new();
-            let mut fcursor = page.free_head;
+            let mut fcursor = page.free_head();
             while fcursor != PAGE_NONE {
                 assert!(
-                    fcursor < page.next_index,
+                    fcursor < page.next_index(),
                     "free slot beyond the bump cursor"
                 );
                 assert!(
@@ -2741,16 +2833,80 @@ impl TaggedHeap {
                 fcursor = unsafe { page.free_link_ptr(fcursor).read() };
             }
             assert_eq!(
-                page.allocated + free_seen.len(),
-                page.next_index,
+                page.allocated() + free_seen.len(),
+                page.next_index(),
                 "page {page_index}: occupancy + free-list length != bump cursor",
             );
-            if page.free_head != PAGE_NONE {
+            if page.free_head() != PAGE_NONE {
                 assert!(
-                    page.on_partial,
+                    page.on_partial(),
                     "page {page_index} has free slots but is off the partial chain",
                 );
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod gc_trace_seed_format_tests {
+    use super::{format_eager_gc_trace_line, format_incremental_gc_trace_line};
+
+    /// A minor's printed account: the context-root seed, the mark drain, and the sweep.
+    fn minor_trace_accounted_us(seed_us: u64, mark_us: u64, sweep_us: u64) -> u64 {
+        seed_us.saturating_add(mark_us).saturating_add(sweep_us)
+    }
+
+    fn field_u64(line: &str, key: &str) -> u64 {
+        let token = format!("{key}=");
+        let start = line
+            .find(&token)
+            .unwrap_or_else(|| panic!("{key} missing in {line}"))
+            + token.len();
+        let rest = &line[start..];
+        let end = rest
+            .find(|c: char| !c.is_ascii_digit())
+            .unwrap_or(rest.len());
+        rest[..end]
+            .parse()
+            .unwrap_or_else(|_| panic!("{key} not an integer in {line}"))
+    }
+
+    #[test]
+    fn minor_line_keeps_old_fields_and_seed_accounts_with_mark_and_sweep() {
+        let seed_us = 528;
+        let mark_us = 37;
+        let sweep_us = 34;
+        let line = format_incremental_gc_trace_line(
+            7, mark_us, sweep_us, 2, 3, 4, 11, 12, 13, 14, 15, seed_us,
+        );
+        assert!(
+            line.starts_with(
+                "NEOVM_GC gc#7 [incremental mark=37us sweep_total=34us slices=2 blocks=3 \
+                 noncons_freed=4] cons_live=11 heap_noncons=12 dump_marked=13/14 live=15B "
+            ),
+            "{line}"
+        );
+        assert!(line.ends_with(" seed_us=528"), "{line}");
+        let parsed_seed = field_u64(&line, "seed_us");
+        let parsed_mark = field_u64(&line, "mark");
+        let parsed_sweep = field_u64(&line, "sweep_total");
+        let accounted = minor_trace_accounted_us(parsed_seed, parsed_mark, parsed_sweep);
+        assert_eq!(accounted, seed_us + mark_us + sweep_us);
+        assert!(accounted > parsed_mark + parsed_sweep);
+        assert_eq!(
+            (parsed_seed, parsed_mark, parsed_sweep),
+            (seed_us, mark_us, sweep_us)
+        );
+    }
+
+    #[test]
+    fn eager_line_appends_seed_us_without_moving_the_phase_bracket() {
+        let line =
+            format_eager_gc_trace_line(3, 1.5, 9, 8, 7, 6, 5, 4, 10, 2, 1, 0, 11, 12, 13, 500);
+        assert!(line.contains("[clear=9us mark=8us sweep=7us]"), "{line}");
+        assert!(line.ends_with(" live=13B seed_us=500"), "{line}");
+        assert_eq!(field_u64(&line, "seed_us"), 500);
+        assert_eq!(field_u64(&line, "mark"), 8);
+        assert_eq!(field_u64(&line, "sweep"), 7);
     }
 }

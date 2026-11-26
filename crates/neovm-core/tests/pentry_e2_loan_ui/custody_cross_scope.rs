@@ -12,3 +12,37 @@ fn lend<'inner, 'outer: 'inner, 'era>(
 }
 
 fn main() {}
+
+// Compile-only neighbour for the included keeper_custody.rs: the return
+// envelope names the serial ticket identity and the ended owner. Kept below
+// main so the golden's line numbers stay put.
+mod serial_ticket {
+    #[derive(Clone, Copy)]
+    pub(crate) struct TicketIdentity;
+    pub(crate) struct ReturnableSerialOwner;
+    impl ReturnableSerialOwner {
+        pub(crate) fn identity(&self) -> TicketIdentity {
+            TicketIdentity
+        }
+    }
+}
+
+// Compile-only neighbour: the World turn the custody cuts for the Baton
+// group under its stop, and the turn's identity (L6.7b b3).
+mod world_turn {
+    use neovm_value::tagged::gc::heap_transfer::{StoppedInterval, UnenteredReservation};
+
+    pub(crate) struct WorldTurnIdentity {
+        pub heap: neovm_value::tagged::gc::HeapIdentity,
+        pub epoch: std::num::NonZeroU64,
+    }
+    pub(crate) struct WorldTurn;
+    impl WorldTurn {
+        pub(crate) fn cut_in_stop(_: &mut StoppedInterval<'_, '_>) -> Self {
+            WorldTurn
+        }
+        pub(crate) fn cut_in_reservation(_: &mut UnenteredReservation<'_, '_>) -> Self {
+            WorldTurn
+        }
+    }
+}
