@@ -45,6 +45,8 @@ use std::time::{Duration, Instant};
 pub mod launch;
 mod observation;
 pub mod oracle;
+#[cfg(test)]
+mod oracle_guard_test;
 mod pty_output;
 mod recording;
 pub mod startup;
