@@ -2491,6 +2491,8 @@ pub use concurrent::MarkFinishError;
 pub use concurrent::MarkPhase;
 mod heap_identity;
 pub use heap_identity::HeapIdentity;
+mod heap_ptr;
+use heap_ptr::HeapPtr;
 mod mark_channel;
 use mark_channel::{ConcurrentMarkFlag, MarkExitSlot};
 mod mark_word;

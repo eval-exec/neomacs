@@ -1,0 +1,21 @@
+error[E0603]: tuple struct constructor `HeapPtr` is private
+  --> tests/heap_capability_ui/b5_heap_ptr_field_private.rs:11:23
+   |
+11 |     let _ = heap_ptr::HeapPtr(std::ptr::null_mut());
+   |                       ^^^^^^^ private tuple struct constructor
+   |
+  ::: tests/heap_capability_ui/../../../neovm-value/src/tagged/gc/heap_ptr.rs
+   |
+   | pub(super) struct HeapPtr(*mut TaggedHeap);
+   |                           --------------- a constructor is private if any of the fields is private
+   |
+note: the tuple struct constructor `HeapPtr` is defined here
+  --> tests/heap_capability_ui/../../../neovm-value/src/tagged/gc/heap_ptr.rs
+   |
+   | pub(super) struct HeapPtr(*mut TaggedHeap);
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider making the field publicly accessible
+  --> tests/heap_capability_ui/../../../neovm-value/src/tagged/gc/heap_ptr.rs
+   |
+   | pub(super) struct HeapPtr(pub *mut TaggedHeap);
+   |                           +++

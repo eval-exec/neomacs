@@ -2519,7 +2519,10 @@ impl TaggedHeap {
         let ptr = self as *mut TaggedHeap;
         // SAFETY: `self` is exclusively borrowed and this call blocks on
         // `done_rx` until the collector finishes `mark_all()`.
-        unsafe { send_to_collector(self.identity, GcRequest::MarkAll(HeapPtr(ptr), done_tx)) };
+        unsafe {
+            let heap_ptr = HeapPtr::new(ptr);
+            send_to_collector(self.identity, GcRequest::MarkAll(heap_ptr, done_tx));
+        }
         // Block until the GC thread has finished marking on the shared heap.
         done_rx.recv().expect("neovm-gc thread did not respond");
     }
