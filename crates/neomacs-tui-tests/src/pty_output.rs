@@ -450,6 +450,68 @@ impl Drop for PendingInput<'_> {
     }
 }
 
+/// Write the entire `bytes` slice to a non-blocking PTY master (or stream) fd,
+/// looping across POSIX short writes, `EINTR`, and `WouldBlock`/`EAGAIN` (by
+/// polling `POLLOUT`) up to `deadline`.
+///
+/// Real errors (`EIO`, `EPIPE`, `WriteZero`, `POLLHUP`/`POLLERR`/`POLLNVAL`,
+/// and deadline expiry) are returned immediately rather than ignored.
+pub fn write_all_nonblocking_pty(
+    file: &mut std::fs::File,
+    bytes: &[u8],
+    deadline: Instant,
+) -> io::Result<()> {
+    let mut written = 0usize;
+    while written < bytes.len() {
+        match file.write(&bytes[written..]) {
+            Ok(0) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::WriteZero,
+                    "non-blocking PTY write returned zero",
+                ));
+            }
+            Ok(count) => written += count,
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                let now = Instant::now();
+                if now >= deadline {
+                    return Err(io::Error::new(
+                        io::ErrorKind::TimedOut,
+                        format!(
+                            "non-blocking PTY write timed out after {written}/{} bytes",
+                            bytes.len()
+                        ),
+                    ));
+                }
+                let wait = deadline
+                    .saturating_duration_since(now)
+                    .min(Duration::from_millis(50));
+                let timeout_ms = wait.as_millis().clamp(1, i32::MAX as u128) as i32;
+                let mut pfd = libc::pollfd {
+                    fd: file.as_raw_fd(),
+                    events: libc::POLLOUT,
+                    revents: 0,
+                };
+                // SAFETY: `pfd` points to a single valid `pollfd` for the live
+                // borrowed `file` descriptor.
+                let rc = unsafe { libc::poll(&mut pfd, 1, timeout_ms) };
+                if rc < 0 {
+                    let error = io::Error::last_os_error();
+                    if error.kind() == io::ErrorKind::Interrupted {
+                        continue;
+                    }
+                    return Err(error);
+                }
+                if pfd.revents & (libc::POLLHUP | libc::POLLERR | libc::POLLNVAL) != 0 {
+                    return Err(io::Error::new(io::ErrorKind::BrokenPipe, "PTY closed"));
+                }
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(())
+}
+
 fn set_nonblocking(fd: BorrowedFd<'_>) -> io::Result<()> {
     // SAFETY: the live PTY owner retains this descriptor throughout the calls.
     let flags = unsafe { libc::fcntl(fd.as_raw_fd(), libc::F_GETFL) };

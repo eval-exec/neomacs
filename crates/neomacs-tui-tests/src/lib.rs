@@ -52,6 +52,7 @@ pub mod startup;
 pub use launch::TuiLaunch;
 pub use observation::{FencedTerminal, TuiObservationError};
 pub use oracle::{assert_neomacs_dumped_runtime, gnu_oracle_program, gnu_oracle_stamp};
+pub use pty_output::write_all_nonblocking_pty;
 use pty_output::{ObservationCursor, PtyOutputEvent, PtyOutputKind, PtyOutputPump};
 pub use recording::TuiRecordingScope;
 use recording::{

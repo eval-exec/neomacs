@@ -10,6 +10,7 @@ enum FakeRead {
     Failure(io::ErrorKind),
     Interrupted,
     Cancel(Arc<Cancellation>),
+    Sleep(Duration),
 }
 
 #[derive(Debug)]
@@ -43,6 +44,11 @@ impl Transport for FakeTransport {
             FakeRead::Cancel(cancellation) => {
                 cancellation.cancel();
                 Err(io::ErrorKind::WouldBlock.into())
+            }
+            FakeRead::Sleep(duration) => {
+                std::thread::sleep(duration);
+                buffer[0] = b'.';
+                Ok(TransportByteCount(1))
             }
         }
     }
@@ -311,6 +317,96 @@ fn output_eof_after_partial_write_reports_committed_prefix_and_broken_pipe() {
             ..
         } if error.kind() == io::ErrorKind::BrokenPipe
     ));
+}
+
+#[test]
+fn partial_write_then_drain_deadline_preserves_committed_prefix() {
+    let mut req = request(Action::Input(b"four".as_slice().into()));
+    req.deadline = Instant::now() + Duration::from_millis(25);
+    let (mut owner, receiver) = owner(FakeTransport {
+        reads: [
+            FakeRead::Empty,
+            FakeRead::Sleep(Duration::from_millis(40)),
+            FakeRead::Data(b"late"),
+        ]
+        .into(),
+        writes: [FakeWrite::Partial(TransportByteCount(2)), FakeWrite::Full].into(),
+        ..Default::default()
+    });
+    assert!(owner.perform(req, &Cancellation::default()).is_err());
+    let events = collected(&receiver);
+    assert_eq!(owner.transport.committed.len(), 1);
+    assert_eq!(owner.transport.committed[0].as_ref(), b"fo");
+    assert!(
+        matches!(events[0].kind(), PtyOutputKind::InputCommitted { bytes, .. } if bytes.as_ref() == b"fo")
+    );
+    assert!(matches!(
+        events.last().unwrap().kind(),
+        PtyOutputKind::Completed {
+            result: Err(TransportError::Input {
+                committed: InputByteCount(2),
+                requested: InputByteCount(4),
+                reason: InputFailure::Deadline,
+            }),
+            ..
+        }
+    ));
+}
+
+#[test]
+fn write_all_nonblocking_pty_handles_short_writes_eagain_and_timeout() {
+    use std::os::fd::{FromRawFd as _, OwnedFd};
+
+    let mut fds = [-1; 2];
+    // SAFETY: valid 2-element array for pipe(2).
+    assert_eq!(unsafe { libc::pipe(fds.as_mut_ptr()) }, 0);
+    // SAFETY: pipe(2) succeeded and returned two distinct owned fds.
+    let read_fd = unsafe { OwnedFd::from_raw_fd(fds[0]) };
+    let write_fd = unsafe { OwnedFd::from_raw_fd(fds[1]) };
+    set_nonblocking(write_fd.as_fd()).unwrap();
+    let mut reader = std::fs::File::from(read_fd);
+    let mut writer = std::fs::File::from(write_fd);
+
+    // 1. Large payload (>256 KiB) exceeds pipe buffer -> exercises short writes + EAGAIN + POLLOUT.
+    let payload: Vec<u8> = (0..300_000usize).map(|i| (i % 251) as u8).collect();
+    let expected_len = payload.len();
+    let drain_thread = std::thread::spawn(move || {
+        let mut received = Vec::with_capacity(expected_len);
+        let mut buf = [0u8; 4096];
+        while received.len() < expected_len {
+            match reader.read(&mut buf) {
+                Ok(0) => break,
+                Ok(n) => received.extend_from_slice(&buf[..n]),
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+                Err(error) => panic!("read pipe: {error}"),
+            }
+        }
+        (received, reader)
+    });
+    write_all_nonblocking_pty(
+        &mut writer,
+        &payload,
+        Instant::now() + Duration::from_secs(5),
+    )
+    .expect("looping non-blocking write must deliver full payload");
+    let (received, reader) = drain_thread.join().unwrap();
+    assert_eq!(received, payload);
+
+    // 2. Undrained pipe with a short deadline must fail with TimedOut rather than hanging.
+    let huge = vec![b'z'; 2 * 1024 * 1024];
+    let err = write_all_nonblocking_pty(
+        &mut writer,
+        &huge,
+        Instant::now() + Duration::from_millis(60),
+    )
+    .expect_err("undrained full non-blocking fd must time out");
+    assert_eq!(err.kind(), io::ErrorKind::TimedOut);
+
+    // 3. Closed peer must fail immediately with BrokenPipe.
+    drop(reader);
+    let err = write_all_nonblocking_pty(&mut writer, b"x", Instant::now() + Duration::from_secs(1))
+        .expect_err("closed peer must fail with BrokenPipe");
+    assert_eq!(err.kind(), io::ErrorKind::BrokenPipe);
 }
 
 #[test]

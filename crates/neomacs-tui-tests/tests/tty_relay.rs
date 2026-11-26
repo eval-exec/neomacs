@@ -1,10 +1,10 @@
 #![cfg(unix)]
 //! Exercise the real Unix PTY readers while Lisp is executing, without timing assertions.
 
-use neomacs_tui_tests::{TuiProcessOutcome, TuiSession};
+use neomacs_tui_tests::{TuiProcessOutcome, TuiSession, write_all_nonblocking_pty};
 use std::ffi::CStr;
 use std::fs::File;
-use std::io::{Read, Write};
+use std::io::Read;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -288,6 +288,11 @@ impl AuxiliaryTty {
         self.output.append(&mut *shared);
     }
 
+    fn clear_output(&mut self) {
+        self.drain_output();
+        self.output.clear();
+    }
+
     /// Resize the terminal the way a terminal emulator does: on its master.
     fn resize(&self, columns: u16, rows: u16) {
         let size = libc::winsize {
@@ -306,8 +311,7 @@ impl AuxiliaryTty {
     }
 
     fn send(&mut self, bytes: &[u8]) {
-        self.master
-            .write_all(bytes)
+        write_all_nonblocking_pty(&mut self.master, bytes, Instant::now() + DEADLOCK_CAP)
             .expect("write auxiliary key bytes");
     }
 }
@@ -315,8 +319,11 @@ impl AuxiliaryTty {
 impl Drop for AuxiliaryTty {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Release);
-        if let Some(drainer) = self.drainer.take() {
-            let _ = drainer.join();
+        if let Some(drainer) = self.drainer.take()
+            && let Err(payload) = drainer.join()
+            && !std::thread::panicking()
+        {
+            std::panic::resume_unwind(payload);
         }
     }
 }
@@ -429,7 +436,7 @@ fn auxiliary_frame_draws_past_its_opening_width_after_resize() {
     // Opened at 80x24. The input reader observes the new size before it reads
     // the key bytes, so the command runs on a frame that is already 120 wide.
     auxiliary.resize(120, 30);
-    auxiliary.output.clear();
+    auxiliary.clear_output();
     auxiliary.send(b"\x03w");
     wait_primary_marker(&mut editor, AUX_RESIZED, Some(&mut auxiliary));
     // A grid left at 80 columns clips the marker at column 100 on every redraw.

@@ -254,7 +254,16 @@ impl<T: Transport> Owner<T> {
             }
             // This owner-observed empty read is the input linearization
             // boundary. No other thread may read, write or record this PTY.
-            self.drain_available(request.deadline)?;
+            if let Err(error) = self.drain_available(request.deadline) {
+                if written > 0 {
+                    return Err(match error {
+                        TransportError::DrainDeadline => failed(written, InputFailure::Deadline),
+                        TransportError::Read(io_err) => failed(written, InputFailure::Io(io_err)),
+                        other => other,
+                    });
+                }
+                return Err(error);
+            }
             match self.read_state {
                 ReadState::Closed if written == 0 => return Err(TransportError::Closed),
                 ReadState::Closed => {
