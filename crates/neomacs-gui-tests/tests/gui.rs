@@ -322,3 +322,7 @@ mod image_api_parity;
 
 #[path = "font_hinting_advances.rs"]
 mod font_hinting_advances;
+
+#[cfg(target_os = "linux")]
+#[path = "presentation_pacing_receipts.rs"]
+mod presentation_pacing_receipts;

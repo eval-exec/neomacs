@@ -9,6 +9,7 @@
 
 use std::collections::{HashMap, HashSet};
 
+use super::CursorDirty;
 use crate::render_thread::cursor::{CursorState, CursorTarget};
 use crate::render_thread::frame_windows::GuiFrameRenderState;
 use neomacs_renderer_wgpu::WgpuRenderer;
@@ -17,8 +18,19 @@ impl GuiFrameRenderState {
     /// Record a primary cursor interpolation sample. Only cursors belonging
     /// to this native host's root frame can use retained cursor composition;
     /// child cursors are painted inside the child scene and need a repaint.
+    ///
+    /// While `is_animating()` remains true, `DemandReason::CursorMotion`
+    /// paces frames at `Cadence::MaxRate`; only the final settled sample
+    /// (once `is_animating()` becomes false and `CursorMotion` is retracted)
+    /// escalates to `CursorDirty::Immediate` so the resting destination is
+    /// guaranteed to present.
     fn mark_cursor_interpolation_changed(&mut self) {
-        self.compositor.cursor_dirty = true;
+        let urgency = if self.cursor.is_animating() {
+            CursorDirty::PacedMotion
+        } else {
+            CursorDirty::Immediate
+        };
+        self.compositor.cursor_dirty = self.compositor.cursor_dirty.max(urgency);
         if self
             .cursor
             .target_cloned()
@@ -80,7 +92,7 @@ impl GuiFrameRenderState {
         // the window dirty through mark_active_visuals_dirty on this same
         // about_to_wait pass, which outranks this and forces the full render
         // it needs.
-        self.compositor.cursor_dirty = true;
+        self.compositor.cursor_dirty = CursorDirty::Immediate;
         true
     }
 
@@ -88,7 +100,7 @@ impl GuiFrameRenderState {
         if !self.cursor.force_blink_on() {
             return false;
         }
-        self.compositor.cursor_dirty = true;
+        self.compositor.cursor_dirty = CursorDirty::Immediate;
         true
     }
 

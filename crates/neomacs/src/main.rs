@@ -1505,6 +1505,8 @@ struct PrimaryWindowDisplayHost {
     primary_frame: PrimaryFrame,
     gui_startup: Option<GuiStartupParameters>,
     last_window_titles: Mutex<HashMap<neovm_core::window::FrameId, LispString>>,
+    last_geometry_hints:
+        Mutex<HashMap<neovm_core::window::FrameId, neovm_core::window::GuiFrameGeometryHints>>,
     display_identity: Option<neomacs_display_protocol::GraphicalDisplayIdentity>,
     font_metrics: Option<FontMetricsService>,
     font_entities: FontEntityCatalog,
@@ -1991,6 +1993,10 @@ impl DisplayHost for PrimaryWindowDisplayHost {
                 "failed to finalize initial GUI frame",
             )?;
         }
+        self.last_geometry_hints
+            .lock()
+            .map_err(|err| format!("failed to cache GUI frame geometry hints: {err}"))?
+            .insert(request.frame_id, request.geometry_hints);
         startup.publisher.complete(
             neomacs_display_runtime::render_thread::InitialWindowPreparation {
                 size: neomacs_display_runtime::render_thread::InitialWindowSize {
@@ -2120,6 +2126,10 @@ impl DisplayHost for PrimaryWindowDisplayHost {
             .lock()
             .map_err(|err| format!("failed to cache GUI frame title: {err}"))?
             .insert(request.frame_id, request.title);
+        self.last_geometry_hints
+            .lock()
+            .map_err(|err| format!("failed to cache GUI frame geometry hints: {err}"))?
+            .insert(request.frame_id, request.geometry_hints);
         Ok(())
     }
 
@@ -2243,6 +2253,10 @@ impl DisplayHost for PrimaryWindowDisplayHost {
             .lock()
             .map_err(|err| format!("failed to forget GUI frame title: {err}"))?
             .remove(&frame_id);
+        self.last_geometry_hints
+            .lock()
+            .map_err(|err| format!("failed to forget GUI frame geometry hints: {err}"))?
+            .remove(&frame_id);
         let frame = if self.primary_frame.id() == Some(frame_id) {
             if let Some(startup) = self.gui_startup.as_mut()
                 && startup.publisher.is_waiting()
@@ -2345,10 +2359,16 @@ impl DisplayHost for PrimaryWindowDisplayHost {
             // Resize requests carry geometry; a staged fullscreen change
             // remains part of this constructor until Lisp finalizes it.
             let fullscreen = request.fullscreen.or(pending.fullscreen);
+            let hints = request.geometry_hints;
+            let frame_id = request.frame_id;
             *pending = GuiFrameHostRequest {
                 fullscreen,
                 ..request
             };
+            self.last_geometry_hints
+                .lock()
+                .map_err(|err| format!("failed to cache GUI frame geometry hints: {err}"))?
+                .insert(frame_id, hints);
             return Ok(());
         }
         let frame = if self.primary_frame.id() == Some(request.frame_id) {
@@ -2373,6 +2393,10 @@ impl DisplayHost for PrimaryWindowDisplayHost {
             }),
             "failed to resize GUI frame",
         )?;
+        self.last_geometry_hints
+            .lock()
+            .map_err(|err| format!("failed to cache GUI frame geometry hints: {err}"))?
+            .insert(request.frame_id, request.geometry_hints);
         Ok(())
     }
 
@@ -2383,7 +2407,24 @@ impl DisplayHost for PrimaryWindowDisplayHost {
     ) -> Result<(), String> {
         if let Some(request) = self.pending_primary_request_mut(frame_id) {
             request.geometry_hints = geometry_hints;
+            self.last_geometry_hints
+                .lock()
+                .map_err(|err| format!("failed to cache GUI frame geometry hints: {err}"))?
+                .insert(frame_id, geometry_hints);
             return Ok(());
+        }
+        {
+            let mut cached_hints = self
+                .last_geometry_hints
+                .lock()
+                .map_err(|err| format!("failed to cache GUI frame geometry hints: {err}"))?;
+            if cached_hints
+                .get(&frame_id)
+                .is_some_and(|cached| *cached == geometry_hints)
+            {
+                return Ok(());
+            }
+            cached_hints.insert(frame_id, geometry_hints);
         }
         let frame = self.frame_ref_for_gui_frame(frame_id);
         self.send_render_command(
@@ -4762,6 +4803,7 @@ fn run_gui_evaluator_worker(
             pending_position: None,
         }),
         last_window_titles: Mutex::new(HashMap::new()),
+        last_geometry_hints: Mutex::new(HashMap::new()),
         display_identity: match &bootstrap_display.kind {
             BootstrapDisplayKind::Gui { identity, .. } => Some(identity.clone()),
             BootstrapDisplayKind::Tty { .. } => None,

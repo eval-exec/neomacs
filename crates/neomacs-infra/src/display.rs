@@ -160,17 +160,27 @@ pub fn start_weston_pixman_xwayland(artifact_root: &Path) -> io::Result<DisplayS
         .stderr(Stdio::null())
         .spawn()?;
     let socket_path = runtime_dir.join(&socket);
-    if !wait_for_path(&socket_path, Duration::from_secs(5)) {
-        let _ = child.kill();
-        let _ = child.wait();
-        return Err(io::Error::new(
-            io::ErrorKind::TimedOut,
-            format!(
-                "weston did not create Wayland socket {}; log: {}",
+    match wait_for_path_for_child(&socket_path, &mut child, Duration::from_secs(5))? {
+        WaitForPathOutcome::Ready => {}
+        WaitForPathOutcome::ChildExited(status) => {
+            return Err(io::Error::other(format!(
+                "weston exited ({status}) before creating Wayland socket {}; log: {}",
                 socket_path.display(),
                 read_log_tail(&log_path)
-            ),
-        ));
+            )));
+        }
+        WaitForPathOutcome::TimedOut => {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                format!(
+                    "weston did not create Wayland socket {}; log: {}",
+                    socket_path.display(),
+                    read_log_tail(&log_path)
+                ),
+            ));
+        }
     }
     let Some(display) = wait_for_xwayland_display(&log_path, Duration::from_secs(5)) else {
         let _ = child.kill();
@@ -254,8 +264,8 @@ pub fn start_weston_with_desktop(
         .spawn()?;
 
     let socket_path = runtime_dir.join(&socket);
-    if wait_for_path(&socket_path, Duration::from_secs(5)) {
-        Ok(DisplaySession {
+    match wait_for_path_for_child(&socket_path, &mut child, Duration::from_secs(5))? {
+        WaitForPathOutcome::Ready => Ok(DisplaySession {
             child: Some(child),
             env: vec![
                 ("XDG_RUNTIME_DIR".to_string(), path_to_string(runtime_dir)),
@@ -265,18 +275,24 @@ pub fn start_weston_with_desktop(
             cleanup_dir: None,
             runtime_directory: Some(runtime_directory),
             _held_directory: None,
-        })
-    } else {
-        let _ = child.kill();
-        let _ = child.wait();
-        Err(io::Error::new(
-            io::ErrorKind::TimedOut,
-            format!(
-                "weston did not create Wayland socket {}; log: {}",
-                socket_path.display(),
-                read_log_tail(&log_path)
-            ),
-        ))
+        }),
+        WaitForPathOutcome::ChildExited(status) => Err(io::Error::other(format!(
+            "weston exited ({status}) before creating Wayland socket {}; log: {}",
+            socket_path.display(),
+            read_log_tail(&log_path)
+        ))),
+        WaitForPathOutcome::TimedOut => {
+            let _ = child.kill();
+            let _ = child.wait();
+            Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                format!(
+                    "weston did not create Wayland socket {}; log: {}",
+                    socket_path.display(),
+                    read_log_tail(&log_path)
+                ),
+            ))
+        }
     }
 }
 
@@ -371,16 +387,35 @@ impl WestonBenchSession {
             runtime_directory: Some(runtime_directory),
         };
         let socket_path = runtime_dir.join(&socket);
-        if !wait_for_path(&socket_path, Duration::from_secs(5)) {
-            pending.kill();
-            return Err(io::Error::new(
-                io::ErrorKind::TimedOut,
-                format!(
-                    "weston did not create Wayland socket {}; log: {}",
+        let wait_outcome = wait_for_path_for_child(
+            &socket_path,
+            pending
+                .child
+                .as_mut()
+                .expect("pending bench session owns child"),
+            Duration::from_secs(5),
+        )?;
+        match wait_outcome {
+            WaitForPathOutcome::Ready => {}
+            WaitForPathOutcome::ChildExited(status) => {
+                let _ = pending.child.take();
+                return Err(io::Error::other(format!(
+                    "weston exited ({status}) before creating Wayland socket {}; log: {}",
                     socket_path.display(),
                     read_log_tail(&log_path)
-                ),
-            ));
+                )));
+            }
+            WaitForPathOutcome::TimedOut => {
+                pending.kill();
+                return Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    format!(
+                        "weston did not create Wayland socket {}; log: {}",
+                        socket_path.display(),
+                        read_log_tail(&log_path)
+                    ),
+                ));
+            }
         }
         let x_display = if config.xwayland {
             match wait_for_xwayland_display(&log_path, Duration::from_secs(5)) {
@@ -1087,15 +1122,39 @@ fn wait_for_authenticated_x11_display(
     Ok(false)
 }
 
-fn wait_for_path(path: &Path, timeout: Duration) -> bool {
+#[derive(Debug, PartialEq, Eq)]
+enum WaitForPathOutcome {
+    Ready,
+    ChildExited(std::process::ExitStatus),
+    TimedOut,
+}
+
+fn wait_for_path_for_child(
+    path: &Path,
+    child: &mut Child,
+    timeout: Duration,
+) -> io::Result<WaitForPathOutcome> {
     let start = Instant::now();
-    while start.elapsed() < timeout {
+    loop {
         if path.exists() {
-            return true;
+            return Ok(WaitForPathOutcome::Ready);
+        }
+        if let Some(status) = child.try_wait()? {
+            return Ok(if path.exists() {
+                WaitForPathOutcome::Ready
+            } else {
+                WaitForPathOutcome::ChildExited(status)
+            });
+        }
+        if start.elapsed() >= timeout {
+            return Ok(if path.exists() {
+                WaitForPathOutcome::Ready
+            } else {
+                WaitForPathOutcome::TimedOut
+            });
         }
         thread::sleep(Duration::from_millis(50));
     }
-    path.exists()
 }
 
 fn set_owner_only_dir_permissions(path: &Path) -> io::Result<()> {
@@ -1263,6 +1322,71 @@ mod displayfd_tests {
             !probe.success(),
             "pid {pid} is still alive after the session guard dropped"
         );
+    }
+}
+
+#[cfg(test)]
+mod wait_for_path_tests {
+    use super::*;
+
+    #[test]
+    fn wait_for_path_for_child_exits_early_when_child_terminates() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let missing = root.path().join("never-created.sock");
+        let mut child = Command::new("false")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn false");
+        let started = Instant::now();
+        let outcome = wait_for_path_for_child(&missing, &mut child, Duration::from_secs(5))
+            .expect("wait_for_path_for_child");
+        let elapsed = started.elapsed();
+        match outcome {
+            WaitForPathOutcome::ChildExited(status) => {
+                assert!(!status.success(), "expected non-zero exit status: {status}");
+            }
+            other => panic!("expected ChildExited, got {other:?}"),
+        }
+        assert!(
+            elapsed < Duration::from_secs(1),
+            "exited child must not burn the 5s timeout, elapsed {elapsed:?}"
+        );
+    }
+
+    #[test]
+    fn wait_for_path_for_child_returns_ready_when_path_exists() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let socket = root.path().join("ready.sock");
+        fs::write(&socket, "").expect("create path");
+        let mut child = Command::new("sleep")
+            .arg("60")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn sleep");
+        let outcome = wait_for_path_for_child(&socket, &mut child, Duration::from_secs(5))
+            .expect("wait_for_path_for_child");
+        let _ = child.kill();
+        let _ = child.wait();
+        assert_eq!(outcome, WaitForPathOutcome::Ready);
+    }
+
+    #[test]
+    fn wait_for_path_for_child_times_out_for_silent_live_child() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let missing = root.path().join("still-missing.sock");
+        let mut child = Command::new("sleep")
+            .arg("60")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn sleep");
+        let outcome = wait_for_path_for_child(&missing, &mut child, Duration::from_millis(80))
+            .expect("wait_for_path_for_child");
+        let _ = child.kill();
+        let _ = child.wait();
+        assert_eq!(outcome, WaitForPathOutcome::TimedOut);
     }
 }
 
