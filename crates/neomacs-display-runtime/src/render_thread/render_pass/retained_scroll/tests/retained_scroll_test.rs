@@ -7,6 +7,13 @@ pub(in crate::render_thread::render_pass) fn fixture() -> FrameGlyphBuffer {
 }
 
 fn fixture_with(change: impl FnOnce(&mut scroll_coverage::ScrollCoverage)) -> FrameGlyphBuffer {
+    fixture_with_state(|_| {}, change)
+}
+
+fn fixture_with_state(
+    change_state: impl FnOnce(&mut FrameDisplayState),
+    change_coverage: impl FnOnce(&mut scroll_coverage::ScrollCoverage),
+) -> FrameGlyphBuffer {
     let mut state = FrameDisplayState::new(8, 4, 10.0, 10.0);
     state.presentation_id = PresentationId::new(71);
     state.background = Color::RED;
@@ -95,6 +102,7 @@ fn fixture_with(change: impl FnOnce(&mut scroll_coverage::ScrollCoverage)) -> Fr
     )
     .unwrap();
     state.window_matrices.push(content.clone());
+    change_state(&mut state);
     state
         .scroll_coverage
         .push(Arc::new(scroll_coverage::ScrollCoverage {
@@ -113,7 +121,7 @@ fn fixture_with(change: impl FnOnce(&mut scroll_coverage::ScrollCoverage)) -> Fr
             hit_index,
             pointer_source: Default::default(),
         }));
-    change(Arc::make_mut(&mut state.scroll_coverage[0]));
+    change_coverage(Arc::make_mut(&mut state.scroll_coverage[0]));
     let mut frame = state.materialize();
     frame.install_presented_hit_index(live_hit_index).unwrap();
     assert_eq!(frame.scroll_surfaces.len(), 1);
@@ -567,27 +575,31 @@ fn changed_coverage_pixels_and_font_catalog_rebuild_the_raster() {
     let mut deliveries = Vec::new();
     let mut previous = None;
     for change in 0..5 {
-        let mut frame = fixture_with(|coverage| {
-            if change >= 1 {
-                coverage.faces.get_mut(&FaceId::new(1)).unwrap().foreground = Color::BLACK;
-            }
-            if change >= 2 {
-                let mut row = coverage.content.matrix.rows[0].as_ref().clone();
-                row.glyphs[1][0].pixel_width = 59.0;
-                coverage.content.matrix.rows[0] = MatrixRow::new(row);
-            }
-        });
-        if change >= 3 {
-            frame.font_catalog_generation = frame.font_catalog_generation.next();
-        }
-        if change == 4 {
-            // This step changes only PGTK policy: the native catalog and
-            // all coverage glyph/font metadata remain identical to step 3.
-            frame.desktop_font_render_options = Some(DesktopFontRenderOptions {
-                hinting: DesktopFontHinting::Slight,
-                ..Default::default()
-            });
-        }
+        let mut frame = fixture_with_state(
+            |state| {
+                if change >= 1 {
+                    state.faces.get_mut(&FaceId::new(1)).unwrap().foreground = Color::BLACK;
+                }
+                if change >= 3 {
+                    state.font_catalog_generation = state.font_catalog_generation.next();
+                }
+                if change == 4 {
+                    // This step changes only PGTK policy: the native catalog and
+                    // all coverage glyph/font metadata remain identical to step 3.
+                    state.desktop_font_render_options = Some(DesktopFontRenderOptions {
+                        hinting: DesktopFontHinting::Slight,
+                        ..Default::default()
+                    });
+                }
+            },
+            |coverage| {
+                if change >= 2 {
+                    let mut row = coverage.content.matrix.rows[0].as_ref().clone();
+                    row.glyphs[1][0].pixel_width = 59.0;
+                    coverage.content.matrix.rows[0] = MatrixRow::new(row);
+                }
+            },
+        );
         render.compositor.input_scroll = Default::default();
         render.compositor.coverage_retention.refresh(&frame);
         let delivery = stream.issue().unwrap();
@@ -653,10 +665,13 @@ fn changing_coverage_defers_raster_work_until_paint_is_stable() {
     let mut deliveries = Vec::new();
     let mut original = None;
     for change in 0..5 {
-        let mut frame = fixture_with(|coverage| {
-            coverage.faces.get_mut(&FaceId::new(1)).unwrap().foreground =
-                Color::new(change as f32 / 8.0, 0.0, 0.0, 1.0);
-        });
+        let mut frame = fixture_with_state(
+            |state| {
+                state.faces.get_mut(&FaceId::new(1)).unwrap().foreground =
+                    Color::new(change as f32 / 8.0, 0.0, 0.0, 1.0);
+            },
+            |_| {},
+        );
         render.compositor.input_scroll = Default::default();
         render.compositor.coverage_retention.refresh(&frame);
         let delivery = stream.issue().unwrap();

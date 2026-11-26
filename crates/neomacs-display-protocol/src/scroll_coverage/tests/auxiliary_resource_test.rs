@@ -319,8 +319,8 @@ fn auxiliary_realized_gui_frame_refuses_additive_face_without_resolved_font_and_
     let base_font_id = ResolvedFontId(1);
     let additive_font_id = ResolvedFontId(95);
 
-    // Realized GUI base (`!fonts.is_empty()`): layout's realize_frame_fonts sets
-    // `default_resolved_font_id = Some(...)` on every GUI face.
+    // Realized GUI base (`!fonts.is_empty()`): base faces carry realized font
+    // identities, while an unresolved additive face leaves `default_resolved_font_id: None`.
     let mut gui_state = base_state();
     gui_state
         .fonts
@@ -332,8 +332,8 @@ fn auxiliary_realized_gui_frame_refuses_additive_face_without_resolved_font_and_
         .default_resolved_font_id = Some(base_font_id);
 
     // 1. Negative GUI direction: additive face absent from base with
-    // `default_resolved_font_id: None` must be refused so the render thread
-    // cannot fall back to `record_emergency_font_fallback("layout published no font identity")`.
+    // `default_resolved_font_id: None` must be refused so text shaped with that
+    // face cannot trigger `record_emergency_font_fallback("layout published no font identity")`.
     let mut unresolved_additive = gui_state.scroll_coverage[0].as_ref().clone();
     unresolved_additive
         .fonts
@@ -406,6 +406,146 @@ fn auxiliary_asymmetric_realized_fonts_refuses_unresolved_additive_face() {
     assert!(coverage.resources_self_closed());
     assert!(!coverage.resources_compatible_with_frame_state(&state));
     assert!(!coverage.resources_compatible_with_frame_buffer(&state.materialize()));
+}
+
+#[test]
+fn primary_materialize_and_prepare_enforce_resource_compatibility_and_invalidate_cached_admission()
+{
+    let base_face_id = crate::FaceId::new(0);
+    let additive_face_id = crate::FaceId::new(77);
+    let unresolved_face_id = crate::FaceId::new(78);
+    let base_font_id = ResolvedFontId(1);
+    let additive_font_id = ResolvedFontId(95);
+
+    let mut gui_state = base_state();
+    gui_state
+        .fonts
+        .insert(base_font_id, fixture_font(base_font_id, "DejaVu Sans Mono"));
+    gui_state
+        .faces
+        .get_mut(&base_face_id)
+        .unwrap()
+        .default_resolved_font_id = Some(base_font_id);
+
+    // 1. Realized GUI base + additive face with `default_resolved_font_id: None`
+    // must be refused by ScrollCoverage::materialize, prepare_scroll_coverage, and
+    // FrameDisplayState::materialize (primary publish path).
+    let mut unresolved = gui_state.scroll_coverage[0].as_ref().clone();
+    unresolved
+        .fonts
+        .insert(base_font_id, fixture_font(base_font_id, "DejaVu Sans Mono"));
+    unresolved
+        .faces
+        .get_mut(&base_face_id)
+        .unwrap()
+        .default_resolved_font_id = Some(base_font_id);
+    unresolved
+        .faces
+        .insert(additive_face_id, crate::Face::new(additive_face_id));
+    let unresolved = Arc::new(unresolved);
+    assert!(unresolved.materialize(&gui_state).is_none());
+    let mut rejected_gui = gui_state.clone();
+    rejected_gui.scroll_coverage = vec![Arc::clone(&unresolved)];
+    assert!(
+        rejected_gui
+            .prepare_scroll_coverage(Arc::clone(&unresolved))
+            .is_none()
+    );
+    assert!(rejected_gui.materialize().scroll_surfaces.is_empty());
+
+    // 2. Asymmetric realized fonts (`base.fonts.is_empty() && !cov.fonts.is_empty()`)
+    // + unresolved additive face must be refused by ScrollCoverage::materialize.
+    let tty_state = base_state();
+    assert!(tty_state.fonts.is_empty());
+    let mut asymmetric = tty_state.scroll_coverage[0].as_ref().clone();
+    asymmetric
+        .fonts
+        .insert(additive_font_id, fixture_font(additive_font_id, "Spleen"));
+    let mut resolved_face = crate::Face::new(additive_face_id);
+    resolved_face.default_resolved_font_id = Some(additive_font_id);
+    asymmetric.faces.insert(additive_face_id, resolved_face);
+    asymmetric
+        .faces
+        .insert(unresolved_face_id, crate::Face::new(unresolved_face_id));
+    assert!(Arc::new(asymmetric).materialize(&tty_state).is_none());
+
+    // 3. Self-invalid shapes (mismatched font.id/face.id key, dangling face, base conflict)
+    // cannot produce a ScrollSurface via ScrollCoverage::materialize.
+    let mut bad_font_key = unresolved.as_ref().clone();
+    bad_font_key.faces.remove(&additive_face_id);
+    bad_font_key.fonts.insert(
+        additive_font_id,
+        fixture_font(base_font_id, "WRONG STALE FONT"),
+    );
+    assert!(Arc::new(bad_font_key).materialize(&gui_state).is_none());
+
+    let mut bad_face_key = unresolved.as_ref().clone();
+    bad_face_key.faces.remove(&additive_face_id);
+    bad_face_key
+        .fonts
+        .insert(additive_font_id, fixture_font(additive_font_id, "Valid"));
+    let mut aliased = crate::Face::new(base_face_id);
+    aliased.default_resolved_font_id = Some(additive_font_id);
+    bad_face_key.faces.insert(additive_face_id, aliased);
+    assert!(Arc::new(bad_face_key).materialize(&gui_state).is_none());
+
+    let mut dangling = unresolved.as_ref().clone();
+    dangling.faces.remove(&base_face_id);
+    assert!(Arc::new(dangling).materialize(&gui_state).is_none());
+
+    // 4. Positive realized GUI primary publish + cached admission invalidation & recovery.
+    let mut valid_gui = unresolved.as_ref().clone();
+    valid_gui.fonts.insert(
+        additive_font_id,
+        fixture_font(additive_font_id, "Additive GUI font"),
+    );
+    valid_gui
+        .faces
+        .get_mut(&additive_face_id)
+        .unwrap()
+        .default_resolved_font_id = Some(additive_font_id);
+    let valid_gui = Arc::new(valid_gui);
+    let mut prepared_state = gui_state.clone();
+    prepared_state.scroll_coverage = vec![Arc::clone(&valid_gui)];
+    let surface = prepared_state
+        .prepare_scroll_coverage(Arc::clone(&valid_gui))
+        .expect("valid realized GUI primary coverage materializes");
+    let rendered = prepared_state.materialize();
+    assert_eq!(rendered.scroll_surfaces.len(), 1);
+    assert!(Arc::ptr_eq(&rendered.scroll_surfaces[0], &surface));
+
+    // Mutating frame.faces into a conflict after admission must invalidate the cached
+    // Ready admission rather than reusing the stale surface, and fixing it must recover.
+    let original_bg = prepared_state.faces[&base_face_id].background;
+    prepared_state
+        .faces
+        .get_mut(&base_face_id)
+        .unwrap()
+        .background = crate::Color::RED;
+    assert!(prepared_state.materialize().scroll_surfaces.is_empty());
+    assert!(
+        prepared_state
+            .prepare_scroll_coverage(Arc::clone(&valid_gui))
+            .is_none()
+    );
+    prepared_state
+        .faces
+        .get_mut(&base_face_id)
+        .unwrap()
+        .background = original_bg;
+    assert!(
+        prepared_state
+            .prepare_scroll_coverage(Arc::clone(&valid_gui))
+            .is_some()
+    );
+    assert_eq!(prepared_state.materialize().scroll_surfaces.len(), 1);
+
+    // 5. Positive TTY/headless primary publish (`fonts.is_empty()` on both).
+    let mut tty_cov = tty_state.scroll_coverage[0].as_ref().clone();
+    tty_cov
+        .faces
+        .insert(additive_face_id, crate::Face::new(additive_face_id));
+    assert!(Arc::new(tty_cov).materialize(&tty_state).is_some());
 }
 
 #[test]
