@@ -4479,3 +4479,756 @@ fn font_match_p_lang_arm_uses_the_fonts_lang_extra() {
         .is_err()
     );
 }
+
+#[derive(Default)]
+struct RecordingFaceQueryHost {
+    last_font_match_face: Rc<RefCell<Option<RuntimeFace>>>,
+    last_frame_font_request: Rc<RefCell<Option<(RuntimeFace, FrameFontSize)>>>,
+    last_spec_request: Rc<RefCell<Option<FontSpecResolveRequest>>>,
+}
+
+impl DisplayHost for RecordingFaceQueryHost {
+    fn realize_gui_frame(&mut self, _request: GuiFrameHostRequest) -> Result<(), String> {
+        Ok(())
+    }
+
+    fn resize_gui_frame(&mut self, _request: GuiFrameHostRequest) -> Result<(), String> {
+        Ok(())
+    }
+
+    fn resolve_font_for_char(
+        &mut self,
+        request: FontResolveRequest,
+    ) -> Result<Option<ResolvedFontMatch>, String> {
+        *self.last_font_match_face.borrow_mut() = Some(request.face.clone());
+        let family = request
+            .face
+            .family_runtime_string_owned()
+            .unwrap_or_else(|| "Hack".to_string());
+        let weight = request.face.weight.unwrap_or(FontWeight::NORMAL);
+        let slant = request.face.slant.unwrap_or(FontSlant::Normal);
+        let width = request.face.width.unwrap_or(FontWidth::Normal);
+        let pixel_size = match request.face.height {
+            Some(crate::face::FaceHeight::Absolute(h)) if h > 0 => {
+                ((h as f64) / 10.0).round() as u32
+            }
+            _ => 14,
+        };
+        Ok(Some(ResolvedFontMatch {
+            font: neovm_eval::emacs_core::eval::test_resolved_opened_font(
+                &family,
+                Some("SRC"),
+                Some("/fonts/Hack.ttf"),
+                weight,
+                slant,
+                width,
+                Some(&family),
+                FontPxProbeResult {
+                    pixel_size,
+                    height: (pixel_size + 3) as i32,
+                    ascent: pixel_size.saturating_sub(1) as i32,
+                    descent: 4,
+                    max_width: 8,
+                    space_width: 8,
+                    average_width: 8,
+                },
+                None,
+            ),
+            glyph_code: Some(65),
+        }))
+    }
+
+    fn resolve_frame_font(
+        &mut self,
+        _frame_id: FrameId,
+        request: FrameFontRequest,
+    ) -> Result<Option<neovm_eval::emacs_core::eval::ResolvedFrameFont>, String> {
+        *self.last_frame_font_request.borrow_mut() = Some((request.face().clone(), request.size()));
+        let family = request
+            .face()
+            .family_runtime_string_owned()
+            .unwrap_or_else(|| "Hack".to_string());
+        let weight = request.face().weight.unwrap_or(FontWeight::NORMAL);
+        let slant = request.face().slant.unwrap_or(FontSlant::Normal);
+        let width = request.face().width.unwrap_or(FontWidth::Normal);
+        let (pixel_size, height_tenths) = match request.size() {
+            FrameFontSize::Points(pt) => {
+                (pt.get().round() as u32, (pt.get() * 10.0).round() as i32)
+            }
+            FrameFontSize::Pixels(px) => (px.get(), (px.get() * 10) as i32),
+            _ => (14, 140),
+        };
+        Ok(Some(neovm_eval::emacs_core::eval::ResolvedFrameFont {
+            font: neovm_eval::emacs_core::eval::test_resolved_opened_font(
+                &family,
+                Some("SRC"),
+                Some("/fonts/Hack.ttf"),
+                weight,
+                slant,
+                width,
+                Some(&family),
+                FontPxProbeResult {
+                    pixel_size,
+                    height: (pixel_size + 3) as i32,
+                    ascent: pixel_size.saturating_sub(1) as i32,
+                    descent: 4,
+                    max_width: 8,
+                    space_width: 8,
+                    average_width: 8,
+                },
+                None,
+            ),
+            height_tenths,
+        }))
+    }
+
+    fn resolve_font_for_spec(
+        &mut self,
+        request: FontSpecResolveRequest,
+    ) -> Result<Option<ResolvedFontSpecMatch>, String> {
+        *self.last_spec_request.borrow_mut() = Some(request.clone());
+        Ok(Some(ResolvedFontSpecMatch {
+            coverage_handle: None,
+            family: LispString::from_utf8("Hack"),
+            foundry: Some(LispString::from_utf8("SRC")),
+            registry: Some(LispString::from_utf8("iso10646-1")),
+            file: Some(LispString::from_utf8("/fonts/Hack.ttf")),
+            weight: request.weight.or(Some(FontWeight::NORMAL)),
+            slant: request.slant.or(Some(FontSlant::Normal)),
+            width: request.width.or(Some(FontWidth::Normal)),
+            spacing: None,
+            postscript_name: None,
+        }))
+    }
+}
+
+#[test]
+fn frame_face_view_six_query_sites_demand_equals_cached_and_zero_rebuilds() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
+    let frame_id = ensure_selected_gui_frame(&mut eval);
+
+    let last_font_match_face = Rc::new(RefCell::new(None));
+    let last_frame_font_request = Rc::new(RefCell::new(None));
+    let last_spec_request = Rc::new(RefCell::new(None));
+    eval.set_display_host(Box::new(RecordingFaceQueryHost {
+        last_font_match_face: last_font_match_face.clone(),
+        last_frame_font_request: last_frame_font_request.clone(),
+        last_spec_request: last_spec_request.clone(),
+    }));
+
+    // Seed default face and define inheritance / remapping / diamond DAG faces.
+    builtin_internal_set_lisp_face_attribute(
+        &mut eval,
+        vec![
+            Value::symbol("default"),
+            Value::keyword("family"),
+            Value::string("Hack"),
+            Value::make_frame(frame_id.0),
+        ],
+    )
+    .unwrap();
+    builtin_internal_set_lisp_face_attribute(
+        &mut eval,
+        vec![
+            Value::symbol("default"),
+            Value::keyword("height"),
+            Value::fixnum(140),
+            Value::make_frame(frame_id.0),
+        ],
+    )
+    .unwrap();
+    for name in ["rev-x", "rev-y", "rev-a", "rev-b", "rev-c", "rev-d"] {
+        builtin_internal_set_lisp_face_attribute(
+            &mut eval,
+            vec![
+                Value::symbol(name),
+                Value::keyword("slant"),
+                Value::symbol("normal"),
+                Value::make_frame(frame_id.0),
+            ],
+        )
+        .unwrap();
+    }
+    builtin_internal_set_lisp_face_attribute(
+        &mut eval,
+        vec![
+            Value::symbol("rev-y"),
+            Value::keyword("inherit"),
+            Value::symbol("rev-x"),
+            Value::make_frame(frame_id.0),
+        ],
+    )
+    .unwrap();
+
+    // Configure buffer text with `rev-y` (inherits remapped `rev-x`) and diamond `rev-a`.
+    {
+        let buf = eval.edit.buffers.current_buffer_mut().unwrap();
+        buf.insert("abcd");
+        let r01 = neovm_edit::buffer::EmacsByteRange::from_usize(0, 1);
+        let r12 = neovm_edit::buffer::EmacsByteRange::from_usize(1, 2);
+        let r23 = neovm_edit::buffer::EmacsByteRange::from_usize(2, 3);
+        buf.text_props_put_property_in_emacs_byte_range(
+            r01,
+            Value::symbol("face"),
+            Value::symbol("rev-y"),
+        );
+        buf.text_props_put_property_in_emacs_byte_range(
+            r12,
+            Value::symbol("face"),
+            Value::symbol("rev-a"),
+        );
+        // Nested list + inline plist with :inherit
+        buf.text_props_put_property_in_emacs_byte_range(
+            r23,
+            Value::symbol("face"),
+            Value::list(vec![
+                Value::list(vec![
+                    Value::keyword("slant"),
+                    Value::symbol("italic"),
+                    Value::keyword("inherit"),
+                    Value::symbol("rev-y"),
+                ]),
+                Value::symbol("default"),
+            ]),
+        );
+    }
+
+    // Set face-remapping-alist with self-remapping default, remapped parent rev-x,
+    // and diamond DAG rev-a -> (rev-b rev-c) -> rev-d -> (:weight bold).
+    let remap_alist = Value::list(vec![
+        Value::list(vec![
+            Value::symbol("default"),
+            Value::list(vec![Value::keyword("height"), Value::make_float(2.0)]),
+            Value::symbol("default"),
+        ]),
+        Value::list(vec![
+            Value::symbol("rev-x"),
+            Value::list(vec![Value::keyword("weight"), Value::symbol("bold")]),
+            Value::symbol("rev-x"),
+        ]),
+        Value::list(vec![
+            Value::symbol("rev-a"),
+            Value::symbol("rev-b"),
+            Value::symbol("rev-c"),
+        ]),
+        Value::list(vec![Value::symbol("rev-b"), Value::symbol("rev-d")]),
+        Value::list(vec![Value::symbol("rev-c"), Value::symbol("rev-d")]),
+        Value::list(vec![
+            Value::symbol("rev-d"),
+            Value::list(vec![Value::keyword("weight"), Value::symbol("bold")]),
+        ]),
+    ]);
+    eval.set_variable("face-remapping-alist", remap_alist);
+
+    let prop_str = Value::string("xy");
+    neovm_edit::emacs_core::textprop::builtin_put_text_property_5(
+        &mut eval,
+        Value::fixnum(0),
+        Value::fixnum(1),
+        Value::symbol("face"),
+        Value::symbol("rev-y"),
+        prop_str,
+    )
+    .unwrap();
+
+    let run_all_six = |eval: &mut Context| {
+        crate::emacs_core::xfaces::reset_frame_lisp_face_table_rebuilds();
+
+        // Site 1: font-at (buffer: inherited remapped parent, diamond DAG, nested plist :inherit)
+        let _ = font_at(eval, vec![Value::fixnum(1)]).unwrap();
+        let f_buf_inherit = last_font_match_face.borrow().clone().unwrap();
+        let _ = font_at(eval, vec![Value::fixnum(2)]).unwrap();
+        let f_buf_diamond = last_font_match_face.borrow().clone().unwrap();
+        let _ = font_at(eval, vec![Value::fixnum(3)]).unwrap();
+        let f_buf_nested = last_font_match_face.borrow().clone().unwrap();
+
+        // Site 2: font-at (string)
+        let _ = font_at(eval, vec![Value::fixnum(0), Value::NIL, prop_str]).unwrap();
+        let f_str = last_font_match_face.borrow().clone().unwrap();
+
+        // Site 3: face-font (default remapped, rev-y inherited remapped parent, diamond rev-a)
+        let ff_def = crate::emacs_core::xfaces::builtin_face_font(
+            eval,
+            &[Value::symbol("default"), Value::make_frame(frame_id.0)],
+        )
+        .unwrap();
+        let f_ff_def = last_font_match_face.borrow().clone().unwrap();
+        let ff_y = crate::emacs_core::xfaces::builtin_face_font(
+            eval,
+            &[Value::symbol("rev-y"), Value::make_frame(frame_id.0)],
+        )
+        .unwrap();
+        let f_ff_y = last_font_match_face.borrow().clone().unwrap();
+        let ff_a = crate::emacs_core::xfaces::builtin_face_font(
+            eval,
+            &[Value::symbol("rev-a"), Value::make_frame(frame_id.0)],
+        )
+        .unwrap();
+        let f_ff_a = last_font_match_face.borrow().clone().unwrap();
+
+        // Site 4: x-list-fonts with FACE arg
+        let _ = crate::emacs_core::display::builtin_x_list_fonts(
+            eval,
+            vec![
+                Value::string("*"),
+                Value::symbol("rev-y"),
+                Value::make_frame(frame_id.0),
+            ],
+        )
+        .unwrap();
+        let f_xlist = last_frame_font_request.borrow().clone().unwrap();
+
+        // Site 5: resolve_current_buffer_remapped_default_face_font (window-body-width remap)
+        let _ = resolve_current_buffer_remapped_default_face_font(eval, frame_id);
+        let f_remap_def = last_frame_font_request.borrow().clone().unwrap();
+
+        // Site 6: font-info with font-spec
+        let spec = font_spec(vec![Value::keyword("family"), Value::string("Hack")]).unwrap();
+        let _ = font_info(eval, vec![spec, Value::make_frame(frame_id.0)]).unwrap();
+        let spec_req = last_spec_request.borrow().clone().unwrap();
+
+        assert_eq!(
+            crate::emacs_core::xfaces::frame_lisp_face_table_rebuilds(),
+            0,
+            "none of the 6 query sites may rebuild the full frame face table"
+        );
+
+        (
+            f_buf_inherit,
+            f_buf_diamond,
+            f_buf_nested,
+            f_str,
+            ff_def,
+            f_ff_def,
+            ff_y,
+            f_ff_y,
+            ff_a,
+            f_ff_a,
+            f_xlist,
+            f_remap_def,
+            (spec_req.weight, spec_req.slant, spec_req.width),
+        )
+    };
+
+    // Cold/Demand pass (before redisplay warms the frame cache)
+    assert!(
+        !crate::emacs_core::xfaces::FrameFaceView::new(&eval, frame_id, false).is_cached(),
+        "frame cache should be cold before realization"
+    );
+    let demand = run_all_six(&mut eval);
+
+    // Verify GNU semantics on Demand results:
+    // - font-at starts from REMAPPED default (height 280) + rev-y -> bold
+    assert_eq!(demand.0.weight, Some(FontWeight::BOLD));
+    assert_eq!(
+        demand.0.height,
+        Some(crate::face::FaceHeight::Absolute(280))
+    );
+    // - diamond DAG rev-a -> bold + remapped default height 280
+    assert_eq!(demand.1.weight, Some(FontWeight::BOLD));
+    assert_eq!(
+        demand.1.height,
+        Some(crate::face::FaceHeight::Absolute(280))
+    );
+    // - nested inline plist with :inherit rev-y -> bold + italic + height 280
+    assert_eq!(demand.2.weight, Some(FontWeight::BOLD));
+    assert_eq!(demand.2.slant, Some(FontSlant::Italic));
+    // - string font-at -> bold + height 280
+    assert_eq!(demand.3.weight, Some(FontWeight::BOLD));
+    assert_eq!(
+        demand.3.height,
+        Some(crate::face::FaceHeight::Absolute(280))
+    );
+    // - face-font 'default -> remapped default height 280
+    assert_eq!(
+        demand.5.height,
+        Some(crate::face::FaceHeight::Absolute(280))
+    );
+    // - face-font 'rev-y / 'rev-a -> starts from UNREMAPPED default (height 140), bold!
+    assert_eq!(demand.7.weight, Some(FontWeight::BOLD));
+    assert_eq!(
+        demand.7.height,
+        Some(crate::face::FaceHeight::Absolute(140))
+    );
+    assert_eq!(demand.9.weight, Some(FontWeight::BOLD));
+    assert_eq!(
+        demand.9.height,
+        Some(crate::face::FaceHeight::Absolute(140))
+    );
+    // - x-list-fonts 'rev-y -> bold, unremapped default height 140
+    assert_eq!(demand.10.0.weight, Some(FontWeight::BOLD));
+    assert_eq!(demand.10.1, FrameFontSize::points(14.0).unwrap());
+    // - resolve_current_buffer_remapped_default_face_font -> height 280
+    assert_eq!(demand.11.1, FrameFontSize::points(28.0).unwrap());
+
+    // Warm the frame realization cache via sync_runtime_faces_for_frame, then run all 6 sites on Cached.
+    eval.sync_runtime_faces_for_frame(frame_id);
+    assert!(
+        crate::emacs_core::xfaces::FrameFaceView::new(&eval, frame_id, false).is_cached(),
+        "frame cache should be warm after realization"
+    );
+    let cached = run_all_six(&mut eval);
+
+    // Invalidate the warm cache via an unrelated face mutation so production
+    // `FrameFaceView::new` runs the Demand path on the exact same realized
+    // frame state, and assert bit-for-bit `Demand == Cached` across all 6 sites!
+    builtin_internal_set_lisp_face_attribute(
+        &mut eval,
+        vec![
+            Value::symbol("unrelated-invalidation-face"),
+            Value::keyword("underline"),
+            Value::T,
+            Value::make_frame(frame_id.0),
+        ],
+    )
+    .unwrap();
+    assert!(
+        !crate::emacs_core::xfaces::FrameFaceView::new(&eval, frame_id, false).is_cached(),
+        "frame cache must be Demand after unrelated face edit"
+    );
+    let demand_after_realize = run_all_six(&mut eval);
+
+    assert_eq!(
+        demand_after_realize.0, cached.0,
+        "Site 1 (font-at buffer inherit): Demand != Cached"
+    );
+    assert_eq!(
+        demand_after_realize.1, cached.1,
+        "Site 1 (font-at buffer diamond): Demand != Cached"
+    );
+    assert_eq!(
+        demand_after_realize.2, cached.2,
+        "Site 1 (font-at buffer nested): Demand != Cached"
+    );
+    assert_eq!(
+        demand_after_realize.3, cached.3,
+        "Site 2 (font-at string): Demand != Cached"
+    );
+    assert_eq!(
+        demand_after_realize.4, cached.4,
+        "Site 3 (face-font default return): Demand != Cached"
+    );
+    assert_eq!(
+        demand_after_realize.5, cached.5,
+        "Site 3 (face-font default face): Demand != Cached"
+    );
+    assert_eq!(
+        demand_after_realize.6, cached.6,
+        "Site 3 (face-font rev-y return): Demand != Cached"
+    );
+    assert_eq!(
+        demand_after_realize.7, cached.7,
+        "Site 3 (face-font rev-y face): Demand != Cached"
+    );
+    assert_eq!(
+        demand_after_realize.8, cached.8,
+        "Site 3 (face-font rev-a return): Demand != Cached"
+    );
+    assert_eq!(
+        demand_after_realize.9, cached.9,
+        "Site 3 (face-font rev-a face): Demand != Cached"
+    );
+    assert_eq!(
+        demand_after_realize.10, cached.10,
+        "Site 4 (x-list-fonts): Demand != Cached"
+    );
+    assert_eq!(
+        demand_after_realize.11, cached.11,
+        "Site 5 (remapped default): Demand != Cached"
+    );
+    assert_eq!(
+        demand_after_realize.12, cached.12,
+        "Site 6 (font-info): Demand != Cached"
+    );
+
+    // Re-warm cache and verify uninterned symbol with print name "bold" does not resolve in either mode.
+    eval.sync_runtime_faces_for_frame(frame_id);
+    let uninterned_bold = Value::from_sym_id(neovm_value::intern::make_uninterned_symbol("bold"));
+    let empty_remap = FaceRemapping::new();
+    let cached_uninterned = crate::emacs_core::xfaces::FrameFaceView::new(&eval, frame_id, false)
+        .resolve_named_with_remapping(uninterned_bold, &empty_remap);
+    let demand_uninterned =
+        crate::emacs_core::xfaces::FrameFaceView::new_demand_for_test(&eval, frame_id, false)
+            .resolve_named_with_remapping(uninterned_bold, &empty_remap);
+    assert_eq!(cached_uninterned, demand_uninterned);
+    assert_ne!(
+        demand_uninterned.weight,
+        Some(FontWeight::BOLD),
+        "uninterned (make-symbol \"bold\") must not resolve interned `bold`"
+    );
+}
+
+#[test]
+fn set_face_font_after_weight_edit_invalidates_warm_frame_cache_and_clears_font_prop() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
+    let frame_id = ensure_selected_gui_frame(&mut eval);
+
+    let last_font_match_face = Rc::new(RefCell::new(None));
+    eval.set_display_host(Box::new(RecordingFaceQueryHost {
+        last_font_match_face: last_font_match_face.clone(),
+        ..Default::default()
+    }));
+
+    builtin_internal_set_lisp_face_attribute(
+        &mut eval,
+        vec![
+            Value::symbol("default"),
+            Value::keyword("family"),
+            Value::string("Hack"),
+            Value::make_frame(frame_id.0),
+        ],
+    )
+    .unwrap();
+    builtin_internal_set_lisp_face_attribute(
+        &mut eval,
+        vec![
+            Value::symbol("default"),
+            Value::keyword("height"),
+            Value::fixnum(140),
+            Value::make_frame(frame_id.0),
+        ],
+    )
+    .unwrap();
+
+    // 1. Set rev-f's :font to a regular font-spec (resolved to opened font-object).
+    let regular_spec = font_spec(vec![
+        Value::keyword("family"),
+        Value::string("Hack"),
+        Value::keyword("weight"),
+        Value::symbol("normal"),
+        Value::keyword("size"),
+        Value::fixnum(14),
+    ])
+    .unwrap();
+    builtin_internal_set_lisp_face_attribute(
+        &mut eval,
+        vec![
+            Value::symbol("rev-f"),
+            Value::keyword("font"),
+            regular_spec,
+            Value::make_frame(frame_id.0),
+        ],
+    )
+    .unwrap();
+    let stored_font_obj = crate::emacs_core::xfaces::builtin_internal_get_lisp_face_attribute(
+        &mut eval,
+        vec![
+            Value::symbol("rev-f"),
+            Value::keyword("font"),
+            Value::make_frame(frame_id.0),
+        ],
+    )
+    .unwrap();
+    assert!(is_font_object(&stored_font_obj));
+
+    // 2. Override :weight to bold: GNU `font_clear_prop` must replace the stored
+    //    font-object with a font-spec whose :weight and :name are cleared.
+    builtin_internal_set_lisp_face_attribute(
+        &mut eval,
+        vec![
+            Value::symbol("rev-f"),
+            Value::keyword("weight"),
+            Value::symbol("bold"),
+            Value::make_frame(frame_id.0),
+        ],
+    )
+    .unwrap();
+    let cleared_font = crate::emacs_core::xfaces::builtin_internal_get_lisp_face_attribute(
+        &mut eval,
+        vec![
+            Value::symbol("rev-f"),
+            Value::keyword("font"),
+            Value::make_frame(frame_id.0),
+        ],
+    )
+    .unwrap();
+    assert!(
+        is_font_spec(&cleared_font),
+        "setting :weight must convert stored font-object into a font-spec via font_clear_prop"
+    );
+    assert!(
+        font_get(vec![cleared_font, Value::keyword("weight")])
+            .unwrap()
+            .is_nil(),
+        "font_clear_prop must clear :weight in the copied font-spec"
+    );
+
+    // 3. Warm the frame realization cache while rev-f is bold.
+    eval.sync_runtime_faces_for_frame(frame_id);
+    assert!(crate::emacs_core::xfaces::FrameFaceView::new(&eval, frame_id, false).is_cached());
+    let _ = crate::emacs_core::xfaces::builtin_face_font(
+        &mut eval,
+        &[Value::symbol("rev-f"), Value::make_frame(frame_id.0)],
+    )
+    .unwrap();
+    assert_eq!(
+        last_font_match_face.borrow().as_ref().unwrap().weight,
+        Some(FontWeight::BOLD)
+    );
+
+    // 4. Re-apply the original regular opened font-object via :font.
+    //    This MUST invalidate the warm cache and revert rev-f's weight to normal!
+    let gen_before = eval.face_change_count();
+    builtin_internal_set_lisp_face_attribute(
+        &mut eval,
+        vec![
+            Value::symbol("rev-f"),
+            Value::keyword("font"),
+            stored_font_obj,
+            Value::make_frame(frame_id.0),
+        ],
+    )
+    .unwrap();
+    assert!(
+        eval.face_change_count() > gen_before,
+        "set-face-font changing derived :weight must bump face_change_count"
+    );
+    assert!(
+        !crate::emacs_core::xfaces::FrameFaceView::new(&eval, frame_id, false).is_cached(),
+        "set-face-font must invalidate the warm frame realization cache"
+    );
+    let _ = crate::emacs_core::xfaces::builtin_face_font(
+        &mut eval,
+        &[Value::symbol("rev-f"), Value::make_frame(frame_id.0)],
+    )
+    .unwrap();
+    assert_eq!(
+        last_font_match_face
+            .borrow()
+            .as_ref()
+            .unwrap()
+            .weight
+            .map(FontWeight::css_weight),
+        Some(FontWeight::NORMAL.css_weight()),
+        "face-font immediately after set-face-font must see regular/normal weight (400), not stale bold"
+    );
+}
+
+#[test]
+fn multi_frame_face_view_uses_each_frames_own_default_and_warm_cache() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
+    let f1 = ensure_selected_gui_frame(&mut eval);
+    let current_buf_id = eval.edit.buffers.current_buffer_id().unwrap();
+    let f2 = eval
+        .frame_manager_mut()
+        .create_frame("f2", 800, 600, current_buf_id);
+    eval.frame_manager_mut()
+        .get_mut(f2)
+        .unwrap()
+        .set_window_system(Some(Value::symbol("neo")));
+
+    let last_font_match_face = Rc::new(RefCell::new(None));
+    eval.set_display_host(Box::new(RecordingFaceQueryHost {
+        last_font_match_face: last_font_match_face.clone(),
+        ..Default::default()
+    }));
+
+    // Distinct default heights on f1 (120) vs f2 (220), and f2-only custom face.
+    builtin_internal_set_lisp_face_attribute(
+        &mut eval,
+        vec![
+            Value::symbol("default"),
+            Value::keyword("height"),
+            Value::fixnum(120),
+            Value::make_frame(f1.0),
+        ],
+    )
+    .unwrap();
+    builtin_internal_set_lisp_face_attribute(
+        &mut eval,
+        vec![
+            Value::symbol("default"),
+            Value::keyword("height"),
+            Value::fixnum(220),
+            Value::make_frame(f2.0),
+        ],
+    )
+    .unwrap();
+    builtin_internal_set_lisp_face_attribute(
+        &mut eval,
+        vec![
+            Value::symbol("f2-only"),
+            Value::keyword("weight"),
+            Value::symbol("bold"),
+            Value::make_frame(f2.0),
+        ],
+    )
+    .unwrap();
+
+    // Before redisplay (Demand): f1 sees 120, f2 sees 220.
+    let _ = crate::emacs_core::xfaces::builtin_face_font(
+        &mut eval,
+        &[Value::symbol("default"), Value::make_frame(f1.0)],
+    )
+    .unwrap();
+    assert_eq!(
+        last_font_match_face.borrow().as_ref().unwrap().height,
+        Some(crate::face::FaceHeight::Absolute(120))
+    );
+    let _ = crate::emacs_core::xfaces::builtin_face_font(
+        &mut eval,
+        &[Value::symbol("default"), Value::make_frame(f2.0)],
+    )
+    .unwrap();
+    assert_eq!(
+        last_font_match_face.borrow().as_ref().unwrap().height,
+        Some(crate::face::FaceHeight::Absolute(220))
+    );
+
+    // Sync f1, then sync f2 (so eval.face_table() now holds f2's snapshot).
+    eval.sync_runtime_faces_for_frame(f1);
+    eval.sync_runtime_faces_for_frame(f2);
+
+    // f1 MUST still hit its own warm Cached table without rejecting on same_snapshot!
+    assert!(
+        crate::emacs_core::xfaces::FrameFaceView::new(&eval, f1, true).is_cached(),
+        "f1 must stay Cached even after f2 redisplayed last"
+    );
+    let _ = crate::emacs_core::xfaces::builtin_face_font(
+        &mut eval,
+        &[Value::symbol("default"), Value::make_frame(f1.0)],
+    )
+    .unwrap();
+    assert_eq!(
+        last_font_match_face.borrow().as_ref().unwrap().height,
+        Some(crate::face::FaceHeight::Absolute(120))
+    );
+
+    // Mutate f1's default height to 160 BEFORE redisplay -> f1 sees 160 immediately
+    // on Demand, does NOT leak f2-only, and f2 remains warm at 220!
+    builtin_internal_set_lisp_face_attribute(
+        &mut eval,
+        vec![
+            Value::symbol("default"),
+            Value::keyword("height"),
+            Value::fixnum(160),
+            Value::make_frame(f1.0),
+        ],
+    )
+    .unwrap();
+    assert!(
+        !crate::emacs_core::xfaces::FrameFaceView::new(&eval, f1, true).is_cached(),
+        "mutating f1 must invalidate f1"
+    );
+    assert!(
+        crate::emacs_core::xfaces::FrameFaceView::new(&eval, f2, true).is_cached(),
+        "mutating f1 must keep f2 cached"
+    );
+    let empty_remap = FaceRemapping::new();
+    let f1_default = crate::emacs_core::xfaces::FrameFaceView::new(&eval, f1, true)
+        .resolve_default(&empty_remap);
+    assert_eq!(
+        f1_default.height,
+        Some(crate::face::FaceHeight::Absolute(160))
+    );
+    let f1_no_leak = crate::emacs_core::xfaces::FrameFaceView::new(&eval, f1, true)
+        .resolve_named_with_remapping(Value::symbol("f2-only"), &empty_remap);
+    assert_ne!(
+        f1_no_leak.weight,
+        Some(FontWeight::BOLD),
+        "f1 Demand lookup must not leak f2-only from eval.face_table()"
+    );
+}
