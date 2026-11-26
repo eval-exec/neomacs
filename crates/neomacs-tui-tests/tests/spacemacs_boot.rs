@@ -51,8 +51,9 @@ fn spacemacs_boot_reaches_home_buffer_in_both_editors() {
             .expect("seed Spacemacs session state");
     }
 
+    let gnu_program = neomacs_tui_tests::oracle::gnu_oracle_program();
     let mut gnu = TuiSession::spawn_launch(
-        spacemacs_launch(&spacemacs, &gnu_state, std::ffi::OsStr::new("emacs")),
+        spacemacs_launch(&spacemacs, &gnu_state, gnu_program.as_os_str()),
         "GNU",
     );
     gnu.read(Duration::from_secs(5));
@@ -118,8 +119,9 @@ fn spacemacs_paste_into_eval_minibuffer_evaluates_in_both_editors() {
             .expect("seed Spacemacs session state");
     }
 
+    let gnu_program = neomacs_tui_tests::oracle::gnu_oracle_program();
     let mut gnu = TuiSession::spawn_launch(
-        spacemacs_launch(&spacemacs, &gnu_state, std::ffi::OsStr::new("emacs")),
+        spacemacs_launch(&spacemacs, &gnu_state, gnu_program.as_os_str()),
         "GNU",
     );
     gnu.read(Duration::from_secs(5));

@@ -89,7 +89,12 @@ fn run_probe(name: &str, program: PathBuf, kind: &str, gnu: bool) -> String {
 }
 
 fn compare_case(kind: &str) {
-    let gnu = run_probe("GNU", PathBuf::from("emacs"), kind, true);
+    let gnu = run_probe(
+        "GNU",
+        neomacs_tui_tests::oracle::gnu_oracle_program(),
+        kind,
+        true,
+    );
     let program = neomacs_tui_tests::neomacs_binary();
     assert!(
         program.exists(),

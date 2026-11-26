@@ -33,7 +33,7 @@ fn probe(name: &str, binary: PathBuf) -> serde_json::Value {
 
 #[test]
 fn frame_bar_parameters_and_root_geometry_match_gnu_on_tty() {
-    let gnu = probe("GNU", PathBuf::from("emacs"));
+    let gnu = probe("GNU", neomacs_tui_tests::oracle::gnu_oracle_program());
     let neomacs = probe("Neomacs", neomacs_tui_tests::neomacs_binary());
     assert_eq!(neomacs, gnu);
     assert_eq!(neomacs[1]["menu"], 0);

@@ -298,7 +298,12 @@ fn run_probe(name: &str, program: PathBuf, scenario: &str, gnu: bool) -> String 
 }
 
 fn assert_transfer_matches_gnu(scenario: &str) {
-    let gnu = run_probe("GNU", PathBuf::from("emacs"), scenario, true);
+    let gnu = run_probe(
+        "GNU",
+        neomacs_tui_tests::oracle::gnu_oracle_program(),
+        scenario,
+        true,
+    );
     let neo = run_probe(
         "Neomacs",
         neomacs_tui_tests::neomacs_binary(),

@@ -126,7 +126,12 @@ fn probe(program: PathBuf, case: &str, gnu: bool, setting: &str) -> ProbeCapture
 }
 
 fn compare(case: &str) {
-    let gnu = probe(PathBuf::from("emacs"), case, true, "on");
+    let gnu = probe(
+        neomacs_tui_tests::oracle::gnu_oracle_program(),
+        case,
+        true,
+        "on",
+    );
     let baseline = probe(neomacs_tui_tests::neomacs_binary(), case, false, "off");
     let neo = probe(neomacs_tui_tests::neomacs_binary(), case, false, "on");
     assert_eq!(

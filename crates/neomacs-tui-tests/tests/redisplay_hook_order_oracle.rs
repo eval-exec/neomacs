@@ -278,7 +278,7 @@ fn run_probe(name: &str, program: PathBuf, scenario: Scenario, extra: &[&str]) -
 fn assert_order_matches_gnu(scenario: Scenario) {
     let gnu = run_probe(
         "GNU",
-        PathBuf::from("emacs"),
+        neomacs_tui_tests::oracle::gnu_oracle_program(),
         scenario,
         &[
             "-no-comp-spawn",

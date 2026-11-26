@@ -29,7 +29,7 @@ fn probe(binary: PathBuf) -> serde_json::Value {
 }
 #[test]
 fn cjk_position_advances_match_gnu_in_a_real_terminal() {
-    let gnu = probe(PathBuf::from("emacs"));
+    let gnu = probe(neomacs_tui_tests::oracle::gnu_oracle_program());
     let neomacs = probe(neomacs_tui_tests::neomacs_binary());
     assert_eq!(
         gnu["positions"],

@@ -316,7 +316,12 @@ fn run_probe(program: PathBuf, case: &str, gnu: bool, setting: &str) -> ProbeCap
 }
 
 fn compare_extent_contract(case: &str) {
-    let gnu = run_probe(PathBuf::from("emacs"), case, true, "on");
+    let gnu = run_probe(
+        neomacs_tui_tests::oracle::gnu_oracle_program(),
+        case,
+        true,
+        "on",
+    );
     let baseline = run_probe(neomacs_tui_tests::neomacs_binary(), case, false, "off");
     let neo = run_probe(neomacs_tui_tests::neomacs_binary(), case, false, "on");
     assert_eq!(
@@ -332,7 +337,12 @@ fn compare_extent_contract(case: &str) {
 }
 
 fn compare(case: &str) {
-    let gnu = run_probe(PathBuf::from("emacs"), case, true, "on");
+    let gnu = run_probe(
+        neomacs_tui_tests::oracle::gnu_oracle_program(),
+        case,
+        true,
+        "on",
+    );
     let neo = run_probe(neomacs_tui_tests::neomacs_binary(), case, false, "on");
     assert_eq!(
         neo.full, gnu.full,

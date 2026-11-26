@@ -18,7 +18,10 @@ fn japanese_process_string_and_region_sends_match_gnu_bytes() {
     let neo = std::env::var_os("NEOMACS_TUI_NEOMACS_BIN")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| root.join("target/release/neomacs"));
-    for (name, program) in [("GNU", std::path::PathBuf::from("emacs")), ("NEO", neo)] {
+    for (name, program) in [
+        ("GNU", neomacs_tui_tests::oracle::gnu_oracle_program()),
+        ("NEO", neo),
+    ] {
         let control = artifacts.join(name);
         fs::create_dir_all(control.join("home/.emacs.d")).unwrap();
         fs::create_dir_all(control.join("tmp")).unwrap();

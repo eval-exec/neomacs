@@ -48,9 +48,7 @@ fn open_edit_save(binary: &Path, preference: &str, initial: &[u8], text: &str) {
 
 #[test]
 fn preferred_gbk_and_windows_1252_files_match_gnu_in_terminal() {
-    let gnu = std::env::var_os("NEOMACS_GNU_EMACS_BINARY")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| "emacs".into());
+    let gnu = neomacs_tui_tests::oracle::gnu_oracle_program();
     for binary in [gnu, neomacs_tui_tests::neomacs_binary()] {
         open_edit_save(
             &binary,

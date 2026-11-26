@@ -30,9 +30,7 @@ fn probe(binary: PathBuf) -> serde_json::Value {
 }
 #[test]
 fn pixel_measurements_match_gnu_terminal_glyph_positions() {
-    let gnu_binary = std::env::var_os("NEOMACS_GNU_EMACS_BINARY")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("emacs"));
+    let gnu_binary = neomacs_tui_tests::oracle::gnu_oracle_program();
     let mut gnu = probe(gnu_binary);
     assert_eq!(
         gnu["native-engine"][0], false,

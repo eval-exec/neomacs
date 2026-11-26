@@ -106,7 +106,7 @@ fn run_probe(name: &str, program: PathBuf, extra: &[&str], env: &[(&str, &str)])
 fn gnu_counts() -> String {
     run_probe(
         "GNU",
-        PathBuf::from("emacs"),
+        neomacs_tui_tests::oracle::gnu_oracle_program(),
         &[
             "-no-comp-spawn",
             "--eval=(progn(set'native-comp-jit-compilation())(set'native-comp-async-report-warnings-errors'silent))",

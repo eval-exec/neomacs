@@ -8,7 +8,7 @@ fn completion_renders_and_accepts_after_the_invoking_window_is_deleted() {
     let root = neomacs_infra::workspace_root();
     let fixture = root.join("crates/neomacs-gui-tests/fixtures/minibuffer-selected-window.el");
     for (label, program) in [
-        ("GNU", "emacs".into()),
+        ("GNU", neomacs_tui_tests::oracle::gnu_oracle_program()),
         ("Neomacs", neomacs_tui_tests::neomacs_binary()),
     ] {
         let directory = TuiTempDirectory::new("issue560-completion-");

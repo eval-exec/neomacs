@@ -166,13 +166,9 @@ fn doom_minor_mode_order_matches_gnu() {
             .expect("seed Doom session state");
     }
 
+    let gnu_program = neomacs_tui_tests::oracle::gnu_oracle_program();
     let mut gnu = TuiSession::spawn_launch(
-        doom_launch(
-            &doom,
-            &gnu_state,
-            std::ffi::OsStr::new("emacs"),
-            &document_args,
-        ),
+        doom_launch(&doom, &gnu_state, gnu_program.as_os_str(), &document_args),
         "GNU",
     );
     // Drain GNU to quiescence before the second costly startup: Doom's initial

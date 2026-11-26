@@ -117,7 +117,7 @@ fn capture(program: PathBuf, gnu: bool, case: &str) -> String {
 }
 
 fn compare(case: &str) {
-    let gnu = capture(PathBuf::from("emacs"), true, case);
+    let gnu = capture(neomacs_tui_tests::oracle::gnu_oracle_program(), true, case);
     let neo = capture(neomacs_tui_tests::neomacs_binary(), false, case);
     assert_eq!(
         neo, gnu,

@@ -473,7 +473,7 @@ enum TimerInputEditor {
 
 fn assert_timer_queued_input_wakes_read(editor: TimerInputEditor) {
     let (program, name) = match editor {
-        TimerInputEditor::Gnu => (std::path::PathBuf::from("emacs"), "GNU"),
+        TimerInputEditor::Gnu => (neomacs_tui_tests::oracle::gnu_oracle_program(), "GNU"),
         TimerInputEditor::Neomacs => (neomacs_binary(), "NEO"),
     };
     let launch = TuiLaunch::new(program.as_os_str())

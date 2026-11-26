@@ -131,13 +131,9 @@ fn index_org_has_face_colours() {
     // Start both editors with Doom and the same document.  Opening the file at
     // launch keeps this test focused on face rendering rather than Doom keymap
     // or completion-UI differences.
+    let gnu_program = neomacs_tui_tests::oracle::gnu_oracle_program();
     let mut gnu = TuiSession::spawn_launch(
-        doom_launch(
-            &doom,
-            &gnu_state,
-            std::ffi::OsStr::new("emacs"),
-            &document_args,
-        ),
+        doom_launch(&doom, &gnu_state, gnu_program.as_os_str(), &document_args),
         "GNU",
     );
     // GNU makes its shared TTY input/output file description nonblocking
