@@ -538,7 +538,11 @@ fn try_resolve_live_frame_font_request_in_state(
     if requested.is_string() {
         // font_spec_from_name retains the original user selector in GNU;
         // unlike public (font-spec :name ...), this is an opening request.
-        let _ = spec.with_vector_data_mut(|fields| font_parse_set(fields, "user-spec", *requested));
+        if let Some(slice) = spec.as_vector_data() {
+            let mut fields = slice.to_vec();
+            font_parse_set(&mut fields, "user-spec", *requested);
+            let _ = spec.replace_vector_data(fields);
+        }
     }
     let mut retry_size = None;
     loop {

@@ -1869,10 +1869,12 @@ fn heap_capability_guard_flags_ufcs_era_collect_calls() {
 /// 4. Trait impls must use full canonical `::core::...` paths matching the closed per-target
 ///    allowlist; `Expr::Verbatim` / `Type::Verbatim` / `Pat::Verbatim` / `TypeParamBound::Verbatim`
 ///    fail closed.
-/// 5. Every `fn` signature (receiver, parameters, generics, return type) and associated `type`
-///    is governed by a closed allowlist so safe code in `slice_view.rs` cannot leak
-///    `&[AtomicTaggedValue]`, `&AtomicTaggedValue`, `&[TaggedValue]`, `&TaggedValue`, callbacks,
-///    or any unanalysable type.
+/// 5. Every `fn` signature (receiver, parameters, generics, return type, and no `async`/`extern`)
+///    and associated `type` is governed by a closed allowlist so safe code in `slice_view.rs`
+///    cannot leak `&[AtomicTaggedValue]`, `&AtomicTaggedValue`, `&[TaggedValue]`, `&TaggedValue`,
+///    callbacks, or any unanalysable type. (Body-vs-signature boundary: inside an allowlisted
+///    signature, a method body could still call `AtomicTaggedValue::store_atomic` on its own cell;
+///    writing is the owner's prerogative and no reference escapes.)
 /// 6. The `unsafe` budget is strictly 2 `Expr::Unsafe` blocks, one inside
 ///    `LispValueSlice::from_atomic_slice` and one inside `LispValueSlice::from_raw_atomic_parts`.
 const SLICE_VIEW_FILE: &str = "neovm-value/src/tagged/slice_view.rs";
@@ -2272,6 +2274,17 @@ fn slice_view_check_fn_signature(
     let is_from_atomic_slice = is_inherent_slice && fn_name == "from_atomic_slice";
     let is_from_raw_parts = is_inherent_slice && fn_name == "from_raw_atomic_parts";
     let is_get_slice = is_inherent_slice && fn_name == "get_slice";
+
+    if sig.asyncness.is_some() {
+        problems.push(format!(
+            "{SLICE_VIEW_FILE}: `async fn {fn_name}` is forbidden in slice_view.rs (fail closed)"
+        ));
+    }
+    if sig.abi.is_some() {
+        problems.push(format!(
+            "{SLICE_VIEW_FILE}: `extern fn {fn_name}` is forbidden in slice_view.rs (fail closed)"
+        ));
+    }
 
     if is_from_atomic_slice || is_from_raw_parts {
         if !slice_view_is_pub_crate(vis) {
@@ -3515,6 +3528,28 @@ fn slice_view_unsafe_budget_fence_rejects_violations() {
     assert!(
         p.contains("unexpected trait impl `::core::cmp::PartialEq` on foreign type"),
         "PartialEq on unallowlisted foreign type must fail:\n{p}"
+    );
+    let async_fn = format!(
+        "{valid_base}\n\
+         impl LispValueSlice {{\n\
+             pub async fn sneaky_async(&self) -> usize {{ self.0.len() }}\n\
+         }}"
+    );
+    let p = slice_view_unsafe_budget_problems(&async_fn).join("\n");
+    assert!(
+        p.contains("`async fn sneaky_async` is forbidden"),
+        "async fn in slice_view.rs must fail:\n{p}"
+    );
+    let extern_fn = format!(
+        "{valid_base}\n\
+         impl LispValueSlice {{\n\
+             pub extern \"C\" fn sneaky_abi(&self) -> usize {{ self.0.len() }}\n\
+         }}"
+    );
+    let p = slice_view_unsafe_budget_problems(&extern_fn).join("\n");
+    assert!(
+        p.contains("`extern fn sneaky_abi` is forbidden"),
+        "extern fn in slice_view.rs must fail:\n{p}"
     );
 
     // 9. Verbatim fallback syntax (`Expr::Verbatim`, etc.) fails closed.

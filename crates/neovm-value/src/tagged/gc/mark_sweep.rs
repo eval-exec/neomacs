@@ -154,8 +154,7 @@ impl TaggedHeap {
             !self.has_unfinished_concurrent_mark(),
             "collection requires an explicit successful marker finish"
         );
-        #[cfg(any(test, debug_assertions, feature = "test-support"))]
-        crate::tagged::mutate::debug_assert_no_heap_mut_closure();
+        crate::tagged::mutate::assert_no_heap_mut_closure();
         // SAFETY: collection entry has the sole stopped owner, no worker,
         // callbacks, or allocation safepoint. Residual words must survive a
         // failed entry for diagnosis; begin never clears a SATB buffer.

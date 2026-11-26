@@ -3095,7 +3095,6 @@ mod worker_symbol_classification_tests {
 /// the GC's per-thread helper state.
 #[doc(hidden)]
 pub fn reset_carrier_tls() {
-    #[cfg(any(test, debug_assertions, feature = "test-support"))]
     crate::tagged::mutate::reset_carrier_tls();
     cold_gc::reset_carrier_tls();
 }

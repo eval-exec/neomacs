@@ -199,6 +199,7 @@ impl Context {
         if !neovm_value::tagged::gc::tagged_heap_is_current(&self.tagged_heap) {
             return Err(HostRefusal::NotInstalled);
         }
+        neovm_value::tagged::mutate::assert_no_heap_mut_closure();
         let _abort = AbortOnPanic("detach");
         let parked = self.park_owner();
         let world = if self.stow_serial_world_state() {
@@ -243,6 +244,7 @@ impl Context {
         if !neovm_value::tagged::gc::tagged_heap_is_current(&self.tagged_heap) {
             return Err(HostRefusal::NotInstalled);
         }
+        neovm_value::tagged::mutate::assert_no_heap_mut_closure();
         let _abort = AbortOnPanic("serial-collect-detach");
         // 1. L6.7c (b): close open bump-allocation regions before the keeper's
         //    collecting stop.

@@ -22,36 +22,6 @@ pub struct HashTableWrite<'a> {
 
 static_assertions::assert_not_impl_any!(HashTableWrite<'static>: Send, Sync, Clone, Copy);
 
-/// A table identity whose read-access hydration has completed. Only the
-/// existing inactive typed Value accessor can construct this private module's
-/// witness, and it consumes the witness before invoking the typed callback.
-/// The marker ties the copied handle to that accessor and forbids thread transfer;
-/// the witness proves hydration only. The accessor's unsafe contract also
-/// requires Tier-H to remain inactive and excludes Lisp callbacks, GC or
-/// safepoints, heap installation changes and owner retirement until return.
-pub(crate) struct HydratedHashTable<'a> {
-    value: Value,
-    _scope: PhantomData<(&'a Value, Rc<()>)>,
-}
-
-static_assertions::assert_not_impl_any!(HydratedHashTable<'static>: Send, Sync, Clone, Copy);
-
-impl<'a> HydratedHashTable<'a> {
-    #[inline]
-    fn for_serial_write(value: &'a Value) -> Option<Self> {
-        value.as_hash_table()?;
-        Some(Self {
-            value: *value,
-            _scope: PhantomData,
-        })
-    }
-
-    #[inline]
-    pub(crate) fn into_value(self) -> Value {
-        self.value
-    }
-}
-
 impl Value {
     /// Edit through operations that report positive net backing growth.
     /// Unlike the unrestricted mutation closure, this capability cannot
@@ -68,18 +38,20 @@ impl Value {
         self,
         f: impl FnOnce(&mut HashTableWrite<'_>) -> R,
     ) -> Option<R> {
-        // The existing cold accessor charges lazy hydration before any
-        // mutable payload loan. No witness or constructor escapes this module;
-        // the callback receives only the typed write capability below.
-        let hydrated = HydratedHashTable::for_serial_write(&self)?;
-        mutate::with_hydrated_hash_table_mut_inactive(
-            hydrated,
-            // Keep the constructor forwarding in the payload loan. An
-            // opaque closure ABI spills its environment and result even
-            // when the inner mutation body has already been inlined.
-            #[inline(always)]
-            |table| f(&mut HashTableWrite::new(table)),
-        )
+        // SAFETY: the caller supplies the inactive-owner and no-callback/no-GC
+        // contract. `mutate::with_hash_table_write_inactive_impl` acquires
+        // `HeapMutClosureGuard::enter_object` strictly before reading
+        // `type_tag`, hydrating pending storage, or forming `&mut LispHashTable`.
+        unsafe {
+            mutate::with_hash_table_write_inactive_impl(
+                self,
+                // Keep the constructor forwarding in the payload loan. An
+                // opaque closure ABI spills its environment and result even
+                // when the inner mutation body has already been inlined.
+                #[inline(always)]
+                |table| f(&mut HashTableWrite::new(table)),
+            )
+        }
     }
 }
 

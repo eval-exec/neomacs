@@ -168,14 +168,20 @@ pub(crate) fn with_char_table_write<R>(
     value: TaggedValue,
     f: impl FnOnce(&mut CharTableWrite<'_>) -> R,
 ) -> Option<R> {
-    if !value.is_char_table() {
+    if !value.is_veclike() {
+        return None;
+    }
+    let raw = (value.bits() & !crate::tagged::value::TAG_MASK) as usize;
+    let _guard = super::HeapMutClosureGuard::enter_object(raw);
+    // SAFETY: `is_veclike()` proved `raw` is a live veclike header and `_guard` excludes re-entry.
+    if unsafe { super::checked_veclike_type_under_guard(raw) }
+        != crate::tagged::header::VecLikeType::CharTable
+    {
         return None;
     }
     LispCollectionRevision::changed(value);
-    note_heap_write(value, HeapWriteKind::CharTableData);
     let object = NonNull::new(value.as_veclike_ptr()?.cast_mut().cast::<CharTableObj>())?;
-    #[cfg(any(test, debug_assertions, feature = "test-support"))]
-    let _guard = super::HeapMutClosureGuard::enter();
+    note_heap_write(value, HeapWriteKind::CharTableData);
     Some(f(&mut CharTableWrite {
         object,
         slots: SlotWrite,
@@ -188,14 +194,20 @@ pub(crate) fn with_sub_char_table_write<R>(
     value: TaggedValue,
     f: impl FnOnce(&mut SubCharTableWrite<'_>) -> R,
 ) -> Option<R> {
-    if !value.is_sub_char_table() {
+    if !value.is_veclike() {
+        return None;
+    }
+    let raw = (value.bits() & !crate::tagged::value::TAG_MASK) as usize;
+    let _guard = super::HeapMutClosureGuard::enter_object(raw);
+    // SAFETY: `is_veclike()` proved `raw` is a live veclike header and `_guard` excludes re-entry.
+    if unsafe { super::checked_veclike_type_under_guard(raw) }
+        != crate::tagged::header::VecLikeType::SubCharTable
+    {
         return None;
     }
     LispCollectionRevision::changed(value);
-    note_heap_write(value, HeapWriteKind::SubCharTableData);
     let object = NonNull::new(value.as_veclike_ptr()?.cast_mut().cast::<SubCharTableObj>())?;
-    #[cfg(any(test, debug_assertions, feature = "test-support"))]
-    let _guard = super::HeapMutClosureGuard::enter();
+    note_heap_write(value, HeapWriteKind::SubCharTableData);
     Some(f(&mut SubCharTableWrite {
         object,
         slots: SlotWrite,

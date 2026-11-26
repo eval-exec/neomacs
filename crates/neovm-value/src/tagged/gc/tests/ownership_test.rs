@@ -1314,14 +1314,12 @@ fn concurrent_vector_bulk_cow_while_header_claimed() {
     // snapshot points at) and grows it (realloc — the historical TOCTOU
     // shape). C_OLD's only reference is now the retired buffer.
     let c_new = heap.alloc_cons(TaggedValue::fixnum(93), TaggedValue::fixnum(94));
-    let mutated = crate::tagged::mutate::with_vector_data_mut(v, |d| {
-        d.clear();
-        d.push(c_new);
-        for i in 0..64 {
-            d.push(TaggedValue::fixnum(i));
-        }
-    });
-    assert!(mutated.is_some());
+    let mut replacement = Vec::with_capacity(65);
+    replacement.push(c_new);
+    for i in 0..64 {
+        replacement.push(TaggedValue::fixnum(i));
+    }
+    assert!(crate::tagged::mutate::replace_vector_data(v, replacement));
 
     finish_concurrent_cycle(&mut heap, root);
 
@@ -1417,10 +1415,9 @@ fn concurrent_vector_bulk_insertion_of_inflight_value_survives() {
     heap.seed_root(root);
     heap.launch_concurrent_mark();
 
-    let mutated = crate::tagged::mutate::with_vector_data_mut(v, |d| {
-        d.push(x);
-    });
-    assert!(mutated.is_some());
+    let mut grown = v.as_vector_data().unwrap().to_vec();
+    grown.push(x);
+    assert!(crate::tagged::mutate::replace_vector_data(v, grown));
 
     finish_concurrent_cycle(&mut heap, root);
 

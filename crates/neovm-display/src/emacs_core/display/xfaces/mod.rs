@@ -1825,10 +1825,16 @@ pub(crate) fn make_lisp_face_vector() -> Value {
 
 fn reset_lisp_face_vector(vector: Value) {
     let unspecified = unspecified_face_symbol();
+    let needs_replace = vector
+        .as_vector_data()
+        .is_some_and(|slots| slots.len() != LISP_FACE_VECTOR_LEN);
+    if needs_replace {
+        let mut values = vec![unspecified; LISP_FACE_VECTOR_LEN];
+        values[0] = face_tag_symbol();
+        let _ = vector.replace_vector_data(values);
+        return;
+    }
     let _ = vector.with_vector_data_mut(|slots| {
-        if slots.len() != LISP_FACE_VECTOR_LEN {
-            *slots = vec![unspecified; LISP_FACE_VECTOR_LEN];
-        }
         // The bulk seam retired any captured backing before this exclusive
         // view; no marker can read these plain temporary owner words.
         slots[0] = face_tag_symbol();

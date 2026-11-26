@@ -68,7 +68,6 @@ pub mod flow_vocab;
 mod hash_mutation;
 #[doc(hidden)]
 pub use hash_mutation::HashTableWrite;
-pub(crate) use hash_mutation::HydratedHashTable;
 #[doc(hidden)]
 pub mod jit_runtime;
 pub mod positions;
@@ -443,8 +442,7 @@ pub fn mutate_string_text_properties<R>(
     value: Value,
     f: impl FnOnce(&mut TextPropertyTable) -> R,
 ) -> Option<R> {
-    let had = string_has_text_property_interval_tree(value);
-    let result = mutate::with_string_text_props_mut(value, f)?;
+    let (had, result) = mutate::with_string_text_props_mut_with_had(value, f)?;
     let props = string_text_props(value);
     let empty = props.is_some_and(TextPropertyTable::is_empty);
     let changed = props.is_some_and(TextPropertyTable::journal_mark_changed);
@@ -4206,8 +4204,8 @@ impl TaggedValue {
         }
     }
 
-    /// Mutate vector elements through the centralized tagged-runtime write path.
-    pub fn with_vector_data_mut<R>(self, f: impl FnOnce(&mut Vec<Value>) -> R) -> Option<R> {
+    /// Mutate vector elements in place through the centralized tagged-runtime write path.
+    pub fn with_vector_data_mut<R>(self, f: impl FnOnce(&mut [Value]) -> R) -> Option<R> {
         mutate::with_vector_data_mut(self, f)
     }
 
@@ -4375,8 +4373,8 @@ impl TaggedValue {
         }
     }
 
-    /// Mutate record elements through the centralized tagged-runtime write path.
-    pub fn with_record_data_mut<R>(self, f: impl FnOnce(&mut Vec<Value>) -> R) -> Option<R> {
+    /// Mutate record elements in place through the centralized tagged-runtime write path.
+    pub fn with_record_data_mut<R>(self, f: impl FnOnce(&mut [Value]) -> R) -> Option<R> {
         mutate::with_record_data_mut(self, f)
     }
 
@@ -4489,16 +4487,24 @@ impl TaggedValue {
 
     /// Mutate a GNU-shaped obarray object.
     pub fn with_obarray_mut<R>(self, f: impl FnOnce(&mut ObarrayObj) -> R) -> Option<R> {
-        if !self.is_obarray() {
+        if !self.is_veclike() {
+            return None;
+        }
+        let raw = (self.bits() & !TAG_MASK) as usize;
+        // Acquire the release re-entrancy guard BEFORE reading `(*header).type_tag`
+        // so caught re-entry cannot alias an outer `&mut *ptr`.
+        let _guard = mutate::HeapMutClosureGuard::enter_object(raw);
+        // SAFETY: `is_veclike()` proved `raw` is a live veclike header and `_guard` excludes re-entry.
+        if unsafe { mutate::checked_veclike_type_under_guard(raw) } != VecLikeType::Obarray {
             return None;
         }
         // Write barrier — see `with_char_table_mut`. Obarrays are dumped and
         // mutated by `intern`; this chokepoint feeds the GC remembered set.
         mutate::LispCollectionRevision::changed(self);
-        note_heap_write(self, HeapWriteKind::ObarrayData);
         let ptr = self.as_veclike_ptr().unwrap() as *mut ObarrayObj;
-        #[cfg(any(test, debug_assertions, feature = "test-support"))]
-        let _guard = mutate::HeapMutClosureGuard::enter();
+        note_heap_write(self, HeapWriteKind::ObarrayData);
+        // SAFETY: `checked_veclike_type_under_guard` validated `ptr` as a live
+        // `ObarrayObj`, and `_guard` excludes re-entry or collection while `&mut *ptr` is live.
         Some(f(unsafe { &mut *ptr }))
     }
 
@@ -4838,12 +4844,12 @@ impl TaggedValue {
         mutate::with_overlay_data_mut(self, f)
     }
 
-    /// Mutate vector elements under exclusive [`HeapMut`] capability.
+    /// Mutate vector elements in place under exclusive [`HeapMut`] capability.
     #[inline]
     pub fn with_vector_data_mut_in<R>(
         self,
         _heap: &mut HeapMut<'_>,
-        f: impl FnOnce(&mut Vec<Value>) -> R,
+        f: impl FnOnce(&mut [Value]) -> R,
     ) -> Option<R> {
         mutate::with_vector_data_mut(self, f)
     }
@@ -4885,12 +4891,12 @@ impl TaggedValue {
         mutate::with_sub_char_table_write(self, f)
     }
 
-    /// Mutate record elements under exclusive [`HeapMut`] capability.
+    /// Mutate record elements in place under exclusive [`HeapMut`] capability.
     #[inline]
     pub fn with_record_data_mut_in<R>(
         self,
         _heap: &mut HeapMut<'_>,
-        f: impl FnOnce(&mut Vec<Value>) -> R,
+        f: impl FnOnce(&mut [Value]) -> R,
     ) -> Option<R> {
         mutate::with_record_data_mut(self, f)
     }

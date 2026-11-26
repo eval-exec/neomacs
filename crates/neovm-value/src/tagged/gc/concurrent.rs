@@ -1296,6 +1296,11 @@ impl TaggedHeap {
         value: TaggedValue,
         update: impl FnOnce(&mut crate::heap_types::threading::ThreadChildren) -> R,
     ) -> Option<R> {
+        if !value.is_veclike() {
+            return None;
+        }
+        let raw = (value.bits() & !crate::tagged::value::TAG_MASK) as usize;
+        let _guard = crate::tagged::mutate::HeapMutClosureGuard::enter_object(raw);
         if value.veclike_type()? != VecLikeType::Thread {
             return None;
         }
@@ -1313,8 +1318,6 @@ impl TaggedHeap {
         // retained by the caller until this non-yielding closure returns.
         let object = unsafe { &mut *ptr };
         let before = object.owned_bytes();
-        #[cfg(any(test, debug_assertions, feature = "test-support"))]
-        let _guard = crate::tagged::mutate::HeapMutClosureGuard::enter();
         let result = update(&mut object.payload.children);
         self.note_allocation_bytes(object.owned_bytes().saturating_sub(before));
         Some(result)
@@ -1335,6 +1338,11 @@ impl TaggedHeap {
         value: TaggedValue,
         update: impl FnOnce(&mut crate::heap_types::threading::ThreadNativeState) -> R,
     ) -> Option<R> {
+        if !value.is_veclike() {
+            return None;
+        }
+        let raw = (value.bits() & !crate::tagged::value::TAG_MASK) as usize;
+        let _guard = crate::tagged::mutate::HeapMutClosureGuard::enter_object(raw);
         if value.veclike_type()? != VecLikeType::Thread {
             return None;
         }
@@ -1347,8 +1355,6 @@ impl TaggedHeap {
         if unsafe { (*ptr).payload.id().heap_identity() } != self.heap_identity() {
             return None;
         }
-        #[cfg(any(test, debug_assertions, feature = "test-support"))]
-        let _guard = crate::tagged::mutate::HeapMutClosureGuard::enter();
         // SAFETY: the validated live object is exclusively borrowed only for
         // the non-yielding closure; this view cannot introduce Lisp children.
         Some(update(unsafe { &mut (*ptr).payload.native }))
@@ -1368,6 +1374,11 @@ impl TaggedHeap {
         value: TaggedValue,
         update: impl FnOnce(&mut crate::heap_types::threading::MutexPayload) -> R,
     ) -> Option<R> {
+        if !value.is_veclike() {
+            return None;
+        }
+        let raw = (value.bits() & !crate::tagged::value::TAG_MASK) as usize;
+        let _guard = crate::tagged::mutate::HeapMutClosureGuard::enter_object(raw);
         if value.veclike_type()? != VecLikeType::Mutex {
             return None;
         }
@@ -1382,8 +1393,6 @@ impl TaggedHeap {
         // retained by the caller until this non-yielding closure returns.
         let object = unsafe { &mut *ptr };
         let before = object.owned_bytes();
-        #[cfg(any(test, debug_assertions, feature = "test-support"))]
-        let _guard = crate::tagged::mutate::HeapMutClosureGuard::enter();
         let result = update(&mut object.payload);
         self.note_allocation_bytes(object.owned_bytes().saturating_sub(before));
         Some(result)
@@ -1402,6 +1411,11 @@ impl TaggedHeap {
         value: TaggedValue,
         update: impl FnOnce(&mut crate::heap_types::threading::CondVarPayload) -> R,
     ) -> Option<R> {
+        if !value.is_veclike() {
+            return None;
+        }
+        let raw = (value.bits() & !crate::tagged::value::TAG_MASK) as usize;
+        let _guard = crate::tagged::mutate::HeapMutClosureGuard::enter_object(raw);
         if value.veclike_type()? != VecLikeType::CondVar {
             return None;
         }
@@ -1416,8 +1430,6 @@ impl TaggedHeap {
         // retained by the caller until this non-yielding closure returns.
         let object = unsafe { &mut *ptr };
         let before = object.owned_bytes();
-        #[cfg(any(test, debug_assertions, feature = "test-support"))]
-        let _guard = crate::tagged::mutate::HeapMutClosureGuard::enter();
         let result = update(&mut object.payload);
         self.note_allocation_bytes(object.owned_bytes().saturating_sub(before));
         Some(result)

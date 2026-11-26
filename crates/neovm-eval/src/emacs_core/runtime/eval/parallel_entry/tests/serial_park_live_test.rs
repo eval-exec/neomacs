@@ -4962,3 +4962,70 @@ fn l67c_c_raw_with_world_inhibits_explicit_gc_and_direct_collect() {
         },
     );
 }
+
+#[test]
+fn phase_0c_detach_serial_owner_for_collect_panics_inside_heap_mut_closure() {
+    with_l67c_c_green_era(
+        "phase-0c-detach-for-collect-guard",
+        |_src| {},
+        |era| {
+            let (inbox, inbox_rx) = mpsc::channel();
+            let mut driver = Driver::new(era, inbox_rx);
+            let o_kit = enroll_driver(era, &mut driver, &inbox, O);
+            drop(inbox);
+
+            let world_handle = era.keeper_baton_for_test().test_world_handle_for_test();
+            let (retire_tx, retire_rx) = mpsc::channel::<()>();
+
+            std::thread::scope(|scope| {
+                let _panic_guard = KeeperPanicGuard { keeper: era };
+                let owner = scope.spawn(move || {
+                    let ctx = world_handle.spawn_unseated_serial_context_for_test();
+                    let mut state = OwnerSerialState::new(o_kit.home.owner, Box::new(ctx))
+                        .ok()
+                        .expect("O detaches");
+                    let home = o_kit.home;
+                    let mut raw_port = ChannelPort::new(
+                        home.owner,
+                        activate(o_kit.permit, home.heap, home.owner),
+                        o_kit.inbox,
+                        o_kit.grants,
+                    );
+                    let mut port = EpochPort::new(&mut raw_port);
+                    let granted = port.request_turn().ok().expect("O granted");
+                    let mut turn = begin_turn(&mut state, home, granted, &mut port, standalone)
+                        .ok()
+                        .expect("O begins");
+                    turn.with_world_collectible(&mut port, standalone, |ev| {
+                        let v = ev.eval_str("(vector 1 2)").expect("allocate vector");
+                        neovm_value::tagged::mutate::with_vector_data_mut(v, |outer| {
+                            outer[0] = neovm_value::value::Value::fixnum(30);
+                            // Calls `bridge(ev)` -> `detach_serial_owner_for_collect`
+                            // directly without passing through `gc_collect_from_current_roots_impl_flow`.
+                            let panicked =
+                                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                    let _ = ev.gc_collect_serial_turn();
+                                }));
+                            assert!(
+                                panicked.is_err(),
+                                "detach_serial_owner_for_collect inside active heap mutation closure must panic before AbortOnPanic"
+                            );
+                            assert_eq!(outer[0], neovm_value::value::Value::fixnum(30));
+                        })
+                        .expect("vector mutation succeeded");
+                    });
+                    turn.end(&mut port)
+                        .ok()
+                        .expect("O ends cleanly after caught panic");
+                    drop(port);
+                    retire(raw_port.exit());
+                    retire_rx.recv_timeout(BOUND).expect("teardown");
+                    drop(state);
+                });
+                assert_eq!(driver.run(), DriverEnd::Drained);
+                retire_tx.send(()).expect("allow drop");
+                owner.join().expect("O joined");
+            });
+        },
+    );
+}

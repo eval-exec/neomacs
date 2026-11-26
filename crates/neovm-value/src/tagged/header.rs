@@ -1348,10 +1348,16 @@ impl LispValueVec {
     }
 
     /// Exclusive bulk mutation of an uncaptured backing. The barriered bulk
-    /// seams retire captured allocations before creating this ownership guard.
+    /// seams retire captured allocations before creating this in-place view.
     #[inline]
     pub fn ensure_owned(&mut self) -> OwnedValueVec<'_> {
         OwnedValueVec::new(self.owned_cells())
+    }
+
+    /// Replace the entire backing with a fresh owned allocation in place.
+    #[inline]
+    pub fn replace_owned(&mut self, items: Vec<TaggedValue>) {
+        self.storage = LispValueVecStorage::Owned(value_vec::into_cells(items));
     }
 
     /// Promote immutable mapped words without borrowing any owned slot uniquely
