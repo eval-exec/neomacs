@@ -3,8 +3,9 @@
 //! An *erased callable pair* is an untyped pointer stored beside the function
 //! pointer that casts it back to a concrete type. The soundness obligation is
 //! a type-identity obligation — the callee's `F` must be the pointee type of
-//! `data` — and nothing in the syntax of a single cast establishes it. Design
-//! note: `tmp/v10x/integ-inbox/ERASED-CALLABLE-GUARD.md`.
+//! `data` — and nothing in the syntax of a single cast establishes it. The rule
+//! and the reviewed pairs live in this file and `erased_callable_pair_scopes.tsv`;
+//! there is no separate design document to consult.
 //!
 //! **The rule, keyed on the pair rather than on a spelling.** A struct, union,
 //! or enum variant that declares both a field of untyped-pointer type

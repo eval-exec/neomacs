@@ -29,10 +29,11 @@
 //! enclosing type, and free functions of the file): each one must be listed,
 //! so a new helper on a protected path cannot arrive unclassified.
 //!
-//! This is the source half of the guard. The binary half,
-//! `tmp/v10x/protected-codegen-check.sh`, pins the instruction count, frame,
-//! callee set and inline tree of every protected function in the fat build;
-//! regenerate this list from that census whenever the table is re-pinned.
+//! This is the source half of the guard. The binary half pins the instruction
+//! count, frame, callee set and inline tree of every protected function in the
+//! fat build; it runs as an out-of-tree codegen census over a fat build, and
+//! `protected_inline_boundary.list` is its committed output. Regenerate that list
+//! from the census whenever the table is re-pinned.
 //! Extending the attribute subset also requires comparing all protected
 //! pre-LTO bodies and inline trees, plus the level-3 callee-attribute check.
 

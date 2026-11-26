@@ -1,8 +1,7 @@
 # Reviewed erased-callable pairs: `workspace-relative path <TAB> item <TAB> reason`.
 # Deny by default. A pair that appears here unsealed is a recorded debt, not an
 # exemption; a pair that disappears makes its row stale and the row fails.
-# See erased_callable_pair_guard_test.rs and
-# tmp/v10x/integ-inbox/ERASED-CALLABLE-GUARD.md.
+# See erased_callable_pair_guard_test.rs for the rule this table is checked against.
 neovm-eval/src/emacs_core/runtime/eval/parallel_entry/thread_control.rs	ErasedParkBridge	Sealed by E5.3a: the sole constructor `ErasedParkBridge::new::<F>` derives `data` (`from_mut(bridge_fn).cast::<()>()`) and `call` (`Self::call_bridge::<F>`) from one instantiation, so a mismatched pair is unconstructible. Recorded so a second pair in this module is a review event.
 neovm-text/src/emacs_core/text/ccl/mod.rs	CclVariableHooks	Found by this row, not known before it: the same shape (untyped `raw` beside two `unsafe fn(*const (), …)` trampolines that cast it back to `V::Raw`) built as a bare struct literal, so nothing tied the halves to one view instantiation. Sealed in the same slice by the sole constructor `CclVariableHooks::new::<V>`, which mints `raw` and both trampolines from one `V`.
 neovm-value/src/tagged/header.rs	UserPtrObj	GNU module ABI shape: a module-owned C pointer beside the module's optional `EmacsFinalizer`. Both halves arrive from the module through `emacs-module.h`; neomacs mints neither, and the finalizer's contract over `ptr` is the module author's. No constructor inside neomacs can enforce the pairing, so this row records it rather than sealing it.

@@ -16,7 +16,7 @@
 # Derived 2026-10-06 from the DWARF inline tree and call targets of the reference fat-LTO build
 # tmp/v10x/b37cand-bin/neomacs (main 3a3ffdfb1c, build-wt.sh: profiling profile, CARGO_INCREMENTAL=0).
 # Not listed: compiler-generated code (derives, closures, drop glue, std/thread-local internals);
-# the binary guard tmp/v10x/protected-codegen-check.sh pins those through the inline tree.
+# the out-of-tree binary codegen census pins those through the inline tree.
 # When the guard's table is re-pinned for an intended change, re-derive this list from the same build.
 
 never	buffer/buffer.rs	<SavedLabeledRestrictions as Drop>::drop	run_loop
