@@ -120,6 +120,20 @@ impl ObservedEnvelope {
     /// Refresh once per reclamation epoch or current dump-span change. An
     /// observer never initializes this ledger merely to reject an empty gate.
     pub(super) fn refresh(&mut self, dump: BarrierWindow) -> bool {
+        self.refresh_inner(dump, || ())
+    }
+
+    #[cfg(test)]
+    pub(super) fn refresh_with_concurrent_reclaim_for_test(
+        &mut self,
+        dump: BarrierWindow,
+        after_reclaimed: impl FnOnce(),
+    ) -> bool {
+        self.refresh_inner(dump, after_reclaimed)
+    }
+
+    #[inline(always)]
+    fn refresh_inner(&mut self, dump: BarrierWindow, after_reclaimed: impl FnOnce()) -> bool {
         let epoch = collection_observation_epoch();
         if self.epoch == Some(epoch) {
             if self.dump == dump {
@@ -128,7 +142,7 @@ impl ObservedEnvelope {
             self.rebuild(dump);
             return true;
         }
-        self.refresh_reclaimed(dump)
+        self.refresh_reclaimed_inner(dump, epoch, after_reclaimed)
     }
 
     /// Acknowledge a reclamation epoch. Every sweep slice that clears a mark
@@ -140,22 +154,46 @@ impl ObservedEnvelope {
     /// Retained dead entries are harmless: they only widen the gate, and
     /// `already_published` and the publishing caller of `insert` check exact
     /// metadata before trusting one.
+    ///
+    /// Ordering proof (pairs with `advance_collection_observation_epoch_by`):
+    /// Writer executes `(W0) clear mark [Release] -> (W1) RECLAIMED_OBSERVATIONS
+    /// += cleared [Release] -> (W2) OBSERVATION_EPOCH += 1 [Release]`.
+    /// Both branches below Acquire `OBSERVATION_EPOCH` BEFORE
+    /// `RECLAIMED_OBSERVATIONS`:
+    /// - Deferred prune: caller Acquired `epoch` before this function Acquires
+    ///   `reclaimed`. Every `(W2)` with side effect `<= epoch` synchronizes-with
+    ///   `epoch` via the RMW release sequence on `OBSERVATION_EPOCH`, so its
+    ///   `(W1)` happened-before `reclaimed`. Storing `self.epoch = Some(epoch)`
+    ///   (never re-loading a later epoch after `reclaimed`) ensures `self.epoch`
+    ///   never advances past a concurrent clear unseen by `reclaimed`.
+    /// - Full prune: Acquires `epoch` first, then `reclaimed`, then scans
+    ///   `retain()`. Every clear included in `epoch` is counted in `reclaimed`,
+    ///   and every clear counted in `reclaimed` synchronizes-with `reclaimed`
+    ///   and is visible to `retain()`.
     #[cold]
     #[inline(never)]
-    fn refresh_reclaimed(&mut self, dump: BarrierWindow) -> bool {
+    fn refresh_reclaimed_inner(
+        &mut self,
+        dump: BarrierWindow,
+        epoch: u64,
+        after_reclaimed: impl FnOnce(),
+    ) -> bool {
         let reclaimed = reclaimed_collection_observation_count();
+        after_reclaimed();
         let debt = reclaimed.wrapping_sub(self.validated_reclaimed);
         if debt.saturating_mul(PRUNE_DEBT_RATIO) < self.owners.len() as u64 {
-            self.epoch = Some(collection_observation_epoch());
+            self.epoch = Some(epoch);
             if self.dump != dump {
                 self.rebuild(dump);
                 return true;
             }
             return false;
         }
-        // Acquire the count and epoch before scanning: a clear published
-        // after them is either seen by this scan or counted as later debt.
+        // Acquire epoch BEFORE reclaimed count, and both before scanning:
+        // every clear up to `epoch` is counted in `reclaimed`, and every clear
+        // counted in `reclaimed` is visible to `retain()` below.
         let epoch = collection_observation_epoch();
+        let reclaimed = reclaimed_collection_observation_count();
         let old_len = self.owners.len();
         #[cfg(any(test, feature = "test-support"))]
         {
@@ -261,6 +299,16 @@ impl ObservedEnvelope {
     #[cfg(test)]
     pub(super) fn owner_count_for_test(&self) -> usize {
         self.owners.len()
+    }
+
+    #[cfg(test)]
+    pub(super) fn epoch_for_test(&self) -> Option<u64> {
+        self.epoch
+    }
+
+    #[cfg(test)]
+    pub(super) fn validated_reclaimed_for_test(&self) -> u64 {
+        self.validated_reclaimed
     }
 
     pub(super) fn ranges(&self) -> [BarrierWindow; 2] {
