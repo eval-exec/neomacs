@@ -173,6 +173,10 @@ impl ConsBlock {
     }
 
     pub(super) fn mark_cell_offset(&mut self, offset: usize) -> bool {
+        assert!(
+            offset < CONS_CELLS_BYTES && offset.is_multiple_of(size_of::<ConsCell>()),
+            "cons block mark_cell_offset {offset} is out of bounds or unaligned (CONS_CELLS_BYTES = {CONS_CELLS_BYTES})"
+        );
         self.trailer().mark_cell(offset / size_of::<ConsCell>())
     }
 
@@ -384,6 +388,29 @@ mod tests {
         assert_eq!(rest_count, CONS_BLOCK_SIZE - 2);
         assert_eq!(block.next_index(), CONS_BLOCK_SIZE);
         assert_eq!(block.reserve_tail(1), (CONS_BLOCK_SIZE, 0));
+    }
+
+    #[test]
+    fn cons_block_rejects_oob_mark_cell_offset_and_rewind_tail() {
+        use std::panic::{AssertUnwindSafe, catch_unwind};
+
+        let mut block = ConsBlock::new();
+        assert_eq!(block.reserve_tail(2), (0, 2));
+        assert!(
+            catch_unwind(AssertUnwindSafe(|| {
+                block.mark_cell_offset(CONS_CELLS_BYTES)
+            }))
+            .is_err(),
+            "mark_cell_offset(CONS_CELLS_BYTES) must panic"
+        );
+        assert!(
+            catch_unwind(AssertUnwindSafe(|| block.mark_cell_offset(1))).is_err(),
+            "unaligned mark_cell_offset must panic"
+        );
+        assert!(
+            catch_unwind(AssertUnwindSafe(|| block.rewind_tail(3))).is_err(),
+            "rewind_tail past next_index must panic"
+        );
     }
 }
 

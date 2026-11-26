@@ -1,7 +1,7 @@
 //! Sticky observation lifetime and address ownership, independent of GC mode.
 
 use super::*;
-use crate::tagged::gc::ConsBlock;
+use crate::tagged::gc::{CONS_BLOCK_SIZE, ConsBlock};
 use crate::tagged::header::{ConsCdrWord, ConsWord};
 use crate::tagged::value::TaggedValue;
 
@@ -156,4 +156,24 @@ fn shared_cons_observation_publication_has_exactly_one_first_observer() {
     });
     assert_eq!(first_observers, 1);
     assert!(unsafe { collection_observed(bits) });
+}
+
+#[test]
+fn clear_cons_observed_dead_rejects_cells_above_block_size() {
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+
+    crate::test_utils::init_test_tracing();
+    let block = make_block(1);
+    assert!(
+        catch_unwind(AssertUnwindSafe(|| {
+            clear_cons_observed_dead(
+                block.base_addr(),
+                block.trailer(),
+                CONS_BLOCK_SIZE + 1,
+                false,
+            )
+        }))
+        .is_err(),
+        "clear_cons_observed_dead must reject cells > CONS_BLOCK_SIZE"
+    );
 }

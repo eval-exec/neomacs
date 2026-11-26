@@ -299,6 +299,11 @@ pub(super) fn clear_cons_observed_dead(
     cells: usize,
     generational: bool,
 ) {
+    assert!(
+        cells <= super::cons_block_trailer::CONS_BLOCK_SIZE,
+        "clear_cons_observed_dead cell count {cells} exceeds CONS_BLOCK_SIZE ({})",
+        super::cons_block_trailer::CONS_BLOCK_SIZE
+    );
     if HAS_CONS_MARKS.load(Ordering::Acquire) {
         clear_cons_observed_dead_slow(base, trailer, cells, generational);
     }

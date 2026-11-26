@@ -146,3 +146,108 @@ fn promotions_spread_mark_words_into_age_bytes() {
         assert_eq!(trailer.is_old(index), survives(index), "cell {index}");
     }
 }
+
+#[test]
+fn trailer_rejects_out_of_bounds_cell_and_word_indices() {
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+
+    crate::test_utils::init_test_tracing();
+    let trailer = trailer();
+
+    assert!(
+        catch_unwind(AssertUnwindSafe(|| trailer.is_marked(CONS_BLOCK_SIZE))).is_err(),
+        "is_marked(CONS_BLOCK_SIZE) must panic"
+    );
+    assert!(
+        catch_unwind(AssertUnwindSafe(|| trailer.mark_cell(CONS_BLOCK_SIZE))).is_err(),
+        "mark_cell(CONS_BLOCK_SIZE) must panic"
+    );
+    assert!(
+        catch_unwind(AssertUnwindSafe(|| trailer.try_mark(CONS_BLOCK_SIZE))).is_err(),
+        "try_mark(CONS_BLOCK_SIZE) must panic"
+    );
+    assert!(
+        catch_unwind(AssertUnwindSafe(|| {
+            trailer.is_live_generational(CONS_BLOCK_SIZE)
+        }))
+        .is_err(),
+        "is_live_generational(CONS_BLOCK_SIZE) must panic"
+    );
+    assert!(
+        catch_unwind(AssertUnwindSafe(|| trailer.is_old(CONS_BLOCK_SIZE))).is_err(),
+        "is_old(CONS_BLOCK_SIZE) must panic"
+    );
+    assert!(
+        catch_unwind(AssertUnwindSafe(|| trailer.age_is_old(CONS_BLOCK_SIZE))).is_err(),
+        "age_is_old(CONS_BLOCK_SIZE) must panic"
+    );
+    assert!(
+        catch_unwind(AssertUnwindSafe(|| trailer.set_old(CONS_BLOCK_SIZE))).is_err(),
+        "set_old(CONS_BLOCK_SIZE) must panic"
+    );
+    assert!(
+        catch_unwind(AssertUnwindSafe(|| trailer.clear_old(CONS_BLOCK_SIZE))).is_err(),
+        "clear_old(CONS_BLOCK_SIZE) must panic"
+    );
+    assert!(
+        catch_unwind(AssertUnwindSafe(|| {
+            trailer.mark_run(CONS_BLOCK_SIZE, 1, true)
+        }))
+        .is_err(),
+        "mark_run past CONS_BLOCK_SIZE must panic"
+    );
+    assert!(
+        catch_unwind(AssertUnwindSafe(|| trailer.mark_run(usize::MAX, 1, true))).is_err(),
+        "mark_run overflow must panic"
+    );
+    assert!(
+        catch_unwind(AssertUnwindSafe(|| {
+            trailer.clear_marks_world_stopped(CONS_BLOCK_SIZE + 1)
+        }))
+        .is_err(),
+        "clear_marks_world_stopped past CONS_BLOCK_SIZE must panic"
+    );
+    assert!(
+        catch_unwind(AssertUnwindSafe(|| {
+            trailer.count_marked(CONS_BLOCK_SIZE + 1)
+        }))
+        .is_err(),
+        "count_marked past CONS_BLOCK_SIZE must panic"
+    );
+    assert!(
+        catch_unwind(AssertUnwindSafe(|| {
+            trailer.count_live_generational(CONS_BLOCK_SIZE + 1)
+        }))
+        .is_err(),
+        "count_live_generational past CONS_BLOCK_SIZE must panic"
+    );
+    assert!(
+        catch_unwind(AssertUnwindSafe(|| {
+            trailer.promote_marked_world_stopped(CONS_BLOCK_SIZE + 1)
+        }))
+        .is_err(),
+        "promote_marked_world_stopped past CONS_BLOCK_SIZE must panic"
+    );
+    assert!(
+        catch_unwind(AssertUnwindSafe(|| trailer.count_old(CONS_BLOCK_SIZE + 1))).is_err(),
+        "count_old past CONS_BLOCK_SIZE must panic"
+    );
+    assert!(
+        catch_unwind(AssertUnwindSafe(|| {
+            let _ = trailer.mark_word(CONS_MARK_WORDS);
+        }))
+        .is_err(),
+        "mark_word(CONS_MARK_WORDS) must panic"
+    );
+    assert!(
+        catch_unwind(AssertUnwindSafe(|| trailer.old_word(CONS_MARK_WORDS))).is_err(),
+        "old_word(CONS_MARK_WORDS) must panic"
+    );
+    assert!(
+        catch_unwind(AssertUnwindSafe(|| {
+            trailer.live_word(CONS_MARK_WORDS, false)
+        }))
+        .is_err(),
+        "live_word(CONS_MARK_WORDS, false) must panic"
+    );
+}
