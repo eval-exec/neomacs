@@ -52,27 +52,102 @@ enum LiveFontCase {
     Minimum,
     MinimumVertical,
     GrownMinibuffer,
+    /// 85x24 and 91x25 resizes plus a font change in one command-loop turn.
     OverlappingResize,
+    /// The same requests, with the font change after the settled 91x25 grid.
+    SettledResizeThenFont,
     Fullscreen,
 }
 
+/// The same stimulus runs on both editors: 80x24, then 85x24 and 91x25 resizes
+/// plus a font change in one command-loop turn. Each editor then settles under
+/// its own event processing. The fixture accepts an end state only after it
+/// has held unchanged for 1 s (re-checked every 50 ms), so a transient grid is
+/// never compared. That hold is a stability convergence, not a blind settle:
+/// a change resets it and is logged as LIVE-FONT-SETTLE-RESET. It lives in
+/// `fixtures/desktop-font-live.el`, which the wall-clock guard deliberately
+/// does not scan (Elisp fixtures are outside it). Review is what keeps it from
+/// becoming a fixed sleep before a single observation.
+///
+/// GNU 31.1 can end this sequence on more than one grid, depending on whether
+/// the `ConfigureNotify` for a resize is processed before `x_new_font` runs.
+/// `x_new_font` sizes the frame from the current `FRAME_COLS`/`FRAME_LINES`
+/// (xterm.c:27179-27181). `xg_frame_set_char_size` waits for each configure
+/// only up to the 0.1 s `x-wait-for-event-timeout` (gtkutil.c:1274,
+/// xterm.c:28432). Neomacs always ends on 91x25, which is the outcome GNU
+/// produces when it wins that race. A program that depends on which side of
+/// the race GNU lands on is not portable under GNU itself. These rows
+/// therefore assert the set of states each editor can legitimately settle in,
+/// and the settled-resize rows assert the common state.
+///
+/// How the GNU set was obtained: 22 attested-oracle runs on a loaded host
+/// (load average 42-52 on 32 cores).
+/// - 12 runs with the 1 s settle hold: 6 settled on 91x25 and 6 on 85x24,
+///   with no reset in any run.
+/// - 10 earlier runs without the hold: 8 on 91x25 and 2 on 85x24.
+///
+/// 80x24 (neither configure processed in time) was never observed under load
+/// alone. It is the grid `x_new_font` reads when both waits miss, and it was
+/// produced directly by running the same row with `--eval '(setq
+/// x-wait-for-event-timeout nil)'`, so that `x_wait_for_event` returns at
+/// once. 15 such runs settled 10x on 80x24 and 5x on 85x24, never 91x25, all
+/// held with no reset. That run is not deterministic: the GTK event flush in
+/// `xg_frame_set_char_size` sometimes still drains the first configure. With
+/// the earlier `{85x24, 91x25}` set, the same configuration timed out at the
+/// 60 s cap on a settled 80x24 frame, so the narrower set was a flake waiting
+/// for a slow host.
+///
+/// These are the states we can produce or argue for from the source. That is
+/// not a proof that GNU 31.1 can reach no other grid. If this row fails on
+/// a settled state outside the set, widen the set deliberately, with the same
+/// evidence: an attested run that produces the state, and the source path
+/// that explains it.
 #[test]
 // Prerequisites: requires GNU GUI Emacs, Xvfb, GSettings and fonts.
-fn gnu_overlapping_resize_and_font_change_preserve_latest_grid() {
-    check_live_font(
+fn gnu_overlapping_resize_and_font_change_settle_on_a_requested_grid() {
+    check_live_font_grids(
         GuiBackend::LinuxX11,
         "gnu-live-overlapping",
         LiveFontCase::OverlappingResize,
+        &[(80, 24), (85, 24), (91, 25)],
+    );
+}
+
+/// Neomacs settles the same stimulus on the latest requested grid. See the
+/// GNU row above for why this is one of GNU's own settled states and not a
+/// divergence.
+#[test]
+// Prerequisites: requires release binary/pdump, Weston, GSettings and fonts.
+fn overlapping_resize_and_font_change_settle_on_the_latest_grid() {
+    check_live_font_grids(
+        GuiBackend::LinuxWayland,
+        "live-overlapping",
+        LiveFontCase::OverlappingResize,
+        &[(91, 25)],
+    );
+}
+
+/// With the font change issued only after the 91x25 grid has settled, both
+/// editors must keep 91x25 under the new font.
+#[test]
+// Prerequisites: requires GNU GUI Emacs, Xvfb, GSettings and fonts.
+fn gnu_settled_resize_then_font_change_preserves_grid() {
+    check_live_font_grids(
+        GuiBackend::LinuxX11,
+        "gnu-live-settled-resize",
+        LiveFontCase::SettledResizeThenFont,
+        &[(91, 25)],
     );
 }
 
 #[test]
 // Prerequisites: requires release binary/pdump, Weston, GSettings and fonts.
-fn overlapping_resize_and_font_change_preserve_latest_grid() {
-    check_live_font(
+fn settled_resize_then_font_change_preserves_grid() {
+    check_live_font_grids(
         GuiBackend::LinuxWayland,
-        "live-overlapping",
-        LiveFontCase::OverlappingResize,
+        "live-settled-resize",
+        LiveFontCase::SettledResizeThenFont,
+        &[(91, 25)],
     );
 }
 
@@ -279,6 +354,31 @@ fn live_font_overrides_current_fonts_and_sets_future_defaults() {
 }
 
 fn check_live_font(backend: GuiBackend, scenario: &str, case: LiveFontCase) {
+    run_live_font(backend, scenario, case, None);
+}
+
+/// Run a resize-and-font case. The row supplies the end grids it accepts;
+/// the fixture's stimulus never depends on which editor runs it.
+fn check_live_font_grids(
+    backend: GuiBackend,
+    scenario: &str,
+    case: LiveFontCase,
+    grids: &[(u32, u32)],
+) {
+    let spec = grids
+        .iter()
+        .map(|(columns, lines)| format!("{columns}x{lines}"))
+        .collect::<Vec<_>>()
+        .join(" ");
+    run_live_font(backend, scenario, case, Some(spec));
+}
+
+fn run_live_font(
+    backend: GuiBackend,
+    scenario: &str,
+    case: LiveFontCase,
+    expected_grids: Option<String>,
+) {
     let root = neomacs_infra::crate_root!().join("../..");
     let artifacts = root.join("target/neomacs-gui-tests").join(scenario);
     let config = artifacts.join("settings-config");
@@ -328,6 +428,9 @@ fn check_live_font(backend: GuiBackend, scenario: &str, case: LiveFontCase) {
     .with_env("NEOMACS_GUI_LIVE_FONT_CASE", case.as_ref())
     .with_env("GSETTINGS_SCHEMA_DIR", schemas.to_string_lossy())
     .with_env("XDG_CONFIG_HOME", config.to_string_lossy());
+    if let Some(grids) = expected_grids {
+        plan = plan.with_env("NEOMACS_GUI_LIVE_FONT_EXPECT_GRIDS", grids);
+    }
     if backend == GuiBackend::LinuxWayland {
         let receipt = artifacts.join("presentation.sexp");
         if receipt.exists() {

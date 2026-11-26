@@ -4,7 +4,11 @@
 use neomacs_gui_tests::{
     DisplayHarness, GuiBackend, GuiRunOptions, GuiScenario, GuiTestPlan, ProcessGuiCommandRunner,
 };
-use std::{fs, path::PathBuf, time::Duration};
+use std::{
+    fs, io,
+    path::{Path, PathBuf},
+    time::Duration,
+};
 
 /// Honor explicit compositor selection, defaulting to the host's native backend.
 fn commit_probe_backend(configured: Option<&str>) -> GuiBackend {
@@ -38,13 +42,15 @@ fn run_fixture_probe(probe: &str, fixture: &str) {
         .map(PathBuf::from)
         .unwrap_or_else(|| root.join("target/release/neomacs"));
     let missing_telemetry = probe == "rtl-missing-telemetry";
+    // Per-backend, per-process files: a repeat run or a concurrent run on
+    // the other backend must never see this run's telemetry or results.
+    let run_dir = fresh_run_dir(&artifacts.join(backend.slug()));
     let stats_path = if missing_telemetry {
-        artifacts
-            .join(format!("missing-{}", std::process::id()))
-            .join("layout-stats.log")
+        run_dir.join("missing").join("layout-stats.log")
     } else {
-        artifacts.join("layout-stats.log")
+        run_dir.join("layout-stats.log")
     };
+    let result_path = run_dir.join("probe-result.txt");
     let mut plan = GuiTestPlan::new(
         backend,
         &root,
@@ -56,6 +62,10 @@ fn run_fixture_probe(probe: &str, fixture: &str) {
     )
     .with_program(program)
     .with_env("NEOMACS_COMMIT_PROBE", probe)
+    .with_env(
+        "NEOMACS_COMMIT_RESULT_FILE",
+        result_path.to_string_lossy().into_owned(),
+    )
     .with_env(
         "NEOMACS_LAYOUT_STATS_FILE",
         stats_path.to_string_lossy().into_owned(),
@@ -82,28 +92,55 @@ fn run_fixture_probe(probe: &str, fixture: &str) {
     let result = plan
         .run_with(
             &mut ProcessGuiCommandRunner,
-            GuiRunOptions::with_timeout(Duration::from_secs(20)),
+            // Explicit hang-avoidance cap only; the fixture exits immediately
+            // once its state-gated checks complete.
+            GuiRunOptions::with_timeout(Duration::from_secs(60)),
         )
         .unwrap();
     let stderr = fs::read_to_string(&result.artifacts.stderr).unwrap_or_default();
-    assert!(!result.timed_out, "{result:#?}\n{stderr}");
+    // Every fixture writes its markers to NEOMACS_COMMIT_RESULT_FILE. A
+    // missing file is a failure, never a cue to read the torn stderr stream.
+    let probe_output = match fs::read_to_string(&result_path) {
+        Ok(output) => output,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => String::new(),
+        Err(error) => panic!("read {}: {error}", result_path.display()),
+    };
+    let structured_output = probe_output.as_str();
+    assert!(
+        !result.timed_out,
+        "{result:#?}\nprobe_output:\n{probe_output}\nstderr:\n{stderr}"
+    );
     if missing_telemetry {
-        assert_eq!(result.exit_code, Some(1), "{result:#?}\n{stderr}");
-        assert!(stderr.contains("Missing layout telemetry"), "{stderr}");
+        assert_eq!(
+            result.exit_code,
+            Some(1),
+            "{result:#?}\nprobe_output:\n{probe_output}\nstderr:\n{stderr}"
+        );
         assert!(
-            !stderr.contains("CURSOR-REPLAY-REFERENCE-GEOMETRY-ONLY"),
-            "{stderr}"
+            structured_output.contains("Missing layout telemetry"),
+            "probe_output:\n{probe_output}\nstderr:\n{stderr}"
+        );
+        assert!(
+            !structured_output.contains("CURSOR-REPLAY-REFERENCE-GEOMETRY-ONLY"),
+            "probe_output:\n{probe_output}\nstderr:\n{stderr}"
         );
         return;
     }
-    assert_eq!(result.exit_code, Some(0), "{result:#?}\n{stderr}");
-    assert!(stderr.contains("COMMIT-EDITING-PASS"), "{stderr}");
+    assert_eq!(
+        result.exit_code,
+        Some(0),
+        "{result:#?}\nprobe_output:\n{probe_output}\nstderr:\n{stderr}"
+    );
+    assert!(
+        structured_output.contains("COMMIT-EDITING-PASS"),
+        "probe_output:\n{probe_output}\nstderr:\n{stderr}"
+    );
     if probe == "org-table-whitespace" {
-        let rendered = stderr.contains("ORG-TABLE-RENDERED-FACES-PASS");
-        let source_only = stderr.contains("ORG-TABLE-REFERENCE-SOURCE-ONLY");
+        let rendered = structured_output.contains("ORG-TABLE-RENDERED-FACES-PASS");
+        let source_only = structured_output.contains("ORG-TABLE-REFERENCE-SOURCE-ONLY");
         assert_ne!(
             rendered, source_only,
-            "missing or ambiguous Org evidence: {stderr}"
+            "missing or ambiguous Org evidence\nprobe_output:\n{probe_output}\nstderr:\n{stderr}"
         );
         if source_only {
             eprintln!("Org reference control: source setup only; rendered faces were not asserted");
@@ -112,26 +149,51 @@ fn run_fixture_probe(probe: &str, fixture: &str) {
     if (probe.ends_with("newline-cursor")
         || probe == "rtl-replacement-cursor"
         || probe.starts_with("stretch-policy-"))
-        && !stderr.contains("CURSOR-REPLAY-REFERENCE-GEOMETRY-ONLY")
+        && !structured_output.contains("CURSOR-REPLAY-REFERENCE-GEOMETRY-ONLY")
     {
-        let marker = stderr
-            .lines()
-            .find_map(|line| line.strip_prefix("CURSOR-REPLAY-STATS "))
-            .expect("missing replay telemetry interval");
-        let bounds: Vec<usize> = marker
-            .split_whitespace()
-            .map(|value| value.parse().unwrap())
-            .collect();
-        assert_eq!(bounds.len(), 2, "{marker}");
-        let stats = fs::read_to_string(artifacts.join("layout-stats.log")).unwrap();
+        let (start, end) = parse_replay_telemetry_interval(structured_output).unwrap_or_else(|| {
+            panic!(
+                "missing replay telemetry interval\nprobe_output:\n{probe_output}\nstderr:\n{stderr}"
+            )
+        });
+        let stats = fs::read_to_string(&stats_path).unwrap();
         let interval = stats
-            .get(bounds[0]..bounds[1])
+            .get(start..end)
             .expect("invalid replay telemetry interval");
         assert!(
             cursor_replay_reused_rows(interval),
             "point move did not reuse rows through cursor-only replay: {interval}"
         );
     }
+}
+
+/// Remove any previous run's directory and recreate it empty. Anything other
+/// than "it was not there" is a failure: a stale file that survives would let
+/// a readiness gate or a marker check pass on old output.
+fn fresh_run_dir(backend_dir: &Path) -> PathBuf {
+    let run_dir = backend_dir.join(format!("run-{}", std::process::id()));
+    match fs::remove_dir_all(&run_dir) {
+        Ok(()) => {}
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => panic!("remove stale {}: {error}", run_dir.display()),
+    }
+    fs::create_dir_all(&run_dir)
+        .unwrap_or_else(|error| panic!("create {}: {error}", run_dir.display()));
+    run_dir
+}
+
+/// Extract the `(start, end)` byte interval from a `CURSOR-REPLAY-STATS` line.
+fn parse_replay_telemetry_interval(output: &str) -> Option<(usize, usize)> {
+    let marker = output
+        .lines()
+        .find_map(|line| line.strip_prefix("CURSOR-REPLAY-STATS "))?;
+    let mut parts = marker.split_whitespace();
+    let start = parts.next()?.parse::<usize>().ok()?;
+    let end = parts.next()?.parse::<usize>().ok()?;
+    if parts.next().is_some() {
+        return None;
+    }
+    Some((start, end))
 }
 
 /// Require the marked redisplay to reuse body rows rather than rebuilding them.
@@ -151,6 +213,23 @@ fn cursor_replay_reused_rows(stats: &str) -> bool {
 }
 
 #[test]
+fn fresh_run_dir_never_keeps_a_previous_runs_files() {
+    let backend_dir = std::env::temp_dir().join(format!(
+        "commit-editing-fresh-run-dir-{}",
+        std::process::id()
+    ));
+    let stale_dir = backend_dir.join(format!("run-{}", std::process::id()));
+    fs::create_dir_all(&stale_dir).unwrap();
+    // The files a previous run with the same pid would have left behind.
+    fs::write(stale_dir.join("layout-stats.log"), "stale telemetry").unwrap();
+    fs::write(stale_dir.join("probe-result.txt"), "COMMIT-EDITING-PASS\n").unwrap();
+    let run_dir = fresh_run_dir(&backend_dir);
+    assert_eq!(run_dir, stale_dir);
+    assert_eq!(fs::read_dir(&run_dir).unwrap().count(), 0);
+    fs::remove_dir_all(&backend_dir).unwrap();
+}
+
+#[test]
 fn replay_telemetry_rejects_full_layout_and_missing_reuse() {
     assert!(cursor_replay_reused_rows(
         "cursor_only=1 reused=3 relaid_body=0"
@@ -163,6 +242,23 @@ fn replay_telemetry_rejects_full_layout_and_missing_reuse() {
     ] {
         assert!(!cursor_replay_reused_rows(stats), "{stats}");
     }
+}
+
+#[test]
+fn replay_telemetry_interval_parser_handles_dedicated_result_output() {
+    assert_eq!(
+        parse_replay_telemetry_interval("CURSOR-REPLAY-STATS 28809 29100\nCOMMIT-EDITING-PASS\n"),
+        Some((28809, 29100))
+    );
+    // Mid-line stderr interleaving from concurrent surface readback tears
+    // char-by-char `external-debugging-output` lines; structured results must
+    // come from the dedicated result file instead.
+    assert_eq!(
+        parse_replay_telemetry_interval(
+            "CURSFirst-frame surface readback: ok\nOR-REPLAY-STATS 28809 29100\nCOMMIT-EDITING-PASS\n"
+        ),
+        None
+    );
 }
 
 /// Backend aliases and platform defaults must not require a live compositor.

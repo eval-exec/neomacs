@@ -8,6 +8,24 @@
   (equal (getenv "NEOMACS_COMMIT_PROBE") "overlay-separator")
   "Non-nil when the small newline belongs to an overlay string.")
 
+;; Markers go to stderr first, so a failing file write cannot hide them, and
+;; then to NEOMACS_COMMIT_RESULT_FILE, which is the copy the harness reads.
+;; Render-thread stderr diagnostics can tear a line written char by char.
+;; `create-lockfiles' is nil so two concurrent runs can never meet a lock.
+(defun neo-commit-emit (line)
+  "Write LINE to stderr, then append it to NEOMACS_COMMIT_RESULT_FILE."
+  (princ (concat line "\n") 'external-debugging-output)
+  (let ((result-file (getenv "NEOMACS_COMMIT_RESULT_FILE")))
+    (unless result-file (error "NEOMACS_COMMIT_RESULT_FILE is unset"))
+    (let ((coding-system-for-write 'utf-8-unix)
+          (create-lockfiles nil))
+      (write-region (concat line "\n") nil result-file 'append 'silent))))
+
+(defun neo-commit-fail (err)
+  "Report ERR and terminate; a failing report still reaches `kill-emacs'."
+  (ignore-errors (neo-commit-emit (format "COMMIT-EDITING-FAIL %S" err)))
+  (kill-emacs 1))
+
 (defun neo-commit-probe-finish ()
   "Check the completed input sequence or the redisplayed separator geometry."
   (interactive)
@@ -35,17 +53,11 @@
                          (< separator-height (/ normal-height 2.0)))
               (error "Separator is not short: normal=%S separator=%S"
                      normal-height separator-height))))
-        (princ "COMMIT-EDITING-PASS\n" 'external-debugging-output)
+        (neo-commit-emit "COMMIT-EDITING-PASS")
         (kill-emacs 0))
-    (error
-     (princ (format "COMMIT-EDITING-FAIL %S\n" err) 'external-debugging-output)
-     (kill-emacs 1))))
+    (error (neo-commit-fail err))))
 
-;; Install the watchdog before setup can enter any input wait.
-(run-at-time 10 nil
-             (lambda ()
-               (princ "COMMIT-EDITING-FAIL watchdog expired\n" 'external-debugging-output)
-               (kill-emacs 1)))
+;; The Rust harness's 60 s process timeout is the single hang-avoidance cap.
 
 (if neo-commit-async-probe
     (progn
@@ -60,6 +72,8 @@
         (fundamental-mode))
       ;; Like a with-editor process filter: display the new buffer, but
       ;; restore the old current buffer while the command loop awaits input.
+      ;; The timer is the stimulus (an asynchronous buffer switch), not a
+      ;; settle: the sentinel event below ends the probe, not this delay.
       (run-at-time 0.5 nil
                    (lambda ()
                      (save-current-buffer (switch-to-buffer "*commit-message*"))
@@ -81,11 +95,25 @@
     (font-lock-ensure))
   (goto-char 10))
 
+(defun neo-commit-probe-when-displayed ()
+  "Check separator geometry once redisplay has placed every probed position."
+  (condition-case err
+      (progn
+        (redisplay t)
+        (if (and (window-cursor-info)
+                 (posn-at-point 1)
+                 (posn-at-point 12)
+                 (or (not neo-commit-overlay-probe) (posn-at-point 17)))
+            (neo-commit-probe-finish)
+          (run-at-time 0.05 nil #'neo-commit-probe-when-displayed)))
+    (error (neo-commit-fail err))))
+
 (unless neo-commit-async-probe
-  (run-at-time 2 nil #'neo-commit-probe-finish))
+  (run-at-time 0 nil #'neo-commit-probe-when-displayed))
 
 ;; Reproduce startup slow enough to expire both timers in the old fixture,
-;; before the command loop could dispatch either queued character.
+;; before the command loop could dispatch either queued character.  This busy
+;; wait is the stimulus of the async-map-delayed row, not a settle.
 (when (equal (getenv "NEOMACS_COMMIT_PROBE") "async-map-delayed")
   (let ((deadline (+ (float-time) 3)))
     (while (< (float-time) deadline))))

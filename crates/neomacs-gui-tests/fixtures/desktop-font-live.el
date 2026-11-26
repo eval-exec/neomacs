@@ -170,24 +170,83 @@
                                     (desktop-font-live-receipt))
              (funcall (or continuation #'desktop-font-live-pass))))))))))
 
-(defun desktop-font-live-overlapping-resize ()
+(defun desktop-font-live-expected-grids ()
+  "The end grids this row accepts, from NEOMACS_GUI_LIVE_FONT_EXPECT_GRIDS.
+The test boundary supplies them, so the fixture's stimulus is identical on
+every editor and only the named row decides which end states it accepts."
+  (let ((spec (getenv "NEOMACS_GUI_LIVE_FONT_EXPECT_GRIDS")))
+    (unless spec
+      (error "NEOMACS_GUI_LIVE_FONT_EXPECT_GRIDS is unset"))
+    (mapcar (lambda (grid)
+              (mapcar #'string-to-number (split-string grid "x")))
+            (split-string spec " " t))))
+
+(defun desktop-font-live-font-grid-settled (expected submission)
+  "Non-nil once the 13x25 font owns a whole grid that EXPECTED accepts."
+  (and (= (frame-char-width) 13) (= (frame-char-height) 25)
+       (member (list (frame-width) (frame-text-lines)) expected)
+       (= (frame-text-width) (* (frame-width) 13))
+       (= (frame-text-height) (* (frame-text-lines) 25))
+       (desktop-font-live-presented submission)))
+
+(defconst desktop-font-live-settle-hold 1.0
+  "Seconds an accepted end state must stay unchanged to count as settled.")
+
+(defun desktop-font-live-hold (expected submission state since)
+  "Confirm the accepted STATE has stayed unchanged since SINCE.
+Re-checked every 0.05 s.  A change restarts the wait for an accepted state,
+so a transient grid on the way to another grid is never reported."
+  (condition-case err
+      (cond
+       ((not (equal state (desktop-font-live-frame-state)))
+        (desktop-font-live-log "LIVE-FONT-SETTLE-RESET %S -> %S"
+                               state (desktop-font-live-frame-state))
+        (desktop-font-live-await-font-grid submission expected))
+       ((>= (- (float-time) since) desktop-font-live-settle-hold)
+        (desktop-font-live-log "LIVE-FONT-GRID %dx%d"
+                               (frame-width) (frame-text-lines))
+        (desktop-font-live-pass))
+       (t (run-at-time 0.05 nil #'desktop-font-live-hold
+                       expected submission state since)))
+    (error (desktop-font-live-log "LIVE-FONT-FAIL %S" err) (kill-emacs 1))))
+
+(defun desktop-font-live-await-font-grid (submission &optional expected)
+  "Wait until an accepted end state is reached and then held."
+  (let ((expected (or expected (desktop-font-live-expected-grids))))
+    (desktop-font-live-await
+     (lambda () (desktop-font-live-font-grid-settled expected submission))
+     (lambda ()
+       (desktop-font-live-hold expected submission
+                               (desktop-font-live-frame-state) (float-time))))))
+
+(defun desktop-font-live-resize-and-font (settle-first)
+  "Resize 80x24 -> 85x24 -> 91x25 and switch to DejaVu Sans Mono 16.
+With SETTLE-FIRST, the font change waits for the settled 91x25 grid.
+Without it, all three requests are issued in one command-loop turn.  Both
+editors receive exactly the same stimulus for each variant."
   (menu-bar-mode -1)
   (tool-bar-mode -1)
   (set-frame-size nil 80 24)
   (desktop-font-live-await
    #'desktop-font-live-grid-ready
    (lambda ()
-     (let ((submission (or (plist-get (desktop-font-live-receipt) :submission) 0)))
-       ;; Native observations may interleave or coalesce these requests. The
-       ;; deterministic core control supplies the specifically older size.
+     (let ((submission (or (plist-get (desktop-font-live-receipt) :submission) 0))
+           (change-font
+            (lambda (submission)
+              (set-face-attribute 'default nil :font "DejaVu Sans Mono 16")
+              (desktop-font-live-await-font-grid submission))))
        (set-frame-size nil 85 24)
        (set-frame-size nil 91 25)
-       (set-face-attribute 'default nil :font "DejaVu Sans Mono 16")
-       (desktop-font-live-await
-        (lambda () (and (= (frame-width) 91) (= (frame-text-lines) 25)
-                        (= (frame-char-width) 13) (= (frame-char-height) 25)
-                        (desktop-font-live-presented submission)))
-        #'desktop-font-live-pass )))))
+       (if (not settle-first)
+           (funcall change-font submission)
+         (desktop-font-live-await
+          (lambda ()
+            (and (= (frame-width) 91) (= (frame-text-lines) 25)
+                 (= (frame-text-width) (* 91 (frame-char-width)))
+                 (= (frame-text-height) (* 25 (frame-char-height)))))
+          (lambda ()
+            (funcall change-font
+                     (or (plist-get (desktop-font-live-receipt) :submission) 0)))))))))
 
 (defun desktop-font-live-repeated ()
   (desktop-font-live-geometry
@@ -423,7 +482,10 @@ keyfile contents the keyfile backend would read."
            ("grown-minibuffer" (setq desktop-font-live-current-stage "grown-minibuffer")
             (desktop-font-live-grown-minibuffer))
            ("overlapping-resize" (setq desktop-font-live-current-stage "overlapping-resize")
-            (desktop-font-live-overlapping-resize))
+            (desktop-font-live-resize-and-font nil))
+           ("settled-resize-then-font"
+            (setq desktop-font-live-current-stage "settled-resize-then-font")
+            (desktop-font-live-resize-and-font t))
            ("fullscreen" (setq desktop-font-live-current-stage "fullscreen")
             (desktop-font-live-fullscreen))
            (_ (error "Unknown live font case: %S" (getenv "NEOMACS_GUI_LIVE_FONT_CASE")))))
