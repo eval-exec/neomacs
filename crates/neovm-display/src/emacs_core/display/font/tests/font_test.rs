@@ -1141,13 +1141,172 @@ fn eval_find_font_accepts_live_frame_designator() {
 #[test]
 fn clear_font_cache_returns_nil() {
     crate::test_utils::init_test_tracing();
-    assert!(clear_font_cache(vec![]).unwrap().is_nil());
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
+    assert!(clear_font_cache(&mut eval, vec![]).unwrap().is_nil());
 }
 
 #[test]
 fn clear_font_cache_rejects_arity() {
     crate::test_utils::init_test_tracing();
-    assert!(clear_font_cache(vec![Value::NIL]).is_err());
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
+    assert!(clear_font_cache(&mut eval, vec![Value::NIL]).is_err());
+}
+
+#[test]
+fn font_info_separates_frame_sizes_handles_nonexistent_isolates_mutation_and_clears_host_cache() {
+    struct FontInfoAuditHost {
+        clear_calls: Rc<RefCell<usize>>,
+        probe_sizes: Rc<RefCell<Vec<FontOpeningSize>>>,
+        matched: Option<ResolvedFontSpecMatch>,
+    }
+
+    impl DisplayHost for FontInfoAuditHost {
+        fn realize_gui_frame(&mut self, _request: GuiFrameHostRequest) -> Result<(), String> {
+            Ok(())
+        }
+
+        fn resize_gui_frame(&mut self, _request: GuiFrameHostRequest) -> Result<(), String> {
+            Ok(())
+        }
+
+        fn resolve_font_for_spec(
+            &mut self,
+            request: FontSpecResolveRequest,
+        ) -> Result<Option<ResolvedFontSpecMatch>, String> {
+            let family = request.family.as_ref().and_then(LispString::as_utf8_str);
+            if family == Some("NoSuchFont") {
+                return Ok(None);
+            }
+            Ok(self.matched.clone())
+        }
+
+        fn probe_font_entity_metrics(
+            &mut self,
+            request: FontEntityMetricsRequest,
+        ) -> Result<Option<ResolvedFontEntityMetrics>, String> {
+            self.probe_sizes.borrow_mut().push(request.size);
+            let px = match request.size {
+                FontOpeningSize::NamedDefault {
+                    frame_fontsize: Some(pt),
+                } => pt.get().round() as u32,
+                FontOpeningSize::Pixels(px) => px.get(),
+                _ => 12,
+            };
+            let px_i32 = px as i32;
+            Ok(Some(ResolvedFontEntityMetrics {
+                metrics: FontPxProbeResult {
+                    pixel_size: px,
+                    height: px_i32 + 4,
+                    ascent: px_i32,
+                    descent: 4,
+                    max_width: px_i32,
+                    space_width: px_i32 / 2,
+                    average_width: px_i32 / 2,
+                },
+                file: Some(LispString::from_utf8("/fixture/audit.ttf")),
+                capability: None,
+            }))
+        }
+
+        fn clear_font_cache(&mut self) {
+            *self.clear_calls.borrow_mut() += 1;
+        }
+    }
+
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
+    let buf_id = eval
+        .edit
+        .buffers
+        .current_buffer_id()
+        .expect("current buffer");
+    let tty_frame = eval
+        .frame_manager_mut()
+        .create_frame("tty-audit", 80, 24, buf_id);
+    let gui_small = eval
+        .frame_manager_mut()
+        .create_frame("gui-small", 80, 24, buf_id);
+    let gui_large = eval
+        .frame_manager_mut()
+        .create_frame("gui-large", 80, 24, buf_id);
+    if let Some(frame) = eval.frame_manager_mut().get_mut(gui_small) {
+        frame.window_system = Some(Value::symbol("neo"));
+        frame.set_parameter(Value::symbol("fontsize"), Value::fixnum(12));
+    }
+    if let Some(frame) = eval.frame_manager_mut().get_mut(gui_large) {
+        frame.window_system = Some(Value::symbol("neo"));
+        frame.set_parameter(Value::symbol("fontsize"), Value::fixnum(24));
+    }
+
+    let clear_calls = Rc::new(RefCell::new(0usize));
+    let probe_sizes = Rc::new(RefCell::new(Vec::new()));
+    eval.set_display_host(Box::new(FontInfoAuditHost {
+        clear_calls: Rc::clone(&clear_calls),
+        probe_sizes: Rc::clone(&probe_sizes),
+        matched: Some(ResolvedFontSpecMatch {
+            coverage_handle: None,
+            foundry: Some(LispString::from_utf8("fixture")),
+            family: LispString::from_utf8("AuditMono"),
+            registry: Some(LispString::from_utf8("iso10646-1")),
+            file: Some(LispString::from_utf8("/fixture/audit.ttf")),
+            weight: Some(FontWeight::NORMAL),
+            slant: Some(FontSlant::Normal),
+            width: Some(FontWidth::Normal),
+            postscript_name: None,
+            spacing: Some(100),
+        }),
+    }));
+
+    // 1. Two GUI frames with different fontsize parameters get distinct metrics.
+    let small_info = font_info(
+        &mut eval,
+        vec![Value::string("AuditMono"), Value::make_frame(gui_small.0)],
+    )
+    .unwrap();
+    let large_info = font_info(
+        &mut eval,
+        vec![Value::string("AuditMono"), Value::make_frame(gui_large.0)],
+    )
+    .unwrap();
+    assert_eq!(
+        small_info.as_vector_data().unwrap().at(2),
+        Value::fixnum(12)
+    );
+    assert_eq!(
+        large_info.as_vector_data().unwrap().at(2),
+        Value::fixnum(24)
+    );
+
+    // 2. Non-GUI frame still returns nil even after GUI frames resolved the name.
+    let tty_info = font_info(
+        &mut eval,
+        vec![Value::string("AuditMono"), Value::make_frame(tty_frame.0)],
+    )
+    .unwrap();
+    assert!(tty_info.is_nil());
+
+    // 3. Nonexistent font returns nil, never serving a cached font.
+    let missing_info = font_info(
+        &mut eval,
+        vec![Value::string("NoSuchFont"), Value::make_frame(gui_small.0)],
+    )
+    .unwrap();
+    assert!(missing_info.is_nil());
+
+    // 4. Mutating a returned font-info vector does not corrupt subsequent calls.
+    small_info.set_vector_slot(0, Value::string("mutated"));
+    let fresh_small = font_info(
+        &mut eval,
+        vec![Value::string("AuditMono"), Value::make_frame(gui_small.0)],
+    )
+    .unwrap();
+    assert_ne!(
+        fresh_small.as_vector_data().unwrap().at(0),
+        Value::string("mutated")
+    );
+
+    // 5. `(clear-font-cache)` forwards invalidation to DisplayHost.
+    assert!(clear_font_cache(&mut eval, vec![]).unwrap().is_nil());
+    assert_eq!(*clear_calls.borrow(), 1);
 }
 
 #[test]

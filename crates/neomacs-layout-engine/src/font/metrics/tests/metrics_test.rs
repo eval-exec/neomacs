@@ -5692,3 +5692,89 @@ fn monospace_cluster_keeps_zero_width_marks_on_their_shared_pen() {
         );
     }
 }
+
+#[cfg(target_os = "linux")]
+#[test]
+fn linux_real_fontconfig_and_freetype_probe_cached_across_repeat_font_info_open() {
+    use crate::font::resolver::FontEntityQuery;
+    use crate::font_backend::FontFamilyName;
+    use neovm_core::emacs_core::eval::FontSpecSelection;
+
+    let mut svc = FontMetricsService::new();
+    // Query a family alias that hits Fontconfig + FreeType metrics probing.
+    let query = FontEntityQuery::new(Some(
+        FontFamilyName::new("monospace").expect("monospace family"),
+    ))
+    .with_selection(FontSpecSelection::OpenBySpec);
+
+    // Warm once to make sure the host has a usable monospace font.
+    let Some(first_entity) = svc.resolve_font_entity(&query) else {
+        return;
+    };
+    let Some(first_opened) = svc.open_font_entity(&query, 16) else {
+        return;
+    };
+
+    // Reset counters after clearing so we measure a clean cold -> warm ->
+    // invalidated cycle on the real Linux Fontconfig + FreeType stack.
+    svc.clear_caches();
+    crate::font::fontconfig::reset_fc_match_queries();
+    crate::font::probe::reset_font_px_metric_probes();
+
+    for _ in 0..50 {
+        let entity = svc.resolve_font_entity(&query).expect("cached entity");
+        let opened = svc.open_font_entity(&query, 16).expect("cached open");
+        assert_eq!(entity.matched.identity, first_entity.matched.identity);
+        assert_eq!(opened.metrics, first_opened.metrics);
+    }
+    let matches_after_50 = crate::font::fontconfig::fc_match_queries();
+    let probes_after_50 = crate::font::probe::font_px_metric_probes();
+    assert!(
+        matches_after_50 <= 1,
+        "50 repeat font-info resolves entered FcFontMatch {matches_after_50} times (expected <= 1)"
+    );
+    assert_eq!(
+        probes_after_50, 1,
+        "50 repeat font-info opens probed FreeType {probes_after_50} times (expected 1)"
+    );
+
+    // Clearing caches (the clear-font-cache / catalog-edge seam) MUST
+    // invalidate so FreeType is re-probed once on the next call.
+    svc.clear_caches();
+    let reopened = svc.open_font_entity(&query, 16).expect("reopened");
+    assert_eq!(reopened.metrics, first_opened.metrics);
+    assert_eq!(
+        crate::font::probe::font_px_metric_probes(),
+        probes_after_50 + 1,
+        "clear_caches must invalidate opened_entity_cache and re-probe FreeType"
+    );
+
+    // Native-handle path (`open_platform_entity_metrics`) must also hit the
+    // bounded identity cache across repeat calls and invalidate on clear_caches.
+    svc.clear_caches();
+    crate::font::probe::reset_font_px_metric_probes();
+    let first_handle_metrics = svc
+        .open_platform_entity_metrics(&first_entity.matched, 17, Some(400))
+        .expect("handle metrics");
+    for _ in 0..50 {
+        assert_eq!(
+            svc.open_platform_entity_metrics(&first_entity.matched, 17, Some(400)),
+            Some(first_handle_metrics)
+        );
+    }
+    assert_eq!(
+        crate::font::probe::font_px_metric_probes(),
+        1,
+        "50 repeat handle opens must probe FreeType once"
+    );
+    svc.clear_caches();
+    assert_eq!(
+        svc.open_platform_entity_metrics(&first_entity.matched, 17, Some(400)),
+        Some(first_handle_metrics)
+    );
+    assert_eq!(
+        crate::font::probe::font_px_metric_probes(),
+        2,
+        "clear_caches must invalidate opened_identity_cache and re-probe FreeType"
+    );
+}

@@ -2952,6 +2952,29 @@ impl DisplayHost for PrimaryWindowDisplayHost {
         request: FontEntityMetricsRequest,
     ) -> Result<Option<ResolvedFontEntityMetrics>, String> {
         let pixel_size = self.font_sizing.font_opening_size_px(request.size).get();
+        let fallback_weight = request.weight.map(|weight| weight.css_weight());
+        if let Some(matched) = request
+            .handle
+            .and_then(|handle| self.font_entities.get(handle).cloned())
+            && let Some(metrics) = self
+                .synchronized_font_metrics()
+                .open_platform_entity_metrics(&matched, pixel_size, fallback_weight)
+        {
+            let file = matched.file_path().map(LispString::from_utf8);
+            let capability = match &matched.asset {
+                neomacs_display_protocol::font::FontOutlineAsset::File(file) => self
+                    .font_otf_capability(file.path(), file.face_index())
+                    .ok()
+                    .flatten(),
+                asset => font_otf_capability_for_asset(asset),
+            };
+            return Ok(Some(ResolvedFontEntityMetrics {
+                metrics: core_font_px_metrics(metrics),
+                file,
+                capability,
+            }));
+        }
+
         let family = request
             .family
             .as_ref()
@@ -2968,8 +2991,8 @@ impl DisplayHost for PrimaryWindowDisplayHost {
         {
             query = query.with_postscript_name(postscript_name);
         }
-        if let Some(weight) = request.weight {
-            query = query.with_weight(weight.css_weight());
+        if let Some(weight) = fallback_weight {
+            query = query.with_weight(weight);
         }
         if let Some(slant) = request.slant {
             query = query.with_slant(slant);
@@ -3003,22 +3026,25 @@ impl DisplayHost for PrimaryWindowDisplayHost {
         let Some(file) = request.file.as_ref().and_then(LispString::as_utf8_str) else {
             return Ok(None);
         };
-        let Some(metrics) = neomacs_layout_engine::font::probe::probe_font_px_metrics(
+        let Some(metrics) = self.synchronized_font_metrics().probe_file_entity_metrics(
             file,
-            0,
             pixel_size,
-            request.weight.map(|weight| f32::from(weight.css_weight())),
+            fallback_weight,
         ) else {
             return Ok(None);
         };
-        self.synchronized_font_metrics()
-            .observe_opened_font_metrics(metrics.ascent, metrics.descent);
         let capability = self.font_otf_capability(file, 0).ok().flatten();
         Ok(Some(ResolvedFontEntityMetrics {
             metrics: core_font_px_metrics(metrics),
             file: request.file,
             capability,
         }))
+    }
+
+    fn clear_font_cache(&mut self) {
+        if let Some(metrics) = self.font_metrics.as_mut() {
+            metrics.clear_font_cache_and_refresh_catalog();
+        }
     }
 
     fn font_otf_capability(

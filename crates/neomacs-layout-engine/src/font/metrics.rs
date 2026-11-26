@@ -1513,6 +1513,8 @@ impl FontMetricsService {
         let options = identity.font_render_options();
         if self.desktop_font_render_options != options {
             self.desktop_font_render_options = options;
+            #[cfg(target_os = "linux")]
+            self.font_resolver.set_desktop_render_options(options);
             // A second service adopting render options the process already
             // applied must not wipe every frame's fallback order.
             if process_render_options_changed(options) {
@@ -1577,6 +1579,8 @@ impl FontMetricsService {
             .and_then(|identity| identity.font_render_options());
         let policy_changed = options != self.desktop_font_render_options;
         self.desktop_font_render_options = options;
+        #[cfg(target_os = "linux")]
+        self.font_resolver.set_desktop_render_options(options);
         let previous = self.font_catalog.generation();
         let update = FontSelectionUpdate {
             catalog: self.font_catalog.observe(native_change),
@@ -1803,6 +1807,32 @@ impl FontMetricsService {
         let opened = self.font_resolver.open_entity(query, pixel_size)?;
         self.observe_opened_font_metrics(opened.metrics.ascent, opened.metrics.descent);
         Some(opened)
+    }
+
+    pub fn open_platform_entity_metrics(
+        &self,
+        matched: &crate::font_backend::PlatformFontMatch,
+        pixel_size: u32,
+        fallback_weight: Option<u16>,
+    ) -> Option<crate::font::probe::FontPxMetrics> {
+        let metrics =
+            self.font_resolver
+                .open_matched_entity_metrics(matched, pixel_size, fallback_weight)?;
+        self.observe_opened_font_metrics(metrics.ascent, metrics.descent);
+        Some(metrics)
+    }
+
+    pub fn probe_file_entity_metrics(
+        &self,
+        file: &str,
+        pixel_size: u32,
+        weight: Option<u16>,
+    ) -> Option<crate::font::probe::FontPxMetrics> {
+        let metrics = self
+            .font_resolver
+            .probe_file_entity_metrics(file, pixel_size, weight)?;
+        self.observe_opened_font_metrics(metrics.ascent, metrics.descent);
+        Some(metrics)
     }
 
     /// Select a frame face through GNU's inherited family/foundry preferences
@@ -2140,14 +2170,10 @@ impl FontMetricsService {
         &self,
         options: neomacs_font_materializer::fontconfig::FontRenderOptions,
     ) -> neomacs_font_materializer::fontconfig::FontRenderOptions {
-        match self.desktop_font_render_options {
-            Some(preferences) => options.for_pgtk(
-                neomacs_font_materializer::fontconfig::SurfaceFontOptions::from_desktop_options(
-                    preferences,
-                ),
-            ),
-            None => options,
-        }
+        crate::font::resolver::apply_desktop_font_render_options(
+            options,
+            self.desktop_font_render_options,
+        )
     }
 
     #[cfg(target_os = "linux")]
@@ -4485,6 +4511,29 @@ impl FontMetricsService {
     pub fn clear_caches(&mut self) {
         self.clear_measurement_caches();
         self.font_resolver.clear_caches();
+    }
+
+    /// Explicit Lisp `(clear-font-cache)` invalidation: force an immediate
+    /// native catalog freshness check (bypassing the 1s poll rate limit and
+    /// publishing a generation edge to secondary `FontMetricsService`
+    /// instances), reload system fontdb state, and drop all measurement,
+    /// resolver, and fallback caches.
+    pub fn clear_font_cache_and_refresh_catalog(&mut self) {
+        let change = self.font_resolver.force_refresh_catalog();
+        #[cfg(not(test))]
+        {
+            neomacs_font_materializer::reset_system_font_system(&mut self.font_system);
+        }
+        #[cfg(test)]
+        {
+            self.font_system = self.test_catalog().font_system();
+        }
+        self.font_file_cache = FontFileCache::new();
+        let _ = self.font_catalog.observe(change);
+        let _ =
+            process_catalog_generation_changed(self.font_resolver.published_catalog_generation());
+        self.clear_caches();
+        self.font_instances.invalidate_catalog_records();
     }
 
     /// Worker-local reset. Catalog, fontset, and symbol-policy changes on

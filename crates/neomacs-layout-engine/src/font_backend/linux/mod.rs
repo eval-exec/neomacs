@@ -303,6 +303,20 @@ impl FontBackend for FontconfigBackend {
         self.catalog.poll()
     }
 
+    fn force_refresh_catalog(&mut self) -> crate::font::catalog::FontCatalogChange {
+        #[cfg(test)]
+        match &self.source {
+            TestFontconfigSource::System => {}
+            TestFontconfigSource::Fixture(_) => {
+                self.advance_catalog_generation();
+                return crate::font::catalog::FontCatalogChange::Changed;
+            }
+        }
+        let change = self.catalog.force_refresh();
+        self.advance_catalog_generation();
+        change
+    }
+
     fn published_catalog_generation(&self) -> u64 {
         self.catalog.published_generation()
     }

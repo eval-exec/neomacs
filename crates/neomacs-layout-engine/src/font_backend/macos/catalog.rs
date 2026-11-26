@@ -75,4 +75,9 @@ impl CoreTextCatalogMonitor {
     pub(super) fn poll(&mut self) -> FontCatalogChange {
         self.changes.poll(&CATALOG_CHANGES)
     }
+
+    pub(super) fn force_refresh(&mut self) -> FontCatalogChange {
+        CATALOG_CHANGES.mark_changed();
+        self.changes.poll(&CATALOG_CHANGES)
+    }
 }

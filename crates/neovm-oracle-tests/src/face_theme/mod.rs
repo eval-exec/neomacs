@@ -38785,3 +38785,18 @@ fn ft_stretch_text_property_face_get_positions_with_face() {
         expect,
     );
 }
+
+#[test]
+fn oracle_prop_clear_font_cache_return_and_arity() {
+    // Always-on GNU 31.1 parity row for `(clear-font-cache)`: returns nil on
+    // zero arguments and signals `wrong-number-of-arguments` with an argument.
+    let expect = expect_test::expect![[r#""OK (t nil wrong-number-of-arguments)""#]];
+    crate::common::assert_oracle_parity_expect(
+        r##"(list (fboundp 'clear-font-cache)
+      (clear-font-cache)
+      (condition-case err
+          (funcall 'clear-font-cache 1)
+        (wrong-number-of-arguments (car err))))"##,
+        expect,
+    );
+}

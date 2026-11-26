@@ -652,6 +652,14 @@ pub trait FontBackend: Send {
     /// polling; this method is called from the evaluator redisplay path.
     fn poll_catalog_change(&mut self) -> crate::font::catalog::FontCatalogChange;
 
+    /// Force an immediate native catalog freshness check and invalidate
+    /// backend caches, bypassing steady-state rate limits and publishing an
+    /// invalidation edge to peer services. Used by Lisp `(clear-font-cache)`.
+    fn force_refresh_catalog(&mut self) -> crate::font::catalog::FontCatalogChange {
+        self.advance_catalog_generation();
+        crate::font::catalog::FontCatalogChange::Changed
+    }
+
     /// Process-wide id of the native catalog publication this backend
     /// observes. `0` means the backend has no shared counter, so each
     /// `Changed` poll is its own event.

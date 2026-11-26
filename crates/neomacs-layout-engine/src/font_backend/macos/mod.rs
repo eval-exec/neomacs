@@ -100,6 +100,12 @@ impl FontBackend for CoreTextBackend {
         self.catalog.poll()
     }
 
+    fn force_refresh_catalog(&mut self) -> crate::font::catalog::FontCatalogChange {
+        let change = self.catalog.force_refresh();
+        self.advance_catalog_generation();
+        change
+    }
+
     fn published_catalog_generation(&self) -> u64 {
         self.catalog.published_generation()
     }

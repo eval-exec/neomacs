@@ -38,7 +38,7 @@ use std::sync::Mutex;
 /// Platform-neutral request for GNU entity enumeration or driver matching.
 /// Optional fields remain optional all the way to the native adapter; no
 /// platform is selected by the caller.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
 pub struct FontEntityQuery {
     selection: FontSpecSelection,
     family: Option<FontFamilyName>,
@@ -192,11 +192,143 @@ impl FontEntityMatchPolicy {
     }
 }
 
+/// Maximum entries in [`FontResolver::entity_cache`].
+///
+/// 512 gives 4x headroom over Fontconfig's 128-entry raw candidate cache so
+/// large sessions (e.g. telega / icon / emoji font-info loops) keep their
+/// entire working set resident, while single-entry LRU eviction bounds memory
+/// (~128 KiB worst-case) without clear-all thrashing.
+pub(crate) const ENTITY_CACHE_CAP: usize = 512;
+
+/// Maximum entries in [`FontResolver::opened_entity_cache`].
+///
+/// Keyed by `(FontEntityQuery, pixel_size)` so distinct frame sizes/DPIs never
+/// alias. 512 covers ~50 families x ~10 pixel sizes with O(1) LRU eviction.
+pub(crate) const OPENED_ENTITY_CACHE_CAP: usize = 512;
+
+struct LruSlot<K, V> {
+    key: K,
+    value: V,
+    prev: Option<usize>,
+    next: Option<usize>,
+}
+
+/// Fixed-capacity O(1) LRU cache with single-entry oldest eviction.
+///
+/// Avoids clear-all thrashing when a working set hovers near the capacity
+/// bound while keeping worst-case memory strictly capped.
+struct BoundedLruCache<K, V> {
+    capacity: usize,
+    index: HashMap<K, usize>,
+    slots: Vec<LruSlot<K, V>>,
+    head: Option<usize>,
+    tail: Option<usize>,
+}
+
+impl<K: Eq + std::hash::Hash + Clone, V> BoundedLruCache<K, V> {
+    fn new(capacity: usize) -> Self {
+        Self {
+            capacity,
+            index: HashMap::default(),
+            slots: Vec::new(),
+            head: None,
+            tail: None,
+        }
+    }
+
+    fn clear(&mut self) {
+        self.index.clear();
+        self.slots.clear();
+        self.head = None;
+        self.tail = None;
+    }
+
+    fn get(&mut self, key: &K) -> Option<&V> {
+        let &slot_idx = self.index.get(key)?;
+        self.move_to_front(slot_idx);
+        Some(&self.slots[slot_idx].value)
+    }
+
+    fn insert(&mut self, key: K, value: V) {
+        if self.capacity == 0 {
+            return;
+        }
+        if let Some(&slot_idx) = self.index.get(&key) {
+            self.slots[slot_idx].value = value;
+            self.move_to_front(slot_idx);
+            return;
+        }
+        if self.slots.len() < self.capacity {
+            let slot_idx = self.slots.len();
+            self.slots.push(LruSlot {
+                key: key.clone(),
+                value,
+                prev: None,
+                next: None,
+            });
+            self.index.insert(key, slot_idx);
+            self.link_front(slot_idx);
+            return;
+        }
+        // Evict the single least-recently-used slot (`tail`) and reuse it in place.
+        let evict_idx = self.tail.expect("non-empty LRU has a tail");
+        self.unlink(evict_idx);
+        let old_key = std::mem::replace(&mut self.slots[evict_idx].key, key.clone());
+        self.index.remove(&old_key);
+        self.slots[evict_idx].value = value;
+        self.index.insert(key, evict_idx);
+        self.link_front(evict_idx);
+    }
+
+    fn move_to_front(&mut self, slot_idx: usize) {
+        if self.head == Some(slot_idx) {
+            return;
+        }
+        self.unlink(slot_idx);
+        self.link_front(slot_idx);
+    }
+
+    fn unlink(&mut self, slot_idx: usize) {
+        let prev = self.slots[slot_idx].prev.take();
+        let next = self.slots[slot_idx].next.take();
+        match prev {
+            Some(p) => self.slots[p].next = next,
+            None => self.head = next,
+        }
+        match next {
+            Some(n) => self.slots[n].prev = prev,
+            None => self.tail = prev,
+        }
+    }
+
+    fn link_front(&mut self, slot_idx: usize) {
+        let old_head = self.head;
+        self.slots[slot_idx].prev = None;
+        self.slots[slot_idx].next = old_head;
+        match old_head {
+            Some(h) => self.slots[h].prev = Some(slot_idx),
+            None => self.tail = Some(slot_idx),
+        }
+        self.head = Some(slot_idx);
+    }
+}
+
+/// Distinguishes native matched-entity metric opens (which prefer backend
+/// `design_metrics`) from standalone file probes in `opened_identity_cache`
+/// so the two formulas can never collide on the same `(file, 0, size, weight)`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+enum IdentityMetricsProbeKind {
+    MatchedEntity,
+    StandaloneFile,
+}
+
 /// Platform-neutral owner of fontset policy and candidate scoring.
 pub struct FontResolver {
     worker_policy: Option<worker_policy::WorkerPolicy>,
     backend: Box<dyn FontBackend>,
     materializer: Option<neomacs_font_materializer::FontMaterializer>,
+    #[cfg(target_os = "linux")]
+    desktop_render_options: Option<neomacs_display_protocol::DesktopFontRenderOptions>,
     capability_cache: Mutex<
         HashMap<
             neomacs_display_protocol::font::FontFileAsset,
@@ -220,6 +352,33 @@ pub struct FontResolver {
     primary_cache: Mutex<HashMap<PrimaryCacheKey, Option<PlatformFontMatch>>>,
     char_cache: Mutex<HashMap<CharCacheKey, CachedCharResolution>>,
     exact_cache: Mutex<HashMap<ResolvedFontIdentity, Option<PlatformFontMatch>>>,
+    /// Bounded LRU of resolved font entities per `FontEntityQuery` (covering
+    /// `font-info`, `find-font`, and `open_entity`). Cleared alongside all
+    /// other service caches on catalog-generation, render-options, and
+    /// `(clear-font-cache)` invalidation edges.
+    entity_cache: Mutex<BoundedLruCache<FontEntityQuery, Option<ResolvedFontEntity>>>,
+    /// Bounded LRU of opened entity metrics keyed by `(FontEntityQuery, pixel_size)`.
+    /// Distinct frame sizes/DPIs resolve to distinct `pixel_size` keys so one
+    /// frame's realization is never served to another. Cleared on the same
+    /// catalog/render-options/`clear-font-cache` edges as `entity_cache`.
+    opened_entity_cache: Mutex<BoundedLruCache<(FontEntityQuery, u32), Option<OpenedFontEntity>>>,
+    /// Bounded LRU of opened pixel metrics keyed by exact
+    /// `(IdentityMetricsProbeKind, ResolvedFontIdentity, pixel_size, fallback_weight)`
+    /// for native entity handles and standalone file probes.
+    /// Avoids re-enumerating Fontconfig (which omits `FC_POSTSCRIPT_NAME` from
+    /// GNU's listing projection) and avoids re-running `FcFreeTypeQuery` /
+    /// `FcFontMatch` / FreeType cmap scans on repeat `font-info` calls.
+    opened_identity_cache: Mutex<
+        BoundedLruCache<
+            (
+                IdentityMetricsProbeKind,
+                ResolvedFontIdentity,
+                u32,
+                Option<u16>,
+            ),
+            Option<crate::font::probe::FontPxMetrics>,
+        >,
+    >,
     /// Fonts already opened for one face and font-def, in open order.
     ///
     /// GNU `fontset_find_font` checks these with `font_has_char` before
@@ -235,6 +394,8 @@ impl FontResolver {
             backend,
             worker_policy: None,
             materializer: neomacs_font_materializer::FontMaterializer::new().ok(),
+            #[cfg(target_os = "linux")]
+            desktop_render_options: None,
             capability_cache: Mutex::new(HashMap::default()),
             otf_capability_cache: Mutex::new(crate::font::probe::OtfCapabilityCache::default()),
             #[cfg(target_os = "linux")]
@@ -242,8 +403,19 @@ impl FontResolver {
             primary_cache: Mutex::new(HashMap::default()),
             char_cache: Mutex::new(HashMap::default()),
             exact_cache: Mutex::new(HashMap::default()),
+            entity_cache: Mutex::new(BoundedLruCache::new(ENTITY_CACHE_CAP)),
+            opened_entity_cache: Mutex::new(BoundedLruCache::new(OPENED_ENTITY_CACHE_CAP)),
+            opened_identity_cache: Mutex::new(BoundedLruCache::new(OPENED_ENTITY_CACHE_CAP)),
             opened_fallbacks: Mutex::new(HashMap::default()),
         }
+    }
+
+    #[cfg(target_os = "linux")]
+    pub(crate) fn set_desktop_render_options(
+        &mut self,
+        options: Option<neomacs_display_protocol::DesktopFontRenderOptions>,
+    ) {
+        self.desktop_render_options = options;
     }
 
     /// Cache policy under this resolver's catalog owner and exact physical size.
@@ -273,6 +445,25 @@ impl FontResolver {
         options
     }
 
+    /// Native Fontconfig render options with the active graphical display's
+    /// Wayland/PGTK `DesktopFontRenderOptions` override applied, matching
+    /// `FontMetricsService::apply_desktop_font_render_options` and GNU
+    /// `ftcrfont_open` (`src/ftcrfont.c:175-185`).
+    #[cfg(target_os = "linux")]
+    fn effective_render_options(
+        &self,
+        file: &str,
+        selector: u32,
+        size: f32,
+        weight: Option<f32>,
+    ) -> Option<neomacs_font_materializer::fontconfig::FontRenderOptions> {
+        let options = self.render_options(file, selector, size, weight)?;
+        Some(apply_desktop_font_render_options(
+            options,
+            self.desktop_render_options,
+        ))
+    }
+
     pub fn platform_default() -> Self {
         Self::new(crate::font_backend::default_font_backend())
     }
@@ -293,6 +484,10 @@ impl FontResolver {
 
     pub(crate) fn poll_catalog_change(&mut self) -> crate::font::catalog::FontCatalogChange {
         self.backend.poll_catalog_change()
+    }
+
+    pub(crate) fn force_refresh_catalog(&mut self) -> crate::font::catalog::FontCatalogChange {
+        self.backend.force_refresh_catalog()
     }
 
     pub(crate) fn published_catalog_generation(&self) -> u64 {
@@ -322,6 +517,11 @@ impl FontResolver {
     /// platform adapter.  Unlike the former binary-side helper this never
     /// assumes Fontconfig on CoreText or DirectWrite builds.
     pub fn resolve_entity(&self, query: &FontEntityQuery) -> Option<ResolvedFontEntity> {
+        if let Ok(mut cache) = self.entity_cache.lock()
+            && let Some(cached) = cache.get(query)
+        {
+            return cached.clone();
+        }
         let candidate_query = self.entity_candidate_query(query);
         let selected = match query.selection {
             FontSpecSelection::Enumerate => self.select_entity_candidates(
@@ -358,12 +558,16 @@ impl FontResolver {
                     self.match_entity_driver(&preferences, query)
                         .filter(|matched| self.driver_match_satisfies_otf(query, matched))
                 }),
-        }?;
-        Some(ResolvedFontEntity {
+        };
+        let resolved = selected.map(|selected| ResolvedFontEntity {
             matched: selected,
             registry: Some("iso10646-1".to_owned()),
             driver: font_driver_symbol(self.backend.kind()),
-        })
+        });
+        if let Ok(mut cache) = self.entity_cache.lock() {
+            cache.insert(query.clone(), resolved.clone());
+        }
+        resolved
     }
 
     /// Enumerate every matching entity in native discovery order. Preference
@@ -652,6 +856,94 @@ impl FontResolver {
             .and_then(|(_, candidate)| self.backend.finalize_match(candidate.matched))
     }
 
+    /// Open one already-resolved platform entity for `font-info` at
+    /// `pixel_size`, reusing bounded LRU metrics keyed by exact
+    /// `(IdentityMetricsProbeKind::MatchedEntity, ResolvedFontIdentity, pixel_size, fallback_weight)`.
+    pub fn open_matched_entity_metrics(
+        &self,
+        matched: &PlatformFontMatch,
+        pixel_size: u32,
+        fallback_weight: Option<u16>,
+    ) -> Option<crate::font::probe::FontPxMetrics> {
+        let pixel_size = pixel_size.max(1);
+        let cache_key = (
+            IdentityMetricsProbeKind::MatchedEntity,
+            matched.identity.clone(),
+            pixel_size,
+            fallback_weight,
+        );
+        if let Ok(mut cache) = self.opened_identity_cache.lock()
+            && let Some(cached) = cache.get(&cache_key)
+        {
+            return *cached;
+        }
+        let enriched = self.with_native_metrics(matched.clone());
+        let metrics = enriched.pixel_metrics(pixel_size as f32).or_else(|| {
+            let identity = &enriched.identity;
+            let file = identity.file_path.as_deref()?;
+            let explicit_weight = identity
+                .variation_coords
+                .iter()
+                .find(|coord| coord.tag() == u32::from_be_bytes(*b"wght"))
+                .map(|coord| coord.value())
+                .or_else(|| fallback_weight.map(f32::from));
+            let selector = identity.freetype_selector()?;
+            #[cfg(target_os = "linux")]
+            return crate::font::probe::probe_font_px_metrics_with_policy(
+                file,
+                selector,
+                pixel_size,
+                explicit_weight,
+                |size| self.effective_render_options(file, selector, size as f32, explicit_weight),
+            );
+            #[cfg(not(target_os = "linux"))]
+            crate::font::probe::probe_font_px_metrics(file, selector, pixel_size, explicit_weight)
+        });
+        if let Ok(mut cache) = self.opened_identity_cache.lock() {
+            cache.insert(cache_key, metrics);
+        }
+        metrics
+    }
+
+    /// Cached standalone-file pixel metrics fallback under the same bounded
+    /// LRU and catalog/render-options invalidation contract as native entities.
+    pub fn probe_file_entity_metrics(
+        &self,
+        file: &str,
+        pixel_size: u32,
+        weight: Option<u16>,
+    ) -> Option<crate::font::probe::FontPxMetrics> {
+        let pixel_size = pixel_size.max(1);
+        let identity = ResolvedFontIdentity::from_file(file, 0, None);
+        let cache_key = (
+            IdentityMetricsProbeKind::StandaloneFile,
+            identity,
+            pixel_size,
+            weight,
+        );
+        if let Ok(mut cache) = self.opened_identity_cache.lock()
+            && let Some(cached) = cache.get(&cache_key)
+        {
+            return *cached;
+        }
+        let explicit_weight = weight.map(f32::from);
+        #[cfg(target_os = "linux")]
+        let metrics = crate::font::probe::probe_font_px_metrics_with_policy(
+            file,
+            0,
+            pixel_size,
+            explicit_weight,
+            |size| self.effective_render_options(file, 0, size as f32, explicit_weight),
+        );
+        #[cfg(not(target_os = "linux"))]
+        let metrics =
+            crate::font::probe::probe_font_px_metrics(file, 0, pixel_size, explicit_weight);
+        if let Ok(mut cache) = self.opened_identity_cache.lock() {
+            cache.insert(cache_key, metrics);
+        }
+        metrics
+    }
+
     /// Open one selected entity through its owning backend for `font-info`.
     /// Native design metrics win; Linux falls back to probing the exact
     /// Fontconfig/FreeType identity selected above.
@@ -660,39 +952,23 @@ impl FontResolver {
         query: &FontEntityQuery,
         pixel_size: u32,
     ) -> Option<OpenedFontEntity> {
-        let mut entity = self.resolve_entity(query)?;
-        entity.matched = self.with_native_metrics(entity.matched);
         let pixel_size = pixel_size.max(1);
-        let metrics = entity
-            .matched
-            .pixel_metrics(pixel_size as f32)
-            .or_else(|| {
-                let identity = &entity.matched.identity;
-                let file = identity.file_path.as_deref()?;
-                let explicit_weight = identity
-                    .variation_coords
-                    .iter()
-                    .find(|coord| coord.tag() == u32::from_be_bytes(*b"wght"))
-                    .map(|coord| coord.value())
-                    .or_else(|| query.weight.map(f32::from));
-                let selector = identity.freetype_selector()?;
-                #[cfg(target_os = "linux")]
-                return crate::font::probe::probe_font_px_metrics_with_policy(
-                    file,
-                    selector,
-                    pixel_size,
-                    explicit_weight,
-                    |size| self.render_options(file, selector, size as f32, explicit_weight),
-                );
-                #[cfg(not(target_os = "linux"))]
-                crate::font::probe::probe_font_px_metrics(
-                    file,
-                    selector,
-                    pixel_size,
-                    explicit_weight,
-                )
-            })?;
-        Some(OpenedFontEntity { entity, metrics })
+        let cache_key = (query.clone(), pixel_size);
+        if let Ok(mut cache) = self.opened_entity_cache.lock()
+            && let Some(cached) = cache.get(&cache_key)
+        {
+            return cached.clone();
+        }
+        let opened = (|| {
+            let entity = self.resolve_entity(query)?;
+            let metrics =
+                self.open_matched_entity_metrics(&entity.matched, pixel_size, query.weight)?;
+            Some(OpenedFontEntity { entity, metrics })
+        })();
+        if let Ok(mut cache) = self.opened_entity_cache.lock() {
+            cache.insert(cache_key, opened.clone());
+        }
+        opened
     }
 
     /// Resolve a primary face from candidates in one concrete family.
@@ -1299,6 +1575,18 @@ impl FontResolver {
             .get_mut()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .clear();
+        self.entity_cache
+            .get_mut()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clear();
+        self.opened_entity_cache
+            .get_mut()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clear();
+        self.opened_identity_cache
+            .get_mut()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clear();
         self.opened_fallbacks
             .get_mut()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -1576,6 +1864,18 @@ impl FontResolver {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .clear();
         self.exact_cache
+            .get_mut()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clear();
+        self.entity_cache
+            .get_mut()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clear();
+        self.opened_entity_cache
+            .get_mut()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clear();
+        self.opened_identity_cache
             .get_mut()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .clear();
@@ -2064,6 +2364,21 @@ fn family_affinity_score(queried_family: Option<&str>, candidate_family: &str) -
         15
     } else {
         80
+    }
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) fn apply_desktop_font_render_options(
+    options: neomacs_font_materializer::fontconfig::FontRenderOptions,
+    desktop_render_options: Option<neomacs_display_protocol::DesktopFontRenderOptions>,
+) -> neomacs_font_materializer::fontconfig::FontRenderOptions {
+    match desktop_render_options {
+        Some(preferences) => options.for_pgtk(
+            neomacs_font_materializer::fontconfig::SurfaceFontOptions::from_desktop_options(
+                preferences,
+            ),
+        ),
+        None => options,
     }
 }
 

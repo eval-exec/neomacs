@@ -66,6 +66,11 @@ impl DirectWriteCatalogMonitor {
             FontCatalogChange::Unchanged
         }
     }
+
+    pub(super) fn force_refresh(&mut self) -> FontCatalogChange {
+        self.snapshot = DirectWriteCatalogSnapshot::capture(true);
+        self.poller.publish_detected(&CATALOG_CHANGES)
+    }
 }
 
 impl DirectWriteCatalogSnapshot {

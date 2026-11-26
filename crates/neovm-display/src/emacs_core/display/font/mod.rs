@@ -3159,9 +3159,15 @@ fn match_font_spec_request(
 }
 
 /// `(clear-font-cache)` -- reset internal font/face caches and return nil.
-pub(crate) fn clear_font_cache(args: Vec<Value>) -> EvalResult {
+pub(crate) fn clear_font_cache(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
     expect_max_args("clear-font-cache", &args, 0)?;
     clear_font_cache_state();
+    if let Some(host) = eval.display_host.as_mut() {
+        host.clear_font_cache();
+    }
     Ok(Value::NIL)
 }
 
@@ -3994,12 +4000,17 @@ fn font_info_vector_for_entity(
     let text_field = |name| {
         font_vector_get_flexible(&elems, name).and_then(|value| font_value_text_lisp_string(&value))
     };
+    let handle = font_vector_get_flexible(&elems, "neomacs-entity-handle")
+        .and_then(|value| value.as_int())
+        .and_then(|value| u32::try_from(value).ok())
+        .and_then(neovm_value::display_vocab::FontEntityHandle::new);
     let opened = eval
         .display_host
         .as_mut()
         .and_then(|host| {
             host.probe_font_entity_metrics(neovm_eval::emacs_core::eval::FontEntityMetricsRequest {
                 frame_id,
+                handle,
                 family: text_field("family"),
                 registry: text_field("registry"),
                 file: text_field("file"),
