@@ -80,8 +80,6 @@ impl InputReceipt {
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum InputFailure {
-    #[error("partial PTY write")]
-    PartialWrite,
     #[error("PTY write returned zero")]
     ZeroWrite,
     #[error("input deadline expired")]

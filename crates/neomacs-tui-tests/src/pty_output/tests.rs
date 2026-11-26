@@ -161,9 +161,128 @@ fn already_available_output_precedes_the_committed_input_fence() {
 }
 
 #[test]
-fn a_partial_write_records_only_its_committed_prefix_and_fails() {
+fn short_writes_continue_across_would_block_and_interleaved_output() {
     let (mut owner, receiver) = owner(FakeTransport {
-        writes: [FakeWrite::Partial(TransportByteCount(2))].into(),
+        reads: [
+            FakeRead::Empty,
+            FakeRead::Data(b"mid"),
+            FakeRead::Empty,
+            FakeRead::Empty,
+        ]
+        .into(),
+        writes: [
+            FakeWrite::Partial(TransportByteCount(2)),
+            FakeWrite::Failure(io::ErrorKind::WouldBlock),
+            FakeWrite::Partial(TransportByteCount(1)),
+            FakeWrite::Full,
+        ]
+        .into(),
+        ..Default::default()
+    });
+    owner
+        .perform(
+            request(Action::Input(b"four".as_slice().into())),
+            &Cancellation::default(),
+        )
+        .unwrap();
+    let events = collected(&receiver);
+    assert_eq!(
+        owner
+            .transport
+            .committed
+            .iter()
+            .map(AsRef::as_ref)
+            .collect::<Vec<_>>(),
+        vec![b"fo".as_slice(), b"u".as_slice(), b"r".as_slice()]
+    );
+    assert!(
+        matches!(events[0].kind(), PtyOutputKind::InputCommitted { bytes, .. } if bytes.as_ref() == b"fo")
+    );
+    assert!(matches!(events[1].kind(), PtyOutputKind::Data(bytes) if bytes.as_ref() == b"mid"));
+    assert!(
+        matches!(events[2].kind(), PtyOutputKind::InputCommitted { bytes, .. } if bytes.as_ref() == b"u")
+    );
+    assert!(
+        matches!(events[3].kind(), PtyOutputKind::InputCommitted { bytes, .. } if bytes.as_ref() == b"r")
+    );
+    assert!(matches!(
+        events[4].kind(),
+        PtyOutputKind::Completed {
+            result: Ok(InputReceipt {
+                committed: InputByteCount(4),
+                ..
+            }),
+            ..
+        }
+    ));
+}
+
+#[test]
+fn a_partial_write_followed_by_failure_records_only_its_committed_prefix() {
+    for (next_write, expected_kind) in [
+        (
+            FakeWrite::Failure(io::ErrorKind::BrokenPipe),
+            Some(io::ErrorKind::BrokenPipe),
+        ),
+        (
+            FakeWrite::Failure(io::ErrorKind::Other),
+            Some(io::ErrorKind::Other),
+        ),
+        (FakeWrite::Zero, None),
+    ] {
+        let (mut owner, receiver) = owner(FakeTransport {
+            writes: [FakeWrite::Partial(TransportByteCount(2)), next_write].into(),
+            ..Default::default()
+        });
+        assert!(
+            owner
+                .perform(
+                    request(Action::Input(b"four".as_slice().into())),
+                    &Cancellation::default()
+                )
+                .is_err()
+        );
+        let events = collected(&receiver);
+        assert_eq!(owner.transport.committed.len(), 1);
+        assert_eq!(owner.transport.committed[0].as_ref(), b"fo");
+        assert!(
+            matches!(events[0].kind(), PtyOutputKind::InputCommitted { bytes, .. } if bytes.as_ref() == b"fo")
+        );
+        match (events[1].kind(), expected_kind) {
+            (
+                PtyOutputKind::Completed {
+                    result:
+                        Err(TransportError::Input {
+                            committed: InputByteCount(2),
+                            requested: InputByteCount(4),
+                            reason: InputFailure::Io(error),
+                        }),
+                    ..
+                },
+                Some(kind),
+            ) => assert_eq!(error.kind(), kind),
+            (
+                PtyOutputKind::Completed {
+                    result:
+                        Err(TransportError::Input {
+                            committed: InputByteCount(2),
+                            requested: InputByteCount(4),
+                            reason: InputFailure::ZeroWrite,
+                        }),
+                    ..
+                },
+                None,
+            ) => {}
+            (other, _) => panic!("unexpected completion after partial write: {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn output_eof_after_partial_write_reports_committed_prefix_and_broken_pipe() {
+    let (mut owner, receiver) = owner(FakeTransport {
+        reads: [FakeRead::Empty, FakeRead::Eof].into(),
+        writes: [FakeWrite::Partial(TransportByteCount(2)), FakeWrite::Full].into(),
         ..Default::default()
     });
     assert!(
@@ -178,18 +297,19 @@ fn a_partial_write_records_only_its_committed_prefix_and_fails() {
     assert_eq!(owner.transport.committed.len(), 1);
     assert_eq!(owner.transport.committed[0].as_ref(), b"fo");
     assert!(
-        matches!(events[0].kind(), PtyOutputKind::InputCommitted {bytes,..} if bytes.as_ref() == b"fo")
+        matches!(events[0].kind(), PtyOutputKind::InputCommitted { bytes, .. } if bytes.as_ref() == b"fo")
     );
+    assert!(matches!(events[1].kind(), PtyOutputKind::OutputClosed));
     assert!(matches!(
-        events[1].kind(),
+        events[2].kind(),
         PtyOutputKind::Completed {
             result: Err(TransportError::Input {
                 committed: InputByteCount(2),
                 requested: InputByteCount(4),
-                reason: InputFailure::PartialWrite
+                reason: InputFailure::Io(error),
             }),
             ..
-        }
+        } if error.kind() == io::ErrorKind::BrokenPipe
     ));
 }
 

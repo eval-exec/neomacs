@@ -237,8 +237,9 @@ impl<T: Transport> Owner<T> {
         stop: &Cancellation,
     ) -> Result<InputByteCount, TransportError> {
         let requested = InputByteCount(bytes.len());
-        let failed = |reason| TransportError::Input {
-            committed: InputByteCount(0),
+        let mut written = 0usize;
+        let failed = |written, reason| TransportError::Input {
+            committed: InputByteCount(written),
             requested,
             reason,
         };
@@ -246,51 +247,62 @@ impl<T: Transport> Owner<T> {
             if request.cancellation.state() == CancellationState::Cancelled
                 || stop.state() == CancellationState::Cancelled
             {
-                return Err(failed(InputFailure::Cancelled));
+                return Err(failed(written, InputFailure::Cancelled));
             }
             if Instant::now() >= request.deadline {
-                return Err(failed(InputFailure::Deadline));
+                return Err(failed(written, InputFailure::Deadline));
             }
             // This owner-observed empty read is the input linearization
             // boundary. No other thread may read, write or record this PTY.
             self.drain_available(request.deadline)?;
             match self.read_state {
-                ReadState::Closed => return Err(TransportError::Closed),
+                ReadState::Closed if written == 0 => return Err(TransportError::Closed),
+                ReadState::Closed => {
+                    return Err(failed(
+                        written,
+                        InputFailure::Io(io::Error::new(io::ErrorKind::BrokenPipe, "PTY closed")),
+                    ));
+                }
                 ReadState::Open => {}
             }
             if request.cancellation.state() == CancellationState::Cancelled
                 || stop.state() == CancellationState::Cancelled
             {
-                return Err(failed(InputFailure::Cancelled));
+                return Err(failed(written, InputFailure::Cancelled));
             }
-            if bytes.is_empty() {
-                return Ok(InputByteCount(0));
+            if written == bytes.len() {
+                return Ok(InputByteCount(written));
             }
-            match self.transport.write(bytes) {
-                Ok(TransportByteCount(0)) => return Err(failed(InputFailure::ZeroWrite)),
+            let remaining = &bytes[written..];
+            match self.transport.write(remaining) {
+                Ok(TransportByteCount(0)) => {
+                    return Err(failed(written, InputFailure::ZeroWrite));
+                }
                 Ok(length) => {
-                    let committed = InputByteCount::from(length);
+                    let count = length.as_usize();
+                    if count > remaining.len() {
+                        return Err(failed(
+                            written,
+                            InputFailure::Io(io::Error::other(format!(
+                                "PTY write returned {count} bytes for {}-byte slice",
+                                remaining.len()
+                            ))),
+                        ));
+                    }
+                    let chunk = &remaining[..count];
+                    written += count;
                     self.emit(PtyOutputKind::InputCommitted {
                         request: request.id,
-                        bytes: bytes[..length.as_usize()].into(),
+                        bytes: chunk.into(),
                     })?;
-                    if length.as_usize() != bytes.len() {
-                        return Err(TransportError::Input {
-                            committed,
-                            requested,
-                            reason: InputFailure::PartialWrite,
-                        });
-                    }
                     if request.cancellation.state() == CancellationState::Cancelled
                         || stop.state() == CancellationState::Cancelled
                     {
-                        return Err(TransportError::Input {
-                            committed,
-                            requested,
-                            reason: InputFailure::Cancelled,
-                        });
+                        return Err(failed(written, InputFailure::Cancelled));
                     }
-                    return Ok(committed);
+                    if written == bytes.len() {
+                        return Ok(InputByteCount(written));
+                    }
                 }
                 Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
                 Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
@@ -302,10 +314,10 @@ impl<T: Transport> Owner<T> {
                     ) {
                         Ok(WriteReadiness::Ready | WriteReadiness::Retry) => {}
                         Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
-                        Err(error) => return Err(failed(InputFailure::Io(error))),
+                        Err(error) => return Err(failed(written, InputFailure::Io(error))),
                     }
                 }
-                Err(error) => return Err(failed(InputFailure::Io(error))),
+                Err(error) => return Err(failed(written, InputFailure::Io(error))),
             }
         }
     }
