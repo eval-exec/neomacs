@@ -375,3 +375,21 @@ fn an_idle_sweep_leaves_a_ready_keyboard_macro_key_to_the_read() {
         "the idle sweep consumed the macro key the read is owed"
     );
 }
+
+#[test]
+fn an_idle_sweep_skips_while_macro_playback_has_no_remaining_key() {
+    use super::command_loop::CommandLoopHost;
+    // GNU's INTERACTIVE is false for the whole playback, including after the
+    // final event has been consumed and before read_char reports its end.
+    let (mut context, completed) = context_with_a_paced_deferred_sweep();
+    context.begin_executing_kbd_macro_runtime(vec![Value::fixnum('x' as i64)]);
+    context.command_loop_mut().keyboard.kboard.kbd_macro_index = 1;
+
+    context.command_loop_1_idle_sweep();
+
+    assert!(
+        context.tagged_heap().sweep_in_progress(),
+        "active macro playback without a remaining key did not stop the idle sweep"
+    );
+    assert_eq!(context.gc_count_for_test(), completed);
+}

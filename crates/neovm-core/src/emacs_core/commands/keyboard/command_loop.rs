@@ -1149,6 +1149,11 @@ impl CommandLoopHost for Context {
     fn command_loop_1_idle_sweep(&mut self) {
         while self.tagged_heap().sweep_in_progress() {
             if self.input_rx().as_ref().is_some_and(|rx| !rx.is_empty())
+                || self.command_loop()
+                    .keyboard
+                    .kboard
+                    .executing_kbd_macro
+                    .is_some()
                 || self.command_loop().keyboard.has_pending_kboard_input()
                 || self.input_pending_for_auto_save()
             {
