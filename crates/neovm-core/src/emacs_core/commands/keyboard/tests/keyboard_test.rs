@@ -393,3 +393,37 @@ fn an_idle_sweep_skips_while_macro_playback_has_no_remaining_key() {
     );
     assert_eq!(context.gc_count_for_test(), completed);
 }
+
+#[test]
+fn an_idle_sweep_stops_for_unread_post_input_method_events() {
+    use super::command_loop::CommandLoopHost;
+    let (mut context, completed) = context_with_a_paced_deferred_sweep();
+    context
+        .eval_str("(setq unread-post-input-method-events '(x))")
+        .expect("set unread-post-input-method-events");
+
+    context.command_loop_1_idle_sweep();
+
+    assert!(
+        context.tagged_heap().sweep_in_progress(),
+        "queued post-input-method event did not stop the idle sweep"
+    );
+    assert_eq!(context.gc_count_for_test(), completed);
+}
+
+#[test]
+fn an_idle_sweep_stops_for_unread_input_method_events() {
+    use super::command_loop::CommandLoopHost;
+    let (mut context, completed) = context_with_a_paced_deferred_sweep();
+    context
+        .eval_str("(setq unread-input-method-events '(x))")
+        .expect("set unread-input-method-events");
+
+    context.command_loop_1_idle_sweep();
+
+    assert!(
+        context.tagged_heap().sweep_in_progress(),
+        "queued input-method event did not stop the idle sweep"
+    );
+    assert_eq!(context.gc_count_for_test(), completed);
+}

@@ -1149,7 +1149,8 @@ impl CommandLoopHost for Context {
     fn command_loop_1_idle_sweep(&mut self) {
         while self.tagged_heap().sweep_in_progress() {
             if self.input_rx().as_ref().is_some_and(|rx| !rx.is_empty())
-                || self.command_loop()
+                || self
+                    .command_loop()
                     .keyboard
                     .kboard
                     .executing_kbd_macro
@@ -1174,7 +1175,7 @@ impl CommandLoopHost for Context {
     /// expensive auto-save.
     fn input_pending_for_auto_save(&mut self) -> bool {
         self.service_leading_internal_frontend_events();
-        if self.peek_unread_command_event().is_some() {
+        if self.has_pending_requeued_events() {
             return true;
         }
         self.has_pending_frontend_input_with_configured_filter()
