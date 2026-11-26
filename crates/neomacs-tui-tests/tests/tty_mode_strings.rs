@@ -27,7 +27,7 @@ use std::ffi::CStr;
 use std::fs::File;
 use std::io::Read as _;
 use std::os::fd::{AsRawFd, FromRawFd};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
@@ -69,24 +69,6 @@ fn count_subslice(haystack: &[u8], needle: &[u8]) -> usize {
         .windows(needle.len())
         .filter(|window| *window == needle)
         .count()
-}
-
-fn resolve_true_program() -> PathBuf {
-    if let Some(paths) = std::env::var_os("PATH") {
-        for dir in std::env::split_paths(&paths) {
-            let candidate = dir.join("true");
-            if candidate.is_file() {
-                return candidate;
-            }
-        }
-    }
-    for candidate in ["/usr/bin/true", "/bin/true"] {
-        let path = PathBuf::from(candidate);
-        if path.is_file() {
-            return path;
-        }
-    }
-    panic!("cannot locate `true` binary on PATH, /usr/bin/true, or /bin/true");
 }
 
 struct SecondaryPty {
@@ -272,28 +254,23 @@ fn spawn_editor(program: &Path, label: &str, is_gnu: bool) -> TuiSession {
 }
 
 fn assert_reset_order(output: &[u8], label: &str, phase: &str) -> usize {
-    let reset2 = find_subslice(output, b"<TTY-MODE-RESET-2>").unwrap_or_else(|| {
+    // `SETUP_EL` pushes non-string `42` between `<TTY-MODE-RESET-2>` and
+    // `<TTY-MODE-RESET-1>`; checking exact contiguity verifies non-strings are
+    // skipped rather than formatted into the stream (GNU `src/term.c:181-188`).
+    const RESET_PAIR: &[u8] = b"<TTY-MODE-RESET-2><TTY-MODE-RESET-1>";
+    let reset2 = find_subslice(output, RESET_PAIR).unwrap_or_else(|| {
         panic!(
-            "{label} ({phase}): missing <TTY-MODE-RESET-2> in PTY output: {:?}",
+            "{label} ({phase}): missing contiguous <TTY-MODE-RESET-2><TTY-MODE-RESET-1> (skipping non-string 42) in PTY output: {:?}",
             String::from_utf8_lossy(output)
         )
     });
-    let reset1 = find_subslice_from(output, reset2 + 1, b"<TTY-MODE-RESET-1>").unwrap_or_else(
-        || {
-            panic!(
-                "{label} ({phase}): missing <TTY-MODE-RESET-1> after <TTY-MODE-RESET-2> in PTY output: {:?}",
-                String::from_utf8_lossy(output)
-            )
-        },
-    );
-    let mouse_disable = find_subslice_from(output, reset1 + 1, MOUSE_DISABLE).unwrap_or_else(
-        || {
+    let mouse_disable = find_subslice_from(output, reset2 + RESET_PAIR.len(), MOUSE_DISABLE)
+        .unwrap_or_else(|| {
             panic!(
                 "{label} ({phase}): missing xterm mouse disable sequence after reset markers in PTY output: {:?}",
                 String::from_utf8_lossy(output)
             )
-        },
-    );
+        });
     let ke = find_subslice_from(output, mouse_disable + MOUSE_DISABLE.len(), TERM_KE)
         .unwrap_or_else(|| {
             panic!(
@@ -314,6 +291,12 @@ fn assert_reset_order(output: &[u8], label: &str, phase: &str) -> usize {
         )
     });
     let reset_end = te + TERM_TE.len();
+    assert_eq!(
+        count_subslice(&output[reset2..reset_end], b"<TTY-MODE-RESET-2>"),
+        1,
+        "{label} ({phase}): expected <TTY-MODE-RESET-2> exactly once in reset burst: {:?}",
+        String::from_utf8_lossy(&output[reset2..reset_end])
+    );
     // `lisp/term/xterm.el` manages bracketed paste via `tty-mode-reset-strings`;
     // Rust must not emit a duplicate `\e[?2004l`.
     assert_eq!(
@@ -326,6 +309,10 @@ fn assert_reset_order(output: &[u8], label: &str, phase: &str) -> usize {
 }
 
 fn assert_set_order(output: &[u8], after: usize, label: &str, phase: &str) {
+    // `SETUP_EL` pushes non-string `99` between `<TTY-MODE-SET-2>` and
+    // `<TTY-MODE-SET-1>`; checking exact contiguity verifies non-strings are
+    // skipped rather than formatted into the stream (GNU `src/term.c:181-188`).
+    const SET_PAIR: &[u8] = b"<TTY-MODE-SET-2><TTY-MODE-SET-1>";
     let ti = find_subslice_from(output, after, TERM_TI).unwrap_or_else(|| {
         panic!(
             "{label} ({phase}): missing ti after te in PTY output: {:?}",
@@ -338,25 +325,25 @@ fn assert_set_order(output: &[u8], after: usize, label: &str, phase: &str) {
             String::from_utf8_lossy(&output[after..])
         )
     });
-    let set2 =
-        find_subslice_from(output, ks + TERM_KS.len(), b"<TTY-MODE-SET-2>").unwrap_or_else(|| {
+    let set2 = find_subslice_from(output, ks + TERM_KS.len(), SET_PAIR).unwrap_or_else(|| {
+        panic!(
+            "{label} ({phase}): missing contiguous <TTY-MODE-SET-2><TTY-MODE-SET-1> (skipping non-string 99) after ks in PTY output: {:?}",
+            String::from_utf8_lossy(&output[after..])
+        )
+    });
+    let mouse_enable =
+        find_subslice_from(output, set2 + SET_PAIR.len(), MOUSE_ENABLE).unwrap_or_else(|| {
             panic!(
-                "{label} ({phase}): missing <TTY-MODE-SET-2> after ks in PTY output: {:?}",
+                "{label} ({phase}): missing xterm mouse enable sequence after set markers in PTY output: {:?}",
                 String::from_utf8_lossy(&output[after..])
             )
         });
-    let set1 = find_subslice_from(output, set2 + 1, b"<TTY-MODE-SET-1>").unwrap_or_else(|| {
-        panic!(
-            "{label} ({phase}): missing <TTY-MODE-SET-1> after <TTY-MODE-SET-2> in PTY output: {:?}",
-            String::from_utf8_lossy(&output[after..])
-        )
-    });
-    let mouse_enable = find_subslice_from(output, set1 + 1, MOUSE_ENABLE).unwrap_or_else(|| {
-        panic!(
-            "{label} ({phase}): missing xterm mouse enable sequence after set markers in PTY output: {:?}",
-            String::from_utf8_lossy(&output[after..])
-        )
-    });
+    assert_eq!(
+        count_subslice(&output[ti..], b"<TTY-MODE-SET-2>"),
+        1,
+        "{label} ({phase}): expected <TTY-MODE-SET-2> exactly once in resume burst: {:?}",
+        String::from_utf8_lossy(&output[ti..mouse_enable + MOUSE_ENABLE.len()])
+    );
     // `lisp/term/xterm.el` manages bracketed paste via `tty-mode-set-strings`;
     // Rust must not emit a duplicate `\e[?2004h`.
     assert_eq!(
@@ -684,16 +671,31 @@ fn check_suspend_emacs_hooks_cannot_suspend_and_bad_arg(
     program: &Path,
     label: &str,
     is_gnu: bool,
-    true_program: &Path,
 ) -> String {
+    use std::os::unix::fs::PermissionsExt as _;
+
     let temp = tempfile::tempdir().expect("tempdir for suspend-emacs parity test");
     let result_path = temp.path().join("result.sexp");
+    let subshell_witness = temp.path().join("subshell.log");
+    let subshell_script = temp.path().join("witness-shell.sh");
+    // Write a witness file from `$SHELL` so a broken `cannot-suspend` path that
+    // silently falls through to ignored `SIGTSTP` on an orphaned PTY fails loud.
+    std::fs::write(
+        &subshell_script,
+        format!(
+            "#!/bin/sh\nprintf 'SUBSHELL_RAN\\n' >> '{}'\nexit 0\n",
+            subshell_witness.display()
+        ),
+    )
+    .expect("write witness SHELL script");
+    std::fs::set_permissions(&subshell_script, std::fs::Permissions::from_mode(0o755))
+        .expect("chmod witness SHELL script");
     let mut session = spawn_editor_with(
         program,
         label,
         is_gnu,
         Some(SETUP_EL),
-        &[("SHELL", true_program)],
+        &[("SHELL", &subshell_script)],
     );
     session.clear_recent_output();
     let expr = format!(
@@ -714,6 +716,11 @@ fn check_suspend_emacs_hooks_cannot_suspend_and_bad_arg(
     let output = session.recent_output().to_vec();
     let after_te = assert_reset_order(&output, label, "cannot-suspend subshell");
     assert_set_order(&output, after_te, label, "cannot-suspend resume");
+    assert_eq!(
+        std::fs::read_to_string(&subshell_witness).unwrap_or_default(),
+        "SUBSHELL_RAN\n",
+        "{label}: cannot-suspend must execute $SHELL exactly once (not silently skip subshell)"
+    );
 
     session.send_keys("C-x C-c");
     assert_eq!(
@@ -1012,9 +1019,13 @@ while True:
     session.read(Duration::from_millis(150));
     session.clear_recent_output();
 
-    // 1st C-g sets quit-flag; 2nd C-g enters emergency escape and stops via SIGTSTP.
+    // 1st C-g sets quit-flag without stopping; 2nd C-g enters emergency escape and stops via SIGTSTP.
     session.send(b"\x07");
     session.read(Duration::from_millis(150));
+    assert!(
+        !stopped.exists(),
+        "{label}: editor must not stop on 1st C-g before 2nd C-g"
+    );
     session.send(b"\x07");
     let stop_deadline = Instant::now() + Duration::from_secs(15);
     while !stopped.exists() {
@@ -1032,6 +1043,12 @@ while True:
         find_subslice(&before_cont, MOUSE_ENABLE).is_none(),
         "{label}: mouse enable arrived before SIGCONT on emergency escape"
     );
+    assert!(
+        find_subslice(&before_cont, b"<TTY-MODE-SET-2>").is_none()
+            && find_subslice(&before_cont, b"<TTY-MODE-SET-1>").is_none(),
+        "{label}: tty-mode-set-strings arrived before SIGCONT on emergency escape: {:?}",
+        String::from_utf8_lossy(&before_cont)
+    );
 
     // Resume via SIGCONT and answer Auto-save=n, Abort=n -> Continuing...
     session.clear_recent_output();
@@ -1048,9 +1065,27 @@ while True:
         Duration::from_secs(10),
     );
     session.send(b"n\n");
+    wait_for_bytes(&mut session, b"Continuing...", Duration::from_secs(10));
     wait_for_bytes(&mut session, MOUSE_ENABLE, Duration::from_secs(10));
     let after_cont = session.recent_output().to_vec();
-    assert_set_order(&after_cont, 0, label, "emergency escape resume");
+    let continuing_pos = find_subslice(&after_cont, b"Continuing...").unwrap_or_else(|| {
+        panic!(
+            "{label}: missing Continuing... after emergency escape prompts: {:?}",
+            String::from_utf8_lossy(&after_cont)
+        )
+    });
+    assert!(
+        find_subslice(&after_cont[..continuing_pos], TERM_TI).is_none()
+            && find_subslice(&after_cont[..continuing_pos], b"<TTY-MODE-SET-2>").is_none(),
+        "{label}: tty resume modes/set-strings arrived before Continuing... prompt: {:?}",
+        String::from_utf8_lossy(&after_cont[..continuing_pos])
+    );
+    assert_set_order(
+        &after_cont,
+        continuing_pos + b"Continuing...".len(),
+        label,
+        "emergency escape resume",
+    );
 
     // Release the probe loop so the editor exits cleanly.
     std::fs::write(&done, "done\n").expect("release probe");
@@ -1097,11 +1132,8 @@ fn tty_mode_strings_real_sigtstp_stop_and_sigcont_resume_like_gnu() {
 fn suspend_emacs_hooks_cannot_suspend_and_bad_arg_match_gnu() {
     let gnu = neomacs_tui_tests::oracle::gnu_oracle_program();
     let neo = neomacs_tui_tests::neomacs_binary();
-    let true_program = resolve_true_program();
-    let gnu_res =
-        check_suspend_emacs_hooks_cannot_suspend_and_bad_arg(&gnu, "GNU", true, &true_program);
-    let neo_res =
-        check_suspend_emacs_hooks_cannot_suspend_and_bad_arg(&neo, "Neomacs", false, &true_program);
+    let gnu_res = check_suspend_emacs_hooks_cannot_suspend_and_bad_arg(&gnu, "GNU", true);
+    let neo_res = check_suspend_emacs_hooks_cannot_suspend_and_bad_arg(&neo, "Neomacs", false);
     assert_eq!(
         neo_res, gnu_res,
         "suspend-emacs hooks / cannot-suspend / bad-arg mismatch vs GNU"

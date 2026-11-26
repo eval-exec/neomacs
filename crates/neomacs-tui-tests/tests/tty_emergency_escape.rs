@@ -491,6 +491,7 @@ fn controlling_tty_second_ctrl_g_abort_terminates_with_sigabrt() {
 struct ModeStringsObservation {
     stop_signal: i32,
     reset_strings_ordered_before_te: bool,
+    no_set_strings_before_sigcont: bool,
     set_strings_ordered_after_ti: bool,
     child_status: String,
 }
@@ -506,8 +507,13 @@ fn find_subslice_from(haystack: &[u8], start: usize, needle: &[u8]) -> Option<us
 }
 
 fn run_mode_strings_case(program: &Path, name: &str) -> ModeStringsObservation {
+    const TERM_KE: &[u8] = b"\x1b[?1l\x1b>";
+    const TERM_VE: &[u8] = b"\x1b[?12l\x1b[?25h";
     const TERM_TE: &[u8] = b"\x1b[?1049l";
     const TERM_TI: &[u8] = b"\x1b[?1049h";
+    const TERM_KS: &[u8] = b"\x1b[?1h\x1b=";
+    const RESET_PAIR: &[u8] = b"<EE-RESET-2><EE-RESET-1>";
+    const SET_PAIR: &[u8] = b"<EE-SET-2><EE-SET-1>";
 
     let dir = neomacs_tui_tests::TuiTempDirectory::new("tty-ee-modes-");
     let script = dir.path().join("probe.el");
@@ -552,10 +558,13 @@ fn run_mode_strings_case(program: &Path, name: &str) -> ModeStringsObservation {
         .expect("parse stop signal");
     session.read(Duration::from_millis(100));
     let pre_suspend = session.recent_output().to_vec();
-    let reset_strings_ordered_before_te = find_subslice(&pre_suspend, b"<EE-RESET-2>")
-        .and_then(|r2| find_subslice_from(&pre_suspend, r2 + 1, b"<EE-RESET-1>"))
-        .and_then(|r1| find_subslice_from(&pre_suspend, r1 + 1, TERM_TE))
+    let reset_strings_ordered_before_te = find_subslice(&pre_suspend, RESET_PAIR)
+        .and_then(|pair| find_subslice_from(&pre_suspend, pair + RESET_PAIR.len(), TERM_KE))
+        .and_then(|ke| find_subslice_from(&pre_suspend, ke + TERM_KE.len(), TERM_VE))
+        .and_then(|ve| find_subslice_from(&pre_suspend, ve + TERM_VE.len(), TERM_TE))
         .is_some();
+    let no_set_strings_before_sigcont = find_subslice(&pre_suspend, b"<EE-SET-2>").is_none()
+        && find_subslice(&pre_suspend, b"<EE-SET-1>").is_none();
 
     session.clear_recent_output();
     std::fs::write(&resume, "go\n").expect("signal SIGCONT");
@@ -582,15 +591,16 @@ fn run_mode_strings_case(program: &Path, name: &str) -> ModeStringsObservation {
     );
     let post_resume = session.recent_output().to_vec();
     let set_strings_ordered_after_ti = find_subslice(&post_resume, b"Continuing...")
-        .and_then(|cont| find_subslice_from(&post_resume, cont + 1, TERM_TI))
-        .and_then(|ti| find_subslice_from(&post_resume, ti + TERM_TI.len(), b"<EE-SET-2>"))
-        .and_then(|s2| find_subslice_from(&post_resume, s2 + 1, b"<EE-SET-1>"))
+        .and_then(|cont| find_subslice_from(&post_resume, cont + b"Continuing...".len(), TERM_TI))
+        .and_then(|ti| find_subslice_from(&post_resume, ti + TERM_TI.len(), TERM_KS))
+        .and_then(|ks| find_subslice_from(&post_resume, ks + TERM_KS.len(), SET_PAIR))
         .is_some();
     let child_status = std::fs::read_to_string(&status).expect("read child status");
 
     ModeStringsObservation {
         stop_signal,
         reset_strings_ordered_before_te,
+        no_set_strings_before_sigcont,
         set_strings_ordered_after_ti,
         child_status,
     }
@@ -610,6 +620,7 @@ fn controlling_tty_second_ctrl_g_emits_tty_mode_reset_and_set_strings() {
         ModeStringsObservation {
             stop_signal: libc::SIGTSTP,
             reset_strings_ordered_before_te: true,
+            no_set_strings_before_sigcont: true,
             set_strings_ordered_after_ti: true,
             child_status: "exit:0".to_string(),
         },
