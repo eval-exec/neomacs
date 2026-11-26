@@ -10,6 +10,13 @@
 //!   order, skipping non-strings), after `ti` and `ks`.
 //! - Both run via `reset_sys_modes`/`init_sys_modes` from exit (`C-x C-c`),
 //!   `suspend-emacs` (`C-z`), `suspend-tty`, `resume-tty`, and `delete-terminal`.
+//!
+//! Load-independence: the 22 gate TTY rows (these 10 rows plus `tty_relay` (3),
+//! `tty_input` (1), `tty_emergency_escape` mode-strings (1), and
+//! `neomacsclient_cli` TTY (7)) were measured at `/proc/loadavg` 25.5–60.6 across
+//! 5 consecutive full runs (110/110 passed, 0 retries, `9ca34ffd1c`); they do
+//! not require a quiet machine. Re-measure under load before re-introducing any
+//! quiet barrier.
 
 use crate::support::{eval_expression_one, settle_session};
 use neomacs_tui_tests::{
