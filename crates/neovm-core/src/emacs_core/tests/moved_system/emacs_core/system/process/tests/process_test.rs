@@ -20621,64 +20621,157 @@ fn b5_gnutls_deinit_and_boot_failure_unregister_socket_before_dropping() {
     drop(keep_open2);
 }
 
+/// Condvar-backed phase gate shared between a test thread and its loopback
+/// peer thread. Owned by [`TestServerHandle`] so panic unwinding ALWAYS wakes
+/// both phase waits and teardown waits before `join()` regardless of local
+/// variable drop order (preventing AB-BA channel-sender/join deadlocks).
+#[cfg(unix)]
+struct GateState {
+    stage: usize,
+    done: bool,
+    cancelled: bool,
+}
+
+#[cfg(unix)]
+#[derive(Clone)]
+struct ServerGate {
+    inner: std::sync::Arc<(std::sync::Mutex<GateState>, std::sync::Condvar)>,
+}
+
+#[cfg(unix)]
+impl ServerGate {
+    fn new() -> Self {
+        Self {
+            inner: std::sync::Arc::new((
+                std::sync::Mutex::new(GateState {
+                    stage: 0,
+                    done: false,
+                    cancelled: false,
+                }),
+                std::sync::Condvar::new(),
+            )),
+        }
+    }
+
+    fn advance_to(&self, stage: usize) {
+        let (lock, cvar) = &*self.inner;
+        let mut state = lock.lock().unwrap_or_else(|e| e.into_inner());
+        if stage > state.stage {
+            state.stage = stage;
+        }
+        cvar.notify_all();
+    }
+
+    fn is_stopped(&self) -> bool {
+        let (lock, _) = &*self.inner;
+        let state = lock.lock().unwrap_or_else(|e| e.into_inner());
+        state.done || state.cancelled
+    }
+
+    /// Block until `stage` is reached. Returns `false` if the handle finished
+    /// or cancelled before `stage` was reached.
+    fn wait_for(&self, stage: usize) -> bool {
+        let (lock, cvar) = &*self.inner;
+        let guard = lock.lock().unwrap_or_else(|e| e.into_inner());
+        let guard = cvar
+            .wait_while(guard, |s| !s.cancelled && !s.done && s.stage < stage)
+            .unwrap_or_else(|e| e.into_inner());
+        !guard.cancelled && !guard.done && guard.stage >= stage
+    }
+
+    /// Block until `finish()` or panic-`Drop` signals teardown.
+    fn wait_done(&self) {
+        let (lock, cvar) = &*self.inner;
+        let guard = lock.lock().unwrap_or_else(|e| e.into_inner());
+        let guard = cvar
+            .wait_while(guard, |s| !s.cancelled && !s.done)
+            .unwrap_or_else(|e| e.into_inner());
+        drop(guard);
+    }
+
+    fn signal_done(&self) {
+        let (lock, cvar) = &*self.inner;
+        let mut state = lock.lock().unwrap_or_else(|e| e.into_inner());
+        state.done = true;
+        cvar.notify_all();
+    }
+
+    fn cancel(&self) {
+        let (lock, cvar) = &*self.inner;
+        let mut state = lock.lock().unwrap_or_else(|e| e.into_inner());
+        state.cancelled = true;
+        cvar.notify_all();
+    }
+}
+
 /// Panic-safe handle for a loopback TLS test server thread.
 ///
-/// The server thread holds its accepted socket(s) open until `done_tx` fires,
-/// so the peer can never close or time out under heavy CI contention before
-/// the client finishes its assertions. Dropping the handle on panic sets the
-/// stop flag, signals `done_tx`, pokes the listener port to unblock any pending
-/// `accept()`, and joins the thread so a failing assertion never hangs.
+/// - Normal path (`finish()`): signals `done`, joins the server thread, then
+///   drops `listener_guard`. Subsequent `Drop` sees `handle.is_none()` and
+///   performs zero syscalls (never pokes an already-released port).
+/// - Panic/early-return path (`Drop` while `handle.is_some()`): cancels the
+///   owned [`ServerGate`] (waking any parked `wait_for`/`wait_done` before
+///   joining), pokes our still-bound `listener_guard` on `127.0.0.1:self.port`
+///   to unblock any pending `accept()` without risking port-recycling races,
+///   joins the server thread, and only then releases `listener_guard`.
 #[cfg(unix)]
 struct TestServerHandle {
     port: u16,
-    stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
-    done_tx: Option<std::sync::mpsc::Sender<()>>,
+    gate: ServerGate,
+    listener_guard: Option<TcpListener>,
     handle: Option<std::thread::JoinHandle<()>>,
 }
 
 #[cfg(unix)]
 impl TestServerHandle {
-    fn spawn<F>(port: u16, f: F) -> Self
+    fn spawn<F>(listener: TcpListener, f: F) -> Self
     where
-        F: FnOnce(std::sync::mpsc::Receiver<()>, std::sync::Arc<std::sync::atomic::AtomicBool>)
-            + Send
-            + 'static,
+        F: FnOnce(TcpListener, ServerGate) + Send + 'static,
     {
-        let (done_tx, done_rx) = std::sync::mpsc::channel::<()>();
-        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let stop_for_thread = std::sync::Arc::clone(&stop);
-        let handle = std::thread::spawn(move || f(done_rx, stop_for_thread));
+        let port = listener.local_addr().expect("listener local addr").port();
+        let listener_guard = listener.try_clone().expect("clone listener guard");
+        let gate = ServerGate::new();
+        let gate_for_thread = gate.clone();
+        let handle = std::thread::spawn(move || f(listener, gate_for_thread));
         Self {
             port,
-            stop,
-            done_tx: Some(done_tx),
+            gate,
+            listener_guard: Some(listener_guard),
             handle: Some(handle),
         }
     }
 
+    fn advance_to(&self, stage: usize) {
+        self.gate.advance_to(stage);
+    }
+
+    fn wait_for(&self, stage: usize) -> bool {
+        self.gate.wait_for(stage)
+    }
+
     fn finish(mut self) {
-        self.stop.store(true, std::sync::atomic::Ordering::SeqCst);
-        if let Some(tx) = self.done_tx.take() {
-            let _ = tx.send(());
-        }
+        self.gate.signal_done();
         if let Some(handle) = self.handle.take() {
             handle.join().expect("server thread finished cleanly");
         }
+        drop(self.listener_guard.take());
     }
 }
 
 #[cfg(unix)]
 impl Drop for TestServerHandle {
     fn drop(&mut self) {
-        self.stop.store(true, std::sync::atomic::Ordering::SeqCst);
-        if let Some(tx) = self.done_tx.take() {
-            let _ = tx.send(());
-        }
-        // Wake any blocked `listener.accept()` if the test panicked early.
+        let Some(handle) = self.handle.take() else {
+            drop(self.listener_guard.take());
+            return;
+        };
+        // Panic/early-return path only: cancel all gate waits first, then wake
+        // any blocked `listener.accept()` while `self.listener_guard` still
+        // keeps `self.port` exclusively bound to this test.
+        self.gate.cancel();
         let _ = std::net::TcpStream::connect(("127.0.0.1", self.port));
-        if let Some(handle) = self.handle.take() {
-            let _ = handle.join();
-        }
+        let _ = handle.join();
+        drop(self.listener_guard.take());
     }
 }
 
@@ -20745,8 +20838,11 @@ fn gnutls_deinit_unwraps_and_registers_plaintext_socket_and_ignores_second_deini
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback");
     let port = listener.local_addr().expect("local addr").port();
 
-    let server = TestServerHandle::spawn(port, move |done_rx, _stop| {
+    let server = TestServerHandle::spawn(listener, move |listener, gate| {
         let (mut stream, _) = listener.accept().expect("accept client");
+        if gate.is_stopped() {
+            return;
+        }
         let mut server = rustls::ServerConnection::new(server_cfg).expect("server conn");
         drive_rustls_server_handshake(&mut server, &mut stream);
 
@@ -20793,7 +20889,7 @@ fn gnutls_deinit_unwraps_and_registers_plaintext_socket_and_ignores_second_deini
         assert_eq!(plain2, b"PLAIN2\n");
         stream.write_all(b"ECHO2\n").expect("write ECHO2");
         stream.flush().expect("flush ECHO2");
-        let _ = done_rx.recv();
+        gate.wait_done();
     });
 
     let mut eval = crate::test_utils::runtime_startup_context();
@@ -20931,8 +21027,11 @@ fn gnutls_deinit_clears_boot_state_and_allows_fresh_reboot() {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback");
     let port = listener.local_addr().expect("local addr").port();
 
-    let server = TestServerHandle::spawn(port, move |done_rx, _stop| {
+    let server = TestServerHandle::spawn(listener, move |listener, gate| {
         let (mut stream, _) = listener.accept().expect("accept client");
+        if gate.is_stopped() {
+            return;
+        }
         for (expected, reply) in [
             (b"PING1\n", b"PONG1\n"),
             (b"PING2\n", b"PONG2\n"),
@@ -20963,7 +21062,7 @@ fn gnutls_deinit_clears_boot_state_and_allows_fresh_reboot() {
             }
             stream.flush().expect("flush tcp");
         }
-        let _ = done_rx.recv();
+        gate.wait_done();
     });
 
     let ca_pem = loopback::resources().join("ca.pem");
@@ -21079,8 +21178,11 @@ fn gnutls_deinit_during_incomplete_handshake_restores_plaintext_socket() {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind silent peer");
     let port = listener.local_addr().expect("local addr").port();
 
-    let server = TestServerHandle::spawn(port, move |done_rx, _stop| {
+    let server = TestServerHandle::spawn(listener, move |listener, gate| {
         let (mut stream, _) = listener.accept().expect("accept client");
+        if gate.is_stopped() {
+            return;
+        }
         stream
             .set_read_timeout(Some(Duration::from_secs(30)))
             .expect("read timeout");
@@ -21095,7 +21197,7 @@ fn gnutls_deinit_during_incomplete_handshake_restores_plaintext_socket() {
             .write_all(b"PLAIN_OK\n")
             .expect("write plaintext reply");
         stream.flush().expect("flush plaintext reply");
-        let _ = done_rx.recv();
+        gate.wait_done();
     });
 
     let ca_pem = loopback::resources().join("ca.pem");
@@ -21145,21 +21247,16 @@ fn gnutls_boot_nonblocking_advances_in_accept_process_output_and_delivers_data()
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind gated TLS peer");
     let port = listener.local_addr().expect("local addr").port();
 
-    let (start1_tx, start1_rx) = std::sync::mpsc::channel::<()>();
-    let (start2_tx, start2_rx) = std::sync::mpsc::channel::<()>();
     let server_cfg = build_loopback_rustls_server_config();
-    let server = TestServerHandle::spawn(port, move |done_rx, stop| {
+    let server = TestServerHandle::spawn(listener, move |listener, gate| {
         let mut keep_alive = Vec::new();
-        for (start_rx, expected, reply) in [
-            (start1_rx, b"PING\n".as_slice(), b"PONG\n".as_slice()),
-            (start2_rx, b"EARLY\n".as_slice(), b"EARLY_OK\n".as_slice()),
+        for (stage, expected, reply) in [
+            (1usize, b"PING\n".as_slice(), b"PONG\n".as_slice()),
+            (2usize, b"EARLY\n".as_slice(), b"EARLY_OK\n".as_slice()),
         ] {
             let (mut stream, _) = listener.accept().expect("accept client");
-            if stop.load(std::sync::atomic::Ordering::SeqCst) {
-                return;
-            }
             // Stay silent until client finishes initial non-blocking gnutls-boot.
-            if start_rx.recv().is_err() {
+            if !gate.wait_for(stage) {
                 return;
             }
             let mut conn = rustls::ServerConnection::new(std::sync::Arc::clone(&server_cfg))
@@ -21178,7 +21275,7 @@ fn gnutls_boot_nonblocking_advances_in_accept_process_output_and_delivers_data()
             tls.flush().expect("flush encrypted reply");
             keep_alive.push(tls);
         }
-        let _ = done_rx.recv();
+        gate.wait_done();
         drop(keep_alive);
     });
 
@@ -21206,7 +21303,7 @@ fn gnutls_boot_nonblocking_advances_in_accept_process_output_and_delivers_data()
         .expect("start non-blocking boot1");
     assert_eq!(boot1, Value::symbol("gnutls-e-again"));
 
-    start1_tx.send(()).expect("release peer 1 handshake");
+    server.advance_to(1);
 
     let res1 = ev
         .eval_str(
@@ -21253,7 +21350,7 @@ fn gnutls_boot_nonblocking_advances_in_accept_process_output_and_delivers_data()
         .expect("start non-blocking boot2");
     assert_eq!(boot2, Value::symbol("gnutls-e-again"));
 
-    start2_tx.send(()).expect("release peer 2 handshake");
+    server.advance_to(2);
 
     let res2 = ev
         .eval_str(
@@ -21297,29 +21394,26 @@ fn gnutls_boot_direct_reboot_from_nonblocking_stage_8() {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind reboot peer");
     let port = listener.local_addr().expect("local addr").port();
 
-    let (drain_tx, drain_rx) = std::sync::mpsc::channel::<()>();
-    let (drained_tx, drained_rx) = std::sync::mpsc::channel::<()>();
-    let server = TestServerHandle::spawn(port, move |done_rx, stop| {
+    let server = TestServerHandle::spawn(listener, move |listener, gate| {
         let (mut stream, _) = listener.accept().expect("accept client");
-        if stop.load(std::sync::atomic::Ordering::SeqCst) {
+        if !gate.wait_for(1) {
             return;
         }
         stream
             .set_read_timeout(Some(Duration::from_secs(30)))
             .expect("read timeout");
-        // Wait until the abandoned non-blocking gnutls-boot has written ClientHello
-        // and returned gnutls-e-again, then drain those bytes before reboot starts.
-        if drain_rx.recv().is_err() {
-            return;
-        }
-        let mut discard = [0u8; 2048];
-        let n = stream
-            .read(&mut discard)
-            .expect("read abandoned ClientHello");
-        assert!(n > 0, "expected abandoned ClientHello bytes");
-        if drained_tx.send(()).is_err() {
-            return;
-        }
+        // Drain the complete abandoned TLS ClientHello record (5-byte header +
+        // exact record payload length) before signaling the client to reboot.
+        let mut header = [0u8; 5];
+        stream
+            .read_exact(&mut header)
+            .expect("read abandoned ClientHello TLS record header");
+        let record_len = u16::from_be_bytes([header[3], header[4]]) as usize;
+        let mut discard = vec![0u8; record_len];
+        stream
+            .read_exact(&mut discard)
+            .expect("read abandoned ClientHello TLS record payload");
+        gate.advance_to(2);
         let server_cfg = build_loopback_rustls_server_config();
         let mut conn = rustls::ServerConnection::new(server_cfg).expect("server conn");
         drive_rustls_server_handshake(&mut conn, &mut stream);
@@ -21334,7 +21428,7 @@ fn gnutls_boot_direct_reboot_from_nonblocking_stage_8() {
         assert_eq!(got.as_slice(), b"REBOOT\n");
         tls.write_all(b"REBOOT_OK\n").expect("write reboot reply");
         tls.flush().expect("flush reboot reply");
-        let _ = done_rx.recv();
+        gate.wait_done();
     });
 
     let ca_pem = loopback::resources().join("ca.pem");
@@ -21360,10 +21454,11 @@ fn gnutls_boot_direct_reboot_from_nonblocking_stage_8() {
         "(gnutls-e-again 8)"
     );
 
-    drain_tx
-        .send(())
-        .expect("signal server to drain ClientHello 1");
-    drained_rx.recv().expect("server drained ClientHello 1");
+    server.advance_to(1);
+    assert!(
+        server.wait_for(2),
+        "server exited before draining ClientHello 1"
+    );
 
     let stage2 = ev
         .eval_str(&format!(
@@ -21406,23 +21501,18 @@ fn gnutls_nonblocking_send_during_failing_handshake_signals_not_drops() {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind failing peer");
     let port = listener.local_addr().expect("local addr").port();
 
-    let (fail1_tx, fail1_rx) = std::sync::mpsc::channel::<()>();
-    let (fail2_tx, fail2_rx) = std::sync::mpsc::channel::<()>();
-    let server = TestServerHandle::spawn(port, move |done_rx, stop| {
+    let server = TestServerHandle::spawn(listener, move |listener, gate| {
         let mut keep_alive = Vec::new();
-        for fail_rx in [fail1_rx, fail2_rx] {
+        for stage in [1usize, 2usize] {
             let (mut stream, _) = listener.accept().expect("accept client");
-            if stop.load(std::sync::atomic::Ordering::SeqCst) {
-                return;
-            }
-            if fail_rx.recv().is_err() {
+            if !gate.wait_for(stage) {
                 return;
             }
             let _ = stream.write_all(b"NOT_TLS_GARBAGE\r\n");
             let _ = stream.flush();
             keep_alive.push(stream);
         }
-        let _ = done_rx.recv();
+        gate.wait_done();
         drop(keep_alive);
     });
 
@@ -21443,7 +21533,7 @@ fn gnutls_nonblocking_send_during_failing_handshake_signals_not_drops() {
         .expect("boot p1");
     assert_eq!(b1, Value::symbol("gnutls-e-again"));
 
-    fail1_tx.send(()).expect("release garbage on p1");
+    server.advance_to(1);
 
     let r1 = ev
         .eval_str(
@@ -21474,7 +21564,7 @@ fn gnutls_nonblocking_send_during_failing_handshake_signals_not_drops() {
         .expect("boot p2");
     assert_eq!(b2, Value::symbol("gnutls-e-again"));
 
-    fail2_tx.send(()).expect("release garbage on p2");
+    server.advance_to(2);
 
     let r2 = ev
         .eval_str(
@@ -21516,18 +21606,14 @@ fn gnutls_nonblocking_handshake_failure_deactivates_without_deleting_and_preserv
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind failing peer");
     let port = listener.local_addr().expect("local addr").port();
 
-    let (fail_tx, fail_rx) = std::sync::mpsc::channel::<()>();
-    let server = TestServerHandle::spawn(port, move |done_rx, stop| {
+    let server = TestServerHandle::spawn(listener, move |listener, gate| {
         let (mut stream, _) = listener.accept().expect("accept client");
-        if stop.load(std::sync::atomic::Ordering::SeqCst) {
-            return;
-        }
-        if fail_rx.recv().is_err() {
+        if !gate.wait_for(1) {
             return;
         }
         let _ = stream.write_all(b"NOT_TLS_GARBAGE\r\n");
         let _ = stream.flush();
-        let _ = done_rx.recv();
+        gate.wait_done();
     });
 
     let ca_pem = loopback::resources().join("ca.pem");
@@ -21551,7 +21637,7 @@ fn gnutls_nonblocking_handshake_failure_deactivates_without_deleting_and_preserv
         .expect("start non-blocking boot");
     assert_eq!(boot, Value::symbol("gnutls-e-again"));
 
-    fail_tx.send(()).expect("release garbage");
+    server.advance_to(1);
 
     let result = ev
         .eval_str(
@@ -21603,18 +21689,13 @@ fn gnutls_nonblocking_open_sentinel_propagates_throw_and_quit() {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind gated TLS peer");
     let port = listener.local_addr().expect("local addr").port();
 
-    let (start_throw_tx, start_throw_rx) = std::sync::mpsc::channel::<()>();
-    let (start_quit_tx, start_quit_rx) = std::sync::mpsc::channel::<()>();
     let server_cfg = build_loopback_rustls_server_config();
-    let server = TestServerHandle::spawn(port, move |done_rx, stop| {
+    let server = TestServerHandle::spawn(listener, move |listener, gate| {
         let mut keep_alive = Vec::new();
-        for start_rx in [start_throw_rx, start_quit_rx] {
+        for stage in [1usize, 2usize] {
             let (mut stream, _) = listener.accept().expect("accept client");
-            if stop.load(std::sync::atomic::Ordering::SeqCst) {
-                return;
-            }
             // Stay completely silent until client verifies gnutls-e-again and arms sentinel.
-            if start_rx.recv().is_err() {
+            if !gate.wait_for(stage) {
                 return;
             }
             let mut conn = rustls::ServerConnection::new(std::sync::Arc::clone(&server_cfg))
@@ -21623,7 +21704,7 @@ fn gnutls_nonblocking_open_sentinel_propagates_throw_and_quit() {
             // Keep both TLS state and TCP socket open until test signals teardown.
             keep_alive.push((conn, stream));
         }
-        let _ = done_rx.recv();
+        gate.wait_done();
         drop(keep_alive);
     });
 
@@ -21653,9 +21734,7 @@ fn gnutls_nonblocking_open_sentinel_propagates_throw_and_quit() {
 
     ev.eval_str("(setq test-throw-armed t)")
         .expect("arm throw sentinel");
-    start_throw_tx
-        .send(())
-        .expect("release server TLS handshake for throw sentinel");
+    server.advance_to(1);
 
     let caught_throw = ev
         .eval_str(
@@ -21701,9 +21780,7 @@ fn gnutls_nonblocking_open_sentinel_propagates_throw_and_quit() {
 
     ev.eval_str("(setq test-quit-armed t)")
         .expect("arm quit sentinel");
-    start_quit_tx
-        .send(())
-        .expect("release server TLS handshake for quit sentinel");
+    server.advance_to(2);
 
     let quit_res = ev.eval_str(
         r#"
@@ -21749,9 +21826,9 @@ fn gnutls_nonblocking_pending_handshake_does_not_busy_spin_command_input_wait() 
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind silent peer");
     let port = listener.local_addr().expect("local addr").port();
 
-    let server = TestServerHandle::spawn(port, move |done_rx, _stop| {
+    let server = TestServerHandle::spawn(listener, move |listener, gate| {
         let (_stream, _) = listener.accept().expect("accept client");
-        let _ = done_rx.recv();
+        gate.wait_done();
     });
 
     let ca_pem = loopback::resources().join("ca.pem");
@@ -21810,13 +21887,17 @@ fn gnutls_nonblocking_pending_handshake_does_not_busy_spin_command_input_wait() 
             .wait_for_command_input(None)
             .expect("unbounded wait_for_command_input");
         assert_eq!(
+            unbounded_outcome,
+            CommandInputWaitOutcome::InputPending,
+            "unbounded wait must block until synthetic input arrives rather than exiting early on StillPending TLS"
+        );
+        assert_eq!(
             publication
                 .finish()
                 .expect("unbounded command-input wait must enter kernel wait instead of spinning")
                 .witness,
             WaitWitness::InputWaitEntered
         );
-        assert_eq!(unbounded_outcome, CommandInputWaitOutcome::InputPending);
     }
 
     let _ = ev.eval_str("(delete-process test-idle-tls-proc)");
@@ -21839,16 +21920,15 @@ fn gnutls_boot_nonblocking_handshake_failure_returns_protocol_error_and_send_doe
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind non-TLS peer");
     let port = listener.local_addr().expect("local addr").port();
 
-    let (wrote_tx, wrote_rx) = std::sync::mpsc::channel::<()>();
-    let server = TestServerHandle::spawn(port, move |done_rx, stop| {
+    let server = TestServerHandle::spawn(listener, move |listener, gate| {
         let (mut stream, _) = listener.accept().expect("accept client");
-        if stop.load(std::sync::atomic::Ordering::SeqCst) {
+        if gate.is_stopped() {
             return;
         }
         let _ = stream.write_all(b"NOT_TLS_GARBAGE\r\n");
         let _ = stream.flush();
-        let _ = wrote_tx.send(());
-        let _ = done_rx.recv();
+        gate.advance_to(1);
+        gate.wait_done();
     });
 
     let ca_pem = loopback::resources().join("ca.pem");
@@ -21876,15 +21956,25 @@ fn gnutls_boot_nonblocking_handshake_failure_returns_protocol_error_and_send_doe
     };
 
     // Wait until the peer has flushed `NOT_TLS_GARBAGE\r\n` AND the kernel
-    // receive buffer holds at least 1 byte (without consuming it; `:filter t`
-    // intentionally keeps poller read interest disabled).
-    wrote_rx.recv().expect("peer wrote non-TLS garbage");
+    // receive buffer holds at least the 5-byte TLS record header (without
+    // consuming bytes; `:filter t` intentionally keeps poller read interest off).
+    assert!(
+        server.wait_for(1),
+        "peer exited before writing non-TLS garbage"
+    );
     let deadline = Instant::now() + Duration::from_secs(15);
-    let mut peek_buf = [0u8; 1];
+    let mut peek_buf = [0u8; 5];
     loop {
         match client_sock.peek(&mut peek_buf) {
-            Ok(n) if n > 0 => break,
-            Ok(_) => panic!("unexpected EOF peeking non-TLS garbage"),
+            Ok(n) if n >= 5 => break,
+            Ok(0) => panic!("unexpected EOF peeking non-TLS garbage"),
+            Ok(_) => {
+                assert!(
+                    Instant::now() < deadline,
+                    "timed out waiting for 5-byte non-TLS header in client receive buffer"
+                );
+                std::thread::yield_now();
+            }
             Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
                 assert!(
                     Instant::now() < deadline,
@@ -21922,6 +22012,87 @@ fn gnutls_boot_nonblocking_handshake_failure_returns_protocol_error_and_send_doe
         crate::emacs_core::print::print_value(&result),
         "(-15 t t \"An unexpected TLS packet was received.\" 8 open (error \"Process fail-boot-send not running: failed with code TLS negotiation failed\n\") failed \"TLS negotiation failed\" 3)"
     );
+}
+
+/// Regression (#15178): proves `TestServerHandle` unwinds promptly on a
+/// deliberate assertion panic while the server thread is parked in `accept()`,
+/// in `gate.wait_for(1)` after accepting a client, or in `gate.wait_done()`,
+/// AND proves `Drop` performs zero port pokes after a normal `finish()`.
+#[cfg(unix)]
+#[test]
+fn gnutls_test_server_handle_unwinds_cleanly_on_panic_and_never_pokes_after_finish() {
+    use std::net::{TcpListener, TcpStream};
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    // 1. Panic while server is parked in `listener.accept()`.
+    let exited_accept = Arc::new(AtomicBool::new(false));
+    let exited_accept_bg = Arc::clone(&exited_accept);
+    let r1 = catch_unwind(AssertUnwindSafe(move || {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind accept-panic listener");
+        let _server = TestServerHandle::spawn(listener, move |listener, gate| {
+            let _ = listener.accept();
+            if gate.is_stopped() {
+                exited_accept_bg.store(true, Ordering::SeqCst);
+            }
+        });
+        panic!("deliberate assertion failure before client connect");
+    }));
+    assert!(r1.is_err(), "deliberate panic must unwind");
+    assert!(
+        exited_accept.load(Ordering::SeqCst),
+        "server parked in accept() must observe cancel and exit cleanly on panic"
+    );
+
+    // 2. Panic while server accepted a live client AND is parked in `gate.wait_for(1)`
+    // (the exact AB-BA deadlock scenario when phase senders lived outside the handle).
+    let exited_gate = Arc::new(AtomicBool::new(false));
+    let exited_gate_bg = Arc::clone(&exited_gate);
+    let r2 = catch_unwind(AssertUnwindSafe(move || {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind gate-panic listener");
+        let port = listener.local_addr().expect("local addr").port();
+        let server = TestServerHandle::spawn(listener, move |listener, gate| {
+            let (_stream, _) = listener.accept().expect("accept client");
+            gate.advance_to(1);
+            // Park on stage 2, which the panicking client will never release.
+            let reached = gate.wait_for(2);
+            assert!(!reached, "cancelled gate wait must return false");
+            exited_gate_bg.store(true, Ordering::SeqCst);
+        });
+        let _client = TcpStream::connect(("127.0.0.1", port)).expect("connect client");
+        assert!(
+            server.wait_for(1),
+            "server must have accepted client and entered stage-2 wait"
+        );
+        panic!("deliberate assertion failure while server is parked on gate.wait_for(2)");
+    }));
+    assert!(r2.is_err(), "deliberate panic must unwind");
+    assert!(
+        exited_gate.load(Ordering::SeqCst),
+        "server parked on gate.wait_for must exit cleanly on panic without AB-BA deadlock"
+    );
+
+    // 3. Normal `finish()` path: Drop must NOT poke the released port.
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind normal-finish listener");
+    let port = listener.local_addr().expect("local addr").port();
+    let server = TestServerHandle::spawn(listener, move |listener, gate| {
+        let (_stream, _) = listener.accept().expect("accept client");
+        gate.wait_done();
+    });
+    let client = TcpStream::connect(("127.0.0.1", port)).expect("connect client");
+    server.finish();
+    drop(client);
+    // Re-bind the exact same port (if not taken by another process) and verify
+    // zero stray/phantom connections were queued by `TestServerHandle::drop`.
+    if let Ok(rebound) = TcpListener::bind(("127.0.0.1", port)) {
+        rebound.set_nonblocking(true).expect("set nonblocking");
+        match rebound.accept() {
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
+            Ok(_) => panic!("phantom connection arrived on recycled port after finish()"),
+            Err(e) => panic!("unexpected accept error on rebound port: {e}"),
+        }
+    }
 }
 
 #[cfg(unix)]
