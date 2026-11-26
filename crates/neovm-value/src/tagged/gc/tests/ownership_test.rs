@@ -958,7 +958,7 @@ fn concurrent_mark_defers_mapped_strings_and_marks_their_interval_children() {
 
     // Termination marked it on the mapped path and traced the child.
     let idx = heap.mapped_string_index_by_addr[&(mapped as usize)];
-    assert!(heap.mapped_string_objects[idx].marked);
+    assert!(heap.mapped_string_objects[idx].is_marked());
     assert_eq!(
         unsafe { (*c.xcons_ptr()).load_car() }.0,
         TaggedValue::fixnum(7).0,
@@ -1095,7 +1095,7 @@ fn concurrent_mapped_subr_still_deferred_and_side_table_marked() {
 
     // The termination marked it via the mapped side table.
     let idx = heap.mapped_veclike_index_by_addr[&(mapped as usize)];
-    assert!(heap.mapped_veclike_objects[idx].marked);
+    assert!(heap.mapped_veclike_objects[idx].is_marked());
 
     // Free the fake image object after the heap is gone.
     drop(heap);
@@ -1605,7 +1605,7 @@ fn concurrent_mapped_vector_still_deferred_and_traced() {
 
     // Termination marked it on the mapped path and traced its child.
     let idx = heap.mapped_veclike_index_by_addr[&(mapped as usize)];
-    assert!(heap.mapped_veclike_objects[idx].marked);
+    assert!(heap.mapped_veclike_objects[idx].is_marked());
     assert_eq!(
         unsafe { (*c.xcons_ptr()).load_car() }.0,
         TaggedValue::fixnum(21).0,

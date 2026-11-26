@@ -947,11 +947,11 @@ impl TaggedHeap {
             return false;
         };
         let object = &mut self.mapped_veclike_objects[index];
-        debug_assert!(std::ptr::eq(object.header as *const VecLikeHeader, ptr));
-        if object.marked {
+        debug_assert!(std::ptr::eq(object.header() as *const VecLikeHeader, ptr));
+        if object.is_marked() {
             return false;
         }
-        object.marked = true;
+        object.set_marked(true);
         true
     }
 
@@ -960,11 +960,11 @@ impl TaggedHeap {
             return false;
         };
         let object = &mut self.mapped_string_objects[index];
-        debug_assert!(std::ptr::eq(object.ptr as *const StringObj, ptr));
-        if object.marked {
+        debug_assert!(std::ptr::eq(object.ptr() as *const StringObj, ptr));
+        if object.is_marked() {
             return false;
         }
-        object.marked = true;
+        object.set_marked(true);
         true
     }
 
@@ -1899,21 +1899,29 @@ impl TaggedHeap {
         let veclike_marked = self
             .mapped_veclike_objects
             .iter()
-            .filter(|object| object.marked)
+            .filter(|object| object.is_marked())
             .count();
         let string_total = self.mapped_string_objects.len();
         let string_marked = self
             .mapped_string_objects
             .iter()
-            .filter(|object| object.marked)
+            .filter(|object| object.is_marked())
             .count();
-        let cons_total: usize = self.mapped_cons_ranges.iter().map(|range| range.len).sum();
+        let cons_total: usize = self
+            .mapped_cons_ranges
+            .iter()
+            .map(MappedConsRange::len)
+            .sum();
         let cons_marked: usize = self
             .mapped_cons_ranges
             .iter()
             .map(MappedConsRange::live_count)
             .sum();
-        let float_total: usize = self.mapped_float_ranges.iter().map(|range| range.len).sum();
+        let float_total: usize = self
+            .mapped_float_ranges
+            .iter()
+            .map(MappedFloatRange::len)
+            .sum();
         let float_marked: usize = self
             .mapped_float_ranges
             .iter()

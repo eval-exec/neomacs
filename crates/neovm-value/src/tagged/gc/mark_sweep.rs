@@ -249,10 +249,10 @@ impl TaggedHeap {
                 range.clear_marks();
             }
             for object in &mut self.mapped_veclike_objects {
-                object.marked = false;
+                object.set_marked(false);
             }
             for object in &mut self.mapped_string_objects {
-                object.marked = false;
+                object.set_marked(false);
             }
         }
         let clear_mapped_done = std::time::Instant::now();
@@ -341,7 +341,11 @@ impl TaggedHeap {
                     unsafe {
                         MappedVeclikeScanSnapshot::capture(
                             &world,
-                            world.heap().mapped_veclike_objects.iter().map(|o| o.header),
+                            world
+                                .heap()
+                                .mapped_veclike_objects
+                                .iter()
+                                .map(MappedVecLikeObject::header),
                         )
                     }
                 };
@@ -349,7 +353,7 @@ impl TaggedHeap {
                 self.staged_mapped_cons_scan = Some(
                     self.mapped_cons_ranges
                         .iter()
-                        .map(|range| (range.start as usize, range.len))
+                        .map(|range| (range.start() as usize, range.len()))
                         .collect(),
                 );
             } else {
@@ -468,7 +472,7 @@ impl TaggedHeap {
             .mapped_veclike_objects
             .iter()
             .filter_map(|object| {
-                let header = object.header;
+                let header = object.header();
                 // SAFETY: `header` is a live mapped veclike for the dump's lifetime.
                 unsafe {
                     if (*header).type_tag == VecLikeType::HashTable {
@@ -563,7 +567,7 @@ impl TaggedHeap {
         let veclike: Vec<*mut VecLikeHeader> = self
             .mapped_veclike_objects
             .iter()
-            .map(|o| o.header)
+            .map(MappedVecLikeObject::header)
             .collect();
         for ptr in veclike {
             // SAFETY: object header was walked from `self`'s live arena/boxed partition during world-stopped GC.
@@ -576,7 +580,7 @@ impl TaggedHeap {
         let cons_ranges: Vec<(*mut ConsCell, usize)> = self
             .mapped_cons_ranges
             .iter()
-            .map(|range| (range.start, range.len))
+            .map(|range| (range.start(), range.len()))
             .collect();
         for (start, len) in cons_ranges {
             for i in 0..len {
@@ -590,8 +594,11 @@ impl TaggedHeap {
             }
         }
         // -- mapped strings (text-prop intervals) --
-        let strings: Vec<*mut StringObj> =
-            self.mapped_string_objects.iter().map(|o| o.ptr).collect();
+        let strings: Vec<*mut StringObj> = self
+            .mapped_string_objects
+            .iter()
+            .map(MappedStringObject::ptr)
+            .collect();
         for ptr in strings {
             let mut roots: Vec<TaggedValue> = Vec::new();
             let intervals = unsafe { (*ptr).data.intervals() };
@@ -815,10 +822,10 @@ impl TaggedHeap {
             range.mark_all();
         }
         for object in &mut self.mapped_veclike_objects {
-            object.marked = true;
+            object.set_marked(true);
         }
         for object in &mut self.mapped_string_objects {
-            object.marked = true;
+            object.set_marked(true);
         }
     }
 
@@ -832,7 +839,7 @@ impl TaggedHeap {
         let cons_ranges: Vec<(*mut ConsCell, usize)> = self
             .mapped_cons_ranges
             .iter()
-            .map(|range| (range.start, range.len))
+            .map(|range| (range.start(), range.len()))
             .collect();
         for (start, len) in cons_ranges {
             for i in 0..len {
@@ -851,7 +858,7 @@ impl TaggedHeap {
         let veclike: Vec<*mut VecLikeHeader> = self
             .mapped_veclike_objects
             .iter()
-            .map(|o| o.header)
+            .map(MappedVecLikeObject::header)
             .collect();
         for ptr in veclike {
             #[cfg(any(test, feature = "test-support"))]
@@ -905,8 +912,11 @@ impl TaggedHeap {
     /// handshake while staging veclikes (atomic-read slots) and cons ranges
     /// for the GC thread.
     pub(super) fn seed_mapped_string_children(&mut self) {
-        let strings: Vec<*mut StringObj> =
-            self.mapped_string_objects.iter().map(|o| o.ptr).collect();
+        let strings: Vec<*mut StringObj> = self
+            .mapped_string_objects
+            .iter()
+            .map(MappedStringObject::ptr)
+            .collect();
         for ptr in strings {
             let mut roots: Vec<TaggedValue> = Vec::new();
             let intervals = unsafe { (*ptr).data.intervals() };
@@ -1095,7 +1105,7 @@ impl TaggedHeap {
             return self
                 .mapped_string_index_by_addr
                 .get(&addr)
-                .map(|&i| image_live || self.mapped_string_objects[i].marked)
+                .map(|&i| image_live || self.mapped_string_objects[i].is_marked())
                 .unwrap_or(true);
         }
         if value.is_float() {
@@ -1111,7 +1121,7 @@ impl TaggedHeap {
             return self
                 .mapped_veclike_index_by_addr
                 .get(&addr)
-                .map(|&i| image_live || self.mapped_veclike_objects[i].marked)
+                .map(|&i| image_live || self.mapped_veclike_objects[i].is_marked())
                 .unwrap_or(true);
         }
         true
@@ -1153,7 +1163,7 @@ impl TaggedHeap {
         let veclike: Vec<(*mut VecLikeHeader, VecLikeType)> = self
             .mapped_veclike_objects
             .iter()
-            .map(|o| (o.header, unsafe { (*o.header).type_tag }))
+            .map(|o| (o.header(), unsafe { (*o.header()).type_tag }))
             .collect();
         for (ptr, ty) in veclike {
             let owner = format!("{ty:?}");
@@ -1168,7 +1178,7 @@ impl TaggedHeap {
         let cons_ranges: Vec<(*mut ConsCell, usize)> = self
             .mapped_cons_ranges
             .iter()
-            .map(|range| (range.start, range.len))
+            .map(|range| (range.start(), range.len()))
             .collect();
         for (start, len) in cons_ranges {
             for i in 0..len {
@@ -1181,8 +1191,11 @@ impl TaggedHeap {
             }
         }
         // Mapped strings (text-property intervals).
-        let strings: Vec<*mut StringObj> =
-            self.mapped_string_objects.iter().map(|o| o.ptr).collect();
+        let strings: Vec<*mut StringObj> = self
+            .mapped_string_objects
+            .iter()
+            .map(MappedStringObject::ptr)
+            .collect();
         for ptr in strings {
             let mut roots: Vec<TaggedValue> = Vec::new();
             let intervals = unsafe { (*ptr).data.intervals() };
@@ -2424,8 +2437,16 @@ impl TaggedHeap {
             // Per-class dump composition: sizes the first-cycle-concurrent
             // work split (conses scan on the GC thread; veclikes/strings are
             // handshake-side until their concurrent-read safety is proven).
-            let dump_cons: usize = self.mapped_cons_ranges.iter().map(|range| range.len).sum();
-            let dump_float: usize = self.mapped_float_ranges.iter().map(|range| range.len).sum();
+            let dump_cons: usize = self
+                .mapped_cons_ranges
+                .iter()
+                .map(MappedConsRange::len)
+                .sum();
+            let dump_float: usize = self
+                .mapped_float_ranges
+                .iter()
+                .map(MappedFloatRange::len)
+                .sum();
             eprintln!(
                 "{}",
                 super::incremental::format_eager_gc_trace_line(

@@ -161,11 +161,14 @@ fn permanent_mapped_and_callback_payloads_body<K: EraKeeper>(
     let mapped_ptr = std::ptr::from_ref(&*mapped).cast_mut();
     let mapped_value = unsafe { TaggedValue::from_veclike_ptr(mapped_ptr.cast()) };
     assert!(WeakSweepPermit::mint(heap, keeper, &[mapped_value]).is_err());
-    heap.mapped_veclike_objects
-        .push(crate::tagged::gc::arena_pages::MappedVecLikeObject::new(
+    // SAFETY: `mapped` is a live boxed `HashTableObj` kept alive across the
+    // `supported(heap)` check and popped immediately below before drop.
+    heap.mapped_veclike_objects.push(unsafe {
+        crate::tagged::gc::arena_pages::MappedVecLikeObject::new(
             mapped_ptr.cast(),
             std::mem::size_of::<HashTableObj>(),
-        ));
+        )
+    });
     assert!(supported(heap).is_err());
     heap.mapped_veclike_objects.pop();
     unsafe { heap.alloc_user_ptr(std::ptr::null_mut(), None) };

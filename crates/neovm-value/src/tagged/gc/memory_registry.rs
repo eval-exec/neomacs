@@ -307,8 +307,10 @@ impl TaggedHeap {
         }
         debug_assert_eq!(start as usize % std::mem::align_of::<ConsCell>(), 0);
         self.extend_dump_span(start as usize, len.saturating_mul(size_of::<ConsCell>()));
+        // SAFETY: caller's `register_mapped_cons_range` safety contract guarantees
+        // `start..start+len` holds aligned, live `ConsCell`s for the heap's lifetime.
         self.mapped_cons_ranges
-            .push(MappedConsRange::new(start, len));
+            .push(unsafe { MappedConsRange::new(start, len) });
         let state = self.current_mutator_gc_mut();
         state.allocated_count = state.allocated_count.saturating_add(len);
     }
@@ -325,8 +327,10 @@ impl TaggedHeap {
         }
         debug_assert_eq!(start as usize % std::mem::align_of::<FloatObj>(), 0);
         self.extend_dump_span(start as usize, len.saturating_mul(size_of::<FloatObj>()));
+        // SAFETY: caller's `register_mapped_float_range` safety contract guarantees
+        // `start..start+len` holds aligned, live `FloatObj`s for the heap's lifetime.
         self.mapped_float_ranges
-            .push(MappedFloatRange::new(start, len));
+            .push(unsafe { MappedFloatRange::new(start, len) });
         let state = self.current_mutator_gc_mut();
         state.allocated_count = state.allocated_count.saturating_add(len);
     }
@@ -362,8 +366,10 @@ impl TaggedHeap {
             .mapped_veclike_index_by_addr
             .insert(header as usize, index);
         debug_assert!(prev.is_none(), "mapped vectorlike object registered twice");
+        // SAFETY: caller's `register_mapped_veclike_object` safety contract
+        // guarantees `header` is a complete, aligned, live veclike for the heap's lifetime.
         self.mapped_veclike_objects
-            .push(MappedVecLikeObject::new(header, byte_len));
+            .push(unsafe { MappedVecLikeObject::new(header, byte_len) });
         // SAFETY: this loader registration proves the complete mapped header
         // remains live until heap teardown.
         unsafe { self.register_image_hash_table(header) };
@@ -386,8 +392,10 @@ impl TaggedHeap {
         let index = self.mapped_string_objects.len();
         let prev = self.mapped_string_index_by_addr.insert(ptr as usize, index);
         debug_assert!(prev.is_none(), "mapped string object registered twice");
+        // SAFETY: caller's `register_mapped_string_object` safety contract
+        // guarantees `ptr` is a complete, aligned, live `StringObj` for the heap's lifetime.
         self.mapped_string_objects
-            .push(MappedStringObject::new(ptr, byte_len));
+            .push(unsafe { MappedStringObject::new(ptr, byte_len) });
         let state = self.current_mutator_gc_mut();
         state.allocated_count = state.allocated_count.saturating_add(1);
 
@@ -537,8 +545,16 @@ impl TaggedHeap {
                 .layout_stats(|object| Self::bignum_payload_layout(&object.value)),
         ];
 
-        let mapped_conses = self.mapped_cons_ranges.iter().map(|range| range.len).sum();
-        let mapped_floats = self.mapped_float_ranges.iter().map(|range| range.len).sum();
+        let mapped_conses = self
+            .mapped_cons_ranges
+            .iter()
+            .map(MappedConsRange::len)
+            .sum();
+        let mapped_floats = self
+            .mapped_float_ranges
+            .iter()
+            .map(MappedFloatRange::len)
+            .sum();
         let mut mapped = MappedLayoutStats {
             conses: mapped_conses,
             floats: mapped_floats,
@@ -550,19 +566,19 @@ impl TaggedHeap {
                 .saturating_add(
                     self.mapped_string_objects
                         .iter()
-                        .map(|object| object.byte_len)
+                        .map(MappedStringObject::byte_len)
                         .sum::<usize>(),
                 )
                 .saturating_add(
                     self.mapped_veclike_objects
                         .iter()
-                        .map(|object| object.byte_len)
+                        .map(MappedVecLikeObject::byte_len)
                         .sum::<usize>(),
                 ),
             ..MappedLayoutStats::default()
         };
         for object in &self.mapped_string_objects {
-            let payload = unsafe { Self::string_payload_layout(&(*object.ptr).data) };
+            let payload = unsafe { Self::string_payload_layout(&(*object.ptr()).data) };
             if payload.owned {
                 mapped.copied_string_payloads += 1;
                 mapped.copied_string_capacity_bytes = mapped
@@ -571,8 +587,8 @@ impl TaggedHeap {
             }
         }
         for object in &self.mapped_veclike_objects {
-            // SAFETY: `object.header` is a live mapped `VecLikeHeader` registered in `self`.
-            let payload = unsafe { Self::veclike_payload_layout(object.header) };
+            // SAFETY: `object.header()` is a live mapped `VecLikeHeader` registered in `self`.
+            let payload = unsafe { Self::veclike_payload_layout(object.header()) };
             if payload.owned {
                 mapped.copied_veclike_payloads += 1;
                 mapped.copied_veclike_capacity_bytes = mapped

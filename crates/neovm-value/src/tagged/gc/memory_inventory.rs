@@ -664,31 +664,31 @@ fn mapped_inventory(heap: &TaggedHeap, marks_final: bool) -> MappedInventory {
         ..MappedInventory::default()
     };
     for range in &heap.mapped_cons_ranges {
-        out.conses += range.len;
+        out.conses += range.len();
         add(
             &mut out.image_object_bytes,
-            range.len * size_of::<ConsCell>(),
+            range.len() * size_of::<ConsCell>(),
         );
         if let Some(live) = out.marked_live_image_object_bytes.as_mut() {
             add(live, range.live_count() * size_of::<ConsCell>());
         }
     }
     for range in &heap.mapped_float_ranges {
-        out.floats += range.len;
+        out.floats += range.len();
         add(
             &mut out.image_object_bytes,
-            range.len * size_of::<FloatObj>(),
+            range.len() * size_of::<FloatObj>(),
         );
         if let Some(live) = out.marked_live_image_object_bytes.as_mut() {
             add(live, range.live_count() * size_of::<FloatObj>());
         }
     }
     for object in &heap.mapped_string_objects {
-        add(&mut out.image_object_bytes, object.byte_len);
-        // SAFETY: `object.ptr` points to a live mapped `StringObj` owned by `heap`'s image.
-        let payload = unsafe { string_payload_with_text_properties(&(*object.ptr).data) };
-        // SAFETY: `object.ptr` begins with a live `GcHeader` for a mapped `StringObj`.
-        let text_properties = unsafe { text_property_storage(object.ptr.cast()) };
+        add(&mut out.image_object_bytes, object.byte_len());
+        // SAFETY: `object.ptr()` points to a live mapped `StringObj` owned by `heap`'s image.
+        let payload = unsafe { string_payload_with_text_properties(&(*object.ptr()).data) };
+        // SAFETY: `object.ptr()` begins with a live `GcHeader` for a mapped `StringObj`.
+        let text_properties = unsafe { text_property_storage(object.ptr().cast()) };
         add(
             &mut out.known_text_property_capacity_bytes,
             text_properties.known_owned_capacity_bytes,
@@ -698,15 +698,15 @@ fn mapped_inventory(heap: &TaggedHeap, marks_final: bool) -> MappedInventory {
             &mut out.copied_owned_payload_capacity_bytes,
             payload.capacity_bytes,
         );
-        if object.marked
+        if object.is_marked()
             && let Some(live) = out.marked_live_image_object_bytes.as_mut()
         {
-            add(live, object.byte_len);
+            add(live, object.byte_len());
         }
     }
     for object in &heap.mapped_veclike_objects {
-        add(&mut out.image_object_bytes, object.byte_len);
-        let header = object.header.cast::<GcHeader>();
+        add(&mut out.image_object_bytes, object.byte_len());
+        let header = object.header().cast::<GcHeader>();
         // SAFETY: `header` points to a live mapped veclike `GcHeader` owned by `heap`.
         let payload = unsafe { header_payload(heap, header) };
         // SAFETY: `header` points to a live mapped veclike `GcHeader` owned by `heap`.
@@ -723,10 +723,10 @@ fn mapped_inventory(heap: &TaggedHeap, marks_final: bool) -> MappedInventory {
             payload.capacity_bytes.saturating_sub(shared),
         );
         add(&mut out.bytecode_shared_reference_bytes, shared);
-        if object.marked
+        if object.is_marked()
             && let Some(live) = out.marked_live_image_object_bytes.as_mut()
         {
-            add(live, object.byte_len);
+            add(live, object.byte_len());
         }
     }
     out
