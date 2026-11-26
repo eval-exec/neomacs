@@ -15,9 +15,13 @@ pub(crate) mod source_jit_cache;
 pub(crate) mod source_jit_compiler;
 mod sync;
 mod text_caches;
+pub(crate) mod thread_control;
 pub(crate) mod world_seat;
 pub(crate) mod world_turn;
 
+#[cfg(test)]
+#[path = "../tests/e53a_thread_control_test.rs"]
+mod e53a_thread_control_tests;
 #[cfg(test)]
 #[path = "../tests/green_era_switch_test.rs"]
 mod green_era_switch_tests;

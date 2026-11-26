@@ -88,16 +88,11 @@ impl Control {
                         let Some(requester) = era.requester.clone() else {
                             std::process::abort();
                         };
-                        era.turn = GroupTurn::Requested;
-                        EraFinishStep::CaseIi {
-                            requester,
-                            port: era.port.take(),
-                        }
+                        let port = era.port.take();
+                        state.set_era_turn(GroupTurn::Requested);
+                        EraFinishStep::CaseIi { requester, port }
                     } else {
-                        let EraState::EraOpen(era) = &mut state.era else {
-                            std::process::abort();
-                        };
-                        era.turn = GroupTurn::Idle;
+                        state.set_era_turn(GroupTurn::Idle);
                         EraFinishStep::EndToIdle
                     }
                 } else if let Some(turn) = Self::pick_service(&mut state) {
@@ -106,10 +101,7 @@ impl Control {
                     match Self::pick(&mut state) {
                         Some((key, None)) => EraFinishStep::Dispatch(NextOwner::Resume(key)),
                         Some((_, Some(_))) | None => {
-                            let EraState::EraOpen(era) = &mut state.era else {
-                                std::process::abort();
-                            };
-                            era.turn = GroupTurn::Idle;
+                            state.set_era_turn(GroupTurn::Idle);
                             EraFinishStep::EndToIdle
                         }
                     }
@@ -151,7 +143,7 @@ impl Control {
                 }
                 let action = {
                     let mut state = self.state();
-                    if state.senders.is_empty() {
+                    if state.baton_participants_empty() {
                         IdleAction::Done
                     } else {
                         let turn = match &state.era {
@@ -216,7 +208,7 @@ impl Control {
                     }
                     IdleAction::WaitDeadline(deadline) => {
                         let state = self.state();
-                        if state.senders.is_empty()
+                        if state.baton_participants_empty()
                             || !matches!(
                                 &state.era,
                                 EraState::EraOpen(era) if era.turn == GroupTurn::Idle
@@ -234,23 +226,23 @@ impl Control {
                         );
                     }
                     IdleAction::CheckDeadlock => {
-                        // QD2: if keeper confirms no live parallel owner and
-                        // empty ring, wake surviving blocked Baton threads and
-                        // hand off a fresh WorldTurn (matching non-era finish's
-                        // NoRunnable path) so the carrier never wedges.
-                        if self.query_era_idle_for_deadlock() {
+                        // D8 (Q2a): BEFORE check under lock -> IdleQuery
+                        // outside lock -> AFTER check under lock verifying
+                        // unchanged epoch, all Baton and Parallel participants
+                        // in deadlock waits, and all enrolled owners accounted
+                        // for. Wake surviving blocked threads and hand off a
+                        // fresh WorldTurn so the carrier never wedges.
+                        if let Some((epoch_before, enrolled_owners)) =
+                            self.query_era_idle_for_deadlock()
+                        {
                             let port = {
                                 let mut state = self.state();
-                                let still_idle = matches!(
-                                    &state.era,
-                                    EraState::EraOpen(era) if era.turn == GroupTurn::Idle
-                                );
-                                let any_live_progress = Self::eligible_runnable_count(&state) > 0
-                                    || Self::queued_native_work(&state) == super::NativeWork::Ready
-                                    || state.waits.select_len() > 0
-                                    || state.physical.get(&ThreadKey::Main)
-                                        == Some(&OwnerLocation::NativeReleased);
-                                if still_idle && !any_live_progress && !state.senders.is_empty() {
+                                if Self::confirm_era_deadlock_after(
+                                    &state,
+                                    epoch_before,
+                                    enrolled_owners,
+                                ) && !state.baton_participants_empty()
+                                {
                                     state.closing = true;
                                     let blocked: Vec<ThreadKey> = state
                                         .waits
@@ -277,7 +269,7 @@ impl Control {
                             continue;
                         }
                         let state = self.state();
-                        if state.senders.is_empty()
+                        if state.baton_participants_empty()
                             || !matches!(
                                 &state.era,
                                 EraState::EraOpen(era) if era.turn == GroupTurn::Idle

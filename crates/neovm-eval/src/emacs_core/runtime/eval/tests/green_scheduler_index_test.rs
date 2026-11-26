@@ -80,7 +80,7 @@ fn slot_wait(wait: Wait) -> SlotWait {
         Wait::Mutex(id) => SlotWait::Mutex(id.0),
         Wait::Condition(id) => SlotWait::Condition(id.0),
         Wait::Select { wait_end } => SlotWait::Select { wait_end },
-        Wait::HostRequest(_) => SlotWait::HostRequest,
+        Wait::HostRequest(_) | Wait::ParallelActive | Wait::Native => SlotWait::HostRequest,
         Wait::Exited => SlotWait::Exited,
     }
 }

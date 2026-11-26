@@ -204,6 +204,20 @@ pub(crate) enum CollectRefusal {
     Poisoned,
 }
 
+/// Result of [`KeeperMsg::IdleQuery`] (E5.3 D8 / L6.7b QD2).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum IdleStatus {
+    /// A turn is out, a request is queued, a collection is requested, or the
+    /// ring HEAD is held for a collecting owner.
+    Busy,
+    /// Between stops with an empty ring, no pending collection, and no held
+    /// HEAD. `enrolled_owners` is the number of live enrolled parallel owners
+    /// (`Driver::owners.len()`) so `Control` can confirm every enrolled owner
+    /// is accounted for in its deadlock-wait set without `owners.is_empty()`
+    /// blocking D8 mixed deadlocks.
+    Idle { enrolled_owners: usize },
+}
+
 /// Owner or Baton group -> keeper. One inbox, so each sender's messages
 /// arrive in the order it sent them.
 pub(crate) enum KeeperMsg<Receipt, Returned, Ticket, Reason, WorldReturned, Report> {
@@ -242,19 +256,13 @@ pub(crate) enum KeeperMsg<Receipt, Returned, Ticket, Reason, WorldReturned, Repo
     Collect {
         reply: Option<mpsc::SyncSender<Result<Report, CollectRefusal>>>,
     },
-    /// The Baton group found no runnable thread (L6.7b b4, lead #14147 QD2):
-    /// may it report a deadlock? REPLY gets `true` only when the keeper is
-    /// between stops with no live parallel owner, nothing queued and no
-    /// collection asked for. Any other state answers `false`: a missed
-    /// verdict is acceptable, a false one never is.
-    ///
-    /// "Live parallel owner" means an owner enrolled with this driver and
-    /// not exited. A mutator registered with the era but never enrolled is
-    /// invisible to the query. Accepted limitation (lead #14206): any
-    /// enrolled owner blocks the verdict, so a deadlock between Baton
-    /// waiters and a live owner that never wakes them is a silent hang, not
-    /// a reported deadlock.
-    IdleQuery { reply: mpsc::SyncSender<bool> },
+    /// Deadlock-idle query (L6.7b QD2, extended by E5.3 D8): REPLY gets
+    /// [`IdleStatus::Idle`] when the keeper is between stops with nothing
+    /// queued, no collection requested, and no held ring HEAD, carrying
+    /// `enrolled_owners` so `Control` can verify under its lock (before and
+    /// after) that every enrolled parallel owner is in a deadlock wait with no
+    /// pending wake. Any other state answers [`IdleStatus::Busy`].
+    IdleQuery { reply: mpsc::SyncSender<IdleStatus> },
 }
 
 /// How a lent turn ended: the Baton group's interval (L6.7b b5) or an
@@ -646,11 +654,17 @@ impl<'o, O: KeeperOps> Driver<'o, O> {
                 Ok(())
             }
             KeeperMsg::IdleQuery { reply } => {
-                let idle = self.owners.is_empty()
-                    && self.queued_len() == 0
+                let status = if self.queued_len() == 0
                     && !self.collect_requested
-                    && self.head_hold.is_none();
-                let _ = reply.try_send(idle);
+                    && self.head_hold.is_none()
+                {
+                    IdleStatus::Idle {
+                        enrolled_owners: self.owners.len(),
+                    }
+                } else {
+                    IdleStatus::Busy
+                };
+                let _ = reply.try_send(status);
                 Ok(())
             }
         }
@@ -1063,9 +1077,9 @@ impl<'o, O: KeeperOps> Driver<'o, O> {
                     self.queue_collect(reply);
                     self.set_waiter(true);
                 }
-                // A turn is out, so the group cannot be idle (QD2).
+                // A turn is out, so the group cannot be idle (QD2 / D8).
                 KeeperMsg::IdleQuery { reply } => {
-                    let _ = reply.try_send(false);
+                    let _ = reply.try_send(IdleStatus::Busy);
                 }
             }
         }
@@ -1133,9 +1147,9 @@ impl<'o, O: KeeperOps> Driver<'o, O> {
                     return Err(Breach::GroupAbandoned { cause });
                 }
                 KeeperMsg::Collect { reply } => self.queue_collect(reply),
-                // An owner's turn is out, so the group cannot be idle (QD2).
+                // An owner's turn is out, so the group cannot be idle (QD2 / D8).
                 KeeperMsg::IdleQuery { reply } => {
-                    let _ = reply.try_send(false);
+                    let _ = reply.try_send(IdleStatus::Busy);
                 }
             }
         }

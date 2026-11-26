@@ -1168,6 +1168,14 @@ impl Context {
     /// existing wait backend remains responsible for the block.
     #[doc(hidden)]
     pub fn green_select_switch(&mut self, wait_time: Duration) -> Result<SelectTurn, Flow> {
+        if self.in_active_serial_turn() {
+            return Err(signal(
+                "error",
+                vec![Value::string(
+                    "neovm internal error: select wait cannot fall through to simulated threading inside a parallel serial turn",
+                )],
+            ));
+        }
         if self.green_seat().is_none() {
             return Ok(SelectTurn::Block(wait_time));
         }

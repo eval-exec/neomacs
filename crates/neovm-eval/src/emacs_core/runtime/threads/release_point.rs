@@ -80,6 +80,14 @@ impl Context {
 
     #[doc(hidden)]
     pub fn sim_release_point(&mut self, _point: SimReleasePoint) -> Result<bool, Flow> {
+        if self.in_active_serial_turn() {
+            return Err(signal(
+                LispCondition::Error,
+                vec![Value::string(
+                    "neovm internal error: sim_release_point cannot run inside a parallel serial turn",
+                )],
+            ));
+        }
         if self.green_threads_running() || !self.threads.any_thread_created() {
             return Ok(false);
         }

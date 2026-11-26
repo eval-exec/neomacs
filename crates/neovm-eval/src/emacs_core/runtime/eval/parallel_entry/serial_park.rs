@@ -136,15 +136,24 @@ pub(crate) trait KeeperPort {
     fn collect_root_epoch(&self) -> Option<neovm_value::tagged::gc::FacadeEpochRetention> {
         None
     }
+    /// Query the keeper's ring/stop/collect idleness for E5.3 D8 deadlock
+    /// detection. Defaults conservatively to [`IdleStatus::Busy`] for test
+    /// ports that do not talk to a real keeper driver.
+    fn idle_status_for_deadlock(
+        &self,
+        _bound: std::time::Duration,
+    ) -> Result<super::driver_core::IdleStatus, PortRefusal> {
+        Ok(super::driver_core::IdleStatus::Busy)
+    }
 }
 
 /// A turn in progress: the E5.1 turn, the seat that received its ticket,
 /// and the armed guard over that ticket.
 #[must_use = "a serial turn must end or park"]
 pub(crate) struct LiveSerial<'t, C: SerialHost, G: LendGuard = ()> {
-    turn: SerialTurn<'t, C, LocalSerialOwner>,
-    active: Option<(SerialDestination, G)>,
-    home: SerialHome,
+    pub(super) turn: SerialTurn<'t, C, LocalSerialOwner>,
+    pub(super) active: Option<(SerialDestination, G)>,
+    pub(super) home: SerialHome,
 }
 
 /// What a turn parked for a collection waits on (L6.7c (c)): the grant the
@@ -176,7 +185,7 @@ pub(crate) enum TurnStartRefusal<R, A> {
 /// refusal sends the ticket back unopened; an activation refusal gives the
 /// received owner back through its seat. Activation owns its own undo:
 /// nothing is half-activated when it refuses.
-fn receive<P: KeeperPort, R, A>(
+pub(super) fn receive<P: KeeperPort, R, A>(
     home: SerialHome,
     grant: Grant,
     guard: P::LendGuard,
@@ -221,7 +230,11 @@ fn returned(mut seat: SerialDestination, local: LocalSerialOwner) -> ReturnedSer
 }
 
 /// Finish a local owner and give its ticket back.
-fn give_back(seat: SerialDestination, local: LocalSerialOwner, port: &mut impl KeeperPort) {
+pub(super) fn give_back(
+    seat: SerialDestination,
+    local: LocalSerialOwner,
+    port: &mut impl KeeperPort,
+) {
     port.give_back(returned(seat, local));
 }
 

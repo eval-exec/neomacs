@@ -291,6 +291,14 @@ pub fn builtin_sleep_for(
 
     let total_secs = secs + millis / 1000.0;
     if total_secs > 0.0 {
+        if eval.in_active_serial_turn() {
+            return Err(signal(
+                "error",
+                vec![Value::string(
+                    "neovm internal error: sleep-for cannot fall through to simulated threading inside a parallel serial turn",
+                )],
+            ));
+        }
         if eval.threads().current_thread_id() != 0 && !eval.green_threads_running() {
             // The worker is already running because its caller released the
             // global lock (`thread_select`, src/thread.c:613-643). Parking

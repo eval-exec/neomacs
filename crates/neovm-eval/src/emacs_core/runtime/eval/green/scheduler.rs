@@ -8,11 +8,14 @@
 //! A thread waiting for a mutex, a condition, another thread's end or a
 //! deadline is not ready until another thread makes it so.
 
-use super::super::parallel_entry::driver_core::RingWaiter;
+use super::super::parallel_entry::driver_core::{IdleStatus, RingWaiter};
 use super::super::parallel_entry::keeper_driver::{
     CollectRefusal, GroupPort, GroupRequestSender, WorldLend,
 };
-use super::super::parallel_entry::serial_park::PortRefusal;
+use super::super::parallel_entry::serial_park::{KeeperPort, PortRefusal};
+mod sync {
+    pub(super) use std::sync::{Arc, Condvar, Mutex, PoisonError, atomic, mpsc};
+}
 use super::super::parallel_entry::world_seat::prove_lent_world_stowed;
 use super::super::parallel_entry::world_turn::{WorldReturned, WorldTurn};
 use super::super::world::{Baton, EraWorldHandle, TurnRight};
@@ -35,6 +38,23 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock, PoisonError};
 use std::time::{Duration, Instant};
 
 mod completion_exit;
+pub(crate) mod wait_core;
+
+pub(crate) use wait_core::{OwnerWake, ParallelParticipant, Participant, SignalHint};
+
+/// Outcome of a parallel owner blocking on `OwnerWake` in a releasing wait
+/// (`Wait::Mutex`, `Wait::Condition`, or `Wait::Join`) under E5.3 D8.
+#[derive(Debug)]
+pub(crate) enum ParallelWaitOutcome {
+    /// Woken normally (mutex released, condition notified, target exited,
+    /// thread-signal received, or runtime closing).
+    Woken,
+    /// D8 confirmed that every Baton and Parallel participant is blocked in a
+    /// deadlock wait with an idle keeper ring and unchanged `deadlock_epoch`.
+    Deadlock {
+        invariant: Result<(), SchedulerIndexInconsistency>,
+    },
+}
 
 /// A Lisp thread's identity in the scheduler.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -87,8 +107,13 @@ impl ConditionId {
 /// What a thread that gave the Baton up waits for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Wait {
-    /// Nothing: it runs again in its turn.
+    /// Nothing: a Baton thread runs again in its turn.
     Runnable,
+    /// A parallel owner running owner-local code, inside a serial turn, or
+    /// woken and re-requesting a serial turn (E5.3 Q3a). Kept distinct from
+    /// `Wait::Runnable` so Baton `runnable_count` / `eligible_runnable_count`
+    /// never include parallel owners.
+    ParallelActive,
     /// Another thread's end (`thread-join`).
     Join(ThreadKey),
     /// A mutex another thread holds (`mutex-lock`).
@@ -98,6 +123,10 @@ pub(crate) enum Wait {
     /// A `thread_select` wait, ready on input, a scheduler event, or its
     /// absolute deadline. The scheduler watches I/O while no owner runs.
     Select { wait_end: Instant },
+    /// A parallel owner's blocking native wait (`ParkWait::Native`, E5.3 Q3b /
+    /// Row 3): not interrupted by `thread-signal`, and a live progress source
+    /// that prevents D8 deadlock detection.
+    Native,
     /// A rooted host request; only the service lifecycle can complete it.
     HostRequest(HostRequestKey),
     /// It ended.
@@ -624,7 +653,7 @@ impl WaitMap {
             Wait::Condition(id) => {
                 self.condition_waiters.entry(id).or_default().insert(key);
             }
-            Wait::HostRequest(_) | Wait::Exited => {}
+            Wait::ParallelActive | Wait::Native | Wait::HostRequest(_) | Wait::Exited => {}
         }
     }
 
@@ -653,7 +682,7 @@ impl WaitMap {
                 }
                 Self::remove_waiter(&mut self.condition_waiters, id, key)
             }
-            Wait::HostRequest(_) | Wait::Exited => {}
+            Wait::ParallelActive | Wait::Native | Wait::HostRequest(_) | Wait::Exited => {}
         }
     }
 
@@ -758,7 +787,7 @@ impl WaitMap {
                         ));
                     }
                 }
-                Wait::HostRequest(_) | Wait::Exited => {}
+                Wait::ParallelActive | Wait::Native | Wait::HostRequest(_) | Wait::Exited => {}
             }
         }
         // Reverse direction: no index entry may name a key whose current wait
@@ -1239,14 +1268,19 @@ enum EraState {
 
 #[derive(Default)]
 struct ControlState {
-    // There is only one Baton in the World, so a sender holding it proves
-    // every recipient queue empty. A single reusable slot also allows a
-    // newborn or parked recipient to receive after the sender has finished.
-    senders: BTreeMap<ThreadKey, mpsc::SyncSender<Wake>>,
+    // Participants registered with Green `Control` (E5.3 D1): Baton threads
+    // hold a single-slot `SyncSender<Wake>` channel; parallel owners hold a
+    // `ParallelParticipant` (`OwnerWake` + `SignalHint`) and never enter the
+    // Baton `ReadyQueue`.
+    participants: BTreeMap<ThreadKey, Participant<Wake>>,
     waits: WaitMap,
     ready: ReadyQueue,
     closing: bool,
     era: EraState,
+    /// Monotonic counter bumped on every wait/wake/participant/turn transition
+    /// so D8's before-and-after deadlock check rejects ABA races where a
+    /// participant wakes, runs, and re-parks during `IdleQuery`.
+    deadlock_epoch: u64,
     physical: BTreeMap<ThreadKey, OwnerLocation>,
     services: BTreeMap<HostRequestKey, ServiceMetadata>,
     pending_services: VecDeque<HostRequestKey>,
@@ -1255,6 +1289,42 @@ struct ControlState {
 }
 
 impl ControlState {
+    pub(super) fn bump_deadlock_epoch(&mut self) {
+        self.deadlock_epoch = self.deadlock_epoch.wrapping_add(1);
+    }
+
+    /// Transition `EraLink.turn` and bump `deadlock_epoch` together so every
+    /// `GroupTurn` change invalidates any in-flight D8 `IdleQuery` snapshot
+    /// (Nit D8-2).
+    pub(super) fn set_era_turn(&mut self, turn: GroupTurn) {
+        let EraState::EraOpen(era) = &mut self.era else {
+            std::process::abort();
+        };
+        era.turn = turn;
+        self.bump_deadlock_epoch();
+    }
+
+    pub(super) fn baton_participants_empty(&self) -> bool {
+        !self.participants.values().any(Participant::is_baton)
+    }
+
+    pub(super) fn has_baton_participant(&self, key: ThreadKey) -> bool {
+        self.participants
+            .get(&key)
+            .is_some_and(Participant::is_baton)
+    }
+
+    pub(super) fn baton_sender(&self, key: &ThreadKey) -> Option<&mpsc::SyncSender<Wake>> {
+        self.participants.get(key).and_then(Participant::as_baton)
+    }
+
+    pub(super) fn parallel_participant_count(&self) -> usize {
+        self.participants
+            .values()
+            .filter(|participant| participant.is_parallel())
+            .count()
+    }
+
     /// The one wait-index predicate: wait map and ready queue. Debug builds
     /// call it at every transition seam; release builds call it only at the
     /// cold deadlock verdict. It only reports; it never repairs.
@@ -1546,7 +1616,7 @@ impl Control {
         if registration.owner() == ThreadKey::Main {
             return Err(ServiceRefusal::MainIsRequester);
         }
-        if !state.senders.contains_key(&ThreadKey::Main)
+        if !state.has_baton_participant(ThreadKey::Main)
             || matches!(state.waits.get(&ThreadKey::Main), Some(Wait::Exited) | None)
         {
             return Err(ServiceRefusal::MainUnavailable);
@@ -2458,10 +2528,7 @@ impl Control {
         };
         let end_era_to_idle = next.is_none() && baton.is_era();
         if end_era_to_idle {
-            let EraState::EraOpen(era) = &mut state.era else {
-                std::process::abort();
-            };
-            era.turn = GroupTurn::Idle;
+            state.set_era_turn(GroupTurn::Idle);
         }
         drop(state);
         match next {
@@ -2718,10 +2785,7 @@ impl Control {
         };
         let end_era_to_idle = next.is_none() && baton.is_era();
         if end_era_to_idle {
-            let EraState::EraOpen(era) = &mut state.era else {
-                std::process::abort();
-            };
-            era.turn = GroupTurn::Idle;
+            state.set_era_turn(GroupTurn::Idle);
         }
         drop(state);
         match next {
@@ -3027,10 +3091,7 @@ impl Control {
         };
         let end_era_to_idle = next.is_none() && baton.is_era();
         if end_era_to_idle {
-            let EraState::EraOpen(era) = &mut state.era else {
-                std::process::abort();
-            };
-            era.turn = GroupTurn::Idle;
+            state.set_era_turn(GroupTurn::Idle);
         }
         drop(state);
         #[cfg(any(test, feature = "test-support"))]
@@ -3167,6 +3228,8 @@ impl Control {
                 | Wait::Mutex(_)
                 | Wait::Condition(_)
                 | Wait::Select { .. }
+                | Wait::ParallelActive
+                | Wait::Native
                 | Wait::Exited,
             )
             | None => {
@@ -3350,7 +3413,9 @@ impl Control {
     pub(crate) fn register_main(&self) -> mpsc::Receiver<Wake> {
         let (sender, receiver) = mpsc::sync_channel(1);
         let mut state = self.state();
-        state.senders.insert(ThreadKey::Main, sender);
+        state
+            .participants
+            .insert(ThreadKey::Main, Participant::Baton(sender));
         Self::set_wait(&mut state, ThreadKey::Main, Wait::Runnable);
         state
             .physical
@@ -3363,11 +3428,113 @@ impl Control {
     pub(crate) fn register_worker(&self, key: ThreadKey) -> mpsc::Receiver<Wake> {
         let (sender, receiver) = mpsc::sync_channel(1);
         let mut state = self.state();
-        state.senders.insert(key, sender);
+        state.participants.insert(key, Participant::Baton(sender));
         Self::set_wait(&mut state, key, Wait::Runnable);
         state.physical.insert(key, OwnerLocation::Receiving);
         Self::enqueue_ready(&mut state, key);
         receiver
+    }
+
+    /// Register an opt-in parallel owner with Green `Control` (E5.3 D1, D2).
+    /// Starts in `Wait::ParallelActive` (never `Wait::Runnable` and never
+    /// pushed into Baton's `ReadyQueue`). Returns its `(OwnerWake, SignalHint)`.
+    pub(crate) fn register_parallel(&self, key: ThreadKey) -> (OwnerWake, SignalHint) {
+        let participant = ParallelParticipant::new();
+        let wake = participant.wake.clone();
+        let hint = participant.signal_hint.clone();
+        {
+            let mut state = self.state();
+            state
+                .participants
+                .insert(key, Participant::Parallel(participant));
+            Self::set_wait(&mut state, key, Wait::ParallelActive);
+        }
+        self.notify_select();
+        (wake, hint)
+    }
+
+    /// Unregister an exited parallel owner after publishing `Wait::Exited`.
+    pub(crate) fn unregister_parallel(&self, key: ThreadKey) {
+        {
+            let mut state = self.state();
+            Self::set_wait(&mut state, key, Wait::Exited);
+            Self::remove_key(&mut state, key);
+        }
+        self.notify_select();
+    }
+
+    /// Whether KEY is registered as a parallel owner participant.
+    pub(crate) fn is_parallel_participant(&self, key: ThreadKey) -> bool {
+        self.state()
+            .participants
+            .get(&key)
+            .is_some_and(Participant::is_parallel)
+    }
+
+    /// Set KEY's atomic `SignalHint` if KEY is a parallel owner (E5.3 D2).
+    pub(crate) fn raise_parallel_signal_hint(&self, key: ThreadKey) {
+        let hint = self
+            .state()
+            .participants
+            .get(&key)
+            .and_then(Participant::as_parallel)
+            .map(|p| p.signal_hint.clone());
+        if let Some(hint) = hint {
+            hint.raise();
+        }
+    }
+
+    /// Clear KEY's atomic `SignalHint` after draining `ThreadManager`'s pending
+    /// error inside a serial turn (E5.3 D2).
+    pub(crate) fn clear_parallel_signal_hint(&self, key: ThreadKey) {
+        let hint = self
+            .state()
+            .participants
+            .get(&key)
+            .and_then(Participant::as_parallel)
+            .map(|p| p.signal_hint.clone());
+        if let Some(hint) = hint {
+            hint.clear_release();
+        }
+    }
+
+    /// Register a parallel owner's wait under `Control.state` lock BEFORE the
+    /// owner returns its serial ticket (E5.3 D1/D3/D4/D5/Row 3). Clears any
+    /// stale `OwnerWake` flag atomically under the same lock so subsequent
+    /// wakes are never lost and stale wakes never fire spuriously.
+    pub(crate) fn begin_parallel_wait(&self, key: ThreadKey, wait: Wait) {
+        debug_assert!(
+            !matches!(wait, Wait::Runnable | Wait::Exited),
+            "parallel owners never enter Wait::Runnable or Wait::Exited via begin_parallel_wait"
+        );
+        {
+            let mut state = self.state();
+            if let Some(parallel) = state
+                .participants
+                .get(&key)
+                .and_then(Participant::as_parallel)
+            {
+                parallel.wake.clear();
+            }
+            Self::set_wait(&mut state, key, wait);
+        }
+        self.notify_select();
+    }
+
+    /// Return a parallel owner to `Wait::ParallelActive` (e.g., after a
+    /// `Wait::Native` or `Wait::HostRequest` wait completes).
+    pub(crate) fn end_parallel_wait(&self, key: ThreadKey) {
+        {
+            let mut state = self.state();
+            if state
+                .participants
+                .get(&key)
+                .is_some_and(Participant::is_parallel)
+            {
+                Self::set_wait(&mut state, key, Wait::ParallelActive);
+            }
+        }
+        self.notify_select();
     }
 
     /// Undo `register_worker` for a worker whose carrier OS thread never
@@ -3392,17 +3559,17 @@ impl Control {
     #[cfg(test)]
     pub(crate) fn worker_registered_for_test(&self, key: ThreadKey) -> bool {
         let state = self.state();
-        state.senders.contains_key(&key)
+        state.participants.contains_key(&key)
             || state.waits.contains_key(&key)
             || state.physical.contains_key(&key)
     }
 
     /// Test-only: how many threads the registry currently charges (wait
-    /// entries, wake senders).
+    /// entries, participants).
     #[cfg(test)]
     pub(crate) fn registry_sizes_for_test(&self) -> (usize, usize) {
         let state = self.state();
-        (state.waits.len(), state.senders.len())
+        (state.waits.len(), state.participants.len())
     }
 
     /// Whether KEY has ended.
@@ -3646,17 +3813,38 @@ impl Control {
     /// Returns `true` if waking `key` in an open era transitioned `GroupTurn`
     /// from `Idle -> Requested` (so the caller should notify waiters/select).
     pub(crate) fn wake_locked(state: &mut ControlState, key: ThreadKey) -> bool {
-        match state.waits.get(&key) {
-            Some(Wait::Runnable | Wait::Exited | Wait::HostRequest(_)) | None => false,
-            Some(Wait::Join(_) | Wait::Mutex(_) | Wait::Condition(_) | Wait::Select { .. }) => {
-                Self::set_wait(state, key, Wait::Runnable);
-                Self::enqueue_ready(state, key);
-                if key == ThreadKey::Main && Self::main_excluded(state) {
+        match state.participants.get(&key) {
+            Some(Participant::Parallel(parallel)) => match state.waits.get(&key) {
+                Some(Wait::Join(_) | Wait::Mutex(_) | Wait::Condition(_)) => {
+                    let wake = parallel.wake.clone();
+                    Self::set_wait(state, key, Wait::ParallelActive);
+                    wake.wake();
                     false
-                } else {
-                    Self::coalesce_request_locked(state)
                 }
-            }
+                // `Wait::Native` and `Wait::HostRequest` are never interrupted
+                // by `thread-signal` or scheduler wakes (E5.3 Row 3); parallel
+                // owners never enter Baton's `ReadyQueue`.
+                _ => false,
+            },
+            Some(Participant::Baton(_)) | None => match state.waits.get(&key) {
+                Some(
+                    Wait::Runnable
+                    | Wait::ParallelActive
+                    | Wait::Native
+                    | Wait::Exited
+                    | Wait::HostRequest(_),
+                )
+                | None => false,
+                Some(Wait::Join(_) | Wait::Mutex(_) | Wait::Condition(_) | Wait::Select { .. }) => {
+                    Self::set_wait(state, key, Wait::Runnable);
+                    Self::enqueue_ready(state, key);
+                    if key == ThreadKey::Main && Self::main_excluded(state) {
+                        false
+                    } else {
+                        Self::coalesce_request_locked(state)
+                    }
+                }
+            },
         }
     }
 
@@ -3791,6 +3979,8 @@ impl Control {
                     Some(Wait::Exited) => ContinuationProgress::OwnerEnded,
                     Some(
                         Wait::Runnable
+                        | Wait::ParallelActive
+                        | Wait::Native
                         | Wait::Join(_)
                         | Wait::Mutex(_)
                         | Wait::Condition(_)
@@ -4054,14 +4244,14 @@ impl Control {
             let Some(port) = era.port.take() else {
                 return Err(PortRefusal::Retry);
             };
-            era.turn = GroupTurn::Requested;
+            state.set_era_turn(GroupTurn::Requested);
             (requester, port)
         };
         if let Err(err) = requester.request_tail() {
             let mut state = self.state();
             if let EraState::EraOpen(era) = &mut state.era {
                 era.port = Some(port);
-                era.turn = GroupTurn::Idle;
+                state.set_era_turn(GroupTurn::Idle);
             }
             return Err(err);
         }
@@ -4077,10 +4267,7 @@ impl Control {
     pub(crate) fn release_era_turn_to_idle(&self, right: TurnRight) {
         {
             let mut state = self.state();
-            let EraState::EraOpen(era) = &mut state.era else {
-                std::process::abort();
-            };
-            era.turn = GroupTurn::Idle;
+            state.set_era_turn(GroupTurn::Idle);
         }
         Self::give_back_era_turn(right);
     }
@@ -4165,7 +4352,7 @@ impl Control {
             let Some(port) = era.port.take() else {
                 return Err(PortRefusal::Retry);
             };
-            era.turn = GroupTurn::Collecting;
+            state.set_era_turn(GroupTurn::Collecting);
             port
         };
         let result = port.collect(lend, returned, reply);
@@ -4178,11 +4365,11 @@ impl Control {
             "GroupPort duplicated while collecting in open era"
         );
         era.port = Some(port);
-        era.turn = if result.is_ok() {
+        state.set_era_turn(if result.is_ok() {
             GroupTurn::Holding
         } else {
             GroupTurn::Idle
-        };
+        });
         result
     }
 
@@ -4198,6 +4385,7 @@ impl Control {
             if let Some(requester) = &era.requester {
                 if requester.request_tail().is_ok() {
                     era.turn = GroupTurn::Requested;
+                    state.bump_deadlock_epoch();
                     return true;
                 }
             }
@@ -4290,11 +4478,11 @@ impl Control {
         era.port = Some(port);
         match result {
             Ok((turn, _epoch, lend)) => {
-                era.turn = GroupTurn::Holding;
                 let world = era
                     .world
                     .try_clone()
                     .expect("era WorldHandle retains facade epoch while era is open");
+                state.set_era_turn(GroupTurn::Holding);
                 let proof = prove_lent_world_stowed(&turn, &world);
                 let mut right = match TurnRight::from_era(turn, lend, world) {
                     Ok(right) => right,
@@ -4304,7 +4492,7 @@ impl Control {
                 Ok(right)
             }
             Err(refusal) => {
-                era.turn = GroupTurn::Idle;
+                state.set_era_turn(GroupTurn::Idle);
                 Err(refusal)
             }
         }
@@ -4354,24 +4542,187 @@ impl Control {
         Self::recv_wake_and_enter(receiver)
     }
 
-    /// Conservative QD2 deadlock-idle check: queries the keeper via
-    /// `KeeperMsg::IdleQuery` (matching `GroupPort::idle_for_deadlock`) outside
-    /// `Control.state` with a bounded wait (lead #14206). Returns `true` ONLY
-    /// when the keeper confirms no live parallel owner exists and the ring is
-    /// empty; any timeout, refusal, or doubt returns `false` conservatively.
-    fn query_era_idle_for_deadlock(&self) -> bool {
+    /// Whether every registered `Participant::Parallel` is currently parked in
+    /// a deadlock wait (`Wait::Join | Wait::Mutex | Wait::Condition`) with no
+    /// pending `OwnerWake` (E5.3 D8, Q2a). Returns `true` vacuously when no
+    /// parallel participants are registered (Baton-only worlds).
+    pub(super) fn all_parallel_deadlock_parked_locked(state: &ControlState) -> bool {
+        state
+            .participants
+            .iter()
+            .all(|(key, participant)| match participant {
+                Participant::Baton(_) => true,
+                Participant::Parallel(parallel) => {
+                    !parallel.wake.is_pending()
+                        && matches!(
+                            state.waits.get(key),
+                            Some(Wait::Join(_) | Wait::Mutex(_) | Wait::Condition(_))
+                        )
+                }
+            })
+    }
+
+    /// Whether no Baton participant can currently make progress (E5.3 D8 / QD2).
+    pub(super) fn no_baton_progress_locked(state: &ControlState) -> bool {
+        Self::eligible_runnable_count(state) == 0
+            && Self::queued_native_work(state) != NativeWork::Ready
+            && state.waits.select_len() == 0
+            && state.physical.get(&ThreadKey::Main) != Some(&OwnerLocation::NativeReleased)
+    }
+
+    /// D8 BEFORE + `IdleQuery` step (E5.3 D8, Q2a): under `Control.state` lock,
+    /// verifies that the era is `GroupTurn::Idle`, no Baton progress exists, and
+    /// every registered `Participant::Parallel` is in `Join|Mutex|Condition`
+    /// with no pending `OwnerWake`, capturing `(deadlock_epoch, requester)`.
+    /// Then drops the lock and sends `KeeperMsg::IdleQuery` with a bounded wait.
+    /// Returns `Some((epoch_before, enrolled_owners))` only when BOTH the
+    /// BEFORE check and the keeper's `IdleStatus::Idle` succeeded. Callers MUST
+    /// re-verify under `Control.state` lock via [`Self::confirm_era_deadlock_after`].
+    pub(super) fn query_era_idle_for_deadlock(&self) -> Option<(u64, usize)> {
         const IDLE_QUERY_BOUND: Duration = Duration::from_millis(50);
-        let requester = {
+        let (epoch_before, requester) = {
             let state = self.state();
-            match &state.era {
-                EraState::EraOpen(era) => era.requester.clone(),
-                _ => return false,
+            let requester = match &state.era {
+                EraState::EraOpen(era) if era.turn == GroupTurn::Idle => era.requester.clone()?,
+                _ => return None,
+            };
+            if !Self::no_baton_progress_locked(&state)
+                || !Self::all_parallel_deadlock_parked_locked(&state)
+            {
+                return None;
             }
+            (state.deadlock_epoch, requester)
         };
-        let Some(requester) = requester else {
-            return false;
-        };
-        matches!(requester.idle_for_deadlock(IDLE_QUERY_BOUND), Ok(true))
+        match requester.idle_status_for_deadlock(IDLE_QUERY_BOUND) {
+            Ok(IdleStatus::Idle { enrolled_owners }) => Some((epoch_before, enrolled_owners)),
+            _ => None,
+        }
+    }
+
+    /// D8 AFTER check under `Control.state` lock (E5.3 D8, Q2a): verifies that
+    /// `deadlock_epoch` did not advance during `IdleQuery`, `GroupTurn` is still
+    /// `Idle`, no Baton progress exists, every registered parallel participant is
+    /// still in a deadlock wait with no pending `OwnerWake`, and every enrolled
+    /// owner reported by the keeper is accounted for in `Control`.
+    pub(super) fn confirm_era_deadlock_after(
+        state: &ControlState,
+        epoch_before: u64,
+        enrolled_owners: usize,
+    ) -> bool {
+        let still_idle = matches!(
+            &state.era,
+            EraState::EraOpen(era) if era.turn == GroupTurn::Idle
+        );
+        !state.closing
+            && still_idle
+            && state.deadlock_epoch == epoch_before
+            && Self::no_baton_progress_locked(state)
+            && Self::all_parallel_deadlock_parked_locked(state)
+            && enrolled_owners <= state.parallel_participant_count()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn deadlock_epoch_for_test(&self) -> u64 {
+        self.state().deadlock_epoch
+    }
+
+    #[cfg(test)]
+    pub(crate) fn all_parallel_deadlock_parked_for_test(&self) -> bool {
+        Self::all_parallel_deadlock_parked_locked(&self.state())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn confirm_era_deadlock_after_for_test(
+        &self,
+        epoch_before: u64,
+        enrolled_owners: usize,
+    ) -> bool {
+        Self::confirm_era_deadlock_after(&self.state(), epoch_before, enrolled_owners)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_main_wait_for_test(&self, wait: Wait) {
+        let mut state = self.state();
+        Self::set_wait(&mut state, ThreadKey::Main, wait);
+    }
+
+    /// Wait for a parked parallel owner (`Wait::Mutex`, `Wait::Condition`, or
+    /// `Wait::Join`) after it has returned its serial ticket, running E5.3 D8
+    /// mixed/parallel-only deadlock detection (Q2b).
+    pub(crate) fn wait_parallel_parked<P: KeeperPort>(
+        &self,
+        key: ThreadKey,
+        wake: &OwnerWake,
+        port: &P,
+    ) -> ParallelWaitOutcome {
+        const IDLE_QUERY_BOUND: Duration = Duration::from_millis(50);
+        const DEADLOCK_POLL: Duration = Duration::from_millis(5);
+        loop {
+            if wake.try_take() {
+                return ParallelWaitOutcome::Woken;
+            }
+            // BEFORE check under Control.state lock.
+            let candidate_epoch = {
+                let state = self.state();
+                if state.closing {
+                    return ParallelWaitOutcome::Woken;
+                }
+                // If another thread already moved us out of our wait (e.g. wake
+                // landed right before we checked), exit promptly.
+                if !matches!(
+                    state.waits.get(&key),
+                    Some(Wait::Join(_) | Wait::Mutex(_) | Wait::Condition(_))
+                ) {
+                    return ParallelWaitOutcome::Woken;
+                }
+                let era_idle = match &state.era {
+                    EraState::EraOpen(era) => era.turn == GroupTurn::Idle,
+                    EraState::SoloActive | EraState::SoloSurrendered => {
+                        state.baton_participants_empty()
+                    }
+                };
+                if era_idle
+                    && Self::no_baton_progress_locked(&state)
+                    && Self::all_parallel_deadlock_parked_locked(&state)
+                {
+                    Some(state.deadlock_epoch)
+                } else {
+                    None
+                }
+            };
+            if let Some(epoch_before) = candidate_epoch
+                && let Ok(IdleStatus::Idle { enrolled_owners }) =
+                    port.idle_status_for_deadlock(IDLE_QUERY_BOUND)
+            {
+                // AFTER check under Control.state lock (mandatory Q2a).
+                let mut state = self.state();
+                if state.closing {
+                    return ParallelWaitOutcome::Woken;
+                }
+                let still_era_idle = match &state.era {
+                    EraState::EraOpen(era) => era.turn == GroupTurn::Idle,
+                    EraState::SoloActive | EraState::SoloSurrendered => {
+                        state.baton_participants_empty()
+                    }
+                };
+                if still_era_idle
+                    && state.deadlock_epoch == epoch_before
+                    && Self::no_baton_progress_locked(&state)
+                    && Self::all_parallel_deadlock_parked_locked(&state)
+                    && enrolled_owners <= state.parallel_participant_count()
+                    && !wake.is_pending()
+                {
+                    let invariant = Self::verify_invariants(&state);
+                    // Transition this owner out of the deadlock wait (bumping
+                    // `deadlock_epoch`) so exactly one owner reports deadlock.
+                    Self::set_wait(&mut state, key, Wait::ParallelActive);
+                    return ParallelWaitOutcome::Deadlock { invariant };
+                }
+            }
+            if wake.wait_timeout(DEADLOCK_POLL) {
+                return ParallelWaitOutcome::Woken;
+            }
+        }
     }
 
     /// QD1 typed check: validate that `right` matches the scheduler's current
@@ -4420,7 +4771,7 @@ impl Control {
             if let Err(error) = Self::check_turn_authority(&state, wake.baton()) {
                 return Err((wake, error));
             }
-            state.senders.get(&target).cloned()
+            state.baton_sender(&target).cloned()
         };
         let Some(sender) = sender else {
             std::process::abort()
@@ -4539,6 +4890,7 @@ impl Control {
         if !matches!(wait, Wait::Runnable) {
             state.ready.invalidate(key);
         }
+        state.bump_deadlock_epoch();
         Self::check_invariants(state);
     }
 
@@ -4578,15 +4930,23 @@ impl Control {
             }
         }
         state.waits.remove(&key);
-        state.senders.remove(&key);
+        state.participants.remove(&key);
         state.physical.remove(&key);
         state.ready.invalidate(key);
+        state.bump_deadlock_epoch();
         Self::check_invariants(state);
     }
 
     /// Queue KEY's ready turn at the back if it has none. The caller already
     /// made KEY `Runnable` through [`Self::set_wait`].
     pub(crate) fn enqueue_ready(state: &mut ControlState, key: ThreadKey) {
+        debug_assert!(
+            !state
+                .participants
+                .get(&key)
+                .is_some_and(Participant::is_parallel),
+            "parallel owners must never enter Baton ReadyQueue"
+        );
         state.ready.enqueue_back(key);
         Self::check_invariants(state);
     }
@@ -4594,6 +4954,13 @@ impl Control {
     /// Queue KEY's ready turn at the front if it has none (the native
     /// interception requeue preserves the turn it is about to use).
     pub(crate) fn enqueue_ready_front(state: &mut ControlState, key: ThreadKey) {
+        debug_assert!(
+            !state
+                .participants
+                .get(&key)
+                .is_some_and(Participant::is_parallel),
+            "parallel owners must never enter Baton ReadyQueue"
+        );
         state.ready.enqueue_front(key);
         Self::check_invariants(state);
     }
@@ -4789,14 +5156,11 @@ impl Control {
                         let Some(requester) = era.requester.clone() else {
                             std::process::abort();
                         };
-                        era.turn = GroupTurn::Requested;
                         let port = era.port.take();
+                        state.set_era_turn(GroupTurn::Requested);
                         EraTransferStep::CaseIi { requester, port }
                     } else {
-                        let EraState::EraOpen(era) = &mut state.era else {
-                            std::process::abort();
-                        };
-                        era.turn = GroupTurn::Idle;
+                        state.set_era_turn(GroupTurn::Idle);
                         EraTransferStep::EndIntervalToIdle
                     }
                 } else if let Some(turn) = Self::pick_service(&mut state) {
@@ -4805,10 +5169,7 @@ impl Control {
                     match Self::pick(&mut state) {
                         Some((key, None)) => EraTransferStep::Owner(NextOwner::Resume(key)),
                         Some((_, Some(_))) | None => {
-                            let EraState::EraOpen(era) = &mut state.era else {
-                                std::process::abort();
-                            };
-                            era.turn = GroupTurn::Idle;
+                            state.set_era_turn(GroupTurn::Idle);
                             EraTransferStep::EndIntervalToIdle
                         }
                     }
@@ -5005,23 +5366,21 @@ impl Control {
                     );
                 }
                 Action::CheckDeadlock => {
-                    // QD2: query keeper outside Control.state lock. Only report
-                    // deadlock when keeper confirms no live parallel owner AND
-                    // empty ring AND re-check under lock still shows Idle with
-                    // every Baton thread in a non-select releasing wait.
-                    if self.query_era_idle_for_deadlock() {
+                    // D8 (Q2a): BEFORE check under lock -> IdleQuery outside
+                    // lock -> AFTER check under lock verifying unchanged
+                    // `deadlock_epoch`, all Baton threads blocked, all
+                    // registered parallel owners in deadlock waits with no
+                    // pending `OwnerWake`, and `enrolled_owners <= parallel`.
+                    if let Some((epoch_before, enrolled_owners)) =
+                        self.query_era_idle_for_deadlock()
+                    {
                         let confirmed = {
                             let mut state = self.state();
-                            let still_idle = matches!(
-                                &state.era,
-                                EraState::EraOpen(era) if era.turn == GroupTurn::Idle
-                            );
-                            let any_runnable = Self::eligible_runnable_count(&state) > 0
-                                || Self::queued_native_work(&state) == NativeWork::Ready
-                                || state.waits.select_len() > 0
-                                || state.physical.get(&ThreadKey::Main)
-                                    == Some(&OwnerLocation::NativeReleased);
-                            if still_idle && !any_runnable {
+                            if Self::confirm_era_deadlock_after(
+                                &state,
+                                epoch_before,
+                                enrolled_owners,
+                            ) {
                                 let invariant = Self::verify_invariants(&state);
                                 if !Self::coalesce_request_locked(&mut state) {
                                     // Requester channel closed / keeper poisoned: fail closed
@@ -5235,7 +5594,7 @@ mod tests {
                 state.pending_services = VecDeque::from([key, sibling]);
                 Control::remove_key(&mut state, requester);
                 assert!(!state.waits.contains_key(&requester));
-                assert!(!state.senders.contains_key(&requester));
+                assert!(!state.participants.contains_key(&requester));
                 assert!(!state.physical.contains_key(&requester));
                 assert_eq!(state.services[&key].phase, ServicePhase::Ended(ended_phase));
                 assert_eq!(
@@ -7009,7 +7368,7 @@ mod tests {
             while Instant::now() < deadline {
                 match inbox_rx.recv_timeout(Duration::from_millis(5)) {
                     Ok(KeeperMsg::IdleQuery { reply }) => {
-                        let _ = reply.try_send(false);
+                        let _ = reply.try_send(IdleStatus::Busy);
                     }
                     Ok(KeeperMsg::BatonRequest) => {
                         panic!(
@@ -7041,7 +7400,7 @@ mod tests {
                             baton_idle_queries <= MAX_TRAILING_IDLE_QUERIES,
                             "too many trailing IdleQueries ({baton_idle_queries}) waiting for BatonRequest; CheckDeadlock appears stuck"
                         );
-                        let _ = reply.try_send(false);
+                        let _ = reply.try_send(IdleStatus::Busy);
                     }
                     Ok(KeeperMsg::BatonRequest) => break,
                     Ok(_) => panic!("expected BatonRequest after wake"),
@@ -7073,7 +7432,7 @@ mod tests {
                             return_idle_queries <= MAX_TRAILING_IDLE_QUERIES,
                             "too many trailing IdleQueries ({return_idle_queries}) waiting for WorldReturn {{ Done }}; CheckDeadlock appears stuck"
                         );
-                        let _ = reply.try_send(false);
+                        let _ = reply.try_send(IdleStatus::Busy);
                     }
                     Ok(KeeperMsg::WorldReturn {
                         end: IntervalEnd::Done,

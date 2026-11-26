@@ -113,6 +113,7 @@ impl Context {
             .set_thread_error_for_value(thread, symbol, data);
         let key = ThreadKey::from_id(id);
         let control = self.green_control();
+        control.raise_parallel_signal_hint(key);
         if matches!(
             control.wait_of(key),
             Some(Wait::Join(_) | Wait::Mutex(_) | Wait::Condition(_))
@@ -123,10 +124,8 @@ impl Context {
         // `wait_condvar`, also one already woken that has not run yet, and
         // ends with the sender's own `post_acquire_global_lock`
         // (src/thread.c:974-982, :1029-1030).
-        if self.threads.in_wait_condvar(id)
-            && let Some(sender) = self.green_key()
-        {
-            self.green_raise_pending_signal(sender)?;
+        if self.threads.in_wait_condvar(id) {
+            self.deliver_current_turn_signal()?;
         }
         Ok(Value::NIL)
     }
@@ -182,9 +181,7 @@ impl Context {
                     .wake_waiting_for(Wait::Mutex(MutexId::new(mutex.native_key())));
                 // GNU `mutex_unlock_callback` (src/thread.c:372-378) runs
                 // `post_acquire_global_lock` after a release.
-                if let Some(key) = self.green_key() {
-                    self.green_raise_pending_signal(key)?;
-                }
+                self.deliver_current_turn_signal()?;
             }
             MutexRelease::NotOwner => {
                 return Err(signal(
@@ -227,9 +224,7 @@ impl Context {
         }
         // GNU `condition_notify_callback` ends with
         // `post_acquire_global_lock` (src/thread.c:533).
-        if let Some(key) = self.green_key() {
-            self.green_raise_pending_signal(key)?;
-        }
+        self.deliver_current_turn_signal()?;
         Ok(Value::NIL)
     }
 
@@ -300,6 +295,49 @@ impl Context {
         let result = wait(self);
         self.threads.set_wait_condvar(id, None);
         result
+    }
+
+    /// Deliver a pending `thread-signal` for the currently executing thread at
+    /// a GNU `post_acquire_global_lock` point (`src/thread.c:146-154`):
+    /// - For a seated Baton thread, delegates to `green_raise_pending_signal`.
+    /// - For an unseated parallel owner inside an active serial turn, checks
+    ///   `!self.condition_stack.is_empty()` directly (GNU `handlerlist != NULL`,
+    ///   E5.3 D2 / Q6c), drains `ThreadManager`'s pending error, and clears the
+    ///   owner's `SignalHint`.
+    pub(crate) fn deliver_current_turn_signal(&mut self) -> Result<(), neovm_value::error::Flow> {
+        if let Some(key) = self.green_key() {
+            return self.green_raise_pending_signal(key);
+        }
+        if self.in_active_serial_turn() {
+            let id = self.threads.current_thread_id();
+            let key = ThreadKey::from_id(id);
+            return self.deliver_parallel_turn_signal(key);
+        }
+        Ok(())
+    }
+
+    /// GNU `post_acquire_global_lock` (`src/thread.c:146-154`) for a parallel
+    /// owner inside a serial turn (E5.3 D2, Q6c). Defers delivery while
+    /// `self.condition_stack.is_empty()` (newborn before top-level handler
+    /// installation), leaving both `ThreadManager`'s error and `SignalHint`
+    /// intact until a handler is installed.
+    pub(crate) fn deliver_parallel_turn_signal(
+        &mut self,
+        key: ThreadKey,
+    ) -> Result<(), neovm_value::error::Flow> {
+        if self.condition_stack.is_empty() {
+            return Ok(());
+        }
+        if let Some(flow) = self.threads.take_pending_thread_signal(key.id()) {
+            if self.green_runtime_started() {
+                self.green_control().clear_parallel_signal_hint(key);
+            }
+            return Err(flow);
+        }
+        if self.green_runtime_started() {
+            self.green_control().clear_parallel_signal_hint(key);
+        }
+        Ok(())
     }
 
     /// The runtime's scheduler (reachable from both seated Green threads and

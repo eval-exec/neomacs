@@ -555,6 +555,21 @@ impl KeeperPort for ChannelPort<'_> {
     fn collect_root_epoch(&self) -> Option<neovm_value::tagged::gc::FacadeEpochRetention> {
         self.mutator.parallel_epoch_retention().ok()
     }
+
+    fn idle_status_for_deadlock(
+        &self,
+        bound: Duration,
+    ) -> Result<driver_core::IdleStatus, PortRefusal> {
+        let (reply, answer) = mpsc::sync_channel(1);
+        self.inbox
+            .send(KeeperMsg::IdleQuery { reply })
+            .map_err(|_| PortRefusal::Poisoned)?;
+        match answer.recv_timeout(bound) {
+            Ok(status) => Ok(status),
+            Err(mpsc::RecvTimeoutError::Timeout) => Ok(driver_core::IdleStatus::Busy),
+            Err(mpsc::RecvTimeoutError::Disconnected) => Err(PortRefusal::Poisoned),
+        }
+    }
 }
 
 /// The Baton group's guard over its World turn (K7 for the group). Armed
@@ -617,18 +632,21 @@ impl GroupRequestSender {
             .map_err(|_| PortRefusal::Poisoned)
     }
 
-    /// Conservative QD2 deadlock-idle query (`KeeperMsg::IdleQuery`), matching
-    /// [`GroupPort::idle_for_deadlock`] without requiring `&GroupPort`.
-    /// Answers `Ok(false)` conservatively if the keeper does not reply within
-    /// `bound` (lead #14206).
-    pub(crate) fn idle_for_deadlock(&self, bound: Duration) -> Result<bool, PortRefusal> {
+    /// D8 / QD2 ring-idleness query (`KeeperMsg::IdleQuery`): answers
+    /// [`driver_core::IdleStatus::Idle`] with the keeper's `enrolled_owners`
+    /// count when between stops with an empty ring and no collect/head-hold,
+    /// or [`driver_core::IdleStatus::Busy`] conservatively on timeout or activity.
+    pub(crate) fn idle_status_for_deadlock(
+        &self,
+        bound: Duration,
+    ) -> Result<driver_core::IdleStatus, PortRefusal> {
         let (reply, answer) = mpsc::sync_channel(1);
         self.inbox
             .send(KeeperMsg::IdleQuery { reply })
             .map_err(|_| PortRefusal::Poisoned)?;
         match answer.recv_timeout(bound) {
-            Ok(idle) => Ok(idle),
-            Err(mpsc::RecvTimeoutError::Timeout) => Ok(false),
+            Ok(status) => Ok(status),
+            Err(mpsc::RecvTimeoutError::Timeout) => Ok(driver_core::IdleStatus::Busy),
             Err(mpsc::RecvTimeoutError::Disconnected) => Err(PortRefusal::Poisoned),
         }
     }
@@ -786,7 +804,8 @@ impl GroupPort {
             .send(KeeperMsg::IdleQuery { reply })
             .map_err(|_| PortRefusal::Poisoned)?;
         match answer.recv_timeout(bound) {
-            Ok(idle) => Ok(idle),
+            Ok(driver_core::IdleStatus::Idle { enrolled_owners: 0 }) => Ok(true),
+            Ok(driver_core::IdleStatus::Idle { .. } | driver_core::IdleStatus::Busy) => Ok(false),
             Err(mpsc::RecvTimeoutError::Timeout) => Ok(false),
             Err(mpsc::RecvTimeoutError::Disconnected) => Err(PortRefusal::Poisoned),
         }
