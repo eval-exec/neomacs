@@ -151,6 +151,20 @@ impl std::fmt::Debug for SymbolHandle {
     }
 }
 
+impl SymbolHandle {
+    /// The admitted symbol identifier.
+    #[inline]
+    pub const fn symbol(&self) -> SymId {
+        self.symbol
+    }
+
+    /// The Plain symbol backing classified at serial keeper admission.
+    #[inline]
+    pub const fn backing(&self) -> PlainSymbolBacking {
+        self.kind
+    }
+}
+
 #[cfg(any(test, feature = "test-support"))]
 impl SymbolHandle {
     /// VIS row: copied era word for the stale-handle refusal oracle.

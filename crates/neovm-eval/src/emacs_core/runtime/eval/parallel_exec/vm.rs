@@ -36,8 +36,8 @@ use super::backtrace::{
 };
 use super::dispatch::opcode_slot;
 use super::effective::{
-    EffectivePlainKey, EraId, PlainAccess, PlainRefusal, PlainUnbind, ShapeGeneration,
-    effective_plain_bind, effective_plain_read, effective_plain_unbind_checked,
+    EffectivePlainKey, EraId, PlainAccess, PlainRefusal, PlainUnbind, PlainUnbindError,
+    ShapeGeneration, effective_plain_bind, effective_plain_read, effective_plain_unbind_checked,
     effective_plain_write,
 };
 use super::engine::{CoreOutcome, EngineFault, RecordStack};
@@ -1190,13 +1190,23 @@ where
                         Ok(PlainUnbind::Done) => {
                             self.arena.bindings_mut().pop();
                         }
-                        Ok(PlainUnbind::NeedsSerial { .. }) | Err(_) => {
+                        Ok(PlainUnbind::NeedsSerial { .. })
+                        | Err(PlainUnbindError::RecordMismatch) => {
                             tracing::error!(
                                 record = ?record,
                                 "the idle unwind met an owner record the serial side must undo"
                             );
                             self.state = RunState::Poisoned;
                             return Err(EngineFault::EscapeRecordContract(RecordStack::Bindings));
+                        }
+                        Err(PlainUnbindError::Access(error)) => {
+                            tracing::error!(
+                                record = ?record,
+                                error = ?error,
+                                "the idle unwind hit a canonical Plain authority failure"
+                            );
+                            self.state = RunState::Poisoned;
+                            return Err(EngineFault::PlainAccess(error));
                         }
                     }
                 }
@@ -1662,7 +1672,10 @@ where
             }
         };
         let len = operands.len();
-        let read = effective_plain_read(&self.plain, &key);
+        let read = match effective_plain_read(&mut self.plain, &key) {
+            Ok(read) => read,
+            Err(error) => return Step::Stop(VmOutcome::Fault(EngineFault::PlainAccess(error))),
+        };
         let Some(value) = read.value().filter(|value| !value.is_unbound()) else {
             return Self::void_variable(sym);
         };
@@ -1717,8 +1730,8 @@ where
         if matches!(op, Op::VarBind(_)) {
             let record = effective_plain_bind(&mut self.plain, &key, value);
             self.arena.bindings_mut().push(record);
-        } else {
-            effective_plain_write(&mut self.plain, &key, value);
+        } else if let Err(error) = effective_plain_write(&mut self.plain, &key, value) {
+            return Step::Stop(VmOutcome::Fault(EngineFault::PlainAccess(error)));
         }
         Self::stop(self.store(frame, branch_pc, len - 1, &[]))
     }
@@ -1823,7 +1836,12 @@ where
                             }
                             remaining += pushed as usize;
                         }
-                        Err(_) => return Self::record_contract_fault(),
+                        Err(PlainUnbindError::RecordMismatch) => {
+                            return Self::record_contract_fault();
+                        }
+                        Err(PlainUnbindError::Access(error)) => {
+                            return Step::Stop(VmOutcome::Fault(EngineFault::PlainAccess(error)));
+                        }
                     }
                 }
                 OwnerRecord::Serial(innermost) => {
@@ -2526,12 +2544,21 @@ where
                         Ok(PlainUnbind::Done) => {
                             self.arena.bindings_mut().pop();
                         }
-                        Ok(PlainUnbind::NeedsSerial { .. }) | Err(_) => {
+                        Ok(PlainUnbind::NeedsSerial { .. })
+                        | Err(PlainUnbindError::RecordMismatch) => {
                             tracing::error!(
                                 record = ?record,
                                 "a Return unwind met an owner record the serial side must undo"
                             );
                             return Err(EngineFault::EscapeRecordContract(RecordStack::Bindings));
+                        }
+                        Err(PlainUnbindError::Access(error)) => {
+                            tracing::error!(
+                                record = ?record,
+                                error = ?error,
+                                "a Return unwind hit a canonical Plain authority failure"
+                            );
+                            return Err(EngineFault::PlainAccess(error));
                         }
                     }
                 }
@@ -2776,7 +2803,14 @@ where
                                         }
                                     }
                                 }
-                                Err(_) => return Self::record_contract_fault(),
+                                Err(PlainUnbindError::RecordMismatch) => {
+                                    return Self::record_contract_fault();
+                                }
+                                Err(PlainUnbindError::Access(error)) => {
+                                    return Step::Stop(VmOutcome::Fault(EngineFault::PlainAccess(
+                                        error,
+                                    )));
+                                }
                             }
                         }
                         OwnerRecord::Serial(innermost) => {

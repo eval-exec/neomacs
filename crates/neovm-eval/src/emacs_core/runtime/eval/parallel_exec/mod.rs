@@ -24,6 +24,8 @@
 
 #[allow(dead_code)] // Harness-only until E5/E6-P wires the backtrace adapter.
 pub(crate) mod backtrace;
+#[allow(dead_code)] // Dormant E4-P2 Slice 2; E6-P wires CanonicalPlain.
+pub(crate) mod canonical_plain;
 pub(crate) mod dispatch;
 pub(crate) mod effective;
 #[allow(dead_code)] // Harness-only until a test target compiles the stepper.
@@ -33,6 +35,9 @@ pub mod frames;
 #[allow(dead_code)] // Harness-only until E6-P wires the executor.
 pub(crate) mod vm;
 
+#[cfg(test)]
+#[path = "tests/canonical_plain_test.rs"]
+mod canonical_plain_tests;
 #[cfg(test)]
 #[path = "tests/dispatch_test.rs"]
 mod dispatch_tests;

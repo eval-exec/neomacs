@@ -8,7 +8,7 @@ use super::super::owner_bindings::{
 use super::dispatch::primitive_slot_by_name;
 use super::effective::{
     EffectivePlainKey, EffectiveRead, EffectiveWrite, EraId, OwnerSlots, OwnerSlotsMut,
-    PlainAccess, PlainAdmission, PlainRefusal, ShapeGeneration, take_top_binding,
+    PlainAccess, PlainAccessError, PlainAdmission, PlainRefusal, ShapeGeneration, take_top_binding,
 };
 use super::engine::{
     CoreOutcome, EngineFault, EscapeClass, EscapeRequest, OwnerPoll, PlainStop, SealedOps,
@@ -442,18 +442,29 @@ impl PlainAccess for TestSlots {
         }
     }
 
-    fn canonical_read(&self, _sym: neovm_value::intern::SymId) -> Value {
+    fn canonical_read(
+        &mut self,
+        _sym: neovm_value::intern::SymId,
+    ) -> Result<Value, PlainAccessError> {
         self.canonical_reads.set(self.canonical_reads.get() + 1);
-        self.canonical
+        Ok(self.canonical)
     }
 
-    fn canonical_write(&mut self, _sym: neovm_value::intern::SymId, value: Value) {
+    fn canonical_write(
+        &mut self,
+        _sym: neovm_value::intern::SymId,
+        value: Value,
+    ) -> Result<(), PlainAccessError> {
         self.canonical_writes.set(self.canonical_writes.get() + 1);
         self.canonical = value;
+        Ok(())
     }
 
-    fn canonical_bound(&self, _sym: neovm_value::intern::SymId) -> bool {
-        true
+    fn canonical_bound(
+        &mut self,
+        _sym: neovm_value::intern::SymId,
+    ) -> Result<bool, PlainAccessError> {
+        Ok(true)
     }
 
     /// This double models no watchers, no retired projection and no dead

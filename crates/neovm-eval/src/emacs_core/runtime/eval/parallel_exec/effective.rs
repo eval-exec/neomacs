@@ -425,20 +425,63 @@ impl<'era> EffectivePlainKey<'era> {
     }
 }
 
+/// Recoverable or terminal authority failure from canonical Plain storage
+/// (E4-P2 Option A).
+///
+/// Canonical reads, writes, and bound checks never panic and never fabricate a
+/// fallback value on symbol-authority refusal: every caller receives this typed
+/// error and turns it into an explicit fault or escape.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum PlainAccessError {
+    /// Symbol authority was contended (`RegistrationError::Busy`).
+    Busy,
+    /// The parallel era or symbol authority is poisoned.
+    Poisoned,
+    /// The owner registration, thread, or symbol handle is stale.
+    StaleRegistration,
+    /// Symbol publication or admission invariant failed (including an
+    /// unadmitted `SymId`).
+    Publication,
+    /// Backing storage reservation exceeded capacity.
+    Capacity,
+}
+
+impl From<neovm_value::tagged::gc::RegistrationError> for PlainAccessError {
+    fn from(error: neovm_value::tagged::gc::RegistrationError) -> Self {
+        use neovm_value::tagged::gc::RegistrationError;
+        match error {
+            RegistrationError::Busy
+            | RegistrationError::OwnerReserveHeld
+            | RegistrationError::OutstandingLoan
+            | RegistrationError::OpenRegion
+            | RegistrationError::ResidualSatb
+            | RegistrationError::PendingRoots
+            | RegistrationError::PendingYoung => Self::Busy,
+            RegistrationError::Poisoned => Self::Poisoned,
+            RegistrationError::WrongHeap
+            | RegistrationError::WrongOwner
+            | RegistrationError::StaleRegistration
+            | RegistrationError::DuplicateOwner
+            | RegistrationError::WrongThread => Self::StaleRegistration,
+            RegistrationError::Publication => Self::Publication,
+            RegistrationError::Exhausted | RegistrationError::Capacity => Self::Capacity,
+        }
+    }
+}
+
 /// The composed owner access shared by the E4 interpreter and the parallel VM:
 /// the owner slot view plus the canonical Plain storage plus the slab's
 /// binding-record LIFO. The production implementation is E4-P2 (owner slab
-/// lease + C3); the trait itself names no test type and the only E4-P1
-/// implementation is the harness double.
+/// lease + C3); the trait itself names no test type.
 pub(crate) trait PlainAccess: OwnerSlotsMut {
     /// Classify one symbol for this owner (admission only; no slot access).
     fn admission(&self, sym: SymId) -> PlainAdmission;
     /// Read canonical Plain storage (C3 in production).
-    fn canonical_read(&self, sym: SymId) -> Value;
+    fn canonical_read(&mut self, sym: SymId) -> Result<Value, PlainAccessError>;
     /// Write canonical Plain storage (C3 in production).
-    fn canonical_write(&mut self, sym: SymId, value: Value);
+    fn canonical_write(&mut self, sym: SymId, value: Value) -> Result<(), PlainAccessError>;
     /// Whether canonical Plain storage has a binding.
-    fn canonical_bound(&self, sym: SymId) -> bool;
+    fn canonical_bound(&mut self, sym: SymId) -> Result<bool, PlainAccessError>;
     /// Push one binding record on the owner slab's record LIFO and name it.
     /// The record is the binding's storage: the collector traces its values
     /// through the slab, so a caller keeps only the id.
@@ -501,12 +544,42 @@ pub(crate) fn take_top_binding(
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct RecordMismatch;
 
-/// One composed read: delegates to the pure rule with the canonical closure.
+/// Why an owner-local Plain unbind failed (E4-P2 Option A).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum PlainUnbindError {
+    /// The executor's entry did not name the slab's top record; nothing was taken.
+    RecordMismatch,
+    /// Restoring a `Captured` binding into canonical storage failed.
+    Access(PlainAccessError),
+}
+
+impl From<RecordMismatch> for PlainUnbindError {
+    fn from(_: RecordMismatch) -> Self {
+        Self::RecordMismatch
+    }
+}
+
+impl From<PlainAccessError> for PlainUnbindError {
+    fn from(error: PlainAccessError) -> Self {
+        Self::Access(error)
+    }
+}
+
+/// One composed read: checks the owner slot first and falls through to
+/// canonical Plain storage only on [`SlotState::NoBinding`].
 pub(crate) fn effective_plain_read<A: PlainAccess + ?Sized>(
-    access: &A,
+    access: &mut A,
     key: &EffectivePlainKey<'_>,
-) -> EffectiveRead {
-    read_effective(access, key, || access.canonical_read(key.symbol()))
+) -> Result<EffectiveRead, PlainAccessError> {
+    match access.slot_state(key.slot(), key.channel()) {
+        SlotState::Bound(value) => Ok(match value.bound() {
+            Some(bound) => EffectiveRead::OwnerBound(bound),
+            None => EffectiveRead::OwnerVoid,
+        }),
+        SlotState::NoBinding => access
+            .canonical_read(key.symbol())
+            .map(EffectiveRead::Canonical),
+    }
 }
 
 /// One composed write: the shared decision, then the slot or canonical write.
@@ -514,7 +587,7 @@ pub(crate) fn effective_plain_write<A: PlainAccess + ?Sized>(
     access: &mut A,
     key: &EffectivePlainKey<'_>,
     value: Value,
-) -> EffectiveWrite {
+) -> Result<EffectiveWrite, PlainAccessError> {
     match write_effective_decision(access, key) {
         EffectiveWrite::OwnerSlot => {
             access.set_slot_state(
@@ -522,29 +595,40 @@ pub(crate) fn effective_plain_write<A: PlainAccess + ?Sized>(
                 key.channel(),
                 SlotState::Bound(SlotValue::new(value)),
             );
-            EffectiveWrite::OwnerSlot
+            Ok(EffectiveWrite::OwnerSlot)
         }
         EffectiveWrite::Canonical => {
-            access.canonical_write(key.symbol(), value);
-            EffectiveWrite::Canonical
+            access.canonical_write(key.symbol(), value)?;
+            Ok(EffectiveWrite::Canonical)
         }
     }
 }
 
-/// `boundp` through the composed rule, delegating to the pure rule.
+/// `boundp` through the composed rule.
 pub(crate) fn effective_plain_bound<A: PlainAccess + ?Sized>(
-    access: &A,
+    access: &mut A,
     key: &EffectivePlainKey<'_>,
-) -> bool {
-    bound_effective(access, key, || access.canonical_bound(key.symbol()))
+) -> Result<bool, PlainAccessError> {
+    match access.slot_state(key.slot(), key.channel()) {
+        SlotState::Bound(value) => Ok(value.bound().is_some()),
+        SlotState::NoBinding => access.canonical_bound(key.symbol()),
+    }
 }
 
 /// `default-value` through the same effective Default channel.
 pub(crate) fn effective_plain_default_read<A: PlainAccess + ?Sized>(
-    access: &A,
+    access: &mut A,
     key: &EffectivePlainKey<'_>,
-) -> EffectiveRead {
-    read_default_effective(access, key, || access.canonical_read(key.symbol()))
+) -> Result<EffectiveRead, PlainAccessError> {
+    match access.slot_state(key.slot(), Channel::Default) {
+        SlotState::Bound(value) => Ok(match value.bound() {
+            Some(bound) => EffectiveRead::OwnerBound(bound),
+            None => EffectiveRead::OwnerVoid,
+        }),
+        SlotState::NoBinding => access
+            .canonical_read(key.symbol())
+            .map(EffectiveRead::Canonical),
+    }
 }
 
 /// `set-default` through the shared Default decision.
@@ -552,7 +636,7 @@ pub(crate) fn effective_plain_default_write<A: PlainAccess + ?Sized>(
     access: &mut A,
     key: &EffectivePlainKey<'_>,
     value: Value,
-) -> EffectiveWrite {
+) -> Result<EffectiveWrite, PlainAccessError> {
     match write_default_decision(access, key) {
         EffectiveWrite::OwnerSlot => {
             access.set_slot_state(
@@ -560,21 +644,24 @@ pub(crate) fn effective_plain_default_write<A: PlainAccess + ?Sized>(
                 Channel::Default,
                 SlotState::Bound(SlotValue::new(value)),
             );
-            EffectiveWrite::OwnerSlot
+            Ok(EffectiveWrite::OwnerSlot)
         }
         EffectiveWrite::Canonical => {
-            access.canonical_write(key.symbol(), value);
-            EffectiveWrite::Canonical
+            access.canonical_write(key.symbol(), value)?;
+            Ok(EffectiveWrite::Canonical)
         }
     }
 }
 
 /// `default-boundp` through the same effective Default channel.
 pub(crate) fn effective_plain_default_bound<A: PlainAccess + ?Sized>(
-    access: &A,
+    access: &mut A,
     key: &EffectivePlainKey<'_>,
-) -> bool {
-    default_bound_effective(access, key, || access.canonical_bound(key.symbol()))
+) -> Result<bool, PlainAccessError> {
+    match access.slot_state(key.slot(), Channel::Default) {
+        SlotState::Bound(value) => Ok(value.bound().is_some()),
+        SlotState::NoBinding => access.canonical_bound(key.symbol()),
+    }
 }
 
 /// One composed bind (GNU `Bvarbind`, bytecode.c:743-746, is `specbind
@@ -620,8 +707,9 @@ pub(crate) fn effective_plain_bind<A: PlainAccess + ?Sized>(
 /// stands"; the host mirror's publication is not an admitted Plain record's
 /// concern.
 ///
-/// A record that is not the slab's top is [`RecordMismatch`]: the caller's
-/// entry and the slab disagree, nothing was taken, and the slot is as it was.
+/// A record that is not the slab's top is [`PlainUnbindError::RecordMismatch`]:
+/// the caller's entry and the slab disagree, nothing was taken, and the slot
+/// is as it was.
 ///
 /// This is the restore without the unbind-time re-validation; the stepper's
 /// walk goes through [`effective_plain_unbind_checked`], which is this
@@ -631,9 +719,11 @@ pub(crate) fn effective_plain_bind<A: PlainAccess + ?Sized>(
 pub(crate) fn effective_plain_unbind<A: PlainAccess + ?Sized>(
     access: &mut A,
     record: SlotRecord,
-) -> Result<(), RecordMismatch> {
-    let taken = access.pop_binding(record.record).ok_or(RecordMismatch)?;
-    restore_taken_binding(access, taken);
+) -> Result<(), PlainUnbindError> {
+    let taken = access
+        .pop_binding(record.record)
+        .ok_or(PlainUnbindError::RecordMismatch)?;
+    restore_taken_binding(access, taken)?;
     Ok(())
 }
 
@@ -654,7 +744,7 @@ pub(crate) fn effective_plain_unbind<A: PlainAccess + ?Sized>(
 pub(crate) fn restore_taken_binding<A: PlainAccess + ?Sized>(
     access: &mut A,
     taken: OwnerBindingRecord,
-) {
+) -> Result<(), PlainAccessError> {
     match taken.undo {
         UndoTarget::Retired => {}
         UndoTarget::Previous(outer) => {
@@ -665,9 +755,10 @@ pub(crate) fn restore_taken_binding<A: PlainAccess + ?Sized>(
         }
         UndoTarget::Captured(saved) => {
             access.set_slot_state(taken.index, taken.channel, SlotState::NoBinding);
-            access.canonical_write(taken.sym, saved.get());
+            access.canonical_write(taken.sym, saved.get())?;
         }
     }
+    Ok(())
 }
 
 /// What the stepper's walk does with one owner binding entry (N-v2-
@@ -693,7 +784,7 @@ pub(crate) enum PlainUnbind {
 pub(crate) fn effective_plain_unbind_checked<A: PlainAccess + ?Sized>(
     access: &mut A,
     record: SlotRecord,
-) -> Result<PlainUnbind, RecordMismatch> {
+) -> Result<PlainUnbind, PlainUnbindError> {
     if access.unbind_needs_serial(record.symbol) {
         return Ok(PlainUnbind::NeedsSerial {
             symbol: record.symbol,
