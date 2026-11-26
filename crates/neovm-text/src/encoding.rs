@@ -1929,7 +1929,7 @@ fn transformed_region_string_in_context<H: TextHost>(
     coding: &str,
     direction: CodingDirection,
     target_multibyte: bool,
-) -> Result<(Value, Option<usize>), neovm_value::error::Flow> {
+) -> Result<(Value, Option<i64>), neovm_value::error::Flow> {
     // Destination nil => the codec returns the converted string, which
     // `builtin_coding_region` carries back into the region.  The ENTRY is still
     // `code_convert_region`, not `code_convert_string`: GNU's region function
@@ -2349,9 +2349,11 @@ pub(crate) struct CodingRun<'a> {
     /// GNU `coding->dst_multibyte` (src/coding.c:8155-8156): multibyteness of
     /// the destination buffer for `:post-read-conversion` hooks.
     dst_multibyte: bool,
-    /// GNU `coding->produced_char` after `:post-read-conversion`
-    /// (`coding->produced_char += Z - prev_Z`, src/coding.c:8194).
-    produced_chars: Option<usize>,
+    /// GNU `coding->produced_char` (`ptrdiff_t`, signed) after
+    /// `:post-read-conversion` (`coding->produced_char += Z - prev_Z`,
+    /// src/coding.c:8194). Can go negative when a hook deletes more buffer
+    /// units than the decoder produced characters.
+    produced_chars: Option<i64>,
 }
 
 impl<'a> CodingRun<'a> {
@@ -2388,11 +2390,11 @@ impl<'a> CodingRun<'a> {
         self
     }
 
-    fn record_produced_chars(&mut self, produced_chars: usize) {
+    fn record_produced_chars(&mut self, produced_chars: i64) {
         self.produced_chars = Some(produced_chars);
     }
 
-    fn produced_chars(&self) -> Option<usize> {
+    fn produced_chars(&self) -> Option<i64> {
         self.produced_chars
     }
 
@@ -3882,7 +3884,7 @@ fn run_post_read_conversion<H: TextHost>(
     hook: SymId,
     text: Value,
     target_multibyte: bool,
-) -> Result<(Value, usize), neovm_value::error::Flow> {
+) -> Result<(Value, i64), neovm_value::error::Flow> {
     let decoded_ls = ctx.lisp_string(text).ok_or_else(|| {
         signal(
             LispCondition::WrongTypeArgument,
@@ -3909,12 +3911,13 @@ fn run_post_read_conversion<H: TextHost>(
             vec![Value::symbol("stringp"), result],
         )
     })?;
-    // GNU `coding->produced_char += Z - prev_Z` (src/coding.c:8194): in a
-    // unibyte buffer `Z - BEG` is the byte count (`schars() == sbytes()`); in a
-    // multibyte buffer `Z - BEG` is the char count (`schars()`).
+    // GNU `coding->produced_char += Z - prev_Z` (src/coding.c:8194): signed
+    // (`ptrdiff_t`), NOT clamped at zero; in a unibyte buffer `Z - BEG` is the
+    // byte count (`schars() == sbytes()`); in a multibyte buffer it is the char
+    // count (`schars()`).
     let final_units = result_ls.schars();
-    let delta = final_units as isize - initial_units as isize;
-    let produced_chars = (decoded_chars as isize + delta).max(0) as usize;
+    let delta = final_units as i64 - initial_units as i64;
+    let produced_chars = decoded_chars as i64 + delta;
     Ok((result, produced_chars))
 }
 
@@ -5867,8 +5870,10 @@ fn builtin_coding_string_in_context<H: TextHost>(
             ));
         }
         insert_coding_result(ctx, buffer_id, &result_text, restore_point)?;
-        let produced_chars = run.produced_chars().unwrap_or_else(|| result_text.schars());
-        return Ok(Value::fixnum(produced_chars as i64));
+        let produced_chars = run
+            .produced_chars()
+            .unwrap_or_else(|| result_text.schars() as i64);
+        return Ok(Value::fixnum(produced_chars));
     }
     // The single EOL pass for the codec chain below, mirroring GNU
     // A bypass descriptor never enters GNU's encoding engine. Eligibility is
@@ -6671,7 +6676,7 @@ fn builtin_coding_region<H: TextHost>(
             // while `code_convert_region` returns `coding.produced_char` (decoded/encoded
             // character count, `src/coding.c:9497-9499`).
             let inserted_units = stored.schars();
-            let produced_chars = hook_produced_chars.unwrap_or_else(|| result_text.schars());
+            let produced_chars = hook_produced_chars.unwrap_or_else(|| result_text.schars() as i64);
             // Capture point geometry BEFORE the replacement so we can mirror
             // GNU's in-place point restoration (coding.c
             // `decode_coding_object`/`encode_coding_object`, the `saved_pt >= 0`
@@ -6718,7 +6723,7 @@ fn builtin_coding_region<H: TextHost>(
                     .buffers_view_mut()
                     .goto_buffer_emacs_byte_pos(current_id, byte_pos);
             }
-            Ok(Value::fixnum(produced_chars as i64))
+            Ok(Value::fixnum(produced_chars))
         }
         Some(Some(buffer_id)) => {
             let restore_point = ctx.buffers().get(buffer_id).map(|buf| buf.point_anchor());
@@ -6728,9 +6733,9 @@ fn builtin_coding_region<H: TextHost>(
                     vec![Value::string("Selecting deleted buffer")],
                 ));
             }
-            let produced_chars = hook_produced_chars.unwrap_or_else(|| result_text.schars());
+            let produced_chars = hook_produced_chars.unwrap_or_else(|| result_text.schars() as i64);
             insert_coding_result(ctx, buffer_id, &result_text, restore_point)?;
-            Ok(Value::fixnum(produced_chars as i64))
+            Ok(Value::fixnum(produced_chars))
         }
     }
 }

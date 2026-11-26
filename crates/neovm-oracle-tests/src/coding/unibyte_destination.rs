@@ -372,3 +372,54 @@ fn decode_coding_region_post_read_hook_into_unibyte_buffer() {
         ]],
     );
 }
+
+/// GNU `decode_coding_object` (`src/coding.c:8194`): `coding->produced_char` is
+/// signed (`ptrdiff_t`) and `coding->produced_char += Z - prev_Z` is NOT
+/// clamped at zero. When decoding 1 non-ASCII char (`é`, 2 unibyte bytes) into
+/// a unibyte buffer and a `:post-read-conversion` hook deletes all 2 bytes,
+/// `produced_char = 1 + (0 - 2) = -1` for both `decode-coding-string` and
+/// `decode-coding-region` (in-place and separate unibyte buffer).
+#[test]
+fn decode_coding_post_read_hook_deleting_region_returns_negative_produced_char() {
+    let form = r#"(progn
+  (defvar neomacs-848-del-obs nil)
+  (defun neomacs-848-del-prc (len)
+    (setq neomacs-848-del-obs
+          (list len (- (point-max) (point-min)) enable-multibyte-characters
+                (string-to-list (buffer-string))))
+    (delete-region (point-min) (point-max))
+    0)
+  (define-coding-system 'neomacs-848-del-prc-cs "test"
+    :coding-type 'utf-8 :mnemonic ?D
+    :post-read-conversion 'neomacs-848-del-prc)
+  (list
+   ;; decode-coding-string into unibyte buffer -> -1
+   (with-temp-buffer
+     (set-buffer-multibyte nil)
+     (let ((n (decode-coding-string (unibyte-string #xc3 #xa9)
+                                    'neomacs-848-del-prc-cs nil (current-buffer))))
+       (list n (point) neomacs-848-del-obs (string-to-list (buffer-string)))))
+   ;; decode-coding-region in-place in unibyte buffer -> -1
+   (with-temp-buffer
+     (set-buffer-multibyte nil)
+     (insert (unibyte-string #xc3 #xa9))
+     (let ((n (decode-coding-region (point-min) (point-max) 'neomacs-848-del-prc-cs)))
+       (list n (point) neomacs-848-del-obs (string-to-list (buffer-string)))))
+   ;; decode-coding-region into separate unibyte buffer -> -1
+   (with-temp-buffer
+     (set-buffer-multibyte nil)
+     (let ((dst (current-buffer)))
+       (with-temp-buffer
+         (set-buffer-multibyte nil)
+         (insert (unibyte-string #xc3 #xa9))
+         (let ((n (decode-coding-region (point-min) (point-max) 'neomacs-848-del-prc-cs dst)))
+           (with-current-buffer dst
+             (list n (point) neomacs-848-del-obs (string-to-list (buffer-string))))))))))"#;
+
+    assert_oracle_parity_expect(
+        form,
+        expect![[
+            r#""OK ((-1 1 (1 2 nil (195 169)) nil) (-1 1 (1 2 nil (195 169)) nil) (-1 1 (1 2 nil (195 169)) nil))""#
+        ]],
+    );
+}
