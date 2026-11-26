@@ -31,6 +31,7 @@ use neovm_value::intern::{SymId, intern, lookup_interned, resolve_sym};
 use neovm_value::tagged::value::SymbolMode;
 use neovm_value::value::*;
 use num_enum::{IntoPrimitive, TryFromPrimitive};
+use rustc_hash::FxHashMap;
 use std::collections::{HashMap, HashSet};
 use strum::{EnumString, IntoStaticStr};
 
@@ -1348,21 +1349,21 @@ impl CodingSystemInfo {
 /// vector, and so does the uncached path.
 #[derive(Default)]
 struct CodingLookupCache {
-    plist: HashMap<SymId, Value>,
-    base: HashMap<SymId, Value>,
-    eol_type: HashMap<SymId, Value>,
-    coding_type: HashMap<SymId, Value>,
+    plist: FxHashMap<SymId, Value>,
+    base: FxHashMap<SymId, Value>,
+    eol_type: FxHashMap<SymId, Value>,
+    coding_type: FxHashMap<SymId, Value>,
 }
 
 /// Central registry for all coding systems and their aliases.
 pub struct CodingSystemManager {
     /// Registered coding systems, keyed by canonical name.
-    pub systems: HashMap<SymId, CodingSystemInfo>,
+    pub systems: FxHashMap<SymId, CodingSystemInfo>,
     /// Alias -> canonical name mapping.
-    pub aliases: HashMap<SymId, SymId>,
+    pub aliases: FxHashMap<SymId, SymId>,
     /// GNU stores aliases in each coding-system spec and appends new aliases
     /// at the tail.  Keep the same order for `coding-system-aliases`.
-    pub alias_order: HashMap<SymId, Vec<SymId>>,
+    pub alias_order: FxHashMap<SymId, Vec<SymId>>,
     /// Detection priority list (ordered list of system names).
     pub priority: Vec<SymId>,
     /// Current keyboard coding system.
@@ -1378,9 +1379,9 @@ impl CodingSystemManager {
     /// Create a new manager pre-populated with the standard coding systems.
     pub fn new() -> Self {
         let mut mgr = Self {
-            systems: HashMap::new(),
-            aliases: HashMap::new(),
-            alias_order: HashMap::new(),
+            systems: FxHashMap::default(),
+            aliases: FxHashMap::default(),
+            alias_order: FxHashMap::default(),
             priority: Vec::new(),
             // GNU `create_terminal` (terminal.c:309-318) defaults each
             // terminal's keyboard coding to `no-conversion` and its
@@ -2050,17 +2051,17 @@ impl CodingSystemManager {
     }
     #[doc(hidden)]
     pub fn from_dump(
-        systems: HashMap<SymId, CodingSystemInfo>,
-        aliases: HashMap<SymId, SymId>,
-        alias_order: HashMap<SymId, Vec<SymId>>,
+        systems: impl IntoIterator<Item = (SymId, CodingSystemInfo)>,
+        aliases: impl IntoIterator<Item = (SymId, SymId)>,
+        alias_order: impl IntoIterator<Item = (SymId, Vec<SymId>)>,
         priority: Vec<SymId>,
         keyboard_coding: SymId,
         terminal_coding: SymId,
     ) -> Self {
         Self {
-            systems,
-            aliases,
-            alias_order,
+            systems: systems.into_iter().collect(),
+            aliases: aliases.into_iter().collect(),
+            alias_order: alias_order.into_iter().collect(),
             priority,
             keyboard_coding,
             terminal_coding,

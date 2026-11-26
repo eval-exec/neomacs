@@ -120,9 +120,9 @@ fn deterministic_order_coding_registry_preserves_priority_and_alias_sequences() 
     let priority = vec![systems[9].0, systems[2].0, systems[8].0];
     let mut baseline = None;
     for layout in MapLayout::iter() {
-        eval.coding_systems.systems = rebuild(&systems, layout);
-        eval.coding_systems.aliases = rebuild(&aliases, layout);
-        eval.coding_systems.alias_order = rebuild(&alias_order, layout);
+        eval.coding_systems.systems = rebuild(&systems, layout).into_iter().collect();
+        eval.coding_systems.aliases = rebuild(&aliases, layout).into_iter().collect();
+        eval.coding_systems.alias_order = rebuild(&alias_order, layout).into_iter().collect();
         eval.coding_systems.priority = priority.clone();
         let state = convert::dump_evaluator(&eval);
         assert_eq!(
