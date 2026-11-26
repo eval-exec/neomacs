@@ -98,6 +98,27 @@ impl ScrollPreviewCoverage {
             && !self.entries.is_empty()
     }
 
+    pub(super) fn matches_auxiliary(
+        &self,
+        update: &neomacs_display_protocol::scroll_coverage::AuxiliaryScrollCoverage,
+    ) -> bool {
+        self.frame == Some(update.frame)
+            && self.entries.len() == update.surfaces.len()
+            && update.surfaces.iter().all(|surface| {
+                let coverage = surface.coverage();
+                self.entries
+                    .get(&coverage.content.window_id)
+                    .is_some_and(|entry| {
+                        entry.certified_at == update.base
+                            && entry.coverage.epoch == coverage.epoch
+                            && entry.coverage.publication == coverage.publication
+                            && entry.coverage.compositor_enabled == coverage.compositor_enabled
+                            && entry.coverage.predict_pixels == coverage.predict_pixels
+                            && entry.compositor_enabled == coverage.compositor_enabled
+                    })
+            })
+    }
+
     fn get(&self, frame: FrameId, window: DisplayWindowId) -> Option<&CertifiedPreviewCoverage> {
         if self.frame != Some(neomacs_display_protocol::DisplayFrameId::new(frame.0)) {
             return None;

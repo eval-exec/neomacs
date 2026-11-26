@@ -5412,3 +5412,401 @@ fn check_discarded_bridge_publication(pending: bool) {
             < anchor
     );
 }
+
+#[test]
+fn single_line_forward_scroll_preserves_full_margin_without_redundant_captures() {
+    let line = "ordinary offscreen text line\n";
+    let (mut eval, frame, buffer, window) = incr_editing_frame(&line.repeat(400), 800, 600);
+    eval.frame_manager_mut()
+        .get_mut(frame)
+        .unwrap()
+        .window_system = Some(Value::symbol("neomacs"));
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
+    let owner = DisplayWindowId::new(window.0 as i64);
+
+    let drain_idle = |engine: &mut LayoutEngine, eval: &Context| -> usize {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let mut captures_started = 0usize;
+        let mut last_active: Option<usize> = None;
+        while engine.maintain_scroll_coverage(eval).is_some() {
+            let active = engine.scroll_coverage.active_capture_start_for_test();
+            if let Some(start) = active
+                && last_active != Some(start)
+            {
+                captures_started += 1;
+            }
+            last_active = active;
+            assert!(
+                std::time::Instant::now() < deadline,
+                "maintain_scroll_coverage timed out"
+            );
+            std::thread::yield_now();
+        }
+        captures_started
+    };
+
+    let exported_margins = |engine: &LayoutEngine| -> (f32, f32, usize) {
+        let coverage = engine
+            .last_frame_display_state
+            .as_ref()
+            .unwrap()
+            .scroll_coverage
+            .iter()
+            .find(|c| c.content.window_id == owner)
+            .expect("exported scroll coverage for scrolled window");
+        let bounds = coverage.content.text_clip_bounds.expect("clip bounds");
+        let backward_px = coverage.viewport.y + coverage.origin - bounds.y;
+        let forward_px = bounds.bottom() - (coverage.viewport.bottom() + coverage.origin);
+        let first_char = coverage.content.matrix.rows.first().unwrap().start_charpos;
+        (backward_px, forward_px, first_char)
+    };
+
+    // Establish initial stationary coverage and record the baseline margin
+    // produced by a single speculative forward capture.
+    engine.layout_frame_rust(&mut eval, frame);
+    let initial_captures = drain_idle(&mut engine, &eval);
+    assert_eq!(
+        initial_captures, 1,
+        "initial stationary window captures one forward page"
+    );
+    engine.layout_frame_rust(&mut eval, frame);
+    let (_, speculative_forward_px, _) = exported_margins(&engine);
+    assert!(
+        speculative_forward_px > 200.0,
+        "expected substantial initial forward margin, got {speculative_forward_px}"
+    );
+
+    // Scroll forward 40 consecutive single lines (more than one full viewport).
+    // Coverage margins must stay >= the speculative baseline at every step,
+    // while redundant per-line captures are eliminated.
+    let mut total_captures = 0usize;
+    for step in 1..=40usize {
+        let start = step * line.len();
+        scroll_window_to(
+            &mut eval,
+            frame,
+            window,
+            buffer,
+            start as i64 + 1,
+            start + 5 * line.len(),
+        );
+        engine.layout_frame_rust(&mut eval, frame);
+        total_captures += drain_idle(&mut engine, &eval);
+        engine.layout_frame_rust(&mut eval, frame);
+
+        let (backward_px, forward_px, first_char) = exported_margins(&engine);
+        assert!(
+            forward_px + 0.5 >= speculative_forward_px,
+            "step {step}: forward margin {forward_px:.1}px dropped below speculative baseline {speculative_forward_px:.1}px"
+        );
+        assert!(
+            first_char == 0 || backward_px + 0.5 >= speculative_forward_px,
+            "step {step}: backward margin {backward_px:.1}px (first_char={first_char}) dropped below speculative baseline {speculative_forward_px:.1}px"
+        );
+    }
+
+    assert!(
+        total_captures <= 4,
+        "40 single-line forward scrolls triggered {total_captures} offscreen captures (expected <= 4)"
+    );
+
+    // Final live geometry must match a fresh layout engine exactly.
+    let actual = selected_window_layout_trace(&eval, &engine, frame);
+    let mut fresh = crate::font::metrics::test_catalog::layout_engine();
+    fresh.layout_frame_rust(&mut eval, frame);
+    assert_eq!(actual, selected_window_layout_trace(&eval, &fresh, frame));
+
+    // Offscreen row content equivalence: settle a fresh reference engine at the
+    // final viewport (producing the baseline speculative forward + backward
+    // coverage) and assert that our Stage 1 exported coverage is a superset
+    // whose overlapping offscreen and visible rows match the reference
+    // row-for-row (char bounds, height, wrap state, and every glyph/face).
+    let _ = drain_idle(&mut fresh, &eval);
+    fresh.layout_frame_rust(&mut eval, frame);
+    let stage1_cov = engine
+        .last_frame_display_state
+        .as_ref()
+        .unwrap()
+        .scroll_coverage
+        .iter()
+        .find(|c| c.content.window_id == owner)
+        .expect("stage1 exported coverage");
+    let ref_cov = fresh
+        .last_frame_display_state
+        .as_ref()
+        .unwrap()
+        .scroll_coverage
+        .iter()
+        .find(|c| c.content.window_id == owner)
+        .expect("reference exported coverage");
+    assert_coverage_superset_matches_rows(stage1_cov, ref_cov, "forward step 40");
+}
+
+fn assert_coverage_superset_matches_rows(
+    actual: &neomacs_display_protocol::scroll_coverage::ScrollCoverage,
+    reference: &neomacs_display_protocol::scroll_coverage::ScrollCoverage,
+    label: &str,
+) {
+    let actual_rows = &actual.content.matrix.rows;
+    let ref_rows = &reference.content.matrix.rows;
+    assert!(
+        actual_rows.first().unwrap().start_charpos <= ref_rows.first().unwrap().start_charpos,
+        "{label}: actual coverage starts after reference ({} > {})",
+        actual_rows.first().unwrap().start_charpos,
+        ref_rows.first().unwrap().start_charpos,
+    );
+    assert!(
+        actual_rows.last().unwrap().end_charpos >= ref_rows.last().unwrap().end_charpos,
+        "{label}: actual coverage ends before reference ({} < {})",
+        actual_rows.last().unwrap().end_charpos,
+        ref_rows.last().unwrap().end_charpos,
+    );
+    for ref_row in ref_rows {
+        let act_row = actual_rows
+            .iter()
+            .find(|r| r.start_charpos == ref_row.start_charpos)
+            .unwrap_or_else(|| {
+                panic!(
+                    "{label}: missing offscreen/visible row starting at charpos {}",
+                    ref_row.start_charpos
+                )
+            });
+        assert_eq!(
+            act_row.end_charpos, ref_row.end_charpos,
+            "{label}: row {} end_charpos mismatch",
+            ref_row.start_charpos
+        );
+        assert_eq!(
+            act_row.height_px, ref_row.height_px,
+            "{label}: row {} height_px mismatch",
+            ref_row.start_charpos
+        );
+        assert_eq!(
+            act_row.continued, ref_row.continued,
+            "{label}: row {} continued mismatch",
+            ref_row.start_charpos
+        );
+        assert_eq!(
+            act_row.glyphs[1].len(),
+            ref_row.glyphs[1].len(),
+            "{label}: row {} text glyph count mismatch",
+            ref_row.start_charpos
+        );
+        for (col, (ag, rg)) in act_row.glyphs[1]
+            .iter()
+            .zip(ref_row.glyphs[1].iter())
+            .enumerate()
+        {
+            assert_eq!(
+                (&ag.glyph_type, ag.face_id, ag.provenance, ag.pixel_width),
+                (&rg.glyph_type, rg.face_id, rg.provenance, rg.pixel_width),
+                "{label}: row {} col {col} glyph mismatch",
+                ref_row.start_charpos
+            );
+        }
+    }
+}
+
+#[test]
+fn single_line_backward_scroll_and_early_preview_gating() {
+    let line = "ordinary offscreen backward line\n";
+    let (mut eval, frame, buffer, window) = incr_editing_frame(&line.repeat(400), 800, 600);
+    eval.frame_manager_mut()
+        .get_mut(frame)
+        .unwrap()
+        .window_system = Some(Value::symbol("neomacs"));
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
+    let owner = DisplayWindowId::new(window.0 as i64);
+
+    // Part A: Early 4-row preview gating.
+    // 1. Initial capture (zero forward headroom) must submit an early preview
+    //    after 4 captured rows (`WorkerPending` on the 5th tick).
+    engine.layout_frame_rust(&mut eval, frame);
+    for _ in 0..4 {
+        assert_eq!(
+            engine.maintain_scroll_coverage(&eval),
+            Some(ScrollCoverageProgress::Continue)
+        );
+    }
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while !engine
+        .scroll_coverage
+        .drain(&mut engine.prepared_viewports)
+        .unwrap()
+    {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "initial low-headroom capture must emit an early 4-row preview"
+        );
+        std::thread::yield_now();
+    }
+    // Drain the initial page completely so contiguous forward headroom is ~1 viewport.
+    while engine.maintain_scroll_coverage(&eval).is_some() {
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::yield_now();
+    }
+    engine.layout_frame_rust(&mut eval, frame);
+
+    // 2. Scroll 1 line forward so a background forward-edge extension starts
+    //    while contiguous forward headroom is already >> 4 lines. It must NOT
+    //    emit an early 4-row preview after 4 captured rows.
+    let step1 = line.len();
+    scroll_window_to(
+        &mut eval,
+        frame,
+        window,
+        buffer,
+        step1 as i64 + 1,
+        step1 + 5 * line.len(),
+    );
+    engine.layout_frame_rust(&mut eval, frame);
+    // Start the forward-edge capture (first target popped when moving forward).
+    let mut captured_steps = 0usize;
+    let mut saw_forward_extension = false;
+    while captured_steps < 5 {
+        let progress = engine.maintain_scroll_coverage(&eval);
+        if let Some(start) = engine.scroll_coverage.active_capture_start_for_test()
+            && start > step1
+        {
+            saw_forward_extension = true;
+            captured_steps += 1;
+            if captured_steps <= 4 {
+                assert_eq!(
+                    progress,
+                    Some(ScrollCoverageProgress::Continue),
+                    "high-headroom forward extension must not block on early 4-row preview"
+                );
+            }
+        } else if progress.is_none() {
+            break;
+        } else {
+            std::thread::yield_now();
+        }
+        assert!(std::time::Instant::now() < deadline);
+    }
+    assert!(
+        saw_forward_extension,
+        "expected a forward-edge background extension capture"
+    );
+    // After 4 rows of the high-headroom extension, no early preview admission
+    // should be pending (5th tick continues capturing rather than WorkerPending).
+    assert_eq!(
+        engine.maintain_scroll_coverage(&eval),
+        Some(ScrollCoverageProgress::Continue),
+        "high-headroom forward extension must defer worker submission past 4 rows"
+    );
+
+    // Part B: Steady single-line backward scrolling from mid-buffer.
+    let mut back_engine = crate::font::metrics::test_catalog::layout_engine();
+    let mid_line = 160usize;
+    let mid_start = mid_line * line.len();
+    scroll_window_to(
+        &mut eval,
+        frame,
+        window,
+        buffer,
+        mid_start as i64 + 1,
+        mid_start + 5 * line.len(),
+    );
+    back_engine.layout_frame_rust(&mut eval, frame);
+
+    let drain_idle = |engine: &mut LayoutEngine, eval: &Context| -> usize {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let mut captures_started = 0usize;
+        let mut last_active: Option<usize> = None;
+        while engine.maintain_scroll_coverage(eval).is_some() {
+            let active = engine.scroll_coverage.active_capture_start_for_test();
+            if let Some(start) = active
+                && last_active != Some(start)
+            {
+                captures_started += 1;
+            }
+            last_active = active;
+            assert!(
+                std::time::Instant::now() < deadline,
+                "maintain_scroll_coverage timed out"
+            );
+            std::thread::yield_now();
+        }
+        captures_started
+    };
+
+    let exported_margins = |engine: &LayoutEngine| -> (f32, f32) {
+        let coverage = engine
+            .last_frame_display_state
+            .as_ref()
+            .unwrap()
+            .scroll_coverage
+            .iter()
+            .find(|c| c.content.window_id == owner)
+            .expect("exported scroll coverage for backward-scrolled window");
+        let bounds = coverage.content.text_clip_bounds.expect("clip bounds");
+        let backward_px = coverage.viewport.y + coverage.origin - bounds.y;
+        let forward_px = bounds.bottom() - (coverage.viewport.bottom() + coverage.origin);
+        (backward_px, forward_px)
+    };
+
+    let _ = drain_idle(&mut back_engine, &eval);
+    back_engine.layout_frame_rust(&mut eval, frame);
+    let (speculative_backward_px, speculative_forward_px) = exported_margins(&back_engine);
+    assert!(speculative_backward_px > 200.0 && speculative_forward_px > 200.0);
+
+    // Step 1 triggers the reversal direction transition (which intentionally
+    // extends the backward edge); steps 2..=40 are steady 1-line backward scrolls.
+    let mut steady_captures = 0usize;
+    for step in 1..=40usize {
+        let start = (mid_line - step) * line.len();
+        scroll_window_to(
+            &mut eval,
+            frame,
+            window,
+            buffer,
+            start as i64 + 1,
+            start + 5 * line.len(),
+        );
+        back_engine.layout_frame_rust(&mut eval, frame);
+        let started = drain_idle(&mut back_engine, &eval);
+        if step >= 2 {
+            steady_captures += started;
+        }
+        back_engine.layout_frame_rust(&mut eval, frame);
+
+        let (backward_px, forward_px) = exported_margins(&back_engine);
+        assert!(
+            backward_px + 0.5 >= speculative_backward_px,
+            "backward step {step}: backward margin {backward_px:.1}px dropped below baseline {speculative_backward_px:.1}px"
+        );
+        assert!(
+            forward_px + 0.5 >= speculative_forward_px,
+            "backward step {step}: forward margin {forward_px:.1}px dropped below baseline {speculative_forward_px:.1}px"
+        );
+    }
+
+    assert!(
+        steady_captures <= 8,
+        "39 steady single-line backward scrolls triggered {steady_captures} offscreen captures (expected <= 8)"
+    );
+
+    // Compare exported offscreen + visible rows against a fresh reference engine.
+    let mut fresh = crate::font::metrics::test_catalog::layout_engine();
+    fresh.layout_frame_rust(&mut eval, frame);
+    let _ = drain_idle(&mut fresh, &eval);
+    fresh.layout_frame_rust(&mut eval, frame);
+    let stage1_cov = back_engine
+        .last_frame_display_state
+        .as_ref()
+        .unwrap()
+        .scroll_coverage
+        .iter()
+        .find(|c| c.content.window_id == owner)
+        .expect("stage1 backward exported coverage");
+    let ref_cov = fresh
+        .last_frame_display_state
+        .as_ref()
+        .unwrap()
+        .scroll_coverage
+        .iter()
+        .find(|c| c.content.window_id == owner)
+        .expect("reference backward exported coverage");
+    assert_coverage_superset_matches_rows(stage1_cov, ref_cov, "backward step 40");
+}

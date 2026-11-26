@@ -606,6 +606,7 @@ impl LayoutEngine {
                 .get(&window_id)
                 .is_some_and(|observed| !observed.moving_backward);
         let start = CharPos0::new(retained.key.window_start.max(0) as usize);
+        let retained_start = start;
         let backward_start = if moving_backward {
             self.prepared_viewports
                 .backward_start(frame.id, window_id, &retained.key)
@@ -614,6 +615,7 @@ impl LayoutEngine {
             start
         };
         let extended_backward = moving_backward
+            && !moved
             && self
                 .scroll_coverage
                 .windows
@@ -654,6 +656,7 @@ impl LayoutEngine {
                     })
                 })
                 .unwrap_or(true);
+        let mut headroom = None;
         if !compatible {
             self.scroll_coverage.cancel_active();
         }
@@ -675,65 +678,107 @@ impl LayoutEngine {
                 .iter()
                 .filter(|row| row.enabled && !RetainedWindowMatrix::is_chrome_role(row.role))
                 .collect();
+            let begin = buffer.point_min_emacs_byte_pos().get();
+            let begin_char = buffer
+                .emacs_byte_pos_to_char_pos_clamped(neovm_core::buffer::EmacsBytePos::new(begin));
+            let end_char =
+                buffer.emacs_byte_pos_to_char_pos_clamped(buffer.point_max_emacs_byte_pos());
+            let body_height = retained.key.partition.text_body().height.max(1.0);
+            let measured = if compatible && let Some(arena) = self.frame_face_arenas.get(&frame.id)
+            {
+                Some(self.prepared_viewports.contiguous_headroom(
+                    frame.id, window_id, retained, arena, begin_char, end_char,
+                ))
+            } else {
+                None
+            };
+            headroom = measured;
+            let in_flight_start = |candidate: CharPos0| -> bool {
+                let expected = candidate.get() as i64;
+                self.scroll_coverage.capture.as_ref().is_some_and(|c| {
+                    c.frame == frame.id
+                        && c.window == window
+                        && c.retained.key.window_start == expected
+                }) || self.scroll_coverage.admission.as_ref().is_some_and(|a| {
+                    a.frame == frame.id
+                        && a.window == window_id
+                        && a.retained.key.window_start == expected
+                })
+            };
+            let need_backward = reversing_backward
+                || extended_backward
+                || urgent_backward
+                || measured
+                    .is_none_or(|h| !h.backward_reaches_begin && h.backward_px < body_height);
+            let need_forward =
+                measured.is_none_or(|h| !h.forward_reaches_end && h.forward_px < body_height);
+
             // Backward acquisition scans at most 8 KiB, regardless of buffer
             // length. It stops only on a complete physical-line boundary.
             // During reversal, extend the connected coverage edge. Starting
             // a whole page just behind the viewport can recapture only rows
             // already available while a gap farther above goes unprepared.
-            let start_byte = buffer
-                .char_pos_to_emacs_byte_pos_clamped(backward_start)
-                .get();
-            let begin = buffer.point_min_emacs_byte_pos().get();
-            let lower = start_byte.saturating_sub(8192).max(begin);
-            let mut position = start_byte;
-            let mut lines = 0;
-            let mut near_backward = None;
-            while position > lower {
-                position -= 1;
-                if buffer.emacs_byte_at_pos(neovm_core::buffer::EmacsBytePos::new(position))
-                    == Some(b'\n')
-                {
-                    lines += 1;
-                    if lines == 5 {
-                        near_backward = Some(position + 1);
-                    }
-                    if lines > rows.len().saturating_sub(2).max(1) {
-                        position += 1;
-                        break;
+            let mut backward_bridge = None;
+            if need_backward {
+                let start_byte = buffer
+                    .char_pos_to_emacs_byte_pos_clamped(backward_start)
+                    .get();
+                let lower = start_byte.saturating_sub(8192).max(begin);
+                let mut position = start_byte;
+                let mut lines = 0;
+                let mut near_backward = None;
+                while position > lower {
+                    position -= 1;
+                    if buffer.emacs_byte_at_pos(neovm_core::buffer::EmacsBytePos::new(position))
+                        == Some(b'\n')
+                    {
+                        lines += 1;
+                        if lines == 5 {
+                            near_backward = Some(position + 1);
+                        }
+                        if lines > rows.len().saturating_sub(2).max(1) {
+                            position += 1;
+                            break;
+                        }
                     }
                 }
-            }
-            if position < start_byte
-                && (position == begin || lines > rows.len().saturating_sub(2).max(1))
-            {
-                targets.push(buffer.emacs_byte_pos_to_char_pos_clamped(
-                    neovm_core::buffer::EmacsBytePos::new(position),
-                ));
-            }
-            // Rich physical lines may consume several source fragments or
-            // visual rows. A distant backward page can exhaust its bounded
-            // job before reaching the live viewport. Prepare a nearer bridge
-            // first; keep the farther target for idle page-up reuse.
-            let mut backward_bridge = None;
-            if let Some(byte) = near_backward {
-                let near = buffer.emacs_byte_pos_to_char_pos_clamped(
-                    neovm_core::buffer::EmacsBytePos::new(byte),
-                );
-                if !targets.contains(&near) {
-                    targets.push(near);
-                    backward_bridge = Some((near, backward_start));
+                if position < start_byte
+                    && (position == begin || lines > rows.len().saturating_sub(2).max(1))
+                {
+                    let far = buffer.emacs_byte_pos_to_char_pos_clamped(
+                        neovm_core::buffer::EmacsBytePos::new(position),
+                    );
+                    if !in_flight_start(far) {
+                        targets.push(far);
+                    }
+                }
+                // Rich physical lines may consume several source fragments or
+                // visual rows. A distant backward page can exhaust its bounded
+                // job before reaching the live viewport. Prepare a nearer bridge
+                // first; keep the farther target for idle page-up reuse.
+                if let Some(byte) = near_backward {
+                    let near = buffer.emacs_byte_pos_to_char_pos_clamped(
+                        neovm_core::buffer::EmacsBytePos::new(byte),
+                    );
+                    if !targets.contains(&near) && !in_flight_start(near) {
+                        targets.push(near);
+                        backward_bridge = Some((near, backward_start));
+                    }
                 }
             }
             let mut forward_target = None;
-            // Two-row overlap matches the usual page movement and also leaves
-            // reusable rows for smaller wheel motions into the next page.
-            if let Some(row) = rows.get(rows.len().saturating_sub(2)) {
-                let forward = CharPos0::new(row.start_charpos);
-                if forward > start {
+            // Extend from the connected forward edge when contiguous prepared
+            // coverage already reaches past the viewport; otherwise use a
+            // two-row overlap matching page movement and wheel motions.
+            if need_forward {
+                let resolve_physical_start = |candidate: CharPos0| -> Option<CharPos0> {
+                    if candidate <= start {
+                        return None;
+                    }
                     // A visual continuation is not an independent source
                     // entry point: capture must acquire its physical line so
                     // shaping, tabs and word-wrap state have their true origin.
-                    let mut byte = buffer.char_pos_to_emacs_byte_pos_clamped(forward).get();
+                    let mut byte = buffer.char_pos_to_emacs_byte_pos_clamped(candidate).get();
                     let lower = byte.saturating_sub(8192).max(begin);
                     while byte > lower
                         && buffer.emacs_byte_at_pos(neovm_core::buffer::EmacsBytePos::new(byte - 1))
@@ -745,14 +790,38 @@ impl LayoutEngine {
                         || buffer.emacs_byte_at_pos(neovm_core::buffer::EmacsBytePos::new(byte - 1))
                             == Some(b'\n')
                     {
-                        let physical_start = buffer.emacs_byte_pos_to_char_pos_clamped(
+                        Some(buffer.emacs_byte_pos_to_char_pos_clamped(
                             neovm_core::buffer::EmacsBytePos::new(byte),
-                        );
-                        if !targets.contains(&physical_start) {
-                            targets.push(physical_start);
-                            forward_target = Some(physical_start);
-                        }
+                        ))
+                    } else {
+                        None
                     }
+                };
+                // Try the connected forward edge first; if a >8 KiB physical
+                // line prevents finding its origin (or no forward rows are
+                // connected yet), fall back into the visible body. During
+                // steady backward motion, anchoring at mid-viewport bridges
+                // back into earlier forward pages and stays connected across
+                // ~half a viewport of upward scrolling instead of
+                // disconnecting every two lines.
+                let fallback_index = if moving_backward && !reversing_backward {
+                    rows.len() / 2
+                } else {
+                    rows.len().saturating_sub(2)
+                };
+                let viewport_fallback = rows
+                    .get(fallback_index)
+                    .map(|row| CharPos0::new(row.start_charpos));
+                if let Some(physical_start) =
+                    [measured.and_then(|h| h.forward_edge), viewport_fallback]
+                        .into_iter()
+                        .flatten()
+                        .find_map(resolve_physical_start)
+                    && !targets.contains(&physical_start)
+                    && !in_flight_start(physical_start)
+                {
+                    targets.push(physical_start);
+                    forward_target = Some(physical_start);
                 }
             }
             // Targets are consumed from the end. Follow the observed motion
@@ -934,8 +1003,37 @@ impl LayoutEngine {
                 self.scroll_coverage.last_window = Some(window_id);
                 return Some(ScrollCoverageProgress::Continue);
             }
+            if compatible && headroom.is_none() {
+                if let (Some(retained), Some(arena)) = (
+                    self.retained_window_matrices.get(&window_id),
+                    self.frame_face_arenas.get(&frame.id),
+                ) && let Some(buffer) = evaluator
+                    .buffer_manager()
+                    .get(neovm_core::buffer::BufferId(retained.key.buffer_id))
+                {
+                    let begin_char = buffer
+                        .emacs_byte_pos_to_char_pos_clamped(buffer.point_min_emacs_byte_pos());
+                    let end_char = buffer
+                        .emacs_byte_pos_to_char_pos_clamped(buffer.point_max_emacs_byte_pos());
+                    headroom = Some(self.prepared_viewports.contiguous_headroom(
+                        frame.id, window_id, retained, arena, begin_char, end_char,
+                    ));
+                }
+            }
             if let Some(capture) = &mut self.scroll_coverage.capture {
-                capture.next_preview_programs = Some(4);
+                let preview_threshold = capture.retained.key.char_height.max(1.0) * 4.0;
+                let needs_early_preview = !compatible
+                    || bridge_end.is_some()
+                    || urgent_backward
+                    || headroom.is_none_or(|h| {
+                        let dir_headroom = if start.get() >= retained_start.get() {
+                            h.forward_px
+                        } else {
+                            h.backward_px
+                        };
+                        dir_headroom < preview_threshold
+                    });
+                capture.next_preview_programs = needs_early_preview.then_some(4);
                 capture.stop_at_source = bridge_end;
             }
         }

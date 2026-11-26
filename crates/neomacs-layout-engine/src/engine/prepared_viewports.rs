@@ -8,6 +8,8 @@
 mod export;
 mod measurement;
 
+pub(in crate::engine) use export::{ContiguousHeadroom, StagedAuxiliaryLastExport};
+
 #[cfg(test)]
 #[path = "prepared_viewports/tests/certificate_test.rs"]
 mod certificate_tests;
