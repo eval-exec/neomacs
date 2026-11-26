@@ -22,6 +22,9 @@ use neomacs_display_protocol::glyph_matrix::{Glyph, GlyphArea, GlyphRow, GlyphTy
 /// else defers to the shared char-width table (GNU's default
 /// `char-width-table`).
 pub(crate) fn base_width_cols(ch: char) -> u8 {
+    if (' '..='~').contains(&ch) {
+        return 1;
+    }
     if is_regional_indicator(ch as u32) {
         2
     } else {

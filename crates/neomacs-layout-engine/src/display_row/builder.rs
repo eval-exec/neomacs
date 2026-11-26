@@ -717,6 +717,40 @@ pub(crate) struct DisplayRowWriteMetrics {
     width_cols: usize,
 }
 
+fn glyph_column_width(glyph: &Glyph, char_width_px: f32) -> usize {
+    // A complex-run member's padding cell carries its own grapheme (a
+    // non-blank Char or Composite) plus a POSITIVE `pixel_width` so the
+    // GUI advances x and the TTY can decompose the run one cell each.
+    // But the run's base `Composite` already accounts for the whole
+    // run's width via `composed_cluster_cols` (= GNU's `cmp->width`,
+    // set once in `produce_composite_glyph`, src/term.c:1859; the
+    // caller advances `it->current_x` by it a single time, :1762).
+    // Counting these padding cells again would double-count the run
+    // (the etc/HELLO Arabic/Indic left-shift): so they contribute 0
+    // cols and 0 px, just like the old zero-width padding shape did.
+    if glyph_row_writer::is_run_member_padding(glyph) {
+        return 0;
+    }
+    match &glyph.glyph_type {
+        GlyphType::Stretch { width_cols } => usize::from((*width_cols).max(1)),
+        GlyphType::AutomaticComposite { terminal, .. } => usize::from(terminal.width_cols),
+        GlyphType::Image { width_cols, .. }
+        | GlyphType::Video { width_cols, .. }
+        | GlyphType::Xwidget { width_cols, .. } => usize::from((*width_cols).max(1)),
+        GlyphType::Glyphless { .. } if glyph.pixel_width > 0.0 => {
+            (glyph.pixel_width / char_width_px.max(1.0)).ceil().max(1.0) as usize
+        }
+        // A composed grapheme cluster advances the column by GNU's
+        // `cmp->width` (= `string-width` of the cluster), not a single
+        // cell — combining marks within it contribute 0.
+        GlyphType::Composite { text } => crate::composition::composed_cluster_cols(text),
+        GlyphType::Char { ch } if base_width_cols(*ch) == 0 => 0,
+        _ if glyph.padding && glyph.pixel_width <= 0.0 => 0,
+        _ if glyph.wide => 2,
+        _ => 1,
+    }
+}
+
 impl DisplayRowWriteMetrics {
     pub(crate) const fn new(width_px: f32, width_cols: usize) -> Self {
         Self {
@@ -743,37 +777,10 @@ impl DisplayRowWriteMetrics {
 
     fn from_glyphs(glyphs: &[Glyph], char_width_px: f32) -> Self {
         glyphs.iter().fold(Self::default(), |mut metrics, glyph| {
-            // A complex-run member's padding cell carries its own grapheme (a
-            // non-blank Char or Composite) plus a POSITIVE `pixel_width` so the
-            // GUI advances x and the TTY can decompose the run one cell each.
-            // But the run's base `Composite` already accounts for the whole
-            // run's width via `composed_cluster_cols` (= GNU's `cmp->width`,
-            // set once in `produce_composite_glyph`, src/term.c:1859; the
-            // caller advances `it->current_x` by it a single time, :1762).
-            // Counting these padding cells again would double-count the run
-            // (the etc/HELLO Arabic/Indic left-shift): so they contribute 0
-            // cols and 0 px, just like the old zero-width padding shape did.
             if glyph_row_writer::is_run_member_padding(glyph) {
                 return metrics;
             }
-            let width_cols = match &glyph.glyph_type {
-                GlyphType::Stretch { width_cols } => usize::from((*width_cols).max(1)),
-                GlyphType::AutomaticComposite { terminal, .. } => usize::from(terminal.width_cols),
-                GlyphType::Image { width_cols, .. }
-                | GlyphType::Video { width_cols, .. }
-                | GlyphType::Xwidget { width_cols, .. } => usize::from((*width_cols).max(1)),
-                GlyphType::Glyphless { .. } if glyph.pixel_width > 0.0 => {
-                    (glyph.pixel_width / char_width_px.max(1.0)).ceil().max(1.0) as usize
-                }
-                // A composed grapheme cluster advances the column by GNU's
-                // `cmp->width` (= `string-width` of the cluster), not a single
-                // cell — combining marks within it contribute 0.
-                GlyphType::Composite { text } => crate::composition::composed_cluster_cols(text),
-                GlyphType::Char { ch } if base_width_cols(*ch) == 0 => 0,
-                _ if glyph.padding && glyph.pixel_width <= 0.0 => 0,
-                _ if glyph.wide => 2,
-                _ => 1,
-            };
+            let width_cols = glyph_column_width(glyph, char_width_px);
             let width_px = if glyph.pixel_width > 0.0 {
                 glyph.pixel_width
             } else {
@@ -996,11 +1003,11 @@ pub(crate) fn display_row_text_is_empty(row: &GlyphRow) -> bool {
 pub(crate) struct DisplayRowColumnCount(usize);
 
 impl DisplayRowColumnCount {
-    pub(crate) fn from_row(row: &GlyphRow, char_width_px: f32) -> Self {
+    pub(crate) fn from_text_area(row: &GlyphRow, char_width_px: f32) -> Self {
         Self(
-            row.glyphs
+            row.glyphs[GlyphArea::Text.index()]
                 .iter()
-                .map(|area| DisplayRowWriteMetrics::from_glyphs(area, char_width_px).width_cols())
+                .map(|glyph| glyph_column_width(glyph, char_width_px))
                 .sum(),
         )
     }
@@ -1010,28 +1017,45 @@ impl DisplayRowColumnCount {
     }
 }
 
-/// Pop glyphs until the row fits `target` columns. Returns whether any
-/// popped glyph was a wide glyph or a wide-glyph padding cell: GNU's TTY
-/// truncation overwrites the padding cells of a cut wide character with the
-/// truncation glyph (the back-scan to the last non-padding glyph at
-/// xdisp.c:26611-26615, then one `produce_special_glyphs` per cell from
-/// there to the row's end, :26636-26641) — issue #446's
-/// `ibuffer_truncated_wide_name_at_the_window_edge`: both cells the cut
-/// `日` leaves carry `$`, not blank+`$`.
-pub(crate) fn trim_display_row_text_to_total_columns(
+/// Result of trimming `GlyphArea::Text` to a target column budget.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct TrimmedTextRow {
+    pub(crate) popped_wide: bool,
+    pub(crate) text_cols: DisplayRowColumnCount,
+}
+
+/// Pop trailing `TEXT_AREA` glyphs until `TEXT_AREA` fits `target` columns.
+///
+/// Measures `GlyphArea::Text` strictly (never `LeftMargin` or `RightMargin`),
+/// matching GNU's TTY truncation path (`src/xdisp.c:26608-26650`), which
+/// operates exclusively on `row->glyphs[TEXT_AREA]` / `row->used[TEXT_AREA]`.
+/// Runs in a single O(text_len) pass by subtracting each popped glyph's column
+/// width instead of rescanning the row on every pop.
+///
+/// Returns whether any popped glyph was a wide glyph or a wide-glyph padding
+/// cell (GNU's TTY truncation overwrites the cut wide character's cells with
+/// the truncation glyph — `src/xdisp.c:26611-26641`, issue #446) along with
+/// the remaining `TEXT_AREA` column count.
+pub(crate) fn trim_display_row_text_to_columns(
     row: &mut GlyphRow,
     target: usize,
     char_width_px: f32,
-) -> bool {
+) -> TrimmedTextRow {
+    let mut text_cols = DisplayRowColumnCount::from_text_area(row, char_width_px).get();
+    let text_area = &mut row.glyphs[GlyphArea::Text.index()];
     let mut popped_wide = false;
-    while DisplayRowColumnCount::from_row(row, char_width_px).get() > target {
-        let text_area = &mut row.glyphs[GlyphArea::Text.index()];
+    while text_cols > target {
         let Some(glyph) = text_area.pop() else {
+            text_cols = 0;
             break;
         };
+        text_cols = text_cols.saturating_sub(glyph_column_width(&glyph, char_width_px));
         popped_wide |= glyph.wide || glyph.padding;
     }
-    popped_wide
+    TrimmedTextRow {
+        popped_wide,
+        text_cols: DisplayRowColumnCount(text_cols),
+    }
 }
 
 pub(crate) fn pop_display_row_trailing_text_char(row: &mut GlyphRow, ch: char) -> Option<Glyph> {

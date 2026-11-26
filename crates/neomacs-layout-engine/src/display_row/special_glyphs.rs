@@ -5,8 +5,7 @@ use crate::display_item::{
     DisplayItem, DisplayItemKind, DisplayTextRun, RenderFaceRef, SourceSpan,
 };
 use crate::display_row::builder::{
-    DisplayRowColumnCount, pop_display_row_trailing_text_char,
-    trim_display_row_text_to_total_columns,
+    pop_display_row_trailing_text_char, trim_display_row_text_to_columns,
 };
 use crate::display_row::geometry::{DisplayRowFlagKind, DisplayRowFlags};
 use crate::display_row::source_state::DisplayRowSourceState;
@@ -173,6 +172,7 @@ fn synthetic_special_glyph_text_item(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn render_right_edge_marker_source(
     row: &mut GlyphRow,
     render_services: &mut ChromeRowRenderServices<'_, '_>,
@@ -180,9 +180,9 @@ fn render_right_edge_marker_source(
     face_id: FaceId,
     base_face: &ResolvedFace,
     char_width: f32,
+    start_col: usize,
     matrix_cols: usize,
 ) {
-    let start_col = DisplayRowColumnCount::from_row(row, char_width).get();
     let mut source_state = DisplayRowSourceState::frame_local();
     render_services.render_item_source_fragment_from_glyph_row_columns(
         row,
@@ -213,15 +213,15 @@ fn install_right_edge_marker_from_source_request(
     let Some(clamped_col) = prepare_special_glyph_row(row, matrix_cols, target_col) else {
         return;
     };
-    let trimmed_wide = trim_display_row_text_to_total_columns(row, clamped_col, char_width);
+    let trimmed = trim_display_row_text_to_columns(row, clamped_col, char_width);
+    let text_cols = trimmed.text_cols.get();
 
-    let padding_cols =
-        clamped_col.saturating_sub(DisplayRowColumnCount::from_row(row, char_width).get());
+    let padding_cols = clamped_col.saturating_sub(text_cols);
     let mut source = RightEdgeMarkerItemSource::new(
         padding_cols,
         marker,
         face_id,
-        trimmed_wide || marker_fill_padding,
+        trimmed.popped_wide || marker_fill_padding,
     );
     render_right_edge_marker_source(
         row,
@@ -230,6 +230,7 @@ fn install_right_edge_marker_from_source_request(
         face_id,
         base_face,
         char_width,
+        text_cols,
         matrix_cols,
     );
 }
@@ -357,21 +358,19 @@ fn install_right_border_from_source_request(
     // before re-installing. This install is only reached for the TTY terminal
     // right border (`reserve_terminal_right_border_col`), whose sole right-margin
     // glyph is that border. Without this, a row reused by the cursor-only /
-    // scroll / edit fast paths already carries a `|` here; since
-    // The row column extent counts right-margin glyphs, so re-running the
-    // install adds ANOTHER `|` and mis-sizes the trim/padding, so the border band
-    // accretes leftward across passes (the timing-dependent multi-column band).
+    // scroll / edit fast paths already carries a `|` here and re-running the
+    // install would append a duplicate border glyph.
     row.glyphs[GlyphArea::RightMargin.index()].clear();
     let prior_displays_text = row.displays_text;
     let preserved_trailing = pop_display_row_trailing_text_char(row, '$');
     let preserved_cols = usize::from(preserved_trailing.is_some());
     let before_final_cols = target_col.saturating_sub(preserved_cols);
-    trim_display_row_text_to_total_columns(row, before_final_cols, request.char_width);
+    let trimmed = trim_display_row_text_to_columns(row, before_final_cols, request.char_width);
+    let mut current_cols = trimmed.text_cols.get();
 
     let mut source_offset = 0usize;
     let padding_face_id = padding_face.face_id();
-    let leading_padding = before_final_cols
-        .saturating_sub(DisplayRowColumnCount::from_row(row, request.char_width).get());
+    let leading_padding = before_final_cols.saturating_sub(current_cols);
     if leading_padding > 0 {
         render_right_border_text(
             row,
@@ -384,9 +383,10 @@ fn install_right_border_from_source_request(
                 char_width: request.char_width,
                 matrix_cols,
                 source_offset,
-                start_col: DisplayRowColumnCount::from_row(row, request.char_width).get(),
+                start_col: current_cols,
             },
         );
+        current_cols = current_cols.saturating_add(leading_padding);
         source_offset = source_offset.saturating_add(leading_padding);
     }
 
@@ -402,14 +402,14 @@ fn install_right_border_from_source_request(
                 char_width: request.char_width,
                 matrix_cols,
                 source_offset,
-                start_col: DisplayRowColumnCount::from_row(row, request.char_width).get(),
+                start_col: current_cols,
             },
         );
+        current_cols = current_cols.saturating_add(preserved_cols);
         source_offset = source_offset.saturating_add(preserved_cols);
     }
 
-    let trailing_padding =
-        target_col.saturating_sub(DisplayRowColumnCount::from_row(row, request.char_width).get());
+    let trailing_padding = target_col.saturating_sub(current_cols);
     if trailing_padding > 0 {
         render_right_border_text(
             row,
@@ -422,7 +422,7 @@ fn install_right_border_from_source_request(
                 char_width: request.char_width,
                 matrix_cols,
                 source_offset,
-                start_col: DisplayRowColumnCount::from_row(row, request.char_width).get(),
+                start_col: current_cols,
             },
         );
         source_offset = source_offset.saturating_add(trailing_padding);
