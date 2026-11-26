@@ -1226,19 +1226,21 @@ fn find_composition_internal_automatic_skips_lisp_font_at_and_passes_tty_frame()
     let gstring = items[2]
         .as_vector_data()
         .expect("third slot must be a gstring vector");
-    let g0 = gstring[2]
+    let g0_item = gstring.at(2);
+    let g0 = g0_item
         .as_vector_data()
         .expect("first glyph in shaped terminal gstring");
-    let g1 = gstring[3]
+    let g1_item = gstring.at(3);
+    let g1 = g1_item
         .as_vector_data()
         .expect("second glyph in shaped terminal gstring");
     assert_eq!(
-        (g0[0].as_fixnum(), g0[1].as_fixnum()),
+        (g0.at(0).as_fixnum(), g0.at(1).as_fixnum()),
         (Some(0), Some(1)),
         "compose-gstring-for-terminal must merge glyph 0 to [0..1]"
     );
     assert_eq!(
-        (g1[0].as_fixnum(), g1[1].as_fixnum()),
+        (g1.at(0).as_fixnum(), g1.at(1).as_fixnum()),
         (Some(0), Some(1)),
         "compose-gstring-for-terminal must merge glyph 1 to [0..1]"
     );
