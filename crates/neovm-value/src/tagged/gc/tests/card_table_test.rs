@@ -469,3 +469,26 @@ fn concurrent_mark_with_dirty_cards_clear_and_collect_is_data_race_free() {
     }
     writer.join().expect("card writer thread");
 }
+
+#[test]
+fn collect_dirty_slots_in_lines_panics_on_out_of_bounds_line_range() {
+    let cards = CardTable::new();
+    // `CHUNK_SUMMARY_BYTES == 1 << u16::BITS` (asserted in `card_table.rs`), 64 bytes/line.
+    let total_lines = (1usize << u16::BITS) / 64;
+    assert!(
+        catch_unwind(AssertUnwindSafe(|| {
+            let mut out = Vec::new();
+            cards.collect_dirty_slots_in_lines(0..total_lines + 1, &mut out);
+        }))
+        .is_err(),
+        "collect_dirty_slots_in_lines past end must panic"
+    );
+    assert!(
+        catch_unwind(AssertUnwindSafe(|| {
+            let mut out = Vec::new();
+            cards.collect_dirty_slots_in_lines(total_lines..total_lines + 1, &mut out);
+        }))
+        .is_err(),
+        "collect_dirty_slots_in_lines starting at total_lines must panic"
+    );
+}

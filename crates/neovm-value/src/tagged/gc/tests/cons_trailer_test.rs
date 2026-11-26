@@ -250,4 +250,18 @@ fn trailer_rejects_out_of_bounds_cell_and_word_indices() {
         .is_err(),
         "live_word(CONS_MARK_WORDS, false) must panic"
     );
+    assert!(
+        catch_unwind(AssertUnwindSafe(|| {
+            let _ = trailer.age_lane(CONS_MARK_WORDS, 0);
+        }))
+        .is_err(),
+        "age_lane(CONS_MARK_WORDS, 0) must panic"
+    );
+    assert!(
+        catch_unwind(AssertUnwindSafe(|| {
+            let _ = trailer.age_lane(0, AGE_LANES_PER_WORD);
+        }))
+        .is_err(),
+        "age_lane(0, AGE_LANES_PER_WORD) must panic"
+    );
 }
