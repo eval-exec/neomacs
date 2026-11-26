@@ -27,7 +27,9 @@
 //! - `neomacs_melpa_test_support::{output_with_timeout,
 //!   group_output_with_timeout, output_with_timeout_pinned}` and
 //!   `EmacsRuntime::with_timeout`, in another crate.
-//! - `mpsc::Receiver::recv_timeout` and `Condvar::wait_timeout`.
+//! - `mpsc::Receiver::recv_timeout` and `Condvar::wait_timeout`. They are
+//!   not floored, but W5 counts them like sleeps, so each use is allowlisted
+//!   with a reason or polls a `HangCap`.
 //! - `poll(2)`, `select(2)` and `epoll_wait(2)` timeouts.
 //!
 //! A test can therefore still write `session.read(Duration::from_millis(200));
@@ -67,7 +69,8 @@
 //!   [`CLOCK_ALLOWLIST`] exactly. A new scope, a changed count and a stale
 //!   entry are all violations.
 //! - **W5 sleep.** The identifiers in [`SLEEP_IDENTS`] (`std::thread` and
-//!   async sleeps, `park_timeout`, and the libc `usleep`, `nanosleep` and
+//!   async sleeps, `park_timeout`, the timed waits `Condvar::wait_timeout*`
+//!   and `Receiver::recv_timeout`, and the libc `usleep`, `nanosleep` and
 //!   `clock_nanosleep`), in any position, are counted per `(file, fn)`
 //!   scope. There are two exceptions. A plain `use` import is not counted (a
 //!   renamed import is a violation). And a sleep is not counted when its
@@ -434,6 +437,30 @@ const CLOCK_ALLOWLIST: &[ScopeAllowance] = &[
 const SLEEP_ALLOWLIST: &[SleepAllowance] = &[
     SleepAllowance {
         file: "src/lib.rs",
+        scope: "TuiSession::read",
+        kinds: &[SleepKind::PolledRetry],
+        reason: "idle-cutoff read: each receive slice re-checks the idle cutoff and the max deadline",
+    },
+    SleepAllowance {
+        file: "src/pty_output.rs",
+        scope: "PtyOutputPump::recv_timeout",
+        kinds: &[SleepKind::PrimitivePacing, SleepKind::PrimitivePacing],
+        reason: "the pump's own timed receive: the fn name and its delegation to the channel",
+    },
+    SleepAllowance {
+        file: "src/pty_output/owner.rs",
+        scope: "run_transport",
+        kinds: &[SleepKind::PolledRetry],
+        reason: "the owner thread waits up to 50 ms for a request while the PTY is closed, then re-checks its stop state",
+    },
+    SleepAllowance {
+        file: "tests/tty_mode_strings.rs",
+        scope: "SecondaryPty::drain",
+        kinds: &[SleepKind::PolledRetry],
+        reason: "idle-quiescence drain: returns once the buffer stops growing for one window",
+    },
+    SleepAllowance {
+        file: "src/lib.rs",
         scope: "TuiSession::send_keys",
         kinds: &[SleepKind::InputCadence],
         reason: "50 ms between the keys of one sequence; callers then wait on screen state",
@@ -530,8 +557,10 @@ const CLOCK_IDENTS: &[&str] = &[
 ];
 
 /// Sleep identifiers: `std::thread` and async runtimes (`sleep`, `sleep_ms`,
-/// `sleep_until`), thread parking with a timeout (`park_timeout`) and the
-/// libc sleeps (`usleep`, `nanosleep`, `clock_nanosleep`). A sleep is "time
+/// `sleep_until`), thread parking with a timeout (`park_timeout`), timed
+/// condvar and channel waits (`wait_timeout*`, `recv_timeout`), which are a
+/// sleep whenever nothing else wakes them, and the libc sleeps (`usleep`,
+/// `nanosleep`, `clock_nanosleep`). A sleep is "time
 /// passing without a clock read": a fixed sleep followed by an assertion is
 /// the settle-flake shape.
 const SLEEP_IDENTS: &[&str] = &[
@@ -539,6 +568,10 @@ const SLEEP_IDENTS: &[&str] = &[
     "sleep_ms",
     "sleep_until",
     "park_timeout",
+    "wait_timeout",
+    "wait_timeout_ms",
+    "wait_timeout_while",
+    "recv_timeout",
     "usleep",
     "nanosleep",
     "clock_nanosleep",
@@ -603,14 +636,14 @@ const SLEEP_PINS: &[(&str, SleepPin)] = &[
     (
         "neomacs-gui-tests",
         SleepPin {
-            total: 41,
+            total: 42,
             blind_settle: 16,
         },
     ),
     (
         "neomacs-tui-tests",
         SleepPin {
-            total: 11,
+            total: 16,
             blind_settle: 3,
         },
     ),
@@ -1791,6 +1824,8 @@ mod rows {
             "fn t() { for _ in 0..1 { let is_expired = (); let _ = is_expired; thread::sleep(TICK); } }",
             "fn t(cap: &HangCap) { for _ in 0..1 { cap.is_expired(); thread::sleep(TICK); } }",
             "fn t() { std::thread::park_timeout(TICK); }",
+            "fn t(cvar: &Condvar, g: G) { let _ = cvar.wait_timeout(g, TICK); assert!(ready()); }",
+            "fn t(rx: &Receiver<()>) { let _ = rx.recv_timeout(TICK); assert!(ready()); }",
             "fn t() { unsafe { libc::usleep(200_000) }; }",
             "fn t() { unsafe { libc::nanosleep(&req, null_mut()) }; }",
             "fn t() { unsafe { libc::clock_nanosleep(0, 0, &req, null_mut()) }; }",

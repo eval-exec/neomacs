@@ -20,7 +20,9 @@
 //! - `neomacs_melpa_test_support::{output_with_timeout,
 //!   group_output_with_timeout, output_with_timeout_pinned}` and
 //!   `EmacsRuntime::with_timeout`, in another crate.
-//! - `mpsc::Receiver::recv_timeout` and `Condvar::wait_timeout`.
+//! - `mpsc::Receiver::recv_timeout` and `Condvar::wait_timeout`. They are
+//!   not floored, but W5 counts them like sleeps, so each use is allowlisted
+//!   with a reason or polls a `HangCap`.
 //! - `poll(2)`, `select(2)` and `epoll_wait(2)` timeouts.
 //!
 //! The pinned `BlindSettle` sleeps in [`SLEEP_ALLOWLIST`] are fixed waits
@@ -62,7 +64,8 @@
 //!   labels) and string literals carrying a presentation-latency key
 //!   ([`COUNTED_LITERAL_FRAGMENTS`]).
 //! - **W5 sleep.** The identifiers in [`SLEEP_IDENTS`] (`std::thread` and
-//!   async sleeps, `park_timeout`, and the libc `usleep`, `nanosleep` and
+//!   async sleeps, `park_timeout`, the timed waits `Condvar::wait_timeout*`
+//!   and `Receiver::recv_timeout`, and the libc `usleep`, `nanosleep` and
 //!   `clock_nanosleep`), in any position, are counted per `(file, fn)`
 //!   scope. There are two exceptions. A plain `use` import is not counted (a
 //!   renamed import is a violation). And a sleep is not counted when its
@@ -299,6 +302,12 @@ const CLOCK_ALLOWLIST: &[ScopeAllowance] = &[
 /// waits for an asserted condition.
 const SLEEP_ALLOWLIST: &[SleepAllowance] = &[
     SleepAllowance {
+        file: "src/telega_fixture/mock.rs",
+        scope: "run_server",
+        kinds: &[SleepKind::PolledRetry],
+        reason: "the fixture server loop re-checks requests and control every 25 ms; nothing is asserted on the timeout",
+    },
+    SleepAllowance {
         file: "src/interaction/mod.rs",
         scope: "DesktopDriver::click",
         kinds: &[SleepKind::InputCadence],
@@ -481,8 +490,10 @@ const CLOCK_IDENTS: &[&str] = &[
 ];
 
 /// Sleep identifiers: `std::thread` and async runtimes (`sleep`, `sleep_ms`,
-/// `sleep_until`), thread parking with a timeout (`park_timeout`) and the
-/// libc sleeps (`usleep`, `nanosleep`, `clock_nanosleep`). A sleep is "time
+/// `sleep_until`), thread parking with a timeout (`park_timeout`), timed
+/// condvar and channel waits (`wait_timeout*`, `recv_timeout`), which are a
+/// sleep whenever nothing else wakes them, and the libc sleeps (`usleep`,
+/// `nanosleep`, `clock_nanosleep`). A sleep is "time
 /// passing without a clock read": a fixed sleep followed by an assertion is
 /// the settle-flake shape.
 const SLEEP_IDENTS: &[&str] = &[
@@ -490,6 +501,10 @@ const SLEEP_IDENTS: &[&str] = &[
     "sleep_ms",
     "sleep_until",
     "park_timeout",
+    "wait_timeout",
+    "wait_timeout_ms",
+    "wait_timeout_while",
+    "recv_timeout",
     "usleep",
     "nanosleep",
     "clock_nanosleep",
@@ -554,14 +569,14 @@ const SLEEP_PINS: &[(&str, SleepPin)] = &[
     (
         "neomacs-gui-tests",
         SleepPin {
-            total: 41,
+            total: 42,
             blind_settle: 16,
         },
     ),
     (
         "neomacs-tui-tests",
         SleepPin {
-            total: 11,
+            total: 16,
             blind_settle: 3,
         },
     ),
@@ -1742,6 +1757,8 @@ mod rows {
             "fn t() { for _ in 0..1 { let is_expired = (); let _ = is_expired; thread::sleep(TICK); } }",
             "fn t(cap: &HangCap) { for _ in 0..1 { cap.is_expired(); thread::sleep(TICK); } }",
             "fn t() { std::thread::park_timeout(TICK); }",
+            "fn t(cvar: &Condvar, g: G) { let _ = cvar.wait_timeout(g, TICK); assert!(ready()); }",
+            "fn t(rx: &Receiver<()>) { let _ = rx.recv_timeout(TICK); assert!(ready()); }",
             "fn t() { unsafe { libc::usleep(200_000) }; }",
             "fn t() { unsafe { libc::nanosleep(&req, null_mut()) }; }",
             "fn t() { unsafe { libc::clock_nanosleep(0, 0, &req, null_mut()) }; }",
