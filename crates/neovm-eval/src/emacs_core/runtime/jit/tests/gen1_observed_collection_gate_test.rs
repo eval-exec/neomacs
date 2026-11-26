@@ -77,7 +77,7 @@ fn gen1_unobserved_old_owners_remember_young_children_without_history() {
         let (_, endpoints) = capture(|| (kind.read(first), kind.read(last)));
         let endpoints = endpoints.expect("the endpoints are retained observations");
         for (tag, owner) in [(1, inside), (2, outside)] {
-            assert!(!is_observed(owner.bits()), "{kind:?}");
+            assert!(!unsafe { is_observed(owner.bits()) }, "{kind:?}");
             let child_roots = context.save_specpdl_roots();
             let child = Value::cons(Value::make_int(90 + tag), Value::NIL);
             context.push_specpdl_root(child);
@@ -98,7 +98,10 @@ fn gen1_unobserved_old_owners_remember_young_children_without_history() {
                 },
                 "the generational barrier still runs: {kind:?}"
             );
-            assert!(!is_observed(owner.bits()), "the store is not a read");
+            assert!(
+                !unsafe { is_observed(owner.bits()) },
+                "the store is not a read"
+            );
             context.restore_specpdl_roots(child_roots);
 
             minor(&mut context);

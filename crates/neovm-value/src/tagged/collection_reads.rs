@@ -700,20 +700,26 @@ pub(crate) fn observe(value: TaggedValue) {
     if CAPTURE_SCOPES.load(Ordering::Relaxed) & !(ReadPolicyBit::ObservedTraversal as usize) == 0 {
         return;
     }
-    observe_active(value.bits());
+    // SAFETY: `value` is a live `TaggedValue` whose pointer projection is in progress.
+    unsafe { observe_active(value.bits()) };
 }
 
 // Inactive pointer reads return at the inline membership check. Keep active
 // dependency recording cold and retain its existing private membership guard;
 // neither gate runs a callback or can change this mutator's capture stack.
+//
+// # Safety
+// `bits` must encode a live `TaggedValue` whose header remains valid for the
+// duration of this call.
 #[cold]
 #[inline(never)]
-fn observe_active(bits: usize) {
+unsafe fn observe_active(bits: usize) {
     if !ACTIVE.with(Cell::get) {
         return;
     }
     store_state::reject_foreign_capture_reads();
-    observe_bits(bits);
+    // SAFETY: caller upholds live-value contract for `bits`.
+    unsafe { observe_bits(bits) };
 }
 
 fn clear_recent_reads() {
@@ -735,8 +741,11 @@ fn recent_publication_epoch() -> Option<u64> {
     })
 }
 
+/// # Safety
+/// `bits` must encode a live `TaggedValue` whose header remains valid for the
+/// duration of this call.
 #[inline]
-fn observe_bits(bits: usize) {
+unsafe fn observe_bits(bits: usize) {
     // Keep exact-identity hits outside the mutable capture state. Ordinary
     // cons/vector access can inline this check without entering the slow
     // dependency recorder. Scope changes clear it so every active scope
@@ -745,7 +754,8 @@ fn observe_bits(bits: usize) {
     // collector and heap-installation handshakes clear this shortcut before
     // a replacement address can be accepted, so only misses publish owners.
     if !recently_observed(bits) {
-        observe_new_owner(bits);
+        // SAFETY: caller upholds live-value contract for `bits`.
+        unsafe { observe_new_owner(bits) };
     }
 }
 
@@ -786,9 +796,12 @@ pub(super) fn reset_recent_reads_for_heap_installation() {
     });
 }
 
+/// # Safety
+/// `bits` must encode a live `TaggedValue` whose header remains valid for the
+/// duration of this call.
 #[cold]
 #[inline(never)]
-fn observe_new_owner(bits: usize) {
+unsafe fn observe_new_owner(bits: usize) {
     store_state::note_recent_miss(bits);
     // Misses acquire the shared epoch here, rather than on every cached read.
     // A real owner remains live while its pointer projection executes, even
@@ -809,7 +822,8 @@ fn observe_new_owner(bits: usize) {
             // the certificate incoherent. A new nested scope starts empty.
             return;
         }
-        publish_observed_owner_in_state(&mut state, bits);
+        // SAFETY: caller upholds live-value contract for `bits`.
+        unsafe { publish_observed_owner_in_state(&mut state, bits) };
         record_observation(
             &mut state,
             bits,
@@ -1021,7 +1035,8 @@ fn record_projected_write_observed(store: &StoreState, value: TaggedValue, proje
     with_state(|state| {
         let mut state = state.borrow_mut();
         if projected && !recent {
-            publish_observed_owner_in_state(&mut state, value.bits());
+            // SAFETY: `value` is a live projected `TaggedValue` owned by the mutator.
+            unsafe { publish_observed_owner_in_state(&mut state, value.bits()) };
         }
         let revision = LispCollectionRevision::from_sequence(store.advance());
         store.record(value.bits(), revision.sequence());
@@ -1196,7 +1211,10 @@ fn refresh_observed_envelope(state: &mut State) {
 
 #[cold]
 #[inline(never)]
-fn publish_observed_owner_in_state(state: &mut State, bits: usize) -> bool {
+/// # Safety
+/// `bits` must encode a live `TaggedValue` whose header (if non-cons) remains
+/// valid and readable for the duration of this call.
+unsafe fn publish_observed_owner_in_state(state: &mut State, bits: usize) -> bool {
     if compiled_journal_mode() != CompiledJournalMode::Observed {
         return false;
     }
@@ -1210,7 +1228,8 @@ fn publish_observed_owner_in_state(state: &mut State, bits: usize) -> bool {
         if tag != super::value::TAG_VECLIKE || state.observed.has_slot_geometry(bits) {
             return false;
         }
-        let live_geometry = native_window_collection_owner(bits);
+        // SAFETY: caller upholds live-value contract for `bits`.
+        let live_geometry = unsafe { native_window_collection_owner(bits) };
         if live_geometry != NativeWindowCollectionOwner::Slots {
             return false;
         }
@@ -1230,15 +1249,17 @@ fn publish_observed_owner_in_state(state: &mut State, bits: usize) -> bool {
         // Header subtype is immutable throughout this live owner's lifetime.
         // Capture only the eligibility fact here: reclamation and transitive
         // replay must never dereference the ledger's unrooted owner addresses.
+        // SAFETY: caller upholds live-value contract for `bits`.
         let native_geometry =
-            promoted_geometry.unwrap_or_else(|| native_window_collection_owner(bits));
+            promoted_geometry.unwrap_or_else(|| unsafe { native_window_collection_owner(bits) });
         let changed = state.observed.insert(bits, native_geometry);
         // Between prunes the ledger can retain a dead lifetime's identity at
         // this reused address; its cleared mark must be published again.
         let newly = if changed || !super::gc::collection_observed_metadata(bits) {
             #[cfg(any(test, feature = "test-support"))]
             OBSERVED_OWNER_PUBLICATIONS.with(|count| count.set(count.get() + 1));
-            super::gc::mark_collection_observed(bits)
+            // SAFETY: caller upholds live-value contract for `bits`.
+            unsafe { super::gc::mark_collection_observed(bits) }
         } else {
             // The retained identity's exact metadata mark was found above.
             false
@@ -1263,15 +1284,18 @@ fn publish_observed_owner_in_state(state: &mut State, bits: usize) -> bool {
 /// avoids recursively observing through `as_veclike_ptr`/`veclike_type`.
 /// Every owner still receives the same sticky mark and full publication-ledger
 /// membership; this fact only limits native address-window geometry.
+///
+/// # Safety
+/// If `bits` carries `TAG_VECLIKE`, `bits & !TAG_MASK` must point to a live,
+/// aligned `VecLikeHeader` readable for the duration of this call.
 #[inline]
-fn native_window_collection_owner(bits: usize) -> NativeWindowCollectionOwner {
+unsafe fn native_window_collection_owner(bits: usize) -> NativeWindowCollectionOwner {
     use super::header::{VecLikeHeader, VecLikeType};
     match bits & super::value::TAG_MASK {
         super::value::TAG_CONS => NativeWindowCollectionOwner::Cons,
         super::value::TAG_VECLIKE => {
-            // SAFETY: called only for a live non-null veclike owner during its
-            // real first pointer projection. Serialized/stale certificate
-            // identities never enter this header-reading publication path.
+            // SAFETY: caller upholds that `bits` names a live non-null veclike
+            // owner during its real first pointer projection.
             let header = unsafe { &*((bits & !super::value::TAG_MASK) as *const VecLikeHeader) };
             if matches!(header.type_tag, VecLikeType::Vector | VecLikeType::Record) {
                 NativeWindowCollectionOwner::Slots

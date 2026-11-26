@@ -38,7 +38,7 @@ fn clear_string_preserves_owner_and_invalidates_observed_reads() {
         let len = payload.sbytes();
         let owner = heap.alloc_string(payload);
         let alias = owner;
-        assert!(mark_collection_observed(owner.bits()));
+        assert!(unsafe { mark_collection_observed(owner.bits()) });
         let (_, reads) = capture(|| owner.as_str_owned());
         let reads = reads.expect("observed string dependency");
 

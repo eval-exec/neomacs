@@ -147,7 +147,7 @@ fn gen0_cons_shim_rejects_outside_mutator_observations_before_exact_query() {
     let (lo, hi) = neovm_value::tagged::collection_reads::compiled_observation_window();
     let address = target.bits() & !neovm_value::tagged::value::TAG_MASK;
     assert!(address < lo || address >= hi);
-    assert!(!is_observed(target.bits()));
+    assert!(!unsafe { is_observed(target.bits()) });
     // A concurrent mark still makes the ordinary native gate ALL. Its SATB
     // work must run even when this mutator's read envelope rejects the owner.
     // SAFETY: serial unit fixture; no concurrent marker is running on this heap.
@@ -289,7 +289,7 @@ fn check_mapped_blv_binding() {
             .tagged_heap
             .remember_mapped_cons_ahead_of_writes(owner)
     );
-    assert!(!is_observed(owner.bits()));
+    assert!(!unsafe { is_observed(owner.bits()) });
     super::super::inline_vars::reset_inline_var_sites();
     let leaf = compile_blv(
         &context,
@@ -327,7 +327,7 @@ fn check_mapped_blv_binding() {
         0
     );
     assert!(
-        !is_observed(owner.bits()),
+        !unsafe { is_observed(owner.bits()) },
         "plain stores do not publish reads"
     );
     let (_, reads) = capture(|| owner.cons_cdr());
@@ -450,7 +450,10 @@ fn check_first_store(kind: StoreKind) {
 fn check_first_store_in(kind: StoreKind, generational: bool) {
     let _journal = JournalMode::observed();
     let (mut context, owner, leaf) = fixture_in(kind, generational);
-    assert!(!is_observed(owner.bits()), "fresh owner: {kind:?}");
+    assert!(
+        !unsafe { is_observed(owner.bits()) },
+        "fresh owner: {kind:?}"
+    );
     let before = LispCollectionRevision::current();
     let shims_before = kind.shim_calls();
     let (lo, hi) = neovm_value::tagged::collection_reads::compiled_observation_window();
@@ -466,7 +469,10 @@ fn check_first_store_in(kind: StoreKind, generational: bool) {
         0,
         "never-read native owner skips the journal: {kind:?}"
     );
-    assert!(!is_observed(owner.bits()), "the store is not a read");
+    assert!(
+        !unsafe { is_observed(owner.bits()) },
+        "the store is not a read"
+    );
     if outside_window {
         assert_eq!(
             kind.shim_calls(),
@@ -477,7 +483,7 @@ fn check_first_store_in(kind: StoreKind, generational: bool) {
     let (value, reads) = capture(|| {
         let value = kind.read(owner);
         assert!(
-            is_observed(owner.bits()),
+            unsafe { is_observed(owner.bits()) },
             "published before returning the read"
         );
         value
@@ -499,7 +505,7 @@ fn check_first_store_in(kind: StoreKind, generational: bool) {
     );
     drop(reads);
     assert!(
-        is_observed(owner.bits()),
+        unsafe { is_observed(owner.bits()) },
         "scope/certificate exit is not reclamation"
     );
     let (_, incoherent) = capture(|| {
@@ -551,7 +557,7 @@ fn gen0_observed_store_before_read_in_the_same_capture_is_coherent() {
     let _journal = JournalMode::observed();
     for kind in STORE_KINDS {
         let (mut context, owner, leaf) = fixture(kind);
-        assert!(!is_observed(owner.bits()));
+        assert!(!unsafe { is_observed(owner.bits()) });
         let before = LispCollectionRevision::current();
         let shims_before = kind.shim_calls();
         let supplied = Value::make_int(65);
@@ -564,19 +570,22 @@ fn gen0_observed_store_before_read_in_the_same_capture_is_coherent() {
             if matches!(kind, StoreKind::BlvDefault | StoreKind::BlvLocal) && shim_delta != 0 {
                 assert_eq!(shim_delta, 1);
             }
-            assert!(!is_observed(owner.bits()), "native setter alone: {kind:?}");
+            assert!(
+                !unsafe { is_observed(owner.bits()) },
+                "native setter alone: {kind:?}"
+            );
             assert_eq!(
                 LispCollectionRevision::current().steps_since_for_test(before),
                 0
             );
             tracing::info!(target: "fx1_collection",
                 "FX1_CAPTURE case=store-before-read kind={kind:?} shim_delta={shim_delta} owner_mark={}",
-                usize::from(is_observed(owner.bits())));
+                usize::from(unsafe { is_observed(owner.bits()) }));
             kind.read(owner)
         });
         assert_eq!(result, kind.expected(supplied));
         let reads = reads.expect("the first actual read follows the unobserved store");
-        assert!(is_observed(owner.bits()));
+        assert!(unsafe { is_observed(owner.bits()) });
         assert!(reads.unchanged());
         native(&mut context, &leaf, &kind.args(owner, Value::make_int(66)));
         assert!(!reads.unchanged(), "later mutation: {kind:?}");
@@ -599,7 +608,7 @@ fn gen0_observed_setter_capture_preserves_inline_and_outlined_dependencies() {
             assert_eq!(shim_delta, 1);
         }
         assert!(
-            !is_observed(owner.bits()),
+            !unsafe { is_observed(owner.bits()) },
             "a compiled setter is not a read: {kind:?}"
         );
         native(&mut context, &leaf, &kind.args(owner, Value::make_int(66)));
@@ -613,7 +622,7 @@ fn gen0_observed_setter_capture_preserves_inline_and_outlined_dependencies() {
         );
         tracing::info!(target: "fx1_collection",
             "FX1_CAPTURE case=setter-only kind={kind:?} shim_delta={shim_delta} owner_mark={}",
-            usize::from(is_observed(owner.bits())));
+            usize::from(unsafe { is_observed(owner.bits()) }));
         let (_, actual) = capture(|| kind.read(owner));
         native(&mut context, &leaf, &kind.args(owner, Value::make_int(67)));
         assert!(!actual.expect("actual owner read").unchanged());
@@ -627,7 +636,7 @@ fn gen0_observed_nested_and_transitive_reads_publish_sticky_owners() {
     let (_, outer) = capture(|| {
         let (_, inner) = capture(|| {
             owner.cons_car();
-            assert!(is_observed(owner.bits()));
+            assert!(unsafe { is_observed(owner.bits()) });
         });
         assert!(inner.expect("nested read").unchanged_and_observe());
     });
@@ -636,7 +645,7 @@ fn gen0_observed_nested_and_transitive_reads_publish_sticky_owners() {
     native(&mut context, &leaf, &[owner, Value::make_int(65)]);
     assert!(!outer.unchanged());
     assert!(!transitive.expect("cache hit retains the owner").unchanged());
-    assert!(is_observed(owner.bits()));
+    assert!(unsafe { is_observed(owner.bits()) });
 }
 
 #[test]
@@ -659,8 +668,8 @@ fn gen0_observed_envelope_does_not_journal_an_unobserved_middle_owner() {
         first.cons_car();
         last.cons_car();
     });
-    assert!(is_observed(first.bits()) && is_observed(last.bits()));
-    assert!(!is_observed(middle.bits()));
+    assert!(unsafe { is_observed(first.bits()) } && unsafe { is_observed(last.bits()) });
+    assert!(!unsafe { is_observed(middle.bits()) });
     let before = LispCollectionRevision::current();
     native(&mut context, &leaf, &[middle, Value::make_int(65)]);
     assert_eq!(
@@ -668,7 +677,7 @@ fn gen0_observed_envelope_does_not_journal_an_unobserved_middle_owner() {
         0,
         "the envelope is conservative; its exact owner filter is not"
     );
-    assert!(!is_observed(middle.bits()));
+    assert!(!unsafe { is_observed(middle.bits()) });
     assert!(ends.expect("only the endpoints were read").unchanged());
     assert_eq!(middle.cons_car(), Value::make_int(65));
 }
@@ -681,7 +690,7 @@ fn gen0_observed_certificate_survives_context_switch_until_its_owner_is_stored()
     first_context.push_specpdl_root(owner);
     let (_, reads) = capture(|| owner.cons_car());
     let reads = reads.expect("Context A owner");
-    assert!(is_observed(owner.bits()));
+    assert!(unsafe { is_observed(owner.bits()) });
     let parked_first = first_context.park_for_test();
     let second_context = context(false);
     let leaf = compile_bytecode_function(&store_function(Op::Setcar)).expect("Context B setter");
@@ -859,17 +868,20 @@ fn gen0_observed_mark_survives_live_stw_and_concurrent_gc_cycles() {
         let mut heap = standalone_heap();
         set_tagged_heap(&mut heap);
         let owner = kind.allocate(&mut heap);
-        assert!(!is_observed(owner.bits()));
+        assert!(!unsafe { is_observed(owner.bits()) });
         let (_, reads) = capture(|| kind.read(owner));
         assert!(reads.expect("live owner read").unchanged());
-        assert!(is_observed(owner.bits()));
+        assert!(unsafe { is_observed(owner.bits()) });
         for _ in 0..2 {
             heap.collect_rooted(std::iter::once(owner));
-            assert!(is_observed(owner.bits()), "live STW survivor: {kind:?}");
+            assert!(
+                unsafe { is_observed(owner.bits()) },
+                "live STW survivor: {kind:?}"
+            );
         }
         concurrent_cycle(&mut heap, &[owner]);
         assert!(
-            is_observed(owner.bits()),
+            unsafe { is_observed(owner.bits()) },
             "live concurrent survivor: {kind:?}"
         );
     }
@@ -887,20 +899,23 @@ fn gen0_observed_mark_clears_when_gc_frees_and_reuses_the_exact_slot() {
         let old_bits = doomed.bits();
         let (_, reads) = capture(|| kind.read(doomed));
         let old_reads = reads.expect("observed owner before reclamation");
-        assert!(is_observed(old_bits));
+        assert!(unsafe { is_observed(old_bits) });
         heap.collect_rooted([keep, keep2].into_iter());
         assert!(!heap.owns_heap_value_for_test(doomed));
         // The same-class neighbors retain this block/page's storage. The
         // non-observing query can inspect its cleared free-slot metadata.
-        assert!(!is_observed(old_bits), "freed slot: {kind:?}");
+        assert!(!unsafe { is_observed(old_bits) }, "freed slot: {kind:?}");
         let reused = kind.allocate(&mut heap);
         assert_eq!(reused.bits(), old_bits, "exact slot reuse: {kind:?}");
-        assert!(!is_observed(reused.bits()), "a new owner is unobserved");
+        assert!(
+            !unsafe { is_observed(reused.bits()) },
+            "a new owner is unobserved"
+        );
         // Readsets do not root owners. Retain this old certificate across
         // reclamation/reuse, but do not validate it after its owner's lifetime.
         drop(old_reads);
         let (_, reads) = capture(|| kind.read(reused));
-        assert!(is_observed(reused.bits()));
+        assert!(unsafe { is_observed(reused.bits()) });
         assert!(reads.expect("fresh reused-owner certificate").unchanged());
     }
 }
@@ -917,16 +932,19 @@ fn gen0_observed_reused_address_republishes_before_recent_read_dedup() {
         let old_bits = doomed.bits();
         let (_, reads) = capture(|| {
             kind.read(doomed);
-            assert!(is_observed(old_bits));
+            assert!(unsafe { is_observed(old_bits) });
             heap.collect_rooted([keep, keep2].into_iter());
-            assert!(!is_observed(old_bits));
+            assert!(!unsafe { is_observed(old_bits) });
             let reused = kind.allocate(&mut heap);
             assert_eq!(reused.bits(), old_bits);
-            assert!(!is_observed(reused.bits()));
+            assert!(!unsafe { is_observed(reused.bits()) });
             // This capture's recent-identity cache still names old_bits.
             // Actual observation must republish before its dedup shortcut.
             kind.read(reused);
-            assert!(is_observed(reused.bits()), "recent identity hit: {kind:?}");
+            assert!(
+                unsafe { is_observed(reused.bits()) },
+                "recent identity hit: {kind:?}"
+            );
         });
         assert!(reads.expect("no writes after either read").unchanged());
     }
@@ -1079,14 +1097,14 @@ fn gen0_observed_collection_store_cost_probe() {
     let observed_neighbors = neighbors.map_or(0, |owners| {
         owners
             .into_iter()
-            .filter(|owner| is_observed(owner.bits()))
+            .filter(|owner| unsafe { is_observed(owner.bits()) })
             .count()
     });
     if envelope && mode == CompiledJournalMode::Observed {
         assert_eq!(owner_in_envelope, 1, "lo <= target < hi");
         assert_eq!(observed_neighbors, 2);
     }
-    let owner_mark_before = usize::from(is_observed(owner.bits()));
+    let owner_mark_before = usize::from(unsafe { is_observed(owner.bits()) });
     if observation == "unobserved" {
         assert_eq!(owner_mark_before, 0);
     }
@@ -1095,7 +1113,7 @@ fn gen0_observed_collection_store_cost_probe() {
     let result = native(&mut context, &leaf, &[owner, Value::make_int(count)]);
     let gcs_after = context.gc_count;
     let journal_steps = LispCollectionRevision::current().steps_since_for_test(revision_before);
-    let owner_mark_after = usize::from(is_observed(owner.bits()));
+    let owner_mark_after = usize::from(unsafe { is_observed(owner.bits()) });
     if observation == "unobserved" {
         assert_eq!(owner_mark_after, 0);
     }

@@ -150,11 +150,11 @@ fn heapborrow_r8_collector_scans_do_not_observe_lisp_reads() {
     });
     assert!(certificate.is_some(), "collection alone is not a Lisp read");
     assert!(
-        !crate::tagged::collection_reads::is_observed(root.bits()),
+        !unsafe { crate::tagged::collection_reads::is_observed(root.bits()) },
         "the collector must not mark a root as Lisp-observed"
     );
     assert!(
-        !crate::tagged::collection_reads::is_observed(child.bits()),
+        !unsafe { crate::tagged::collection_reads::is_observed(child.bits()) },
         "the collector must not mark a child as Lisp-observed"
     );
     heap.complete_collection_for_test();
@@ -188,7 +188,7 @@ fn heapborrow_r8_vector_and_string_scans_do_not_observe_lisp_reads() {
     });
     assert!(certificate.is_some());
     for value in [root, text] {
-        assert!(!crate::tagged::collection_reads::is_observed(value.bits()));
+        assert!(!unsafe { crate::tagged::collection_reads::is_observed(value.bits()) });
     }
     heap.complete_collection_for_test();
     assert_eq!(
@@ -201,6 +201,6 @@ fn heapborrow_r8_vector_and_string_scans_do_not_observe_lisp_reads() {
         root.as_vector_data().unwrap().at(0).as_str_owned().unwrap()
     });
     assert!(reads.is_some());
-    assert!(crate::tagged::collection_reads::is_observed(root.bits()));
-    assert!(crate::tagged::collection_reads::is_observed(text.bits()));
+    assert!(unsafe { crate::tagged::collection_reads::is_observed(root.bits()) });
+    assert!(unsafe { crate::tagged::collection_reads::is_observed(text.bits()) });
 }

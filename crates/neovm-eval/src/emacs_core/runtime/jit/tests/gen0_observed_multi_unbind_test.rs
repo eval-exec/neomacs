@@ -51,7 +51,7 @@ fn observe_bound_cells(context: &mut Context) -> EvalResult {
             .expect("the reads after both bindings are coherent")
             .unchanged()
     );
-    assert!(!is_observed(target.bits()));
+    assert!(!unsafe { is_observed(target.bits()) });
     assert!(
         context
             .tagged_heap
@@ -97,7 +97,7 @@ fn check_multi_blv_unbind() {
     context.assign("fx1-unbind-upper-anchor", upper);
     let old_lower = lower.cons_cdr();
     let old_target = target.cons_cdr();
-    assert!(!is_observed(lower.bits()) && !is_observed(target.bits()));
+    assert!(!unsafe { is_observed(lower.bits()) } && !unsafe { is_observed(target.bits()) });
     let observer = intern("fx1-unbind-observe-bound-cells");
     register_global_subr_entry(
         observer,
@@ -167,9 +167,9 @@ fn check_multi_blv_unbind() {
         LispCollectionRevision::current().steps_since_for_test(revision),
         1
     );
-    assert!(is_observed(lower.bits()));
+    assert!(unsafe { is_observed(lower.bits()) });
     assert!(
-        !is_observed(target.bits()),
+        !unsafe { is_observed(target.bits()) },
         "an internal restore is not a read"
     );
     assert_eq!(context.specpdl.len(), specpdl_depth);

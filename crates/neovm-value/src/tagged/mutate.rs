@@ -306,7 +306,9 @@ pub fn set_compiled_cons_cdr(cell: TaggedValue, value: TaggedValue) -> bool {
     }
     let address = cell.bits() & !TAG_MASK;
     let (lo, hi) = super::collection_reads::compiled_observation_window();
-    let observed = lo <= address && address < hi && is_observed(cell.bits());
+    // SAFETY: `cell` passed the Cons tag check above; cons observation queries
+    // side-bitmap metadata only and never dereferences `cell`.
+    let observed = lo <= address && address < hi && unsafe { is_observed(cell.bits()) };
     if !observed {
         // SAFETY: `cell` passed the cons check above and is a live word this mutator owns.
         unsafe {

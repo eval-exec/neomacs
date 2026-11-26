@@ -925,7 +925,9 @@ fn compiled_cons_store(cell: Value, value: Value, cdr: bool) -> bool {
     let observed = if lo <= address && address < hi {
         #[cfg(test)]
         CONS_OBSERVATION_QUERIES.with(|count| count.set(count.get() + 1));
-        is_observed(cell.bits())
+        // SAFETY: `cell` passed the Cons tag check above; cons observation
+        // queries side-bitmap metadata only and never dereferences `cell`.
+        unsafe { is_observed(cell.bits()) }
     } else {
         false
     };

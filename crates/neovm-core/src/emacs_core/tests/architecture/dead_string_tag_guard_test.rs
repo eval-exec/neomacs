@@ -45,10 +45,6 @@ const ALLOWED_SAFE_STRING_OBJ_CASTS: &[(&str, &str)] = &[
         "aref_fast",
     ),
     (
-        "crates/neovm-value/src/tagged/gc/collection_observed.rs",
-        "mark_collection_observed",
-    ),
-    (
         "crates/neovm-value/src/tagged/gc/collector_reads.rs",
         "gc_string_ptr",
     ),

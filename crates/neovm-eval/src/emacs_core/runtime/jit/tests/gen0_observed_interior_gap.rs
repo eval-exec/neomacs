@@ -63,7 +63,7 @@ fn gen0_native_interior_gap_skips_repeat_shims_without_admitting_growth() {
     let hull = context.tagged_heap.jit_barrier_window_for_test();
     assert!(hull.covers(target.bits() & !TAG_MASK));
     assert!(!hull.covers(growth.bits() & !TAG_MASK));
-    assert!(!is_observed(target.bits()) && !is_observed(growth.bits()));
+    assert!(!unsafe { is_observed(target.bits()) } && !unsafe { is_observed(growth.bits()) });
     let setcar = compile_bytecode_function(&store_function(Op::Setcar))
         .expect("the interior setcar leaf compiles");
     let setcdr = compile_bytecode_function(&store_function(Op::Setcdr))
@@ -101,7 +101,7 @@ fn gen0_native_interior_gap_skips_repeat_shims_without_admitting_growth() {
             .expect("supplied-value setters add no dependency")
             .unchanged()
     );
-    assert!(!is_observed(target.bits()) && !is_observed(growth.bits()));
+    assert!(!unsafe { is_observed(target.bits()) } && !unsafe { is_observed(growth.bits()) });
     assert_eq!(target.cons_car(), Value::make_int(16));
     assert_eq!(growth.cons_cdr(), Value::make_int(16));
 
@@ -376,7 +376,7 @@ fn gen0_native_two_store_leaf_closes_only_the_first_read_owner() {
             .expect("the second owner has a range proof")
             .covers(owners[5].bits() & !TAG_MASK)
     );
-    assert!(!is_observed(owners[1].bits()) && !is_observed(owners[5].bits()));
+    assert!(!unsafe { is_observed(owners[1].bits()) } && !unsafe { is_observed(owners[5].bits()) });
     let (_, setter_reads) = capture(|| {
         for value in 1..=16 {
             let supplied = Value::make_int(value);
@@ -397,7 +397,7 @@ fn gen0_native_two_store_leaf_closes_only_the_first_read_owner() {
     let (read, newly_read) = capture(|| owners[1].cons_car());
     assert_eq!(read, Value::make_int(16));
     let newly_read = newly_read.expect("a real read closes the exact exemption");
-    assert!(is_observed(owners[1].bits()) && !is_observed(owners[5].bits()));
+    assert!(unsafe { is_observed(owners[1].bits()) } && !unsafe { is_observed(owners[5].bits()) });
     assert_eq!(
         native(
             &mut context,
@@ -413,7 +413,7 @@ fn gen0_native_two_store_leaf_closes_only_the_first_read_owner() {
     assert!(!newly_read.unchanged());
     assert!(endpoints.unchanged());
     assert!(
-        !is_observed(owners[5].bits()),
+        !unsafe { is_observed(owners[5].bits()) },
         "the other store still adds no read dependency"
     );
     assert_eq!(owners[1].cons_car(), Value::make_int(23));

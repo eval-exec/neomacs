@@ -72,14 +72,14 @@ fn observed_cons_marks_distinguish_eight_aligned_foreign_cells() {
     let first = cells.bits(0);
     let second = cells.bits(1);
     assert_eq!((first & !TAG_MASK) % 16, 8);
-    assert!(!collection_observed(first));
-    assert!(!collection_observed(second));
-    assert!(mark_collection_observed(first));
-    assert!(collection_observed(first));
-    assert!(!collection_observed(second));
-    assert!(!mark_collection_observed(first));
-    assert!(mark_collection_observed(second));
-    assert!(collection_observed(second));
+    assert!(!unsafe { collection_observed(first) });
+    assert!(!unsafe { collection_observed(second) });
+    assert!(unsafe { mark_collection_observed(first) });
+    assert!(unsafe { collection_observed(first) });
+    assert!(!unsafe { collection_observed(second) });
+    assert!(!unsafe { mark_collection_observed(first) });
+    assert!(unsafe { mark_collection_observed(second) });
+    assert!(unsafe { collection_observed(second) });
 }
 
 #[test]
@@ -89,7 +89,7 @@ fn gen0_sweep_preserves_live_cons_observations_and_clears_dead_addresses() {
     let observed = [0, 1, 31, 32, 63, 64, 95, 96].map(|index| (index, cell_bits(&block, index)));
     let live = [1, 32, 63, 95];
     for (_, bits) in observed {
-        assert!(mark_collection_observed(bits));
+        assert!(unsafe { mark_collection_observed(bits) });
     }
     for index in live {
         block.mark_cell_offset(index * std::mem::size_of::<ConsCell>());
@@ -99,7 +99,7 @@ fn gen0_sweep_preserves_live_cons_observations_and_clears_dead_addresses() {
     for (index, bits) in observed {
         // Cons queries use the old address as a metadata key, never as a
         // dereferenced cell. This also checks the dead/free lifetime seam.
-        assert_eq!(collection_observed(bits), live.contains(&index));
+        assert_eq!(unsafe { collection_observed(bits) }, live.contains(&index));
     }
     assert!(!free_list.is_null());
 }
@@ -110,7 +110,7 @@ fn gen1_sweep_preserves_untraced_old_and_marked_young_cons_observations() {
     let mut block = make_block(65);
     let observed = [0, 1, 31, 32, 63, 64].map(|index| (index, cell_bits(&block, index)));
     for (_, bits) in observed {
-        assert!(mark_collection_observed(bits));
+        assert!(unsafe { mark_collection_observed(bits) });
     }
     block.trailer().set_old(0);
     block.trailer().set_old(63);
@@ -120,7 +120,7 @@ fn gen1_sweep_preserves_untraced_old_and_marked_young_cons_observations() {
     let mut free_list = std::ptr::null_mut();
     assert_eq!(block.sweep_generational(&mut free_list), live.len());
     for (index, bits) in observed {
-        assert_eq!(collection_observed(bits), live.contains(&index));
+        assert_eq!(unsafe { collection_observed(bits) }, live.contains(&index));
     }
     assert!(block.trailer().is_old(0));
     assert!(block.trailer().is_old(63));
@@ -131,12 +131,12 @@ fn cons_observation_is_cleared_before_block_storage_is_released() {
     crate::test_utils::init_test_tracing();
     let block = make_block(1);
     let bits = cell_bits(&block, 0);
-    assert!(mark_collection_observed(bits));
-    assert!(collection_observed(bits));
+    assert!(unsafe { mark_collection_observed(bits) });
+    assert!(unsafe { collection_observed(bits) });
     drop(block);
     // A stale Cons identity can safely query the side bitmap after storage
     // dies; the query never accesses the old allocation or its trailer.
-    assert!(!collection_observed(bits));
+    assert!(!unsafe { collection_observed(bits) });
 }
 
 #[test]
@@ -146,7 +146,7 @@ fn shared_cons_observation_publication_has_exactly_one_first_observer() {
     let bits = cell_bits(&block, 0);
     let first_observers = std::thread::scope(|scope| {
         let observers: Vec<_> = (0..8)
-            .map(|_| scope.spawn(move || mark_collection_observed(bits)))
+            .map(|_| scope.spawn(move || unsafe { mark_collection_observed(bits) }))
             .collect();
         observers
             .into_iter()
@@ -155,5 +155,5 @@ fn shared_cons_observation_publication_has_exactly_one_first_observer() {
             .count()
     });
     assert_eq!(first_observers, 1);
-    assert!(collection_observed(bits));
+    assert!(unsafe { collection_observed(bits) });
 }

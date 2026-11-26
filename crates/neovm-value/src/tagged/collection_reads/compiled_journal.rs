@@ -55,10 +55,18 @@ pub(crate) fn force_compiled_journal_for_test(mode: Option<CompiledJournalMode>)
     super::publish_compiled_observation_window();
 }
 
-/// A non-observing query. A non-cons address must still name retained storage;
-/// Cons bits are keys into metadata, and never dereferenced by the query.
+/// A non-observing query. Cons bits are keys into metadata and never
+/// dereferenced; non-cons heap tags read the object's `GcHeader`.
+///
+/// # Safety
+/// If `bits` carries `TAG_STRING`, `TAG_FLOAT`, or `TAG_VECLIKE` with a
+/// non-zero address, `bits & !TAG_MASK` must point to a live, properly
+/// aligned heap object whose leading `GcHeader` remains readable for the
+/// duration of this call. `TAG_CONS` and immediate tags do not dereference
+/// `bits`.
 #[inline]
 #[doc(hidden)]
-pub fn is_observed(bits: usize) -> bool {
-    crate::tagged::gc::collection_observed(bits)
+pub unsafe fn is_observed(bits: usize) -> bool {
+    // SAFETY: caller upholds the live-header contract of `collection_observed`.
+    unsafe { crate::tagged::gc::collection_observed(bits) }
 }

@@ -24,7 +24,7 @@ fn unobserved_cons() -> (ConsBlock, usize) {
 
 fn marked_cons() -> (ConsBlock, usize) {
     let (block, bits) = unobserved_cons();
-    assert!(mark_collection_observed(bits));
+    assert!(unsafe { mark_collection_observed(bits) });
     (block, bits)
 }
 
@@ -54,16 +54,18 @@ fn while_registry_locked(operation: impl FnOnce() -> bool + Send + 'static) -> b
 fn observed_cons_query_does_not_wait_for_registry_insertion_lock() {
     crate::test_utils::init_test_tracing();
     let (_block, bits) = marked_cons();
-    assert!(while_registry_locked(move || collection_observed(bits)));
+    assert!(while_registry_locked(move || unsafe {
+        collection_observed(bits)
+    }));
 }
 
 #[test]
 fn repeated_cons_observation_does_not_wait_for_registry_insertion_lock() {
     crate::test_utils::init_test_tracing();
     let (_block, bits) = marked_cons();
-    assert!(!while_registry_locked(move || mark_collection_observed(
-        bits
-    )));
+    assert!(!while_registry_locked(move || unsafe {
+        mark_collection_observed(bits)
+    }));
 }
 
 #[test]
@@ -90,7 +92,7 @@ fn compiled_cons_observation_word_survives_clear_and_reuse() {
     let (reused_word, reused_mask) = cons_collection_observed_word(bits);
     assert!(std::ptr::eq(word, reused_word));
     assert_eq!(mask, reused_mask);
-    assert!(mark_collection_observed(bits));
+    assert!(unsafe { mark_collection_observed(bits) });
     assert!(collection_observed_metadata(bits));
     drop(block);
     // Native code's permanent word and stale-safe ledger lookup remain valid
@@ -106,7 +108,7 @@ fn noncons_observation_metadata_is_safe_after_header_storage_dies() {
     // payload or Lisp pointer projection.
     let header = Box::new(GcHeader::new(HeapObjectKind::Float));
     let bits = (&*header as *const GcHeader as usize) | TAG_FLOAT;
-    assert!(mark_collection_observed(bits));
+    assert!(unsafe { mark_collection_observed(bits) });
     assert!(header.collection_observed());
     assert!(collection_observed_metadata(bits));
     let before = collection_observation_epoch();
@@ -140,6 +142,6 @@ fn compiled_cons_observation_registration_is_stable_across_threads() {
     assert!(!collection_observed_metadata(bits));
     let (word, mask) = cons_collection_observed_word(bits);
     assert_eq!(word.load(Ordering::Acquire) & mask, 0);
-    assert!(mark_collection_observed(bits));
+    assert!(unsafe { mark_collection_observed(bits) });
     assert_ne!(word.load(Ordering::Acquire) & mask, 0);
 }

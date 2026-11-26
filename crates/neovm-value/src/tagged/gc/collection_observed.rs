@@ -169,9 +169,16 @@ fn mark_noncons_observed(address: usize, header: &GcHeader) -> bool {
 /// pointer projection or consulting the active heap. The caller gates this
 /// API on observed mode and publishes its own JIT address envelope before
 /// any subsequent compiled mutation. Returns whether the shared mark is new.
+///
+/// # Safety
+/// If `bits` carries `TAG_STRING`, `TAG_FLOAT`, or `TAG_VECLIKE` with a
+/// non-zero address, `bits & !TAG_MASK` must point to a live, properly
+/// aligned heap object of that tag whose leading `GcHeader` (or `StringObj`)
+/// remains valid for the duration of this call. `TAG_CONS` and immediate tags
+/// do not dereference `bits`.
 #[cold]
 #[inline(never)]
-pub(crate) fn mark_collection_observed(bits: usize) -> bool {
+pub(crate) unsafe fn mark_collection_observed(bits: usize) -> bool {
     let address = bits & !TAG_MASK;
     if address == 0 {
         return false;
@@ -179,15 +186,16 @@ pub(crate) fn mark_collection_observed(bits: usize) -> bool {
     match bits & TAG_MASK {
         TAG_CONS => mark_cons_observed(address),
         TAG_STRING => {
-            // SAFETY: the caller supplies a live string owner. The atomic
-            // header mark survives byte-storage replacement and materialization;
-            // publish it before the certificate's revision snapshot.
+            // SAFETY: caller upholds that `address` names a live `StringObj`.
+            // The atomic header mark survives byte-storage replacement and
+            // materialization; publish it before the certificate's revision snapshot.
             let owner = unsafe { &*(address as *const StringObj) };
             mark_noncons_observed(address, &owner.header)
         }
         TAG_FLOAT | TAG_VECLIKE => {
-            // SAFETY: a live non-cons heap owner begins with GcHeader. Raw
-            // tag decoding avoids recursively observing while STATE is held.
+            // SAFETY: caller upholds that `address` names a live non-cons heap
+            // owner beginning with `GcHeader`. Raw tag decoding avoids
+            // recursively observing while STATE is held.
             mark_noncons_observed(address, unsafe { &*(address as *const GcHeader) })
         }
         _ => false,
@@ -196,9 +204,16 @@ pub(crate) fn mark_collection_observed(bits: usize) -> bool {
 
 /// Query a live owner's sticky mark. The side bitmap makes no assumption
 /// about which Context owns a cons or whether it has an owned-block trailer.
+///
+/// # Safety
+/// If `bits` carries `TAG_STRING`, `TAG_FLOAT`, or `TAG_VECLIKE` with a
+/// non-zero address, `bits & !TAG_MASK` must point to a live, properly
+/// aligned heap object whose leading `GcHeader` remains readable for the
+/// duration of this call. `TAG_CONS` and immediate tags do not dereference
+/// `bits`.
 #[inline]
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
-pub(crate) fn collection_observed(bits: usize) -> bool {
+pub(crate) unsafe fn collection_observed(bits: usize) -> bool {
     let address = bits & !TAG_MASK;
     if address == 0 {
         return false;
@@ -211,7 +226,8 @@ pub(crate) fn collection_observed(bits: usize) -> bool {
             cons_observed(address)
         }
         TAG_STRING | TAG_FLOAT | TAG_VECLIKE => {
-            // SAFETY: the caller supplies a live owner, as for the marking API.
+            // SAFETY: caller upholds that `address` names a live heap owner
+            // with a valid leading `GcHeader`.
             unsafe { &*(address as *const GcHeader) }.collection_observed()
         }
         _ => false,

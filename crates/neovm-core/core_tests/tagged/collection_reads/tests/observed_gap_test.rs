@@ -88,7 +88,7 @@ fn exclude_middle(context: &Context, owners: [TaggedValue; 3]) -> BarrierWindow 
     let (_, certificate) = capture(|| (left.cons_car(), right.cons_car()));
     let certificate = certificate.expect("the observed endpoints are coherent");
     assert!(certificate.unchanged());
-    assert!(!is_observed(target.bits()));
+    assert!(!unsafe { is_observed(target.bits()) });
     let hull = context.tagged_heap().jit_barrier_window_for_test();
     assert!(hull.covers(address(target)));
     assert_eq!(
@@ -137,7 +137,7 @@ fn observed_exterior_refusal_does_not_block_later_interior_cons_gap() {
     assert!(hull.covers(address(left)) && hull.covers(address(right)));
     assert!(hull.covers(address(interior)));
     assert!(!hull.covers(address(exterior)));
-    assert!(!is_observed(exterior.bits()) && !is_observed(interior.bits()));
+    assert!(!unsafe { is_observed(exterior.bits()) } && !unsafe { is_observed(interior.bits()) });
     assert!(
         compiled_observation_gate(BarrierWindow::NONE)
             .excluded_for_test()
@@ -357,7 +357,7 @@ fn observed_tracking_refusal_keeps_full_setter_and_reopens_gap_after_disarm() {
     let [left, target, right] = rooted_cons_triplet(&mut context);
     let (_, endpoints) = capture(|| (left.cons_car(), right.cons_car()));
     let endpoints = endpoints.expect("retained endpoint observations");
-    assert!(!is_observed(target.bits()));
+    assert!(!unsafe { is_observed(target.bits()) });
 
     // SAFETY: serial test setup; the WorldView is used in place and never swapped.
     unsafe { context.tagged_heap_mut() }
@@ -435,7 +435,7 @@ fn observed_cons_gap_retains_vector_and_string_dependencies() {
         assert!(published.covers(address(owner)));
     }
     assert!(
-        is_observed(string.bits()),
+        unsafe { is_observed(string.bits()) },
         "the independent string guard remains armed"
     );
     native_setcar(&mut context, target, TaggedValue::make_int(12));
@@ -463,11 +463,11 @@ fn observed_mode_transition_republishes_an_off_capture_dependency() {
     force_compiled_journal_for_test(Some(CompiledJournalMode::Off));
     let (_, reads) = capture(|| {
         assert_eq!(owner.cons_car(), TaggedValue::make_int(7));
-        assert!(!is_observed(owner.bits()));
+        assert!(!unsafe { is_observed(owner.bits()) });
         force_compiled_journal_for_test(Some(CompiledJournalMode::Observed));
         assert_eq!(owner.cons_car(), TaggedValue::make_int(7));
         assert!(
-            is_observed(owner.bits()),
+            unsafe { is_observed(owner.bits()) },
             "an Off-mode recent hit cannot skip publication"
         );
         native_setcar(&mut context, owner, TaggedValue::make_int(23));
@@ -495,7 +495,7 @@ fn observed_interior_cons_refinement_preserves_growth_vector_and_record_gate() {
     let record = unsafe { context.tagged_heap_mut() }.alloc_record(vec![TaggedValue::make_int(41)]);
     for owner in [vector, record] {
         context.push_specpdl_root(owner);
-        assert!(!is_observed(owner.bits()));
+        assert!(!unsafe { is_observed(owner.bits()) });
     }
     let hull = context.tagged_heap().jit_barrier_window_for_test();
     assert!(hull.covers(address(target)));
@@ -579,7 +579,7 @@ fn observed_alternating_interior_and_growth_cons_stores_do_not_expand_hull_gate(
     }
     assert_eq!(LispCollectionRevision::current(), revision);
     assert!(endpoints.unchanged());
-    assert!(!is_observed(target.bits()) && !is_observed(growth.bits()));
+    assert!(!unsafe { is_observed(target.bits()) } && !unsafe { is_observed(growth.bits()) });
     assert_eq!(target.cons_car(), TaggedValue::make_int(16));
     assert_eq!(growth.cons_cdr(), TaggedValue::make_int(16));
     native_setcar(&mut context, left, TaggedValue::make_int(23));
