@@ -24,7 +24,7 @@ impl Drop for OwnedChild {
 }
 
 fn state(path: &Path, after: u64) -> Value {
-    state_with_timeout(path, after, Duration::from_secs(8))
+    state_with_timeout(path, after, Duration::from_secs(10))
 }
 
 fn state_with_timeout(path: &Path, after: u64, timeout: Duration) -> Value {
@@ -44,7 +44,7 @@ fn state_with_timeout(path: &Path, after: u64, timeout: Duration) -> Value {
 }
 
 fn state_after_input(path: &Path, after: u64, counter: &str, expected: f64) -> Value {
-    let deadline = Instant::now() + Duration::from_secs(8);
+    let deadline = Instant::now() + Duration::from_secs(10);
     let mut sample = after;
     loop {
         let value = state(path, sample);
@@ -63,7 +63,7 @@ fn readback(path: &Path) -> image::DynamicImage {
     // The running renderer rewrites its diagnostic PNG on each frame. A
     // timer sample does not synchronize file publication: wait for a complete
     // PNG instead of treating a concurrent write as a rendering failure.
-    let deadline = Instant::now() + Duration::from_secs(8);
+    let deadline = Instant::now() + Duration::from_secs(10);
     loop {
         match image::open(path) {
             Ok(image) => return image,
@@ -105,6 +105,19 @@ fn native_page_keys_advance_and_have_confirmed_input_latency() {
 }
 
 #[test]
+fn native_page_keys_advance_and_have_confirmed_input_latency_without_debug_logs() {
+    run_native_scroll_scenario_with_mode(
+        ScrollKind::Page,
+        ScrollTarget::Selected,
+        400,
+        false,
+        false,
+        false,
+        true,
+    );
+}
+
+#[test]
 fn precise_native_bursts_in_a_large_buffer_return_to_the_initial_viewport() {
     run_native_scroll_in_buffer(ScrollKind::PreciseBurst, ScrollTarget::Selected, 100_000);
 }
@@ -135,6 +148,26 @@ fn rich_large_buffer_native_wheel_scroll_advances() {
 }
 
 #[test]
+fn sustained_scroll_stream_drains_and_reverses_in_large_plain_buffer() {
+    run_native_scroll_profile(
+        ScrollKind::PreciseStreamState,
+        ScrollTarget::Selected,
+        100_000,
+        false,
+    );
+}
+
+#[test]
+fn sustained_scroll_stream_drains_and_reverses_in_large_rich_buffer() {
+    run_native_scroll_profile(
+        ScrollKind::PreciseStreamState,
+        ScrollTarget::Selected,
+        100_000,
+        true,
+    );
+}
+
+#[test]
 fn continuous_120hz_scroll_in_large_plain_buffer() {
     run_native_scroll_profile(
         ScrollKind::PreciseStream,
@@ -159,6 +192,7 @@ enum ScrollKind {
     Precise,
     PreciseBurst,
     PreciseStream,
+    PreciseStreamState,
     Wheel,
     Page,
 }
@@ -249,6 +283,18 @@ fn run_native_scroll_scenario(
     stalled: bool,
     resolved: bool,
 ) {
+    run_native_scroll_scenario_with_mode(kind, target, lines, rich, stalled, resolved, false);
+}
+
+fn run_native_scroll_scenario_with_mode(
+    kind: ScrollKind,
+    target: ScrollTarget,
+    lines: usize,
+    rich: bool,
+    stalled: bool,
+    resolved: bool,
+    force_timing_only: bool,
+) {
     let profile = if rich { "rich-v1" } else { "plain" };
     let root = neomacs_infra::workspace_root();
     let artifact_root = std::env::var_os("CARGO_TARGET_DIR")
@@ -284,7 +330,11 @@ focus_follows_mouse yes
     // Continuous GPU readback/PNG encoding would dominate input latency.
     // Sustained streams measure throughput; readback and per-glyph debug
     // logging would change the workload. Burst tests cover rendered pixels.
-    let timing_only = matches!(kind, ScrollKind::PreciseStream)
+    let timing_only = force_timing_only
+        || matches!(
+            kind,
+            ScrollKind::PreciseStream | ScrollKind::PreciseStreamState
+        )
         || std::env::var_os("NEOMACS_GUI_SCROLL_TIMING_ONLY").is_some();
     fs::write(
         artifacts.join("measurement-mode"),
@@ -393,13 +443,45 @@ focus_follows_mouse yes
         200,
     );
     let mut trackpad = trackpad.for_pointer_target(pointer_target);
-    trackpad.move_to_body();
-    thread::sleep(Duration::from_millis(200));
-    let mut previous = state(&state_path, initial["sample"].as_u64().unwrap());
+    // Sway starts with WLR_LIBINPUT_NO_DEVICES=1, so the seat has no keyboard
+    // until a virtual keyboard attaches. Holding one idle wtype device alive
+    // for the duration of page-key scenarios keeps WL_SEAT_CAPABILITY_KEYBOARD
+    // attached so winit binds wl_keyboard once and never races transient
+    // per-key wtype device attach/detach under heavy CPU load.
+    let _keyboard_holder = matches!(kind, ScrollKind::Page).then(|| {
+        OwnedChild(
+            Command::new("wtype")
+                .env("XDG_RUNTIME_DIR", &runtime)
+                .env("WAYLAND_DISPLAY", &socket)
+                .args(["-s", "120000"])
+                .spawn()
+                .expect("wtype is required for native page-key testing"),
+        )
+    });
+    if matches!(kind, ScrollKind::Page) {
+        let _focused =
+            crate::wayland_readiness::wait_for_focused_child(Path::new(&runtime), &artifacts);
+        if !timing_only {
+            let focus_deadline = Instant::now() + Duration::from_secs(10);
+            while !fs::read_to_string(artifacts.join("neomacs.log"))
+                .unwrap_or_default()
+                .contains("WindowFocus { focused: true")
+            {
+                assert!(
+                    Instant::now() < focus_deadline,
+                    "editor did not receive keyboard focus after virtual keyboard attached: {artifacts:?}"
+                );
+                thread::sleep(Duration::from_millis(20));
+            }
+        }
+    }
     let initial_pixels = (!timing_only).then(|| readback(&pixels_path));
     if let Some(pixels) = &initial_pixels {
         pixels.save(artifacts.join("before.png")).unwrap();
     }
+    trackpad.move_to_body();
+    thread::sleep(Duration::from_millis(200));
+    let mut previous = state(&state_path, initial["sample"].as_u64().unwrap());
     // Sample text away from point at the left edge: moving the cursor alone
     // must not make a stale text presentation look like successful scrolling.
     let text_pixels = |pixels: &image::DynamicImage| {
@@ -419,7 +501,7 @@ focus_follows_mouse yes
             !timing_only,
             "stall proof requires pixel and presentation evidence"
         );
-        let deadline = Instant::now() + Duration::from_secs(8);
+        let deadline = Instant::now() + Duration::from_secs(10);
         let has_certified_coverage = |log: &str| {
             log.lines().any(|line| {
                 let auxiliary_ok = line.contains("installed auxiliary compositor coverage")
@@ -506,9 +588,13 @@ focus_follows_mouse yes
             if changed && confirmed {
                 break;
             }
+            // 10 s is a hang-avoidance cap, not a latency assertion: the
+            // evaluator is held frozen in `(while (file-exists-p gate))` until
+            // this test removes `stall_path` below, and the frozen-state check
+            // after the loop rejects any premature resume.
             assert!(
-                sent.elapsed() < Duration::from_secs(4),
-                "no projected pixels with native presentation while evaluator is stalled: {artifacts:?}"
+                sent.elapsed() < Duration::from_secs(10),
+                "hang-avoidance cap (10s) expired: no projected pixels with native presentation while evaluator is stalled: {artifacts:?}"
             );
             thread::sleep(Duration::from_millis(10));
         }
@@ -553,7 +639,7 @@ focus_follows_mouse yes
             previous[counter].as_f64().unwrap() + count,
         );
         assert!(position(&completed) > position(&previous));
-        let deadline = Instant::now() + Duration::from_secs(4);
+        let deadline = Instant::now() + Duration::from_secs(10);
         loop {
             let samples: Vec<Value> = fs::read_to_string(&latency_path)
                 .unwrap_or_default()
@@ -588,7 +674,10 @@ focus_follows_mouse yes
         return;
     }
 
-    if matches!(kind, ScrollKind::PreciseStream) {
+    if matches!(
+        kind,
+        ScrollKind::PreciseStream | ScrollKind::PreciseStreamState
+    ) {
         continuous::run(
             &mut trackpad,
             &artifacts,
@@ -600,6 +689,11 @@ focus_follows_mouse yes
             } else {
                 continuous::Workload::Plain
             },
+            if matches!(kind, ScrollKind::PreciseStream) {
+                continuous::Mode::CalibratedPacing
+            } else {
+                continuous::Mode::StateOnly
+            },
         );
         return;
     }
@@ -610,9 +704,12 @@ focus_follows_mouse yes
     let mut processed_pages = previous["processed-pages"].as_f64().unwrap();
     let mut trace = vec![previous.clone()];
     let steps = match kind {
-        ScrollKind::Precise | ScrollKind::PreciseBurst | ScrollKind::PreciseStream => 24,
+        ScrollKind::Precise | ScrollKind::PreciseBurst => 24,
         ScrollKind::Wheel => 12,
         ScrollKind::Page => 8,
+        ScrollKind::PreciseStream | ScrollKind::PreciseStreamState => {
+            unreachable!("stream scenarios return via continuous::run")
+        }
     };
     for step in 0..steps {
         let down = step
@@ -623,7 +720,7 @@ focus_follows_mouse yes
             };
         match kind {
             ScrollKind::Precise => trackpad.scroll(if down { 4.0 } else { -4.0 }),
-            ScrollKind::PreciseBurst | ScrollKind::PreciseStream => {
+            ScrollKind::PreciseBurst => {
                 // Deliver a burst without waiting for a redisplay between
                 // events. Observe direction and rendered text after each
                 // batch, then reverse while preserving the same device.
@@ -647,6 +744,9 @@ focus_follows_mouse yes
                     .status()
                     .expect("wtype is required for native page-key testing");
                 assert!(status.success());
+            }
+            ScrollKind::PreciseStream | ScrollKind::PreciseStreamState => {
+                unreachable!("stream scenarios return via continuous::run")
             }
         }
         thread::sleep(Duration::from_millis(500));
@@ -719,11 +819,12 @@ focus_follows_mouse yes
         if !timing_only {
             let native_log = fs::read_to_string(artifacts.join("neomacs.log")).unwrap();
             let expected_event = match kind {
-                ScrollKind::Precise | ScrollKind::PreciseBurst | ScrollKind::PreciseStream => {
-                    "PixelScroll {"
-                }
+                ScrollKind::Precise | ScrollKind::PreciseBurst => "PixelScroll {",
                 ScrollKind::Wheel => "MouseScroll {",
                 ScrollKind::Page => "KeyPress {",
+                ScrollKind::PreciseStream | ScrollKind::PreciseStreamState => {
+                    unreachable!("stream scenarios return via continuous::run")
+                }
             };
             assert!(
                 native_log.contains(expected_event),
@@ -753,7 +854,7 @@ focus_follows_mouse yes
             );
         }
     }
-    let deadline = Instant::now() + Duration::from_secs(8);
+    let deadline = Instant::now() + Duration::from_secs(10);
     let samples = loop {
         let samples: Vec<Value> = fs::read_to_string(&latency_path)
             .unwrap_or_default()

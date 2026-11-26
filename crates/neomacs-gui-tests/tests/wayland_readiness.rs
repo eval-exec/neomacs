@@ -125,7 +125,7 @@ fn wait_for_target<T>(
     mut alive: impl FnMut() -> bool,
     proof: impl Fn(MappedEditor) -> Option<T>,
 ) -> T {
-    let deadline = Instant::now() + Duration::from_secs(8);
+    let deadline = Instant::now() + Duration::from_secs(10);
     let mut last_tree = None;
     loop {
         assert!(

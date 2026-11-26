@@ -83,3 +83,97 @@ fn native_titlebar_is_not_a_menu_hit_and_popup_anchor_stays_frame_local() {
         28.0
     );
 }
+
+#[test]
+fn pointer_entered_updates_mouse_position_for_subsequent_scroll_without_motion() {
+    use crate::thread_comm::{InputEvent, PointerAction, ThreadComms};
+    use std::sync::{Arc, Mutex};
+    use winit::{
+        dpi::PhysicalPosition,
+        event::{MouseScrollDelta, PointerKind, TouchPhase, WindowEvent},
+        window::WindowId,
+    };
+
+    let comms = ThreadComms::new();
+    let (emacs, render) = comms.split();
+    let mut app = RenderApp::new(
+        render,
+        800,
+        600,
+        "test".to_string(),
+        Arc::new(crate::render_thread::ImageRenderState::default()),
+        Arc::new((Mutex::new(Vec::new()), std::sync::Condvar::new())),
+        true,
+        #[cfg(feature = "neo-term")]
+        crate::terminal::new_shared_terminals(),
+    );
+    let window_id = WindowId::from_raw(7);
+    app.frame_windows.primary_winit_id = Some(window_id);
+
+    // Primary PointerEntered with zero subsequent PointerMoved must update
+    // mouse_pos so a scroll event targets the entered coordinates instead of
+    // (0.0, 0.0).
+    app.dispatch_pointer_window_event(
+        window_id,
+        WindowEvent::PointerEntered {
+            device_id: None,
+            position: PhysicalPosition::new(200.0, 240.0),
+            primary: true,
+            kind: PointerKind::Mouse,
+        },
+    )
+    .expect("PointerEntered is handled");
+    assert_eq!(
+        app.frame_windows.primary_window().unwrap().render.mouse_pos,
+        (200.0, 240.0)
+    );
+
+    // Non-primary PointerEntered must not overwrite the primary pointer's position.
+    app.dispatch_pointer_window_event(
+        window_id,
+        WindowEvent::PointerEntered {
+            device_id: None,
+            position: PhysicalPosition::new(12.0, 16.0),
+            primary: false,
+            kind: PointerKind::Mouse,
+        },
+    )
+    .expect("non-primary PointerEntered is accepted");
+    assert_eq!(
+        app.frame_windows.primary_window().unwrap().render.mouse_pos,
+        (200.0, 240.0)
+    );
+
+    app.dispatch_pointer_window_event(
+        window_id,
+        WindowEvent::MouseWheel {
+            device_id: None,
+            delta: MouseScrollDelta::PixelDelta(PhysicalPosition::new(0.0, -4.0)),
+            phase: TouchPhase::Moved,
+            timestamp: None,
+        },
+    )
+    .expect("MouseWheel is handled");
+
+    let mut scroll_pos = None;
+    while let Ok(event) = emacs.input_rx.try_recv() {
+        let inner = match event {
+            InputEvent::Tracked { event, .. } => *event,
+            other => other,
+        };
+        let inner = match inner {
+            InputEvent::Observed { event, .. } => *event,
+            other => other,
+        };
+        if let InputEvent::PositionedPointer(pointer) = inner
+            && matches!(pointer.action, PointerAction::Scroll { .. })
+        {
+            scroll_pos = Some((pointer.position.x, pointer.position.y));
+        }
+    }
+    assert_eq!(
+        scroll_pos,
+        Some((200.0, 240.0)),
+        "MouseWheel after PointerEntered without PointerMoved must use entered coordinates"
+    );
+}

@@ -68,6 +68,7 @@ impl TryFrom<WindowEvent> for PendingNativeInput {
             | WindowEvent::ModifiersChanged(_)
             | WindowEvent::Focused(_)
             | WindowEvent::Ime(_)
+            | WindowEvent::PointerEntered { .. }
             | WindowEvent::PointerMoved { .. }
             | WindowEvent::PointerLeft { .. }
             | WindowEvent::PointerButton { .. }

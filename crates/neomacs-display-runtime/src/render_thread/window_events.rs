@@ -22,6 +22,60 @@ impl RenderApp {
     /// is the Command key on macOS and the Super key elsewhere, which is
     /// exactly how this transport already overloads `meta` (`super`)
     /// today.
+    /// Dispatch pointer window events, including `PointerEntered` whose
+    /// authoritative surface-local coordinates initialize `mouse_pos` even
+    /// when a Wayland compositor delivers `wl_pointer.enter` without a
+    /// subsequent `wl_pointer.motion`.
+    pub(super) fn dispatch_pointer_window_event(
+        &mut self,
+        window_id: WindowId,
+        event: WindowEvent,
+    ) -> Result<(), WindowEvent> {
+        match event {
+            WindowEvent::PointerButton {
+                state,
+                button,
+                position,
+                primary,
+                ..
+            } => {
+                if primary {
+                    self.handle_cursor_moved(window_id, position);
+                    if let Some(button) = button.mouse_button() {
+                        self.handle_mouse_input(window_id, state, button);
+                    }
+                }
+                Ok(())
+            }
+            WindowEvent::PointerEntered {
+                position, primary, ..
+            } => {
+                if primary {
+                    self.handle_cursor_moved(window_id, position);
+                }
+                Ok(())
+            }
+            WindowEvent::PointerMoved { position, .. } => {
+                self.handle_cursor_moved(window_id, position);
+                Ok(())
+            }
+            WindowEvent::PointerLeft { .. } => {
+                self.handle_cursor_left(window_id);
+                Ok(())
+            }
+            WindowEvent::MouseWheel {
+                device_id,
+                delta,
+                phase,
+                ..
+            } => {
+                self.handle_mouse_wheel(window_id, device_id, delta, phase);
+                Ok(())
+            }
+            other => Err(other),
+        }
+    }
+
     pub(super) fn track_modifier_key(&mut self, physical_key: PhysicalKey, pressed: bool) {
         use winit::keyboard::KeyCode;
         let (modifier, side) = match physical_key {
@@ -502,36 +556,12 @@ impl RenderApp {
                 }
             }
 
-            WindowEvent::PointerButton {
-                state,
-                button,
-                position,
-                primary,
-                ..
-            } => {
-                if primary {
-                    self.handle_cursor_moved(window_id, position);
-                    if let Some(button) = button.mouse_button() {
-                        self.handle_mouse_input(window_id, state, button);
-                    }
-                }
-            }
-
-            WindowEvent::PointerMoved { position, .. } => {
-                self.handle_cursor_moved(window_id, position);
-            }
-
-            WindowEvent::PointerLeft { .. } => {
-                self.handle_cursor_left(window_id);
-            }
-
-            WindowEvent::MouseWheel {
-                device_id,
-                delta,
-                phase,
-                ..
-            } => {
-                self.handle_mouse_wheel(window_id, device_id, delta, phase);
+            event @ (WindowEvent::PointerButton { .. }
+            | WindowEvent::PointerEntered { .. }
+            | WindowEvent::PointerMoved { .. }
+            | WindowEvent::PointerLeft { .. }
+            | WindowEvent::MouseWheel { .. }) => {
+                let _ = self.dispatch_pointer_window_event(window_id, event);
             }
 
             WindowEvent::RedrawRequested => {

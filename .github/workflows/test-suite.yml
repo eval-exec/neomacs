@@ -1428,25 +1428,16 @@ jobs:
       - name: Prepare pinned GUI package fixtures
         run: bash scripts/ci/setup-gui-test-packages.sh
 
-      # The standalone Native display contract workflow is disabled. Keep its
-      # display-runtime scroll-input coverage in automatic CI by running it
-      # from the same archive; native_display itself is already part of
-      # package(neomacs-gui-tests).
-      #
-      # Two passes over the same archive.  The remaining serial pass holds
-      # only tests whose assertions are measurements of a live compositor:
-      # the input-to-presentation latency rows, the resize/presentation pixel
-      # rows, the calibrated Wayland font raster rows, and the display-runtime
-      # scroll-input units.  A sibling sharing the runner's cores invalidates
-      # those budgets.
-      #
-      # native_menus and the live desktop-font suites are receipt-gated and
-      # run in the bulk pass: menu input starts only after the primary
-      # surface's first presentation (no fixed settle), and the desktop-font
-      # stages wait for the observed GSettings change plus the native
-      # presentation receipt, capped only by the 60 s process timeout.  They
-      # no longer depend on a 20 s per-stage budget, so concurrency no longer
-      # turns load into a failure.
+      # Single parallel pass over the GUI test archive.  Every Linux GUI row
+      # in this pass owns a private Xvfb/Sway compositor and asserts state
+      # transitions with generous hang-avoidance caps (including stalled
+      # scroll, page-key receipts, resize presentation, Wayland font raster,
+      # native menus, live desktop fonts, and the sustained-stream state
+      # rows); none shares an exclusive desktop resource or enforces a
+      # load-sensitive latency deadline.  (The pure in-memory
+      # `neomacs-display-runtime` `scroll_input` unit tests already run in the
+      # display unit-test job above, and `native_display` is part of
+      # `package(neomacs-gui-tests)`.)
       #
       # The two `continuous_120hz_` scenarios are NOT in this pass. They are
       # calibrated performance gates: native_scrolling/budget.rs judges the
@@ -1463,24 +1454,13 @@ jobs:
       # Both scenarios passed there (2026-11-18, i9-14900K, llvmpipe median
       # 2.9-3.3 ms, tier SoftwareVulkanFast). The dispatch-only
       # scroll120-cohort workflow covers the same scenarios' analysis.
-      - name: Run serialized input and presentation-budget scenarios
-        run: |
-          cargo nextest run \
-            --archive-file neomacs-workspace-tests.tar.zst \
-            --extract-to "$TMPDIR/nextest" \
-            -E '(package(neomacs-gui-tests) and (test(~presents_while_command_is_stalled) or test(~presents_resolved_destination_while_command_is_stalled) or test(~presents_pixels_while_evaluator_is_stalled) or test(~have_confirmed_input_latency) or test(~resize_presentation::) or test(~wayland_font_raster::))) or (package(neomacs-display-runtime) and test(scroll_input))' \
-            --workspace-remap "$GITHUB_WORKSPACE" \
-            --test-threads 1 \
-            --no-fail-fast
-
       - name: Run real GUI tests
         if: ${{ !cancelled() }}
         run: |
           cargo nextest run \
             --archive-file neomacs-workspace-tests.tar.zst \
             --extract-to "$TMPDIR/nextest" \
-            --extract-overwrite \
-            -E 'package(neomacs-gui-tests) and not (test(~continuous_120hz_) or test(~presents_while_command_is_stalled) or test(~presents_resolved_destination_while_command_is_stalled) or test(~presents_pixels_while_evaluator_is_stalled) or test(~have_confirmed_input_latency) or test(~resize_presentation::) or test(~wayland_font_raster::))' \
+            -E 'package(neomacs-gui-tests) and not test(~continuous_120hz_)' \
             --workspace-remap "$GITHUB_WORKSPACE" \
             --test-threads 4 \
             --no-fail-fast

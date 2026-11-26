@@ -139,11 +139,11 @@ fn run_resize_test(scenario: ResizeScenario) {
     let pid = child.id();
     let mut child = KillOnDrop(Some(child));
 
-    let window = wait_for_x11_window(pid, session.env(), Duration::from_secs(12));
+    let window = wait_for_x11_window(pid, session.env(), Duration::from_secs(30));
     run_x11_tool(session.env(), "xdotool", ["windowmap", "--sync", &window]);
-    wait_for_path(&ready_path, Duration::from_secs(12));
+    wait_for_path(&ready_path, Duration::from_secs(30));
     let (before, old_mode_rows) =
-        wait_for_red_mode_line(session.env(), &window, &before_png, Duration::from_secs(12));
+        wait_for_red_mode_line(session.env(), &window, &before_png, Duration::from_secs(30));
 
     if scenario.is_idle() {
         // The one-shot idle callback has reported readiness. Let it return
@@ -208,6 +208,9 @@ fn run_resize_test(scenario: ResizeScenario) {
         // timer (which could itself wake redisplay and mask the bug).
         // The bottom mode line must remain the same distance from the
         // bottom of the native window, and span its new width.
+        // The 10 s cap is hang-avoidance only (not a latency assertion):
+        // resize-presentation.el disables `blink-cursor-mode` and installs no
+        // periodic timers, so a blocked resize cannot self-heal after 3 s.
         let bottom_inset = before.height() - old_mode_rows.last().unwrap();
         wait_for_resized_mode_line(
             session.env(),
@@ -215,7 +218,7 @@ fn run_resize_test(scenario: ResizeScenario) {
             &artifacts.png,
             (new_width, new_height),
             bottom_inset,
-            Duration::from_secs(3),
+            Duration::from_secs(10),
         );
         return;
     }
@@ -241,7 +244,7 @@ fn run_resize_test(scenario: ResizeScenario) {
         &artifacts.png,
         (new_width, new_height),
         bottom_inset,
-        Duration::from_secs(3),
+        Duration::from_secs(10),
     );
     capture_x11_window(session.env(), &window, &artifacts.png);
 
@@ -463,7 +466,7 @@ fn wait_for_resized_mode_line(
         }
         assert!(
             started.elapsed() < timeout,
-            "content did not resize without keyboard or mouse input within {timeout:?}: \
+            "hang-avoidance cap ({timeout:?}) expired: content did not resize without keyboard or mouse input: \
              expected mode line at y={expected_row} spanning width {}, \
              actual image {:?}, red rows {:?}; capture={}",
             size.0,

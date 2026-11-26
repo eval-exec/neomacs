@@ -431,7 +431,7 @@ fn settle(
 
 fn stop_editor(editor: &mut OwnedEditor, dir: &Path) {
     fs::write(dir.join("control"), "stop").unwrap();
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + Duration::from_secs(10);
     loop {
         if let Some(status) = editor.0.try_wait().unwrap() {
             assert!(status.success(), "editor exit: {status}; {dir:?}");
