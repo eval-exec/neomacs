@@ -851,7 +851,13 @@ impl ImageCatalog for AsyncImageCatalog {
         };
         // Snapshot the in-flight load tokens before the entries are removed:
         // their late terminals describe images this clear frees.
-        let pre_clear_loads: Vec<ImageLoadToken> = if matches!(&target, ImageInvalidation::All) {
+        let cleared_after_presentation = match &target {
+            ImageInvalidation::All {
+                cleared_after_presentation,
+            } => Some(*cleared_after_presentation),
+            _ => None,
+        };
+        let pre_clear_loads: Vec<ImageLoadToken> = if cleared_after_presentation.is_some() {
             self.entries
                 .borrow()
                 .values()
@@ -870,7 +876,7 @@ impl ImageCatalog for AsyncImageCatalog {
                 .filter(|request| match &target {
                     ImageInvalidation::Spec { spec } => request.spec == *spec,
                     ImageInvalidation::Dependency(source) => request.source == *source,
-                    ImageInvalidation::All => true,
+                    ImageInvalidation::All { .. } => true,
                 })
                 .cloned()
                 .collect::<Vec<_>>();
@@ -901,7 +907,7 @@ impl ImageCatalog for AsyncImageCatalog {
             geometry.retain(|request, _| match &target {
                 ImageInvalidation::Spec { spec } => request.spec != *spec,
                 ImageInvalidation::Dependency(source) => request.source != *source,
-                ImageInvalidation::All => false,
+                ImageInvalidation::All { .. } => false,
             });
         }
 
@@ -918,13 +924,16 @@ impl ImageCatalog for AsyncImageCatalog {
         // the frame cache holds chrome icons as well as editor images.  The
         // wholesale command therefore runs even when the catalog itself had no
         // matching entry; the published total changes either way.
-        let clears_everything = matches!(&target, ImageInvalidation::All);
-        if clears_everything {
+        let clears_everything = cleared_after_presentation.is_some();
+        if let Some(cleared_after_presentation) = cleared_after_presentation {
             // Free only what existed when the clear was issued: an eager CPU
             // decode submitted after this ticket belongs to a later load and
             // must not be retired by this physical clear.
             let through = self.image_decode_client.admission_ticket();
-            let command = RenderCommand::Asset(AssetCommand::ClearImageCache { through });
+            let command = RenderCommand::Asset(AssetCommand::ClearImageCache {
+                through,
+                cleared_after_presentation,
+            });
             let _delivery = self.send_ordered_cache_command(command, ordered_deadline);
         }
         if clears_everything || matches!(result, ImageInvalidationResult::Changed) {

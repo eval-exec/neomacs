@@ -140,6 +140,29 @@
        (268 . 4294967040) (268 . 8)))))
 
 
+(defun image-api-wait-cache-size (pred &optional stable-seconds timeout-seconds)
+  "Wait until (funcall PRED (image-cache-size)) holds (and stays unchanged
+for STABLE-SECONDS when non-nil), bounded by TIMEOUT-SECONDS."
+  (let ((deadline (+ (float-time) (or timeout-seconds 10.0)))
+        (stable-for (or stable-seconds 0.0))
+        (stable-since nil)
+        (last-size nil))
+    (while (< (float-time) deadline)
+      (let ((size (image-cache-size)))
+        (if (funcall pred size)
+            (if (<= stable-for 0.0)
+                (setq deadline 0.0)
+              (if (eql size last-size)
+                  (when (>= (- (float-time) stable-since) stable-for)
+                    (setq deadline 0.0))
+                (setq last-size size
+                      stable-since (float-time))))
+          (setq last-size nil
+                stable-since nil)))
+      (when (> deadline 0.0)
+        (sit-for 0.05)))
+    (image-cache-size)))
+
 (defun image-api-cache ()
   ;; GNU frees the frame image cache on the caller's thread; the shared-cache
   ;; frontend must make the same post-invalidation total visible immediately.
@@ -147,20 +170,21 @@
     (switch-to-buffer buf)
     (erase-buffer)
     (redisplay t)
-    (sit-for 0.3)
-    (let* ((base (image-cache-size))
+    ;; State-gate on startup chrome icon residency rather than a blind 0.3s
+    ;; sleep: under parallel load, async GPU startup plus toolbar icon upload
+    ;; can exceed 0.3s, which would otherwise let toolbar bytes land inside
+    ;; the first image's delta window.
+    (let* ((base (image-api-wait-cache-size (lambda (n) (> n 0)) 0.3 10.0))
            (img (create-image (base64-decode-string image-api-png) 'png t :scale 1))
            (aimg (create-image (base64-decode-string image-api-alpha-png) 'png t :scale 1)))
       (goto-char (point-max))
       (insert-image img)
       (redisplay t)
-      (sit-for 0.3)
-      (let ((after-plain (image-cache-size)))
+      (let ((after-plain (image-api-wait-cache-size (lambda (n) (> n base)) 0.0 10.0)))
         (goto-char (point-max))
         (insert-image aimg)
         (redisplay t)
-        (sit-for 0.3)
-        (let* ((after-alpha (image-cache-size))
+        (let* ((after-alpha (image-api-wait-cache-size (lambda (n) (> n after-plain)) 0.0 10.0))
                ;; 5x3 opaque PNG = one RGBA pixmap; 2x1 RGBA = one pixmap.
                (plain (- after-plain base))
                (masked (- after-alpha after-plain))

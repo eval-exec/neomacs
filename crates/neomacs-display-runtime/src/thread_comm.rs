@@ -594,6 +594,11 @@ pub enum AssetCommand {
         /// Admission ticket of the shared decoder at clear time. Decodes
         /// submitted after it were requested after the clear and survive.
         through: u64,
+        /// Highest presentation ID issued by the evaluator when the clear ran.
+        /// Chrome/toolbar icons remain unrealized until a strictly newer frame
+        /// presentation arrives, so stale or pre-clear queued frames cannot
+        /// repopulate the cleared image cache before the next redisplay.
+        cleared_after_presentation: u64,
     },
     /// Recompute the renderer's retained-image usage and publish it, then
     /// acknowledge.

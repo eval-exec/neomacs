@@ -830,6 +830,7 @@ impl RenderApp {
                     let cursor_trail_fade_enabled = self.effects.cursor_trail_fade.enabled;
                     let renderer = self.renderer.as_ref();
                     if let Some(window_state) = self.frame_windows.get_mut(frame_id.get()) {
+                        let ingested_presentation = frame.presentation_id;
                         let cursor_config = self.cursor_defaults.config_snapshot();
                         let outcome = Self::ingest_frame_window_root_frame(
                             window_state,
@@ -839,6 +840,7 @@ impl RenderApp {
                             scroll_anchors,
                             reflow_imprints,
                         );
+                        self.toolbar.note_frame_published(ingested_presentation);
                         if let Some(cursor_sync) = outcome.cursor {
                             Self::update_frame_window_cursor_side_effects(
                                 renderer,
@@ -912,6 +914,7 @@ impl RenderApp {
                         );
                         let renderer = self.renderer.as_ref();
                         if window_state.render.update_child_frame(frame) {
+                            self.toolbar.note_frame_published(new_presentation);
                             if let Some((old, old_width, old_height, resize_spec)) =
                                 resize_crossfade
                             {
@@ -1000,6 +1003,7 @@ impl RenderApp {
                             &frame,
                         );
                         if ws.render.update_child_frame(frame) {
+                            self.toolbar.note_frame_published(new_presentation);
                             if let Some((old, old_width, old_height, resize_spec)) =
                                 resize_crossfade
                             {
@@ -1060,6 +1064,7 @@ impl RenderApp {
                         .primary_window_mut()
                         .map(|ws| &mut ws.render)
                     {
+                        let ingested_presentation = frame.presentation_id;
                         let outcome = Self::ingest_top_level_render_frame(
                             primary_frame,
                             frame,
@@ -1068,6 +1073,7 @@ impl RenderApp {
                             scroll_anchors,
                             reflow_imprints,
                         );
+                        self.toolbar.note_frame_published(ingested_presentation);
                         if let Some(transition) = outcome.presentation {
                             self.comms.send_input(
                                 crate::thread_comm::InputEvent::PresentationActivated {

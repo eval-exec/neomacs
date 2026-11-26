@@ -168,7 +168,7 @@ impl ImageCatalog for RecordingImageDisplayHost {
     }
 
     fn invalidate(&self, invalidation: ImageInvalidation) -> ImageInvalidationResult {
-        if invalidation == ImageInvalidation::All {
+        if matches!(invalidation, ImageInvalidation::All { .. }) {
             *self.clear_all_calls.lock().expect("image clear_all lock") += 1;
         }
         self.invalidations
@@ -1175,6 +1175,85 @@ fn clear_image_cache_nil_filter_clears_catalog_with_gui_host() {
     builtin_clear_image_cache_in_context(&mut eval, vec![Value::T]).unwrap();
 
     assert_eq!(*clear_all_calls.lock().unwrap(), 3);
+}
+
+#[test]
+fn clear_image_cache_all_invalidates_media_even_when_catalog_reports_unchanged() {
+    #[derive(Default)]
+    struct ToolbarOnlyClearHost {
+        clear_all_presentations: Arc<Mutex<Vec<u64>>>,
+    }
+
+    impl DisplayHost for ToolbarOnlyClearHost {
+        fn realize_gui_frame(&mut self, _request: GuiFrameHostRequest) -> Result<(), String> {
+            Ok(())
+        }
+
+        fn resize_gui_frame(&mut self, _request: GuiFrameHostRequest) -> Result<(), String> {
+            Ok(())
+        }
+
+        fn image_catalog(&self) -> Option<&dyn ImageCatalog> {
+            Some(self)
+        }
+    }
+
+    impl ImageCatalog for ToolbarOnlyClearHost {
+        fn lookup(&self, _request: ImageResolveRequest, _limit: ImageSizeLimit) -> ImageLookup {
+            ImageLookup::Pending(PendingImage::new(
+                test_image_load(1),
+                ImageLayoutExtent::new(0, 0),
+            ))
+        }
+
+        fn invalidate(&self, invalidation: ImageInvalidation) -> ImageInvalidationResult {
+            if let ImageInvalidation::All {
+                cleared_after_presentation,
+            } = invalidation
+            {
+                self.clear_all_presentations
+                    .lock()
+                    .unwrap()
+                    .push(cleared_after_presentation);
+            }
+            // No editor images were in the catalog — only chrome/toolbar textures
+            // existed on the renderer.
+            ImageInvalidationResult::Unchanged
+        }
+
+        fn invalidate_animation(
+            &self,
+            _invalidation: ImageAnimationInvalidation,
+        ) -> ImageInvalidationResult {
+            ImageInvalidationResult::Unchanged
+        }
+    }
+
+    crate::test_utils::init_test_tracing();
+    let clear_all_presentations = Arc::new(Mutex::new(Vec::new()));
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
+    eval.set_display_host(Box::new(ToolbarOnlyClearHost {
+        clear_all_presentations: Arc::clone(&clear_all_presentations),
+    }));
+
+    let issued_presentation = eval.begin_interaction_presentation();
+    let media_before = eval.media_generation();
+    let redisplay_before = eval.redisplay_generation();
+    builtin_clear_image_cache_in_context(&mut eval, vec![Value::T]).unwrap();
+
+    assert_eq!(
+        *clear_all_presentations.lock().unwrap(),
+        vec![issued_presentation],
+        "wholesale clear-image-cache must forward the evaluator's latest presentation fence"
+    );
+    assert!(
+        eval.media_generation() > media_before,
+        "wholesale clear-image-cache must invalidate media even when only toolbar icons were cached"
+    );
+    assert!(
+        eval.redisplay_generation() > redisplay_before,
+        "wholesale clear-image-cache must trigger the next redisplay so toolbar icons re-realize"
+    );
 }
 
 #[test]

@@ -2078,7 +2078,9 @@ fn clear_image_cache_usage_read_stays_post_clear_with_a_full_command_channel() {
         }
     });
 
-    let _ = catalog.invalidate(ImageInvalidation::All);
+    let _ = catalog.invalidate(ImageInvalidation::All {
+        cleared_after_presentation: 0,
+    });
     assert_eq!(
         catalog.cached_size_bytes(),
         0,
@@ -2138,7 +2140,9 @@ fn clear_image_cache_read_waits_out_a_stalled_render_thread() {
         }
     });
 
-    let _ = catalog.invalidate(ImageInvalidation::All);
+    let _ = catalog.invalidate(ImageInvalidation::All {
+        cleared_after_presentation: 0,
+    });
     assert_eq!(
         catalog.cached_size_bytes(),
         0,
@@ -2173,7 +2177,9 @@ fn clear_image_cache_read_before_gpu_startup_does_not_wait_for_the_renderer() {
     let sender_for_catalog = cmd_tx.clone();
     let reader = std::thread::spawn(move || {
         let catalog = test_image_catalog(&sender_for_catalog, state_for_catalog);
-        let _ = catalog.invalidate(ImageInvalidation::All);
+        let _ = catalog.invalidate(ImageInvalidation::All {
+            cleared_after_presentation: 0,
+        });
         let _ = done_tx.send(catalog.cached_size_bytes());
     });
     // Nobody drains `cmd_rx`: before the GPU exists the read must not wait on
@@ -2213,7 +2219,9 @@ fn clear_image_cache_read_stops_when_the_renderer_exits_with_the_ack_queued() {
     let sender_for_catalog = cmd_tx.clone();
     let reader = std::thread::spawn(move || {
         let catalog = test_image_catalog(&sender_for_catalog, state_for_catalog);
-        let _ = catalog.invalidate(ImageInvalidation::All);
+        let _ = catalog.invalidate(ImageInvalidation::All {
+            cleared_after_presentation: 0,
+        });
         let _ = done_tx.send(catalog.cached_size_bytes());
     });
     // Wait until the read has queued the clear and its publish.
@@ -2327,7 +2335,9 @@ fn clear_then_failed_load_then_renderer_exit_is_zero() {
     let sender_for_catalog = cmd_tx.clone();
     let reader = std::thread::spawn(move || {
         let catalog = test_image_catalog(&sender_for_catalog, state_for_catalog);
-        let _ = catalog.invalidate(ImageInvalidation::All);
+        let _ = catalog.invalidate(ImageInvalidation::All {
+            cleared_after_presentation: 0,
+        });
         let request = ImageResolveRequest {
             spec: test_image_spec_identity("after-clear-load"),
             source: ImageResolveSource::Data(ImageDataSource::Isolated(EncodedBytes::new(
@@ -2381,7 +2391,9 @@ fn clear_after_renderer_exit_reports_the_known_post_clear_zero() {
     image_state.mark_renderer_exited();
     drop(cmd_rx);
 
-    let _ = catalog.invalidate(ImageInvalidation::All);
+    let _ = catalog.invalidate(ImageInvalidation::All {
+        cleared_after_presentation: 0,
+    });
     assert_eq!(
         catalog.cached_size_bytes(),
         0,
@@ -2409,7 +2421,9 @@ fn post_clear_ready_load_invalidates_the_known_zero() {
         image_state.mark_renderer_ready();
         image_state.publish_cache_usage(ImageCacheUsage::new(4_096, 0));
         let catalog = test_image_catalog(&cmd_tx, Arc::clone(&image_state));
-        let _ = catalog.invalidate(ImageInvalidation::All);
+        let _ = catalog.invalidate(ImageInvalidation::All {
+            cleared_after_presentation: 0,
+        });
         image_state.mark_renderer_exited();
         drop(cmd_rx);
         assert_eq!(
@@ -2426,7 +2440,9 @@ fn post_clear_ready_load_invalidates_the_known_zero() {
     image_state.publish_cache_usage(ImageCacheUsage::new(4_096, 0));
     let catalog = test_image_catalog(&cmd_tx, Arc::clone(&image_state));
 
-    let _ = catalog.invalidate(ImageInvalidation::All);
+    let _ = catalog.invalidate(ImageInvalidation::All {
+        cleared_after_presentation: 0,
+    });
     let request = ImageResolveRequest {
         spec: test_image_spec_identity("after-clear-ready"),
         source: ImageResolveSource::Data(ImageDataSource::Isolated(EncodedBytes::new(

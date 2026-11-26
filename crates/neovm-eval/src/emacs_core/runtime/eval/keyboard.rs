@@ -2205,6 +2205,10 @@ impl crate::emacs_core::eval::Context {
         self.command_loop.presented_interactions.begin()
     }
 
+    pub fn last_interaction_presentation(&self) -> u64 {
+        self.command_loop.presented_interactions.last_issued()
+    }
+
     pub fn register_presented_mouse_target(
         &mut self,
         presentation: u64,

@@ -225,9 +225,16 @@ static_assertions::assert_impl_all!(ImageResolveRequest: Send, Sync, Clone, std:
 /// in the type prevents another source-only approximation at call sites.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum ImageInvalidation {
-    Spec { spec: ImageSpecIdentity },
+    Spec {
+        spec: ImageSpecIdentity,
+    },
     Dependency(ImageResolveSource),
-    All,
+    All {
+        /// Highest presentation ID issued by the evaluator when the clear ran.
+        /// Frames at or below this fence belong to pre-clear redisplays and
+        /// must not re-realize cleared chrome textures before the next redisplay.
+        cleared_after_presentation: u64,
+    },
 }
 
 /// Independent invalidation domain for decoder/compositor sequence state.

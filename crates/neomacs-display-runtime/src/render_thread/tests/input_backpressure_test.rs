@@ -257,6 +257,7 @@ fn owned_native_progress_fixture() {
             commands
                 .send(RenderCommand::Asset(AssetCommand::ClearImageCache {
                     through: 0,
+                    cleared_after_presentation: 0,
                 }))
                 .unwrap();
             native.unpark();
