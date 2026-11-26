@@ -316,3 +316,67 @@ fn oracle_prop_coding_string_advanced_nocopy_flag() {
     let expect = expect_test::expect![[r#""OK ((t 5) (t 5) (t 5) t (t t t t t))""#]];
     crate::common::assert_oracle_parity_expect(form, expect);
 }
+
+#[test]
+fn oracle_prop_coding_string_buffer_destination_drops_source_properties() {
+    // GNU `code_convert_string` (src/coding.c:9588-9629):
+    // - `NOCOPY` only applies when `dst_object` is `Qt` (string return);
+    //   buffer destinations never copy source string text properties across
+    //   either decode or encode, on multibyte or unibyte buffers, with or
+    //   without `inhibit-eol-conversion`.
+    // - `coding-system = nil` returns a copy preserving properties/multibyteness
+    //   only when `dst_object` is `nil`; when `dst_object` is `t` or a buffer
+    //   it rewrites to `no-conversion` and runs conversion normally.
+    let form = r#"(progn
+  (define-coding-system-alias 'oracle-prop-utf8-dos 'utf-8-dos)
+  (let* ((codings '(utf-8 utf-8-unix utf-8-dos utf-8-mac
+                    raw-text raw-text-unix raw-text-dos raw-text-mac
+                    undecided-dos undecided-mac dos mac no-conversion nil
+                    oracle-prop-utf8-dos))
+         (buf-cases
+          (let ((out nil))
+            (dolist (op '(decode encode))
+              (dolist (buf-mb '(t nil))
+                (dolist (src-kind '(uni-ab uni-lf mb-ab mb-lf))
+                  (dolist (inhibit-eol '(nil t))
+                    (dolist (cs codings)
+                      (let* ((inhibit-eol-conversion inhibit-eol)
+                             (raw (cond
+                                   ((eq src-kind 'uni-ab) (unibyte-string ?a ?b))
+                                   ((eq src-kind 'uni-lf) (unibyte-string ?a ?b ?\n))
+                                   ((eq src-kind 'mb-ab) "ab")
+                                   (t "ab\n")))
+                             (orig (propertize raw 'foo 'bar)))
+                        (with-temp-buffer
+                          (set-buffer-multibyte buf-mb)
+                          (let ((n (if (eq op 'decode)
+                                       (decode-coding-string orig cs t (current-buffer))
+                                     (encode-coding-string orig cs t (current-buffer)))))
+                            (push (list op buf-mb src-kind inhibit-eol cs n
+                                        (text-properties-at (point-min)))
+                                  out)))))))))
+            (nreverse out)))
+         (nil-cs-cases
+          (let ((out nil))
+            (dolist (op '(decode encode))
+              (dolist (dst '(nil t))
+                (dolist (nocopy '(nil t))
+                  (let* ((orig (propertize (unibyte-string ?a ?b ?\n) 'foo 'bar))
+                         (res (if (eq op 'decode)
+                                  (decode-coding-string orig nil nocopy dst)
+                                (encode-coding-string orig nil nocopy dst))))
+                    (push (list op dst nocopy (eq res orig) (multibyte-string-p res)
+                                (text-properties-at 0 res))
+                          out)))))
+            (nreverse out))))
+    (list
+     (let ((leaked nil))
+       (dolist (c buf-cases)
+         (when (nth 6 c) (push c leaked)))
+       (list (length buf-cases) (length leaked) (nreverse leaked)))
+     nil-cs-cases)))"#;
+    let expect = expect_test::expect![[
+        r#""OK ((480 0 nil) ((decode nil nil nil nil (foo bar)) (decode nil t t nil (foo bar)) (decode t nil nil t nil) (decode t t t nil (foo bar)) (encode nil nil nil nil (foo bar)) (encode nil t t nil (foo bar)) (encode t nil nil nil nil) (encode t t t nil (foo bar))))""#
+    ]];
+    crate::common::assert_oracle_parity_expect(form, expect);
+}
