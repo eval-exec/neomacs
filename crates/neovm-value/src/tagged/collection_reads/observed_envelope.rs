@@ -84,6 +84,45 @@ pub(super) struct LegacyEnvelopeLayout {
     geometry_rebuilds: usize,
 }
 
+// Test-only interleaving hooks for `ObservedEnvelope::refresh`. In non-test
+// builds only the zero-sized `NoopRefreshHooks` implementation exists, so both
+// hook calls monomorphize to no-ops and inline away completely.
+trait RefreshHooks {
+    fn after_reclaimed(&mut self);
+    fn between_full_prune_loads(&mut self);
+}
+
+struct NoopRefreshHooks;
+
+impl RefreshHooks for NoopRefreshHooks {
+    #[inline(always)]
+    fn after_reclaimed(&mut self) {}
+
+    #[inline(always)]
+    fn between_full_prune_loads(&mut self) {}
+}
+
+#[cfg(test)]
+struct TestRefreshHooks<F1, F2> {
+    after_reclaimed: Option<F1>,
+    between_full_prune_loads: Option<F2>,
+}
+
+#[cfg(test)]
+impl<F1: FnOnce(), F2: FnOnce()> RefreshHooks for TestRefreshHooks<F1, F2> {
+    fn after_reclaimed(&mut self) {
+        if let Some(f) = self.after_reclaimed.take() {
+            f();
+        }
+    }
+
+    fn between_full_prune_loads(&mut self) {
+        if let Some(f) = self.between_full_prune_loads.take() {
+            f();
+        }
+    }
+}
+
 impl ObservedEnvelope {
     /// Heap reinstallation can change the native dump/owner protocol between
     /// uses of a learned negative proof. Forget only those optional rejects;
@@ -120,7 +159,7 @@ impl ObservedEnvelope {
     /// Refresh once per reclamation epoch or current dump-span change. An
     /// observer never initializes this ledger merely to reject an empty gate.
     pub(super) fn refresh(&mut self, dump: BarrierWindow) -> bool {
-        self.refresh_inner(dump, || ())
+        self.refresh_with_hooks(dump, NoopRefreshHooks)
     }
 
     #[cfg(test)]
@@ -129,11 +168,32 @@ impl ObservedEnvelope {
         dump: BarrierWindow,
         after_reclaimed: impl FnOnce(),
     ) -> bool {
-        self.refresh_inner(dump, after_reclaimed)
+        self.refresh_with_hooks(
+            dump,
+            TestRefreshHooks {
+                after_reclaimed: Some(after_reclaimed),
+                between_full_prune_loads: Option::<fn()>::None,
+            },
+        )
+    }
+
+    #[cfg(test)]
+    pub(super) fn refresh_with_full_prune_interleave_for_test(
+        &mut self,
+        dump: BarrierWindow,
+        between_full_prune_loads: impl FnOnce(),
+    ) -> bool {
+        self.refresh_with_hooks(
+            dump,
+            TestRefreshHooks {
+                after_reclaimed: Option::<fn()>::None,
+                between_full_prune_loads: Some(between_full_prune_loads),
+            },
+        )
     }
 
     #[inline(always)]
-    fn refresh_inner(&mut self, dump: BarrierWindow, after_reclaimed: impl FnOnce()) -> bool {
+    fn refresh_with_hooks(&mut self, dump: BarrierWindow, hooks: impl RefreshHooks) -> bool {
         let epoch = collection_observation_epoch();
         if self.epoch == Some(epoch) {
             if self.dump == dump {
@@ -142,7 +202,7 @@ impl ObservedEnvelope {
             self.rebuild(dump);
             return true;
         }
-        self.refresh_reclaimed_inner(dump, epoch, after_reclaimed)
+        self.refresh_reclaimed_with_hooks(dump, epoch, hooks)
     }
 
     /// Acknowledge a reclamation epoch. Every sweep slice that clears a mark
@@ -172,14 +232,14 @@ impl ObservedEnvelope {
     ///   and is visible to `retain()`.
     #[cold]
     #[inline(never)]
-    fn refresh_reclaimed_inner(
+    fn refresh_reclaimed_with_hooks(
         &mut self,
         dump: BarrierWindow,
         epoch: u64,
-        after_reclaimed: impl FnOnce(),
+        mut hooks: impl RefreshHooks,
     ) -> bool {
         let reclaimed = reclaimed_collection_observation_count();
-        after_reclaimed();
+        hooks.after_reclaimed();
         let debt = reclaimed.wrapping_sub(self.validated_reclaimed);
         if debt.saturating_mul(PRUNE_DEBT_RATIO) < self.owners.len() as u64 {
             self.epoch = Some(epoch);
@@ -193,6 +253,7 @@ impl ObservedEnvelope {
         // every clear up to `epoch` is counted in `reclaimed`, and every clear
         // counted in `reclaimed` is visible to `retain()` below.
         let epoch = collection_observation_epoch();
+        hooks.between_full_prune_loads();
         let reclaimed = reclaimed_collection_observation_count();
         let old_len = self.owners.len();
         #[cfg(any(test, feature = "test-support"))]

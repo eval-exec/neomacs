@@ -184,3 +184,71 @@ fn full_prune_refresh_acquires_epoch_before_reclaimed_across_concurrent_reclaim(
         r2
     );
 }
+
+#[test]
+fn full_prune_refresh_interleaved_between_epoch_and_reclaimed_catches_load_swap() {
+    // Interleave a mark-clearing collection directly BETWEEN the two full-prune
+    // loads (`epoch = collection_observation_epoch()` and
+    // `reclaimed = reclaimed_collection_observation_count()`).
+    // With the correct EPOCH-before-RECLAIMED order:
+    //   - `self.epoch` stays at pre-interleave `Some(e1)` (never `e2`), and
+    //   - `validated_reclaimed` absorbs the post-interleave `r2` (and `retain()`
+    //     prunes `owners[2]` so only the 1 live owner remains).
+    // Swapping the two loads causes `validated_reclaimed` to record stale `r1 < r2`
+    // while `self.epoch` advances to `Some(e2)`, failing both assertions.
+    crate::test_utils::init_test_tracing();
+    force_compiled_journal_for_test(Some(CompiledJournalMode::Observed));
+    let _mode = ObservedMode;
+    let mut heap = crate::tagged::gc::TestHeap::new();
+    heap.set_gc_threshold(usize::MAX);
+
+    let owners: Vec<TaggedValue> = (0..4)
+        .map(|i| heap.alloc_vector(vec![TaggedValue::make_int(i)]))
+        .collect();
+    let (_, cert) = capture(|| {
+        for owner in &owners {
+            std::hint::black_box(owner.as_vector_data().unwrap().at(0));
+        }
+    });
+    drop(cert);
+
+    let mut envelope = super::ObservedEnvelope::new();
+    for owner in &owners {
+        envelope.insert(owner.bits(), super::NativeWindowCollectionOwner::Slots);
+    }
+
+    // Reclaim 2 of 4 owners: debt = 2, 2 * 4 >= 4 -> enters full-prune branch.
+    heap.collect_rooted(owners[2..].iter().copied());
+    let e1 = collection_observation_epoch();
+    let r1 = crate::tagged::gc::reclaimed_collection_observation_count();
+    let mut e2 = 0;
+    let mut r2 = 0;
+
+    let dump = crate::tagged::gc::current_collection_dump_window();
+    envelope.refresh_with_full_prune_interleave_for_test(dump, || {
+        heap.collect_rooted(owners[3..].iter().copied());
+        e2 = collection_observation_epoch();
+        r2 = crate::tagged::gc::reclaimed_collection_observation_count();
+    });
+    assert!(e2 > e1, "interleaved reclamation must advance epoch");
+    assert!(
+        r2 > r1,
+        "interleaved reclamation must advance reclaimed count"
+    );
+    assert_eq!(
+        envelope.epoch_for_test(),
+        Some(e1),
+        "full prune must acquire epoch (e1) BEFORE reclaimed (r2); swapping the loads advances epoch to e2"
+    );
+    assert!(
+        envelope.validated_reclaimed_for_test() >= r2,
+        "full prune must acquire reclaimed (r2) AFTER epoch (e1); swapping the loads leaves stale r1 ({} < {})",
+        envelope.validated_reclaimed_for_test(),
+        r2
+    );
+    assert_eq!(
+        envelope.owner_count_for_test(),
+        1,
+        "retain() must observe the interleaved clear and prune all 3 dead owners"
+    );
+}
