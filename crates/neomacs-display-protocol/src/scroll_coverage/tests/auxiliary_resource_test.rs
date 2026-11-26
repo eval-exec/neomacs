@@ -243,6 +243,75 @@ fn auxiliary_self_closure_refuses_every_dangling_face_or_font_reference() {
 }
 
 #[test]
+fn auxiliary_self_closure_refuses_mismatched_face_and_font_map_keys() {
+    let mut state = base_state();
+    let base_font_id = ResolvedFontId(1);
+    let aliased_font_key = ResolvedFontId(99);
+    let additive_face_key = crate::FaceId::new(77);
+    let base_face_id = crate::FaceId::new(0);
+
+    state
+        .fonts
+        .insert(base_font_id, fixture_font(base_font_id, "DejaVu Sans Mono"));
+    state
+        .faces
+        .get_mut(&base_face_id)
+        .unwrap()
+        .default_resolved_font_id = Some(base_font_id);
+
+    // 1. Mismatched font key/id: fonts[99] carries embedded ResolvedFont::id == 1.
+    // Neither key 77 nor key 99 collides with base's map keys, so map-key conflict
+    // detection alone would accept this and GlyphAtlas::install_frame_fonts would
+    // index by font.id (1), flushing the atlas and overwriting base font 1.
+    let mut mismatched_font = state.scroll_coverage[0].as_ref().clone();
+    mismatched_font
+        .fonts
+        .insert(base_font_id, fixture_font(base_font_id, "DejaVu Sans Mono"));
+    mismatched_font
+        .faces
+        .get_mut(&base_face_id)
+        .unwrap()
+        .default_resolved_font_id = Some(base_font_id);
+    mismatched_font.fonts.insert(
+        aliased_font_key,
+        fixture_font(base_font_id, "WRONG STALE FONT"),
+    );
+    let mut additive_face = crate::Face::new(additive_face_key);
+    additive_face.default_resolved_font_id = Some(aliased_font_key);
+    mismatched_font
+        .faces
+        .insert(additive_face_key, additive_face);
+    assert!(!mismatched_font.resources_self_closed());
+    assert!(!mismatched_font.resources_compatible_with_frame_state(&state));
+    assert!(!mismatched_font.resources_compatible_with_frame_buffer(&state.materialize()));
+
+    // 2. Mismatched face key/id: faces[77] carries embedded Face::id == 0 while
+    // every font entry has matching key == id. Renderer char/cluster tables index
+    // by face.id (0), which would alias base face 0 onto additive face 77.
+    let mut mismatched_face = state.scroll_coverage[0].as_ref().clone();
+    mismatched_face
+        .fonts
+        .insert(base_font_id, fixture_font(base_font_id, "DejaVu Sans Mono"));
+    mismatched_face
+        .faces
+        .get_mut(&base_face_id)
+        .unwrap()
+        .default_resolved_font_id = Some(base_font_id);
+    mismatched_face.fonts.insert(
+        aliased_font_key,
+        fixture_font(aliased_font_key, "Valid additive font"),
+    );
+    let mut aliased_face = crate::Face::new(base_face_id);
+    aliased_face.default_resolved_font_id = Some(aliased_font_key);
+    mismatched_face
+        .faces
+        .insert(additive_face_key, aliased_face);
+    assert!(!mismatched_face.resources_self_closed());
+    assert!(!mismatched_face.resources_compatible_with_frame_state(&state));
+    assert!(!mismatched_face.resources_compatible_with_frame_buffer(&state.materialize()));
+}
+
+#[test]
 fn auxiliary_admission_checks_catalog_metrics_materialized_bars_and_bitmaps() {
     let mut state = base_state();
     let surface = state

@@ -511,3 +511,123 @@ fn auxiliary_rejects_conflicting_or_dangling_resources_and_revokes_previous() {
     );
     assert!(retention.entries.is_empty());
 }
+
+#[test]
+fn auxiliary_rejects_mismatched_face_or_font_key_id_and_revokes_previous() {
+    use neomacs_display_protocol::font::{
+        FontFileAsset, FontOutlineAsset, FontReplay, FontSlantKind, ResolvedFont, ResolvedFontId,
+        ResolvedFontIdentity,
+    };
+    let make_font = |id: ResolvedFontId, family: &str| ResolvedFont {
+        id,
+        identity: ResolvedFontIdentity::from_file("/fixture/key-id-mismatch.ttf", 0, None),
+        replay: FontReplay::Swash {
+            asset: FontOutlineAsset::File(
+                FontFileAsset::new("/fixture/key-id-mismatch.ttf", 0).unwrap(),
+            ),
+        },
+        family: family.into(),
+        full_name: None,
+        postscript_name: None,
+        weight: 400,
+        slant: FontSlantKind::Normal,
+        width: 5,
+        pixel_size: 10.0,
+        ascent_px: 8.0,
+        descent_px: 2.0,
+        space_advance_px: 10.0,
+        glyph_advance: Default::default(),
+        spacing: None,
+    };
+
+    let base_font_id = ResolvedFontId(1);
+    let aliased_font_key = ResolvedFontId(99);
+    let additive_face_key = FaceId::new(77);
+    let base_face_id = FaceId::new(0);
+
+    let mut base = surface_frame(1, 7, 3);
+    base.fonts
+        .insert(base_font_id, make_font(base_font_id, "DejaVu Sans Mono"));
+    if let Some(face) = base.faces.get_mut(&base_face_id) {
+        face.default_resolved_font_id = Some(base_font_id);
+    }
+
+    // 1. Mismatched font key/id: fonts[99] has embedded id=1; must be rejected and revoke prior entry.
+    let mut retention = CoverageRetention::default();
+    retention.refresh(&base);
+    let bad_font_key = surface_with_coverage_edit(7, 3, 1, |cov| {
+        cov.fonts
+            .insert(base_font_id, make_font(base_font_id, "DejaVu Sans Mono"));
+        cov.faces
+            .get_mut(&base_face_id)
+            .unwrap()
+            .default_resolved_font_id = Some(base_font_id);
+        cov.fonts.insert(
+            aliased_font_key,
+            make_font(base_font_id, "WRONG STALE FONT"),
+        );
+        let mut additive_face = Face::new(additive_face_key);
+        additive_face.default_resolved_font_id = Some(aliased_font_key);
+        cov.faces.insert(additive_face_key, additive_face);
+    });
+    let bad_font_pub = bad_font_key.coverage().publication;
+    let changes = retention.apply_auxiliary(auxiliary(1, vec![bad_font_key]), Some(&base));
+    assert_eq!(
+        changes,
+        AuxiliaryCoverageChanges {
+            installed: 0,
+            revoked: 1,
+            conservative_revocations: 0,
+        }
+    );
+    assert!(retention.entries.is_empty());
+    assert!(
+        retention
+            .certified_publication_at(
+                base.presentation_id,
+                DisplayWindowId::new(7),
+                3,
+                bad_font_pub
+            )
+            .is_none()
+    );
+
+    // 2. Mismatched face key/id: faces[77] has embedded id=0; must be rejected and revoke prior entry.
+    retention.refresh(&base);
+    let bad_face_key = surface_with_coverage_edit(7, 3, 1, |cov| {
+        cov.fonts
+            .insert(base_font_id, make_font(base_font_id, "DejaVu Sans Mono"));
+        cov.faces
+            .get_mut(&base_face_id)
+            .unwrap()
+            .default_resolved_font_id = Some(base_font_id);
+        cov.fonts.insert(
+            aliased_font_key,
+            make_font(aliased_font_key, "Valid additive font"),
+        );
+        let mut aliased_face = Face::new(base_face_id);
+        aliased_face.default_resolved_font_id = Some(aliased_font_key);
+        cov.faces.insert(additive_face_key, aliased_face);
+    });
+    let bad_face_pub = bad_face_key.coverage().publication;
+    let changes = retention.apply_auxiliary(auxiliary(1, vec![bad_face_key]), Some(&base));
+    assert_eq!(
+        changes,
+        AuxiliaryCoverageChanges {
+            installed: 0,
+            revoked: 1,
+            conservative_revocations: 0,
+        }
+    );
+    assert!(retention.entries.is_empty());
+    assert!(
+        retention
+            .certified_publication_at(
+                base.presentation_id,
+                DisplayWindowId::new(7),
+                3,
+                bad_face_pub
+            )
+            .is_none()
+    );
+}

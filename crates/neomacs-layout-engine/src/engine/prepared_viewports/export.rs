@@ -781,6 +781,9 @@ impl PreparedViewports {
             service.set_realized_fontset_context(frame.0, arena.face_epoch().get());
         }
         crate::font::metrics::realize_frame_fonts(&mut fonts, metrics);
+        if fonts.font_catalog_generation != state.font_catalog_generation {
+            return None;
+        }
         let pointer_source =
             crate::presentation::pointer::window_pointer_source_map(&fonts).ok()?;
         Some(ScrollCoverage {

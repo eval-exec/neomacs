@@ -209,13 +209,25 @@ impl ScrollCoverageAdmission {
 
 impl ScrollCoverage {
     /// Prove every face and resolved font referenced by this coverage is owned
-    /// inside its own tables (self-closure).
+    /// inside its own tables (self-closure) and keyed by its own embedded ID.
     ///
+    /// - Every `(id, face)` in `self.faces` must satisfy `face.id == *id`, and
+    ///   every `(id, font)` in `self.fonts` must satisfy `font.id == *id`.
+    ///   Checking `contains_key` alone is insufficient: `ScrollCoverage` is
+    ///   `Serialize + Deserialize` with public maps, so `apply_auxiliary` must
+    ///   not trust the producer. Downstream render sinks index `frame_fonts` by
+    ///   `font.id` (`GlyphAtlas::install_frame_fonts`) and `frame_char_fonts` /
+    ///   `frame_shaped_clusters` by `face.id`; a mismatched key/id entry (e.g.
+    ///   `fonts[99] = ResolvedFont { id: 1 }`) would bypass map-key conflict
+    ///   checks in `resources_compatible`, flush the GPU glyph atlas, overwrite
+    ///   font `1`, or alias another face's tables.
     /// - Every enabled row's `referenced_face_ids()` and every `FaceId` key in
     ///   `char_fonts` / `shaped_clusters` must exist in `self.faces`.
     /// - Every `ResolvedFontId` referenced by `self.faces[*].default_resolved_font_id`,
     ///   `self.char_fonts`, or `self.shaped_clusters` must exist in `self.fonts`.
     pub fn resources_self_closed(&self) -> bool {
+        let face_ids_match_keys = self.faces.iter().all(|(id, face)| face.id == *id);
+        let font_ids_match_keys = self.fonts.iter().all(|(id, font)| font.id == *id);
         let matrix_faces_closed = self
             .content
             .matrix
@@ -248,7 +260,9 @@ impl ScrollCoverage {
                     .all(|glyph| self.fonts.contains_key(&glyph.resolved_font_id))
             })
         });
-        matrix_faces_closed
+        face_ids_match_keys
+            && font_ids_match_keys
+            && matrix_faces_closed
             && table_faces_closed
             && face_default_fonts_closed
             && char_fonts_closed
@@ -654,7 +668,9 @@ impl ScrollSurface {
         for (face, clusters) in &self.coverage.shaped_clusters {
             let table = frame.shaped_clusters.entry(*face).or_default();
             for (text, glyphs) in clusters {
-                table.entry(text.clone()).or_insert_with(|| glyphs.clone());
+                if !table.contains_key(text.as_ref()) {
+                    table.insert(text.clone(), glyphs.clone());
+                }
             }
         }
         if let Err(error) = frame.install_presented_pointer_source_map(&pointer_source) {
