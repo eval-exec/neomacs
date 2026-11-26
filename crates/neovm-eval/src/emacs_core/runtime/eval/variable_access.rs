@@ -768,7 +768,7 @@ pub fn buffer_local_value_in(eval: &Context, variable: Value, buffer: Value) -> 
             let value = if cell.is_nil() {
                 eval.obarray()
                     .canonical_default_value(CanonicalAccess::STORAGE, resolved_id)
-            } else if neovm_value::value::eq_value(&cell, &blv.valcell.get()) {
+            } else if neovm_value::value::eq_value(&cell, &blv.valcell()) {
                 fwd.load()
             } else {
                 Some(cell.cons_cdr())

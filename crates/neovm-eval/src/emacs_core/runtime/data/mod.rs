@@ -411,7 +411,9 @@ pub(crate) fn default_value_by_id(ctx: &Context, resolved: SymId) -> Option<Valu
     }
     // GNU's `*-consed` DEFVAR_INTs are live counters; the forwarded cell is
     // only a cache refreshed on read.
-    if let Some(value) = ctx.derived_memory_use_read(resolved) {
+    if !ctx.obarray().is_localized(resolved)
+        && let Some(value) = ctx.derived_memory_use_read(resolved)
+    {
         return Some(value);
     }
     default_value_in_state(

@@ -497,9 +497,10 @@ fn deterministic_order_consed_counters_are_rebuilt_over_the_live_counter() {
 
     let dir = tempfile::tempdir().expect("private dump directory");
     let path = dir.path().join("counters.pdump");
+    let hooks = eval.hooks_installed();
     super::dump_to_file(&eval, &path).expect("write image");
-    let loaded =
-        super::load_from_dump_with_proof(&path, eval.hooks_installed()).expect("load image");
+    drop(eval);
+    let loaded = super::load_from_dump_with_proof(&path, hooks).expect("load image");
     let before = read(&loaded);
     assert_eq!(
         before,
