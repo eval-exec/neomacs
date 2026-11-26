@@ -452,13 +452,35 @@ impl Context {
 }
 
 /// Thread-local marker for the currently active `SerialTurn` on this OS thread
-/// (L6.7c (c) F3 / Q2): stores zero bytes on `#[repr(C)] Context`, zero heap
-/// `Value`s, and zero `TaggedHeap` pointers, so `Context` layout stays pinned
-/// and `park_carrier_tls()` never interacts with it.
+/// (L6.7c (c) F3 / Q2 + NIT-1): stores zero bytes on `#[repr(C)] Context`,
+/// zero heap `Value`s, and zero `TaggedHeap` pointers, so `Context` layout
+/// stays pinned and `park_carrier_tls()` never interacts with it. Includes
+/// monotonic `context_id` (`Context::context_instance_id()`) so two `Context`s
+/// sharing the same World `HeapIdentity` at a reused or swapped address cannot
+/// falsely match.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct ActiveSerialTurn {
+pub(super) struct ActiveSerialTurn {
     ctx_addr: usize,
     heap: neovm_value::tagged::gc::HeapIdentity,
+    context_id: u64,
+}
+
+impl ActiveSerialTurn {
+    #[inline]
+    pub(super) fn for_context(ctx: &Context) -> Self {
+        Self {
+            ctx_addr: std::ptr::from_ref(ctx) as usize,
+            heap: ctx.tagged_heap.heap_identity(),
+            context_id: ctx.context_instance_id(),
+        }
+    }
+
+    /// Closed exact-identity match: true ONLY when address, `HeapIdentity`,
+    /// and monotonic `context_instance_id` all match `ctx`.
+    #[inline]
+    pub(super) fn matches(self, ctx: &Context) -> bool {
+        self == Self::for_context(ctx)
+    }
 }
 
 std::thread_local! {
@@ -468,17 +490,15 @@ std::thread_local! {
 
 impl Context {
     /// True while this `Context` is inside a live `SerialTurn` on this OS
-    /// thread (`SerialHost::enter_turn` .. `leave_turn`). Ensures unbridged
-    /// `SerialTurn::with_world` turns never fall through to direct
-    /// `TaggedHeap` STW collection even under `NEOVM_HASH_TEST_PARITY=off` or
-    /// direct `gc_collect_exact` calls (L6.7c (c) F3 / Q2).
+    /// thread (`SerialHost::enter_turn` .. `leave_turn`). Deny-by-default:
+    /// returns `false` when no turn is active or any field of
+    /// [`ActiveSerialTurn`] differs. Ensures unbridged `SerialTurn::with_world`
+    /// turns never fall through to direct `TaggedHeap` STW collection even
+    /// under `NEOVM_HASH_TEST_PARITY=off` or direct `gc_collect_exact` calls
+    /// (L6.7c (c) F3 / Q2 + NIT-1).
     #[inline]
     pub(crate) fn in_active_serial_turn(&self) -> bool {
-        let current = ActiveSerialTurn {
-            ctx_addr: std::ptr::from_ref(self) as usize,
-            heap: self.tagged_heap.heap_identity(),
-        };
-        ACTIVE_SERIAL_TURN.with(|slot| slot.get() == Some(current))
+        ACTIVE_SERIAL_TURN.with(|slot| slot.get().is_some_and(|active| active.matches(self)))
     }
 }
 
@@ -506,10 +526,7 @@ impl SerialHost for Context {
     /// keeper's next stop instead of firing an uncoordinated direct minor/STW
     /// collection inside the turn.
     fn enter_turn(&mut self, _: HostTransition) {
-        let current = ActiveSerialTurn {
-            ctx_addr: std::ptr::from_ref(self) as usize,
-            heap: self.tagged_heap.heap_identity(),
-        };
+        let current = ActiveSerialTurn::for_context(self);
         ACTIVE_SERIAL_TURN.with(|slot| {
             let prev = slot.replace(Some(current));
             debug_assert!(
@@ -523,10 +540,7 @@ impl SerialHost for Context {
     /// L6.7c (a) + F3: paired 1:1 with `enter_turn` by `SerialTurn`'s RAII
     /// lifecycle (`end`, `park`, or unwind `Drop`), so depth cannot leak.
     fn leave_turn(&mut self, _: HostTransition) {
-        let expected = ActiveSerialTurn {
-            ctx_addr: std::ptr::from_ref(self) as usize,
-            heap: self.tagged_heap.heap_identity(),
-        };
+        let expected = ActiveSerialTurn::for_context(self);
         ACTIVE_SERIAL_TURN.with(|slot| {
             if slot.get() == Some(expected) {
                 slot.set(None);

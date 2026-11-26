@@ -765,3 +765,84 @@ fn l64_begin_refuses_to_run_against_placeholders_when_world_is_held_elsewhere() 
     assert_eq!(eval(&mut main, "(lossage-size)"), "529");
     assert_eq!(main.display_var_change_count, 91);
 }
+
+/// NIT-1: `ACTIVE_SERIAL_TURN` must key on monotonic `context_instance_id` in
+/// addition to `(ctx_addr, HeapIdentity)` so a second `Context` on the same
+/// World swapped into the exact same address never falsely appears in-turn or
+/// silently inhibits explicit GC.
+#[test]
+fn l67c_nit1_active_serial_turn_refuses_same_address_same_heap_foreign_context() {
+    let mut main =
+        Context::new_with_threading(ThreadingMode::Green, crate::test_utils::unit_runtime());
+    let baton = main.start_green_runtime().expect("start the Green runtime");
+    let main_detached = detach(&mut main);
+    let (to_main, from_worker) = std::sync::mpsc::channel();
+    let worker = std::thread::spawn(move || {
+        baton.enter();
+        let mut owner_b = Context::new_green_owner(&baton);
+        let owner_b_proof = detach(&mut owner_b);
+        assert!(names_no_heap(), "owner_b detaches cleanly before owner_a");
+
+        let owner_a = Context::new_green_owner(&baton);
+        let mut state: State = OwnerSerialState::new(7, Box::new(owner_a))
+            .ok()
+            .expect("owner_a detaches cleanly");
+        let mut turn = state.begin((7, "ticket-nit1")).ok().expect("own ticket");
+        turn.with_world(|ctx_slot| {
+            let addr_a = std::ptr::from_ref(ctx_slot) as usize;
+            let heap_a = ctx_slot.tagged_heap.heap_identity();
+            let id_a = ctx_slot.context_instance_id();
+            let id_b = owner_b.context_instance_id();
+            assert_eq!(
+                owner_b.tagged_heap.heap_identity(),
+                heap_a,
+                "both Contexts share the exact same World HeapIdentity"
+            );
+            assert_ne!(
+                id_b, id_a,
+                "monotonic context_instance_id distinguishes the two Contexts"
+            );
+            assert!(ctx_slot.in_active_serial_turn());
+            assert!(ctx_slot.is_explicit_gc_inhibited());
+
+            // Swap a distinct Context from the same World into the exact same
+            // memory address as the active SerialTurn's Context.
+            std::mem::swap(ctx_slot, &mut owner_b);
+            assert_eq!(
+                std::ptr::from_ref(ctx_slot) as usize,
+                addr_a,
+                "foreign Context now occupies the exact same address"
+            );
+            assert_eq!(
+                ctx_slot.tagged_heap.heap_identity(),
+                heap_a,
+                "foreign Context shares the exact same HeapIdentity"
+            );
+            assert_eq!(ctx_slot.context_instance_id(), id_b);
+            assert!(
+                !ctx_slot.in_active_serial_turn(),
+                "NIT-1: same-address/same-heap foreign Context (expected context_id={id_a}, got context_id={id_b}) must NOT match ActiveSerialTurn"
+            );
+            assert!(
+                !ctx_slot.is_explicit_gc_inhibited(),
+                "NIT-1: same-address/same-heap foreign Context (expected context_id={id_a}, got context_id={id_b}) must NOT falsely inhibit GC"
+            );
+
+            // Restore before ending the turn cleanly.
+            std::mem::swap(ctx_slot, &mut owner_b);
+            assert!(ctx_slot.in_active_serial_turn());
+        });
+        assert_eq!(ended(turn), (7, "ticket-nit1"));
+        assert!(names_no_heap());
+        drop(state);
+        drop(owner_b_proof);
+        drop(owner_b);
+        to_main.send(baton).expect("return baton to main");
+    });
+
+    let baton = from_worker.recv().expect("baton returns from worker");
+    worker.join().expect("worker thread finishes cleanly");
+    baton.enter();
+    reattach(&mut main, main_detached);
+    main.seat_green_main_for_test(baton);
+}

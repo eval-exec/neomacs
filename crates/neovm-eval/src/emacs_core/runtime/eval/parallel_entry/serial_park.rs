@@ -509,9 +509,11 @@ type SerialCollectBridgeFn = dyn FnMut(
 /// Thread-local RAII hook for in-stack explicit GC inside
 /// [`LiveSerial::with_world_collectible`]. Stores zero heap `Value`s and zero
 /// `TaggedHeap` pointers (Q2), so `park_carrier_tls()` never interacts with it.
+/// Keyed by closed exact [`super::serial_detach::ActiveSerialTurn`]
+/// (`ctx_addr`, `heap`, monotonic `context_id`, NIT-1) so a distinct `Context`
+/// on the same World at a reused or swapped address cannot falsely match.
 struct ActiveSerialCollectScope {
-    ctx_addr: usize,
-    heap: HeapIdentity,
+    owner: super::serial_detach::ActiveSerialTurn,
     inhibit_base: usize,
     bridge: *mut SerialCollectBridgeFn,
 }
@@ -566,8 +568,7 @@ impl<'t, G: LendGuard> LiveSerial<'t, super::super::Context, G> {
         let home = self.home;
         let active_slot = &mut self.active;
         self.turn.with_world_rebind(|ctx, local_slot, mut ops| {
-            let ctx_addr = std::ptr::from_ref(ctx) as usize;
-            let heap = ctx.tagged_heap.heap_identity();
+            let owner = super::serial_detach::ActiveSerialTurn::for_context(ctx);
             let inhibit_base = ctx.gc_inhibit_depth;
             let mut bridge_fn = |ev: &mut super::super::Context| -> Result<
                 neovm_value::tagged::gc::CollectionReport,
@@ -635,8 +636,7 @@ impl<'t, G: LendGuard> LiveSerial<'t, super::super::Context, G> {
             // invocation is active at a time.
             let bridge_ptr: *mut SerialCollectBridgeFn = unsafe { std::mem::transmute(bridge_ref) };
             let _scope_guard = SerialCollectScopeGuard::install(ActiveSerialCollectScope {
-                ctx_addr,
-                heap,
+                owner,
                 inhibit_base,
                 bridge: bridge_ptr,
             });
@@ -647,16 +647,15 @@ impl<'t, G: LendGuard> LiveSerial<'t, super::super::Context, G> {
 
 impl super::super::Context {
     /// Returns the baseline `gc_inhibit_depth` recorded at entry to an active
-    /// [`LiveSerial::with_world_collectible`] scope on this OS thread when both
-    /// `self`'s address and `HeapIdentity` match (zero bytes on `Context`, Q2).
+    /// [`LiveSerial::with_world_collectible`] scope on this OS thread when
+    /// `self`'s closed [`super::serial_detach::ActiveSerialTurn`] identity
+    /// (`ctx_addr`, `HeapIdentity`, monotonic `context_instance_id`) matches;
+    /// deny-by-default `None` otherwise (zero bytes on `Context`, Q2 + NIT-1).
     #[inline]
     pub(crate) fn active_serial_collect_inhibit_base(&self) -> Option<usize> {
-        let my_addr = std::ptr::from_ref(self) as usize;
-        let my_heap = self.tagged_heap.heap_identity();
         SERIAL_TURN_COLLECT_SCOPE.with(|slot| {
             let scope = slot.take()?;
-            let matched =
-                (scope.ctx_addr == my_addr && scope.heap == my_heap).then_some(scope.inhibit_base);
+            let matched = scope.owner.matches(self).then_some(scope.inhibit_base);
             slot.set(Some(scope));
             matched
         })
@@ -701,15 +700,15 @@ impl super::super::Context {
         //    aliasing). Restore it ONLY on `Ok(report)` so an unwinding or
         //    failing bridge never re-exposes a broken/detached scope to
         //    intermediate destructors inside `body(ctx)` (F6.1).
-        let my_addr = std::ptr::from_ref(self) as usize;
-        let my_heap = self.tagged_heap.heap_identity();
+        let actual = super::serial_detach::ActiveSerialTurn::for_context(self);
         let taken = SERIAL_TURN_COLLECT_SCOPE.with(|slot| slot.take());
         let Some(scope) = taken else {
             panic!("gc_collect_serial_turn called without an active SerialTurn collect scope");
         };
-        if scope.ctx_addr != my_addr || scope.heap != my_heap {
+        if scope.owner != actual {
+            let expected = scope.owner;
             SERIAL_TURN_COLLECT_SCOPE.with(|slot| slot.set(Some(scope)));
-            panic!("gc_collect_serial_turn scope mismatch (foreign Context or heap)");
+            panic!("gc_collect_serial_turn scope mismatch (expected {expected:?}, got {actual:?})");
         }
         let bridge_ptr = scope.bridge;
         // SAFETY: `bridge_ptr` points to the live stack closure installed by

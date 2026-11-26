@@ -480,3 +480,160 @@ fn l64_activation_closure_verifies_host_heap_on_begin_and_resume() {
     turn.end(&mut port).ok().expect("the host detaches");
     assert!(names_no_heap(), "end takes the heap back down");
 }
+
+/// Minimal `KeeperPort` whose `CollectReply` matches `LiveSerial::with_world_collectible`
+/// for single-thread scope-identity tests (NIT-1).
+struct CollectScopeFakePort {
+    home: SerialHome,
+    generation: u64,
+    epoch: u64,
+}
+
+impl KeeperPort for CollectScopeFakePort {
+    type LendGuard = ();
+    type CollectReply = super::super::keeper_driver::CollectReply;
+
+    fn give_back(&mut self, _returned: ReturnedSerialTicket) {}
+
+    fn give_back_to_collect(
+        &mut self,
+        _returned: ReturnedSerialTicket,
+        _reply: Self::CollectReply,
+    ) {
+    }
+
+    fn request_turn(&mut self) -> Result<(Grant, ()), PortRefusal> {
+        self.generation += 1;
+        self.epoch += 1;
+        let generation = nonzero(self.generation);
+        let epoch = nonzero(self.epoch);
+        let cut = TicketIdentity {
+            owner: self.home.owner,
+            generation,
+            heap: self.home.heap,
+            epoch,
+        };
+        Ok((
+            Grant {
+                ticket: StoppedSerialTicket::transport(cut),
+                generation,
+                epoch,
+            },
+            (),
+        ))
+    }
+
+    fn refuse(&mut self, _ticket: StoppedSerialTicket, _reason: ReceiveReason) {}
+}
+
+/// NIT-1: `ActiveSerialCollectScope` must key on monotonic `context_instance_id`
+/// in addition to `(ctx_addr, HeapIdentity)` so a second `Context` on the same
+/// World swapped into the exact same address cannot match
+/// `active_serial_collect_inhibit_base()` or enter `gc_collect_serial_turn()`.
+#[test]
+fn l67c_nit1_active_serial_collect_scope_refuses_same_address_same_heap_foreign_context() {
+    use crate::emacs_core::eval::ThreadingMode;
+
+    let mut main =
+        Context::new_with_threading(ThreadingMode::Green, crate::test_utils::unit_runtime());
+    let baton = main.start_green_runtime().expect("start the Green runtime");
+    let _main_state: State = OwnerSerialState::new(1, Box::new(main))
+        .ok()
+        .expect("detach main and stow World carriers");
+    let (to_main, from_worker) = std::sync::mpsc::channel();
+    let worker = std::thread::spawn(move || {
+        baton.enter();
+        let owner_a = Context::new_green_owner(&baton);
+        let home = SerialHome {
+            owner: 9,
+            heap: owner_a.tagged_heap.heap_identity(),
+        };
+        let mut state: State = OwnerSerialState::new(home.owner, Box::new(owner_a))
+            .ok()
+            .expect("owner_a detaches cleanly");
+        let mut port = CollectScopeFakePort {
+            home,
+            generation: 0,
+            epoch: 0,
+        };
+        let grant = port.request_turn().ok().expect("grant");
+        let mut live = begin_turn(&mut state, home, grant, &mut port, |_| {
+            Ok::<(), Infallible>(())
+        })
+        .ok()
+        .expect("begin live serial turn");
+
+        let owner_b = live.with_world_collectible(
+            &mut port,
+            |_| Ok::<(), Infallible>(()),
+            |ctx_slot| {
+                let mut owner_b = Context::new_green_owner(&baton);
+                let addr_a = std::ptr::from_ref(ctx_slot) as usize;
+                let heap_a = ctx_slot.tagged_heap.heap_identity();
+                let id_a = ctx_slot.context_instance_id();
+                let id_b = owner_b.context_instance_id();
+                assert_eq!(owner_b.tagged_heap.heap_identity(), heap_a);
+                assert_ne!(id_b, id_a);
+                assert_eq!(ctx_slot.active_serial_collect_inhibit_base(), Some(1));
+                assert!(ctx_slot.in_active_serial_turn());
+
+                // Swap distinct same-World Context into the exact same address.
+                std::mem::swap(ctx_slot, &mut owner_b);
+                assert_eq!(std::ptr::from_ref(ctx_slot) as usize, addr_a);
+                assert_eq!(ctx_slot.tagged_heap.heap_identity(), heap_a);
+                assert_eq!(ctx_slot.context_instance_id(), id_b);
+
+                assert_eq!(
+                    ctx_slot.active_serial_collect_inhibit_base(),
+                    None,
+                    "NIT-1: same-address/same-heap foreign Context (expected context_id={id_a}, got context_id={id_b}) must NOT match ActiveSerialCollectScope"
+                );
+                assert!(
+                    !ctx_slot.in_active_serial_turn(),
+                    "NIT-1: same-address/same-heap foreign Context (expected context_id={id_a}, got context_id={id_b}) must NOT match ActiveSerialTurn"
+                );
+                assert!(
+                    !ctx_slot.is_explicit_gc_inhibited(),
+                    "NIT-1: same-address/same-heap foreign Context (expected context_id={id_a}, got context_id={id_b}) must NOT falsely inhibit GC"
+                );
+
+                let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    ctx_slot.gc_collect_serial_turn()
+                }));
+                let payload = caught.expect_err(
+                    "NIT-1: gc_collect_serial_turn must refuse same-address/same-heap foreign Context",
+                );
+                let msg = payload
+                    .downcast_ref::<&str>()
+                    .copied()
+                    .or_else(|| payload.downcast_ref::<String>().map(String::as_str))
+                    .unwrap_or("");
+                assert!(
+                    msg.contains("scope mismatch")
+                        && msg.contains(&format!("context_id: {id_a}"))
+                        && msg.contains(&format!("context_id: {id_b}")),
+                    "NIT-1: expected scope mismatch naming expected context_id={id_a} and actual context_id={id_b}, got: {msg:?}"
+                );
+
+                // Restore original Context; scope must still be intact for it.
+                std::mem::swap(ctx_slot, &mut owner_b);
+                assert_eq!(
+                    ctx_slot.active_serial_collect_inhibit_base(),
+                    Some(1),
+                    "original Context retains its ActiveSerialCollectScope after foreign refusal"
+                );
+                assert!(ctx_slot.in_active_serial_turn());
+                owner_b
+            },
+        );
+        live.end(&mut port).ok().expect("end live serial turn");
+        assert!(names_no_heap());
+        drop(owner_b);
+        drop(state);
+        to_main.send(baton).expect("return baton to main");
+    });
+
+    let baton = from_worker.recv().expect("baton returns from worker");
+    worker.join().expect("worker thread finishes cleanly");
+    drop(baton);
+}
