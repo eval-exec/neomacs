@@ -17,10 +17,14 @@
 //!
 //! Every non-`TextAndCells` test must have an explicit entry in
 //! [`NON_CELL_ALLOWLIST`] with a typed [`NonCellAssertionKind`] and reason,
-//! and the crate totals must equal [`CELL_ASSERTION_PINS`] **exactly** (same
-//! pin shape as `SLEEP_PINS` in `wall_clock_guard_test.rs`). Adding a new
-//! text-only TUI test fails this guard until it is either upgraded to
-//! cell-level parity or explicitly classified and reviewed.
+//! and the exception counts (`text_and_face`, `text_only`,
+//! `blocked_chrome_divergence`) must equal [`CELL_ASSERTION_PINS`] **exactly**
+//! (same shape as `SLEEP_PINS` in `wall_clock_guard_test.rs`), while
+//! `text_and_cells` and `total` are non-shrinking **floors**
+//! (`min_text_and_cells`, `min_total`). Adding a new strong `TextAndCells`
+//! test therefore passes freely without touching this file, whereas adding a
+//! new text-only test, downgrading a strong test, or silently losing test
+//! discovery fails this guard until reviewed.
 //!
 //! # Artifact-only `RawTerminalSnapshot` defense
 //!
@@ -76,25 +80,33 @@ impl NonCellAssertionKind {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct CellAssertionPin {
-    total: usize,
-    text_and_cells: usize,
+    /// Non-shrinking floor on total discovered integration tests (guards
+    /// against silent loss of test discovery or dropped modules).
+    min_total: usize,
+    /// Non-shrinking floor on `TextAndCells` tests (adding new strong tests
+    /// passes freely; shrinking fails).
+    min_text_and_cells: usize,
+    /// Exact pin on partial-face (`TextAndFace`) exceptions.
     text_and_face: usize,
+    /// Exact pin on `TextOnly` exceptions.
     text_only: usize,
+    /// Exact pin on `BlockedChromeDivergence` exceptions.
     blocked_chrome_divergence: usize,
 }
 
-/// Exact crate-wide ratchet pins (same shape as `SLEEP_PINS`).
+/// Crate-wide ratchet pins (same exception-pin shape as `SLEEP_PINS`, plus
+/// non-shrinking floors on `total` and `text_and_cells`).
 ///
 /// Baseline on `c2ab78b0e9` before targeted conversions:
 /// `total = 1164, text_and_cells = 990 (85.1%), text_and_face = 2, text_only = 172`.
 /// After converting 13 attribute-subject rows across 6 files and rebasing onto
 /// `d6f1de3ca8` (+2 text-only margin-truncation rows in `issue_702_truncated_margin_parity.rs`):
-/// `total = 1166, text_and_cells = 1003 (86.0%), text_and_face = 2, text_only = 161`.
+/// `min_total = 1166, min_text_and_cells = 1003 (86.0%), text_and_face = 2, text_only = 161`.
 const CELL_ASSERTION_PINS: &[(&str, CellAssertionPin)] = &[(
     "neomacs-tui-tests",
     CellAssertionPin {
-        total: 1166,
-        text_and_cells: 1003,
+        min_total: 1166,
+        min_text_and_cells: 1003,
         text_and_face: 2,
         text_only: 161,
         blocked_chrome_divergence: 1,
@@ -1645,16 +1657,26 @@ fn validate_against_allowlist_and_pin(
         }
     }
 
-    let actual_pin = CellAssertionPin {
-        total: classified.len(),
-        text_and_cells: actual_cells,
-        text_and_face: actual_face,
-        text_only: actual_text,
-        blocked_chrome_divergence: blocked_count,
-    };
-    if actual_pin != pin {
+    let actual_total = classified.len();
+    if actual_total < pin.min_total {
         violations.push(format!(
-            "CELL_ASSERTION_PINS mismatch: actual={actual_pin:?} != pinned={pin:?}"
+            "CELL_ASSERTION_PINS total floor regressed: actual total={actual_total} < min_total={}",
+            pin.min_total
+        ));
+    }
+    if actual_cells < pin.min_text_and_cells {
+        violations.push(format!(
+            "CELL_ASSERTION_PINS text_and_cells floor regressed: actual text_and_cells={actual_cells} < min_text_and_cells={}",
+            pin.min_text_and_cells
+        ));
+    }
+    if actual_face != pin.text_and_face
+        || actual_text != pin.text_only
+        || blocked_count != pin.blocked_chrome_divergence
+    {
+        violations.push(format!(
+            "CELL_ASSERTION_PINS exception mismatch: actual=(text_and_face={actual_face}, text_only={actual_text}, blocked_chrome_divergence={blocked_count}) != pinned=(text_and_face={}, text_only={}, blocked_chrome_divergence={})",
+            pin.text_and_face, pin.text_only, pin.blocked_chrome_divergence
         ));
     }
 
@@ -1775,8 +1797,8 @@ fn plain_text_only_row() {
     assert_eq!(get("plain_text_only_row"), AssertionStrength::TextOnly);
 
     let pin = CellAssertionPin {
-        total: 5,
-        text_and_cells: 2,
+        min_total: 5,
+        min_text_and_cells: 2,
         text_and_face: 1,
         text_only: 2,
         blocked_chrome_divergence: 0,
@@ -1794,7 +1816,7 @@ fn plain_text_only_row() {
         "expected text-only row to be flagged: {err:?}"
     );
 
-    // Properly classified allowlist + exact pin passes.
+    // Properly classified allowlist + pin passes.
     let allowlist = [
         NonCellAllowance {
             file: "tests/synthetic.rs",
@@ -1818,6 +1840,41 @@ fn plain_text_only_row() {
     validate_against_allowlist_and_pin(&classified, &allowlist, pin)
         .expect("exact classification and pin must pass");
 
+    // Adding a brand-new strong TextAndCells test above min_total / min_text_and_cells
+    // must pass freely without requiring a pin bump.
+    let mut with_extra_strong = classified.clone();
+    with_extra_strong.insert(
+        FnKey {
+            file: "tests/synthetic.rs".to_owned(),
+            name: "added_strong_row".to_owned(),
+        },
+        AssertionStrength::TextAndCells,
+    );
+    validate_against_allowlist_and_pin(&with_extra_strong, &allowlist, pin)
+        .expect("adding a new TextAndCells row must pass without bumping floors");
+
+    // Losing a TextAndCells test below min_text_and_cells or dropping total
+    // below min_total must fail.
+    let mut missing_strong = classified.clone();
+    missing_strong.remove(&FnKey {
+        file: "tests/synthetic.rs".to_owned(),
+        name: "strong_raw_snapshot_row".to_owned(),
+    });
+    let floor_err = validate_against_allowlist_and_pin(&missing_strong, &allowlist, pin)
+        .expect_err("dropping a TextAndCells row below the floor must fail");
+    assert!(
+        floor_err
+            .iter()
+            .any(|msg| msg.contains("total floor regressed")),
+        "expected total floor diagnostic: {floor_err:?}"
+    );
+    assert!(
+        floor_err
+            .iter()
+            .any(|msg| msg.contains("text_and_cells floor regressed")),
+        "expected text_and_cells floor diagnostic: {floor_err:?}"
+    );
+
     // Stale allowlist entry for a TextAndCells row must be rejected.
     let mut stale = allowlist.to_vec();
     stale.push(NonCellAllowance {
@@ -1835,17 +1892,28 @@ fn plain_text_only_row() {
         "expected stale allowlist diagnostic: {stale_err:?}"
     );
 
-    // Pin mismatch must be rejected even if allowlist matches.
-    let bad_pin = CellAssertionPin {
-        text_only: 1,
-        ..pin
-    };
-    let pin_err = validate_against_allowlist_and_pin(&classified, &allowlist, bad_pin)
-        .expect_err("mismatched pin must fail");
-    assert!(
-        pin_err
-            .iter()
-            .any(|msg| msg.contains("CELL_ASSERTION_PINS mismatch")),
-        "expected pin mismatch diagnostic: {pin_err:?}"
-    );
+    // Exception pin mismatch must be rejected in either direction even if allowlist matches.
+    for bad_pin in [
+        CellAssertionPin {
+            text_only: 1,
+            ..pin
+        },
+        CellAssertionPin {
+            text_only: 3,
+            ..pin
+        },
+        CellAssertionPin {
+            text_and_face: 0,
+            ..pin
+        },
+    ] {
+        let pin_err = validate_against_allowlist_and_pin(&classified, &allowlist, bad_pin)
+            .expect_err("mismatched exception pin must fail");
+        assert!(
+            pin_err
+                .iter()
+                .any(|msg| msg.contains("CELL_ASSERTION_PINS exception mismatch")),
+            "expected exception pin mismatch diagnostic: {pin_err:?}"
+        );
+    }
 }
