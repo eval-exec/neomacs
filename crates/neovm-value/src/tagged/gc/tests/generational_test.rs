@@ -167,6 +167,97 @@ fn generational_mapped_and_permanent_logs_are_per_cycle() {
 }
 
 #[test]
+fn reset_generational_remembered_clears_boxed_owner_inside_non_contiguous_mapped_bracket() {
+    use crate::tagged::header::{HashTableObj, VecLikeHeader};
+    use crate::value::{HashTableTest, LispHashTable};
+
+    // Allocate the mapped bracket shells through a second `TaggedHeap` so both
+    // the bracket shells and `heap`'s target table go through the exact same
+    // `allocation.rs` `Box::new(HashTableObj::new(..))` callsite (sharing the
+    // same allocator bucket even on callsite-segregated macOS xzone libmalloc).
+    let mut bracket_heap = TaggedHeap::new();
+    let mut heap = heap_with_generations(true);
+    set_tagged_heap(&mut heap);
+
+    let mut candidates = Vec::new();
+    let mut heap_tables = Vec::new();
+    let mut bracket: Option<(usize, usize, TaggedValue)> = None;
+    for _round in 0..8 {
+        for _ in 0..32 {
+            candidates.push(bracket_heap.alloc_hash_table(LispHashTable::new(HashTableTest::Eq)));
+            heap_tables.push(heap.alloc_hash_table(LispHashTable::new(HashTableTest::Eq)));
+        }
+        candidates.sort_by_key(|ht| ht.as_veclike_ptr().expect("bracket ptr") as usize);
+        let mut best: Option<(usize, usize, usize, TaggedValue)> = None;
+        for &ht in &heap_tables {
+            let addr = ht.as_veclike_ptr().expect("table ptr") as usize;
+            let pos = candidates
+                .partition_point(|b| (b.as_veclike_ptr().expect("bracket ptr") as usize) < addr);
+            if pos > 0 && pos < candidates.len() {
+                let lo_i = pos - 1;
+                let hi_i = pos;
+                let lo_a = candidates[lo_i].as_veclike_ptr().expect("lo ptr") as usize;
+                let hi_a = candidates[hi_i].as_veclike_ptr().expect("hi ptr") as usize;
+                let span = hi_a - lo_a;
+                if best.is_none_or(|(best_span, _, _, _)| span < best_span) {
+                    best = Some((span, lo_i, hi_i, ht));
+                }
+            }
+        }
+        if let Some((_, lo_i, hi_i, ht)) = best {
+            bracket = Some((lo_i, hi_i, ht));
+            break;
+        }
+    }
+    let (lo_idx, hi_idx, table) =
+        bracket.expect("layout could not produce a bracket around any heap table");
+    let lo_ptr = candidates[lo_idx]
+        .as_veclike_ptr()
+        .expect("lo veclike")
+        .cast_mut()
+        .cast::<VecLikeHeader>();
+    let hi_ptr = candidates[hi_idx]
+        .as_veclike_ptr()
+        .expect("hi veclike")
+        .cast_mut()
+        .cast::<VecLikeHeader>();
+
+    // Promote `table` to tenured ordinary-old BEFORE registering the mapped
+    // bracket so the initial collection marks `table` normally rather than
+    // treating its address as pre-marked mapped storage.
+    minor(&mut heap, &[table]);
+    assert!(header(table).flags.boxed());
+    assert!(header(table).tenured);
+    assert!(!header(table).generation.permanent());
+    assert!(!header(table).is_remembered());
+
+    // SAFETY: `lo_ptr` and `hi_ptr` belong to `bracket_heap` (declared before
+    // `heap`, never collected, dropped strictly after `heap`).
+    unsafe {
+        heap.register_mapped_veclike_object(lo_ptr, std::mem::size_of::<HashTableObj>());
+        heap.register_mapped_veclike_object(hi_ptr, std::mem::size_of::<HashTableObj>());
+    }
+    assert!(heap.mapped_image_owns_for_test(table));
+
+    // Simulate the writer claim (`TableMut::edit`) setting `Logged` and pushing to `remset`.
+    assert!(header(table).claim_remembered());
+    heap.current_mutator_gc_mut().remset.push(table);
+    assert!(header(table).is_remembered());
+    heap.assert_remembered_membership_for_test(table);
+
+    // Stopped reset must clear `header.remembered` even though `table` lies inside
+    // `[dump_addr_lo, dump_addr_hi)`.
+    heap.reset_generational_remembered_world_stopped();
+    assert!(
+        !header(table).is_remembered(),
+        "#876: reset_generational_remembered_world_stopped left bracketed boxed table stuck Logged"
+    );
+    heap.assert_remembered_membership_for_test(table);
+    drop(heap);
+    drop(bracket_heap);
+}
+
+#[test]
 fn generational_disabled_never_logs_r() {
     let mut heap = heap_with_generations(false);
     set_tagged_heap(&mut heap);

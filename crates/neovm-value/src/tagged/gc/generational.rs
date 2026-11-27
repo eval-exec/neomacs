@@ -135,6 +135,57 @@ impl TaggedHeap {
         self.mapped_remembered.extend(additions);
     }
 
+    /// Whether a remembered non-cons owner carries a heap-owned `GcHeader`
+    /// whose `remembered` claim must be checked and cleared at a stop.
+    ///
+    /// Mapped pdump objects have no heap-owned `remembered` claim; they are
+    /// tracked via `r_mapped_seen` / `mapped_remembered` instead. For
+    /// `HashTableObj`, `header.flags.boxed()` is authoritative (`with_boxed()`
+    /// has only two call sites — `TaggedHeap::link_veclike` and parallel owner
+    /// linking in `cons_storage.rs` — and `HashTableObj` has no arena page
+    /// class). Checking `!self.owner_is_mapped(owner) || header.flags.boxed()`
+    /// keeps all stopped clearers symmetric with `TableMut::edit` even if a
+    /// heap-boxed object's address falls inside a non-contiguous
+    /// `[dump_addr_lo, dump_addr_hi)` span.
+    ///
+    /// # Safety
+    /// `owner` must be a live, initialized non-cons heap or mapped object
+    /// retained through the current stopped collection before sweep.
+    pub(super) unsafe fn remembered_owner_has_header_claim(
+        &self,
+        owner: TaggedValue,
+    ) -> Option<*const GcHeader> {
+        if owner.is_cons() {
+            return None;
+        }
+        let addr = Self::value_heap_addr(owner)?;
+        let header = addr as *const GcHeader;
+        // SAFETY: caller guarantees `owner` points to a live initialized `GcHeader`.
+        if !self.owner_is_mapped(owner) || unsafe { (*header).flags.boxed() } {
+            Some(header)
+        } else {
+            None
+        }
+    }
+
+    /// Clear a remembered non-cons owner's `header.remembered` claim when the
+    /// owner carries a heap-owned header claim. Shared by every stopped
+    /// clearer (`reset_generational_remembered_world_stopped` and
+    /// `mutator_registration::collection::trace_work`).
+    ///
+    /// # Safety
+    /// All mutators/appenders are stopped, the collector holds exclusive heap
+    /// access before sweep, and `owner` names a live remembered object.
+    pub(super) unsafe fn clear_remembered_header_world_stopped(&self, owner: TaggedValue) {
+        // SAFETY: caller upholds stop-all exclusion and live-owner contract.
+        if let Some(header) = unsafe { self.remembered_owner_has_header_claim(owner) } {
+            // SAFETY: all appenders are stopped and no header has been freed yet.
+            unsafe { &*header }
+                .remembered
+                .store(RememberedState::Unlogged as u8, Ordering::Relaxed);
+        }
+    }
+
     /// Reset claims before a major traces old objects, and at termination
     /// after P-all. No owner is freed until this drain is complete. Facts
     /// appended during the later cooperative sweep belong to the next cycle.
@@ -165,17 +216,13 @@ impl TaggedHeap {
             mutator.remembered_cache.fill(0);
         }
         for owner in owners {
-            if self.owner_is_mapped(owner) {
-                continue;
-            }
             // Owned conses are remembered by their cards, never logged.
-            debug_assert!(!owner.is_cons(), "an owned cons in the remembered set");
-            if let Some(addr) = Self::value_heap_addr(owner) {
-                // All appenders are stopped, and no header has been freed.
-                unsafe { &*(addr as *const GcHeader) }
-                    .remembered
-                    .store(RememberedState::Unlogged as u8, Ordering::Relaxed);
-            }
+            debug_assert!(
+                !owner.is_cons() || self.owner_is_mapped(owner),
+                "an owned cons in the remembered set"
+            );
+            // SAFETY: all appenders are stopped, and no header has been freed.
+            unsafe { self.clear_remembered_header_world_stopped(owner) };
         }
     }
 
@@ -198,24 +245,21 @@ impl TaggedHeap {
 
     #[cfg(any(any(test, feature = "test-support"), debug_assertions))]
     fn remembered_membership_is_valid(&self, owner: TaggedValue) -> bool {
-        if owner.is_cons() || self.owner_is_mapped(owner) {
+        // SAFETY: `owner` is a live heap or mapped object checked under stop/test.
+        let Some(header) = (unsafe { self.remembered_owner_has_header_claim(owner) }) else {
             return true;
-        }
-        if let Some(addr) = Self::value_heap_addr(owner) {
-            let header = unsafe { &*(addr as *const GcHeader) };
-            !header.is_remembered()
-                || self.mapped_remembered.contains(&owner.bits())
-                || self
-                    .generational
-                    .r_seed
-                    .iter()
-                    .any(|value| value.bits() == owner.bits())
-                || self
-                    .mutators()
-                    .any(|m| m.remset.iter().any(|value| value.bits() == owner.bits()))
-        } else {
-            true
-        }
+        };
+        let header = unsafe { &*header };
+        !header.is_remembered()
+            || self.mapped_remembered.contains(&owner.bits())
+            || self
+                .generational
+                .r_seed
+                .iter()
+                .any(|value| value.bits() == owner.bits())
+            || self
+                .mutators()
+                .any(|m| m.remset.iter().any(|value| value.bits() == owner.bits()))
     }
 }
 

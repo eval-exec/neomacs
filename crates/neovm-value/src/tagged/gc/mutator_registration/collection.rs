@@ -1312,17 +1312,11 @@ fn trace_work(heap: &mut TaggedHeap, work: &CollectionWork) {
         heap.seed_root(unsafe { word.value() });
     }
     for word in &work.remembered {
-        // SAFETY: same world-stopped collector authority before sweep.
+        // SAFETY: same world-stopped collector authority before sweep; the
+        // pending remembered owner remains retained until this stopped cycle
+        // consumes its claim.
         let owner = unsafe { word.value() };
-        if !owner.is_cons() && !heap.owner_is_mapped(owner) {
-            if let Some(address) = TaggedHeap::value_heap_addr(owner) {
-                // SAFETY: the pending remembered owner remains retained until
-                // this stopped major consumes its claim, before any sweep.
-                unsafe { &*(address as *const GcHeader) }
-                    .remembered
-                    .store(RememberedState::Unlogged as u8, Ordering::Relaxed);
-            }
-        }
+        unsafe { heap.clear_remembered_header_world_stopped(owner) };
     }
     for word in work.remembered.iter().chain(&work.cons_writes) {
         // SAFETY: same world-stopped collector authority before sweep.
