@@ -962,6 +962,7 @@ fn encode_utf16_lisp_string(
     s: &neovm_value::heap_types::LispString,
     endian: Utf16Endian,
     bom: bool,
+    default_char: u32,
 ) -> Vec<u8> {
     let mut out = Vec::with_capacity(s.sbytes() * 2 + 2);
     if bom {
@@ -971,8 +972,22 @@ fn encode_utf16_lisp_string(
         }
     }
 
+    // Mirrors GNU `encode_coding_utf_16` (`src/coding.c:1728-1749`): any char
+    // above `MAX_UNICODE_CHAR` (`0x10_FFFF`, including raw byte8 chars) is
+    // replaced unconditionally with `coding->default_char` without clamping,
+    // and values >= `0x1_0000` emit `(c - 0x1_0000) >> 10 + 0xD800` and
+    // `((c - 0x1_0000) & 0x3FF) + 0xDC00`.
     for code in coding_source_codepoints(s) {
-        push_utf16_codepoint(&mut out, endian, code);
+        let c = if code > 0x10_FFFF { default_char } else { code };
+        if c < 0x1_0000 {
+            push_utf16_unit(&mut out, endian, c as u16);
+        } else {
+            let scalar = c - 0x1_0000;
+            let high = ((scalar >> 10) + 0xD800) as u16;
+            let low = ((scalar & 0x3FF) + 0xDC00) as u16;
+            push_utf16_unit(&mut out, endian, high);
+            push_utf16_unit(&mut out, endian, low);
+        }
     }
 
     out
@@ -1300,6 +1315,15 @@ pub fn encode_lisp_string(
     coding_system: &str,
     eol_conversion: crate::emacs_core::coding::EolConversion,
 ) -> Vec<u8> {
+    encode_lisp_string_with_default_char(s, coding_system, eol_conversion, None)
+}
+
+fn encode_lisp_string_with_default_char(
+    s: &neovm_value::heap_types::LispString,
+    coding_system: &str,
+    eol_conversion: crate::emacs_core::coding::EolConversion,
+    default_char: Option<u32>,
+) -> Vec<u8> {
     // The single EOL pass, mirroring GNU `consume_chars` (src/coding.c:7607):
     // convert the SOURCE once, here, above every codec branch, and hand the
     // branches a coding name whose EOL leg is spent.  No branch below can skip
@@ -1309,6 +1333,7 @@ pub fn encode_lisp_string(
         expanded.as_ref().unwrap_or(s),
         &coding_name_with_eol_spent(coding_system),
         eol_conversion,
+        default_char,
     )
 }
 
@@ -1319,12 +1344,18 @@ fn encode_lisp_string_eol_spent(
     s: &neovm_value::heap_types::LispString,
     coding_system: &str,
     eol_conversion: crate::emacs_core::coding::EolConversion,
+    default_char: Option<u32>,
 ) -> Vec<u8> {
     if let Some((endian, bom)) = utf16_coding_variant(coding_system) {
         // GNU `encode_coding_utf_16` writes a signature whenever the coding
         // system's `:bom` is not nil (src/coding.c), so the auto `utf-16` -- whose
         // `:bom` is a cons -- writes one too, in its own big-endian order.
-        return encode_utf16_lisp_string(s, endian, bom != Utf16Bom::Without);
+        return encode_utf16_lisp_string(
+            s,
+            endian,
+            bom != Utf16Bom::Without,
+            default_char.unwrap_or(0x20),
+        );
     }
 
     let family = coding_system_family(coding_system);
@@ -1367,6 +1398,8 @@ fn encode_lisp_string_eol_spent(
     }
 
     let single_byte_charset = SingleByteCharset::for_coding_system(coding_system);
+    let latin_fallback = (default_char.unwrap_or(0x20) & 0xFF) as u8;
+    let ascii_fallback = (default_char.unwrap_or(u32::from(b'?')) & 0xFF) as u8;
     let mut out = Vec::with_capacity(s.sbytes());
     let mut push_encoded = |code: u32| {
         if let Some(charset) = single_byte_charset {
@@ -1375,10 +1408,9 @@ fn encode_lisp_string_eol_spent(
             } else if neovm_value::emacs_char::char_byte8_p(code) {
                 out.push(neovm_value::emacs_char::char_to_byte8(code));
             } else {
-                // GNU substitutes an unencodable character with a space (0x20)
-                // for the Latin charset coding systems (the ASCII coding uses
-                // `?`).
-                out.push(b' ');
+                // GNU `encode_coding_charset` (`src/coding.c:5648-5649`) emits
+                // the low byte of `coding->default_char` (defaults to 0x20).
+                out.push(latin_fallback);
             }
             return;
         }
@@ -1390,7 +1422,7 @@ fn encode_lisp_string_eol_spent(
                     // GNU `encode_coding_charset': a raw byte goes out as itself.
                     out.push(neovm_value::emacs_char::char_to_byte8(code));
                 } else {
-                    out.push(b'?');
+                    out.push(ascii_fallback);
                 }
             }
             // Single-byte / codepage coding systems we do not fully model -- notably
@@ -1400,15 +1432,15 @@ fn encode_lisp_string_eol_spent(
             // pure-ASCII input encoded to "" (e.g. make-temp-file-internal returned a
             // bare nonce because its encoded PREFIX came back empty, leaving
             // `org-persist-directory' separator-less and crashing org's load on
-            // Windows). Pass ASCII and raw byte8 through; substitute `?` for
-            // characters this codec does not model (matching the us-ascii fallback).
+            // Windows). Pass ASCII and raw byte8 through; substitute `?` (or
+            // `:default-char`) for characters this codec does not model.
             _ => {
                 if code <= 0x7F {
                     out.push(code as u8);
                 } else if neovm_value::emacs_char::char_byte8_p(code) {
                     out.push(neovm_value::emacs_char::char_to_byte8(code));
                 } else {
-                    out.push(b'?');
+                    out.push(ascii_fallback);
                 }
             }
         }
@@ -2168,30 +2200,50 @@ fn general_charset_coding_list<H: TextHost>(
     Some(info.charset_list.clone())
 }
 
-/// Encode `s` through an explicit ordered charset list (a charset-type coding
-/// system): each character is emitted as the bytes of the first charset that
-/// can represent it, and characters that no charset can encode are replaced by
-/// a space (0x20), matching GNU `encode-coding-string`.
+/// Encode `s` through an explicit ordered charset list (a charset-type or
+/// big5-type coding system): each character is emitted as the bytes of the
+/// first charset that can represent it, and unencodable characters use
+/// `coding->default_char` (re-encoded through `charset_list` for `big5`,
+/// `src/coding.c:5039-5054`, or emitted as `EMIT_ONE_BYTE(default_char)` for
+/// `charset`, `src/coding.c:5648-5649`).
 fn encode_via_charset_list(
     s: &neovm_value::heap_types::LispString,
     charset_list: &[SymId],
+    default_char: Option<u32>,
+    reencode_default_char: bool,
 ) -> Vec<u8> {
+    let dc = default_char.unwrap_or(0x20);
     let mut out = Vec::with_capacity(s.sbytes());
+    let emit_from_charsets = |code: u32, out: &mut Vec<u8>| -> bool {
+        for &charset in charset_list {
+            if let Some(bytes) =
+                crate::emacs_core::charset::charset_encode_char_bytes(charset, i64::from(code))
+            {
+                out.extend(bytes);
+                return true;
+            }
+        }
+        false
+    };
     let emit = |code: u32, out: &mut Vec<u8>| {
         // GNU `encode_coding_charset': a raw 8-bit byte goes out as itself.
         if neovm_value::emacs_char::char_byte8_p(code) {
             out.push(neovm_value::emacs_char::char_to_byte8(code));
             return;
         }
-        for &charset in charset_list {
-            if let Some(bytes) =
-                crate::emacs_core::charset::charset_encode_char_bytes(charset, i64::from(code))
-            {
-                out.extend(bytes);
-                return;
-            }
+        if emit_from_charsets(code, out) {
+            return;
         }
-        out.push(b' ');
+        if reencode_default_char && emit_from_charsets(dc, out) {
+            return;
+        }
+        // For `charset`-type codings (`reencode_default_char == false`), GNU
+        // emits `(dc & 0xFF)` (`src/coding.c:5648-5649`). For `big5`-type
+        // codings (`reencode_default_char == true`), if a non-ASCII
+        // `default_char` itself fails re-encoding, GNU dereferences a NULL
+        // charset pointer (`src/coding.c:5039-5054`); falling back to
+        // `(dc & 0xFF)` here is a deliberate safety divergence from GNU's crash.
+        out.push((dc & 0xFF) as u8);
     };
     for code in coding_source_codepoints(s) {
         emit(code, &mut out);
@@ -3226,17 +3278,14 @@ fn encode_via_euc(
     s: &neovm_value::heap_types::LispString,
     spec: &crate::emacs_core::coding::Iso2022Spec,
     charset_list: &[SymId],
+    default_char: Option<u32>,
 ) -> Vec<u8> {
+    let dc = default_char.unwrap_or(0x20);
     let mut out = Vec::with_capacity(s.sbytes());
-    let emit = |code: u32, out: &mut Vec<u8>| {
+    let emit_char = |code: u32, out: &mut Vec<u8>| -> bool {
         if code < 0x80 {
             out.push(code as u8);
-            return;
-        }
-        // GNU `encode_coding_iso_2022': a raw 8-bit byte goes out as itself.
-        if neovm_value::emacs_char::char_byte8_p(code) {
-            out.push(neovm_value::emacs_char::char_to_byte8(code));
-            return;
+            return true;
         }
         for &charset in charset_list {
             // Prefer the register this charset is the *initial* designation of
@@ -3266,14 +3315,26 @@ fn encode_via_euc(
                     out.push(0x8F);
                     out.extend(bytes.iter().map(|b| b | 0x80));
                 }
-                _ => out.push(b' '),
+                _ => return false,
             }
-            return;
+            return true;
         }
-        out.push(b' ');
+        false
     };
     for code in coding_source_codepoints(s) {
-        emit(code, &mut out);
+        // GNU `encode_coding_iso_2022': a raw 8-bit byte goes out as itself.
+        if neovm_value::emacs_char::char_byte8_p(code) {
+            out.push(neovm_value::emacs_char::char_to_byte8(code));
+            continue;
+        }
+        if !emit_char(code, &mut out) && !emit_char(dc, &mut out) {
+            // Deliberate safety divergence from GNU Emacs 31.1: when
+            // re-encoding an unencodable non-ASCII `default_char` fails in
+            // `encode_coding_iso_2022` (`src/coding.c:4515-4520`), GNU
+            // dereferences a NULL charset pointer; Neomacs falls back to ASCII
+            // space.
+            out.push(b' ');
+        }
     }
     out
 }
@@ -3424,32 +3485,44 @@ fn sjis_charsets<H: TextHost>(ctx: &H, coding: &str) -> Option<Vec<SymId>> {
 
 /// Encode `s` as Shift-JIS: ASCII as-is, half-width katakana as `code | 0x80`,
 /// and JISX0208 kanji through the `JIS_TO_SJIS` shift into two bytes.
-fn encode_via_sjis(s: &neovm_value::heap_types::LispString, charsets: &[SymId]) -> Vec<u8> {
+fn encode_via_sjis(
+    s: &neovm_value::heap_types::LispString,
+    charsets: &[SymId],
+    default_char: Option<u32>,
+) -> Vec<u8> {
     use crate::emacs_core::charset::charset_encode_char;
     let kana = charsets[1];
     let kanji = charsets[2];
+    let dc = default_char.unwrap_or(0x20);
     let mut out = Vec::with_capacity(s.sbytes());
-    let emit = |code: u32, out: &mut Vec<u8>| {
+    let emit_char = |code: u32, out: &mut Vec<u8>| -> bool {
         if code < 0x80 {
             out.push(code as u8);
-            return;
-        }
-        if neovm_value::emacs_char::char_byte8_p(code) {
-            out.push(neovm_value::emacs_char::char_to_byte8(code));
-            return;
-        }
-        if let Some(k) = charset_encode_char(kana, i64::from(code)) {
+            true
+        } else if let Some(k) = charset_encode_char(kana, i64::from(code)) {
             out.push((k as u8) | 0x80);
+            true
         } else if let Some(j) = charset_encode_char(kanji, i64::from(code)) {
             let (s1, s2) = jis_to_sjis(j as u32);
             out.push(s1);
             out.push(s2);
+            true
         } else {
-            out.push(b' ');
+            false
         }
     };
     for code in coding_source_codepoints(s) {
-        emit(code, &mut out);
+        if neovm_value::emacs_char::char_byte8_p(code) {
+            out.push(neovm_value::emacs_char::char_to_byte8(code));
+            continue;
+        }
+        if !emit_char(code, &mut out) && !emit_char(dc, &mut out) {
+            // Deliberate safety divergence from GNU Emacs 31.1: when
+            // re-encoding an unencodable non-ASCII `default_char` fails in
+            // `encode_coding_sjis` (`src/coding.c:4949-4982`), GNU dereferences
+            // a NULL charset pointer; Neomacs falls back to ASCII space.
+            out.push(b' ');
+        }
     }
     out
 }
@@ -3643,7 +3716,13 @@ fn chinese_hz_charset<H: TextHost>(ctx: &H, coding: &str) -> Option<SymId> {
 
 /// Encode `s` as HZ-GB-2312 (RFC 1843): ASCII by default, `~{` switches to
 /// GB2312 (7-bit GL bytes), `~}` back, `~` doubled to `~~`.
-fn encode_via_hz(s: &neovm_value::heap_types::LispString, gb2312: SymId) -> Vec<u8> {
+fn encode_via_hz(
+    s: &neovm_value::heap_types::LispString,
+    gb2312: SymId,
+    default_char: Option<u32>,
+) -> Vec<u8> {
+    let dc = default_char.unwrap_or(0x20);
+    let fallback_byte = if dc < 0x80 { dc as u8 } else { b' ' };
     let mut out = Vec::with_capacity(s.sbytes());
     let mut in_gb = false;
     for code in coding_source_codepoints(s) {
@@ -3667,13 +3746,11 @@ fn encode_via_hz(s: &neovm_value::heap_types::LispString, gb2312: SymId) -> Vec<
             out.push(((gbcode >> 8) & 0x7F) as u8);
             out.push((gbcode & 0x7F) as u8);
         } else {
-            // Non-ASCII, non-GB2312: GNU emits a \uXXXX literal (rare); leave a
-            // space rather than mis-encode.
             if in_gb {
                 out.extend_from_slice(b"~}");
                 in_gb = false;
             }
-            out.push(b' ');
+            out.push(fallback_byte);
         }
     }
     if in_gb {
@@ -4393,11 +4470,15 @@ fn emacs_mule_leading(id: i64) -> Vec<u8> {
 }
 
 /// Encode `s` as emacs-mule.
-fn encode_via_emacs_mule(s: &neovm_value::heap_types::LispString) -> Vec<u8> {
+fn encode_via_emacs_mule(
+    s: &neovm_value::heap_types::LispString,
+    default_char: Option<u32>,
+) -> Vec<u8> {
+    let dc = default_char.unwrap_or(0x20);
     if emacs_mule_prepared_enabled() {
-        return encode_via_emacs_mule_prepared(s);
+        return encode_via_emacs_mule_prepared_with_default(s, dc);
     }
-    encode_via_emacs_mule_legacy(s)
+    encode_via_emacs_mule_legacy(s, dc)
 }
 
 /// Process configuration only, shared by all mutators. OnceLock publishes the
@@ -4410,13 +4491,12 @@ fn emacs_mule_prepared_enabled() -> bool {
     })
 }
 
-fn encode_via_emacs_mule_legacy(s: &neovm_value::heap_types::LispString) -> Vec<u8> {
+fn encode_via_emacs_mule_legacy(s: &neovm_value::heap_types::LispString, dc: u32) -> Vec<u8> {
     let mut out = Vec::with_capacity(s.sbytes());
-    for code in coding_source_codepoints(s) {
+    let emit_char = |code: u32, out: &mut Vec<u8>| -> bool {
         if code < 0x80 {
             out.push(code as u8);
-        } else if neovm_value::emacs_char::char_byte8_p(code) {
-            out.push(neovm_value::emacs_char::char_to_byte8(code));
+            true
         } else if let Some((id, dim, cs_code)) =
             crate::emacs_core::charset::emacs_mule_encode_char(i64::from(code))
         {
@@ -4428,26 +4508,45 @@ fn encode_via_emacs_mule_legacy(s: &neovm_value::heap_types::LispString) -> Vec<
             } else {
                 out.push((cs_code | 0x80) as u8);
             }
+            true
         } else {
+            false
+        }
+    };
+    for code in coding_source_codepoints(s) {
+        if neovm_value::emacs_char::char_byte8_p(code) {
+            out.push(neovm_value::emacs_char::char_to_byte8(code));
+        } else if !emit_char(code, &mut out) && !emit_char(dc, &mut out) {
+            // Deliberate safety divergence from GNU Emacs 31.1 (`src/coding.c:2641-2650`):
+            // when re-encoding a non-ASCII `default_char` fails, GNU leaves
+            // `charset == NULL` and dereferences `CHARSET_DIMENSION(NULL)`.
+            // Neomacs falls back to ASCII space (pinned by a Neo-only unit test).
             out.push(b' ');
         }
     }
     out
 }
 
+#[cfg(any(test, feature = "test-support"))]
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// GNU keeps the ordered Mule charset list for the entire encode. This view
 /// belongs to this conversion's mutator and resolves candidate maps lazily;
 /// the loop runs no Lisp, so the registry cannot change beneath its fallback
 /// encoders. Other mutators own independent views and may share immutable maps.
 fn encode_via_emacs_mule_prepared(s: &neovm_value::heap_types::LispString) -> Vec<u8> {
+    encode_via_emacs_mule_prepared_with_default(s, 0x20)
+}
+
+fn encode_via_emacs_mule_prepared_with_default(
+    s: &neovm_value::heap_types::LispString,
+    dc: u32,
+) -> Vec<u8> {
     let mut encoder = crate::emacs_core::charset::EmacsMuleEncoder::new();
     let mut out = Vec::with_capacity(s.sbytes());
-    for code in coding_source_codepoints(s) {
+    let mut emit_char = |code: u32, out: &mut Vec<u8>| -> bool {
         if code < 0x80 {
             out.push(code as u8);
-        } else if neovm_value::emacs_char::char_byte8_p(code) {
-            out.push(neovm_value::emacs_char::char_to_byte8(code));
+            true
         } else if let Some((id, dimension, charset_code)) = encoder.encode_char(i64::from(code)) {
             let id = id as u8;
             match id {
@@ -4464,7 +4563,19 @@ fn encode_via_emacs_mule_prepared(s: &neovm_value::heap_types::LispString) -> Ve
             } else {
                 out.push((charset_code | 0x80) as u8);
             }
+            true
         } else {
+            false
+        }
+    };
+    for code in coding_source_codepoints(s) {
+        if neovm_value::emacs_char::char_byte8_p(code) {
+            out.push(neovm_value::emacs_char::char_to_byte8(code));
+        } else if !emit_char(code, &mut out) && !emit_char(dc, &mut out) {
+            // Deliberate safety divergence from GNU Emacs 31.1 (`src/coding.c:2641-2650`):
+            // when re-encoding a non-ASCII `default_char` fails, GNU leaves
+            // `charset == NULL` and dereferences `CHARSET_DIMENSION(NULL)`.
+            // Neomacs falls back to ASCII space (pinned by a Neo-only unit test).
             out.push(b' ');
         }
     }
@@ -4695,12 +4806,24 @@ fn iso2022_emit_code(out: &mut Vec<u8>, code: i64, dim: i64, graphic_right: bool
 }
 
 /// Encode `s` through the full ISO-2022 escape-sequence machine.
+#[cfg(any(test, feature = "test-support"))]
 fn encode_via_iso2022(
     s: &neovm_value::heap_types::LispString,
     spec: &crate::emacs_core::coding::Iso2022Spec,
     charset_list: &[SymId],
     boundary: EncodingBoundary,
     state: &mut CodingEncoderState,
+) -> Vec<u8> {
+    encode_via_iso2022_with_default(s, spec, charset_list, boundary, state, None)
+}
+
+fn encode_via_iso2022_with_default(
+    s: &neovm_value::heap_types::LispString,
+    spec: &crate::emacs_core::coding::Iso2022Spec,
+    charset_list: &[SymId],
+    boundary: EncodingBoundary,
+    state: &mut CodingEncoderState,
+    default_char: Option<u32>,
 ) -> Vec<u8> {
     use crate::emacs_core::charset::{
         charset_encode_char, charset_encode_char_physical, charset_iso2022_designation,
@@ -4755,16 +4878,17 @@ fn encode_via_iso2022(
         }
     };
 
-    let classify = |c: u32| -> (SymId, i64, i64, bool) {
+    let dc = default_char.unwrap_or(0x20);
+    let try_classify = |c: u32| -> Option<(SymId, i64, i64, bool)> {
         if c < 0x80 {
             // The use-roman flag (japanese-iso-7bit-1978-irv / old-jis) maps
             // ASCII through latin-jisx0201 — the G0 initial designation — so the
             // byte is emitted with no re-designation. GNU keeps the position
             // code = c (it does not re-encode through latin-jisx0201).
             if use_roman {
-                (intern("latin-jisx0201"), i64::from(c), 1, false)
+                Some((intern("latin-jisx0201"), i64::from(c), 1, false))
             } else {
-                (ascii, i64::from(c), 1, false)
+                Some((ascii, i64::from(c), 1, false))
             }
         } else {
             // Iterate the coding's charset list in order (GNU char_charset
@@ -4773,7 +4897,6 @@ fn encode_via_iso2022(
             // iso-2022-jp (jisx0208 before -1978) from japanese-iso-7bit-1978-irv
             // (-1978 first). For FULL_SUPPORT codings `candidates` is the broad
             // id-ordered set (with -1978 already dropped).
-            let mut found = None;
             for &cs in &candidates {
                 // FULL_SUPPORT walks `Viso_2022_charset_list` by id. That list
                 // holds table slots, so an alias of the public name does not
@@ -4790,12 +4913,16 @@ fn encode_via_iso2022(
                     charset_encode_char(cs, i64::from(c))
                 };
                 if let (Some((_, dim, c96)), Some(code)) = (desig_of, encoded) {
-                    found = Some((cs, code, dim, c96));
-                    break;
+                    return Some((cs, code, dim, c96));
                 }
             }
-            found.unwrap_or((ascii, 0x20, 1, false)) // unencodable -> space
+            None
         }
+    };
+    let classify = |c: u32| -> (SymId, i64, i64, bool) {
+        try_classify(c)
+            .or_else(|| try_classify(dc))
+            .unwrap_or((ascii, 0x20, 1, false))
     };
 
     let chars: Vec<u32> = coding_source_codepoints(s).collect();
@@ -5435,6 +5562,7 @@ struct ResolvedCodecs {
     euc: Option<(crate::emacs_core::coding::Iso2022Spec, Vec<SymId>)>,
     sjis: Option<Vec<SymId>>,
     charset: Option<Vec<SymId>>,
+    is_big5: bool,
 }
 
 impl ResolvedCodecs {
@@ -5444,6 +5572,10 @@ impl ResolvedCodecs {
         encode: bool,
         effective_decoder: EffectiveDecoder,
     ) -> Self {
+        let is_big5 = ctx
+            .coding_systems()
+            .get(coding_system_base(coding))
+            .is_some_and(|info| resolve_sym(info.coding_type) == "big5");
         Self {
             utf7: utf7_variant(coding),
             hz: chinese_hz_charset(ctx, coding),
@@ -5458,6 +5590,7 @@ impl ResolvedCodecs {
             euc: euc_iso2022_spec(ctx, coding),
             sjis: sjis_charsets(ctx, coding),
             charset: general_charset_coding_list(ctx, coding, encode),
+            is_big5,
         }
     }
 
@@ -6178,6 +6311,7 @@ fn builtin_coding_string_in_context<H: TextHost>(
     }
     let result_res: EvalResult = (|| {
         if encode {
+            let default_char = ctx.coding_systems().effective_default_char(&coding);
             let source_string = || {
                 args[0]
                     .as_lisp_string()
@@ -6189,12 +6323,12 @@ fn builtin_coding_string_in_context<H: TextHost>(
                     neovm_value::heap_types::LispString::from_unibyte(bytes),
                 ))
             } else if let Some(gb2312) = codecs.hz {
-                let bytes = encode_via_hz(source_string(), gb2312);
+                let bytes = encode_via_hz(source_string(), gb2312, default_char);
                 Ok(Value::heap_string(
                     neovm_value::heap_types::LispString::from_unibyte(bytes),
                 ))
             } else if codecs.emacs_mule {
-                let bytes = encode_via_emacs_mule(source_string());
+                let bytes = encode_via_emacs_mule(source_string(), default_char);
                 Ok(Value::heap_string(
                     neovm_value::heap_types::LispString::from_unibyte(bytes),
                 ))
@@ -6244,22 +6378,34 @@ fn builtin_coding_string_in_context<H: TextHost>(
                     }
                     EncodingBoundary::CompleteText | EncodingBoundary::FileRegion => &mut scratch,
                 };
-                let bytes = encode_via_iso2022(source, spec, charsets, encoding_boundary, state);
+                let bytes = encode_via_iso2022_with_default(
+                    source,
+                    spec,
+                    charsets,
+                    encoding_boundary,
+                    state,
+                    default_char,
+                );
                 Ok(Value::heap_string(
                     neovm_value::heap_types::LispString::from_unibyte(bytes),
                 ))
             } else if let Some((spec, charsets)) = &codecs.euc {
-                let bytes = encode_via_euc(source_string(), spec, charsets);
+                let bytes = encode_via_euc(source_string(), spec, charsets, default_char);
                 Ok(Value::heap_string(
                     neovm_value::heap_types::LispString::from_unibyte(bytes),
                 ))
             } else if let Some(charsets) = &codecs.sjis {
-                let bytes = encode_via_sjis(source_string(), charsets);
+                let bytes = encode_via_sjis(source_string(), charsets, default_char);
                 Ok(Value::heap_string(
                     neovm_value::heap_types::LispString::from_unibyte(bytes),
                 ))
             } else if let Some(charset_list) = &codecs.charset {
-                let bytes = encode_via_charset_list(source_string(), charset_list);
+                let bytes = encode_via_charset_list(
+                    source_string(),
+                    charset_list,
+                    default_char,
+                    codecs.is_big5,
+                );
                 Ok(Value::heap_string(
                     neovm_value::heap_types::LispString::from_unibyte(bytes),
                 ))
@@ -6273,11 +6419,12 @@ fn builtin_coding_string_in_context<H: TextHost>(
                 {
                     *nocopy = Value::NIL;
                 }
-                builtin_encode_coding_string_with_known(
+                builtin_encode_coding_string_with_known_and_default(
                     args,
                     |_| true,
                     encode_eol_conversion,
                     coding_symbol_mode,
+                    default_char,
                 )
             }
         } else {
@@ -7180,6 +7327,16 @@ pub(crate) fn builtin_encode_coding_string_with_known(
     eol_conversion: crate::emacs_core::coding::EolConversion,
     mode: neovm_value::tagged::SymbolMode,
 ) -> EvalResult {
+    builtin_encode_coding_string_with_known_and_default(args, known, eol_conversion, mode, None)
+}
+
+fn builtin_encode_coding_string_with_known_and_default(
+    args: Vec<Value>,
+    known: impl FnOnce(&str) -> bool,
+    eol_conversion: crate::emacs_core::coding::EolConversion,
+    mode: neovm_value::tagged::SymbolMode,
+    default_char: Option<u32>,
+) -> EvalResult {
     expect_min_args("encode-coding-string", &args, 2)?;
     if args.len() > 4 {
         return Err(signal(
@@ -7218,7 +7375,7 @@ pub(crate) fn builtin_encode_coding_string_with_known(
     {
         return Ok(args[0]);
     }
-    let bytes = encode_lisp_string(string, &coding, eol_conversion);
+    let bytes = encode_lisp_string_with_default_char(string, &coding, eol_conversion, default_char);
     Ok(Value::heap_string(
         neovm_value::heap_types::LispString::from_unibyte(bytes),
     ))

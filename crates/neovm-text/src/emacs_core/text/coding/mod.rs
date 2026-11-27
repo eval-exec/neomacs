@@ -1855,6 +1855,21 @@ impl CodingSystemManager {
         self.systems.get_mut(&canonical)
     }
 
+    /// Return the default encoding character (`CODING_ATTR_DEFAULT_CHAR`,
+    /// `src/coding.c:5702`) configured on `name`'s shared coding-system bucket.
+    pub(crate) fn effective_default_char(&self, name: &str) -> Option<u32> {
+        let resolved = resolve_runtime_name(self, name)?;
+        let bucket = runtime_bucket_name(self, &resolved)?;
+        let info = self.get(&bucket)?;
+        if let Some(val) = info.properties.get(&intern(":default-char"))
+            && let Some(code) = val.as_int()
+            && (0..=0x3F_FFFF).contains(&code)
+        {
+            return Some(code as u32);
+        }
+        info.default_char.map(|c| c as u32)
+    }
+
     /// Check if a name is a known coding system (or alias).
     pub fn is_known(&self, name: &str) -> bool {
         self.resolve(name).is_some()
@@ -3311,7 +3326,9 @@ pub fn builtin_coding_system_put(
             ));
         }
         // GNU coerces a `:mnemonic` string to its first character (coding.c
-        // `Fcoding_system_put`), and the stored value is the coerced one.
+        // `Fcoding_system_put`), and `:default-char` coerces `nil` to `? `
+        // (32) and validates non-nil values with `CHECK_CHARACTER`
+        // (`src/coding.c:11540-11547`). The stored value is the coerced one.
         let stored_val = if matches!(prop_name, ":mnemonic" | "mnemonic") {
             let Some(code) = first_emacs_char_code(val) else {
                 return Err(signal(
@@ -3320,6 +3337,21 @@ pub fn builtin_coding_system_put(
                 ));
             };
             Value::fixnum(code)
+        } else if prop_name == ":default-char" {
+            if val.is_nil() {
+                info.default_char = Some(' ');
+                Value::fixnum(i64::from(b' '))
+            } else if let ValueKind::Fixnum(code) = val.kind()
+                && (0..=0x3F_FFFF).contains(&code)
+            {
+                info.default_char = char::from_u32(code as u32);
+                val
+            } else {
+                return Err(signal(
+                    LispCondition::WrongTypeArgument,
+                    vec![Value::symbol("characterp"), val],
+                ));
+            }
         } else {
             val
         };
@@ -4458,10 +4490,18 @@ pub fn builtin_define_coding_system_internal_with_quoting_style(
     // arg[8]: pre-write-conversion (GNU `CHECK_SYMBOL`, coding.c:11087)
     let pre_write_conversion = check_symbol_hook_arg(&args[8], mode)?;
 
-    // arg[9]: default-char
-    let default_char = match args[9].kind() {
-        ValueKind::Fixnum(c) => char::from_u32(c as u32),
-        _ => None,
+    // arg[9]: default-char (GNU `src/coding.c:11090-11096`: nil -> ' ', else CHECK_CHARACTER)
+    let default_char = if args[9].is_nil() {
+        Some(' ')
+    } else if let ValueKind::Fixnum(c) = args[9].kind()
+        && (0..=0x3F_FFFF).contains(&c)
+    {
+        char::from_u32(c as u32)
+    } else {
+        return Err(signal(
+            LispCondition::WrongTypeArgument,
+            vec![Value::symbol("characterp"), args[9]],
+        ));
     };
 
     // arg[10]: for-unibyte

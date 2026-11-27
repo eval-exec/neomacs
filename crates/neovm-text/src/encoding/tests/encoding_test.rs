@@ -2842,4 +2842,28 @@ fn decode_coding_string_iso_latin_1_and_9_dos_pure_ascii_mark_charset_like_gnu()
 
 #[cfg(test)]
 #[path = "gdh_utf8_unibyte.rs"]
+/// Neomacs safety invariant (deliberate divergence from GNU Emacs 31.1
+/// `src/coding.c:2641-2650`, where re-encoding an unencodable non-ASCII
+/// `default_char` leaves `charset == NULL` and dereferences
+/// `CHARSET_DIMENSION(NULL)`): `encode_via_emacs_mule` falls back to ASCII
+/// space instead of crashing.
+#[test]
+fn encode_via_emacs_mule_unencodable_non_ascii_default_char_falls_back_safely() {
+    crate::test_utils::init_test_tracing();
+    let source = neovm_value::heap_types::LispString::from_utf8("a\u{1F600}b");
+    let unencodable_dc = Some(0x1F600);
+    assert_eq!(
+        encode_via_emacs_mule_legacy(&source, 0x1F600),
+        b"a b".to_vec()
+    );
+    assert_eq!(
+        encode_via_emacs_mule_prepared_with_default(&source, 0x1F600),
+        b"a b".to_vec()
+    );
+    assert_eq!(
+        encode_via_emacs_mule(&source, unencodable_dc),
+        b"a b".to_vec()
+    );
+}
+
 mod gdh_utf8_unibyte;

@@ -3648,3 +3648,59 @@ fn sjis_and_big5_char_unencodable_and_range_errors() {
         .expect("from_dump recovers chinese-big5");
     assert_eq!(big5_cs, vec![intern("ascii"), intern("big5")]);
 }
+
+#[test]
+fn coding_system_put_default_char_coerces_nil_validates_and_shares_bucket() {
+    crate::test_utils::init_test_tracing();
+    let mut manager = mgr();
+    manager.add_alias("dc-l1-alias", "iso-latin-1");
+
+    // `nil` coerces to space (32) and returns 32.
+    let res = builtin_coding_system_put(
+        &mut manager,
+        vec![
+            Value::symbol("dc-l1-alias"),
+            Value::symbol(":default-char"),
+            Value::NIL,
+        ],
+        SymbolMode::Bare,
+    )
+    .unwrap();
+    assert_eq!(res, Value::fixnum(32));
+    assert_eq!(manager.effective_default_char("iso-latin-1-unix"), Some(32));
+
+    // Valid char updates shared bucket for alias, base, and subsidiaries.
+    let res = builtin_coding_system_put(
+        &mut manager,
+        vec![
+            Value::symbol("iso-latin-1-unix"),
+            Value::symbol(":default-char"),
+            Value::fixnum(b'*' as i64),
+        ],
+        SymbolMode::Bare,
+    )
+    .unwrap();
+    assert_eq!(res, Value::fixnum(b'*' as i64));
+    assert_eq!(
+        manager.effective_default_char("dc-l1-alias"),
+        Some(u32::from(b'*'))
+    );
+
+    // Non-character values signal `(wrong-type-argument characterp ...)`.
+    for bad in [
+        Value::string("x"),
+        Value::fixnum(-1),
+        Value::fixnum(0x40_0000),
+    ] {
+        let err = builtin_coding_system_put(
+            &mut manager,
+            vec![
+                Value::symbol("dc-l1-alias"),
+                Value::symbol(":default-char"),
+                bad,
+            ],
+            SymbolMode::Bare,
+        );
+        assert!(err.is_err(), "expected characterp error for {bad:?}");
+    }
+}
