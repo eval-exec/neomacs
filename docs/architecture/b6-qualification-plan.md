@@ -176,9 +176,20 @@ row** (`b6_an_admitted_owner_is_the_only_thread_the_era_arm_adds`), which assert
 it and nil for main, and the owner is still parked at the end. The existing parity row keeps
 running unchanged in the Sim and Green controls, so nothing is weakened or deleted.
 
-Resulting b6 numbers (r3, lead-ruled 2026-11-26): **30/30 parity rows + 1 named exclusion, with the
-covering claim asserted on every row.** Because the excluded row is one of the 19 S3-baseline cases,
-b6 is **18/19 of the historical suite by parity** plus the per-row thread-count assertion.
+**Second exclusion, found on the first enabled run (2026-11-27, #16472):**
+`e6p1_a_feature_detected_opt_in_creator_matches_make_thread` (oracle_default_threads.rs) returns a
+list that includes `(funcall hint th)`, where `hint` is
+`(and (fboundp 'neomacs-thread-parallel-p) (funcall 'neomacs-thread-parallel-p th))`. With the era
+open and the admission live, that element is `t` by design; GNU has no such function and answers
+`nil`. It is not a divergence — it is a Neomacs extension reported truthfully — and no single form
+can produce both. The row is excluded from the b6 arm and covered by the witness, which asserts
+`admitted=t` on every row: the same fact, on the Neomacs side, everywhere. The row keeps running
+unchanged in `oracle_default_threads.rs` (Sim and Green control arms), so nothing is weakened.
+
+Resulting b6 numbers (r3, lead-ruled 2026-11-26; amended 2026-11-27): **29/29 parity rows + 2 named
+exclusions, with the covering claims asserted on every row.** Because only the `all-threads`
+exclusion is one of the 19 S3-baseline cases, b6 is **18/19 of the historical suite by parity** plus
+the per-row thread-count and admission assertions.
 
 There is no separate named covering row: the oracle crate has no public way to run Neomacs alone with
 `extra_env` (every such helper routes through `run_parity_under_envs`, which compares against GNU in
@@ -189,12 +200,14 @@ two owners is red on every row rather than in one place. The rejected alternativ
 `(length (delq b6-idle-owner (all-threads)))` — would edit a passing row's form, which the
 repository's "never adjust a test to fit" rule discourages.
 
-**Row audit (peer, 2026-11-25 07:38Z): the exclusion set is exactly one row.** Grepping all 31
+**Row audit (peer, 2026-11-25 07:38Z; extended 2026-11-27 after the first enabled run).** Grepping all 31
 forms for thread enumeration: only line 70 prints a count. The other `all-threads` uses
 (`:101`, `:122`, `:123`, `:125`) are `(memq th (all-threads))` / `(memq main-thread ...)`
 identity tests, which tolerate an extra idle owner unchanged. The `condition-notify-one wakes
 exactly one waiter` row (`:444`) parks its waiters on its own condition variable, so the prelude's
-idle waiter does not perturb it. No other row needs an exclusion.
+idle waiter does not perturb it. The second exclusion above is not a thread-enumeration row: it is
+the only row in the suite that calls a Neomacs-only function whose answer the era changes. No other
+row needs an exclusion.
 
 ### 4.2 Neomacs-only rows for what L6.7c (a) changes inside an era turn
 

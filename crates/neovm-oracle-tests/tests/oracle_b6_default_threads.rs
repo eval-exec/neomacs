@@ -34,17 +34,21 @@
 //! tree before the enabled tree could be built, per the rule that a check
 //! never observed failing has no meaning.
 //!
-//! **Scope: the whole thread suite, one named exclusion.** This file replays
-//! every row of `oracle_default_threads.rs` with the era open — 30 of its 31
+//! **Scope: the whole thread suite, two named exclusions.** This file replays
+//! every row of `oracle_default_threads.rs` with the era open — 29 of its 31
 //! rows, named `b6_<original>`, each keeping its original form and its
-//! original GNU expectation byte for byte. The excluded row is
+//! original GNU expectation byte for byte. The excluded rows are
 //! `e8s_make_thread_arity_and_main_thread_identity`, which prints
 //! `(length (all-threads))`: GNU answers 1, and an admitted owner is a real
-//! thread object, so the b6 arm answers 2 by construction. That is not a
-//! divergence, and no single form can prove both. The exclusion is covered
-//! instead by the witness: every row asserts `threads=2`, so an era arm that
-//! failed to add its owner — or added two — is red on every row, not on one.
-//! The Sim and Green control arms keep running the excluded row unchanged in
+//! thread object, so the b6 arm answers 2 by construction; and
+//! `e6p1_a_feature_detected_opt_in_creator_matches_make_thread`, whose list
+//! includes `(neomacs-thread-parallel-p th)` — a Neomacs-only extension that
+//! GNU cannot answer, so with admission live the arm reads `t` where GNU reads
+//! `nil`. Neither is a divergence, and no single form can prove both. Both
+//! exclusions are covered instead by the witness: every row asserts
+//! `threads=2` and `admitted=t`, so an era arm that failed to add its owner —
+//! or added two, or admitted nothing — is red on every row, not on one. The
+//! Sim and Green control arms keep running both excluded rows unchanged in
 //! `oracle_default_threads.rs`, so nothing is weakened or deleted.
 //!
 //! The arm MUST run with `NEOVM_THREADS=green`: `admit_parallel` refuses with
@@ -129,36 +133,6 @@ fn assert_b6_thread_row(form: &str, expected: expect_test::Expect) {
     assert!(
         witness.contains("parked=t"),
         "the idle owner never reached its park; witness was {witness:?}"
-    );
-}
-
-/// A worker's join value with an era open and an idle owner parked beside it.
-#[test]
-fn b6_e6p1_a_feature_detected_opt_in_creator_matches_make_thread() {
-    return_if_neovm_enable_oracle_proptest_not_set!();
-    assert_b6_thread_row(
-        r##"
-(let* ((creator (if (fboundp 'neomacs-make-parallel-thread)
-                    #'neomacs-make-parallel-thread
-                  #'make-thread))
-       (hint (lambda (th)
-               (and (fboundp 'neomacs-thread-parallel-p)
-                    (funcall 'neomacs-thread-parallel-p th))))
-       (name (copy-sequence "e6p1"))
-       (th (funcall creator
-                    (lambda ()
-                      (let ((child (make-thread (lambda () 'child))))
-                        (list 'result (eq (current-thread) main-thread)
-                              (thread-join child) (funcall hint child))))
-                    name)))
-  (list (func-arity creator) (threadp th) (eq name (thread-name th))
-        (and (memq th (all-threads)) t) (funcall hint th)
-        (thread-join th) (thread-live-p th)
-        (condition-case err (funcall creator (lambda () 1) 42) (error err))))
-"##,
-        expect_test::expect![[
-            r#""OK ((1 . 3) t t t nil (result nil child nil) nil (wrong-type-argument stringp 42))""#
-        ]],
     );
 }
 
