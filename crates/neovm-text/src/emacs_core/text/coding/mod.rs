@@ -31,7 +31,7 @@ use neovm_value::intern::{SymId, intern, lookup_interned, resolve_sym};
 use neovm_value::tagged::value::SymbolMode;
 use neovm_value::value::*;
 use num_enum::{IntoPrimitive, TryFromPrimitive};
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 use std::collections::{HashMap, HashSet};
 use strum::{EnumString, IntoStaticStr};
 
@@ -1359,6 +1359,11 @@ struct CodingLookupCache {
 pub struct CodingSystemManager {
     /// Registered coding systems, keyed by canonical name.
     pub systems: FxHashMap<SymId, CodingSystemInfo>,
+    /// Registration order of canonical names in `systems` (oldest-first).
+    /// Preserved across pdump round-trips and used as the deterministic
+    /// fallback when no Lisp `coding-system-list` variable is in scope,
+    /// avoiding `FxHashMap` iteration order.
+    definition_order: Vec<SymId>,
     /// Alias -> canonical name mapping.
     pub aliases: FxHashMap<SymId, SymId>,
     /// GNU stores aliases in each coding-system spec and appends new aliases
@@ -1380,6 +1385,7 @@ impl CodingSystemManager {
     pub fn new() -> Self {
         let mut mgr = Self {
             systems: FxHashMap::default(),
+            definition_order: Vec::new(),
             aliases: FxHashMap::default(),
             alias_order: FxHashMap::default(),
             priority: Vec::new(),
@@ -1783,7 +1789,11 @@ impl CodingSystemManager {
     fn register(&mut self, info: CodingSystemInfo) {
         self.invalidate_lookup_cache();
         let name = info.name;
+        let is_new = !self.systems.contains_key(&name);
         self.systems.insert(name, info);
+        if is_new {
+            self.definition_order.push(name);
+        }
         self.alias_order.entry(name).or_insert_with(|| vec![name]);
     }
 
@@ -2049,6 +2059,39 @@ impl CodingSystemManager {
     pub fn dump_terminal_coding_sym(&self) -> SymId {
         self.terminal_coding
     }
+    /// Return registered coding systems in deterministic registration order
+    /// (`definition_order`), followed by any keys inserted directly into
+    /// `systems` ordered by `SymId::to_raw()`.
+    #[doc(hidden)]
+    pub fn dump_ordered_systems(&self) -> Vec<(SymId, &CodingSystemInfo)> {
+        let mut out = Vec::with_capacity(self.systems.len());
+        let mut seen = FxHashSet::default();
+        for &id in &self.definition_order {
+            if let Some(info) = self.systems.get(&id)
+                && seen.insert(id)
+            {
+                out.push((id, info));
+            }
+        }
+        if out.len() < self.systems.len() {
+            let mut extras: Vec<(SymId, &CodingSystemInfo)> = self
+                .systems
+                .iter()
+                .filter(|(id, _)| !seen.contains(*id))
+                .map(|(id, info)| (*id, info))
+                .collect();
+            extras.sort_by_key(|(id, _)| id.to_raw());
+            out.extend(extras);
+        }
+        out
+    }
+
+    /// Registration order of canonical coding-system names (oldest-first).
+    #[doc(hidden)]
+    pub fn dump_definition_order(&self) -> &[SymId] {
+        &self.definition_order
+    }
+
     #[doc(hidden)]
     pub fn from_dump(
         systems: impl IntoIterator<Item = (SymId, CodingSystemInfo)>,
@@ -2058,8 +2101,17 @@ impl CodingSystemManager {
         keyboard_coding: SymId,
         terminal_coding: SymId,
     ) -> Self {
+        let mut system_map = FxHashMap::default();
+        let mut definition_order = Vec::new();
+        for (id, info) in systems {
+            if !system_map.contains_key(&id) {
+                definition_order.push(id);
+            }
+            system_map.insert(id, info);
+        }
         Self {
-            systems: systems.into_iter().collect(),
+            systems: system_map,
+            definition_order,
             aliases: aliases.into_iter().collect(),
             alias_order: alias_order.into_iter().collect(),
             priority,
@@ -6945,12 +6997,27 @@ fn canonical_runtime_name(mgr: &CodingSystemManager, name: &str) -> Option<Strin
 }
 
 fn runtime_bucket_name(mgr: &CodingSystemManager, resolved_name: &str) -> Option<String> {
-    let base = strip_eol_suffix(resolved_name);
-    let bucket_base = properties_bucket_base(base);
+    let base = if EolType::from_suffix(resolved_name).is_some() {
+        let stripped = strip_eol_suffix(resolved_name);
+        let stripped_bucket = properties_bucket_base(stripped);
+        let is_undecided_base = mgr
+            .resolve(stripped_bucket)
+            .and_then(|id| mgr.systems.get(&id))
+            .is_some_and(|info| matches!(info.eol_type, EolType::Undecided));
+        if is_undecided_base {
+            stripped_bucket
+        } else if mgr.is_known(resolved_name) {
+            resolved_name
+        } else {
+            stripped_bucket
+        }
+    } else {
+        properties_bucket_base(resolved_name)
+    };
     let bucket_name = mgr
-        .resolve(bucket_base)
+        .resolve(base)
         .map(|id| resolve_sym(id).to_string())
-        .unwrap_or_else(|| bucket_base.to_string());
+        .unwrap_or_else(|| base.to_string());
     if mgr.is_known(bucket_name.as_str()) {
         Some(bucket_name)
     } else {
@@ -6973,39 +7040,73 @@ fn coding_exclude_list(exclude: Option<Value>) -> Result<Option<Vec<Value>>, Flo
     }
 }
 
+/// Mirror GNU `EQ (XCAR (tail), CODING_ATTR_BASE_NAME (attrs))`
+/// (`src/coding.c:9141`): true for canonical base coding systems (including
+/// fixed-EOL bases), false for aliases and auto-generated `-unix`/`-dos`/`-mac`
+/// subsidiaries of an `Undecided` base.
+fn is_canonical_base_coding(mgr: &CodingSystemManager, sym: SymId) -> bool {
+    if !mgr.systems.contains_key(&sym) || mgr.aliases.contains_key(&sym) {
+        return false;
+    }
+    let name = resolve_sym(sym);
+    if EolType::from_suffix(name).is_some() {
+        let base = strip_eol_suffix(name);
+        if let Some(base_id) = lookup_interned(base)
+            && let Some(base_info) = mgr.systems.get(&base_id)
+            && matches!(base_info.eol_type, EolType::Undecided)
+        {
+            return false;
+        }
+    }
+    true
+}
+
 fn raw_coding_candidates(
     mgr: &CodingSystemManager,
+    coding_system_list: Option<Value>,
     exclude: Option<&[Value]>,
     mode: SymbolMode,
-) -> Vec<String> {
-    let excluded: HashSet<String> = exclude
+) -> Vec<SymId> {
+    let excluded: HashSet<SymId> = exclude
         .unwrap_or(&[])
         .iter()
-        .filter_map(|value| value.as_symbol_name(mode).map(|name| name.to_string()))
+        .filter_map(|value| value.as_symbol_id(mode))
         .collect();
 
-    let mut names: Vec<String> = mgr
-        .systems
-        .values()
-        .filter(|info| info.eol_type == EolType::Undecided)
-        .map(|info| display_base_name(strip_eol_suffix(resolve_sym(info.name))).to_string())
-        .filter(|name| {
-            !matches!(
-                name.as_str(),
-                "raw-text" | "no-conversion" | "binary" | "undecided"
-            )
-        })
-        .filter(|name| !excluded.contains(name))
-        .collect();
-    names.sort();
-    names.dedup();
-    names
+    let mut candidates = Vec::new();
+    match coding_system_list {
+        Some(mut tail) => {
+            // Walk GNU `Vcoding_system_list` in list order (`src/coding.c:9134-9147`).
+            while tail.is_cons() {
+                let entry = tail.cons_car();
+                tail = tail.cons_cdr();
+                let Some(sym) = entry.as_symbol_id(mode) else {
+                    continue;
+                };
+                if !excluded.contains(&sym) && is_canonical_base_coding(mgr, sym) {
+                    candidates.push(sym);
+                }
+            }
+        }
+        None => {
+            // Deterministic fallback when called outside a Lisp evaluator:
+            // walk `definition_order` newest-first, mirroring `Vcoding_system_list`.
+            for &sym in mgr.definition_order.iter().rev() {
+                if !excluded.contains(&sym) && is_canonical_base_coding(mgr, sym) {
+                    candidates.push(sym);
+                }
+            }
+        }
+    }
+    candidates
 }
 
 /// Safely represent the original Emacs characters, without a Unicode display
 /// projection. LispString owns both the bytes and their multibyte interpretation.
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 fn safe_coding_systems_for_text(
     mgr: &CodingSystemManager,
+    coding_system_list: Option<Value>,
     text: &LispString,
     exclude: Option<Value>,
     mode: SymbolMode,
@@ -7029,12 +7130,13 @@ fn safe_coding_systems_for_text(
     chars.sort_unstable();
     chars.dedup();
     let mut safe_codings = Vec::new();
-    for coding in raw_coding_candidates(mgr, exclude.as_deref(), mode) {
-        let Some(repertoire) = CodingRepertoire::for_coding_system(mgr, &coding, mode) else {
+    for sym in raw_coding_candidates(mgr, coding_system_list, exclude.as_deref(), mode) {
+        let coding = resolve_sym(sym);
+        let Some(repertoire) = CodingRepertoire::for_coding_system(mgr, coding, mode) else {
             continue;
         };
         if chars.iter().all(|&ch| repertoire.encodes(ch)) {
-            safe_codings.push(coding_name_value(&coding));
+            safe_codings.push(Value::from_sym_id(sym));
         }
     }
     safe_codings.push(Value::symbol("raw-text"));
@@ -7063,9 +7165,11 @@ pub fn builtin_find_coding_systems_region_internal<H: TextHost>(
     expect_min_args("find-coding-systems-region-internal", &args, 2)?;
     expect_max_args("find-coding-systems-region-internal", &args, 3)?;
 
+    let coding_system_list = eval.visible_variable_value_or_nil(intern("coding-system-list"));
     if let Some(text) = args[0].as_lisp_string() {
         return safe_coding_systems_for_text(
             eval.coding_systems(),
+            Some(coding_system_list),
             text,
             args.get(2).copied(),
             eval.symbol_mode(),
@@ -7081,6 +7185,7 @@ pub fn builtin_find_coding_systems_region_internal<H: TextHost>(
         .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
     safe_coding_systems_for_region(
         eval.coding_systems(),
+        Some(coding_system_list),
         buffer,
         (start, end),
         &args,
@@ -7093,6 +7198,7 @@ pub fn builtin_find_coding_systems_region_internal<H: TextHost>(
 /// `args-out-of-range` data.
 fn safe_coding_systems_for_region(
     mgr: &CodingSystemManager,
+    coding_system_list: Option<Value>,
     buffer: &Buffer,
     (start, end): (i64, i64),
     args: &[Value],
@@ -7121,7 +7227,7 @@ fn safe_coding_systems_for_region(
         return Ok(Value::T);
     }
     let text = buffer.buffer_substring_lisp_string_range(byte_range);
-    safe_coding_systems_for_text(mgr, &text, args.get(2).copied(), mode)
+    safe_coding_systems_for_text(mgr, coding_system_list, &text, args.get(2).copied(), mode)
 }
 
 // ===========================================================================

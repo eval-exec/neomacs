@@ -4573,11 +4573,12 @@ pub(crate) fn dump_coding_system_manager(
     csm: &CodingSystemManager,
 ) -> DumpCodingSystemManager {
     DumpCodingSystemManager {
-        systems_syms: OrderedDumpEntries::by_key(&csm.systems, |entry| entry.0.to_raw())
+        systems_syms: csm
+            .dump_ordered_systems()
             .into_iter()
             .map(|(k, v)| {
                 (
-                    dump_sym_id(*k),
+                    dump_sym_id(k),
                     DumpCodingSystemInfo {
                         name_sym: Some(dump_sym_id(v.name)),
                         name: None,
@@ -6908,11 +6909,11 @@ pub(crate) fn load_mode_registry(
 }
 
 fn rebuild_coding_alias_order(
-    systems: &HashMap<SymId, CodingSystemInfo>,
+    systems: &[(SymId, CodingSystemInfo)],
     aliases: &HashMap<SymId, SymId>,
 ) -> HashMap<SymId, Vec<SymId>> {
     let mut order: HashMap<SymId, Vec<SymId>> =
-        systems.keys().copied().map(|id| (id, vec![id])).collect();
+        systems.iter().map(|(id, _)| (*id, vec![*id])).collect();
     let mut alias_pairs: Vec<(SymId, SymId)> = aliases.iter().map(|(k, v)| (*k, *v)).collect();
     alias_pairs.sort_by(|(left, _), (right, _)| {
         intern::resolve_sym(*left).cmp(intern::resolve_sym(*right))
@@ -6930,7 +6931,9 @@ pub(crate) fn load_coding_system_manager(
     decoder: &mut LoadDecoder,
     dcsm: &DumpCodingSystemManager,
 ) -> CodingSystemManager {
-    let systems: HashMap<SymId, CodingSystemInfo> = if dcsm.systems_syms.is_empty() {
+    // Preserve `dcsm.systems_syms` / `dcsm.systems` Vec order so
+    // `CodingSystemManager::from_dump` restores `definition_order` faithfully.
+    let systems: Vec<(SymId, CodingSystemInfo)> = if dcsm.systems_syms.is_empty() {
         dcsm.systems
             .iter()
             .map(|(k, v)| {

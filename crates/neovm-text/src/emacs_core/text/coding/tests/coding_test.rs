@@ -51,8 +51,13 @@ fn restored_null_policy_manager(
     ));
     manager.add_alias("legacy-null-alias", "legacy-null-policy");
     manager.add_alias("legacy-null-dos-alias", "legacy-null-policy-dos");
+    let ordered_systems: Vec<_> = manager
+        .dump_ordered_systems()
+        .into_iter()
+        .map(|(id, info)| (id, info.clone()))
+        .collect();
     CodingSystemManager::from_dump(
-        manager.systems,
+        ordered_systems,
         manager.aliases,
         manager.alias_order,
         manager.priority,
@@ -3401,7 +3406,7 @@ fn region_buffer(text: &str) -> neovm_edit::buffer::Buffer {
 
 fn region_codings(buffer: &neovm_edit::buffer::Buffer, start: i64, end: i64) -> EvalResult {
     let args = [Value::fixnum(start), Value::fixnum(end)];
-    safe_coding_systems_for_region(&mgr(), buffer, (start, end), &args, SymbolMode::Bare)
+    safe_coding_systems_for_region(&mgr(), None, buffer, (start, end), &args, SymbolMode::Bare)
 }
 
 fn coding_names(value: Value) -> Vec<String> {
@@ -3423,7 +3428,7 @@ fn find_coding_systems_region_ascii_buffer_copies_nothing() {
     let end = REGION_CHARS as i64 + 1;
     let args = [Value::fixnum(1), Value::fixnum(end)];
     let (result, (calls, bytes)) = super::allocation_tests::measured(|| {
-        safe_coding_systems_for_region(&manager, &buffer, (1, end), &args, SymbolMode::Bare)
+        safe_coding_systems_for_region(&manager, None, &buffer, (1, end), &args, SymbolMode::Bare)
     });
     assert_eq!(result.unwrap(), Value::T);
     assert_eq!(
@@ -3444,6 +3449,7 @@ fn find_coding_systems_region_non_ascii_buffer_scans_region() {
     let end = REGION_CHARS as i64 + 2;
     let expected = safe_coding_systems_for_text(
         &mgr(),
+        None,
         &LispString::from_utf8(&text),
         None,
         SymbolMode::Bare,
@@ -3467,7 +3473,7 @@ fn find_coding_systems_region_unibyte_buffer_answers_t() {
     let end = REGION_CHARS as i64 + 1;
     let args = [Value::fixnum(1), Value::fixnum(end)];
     let (result, (calls, bytes)) = super::allocation_tests::measured(|| {
-        safe_coding_systems_for_region(&manager, &buffer, (1, end), &args, SymbolMode::Bare)
+        safe_coding_systems_for_region(&manager, None, &buffer, (1, end), &args, SymbolMode::Bare)
     });
     assert_eq!(result.unwrap(), Value::T);
     assert_eq!(
@@ -3482,7 +3488,7 @@ fn find_coding_systems_region_unibyte_buffer_answers_t() {
 fn find_coding_systems_region_strings_follow_char_byte_rule() {
     crate::test_utils::init_test_tracing();
     let codings = |text: LispString| {
-        safe_coding_systems_for_text(&mgr(), &text, None, SymbolMode::Bare).unwrap()
+        safe_coding_systems_for_text(&mgr(), None, &text, None, SymbolMode::Bare).unwrap()
     };
     assert_eq!(
         codings(LispString::from_unibyte(vec![0xFF, b'a'])),
@@ -3490,4 +3496,102 @@ fn find_coding_systems_region_strings_follow_char_byte_rule() {
     );
     assert_eq!(codings(LispString::from_utf8("abc")), Value::T);
     assert_ne!(codings(LispString::from_utf8("aé")), Value::T);
+}
+
+/// Without a Lisp `coding-system-list`, fallback order follows explicit
+/// `definition_order` newest-first (never `FxHashMap` iteration or
+/// alphabetical order), includes fixed-EOL bases, and skips aliases and
+/// auto-generated `-unix`/`-dos`/`-mac` subsidiaries.
+#[test]
+fn find_coding_systems_region_definition_order_and_canonical_bases() {
+    crate::test_utils::init_test_tracing();
+    let mut manager = mgr();
+
+    let mut z_fixed_unix = CodingSystemInfo::new("z-fixed-unix", "utf-8", 'Z', EolType::Unix);
+    z_fixed_unix.charset_list = vec![intern("unicode")];
+    manager.register(z_fixed_unix);
+
+    let mut a_fixed = CodingSystemInfo::new("a-fixed", "utf-8", 'A', EolType::Unix);
+    a_fixed.charset_list = vec![intern("unicode")];
+    manager.register(a_fixed);
+
+    let mut m_undec = CodingSystemInfo::new("m-undec", "utf-8", 'M', EolType::Undecided);
+    m_undec.charset_list = vec![intern("unicode")];
+    manager.register(m_undec);
+    let mut m_undec_unix = CodingSystemInfo::new("m-undec-unix", "utf-8", 'M', EolType::Unix);
+    m_undec_unix.charset_list = vec![intern("unicode")];
+    manager.register(m_undec_unix);
+    manager.add_alias("m-alias", "m-undec");
+
+    let text = LispString::from_utf8("a😀");
+    let fallback = coding_names(
+        safe_coding_systems_for_text(&manager, None, &text, None, SymbolMode::Bare).unwrap(),
+    );
+    assert_eq!(
+        &fallback[..3],
+        &["m-undec", "a-fixed", "z-fixed-unix"],
+        "fallback order must be reverse definition_order, not alphabetical"
+    );
+    assert!(!fallback.iter().any(|n| n == "m-undec-unix"));
+    assert!(!fallback.iter().any(|n| n == "m-alias"));
+
+    // Explicit `coding-system-list` controls exact order and skips aliases/subsidiaries.
+    let explicit_list = Value::list(vec![
+        Value::symbol("m-alias"),
+        Value::symbol("m-undec-unix"),
+        Value::symbol("z-fixed-unix"),
+        Value::symbol("m-undec"),
+    ]);
+    let explicit = coding_names(
+        safe_coding_systems_for_text(&manager, Some(explicit_list), &text, None, SymbolMode::Bare)
+            .unwrap(),
+    );
+    assert_eq!(
+        explicit,
+        vec!["z-fixed-unix", "m-undec", "raw-text", "no-conversion"]
+    );
+}
+
+#[test]
+fn runtime_bucket_name_preserves_fixed_eol_bases_with_eol_suffix() {
+    crate::test_utils::init_test_tracing();
+    let mut manager = mgr();
+
+    let mut lone_unix = CodingSystemInfo::new("fcs-lone-unix", "charset", 'L', EolType::Unix);
+    lone_unix.charset_list = vec![intern("iso-8859-1")];
+    manager.register(lone_unix);
+
+    let mut pair_base = CodingSystemInfo::new("fcs-pair", "charset", 'P', EolType::Unix);
+    pair_base.charset_list = vec![intern("iso-8859-1")];
+    manager.register(pair_base);
+
+    let mut pair_unix = CodingSystemInfo::new("fcs-pair-unix", "utf-8", 'U', EolType::Unix);
+    pair_unix.charset_list = vec![intern("unicode")];
+    manager.register(pair_unix);
+
+    let mut undec = CodingSystemInfo::new("fcs-undec-b", "charset", 'D', EolType::Undecided);
+    undec.charset_list = vec![intern("iso-8859-1")];
+    manager.register(undec);
+    manager.register(CodingSystemInfo::new(
+        "fcs-undec-b-unix",
+        "charset",
+        'D',
+        EolType::Unix,
+    ));
+
+    assert_eq!(
+        runtime_bucket_name(&manager, "fcs-lone-unix").as_deref(),
+        Some("fcs-lone-unix"),
+        "fixed-EOL base ending in -unix with no stripped base must keep its own bucket"
+    );
+    assert_eq!(
+        runtime_bucket_name(&manager, "fcs-pair-unix").as_deref(),
+        Some("fcs-pair-unix"),
+        "fixed-EOL base ending in -unix must not bleed into a separate fixed-EOL base"
+    );
+    assert_eq!(
+        runtime_bucket_name(&manager, "fcs-undec-b-unix").as_deref(),
+        Some("fcs-undec-b"),
+        "auto-generated subsidiary of an Undecided base must still share the Undecided base bucket"
+    );
 }

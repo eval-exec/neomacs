@@ -557,3 +557,109 @@ fn deterministic_order_overlay_serials_survive_dump_and_resume_the_counter() {
         .expect("create a fresh overlay after image load");
     assert!(fresh.as_overlay_data().unwrap().serial.get() > ATTACHED_SERIAL);
 }
+
+#[test]
+fn deterministic_order_coding_definition_order_survives_dump_round_trip() {
+    use neovm_text::emacs_core::coding::safe_coding_systems_for_text;
+    use neovm_value::intern::resolve_sym;
+    use neovm_value::tagged::value::SymbolMode;
+    use neovm_value::value::list_to_vec;
+
+    let coding_names = |value: Value| -> Vec<String> {
+        list_to_vec(&value)
+            .expect("coding candidate list")
+            .into_iter()
+            .map(|v| resolve_sym(v.as_bare_symbol_id().expect("coding symbol")).to_owned())
+            .collect()
+    };
+
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
+
+    let mut z_fixed_unix = CodingSystemInfo::new("pdump-z-fixed-unix", "utf-8", 'Z', EolType::Unix);
+    z_fixed_unix.charset_list = vec![intern("unicode")];
+    eval.coding_systems.register(z_fixed_unix);
+
+    let mut a_fixed = CodingSystemInfo::new("pdump-a-fixed", "utf-8", 'A', EolType::Unix);
+    a_fixed.charset_list = vec![intern("unicode")];
+    eval.coding_systems.register(a_fixed);
+
+    let mut m_undec = CodingSystemInfo::new("pdump-m-undec", "utf-8", 'M', EolType::Undecided);
+    m_undec.charset_list = vec![intern("unicode")];
+    eval.coding_systems.register(m_undec);
+    let mut m_undec_unix = CodingSystemInfo::new("pdump-m-undec-unix", "utf-8", 'M', EolType::Unix);
+    m_undec_unix.charset_list = vec![intern("unicode")];
+    eval.coding_systems.register(m_undec_unix);
+    eval.coding_systems
+        .add_alias("pdump-m-alias", "pdump-m-undec");
+
+    let text = LispString::from_utf8("a😀");
+    let before_order: Vec<String> = eval
+        .coding_systems
+        .dump_definition_order()
+        .iter()
+        .map(|id| resolve_sym(*id).to_owned())
+        .collect();
+    assert!(!before_order.is_empty());
+    let before_candidates = coding_names(
+        safe_coding_systems_for_text(&eval.coding_systems, None, &text, None, SymbolMode::Bare)
+            .expect("pre-dump fallback candidates"),
+    );
+    assert_eq!(
+        &before_candidates[..3],
+        &["pdump-m-undec", "pdump-a-fixed", "pdump-z-fixed-unix"],
+        "pre-dump fallback order must be reverse definition_order, not alphabetical or hash order"
+    );
+
+    let dir = tempfile::tempdir().unwrap();
+    let first = dir.path().join("coding-order-first.pdump");
+    let second = dir.path().join("coding-order-second.pdump");
+    super::dump_to_file(&eval, &first).unwrap();
+    super::dump_to_file(&eval, &second).unwrap();
+    assert_eq!(
+        std::fs::read(&first).unwrap(),
+        std::fs::read(&second).unwrap(),
+        "coding definition_order must dump deterministically"
+    );
+
+    let proof = eval.hooks_installed();
+    drop(eval);
+    let mut loaded = super::load_from_dump_with_proof(&second, proof).unwrap();
+
+    let after_order: Vec<String> = loaded
+        .coding_systems
+        .dump_definition_order()
+        .iter()
+        .map(|id| resolve_sym(*id).to_owned())
+        .collect();
+    assert_eq!(
+        after_order, before_order,
+        "pdump round-trip must preserve CodingSystemManager.definition_order verbatim"
+    );
+    let after_candidates = coding_names(
+        safe_coding_systems_for_text(&loaded.coding_systems, None, &text, None, SymbolMode::Bare)
+            .expect("post-dump fallback candidates"),
+    );
+    assert_eq!(
+        after_candidates, before_candidates,
+        "post-dump non-Lisp fallback candidate list must match pre-dump order exactly"
+    );
+
+    // Registering a fresh coding system after reload appends to definition_order,
+    // so it leads the newest-first fallback list ahead of pre-dump entries.
+    let mut post_load = CodingSystemInfo::new("pdump-b-post-load", "utf-8", 'B', EolType::Unix);
+    post_load.charset_list = vec![intern("unicode")];
+    loaded.coding_systems.register(post_load);
+    let post_candidates = coding_names(
+        safe_coding_systems_for_text(&loaded.coding_systems, None, &text, None, SymbolMode::Bare)
+            .expect("post-register fallback candidates"),
+    );
+    assert_eq!(
+        &post_candidates[..4],
+        &[
+            "pdump-b-post-load",
+            "pdump-m-undec",
+            "pdump-a-fixed",
+            "pdump-z-fixed-unix",
+        ]
+    );
+}
