@@ -339,6 +339,18 @@ const CRANELIFT_CRATES: &[&str] = &[
 /// A leading `-` (`RUST_LOG=-cranelift_jit`, the form that silences a target) names Cranelift too, so it counts
 /// as configured and keeps its directive unchanged.
 fn rust_log_configures_cranelift(spec: &str) -> bool {
+    rust_log_names_any(spec, CRANELIFT_CRATES)
+}
+
+/// `fontdb` reports every font file it cannot parse at WARN: one line per
+/// unparseable bitmap font on the system (776 lines, 157 KB, on a host with
+/// `proggyfonts`, #883). A user cannot act on that, and GNU prints nothing
+/// comparable, so it is kept at ERROR unless `RUST_LOG` names `fontdb`.
+const FONTDB_CRATES: &[&str] = &["fontdb"];
+
+/// Whether SPEC has a directive for one of CRATES (or a module inside one),
+/// including the `-target` form that silences it.
+fn rust_log_names_any(spec: &str, crates: &[&str]) -> bool {
     spec.split(',').any(|directive| {
         let target = directive
             .split('=')
@@ -347,7 +359,7 @@ fn rust_log_configures_cranelift(spec: &str) -> bool {
             .trim()
             .trim_start_matches('-')
             .replace('-', "_");
-        CRANELIFT_CRATES.iter().any(|crate_name| {
+        crates.iter().any(|crate_name| {
             target == *crate_name || target.starts_with(&format!("{crate_name}::"))
         })
     })
@@ -355,22 +367,29 @@ fn rust_log_configures_cranelift(spec: &str) -> bool {
 
 /// Build the process env filter.
 ///
-/// - No `RUST_LOG`: `warn`, which already leaves every Cranelift crate at WARN.
-/// - `RUST_LOG` that names a Cranelift target: used verbatim (user wins).
-/// - Any other `RUST_LOG`: the user's specification plus `<cranelift crate>=warn` for every crate they did not
-///   name, appended so it cannot override their own directives.
+/// - The base is the user's `RUST_LOG`, or `warn` when it is unset.
+/// - Every Cranelift crate is pinned at WARN unless `RUST_LOG` names one. With no `RUST_LOG` the base already is
+///   `warn`, so nothing is appended for them.
+/// - `fontdb` is pinned at ERROR unless `RUST_LOG` names it, also with no `RUST_LOG` (#883).
+/// - Each pin is appended after the user's directives, and only for a group the user did not name, so an explicit
+///   directive is never overridden.
 fn env_filter_spec(rust_log: Option<&str>) -> String {
-    let Some(spec) = rust_log else {
-        return "warn".to_string();
-    };
-    if rust_log_configures_cranelift(spec) {
-        return spec.to_string();
+    let mut out = rust_log.unwrap_or("warn").to_string();
+    if let Some(spec) = rust_log
+        && !rust_log_configures_cranelift(spec)
+    {
+        for crate_name in CRANELIFT_CRATES {
+            out.push(',');
+            out.push_str(crate_name);
+            out.push_str("=warn");
+        }
     }
-    let mut out = spec.to_string();
-    for crate_name in CRANELIFT_CRATES {
-        out.push(',');
-        out.push_str(crate_name);
-        out.push_str("=warn");
+    if !rust_log.is_some_and(|spec| rust_log_names_any(spec, FONTDB_CRATES)) {
+        for crate_name in FONTDB_CRATES {
+            out.push(',');
+            out.push_str(crate_name);
+            out.push_str("=error");
+        }
     }
     out
 }
@@ -670,10 +689,49 @@ mod env_filter_tests {
         }
     }
 
-    /// No `RUST_LOG` at all already means `warn` for everything, so nothing needs appending.
+    /// No `RUST_LOG`: `warn` for everything, which already covers Cranelift, and `fontdb` kept at ERROR (#883).
     #[test]
-    fn absent_rust_log_is_warn() {
-        assert_eq!(env_filter_spec(None), "warn");
+    fn absent_rust_log_is_warn_with_fontdb_at_error() {
+        assert_eq!(env_filter_spec(None), "warn,fontdb=error");
+    }
+
+    /// #883: `fontdb`'s per-font WARN lines stay off under a plain `RUST_LOG` too, and a user who names `fontdb`
+    /// gets exactly their directive.
+    #[test]
+    fn fontdb_defaults_to_error_unless_rust_log_names_it() {
+        let spec = env_filter_spec(Some("info"));
+        assert!(spec.starts_with("info,"), "{spec}");
+        assert!(spec.ends_with(",fontdb=error"), "{spec}");
+        for named in [
+            "fontdb=warn",
+            "info,fontdb=warn",
+            "info,fontdb::loader=debug",
+            "info,-fontdb",
+        ] {
+            let spec = env_filter_spec(Some(named));
+            assert!(
+                !spec.contains("fontdb=error"),
+                "`{named}` names fontdb, so it must not be pinned: {spec}"
+            );
+            assert!(spec.starts_with(named), "{spec}");
+        }
+    }
+
+    /// The pins must actually apply: the built filter drops a `fontdb` WARN by default and keeps it when asked.
+    #[test]
+    fn fontdb_pin_filters_a_warn_record() {
+        use tracing_subscriber::layer::SubscriberExt;
+        let enabled = |rust_log: Option<&str>| {
+            let filter = EnvFilter::try_new(env_filter_spec(rust_log)).unwrap();
+            let subscriber = tracing_subscriber::registry().with(filter);
+            tracing::subscriber::with_default(
+                subscriber,
+                || tracing::enabled!(target: "fontdb", tracing::Level::WARN),
+            )
+        };
+        assert!(!enabled(None));
+        assert!(!enabled(Some("info")));
+        assert!(enabled(Some("fontdb=warn")));
     }
 
     /// A user who names a Cranelift target gets their specification verbatim -- including a JIT developer who wants
@@ -692,8 +750,8 @@ mod env_filter_tests {
         ] {
             assert_eq!(
                 env_filter_spec(Some(spec)),
-                spec,
-                "`{spec}` must be respected unchanged"
+                format!("{spec},fontdb=error"),
+                "`{spec}` must be respected unchanged; only the fontdb pin is appended"
             );
         }
     }

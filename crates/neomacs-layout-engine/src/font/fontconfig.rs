@@ -324,7 +324,8 @@ pub fn resolve_family(
                 }
             };
             if let Some(concrete) = matched {
-                tracing::info!("fontconfig: {} -> {}", generic, concrete);
+                // Resolver detail, not an event a user acts on (#883).
+                tracing::debug!("fontconfig: {} -> {}", generic, concrete);
                 map.insert(generic.to_string(), concrete);
             }
         }
