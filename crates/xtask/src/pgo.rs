@@ -69,6 +69,7 @@ impl CodegenContract {
             BuildProfile::ReleasePgo => Ok(Self::Shipping),
             BuildProfile::ReleasePgoProfiling => Ok(Self::Diagnostic),
             BuildProfile::Release
+            | BuildProfile::ReleaseFast
             | BuildProfile::Profiling
             | BuildProfile::ReleasePgoGen
             | BuildProfile::Dev

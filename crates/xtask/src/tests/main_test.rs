@@ -931,6 +931,44 @@ fn parse_release_uses_release_bin_dir() {
 }
 
 #[test]
+fn parse_release_fast_uses_release_fast_bin_dir() {
+    let options = parse_options(&["--profile", "release-fast"]);
+    assert_eq!(options.profile, BuildProfile::ReleaseFast);
+    assert_eq!(options.bin_dir, PathBuf::from("/repo/target/release-fast"));
+}
+
+#[test]
+fn parse_dev_requires_no_byte_compile() {
+    let err = FreshBuildOptions::parse(
+        PathBuf::from("/repo"),
+        ["--profile", "dev"].into_iter().map(OsString::from),
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(err.contains("--no-byte-compile"), "{err}");
+    assert!(err.contains("release-fast"), "{err}");
+
+    let options = parse_options(&["--profile", "dev", "--no-byte-compile"]);
+    assert_eq!(options.profile, BuildProfile::Dev);
+    assert!(options.no_byte_compile);
+    assert_eq!(options.bin_dir, PathBuf::from("/repo/target/debug"));
+}
+
+#[test]
+fn parse_debug_is_rejected_with_dev_hint() {
+    let err = FreshBuildOptions::parse(
+        PathBuf::from("/repo"),
+        ["--profile", "debug", "--no-byte-compile"]
+            .into_iter()
+            .map(OsString::from),
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(err.contains("--profile dev --no-byte-compile"), "{err}");
+    assert!(err.contains("release-fast"), "{err}");
+}
+
+#[test]
 fn explicit_bin_dir_overrides_release_default() {
     let options = parse_options(&["--release", "--bin-dir", "out/neomacs-bin"]);
     assert_eq!(options.profile, BuildProfile::Release);
