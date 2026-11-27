@@ -1353,6 +1353,63 @@ fn check_propagates_rebuild_to_transitive_dependents() {
 }
 
 #[test]
+fn check_compile_main_dependency_rule_selects_a_fresh_compile_first_source() {
+    let (root, lisp) = check_fixture(
+        "COMPILE_FIRST = $(lisp)/emacs-lisp/foo.elc\n\
+         MAIN_FIRST =\n\
+         $(lisp)/emacs-lisp/foo.elc: $(lisp)/base.elc\n",
+    );
+    fs::create_dir_all(lisp.join("emacs-lisp")).unwrap();
+    write_fresh_elc(&lisp.join("loadup.el"));
+    let foo = lisp.join("emacs-lisp/foo.el");
+    fs::write(&foo, "(require 'base)\n").unwrap();
+    let base = lisp.join("base.el");
+    fs::write(&base, "(provide 'base)\n").unwrap();
+    write_fresh_elc(&foo);
+    // base.elc newer than foo.elc: COMPILE_FIRST's mtime check skips foo,
+    // but compile-main's dependency rule selects it.
+    write_elc_newer_than(&base, &foo.with_extension("elc"));
+
+    let report = crate::rebuild_check::check(&check_options(&root)).unwrap();
+
+    assert_eq!(report.compile_first.total, 1);
+    assert!(
+        report.compile_first.files.is_empty(),
+        "COMPILE_FIRST only checks mtime, and foo.elc is current"
+    );
+    assert!(
+        report.compile_main.files.contains(&foo),
+        "compile-main's newer-dependency-bytecode rule must select foo"
+    );
+    assert_eq!(report.compile_main.total, 3, "loadup.el, base.el, foo.el");
+}
+
+#[test]
+fn check_keeps_a_fresh_source_when_dependency_bytecode_is_older() {
+    let (root, lisp) = check_fixture(
+        "COMPILE_FIRST = $(lisp)/emacs-lisp/foo.elc\n\
+         MAIN_FIRST =\n\
+         $(lisp)/emacs-lisp/foo.elc: $(lisp)/base.elc\n",
+    );
+    fs::create_dir_all(lisp.join("emacs-lisp")).unwrap();
+    write_fresh_elc(&lisp.join("loadup.el"));
+    let foo = lisp.join("emacs-lisp/foo.el");
+    fs::write(&foo, "(require 'base)\n").unwrap();
+    let base = lisp.join("base.el");
+    fs::write(&base, "(provide 'base)\n").unwrap();
+    write_fresh_elc(&base);
+    // foo.elc newer than base.elc: nothing is out of date.
+    write_elc_newer_than(&foo, &base.with_extension("elc"));
+
+    let report = crate::rebuild_check::check(&check_options(&root)).unwrap();
+
+    assert!(
+        report.compile_first.files.is_empty() && report.compile_main.files.is_empty(),
+        "{report:?}"
+    );
+}
+
+#[test]
 fn check_reports_subdirs_drift_and_round_trips_through_update() {
     let (root, lisp) = check_fixture("COMPILE_FIRST =\nMAIN_FIRST =\n");
     write_fresh_elc(&lisp.join("loadup.el"));

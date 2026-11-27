@@ -19,18 +19,23 @@
 //! 3. `MAIN_FIRST`,
 //! 4. the rest of `compile-main`.
 //!
-//! A source that belongs to more than one list is attributed to the earliest
-//! stage, because that stage compiles it first.
+//! Every stage's predicate is evaluated for a source that belongs to more than
+//! one list, and the source is reported under the earliest stage that would
+//! compile it.  A COMPILE_FIRST file whose own mtime is current but whose
+//! dependency bytecode is newer is therefore reported under compile-main: that
+//! is the pass whose dependency rule selects it.
 //!
 //! Generated Lisp outputs that `fresh-build` currently regenerates
 //! unconditionally (leim, semantic grammars, loaddefs, custom/finder data) are
 //! NOT evaluated here; only `subdirs.el` is, because its content comparison is
 //! exact and already implemented.  The report says so.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
+
+use strum::IntoEnumIterator;
 
 use crate::{
     FreshBuildOptions, Result, bytecode_needs_rebuild, bytecode_needs_rebuild_with_dependencies,
@@ -43,17 +48,42 @@ use crate::{
 /// How many paths one stage prints before folding the rest into a count.
 const MAX_LISTED: usize = 10;
 
+/// The bytecode stages, in the order the pipeline compiles them.
+///
+/// `EnumIter` supplies the pipeline order without a second, hand-maintained
+/// list; `Display` carries the report labels as per-variant attributes; the
+/// explicit `repr` discriminants are the array slots (a new variant cannot
+/// silently shift an existing one).
+#[repr(usize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, strum::EnumIter, strum::Display)]
+enum Stage {
+    #[strum(to_string = "COMPILE_FIRST")]
+    CompileFirst = 0,
+    #[strum(to_string = "preloaded")]
+    Preloaded = 1,
+    #[strum(to_string = "MAIN_FIRST")]
+    MainFirst = 2,
+    #[strum(to_string = "compile-main")]
+    CompileMain = 3,
+}
+
+impl Stage {
+    fn index(self) -> usize {
+        self as usize
+    }
+}
+
 #[derive(Debug)]
 pub(crate) struct StageReport {
-    pub(crate) label: &'static str,
+    pub(crate) stage: Stage,
     pub(crate) files: Vec<PathBuf>,
     pub(crate) total: usize,
 }
 
 impl StageReport {
-    fn new(label: &'static str) -> Self {
+    fn new(stage: Stage) -> Self {
         Self {
-            label,
+            stage,
             files: Vec::new(),
             total: 0,
         }
@@ -62,7 +92,7 @@ impl StageReport {
     fn print(&self, repo_root: &Path) {
         println!(
             "  {:<14} {:>4} / {:<4} need byte-compilation",
-            self.label,
+            self.stage,
             self.files.len(),
             self.total
         );
@@ -181,77 +211,54 @@ pub(crate) fn check(options: &FreshBuildOptions) -> Result<RebuildCheck> {
             .extend(unicode_deps.iter().cloned());
     }
 
-    // Stage membership, earliest first.  A source listed in more than one
-    // stage (COMPILE_FIRST files are also compile-main candidates) belongs to
-    // the stage that compiles it first.
-    let compile_first_set: BTreeSet<PathBuf> = compile_first.into_iter().collect();
+    // Candidate membership per stage, in pipeline order.  A COMPILE_FIRST or
+    // preloaded source is also a compile-main candidate, so this is NOT a
+    // partition: `total` reports how many sources each stage considers.
     let mut preloaded_set: BTreeSet<PathBuf> = preloaded_sources.into_iter().collect();
     preloaded_set.extend(unicode_deps.iter().cloned());
-    let general_set: BTreeSet<PathBuf> = general.into_iter().collect();
-
-    let stage_of = |source: &PathBuf| -> Option<usize> {
-        if compile_first_set.contains(source) {
-            Some(0)
-        } else if preloaded_set.contains(source) {
-            Some(1)
-        } else if main_first_set.contains(source) {
-            Some(2)
-        } else if general_set.contains(source) {
-            Some(3)
-        } else {
-            None
-        }
-    };
-
-    let mut membership: [BTreeSet<PathBuf>; 4] = [
-        BTreeSet::new(),
-        BTreeSet::new(),
-        BTreeSet::new(),
-        BTreeSet::new(),
+    let membership: [BTreeSet<PathBuf>; 4] = [
+        compile_first.into_iter().collect(),
+        preloaded_set,
+        main_first_set,
+        general.into_iter().collect(),
     ];
-    for source in compile_first_set
-        .iter()
-        .chain(preloaded_set.iter())
-        .chain(main_first_set.iter())
-        .chain(general_set.iter())
-    {
-        if let Some(index) = stage_of(source) {
-            membership[index].insert(source.clone());
-        }
-    }
 
-    let mut rebuild: BTreeSet<PathBuf> = BTreeSet::new();
+    // Evaluate every stage's predicate.  A source is reported under the
+    // earliest stage that would compile it.  This matters for the review
+    // case where COMPILE_FIRST sees a current mtime but compile-main's
+    // dependency rule (newer dependency bytecode) still selects the source:
+    // the pipeline compiles it in compile-main, so that is where it belongs.
+    let mut selected: BTreeMap<PathBuf, Stage> = BTreeMap::new();
     for source in membership.iter().flatten() {
-        let needs = match stage_of(source) {
-            Some(0) => bytecode_needs_rebuild(source),
-            Some(1) if *source == characters => {
-                bytecode_needs_rebuild_with_dependencies(source, &unicode_deps)
+        if selected.contains_key(source) {
+            continue;
+        }
+        for stage in Stage::iter() {
+            if !membership[stage.index()].contains(source) {
+                continue;
             }
-            Some(1) => bytecode_needs_rebuild(source),
-            Some(2) => compile_main_needs_rebuild(source),
-            Some(3) => {
-                compile_main_needs_rebuild(source)
-                    || compile_main_dependency_bytecode_newer(source, &dependencies)
+            if stage_needs(stage, source, &characters, &unicode_deps, &dependencies) {
+                selected.insert(source.clone(), stage);
+                break;
             }
-            Some(_) | None => false,
-        };
-        if needs {
-            rebuild.insert(source.clone());
         }
     }
 
-    // A rebuilt file's dependents are out of date too, exactly as make's
-    // prerequisite rule propagates to the dependent target.  Iterate to a
-    // fixpoint because the dependency graph can be deep.
+    // A rebuilt file's dependents are out of date too.  This mirrors
+    // compile-main's rebuild closure: only general candidates participate,
+    // and the dependent is compiled by compile-main (the earlier stages do
+    // not consult dependencies, except characters').  Iterate to a fixpoint
+    // because the graph can be deep.
     loop {
         let mut changed = false;
         for (source, deps) in &edges {
-            if rebuild.contains(source) {
+            if selected.contains_key(source)
+                || !membership[Stage::CompileMain.index()].contains(source)
+            {
                 continue;
             }
-            let is_known = membership.iter().any(|stage| stage.contains(source));
-            if is_known && deps.iter().any(|dep| rebuild.contains(dep)) {
-                rebuild.insert(source.clone());
+            if deps.iter().any(|dep| selected.contains_key(dep)) {
+                selected.insert(source.clone(), Stage::CompileMain);
                 changed = true;
             }
         }
@@ -261,19 +268,19 @@ pub(crate) fn check(options: &FreshBuildOptions) -> Result<RebuildCheck> {
     }
 
     let mut stages = [
-        StageReport::new("COMPILE_FIRST"),
-        StageReport::new("preloaded"),
-        StageReport::new("MAIN_FIRST"),
-        StageReport::new("compile-main"),
+        StageReport::new(Stage::CompileFirst),
+        StageReport::new(Stage::Preloaded),
+        StageReport::new(Stage::MainFirst),
+        StageReport::new(Stage::CompileMain),
     ];
-    for (index, sources) in membership.iter().enumerate() {
-        stages[index].total = sources.len();
-        stages[index].files = sources
-            .iter()
-            .filter(|source| rebuild.contains(*source))
-            .cloned()
-            .collect();
-        stages[index].files.sort();
+    for (stage, sources) in Stage::iter().zip(membership.iter()) {
+        stages[stage.index()].total = sources.len();
+    }
+    for (source, stage) in selected {
+        stages[stage.index()].files.push(source);
+    }
+    for stage in &mut stages {
+        stage.files.sort();
     }
     let [compile_first, preloaded, main_first, compile_main] = stages;
 
@@ -293,6 +300,28 @@ pub(crate) fn check(options: &FreshBuildOptions) -> Result<RebuildCheck> {
         subdirs_changed,
         subdirs_total: dirs.len(),
     })
+}
+
+/// The pipeline's staleness predicate for one stage, in exhaustive form.
+fn stage_needs(
+    stage: Stage,
+    source: &Path,
+    characters: &Path,
+    unicode_deps: &[PathBuf],
+    dependencies: &BTreeMap<PathBuf, BTreeSet<PathBuf>>,
+) -> bool {
+    match stage {
+        Stage::CompileFirst => bytecode_needs_rebuild(source),
+        Stage::Preloaded if source == characters => {
+            bytecode_needs_rebuild_with_dependencies(source, unicode_deps)
+        }
+        Stage::Preloaded => bytecode_needs_rebuild(source),
+        Stage::MainFirst => compile_main_needs_rebuild(source),
+        Stage::CompileMain => {
+            compile_main_needs_rebuild(source)
+                || compile_main_dependency_bytecode_newer(source, dependencies)
+        }
+    }
 }
 
 /// Whether `update-subdirs` would rewrite or remove `dir/subdirs.el`.
