@@ -64,6 +64,9 @@ const NON_EDITOR_PROGRAMS: &[&str] = &[
     "tic",
     "tput",
     "toe",
+    // Terminfo capability query; `ensure_terminfo_dir` never launches an
+    // editor, it only asks whether the host database has the TERM entry.
+    "infocmp",
     "ps",
     // Compression fixture input (`source_startup_silences_jka_compr`):
     // produces the `.el.gz` under test, never spawns an editor.
@@ -132,6 +135,43 @@ const EXCEPTIONS: &[Exception] = &[
         path_suffix: "emacs_core/tests/architecture/split_test_support_manifest_test.rs",
         argument: "env!(\"CARGO\")",
         reason: "cargo metadata query for the manifest guard, not an editor",
+    },
+    Exception {
+        path_suffix: "emacs_core/tests/architecture/buffer_manager_view_ratchet_test.rs",
+        argument: "&cargo_bin",
+        reason: "cargo metadata query for the dependency ratchet, not an editor",
+    },
+];
+
+/// A reviewed match that is fixture source text rather than a spawn.
+///
+/// The extra `line_contains` marker names the fixture arm that owns the match
+/// (its case label plus the raw-string opener).  A bare raw string elsewhere on
+/// the line is not enough: `Command::new("emacs").arg(r#"--batch"#)` is still a
+/// real spawn, while the oracle guard's arms are source samples fed to its own
+/// detector and never constructed commands.
+struct FixtureException {
+    path_suffix: &'static str,
+    argument: &'static str,
+    line_contains: &'static str,
+    reason: &'static str,
+}
+
+const FIXTURE_EXCEPTIONS: &[FixtureException] = &[
+    FixtureException {
+        path_suffix: "neomacs-tui-tests/src/oracle_guard_test.rs",
+        argument: "\"emacs\"",
+        line_contains: "(\"direct Command::new\", r#\"",
+        reason: "the oracle guard's direct Command::new fixture arm; no process is spawned",
+    },
+    FixtureException {
+        path_suffix: "neomacs-tui-tests/src/oracle_guard_test.rs",
+        argument: "\"emacs\"",
+        // The case label is on the previous line, so the marker is the
+        // fixture source text that follows the raw-string opener on the
+        // match line.
+        line_contains: "r#\"macro_rules! mk {",
+        reason: "the oracle guard's macro_rules fixture arm; no process is spawned",
     },
 ];
 
@@ -202,6 +242,14 @@ fn is_exception(relative: &str, argument: &str) -> bool {
     })
 }
 
+fn is_fixture_exception(relative: &str, argument: &str, line: &str) -> bool {
+    FIXTURE_EXCEPTIONS.iter().any(|exception| {
+        relative.ends_with(exception.path_suffix)
+            && argument == exception.argument
+            && line.contains(exception.line_contains)
+    })
+}
+
 #[test]
 fn bash_that_can_launch_an_editor_stays_a_violation() {
     assert!(
@@ -213,6 +261,29 @@ fn bash_that_can_launch_an_editor_stays_a_violation() {
     assert!(
         !NON_EDITOR_PROGRAMS.contains(&argument.trim_matches('"')),
         "Command::new(\"bash\") must fail the tripwire"
+    );
+}
+
+#[test]
+fn fixture_exception_requires_its_own_fixture_text() {
+    let relative = "crates/neomacs-tui-tests/src/oracle_guard_test.rs";
+    let direct_fixture =
+        r##"        ("direct Command::new", r#"let c = Command::new("emacs");"#),"##;
+    let macro_fixture =
+        r##"            r#"macro_rules! mk { () => { Command::new("emacs") }; }"#,"##;
+    assert!(is_fixture_exception(relative, "\"emacs\"", direct_fixture));
+    assert!(is_fixture_exception(relative, "\"emacs\"", macro_fixture));
+
+    let executable_with_raw_string =
+        "    let _child = Command::new(\"emacs\").arg(r#\"--batch\"#).spawn();";
+    assert!(
+        !is_fixture_exception(relative, "\"emacs\"", executable_with_raw_string),
+        "a raw string elsewhere on the line must not exempt a real spawn"
+    );
+    let executable = "    let command = Command::new(\"emacs\");";
+    assert!(
+        !is_fixture_exception(relative, "\"emacs\"", executable),
+        "an executable spawn in the same file must not ride the fixture exception"
     );
 }
 
@@ -253,6 +324,7 @@ fn harness_editor_spawns_go_through_the_canonical_environment() {
                     && NON_EDITOR_PROGRAMS.contains(&argument.trim_matches('"'))
                 || argument.contains("current_exe")
                 || is_exception(&relative, argument)
+                || is_fixture_exception(&relative, argument, line)
             {
                 continue;
             }
