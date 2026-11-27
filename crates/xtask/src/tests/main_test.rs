@@ -988,6 +988,43 @@ fn parse_check_rejects_dry_run() {
 }
 
 #[test]
+fn parse_incremental_is_accepted() {
+    let options = parse_options(&["--release", "--incremental"]);
+    assert!(options.incremental);
+    assert!(!options.no_byte_compile);
+}
+
+#[test]
+fn parse_incremental_rejects_no_byte_compile() {
+    let err = FreshBuildOptions::parse_with_env(
+        PathBuf::from("/repo"),
+        ["--release", "--incremental", "--no-byte-compile"]
+            .into_iter()
+            .map(OsString::from),
+        ParseEnv::default(),
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(err.contains("--incremental"), "{err}");
+    assert!(err.contains("--no-byte-compile"), "{err}");
+}
+
+#[test]
+fn bytecode_plan_distinguishes_incremental_from_bootstrap_clean() {
+    let bootstrap = BytecodePlan::of(&parse_options(&["--release"]));
+    assert!(bootstrap.is_bootstrap_clean());
+    assert!(bootstrap.bootstrap_clean_proof().is_some());
+
+    let incremental = BytecodePlan::of(&parse_options(&["--release", "--incremental"]));
+    assert!(!incremental.is_bootstrap_clean());
+    assert!(incremental.bootstrap_clean_proof().is_none());
+
+    let keep = BytecodePlan::of(&parse_options(&["--release", "--no-byte-compile"]));
+    assert!(!keep.is_bootstrap_clean());
+    assert!(keep.bootstrap_clean_proof().is_none());
+}
+
+#[test]
 fn explicit_bin_dir_overrides_release_default() {
     let options = parse_options(&["--release", "--bin-dir", "out/neomacs-bin"]);
     assert_eq!(options.profile, BuildProfile::Release);
@@ -1440,6 +1477,10 @@ fn check_reports_stale_leim_generation_and_its_bytecode() {
     write_fresh_elc(&lisp.join("loadup.el"));
     let source = root.join("leim/CXTERM-DIC/Punct.tit");
     fs::create_dir_all(source.parent().unwrap()).unwrap();
+    // Older than the output, so only the dictionary change is stale.
+    let converter = lisp.join("international/titdic-cnv.el");
+    fs::create_dir_all(converter.parent().unwrap()).unwrap();
+    fs::write(&converter, "").unwrap();
     let output = lisp.join("leim/quail/Punct.el");
     fs::create_dir_all(output.parent().unwrap()).unwrap();
     fs::write(&output, "(provide 'Punct)\n").unwrap();
@@ -1477,6 +1518,12 @@ fn check_reports_a_generated_output_missing_from_the_tree() {
 fn check_reports_leim_list_when_a_dictionary_changes() {
     let (root, lisp) = check_fixture("COMPILE_FIRST =\nMAIN_FIRST =\n");
     write_fresh_elc(&lisp.join("loadup.el"));
+    // Both prerequisites are present and older than the list below, so the
+    // mtime rule is genuinely false before the dictionary changes.
+    let converter = lisp.join("international/titdic-cnv.el");
+    fs::create_dir_all(converter.parent().unwrap()).unwrap();
+    fs::write(&converter, "").unwrap();
+    fs::write(lisp.join("international/quail.el"), "").unwrap();
     for rule in crate::LEIM_GENERATION_RULES {
         for rel in rule.output_rels {
             let output = lisp.join(rel);
@@ -1504,6 +1551,305 @@ fn check_reports_leim_list_when_a_dictionary_changes() {
             .contains(&lisp.join("leim/quail/Punct.el"))
     );
     assert!(report.generated.leim_list, "{report:?}");
+}
+
+#[test]
+fn check_leim_converter_is_a_prerequisite() {
+    let (root, lisp) = check_fixture("COMPILE_FIRST =\nMAIN_FIRST =\n");
+    write_fresh_elc(&lisp.join("loadup.el"));
+    let source = root.join("leim/CXTERM-DIC/Punct.tit");
+    fs::create_dir_all(source.parent().unwrap()).unwrap();
+    fs::write(&source, "tit\n").unwrap();
+    let output = lisp.join("leim/quail/Punct.el");
+    fs::create_dir_all(output.parent().unwrap()).unwrap();
+    fs::write(&output, "(provide 'Punct)\n").unwrap();
+    write_fresh_elc(&output);
+    let converter = lisp.join("international/titdic-cnv.el");
+    fs::create_dir_all(converter.parent().unwrap()).unwrap();
+    write_file_newer_than(&converter, "converter", &output);
+
+    let report = crate::rebuild_check::check(&check_options(&root)).unwrap();
+
+    assert_eq!(report.generated.leim, vec![output.clone()]);
+    assert!(
+        report.compile_main.files.contains(&output),
+        "the regenerated dictionary's bytecode is stale"
+    );
+}
+
+#[test]
+fn check_leim_list_updater_is_a_prerequisite() {
+    let (root, lisp) = check_fixture("COMPILE_FIRST =\nMAIN_FIRST =\n");
+    write_fresh_elc(&lisp.join("loadup.el"));
+    let converter = lisp.join("international/titdic-cnv.el");
+    fs::create_dir_all(converter.parent().unwrap()).unwrap();
+    fs::write(&converter, "").unwrap();
+    for rule in crate::LEIM_GENERATION_RULES {
+        for rel in rule.output_rels {
+            let output = lisp.join(rel);
+            fs::create_dir_all(output.parent().unwrap()).unwrap();
+            fs::write(&output, "").unwrap();
+        }
+    }
+    let ext = root.join("leim/leim-ext.el");
+    fs::create_dir_all(ext.parent().unwrap()).unwrap();
+    fs::write(&ext, "").unwrap();
+    let list = lisp.join("leim/leim-list.el");
+    write_file_newer_than(&list, "list", &ext);
+    let quail = lisp.join("international/quail.el");
+    write_file_newer_than(&quail, "quail", &list);
+
+    let report = crate::rebuild_check::check(&check_options(&root)).unwrap();
+
+    assert!(report.generated.leim.is_empty());
+    assert!(
+        report.generated.leim_list,
+        "a newer list updater must mark the list stale"
+    );
+}
+
+#[test]
+fn loaddefs_contents_find_a_removed_source() {
+    let tempdir = tempdir();
+    fs::write(tempdir.join("present.el"), "").unwrap();
+    assert!(!loaddefs_contents_reference_missing_source(
+        ";;; Generated autoloads from present.el\n",
+        &tempdir
+    ));
+    assert!(loaddefs_contents_reference_missing_source(
+        ";;; Generated autoloads from gone.el\n",
+        &tempdir
+    ));
+    assert!(!loaddefs_contents_reference_missing_source(
+        ";;; unrelated\n",
+        &tempdir
+    ));
+}
+
+#[test]
+fn loaddefs_files_with_missing_sources_find_the_generated_file() {
+    let (root, lisp) = check_fixture("COMPILE_FIRST =\nMAIN_FIRST =\n");
+    write_fresh_elc(&lisp.join("loadup.el"));
+    let pkg = lisp.join("pkg");
+    fs::create_dir_all(&pkg).unwrap();
+    fs::write(pkg.join("gone.el"), "").unwrap();
+    let loaddefs = pkg.join("loaddefs.el");
+    fs::write(&loaddefs, ";;; Generated autoloads from gone.el\n").unwrap();
+
+    let options = check_options(&root);
+    let paths = pipeline_paths(&options);
+    assert!(
+        loaddefs_files_with_missing_sources(&paths)
+            .unwrap()
+            .is_empty()
+    );
+
+    fs::remove_file(pkg.join("gone.el")).unwrap();
+    let affected = loaddefs_files_with_missing_sources(&paths).unwrap();
+    assert!(affected.contains(&loaddefs), "{affected:?}");
+}
+
+/// A source can select a named output with a file-local
+/// `generated-autoload-file` or a `;;;###foo-autoload` cookie; that output is
+/// not `<dir>/loaddefs.el` (`cl-loaddefs.el`, `calc-loaddefs.el`, ...).  It
+/// records the same sections and must be scanned too.
+#[test]
+fn loaddefs_files_with_missing_sources_scan_named_secondary_outputs() {
+    let (root, lisp) = check_fixture("COMPILE_FIRST =\nMAIN_FIRST =\n");
+    write_fresh_elc(&lisp.join("loadup.el"));
+    let generated = lisp.join("emacs-lisp");
+    fs::create_dir_all(&generated).unwrap();
+    fs::write(generated.join("cl-extra.el"), "").unwrap();
+    let named = generated.join("cl-loaddefs.el");
+    fs::write(&named, ";;; Generated autoloads from cl-extra.el\n").unwrap();
+
+    let options = check_options(&root);
+    let paths = pipeline_paths(&options);
+    assert!(
+        loaddefs_files_with_missing_sources(&paths)
+            .unwrap()
+            .is_empty(),
+        "a present source must not invalidate the named output"
+    );
+
+    fs::remove_file(generated.join("cl-extra.el")).unwrap();
+    let affected = loaddefs_files_with_missing_sources(&paths).unwrap();
+    assert!(affected.contains(&named), "{affected:?}");
+}
+
+/// With the primary output still present the generator stays in update mode
+/// and skips surviving sources older than it, so deleting only the affected
+/// secondary file would rebuild that file without their sections.  A missing
+/// recorded source must therefore force the full-regeneration path by
+/// removing the primary sources, while secondary seeds and bytecode stay.
+#[test]
+fn incremental_missing_source_forces_full_regeneration_without_touching_bytecode() {
+    let repo = tempdir();
+    let lisp = repo.join("lisp");
+    fs::create_dir_all(lisp.join("emacs-lisp")).unwrap();
+    for stem in ["loaddefs", "emacs-lisp/cl-loaddefs"] {
+        fs::write(lisp.join(format!("{stem}.el")), ";; generated\n").unwrap();
+        fs::write(lisp.join(format!("{stem}.elc")), ";ELC\n").unwrap();
+    }
+    fs::write(lisp.join("theme-loaddefs.el"), ";; themes\n").unwrap();
+    fs::write(
+        lisp.join("emacs-lisp/cl-loaddefs.el"),
+        ";;; Generated autoloads from gone.el\n",
+    )
+    .unwrap();
+
+    let options = FreshBuildOptions {
+        repo_root: repo.clone(),
+        runtime_root: repo.clone(),
+        bin_dir: repo.join("target/release"),
+        profile: BuildProfile::Release,
+        production_capabilities: ProductionCapabilities::for_host().unwrap(),
+        cargo_jobs: CargoJobBudget::Inherit,
+        dry_run: false,
+        check: false,
+        incremental: true,
+        native_comp: false,
+        skip_build: false,
+        no_byte_compile: false,
+        features: Vec::new(),
+        aot_preload: AotPreloadMode::Disabled,
+    };
+    let paths = PipelinePaths {
+        lisp_root: lisp.clone(),
+        ..pipeline_paths(&options)
+    };
+    let plan = BytecodePlan::of(&options);
+
+    remove_primary_loaddefs_for_regeneration(
+        plan,
+        &options,
+        &paths,
+        &lisp.join("loaddefs.el"),
+        &lisp.join("theme-loaddefs.el"),
+    )
+    .unwrap();
+
+    assert!(
+        !lisp.join("loaddefs.el").exists(),
+        "the primary source must go so the generator stops updating in place"
+    );
+    assert!(!lisp.join("theme-loaddefs.el").exists());
+    assert!(
+        lisp.join("emacs-lisp/cl-loaddefs.el").is_file(),
+        "secondary outputs must remain loadable seeds during the scrape"
+    );
+    assert!(
+        lisp.join("loaddefs.elc").is_file(),
+        "incremental mode never deletes bytecode it did not prove stale"
+    );
+    fs::remove_dir_all(&repo).ok();
+}
+
+/// An output that receives no surviving definitions is never rewritten by the
+/// generator (it groups collected definitions by output file), so its section
+/// for the deleted source would survive the full regeneration.  The
+/// post-generation sweep must remove it while keeping healthy outputs.
+#[test]
+fn incremental_cleanup_removes_secondary_outputs_still_recording_a_removed_source() {
+    let (root, lisp) = check_fixture("COMPILE_FIRST =\nMAIN_FIRST =\n");
+    write_fresh_elc(&lisp.join("loadup.el"));
+    let generated = lisp.join("emacs-lisp");
+    fs::create_dir_all(&generated).unwrap();
+    fs::write(generated.join("live.el"), "").unwrap();
+    let healthy = generated.join("cl-loaddefs.el");
+    fs::write(&healthy, ";;; Generated autoloads from live.el\n").unwrap();
+    let orphaned = lisp.join("calc/calc-loaddefs.el");
+    fs::create_dir_all(orphaned.parent().unwrap()).unwrap();
+    fs::write(&orphaned, ";;; Generated autoloads from gone.el\n").unwrap();
+
+    let mut options = check_options(&root);
+    options.check = false;
+    options.incremental = true;
+    let paths = pipeline_paths(&options);
+
+    remove_loaddefs_outputs_still_recording_a_removed_source(
+        BytecodePlan::of(&options),
+        &options,
+        &paths,
+    )
+    .unwrap();
+
+    assert!(
+        !orphaned.exists(),
+        "an output with no surviving definitions keeps its stale section \
+         unless the sweep removes it"
+    );
+    assert!(
+        healthy.is_file(),
+        "an output that still records present sources must stay"
+    );
+}
+
+#[test]
+fn leim_list_generation_prefers_newer_sources_before_loading_quail() {
+    let args = leim_list_generation_args(Path::new("lisp/leim"));
+    let prefer_newer = args
+        .iter()
+        .position(|arg| arg == "(setq load-prefer-newer t)")
+        .expect("the updater must not load a stale quail.elc");
+    let load_quail = args
+        .iter()
+        .position(|arg| arg == "international/quail")
+        .unwrap();
+    assert!(
+        prefer_newer < load_quail,
+        "load-prefer-newer must be set before quail is loaded"
+    );
+}
+
+/// The updater saves `leim-list.el` before returning, so a failed step can
+/// leave a file that mtime-passes as current and skips the leim-ext.el
+/// append on the next incremental run.  The failure must remove it.
+#[cfg(unix)]
+#[test]
+fn failed_leim_list_generation_removes_the_partial_output() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let repo = tempdir();
+    let lisp = repo.join("lisp");
+    fs::create_dir_all(lisp.join("leim")).unwrap();
+    fs::create_dir_all(repo.join("leim")).unwrap();
+    fs::write(repo.join("leim/leim-ext.el"), "").unwrap();
+
+    let bin_dir = repo.join("target/release");
+    fs::create_dir_all(&bin_dir).unwrap();
+    let bootstrap = bin_dir.join("bootstrap-neomacs");
+    fs::write(
+        &bootstrap,
+        "#!/bin/sh\necho partial > lisp/leim/leim-list.el\nexit 3\n",
+    )
+    .unwrap();
+    fs::set_permissions(&bootstrap, fs::Permissions::from_mode(0o755)).unwrap();
+
+    let options = FreshBuildOptions {
+        repo_root: repo.clone(),
+        runtime_root: repo.clone(),
+        bin_dir,
+        profile: BuildProfile::Release,
+        production_capabilities: ProductionCapabilities::for_host().unwrap(),
+        cargo_jobs: CargoJobBudget::Inherit,
+        dry_run: false,
+        check: false,
+        incremental: true,
+        native_comp: false,
+        skip_build: false,
+        no_byte_compile: false,
+        features: Vec::new(),
+        aot_preload: AotPreloadMode::Disabled,
+    };
+    let paths = pipeline_paths(&options);
+
+    run_leim_list_generation(&options, &paths, &[]).expect_err("the step must fail");
+    assert!(
+        !lisp.join("leim/leim-list.el").exists(),
+        "a failed update left a partial list that would pass an mtime check"
+    );
+    fs::remove_dir_all(&repo).ok();
 }
 
 #[test]
@@ -2771,6 +3117,7 @@ fn generated_unidata_source_files_match_gnu_gen_clean_shape() {
         cargo_jobs: CargoJobBudget::Inherit,
         dry_run: false,
         check: false,
+        incremental: false,
         native_comp: false,
         skip_build: false,
         no_byte_compile: false,
@@ -3482,6 +3829,7 @@ fn a_no_byte_compile_run_deletes_no_bytecode_it_will_not_put_back() {
         cargo_jobs: CargoJobBudget::Inherit,
         dry_run: false,
         check: false,
+        incremental: false,
         native_comp: false,
         skip_build: false,
         no_byte_compile: true,
@@ -3544,6 +3892,7 @@ fn a_recompiling_run_clears_primary_but_keeps_secondary_loaddefs_bytecode() {
         cargo_jobs: CargoJobBudget::Inherit,
         dry_run: false,
         check: false,
+        incremental: false,
         native_comp: false,
         skip_build: false,
         no_byte_compile: false,
@@ -3608,6 +3957,7 @@ fn full_loaddefs_regeneration_keeps_secondary_bootstrap_seeds_loadable() {
         cargo_jobs: CargoJobBudget::Inherit,
         dry_run: false,
         check: false,
+        incremental: false,
         native_comp: false,
         skip_build: false,
         no_byte_compile: false,

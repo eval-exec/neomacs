@@ -80,7 +80,7 @@ impl Stage {
 
 #[derive(Debug)]
 pub(crate) struct StageReport {
-    pub(crate) stage: Stage,
+    stage: Stage,
     pub(crate) files: Vec<PathBuf>,
     pub(crate) total: usize,
 }
@@ -437,7 +437,11 @@ fn generated_report(paths: &PipelinePaths) -> Result<GeneratedReport> {
             .map(|rel| paths.lisp_root.join(rel))
             .collect::<Vec<_>>();
         leim_total += outputs.len();
-        if generated_outputs_need_rebuild(&outputs, std::slice::from_ref(&source)) {
+        // The converter is a prerequisite the build tracks explicitly: a
+        // bootstrap-clean build used to force these outputs, so an incremental
+        // build must still regenerate them when the conversion code changes.
+        let converter = paths.lisp_root.join("international/titdic-cnv.el");
+        if generated_outputs_need_rebuild(&outputs, &[source, converter]) {
             leim.extend(outputs);
         }
     }
@@ -451,6 +455,9 @@ fn generated_report(paths: &PipelinePaths) -> Result<GeneratedReport> {
         && (!leim.is_empty() || {
             let mut dependencies = leim_generated_output_paths(paths);
             dependencies.push(leim_ext);
+            // The updater that writes the list, tracked explicitly so an
+            // incremental build regenerates it when the code changes.
+            dependencies.push(paths.lisp_root.join("international/quail.el"));
             generated_file_needs_rebuild(&paths.lisp_root.join("leim/leim-list.el"), &dependencies)
         });
 
