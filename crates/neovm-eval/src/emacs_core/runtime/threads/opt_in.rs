@@ -19,7 +19,7 @@ use neovm_value::value::Value;
 /// Option A): Step 1 (E6-P.4) lands the full production route dormant (`false`)
 /// with zero temporary env doors; Step 3 (ADMISSION-ON) flips this single switch
 /// to `true` after `b6` passes on the attested GNU Emacs 31.1 oracle.
-const PRODUCTION_ADMISSION_ENABLED: bool = false;
+const PRODUCTION_ADMISSION_ENABLED: bool = true;
 
 #[cfg(test)]
 static TEST_ADMISSION_OVERRIDE: std::sync::atomic::AtomicBool =
