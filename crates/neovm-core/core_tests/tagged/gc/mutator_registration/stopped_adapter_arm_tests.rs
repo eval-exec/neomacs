@@ -441,7 +441,7 @@ fn stopped_major_admits_and_sweeps_mapped_weak_table_pre_partition() {
     drop(mapped_guard);
 }
 
-/// #16441 Bug 2 (post-partition): after `promote_and_blacken` promotes a
+/// #16441 Bug 2 (post-partition): after `promote_and_blacken_world_stopped` promotes a
 /// loader-stamped boxed weak hash table to `generation.permanent()` and
 /// blackens a mapped weak hash table (registering both in
 /// `always_swept_weak_tables`), a stopped major collection admits BOTH, sweeps
@@ -461,7 +461,7 @@ fn stopped_major_admits_and_sweeps_permanent_and_mapped_weak_tables_post_partiti
         .expect("make perm weak table");
     let _stamp = unsafe { context.tagged_heap_mut() }.note_image_object(perm_table);
 
-    // First full collection runs `promote_and_blacken`: `perm_table` becomes
+    // First full collection runs `promote_and_blacken_world_stopped`: `perm_table` becomes
     // `generation.permanent()`, `mapped_table` becomes blackened, and both are
     // registered in `always_swept_weak_tables`.
     context.gc_collect_exact();

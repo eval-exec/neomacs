@@ -324,7 +324,12 @@ fn born_black_children_trace_without_consuming_promotion_logs() {
     phase.stop();
     let headers_before = phase.current_mutator_gc().black_born.clone();
     let regions_before = phase.current_mutator_gc().black_born_regions.len();
-    phase.trace_black_born_children_world_stopped();
+    // SAFETY: serial fixture; the stimulus is the helper alone, as before.
+    unsafe {
+        StoppedWorldProof::with_stopped_world(&mut phase, |heap, stopped| {
+            heap.trace_black_born_children_world_stopped(stopped)
+        })
+    };
     phase.incremental_drain_all();
     assert!(phase.is_value_marked(cons_child));
     assert!(phase.is_value_marked(vector_child));
@@ -334,7 +339,12 @@ fn born_black_children_trace_without_consuming_promotion_logs() {
         regions_before
     );
     assert_eq!(cons_births(&phase), [born_cons]);
-    phase.trace_black_born_children_world_stopped();
+    // SAFETY: serial fixture; the stimulus is the helper alone, as before.
+    unsafe {
+        StoppedWorldProof::with_stopped_world(&mut phase, |heap, stopped| {
+            heap.trace_black_born_children_world_stopped(stopped)
+        })
+    };
     phase.incremental_drain_all();
     assert_eq!(phase.current_mutator_gc().black_born, headers_before);
     assert_eq!(
@@ -364,7 +374,12 @@ fn born_black_weak_table_registers_before_weak_decisions() {
     table.insert(key.to_hash_key(&HashTableTest::Eq), key, value);
     let owner = roots.keep(phase.alloc_hash_table(table));
     phase.stop();
-    phase.trace_black_born_children_world_stopped();
+    // SAFETY: serial fixture; the stimulus is the helper alone, as before.
+    unsafe {
+        StoppedWorldProof::with_stopped_world(&mut phase, |heap, stopped| {
+            heap.trace_black_born_children_world_stopped(stopped)
+        })
+    };
     phase.incremental_drain_all();
     assert!(
         phase

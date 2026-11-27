@@ -273,7 +273,7 @@ impl TaggedHeap {
         if self.generational.enabled {
             self.generational.promo.clear();
             if self.generational.major_in_progress {
-                self.reset_generational_remembered_world_stopped();
+                self.reset_generational_remembered_world_stopped(stopped);
             }
             for mutator in self.mutators_mut() {
                 debug_assert!(mutator.black_cons_region_start.is_none());
@@ -415,7 +415,7 @@ impl TaggedHeap {
         self.clear_dirty_writes();
         self.seed_internal_runtime_roots();
         if self.is_minor_collection() {
-            self.seed_generational_remembered();
+            self.seed_generational_remembered(stopped);
         }
         if partitioned && !self.is_minor_collection() {
             // Re-scan dumped/tenured objects mutated to point at young heap
@@ -478,11 +478,11 @@ impl TaggedHeap {
     /// image's equivalent for heap-reconstructed rows); every other survivor
     /// is a runtime object and is tenured old (GEN1) or left young (GEN0), so
     /// full collections keep tracing it and the sweep can free it when dead.
-    pub(super) fn promote_and_blacken(&mut self) {
+    pub(super) fn promote_and_blacken_world_stopped(&mut self, stopped: &StoppedWorldProof<'_>) {
         // An open region's reserved slots would be classified (and its full
         // pages retired) as survivors.
         self.close_alloc_regions();
-        self.join_old_boxes_for_partition_world_stopped();
+        self.join_old_boxes_for_partition_world_stopped(stopped);
         // 1. Classify every surviving heap object. The first partition cycle
         //    ran a full trace+sweep, so everything still in `all_objects` is
         //    alive. An image resident (the pdump loader stamped it when it
@@ -532,7 +532,7 @@ impl TaggedHeap {
                     }
                     None if self.generational.enabled => {
                         (*obj).promote_to_old_generation();
-                        self.link_old_object_world_stopped(obj);
+                        self.link_old_object_world_stopped(stopped, obj);
                     }
                     None => {
                         (*obj).next = young_head;
@@ -603,11 +603,11 @@ impl TaggedHeap {
         //    otherwise miss. It covers page-tenured owners too — see the
         //    page walk inside `scan_permanents_for_young_children`.
         self.scan_permanents_for_young_children();
-        self.clear_black_births_world_stopped();
+        self.clear_black_births_world_stopped(stopped);
     }
 
     /// Stage-3 promotion page walk (see the call site in
-    /// `promote_and_blacken` for the full rationale). One-shot: runs only at
+    /// `promote_and_blacken_world_stopped` for the full rationale). One-shot: runs only at
     /// the single promotion of the first partition cycle.
     pub(super) fn promote_arena_pages(&mut self) {
         // A retired page's slots are all permanent image residents, so the
@@ -1139,7 +1139,7 @@ impl TaggedHeap {
     /// read "unmarked" at termination, and the weak sweep removed entries
     /// whose weak side was live image data reachable only through, say, a
     /// symbol's value cell (GNU keeps them). Image objects are never freed,
-    /// and `promote_and_blacken` marks every one of them at the end of this
+    /// and `promote_and_blacken_world_stopped` marks every one of them at the end of this
     /// same cycle, which is what every later cycle reads; this answers the
     /// same way one cycle earlier. The stop-the-world first cycle reads the
     /// side bits, which its pre-mark (`premark_mapped_image`) has set for
@@ -1186,7 +1186,7 @@ impl TaggedHeap {
             // Heap-owned non-cons: every such object starts with a `GcHeader`
             // (`StringObj`/`FloatObj` headers and `VecLikeHeader.gc` are all
             // at offset 0). TENURED SHORT-CIRCUIT before the bit read:
-            // `promote_and_blacken` never removes tenured objects from
+            // `promote_and_blacken_world_stopped` never removes tenured objects from
             // `non_cons_object_addrs`, and a tenured bit froze at promotion,
             // so interpreting it against the current parity would read
             // "unmarked" on every other cycle — spurious partition/tricolor
@@ -2456,9 +2456,9 @@ impl TaggedHeap {
         // allocation is still live until `sweep_objects` runs below.
         #[cfg(feature = "gc-memory-telemetry")]
         memory_telemetry::observe(self, memory_telemetry::Phase::FinalMark);
-        self.promote_survivors_world_stopped();
+        self.promote_survivors_world_stopped(stopped);
         self.unchain_dead_markers();
-        self.reset_generational_remembered_world_stopped();
+        self.reset_generational_remembered_world_stopped(stopped);
 
         // -- Sweep phase --
         let cons_live_bytes = self.sweep_cons();
@@ -2466,7 +2466,7 @@ impl TaggedHeap {
             self.begin_old_sweep_world_stopped(stopped);
             self.sweep_old_objects_slice(stopped, usize::MAX);
         }
-        let object_live_bytes = self.sweep_objects();
+        let object_live_bytes = self.sweep_objects(stopped);
         // Object arena pages: the intrusive-list sweep above never sees page
         // floats/strings/vectors; their page sweeps are the second half of
         // the eager sweep. Survivor bytes are VARIABLE-size
@@ -2490,7 +2490,7 @@ impl TaggedHeap {
         // in its own pass, the way GNU's `sweep_conses` does.
         let _released_object_pages = self.release_empty_object_pages();
         if self.generational.major_in_progress {
-            self.recompute_old_bytes_world_stopped();
+            self.recompute_old_bytes_world_stopped(stopped);
         }
         self.live_bytes = cons_live_bytes
             .saturating_add(object_live_bytes)
@@ -2508,9 +2508,9 @@ impl TaggedHeap {
         // Promote them to the tenured old generation and blacken the dump so
         // all later cycles skip both regions.
         if self.partition_dump && !self.dump_blackened {
-            self.promote_and_blacken();
+            self.promote_and_blacken_world_stopped(stopped);
             self.dump_blackened = true;
-            self.recompute_old_bytes_world_stopped();
+            self.recompute_old_bytes_world_stopped(stopped);
         }
         if self.generational.enabled {
             self.finish_generation_pacing();

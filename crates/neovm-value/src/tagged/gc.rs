@@ -523,7 +523,7 @@ pub struct TaggedHeap {
     /// minor, so any of them would otherwise never re-register itself for the
     /// weak sweep and its entries would be pinned forever (a weak-table leak:
     /// GNU re-sweeps every weak table on every GC). Populated by
-    /// `promote_and_blacken` and `promote_arena_pages` (every weak-table
+    /// `promote_and_blacken_world_stopped` and `promote_arena_pages` (every weak-table
     /// survivor) and at mapped-dump registration; seeded into
     /// `weak_hash_tables` at the start of every `mark_and_sweep_weak_tables`
     /// so these tables are swept against the CURRENT cycle's marks exactly
@@ -768,7 +768,7 @@ pub struct TaggedHeap {
     /// linked here — the list sweeps free with `Box::from_raw`.
     all_objects: *mut GcHeader,
     /// Intrusive linked list of TENURED non-cons heap objects (the old
-    /// generation). Filled at first-cycle promotion (`promote_and_blacken`);
+    /// generation). Filled at first-cycle promotion (`promote_and_blacken_world_stopped`);
     /// these are permanently black and are NEVER cleared or swept, so the
     /// minor-GC walk skips them entirely. Freed only at heap teardown.
     tenured_objects: *mut GcHeader,

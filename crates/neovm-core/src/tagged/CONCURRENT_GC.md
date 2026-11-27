@@ -112,7 +112,7 @@ should_run_concurrent = if partition_dump { dump_blackened }
 ```
 
 - WITH a dump partition: concurrent runs once the mapped pdump image has been
-  promoted + blackened (`promote_and_blacken` at the first partition cycle's
+  promoted + blackened (`promote_and_blacken_world_stopped` at the first partition cycle's
   sweep end sets `dump_blackened`). The first partition cycle itself is the STW
   full trace that does the promotion.
 - WITHOUT a dump (a **dump-less heap**): concurrent runs after the bootstrap
@@ -430,7 +430,7 @@ the newest block or page's bump tail, else a fresh one).
   list — a free-list run closed after that would be pushed onto the list the
   sweep rebuilds and handed out twice — the sweep slices, `sweep_cons`,
   `sweep_objects`, the page sweep, `complete_collection`,
-  `begin_stw_collection`, `promote_and_blacken`, `reset_bytes_since_gc`);
+  `begin_stw_collection`, `promote_and_blacken_world_stopped`, `reset_bytes_since_gc`);
   the verifiers, the block/page releases and `layout_stats` assert it.
   Closing unmarks a black region's unused tail and gives it back: a bump
   tail still ending at the limit rewinds its cursor (keeping "bits at or

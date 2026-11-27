@@ -228,7 +228,7 @@ fn replacing_hash_table_inside_edit_keeps_writer_and_depth() {
 /// inside a non-contiguous `[dump_addr_lo, dump_addr_hi)` span created by
 /// mapped image registrations, `TableMut::edit` treats it as boxed (`!mapped`)
 /// and sets `header.remembered = Logged`. Stopped collection clearers
-/// (`trace_work` and `reset_generational_remembered_world_stopped`) must use
+/// (`trace_collection_work_world_stopped` and `reset_generational_remembered_world_stopped`) must use
 /// the same boxed authority (`!owner_is_mapped || flags.boxed()`), otherwise
 /// the header stays stuck `Logged` after minor 1, the second `TableMut::edit`
 /// fails to re-log the table, and minor 2 collects the live young child.

@@ -37,6 +37,33 @@ use super::{HeapIdentity, StoppedWorldEntry, TaggedHeap};
 use std::marker::PhantomData;
 use std::rc::Rc;
 
+/// `TaggedHeap` methods named `*_world_stopped` whose premise is not a
+/// stopped-world capability parameter, each with that premise (#859).
+///
+/// Every other `TaggedHeap` method with the suffix takes a
+/// `StoppedWorldProof`, `StoppedMutatorsProof` or
+/// `ParallelStoppedMutatorsProof`. The architecture guard
+/// `c12_relinking_helpers_are_reached_only_through_proof_gated_entries`
+/// reads this table from source and fails both ways: a suffixed method
+/// without a proof that is not listed here, and a listed method that has
+/// gained a proof. Typing these premises is the next class.
+#[expect(
+    dead_code,
+    reason = "data for the architecture guard, which reads it from source"
+)]
+pub(super) const WORLD_STOPPED_PREMISE_EXCEPTIONS: [(&str, &str); 2] = [
+    (
+        "publish_persistent_remembered_world_stopped",
+        "marker joined, mutators parked, mark unfinished: finish_concurrent_mark \
+         calls it before the mark completes, where no StoppedWorldProof can be minted",
+    ),
+    (
+        "admit_threads_world_stopped",
+        "the caller's unsafe contract: sole stopped Context, marker launches \
+         excluded, collector quiescent; neovm-eval's admission commit holds no proof",
+    ),
+];
+
 /// Thread-confined, non-escaping, lifetime-invariant proof that all mutators
 /// of the identified [`TaggedHeap`] are stopped (no concurrent or TLS-aliased
 /// writer, no unfinished concurrent marker, none launched since the mint) for
@@ -361,6 +388,28 @@ mod tests {
         );
     }
 
+    /// #859: `publish_persistent_remembered_world_stopped` is the listed
+    /// premise exception (marker joined, mark unfinished). Wrapping it in
+    /// the serial mint during an unfinished mark is the mint's refusal; the
+    /// body never runs, so the exception cannot be admitted that way.
+    #[test]
+    fn premise_exception_wrapped_in_the_serial_mint_is_refused_during_an_unfinished_mark() {
+        let mut heap = TaggedHeap::new();
+        record_mark_only_in_side_table(&mut heap);
+        let ran = std::cell::Cell::new(false);
+        let message = panic_message(|| unsafe {
+            StoppedWorldProof::with_stopped_world(&mut heap, |heap, _| {
+                ran.set(true);
+                heap.publish_persistent_remembered_world_stopped();
+            });
+        });
+        assert_eq!(
+            message,
+            "StoppedWorldProof::with_stopped_world: a concurrent mark is unfinished"
+        );
+        assert!(!ran.get(), "the refusal precedes the body");
+    }
+
     #[test]
     fn every_gated_entry_rejects_a_side_table_only_mark_recorded_after_the_mint_by_name() {
         for (name, entry) in gated_entries() {
@@ -402,7 +451,7 @@ mod tests {
         }
     }
 
-    /// #859: `promote_and_blacken` relinks `all_objects` on the premise that
+    /// #859: `promote_and_blacken_world_stopped` relinks `all_objects` on the premise that
     /// the sweep completed, so the entry refuses a pending mark or sweep even
     /// with a valid proof.
     #[test]

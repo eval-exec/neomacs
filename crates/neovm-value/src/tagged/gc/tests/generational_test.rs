@@ -247,7 +247,12 @@ fn reset_generational_remembered_clears_boxed_owner_inside_non_contiguous_mapped
 
     // Stopped reset must clear `header.remembered` even though `table` lies inside
     // `[dump_addr_lo, dump_addr_hi)`.
-    heap.reset_generational_remembered_world_stopped();
+    // SAFETY: serial fixture; sole owner, no marker, no callback.
+    unsafe {
+        StoppedWorldProof::with_stopped_world(&mut heap, |heap, stopped| {
+            heap.reset_generational_remembered_world_stopped(stopped)
+        })
+    };
     assert!(
         !header(table).is_remembered(),
         "#876: reset_generational_remembered_world_stopped left bracketed boxed table stuck Logged"

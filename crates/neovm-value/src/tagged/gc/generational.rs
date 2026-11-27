@@ -90,7 +90,7 @@ impl TaggedHeap {
     /// all registered mutators. Today the iterator yields exactly one.
     #[cold]
     #[inline(never)]
-    pub(super) fn seed_generational_remembered(&mut self) {
+    pub(super) fn seed_generational_remembered(&mut self, stopped: &StoppedWorldProof<'_>) {
         if !self.generational.enabled {
             return;
         }
@@ -117,7 +117,7 @@ impl TaggedHeap {
                 self.push_value_children_to_gray(owner, "generational-remembered");
             }
         }
-        self.trace_dirty_card_owners_world_stopped();
+        self.trace_dirty_card_owners_world_stopped(stopped);
     }
 
     /// Merge current-mutator persistent additions only under collector
@@ -171,12 +171,17 @@ impl TaggedHeap {
     /// Clear a remembered non-cons owner's `header.remembered` claim when the
     /// owner carries a heap-owned header claim. Shared by every stopped
     /// clearer (`reset_generational_remembered_world_stopped` and
-    /// `mutator_registration::collection::trace_work`).
+    /// `trace_collection_work_world_stopped` in `mutator_registration::collection`).
+    /// Both hold a `StoppedWorldProof`.
     ///
     /// # Safety
     /// All mutators/appenders are stopped, the collector holds exclusive heap
     /// access before sweep, and `owner` names a live remembered object.
-    pub(super) unsafe fn clear_remembered_header_world_stopped(&self, owner: TaggedValue) {
+    pub(super) unsafe fn clear_remembered_header_world_stopped(
+        &self,
+        _stopped: &StoppedWorldProof<'_>,
+        owner: TaggedValue,
+    ) {
         // SAFETY: caller upholds stop-all exclusion and live-owner contract.
         if let Some(header) = unsafe { self.remembered_owner_has_header_claim(owner) } {
             // SAFETY: all appenders are stopped and no header has been freed yet.
@@ -191,7 +196,10 @@ impl TaggedHeap {
     /// appended during the later cooperative sweep belong to the next cycle.
     #[cold]
     #[inline(never)]
-    pub(super) fn reset_generational_remembered_world_stopped(&mut self) {
+    pub(super) fn reset_generational_remembered_world_stopped(
+        &mut self,
+        stopped: &StoppedWorldProof<'_>,
+    ) {
         if !self.generational.enabled {
             return;
         }
@@ -200,7 +208,7 @@ impl TaggedHeap {
         // chunk's slot was logged when its summary went dirty, so cleaning
         // the logged slots cleans every card. Only conses have cards; slot
         // owners leave through their logged headers below.
-        self.scan_dirty_card_slots_world_stopped();
+        self.scan_dirty_card_slots_world_stopped(stopped);
         let slots = self
             .card_slots_mut()
             .map(CardSlots::take_dirty)
@@ -222,7 +230,7 @@ impl TaggedHeap {
                 "an owned cons in the remembered set"
             );
             // SAFETY: all appenders are stopped, and no header has been freed.
-            unsafe { self.clear_remembered_header_world_stopped(owner) };
+            unsafe { self.clear_remembered_header_world_stopped(stopped, owner) };
         }
     }
 
@@ -444,7 +452,7 @@ impl TaggedHeap {
     /// has joined; no mutator can publish a store until this finishes.
     #[cold]
     #[inline(never)]
-    pub(super) fn promote_survivors_world_stopped(&mut self) {
+    pub(super) fn promote_survivors_world_stopped(&mut self, stopped: &StoppedWorldProof<'_>) {
         if !self.generational.enabled {
             return;
         }
@@ -461,7 +469,7 @@ impl TaggedHeap {
             // itself. A marked one behind a clean card was reached another
             // way, but the next minor would miss it.
             self.verify_dump_partition();
-            self.verify_old_cons_edge_cards_world_stopped();
+            self.verify_old_cons_edge_cards_world_stopped(stopped);
         }
         let partition_first = self.partition_dump && !self.dump_blackened;
         let mut headers = std::mem::take(&mut self.generational.promo);
@@ -547,7 +555,7 @@ impl TaggedHeap {
             })
             .expect("promotion requires every young-only loan returned");
         if self.generational.verify {
-            self.verify_age_mirror_world_stopped();
+            self.verify_age_mirror_world_stopped(stopped);
         }
         let newly_promoted_cons_bytes = promoted.saturating_mul(size_of::<ConsCell>());
         self.generational.old_bytes = self
@@ -563,7 +571,7 @@ impl TaggedHeap {
             newly_promoted_header_bytes.saturating_add(newly_promoted_cons_bytes),
         );
         if !partition_first {
-            self.clear_black_births_world_stopped();
+            self.clear_black_births_world_stopped(stopped);
         }
     }
 
@@ -571,7 +579,7 @@ impl TaggedHeap {
     /// prevents a new collection until deferred first-partition promotion ends.
     #[cold]
     #[inline(never)]
-    pub(super) fn clear_black_births_world_stopped(&mut self) {
+    pub(super) fn clear_black_births_world_stopped(&mut self, _stopped: &StoppedWorldProof<'_>) {
         for mutator in self.mutators_mut() {
             debug_assert!(mutator.black_cons_region_start.is_none());
             debug_assert!(mutator.black_float_region_start.is_none());
@@ -598,7 +606,11 @@ impl TaggedHeap {
 
     /// Add a promoted Box survivor to the old list under collector exclusion.
     #[inline]
-    pub(super) unsafe fn link_old_object_world_stopped(&mut self, ptr: *mut GcHeader) {
+    pub(super) unsafe fn link_old_object_world_stopped(
+        &mut self,
+        _stopped: &StoppedWorldProof<'_>,
+        ptr: *mut GcHeader,
+    ) {
         let header = unsafe { &mut *ptr };
         debug_assert!(header.tenured && !header.generation.permanent());
         header.marked.store(UNMARKED_AT_REST, Ordering::Relaxed);
@@ -683,7 +695,7 @@ impl TaggedHeap {
 
     /// Find the dirty chunk slots by scanning the summaries. With every
     /// mutator stopped.
-    pub(super) fn scan_dirty_card_slots_world_stopped(&mut self) {
+    pub(super) fn scan_dirty_card_slots_world_stopped(&mut self, _stopped: &StoppedWorldProof<'_>) {
         let Some(census) = self.census.as_deref_mut() else {
             return;
         };
@@ -768,11 +780,11 @@ impl TaggedHeap {
     /// With every mutator stopped; an aliased card only adds owners.
     #[cold]
     #[inline(never)]
-    fn trace_dirty_card_owners_world_stopped(&mut self) {
+    fn trace_dirty_card_owners_world_stopped(&mut self, stopped: &StoppedWorldProof<'_>) {
         if self.card_table().is_none() {
             return;
         }
-        self.scan_dirty_card_slots_world_stopped();
+        self.scan_dirty_card_slots_world_stopped(stopped);
         let slots = self.card_slots().map_or(0, |slots| slots.dirty().len());
         for slot_index in 0..slots {
             let Some((chunk, blocks)) = self.dirty_slot_blocks(slot_index) else {
@@ -826,7 +838,10 @@ impl TaggedHeap {
     /// mode with every mutator stopped, before promotion and the card reset.
     #[cold]
     #[inline(never)]
-    pub(super) fn verify_old_cons_edge_cards_world_stopped(&self) {
+    pub(super) fn verify_old_cons_edge_cards_world_stopped(
+        &self,
+        _stopped: &StoppedWorldProof<'_>,
+    ) {
         for block in &self.cons_blocks {
             for word in 0..cons_mark_words(block.next_index()) {
                 let mut old = block.trailer().old_word(word);
@@ -853,7 +868,7 @@ impl TaggedHeap {
     /// major promotion, the only writers of either copy.
     #[cold]
     #[inline(never)]
-    fn verify_age_mirror_world_stopped(&self) {
+    fn verify_age_mirror_world_stopped(&self, _stopped: &StoppedWorldProof<'_>) {
         for block in &self.cons_blocks {
             assert!(
                 block.trailer().ages_match_old_bits(),

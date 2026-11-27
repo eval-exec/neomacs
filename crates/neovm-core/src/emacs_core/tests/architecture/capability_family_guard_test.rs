@@ -1354,43 +1354,312 @@ fn c12_production_reach_walk_refuses_every_route_into_a_test_file() {
     );
 }
 
-// --- #859 item 3, class closure: relinking helpers are reachable only
-// through a proof-gated entry ---
+// --- #859 item 3, class closure: stopped-world helpers hold the proof ---
 //
-// `promote_and_blacken` relinks `all_objects` on the premise that the sweep
-// completed; the other helpers recompute or rebase state that the same
-// premise protects. Rule: every production call of one of them sits in a
-// `C12_PROOF_GATED_ENTRIES` entry (which asserts its `StoppedWorldProof`
-// first) or in another helper of this set, and no helper is used as a value.
-// Since the helpers are only reachable that way, any safe path to one passes
-// through a gated entry. The set itself is hand-kept: a new relinking helper
-// must be added here (tracked on #859).
+// A `TaggedHeap` method named `*_world_stopped` runs on the premise that
+// the world is stopped; `promote_and_blacken_world_stopped` relinks
+// `all_objects` on it. The premise is a type: such a method takes a
+// `&StoppedWorldProof`, so rustc refuses a caller that holds none. The set
+// is derived from the source, not kept by hand:
+// - every fn of an `impl TaggedHeap` (inherent or trait) whose name ends
+//   `_world_stopped` takes a stopped-family proof parameter
+//   (`STOPPED_PROOF_TYPES`), unless the production table
+//   `WORLD_STOPPED_PREMISE_EXCEPTIONS` (read from source) lists it with its
+//   premise; a listed exception that takes one is a stale entry;
+// - every production call of a helper taking a `StoppedWorldProof` sits in
+//   an inherent `impl TaggedHeap` fn that itself takes one, so no helper is
+//   reached from a fresh mint inside some other fn;
+// - no derived helper is named by path or inside a macro body.
+// Limit: the class is "claims the premise by name". A relinking fn named
+// without the suffix and taking no proof is not detected (#859).
 
-const RELINKING_HELPERS: [&str; 4] = [
-    "promote_and_blacken",
+/// The production exception table and the file that must define it.
+const PREMISE_EXCEPTIONS_CONST: &str = "WORLD_STOPPED_PREMISE_EXCEPTIONS";
+const PREMISE_EXCEPTIONS_FILE: &str = "neovm-value/src/tagged/gc/stopped_world_proof.rs";
+
+/// Reads `[(name, premise), ..]` from the one production definition of
+/// `WORLD_STOPPED_PREMISE_EXCEPTIONS`; any other shape fails closed.
+fn premise_exceptions(sources: &[(String, String)], problems: &mut Vec<String>) -> Vec<String> {
+    let lit = |expr: &syn::Expr| match expr {
+        syn::Expr::Lit(syn::ExprLit {
+            lit: syn::Lit::Str(s),
+            ..
+        }) => Some(s.value()),
+        _ => None,
+    };
+    let mut found = Vec::new();
+    for (file, source) in sources {
+        let Ok(ast) = syn::parse_file(source) else {
+            continue;
+        };
+        for item in &ast.items {
+            if let syn::Item::Const(item) = item
+                && item.ident == PREMISE_EXCEPTIONS_CONST
+            {
+                found.push((file.clone(), item.expr.clone()));
+            }
+        }
+    }
+    let [(file, expr)] = found.as_slice() else {
+        problems.push(format!(
+            "`{PREMISE_EXCEPTIONS_CONST}` must be defined exactly once at a module's top level, found {} (fail closed)",
+            found.len()
+        ));
+        return Vec::new();
+    };
+    if !file.ends_with(PREMISE_EXCEPTIONS_FILE) {
+        problems.push(format!(
+            "`{PREMISE_EXCEPTIONS_CONST}` is defined in {file}, not {PREMISE_EXCEPTIONS_FILE} (fail closed)"
+        ));
+    }
+    let syn::Expr::Array(array) = &**expr else {
+        problems.push(format!(
+            "`{PREMISE_EXCEPTIONS_CONST}` is not an array literal (fail closed)"
+        ));
+        return Vec::new();
+    };
+    let mut names = Vec::new();
+    for entry in &array.elems {
+        match entry {
+            syn::Expr::Tuple(tuple) if tuple.elems.len() == 2 => {
+                match (lit(&tuple.elems[0]), lit(&tuple.elems[1])) {
+                    (Some(name), Some(premise)) if !premise.trim().is_empty() => names.push(name),
+                    _ => problems.push(format!(
+                        "`{PREMISE_EXCEPTIONS_CONST}` entry is not (name, non-empty premise) string literals (fail closed)"
+                    )),
+                }
+            }
+            _ => problems.push(format!(
+                "`{PREMISE_EXCEPTIONS_CONST}` entry is not a 2-tuple (fail closed)"
+            )),
+        }
+    }
+    names
+}
+
+/// The stopped-world capability types a `_world_stopped` helper may take.
+const STOPPED_PROOF_TYPES: [&str; 3] = [
+    "StoppedWorldProof",
+    "StoppedMutatorsProof",
+    "ParallelStoppedMutatorsProof",
+];
+
+/// What a signature's parameters prove. Ordered weakest first, so a name
+/// defined more than once (cfg variants) keeps its weakest definition.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
+enum StoppedProof {
+    None,
+    /// `StoppedMutatorsProof` or `ParallelStoppedMutatorsProof` only.
+    Mutators,
+    /// A `StoppedWorldProof`: the C12 relinking premise.
+    World,
+}
+
+/// Non-vacuity floor: the helpers #859 item 3 named stay in the derived set.
+const WORLD_STOPPED_FLOOR: [&str; 4] = [
+    "promote_and_blacken_world_stopped",
     "join_old_boxes_for_partition_world_stopped",
     "recompute_old_bytes_world_stopped",
     "refresh_generation_major_baseline_world_stopped",
 ];
 
-struct RelinkVisitor<'a> {
+const WORLD_STOPPED_SUFFIX: &str = "_world_stopped";
+
+fn stopped_proof(sig: &syn::Signature) -> StoppedProof {
+    struct Mentions(StoppedProof);
+    impl<'ast> Visit<'ast> for Mentions {
+        fn visit_path_segment(&mut self, seg: &'ast syn::PathSegment) {
+            let kind = if seg.ident == "StoppedWorldProof" {
+                StoppedProof::World
+            } else if STOPPED_PROOF_TYPES.iter().any(|ty| seg.ident == ty) {
+                StoppedProof::Mutators
+            } else {
+                StoppedProof::None
+            };
+            self.0 = self.0.max(kind);
+            visit::visit_path_segment(self, seg);
+        }
+    }
+    let mut mentions = Mentions(StoppedProof::None);
+    for arg in &sig.inputs {
+        if let syn::FnArg::Typed(typed) = arg {
+            mentions.visit_type(&typed.ty);
+        }
+    }
+    mentions.0
+}
+
+/// Identifier tokens of a macro body, recursively. Literals are skipped, so
+/// a message string that names a helper is not a reference to it.
+fn macro_idents(tokens: proc_macro2::TokenStream, out: &mut Vec<String>) {
+    for tree in tokens {
+        match tree {
+            proc_macro2::TokenTree::Ident(ident) => out.push(ident.to_string()),
+            proc_macro2::TokenTree::Group(group) => macro_idents(group.stream(), out),
+            proc_macro2::TokenTree::Punct(_) | proc_macro2::TokenTree::Literal(_) => {}
+        }
+    }
+}
+
+/// One derived `_world_stopped` name: its weakest definition's proof, and
+/// where that definition is and which parameter types it has.
+struct WorldStoppedSig {
+    proof: StoppedProof,
+    at: String,
+    params: String,
+}
+
+/// Typed parameters rendered as `name: Type`, for the failure message.
+fn parameter_types(sig: &syn::Signature) -> String {
+    fn ty(t: &syn::Type) -> String {
+        match t {
+            syn::Type::Reference(r) => {
+                format!(
+                    "&{}{}",
+                    if r.mutability.is_some() { "mut " } else { "" },
+                    ty(&r.elem)
+                )
+            }
+            syn::Type::Ptr(p) => {
+                format!(
+                    "*{} {}",
+                    match p.mutability {
+                        syn::PointerMutability::Mut(_) => "mut",
+                        syn::PointerMutability::Const(_) => "const",
+                    },
+                    ty(&p.elem)
+                )
+            }
+            syn::Type::Path(p) => p
+                .path
+                .segments
+                .iter()
+                .map(|seg| seg.ident.to_string())
+                .collect::<Vec<_>>()
+                .join("::"),
+            _ => "_".to_owned(),
+        }
+    }
+    sig.inputs
+        .iter()
+        .filter_map(|arg| match arg {
+            syn::FnArg::Typed(typed) => Some(match &*typed.pat {
+                syn::Pat::Ident(pat) => format!("{}: {}", pat.ident, ty(&typed.ty)),
+                _ => format!("_: {}", ty(&typed.ty)),
+            }),
+            syn::FnArg::Receiver(_) => None,
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// Pass 1: every `_world_stopped` fn of an `impl TaggedHeap`, with whether
+/// each of its definitions takes the proof (a cfg variant without it counts).
+struct WorldStoppedSigs<'a> {
     file: &'a str,
     excluded: u32,
     impl_stack: Vec<String>,
-    fn_stack: Vec<String>,
+    sigs: &'a mut BTreeMap<String, WorldStoppedSig>,
+}
+
+impl<'ast> Visit<'ast> for WorldStoppedSigs<'_> {
+    fn visit_item_mod(&mut self, item: &'ast syn::ItemMod) {
+        let ex = production_excluded(&item.attrs);
+        self.excluded += u32::from(ex);
+        visit::visit_item_mod(self, item);
+        self.excluded -= u32::from(ex);
+    }
+
+    fn visit_item_impl(&mut self, item: &'ast syn::ItemImpl) {
+        let ex = production_excluded(&item.attrs);
+        self.excluded += u32::from(ex);
+        self.impl_stack
+            .push(type_name(&item.self_ty).unwrap_or_default());
+        visit::visit_item_impl(self, item);
+        self.impl_stack.pop();
+        self.excluded -= u32::from(ex);
+    }
+
+    fn visit_item_fn(&mut self, item: &'ast syn::ItemFn) {
+        let saved = std::mem::take(&mut self.impl_stack);
+        visit::visit_item_fn(self, item);
+        self.impl_stack = saved;
+    }
+
+    fn visit_impl_item_fn(&mut self, item: &'ast syn::ImplItemFn) {
+        let ex = production_excluded(&item.attrs);
+        let name = item.sig.ident.to_string();
+        if self.excluded == 0
+            && !ex
+            && self.impl_stack.last().is_some_and(|ty| ty == "TaggedHeap")
+            && name.ends_with(WORLD_STOPPED_SUFFIX)
+        {
+            let at = format!("{}:{}", self.file, item.sig.ident.span().start().line);
+            let proof = stopped_proof(&item.sig);
+            let params = parameter_types(&item.sig);
+            self.sigs
+                .entry(name)
+                .and_modify(|sig| {
+                    // Keep the weakest definition (cfg variants).
+                    if proof < sig.proof {
+                        *sig = WorldStoppedSig {
+                            proof,
+                            at: at.clone(),
+                            params: params.clone(),
+                        };
+                    }
+                })
+                .or_insert(WorldStoppedSig { proof, at, params });
+        }
+        self.excluded += u32::from(ex);
+        visit::visit_impl_item_fn(self, item);
+        self.excluded -= u32::from(ex);
+    }
+}
+
+struct RelinkVisitor<'a> {
+    file: &'a str,
+    helpers: &'a BTreeMap<String, WorldStoppedSig>,
+    excluded: u32,
+    impl_stack: Vec<String>,
+    /// Enclosing fn names, each with what its signature proves.
+    fn_stack: Vec<(String, StoppedProof)>,
+    /// Depth of body closures of pinned `StoppedWorldProof` mints
+    /// (`C12_FAMILY_CALLS`) around the current expression; a nested fn item
+    /// resets it.
+    mint_closure: u32,
     calls: &'a mut BTreeMap<String, usize>,
     problems: &'a mut Vec<String>,
 }
 
 impl RelinkVisitor<'_> {
-    /// Only a method of `impl TaggedHeap` itself counts: a free fn or a
-    /// method on another type that merely shares an entry's name does not.
+    /// A helper of the C12 relinking class: every definition takes a
+    /// `StoppedWorldProof`. A listed premise exception never qualifies: one
+    /// that took a proof is already reported stale by the signature rule.
+    fn is_helper(&self, name: &str) -> bool {
+        self.helpers
+            .get(name)
+            .is_some_and(|sig| sig.proof == StoppedProof::World)
+    }
+
+    /// Only an inherent `impl TaggedHeap` method that itself takes the proof
+    /// may call a helper; a free fn, another type's method, a trait impl, or
+    /// a proofless method minting its own proof does not qualify.
+    ///
+    /// Deliberately `StoppedWorldProof`-only, unlike the signature rule,
+    /// which accepts all three families: the relinking premise (sweep
+    /// complete, no unfinished mark, launch epoch unchanged) is what only a
+    /// `StoppedWorldProof` asserts. A `StoppedMutatorsProof` helper states a
+    /// weaker premise and is outside this layer.
     fn caller_allowed(&self) -> bool {
-        self.impl_stack.last().is_some_and(|ty| ty == "TaggedHeap")
-            && self.fn_stack.last().is_some_and(|caller| {
-                super::C12_PROOF_GATED_ENTRIES.contains(&caller.as_str())
-                    || RELINKING_HELPERS.contains(&caller.as_str())
-            })
+        // The body closure of a pinned production mint holds the proof as its
+        // parameter; the family pins fix where such closures may exist.
+        self.mint_closure > 0
+            || self.impl_stack.last().is_some_and(|ty| ty == "TaggedHeap")
+                && self
+                    .fn_stack
+                    .last()
+                    .is_some_and(|(_, proof)| *proof == StoppedProof::World)
     }
 }
 
@@ -1405,8 +1674,7 @@ impl<'ast> Visit<'ast> for RelinkVisitor<'_> {
     fn visit_item_impl(&mut self, item: &'ast syn::ItemImpl) {
         let ex = production_excluded(&item.attrs);
         self.excluded += u32::from(ex);
-        // Only an inherent `impl TaggedHeap` holds the gated entries; a trait
-        // impl's method that shares an entry's name is not that entry.
+        // A trait impl's method is not an inherent proof holder.
         let self_ty = if item.trait_.is_none() {
             type_name(&item.self_ty).unwrap_or_default()
         } else {
@@ -1422,9 +1690,12 @@ impl<'ast> Visit<'ast> for RelinkVisitor<'_> {
         let ex = production_excluded(&item.attrs);
         self.excluded += u32::from(ex);
         let saved = std::mem::take(&mut self.impl_stack);
-        self.fn_stack.push(item.sig.ident.to_string());
+        let saved_mint = std::mem::take(&mut self.mint_closure);
+        self.fn_stack
+            .push((item.sig.ident.to_string(), stopped_proof(&item.sig)));
         visit::visit_item_fn(self, item);
         self.fn_stack.pop();
+        self.mint_closure = saved_mint;
         self.impl_stack = saved;
         self.excluded -= u32::from(ex);
     }
@@ -1432,19 +1703,23 @@ impl<'ast> Visit<'ast> for RelinkVisitor<'_> {
     fn visit_impl_item_fn(&mut self, item: &'ast syn::ImplItemFn) {
         let ex = production_excluded(&item.attrs);
         self.excluded += u32::from(ex);
-        self.fn_stack.push(item.sig.ident.to_string());
+        let saved_mint = std::mem::take(&mut self.mint_closure);
+        self.fn_stack
+            .push((item.sig.ident.to_string(), stopped_proof(&item.sig)));
         visit::visit_impl_item_fn(self, item);
         self.fn_stack.pop();
+        self.mint_closure = saved_mint;
         self.excluded -= u32::from(ex);
     }
 
     fn visit_macro(&mut self, mac: &'ast syn::Macro) {
-        let tokens = mac.tokens.to_string();
+        let mut idents = Vec::new();
+        macro_idents(mac.tokens.clone(), &mut idents);
         if self.excluded == 0
-            && let Some(helper) = RELINKING_HELPERS.iter().find(|h| tokens.contains(*h))
+            && let Some(helper) = idents.iter().find(|ident| self.is_helper(ident))
         {
             self.problems.push(format!(
-                "{}:{}: macro body names relinking helper `{helper}` (unanalysable, fail closed)",
+                "{}:{}: macro body names stopped-world helper `{helper}` (unanalysable, fail closed)",
                 self.file,
                 mac.path.span().start().line
             ));
@@ -1476,18 +1751,67 @@ impl<'ast> Visit<'ast> for RelinkVisitor<'_> {
         visit::visit_expr(self, expr);
     }
 
+    fn visit_expr_call(&mut self, call: &'ast syn::ExprCall) {
+        let mint = match &*call.func {
+            syn::Expr::Path(path) => {
+                let segs: Vec<String> = path
+                    .path
+                    .segments
+                    .iter()
+                    .map(|seg| seg.ident.to_string())
+                    .collect();
+                match segs.as_slice() {
+                    [.., ty, ctor]
+                        if ty == "StoppedWorldProof"
+                            && (ctor == "with_stopped_world" || ctor == "with_all_stopped") =>
+                    {
+                        Some(format!("StoppedWorldProof::{ctor}"))
+                    }
+                    _ => None,
+                }
+            }
+            _ => None,
+        };
+        let enclosing = match (self.impl_stack.last(), self.fn_stack.last()) {
+            (Some(ty), Some((func, _))) if !ty.is_empty() => format!("{ty}::{func}"),
+            (_, Some((func, _))) => func.clone(),
+            _ => String::new(),
+        };
+        let pinned = mint.as_ref().is_some_and(|callee| {
+            C12_FAMILY_CALLS
+                .iter()
+                .any(|&(file, func, pinned_callee, _)| {
+                    file == self.file && func == enclosing && pinned_callee == callee
+                })
+        });
+        if !pinned {
+            visit::visit_expr_call(self, call);
+            return;
+        }
+        self.visit_expr(&call.func);
+        for arg in &call.args {
+            if let syn::Expr::Closure(_) = arg {
+                self.mint_closure += 1;
+                self.visit_expr(arg);
+                self.mint_closure -= 1;
+            } else {
+                self.visit_expr(arg);
+            }
+        }
+    }
+
     fn visit_expr_method_call(&mut self, call: &'ast syn::ExprMethodCall) {
         let name = call.method.to_string();
-        if self.excluded == 0 && RELINKING_HELPERS.contains(&name.as_str()) {
+        if self.excluded == 0 && self.is_helper(&name) {
             *self.calls.entry(name.clone()).or_default() += 1;
             if !self.caller_allowed() {
                 let caller = self
                     .fn_stack
                     .last()
-                    .cloned()
+                    .map(|(caller, _)| caller.clone())
                     .unwrap_or_else(|| "<module>".to_owned());
                 self.problems.push(format!(
-                    "{}:{}: `{caller}` calls relinking helper `{name}` without being a proof-gated entry",
+                    "{}:{}: `{caller}` calls stopped-world helper `{name}` without holding a StoppedWorldProof parameter",
                     self.file,
                     call.method.span().start().line
                 ));
@@ -1499,12 +1823,12 @@ impl<'ast> Visit<'ast> for RelinkVisitor<'_> {
     fn visit_expr_path(&mut self, expr: &'ast syn::ExprPath) {
         if self.excluded == 0
             && let Some(last) = expr.path.segments.last()
-            && RELINKING_HELPERS.contains(&last.ident.to_string().as_str())
+            && self.is_helper(&last.ident.to_string())
         {
             // Covers `Self::helper(..)` / `TaggedHeap::helper(..)` and a
             // helper taken as a value; both bypass the method-call check.
             self.problems.push(format!(
-                "{}:{}: relinking helper `{}` named by path (UFCS call or function value), fail closed",
+                "{}:{}: stopped-world helper `{}` named by path (UFCS call or function value), fail closed",
                 self.file,
                 last.ident.span().start().line,
                 last.ident
@@ -1514,50 +1838,102 @@ impl<'ast> Visit<'ast> for RelinkVisitor<'_> {
     }
 }
 
-fn relink_problems_in(
-    file: &str,
-    source: &str,
-    calls: &mut BTreeMap<String, usize>,
+/// Both passes over `sources`: the derived helper set, then every rule.
+/// Returns the derived set and the production call counts per helper.
+fn world_stopped_problems(
+    sources: &[(String, String)],
+    exceptions: &[String],
     problems: &mut Vec<String>,
-) {
-    let ast = syn::parse_file(source).unwrap_or_else(|error| panic!("parse {file}: {error}"));
-    if production_excluded(&ast.attrs) {
-        return;
+) -> (BTreeMap<String, WorldStoppedSig>, BTreeMap<String, usize>) {
+    let parsed: Vec<(&str, syn::File)> = sources
+        .iter()
+        .map(|(file, source)| {
+            let ast =
+                syn::parse_file(source).unwrap_or_else(|error| panic!("parse {file}: {error}"));
+            (file.as_str(), ast)
+        })
+        .filter(|(_, ast)| !production_excluded(&ast.attrs))
+        .collect();
+    let mut sigs = BTreeMap::new();
+    for (file, ast) in &parsed {
+        WorldStoppedSigs {
+            file,
+            excluded: 0,
+            impl_stack: Vec::new(),
+            sigs: &mut sigs,
+        }
+        .visit_file(ast);
     }
-    RelinkVisitor {
-        file,
-        excluded: 0,
-        impl_stack: Vec::new(),
-        fn_stack: Vec::new(),
-        calls,
-        problems,
+    for (name, sig) in &sigs {
+        let (at, params) = (&sig.at, &sig.params);
+        match (exceptions.iter().any(|exception| exception == name), sig.proof) {
+            (false, StoppedProof::None) => problems.push(format!(
+                "{at}: `{name}` is named `{WORLD_STOPPED_SUFFIX}` but takes no stopped-world proof parameter (accepted: {}; its parameter types: [{params}])",
+                STOPPED_PROOF_TYPES.join(", ")
+            )),
+            (true, StoppedProof::Mutators | StoppedProof::World) => problems.push(format!(
+                "{at}: exception `{name}` now takes a stopped-world proof (stale exception entry)"
+            )),
+            (false, StoppedProof::Mutators | StoppedProof::World) | (true, StoppedProof::None) => {}
+        }
     }
-    .visit_file(&ast);
+    let mut calls = BTreeMap::new();
+    for (file, ast) in &parsed {
+        RelinkVisitor {
+            file,
+            helpers: &sigs,
+            excluded: 0,
+            impl_stack: Vec::new(),
+            fn_stack: Vec::new(),
+            mint_closure: 0,
+            calls: &mut calls,
+            problems,
+        }
+        .visit_file(ast);
+    }
+    (sigs, calls)
 }
 
 #[test]
 fn c12_relinking_helpers_are_reached_only_through_proof_gated_entries() {
-    let mut calls = BTreeMap::new();
+    let sources: Vec<(String, String)> =
+        architecture_production_source_roots::production_source_files()
+            .into_iter()
+            .filter(|file| !file.is_test_path())
+            .map(|file| {
+                let source = std::fs::read_to_string(&file.path)
+                    .unwrap_or_else(|error| panic!("read {}: {error}", file.path.display()));
+                (display_path(&file), source)
+            })
+            .collect();
     let mut problems = Vec::new();
-    for file in architecture_production_source_roots::production_source_files() {
-        if file.is_test_path() {
-            continue;
-        }
-        let source = std::fs::read_to_string(&file.path)
-            .unwrap_or_else(|error| panic!("read {}: {error}", file.path.display()));
-        relink_problems_in(&display_path(&file), &source, &mut calls, &mut problems);
-    }
-    // Non-vacuity: every helper still has a production caller under this name.
-    for helper in RELINKING_HELPERS {
-        if !calls.contains_key(helper) {
+    let exceptions = premise_exceptions(&sources, &mut problems);
+    let (sigs, calls) = world_stopped_problems(&sources, &exceptions, &mut problems);
+    // Non-vacuity: the named helpers are still derived, take the proof, and
+    // have a production caller; every exception still exists.
+    for helper in WORLD_STOPPED_FLOOR {
+        if !sigs
+            .get(helper)
+            .is_some_and(|sig| sig.proof == StoppedProof::World)
+        {
             problems.push(format!(
-                "relinking helper `{helper}` has no production call (renamed? update the set)"
+                "floor helper `{helper}` is not a proof-taking `TaggedHeap::*{WORLD_STOPPED_SUFFIX}` fn (renamed?)"
+            ));
+        }
+        if !calls.contains_key(helper) {
+            problems.push(format!("floor helper `{helper}` has no production call"));
+        }
+    }
+    for name in &exceptions {
+        if !sigs.contains_key(name) {
+            problems.push(format!(
+                "exception `{name}` no longer exists (stale exception entry)"
             ));
         }
     }
     assert!(
         problems.is_empty(),
-        "relinking helpers escaped their gated entries:\n{}",
+        "stopped-world helpers escaped their proof:\n{}",
         problems.join("\n")
     );
 }
@@ -1565,72 +1941,256 @@ fn c12_relinking_helpers_are_reached_only_through_proof_gated_entries() {
 #[test]
 fn c12_relinking_helper_rule_refuses_ungated_callers() {
     let run = |source: &str| {
-        let (mut calls, mut problems) = (BTreeMap::new(), Vec::new());
-        relink_problems_in(
-            "neovm-value/src/tagged/gc/synthetic.rs",
-            source,
-            &mut calls,
+        let mut problems = Vec::new();
+        world_stopped_problems(
+            &[(
+                "neovm-value/src/tagged/gc/synthetic.rs".to_owned(),
+                source.to_owned(),
+            )],
+            &["publish_persistent_remembered_world_stopped".to_owned()],
             &mut problems,
         );
         problems.join("\n")
     };
-    // 0. Positive control: a gated entry and a helper calling helpers.
-    let ok = run("impl TaggedHeap {
-        pub unsafe fn finish_first_partition_cycle(&mut self, s: &P) { self.promote_and_blacken(); }
-        fn promote_and_blacken(&mut self) { self.join_old_boxes_for_partition_world_stopped(); }
-    }");
+    const H: &str = "fn h_world_stopped(&mut self, _s: &StoppedWorldProof<'_>) {}";
+    // 0. Positive control: an entry and a helper chain all holding the proof.
+    let ok = run(&format!("impl TaggedHeap {{
+        pub unsafe fn finish_first_partition_cycle(&mut self, s: &StoppedWorldProof<'_>) {{ self.g_world_stopped(s); }}
+        fn g_world_stopped(&mut self, s: &StoppedWorldProof<'_>) {{ self.h_world_stopped(s); }}
+        {H}
+    }}"));
     assert!(ok.is_empty(), "positive control must pass:\n{ok}");
-    // 1. A new safe pub fn reaching a helper directly.
-    let p = run("impl TaggedHeap { pub fn shortcut(&mut self) { self.promote_and_blacken(); } }");
-    assert!(p.contains("`shortcut` calls relinking helper `promote_and_blacken` without being a proof-gated entry"), "{p}");
-    // 2. UFCS and function-value spellings fail closed.
-    let p = run(
-        "impl TaggedHeap { pub fn ufcs(&mut self) { Self::recompute_old_bytes_world_stopped(self); } }",
-    );
-    assert!(
-        p.contains("relinking helper `recompute_old_bytes_world_stopped` named by path"),
-        "{p}"
-    );
-    let p = run("fn f() { let g = TaggedHeap::promote_and_blacken; }");
-    assert!(
-        p.contains("relinking helper `promote_and_blacken` named by path"),
-        "{p}"
-    );
-    // 3. A free fn (or another type's method) that merely shares a gated
-    //    entry's name is not that entry.
-    let p = run("pub fn finalize_collection(h: &mut TaggedHeap) { h.promote_and_blacken(); }");
-    assert!(p.contains("`finalize_collection` calls relinking helper `promote_and_blacken` without being a proof-gated entry"), "{p}");
-    let p = run(
-        "impl Other { pub fn finalize_collection(&mut self, h: &mut TaggedHeap) { h.promote_and_blacken(); } }",
-    );
-    assert!(
-        p.contains("`finalize_collection` calls relinking helper"),
-        "{p}"
-    );
-    // 4. A macro body that names a helper is unanalysable.
-    let p = run("macro_rules! relink { ($h:expr) => { $h.promote_and_blacken() }; }");
+    // 1. A suffixed helper without the proof, inherent or trait impl.
+    let p = run("impl TaggedHeap { fn relink_world_stopped(&mut self) {} }");
+    assert!(p.contains("`relink_world_stopped` is named `_world_stopped` but takes no stopped-world proof parameter"), "{p}");
+    let p = run("impl Bypass for TaggedHeap { fn relink_world_stopped(&mut self) {} }");
     assert!(
         p.contains(
-            "macro body names relinking helper `promote_and_blacken` (unanalysable, fail closed)"
+            "`relink_world_stopped` is named `_world_stopped` but takes no stopped-world proof"
         ),
         "{p}"
     );
-    // 5a. A trait impl on `TaggedHeap` is not the inherent gated entry.
-    let p = run(
-        "pub trait Bypass { fn finalize_collection(&mut self); }
-         impl Bypass for TaggedHeap { fn finalize_collection(&mut self) { self.promote_and_blacken(); } }",
-    );
+    // 1b. One cfg variant without the proof is enough.
+    let p = run("impl TaggedHeap {
+        #[cfg(unix)] fn relink_world_stopped(&mut self, _s: &StoppedWorldProof<'_>) {}
+        #[cfg(not(unix))] fn relink_world_stopped(&mut self) {}
+    }");
     assert!(
-        p.contains("`finalize_collection` calls relinking helper `promote_and_blacken` without being a proof-gated entry"),
+        p.contains("`relink_world_stopped` is named `_world_stopped` but takes no"),
         "{p}"
     );
-    // 5b. Unparsed items and expressions fail closed.
+    // 1c. The message names the accepted families and the actual parameter
+    //     types, so a missing proof reads differently from a wrong family.
+    let p = run("impl TaggedHeap { fn relink_world_stopped(&mut self, ptr: *mut GcHeader) {} }");
+    assert!(
+        p.contains("(accepted: StoppedWorldProof, StoppedMutatorsProof, ParallelStoppedMutatorsProof; its parameter types: [ptr: *mut GcHeader])"),
+        "{p}"
+    );
+    let p =
+        run("impl TaggedHeap { fn relink_world_stopped(&mut self, _: &StoppedClaimsProof) {} }");
+    assert!(
+        p.contains("its parameter types: [_: &StoppedClaimsProof])"),
+        "{p}"
+    );
+    // 2. A stale exception: it took the proof.
+    let p = run(
+        "impl TaggedHeap { fn publish_persistent_remembered_world_stopped(&mut self, _s: &StoppedWorldProof<'_>) {} }",
+    );
+    assert!(p.contains("exception `publish_persistent_remembered_world_stopped` now takes a stopped-world proof"), "{p}");
+    // 3. A proofless method minting its own proof to reach a helper.
+    let p = run(&format!("impl TaggedHeap {{ {H}
+        pub fn shortcut(&mut self) {{ StoppedWorldProof::with_stopped_world(self, |heap, s| heap.h_world_stopped(s)); }}
+    }}"));
+    assert!(p.contains("`shortcut` calls stopped-world helper `h_world_stopped` without holding a StoppedWorldProof parameter"), "{p}");
+    // 4. UFCS and function-value spellings fail closed.
+    let p = run(&format!(
+        "impl TaggedHeap {{ {H}
+        fn ufcs(&mut self, s: &StoppedWorldProof<'_>) {{ Self::h_world_stopped(self, s); }} }}"
+    ));
+    assert!(
+        p.contains("stopped-world helper `h_world_stopped` named by path"),
+        "{p}"
+    );
+    let p = run(&format!(
+        "impl TaggedHeap {{ {H} }} fn f() {{ let g = TaggedHeap::h_world_stopped; }}"
+    ));
+    assert!(
+        p.contains("stopped-world helper `h_world_stopped` named by path"),
+        "{p}"
+    );
+    // 5. A free fn, another type's method, or a trait impl holding a proof
+    //    is not an inherent `TaggedHeap` proof holder.
+    let p = run(&format!("impl TaggedHeap {{ {H} }}
+        pub fn finalize_collection(h: &mut TaggedHeap, s: &StoppedWorldProof<'_>) {{ h.h_world_stopped(s); }}"));
+    assert!(
+        p.contains(
+            "`finalize_collection` calls stopped-world helper `h_world_stopped` without holding"
+        ),
+        "{p}"
+    );
+    let p = run(&format!("impl TaggedHeap {{ {H} }}
+        impl Other {{ fn finalize_collection(&mut self, h: &mut TaggedHeap, s: &StoppedWorldProof<'_>) {{ h.h_world_stopped(s); }} }}"));
+    assert!(
+        p.contains("`finalize_collection` calls stopped-world helper"),
+        "{p}"
+    );
+    let p = run(&format!("impl TaggedHeap {{ {H} }}
+        impl Bypass for TaggedHeap {{ fn finalize_collection(&mut self, s: &StoppedWorldProof<'_>) {{ self.h_world_stopped(s); }} }}"));
+    assert!(
+        p.contains(
+            "`finalize_collection` calls stopped-world helper `h_world_stopped` without holding"
+        ),
+        "{p}"
+    );
+    // 6. A macro body that names a helper is unanalysable.
+    let p = run(&format!(
+        "impl TaggedHeap {{ {H} }}
+        macro_rules! relink {{ ($h:expr, $s:expr) => {{ $h.h_world_stopped($s) }}; }}"
+    ));
+    assert!(
+        p.contains(
+            "macro body names stopped-world helper `h_world_stopped` (unanalysable, fail closed)"
+        ),
+        "{p}"
+    );
+    // 7. Unparsed items and expressions fail closed.
     let p = run("pub macro relink() {}");
     assert!(p.contains("unparsed item"), "{p}");
     let p = run("fn f() { let _ = builtin # offset_of(TaggedHeap, mark_parity); }");
     assert!(p.contains("unparsed expression"), "{p}");
-    // 5. A test-gated caller is out of scope.
-    let gated =
-        run("impl TaggedHeap { #[cfg(test)] pub fn t(&mut self) { self.promote_and_blacken(); } }");
+    // 8. The exception is not a helper: its proofless caller is allowed.
+    let p = run("impl TaggedHeap { fn publish_persistent_remembered_world_stopped(&mut self) {}
+        pub fn finish_concurrent_mark(&mut self) { self.publish_persistent_remembered_world_stopped(); } }");
+    assert!(p.is_empty(), "{p}");
+    // 10. A helper taking another stopped-family proof satisfies the
+    //     signature rule, and is outside the relinking call-site class.
+    let p = run(
+        "impl TaggedHeap { fn entries_world_stopped(&mut self, _: &StoppedMutatorsProof) {}
+        fn fold(&mut self, p: &StoppedMutatorsProof) { self.entries_world_stopped(p); } }",
+    );
+    assert!(p.is_empty(), "{p}");
+    // 11. A string literal naming a helper inside a macro is not a reference.
+    let p = run(&format!("impl TaggedHeap {{ {H}
+        fn g(&mut self, s: &StoppedWorldProof<'_>) {{ assert!(true, \"h_world_stopped must not run\"); self.h_world_stopped(s); }} }}"));
+    assert!(p.is_empty(), "{p}");
+    // 12. The body closure of a pinned production mint holds the proof: the
+    //     same source is allowed at its pinned (file, fn) and refused anywhere
+    //     else, and a fn item nested in the closure is not covered.
+    let run_at = |file: &str, source: &str| {
+        let mut problems = Vec::new();
+        world_stopped_problems(
+            &[(file.to_owned(), source.to_owned())],
+            &["publish_persistent_remembered_world_stopped".to_owned()],
+            &mut problems,
+        );
+        problems.join("\n")
+    };
+    let pinned_file = "neovm-value/src/tagged/gc/mutator_registration/collection.rs";
+    let job = format!(
+        "impl TaggedHeap {{ {H} }}
+         impl StoppedCollectorJob {{ fn run(self) {{
+             StoppedWorldProof::with_all_stopped(heap, self.p, |heap, s| heap.h_world_stopped(s));
+         }} }}"
+    );
+    let p = run_at(pinned_file, &job);
+    assert!(p.is_empty(), "{p}");
+    let p = run_at("neovm-value/src/tagged/gc/synthetic.rs", &job);
+    assert!(
+        p.contains("`run` calls stopped-world helper `h_world_stopped` without holding"),
+        "{p}"
+    );
+    let p = run_at(
+        pinned_file,
+        &job.replace("impl StoppedCollectorJob", "impl OtherJob"),
+    );
+    assert!(
+        p.contains("`run` calls stopped-world helper `h_world_stopped` without holding"),
+        "{p}"
+    );
+    let nested = format!(
+        "impl TaggedHeap {{ {H} }}
+         impl StoppedCollectorJob {{ fn run(self) {{
+             StoppedWorldProof::with_all_stopped(heap, self.p, |heap, s| {{
+                 fn inner(h: &mut TaggedHeap, s: &StoppedWorldProof<'_>) {{ h.h_world_stopped(s); }}
+             }});
+         }} }}"
+    );
+    let p = run_at(pinned_file, &nested);
+    assert!(
+        p.contains("`inner` calls stopped-world helper `h_world_stopped` without holding"),
+        "{p}"
+    );
+    // 9. Test-gated definitions and callers are out of scope.
+    let gated = run(&format!(
+        "impl TaggedHeap {{ {H}
+        #[cfg(test)] fn relink_world_stopped(&mut self) {{}}
+        #[cfg(test)] pub fn t(&mut self) {{ self.h_world_stopped(todo!()); }} }}"
+    ));
     assert!(gated.is_empty(), "{gated}");
+}
+
+#[test]
+fn c12_premise_exception_table_is_read_fail_closed() {
+    let read = |files: &[(&str, &str)]| {
+        let sources: Vec<(String, String)> = files
+            .iter()
+            .map(|(file, source)| ((*file).to_owned(), (*source).to_owned()))
+            .collect();
+        let mut problems = Vec::new();
+        let names = premise_exceptions(&sources, &mut problems);
+        (names, problems.join("\n"))
+    };
+    let home = "neovm-value/src/tagged/gc/stopped_world_proof.rs";
+    // 0. Positive control: names are read, premises are required.
+    let (names, p) = read(&[(
+        home,
+        r#"const WORLD_STOPPED_PREMISE_EXCEPTIONS: [(&str, &str); 1] = [("a_world_stopped", "premise")];"#,
+    )]);
+    assert_eq!(
+        (names, p.as_str()),
+        (vec!["a_world_stopped".to_owned()], "")
+    );
+    // 1. Missing, or defined twice.
+    let (_, p) = read(&[(home, "const OTHER: u8 = 0;")]);
+    assert!(
+        p.contains("must be defined exactly once at a module's top level, found 0"),
+        "{p}"
+    );
+    let one = r#"const WORLD_STOPPED_PREMISE_EXCEPTIONS: [(&str, &str); 0] = [];"#;
+    let (_, p) = read(&[(home, one), ("neovm-value/src/other.rs", one)]);
+    assert!(p.contains("found 2"), "{p}");
+    // 2. Defined in another file.
+    let (_, p) = read(&[("neovm-value/src/other.rs", one)]);
+    assert!(
+        p.contains("is defined in neovm-value/src/other.rs, not"),
+        "{p}"
+    );
+    // 3. Not an array literal, or an entry of another shape.
+    let (_, p) = read(&[(
+        home,
+        "const WORLD_STOPPED_PREMISE_EXCEPTIONS: [(&str, &str); 0] = make();",
+    )]);
+    assert!(p.contains("is not an array literal"), "{p}");
+    let (_, p) = read(&[(
+        home,
+        r#"const WORLD_STOPPED_PREMISE_EXCEPTIONS: [&str; 1] = ["a_world_stopped"];"#,
+    )]);
+    assert!(p.contains("entry is not a 2-tuple"), "{p}");
+    let (_, p) = read(&[(
+        home,
+        r#"const WORLD_STOPPED_PREMISE_EXCEPTIONS: [(&str, &str); 1] = [(NAME, "premise")];"#,
+    )]);
+    assert!(
+        p.contains("entry is not (name, non-empty premise) string literals"),
+        "{p}"
+    );
+    // 4. An entry without its premise.
+    let (_, p) = read(&[(
+        home,
+        r#"const WORLD_STOPPED_PREMISE_EXCEPTIONS: [(&str, &str); 1] = [("a_world_stopped", " ")];"#,
+    )]);
+    assert!(
+        p.contains("entry is not (name, non-empty premise) string literals"),
+        "{p}"
+    );
 }

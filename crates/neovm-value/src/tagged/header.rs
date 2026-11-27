@@ -553,7 +553,7 @@ pub(crate) const UNMARKED_AT_REST: u8 = 0;
 /// - bit 0 `permanent`: an image resident. Reserved for objects that came
 ///   from the mapped dump image or that the pdump loader reconstructed from a
 ///   dump-image row (the loader-stamped [`HeaderFlags::image_resident`] bit).
-///   The first partition cycle's promotion (`promote_and_blacken`) makes
+///   The first partition cycle's promotion (`promote_and_blacken_world_stopped`) makes
 ///   exactly those permanent, and a [`ImageResident`] proof is required:
 ///   never traced, never swept, not even by a major. Implies `tenured`.
 ///   Runtime survivors of that same cycle are only tenured, never permanent.

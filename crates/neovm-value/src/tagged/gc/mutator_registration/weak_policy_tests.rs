@@ -151,7 +151,7 @@ fn permanent_mapped_and_callback_payloads_body<K: EraKeeper>(
         // A permanent weak table NOT registered in `always_swept_weak_tables_set`
         // would be skipped by the main mark and never swept: `supported` MUST refuse.
         assert!(supported(heap).is_err());
-        // Once registered in `always_swept_weak_tables_set` (as `promote_and_blacken`
+        // Once registered in `always_swept_weak_tables_set` (as `promote_and_blacken_world_stopped`
         // does for real image-resident weak tables), `supported` admits it while
         // structural eligibility (`pending_clear && depth == 0 && authority == 0`) holds.
         let inserted = heap.always_swept_weak_tables_set.insert(ptr);
@@ -197,7 +197,7 @@ fn permanent_mapped_and_callback_payloads_body<K: EraKeeper>(
     // Post-partition (`partition_dump && dump_blackened`): an UNREGISTERED
     // mapped weak table is skipped by the main mark and MUST be refused
     // fail-closed; registering it in `always_swept_weak_tables_set` (as
-    // `promote_and_blacken` does) admits it while keeping unhydrated refused.
+    // `promote_and_blacken_world_stopped` does) admits it while keeping unhydrated refused.
     let saved_partition = heap.partition_dump;
     let saved_blackened = heap.dump_blackened;
     heap.partition_dump = true;

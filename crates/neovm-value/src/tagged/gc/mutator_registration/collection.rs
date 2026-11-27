@@ -199,7 +199,7 @@ pub(in crate::tagged::gc) fn supported(heap: &TaggedHeap) -> Result<(), Collecti
                     //
                     // Pre- vs post-partition registration proof: once a table
                     // is permanently black (`header.generation.permanent()`, or
-                    // a mapped table after `promote_and_blacken` set
+                    // a mapped table after `promote_and_blacken_world_stopped` set
                     // `partition_dump && dump_blackened`), the main mark skips
                     // it, so `mark_and_sweep_weak_tables` reaches it on a
                     // stopped major iff it is registered in
@@ -1018,7 +1018,7 @@ impl<'heap, 'stop, 'era> StoppedCollectorJob<'heap, 'stop, 'era> {
                     frozen_root_words += 1;
                 }
                 for item in &images.work {
-                    trace_work(heap, item);
+                    heap.trace_collection_work_world_stopped(stopped_proof, item);
                 }
                 // E3.2: the stopped job must not run a native finalizer or SQLite
                 // teardown while it holds the stopped heap loan. The sweep detaches
@@ -1300,60 +1300,68 @@ fn capture_young_with_peers(
     }
 }
 
-fn trace_work(heap: &mut TaggedHeap, work: &CollectionWork) {
-    for word in work
-        .roots
-        .iter()
-        .chain(&work.remembered)
-        .chain(&work.cons_writes)
-    {
-        // SAFETY: world-stopped collector holds `&mut TaggedHeap` before sweep;
-        // all queued owner words stay live for this cycle.
-        heap.seed_root(unsafe { word.value() });
-    }
-    for word in &work.remembered {
-        // SAFETY: same world-stopped collector authority before sweep; the
-        // pending remembered owner remains retained until this stopped cycle
-        // consumes its claim.
-        let owner = unsafe { word.value() };
-        unsafe { heap.clear_remembered_header_world_stopped(owner) };
-    }
-    for word in work.remembered.iter().chain(&work.cons_writes) {
-        // SAFETY: same world-stopped collector authority before sweep.
-        heap.push_value_children_to_gray(unsafe { word.value() }, "parallel-written-owner");
-    }
-    for &bits in work.mapped.iter().chain(&work.written_owners) {
-        heap.push_value_children_to_gray(
-            unsafe {
-                /* SAFETY: value-internal construction from a real Value */
-                TaggedValue::from_bits(bits)
-            },
-            "parallel-owner-children",
-        );
-    }
-    for &id in &work.symbols {
-        heap.mark_symbol(id);
-    }
-    for &address in &work.black_headers {
-        let header = address as *mut GcHeader;
-        // SAFETY: the typed birth log retains initialized owned storage until
-        // this complete stopped mark/sweep. Never decode an address as a word.
-        let owner = unsafe {
-            match (*header).kind {
-                HeapObjectKind::String => TaggedValue::from_string_ptr(header.cast()),
-                HeapObjectKind::Float => TaggedValue::from_float_ptr(header.cast()),
-                HeapObjectKind::VecLike => TaggedValue::from_veclike_ptr(header.cast()),
-            }
-        };
-        heap.seed_root(owner);
-    }
-    for region in &work.black_regions {
-        for owner in region.cons_owners() {
-            heap.seed_root(owner);
+impl TaggedHeap {
+    /// Trace one stopped collector job's queued work. Runs inside the job's
+    /// `StoppedWorldProof::with_all_stopped` closure, before its sweep.
+    fn trace_collection_work_world_stopped(
+        &mut self,
+        stopped: &super::super::StoppedWorldProof<'_>,
+        work: &CollectionWork,
+    ) {
+        for word in work
+            .roots
+            .iter()
+            .chain(&work.remembered)
+            .chain(&work.cons_writes)
+        {
+            // SAFETY: world-stopped collector holds `&mut TaggedHeap` before sweep;
+            // all queued owner words stay live for this cycle.
+            self.seed_root(unsafe { word.value() });
         }
-        for header in region.float_headers() {
-            // SAFETY: the closed descriptor covers initialized float slots.
-            heap.seed_root(unsafe { TaggedValue::from_float_ptr(header.cast()) });
+        for word in &work.remembered {
+            // SAFETY: same world-stopped collector authority before sweep; the
+            // pending remembered owner remains retained until this stopped cycle
+            // consumes its claim.
+            let owner = unsafe { word.value() };
+            unsafe { self.clear_remembered_header_world_stopped(stopped, owner) };
+        }
+        for word in work.remembered.iter().chain(&work.cons_writes) {
+            // SAFETY: same world-stopped collector authority before sweep.
+            self.push_value_children_to_gray(unsafe { word.value() }, "parallel-written-owner");
+        }
+        for &bits in work.mapped.iter().chain(&work.written_owners) {
+            self.push_value_children_to_gray(
+                unsafe {
+                    /* SAFETY: value-internal construction from a real Value */
+                    TaggedValue::from_bits(bits)
+                },
+                "parallel-owner-children",
+            );
+        }
+        for &id in &work.symbols {
+            self.mark_symbol(id);
+        }
+        for &address in &work.black_headers {
+            let header = address as *mut GcHeader;
+            // SAFETY: the typed birth log retains initialized owned storage until
+            // this complete stopped mark/sweep. Never decode an address as a word.
+            let owner = unsafe {
+                match (*header).kind {
+                    HeapObjectKind::String => TaggedValue::from_string_ptr(header.cast()),
+                    HeapObjectKind::Float => TaggedValue::from_float_ptr(header.cast()),
+                    HeapObjectKind::VecLike => TaggedValue::from_veclike_ptr(header.cast()),
+                }
+            };
+            self.seed_root(owner);
+        }
+        for region in &work.black_regions {
+            for owner in region.cons_owners() {
+                self.seed_root(owner);
+            }
+            for header in region.float_headers() {
+                // SAFETY: the closed descriptor covers initialized float slots.
+                self.seed_root(unsafe { TaggedValue::from_float_ptr(header.cast()) });
+            }
         }
     }
 }

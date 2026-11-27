@@ -64,7 +64,13 @@ fn miriub3_eager_sweep_preserves_young_and_old_survivors() {
             .store(UNMARKED_AT_REST, Ordering::Relaxed);
     }
     let young_bytes = unsafe { heap.collector_object_bytes(headers[1]) };
-    assert_eq!(heap.sweep_objects(), young_bytes);
+    // SAFETY: serial fixture; sole owner, no marker, no callback.
+    let swept = unsafe {
+        StoppedWorldProof::with_stopped_world(&mut heap, |heap, stopped| {
+            heap.sweep_objects(stopped)
+        })
+    };
+    assert_eq!(swept, young_bytes);
     assert_eq!(heap.non_cons_object_addrs.len(), 3);
     assert_eq!(heap.all_objects, headers[1]);
     assert_eq!(heap.generational.old_objects, headers[0]);
@@ -73,7 +79,13 @@ fn miriub3_eager_sweep_preserves_young_and_old_survivors() {
         assert_eq!((*headers[0]).next, headers[3]);
         assert!((*headers[3]).next.is_null());
     }
-    assert_eq!(heap.sweep_objects(), young_bytes);
+    // SAFETY: serial fixture; sole owner, no marker, no callback.
+    let swept = unsafe {
+        StoppedWorldProof::with_stopped_world(&mut heap, |heap, stopped| {
+            heap.sweep_objects(stopped)
+        })
+    };
+    assert_eq!(swept, young_bytes);
     assert_eq!(heap.all_objects, headers[1]);
     assert_eq!(heap.non_cons_object_addrs.len(), 3);
 }
@@ -2077,7 +2089,7 @@ fn parity_reclaims_garbage_within_two_cycles() {
     );
 }
 
-/// PARITY MARK BITS (c): tenured stability. After `promote_and_blacken`,
+/// PARITY MARK BITS (c): tenured stability. After `promote_and_blacken_world_stopped`,
 /// a tenured object's frozen mark bit must never be re-interpreted or
 /// re-written: across two subsequent concurrent cycles (one at each
 /// parity) the raw bit stays exactly as frozen (a re-trace would have

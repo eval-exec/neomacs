@@ -158,7 +158,10 @@ impl TaggedHeap {
     /// every log intact: promotion consumes these same P-all facts afterwards.
     #[cold]
     #[inline(never)]
-    pub(super) fn trace_black_born_children_world_stopped(&mut self) {
+    pub(super) fn trace_black_born_children_world_stopped(
+        &mut self,
+        _stopped: &StoppedWorldProof<'_>,
+    ) {
         if !self.is_generational_major_marking() {
             return;
         }

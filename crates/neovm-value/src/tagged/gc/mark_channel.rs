@@ -356,8 +356,16 @@ mod tests {
                 Err(MarkFinishError::PoisonedCollectorState)
             ));
             assert!(
-                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| heap.sweep_objects()))
-                    .is_err(),
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    // SAFETY: serial fixture; the row probes sweep_objects' own refusal.
+                    unsafe {
+                        super::super::StoppedWorldProof::with_unchecked_admission_for_test(
+                            &mut heap,
+                            |heap, stopped| heap.sweep_objects(stopped),
+                        )
+                    }
+                }))
+                .is_err(),
                 "sweep_objects must refuse while concurrent mark is unfinished"
             );
             assert!(
@@ -425,8 +433,16 @@ mod tests {
                 Err(MarkFinishError::PoisonedCollectorState)
             ));
             assert!(
-                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| heap_a.sweep_objects()))
-                    .is_err()
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    // SAFETY: serial fixture; the row probes sweep_objects' own refusal.
+                    unsafe {
+                        super::super::StoppedWorldProof::with_unchecked_admission_for_test(
+                            &mut heap_a,
+                            |heap, stopped| heap.sweep_objects(stopped),
+                        )
+                    }
+                }))
+                .is_err()
             );
 
             // On heap_b: fields look active with heap_a's channel, yet take_for_finish
@@ -552,7 +568,13 @@ mod tests {
         heap.generational.major_in_progress = true;
         assert!(
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                heap.trace_black_born_children_world_stopped()
+                // SAFETY: serial fixture; the row probes the helper's own refusal.
+                unsafe {
+                    super::super::StoppedWorldProof::with_unchecked_admission_for_test(
+                        &mut heap,
+                        |heap, stopped| heap.trace_black_born_children_world_stopped(stopped),
+                    )
+                }
             }))
             .is_err(),
             "trace_black_born_children_world_stopped must fail closed"

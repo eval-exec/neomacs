@@ -22,7 +22,7 @@ use rustc_hash::FxHashSet;
 // `incremental_sweep_slice`).
 //
 // GENERATIONAL NOTE — page objects tenure via the promotion PAGE WALK
-// (`promote_and_blacken` flips `header.tenured` on every allocated slot at
+// (`promote_and_blacken_world_stopped` flips `header.tenured` on every allocated slot at
 // the one-time first partition cycle; the intrusive-list splice never sees
 // them). The per-object `header.tenured` remains the SOLE mark-path
 // authority; no page-level flag is consulted by any mark path. Pages that

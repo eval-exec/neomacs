@@ -129,7 +129,7 @@ impl TaggedHeap {
         // list the sweep rebuilds, then the sweep would push them again (a
         // double hand-out). Also I1: `sweep_in_progress` flips below.
         self.close_alloc_regions();
-        self.trace_black_born_children_world_stopped();
+        self.trace_black_born_children_world_stopped(stopped);
         if self.generational.major_in_progress {
             self.incremental_drain_all();
         }
@@ -176,9 +176,9 @@ impl TaggedHeap {
         let unchain_t0 = std::time::Instant::now();
         #[cfg(feature = "gc-memory-telemetry")]
         memory_telemetry::observe(self, memory_telemetry::Phase::FinalMark);
-        self.promote_survivors_world_stopped();
+        self.promote_survivors_world_stopped(stopped);
         self.unchain_dead_markers();
-        self.reset_generational_remembered_world_stopped();
+        self.reset_generational_remembered_world_stopped(stopped);
         self.handshake.last_term_unchain_us = unchain_t0.elapsed().as_micros() as u64;
 
         // No reader can remain: join preceded all drains and weak/finalizer
@@ -453,7 +453,7 @@ impl TaggedHeap {
             unsafe {
                 self.sweep_noncons_pending = (*current).next;
                 if (*current).tenured && !(*current).generation.permanent() {
-                    self.link_old_object_world_stopped(current);
+                    self.link_old_object_world_stopped(stopped, current);
                     processed += 1;
                     continue;
                 }
@@ -592,7 +592,7 @@ impl TaggedHeap {
         let _released_object_pages = self.release_empty_object_pages();
 
         if self.generational.major_in_progress {
-            self.recompute_old_bytes_world_stopped();
+            self.recompute_old_bytes_world_stopped(stopped);
         }
 
         // The live count the next threshold derives from comes from what the
@@ -1687,8 +1687,8 @@ impl TaggedHeap {
     }
 
     /// Sweep non-cons objects: walk intrusive list, free unmarked, rebuild list.
-    pub(super) fn sweep_objects(&mut self) -> usize {
-        self.sweep_objects_with_reclaim(|heap, current| {
+    pub(super) fn sweep_objects(&mut self, stopped: &StoppedWorldProof<'_>) -> usize {
+        self.sweep_objects_with_reclaim(stopped, |heap, current| {
             // SAFETY: `current` was just unlinked from `heap.all_objects` and
             // is an unmarked boxed allocation owned by `heap`.
             unsafe { heap.free_gc_object(current, ReclamationMode::Explicit) };
@@ -1697,6 +1697,7 @@ impl TaggedHeap {
 
     fn sweep_objects_with_reclaim(
         &mut self,
+        stopped: &StoppedWorldProof<'_>,
         mut reclaim: impl FnMut(&mut Self, *mut GcHeader),
     ) -> usize {
         assert!(
@@ -1734,7 +1735,7 @@ impl TaggedHeap {
                         Some(prev) => (*prev).next = next,
                     }
                     let expected_head = self.all_objects;
-                    self.link_old_object_world_stopped(current);
+                    self.link_old_object_world_stopped(stopped, current);
                     debug_assert_eq!(
                         self.all_objects, expected_head,
                         "the eager sweep must not allocate into the young list"
@@ -2988,12 +2989,20 @@ mod gc_trace_seed_format_tests {
         }
 
         let res = catch_unwind(AssertUnwindSafe(|| {
-            heap.sweep_objects_with_reclaim(|heap, ptr| {
-                assert_eq!(ptr, b_hdr, "only unmarked `b` should be reclaimed");
-                // SAFETY: `ptr` was unlinked from `all_objects` by the sweep.
-                unsafe { heap.free_gc_object(ptr, ReclamationMode::Explicit) };
-                panic!("injected reclaim panic during sweep_objects");
-            });
+            // SAFETY: serial fixture; sole owner, no marker, no callback.
+            unsafe {
+                crate::tagged::gc::StoppedWorldProof::with_stopped_world(
+                    &mut heap,
+                    |heap, stopped| {
+                        heap.sweep_objects_with_reclaim(stopped, |heap, ptr| {
+                            assert_eq!(ptr, b_hdr, "only unmarked `b` should be reclaimed");
+                            // SAFETY: `ptr` was unlinked from `all_objects` by the sweep.
+                            unsafe { heap.free_gc_object(ptr, ReclamationMode::Explicit) };
+                            panic!("injected reclaim panic during sweep_objects");
+                        });
+                    },
+                )
+            }
         }));
         assert!(res.is_err(), "injected reclaim panic must propagate");
 

@@ -139,7 +139,7 @@ impl TaggedHeap {
     /// Same stopped-world contract as the other collector-protocol entries:
     /// `stopped` vouches that no mutator or marker runs. The entry also
     /// refuses (in release) a pending mark or sweep, because
-    /// `promote_and_blacken` relinks `all_objects` on the premise that the
+    /// `promote_and_blacken_world_stopped` relinks `all_objects` on the premise that the
     /// sweep has completed.
     #[doc(hidden)]
     pub unsafe fn finish_first_partition_cycle(&mut self, stopped: &StoppedWorldProof<'_>) {
@@ -153,11 +153,11 @@ impl TaggedHeap {
             self.first_cycle_concurrent = false;
             return;
         }
-        self.promote_and_blacken();
+        self.promote_and_blacken_world_stopped(stopped);
         self.dump_blackened = true;
-        self.recompute_old_bytes_world_stopped();
+        self.recompute_old_bytes_world_stopped(stopped);
         if self.generational.enabled {
-            self.refresh_generation_major_baseline_world_stopped();
+            self.refresh_generation_major_baseline_world_stopped(stopped);
         }
         self.first_cycle_concurrent = false;
     }
@@ -204,7 +204,7 @@ impl TaggedHeap {
             // The drained first cycle kept its births for the permanent
             // splice. This explicit entry cancels that splice; its fresh
             // full trace must decide liveness without the previous logs.
-            self.clear_black_births_world_stopped();
+            self.clear_black_births_world_stopped(stopped);
             self.first_cycle_concurrent = false;
             self.staged_mapped_cons_scan = None;
             self.staged_mapped_veclikes = None;

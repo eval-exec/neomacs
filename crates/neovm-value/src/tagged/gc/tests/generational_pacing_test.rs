@@ -322,7 +322,12 @@ fn generational_pacing_first_partition_baseline_refresh_does_not_reset_again() {
     heap.finish_generation_pacing();
     heap.current_mutator_gc_mut().pacing = counters(17, 0, 0);
     heap.generational.old_bytes = size_of::<ConsCell>();
-    heap.refresh_generation_major_baseline_world_stopped();
+    // SAFETY: serial fixture; sole owner, no marker, no callback.
+    unsafe {
+        StoppedWorldProof::with_stopped_world(&mut heap, |heap, stopped| {
+            heap.refresh_generation_major_baseline_world_stopped(stopped)
+        })
+    };
     assert_eq!(
         heap.generational.old_bytes_after_major,
         size_of::<ConsCell>()
@@ -340,7 +345,12 @@ fn generational_pacing_off_does_not_select_or_touch_new_accounting() {
     heap.record_generation_promoted_bytes(8);
     heap.note_generation_stress_cycle_started();
     heap.finish_generation_pacing();
-    heap.refresh_generation_major_baseline_world_stopped();
+    // SAFETY: serial fixture; sole owner, no marker, no callback.
+    unsafe {
+        StoppedWorldProof::with_stopped_world(&mut heap, |heap, stopped| {
+            heap.refresh_generation_major_baseline_world_stopped(stopped)
+        })
+    };
     assert_eq!(heap.current_mutator_gc().pacing, counters(2, 3, 4));
     assert_eq!(heap.generational.old_bytes_after_major, 5);
 }

@@ -46,7 +46,7 @@ impl TaggedHeap {
                 debug_assert!(header.tenured && !header.generation.permanent());
                 self.generational.old_sweep_pending = header.gc_link();
                 if header.is_marked_at(self.mark_parity) {
-                    self.link_old_object_world_stopped(ptr);
+                    self.link_old_object_world_stopped(stopped, ptr);
                 } else {
                     self.non_cons_object_addrs.remove(&(ptr as usize));
                     self.unregister_vector_object(ptr);
@@ -66,7 +66,7 @@ impl TaggedHeap {
     /// live-bit walks include old slots and exclude permanent image survivors.
     #[cold]
     #[inline(never)]
-    pub(super) fn recompute_old_bytes_world_stopped(&mut self) {
+    pub(super) fn recompute_old_bytes_world_stopped(&mut self, _stopped: &StoppedWorldProof<'_>) {
         if !self.generational.enabled {
             return;
         }
@@ -104,7 +104,10 @@ impl TaggedHeap {
     /// ordinary-old Boxes join the existing first-partition permanent walk.
     #[cold]
     #[inline(never)]
-    pub(super) fn join_old_boxes_for_partition_world_stopped(&mut self) {
+    pub(super) fn join_old_boxes_for_partition_world_stopped(
+        &mut self,
+        _stopped: &StoppedWorldProof<'_>,
+    ) {
         if !self.generational.enabled {
             return;
         }

@@ -147,7 +147,10 @@ impl TaggedHeap {
     /// do not reset any mutator facts a second time.
     #[cold]
     #[inline(never)]
-    pub(super) fn refresh_generation_major_baseline_world_stopped(&mut self) {
+    pub(super) fn refresh_generation_major_baseline_world_stopped(
+        &mut self,
+        _stopped: &StoppedWorldProof<'_>,
+    ) {
         if self.generational.enabled {
             debug_assert_eq!(self.generational.cycle, GenerationCycle::Major);
             self.generational.old_bytes_after_major = self.generational.old_bytes;
