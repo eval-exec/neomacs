@@ -39,6 +39,7 @@ impl Context {
         registers: RegisterManager,
         bookmarks: BookmarkManager,
         watchers: VariableWatcherList,
+        defer_process_wait_backend: bool,
         _hooks: EvalHooksInstalled,
     ) -> Self {
         // A restored image can contain byte-code values before any Context
@@ -154,9 +155,8 @@ impl Context {
             coding_systems: coding_systems,
             macro_perf_stats: MacroPerfStats::default(),
             buffers: buffers,
-            global: super::global_state::GlobalState::fresh_then(
-                crate::emacs_core::eval::data::command_loop::CommandLoop::new(),
-                |global| {
+            global: {
+                let init_global = |global: &mut super::global_state::GlobalState| {
                     global.modes = modes;
                     global.face_table = face_table;
                     global.abbrevs = abbrevs;
@@ -166,8 +166,19 @@ impl Context {
                     global.kmacro = kmacro;
                     global.registers = registers;
                     global.bookmarks = bookmarks;
-                },
-            ),
+                };
+                if defer_process_wait_backend {
+                    super::global_state::GlobalState::fresh_deferred_io_then(
+                        crate::emacs_core::eval::data::command_loop::CommandLoop::new(),
+                        init_global,
+                    )
+                } else {
+                    super::global_state::GlobalState::fresh_then(
+                        crate::emacs_core::eval::data::command_loop::CommandLoop::new(),
+                        init_global,
+                    )
+                }
+            },
             // Prepare allocation-capable managers before retiring the old TLS
             // installation. The closed factory reinstalls the final view.
             tagged_heap,

@@ -613,13 +613,32 @@ pub fn load_from_dump_with_proof(
     path: &Path,
     proof: crate::emacs_core::eval::hooks_proof::EvalHooksInstalled,
 ) -> Result<Context, DumpError> {
+    load_from_dump_inner(path, false, proof)
+}
+
+/// Like [`load_from_dump_with_proof`], but defers opening OS poller/signal
+/// descriptors until post-image activation (`ProcessManager::ensure_wait_backend`).
+/// Used before a zygote `fork()` so children never share epoll/timerfd/kqueue/pipe
+/// kernel objects.
+pub(crate) fn load_from_dump_deferred_io_with_proof(
+    path: &Path,
+    proof: crate::emacs_core::eval::hooks_proof::EvalHooksInstalled,
+) -> Result<Context, DumpError> {
+    load_from_dump_inner(path, true, proof)
+}
+
+fn load_from_dump_inner(
+    path: &Path,
+    defer_process_wait_backend: bool,
+    proof: crate::emacs_core::eval::hooks_proof::EvalHooksInstalled,
+) -> Result<Context, DumpError> {
     // Refuse before touching symbol tables or mapping the image if another
     // live Context's heap is already installed on this thread (rt A3).
     neovm_value::tagged::gc::refuse_if_live_heap_installed();
     let load_start = std::time::Instant::now();
     let mut image = mmap_image::load_image(path)?;
     image.apply_relocations()?;
-    let mut eval = match load_from_mapped_image(&mut image, proof) {
+    let mut eval = match load_from_mapped_image(&mut image, defer_process_wait_backend, proof) {
         Ok(eval) => eval,
         Err(err) => {
             // A failed load may already have installed process-lifetime
@@ -642,6 +661,7 @@ pub fn load_from_dump_with_proof(
 
 fn load_from_mapped_image(
     image: &mut mmap_image::LoadedMmapImage,
+    defer_process_wait_backend: bool,
     proof: crate::emacs_core::eval::hooks_proof::EvalHooksInstalled,
 ) -> Result<Context, DumpError> {
     let mut state = empty_context_state();
@@ -726,6 +746,7 @@ fn load_from_mapped_image(
         spans,
         mapped_heap,
         value_fixups_section,
+        defer_process_wait_backend,
         proof,
     )?;
     drop(_cleanup);
@@ -903,6 +924,7 @@ fn reconstruct_evaluator_after_symbol_table_with_tagged_heap_parts(
     spans: object_starts::LoadedSpans<'_>,
     mapped_heap: Option<mapped_heap::MappedHeapView>,
     value_fixups_section: Option<&[u8]>,
+    defer_process_wait_backend: bool,
     proof: crate::emacs_core::eval::hooks_proof::EvalHooksInstalled,
 ) -> Result<Context, DumpError> {
     let decoder = LoadDecoder::from_file_descriptors_and_spans_with_mapped_heap_and_fixups(
@@ -915,6 +937,7 @@ fn reconstruct_evaluator_after_symbol_table_with_tagged_heap_parts(
         state,
         decoder,
         value_fixups_section,
+        defer_process_wait_backend,
         proof,
     )
 }
@@ -925,7 +948,7 @@ fn reconstruct_evaluator_after_symbol_table_with_decoder(
     proof: crate::emacs_core::eval::hooks_proof::EvalHooksInstalled,
 ) -> Result<Context, DumpError> {
     reconstruct_evaluator_after_symbol_table_with_decoder_and_value_fixups(
-        state, decoder, None, proof,
+        state, decoder, None, false, proof,
     )
 }
 
@@ -933,6 +956,7 @@ fn reconstruct_evaluator_after_symbol_table_with_decoder_and_value_fixups(
     state: &DumpContextState,
     mut decoder: LoadDecoder<'_>,
     value_fixups_section: Option<&[u8]>,
+    defer_process_wait_backend: bool,
     proof: crate::emacs_core::eval::hooks_proof::EvalHooksInstalled,
 ) -> Result<Context, DumpError> {
     // 2. Reconstruct the tagged heap before any heap-backed value/object loads
@@ -1005,6 +1029,7 @@ fn reconstruct_evaluator_after_symbol_table_with_decoder_and_value_fixups(
         load_register_manager(&mut decoder, &state.registers),
         load_bookmark_manager(&state.bookmarks),
         load_watcher_list(&mut decoder, &state.watchers),
+        defer_process_wait_backend,
         proof,
     );
 

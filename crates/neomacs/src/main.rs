@@ -117,6 +117,7 @@ pub(crate) mod frame_layout;
 mod gc_memory_allocator;
 mod image_catalog;
 mod input_bridge;
+mod zygote;
 use input_bridge::publication::{InputPublisher, InputRoute, PrimaryInputPublisher};
 use neomacs_display_runtime::tty_input::Publication;
 use neovm_core::window::DisplayFrameExt;
@@ -5364,6 +5365,13 @@ pub unsafe fn run(mode: RuntimeMode) {
         return;
     }
 
+    // Internal test-harness mode: pre-boot pdump once and serve isolated batch
+    // evaluations via single-threaded `fork()` before spawning any background
+    // threads (text_huge_pages, logging file workers, diagnostics).
+    if let Some((socket_path, dump_file_override)) = parse_batch_zygote_args(std::env::args()) {
+        zygote::run_batch_zygote(&socket_path, mode, dump_file_override.as_deref());
+    }
+
     // Parse argv before initializing tracing so we know whether this is a
     // GUI or TTY run — logging policy differs between the two (under TTY
     // any tracing output would smash the alt-screen redisplay engine).
@@ -5537,10 +5545,80 @@ pub unsafe fn run(mode: RuntimeMode) {
     }
 
     debug_assert_eq!(startup.frontend, FrontendKind::Tty);
-    let bootstrap_display = bootstrap_tty_display_config(interactivity);
 
-    // TTY geometry is in character cells and performs no native font lookup.
-    // GUI geometry is prepared once on the evaluator thread instead.
+    // 2. Initialize the evaluator from the canonical bootstrap surface.
+    //    GNU loads the dumped bootstrap image here, then lets the outer
+    //    command loop evaluate `top-level`/`normal-top-level`.
+    let evaluator = create_startup_evaluator_for_mode(mode, &startup);
+    let exit_code = run_tty_session(
+        evaluator,
+        mode,
+        &startup,
+        process_started_at,
+        &process_args,
+        daemon_notifier,
+    );
+    if exit_code != 0 {
+        std::process::exit(exit_code);
+    }
+}
+
+fn parse_batch_zygote_args(
+    args: impl IntoIterator<Item = String>,
+) -> Option<(PathBuf, Option<PathBuf>)> {
+    let mut socket: Option<PathBuf> = None;
+    let mut dump_file: Option<PathBuf> = None;
+    let mut iter = args.into_iter().skip(1);
+    while let Some(arg) = iter.next() {
+        if arg == "--" {
+            break;
+        }
+        if let Some(val) = arg.strip_prefix("--batch-zygote-socket=") {
+            socket = Some(PathBuf::from(val));
+        } else if arg == "--batch-zygote-socket" {
+            if let Some(val) = iter.next() {
+                socket = Some(PathBuf::from(val));
+            }
+        } else if let Some(val) = arg.strip_prefix("--dump-file=") {
+            dump_file = Some(PathBuf::from(val));
+        } else if arg == "--dump-file" {
+            if let Some(val) = iter.next() {
+                dump_file = Some(PathBuf::from(val));
+            }
+        }
+    }
+    socket.map(|s| (s, dump_file))
+}
+
+/// Shared TTY/batch execution tail used by forked zygote children.
+fn run_tty_batch_evaluator(
+    evaluator: Context,
+    mode: RuntimeMode,
+    startup: &StartupOptions,
+    process_started_at: Instant,
+    process_args: &[OsString],
+) -> i32 {
+    run_tty_session(
+        evaluator,
+        mode,
+        startup,
+        process_started_at,
+        process_args,
+        None,
+    )
+}
+
+fn run_tty_session(
+    mut evaluator: Context,
+    mode: RuntimeMode,
+    startup: &StartupOptions,
+    process_started_at: Instant,
+    process_args: &[OsString],
+    daemon_notifier: Option<neovm_core::emacs_core::eval::DaemonNotifier>,
+) -> i32 {
+    let interactivity =
+        Interactivity::from_noninteractive(startup.noninteractive || startup.daemon.is_some());
+    let bootstrap_display = bootstrap_tty_display_config(interactivity);
     let frame_metrics = BootstrapFrameMetrics::TTY;
     let (width, height) = startup_dimensions(
         startup.frontend,
@@ -5549,17 +5627,13 @@ pub unsafe fn run(mode: RuntimeMode) {
         startup.daemon.is_some(),
     );
 
-    // 2. Initialize the evaluator from the canonical bootstrap surface.
-    //    GNU loads the dumped bootstrap image here, then lets the outer
-    //    command loop evaluate `top-level`/`normal-top-level`.
-    let mut evaluator = create_startup_evaluator_for_mode(mode, &startup);
     evaluator.setup_thread_locals();
     if let Some(options) = &startup.daemon {
         evaluator.configure_daemon(options.name.clone(), daemon_notifier);
     }
-    if tty_init::should_enable_live_tty_io(&startup) {
+    if tty_init::should_enable_live_tty_io(startup) {
         reset_terminal_host();
-        configure_terminal_runtime(tty_init::detect_tty_runtime(&startup));
+        configure_terminal_runtime(tty_init::detect_tty_runtime(startup));
         // Root `make-terminal-frame` re-reads this terminal's winsize
         // (`frame.c:1861`). The query lives on the initial terminal's
         // record. The same function may be installed again; a different
@@ -5604,8 +5678,8 @@ pub unsafe fn run(mode: RuntimeMode) {
         .selected_frame()
         .expect("No selected frame after bootstrap")
         .id;
-    configure_gnu_startup_state(&mut evaluator, frame_id, &startup);
-    if tty_init::should_enable_live_tty_io(&startup) {
+    configure_gnu_startup_state(&mut evaluator, frame_id, startup);
+    if tty_init::should_enable_live_tty_io(startup) {
         termcap_input::seed_input_decode_map_from_terminal(&mut evaluator);
     }
 
@@ -5621,7 +5695,7 @@ pub unsafe fn run(mode: RuntimeMode) {
     let tty_popup_force_full_redraw = Arc::new(AtomicBool::new(false));
     let tty_input_pause = tty_frontend::TtyInputPause::new();
     let secondary_ttys = secondary_tty::SecondaryTtyRegistry::default();
-    if tty_init::should_enable_live_tty_io(&startup) {
+    if tty_init::should_enable_live_tty_io(startup) {
         set_terminal_host(Box::new(
             tty_frontend::TtyTerminalHost::with_emergency_escape(
                 emacs_comms.cmd_tx.clone(),
@@ -5776,7 +5850,7 @@ pub unsafe fn run(mode: RuntimeMode) {
     let daemon_tty_cleanup = secondary_ttys.clone();
     frame_layout::install_tty_redisplay_callback_with_popup_redraw(
         &mut evaluator,
-        &startup,
+        startup,
         Some(tty_popup_force_full_redraw),
         Some(Box::new(move |eval| secondary_ttys.render_selected(eval))),
     );
@@ -5818,10 +5892,10 @@ pub unsafe fn run(mode: RuntimeMode) {
         neomacs_display_runtime::thread_comm::RenderCommand::Lifecycle(LifecycleCommand::Shutdown),
     );
     frontend.join();
-    if tty_init::should_enable_live_tty_io(&startup) {
+    if tty_init::should_enable_live_tty_io(startup) {
         tty_init::tty_shutdown_terminal_with(&primary_reset_strings);
     }
-    log_clean_process_exit(process_started_at, &process_args);
+    log_clean_process_exit(process_started_at, process_args);
 
     // The JIT's final report (same thread and placement rules as the
     // drain below). No-op unless a JIT report knob is set.
@@ -5836,22 +5910,22 @@ pub unsafe fn run(mode: RuntimeMode) {
         maybe_drain_aot_pgo(mode, &evaluator);
     }
 
+    let mut exit_code = 0;
     if let Some(request) = evaluator.shutdown_request() {
         if startup.daemon.is_some() {
             daemon_tty_cleanup.close_all();
         }
         if request.restart {
             if startup.daemon.is_some() {
-                daemon::restart(&process_args);
+                daemon::restart(process_args);
             }
             tracing::warn!("restart requested via kill-emacs, but restart is not implemented yet");
         }
-        if request.exit_code != 0 {
-            std::process::exit(request.exit_code);
-        }
+        exit_code = request.exit_code;
     }
 
     leak_evaluator_for_process_exit(evaluator);
+    exit_code
 }
 
 fn leak_evaluator_for_process_exit(evaluator: Context) {
@@ -6446,15 +6520,18 @@ fn bootstrap_buffers_with_font(
 /// diagnostics built on `initial_argv0' print and what normalizers built
 /// on `invocation-*' must match.
 fn invocation_name() -> String {
-    std::env::args_os()
-        .next()
-        .as_deref()
+    invocation_name_from_argv0(None)
+}
+
+fn invocation_name_from_argv0(argv0: Option<&str>) -> String {
+    let raw = argv0
         .map(PathBuf::from)
-        .and_then(|raw| {
-            raw.file_name()
-                .map(|name| name.to_string_lossy().into_owned())
-        })
-        .unwrap_or_else(|| "neomacs".to_string())
+        .or_else(|| std::env::args_os().next().map(PathBuf::from));
+    raw.and_then(|raw| {
+        raw.file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+    })
+    .unwrap_or_else(|| "neomacs".to_string())
 }
 
 /// GNU `init_cmdargs` (src/emacs.c:518-549): `invocation-directory' is the
@@ -6462,11 +6539,10 @@ fn invocation_name() -> String {
 /// falls back to a PATH search; a relative directory is made absolute
 /// against the startup working directory.  Never canonicalized: the
 /// as-invoked path is the observable contract.
-fn invocation_directory_from_argv0() -> PathBuf {
-    let invoked = std::env::args_os().next();
-    let raw = invoked
-        .as_deref()
+fn invocation_directory_from_argv0(argv0: Option<&str>) -> PathBuf {
+    let raw = argv0
         .map(PathBuf::from)
+        .or_else(|| std::env::args_os().next().map(PathBuf::from))
         .unwrap_or_else(|| PathBuf::from("neomacs"));
     let directory = match raw.parent() {
         Some(parent) if !parent.as_os_str().is_empty() => {
@@ -6566,8 +6642,9 @@ fn configure_gnu_startup_state(eval: &mut Context, frame_id: FrameId, startup: &
         .cloned()
         .map(Value::string)
         .collect::<Vec<_>>();
-    let invocation_name = invocation_name();
-    let invocation_directory = ensure_dir_string(&invocation_directory_from_argv0());
+    let argv0 = argv_strings.first().map(String::as_str);
+    let invocation_name = invocation_name_from_argv0(argv0);
+    let invocation_directory = ensure_dir_string(&invocation_directory_from_argv0(argv0));
 
     eval.set_variable("command-line-args", Value::list(argv));
     eval.set_variable("command-line-args-left", Value::list(argv_left));

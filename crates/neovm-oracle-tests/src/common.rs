@@ -17,6 +17,8 @@ use std::sync::OnceLock;
 
 #[path = "oracle_sandbox.rs"]
 pub(crate) mod oracle_sandbox;
+#[path = "oracle_zygote.rs"]
+mod oracle_zygote;
 
 use oracle_sandbox::{OracleSandbox, ResultNormalization};
 
@@ -1370,13 +1372,17 @@ fn run_neomacs_binary_eval_with_sandbox(
     cmd.env(OracleEngine::ENV, OracleEngine::Neomacs.as_env_value());
     eval_program.configure_command(&mut cmd, WindowSystemIdentity::Neovm);
 
-    if let Some(mem_limit) = neomacs_binary_mem_limit_bytes() {
+    let mem_limit = neomacs_binary_mem_limit_bytes();
+    if let Some(mem_limit) = mem_limit {
         apply_virtual_memory_limit(&mut cmd, mem_limit);
     }
 
-    let output = cmd
-        .output()
-        .map_err(|e| format!("failed to run Neomacs binary: {e}"))?;
+    let output = match oracle_zygote::try_run_neomacs_via_zygote(&cmd, sandbox, mem_limit, None) {
+        Some(result) => result?,
+        None => cmd
+            .output()
+            .map_err(|e| format!("failed to run Neomacs binary: {e}"))?,
+    };
 
     if !output.status.success() {
         return Err(format!(
@@ -1852,9 +1858,22 @@ fn spawn_batch_editor(
     engine: OracleEngine,
 ) -> Result<std::process::Output, String> {
     let mut cmd = batch_editor_command(sandbox, eval_program, engine);
-    let output = cmd
-        .output()
-        .map_err(|error| format!("failed to run batch editor: {error}"))?;
+    let output = if matches!(engine, OracleEngine::Neomacs) {
+        match oracle_zygote::try_run_neomacs_via_zygote(
+            &cmd,
+            sandbox,
+            neomacs_binary_mem_limit_bytes(),
+            None,
+        ) {
+            Some(result) => result?,
+            None => cmd
+                .output()
+                .map_err(|error| format!("failed to run batch editor: {error}"))?,
+        }
+    } else {
+        cmd.output()
+            .map_err(|error| format!("failed to run batch editor: {error}"))?
+    };
     if output.status.success() {
         Ok(output)
     } else {
