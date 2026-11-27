@@ -39,7 +39,7 @@ struct Gen1ModePin {
 impl Gen1ModePin {
     fn new() -> Self {
         let previous = std::env::var_os("NEOVM_GC_GENERATIONAL");
-        // SAFETY: lib-test executes one test per process; restored on drop.
+        // SAFETY: `cargo nextest` executes one test per process; restored on drop.
         unsafe { std::env::set_var("NEOVM_GC_GENERATIONAL", "1") };
         Self { previous }
     }
@@ -480,6 +480,9 @@ fn e7p1_nmjit_registry_refuses_wrong_heap_busy_and_retains_on_poison() {
             let busy = registry_a
                 .hold_active_call_for_test(|| registry_a.reclaim_with_grace(&mut receipt_a));
             assert!(matches!(busy, Err(NmjitRegistryError::Busy)));
+            let mutex_busy = registry_a
+                .hold_state_lock_for_test(|| registry_a.reclaim_with_grace(&mut receipt_a));
+            assert!(matches!(mutex_busy, Err(NmjitRegistryError::Busy)));
             if compiled_a.is_some() {
                 assert_eq!(registry_a.stats().unwrap().retired, 1);
             }

@@ -8,8 +8,13 @@ use neovm_value::tagged::gc::symbol_table::abi::*;
 use std::mem::{ManuallyDrop, offset_of};
 
 // A finalized code address is viewed at its one verified C signature, as in
-// the existing fixed-builtin ABI leaf. Neither union nor raw pointer escapes
-// the constructor. This is executable-code ABI conversion, never enum decoding.
+// the existing fixed-builtin ABI leaf. The union never escapes this module;
+// the finalized `ParallelEntry` function pointer is either invoked while
+// borrowing `NativeCompiledCode` (`NativeCompiledCode::run`), or copied via
+// `unsafe fn raw_entry()` exclusively by `NmjitCodeRegistry`, which pins
+// `ExecutableMemory` in `state` until stop-bound `EraGraceReceipt` (`IN_SLICE
+// == 0`) AND `active_calls == 0` prove zero live or future calls remain.
+// This is executable-code ABI conversion, never enum decoding.
 union FinalizedEntry {
     code: *const u8,
     call: ParallelEntry,
@@ -23,11 +28,16 @@ struct ExecutableMemory {
 }
 impl Drop for ExecutableMemory {
     fn drop(&mut self) {
-        // SAFETY: this owner is unique, cannot expose an entry address, and
-        // is dropped exactly once. A successful entry borrows its containing
-        // code owner until the native stack returns. Failed compilation has
-        // never published a callable entry. Thus no live or future call can
-        // refer to these mappings when free_memory invalidates them.
+        // SAFETY: this owner is unique and dropped exactly once. Every direct
+        // call (`NativeCompiledCode::run`) borrows `&self` until the native
+        // stack returns, and every indirect call via `unsafe fn raw_entry()`
+        // (`NmjitCodeRegistry::run_scalar` / `run_cell`) holds `IN_SLICE` and
+        // `ActiveCallGuard` while `NmjitCodeRegistry` retains `self` alive in
+        // `state.active`/`state.retired` until `&mut EraGraceReceipt`
+        // (`AllStopped`, `IN_SLICE == 0`) AND `active_calls == 0` (or exclusive
+        // `Drop` of the registry). Failed compilation never publishes an entry.
+        // Thus no live or future call can refer to these mappings when
+        // `free_memory` invalidates them.
         unsafe { ManuallyDrop::take(&mut self.module).free_memory() }
     }
 }
@@ -44,8 +54,16 @@ impl NativeCompiledCode {
     /// Copy the finalized immutable C-ABI entry pointer for execution inside
     /// `NmjitCodeRegistry` while `ExecutableMemory` remains owned by the
     /// registry until stop-bound `EraGraceReceipt` reclamation.
+    ///
+    /// # Safety
+    ///
+    /// The caller must guarantee that `self` (and its owned `ExecutableMemory`)
+    /// will not be dropped until every invocation of the returned `ParallelEntry`
+    /// has returned (e.g. by holding `IN_SLICE` and `ActiveCallGuard` while
+    /// `NmjitCodeRegistry` defers dropping retired entries until
+    /// `&mut EraGraceReceipt` with `active_calls == 0`).
     #[inline]
-    pub(super) fn raw_entry(&self) -> ParallelEntry {
+    pub(super) unsafe fn raw_entry(&self) -> ParallelEntry {
         self.entry
     }
 
@@ -208,8 +226,10 @@ impl NativeCompiledCode {
             .map_err(|error| ParallelCompileError::Finalize(error.to_string()))?;
         let pointer = module.get_finalized_function(id);
         // SAFETY: this sole constructor just finalized exactly the four-pointer
-        // platform C signature above, returning I32. ExecutableMemory retains
-        // its mappings. The typed pointer never escapes this owning wrapper.
+        // platform C signature above, returning I32. `ExecutableMemory` retains
+        // the mappings until dropped; any caller copying `entry` via `unsafe fn
+        // raw_entry()` (`NmjitCodeRegistry`) upholds its grace/active-call pin
+        // contract before `ExecutableMemory::drop` can run.
         let entry = unsafe { FinalizedEntry { code: pointer }.call };
         Ok(Self {
             entry,

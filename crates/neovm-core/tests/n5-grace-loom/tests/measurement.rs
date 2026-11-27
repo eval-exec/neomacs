@@ -54,7 +54,7 @@ use vocab::{SymbolChunkCount, SymbolChunkSlots, SymbolSlotCount};
 /// The adapter's view loads through this module. The owner's mutex is the
 /// nested backend below.
 mod sync {
-    pub use std::sync::atomic::{AtomicPtr, AtomicU32, Ordering};
+    pub use std::sync::atomic::{AtomicPtr, Ordering};
 }
 
 /// Generic owner against real `std`, same cells as the adapter's parent seam.

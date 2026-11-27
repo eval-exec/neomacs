@@ -43,7 +43,7 @@ struct Gen1ModePin {
 impl Gen1ModePin {
     fn new() -> Self {
         let previous = std::env::var_os("NEOVM_GC_GENERATIONAL");
-        // SAFETY: lib-test executes one test per process; restored on drop.
+        // SAFETY: `cargo nextest` executes one test per process; restored on drop.
         unsafe { std::env::set_var("NEOVM_GC_GENERATIONAL", "1") };
         Self { previous }
     }
@@ -210,7 +210,7 @@ impl<'a, 'era, 'owner> VmCode for Tier1LeafVmCode<'a, 'era, 'owner> {
         classify_call_with_symbols(designator, nargs, env, arena, |_| SymbolCallLookup::Unbound)
     }
 
-    fn try_tier1_leaf(&self, code: Value, args: &[Value]) -> Option<Value> {
+    fn try_tier1_leaf(&self, code: Value, args: &[Value]) -> Option<ImmediateResult> {
         let &(leaf_id, plan) = self.leaves.get(&code.bits())?;
         let input = match plan {
             ScalarProgram::Constant(_) => ImmediateResult::Nil,
@@ -225,11 +225,7 @@ impl<'a, 'era, 'owner> VmCode for Tier1LeafVmCode<'a, 'era, 'owner> {
             .registry
             .run_scalar(leaf_id, self.admission, &mut run, self.destination, input)
         {
-            Ok(()) => {
-                let out = ExecutionTestHomes::read(self.destination, &run);
-                // SAFETY: `ImmediateResult::word()` is a validated immediate (`nil`, `t`, or fixnum).
-                Some(unsafe { Value::from_bits(out.word()) })
-            }
+            Ok(()) => Some(ExecutionTestHomes::read(self.destination, &run)),
             Err(_) => None,
         }
     }
@@ -364,6 +360,72 @@ fn e7p1_vm_exec_tier1_leaf_matches_serial_vm_and_falls_back_cleanly() {
         classify_tier1_scalar_leaf(add1_non_leaf.bytecode_data_if_materialized().unwrap()),
         None
     );
+
+    // Reject calls, allocations, non-immediate constants, closures, dynamic,
+    // optional, and &rest parameter shapes.
+    let call_non_leaf = make_leaf_bc(1, vec![Op::StackRef(0), Op::Call(0), Op::Return], vec![]);
+    assert_eq!(
+        classify_tier1_scalar_leaf(call_non_leaf.bytecode_data_if_materialized().unwrap()),
+        None
+    );
+    let cons_non_leaf = make_leaf_bc(
+        2,
+        vec![Op::StackRef(1), Op::StackRef(1), Op::Cons, Op::Return],
+        vec![],
+    );
+    assert_eq!(
+        classify_tier1_scalar_leaf(cons_non_leaf.bytecode_data_if_materialized().unwrap()),
+        None
+    );
+    let non_imm_const = make_leaf_bc(
+        0,
+        vec![Op::Constant(0), Op::Return],
+        vec![Value::cons(Value::fixnum(1), Value::fixnum(2))],
+    );
+    assert_eq!(
+        classify_tier1_scalar_leaf(non_imm_const.bytecode_data_if_materialized().unwrap()),
+        None
+    );
+    let mut closure_fn = ByteCodeFunction::new(LambdaParams {
+        required: vec![],
+        optional: vec![],
+        rest: None,
+    });
+    closure_fn.set_lexical(true);
+    closure_fn.set_env(Some(Value::cons(Value::fixnum(1), Value::NIL)));
+    closure_fn.set_ops(vec![Op::Nil, Op::Return]);
+    closure_fn.set_max_stack(StackDepth::for_test(4));
+    assert_eq!(classify_tier1_scalar_leaf(&closure_fn), None);
+
+    let mut dynamic_fn = ByteCodeFunction::new(LambdaParams {
+        required: vec![intern("e7p1-dyn-x")],
+        optional: vec![],
+        rest: None,
+    });
+    dynamic_fn.set_lexical(false);
+    dynamic_fn.set_ops(vec![Op::Nil, Op::Return]);
+    dynamic_fn.set_max_stack(StackDepth::for_test(4));
+    assert_eq!(classify_tier1_scalar_leaf(&dynamic_fn), None);
+
+    let mut rest_fn = ByteCodeFunction::new(LambdaParams {
+        required: vec![],
+        optional: vec![],
+        rest: Some(intern("e7p1-rest")),
+    });
+    rest_fn.set_lexical(true);
+    rest_fn.set_ops(vec![Op::Nil, Op::Return]);
+    rest_fn.set_max_stack(StackDepth::for_test(4));
+    assert_eq!(classify_tier1_scalar_leaf(&rest_fn), None);
+
+    let mut optional_fn = ByteCodeFunction::new(LambdaParams {
+        required: vec![],
+        optional: vec![intern("e7p1-opt")],
+        rest: None,
+    });
+    optional_fn.set_lexical(true);
+    optional_fn.set_ops(vec![Op::Nil, Op::Return]);
+    optional_fn.set_max_stack(StackDepth::for_test(4));
+    assert_eq!(classify_tier1_scalar_leaf(&optional_fn), None);
 
     let cons_arg = Value::cons(Value::fixnum(1), Value::fixnum(2));
 

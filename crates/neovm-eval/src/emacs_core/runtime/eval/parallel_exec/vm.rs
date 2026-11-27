@@ -636,7 +636,14 @@ pub(crate) trait VmCode {
     /// Returning `None` (no compiled leaf, backend unavailable, retired entry,
     /// non-immediate argument, or contention) seamlessly falls back to the
     /// owner-local bytecode child frame with identical observable semantics.
-    fn try_tier1_leaf(&self, _code: Value, _args: &[Value]) -> Option<Value> {
+    ///
+    /// Returning `Some(ImmediateResult)` enforces at the type level that no
+    /// unvalidated heap pointer can cross the Tier-1 leaf boundary.
+    fn try_tier1_leaf(
+        &self,
+        _code: Value,
+        _args: &[Value],
+    ) -> Option<neovm_value::tagged::gc::ImmediateResult> {
         None
     }
 }
@@ -2045,8 +2052,11 @@ where
             let segment = self.arena.operand_segment(operands);
             code.try_tier1_leaf(callee_code, &segment[func_slot + 1..])
         };
-        if let Some(result) = leaf_result {
+        if let Some(imm) = leaf_result {
             self.tier1_leaf_hits = self.tier1_leaf_hits.saturating_add(1);
+            // SAFETY: `ImmediateResult::word()` is guaranteed by construction
+            // to encode a validated immediate (`nil`, `t`, or fixnum).
+            let result = unsafe { Value::from_bits(imm.word()) };
             return Self::stop(self.store(frame, branch_pc, func_slot, &[result]));
         }
 

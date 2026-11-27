@@ -105,7 +105,7 @@ use std::num::NonZeroUsize;
 /// The adapter's view loads through this module. The owner's mutex is the
 /// nested backend below; `TryLockError` there stays real `std`.
 mod sync {
-    pub use loom::sync::atomic::{AtomicPtr, AtomicU32, Ordering};
+    pub use loom::sync::atomic::{AtomicPtr, Ordering};
 }
 
 /// Generic owner. Its `sync` is the same Loom backend, so the root store and
@@ -780,6 +780,10 @@ fn positive_real_grace_drain_refuses_busy_under_concurrent_table_view() {
 #[test]
 fn positive_real_grace_drain_refuses_busy_under_contended_writer_mutex() {
     let bits = address_pool_bits();
+    let saw_busy = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let saw_ok = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let saw_busy_in = std::sync::Arc::clone(&saw_busy);
+    let saw_ok_in = std::sync::Arc::clone(&saw_ok);
     support::check(2, move || {
         let pool = materialize(&bits);
         let initial = build_table(PointerTableGeneration::INITIAL, INITIAL_CHUNKS, &pool);
@@ -798,6 +802,10 @@ fn positive_real_grace_drain_refuses_busy_under_contended_writer_mutex() {
         let writer = loom::thread::spawn(move || {
             match writer_tables.try_prepare(shape(GROWN_CHUNKS)).result {
                 Ok(open) => {
+                    // Yield while holding the writer mutex so Loom explores
+                    // schedules where `drainer` enters `reclaim_retired_after_grace`
+                    // under active mutex contention (killing `try_lock -> lock`).
+                    loom::thread::yield_now();
                     drop(open);
                 }
                 Err(TablePublicationError::Busy) => {}
@@ -817,10 +825,12 @@ fn positive_real_grace_drain_refuses_busy_under_contended_writer_mutex() {
         let outcome = support::join(drainer);
         match outcome {
             Ok(report) => {
+                saw_ok_in.store(true, std::sync::atomic::Ordering::Relaxed);
                 assert_eq!(report.reclaimed.get(), 1);
                 assert_eq!(tables.stats().expect("stats").retired.get(), 0);
             }
             Err(TablePublicationError::Busy) => {
+                saw_busy_in.store(true, std::sync::atomic::Ordering::Relaxed);
                 assert_eq!(tables.stats().expect("stats").retired.get(), 1);
                 // SAFETY: all threads joined and zero views are live.
                 let retry = unsafe { tables.reclaim_retired_after_grace() }
@@ -831,6 +841,14 @@ fn positive_real_grace_drain_refuses_busy_under_contended_writer_mutex() {
             Err(other) => panic!("unexpected drain error: {other:?}"),
         }
     });
+    assert!(
+        saw_busy.load(std::sync::atomic::Ordering::Relaxed),
+        "Model 3 must exercise at least one contended Busy refusal (kills try_lock -> lock)"
+    );
+    assert!(
+        saw_ok.load(std::sync::atomic::Ordering::Relaxed),
+        "Model 3 must exercise at least one uncontended Ok drain"
+    );
 }
 
 /// Handshake-free Store-Buffering Loom model (E6-P.4 #16434):

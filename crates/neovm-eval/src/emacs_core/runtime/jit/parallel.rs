@@ -130,10 +130,17 @@ pub(crate) struct ParallelCompiledCode {
     unavailable: std::convert::Infallible,
 }
 impl ParallelCompiledCode {
+    /// Copy the finalized entry pointer for registry-pinned execution.
+    ///
+    /// # Safety
+    ///
+    /// Caller must keep `self` alive until every call through the returned
+    /// `ParallelEntry` has returned (see `NativeCompiledCode::raw_entry`).
     #[cfg(feature = "jit")]
     #[inline]
-    pub(super) fn raw_entry(&self) -> ParallelEntry {
-        self.native.raw_entry()
+    pub(super) unsafe fn raw_entry(&self) -> ParallelEntry {
+        // SAFETY: caller upholds `NativeCompiledCode::raw_entry`'s pin contract.
+        unsafe { self.native.raw_entry() }
     }
 
     #[doc(hidden)]
@@ -184,10 +191,17 @@ pub(crate) struct ParallelCompiledCellCode {
     unavailable: std::convert::Infallible,
 }
 impl ParallelCompiledCellCode {
+    /// Copy the finalized entry pointer for registry-pinned execution.
+    ///
+    /// # Safety
+    ///
+    /// Caller must keep `self` alive until every call through the returned
+    /// `ParallelEntry` has returned (see `NativeCompiledCode::raw_entry`).
     #[cfg(feature = "jit")]
     #[inline]
-    pub(super) fn raw_entry(&self) -> ParallelEntry {
-        self.native.raw_entry()
+    pub(super) unsafe fn raw_entry(&self) -> ParallelEntry {
+        // SAFETY: caller upholds `NativeCompiledCode::raw_entry`'s pin contract.
+        unsafe { self.native.raw_entry() }
     }
 
     #[cfg(feature = "jit")]

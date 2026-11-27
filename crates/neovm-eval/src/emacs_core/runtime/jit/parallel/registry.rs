@@ -91,8 +91,11 @@ struct ActiveCallGuard<'a> {
 impl<'a> ActiveCallGuard<'a> {
     #[inline]
     fn enter(counter: &'a AtomicUsize) -> Self {
-        let prev = counter.fetch_add(1, Ordering::Acquire);
-        assert!(prev < usize::MAX, "nmjit active call counter overflow");
+        let _prev = counter
+            .fetch_update(Ordering::Acquire, Ordering::Relaxed, |cur| {
+                cur.checked_add(1)
+            })
+            .expect("nmjit active call counter overflow");
         Self { counter }
     }
 }
@@ -225,7 +228,14 @@ impl NmjitCodeRegistry {
                     let entry = {
                         let state = self.lock_state_blocking()?;
                         match state.active.get(&id) {
-                            Some(RegisteredLeaf::Scalar(code)) => code.raw_entry(),
+                            Some(RegisteredLeaf::Scalar(code)) => {
+                                // SAFETY: `_active` (`active_calls > 0`) and `IN_SLICE`
+                                // (`activation`) are already live before this lock is
+                                // dropped, and `reclaim_with_grace` requires both
+                                // `&mut EraGraceReceipt` (`IN_SLICE == 0`) and
+                                // `active_calls == 0` before dropping retired mappings.
+                                unsafe { code.raw_entry() }
+                            }
                             Some(RegisteredLeaf::Cell(_)) => {
                                 return Err(NmjitRegistryError::Entry(
                                     ParallelEntryError::UnexpectedEntryKind,
@@ -313,7 +323,12 @@ impl NmjitCodeRegistry {
                         let state = self.lock_state_blocking()?;
                         match state.active.get(&id) {
                             Some(RegisteredLeaf::Cell(code)) => {
-                                (code.raw_entry(), code.read_kind())
+                                // SAFETY: `_active` (`active_calls > 0`) and `IN_SLICE`
+                                // (`activation`) are already live before this lock is
+                                // dropped, and `reclaim_with_grace` requires both
+                                // `&mut EraGraceReceipt` (`IN_SLICE == 0`) and
+                                // `active_calls == 0` before dropping retired mappings.
+                                (unsafe { code.raw_entry() }, code.read_kind())
                             }
                             Some(RegisteredLeaf::Scalar(_)) => {
                                 return Err(NmjitRegistryError::Entry(
@@ -395,6 +410,12 @@ impl NmjitCodeRegistry {
             let _guard = self.state.lock().unwrap();
             panic!("intentional registry poison");
         }));
+    }
+
+    #[cfg(test)]
+    pub(super) fn hold_state_lock_for_test<R>(&self, f: impl FnOnce() -> R) -> R {
+        let _guard = self.state.lock().unwrap();
+        f()
     }
 
     #[cfg(test)]

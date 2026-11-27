@@ -499,12 +499,37 @@ fn e7p0_grace_receipt_refuses_poisoned_era_and_retains_tables() {
 
 #[test]
 fn e7p0_grace_receipt_unblocks_real_era_need_grace_with_live_owner() {
-    with_query_era(
+    crate::test_utils::init_test_tracing();
+    static NEXT_SECOND: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    fn advance_next_chunk_gap() {
+        let mut id = crate::intern::make_uninterned_symbol("e7p0-need-grace-gap");
+        let target = (u64::from(id.to_raw()) / 4096 + 1) * 4096 + 17;
+        while u64::from(id.to_raw()) + 1 < target {
+            id = crate::intern::make_uninterned_symbol("e7p0-need-grace-gap");
+        }
+    }
+
+    let seq = NEXT_SECOND.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let spellings = vec![
+        format!("e7p0-need-grace-grow-0-{seq}"),
+        format!("e7p0-need-grace-grow-1-{seq}"),
+        format!("e7p0-need-grace-grow-2-{seq}"),
+        format!("e7p0-need-grace-unblocked-{seq}"),
+    ];
+    for s in &spellings {
+        assert!(crate::intern::lookup_interned(s).is_none());
+    }
+
+    neovm_eval::test_support::authority::with_test_symbol_intern_race_era(
         PlainSymbolBacking::Unprojected,
-        Query::TableGrowth,
-        |era, ids, target| {
-            assert!(target.is_none());
-            let old_handle = era.admit_plain_symbol(ids[1]).unwrap();
+        &spellings,
+        |era, ids| {
+            let handles = [
+                era.admit_plain_symbol(ids[1]).unwrap(),
+                era.admit_plain_symbol(ids[2]).unwrap(),
+                era.admit_plain_symbol(ids[3]).unwrap(),
+                era.admit_plain_symbol(ids[4]).unwrap(),
+            ];
             let mut stopped = era.stop().unwrap();
             let inputs = era
                 .with_stopped_heap_for_test(&stopped, |heap| unsafe {
@@ -522,6 +547,7 @@ fn e7p0_grace_receipt_unblocks_real_era_need_grace_with_live_owner() {
             let permit = era.register(1, 4).unwrap();
             let (ready_tx, ready_rx) = std::sync::mpsc::sync_channel::<()>(1);
             let inputs_ref = &inputs;
+            let handles_ref = &handles;
 
             let reclaimed = std::thread::scope(|scope| {
                 let worker = scope.spawn(move || {
@@ -530,18 +556,30 @@ fn e7p0_grace_receipt_unblocks_real_era_need_grace_with_live_owner() {
                         let mut run = owner.run_access().unwrap();
                         let mut name = run.root_slot(&inputs_ref[0]).unwrap();
                         let mut dst = run.root_slot(&inputs_ref[1]).unwrap();
-                        run.sym_value_into(&old_handle, &mut name).unwrap();
-                        run.override_symbol_table_limits_for_test(TableLimitProbe::Retirees)
+                        // Three pre-grace growths build up 3 retired tables so
+                        // pinning `TableLimitProbe::Bytes` at the retained
+                        // total leaves enough reclaimed headroom after grace
+                        // to admit the 4th growth under the EXACT same byte cap.
+                        for handle in &handles_ref[0..3] {
+                            advance_next_chunk_gap();
+                            run.sym_value_into(handle, &mut name).unwrap();
+                            intern_once(&mut run, &name, &mut dst).unwrap();
+                        }
+
+                        let after_growth = run.symbol_table_census_for_test().unwrap();
+                        assert!(after_growth.retired() >= 3);
+
+                        // Arm tight byte cap at current retained total and
+                        // advance past the next chunk boundary: growth MUST
+                        // fail with `Capacity` (`NeedGrace(Bytes)`).
+                        run.override_symbol_table_limits_for_test(TableLimitProbe::Bytes)
                             .unwrap();
+                        advance_next_chunk_gap();
+                        run.sym_value_into(&handles_ref[3], &mut name).unwrap();
                         assert_eq!(
                             intern_once(&mut run, &name, &mut dst),
                             Err(InitialInternError::Authority(RegistrationError::Capacity))
                         );
-                        run.override_symbol_table_limits_for_test(TableLimitProbe::Production)
-                            .unwrap();
-                        intern_once(&mut run, &name, &mut dst).unwrap();
-                        let after_growth = run.symbol_table_census_for_test().unwrap();
-                        assert!(after_growth.retired() >= 1);
                         drop(name);
                         drop(dst);
                         run.clear_root_slots().unwrap();
@@ -556,7 +594,7 @@ fn e7p0_grace_receipt_unblocks_real_era_need_grace_with_live_owner() {
                     }
 
                     {
-                        let run = loop {
+                        let mut run = loop {
                             match owner.run_access() {
                                 Ok(run) => break run,
                                 Err(RegistrationError::Busy) => std::thread::yield_now(),
@@ -565,6 +603,20 @@ fn e7p0_grace_receipt_unblocks_real_era_need_grace_with_live_owner() {
                         };
                         let after_grace = run.symbol_table_census_for_test().unwrap();
                         assert_eq!(after_grace.retired(), 0);
+                        // Without relaxing the byte cap, retrying the EXACT
+                        // same 4th growth now succeeds because grace reclaimed
+                        // the retired tables under the cap.
+                        let mut name = run.root_slot(&inputs_ref[0]).unwrap();
+                        let mut dst = run.root_slot(&inputs_ref[1]).unwrap();
+                        run.sym_value_into(&handles_ref[3], &mut name).unwrap();
+                        intern_once(&mut run, &name, &mut dst).unwrap();
+                        let after_unblocked = run.symbol_table_census_for_test().unwrap();
+                        assert!(after_unblocked.retired() >= 1);
+                        run.override_symbol_table_limits_for_test(TableLimitProbe::Production)
+                            .unwrap();
+                        drop(name);
+                        drop(dst);
+                        run.clear_root_slots().unwrap();
                     }
                     owner.retire_rooted(&[]).unwrap();
                 });
@@ -580,7 +632,7 @@ fn e7p0_grace_receipt_unblocks_real_era_need_grace_with_live_owner() {
                 report
             });
 
-            assert!(reclaimed.reclaimed >= 1);
+            assert!(reclaimed.reclaimed >= 3);
             assert!(reclaimed.freed_bytes > 0);
             drop(inputs);
             let (collector, keeper) = era.finish().unwrap();
