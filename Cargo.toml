@@ -543,6 +543,18 @@ inherits = "release"
 debug = false
 strip = "none"
 
+# Fast incremental optimized build for day-to-day editor/GUI development.
+# Skips fat LTO and uses parallel codegen + incremental compilation so Rust
+# relinks take seconds while keeping release-level runtime speed for pdump and
+# interactive editing. Lives in target/release-fast so it never disturbs
+# target/release or target/debug.
+[profile.release-fast]
+inherits = "release"
+lto = false
+codegen-units = 16
+incremental = true
+debug = "line-tables-only"
+
 [patch.crates-io]
 # Never vendor dependencies into this repository. Always fork the crate on
 # GitHub and make changes on the fork's `patch` branch. Reference an exact Git

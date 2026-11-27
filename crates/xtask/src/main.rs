@@ -757,12 +757,25 @@ impl FreshBuildOptions {
         // The pipeline byte-compiles the whole Lisp tree with the binary it
         // just built; an unoptimized profile makes that take hours, which is
         // what the original --release requirement existed to prevent.
-        if !profile.is_optimized() {
+        // `--profile dev` is allowed with `--no-byte-compile` (reusing existing
+        // `.elc` files) for fast debug-assertion iteration. `debug` is not a
+        // valid Cargo profile name (Cargo's built-in profile is `dev`, which
+        // outputs to `target/debug`).
+        if matches!(profile, BuildProfile::Debug | BuildProfile::Test) {
             return Err(format!(
-                "fresh-build cannot use the `{}` profile: the pipeline \
-                 byte-compiles the Lisp tree with the binary it builds, so it \
-                 needs an optimized profile (`release`, or `profiling` which \
-                 inherits it).",
+                "fresh-build cannot use the `{}` profile: use `--profile dev --no-byte-compile` \
+                 for an unoptimized debug build (outputs to target/debug), or \
+                 `--profile release-fast` for fast incremental optimized builds.",
+                profile.as_name()
+            )
+            .into());
+        }
+        if !profile.is_optimized() && !no_byte_compile {
+            return Err(format!(
+                "fresh-build cannot byte-compile the Lisp tree with the unoptimized `{}` profile.\n\n\
+                 Re-run with:\n    cargo xtask fresh-build --profile dev --no-byte-compile\n\
+                 (reuses existing .elc files) or, for fast incremental optimized builds:\n    \
+                 cargo xtask fresh-build --profile release-fast",
                 profile.as_name()
             )
             .into());
@@ -881,6 +894,8 @@ fn resolve_cli_path(repo_root: &Path, raw: OsString) -> PathBuf {
 #[strum(serialize_all = "kebab-case")]
 enum BuildProfile {
     Release,
+    /// Fast incremental optimized build (no fat LTO, parallel codegen, line tables).
+    ReleaseFast,
     Profiling,
     /// Profile-guided shipping build.
     ReleasePgo,
@@ -888,8 +903,7 @@ enum BuildProfile {
     ReleasePgoProfiling,
     /// The instrumented pass that PRODUCES a profile. Never a PGO consumer.
     ReleasePgoGen,
-    /// Unoptimized; rejected, since the pipeline byte-compiles the Lisp tree
-    /// with the binary it just built.
+    /// Unoptimized debug build; allowed with `--no-byte-compile` (outputs to target/debug).
     Dev,
     Debug,
     Test,
@@ -4939,28 +4953,30 @@ Options:
   --runtime-root DIR  Runtime root containing lisp/ and etc/
   --release           Build with the release profile, using target/release
                       (equivalent to --profile release)
-  --profile release-pgo
-                      Profile-guided build. Runs the pipeline TWICE: an
-                      instrumented pass (target/release-pgo-gen), then the
-                      committed training workload crates/xtask/pgo-train.el, then
-                      llvm-profdata merge, then the optimized build into
-                      target/release-pgo. Needs `rustup component add
-                      llvm-tools`. Measured on this tree: STARTUP -17%,
-                      byte-compile -17% instructions, batch font-lock benches
-                      -23%/-27% cycles. It does NOT speed up the interactive
-                      edit loop: a real TTY keystroke->redisplay measurement is
-                      +2%, because the training workload runs in --batch and so
-                      never exercises redisplay. Scope claims accordingly.
-  --profile release-pgo-profiling
-                      As release-pgo, but keeps debug symbols so the SHIPPED
-                      configuration can be profiled -- PGO changes inlining and
-                      block layout, so hotspots from a plain release build do
-                      not necessarily carry over.
-  --profile NAME      Build with cargo profile NAME, using target/<dir> for it.
-                      `profiling` inherits release but keeps debug symbols, and
-                      lives in target/profiling -- so it does NOT disturb an
-                      existing target/release build or its pdump. Unoptimized
-                      profiles (dev/debug/test) are rejected.
+  --profile NAME      Build with Cargo profile NAME (outputs to target/<dir>).
+                      Built-in profiles:
+                        release               Fat-LTO release build (target/release)
+                        release-fast          Fast incremental optimized dev build:
+                                              no fat LTO, codegen-units=16, line tables
+                                              (target/release-fast)
+                        profiling             Release-identical codegen with function
+                                              symbols (strip=none, debug=false;
+                                              target/profiling). Does not disturb
+                                              target/release or its pdump.
+                        release-pgo           Two-pass PGO shipping build
+                                              (target/release-pgo; needs llvm-tools;
+                                              runs release-pgo-gen + pgo-train.el +
+                                              llvm-profdata merge). Speeds up startup
+                                              (-17%) and batch/byte-compile (-17..-27%);
+                                              does not speed up interactive redisplay.
+                        release-pgo-profiling Two-pass PGO build with function symbols
+                                              (strip=none, debug=false;
+                                              target/release-pgo-profiling).
+                        dev                   Unoptimized debug build (target/debug,
+                                              deps at opt-level=3); requires
+                                              --no-byte-compile to reuse existing .elc.
+                      Custom optimized Cargo.toml profiles are also accepted.
+                      `debug` and `test` are rejected (use `dev --no-byte-compile`).
   --dry-run           Print planned commands without running them
   --low-memory        Bound every Cargo compile to one job; slower, but avoids
                       the release-link OOM reported on 8 GiB WSL/Nix machines
