@@ -141,13 +141,26 @@ const EXCEPTIONS: &[Exception] = &[
         argument: "&cargo_bin",
         reason: "cargo metadata query for the dependency ratchet, not an editor",
     },
-    Exception {
-        path_suffix: "neomacs-tui-tests/src/oracle_guard_test.rs",
-        argument: "\"emacs\"",
-        reason: "the oracle guard's forbidden-shape fixture strings are source text \
-                 consumed by the guard; no process is spawned",
-    },
 ];
+
+/// A reviewed match that is fixture source text rather than a spawn.
+///
+/// The extra `line_contains` marker is required so executable code in the same
+/// file cannot ride the exception: the oracle guard's fixture arms are raw
+/// string literals fed to its own detector, never constructed commands.
+struct FixtureException {
+    path_suffix: &'static str,
+    argument: &'static str,
+    line_contains: &'static str,
+    reason: &'static str,
+}
+
+const FIXTURE_EXCEPTIONS: &[FixtureException] = &[FixtureException {
+    path_suffix: "neomacs-tui-tests/src/oracle_guard_test.rs",
+    argument: "\"emacs\"",
+    line_contains: "r#\"",
+    reason: "forbidden-shape fixture strings consumed by the oracle guard; no process is spawned",
+}];
 
 fn repo_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -216,6 +229,14 @@ fn is_exception(relative: &str, argument: &str) -> bool {
     })
 }
 
+fn is_fixture_exception(relative: &str, argument: &str, line: &str) -> bool {
+    FIXTURE_EXCEPTIONS.iter().any(|exception| {
+        relative.ends_with(exception.path_suffix)
+            && argument == exception.argument
+            && line.contains(exception.line_contains)
+    })
+}
+
 #[test]
 fn bash_that_can_launch_an_editor_stays_a_violation() {
     assert!(
@@ -227,6 +248,19 @@ fn bash_that_can_launch_an_editor_stays_a_violation() {
     assert!(
         !NON_EDITOR_PROGRAMS.contains(&argument.trim_matches('"')),
         "Command::new(\"bash\") must fail the tripwire"
+    );
+}
+
+#[test]
+fn fixture_exception_requires_the_raw_string_marker() {
+    let relative = "crates/neomacs-tui-tests/src/oracle_guard_test.rs";
+    let fixture = r##"        ("direct Command::new", r#"let c = Command::new("emacs");"#),"##;
+    assert!(is_fixture_exception(relative, "\"emacs\"", fixture));
+
+    let executable = "    let command = Command::new(\"emacs\");";
+    assert!(
+        !is_fixture_exception(relative, "\"emacs\"", executable),
+        "an executable spawn in the same file must not ride the fixture exception"
     );
 }
 
@@ -267,6 +301,7 @@ fn harness_editor_spawns_go_through_the_canonical_environment() {
                     && NON_EDITOR_PROGRAMS.contains(&argument.trim_matches('"'))
                 || argument.contains("current_exe")
                 || is_exception(&relative, argument)
+                || is_fixture_exception(&relative, argument, line)
             {
                 continue;
             }
