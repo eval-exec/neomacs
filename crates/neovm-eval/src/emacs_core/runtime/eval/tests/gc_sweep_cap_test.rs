@@ -97,7 +97,7 @@ fn sweep_from_zero_allocation() -> Context {
         }
         // The mark window consed: the sweep would not start from zero
         // allocation. Finish this cycle and try again.
-        ev.tagged_heap.finish_incremental_sweep_now();
+        ev.tagged_heap.finish_incremental_sweep_now_for_test();
         attempts += 1;
         assert!(attempts < 20, "could not observe a fresh sweep");
         garbage(&mut ev);
