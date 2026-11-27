@@ -80,7 +80,7 @@ impl Stage {
 
 #[derive(Debug)]
 pub(crate) struct StageReport {
-    pub(crate) stage: Stage,
+    stage: Stage,
     pub(crate) files: Vec<PathBuf>,
     pub(crate) total: usize,
 }
