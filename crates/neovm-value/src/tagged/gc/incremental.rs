@@ -235,6 +235,7 @@ impl TaggedHeap {
         self.sweep_marker_page_end = self.marker_arena.pages.len();
         self.sweep_bignum_page_end = self.bignum_arena.pages.len();
         self.sweep_noncons_live_bytes = 0;
+        self.sweep_young_list_live_bytes = 0;
         self.sweep_mark_us = self.incremental_mark_us;
         self.snapshot_context_seed_for_sweep();
         self.sweep_bytes_before = bytes_before;
@@ -271,6 +272,10 @@ impl TaggedHeap {
                 self.pace_lead_bytes,
             );
         }
+        // The sweep window starts here: `finish_incremental_sweep` reads its
+        // cons allocation against this count.
+        self.sweep_window_conses_start =
+            self.memory_use_counts_snapshot()[MemoryUseCountSlot::ConsCells.index()];
         // The triggering allocation budget is spent; the next mark fires once a
         // fresh threshold's worth has been allocated.
         self.reset_bytes_since_gc();
@@ -555,8 +560,8 @@ impl TaggedHeap {
                     (*current).next = self.all_objects;
                     self.all_objects = current;
                     if !(*current).flags.image_resident() {
-                        self.sweep_noncons_live_bytes = self
-                            .sweep_noncons_live_bytes
+                        self.sweep_young_list_live_bytes = self
+                            .sweep_young_list_live_bytes
                             .saturating_add(self.collector_object_bytes(current));
                     }
                 } else {
@@ -702,13 +707,29 @@ impl TaggedHeap {
         // taking it from that term alone keeps it off the survivors the
         // window never touched. Both undercount what the windows allocated
         // that stays live, which only paces the next cycle sooner.
+        //
+        // Two parts of `bytes_since_gc` can never be in that term, so they
+        // are not taken from it: the window's conses (counted against the
+        // cons slot at termination; a Lisp write to the counter can only
+        // shrink this, toward the old upper bound), and the young-list
+        // survivors, which sit in their own term because nothing allocated
+        // in the window joins the detached list.
+        let window_bytes = self.bytes_since_gc();
+        let window_cons_bytes = usize::try_from(
+            self.memory_use_counts_snapshot()[MemoryUseCountSlot::ConsCells.index()]
+                .wrapping_sub(self.sweep_window_conses_start),
+        )
+        .unwrap_or(usize::MAX)
+        .saturating_mul(size_of::<ConsCell>())
+        .min(window_bytes);
         let cons_live_bytes = self
             .sweep_cons_live_cells
             .saturating_mul(size_of::<ConsCell>());
         self.live_bytes = cons_live_bytes
+            .saturating_add(self.sweep_young_list_live_bytes)
             .saturating_add(
                 self.sweep_noncons_live_bytes
-                    .saturating_sub(self.bytes_since_gc()),
+                    .saturating_sub(window_bytes - window_cons_bytes),
             )
             .saturating_add(self.old_noncons_bytes())
             .saturating_sub(self.sweep_mark_window_alloc_bytes)

@@ -795,3 +795,54 @@ fn sweep_window_allocation_the_sweep_never_counted_keeps_the_survivors() {
         "32,768 conses allocated during the sweep erased survivors: live bytes {quiet} -> {busy}"
     );
 }
+
+/// Live bytes after a non-generational incremental cycle that retains 2,048
+/// strings (arena pages) and 64 hash tables (the boxed young list), when its
+/// sweep window allocates `conses` dead conses. Without generations the
+/// retained strings stay in `sweep_noncons_live_bytes` and the hash tables
+/// are young-list survivors, so the window's conses must not be taken from
+/// either.
+fn live_bytes_after_nongenerational_sweep_with_window_conses(conses: usize) -> usize {
+    use crate::value::{HashTableTest, LispHashTable};
+    let mut heap = heap_with_generations(false);
+    set_tagged_heap(&mut heap);
+    let mut kept: Vec<TaggedValue> = (0..2_048)
+        .map(|i| heap.alloc_string(LispString::from_utf8(&format!("retained {i:08}"))))
+        .collect();
+    kept.extend((0..64).map(|_| heap.alloc_hash_table(LispHashTable::new(HashTableTest::Eq))));
+    heap.concurrent_begin();
+    for &value in &kept {
+        heap.seed_root(value);
+    }
+    heap.launch_concurrent_mark();
+    while !heap.concurrent_mark_done() {
+        std::thread::yield_now();
+    }
+    heap.join_concurrent_mark();
+    heap.reseed_runtime_and_remembered_roots();
+    for &value in &kept {
+        heap.seed_root(value);
+    }
+    heap.incremental_drain_all();
+    let bytes_before = heap.live_bytes();
+    heap.incremental_finish_for_test(bytes_before, std::time::Instant::now());
+    assert!(heap.sweep_in_progress());
+    for _ in 0..conses {
+        let _ = heap.alloc_cons(TaggedValue::NIL, TaggedValue::NIL);
+    }
+    heap.finish_incremental_sweep_now_for_test();
+    heap.live_bytes
+}
+
+#[test]
+fn nongenerational_sweep_window_conses_keep_the_retained_survivors() {
+    let quiet = live_bytes_after_nongenerational_sweep_with_window_conses(0);
+    // About 512 KB of conses, well above the retained strings' and tables' bytes.
+    let busy = live_bytes_after_nongenerational_sweep_with_window_conses(32_768);
+    assert!(quiet > 0, "the fixture retained nothing");
+    assert!(
+        busy >= quiet,
+        "32,768 conses allocated during a non-generational sweep erased survivors: \
+         live bytes {quiet} -> {busy}"
+    );
+}

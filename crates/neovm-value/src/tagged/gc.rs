@@ -1099,6 +1099,16 @@ pub struct TaggedHeap {
     /// evaluator's completed-cycle block is the serial backstop (E3.2).
     /// Trailing, so no pinned offset moves.
     pending_native_destroys: Option<native_deferred::PendingNativeDestroys>,
+    /// Survivor bytes the deferred sweep counted on the detached young list.
+    /// Allocation during the sweep links onto the fresh young list, never
+    /// this one, so the sweep-window subtraction stays off this term.
+    /// Trailing, so no pinned offset moves.
+    sweep_young_list_live_bytes: usize,
+    /// Conses handed out (the `memory-use-counts` cons slot) at mark
+    /// termination. At completion the difference is the sweep window's cons
+    /// allocation, which the sweep never counts. Trailing, so no pinned
+    /// offset moves.
+    sweep_window_conses_start: u64,
 }
 
 impl Default for TaggedHeap {
@@ -1234,6 +1244,8 @@ impl TaggedHeap {
             cycle_time_bank: cycle_time_bank::GcCycleTimeBank::default(),
             published_payload_roots: publication_roots::PublishedPayloadRoots::default(),
             pending_native_destroys: None,
+            sweep_young_list_live_bytes: 0,
+            sweep_window_conses_start: 0,
             dirty_owner_bits: FxHashSet::default(),
             dirty_writes: Vec::new(),
             gc_collections: 0,
