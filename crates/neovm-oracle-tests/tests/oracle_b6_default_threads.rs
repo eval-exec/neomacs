@@ -34,22 +34,30 @@
 //! tree before the enabled tree could be built, per the rule that a check
 //! never observed failing has no meaning.
 //!
-//! **Scope: the whole thread suite, two named exclusions.** This file replays
-//! every row of `oracle_default_threads.rs` with the era open — 29 of its 31
+//! **Scope: the whole thread suite, one named exclusion.** This file replays
+//! every row of `oracle_default_threads.rs` with the era open — 31 of its 32
 //! rows, named `b6_<original>`, each keeping its original form and its
-//! original GNU expectation byte for byte. The excluded rows are
+//! original GNU expectation byte for byte. (The arm grew by #877's regression
+//! row after its scope was ratified; it is replayed here so the every-row
+//! claim stays true.) The excluded row is
 //! `e8s_make_thread_arity_and_main_thread_identity`, which prints
 //! `(length (all-threads))`: GNU answers 1, and an admitted owner is a real
-//! thread object, so the b6 arm answers 2 by construction; and
-//! `e6p1_a_feature_detected_opt_in_creator_matches_make_thread`, whose list
-//! includes `(neomacs-thread-parallel-p th)` — a Neomacs-only extension that
-//! GNU cannot answer, so with admission live the arm reads `t` where GNU reads
-//! `nil`. Neither is a divergence, and no single form can prove both. Both
-//! exclusions are covered instead by the witness: every row asserts
-//! `threads=2` and `admitted=t`, so an era arm that failed to add its owner —
-//! or added two, or admitted nothing — is red on every row, not on one. The
-//! Sim and Green control arms keep running both excluded rows unchanged in
-//! `oracle_default_threads.rs`, so nothing is weakened or deleted.
+//! thread object, so the b6 arm answers 2 by construction. That is not a
+//! divergence, and no single form can prove both. The exclusion is covered
+//! instead by the witness: every row asserts `threads=2` and `admitted=t`, so
+//! an era arm that failed to add its owner — or added two, or admitted
+//! nothing — is red on every row, not on one. The Sim and Green control arms
+//! keep running the excluded row unchanged in `oracle_default_threads.rs`, so
+//! nothing is weakened or deleted.
+//!
+//! The former second exclusion (`e6p1_a_feature_detected_opt_in_creator...`)
+//! is gone: that row forked on `fboundp 'neomacs-make-parallel-thread` and
+//! compared the Neomacs-only hint, so with admission on it could never agree
+//! with GNU. It was re-expressed as `e6p1_make_thread_matches_gnu_in_the_default_arm`
+//! (both editors create through `make-thread`, no Neomacs-only function in the
+//! compared list) and rejoins this arm as `b6_e6p1_make_thread_matches_gnu_in_the_default_arm`.
+//! The creator's own semantics live in the unit rows instead, including a
+//! forced-off fallback row.
 //!
 //! The arm MUST run with `NEOVM_THREADS=green`: `admit_parallel` refuses with
 //! `Unavailable` unless `green_world(ctx)` holds (`green/api.rs:392`), and a
@@ -133,6 +141,35 @@ fn assert_b6_thread_row(form: &str, expected: expect_test::Expect) {
     assert!(
         witness.contains("parked=t"),
         "the idle owner never reached its park; witness was {witness:?}"
+    );
+}
+
+/// `make-thread`'s GNU-visible shape with an era open and an idle owner parked.
+/// The row states its arm: both editors create through `make-thread`, so the
+/// compared list carries no Neomacs-only function. (Its predecessor forked on
+/// `fboundp 'neomacs-make-parallel-thread` and compared the Neomacs-only hint,
+/// which cannot agree once admission is on; the creator's own semantics are
+/// covered by the unit rows in opt_in_creator_test.rs.)
+#[test]
+fn b6_e6p1_make_thread_matches_gnu_in_the_default_arm() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+    assert_b6_thread_row(
+        r##"
+(let* ((name (copy-sequence "e6p1"))
+       (th (make-thread
+            (lambda ()
+              (let ((child (make-thread (lambda () 'child))))
+                (list 'result (eq (current-thread) main-thread)
+                      (thread-join child))))
+            name)))
+  (list (func-arity #'make-thread) (threadp th) (eq name (thread-name th))
+        (and (memq th (all-threads)) t)
+        (thread-join th) (thread-live-p th)
+        (condition-case err (make-thread (lambda () 1) 42) (error err))))
+"##,
+        expect_test::expect![[
+            r#""OK ((1 . 3) t t t (result nil child) nil (wrong-type-argument stringp 42))""#
+        ]],
     );
 }
 
@@ -737,14 +774,15 @@ fn b6_e8s_condition_wait_interrupted_by_thread_signal() {
     );
 }
 
+/// The `make-thread` arm, stated rather than detected: the row's stimulus is
+/// `make-thread` on both editors, so it does not change when admission flips
+/// on. The creator's own arm is covered by the E6-P.4 unit rows.
 #[test]
-fn b6_e6p1_an_opt_in_thread_object_takes_signals_mutexes_and_last_error() {
+fn b6_e6p1_make_thread_takes_signals_mutexes_and_last_error() {
     return_if_neovm_enable_oracle_proptest_not_set!();
     assert_b6_thread_row(
         r##"
-(let* ((creator (if (fboundp 'neomacs-make-parallel-thread)
-                    #'neomacs-make-parallel-thread
-                  #'make-thread))
+(let* ((creator #'make-thread)
        (m (make-mutex "e6p1-m")) (c (make-condition-variable m)) (ready nil)
        (th (funcall creator
                     (lambda ()
@@ -819,6 +857,30 @@ fn b6_e8s_blocking_io_writer_thread_releases_main_sleep_for() {
                          "e8s-sleep-writer")))
     ;; The writer thread must run DURING main's sleep for `ran' to be set:
     ;; this is the blocking-I/O Baton release, not a timeout race.
+    (sleep-for 0.5)
+    (let ((during (car ran)))
+      (list during (thread-join th) (car ran)))))
+"##,
+        expect_test::expect![[r#""OK (writer-ran (writer-ran) writer-ran)""#]],
+    );
+}
+
+/// Issue #877's regression shape, replayed with the era open: a prior thread
+/// join leaves an unread nudge on the shared native pipe, so main's first
+/// physical wait returns at once and its second must honor the new writer's
+/// earlier select deadline. The row landed in `oracle_default_threads.rs`
+/// after this arm's scope was ratified; it is replayed here so the arm keeps
+/// its every-row claim.
+#[test]
+fn b6_e8s_blocking_io_writer_thread_releases_main_sleep_for_after_prior_thread_join() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+    assert_b6_thread_row(
+        r##"
+(let ((prior (make-thread (lambda () 42) "e8s-prior")))
+  (thread-join prior)
+  (let* ((ran nil)
+         (th (make-thread (lambda () (sleep-for 0.1) (push 'writer-ran ran))
+                          "e8s-sleep-writer-after-join")))
     (sleep-for 0.5)
     (let ((during (car ran)))
       (list during (thread-join th) (car ran)))))

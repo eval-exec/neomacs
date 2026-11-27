@@ -2,7 +2,9 @@
 //! tests (`E6-P4-ADMISSION-PREREAD.md` §3.2 + Lead Condition 1).
 //!
 //! Covers:
-//! - Dormancy default (`PRODUCTION_ADMISSION_ENABLED == false`)
+//! - ADMISSION-ON (#77u): the eligible opt-in request is admitted by default
+//!   and opens the live era; the Baton fallback is kept covered through the
+//!   forced-off test seam
 //! - `make-thread`-only zero-keeper invariant
 //! - GEN0 and Sim mode Baton/Sim fallback (`neomacs-thread-parallel-p` = `nil`)
 //! - End-to-end `b6`-prelude shape (live opt-in owner parked in
@@ -22,7 +24,9 @@ use crate::emacs_core::eval::parallel_entry::keeper_driver::{GroupLink, GroupPor
 use crate::emacs_core::eval::world::TurnRight;
 use crate::emacs_core::eval::{Context, ThreadingMode};
 use crate::emacs_core::print::print_value;
-use crate::emacs_core::threads::with_parallel_admission_enabled_for_test;
+use crate::emacs_core::threads::{
+    with_parallel_admission_disabled_for_test, with_parallel_admission_enabled_for_test,
+};
 use std::panic::AssertUnwindSafe;
 use std::sync::mpsc;
 use std::time::Duration;
@@ -50,22 +54,46 @@ fn eval_printed(ctx: &mut Context, src: &str) -> String {
     print_value(&val)
 }
 
+const ROW1_FORM: &str =
+    "(let ((th (neomacs-make-parallel-thread (lambda () (+ 40 2)) \"e6p4-row1\")))
+           (list (thread-join th) (neomacs-thread-parallel-p th)))";
+
+/// ADMISSION-ON (#77u): production admission is on, so an eligible opt-in
+/// request in Green is admitted and opens the live era.
 #[test]
-fn e6p4_row1_production_dormant_by_default_falls_back_to_baton() {
+fn e6p4_row1_production_admission_on_by_default_admits() {
     let mut ctx = green_context(true);
-    let out = eval_printed(
-        &mut ctx,
-        "(let ((th (neomacs-make-parallel-thread (lambda () (+ 40 2)) \"dormant\")))
-           (list (thread-join th) (neomacs-thread-parallel-p th)))",
-    );
-    assert_eq!(out, "(42 nil)");
+    let out = eval_printed(&mut ctx, ROW1_FORM);
+    assert_eq!(out, "(42 t)");
     let control = ctx.green_control();
     assert!(
-        !control.era_is_open(),
-        "dormant production must not open an era"
+        control.era_is_open(),
+        "an admitted opt-in request must open the live era"
     );
-    assert!(control.era_state_is_solo_active());
+    // The owner retires on its own exit, so the live-participant count is
+    // asserted where the code maintains it: zero once teardown closes the era.
     ctx.green_teardown();
+    assert!(!control.era_is_open());
+    assert_eq!(control.live_parallel_participant_count(), 0);
+}
+
+/// The fallback arm of the same primitive, kept covered now that production
+/// admission is on: forcing admission off must reproduce the Baton thread and
+/// leave the era closed.
+#[test]
+fn e6p4_row1b_forced_off_production_falls_back_to_baton() {
+    with_parallel_admission_disabled_for_test(|| {
+        let mut ctx = green_context(true);
+        let out = eval_printed(&mut ctx, ROW1_FORM);
+        assert_eq!(out, "(42 nil)");
+        let control = ctx.green_control();
+        assert!(
+            !control.era_is_open(),
+            "a refused opt-in request must not open an era"
+        );
+        assert!(control.era_state_is_solo_active());
+        ctx.green_teardown();
+    });
 }
 
 #[test]
@@ -478,7 +506,7 @@ fn e6p4_row8b_inv2_retire_by_wake_parked_owner() {
 /// **Slice A (`Control::wait_of` fix, `#15237`)** red-first regression row:
 /// `thread-signal` targeting an admitted opt-in parallel owner parked in
 /// `(condition-wait c)` MUST observe `Control::wait_of(key) == Some(Wait::Condition(..))`
-/// and wake it cleanly (matching `e6p1_an_opt_in_thread_object_takes_signals_mutexes_and_last_error`).
+/// and wake it cleanly (matching `e6p1_make_thread_takes_signals_mutexes_and_last_error`).
 #[test]
 fn e6p4_row9_wait_of_wakes_parked_opt_in_owner_on_thread_signal() {
     let (done_tx, done_rx) = mpsc::channel::<Result<(), String>>();

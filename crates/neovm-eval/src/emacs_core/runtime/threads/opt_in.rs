@@ -21,31 +21,58 @@ use neovm_value::value::Value;
 /// to `true` after `b6` passes on the attested GNU Emacs 31.1 oracle.
 const PRODUCTION_ADMISSION_ENABLED: bool = true;
 
-#[cfg(test)]
-static TEST_ADMISSION_OVERRIDE: std::sync::atomic::AtomicBool =
-    std::sync::atomic::AtomicBool::new(false);
+/// Test-only override of the single-point switch: `DEFAULT` follows the
+/// compiled constant, `OFF` and `ON` force one configuration. Both directions
+/// exist so a row can assert the admitted arm and the Baton-fallback arm of the
+/// same primitive; with production admission on, the fallback arm is only
+/// reachable through `OFF`. `test-support` builds expose both cross-crate so
+/// re-homed tests (neovm-core) can cover the same pair.
+#[cfg(any(test, feature = "test-support"))]
+static TEST_ADMISSION_OVERRIDE: std::sync::atomic::AtomicU8 =
+    std::sync::atomic::AtomicU8::new(ADMISSION_OVERRIDE_DEFAULT);
+#[cfg(any(test, feature = "test-support"))]
+const ADMISSION_OVERRIDE_DEFAULT: u8 = 0;
+#[cfg(any(test, feature = "test-support"))]
+const ADMISSION_OVERRIDE_OFF: u8 = 1;
+#[cfg(any(test, feature = "test-support"))]
+const ADMISSION_OVERRIDE_ON: u8 = 2;
 
-/// Run `body` with the single-point admission switch enabled in unit tests so
-/// E6-P.4's regression rows exercise the live production route while production
-/// stays dormant (`PRODUCTION_ADMISSION_ENABLED == false`).
-#[cfg(test)]
-pub(crate) fn with_parallel_admission_enabled_for_test<R>(body: impl FnOnce() -> R) -> R {
-    struct Reset(bool);
+#[cfg(any(test, feature = "test-support"))]
+fn with_admission_override<R>(mode: u8, body: impl FnOnce() -> R) -> R {
+    struct Reset(u8);
     impl Drop for Reset {
         fn drop(&mut self) {
             TEST_ADMISSION_OVERRIDE.store(self.0, std::sync::atomic::Ordering::Release);
         }
     }
-    let prev = TEST_ADMISSION_OVERRIDE.swap(true, std::sync::atomic::Ordering::AcqRel);
+    let prev = TEST_ADMISSION_OVERRIDE.swap(mode, std::sync::atomic::Ordering::AcqRel);
     let _reset = Reset(prev);
     body()
 }
 
+/// Run `body` with the switch forced ON, whatever the compiled constant says:
+/// the rows that exercise the live production route use this so they keep
+/// meaning if the constant is ever flipped back.
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) fn with_parallel_admission_enabled_for_test<R>(body: impl FnOnce() -> R) -> R {
+    with_admission_override(ADMISSION_OVERRIDE_ON, body)
+}
+
+/// Run `body` with the switch forced OFF: the shape a refused opt-in request
+/// takes (an ordinary Baton thread with the hint nil). With production
+/// admission on, this is the only way to keep that fallback covered.
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) fn with_parallel_admission_disabled_for_test<R>(body: impl FnOnce() -> R) -> R {
+    with_admission_override(ADMISSION_OVERRIDE_OFF, body)
+}
+
 #[inline]
 fn parallel_admission_enabled() -> bool {
-    #[cfg(test)]
-    if TEST_ADMISSION_OVERRIDE.load(std::sync::atomic::Ordering::Acquire) {
-        return true;
+    #[cfg(any(test, feature = "test-support"))]
+    match TEST_ADMISSION_OVERRIDE.load(std::sync::atomic::Ordering::Acquire) {
+        ADMISSION_OVERRIDE_ON => return true,
+        ADMISSION_OVERRIDE_OFF => return false,
+        _ => {}
     }
     PRODUCTION_ADMISSION_ENABLED
 }

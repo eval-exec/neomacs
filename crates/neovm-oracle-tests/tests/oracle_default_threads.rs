@@ -73,37 +73,38 @@ fn e8s_make_thread_arity_and_main_thread_identity() {
     );
 }
 
-/// E6-P.1: a program that feature-detects the opt-in creator runs the same
-/// in GNU, which has no `neomacs-make-parallel-thread` and takes
-/// `make-thread`, and in Neomacs, which takes the extension and (until an
-/// N-mutator admission exists) gets an ordinary Baton thread with the hint
-/// nil. A default thread made inside it, and the creator's argument errors,
-/// match too (pentry DESIGN §6).
+/// E6-P.1: the default `make-thread` arm agrees with GNU. GNU has no
+/// `neomacs-make-parallel-thread`, so a program that wants the same answer in
+/// both editors creates through `make-thread`; this row states that arm rather
+/// than branching on `fboundp`. It covers the thread object, a child made
+/// inside the worker, and the arity/argument errors (pentry DESIGN §6). The
+/// opt-in creator's own two arms — admitted, and the forced-off Baton fallback
+/// with the hint nil — are Neomacs-unit rows in `opt_in_creator_test.rs`.
 #[test]
-fn e6p1_a_feature_detected_opt_in_creator_matches_make_thread() {
+fn e6p1_make_thread_matches_gnu_in_the_default_arm() {
     return_if_neovm_enable_oracle_proptest_not_set!();
+    // The GNU-comparable arm, stated rather than detected: this row creates
+    // through `make-thread` on BOTH editors, so the compared list contains no
+    // Neomacs-only function and no `fboundp` fork. The opt-in creator's
+    // "behaves like make-thread" claim is a Neomacs-side property (it differs by
+    // design when admission is on, where the hint reports t) and is covered by
+    // the unit rows in opt_in_creator_test.rs, including the forced-off arm.
     assert_default_threads_oracle(
         r##"
-(let* ((creator (if (fboundp 'neomacs-make-parallel-thread)
-                    #'neomacs-make-parallel-thread
-                  #'make-thread))
-       (hint (lambda (th)
-               (and (fboundp 'neomacs-thread-parallel-p)
-                    (funcall 'neomacs-thread-parallel-p th))))
-       (name (copy-sequence "e6p1"))
-       (th (funcall creator
-                    (lambda ()
-                      (let ((child (make-thread (lambda () 'child))))
-                        (list 'result (eq (current-thread) main-thread)
-                              (thread-join child) (funcall hint child))))
-                    name)))
-  (list (func-arity creator) (threadp th) (eq name (thread-name th))
-        (and (memq th (all-threads)) t) (funcall hint th)
+(let* ((name (copy-sequence "e6p1"))
+       (th (make-thread
+            (lambda ()
+              (let ((child (make-thread (lambda () 'child))))
+                (list 'result (eq (current-thread) main-thread)
+                      (thread-join child))))
+            name)))
+  (list (func-arity #'make-thread) (threadp th) (eq name (thread-name th))
+        (and (memq th (all-threads)) t)
         (thread-join th) (thread-live-p th)
-        (condition-case err (funcall creator (lambda () 1) 42) (error err))))
+        (condition-case err (make-thread (lambda () 1) 42) (error err))))
 "##,
         expect_test::expect![[
-            r#""OK ((1 . 3) t t t nil (result nil child nil) nil (wrong-type-argument stringp 42))""#
+            r#""OK ((1 . 3) t t t (result nil child) nil (wrong-type-argument stringp 42))""#
         ]],
     );
 }
@@ -733,20 +734,23 @@ fn e8s_condition_wait_interrupted_by_thread_signal() {
     );
 }
 
-/// E6-P.1 follow-up: a thread the feature-detected opt-in creator makes is an
-/// ordinary thread object for the mutex, condition, signal and last-error
-/// APIs. GNU takes `make-thread`; Neomacs takes the extension, which is
-/// Baton-serial until an N-mutator admission exists. A condition wait
-/// interrupted by `thread-signal` matches GNU only under Green, so the row
-/// lives in the Green group.
+/// E6-P.1 follow-up: a thread object takes the mutex, condition, signal and
+/// last-error APIs, and a second thread that dies with a signal leaves its
+/// error for `thread-last-error`. The arm is stated, not detected: both
+/// editors create through `make-thread` (GNU has no
+/// `neomacs-make-parallel-thread`), so the row's stimulus does not change when
+/// Neomacs' production admission flips on. A condition wait interrupted by
+/// `thread-signal` matches GNU only under Green, so the row lives in the Green
+/// group. The creator's own arm is covered by Neomacs-side rows — the hint in
+/// `opt_in_creator_test.rs`, a parked owner woken by `thread-signal` in
+/// `e6p4_row9_wait_of_wakes_parked_opt_in_owner_on_thread_signal`, and mutex
+/// reattach in `e6p4_row12_opt_in_owner_current_thread_and_mutex_unlock_after_park_reattach`.
 #[test]
-fn e6p1_an_opt_in_thread_object_takes_signals_mutexes_and_last_error() {
+fn e6p1_make_thread_takes_signals_mutexes_and_last_error() {
     return_if_neovm_enable_oracle_proptest_not_set!();
     assert_green_default_threads_oracle(
         r##"
-(let* ((creator (if (fboundp 'neomacs-make-parallel-thread)
-                    #'neomacs-make-parallel-thread
-                  #'make-thread))
+(let* ((creator #'make-thread)
        (m (make-mutex "e6p1-m")) (c (make-condition-variable m)) (ready nil)
        (th (funcall creator
                     (lambda ()

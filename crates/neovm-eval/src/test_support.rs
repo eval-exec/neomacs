@@ -34,6 +34,24 @@ fn c5_jit_epoch_total() -> u64 {
 
 /// TA2 authority fence.
 pub mod authority {
+    /// FENCE (#77u both-config rows): force the single-point production
+    /// admission switch OFF for the duration of `body`, so a re-homed test can
+    /// assert the Baton-fallback arm of the primitive whose admitted arm it
+    /// covers. Delegates only to the crate-private seam; the compiled constant
+    /// stays the sole production switch.
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn with_parallel_admission_disabled_for_test<R>(body: impl FnOnce() -> R) -> R {
+        crate::emacs_core::threads::with_parallel_admission_disabled_for_test(body)
+    }
+    /// FENCE (#77u both-config rows): the ON direction of the same seam, so a
+    /// re-homed row that must exercise the admitted arm keeps meaning if the
+    /// compiled constant is ever flipped back.
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn with_parallel_admission_enabled_for_test<R>(body: impl FnOnce() -> R) -> R {
+        crate::emacs_core::threads::with_parallel_admission_enabled_for_test(body)
+    }
     // PEER5726: private leaf contracts execute with core canonical factories.
     #[cfg(all(feature = "test-support", feature = "vm-profile"))]
     pub fn run_buffer_local_value_leaf_matches_the_builtin_on_every_variable_shape_for_test(

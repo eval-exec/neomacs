@@ -4,7 +4,7 @@ Owner: peer (claude-ds). Date: 2026-11-25. Base: main `5f5a239737`. Status: **r3
 
 Moved here from the scratch planning tree on 2026-11-26 (r3) so the plan travels with the code it
 describes: a plan that lives only under `tmp/` is a dead reference for every reader but its author.
-r3 amends §4.1: the covering claim is asserted on all 30 parity rows through the witness, not by a
+r3 amends §4.1: the covering claim is asserted on all parity rows through the witness, not by a
 separate named row, and names the row it excludes.
 r2 (peer, 07:4xZ) folds the lead's rulings #14342 into §4.2, §5, §8 and §9: Q1 yes, Q2 yes, Q3 yes,
 Q4 = option (b) as its own slice with a self-containment fallback. r1 (peer, 07:38Z) added §4.2,
@@ -176,38 +176,35 @@ row** (`b6_an_admitted_owner_is_the_only_thread_the_era_arm_adds`), which assert
 it and nil for main, and the owner is still parked at the end. The existing parity row keeps
 running unchanged in the Sim and Green controls, so nothing is weakened or deleted.
 
-**Second exclusion, found on the first enabled run (2026-11-27, #16472):**
-`e6p1_a_feature_detected_opt_in_creator_matches_make_thread` (oracle_default_threads.rs) returns a
-list that includes `(funcall hint th)`, where `hint` is
-`(and (fboundp 'neomacs-thread-parallel-p) (funcall 'neomacs-thread-parallel-p th))`. With the era
-open and the admission live, that element is `t` by design; GNU has no such function and answers
-`nil`. It is not a divergence — it is a Neomacs extension reported truthfully — and no single form
-can produce both. The row is excluded from the b6 arm and covered by the witness, which asserts
-`admitted=t` on every row: the same fact, on the Neomacs side, everywhere. The row keeps running
-unchanged in `oracle_default_threads.rs` (Sim and Green control arms), so nothing is weakened.
+Resulting b6 numbers (r3, lead-ruled 2026-11-26; arm size 31/31 since #877's regression row
+rejoined on 2026-11-27): **31/31 parity rows + 1 named exclusion, with the covering claims asserted
+on every row.** The `all-threads` exclusion is one of the 19 S3-baseline
+cases, so b6 is **18/19 of the historical suite by parity** plus the per-row thread-count and
+admission assertions.
 
-Resulting b6 numbers (r3, lead-ruled 2026-11-26; amended 2026-11-27): **29/29 parity rows + 2 named
-exclusions, with the covering claims asserted on every row.** Because only the `all-threads`
-exclusion is one of the 19 S3-baseline cases, b6 is **18/19 of the historical suite by parity** plus
-the per-row thread-count and admission assertions.
+The temporary second exclusion (the opt-in creator row that forked on `fboundp
+'neomacs-make-parallel-thread` and compared the Neomacs-only hint) was removed on 2026-11-27 when
+that row was re-expressed as `e6p1_make_thread_matches_gnu_in_the_default_arm`: it now states its arm
+and creates through `make-thread` on both editors, so it rejoins the arm as a parity row. The
+creator's own semantics, both admitted and forced-off, are unit rows in
+`opt_in_creator_test.rs`.
 
 There is no separate named covering row: the oracle crate has no public way to run Neomacs alone with
 `extra_env` (every such helper routes through `run_parity_under_envs`, which compares against GNU in
 verify and live modes), and adding a private runner path to the most sensitive test crate to buy back
 one named row is more risk for less coverage. Instead the prelude writes `threads=<n>` into the
-witness and every one of the 30 parity rows asserts `threads=2`, so an era arm that admitted zero or
+witness and every parity row asserts `threads=2`, so an era arm that admitted zero or
 two owners is red on every row rather than in one place. The rejected alternative — running the row as
 `(length (delq b6-idle-owner (all-threads)))` — would edit a passing row's form, which the
 repository's "never adjust a test to fit" rule discourages.
 
-**Row audit (peer, 2026-11-25 07:38Z; extended 2026-11-27 after the first enabled run).** Grepping all 31
-forms for thread enumeration: only line 70 prints a count. The other `all-threads` uses
+**Row audit (peer, 2026-11-25 07:38Z, over the 31 forms present then; #877's row
+arrived later and prints no thread count).** Grepping all 31 forms for thread enumeration: only line 70 prints a count. The other `all-threads` uses
 (`:101`, `:122`, `:123`, `:125`) are `(memq th (all-threads))` / `(memq main-thread ...)`
 identity tests, which tolerate an extra idle owner unchanged. The `condition-notify-one wakes
 exactly one waiter` row (`:444`) parks its waiters on its own condition variable, so the prelude's
-idle waiter does not perturb it. The second exclusion above is not a thread-enumeration row: it is
-the only row in the suite that calls a Neomacs-only function whose answer the era changes. No other
-row needs an exclusion.
+idle waiter does not perturb it. No other row needs an exclusion: after the
+2026-11-27 rewrite no compared form calls a Neomacs-only function.
 
 ### 4.2 Neomacs-only rows for what L6.7c (a) changes inside an era turn
 
@@ -310,8 +307,8 @@ used, because it would brand the run unattested.
 Requirements on the record:
 - the profile and feature lines from `check-gnu-oracle.sh`;
 - the exact binary provenance (source SHA of the b6 branch tip, `fresh-build --release` stamp);
-- per-arm counts: 30/30 parity rows for the b6 arm, each with `threads=2` asserted from its witness
-  (the named exclusion and why it is excluded, §4.1), 31/31 for each control, and the witness line for
+- per-arm counts: 31/31 parity rows for the b6 arm, each with `threads=2` asserted from its witness
+  (the named exclusion and why it is excluded, §4.1), 32/32 for each control (every source row), and the witness line for
   every b6-arm row;
 - a `snapshot` run is NOT evidence here (it compares to checked-in strings).
 
@@ -346,9 +343,9 @@ test filter above, as long as the record names the filter.
   row for the `all-threads` count, rather than touching the passing row's form to reach 31/31.
   The L6.7b wording "19/19 must match" then reads 18/19 by parity plus one stronger row.
   **RULED: YES.** Keep the exclusion named and the covering row's assertion explicit.
-  **AMENDED 2026-11-26 (r3):** the covering assertion is `threads=2` on all 30 parity rows read from
+  **AMENDED 2026-11-26 (r3):** the covering assertion is `threads=2` on every parity row read from
   the witness, replacing the separate named row — the crate has no public Neomacs-only runner with
-  `extra_env`, and 30 per-row counts catch a zero- or two-owner arm everywhere instead of once.
+  `extra_env`, and the per-row counts catch a zero- or two-owner arm everywhere instead of once.
   Re-ruled YES on that basis.
 - **Q2 (owner of the harness change).** The witness helper (§2.2) lives in
   `crates/neovm-oracle-tests/src/common.rs`, next to the JIT witness. The peer proposes to own it
