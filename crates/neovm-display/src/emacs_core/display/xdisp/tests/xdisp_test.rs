@@ -4624,8 +4624,14 @@ fn test_window_line_height_eval_uses_exact_chrome_rows() {
     );
 }
 
+/// GNU `Fwindow_line_height` returns `row->y` for YPOS (window.c:2153-2156),
+/// and a current-matrix row's `y` counts from the window top, tab and header
+/// lines included. Under a 17 px header line the pinned 31.1 oracle answers
+/// `(window-line-height 0)` with `(17 0 17 0)` and `(window-line-height 1)`
+/// with `(17 1 34 0)`: VPOS is the text-row index, YPOS is not shifted to the
+/// text area.
 #[test]
-fn test_window_line_height_eval_reports_text_rows_relative_to_text_area() {
+fn test_window_line_height_eval_reports_text_rows_from_the_window_top_like_gnu() {
     crate::test_utils::init_test_tracing();
     let mut eval = interactive_context();
     let buf_id = eval
@@ -4728,11 +4734,11 @@ fn test_window_line_height_eval_reports_text_rows_relative_to_text_area() {
 
     assert_eq!(
         neovm_eval::emacs_core::print::print_value(&first),
-        "(11 0 0 0)"
+        "(11 0 12 0)"
     );
     assert_eq!(
         neovm_eval::emacs_core::print::print_value(&last),
-        "(13 1 11 0)"
+        "(13 1 23 0)"
     );
 }
 

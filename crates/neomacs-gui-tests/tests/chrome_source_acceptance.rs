@@ -208,7 +208,11 @@ fn run_editor(
                 .as_str()
                 .is_some_and(|name| !name.is_empty() && name != "nil")
         );
-        normalized.push(fields.iter().map(|field| sample[*field].clone()).collect());
+        let mut compared: Vec<Value> = fields.iter().map(|field| sample[*field].clone()).collect();
+        // `window-line-height' for point's line, text lines 0 and 1 and the
+        // header line: GNU's values, not only their presence.
+        compared.push(sample["line_heights"].clone());
+        normalized.push(compared);
     }
     let png = image::open(&result.artifacts.png)
         .expect("actual GUI paint PNG")

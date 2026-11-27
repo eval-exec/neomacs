@@ -4121,6 +4121,19 @@ impl WindowDisplaySnapshot {
         )
     }
 
+    /// The output row that carries text-body row BODY_ROW: the inverse of
+    /// [`Self::text_body_position`]'s row, and GNU's matrix VPOS for it (the
+    /// tab and header rows count, `MATRIX_ROW (w->current_matrix, vpos)`).
+    pub fn output_row_for_body_row(&self, body_row: i64) -> i64 {
+        self.body_rows
+            .iter()
+            .find(|row| row.body_row == body_row)
+            .map_or_else(
+                || body_row.saturating_add(self.top_chrome_rows()),
+                |row| row.output_row,
+            )
+    }
+
     pub fn logical_cursor_pos(&self) -> Option<WindowCursorPos> {
         self.logical_cursor.or_else(|| {
             self.phys_cursor

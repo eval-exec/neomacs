@@ -50,6 +50,10 @@
           (let* ((before neo-chrome-source-evals)
                  (cursor (window-cursor-info))
                  (line-height (window-line-height))
+                 ;; GNU's VPOS/YPOS count the header row (window.c:2153-2156).
+                 (line-heights (list line-height (window-line-height 0)
+                                     (window-line-height 1)
+                                     (window-line-height 'header-line)))
                  (dimensions (window-lines-pixel-dimensions))
                  (end-cached (window-end nil nil))
                  (end-update (window-end nil t))
@@ -84,6 +88,7 @@
                              (and hit (equal (posn-point hit) 1))))
                (cursor_raw . ,(prin1-to-string cursor))
                (line_height_raw . ,(prin1-to-string line-height))
+               (line_heights . ,(prin1-to-string line-heights))
                (dimensions_raw . ,(prin1-to-string dimensions))
                (position_raw . ,(prin1-to-string position))
                (hit_raw . ,(prin1-to-string hit)))

@@ -8840,9 +8840,10 @@ fn window_line_height_impl(
                 PositionGeometrySource::Redisplay,
             )?
             .and_then(|(_, metrics)| {
+                let vpos = snapshot.output_row_for_body_row(metrics.row);
                 snapshot
-                    .row_metrics(metrics.row)
-                    .map(|row| snapshot_text_row_line_metrics(snapshot, row))
+                    .row_metrics(vpos)
+                    .map(|row| snapshot_row_line_metrics(row, vpos))
             })
         } else if let Some(selector) = WindowLineSelector::from_lisp_value(line_spec) {
             snapshot_chrome_line_metrics(snapshot, selector)
@@ -9761,16 +9762,15 @@ fn snapshot_text_rows(snapshot: &WindowDisplaySnapshot) -> Vec<&DisplayRowSnapsh
     rows
 }
 
-fn snapshot_text_row_line_metrics(
-    snapshot: &WindowDisplaySnapshot,
-    row: &DisplayRowSnapshot,
-) -> WindowLineMetrics {
-    let top_chrome_rows = snapshot.top_chrome_rows();
-    let top_chrome_height = snapshot.top_chrome_height();
+/// GNU `Fwindow_line_height`'s `found_row` (window.c:2153-2156): YPOS is the
+/// row's `y`, measured from the window top with the tab and header lines
+/// included. VPOS is the caller's: the matrix row for LINE nil, the text-row
+/// index for an integer LINE.
+fn snapshot_row_line_metrics(row: &DisplayRowSnapshot, vpos: i64) -> WindowLineMetrics {
     WindowLineMetrics {
         height: row.height,
-        vpos: row.row - top_chrome_rows,
-        ypos: row.y - top_chrome_height,
+        vpos,
+        ypos: row.y,
         offbot: 0,
     }
 }
@@ -9789,7 +9789,7 @@ fn snapshot_text_line_metrics(
         return None;
     }
     rows.get(idx as usize)
-        .map(|row| snapshot_text_row_line_metrics(snapshot, row))
+        .map(|row| snapshot_row_line_metrics(row, idx))
 }
 
 fn resolve_live_window_display_context(
