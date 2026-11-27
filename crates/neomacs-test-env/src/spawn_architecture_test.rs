@@ -64,6 +64,9 @@ const NON_EDITOR_PROGRAMS: &[&str] = &[
     "tic",
     "tput",
     "toe",
+    // Terminfo capability query; `ensure_terminfo_dir` never launches an
+    // editor, it only asks whether the host database has the TERM entry.
+    "infocmp",
     "ps",
     // Compression fixture input (`source_startup_silences_jka_compr`):
     // produces the `.el.gz` under test, never spawns an editor.
@@ -132,6 +135,17 @@ const EXCEPTIONS: &[Exception] = &[
         path_suffix: "emacs_core/tests/architecture/split_test_support_manifest_test.rs",
         argument: "env!(\"CARGO\")",
         reason: "cargo metadata query for the manifest guard, not an editor",
+    },
+    Exception {
+        path_suffix: "emacs_core/tests/architecture/buffer_manager_view_ratchet_test.rs",
+        argument: "&cargo_bin",
+        reason: "cargo metadata query for the dependency ratchet, not an editor",
+    },
+    Exception {
+        path_suffix: "neomacs-tui-tests/src/oracle_guard_test.rs",
+        argument: "\"emacs\"",
+        reason: "the oracle guard's forbidden-shape fixture strings are source text \
+                 consumed by the guard; no process is spawned",
     },
 ];
 
