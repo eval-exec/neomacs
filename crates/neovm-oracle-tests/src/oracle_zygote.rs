@@ -60,10 +60,24 @@ mod unix_impl {
 
     use crate::common::oracle_sandbox::OracleSandbox;
 
-    const WIRE_MAGIC: &[u8; 4] = b"NVZ1";
+    const WIRE_MAGIC: &[u8; 4] = b"NVZ2";
     const RESP_EXITED: u8 = 0;
     const RESP_SIGNALED: u8 = 1;
     const STARTUP_WAIT_TIMEOUT: Duration = Duration::from_secs(10);
+
+    /// POSIX signals whose `SIG_IGN` disposition is preserved across `execve()`
+    /// and propagated from the calling test process into each forked zygote
+    /// child. Must stay in identical bit order with `zygote::INHERITED_SIGNALS`.
+    const INHERITED_SIGNALS: [libc::c_int; 8] = [
+        libc::SIGHUP,
+        libc::SIGINT,
+        libc::SIGQUIT,
+        libc::SIGPROF,
+        libc::SIGTERM,
+        libc::SIGTTOU,
+        libc::SIGTTIN,
+        libc::SIGTSTP,
+    ];
 
     /// Latched when the target binary cannot launch a zygote (e.g. a debug
     /// build without a final pdump), so subsequent calls in this process fall
@@ -376,6 +390,7 @@ mod unix_impl {
         push_bytes(&mut payload, stderr_path.as_os_str().as_bytes());
         payload.extend_from_slice(&CANONICAL_UMASK.to_le_bytes());
         payload.extend_from_slice(&rlimit_as.unwrap_or(0).to_le_bytes());
+        payload.extend_from_slice(&caller_ignored_signals_mask().to_le_bytes());
 
         let mut frame = Vec::with_capacity(8 + payload.len());
         frame.extend_from_slice(WIRE_MAGIC);
@@ -413,22 +428,22 @@ mod unix_impl {
         decode_exit_status(&resp)
     }
 
-    /// Check whether the calling test process installed `SIG_IGN` on signals
-    /// whose inheritance is observable by child-process tests (e.g.
-    /// `div_core_process_pty_child_signal_dispositions_match_pipe`). A shared
-    /// zygote does not inherit per-test `sigaction` overrides, so those tests
-    /// fall back to direct `Command::output()`.
-    fn caller_has_ignored_inherited_signals() -> bool {
-        for sig in [libc::SIGHUP, libc::SIGINT, libc::SIGQUIT, libc::SIGPROF] {
+    /// Snapshot which signals in `INHERITED_SIGNALS` currently have `SIG_IGN`
+    /// in the calling test process so the forked zygote child reproduces the
+    /// exact `execve()`-inherited signal dispositions regardless of which
+    /// earlier test spawned the daemon.
+    fn caller_ignored_signals_mask() -> u32 {
+        let mut mask = 0u32;
+        for (bit, &sig) in INHERITED_SIGNALS.iter().enumerate() {
             // SAFETY: querying current signal disposition with null `act`.
             let mut old: libc::sigaction = unsafe { std::mem::zeroed() };
             if unsafe { libc::sigaction(sig, std::ptr::null(), &mut old) } == 0
                 && old.sa_sigaction == libc::SIG_IGN
             {
-                return true;
+                mask |= 1u32 << bit;
             }
         }
-        false
+        mask
     }
 
     pub(crate) fn try_run_neomacs_via_zygote(
@@ -437,10 +452,7 @@ mod unix_impl {
         rlimit_as: Option<u64>,
         timeout: Option<Duration>,
     ) -> Option<Result<Output, String>> {
-        if !zygote_enabled()
-            || !sandbox.extra_env_is_empty()
-            || caller_has_ignored_inherited_signals()
-        {
+        if !zygote_enabled() || !sandbox.extra_env_is_empty() {
             return None;
         }
 
@@ -838,6 +850,76 @@ mod unix_impl {
                     "zygote leaked capture files into case working directory"
                 );
             }
+        }
+
+        #[cfg(target_os = "linux")]
+        #[test]
+        fn zygote_propagates_caller_sigttou_disposition_without_test_order_leak() {
+            // Regression test: verify that ONE shared zygote daemon faithfully
+            // propagates the caller's SIGTTOU disposition (SIG_DFL vs SIG_IGN)
+            // per request regardless of the daemon's own inherited disposition.
+            struct SigRestore(libc::c_int, libc::sigaction);
+            impl Drop for SigRestore {
+                fn drop(&mut self) {
+                    // SAFETY: restoring previously queried `sigaction`.
+                    unsafe {
+                        libc::sigaction(self.0, &self.1, std::ptr::null_mut());
+                    }
+                }
+            }
+            let set_sig = |sig: libc::c_int, disp: usize| -> SigRestore {
+                // SAFETY: querying and setting a standard catchable signal.
+                let mut old: libc::sigaction = unsafe { std::mem::zeroed() };
+                let mut act: libc::sigaction = unsafe { std::mem::zeroed() };
+                act.sa_sigaction = disp;
+                assert_eq!(unsafe { libc::sigemptyset(&mut act.sa_mask) }, 0);
+                assert_eq!(unsafe { libc::sigaction(sig, &act, &mut old) }, 0);
+                SigRestore(sig, old)
+            };
+
+            let program = PathBuf::from(crate::common::neomacs_binary_path());
+            let dir = bounded_temp_dir("nvz-sig-").expect("tempdir");
+            let sock = dir.path().join("z.sock");
+            let mut server = spawn_private_zygote(&program, &sock, dir.path());
+
+            let form = r#"(with-temp-buffer
+                (insert-file-contents "/proc/self/status")
+                (re-search-forward "^SigIgn:[ \t]+\\([0-9a-fA-F]+\\)")
+                (princ (match-string 1)))"#;
+            let ttou_bit = 1u64 << ((libc::SIGTTOU - 1) as u32);
+
+            let read_sigign = |tag: &str| -> u64 {
+                let out =
+                    run_direct_on_socket(&sock, &program, dir.path(), dir.path(), tag, &[], form);
+                assert!(out.status.success(), "{tag} failed: {out:?}");
+                let hex = String::from_utf8_lossy(&out.stdout);
+                u64::from_str_radix(hex.trim(), 16)
+                    .unwrap_or_else(|e| panic!("invalid SigIgn {hex:?}: {e}"))
+            };
+
+            let _orig = set_sig(libc::SIGTTOU, libc::SIG_DFL);
+            assert_eq!(
+                read_sigign("dfl1") & ttou_bit,
+                0,
+                "expected SIGTTOU=SIG_DFL in child"
+            );
+
+            let _ign = set_sig(libc::SIGTTOU, libc::SIG_IGN);
+            assert_ne!(
+                read_sigign("ign") & ttou_bit,
+                0,
+                "expected SIGTTOU=SIG_IGN in child"
+            );
+
+            drop(_ign);
+            assert_eq!(
+                read_sigign("dfl2") & ttou_bit,
+                0,
+                "expected SIGTTOU restored to SIG_DFL in child"
+            );
+
+            let _ = server.kill();
+            let _ = server.wait();
         }
     }
 }

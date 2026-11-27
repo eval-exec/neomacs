@@ -57,11 +57,25 @@ mod unix_impl {
         run_tty_batch_evaluator,
     };
 
-    const WIRE_MAGIC: &[u8; 4] = b"NVZ1";
+    const WIRE_MAGIC: &[u8; 4] = b"NVZ2";
     const MAX_REQUEST_BYTES: usize = 16 * 1024 * 1024;
     const DEFAULT_IDLE_TIMEOUT_SECS: u64 = 15;
     const REQUEST_READ_DEADLINE: Duration = Duration::from_secs(5);
     const POLL_TICK_MS: i32 = 250;
+
+    /// POSIX signals whose `SIG_IGN` disposition is preserved across `execve()`
+    /// and propagated from the calling client into each forked zygote child.
+    /// Must stay in identical bit order with `oracle_zygote::INHERITED_SIGNALS`.
+    const INHERITED_SIGNALS: [libc::c_int; 8] = [
+        libc::SIGHUP,
+        libc::SIGINT,
+        libc::SIGQUIT,
+        libc::SIGPROF,
+        libc::SIGTERM,
+        libc::SIGTTOU,
+        libc::SIGTTIN,
+        libc::SIGTSTP,
+    ];
 
     const RESP_EXITED: u8 = 0;
     const RESP_SIGNALED: u8 = 1;
@@ -97,6 +111,7 @@ mod unix_impl {
         stderr_path: PathBuf,
         umask: u32,
         rlimit_as: u64,
+        ignored_signals_mask: u32,
     }
 
     struct Cursor<'a> {
@@ -200,6 +215,7 @@ mod unix_impl {
         let stderr_path = PathBuf::from(cur.read_os_string()?);
         let umask = cur.read_u32()?;
         let rlimit_as = cur.read_u64()?;
+        let ignored_signals_mask = cur.read_u32()?;
 
         Ok(ZygoteRequest {
             argv,
@@ -209,6 +225,7 @@ mod unix_impl {
             stderr_path,
             umask,
             rlimit_as,
+            ignored_signals_mask,
         })
     }
 
@@ -400,15 +417,23 @@ mod unix_impl {
         Ok(())
     }
 
-    fn reset_child_signals() {
-        // SAFETY: resetting parent-installed signal handlers in newly forked
-        // single-threaded child. Keep SIGPIPE as SIG_IGN to match Rust's
-        // normal `main()` runtime initialization (`std::sys::pal::unix::init`).
+    fn reset_child_signals(ignored_signals_mask: u32) {
+        // SAFETY: resetting parent-installed signal handlers and applying the
+        // calling client's `SIG_IGN`/`SIG_DFL` dispositions in the newly
+        // forked single-threaded child. Keep SIGPIPE as SIG_IGN to match
+        // Rust's normal `main()` runtime initialization
+        // (`std::sys::pal::unix::init`).
         unsafe {
             libc::signal(libc::SIGCHLD, libc::SIG_DFL);
             libc::signal(libc::SIGPIPE, libc::SIG_IGN);
-            libc::signal(libc::SIGTERM, libc::SIG_DFL);
-            libc::signal(libc::SIGINT, libc::SIG_DFL);
+            for (bit, &sig) in INHERITED_SIGNALS.iter().enumerate() {
+                let disp = if (ignored_signals_mask & (1u32 << bit)) != 0 {
+                    libc::SIG_IGN
+                } else {
+                    libc::SIG_DFL
+                };
+                libc::signal(sig, disp);
+            }
         }
     }
 
@@ -493,7 +518,7 @@ mod unix_impl {
         req: ZygoteRequest,
     ) -> ! {
         let started_at = Instant::now();
-        reset_child_signals();
+        reset_child_signals(req.ignored_signals_mask);
 
         if redirect_fd_to_path(Path::new("/dev/null"), libc::STDIN_FILENO, libc::O_RDONLY).is_err()
             || redirect_fd_to_path(
@@ -1070,9 +1095,10 @@ mod unix_impl {
             // stderr = "/tmp/e"
             payload.extend_from_slice(&6u32.to_le_bytes());
             payload.extend_from_slice(b"/tmp/e");
-            // umask + rlimit_as
+            // umask + rlimit_as + ignored_signals_mask
             payload.extend_from_slice(&0o022u32.to_le_bytes());
             payload.extend_from_slice(&0u64.to_le_bytes());
+            payload.extend_from_slice(&0u32.to_le_bytes());
 
             let mut frame = Vec::with_capacity(8 + payload.len());
             frame.extend_from_slice(WIRE_MAGIC);
