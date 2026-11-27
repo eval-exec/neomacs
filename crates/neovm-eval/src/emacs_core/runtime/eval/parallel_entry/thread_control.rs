@@ -169,6 +169,11 @@ impl ParallelOwnerControl {
     /// Register KEY as a `Participant::Parallel` in `control` and return its
     /// thread-confined control handle.
     pub(crate) fn register(control: Arc<Control>, key: ThreadKey) -> Self {
+        debug_assert_ne!(
+            key,
+            ThreadKey::Main,
+            "ThreadKey::Main is a Baton participant and cannot register as a parallel owner"
+        );
         let (wake, signal_hint) = control.register_parallel(key);
         Self {
             key,
@@ -593,7 +598,119 @@ where
     })
 }
 
+/// RAII guard for blocking parallel-owner wait loops (`parallel_thread_join`,
+/// `parallel_mutex_lock`) that roots `blocker` (and any extra stack `Value`s
+/// such as a pre-wait signal snapshot) in a VM root frame and pairs
+/// `set_thread_blocker` / `set_wait_condvar` with cleanup in `Drop`.
+///
+/// Coupling invariant: `Self` is constructed immediately after
+/// `push_vm_root_frame()` so even a panic while installing `thread_blocker` or
+/// `wait_condvar` unwinds the root frame cleanly (Nit 4). `Drop` clears
+/// `wait_condvar` and `thread_blocker` (guarded by `tagged_heap_is_current` so
+/// a fail-closed `PostDetachParkError` Rust panic unwind never touches heap
+/// storage with parked carrier TLS) strictly before popping the VM root frame.
+pub(super) struct ParallelWaitRootGuard<'a> {
+    pub(super) ctx: &'a mut Context,
+    thread_id: u64,
+    blocker_set: bool,
+    wait_condvar_set: bool,
+}
+
+impl<'a> ParallelWaitRootGuard<'a> {
+    pub(super) fn enter(
+        ctx: &'a mut Context,
+        thread_id: u64,
+        blocker: Value,
+        extra_roots: &[Value],
+        wait_condvar: Option<crate::emacs_core::threads::WaitCondvar>,
+    ) -> Self {
+        ctx.push_vm_root_frame();
+        let mut guard = Self {
+            ctx,
+            thread_id,
+            blocker_set: false,
+            wait_condvar_set: false,
+        };
+        guard.ctx.push_vm_frame_root(blocker);
+        for &value in extra_roots {
+            guard.ctx.push_vm_frame_root(value);
+        }
+        guard.ctx.threads.set_thread_blocker(thread_id, blocker);
+        guard.blocker_set = true;
+        if let Some(kind) = wait_condvar {
+            guard.ctx.threads.set_wait_condvar(thread_id, Some(kind));
+            guard.wait_condvar_set = true;
+        }
+        guard
+    }
+}
+
+impl Drop for ParallelWaitRootGuard<'_> {
+    fn drop(&mut self) {
+        if neovm_value::tagged::gc::tagged_heap_is_current(&self.ctx.tagged_heap) {
+            if self.wait_condvar_set {
+                self.ctx.threads.set_wait_condvar(self.thread_id, None);
+            }
+            if self.blocker_set {
+                self.ctx.threads.clear_thread_blocker(self.thread_id);
+            }
+        }
+        self.ctx.pop_vm_root_frame();
+    }
+}
+
 impl Context {
+    /// Verify that `SERIAL_TURN_PARK_SCOPE` is installed for this exact
+    /// `Context` (`ActiveSerialTurn`) and return its `ThreadKey`, failing
+    /// loudly on unbridged serial turns without mutating wait/mutex state.
+    #[cold]
+    #[inline(never)]
+    pub(super) fn verify_active_serial_park_bridge(
+        &self,
+        op_name: &str,
+    ) -> Result<ThreadKey, Flow> {
+        let actual = ActiveSerialTurn::for_context(self);
+        let taken = SERIAL_TURN_PARK_SCOPE.with(Cell::take);
+        let Some(scope) = taken else {
+            return Err(signal(
+                LispCondition::Error,
+                vec![Value::string(format!(
+                    "neovm internal error: {op_name} called in an unbridged parallel serial turn"
+                ))],
+            ));
+        };
+        let expected = scope.owner;
+        let key = scope.key;
+        SERIAL_TURN_PARK_SCOPE.with(|slot| slot.set(Some(scope)));
+        if expected != actual {
+            return Err(signal(
+                LispCondition::Error,
+                vec![Value::string(format!(
+                    "neovm internal error: {op_name} park bridge mismatch for parallel serial turn (expected {expected:?}, got {actual:?})"
+                ))],
+            ));
+        }
+        Ok(key)
+    }
+
+    /// Mirror Baton (`green/switch.rs:1076-1082`): once the Green runtime
+    /// enters `Lifecycle::Closing`, surface `Flow::shutdown` so parked wait
+    /// loops terminate cleanly instead of spinning.
+    #[cold]
+    #[inline(never)]
+    fn check_parallel_shutdown(&mut self, key: ThreadKey) -> Result<(), Flow> {
+        if self.green_runtime_started() {
+            let control = self.green_control();
+            let exit = self.with_green_runtime(|runtime| runtime.exit_for(key, &control));
+            if let Some(request) = exit {
+                self.shutdown_request = Some(request);
+                self.command_loop.running = false;
+                return Err(Flow::shutdown(request));
+            }
+        }
+        Ok(())
+    }
+
     /// Park the currently active parallel serial turn through the scoped
     /// [`with_world_parkable`] bridge (Q6a). Fails loudly if no bridge is
     /// installed for this exact `(ctx_addr, HeapIdentity, context_instance_id)`
@@ -635,6 +752,12 @@ impl Context {
             ));
         }
         let key = scope.key;
+        // Fast-path shutdown BEFORE registering a wait or detaching if the
+        // Green runtime has already entered `Lifecycle::Closing` (Blocker 2).
+        if let Err(flow) = self.check_parallel_shutdown(key) {
+            SERIAL_TURN_PARK_SCOPE.with(|slot| slot.set(Some(scope)));
+            return Err(flow);
+        }
         // SAFETY:
         // - Type pairing & alignment: `scope.bridge` is an `ErasedParkBridge`
         //   constructed exclusively via `ErasedParkBridge::new::<F>(&mut bridge_fn)`,
@@ -653,6 +776,7 @@ impl Context {
         match unsafe { scope.bridge.call(self, wait, native_body) } {
             Ok(outcome) => {
                 SERIAL_TURN_PARK_SCOPE.with(|slot| slot.set(Some(scope)));
+                self.check_parallel_shutdown(key)?;
                 Ok((key, outcome))
             }
             Err(SerialParkFailure::PreDetach(error)) => {
@@ -686,21 +810,12 @@ impl Context {
     /// Row 4; GNU `Fthread_join`, `src/thread.c:1118-1144`):
     /// - Rejects self-join (`"Cannot join current thread"`).
     /// - Snapshots TARGET's injected `thread-signal` error BEFORE waiting and
-    ///   roots both `args[0]` and every `Value` in that snapshot in a VM root
-    ///   frame across `parallel_park_in_turn` so GC while parked cannot sweep
-    ///   snapshot payloads even if TARGET catches and clears its own error.
-    /// - When TARGET has not exited yet (`!control.exited(target_key)`), sets
-    ///   `thread_blocker` and `WaitCondvar::Join` for this parallel thread's id
-    ///   (`self.threads.current_thread_id()`, NOT `green_current_id()`) and
-    ///   parks via `ParkWait::Join(target_key)` until TARGET exits or this
-    ///   joiner receives a pending `thread-signal`.
-    /// - Clears `wait_condvar`, `thread_blocker`, and pops the VM root frame
-    ///   unconditionally on every Lisp/recoverable exit path before propagating
-    ///   `wait_result?` or delivering this joiner's own pending signal AHEAD of
-    ///   TARGET's snapshot (GNU `thread_join_callback`, `src/thread.c:1110-1115`).
-    ///   (On a fail-closed `PostDetachParkError` panic, carrier TLS is already
-    ///   parked, the serial ticket was already returned, and the abandoned
-    ///   `Context` is never used again.)
+    ///   roots both `args[0]` and every `Value` in that snapshot in a
+    ///   `Drop`-guarded VM root frame (`ParallelWaitRootGuard`) across
+    ///   `parallel_park_in_turn` so GC while parked cannot sweep snapshot
+    ///   payloads even if TARGET catches and clears its own error.
+    /// - Verifies the active park bridge before mutating wait state so
+    ///   `joiner_key` always matches `scope.key`.
     /// - Marks join observed, re-raises TARGET's snapshot if present, else
     ///   returns TARGET's stored result.
     #[cold]
@@ -719,28 +834,29 @@ impl Context {
         let target_key = ThreadKey::from_id(target_id);
         let control = self.green_control();
         if !control.exited(target_key) {
-            let joiner_key = ThreadKey::from_id(joiner_id);
-            self.push_vm_root_frame();
-            self.push_vm_frame_root(args[0]);
-            if let Some(sig) = pending.as_ref().and_then(Flow::as_signal) {
-                for &value in &sig.data {
-                    self.push_vm_frame_root(value);
-                }
-            }
-            // Coupling invariant: `set_thread_blocker` stores `args[0]` in the
-            // blocker slot for the same span that `args[0]` is rooted in the
-            // VM root frame pushed above; `clear_thread_blocker` MUST run
-            // before `pop_vm_root_frame()`.
-            self.threads.set_thread_blocker(joiner_id, args[0]);
-            self.threads.set_wait_condvar(
+            let joiner_key = self.verify_active_serial_park_bridge("thread-join")?;
+            debug_assert_eq!(
                 joiner_id,
-                Some(crate::emacs_core::threads::WaitCondvar::Join),
+                joiner_key.id(),
+                "parallel_thread_join current_thread_id must match active park scope key"
             );
-            let wait_result = (|| -> Result<(), Flow> {
+            let extra_roots: Vec<Value> = pending
+                .as_ref()
+                .and_then(Flow::as_signal)
+                .map(|sig| sig.data.clone())
+                .unwrap_or_default();
+            {
+                let guard = ParallelWaitRootGuard::enter(
+                    self,
+                    joiner_key.id(),
+                    args[0],
+                    &extra_roots,
+                    Some(crate::emacs_core::threads::WaitCondvar::Join),
+                );
                 while !control.exited(target_key)
-                    && !self.threads.has_pending_thread_signal(joiner_id)
+                    && !guard.ctx.threads.has_pending_thread_signal(joiner_key.id())
                 {
-                    let (_k, outcome) = self.parallel_park_in_turn(
+                    let (_k, outcome) = guard.ctx.parallel_park_in_turn(
                         "thread-join",
                         ParkWait::Join(target_key),
                         None,
@@ -749,12 +865,7 @@ impl Context {
                         return Err(parallel_deadlock_flow(invariant));
                     }
                 }
-                Ok(())
-            })();
-            self.threads.set_wait_condvar(joiner_id, None);
-            self.threads.clear_thread_blocker(joiner_id);
-            self.pop_vm_root_frame();
-            wait_result?;
+            }
             self.deliver_parallel_turn_signal(joiner_key)?;
         }
         self.threads.join_thread_for_value(args[0]);

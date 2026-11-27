@@ -4698,8 +4698,15 @@ impl Control {
             }
             // BEFORE check under Control.state lock.
             let candidate_epoch = {
-                let state = self.state();
+                let mut state = self.state();
                 if state.closing {
+                    if state
+                        .participants
+                        .get(&key)
+                        .is_some_and(Participant::is_parallel)
+                    {
+                        Self::set_wait(&mut state, key, Wait::ParallelActive);
+                    }
                     return ParallelWaitOutcome::Woken;
                 }
                 // If another thread already moved us out of our wait (e.g. wake
@@ -4732,6 +4739,13 @@ impl Control {
                 // AFTER check under Control.state lock (mandatory Q2a).
                 let mut state = self.state();
                 if state.closing {
+                    if state
+                        .participants
+                        .get(&key)
+                        .is_some_and(Participant::is_parallel)
+                    {
+                        Self::set_wait(&mut state, key, Wait::ParallelActive);
+                    }
                     return ParallelWaitOutcome::Woken;
                 }
                 let still_era_idle = match &state.era {
@@ -7484,5 +7498,51 @@ mod tests {
             runtime.carried_holder.set(prev_holder);
         });
         let (_solo, _wh, _port) = control.close_era(escrowed).expect("close era");
+    }
+
+    /// E5.4a R3 Commit 2 (Blocker 2 — #16167): if `Control::close()` fires
+    /// BEFORE `begin_parallel_wait`, `wait_parallel_parked` must reset
+    /// `Control.state.waits[key]` back to `Wait::ParallelActive` before
+    /// returning `Woken`, leaving zero phantom waiters in `Control`'s index.
+    #[test]
+    fn e54a_r3_closing_before_begin_parallel_wait_leaves_no_phantom_waiter() {
+        use crate::emacs_core::eval::parallel_entry::keeper_custody::ReturnedSerialTicket;
+        use crate::emacs_core::eval::parallel_entry::serial_park::{
+            Grant, KeeperPort, PortRefusal,
+        };
+        use crate::emacs_core::eval::parallel_entry::serial_ticket::{
+            ReceiveReason, StoppedSerialTicket,
+        };
+
+        struct DummyPort;
+        impl KeeperPort for DummyPort {
+            type LendGuard = ();
+            type CollectReply = ();
+            fn give_back(&mut self, _: ReturnedSerialTicket) {}
+            fn give_back_to_collect(&mut self, _: ReturnedSerialTicket, _: ()) {}
+            fn request_turn(&mut self) -> Result<(Grant, ()), PortRefusal> {
+                unreachable!()
+            }
+            fn refuse(&mut self, _: StoppedSerialTicket, _: ReceiveReason) {}
+        }
+
+        let control = Control::default();
+        let key = ThreadKey::from_id(42);
+        let cond = ConditionId::new(77);
+        let (wake, _hint) = control.register_parallel(key);
+        // Close BEFORE `begin_parallel_wait`!
+        control.close();
+        control.begin_parallel_wait(key, Wait::Condition(cond));
+        let outcome = control.wait_parallel_parked(key, &wake, &DummyPort);
+        assert!(matches!(outcome, ParallelWaitOutcome::Woken));
+        assert_eq!(
+            control.wait_of(key),
+            Some(Wait::ParallelActive),
+            "Blocker 2: closing before begin_parallel_wait must NOT leave a phantom Wait::Condition in Control"
+        );
+        assert!(
+            !control.wake_one_waiting_for(Wait::Condition(cond)),
+            "Blocker 2: condition_waiters index must contain no phantom waiter after closing exit"
+        );
     }
 }
