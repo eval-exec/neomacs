@@ -34,6 +34,8 @@ use neovm_value::value::buffer_vocab::BufferId;
 use neovm_value::value::{Value, ValueKind, equal_value, list_to_vec};
 use num_enum::IntoPrimitive;
 use polling::Poller;
+#[cfg(windows)]
+use polling::os::iocp::PollerIocpExt;
 use rustc_hash::FxHashMap;
 use socket2::Socket;
 use strum::{EnumString, IntoStaticStr};
