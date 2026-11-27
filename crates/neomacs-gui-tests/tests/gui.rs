@@ -340,5 +340,9 @@ mod presentation_pacing_receipts;
 #[path = "display_debug_dump.rs"]
 mod display_debug_dump;
 
+#[cfg(target_os = "linux")]
+#[path = "disabled_effects_idle.rs"]
+mod disabled_effects_idle;
+
 #[path = "timing_assertion_ratchet.rs"]
 mod timing_assertion_ratchet;
