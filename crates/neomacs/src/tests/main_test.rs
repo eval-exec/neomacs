@@ -6556,11 +6556,12 @@ fn bootstrap_buffers_seed_frame_with_renderer_metrics() {
 fn startup_dimensions_gui_matches_gnu_default_text_grid() {
     let metrics = bootstrap_frame_metrics();
     let (width, height) = startup_dimensions(FrontendKind::Gui, metrics, false, false);
-    // GNU's default GUI frame is 80 text columns wide and 35 counted text rows
-    // tall (its frame-height is deterministically one less than the nominal 36-row
-    // geometry). The requested window reserves the scroll bar + both 8px fringes on
-    // the sides and the menu + tool bars on top, so the text grid lands on 80x35
-    // instead of the chrome eating into it (78x33).
+    // GNU's default GUI frame is an 80x36 text grid, minibuffer included
+    // (frame.c gui_figure_window_size). The requested window reserves the
+    // scroll bar + both 8px fringes on the sides and the menu + tool bars on
+    // top, so the text grid lands on 80x36 instead of the chrome eating into
+    // it. The GUI oracle row frame_text_height_matches_gnu_* checks the
+    // realized frame against GNU.
     // GNU xfns.c:x_set_scroll_bar_default_width uses the toolkit's pixel
     // band, not a font cell; startup and layout share that default.
     let side_chrome = neovm_core::window::GUI_SCROLL_BAR_DEFAULT_WIDTH_PX as f32 + 2.0 * 8.0;
@@ -6572,7 +6573,7 @@ fn startup_dimensions_gui_matches_gnu_default_text_grid() {
     );
     assert_eq!(
         height,
-        (35.0 * metrics.char_height + top_chrome).round() as u32
+        (36.0 * metrics.char_height + top_chrome).round() as u32
     );
 }
 

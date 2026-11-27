@@ -1083,12 +1083,15 @@ fn startup_dimensions(
             // chrome up front — otherwise the scroll bar/fringes eat into the columns
             // (frame 78 wide) and the menu/tool bars eat into the lines (frame 33).
             //
-            // Observed GNU `(frame-height)` is one LESS than its nominal geometry
-            // rows — deterministic, not a WM trim: `-g 80x35`->34, `-g 80x36`->35,
-            // `-g 80x40`->39, and the default (== -g 80x36) nets 35. GNU's default
-            // GUI frame is therefore 80x35 of *counted* text; match that observable.
+            // The text grid is 36 lines, minibuffer included: frame.c
+            // gui_figure_window_size seeds `text_height = 36 * FRAME_LINE_HEIGHT`,
+            // and FRAME_TEXT_HEIGHT covers the root and minibuffer windows. The
+            // pinned 31.1 oracle under the GUI test harness reports
+            // frame-text-height 612 at a 17 px line (root 595 + minibuffer 17)
+            // and frame-height 36, on X11. An earlier 35 here matched a 31.0.90
+            // run on a live desktop, whose window manager can trim the frame.
             let cols = 80u32;
-            let text_rows = 35u32;
+            let text_rows = 36u32;
             // Side chrome the layout reserves outside the text columns: the
             // default vertical scroll bar plus the two 8px fringes.  GNU's
             // gui_figure_window_size adds FRAME_SCROLL_BAR_AREA_WIDTH, the
