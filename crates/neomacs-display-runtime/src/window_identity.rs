@@ -2,11 +2,6 @@
 
 use winit::window::WindowAttributes;
 
-#[cfg(target_os = "linux")]
-mod generated {
-    include!(concat!(env!("OUT_DIR"), "/application_identity.rs"));
-}
-
 /// Wayland application IDs and icon-theme names are both strings at the
 /// protocol boundary, but they are not interchangeable concepts.
 #[cfg(target_os = "linux")]
@@ -67,9 +62,9 @@ impl ApplicationIdentity {
 
 #[cfg(target_os = "linux")]
 pub(crate) const NEOMACS_APPLICATION: ApplicationIdentity = ApplicationIdentity {
-    app_id: ApplicationId(generated::GENERATED_APP_ID),
-    desktop_file_id: DesktopFileId(generated::GENERATED_DESKTOP_FILE_ID),
-    icon_name: IconName(generated::GENERATED_ICON_NAME),
+    app_id: ApplicationId(env!("NEOMACS_GENERATED_APP_ID")),
+    desktop_file_id: DesktopFileId(env!("NEOMACS_GENERATED_DESKTOP_FILE_ID")),
+    icon_name: IconName(env!("NEOMACS_GENERATED_ICON_NAME")),
 };
 
 #[cfg(target_os = "linux")]

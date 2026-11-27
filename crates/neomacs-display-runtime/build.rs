@@ -6,8 +6,7 @@ use std::path::{Path, PathBuf};
 
 fn main() {
     let crate_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("manifest directory"));
-    let out_dir = PathBuf::from(env::var("OUT_DIR").expect("build output directory"));
-    generate_application_identity(&crate_dir, &out_dir);
+    emit_application_identity(&crate_dir);
 
     let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
     if target_os == "windows" {
@@ -18,7 +17,7 @@ fn main() {
     }
 }
 
-fn generate_application_identity(crate_dir: &Path, out_dir: &Path) {
+fn emit_application_identity(crate_dir: &Path) {
     let desktop_entry = crate_dir.join("assets/neomacs.desktop");
     println!("cargo:rerun-if-changed={}", desktop_entry.display());
 
@@ -38,13 +37,17 @@ fn generate_application_identity(crate_dir: &Path, out_dir: &Path) {
         "StartupWMClass must match the desktop file stem/application ID"
     );
 
-    let generated = format!(
-        "pub(crate) const GENERATED_APP_ID: &str = {app_id:?};\n\
-         pub(crate) const GENERATED_DESKTOP_FILE_ID: &str = {desktop_file_id:?};\n\
-         pub(crate) const GENERATED_ICON_NAME: &str = {icon_name:?};\n"
-    );
-    fs::write(out_dir.join("application_identity.rs"), generated)
-        .expect("write generated application identity");
+    for (name, value) in [
+        ("NEOMACS_GENERATED_APP_ID", app_id),
+        ("NEOMACS_GENERATED_DESKTOP_FILE_ID", desktop_file_id),
+        ("NEOMACS_GENERATED_ICON_NAME", icon_name),
+    ] {
+        assert!(
+            !value.contains(['\n', '\r']),
+            "{name} cannot contain line breaks when delivered via cargo:rustc-env"
+        );
+        println!("cargo:rustc-env={name}={value}");
+    }
 }
 
 fn desktop_entry_value<'a>(contents: &'a str, key: &str) -> &'a str {

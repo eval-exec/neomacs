@@ -996,10 +996,6 @@ impl<'ast, F: Fn(&Path) -> bool> Visit<'ast> for ModuleEdges<'_, F> {
                     "$OUT_DIR/x11_colors.rs",
                 ),
                 (
-                    "neomacs-display-runtime/src/window_identity.rs",
-                    "$OUT_DIR/application_identity.rs",
-                ),
-                (
                     "neomacs-webview/src/platform/linux/sys.rs",
                     "$OUT_DIR/wpe_platform_sys.rs",
                 ),

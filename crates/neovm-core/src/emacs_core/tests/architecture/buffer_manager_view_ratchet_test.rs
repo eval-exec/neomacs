@@ -164,10 +164,6 @@ const ALLOWED_PRODUCTION_INCLUDE_MACROS: &[(&str, &str)] = &[
         "concat ! (env ! (\"OUT_DIR\") , \"/x11_colors.rs\")",
     ),
     (
-        "neomacs-display-runtime/src/window_identity.rs",
-        "concat ! (env ! (\"OUT_DIR\") , \"/application_identity.rs\")",
-    ),
-    (
         "neomacs-webview/src/platform/linux/sys.rs",
         "concat ! (env ! (\"OUT_DIR\") , \"/wpe_platform_sys.rs\")",
     ),

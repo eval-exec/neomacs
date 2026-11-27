@@ -114,6 +114,24 @@ pub(super) fn deliver_pending_quit(input_tx: &Sender<InputEvent>) {
 
 type Terminate = extern "C-unwind" fn(&NSApplication, Sel, Option<&AnyObject>);
 
+/// Convert `Terminate` into Objective-C's erased `Imp` function pointer for
+/// `NSApplication.terminate:` method swizzling.
+///
+/// Rust forbids `as` casts between function pointers of different signatures
+/// (`error[E0605]`), and laundering through `usize` is prohibited; this helper
+/// holds the single audited `transmute` site.
+///
+/// # Safety
+///
+/// `f` must match `NSApplication`'s exact `void(id, SEL, id)` ABI with
+/// nullable sender, retain no borrowed Objective-C objects, and have
+/// process-long code lifetime.
+unsafe fn imp_from_terminate(f: Terminate) -> Imp {
+    // SAFETY: Caller guarantees `f` matches Objective-C's `IMP` ABI for
+    // `NSApplication.terminate:` (`void(id, SEL, id)`).
+    unsafe { std::mem::transmute::<Terminate, Imp>(f) }
+}
+
 extern "C-unwind" fn terminate(
     _application: &NSApplication,
     _selector: Sel,
@@ -135,10 +153,10 @@ fn install_terminate_override(app: &NSApplication, input_tx: &Sender<InputEvent>
     };
     // Winit uses this same seam for sendEvent: (winit-appkit/src/app.rs).
     // Install after EventLoop creation, which initializes the global app.
-    // SAFETY: Terminate has NSApplication's exact void(id, SEL, id) ABI and
+    // SAFETY: `terminate` has NSApplication's exact void(id, SEL, id) ABI and
     // nullable sender. It imposes no extra requirements on callers, retains
     // no borrowed Objective-C objects, and has process-long code lifetime.
-    let replacement = unsafe { std::mem::transmute::<Terminate, Imp>(terminate) };
+    let replacement = unsafe { imp_from_terminate(terminate) };
     if std::ptr::fn_addr_eq(replacement, method.implementation()) {
         return;
     }
