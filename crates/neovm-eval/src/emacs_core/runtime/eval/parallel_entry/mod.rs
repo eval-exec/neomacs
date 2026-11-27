@@ -3,6 +3,7 @@ pub(crate) mod capability;
 pub(crate) mod driver_core;
 pub(crate) mod keeper_custody;
 pub(crate) mod keeper_driver;
+pub(crate) mod live_admission;
 pub(crate) mod owned_source;
 mod quit_requester;
 pub(crate) mod serial_detach;

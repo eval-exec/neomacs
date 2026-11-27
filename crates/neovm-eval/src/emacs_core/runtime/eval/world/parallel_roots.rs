@@ -13,7 +13,7 @@ use neovm_value::tagged::value::TaggedValue;
 mod parallel_admission;
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) use parallel_admission::OwnedProofProjection;
-pub(crate) use parallel_admission::{OwnedParallelError, OwnedParallelProjection};
+pub(crate) use parallel_admission::{OwnedParallelError, OwnedParallelProjection, SerialRecovery};
 
 use neovm_value::tagged::gc::FrozenFunctionRoots;
 pub(crate) use neovm_value::tagged::gc::FrozenLegacyRoots;

@@ -11,8 +11,8 @@ use neovm_value::tagged::gc::heap_transfer::{
     RestoredHeapBacking, ScopedEraError, ScopedEraFailure, SourceRecoveryFailure,
 };
 use neovm_value::tagged::gc::{
-    FrozenLegacyRoots, Gen1Admission, WorldLoan, clear_tagged_heap_root_if_installed,
-    tagged_heap_is_installed,
+    FrozenFunctionRoots, FrozenLegacyRoots, Gen1Admission, WorldLoan,
+    clear_tagged_heap_root_if_installed, tagged_heap_is_installed,
 };
 use neovm_value::tagged::transport::RootBatchLease;
 use std::ptr::NonNull;
@@ -39,19 +39,32 @@ pub(crate) unsafe fn detach_source_heap(root: NonNull<neovm_value::tagged::gc::T
     unsafe { clear_tagged_heap_root_if_installed(root) };
 }
 
+/// Mint the live-Green era's `FrozenLegacyRoots` census inside the eval World
+/// owner (`eval/world/`, preserving `keeper_world_designator_seam_guard`).
+///
+/// Derives `HeapIdentity` directly from the exclusive `Baton` and pins
+/// `FrozenFunctionRoots::MayBeActive` with an empty frozen word list.
+///
+/// # Safety
+/// `keeper` is the sole serial World authority on this OS thread, Main's live
+/// roots (and every parked Baton thread's roots) remain published in
+/// `GreenRuntime::parked` for the whole open era so none may be frozen into
+/// the transfer, and `MayBeActive` reflects live legacy frames staying
+/// reachable through those published roots.
+pub(crate) unsafe fn freeze_live_legacy_roots(keeper: &Baton) -> FrozenLegacyRoots {
+    let heap = keeper.parallel_heap_identity();
+    // SAFETY: this file lives under `eval/world`, the sole World owner
+    // allowed to mint `FrozenLegacyRoots`; caller upholds the parked-root
+    // publication contract above.
+    unsafe { FrozenLegacyRoots::new(heap, Vec::new(), FrozenFunctionRoots::MayBeActive) }
+}
+
 /// # Safety
 /// `keeper` is the inaccessible sole serial owner of `admission`'s heap.
 /// Every host, projection, and manager view has ended, and ordinary heap TLS
 /// for that allocation is uninstalled. `roots` is that shell's fresh census.
 /// The returned right must leave every source frame that still names the
 /// collector or the era before a destination uses it.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "dormant until a later slice admits through the reference-free transfer; the heap-transfer tests are the caller"
-    )
-)]
 pub(crate) unsafe fn prepare_reference_free_transfer<'heap>(
     mut admission: Gen1Admission<'heap>,
     keeper: Baton,
@@ -81,13 +94,6 @@ pub(crate) unsafe fn prepare_reference_free_transfer<'heap>(
 /// `restored` was produced on this source thread from the matching receipt.
 /// No other heap or World loan is live. The caller retires `publication`
 /// only after the recovered census is rooted in the restored shell.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "dormant until a later slice admits through the reference-free transfer; the heap-transfer tests are the caller"
-    )
-)]
 pub(crate) unsafe fn recover_transferred_source(
     restored: RestoredHeapBacking,
 ) -> Result<(Baton, FrozenLegacyRoots, RootBatchLease), SourceRecoveryFailure> {

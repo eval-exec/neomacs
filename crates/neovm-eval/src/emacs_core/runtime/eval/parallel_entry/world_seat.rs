@@ -191,13 +191,31 @@ static_assertions::assert_not_impl_any!(ActiveWorldSeat: Send, Sync, Clone, Copy
 
 /// Aborts the process when a panic unwinds midway through a park/enter/exit
 /// TLS transition (matching `serial_detach.rs` and `green/switch.rs`).
-struct AbortOnPanic(&'static str);
+///
+/// Uses an explicit `armed` flag rather than `std::thread::panicking()` alone
+/// so callers invoked during an outer unwind (such as `LiveEraOpenGuard::drop`
+/// rolling back `resume_with_turn_right` under `E6-P4-I1`) abort ONLY on a
+/// nested panic inside the transition, never on a clean completion.
+struct AbortOnPanic {
+    step: &'static str,
+    armed: bool,
+}
+
+impl AbortOnPanic {
+    fn new(step: &'static str) -> Self {
+        Self { step, armed: true }
+    }
+
+    fn disarm(mut self) {
+        self.armed = false;
+    }
+}
 
 impl Drop for AbortOnPanic {
     fn drop(&mut self) {
-        if std::thread::panicking() {
+        if self.armed {
             tracing::error!(
-                step = self.0,
+                step = self.step,
                 "a seated Green World host panicked between carrier-TLS transition steps; aborting"
             );
             std::process::abort();
@@ -205,10 +223,6 @@ impl Drop for AbortOnPanic {
     }
 }
 
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "L6.7b b4.3 (Green switch points) is the caller")
-)]
 impl ParkedWorldSeat {
     /// Park a live seated Green `Context` (holding its `Baton` inline on its
     /// `GreenSeat`) off this OS thread so a parallel era can lend World turns
@@ -283,10 +297,14 @@ impl ParkedWorldSeat {
         // Guard the entire park + root-publication + stow + TLS sequence
         // (matching `switch_out`): an `Err` return does not panic, while an
         // unwind midway aborts before bindings and carriers can split.
-        let _abort = AbortOnPanic("world-seat-park");
-        let (roots, retention) = ctx
-            .park_world_seat_with_roots(retention)
-            .map_err(|_| WorldSeatRefusal::RootPublication)?;
+        let abort = AbortOnPanic::new("world-seat-park");
+        let (roots, retention) = match ctx.park_world_seat_with_roots(retention) {
+            Ok(pair) => pair,
+            Err(_) => {
+                abort.disarm();
+                return Err(WorldSeatRefusal::RootPublication);
+            }
+        };
         let stowed = ctx.stow_serial_world_state();
         assert!(
             stowed,
@@ -299,6 +317,7 @@ impl ParkedWorldSeat {
         unsafe {
             park_carrier_tls();
         }
+        abort.disarm();
         Ok(Self {
             slab,
             roots,
@@ -339,10 +358,11 @@ impl ParkedWorldSeat {
         if !ctx.serial_world_is_stowed() {
             return Err((self, turn, lend, WorldSeatRefusal::WorldHeldElsewhere));
         }
-        let _abort = AbortOnPanic("world-seat-enter");
+        let abort = AbortOnPanic::new("world-seat-enter");
         reset_carrier_tls();
         ctx.unstow_serial_world_state();
         ctx.resume_world_seat_with_roots(self.roots);
+        abort.disarm();
         Ok(ActiveWorldSeat {
             slab: self.slab,
             turn,
@@ -366,6 +386,33 @@ impl ParkedWorldSeat {
         self.enter(ctx, turn, lend)
     }
 
+    /// Resume a parked seated Green `Context` in place under a newly installed
+    /// `TurnRight` (`TurnRight::Era` after live-Green era-open, or
+    /// `TurnRight::Solo` on era-open rollback / era teardown, E6-P.4).
+    #[cold]
+    #[inline(never)]
+    pub(crate) fn resume_with_turn_right(
+        self,
+        ctx: &mut Context,
+        mut right: super::super::world::TurnRight,
+    ) {
+        let abort = AbortOnPanic::new("world-seat-resume-turn-right");
+        right.clear_stowed_for_return();
+        right.enter();
+        reset_carrier_tls();
+        ctx.unstow_serial_world_state();
+        ctx.resume_world_seat_with_roots(self.roots);
+        let seat_key = {
+            let seat = ctx.green_seat().expect("resumed Green seat is seated");
+            let key = seat.key;
+            seat.install_baton(right);
+            key
+        };
+        ctx.threads.enter_thread(seat_key.id());
+        drop(self.retention);
+        abort.disarm();
+    }
+
     /// Test-only teardown helper: restore `ctx` briefly to retire its parked
     /// `RootBatchLease`, clear any cached `PreparedRootBatch`, stow World
     /// carriers back to `Stowed`, and drop the seat's `FacadeEpochRetention`
@@ -379,7 +426,7 @@ impl ParkedWorldSeat {
     #[cfg(test)]
     #[allow(unsafe_code)]
     pub(crate) unsafe fn retire_parked_for_teardown_for_test(self, ctx: &mut Context) {
-        let _abort = AbortOnPanic("world-seat-teardown");
+        let abort = AbortOnPanic::new("world-seat-teardown");
         reset_carrier_tls();
         ctx.unstow_serial_world_state();
         ctx.resume_world_seat_with_roots(self.roots);
@@ -394,6 +441,7 @@ impl ParkedWorldSeat {
             park_carrier_tls();
         }
         drop(self.retention);
+        abort.disarm();
     }
 }
 
@@ -484,7 +532,7 @@ impl ActiveWorldSeat {
         ctx: &mut Context,
     ) -> (ParkedWorldSeat, WorldTurn, WorldLend) {
         let (roots, retention) = {
-            let _abort = AbortOnPanic("world-seat-switch-out");
+            let abort = AbortOnPanic::new("world-seat-switch-out");
             let current_slab = ctx.owner.slab().map(|s| s as *const _ as usize);
             assert_eq!(
                 current_slab,
@@ -510,6 +558,7 @@ impl ActiveWorldSeat {
             unsafe {
                 park_carrier_tls();
             }
+            abort.disarm();
             (roots, retention)
         };
         drop(self.retention);

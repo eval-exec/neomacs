@@ -78,7 +78,7 @@ impl Baton {
     /// adapter, so the function is live in the library build. The adapter
     /// itself stays dormant: nothing on the production admission path
     /// reaches it.
-    pub(super) fn from_world_loan(loan: WorldLoan) -> Self {
+    pub(crate) fn from_world_loan(loan: WorldLoan) -> Self {
         match EraWorldLoan::into_retained_owner(Box::new(loan)).downcast::<Self>() {
             Ok(baton) => *baton,
             Err(retained) => {

@@ -96,3 +96,22 @@ impl super::Context {
         Ok(())
     }
 }
+
+/// Retire the `RootBatchLease` returned by `recover_transferred_source` once
+/// Main has restored `TurnRight::Solo(Baton)` and reattached its Context (`E6-P.4`).
+pub(crate) fn retire_transfer_publication_on_main(
+    ctx: &mut super::Context,
+    publication: RootBatchLease,
+) -> Result<(), neovm_value::error::Flow> {
+    ctx.prepare_parked_root_retirement()?;
+    match finish(publication) {
+        Ok(()) => Ok(()),
+        Err(failure) => {
+            let (publication, _error) = failure.into_parts();
+            ctx.with_green_runtime(|runtime| {
+                runtime.parked.borrow_mut().push_retained(publication);
+            });
+            Ok(())
+        }
+    }
+}

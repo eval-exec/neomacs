@@ -18,6 +18,7 @@ use factory::{AdmissionPlan, ProductionPlan};
 use neovm_value::tagged::gc::{QuiescentCollector, RegistrationError, RendezvousError};
 use neovm_value::tagged::value::TaggedValue;
 use neovm_value::value::{HashTableTest, HashTableWeakness, LispHashTable};
+pub(crate) use preparation::SerialRecovery;
 
 /// Why owned admission refused before any owner ran.
 #[derive(Debug, PartialEq, Eq)]

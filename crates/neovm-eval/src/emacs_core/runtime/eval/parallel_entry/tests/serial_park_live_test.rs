@@ -3471,8 +3471,13 @@ fn run_l67c_a_serial_turn_make_list_row(pre_freeze_cons: bool) {
                             "L6.7c (a): debt must remain >= gc_threshold for the keeper's next stop"
                         );
                         assert!(
-                            ev.gc_inhibit_depth_for_test() >= 1,
-                            "L6.7c (a): SerialTurn must hold RAII GC inhibit guard"
+                            ev.in_active_serial_turn(),
+                            "Q4-(b): SerialTurn must mark ACTIVE_SERIAL_TURN to inhibit threshold GC"
+                        );
+                        assert_eq!(
+                            ev.gc_inhibit_depth_for_test(),
+                            0,
+                            "Q4-(b): SerialTurn must not bump gc_inhibit_depth"
                         );
                         threshold
                     });
@@ -3646,57 +3651,57 @@ fn l67c_a_serial_turn_gc_inhibit_guard_restores_depth_on_normal_and_unwind() {
 
     let ev = Context::new(crate::test_utils::unit_runtime());
     assert_eq!(ev.gc_inhibit_depth_for_test(), 0);
+    assert!(!ev.in_active_serial_turn());
     let mut state = OwnerSerialState::new(77, Box::new(ev))
         .ok()
         .expect("fresh Context detaches");
 
-    // Turn 1: depth == 1 across with_world, panic unwind inside with_world
-    // (caught while turn is live), and park/resume (depth does not accumulate).
+    // Turn 1: ACTIVE_SERIAL_TURN is live (while gc_inhibit_depth stays 0 under
+    // `#14342` Q4-(b)) across with_world, caught panic unwind inside with_world,
+    // and park/resume.
     let mut t1 = state.begin(Local(77)).ok().expect("turn 1 begins");
     t1.with_world(|ctx| {
+        assert!(
+            ctx.in_active_serial_turn(),
+            "Q4-(b): ACTIVE_SERIAL_TURN must be active inside SerialTurn"
+        );
         assert_eq!(
             ctx.gc_inhibit_depth_for_test(),
-            1,
-            "L6.7c (a): depth must be 1 inside SerialTurn"
+            0,
+            "Q4-(b): SerialTurn must leave gc_inhibit_depth == 0"
         );
     });
     let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         t1.with_world(|ctx| {
-            assert_eq!(
-                ctx.gc_inhibit_depth_for_test(),
-                1,
-                "depth must remain 1 before unwind inside with_world"
-            );
+            assert!(ctx.in_active_serial_turn());
+            assert_eq!(ctx.gc_inhibit_depth_for_test(), 0);
             panic!("intentional unwind inside SerialTurn::with_world");
         });
     }));
     assert!(unwound.is_err(), "panic must unwind out of with_world");
     t1.with_world(|ctx| {
-        assert_eq!(
-            ctx.gc_inhibit_depth_for_test(),
-            1,
-            "depth must remain 1 after caught unwind inside with_world"
+        assert!(
+            ctx.in_active_serial_turn(),
+            "ACTIVE_SERIAL_TURN must remain set after caught unwind inside with_world"
         );
+        assert_eq!(ctx.gc_inhibit_depth_for_test(), 0);
     });
     let (parked, _) = t1.park("wait").ok().expect("turn 1 parks");
     let mut resumed = parked.resume(Local(77)).ok().expect("turn 1 resumes");
     resumed.with_world(|ctx| {
-        assert_eq!(
-            ctx.gc_inhibit_depth_for_test(),
-            1,
-            "park/resume must restore and re-enter depth == 1 (no leak)"
+        assert!(
+            ctx.in_active_serial_turn(),
+            "park/resume must clear and re-enter ACTIVE_SERIAL_TURN cleanly"
         );
+        assert_eq!(ctx.gc_inhibit_depth_for_test(), 0);
     });
     let _ = resumed.end().ok().expect("turn 1 ends");
 
-    // Turn 2: fresh begin after end must still see depth == 1 (not 2).
+    // Turn 2: fresh begin after end must re-enter ACTIVE_SERIAL_TURN with depth == 0.
     let mut t2 = state.begin(Local(77)).ok().expect("turn 2 begins");
     t2.with_world(|ctx| {
-        assert_eq!(
-            ctx.gc_inhibit_depth_for_test(),
-            1,
-            "end must restore depth to 0 so the next turn starts at 1"
-        );
+        assert!(ctx.in_active_serial_turn());
+        assert_eq!(ctx.gc_inhibit_depth_for_test(), 0);
     });
     let _ = t2.end().ok().expect("turn 2 ends");
 }
@@ -4157,6 +4162,103 @@ fn l67c_c_serial_turn_inner_inhibit_suppresses_explicit_garbage_collect() {
                     grants.len(),
                     2,
                     "exactly one keeper collect stop (none during inner inhibit, one after)"
+                );
+            });
+        },
+    );
+}
+
+/// `#15237` Q4-(b) `inhibit_base` condition proof:
+/// Removing `gc_inhibit_depth += 1` from `SerialHost::enter_turn` sets
+/// `with_world_collectible`'s `inhibit_base = 0` so:
+/// 1. Normal `with_world_collectible` (`gc_inhibit_depth == 0`) sees
+///    `is_explicit_gc_inhibited() == false` and routes explicit `(garbage-collect)`
+///    through the keeper while threshold GC stays inhibited (`in_active_serial_turn()`).
+/// 2. An OUTER `gc_inhibit_depth > 0` active BEFORE entering `with_world_collectible`
+///    keeps `is_explicit_gc_inhibited() == true` and suppresses explicit `(garbage-collect)`
+///    with zero keeper collect stops (never accidentally allowing GC under an outer inhibit).
+/// 3. Leaving the outer inhibit restores explicit `(garbage-collect)` routing cleanly.
+#[test]
+fn l67c_c_q4b_outer_and_nested_inhibit_base_preservation() {
+    with_l67c_c_green_era(
+        "l67c-c-q4b-inhibit-base",
+        |_src| {},
+        |era| {
+            let (inbox, inbox_rx) = mpsc::channel();
+            let mut driver = Driver::new(era, inbox_rx);
+            let o_kit = enroll_driver(era, &mut driver, &inbox, O);
+            drop(inbox);
+
+            let world_handle = era.keeper_baton_for_test().test_world_handle_for_test();
+            let (retire_tx, retire_rx) = mpsc::channel::<()>();
+
+            std::thread::scope(|scope| {
+                let _panic_guard = KeeperPanicGuard { keeper: era };
+                let owner = scope.spawn(move || {
+                    let ctx = world_handle.spawn_unseated_serial_context_for_test();
+                    let mut state = OwnerSerialState::new(o_kit.home.owner, Box::new(ctx))
+                        .ok()
+                        .expect("O detaches");
+                    let home = o_kit.home;
+                    let mut raw_port = ChannelPort::new(
+                        home.owner,
+                        activate(o_kit.permit, home.heap, home.owner),
+                        o_kit.inbox,
+                        o_kit.grants,
+                    );
+                    let mut port = EpochPort::new(&mut raw_port);
+                    let granted = port.request_turn().ok().expect("O granted");
+                    let mut turn = begin_turn(&mut state, home, granted, &mut port, standalone)
+                        .ok()
+                        .expect("O begins");
+
+                    // Simulate a genuine outer GC inhibit present BEFORE entering
+                    // `with_world_collectible`.
+                    turn.with_world(|ev| {
+                        assert_eq!(ev.gc_inhibit_depth_for_test(), 0);
+                        assert!(ev.in_active_serial_turn());
+                        ev.set_gc_inhibit_depth_for_test(1);
+                    });
+                    turn.with_world_collectible(&mut port, standalone, |ev| {
+                        let gc0 = ev.tagged_heap.gc_collections();
+                        assert_eq!(ev.active_serial_collect_inhibit_base(), Some(0));
+                        assert!(
+                            ev.is_explicit_gc_inhibited(),
+                            "outer gc_inhibit_depth == 1 must stay inhibited inside with_world_collectible"
+                        );
+                        assert_eq!(eval(ev, "(garbage-collect)"), "nil");
+                        assert_eq!(
+                            ev.tagged_heap.gc_collections(),
+                            gc0,
+                            "outer inhibit must take zero keeper collect stops"
+                        );
+                        ev.set_gc_inhibit_depth_for_test(0);
+                        assert!(
+                            !ev.is_explicit_gc_inhibited(),
+                            "clearing outer inhibit restores explicit GC inside with_world_collectible"
+                        );
+                        let stats = ev
+                            .eval_str("(garbage-collect)")
+                            .expect("explicit (garbage-collect) runs once depth == 0");
+                        assert!(
+                            neovm_value::value::list_to_vec(&stats).is_some_and(|b| !b.is_empty())
+                        );
+                        assert_eq!(ev.tagged_heap.gc_collections(), gc0 + 1);
+                    });
+                    turn.end(&mut port).ok().expect("O ends");
+                    let grants = port.grants();
+                    retire(raw_port.exit());
+                    retire_rx.recv_timeout(BOUND).expect("teardown");
+                    drop(state);
+                    grants
+                });
+                assert_eq!(driver.run(), DriverEnd::Drained);
+                retire_tx.send(()).expect("allow drop");
+                let grants = owner.join().expect("O joined");
+                assert_eq!(
+                    grants.len(),
+                    2,
+                    "exactly one keeper collect stop (none during outer inhibit, one after)"
                 );
             });
         },

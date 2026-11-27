@@ -53,13 +53,13 @@ impl std::fmt::Debug for MutatorPermit<'_> {
     }
 }
 
+#[must_use = "into_permit() to retry activation; dropping cancels the unused start"]
 pub struct MutatorStartFailure<'era> {
     pub reason: RegistrationError,
     permit: MutatorPermit<'era>,
 }
 impl<'era> MutatorStartFailure<'era> {
-    #[cfg_attr(feature = "test-support", visibility::make(pub))]
-    pub(crate) fn into_permit(self) -> MutatorPermit<'era> {
+    pub fn into_permit(self) -> MutatorPermit<'era> {
         self.permit
     }
 }

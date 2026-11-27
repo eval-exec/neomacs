@@ -34,11 +34,15 @@ pub use api::{green_make_thread, green_world};
 pub(crate) use bootstrap::GreenBootstrap;
 #[cfg(debug_assertions)]
 pub(crate) use bootstrap::debug_assert_native_tables_open;
-pub(crate) use carried::SourceWorldCarriers;
+pub(crate) use carried::{
+    SourceWorldCarriers, clear_current_thread_observations, restore_current_thread_observations,
+    stash_current_thread_observations,
+};
 pub(crate) use host_service::HostRequestKey;
+pub(crate) use root_registry::retire_transfer_publication_on_main;
 pub(crate) use scheduler::{
-    ConditionId, Control, MutexId, OwnerWake, ParallelWaitOutcome, SchedulerIndexInconsistency,
-    SignalHint, ThreadKey, Wait,
+    ConditionId, Control, EraCloseError, Lifecycle, MutexId, OwnerWake, ParallelWaitOutcome,
+    SchedulerIndexInconsistency, SignalHint, ThreadKey, Wait,
 };
 pub(crate) use switch::WorldSeatParkedRoots;
 #[doc(hidden)]
@@ -110,6 +114,15 @@ pub(crate) struct GreenRuntime {
     /// `set-standard-case-table` sets it here, and each thread installs it
     /// as it resumes.
     pub(super) standard_case_table: std::cell::Cell<Option<neovm_value::value::Value>>,
+    /// Thread IDs admitted to parallel opt-in execution via
+    /// `neomacs-make-parallel-thread` (E6-P.4). Stored here rather than on
+    /// `ThreadManager` or `Context` to preserve both ABI layout pins; remains
+    /// readable after thread exit/`thread-join`.
+    pub(crate) parallel_admitted: std::cell::RefCell<rustc_hash::FxHashSet<u64>>,
+    /// Live keeper era opened on first opt-in admission (E6-P.4), torn down
+    /// cleanly by `green_teardown`.
+    pub(crate) live_era:
+        std::cell::RefCell<Option<super::parallel_entry::live_admission::LiveEraRuntime>>,
 }
 
 impl std::fmt::Debug for GreenRuntime {
@@ -258,6 +271,8 @@ impl Context {
             standard_case_table: std::cell::Cell::new(self.cached_standard_case_table),
             outgoing_constant_error: std::cell::Cell::new(None),
             carriers: carrier::CarrierPool::new(),
+            parallel_admitted: Default::default(),
+            live_era: Default::default(),
         }));
         Ok(baton)
     }
@@ -433,6 +448,45 @@ impl Context {
         Self::assemble_green_owner(views, seed, case_table)
     }
 
+    /// Build an unseated same-World `Context` for an admitted opt-in parallel
+    /// owner while holding its first keeper-lent `SerialSeat` (E6-P.4).
+    ///
+    /// Installs no `GreenSeat` so `SerialHost::detach` accepts it, and keeps
+    /// its own dynamic-module registry handle so dropping the dormant owner
+    /// never retires the shared World's registry.
+    #[cold]
+    #[inline(never)]
+    pub(crate) fn new_unseated_serial_owner(
+        handle: &super::world::EraWorldHandle,
+        seat: &super::parallel_entry::serial_ticket::SerialDestination,
+    ) -> Self {
+        neovm_value::intern::prepare_thread_symbol_caches();
+        let (seed, current, case_table) = {
+            let runtime = handle.green_runtime_under_serial_seat(seat);
+            let runtime = runtime
+                .as_ref()
+                .expect("live parallel era has a started GreenRuntime");
+            runtime.bootstrap.install_native_tables();
+            (
+                runtime.bootstrap.seed(),
+                runtime.bootstrap.current_buffer,
+                runtime.standard_case_table.get(),
+            )
+        };
+        let mut views = handle.owner_views_under_serial_seat(seat, current);
+        views.tagged_heap.install_tagged_heap();
+        let mut owner = Context::assemble(views, seed);
+        owner.dynamic_module_registry =
+            super::data::dynamic_module_registry::DynamicModuleRegistryHandle::new(Vec::new());
+        owner.cached_standard_case_table = case_table;
+        owner.gc_count = owner.tagged_heap.gc_collections() as u64;
+        owner.ensure_owner_slab();
+        owner.setup_thread_locals();
+        owner.republish_owner_mirrors();
+        owner.unstow_serial_world_state();
+        owner
+    }
+
     #[cold]
     #[inline(never)]
     fn assemble_green_owner(
@@ -596,6 +650,8 @@ impl GreenRuntime {
             standard_case_table: std::cell::Cell::new(captured.standard_case_table),
             outgoing_constant_error: std::cell::Cell::new(None),
             carriers: carrier::CarrierPool::new(),
+            parallel_admitted: Default::default(),
+            live_era: Default::default(),
         })
     }
 

@@ -299,12 +299,7 @@ impl<'era> Mutator<'era> {
     }
     /// Publish terminated-owner roots before leaving. The canonical entry and
     /// its image remain retained and participate in later frozen memberships.
-    #[cfg(any(test, feature = "test-support"))]
-    #[cfg_attr(feature = "test-support", visibility::make(pub))]
-    pub(crate) fn retire_rooted(
-        mut self,
-        roots: &[SharedRoot],
-    ) -> Result<(), RootedRetireFailure<'era>> {
+    pub fn retire_rooted(mut self, roots: &[SharedRoot]) -> Result<(), RootedRetireFailure<'era>> {
         let result = (|| {
             if self
                 .local
@@ -315,6 +310,7 @@ impl<'era> Mutator<'era> {
             }
             // Refuse before transitioning mode if this registration still
             // holds an open owner-cons run.
+            #[cfg(any(test, feature = "test-support"))]
             self.registry
                 .check_owner_cons_closed(self.entry.key.registration)?;
             // Every Running/Resuming entry access shares the canonical gate.
@@ -338,6 +334,7 @@ impl<'era> Mutator<'era> {
             // The owner thread cannot borrow the collector. Refuse if a cons
             // run is still open, skip owners that hold no lease, and queue
             // closed leases for `reclaim_retired_owner_cons`.
+            #[cfg(any(test, feature = "test-support"))]
             self.registry
                 .note_retired_owner_cons(self.entry.key.registration)?;
             e.rendezvous.retiring = true;
@@ -578,14 +575,13 @@ impl<'era> Mutator<'era> {
     }
 }
 
+#[must_use = "into_owner() to retry retirement; dropping poisons the era"]
 pub struct RootedRetireFailure<'era> {
     pub reason: RendezvousError,
     owner: Mutator<'era>,
 }
 impl<'era> RootedRetireFailure<'era> {
-    #[cfg(any(test, feature = "test-support"))]
-    #[cfg_attr(feature = "test-support", visibility::make(pub))]
-    pub(crate) fn into_owner(self) -> Mutator<'era> {
+    pub fn into_owner(self) -> Mutator<'era> {
         self.owner
     }
 }

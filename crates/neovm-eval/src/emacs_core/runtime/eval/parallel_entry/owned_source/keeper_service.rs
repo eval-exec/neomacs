@@ -15,11 +15,9 @@ use neovm_value::tagged::gc::heap_transfer::{
 use std::num::NonZeroU64;
 
 use neovm_value::tagged::gc::{
-    AllStopped, CollectionError, CollectionReport, MutatorKey, ParallelHeapEra, RendezvousError,
-    StopAttempt,
+    AllStopped, CollectionError, CollectionReport, HeapIdentity, MutatorKey, MutatorPermit,
+    ParallelHeapEra, RegistrationError, RendezvousError, StopAttempt,
 };
-#[cfg(test)]
-use neovm_value::tagged::gc::{HeapIdentity, MutatorPermit, RegistrationError};
 use std::marker::PhantomData;
 use std::rc::Rc;
 use std::thread::ThreadId;
@@ -245,14 +243,12 @@ impl<'service, 'heap> KeeperEra<'service, 'heap> {
     }
 
     /// Heap the service thread registers a mutator permit against.
-    #[cfg(test)]
     pub(crate) fn heap_identity(&self) -> HeapIdentity {
         self.era.heap_identity()
     }
 
     /// Register one mutator on this service thread. Activation and publication
     /// stay on the owner thread; the permit is what crosses.
-    #[cfg(test)]
     pub(crate) fn register(
         &self,
         owner: u64,

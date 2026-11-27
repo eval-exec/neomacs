@@ -233,9 +233,22 @@ impl ReturnedEraEnd {
             .return_to_source()
             .map(|transfer| Self { transfer })
     }
+
+    /// Unwrap the reference-free return for the live-Green era-teardown path
+    /// (`E6-P.4`), which calls `PendingHeapReturn::restore` directly on Main's
+    /// OS thread.
+    pub(crate) fn into_heap_transfer(self) -> ReturnedHeapTransfer {
+        self.transfer
+    }
 }
 
 impl PreparedEraStart {
+    /// Wrap a reference-free heap transfer prepared by the live-Green era-open
+    /// path (`E6-P.4`) so it shares `keeper_serve` and `ReturnedEraEnd`.
+    pub(crate) fn from_heap_transfer(transfer: PreparedHeapTransfer) -> Self {
+        Self { transfer }
+    }
+
     /// Hand the affine transfer to a later scoped-era adapter.
     ///
     /// The transfer retains its backing. This does not expose a collector or

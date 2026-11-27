@@ -539,10 +539,11 @@ impl SerialHost for Context {
         self.reattach_serial_owner(detached)
     }
 
-    /// L6.7c (a) + F3: inhibit safe-point (threshold) GC and unbridged direct
-    /// STW GC for the whole `SerialTurn` so Lisp allocation debt defers to the
-    /// keeper's next stop instead of firing an uncoordinated direct minor/STW
-    /// collection inside the turn.
+    /// L6.7c (a) + F3 + Q4-(b): mark this OS thread inside a live `SerialTurn`
+    /// via the zero-ABI `ACTIVE_SERIAL_TURN` TLS slot so safe-point threshold
+    /// GC and unbridged direct STW GC stay inhibited without bumping
+    /// `gc_inhibit_depth` (which would falsely trip Baton's `switch_refusal`
+    /// or leak a depth offset into `ActiveSerialCollectScope`).
     fn enter_turn(&mut self, _: HostTransition) {
         let current = ActiveSerialTurn::for_context(self);
         ACTIVE_SERIAL_TURN.with(|slot| {
@@ -552,11 +553,11 @@ impl SerialHost for Context {
                 "at most one active SerialTurn per OS thread"
             );
         });
-        self.gc_inhibit_depth += 1;
     }
 
-    /// L6.7c (a) + F3: paired 1:1 with `enter_turn` by `SerialTurn`'s RAII
-    /// lifecycle (`end`, `park`, or unwind `Drop`), so depth cannot leak.
+    /// L6.7c (a) + F3 + Q4-(b): paired 1:1 with `enter_turn` by `SerialTurn`'s
+    /// RAII lifecycle (`end`, `park`, or unwind `Drop`), so the TLS marker
+    /// cannot leak.
     fn leave_turn(&mut self, _: HostTransition) {
         let expected = ActiveSerialTurn::for_context(self);
         ACTIVE_SERIAL_TURN.with(|slot| {
@@ -564,11 +565,6 @@ impl SerialHost for Context {
                 slot.set(None);
             }
         });
-        debug_assert!(
-            self.gc_inhibit_depth > 0 || std::thread::panicking(),
-            "SerialTurn::leave_turn called with gc_inhibit_depth == 0"
-        );
-        self.gc_inhibit_depth = self.gc_inhibit_depth.saturating_sub(1);
     }
 }
 

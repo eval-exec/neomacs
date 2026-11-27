@@ -1203,6 +1203,9 @@ pub(crate) enum EraOpenError {
 pub(crate) enum EraCloseError {
     /// No parallel era is currently open on this `Control`.
     NotOpen,
+    /// At least one admitted `Participant::Parallel` owner has not yet retired
+    /// (`E6-P4-I2(b)` exit-gated `close_era`).
+    LiveOwnersRemaining,
 }
 
 /// Typed QD1 check failure when a `Wake` carries the wrong `TurnRight` variant
@@ -3460,6 +3463,7 @@ impl Control {
             Self::set_wait(&mut state, key, Wait::Exited);
             Self::remove_key(&mut state, key);
         }
+        self.metadata_changed.notify_all();
         self.notify_select();
     }
 
@@ -3495,6 +3499,7 @@ impl Control {
             }
             Self::remove_key(&mut state, me);
         }
+        self.metadata_changed.notify_all();
         self.notify_select();
     }
 
@@ -4181,10 +4186,6 @@ impl Control {
     /// Linearly surrender Green's unique `TurnRight::Solo(Baton)` so the caller
     /// can escrow the `Baton` in a parallel era (QD1). Refused if the runtime
     /// is closing, an era is already open, or `Solo` was already surrendered.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "L6.7b b4.3 Slice 2 era admission is the caller")
-    )]
     pub(crate) fn surrender_solo_for_era(
         &self,
         right: TurnRight,
@@ -4208,13 +4209,6 @@ impl Control {
 
     /// Restore a previously surrendered `Baton` back into Green if era
     /// admission fails before [`Control::open_era`].
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "L6.7b b4.3 Slice 2 era admission rollback is the caller"
-        )
-    )]
     pub(crate) fn restore_surrendered_solo(&self, baton: Baton) -> Result<TurnRight, Baton> {
         let mut state = self.state();
         if !matches!(state.era, EraState::SoloSurrendered) {
@@ -4229,10 +4223,6 @@ impl Control {
     /// Refused with [`EraOpenError::SoloBatonHeld`] if Green has not linearly
     /// surrendered its unique `TurnRight::Solo(Baton)` via
     /// [`Control::surrender_solo_for_era`].
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "L6.7b b4.3 era admission is the caller")
-    )]
     pub(crate) fn open_era(
         &self,
         world: EraWorldHandle,
@@ -4260,10 +4250,6 @@ impl Control {
     }
 
     /// Acquire the Baton group's initial `WorldTurn` right after [`Self::open_era`].
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "L6.7b b4.3 era admission is the caller")
-    )]
     pub(crate) fn acquire_initial_era_turn(&self) -> Result<TurnRight, PortRefusal> {
         let (requester, port) = {
             let mut state = self.state();
@@ -4295,10 +4281,6 @@ impl Control {
 
     /// End the group's final active interval (`Holding -> Idle`) before
     /// leaving the era.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "L6.7b b4.3 era teardown is the caller")
-    )]
     pub(crate) fn release_era_turn_to_idle(&self, right: TurnRight) {
         {
             let mut state = self.state();
@@ -4310,10 +4292,6 @@ impl Control {
     /// Remove the `GroupPort` (and drop the cloned inbox request sender) from
     /// an idle open era so the caller can invoke `GroupPort::exit()` and allow
     /// the keeper's `Driver::run()` to observe channel disconnect and drain.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "L6.7b b4.3 era teardown is the caller")
-    )]
     pub(crate) fn take_era_port_for_exit(&self) -> Option<GroupPort> {
         let mut state = self.state();
         let EraState::EraOpen(era) = &mut state.era else {
@@ -4325,10 +4303,10 @@ impl Control {
 
     /// Close the active parallel era, restoring the keeper's escrowed `Baton`
     /// back into Green as `TurnRight::Solo(Baton)`.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "L6.7b b4.3 era teardown is the caller")
-    )]
+    ///
+    /// Enforces `E6-P4-I2(b)` (exit-gated `close_era`): refuses with
+    /// [`EraCloseError::LiveOwnersRemaining`] while any `Participant::Parallel`
+    /// owner remains registered on `Control`.
     pub(crate) fn close_era(
         &self,
         baton: Baton,
@@ -4337,11 +4315,62 @@ impl Control {
         if !matches!(state.era, EraState::EraOpen(_)) {
             return Err((baton, EraCloseError::NotOpen));
         }
+        if state.parallel_participant_count() > 0 {
+            return Err((baton, EraCloseError::LiveOwnersRemaining));
+        }
         let EraState::EraOpen(link) = std::mem::replace(&mut state.era, EraState::SoloActive)
         else {
             unreachable!("checked EraOpen above");
         };
         Ok((TurnRight::Solo(baton), link.world, link.port))
+    }
+
+    /// Whether a parallel era is currently open on this `Control`.
+    #[cfg(test)]
+    pub(crate) fn era_is_open(&self) -> bool {
+        matches!(self.state().era, EraState::EraOpen(_))
+    }
+
+    /// Clone the open era's inert [`EraWorldHandle`] (used when enrolling a
+    /// newly admitted opt-in parallel owner into an already-open era, E6-P.4).
+    pub(crate) fn try_clone_era_world_handle(&self) -> Option<EraWorldHandle> {
+        let state = self.state();
+        match &state.era {
+            EraState::EraOpen(era) => era.world.try_clone().ok(),
+            EraState::SoloActive | EraState::SoloSurrendered => None,
+        }
+    }
+
+    /// Whether this `Control` is back in `EraState::SoloActive`.
+    #[cfg(test)]
+    pub(crate) fn era_state_is_solo_active(&self) -> bool {
+        matches!(self.state().era, EraState::SoloActive)
+    }
+
+    /// Count of admitted `Participant::Parallel` owners that have not yet
+    /// retired from `Control` (`E6-P4-I2(b)`).
+    pub(crate) fn live_parallel_participant_count(&self) -> usize {
+        self.state().parallel_participant_count()
+    }
+
+    /// Wait up to `timeout` until every admitted `Participant::Parallel` owner
+    /// has retired from `Control` (`E6-P4-I2(b)` exit-gated `close_era`).
+    pub(crate) fn wait_all_parallel_participants_exited(&self, timeout: Duration) -> bool {
+        let deadline = Instant::now() + timeout;
+        let mut state = self.state();
+        while state.parallel_participant_count() > 0 {
+            let now = Instant::now();
+            if now >= deadline {
+                return false;
+            }
+            let remaining = deadline.saturating_duration_since(now);
+            let (guard, _result) = self
+                .metadata_changed
+                .wait_timeout(state, remaining)
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            state = guard;
+        }
+        true
     }
 
     /// Return a held `TurnRight::Era` back to the keeper (Case i / Case ii).

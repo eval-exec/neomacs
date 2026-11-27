@@ -40,9 +40,10 @@ mod era_world_loan;
 mod function_write_hooks;
 mod green_owner;
 mod heap_transfer_adapter;
-pub(crate) use heap_transfer_adapter::PreparedHeapTransferProductionEra;
-#[cfg(test)]
-pub(crate) use heap_transfer_adapter::recover_transferred_source;
+pub(crate) use heap_transfer_adapter::{
+    PreparedHeapTransferProductionEra, freeze_live_legacy_roots, prepare_reference_free_transfer,
+    recover_transferred_source,
+};
 #[cfg(test)]
 #[path = "world/tests/heap_transfer.rs"]
 mod heap_transfer_tests;
@@ -76,7 +77,9 @@ pub(crate) use green_owner::TestBatonWorldHandle;
 #[allow(unused_imports)]
 pub(crate) use green_owner::{EraTurnRight, EraWorldHandle, TurnRight};
 #[allow(unused_imports)]
-pub(crate) use green_owner::{FrozenLegacyRoots, OwnedParallelError, OwnedParallelProjection};
+pub(crate) use green_owner::{
+    FrozenLegacyRoots, OwnedParallelError, OwnedParallelProjection, SerialRecovery,
+};
 pub(crate) use slot::WorldSlot;
 pub(crate) use sole_owner::{
     PublishedSoleOwnerDriver, SoleOwnerDriver, SoleOwnerRegistration, SoleOwnerVm,

@@ -206,6 +206,67 @@ impl CarriedState {
             swap(&mut **piece);
         }
     }
+
+    /// Swap ONLY the `CarrierId::Observations` slot between this stowed
+    /// `CarriedState` and the current OS thread's `collection_reads::STATE`
+    /// (`E6-P.4` live-Green era-open / teardown observation-receipt bridge).
+    #[cold]
+    #[inline(never)]
+    pub(crate) fn swap_observations_only(&mut self) {
+        let idx = CARRIER_IDS
+            .iter()
+            .position(|id| matches!(id, CarrierId::Observations))
+            .expect("CarrierId::Observations is present in CARRIER_IDS");
+        (CARRIERS[idx].1)(&mut *self.pieces[idx]);
+    }
+
+    /// Replace the stowed `CarrierId::Observations` piece with a fresh
+    /// placeholder, dropping any extra `Rc` clone of the heap's canonical
+    /// `ObservationWorld` before `PendingHeapReturn::restore()` verifies
+    /// `RefOwners::HeapOnly` (`E6-P.4`).
+    #[cold]
+    #[inline(never)]
+    pub(crate) fn reset_observations_to_placeholder(&mut self) {
+        let idx = CARRIER_IDS
+            .iter()
+            .position(|id| matches!(id, CarrierId::Observations))
+            .expect("CarrierId::Observations is present in CARRIER_IDS");
+        self.pieces[idx] = (CARRIERS[idx].0)();
+    }
+}
+
+/// Stash the current OS thread's `CarrierId::Observations` state behind a fresh
+/// placeholder (`E6-P.4`, preserving the N13 carried-World-state seal).
+#[cold]
+#[inline(never)]
+pub(crate) fn stash_current_thread_observations() -> Box<dyn Any> {
+    let idx = CARRIER_IDS
+        .iter()
+        .position(|id| matches!(id, CarrierId::Observations))
+        .expect("CarrierId::Observations is present in CARRIER_IDS");
+    let mut slot = (CARRIERS[idx].0)();
+    (CARRIERS[idx].1)(&mut *slot);
+    slot
+}
+
+/// Restore a previously stashed `CarrierId::Observations` state onto the
+/// current OS thread (`E6-P.4`, preserving the N13 carried-World-state seal).
+#[cold]
+#[inline(never)]
+pub(crate) fn restore_current_thread_observations(mut saved: Box<dyn Any>) {
+    let idx = CARRIER_IDS
+        .iter()
+        .position(|id| matches!(id, CarrierId::Observations))
+        .expect("CarrierId::Observations is present in CARRIER_IDS");
+    (CARRIERS[idx].1)(&mut *saved);
+}
+
+/// Replace the current OS thread's `CarrierId::Observations` state with a fresh
+/// placeholder and drop the displaced value (`E6-P.4`, preserving the N13 seal).
+#[cold]
+#[inline(never)]
+pub(crate) fn clear_current_thread_observations() {
+    drop(stash_current_thread_observations());
 }
 
 #[cfg(target_pointer_width = "64")]

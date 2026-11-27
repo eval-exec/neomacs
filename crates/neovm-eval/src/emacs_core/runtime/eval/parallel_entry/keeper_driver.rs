@@ -48,16 +48,8 @@ pub(crate) type GroupLink = driver_core::GroupLink<WorldTurn>;
 /// A proven invariant break.
 pub(crate) type Breach = driver_core::Breach<ReceiveReason, RendezvousError>;
 /// Why the driver stopped serving.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "no production spawner until E6-P admission")
-)]
 pub(crate) type DriverEnd = driver_core::DriverEnd<ReceiveReason, RendezvousError>;
 /// The keeper side of L6.7a over the product era.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "no production spawner until E6-P admission")
-)]
 pub(crate) type Driver<'k, 'service, 'heap> =
     driver_core::Driver<'k, &'k KeeperEra<'service, 'heap>>;
 
@@ -346,15 +338,37 @@ pub(crate) struct ChannelPort<'era> {
     exited: bool,
     inbox: mpsc::Sender<KeeperMsg>,
     grants: mpsc::Receiver<GrantMsg>,
+    publishing_owners: Option<std::sync::Arc<std::sync::atomic::AtomicUsize>>,
+}
+
+struct PublishingGuard<'a> {
+    counter: Option<&'a std::sync::atomic::AtomicUsize>,
+}
+
+impl<'a> PublishingGuard<'a> {
+    fn enter(counter: Option<&'a std::sync::Arc<std::sync::atomic::AtomicUsize>>) -> Self {
+        if let Some(counter) = counter {
+            counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Self {
+                counter: Some(&**counter),
+            }
+        } else {
+            Self { counter: None }
+        }
+    }
+}
+
+impl Drop for PublishingGuard<'_> {
+    fn drop(&mut self) {
+        if let Some(counter) = self.counter {
+            counter.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
 }
 
 /// How many times one request republishes before it refuses with `Retry`.
 const REPUBLISH_LIMIT: usize = 2;
 
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "no production spawner until E6-P admission")
-)]
 impl<'era> ChannelPort<'era> {
     pub(crate) fn new(
         owner: u64,
@@ -369,7 +383,16 @@ impl<'era> ChannelPort<'era> {
             exited: false,
             inbox,
             grants,
+            publishing_owners: None,
         }
+    }
+
+    pub(crate) fn with_publishing_owners(
+        mut self,
+        publishing_owners: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    ) -> Self {
+        self.publishing_owners = Some(publishing_owners);
+        self
     }
 
     /// The owner is done: tell the keeper and hand the mutator back for its
@@ -462,14 +485,34 @@ impl<'era> ChannelPort<'era> {
     /// Publish again: leave native first if the last request entered it.
     fn publish(&mut self) -> Result<PublishedOwner, PortRefusal> {
         let mutator = &mut self.mutator;
+        let inbox = &self.inbox;
         if self.native {
-            match driver_core::retry_contended(busy, || mutator.leave_native().map(|_| ())) {
+            // Wake the keeper BEFORE calling `leave_native()` (E6-P.4):
+            // `leave_native()` blocks inside `prepare_restore()`'s condvar
+            // while a Baton-group `WorldTurn` stop is open rather than
+            // returning `Busy`, so without an upfront `Wake` to raise
+            // `ring_waiter`, a Baton thread polling `(thread-yield)` would
+            // never release its stop and `leave_native()` would deadlock.
+            let _ = inbox.send(KeeperMsg::Wake);
+            match driver_core::retry_contended(busy, || {
+                let res = mutator.leave_native().map(|_| ());
+                if matches!(res, Err(RendezvousError::Busy)) {
+                    let _ = inbox.send(KeeperMsg::Wake);
+                }
+                res
+            }) {
                 Ok(()) => {}
                 Err(err) => return Err(Self::map_publish_error(err)),
             }
             self.native = false;
         }
-        match driver_core::retry_contended(busy, || mutator.publish_native_owner(&[])) {
+        match driver_core::retry_contended(busy, || {
+            let res = mutator.publish_native_owner(&[]);
+            if matches!(res, Err(RendezvousError::Busy)) {
+                let _ = inbox.send(KeeperMsg::Wake);
+            }
+            res
+        }) {
             Ok(receipt) => {
                 self.native = true;
                 Ok(receipt)
@@ -501,16 +544,25 @@ impl KeeperPort for ChannelPort<'_> {
 
     fn request_turn(&mut self) -> Result<(Grant, ChannelLend), PortRefusal> {
         for _ in 0..=REPUBLISH_LIMIT {
-            let receipt = self.publish()?;
-            let (_, generation, _) = receipt.serial_facts();
-            if self
-                .inbox
-                .send(KeeperMsg::Request {
-                    owner: self.owner,
-                    receipt,
-                })
-                .is_err()
-            {
+            let (generation, sent) = {
+                // Dekker pair with `Driver::serve_group`: increment
+                // `publishing_owners` (SeqCst) BEFORE `publish()` sends
+                // `KeeperMsg::Wake` and enters `leave_native()`, and hold it
+                // until `KeeperMsg::Request` is enqueued in `inbox`.
+                let counter = self.publishing_owners.clone();
+                let _publishing = PublishingGuard::enter(counter.as_ref());
+                let receipt = self.publish()?;
+                let (_, generation, _) = receipt.serial_facts();
+                let sent = self
+                    .inbox
+                    .send(KeeperMsg::Request {
+                        owner: self.owner,
+                        receipt,
+                    })
+                    .is_ok();
+                (generation, sent)
+            };
+            if !sent {
                 return Err(PortRefusal::Poisoned);
             }
             match self.grants.recv() {

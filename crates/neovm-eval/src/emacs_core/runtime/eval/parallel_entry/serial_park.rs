@@ -384,11 +384,64 @@ pub(crate) fn begin_turn<'t, C: SerialHost, P: KeeperPort, A>(
     }
 }
 
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "E5.3, E5.4 and E6-P call it; the rows do now")
-)]
+/// Receive a keeper-granted ticket and validate it without yet requiring an
+/// existing `OwnerSerialState` (used by E6-P.4 opt-in owner bootstrap so the
+/// owner's `Context` is constructed only while holding its first `SerialSeat`).
+pub(crate) fn receive_initial_seat<P: KeeperPort, A>(
+    home: SerialHome,
+    (grant, guard): (Grant, P::LendGuard),
+    port: &mut P,
+    activate: impl FnOnce(&mut LocalSerialOwner) -> Result<(), A>,
+) -> Result<
+    (SerialDestination, LocalSerialOwner, P::LendGuard),
+    TurnStartRefusal<std::convert::Infallible, A>,
+> {
+    receive(home, grant, guard, port, activate)
+}
+
+/// Return an initially received `SerialDestination` cleanly when opt-in owner
+/// bootstrap fails before entering [`LiveSerial`].
+pub(crate) fn give_back_initial_seat<P: KeeperPort>(
+    seat: SerialDestination,
+    local: LocalSerialOwner,
+    guard: P::LendGuard,
+    port: &mut P,
+) {
+    give_back(seat, local, port);
+    guard.disarm();
+}
+
 impl<'t, C: SerialHost, G: LendGuard> LiveSerial<'t, C, G> {
+    /// Pair an already-begun `SerialTurn` with its received `SerialDestination`
+    /// and `LendGuard` (E6-P.4 opt-in owner bootstrap after initial `Context` creation).
+    pub(crate) fn from_parts(
+        turn: SerialTurn<'t, C, LocalSerialOwner>,
+        seat: SerialDestination,
+        guard: G,
+        home: SerialHome,
+    ) -> Self {
+        Self {
+            turn,
+            active: Some((seat, guard)),
+            home,
+        }
+    }
+
+    /// Consume a live turn into its underlying `SerialTurn`, received
+    /// `SerialDestination`, and armed `LendGuard` for single-turn G5 parallel
+    /// owner retirement (`finish_live_turn_for_retire`).
+    pub(super) fn into_parts_for_retire(
+        self,
+    ) -> (SerialTurn<'t, C, LocalSerialOwner>, SerialDestination, G) {
+        let LiveSerial {
+            turn,
+            active,
+            home: _,
+        } = self;
+        let (seat, guard) = active.expect("live serial turn holds active seat and guard");
+        (turn, seat, guard)
+    }
+
     /// Lend the owner's Context to BODY (E5.1 `with_world`).
     pub(crate) fn with_world<R>(&mut self, body: impl for<'g> FnOnce(&'g mut C) -> R) -> R {
         self.turn.with_world(body)
@@ -503,6 +556,7 @@ impl<'t, C: SerialHost, G: LendGuard> LiveSerial<'t, C, G> {
 #[allow(dead_code)]
 #[derive(Debug)]
 enum SerialCollectError {
+    RebindBusy,
     MissingEpoch,
     Detach(super::serial_detach::HostRefusal),
     Poisoned,
@@ -514,17 +568,53 @@ enum SerialCollectError {
     Reattach(super::serial_detach::HostRefusal),
 }
 
+/// Shared cold rebind state held by [`SerialRebindFrame`] so independent
+/// mid-turn TLS bridges (`SERIAL_TURN_COLLECT_SCOPE` and
+/// `SERIAL_TURN_PARK_SCOPE`) can compose explicitly over one
+/// [`SerialTurn::with_world_rebind`] frame without merging their TLS scopes or
+/// using a `RefCell` (`#16127` Option A).
+pub(super) struct SerialRebindState<'g, 'p, G: LendGuard, P: KeeperPort<LendGuard = G>, A> {
+    pub(super) home: SerialHome,
+    pub(super) local_slot: &'g mut Option<LocalSerialOwner>,
+    pub(super) active_slot: &'g mut Option<(SerialDestination, G)>,
+    pub(super) ops: super::serial_turn::TurnHostOps<'g, super::super::Context>,
+    pub(super) port: &'p mut P,
+    pub(super) activate: &'p mut dyn FnMut(&mut LocalSerialOwner) -> Result<(), A>,
+}
+
+/// `Cell<Option<...>>` take/put owner for [`SerialRebindState`]. Each bridge
+/// takes exclusive ownership of the state for its synchronous park/resume
+/// cycle and puts it back on return; a nested/re-entrant take observes `None`
+/// as a typed `Option` instead of a `RefCell` borrow panic.
+pub(super) struct SerialRebindFrame<'g, 'p, G: LendGuard, P: KeeperPort<LendGuard = G>, A> {
+    state: std::cell::Cell<Option<SerialRebindState<'g, 'p, G, P, A>>>,
+}
+
+impl<'g, 'p, G: LendGuard, P: KeeperPort<LendGuard = G>, A> SerialRebindFrame<'g, 'p, G, P, A> {
+    #[inline]
+    pub(super) fn take_state(&self) -> Option<SerialRebindState<'g, 'p, G, P, A>> {
+        self.state.take()
+    }
+
+    #[inline]
+    pub(super) fn put_state(&self, state: SerialRebindState<'g, 'p, G, P, A>) {
+        let prev = self.state.replace(Some(state));
+        debug_assert!(prev.is_none(), "SerialRebindFrame state put twice");
+    }
+}
+
 type SerialCollectBridgeFn = dyn FnMut(
         &mut super::super::Context,
     ) -> Result<neovm_value::tagged::gc::CollectionReport, SerialCollectError>
     + 'static;
 
 /// Thread-local RAII hook for in-stack explicit GC inside
-/// [`LiveSerial::with_world_collectible`]. Stores zero heap `Value`s and zero
-/// `TaggedHeap` pointers (Q2), so `park_carrier_tls()` never interacts with it.
-/// Keyed by closed exact [`super::serial_detach::ActiveSerialTurn`]
-/// (`ctx_addr`, `heap`, monotonic `context_id`, NIT-1) so a distinct `Context`
-/// on the same World at a reused or swapped address cannot falsely match.
+/// [`LiveSerial::with_world_collectible`] / [`SerialRebindFrame::with_collect_scope`].
+/// Stores zero heap `Value`s and zero `TaggedHeap` pointers (Q2), so
+/// `park_carrier_tls()` never interacts with it. Keyed by closed exact
+/// [`super::serial_detach::ActiveSerialTurn`] (`ctx_addr`, `heap`, monotonic
+/// `context_id`, NIT-1) so a distinct `Context` on the same World at a reused
+/// or swapped address cannot falsely match.
 struct ActiveSerialCollectScope {
     owner: super::serial_detach::ActiveSerialTurn,
     inhibit_base: usize,
@@ -536,12 +626,10 @@ std::thread_local! {
         const { std::cell::Cell::new(None) };
 }
 
-#[allow(dead_code)]
 struct SerialCollectScopeGuard {
     previous: Option<ActiveSerialCollectScope>,
 }
 
-#[allow(dead_code)]
 impl SerialCollectScopeGuard {
     fn install(scope: ActiveSerialCollectScope) -> Self {
         let previous = SERIAL_TURN_COLLECT_SCOPE.with(|slot| slot.replace(Some(scope)));
@@ -556,104 +644,177 @@ impl Drop for SerialCollectScopeGuard {
     }
 }
 
+impl<'g, 'p, G, P, A> SerialRebindFrame<'g, 'p, G, P, A>
+where
+    G: LendGuard,
+    P: KeeperPort<LendGuard = G, CollectReply = super::keeper_driver::CollectReply>,
+{
+    /// Install ONLY `SERIAL_TURN_COLLECT_SCOPE` over this rebind frame,
+    /// routing explicit Lisp `(garbage-collect)` / `(garbage-collect-maybe)`
+    /// through the keeper's HEAD-hold collect protocol (L6.7c (c), Option B).
+    ///
+    /// Keeps `SERIAL_TURN_COLLECT_SCOPE` completely independent of
+    /// `SERIAL_TURN_PARK_SCOPE` (`#16127` Option A): callers that also need
+    /// wait parking compose `with_park_scope_on_frame` explicitly inside
+    /// `body`.
+    #[cold]
+    #[inline(never)]
+    pub(super) fn with_collect_scope<R>(
+        &self,
+        ctx: &mut super::super::Context,
+        body: impl FnOnce(&mut super::super::Context) -> R,
+    ) -> R {
+        let owner = super::serial_detach::ActiveSerialTurn::for_context(ctx);
+        // Under `#14342` Q4-(b), `SerialHost::enter_turn` no longer bumps
+        // `gc_inhibit_depth`, so `inhibit_base = 0` ensures any genuine
+        // `gc_inhibit_depth > 0` (outer OR nested) inhibits explicit GC while
+        // normal turns (`gc_inhibit_depth == 0`) route through the keeper's
+        // HEAD-hold collect protocol.
+        let inhibit_base = 0;
+        let mut bridge_fn = |ev: &mut super::super::Context| -> Result<
+            neovm_value::tagged::gc::CollectionReport,
+            SerialCollectError,
+        > {
+            let mut state = self.take_state().ok_or(SerialCollectError::RebindBusy)?;
+            let epoch = match state.port.collect_root_epoch() {
+                Some(epoch) => epoch,
+                None => {
+                    self.put_state(state);
+                    return Err(SerialCollectError::MissingEpoch);
+                }
+            };
+            if let Err(refusal) = state
+                .ops
+                .detach_with(|t| ev.detach_serial_owner_for_collect(epoch, t))
+            {
+                self.put_state(state);
+                return Err(SerialCollectError::Detach(refusal));
+            }
+            let local = state
+                .local_slot
+                .take()
+                .expect("live serial turn holds its local owner before collect park");
+            let (seat, guard) = state
+                .active_slot
+                .take()
+                .expect("live serial turn holds its seat and guard before collect park");
+            let (report_tx, report_rx) = super::sync::mpsc::sync_channel(1);
+            park_ticket_to_collect(seat, local, guard, Some(report_tx), state.port);
+            let (seat2, local2, guard2) =
+                match resume_ticket_for_collect(state.home, state.port, &mut state.activate) {
+                    Ok(resumed) => resumed,
+                    Err(TurnStartRefusal::Port(PortRefusal::Poisoned)) => {
+                        return Err(SerialCollectError::Poisoned);
+                    }
+                    Err(TurnStartRefusal::Port(PortRefusal::Failed)) => {
+                        return Err(SerialCollectError::Failed);
+                    }
+                    Err(TurnStartRefusal::Port(PortRefusal::Retry)) => {
+                        unreachable!("resume_ticket_for_collect retries PortRefusal::Retry")
+                    }
+                    Err(TurnStartRefusal::Receive(reason)) => {
+                        return Err(SerialCollectError::Receive(reason));
+                    }
+                    Err(TurnStartRefusal::Activate(_)) => {
+                        return Err(SerialCollectError::Activate);
+                    }
+                    Err(TurnStartRefusal::Turn(_)) => {
+                        unreachable!("resume_ticket_for_collect does not call Turn::resume")
+                    }
+                };
+            *state.local_slot = Some(local2);
+            *state.active_slot = Some((seat2, guard2));
+            let report = match report_rx.recv() {
+                Ok(Ok(report)) => report,
+                Ok(Err(refusal)) => return Err(SerialCollectError::ReportRefused(refusal)),
+                Err(_) => return Err(SerialCollectError::ReportChannelClosed),
+            };
+            // `reattach_serial_owner` restores `DetachedOwner::saved_thread_id`
+            // directly (E5.4a R3), and HEAD-hold collect runs no interleaved
+            // Lisp on its own.
+            state
+                .ops
+                .reattach_with(|d, t| ev.reattach(d, t))
+                .map_err(SerialCollectError::Reattach)?;
+            self.put_state(state);
+            Ok(report)
+        };
+        let bridge_ref: &mut (
+                 dyn FnMut(
+            &mut super::super::Context,
+        )
+            -> Result<neovm_value::tagged::gc::CollectionReport, SerialCollectError>
+                     + '_
+             ) = &mut bridge_fn;
+        // SAFETY: `SerialCollectScopeGuard` removes this pointer from
+        // `SERIAL_TURN_COLLECT_SCOPE` before `bridge_fn` leaves the stack
+        // frame (both on normal return and panic unwind), and
+        // `gc_collect_serial_turn` takes the scope out of TLS for the
+        // duration of the bridge call, ensuring at most one `&mut`
+        // invocation is active at a time.
+        let bridge_ptr: *mut SerialCollectBridgeFn = unsafe { std::mem::transmute(bridge_ref) };
+        let _scope_guard = SerialCollectScopeGuard::install(ActiveSerialCollectScope {
+            owner,
+            inhibit_base,
+            bridge: bridge_ptr,
+        });
+        body(ctx)
+    }
+}
+
 impl<'t, G: LendGuard> LiveSerial<'t, super::super::Context, G> {
+    /// Open one [`SerialRebindFrame`] over this live serial turn so callers
+    /// can compose independent TLS bridges (`with_collect_scope`,
+    /// `with_park_scope_on_frame`) explicitly at the call site (`#16127`
+    /// Option A).
+    #[cold]
+    #[inline(never)]
+    pub(super) fn with_rebind_frame<P, A, R>(
+        &mut self,
+        port: &mut P,
+        mut activate: impl FnMut(&mut LocalSerialOwner) -> Result<(), A>,
+        body: impl for<'g> FnOnce(
+            &'g mut super::super::Context,
+            &SerialRebindFrame<'g, '_, G, P, A>,
+        ) -> R,
+    ) -> R
+    where
+        P: KeeperPort<LendGuard = G>,
+    {
+        let home = self.home;
+        let active_slot = &mut self.active;
+        self.turn.with_world_rebind(|ctx, local_slot, ops| {
+            let frame = SerialRebindFrame {
+                state: std::cell::Cell::new(Some(SerialRebindState {
+                    home,
+                    local_slot,
+                    active_slot,
+                    ops,
+                    port,
+                    activate: &mut activate,
+                })),
+            };
+            body(ctx, &frame)
+        })
+    }
+
     /// Lend the owner's `Context` to BODY while routing explicit Lisp
     /// `(garbage-collect)` / `(garbage-collect-maybe FACTOR)` through the
     /// keeper's HEAD-hold collect protocol (L6.7c (c), Option B).
     #[cold]
     #[inline(never)]
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "E6-P parallel owner loop is the production caller; live rows call it now"
-        )
-    )]
+    #[allow(dead_code)]
     pub(crate) fn with_world_collectible<P, A, R>(
         &mut self,
         port: &mut P,
-        mut activate: impl FnMut(&mut LocalSerialOwner) -> Result<(), A>,
+        activate: impl FnMut(&mut LocalSerialOwner) -> Result<(), A>,
         body: impl for<'g> FnOnce(&'g mut super::super::Context) -> R,
     ) -> R
     where
         P: KeeperPort<LendGuard = G, CollectReply = super::keeper_driver::CollectReply>,
     {
-        let home = self.home;
-        let active_slot = &mut self.active;
-        self.turn.with_world_rebind(|ctx, local_slot, mut ops| {
-            let owner = super::serial_detach::ActiveSerialTurn::for_context(ctx);
-            let inhibit_base = ctx.gc_inhibit_depth;
-            let mut bridge_fn = |ev: &mut super::super::Context| -> Result<
-                neovm_value::tagged::gc::CollectionReport,
-                SerialCollectError,
-            > {
-                let epoch = port
-                    .collect_root_epoch()
-                    .ok_or(SerialCollectError::MissingEpoch)?;
-                ops.detach_with(|t| ev.detach_serial_owner_for_collect(epoch, t))
-                    .map_err(SerialCollectError::Detach)?;
-                let local = local_slot
-                    .take()
-                    .expect("live serial turn holds its local owner before collect park");
-                let (seat, guard) = active_slot
-                    .take()
-                    .expect("live serial turn holds its seat and guard before collect park");
-                let (report_tx, report_rx) = super::sync::mpsc::sync_channel(1);
-                park_ticket_to_collect(seat, local, guard, Some(report_tx), port);
-                let (seat2, local2, guard2) =
-                    match resume_ticket_for_collect(home, port, &mut activate) {
-                        Ok(resumed) => resumed,
-                        Err(TurnStartRefusal::Port(PortRefusal::Poisoned)) => {
-                            return Err(SerialCollectError::Poisoned);
-                        }
-                        Err(TurnStartRefusal::Port(PortRefusal::Failed)) => {
-                            return Err(SerialCollectError::Failed);
-                        }
-                        Err(TurnStartRefusal::Port(PortRefusal::Retry)) => {
-                            unreachable!("resume_ticket_for_collect retries PortRefusal::Retry")
-                        }
-                        Err(TurnStartRefusal::Receive(reason)) => {
-                            return Err(SerialCollectError::Receive(reason));
-                        }
-                        Err(TurnStartRefusal::Activate(_)) => {
-                            return Err(SerialCollectError::Activate);
-                        }
-                        Err(TurnStartRefusal::Turn(_)) => {
-                            unreachable!("resume_ticket_for_collect does not call Turn::resume")
-                        }
-                    };
-                *local_slot = Some(local2);
-                *active_slot = Some((seat2, guard2));
-                let report = match report_rx.recv() {
-                    Ok(Ok(report)) => report,
-                    Ok(Err(refusal)) => return Err(SerialCollectError::ReportRefused(refusal)),
-                    Err(_) => return Err(SerialCollectError::ReportChannelClosed),
-                };
-                ops.reattach_with(|d, t| ev.reattach(d, t))
-                    .map_err(SerialCollectError::Reattach)?;
-                Ok(report)
-            };
-            let bridge_ref: &mut (
-                     dyn FnMut(
-                &mut super::super::Context,
-            ) -> Result<
-                neovm_value::tagged::gc::CollectionReport,
-                SerialCollectError,
-            > + '_
-                 ) = &mut bridge_fn;
-            // SAFETY: `SerialCollectScopeGuard` removes this pointer from
-            // `SERIAL_TURN_COLLECT_SCOPE` before `bridge_fn` leaves the stack
-            // frame (both on normal return and panic unwind), and
-            // `gc_collect_serial_turn` takes the scope out of TLS for the
-            // duration of the bridge call, ensuring at most one `&mut`
-            // invocation is active at a time.
-            let bridge_ptr: *mut SerialCollectBridgeFn = unsafe { std::mem::transmute(bridge_ref) };
-            let _scope_guard = SerialCollectScopeGuard::install(ActiveSerialCollectScope {
-                owner,
-                inhibit_base,
-                bridge: bridge_ptr,
-            });
-            body(ctx)
+        self.with_rebind_frame(port, activate, |ctx, frame| {
+            frame.with_collect_scope(ctx, body)
         })
     }
 }

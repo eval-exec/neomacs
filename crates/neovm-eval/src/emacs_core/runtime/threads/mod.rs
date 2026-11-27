@@ -270,6 +270,8 @@ mod release_point;
 
 use completion::SimCompletion;
 pub(crate) use completion::{CompletingThread, CompletionExit, RetiredCompletion};
+#[cfg(test)]
+pub(crate) use opt_in::with_parallel_admission_enabled_for_test;
 #[doc(hidden)]
 pub use opt_in::{builtin_neomacs_make_parallel_thread, builtin_neomacs_thread_parallel_p};
 #[doc(hidden)]

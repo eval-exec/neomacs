@@ -41,7 +41,9 @@ use crate::emacs_core::eval::world::WorldProofEraExt;
 mod parallel_roots;
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) use parallel_roots::OwnedProofProjection;
-pub(crate) use parallel_roots::{FrozenLegacyRoots, OwnedParallelError, OwnedParallelProjection};
+pub(crate) use parallel_roots::{
+    FrozenLegacyRoots, OwnedParallelError, OwnedParallelProjection, SerialRecovery,
+};
 
 impl World {
     /// Finish publications before automatic field destruction reaches the heap.
@@ -157,10 +159,6 @@ impl Baton {
     /// its own; see [`EraWorldHandle`].
     #[cold]
     #[inline(never)]
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "L6.7b b4.3 Slice 2 era admission is the caller")
-    )]
     pub(crate) fn era_world_handle(
         &self,
     ) -> Result<EraWorldHandle, neovm_value::tagged::gc::FacadeMarkExclusionError> {
@@ -458,6 +456,47 @@ impl EraWorldHandle {
             runtime.carried_holder.get() == super::super::green::CarriedHolder::Stowed
         })
     }
+
+    /// Borrow the World's `GreenRuntime` while holding an active keeper-lent
+    /// `SerialDestination` for this same heap (E6-P.4 opt-in owner bootstrap).
+    pub(crate) fn green_runtime_under_serial_seat(
+        &self,
+        seat: &super::super::parallel_entry::serial_ticket::SerialDestination,
+    ) -> std::cell::Ref<'_, Option<Box<super::super::green::GreenRuntime>>> {
+        assert_eq!(
+            seat.heap_identity(),
+            self.heap_identity(),
+            "SerialDestination heap identity must match EraWorldHandle"
+        );
+        self.world.green.borrow()
+    }
+
+    /// Publish World views for a new unseated parallel owner while holding an
+    /// active keeper-lent `SerialDestination` for this same heap (E6-P.4).
+    pub(crate) fn owner_views_under_serial_seat(
+        &self,
+        seat: &super::super::parallel_entry::serial_ticket::SerialDestination,
+        current: Option<BufferId>,
+    ) -> ReadyWorld {
+        assert_eq!(
+            seat.heap_identity(),
+            self.heap_identity(),
+            "SerialDestination heap identity must match EraWorldHandle"
+        );
+        let lease = WorldLease(Arc::clone(&self.world));
+        WorldStorageBuilder::publish_views(&lease, BufferSelection::for_owner(current))
+    }
+
+    /// Spawn a fresh unseated serial `Context` for an admitted opt-in parallel
+    /// owner while holding its first keeper-lent `SerialDestination` (E6-P.4).
+    #[cold]
+    #[inline(never)]
+    pub(crate) fn spawn_unseated_serial_context(
+        &self,
+        seat: &super::super::parallel_entry::serial_ticket::SerialDestination,
+    ) -> Context {
+        Context::new_unseated_serial_owner(self, seat)
+    }
 }
 
 /// RAII guard restoring `World::baton_holder` to the era's escrowing holder
@@ -655,6 +694,14 @@ impl TurnRight {
     #[inline]
     pub(crate) fn is_solo(&self) -> bool {
         matches!(self, Self::Solo(_))
+    }
+
+    /// Clone the open era's [`EraWorldHandle`] if this turn right is `Era`.
+    pub(crate) fn try_clone_era_world_handle(&self) -> Option<EraWorldHandle> {
+        match self {
+            Self::Solo(_) => None,
+            Self::Era(era) => era.world.try_clone().ok(),
+        }
     }
 
     #[inline]

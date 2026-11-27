@@ -2954,7 +2954,7 @@ impl Context {
     #[inline(never)]
     #[doc(hidden)]
     pub fn gc_safe_point_exact_should_collect_slow(&mut self) -> bool {
-        if self.gc_inhibit_depth > 0 {
+        if self.gc_inhibit_depth > 0 || self.in_active_serial_turn() {
             return false;
         }
         match self.tagged_heap.mark_phase() {

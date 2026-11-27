@@ -263,6 +263,10 @@ pub(crate) enum KeeperMsg<Receipt, Returned, Ticket, Reason, WorldReturned, Repo
     /// after) that every enrolled parallel owner is in a deadlock wait with no
     /// pending wake. Any other state answers [`IdleStatus::Busy`].
     IdleQuery { reply: mpsc::SyncSender<IdleStatus> },
+    /// Wake the driver between stops (or raise the group's `ring_waiter` word
+    /// while a World turn is out) so the keeper's `between_stops_hook` can
+    /// enroll newly admitted opt-in owners strictly between stops (E6-P.4).
+    Wake,
 }
 
 /// How a lent turn ended: the Baton group's interval (L6.7b b5) or an
@@ -438,6 +442,15 @@ impl<WorldTurn> GroupLink<WorldTurn> {
     pub(crate) fn into_parts(self) -> (mpsc::Receiver<GroupMsg<WorldTurn>>, sync::Arc<RingWaiter>) {
         (self.world, self.waiter)
     }
+
+    #[cfg(test)]
+    pub(crate) fn new_for_test() -> Self {
+        let (_tx, world) = mpsc::channel();
+        Self {
+            world,
+            waiter: sync::Arc::new(RingWaiter::new()),
+        }
+    }
 }
 
 impl RingWaiter {
@@ -492,12 +505,23 @@ pub(crate) struct Driver<'o, O: KeeperOps> {
     /// with no gate holder seen, ends as a self-wait.
     contention_bound: Duration,
     pending_observer: Option<PendingObserver<'o, O::Pending>>,
+    /// Optional keeper-thread callback invoked strictly between stops (never
+    /// while a stop or ticket lend is active), used by E6-P.4 to dynamically
+    /// register and enroll newly admitted opt-in parallel owners.
+    #[allow(clippy::type_complexity)]
+    between_stops_hook: Option<Box<dyn FnMut(&mut Driver<'o, O>) + 'o>>,
+    /// Set when `KeeperMsg::Wake` arrives inside a stop so the current
+    /// `serve_group`/`serve_owner` breaks out of the stop and lets
+    /// `run_between_stops_hook` enroll pending owners promptly.
+    wake_pending: bool,
+    /// Count of parallel owners currently inside `ChannelPort::publish()`
+    /// (`leave_native()` / `publish_native_owner()`) before their
+    /// `KeeperMsg::Request` reaches `inbox` (`E6-P.4` level-triggered Dekker
+    /// pair with `KeeperMsg::Wake` so a `Wake` consumed between stops cannot
+    /// strand `leave_native()` behind a new Baton-group stop).
+    publishing_owners: sync::Arc<sync::atomic::AtomicUsize>,
 }
 
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "no production spawner until E6-P admission")
-)]
 impl<'o, O: KeeperOps> Driver<'o, O> {
     pub(crate) fn new(ops: O, inbox: mpsc::Receiver<MsgOf<O>>) -> Self {
         Self {
@@ -512,6 +536,31 @@ impl<'o, O: KeeperOps> Driver<'o, O> {
             stop_bound: CONTENTION_BOUND,
             contention_bound: CONTENTION_BOUND,
             pending_observer: None,
+            between_stops_hook: None,
+            wake_pending: false,
+            publishing_owners: sync::Arc::new(sync::atomic::AtomicUsize::new(0)),
+        }
+    }
+
+    /// Share the level-triggered `publishing_owners` counter with enrolled
+    /// parallel owners' [`ChannelPort`]s (`E6-P.4`).
+    #[allow(dead_code)]
+    pub(crate) fn publishing_owners_counter(&self) -> sync::Arc<sync::atomic::AtomicUsize> {
+        sync::Arc::clone(&self.publishing_owners)
+    }
+
+    /// Install a callback invoked strictly between stops so the keeper thread
+    /// can register and enroll newly admitted opt-in owners safely (E6-P.4).
+    pub(crate) fn with_between_stops_hook(mut self, hook: impl FnMut(&mut Self) + 'o) -> Self {
+        self.between_stops_hook = Some(Box::new(hook));
+        self
+    }
+
+    fn run_between_stops_hook(&mut self) {
+        self.wake_pending = false;
+        if let Some(mut hook) = self.between_stops_hook.take() {
+            hook(self);
+            self.between_stops_hook = Some(hook);
         }
     }
 
@@ -581,6 +630,7 @@ impl<'o, O: KeeperOps> Driver<'o, O> {
     /// break poisons the era.
     pub(crate) fn run(mut self) -> EndOf<O> {
         loop {
+            self.run_between_stops_hook();
             if !self.stop_due() {
                 match self.inbox.recv() {
                     Ok(message) => {
@@ -600,6 +650,7 @@ impl<'o, O: KeeperOps> Driver<'o, O> {
                     return self.poison(breach);
                 }
             }
+            self.run_between_stops_hook();
             if self.stop_due()
                 && let Err(breach) = self.serve_stop()
             {
@@ -654,6 +705,11 @@ impl<'o, O: KeeperOps> Driver<'o, O> {
                 Ok(())
             }
             KeeperMsg::IdleQuery { reply } => {
+                // Enroll any pending opt-in owners strictly between stops
+                // BEFORE sampling `self.owners.len()` for E5.3 D8 deadlock
+                // verification, so a freshly admitted spawn cannot hide behind
+                // a stale `enrolled_owners` count.
+                self.run_between_stops_hook();
                 let status = if self.queued_len() == 0
                     && !self.collect_requested
                     && self.head_hold.is_none()
@@ -665,6 +721,10 @@ impl<'o, O: KeeperOps> Driver<'o, O> {
                     IdleStatus::Busy
                 };
                 let _ = reply.try_send(status);
+                Ok(())
+            }
+            KeeperMsg::Wake => {
+                self.run_between_stops_hook();
                 Ok(())
             }
         }
@@ -959,6 +1019,12 @@ impl<'o, O: KeeperOps> Driver<'o, O> {
             }
         };
         match end {
+            IntervalEnd::Done
+                if self.wake_pending
+                    || self.publishing_owners.load(sync::atomic::Ordering::SeqCst) > 0 =>
+            {
+                Ok(Step::End(batch))
+            }
             IntervalEnd::Done => Ok(Step::Next(batch)),
             // L6.7c (c): the owner's ticket is retired, so this stop lends
             // nothing more, and the HEAD waits for the owner's next request.
@@ -995,9 +1061,16 @@ impl<'o, O: KeeperOps> Driver<'o, O> {
         let (turn, held) = batch
             .lend_world()
             .map_err(|CustodyRefused| Breach::Custody)?;
-        // A client already waiting behind the group's grant ends the
-        // interval at its first switch point (QB2).
-        self.set_waiter(!self.queued.is_empty() || self.collect_requested);
+        // A client already waiting behind the group's grant (or an owner
+        // currently publishing in `ChannelPort::request_turn`) ends the
+        // interval at its first switch point (QB2 / E6-P.4 Dekker pair).
+        let owner_publishing = self.publishing_owners.load(sync::atomic::Ordering::SeqCst) > 0;
+        self.set_waiter(
+            !self.queued.is_empty()
+                || self.collect_requested
+                || self.wake_pending
+                || owner_publishing,
+        );
         if self.send_group(GroupMsg::World { turn, epoch }).is_err() {
             // The bounced message drops the turn, and `held` drops the stop
             // with the breach.
@@ -1012,6 +1085,12 @@ impl<'o, O: KeeperOps> Driver<'o, O> {
             Settle::Retire(error) => Breach::Rendezvous(error),
         })?;
         match end {
+            IntervalEnd::Done
+                if self.wake_pending
+                    || self.publishing_owners.load(sync::atomic::Ordering::SeqCst) > 0 =>
+            {
+                Ok(Step::End(batch))
+            }
             IntervalEnd::Done => Ok(Step::Next(batch)),
             // b5 (QB3): the group's turn is retired, so it goes back at the
             // HEAD; this stop lends nothing more, and the next one collects
@@ -1080,6 +1159,13 @@ impl<'o, O: KeeperOps> Driver<'o, O> {
                 // A turn is out, so the group cannot be idle (QD2 / D8).
                 KeeperMsg::IdleQuery { reply } => {
                     let _ = reply.try_send(IdleStatus::Busy);
+                }
+                // Pending owner enrollment: raise `ring_waiter` and break out
+                // of the stop once the group returns so `run_between_stops_hook`
+                // enrolls the owner strictly between stops (E6-P.4).
+                KeeperMsg::Wake => {
+                    self.wake_pending = true;
+                    self.set_waiter(true);
                 }
             }
         }
@@ -1150,6 +1236,9 @@ impl<'o, O: KeeperOps> Driver<'o, O> {
                 // An owner's turn is out, so the group cannot be idle (QD2 / D8).
                 KeeperMsg::IdleQuery { reply } => {
                     let _ = reply.try_send(IdleStatus::Busy);
+                }
+                KeeperMsg::Wake => {
+                    self.wake_pending = true;
                 }
             }
         }

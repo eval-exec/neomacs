@@ -206,6 +206,13 @@ pub(crate) struct SerialDestination {
     seat: Seat,
 }
 
+impl SerialDestination {
+    /// Heap identity certified by this received serial turn seat (`E6-P.4`).
+    pub(crate) fn heap_identity(&self) -> HeapIdentity {
+        self.expected.heap
+    }
+}
+
 /// The local guard around one received ticket. `finish` consumes it.
 #[derive(Debug)]
 #[must_use]

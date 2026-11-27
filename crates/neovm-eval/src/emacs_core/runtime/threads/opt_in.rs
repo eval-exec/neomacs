@@ -11,18 +11,53 @@
 
 use super::{builtin_make_thread, expect_args, expect_thread_id};
 use crate::emacs_core::eval::Context;
+use crate::emacs_core::eval::parallel_entry::live_admission::SpawnParallelError;
 use neovm_value::error::EvalResult;
 use neovm_value::value::Value;
 
-/// A granted N-mutator admission. It is uninhabited until a production
-/// route exists, so the creator's admitted arm is statically unreachable,
-/// and making the type inhabited forces that arm to be written.
-pub(crate) enum ParallelAdmission {}
+/// Single-point production admission switch (`#14342` Q3, `E6-P4-ADMISSION-PREREAD.md` §4
+/// Option A): Step 1 (E6-P.4) lands the full production route dormant (`false`)
+/// with zero temporary env doors; Step 3 (ADMISSION-ON) flips this single switch
+/// to `true` after `b6` passes on the attested GNU Emacs 31.1 oracle.
+const PRODUCTION_ADMISSION_ENABLED: bool = false;
+
+#[cfg(test)]
+static TEST_ADMISSION_OVERRIDE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Run `body` with the single-point admission switch enabled in unit tests so
+/// E6-P.4's regression rows exercise the live production route while production
+/// stays dormant (`PRODUCTION_ADMISSION_ENABLED == false`).
+#[cfg(test)]
+pub(crate) fn with_parallel_admission_enabled_for_test<R>(body: impl FnOnce() -> R) -> R {
+    struct Reset(bool);
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            TEST_ADMISSION_OVERRIDE.store(self.0, std::sync::atomic::Ordering::Release);
+        }
+    }
+    let prev = TEST_ADMISSION_OVERRIDE.swap(true, std::sync::atomic::Ordering::AcqRel);
+    let _reset = Reset(prev);
+    body()
+}
+
+#[inline]
+fn parallel_admission_enabled() -> bool {
+    #[cfg(test)]
+    if TEST_ADMISSION_OVERRIDE.load(std::sync::atomic::Ordering::Acquire) {
+        return true;
+    }
+    PRODUCTION_ADMISSION_ENABLED
+}
+
+/// A granted N-mutator admission (`E6-P.4`).
+pub(crate) struct ParallelAdmission(());
 
 /// Why an opt-in request runs Baton-serial instead.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum NMutatorEntryError {
-    /// This build has no production N-mutator route yet.
+    /// Production admission is dormant, or the current runtime/context is not
+    /// eligible for live-Green N-mutator admission (e.g. Sim mode).
     Unavailable,
     /// The installed heap is GEN0. DESIGN's name for
     /// [`neovm_value::tagged::gc::Gen1AdmissionError::GenerationalRequired`].
@@ -31,9 +66,7 @@ pub(crate) enum NMutatorEntryError {
 
 /// The admission the opt-in creator asks for.
 ///
-/// Read-only. The subr runs with this thread's heap installed, and
-/// `HeapTransfer::with_collector` refuses that state, so this does not take
-/// a collector loan and does not call `ParallelHeapEra::admit_rooted`.
+/// Read-only preflight before opening or enrolling in a live parallel era.
 fn admit_parallel(eval: &Context) -> Result<ParallelAdmission, NMutatorEntryError> {
     // The subr runs with this heap installed. A caller that has not installed
     // it yet must not observe a different thread-local heap.
@@ -49,11 +82,13 @@ fn admit_parallel(eval: &Context) -> Result<ParallelAdmission, NMutatorEntryErro
     } else {
         eval.tagged_heap.tagged_heap_generational_enabled()
     };
-    if eligible {
-        Err(NMutatorEntryError::Unavailable)
-    } else {
-        Err(NMutatorEntryError::GenerationalDisabled)
+    if !eligible {
+        return Err(NMutatorEntryError::GenerationalDisabled);
     }
+    if !parallel_admission_enabled() || !crate::emacs_core::eval::green_world(eval) {
+        return Err(NMutatorEntryError::Unavailable);
+    }
+    Ok(ParallelAdmission(()))
 }
 
 /// `(neomacs-make-parallel-thread FUNCTION &optional NAME BUFFER-DISPOSITION)`.
@@ -64,7 +99,11 @@ fn admit_parallel(eval: &Context) -> Result<ParallelAdmission, NMutatorEntryErro
 #[doc(hidden)]
 pub fn builtin_neomacs_make_parallel_thread(eval: &mut Context, args: Vec<Value>) -> EvalResult {
     match admit_parallel(eval) {
-        Ok(admission) => match admission {},
+        Ok(_admission) => match eval.spawn_parallel_opt_in_thread(&args) {
+            Ok(handle) => Ok(handle),
+            Err(SpawnParallelError::Lisp(flow)) => Err(flow),
+            Err(SpawnParallelError::Refused(_)) => builtin_make_thread(eval, args),
+        },
         Err(NMutatorEntryError::Unavailable | NMutatorEntryError::GenerationalDisabled) => {
             builtin_make_thread(eval, args)
         }
@@ -77,9 +116,8 @@ pub fn builtin_neomacs_make_parallel_thread(eval: &mut Context, args: Vec<Value>
 #[doc(hidden)]
 pub fn builtin_neomacs_thread_parallel_p(eval: &mut Context, args: Vec<Value>) -> EvalResult {
     expect_args("neomacs-thread-parallel-p", &args, 1)?;
-    expect_thread_id(&eval.threads, &args[0])?;
-    // `ParallelAdmission` is uninhabited, so no thread was admitted.
-    Ok(Value::NIL)
+    let id = expect_thread_id(&eval.threads, &args[0])?;
+    Ok(Value::bool_val(eval.is_thread_parallel_admitted(id)))
 }
 
 #[cfg(test)]

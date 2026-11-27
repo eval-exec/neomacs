@@ -309,6 +309,22 @@ pub struct GreenSeat {
 }
 
 impl GreenSeat {
+    pub(crate) fn control(&self) -> &Arc<Control> {
+        &self.control
+    }
+
+    pub(crate) fn baton_ref(&self) -> Option<&TurnRight> {
+        self.baton.as_ref()
+    }
+
+    pub(crate) fn take_baton(&mut self) -> Option<TurnRight> {
+        self.baton.take()
+    }
+
+    pub(crate) fn install_baton(&mut self, right: TurnRight) {
+        self.baton = Some(right);
+    }
+
     pub(crate) fn take_owner_step_baton(
         &mut self,
     ) -> Result<TurnRight, host_service::HostRootError> {
@@ -1481,6 +1497,12 @@ impl Context {
                 None => std::process::abort(),
             };
         }
+        // E6-P.4 Seam 2 (`E6-P4-I2`): if a live parallel keeper era is open,
+        // wake every parked `Participant::Parallel` owner via `Control::close()`,
+        // release Main's `TurnRight::Era` while waiting for all owners to finish
+        // G5 retirement, close the keeper era, and restore `TurnRight::Solo(Baton)`
+        // onto Main before draining carriers and retiring parked roots.
+        self.teardown_live_parallel_era();
         // Every carrier is idle here (no Lisp thread can run after the loop
         // above). Wake and join them deterministically; idle carriers hold no
         // Baton and touch no World state.
@@ -2189,7 +2211,7 @@ impl Context {
     #[cold]
     #[inline(never)]
     pub(crate) fn green_spawn(&mut self, args: &[Value]) -> Result<Value, Flow> {
-        if self.green_seat().is_none() {
+        if self.green_seat().is_none() && !self.in_active_serial_turn() {
             self.start_green_threads()
                 .map_err(|error| signal("error", vec![Value::string(error.to_string())]))?;
         }
@@ -2199,7 +2221,7 @@ impl Context {
         self.threads.set_thread_current_buffer(id, current);
         let handle = self.threads.thread_handle(id).unwrap_or(Value::NIL);
         let key = ThreadKey::from_id(id);
-        let control = Arc::clone(&self.green_seat().expect("seated").control);
+        let control = self.green_control();
         let receiver = control.register_worker(key);
         self.with_green_runtime(|runtime| {
             runtime.pending_starts.borrow_mut().insert(key, function);

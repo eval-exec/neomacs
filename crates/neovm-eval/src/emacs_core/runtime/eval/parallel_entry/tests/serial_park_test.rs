@@ -574,7 +574,8 @@ fn l67c_nit1_active_serial_collect_scope_refuses_same_address_same_heap_foreign_
                 let id_b = owner_b.context_instance_id();
                 assert_eq!(owner_b.tagged_heap.heap_identity(), heap_a);
                 assert_ne!(id_b, id_a);
-                assert_eq!(ctx_slot.active_serial_collect_inhibit_base(), Some(1));
+                assert_eq!(ctx_slot.active_serial_collect_inhibit_base(), Some(0));
+                assert_eq!(ctx_slot.gc_inhibit_depth_for_test(), 0);
                 assert!(ctx_slot.in_active_serial_turn());
 
                 // Swap distinct same-World Context into the exact same address.
@@ -619,7 +620,7 @@ fn l67c_nit1_active_serial_collect_scope_refuses_same_address_same_heap_foreign_
                 std::mem::swap(ctx_slot, &mut owner_b);
                 assert_eq!(
                     ctx_slot.active_serial_collect_inhibit_base(),
-                    Some(1),
+                    Some(0),
                     "original Context retains its ActiveSerialCollectScope after foreign refusal"
                 );
                 assert!(ctx_slot.in_active_serial_turn());
