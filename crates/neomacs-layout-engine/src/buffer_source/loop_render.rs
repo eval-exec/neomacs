@@ -257,15 +257,20 @@ impl<'rows, 'emit, 'surface, FS: crate::neovm_bridge::FaceServices>
 
         // A query's acquisition limit is not ZV. Do not emit the EOB
         // prelude or tail while another visible row still needs source.
-        if loop_context.exhausted_window_horizon(
+        let current_row_visible = self
+            .row_build
+            .row_geometry
+            .current_row_is_visible(loop_context.row_visibility_limit());
+        if (loop_context.exhausted_window_horizon(
             self.progress.byte_idx(),
             text.len(),
             self.progress.charpos(),
-        ) && (self.progress.byte_idx() == text.len()
-            || self
-                .row_build
-                .row_geometry
-                .current_row_is_visible(loop_context.row_visibility_limit()))
+        ) && (self.progress.byte_idx() == text.len() || current_row_visible))
+            || (loop_context.exhausted_row_horizon(
+                self.progress.byte_idx(),
+                text.len(),
+                self.progress.charpos(),
+            ) && current_row_visible)
         {
             tracing::debug!(
                 "layout_window_rust: window horizon exhausted byte_idx={} text_len={} charpos={} accessible_end={} row_visible={}",
@@ -273,9 +278,7 @@ impl<'rows, 'emit, 'surface, FS: crate::neovm_bridge::FaceServices>
                 text.len(),
                 self.progress.charpos(),
                 loop_context.accessible_end(),
-                self.row_build
-                    .row_geometry
-                    .current_row_is_visible(loop_context.row_visibility_limit()),
+                current_row_visible,
             );
             // A physical-line scan that ends exactly at the copied boundary
             // cannot certify the last row, even if its transition filled the

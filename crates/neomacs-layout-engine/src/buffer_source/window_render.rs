@@ -78,7 +78,11 @@ impl WindowTextReadBudget {
     fn grow(self) -> Self {
         Self {
             chars: CharLen::new(self.chars.get().saturating_mul(2)),
-            mode: self.mode,
+            // If a retry was triggered after a `WindowRows` cut (for example,
+            // by a feature that collapsed newlines inside the row-bounded
+            // slice), promote to `CharHorizon` so the doubled character budget
+            // strictly advances past the previous `WindowRows` boundary.
+            mode: ViewportSourceReadMode::CharHorizon,
         }
     }
 

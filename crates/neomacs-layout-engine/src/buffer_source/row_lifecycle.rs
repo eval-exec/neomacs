@@ -647,6 +647,30 @@ pub(crate) fn hscroll_skip_char_steps() -> usize {
     HSCROLL_SKIP_CHAR_STEPS.load(std::sync::atomic::Ordering::Relaxed)
 }
 
+fn hscroll_text_display_columns(
+    text: &str,
+    tab_width: i32,
+    consumed_columns: i32,
+) -> (i32, Option<char>) {
+    let mut cols = 0i32;
+    let mut first = None;
+    let tw = tab_width.max(1);
+    for ch in text.chars() {
+        if first.is_none() {
+            first = Some(ch);
+        }
+        if ch == '\t' {
+            let cur = consumed_columns.saturating_add(cols);
+            cols = cols.saturating_add(((cur / tw + 1) * tw) - cur);
+        } else if is_wide_char(ch) {
+            cols = cols.saturating_add(2);
+        } else {
+            cols = cols.saturating_add(1);
+        }
+    }
+    (cols, first)
+}
+
 pub(crate) fn consume_hscroll_skip_from_position<B: LayoutBufferView + ?Sized>(
     text: &[u8],
     position: &mut DisplaySourceTextPosition,
@@ -654,9 +678,191 @@ pub(crate) fn consume_hscroll_skip_from_position<B: LayoutBufferView + ?Sized>(
     tab_width: i32,
     buffer: &B,
     text_start_byte: usize,
+    window_id: Option<u64>,
 ) -> Option<BufferSourceHscrollSkipAction> {
     #[cfg(test)]
     HSCROLL_SKIP_CHAR_STEPS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    if position.byte_idx() >= text.len() {
+        return None;
+    }
+
+    if crate::neovm_bridge::buffer_may_collapse_newlines(buffer) {
+        let saved_position = *position;
+        let cur_charpos_i64 = position.charpos();
+        let cur_charpos = CharPos0::new(cur_charpos_i64.max(0) as usize);
+        let cur_byte = EmacsBytePos::new(text_start_byte.saturating_add(position.byte_idx()));
+        let slice_end_byte = EmacsBytePos::new(text_start_byte.saturating_add(text.len()));
+        let point_max_byte = buffer.layout_point_max_emacs_byte_pos();
+
+        // 1. Invisible span (GNU `handle_invisible_prop`): consume hidden text
+        //    without breaking on hidden newlines.
+        let prop_access =
+            crate::neovm_bridge::RustTextPropAccess::new_for_optional_window(buffer, window_id);
+        let (invis, next_vis_charpos) = prop_access.check_invisible(cur_charpos_i64);
+        if invis.hidden() && next_vis_charpos > cur_charpos_i64 {
+            let target_char = CharPos0::new(next_vis_charpos as usize);
+            let target_byte = buffer.layout_char_pos_to_emacs_byte_pos(target_char);
+            if target_byte > slice_end_byte && slice_end_byte < point_max_byte {
+                *position = saved_position;
+                return None;
+            }
+            let first_char = position.consume_step_char(text)?;
+            let target_rel = target_byte
+                .get()
+                .saturating_sub(text_start_byte)
+                .min(text.len());
+            while position.byte_idx() < target_rel {
+                if position.consume_step_char(text).is_none() {
+                    break;
+                }
+            }
+            let disposition = if matches!(
+                invis,
+                crate::neovm_bridge::InvisibleStatus::Hidden { ellipsis: true, .. }
+            ) {
+                let ellipsis = crate::neovm_bridge::buffer_invisible_ellipsis_text(buffer)
+                    .unwrap_or_else(|| "...".to_string());
+                let (cols, first) = hscroll_text_display_columns(
+                    &ellipsis,
+                    tab_width,
+                    hscroll_skip.consumed_columns(),
+                );
+                if cols > 0 {
+                    hscroll_skip.consume_display_item(HorizontalScrollDisplayItem::glyph(
+                        first.unwrap_or('.'),
+                        cols,
+                    ))
+                } else {
+                    HscrollConsumedTextDisposition::Hidden
+                }
+            } else {
+                HscrollConsumedTextDisposition::Hidden
+            };
+            return Some(BufferSourceHscrollSkipAction::Text {
+                source_char: first_char,
+                disposition,
+            });
+        }
+
+        // 2. Replacing `display` property/overlay (string, stretch, media, etc.).
+        if let Some(repl) =
+            crate::neovm_bridge::display_replacement_span_at(buffer, cur_byte, window_id)
+        {
+            if !repl.is_stretch {
+                if repl.end_byte > slice_end_byte && slice_end_byte < point_max_byte {
+                    *position = saved_position;
+                    return None;
+                }
+                let first_char = position.consume_step_char(text)?;
+                let target_rel = repl
+                    .end_byte
+                    .get()
+                    .saturating_sub(text_start_byte)
+                    .min(text.len());
+                while position.byte_idx() < target_rel {
+                    if position.consume_step_char(text).is_none() {
+                        break;
+                    }
+                }
+                if repl.breaks_row {
+                    return Some(BufferSourceHscrollSkipAction::LineBreak {
+                        source_char: first_char,
+                    });
+                }
+                let disposition = if let Some(ref repl_text) = repl.string_text {
+                    let (cols, first) = hscroll_text_display_columns(
+                        repl_text,
+                        tab_width,
+                        hscroll_skip.consumed_columns(),
+                    );
+                    if cols > 0 {
+                        hscroll_skip.consume_display_item(HorizontalScrollDisplayItem::glyph(
+                            first.unwrap_or(' '),
+                            cols,
+                        ))
+                    } else {
+                        HscrollConsumedTextDisposition::Hidden
+                    }
+                } else {
+                    HscrollConsumedTextDisposition::Hidden
+                };
+                return Some(BufferSourceHscrollSkipAction::Text {
+                    source_char: first_char,
+                    disposition,
+                });
+            }
+        }
+
+        // 3. Valid static `composition` property spanning 1+ chars (may include `\n`).
+        let comp_lookup = crate::neovm_bridge::LayoutCharPropertyLookup::new(
+            buffer,
+            Value::symbol(&crate::fixed_symbols::COMPOSITION),
+        );
+        if let Some(comp) = comp_lookup
+            .text_value_at(buffer, cur_byte)
+            .and_then(neovm_core::emacs_core::composite::composition_display_text_for_property)
+        {
+            let count = comp.char_len().max(1);
+            let first_char = position.consume_step_char(text)?;
+            for _ in 1..count {
+                if position.consume_step_char(text).is_none() {
+                    if slice_end_byte < point_max_byte {
+                        *position = saved_position;
+                        return None;
+                    }
+                    break;
+                }
+            }
+            let (cols, first) = hscroll_text_display_columns(
+                comp.text(),
+                tab_width,
+                hscroll_skip.consumed_columns(),
+            );
+            let disposition = if cols > 0 {
+                hscroll_skip.consume_display_item(HorizontalScrollDisplayItem::glyph(
+                    first.unwrap_or(first_char.ch()),
+                    cols,
+                ))
+            } else {
+                HscrollConsumedTextDisposition::Hidden
+            };
+            return Some(BufferSourceHscrollSkipAction::Text {
+                source_char: first_char,
+                disposition,
+            });
+        }
+
+        // 4. Automatic composition span starting at or covering `cur_charpos`.
+        let auto_spans = buffer.layout_automatic_composition_spans();
+        if !auto_spans.is_empty() {
+            let idx = auto_spans.partition_point(|span| span.end() <= cur_charpos);
+            if let Some(span) = auto_spans.get(idx)
+                && span.start() <= cur_charpos
+                && cur_charpos < span.end()
+            {
+                let remain = span.end().get().saturating_sub(cur_charpos.get()).max(1);
+                let first_char = position.consume_step_char(text)?;
+                for _ in 1..remain {
+                    if position.consume_step_char(text).is_none() {
+                        if slice_end_byte < point_max_byte {
+                            *position = saved_position;
+                            return None;
+                        }
+                        break;
+                    }
+                }
+                let cols = if is_wide_char(first_char.ch()) { 2 } else { 1 };
+                let disposition = hscroll_skip.consume_display_item(
+                    HorizontalScrollDisplayItem::glyph(first_char.ch(), cols),
+                );
+                return Some(BufferSourceHscrollSkipAction::Text {
+                    source_char: first_char,
+                    disposition,
+                });
+            }
+        }
+    }
+
     let source_char = position.consume_step_char(text)?;
     // A `(space :align-to N)` / `(space :width N)` spec on the skipped char
     // occupies its RESOLVED width, not one column: GNU's hscroll move
@@ -671,6 +877,51 @@ pub(crate) fn consume_hscroll_skip_from_position<B: LayoutBufferView + ?Sized>(
         text_start_byte + source_char.start_byte_idx(),
         hscroll_skip.consumed_columns(),
     );
+    if source_char.ch() == '\n' {
+        if crate::neovm_bridge::display_table_newline_breaks_row(buffer) {
+            return Some(BufferSourceHscrollSkipAction::LineBreak { source_char });
+        }
+        let (cols, first) = crate::neovm_bridge::display_table_char_column_width(
+            buffer,
+            '\n',
+            tab_width,
+            hscroll_skip.consumed_columns(),
+        )
+        .unwrap_or((0, None));
+        let disposition = if cols > 0 {
+            hscroll_skip.consume_display_item(HorizontalScrollDisplayItem::glyph(
+                first.unwrap_or(' '),
+                cols,
+            ))
+        } else {
+            HscrollConsumedTextDisposition::Hidden
+        };
+        return Some(BufferSourceHscrollSkipAction::Text {
+            source_char,
+            disposition,
+        });
+    }
+    if spec_columns.is_none()
+        && let Some((cols, first)) = crate::neovm_bridge::display_table_char_column_width(
+            buffer,
+            source_char.ch(),
+            tab_width,
+            hscroll_skip.consumed_columns(),
+        )
+    {
+        let disposition = if cols > 0 {
+            hscroll_skip.consume_display_item(HorizontalScrollDisplayItem::glyph(
+                first.unwrap_or(source_char.ch()),
+                cols,
+            ))
+        } else {
+            HscrollConsumedTextDisposition::Hidden
+        };
+        return Some(BufferSourceHscrollSkipAction::Text {
+            source_char,
+            disposition,
+        });
+    }
     Some(consume_source_char_for_hscroll(
         source_char,
         hscroll_skip,
@@ -701,6 +952,12 @@ pub(crate) fn long_line_hscroll_jump<B: LayoutBufferView + ?Sized>(
     query_target: Option<i64>,
 ) -> Option<DisplaySourceTextPosition> {
     if hscroll_skip.consumed_columns() != 0 || !buffer.layout_long_line_optimizations_p() {
+        return None;
+    }
+    // When display tables, compositions, or display/invisible properties can
+    // collapse newlines, fall back to the element-aware hscroll walk instead of
+    // jumping to raw `b'\n'`.
+    if crate::neovm_bridge::buffer_may_collapse_newlines(buffer) {
         return None;
     }
     let configured_columns = hscroll_skip.configured_columns();

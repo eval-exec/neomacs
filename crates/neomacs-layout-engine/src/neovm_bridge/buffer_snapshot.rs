@@ -112,6 +112,9 @@ pub(crate) struct LayoutBufferSnapshot {
     /// Non-overlapping ranges compiled from Lisp's live
     /// `composition-function-table`, in ascending buffer-character order.
     automatic_composition_spans: Vec<CharRange>,
+    /// Upper charpos bound of the bounded automatic-composition capture when
+    /// `auto-composition-mode` was active (`None` when disabled or whole-buffer).
+    automatic_composition_capture_end: Option<CharPos0>,
     /// GNU `composition_gstring_width` for the automatic composition that
     /// starts at each key (character position), resolved on the evaluator
     /// thread before the walk.  Plain pixels, so a prepared row job can
@@ -227,6 +230,7 @@ impl LayoutBufferSnapshot {
             overlay_view_span,
             category_symbol_plists: FxHashMap::default(),
             automatic_composition_spans: Vec::new(),
+            automatic_composition_capture_end: None,
             automatic_composition_advances: FxHashMap::default(),
             string_composition_rules: None,
         }
@@ -355,8 +359,10 @@ impl LayoutBufferSnapshot {
                 snapshot.overlay_view_span,
             ),
         };
-        snapshot.automatic_composition_spans =
+        let (spans, capture_end) =
             capture_automatic_composition_spans(buffer, vars, &snapshot.vars, visible, symbol_mode);
+        snapshot.automatic_composition_spans = spans;
+        snapshot.automatic_composition_capture_end = capture_end;
         snapshot.string_composition_rules =
             capture_string_composition_rules(buffer, vars, symbol_mode);
         // Capture helpers above do not call Lisp or collect. Register the
@@ -416,9 +422,9 @@ pub(super) fn capture_automatic_composition_spans(
     vars: &[Option<Value>; <LayoutVar as strum::EnumCount>::COUNT],
     visible: Option<(usize, usize)>,
     symbol_mode: SymbolMode,
-) -> Vec<CharRange> {
+) -> (Vec<CharRange>, Option<CharPos0>) {
     if !buffer.get_multibyte() {
-        return Vec::new();
+        return (Vec::new(), None);
     }
     let Some(table) = active_composition_table(
         vars[LayoutVar::AutoCompositionMode as usize],
@@ -427,24 +433,31 @@ pub(super) fn capture_automatic_composition_spans(
         variables,
         symbol_mode,
     ) else {
-        return Vec::new();
+        return (Vec::new(), None);
     };
     // Both paths report ABSOLUTE char positions, so nothing is added here.
     // The bounded one is memoized only in its whole-buffer form: a memo keyed
     // on the buffer alone cannot answer a question that moves with the window.
-    let spans = match visible {
-        Some((first_char, budget)) => buffer.automatic_composition_spans_visible_with_symbols(
-            table,
-            first_char,
-            budget,
-            symbol_mode,
+    let (spans, capture_end) = match visible {
+        Some((first_char, budget)) => (
+            buffer.automatic_composition_spans_visible_with_symbols(
+                table,
+                first_char,
+                budget,
+                symbol_mode,
+            ),
+            Some(CharPos0::new(first_char.saturating_add(budget))),
         ),
-        None => buffer.automatic_composition_spans_with_symbols(table, symbol_mode),
+        None => (
+            buffer.automatic_composition_spans_with_symbols(table, symbol_mode),
+            None,
+        ),
     };
-    spans
+    let ranges = spans
         .iter()
         .map(|span| CharRange::new(CharPos0::new(span.start()), CharPos0::new(span.end())))
-        .collect()
+        .collect();
+    (ranges, capture_end)
 }
 
 /// Resolve the same automatic composer as buffer redisplay, but leave the
@@ -1070,6 +1083,14 @@ impl LayoutBufferView for LayoutBufferSnapshot {
             .get(index)
             .copied()
             .filter(|range| range.start() == pos)
+    }
+
+    fn layout_automatic_composition_spans(&self) -> &[CharRange] {
+        &self.automatic_composition_spans
+    }
+
+    fn layout_automatic_composition_capture_end(&self) -> Option<CharPos0> {
+        self.automatic_composition_capture_end
     }
 
     fn layout_next_automatic_composition_start(

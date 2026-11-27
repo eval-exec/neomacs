@@ -89,8 +89,14 @@ pub(crate) fn plan_plain_row_classified<B: LayoutBufferView>(
     }
     let row_char_start = CharPos0::new(row.charpos.max(0) as usize);
     let row_char_end = row_char_start.add_len(neovm_core::buffer::CharLen::new(line_char_len));
+    // Include the trailing `'\n'` at `row_char_end` so an automatic
+    // composition starting ON the newline itself refuses routing instead of
+    // splitting the composed cluster at the row boundary.
+    let row_char_end_inclusive = row_char_end
+        .add_len(neovm_core::buffer::CharLen::new(1))
+        .min(buffer.layout_point_max_char_pos());
     if buffer
-        .layout_next_automatic_composition_start(row_char_start, row_char_end)
+        .layout_next_automatic_composition_start(row_char_start, row_char_end_inclusive)
         .is_some()
     {
         return Err(RouteRefusal::ScanCompose);

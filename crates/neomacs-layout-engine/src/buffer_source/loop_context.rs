@@ -155,6 +155,16 @@ impl BufferSourceLoopRequestContext {
         )
     }
 
+    pub(crate) fn exhausted_row_horizon(
+        self,
+        byte_idx: usize,
+        bytes_read: usize,
+        charpos: i64,
+    ) -> bool {
+        self.read_boundary
+            .exhausts_row_horizon(byte_idx, bytes_read, charpos, self.accessible_end)
+    }
+
     pub(crate) fn invisible_text_request<'a>(
         self,
         text: &'a [u8],

@@ -52,9 +52,15 @@ fn skip_work(len: usize) -> usize {
             position = jumped;
             break;
         }
-        let Some(action) =
-            consume_hscroll_skip_from_position(&text, &mut position, &mut skip, 8, &buffer, 0)
-        else {
+        let Some(action) = consume_hscroll_skip_from_position(
+            &text,
+            &mut position,
+            &mut skip,
+            8,
+            &buffer,
+            0,
+            None,
+        ) else {
             break;
         };
         if action.is_line_break() {

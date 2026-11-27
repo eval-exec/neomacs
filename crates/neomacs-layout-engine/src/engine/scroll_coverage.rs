@@ -1439,6 +1439,7 @@ impl LayoutEngine {
             LayoutVar::IndicateBufferBoundaries,
             LayoutVar::OverlayArrowPosition,
             LayoutVar::BufferDisplayTable,
+            LayoutVar::StandardDisplayTable,
         ] {
             if view
                 .layout_buffer_local_value(variable)

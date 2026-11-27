@@ -236,6 +236,7 @@ pub(crate) struct BufferTextSourceCursor<'a, B: LayoutBufferView + ?Sized> {
     byte_position_queries: Cell<usize>,
     face_property: LayoutCharPropertyLookup,
     display_property: LayoutCharPropertyLookup,
+    composition_property: LayoutCharPropertyLookup,
     /// The walk's evaluated `(when FORM . SPEC)` results (from the view).
     display_when: crate::display_when::DisplayWhenConditions,
     line_height_property: LayoutCharPropertyLookup,
@@ -243,6 +244,10 @@ pub(crate) struct BufferTextSourceCursor<'a, B: LayoutBufferView + ?Sized> {
 }
 
 impl<'a, B: LayoutBufferView + ?Sized> BufferTextSourceCursor<'a, B> {
+    pub(crate) fn buffer(&self) -> &'a B {
+        self.buffer
+    }
+
     /// Cursor with no window context (overlay `window` properties unrestricted).
     /// The redisplay path uses [`new_for_window`](Self::new_for_window), so only
     /// focused tests seat a cursor this way.
@@ -320,6 +325,10 @@ impl<'a, B: LayoutBufferView + ?Sized> BufferTextSourceCursor<'a, B> {
                 buffer,
                 Value::symbol(&crate::fixed_symbols::DISPLAY),
             ),
+            composition_property: LayoutCharPropertyLookup::new(
+                buffer,
+                Value::symbol(&crate::fixed_symbols::COMPOSITION),
+            ),
             line_height_property: LayoutCharPropertyLookup::new(
                 buffer,
                 Value::symbol(&crate::fixed_symbols::LINE_HEIGHT),
@@ -336,6 +345,10 @@ impl<'a, B: LayoutBufferView + ?Sized> BufferTextSourceCursor<'a, B> {
     /// width) without routing through the producer.
     pub(crate) fn layout_buffer(&self) -> &B {
         self.buffer
+    }
+
+    pub(crate) fn window_id(&self) -> Option<u64> {
+        self.window_id
     }
 
     pub(crate) fn set_ordinary_run_horizon(&mut self, end: CharPos0) {
@@ -681,10 +694,8 @@ impl<'a, B: LayoutBufferView + ?Sized> BufferTextSourceCursor<'a, B> {
     }
 
     fn composition_prop_at(&self, char_pos: CharPos0) -> Option<Value> {
-        self.buffer.layout_text_prop_at_emacs_byte_pos(
-            self.byte_pos(char_pos),
-            Value::symbol(&crate::fixed_symbols::COMPOSITION),
-        )
+        self.composition_property
+            .text_value_at(self.buffer, self.byte_pos(char_pos))
     }
 
     fn display_replacement_source(
@@ -1068,7 +1079,9 @@ impl<'a, B: LayoutBufferView + ?Sized> BufferTextSourceCursor<'a, B> {
             // the next row resumes on the following char. An entry WITHOUT a
             // trailing `\n` (e.g. `[$]`) keeps the plain no-break replacement,
             // matching GNU (the newline's break is fully replaced -> lines join).
-            if character.code() == u32::from(b'\n') && mapped_text.text.ends_with('\n') {
+            if character.code() == u32::from(b'\n')
+                && crate::neovm_bridge::display_table_glyphs_end_row(&mapped_text.text)
+            {
                 return Some(
                     self.bind_box_run_topology(
                         DisplayItem::new(

@@ -17,6 +17,7 @@ pub(crate) struct BorrowedLayoutBuffer<'a> {
     target: crate::display_property::DisplayPropertyTarget,
     vars: [Option<Value>; <LayoutVar as strum::EnumCount>::COUNT],
     spans: Vec<CharRange>,
+    automatic_composition_capture_end: Option<CharPos0>,
     string_rules: Option<neovm_core::emacs_core::composite::AutomaticCompositionRules>,
 }
 
@@ -49,7 +50,7 @@ impl<'a> BorrowedLayoutBuffer<'a> {
     ) -> Self {
         let obarray = variables.obarray();
         let vars = resolve_layout_vars(buffer, Some(variables));
-        let spans = capture_automatic_composition_spans(
+        let (spans, automatic_composition_capture_end) = capture_automatic_composition_spans(
             buffer,
             variables,
             &vars,
@@ -62,6 +63,7 @@ impl<'a> BorrowedLayoutBuffer<'a> {
             target,
             vars,
             spans,
+            automatic_composition_capture_end,
             string_rules: capture_string_composition_rules(buffer, variables, symbol_mode),
         }
     }
@@ -233,6 +235,12 @@ impl LayoutBufferView for BorrowedLayoutBuffer<'_> {
         let id = category.as_bare_symbol_id()?;
         neovm_core::emacs_core::symbol::SymbolPropertyRevision::observe(id);
         neovm_core::emacs_core::plist::plist_get(self.obarray.symbol_plist_id(id), &property)
+    }
+    fn layout_automatic_composition_spans(&self) -> &[CharRange] {
+        &self.spans
+    }
+    fn layout_automatic_composition_capture_end(&self) -> Option<CharPos0> {
+        self.automatic_composition_capture_end
     }
     fn layout_automatic_composition_starting_at(&self, pos: CharPos0) -> Option<CharRange> {
         self.spans.iter().copied().find(|span| span.start() == pos)

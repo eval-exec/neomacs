@@ -76,6 +76,21 @@ impl BufferWindowReadBoundary {
         matches!(self, Self::WindowChars(_)) && byte_idx >= bytes_read && charpos < accessible_end
     }
 
+    /// Defense-in-depth horizon check for `WindowRows`: if a walk ever
+    /// exhausts its row-bounded slice while more buffer text remains AND the
+    /// viewport still has visible rows to fill (e.g. a collapsed newline),
+    /// retry instead of fabricating a premature EOB.
+    #[inline]
+    pub(crate) fn exhausts_row_horizon(
+        self,
+        byte_idx: usize,
+        bytes_read: usize,
+        charpos: i64,
+        accessible_end: i64,
+    ) -> bool {
+        matches!(self, Self::WindowRows) && byte_idx >= bytes_read && charpos < accessible_end
+    }
+
     #[inline]
     pub(crate) fn exhausts_sync_horizon(
         self,

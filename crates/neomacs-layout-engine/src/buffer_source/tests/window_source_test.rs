@@ -523,3 +523,215 @@ fn window_rows_budget_keeps_the_newline_bound_when_the_rows_fit() {
         assert_eq!(source.accessible_end(), chars);
     }
 }
+
+/// Issue #702 Round 2 (Correctness): newlines collapsed by `buffer-display-table`
+/// (entries without a trailing `?\n` such as `[]` or `[? ]`) or covered by a
+/// `composition` property must NOT be counted as preserved row breaks by
+/// `find_nth_preserved_newline_within` / `WindowRowsWithin`, whereas a
+/// whitespace-mode entry ending in `?\n` (`[?$ ?\n]`) still preserves row breaks.
+#[test]
+fn window_rows_budget_ignores_display_table_and_composition_collapsed_newlines() {
+    for (label, setup, expect_rows_boundary) in [
+        (
+            "display-table-empty",
+            "(let ((dt (make-char-table 'display-table nil))) (aset dt ?\\n []) (set (make-local-variable 'buffer-display-table) dt))",
+            false,
+        ),
+        (
+            "display-table-space",
+            "(let ((dt (make-char-table 'display-table nil))) (aset dt ?\\n [? ]) (set (make-local-variable 'buffer-display-table) dt))",
+            false,
+        ),
+        (
+            "display-table-with-trailing-nl",
+            "(let ((dt (make-char-table 'display-table nil))) (aset dt ?\\n [?$ ?\\n]) (set (make-local-variable 'buffer-display-table) dt))",
+            true,
+        ),
+        (
+            "static-composition-spanning-nl",
+            "(let ((p 1)) (while (< p (point-max)) (put-text-property (+ p 2) (min (point-max) (+ p 4)) 'composition (list 0 2 [?X])) (setq p (+ p 4))))",
+            false,
+        ),
+    ] {
+        let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
+        let text = "abc\n".repeat(400);
+        eval.buffer_manager_mut()
+            .current_buffer_mut()
+            .unwrap()
+            .insert(&text);
+        eval.eval_str(setup).expect(label);
+        let chars = text.chars().count() as i64;
+        let buffer = eval.buffer_manager().current_buffer().unwrap();
+        let view = crate::neovm_bridge::BorrowedLayoutBuffer::for_window(
+            buffer,
+            eval.variables(),
+            CharPos0::new(0),
+            128,
+            crate::display_property::DisplayPropertyTarget::for_window_system(false),
+        );
+        let access = RustBufferAccess::new(&view);
+        let request = BufferWindowSourceRequest::new(
+            0,
+            None,
+            0,
+            0,
+            chars,
+            38,
+            WindowKind::Main,
+            ScrollPolicy::Recenter,
+            neovm_core::window::ScrollMargin::default(),
+        )
+        .with_window_rows_within(CharLen::new(1024));
+        let mut bytes = Vec::new();
+        let source = request.read_exact_into(&access, &mut bytes);
+        if expect_rows_boundary {
+            assert_eq!(
+                source.read_boundary(),
+                BufferWindowReadBoundary::WindowRows,
+                "{label}: display-table entry ending with ?\\n must preserve WindowRows"
+            );
+            assert_eq!(bytes.len(), 160, "{label}: 40 preserved newlines * 4 bytes");
+        } else {
+            assert_eq!(
+                source.read_boundary(),
+                BufferWindowReadBoundary::WindowChars(CharPos0::new(1024)),
+                "{label}: collapsed newlines must fall back to retryable WindowChars, not non-retryable WindowRows"
+            );
+            assert_eq!(bytes.len(), 1024, "{label}: must read through allowance");
+        }
+    }
+}
+
+/// Blocker 3 & Blocker 2.1/2.2/2.3 unit proof:
+/// - `BorrowedLayoutBuffer::layout_automatic_composition_spans` exposes
+///   captured automatic composition spans identically to `LayoutBufferSnapshot`
+///   and `layout_automatic_composition_capture_end` guards bounded captures.
+/// - `newline_at_charpos_breaks_row` returns `true` for invalid/inert
+///   `'composition 'invalid`, `'display "X\nY"`, and `[?\n ?X]`, and `false`
+///   for `'display " "`, `'invisible t`, valid static `'composition`, and `[]`/`[? ]`.
+#[test]
+fn borrowed_buffer_and_newline_predicate_handle_all_collapse_causes() {
+    use crate::neovm_bridge::{LayoutBufferView, newline_at_charpos_breaks_row};
+
+    // 1. Invalid composition, display, invisible, valid composition, and [?\n ?X].
+    {
+        let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
+        eval.buffer_manager_mut()
+            .current_buffer_mut()
+            .unwrap()
+            .insert("a\nb\nc\nd\ne\n");
+        eval.eval_str(
+            "(progn \
+               (put-text-property 2 3 'composition 'invalid) \
+               (put-text-property 4 5 'display \" \") \
+               (put-text-property 6 7 'invisible t) \
+               (put-text-property 8 9 'composition (list 0 1 [?X])) \
+               (put-text-property 10 11 'display \"X\\nY\"))",
+        )
+        .expect("setup newline properties");
+        {
+            let buffer = eval.buffer_manager().current_buffer().unwrap();
+            let view = crate::neovm_bridge::BorrowedLayoutBuffer::for_window(
+                buffer,
+                eval.variables(),
+                CharPos0::new(0),
+                128,
+                crate::display_property::DisplayPropertyTarget::Terminal,
+            );
+            assert!(
+                newline_at_charpos_breaks_row(&view, CharPos0::new(1), None),
+                "invalid 'composition property must NOT suppress row break"
+            );
+            assert!(
+                !newline_at_charpos_breaks_row(&view, CharPos0::new(3), None),
+                "'display \" \" on newline must suppress row break"
+            );
+            assert!(
+                !newline_at_charpos_breaks_row(&view, CharPos0::new(5), None),
+                "'invisible t on newline must suppress row break"
+            );
+            assert!(
+                !newline_at_charpos_breaks_row(&view, CharPos0::new(7), None),
+                "valid static 'composition on newline must suppress row break"
+            );
+            assert!(
+                newline_at_charpos_breaks_row(&view, CharPos0::new(9), None),
+                "'display string containing '\\n' must still break the row"
+            );
+        }
+
+        // 2. Display-table entry with embedded newline `[?\n ?X]` breaks rows.
+        eval.eval_str(
+            "(let ((dt (make-char-table 'display-table nil))) \
+               (aset dt ?\\n [?\\n ?X]) \
+               (set (make-local-variable 'buffer-display-table) dt))",
+        )
+        .expect("embedded newline display table");
+        {
+            let buffer = eval.buffer_manager().current_buffer().unwrap();
+            let view = crate::neovm_bridge::BorrowedLayoutBuffer::for_window(
+                buffer,
+                eval.variables(),
+                CharPos0::new(0),
+                128,
+                crate::display_property::DisplayPropertyTarget::Terminal,
+            );
+            assert!(
+                crate::neovm_bridge::display_table_newline_breaks_row(&view),
+                "[?\\n ?X] contains a newline glyph and must still break rows"
+            );
+        }
+    }
+
+    // 3. `BorrowedLayoutBuffer::layout_automatic_composition_spans` exposes
+    //    spans (not `&[]`) and `layout_automatic_composition_capture_end` is
+    //    `Some(end)` when `auto-composition-mode` is active on a bounded view,
+    //    preventing `find_nth_preserved_newline_within` from returning
+    //    non-retryable `WindowRows` past the bounded capture horizon.
+    {
+        let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
+        eval.buffer_manager_mut()
+            .current_buffer_mut()
+            .unwrap()
+            .insert(&"a\nb\n".repeat(40));
+        eval.eval_str(
+            "(progn \
+               (set (make-local-variable 'auto-composition-mode) t) \
+               (set (make-local-variable 'auto-composition-function) 'auto-compose-chars) \
+               (let ((tbl (make-char-table 'composition-function-table nil))) \
+                 (aset tbl ?a (list (vector \"a\\n\" 0 'ignore))) \
+                 (set (make-local-variable 'composition-function-table) tbl)))",
+        )
+        .expect("setup auto-composition table");
+        let buffer = eval.buffer_manager().current_buffer().unwrap();
+        let borrowed = crate::neovm_bridge::BorrowedLayoutBuffer::for_window(
+            buffer,
+            eval.variables(),
+            CharPos0::new(0),
+            32,
+            crate::display_property::DisplayPropertyTarget::Terminal,
+        );
+        assert_eq!(
+            borrowed.layout_automatic_composition_capture_end(),
+            Some(CharPos0::new(32)),
+            "bounded BorrowedLayoutBuffer under auto-composition-mode must expose its capture horizon"
+        );
+        assert!(
+            !borrowed.layout_automatic_composition_spans().is_empty(),
+            "BorrowedLayoutBuffer must expose non-empty automatic composition spans (not &[])"
+        );
+        assert!(
+            !newline_at_charpos_breaks_row(&borrowed, CharPos0::new(1), None),
+            "newline inside automatic composition span on BorrowedLayoutBuffer must not break row"
+        );
+        // Searching for 30 newlines (> 16 newlines inside [0, 32)) crosses the
+        // capture horizon, so `find_nth_preserved_newline_within` must return
+        // `None` (falling back to retryable `WindowChars`).
+        let access = RustBufferAccess::new(&borrowed);
+        assert_eq!(
+            access.find_nth_preserved_newline_within(0, 160, 30),
+            None,
+            "newlines past automatic-composition capture horizon must not produce non-retryable WindowRows"
+        );
+    }
+}

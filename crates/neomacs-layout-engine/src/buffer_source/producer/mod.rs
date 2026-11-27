@@ -77,6 +77,14 @@ pub(crate) struct BufferElementProducer<'request, B: LayoutBufferView> {
 }
 
 impl<'request, B: LayoutBufferView> BufferElementProducer<'request, B> {
+    pub(crate) fn buffer(&self) -> &'request B {
+        self.source_cursor.buffer()
+    }
+
+    pub(crate) fn window_id(&self) -> Option<u64> {
+        self.source_cursor.window_id()
+    }
+
     /// Producer with no window context. The redisplay path uses
     /// [`new_for_window`](Self::new_for_window) so overlay `window` properties
     /// are honored, so only focused tests seat a producer this way.

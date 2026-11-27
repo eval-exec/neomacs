@@ -227,5 +227,7 @@ mod mode_line_element_attribution_oracle;
 #[path = "r2_real_cn_intervals_oracle.rs"]
 mod r2_real_cn_intervals_oracle;
 
+#[path = "issue_702_collapsed_newline_parity.rs"]
+mod issue_702_collapsed_newline_parity;
 #[path = "issue_702_truncated_margin_parity.rs"]
 mod issue_702_truncated_margin_parity;

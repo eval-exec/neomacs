@@ -329,6 +329,7 @@ impl<'request, B: LayoutBufferView> BufferSourceWalk<'request, B> {
             tab_width,
             self.producer.layout_buffer(),
             self.producer.text_start_byte(),
+            self.producer.window_id(),
         );
         DisplaySourcePositionConsumption::new(action, source_position)
     }
@@ -374,10 +375,14 @@ impl<'request, B: LayoutBufferView> BufferSourceWalk<'request, B> {
         source_position: DisplaySourceTextPosition,
     ) -> DisplaySourcePositionConsumption<BufferSourceTruncationSkipAction> {
         let mut source_position = source_position;
-        let action = BufferSourceTruncationSkipAction::consume_source_step_char_and_rest_of_line(
-            text,
-            &mut source_position,
-        );
+        let action =
+            BufferSourceTruncationSkipAction::consume_source_step_char_and_rest_of_line_in_buffer(
+                self.producer.buffer(),
+                text,
+                self.producer.text_start_byte(),
+                self.producer.window_id(),
+                &mut source_position,
+            );
         DisplaySourcePositionConsumption::new(action, source_position)
     }
 

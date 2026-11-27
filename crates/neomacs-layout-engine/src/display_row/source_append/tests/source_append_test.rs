@@ -1158,6 +1158,7 @@ fn buffer_hscroll_skip_preserves_line_break_action() {
         8,
         &snapshot,
         0,
+        None,
     )
     .expect("hscroll skip action");
 
@@ -1188,6 +1189,7 @@ fn buffer_hscroll_skip_consumes_tab_to_next_stop() {
         8,
         &snapshot,
         0,
+        None,
     )
     .expect("hscroll skip action");
 
@@ -1222,6 +1224,7 @@ fn buffer_hscroll_skip_consumes_wide_char_columns() {
         8,
         &snapshot,
         0,
+        None,
     )
     .expect("hscroll skip action");
 
@@ -1242,6 +1245,7 @@ fn buffer_hscroll_skip_consumes_wide_char_columns() {
         8,
         &snapshot,
         0,
+        None,
     )
     .expect("left truncation replacement action");
 
@@ -1276,6 +1280,7 @@ fn buffer_hscroll_skip_keeps_marker_pending_while_still_skipping() {
         8,
         &snapshot,
         0,
+        None,
     )
     .expect("hscroll skip action");
 

@@ -562,6 +562,14 @@ pub(crate) trait LayoutBufferView {
     /// These spans are compiled from the live Lisp rule table when the
     /// immutable layout snapshot is built.  A live-buffer adapter deliberately
     /// has none: it lacks the evaluator environment needed to resolve rules.
+    fn layout_automatic_composition_spans(&self) -> &[CharRange] {
+        &[]
+    }
+    /// Upper charpos bound of bounded automatic-composition capture when
+    /// `auto-composition-mode` was active (`None` when disabled or whole-buffer).
+    fn layout_automatic_composition_capture_end(&self) -> Option<CharPos0> {
+        None
+    }
     fn layout_automatic_composition_starting_at(&self, _pos: CharPos0) -> Option<CharRange> {
         None
     }
@@ -1462,6 +1470,261 @@ pub(crate) fn buffer_has_active_display_table<B: LayoutBufferView + ?Sized>(buff
     active_buffer_display_table(buffer).is_some()
 }
 
+/// Whether a decoded display-table entry for `'\n'` terminates the display row
+/// at its end (GNU `ITERATOR_AT_END_OF_LINE_P` / `get_next_display_element`,
+/// `src/xdisp.c:8488-8513`, e.g. whitespace-mode's `[?$ ?\n]`).
+#[inline]
+pub(crate) fn display_table_glyphs_end_row(decoded_text: &str) -> bool {
+    decoded_text.ends_with('\n')
+}
+
+/// Whether a decoded display-table entry for `'\n'` contains any newline glyph
+/// (trailing `[?$ ?\n]` or embedded `[?\n ?X]`) that triggers a display row
+/// break in GNU `next_element_from_display_vector`.
+#[inline]
+pub(crate) fn display_table_glyphs_contain_newline(decoded_text: &str) -> bool {
+    decoded_text.contains('\n')
+}
+
+/// Whether a raw `'\n'` byte breaks a display row under the buffer's active
+/// display table. Returns `true` when no display-table vector remaps `?\n`, or
+/// when its replacement vector contains `'\n'` (e.g. `[?$ ?\n]` or `[?\n ?X]`).
+/// Returns `false` for `[]` or vectors without `'\n'` (e.g. `[? ]`, `[?$]`),
+/// because GNU joins lines instead of breaking the row.
+pub(crate) fn display_table_newline_breaks_row<B: LayoutBufferView + ?Sized>(buffer: &B) -> bool {
+    let nl = neovm_core::emacs_core::emacs_char::EmacsChar::from_char('\n');
+    if !buffer_display_table_glyph_vector_p(buffer, nl) {
+        return true;
+    }
+    buffer_display_table_glyphs(buffer, nl)
+        .is_none_or(|glyphs| display_table_glyphs_contain_newline(&glyphs.text))
+}
+
+/// Number of display elements produced by `ch` under the active display table
+/// (`0` for `[]`, `k` for a `k`-glyph vector, `1` when unmapped), matching GNU
+/// `get_next_display_element` (`src/xdisp.c:8488-8513`) for `forward_to_next_line_start`'s
+/// `MAX_NEWLINE_DISTANCE` counter.
+pub(crate) fn display_table_char_element_count<B: LayoutBufferView + ?Sized>(
+    buffer: &B,
+    ch: char,
+) -> usize {
+    let ec = neovm_core::emacs_core::emacs_char::EmacsChar::from_char(ch);
+    if !buffer_display_table_glyph_vector_p(buffer, ec) {
+        return 1;
+    }
+    buffer_display_table_glyphs(buffer, ec).map_or(1, |glyphs| glyphs.text.chars().count())
+}
+
+/// Display column width of a character remapped by the active display table,
+/// or `None` when `ch` is not remapped.
+pub(crate) fn display_table_char_column_width<B: LayoutBufferView + ?Sized>(
+    buffer: &B,
+    ch: char,
+    tab_width: i32,
+    consumed_columns: i32,
+) -> Option<(i32, Option<char>)> {
+    let ec = neovm_core::emacs_core::emacs_char::EmacsChar::from_char(ch);
+    if !buffer_display_table_glyph_vector_p(buffer, ec) {
+        return None;
+    }
+    let glyphs = buffer_display_table_glyphs(buffer, ec)?;
+    let mut cols = 0i32;
+    let mut first = None;
+    let tw = tab_width.max(1);
+    for g in glyphs.text.chars() {
+        if first.is_none() {
+            first = Some(g);
+        }
+        if g == '\t' {
+            let cur = consumed_columns.saturating_add(cols);
+            cols = cols.saturating_add(((cur / tw + 1) * tw) - cur);
+        } else if crate::unicode::is_wide_char(g) {
+            cols = cols.saturating_add(2);
+        } else {
+            cols = cols.saturating_add(1);
+        }
+    }
+    Some((cols, first))
+}
+
+/// O(1) conservative check for whether ANY mechanism in `buffer` could collapse
+/// a raw `'\n'` (active display table remapping `?\n` without `'\n'`, static or
+/// automatic composition, `display` or `invisible` text properties/overlays, or
+/// indirect `category` / `default-text-properties` / `char-property-alias-alist`).
+/// When this returns `false`, every raw `'\n'` byte is guaranteed to break the
+/// display row, letting truncation skip and hscroll jump take their O(1) fast paths.
+pub(crate) fn buffer_may_collapse_newlines<B: LayoutBufferView + ?Sized>(buffer: &B) -> bool {
+    if !display_table_newline_breaks_row(buffer) {
+        return true;
+    }
+    if !buffer.layout_automatic_composition_spans().is_empty()
+        || buffer.layout_automatic_composition_capture_end().is_some()
+    {
+        return true;
+    }
+    if buffer
+        .layout_buffer_local_value(LayoutVar::DefaultTextProperties)
+        .is_some_and(|v| !v.is_nil())
+        || buffer
+            .layout_buffer_local_value(LayoutVar::CharPropertyAliasAlist)
+            .is_some_and(|v| !v.is_nil())
+    {
+        return true;
+    }
+    for sym in [
+        &crate::fixed_symbols::COMPOSITION,
+        &crate::fixed_symbols::DISPLAY,
+        &crate::fixed_symbols::INVISIBLE,
+        &crate::fixed_symbols::CATEGORY,
+    ] {
+        if buffer.layout_text_prop_present_anywhere(Value::symbol(sym)) {
+            return true;
+        }
+    }
+    let overlays = buffer.layout_overlays();
+    if !overlays.is_empty()
+        && (overlays.may_contain_property(Value::symbol(&crate::fixed_symbols::DISPLAY))
+            || overlays.may_contain_property(Value::symbol(&crate::fixed_symbols::INVISIBLE))
+            || overlays.may_contain_property(Value::symbol(&crate::fixed_symbols::CATEGORY)))
+    {
+        return true;
+    }
+    false
+}
+
+/// Resolved replacing `display` property at a buffer byte position, shared by
+/// truncation skip (`overflow.rs`) and hscroll skip (`row_lifecycle.rs`).
+#[derive(Clone, Debug)]
+pub(crate) struct DisplayReplacementSpan {
+    pub(crate) end_byte: EmacsBytePos,
+    pub(crate) breaks_row: bool,
+    pub(crate) string_text: Option<String>,
+    pub(crate) is_stretch: bool,
+}
+
+/// Resolve whether an active replacing `display` property/overlay covers
+/// `pos_byte`, along with its covered byte end and whether a replacement string
+/// itself contains `'\n'`. Non-replacing modifiers (`raise`, `height`, etc.)
+/// return `None`.
+pub(crate) fn display_replacement_span_at<B: LayoutBufferView + ?Sized>(
+    buffer: &B,
+    pos_byte: EmacsBytePos,
+    window_id: Option<u64>,
+) -> Option<DisplayReplacementSpan> {
+    let lookup =
+        LayoutCharPropertyLookup::new(buffer, Value::symbol(&crate::fixed_symbols::DISPLAY));
+    let source = lookup.overlay_or_text_source_at(buffer, pos_byte, window_id)?;
+    let conditions = buffer.layout_display_when_conditions();
+    let pos_char = buffer.layout_emacs_byte_pos_to_char_pos(pos_byte).get() as i64;
+    let classified = crate::display_property::classify_display_property_at(
+        source.value,
+        &conditions,
+        crate::display_property::DisplayPropertyObject::Buffer,
+        buffer.layout_display_target(),
+        crate::display_when::DisplayWhenLookup::buffer_at_char_pos(pos_char),
+    );
+    let replacement = classified.replacement()?;
+    let zv = buffer.layout_point_max_emacs_byte_pos();
+    let end_byte = if let Some(overlay) = source.overlay {
+        buffer
+            .layout_overlays()
+            .overlay_end_emacs_byte_pos(overlay)
+            .map_or_else(
+                || EmacsBytePos::new(pos_byte.get().saturating_add(1)).min(zv),
+                |end| end.min(zv),
+            )
+    } else {
+        lookup
+            .effective_text_extent_at(buffer, pos_byte, EmacsByteRange::new(pos_byte, zv))
+            .map_or_else(
+                || EmacsBytePos::new(pos_byte.get().saturating_add(1)).min(zv),
+                |r| r.end(),
+            )
+    };
+    match replacement {
+        crate::display_property::DisplayReplacementProperty::String => {
+            let text = classified
+                .replacement_spec()
+                .as_lisp_string()
+                .map(|s| {
+                    s.as_utf8_str()
+                        .map(str::to_owned)
+                        .unwrap_or_else(|| String::from_utf8_lossy(s.as_bytes()).into_owned())
+                })
+                .unwrap_or_default();
+            let breaks_row = text.contains('\n');
+            Some(DisplayReplacementSpan {
+                end_byte,
+                breaks_row,
+                string_text: Some(text),
+                is_stretch: false,
+            })
+        }
+        crate::display_property::DisplayReplacementProperty::Stretch(_) => {
+            Some(DisplayReplacementSpan {
+                end_byte,
+                breaks_row: false,
+                string_text: None,
+                is_stretch: true,
+            })
+        }
+        crate::display_property::DisplayReplacementProperty::Media(_)
+        | crate::display_property::DisplayReplacementProperty::Fringe(_)
+        | crate::display_property::DisplayReplacementProperty::Margin(_) => {
+            Some(DisplayReplacementSpan {
+                end_byte,
+                breaks_row: false,
+                string_text: None,
+                is_stretch: false,
+            })
+        }
+    }
+}
+
+/// Whether a raw `'\n'` at `newline_charpos` breaks a display row (not
+/// collapsed by `buffer-display-table`, a valid static `composition` property,
+/// an automatic composition span, `invisible`, or a replacing `display`
+/// property/overlay).
+pub(crate) fn newline_at_charpos_breaks_row<B: LayoutBufferView + ?Sized>(
+    buffer: &B,
+    newline_charpos: CharPos0,
+    window_id: Option<u64>,
+) -> bool {
+    if !display_table_newline_breaks_row(buffer) {
+        return false;
+    }
+    let pos_byte = buffer.layout_char_pos_to_emacs_byte_pos(newline_charpos);
+    let comp_lookup =
+        LayoutCharPropertyLookup::new(buffer, Value::symbol(&crate::fixed_symbols::COMPOSITION));
+    if comp_lookup
+        .text_value_at(buffer, pos_byte)
+        .and_then(neovm_core::emacs_core::composite::composition_display_text_for_property)
+        .is_some()
+    {
+        return false;
+    }
+    let auto_spans = buffer.layout_automatic_composition_spans();
+    if !auto_spans.is_empty() {
+        let idx = auto_spans.partition_point(|span| span.end() <= newline_charpos);
+        if let Some(span) = auto_spans.get(idx)
+            && span.start() <= newline_charpos
+            && newline_charpos < span.end()
+        {
+            return false;
+        }
+    }
+    if RustTextPropAccess::new_for_optional_window(buffer, window_id)
+        .invisible_status_at(newline_charpos.get() as i64)
+        .hidden()
+    {
+        return false;
+    }
+    if let Some(repl) = display_replacement_span_at(buffer, pos_byte, window_id) {
+        return repl.breaks_row;
+    }
+    true
+}
+
 /// Whether the active display table maps `ch` to a glyph vector. This keeps
 /// text-run scanning on the cheap presence path; decoding is deferred until
 /// the mapped item is emitted.
@@ -1543,7 +1806,9 @@ pub(crate) fn buffer_glyphless_char_display<B: LayoutBufferView + ?Sized>(
 /// slot when it holds a vector of glyph codes, and otherwise falls back to the
 /// default three `.` glyphs.  We mirror the character selection; returning
 /// `None` lets the caller use the hard-coded `"..."` default.
-pub(crate) fn buffer_invisible_ellipsis_text<B: LayoutBufferView>(buffer: &B) -> Option<String> {
+pub(crate) fn buffer_invisible_ellipsis_text<B: LayoutBufferView + ?Sized>(
+    buffer: &B,
+) -> Option<String> {
     let table = active_buffer_display_table(buffer)?;
     let slot = table
         .as_char_table_obj()?
@@ -2816,11 +3081,20 @@ impl<'a, B: LayoutBufferView> RustBufferAccess<'a, B> {
         if n == 0 {
             return Some(bounds.start().get() as i64);
         }
+        // GNU `get_next_display_element` (`src/xdisp.c:8488-8513`): if the
+        // active display table remaps `?\n` without a trailing `?\n` (e.g. `[]`
+        // or `[? ]`), raw newlines join lines instead of breaking display rows.
+        if !display_table_newline_breaks_row(self.buffer) {
+            return None;
+        }
         let lookups = [
             &crate::fixed_symbols::DISPLAY,
             &crate::fixed_symbols::INVISIBLE,
+            &crate::fixed_symbols::COMPOSITION,
         ]
         .map(|symbol| LayoutCharPropertyLookup::new(self.buffer, Value::symbol(symbol)));
+        let auto_spans = self.buffer.layout_automatic_composition_spans();
+        let auto_capture_end = self.buffer.layout_automatic_composition_capture_end();
         let overlays = self.buffer.layout_overlays();
         let mut start = bounds.start();
         let mut remaining = n;
@@ -2846,6 +3120,26 @@ impl<'a, B: LayoutBufferView> RustBufferAccess<'a, B> {
                                 lookup.effective_text_extent_at(self.buffer, pos, bounds)
                             {
                                 skip_to = skip_to.max(extent.end());
+                            }
+                        }
+                        if !auto_spans.is_empty() || auto_capture_end.is_some() {
+                            let pos_char = self.buffer.layout_emacs_byte_pos_to_char_pos(pos);
+                            if auto_capture_end.is_some_and(|cap_end| pos_char >= cap_end) {
+                                // Automatic compositions past the bounded
+                                // capture horizon were not computed; refuse to
+                                // claim a non-retryable WindowRows cutoff here.
+                                return Err((false, bounds.end()));
+                            }
+                            let idx = auto_spans.partition_point(|span| span.end() <= pos_char);
+                            if let Some(span) = auto_spans.get(idx)
+                                && span.start() <= pos_char
+                                && pos_char < span.end()
+                            {
+                                let span_end = self
+                                    .buffer
+                                    .layout_char_pos_to_emacs_byte_pos(span.end())
+                                    .min(bounds.end());
+                                skip_to = skip_to.max(span_end);
                             }
                         }
                         for overlay in overlays.iter_overlays_in_accessible_emacs_byte_range(
