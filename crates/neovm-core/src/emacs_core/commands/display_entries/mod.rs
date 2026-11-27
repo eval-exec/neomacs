@@ -276,11 +276,13 @@ pub(crate) fn builtin_reconsider_frame_fonts(
 ///
 /// GNU decodes before it answers (`src/frame.c:4439`):
 ///
-///     #ifdef FRAME_TOOLBAR_WIDTH
-///       struct frame *f = decode_any_frame (frame);
-///       if (FRAME_WINDOW_P (f)) return make_fixnum (FRAME_TOOLBAR_WIDTH (f));
-///     #endif
-///       return make_fixnum (0);
+/// ```text
+/// #ifdef FRAME_TOOLBAR_WIDTH
+///   struct frame *f = decode_any_frame (frame);
+///   if (FRAME_WINDOW_P (f)) return make_fixnum (FRAME_TOOLBAR_WIDTH (f));
+/// #endif
+///   return make_fixnum (0);
+/// ```
 ///
 /// so a non-frame signals `framep` and never reaches the constant.  The width
 /// is 0 until a side-mounted tool bar exists to measure, but the DECODE is not
