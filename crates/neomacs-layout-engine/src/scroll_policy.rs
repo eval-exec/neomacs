@@ -54,6 +54,17 @@ pub(crate) enum ForwardScroll {
     Recenter { lines_above_point: i64 },
 }
 
+/// The window start for a point row that is only partly visible at the bottom.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PartiallyVisiblePointRow {
+    /// A scrolling policy: `try_scrolling` lifts the start just far enough
+    /// for the row to fit.
+    FitRow,
+    /// The default policy: `recenter:`, leaving this many display lines above
+    /// point.
+    Recenter { lines_above_point: i64 },
+}
+
 impl ScrollPolicy {
     /// Resolve GNU's precedence once (xdisp.c:19388-19408 for the amount,
     /// xdisp.c:21067-21078 for whether `try_scrolling` runs at all).
@@ -163,6 +174,30 @@ impl ScrollPolicy {
             // scrolling backward (`centering_position = margin`, xdisp.c:21183).
             Self::Unlimited => margin,
             _ => (window_rows as i64 / 2).max(0),
+        }
+    }
+
+    /// What to do when point's row is laid out but only partly visible at the
+    /// bottom of the window, and the row is no taller than the window.
+    ///
+    /// GNU `try_cursor_movement` (xdisp.c:20097-20125) answers
+    /// CURSOR_MOVEMENT_MUST_SCROLL for that row and sets `temp_scroll_step`
+    /// only for a row taller than the window. `redisplay_window` then enters
+    /// `try_scrolling` only under a scrolling policy (xdisp.c:21087-21108).
+    /// Under the default variables it goes to `recenter:` — it does not lift
+    /// the window just enough to show the row.
+    pub(crate) fn partially_visible_point_row(
+        self,
+        window_rows: usize,
+        scroll_margin: ScrollMargin,
+    ) -> PartiallyVisiblePointRow {
+        match self {
+            Self::Recenter => PartiallyVisiblePointRow::Recenter {
+                lines_above_point: self.recenter_lines_above_point(window_rows, scroll_margin),
+            },
+            Self::Conservative { .. } | Self::Unlimited | Self::Step { .. } => {
+                PartiallyVisiblePointRow::FitRow
+            }
         }
     }
 

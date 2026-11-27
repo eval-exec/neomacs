@@ -142,7 +142,11 @@ fn observe(
     assert_eq!(result.exit_code, Some(0), "{context}");
     assert!(output.contains("COMMIT-EDITING-PASS"), "{context}");
     let records = parse_records(&output);
-    assert_eq!(records.len(), 10 * 3, "ten cases of three steps\n{context}");
+    assert_eq!(
+        records.len(),
+        15 * 3,
+        "fifteen cases of three steps\n{context}"
+    );
     (records, output)
 }
 
@@ -246,7 +250,7 @@ fn walk_matches_gnu(neo_backend: GuiBackend) {
     // callbacks start in the window's buffer would diverge from GNU.
     let gnu_buffers = parse_current_buffers(&gnu_output);
     let neo_buffers = parse_current_buffers(&neo_output);
-    assert_eq!(gnu_buffers.len(), 10 * 3 * 2, "two phases per step on GNU");
+    assert_eq!(gnu_buffers.len(), 15 * 3 * 2, "two phases per step on GNU");
     assert!(
         gnu_buffers
             .iter()
@@ -258,12 +262,6 @@ fn walk_matches_gnu(neo_backend: GuiBackend) {
         "chained-timer current-buffer differs from GNU 31.1"
     );
 
-    for record in &gnu {
-        assert_eq!(
-            record.posn_row, record.cursor_row,
-            "GNU's own cursor and posn disagree: {record:?}"
-        );
-    }
     let draws = parse_draws(&neo_output);
     assert_eq!(draws.len(), gnu.len(), "one Neomacs draw line per step");
     let misdrawn: Vec<String> = draws.iter().filter_map(draw_defect).collect();

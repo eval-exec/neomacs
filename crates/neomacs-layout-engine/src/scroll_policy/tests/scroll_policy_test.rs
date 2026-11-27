@@ -323,3 +323,29 @@ fn line_searches_agree_with_the_per_char_walk() {
         }
     }
 }
+
+/// A partly visible bottom point row recenters under GNU's defaults and is
+/// fitted only under a scrolling policy (xdisp.c try_cursor_movement
+/// :20097-20125, redisplay_window :21087-21108). The GUI oracle row
+/// cursor_row_walk_matches_gnu_* (line-spacing and tall mode-line cases)
+/// observes the same split on GNU 31.1.
+#[test]
+fn partially_visible_point_row_recenters_unless_a_scrolling_policy_applies() {
+    assert_eq!(
+        ScrollPolicy::Recenter.partially_visible_point_row(27, margin(0)),
+        PartiallyVisiblePointRow::Recenter {
+            lines_above_point: 13
+        }
+    );
+    for policy in [
+        ScrollPolicy::Conservative { max_lines: 5 },
+        ScrollPolicy::Unlimited,
+        ScrollPolicy::Step { lines: 2 },
+    ] {
+        assert_eq!(
+            policy.partially_visible_point_row(27, margin(0)),
+            PartiallyVisiblePointRow::FitRow,
+            "{policy:?}"
+        );
+    }
+}

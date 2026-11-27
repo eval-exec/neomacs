@@ -57,8 +57,32 @@
     (wrapped-numbers wrapped (display-line-numbers-mode hl-line-mode))
     (wrapped-visual wrapped (display-line-numbers-mode visual-line-mode))
     (tall-glyph-numbers tall-glyph (display-line-numbers-mode hl-line-mode))
-    (small-glyph-numbers small-glyph (display-line-numbers-mode hl-line-mode)))
-  "(NAME LINE-99-SHAPE MODES): one buffer per case.")
+    (small-glyph-numbers small-glyph (display-line-numbers-mode hl-line-mode))
+    ;; Shapes that move the text area's origin or its rows' pitch, where a
+    ;; glyph-derived cursor is most likely to disagree with layout's row.
+    (empty-tab-bar empty (tab-bar-mode display-line-numbers-mode hl-line-mode))
+    (empty-header-line empty (neo-row-walk-header-line display-line-numbers-mode hl-line-mode))
+    (empty-line-spacing empty (neo-row-walk-line-spacing display-line-numbers-mode hl-line-mode))
+    (short-all-chrome short (tab-bar-mode neo-row-walk-header-line neo-row-walk-line-spacing
+                                          display-line-numbers-mode hl-line-mode))
+    ;; A mode line taller than a text line, like doom-modeline's: the body
+    ;; height stops being a multiple of the line height.
+    (empty-tall-mode-line empty (neo-row-walk-tall-mode-line display-line-numbers-mode
+                                                             hl-line-mode)))
+  "(NAME LINE-99-SHAPE MODES): one buffer per case.
+Each MODE is called with 1 in the case's buffer.")
+
+(defun neo-row-walk-header-line (_arg)
+  "Give the case's buffer a header line."
+  (setq header-line-format "cursor row walk"))
+
+(defun neo-row-walk-tall-mode-line (_arg)
+  "Make the mode line 1.4 times the default face's height."
+  (set-face-attribute 'mode-line nil :height 1.4))
+
+(defun neo-row-walk-line-spacing (_arg)
+  "Give the case's buffer 4 px of extra line spacing."
+  (setq line-spacing 4))
 
 (defun neo-row-walk-setup (case)
   "Build CASE's buffer and leave point on line 98, column 5."
@@ -68,6 +92,10 @@
       (delete-other-windows)
       (fundamental-mode)
       (setq truncate-lines nil)
+      ;; `tab-bar-mode' and the mode-line face are global: each case starts
+      ;; without them.
+      (tab-bar-mode -1)
+      (set-face-attribute 'mode-line nil :height 'unspecified)
       (dolist (mode modes) (funcall mode 1))
       (erase-buffer)
       (dotimes (index 97)

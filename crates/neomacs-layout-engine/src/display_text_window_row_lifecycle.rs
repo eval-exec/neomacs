@@ -24,8 +24,8 @@ use crate::display_row::walk_state::{
 use crate::display_status_line::ChromeRowRenderServices;
 use crate::neovm_bridge::{ForwardScrollMeasurement, LayoutBufferView, RustBufferAccess};
 use crate::scroll_policy::{
-    ForwardScroll, LineText, ScrollPolicy, count_lines_bounded, last_usable_row, line_start_above,
-    line_start_below,
+    ForwardScroll, LineText, PartiallyVisiblePointRow, ScrollPolicy, count_lines_bounded,
+    last_usable_row, line_start_above, line_start_below,
 };
 use crate::types::WindowParams;
 use crate::viewport_resolution::{
@@ -1000,7 +1000,25 @@ impl<'a, 'buf, B: LayoutBufferView> TextWindowVisibilityRetryRequest<'a, 'buf, B
             self.text_area_top,
             self.text_area_bottom,
             self.window_start,
-        );
+        )
+        .map(|fitted| {
+            match self
+                .scroll_policy
+                .partially_visible_point_row(self.rows.len(), self.scroll_margin)
+            {
+                PartiallyVisiblePointRow::FitRow => fitted,
+                // A recenter that would not move the start forward cannot
+                // bring the bottom row into view; keep the fitting start.
+                PartiallyVisiblePointRow::Recenter { lines_above_point } => Some(line_start_above(
+                    self.point_charpos,
+                    lines_above_point,
+                    self.accessible_start,
+                    self.buf_access,
+                ))
+                .filter(|start| *start > self.window_start)
+                .unwrap_or(fitted),
+            }
+        });
         // GNU cursor_row_fully_visible_p tests the screen row, not the
         // remainder of its physical source line. A wrapped line may continue
         // below the viewport while point's row is already completely visible.
