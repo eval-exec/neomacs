@@ -979,8 +979,12 @@ pub(super) fn owner_cons_reserve_resume_of_a_live_lease_is_not_busy<K, W>(
 
 /// Ordinary `TaggedHeap::collect` while a lease still has an open run.
 ///
-/// The direct entry must refuse at `assert_no_owner_cons_reserves` and
-/// leave the book returnable. It must not rewind the block under the open
+/// The direct entry must refuse and leave the book returnable. The serial
+/// mint `StoppedWorldProof::with_stopped_world` refuses first, before any
+/// heap state changes: no stopped-world proof exists while a lease is
+/// outstanding. Each collector entry keeps its own
+/// `assert_no_owner_cons_reserves` backstop for the parallel mint, which
+/// admits parked reserves. It must not rewind the block under the open
 /// run. A closed book uses `collect_requested`, which enters the stop
 /// session. This row is red on 9c6133fae3: the infallible entry returns
 /// the lease, `close_for_stop` sticks on `InvalidReserve`, and the owner
@@ -1042,7 +1046,7 @@ pub(super) fn owner_cons_reserve_ordinary_gc_refuses_a_live_lease<K, W>(
                     let text = panic_text(&*payload);
                     assert!(
                         text.contains(
-                            "collection requires explicit return of every owner cons reserve"
+                            "StoppedWorldProof::with_stopped_world: owner cons reserves are outstanding"
                         ),
                         "ordinary GC refused for another reason: {text}"
                     );
