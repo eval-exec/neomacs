@@ -1649,6 +1649,169 @@ fn loaddefs_files_with_missing_sources_find_the_generated_file() {
     assert!(affected.contains(&loaddefs), "{affected:?}");
 }
 
+/// A source can select a named output with a file-local
+/// `generated-autoload-file` or a `;;;###foo-autoload` cookie; that output is
+/// not `<dir>/loaddefs.el` (`cl-loaddefs.el`, `calc-loaddefs.el`, ...).  It
+/// records the same sections and must be scanned too.
+#[test]
+fn loaddefs_files_with_missing_sources_scan_named_secondary_outputs() {
+    let (root, lisp) = check_fixture("COMPILE_FIRST =\nMAIN_FIRST =\n");
+    write_fresh_elc(&lisp.join("loadup.el"));
+    let generated = lisp.join("emacs-lisp");
+    fs::create_dir_all(&generated).unwrap();
+    fs::write(generated.join("cl-extra.el"), "").unwrap();
+    let named = generated.join("cl-loaddefs.el");
+    fs::write(&named, ";;; Generated autoloads from cl-extra.el\n").unwrap();
+
+    let options = check_options(&root);
+    let paths = pipeline_paths(&options);
+    assert!(
+        loaddefs_files_with_missing_sources(&paths)
+            .unwrap()
+            .is_empty(),
+        "a present source must not invalidate the named output"
+    );
+
+    fs::remove_file(generated.join("cl-extra.el")).unwrap();
+    let affected = loaddefs_files_with_missing_sources(&paths).unwrap();
+    assert!(affected.contains(&named), "{affected:?}");
+}
+
+/// With the primary output still present the generator stays in update mode
+/// and skips surviving sources older than it, so deleting only the affected
+/// secondary file would rebuild that file without their sections.  A missing
+/// recorded source must therefore force the full-regeneration path by
+/// removing the primary sources, while secondary seeds and bytecode stay.
+#[test]
+fn incremental_missing_source_forces_full_regeneration_without_touching_bytecode() {
+    let repo = tempdir();
+    let lisp = repo.join("lisp");
+    fs::create_dir_all(lisp.join("emacs-lisp")).unwrap();
+    for stem in ["loaddefs", "emacs-lisp/cl-loaddefs"] {
+        fs::write(lisp.join(format!("{stem}.el")), ";; generated\n").unwrap();
+        fs::write(lisp.join(format!("{stem}.elc")), ";ELC\n").unwrap();
+    }
+    fs::write(lisp.join("theme-loaddefs.el"), ";; themes\n").unwrap();
+    fs::write(
+        lisp.join("emacs-lisp/cl-loaddefs.el"),
+        ";;; Generated autoloads from gone.el\n",
+    )
+    .unwrap();
+
+    let options = FreshBuildOptions {
+        repo_root: repo.clone(),
+        runtime_root: repo.clone(),
+        bin_dir: repo.join("target/release"),
+        profile: BuildProfile::Release,
+        production_capabilities: ProductionCapabilities::for_host().unwrap(),
+        cargo_jobs: CargoJobBudget::Inherit,
+        dry_run: false,
+        check: false,
+        incremental: true,
+        native_comp: false,
+        skip_build: false,
+        no_byte_compile: false,
+        features: Vec::new(),
+        aot_preload: AotPreloadMode::Disabled,
+    };
+    let paths = PipelinePaths {
+        lisp_root: lisp.clone(),
+        ..pipeline_paths(&options)
+    };
+    let plan = BytecodePlan::of(&options);
+
+    remove_primary_loaddefs_for_regeneration(
+        plan,
+        &options,
+        &paths,
+        &lisp.join("loaddefs.el"),
+        &lisp.join("theme-loaddefs.el"),
+    )
+    .unwrap();
+
+    assert!(
+        !lisp.join("loaddefs.el").exists(),
+        "the primary source must go so the generator stops updating in place"
+    );
+    assert!(!lisp.join("theme-loaddefs.el").exists());
+    assert!(
+        lisp.join("emacs-lisp/cl-loaddefs.el").is_file(),
+        "secondary outputs must remain loadable seeds during the scrape"
+    );
+    assert!(
+        lisp.join("loaddefs.elc").is_file(),
+        "incremental mode never deletes bytecode it did not prove stale"
+    );
+    fs::remove_dir_all(&repo).ok();
+}
+
+#[test]
+fn leim_list_generation_prefers_newer_sources_before_loading_quail() {
+    let args = leim_list_generation_args(Path::new("lisp/leim"));
+    let prefer_newer = args
+        .iter()
+        .position(|arg| arg == "(setq load-prefer-newer t)")
+        .expect("the updater must not load a stale quail.elc");
+    let load_quail = args
+        .iter()
+        .position(|arg| arg == "international/quail")
+        .unwrap();
+    assert!(
+        prefer_newer < load_quail,
+        "load-prefer-newer must be set before quail is loaded"
+    );
+}
+
+/// The updater saves `leim-list.el` before returning, so a failed step can
+/// leave a file that mtime-passes as current and skips the leim-ext.el
+/// append on the next incremental run.  The failure must remove it.
+#[cfg(unix)]
+#[test]
+fn failed_leim_list_generation_removes_the_partial_output() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let repo = tempdir();
+    let lisp = repo.join("lisp");
+    fs::create_dir_all(lisp.join("leim")).unwrap();
+    fs::create_dir_all(repo.join("leim")).unwrap();
+    fs::write(repo.join("leim/leim-ext.el"), "").unwrap();
+
+    let bin_dir = repo.join("target/release");
+    fs::create_dir_all(&bin_dir).unwrap();
+    let bootstrap = bin_dir.join("bootstrap-neomacs");
+    fs::write(
+        &bootstrap,
+        "#!/bin/sh\necho partial > lisp/leim/leim-list.el\nexit 3\n",
+    )
+    .unwrap();
+    fs::set_permissions(&bootstrap, fs::Permissions::from_mode(0o755)).unwrap();
+
+    let options = FreshBuildOptions {
+        repo_root: repo.clone(),
+        runtime_root: repo.clone(),
+        bin_dir,
+        profile: BuildProfile::Release,
+        production_capabilities: ProductionCapabilities::for_host().unwrap(),
+        cargo_jobs: CargoJobBudget::Inherit,
+        dry_run: false,
+        check: false,
+        incremental: true,
+        native_comp: false,
+        skip_build: false,
+        no_byte_compile: false,
+        features: Vec::new(),
+        aot_preload: AotPreloadMode::Disabled,
+    };
+    let paths = pipeline_paths(&options);
+
+    run_leim_list_generation(&options, &paths, &[]).expect_err("the step must fail");
+    assert!(
+        !lisp.join("leim/leim-list.el").exists(),
+        "a failed update left a partial list that would pass an mtime check"
+    );
+    fs::remove_dir_all(&repo).ok();
+}
+
 #[test]
 fn check_custom_finder_follows_gnu_file_presence() {
     let (root, lisp) = check_fixture("COMPILE_FIRST =\nMAIN_FIRST =\n");

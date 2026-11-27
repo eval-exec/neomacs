@@ -2506,7 +2506,16 @@ fn run_leim_list_generation(
     }
 
     let args = leim_list_generation_args(&leim_dir);
-    run_captured_step(options, &options.repo_root, &paths.bootstrap, &args, envs)?;
+    if let Err(err) = run_captured_step(options, &options.repo_root, &paths.bootstrap, &args, envs)
+    {
+        // The updater saves the list before it returns, so a failure can
+        // leave a complete-looking file that the next incremental run would
+        // accept as current and skip the leim-ext.el append.
+        if !options.dry_run {
+            let _ = remove_file_if_exists(&output);
+        }
+        return Err(err);
+    }
     if !options.dry_run {
         if let Err(err) = append_leim_ext(&output, &leim_ext) {
             // The list exists without its extension contents.  Delete it so an
@@ -2571,6 +2580,10 @@ fn leim_list_generation_args(leim_dir: &Path) -> Vec<OsString> {
         OsString::from("--batch"),
         OsString::from("--no-site-file"),
         OsString::from("--no-site-lisp"),
+        // The rule runs because quail.el or leim-ext.el changed; loading a
+        // stale quail.elc would update the list with the old converter.
+        OsString::from("--eval"),
+        OsString::from("(setq load-prefer-newer t)"),
         OsString::from("-l"),
         OsString::from("international/quail"),
         OsString::from("--eval"),
@@ -3214,9 +3227,14 @@ fn remove_primary_loaddefs_for_regeneration(
     if matches!(plan, BytecodePlan::Incremental(_)) {
         // A partial update keeps the section of every source it does not
         // find, so a deleted or renamed autoloaded library would keep
-        // autoloads pointing at the old filename.  Delete only the generated
-        // files that record such a source: the generator then takes its
-        // full-regeneration path for those directories.
+        // autoloads pointing at the old filename.  Deleting the affected
+        // generated file alone is not enough: with the primary output still
+        // present the generator stays in update mode (loaddefs-gen.el:602-620)
+        // and skips every surviving source older than it, so the regenerated
+        // file would lose their sections too.  Removing the primary source
+        // outputs makes `updating` nil and regenerates every output in full
+        // (loaddefs-gen.el:630-668); the secondary outputs stay as loadable
+        // seeds, and no bytecode is touched.
         let affected = loaddefs_files_with_missing_sources(paths)?;
         if affected.is_empty() {
             // GNU's plain `autoloads` target: the generator scans and
@@ -3225,8 +3243,11 @@ fn remove_primary_loaddefs_for_regeneration(
             print_synthetic_step("incremental loaddefs scan (existing sources kept)");
             return Ok(());
         }
-        print_synthetic_step("regenerate loaddefs after a recorded source was removed");
+        print_synthetic_step("regenerate all loaddefs after a recorded source was removed");
         for file in &affected {
+            println!("  INFO  records a missing source: {}", file.display());
+        }
+        for file in [loaddefs_el, theme_loaddefs_el] {
             if options.dry_run {
                 println!("  would remove: {}", file.display());
             } else {
@@ -3891,22 +3912,33 @@ fn loaddefs_dirs(lisp_root: &Path) -> Result<Vec<PathBuf>> {
 /// filename.  Deleting the generated file forces the generator's
 /// full-regeneration path for that directory.
 fn loaddefs_files_with_missing_sources(paths: &PipelinePaths) -> Result<Vec<PathBuf>> {
-    let mut candidates = loaddefs_dirs(&paths.lisp_root)?
-        .into_iter()
-        .map(|dir| dir.join("loaddefs.el"))
-        .collect::<Vec<_>>();
-    candidates.push(paths.lisp_root.join("theme-loaddefs.el"));
-
     let mut affected = Vec::new();
-    for file in candidates {
-        let Ok(contents) = fs::read_to_string(&file) else {
-            continue;
+    for dir in loaddefs_dirs(&paths.lisp_root)? {
+        let entries = match fs::read_dir(&dir) {
+            Ok(entries) => entries,
+            Err(_) => continue,
         };
-        let base = file.parent().unwrap_or(&paths.lisp_root);
-        if loaddefs_contents_reference_missing_source(&contents, base) {
-            affected.push(file);
+        for entry in entries {
+            let entry = entry?;
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            // Every generated output ends with `loaddefs.el`: the directory
+            // file and named outputs a source selects with a file-local
+            // `generated-autoload-file` (cl-loaddefs.el, calc-loaddefs.el,
+            // foo-loaddefs.el from a cookie, theme-loaddefs.el).
+            if !entry.file_type()?.is_file() || !name.ends_with("loaddefs.el") {
+                continue;
+            }
+            let file = entry.path();
+            let Ok(contents) = fs::read_to_string(&file) else {
+                continue;
+            };
+            if loaddefs_contents_reference_missing_source(&contents, &dir) {
+                affected.push(file);
+            }
         }
     }
+    affected.sort();
     Ok(affected)
 }
 
