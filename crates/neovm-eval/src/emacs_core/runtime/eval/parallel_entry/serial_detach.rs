@@ -135,6 +135,12 @@ pub(crate) struct DetachedOwner {
     tls: DetachedTls,
     world: DetachedWorldCarriers,
     parked_roots: Option<SerialParkedRoots>,
+    /// World-global `ThreadManager::current_thread` active when this serial
+    /// owner detached, restored in `reattach_serial_owner` so Baton or peer
+    /// turns running while detached cannot leave stale thread identity across
+    /// `begin_turn`, `ParkedSerial::resume`, `with_world_parkable`, or
+    /// `with_world_collectible` (E5.4a R3 Blocker 1).
+    saved_thread_id: u64,
 }
 
 impl DetachedOwner {
@@ -201,6 +207,7 @@ impl Context {
         }
         neovm_value::tagged::mutate::assert_no_heap_mut_closure();
         let _abort = AbortOnPanic("detach");
+        let saved_thread_id = self.threads.current_thread_id();
         let parked = self.park_owner();
         let world = if self.stow_serial_world_state() {
             DetachedWorldCarriers::Stowed
@@ -222,6 +229,7 @@ impl Context {
             },
             world,
             parked_roots: None,
+            saved_thread_id,
         })
     }
 
@@ -246,6 +254,7 @@ impl Context {
         }
         neovm_value::tagged::mutate::assert_no_heap_mut_closure();
         let _abort = AbortOnPanic("serial-collect-detach");
+        let saved_thread_id = self.threads.current_thread_id();
         // 1. L6.7c (b): close open bump-allocation regions before the keeper's
         //    collecting stop.
         self.tagged_heap.close_alloc_regions();
@@ -322,6 +331,7 @@ impl Context {
                 #[cfg(feature = "jit")]
                 jit: parked_jit,
             }),
+            saved_thread_id,
         })
     }
 
@@ -408,6 +418,7 @@ impl Context {
             tls: DetachedTls { .. },
             world,
             parked_roots,
+            saved_thread_id,
         } = detached;
         match world {
             DetachedWorldCarriers::Stowed => {
@@ -449,6 +460,11 @@ impl Context {
         } else {
             self.resume_owner(host.parked);
         }
+        // Restore this serial owner's World-global `ThreadManager::current_thread`
+        // (matching `green/switch.rs:1000`) so Baton or peer turns running while
+        // detached cannot leave stale thread identity across `begin_turn`,
+        // `ParkedSerial::resume`, `with_world_parkable`, or `with_world_collectible`.
+        self.threads.enter_thread(saved_thread_id);
         Ok(())
     }
 }

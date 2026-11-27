@@ -574,9 +574,16 @@ where
             *active_slot = Some((seat2, guard2));
             ops.reattach_with(|d, t| ev.reattach(d, t))
                 .map_err(|r| SerialParkFailure::PostDetach(PostDetachParkError::Reattach(r)))?;
+            // Enforce this parallel owner's ThreadKey on resume (matching
+            // `green/switch.rs:1000` and `reattach_serial_owner`).
+            ev.threads.enter_thread(owner_key.id());
             Ok(outcome)
         };
 
+        // Establish this parallel owner's World-global `ThreadManager::current_thread`
+        // BEFORE `body(ctx)` runs a single form (E5.4a R3 Blocker 1), so even a
+        // first turn before any park never snapshots stale Main (id 0).
+        ctx.threads.enter_thread(owner_key.id());
         let _scope_guard = SerialParkScopeGuard::install(ActiveSerialParkScope {
             owner: owner_identity,
             key: owner_key,

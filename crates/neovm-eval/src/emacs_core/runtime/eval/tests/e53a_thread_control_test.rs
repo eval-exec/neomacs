@@ -781,10 +781,23 @@ fn e53a_row2_parallel_sender_in_wait_condvar_delivers_own_pending_signal() {
                 assert!(start.elapsed() < BOUND);
                 let _ = eval(main, "(sleep-for 0.01)");
             }
-            let joined = eval(
-                main,
-                "(progn (mutex-unlock e53a-s2-mx) (thread-join e53a-s2-target))",
+            assert_eq!(
+                eval(main, "(progn (mutex-unlock e53a-s2-mx) 'unlocked)"),
+                "unlocked"
             );
+            // Wait (bounded) until target actually runs, consumes `wake-target`
+            // inside its `condition-case`, and exits; calling `thread-join`
+            // before target consumes its signal would snapshot and re-raise
+            // `wake-target` per GNU `Fthread_join` (`src/thread.c:1134-1141`).
+            let start = Instant::now();
+            while !control.exited(target_key) {
+                assert!(
+                    start.elapsed() < BOUND,
+                    "timed out waiting for e53a-s2-target to consume wake-target and exit"
+                );
+                let _ = eval(main, "(thread-yield)");
+            }
+            let joined = eval(main, "(thread-join e53a-s2-target)");
             assert_eq!(
                 joined, "(target-caught \"wake-target\")",
                 "target must have caught wake-target signal, got: {joined}"
@@ -2540,6 +2553,467 @@ fn e53a_blocker2_post_detach_poisoned_fails_closed_without_restoring_scope() {
         move |main, _control| {
             let start = Instant::now();
             while !done_m.load(Ordering::Acquire) {
+                assert!(start.elapsed() < BOUND);
+                let _ = eval(main, "(sleep-for 0.005)");
+            }
+        },
+    );
+}
+
+// ===========================================================================
+// E5.4a R3 Commit 1 (Blocker 1 — #16167 / #16169): thread-identity
+// establishment across `with_world_parkable` entry (before first park),
+// `begin_turn`, and `ParkedSerial::resume`. Each row runs Main on Baton to
+// clobber World-global `current_thread_id = 0` beforehand and asserts BOTH
+// `(eq (current-thread) peer)` AND self-owned `(mutex-unlock held-mx)` BEFORE
+// any park (plus checking Main's `thread--blocker` and `wait_condvar` stay
+// untouched on `with_world_parkable` entry).
+// ===========================================================================
+
+fn lock_mutex_var_as_current(ev: &mut Context, var: &str) {
+    let mx_val = ev.eval_str(var).expect("mutex var");
+    let mx = ev
+        .threads
+        .mutex_id_from_handle(&mx_val)
+        .expect("valid mutex handle");
+    assert_eq!(
+        ev.threads.mutex_lock(mx),
+        crate::emacs_core::threads::MutexAcquisition::Acquired,
+        "acquire {var} as current thread"
+    );
+}
+
+#[test]
+fn e54a_r3_identity_path1_with_world_parkable_entry_before_first_park() {
+    let phase = Arc::new(AtomicUsize::new(0));
+    let phase_m = Arc::clone(&phase);
+    let peer_key_slot = Arc::new(std::sync::Mutex::new(None::<ThreadKey>));
+    let peer_key_m = Arc::clone(&peer_key_slot);
+
+    run_in_e53a_era(
+        "e54a-r3-id-parkable-entry",
+        |src| {
+            assert_eq!(
+                eval(
+                    src,
+                    "(progn
+                       (setq e54a-id1-held (make-mutex \"id1-held\"))
+                       'ok)"
+                ),
+                "ok"
+            );
+        },
+        move |state, port, home, control| {
+            // Turn 1: create peer thread handle and lock `e54a-id1-held` as peer,
+            // then deliberately restore `current_thread` to 0 before ending turn 1
+            // (and let Main run in between) so entering `with_world_parkable` in
+            // Turn 2 starts with stale `current_thread_id == 0` if entry does not
+            // establish `owner_key.id()`.
+            let (grant1, lend1) = port.request_turn().ok().expect("turn 1");
+            let mut turn1 = begin_turn(state, home, (grant1, lend1), port, standalone)
+                .ok()
+                .expect("begin turn 1");
+            let peer_key = turn1.with_world(|ev| {
+                let key = create_parallel_thread_handle(ev, "e54a-id1-peer", "id1-peer");
+                let prev = ev.threads.enter_thread(key.id());
+                lock_mutex_var_as_current(ev, "e54a-id1-held");
+                // Leave current_thread_id = 0 to prove `with_world_parkable` entry
+                // itself (not `begin_turn`) establishes `owner_key.id()`.
+                ev.threads.enter_thread(prev);
+                key
+            });
+            turn1.end(port).ok().expect("end turn 1");
+            *peer_key_slot.lock().unwrap() = Some(peer_key);
+            phase.store(1, Ordering::Release);
+
+            // Wait until Main has run Lisp on Baton (confirming current_thread == 0).
+            let start = Instant::now();
+            while phase.load(Ordering::Acquire) < 2 {
+                assert!(start.elapsed() < BOUND);
+                std::thread::yield_now();
+            }
+
+            // Turn 2: enter `with_world_parkable` WITHOUT manually calling
+            // `enter_thread`. Immediately assert `(current-thread)` and
+            // self-owned `(mutex-unlock e54a-id1-held)` BEFORE any park, and
+            // assert Main's blocker/wait_condvar remain clean across a join wait.
+            let mut owner = ParallelOwnerControl::register(Arc::clone(control), peer_key);
+            let (grant2, lend2) = loop {
+                match port.request_turn() {
+                    Ok(g) => break g,
+                    Err(
+                        crate::emacs_core::eval::parallel_entry::serial_park::PortRefusal::Retry,
+                    ) => std::thread::yield_now(),
+                    Err(e) => panic!("turn 2 request: {e:?}"),
+                }
+            };
+            let mut turn2 = begin_turn(state, home, (grant2, lend2), port, standalone)
+                .ok()
+                .expect("begin turn 2");
+            let (ct_before_park, unlock_before_park, join_err) =
+                with_world_parkable(&mut turn2, &mut owner, port, standalone, |ev| {
+                    let ct = eval(ev, "(eq (current-thread) e54a-id1-peer)");
+                    let ul = eval(ev, "(progn (mutex-unlock e54a-id1-held) 'unlocked)");
+                    // Trying to join Main must NOT falsely report
+                    // "Cannot join current thread" (which happens if current_thread==0).
+                    // Use `thread-join` on an already-exited dummy thread? Even
+                    // cleaner: check `current_thread_id() == peer_key.id()` and
+                    // Main's blocker/wait_condvar stay untouched.
+                    let tid = ev.threads.current_thread_id();
+                    assert_eq!(
+                        tid,
+                        peer_key.id(),
+                        "with_world_parkable entry must set owner id"
+                    );
+                    let main_blocker = eval(ev, "(thread--blocker main-thread)");
+                    (ct, ul, main_blocker)
+                });
+            turn2.end(port).ok().expect("end turn 2");
+            drop(owner);
+            phase.store(3, Ordering::Release);
+
+            assert_eq!(
+                ct_before_park, "t",
+                "(current-thread) must be peer on with_world_parkable entry before first park"
+            );
+            assert_eq!(
+                unlock_before_park, "unlocked",
+                "self-owned (mutex-unlock) must succeed on with_world_parkable entry before first park"
+            );
+            assert_eq!(join_err, "nil");
+        },
+        move |main, _control| {
+            let start = Instant::now();
+            while phase_m.load(Ordering::Acquire) < 1 {
+                assert!(start.elapsed() < BOUND);
+                let _ = eval(main, "(sleep-for 0.005)");
+            }
+            let _peer_key = peer_key_m.lock().unwrap().expect("peer key");
+            assert_eq!(eval(main, "(eq (current-thread) main-thread)"), "t");
+            phase_m.store(2, Ordering::Release);
+            while phase_m.load(Ordering::Acquire) < 3 {
+                assert!(start.elapsed() < BOUND);
+                let _ = eval(main, "(sleep-for 0.005)");
+            }
+        },
+    );
+}
+
+#[test]
+fn e54a_r3_identity_path2_begin_turn_restores_saved_thread_id() {
+    let phase = Arc::new(AtomicUsize::new(0));
+    let phase_m = Arc::clone(&phase);
+
+    run_in_e53a_era(
+        "e54a-r3-id-begin-turn",
+        |src| {
+            assert_eq!(
+                eval(
+                    src,
+                    "(progn
+                       (setq e54a-id2-held (make-mutex \"id2-held\"))
+                       'ok)"
+                ),
+                "ok"
+            );
+        },
+        move |state, port, home, _control| {
+            // Turn 1: enter peer thread id, lock `e54a-id2-held`, end turn 1
+            // while holding peer's thread id (so `detach_serial_owner` saves it).
+            let (grant1, lend1) = port.request_turn().ok().expect("turn 1");
+            let mut turn1 = begin_turn(state, home, (grant1, lend1), port, standalone)
+                .ok()
+                .expect("begin turn 1");
+            let peer_key = turn1.with_world(|ev| {
+                let key = create_parallel_thread_handle(ev, "e54a-id2-peer", "id2-peer");
+                ev.threads.enter_thread(key.id());
+                lock_mutex_var_as_current(ev, "e54a-id2-held");
+                key
+            });
+            turn1.end(port).ok().expect("end turn 1");
+            phase.store(1, Ordering::Release);
+
+            // Wait for Main to run Lisp on Baton (overwriting current_thread to 0).
+            let start = Instant::now();
+            while phase.load(Ordering::Acquire) < 2 {
+                assert!(start.elapsed() < BOUND);
+                std::thread::yield_now();
+            }
+
+            // Turn 2: `begin_turn` alone (no `with_world_parkable`, no manual
+            // `enter_thread`) must restore `peer_key.id()`.
+            let (grant2, lend2) = loop {
+                match port.request_turn() {
+                    Ok(g) => break g,
+                    Err(
+                        crate::emacs_core::eval::parallel_entry::serial_park::PortRefusal::Retry,
+                    ) => std::thread::yield_now(),
+                    Err(e) => panic!("turn 2 request: {e:?}"),
+                }
+            };
+            let mut turn2 = begin_turn(state, home, (grant2, lend2), port, standalone)
+                .ok()
+                .expect("begin turn 2");
+            let (ct, ul) = turn2.with_world(|ev| {
+                let ct = eval(ev, "(eq (current-thread) e54a-id2-peer)");
+                let ul = eval(ev, "(progn (mutex-unlock e54a-id2-held) 'unlocked)");
+                let _ = ev.threads.finish_thread(peer_key.id(), Value::NIL);
+                (ct, ul)
+            });
+            turn2.end(port).ok().expect("end turn 2");
+            phase.store(3, Ordering::Release);
+
+            assert_eq!(ct, "t", "begin_turn must restore saved current_thread_id");
+            assert_eq!(
+                ul, "unlocked",
+                "self-owned (mutex-unlock) must succeed immediately after begin_turn"
+            );
+        },
+        move |main, _control| {
+            let start = Instant::now();
+            while phase_m.load(Ordering::Acquire) < 1 {
+                assert!(start.elapsed() < BOUND);
+                let _ = eval(main, "(sleep-for 0.005)");
+            }
+            assert_eq!(eval(main, "(eq (current-thread) main-thread)"), "t");
+            phase_m.store(2, Ordering::Release);
+            while phase_m.load(Ordering::Acquire) < 3 {
+                assert!(start.elapsed() < BOUND);
+                let _ = eval(main, "(sleep-for 0.005)");
+            }
+        },
+    );
+}
+
+#[test]
+fn e54a_r3_identity_path3_parked_serial_resume_restores_saved_thread_id() {
+    let phase = Arc::new(AtomicUsize::new(0));
+    let phase_m = Arc::clone(&phase);
+
+    run_in_e53a_era(
+        "e54a-r3-id-parked-resume",
+        |src| {
+            assert_eq!(
+                eval(
+                    src,
+                    "(progn
+                       (setq e54a-id3-held (make-mutex \"id3-held\"))
+                       'ok)"
+                ),
+                "ok"
+            );
+        },
+        move |state, port, home, _control| {
+            // Turn 1: enter peer id, lock `e54a-id3-held`, park via `LiveSerial::park`.
+            let (grant1, lend1) = port.request_turn().ok().expect("turn 1");
+            let mut turn1 = begin_turn(state, home, (grant1, lend1), port, standalone)
+                .ok()
+                .expect("begin turn 1");
+            let peer_key = turn1.with_world(|ev| {
+                let key = create_parallel_thread_handle(ev, "e54a-id3-peer", "id3-peer");
+                ev.threads.enter_thread(key.id());
+                lock_mutex_var_as_current(ev, "e54a-id3-held");
+                key
+            });
+            let parked = turn1.park("id3-wait", port).ok().expect("park turn 1");
+            phase.store(1, Ordering::Release);
+
+            // Wait for Main to run Lisp on Baton (overwriting current_thread to 0).
+            let start = Instant::now();
+            while phase.load(Ordering::Acquire) < 2 {
+                assert!(start.elapsed() < BOUND);
+                std::thread::yield_now();
+            }
+
+            // Resume via `ParkedSerial::resume` (no `with_world_parkable`, no
+            // manual `enter_thread`) -> must restore `peer_key.id()`.
+            let mut turn2 = loop {
+                match parked.resume(port, standalone) {
+                    Ok(t) => break t,
+                    Err(_) => panic!("ParkedSerial::resume failed"),
+                }
+            };
+            let (ct, ul) = turn2.with_world(|ev| {
+                let ct = eval(ev, "(eq (current-thread) e54a-id3-peer)");
+                let ul = eval(ev, "(progn (mutex-unlock e54a-id3-held) 'unlocked)");
+                let _ = ev.threads.finish_thread(peer_key.id(), Value::NIL);
+                (ct, ul)
+            });
+            turn2.end(port).ok().expect("end turn 2");
+            phase.store(3, Ordering::Release);
+
+            assert_eq!(
+                ct, "t",
+                "ParkedSerial::resume must restore saved current_thread_id"
+            );
+            assert_eq!(
+                ul, "unlocked",
+                "self-owned (mutex-unlock) must succeed immediately after ParkedSerial::resume"
+            );
+        },
+        move |main, _control| {
+            let start = Instant::now();
+            while phase_m.load(Ordering::Acquire) < 1 {
+                assert!(start.elapsed() < BOUND);
+                let _ = eval(main, "(sleep-for 0.005)");
+            }
+            assert_eq!(eval(main, "(eq (current-thread) main-thread)"), "t");
+            phase_m.store(2, Ordering::Release);
+            while phase_m.load(Ordering::Acquire) < 3 {
+                assert!(start.elapsed() < BOUND);
+                let _ = eval(main, "(sleep-for 0.005)");
+            }
+        },
+    );
+}
+
+#[test]
+fn e54a_r3_identity_path4_with_world_collectible_restores_saved_thread_id() {
+    use crate::emacs_core::eval::parallel_entry::keeper_custody::ReturnedSerialTicket;
+    use crate::emacs_core::eval::parallel_entry::keeper_driver::{ChannelPort, CollectReply};
+    use crate::emacs_core::eval::parallel_entry::serial_park::{
+        Grant, KeeperPort, LendGuard, PortRefusal,
+    };
+    use crate::emacs_core::eval::parallel_entry::serial_ticket::{
+        ReceiveReason, SerialDestination, StoppedSerialTicket, TicketIdentity,
+    };
+    use neovm_value::tagged::gc::FacadeEpochRetention;
+
+    struct ClobberCollectPort<'a, 'b> {
+        inner: &'a mut ChannelPort<'b>,
+        home: SerialHome,
+        phase: Arc<AtomicUsize>,
+    }
+
+    impl<'b> KeeperPort for ClobberCollectPort<'_, 'b> {
+        type LendGuard = <ChannelPort<'b> as KeeperPort>::LendGuard;
+        type CollectReply = CollectReply;
+
+        fn give_back(&mut self, returned: ReturnedSerialTicket) {
+            self.inner.give_back(returned);
+        }
+
+        fn give_back_to_collect(
+            &mut self,
+            returned: ReturnedSerialTicket,
+            reply: Self::CollectReply,
+        ) {
+            // 1. Release the ticket normally so Main runs on Baton and clobbers
+            //    World-global `current_thread_id` to 0 while `owner_a` is
+            //    detached inside `with_world_collectible`.
+            self.inner.give_back(returned);
+            self.phase.store(1, Ordering::Release);
+            let start = Instant::now();
+            while self.phase.load(Ordering::Acquire) < 2 {
+                assert!(
+                    start.elapsed() < BOUND,
+                    "timed out waiting for Main clobber"
+                );
+                std::thread::yield_now();
+            }
+            // 2. Request a fresh ticket and hand it right back to collect (real
+            //    keeper collection + real CollectionReport while current_thread
+            //    is still 0), so `resume_ticket_for_collect` then calls
+            //    `reattach_serial_owner` against stale current_thread == 0.
+            let (grant, guard) = loop {
+                match self.inner.request_turn() {
+                    Ok(g) => break g,
+                    Err(PortRefusal::Retry) => std::thread::yield_now(),
+                    Err(e) => panic!("clobber collect requeue: {e:?}"),
+                }
+            };
+            let expected = TicketIdentity {
+                owner: self.home.owner,
+                generation: grant.generation,
+                heap: self.home.heap,
+                epoch: grant.epoch,
+            };
+            let mut seat = SerialDestination::new(expected);
+            let local = seat
+                .receive_serial(grant.ticket)
+                .ok()
+                .expect("receive")
+                .guard();
+            let returnable = local.finish(&mut seat).ok().expect("finish");
+            self.inner
+                .give_back_to_collect(returnable.return_ticket(), reply);
+            guard.disarm();
+        }
+
+        fn request_turn(&mut self) -> Result<(Grant, Self::LendGuard), PortRefusal> {
+            self.inner.request_turn()
+        }
+
+        fn refuse(&mut self, ticket: StoppedSerialTicket, reason: ReceiveReason) {
+            self.inner.refuse(ticket, reason);
+        }
+
+        fn collect_root_epoch(&self) -> Option<FacadeEpochRetention> {
+            self.inner.collect_root_epoch()
+        }
+    }
+
+    let phase = Arc::new(AtomicUsize::new(0));
+    let phase_m = Arc::clone(&phase);
+
+    run_in_e53a_era(
+        "e54a-r3-id-collectible",
+        |src| {
+            assert_eq!(
+                eval(
+                    src,
+                    "(progn
+                       (setq e54a-id4-held (make-mutex \"id4-held\"))
+                       'ok)"
+                ),
+                "ok"
+            );
+        },
+        move |state, port, home, _control| {
+            let (grant, lend) = port.request_turn().ok().expect("turn 1");
+            let mut turn = begin_turn(state, home, (grant, lend), port, standalone)
+                .ok()
+                .expect("begin turn 1");
+            let peer_key = turn.with_world(|ev| {
+                let key = create_parallel_thread_handle(ev, "e54a-id4-peer", "id4-peer");
+                ev.threads.enter_thread(key.id());
+                lock_mutex_var_as_current(ev, "e54a-id4-held");
+                key
+            });
+            let mut clobber_port = ClobberCollectPort {
+                inner: port,
+                home,
+                phase: Arc::clone(&phase),
+            };
+            let (ct, ul) = turn.with_world_collectible(&mut clobber_port, standalone, |ev| {
+                ev.gc_collect_serial_turn()
+                    .expect("with_world_collectible GC round-trip");
+                let ct = eval(ev, "(eq (current-thread) e54a-id4-peer)");
+                let ul = eval(ev, "(progn (mutex-unlock e54a-id4-held) 'unlocked)");
+                let _ = ev.threads.finish_thread(peer_key.id(), Value::NIL);
+                (ct, ul)
+            });
+            turn.end(port).ok().expect("end turn 1");
+            phase.store(3, Ordering::Release);
+
+            assert_eq!(
+                ct, "t",
+                "with_world_collectible must restore saved current_thread_id after clobber"
+            );
+            assert_eq!(
+                ul, "unlocked",
+                "self-owned (mutex-unlock) must succeed after with_world_collectible clobber"
+            );
+        },
+        move |main, _control| {
+            let start = Instant::now();
+            while phase_m.load(Ordering::Acquire) < 1 {
+                assert!(start.elapsed() < BOUND);
+                let _ = eval(main, "(sleep-for 0.005)");
+            }
+            assert_eq!(eval(main, "(eq (current-thread) main-thread)"), "t");
+            phase_m.store(2, Ordering::Release);
+            while phase_m.load(Ordering::Acquire) < 3 {
                 assert!(start.elapsed() < BOUND);
                 let _ = eval(main, "(sleep-for 0.005)");
             }
