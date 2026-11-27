@@ -556,9 +556,9 @@ fn record(func: Option<&ir::Func>, verdict: &str, ops: usize, baseline_params: u
     }
     if let Some(func) = func {
         static DUMP: std::sync::OnceLock<Option<std::path::PathBuf>> = std::sync::OnceLock::new();
-        if let Some(path) = DUMP
-            .get_or_init(|| std::env::var_os("NEOVM_JIT_DUMP_OPT").map(std::path::PathBuf::from))
-        {
+        if let Some(path) = DUMP.get_or_init(|| {
+            super::super::dump_knob_path("NEOVM_JIT_DUMP_OPT").map(std::path::PathBuf::from)
+        }) {
             use std::io::Write;
             static OUTPUT: std::sync::Mutex<()> = std::sync::Mutex::new(());
             let _guard = OUTPUT.lock().unwrap_or_else(|p| p.into_inner());

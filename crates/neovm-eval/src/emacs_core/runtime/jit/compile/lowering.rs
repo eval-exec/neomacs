@@ -4963,7 +4963,8 @@ pub(crate) fn dump_clif(func: &cranelift_codegen::ir::Function, header: &str) {
     }
     use std::sync::OnceLock;
     static PATH: OnceLock<Option<String>> = OnceLock::new();
-    let Some(path) = PATH.get_or_init(|| std::env::var("NEOVM_JIT_DUMP_CLIF").ok()) else {
+    let Some(path) = PATH.get_or_init(|| super::super::dump_knob_path("NEOVM_JIT_DUMP_CLIF"))
+    else {
         return;
     };
     append_clif_record(path, func, header);

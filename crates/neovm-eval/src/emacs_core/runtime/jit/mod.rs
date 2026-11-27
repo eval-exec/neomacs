@@ -262,6 +262,26 @@ pub(crate) mod tier2;
 #[cfg(feature = "jit")]
 pub mod stats;
 
+/// Read an `NEOVM_JIT_DUMP_*=<path>` knob.
+///
+/// `unset`, empty, `0`, `off`, `false` and `no` all mean OFF. Before this, `=0` was taken as a *path*: the dumpers
+/// created a file literally named `0` in the working directory, and the presence checks (`naming_enabled`,
+/// `dump_requested_by_env`) turned per-function naming ON while the user was trying to turn dumping off -- which is
+/// why setting all three knobs to `0` made startup output larger, not smaller (issue #865).
+pub(crate) fn dump_knob_path(name: &str) -> Option<String> {
+    let value = std::env::var(name).ok()?;
+    let trimmed = value.trim();
+    if trimmed.is_empty()
+        || trimmed.eq_ignore_ascii_case("off")
+        || trimmed.eq_ignore_ascii_case("false")
+        || trimmed.eq_ignore_ascii_case("no")
+        || trimmed == "0"
+    {
+        return None;
+    }
+    Some(trimmed.to_string())
+}
+
 #[cfg(feature = "jit")]
 pub(crate) use cache::note_seam_interp_fallback;
 #[cfg(feature = "jit")]

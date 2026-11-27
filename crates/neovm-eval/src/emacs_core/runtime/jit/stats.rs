@@ -900,7 +900,7 @@ pub(crate) fn naming_enabled() -> bool {
     *ON.get_or_init(|| {
         report_requested()
             || std::env::var_os("PERF_BUILDID_DIR").is_some()
-            || std::env::var_os("NEOVM_JIT_DUMP_CLIF").is_some()
+            || super::dump_knob_path("NEOVM_JIT_DUMP_CLIF").is_some()
             || std::env::var_os("NEOVM_JIT_CODE_FUNCTION").is_some()
             || asm_dump::dump_requested_by_env()
     })

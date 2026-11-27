@@ -49,14 +49,14 @@ fn dump_path() -> Option<PathBuf> {
         return forced;
     }
     static PATH: OnceLock<Option<PathBuf>> = OnceLock::new();
-    PATH.get_or_init(|| std::env::var_os("NEOVM_JIT_DUMP_ASM").map(PathBuf::from))
+    PATH.get_or_init(|| super::super::dump_knob_path("NEOVM_JIT_DUMP_ASM").map(PathBuf::from))
         .clone()
 }
 
 /// Whether the environment asks for the dump (read once; part of
 /// `naming_enabled`, so dumped leaves carry their Lisp names).
 pub(crate) fn dump_requested_by_env() -> bool {
-    std::env::var_os("NEOVM_JIT_DUMP_ASM").is_some()
+    super::super::dump_knob_path("NEOVM_JIT_DUMP_ASM").is_some()
 }
 
 /// Whether a JIT compile should ask Cranelift for its disassembly. AOT
