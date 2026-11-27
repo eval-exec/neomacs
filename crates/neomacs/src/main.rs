@@ -5549,172 +5549,16 @@ pub unsafe fn run(mode: RuntimeMode) {
     // 2. Initialize the evaluator from the canonical bootstrap surface.
     //    GNU loads the dumped bootstrap image here, then lets the outer
     //    command loop evaluate `top-level`/`normal-top-level`.
-    let evaluator = create_startup_evaluator_for_mode(mode, &startup);
-    let exit_code = run_tty_session(
-        evaluator,
-        mode,
-        &startup,
-        process_started_at,
-        &process_args,
-        daemon_notifier,
-    );
-    if exit_code != 0 {
-        std::process::exit(exit_code);
-    }
-}
-
-fn parse_batch_zygote_args(
-    args: impl IntoIterator<Item = String>,
-) -> Option<(PathBuf, Option<PathBuf>)> {
-    let argv: Vec<String> = args.into_iter().collect();
-    let mut socket: Option<PathBuf> = None;
-    let mut dump_file: Option<PathBuf> = None;
-    let mut idx = 0usize;
-    while idx + 1 < argv.len() {
-        let arg = &argv[idx + 1];
-        if arg == "--" {
-            break;
+    let mut evaluator = create_startup_evaluator_for_mode(mode, &startup);
+    if startup.noninteractive && startup.daemon.is_none() {
+        let exit_code =
+            run_tty_batch_evaluator(evaluator, mode, &startup, process_started_at, &process_args);
+        if exit_code != 0 {
+            std::process::exit(exit_code);
         }
-        if let Some(val) = arg.strip_prefix("--batch-zygote-socket=") {
-            socket = Some(PathBuf::from(val));
-            idx += 1;
-            continue;
-        }
-        if arg == "--batch-zygote-socket" {
-            if let Some(val) = argv.get(idx + 2) {
-                socket = Some(PathBuf::from(val));
-                idx += 2;
-            } else {
-                idx += 1;
-            }
-            continue;
-        }
-        // Reuse the normal startup parser's `-dump-file` / `--dump-file`
-        // matching rules (GNU `emacs.c:942, 991`).
-        match args::argmatch(&argv, &mut idx, "-dump-file", Some("--dump-file"), 6, true) {
-            args::ArgMatch::Value(val) => {
-                dump_file = Some(PathBuf::from(val));
-                continue;
-            }
-            args::ArgMatch::MissingValue => {
-                idx += 1;
-                continue;
-            }
-            args::ArgMatch::NoMatch => {}
-            args::ArgMatch::Bare => unreachable!(),
-        }
-        // Skip operands belonging to standard options (e.g. `--eval <form>`)
-        // so an operand whose text begins with `--batch-zygote-socket=` is
-        // never misinterpreted as a zygote launch flag.
-        if let Some(matched) = args::classify_standard_arg(arg) {
-            idx = (idx + 1 + matched.operands).min(argv.len().saturating_sub(1));
-        } else {
-            idx += 1;
-        }
-    }
-    socket.map(|s| (s, dump_file))
-}
-
-#[cfg(test)]
-mod batch_zygote_arg_tests {
-    use super::parse_batch_zygote_args;
-    use std::path::PathBuf;
-
-    #[test]
-    fn parse_batch_zygote_args_ignores_standard_option_operands() {
-        let args = [
-            "neomacs",
-            "--batch",
-            "--eval",
-            "--batch-zygote-socket=/tmp/should-not-match.sock",
-        ]
-        .into_iter()
-        .map(String::from);
-        assert_eq!(parse_batch_zygote_args(args), None);
-
-        let args_after_dashdash = [
-            "neomacs",
-            "--batch",
-            "--",
-            "--batch-zygote-socket=/tmp/should-not-match.sock",
-        ]
-        .into_iter()
-        .map(String::from);
-        assert_eq!(parse_batch_zygote_args(args_after_dashdash), None);
+        return;
     }
 
-    #[test]
-    fn parse_batch_zygote_args_accepts_separate_and_inline_forms() {
-        let inline = [
-            "neomacs",
-            "--batch-zygote-socket=/tmp/z.sock",
-            "--dump-file=/tmp/custom.pdump",
-        ]
-        .into_iter()
-        .map(String::from);
-        let expected = Some((
-            PathBuf::from("/tmp/z.sock"),
-            Some(PathBuf::from("/tmp/custom.pdump")),
-        ));
-        assert_eq!(parse_batch_zygote_args(inline), expected);
-
-        let short_dump = [
-            "neomacs",
-            "--batch-zygote-socket",
-            "/tmp/z.sock",
-            "-dump-file",
-            "/tmp/custom.pdump",
-        ]
-        .into_iter()
-        .map(String::from);
-        assert_eq!(parse_batch_zygote_args(short_dump), expected);
-
-        let long_separate_dump = [
-            "neomacs",
-            "--batch-zygote-socket=/tmp/z.sock",
-            "--dump-file",
-            "/tmp/custom.pdump",
-        ]
-        .into_iter()
-        .map(String::from);
-        assert_eq!(parse_batch_zygote_args(long_separate_dump), expected);
-
-        let separate = ["neomacs", "--batch-zygote-socket", "/tmp/z2.sock"]
-            .into_iter()
-            .map(String::from);
-        assert_eq!(
-            parse_batch_zygote_args(separate),
-            Some((PathBuf::from("/tmp/z2.sock"), None))
-        );
-    }
-}
-
-/// Shared TTY/batch execution tail used by forked zygote children.
-fn run_tty_batch_evaluator(
-    evaluator: Context,
-    mode: RuntimeMode,
-    startup: &StartupOptions,
-    process_started_at: Instant,
-    process_args: &[OsString],
-) -> i32 {
-    run_tty_session(
-        evaluator,
-        mode,
-        startup,
-        process_started_at,
-        process_args,
-        None,
-    )
-}
-
-fn run_tty_session(
-    mut evaluator: Context,
-    mode: RuntimeMode,
-    startup: &StartupOptions,
-    process_started_at: Instant,
-    process_args: &[OsString],
-    daemon_notifier: Option<neovm_core::emacs_core::eval::DaemonNotifier>,
-) -> i32 {
     let interactivity =
         Interactivity::from_noninteractive(startup.noninteractive || startup.daemon.is_some());
     let bootstrap_display = bootstrap_tty_display_config(interactivity);
@@ -5730,9 +5574,9 @@ fn run_tty_session(
     if let Some(options) = &startup.daemon {
         evaluator.configure_daemon(options.name.clone(), daemon_notifier);
     }
-    if tty_init::should_enable_live_tty_io(startup) {
+    if tty_init::should_enable_live_tty_io(&startup) {
         reset_terminal_host();
-        configure_terminal_runtime(tty_init::detect_tty_runtime(startup));
+        configure_terminal_runtime(tty_init::detect_tty_runtime(&startup));
         // Root `make-terminal-frame` re-reads this terminal's winsize
         // (`frame.c:1861`). The query lives on the initial terminal's
         // record. The same function may be installed again; a different
@@ -5777,8 +5621,8 @@ fn run_tty_session(
         .selected_frame()
         .expect("No selected frame after bootstrap")
         .id;
-    configure_gnu_startup_state(&mut evaluator, frame_id, startup);
-    if tty_init::should_enable_live_tty_io(startup) {
+    configure_gnu_startup_state(&mut evaluator, frame_id, &startup);
+    if tty_init::should_enable_live_tty_io(&startup) {
         termcap_input::seed_input_decode_map_from_terminal(&mut evaluator);
     }
 
@@ -5794,7 +5638,7 @@ fn run_tty_session(
     let tty_popup_force_full_redraw = Arc::new(AtomicBool::new(false));
     let tty_input_pause = tty_frontend::TtyInputPause::new();
     let secondary_ttys = secondary_tty::SecondaryTtyRegistry::default();
-    if tty_init::should_enable_live_tty_io(startup) {
+    if tty_init::should_enable_live_tty_io(&startup) {
         set_terminal_host(Box::new(
             tty_frontend::TtyTerminalHost::with_emergency_escape(
                 emacs_comms.cmd_tx.clone(),
@@ -5949,7 +5793,7 @@ fn run_tty_session(
     let daemon_tty_cleanup = secondary_ttys.clone();
     frame_layout::install_tty_redisplay_callback_with_popup_redraw(
         &mut evaluator,
-        startup,
+        &startup,
         Some(tty_popup_force_full_redraw),
         Some(Box::new(move |eval| secondary_ttys.render_selected(eval))),
     );
@@ -5991,10 +5835,10 @@ fn run_tty_session(
         neomacs_display_runtime::thread_comm::RenderCommand::Lifecycle(LifecycleCommand::Shutdown),
     );
     frontend.join();
-    if tty_init::should_enable_live_tty_io(startup) {
+    if tty_init::should_enable_live_tty_io(&startup) {
         tty_init::tty_shutdown_terminal_with(&primary_reset_strings);
     }
-    log_clean_process_exit(process_started_at, process_args);
+    log_clean_process_exit(process_started_at, &process_args);
 
     // The JIT's final report (same thread and placement rules as the
     // drain below). No-op unless a JIT report knob is set.
@@ -6016,8 +5860,249 @@ fn run_tty_session(
         }
         if request.restart {
             if startup.daemon.is_some() {
-                daemon::restart(process_args);
+                daemon::restart(&process_args);
             }
+            tracing::warn!("restart requested via kill-emacs, but restart is not implemented yet");
+        }
+        exit_code = request.exit_code;
+    }
+
+    leak_evaluator_for_process_exit(evaluator);
+    if exit_code != 0 {
+        std::process::exit(exit_code);
+    }
+}
+
+fn parse_batch_zygote_args(
+    args: impl IntoIterator<Item = String>,
+) -> Option<(PathBuf, Option<PathBuf>)> {
+    let argv: Vec<String> = args.into_iter().collect();
+    let mut socket: Option<PathBuf> = None;
+    let mut dump_file: Option<PathBuf> = None;
+    let mut idx = 0usize;
+    while idx + 1 < argv.len() {
+        let arg = &argv[idx + 1];
+        if arg == "--" {
+            break;
+        }
+        if let Some(val) = arg.strip_prefix("--batch-zygote-socket=") {
+            socket = Some(PathBuf::from(val));
+            idx += 1;
+            continue;
+        }
+        if arg == "--batch-zygote-socket" {
+            if let Some(val) = argv.get(idx + 2) {
+                socket = Some(PathBuf::from(val));
+                idx += 2;
+            } else {
+                idx += 1;
+            }
+            continue;
+        }
+        // Reuse the normal startup parser's `-dump-file` / `--dump-file`
+        // matching rules (GNU `emacs.c:942, 991`).
+        match args::argmatch(&argv, &mut idx, "-dump-file", Some("--dump-file"), 6, true) {
+            args::ArgMatch::Value(val) => {
+                dump_file = Some(PathBuf::from(val));
+                continue;
+            }
+            args::ArgMatch::MissingValue => {
+                idx += 1;
+                continue;
+            }
+            args::ArgMatch::NoMatch => {}
+            args::ArgMatch::Bare => unreachable!(),
+        }
+        // Skip operands belonging to standard options (e.g. `--eval <form>`)
+        // so an operand whose text begins with `--batch-zygote-socket=` is
+        // never misinterpreted as a zygote launch flag.
+        if let Some(matched) = args::classify_standard_arg(arg) {
+            idx = (idx + 1 + matched.operands).min(argv.len().saturating_sub(1));
+        } else {
+            idx += 1;
+        }
+    }
+    socket.map(|s| (s, dump_file))
+}
+
+#[cfg(test)]
+mod batch_zygote_arg_tests {
+    use super::parse_batch_zygote_args;
+    use std::path::PathBuf;
+
+    #[test]
+    fn parse_batch_zygote_args_ignores_standard_option_operands() {
+        let args = [
+            "neomacs",
+            "--batch",
+            "--eval",
+            "--batch-zygote-socket=/tmp/should-not-match.sock",
+        ]
+        .into_iter()
+        .map(String::from);
+        assert_eq!(parse_batch_zygote_args(args), None);
+
+        let args_after_dashdash = [
+            "neomacs",
+            "--batch",
+            "--",
+            "--batch-zygote-socket=/tmp/should-not-match.sock",
+        ]
+        .into_iter()
+        .map(String::from);
+        assert_eq!(parse_batch_zygote_args(args_after_dashdash), None);
+    }
+
+    #[test]
+    fn parse_batch_zygote_args_accepts_separate_and_inline_forms() {
+        let inline = [
+            "neomacs",
+            "--batch-zygote-socket=/tmp/z.sock",
+            "--dump-file=/tmp/custom.pdump",
+        ]
+        .into_iter()
+        .map(String::from);
+        let expected = Some((
+            PathBuf::from("/tmp/z.sock"),
+            Some(PathBuf::from("/tmp/custom.pdump")),
+        ));
+        assert_eq!(parse_batch_zygote_args(inline), expected);
+
+        let short_dump = [
+            "neomacs",
+            "--batch-zygote-socket",
+            "/tmp/z.sock",
+            "-dump-file",
+            "/tmp/custom.pdump",
+        ]
+        .into_iter()
+        .map(String::from);
+        assert_eq!(parse_batch_zygote_args(short_dump), expected);
+
+        let long_separate_dump = [
+            "neomacs",
+            "--batch-zygote-socket=/tmp/z.sock",
+            "--dump-file",
+            "/tmp/custom.pdump",
+        ]
+        .into_iter()
+        .map(String::from);
+        assert_eq!(parse_batch_zygote_args(long_separate_dump), expected);
+
+        let separate = ["neomacs", "--batch-zygote-socket", "/tmp/z2.sock"]
+            .into_iter()
+            .map(String::from);
+        assert_eq!(
+            parse_batch_zygote_args(separate),
+            Some((PathBuf::from("/tmp/z2.sock"), None))
+        );
+    }
+}
+
+/// Shared noninteractive `--batch` execution tail used by both normal batch
+/// invocations and forked zygote children. Does not create interactive TTY
+/// channels (`ThreadComms`) or spawn input reader threads.
+fn run_tty_batch_evaluator(
+    mut evaluator: Context,
+    mode: RuntimeMode,
+    startup: &StartupOptions,
+    process_started_at: Instant,
+    process_args: &[OsString],
+) -> i32 {
+    if !startup.noninteractive || startup.daemon.is_some() {
+        eprintln!("neomacs: batch evaluator only supports noninteractive --batch sessions");
+        return 1;
+    }
+
+    let interactivity = Interactivity::from_noninteractive(true);
+    let bootstrap_display = bootstrap_tty_display_config(interactivity);
+    let frame_metrics = BootstrapFrameMetrics::TTY;
+    let (width, height) = startup_dimensions(startup.frontend, frame_metrics, true, false);
+
+    evaluator.setup_thread_locals();
+    reset_terminal_host();
+    reset_terminal_runtime();
+    // GNU Emacs does NOT disable GC during startup — GC runs normally.
+    // The bc_buf refactor and conservative stack scanning ensure all
+    // bytecode VM values are reachable during collection.
+    evaluator.set_variable("dump-mode", Value::NIL);
+    tracing::info!("Context initialized");
+
+    // 3. Bootstrap the host-side initial frame/buffers.
+    let _bootstrap = bootstrap_buffers(&mut evaluator, width, height, bootstrap_display);
+    let frame_id = evaluator
+        .frame_manager()
+        .selected_frame()
+        .expect("No selected frame after bootstrap")
+        .id;
+    configure_gnu_startup_state(&mut evaluator, frame_id, startup);
+    maybe_install_startup_phase_trace(&mut evaluator);
+
+    tracing::info!("TTY batch mode — skipping terminal init");
+    let secondary_ttys = secondary_tty::SecondaryTtyRegistry::default();
+    if neovm_core::face::realization::enabled() {
+        // GNU allows an explicit make-terminal-frame even in --batch
+        // (frame.c:1754-1823). Install the deferred auxiliary-device factory
+        // without initializing a primary terminal or a keyboard receiver.
+        let auxiliary_input_tx = neovm_core::host_input::HostInputPublisher::closed();
+        let mut factory = secondary_tty::SecondaryTtyFactory::new(
+            secondary_ttys.clone(),
+            auxiliary_input_tx,
+            evaluator.quit_requested.clone(),
+        );
+        // Plain --batch waits until make-terminal-frame opens a device
+        // (frame.c:1811) so elb-style batch never builds the display runtime.
+        let render_registry = secondary_ttys.clone();
+        factory.defer_redisplay_until_open(Box::new(move |eval| {
+            frame_layout::install_headless_tty_redisplay(
+                eval,
+                Some(Box::new(move |eval| render_registry.render_selected(eval))),
+            );
+        }));
+        evaluator.set_tty_frame_host_factory(Box::new(factory));
+    }
+
+    // 8. Set up redisplay callback (deferred headless TTY RIF render).
+    let daemon_tty_cleanup = secondary_ttys.clone();
+    frame_layout::install_tty_redisplay_callback_with_popup_redraw(
+        &mut evaluator,
+        startup,
+        None,
+        Some(Box::new(move |eval| secondary_ttys.render_selected(eval))),
+    );
+
+    // Add undo boundary after startup so initial content isn't undoable
+    evaluator
+        .buffer_manager_view_mut()
+        .append_undo_list_boundary_to_current();
+
+    // 9. Enter GNU's outer command loop (`recursive-edit`).
+    maybe_prepopulate_aot(mode, &evaluator);
+    neovm_core::emacs_core::load::maybe_run_after_pdump_load_hook(&mut evaluator);
+    tracing::info!("Entering GNU command loop (recursive-edit)...");
+    mark_jit_command_loop_entry();
+    let exit_status = neovm_core::emacs_core::keyboard::recursive_edit(&mut evaluator);
+    if exit_status.is_ok() {
+        tracing::info!("Command loop exited normally");
+    } else {
+        tracing::warn!("Command loop exited with error");
+    }
+
+    // 11. Shutdown
+    tracing::info!("Shutting down...");
+    daemon_tty_cleanup.close_all_with(|terminal_id| {
+        neovm_core::emacs_core::terminal::pure::terminal_mode_strings_bytes(
+            terminal_id,
+            "tty-mode-reset-strings",
+        )
+    });
+    log_clean_process_exit(process_started_at, process_args);
+    maybe_report_jit_stats(&evaluator);
+    maybe_drain_aot_pgo(mode, &evaluator);
+
+    let mut exit_code = 0;
+    if let Some(request) = evaluator.shutdown_request() {
+        if request.restart {
             tracing::warn!("restart requested via kill-emacs, but restart is not implemented yet");
         }
         exit_code = request.exit_code;
