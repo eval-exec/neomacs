@@ -5,8 +5,8 @@
 use self::control::{Mode, Request, RequestId, RingClient, SerialClient, State as Ring};
 use self::driver_core::{
     Attempt, Batch, BatchVisitor, Breach, BreachOf, CollectRefusal, CustodyRefused, Driver,
-    DriverEnd, GrantMsg, GroupMsg, Head, IntervalEnd, KeeperMsg, KeeperOps, LendDrop, Refusal,
-    Settle,
+    DriverEnd, GrantMsg, GroupMsg, Head, IdleStatus, IntervalEnd, KeeperMsg, KeeperOps, LendDrop,
+    Refusal, Settle,
 };
 use crate::sync::{Signal, mpsc};
 use crate::{MutatorKey, RendezvousError};
@@ -41,12 +41,15 @@ struct Model {
     members: Vec<(MutatorKey, Mode)>,
     commits: Vec<u64>,
     grants: Vec<(u64, NonZeroU64)>,
+    stop_active: bool,
 }
 
 pub struct ModelEra {
     model: Mutex<Model>,
     /// A member's mode changed, or the ring moved on. Only the keeper waits.
     changed: Signal,
+    /// A stop completed (or era poisoned). Only a publishing owner waits.
+    stop_ended: Signal,
 }
 
 impl ModelEra {
@@ -60,9 +63,25 @@ impl ModelEra {
                     .collect(),
                 commits: Vec::new(),
                 grants: Vec::new(),
+                stop_active: false,
             }),
             changed: Signal::new(),
+            stop_ended: Signal::new(),
         })
+    }
+
+    /// Whether a stop is currently active (checked inside `between_stops_hook`
+    /// and by a publishing owner modelling `leave_native()` / `prepare_restore()`).
+    fn is_stop_active(&self) -> bool {
+        self.model.lock().unwrap().stop_active
+    }
+
+    /// Model `mutator.leave_native()` -> `prepare_restore()` blocking while a
+    /// stop is active until the keeper completes the stop.
+    fn wait_until_stop_inactive(&self) {
+        while self.is_stop_active() {
+            self.stop_ended.wait();
+        }
     }
 
     /// An owner reaches a poll (or publishes) and stops.
@@ -217,6 +236,7 @@ impl<'a> KeeperOps for Era<'a> {
         };
         if model.ring.ready(&members)? {
             model.ring.begin_trace(epoch, &members)?;
+            model.stop_active = true;
             return Ok(Attempt::Stopped(Stop { era: self.0, epoch }));
         }
         drop(model);
@@ -236,8 +256,12 @@ impl<'a> KeeperOps for Era<'a> {
     }
 
     fn poison(self) {
-        self.0.model.lock().unwrap().ring.poison();
+        let mut model = self.0.model.lock().unwrap();
+        model.ring.poison();
+        model.stop_active = false;
+        drop(model);
         self.0.changed.notify();
+        self.0.stop_ended.notify();
     }
 
     fn epoch(stopped: &Stop<'a>) -> NonZeroU64 {
@@ -269,8 +293,10 @@ impl<'a> KeeperOps for Era<'a> {
         let members = model.members.clone();
         model.ring.complete(stopped.epoch, &members)?;
         model.ring.finish_debt(&members)?;
+        model.stop_active = false;
         drop(model);
         stopped.era.changed.notify();
+        stopped.era.stop_ended.notify();
         Ok(())
     }
 
@@ -412,8 +438,10 @@ impl<'a> Batch<Era<'a>> for ModelBatch<'a> {
         let members = model.members.clone();
         model.ring.complete(self.epoch, &members)?;
         model.ring.finish_debt(&members)?;
+        model.stop_active = false;
         drop(model);
         self.era.changed.notify();
+        self.era.stop_ended.notify();
         Ok(())
     }
 }
@@ -1256,5 +1284,280 @@ pub fn a_failed_owner_requeue_answers_the_collect_reply() {
             matches!(end, DriverEnd::Poisoned(Breach::Rendezvous(RendezvousError::Capacity))),
             "a refused re-commit poisons the era: {end:?}"
         );
+    });
+}
+
+/// L18 (E6-P.4-FU1). Dekker pair when `KeeperMsg::Wake` is consumed in
+/// `between_stops` BEFORE `serve_group` opens the Baton-group stop while the
+/// owner is still inside the `publishing_owners` window (modelling
+/// `ChannelPort::publish()` entering `leave_native()` / `prepare_restore()`
+/// after the stop opens). Even though `wake_pending` was cleared in
+/// `between_stops` and `queued` is still empty, `serve_group` loads
+/// `has_publishing_owners() == true`, raises `ring_waiter`, and breaks out via
+/// `Step::End(batch)` so the owner unblocks, commits `Request`, and gets
+/// granted. Also asserts `between_stops_hook` runs strictly outside any stop.
+pub fn a_publishing_owner_wakes_group_after_wake_consumed_between_stops() {
+    model(|| {
+        let era = ModelEra::new(&[(1, Mode::NativeStopped)]);
+        let (inbox, inbox_rx) = mpsc::channel();
+        let hook_runs = Arc::new(AtomicUsize::new(0));
+        let mut driver = {
+            let era_hook = Arc::clone(&era);
+            let hook_runs = Arc::clone(&hook_runs);
+            Driver::new(Era(&era), inbox_rx).with_between_stops_hook(move |_drv| {
+                assert!(
+                    !era_hook.is_stop_active(),
+                    "between_stops_hook must never run while a stop is active"
+                );
+                hook_runs.fetch_add(1, Ordering::SeqCst);
+            })
+        };
+        let publishing = driver.publishing_owners_counter();
+        let (grants_tx, grants) = mpsc::sync_channel(1);
+        driver.enroll(1, key(1), grants_tx);
+        let (world, waiter) = driver.enroll_group().into_parts();
+        let (wake_sent_tx, wake_sent) = mpsc::channel::<()>();
+        let (holding_tx, holding) = mpsc::channel::<()>();
+
+        let group = {
+            let inbox = inbox.clone();
+            loom::thread::spawn(move || {
+                // Ensure `Wake` is enqueued before `BatonRequest` so the keeper
+                // drains `Wake` in `between_stops` before `serve_group`.
+                let _ = wake_sent.recv();
+                let _ = inbox.send(KeeperMsg::BatonRequest);
+                let seen = match world.recv() {
+                    Ok(GroupMsg::World { turn, epoch }) => {
+                        let _ = holding_tx.send(());
+                        let raised = (0..WAIT_YIELDS).any(|_| {
+                            let raised = waiter.raised();
+                            if !raised {
+                                loom::thread::yield_now();
+                            }
+                            raised
+                        });
+                        assert!(
+                            raised,
+                            "the waiter word was never raised for a publishing owner"
+                        );
+                        let _ = inbox.send(KeeperMsg::WorldReturn {
+                            returned: turn,
+                            end: IntervalEnd::Done,
+                        });
+                        Seen::Granted(epoch)
+                    }
+                    Ok(GroupMsg::Poisoned) => Seen::Poisoned,
+                    Err(_) => Seen::Disconnected,
+                };
+                let _ = inbox.send(KeeperMsg::GroupExit);
+                seen
+            })
+        };
+
+        let owner = {
+            let inbox = inbox.clone();
+            let era_owner = Arc::clone(&era);
+            loom::thread::spawn(move || {
+                publishing.fetch_add(1, Ordering::SeqCst);
+                let _ = inbox.send(KeeperMsg::Wake);
+                let _ = wake_sent_tx.send(());
+                // Wait until the Baton group holds the World so `queued` is
+                // still empty and `leave_native` blocks on the active stop.
+                let _ = holding.recv();
+                era_owner.wait_until_stop_inactive();
+                let _ = inbox.send(KeeperMsg::Request {
+                    owner: 1,
+                    receipt: Receipt {
+                        owner: 1,
+                        generation: generation(),
+                    },
+                });
+                publishing.fetch_sub(1, Ordering::SeqCst);
+                let seen = match grants.recv() {
+                    Ok(GrantMsg::Grant { ticket, epoch }) => {
+                        let _ = inbox.send(KeeperMsg::GiveBack {
+                            owner: 1,
+                            returned: ticket,
+                            end: IntervalEnd::Done,
+                        });
+                        Seen::Granted(epoch)
+                    }
+                    Ok(GrantMsg::Republish) => Seen::Republish,
+                    Ok(GrantMsg::Poisoned) => Seen::Poisoned,
+                    Err(_) => Seen::Disconnected,
+                };
+                let _ = inbox.send(KeeperMsg::Exit { owner: 1 });
+                seen
+            })
+        };
+
+        drop(inbox);
+        let end = driver.run();
+        let group = group.join().unwrap();
+        let owner = owner.join().unwrap();
+        assert_eq!(end, DriverEnd::Drained);
+        assert!(matches!(group, Seen::Granted(_)), "the group: {group:?}");
+        assert!(matches!(owner, Seen::Granted(_)), "the owner: {owner:?}");
+        assert!(
+            hook_runs.load(Ordering::SeqCst) >= 1,
+            "between_stops_hook must run"
+        );
+        let model = era.model.lock().unwrap();
+        let granted: Vec<u64> = model.grants.iter().map(|(client, _)| *client).collect();
+        assert_eq!(granted, [GROUP, 1]);
+    });
+}
+
+/// L19 (E6-P.4-FU1). `KeeperMsg::IdleQuery` must report `IdleStatus::Busy`
+/// while any parallel owner holds `publishing_owners > 0`, and `IdleStatus::Idle`
+/// once the count returns to 0.
+pub fn idle_query_reports_busy_while_owner_is_publishing() {
+    model(|| {
+        let era = ModelEra::new(&[(1, Mode::NativeStopped)]);
+        let (inbox, inbox_rx) = mpsc::channel();
+        let mut driver = Driver::new(Era(&era), inbox_rx);
+        let publishing = driver.publishing_owners_counter();
+        let (grants_tx, _grants) = mpsc::sync_channel(1);
+        driver.enroll(1, key(1), grants_tx);
+
+        let owner = {
+            let inbox = inbox.clone();
+            loom::thread::spawn(move || {
+                publishing.fetch_add(1, Ordering::SeqCst);
+                let (reply_tx, reply_rx) = mpsc::sync_channel(1);
+                let _ = inbox.send(KeeperMsg::IdleQuery { reply: reply_tx });
+                let busy = reply_rx.recv();
+                assert_eq!(
+                    busy,
+                    Ok(IdleStatus::Busy),
+                    "idle query must report Busy while an owner is publishing"
+                );
+                publishing.fetch_sub(1, Ordering::SeqCst);
+
+                let (reply_tx2, reply_rx2) = mpsc::sync_channel(1);
+                let _ = inbox.send(KeeperMsg::IdleQuery { reply: reply_tx2 });
+                let idle = reply_rx2.recv();
+                assert_eq!(
+                    idle,
+                    Ok(IdleStatus::Idle { enrolled_owners: 1 }),
+                    "idle query must report Idle once publishing_owners returns to 0"
+                );
+                let _ = inbox.send(KeeperMsg::Exit { owner: 1 });
+            })
+        };
+
+        drop(inbox);
+        let end = driver.run();
+        owner.join().unwrap();
+        assert_eq!(end, DriverEnd::Drained);
+    });
+}
+
+/// L20 (E6-P.4-FU1). `KeeperMsg::Wake` arriving while the Baton group holds
+/// the World (in `await_world`) raises `ring_waiter`, breaks out of the stop,
+/// and invokes `between_stops_hook` strictly outside the stop.
+pub fn wake_during_world_raises_waiter_and_runs_between_stops_hook() {
+    model(|| {
+        let era = ModelEra::new(&[(1, Mode::NativeStopped)]);
+        let (inbox, inbox_rx) = mpsc::channel();
+        let hook_runs = Arc::new(AtomicUsize::new(0));
+        let mut driver = {
+            let era_hook = Arc::clone(&era);
+            let hook_runs = Arc::clone(&hook_runs);
+            Driver::new(Era(&era), inbox_rx).with_between_stops_hook(move |_drv| {
+                assert!(
+                    !era_hook.is_stop_active(),
+                    "between_stops_hook must never run while a stop is active"
+                );
+                hook_runs.fetch_add(1, Ordering::SeqCst);
+            })
+        };
+        let publishing = driver.publishing_owners_counter();
+        let (grants_tx, grants) = mpsc::sync_channel(1);
+        driver.enroll(1, key(1), grants_tx);
+        let (world, waiter) = driver.enroll_group().into_parts();
+        let (holding_tx, holding) = mpsc::channel::<()>();
+
+        let group = {
+            let inbox = inbox.clone();
+            loom::thread::spawn(move || {
+                let _ = inbox.send(KeeperMsg::BatonRequest);
+                let seen = match world.recv() {
+                    Ok(GroupMsg::World { turn, epoch }) => {
+                        assert!(
+                            !waiter.raised(),
+                            "an interval nobody waits behind starts lowered"
+                        );
+                        let _ = holding_tx.send(());
+                        let raised = (0..WAIT_YIELDS).any(|_| {
+                            let raised = waiter.raised();
+                            if !raised {
+                                loom::thread::yield_now();
+                            }
+                            raised
+                        });
+                        assert!(raised, "the waiter word was never raised");
+                        let _ = inbox.send(KeeperMsg::WorldReturn {
+                            returned: turn,
+                            end: IntervalEnd::Done,
+                        });
+                        Seen::Granted(epoch)
+                    }
+                    Ok(GroupMsg::Poisoned) => Seen::Poisoned,
+                    Err(_) => Seen::Disconnected,
+                };
+                let _ = inbox.send(KeeperMsg::GroupExit);
+                seen
+            })
+        };
+
+        let owner = {
+            let inbox = inbox.clone();
+            let era_owner = Arc::clone(&era);
+            loom::thread::spawn(move || {
+                let _ = holding.recv();
+                publishing.fetch_add(1, Ordering::SeqCst);
+                let _ = inbox.send(KeeperMsg::Wake);
+                era_owner.wait_until_stop_inactive();
+                let _ = inbox.send(KeeperMsg::Request {
+                    owner: 1,
+                    receipt: Receipt {
+                        owner: 1,
+                        generation: generation(),
+                    },
+                });
+                publishing.fetch_sub(1, Ordering::SeqCst);
+                let seen = match grants.recv() {
+                    Ok(GrantMsg::Grant { ticket, epoch }) => {
+                        let _ = inbox.send(KeeperMsg::GiveBack {
+                            owner: 1,
+                            returned: ticket,
+                            end: IntervalEnd::Done,
+                        });
+                        Seen::Granted(epoch)
+                    }
+                    Ok(GrantMsg::Republish) => Seen::Republish,
+                    Ok(GrantMsg::Poisoned) => Seen::Poisoned,
+                    Err(_) => Seen::Disconnected,
+                };
+                let _ = inbox.send(KeeperMsg::Exit { owner: 1 });
+                seen
+            })
+        };
+
+        drop(inbox);
+        let end = driver.run();
+        let group = group.join().unwrap();
+        let owner = owner.join().unwrap();
+        assert_eq!(end, DriverEnd::Drained);
+        assert!(matches!(group, Seen::Granted(_)), "the group: {group:?}");
+        assert!(matches!(owner, Seen::Granted(_)), "the owner: {owner:?}");
+        assert!(
+            hook_runs.load(Ordering::SeqCst) >= 1,
+            "between_stops_hook must run"
+        );
+        let model = era.model.lock().unwrap();
+        let granted: Vec<u64> = model.grants.iter().map(|(client, _)| *client).collect();
+        assert_eq!(granted, [GROUP, 1]);
     });
 }

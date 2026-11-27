@@ -544,9 +544,14 @@ impl<'o, O: KeeperOps> Driver<'o, O> {
 
     /// Share the level-triggered `publishing_owners` counter with enrolled
     /// parallel owners' [`ChannelPort`]s (`E6-P.4`).
-    #[allow(dead_code)]
     pub(crate) fn publishing_owners_counter(&self) -> sync::Arc<sync::atomic::AtomicUsize> {
         sync::Arc::clone(&self.publishing_owners)
+    }
+
+    /// Whether any parallel owner is currently inside the Dekker-protected
+    /// `ChannelPort::publish()` -> `KeeperMsg::Request` window (`E6-P.4`).
+    fn has_publishing_owners(&self) -> bool {
+        self.publishing_owners.load(sync::atomic::Ordering::SeqCst) > 0
     }
 
     /// Install a callback invoked strictly between stops so the keeper thread
@@ -713,6 +718,7 @@ impl<'o, O: KeeperOps> Driver<'o, O> {
                 let status = if self.queued_len() == 0
                     && !self.collect_requested
                     && self.head_hold.is_none()
+                    && !self.has_publishing_owners()
                 {
                     IdleStatus::Idle {
                         enrolled_owners: self.owners.len(),
@@ -1019,10 +1025,7 @@ impl<'o, O: KeeperOps> Driver<'o, O> {
             }
         };
         match end {
-            IntervalEnd::Done
-                if self.wake_pending
-                    || self.publishing_owners.load(sync::atomic::Ordering::SeqCst) > 0 =>
-            {
+            IntervalEnd::Done if self.wake_pending || self.has_publishing_owners() => {
                 Ok(Step::End(batch))
             }
             IntervalEnd::Done => Ok(Step::Next(batch)),
@@ -1062,14 +1065,13 @@ impl<'o, O: KeeperOps> Driver<'o, O> {
             .lend_world()
             .map_err(|CustodyRefused| Breach::Custody)?;
         // A client already waiting behind the group's grant (or an owner
-        // currently publishing in `ChannelPort::request_turn`) ends the
-        // interval at its first switch point (QB2 / E6-P.4 Dekker pair).
-        let owner_publishing = self.publishing_owners.load(sync::atomic::Ordering::SeqCst) > 0;
+        // currently publishing in `ChannelPort`) ends the interval at its
+        // first switch point (QB2 / E6-P.4 Dekker pair).
         self.set_waiter(
             !self.queued.is_empty()
                 || self.collect_requested
                 || self.wake_pending
-                || owner_publishing,
+                || self.has_publishing_owners(),
         );
         if self.send_group(GroupMsg::World { turn, epoch }).is_err() {
             // The bounced message drops the turn, and `held` drops the stop
@@ -1085,10 +1087,7 @@ impl<'o, O: KeeperOps> Driver<'o, O> {
             Settle::Retire(error) => Breach::Rendezvous(error),
         })?;
         match end {
-            IntervalEnd::Done
-                if self.wake_pending
-                    || self.publishing_owners.load(sync::atomic::Ordering::SeqCst) > 0 =>
-            {
+            IntervalEnd::Done if self.wake_pending || self.has_publishing_owners() => {
                 Ok(Step::End(batch))
             }
             IntervalEnd::Done => Ok(Step::Next(batch)),

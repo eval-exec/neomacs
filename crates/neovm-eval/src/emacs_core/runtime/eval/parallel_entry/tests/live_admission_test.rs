@@ -815,6 +815,7 @@ fn e6p4_row13a_park_only_scope_inhibits_explicit_gc_separately_falsifiable() {
                 };
                 let (grants_tx, grants_rx) = mpsc::sync_channel(1);
                 driver.enroll(1, key, grants_tx);
+                let publishing_owners = driver.publishing_owners_counter();
                 ready_tx
                     .send((group_port, inbox_tx.clone()))
                     .expect("send ready");
@@ -822,7 +823,13 @@ fn e6p4_row13a_park_only_scope_inhibits_explicit_gc_separately_falsifiable() {
                 let owner_handle = scope.spawn(move || {
                     let mut owner_ctl = ParallelOwnerControl::from_registered(registered_owner);
                     let mutator = permit.activate(home.heap, home.owner).expect("activate");
-                    let mut port = ChannelPort::new(home.owner, mutator, inbox_tx, grants_rx);
+                    let mut port = ChannelPort::new(
+                        home.owner,
+                        mutator,
+                        inbox_tx,
+                        grants_rx,
+                        publishing_owners,
+                    );
                     let grant = loop {
                         match port.request_turn() {
                             Ok(g) => break g,
@@ -968,13 +975,20 @@ fn e6p4_row13b_collect_only_scope_refuses_condition_wait_separately_falsifiable(
                 };
                 let (grants_tx, grants_rx) = mpsc::sync_channel(1);
                 driver.enroll(1, key, grants_tx);
+                let publishing_owners = driver.publishing_owners_counter();
                 ready_tx
                     .send((group_port, inbox_tx.clone()))
                     .expect("send ready");
 
                 let owner_handle = scope.spawn(move || {
                     let mutator = permit.activate(home.heap, home.owner).expect("activate");
-                    let mut port = ChannelPort::new(home.owner, mutator, inbox_tx, grants_rx);
+                    let mut port = ChannelPort::new(
+                        home.owner,
+                        mutator,
+                        inbox_tx,
+                        grants_rx,
+                        publishing_owners,
+                    );
                     let grant = loop {
                         match port.request_turn() {
                             Ok(g) => break g,
@@ -1245,4 +1259,170 @@ fn e6p4_row11d_panic_after_idle_keeper_spawn_restores_tls_and_solo_active() {
         assert!(control.era_is_open());
         ctx.green_teardown();
     });
+}
+
+/// **E6-P.4-FU1 Row 14 (MEDIUM #1):**
+/// Proves `ChannelPort::publish_idle()` cannot bypass the `publishing_owners`
+/// Dekker guard: when an owner that is already `native` calls `publish_idle()`
+/// while the Baton group holds an active `WorldTurn` stop, `publish_idle()`
+/// runs through `with_published_receipt` (`PublishingGuard` + `KeeperMsg::Wake`),
+/// raises the group's `ring_waiter` so the group releases its stop instead of
+/// deadlocking in `leave_native()`, succeeds with `Ok(())`, and restores
+/// `publishing_owners` to `0`.
+#[test]
+fn e6p4_row14_publish_idle_uses_dekker_guard_while_group_holds_world() {
+    use crate::emacs_core::eval::parallel_entry::keeper_driver::{ChannelPort, Driver, GroupPort};
+    use crate::emacs_core::eval::parallel_entry::owned_source::{PreparedEraStart, keeper_serve};
+    use crate::emacs_core::eval::parallel_entry::serial_park::{PortRefusal, SerialHome};
+    use crate::emacs_core::eval::parallel_entry::thread_control::retire_mutator_rooted;
+    use crate::emacs_core::eval::parallel_entry::world_seat::ParkedWorldSeat;
+    use crate::emacs_core::eval::world::{
+        freeze_live_legacy_roots, prepare_reference_free_transfer, recover_transferred_source,
+    };
+    use neovm_value::tagged::gc::Gen1Admission;
+
+    let mut ctx = green_context(true);
+    let control = ctx.green_control();
+    let _recovery = ctx.retire_empty_dead_windows_table();
+    ctx.tagged_heap.close_alloc_regions();
+    ctx.prepare_parked_root_retirement()
+        .expect("prepare parked root retirement");
+    let parked = unsafe { ParkedWorldSeat::park_seated(&mut ctx) }.expect("park Main");
+    let right = ctx
+        .green_seat()
+        .expect("Main seated")
+        .take_baton()
+        .expect("Main holds Solo");
+    let baton = control.surrender_solo_for_era(right).expect("surrender");
+    ctx.with_green_runtime(|rt| rt.carried.borrow_mut().swap_observations_only());
+    let heap_ptr = ctx.tagged_heap.heap_root().as_ptr();
+    let collector = unsafe { (*heap_ptr).drain_to_quiescent(|_| {}) }.expect("drain");
+    let admission = Gen1Admission::check(collector).expect("GEN1");
+    let frozen = unsafe { freeze_live_legacy_roots(&baton) };
+    let (pending_return, transfer) =
+        unsafe { prepare_reference_free_transfer(admission, baton, frozen) }.expect("transfer");
+    let saved_obs = crate::emacs_core::eval::green::stash_current_thread_observations();
+    let prepared = PreparedEraStart::from_heap_transfer(transfer);
+
+    let (ready_tx, ready_rx) = mpsc::sync_channel(1);
+    let (first_idle_tx, first_idle_rx) = mpsc::sync_channel(1);
+    let (world_held_tx, world_held_rx) = mpsc::sync_channel(1);
+
+    let keeper = std::thread::spawn(move || {
+        keeper_serve(prepared, |era| {
+            std::thread::scope(|scope| {
+                let (inbox_tx, inbox_rx) = mpsc::channel::<KeeperMsg>();
+                let mut driver = Driver::new(era, inbox_rx);
+                let group_link = driver.enroll_group();
+                let group_port = GroupPort::new(inbox_tx.clone(), group_link);
+                let permit = era.register(1, 64).expect("register owner");
+                let key = permit.key();
+                let home = SerialHome {
+                    heap: era.heap_identity(),
+                    owner: 1,
+                };
+                let (grants_tx, grants_rx) = mpsc::sync_channel(1);
+                driver.enroll(1, key, grants_tx);
+                let publishing_owners = driver.publishing_owners_counter();
+                let pub_check = std::sync::Arc::clone(&publishing_owners);
+                ready_tx
+                    .send((group_port, inbox_tx.clone(), pub_check))
+                    .expect("send ready");
+
+                let owner_handle = scope.spawn(move || {
+                    let mutator = permit.activate(home.heap, home.owner).expect("activate");
+                    let mut port = ChannelPort::new(
+                        home.owner,
+                        mutator,
+                        inbox_tx,
+                        grants_rx,
+                        publishing_owners,
+                    );
+                    // First `publish_idle()` enters native mode (`self.native = true`).
+                    loop {
+                        match port.publish_idle() {
+                            Ok(()) => break,
+                            Err(PortRefusal::Retry) => std::thread::yield_now(),
+                            Err(other) => panic!("first publish_idle failed: {other:?}"),
+                        }
+                    }
+                    first_idle_tx.send(()).expect("signal first publish_idle");
+                    // Wait until Baton group holds an active `WorldTurn` stop.
+                    world_held_rx
+                        .recv()
+                        .expect("wait for Baton group WorldTurn");
+                    // Second `publish_idle()` must execute `leave_native()` under
+                    // `PublishingGuard` + `KeeperMsg::Wake` and wake the group.
+                    loop {
+                        match port.publish_idle() {
+                            Ok(()) => break,
+                            Err(PortRefusal::Retry) => std::thread::yield_now(),
+                            Err(other) => panic!("second publish_idle failed: {other:?}"),
+                        }
+                    }
+                    let mutator = port.exit();
+                    retire_mutator_rooted(mutator).expect("retire mutator");
+                });
+
+                let _ = driver.run();
+                owner_handle.join().expect("owner joined");
+            });
+        })
+        .expect("keeper_serve clean")
+        .0
+    });
+
+    let (mut group_port, inbox_tx, pub_check) = ready_rx.recv().expect("keeper ready");
+    first_idle_rx
+        .recv()
+        .expect("owner finished first publish_idle");
+    let (turn, _epoch, lend) = group_port
+        .request_world()
+        .expect("group acquires WorldTurn");
+    assert!(
+        !group_port.ring_waiter(),
+        "Row 14: WorldTurn must start with ring_waiter lowered before second publish_idle()"
+    );
+    world_held_tx.send(()).expect("signal WorldTurn held");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while !group_port.ring_waiter() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "Row 14: publish_idle() did not raise group ring_waiter via Dekker guard + Wake"
+        );
+        std::thread::yield_now();
+    }
+    // Sample `publishing_owners` while `WorldTurn` is still held: the stop is
+    // open, so `leave_native()` cannot have returned and `PublishingGuard` is
+    // deterministically held (`== 1`).
+    let held_while_world_open = pub_check.load(std::sync::atomic::Ordering::SeqCst);
+    group_port.give_back(
+        lend,
+        crate::emacs_core::eval::parallel_entry::world_turn::WorldReturned::from_end(turn),
+    );
+    group_port.exit();
+    drop(inbox_tx);
+
+    let returned_end = keeper.join().expect("keeper joined");
+    assert_eq!(
+        held_while_world_open, 1,
+        "Row 14: publish_idle() must hold publishing_owners == 1 while WorldTurn stop is open"
+    );
+    assert_eq!(
+        pub_check.load(std::sync::atomic::Ordering::SeqCst),
+        0,
+        "Row 14: publishing_owners must return to 0 after publish_idle()"
+    );
+    crate::emacs_core::eval::green::restore_current_thread_observations(saved_obs);
+    let restored = pending_return
+        .restore(returned_end.into_heap_transfer())
+        .expect("restore");
+    let (baton, _roots, pub_) = unsafe { recover_transferred_source(restored) }.expect("recover");
+    ctx.with_green_runtime(|rt| rt.carried.borrow_mut().swap_observations_only());
+    let right = control
+        .restore_surrendered_solo(baton)
+        .expect("restore surrendered solo");
+    parked.resume_with_turn_right(&mut ctx, right);
+    let _ = crate::emacs_core::eval::green::retire_transfer_publication_on_main(&mut ctx, pub_);
+    ctx.green_teardown();
 }

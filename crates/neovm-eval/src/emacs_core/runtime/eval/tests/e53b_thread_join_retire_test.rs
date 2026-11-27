@@ -187,12 +187,19 @@ where
                     .expect("register parallel owner");
                 let (grant_tx, grant_rx) = mpsc::sync_channel(1);
                 driver.enroll(PEER1_OWNER_ID, permit.key(), grant_tx);
+                let publishing_owners = driver.publishing_owners_counter();
                 let peer_inbox = inbox.clone();
                 let peer_control = Arc::clone(&control);
                 let (peer_idle_tx, peer_idle_rx) = mpsc::sync_channel::<()>(1);
                 let peer_handle = scope.spawn(move || {
                     let mutator = activate(permit, heap, PEER1_OWNER_ID);
-                    let mut port = ChannelPort::new(PEER1_OWNER_ID, mutator, peer_inbox, grant_rx);
+                    let mut port = ChannelPort::new(
+                        PEER1_OWNER_ID,
+                        mutator,
+                        peer_inbox,
+                        grant_rx,
+                        publishing_owners,
+                    );
                     let start = Instant::now();
                     let _idle_receipt = loop {
                         match port.publish_idle_receipt_for_test() {
@@ -383,13 +390,16 @@ fn run_in_e53b_two_peer_era<S, M, P1, P2>(
                     .expect("register parallel owner 2");
                 let (g2_tx, g2_rx) = mpsc::sync_channel(1);
                 driver.enroll(PEER2_OWNER_ID, permit2.key(), g2_tx);
+                let p1_pub = driver.publishing_owners_counter();
+                let p2_pub = driver.publishing_owners_counter();
 
                 let p1_inbox = inbox.clone();
                 let p1_control = Arc::clone(&control);
                 let (p1_idle_tx, p1_idle_rx) = mpsc::sync_channel::<()>(1);
                 let p1_handle = scope.spawn(move || {
                     let mutator = activate(permit1, heap, PEER1_OWNER_ID);
-                    let mut port = ChannelPort::new(PEER1_OWNER_ID, mutator, p1_inbox, g1_rx);
+                    let mut port =
+                        ChannelPort::new(PEER1_OWNER_ID, mutator, p1_inbox, g1_rx, p1_pub);
                     let start = Instant::now();
                     let _idle_receipt = loop {
                         match port.publish_idle_receipt_for_test() {
@@ -426,7 +436,8 @@ fn run_in_e53b_two_peer_era<S, M, P1, P2>(
                 let (p2_idle_tx, p2_idle_rx) = mpsc::sync_channel::<()>(1);
                 let p2_handle = scope.spawn(move || {
                     let mutator = activate(permit2, heap, PEER2_OWNER_ID);
-                    let mut port = ChannelPort::new(PEER2_OWNER_ID, mutator, p2_inbox, g2_rx);
+                    let mut port =
+                        ChannelPort::new(PEER2_OWNER_ID, mutator, p2_inbox, g2_rx, p2_pub);
                     let start = Instant::now();
                     let _idle_receipt = loop {
                         match port.publish_idle_receipt_for_test() {

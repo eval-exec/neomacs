@@ -153,6 +153,28 @@ fn main() {
             "                let _ = hold;\n",
         ),
     );
+    // N-L18/N-L19 (E6-P.4-FU1): zero out the `publishing_owners` SeqCst load
+    // so `serve_group`, `serve_owner`, and `IdleQuery` ignore owners mid-publish.
+    write(
+        &out,
+        "driver_core_ignore_publishing_owners.rs",
+        &mutate(
+            &core,
+            "        self.publishing_owners.load(sync::atomic::Ordering::SeqCst) > 0",
+            "        false",
+        ),
+    );
+    // N-L20 (E6-P.4-FU1): `KeeperMsg::Wake` inside `await_world` leaves
+    // `ring_waiter` lowered.
+    write(
+        &out,
+        "driver_core_silent_wake.rs",
+        &mutate(
+            &core,
+            "                KeeperMsg::Wake => {\n                    self.wake_pending = true;\n                    self.set_waiter(true);\n                }",
+            "                KeeperMsg::Wake => {\n                    self.wake_pending = true;\n                }",
+        ),
+    );
     // N-L1: the ring commits at the head, so it grants newest first.
     write(
         &out,

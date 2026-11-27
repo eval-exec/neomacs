@@ -164,6 +164,35 @@ mod misrouted_grant {
     include!("model.rs");
 }
 
+/// N-L18/N-L19 (E6-P.4-FU1): `has_publishing_owners()` returns false.
+#[allow(dead_code, unused)]
+mod ignore_publishing_owners {
+    use crate::sync;
+    mod control {
+        include!(concat!(env!("OUT_DIR"), "/control.rs"));
+    }
+    mod driver_core {
+        include!(concat!(
+            env!("OUT_DIR"),
+            "/driver_core_ignore_publishing_owners.rs"
+        ));
+    }
+    include!("model.rs");
+}
+
+/// N-L20 (E6-P.4-FU1): `KeeperMsg::Wake` inside `await_world` leaves waiter down.
+#[allow(dead_code, unused)]
+mod silent_wake {
+    use crate::sync;
+    mod control {
+        include!(concat!(env!("OUT_DIR"), "/control.rs"));
+    }
+    mod driver_core {
+        include!(concat!(env!("OUT_DIR"), "/driver_core_silent_wake.rs"));
+    }
+    include!("model.rs");
+}
+
 /// L1 + L3/L4/L5 + L7.
 #[test]
 fn two_owners_one_turn_each_in_commit_order() {
@@ -324,4 +353,43 @@ fn negative_a_tail_requeue_lets_the_queued_owner_in_first() {
 #[test]
 fn a_collecting_owner_that_exits_gives_up_the_head() {
     real::a_collecting_owner_that_exits_gives_up_the_head();
+}
+
+/// L18 (E6-P.4-FU1): Dekker pair when `Wake` is consumed in `between_stops`
+/// before `serve_group` opens the Baton-group stop.
+#[test]
+fn a_publishing_owner_wakes_group_after_wake_consumed_between_stops() {
+    real::a_publishing_owner_wakes_group_after_wake_consumed_between_stops();
+}
+
+#[test]
+#[should_panic(expected = "the waiter word was never raised for a publishing owner")]
+fn negative_ignoring_publishing_owners_misses_wake_consumed_between_stops() {
+    ignore_publishing_owners::a_publishing_owner_wakes_group_after_wake_consumed_between_stops();
+}
+
+/// L19 (E6-P.4-FU1): `IdleQuery` reports `Busy` while `publishing_owners > 0`.
+#[test]
+fn idle_query_reports_busy_while_owner_is_publishing() {
+    real::idle_query_reports_busy_while_owner_is_publishing();
+}
+
+#[test]
+#[should_panic(expected = "idle query must report Busy while an owner is publishing")]
+fn negative_ignoring_publishing_owners_reports_false_idle() {
+    ignore_publishing_owners::idle_query_reports_busy_while_owner_is_publishing();
+}
+
+/// L20 (E6-P.4-FU1): `KeeperMsg::Wake` arriving during `await_world` raises
+/// `ring_waiter`, breaks out of the stop, and runs `between_stops_hook`
+/// strictly outside any stop.
+#[test]
+fn wake_during_world_raises_waiter_and_runs_between_stops_hook() {
+    real::wake_during_world_raises_waiter_and_runs_between_stops_hook();
+}
+
+#[test]
+#[should_panic(expected = "the waiter word was never raised")]
+fn negative_silent_wake_in_await_world_leaves_waiter_lowered() {
+    silent_wake::wake_during_world_raises_waiter_and_runs_between_stops_hook();
 }

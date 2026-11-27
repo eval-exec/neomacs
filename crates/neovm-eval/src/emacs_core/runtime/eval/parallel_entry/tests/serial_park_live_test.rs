@@ -155,6 +155,7 @@ struct DriverKit<'era> {
     home: SerialHome,
     inbox: mpsc::Sender<KeeperMsg>,
     grants: mpsc::Receiver<GrantMsg>,
+    publishing_owners: std::sync::Arc<std::sync::atomic::AtomicUsize>,
 }
 
 /// OWNER's standalone Context, kept dormant.
@@ -178,6 +179,7 @@ impl<'era> DriverKit<'era> {
             activate(self.permit, self.home.heap, self.home.owner),
             self.inbox,
             self.grants,
+            self.publishing_owners,
         );
         (state, self.home, port)
     }
@@ -209,6 +211,7 @@ fn enroll_driver<'k>(
         },
         inbox: inbox.clone(),
         grants,
+        publishing_owners: driver.publishing_owners_counter(),
     }
 }
 
@@ -3435,6 +3438,7 @@ fn run_l67c_a_serial_turn_make_list_row(pre_freeze_cons: bool) {
                         activate(owner_kit.permit, home.heap, home.owner),
                         owner_kit.inbox,
                         owner_kit.grants,
+                        owner_kit.publishing_owners,
                     );
                     ready_tx.send(()).expect("signal serial owner ready");
 
@@ -3588,6 +3592,7 @@ fn l67c_b_serial_turn_cons_without_safepoint_closes_alloc_regions_on_detach() {
                         activate(owner_kit.permit, home.heap, home.owner),
                         owner_kit.inbox,
                         owner_kit.grants,
+                        owner_kit.publishing_owners,
                     );
                     ready_tx.send(()).expect("signal serial owner ready");
 
@@ -3836,6 +3841,7 @@ fn l67c_c_serial_turn_garbage_collect_subr_and_bytecode_run_first_and_resume_at_
                         activate(b_kit.permit, home.heap, home.owner),
                         b_kit.inbox,
                         b_kit.grants,
+                        b_kit.publishing_owners,
                     );
                     let receipt = port
                         .publish_idle_receipt_for_test()
@@ -3876,6 +3882,7 @@ fn l67c_c_serial_turn_garbage_collect_subr_and_bytecode_run_first_and_resume_at_
                         activate(o_kit.permit, home.heap, home.owner),
                         o_kit.inbox,
                         o_kit.grants,
+                        o_kit.publishing_owners,
                     );
                     let mut port = EpochPort::new(&mut raw_port);
                     let granted = port.request_turn().ok().expect("O granted");
@@ -4031,6 +4038,7 @@ fn l67c_c_serial_turn_garbage_collect_preserves_parked_turn_only_roots_and_recla
                         activate(o_kit.permit, home.heap, home.owner),
                         o_kit.inbox,
                         o_kit.grants,
+                        o_kit.publishing_owners,
                     );
                     let granted = port.request_turn().ok().expect("O granted");
                     let mut turn = begin_turn(&mut state, home, granted, &mut port, standalone)
@@ -4114,6 +4122,7 @@ fn l67c_c_serial_turn_inner_inhibit_suppresses_explicit_garbage_collect() {
                         activate(o_kit.permit, home.heap, home.owner),
                         o_kit.inbox,
                         o_kit.grants,
+                        o_kit.publishing_owners,
                     );
                     let mut port = EpochPort::new(&mut raw_port);
                     let granted = port.request_turn().ok().expect("O granted");
@@ -4205,6 +4214,7 @@ fn l67c_c_q4b_outer_and_nested_inhibit_base_preservation() {
                         activate(o_kit.permit, home.heap, home.owner),
                         o_kit.inbox,
                         o_kit.grants,
+                        o_kit.publishing_owners,
                     );
                     let mut port = EpochPort::new(&mut raw_port);
                     let granted = port.request_turn().ok().expect("O granted");
@@ -4295,6 +4305,7 @@ fn l67c_c_serial_turn_garbage_collect_maybe_routes_through_keeper_when_threshold
                         activate(o_kit.permit, home.heap, home.owner),
                         o_kit.inbox,
                         o_kit.grants,
+                        o_kit.publishing_owners,
                     );
                     let mut port = EpochPort::new(&mut raw_port);
                     let granted = port.request_turn().ok().expect("O granted");
@@ -4408,6 +4419,7 @@ fn l67c_c_serial_turn_collect_poisoned_era_fails_closed_without_direct_gc() {
                         activate(o_kit.permit, home.heap, home.owner),
                         o_kit.inbox,
                         o_kit.grants,
+                        o_kit.publishing_owners,
                     );
                     let granted = port.request_turn().ok().expect("O Turn 1 granted");
                     let mut gc_before_call = before;
@@ -4554,6 +4566,7 @@ fn l67c_c_serial_turn_collect_unwind_during_head_hold_releases_head_via_exit() {
                         activate(b_kit.permit, home.heap, home.owner),
                         b_kit.inbox,
                         b_kit.grants,
+                        b_kit.publishing_owners,
                     );
                     let receipt = port
                         .publish_idle_receipt_for_test()
@@ -4592,6 +4605,7 @@ fn l67c_c_serial_turn_collect_unwind_during_head_hold_releases_head_via_exit() {
                         activate(o_kit.permit, home.heap, home.owner),
                         o_kit.inbox,
                         o_kit.grants,
+                        o_kit.publishing_owners,
                     );
                     let mut fault_port = PanicDuringHeadHoldPort {
                         port: &mut raw_port,
@@ -4716,6 +4730,7 @@ fn l67c_c_serial_turn_collect_preserves_jit_redefined_function_pin() {
                         activate(o_kit.permit, home.heap, home.owner),
                         o_kit.inbox,
                         o_kit.grants,
+                        o_kit.publishing_owners,
                     );
                     let granted = port.request_turn().ok().expect("O granted");
                     let mut turn = begin_turn(&mut state, home, granted, &mut port, standalone)
@@ -4883,6 +4898,7 @@ fn l67c_c_serial_turn_collect_permanent_port_failure_releases_head_via_exit() {
                         activate(b_kit.permit, home.heap, home.owner),
                         b_kit.inbox,
                         b_kit.grants,
+                        b_kit.publishing_owners,
                     );
                     let receipt = port
                         .publish_idle_receipt_for_test()
@@ -4921,6 +4937,7 @@ fn l67c_c_serial_turn_collect_permanent_port_failure_releases_head_via_exit() {
                         activate(o_kit.permit, home.heap, home.owner),
                         o_kit.inbox,
                         o_kit.grants,
+                        o_kit.publishing_owners,
                     );
                     let mut fault_port = PermanentFailDuringHeadHoldPort {
                         port: &mut raw_port,
@@ -5022,6 +5039,7 @@ fn l67c_c_raw_with_world_inhibits_explicit_gc_and_direct_collect() {
                         activate(o_kit.permit, home.heap, home.owner),
                         o_kit.inbox,
                         o_kit.grants,
+                        o_kit.publishing_owners,
                     );
                     let granted = port.request_turn().ok().expect("O granted");
                     let mut turn = begin_turn(&mut state, home, granted, &mut port, standalone)
@@ -5104,6 +5122,7 @@ fn phase_0c_detach_serial_owner_for_collect_panics_inside_heap_mut_closure() {
                         activate(o_kit.permit, home.heap, home.owner),
                         o_kit.inbox,
                         o_kit.grants,
+                        o_kit.publishing_owners,
                     );
                     let mut port = EpochPort::new(&mut raw_port);
                     let granted = port.request_turn().ok().expect("O granted");

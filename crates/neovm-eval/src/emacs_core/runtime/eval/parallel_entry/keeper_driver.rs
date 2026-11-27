@@ -329,8 +329,10 @@ impl Drop for ChannelLend {
 }
 
 /// The product [`KeeperPort`]: the owner's era mutator, the keeper's inbox,
-/// and this owner's grant channel. Each request publishes again: a receipt is
-/// single-use, and the request is committed under the new publication.
+/// this owner's grant channel, and the driver's level-triggered
+/// `publishing_owners` counter (`E6-P.4`). Each request publishes again: a
+/// receipt is single-use, and the request is committed under the new
+/// publication.
 pub(crate) struct ChannelPort<'era> {
     owner: u64,
     mutator: Mutator<'era>,
@@ -338,31 +340,24 @@ pub(crate) struct ChannelPort<'era> {
     exited: bool,
     inbox: mpsc::Sender<KeeperMsg>,
     grants: mpsc::Receiver<GrantMsg>,
-    publishing_owners: Option<std::sync::Arc<std::sync::atomic::AtomicUsize>>,
+    publishing_owners: std::sync::Arc<std::sync::atomic::AtomicUsize>,
 }
 
 struct PublishingGuard<'a> {
-    counter: Option<&'a std::sync::atomic::AtomicUsize>,
+    counter: &'a std::sync::atomic::AtomicUsize,
 }
 
 impl<'a> PublishingGuard<'a> {
-    fn enter(counter: Option<&'a std::sync::Arc<std::sync::atomic::AtomicUsize>>) -> Self {
-        if let Some(counter) = counter {
-            counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            Self {
-                counter: Some(&**counter),
-            }
-        } else {
-            Self { counter: None }
-        }
+    fn enter(counter: &'a std::sync::atomic::AtomicUsize) -> Self {
+        counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Self { counter }
     }
 }
 
 impl Drop for PublishingGuard<'_> {
     fn drop(&mut self) {
-        if let Some(counter) = self.counter {
-            counter.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
-        }
+        self.counter
+            .fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
     }
 }
 
@@ -375,6 +370,7 @@ impl<'era> ChannelPort<'era> {
         mutator: Mutator<'era>,
         inbox: mpsc::Sender<KeeperMsg>,
         grants: mpsc::Receiver<GrantMsg>,
+        publishing_owners: std::sync::Arc<std::sync::atomic::AtomicUsize>,
     ) -> Self {
         Self {
             owner,
@@ -383,16 +379,8 @@ impl<'era> ChannelPort<'era> {
             exited: false,
             inbox,
             grants,
-            publishing_owners: None,
+            publishing_owners,
         }
-    }
-
-    pub(crate) fn with_publishing_owners(
-        mut self,
-        publishing_owners: std::sync::Arc<std::sync::atomic::AtomicUsize>,
-    ) -> Self {
-        self.publishing_owners = Some(publishing_owners);
-        self
     }
 
     /// The owner is done: tell the keeper and hand the mutator back for its
@@ -407,8 +395,11 @@ impl<'era> ChannelPort<'era> {
 
     /// Publish and stay NativeStopped without asking for a turn, so a stop
     /// does not wait on this owner while it waits for something else.
+    ///
+    /// Runs under [`PublishingGuard`] via [`Self::with_published_receipt`] so
+    /// `publish_idle()` can never bypass the Dekker guard (`E6-P.4-FU1`).
     pub(crate) fn publish_idle(&mut self) -> Result<(), PortRefusal> {
-        self.publish().map(drop)
+        self.with_published_receipt(|_, _| ())
     }
 
     /// Test-only helper: publish and stay `NativeStopped` while returning the
@@ -417,12 +408,12 @@ impl<'era> ChannelPort<'era> {
     /// `RingWaiter` raise during an active Baton-group interval).
     #[cfg(test)]
     pub(crate) fn publish_idle_receipt_for_test(&mut self) -> Result<PublishedOwner, PortRefusal> {
-        self.publish()
+        self.with_published_receipt(|_, receipt| receipt)
     }
 
     /// Test-only helper: send `KeeperMsg::Request` using a pre-published
-    /// `PublishedOwner` receipt (falling back to normal `publish()` if the
-    /// keeper asks for `Republish`), then wait for `GrantMsg::Grant`.
+    /// `PublishedOwner` receipt (falling back to normal Dekker-guarded publish
+    /// if the keeper asks for `Republish`), then wait for `GrantMsg::Grant`.
     #[cfg(test)]
     pub(crate) fn request_turn_with_receipt_for_test(
         &mut self,
@@ -430,19 +421,31 @@ impl<'era> ChannelPort<'era> {
     ) -> Result<(Grant, ChannelLend), PortRefusal> {
         let mut pending = Some(initial_receipt);
         for _ in 0..=REPUBLISH_LIMIT {
-            let receipt = match pending.take() {
-                Some(receipt) => receipt,
-                None => self.publish()?,
+            let (generation, sent) = match pending.take() {
+                Some(receipt) => {
+                    let (_, generation, _) = receipt.serial_facts();
+                    let sent = self
+                        .inbox
+                        .send(KeeperMsg::Request {
+                            owner: self.owner,
+                            receipt,
+                        })
+                        .is_ok();
+                    (generation, sent)
+                }
+                None => self.with_published_receipt(|this, receipt| {
+                    let (_, generation, _) = receipt.serial_facts();
+                    let sent = this
+                        .inbox
+                        .send(KeeperMsg::Request {
+                            owner: this.owner,
+                            receipt,
+                        })
+                        .is_ok();
+                    (generation, sent)
+                })?,
             };
-            let (_, generation, _) = receipt.serial_facts();
-            if self
-                .inbox
-                .send(KeeperMsg::Request {
-                    owner: self.owner,
-                    receipt,
-                })
-                .is_err()
-            {
+            if !sent {
                 return Err(PortRefusal::Poisoned);
             }
             match self.grants.recv() {
@@ -482,43 +485,56 @@ impl<'era> ChannelPort<'era> {
         }
     }
 
-    /// Publish again: leave native first if the last request entered it.
-    fn publish(&mut self) -> Result<PublishedOwner, PortRefusal> {
-        let mutator = &mut self.mutator;
-        let inbox = &self.inbox;
-        if self.native {
-            // Wake the keeper BEFORE calling `leave_native()` (E6-P.4):
-            // `leave_native()` blocks inside `prepare_restore()`'s condvar
-            // while a Baton-group `WorldTurn` stop is open rather than
-            // returning `Busy`, so without an upfront `Wake` to raise
-            // `ring_waiter`, a Baton thread polling `(thread-yield)` would
-            // never release its stop and `leave_native()` would deadlock.
-            let _ = inbox.send(KeeperMsg::Wake);
+    /// Sole publish path on [`ChannelPort`]: holds [`PublishingGuard`] (SeqCst
+    /// increment of `publishing_owners`, Dekker pair with `Driver::serve_group`
+    /// and `Driver::serve_owner`) across `leave_native()`,
+    /// `publish_native_owner()`, and `after(self, receipt)` so no entry point
+    /// (`publish_idle`, `request_turn`, or test helpers) can bypass the guard.
+    fn with_published_receipt<R>(
+        &mut self,
+        after: impl FnOnce(&mut Self, PublishedOwner) -> R,
+    ) -> Result<R, PortRefusal> {
+        let counter = std::sync::Arc::clone(&self.publishing_owners);
+        let _publishing = PublishingGuard::enter(&counter);
+        let receipt = {
+            let mutator = &mut self.mutator;
+            let inbox = &self.inbox;
+            if self.native {
+                // Wake the keeper BEFORE calling `leave_native()` (E6-P.4):
+                // `leave_native()` blocks inside `prepare_restore()`'s condvar
+                // while a Baton-group `WorldTurn` stop is open rather than
+                // returning `Busy`, so without an upfront `Wake` + `publishing_owners`
+                // Dekker pair to raise `ring_waiter`, a Baton thread polling
+                // `(thread-yield)` would never release its stop and
+                // `leave_native()` would deadlock.
+                let _ = inbox.send(KeeperMsg::Wake);
+                match driver_core::retry_contended(busy, || {
+                    let res = mutator.leave_native().map(|_| ());
+                    if matches!(res, Err(RendezvousError::Busy)) {
+                        let _ = inbox.send(KeeperMsg::Wake);
+                    }
+                    res
+                }) {
+                    Ok(()) => {}
+                    Err(err) => return Err(Self::map_publish_error(err)),
+                }
+                self.native = false;
+            }
             match driver_core::retry_contended(busy, || {
-                let res = mutator.leave_native().map(|_| ());
+                let res = mutator.publish_native_owner(&[]);
                 if matches!(res, Err(RendezvousError::Busy)) {
                     let _ = inbox.send(KeeperMsg::Wake);
                 }
                 res
             }) {
-                Ok(()) => {}
+                Ok(receipt) => {
+                    self.native = true;
+                    receipt
+                }
                 Err(err) => return Err(Self::map_publish_error(err)),
             }
-            self.native = false;
-        }
-        match driver_core::retry_contended(busy, || {
-            let res = mutator.publish_native_owner(&[]);
-            if matches!(res, Err(RendezvousError::Busy)) {
-                let _ = inbox.send(KeeperMsg::Wake);
-            }
-            res
-        }) {
-            Ok(receipt) => {
-                self.native = true;
-                Ok(receipt)
-            }
-            Err(err) => Err(Self::map_publish_error(err)),
-        }
+        };
+        Ok(after(self, receipt))
     }
 }
 
@@ -544,24 +560,20 @@ impl KeeperPort for ChannelPort<'_> {
 
     fn request_turn(&mut self) -> Result<(Grant, ChannelLend), PortRefusal> {
         for _ in 0..=REPUBLISH_LIMIT {
-            let (generation, sent) = {
-                // Dekker pair with `Driver::serve_group`: increment
-                // `publishing_owners` (SeqCst) BEFORE `publish()` sends
-                // `KeeperMsg::Wake` and enters `leave_native()`, and hold it
-                // until `KeeperMsg::Request` is enqueued in `inbox`.
-                let counter = self.publishing_owners.clone();
-                let _publishing = PublishingGuard::enter(counter.as_ref());
-                let receipt = self.publish()?;
+            // `with_published_receipt` holds `PublishingGuard` across
+            // `leave_native()`, `publish_native_owner()`, and enqueuing
+            // `KeeperMsg::Request` in `inbox`.
+            let (generation, sent) = self.with_published_receipt(|this, receipt| {
                 let (_, generation, _) = receipt.serial_facts();
-                let sent = self
+                let sent = this
                     .inbox
                     .send(KeeperMsg::Request {
-                        owner: self.owner,
+                        owner: this.owner,
                         receipt,
                     })
                     .is_ok();
                 (generation, sent)
-            };
+            })?;
             if !sent {
                 return Err(PortRefusal::Poisoned);
             }

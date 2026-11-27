@@ -1018,8 +1018,7 @@ fn run_parallel_opt_in_owner<'era>(
     let control = Arc::clone(owner.control());
     let wake_inbox = inbox.clone();
     let mutator = activate_owner_permit(permit, home, &wake_inbox);
-    let mut port = ChannelPort::new(home.owner, mutator, inbox, grants)
-        .with_publishing_owners(publishing_owners);
+    let mut port = ChannelPort::new(home.owner, mutator, inbox, grants, publishing_owners);
 
     // Acquire our first SerialSeat BEFORE touching World or constructing Context.
     let initial_grant = loop {

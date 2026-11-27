@@ -137,12 +137,19 @@ where
                     .expect("register parallel owner");
                 let (grant_tx, grant_rx) = mpsc::sync_channel(1);
                 driver.enroll(PEER_OWNER_ID, permit.key(), grant_tx);
+                let publishing_owners = driver.publishing_owners_counter();
                 let peer_inbox = inbox.clone();
                 let peer_control = Arc::clone(&control);
                 let (peer_idle_tx, peer_idle_rx) = mpsc::sync_channel::<()>(1);
                 let peer_handle = scope.spawn(move || {
                     let mutator = activate(permit, heap, PEER_OWNER_ID);
-                    let mut port = ChannelPort::new(PEER_OWNER_ID, mutator, peer_inbox, grant_rx);
+                    let mut port = ChannelPort::new(
+                        PEER_OWNER_ID,
+                        mutator,
+                        peer_inbox,
+                        grant_rx,
+                        publishing_owners,
+                    );
                     let start = Instant::now();
                     let _idle_receipt = loop {
                         match port.publish_idle_receipt_for_test() {
@@ -1336,6 +1343,8 @@ fn e53a_row6_parallel_only_deadlock_detected_by_parallel_owner_park_path() {
             let (g2_tx, g2_rx) = mpsc::sync_channel(1);
             driver.enroll(PEER_OWNER_ID, p1_permit.key(), g1_tx);
             driver.enroll(PEER2_OWNER_ID, p2_permit.key(), g2_tx);
+            let pub1 = driver.publishing_owners_counter();
+            let pub2 = driver.publishing_owners_counter();
 
             let k1 = ThreadKey::Worker(NonZeroU64::new(91).unwrap());
             let k2 = ThreadKey::Worker(NonZeroU64::new(92).unwrap());
@@ -1349,7 +1358,7 @@ fn e53a_row6_parallel_only_deadlock_detected_by_parallel_owner_park_path() {
                 let inbox1 = inbox.clone();
                 let h1 = scope.spawn(move || {
                     let mutator = activate(p1_permit, heap, PEER_OWNER_ID);
-                    let port = ChannelPort::new(PEER_OWNER_ID, mutator, inbox1, g1_rx);
+                    let port = ChannelPort::new(PEER_OWNER_ID, mutator, inbox1, g1_rx, pub1);
                     let owner = ParallelOwnerControl::register(Arc::clone(&c1), k1);
                     c1.begin_parallel_wait(k1, Wait::Mutex(mx1));
                     let outcome = c1.wait_parallel_parked(k1, owner.wake(), &port);
@@ -1369,7 +1378,7 @@ fn e53a_row6_parallel_only_deadlock_detected_by_parallel_owner_park_path() {
                 let inbox2 = inbox;
                 let h2 = scope.spawn(move || {
                     let mutator = activate(p2_permit, heap, PEER2_OWNER_ID);
-                    let port = ChannelPort::new(PEER2_OWNER_ID, mutator, inbox2, g2_rx);
+                    let port = ChannelPort::new(PEER2_OWNER_ID, mutator, inbox2, g2_rx, pub2);
                     let owner = ParallelOwnerControl::register(Arc::clone(&c2), k2);
                     c2.begin_parallel_wait(k2, Wait::Mutex(mx2));
                     let outcome = c2.wait_parallel_parked(k2, owner.wake(), &port);

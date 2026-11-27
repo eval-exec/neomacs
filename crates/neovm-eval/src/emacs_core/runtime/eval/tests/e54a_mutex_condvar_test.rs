@@ -166,12 +166,19 @@ where
                     .expect("register parallel owner");
                 let (grant_tx, grant_rx) = mpsc::sync_channel(1);
                 driver.enroll(PEER1_OWNER_ID, permit.key(), grant_tx);
+                let publishing_owners = driver.publishing_owners_counter();
                 let peer_inbox = inbox.clone();
                 let peer_control = Arc::clone(&control);
                 let (peer_idle_tx, peer_idle_rx) = mpsc::sync_channel::<()>(1);
                 let peer_handle = scope.spawn(move || {
                     let mutator = activate(permit, heap, PEER1_OWNER_ID);
-                    let mut port = ChannelPort::new(PEER1_OWNER_ID, mutator, peer_inbox, grant_rx);
+                    let mut port = ChannelPort::new(
+                        PEER1_OWNER_ID,
+                        mutator,
+                        peer_inbox,
+                        grant_rx,
+                        publishing_owners,
+                    );
                     let start = Instant::now();
                     let _idle_receipt = loop {
                         match port.publish_idle_receipt_for_test() {
