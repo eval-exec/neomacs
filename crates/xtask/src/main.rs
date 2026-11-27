@@ -5018,9 +5018,10 @@ Options:
                       would rebuild, and build nothing. Needs no profile.
                       Exit 0 = up to date, 1 = work needed. Covers COMPILE_FIRST,
                       preloaded, MAIN_FIRST and compile-main (with its dependency
-                      closure) plus subdirs.el; leim, semantic grammars,
-                      loaddefs and custom/finder data are regenerated
-                      unconditionally by fresh-build and are not evaluated.
+                      closure), subdirs.el, and the leim, semantic grammar and
+                      custom/finder generated sources. loaddefs is always
+                      scanned by its generator (which writes only when the
+                      content changed) and is not evaluated statically.
   --low-memory        Bound every Cargo compile to one job; slower, but avoids
                       the release-link OOM reported on 8 GiB WSL/Nix machines
   --jobs N            Bound every Cargo compile to positive job count N

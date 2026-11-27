@@ -1435,6 +1435,60 @@ fn check_reports_a_dangling_subdirs_symlink() {
 }
 
 #[test]
+fn check_reports_stale_leim_generation_and_its_bytecode() {
+    let (root, lisp) = check_fixture("COMPILE_FIRST =\nMAIN_FIRST =\n");
+    write_fresh_elc(&lisp.join("loadup.el"));
+    let source = root.join("leim/CXTERM-DIC/Punct.tit");
+    fs::create_dir_all(source.parent().unwrap()).unwrap();
+    let output = lisp.join("leim/quail/Punct.el");
+    fs::create_dir_all(output.parent().unwrap()).unwrap();
+    fs::write(&output, "(provide 'Punct)\n").unwrap();
+    write_fresh_elc(&output);
+    write_file_newer_than(&source, "tit", &output);
+
+    let report = crate::rebuild_check::check(&check_options(&root)).unwrap();
+
+    assert_eq!(report.generated.leim, vec![output.clone()]);
+    assert_eq!(report.generated.leim_total, 1);
+    assert!(
+        report.compile_main.files.contains(&output),
+        "a regenerated .el makes its current .elc stale"
+    );
+}
+
+#[test]
+fn check_reports_stale_semantic_grammar() {
+    let (root, lisp) = check_fixture("COMPILE_FIRST =\nMAIN_FIRST =\n");
+    write_fresh_elc(&lisp.join("loadup.el"));
+    let grammar = lisp.join("cedet/semantic/bovine/grammar.el");
+    fs::create_dir_all(grammar.parent().unwrap()).unwrap();
+    fs::write(&grammar, "(provide 'grammar)\n").unwrap();
+    let output = lisp.join("cedet/semantic/bovine/c-by.el");
+    fs::write(&output, "(provide 'c-by)\n").unwrap();
+    let source = root.join("admin/grammars/c.by");
+    fs::create_dir_all(source.parent().unwrap()).unwrap();
+    write_file_newer_than(&source, "grammar", &output);
+
+    let report = crate::rebuild_check::check(&check_options(&root)).unwrap();
+
+    assert_eq!(report.generated.semantic, vec![output]);
+    assert_eq!(report.generated.semantic_total, 1);
+}
+
+#[test]
+fn check_reports_leim_list_regeneration() {
+    let (root, lisp) = check_fixture("COMPILE_FIRST =\nMAIN_FIRST =\n");
+    write_fresh_elc(&lisp.join("loadup.el"));
+    let leim_ext = root.join("leim/leim-ext.el");
+    fs::create_dir_all(leim_ext.parent().unwrap()).unwrap();
+    fs::write(&leim_ext, "").unwrap();
+
+    let report = crate::rebuild_check::check(&check_options(&root)).unwrap();
+
+    assert!(report.generated.leim_list);
+}
+
+#[test]
 fn check_reports_subdirs_drift_and_round_trips_through_update() {
     let (root, lisp) = check_fixture("COMPILE_FIRST =\nMAIN_FIRST =\n");
     write_fresh_elc(&lisp.join("loadup.el"));
@@ -3076,6 +3130,22 @@ fn check_options(root: &Path) -> FreshBuildOptions {
 
 fn write_fresh_elc(source: &Path) {
     write_elc_newer_than(source, source);
+}
+
+fn write_file_newer_than(path: &Path, contents: &str, older: &Path) {
+    let older_mtime = fs::metadata(older).unwrap().modified().unwrap();
+    for attempt in 0..200 {
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        fs::write(path, format!("{contents} {attempt}\n")).unwrap();
+        if fs::metadata(path).unwrap().modified().unwrap() > older_mtime {
+            return;
+        }
+    }
+    panic!(
+        "{} did not become newer than {}",
+        path.display(),
+        older.display()
+    );
 }
 
 fn tempdir() -> PathBuf {
