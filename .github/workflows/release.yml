@@ -95,12 +95,12 @@ jobs:
           fi
           if [[ "$target" == "x86_64-unknown-linux-gnu" ]]; then
             profile=release-pgo
-            env -u RUST_LOG cargo xtask fresh-build --profile "$profile" --features "$RELEASE_FEATURES"
+            env -u RUST_LOG cargo xtask fresh-build --profile "$profile" --features "$RELEASE_FEATURES" --bootstrap-clean
           else
             profile=release
             env -u RUST_LOG NEOMACS_BUILD_PROFILE=release cargo build -p neomacs \
               --features "$RELEASE_FEATURES" --profile release
-            env -u RUST_LOG cargo xtask fresh-build --release --features "$RELEASE_FEATURES" --skip-build
+            env -u RUST_LOG cargo xtask fresh-build --release --features "$RELEASE_FEATURES" --skip-build --bootstrap-clean
           fi
           target_root="${CARGO_TARGET_DIR:-$GITHUB_WORKSPACE/target}"
           if [[ "$target_root" != /* ]]; then
@@ -310,12 +310,12 @@ jobs:
           fi
           if [[ "$target" == "x86_64-unknown-linux-gnu" ]]; then
             profile=release-pgo
-            env -u RUST_LOG cargo xtask fresh-build --profile "$profile" --features "$RELEASE_FEATURES"
+            env -u RUST_LOG cargo xtask fresh-build --profile "$profile" --features "$RELEASE_FEATURES" --bootstrap-clean
           else
             profile=release
             env -u RUST_LOG NEOMACS_BUILD_PROFILE=release cargo build -p neomacs \
               --features "$RELEASE_FEATURES" --profile release
-            env -u RUST_LOG cargo xtask fresh-build --release --features "$RELEASE_FEATURES" --skip-build
+            env -u RUST_LOG cargo xtask fresh-build --release --features "$RELEASE_FEATURES" --skip-build --bootstrap-clean
           fi
           target_root="${CARGO_TARGET_DIR:-$GITHUB_WORKSPACE/target}"
           if [[ "$target_root" != /* ]]; then
@@ -460,7 +460,7 @@ jobs:
         run: cargo build -p neomacs --features "$RELEASE_FEATURES" --profile release
 
       - name: Bootstrap and dump
-        run: cargo xtask fresh-build --release --features "$RELEASE_FEATURES" --skip-build
+        run: cargo xtask fresh-build --release --features "$RELEASE_FEATURES" --skip-build --bootstrap-clean
 
       - name: Configure Developer ID signing and notarization
         id: macos-signing
@@ -548,7 +548,7 @@ jobs:
         run: cargo build -p neomacs --features "$RELEASE_FEATURES" --profile release
 
       - name: Bootstrap and dump
-        run: cargo xtask fresh-build --release --features "$RELEASE_FEATURES" --skip-build
+        run: cargo xtask fresh-build --release --features "$RELEASE_FEATURES" --skip-build --bootstrap-clean
 
       - name: Configure Developer ID signing and notarization
         id: macos-signing
@@ -655,7 +655,7 @@ jobs:
           # it HOME explicitly (a real Windows session always has one; GNU's
           # w32.c init_environment likewise guarantees HOME is set).
           export HOME="${USERPROFILE:-$GITHUB_WORKSPACE}"
-          cargo xtask fresh-build --release --features "$RELEASE_FEATURES" --skip-build
+          cargo xtask fresh-build --release --features "$RELEASE_FEATURES" --skip-build --bootstrap-clean
 
       - name: Set version env (bash)
         shell: bash

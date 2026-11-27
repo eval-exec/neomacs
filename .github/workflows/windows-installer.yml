@@ -113,7 +113,7 @@ jobs:
         shell: bash
         timeout-minutes: 150
         run: |
-          cargo xtask fresh-build --release
+          cargo xtask fresh-build --release --bootstrap-clean
           sha256sum target/release/neomacs.exe target/release/neomacs.pdump \
             target/release/runneomacs.exe target/release/cmdproxy.exe > "$RUNNER_TEMP/launcher-runtime.sha256"
 

@@ -178,7 +178,7 @@ for k in sorted_keys:
     print(f"  {k}={build_env[k]}", flush=True)
 print("=== END BUILD ENVIRONMENT ===", flush=True)
 
-fresh_cmd = ["cargo", "xtask", "fresh-build", "--release"]
+fresh_cmd = ["cargo", "xtask", "fresh-build", "--release", "--bootstrap-clean"]
 if jobs:
     fresh_cmd.extend(["--jobs", jobs])
 
