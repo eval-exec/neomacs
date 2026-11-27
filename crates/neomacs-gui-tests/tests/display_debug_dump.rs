@@ -7,13 +7,17 @@ use neomacs_gui_tests::{
 use serde_json::Value;
 use std::{fs, path::PathBuf, time::Duration};
 
-#[test]
-fn wayland_display_debug_dump_captures_last_presented_and_frame_snapshot() {
+/// Run the fixture once on Wayland with RUST_LOG set to RUST_LOG_VALUE and
+/// return the parsed dump, its raw text and the editor's stderr.
+fn run_dump(tag: &str, rust_log_value: &str) -> (Value, String, String) {
     let root = neomacs_infra::workspace_root();
     let binary = std::env::var_os("NEOMACS_GUI_TEST_BINARY")
         .map(PathBuf::from)
         .unwrap_or_else(|| root.join("target/release/neomacs"));
-    let artifacts = root.join(format!("tmp/display-debug-dump-{}", std::process::id()));
+    let artifacts = root.join(format!(
+        "tmp/display-debug-dump-{tag}-{}",
+        std::process::id()
+    ));
     fs::create_dir_all(&artifacts).unwrap();
     let dump_path = artifacts.join("live-wayland-dump.json");
 
@@ -34,7 +38,7 @@ fn wayland_display_debug_dump_captures_last_presented_and_frame_snapshot() {
     .with_program(binary)
     .with_env("NEOMACS_DEBUG_DISPLAY_DUMP", dump_path.to_string_lossy())
     .with_env("TMPDIR", root.join("tmp").to_string_lossy())
-    .with_env("RUST_LOG", "warn,neomacs::cursor_geometry=debug");
+    .with_env("RUST_LOG", rust_log_value);
     for (key, value) in session.env() {
         plan = plan.with_env(key, value);
     }
@@ -53,6 +57,12 @@ fn wayland_display_debug_dump_captures_last_presented_and_frame_snapshot() {
     let raw = fs::read_to_string(&dump_path)
         .unwrap_or_else(|e| panic!("failed reading {}: {e}\n{stderr}", dump_path.display()));
     let doc: Value = serde_json::from_str(&raw).expect("dump must be valid JSON");
+    (doc, raw, stderr)
+}
+
+#[test]
+fn wayland_display_debug_dump_captures_last_presented_and_frame_snapshot() {
+    let (doc, raw, _stderr) = run_dump("prearmed", "warn,neomacs::cursor_geometry=debug");
 
     assert_eq!(doc["schema_version"].as_u64(), Some(1));
     assert!(
@@ -119,5 +129,40 @@ fn wayland_display_debug_dump_captures_last_presented_and_frame_snapshot() {
     assert_eq!(
         doc["diagnostics_flags"]["presentation_lagging"].as_bool(),
         Some(false)
+    );
+}
+
+/// #855: one dump, with no environment variable arming the target, must
+/// carry a fresh `stage=layout` / `stage=draw` pair. The reporter's first
+/// bundle had an empty `cursor_geometry_log` because capture was armed only
+/// at dump time and nothing redisplayed afterwards.
+#[test]
+fn wayland_display_debug_dump_self_arms_cursor_geometry_without_rust_log() {
+    let (doc, raw, _stderr) = run_dump("unarmed", "warn");
+    assert!(
+        doc["cursor_geometry_capture_error"].is_null(),
+        "the dump must capture fresh geometry on its own: {raw}"
+    );
+    let log: Vec<&str> = doc["cursor_geometry_log"]
+        .as_array()
+        .expect("cursor_geometry_log array")
+        .iter()
+        .filter_map(Value::as_str)
+        .collect();
+    assert!(
+        log.iter().any(|line| line.contains(" stage=layout ")),
+        "a stage=layout line: {log:#?}"
+    );
+    assert!(
+        log.iter().any(|line| line.contains(" stage=draw ")),
+        "a stage=draw line: {log:#?}"
+    );
+    assert!(
+        doc["post_redisplay_last_presented"].is_array(),
+        "the render state after the forced redisplay: {raw}"
+    );
+    assert!(
+        doc["cursor_geometry_capture_wait_ms"].as_u64().is_some(),
+        "{raw}"
     );
 }

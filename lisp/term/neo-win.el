@@ -750,21 +750,50 @@ Only cursor effects are used when rendering this buffer's cursor.")
 
 ;;; Display / cursor debug state dump (issue #855)
 
+(defconst neomacs--display-debug-capture-timeout 2.0
+  "Seconds `neomacs-dump-display-state' waits for fresh cursor geometry.")
+
+(defun neomacs--display-debug-bundle ()
+  "Return the live display debug bundle as a JSON alist.
+Reading it also arms in-process `neomacs::cursor_geometry' capture."
+  (json-parse-string (neomacs--frame-snapshot nil 'display-debug)
+                     :object-type 'alist :array-type 'array
+                     :null-object :null :false-object :false))
+
+(defun neomacs--display-debug-new-stages (before after)
+  "Return the geometry stages logged in AFTER that BEFORE did not have.
+BEFORE and AFTER are bundles from `neomacs--display-debug-bundle'.  The
+result is a list of the symbols `layout' and `draw'."
+  (let ((old (append (alist-get 'cursor_geometry_log before) nil))
+        stages)
+    (dolist (line (append (alist-get 'cursor_geometry_log after) nil))
+      (unless (member line old)
+        (when (and (string-match-p " stage=layout " line) (not (memq 'layout stages)))
+          (push 'layout stages))
+        (when (and (string-match-p " stage=draw " line) (not (memq 'draw stages)))
+          (push 'draw stages))))
+    stages))
+
 (defun neomacs-dump-display-state (&optional path)
   "Write a JSON debug bundle of live Neomacs display state to PATH.
-Captures the render thread's last-presented state (presentation id,
-frame sequence, retained-static vs. full-render path, scale/surface
+The bundle holds the render thread's last-presented state (presentation
+id, frame sequence, retained-static vs. full-render path, scale/surface
 size, cursor blink/visibility/inverse-video, animation override, and
-input-scroll offset) without forcing a redisplay, arms in-process
-`neomacs::cursor_geometry' capture, and bundles buffered
-`neomacs::cursor_geometry' lines alongside the frame snapshot into one
-JSON file.
+input-scroll offset) and the frame snapshot, both captured BEFORE any
+redisplay, so a stale frame is recorded as it was.
 
-Unless `RUST_LOG' pre-armed `neomacs::cursor_geometry' at startup (for
-example `RUST_LOG=warn,neomacs::cursor_geometry=debug'), the first
-invocation has no prior `cursor_geometry_log' lines; capture then
-remains armed in a bounded 64-line ring for the rest of the session so
-subsequent invocations retain multi-frame history.
+It then arms in-process `neomacs::cursor_geometry' capture, forces one
+redisplay, and waits up to `neomacs--display-debug-capture-timeout'
+seconds for a fresh `stage=layout' and `stage=draw' pair.  So, unlike
+earlier versions, the command may repaint the frame; the pre-redisplay
+state above is what a repaint could change.  The bundle's
+`cursor_geometry_log' holds those lines (with any earlier ones, when
+`RUST_LOG' pre-armed the target), and `post_redisplay_last_presented'
+the render state after that redisplay.  If the pair does not arrive in
+time, the bundle is still written and `cursor_geometry_capture_error'
+says which stage was missing; otherwise that field is null.  No
+environment variable is needed.  Capture stays armed afterwards in a
+bounded 64-line ring, so later dumps also carry multi-frame history.
 
 The JSON bundle includes visible buffer text in `frame_snapshot.text';
 review and remove any private content before sharing it publicly.
@@ -794,11 +823,46 @@ file in `temporary-file-directory'.  Returns the written file path."
                 (expand-file-name default-name env-path)
               (expand-file-name env-path)))
            (t
-            (expand-file-name default-name temporary-file-directory)))))
-    (neomacs--write-frame-snapshot target nil 'display-debug)
-    (message
-     "Wrote display debug state to %s (cursor_geometry capture remains armed, 64-line ring; first dump has no prior cursor lines unless RUST_LOG armed it — re-run for history)"
-     target)
+            (expand-file-name default-name temporary-file-directory))))
+         ;; The unhealed state first: no redisplay has run yet.
+         (before (neomacs--display-debug-bundle))
+         (started (float-time))
+         (deadline (+ started neomacs--display-debug-capture-timeout))
+         after stages)
+    (force-window-update)
+    (while (progn
+             (redisplay t)
+             (setq after (neomacs--display-debug-bundle)
+                   stages (neomacs--display-debug-new-stages before after))
+             (and (not (and (memq 'layout stages) (memq 'draw stages)))
+                  (< (float-time) deadline)))
+      (sit-for 0.05))
+    (let ((bundle (copy-sequence before))
+          (missing (delq nil (list (unless (memq 'layout stages) "stage=layout")
+                                   (unless (memq 'draw stages) "stage=draw")))))
+      (setf (alist-get 'cursor_geometry_log bundle)
+            (alist-get 'cursor_geometry_log after))
+      (setf (alist-get 'cursor_geometry_capture_enabled bundle)
+            (alist-get 'cursor_geometry_capture_enabled after))
+      (setf (alist-get 'post_redisplay_last_presented bundle)
+            (alist-get 'last_presented after))
+      (setf (alist-get 'cursor_geometry_capture_error bundle)
+            (if missing
+                (format "no fresh %s line within %.1f s of a forced redisplay"
+                        (string-join missing " or ")
+                        neomacs--display-debug-capture-timeout)
+              :null))
+      (setf (alist-get 'cursor_geometry_capture_wait_ms bundle)
+            (round (* 1000 (- (float-time) started))))
+      (let ((coding-system-for-write 'no-conversion))
+        (with-temp-file target
+          (set-buffer-multibyte nil)
+          (insert (json-serialize bundle :null-object :null :false-object :false))))
+      (message
+       (if missing
+           "Wrote display debug state to %s (forced a repaint; cursor geometry incomplete: %s; see cursor_geometry_capture_error)"
+         "Wrote display debug state to %s (forced a repaint for fresh cursor geometry; capture stays armed, 64-line ring)")
+       target (string-join missing ", ")))
     target))
 
 (when (boundp 'menu-bar-help-menu)
