@@ -23,11 +23,29 @@ body:
            If it is not on `PATH`, use its full path, for example
            `./target/release/neomacs --version`. Paste **every line** of the
            output into **Neomacs --version output** below.
-        2. Reproduce with verbose logs:
+        2. For **display, rendering, or cursor-position bugs**, launch with
+           cursor-geometry telemetry enabled and capture a single debug bundle
+           while the bug is visible:
            ```bash
-           RUST_LOG=debug NEOMACS_LOG=info ./target/release/neomacs 2>&1 | tee neomacs-debug.log
+           NEOMACS_DEBUG_DISPLAY_DUMP=neomacs-display-debug.json \
+             RUST_LOG=warn,neomacs::cursor_geometry=debug \
+             ./target/release/neomacs
            ```
-        3. In **Extra context**, upload `neomacs-debug.log` (or paste key excerpts).
+           Then trigger either **Help -> Dump Display Debug State** (from the
+           menu bar — captures immediately without activating the minibuffer) or
+           `M-x neomacs-dump-display-state` to write `neomacs-display-debug.json`
+           (contains the `neomacs::cursor_geometry` log, frame snapshot, and
+           last-presented render state). You can also run `M-x neomacs-dump-display-state`
+           in an already-running session to enable `neomacs::cursor_geometry`
+           capture on the fly.
+        3. To collect general runtime logs without Cranelift JIT noise, run:
+           ```bash
+           NEOMACS_LOG_FILE=neomacs-debug.log \
+             RUST_LOG=info,cranelift_codegen=off,cranelift_frontend=off,cranelift_jit=off,regalloc2=off \
+             ./target/release/neomacs
+           ```
+        4. In **Extra context**, upload `neomacs-display-debug.json` and/or
+           `neomacs-debug.log` (or paste key excerpts).
 
   - type: textarea
     id: summary

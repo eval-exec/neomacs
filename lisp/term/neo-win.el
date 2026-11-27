@@ -748,6 +748,54 @@ Applied at the render level."
 The value is one entry or a list of entries in `neomacs-effects' format.
 Only cursor effects are used when rendering this buffer's cursor.")
 
+;;; Display / cursor debug state dump (issue #855)
+
+(defun neomacs-dump-display-state (&optional path)
+  "Write a JSON debug bundle of live Neomacs display state to PATH.
+Captures the render thread's last-presented state (presentation id,
+frame sequence, retained-static vs. full-render path, scale/surface
+size, cursor blink/visibility/inverse-video, animation override, and
+input-scroll offset) without forcing a redisplay, enables in-process
+`neomacs::cursor_geometry' capture, and bundles buffered
+`neomacs::cursor_geometry' lines alongside the frame snapshot into one
+JSON file.
+
+When called interactively without a prefix argument, or via
+`Help -> Dump Display Debug State', writes immediately without opening the
+minibuffer so the active window and cursor state are captured undisturbed.
+With a prefix argument (`C-u'), prompts for the destination file.
+
+When PATH is nil, uses `$NEOMACS_DEBUG_DISPLAY_DUMP' if set (treating an
+existing directory as a target folder), or otherwise creates a timestamped
+file in `temporary-file-directory'.  Returns the written file path."
+  (interactive (list (when current-prefix-arg
+                       (read-file-name "Write display debug state to: "))))
+  (let* ((env-path (getenv "NEOMACS_DEBUG_DISPLAY_DUMP"))
+         (default-name (format "neomacs-display-debug-%d-%d.json"
+                               (emacs-pid)
+                               (floor (float-time))))
+         (target
+          (cond
+           ((and (stringp path) (not (string-empty-p path)))
+            (if (file-directory-p path)
+                (expand-file-name default-name path)
+              (expand-file-name path)))
+           ((and (stringp env-path) (not (string-empty-p env-path)))
+            (if (file-directory-p env-path)
+                (expand-file-name default-name env-path)
+              (expand-file-name env-path)))
+           (t
+            (expand-file-name default-name temporary-file-directory)))))
+    (neomacs--write-frame-snapshot target nil 'display-debug)
+    (message "Wrote Neomacs display debug state to %s" target)
+    target))
+
+(when (boundp 'menu-bar-help-menu)
+  (define-key-after menu-bar-help-menu [neomacs-dump-display-state]
+    '(menu-item "Dump Display Debug State" neomacs-dump-display-state
+                :help "Write live display and cursor debug snapshot to a JSON file")
+    'send-emacs-bug-report))
+
 ;; Provide the feature
 ;; The customization surface: one option per property for the slots people
 ;; tune, one per effect for the decorative gallery.  Loaded here so the options

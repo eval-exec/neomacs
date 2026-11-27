@@ -228,6 +228,9 @@ pub fn install_frame_snapshot_fn(evaluator: &mut Context) {
     use neovm_core::emacs_core::xdisp::SnapshotFormat;
 
     evaluator.frame_snapshot_fn = Some(Box::new(|eval, request| {
+        if matches!(request.format, SnapshotFormat::DisplayDebug) {
+            return capture_display_debug_bundle_json(eval, &request.target);
+        }
         let states = collect_snapshot_states(eval, &request.target)?;
         Ok(match request.format {
             SnapshotFormat::Json => serde_json::to_string(&SnapshotDoc { frames: &states })
@@ -257,8 +260,307 @@ pub fn install_frame_snapshot_fn(evaluator: &mut Context) {
                 .map(|state| state.render_text_faces())
                 .collect::<Vec<_>>()
                 .join("\n"),
+            SnapshotFormat::DisplayDebug => unreachable!("handled before layout"),
         })
     }));
+}
+
+#[derive(serde::Serialize)]
+struct DisplayDebugFrameSnapshotSection<'a> {
+    geometry: SnapshotGeometryDoc<'a>,
+    text: Vec<String>,
+}
+
+/// Top-level JSON bundle written by `M-x neomacs-dump-display-state` /
+/// `neomacs--frame-snapshot`'s `'display-debug` format.
+///
+/// Consumes `neomacs::cursor_geometry` lines and the existing `frame-snapshot`
+/// geometry/text projection verbatim without re-deriving cursor fields, and
+/// pairs them with the render thread's last-presented state (blink, visibility,
+/// inverse-video, retained_static vs full_render, scale/surface, animation,
+/// input-scroll) keyed by `presentation_id`.
+#[derive(serde::Serialize)]
+struct DisplayDebugBundle<'a> {
+    schema_version: u32,
+    capture_unix_ms: u64,
+    version: neomacs_display_protocol::DisplayDebugVersion,
+    selected_frame_id: Option<u64>,
+    last_interaction_presentation: u64,
+    last_presented: Vec<neomacs_display_protocol::PresentedFrameDebugSnapshot>,
+    render_capture_error: Option<String>,
+    cursor_geometry_capture_enabled: bool,
+    cursor_geometry_log: Vec<String>,
+    frame_snapshot: Option<DisplayDebugFrameSnapshotSection<'a>>,
+    frame_snapshot_error: Option<String>,
+    diagnostics_flags: neomacs_display_protocol::DisplayDebugFlags,
+}
+
+fn capture_display_debug_bundle_json(
+    eval: &mut Context,
+    target: &neovm_core::emacs_core::xdisp::SnapshotTarget,
+) -> Result<String, String> {
+    // 1. Capture the render thread's unhealed last-presented state and the
+    //    evaluator's pre-snapshot `last_interaction_presentation` FIRST, before
+    //    `collect_snapshot_states` allocates and discards a snapshot
+    //    `PresentationId` (which advances `last_interaction_presentation()`
+    //    without sending a frame to the render thread).
+    let selected_frame_id = eval.frame_manager().selected_frame().map(|f| f.id.0);
+    let last_interaction_presentation = eval.last_interaction_presentation();
+    let (last_presented, render_capture_error) = match eval.display_host.as_deref() {
+        Some(host) => match host.capture_display_debug_state() {
+            Ok(raw_json) => match serde_json::from_str::<
+                Vec<neomacs_display_protocol::PresentedFrameDebugSnapshot>,
+            >(&raw_json)
+            {
+                Ok(frames) => (frames, None),
+                Err(error) => (
+                    Vec::new(),
+                    Some(format!("failed to decode render debug state: {error}")),
+                ),
+            },
+            Err(error) => (Vec::new(), Some(error)),
+        },
+        None => (
+            Vec::new(),
+            Some("no display host attached to capture render-thread state".to_string()),
+        ),
+    };
+
+    // 2. Turn on in-process `neomacs::cursor_geometry` capture so subsequent
+    //    (and snapshot-pass) cursor-geometry lines are buffered verbatim.
+    neovm_core::logging::set_cursor_geometry_capture(true);
+
+    // 3. Reuse the existing `frame-snapshot` layout projection (does not push
+    //    to the render thread).
+    let (snapshot_states, frame_snapshot_error) = match collect_snapshot_states(eval, target) {
+        Ok(states) => (Some(states), None),
+        Err(error) => (None, Some(error)),
+    };
+    let frame_snapshot = snapshot_states.as_ref().map(|states| {
+        let geometry = SnapshotGeometryDoc {
+            frames: states
+                .iter()
+                .map(|state| SnapshotGeometryFrame {
+                    presentation_id: &state.presentation_id,
+                    frame_cols: state.frame_cols,
+                    frame_rows: state.frame_rows,
+                    frame_pixel_width: state.frame_pixel_width,
+                    frame_pixel_height: state.frame_pixel_height,
+                    window_infos: &state.window_infos,
+                })
+                .collect(),
+        };
+        let text = states.iter().map(|state| state.render_text()).collect();
+        DisplayDebugFrameSnapshotSection { geometry, text }
+    });
+
+    // 4. Snapshot the verbatim `neomacs::cursor_geometry` lines collected by
+    //    the tracing layer (both pre-existing `RUST_LOG` lines and any emitted
+    //    by the snapshot pass above).
+    let cursor_geometry_log = neovm_core::logging::snapshot_cursor_geometry_lines();
+    let cursor_geometry_capture_enabled = neovm_core::logging::cursor_geometry_capture_enabled();
+
+    let window_system = eval
+        .frame_manager()
+        .selected_frame()
+        .and_then(|f| f.window_system)
+        .map(|ws| neovm_core::emacs_core::print::print_value(&ws))
+        .unwrap_or_else(|| "none".to_string());
+    let capture_unix_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    let diagnostics_flags = neomacs_display_protocol::DisplayDebugFlags::compute(
+        selected_frame_id,
+        last_interaction_presentation,
+        &last_presented,
+    );
+    let doc = DisplayDebugBundle {
+        schema_version: neomacs_display_protocol::DISPLAY_DEBUG_SCHEMA_VERSION,
+        capture_unix_ms,
+        version: neomacs_display_protocol::DisplayDebugVersion {
+            package_version: env!("CARGO_PKG_VERSION").to_string(),
+            git_commit: super::build_info::git_commit_summary(),
+            platform: format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH),
+            window_system,
+        },
+        selected_frame_id,
+        last_interaction_presentation,
+        last_presented,
+        render_capture_error,
+        cursor_geometry_capture_enabled,
+        cursor_geometry_log,
+        frame_snapshot,
+        frame_snapshot_error,
+        diagnostics_flags,
+    };
+    serde_json::to_string_pretty(&doc)
+        .map_err(|error| format!("display debug snapshot JSON serialization failed: {error}"))
+}
+
+#[cfg(test)]
+mod display_debug_tests {
+    use super::*;
+    use neomacs_display_protocol::{
+        DISPLAY_DEBUG_SCHEMA_VERSION, PresentedFrameDebugSnapshot, PresentedRenderPath,
+    };
+    use neovm_core::emacs_core::eval::DisplayHost;
+
+    struct MockDebugDisplayHost {
+        payload: String,
+    }
+
+    impl DisplayHost for MockDebugDisplayHost {
+        fn realize_gui_frame(
+            &mut self,
+            _request: neovm_core::emacs_core::eval::GuiFrameHostRequest,
+        ) -> Result<(), String> {
+            Ok(())
+        }
+
+        fn resize_gui_frame(
+            &mut self,
+            _request: neovm_core::emacs_core::eval::GuiFrameHostRequest,
+        ) -> Result<(), String> {
+            Ok(())
+        }
+
+        fn capture_display_debug_state(&self) -> Result<String, String> {
+            Ok(self.payload.clone())
+        }
+    }
+
+    #[test]
+    fn display_debug_snapshot_bundles_last_presented_frame_snapshot_and_cursor_geometry_log() {
+        let _guard = neovm_core::logging::init(neovm_core::logging::LogTarget::Test);
+        neovm_core::logging::clear_cursor_geometry_lines();
+        neovm_core::logging::set_cursor_geometry_capture(false);
+
+        let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
+        let buf_id = eval
+            .edit
+            .buffers
+            .current_buffer_id()
+            .expect("initial buffer");
+        eval.frame_manager_mut()
+            .create_frame("F1", 800, 600, buf_id);
+        install_frame_snapshot_fn(&mut eval);
+
+        let redisplay_count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let rc = std::sync::Arc::clone(&redisplay_count);
+        eval.redisplay_fn = Some(Box::new(move |_| {
+            rc.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }));
+
+        eval.eval_str("(progn (insert \"alpha\\nbeta\\ngamma\") (goto-char 9))")
+            .expect("populate buffer");
+
+        let selected_frame_id = eval
+            .frame_manager()
+            .selected_frame()
+            .expect("selected frame")
+            .id
+            .0;
+        // Simulate a prior presented frame (presentation_id = 1) so the test
+        // also verifies that `collect_snapshot_states` allocating and
+        // discarding its own snapshot PresentationId does not falsely flag
+        // `presentation_lagging`.
+        let pre_snapshot_presentation = eval.begin_interaction_presentation();
+        let mock_frame = PresentedFrameDebugSnapshot {
+            frame_id: selected_frame_id,
+            is_primary: true,
+            presentation_id: pre_snapshot_presentation,
+            frame_seq: 12,
+            render_path: PresentedRenderPath::RetainedStatic,
+            scale_factor: 1.0,
+            surface_px: [800, 600],
+            logical_px: [800.0, 600.0],
+            has_active_cursor: true,
+            cursor_visible: false,
+            blink_enabled: true,
+            inverse_video_active: false,
+            is_animating: false,
+            animated_cursor_rect: None,
+            input_scroll_active: false,
+            input_scroll_offset: 0.0,
+        };
+        eval.display_host = Some(Box::new(MockDebugDisplayHost {
+            payload: serde_json::to_string(&vec![mock_frame]).expect("encode mock frame"),
+        }));
+
+        // Emit one sample `neomacs::cursor_geometry` line with capture enabled
+        // to prove the bundle consumes the target verbatim.
+        neovm_core::logging::set_cursor_geometry_capture(true);
+        tracing::debug!(
+            target: neovm_core::logging::CURSOR_GEOMETRY_TARGET,
+            "frame={selected_frame_id} stage=draw presentation={pre_snapshot_presentation} window=1 drawn_in_row=true"
+        );
+        neovm_core::logging::set_cursor_geometry_capture(false);
+
+        let val = eval
+            .eval_str("(neomacs--frame-snapshot nil 'display-debug)")
+            .expect("display-debug snapshot");
+        let json = val.as_utf8_str().expect("snapshot string");
+        let parsed: serde_json::Value = serde_json::from_str(json).expect("parse bundle JSON");
+
+        assert_eq!(
+            parsed["schema_version"].as_u64(),
+            Some(u64::from(DISPLAY_DEBUG_SCHEMA_VERSION))
+        );
+        assert_eq!(
+            parsed["last_interaction_presentation"].as_u64(),
+            Some(pre_snapshot_presentation),
+            "last_interaction_presentation must be sampled before snapshot layout"
+        );
+        assert_eq!(
+            parsed["diagnostics_flags"]["presentation_lagging"].as_bool(),
+            Some(false),
+            "discarded snapshot presentation must not cause false presentation_lagging"
+        );
+        assert_eq!(
+            redisplay_count.load(std::sync::atomic::Ordering::SeqCst),
+            0,
+            "'display-debug must not force redisplay"
+        );
+        assert!(parsed["render_capture_error"].is_null());
+        assert_eq!(
+            parsed["cursor_geometry_capture_enabled"].as_bool(),
+            Some(true)
+        );
+        let log_lines = parsed["cursor_geometry_log"]
+            .as_array()
+            .expect("cursor_geometry_log array");
+        assert!(
+            log_lines
+                .iter()
+                .any(|line| line.as_str().is_some_and(|s| s.contains(&format!(
+                    "stage=draw presentation={pre_snapshot_presentation}"
+                )))),
+            "bundle must embed verbatim neomacs::cursor_geometry lines: {log_lines:?}"
+        );
+        assert_eq!(parsed["last_presented"][0]["frame_seq"].as_u64(), Some(12));
+        assert_eq!(
+            parsed["last_presented"][0]["render_path"].as_str(),
+            Some("retained_static")
+        );
+        assert_eq!(
+            parsed["diagnostics_flags"]["cursor_hidden_or_blinked_off"].as_bool(),
+            Some(true)
+        );
+        assert!(parsed["frame_snapshot"]["text"].is_array());
+        assert!(parsed["frame_snapshot"]["geometry"]["frames"].is_array());
+
+        // Control: `'text` format still forces redisplay before capturing.
+        let _ = eval
+            .eval_str("(neomacs--frame-snapshot nil 'text)")
+            .expect("text snapshot");
+        assert_eq!(
+            redisplay_count.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "'text control must still invoke redisplay_fn"
+        );
+        neovm_core::logging::set_cursor_geometry_capture(false);
+    }
 }
 
 /// Single frontend font-driver vtable (`N-font-driver-vtable`, GNU

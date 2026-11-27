@@ -12690,11 +12690,12 @@ fn snapshot_request_from_args(
             Some("text-faces") => SnapshotFormat::TextFaces,
             Some("json") => SnapshotFormat::Json,
             Some("json-geometry") => SnapshotFormat::JsonGeometry,
+            Some("display-debug") => SnapshotFormat::DisplayDebug,
             _ => {
                 return Err(signal(
                     "error",
                     vec![Value::string(format!(
-                        "Invalid frame snapshot format: {value} (use text, text-faces, json or json-geometry)"
+                        "Invalid frame snapshot format: {value} (use text, text-faces, json, json-geometry or display-debug)"
                     ))],
                 ));
             }
@@ -12703,18 +12704,23 @@ fn snapshot_request_from_args(
     Ok(SnapshotRequest { target, format })
 }
 
-/// Force a full redisplay, then run the frontend snapshot hook.
+/// Force a full redisplay (except for `DisplayDebug`, which inspects the live
+/// unhealed state without redisplaying), then run the frontend snapshot hook.
 ///
-/// The redisplay first is essential: `redisplay_with_force` performs the
-/// marker/point syncs, `pre-redisplay-function`, and auto-hscroll that
-/// layout correctness depends on (GNU `redisplay_internal` preamble). The
-/// hook then lays out the target frames on demand and serializes. The
-/// take/call/reinstall dance mirrors `redisplay_fn` (eval.rs).
+/// For layout snapshot formats, redisplay first is essential:
+/// `redisplay_with_force` performs the marker/point syncs,
+/// `pre-redisplay-function`, and auto-hscroll that layout correctness depends
+/// on (GNU `redisplay_internal` preamble). For `DisplayDebug`, forcing a
+/// redisplay would heal stale-frame / cursor-lag bugs before capturing them,
+/// so it is deliberately skipped. The take/call/reinstall dance mirrors
+/// `redisplay_fn` (eval.rs).
 fn run_frame_snapshot(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     request: &SnapshotRequest,
 ) -> Result<String, Flow> {
-    eval.redisplay_with_force(true)?;
+    if !matches!(request.format, SnapshotFormat::DisplayDebug) {
+        eval.redisplay_with_force(true)?;
+    }
     let Some(mut hook) = eval.frame_snapshot_fn.take() else {
         return Err(signal(
             "error",

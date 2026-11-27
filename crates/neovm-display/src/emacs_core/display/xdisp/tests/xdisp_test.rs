@@ -11200,3 +11200,39 @@ mod mode_line_min_width_boundary_test;
 
 #[path = "window_text_chrome_test.rs"]
 mod window_text_chrome_test;
+
+#[test]
+fn frame_snapshot_display_debug_skips_forced_redisplay() {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+
+    let mut eval = interactive_context();
+    let redisplay_calls = Arc::new(AtomicUsize::new(0));
+    let redisplay_calls_cb = Arc::clone(&redisplay_calls);
+    eval.redisplay_fn = Some(Box::new(move |_eval| {
+        redisplay_calls_cb.fetch_add(1, Ordering::SeqCst);
+    }));
+    eval.frame_snapshot_fn = Some(Box::new(|_eval, req| Ok(format!("{:?}", req.format))));
+
+    // `'display-debug` must capture live state without forcing a fresh redisplay.
+    let debug_val =
+        builtin_neomacs_frame_snapshot(&mut eval, vec![Value::NIL, Value::symbol("display-debug")])
+            .expect("display-debug snapshot");
+    assert_eq!(debug_val.as_utf8_str(), Some("DisplayDebug"));
+    assert_eq!(
+        redisplay_calls.load(Ordering::SeqCst),
+        0,
+        "'display-debug must not force redisplay before capturing state"
+    );
+
+    // Control: unknown formats are still rejected.
+    let err =
+        builtin_neomacs_frame_snapshot(&mut eval, vec![Value::NIL, Value::symbol("not-a-format")])
+            .unwrap_err();
+    match err.into_kind() {
+        FlowKind::Signal(sig) => assert_eq!(sig.symbol_name(), "error"),
+        other => panic!("expected error signal, got {:?}", other),
+    }
+}

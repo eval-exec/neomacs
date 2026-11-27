@@ -1257,6 +1257,9 @@ pub enum SnapshotFormat {
     Json,
     /// Frame and window geometry without replay assets or glyph matrices.
     JsonGeometry,
+    /// Live Lisp + last-presented render-thread display/cursor debug JSON
+    /// (captured WITHOUT forcing a fresh redisplay).
+    DisplayDebug,
 }
 
 /// One `neomacs--frame-snapshot` request, handed to the frontend hook.

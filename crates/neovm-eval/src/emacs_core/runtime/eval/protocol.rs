@@ -856,6 +856,11 @@ pub trait DisplayHost {
     /// builtin: ask the display to simulate a GPU device loss so the whole
     /// recovery path can be exercised against a healthy device.
     fn debug_lose_device(&self) {}
+    /// Capture the render thread's live last-presented display/cursor debug
+    /// state as serialized JSON without forcing a fresh redisplay.
+    fn capture_display_debug_state(&self) -> Result<String, String> {
+        Err("live GUI display debug capture is unavailable on this display host".to_owned())
+    }
 }
 
 /// Typed request crossing from frame-local face state into native font

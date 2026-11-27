@@ -18,14 +18,147 @@
 //! `try_init`), so events from crates using the `log` facade
 //! (e.g. `cosmic-text`, `wgpu`) flow into the tracing subscriber.
 
+use std::collections::VecDeque;
+use std::fmt;
 use std::io::IsTerminal;
 use std::sync::OnceLock;
+use std::sync::atomic::{AtomicBool, Ordering};
 
+use parking_lot::Mutex;
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::Layer;
 use tracing_subscriber::Registry;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
+
+/// Tracing target owned by the cursor-geometry telemetry (`neomacs::cursor_geometry`).
+/// Consumed verbatim by the display debug bundle without re-deriving cursor fields.
+pub const CURSOR_GEOMETRY_TARGET: &str = "neomacs::cursor_geometry";
+
+const CURSOR_GEOMETRY_RING_CAP: usize = 64;
+
+static CURSOR_GEOMETRY_CAPTURE: AtomicBool = AtomicBool::new(false);
+static CURSOR_GEOMETRY_RING: OnceLock<Mutex<VecDeque<String>>> = OnceLock::new();
+
+fn cursor_geometry_ring() -> &'static Mutex<VecDeque<String>> {
+    CURSOR_GEOMETRY_RING
+        .get_or_init(|| Mutex::new(VecDeque::with_capacity(CURSOR_GEOMETRY_RING_CAP)))
+}
+
+/// Enable or disable in-process capture of `neomacs::cursor_geometry` DEBUG
+/// events into the bounded ring buffer used by `neomacs-dump-display-state`.
+///
+/// Rebuilds tracing's callsite interest cache so `tracing::enabled!(target:
+/// "neomacs::cursor_geometry", Level::DEBUG)` observes the change immediately
+/// while remaining zero-cost when off. Returns the previous state.
+pub fn set_cursor_geometry_capture(enabled: bool) -> bool {
+    let previous = CURSOR_GEOMETRY_CAPTURE.swap(enabled, Ordering::SeqCst);
+    if previous != enabled {
+        tracing::callsite::rebuild_interest_cache();
+    }
+    previous
+}
+
+/// Whether in-process `neomacs::cursor_geometry` capture is currently enabled.
+pub fn cursor_geometry_capture_enabled() -> bool {
+    CURSOR_GEOMETRY_CAPTURE.load(Ordering::Relaxed)
+}
+
+/// Return a snapshot of the most recent `neomacs::cursor_geometry` log lines
+/// (oldest first, bounded to the last 64 events).
+pub fn snapshot_cursor_geometry_lines() -> Vec<String> {
+    cursor_geometry_ring().lock().iter().cloned().collect()
+}
+
+/// Clear buffered `neomacs::cursor_geometry` lines (used by tests).
+pub fn clear_cursor_geometry_lines() {
+    cursor_geometry_ring().lock().clear();
+}
+
+#[derive(Default)]
+struct CursorGeometryMessageVisitor {
+    message: Option<String>,
+    extras: Vec<String>,
+}
+
+impl tracing::field::Visit for CursorGeometryMessageVisitor {
+    fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn fmt::Debug) {
+        if field.name() == "message" {
+            self.message = Some(format!("{value:?}"));
+        } else {
+            self.extras.push(format!("{}={value:?}", field.name()));
+        }
+    }
+
+    fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
+        if field.name() == "message" {
+            self.message = Some(value.to_string());
+        } else {
+            self.extras.push(format!("{}={value}", field.name()));
+        }
+    }
+}
+
+struct CursorGeometryCaptureFilter;
+
+impl<S: tracing::Subscriber> tracing_subscriber::layer::Filter<S> for CursorGeometryCaptureFilter {
+    fn enabled(
+        &self,
+        metadata: &tracing::Metadata<'_>,
+        _ctx: &tracing_subscriber::layer::Context<'_, S>,
+    ) -> bool {
+        // `tracing::enabled!` builds `Kind::HINT` metadata (neither `is_event`
+        // nor `is_span`), so exclude spans rather than requiring `is_event()`.
+        !metadata.is_span()
+            && metadata.target() == CURSOR_GEOMETRY_TARGET
+            && CURSOR_GEOMETRY_CAPTURE.load(Ordering::Relaxed)
+    }
+
+    fn callsite_enabled(
+        &self,
+        metadata: &'static tracing::Metadata<'static>,
+    ) -> tracing::subscriber::Interest {
+        if !metadata.is_span()
+            && metadata.target() == CURSOR_GEOMETRY_TARGET
+            && CURSOR_GEOMETRY_CAPTURE.load(Ordering::Relaxed)
+        {
+            tracing::subscriber::Interest::always()
+        } else {
+            tracing::subscriber::Interest::never()
+        }
+    }
+
+    fn max_level_hint(&self) -> Option<tracing::metadata::LevelFilter> {
+        Some(tracing::metadata::LevelFilter::DEBUG)
+    }
+}
+
+struct CursorGeometryCaptureLayer;
+
+impl<S: tracing::Subscriber> Layer<S> for CursorGeometryCaptureLayer {
+    fn on_event(
+        &self,
+        event: &tracing::Event<'_>,
+        _ctx: tracing_subscriber::layer::Context<'_, S>,
+    ) {
+        if event.metadata().target() != CURSOR_GEOMETRY_TARGET {
+            return;
+        }
+        let mut visitor = CursorGeometryMessageVisitor::default();
+        event.record(&mut visitor);
+        let line = match (visitor.message, visitor.extras.is_empty()) {
+            (Some(msg), true) => msg,
+            (Some(msg), false) => format!("{msg} {}", visitor.extras.join(" ")),
+            (None, false) => visitor.extras.join(" "),
+            (None, true) => return,
+        };
+        let mut ring = cursor_geometry_ring().lock();
+        if ring.len() >= CURSOR_GEOMETRY_RING_CAP {
+            ring.pop_front();
+        }
+        ring.push_back(line);
+    }
+}
 
 /// Where the default writer sends tracing output for a given binary.
 ///
@@ -265,6 +398,24 @@ fn file_layer_for(
     open_file_layer(&path)
 }
 
+/// Whether a `RUST_LOG` directive string explicitly enables DEBUG/TRACE
+/// logging for `neomacs::cursor_geometry` (or globally).
+fn rust_log_enables_cursor_geometry(rust_log: &str) -> bool {
+    rust_log.split(',').any(|raw| {
+        let tok = raw.trim();
+        if tok.eq_ignore_ascii_case("debug") || tok.eq_ignore_ascii_case("trace") {
+            return true;
+        }
+        if let Some((target, level)) = tok.split_once('=') {
+            target.trim() == CURSOR_GEOMETRY_TARGET
+                && (level.trim().eq_ignore_ascii_case("debug")
+                    || level.trim().eq_ignore_ascii_case("trace"))
+        } else {
+            false
+        }
+    })
+}
+
 fn init_inner(target: LogTarget) -> Option<tracing_appender::non_blocking::WorkerGuard> {
     // Note: `tracing_subscriber::fmt::Subscriber::try_init` (which the
     // `.try_init()` call below ultimately runs) installs the log→tracing
@@ -296,6 +447,22 @@ fn init_inner(target: LogTarget) -> Option<tracing_appender::non_blocking::Worke
     if let Some(layer) = file {
         layers.push(layer);
     }
+    // Zero-cost-when-off per-layer filtered ring buffer for
+    // `neomacs::cursor_geometry` events consumed verbatim by
+    // `M-x neomacs-dump-display-state`. If the user launched with
+    // `RUST_LOG=...,neomacs::cursor_geometry=debug`, pre-arm capture so
+    // lines emitted before the dump command runs are already buffered.
+    if std::env::var("RUST_LOG")
+        .ok()
+        .is_some_and(|val| rust_log_enables_cursor_geometry(&val))
+    {
+        CURSOR_GEOMETRY_CAPTURE.store(true, Ordering::SeqCst);
+    }
+    layers.push(
+        CursorGeometryCaptureLayer
+            .with_filter(CursorGeometryCaptureFilter)
+            .boxed(),
+    );
     // GC trace is an explicit stderr diagnostic even for silent batch/TUI
     // logging. Keep this separate from RUST_LOG and the normal writers so
     // TRACE=1 alone exposes the generation labels without changing Lisp output.
@@ -323,4 +490,86 @@ fn init_inner(target: LogTarget) -> Option<tracing_appender::non_blocking::Worke
         eprintln!("warning: tracing subscriber init failed: {e}");
     }
     file_guard
+}
+
+#[cfg(test)]
+mod cursor_geometry_capture_tests {
+    use super::*;
+
+    #[test]
+    fn cursor_geometry_capture_is_off_by_default_and_toggles_live() {
+        // Build an isolated subscriber mirroring default `RUST_LOG=warn` so
+        // ambient developer-shell `RUST_LOG=debug` does not mask the filter.
+        let subscriber = tracing_subscriber::registry()
+            .with(
+                tracing_subscriber::fmt::layer()
+                    .with_test_writer()
+                    .with_filter(EnvFilter::new("warn")),
+            )
+            .with(CursorGeometryCaptureLayer.with_filter(CursorGeometryCaptureFilter));
+
+        tracing::subscriber::with_default(subscriber, || {
+            set_cursor_geometry_capture(false);
+            clear_cursor_geometry_lines();
+            assert!(!cursor_geometry_capture_enabled());
+            assert!(
+                !tracing::enabled!(target: CURSOR_GEOMETRY_TARGET, tracing::Level::DEBUG),
+                "cursor_geometry target must stay disabled under default warn filter when capture is off"
+            );
+
+            tracing::debug!(
+                target: CURSOR_GEOMETRY_TARGET,
+                "frame=1 stage=draw presentation=0 skipped=true"
+            );
+            assert!(
+                snapshot_cursor_geometry_lines().is_empty(),
+                "events emitted while off must not be buffered"
+            );
+
+            let prev = set_cursor_geometry_capture(true);
+            assert!(!prev);
+            assert!(cursor_geometry_capture_enabled());
+            assert!(
+                tracing::enabled!(target: CURSOR_GEOMETRY_TARGET, tracing::Level::DEBUG),
+                "set_cursor_geometry_capture(true) must enable neomacs::cursor_geometry at DEBUG"
+            );
+
+            tracing::debug!(
+                target: CURSOR_GEOMETRY_TARGET,
+                "frame=1 stage=layout presentation=7 window=3 hscroll=0 vscroll=0"
+            );
+            tracing::debug!(
+                target: CURSOR_GEOMETRY_TARGET,
+                "frame=1 stage=draw presentation=7 window=3 drawn_in_row=true"
+            );
+
+            let lines = snapshot_cursor_geometry_lines();
+            assert_eq!(lines.len(), 2);
+            assert!(lines[0].contains("stage=layout presentation=7"));
+            assert!(lines[1].contains("stage=draw presentation=7"));
+
+            let was_enabled = set_cursor_geometry_capture(false);
+            assert!(was_enabled);
+            assert!(!cursor_geometry_capture_enabled());
+            assert!(
+                !tracing::enabled!(target: CURSOR_GEOMETRY_TARGET, tracing::Level::DEBUG),
+                "set_cursor_geometry_capture(false) must disable neomacs::cursor_geometry again"
+            );
+        });
+    }
+
+    #[test]
+    fn rust_log_parser_detects_cursor_geometry_directives() {
+        assert!(!rust_log_enables_cursor_geometry("warn"));
+        assert!(!rust_log_enables_cursor_geometry(
+            "info,neomacs::cursor_geometry=warn"
+        ));
+        assert!(rust_log_enables_cursor_geometry(
+            "warn,neomacs::cursor_geometry=debug"
+        ));
+        assert!(rust_log_enables_cursor_geometry(
+            "neomacs::cursor_geometry=trace"
+        ));
+        assert!(rust_log_enables_cursor_geometry("debug"));
+    }
 }

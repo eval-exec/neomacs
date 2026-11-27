@@ -9,6 +9,52 @@ fn clear_image_terminals(shared: &super::SharedImageRenderState, image: ImageId)
 }
 
 impl RenderApp {
+    pub(super) fn collect_display_debug_snapshots(
+        &self,
+    ) -> Vec<neomacs_display_protocol::PresentedFrameDebugSnapshot> {
+        let mut snapshots = Vec::new();
+        self.frame_windows
+            .for_each_top_level_window(|window_state| {
+                let frame_id = window_state.render.emacs_frame_id;
+                let is_primary = self.frame_windows.is_primary_frame_id(frame_id);
+                let scale_factor = window_state.scale_factor();
+                let (surf_w, surf_h) = window_state.content_size();
+                let cursor_visible = window_state.render.cursor.blink_on;
+                let blink_enabled = window_state.render.cursor.blink_enabled;
+                if let Some(frame) = window_state.render.compositor.current_frame.as_ref() {
+                    snapshots.push(
+                        neomacs_display_protocol::PresentedFrameDebugSnapshot::from_frame_buffer(
+                            frame_id,
+                            is_primary,
+                            frame,
+                            window_state.render.last_presented_frame,
+                            scale_factor,
+                            [surf_w, surf_h],
+                            cursor_visible,
+                            blink_enabled,
+                        ),
+                    );
+                }
+                for (&child_id, child_entry) in &window_state.render.compositor.child_frames.frames
+                {
+                    snapshots.push(
+                        neomacs_display_protocol::PresentedFrameDebugSnapshot::from_frame_buffer(
+                            child_id,
+                            false,
+                            &child_entry.frame,
+                            None,
+                            scale_factor,
+                            [surf_w, surf_h],
+                            cursor_visible,
+                            blink_enabled,
+                        ),
+                    );
+                }
+            });
+        snapshots.sort_by_key(|s| (!s.is_primary, s.frame_id));
+        snapshots
+    }
+
     #[cfg(feature = "video")]
     fn video_renderer_identity(&self) -> Option<neomacs_video::VideoRendererIdentity> {
         let gpu = self.gpu.as_ref()?;
@@ -256,6 +302,10 @@ impl RenderApp {
                 self.frame_windows.mark_top_level_dirty();
                 self.frame_windows
                     .for_each_top_level_window(|window_state| window_state.request_redraw());
+            }
+            AssetCommand::CaptureDisplayDebugState { reply } => {
+                let snapshots = self.collect_display_debug_snapshots();
+                let _ = reply.send(snapshots);
             }
             AssetCommand::WebView(command) => {
                 #[cfg(not(feature = "webview"))]

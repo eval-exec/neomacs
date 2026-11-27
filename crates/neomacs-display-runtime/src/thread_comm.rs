@@ -620,6 +620,14 @@ pub enum AssetCommand {
     /// a healthy device. Sent by the hidden `neomacs--debug-lose-device`
     /// builtin; never used in production paths.
     DebugSimulateDeviceLoss,
+    /// On-demand diagnostic snapshot of the render thread's last-presented
+    /// cursor, window, and cursor-context row state for every live frame
+    /// (`M-x neomacs-dump-display-state` / `neomacs--frame-snapshot`
+    /// `'display-debug`).
+    CaptureDisplayDebugState {
+        reply:
+            crossbeam_channel::Sender<Vec<neomacs_display_protocol::PresentedFrameDebugSnapshot>>,
+    },
     /// Backend-neutral embedded-browser operation.
     WebView(neomacs_webview::WebViewCommand),
     /// Create a shader surface (docs/display-engine/SHADER_SURFACES.md)

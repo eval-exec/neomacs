@@ -3232,6 +3232,19 @@ impl DisplayHost for PrimaryWindowDisplayHost {
         }
     }
 
+    fn capture_display_debug_state(&self) -> Result<String, String> {
+        let (reply, received) = crossbeam_channel::bounded(1);
+        self.send_render_command(
+            RenderCommand::Asset(AssetCommand::CaptureDisplayDebugState { reply }),
+            "failed to request display debug state",
+        )?;
+        let snapshots = received
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .map_err(|error| format!("display debug state reply failed: {error}"))?;
+        serde_json::to_string(&snapshots)
+            .map_err(|error| format!("display debug state JSON encode failed: {error}"))
+    }
+
     fn begin_video_measurement_epoch(
         &self,
     ) -> Result<neomacs_video_model::VideoDiagnostics, String> {

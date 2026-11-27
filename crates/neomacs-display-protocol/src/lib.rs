@@ -10,6 +10,7 @@ pub mod animated_visual;
 pub mod child_frame_animation;
 pub mod clipboard;
 pub mod cursor;
+pub mod display_debug;
 pub mod display_identity;
 pub mod display_scale;
 pub mod dma_buf;
@@ -64,6 +65,7 @@ pub use glyph_matrix_capacity::*;
 pub mod tty_capabilities;
 
 pub use clipboard::*;
+pub use display_debug::*;
 pub use display_identity::*;
 pub use display_scale::*;
 pub use dma_buf::*;

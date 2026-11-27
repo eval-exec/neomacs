@@ -120,6 +120,7 @@ impl RenderApp {
             output,
             frame,
             projection,
+            last_presented_frame,
         } = match rendered {
             Ok(rendered) => rendered,
             Err(failure) => {
@@ -214,6 +215,8 @@ impl RenderApp {
         // This projection describes the frame just handed to the compositor.
         // Keep input publication at submission; native confirmation is separate.
         if let Some(window_state) = self.frame_windows.get_mut(emacs_frame_id) {
+            window_state.render.presented_frame_seq = last_presented_frame.frame_seq;
+            window_state.render.last_presented_frame = Some(last_presented_frame);
             window_state.render.publish_submitted_projection(projection);
         }
         #[cfg(feature = "video")]

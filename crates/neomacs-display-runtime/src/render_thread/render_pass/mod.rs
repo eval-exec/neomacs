@@ -74,6 +74,63 @@ struct RenderedFrameSurface {
     output: wgpu::SurfaceTexture,
     frame: crate::core::frame_glyphs::FrameGlyphBuffer,
     projection: Option<neomacs_display_protocol::InteractionProjection>,
+    last_presented_frame: neomacs_display_protocol::LastPresentedFrameSummary,
+}
+
+/// Build the inline `Copy` summary of the last-presented render-thread state
+/// that this render pass is about to hand to `queue().present(...)`.
+///
+/// Captures ONLY the render-thread state not owned by `neomacs::cursor_geometry`
+/// (monotonic present sequence, composition strategy, scale/surface size,
+/// blink/visibility/inverse-video, smooth-cursor animation override, and
+/// input-scroll prediction). Zero heap allocation; committed onto
+/// `GuiFrameRenderState` only after `queue().present(...)`.
+fn build_last_presented_frame_summary(
+    render: &GuiFrameRenderState,
+    native: &GuiFrameNativeWindowState,
+    frame: &crate::core::frame_glyphs::FrameGlyphBuffer,
+    inputs: &FrameDrawInputs<'_>,
+    cursor_visible: bool,
+    render_path: neomacs_display_protocol::PresentedRenderPath,
+    next_frame_seq: u64,
+) -> neomacs_display_protocol::LastPresentedFrameSummary {
+    let (surface_width, surface_height) = native.content_size();
+    let input_scroll_proj = render.compositor.input_scroll.staged_projection();
+    let input_scroll_active = render.compositor.input_scroll.active();
+    let input_scroll_offset = input_scroll_proj.map_or(0.0, |(_, offset)| offset);
+    let active = frame.active_cursor();
+    let animated_cursor_rect = active.and_then(|c| match inputs.root_animated_cursor {
+        Some(anim) if anim.window_id == c.window_id => {
+            Some(neomacs_display_protocol::DisplayDebugRect::from_array([
+                anim.x,
+                anim.y,
+                anim.width,
+                anim.height,
+            ]))
+        }
+        _ => None,
+    });
+    neomacs_display_protocol::LastPresentedFrameSummary {
+        presentation_id: frame.presentation_id,
+        frame_seq: next_frame_seq,
+        render_path,
+        scale_factor: native.scale_factor,
+        surface_width,
+        surface_height,
+        logical_width: frame.width,
+        logical_height: frame.height,
+        has_active_cursor: active.is_some(),
+        cursor_visible,
+        blink_enabled: render.cursor.blink_enabled,
+        inverse_video_active: cursor_visible
+            && active.is_some_and(|c| {
+                matches!(c.style, neomacs_display_protocol::CursorStyle::FilledBox)
+            }),
+        is_animating: render.cursor.animating,
+        animated_cursor_rect,
+        input_scroll_active,
+        input_scroll_offset,
+    }
 }
 
 /// The inputs one frame's content draw needs that are fixed for the whole
@@ -483,6 +540,16 @@ fn render_frame_window_contents_reserved(
                 render.applied_frame_alpha,
             );
         }
+        let next_frame_seq = render.presented_frame_seq.wrapping_add(1);
+        let last_presented_frame = build_last_presented_frame_summary(
+            render,
+            native,
+            &frame,
+            &inputs,
+            cursor_visible,
+            neomacs_display_protocol::PresentedRenderPath::RetainedStatic,
+            next_frame_seq,
+        );
         renderer.set_scale_factor(old_scale_factor);
         renderer.resize(old_width, old_height);
         // Forwarded, not discarded. Eligibility requires only that this frame
@@ -497,6 +564,7 @@ fn render_frame_window_contents_reserved(
             output,
             frame,
             projection: pane_projection,
+            last_presented_frame,
         });
     }
 
@@ -561,12 +629,28 @@ fn render_frame_window_contents_reserved(
             render.applied_frame_alpha,
         );
     }
+    let render_path = if render.compositor.input_scroll.active() {
+        neomacs_display_protocol::PresentedRenderPath::RetainedScroll
+    } else {
+        neomacs_display_protocol::PresentedRenderPath::FullRender
+    };
+    let next_frame_seq = render.presented_frame_seq.wrapping_add(1);
+    let last_presented_frame = build_last_presented_frame_summary(
+        render,
+        native,
+        &frame,
+        &inputs,
+        cursor_visible,
+        render_path,
+        next_frame_seq,
+    );
     renderer.set_scale_factor(old_scale_factor);
     renderer.resize(old_width, old_height);
     Ok(RenderedFrameSurface {
         output,
         frame,
         projection: pane_projection,
+        last_presented_frame,
     })
 }
 

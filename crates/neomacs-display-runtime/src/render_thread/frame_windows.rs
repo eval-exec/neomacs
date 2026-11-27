@@ -333,6 +333,13 @@ pub(crate) struct GuiFrameRenderState {
     pub(super) input_method: InputMethodState,
     /// Text cursor animation and blink state for this frame window.
     pub(super) cursor: CursorState,
+    /// Monotonic count of presented frames for this top-level window.
+    pub(in crate::render_thread) presented_frame_seq: u64,
+    /// Inline `Copy` summary of the last-presented render-thread state handed
+    /// to `queue().present(...)` for on-demand display debug dumps (zero
+    /// per-frame heap allocation).
+    pub(in crate::render_thread) last_presented_frame:
+        Option<neomacs_display_protocol::LastPresentedFrameSummary>,
     /// Last known pointer position in native root-surface logical coordinates.
     pub mouse_pos: (f32, f32),
     pub(super) scroll_input: super::scroll_input::ScrollInput,
@@ -583,6 +590,8 @@ impl GuiFrameRenderState {
             applied_frame_alpha: 1.0,
             input_method: InputMethodState::default(),
             cursor: CursorState::new(at),
+            presented_frame_seq: 0,
+            last_presented_frame: None,
             mouse_pos: (0.0, 0.0),
             scroll_input: super::scroll_input::ScrollInput::default(),
             pointer_inside: false,

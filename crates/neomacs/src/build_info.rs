@@ -154,6 +154,11 @@ pub(crate) fn write_build_provenance(output: &mut String) {
     BuildProvenance::embedded().write_to(output);
 }
 
+pub(crate) fn git_commit_summary() -> String {
+    let source = SourceRevision::embedded();
+    format!("{}{}", source.sha(), source.worktree_suffix())
+}
+
 #[cfg(test)]
 #[path = "build_info/tests/build_info_test.rs"]
 mod tests;

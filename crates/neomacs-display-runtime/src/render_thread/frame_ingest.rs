@@ -7,6 +7,14 @@ use super::frame_windows::{
 use crate::core::types::DisplayFrameId;
 use crate::render_thread::cursor::{CursorConfigSnapshot, CursorTarget};
 
+/// Read `NEOMACS_DUMP_FRAME_GLYPHS` at most once per process so normal frames
+/// never touch the environment on every ingested presentation.
+pub(crate) fn dump_frame_glyphs_mode() -> Option<&'static str> {
+    static MODE: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    MODE.get_or_init(|| std::env::var("NEOMACS_DUMP_FRAME_GLYPHS").ok())
+        .as_deref()
+}
+
 #[cfg(feature = "webview")]
 fn collect_frame_webviews(
     frame: &crate::core::frame_glyphs::FrameGlyphBuffer,
@@ -638,8 +646,9 @@ impl RenderApp {
                 //   by (window, y, x), plus cursors. This is the reusable frontend
                 //   debugging view: any color/face/stipple/position bug is a text diff
                 //   (neomacs-before vs -after, or vs GNU) with no rebuild or screenshot.
-                let dump_frame_glyphs_mode = std::env::var("NEOMACS_DUMP_FRAME_GLYPHS").ok();
-                if matches!(dump_frame_glyphs_mode.as_deref(), Some("1") | Some("full")) {
+                // Cached once via `OnceLock` so normal frames never call `std::env::var`.
+                let dump_frame_glyphs_mode = dump_frame_glyphs_mode();
+                if matches!(dump_frame_glyphs_mode, Some("1") | Some("full")) {
                     let mut char_count = 0usize;
                     let mut bg_count = 0usize;
                     let mut border_count = 0usize;
@@ -813,7 +822,7 @@ impl RenderApp {
                                 )
                             });
                     tracing::info!("all_glyphs:\n{}", all_glyphs);
-                    if dump_frame_glyphs_mode.as_deref() == Some("full") {
+                    if dump_frame_glyphs_mode == Some("full") {
                         tracing::info!(
                             "GLYPH_DUMP_FULL frame={}:\n{}",
                             frame_id,

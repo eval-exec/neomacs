@@ -1917,3 +1917,105 @@ fn cursor_motion_mid_animation_stays_paced_without_unpaced_cursor_animation() {
     );
     assert!(!plan_settle.reasons.contains(DemandReason::CursorMotion));
 }
+
+#[test]
+fn capture_display_debug_state_command_returns_last_presented_and_fallback_snapshots() {
+    use crate::thread_comm::AssetCommand;
+    use neomacs_display_protocol::{
+        DisplayDebugRect, LastPresentedFrameSummary, PresentationId, PresentedRenderPath,
+    };
+
+    let mut app = make_test_app();
+    let win_id = DisplayWindowId::new(17);
+    let mut frame = FrameGlyphBuffer::with_size(800.0, 600.0);
+    frame.presentation_id = PresentationId::new(11);
+    frame.set_phys_cursor(PhysCursor {
+        window_id: win_id,
+        charpos: 25,
+        row: 2,
+        col: 0,
+        slot_id: DisplaySlotId {
+            window_id: win_id,
+            row: 2,
+            col: 0,
+        },
+        x: 0.0,
+        y: 40.0,
+        width: 10.0,
+        height: 20.0,
+        ascent: 15.0,
+        style: CursorStyle::FilledBox,
+        color: Color::WHITE,
+        cursor_fg: Color::BLACK,
+    });
+
+    {
+        let primary = app
+            .frame_windows
+            .primary_window_mut()
+            .expect("primary window");
+        primary.render.compositor.current_frame = Some(frame);
+        primary.render.last_presented_frame = None;
+    }
+
+    // Before any swapchain present, CaptureDisplayDebugState reports NotYetPresented.
+    let (tx1, rx1) = crossbeam_channel::bounded(1);
+    app.handle_asset(AssetCommand::CaptureDisplayDebugState { reply: tx1 });
+    let before = rx1.recv().expect("debug reply before present");
+    assert_eq!(before.len(), 1);
+    assert!(before[0].is_primary);
+    assert_eq!(before[0].render_path, PresentedRenderPath::NotYetPresented);
+    assert_eq!(before[0].presentation_id, 11);
+    assert!(before[0].has_active_cursor);
+
+    // Once present.rs records LastPresentedFrameSummary, CaptureDisplayDebugState
+    // returns the exact presented metrics and render_path.
+    {
+        let primary = app
+            .frame_windows
+            .primary_window_mut()
+            .expect("primary window");
+        primary.render.presented_frame_seq = 9;
+        primary.render.last_presented_frame = Some(LastPresentedFrameSummary {
+            presentation_id: PresentationId::new(11),
+            frame_seq: 9,
+            render_path: PresentedRenderPath::RetainedStatic,
+            scale_factor: 2.0,
+            surface_width: 1600,
+            surface_height: 1200,
+            logical_width: 800.0,
+            logical_height: 600.0,
+            has_active_cursor: true,
+            cursor_visible: false,
+            blink_enabled: true,
+            inverse_video_active: false,
+            is_animating: true,
+            animated_cursor_rect: Some(DisplayDebugRect::from_array([0.0, 40.0, 10.0, 20.0])),
+            input_scroll_active: false,
+            input_scroll_offset: 0.0,
+        });
+    }
+
+    let (tx2, rx2) = crossbeam_channel::bounded(1);
+    app.handle_asset(AssetCommand::CaptureDisplayDebugState { reply: tx2 });
+    let after = rx2.recv().expect("debug reply after present");
+    assert_eq!(after.len(), 1);
+    assert_eq!(after[0].frame_seq, 9);
+    assert_eq!(after[0].render_path, PresentedRenderPath::RetainedStatic);
+    assert_eq!(after[0].scale_factor, 2.0);
+    assert_eq!(after[0].surface_px, [1600, 1200]);
+    assert!(!after[0].cursor_visible);
+    assert!(!after[0].inverse_video_active);
+    assert!(after[0].is_animating);
+}
+
+#[test]
+fn dump_frame_glyphs_mode_uses_oncelock_cache() {
+    let first = super::frame_ingest::dump_frame_glyphs_mode();
+    let second = super::frame_ingest::dump_frame_glyphs_mode();
+    assert_eq!(first, second);
+    // Both calls return the exact same cached &'static str pointer when set.
+    if let (Some(a), Some(b)) = (first, second) {
+        assert_eq!(a.as_ptr(), b.as_ptr());
+    }
+}
