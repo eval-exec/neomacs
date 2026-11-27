@@ -242,6 +242,77 @@ fn draw_defect(record: &DrawRecord<'_>) -> Option<String> {
         .then(|| format!("  {} {}: {}", record.case, record.step, record.line))
 }
 
+/// `window-cursor-info`'s Y for CASE and STEP, from the editor's own record.
+fn cursor_info_record<'a>(output: &'a str, case: &str, step: &str) -> Option<(f32, &'a str)> {
+    output
+        .lines()
+        .filter_map(|line| line.strip_prefix("CURSOR-ROW-WALK "))
+        .find_map(|record| {
+            let at = record.find(" [")?;
+            let fields: Vec<&str> = record[..at].split_whitespace().collect();
+            let vector = record[at + 1..].trim_end();
+            let y = vector.split_whitespace().nth(2)?.parse().ok()?;
+            (fields.first() == Some(&case) && fields.get(1) == Some(&step)).then_some((y, vector))
+        })
+}
+
+/// The `(x,y wxh)` text after `key=` in LINE, for failure messages.
+fn rect_text<'a>(line: &'a str, key: &str) -> &'a str {
+    line.split(&format!(" {key}="))
+        .nth(1)
+        .map_or("missing", |rest| {
+            rest.find(')').map_or(rest, |end| &rest[..=end])
+        })
+}
+
+/// In the same frame, the drawn cursor must be the physical cursor Lisp
+/// reports: drawn y minus the text area's top equals `window-cursor-info`'s
+/// Y. Together with the per-step GNU comparison of the `posn-at-point` and
+/// `window-cursor-info` rows, this ties the drawn cursor to the row
+/// `posn-at-point` gives point. #855 was confirmed by posn and the drawn
+/// cursor disagreeing by a row while the drawn and layout rectangles agreed.
+/// (`posn-at-point`'s Y is measured below a header line and
+/// `window-cursor-info`'s from the window's text-area top, on GNU as well, so
+/// the two are compared through GNU rather than to each other directly.)
+fn cursor_info_defect(record: &DrawRecord<'_>, neo_output: &str) -> Option<String> {
+    let info = cursor_info_record(neo_output, record.case, record.step);
+    // Both rectangles go into every failure: the drawn cursor with the text
+    // area it is measured in, and the `window-cursor-info' vector Lisp saw.
+    let rects = || {
+        format!(
+            "drawn={} text_area={} window-cursor-info={}",
+            rect_text(record.line, "drawn"),
+            rect_text(record.line, "text_area"),
+            info.map_or("missing", |(_, vector)| vector)
+        )
+    };
+    // Fail closed: a step whose numbers cannot be read is a defect, never a
+    // silent pass.
+    let (Some(drawn), Some(text_top), Some((info_y, _))) = (
+        rect_y(record.line, "drawn"),
+        rect_y(record.line, "text_area"),
+        info,
+    ) else {
+        return Some(format!(
+            "  {} {}: unreadable step: {}\n    {}",
+            record.case,
+            record.step,
+            rects(),
+            record.line
+        ));
+    };
+    ((drawn - text_top - info_y).abs() >= 1.0).then(|| {
+        format!(
+            "  {} {}: drawn y - text top = {} but window-cursor-info Y = {info_y}: {}\n    {}",
+            record.case,
+            record.step,
+            drawn - text_top,
+            rects(),
+            record.line
+        )
+    })
+}
+
 fn walk_matches_gnu(neo_backend: GuiBackend) {
     let root = neomacs_infra::workspace_root();
     let artifacts = root
@@ -304,7 +375,10 @@ fn walk_matches_gnu(neo_backend: GuiBackend) {
 
     let draws = parse_draws(&neo_output);
     assert_eq!(draws.len(), gnu.len(), "one Neomacs draw line per step");
-    let misdrawn: Vec<String> = draws.iter().filter_map(draw_defect).collect();
+    let misdrawn: Vec<String> = draws
+        .iter()
+        .filter_map(|draw| draw_defect(draw).or_else(|| cursor_info_defect(draw, &neo_output)))
+        .collect();
     let diverging: Vec<String> = gnu
         .iter()
         .zip(&actual)
@@ -314,7 +388,8 @@ fn walk_matches_gnu(neo_backend: GuiBackend) {
     assert!(
         diverging.is_empty() && misdrawn.is_empty(),
         "{} of {} observations differ from GNU 31.1, and {} drawn cursors leave \
-         layout's row (Neomacs log: {}):\n{}\ndrawn outside layout's row:\n{}",
+         layout's row, point's row or the physical cursor Lisp reports (Neomacs log: {}):\n{}\n\
+         misdrawn:\n{}",
         diverging.len(),
         gnu.len(),
         misdrawn.len(),
@@ -357,4 +432,36 @@ fn draw_defect_catches_a_cursor_resolved_into_another_row() {
     };
     assert!(draw_defect(&record(reporter)).is_some());
     assert!(draw_defect(&record(ours)).is_none());
+}
+
+/// A drawn cursor one row away from the physical cursor Lisp reports is a
+/// defect even when its rectangles agree with layout and its row holds point;
+/// the same draw line with `window-cursor-info` at drawn y - text top is not.
+#[test]
+fn cursor_info_defect_catches_a_drawn_cursor_away_from_window_cursor_info() {
+    let line = "frame=4294967297 stage=draw presentation=488 window=3 charpos=1943 \
+        style=FilledBox layout=(row=18 col=6 slot=18,6 x=56.0 y=357.0 w=8.0 h=17.0 \
+        ascent=13.0) drawn=(56.0,357.0 8.0x17.0) drawn_in_row=true \
+        text_area=(8.0,51.0 640.0x578.0) row=(role=Text top=357.0 h=17.0 pixel_y=306.0 \
+        ascent=13.0 spacing=0.0 chars=1942..1943 cursor_col=6 damage=Reused) glyph=missing";
+    let record = DrawRecord {
+        case: "mid-one-char-doom",
+        step: "1",
+        line,
+    };
+    // drawn y 357 - text-area top 51 = 306.
+    let agrees = "CURSOR-ROW-WALK mid-one-char-doom 1 99 1 80 17 306 [t 48 306 8 17 13]\n";
+    let a_row_above = "CURSOR-ROW-WALK mid-one-char-doom 1 99 1 80 17 289 [t 48 289 8 17 13]\n";
+    assert_eq!(cursor_info_defect(&record, agrees), None);
+    let defect = cursor_info_defect(&record, a_row_above).expect("a row above is a defect");
+    assert!(
+        defect.contains("drawn=(56.0,357.0 8.0x17.0)")
+            && defect.contains("text_area=(8.0,51.0 640.0x578.0)")
+            && defect.contains("window-cursor-info=[t 48 289 8 17 13]"),
+        "the failure names both rectangles: {defect}"
+    );
+    assert!(
+        cursor_info_defect(&record, "").is_some(),
+        "a step without its window-cursor-info record fails closed"
+    );
 }
