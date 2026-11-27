@@ -1,15 +1,17 @@
 //! Client for the pre-booted Neomacs batch `fork()` zygote server.
 //!
 //! Routes eligible Neomacs oracle evaluations (default-environment batch runs
-//! on Unix) through a shared per-run zygote daemon over a Unix domain socket so
-//! the 21 MiB `neomacs.pdump` is loaded once per nextest run instead of once
-//! per test case, while every test still executes inside its own OS-isolated
-//! `fork()`ed child process.
+//! on Linux and macOS) through a shared per-run zygote daemon over a Unix
+//! domain socket so the 21 MiB `neomacs.pdump` is loaded once per nextest run
+//! instead of once per test case, while every test still executes inside its
+//! own OS-isolated `fork()`ed child process.
 //!
-//! Works on both Linux and macOS (`#[cfg(unix)]`). Falls back transparently to
-//! normal `Command::output()` when disabled (`NEOVM_ORACLE_ZYGOTE=0`), outside
-//! Unix, when the binary has no final pdump image (e.g. debug builds), or for
-//! tests with custom pre-boot environment overrides.
+//! Enabled on Linux and macOS (`#[cfg(any(target_os = "linux", target_os = "macos"))]`),
+//! where peer UID verification (`SO_PEERCRED` / `getpeereid`) is supported.
+//! Falls back transparently to normal `Command::output()` when disabled
+//! (`NEOVM_ORACLE_ZYGOTE=0`), on other platforms, when the binary has no final
+//! pdump image (e.g. debug builds), or for tests with custom pre-boot
+//! environment overrides.
 
 use std::process::Output;
 use std::time::Duration;
@@ -18,7 +20,7 @@ use neomacs_test_env::PinnedCommand;
 
 use crate::common::oracle_sandbox::OracleSandbox;
 
-#[cfg(not(unix))]
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 pub(crate) fn try_run_neomacs_via_zygote(
     _cmd: &PinnedCommand,
     _sandbox: &OracleSandbox,
@@ -28,7 +30,7 @@ pub(crate) fn try_run_neomacs_via_zygote(
     None
 }
 
-#[cfg(unix)]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub(crate) fn try_run_neomacs_via_zygote(
     cmd: &PinnedCommand,
     sandbox: &OracleSandbox,
@@ -38,7 +40,7 @@ pub(crate) fn try_run_neomacs_via_zygote(
     unix_impl::try_run_neomacs_via_zygote(cmd, sandbox, rlimit_as, timeout)
 }
 
-#[cfg(unix)]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 mod unix_impl {
     use std::collections::BTreeMap;
     use std::collections::hash_map::DefaultHasher;
@@ -298,11 +300,6 @@ mod unix_impl {
                 ));
             }
             Ok(())
-        }
-        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-        {
-            let _ = (expected_uid, fd);
-            Err("peer UID verification is unsupported on this Unix platform".to_string())
         }
     }
 
