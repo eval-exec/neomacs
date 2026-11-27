@@ -511,6 +511,30 @@ mod unix_impl {
         mask
     }
 
+    fn collect_captured_output(
+        status: ExitStatus,
+        stdout_path: &Path,
+        stderr_path: &Path,
+    ) -> Result<Output, String> {
+        let stdout = fs::read(stdout_path).map_err(|e| {
+            format!(
+                "failed to read zygote stdout capture {}: {e}",
+                stdout_path.display()
+            )
+        })?;
+        let stderr = fs::read(stderr_path).map_err(|e| {
+            format!(
+                "failed to read zygote stderr capture {}: {e}",
+                stderr_path.display()
+            )
+        })?;
+        Ok(Output {
+            status,
+            stdout,
+            stderr,
+        })
+    }
+
     pub(crate) fn try_run_neomacs_via_zygote(
         cmd: &PinnedCommand,
         sandbox: &OracleSandbox,
@@ -557,15 +581,8 @@ mod unix_impl {
 
         // Do not retry once the request is dispatched: the server may already
         // have forked and started side-effecting evaluation.
-        let result = round_trip(&mut stream, &frame, timeout).map(|status| {
-            let stdout = fs::read(&stdout_path).unwrap_or_default();
-            let stderr = fs::read(&stderr_path).unwrap_or_default();
-            Output {
-                status,
-                stdout,
-                stderr,
-            }
-        });
+        let result = round_trip(&mut stream, &frame, timeout)
+            .and_then(|status| collect_captured_output(status, &stdout_path, &stderr_path));
         drop(capture_dir);
         Some(result)
     }
@@ -884,6 +901,28 @@ mod unix_impl {
         fn verify_peer_same_uid_accepts_same_user_socketpair() {
             let (a, _b) = UnixStream::pair().expect("socketpair");
             verify_peer_same_uid(&a).expect("same-user peer should be accepted");
+        }
+
+        #[test]
+        fn collect_captured_output_allows_empty_and_propagates_read_errors() {
+            let dir = bounded_temp_dir("nvz-cap-").expect("tempdir");
+            let stdout_path = dir.path().join("stdout");
+            let stderr_path = dir.path().join("stderr");
+            let status = ExitStatus::from_raw(0);
+
+            // Missing capture files must return Err rather than silently
+            // synthesizing empty output.
+            assert!(collect_captured_output(status, &stdout_path, &stderr_path).is_err());
+
+            fs::write(&stdout_path, b"").unwrap();
+            assert!(collect_captured_output(status, &stdout_path, &stderr_path).is_err());
+
+            // Genuine empty capture files succeed.
+            fs::write(&stderr_path, b"").unwrap();
+            let out = collect_captured_output(status, &stdout_path, &stderr_path)
+                .expect("empty capture files should succeed");
+            assert!(out.stdout.is_empty());
+            assert!(out.stderr.is_empty());
         }
 
         #[test]
