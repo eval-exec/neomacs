@@ -276,7 +276,7 @@ struct Config {
     cpus: String,
     receipt: PathBuf,
     reference: PathBuf,
-    gnu_bin: PathBuf,
+    gnu_bin: Option<PathBuf>,
     run_gnu: bool,
     rss_limit_kib_per_min: f64,
     /// Debug/selection filter: `SOAK_ONLY=a,b` runs only those scenarios.
@@ -290,6 +290,32 @@ struct Config {
 /// Editor directory for the sandboxed run: `NEOVM_BINARY_PATH` (the path CI
 /// exports for the runtime artifact) or `NEOMACS_BIN`, else the workspace's
 /// release build. Accepts either the binary itself or its directory.
+/// Resolve the pinned GNU Emacs binary for soak GNU parity rows:
+/// 1. `TB_GNU_BIN` (explicit soak override),
+/// 2. `NEOVM_FORCE_ORACLE_PATH` (standard oracle override),
+/// 3. `<repo>` (or an ancestor)'s `tmp/gnu-emacs-oracle/bin/emacs`,
+/// 4. CI's attested oracle prefix `/opt/gnu-emacs-oracle/bin/emacs`.
+fn resolve_gnu_oracle_bin(repo: &Path) -> Option<PathBuf> {
+    if let Some(path) = env::var_os("TB_GNU_BIN").filter(|v| !v.is_empty()) {
+        return Some(PathBuf::from(path));
+    }
+    if let Some(path) = env::var_os("NEOVM_FORCE_ORACLE_PATH").filter(|v| !v.is_empty()) {
+        return Some(PathBuf::from(path));
+    }
+    if let Some(found) = repo
+        .ancestors()
+        .map(|ancestor| ancestor.join("tmp/gnu-emacs-oracle/bin/emacs"))
+        .find(|path| path.is_file())
+    {
+        return Some(found);
+    }
+    let ci_oracle = PathBuf::from("/opt/gnu-emacs-oracle/bin/emacs");
+    if ci_oracle.is_file() {
+        return Some(ci_oracle);
+    }
+    None
+}
+
 fn resolve_editor_dir(repo: &Path) -> PathBuf {
     for var in ["NEOVM_BINARY_PATH", "NEOMACS_BIN"] {
         if let Some(value) = env::var_os(var) {
@@ -377,9 +403,7 @@ impl Config {
                     repo.join("tmp/v10x/soak/reference")
                         .join(format!("seed{seed}.tsv"))
                 }),
-            gnu_bin: env::var_os("TB_GNU_BIN")
-                .map(PathBuf::from)
-                .unwrap_or_else(|| PathBuf::from("/home/exec/.local/bin/emacs")),
+            gnu_bin: resolve_gnu_oracle_bin(&repo),
             run_gnu: env::var("SOAK_GNU")
                 .map(|v| v != "0")
                 .unwrap_or(role != Role::Smoke),
@@ -583,7 +607,19 @@ fn run_row(config: &Config, scenario: &Scenario, arm: Arm, gnu: bool) -> Run {
         .arg("-o")
         .arg(&perf_path);
     if gnu {
-        command.arg(&config.gnu_bin);
+        let gnu_bin = config.gnu_bin.as_deref().unwrap_or_else(|| {
+            panic!(
+                "soak GNU comparison requires an attested GNU Emacs binary: \
+                 set TB_GNU_BIN or NEOVM_FORCE_ORACLE_PATH, or build \
+                 tmp/gnu-emacs-oracle/bin/emacs via scripts/ci/build-gnu-oracle.sh"
+            )
+        });
+        assert!(
+            gnu_bin.is_file(),
+            "configured GNU Emacs binary does not exist: {}",
+            gnu_bin.display(),
+        );
+        command.arg(gnu_bin);
     } else {
         command.arg(config.bin.join("neomacs"));
     }

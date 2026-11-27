@@ -101,12 +101,11 @@ pub fn gnu_probe_command() -> neomacs_test_env::PinnedCommand {
 
 /// A canonically pinned GNU command for recording an expectation.
 ///
-/// Recording evaluates Lisp in GNU, so on Linux it must run in the campaign
-/// sandbox: the same wrappers as [`gnu_probe_command`], or the campaign's
-/// `tmp/v10x/sandbox-run.sh` found from the workspace root (the main
-/// checkout when the test runs in a worktree).  A host without that wrapper
-/// cannot refresh Linux GNU expectations, and saying so beats silently
-/// recording them unsandboxed.
+/// Recording evaluates Lisp in GNU, so on Linux it must run in a sandbox: an
+/// explicit override (`NEOVM_LISP_SANDBOX`, `NEOMACS_PROBE_SANDBOX`,
+/// `NEOVM_SANDBOX_RUN`), the tracked `crates/neovm-core/tests/soak/sandbox-run.sh`,
+/// or a scratch fallback. A host without a launcher cannot refresh Linux GNU
+/// expectations, and saying so beats silently recording them unsandboxed.
 pub fn gnu_refresh_command() -> neomacs_test_env::PinnedCommand {
     let emacs = gnu_oracle().executable_path();
     if std::env::var("CARFRAME_TEST_IN_SANDBOX").as_deref() == Ok("1") {
@@ -114,9 +113,10 @@ pub fn gnu_refresh_command() -> neomacs_test_env::PinnedCommand {
     }
     let wrapper = probe_sandbox().unwrap_or_else(|| {
         panic!(
-            "refreshing GNU expectations requires the campaign sandbox: set \
-             NEOVM_LISP_SANDBOX (or NEOMACS_PROBE_SANDBOX), or keep \
-             tmp/v10x/sandbox-run.sh in the workspace or one of its ancestors"
+            "refreshing GNU expectations requires a sandbox launcher: \
+             expected tracked crates/neovm-core/tests/soak/sandbox-run.sh under {} \
+             (or set NEOVM_LISP_SANDBOX / NEOMACS_PROBE_SANDBOX / NEOVM_SANDBOX_RUN)",
+            workspace_root().display(),
         )
     });
     let mut command = canonical_oracle_command(wrapper);
@@ -124,25 +124,31 @@ pub fn gnu_refresh_command() -> neomacs_test_env::PinnedCommand {
     command
 }
 
-/// The campaign sandbox wrapper, when one is configured or installed.
+/// The process sandbox wrapper, when one is configured or installed.
 ///
-/// A worktree does not carry the ignored `tmp/` tree, so the script is
-/// searched for in the workspace root and each of its ancestors; that finds
-/// the main checkout's copy without hardcoding a host path.
+/// Explicit environment overrides win first; otherwise on Linux the tracked
+/// `crates/neovm-core/tests/soak/sandbox-run.sh` in the workspace is preferred
+/// ahead of any gitignored scratch fallback so clean checkouts and CI runners
+/// work out of the box.
 fn probe_sandbox() -> Option<std::ffi::OsString> {
     std::env::var_os("NEOVM_LISP_SANDBOX")
-        .or_else(|| std::env::var_os("NEOMACS_PROBE_SANDBOX"))
-        .or_else(|| std::env::var_os("NEOVM_SANDBOX_RUN"))
+        .filter(|v| !v.is_empty())
+        .or_else(|| std::env::var_os("NEOMACS_PROBE_SANDBOX").filter(|v| !v.is_empty()))
+        .or_else(|| std::env::var_os("NEOVM_SANDBOX_RUN").filter(|v| !v.is_empty()))
         .or_else(|| {
-            // The campaign sandbox is a Linux process wrapper
-            // (`systemd-run` + PID namespaces); a Darwin host runs the local
-            // GNU reference directly and has no such script.
+            // The sandbox wrapper is a Linux process launcher (`systemd-run` /
+            // PID namespaces); a Darwin host runs the local GNU reference
+            // directly.
             if !cfg!(target_os = "linux") {
                 return None;
             }
-            workspace_root()
-                .ancestors()
-                .map(|root| root.join("tmp/v10x/sandbox-run.sh"))
+            let root = workspace_root();
+            let tracked = root.join("crates/neovm-core/tests/soak/sandbox-run.sh");
+            if tracked.is_file() {
+                return Some(tracked.into_os_string());
+            }
+            root.ancestors()
+                .map(|ancestor| ancestor.join("tmp/v10x/sandbox-run.sh"))
                 .find(|path| path.is_file())
                 .map(std::path::PathBuf::into_os_string)
         })

@@ -10,6 +10,10 @@ const CHILD_CASE: &str = "NEOVM_MODULE_LIFETIME_CASE";
 const CHILD_LIBRARY: &str = "NEOVM_MODULE_LIFETIME_LIBRARY";
 const CHILD_EXPECT: &str = "NEOVM_MODULE_LIFETIME_EXPECT";
 
+/// Tracked portable sandbox launcher (capability-probes systemd scope / PID
+/// namespace / direct exec; also used by `tests/thread_soak.rs`).
+const TRACKED_SANDBOX_REL: &str = "crates/neovm-core/tests/soak/sandbox-run.sh";
+
 const MODULE_SOURCE: &str = r#"
 #include <emacs-module.h>
 int plugin_is_GPL_compatible;
@@ -41,14 +45,59 @@ fn checked_output(mut command: Command) -> Output {
 }
 
 fn sandbox() -> Option<PathBuf> {
-    std::env::var_os("NEOVM_SANDBOX_RUN")
-        .map(PathBuf::from)
-        .or_else(|| {
-            neomacs_infra::workspace_root()
-                .ancestors()
-                .map(|root| root.join("tmp/v10x/sandbox-run.sh"))
-                .find(|path| path.is_file())
-        })
+    if let Some(override_path) = std::env::var_os("NEOVM_SANDBOX_RUN").filter(|v| !v.is_empty()) {
+        return Some(PathBuf::from(override_path));
+    }
+    let root = neomacs_infra::workspace_root();
+    let tracked = root.join(TRACKED_SANDBOX_REL);
+    if tracked.is_file() {
+        return Some(tracked);
+    }
+    root.ancestors()
+        .map(|ancestor| ancestor.join("tmp/v10x/sandbox-run.sh"))
+        .find(|path| path.is_file())
+}
+
+/// Resolve the directory containing GNU Emacs's `emacs-module.h`:
+/// 1. `GNU_EMACS_SOURCE` (either `<dir>/src` or `<dir>`),
+/// 2. `NEOVM_FORCE_ORACLE_PATH` sibling `<prefix>/include`,
+/// 3. `<workspace_root>` (or an ancestor)'s `tmp/gnu-emacs-oracle/include`,
+/// 4. CI's attested oracle prefix `/opt/gnu-emacs-oracle/include`.
+fn emacs_module_header_dir() -> Option<PathBuf> {
+    if let Some(src) = std::env::var_os("GNU_EMACS_SOURCE").filter(|v| !v.is_empty()) {
+        let base = PathBuf::from(src);
+        let src_dir = base.join("src");
+        if src_dir.join("emacs-module.h").is_file() {
+            return Some(src_dir);
+        }
+        if base.join("emacs-module.h").is_file() {
+            return Some(base);
+        }
+        return None;
+    }
+    if let Some(oracle_bin) = std::env::var_os("NEOVM_FORCE_ORACLE_PATH").filter(|v| !v.is_empty())
+    {
+        let bin_path = PathBuf::from(oracle_bin);
+        if let Some(prefix) = bin_path.parent().and_then(|p| p.parent()) {
+            let include = prefix.join("include");
+            if include.join("emacs-module.h").is_file() {
+                return Some(include);
+            }
+        }
+    }
+    let root = neomacs_infra::workspace_root();
+    if let Some(include) = root
+        .ancestors()
+        .map(|ancestor| ancestor.join("tmp/gnu-emacs-oracle/include"))
+        .find(|dir| dir.join("emacs-module.h").is_file())
+    {
+        return Some(include);
+    }
+    let ci_include = PathBuf::from("/opt/gnu-emacs-oracle/include");
+    if ci_include.join("emacs-module.h").is_file() {
+        return Some(ci_include);
+    }
+    None
 }
 
 /// A child either inherits the runner's PID isolation or enters it through
@@ -103,28 +152,48 @@ fn lifetime_case(case: &str, result_code: i32, init_status: i32, pending_exit: &
         context.gc_collect_exact();
         let result = apply_module_function(&mut context, callback, Vec::new()).unwrap();
         assert_eq!(result.as_int().unwrap().to_string(), expected_integer);
+        println!(
+            "library_lifetime child verified: case={case} condition={expected_condition} integer={expected_integer}"
+        );
         return;
     }
 
     let isolation = if std::env::var("CARFRAME_TEST_IN_SANDBOX").as_deref() == Ok("1") {
         ChildIsolation::Inherited
     } else {
-        let Some(sandbox) = sandbox() else {
-            tracing::warn!(
-                case,
-                "module lifetime probe requires a Lisp sandbox; skipped"
-            );
-            return;
-        };
+        let sandbox = sandbox().unwrap_or_else(|| {
+            panic!(
+                "module lifetime probe ({case}) requires a sandbox launcher: \
+                 expected tracked {TRACKED_SANDBOX_REL} under {} \
+                 (or set NEOVM_SANDBOX_RUN or CARFRAME_TEST_IN_SANDBOX=1)",
+                neomacs_infra::workspace_root().display(),
+            )
+        });
+        assert!(
+            sandbox.is_file(),
+            "module lifetime probe ({case}) sandbox launcher does not exist: {}",
+            sandbox.display(),
+        );
         ChildIsolation::Launch(sandbox)
     };
 
-    let directory = neomacs_infra::workspace_root()
-        .join("tmp/tsb-modules")
-        .join(format!("{case}-{}", std::process::id()));
-    std::fs::create_dir_all(&directory).unwrap();
-    let source = directory.join("module.c");
-    let library = directory.join("module.so");
+    let header_directory = emacs_module_header_dir().unwrap_or_else(|| {
+        panic!(
+            "module lifetime probe ({case}) requires emacs-module.h: \
+             checked GNU_EMACS_SOURCE, NEOVM_FORCE_ORACLE_PATH sibling include/, \
+             tmp/gnu-emacs-oracle/include under {} (and ancestors), and \
+             /opt/gnu-emacs-oracle/include (build the oracle prefix via \
+             scripts/ci/build-gnu-oracle.sh)",
+            neomacs_infra::workspace_root().display(),
+        )
+    });
+
+    let tempdir = tempfile::Builder::new()
+        .prefix(&format!("tsb-module-{case}-"))
+        .tempdir()
+        .expect("create temporary directory for module lifetime probe");
+    let source = tempdir.path().join("module.c");
+    let library = tempdir.path().join("module.so");
     std::fs::write(
         &source,
         MODULE_SOURCE
@@ -134,29 +203,16 @@ fn lifetime_case(case: &str, result_code: i32, init_status: i32, pending_exit: &
             .replace("INIT_STATUS", &init_status.to_string()),
     )
     .unwrap();
-    let header_directory = PathBuf::from("/home/exec/Projects/github.com/emacs-mirror/emacs/src");
-    if !header_directory.join("emacs-module.h").is_file() {
-        tracing::warn!(
-            case,
-            "module lifetime probe requires emacs-module.h; skipped"
-        );
-        return;
-    }
     let mut compiler = Command::new("cc");
     compiler
         .args(["-shared", "-fPIC", "-I"])
-        .arg(header_directory)
+        .arg(&header_directory)
         .arg(&source)
         .arg("-o")
         .arg(&library);
-    let output = match compiler.output() {
-        Ok(output) => output,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            tracing::warn!(case, "module lifetime probe requires a C compiler; skipped");
-            return;
-        }
-        Err(error) => panic!("start C compiler: {error}"),
-    };
+    let output = compiler.output().unwrap_or_else(|error| {
+        panic!("module lifetime probe ({case}) requires a C compiler (`cc`): {error}")
+    });
     assert!(
         output.status.success(),
         "{}",
@@ -185,7 +241,7 @@ fn lifetime_case(case: &str, result_code: i32, init_status: i32, pending_exit: &
         );
         expected = String::from_utf8(output.stdout).unwrap();
         let fixture = neomacs_infra::crate_root!()
-            .join("src/emacs_core/system/dynamic_module/tests/library_lifetime")
+            .join("src/emacs_core/tests/moved_system/emacs_core/system/dynamic_module/tests/library_lifetime")
             .join(format!("{case}.expect"));
         std::fs::write(fixture, format!("{}\n", expected.trim())).unwrap();
     }
@@ -212,10 +268,19 @@ fn lifetime_case(case: &str, result_code: i32, init_status: i32, pending_exit: &
         .env(CHILD_EXPECT, expected.trim())
         .env("UPDATE_EXPECT", "0");
     let output = checked_output(child);
+    let child_stdout = String::from_utf8_lossy(&output.stdout);
+    let (expected_condition, expected_integer) = expected.trim().split_once(':').unwrap();
+    let expected_marker = format!(
+        "library_lifetime child verified: case={case} condition={expected_condition} integer={expected_integer}"
+    );
+    print!("{child_stdout}");
     assert!(
-        String::from_utf8_lossy(&output.stdout).contains("1 passed; 0 failed"),
-        "sandbox child did not run its selected regression test: {}",
-        String::from_utf8_lossy(&output.stdout),
+        child_stdout.contains("1 passed; 0 failed"),
+        "sandbox child did not run its selected regression test: {child_stdout}",
+    );
+    assert!(
+        child_stdout.contains(&expected_marker),
+        "sandbox child did not emit verification marker `{expected_marker}`: {child_stdout}",
     );
 }
 
@@ -242,5 +307,35 @@ fn combinedinit_keeps_published_function_callable() {
         44,
         1,
         "env->non_local_exit_signal (env, env->intern (env, \"error\"), env->intern (env, \"nil\"));",
+    );
+}
+
+#[test]
+fn sandbox_resolves_tracked_launcher_by_default() {
+    // Only assert the default resolution when no explicit override is set in the
+    // caller's environment (so operator overrides via NEOVM_SANDBOX_RUN remain
+    // valid under this test too).
+    if std::env::var_os("NEOVM_SANDBOX_RUN").is_some_and(|v| !v.is_empty()) {
+        return;
+    }
+    let resolved = sandbox().expect("tracked sandbox-run.sh must resolve on a clean checkout");
+    assert!(
+        resolved.ends_with(TRACKED_SANDBOX_REL),
+        "default sandbox must resolve tracked {TRACKED_SANDBOX_REL}, got {}",
+        resolved.display(),
+    );
+    assert!(resolved.is_file());
+}
+
+#[test]
+fn emacs_module_header_resolves_from_oracle_or_env() {
+    let dir = emacs_module_header_dir().expect(
+        "emacs-module.h must resolve from GNU_EMACS_SOURCE, NEOVM_FORCE_ORACLE_PATH, \
+         tmp/gnu-emacs-oracle/include, or /opt/gnu-emacs-oracle/include",
+    );
+    assert!(
+        dir.join("emacs-module.h").is_file(),
+        "resolved header directory does not contain emacs-module.h: {}",
+        dir.display(),
     );
 }
