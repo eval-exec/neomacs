@@ -397,11 +397,11 @@ fn e53a_q6a_unbridged_blocking_builtins_fail_loudly_in_serial_turn() {
                 "unbridged (thread-yield) in serial turn must fail loudly, got: {yield_out}"
             );
             assert!(
-                lock_out.contains("mutex-lock cannot fall through"),
+                lock_out.contains("mutex-lock called in an unbridged parallel serial turn"),
                 "unbridged (mutex-lock) in serial turn must fail loudly, got: {lock_out}"
             );
             assert!(
-                cond_out.contains("condition-wait cannot fall through"),
+                cond_out.contains("condition-wait called in an unbridged parallel serial turn"),
                 "unbridged (condition-wait) in serial turn must fail loudly, got: {cond_out}"
             );
             assert!(

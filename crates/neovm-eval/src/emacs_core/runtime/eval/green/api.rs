@@ -11,7 +11,7 @@ use crate::emacs_core::threads::{
 use neovm_value::error::{EvalResult, expect_args, signal};
 use neovm_value::value::Value;
 
-pub(super) fn mutex_depth_exhausted() -> neovm_value::error::Flow {
+pub(crate) fn mutex_depth_exhausted() -> neovm_value::error::Flow {
     signal(
         "error",
         vec![Value::string("Mutex recursion depth exhausted")],

@@ -15,9 +15,12 @@
 //!   cleanly instead of falling through to simulated threading.
 
 use super::super::Context;
+use super::super::green::condition_wait::{
+    ConditionSeat, ConditionWait, invalid_wait_state, wait_with_seat,
+};
 use super::super::green::{
     ConditionId, Control, HostRequestKey, MutexId, OwnerWake, ParallelWaitOutcome, SignalHint,
-    ThreadKey, Wait,
+    ThreadKey, Wait, mutex_depth_exhausted,
 };
 use super::super::owner_bindings::OwnerSlabHandle;
 use super::keeper_driver::ChannelPort;
@@ -28,6 +31,7 @@ use super::serial_park::{
 };
 use super::serial_ticket::{LocalSerialOwner, ReceiveReason};
 use super::serial_turn::{OwnerSerialState, SerialHost, TurnRefusal};
+use crate::emacs_core::threads::{CondVarHandle, MutexAcquisition, MutexHandle, WaitCondvar};
 use neovm_value::error::{EvalResult, Flow, LispCondition, expect_args, signal};
 use neovm_value::tagged::gc::RendezvousError;
 use neovm_value::value::Value;
@@ -659,7 +663,166 @@ impl Drop for ParallelWaitRootGuard<'_> {
     }
 }
 
+/// Parallel-owner seat for `green::condition_wait::wait_with_seat` (E5.4a D4),
+/// backed by `OwnerSlab::parallel_condition_wait` so Baton and parallel owners
+/// share the single `ValidatedWait` + `ConditionWait` state machine.
+struct ParallelConditionSeat;
+
+impl ConditionSeat for ParallelConditionSeat {
+    fn key(&self, ctx: &mut Context) -> Result<ThreadKey, Flow> {
+        if !ctx.in_active_serial_turn() || !ctx.green_runtime_started() {
+            return Err(invalid_wait_state());
+        }
+        // Validate the park bridge BEFORE `ValidatedWait::unlock` runs (Nit 3)
+        // and return `scope.key` so `ConditionSeat` cannot disagree with
+        // `parallel_park_in_turn`.
+        let key = ctx.verify_active_serial_park_bridge("condition-wait")?;
+        debug_assert_eq!(
+            ctx.threads.current_thread_id(),
+            key.id(),
+            "ParallelConditionSeat::key current_thread_id must match active park scope key"
+        );
+        Ok(key)
+    }
+
+    fn condition_wait<'a>(&self, ctx: &'a mut Context) -> Result<&'a ConditionWait, Flow> {
+        Ok(&ctx.ensure_owner_slab().parallel_condition_wait)
+    }
+
+    fn condition_wait_mut<'a>(&self, ctx: &'a mut Context) -> Result<&'a mut ConditionWait, Flow> {
+        Ok(&mut ctx.ensure_owner_slab().parallel_condition_wait)
+    }
+
+    fn push_wait_roots(&self, ctx: &mut Context, condition: CondVarHandle) {
+        let mutex = ctx.threads.condition_variable_mutex(condition);
+        ctx.push_vm_root_frame();
+        ctx.push_vm_frame_root(condition.value());
+        ctx.push_vm_frame_root(mutex.value());
+    }
+
+    fn leave_wait_cleanup(&self, ctx: &mut Context, key: ThreadKey) {
+        if neovm_value::tagged::gc::tagged_heap_is_current(&ctx.tagged_heap) {
+            ctx.threads.set_wait_condvar(key.id(), None);
+            ctx.threads.clear_thread_blocker(key.id());
+        }
+        if let Some(slab) = ctx.owner.slab_mut() {
+            slab.parallel_condition_wait = ConditionWait::Completed;
+        }
+        ctx.pop_vm_root_frame();
+    }
+
+    fn wake_mutex_waiters(&self, ctx: &mut Context, mutex: MutexId) -> Result<(), Flow> {
+        ctx.green_control().wake_waiting_for(Wait::Mutex(mutex));
+        Ok(())
+    }
+
+    fn park_condition(
+        &self,
+        ctx: &mut Context,
+        key: ThreadKey,
+        condition: ConditionId,
+    ) -> Result<(), Flow> {
+        ctx.threads
+            .set_wait_condvar(key.id(), Some(WaitCondvar::Condition));
+        let res = ctx.parallel_park_in_turn("condition-wait", ParkWait::Condition(condition), None);
+        // On non-panicking return (`Ok` or `Err(PreDetach)`/`Err(Shutdown)`),
+        // heap TLS is installed (fail-closed `PostDetachParkError` panics
+        // straight to `WaitOwner::drop`, Nit 7).
+        ctx.threads.set_wait_condvar(key.id(), None);
+        let (_k, outcome) = res?;
+        if let ParallelWaitOutcome::Deadlock { invariant } = outcome {
+            return Err(parallel_deadlock_flow(invariant));
+        }
+        Ok(())
+    }
+
+    fn park_mutex_relock(
+        &self,
+        ctx: &mut Context,
+        key: ThreadKey,
+        mutex: MutexId,
+    ) -> Result<(), Flow> {
+        ctx.threads
+            .set_wait_condvar(key.id(), Some(WaitCondvar::Mutex));
+        let res = ctx.parallel_park_in_turn("condition-wait", ParkWait::Mutex(mutex), None);
+        ctx.threads.set_wait_condvar(key.id(), None);
+        let (_k, outcome) = res?;
+        if let ParallelWaitOutcome::Deadlock { invariant } = outcome {
+            return Err(parallel_deadlock_flow(invariant));
+        }
+        Ok(())
+    }
+
+    fn deliver_signal(&self, ctx: &mut Context, key: ThreadKey) -> Result<(), Flow> {
+        ctx.deliver_parallel_turn_signal(key)
+    }
+}
+
 impl Context {
+    /// `(mutex-lock MUTEX)` inside a parallel owner's serial turn (E5.4a D3,
+    /// GNU `lisp_mutex_lock_for_thread` + `mutex_lock_callback`,
+    /// `src/thread.c:212-244, 330-341`).
+    #[cold]
+    #[inline(never)]
+    pub(crate) fn parallel_mutex_lock(&mut self, mutex: MutexHandle) -> EvalResult {
+        match self.threads.mutex_lock(mutex) {
+            MutexAcquisition::Acquired => return Ok(Value::NIL),
+            MutexAcquisition::Blocked => {}
+            MutexAcquisition::DepthExhausted => return Err(mutex_depth_exhausted()),
+        }
+        let locker_key = self.verify_active_serial_park_bridge("mutex-lock")?;
+        let locker_id = locker_key.id();
+        debug_assert_eq!(
+            self.threads.current_thread_id(),
+            locker_id,
+            "parallel_mutex_lock current_thread_id must match active park scope key"
+        );
+        let guard = ParallelWaitRootGuard::enter(
+            self,
+            locker_id,
+            mutex.value(),
+            &[],
+            Some(WaitCondvar::Mutex),
+        );
+        loop {
+            if guard.ctx.threads.has_pending_thread_signal(locker_id) {
+                guard.ctx.deliver_parallel_turn_signal(locker_key)?;
+                // GNU `lisp_mutex_lock_for_thread` (`src/thread.c:232-238`): a
+                // fresh contended lock exits without parking or acquiring
+                // whenever `error_symbol` is set, even if
+                // `post_acquire_global_lock` deferred raising because
+                // `condition_stack` is empty.
+                return Ok(Value::NIL);
+            }
+            let (_k, outcome) = guard.ctx.parallel_park_in_turn(
+                "mutex-lock",
+                ParkWait::Mutex(MutexId::new(mutex.native_key())),
+                None,
+            )?;
+            if let ParallelWaitOutcome::Deadlock { invariant } = outcome {
+                return Err(parallel_deadlock_flow(invariant));
+            }
+            guard.ctx.deliver_parallel_turn_signal(locker_key)?;
+            match guard.ctx.threads.mutex_lock(mutex) {
+                MutexAcquisition::Acquired => return Ok(Value::NIL),
+                MutexAcquisition::Blocked => {}
+                MutexAcquisition::DepthExhausted => return Err(mutex_depth_exhausted()),
+            }
+        }
+    }
+
+    /// `(condition-wait COND)` inside a parallel owner's serial turn (E5.4a D4,
+    /// GNU `Fcondition_wait` + `condition_wait_callback`, `src/thread.c:445-504`):
+    /// verifies the park bridge before unlocking any mutex, then runs the shared
+    /// `ConditionSeat` state machine (`green::condition_wait::wait_with_seat`)
+    /// over `ParallelConditionSeat`.
+    #[cold]
+    #[inline(never)]
+    pub(crate) fn parallel_condition_wait(&mut self, condition: CondVarHandle) -> EvalResult {
+        self.verify_active_serial_park_bridge("condition-wait")?;
+        wait_with_seat(self, ParallelConditionSeat, condition)
+    }
+
     /// Verify that `SERIAL_TURN_PARK_SCOPE` is installed for this exact
     /// `Context` (`ActiveSerialTurn`) and return its `ThreadKey`, failing
     /// loudly on unbridged serial turns without mutating wait/mutex state.

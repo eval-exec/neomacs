@@ -270,6 +270,9 @@ pub struct OwnerSlab {
     /// This owner's seat in a Green runtime (round 3d): its Lisp thread's
     /// key, channel and, while it runs, the World's Baton.
     green: Option<Box<super::green::GreenSeat>>,
+    /// This owner's `condition-wait` typestate when running as an unseated
+    /// parallel owner (E5.4a D4), mirroring `GreenSeat::condition_wait`.
+    pub(crate) parallel_condition_wait: super::green::condition_wait::ConditionWait,
     /// GNU fileio.c's auto-saving flag and mode bits, local to this owner.
     /// No Lisp argument, manager reference or native handle is retained.
     native_fileio: AutoSaveNativeWritePolicy,
@@ -338,6 +341,7 @@ impl OwnerSlab {
             debugger: None,
             parked: Vec::new(),
             green: None,
+            parallel_condition_wait: super::green::condition_wait::ConditionWait::Completed,
             native_fileio: AutoSaveNativeWritePolicy::Ordinary { preserved_mode: 0 },
             native_fileio_dir_umask: 0,
             selection_activation: super::activation::SelectionActivation::dormant(),

@@ -26,6 +26,9 @@ mod e53a_thread_control_tests;
 #[path = "../tests/e53b_thread_join_retire_test.rs"]
 mod e53b_thread_join_retire_tests;
 #[cfg(test)]
+#[path = "../tests/e54a_mutex_condvar_test.rs"]
+mod e54a_mutex_condvar_tests;
+#[cfg(test)]
 #[path = "../tests/green_era_switch_test.rs"]
 mod green_era_switch_tests;
 #[cfg(test)]

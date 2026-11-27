@@ -17,7 +17,7 @@ mod bootstrap;
 mod carried;
 mod carrier;
 pub(crate) mod carrier_tls;
-mod condition_wait;
+pub(crate) mod condition_wait;
 #[allow(
     dead_code,
     reason = "S2 control service stays dormant until owned host adapters activate"
@@ -28,6 +28,7 @@ mod root_registry;
 mod scheduler;
 pub(super) mod switch;
 
+pub(crate) use api::mutex_depth_exhausted;
 #[doc(hidden)]
 pub use api::{green_make_thread, green_world};
 pub(crate) use bootstrap::GreenBootstrap;

@@ -750,15 +750,6 @@ fn finish_sim_thread_registration(
     Ok(())
 }
 
-fn unbridged_parallel_builtin_error(op: &str) -> Flow {
-    signal(
-        LispCondition::Error,
-        vec![Value::string(format!(
-            "neovm internal error: {op} cannot fall through to simulated threading inside a parallel serial turn"
-        ))],
-    )
-}
-
 /// `(thread-join THREAD)` -- wait for thread completion.
 ///
 /// Returns the thread's result, resuming a simulated blocked thread when needed,
@@ -1268,7 +1259,7 @@ pub fn builtin_mutex_lock(
         return ctx.green_mutex_lock(id);
     }
     if ctx.in_active_serial_turn() {
-        return Err(unbridged_parallel_builtin_error("mutex-lock"));
+        return ctx.parallel_mutex_lock(id);
     }
     match ctx.threads.mutex_lock(id) {
         MutexAcquisition::Acquired => Ok(Value::NIL),
@@ -1479,7 +1470,7 @@ pub fn builtin_condition_wait(
     expect_args("condition-wait", &args, 1)?;
     let id = expect_cv_id(&ctx.threads, &args[0])?;
     if ctx.in_active_serial_turn() {
-        return Err(unbridged_parallel_builtin_error("condition-wait"));
+        return ctx.parallel_condition_wait(id);
     }
     let mutex_id = ctx.threads.condition_variable_mutex(id);
     if !ctx.threads.mutex_owned_by_current_thread(mutex_id) {
