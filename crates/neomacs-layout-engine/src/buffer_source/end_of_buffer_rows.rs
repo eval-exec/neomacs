@@ -202,7 +202,7 @@ impl<'a> EndOfBufferRowsFillRequest<'a> {
         &self,
         buffer: &B,
         mut output: TextWindowOutputTarget<'_>,
-        evaluator: &Context,
+        evaluator: &mut Context,
         faces: WindowFaces<'_, FS>,
         face_ids: &mut FrameFaceAttempt,
         row_geometry: &DisplayRowGeometryState,
@@ -254,7 +254,8 @@ impl<'a> EndOfBufferRowsFillRequest<'a> {
         let text_prefix_glyphs = match self.text_prefix {
             BeyondAccessibleEndTextPrefix::None => None,
             BeyondAccessibleEndTextPrefix::LineNumber(prefix) => {
-                let resolved = faces.resolve_named_face(prefix.face().face_name());
+                let resolved =
+                    faces.resolve_named_face_for_display(prefix.face().face_name(), evaluator);
                 let face_id = crate::display_row::face_state::stable_face_id_for_resolved(
                     face_ids, &resolved,
                 );

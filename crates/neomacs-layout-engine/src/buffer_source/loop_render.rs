@@ -94,56 +94,61 @@ impl<'rows, 'emit, 'surface, FS: crate::neovm_bridge::FaceServices>
                 }
             }
 
-            let invisible_text_outcome = self.render_invisible_text_for_context(
-                loop_context,
-                source_walk,
-                text,
-                active_face_state,
-                buffer,
-            );
-            match invisible_text_outcome {
-                BufferSourceInvisibleTextRenderOutcome::Visible => {}
-                BufferSourceInvisibleTextRenderOutcome::RenderBoundaryOverlayStrings => {
-                    if !self.render_next_source_item_for_context(
-                        loop_context,
-                        source_walk,
-                        row_prelude_context,
-                        face_resolution_context,
-                        text,
-                        params,
-                        active_face_state,
-                        buffer,
-                    ) {
-                        break;
+            let mid_display_vector = self.progress.dpvec_index() > 0;
+            if !mid_display_vector {
+                let invisible_text_outcome = self.render_invisible_text_for_context(
+                    loop_context,
+                    source_walk,
+                    text,
+                    active_face_state,
+                    buffer,
+                );
+                match invisible_text_outcome {
+                    BufferSourceInvisibleTextRenderOutcome::Visible => {}
+                    BufferSourceInvisibleTextRenderOutcome::RenderBoundaryOverlayStrings => {
+                        if !self.render_next_source_item_for_context(
+                            loop_context,
+                            source_walk,
+                            row_prelude_context,
+                            face_resolution_context,
+                            text,
+                            params,
+                            active_face_state,
+                            buffer,
+                        ) {
+                            break;
+                        }
+                        continue;
                     }
-                    continue;
-                }
-                BufferSourceInvisibleTextRenderOutcome::HiddenSpanApplied => continue,
-                BufferSourceInvisibleTextRenderOutcome::EllipsisContinuesOnNextRow(wrap_break) => {
-                    self.row_carryover.line_numbers.mark_continuation_row();
-                    if emit_nested_source_visual_wrap_with_break(
-                        loop_context,
-                        self.reborrow(),
+                    BufferSourceInvisibleTextRenderOutcome::HiddenSpanApplied => continue,
+                    BufferSourceInvisibleTextRenderOutcome::EllipsisContinuesOnNextRow(
                         wrap_break,
-                    )
-                    .should_break()
-                    {
-                        break;
+                    ) => {
+                        self.row_carryover.line_numbers.mark_continuation_row();
+                        if emit_nested_source_visual_wrap_with_break(
+                            loop_context,
+                            self.reborrow(),
+                            wrap_break,
+                        )
+                        .should_break()
+                        {
+                            break;
+                        }
+                        continue;
                     }
-                    continue;
-                }
-                BufferSourceInvisibleTextRenderOutcome::RewindToWordWrap(break_candidate) => {
-                    if emit_word_wrap_rewind(
-                        loop_context,
-                        self.reborrow(),
-                        source_walk,
-                        break_candidate,
-                    )
-                    .should_break()
-                    {
-                        break;
+                    BufferSourceInvisibleTextRenderOutcome::RewindToWordWrap(break_candidate) => {
+                        if emit_word_wrap_rewind(
+                            loop_context,
+                            self.reborrow(),
+                            source_walk,
+                            break_candidate,
+                        )
+                        .should_break()
+                        {
+                            break;
+                        }
+                        continue;
                     }
-                    continue;
                 }
             }
 
@@ -175,20 +180,22 @@ impl<'rows, 'emit, 'surface, FS: crate::neovm_bridge::FaceServices>
             // display tables, point rows, box faces and word wrap genuinely
             // cannot route), so the element arm below is the GENERAL path and
             // renders everything the route refuses.
-            use crate::buffer_source::row_route::PlainRowRouteOutcome;
-            match self.try_render_plain_row_via_item_renderer(
-                crate::buffer_source::row_route::PlainRowRouteRequest::new(
-                    loop_context,
-                    face_resolution_context,
-                    text,
-                    params,
-                ),
-                source_walk,
-                active_face_state,
-                &mut route_refusals,
-            ) {
-                PlainRowRouteOutcome::Rendered => continue,
-                PlainRowRouteOutcome::NotRouted => {}
+            if !mid_display_vector {
+                use crate::buffer_source::row_route::PlainRowRouteOutcome;
+                match self.try_render_plain_row_via_item_renderer(
+                    crate::buffer_source::row_route::PlainRowRouteRequest::new(
+                        loop_context,
+                        face_resolution_context,
+                        text,
+                        params,
+                    ),
+                    source_walk,
+                    active_face_state,
+                    &mut route_refusals,
+                ) {
+                    PlainRowRouteOutcome::Rendered => continue,
+                    PlainRowRouteOutcome::NotRouted => {}
+                }
             }
 
             if !self.render_next_source_item_for_context(

@@ -1470,14 +1470,6 @@ pub(crate) fn buffer_has_active_display_table<B: LayoutBufferView + ?Sized>(buff
     active_buffer_display_table(buffer).is_some()
 }
 
-/// Whether a decoded display-table entry for `'\n'` terminates the display row
-/// at its end (GNU `ITERATOR_AT_END_OF_LINE_P` / `get_next_display_element`,
-/// `src/xdisp.c:8488-8513`, e.g. whitespace-mode's `[?$ ?\n]`).
-#[inline]
-pub(crate) fn display_table_glyphs_end_row(decoded_text: &str) -> bool {
-    decoded_text.ends_with('\n')
-}
-
 /// Whether a decoded display-table entry for `'\n'` contains any newline glyph
 /// (trailing `[?$ ?\n]` or embedded `[?\n ?X]`) that triggers a display row
 /// break in GNU `next_element_from_display_vector`.
@@ -1500,61 +1492,15 @@ pub(crate) fn display_table_newline_breaks_row<B: LayoutBufferView + ?Sized>(buf
         .is_none_or(|glyphs| display_table_glyphs_contain_newline(&glyphs.text))
 }
 
-/// Number of display elements produced by `ch` under the active display table
-/// (`0` for `[]`, `k` for a `k`-glyph vector, `1` when unmapped), matching GNU
-/// `get_next_display_element` (`src/xdisp.c:8488-8513`) for `forward_to_next_line_start`'s
-/// `MAX_NEWLINE_DISTANCE` counter.
-pub(crate) fn display_table_char_element_count<B: LayoutBufferView + ?Sized>(
-    buffer: &B,
-    ch: char,
-) -> usize {
-    let ec = neovm_core::emacs_core::emacs_char::EmacsChar::from_char(ch);
-    if !buffer_display_table_glyph_vector_p(buffer, ec) {
-        return 1;
-    }
-    buffer_display_table_glyphs(buffer, ec).map_or(1, |glyphs| glyphs.text.chars().count())
-}
-
-/// Display column width of a character remapped by the active display table,
-/// or `None` when `ch` is not remapped.
-pub(crate) fn display_table_char_column_width<B: LayoutBufferView + ?Sized>(
-    buffer: &B,
-    ch: char,
-    tab_width: i32,
-    consumed_columns: i32,
-) -> Option<(i32, Option<char>)> {
-    let ec = neovm_core::emacs_core::emacs_char::EmacsChar::from_char(ch);
-    if !buffer_display_table_glyph_vector_p(buffer, ec) {
-        return None;
-    }
-    let glyphs = buffer_display_table_glyphs(buffer, ec)?;
-    let mut cols = 0i32;
-    let mut first = None;
-    let tw = tab_width.max(1);
-    for g in glyphs.text.chars() {
-        if first.is_none() {
-            first = Some(g);
-        }
-        if g == '\t' {
-            let cur = consumed_columns.saturating_add(cols);
-            cols = cols.saturating_add(((cur / tw + 1) * tw) - cur);
-        } else if crate::unicode::is_wide_char(g) {
-            cols = cols.saturating_add(2);
-        } else {
-            cols = cols.saturating_add(1);
-        }
-    }
-    Some((cols, first))
-}
-
 /// O(1) conservative check for whether ANY mechanism in `buffer` could collapse
-/// a raw `'\n'` (active display table remapping `?\n` without `'\n'`, static or
-/// automatic composition, `display` or `invisible` text properties/overlays, or
-/// indirect `category` / `default-text-properties` / `char-property-alias-alist`).
+/// or split a raw `'\n'` (active display table, static or automatic
+/// composition, `display` or `invisible` text properties/overlays, or indirect
+/// `category` / `default-text-properties` / `char-property-alias-alist`).
 /// When this returns `false`, every raw `'\n'` byte is guaranteed to break the
-/// display row, letting truncation skip and hscroll jump take their O(1) fast paths.
+/// display row once with no suffix glyphs, letting truncation skip and hscroll
+/// jump take their O(1) fast paths.
 pub(crate) fn buffer_may_collapse_newlines<B: LayoutBufferView + ?Sized>(buffer: &B) -> bool {
-    if !display_table_newline_breaks_row(buffer) {
+    if buffer_has_active_display_table(buffer) {
         return true;
     }
     if !buffer.layout_automatic_composition_spans().is_empty()

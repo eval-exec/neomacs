@@ -76,6 +76,18 @@ impl<'a, FS: crate::neovm_bridge::FaceServices> WindowFaces<'a, FS> {
             .resolve_remapped_named_face(self.remapping, face_name)
     }
 
+    pub(crate) fn resolve_named_face_for_display(
+        self,
+        face_name: &str,
+        evaluator: &mut neovm_core::emacs_core::Context,
+    ) -> ResolvedFace {
+        let mut face = self.resolve_named_face(face_name);
+        self.frame
+            .resolver
+            .realize_for_display(&mut face, evaluator);
+        face
+    }
+
     pub(crate) fn resolve_fixed_face(
         self,
         handle: neovm_core::emacs_core::intern::WellKnown,

@@ -215,6 +215,7 @@ impl HscrollConsumedTextDisposition {
 pub(crate) struct LineNumberRenderState {
     current_line: i64,
     point_line: i64,
+    last_numbered_line: Option<i64>,
     phase: LineNumberRenderPhase,
 }
 
@@ -748,7 +749,7 @@ impl TextRowTransitionStatePolicy {
         match self.line_number {
             TextRowLineNumberTransition::BufferNewline => line_numbers.advance_line(),
             TextRowLineNumberTransition::DisplayStringNewline => {
-                line_numbers.mark_continuation_row()
+                line_numbers.mark_display_string_break()
             }
             TextRowLineNumberTransition::Keep => {}
         }
@@ -1014,6 +1015,7 @@ impl LineNumberRenderState {
         Self {
             current_line,
             point_line,
+            last_numbered_line: None,
             phase: if enabled {
                 LineNumberRenderPhase::Pending(LineNumberRowPrefix::Numbered)
             } else {
@@ -1036,6 +1038,19 @@ impl LineNumberRenderState {
     pub(crate) fn advance_line(&mut self) {
         self.current_line += 1;
         self.arm_prefix(LineNumberRowPrefix::Numbered);
+    }
+
+    /// Row break triggered by a synthetic newline (pushed `display` string or
+    /// display-table vector `?\n`) without crossing a buffer `'\n'` at the
+    /// break itself. Prints the current line number only if `current_line` has
+    /// advanced since the last numbered row (e.g. a previous display vector for
+    /// `'\n'` finished mid-row); otherwise reserves a blank continuation gutter.
+    pub(crate) fn mark_display_string_break(&mut self) {
+        if self.last_numbered_line != Some(self.current_line) {
+            self.arm_prefix(LineNumberRowPrefix::Numbered);
+        } else {
+            self.mark_continuation_row();
+        }
     }
 
     /// GNU `maybe_produce_line_number` renders a blank (width-reserved, no
@@ -1120,9 +1135,14 @@ impl LineNumberRenderState {
         };
 
         let content = match prefix {
-            LineNumberRowPrefix::Numbered => LineNumberTextPrefixContent::Number(
-                self.display_number(mode, current_absolute, offset),
-            ),
+            LineNumberRowPrefix::Numbered => {
+                self.last_numbered_line = Some(self.current_line);
+                LineNumberTextPrefixContent::Number(self.display_number(
+                    mode,
+                    current_absolute,
+                    offset,
+                ))
+            }
             LineNumberRowPrefix::ReservedBlank(_) => LineNumberTextPrefixContent::Blank,
         };
         let face = if matches!(

@@ -100,6 +100,7 @@ pub(crate) struct BufferSourceWalkSetup {
     pub(crate) col: usize,
     pub(crate) byte_idx: usize,
     pub(crate) charpos: i64,
+    pub(crate) dpvec_index: usize,
     pub(crate) text_area_left: f32,
     pub(crate) window_top: f32,
     pub(crate) invisible_text_checkpoint: InvisibleTextScanCheckpoint,
@@ -303,6 +304,7 @@ impl<'a> BufferSourceWalkSetupRequest<'a> {
             col: 0,
             byte_idx: 0,
             charpos: self.window_start,
+            dpvec_index: 0,
             text_area_left: self.text_x,
             window_top: self.window_top,
             invisible_text_checkpoint: InvisibleTextScanCheckpoint::new(self.window_start),
@@ -423,6 +425,7 @@ impl BufferSourceWalkSetup {
                 &mut self.x,
                 &mut self.col,
             )
+            .with_dpvec_index(&mut self.dpvec_index)
             .with_physical_line_tabs(&mut self.physical_line_tabs)
             .with_row_text_start(&mut self.row_text_start_x),
             state.source_render.reborrow(),

@@ -846,6 +846,10 @@ pub(crate) struct DisplaySourceMappedText {
     /// mapped text; `Some([])` is an empty display vector; a run whose face is
     /// `None` explicitly resets those glyphs to the saved face.
     lisp_face_runs: Option<Box<[DisplaySourceMappedFaceRun]>>,
+    /// Starting glyph index within the source character's display-table vector
+    /// (GNU `it->current.dpvec_index`). `Some(idx)` for display-table vector
+    /// items and their face segments; `None` for non-display-table mapped text.
+    dpvec_start_index: Option<usize>,
 }
 
 impl DisplaySourceMappedText {
@@ -864,6 +868,7 @@ impl DisplaySourceMappedText {
             semantic_face_overlay: None,
             glyph_string_start: None,
             lisp_face_runs: None,
+            dpvec_start_index: None,
         }
     }
 
@@ -881,6 +886,7 @@ impl DisplaySourceMappedText {
             semantic_face_overlay: None,
             glyph_string_start: Some(glyph_string_start),
             lisp_face_runs: None,
+            dpvec_start_index: None,
         }
     }
 
@@ -896,6 +902,12 @@ impl DisplaySourceMappedText {
             "display-source face runs must cover the mapped text exactly"
         );
         self.lisp_face_runs = Some(face_runs);
+        self.dpvec_start_index = Some(self.dpvec_start_index.unwrap_or(0));
+        self
+    }
+
+    pub(crate) fn with_dpvec_start_index(mut self, index: usize) -> Self {
+        self.dpvec_start_index = Some(index);
         self
     }
 
@@ -918,11 +930,19 @@ impl DisplaySourceMappedText {
             semantic_face_overlay: None,
             glyph_string_start,
             lisp_face_runs: None,
+            dpvec_start_index: None,
         }
     }
 
     pub(crate) const fn is_display_table_vector(&self) -> bool {
         self.lisp_face_runs.is_some()
+    }
+
+    pub(crate) const fn dpvec_start_index(&self) -> usize {
+        match self.dpvec_start_index {
+            Some(index) => index,
+            None => 0,
+        }
     }
 
     pub(crate) fn lisp_face_runs(&self) -> &[DisplaySourceMappedFaceRun] {
@@ -932,21 +952,26 @@ impl DisplaySourceMappedText {
         }
     }
 
-    /// Remove a display-vector's terminal newline glyph while keeping its
-    /// per-glyph face metadata aligned with the visible prefix.
-    pub(crate) fn into_prefix_without_last_char(mut self) -> Self {
-        let char_len = self.text.chars().count();
-        let keep_chars = char_len.saturating_sub(1);
-        let keep_bytes = self
+    /// Slice a display-table vector to start at glyph index `start_char`
+    /// (GNU `it->current.dpvec_index`), keeping `lisp_face_runs` aligned.
+    pub(crate) fn into_display_vector_suffix(mut self, start_char: usize) -> Self {
+        if start_char == 0 {
+            return self;
+        }
+        let split_byte = self
             .text
             .char_indices()
-            .nth(keep_chars)
+            .nth(start_char)
             .map_or(self.text.len(), |(byte, _)| byte);
-        self.text = self.text[..keep_bytes].into();
-        self.lisp_face_runs = self.lisp_face_runs.map(|runs| {
-            let (prefix, _) = split_face_runs_at(&runs, keep_chars);
-            prefix.into()
-        });
+        self.text = self.text[split_byte..].into();
+        self.lisp_face_runs = self
+            .lisp_face_runs
+            .map(|runs| split_face_runs_at(&runs, start_char).1.into());
+        self.dpvec_start_index = Some(
+            self.dpvec_start_index
+                .unwrap_or(0)
+                .saturating_add(start_char),
+        );
         self
     }
 
@@ -958,6 +983,9 @@ impl DisplaySourceMappedText {
             .char_indices()
             .nth(emitted_chars)
             .map(|(byte, _)| byte)?;
+        let dpvec_start_index = self
+            .dpvec_start_index
+            .map(|idx| idx.saturating_add(emitted_chars));
         Some(Self {
             measurement_face: self.measurement_face,
             text: self.text[split_byte..].into(),
@@ -968,6 +996,7 @@ impl DisplaySourceMappedText {
             lisp_face_runs: self
                 .lisp_face_runs
                 .map(|runs| split_face_runs_at(&runs, emitted_chars).1.into()),
+            dpvec_start_index,
         })
     }
 }

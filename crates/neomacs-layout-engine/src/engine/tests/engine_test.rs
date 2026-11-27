@@ -1367,6 +1367,43 @@ fn line_number_render_state_renders_blank_gutter_on_continuation_rows() {
 }
 
 #[test]
+fn line_number_render_state_display_string_break_tracks_mid_row_buffer_newlines() {
+    let field = LineNumberFieldLayout::new(4, 8.0);
+    let mut state = LineNumberRenderState::new(true, 1, 1);
+
+    // Row 0 ("1 Aa"): numbered line 1, then breaks on embedded `?\n` inside `?Z`.
+    let row0 = state
+        .take_text_prefix(DisplayLineNumbersMode::Absolute, false, 0, 0, field)
+        .expect("row 0 prefix");
+    assert!(!row0.blank());
+    assert_eq!(row0.text(), "1");
+    state.mark_display_string_break();
+
+    // Row 1 ("  bB"): continuation blank gutter, then breaks on leading `?\n` of buffer `?\n`.
+    let row1 = state
+        .take_text_prefix(DisplayLineNumbersMode::Absolute, false, 0, 0, field)
+        .expect("row 1 prefix");
+    assert!(row1.blank());
+    state.mark_display_string_break();
+
+    // Row 2 ("  XC"): starts mid-vector on buffer `?\n` (still line 1 -> blank gutter),
+    // finishes buffer `?\n` mid-row (`current_line` -> 2), then breaks on next `?\n`.
+    let row2 = state
+        .take_text_prefix(DisplayLineNumbersMode::Absolute, false, 0, 0, field)
+        .expect("row 2 prefix");
+    assert!(row2.blank());
+    state.resume_after_replacement(1);
+    state.mark_display_string_break();
+
+    // Row 3 ("2 X"): `current_line` (2) advanced past `last_numbered_line` (1), so line 2 prints.
+    let row3 = state
+        .take_text_prefix(DisplayLineNumbersMode::Absolute, false, 0, 0, field)
+        .expect("row 3 prefix");
+    assert!(!row3.blank());
+    assert_eq!(row3.text(), "2");
+}
+
+#[test]
 fn captured_cursor_info_builds_from_active_face_state() {
     let eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let resolver = crate::neovm_bridge::FaceResolver::new(
@@ -7973,6 +8010,36 @@ fn layout_frame_rust_display_table_preserves_face_segments_across_wraps() {
         f32::from_bits(first_mapped_glyph.pixel_width_bits).round() as i64,
         "the cursor spans the first displayed glyph, not the whole vector"
     );
+}
+
+#[test]
+fn layout_frame_rust_display_table_embedded_newline_cursor_matches_gnu_row_for_charpos_p() {
+    // GNU `row_for_charpos_p` (`src/xdisp.c:25000-25014`): a non-continued row
+    // ending mid-display-vector does NOT hold the cursor; the row completing
+    // the vector does (`[?\n ?X]` -> row 1 col 0; `[?a ?\n ?b]` -> row 1 col 0;
+    // trailing `[?a ?\n]` -> row 0 col 1).
+    let run_case = |text: &str, ch: char, vec_chars: &[char]| {
+        let glyphs_chars: Vec<char> = vec_chars.to_vec();
+        let trace = layout_trace_with_buffer_setup(text, 320, 180, move |buffer, _, _| {
+            let table = Value::make_char_table(Value::symbol("display-table"), Value::NIL, 6);
+            let glyphs = Value::vector(
+                glyphs_chars
+                    .iter()
+                    .map(|&c| Value::fixnum(c as i64))
+                    .collect(),
+            );
+            neovm_core::emacs_core::chartable::ct_set_single(&table, ch as i64, glyphs);
+            buffer.set_buffer_local("buffer-display-table", table);
+            buffer.goto_emacs_byte_pos(EmacsBytePos::new(1));
+        });
+        let cursor = trace.phys_cursor.as_ref().expect("phys cursor");
+        (cursor.col, cursor.row)
+    };
+
+    assert_eq!(run_case("A\nB\n", '\n', &['\n', 'X']), (0, 1));
+    assert_eq!(run_case("A\nB\n", '\n', &['\n', '\n', 'X']), (0, 2));
+    assert_eq!(run_case("AZB\n", 'Z', &['a', '\n', 'b']), (0, 1));
+    assert_eq!(run_case("AZB\n", 'Z', &['a', '\n']), (1, 0));
 }
 
 #[test]

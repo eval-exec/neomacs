@@ -956,6 +956,122 @@ fn display_table_face_run_terminals_compare_with_the_replaced_source_face() {
     assert_eq!(output_plain.box_vertical_edges, BoxVerticalEdges::Neither);
 }
 
+#[test]
+fn display_item_segment_source_splits_embedded_newlines_with_faces_and_dpvec_indices() {
+    let base = RenderFaceRef::FaceId(FaceId::new(3));
+    let mapped = DisplaySourceMappedText::new("$\n\nX").with_lisp_face_runs(vec![
+        DisplaySourceMappedFaceRun::new(1, neovm_core::face::LispFaceId::new(7)),
+        DisplaySourceMappedFaceRun::new(1, None),
+        DisplaySourceMappedFaceRun::new(1, neovm_core::face::LispFaceId::new(9)),
+        DisplaySourceMappedFaceRun::new(1, neovm_core::face::LispFaceId::new(11)),
+    ]);
+    let item = DisplayItem::new(
+        SourceSpan::synthetic(5, 0, 1),
+        base,
+        DisplayItemKind::SourceMappedText(mapped),
+    );
+    let mut source = DisplayItemSegmentSource::new(item);
+    let mut resolver = SymbolFaceResolver;
+    let mut context = DisplaySourceContext::with_face_resolver(&mut resolver);
+
+    assert_eq!(source.next_dpvec_index(), 0);
+    let seg0 = source.next_item(&mut context).expect("prefix text");
+    assert_eq!(seg0.face, RenderFaceRef::FaceId(FaceId::new(7)));
+    assert!(matches!(
+        &seg0.kind,
+        DisplayItemKind::SourceMappedText(m) if &*m.text == "$" && m.dpvec_start_index() == 0
+    ));
+    assert_eq!(source.next_dpvec_index(), 1);
+
+    let seg1 = source.next_item(&mut context).expect("first newline");
+    assert_eq!(seg1.face, base);
+    assert!(matches!(seg1.kind, DisplayItemKind::RowBreak(_)));
+    assert_eq!(source.next_dpvec_index(), 2);
+
+    let seg2 = source.next_item(&mut context).expect("second newline");
+    assert_eq!(seg2.face, RenderFaceRef::FaceId(FaceId::new(9)));
+    assert!(matches!(seg2.kind, DisplayItemKind::RowBreak(_)));
+    assert_eq!(source.next_dpvec_index(), 3);
+
+    let seg3 = source.next_item(&mut context).expect("suffix text");
+    assert_eq!(seg3.face, RenderFaceRef::FaceId(FaceId::new(11)));
+    assert!(matches!(
+        &seg3.kind,
+        DisplayItemKind::SourceMappedText(m) if &*m.text == "X" && m.dpvec_start_index() == 3
+    ));
+    assert_eq!(source.next_dpvec_index(), 4);
+    assert!(!source.has_remaining());
+    assert!(source.next_item(&mut context).is_none());
+}
+
+#[test]
+fn display_item_segment_source_skip_to_next_row_break_stops_mid_vector_or_exhausts() {
+    let make_source = |text: &str, start_idx: usize| {
+        let mapped = DisplaySourceMappedText::new(text)
+            .with_lisp_face_runs(vec![DisplaySourceMappedFaceRun::new(
+                text.chars().count(),
+                None,
+            )])
+            .into_display_vector_suffix(start_idx);
+        DisplayItemSegmentSource::new(DisplayItem::new(
+            SourceSpan::synthetic(5, 0, 1),
+            RenderFaceRef::FaceId(FaceId::new(3)),
+            DisplayItemKind::SourceMappedText(mapped),
+        ))
+    };
+
+    let mut first = make_source("ab\ncd\ne", 0);
+    assert_eq!(
+        first.skip_to_next_row_break(),
+        DisplayVectorTruncateSkip::ResumeAfterEmbeddedNewline {
+            next_dpvec_index: 3
+        }
+    );
+
+    let mut second = make_source("ab\ncd\ne", 3);
+    assert_eq!(
+        second.skip_to_next_row_break(),
+        DisplayVectorTruncateSkip::ResumeAfterEmbeddedNewline {
+            next_dpvec_index: 6
+        }
+    );
+
+    let mut tail = make_source("ab\ncd\ne", 6);
+    assert_eq!(
+        tail.skip_to_next_row_break(),
+        DisplayVectorTruncateSkip::NoNewlineInVector
+    );
+
+    let mut trailing = make_source("ab\n", 0);
+    assert_eq!(
+        trailing.skip_to_next_row_break(),
+        DisplayVectorTruncateSkip::ConsumedTrailingNewline
+    );
+}
+
+#[test]
+fn display_source_text_position_tracks_and_resets_dpvec_index() {
+    let text = b"A\nB";
+    let mut pos = DisplaySourceTextPosition::new(1, 1);
+    pos.set_dpvec_index(2);
+    assert_eq!(pos.dpvec_index(), 2);
+
+    let peek = pos.peek_step_char(text).expect("peek newline");
+    assert_eq!(peek.ch(), '\n');
+    assert_eq!(pos.dpvec_index(), 2);
+    assert_eq!(pos.charpos(), 1);
+
+    let same_char = pos.with_charpos(1);
+    assert_eq!(same_char.dpvec_index(), 2);
+    let moved_char = pos.with_charpos(2);
+    assert_eq!(moved_char.dpvec_index(), 0);
+
+    let consumed = pos.consume_step_char(text).expect("consume newline");
+    assert_eq!(consumed.ch(), '\n');
+    assert_eq!(pos.charpos(), 2);
+    assert_eq!(pos.dpvec_index(), 0);
+}
+
 struct ResolvedDisplayPropertyResolver {
     seen_face: Option<RenderFaceRef>,
 }

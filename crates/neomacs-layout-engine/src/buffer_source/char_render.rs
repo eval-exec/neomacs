@@ -16,14 +16,25 @@ use crate::display_item::{
 };
 use crate::display_row::builder::DisplayRowAppendStatus;
 use crate::display_row::face_state::{DisplayRowActiveFaceState, DisplayRowExtendFace};
+use crate::display_row::metrics::DisplayRowMeasuredFaceMetrics;
+use crate::display_row::render_policy::{DisplayRowRenderClipBehavior, DisplayRowRenderPolicy};
+use crate::display_row::replacement::DisplayReplacementStringLineBreak;
 use crate::display_row::source_state::DisplayRowSourceState;
-use crate::display_source::{DisplayItemSegmentSource, DisplaySourceStepItem};
-use crate::display_source_append_plan::NaturalDisplayRowAppendRenderPolicy;
+use crate::display_row::transition::{
+    DisplayRowLineBreakTransitionPlan, DisplayRowOverflowTransitionPlan,
+    DisplayRowTextWindowEmitContext,
+};
+use crate::display_source::{
+    DisplayItemSegmentSource, DisplaySourceStepChar, DisplaySourceStepItem,
+    DisplayVectorTruncateSkip,
+};
 use crate::display_source_item_append::{
     DisplaySourcePreparedCharAppend, DisplaySourceTextCharPreparedAppend,
 };
-use crate::neovm_bridge::LayoutBufferView;
-use crate::types::WindowParams;
+use crate::neovm_bridge::{LayoutBufferView, ResolvedFace};
+use crate::types::{LayoutCharPos0, WindowParams};
+use neomacs_display_protocol::types::FaceId;
+use neovm_core::buffer::LispCharPos1;
 
 /// Render exactly ONE character of the Renderable element arm.
 ///
@@ -358,6 +369,146 @@ pub(crate) fn render_source_char_and_apply<
     BufferSourceItemRenderOutcome::Rendered
 }
 
+struct DisplayVectorRenderPolicy {
+    fallback_metrics: DisplayRowMeasuredFaceMetrics,
+    produced_row_break: Option<DisplayReplacementStringLineBreak>,
+}
+
+impl DisplayVectorRenderPolicy {
+    fn new(fallback_metrics: DisplayRowMeasuredFaceMetrics) -> Self {
+        Self {
+            fallback_metrics,
+            produced_row_break: None,
+        }
+    }
+}
+
+impl DisplayRowRenderPolicy for DisplayVectorRenderPolicy {
+    fn stop_before_item(
+        &mut self,
+        item: &DisplayItem,
+        face_id: FaceId,
+        face: &ResolvedFace,
+        newline_font_metrics: Option<DisplayRowMeasuredFaceMetrics>,
+    ) -> bool {
+        if let DisplayItemKind::RowBreak(row_break) = item.kind {
+            let mut line_break = DisplayReplacementStringLineBreak::from_resolved_face(
+                face_id,
+                face,
+                self.fallback_metrics,
+                row_break.line_height,
+                row_break.line_spacing,
+                item.box_vertical_edges,
+            );
+            if let Some(metrics) = newline_font_metrics {
+                line_break = line_break.with_measured_metrics(metrics, face_id);
+            }
+            self.produced_row_break = Some(line_break);
+            true
+        } else {
+            false
+        }
+    }
+
+    fn clipped_behavior(&mut self, item: &DisplayItem) -> DisplayRowRenderClipBehavior {
+        if matches!(item.kind, DisplayItemKind::SourceMappedText(_)) {
+            DisplayRowRenderClipBehavior::PreserveRemainderAndStop
+        } else {
+            DisplayRowRenderClipBehavior::Continue
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn emit_display_vector_row_break<B: LayoutBufferView, FS: crate::neovm_bridge::FaceServices>(
+    loop_context: BufferSourceLoopRequestContext,
+    text: &[u8],
+    active_face_state: &DisplayRowActiveFaceState,
+    source_walk: &mut BufferSourceWalk<'_, B>,
+    buffer: &B,
+    line_break: DisplayReplacementStringLineBreak,
+    transition: DisplayRowLineBreakTransitionPlan,
+    mut state: BufferSourceLoopMutableState<'_, '_, '_, FS>,
+) -> bool {
+    let synthetic_newline =
+        DisplaySourceStepChar::new('\n', state.progress.byte_idx(), state.progress.charpos());
+    !loop_context
+        .line_break_request(
+            synthetic_newline,
+            text,
+            state.surface.append_surface,
+            active_face_state,
+        )
+        .with_display_string_line_break(line_break)
+        .render_display_string_break_and_apply(source_walk, buffer, state.reborrow(), transition)
+        .should_break()
+}
+
+#[allow(clippy::too_many_arguments)]
+fn emit_display_vector_truncated_row_end<FS: crate::neovm_bridge::FaceServices>(
+    loop_context: BufferSourceLoopRequestContext,
+    source_step_char: DisplaySourceStepChar,
+    active_face_state: &DisplayRowActiveFaceState,
+    truncated_end_charpos: i64,
+    crossed_buffer_newline: bool,
+    mut state: BufferSourceLoopMutableState<'_, '_, '_, FS>,
+) -> bool {
+    if state
+        .surface
+        .append_surface
+        .right_edge_marker_column()
+        .is_reserved()
+    {
+        let marker_position = state.progress.row_position();
+        let metrics = active_face_state.metrics();
+        state
+            .source_render
+            .output_emitter()
+            .push_text_overlaid_marker_point(
+                LispCharPos1::new(source_step_char.start_charpos() + 1),
+                marker_position.x_px(),
+                state.row_build.row_geometry.y(),
+                metrics.char_width(),
+                state.row_build.row_geometry.height(),
+                state.row_build.row_geometry.row(),
+                marker_position.col(),
+            );
+    }
+    state.progress.reset_physical_line_tabs();
+    state
+        .source_render
+        .output_emitter()
+        .note_truncated_end(LispCharPos1::new(truncated_end_charpos));
+    if crossed_buffer_newline {
+        state.row_carryover.line_numbers.advance_line();
+    } else {
+        state.row_carryover.line_numbers.mark_display_string_break();
+    }
+    *state.progress.row_progress_mut().x_mut() = loop_context.content_x();
+    state.row_build.row_extend.clear();
+    let row_position = state.progress.row_position();
+    let row_transition = DisplayRowTextWindowEmitContext::from_source_render(
+        loop_context.row_geometry_defaults(),
+        loop_context.display_text_row_base(),
+        state.row_y_positions,
+        loop_context.max_rows(),
+        state.row_build.row_geometry,
+        state.row_build.row_flags,
+        loop_context.row_limit(),
+        &mut state.source_render,
+    )
+    .emit_overflow_then_row_start(
+        DisplayRowOverflowTransitionPlan::truncation(
+            crate::display_row::walk_state::TextRowTransitionStatePolicy::truncation(),
+        ),
+        LayoutCharPos0::new(state.progress.charpos()),
+        row_position,
+        state.row_carryover.render_state(loop_context.has_prefix()),
+        state.progress.row_progress_mut().col_mut(),
+    );
+    !row_transition.is_exhausted()
+}
+
 #[allow(clippy::too_many_arguments)]
 fn render_display_table_vector_and_apply<
     B: LayoutBufferView,
@@ -381,10 +532,11 @@ fn render_display_table_vector_and_apply<
     let empty_display_vector = matches!(&source_item.kind, DisplayItemKind::SourceMappedText(mapped) if mapped.text.is_empty());
     let mut source = DisplayItemSegmentSource::new(source_item);
     let mut source_state = DisplayRowSourceState::frame_local();
-    let mut render_policy = NaturalDisplayRowAppendRenderPolicy;
+    let mut render_policy = DisplayVectorRenderPolicy::new(active_face_state.metrics());
     let mut cursor_pending = state
         .cursor_info
         .should_capture_visible_glyph_at(state.progress.charpos(), loop_context.point_charpos());
+    let mut pending_row_cursor: Option<crate::display_cursor::CapturedCursorInfo> = None;
     let mut first_glyph_pending = true;
     loop {
         let position = state.progress.row_position();
@@ -407,9 +559,14 @@ fn render_display_table_vector_and_apply<
                 first_slot.width_px(),
             );
             if cursor_pending {
-                capture_cursor_info(
-                    state.cursor_info,
-                    prepared_append.cursor_info_for_main_char_with_slot_width(
+                // Defer committing this row's cursor candidate until we know
+                // whether this row completes the character or ends mid-vector
+                // on a non-continued embedded `?\n` (GNU `row_for_charpos_p`,
+                // `src/xdisp.c:25000-25014`: `MATRIX_ROW_ENDS_IN_MIDDLE_OF_CHAR_P`
+                // only keeps the cursor on `row->continued_p`; otherwise the
+                // subsequent row carrying the vector's suffix owns the cursor).
+                pending_row_cursor =
+                    Some(prepared_append.cursor_info_for_main_char_with_slot_width(
                         active_face_state,
                         state.row_build.row_geometry.text_position(
                             first_slot.x_px(),
@@ -418,16 +575,106 @@ fn render_display_table_vector_and_apply<
                         ),
                         first_slot.width_px(),
                         false,
-                    ),
-                );
+                    ));
                 cursor_pending = false;
             }
             first_glyph_pending = false;
         }
 
+        if let Some(line_break) = render_policy.produced_row_break.take() {
+            // A leading `?\n` in a display vector (e.g. `[?\n ?X]`) has no
+            // preceding glyph on this row; publish its display point at the
+            // row-break column so `posn-at-point` matches GNU's `move_it_to`
+            // (row 0 col 1 for `"A\nB\n"` at point 2).
+            let end_pos = append_progress.end();
+            if first_glyph_pending {
+                let metrics = active_face_state.metrics();
+                state
+                    .source_render
+                    .output_emitter()
+                    .push_text_display_point(
+                        LispCharPos1::new(source_step_char.start_charpos() + 1),
+                        end_pos.x_px(),
+                        state.row_build.row_geometry.y(),
+                        metrics.char_width(),
+                        state.row_build.row_geometry.height(),
+                        state.row_build.row_geometry.row(),
+                        end_pos.col(),
+                    );
+                if cursor_pending {
+                    pending_row_cursor =
+                        Some(prepared_append.cursor_info_for_main_char_with_slot_width(
+                            active_face_state,
+                            state.row_build.row_geometry.text_position(
+                                end_pos.x_px(),
+                                source_step_char.start_byte_idx(),
+                                end_pos.col(),
+                            ),
+                            metrics.char_width(),
+                            false,
+                        ));
+                }
+            }
+            state.progress.apply_row_position(end_pos);
+            if source.has_remaining() {
+                // Non-continued row ending mid-display-vector: GNU
+                // `row_for_charpos_p` (`src/xdisp.c:25000-25014`) returns
+                // `row->continued_p` (false), so drop `pending_row_cursor`
+                // and let the row completing the vector capture it.
+                let next_dpvec_index = source.next_dpvec_index();
+                state.progress.set_dpvec_index(next_dpvec_index);
+                let keep_going = emit_display_vector_row_break(
+                    loop_context,
+                    text,
+                    active_face_state,
+                    source_walk,
+                    buffer,
+                    line_break,
+                    DisplayRowLineBreakTransitionPlan::display_string_line_break(),
+                    state.reborrow(),
+                );
+                if !keep_going {
+                    return BufferSourceItemRenderOutcome::Stop;
+                }
+                state.progress.set_dpvec_index(next_dpvec_index);
+                return BufferSourceItemRenderOutcome::ContinueBufferWalk;
+            }
+            if let Some(cursor) = pending_row_cursor.take() {
+                capture_cursor_info(state.cursor_info, cursor);
+            }
+            if let Some(end_charpos) = source_end_charpos {
+                state.progress.max_charpos(end_charpos);
+            }
+            if let Some(end_byte_idx) = source_end_byte_idx {
+                state.progress.set_byte_idx(end_byte_idx);
+            }
+            let transition = if source_step_char.ch() == '\n' {
+                DisplayRowLineBreakTransitionPlan::line_break()
+            } else {
+                DisplayRowLineBreakTransitionPlan::display_string_line_break()
+            };
+            let keep_going = emit_display_vector_row_break(
+                loop_context,
+                text,
+                active_face_state,
+                source_walk,
+                buffer,
+                line_break,
+                transition,
+                state.reborrow(),
+            );
+            return if keep_going {
+                BufferSourceItemRenderOutcome::ContinueBufferWalk
+            } else {
+                BufferSourceItemRenderOutcome::Stop
+            };
+        }
+
         match append_progress.status() {
             DisplayRowAppendStatus::Complete => {
-                if cursor_pending {
+                if let Some(cursor) = pending_row_cursor.take() {
+                    capture_cursor_info(state.cursor_info, cursor);
+                } else if cursor_pending {
                     state.cursor_info.defer_zero_width_to_next_glyph(
                         prepared_append.cursor_info_for_main_char_with_slot_width(
                             active_face_state,
@@ -459,11 +706,68 @@ fn render_display_table_vector_and_apply<
                 if let Some(end_byte_idx) = source_end_byte_idx {
                     state.progress.set_byte_idx(end_byte_idx);
                 }
+                if source_step_char.ch() == '\n' {
+                    state.row_carryover.line_numbers.resume_after_replacement(1);
+                }
                 return BufferSourceItemRenderOutcome::Rendered;
             }
             DisplayRowAppendStatus::Clipped => {
                 state.progress.apply_row_position(append_progress.end());
                 if params.wrap_mode == crate::types::LineWrapMode::Truncate {
+                    match source.skip_to_next_row_break() {
+                        DisplayVectorTruncateSkip::ResumeAfterEmbeddedNewline {
+                            next_dpvec_index,
+                        } => {
+                            // Truncated row ends mid-vector before an embedded
+                            // `?\n`: `continued_p` is false so the suffix row
+                            // owns the cursor (GNU `row_for_charpos_p`).
+                            state.progress.set_dpvec_index(next_dpvec_index);
+                            let keep_going = emit_display_vector_truncated_row_end(
+                                loop_context,
+                                source_step_char,
+                                active_face_state,
+                                source_step_char.start_charpos() + 1,
+                                false,
+                                state.reborrow(),
+                            );
+                            if !keep_going {
+                                return BufferSourceItemRenderOutcome::Stop;
+                            }
+                            state.progress.set_dpvec_index(next_dpvec_index);
+                            return BufferSourceItemRenderOutcome::ContinueBufferWalk;
+                        }
+                        DisplayVectorTruncateSkip::ConsumedTrailingNewline => {
+                            if let Some(cursor) = pending_row_cursor.take() {
+                                capture_cursor_info(state.cursor_info, cursor);
+                            }
+                            let end_charpos = source_end_charpos
+                                .unwrap_or_else(|| source_step_char.start_charpos() + 1);
+                            if let Some(end_charpos) = source_end_charpos {
+                                state.progress.max_charpos(end_charpos);
+                            }
+                            if let Some(end_byte_idx) = source_end_byte_idx {
+                                state.progress.set_byte_idx(end_byte_idx);
+                            }
+                            let keep_going = emit_display_vector_truncated_row_end(
+                                loop_context,
+                                source_step_char,
+                                active_face_state,
+                                end_charpos,
+                                source_step_char.ch() == '\n',
+                                state.reborrow(),
+                            );
+                            return if keep_going {
+                                BufferSourceItemRenderOutcome::ContinueBufferWalk
+                            } else {
+                                BufferSourceItemRenderOutcome::Stop
+                            };
+                        }
+                        DisplayVectorTruncateSkip::NoNewlineInVector => {
+                            if let Some(cursor) = pending_row_cursor.take() {
+                                capture_cursor_info(state.cursor_info, cursor);
+                            }
+                        }
+                    }
                     let overflow_outcome = BufferSourceOverflowRenderRequest::new(
                         &prepared_append,
                         source_step_char,
@@ -497,6 +801,11 @@ fn render_display_table_vector_and_apply<
                     debug_assert!(overflow_outcome.should_break());
                     return BufferSourceItemRenderOutcome::Stop;
                 }
+                if let Some(cursor) = pending_row_cursor.take() {
+                    // Wrapped row (`continued_p == true`) retains the cursor
+                    // even when ending mid-vector (GNU `row_for_charpos_p`).
+                    capture_cursor_info(state.cursor_info, cursor);
+                }
                 let continuation = crate::buffer_source::render::emit_nested_source_visual_wrap(
                     loop_context,
                     state.reborrow(),
@@ -514,7 +823,7 @@ fn render_display_table_vector_and_apply<
                 }
             }
             DisplayRowAppendStatus::RowBreak => {
-                unreachable!("display-table vector rows are extracted before item rendering")
+                unreachable!("display-table vector RowBreak items are handled via stop_before_item")
             }
         }
     }

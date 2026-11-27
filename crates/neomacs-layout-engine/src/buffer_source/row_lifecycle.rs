@@ -122,6 +122,11 @@ pub(crate) enum BufferSourceHscrollSkipAction {
     LineBreak {
         source_char: DisplaySourceStepChar,
     },
+    DisplayVectorLineBreak {
+        source_char: DisplaySourceStepChar,
+        mid_display_vector: bool,
+        crossed_buffer_newline: bool,
+    },
     Text {
         source_char: DisplaySourceStepChar,
         disposition: HscrollConsumedTextDisposition,
@@ -130,22 +135,40 @@ pub(crate) enum BufferSourceHscrollSkipAction {
 
 impl BufferSourceHscrollSkipAction {
     pub(crate) fn is_line_break(self) -> bool {
-        matches!(self, Self::LineBreak { .. })
+        matches!(
+            self,
+            Self::LineBreak { .. } | Self::DisplayVectorLineBreak { .. }
+        )
+    }
+
+    pub(crate) fn line_break_transition(self) -> DisplayRowLineBreakTransitionPlan {
+        match self {
+            Self::DisplayVectorLineBreak {
+                crossed_buffer_newline: false,
+                ..
+            } => DisplayRowLineBreakTransitionPlan::display_string_line_break(),
+            _ => DisplayRowLineBreakTransitionPlan::hscroll_line_break(),
+        }
     }
 
     pub(crate) fn ch_start_byte_idx(self) -> usize {
         match self {
-            Self::LineBreak { source_char } | Self::Text { source_char, .. } => {
-                source_char.start_byte_idx()
-            }
+            Self::LineBreak { source_char }
+            | Self::DisplayVectorLineBreak { source_char, .. }
+            | Self::Text { source_char, .. } => source_char.start_byte_idx(),
         }
     }
 
     pub(crate) fn end_charpos(self) -> i64 {
         match self {
-            Self::LineBreak { source_char } | Self::Text { source_char, .. } => {
-                source_char.start_charpos() + 1
-            }
+            Self::DisplayVectorLineBreak {
+                source_char,
+                mid_display_vector: true,
+                ..
+            } => source_char.start_charpos(),
+            Self::LineBreak { source_char }
+            | Self::DisplayVectorLineBreak { source_char, .. }
+            | Self::Text { source_char, .. } => source_char.start_charpos() + 1,
         }
     }
 
@@ -154,9 +177,9 @@ impl BufferSourceHscrollSkipAction {
     /// hscrolled-off prefix. Point below this charpos lies hidden.
     pub(crate) fn hidden_prefix_end_charpos(self) -> i64 {
         match self {
-            Self::LineBreak { source_char } | Self::Text { source_char, .. } => {
-                source_char.start_charpos()
-            }
+            Self::LineBreak { source_char }
+            | Self::DisplayVectorLineBreak { source_char, .. }
+            | Self::Text { source_char, .. } => source_char.start_charpos(),
         }
     }
 
@@ -176,6 +199,7 @@ impl BufferSourceHscrollSkipAction {
                 ..
             } => Some((target, visible_remainder)),
             Self::LineBreak { .. }
+            | Self::DisplayVectorLineBreak { .. }
             | Self::Text {
                 disposition: HscrollConsumedTextDisposition::Hidden,
                 ..
@@ -192,7 +216,15 @@ impl BufferSourceHscrollSkipAction {
     ) {
         if self.is_line_break() {
             *x = content_x;
-            output_emitter.note_display_buffer_pos(LispCharPos1::new(self.end_charpos()));
+            let note_pos = match self {
+                Self::DisplayVectorLineBreak {
+                    source_char,
+                    mid_display_vector: true,
+                    ..
+                } => source_char.start_charpos() + 1,
+                _ => self.end_charpos(),
+            };
+            output_emitter.note_display_buffer_pos(LispCharPos1::new(note_pos));
             row_extend.clear();
         }
     }
@@ -359,7 +391,9 @@ impl BufferSourceHscrollSkipAction {
                 active_face_id,
                 match self {
                     Self::Text { source_char, .. } => source_char.start_charpos().max(0) as usize,
-                    Self::LineBreak { .. } => unreachable!("line breaks have no visible remainder"),
+                    Self::LineBreak { .. } | Self::DisplayVectorLineBreak { .. } => {
+                        unreachable!("line breaks have no visible remainder")
+                    }
                 },
                 metrics.char_width(),
                 cursor_anchor,
@@ -686,7 +720,7 @@ pub(crate) fn consume_hscroll_skip_from_position<B: LayoutBufferView + ?Sized>(
         return None;
     }
 
-    if crate::neovm_bridge::buffer_may_collapse_newlines(buffer) {
+    if position.dpvec_index() == 0 && crate::neovm_bridge::buffer_may_collapse_newlines(buffer) {
         let saved_position = *position;
         let cur_charpos_i64 = position.charpos();
         let cur_charpos = CharPos0::new(cur_charpos_i64.max(0) as usize);
@@ -863,6 +897,80 @@ pub(crate) fn consume_hscroll_skip_from_position<B: LayoutBufferView + ?Sized>(
         }
     }
 
+    // When a display table maps the character at `position` to a glyph vector,
+    // iterate element-by-element starting at `position.dpvec_index()` (GNU
+    // `next_element_from_display_vector`), so an embedded `?\n` breaks the row
+    // leaving suffix glyphs at the same buffer charpos, and hitting the hscroll
+    // boundary mid-vector leaves the remaining suffix visible on this row.
+    if crate::neovm_bridge::buffer_has_active_display_table(buffer) {
+        let peek = position.peek_step_char(text)?;
+        let spec_columns = if position.dpvec_index() == 0 {
+            hscroll_display_spec_columns(
+                buffer,
+                text_start_byte + peek.start_byte_idx(),
+                hscroll_skip.consumed_columns(),
+            )
+        } else {
+            None
+        };
+        if spec_columns.is_none() {
+            let ec = neovm_core::emacs_core::emacs_char::EmacsChar::from_char(peek.ch());
+            if let Some(glyphs) = crate::neovm_bridge::buffer_display_table_glyphs(buffer, ec) {
+                let start_idx = position.dpvec_index();
+                let total_chars = glyphs.text.chars().count();
+                let tw = tab_width.max(1);
+                for (rel, g) in glyphs.text.chars().skip(start_idx).enumerate() {
+                    let next_idx = start_idx + rel + 1;
+                    if g == '\n' {
+                        if next_idx < total_chars {
+                            position.set_dpvec_index(next_idx);
+                            return Some(BufferSourceHscrollSkipAction::DisplayVectorLineBreak {
+                                source_char: peek,
+                                mid_display_vector: true,
+                                crossed_buffer_newline: false,
+                            });
+                        }
+                        let source_char = position.consume_step_char(text)?;
+                        return Some(BufferSourceHscrollSkipAction::DisplayVectorLineBreak {
+                            source_char,
+                            mid_display_vector: false,
+                            crossed_buffer_newline: peek.ch() == '\n',
+                        });
+                    }
+                    let cols = if g == '\t' {
+                        let cur = hscroll_skip.consumed_columns();
+                        ((cur / tw + 1) * tw) - cur
+                    } else if is_wide_char(g) {
+                        2
+                    } else {
+                        1
+                    };
+                    let disposition = hscroll_skip
+                        .consume_display_item(HorizontalScrollDisplayItem::glyph(g, cols));
+                    if !matches!(disposition, HscrollConsumedTextDisposition::Hidden) {
+                        if next_idx < total_chars {
+                            position.set_dpvec_index(next_idx);
+                            return Some(BufferSourceHscrollSkipAction::Text {
+                                source_char: peek,
+                                disposition,
+                            });
+                        }
+                        let source_char = position.consume_step_char(text)?;
+                        return Some(BufferSourceHscrollSkipAction::Text {
+                            source_char,
+                            disposition,
+                        });
+                    }
+                }
+                let source_char = position.consume_step_char(text)?;
+                return Some(BufferSourceHscrollSkipAction::Text {
+                    source_char,
+                    disposition: HscrollConsumedTextDisposition::Hidden,
+                });
+            }
+        }
+    }
+
     let source_char = position.consume_step_char(text)?;
     // A `(space :align-to N)` / `(space :width N)` spec on the skipped char
     // occupies its RESOLVED width, not one column: GNU's hscroll move
@@ -877,51 +985,6 @@ pub(crate) fn consume_hscroll_skip_from_position<B: LayoutBufferView + ?Sized>(
         text_start_byte + source_char.start_byte_idx(),
         hscroll_skip.consumed_columns(),
     );
-    if source_char.ch() == '\n' {
-        if crate::neovm_bridge::display_table_newline_breaks_row(buffer) {
-            return Some(BufferSourceHscrollSkipAction::LineBreak { source_char });
-        }
-        let (cols, first) = crate::neovm_bridge::display_table_char_column_width(
-            buffer,
-            '\n',
-            tab_width,
-            hscroll_skip.consumed_columns(),
-        )
-        .unwrap_or((0, None));
-        let disposition = if cols > 0 {
-            hscroll_skip.consume_display_item(HorizontalScrollDisplayItem::glyph(
-                first.unwrap_or(' '),
-                cols,
-            ))
-        } else {
-            HscrollConsumedTextDisposition::Hidden
-        };
-        return Some(BufferSourceHscrollSkipAction::Text {
-            source_char,
-            disposition,
-        });
-    }
-    if spec_columns.is_none()
-        && let Some((cols, first)) = crate::neovm_bridge::display_table_char_column_width(
-            buffer,
-            source_char.ch(),
-            tab_width,
-            hscroll_skip.consumed_columns(),
-        )
-    {
-        let disposition = if cols > 0 {
-            hscroll_skip.consume_display_item(HorizontalScrollDisplayItem::glyph(
-                first.unwrap_or(source_char.ch()),
-                cols,
-            ))
-        } else {
-            HscrollConsumedTextDisposition::Hidden
-        };
-        return Some(BufferSourceHscrollSkipAction::Text {
-            source_char,
-            disposition,
-        });
-    }
     Some(consume_source_char_for_hscroll(
         source_char,
         hscroll_skip,
@@ -954,10 +1017,10 @@ pub(crate) fn long_line_hscroll_jump<B: LayoutBufferView + ?Sized>(
     if hscroll_skip.consumed_columns() != 0 || !buffer.layout_long_line_optimizations_p() {
         return None;
     }
-    // When display tables, compositions, or display/invisible properties can
-    // collapse newlines, fall back to the element-aware hscroll walk instead of
-    // jumping to raw `b'\n'`.
-    if crate::neovm_bridge::buffer_may_collapse_newlines(buffer) {
+    // When resuming mid-display-vector or when display tables, compositions, or
+    // display/invisible properties can split or collapse newlines, fall back to
+    // the element-aware hscroll walk instead of jumping to raw `b'\n'`.
+    if position.dpvec_index() > 0 || crate::neovm_bridge::buffer_may_collapse_newlines(buffer) {
         return None;
     }
     let configured_columns = hscroll_skip.configured_columns();
@@ -1203,7 +1266,7 @@ impl<'a> BufferSourceHscrollSkipRenderContext<'a> {
                 context.content_x,
             );
             let row_position = progress.row_position();
-            let line_break_transition = DisplayRowLineBreakTransitionPlan::hscroll_line_break();
+            let line_break_transition = hscroll_action.line_break_transition();
             let next_row_start = hscroll_action
                 .line_break_next_row_start(row_source_start)
                 .expect("hscroll line break next row start");
@@ -1235,6 +1298,14 @@ impl<'a> BufferSourceHscrollSkipRenderContext<'a> {
                 row_position.col(),
                 context.metrics.row_height(),
             );
+        }
+
+        if matches!(
+            hscroll_action,
+            BufferSourceHscrollSkipAction::Text { source_char, .. } if source_char.ch() == '\n'
+        ) && progress.dpvec_index() == 0
+        {
+            row_carryover.line_numbers.resume_after_replacement(1);
         }
 
         let marker_cell_position = progress.row_position();

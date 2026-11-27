@@ -242,7 +242,11 @@ impl<'a> BufferSourceOverflowRenderRequest<'a> {
                 source_render
                     .output_emitter()
                     .note_truncated_end(LispCharPos1::new(
-                        truncation_skip.charpos + i64::from(!truncation_skip.reached_line_break),
+                        truncation_skip.charpos
+                            + i64::from(
+                                !truncation_skip.reached_line_break
+                                    || truncation_skip.source_position.dpvec_index() > 0,
+                            ),
                     ));
                 truncation_skip.apply_before_row_transition(
                     row_carryover.line_numbers,
@@ -453,6 +457,7 @@ impl<'a> BufferSourceOverflowRenderRequest<'a> {
 pub(crate) struct BufferSourceTruncationSkipAction {
     pub(crate) charpos: i64,
     pub(crate) reached_line_break: bool,
+    pub(crate) crossed_buffer_newline: bool,
     pub(crate) source_position: DisplaySourceTextPosition,
 }
 
@@ -465,6 +470,7 @@ impl BufferSourceTruncationSkipAction {
         Self {
             charpos: position.charpos(),
             reached_line_break,
+            crossed_buffer_newline: reached_line_break,
             source_position: *position,
         }
     }
@@ -476,11 +482,13 @@ impl BufferSourceTruncationSkipAction {
     ///   for raw `'\n'`.
     /// - General path: consume the overflowing display element, then step
     ///   display elements up to `MAX_NEWLINE_DISTANCE = 500`, consulting
-    ///   `buffer-display-table`, valid static `composition`, automatic
-    ///   composition spans, `invisible`, and replacing `display` properties /
-    ///   overlays. After `500` display elements without a displayed newline,
-    ///   take GNU's raw-newline shortcut when no `display` property or overlay
-    ///   can supply an embedded newline before the next raw `'\n'`.
+    ///   `buffer-display-table` (including embedded non-trailing `?\n` that
+    ///   leaves `dpvec_index` pointing at suffix glyphs), valid static
+    ///   `composition`, automatic composition spans, `invisible`, and replacing
+    ///   `display` properties / overlays. After `500` display elements without
+    ///   a displayed newline, take GNU's raw-newline shortcut when no `display`
+    ///   property or overlay can supply an embedded newline before the next raw
+    ///   `'\n'`.
     pub(crate) fn consume_source_step_char_and_rest_of_line_in_buffer<
         B: LayoutBufferView + ?Sized,
     >(
@@ -495,7 +503,7 @@ impl BufferSourceTruncationSkipAction {
         }
 
         const MAX_NEWLINE_DISTANCE: usize = 500;
-        let dt_nl_breaks = crate::neovm_bridge::display_table_newline_breaks_row(buffer);
+        let has_display_table = crate::neovm_bridge::buffer_has_active_display_table(buffer);
         let comp_lookup = crate::neovm_bridge::LayoutCharPropertyLookup::new(
             buffer,
             neovm_core::emacs_core::Value::symbol(&crate::fixed_symbols::COMPOSITION),
@@ -521,9 +529,10 @@ impl BufferSourceTruncationSkipAction {
             }
         };
 
-        // Step one display element starting at `pos`. Returns `Some((broke_row,
-        // elements_counted))`, or `None` when the slice ends.
-        let step_element = |pos: &mut DisplaySourceTextPosition| -> Option<(bool, usize)> {
+        // Step one display element starting at `pos`. Returns
+        // `Some((broke_row, crossed_buffer_newline, elements_counted))`, or
+        // `None` when the slice ends.
+        let step_element = |pos: &mut DisplaySourceTextPosition| -> Option<(bool, bool, usize)> {
             if pos.byte_idx() >= text.len() {
                 return None;
             }
@@ -531,65 +540,91 @@ impl BufferSourceTruncationSkipAction {
             let cur_charpos = neovm_core::buffer::CharPos0::new(cur_charpos_i64.max(0) as usize);
             let cur_byte = EmacsBytePos::new(text_start_byte.saturating_add(pos.byte_idx()));
 
-            // 1. Invisible text/overlay run (GNU `handle_invisible_prop`).
-            let (invis, next_vis_charpos) = prop_access.check_invisible(cur_charpos_i64);
-            if invis.hidden() && next_vis_charpos > cur_charpos_i64 {
-                let target_char = neovm_core::buffer::CharPos0::new(next_vis_charpos as usize);
-                let target_byte = buffer.layout_char_pos_to_emacs_byte_pos(target_char);
-                let rel = target_byte.get().saturating_sub(text_start_byte);
-                advance_to_byte(pos, rel.max(pos.byte_idx().saturating_add(1)));
-                let elems = usize::from(matches!(
-                    invis,
-                    crate::neovm_bridge::InvisibleStatus::Hidden { ellipsis: true, .. }
-                ));
-                return Some((false, elems));
-            }
+            if pos.dpvec_index() == 0 {
+                // 1. Invisible text/overlay run (GNU `handle_invisible_prop`).
+                let (invis, next_vis_charpos) = prop_access.check_invisible(cur_charpos_i64);
+                if invis.hidden() && next_vis_charpos > cur_charpos_i64 {
+                    let target_char = neovm_core::buffer::CharPos0::new(next_vis_charpos as usize);
+                    let target_byte = buffer.layout_char_pos_to_emacs_byte_pos(target_char);
+                    let rel = target_byte.get().saturating_sub(text_start_byte);
+                    advance_to_byte(pos, rel.max(pos.byte_idx().saturating_add(1)));
+                    let elems = usize::from(matches!(
+                        invis,
+                        crate::neovm_bridge::InvisibleStatus::Hidden { ellipsis: true, .. }
+                    ));
+                    return Some((false, false, elems));
+                }
 
-            // 2. Replacing `display` property/overlay (GNU `handle_display_prop`).
-            if let Some(repl) =
-                crate::neovm_bridge::display_replacement_span_at(buffer, cur_byte, window_id)
-            {
-                let rel = repl.end_byte.get().saturating_sub(text_start_byte);
-                advance_to_byte(pos, rel.max(pos.byte_idx().saturating_add(1)));
-                return Some((repl.breaks_row, 1));
-            }
-
-            // 3. Valid static `composition` property (GNU `handle_composition_prop`).
-            if let Some(comp) = comp_lookup
-                .text_value_at(buffer, cur_byte)
-                .and_then(neovm_core::emacs_core::composite::composition_display_text_for_property)
-            {
-                advance_chars(pos, comp.char_len().max(1));
-                return Some((false, 1));
-            }
-
-            // 4. Automatic composition span starting at or covering `cur_charpos`.
-            if !auto_spans.is_empty() {
-                let idx = auto_spans.partition_point(|span| span.end() <= cur_charpos);
-                if let Some(span) = auto_spans.get(idx)
-                    && span.start() <= cur_charpos
-                    && cur_charpos < span.end()
+                // 2. Replacing `display` property/overlay (GNU `handle_display_prop`).
+                if let Some(repl) =
+                    crate::neovm_bridge::display_replacement_span_at(buffer, cur_byte, window_id)
                 {
-                    let remain = span.end().get().saturating_sub(cur_charpos.get()).max(1);
-                    advance_chars(pos, remain);
-                    return Some((false, 1));
+                    let rel = repl.end_byte.get().saturating_sub(text_start_byte);
+                    advance_to_byte(pos, rel.max(pos.byte_idx().saturating_add(1)));
+                    return Some((repl.breaks_row, false, 1));
+                }
+
+                // 3. Valid static `composition` property (GNU `handle_composition_prop`).
+                if let Some(comp) = comp_lookup.text_value_at(buffer, cur_byte).and_then(
+                    neovm_core::emacs_core::composite::composition_display_text_for_property,
+                ) {
+                    advance_chars(pos, comp.char_len().max(1));
+                    return Some((false, false, 1));
+                }
+
+                // 4. Automatic composition span starting at or covering `cur_charpos`.
+                if !auto_spans.is_empty() {
+                    let idx = auto_spans.partition_point(|span| span.end() <= cur_charpos);
+                    if let Some(span) = auto_spans.get(idx)
+                        && span.start() <= cur_charpos
+                        && cur_charpos < span.end()
+                    {
+                        let remain = span.end().get().saturating_sub(cur_charpos.get()).max(1);
+                        advance_chars(pos, remain);
+                        return Some((false, false, 1));
+                    }
                 }
             }
 
-            // 5. Ordinary character / display-table mapping.
+            // 5. Ordinary character / display-table mapping (GNU
+            // `DISP_CHAR_VECTOR` + `next_element_from_display_vector`).
+            if has_display_table {
+                let peek = pos.peek_step_char(text)?;
+                let ch = peek.ch();
+                let ec = neovm_core::emacs_core::emacs_char::EmacsChar::from_char(ch);
+                if let Some(glyphs) = crate::neovm_bridge::buffer_display_table_glyphs(buffer, ec) {
+                    let start_idx = pos.dpvec_index();
+                    let total_chars = glyphs.text.chars().count();
+                    let mut elems = 0usize;
+                    for (rel, g) in glyphs.text.chars().skip(start_idx).enumerate() {
+                        elems = rel + 1;
+                        if g == '\n' {
+                            let next_idx = start_idx + rel + 1;
+                            if next_idx < total_chars {
+                                // Embedded non-trailing `?\n`: end the row and
+                                // leave `dpvec_index` pointing at the suffix
+                                // glyphs at the same buffer charpos.
+                                pos.set_dpvec_index(next_idx);
+                                return Some((true, false, elems));
+                            }
+                            let _ = pos.consume_step_char(text);
+                            return Some((true, ch == '\n', elems));
+                        }
+                    }
+                    let _ = pos.consume_step_char(text);
+                    return Some((false, ch == '\n', elems));
+                }
+            }
+
             let step = pos.consume_step_char(text)?;
             let ch = step.ch();
             if ch == '\n' {
-                if dt_nl_breaks {
-                    return Some((true, 1));
-                }
-                let elems = crate::neovm_bridge::display_table_char_element_count(buffer, '\n');
-                return Some((false, elems));
+                return Some((true, true, 1));
             }
-            let elems = crate::neovm_bridge::display_table_char_element_count(buffer, ch);
-            Some((false, elems))
+            Some((false, false, 1))
         };
 
+        let mut crossed_any_buffer_newline = false;
         // First consume the overflowing element that triggered truncation
         // (matching GNU having produced & overwritten the right-edge column
         // before calling `forward_to_next_line_start`).
@@ -598,29 +633,35 @@ impl BufferSourceTruncationSkipAction {
                 return Self {
                     charpos: position.charpos(),
                     reached_line_break: false,
+                    crossed_buffer_newline: false,
                     source_position: *position,
                 };
             }
-            Some((true, _)) => {
+            Some((true, crossed_nl, _)) => {
                 return Self {
                     charpos: position.charpos(),
                     reached_line_break: true,
+                    crossed_buffer_newline: crossed_nl,
                     source_position: *position,
                 };
             }
-            Some((false, _)) => {}
+            Some((false, crossed_nl, _)) => {
+                crossed_any_buffer_newline |= crossed_nl;
+            }
         }
 
         let mut display_elements = 0usize;
         let mut reached = false;
         while display_elements < MAX_NEWLINE_DISTANCE {
-            let Some((broke, elems)) = step_element(position) else {
+            let Some((broke, crossed_nl, elems)) = step_element(position) else {
                 return Self {
                     charpos: position.charpos(),
                     reached_line_break: false,
+                    crossed_buffer_newline: crossed_any_buffer_newline,
                     source_position: *position,
                 };
             };
+            crossed_any_buffer_newline |= crossed_nl;
             if broke {
                 reached = true;
                 break;
@@ -649,9 +690,11 @@ impl BufferSourceTruncationSkipAction {
             let has_overlays = !buffer.layout_overlays().is_empty();
             if !has_display_in_span && !has_overlays {
                 reached = position.consume_until_line_break(text);
+                crossed_any_buffer_newline |= reached;
             } else {
                 // Slow path (`src/xdisp.c:7784-7794`): keep stepping elements.
-                while let Some((broke, _)) = step_element(position) {
+                while let Some((broke, crossed_nl, _)) = step_element(position) {
+                    crossed_any_buffer_newline |= crossed_nl;
                     if broke {
                         reached = true;
                         break;
@@ -663,6 +706,7 @@ impl BufferSourceTruncationSkipAction {
         Self {
             charpos: position.charpos(),
             reached_line_break: reached,
+            crossed_buffer_newline: crossed_any_buffer_newline,
             source_position: *position,
         }
     }
@@ -687,8 +731,10 @@ impl BufferSourceTruncationSkipAction {
         x: &mut f32,
         content_x: f32,
     ) {
-        if self.reached_line_break() {
+        if self.crossed_buffer_newline {
             line_numbers.advance_line();
+        } else if self.reached_line_break() {
+            line_numbers.mark_display_string_break();
         }
         *x = content_x;
         row_extend.clear();
@@ -1083,7 +1129,11 @@ impl<'a> BufferSourceSpecialOverflowRenderRequest<'a> {
                 source_render
                     .output_emitter()
                     .note_truncated_end(LispCharPos1::new(
-                        truncation_skip.charpos + i64::from(!truncation_skip.reached_line_break),
+                        truncation_skip.charpos
+                            + i64::from(
+                                !truncation_skip.reached_line_break
+                                    || truncation_skip.source_position.dpvec_index() > 0,
+                            ),
                     ));
                 let mut source_position = truncation_skip.source_position();
                 truncation_skip.apply_before_row_transition(

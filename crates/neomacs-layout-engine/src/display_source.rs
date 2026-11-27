@@ -265,26 +265,90 @@ impl DisplaySourceRangeItemAppendRequest {
     }
 }
 
+/// Outcome of scanning the unconsumed remainder of a display-table vector for
+/// an embedded newline when a truncated row clips mid-vector.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum DisplayVectorTruncateSkip {
+    /// A `'\n'` inside the remaining display vector has suffix glyphs starting
+    /// at `next_dpvec_index` on the same buffer character.
+    ResumeAfterEmbeddedNewline { next_dpvec_index: usize },
+    /// The remaining display vector ended with a trailing `'\n'`: the current
+    /// buffer character is fully consumed and terminates the truncated row.
+    ConsumedTrailingNewline,
+    /// No `'\n'` exists in the remaining display vector: caller must continue
+    /// truncation skip into subsequent buffer text.
+    NoNewlineInVector,
+}
+
 /// Source for one logical display item.
 ///
 /// Most items are yielded once. A display-table `SourceMappedText` remains one
 /// source element to the buffer walk, but is exposed here as contiguous face
-/// segments so row measurement and rendering use each glyph's GNU lface.
+/// segments split at every `'\n'` glyph (GNU `next_element_from_display_vector`,
+/// `src/xdisp.c:9258-9346`) so row measurement, rendering, and embedded-newline
+/// row breaks use each glyph's GNU lface.
 pub(crate) struct DisplayItemSegmentSource {
     item: Option<DisplayItem>,
+    base_dpvec_index: usize,
     face_run_index: usize,
+    run_char_offset: usize,
     text_char_offset: usize,
     text_byte_offset: usize,
 }
 
 impl DisplayItemSegmentSource {
     pub(crate) fn new(item: DisplayItem) -> Self {
+        let base_dpvec_index = match &item.kind {
+            DisplayItemKind::SourceMappedText(mapped) => mapped.dpvec_start_index(),
+            _ => 0,
+        };
         Self {
             item: Some(item),
+            base_dpvec_index,
             face_run_index: 0,
+            run_char_offset: 0,
             text_char_offset: 0,
             text_byte_offset: 0,
         }
+    }
+
+    pub(crate) fn has_remaining(&self) -> bool {
+        self.item.is_some()
+    }
+
+    /// Display-vector index of the next unconsumed glyph in the source
+    /// character's display table vector (GNU `it->current.dpvec_index`).
+    pub(crate) fn next_dpvec_index(&self) -> usize {
+        self.base_dpvec_index.saturating_add(self.text_char_offset)
+    }
+
+    /// Scan remaining glyphs in this display-table vector for a `'\n'` when a
+    /// truncated row clips mid-vector.
+    pub(crate) fn skip_to_next_row_break(&mut self) -> DisplayVectorTruncateSkip {
+        let outcome = {
+            let Some(item) = self.item.as_ref() else {
+                return DisplayVectorTruncateSkip::NoNewlineInVector;
+            };
+            let DisplayItemKind::SourceMappedText(mapped) = &item.kind else {
+                return DisplayVectorTruncateSkip::NoNewlineInVector;
+            };
+            let remaining = mapped.text.get(self.text_byte_offset..).unwrap_or_default();
+            if let Some((nl_byte_rel, _)) = remaining.char_indices().find(|&(_, ch)| ch == '\n') {
+                let chars_before_nl = remaining[..nl_byte_rel].chars().count();
+                let after_nl_byte = self.text_byte_offset + nl_byte_rel + 1;
+                let after_nl_char = self.text_char_offset + chars_before_nl + 1;
+                let next_dpvec_index = self.base_dpvec_index.saturating_add(after_nl_char);
+                if after_nl_byte < mapped.text.len() {
+                    DisplayVectorTruncateSkip::ResumeAfterEmbeddedNewline { next_dpvec_index }
+                } else {
+                    DisplayVectorTruncateSkip::ConsumedTrailingNewline
+                }
+            } else {
+                DisplayVectorTruncateSkip::NoNewlineInVector
+            }
+        };
+        self.item = None;
+        outcome
     }
 }
 
@@ -298,56 +362,82 @@ impl DisplayItemSource for DisplayItemSegmentSource {
             return self.item.take();
         }
 
-        let run = mapped.lisp_face_runs().get(self.face_run_index)?.clone();
+        let runs = mapped.lisp_face_runs();
+        let run = runs.get(self.face_run_index)?.clone();
+        let run_remaining_chars = run.char_len.saturating_sub(self.run_char_offset);
         let remaining = mapped.text.get(self.text_byte_offset..)?;
-        let segment_byte_len = remaining
+        let run_byte_len = remaining
             .char_indices()
-            .nth(run.char_len)
+            .nth(run_remaining_chars)
             .map_or(remaining.len(), |(byte, _)| byte);
-        let segment_text: Box<str> = remaining[..segment_byte_len].into();
-        let glyph_string_start = mapped.glyph_string_start.as_ref().map(|start| {
-            start
-                .clone()
-                .advanced_by(self.text_char_offset, self.text_byte_offset)
-        });
+        let run_slice = &remaining[..run_byte_len];
+
+        let (emitted_chars, emitted_bytes, is_row_break) = if run_slice.starts_with('\n') {
+            (1usize, 1usize, true)
+        } else if let Some(nl_byte) = run_slice.find('\n') {
+            (run_slice[..nl_byte].chars().count(), nl_byte, false)
+        } else {
+            (run_remaining_chars, run_byte_len, false)
+        };
+
         let face = run
             .lisp_face_id
             .map(|id| context.resolve_lisp_face_ref(item.face, id))
             .unwrap_or(item.face);
         let current_boxed = context.face_has_box(face);
-        let previous_boxed = if self.face_run_index == 0 {
+        let previous_boxed = if self.run_char_offset > 0 {
+            current_boxed
+        } else if self.face_run_index == 0 {
             // GNU saves the face of the replaced source character before
             // entering a display vector. The vector's first realized face is
             // compared with that saved face, not with the previous buffer
             // character outside this item.
             context.face_has_box(item.face)
         } else {
-            let previous = &mapped.lisp_face_runs()[self.face_run_index - 1];
+            let previous = &runs[self.face_run_index - 1];
             let previous_face = previous
                 .lisp_face_id
                 .map(|id| context.resolve_lisp_face_ref(item.face, id))
                 .unwrap_or(item.face);
             context.face_has_box(previous_face)
         };
-        let next_boxed = if self.face_run_index + 1 == mapped.lisp_face_runs().len() {
+        let next_run_char_offset = self.run_char_offset.saturating_add(emitted_chars);
+        let next_boxed = if next_run_char_offset < run.char_len {
+            current_boxed
+        } else if self.face_run_index + 1 == runs.len() {
             // The same saved source face is restored after the vector, so it
             // is the authoritative successor at the final mapped run.
             context.face_has_box(item.face)
         } else {
-            let next = &mapped.lisp_face_runs()[self.face_run_index + 1];
+            let next = &runs[self.face_run_index + 1];
             let next_face = next
                 .lisp_face_id
                 .map(|id| context.resolve_lisp_face_ref(item.face, id))
                 .unwrap_or(item.face);
             context.face_has_box(next_face)
         };
+
+        let kind = if is_row_break {
+            DisplayItemKind::RowBreak(DisplayRowBreak::explicit_newline())
+        } else {
+            let segment_text: Box<str> = run_slice[..emitted_bytes].into();
+            let glyph_string_start = mapped.glyph_string_start.as_ref().map(|start| {
+                start
+                    .clone()
+                    .advanced_by(self.text_char_offset, self.text_byte_offset)
+            });
+            DisplayItemKind::SourceMappedText(
+                DisplaySourceMappedText::face_segment(segment_text, glyph_string_start)
+                    .with_dpvec_start_index(
+                        self.base_dpvec_index.saturating_add(self.text_char_offset),
+                    ),
+            )
+        };
+
         let segment = DisplayItem {
             span: item.span.clone(),
             face,
-            kind: DisplayItemKind::SourceMappedText(DisplaySourceMappedText::face_segment(
-                segment_text,
-                glyph_string_start,
-            )),
+            kind,
             layout: item.layout,
             pointer_appearance: item.pointer_appearance.clone(),
             box_vertical_edges: BoxVerticalEdges::from_ownership(
@@ -359,10 +449,14 @@ impl DisplayItemSource for DisplayItemSegmentSource {
             ),
         };
 
-        self.face_run_index += 1;
-        self.text_char_offset = self.text_char_offset.saturating_add(run.char_len);
-        self.text_byte_offset = self.text_byte_offset.saturating_add(segment_byte_len);
-        if self.face_run_index == mapped.lisp_face_runs().len() {
+        self.run_char_offset = next_run_char_offset;
+        self.text_char_offset = self.text_char_offset.saturating_add(emitted_chars);
+        self.text_byte_offset = self.text_byte_offset.saturating_add(emitted_bytes);
+        if self.run_char_offset >= run.char_len {
+            self.face_run_index += 1;
+            self.run_char_offset = 0;
+        }
+        if self.face_run_index >= runs.len() {
             self.item = None;
         }
         Some(segment)
@@ -562,10 +656,15 @@ impl DisplaySourceTextOrigin {
 ///
 /// `byte_idx` is deliberately not an [`EmacsBytePos`]: it is relative to the
 /// walk's [`DisplaySourceTextOrigin`], while `charpos` remains buffer-absolute.
+/// `dpvec_index` mirrors GNU's `it->current.dpvec_index`: zero outside a
+/// mid-display-vector resume, and the next unconsumed glyph index inside the
+/// display-table vector for the character at `(byte_idx, charpos)` when a row
+/// breaks or hscrolls mid-vector.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct DisplaySourceTextPosition {
     byte_idx: usize,
     charpos: i64,
+    dpvec_index: usize,
 }
 
 /// A buffer seating and whether its overlay-string insertion was consumed.
@@ -594,7 +693,11 @@ impl DisplaySourceResumeCursor {
 
 impl DisplaySourceTextPosition {
     pub(crate) const fn new(byte_idx: usize, charpos: i64) -> Self {
-        Self { byte_idx, charpos }
+        Self {
+            byte_idx,
+            charpos,
+            dpvec_index: 0,
+        }
     }
 
     pub(crate) const fn byte_idx(self) -> usize {
@@ -605,33 +708,69 @@ impl DisplaySourceTextPosition {
         self.charpos
     }
 
+    pub(crate) const fn dpvec_index(self) -> usize {
+        self.dpvec_index
+    }
+
+    pub(crate) const fn with_dpvec_index(self, dpvec_index: usize) -> Self {
+        Self {
+            byte_idx: self.byte_idx,
+            charpos: self.charpos,
+            dpvec_index,
+        }
+    }
+
+    pub(crate) fn set_dpvec_index(&mut self, dpvec_index: usize) {
+        self.dpvec_index = dpvec_index;
+    }
+
     pub(crate) const fn with_charpos(self, charpos: i64) -> Self {
         Self {
             byte_idx: self.byte_idx,
             charpos,
+            dpvec_index: if charpos == self.charpos {
+                self.dpvec_index
+            } else {
+                0
+            },
         }
     }
 
     pub(crate) fn advance_byte_idx_to(&mut self, byte_idx: usize) {
         self.byte_idx = byte_idx;
+        self.dpvec_index = 0;
     }
 
     pub(crate) fn advance_to(&mut self, byte_idx: usize, charpos: i64) {
         self.byte_idx = byte_idx;
         self.charpos = charpos;
+        self.dpvec_index = 0;
     }
 
     pub(crate) fn advance_charpos_by_one(&mut self) {
         self.charpos = self.charpos.saturating_add(1);
+        self.dpvec_index = 0;
     }
 
     pub(crate) fn advance_one_char(&mut self, ch_len: usize) {
         self.byte_idx = self.byte_idx.saturating_add(ch_len);
         self.charpos = self.charpos.saturating_add(1);
+        self.dpvec_index = 0;
     }
 
     pub(crate) fn matches(self, byte_idx: usize, charpos: i64) -> bool {
         self.byte_idx == byte_idx && self.charpos == charpos
+    }
+
+    pub(crate) fn peek_step_char(self, text: &[u8]) -> Option<DisplaySourceStepChar> {
+        if self.byte_idx >= text.len() {
+            return None;
+        }
+        let (ch, ch_len) = decode_utf8(&text[self.byte_idx..]);
+        if ch_len == 0 {
+            return None;
+        }
+        Some(DisplaySourceStepChar::new(ch, self.byte_idx, self.charpos))
     }
 
     pub(crate) fn consume_step_char(&mut self, text: &[u8]) -> Option<DisplaySourceStepChar> {
@@ -691,6 +830,7 @@ impl DisplaySourceTextPosition {
         let advance = run + usize::from(found_newline);
         self.byte_idx += advance;
         self.charpos = self.charpos.saturating_add(advance as i64);
+        self.dpvec_index = 0;
         if found_newline || run == rest.len() {
             return found_newline;
         }

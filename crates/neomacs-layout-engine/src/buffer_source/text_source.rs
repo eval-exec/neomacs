@@ -975,12 +975,14 @@ impl<'a, B: LayoutBufferView + ?Sized> BufferTextSourceCursor<'a, B> {
         face: RenderFaceRef,
         layout: DisplayItemLayout,
         context: &mut DisplaySourceContext<'_>,
+        dpvec_index: usize,
     ) -> Option<DisplayItem> {
         let character = self.char_at(start)?;
 
-        if let Some(composition) = self
-            .composition_prop_at(start)
-            .and_then(composition_display_text_for_property)
+        if dpvec_index == 0
+            && let Some(composition) = self
+                .composition_prop_at(start)
+                .and_then(composition_display_text_for_property)
         {
             let end = start.add_len(CharLen::new(composition.char_len()));
             if end
@@ -1010,7 +1012,9 @@ impl<'a, B: LayoutBufferView + ?Sized> BufferTextSourceCursor<'a, B> {
             }
         }
 
-        if let Some(composition) = self.buffer.layout_automatic_composition_starting_at(start) {
+        if dpvec_index == 0
+            && let Some(composition) = self.buffer.layout_automatic_composition_starting_at(start)
+        {
             let end = composition.end();
             // A text-property boundary INSIDE the span does not split it: GNU
             // composes the character sequence and stamps the composed glyph
@@ -1052,54 +1056,23 @@ impl<'a, B: LayoutBufferView + ?Sized> BufferTextSourceCursor<'a, B> {
             }
         }
 
-        // GNU `get_next_display_element`: before the control-char / glyphless /
-        // tab arms, consult the active display table.  If the char remaps to a
-        // glyph vector, the WHOLE vector is ONE display element spanning the
-        // single source char — emit it as a `SourceMappedText` over
-        // `[start, start+1)`.  The source walk advances by the item's span-end
-        // (the single char) exactly once, so byte/charpos never desync; each
-        // decoded glyph is appended as a real glyph (a `?\t` glyph re-expands
-        // through the ordinary tab path), keeping the row non-blank.
+        // GNU `get_next_display_element` (`src/xdisp.c:8488-8513`): before the
+        // control-char / glyphless / tab arms, consult the active display
+        // table. Emit the vector (sliced from `dpvec_index`, GNU
+        // `it->current.dpvec_index`) as a `SourceMappedText` over
+        // `[start, start+1)`. `DisplayItemSegmentSource` and
+        // `render_display_table_vector_and_apply` iterate its glyphs and split
+        // rows at any `?\n` element (leading, embedded, or trailing), resuming
+        // remaining suffix glyphs on subsequent rows at the same buffer charpos.
         if let Some(glyphs) = self.display_table_glyphs(character) {
             let crate::neovm_bridge::BufferDisplayTableGlyphs {
                 text,
                 lisp_face_runs,
             } = glyphs;
-            let mapped_text =
-                DisplaySourceMappedText::new(text).with_lisp_face_runs(lisp_face_runs);
+            let mapped_text = DisplaySourceMappedText::new(text)
+                .with_lisp_face_runs(lisp_face_runs)
+                .into_display_vector_suffix(dpvec_index);
             self.char_pos = start.add_len(CharLen::new(1));
-            // GNU iterates a display-table entry element-by-element and decides
-            // end-of-line on the DISPLAYED char: `ITERATOR_AT_END_OF_LINE_P`
-            // (dispextern.h) tests `it->c == '\n'`, and `next_element_from_
-            // display_vector` (xdisp.c) sets `it->c` per glyph. So a newline whose
-            // entry ends in a `\n` glyph (whitespace-mode's `[$ \n]`) renders its
-            // leading glyphs and THEN ends the row — the trailing `\n` glyph is
-            // its own end-of-line element. Emit the leading glyphs and mark the
-            // item to break the row after; the buffer newline is consumed here, so
-            // the next row resumes on the following char. An entry WITHOUT a
-            // trailing `\n` (e.g. `[$]`) keeps the plain no-break replacement,
-            // matching GNU (the newline's break is fully replaced -> lines join).
-            if character.code() == u32::from(b'\n')
-                && crate::neovm_bridge::display_table_glyphs_end_row(&mapped_text.text)
-            {
-                return Some(
-                    self.bind_box_run_topology(
-                        DisplayItem::new(
-                            self.span(start, self.char_pos),
-                            face,
-                            DisplayItemKind::SourceMappedText(
-                                mapped_text.into_prefix_without_last_char(),
-                            ),
-                        )
-                        .with_layout(layout)
-                        .with_break_after_row(),
-                        start,
-                        self.char_pos,
-                        face,
-                        context,
-                    ),
-                );
-            }
             return Some(
                 self.bind_box_run_topology(
                     DisplayItem::new(
@@ -1191,6 +1164,7 @@ impl<'a, B: LayoutBufferView + ?Sized> BufferTextSourceCursor<'a, B> {
         property_end: CharPos0,
         face: RenderFaceRef,
         context: &mut DisplaySourceContext<'_>,
+        dpvec_index: usize,
     ) -> Option<DisplayItem> {
         self.next_text_item_with_layout(
             start,
@@ -1198,6 +1172,7 @@ impl<'a, B: LayoutBufferView + ?Sized> BufferTextSourceCursor<'a, B> {
             face,
             DisplayItemLayout::default(),
             context,
+            dpvec_index,
         )
     }
 
@@ -1209,13 +1184,25 @@ impl<'a, B: LayoutBufferView + ?Sized> BufferTextSourceCursor<'a, B> {
         DisplaySourcePosition::buffer(self.buffer_id, self.char_pos, self.byte_pos(self.char_pos))
     }
 
+    #[cfg(test)]
     pub(crate) fn next_cursor_item(
         &mut self,
         context: &mut DisplaySourceContext<'_>,
         replacement_mode: BufferTextDisplayReplacementMode,
     ) -> Option<BufferTextCursorItem> {
+        self.next_cursor_item_at_dpvec_index(context, replacement_mode, 0)
+    }
+
+    pub(crate) fn next_cursor_item_at_dpvec_index(
+        &mut self,
+        context: &mut DisplaySourceContext<'_>,
+        replacement_mode: BufferTextDisplayReplacementMode,
+        dpvec_index: usize,
+    ) -> Option<BufferTextCursorItem> {
         loop {
-            if let Some(item) = self.replacement_strings.next_item(context) {
+            if dpvec_index == 0
+                && let Some(item) = self.replacement_strings.next_item(context)
+            {
                 return Some(BufferTextCursorItem::Item(item));
             }
 
@@ -1225,7 +1212,8 @@ impl<'a, B: LayoutBufferView + ?Sized> BufferTextSourceCursor<'a, B> {
 
             let start = self.char_pos;
             let source_char = self.char_at(start)?;
-            if self.overlay_strings_produced_at != Some(start)
+            if dpvec_index == 0
+                && self.overlay_strings_produced_at != Some(start)
                 && let Some(strings) = self.overlay_strings_at(start)
             {
                 // INSERTION: the cursor stays put, so the buffer character at
@@ -1248,7 +1236,9 @@ impl<'a, B: LayoutBufferView + ?Sized> BufferTextSourceCursor<'a, B> {
             let pointer_appearance = self.pointer_appearance_at(start, property_end, face, context);
             let span = self.span(start, property_end);
 
-            if let Some(display_source) = self.display_prop_source_at(start) {
+            if dpvec_index == 0
+                && let Some(display_source) = self.display_prop_source_at(start)
+            {
                 let display_prop = display_source.value;
                 let display_property = DisplayPropertySourcePlan::new_at(
                     display_prop,
@@ -1343,13 +1333,20 @@ impl<'a, B: LayoutBufferView + ?Sized> BufferTextSourceCursor<'a, B> {
                     DisplayPropertySourceCursorAction::FallThrough { layout } => layout,
                 };
                 return self
-                    .next_text_item_with_layout(start, property_end, face, item_layout, context)
+                    .next_text_item_with_layout(
+                        start,
+                        property_end,
+                        face,
+                        item_layout,
+                        context,
+                        dpvec_index,
+                    )
                     .map(|item| item.with_pointer_appearance(pointer_appearance))
                     .map(BufferTextCursorItem::Item);
             }
 
             return self
-                .next_text_item(start, property_end, face, context)
+                .next_text_item(start, property_end, face, context, dpvec_index)
                 .map(|item| item.with_pointer_appearance(pointer_appearance))
                 .map(BufferTextCursorItem::Item);
         }
@@ -1360,7 +1357,7 @@ impl<'a, B: LayoutBufferView + ?Sized> BufferTextSourceCursor<'a, B> {
         context: &mut DisplaySourceContext<'_>,
         replacement_mode: BufferTextDisplayReplacementMode,
     ) -> Option<DisplayItem> {
-        match self.next_cursor_item(context, replacement_mode)? {
+        match self.next_cursor_item_at_dpvec_index(context, replacement_mode, 0)? {
             BufferTextCursorItem::Item(item) => Some(item),
             BufferTextCursorItem::DisplayPropertyReplacement(_) => {
                 debug_assert!(false, "display item cursor surfaced a buffer replacement");

@@ -208,6 +208,18 @@ impl DisplayReplacementStringLineBreak {
         }
     }
 
+    pub(crate) fn with_measured_metrics(
+        mut self,
+        metrics: DisplayRowMeasuredFaceMetrics,
+        face_id: FaceId,
+    ) -> Self {
+        self.metrics = metrics;
+        self.extend_face = self
+            .extend_face
+            .map(|face| DisplayRowExtendFace::new(face.background(), face_id, metrics));
+        self
+    }
+
     pub(crate) fn face_id(self) -> FaceId {
         self.face_id
     }

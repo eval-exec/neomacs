@@ -126,7 +126,11 @@ impl BufferSourceConsumptionState {
         let source_char = source
             .char_at(expected_source_pos)
             .and_then(|character| character.as_rust_char());
-        let item = source.next_cursor_item(context, replacement_mode)?;
+        let item = source.next_cursor_item_at_dpvec_index(
+            context,
+            replacement_mode,
+            position.dpvec_index(),
+        )?;
         if let BufferTextCursorItem::DisplayPropertyReplacement(replacement) = &item
             && !self.replacement_matches(position, replacement)?
         {

@@ -53,6 +53,7 @@ impl<'emit> DisplaySourceRowProgressState<'emit> {
 pub(crate) struct DisplaySourceProgressState<'emit> {
     byte_idx: &'emit mut usize,
     charpos: &'emit mut i64,
+    dpvec_index: Option<&'emit mut usize>,
     row: DisplaySourceRowProgressState<'emit>,
     physical_line_tabs: Option<&'emit mut DisplayPhysicalLineTabState>,
     row_text_start_x: Option<&'emit mut Px>,
@@ -68,10 +69,16 @@ impl<'emit> DisplaySourceProgressState<'emit> {
         Self {
             byte_idx,
             charpos,
+            dpvec_index: None,
             row: DisplaySourceRowProgressState::new(x, col),
             physical_line_tabs: None,
             row_text_start_x: None,
         }
+    }
+
+    pub(crate) fn with_dpvec_index(mut self, dpvec_index: &'emit mut usize) -> Self {
+        self.dpvec_index = Some(dpvec_index);
+        self
     }
 
     pub(crate) fn with_physical_line_tabs(
@@ -85,6 +92,16 @@ impl<'emit> DisplaySourceProgressState<'emit> {
     pub(crate) fn with_row_text_start(mut self, x: &'emit mut Px) -> Self {
         self.row_text_start_x = Some(x);
         self
+    }
+
+    pub(crate) fn dpvec_index(&self) -> usize {
+        self.dpvec_index.as_deref().copied().unwrap_or(0)
+    }
+
+    pub(crate) fn set_dpvec_index(&mut self, dpvec_index: usize) {
+        if let Some(slot) = self.dpvec_index.as_deref_mut() {
+            *slot = dpvec_index;
+        }
     }
 
     pub(crate) fn visual_row_progress(&mut self) -> DisplaySourceVisualRowProgress<'_> {
@@ -122,14 +139,21 @@ impl<'emit> DisplaySourceProgressState<'emit> {
     }
 
     pub(crate) fn set_charpos(&mut self, charpos: i64) {
+        if *self.charpos != charpos {
+            self.set_dpvec_index(0);
+        }
         *self.charpos = charpos;
     }
 
     pub(crate) fn advance_charpos_by_one(&mut self) {
         *self.charpos += 1;
+        self.set_dpvec_index(0);
     }
 
     pub(crate) fn max_charpos(&mut self, charpos: i64) {
+        if charpos > *self.charpos {
+            self.set_dpvec_index(0);
+        }
         *self.charpos = (*self.charpos).max(charpos);
     }
 
@@ -138,11 +162,15 @@ impl<'emit> DisplaySourceProgressState<'emit> {
     }
 
     pub(crate) fn set_byte_idx(&mut self, byte_idx: usize) {
+        if *self.byte_idx != byte_idx {
+            self.set_dpvec_index(0);
+        }
         *self.byte_idx = byte_idx;
     }
 
     pub(crate) fn source_position(&self) -> DisplaySourceTextPosition {
         DisplaySourceTextPosition::new(*self.byte_idx, *self.charpos)
+            .with_dpvec_index(self.dpvec_index())
     }
 
     pub(crate) fn apply_row_position(&mut self, position: DisplayRowPosition) {
@@ -152,6 +180,7 @@ impl<'emit> DisplaySourceProgressState<'emit> {
     pub(crate) fn apply_source_position(&mut self, position: DisplaySourceTextPosition) {
         *self.byte_idx = position.byte_idx();
         *self.charpos = position.charpos();
+        self.set_dpvec_index(position.dpvec_index());
     }
 
     pub(crate) fn continue_physical_line_after_visual_row(
@@ -180,6 +209,7 @@ impl<'emit> DisplaySourceProgressState<'emit> {
         DisplaySourceProgressState {
             byte_idx: self.byte_idx,
             charpos: self.charpos,
+            dpvec_index: self.dpvec_index.as_deref_mut(),
             row: self.row.reborrow(),
             physical_line_tabs: self.physical_line_tabs.as_deref_mut(),
             row_text_start_x: self.row_text_start_x.as_deref_mut(),

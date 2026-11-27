@@ -3389,6 +3389,7 @@ fn buffer_text_truncation_skip_action_reports_transition_continuation() {
     let action = BufferSourceTruncationSkipAction {
         charpos: 12,
         reached_line_break: false,
+        crossed_buffer_newline: false,
         source_position: DisplaySourceTextPosition::new(0, 12),
     };
 
@@ -3407,6 +3408,7 @@ fn buffer_text_truncation_skip_action_syncs_after_visible_transition() {
     let action = BufferSourceTruncationSkipAction {
         charpos: 12,
         reached_line_break: true,
+        crossed_buffer_newline: true,
         source_position: DisplaySourceTextPosition::new(0, 12),
     };
     let mut position = DisplaySourceTextPosition::new(2, 9);
@@ -3429,6 +3431,7 @@ fn buffer_text_truncation_skip_action_skips_sync_when_transition_exhausted() {
     let action = BufferSourceTruncationSkipAction {
         charpos: 12,
         reached_line_break: true,
+        crossed_buffer_newline: true,
         source_position: DisplaySourceTextPosition::new(0, 12),
     };
     let mut position = DisplaySourceTextPosition::new(2, 9);
