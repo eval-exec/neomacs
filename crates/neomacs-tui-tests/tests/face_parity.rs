@@ -209,6 +209,37 @@ fn hl_line_highlight_matches_gnu() {
     assert_pair_exact_display("hl-line", &gnu, &neo);
 }
 
+/// `:distant-foreground` never applies on a terminal: GNU's
+/// `load_face_colors` swaps it in, but only `realize_gui_face` calls that
+/// (src/xfaces.c:6386); `realize_tty_face` never reads the attribute. Both
+/// rows are near-same pairs on a GUI frame (#853's `#f0f0f0` on `#c6c7c7`,
+/// distance 15486, and `#333333` on `#333334`, distance 2), so a terminal that
+/// swapped would paint the distant red where GNU keeps the face's own colors.
+#[test]
+fn distant_foreground_is_not_applied_on_a_terminal() {
+    let (mut gnu, mut neo) = boot_pair("");
+    wait_for_both(&mut gnu, &mut neo, Duration::from_secs(30), scratch_ready);
+
+    eval_expression(
+        &mut gnu,
+        &mut neo,
+        "(progn (switch-to-buffer (get-buffer-create \"distant\")) \
+         (erase-buffer) (setq-local mode-line-format nil) \
+         (insert (propertize \"distant near pair\" 'face \
+                   '(:foreground \"#f0f0f0\" :background \"#c6c7c7\" \
+                     :distant-foreground \"#ff0000\")) \"\\n\" \
+                 (propertize \"distant same pair\" 'face \
+                   '(:foreground \"#333333\" :background \"#333334\" \
+                     :distant-foreground \"#ff0000\")) \"\\n\") \
+         (goto-char (point-max)) nil)",
+    );
+    let ready = |grid: &[String]| grid.iter().any(|row| row.contains("distant same pair"));
+    wait_for_both(&mut gnu, &mut neo, Duration::from_secs(10), ready);
+
+    read_both(&mut gnu, &mut neo, Duration::from_millis(500));
+    assert_pair_exact_display("distant-foreground on a terminal", &gnu, &neo);
+}
+
 /// Font-lock in C mode: a different major mode exercises different
 /// font-lock faces (types, preprocessor) than the elisp scenario.
 #[test]
