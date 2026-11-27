@@ -1457,6 +1457,88 @@ fn check_reports_stale_leim_generation_and_its_bytecode() {
 }
 
 #[test]
+fn check_reports_a_generated_output_missing_from_the_tree() {
+    let (root, lisp) = check_fixture("COMPILE_FIRST =\nMAIN_FIRST =\n");
+    write_fresh_elc(&lisp.join("loadup.el"));
+    let source = root.join("leim/CXTERM-DIC/Punct.tit");
+    fs::create_dir_all(source.parent().unwrap()).unwrap();
+    fs::write(&source, "tit\n").unwrap();
+    let output = lisp.join("leim/quail/Punct.el");
+    // The output does not exist: generation creates it, and compile-main must
+    // then compile it even though compile_main_sources cannot see it yet.
+
+    let report = crate::rebuild_check::check(&check_options(&root)).unwrap();
+
+    assert!(report.generated.leim.contains(&output));
+    assert!(report.compile_main.files.contains(&output), "{report:?}");
+}
+
+#[test]
+fn check_reports_leim_list_when_a_dictionary_changes() {
+    let (root, lisp) = check_fixture("COMPILE_FIRST =\nMAIN_FIRST =\n");
+    write_fresh_elc(&lisp.join("loadup.el"));
+    for rule in crate::LEIM_GENERATION_RULES {
+        for rel in rule.output_rels {
+            let output = lisp.join(rel);
+            fs::create_dir_all(output.parent().unwrap()).unwrap();
+            fs::write(&output, "").unwrap();
+        }
+    }
+    let ext = root.join("leim/leim-ext.el");
+    fs::create_dir_all(ext.parent().unwrap()).unwrap();
+    fs::write(&ext, "").unwrap();
+    let list = lisp.join("leim/leim-list.el");
+    write_file_newer_than(&list, "list", &ext);
+    // Every prerequisite is older than the list, so the mtime rule alone
+    // calls it current; the changed dictionary must still mark it stale.
+    let source = root.join("leim/CXTERM-DIC/Punct.tit");
+    fs::create_dir_all(source.parent().unwrap()).unwrap();
+    write_file_newer_than(&source, "tit", &lisp.join("leim/quail/Punct.el"));
+
+    let report = crate::rebuild_check::check(&check_options(&root)).unwrap();
+
+    assert!(
+        report
+            .generated
+            .leim
+            .contains(&lisp.join("leim/quail/Punct.el"))
+    );
+    assert!(report.generated.leim_list, "{report:?}");
+}
+
+#[test]
+fn check_custom_finder_follows_gnu_file_presence() {
+    let (root, lisp) = check_fixture("COMPILE_FIRST =\nMAIN_FIRST =\n");
+    write_fresh_elc(&lisp.join("loadup.el"));
+    fs::write(lisp.join("cus-dep.el"), "").unwrap();
+    fs::write(lisp.join("finder.el"), "").unwrap();
+    fs::write(lisp.join("cus-load.el"), "").unwrap();
+    fs::write(lisp.join("finder-inf.el"), "").unwrap();
+
+    let options = check_options(&root);
+    let paths = pipeline_paths(&options);
+    // GNU's cus-load.el and finder-inf.el rules have no prerequisites: a
+    // completed tree is up to date, and only a missing output regenerates.
+    assert!(
+        custom_dependencies_generation_job(&paths)
+            .unwrap()
+            .is_none()
+    );
+    assert!(finder_data_generation_job(&paths).unwrap().is_none());
+    let report = crate::rebuild_check::check(&options).unwrap();
+    assert!(report.generated.custom_finder.is_empty(), "{report:?}");
+
+    fs::remove_file(lisp.join("cus-load.el")).unwrap();
+    assert!(
+        custom_dependencies_generation_job(&paths)
+            .unwrap()
+            .is_some()
+    );
+    let report = crate::rebuild_check::check(&options).unwrap();
+    assert_eq!(report.generated.custom_finder, vec!["cus-load.el"]);
+}
+
+#[test]
 fn check_reports_stale_semantic_grammar() {
     let (root, lisp) = check_fixture("COMPILE_FIRST =\nMAIN_FIRST =\n");
     write_fresh_elc(&lisp.join("loadup.el"));

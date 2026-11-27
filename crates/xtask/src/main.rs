@@ -2147,13 +2147,15 @@ fn run_custom_finder_generation(
 
 fn custom_dependencies_generation_job(paths: &PipelinePaths) -> Result<Option<GeneratedLispJob>> {
     let output = paths.lisp_root.join("cus-load.el");
-    let dirs = lisp_dirs_for_custom_dependencies(&paths.lisp_root)?;
-    let mut dependencies = dirs.clone();
-    dependencies.push(paths.lisp_root.join("cus-dep.el"));
-    if !generated_file_needs_rebuild(&output, &dependencies) {
+    // GNU lisp/Makefile.in's `$(lisp)/cus-load.el` rule has no prerequisites:
+    // `all` rebuilds it only when the file is missing (the phony `custom-deps`
+    // target is the forced variant).  Matching that rule keeps the build and
+    // `--check` in agreement and matches `make -q` on a completed tree.
+    if output.is_file() {
         return Ok(None);
     }
 
+    let dirs = lisp_dirs_for_custom_dependencies(&paths.lisp_root)?;
     let args = custom_dependencies_generation_args(&paths.lisp_root, &output, &dirs);
     Ok(Some(GeneratedLispJob {
         name: "lisp/cus-load.el (GNU custom-deps)".to_string(),
@@ -2164,13 +2166,13 @@ fn custom_dependencies_generation_job(paths: &PipelinePaths) -> Result<Option<Ge
 
 fn finder_data_generation_job(paths: &PipelinePaths) -> Result<Option<GeneratedLispJob>> {
     let output = paths.lisp_root.join("finder-inf.el");
-    let dirs = lisp_dirs_for_finder_data(&paths.lisp_root)?;
-    let mut dependencies = dirs.clone();
-    dependencies.push(paths.lisp_root.join("finder.el"));
-    if !generated_file_needs_rebuild(&output, &dependencies) {
+    // Same rule as cus-load.el: GNU's `$(lisp)/finder-inf.el` has no
+    // prerequisites, so `all` rebuilds it only when the file is missing.
+    if output.is_file() {
         return Ok(None);
     }
 
+    let dirs = lisp_dirs_for_finder_data(&paths.lisp_root)?;
     let args = finder_data_generation_args(&paths.lisp_root, &output, &dirs);
     Ok(Some(GeneratedLispJob {
         name: "lisp/finder-inf.el (GNU finder-data)".to_string(),

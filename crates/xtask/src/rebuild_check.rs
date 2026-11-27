@@ -303,22 +303,31 @@ pub(crate) fn check(options: &FreshBuildOptions) -> Result<RebuildCheck> {
             .extend(unicode_deps.iter().cloned());
     }
 
+    // Generated Lisp that GNU's make rules would regenerate.  Computed before
+    // membership because an output that does not exist yet is invisible to
+    // compile_main_sources, which walks the tree; the pipeline creates it
+    // before compile-main runs, so it is a compile candidate.
+    let generated = generated_report(&paths)?;
+
     // Candidate membership per stage, in pipeline order.  A COMPILE_FIRST or
     // preloaded source is also a compile-main candidate, so this is NOT a
     // partition: `total` reports how many sources each stage considers.
     let mut preloaded_set: BTreeSet<PathBuf> = preloaded_sources.into_iter().collect();
     preloaded_set.extend(unicode_deps.iter().cloned());
-    let membership: [BTreeSet<PathBuf>; 4] = [
+    let mut membership: [BTreeSet<PathBuf>; 4] = [
         compile_first.into_iter().collect(),
         preloaded_set,
         main_first_set,
         general.into_iter().collect(),
     ];
-
-    // Generated Lisp that GNU's make rules would regenerate.  Computed before
-    // the bytecode seeds because a generated source that is about to be
-    // rewritten also makes its own .elc stale.
-    let generated = generated_report(&paths)?;
+    for output in generated.leim.iter().chain(generated.semantic.iter()) {
+        // A generated output the tree does not have yet cannot appear in
+        // compile_main_sources, but the generation stages create it before
+        // compile-main runs, so compile-main will consider it then.
+        if !output.exists() && !membership[Stage::MainFirst.index()].contains(output) {
+            membership[Stage::CompileMain.index()].insert(output.clone());
+        }
+    }
 
     // Evaluate every stage's predicate.  A source is reported under the
     // earliest stage that would compile it.  This matters for the review
@@ -434,11 +443,16 @@ fn generated_report(paths: &PipelinePaths) -> Result<GeneratedReport> {
     }
 
     let leim_ext = paths.leim_root.join("leim-ext.el");
-    let leim_list = leim_ext.is_file() && {
-        let mut dependencies = leim_generated_output_paths(paths);
-        dependencies.push(leim_ext);
-        generated_file_needs_rebuild(&paths.lisp_root.join("leim/leim-list.el"), &dependencies)
-    };
+    // The list is regenerated after dictionary conversion, so a leim output
+    // that will be rewritten makes the list stale even while the old output
+    // timestamps still look current.  The mtime rule covers the remaining
+    // cases (missing list, newer leim-ext.el or newer prerequisite outputs).
+    let leim_list = leim_ext.is_file()
+        && (!leim.is_empty() || {
+            let mut dependencies = leim_generated_output_paths(paths);
+            dependencies.push(leim_ext);
+            generated_file_needs_rebuild(&paths.lisp_root.join("leim/leim-list.el"), &dependencies)
+        });
 
     let mut semantic = Vec::new();
     let mut semantic_total = 0usize;
