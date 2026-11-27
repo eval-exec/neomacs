@@ -988,10 +988,35 @@ fn parse_check_rejects_dry_run() {
 }
 
 #[test]
-fn parse_incremental_is_accepted() {
-    let options = parse_options(&["--release", "--incremental"]);
-    assert!(options.incremental);
+fn parse_incremental_is_the_default() {
+    let options = parse_options(&["--release"]);
+    assert!(!options.bootstrap_clean);
     assert!(!options.no_byte_compile);
+
+    let explicit = parse_options(&["--release", "--incremental"]);
+    assert!(!explicit.bootstrap_clean);
+}
+
+#[test]
+fn parse_bootstrap_clean_is_accepted() {
+    let options = parse_options(&["--release", "--bootstrap-clean"]);
+    assert!(options.bootstrap_clean);
+    assert!(!options.no_byte_compile);
+}
+
+#[test]
+fn parse_bootstrap_clean_rejects_incremental() {
+    let err = FreshBuildOptions::parse_with_env(
+        PathBuf::from("/repo"),
+        ["--release", "--bootstrap-clean", "--incremental"]
+            .into_iter()
+            .map(OsString::from),
+        ParseEnv::default(),
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(err.contains("--bootstrap-clean"), "{err}");
+    assert!(err.contains("--incremental"), "{err}");
 }
 
 #[test]
@@ -1010,14 +1035,17 @@ fn parse_incremental_rejects_no_byte_compile() {
 }
 
 #[test]
-fn bytecode_plan_distinguishes_incremental_from_bootstrap_clean() {
-    let bootstrap = BytecodePlan::of(&parse_options(&["--release"]));
-    assert!(bootstrap.is_bootstrap_clean());
-    assert!(bootstrap.bootstrap_clean_proof().is_some());
-
-    let incremental = BytecodePlan::of(&parse_options(&["--release", "--incremental"]));
+fn bytecode_plan_defaults_to_incremental_and_opts_into_bootstrap_clean() {
+    let incremental = BytecodePlan::of(&parse_options(&["--release"]));
     assert!(!incremental.is_bootstrap_clean());
     assert!(incremental.bootstrap_clean_proof().is_none());
+
+    let explicit = BytecodePlan::of(&parse_options(&["--release", "--incremental"]));
+    assert!(!explicit.is_bootstrap_clean());
+
+    let bootstrap = BytecodePlan::of(&parse_options(&["--release", "--bootstrap-clean"]));
+    assert!(bootstrap.is_bootstrap_clean());
+    assert!(bootstrap.bootstrap_clean_proof().is_some());
 
     let keep = BytecodePlan::of(&parse_options(&["--release", "--no-byte-compile"]));
     assert!(!keep.is_bootstrap_clean());
@@ -1707,7 +1735,7 @@ fn incremental_missing_source_forces_full_regeneration_without_touching_bytecode
         cargo_jobs: CargoJobBudget::Inherit,
         dry_run: false,
         check: false,
-        incremental: true,
+        bootstrap_clean: false,
         native_comp: false,
         skip_build: false,
         no_byte_compile: false,
@@ -1764,7 +1792,7 @@ fn incremental_cleanup_removes_secondary_outputs_still_recording_a_removed_sourc
 
     let mut options = check_options(&root);
     options.check = false;
-    options.incremental = true;
+    assert!(!options.bootstrap_clean, "incremental is the default");
     let paths = pipeline_paths(&options);
 
     remove_loaddefs_outputs_still_recording_a_removed_source(
@@ -1835,7 +1863,7 @@ fn failed_leim_list_generation_removes_the_partial_output() {
         cargo_jobs: CargoJobBudget::Inherit,
         dry_run: false,
         check: false,
-        incremental: true,
+        bootstrap_clean: false,
         native_comp: false,
         skip_build: false,
         no_byte_compile: false,
@@ -3117,7 +3145,7 @@ fn generated_unidata_source_files_match_gnu_gen_clean_shape() {
         cargo_jobs: CargoJobBudget::Inherit,
         dry_run: false,
         check: false,
-        incremental: false,
+        bootstrap_clean: false,
         native_comp: false,
         skip_build: false,
         no_byte_compile: false,
@@ -3829,7 +3857,7 @@ fn a_no_byte_compile_run_deletes_no_bytecode_it_will_not_put_back() {
         cargo_jobs: CargoJobBudget::Inherit,
         dry_run: false,
         check: false,
-        incremental: false,
+        bootstrap_clean: false,
         native_comp: false,
         skip_build: false,
         no_byte_compile: true,
@@ -3892,7 +3920,7 @@ fn a_recompiling_run_clears_primary_but_keeps_secondary_loaddefs_bytecode() {
         cargo_jobs: CargoJobBudget::Inherit,
         dry_run: false,
         check: false,
-        incremental: false,
+        bootstrap_clean: true,
         native_comp: false,
         skip_build: false,
         no_byte_compile: false,
@@ -3957,7 +3985,7 @@ fn full_loaddefs_regeneration_keeps_secondary_bootstrap_seeds_loadable() {
         cargo_jobs: CargoJobBudget::Inherit,
         dry_run: false,
         check: false,
-        incremental: false,
+        bootstrap_clean: true,
         native_comp: false,
         skip_build: false,
         no_byte_compile: false,

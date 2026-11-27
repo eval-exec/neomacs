@@ -74,11 +74,12 @@ struct FreshBuildOptions {
     /// Read-only staleness query: report what a bytecode-preserving build
     /// would recompile, then exit 0 (up to date) or 1 (work needed).
     check: bool,
-    /// Keep existing `.elc` and generated Lisp sources and rebuild only what
-    /// the staleness predicates select (GNU make-like), instead of the
-    /// bootstrap-clean sweep.  Runs byte-compilation; conflicts with
-    /// `--no-byte-compile`.
-    incremental: bool,
+    /// Remove every `.elc` and regenerate all generated Lisp sources before
+    /// rebuilding, as GNU's `make bootstrap` does.  The default is the plain
+    /// `make` side: keep existing outputs and rebuild only what each stage's
+    /// staleness predicate selects.  `--incremental` is the explicit spelling
+    /// of the default and conflicts with `--no-byte-compile`.
+    bootstrap_clean: bool,
     native_comp: bool,
     skip_build: bool,
     no_byte_compile: bool,
@@ -216,10 +217,10 @@ impl BytecodePlan {
     fn of(options: &FreshBuildOptions) -> Self {
         if options.no_byte_compile {
             Self::KeepExisting
-        } else if options.incremental {
-            Self::Incremental(WillRecompileLisp(()))
-        } else {
+        } else if options.bootstrap_clean {
             Self::Bootstrap(WillRecompileLisp(()))
+        } else {
+            Self::Incremental(WillRecompileLisp(()))
         }
     }
 
@@ -700,7 +701,8 @@ impl FreshBuildOptions {
         let mut cargo_jobs = CargoJobBudget::Inherit;
         let mut dry_run = false;
         let mut check = false;
-        let mut incremental = false;
+        let mut bootstrap_clean = false;
+        let mut incremental_explicit = false;
         let mut native_comp = parse_env.native_comp;
         let mut skip_build = false;
         let mut no_byte_compile = false;
@@ -749,7 +751,8 @@ impl FreshBuildOptions {
                 }
                 "--dry-run" => dry_run = true,
                 "--check" => check = true,
-                "--incremental" => incremental = true,
+                "--incremental" => incremental_explicit = true,
+                "--bootstrap-clean" => bootstrap_clean = true,
                 "--native-comp" => native_comp = true,
                 "--no-native-comp" => native_comp = false,
                 "--skip-build" => skip_build = true,
@@ -782,7 +785,12 @@ impl FreshBuildOptions {
                     .into(),
             );
         }
-        if incremental && no_byte_compile {
+        if bootstrap_clean && incremental_explicit {
+            return Err("--bootstrap-clean removes bytecode and generated sources; \
+                 --incremental keeps them, so the two are mutually exclusive"
+                .into());
+        }
+        if incremental_explicit && no_byte_compile {
             return Err(
                 "--incremental rebuilds stale bytecode; it cannot be combined with \
                  --no-byte-compile"
@@ -855,7 +863,7 @@ impl FreshBuildOptions {
             cargo_jobs,
             dry_run,
             check,
-            incremental,
+            bootstrap_clean,
             native_comp,
             skip_build,
             no_byte_compile,
@@ -1158,8 +1166,9 @@ fn run_fresh_build_pipeline(
     // pbootstrap/COMPILE_FIRST; GNU removes loaddefs.el later, in
     // autoloads-force, immediately before regenerating it.
     //
-    // `--incremental` is the plain-make side of that split: no sweep, so
-    // every stage's own predicate decides what to regenerate or recompile.
+    // The default incremental plan is the plain-make side of that split: no
+    // sweep, so every stage's own predicate decides what to regenerate or
+    // recompile.  `--bootstrap-clean` opts back into the sweep.
     if let Some(proof) = bytecode_plan.bootstrap_clean_proof() {
         remove_stale_lisp_bytecode(proof, options, &paths)?;
     }
@@ -5144,7 +5153,7 @@ fn print_usage() {
 
 fn usage_text() -> &'static str {
     "\
-Usage: cargo xtask [fresh-build] (--release | --profile NAME | --check) [--bin-dir DIR] [--runtime-root DIR] [--dry-run] [--low-memory|--jobs N] [--native-comp|--no-native-comp] [--skip-build] [--no-byte-compile] [--incremental] [--aot-preload|--no-aot-preload]
+Usage: cargo xtask [fresh-build] (--release | --profile NAME | --check) [--bin-dir DIR] [--runtime-root DIR] [--dry-run] [--low-memory|--jobs N] [--native-comp|--no-native-comp] [--skip-build] [--no-byte-compile] [--bootstrap-clean|--incremental] [--aot-preload|--no-aot-preload]
        cargo xtask build-info --binary PATH [--runtime-root DIR] [--dry-run]
        cargo xtask check-dependency-coherence
        cargo xtask font-fixtures
@@ -5235,12 +5244,13 @@ Options:
   --no-native-comp    Exclude native-comp-only COMPILE_FIRST entries
   --skip-build        Skip the initial cargo build -p neomacs stage
   --no-byte-compile   Skip byte-compilation steps (5, 9, 11); keep existing .elc
-  --incremental       GNU make-like build: keep existing .elc and generated
-                      Lisp sources and rebuild only what each stage's
-                      staleness predicate selects. Runs byte-compilation;
-                      cannot be combined with --no-byte-compile. The default
-                      is the bootstrap-clean sweep (every .elc and generated
-                      source removed first).
+  --bootstrap-clean   GNU bootstrap-like build: remove every .elc and all
+                      generated Lisp sources, then regenerate them. The
+                      default is incremental: keep existing outputs and
+                      rebuild only what each stage's staleness predicate
+                      selects (GNU plain make).
+  --incremental       Explicit form of the default. Cannot be combined with
+                      --bootstrap-clean or --no-byte-compile.
   --no-aot-preload    Disable optional AOT preload production (the default).
   --aot-preload       Opt into preload production:
                       sets NEOVM_AOT_PRELOAD=1 on step (10), emits

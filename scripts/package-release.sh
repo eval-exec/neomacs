@@ -103,7 +103,7 @@ source "$repo_root/scripts/lib/archlib.sh"
 source "$repo_root/scripts/lib/info-manuals.sh"
 
 if ((skip_build == 0)); then
-  cargo xtask fresh-build --release
+  cargo xtask fresh-build --release --bootstrap-clean
 fi
 
 # NEOMACS_RELEASE_DIR selects the cargo profile directory to package; the

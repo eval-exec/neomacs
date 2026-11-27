@@ -234,6 +234,12 @@ cargo xtask fresh-build --release
 ./target/release/neomacs
 ```
 
+`fresh-build` is incremental by default, like GNU's plain `make`: it rebuilds
+only what a staleness predicate selects (a warm tree takes seconds). Pass
+`--bootstrap-clean` to remove every `.elc` and generated Lisp source first, as
+GNU's `make bootstrap` does. `fresh-build --check` reports what a build would
+do without writing anything.
+
 Run Cargo commands from within the checkout (normally its root). Cargo discovers
 `.cargo/config.toml` from the invocation directory; Neomacs uses that config to
 provide member crates with the repository root for shared Lisp and test assets.
