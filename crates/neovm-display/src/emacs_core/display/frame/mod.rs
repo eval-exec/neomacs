@@ -2237,6 +2237,33 @@ fn fontset_font_object_cons_name(value: &Value) -> Option<String> {
 
 /// `(modify-frame-parameters FRAME ALIST)` -> nil.
 #[doc(hidden)]
+/// GNU `set_frame_cursor_types` ends with `f->cursor_type_changed = true`
+/// "to make sure the cursor gets redrawn" (src/xdisp.c:34597-34621). That
+/// flag defeats redisplay's shortcuts: the cursor-motion and window-reuse
+/// paths are skipped and every window of the frame is redisplayed
+/// (xdisp.c:17604, 19879, 21258, 21796). Neomacs's equivalent is a body
+/// redisplay of each live window on the frame. Without it the next redisplay
+/// found nothing changed and kept the old shape (#882).
+fn mark_frame_cursor_type_changed(eval: &mut neovm_eval::emacs_core::eval::Context, fid: FrameId) {
+    let windows = eval
+        .frame_manager()
+        .get(fid)
+        .map(|frame| {
+            frame
+                .window_list()
+                .into_iter()
+                .chain(frame.minibuffer_window)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    eval.gnu_mark_frame_redisplay(fid);
+    for window in windows {
+        eval.force_body_redisplay(crate::window::ForcedBodyRedisplay::Window(window));
+        eval.gnu_mark_window_redisplay(window);
+    }
+    eval.invalidate_redisplay();
+}
+
 pub fn builtin_modify_frame_parameters(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
@@ -2610,6 +2637,12 @@ pub fn builtin_modify_frame_parameters(
                             super::font::update_face_from_frame_parameter(
                                 eval, fid, param, pair_cdr,
                             )?;
+                        }
+                        FrameParamKey::Known(FrameParam::CursorType) => {
+                            if let Some(frame) = eval.frame_manager_mut().get_mut(fid) {
+                                frame.set_known_parameter(FrameParam::CursorType, pair_cdr);
+                            }
+                            mark_frame_cursor_type_changed(eval, fid);
                         }
                         key => {
                             if let Some(frame) = eval.frame_manager_mut().get_mut(fid) {

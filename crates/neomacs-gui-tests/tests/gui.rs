@@ -158,6 +158,9 @@ mod frame_bar_parameters;
 #[path = "frame_resize_oracle.rs"]
 mod frame_resize_oracle;
 
+#[path = "frame_cursor_type_gui_oracle.rs"]
+mod frame_cursor_type_gui_oracle;
+
 #[path = "frame_text_height_gui_oracle.rs"]
 mod frame_text_height_gui_oracle;
 
