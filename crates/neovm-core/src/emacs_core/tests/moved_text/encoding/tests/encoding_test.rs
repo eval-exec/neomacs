@@ -1025,13 +1025,40 @@ fn encode_coding_region_charset_coding_matches_string_path() {
 fn decode_coding_region_charset_coding_decodes_and_marks_charset() {
     crate::test_utils::init_test_tracing();
     let mut eval = crate::test_utils::new_context();
+    // GNU Emacs 31.1 (`src/buffer.c:2730-2738`, `src/coding.c:633-656`):
+    // `(set-buffer-multibyte t)` reinterprets raw bytes 0xD2 0xBB (valid 2-byte
+    // UTF-8) as literal U+04BB ("һ"), and `decode-coding-region` preserves
+    // literal multibyte characters verbatim without re-decoding them as GB2312.
     assert_eq!(
         neovm_eval::emacs_core::print::format_eval_result(&eval.eval_str(
-            "(progn (set-buffer-multibyte nil) (insert #xd2 #xbb) (set-buffer-multibyte t)
+            "(progn (erase-buffer) (set-buffer-multibyte nil) (insert #xd2 #xbb)
+                    (set-buffer-multibyte t)
+                    (decode-coding-region (point-min) (point-max) 'cn-gb-2312-unix)
+                    (buffer-string))",
+        )),
+        "OK \"\u{04bb}\""
+    );
+    // `(set-buffer-multibyte 'to)` converts raw bytes 0xD2 0xBB to eight-bit
+    // raw characters, which `decode-coding-region` decodes as GB2312 一.
+    assert_eq!(
+        neovm_eval::emacs_core::print::format_eval_result(&eval.eval_str(
+            "(progn (erase-buffer) (set-buffer-multibyte nil) (insert #xd2 #xbb)
+                    (set-buffer-multibyte 'to)
                     (decode-coding-region (point-min) (point-max) 'cn-gb-2312-unix)
                     (buffer-string))",
         )),
         "OK #(\"\u{4e00}\" 0 1 (charset chinese-gb2312))"
+    );
+    // Non-UTF-8 GB2312 bytes 0xB0 0xA1 remain raw eight-bit chars under
+    // `(set-buffer-multibyte t)` and decode as GB2312 啊 with charset property.
+    assert_eq!(
+        neovm_eval::emacs_core::print::format_eval_result(&eval.eval_str(
+            "(progn (erase-buffer) (set-buffer-multibyte nil) (insert #xb0 #xa1)
+                    (set-buffer-multibyte t)
+                    (decode-coding-region (point-min) (point-max) 'cn-gb-2312-unix)
+                    (buffer-string))",
+        )),
+        "OK #(\"\u{554a}\" 0 1 (charset chinese-gb2312))"
     );
     // Round-trip: encoding 一 then decoding it gives 一 back.
     assert_eq!(

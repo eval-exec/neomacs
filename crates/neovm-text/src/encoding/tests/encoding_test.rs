@@ -2840,8 +2840,6 @@ fn decode_coding_string_iso_latin_1_and_9_dos_pure_ascii_mark_charset_like_gnu()
     }
 }
 
-#[cfg(test)]
-#[path = "gdh_utf8_unibyte.rs"]
 /// Neomacs safety invariant (deliberate divergence from GNU Emacs 31.1
 /// `src/coding.c:2641-2650`, where re-encoding an unencodable non-ASCII
 /// `default_char` leaves `charset == NULL` and dereferences
@@ -2866,4 +2864,63 @@ fn encode_via_emacs_mule_unencodable_non_ascii_default_char_falls_back_safely() 
     );
 }
 
+#[test]
+fn multibyte_decode_segmenter_distinguishes_raw_byte8_from_literal_chars() {
+    use neovm_value::emacs_char;
+    use neovm_value::heap_types::LispString;
+
+    assert!(!lisp_string_has_literal_multibyte_chars(
+        &LispString::from_unibyte(vec![0xc3, 0xa9])
+    ));
+    assert!(!lisp_string_has_literal_multibyte_chars(
+        &LispString::from_utf8("ascii")
+    ));
+
+    // Pure raw byte8 in multibyte storage has no literal multibyte chars.
+    let mut byte8_only = Vec::new();
+    let mut buf = [0u8; emacs_char::MAX_MULTIBYTE_LENGTH];
+    for b in [0xc3u8, 0xa9u8] {
+        let n = emacs_char::char_string(emacs_char::unibyte_to_char(b), &mut buf);
+        byte8_only.extend_from_slice(&buf[..n]);
+    }
+    assert!(!lisp_string_has_literal_multibyte_chars(
+        &LispString::from_emacs_bytes(byte8_only)
+    ));
+
+    // Mixed: 'a', raw byte #xe9, literal U+3042, raw byte #xf1.
+    let mut mixed = vec![b'a'];
+    let n = emacs_char::char_string(emacs_char::unibyte_to_char(0xe9), &mut buf);
+    mixed.extend_from_slice(&buf[..n]);
+    let lit_start = mixed.len();
+    mixed.extend_from_slice("あ".as_bytes());
+    let lit_end = mixed.len();
+    let n = emacs_char::char_string(emacs_char::unibyte_to_char(0xf1), &mut buf);
+    mixed.extend_from_slice(&buf[..n]);
+
+    let s = LispString::from_emacs_bytes(mixed.clone());
+    assert!(lisp_string_has_literal_multibyte_chars(&s));
+    let segs = split_multibyte_decode_segments(&s);
+    assert_eq!(
+        segs,
+        vec![
+            MultibyteDecodeSegment::RawBytes(vec![b'a', 0xe9]),
+            MultibyteDecodeSegment::LiteralMultibyte(&mixed[lit_start..lit_end]),
+            MultibyteDecodeSegment::RawBytes(vec![0xf1]),
+        ]
+    );
+    assert_eq!(
+        multibyte_detection_bytes(&segs),
+        vec![b'a', 0xe9, b' ', 0xf1]
+    );
+
+    let pure_lit = LispString::from_utf8("é\r\n");
+    let pure_segs = split_multibyte_decode_segments(&pure_lit);
+    assert_eq!(
+        multibyte_detection_bytes(&pure_segs),
+        vec![0xc3, 0xa9, b'\r', b'\n']
+    );
+}
+
+#[cfg(test)]
+#[path = "gdh_utf8_unibyte.rs"]
 mod gdh_utf8_unibyte;

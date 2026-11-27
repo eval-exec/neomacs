@@ -3,6 +3,7 @@
 mod advanced;
 mod alias_conversion_hooks;
 mod basic;
+mod decode_multibyte;
 mod default_char;
 mod detection_state;
 mod eol_decode_matrix;
