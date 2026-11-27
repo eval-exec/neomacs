@@ -25,10 +25,12 @@
 //! dependency bytecode is newer is therefore reported under compile-main: that
 //! is the pass whose dependency rule selects it.
 //!
-//! Generated Lisp outputs that `fresh-build` currently regenerates
-//! unconditionally (leim, semantic grammars, loaddefs, custom/finder data) are
-//! NOT evaluated here; only `subdirs.el` is, because its content comparison is
-//! exact and already implemented.  The report says so.
+//! Generated Lisp with GNU make-style prerequisites (leim, the semantic
+//! grammars, custom/finder data and `subdirs.el`) is evaluated with the same
+//! predicates the pipeline uses, and a `.el` that would be regenerated seeds
+//! its own bytecode rebuild.  Loaddefs is not evaluated statically: GNU always
+//! runs the autoload generator, which writes a file only when the content hash
+//! changed.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -38,11 +40,14 @@ use std::path::{Path, PathBuf};
 use strum::IntoEnumIterator;
 
 use crate::{
-    FreshBuildOptions, Result, bytecode_needs_rebuild, bytecode_needs_rebuild_with_dependencies,
-    compile_main_dependency_bytecode_newer, compile_main_needs_rebuild, compile_main_sources,
-    lisp_dirs_for_subdirs_update, parse_compile_first_sources, parse_compile_main_dependencies,
-    parse_main_first_sources, parse_preloaded_lisp_sources, pipeline_paths,
-    preloaded_characters_dependency_sources, update_subdirs_contents, update_subdirs_expression,
+    FreshBuildOptions, LEIM_GENERATION_RULES, PipelinePaths, Result, bytecode_needs_rebuild,
+    bytecode_needs_rebuild_with_dependencies, compile_main_dependency_bytecode_newer,
+    compile_main_needs_rebuild, compile_main_sources, custom_dependencies_generation_job,
+    finder_data_generation_job, generated_file_needs_rebuild, generated_outputs_need_rebuild,
+    leim_generated_output_paths, lisp_dirs_for_subdirs_update, parse_compile_first_sources,
+    parse_compile_main_dependencies, parse_main_first_sources, parse_preloaded_lisp_sources,
+    pipeline_paths, preloaded_characters_dependency_sources, semantic_grammar_targets,
+    update_subdirs_contents, update_subdirs_expression,
 };
 
 /// How many paths one stage prints before folding the rest into a count.
@@ -105,19 +110,105 @@ impl StageReport {
     }
 }
 
+/// Conditionally generated Lisp artifacts, decided by the pipeline's own
+/// predicates (`LEIM_GENERATION_RULES`, `SEMANTIC_GRAMMAR_TARGETS`,
+/// `generated_file_needs_rebuild`, and the custom/finder job predicates).
+///
+/// A rule whose input is absent is skipped: the build itself refuses a missing
+/// generation input (`ensure_generation_input`), so absence is not a staleness
+/// verdict for this query.  Loaddefs is not evaluated statically: GNU always
+/// runs the autoload generator, which writes a file only when its content hash
+/// changed.
+#[derive(Debug)]
+pub(crate) struct GeneratedReport {
+    pub(crate) leim: Vec<PathBuf>,
+    pub(crate) leim_total: usize,
+    pub(crate) leim_list: bool,
+    pub(crate) semantic: Vec<PathBuf>,
+    pub(crate) semantic_total: usize,
+    pub(crate) custom_finder: Vec<&'static str>,
+}
+
+impl GeneratedReport {
+    fn has_work(&self) -> bool {
+        self.leim_list
+            || !self.leim.is_empty()
+            || !self.semantic.is_empty()
+            || !self.custom_finder.is_empty()
+    }
+
+    fn work_count(&self) -> usize {
+        self.leim.len()
+            + usize::from(self.leim_list)
+            + self.semantic.len()
+            + self.custom_finder.len()
+    }
+
+    fn print(&self, repo_root: &Path) {
+        println!(
+            "  {:<14} {:>4} / {:<4} outputs would regenerate",
+            "leim",
+            self.leim.len(),
+            self.leim_total
+        );
+        for file in self.leim.iter().take(MAX_LISTED) {
+            println!("    - {}", relative(repo_root, file));
+        }
+        if self.leim.len() > MAX_LISTED {
+            println!("    ... {} more", self.leim.len() - MAX_LISTED);
+        }
+        println!(
+            "  {:<14} {}",
+            "leim-list.el",
+            if self.leim_list {
+                "would regenerate"
+            } else {
+                "up to date"
+            }
+        );
+        println!(
+            "  {:<14} {:>4} / {:<4} outputs would regenerate",
+            "semantic",
+            self.semantic.len(),
+            self.semantic_total
+        );
+        for file in self.semantic.iter().take(MAX_LISTED) {
+            println!("    - {}", relative(repo_root, file));
+        }
+        if self.semantic.len() > MAX_LISTED {
+            println!("    ... {} more", self.semantic.len() - MAX_LISTED);
+        }
+        println!(
+            "  {:<14} {:>4} / {:<4} generators would run",
+            "custom/finder",
+            self.custom_finder.len(),
+            2
+        );
+        for name in &self.custom_finder {
+            println!("    - lisp/{name}");
+        }
+        println!(
+            "  {:<14} always scanned by the generator (content-checked)",
+            "loaddefs"
+        );
+    }
+}
+
 #[derive(Debug)]
 pub(crate) struct RebuildCheck {
     pub(crate) compile_first: StageReport,
     pub(crate) preloaded: StageReport,
     pub(crate) main_first: StageReport,
     pub(crate) compile_main: StageReport,
+    pub(crate) generated: GeneratedReport,
     pub(crate) subdirs_changed: Vec<PathBuf>,
     pub(crate) subdirs_total: usize,
 }
 
 impl RebuildCheck {
     pub(crate) fn has_work(&self) -> bool {
-        !self.subdirs_changed.is_empty()
+        self.generated.has_work()
+            || !self.subdirs_changed.is_empty()
             || [
                 &self.compile_first,
                 &self.preloaded,
@@ -150,6 +241,7 @@ impl RebuildCheck {
         ] {
             stage.print(repo_root);
         }
+        self.generated.print(repo_root);
         println!(
             "  subdirs.el     {:>4} / {:<4} would change",
             self.subdirs_changed.len(),
@@ -164,17 +256,17 @@ impl RebuildCheck {
 
         if self.has_work() {
             println!(
-                "work needed: {} .el file(s), {} subdirs.el file(s)",
+                "work needed: {} .el file(s), {} generated item(s), {} subdirs.el file(s)",
                 self.bytecode_work(),
+                self.generated.work_count(),
                 self.subdirs_changed.len()
             );
         } else {
             println!("up to date: nothing to rebuild");
         }
         println!(
-            "note: leim, semantic grammars, loaddefs and custom/finder data are \
-             regenerated unconditionally by fresh-build; --check does not \
-             evaluate them."
+            "note: loaddefs is always scanned by its generator, which writes only \
+             when the content changed; --check does not run it."
         );
     }
 }
@@ -211,17 +303,31 @@ pub(crate) fn check(options: &FreshBuildOptions) -> Result<RebuildCheck> {
             .extend(unicode_deps.iter().cloned());
     }
 
+    // Generated Lisp that GNU's make rules would regenerate.  Computed before
+    // membership because an output that does not exist yet is invisible to
+    // compile_main_sources, which walks the tree; the pipeline creates it
+    // before compile-main runs, so it is a compile candidate.
+    let generated = generated_report(&paths)?;
+
     // Candidate membership per stage, in pipeline order.  A COMPILE_FIRST or
     // preloaded source is also a compile-main candidate, so this is NOT a
     // partition: `total` reports how many sources each stage considers.
     let mut preloaded_set: BTreeSet<PathBuf> = preloaded_sources.into_iter().collect();
     preloaded_set.extend(unicode_deps.iter().cloned());
-    let membership: [BTreeSet<PathBuf>; 4] = [
+    let mut membership: [BTreeSet<PathBuf>; 4] = [
         compile_first.into_iter().collect(),
         preloaded_set,
         main_first_set,
         general.into_iter().collect(),
     ];
+    for output in generated.leim.iter().chain(generated.semantic.iter()) {
+        // A generated output the tree does not have yet cannot appear in
+        // compile_main_sources, but the generation stages create it before
+        // compile-main runs, so compile-main will consider it then.
+        if !output.exists() && !membership[Stage::MainFirst.index()].contains(output) {
+            membership[Stage::CompileMain.index()].insert(output.clone());
+        }
+    }
 
     // Evaluate every stage's predicate.  A source is reported under the
     // earliest stage that would compile it.  This matters for the review
@@ -241,6 +347,16 @@ pub(crate) fn check(options: &FreshBuildOptions) -> Result<RebuildCheck> {
                 selected.insert(source.clone(), stage);
                 break;
             }
+        }
+    }
+
+    // A generated source that will be rewritten makes its current .elc stale
+    // even though its mtime is current.  The generation stages write these
+    // files before compile-main runs, so compile-main is the pass that
+    // recompiles them.
+    for output in generated.leim.iter().chain(generated.semantic.iter()) {
+        if membership[Stage::CompileMain.index()].contains(output) {
+            selected.entry(output.clone()).or_insert(Stage::CompileMain);
         }
     }
 
@@ -297,8 +413,79 @@ pub(crate) fn check(options: &FreshBuildOptions) -> Result<RebuildCheck> {
         preloaded,
         main_first,
         compile_main,
+        generated,
         subdirs_changed,
         subdirs_total: dirs.len(),
+    })
+}
+
+/// Evaluate the conditionally generated Lisp layers with the pipeline's own
+/// prerequisites and predicates.
+fn generated_report(paths: &PipelinePaths) -> Result<GeneratedReport> {
+    let mut leim = Vec::new();
+    let mut leim_total = 0usize;
+    for rule in LEIM_GENERATION_RULES {
+        let source = paths.leim_root.join(rule.source_rel);
+        if !source.is_file() {
+            // The build refuses a missing generation input; absence is not
+            // this query's staleness verdict (and keeps test fixtures clean).
+            continue;
+        }
+        let outputs = rule
+            .output_rels
+            .iter()
+            .map(|rel| paths.lisp_root.join(rel))
+            .collect::<Vec<_>>();
+        leim_total += outputs.len();
+        if generated_outputs_need_rebuild(&outputs, std::slice::from_ref(&source)) {
+            leim.extend(outputs);
+        }
+    }
+
+    let leim_ext = paths.leim_root.join("leim-ext.el");
+    // The list is regenerated after dictionary conversion, so a leim output
+    // that will be rewritten makes the list stale even while the old output
+    // timestamps still look current.  The mtime rule covers the remaining
+    // cases (missing list, newer leim-ext.el or newer prerequisite outputs).
+    let leim_list = leim_ext.is_file()
+        && (!leim.is_empty() || {
+            let mut dependencies = leim_generated_output_paths(paths);
+            dependencies.push(leim_ext);
+            generated_file_needs_rebuild(&paths.lisp_root.join("leim/leim-list.el"), &dependencies)
+        });
+
+    let mut semantic = Vec::new();
+    let mut semantic_total = 0usize;
+    for target in semantic_grammar_targets(paths) {
+        if !target.source.is_file() || !target.grammar.is_file() {
+            continue;
+        }
+        semantic_total += 1;
+        if generated_file_needs_rebuild(
+            &target.output,
+            &[target.source.clone(), target.grammar.clone()],
+        ) {
+            semantic.push(target.output);
+        }
+    }
+
+    let mut custom_finder = Vec::new();
+    if paths.lisp_root.join("cus-dep.el").is_file()
+        && custom_dependencies_generation_job(paths)?.is_some()
+    {
+        custom_finder.push("cus-load.el");
+    }
+    if paths.lisp_root.join("finder.el").is_file() && finder_data_generation_job(paths)?.is_some() {
+        custom_finder.push("finder-inf.el");
+    }
+
+    Ok(GeneratedReport {
+        leim,
+        leim_total,
+        leim_list,
+        semantic,
+        semantic_total,
+        custom_finder,
     })
 }
 
