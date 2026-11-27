@@ -24,3 +24,7 @@ path = "tests/ledger.rs"
 [[test]]
 name = "measurement"
 path = "tests/measurement.rs"
+
+[[test]]
+name = "sb_negative"
+path = "tests/sb_negative.rs"

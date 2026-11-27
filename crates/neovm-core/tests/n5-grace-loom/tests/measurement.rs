@@ -66,7 +66,7 @@ pub mod tagged {
         #[allow(dead_code)]
         pub mod publication {
             mod sync {
-                pub use std::sync::atomic::{AtomicPtr, AtomicU32, Ordering};
+                pub use std::sync::atomic::{AtomicPtr, AtomicU32, Ordering, fence};
                 pub use std::sync::{Mutex, MutexGuard, TryLockError};
             }
             include!(concat!(env!("OUT_DIR"), "/publication_types.inc"));

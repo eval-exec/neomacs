@@ -117,7 +117,7 @@ pub mod tagged {
         #[allow(dead_code)]
         pub mod publication {
             mod sync {
-                pub use loom::sync::atomic::{AtomicPtr, AtomicU32, Ordering};
+                pub use loom::sync::atomic::{AtomicPtr, AtomicU32, Ordering, fence};
                 pub use loom::sync::{Mutex, MutexGuard};
                 pub use std::sync::TryLockError;
             }
@@ -831,4 +831,92 @@ fn positive_real_grace_drain_refuses_busy_under_contended_writer_mutex() {
             Err(other) => panic!("unexpected drain error: {other:?}"),
         }
     });
+}
+
+/// Handshake-free Store-Buffering Loom model (E6-P.4 #16434):
+/// NO condvar/mutex handshake between viewer and writer+drainer.
+/// - Main (Viewer) calls `tables.view()` (`view_depth.fetch_add(AcqRel)` ->
+///   `fence(SeqCst)` -> `root.load(Acquire)`) and keeps `view` LIVE across
+///   `join(drainer)`.
+/// - Drainer publishes gen 2 (`root.store(Release)` under `metadata`) and
+///   immediately calls `reclaim_retired_after_grace()` (`metadata` lock ->
+///   `fence(SeqCst)` -> `view_depth.load(Acquire)`).
+/// Because `view` is never dropped before `join(drainer)`, observing the
+/// retired gen 1 pointer (`seen_ptr == initial_ptr`) while `drain` returns
+/// `Ok(reclaimed == 1)` is a Store-Buffering UAF (`SB_UAF_RECLAIMED_BEHIND_LIVE_TABLE_VIEW`,
+/// proven red on the old ordering in `tests/sb_negative.rs`).
+#[test]
+fn positive_handshake_free_table_view_vs_grace_drain_prevents_store_buffering() {
+    let bits = address_pool_bits();
+    let saw_ok = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let saw_busy = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let saw_ok_run = std::sync::Arc::clone(&saw_ok);
+    let saw_busy_run = std::sync::Arc::clone(&saw_busy);
+    support::check(2, move || {
+        let pool = materialize(&bits);
+        let initial = build_table(PointerTableGeneration::INITIAL, INITIAL_CHUNKS, &pool);
+        let tables = Arc::new(
+            PublishedSymbolTables::new(initial, TableLimits::default())
+                .expect("bootstrap within limits"),
+        );
+        let initial_ptr = {
+            let v = tables.view();
+            v.table() as *const PublishedSymbolTable as usize
+        };
+
+        let drainer_tables = Arc::clone(&tables);
+        let drainer_bits = bits.clone();
+        let drainer = loom::thread::spawn(move || {
+            let pool = materialize(&drainer_bits);
+            drainer_tables
+                .try_prepare(shape(GROWN_CHUNKS))
+                .result
+                .expect("growth")
+                .publish(pool[..GROWN_CHUNKS].iter().copied())
+                .expect("prefix-stable growth");
+            // SAFETY: testing handshake-free `view_depth` vs `root`
+            // Store-Buffering Dekker fence pair; `TableView` tracks
+            // `view_depth` atomically.
+            unsafe { drainer_tables.reclaim_retired_after_grace() }
+        });
+
+        let view = tables.view();
+        let seen_ptr = view.table() as *const PublishedSymbolTable as usize;
+
+        let drain_outcome = support::join(drainer);
+        match drain_outcome {
+            Ok(report) => {
+                assert_eq!(report.reclaimed.get(), 1);
+                if seen_ptr == initial_ptr {
+                    panic!("SB_UAF_RECLAIMED_BEHIND_LIVE_TABLE_VIEW");
+                }
+                assert_eq!(view.table().generation().get(), 2);
+                assert_eq!(view.table().chunk_count().get(), GROWN_CHUNKS);
+                saw_ok_run.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            }
+            Err(TablePublicationError::Busy) => {
+                let gen_seen = view.table().generation().get();
+                assert!(gen_seen == 1 || gen_seen == 2);
+                saw_busy_run.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            }
+            Err(other) => panic!("unexpected drain error: {other:?}"),
+        }
+        drop(view);
+
+        // Once `view` drops, any still-retired predecessor must drain cleanly.
+        if tables.stats().expect("stats").retired.get() > 0 {
+            let report = unsafe { tables.reclaim_retired_after_grace() }
+                .expect("drain succeeds once TableView drops");
+            assert_eq!(report.reclaimed.get(), 1);
+        }
+        assert_eq!(tables.stats().expect("stats").retired.get(), 0);
+    });
+    assert!(
+        saw_ok.load(std::sync::atomic::Ordering::Relaxed) > 0,
+        "model must explore schedules where drainer reclaims gen 1 while viewer observes gen 2"
+    );
+    assert!(
+        saw_busy.load(std::sync::atomic::Ordering::Relaxed) > 0,
+        "model must explore schedules where drainer refuses Busy behind live TableView"
+    );
 }

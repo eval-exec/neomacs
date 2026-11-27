@@ -8,7 +8,7 @@
 //! call it. The core does not implement `Send` or `Sync`: an arbitrary
 //! published address is not that proof.
 
-use super::sync::{AtomicPtr, AtomicU32, Mutex, MutexGuard, Ordering, TryLockError};
+use super::sync::{AtomicPtr, AtomicU32, Mutex, MutexGuard, Ordering, TryLockError, fence};
 use super::{
     GraceReclaimReport, PayloadGeneration, PayloadPlan, PublicationChange, PublicationError,
     PublicationPayload, PublicationStatistics, RetainedBytes, RetentionLimit, RetentionLimits,
@@ -40,9 +40,13 @@ pub(crate) struct PublicationLedger<P: PublicationPayload> {
     /// Live [`PublicationView`]s of this ledger. Reclaim runs only at zero.
     /// `AtomicU32` is `Sync`, so a view's reference does not add a
     /// `Cell<u32>: Sync` note to the confinement fixture.
-    /// Updated atomically with `fetch_add(Acquire)` / `fetch_sub(Release)` so
-    /// typed `Send + Sync` wrappers (such as `PublishedSymbolTables`) can track
-    /// concurrent views safely alongside stop-bound grace reclamation.
+    /// Updated atomically with `fetch_add(AcqRel)` + `fence(SeqCst)` /
+    /// `fetch_sub(Release)` so typed `Send + Sync` wrappers (such as
+    /// `PublishedSymbolTables`) form a Dekker Store-Buffering pair with
+    /// `root.store(Release)` (under `metadata`) + `fence(SeqCst)` +
+    /// `view_depth.load(Acquire)`, preventing a concurrent grace drain from
+    /// observing `view_depth == 0` behind a live view that loaded a retired
+    /// root.
     view_depth: AtomicU32,
     // Keeps `Send`/`Sync` off this generic store. The typed publisher, not an
     // arbitrary pointer, is what may add that proof later.
@@ -205,14 +209,23 @@ impl<P: PublicationPayload> PublicationLedger<P> {
         Ok(store)
     }
 
-    /// One Acquire load. Later publications do not change this view.
+    /// One Acquire snapshot of the root, ordered against concurrent grace drain
+    /// by a `SeqCst` Dekker fence pair. Later publications do not change this
+    /// view.
     ///
-    /// The view atomically increments [`Self::view_depth`] (`Acquire`) and its
-    /// drop decrements it (`Release`). Reclaim does not run while the count is
-    /// positive.
+    /// Forms a Store-Buffering (Dekker) pair with [`Self::release_retained`]
+    /// and [`Self::drain_predecessors_after_grace`]: the view executes
+    /// `view_depth.fetch_add(1, AcqRel)` -> `fence(SeqCst)` ->
+    /// `root.load(Acquire)`, while replacement executes `root.store(Release)`
+    /// under `metadata` and grace drain executes `metadata` lock ->
+    /// `fence(SeqCst)` -> `view_depth.load(Acquire)`. Thus no live view can
+    /// observe a retired root while a concurrent drain observes `view_depth == 0`.
+    /// Dropping the view decrements `view_depth` with `Release`, synchronizing
+    /// with a subsequent `view_depth.load(Acquire)` before predecessors drop.
     pub(crate) fn view(&self) -> PublicationView<'_, P> {
-        let prev = self.view_depth.fetch_add(1, Ordering::Acquire);
+        let prev = self.view_depth.fetch_add(1, Ordering::AcqRel);
         assert!(prev < u32::MAX, "publication view depth");
+        fence(Ordering::SeqCst);
         PublicationView {
             address: self.root.load(Ordering::Acquire),
             depth: &self.view_depth,
@@ -271,6 +284,11 @@ impl<P: PublicationPayload> PublicationLedger<P> {
         &self,
     ) -> Result<GraceReclaimReport, PublicationError<P::Error>> {
         let mut metadata = self.lock()?;
+        // `metadata` lock synchronizes with prior `release_retained`'s
+        // `root.store(Release)`, and this `fence(SeqCst)` + `load(Acquire)`
+        // completes the Store-Buffering (Dekker) pair against `view()`'s
+        // `view_depth.fetch_add(1, AcqRel)` -> `fence(SeqCst)` -> `root.load(Acquire)`.
+        fence(Ordering::SeqCst);
         if self.view_depth.load(Ordering::Acquire) > 0 {
             return Err(PublicationError::Busy);
         }
@@ -450,6 +468,7 @@ impl<P: PublicationPayload> Admission<'_, P> {
         extra: usize,
         reclaim: impl FnOnce(PayloadGeneration),
     ) {
+        fence(Ordering::SeqCst);
         if self.view_depth.load(Ordering::Acquire) > 0 {
             return;
         }

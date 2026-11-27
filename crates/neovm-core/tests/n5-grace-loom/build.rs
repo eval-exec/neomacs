@@ -103,7 +103,33 @@ fn main() {
         owner.contains("fn commit_replacement"),
         "the generic owner no longer has commit_replacement; re-anchor this seam"
     );
-    fs::write(out_dir.join("publication_ledger.inc"), owner).expect("write the stripped owner");
+    fs::write(out_dir.join("publication_ledger.inc"), &owner).expect("write the stripped owner");
+
+    // Negative control (E6-P.4 #16434): downgrade the Store-Buffering `SeqCst`
+    // fence pair back to the old `fetch_add(Acquire)` + `view_depth.load(Acquire)`
+    // (no fences) so `sb_negative.rs` proves the handshake-free Loom model
+    // fails on the old ordering. Every anchor must match exactly once.
+    let weak = mutate_once(
+        &owner,
+        "        let prev = self.view_depth.fetch_add(1, Ordering::AcqRel);\n        assert!(prev < u32::MAX, \"publication view depth\");\n        fence(Ordering::SeqCst);",
+        "        let prev = self.view_depth.fetch_add(1, Ordering::Acquire);\n        assert!(prev < u32::MAX, \"publication view depth\");",
+    );
+    let weak = mutate_once(
+        &weak,
+        "        fence(Ordering::SeqCst);\n        if self.view_depth.load(Ordering::Acquire) > 0 {\n            return Err(PublicationError::Busy);",
+        "        if self.view_depth.load(Ordering::Acquire) > 0 {\n            return Err(PublicationError::Busy);",
+    );
+    fs::write(out_dir.join("publication_ledger_weak_sb.inc"), weak)
+        .expect("write the weakened Store-Buffering owner");
+}
+
+fn mutate_once(text: &str, anchor: &str, replacement: &str) -> String {
+    assert_eq!(
+        text.matches(anchor).count(),
+        1,
+        "mutation anchor `{anchor}` must match exactly once in publication/ledger.rs"
+    );
+    text.replacen(anchor, replacement, 1)
 }
 
 /// `PublishedSymbolTables`'s brace body, not the borrowed view beside it.

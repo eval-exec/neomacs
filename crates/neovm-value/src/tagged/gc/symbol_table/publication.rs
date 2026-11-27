@@ -270,11 +270,19 @@ pub(crate) struct PublishedSymbolTables {
 unsafe impl Send for PublishedSymbolTables {}
 // SAFETY: immutable descriptor reads use Acquire publication; owner changes are
 // mutex-exclusive and retain every predecessor until stop-bound grace
-// reclamation. `TableView` tracks `ledger.view_depth` atomically so
-// `reclaim_retired_after_grace` refuses `Busy` behind any live `TableView`, and
-// `PublicationView` is confined to `ExecutionActivation` (`IN_SLICE`) where
-// `AllStopped` excludes concurrent grace reclamation. Shared access cannot
-// mutate a table, dereference chunk contents, or reclaim behind a live view.
+// reclamation. `TableView` (`PublishedSymbolTables::view`) forms a Store-Buffering
+// (Dekker) fence pair (`view_depth.fetch_add(1, AcqRel)` -> `fence(SeqCst)` ->
+// `root.load(Acquire)`) against replacement `root.store(Release)` (under
+// `metadata`) and `drain_predecessors_after_grace` (`metadata` lock ->
+// `fence(SeqCst)` -> `view_depth.load(Acquire)`), eliminating the interleaving
+// where a live `TableView` observes a retired descriptor while a concurrent
+// drainer observes `view_depth == 0`. Dropping `TableView` performs
+// `view_depth.fetch_sub(1, Release)` synchronizing-with `view_depth.load(Acquire)`
+// before any predecessor is dropped. `PublicationView` does not bump
+// `view_depth` and stays confined to `ExecutionActivation` (`IN_SLICE`), where
+// stop-bound `AllStopped` / `EraGraceReceipt` excludes concurrent reclamation.
+// Shared access cannot mutate a table, dereference chunk contents, or reclaim
+// behind a live view.
 unsafe impl Sync for PublishedSymbolTables {}
 
 impl PublishedSymbolTables {
