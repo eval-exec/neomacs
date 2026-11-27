@@ -5368,8 +5368,15 @@ pub unsafe fn run(mode: RuntimeMode) {
     // Internal test-harness mode: pre-boot pdump once and serve isolated batch
     // evaluations via single-threaded `fork()` before spawning any background
     // threads (text_huge_pages, logging file workers, diagnostics).
-    if let Some((socket_path, dump_file_override)) = parse_batch_zygote_args(std::env::args()) {
-        zygote::run_batch_zygote(&socket_path, mode, dump_file_override.as_deref());
+    match parse_batch_zygote_args(std::env::args()) {
+        Ok(Some((socket_path, dump_file_override))) => {
+            zygote::run_batch_zygote(&socket_path, mode, dump_file_override.as_deref());
+        }
+        Ok(None) => {}
+        Err(message) => {
+            eprintln!("{message}");
+            std::process::exit(1);
+        }
     }
 
     // Parse argv before initializing tracing so we know whether this is a
@@ -5546,11 +5553,8 @@ pub unsafe fn run(mode: RuntimeMode) {
 
     debug_assert_eq!(startup.frontend, FrontendKind::Tty);
 
-    // 2. Initialize the evaluator from the canonical bootstrap surface.
-    //    GNU loads the dumped bootstrap image here, then lets the outer
-    //    command loop evaluate `top-level`/`normal-top-level`.
-    let mut evaluator = create_startup_evaluator_for_mode(mode, &startup);
     if startup.noninteractive && startup.daemon.is_none() {
+        let evaluator = create_startup_evaluator_for_mode(mode, &startup);
         let exit_code =
             run_tty_batch_evaluator(evaluator, mode, &startup, process_started_at, &process_args);
         if exit_code != 0 {
@@ -5569,6 +5573,11 @@ pub unsafe fn run(mode: RuntimeMode) {
         startup.noninteractive,
         startup.daemon.is_some(),
     );
+
+    // 2. Initialize the evaluator from the canonical bootstrap surface.
+    //    GNU loads the dumped bootstrap image here, then lets the outer
+    //    command loop evaluate `top-level`/`normal-top-level`.
+    let mut evaluator = create_startup_evaluator_for_mode(mode, &startup);
 
     evaluator.setup_thread_locals();
     if let Some(options) = &startup.daemon {
@@ -5875,15 +5884,23 @@ pub unsafe fn run(mode: RuntimeMode) {
 
 fn parse_batch_zygote_args(
     args: impl IntoIterator<Item = String>,
-) -> Option<(PathBuf, Option<PathBuf>)> {
+) -> Result<Option<(PathBuf, Option<PathBuf>)>, String> {
     let argv: Vec<String> = args.into_iter().collect();
     let mut socket: Option<PathBuf> = None;
     let mut dump_file: Option<PathBuf> = None;
+    let mut missing_dump_file = false;
     let mut idx = 0usize;
     while idx + 1 < argv.len() {
         let arg = &argv[idx + 1];
         if arg == "--" {
             break;
+        }
+        if arg == "-x" {
+            // Normal startup rewrites `-x` to `-scripteval`, which consumes
+            // the next token as the script filename even though the sorter
+            // table gives `-x` zero operands.
+            idx = (idx + 2).min(argv.len().saturating_sub(1));
+            continue;
         }
         if let Some(val) = arg.strip_prefix("--batch-zygote-socket=") {
             socket = Some(PathBuf::from(val));
@@ -5894,10 +5911,9 @@ fn parse_batch_zygote_args(
             if let Some(val) = argv.get(idx + 2) {
                 socket = Some(PathBuf::from(val));
                 idx += 2;
-            } else {
-                idx += 1;
+                continue;
             }
-            continue;
+            return Err("neomacs: option `--batch-zygote-socket' requires an argument".to_string());
         }
         // Reuse the normal startup parser's `-dump-file` / `--dump-file`
         // matching rules (GNU `emacs.c:942, 991`).
@@ -5907,6 +5923,7 @@ fn parse_batch_zygote_args(
                 continue;
             }
             args::ArgMatch::MissingValue => {
+                missing_dump_file = true;
                 idx += 1;
                 continue;
             }
@@ -5922,7 +5939,14 @@ fn parse_batch_zygote_args(
             idx += 1;
         }
     }
-    socket.map(|s| (s, dump_file))
+    if let Some(sock) = socket {
+        if missing_dump_file {
+            return Err("neomacs: option `-dump-file' requires an argument".to_string());
+        }
+        Ok(Some((sock, dump_file)))
+    } else {
+        Ok(None)
+    }
 }
 
 #[cfg(test)]
@@ -5940,7 +5964,7 @@ mod batch_zygote_arg_tests {
         ]
         .into_iter()
         .map(String::from);
-        assert_eq!(parse_batch_zygote_args(args), None);
+        assert_eq!(parse_batch_zygote_args(args), Ok(None));
 
         let args_after_dashdash = [
             "neomacs",
@@ -5950,7 +5974,12 @@ mod batch_zygote_arg_tests {
         ]
         .into_iter()
         .map(String::from);
-        assert_eq!(parse_batch_zygote_args(args_after_dashdash), None);
+        assert_eq!(parse_batch_zygote_args(args_after_dashdash), Ok(None));
+
+        let script_x = ["neomacs", "-x", "--batch-zygote-socket=script.sock"]
+            .into_iter()
+            .map(String::from);
+        assert_eq!(parse_batch_zygote_args(script_x), Ok(None));
     }
 
     #[test]
@@ -5962,10 +5991,10 @@ mod batch_zygote_arg_tests {
         ]
         .into_iter()
         .map(String::from);
-        let expected = Some((
+        let expected = Ok(Some((
             PathBuf::from("/tmp/z.sock"),
             Some(PathBuf::from("/tmp/custom.pdump")),
-        ));
+        )));
         assert_eq!(parse_batch_zygote_args(inline), expected);
 
         let short_dump = [
@@ -5994,8 +6023,25 @@ mod batch_zygote_arg_tests {
             .map(String::from);
         assert_eq!(
             parse_batch_zygote_args(separate),
-            Some((PathBuf::from("/tmp/z2.sock"), None))
+            Ok(Some((PathBuf::from("/tmp/z2.sock"), None)))
         );
+    }
+
+    #[test]
+    fn parse_batch_zygote_args_rejects_missing_dump_file_or_socket_operand() {
+        let missing_dump = [
+            "neomacs",
+            "--batch-zygote-socket=/tmp/z.sock",
+            "--dump-file",
+        ]
+        .into_iter()
+        .map(String::from);
+        assert!(parse_batch_zygote_args(missing_dump).is_err());
+
+        let missing_sock = ["neomacs", "--batch-zygote-socket"]
+            .into_iter()
+            .map(String::from);
+        assert!(parse_batch_zygote_args(missing_sock).is_err());
     }
 }
 
