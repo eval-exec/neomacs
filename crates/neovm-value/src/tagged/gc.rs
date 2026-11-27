@@ -1007,11 +1007,6 @@ pub struct TaggedHeap {
     /// True between a concurrent mark's start and termination handshakes — the
     /// mutator runs while the GC thread marks.
     concurrent_mark_running: ConcurrentMarkFlag,
-    /// Monotonic count of concurrent-mark launches on this heap. A
-    /// `StoppedWorldProof` snapshots it at mint, so a marker launched and
-    /// finished inside a proof's body (ABA on `concurrent_mark_running`) still
-    /// fails the proof's next use.
-    mark_launch_epoch: u64,
 
     // --- Incremental sweep state (step 8). After a mark terminates, the sweep
     // is deferred and drained in bounded slices at later safe points, so the
@@ -1083,6 +1078,17 @@ pub struct TaggedHeap {
     card_table_base_5: Cell<u8>,
     card_table_base_6: Cell<u8>,
     card_table_base_7: Cell<u8>,
+    /// Concurrent-mark launches on this heap, mod 2^16. A `StoppedWorldProof`
+    /// snapshots it at mint, so a marker launched (and perhaps already
+    /// finished) inside a proof's body fails the proof's next use even when
+    /// `concurrent_mark_running` reads false again (ABA). It is declared here,
+    /// after the last byte-sized field, so it occupies the bool cluster's
+    /// existing tail padding: the frozen shipping layout (`store_layout.rs`,
+    /// `cold_gc.rs`) keeps its size and every pinned offset. 16 bits suffice:
+    /// a stale proof escapes only if a multiple of 65,536 launches happens
+    /// inside one synchronous proof body, where a single launch is already a
+    /// protocol violation.
+    mark_launch_epoch: u16,
     /// Executing mutator's protocol followed by this heap's stopped-handshake
     /// window mirrors. The journal allocation stays with ObservationWorld.
     store: std::mem::MaybeUninit<super::collection_reads::StoreState>,

@@ -213,10 +213,10 @@ impl TaggedHeap {
     /// heap. Cold consumer-side gate protecting finish, sweep, collection
     /// start, and drop against whole-field overwrites or swaps of
     /// `concurrent_mark_running` / `gc_exited`.
-    /// Count of concurrent-mark launches on this heap (see `mark_launch_epoch`).
+    /// Concurrent-mark launch count, mod 2^16 (see the field's doc).
     #[inline]
     pub(super) fn mark_launch_epoch(&self) -> u64 {
-        self.mark_launch_epoch
+        u64::from(self.mark_launch_epoch)
     }
 
     #[inline]
@@ -550,7 +550,7 @@ impl TaggedHeap {
         self.close_alloc_regions();
         // SAFETY: see above; lockstep start handshake before sending the job.
         unsafe { self.concurrent_mark_running.set(true) };
-        self.mark_launch_epoch += 1;
+        self.mark_launch_epoch = self.mark_launch_epoch.wrapping_add(1);
         // Keep the write-barrier fast path reaching `record_heap_write` so the
         // SATB log fires even with owner-tracking Disabled / no partition:
         // the window becomes ALL.
