@@ -81,6 +81,46 @@ impl NativeTables {
     }
 }
 
+/// Transient snapshot of the 4 thread-local startup subr tables used ONLY by
+/// non-Green (Sim) `SerialHost` detach/reattach so `reset_carrier_tls()` does
+/// not leave a Sim owner without its subr dispatch tables. Does not bump
+/// `NATIVE_TABLES_CAPTURED`, because no multi-owner Green World shares it.
+pub(crate) struct SavedNativeTables {
+    subrs: Vec<Option<SubrEntry>>,
+    inline: Vec<InlineSubr>,
+    leaves: Vec<Option<&'static LeafSpec>>,
+    subr_objects: Vec<Option<TaggedValue>>,
+}
+
+impl std::fmt::Debug for SavedNativeTables {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SavedNativeTables")
+            .field("subrs", &self.subrs.len())
+            .field("inline", &self.inline.len())
+            .field("leaves", &self.leaves.len())
+            .field("subr_objects", &self.subr_objects.len())
+            .finish()
+    }
+}
+
+impl SavedNativeTables {
+    pub(crate) fn capture() -> Self {
+        Self {
+            subrs: super::super::GLOBAL_SUBR_TABLE.with(|table| table.borrow().clone()),
+            inline: super::super::INLINE_SUBR_TABLE.with(|table| table.borrow().clone()),
+            leaves: crate::emacs_core::subr::leaf::snapshot_subr_leaves(),
+            subr_objects: neovm_value::tagged::value::snapshot_static_subr_objects(),
+        }
+    }
+
+    pub(crate) fn install(self) {
+        super::super::GLOBAL_SUBR_TABLE.with(|table| *table.borrow_mut() = self.subrs);
+        super::super::INLINE_SUBR_TABLE.with(|table| *table.borrow_mut() = self.inline);
+        crate::emacs_core::subr::leaf::install_subr_leaves(self.leaves);
+        neovm_value::tagged::value::install_static_subr_objects(self.subr_objects);
+    }
+}
+
 /// The first owner's execution state a further owner starts from.
 pub(crate) struct GreenBootstrap {
     core_eval_symbols: CoreEvalSymbols,

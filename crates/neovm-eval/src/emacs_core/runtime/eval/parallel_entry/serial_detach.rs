@@ -54,7 +54,8 @@
 
 use super::super::Context;
 use super::super::ParkedOwner;
-use super::super::green::carrier_tls::{park_carrier_tls, reset_carrier_tls};
+use super::super::green::SavedNativeTables;
+use super::super::green::carrier_tls::park_carrier_tls;
 use super::serial_turn::{HostTransition, SerialHost};
 use std::marker::PhantomData;
 
@@ -141,6 +142,11 @@ pub(crate) struct DetachedOwner {
     /// `begin_turn`, `ParkedSerial::resume`, `with_world_parkable`, or
     /// `with_world_collectible` (E5.4a R3 Blocker 1).
     saved_thread_id: u64,
+    /// Snapshot of the four startup subr TLS tables captured ONLY when this
+    /// owner has no `GreenRuntime` (Sim mode), so `reattach_serial_owner` can
+    /// restore them after `reset_carrier_tls()`. Always `None` for Green
+    /// Worlds, which restore directly from `GreenRuntime::bootstrap`.
+    sim_native_tables: Option<SavedNativeTables>,
 }
 
 impl DetachedOwner {
@@ -208,6 +214,10 @@ impl Context {
         neovm_value::tagged::mutate::assert_no_heap_mut_closure();
         let _abort = AbortOnPanic("detach");
         let saved_thread_id = self.threads.current_thread_id();
+        let sim_native_tables = self
+            .green_runtime_ref()
+            .is_none()
+            .then(SavedNativeTables::capture);
         let parked = self.park_owner();
         let world = if self.stow_serial_world_state() {
             DetachedWorldCarriers::Stowed
@@ -220,7 +230,8 @@ impl Context {
         self.tagged_heap.close_alloc_regions();
         // SAFETY: `self` has parked its owner bindings and stowed carried
         // World state under `AbortOnPanic`; no TLS heap loan is live, and
-        // `reattach_serial_owner` calls `reset_carrier_tls()` before returning.
+        // `reattach_serial_owner` calls `reset_carrier_tls_for_resume()` before
+        // returning.
         unsafe { park_carrier_tls() };
         Ok(DetachedOwner {
             host: DetachedHostBindings { parked },
@@ -230,6 +241,7 @@ impl Context {
             world,
             parked_roots: None,
             saved_thread_id,
+            sim_native_tables,
         })
     }
 
@@ -255,6 +267,10 @@ impl Context {
         neovm_value::tagged::mutate::assert_no_heap_mut_closure();
         let _abort = AbortOnPanic("serial-collect-detach");
         let saved_thread_id = self.threads.current_thread_id();
+        let sim_native_tables = self
+            .green_runtime_ref()
+            .is_none()
+            .then(SavedNativeTables::capture);
         // 1. L6.7c (b): close open bump-allocation regions before the keeper's
         //    collecting stop.
         self.tagged_heap.close_alloc_regions();
@@ -332,6 +348,7 @@ impl Context {
                 jit: parked_jit,
             }),
             saved_thread_id,
+            sim_native_tables,
         })
     }
 
@@ -419,6 +436,7 @@ impl Context {
             world,
             parked_roots,
             saved_thread_id,
+            sim_native_tables,
         } = detached;
         match world {
             DetachedWorldCarriers::Stowed => {
@@ -429,7 +447,16 @@ impl Context {
             }
             DetachedWorldCarriers::NotStowed => {}
         }
-        reset_carrier_tls();
+        if !self.reset_carrier_tls_for_resume() {
+            if let Some(native) = sim_native_tables {
+                native.install();
+            } else {
+                debug_assert!(
+                    false,
+                    "reattach without a GreenRuntime must have captured SavedNativeTables at detach; otherwise the 4 subr tables would stay empty"
+                );
+            }
+        }
         self.unstow_serial_world_state();
         if let Some(mut parked_roots) = parked_roots {
             // Restore JIT pins with explicit heap identity (`pin_redefined_function_for_heap`,

@@ -201,7 +201,7 @@ pub(crate) unsafe fn park_carrier_tls() {
 /// this. Every step below only clears or forgets containers of `Copy` `Value`
 /// bits and native memory; none dereferences a heap object, because an
 /// idle-time collection may have freed whatever those `Value`s named.
-pub(crate) fn reset_carrier_tls() {
+pub(super) fn reset_carrier_tls() {
     // Mutator / collection state.
     reset_step!(
         "collection_reads",

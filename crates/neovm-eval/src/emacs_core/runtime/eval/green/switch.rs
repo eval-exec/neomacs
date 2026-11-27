@@ -984,7 +984,11 @@ impl Context {
             let _era_resume_guard = resumed_era.then_some(EraTransitionAbortOnPanic("era-resume"));
             if resumed_era {
                 baton.clear_stowed_for_return();
-                super::carrier_tls::reset_carrier_tls();
+                let restored = self.reset_carrier_tls_for_resume();
+                debug_assert!(
+                    restored,
+                    "green_park_impl era-resume requires a GreenRuntime"
+                );
             }
             // Only the returning continuation refreshes its private dispatch
             // header from canonical cells. A peer's function write updates its own

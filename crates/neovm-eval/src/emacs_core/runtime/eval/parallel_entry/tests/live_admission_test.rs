@@ -1426,3 +1426,146 @@ fn e6p4_row14_publish_idle_uses_dekker_guard_while_group_holds_world() {
     let _ = crate::emacs_core::eval::green::retire_transfer_publication_on_main(&mut ctx, pub_);
     ctx.green_teardown();
 }
+
+/// Regression for #16441: byte-compiled `Op::CallBuiltinSym` subrs
+/// (`current-buffer` = opcode `p`, `point` = opcode `d`, `widen` = opcode `s`)
+/// and direct subr `funcall` must keep working across ALL FOUR in-place
+/// `reset_carrier_tls()` resume paths:
+/// 1. `ParkedWorldSeat::resume_with_turn_right` (era-open commit + teardown)
+/// 2. `ParkedWorldSeat::enter` (era `(garbage-collect)` interval round-trip)
+/// 3. `green_park_impl` era-resume (`thread-yield` / `condition-wait` on Main + Baton worker)
+/// 4. `Context::reattach_serial_owner` (admitted parallel owner parking in `condition-wait`
+///    and resuming across turns/GC)
+#[test]
+fn e6p4_row15_byte_compiled_subrs_survive_era_commit_switch_gc_reattach_and_teardown() {
+    with_parallel_admission_enabled_for_test(|| {
+        let mut ctx = green_context(true);
+        // Bytecode probes using GNU opcodes `p` (current-buffer), `d` (point),
+        // `s` (widen), plus direct subr-object `funcall`.
+        let setup = eval_printed(
+            &mut ctx,
+            r#"(progn
+                 (setq bc-curbuf (make-byte-code 0 "p\207" [] 1))
+                 (setq bc-point  (make-byte-code 0 "`\207" [] 1))
+                 (setq bc-widen  (make-byte-code 0 "~\207" [] 1))
+                 (fset 'bc-probe
+                       (lambda ()
+                         (list (bufferp (funcall bc-curbuf))
+                               (integerp (funcall bc-point))
+                               (null (funcall bc-widen))
+                               (bufferp (funcall (symbol-function 'current-buffer))))))
+                 (bc-probe))"#,
+        );
+        assert_eq!(setup, "(t t t t)", "baseline before era open");
+
+        // 1. Open era and admit a parallel owner that probes before AND after
+        //    parking in `condition-wait` (`reattach_serial_owner`).
+        let out = eval_printed(
+            &mut ctx,
+            r#"(progn
+                 (setq r15-m (make-mutex "r15-m"))
+                 (setq r15-c (make-condition-variable r15-m "r15-c"))
+                 (setq r15-ready nil)
+                 (setq r15-owner-before nil)
+                 (setq r15-owner-after nil)
+                 (setq r15-baton-after nil)
+                 (setq r15-owner
+                       (neomacs-make-parallel-thread
+                        (lambda ()
+                          (setq r15-owner-before (bc-probe))
+                          (mutex-lock r15-m)
+                          (setq r15-ready t)
+                          (condition-wait r15-c)
+                          (mutex-unlock r15-m)
+                          (setq r15-owner-after (bc-probe))
+                          'owner-ok)
+                        "r15-par"))
+                 ;; Immediately after era-open commit (`resume_with_turn_right`):
+                 (let ((after-commit (bc-probe)))
+                   ;; Spawn an ordinary Baton worker and yield across era switch
+                   ;; (`green_park_impl` era-resume on both Main and Baton worker):
+                   (setq r15-baton
+                         (make-thread
+                          (lambda ()
+                            (thread-yield)
+                            (setq r15-baton-after (bc-probe))
+                            'baton-ok)
+                          "r15-baton"))
+                   (while (null r15-ready) (thread-yield))
+                   (let ((after-switch (bc-probe)))
+                     ;; Run a keeper-stopped GC interval (`ParkedWorldSeat::enter`):
+                     (garbage-collect)
+                     (let ((after-gc (bc-probe)))
+                       ;; Wake the parked parallel owner so it runs `reattach_serial_owner`:
+                       (mutex-lock r15-m)
+                       (condition-notify r15-c)
+                       (mutex-unlock r15-m)
+                       (let ((owner-res (thread-join r15-owner))
+                             (baton-res (thread-join r15-baton)))
+                         (list (neomacs-thread-parallel-p r15-owner)
+                               (neomacs-thread-parallel-p r15-baton)
+                               owner-res
+                               baton-res
+                               after-commit
+                               after-switch
+                               after-gc
+                               r15-owner-before
+                               r15-owner-after
+                               r15-baton-after))))))"#,
+        );
+        assert_eq!(
+            out,
+            "(t nil owner-ok baton-ok (t t t t) (t t t t) (t t t t) (t t t t) (t t t t) (t t t t))"
+        );
+
+        // Tear down the live era (`resume_with_turn_right` -> Solo) and verify
+        // byte-compiled subrs STILL work on Main afterwards.
+        ctx.green_teardown();
+        let after_teardown = eval_printed(&mut ctx, "(bc-probe)");
+        assert_eq!(after_teardown, "(t t t t)", "after era teardown");
+    });
+}
+
+/// Regression for #16441 rollback half: when `ensure_live_parallel_era()`
+/// refuses and rolls back via `LiveEraOpenGuard::drop` ->
+/// `ParkedWorldSeat::resume_with_turn_right`, Main's byte-compiled subrs must
+/// remain intact (exact failure triggered on pdumped release binaries in #16441).
+#[test]
+fn e6p4_row16_byte_compiled_subrs_survive_era_open_rollback() {
+    with_parallel_admission_enabled_for_test(|| {
+        for fault in [
+            LiveEraOpenFault::FailAfterSurrenderBeforeOpen,
+            LiveEraOpenFault::FailAfterOpenBeforeAcquire,
+        ] {
+            let mut ctx = green_context(true);
+            let setup = eval_printed(
+                &mut ctx,
+                r#"(progn
+                     (setq bc-curbuf (make-byte-code 0 "p\207" [] 1))
+                     (setq bc-point  (make-byte-code 0 "`\207" [] 1))
+                     (setq bc-widen  (make-byte-code 0 "~\207" [] 1))
+                     (list (bufferp (funcall bc-curbuf))
+                           (integerp (funcall bc-point))
+                           (null (funcall bc-widen))))"#,
+            );
+            assert_eq!(setup, "(t t t)");
+
+            set_era_open_fault_for_test(Some(fault));
+            let out = eval_printed(
+                &mut ctx,
+                r#"(let ((th (neomacs-make-parallel-thread (lambda () 7) "r16-rb")))
+                     (list (neomacs-thread-parallel-p th)
+                           (thread-join th)
+                           (bufferp (funcall bc-curbuf))
+                           (integerp (funcall bc-point))
+                           (null (funcall bc-widen))
+                           (bufferp (funcall (symbol-function 'current-buffer)))))"#,
+            );
+            assert_eq!(
+                out, "(nil 7 t t t t)",
+                "rollback fault {fault:?} must preserve Main's native subr tables"
+            );
+            ctx.green_teardown();
+        }
+    });
+}

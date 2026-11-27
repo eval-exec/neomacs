@@ -903,3 +903,52 @@ fn phase_0c_detach_serial_owner_panics_inside_heap_mut_closure() {
     let detached = detach(&mut ev);
     reattach(&mut ev, detached);
 }
+
+/// Regression for #16441 (`reattach_serial_owner` on BOTH Green and Sim owners):
+/// detaching and reattaching via `SerialHost` runs `reset_carrier_tls()`, which
+/// clears `GLOBAL_SUBR_TABLE`, `INLINE_SUBR_TABLE`, `SUBR_LEAVES`, and
+/// `STATIC_SUBR_OBJECTS`. Byte-compiled `Op::CallBuiltinSym` subrs must still
+/// dispatch cleanly after reattach.
+#[test]
+fn l64_reattach_preserves_byte_compiled_subr_tables_for_green_and_sim() {
+    let probe = r#"(progn
+                     (setq bc-curbuf (make-byte-code 0 "p\207" [] 1))
+                     (setq bc-point  (make-byte-code 0 "`\207" [] 1))
+                     (setq bc-widen  (make-byte-code 0 "~\207" [] 1))
+                     (list (bufferp (funcall bc-curbuf))
+                           (integerp (funcall bc-point))
+                           (null (funcall bc-widen))
+                           (bufferp (funcall (symbol-function 'current-buffer)))))"#;
+    let check = r#"(list (bufferp (funcall bc-curbuf))
+                         (integerp (funcall bc-point))
+                         (null (funcall bc-widen))
+                         (bufferp (funcall (symbol-function 'current-buffer))))"#;
+
+    // Sim owner (no GreenRuntime)
+    {
+        let mut ev = owner();
+        assert_eq!(eval(&mut ev, probe), "(t t t t)");
+        let detached = detach(&mut ev);
+        reattach(&mut ev, detached);
+        assert_eq!(
+            eval(&mut ev, check),
+            "(t t t t)",
+            "Sim reattach must restore native subr tables after reset_carrier_tls()"
+        );
+    }
+
+    // Green owner (with GreenRuntime::bootstrap)
+    {
+        let mut ev =
+            Context::new_with_threading(ThreadingMode::Green, crate::test_utils::unit_runtime());
+        let _baton = ev.start_green_runtime().expect("start Green runtime");
+        assert_eq!(eval(&mut ev, probe), "(t t t t)");
+        let detached = detach(&mut ev);
+        reattach(&mut ev, detached);
+        assert_eq!(
+            eval(&mut ev, check),
+            "(t t t t)",
+            "Green reattach must restore native subr tables after reset_carrier_tls()"
+        );
+    }
+}

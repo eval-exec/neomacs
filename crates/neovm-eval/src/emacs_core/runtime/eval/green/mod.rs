@@ -31,9 +31,9 @@ pub(super) mod switch;
 pub(crate) use api::mutex_depth_exhausted;
 #[doc(hidden)]
 pub use api::{green_make_thread, green_world};
-pub(crate) use bootstrap::GreenBootstrap;
 #[cfg(debug_assertions)]
 pub(crate) use bootstrap::debug_assert_native_tables_open;
+pub(crate) use bootstrap::{GreenBootstrap, SavedNativeTables};
 pub(crate) use carried::{
     SourceWorldCarriers, clear_current_thread_observations, restore_current_thread_observations,
     stash_current_thread_observations,
@@ -346,6 +346,30 @@ impl Context {
         runtime.carried.borrow_mut().stow();
         runtime.carried_holder.set(CarriedHolder::Stowed);
         true
+    }
+
+    /// Complete a deferred [`carrier_tls::reset_carrier_tls`] for an existing
+    /// `Context` resuming in place on this OS thread: clear the deferred
+    /// caches, pre-reserve the thread-local intern cache, and reinstall the
+    /// four startup native subr tables (`GLOBAL_SUBR_TABLE`,
+    /// `INLINE_SUBR_TABLE`, `SUBR_LEAVES`, `STATIC_SUBR_OBJECTS`) from
+    /// `GreenRuntime::bootstrap` (matching [`Self::new_green_owner_with_turn`]
+    /// and [`Self::new_unseated_serial_owner`]).
+    ///
+    /// Returns `true` when restored from `GreenRuntime::bootstrap`, or `false`
+    /// when this `Context` has no `GreenRuntime` (Sim mode).
+    #[cold]
+    #[inline(never)]
+    pub(in crate::emacs_core::eval) fn reset_carrier_tls_for_resume(&self) -> bool {
+        carrier_tls::reset_carrier_tls();
+        neovm_value::intern::prepare_thread_symbol_caches();
+        let runtime = self.green_runtime_ref();
+        if let Some(runtime) = runtime.as_ref() {
+            runtime.bootstrap.install_native_tables();
+            true
+        } else {
+            false
+        }
     }
 
     /// Acquire the World's stowed carried TLS and warm `OwnerCarried` onto this

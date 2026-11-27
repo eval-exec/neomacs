@@ -41,3 +41,26 @@ fn sequential_contexts_on_a_second_thread_reset_heap_owned_caches() {
     .join()
     .expect("second runtime thread");
 }
+
+#[test]
+fn reset_carrier_tls_rearms_core_load_hooks_for_next_context_on_same_thread() {
+    std::thread::spawn(|| {
+        let mut first = Context::new(crate::test_utils::unit_runtime());
+        first.eval_str("(standard-syntax-table)").unwrap();
+        // Simulate a carrier reset (e.g. era resume/rollback) that clears
+        // `PDUMP_RUNTIME_STATE` while `CORE_PDUMP_HOOKS` already completed.
+        reset_carrier_tls();
+        drop(first);
+
+        let mut second = Context::new(crate::test_utils::unit_runtime());
+        // Must re-register and run core load hooks so `second` does not inherit
+        // `first`'s freed charset/syntax registries in TLS.
+        second.gc_collect_exact();
+        let result = second
+            .eval_str("(syntax-table-p (standard-syntax-table))")
+            .expect("second context after reset_carrier_tls");
+        assert_eq!(result, Value::T);
+    })
+    .join()
+    .expect("thread finished");
+}

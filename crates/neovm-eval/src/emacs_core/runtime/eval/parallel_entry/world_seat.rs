@@ -48,7 +48,7 @@
 
 use super::super::Context;
 use super::super::green::WorldSeatParkedRoots;
-use super::super::green::carrier_tls::{park_carrier_tls, reset_carrier_tls};
+use super::super::green::carrier_tls::park_carrier_tls;
 use super::keeper_driver::WorldLend;
 use super::world_turn::{WorldReturned, WorldTurn, WorldTurnIdentity};
 use neovm_value::tagged::gc::FacadeEpochRetention;
@@ -359,7 +359,8 @@ impl ParkedWorldSeat {
             return Err((self, turn, lend, WorldSeatRefusal::WorldHeldElsewhere));
         }
         let abort = AbortOnPanic::new("world-seat-enter");
-        reset_carrier_tls();
+        let restored = ctx.reset_carrier_tls_for_resume();
+        debug_assert!(restored, "ParkedWorldSeat::enter requires a GreenRuntime");
         ctx.unstow_serial_world_state();
         ctx.resume_world_seat_with_roots(self.roots);
         abort.disarm();
@@ -399,7 +400,11 @@ impl ParkedWorldSeat {
         let abort = AbortOnPanic::new("world-seat-resume-turn-right");
         right.clear_stowed_for_return();
         right.enter();
-        reset_carrier_tls();
+        let restored = ctx.reset_carrier_tls_for_resume();
+        debug_assert!(
+            restored,
+            "ParkedWorldSeat::resume_with_turn_right requires a GreenRuntime"
+        );
         ctx.unstow_serial_world_state();
         ctx.resume_world_seat_with_roots(self.roots);
         let seat_key = {
@@ -427,7 +432,11 @@ impl ParkedWorldSeat {
     #[allow(unsafe_code)]
     pub(crate) unsafe fn retire_parked_for_teardown_for_test(self, ctx: &mut Context) {
         let abort = AbortOnPanic::new("world-seat-teardown");
-        reset_carrier_tls();
+        let restored = ctx.reset_carrier_tls_for_resume();
+        debug_assert!(
+            restored,
+            "ParkedWorldSeat::retire_parked_for_teardown_for_test requires a GreenRuntime"
+        );
         ctx.unstow_serial_world_state();
         ctx.resume_world_seat_with_roots(self.roots);
         ctx.clear_cached_parked_root_batch_for_test();

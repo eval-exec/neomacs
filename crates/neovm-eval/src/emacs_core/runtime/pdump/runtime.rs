@@ -25,6 +25,7 @@ struct LoadedDumpStats {
 #[derive(Default)]
 struct PdumpRuntimeState {
     load_hooks: Vec<LoadHook>,
+    core_hooks_registered: bool,
     loaded_dump: Option<LoadedDumpStats>,
 }
 
@@ -62,35 +63,37 @@ fn run_registered_load_hooks() {
     }
 }
 
+fn register_core_load_hooks_into_state() {
+    pdumper_do_now_and_after_load(neovm_text::emacs_core::syntax::reset_syntax_thread_locals);
+    pdumper_do_now_and_after_load(neovm_text::emacs_core::casetab::reset_casetab_thread_locals);
+    pdumper_do_now_and_after_load(neovm_text::emacs_core::regex::reset_regex_thread_locals);
+    pdumper_do_now_and_after_load(neovm_value::string_pos_cache::reset_string_pos_cache);
+    pdumper_do_now_and_after_load(neovm_text::emacs_core::category::reset_category_thread_locals);
+    pdumper_do_now_and_after_load(neovm_value::tagged::value::reset_current_subrs);
+    pdumper_do_now_and_after_load(neovm_value::value::reset_string_text_properties);
+    pdumper_do_now_and_after_load(neovm_text::emacs_core::ccl::reset_ccl_registry);
+    pdumper_do_now_and_after_load(
+        crate::emacs_core::eval::data::dynamic_module_registry::reset_dynamic_module_registry,
+    );
+    // dispnew owns no thread-local state; its reset is empty and
+    // stays with the display layer for its own tests. Pdump must not
+    // reach into display for a no-op.
+    pdumper_do_now_and_after_load(crate::emacs_core::eval::lifecycle::clear_font_cache_state);
+    pdumper_do_now_and_after_load(crate::emacs_core::builtins::reset_builtins_thread_locals);
+    pdumper_do_now_and_after_load(neovm_text::emacs_core::charset::reset_charset_registry);
+    pdumper_do_now_and_after_load(crate::emacs_core::eval::lifecycle::reset_timefns_thread_locals);
+    PDUMP_RUNTIME_STATE.with(|state| state.borrow_mut().core_hooks_registered = true);
+}
+
 fn register_core_load_hooks() {
+    // `CORE_PDUMP_HOOKS` is retained as a vestigial `CarrierIntrinsic` slot
+    // (listed in `carrier_tls_class_test.rs`); live per-carrier registration
+    // state lives in `PdumpRuntimeState::core_hooks_registered`, which
+    // `reset_carrier_tls()` clears alongside `load_hooks`.
     CORE_PDUMP_HOOKS.with(|once| {
-        once.call_once(|| {
-            pdumper_do_now_and_after_load(neovm_text::emacs_core::syntax::reset_syntax_thread_locals);
-            pdumper_do_now_and_after_load(neovm_text::emacs_core::casetab::reset_casetab_thread_locals);
-            pdumper_do_now_and_after_load(neovm_text::emacs_core::regex::reset_regex_thread_locals);
-            pdumper_do_now_and_after_load(
-                neovm_value::string_pos_cache::reset_string_pos_cache,
-            );
-            pdumper_do_now_and_after_load(
-                neovm_text::emacs_core::category::reset_category_thread_locals,
-            );
-            pdumper_do_now_and_after_load(neovm_value::tagged::value::reset_current_subrs);
-            pdumper_do_now_and_after_load(neovm_value::value::reset_string_text_properties);
-            pdumper_do_now_and_after_load(neovm_text::emacs_core::ccl::reset_ccl_registry);
-            pdumper_do_now_and_after_load(
-                crate::emacs_core::eval::data::dynamic_module_registry::reset_dynamic_module_registry,
-            );
-            // dispnew owns no thread-local state; its reset is empty and
-            // stays with the display layer for its own tests. Pdump must not
-            // reach into display for a no-op.
-            pdumper_do_now_and_after_load(crate::emacs_core::eval::lifecycle::clear_font_cache_state);
-            pdumper_do_now_and_after_load(
-                crate::emacs_core::builtins::reset_builtins_thread_locals,
-            );
-            pdumper_do_now_and_after_load(neovm_text::emacs_core::charset::reset_charset_registry);
-            pdumper_do_now_and_after_load(crate::emacs_core::eval::lifecycle::reset_timefns_thread_locals);
-        })
+        once.call_once(|| {});
     });
+    register_core_load_hooks_into_state();
 }
 
 pub(crate) fn clear_loaded_dump_stats() {
@@ -136,10 +139,12 @@ pub(crate) fn pdumper_stats_value() -> Option<Value> {
 }
 
 pub(crate) fn reset_runtime_for_new_heap(mode: HeapResetMode) {
-    let hooks_already_registered = CORE_PDUMP_HOOKS.with(Once::is_completed);
-    register_core_load_hooks();
+    let hooks_already_registered =
+        PDUMP_RUNTIME_STATE.with(|state| state.borrow().core_hooks_registered);
     if hooks_already_registered {
         run_registered_load_hooks();
+    } else {
+        register_core_load_hooks();
     }
 
     match mode {
@@ -171,8 +176,9 @@ pub(crate) fn run_after_pdump_load_hook(eval: &mut Context) {
 #[path = "runtime/tests/runtime_test.rs"]
 mod tests;
 
-/// Carrier park: reset the per-thread pdump runtime state. `CORE_PDUMP_HOOKS`
-/// is a process-lifetime `Once` latch, not per-thread state.
+/// Carrier park: reset the per-thread pdump runtime state (including
+/// `core_hooks_registered`, so the next `Context` on this OS thread re-arms
+/// the core pdump load hooks).
 pub(crate) fn reset_carrier_tls() {
     PDUMP_RUNTIME_STATE.with(|state| *state.borrow_mut() = PdumpRuntimeState::default());
 }
@@ -184,7 +190,9 @@ pub(crate) fn carrier_tls_fingerprint(h: &mut u64) {
         h,
         PDUMP_RUNTIME_STATE.with(|slot| {
             let s = slot.borrow();
-            ((s.load_hooks.len() as u64) << 1) ^ (s.loaded_dump.is_some() as u64)
+            ((s.load_hooks.len() as u64) << 2)
+                ^ ((s.loaded_dump.is_some() as u64) << 1)
+                ^ (s.core_hooks_registered as u64)
         }),
     );
 }
