@@ -1990,6 +1990,186 @@ fn assert_filled_box_composite_matches_full_render(animated: Option<AnimatedCurs
     );
 }
 
+/// #607 Stage 2B Mechanism B: `composite_retained_scene_with_cursor` must
+/// match the full render bit-for-bit across settled/in-flight/blinked-off
+/// cursors while issuing exactly 1 `Queue::submit` (vs 3 for the uncoalesced
+/// blit + cursor + scissored-cell path), and must preserve ordering when
+/// followed by a downstream consumer (`place_native_content_with_opacity`).
+#[test]
+fn coalesced_retained_composite_matches_full_render_and_submits_once() {
+    let mut h = try_harness().expect("wgpu adapter required for coalesced retained composite test");
+    h.renderer.effects.cursor_color_cycle.enabled = false;
+    let frame = filled_box_frame();
+    h.atlas.set_current_frame_fonts(frame.font_bindings());
+
+    let (_ts, vs) = make_tex(&h.renderer, "coalesced-static");
+    h.renderer.render_frame_glyphs(
+        &vs,
+        &frame,
+        &mut h.atlas,
+        mapping_for(&frame, W, H),
+        false,
+        None,
+        None,
+        None,
+        None,
+        None,
+    );
+    let bg = h.renderer.create_texture_bind_group(&vs);
+    let cells = [neomacs_renderer_wgpu::renderer::RetainedCursorCellDraw {
+        mini: &frame,
+        scissor: (20, 16, 10, 18),
+    }];
+
+    for (label, cursor_visible, animated) in [
+        ("settled-visible", true, None),
+        (
+            "in-flight-rect",
+            true,
+            Some(AnimatedCursor {
+                window_id: DisplayWindowId::new(1),
+                x: 20.0,
+                y: 38.0,
+                width: 10.0,
+                height: 18.0,
+                corners: None,
+                frame_id: DisplayFrameId::new(0),
+            }),
+        ),
+        (
+            "in-flight-corners",
+            true,
+            Some(AnimatedCursor {
+                window_id: DisplayWindowId::new(1),
+                x: 20.0,
+                y: 18.0,
+                width: 10.0,
+                height: 18.0,
+                corners: Some([(20.0, 18.0), (30.0, 20.0), (30.0, 36.0), (20.0, 34.0)]),
+                frame_id: DisplayFrameId::new(0),
+            }),
+        ),
+        ("blinked-off", false, None),
+    ] {
+        let (ta, va) = make_tex(&h.renderer, "coalesced-full");
+        h.renderer.render_frame_glyphs(
+            &va,
+            &frame,
+            &mut h.atlas,
+            mapping_for(&frame, W, H),
+            cursor_visible,
+            animated,
+            None,
+            None,
+            None,
+            None,
+        );
+        let full = read_tex(&h.renderer, &ta);
+
+        let (tc, vc) = make_tex(&h.renderer, "coalesced-comp");
+        let submits_before = h.renderer.queue_submit_count();
+        h.renderer.composite_retained_scene_with_cursor(
+            &vc,
+            &bg,
+            &frame,
+            mapping_for(&frame, W, H),
+            cursor_visible,
+            animated,
+            None,
+            if cursor_visible { &cells } else { &[] },
+            Some(&mut h.atlas),
+        );
+        let submits = h.renderer.queue_submit_count() - submits_before;
+        assert_eq!(
+            submits, 1,
+            "{label}: composite_retained_scene_with_cursor must issue exactly 1 queue.submit, got {submits}"
+        );
+        let comp = read_tex(&h.renderer, &tc);
+
+        let mut max_diff = 0i32;
+        for y in 0..H {
+            for x in 0..W {
+                let a = pxb(&full, x, y);
+                let b = pxb(&comp, x, y);
+                for c in 0..4 {
+                    max_diff = max_diff.max((a[c] as i32 - b[c] as i32).abs());
+                }
+            }
+        }
+        assert!(
+            max_diff <= 2,
+            "{label}: coalesced composite must match full render, max_diff={max_diff}"
+        );
+    }
+
+    // Ordering proof relative to a subsequent consumer pass: composite into a
+    // pooled SnapshotLease (submit 1), then place_native_content_with_opacity
+    // reading that lease into the destination view (submit 2). Total submits
+    // must be exactly 2 and the final pixels must match the full render.
+    let lease = h
+        .renderer
+        .acquire_snapshot(neomacs_renderer_wgpu::SnapshotSize::new(W, H).unwrap())
+        .expect("snapshot lease");
+    let (td, vd) = make_tex(&h.renderer, "coalesced-native-dst");
+    let submits_before = h.renderer.queue_submit_count();
+    h.renderer.composite_retained_scene_with_cursor(
+        lease.view(),
+        &bg,
+        &frame,
+        mapping_for(&frame, W, H),
+        true,
+        None,
+        None,
+        &cells,
+        Some(&mut h.atlas),
+    );
+    let placement = neomacs_renderer_wgpu::renderer::NativeContentPlacement::new(
+        neomacs_renderer_wgpu::renderer::RenderTarget::new(
+            &vd,
+            mapping_for(&frame, W, H).surface(),
+        ),
+        &lease,
+    )
+    .expect("native content placement");
+    h.renderer
+        .place_native_content_with_opacity(placement, frame.background, 1.0);
+    let submits = h.renderer.queue_submit_count() - submits_before;
+    assert_eq!(
+        submits, 2,
+        "coalesced composite (1) + downstream native placement (1) must be 2 strictly ordered submits, got {submits}"
+    );
+    let placed = read_tex(&h.renderer, &td);
+
+    let (tf, vf) = make_tex(&h.renderer, "coalesced-native-ref");
+    h.renderer.render_frame_glyphs(
+        &vf,
+        &frame,
+        &mut h.atlas,
+        mapping_for(&frame, W, H),
+        true,
+        None,
+        None,
+        None,
+        None,
+        None,
+    );
+    let full = read_tex(&h.renderer, &tf);
+    let mut max_diff = 0i32;
+    for y in 0..H {
+        for x in 0..W {
+            let a = pxb(&full, x, y);
+            let b = pxb(&placed, x, y);
+            for c in 0..4 {
+                max_diff = max_diff.max((a[c] as i32 - b[c] as i32).abs());
+            }
+        }
+    }
+    assert!(
+        max_diff <= 2,
+        "downstream consumer reading coalesced composite must see completed pixels, max_diff={max_diff}"
+    );
+}
+
 #[test]
 fn filled_box_vertical_motion_keeps_destination_text_normal_until_arrival() {
     let Some(mut h) = try_harness() else {

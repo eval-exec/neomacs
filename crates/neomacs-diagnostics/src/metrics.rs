@@ -38,6 +38,12 @@ pub struct FrameMetrics {
     pub frame_p99_us: u64,
     pub composite_only_frames: u64,
     pub retained_static_builds: u64,
+    /// Root glyph build/render passes executed (`scene::render_frame_root_glyphs`).
+    #[serde(default)]
+    pub root_glyph_passes: u64,
+    /// `wgpu::Queue::submit` calls executed by the retained-static composite phase.
+    #[serde(default)]
+    pub retained_composite_queue_submits: u64,
     /// Planned frames attributed per demand reason ("why did this frame
     /// happen?"), keyed by the scheduler's reason names. A frame driven by
     /// several reasons counts once under each.

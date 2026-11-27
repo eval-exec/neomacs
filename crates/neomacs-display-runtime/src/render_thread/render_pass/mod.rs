@@ -97,10 +97,29 @@ struct FrameDrawInputs<'a> {
     toolbar: &'a ToolbarResources,
 }
 
+/// Pure native-window draw metadata needed by render-pass strategies without
+/// holding a live winit window or swapchain surface.
+#[derive(Clone, Copy)]
+pub(super) struct NativeDrawContext<'a> {
+    pub(super) content_size: (u32, u32),
+    pub(super) scale_factor: f64,
+    pub(super) chrome: &'a super::state::WindowChrome,
+}
+
+impl<'a> NativeDrawContext<'a> {
+    pub(super) fn from_native(native: &'a GuiFrameNativeWindowState) -> Self {
+        Self {
+            content_size: native.content_size(),
+            scale_factor: native.scale_factor,
+            chrome: &native.chrome,
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn render_frame_window_contents(
     renderer: &mut WgpuRenderer,
-    native: &GuiFrameNativeWindowState,
+    native: NativeDrawContext<'_>,
     render: &mut GuiFrameRenderState,
     surface_view: &wgpu::TextureView,
     frame: &crate::core::frame_glyphs::FrameGlyphBuffer,
@@ -411,6 +430,7 @@ fn render_frame_window_contents_reserved(
     let mouse_pos = render
         .root_frame_point_from_surface(render.mouse_pos.0, render.mouse_pos.1)
         .unwrap_or((-1.0, -1.0));
+    let native_draw = NativeDrawContext::from_native(native);
     if retained_static::is_eligible(compositor_only_hint, &pane_blits, render) {
         render.begin_presentable_render(RenderWork::CompositeOnly {
             layers: LayerMask::CURSOR_EFFECTS,
@@ -418,7 +438,7 @@ fn render_frame_window_contents_reserved(
         let hovered_scroll_bar = render.hovered_scroll_bar(&frame);
         let draw_result = retained_static::draw(
             renderer,
-            native,
+            native_draw,
             render,
             &composition_view,
             &frame,
@@ -481,7 +501,7 @@ fn render_frame_window_contents_reserved(
         Some(composition) => full_render::through_composition_ring(
             &acquired,
             renderer,
-            native,
+            native_draw,
             render,
             composition,
             &composition_view,
@@ -494,7 +514,7 @@ fn render_frame_window_contents_reserved(
         None => full_render::onto_target(
             &acquired,
             renderer,
-            native,
+            native_draw,
             render,
             &composition_view,
             &mut frame,

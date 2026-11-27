@@ -62,6 +62,10 @@ pub(super) static CHILD_FRAME_CROSSFADE_QUADS: AtomicU64 = AtomicU64::new(0);
 /// Frames served by the retained-static composite fast path (blit + cursor,
 /// no glyph pipeline).
 pub(super) static COMPOSITE_ONLY_FRAMES: AtomicU64 = AtomicU64::new(0);
+/// `wgpu::Queue::submit` calls executed by the retained-static composite phase
+/// (blit + cursor + filled-box cell redraws). One per `CompositeOnly` frame
+/// when coalesced (#607 Stage 2B).
+pub(super) static RETAINED_COMPOSITE_QUEUE_SUBMITS: AtomicU64 = AtomicU64::new(0);
 /// Full-frame textures the GPU budget refused. Each one costs that frame its
 /// offscreen composition (so its transitions and pane motion) or its post
 /// shader, and the frame is still drawn. Structurally zero unless the render
@@ -133,6 +137,10 @@ fn tick_us(now: EventTime) -> u64 {
 
 pub(super) fn count(counter: &AtomicU64) {
     counter.fetch_add(1, Ordering::Relaxed);
+}
+
+pub(super) fn add(counter: &AtomicU64, delta: u64) {
+    counter.fetch_add(delta, Ordering::Relaxed);
 }
 
 /// Per-native-window demand attribution (frame scheduling plan,
@@ -243,6 +251,7 @@ pub struct FrameSchedSnapshot {
     pub scroll_raster_blits: u64,
     pub auxiliary_coverage_conservative_revocations: u64,
     pub composite_only_frames: u64,
+    pub retained_composite_queue_submits: u64,
     /// Latest commit-to-submission latency; historical diagnostic field name.
     pub last_commit_to_present_us: u64,
     /// Maximum commit-to-submission latency; historical diagnostic field name.
@@ -316,6 +325,7 @@ pub fn snapshot() -> FrameSchedSnapshot {
         auxiliary_coverage_conservative_revocations: AUXILIARY_COVERAGE_CONSERVATIVE_REVOCATIONS
             .load(Ordering::Relaxed),
         composite_only_frames: COMPOSITE_ONLY_FRAMES.load(Ordering::Relaxed),
+        retained_composite_queue_submits: RETAINED_COMPOSITE_QUEUE_SUBMITS.load(Ordering::Relaxed),
         last_commit_to_present_us: LAST_COMMIT_TO_SUBMISSION_US.load(Ordering::Relaxed),
         max_commit_to_present_us: MAX_COMMIT_TO_SUBMISSION_US.load(Ordering::Relaxed),
         frame_time_buckets: std::array::from_fn(|i| FRAME_TIME_BUCKETS[i].load(Ordering::Relaxed)),
@@ -374,6 +384,7 @@ pub(super) fn maybe_log_snapshot(now: EventTime) {
             snap.auxiliary_coverage_conservative_revocations,
         full_frame_texture_refusals = FULL_FRAME_TEXTURE_REFUSALS.load(Ordering::Relaxed),
         composite_only_frames = snap.composite_only_frames,
+        retained_composite_queue_submits = snap.retained_composite_queue_submits,
         last_commit_to_present_us = snap.last_commit_to_present_us,
         max_commit_to_present_us = snap.max_commit_to_present_us,
         demand_reasons = demand_reasons,

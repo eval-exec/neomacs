@@ -13,5 +13,7 @@ fn frame_metrics_snapshot_is_publicly_callable() {
     let _ = snap.max_commit_to_present_us;
     let _ = snap.composite_only_frames;
     let _ = snap.retained_static_builds;
+    let _ = snap.root_glyph_passes;
+    let _ = snap.retained_composite_queue_submits;
     let _ = snap.wakeups;
 }

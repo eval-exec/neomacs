@@ -15,6 +15,8 @@ fn snapshot_serializes_stable_json_shape() {
             frame_p99_us: 16000,
             composite_only_frames: 10,
             retained_static_builds: 3,
+            root_glyph_passes: 90,
+            retained_composite_queue_submits: 10,
             demand_reasons: [("cursor_animation".to_owned(), 12)].into_iter().collect(),
             unattributed_presents: 0,
             active_reasons: Vec::new(),
@@ -32,6 +34,8 @@ fn snapshot_serializes_stable_json_shape() {
     let v: serde_json::Value = serde_json::to_value(&snap).unwrap();
     assert_eq!(v["frame"]["presents"], 100);
     assert_eq!(v["frame"]["last_commit_to_present_us"], 1200);
+    assert_eq!(v["frame"]["root_glyph_passes"], 90);
+    assert_eq!(v["frame"]["retained_composite_queue_submits"], 10);
     assert_eq!(v["frame"]["demand_reasons"]["cursor_animation"], 12);
     assert_eq!(v["frame"]["unattributed_presents"], 0);
     assert_eq!(v["frame"]["deadline_serviced_redraws"], 20);
@@ -89,6 +93,8 @@ fn default_snapshot_is_all_zero() {
     assert_eq!(snap.gc.collections, 0);
     let v = serde_json::to_value(&snap).unwrap();
     assert_eq!(v["frame"]["max_commit_to_present_us"], 0);
+    assert_eq!(v["frame"]["root_glyph_passes"], 0);
+    assert_eq!(v["frame"]["retained_composite_queue_submits"], 0);
     assert_eq!(v["gc"]["vector_cells"], 0);
 }
 

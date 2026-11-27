@@ -48,6 +48,8 @@ impl WgpuRenderer {
         if let Some(timing) = &timing {
             timing.resolve_frame_encoder(&mut encoder);
         }
+        self.queue_submits
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let submission = self
             .caches
             .video

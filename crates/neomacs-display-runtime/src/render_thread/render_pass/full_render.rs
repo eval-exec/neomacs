@@ -19,8 +19,8 @@
 //! strategy draws content and overlays in one go. That asymmetry is the whole
 //! reason `include_overlays` exists.
 
-use super::FrameDrawInputs;
-use crate::render_thread::frame_windows::{GuiFrameNativeWindowState, GuiFrameRenderState};
+use super::{FrameDrawInputs, NativeDrawContext};
+use crate::render_thread::frame_windows::GuiFrameRenderState;
 use crate::render_thread::transitions::{detect_frame_transitions, render_frame_transitions};
 use neomacs_renderer_wgpu::{PaneBlit, SnapshotLease, WgpuRenderer};
 
@@ -31,7 +31,7 @@ use neomacs_renderer_wgpu::{PaneBlit, SnapshotLease, WgpuRenderer};
 pub(super) fn through_composition_ring(
     acquired: &super::surface::SurfaceAcquired,
     renderer: &mut WgpuRenderer,
-    native: &GuiFrameNativeWindowState,
+    native: NativeDrawContext<'_>,
     render: &mut GuiFrameRenderState,
     composition: &SnapshotLease,
     composition_view: &wgpu::TextureView,
@@ -41,6 +41,13 @@ pub(super) fn through_composition_ring(
     accept_derived_effects: bool,
     pane_blits: &[PaneBlit],
 ) -> Result<(), super::surface::FrameRenderFailure> {
+    let seed_retained = super::retained_static::can_seed_on_commit(
+        renderer,
+        pane_blits,
+        render,
+        frame,
+        accept_derived_effects,
+    );
     super::render_frame_window_contents(
         renderer,
         native,
@@ -48,13 +55,65 @@ pub(super) fn through_composition_ring(
         composition.view(),
         frame,
         inputs,
-        cursor_visible,
+        if seed_retained { false } else { cursor_visible },
         false,
     )?;
 
     detect_transitions(acquired, renderer, render, frame, accept_derived_effects);
     if render.compositor.renderer_effects.needs_redraw() {
         render.mark_dirty();
+    }
+
+    if seed_retained && pane_blits.is_empty() && !render.compositor.transitions.has_active() {
+        let cursor_cells = super::retained_static::build_filled_box_cursor_cells(
+            frame,
+            native.scale_factor as f32,
+            &render.pointer_appearance,
+        );
+        let hovered_scroll_bar = render.hovered_scroll_bar(frame);
+        super::retained_static::composite_cursor_over_retained(
+            renderer,
+            composition.bind_group(),
+            &cursor_cells,
+            composition_view,
+            frame,
+            inputs.present_mapping,
+            cursor_visible,
+            inputs.root_animated_cursor,
+            hovered_scroll_bar,
+            render.compositor.glyph_atlas.as_mut(),
+        );
+        super::chrome::render_frame_window_overlays_with_toolbar_resources(
+            renderer,
+            native,
+            render,
+            composition_view,
+            frame,
+            cursor_visible,
+            inputs.animated_cursor,
+            inputs.child_frame_style,
+            inputs.scroll_indicators_enabled,
+            inputs.toolbar,
+        )?;
+        if !render.compositor.renderer_effects.needs_redraw()
+            && !render.compositor.transitions.has_active()
+        {
+            let includes_chrome = !super::retained_static::frame_has_static_chrome(
+                renderer,
+                native,
+                frame,
+                inputs.scroll_indicators_enabled,
+            );
+            render.compositor.retained_static = Some(
+                crate::render_thread::frame_windows::RetainedStatic::from_shared_root(
+                    composition.clone(),
+                    includes_chrome,
+                    render.compositor.current_scene_generation,
+                    cursor_cells,
+                ),
+            );
+        }
+        return Ok(());
     }
 
     if pane_blits.is_empty() {
@@ -80,8 +139,8 @@ pub(super) fn through_composition_ring(
             composition,
             composition_view,
             (
-                native.content_size().0 as f32 / native.scale_factor as f32,
-                native.content_size().1 as f32 / native.scale_factor as f32,
+                native.content_size.0 as f32 / native.scale_factor as f32,
+                native.content_size.1 as f32 / native.scale_factor as f32,
             ),
             pane_blits,
         );
@@ -90,10 +149,43 @@ pub(super) fn through_composition_ring(
         renderer,
         &mut render.compositor.transitions,
         composition_view,
-        native.content_size().0,
-        native.content_size().1,
+        native.content_size.0,
+        native.content_size.1,
         frame,
     );
+    if seed_retained {
+        // Fallback if a transition unexpectedly started inside `detect_transitions`
+        // after rendering `composition` cursorless: paint the cursor layer over the
+        // transitioned surface so the frame never misses its cursor.
+        let cursor_cells = super::retained_static::build_filled_box_cursor_cells(
+            frame,
+            native.scale_factor as f32,
+            &render.pointer_appearance,
+        );
+        let hovered_scroll_bar = render.hovered_scroll_bar(frame);
+        renderer.render_cursor_only(
+            composition_view,
+            frame,
+            inputs.present_mapping,
+            cursor_visible,
+            inputs.root_animated_cursor,
+            hovered_scroll_bar,
+        );
+        if cursor_visible && let Some(atlas) = render.compositor.glyph_atlas.as_mut() {
+            for cell in &cursor_cells {
+                atlas.set_current_frame_fonts(cell.mini.font_bindings());
+                renderer.render_frame_cell_loaded(
+                    composition_view,
+                    &cell.mini,
+                    atlas,
+                    inputs.present_mapping,
+                    true,
+                    inputs.root_animated_cursor,
+                    cell.scissor,
+                );
+            }
+        }
+    }
     if render.compositor.transitions.has_active() {
         render.mark_dirty();
     }
@@ -151,7 +243,7 @@ pub(super) fn place_pane_composition(
 pub(super) fn onto_target(
     acquired: &super::surface::SurfaceAcquired,
     renderer: &mut WgpuRenderer,
-    native: &GuiFrameNativeWindowState,
+    native: NativeDrawContext<'_>,
     render: &mut GuiFrameRenderState,
     composition_view: &wgpu::TextureView,
     frame: &mut crate::core::frame_glyphs::FrameGlyphBuffer,
@@ -159,6 +251,68 @@ pub(super) fn onto_target(
     cursor_visible: bool,
     accept_derived_effects: bool,
 ) -> Result<(), super::surface::FrameRenderFailure> {
+    if render.cursor.is_animating()
+        && super::retained_static::can_seed_on_commit(
+            renderer,
+            &[],
+            render,
+            frame,
+            accept_derived_effects,
+        )
+        && let Some(native_size) =
+            neomacs_renderer_wgpu::SnapshotSize::new(native.content_size.0, native.content_size.1)
+    {
+        // When offscreen composition is disabled (e.g., transitions and window
+        // animations off) but cursor motion is active, build `RetainedStatic`
+        // once on the commit frame so follow-up `CompositeOnly` ticks reuse it
+        // without a second root glyph pass (#607 Stage 2B).
+        super::retained_static::ensure_retained_static_texture(renderer, render, native_size);
+        let retained_view = render
+            .compositor
+            .retained_static
+            .as_ref()
+            .expect("retained texture just ensured")
+            .view()
+            .clone();
+        super::render_frame_window_contents(
+            renderer,
+            native,
+            render,
+            &retained_view,
+            frame,
+            inputs,
+            false,
+            true,
+        )?;
+        let cells = super::retained_static::build_filled_box_cursor_cells(
+            frame,
+            native.scale_factor as f32,
+            &render.pointer_appearance,
+        );
+        if let Some(rs) = render.compositor.retained_static.as_mut() {
+            rs.generation = render.compositor.current_scene_generation;
+            rs.cursor_cells = cells;
+        }
+        detect_transitions(acquired, renderer, render, frame, accept_derived_effects);
+        let hovered_scroll_bar = render.hovered_scroll_bar(frame);
+        if let Some(rs) = render.compositor.retained_static.as_ref() {
+            super::retained_static::composite_cursor_over_retained(
+                renderer,
+                rs.bind_group(),
+                &rs.cursor_cells,
+                composition_view,
+                frame,
+                inputs.present_mapping,
+                cursor_visible,
+                inputs.root_animated_cursor,
+                hovered_scroll_bar,
+                render.compositor.glyph_atlas.as_mut(),
+            );
+        }
+        render.mark_active_visuals_dirty();
+        return Ok(());
+    }
+
     super::render_frame_window_contents(
         renderer,
         native,

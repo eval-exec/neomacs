@@ -36,14 +36,15 @@ mod transient_overlays;
 #[cfg(test)]
 pub(in crate::render_thread) use frame_bands::frame_chrome_toolbar_bounds;
 
-use crate::render_thread::frame_windows::{GuiFrameNativeWindowState, GuiFrameRenderState};
+use super::NativeDrawContext;
+use crate::render_thread::frame_windows::GuiFrameRenderState;
 use crate::render_thread::state::{ChildFrameStyle, ToolbarResources};
 use neomacs_renderer_wgpu::WgpuRenderer;
 
 #[allow(clippy::too_many_arguments)]
 pub(super) fn render_frame_window_overlays_with_toolbar_resources(
     renderer: &mut WgpuRenderer,
-    native: &GuiFrameNativeWindowState,
+    native: NativeDrawContext<'_>,
     render: &mut GuiFrameRenderState,
     surface_view: &wgpu::TextureView,
     frame: &crate::core::frame_glyphs::FrameGlyphBuffer,
@@ -60,7 +61,7 @@ pub(super) fn render_frame_window_overlays_with_toolbar_resources(
     // this one; moving the call up to them is a change to those two files.
     super::scene::render_frame_content_overlays(
         renderer,
-        native.content_size(),
+        native.content_size,
         render,
         surface_view,
         frame,
@@ -75,30 +76,30 @@ pub(super) fn render_frame_window_overlays_with_toolbar_resources(
         renderer,
         render,
         surface_view,
-        native.content_size().0,
-        native.content_size().1,
+        native.content_size.0,
+        native.content_size.1,
     );
     transient_overlays::draw_visual_bell(
         renderer,
         render,
         surface_view,
-        native.content_size().0,
-        native.content_size().1,
+        native.content_size.0,
+        native.content_size.1,
     );
     frame_bands::draw_corner_mask(
         renderer,
         surface_view,
-        &native.chrome,
-        native.content_size().0,
-        native.content_size().1,
+        native.chrome,
+        native.content_size.0,
+        native.content_size.1,
     );
     transient_overlays::draw_fps(
         renderer,
         render,
         surface_view,
         frame,
-        native.content_size().0,
-        native.content_size().1,
+        native.content_size.0,
+        native.content_size.1,
     );
     transient_overlays::draw_typing_speed(renderer, render, surface_view, frame);
     Ok(())

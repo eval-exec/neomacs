@@ -167,6 +167,6 @@ impl WgpuRenderer {
             }
         }
 
-        self.queue.submit(std::iter::once(encoder.finish()));
+        self.submit_command_buffers(std::iter::once(encoder.finish()));
     }
 }

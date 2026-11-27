@@ -162,8 +162,13 @@ pub(super) fn report_unpooled_gpu_textures(
     render: &GuiFrameRenderState,
 ) {
     let owner = GpuBudgetOwner::FrameWindow(render.emacs_frame_id);
-    match render.compositor.retained_static.as_ref() {
-        Some(retained) => renderer.record_full_frame_texture(owner, &retained.texture),
+    match render
+        .compositor
+        .retained_static
+        .as_ref()
+        .and_then(|retained| retained.unpooled_texture())
+    {
+        Some(texture) => renderer.record_full_frame_texture(owner, texture),
         None => renderer.retire_full_frame_texture(owner, UnpooledTexture::RetainedStaticScene),
     }
     let atlas_bytes = render

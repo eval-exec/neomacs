@@ -126,7 +126,7 @@ fn run_navigation(
         "cursor interpolation must reuse the scene: {stats}"
     );
     assert!(
-        count("root_glyph_passes") <= commits * 3,
-        "root glyph work must follow scene commits, not the display-rate cursor clock: {stats}"
+        count("root_glyph_passes") <= commits + commits / 4,
+        "root glyph work must reuse the commit pass (1.00x, not 2.00x): {stats}"
     );
 }

@@ -533,3 +533,171 @@ fn wayland_gpu_only_cursor_motion_presents_paced_receipts_without_unpaced_storm(
         "quality_mode=Full animated jump must emit 1..=2 final-settle CursorAnimation(NextPresentation) frames without mid-motion storms: got cursor_animation={p2_cursor_anim} (cursor_motion={p2_cursor_motion}, composite_only={p2_composite_only})"
     );
 }
+
+fn verify_receipts_monotonic_and_wire_ordered(receipts: &[String], wire: &[String], label: &str) {
+    verify_receipts_distinct_and_on_wire(receipts, wire, label);
+
+    let mut prev_ns: Option<u128> = None;
+    let mut prev_wire_pos: Option<usize> = None;
+    for receipt in receipts {
+        let seconds = parse_receipt_u64(receipt, ":seconds");
+        let nanoseconds = parse_receipt_u64(receipt, ":nanoseconds");
+        let ts_ns = u128::from(seconds) * 1_000_000_000 + u128::from(nanoseconds);
+        if let Some(prev) = prev_ns {
+            assert!(
+                ts_ns >= prev,
+                "{label} presentation timestamps must be monotonically non-decreasing: prev_ns={prev}, current_ns={ts_ns}, receipt={receipt}"
+            );
+        }
+        prev_ns = Some(ts_ns);
+
+        let timestamp = format!(
+            ".presented({}, {}, {},",
+            seconds >> 32,
+            seconds & 0xffff_ffff,
+            nanoseconds
+        );
+        let search_start = prev_wire_pos.map_or(0, |pos| pos + 1);
+        let wire_pos = wire[search_start..]
+            .iter()
+            .position(|line| line.contains("wp_presentation_feedback") && line.contains(&timestamp))
+            .map(|offset| search_start + offset)
+            .unwrap_or_else(|| {
+                panic!(
+                    "{label} wire wp_presentation_feedback.presented event out of order or missing after line {search_start}: {receipt}"
+                )
+            });
+        prev_wire_pos = Some(wire_pos);
+    }
+
+    if let (Some(first), Some(last)) = (receipts.first(), receipts.last())
+        && receipts.len() >= 2
+    {
+        let first_ns = u128::from(parse_receipt_u64(first, ":seconds")) * 1_000_000_000
+            + u128::from(parse_receipt_u64(first, ":nanoseconds"));
+        let last_ns = u128::from(parse_receipt_u64(last, ":seconds")) * 1_000_000_000
+            + u128::from(parse_receipt_u64(last, ":nanoseconds"));
+        assert!(
+            last_ns > first_ns,
+            "{label} multi-frame sequence must span strictly advancing presentation timestamps: first={first_ns}ns, last={last_ns}ns"
+        );
+    }
+
+    // Verify wire attachment discipline: every `wp_presentation.feedback` is
+    // followed by a `wl_surface.commit` (matching present.rs before_present ->
+    // queue.present ordering).
+    let feedback_attach_count = wire
+        .iter()
+        .filter(|line| line.contains("wp_presentation") && line.contains(".feedback("))
+        .count();
+    assert!(
+        feedback_attach_count >= receipts.len(),
+        "{label} wire log must contain at least as many wp_presentation.feedback attachments ({feedback_attach_count}) as Presented receipts ({})",
+        receipts.len()
+    );
+}
+
+#[test]
+// Prerequisites: requires release binary/pdump, GL Weston (--renderer=gl), and a hardware GPU adapter (quality_mode=Full).
+// #607 Stage 2B Mechanism A: reverting commit glyph-pass reuse makes p2_root_glyph_passes jump to 2*p2_commits (RED).
+fn wayland_gpu_only_cursor_motion_reuses_commit_glyph_pass_without_second_build() {
+    let mut ctx = TestRunContext::launch("stage2b-mech-a", WestonSession::start_gl_only);
+
+    ctx.wait_for_flag("ready", Duration::from_secs(30));
+    ctx.write_flag("phase2-setup", "setup\n");
+    ctx.wait_for_flag("phase2-ready", Duration::from_secs(30));
+    let m2 = fetch_metrics(ctx.port);
+    ctx.write_flag("phase2-go", "go\n");
+    ctx.wait_for_flag("phase2-done", Duration::from_secs(30));
+    let m3 = fetch_metrics(ctx.port);
+    let logs = ctx.quit_and_collect();
+
+    let phase2_receipts = logs.read_receipts("receipts-phase2.sexp");
+    verify_receipts_monotonic_and_wire_ordered(&phase2_receipts, &logs.wire, "stage2b-mech-a");
+
+    let p2_commits = metric_u64(&m3, "scene_commits") - metric_u64(&m2, "scene_commits");
+    let p2_root_glyph_passes =
+        metric_u64(&m3, "root_glyph_passes") - metric_u64(&m2, "root_glyph_passes");
+    let p2_retained_builds =
+        metric_u64(&m3, "retained_static_builds") - metric_u64(&m2, "retained_static_builds");
+    let p2_composite_only =
+        metric_u64(&m3, "composite_only_frames") - metric_u64(&m2, "composite_only_frames");
+
+    eprintln!(
+        "stage2b-mech-a weston: renderer={}\nstage2b-mech-a device: {}\nstage2b-mech-a policy: {}\nstage2b-mech-a summary: commits={p2_commits} root_glyph_passes={p2_root_glyph_passes} retained_static_builds={p2_retained_builds} composite_only={p2_composite_only} receipts={}",
+        logs.renderer,
+        logs.device_line,
+        logs.final_policy_line,
+        phase2_receipts.len()
+    );
+
+    assert!(
+        logs.final_policy_line.contains("quality_mode=Full"),
+        "GPU-only Mechanism A row requires quality_mode=Full: {}",
+        logs.final_policy_line
+    );
+    assert!(
+        p2_commits >= 1,
+        "animated jump must publish at least one scene commit, got {p2_commits}"
+    );
+    assert!(
+        p2_composite_only >= 3,
+        "animated jump must exercise composite-only cursor frames, got {p2_composite_only}"
+    );
+    assert_eq!(
+        p2_root_glyph_passes, p2_commits,
+        "animated cursor motion after a commit must reuse the commit's root glyph pass (1.00x, not 2.00x): root_glyph_passes={p2_root_glyph_passes}, commits={p2_commits}, retained_static_builds={p2_retained_builds}, composite_only={p2_composite_only}"
+    );
+}
+
+#[test]
+// Prerequisites: requires release binary/pdump, GL Weston (--renderer=gl), and a hardware GPU adapter (quality_mode=Full).
+// #607 Stage 2B Mechanism B: reverting submit coalescing makes p2_retained_submits jump to 3*p2_composite_only (RED).
+fn wayland_gpu_only_retained_static_coalesces_submits_and_preserves_receipt_order() {
+    let mut ctx = TestRunContext::launch("stage2b-mech-b", WestonSession::start_gl_only);
+
+    ctx.wait_for_flag("ready", Duration::from_secs(30));
+    ctx.write_flag("phase2-setup", "setup\n");
+    ctx.wait_for_flag("phase2-ready", Duration::from_secs(30));
+    let m2 = fetch_metrics(ctx.port);
+    ctx.write_flag("phase2-go", "go\n");
+    ctx.wait_for_flag("phase2-done", Duration::from_secs(30));
+    let m3 = fetch_metrics(ctx.port);
+    let logs = ctx.quit_and_collect();
+
+    let phase2_receipts = logs.read_receipts("receipts-phase2.sexp");
+    verify_receipts_monotonic_and_wire_ordered(&phase2_receipts, &logs.wire, "stage2b-mech-b");
+
+    let p2_composite_only =
+        metric_u64(&m3, "composite_only_frames") - metric_u64(&m2, "composite_only_frames");
+    let p2_retained_submits = metric_u64(&m3, "retained_composite_queue_submits")
+        - metric_u64(&m2, "retained_composite_queue_submits");
+    let p2_presents = metric_u64(&m3, "presents") - metric_u64(&m2, "presents");
+
+    eprintln!(
+        "stage2b-mech-b weston: renderer={}\nstage2b-mech-b device: {}\nstage2b-mech-b policy: {}\nstage2b-mech-b summary: composite_only={p2_composite_only} retained_composite_submits={p2_retained_submits} presents={p2_presents} receipts={}",
+        logs.renderer,
+        logs.device_line,
+        logs.final_policy_line,
+        phase2_receipts.len()
+    );
+
+    assert!(
+        logs.final_policy_line.contains("quality_mode=Full"),
+        "GPU-only Mechanism B row requires quality_mode=Full: {}",
+        logs.final_policy_line
+    );
+    assert!(
+        p2_composite_only >= 3,
+        "animated jump must exercise composite-only cursor frames, got {p2_composite_only}"
+    );
+    assert!(
+        phase2_receipts.len() >= 2,
+        "coalesced composite frames must preserve distinct wire-ordered Presented receipts, got {}",
+        phase2_receipts.len()
+    );
+    assert_eq!(
+        p2_retained_submits, p2_composite_only,
+        "retained_static::draw must coalesce blit + cursor + filled-box cell into exactly 1 Queue::submit per composite-only frame: submits={p2_retained_submits}, composite_only={p2_composite_only}"
+    );
+}

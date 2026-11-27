@@ -253,7 +253,6 @@ fn static_scene(shrink: bool) {
         .retained_static
         .as_ref()
         .unwrap()
-        .texture
         .view()
         .clone();
     draw_root(&mut renderer, &mut render, &view, &root);

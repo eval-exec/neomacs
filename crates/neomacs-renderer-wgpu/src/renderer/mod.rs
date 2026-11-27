@@ -37,6 +37,7 @@ mod full_frame_texture;
 pub use full_frame_texture::FullFrameTexture;
 mod fx_state;
 mod glyphs;
+pub use glyphs::RetainedCursorCellDraw;
 mod gpu_budget;
 pub use gpu_budget::{BudgetExceeded, GpuBudget, GpuBudgetOwner, UnpooledTexture};
 mod layer_backgrounds;
@@ -248,6 +249,8 @@ pub struct WgpuRenderer {
     /// different seed and the same entity a different seed each frame, and
     /// unlike the clock it replays identically.
     pub(super) frame_seq: u64,
+    /// Monotonic count of `wgpu::Queue::submit` calls issued by this renderer.
+    pub(super) queue_submits: std::sync::atomic::AtomicU64,
 }
 
 impl WgpuRenderer {
@@ -1292,6 +1295,7 @@ impl WgpuRenderer {
             row_reuse: row_reuse::RowReuseCache::default(),
             glyph_stats: GlyphRenderStats::new(),
             frame_seq: 0,
+            queue_submits: std::sync::atomic::AtomicU64::new(0),
             frame_sample: neomacs_display_protocol::frame_time::FrameSample::new(
                 neomacs_display_protocol::frame_time::observe_platform_now(),
                 std::time::Duration::from_millis(16),
@@ -1670,7 +1674,28 @@ impl WgpuRenderer {
             render_pass.draw(0..vertices.len() as u32, 0..1);
         }
 
-        self.queue.submit(std::iter::once(encoder.finish()));
+        self.submit_command_buffers(std::iter::once(encoder.finish()));
+    }
+
+    /// Monotonic count of `wgpu::Queue::submit` calls issued by this renderer.
+    ///
+    /// Production-safe relaxed atomic read: performs no GPU fence, flush, or
+    /// device synchronization. Read by `retained_static::draw` to record
+    /// `RETAINED_COMPOSITE_QUEUE_SUBMITS` and by render-pass regression tests.
+    pub fn queue_submit_count(&self) -> u64 {
+        self.queue_submits
+            .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Submit command buffers to the renderer's GPU queue and record the
+    /// submission count for render-pass diagnostics (#607 Stage 2B).
+    pub(super) fn submit_command_buffers<I: IntoIterator<Item = wgpu::CommandBuffer>>(
+        &self,
+        command_buffers: I,
+    ) -> wgpu::SubmissionIndex {
+        self.queue_submits
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.queue.submit(command_buffers)
     }
 
     /// Add a rectangle to the vertex list (6 vertices = 2 triangles).

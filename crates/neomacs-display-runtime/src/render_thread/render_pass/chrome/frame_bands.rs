@@ -18,7 +18,8 @@
 //! visual bell, so it cannot be drawn in the same pass as the bars; `super`
 //! keeps that sequence.
 
-use crate::render_thread::frame_windows::{GuiFrameNativeWindowState, GuiFrameRenderState};
+use super::super::NativeDrawContext;
+use crate::render_thread::frame_windows::GuiFrameRenderState;
 use crate::render_thread::state::{ToolbarResources, WindowChrome};
 use neomacs_display_protocol::frame_chrome::{
     CompactBarContent, FrameChromeContent, FrameRect, ToolBarContent,
@@ -67,14 +68,14 @@ struct GuiFrameCompactBarOverlay<'a> {
 /// order they stack: titlebar, menu bar, tool bar, compact bar.
 pub(super) fn draw(
     renderer: &mut WgpuRenderer,
-    native: &GuiFrameNativeWindowState,
+    native: NativeDrawContext<'_>,
     render: &mut GuiFrameRenderState,
     surface_view: &wgpu::TextureView,
     frame: &crate::core::frame_glyphs::FrameGlyphBuffer,
     toolbar: &ToolbarResources,
 ) {
-    let (width, height) = (native.content_size().0, native.content_size().1);
-    let native_chrome = &native.chrome;
+    let (width, height) = native.content_size;
+    let native_chrome = native.chrome;
     let titlebar_background = (frame.background.r, frame.background.g, frame.background.b);
 
     let menu_bar = frame.frame_chrome.bands().iter().find_map(|band| {

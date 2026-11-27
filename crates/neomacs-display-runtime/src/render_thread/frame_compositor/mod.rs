@@ -247,19 +247,40 @@ impl FrameCompositor {
     }
 }
 
+/// Backing picture for [`RetainedStatic`].
+pub(super) enum RetainedSceneSource {
+    /// Unpooled full-frame texture owned directly by `RetainedStatic`,
+    /// holding the complete cursorless scene (root glyphs + static chrome).
+    Owned {
+        texture: FullFrameTexture,
+        bind_group: wgpu::BindGroup,
+    },
+    /// Cursorless root-glyph scene shared zero-copy from `CompositionRing`
+    /// (#607 Stage 2B). When `includes_chrome` is `true`, the frame had no
+    /// static chrome overlays beyond root glyphs and can composite directly;
+    /// when `false`, the first `CompositeOnly` frame upgrades to `Owned` by
+    /// blitting this lease and drawing static chrome without re-running the
+    /// root glyph pipeline.
+    ///
+    /// **GPU-budget ownership**: `lease` is a reference-counted handle to a
+    /// `SnapshotPool` slot whose bytes remain owned and charged under
+    /// `GpuBudget::pooled_bytes()` for as long as any clone of the lease is
+    /// outstanding. `RetainedStatic::unpooled_texture()` therefore returns
+    /// `None` for `SharedRoot` so `report_unpooled_gpu_textures` never
+    /// double-counts it as `UnpooledTexture::RetainedStaticScene` (and dropping
+    /// the last clone automatically returns the slot to the pool without
+    /// under-counting).
+    SharedRoot {
+        lease: neomacs_renderer_wgpu::SnapshotLease,
+        includes_chrome: bool,
+    },
+}
+
 /// A cursorless render of the current scene, retained across cursor-only
 /// frames so an ambient cursor effect composites over it instead of
 /// re-running the glyph pipeline. Validity is generation- and size-keyed.
 pub(crate) struct RetainedStatic {
-    /// The scene texture, its GPU-budget category and its cost as one value.
-    ///
-    /// It used to be a raw `wgpu::Texture` nothing read, kept alive by an
-    /// `#[allow(dead_code)]`, beside a `width`/`height` pair the per-frame
-    /// census re-derived a byte count from. Three descriptions of one
-    /// allocation, any two of which could disagree; now there is one.
-    pub(super) texture: FullFrameTexture,
-    /// Image-pipeline bind group for blitting the texture to the surface.
-    pub(super) bind_group: wgpu::BindGroup,
+    pub(super) source: RetainedSceneSource,
     /// `current_scene_generation` this was built from; a new scene commit
     /// bumps that stamp and invalidates this.
     pub(super) generation: u64,
@@ -281,12 +302,80 @@ pub(crate) struct RetainedCursorCell {
 impl RetainedStatic {
     pub(super) fn new(texture: FullFrameTexture, bind_group: wgpu::BindGroup) -> Self {
         Self {
-            texture,
-            bind_group,
+            source: RetainedSceneSource::Owned {
+                texture,
+                bind_group,
+            },
             // Sentinel: no valid scene captured yet, forcing a build on the
             // first fast-path frame.
             generation: u64::MAX,
             cursor_cells: Vec::new(),
         }
+    }
+
+    pub(super) fn from_shared_root(
+        lease: neomacs_renderer_wgpu::SnapshotLease,
+        includes_chrome: bool,
+        generation: u64,
+        cursor_cells: Vec<RetainedCursorCell>,
+    ) -> Self {
+        Self {
+            source: RetainedSceneSource::SharedRoot {
+                lease,
+                includes_chrome,
+            },
+            generation,
+            cursor_cells,
+        }
+    }
+
+    pub(super) fn size(&self) -> neomacs_renderer_wgpu::SnapshotSize {
+        match &self.source {
+            RetainedSceneSource::Owned { texture, .. } => texture.size(),
+            RetainedSceneSource::SharedRoot { lease, .. } => lease.size(),
+        }
+    }
+
+    pub(super) fn view(&self) -> &wgpu::TextureView {
+        match &self.source {
+            RetainedSceneSource::Owned { texture, .. } => texture.view(),
+            RetainedSceneSource::SharedRoot { lease, .. } => lease.view(),
+        }
+    }
+
+    pub(super) fn bind_group(&self) -> &wgpu::BindGroup {
+        match &self.source {
+            RetainedSceneSource::Owned { bind_group, .. } => bind_group,
+            RetainedSceneSource::SharedRoot { lease, .. } => lease.bind_group(),
+        }
+    }
+
+    pub(super) fn unpooled_texture(&self) -> Option<&FullFrameTexture> {
+        match &self.source {
+            RetainedSceneSource::Owned { texture, .. } => Some(texture),
+            RetainedSceneSource::SharedRoot { .. } => None,
+        }
+    }
+
+    pub(super) fn is_owned_at(&self, size: neomacs_renderer_wgpu::SnapshotSize) -> bool {
+        matches!(
+            &self.source,
+            RetainedSceneSource::Owned { texture, .. } if texture.size() == size
+        )
+    }
+
+    pub(super) fn is_ready_for_composite(
+        &self,
+        generation: u64,
+        size: neomacs_renderer_wgpu::SnapshotSize,
+    ) -> bool {
+        self.generation == generation
+            && self.size() == size
+            && match &self.source {
+                RetainedSceneSource::Owned { .. } => true,
+                RetainedSceneSource::SharedRoot {
+                    includes_chrome, ..
+                } => *includes_chrome,
+            }
     }
 }

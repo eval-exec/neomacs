@@ -5097,6 +5097,8 @@ fn build_metrics_snapshot() -> neomacs_diagnostics::MetricsSnapshot {
             ),
             composite_only_frames: f.composite_only_frames,
             retained_static_builds: f.retained_static_builds,
+            root_glyph_passes: f.root_glyph_passes,
+            retained_composite_queue_submits: f.retained_composite_queue_submits,
             demand_reasons: neomacs_display_runtime::DEMAND_REASON_NAMES
                 .iter()
                 .zip(f.demand_reasons.iter())

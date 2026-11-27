@@ -1,7 +1,7 @@
 //! Glyphs methods for WgpuRenderer.
 
 use super::super::glyph_atlas::{ComposedGlyphKey, GlyphKey, WgpuGlyphAtlas};
-use super::super::vertex::{CoverageGlyphVertex, RectVertex, Uniforms};
+use super::super::vertex::{CoverageGlyphVertex, GlyphVertex, RectVertex, Uniforms};
 use super::GlyphRenderStats;
 use super::ModeLineFadeEntry;
 use super::WgpuRenderer;
@@ -27,6 +27,13 @@ use std::sync::{
     OnceLock,
     atomic::{AtomicU64, Ordering},
 };
+
+/// One filled-box cursor cell mini-frame and its physical-pixel scissor rect
+/// drawn inside [`WgpuRenderer::composite_retained_scene_with_cursor`].
+pub struct RetainedCursorCellDraw<'a> {
+    pub mini: &'a FrameGlyphBuffer,
+    pub scissor: (u32, u32, u32, u32),
+}
 
 pub(super) const CHAR_OVERLAP_MIN_AXIS: f32 = 0.5;
 const CHAR_OVERLAP_MIN_AREA: f32 = 1.0;
@@ -1819,7 +1826,7 @@ impl WgpuRenderer {
         #[cfg(feature = "video")]
         self.submit_video_frame_content_pass(encoder, gpu_timing, submitted_video_ids);
         #[cfg(not(feature = "video"))]
-        self.queue.submit([encoder.finish()]);
+        self.submit_command_buffers([encoder.finish()]);
     }
 
     /// Draw only the cursor layer onto `view`, preserving existing content
@@ -1907,7 +1914,325 @@ impl WgpuRenderer {
                 render_pass.draw(0..chrome.cursors.len() as u32, 0..1);
             }
         }
-        self.queue.submit(std::iter::once(encoder.finish()));
+        self.submit_command_buffers(std::iter::once(encoder.finish()));
+    }
+
+    /// Composite a retained cursorless scene, the cursor/chrome layer, and all
+    /// scissored filled-box inverse-video cursor cells into `view` in a single
+    /// `wgpu::CommandEncoder`, single `wgpu::RenderPass`, and single
+    /// `wgpu::Queue::submit` (#607 Stage 2B).
+    ///
+    /// Preserves the exact draw order of the three formerly separate submits:
+    ///   1. Full-target blit of `retained_bind_group` (`LoadOp::Clear(TRANSPARENT)`),
+    ///   2. Unscissored cursor/chrome layer (`cursor_bg`, `behind_text_cursor`, `cursors`),
+    ///   3. Each scissored filled-box cursor cell mini-frame (when `cursor_visible`).
+    ///
+    /// Vertex arenas are reset once at the top of this pass so later uploads
+    /// within the same command encoder occupy disjoint buffer slices.
+    #[allow(clippy::too_many_arguments)]
+    pub fn composite_retained_scene_with_cursor(
+        &mut self,
+        view: &wgpu::TextureView,
+        retained_bind_group: &wgpu::BindGroup,
+        frame_glyphs: &FrameGlyphBuffer,
+        mapping: neomacs_display_protocol::PresentMapping,
+        cursor_visible: bool,
+        animated_cursor: Option<AnimatedCursor>,
+        hovered_scroll_bar: Option<ScrollBarIdentity>,
+        filled_box_cells: &[RetainedCursorCellDraw<'_>],
+        mut glyph_atlas: Option<&mut WgpuGlyphAtlas>,
+    ) {
+        debug_assert_eq!(mapping.presentation(), frame_glyphs.presentation_id);
+        debug_assert_eq!(mapping.content_logical_size().width(), frame_glyphs.width);
+        debug_assert_eq!(mapping.content_logical_size().height(), frame_glyphs.height);
+        debug_assert_eq!(
+            view.texture().format(),
+            self.surface_format,
+            "composite target must match the renderer's pipeline format"
+        );
+
+        let surface = mapping.surface();
+        let surface_width = surface.device_width().get();
+        let surface_height = surface.device_height().get();
+
+        // Reset vertex arenas ONCE for the entire coalesced encoder so blit,
+        // cursor layer, and filled-box cell uploads never overwrite each other
+        // before the single `queue.submit` executes.
+        self.arenas.begin_frame();
+
+        let Ok((logical_w, logical_h, draw)) = self.prepare_frame_uniforms(mapping) else {
+            return;
+        };
+
+        let blit_vertices = [
+            GlyphVertex {
+                position: [0.0, 0.0],
+                tex_coords: [0.0, 0.0],
+                color: [1.0, 1.0, 1.0, 1.0],
+            },
+            GlyphVertex {
+                position: [logical_w, 0.0],
+                tex_coords: [1.0, 0.0],
+                color: [1.0, 1.0, 1.0, 1.0],
+            },
+            GlyphVertex {
+                position: [logical_w, logical_h],
+                tex_coords: [1.0, 1.0],
+                color: [1.0, 1.0, 1.0, 1.0],
+            },
+            GlyphVertex {
+                position: [0.0, 0.0],
+                tex_coords: [0.0, 0.0],
+                color: [1.0, 1.0, 1.0, 1.0],
+            },
+            GlyphVertex {
+                position: [logical_w, logical_h],
+                tex_coords: [1.0, 1.0],
+                color: [1.0, 1.0, 1.0, 1.0],
+            },
+            GlyphVertex {
+                position: [0.0, logical_h],
+                tex_coords: [0.0, 1.0],
+                color: [1.0, 1.0, 1.0, 1.0],
+            },
+        ];
+        let blit_upload = self
+            .arenas
+            .image
+            .upload(&self.device, &self.queue, &blit_vertices);
+
+        let cursor_params = FrameParams {
+            frame_glyphs,
+            pointer_override: super::pointer_override::PointerOverrideResolver::new(
+                frame_glyphs,
+                None,
+            ),
+            faces: &frame_glyphs.faces,
+            cursor_visible,
+            animated_cursor: &animated_cursor,
+            cursor_inverse_video: None,
+            hovered_scroll_bar,
+            background_gradient: None,
+            logical_w,
+            logical_h,
+            device_scale: surface.device_scale(),
+            face_debug_call_id: 0,
+            has_line_anims: false,
+            row_damage: None,
+        };
+        let chrome = self.collect_chrome_layers(&cursor_params);
+
+        // Pre-prepare filled-box cursor cells BEFORE opening the render pass so
+        // their `FrameParams` and vertex lists outlive the single `RenderPass`.
+        let mut prepared_cells = Vec::new();
+        if cursor_visible && !filled_box_cells.is_empty() && glyph_atlas.is_some() {
+            for cell in filled_box_cells {
+                let Some(scissor) =
+                    SurfaceScissor::intersect(cell.scissor, surface_width, surface_height)
+                else {
+                    continue;
+                };
+                let mini = cell.mini;
+                debug_assert_eq!(mapping.presentation(), mini.presentation_id);
+                debug_assert_eq!(mapping.content_logical_size().width(), mini.width);
+                debug_assert_eq!(mapping.content_logical_size().height(), mini.height);
+
+                self.refresh_frame_animation_state(mini);
+
+                let cell_params = FrameParams {
+                    frame_glyphs: mini,
+                    pointer_override: super::pointer_override::PointerOverrideResolver::new(
+                        mini, None,
+                    ),
+                    faces: &mini.faces,
+                    cursor_visible: true,
+                    animated_cursor: &animated_cursor,
+                    cursor_inverse_video: self.active_cursor_inverse_video(
+                        mini,
+                        true,
+                        animated_cursor.as_ref(),
+                    ),
+                    hovered_scroll_bar: None,
+                    background_gradient: None,
+                    logical_w,
+                    logical_h,
+                    device_scale: surface.device_scale(),
+                    face_debug_call_id: 0,
+                    has_line_anims: !self.fx.line_anim.active.is_empty()
+                        || !self.fx.scroll_spacing.active.is_empty(),
+                    row_damage: None,
+                };
+                let box_spans = self.collect_box_spans(&cell_params);
+                let (non_overlay_rect_vertices, foreground_rect_vertices) =
+                    self.collect_non_overlay_backgrounds(&cell_params, &box_spans);
+                let overlay_rect_vertices =
+                    self.collect_overlay_backgrounds(&cell_params, &box_spans);
+                let cell_chrome = self.collect_chrome_layers(&cell_params);
+                prepared_cells.push((
+                    scissor,
+                    mini,
+                    cell_params,
+                    box_spans,
+                    non_overlay_rect_vertices,
+                    foreground_rect_vertices,
+                    overlay_rect_vertices,
+                    cell_chrome,
+                ));
+            }
+        }
+
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("Retained Composite Encoder"),
+            });
+        {
+            let mut render_pass = super::frame_pass::FrameRenderPass::Plain(
+                encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("Retained Composite Pass"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                            store: wgpu::StoreOp::Store,
+                        },
+                        depth_slice: None,
+                    })],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                    multiview_mask: None,
+                }),
+            );
+
+            // Phase 1: Full-target blit of the retained cursorless scene.
+            if let Some(ref upload) = blit_upload {
+                render_pass.set_pipeline(&self.pipelines.surface_copy);
+                render_pass.set_bind_group(0, draw.binding(), &[]);
+                render_pass.set_bind_group(1, retained_bind_group, &[]);
+                render_pass.set_vertex_buffer(0, upload.buffer_slice());
+                render_pass.draw(0..6, 0..1);
+            }
+
+            // Phase 2: Unscissored cursor/chrome layer (identical to render_cursor_only).
+            render_pass.set_bind_group(0, draw.binding(), &[]);
+            self.draw_pre_text_cursor_layers(
+                &mut render_pass,
+                &chrome.cursor_bg,
+                &chrome.behind_text_cursor,
+            );
+            if let Some(upload) =
+                self.arenas
+                    .rect
+                    .upload(&self.device, &self.queue, &chrome.cursors)
+            {
+                render_pass.set_pipeline(&self.pipelines.rect);
+                render_pass.set_vertex_buffer(0, upload.buffer_slice());
+                render_pass.draw(0..chrome.cursors.len() as u32, 0..1);
+            }
+
+            // Phase 3: Scissored inverse-video filled-box cursor cells.
+            if !prepared_cells.is_empty()
+                && let Some(atlas) = glyph_atlas.as_deref_mut()
+            {
+                atlas.advance_generation();
+                for (
+                    scissor,
+                    mini,
+                    cell_params,
+                    box_spans,
+                    non_overlay_rect_vertices,
+                    foreground_rect_vertices,
+                    overlay_rect_vertices,
+                    cell_chrome,
+                ) in &prepared_cells
+                {
+                    atlas.set_current_frame_fonts(mini.font_bindings());
+                    if let Some((default_font_size, default_line_height)) =
+                        frame_default_glyph_metrics(mini)
+                    {
+                        atlas.set_metrics(default_font_size, default_line_height);
+                    }
+
+                    let mut stats = GlyphRenderStats::new();
+                    stats.total_frame_glyphs = mini.glyphs.len();
+                    for glyph in &mini.glyphs {
+                        if let FrameGlyph::Char { composed, .. } = glyph {
+                            stats.text_glyphs += 1;
+                            if composed.is_some() {
+                                stats.composed_glyphs += 1;
+                            }
+                        }
+                    }
+                    let mut seen_single_keys: HashSet<GlyphKey> = HashSet::new();
+                    let mut seen_composed_keys: HashSet<ComposedGlyphKey> = HashSet::new();
+
+                    render_pass.set_bind_group(0, draw.binding(), &[]);
+                    scissor.apply(&mut render_pass);
+                    let mut ctx = FramePassCtx {
+                        pass: render_pass,
+                        params: cell_params,
+                    };
+
+                    self.draw_non_overlay_backgrounds(
+                        &mut ctx.pass,
+                        non_overlay_rect_vertices,
+                        mini.background_alpha,
+                    );
+                    self.draw_rect_vertex_layer(&mut ctx.pass, foreground_rect_vertices);
+
+                    let effects_for_ctx = mini.effective_phys_cursor_effects(&self.effects).clone();
+                    let ectx = super::effect_common::EffectCtx {
+                        effects: &effects_for_ctx,
+                        frame_glyphs: mini,
+                        animated_cursor: &animated_cursor,
+                        cursor_visible: true,
+                        surface_width,
+                        surface_height,
+                        aurora_start: self.ambient.aurora_start,
+                        frame_sample: self.frame_sample,
+                        frame_seq: self.frame_seq,
+                        scale_factor: self.scale_factor,
+                        logical_w,
+                        logical_h,
+                        renderer_width: self.width as f32,
+                        renderer_height: self.height as f32,
+                    };
+                    self.draw_pre_content_background_effects(
+                        &mut ctx.pass,
+                        &ectx,
+                        &mini.faces,
+                        &box_spans.spans,
+                    );
+                    self.draw_pre_content_effects(&mut ctx.pass, &ectx);
+                    self.draw_pre_text_cursor_layers(
+                        &mut ctx.pass,
+                        &cell_chrome.cursor_bg,
+                        &cell_chrome.behind_text_cursor,
+                    );
+                    self.draw_text_and_overlay_passes(
+                        &mut ctx,
+                        box_spans,
+                        overlay_rect_vertices,
+                        atlas,
+                        &mut stats,
+                        &mut seen_single_keys,
+                        &mut seen_composed_keys,
+                    );
+                    self.draw_inline_images(&mut ctx);
+                    #[cfg(all(feature = "webview", target_os = "linux"))]
+                    self.draw_inline_webkit_views(&mut ctx);
+                    self.draw_inline_surfaces(&mut ctx);
+                    self.draw_cursor_layer(&mut ctx, cell_chrome);
+                    self.draw_post_content_effects(&mut ctx.pass, &ectx, &mini.faces);
+
+                    render_pass = ctx.pass;
+                }
+            }
+        }
+
+        self.submit_command_buffers(std::iter::once(encoder.finish()));
     }
 
     fn refresh_frame_animation_state(&mut self, frame_glyphs: &FrameGlyphBuffer) {
