@@ -368,7 +368,8 @@ pub(super) const BEACON_TUI_PRELUDE: &str = r####"
   (call-interactively #'beacon-blink)
   (beacon359-tui-state "EOL"))
 
-(defun beacon359-tui-natural-finished ()
+(defun beacon359-tui-natural-finished (&rest _)
+  (advice-remove 'beacon--vanish #'beacon359-tui-natural-finished)
   (message "B359-NATURAL-DONE ovs=%d listed=%S timerp=%S"
            (length (beacon359-tui-live-overlays))
            (and (timerp beacon--timer) (memq beacon--timer timer-list) t)
@@ -384,8 +385,7 @@ pub(super) const BEACON_TUI_PRELUDE: &str = r####"
         beacon359-tui-blinks 0)
   (call-interactively #'beacon-blink)
   (beacon359-tui-own-action)
-  (let ((observer (run-at-time 2.8 nil #'beacon359-tui-natural-finished)))
-    (push observer beacon359-tui-observer-timers))
+  (advice-add 'beacon--vanish :after #'beacon359-tui-natural-finished)
   (beacon359-tui-state "NATURAL-START"))
 
 (defun beacon359-tui-reset-automatic ()
@@ -704,6 +704,10 @@ pub(super) const BEACON_TUI_PRELUDE: &str = r####"
                (append beacon359-tui-owned-timers
                        beacon359-tui-observer-timers
                        (and (timerp beacon--timer) (list beacon--timer)))))
+        (attempt 'natural-advice
+                 (lambda ()
+                   (advice-remove 'beacon--vanish
+                                  #'beacon359-tui-natural-finished)))
         (attempt 'disable-mode
                  (lambda () (when (bound-and-true-p beacon-mode)
                               (beacon-mode -1))))

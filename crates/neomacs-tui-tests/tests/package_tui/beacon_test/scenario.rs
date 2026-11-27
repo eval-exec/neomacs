@@ -96,20 +96,18 @@ pub(super) fn run_body(
     // completely before the other: the shard-07 recording shows GNU blinking
     // at 125-127 s and Neo at 139-141 s, so a joint wait that starts after
     // both invocations can never see GNU's blink. Observe each editor's own
-    // blink in its own turn.
-    both(pair, "natural timer start", |session| {
+    // blink and its `beacon--vanish` terminal receipt in its own turn.
+    both(pair, "natural timer lifecycle", |session| {
         invoke(session, "beacon359-tui-natural", "B359-NATURAL-START");
         let _ = wait_for_background(session, "manual alpha", 7, 7, true);
         let _ = wait_for_background(session, "manual alpha", 7, 7, false);
-    })?;
-    for session in [&mut pair.gnu, &mut pair.neo] {
         wait_for(
             session,
-            Duration::from_secs(3),
-            "natural timer terminal state",
+            Duration::from_secs(8),
+            "natural timer terminal receipt",
             |grid| grid.iter().any(|row| row.contains("B359-NATURAL-DONE")),
         );
-    }
+    })?;
     record_pair(
         pair,
         "natural timer",
