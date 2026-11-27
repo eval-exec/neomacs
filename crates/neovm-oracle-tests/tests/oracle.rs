@@ -40,6 +40,9 @@ mod oracle_combination;
 #[path = "oracle_copy_lisp_face_defaults.rs"]
 mod oracle_copy_lisp_face_defaults;
 
+#[path = "oracle_b6_default_threads.rs"]
+mod oracle_b6_default_threads;
+
 #[path = "oracle_default_threads.rs"]
 mod oracle_default_threads;
 
