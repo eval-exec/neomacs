@@ -127,6 +127,20 @@ fn render_frame_window_contents(
     cursor_visible: bool,
     include_overlays: bool,
 ) -> Result<(), FrameRenderFailure> {
+    // A disabled effect family can never drain through its own emit -- every
+    // emit returns early when its config is disabled, before it would have
+    // drained anything -- so its state would freeze and the `needs_redraw`
+    // poll below would keep demanding frames at the animation rate forever
+    // (#857). Release that state once per presented frame, before the draw
+    // that the poll then reads.
+    //
+    // The effective config, not `renderer.effects`: the emits below read
+    // `effective_phys_cursor_effects`, and a per-window cursor profile can
+    // enable a family the global config disables.
+    render
+        .compositor
+        .renderer_effects
+        .release_disabled(frame.effective_phys_cursor_effects(&renderer.effects));
     scene::render_frame_root_glyphs(
         renderer,
         render,

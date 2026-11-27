@@ -78,6 +78,7 @@ fn disabled_cursor_comet_stops_demanding_frames() {
     // The user disables the effect mid-fade. The next presented frame runs the
     // same sequence the draw pass does: release disabled state, then emit.
     config.cursor_comet.enabled = false;
+    effects.release_disabled(&config);
     let ctx = test_ctx(&config, &frame_glyphs, &cursor);
     let _ = emit_cursor_comet(&ctx, &mut effects.fx.cursor_comet.positions);
 
@@ -89,4 +90,86 @@ fn disabled_cursor_comet_stops_demanding_frames() {
         !effects.needs_redraw(),
         "a disabled effect must not keep demanding frames (#857)"
     );
+}
+
+/// Every field a per-family predicate reads must be released by
+/// `release_disabled` when the family is disabled, or be listed below with the
+/// reason it needs no release.
+///
+/// This is the class guard, not a second copy of the behavioural row: adding a
+/// field to a predicate and forgetting the release re-opens #857 for that one
+/// family, and nothing else in the suite would notice, because that family's
+/// own emit test never disables it.
+#[test]
+fn every_predicate_field_is_released_when_disabled() {
+    /// Fields the predicates read that are not accumulated animation state.
+    const EXEMPT: &[(&str, &str)] = &[(
+        "has_animated_borders",
+        "frame-derived: set from the borders present in each frame, not accumulated state",
+    )];
+
+    const PREDICATES: &[&str] = &[
+        "pub fn cursor_effects_active(&self) -> bool {",
+        "pub fn window_effects_active(&self) -> bool {",
+        "pub fn text_effects_active(&self) -> bool {",
+        "pub fn scroll_effects_active(&self) -> bool {",
+        "pub fn decorative_effects_active(&self) -> bool {",
+        "pub fn has_transient_effects(&self) -> bool {",
+    ];
+    const RELEASE: &str = "pub fn release_disabled(&mut self, config: &EffectsConfig) {";
+
+    let source = include_str!("../../fx_state.rs");
+    let body_of = |needle: &str| -> String {
+        let start = source
+            .find(needle)
+            .unwrap_or_else(|| panic!("`{needle}` not found in fx_state.rs; rename or remove it"));
+        let rest = &source[start + needle.len()..];
+        let end = rest
+            .find("\n    }\n")
+            .unwrap_or_else(|| panic!("unterminated body for `{needle}`"));
+        rest[..end].to_string()
+    };
+
+    /// Split a leading identifier off `s`, returning it and the remainder with
+    /// at most one separating `.` removed.
+    fn take_ident(s: &str) -> (Option<String>, &str) {
+        let end = s
+            .find(|c: char| !c.is_alphanumeric() && c != '_')
+            .unwrap_or(s.len());
+        let ident = s[..end].to_string();
+        let after = &s[end..];
+        let after = after.strip_prefix('.').unwrap_or(after);
+        (if ident.is_empty() { None } else { Some(ident) }, after)
+    }
+
+    // `self.fx.<field>` or `self.fx.<field>.<part>` -> the key the release must mention.
+    fn read_keys(body: &str) -> Vec<String> {
+        let mut keys = Vec::new();
+        let mut rest = body;
+        while let Some(pos) = rest.find("self.fx.") {
+            rest = &rest[pos + "self.fx.".len()..];
+            let (field, after_field) = take_ident(rest);
+            rest = after_field;
+            let Some(field) = field else { continue };
+            // A second segment only counts when it is a field access, not a call or comparison.
+            let (part, _) = take_ident(rest);
+            keys.push(match part {
+                Some(part) => format!("{field}.{part}"),
+                None => field,
+            });
+        }
+        keys
+    }
+
+    let released = read_keys(&body_of(RELEASE));
+    for predicate in PREDICATES {
+        for key in read_keys(&body_of(predicate)) {
+            assert!(
+                released.contains(&key) || EXEMPT.iter().any(|(field, _)| *field == key.as_str()),
+                "`{key}` is read by `{predicate}` but `release_disabled` never releases it. \
+                 Add `release_effect_state_if_disabled!(config.<flag>, self.fx.{key}...)`, or add \
+                 it to EXEMPT with the reason it holds no accumulated animation state (#857)."
+            );
+        }
+    }
 }

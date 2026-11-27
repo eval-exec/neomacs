@@ -14,6 +14,7 @@
 //! (`aurora_start`, `render_start_time`, and the effect duration settings)
 //! live directly on `WgpuRenderer`, outside these structs.
 
+use crate::effect_config::EffectsConfig;
 use neomacs_display_protocol::frame_time::{EventTime, observe_platform_now};
 use neomacs_display_protocol::types::Rect;
 
@@ -566,6 +567,21 @@ pub struct RendererFrameEffects {
     pub(crate) clocks: Option<EffectClocks>,
 }
 
+/// Clear one effect family's animation state when its config disables it.
+///
+/// The clear is written at the call site instead of inside the macro because
+/// the states differ (`Vec::clear` for queues, `= None` for one-shots) and a
+/// reader comparing [`RendererFrameEffects::release_disabled`] with the
+/// per-family predicates above should see the exact field and the exact
+/// field it clears, one line each.
+macro_rules! release_effect_state_if_disabled {
+    ($flag:expr, $($clear:tt)+) => {
+        if !$flag.enabled {
+            $($clear)+
+        }
+    };
+}
+
 impl RendererFrameEffects {
     /// Whether the frame has any animating effect and therefore needs another
     /// frame. This is a pure poll of effect *state* — the demand is known
@@ -649,6 +665,136 @@ impl RendererFrameEffects {
         !self.fx.click_halo.halos.is_empty()
             || !self.fx.edge_snap.snaps.is_empty()
             || self.fx.error_pulse.started.is_some()
+    }
+
+    /// Release the accumulated animation state of every effect family that
+    /// `config` disables.
+    ///
+    /// Every drain of these states lives inside the family's own `emit_*`,
+    /// and every `emit_*` returns early when its config is disabled -- before
+    /// it would have drained anything. A disable that lands while a state is
+    /// populated therefore freezes it, and because the scheduler polls exactly
+    /// this state ([`Self::needs_redraw`] and the six per-family predicates) a
+    /// frozen family keeps demanding a frame at the animation rate forever,
+    /// with nothing left to draw (#857: ~120 presents/second on an idle
+    /// session whose effects were switched off).
+    ///
+    /// Call it once per presented frame, before the continuation decision in
+    /// `render_frame_window_contents`, with the same effective config the
+    /// emits will see -- a per-window cursor profile can enable a family the
+    /// global config disables.
+    ///
+    /// `has_animated_borders` is deliberately absent: it is frame-derived
+    /// (set from the borders present in each frame), not an accumulated
+    /// animation, so clearing it here would fight the frame that sets it.
+    /// `fx_state/tests/disabled_drain_test.rs` fails if a predicate gains a
+    /// field this function does not release.
+    pub fn release_disabled(&mut self, config: &EffectsConfig) {
+        release_effect_state_if_disabled!(config.cursor_wake, self.fx.cursor_wake.started = None);
+        release_effect_state_if_disabled!(
+            config.cursor_trail_fade,
+            self.fx.cursor_trail.positions.clear()
+        );
+        release_effect_state_if_disabled!(
+            config.cursor_magnetism,
+            self.fx.cursor_magnetism.entries.clear()
+        );
+        release_effect_state_if_disabled!(
+            config.cursor_comet,
+            self.fx.cursor_comet.positions.clear()
+        );
+        release_effect_state_if_disabled!(
+            config.cursor_particles,
+            self.fx.cursor_particles.entries.clear()
+        );
+        release_effect_state_if_disabled!(
+            config.cursor_ghost,
+            self.fx.cursor_ghost.entries.clear()
+        );
+        release_effect_state_if_disabled!(
+            config.cursor_lightning,
+            self.fx.cursor_lightning.start = None
+        );
+        release_effect_state_if_disabled!(
+            config.cursor_pendulum,
+            self.fx.pendulum.swing_start = None
+        );
+        release_effect_state_if_disabled!(
+            config.cursor_sonar_ping,
+            self.fx.sonar_ping.entries.clear()
+        );
+        release_effect_state_if_disabled!(
+            config.cursor_sparkle_burst,
+            self.fx.sparkle_burst.entries.clear()
+        );
+        release_effect_state_if_disabled!(
+            config.cursor_metronome,
+            self.fx.metronome.tick_start = None
+        );
+        release_effect_state_if_disabled!(
+            config.window_switch_fade,
+            self.fx.window_fade.active.clear()
+        );
+        release_effect_state_if_disabled!(config.title_fade, self.fx.title_fade.active.clear());
+        release_effect_state_if_disabled!(
+            config.border_transition,
+            self.fx.border_transition.transitions.clear()
+        );
+        release_effect_state_if_disabled!(
+            config.mode_line_transition,
+            self.fx.mode_line_fade.active.clear()
+        );
+        release_effect_state_if_disabled!(config.edge_glow, self.fx.edge_glow.entries.clear());
+        release_effect_state_if_disabled!(
+            config.typing_ripple,
+            self.fx.typing_ripple.active.clear()
+        );
+        release_effect_state_if_disabled!(config.line_animation, self.fx.line_anim.active.clear());
+        release_effect_state_if_disabled!(config.text_fade_in, self.fx.text_fade.active.clear());
+        release_effect_state_if_disabled!(
+            config.typing_heatmap,
+            self.fx.typing_heatmap.entries.clear()
+        );
+        release_effect_state_if_disabled!(
+            config.scroll_line_spacing,
+            self.fx.scroll_spacing.active.clear()
+        );
+        release_effect_state_if_disabled!(
+            config.scroll_velocity_fade,
+            self.fx.scroll_velocity.fades.clear()
+        );
+        release_effect_state_if_disabled!(
+            config.scroll_momentum,
+            self.fx.scroll_momentum.active.clear()
+        );
+        release_effect_state_if_disabled!(config.matrix_rain, self.fx.matrix_rain.columns.clear());
+        release_effect_state_if_disabled!(
+            config.lightning_bolt,
+            self.fx.lightning_bolt.segments.clear()
+        );
+        release_effect_state_if_disabled!(
+            config.cursor_ripple_ring,
+            self.fx.ripple_ring.start = None
+        );
+        release_effect_state_if_disabled!(config.cursor_shockwave, self.fx.shockwave.start = None);
+        release_effect_state_if_disabled!(config.cursor_bubble, self.fx.bubble.spawn_time = None);
+        release_effect_state_if_disabled!(config.cursor_firework, self.fx.firework.start = None);
+        release_effect_state_if_disabled!(config.cursor_snowflake, self.fx.snowflake.start = None);
+        release_effect_state_if_disabled!(config.rain_effect, self.fx.rain.drops.clear());
+        release_effect_state_if_disabled!(
+            config.cursor_ripple_wave,
+            self.fx.ripple_wave.waves.clear()
+        );
+        release_effect_state_if_disabled!(
+            config.resize_padding,
+            self.fx.resize_padding.started = None
+        );
+        release_effect_state_if_disabled!(config.click_halo, self.fx.click_halo.halos.clear());
+        release_effect_state_if_disabled!(config.edge_snap, self.fx.edge_snap.snaps.clear());
+        release_effect_state_if_disabled!(
+            config.cursor_error_pulse,
+            self.fx.error_pulse.started = None
+        );
     }
 
     // TRIGGER SIGNATURE: `now` should widen to `EventTime`. It still takes a
