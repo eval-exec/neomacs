@@ -38,6 +38,12 @@
     (pcase shape
       ('empty "")
       ('short "ab")
+      ;; One character, so a C-n with goal column 5 lands on its newline.
+      ('one-char "x")
+      ;; One space: trailing whitespace, which Doom shows by default.
+      ('one-space " ")
+      ;; A lone closing paren, as in the #855 reporter's workspace autosave.
+      ('one-paren ")")
       ('exact-width (make-string width ?x))
       ('width-minus-one (make-string (1- width) ?x))
       ('wrapped (make-string (+ width (/ width 2)) ?w))
@@ -68,9 +74,44 @@
     ;; A mode line taller than a text line, like doom-modeline's: the body
     ;; height stops being a multiple of the line height.
     (empty-tall-mode-line empty (neo-row-walk-tall-mode-line display-line-numbers-mode
-                                                             hl-line-mode)))
-  "(NAME LINE-99-SHAPE MODES): one buffer per case.
-Each MODE is called with 1 in the case's buffer.")
+                                                             hl-line-mode))
+    ;; #855: point lands on the newline of an empty or one-character line in
+    ;; the MIDDLE of the window.  No step scrolls, so every move is redrawn
+    ;; by the cursor-only path, which the bottom-row cases above never use.
+    (mid-empty-plain empty nil middle)
+    (mid-empty-hl-line empty (hl-line-mode) middle)
+    (mid-empty-numbers empty (display-line-numbers-mode) middle)
+    (mid-empty-tall-mode-line empty (neo-row-walk-tall-mode-line) middle)
+    (mid-empty-doom empty (display-line-numbers-mode hl-line-mode
+                                                     neo-row-walk-tall-mode-line)
+                    middle)
+    (mid-one-char-plain one-char nil middle)
+    (mid-one-char-doom one-char (display-line-numbers-mode hl-line-mode
+                                                           neo-row-walk-tall-mode-line)
+                       middle)
+    (mid-one-space-trailing one-space (neo-row-walk-trailing-whitespace) middle)
+    (mid-one-space-doom one-space (neo-row-walk-trailing-whitespace
+                                   display-line-numbers-mode hl-line-mode
+                                   neo-row-walk-tall-mode-line)
+                        middle)
+    (mid-one-paren-elisp-doom one-paren (neo-row-walk-elisp
+                                         neo-row-walk-trailing-whitespace
+                                         display-line-numbers-mode hl-line-mode
+                                         neo-row-walk-tall-mode-line)
+                              middle))
+  "(NAME LINE-99-SHAPE MODES [PLACEMENT]): one buffer per case.
+Each MODE is called with 1 in the case's buffer.  PLACEMENT `middle' puts
+line 98 in the middle of the window; otherwise it is on the last body row,
+so the first C-n scrolls.")
+
+(defun neo-row-walk-elisp (_arg)
+  "Edit the case's buffer in `emacs-lisp-mode' with font-lock on."
+  (emacs-lisp-mode)
+  (font-lock-mode 1))
+
+(defun neo-row-walk-trailing-whitespace (_arg)
+  "Show trailing whitespace in the case's buffer, as Doom does."
+  (setq show-trailing-whitespace t))
 
 (defun neo-row-walk-header-line (_arg)
   "Give the case's buffer a header line."
@@ -86,7 +127,7 @@ Each MODE is called with 1 in the case's buffer.")
 
 (defun neo-row-walk-setup (case)
   "Build CASE's buffer and leave point on line 98, column 5."
-  (pcase-let ((`(,name ,shape ,modes) case))
+  (pcase-let ((`(,name ,shape ,modes ,placement) case))
     (let ((buffer (get-buffer-create (format "row-walk-%s" name))))
       (switch-to-buffer buffer)
       (delete-other-windows)
@@ -108,8 +149,10 @@ Each MODE is called with 1 in the case's buffer.")
       (goto-char (point-min))
       (forward-line 97)
       (move-to-column 5)
-      ;; Line 98 on the last body row, so the first C-n has to scroll.
-      (recenter -1)
+      (if (eq placement 'middle)
+          (recenter)
+        ;; Line 98 on the last body row, so the first C-n has to scroll.
+        (recenter -1))
       (setq last-command nil)
       (neo-row-walk-emit
        (format "CURSOR-ROW-WALK-WINDOW %s %d %d %d %S %S"
