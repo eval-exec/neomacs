@@ -1,0 +1,23 @@
+# Standalone Loom model workspace for E5.4b (E5.3/E5.4 thread control:
+# wait_core.rs, condition_wait.rs, and driver_core.rs + control.rs).
+# Not a member of the main workspace (6052/6091 rule: zero cfg(loom) in
+# neovm-eval or neovm-core).
+[workspace]
+
+[package]
+name = "e5-thread-control-loom"
+version = "0.0.0"
+edition = "2024"
+publish = false
+autotests = false
+
+[[test]]
+name = "thread_control"
+path = "tests/thread_control.rs"
+
+[dependencies]
+loom = "=0.7.2"
+tracing = "=0.1.44"
+
+[profile.test]
+opt-level = 1
