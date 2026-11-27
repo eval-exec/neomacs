@@ -215,3 +215,20 @@ Self-vs-self guard stability check on **`9ca34ffd1c`** (`neomacs-perf suite scro
 - `verdict = passed`, `gate_metric = instructions`, `percent_change = +0.010%` (190× below the `+2.0%` budget)
 - Baseline 3 reps: `[137504302284, 137509977335, 137513126074]`
 - Candidate 3 reps: `[137523046138, 137524382930, 137546421972]`
+
+---
+
+## 6. Runtime Fix Progression
+
+Sections 1–5 above record the untouched pre-fix attribution (`8471a2c0d1` historical 6-cell matrix and `9ca34ffd1c` LBR / baseline). Each runtime fix slice below records its exact delta against its landing base.
+
+### Slice 1 — Right-Edge Truncation Marker GNU Parity + `O(text_len)` Single-Pass Trim (on `da4a1d4e58`)
+
+- **Behavioral fix (Section 4 resolved):** `DisplayRowColumnCount::from_text_area` and `trim_display_row_text_to_columns` (`crates/neomacs-layout-engine/src/display_row/builder.rs`, `crates/neomacs-layout-engine/src/display_row/special_glyphs.rs`) now measure strictly `GlyphArea::Text` (matching GNU Emacs 31.1 `src/xdisp.c:26608-26650`, which operates exclusively on `row->glyphs[TEXT_AREA]` / `row->used[TEXT_AREA]`), eliminating the blank gap before right display margins while keeping `$$` wide-char cut overwrite intact.
+- **Complexity fix:** Replaced the `O(popped * row_len)` rescan-per-`.pop()` loop with a single `O(text_len)` pass plus an ASCII width fast path in `base_width_cols` (`crates/neomacs-layout-engine/src/composition.rs`).
+- **Deterministic `EditLoop` `instructions` delta (`scrolling-long-lines-guard`, local `i9-14900K`, `provenance = local-UNTRUSTED`, `loadavg = 34.52 34.46 37.08`, `--samples 3 --cpu 0 --require-governor performance --hardware-counters --counter-scope edit-loop --allow-local`, both arms `portable_dump = loaded`):**
+  - `verdict = passed`, `gate_metric = instructions`, **`percent_change = -3.798%`** (`-5,223,734,317` instructions, `0.9620×`, paired deltas `-3.811%, -3.784%, -3.796%`)
+  - Baseline `da4a1d4e58` (`b62c36d7...`): **`137,532,973,298`** (`[137551418872, 137509757129, 137532973298]`, spread `0.030%`)
+  - Candidate Slice 1 (`9fda678f...`): **`132,309,238,981`** (`[132309238981, 132306722713, 132312580895]`, spread `0.004%`)
+  - Against attested GNU Emacs 31.1 (`compare scrolling-long-lines`, `provenance = local-UNTRUSTED`, `loadavg = 19.52 29.24 34.91`): GNU `66,112,992,103` (`spread 0.001%`) vs Slice 1 `132,322,028,476` (`spread 0.111%`), lowering Neo / GNU `instructions` from **`2.080×`** (`9ca34ffd1c`) to **`2.001×`** even while now rendering the 30 previously-truncated visible text columns per line.
+  - Note: Local `cpu-cycles` / wall-time numbers are load-sensitive (`provenance = local-UNTRUSTED`); calibrated idle-`TreeRoot` wall/CPU re-baseline (`2.738×` in Section 5) is unchanged by this local-only measurement and will be re-measured on idle `TreeRoot` once the remaining layout/retry slices land.

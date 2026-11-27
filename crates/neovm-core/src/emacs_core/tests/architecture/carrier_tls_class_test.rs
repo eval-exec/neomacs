@@ -1121,6 +1121,20 @@ const TLS_CLASSIFICATION: &[(&str, &str, TlsClass)] = &[
         "SERIAL_TURN_COLLECT_SCOPE",
         TlsClass::CarrierIntrinsic,
     ),
+    // CarrierIntrinsic: value-free lexical RAII park-bridge hook
+    // (`{ owner: ActiveSerialTurn { ctx_addr, heap, context_id }, key, bridge: ErasedParkBridge }`,
+    // zero Lisp Values, zero TaggedHeap pointers). Installed by
+    // `SerialParkScopeGuard::install`, taken out of TLS across
+    // `ErasedParkBridge::call` / `park_carrier_tls` (so parking and carrier
+    // replacement never observe a live park hook), restored only on `Ok` or
+    // `PreDetach`, left cleared on `PostDetach` fail-closed panic
+    // (L6.7c (c) F6.1), and cleared/restored on normal return or unwind by
+    // `SerialParkScopeGuard::drop`.
+    (
+        "neovm-eval/src/emacs_core/runtime/eval/parallel_entry/thread_control.rs",
+        "SERIAL_TURN_PARK_SCOPE",
+        TlsClass::CarrierIntrinsic,
+    ),
     (
         "neomacs/src/tty_output_windows.rs",
         "SESSION",

@@ -74,6 +74,9 @@ fn pipe_reader_into_file(reader: os_pipe::PipeReader) -> File {
 pub struct SpawnedChild {
     pub pid: u32,
     pub stdin: Option<PollRegistration<File>>,
+    /// Cached `O_NONBLOCK` state of `stdin` so `process-send-string` avoids
+    /// redundant `fcntl(F_GETFL/F_SETFL)` syscalls on every write.
+    pub stdin_nonblocking: bool,
     pub stdout: Option<File>,
     pub stderr: Option<File>,
     pub backend: ChildBackend,
@@ -104,6 +107,7 @@ impl SpawnedChild {
         Self {
             pid: child.id(),
             stdin,
+            stdin_nonblocking: false,
             stdout,
             stderr,
             backend: ChildBackend::Std(child),

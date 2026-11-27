@@ -143,6 +143,19 @@ struct SchedulerState {
     physical: BTreeMap<ThreadKey, OwnerLocation>,
 }
 
+impl SchedulerState {
+    fn baton_participants_empty(&self) -> bool {
+        self.senders.is_empty()
+    }
+
+    fn set_era_turn(&mut self, turn: GroupTurn) {
+        let EraState::EraOpen(era) = &mut self.era else {
+            std::process::abort();
+        };
+        era.turn = turn;
+    }
+}
+
 pub(crate) struct Control {
     metadata_changed: Condvar,
     _confined: PhantomData<Rc<()>>,
@@ -213,8 +226,12 @@ impl Control {
         unreachable!("compile-only main exclusion check")
     }
 
-    fn query_era_idle_for_deadlock(&self) -> bool {
-        unreachable!("compile-only QD2 deadlock check")
+    fn query_era_idle_for_deadlock(&self) -> Option<(u64, usize)> {
+        unreachable!("compile-only D8/QD2 deadlock check")
+    }
+
+    fn confirm_era_deadlock_after(_: &SchedulerState, _: u64, _: usize) -> bool {
+        unreachable!("compile-only D8 deadlock after-check")
     }
 
     fn eligible_runnable_count(_: &SchedulerState) -> usize {

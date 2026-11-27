@@ -104,10 +104,10 @@ pub fn builtin_frame_face_hash_table(
     args: Vec<Value>,
 ) -> EvalResult {
     crate::emacs_core::display::expect_args_range("frame--face-hash-table", &args, 0, 1)?;
-    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
     let frame_id = crate::emacs_core::window_cmds::resolve_frame_id_in_state(
         frames,
-        buffers,
+        &mut buffers,
         args.first(),
         crate::emacs_core::window_cmds::FrameDomain::Live,
     )?;

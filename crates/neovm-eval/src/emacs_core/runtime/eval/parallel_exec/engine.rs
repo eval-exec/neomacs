@@ -21,8 +21,8 @@
 
 use super::dispatch::primitive_slot_by_name;
 use super::effective::{
-    EffectivePlainKey, EffectiveRead, EffectiveWrite, EraId, PlainAccess, ShapeGeneration,
-    bound_effective, effective_plain_read, read_effective, write_effective,
+    EffectivePlainKey, EffectiveRead, EffectiveWrite, EraId, PlainAccess, PlainAccessError,
+    ShapeGeneration, bound_effective, effective_plain_read, read_effective, write_effective,
 };
 use super::frames::{
     FrameArena, FrameId, FramePublishError, HandlerMark, InterpFrame, OwnerRecordMark, PollBudget,
@@ -189,6 +189,9 @@ pub(crate) enum EngineFault {
     /// The dispatch table admitted an opcode, or an escape returned a
     /// completion shape, this executor has no arm for.
     DispatchContract(Op),
+    /// Canonical Plain symbol authority refused a read, write, or bound check
+    /// (E4-P2 Option A).
+    PlainAccess(PlainAccessError),
 }
 
 /// Why a plain slot access stopped before it touched the slot.
@@ -200,6 +203,8 @@ pub(crate) enum PlainStop {
     /// The serial-request poll refused. The caller abandons the access; a
     /// driving path unwinds through [`Stage1::settle`].
     Poll(RendezvousError),
+    /// Canonical Plain storage refused the authority call.
+    Access(PlainAccessError),
 }
 
 /// A finished step. `pending` is a [`RootHandle`] from [`RootRegistry::push`].
@@ -651,6 +656,9 @@ where
             Err(PlainStop::Poll(error)) => {
                 FormStep::Stop(StepOutcome::Fault(EngineFault::Poll(error)))
             }
+            Err(PlainStop::Access(error)) => {
+                FormStep::Stop(StepOutcome::Fault(EngineFault::PlainAccess(error)))
+            }
         }
     }
 
@@ -660,7 +668,7 @@ where
         key: &EffectivePlainKey<'_>,
     ) -> Result<EffectiveRead, PlainStop> {
         self.guard_key(key)?;
-        Ok(effective_plain_read(&self.slots, key))
+        effective_plain_read(&mut self.slots, key).map_err(PlainStop::Access)
     }
 
     fn eval_call(&mut self, ctx: &mut Context, form: Value) -> FormStep {

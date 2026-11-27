@@ -9,8 +9,48 @@ use super::*;
 use neovm_eval::host_effect::wake::{
     ControlDestination, ControlNudge, ControlNudgeOutcome, NotificationLatch,
 };
-use neovm_value::intern::intern;
+use neovm_value::intern::{SymId, intern};
 use neovm_value::tagged::value::SymbolMode;
+
+#[inline]
+fn sym_inhibit_quit() -> SymId {
+    static SYM: std::sync::OnceLock<SymId> = std::sync::OnceLock::new();
+    *SYM.get_or_init(|| intern("inhibit-quit"))
+}
+
+#[inline]
+fn sym_last_nonmenu_event() -> SymId {
+    static SYM: std::sync::OnceLock<SymId> = std::sync::OnceLock::new();
+    *SYM.get_or_init(|| intern("last-nonmenu-event"))
+}
+
+#[inline]
+fn sym_inhibit_null_byte_detection() -> SymId {
+    static SYM: std::sync::OnceLock<SymId> = std::sync::OnceLock::new();
+    *SYM.get_or_init(|| intern("inhibit-null-byte-detection"))
+}
+
+#[inline]
+fn sym_nil() -> SymId {
+    static SYM: std::sync::OnceLock<SymId> = std::sync::OnceLock::new();
+    *SYM.get_or_init(|| intern("nil"))
+}
+
+#[inline]
+fn sym_undecided() -> SymId {
+    static SYM: std::sync::OnceLock<SymId> = std::sync::OnceLock::new();
+    *SYM.get_or_init(|| intern("undecided"))
+}
+
+/// Whether `service_process_output_for_ids` needs to probe `waitpid(WNOHANG)`
+/// for a child process whose pipe is still open. When `note_child_signal` is
+/// installed on `SIGCHLD` (without `SA_NOCLDSTOP`), every child exit, stop, or
+/// continue sets `CHILD_SIGNAL_SEEN` before the status is visible to `waitpid`.
+#[inline]
+fn child_status_poll_needed() -> bool {
+    !crate::emacs_core::os_signal::child_signal_handler_installed()
+        || crate::emacs_core::os_signal::child_signal_seen()
+}
 
 use super::NetworkSocketIo;
 use super::reap::{ChildOwnershipIo, ReapableChildIo};
@@ -7417,6 +7457,20 @@ impl SystemProcessExt for ProcessManager {
         site: crate::emacs_core::wait::WaitStatusNotifySite,
     ) -> usize {
         let _ = site;
+        // On Unix, when `note_child_signal` is installed on `SIGCHLD` (without
+        // `SA_NOCLDSTOP`), every child exit, stop, or continue sets
+        // `CHILD_SIGNAL_SEEN` before the kernel exposes the status to
+        // `waitpid`. Skip the unconditional `HashMap` walk and `waitpid`
+        // syscalls when neither a `SIGCHLD` nor a deferred fallback child is
+        // pending. Unit tests that never call `os_signal::install()` keep the
+        // unconditional poll.
+        #[cfg(unix)]
+        if crate::emacs_core::os_signal::child_signal_handler_installed()
+            && !crate::emacs_core::os_signal::child_signal_seen()
+            && !super::reap::has_safe_point_fallback()
+        {
+            return 0;
+        }
         // The full walk covers every live child, so it is the point that
         // consumes the SIGCHLD latch. Clear before polling: a delivery during
         // the walk sets it again and stays visible to the next observation.
@@ -7433,10 +7487,37 @@ impl SystemProcessExt for ProcessManager {
         }
         population.sort_unstable_by_key(|child| std::cmp::Reverse(child.id()));
         let mut stamped = 0;
+        let mut rearm_signal_latch = false;
         for child in population {
+            // `poll_child_status_change` skips children that already have a
+            // transition awaiting sentinel publication (`status_notify_pending`).
+            // If a second SIGCHLD (e.g. SIGCONT or SIGKILL after SIGSTOP)
+            // coalesced into `CHILD_SIGNAL_SEEN == true` before we cleared the
+            // latch above, re-arm the latch so the next iteration of
+            // `record_and_notify_status_changes` reaps it once `status_notify`
+            // publishes the first transition.
+            let already_pending = self
+                .get(child.id())
+                .is_some_and(|proc| proc.status_notify_pending);
+            if already_pending {
+                rearm_signal_latch = true;
+                continue;
+            }
             if self.check_child_status_change(child.id()) {
                 stamped += 1;
+                // A non-terminal transition (stop/continue) leaves the child
+                // alive and may sit in front of a second coalesced transition
+                // already queued in the kernel; re-arm once so the follow-up
+                // pass drains it after `status_notify` publishes this one.
+                if self.get(child.id()).is_some_and(|proc| {
+                    !process_status_is_terminal_for_notify(&proc.pending_status)
+                }) {
+                    rearm_signal_latch = true;
+                }
             }
+        }
+        if rearm_signal_latch {
+            crate::emacs_core::os_signal::mark_child_signal_seen();
         }
         STATUS_NOTIFY_STAMPED.fetch_add(stamped as u64, std::sync::atomic::Ordering::Relaxed);
         stamped
@@ -7509,8 +7590,19 @@ impl SystemProcessExt for ProcessManager {
 pub(super) fn dedupe_process_ids(
     process_ids: impl IntoIterator<Item = ProcessId>,
 ) -> Vec<ProcessId> {
-    let mut unique = Vec::new();
-    for id in process_ids {
+    let mut iter = process_ids.into_iter();
+    let Some(first) = iter.next() else {
+        return Vec::new();
+    };
+    let Some(second) = iter.next() else {
+        return vec![first];
+    };
+    let mut unique = Vec::with_capacity(2 + iter.size_hint().0);
+    unique.push(first);
+    if second != first {
+        unique.push(second);
+    }
+    for id in iter {
         if !unique.contains(&id) {
             unique.push(id);
         }
@@ -7975,8 +8067,8 @@ impl ProcessContextExt for neovm_eval::emacs_core::eval::Context {
             .ok_or_else(|| signal("error", vec![Value::string("Process not found")]))?
             .coding_encode
             .as_bare_symbol_id()
-            .filter(|&symbol| symbol != neovm_value::intern::intern("nil"))
-            .unwrap_or_else(|| neovm_value::intern::intern("undecided"));
+            .filter(|&symbol| symbol != sym_nil())
+            .unwrap_or_else(sym_undecided);
         let state = ProcessEncodingState::initialized(
             neovm_text::encoding::RuntimeCodingSystem::from_symbol(coding),
             &self.coding_systems(),
@@ -8111,8 +8203,8 @@ impl ProcessContextExt for neovm_eval::emacs_core::eval::Context {
         self.push_specpdl_root(saved_deactivate_mark);
 
         let result = (|| {
-            self.try_specbind_or_unwind_to(specpdl_count, intern("inhibit-quit"), Value::T)?;
-            self.try_specbind_or_unwind_to(specpdl_count, intern("last-nonmenu-event"), Value::T)?;
+            self.try_specbind_or_unwind_to(specpdl_count, sym_inhibit_quit(), Value::T)?;
+            self.try_specbind_or_unwind_to(specpdl_count, sym_last_nonmenu_event(), Value::T)?;
             self.apply(callback, args)
         })();
         self.match_data = saved_match_data;
@@ -8386,7 +8478,7 @@ impl ProcessContextExt for neovm_eval::emacs_core::eval::Context {
         // GNU detect_coding reads the live DEFVAR_BOOL when output arrives,
         // independently of the binding at process creation or any lexenv.
         let global_null_inhibition = self
-            .forwarded_variable_value(intern("inhibit-null-byte-detection"))
+            .forwarded_variable_value(sym_inhibit_null_byte_detection())
             .unwrap_or(Value::NIL)
             .is_truthy();
         // Stage one: the read.  It borrows the `ProcessManager` mutably out of
@@ -8491,8 +8583,8 @@ impl ProcessContextExt for neovm_eval::emacs_core::eval::Context {
         let saved_match_data = self.match_data.clone();
         let specpdl_count = self.specpdl().len();
         let decoded = (|| {
-            self.try_specbind_or_unwind_to(specpdl_count, intern("inhibit-quit"), Value::T)?;
-            self.try_specbind_or_unwind_to(specpdl_count, intern("last-nonmenu-event"), Value::T)?;
+            self.try_specbind_or_unwind_to(specpdl_count, sym_inhibit_quit(), Value::T)?;
+            self.try_specbind_or_unwind_to(specpdl_count, sym_last_nonmenu_event(), Value::T)?;
             coding.decode_in_context(self, &bytes, &mut decoder, block)
         })();
         // The `?` is deliberately AFTER the unwind, not on the call: a
@@ -8844,7 +8936,14 @@ impl ProcessContextExt for neovm_eval::emacs_core::eval::Context {
         &mut self,
         target_process: Option<ProcessId>,
     ) -> Result<ProcessOutputServiceOutcome, Flow> {
+        if !self.processes().has_unnotified_status_change() {
+            return Ok(ProcessOutputServiceOutcome::default());
+        }
         let visit = self.processes().processes_with_unnotified_status_change();
+        // GNU src/process.c:7885, `update_tick = process_tick;`, before running
+        // sentinels so any status change produced by a sentinel advances
+        // `process_tick` past `update_tick` and triggers another walk.
+        self.processes_mut().mark_status_notify_walked();
         if visit.is_empty() {
             return Ok(ProcessOutputServiceOutcome::default());
         }
@@ -9224,6 +9323,7 @@ impl ProcessContextExt for neovm_eval::emacs_core::eval::Context {
                 .is_some_and(process_defers_status_poll_while_readable_pty);
             if !defer_status_poll_for_readable_pty
                 && (publish_status_before_readable_output || !has_readable_process_io)
+                && (child_status_poll_needed() || !has_readable_process_io)
                 && self.processes_mut().check_child_status_change(pid)
             {
                 if self
@@ -9531,10 +9631,11 @@ impl ProcessContextExt for neovm_eval::emacs_core::eval::Context {
                 // (accept-process-output p 1))` idiom, 60 runs: the sentinel is
                 // lost 0/60 in GNU and was lost 4/60 here until this follow-up
                 // covered the initial poll too.
-                let publish_same_pass_after_output = self
-                    .processes()
-                    .get(pid)
-                    .is_some_and(process_publishes_status_after_ready_output);
+                let publish_same_pass_after_output = (child_status_poll_needed() || saw_pty_eof)
+                    && self
+                        .processes()
+                        .get(pid)
+                        .is_some_and(process_publishes_status_after_ready_output);
                 let mut status_changed = publish_same_pass_after_output
                     && self.processes_mut().check_child_status_change(pid);
                 if !status_changed && publish_same_pass_after_output {
@@ -9584,6 +9685,9 @@ impl ProcessContextExt for neovm_eval::emacs_core::eval::Context {
             // ordering only when bytes are actually pending, not for no-output
             // exits such as `sh -c "exit 7"`.
             if (!publish_status_before_readable_output || has_readable_process_io)
+                && (child_status_poll_needed()
+                    || saw_pty_eof
+                    || !publish_status_before_readable_output)
                 && self.processes_mut().check_child_status_change(pid)
             {
                 if self

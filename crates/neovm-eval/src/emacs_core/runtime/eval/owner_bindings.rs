@@ -827,6 +827,48 @@ impl OwnerSlabRegistry {
         slab
     }
 
+    /// Remove and deallocate a retiring owner's slab from this World's
+    /// registry (E5.3b G5 Step 5).
+    ///
+    /// Returns `true` when `slab` was registered with no active parallel
+    /// [`OwnerSlabLease`] and has now been removed and freed. Returns `false`
+    /// when `slab` is not registered or a leaked lease still marks
+    /// `parallel_lease_active` (leaving the allocation owned by this registry
+    /// until `OwnerSlabRegistry::drop` to prevent use-after-free).
+    ///
+    /// # Safety
+    /// - The caller must hold exclusive World authority (an active serial turn
+    ///   ticket or the World's Baton) on this OS thread, excluding any
+    ///   concurrent `OwnerSlabRegistry` access or collector root walk.
+    /// - Both the retiring `Context` (whose `OwnerSlot` named `slab`) and any
+    ///   [`OwnerSlabHandle`] minted for `slab` must already have been dropped
+    ///   before this call so no live pointer can dereference `slab` afterward.
+    pub(crate) unsafe fn unregister(&mut self, slab: NonNull<OwnerSlab>) -> bool {
+        let Some(pos) = self.slabs.iter().position(|entry| *entry == slab) else {
+            return false;
+        };
+        // SAFETY: `slab` is currently owned by `self.slabs`, so its allocation
+        // is live; only the atomic `parallel_lease_active` flag is loaded here
+        // without materializing `&OwnerSlab`.
+        let lease_active = unsafe {
+            (*slab.as_ptr())
+                .parallel_lease_active
+                .load(Ordering::Acquire)
+        };
+        if lease_active {
+            return false;
+        }
+        let removed = self.slabs.swap_remove(pos);
+        // SAFETY: `removed` was allocated via `Box::leak(Box::new(...))` in
+        // `Self::register`, has just been removed from `self.slabs` so
+        // `OwnerSlabRegistry::drop` will not free it again, has
+        // `!parallel_lease_active`, and this method's `# Safety` preconditions
+        // guarantee that exclusive World authority is held and no `Context` or
+        // `OwnerSlabHandle` referencing `removed` survives.
+        drop(unsafe { Box::from_raw(removed.as_ptr()) });
+        true
+    }
+
     /// Visit every registered slab's values (the collector's root phase).
     #[doc(hidden)]
     pub fn trace_roots(&self, heap: usize, visit: &mut dyn FnMut(Value)) {
@@ -927,6 +969,14 @@ impl OwnerSlot {
     #[doc(hidden)]
     pub fn is_dormant(&self) -> bool {
         self.0.is_none()
+    }
+
+    /// Raw pointer to this owner's slab allocation, if one was registered.
+    /// Used solely by G5 Step 5 retirement to identify the slab to remove from
+    /// `OwnerSlabRegistry` after this `Context` has been dropped.
+    #[inline]
+    pub(crate) fn raw_slab_ptr(&self) -> Option<NonNull<OwnerSlab>> {
+        self.0
     }
 
     /// Whether a parallel [`OwnerSlabLease`] currently marks this slab active

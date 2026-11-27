@@ -63,6 +63,10 @@ impl PresentedInteractions {
         id
     }
 
+    pub fn last_issued(&self) -> u64 {
+        self.next_presentation.saturating_sub(1)
+    }
+
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn register_mouse_target(
         &mut self,

@@ -1079,8 +1079,8 @@ mod unit_runtime {
     }
 
     fn seed_batch_startup_frame(ctx: &mut Context) -> FrameId {
-        let (frames, buffers) = ctx.frame_manager_and_buffers_mut();
-        crate::emacs_core::window_cmds::seed_batch_startup_frame_in_state(frames, buffers)
+        let (frames, mut buffers) = ctx.frame_manager_and_buffer_view_mut();
+        crate::emacs_core::window_cmds::seed_batch_startup_frame_in_state(frames, &mut buffers)
     }
 
     fn configure_window_system_runtime(

@@ -1850,7 +1850,11 @@ fn l67b_a_collection_blocks_idle_and_raises_the_waiter_word() {
             });
             assert_eq!(driver.run(), DriverEnd::Drained);
             let (queued, before) = runner.join().expect("the group");
-            assert!(!queued, "a queued collection is not idle");
+            assert_eq!(
+                queued,
+                crate::emacs_core::eval::parallel_entry::driver_core::IdleStatus::Busy,
+                "a queued collection is not idle"
+            );
             assert!(!before, "nothing waited when the World was lent");
         });
     });
@@ -2043,7 +2047,11 @@ fn l67a_collection_request_rides_batch_stop_once() {
                         let idle = barrier_rx
                             .recv_timeout(BOUND)
                             .expect("driver drained Collect during Pending");
-                        assert!(!idle, "driver must not be idle while stop is pending");
+                        assert_eq!(
+                            idle,
+                            crate::emacs_core::eval::parallel_entry::driver_core::IdleStatus::Busy,
+                            "driver must not be idle while stop is pending"
+                        );
                         l_go_tx.send(()).expect("release L");
                         return;
                     }
@@ -2568,7 +2576,11 @@ fn l67a_slow_owner_delays_empty_ring_collect_then_completes() {
                 let idle = barrier_rx
                     .recv_timeout(BOUND)
                     .expect("driver drained Collect 2 during Pending");
-                assert!(!idle, "driver must not be idle while stop is pending");
+                assert_eq!(
+                    idle,
+                    crate::emacs_core::eval::parallel_entry::driver_core::IdleStatus::Busy,
+                    "driver must not be idle while stop is pending"
+                );
                 l_go_tx.send(()).expect("release L");
             });
             assert_eq!(driver.run(), DriverEnd::Drained);

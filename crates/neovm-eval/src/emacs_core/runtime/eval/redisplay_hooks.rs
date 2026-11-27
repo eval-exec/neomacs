@@ -550,8 +550,9 @@ impl Context {
             .get_mut(frame)
             .and_then(|frame| frame.find_window_mut(window))
         {
+            let mut buffers = neovm_edit::buffer::BufferManagerMut::new(&mut self.edit.buffers);
             crate::emacs_core::eval::data::window_markers::set_window_start_with_marker(
-                &mut self.edit.buffers,
+                &mut buffers,
                 window,
                 start,
             );
@@ -1353,9 +1354,11 @@ impl RedisplayTransaction<'_> {
             );
         }
         if let Some(frame) = self.eval.frames.selected_frame().map(|frame| frame.id) {
+            let mut buffers =
+                neovm_edit::buffer::BufferManagerMut::new(&mut self.eval.edit.buffers);
             super::display_query_hooks::remember_selected_window_point(
                 &mut self.eval.frames,
-                &mut self.eval.edit.buffers,
+                &mut buffers,
                 frame,
             );
         }
@@ -1609,8 +1612,10 @@ impl<'a> MiniDisplaySource<'a> {
                     // saved window snapshot roots those marker objects.
                     *position_markers = crate::emacs_core::eval::data::window_state::WindowPositionMarkerState::Detached;
                 }
+                let mut buffers =
+                    neovm_edit::buffer::BufferManagerMut::new(&mut scope.eval.edit.buffers);
                 crate::emacs_core::eval::data::window_markers::attach_window_position_markers(
-                    &mut scope.eval.edit.buffers,
+                    &mut buffers,
                     window,
                 );
             }
@@ -1639,8 +1644,10 @@ impl<'a> MiniDisplaySource<'a> {
                 .get_mut(self.request.frame)
                 .and_then(|frame| frame.find_window_mut(self.request.window))
             {
+                let mut buffers =
+                    neovm_edit::buffer::BufferManagerMut::new(&mut self.eval.edit.buffers);
                 crate::emacs_core::eval::data::window_markers::unchain_window_markers(
-                    &mut self.eval.edit.buffers,
+                    &mut buffers,
                     window,
                 );
                 window.reset_mode_line_base();
@@ -1662,17 +1669,17 @@ impl<'a> MiniDisplaySource<'a> {
                     *force_start = old_force_start;
                 }
                 crate::emacs_core::eval::data::window_markers::set_window_start_with_marker(
-                    &mut self.eval.edit.buffers,
+                    &mut buffers,
                     window,
                     start,
                 );
                 crate::emacs_core::eval::data::window_markers::set_window_point_with_marker(
-                    &mut self.eval.edit.buffers,
+                    &mut buffers,
                     window,
                     point,
                 );
                 crate::emacs_core::eval::data::window_markers::set_window_old_point_with_marker(
-                    &mut self.eval.edit.buffers,
+                    &mut buffers,
                     window,
                     old_point,
                 );

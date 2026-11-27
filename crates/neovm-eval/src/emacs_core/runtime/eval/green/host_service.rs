@@ -8,7 +8,7 @@
 
 use super::super::world::{TurnRight, WorldLease};
 use super::scheduler::ThreadKey;
-pub(super) use crate::host_effect::contracts::HostRequestKey;
+pub(crate) use crate::host_effect::contracts::HostRequestKey;
 use crate::host_effect::contracts::{
     HostRequestGeneration, HostRequestId, HostSessionId, RecordKind, RegisteredRecord,
     RegisteredRootRef, RootRecordId,

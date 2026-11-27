@@ -116,19 +116,30 @@ impl PlainAccess for TestSlots {
         }
     }
 
-    fn canonical_read(&self, _sym: neovm_value::intern::SymId) -> Value {
+    fn canonical_read(
+        &mut self,
+        _sym: neovm_value::intern::SymId,
+    ) -> Result<Value, PlainAccessError> {
         self.canonical_reads.set(self.canonical_reads.get() + 1);
-        self.canonical
+        Ok(self.canonical)
     }
 
-    fn canonical_write(&mut self, _sym: neovm_value::intern::SymId, value: Value) {
+    fn canonical_write(
+        &mut self,
+        _sym: neovm_value::intern::SymId,
+        value: Value,
+    ) -> Result<(), PlainAccessError> {
         self.canonical_writes.set(self.canonical_writes.get() + 1);
         self.trace.borrow_mut().push("canonical");
         self.canonical = value;
+        Ok(())
     }
 
-    fn canonical_bound(&self, _sym: neovm_value::intern::SymId) -> bool {
-        self.canonical_bound
+    fn canonical_bound(
+        &mut self,
+        _sym: neovm_value::intern::SymId,
+    ) -> Result<bool, PlainAccessError> {
+        Ok(self.canonical_bound)
     }
 
     /// This double models no watchers, no retired projection and no dead
@@ -408,12 +419,12 @@ fn from_admission_mints_the_key_and_carries_the_refusal() {
 #[test]
 fn composed_read_owner_bound_never_canonical() {
     let sym = plain_sym("bound");
-    let slots = TestSlots::access(bound(5), Value::fixnum(99), mint(sym));
+    let mut slots = TestSlots::access(bound(5), Value::fixnum(99), mint(sym));
     let key = EffectivePlainKey::from_admission(&mint(sym), EraId::new(3), ShapeGeneration::new(7))
         .expect("mint");
     assert_eq!(
-        effective_plain_read(&slots, &key),
-        EffectiveRead::OwnerBound(Value::fixnum(5))
+        effective_plain_read(&mut slots, &key),
+        Ok(EffectiveRead::OwnerBound(Value::fixnum(5)))
     );
     assert_eq!(slots.canonical_reads(), 0, "canonical storage is not read");
 }
@@ -421,12 +432,12 @@ fn composed_read_owner_bound_never_canonical() {
 #[test]
 fn composed_read_no_binding_delegates_canonical_once() {
     let sym = plain_sym("unbound");
-    let slots = TestSlots::access(SlotState::NoBinding, Value::fixnum(41), mint(sym));
+    let mut slots = TestSlots::access(SlotState::NoBinding, Value::fixnum(41), mint(sym));
     let key = EffectivePlainKey::from_admission(&mint(sym), EraId::new(3), ShapeGeneration::new(7))
         .expect("mint");
     assert_eq!(
-        effective_plain_read(&slots, &key),
-        EffectiveRead::Canonical(Value::fixnum(41))
+        effective_plain_read(&mut slots, &key),
+        Ok(EffectiveRead::Canonical(Value::fixnum(41)))
     );
     assert_eq!(slots.canonical_reads(), 1);
 }
@@ -434,14 +445,17 @@ fn composed_read_no_binding_delegates_canonical_once() {
 #[test]
 fn composed_read_void_is_unbound_not_canonical() {
     let sym = plain_sym("void");
-    let slots = TestSlots::access(
+    let mut slots = TestSlots::access(
         SlotState::Bound(SlotValue::new(Value::UNBOUND)),
         Value::fixnum(1),
         mint(sym),
     );
     let key = EffectivePlainKey::from_admission(&mint(sym), EraId::new(3), ShapeGeneration::new(7))
         .expect("mint");
-    assert_eq!(effective_plain_read(&slots, &key), EffectiveRead::OwnerVoid);
+    assert_eq!(
+        effective_plain_read(&mut slots, &key),
+        Ok(EffectiveRead::OwnerVoid)
+    );
     assert_eq!(
         slots.canonical_reads(),
         0,
@@ -457,7 +471,7 @@ fn composed_write_bound_replaces_slot_not_canonical() {
         .expect("mint");
     assert_eq!(
         effective_plain_write(&mut slots, &key, Value::fixnum(6)),
-        EffectiveWrite::OwnerSlot
+        Ok(EffectiveWrite::OwnerSlot)
     );
     assert_eq!(slots.canonical_writes(), 0);
     assert_slot(slots.slot_state(TlsIndex::VOID, Channel::Default), Some(6));
@@ -472,7 +486,7 @@ fn composed_write_unbound_writes_canonical() {
         .expect("mint");
     assert_eq!(
         effective_plain_write(&mut slots, &key, Value::fixnum(8)),
-        EffectiveWrite::Canonical
+        Ok(EffectiveWrite::Canonical)
     );
     assert_eq!(slots.canonical_writes(), 1);
     assert_eq!(slots.canonical, Value::fixnum(8));
@@ -491,17 +505,17 @@ fn composed_default_ops_use_the_default_channel() {
     // `(1 t t 1)`), never the canonical 9.
     assert_eq!(key.channel(), Channel::Default);
     assert_eq!(
-        effective_plain_read(&slots, &key),
-        EffectiveRead::OwnerBound(Value::fixnum(30))
+        effective_plain_read(&mut slots, &key),
+        Ok(EffectiveRead::OwnerBound(Value::fixnum(30)))
     );
     assert_eq!(
-        effective_plain_default_read(&slots, &key),
-        EffectiveRead::OwnerBound(Value::fixnum(30))
+        effective_plain_default_read(&mut slots, &key),
+        Ok(EffectiveRead::OwnerBound(Value::fixnum(30)))
     );
     assert_eq!(slots.canonical_reads(), 0);
     assert_eq!(
         effective_plain_default_write(&mut slots, &key, Value::fixnum(31)),
-        EffectiveWrite::OwnerSlot
+        Ok(EffectiveWrite::OwnerSlot)
     );
     assert_eq!(slots.canonical_writes(), 0);
     assert_slot(slots.slot_state(TlsIndex::VOID, Channel::Default), Some(31));
@@ -510,26 +524,26 @@ fn composed_default_ops_use_the_default_channel() {
 #[test]
 fn composed_bound_treats_void_as_unbound() {
     let sym = plain_sym("bound_p");
-    let slots = TestSlots::access(
+    let mut slots = TestSlots::access(
         SlotState::Bound(SlotValue::new(Value::UNBOUND)),
         Value::fixnum(1),
         mint(sym),
     );
     let key = EffectivePlainKey::from_admission(&mint(sym), EraId::new(3), ShapeGeneration::new(7))
         .expect("mint");
-    assert!(!effective_plain_bound(&slots, &key));
-    assert!(!effective_plain_default_bound(&slots, &key));
+    assert_eq!(effective_plain_bound(&mut slots, &key), Ok(false));
+    assert_eq!(effective_plain_default_bound(&mut slots, &key), Ok(false));
 
-    let slots = TestSlots::access(bound(1), Value::fixnum(1), mint(sym));
-    assert!(effective_plain_bound(&slots, &key));
-    assert!(effective_plain_default_bound(&slots, &key));
+    let mut slots = TestSlots::access(bound(1), Value::fixnum(1), mint(sym));
+    assert_eq!(effective_plain_bound(&mut slots, &key), Ok(true));
+    assert_eq!(effective_plain_default_bound(&mut slots, &key), Ok(true));
 
     // No owner binding and no canonical binding: both composed bound
     // questions are false (GNU `default-boundp` on a void Plain variable).
     let mut slots = TestSlots::access(SlotState::NoBinding, Value::NIL, mint(sym));
     slots.canonical_bound = false;
-    assert!(!effective_plain_bound(&slots, &key));
-    assert!(!effective_plain_default_bound(&slots, &key));
+    assert_eq!(effective_plain_bound(&mut slots, &key), Ok(false));
+    assert_eq!(effective_plain_default_bound(&mut slots, &key), Ok(false));
 }
 
 #[test]
@@ -687,7 +701,7 @@ fn composed_unbind_of_a_record_that_is_not_the_top_takes_nothing_and_changes_not
     // The outer record, under the inner one.
     assert_eq!(
         effective_plain_unbind(&mut slots, outer),
-        Err(RecordMismatch)
+        Err(PlainUnbindError::RecordMismatch)
     );
     assert_slot(slot(&slots), Some(7));
     assert_eq!(slots.trace(), Vec::<&str>::new());
@@ -705,7 +719,7 @@ fn composed_unbind_of_a_record_that_is_not_the_top_takes_nothing_and_changes_not
     // A taken record, named again.
     assert_eq!(
         effective_plain_unbind(&mut slots, inner),
-        Err(RecordMismatch)
+        Err(PlainUnbindError::RecordMismatch)
     );
     assert_slot(slot(&slots), Some(4));
     assert_eq!(slots.trace(), Vec::<&str>::from(["slot"]));

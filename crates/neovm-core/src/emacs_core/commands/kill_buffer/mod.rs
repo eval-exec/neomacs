@@ -263,8 +263,8 @@ pub(crate) fn builtin_kill_buffer(
     // until retirement: an escaping unlock handler observes the live session.
     if eval.edit.buffers.current_buffer_id() == Some(id) {
         let other = {
-            let (frames, buffers) = eval.frame_manager_and_buffers_mut();
-            other_buffer_impl_in_state(frames, buffers, vec![Value::make_buffer(id)])?
+            let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
+            other_buffer_impl_in_state(frames, &mut buffers, vec![Value::make_buffer(id)])?
         };
         if let Some(next) = other.as_buffer_id() {
             eval.set_current_buffer_unrecorded(next)?;
@@ -297,8 +297,8 @@ pub(crate) fn builtin_kill_buffer(
         .and_then(|window| eval.frame_manager().window_buffer_id(window));
     if current.is_some() && current == minibuffer {
         let other = {
-            let (frames, buffers) = eval.frame_manager_and_buffers_mut();
-            other_buffer_impl_in_state(frames, buffers, vec![Value::make_buffer(id)])?
+            let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
+            other_buffer_impl_in_state(frames, &mut buffers, vec![Value::make_buffer(id)])?
         };
         if other.as_buffer_id() == Some(id) {
             return Ok(Value::NIL);
@@ -449,10 +449,10 @@ pub(crate) fn builtin_kill_buffer(
                     Some(replacement) => replacement,
                     None => {
                         let other = {
-                            let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+                            let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
                             other_buffer_impl_in_state(
                                 frames,
-                                buffers,
+                                &mut buffers,
                                 vec![Value::make_buffer(previous)],
                             )?
                         };

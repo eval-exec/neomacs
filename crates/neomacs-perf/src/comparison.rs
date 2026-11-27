@@ -626,8 +626,18 @@ pub enum ComparisonRejection {
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum ComparisonVerdict {
-    Valid { summary: ComparisonMetricSummary },
-    Rejected { reasons: Vec<ComparisonRejection> },
+    Valid {
+        summary: ComparisonMetricSummary,
+        /// Non-gating context summaries (for example, the scenario's wall/CPU
+        /// time and CPU cycles with full median + MAD spread when `summary`
+        /// gates on `MetricName::Instructions`). Reported for human context;
+        /// never used as a pass/fail gate.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        context_metrics: Vec<ComparisonMetricSummary>,
+    },
+    Rejected {
+        reasons: Vec<ComparisonRejection>,
+    },
 }
 
 impl ComparisonVerdict {
@@ -999,8 +1009,21 @@ pub(crate) fn evaluate_comparison(
         return ComparisonVerdict::Rejected { reasons };
     }
 
+    let summary = summarize_metric_samples(input.primary_metric, expected_unit, &samples);
+    let context_metrics = collect_context_metrics(input, observations);
+    ComparisonVerdict::Valid {
+        summary,
+        context_metrics,
+    }
+}
+
+fn summarize_metric_samples(
+    metric: MetricName,
+    unit: MetricUnit,
+    samples: &[(ComparisonRunRole, u32, f64)],
+) -> ComparisonMetricSummary {
     let mut paired_values = BTreeMap::new();
-    for &(role, sample_index, value) in &samples {
+    for &(role, sample_index, value) in samples {
         let pair = paired_values.entry(sample_index).or_insert([None, None]);
         pair[match role {
             ComparisonRunRole::Baseline => 0,
@@ -1039,21 +1062,89 @@ pub(crate) fn evaluate_comparison(
     let baseline_mad = median_absolute_deviation(&baseline_samples, baseline_median);
     let candidate_mad = median_absolute_deviation(&candidate_samples, candidate_median);
     let ratio = candidate_median / baseline_median;
-    ComparisonVerdict::Valid {
-        summary: ComparisonMetricSummary {
-            metric: input.primary_metric,
-            unit: expected_unit,
-            baseline_samples,
-            candidate_samples,
-            paired_samples,
-            baseline_median,
-            candidate_median,
-            baseline_median_absolute_deviation: baseline_mad,
-            candidate_median_absolute_deviation: candidate_mad,
-            candidate_to_baseline_ratio: ratio,
-            percent_change: (ratio - 1.0) * 100.0,
-        },
+    ComparisonMetricSummary {
+        metric,
+        unit,
+        baseline_samples,
+        candidate_samples,
+        paired_samples,
+        baseline_median,
+        candidate_median,
+        baseline_median_absolute_deviation: baseline_mad,
+        candidate_median_absolute_deviation: candidate_mad,
+        candidate_to_baseline_ratio: ratio,
+        percent_change: (ratio - 1.0) * 100.0,
     }
+}
+
+fn is_cpu_time_metric(metric: MetricName) -> bool {
+    matches!(
+        metric,
+        MetricName::PerEditCpuTime
+            | MetricName::PerCompletionCpuTime
+            | MetricName::PerBytecodeCallCpuTime
+            | MetricName::PerOperationCpuTime
+            | MetricName::WorkloadCpuTime
+    )
+}
+
+/// Summarize non-gating secondary metrics that are present with valid positive
+/// values on every observation: the scenario's default wall/CPU metric (when
+/// gating on instructions), wall time (`WorkloadWallTime` / `ProcessWallTime`)
+/// for CPU-time-primary scenarios so every converted row reports wall-time
+/// spread alongside CPU time, retired instructions (when gating on latency
+/// with hardware counters enabled), and CPU cycles.
+fn collect_context_metrics(
+    input: &ComparisonInput,
+    observations: &[ComparisonObservation],
+) -> Vec<ComparisonMetricSummary> {
+    let scenario_primary = scenario(input.scenario).primary_metric;
+    let mut candidates = Vec::with_capacity(5);
+    let mut push_unique = |metric: MetricName| {
+        if metric != input.primary_metric && !candidates.contains(&metric) {
+            candidates.push(metric);
+        }
+    };
+    push_unique(scenario_primary);
+    if is_cpu_time_metric(scenario_primary) {
+        push_unique(MetricName::WorkloadWallTime);
+        push_unique(MetricName::ProcessWallTime);
+    }
+    push_unique(MetricName::Instructions);
+    push_unique(MetricName::CpuCycles);
+    let expected_count = input.samples_per_side.get() as usize * 2;
+    let mut summaries = Vec::new();
+    for metric in candidates {
+        let unit = metric.canonical_unit();
+        let mut samples = Vec::with_capacity(expected_count);
+        let mut all_present = true;
+        for observation in observations {
+            let Some(measurements) = observation.verdict.measurements() else {
+                all_present = false;
+                break;
+            };
+            let Some(measurement) = measurements.iter().find(|m| m.name == metric) else {
+                all_present = false;
+                break;
+            };
+            if !measurement.value.is_finite()
+                || measurement.value <= 0.0
+                || measurement.unit != unit
+            {
+                all_present = false;
+                break;
+            }
+            samples.push((
+                observation.run.role,
+                observation.run.sample_index,
+                measurement.value,
+            ));
+        }
+        if all_present && samples.len() == expected_count {
+            summaries.push(summarize_metric_samples(metric, unit, &samples));
+        }
+    }
+    summaries
 }
 
 fn validate_guard_run_environment(

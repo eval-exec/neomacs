@@ -1,0 +1,10 @@
+error[E0616]: field `parent` of struct `CharTableObj` is private
+ --> tests/chartable_write_ui/direct_parent_store.rs:8:10
+  |
+8 |         .parent
+  |          ^^^^^^ private field
+  |
+help: a method `parent` also exists, call it with parentheses
+  |
+8 |         .parent()
+  |                ++

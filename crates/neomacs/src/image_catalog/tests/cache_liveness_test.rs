@@ -293,12 +293,14 @@ fn owned_cache_policy_fixture() {
             // This is the evaluator's real clear/read pair before it could
             // publish later first-frame readiness. Nobody services commands.
             assert!(!state.renderer_can_retain_images());
-            let _ = catalog.invalidate(ImageInvalidation::All);
+            let _ = catalog.invalidate(ImageInvalidation::All {
+                cleared_after_presentation: 0,
+            });
             assert_eq!(catalog.cached_size_bytes(), 0);
             assert!(started.elapsed() < Duration::from_secs(2));
             assert!(matches!(
                 receiver.try_recv().unwrap(),
-                RenderCommand::Asset(AssetCommand::ClearImageCache { through: 0 })
+                RenderCommand::Asset(AssetCommand::ClearImageCache { through: 0, .. })
             ));
             assert!(
                 receiver.is_empty(),
@@ -369,7 +371,9 @@ fn owned_cache_policy_fixture() {
                     .unwrap();
             }
             assert!(receiver.is_full());
-            let _ = catalog.invalidate(ImageInvalidation::All);
+            let _ = catalog.invalidate(ImageInvalidation::All {
+                cleared_after_presentation: 0,
+            });
             assert!(started.elapsed() >= CACHE_USAGE_SYNC_DEADLINE);
             assert_eq!(
                 receiver.len(),
@@ -391,7 +395,7 @@ fn owned_cache_policy_fixture() {
                 assert!(
                     matches!(
                         first,
-                        RenderCommand::Asset(AssetCommand::ClearImageCache { through: 0 })
+                        RenderCommand::Asset(AssetCommand::ClearImageCache { through: 0, .. })
                     ),
                     "a pending clear must precede the usage publish; got {first:?}"
                 );
@@ -488,7 +492,9 @@ fn owned_cache_policy_fixture() {
             }
             assert!(receiver.is_full());
             let invalidation_started = Instant::now();
-            let _ = catalog.invalidate(ImageInvalidation::All);
+            let _ = catalog.invalidate(ImageInvalidation::All {
+                cleared_after_presentation: 0,
+            });
             assert!(invalidation_started.elapsed() >= CACHE_USAGE_SYNC_DEADLINE);
             assert_eq!(
                 receiver.len(),
@@ -527,7 +533,9 @@ fn owned_cache_policy_fixture() {
                         }
                     };
                     match command {
-                        RenderCommand::Asset(AssetCommand::ClearImageCache { through: 0 }) => {
+                        RenderCommand::Asset(AssetCommand::ClearImageCache {
+                            through: 0, ..
+                        }) => {
                             order.push("clear".to_owned());
                             bytes = 0;
                         }
@@ -603,7 +611,9 @@ fn owned_cache_policy_fixture() {
             }
             assert!(receiver.is_full());
             let clear_started = Instant::now();
-            let _ = catalog.invalidate(ImageInvalidation::All);
+            let _ = catalog.invalidate(ImageInvalidation::All {
+                cleared_after_presentation: 0,
+            });
             assert!(clear_started.elapsed() >= CACHE_USAGE_SYNC_DEADLINE);
 
             // Native service stays withheld throughout this public lookup.
@@ -690,7 +700,9 @@ fn owned_cache_policy_fixture() {
             }
             assert!(receiver.is_full());
             let invalidation_started = Instant::now();
-            let _ = catalog.invalidate(ImageInvalidation::All);
+            let _ = catalog.invalidate(ImageInvalidation::All {
+                cleared_after_presentation: 0,
+            });
             assert!(invalidation_started.elapsed() >= CACHE_USAGE_SYNC_DEADLINE);
             assert_eq!(
                 receiver.len(),
@@ -771,7 +783,9 @@ fn owned_cache_policy_fixture() {
                         }
                     };
                     match command {
-                        RenderCommand::Asset(AssetCommand::ClearImageCache { through: 0 }) => {
+                        RenderCommand::Asset(AssetCommand::ClearImageCache {
+                            through: 0, ..
+                        }) => {
                             order.push("clear".to_owned());
                             bytes = 0;
                             next_state.publish_cache_usage(ImageCacheUsage::new(0, 0));

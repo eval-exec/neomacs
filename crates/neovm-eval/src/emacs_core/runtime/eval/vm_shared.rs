@@ -333,9 +333,10 @@ impl Context {
         let Some(frame_id) = self.frames.selected_frame().map(|frame| frame.id) else {
             return;
         };
+        let mut buffers = neovm_edit::buffer::BufferManagerMut::new(&mut self.edit.buffers);
         super::display_query_hooks::remember_selected_window_point(
             &mut self.frames,
-            &mut self.edit.buffers,
+            &mut buffers,
             frame_id,
         );
         let selected = self

@@ -33,6 +33,23 @@ mod media;
 pub(in crate::render_thread) mod motion;
 mod overlays;
 
+/// Pending compositor-layer cursor change not yet drawn by any frame.
+///
+/// Ordered by urgency so merging a discrete change (blink toggle or final
+/// settled sample) never downgrades to paced motion:
+/// - `PacedMotion`: intermediate interpolation sample while `is_animating()` is
+///   still true; paced by `DemandReason::CursorMotion` (`Cadence::MaxRate`).
+/// - `Immediate`: blink toggle, forced blink-on, or the final settled sample
+///   when `is_animating()` transitions to false and `CursorMotion` is retracted;
+///   owes an immediate `DemandReason::CursorAnimation` (`Cadence::NextPresentation`).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord)]
+pub(in crate::render_thread) enum CursorDirty {
+    #[default]
+    None,
+    PacedMotion,
+    Immediate,
+}
+
 /// Glyph composition and rendering state for a frame window.
 pub(crate) struct FrameCompositor {
     pub current_frame: Option<FrameGlyphBuffer>,
@@ -69,7 +86,7 @@ pub(crate) struct FrameCompositor {
     /// path reproduces such a frame from the retained scene, so this asks for
     /// a cursor-only frame rather than a repaint. Kept separate from `dirty`
     /// because anything that sets `dirty` outranks it in the demand model.
-    pub(super) cursor_dirty: bool,
+    pub(super) cursor_dirty: CursorDirty,
     pub(super) visual_cursors: HashMap<i64, CursorState>,
     pub renderer_effects: RendererFrameEffects,
     pub transitions: TransitionState,
@@ -209,7 +226,7 @@ impl FrameCompositor {
             pending_child_frame_removals_to_present: Vec::new(),
             glyph_atlas,
             dirty: false,
-            cursor_dirty: false,
+            cursor_dirty: CursorDirty::None,
             visual_cursors: HashMap::new(),
             renderer_effects: RendererFrameEffects::default(),
             transitions: TransitionState::default(),

@@ -1,0 +1,10 @@
+error[E0616]: field `ascii` of struct `CharTableObj` is private
+ --> tests/chartable_write_ui/direct_ascii_store.rs:8:10
+  |
+8 |         .ascii
+  |          ^^^^^ private field
+  |
+help: a method `ascii` also exists, call it with parentheses
+  |
+8 |         .ascii()
+  |               ++

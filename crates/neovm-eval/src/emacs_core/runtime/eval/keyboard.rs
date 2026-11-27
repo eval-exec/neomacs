@@ -2205,6 +2205,10 @@ impl crate::emacs_core::eval::Context {
         self.command_loop.presented_interactions.begin()
     }
 
+    pub fn last_interaction_presentation(&self) -> u64 {
+        self.command_loop.presented_interactions.last_issued()
+    }
+
     pub fn register_presented_mouse_target(
         &mut self,
         presentation: u64,
@@ -3180,6 +3184,12 @@ impl crate::emacs_core::eval::Context {
 
     #[doc(hidden)]
     pub fn sync_pending_resize_events(&mut self) -> bool {
+        if self.command_loop.keyboard.pending_input_events.is_empty()
+            && self.input_rx.as_ref().is_none()
+            && self.display_host.is_none()
+        {
+            return false;
+        }
         // Per-call Rust IDs only, owned through exclusive &mut Context.
         let mut publications = Vec::new();
         let applied_resize = sync_pending_resize_events_in_keyboard_runtime(

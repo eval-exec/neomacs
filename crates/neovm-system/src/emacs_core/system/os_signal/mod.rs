@@ -416,6 +416,13 @@ static PENDING: [AtomicU32; HandledSignal::COUNT] =
 /// wait's full status walk runs, so an observation before the next SIGCHLD
 /// does not reap ahead of GNU's signal timing.
 static CHILD_SIGNAL_SEEN: AtomicBool = AtomicBool::new(false);
+/// True once `install_child_signal_flag` has installed `note_child_signal` on
+/// `SIGCHLD`. When true, every child exit/stop/continue sets `CHILD_SIGNAL_SEEN`,
+/// so wait loops can skip unconditional `waitpid(WNOHANG)` walks while the latch
+/// is clear; unit tests that never call `os_signal::install()` leave this false
+/// and keep polling unconditionally.
+#[cfg(unix)]
+static CHILD_SIGNAL_HANDLER_INSTALLED: AtomicBool = AtomicBool::new(false);
 
 /// GNU's `lib_child_handler` (src/process.c:7657): the handler that was
 /// installed for SIGCHLD before `catch_child_signal` claimed the signal, or 0
@@ -470,8 +477,8 @@ unsafe fn handler_from_address<T: SignalHandlerAbi>(address: usize) -> T {
 
 #[cfg(unix)]
 extern "C" fn note_child_signal(signal: libc::c_int) {
-    // Async-signal-safe: one relaxed store, no allocation, no lock.
-    CHILD_SIGNAL_SEEN.store(true, Ordering::Relaxed);
+    // Async-signal-safe: one atomic store, no allocation, no lock.
+    CHILD_SIGNAL_SEEN.store(true, Ordering::Release);
     let handler = LIB_CHILD_HANDLER.load(Ordering::Acquire);
     if handler != 0 {
         // SAFETY: `install_child_signal_flag` stores only a previous handler
@@ -483,14 +490,34 @@ extern "C" fn note_child_signal(signal: libc::c_int) {
     }
 }
 
+/// Whether `note_child_signal` is currently installed for `SIGCHLD`.
+pub(crate) fn child_signal_handler_installed() -> bool {
+    #[cfg(unix)]
+    {
+        CHILD_SIGNAL_HANDLER_INSTALLED.load(Ordering::Acquire)
+    }
+    #[cfg(not(unix))]
+    {
+        false
+    }
+}
+
 /// Whether a SIGCHLD was delivered since the last full status walk.
 pub(crate) fn child_signal_seen() -> bool {
-    CHILD_SIGNAL_SEEN.load(Ordering::Relaxed)
+    CHILD_SIGNAL_SEEN.load(Ordering::Acquire)
 }
 
 /// Clear the latch at the start of the wait's full status walk.
 pub(crate) fn clear_child_signal_seen() {
-    CHILD_SIGNAL_SEEN.store(false, Ordering::Relaxed);
+    CHILD_SIGNAL_SEEN.store(false, Ordering::Release);
+}
+
+/// Re-arm the latch when a status walk skips a child with an already-pending
+/// notification or harvests a non-terminal transition (stop/continue) so a
+/// coalesced follow-up `SIGCHLD` is reaped on the next pass after
+/// `status_notify` publishes the first transition.
+pub(crate) fn mark_child_signal_seen() {
+    CHILD_SIGNAL_SEEN.store(true, Ordering::Release);
 }
 
 /// GNU's `noninteractive` as of the last mode-aware install.
@@ -605,6 +632,12 @@ fn install_child_signal_flag() -> bool {
             }
         }
 
+        if installed {
+            // Mark one sweep pending so any child that exited before SIGCHLD
+            // was claimed is still reaped on the first status walk.
+            CHILD_SIGNAL_SEEN.store(true, Ordering::Release);
+            CHILD_SIGNAL_HANDLER_INSTALLED.store(true, Ordering::Release);
+        }
         libc::pthread_sigmask(libc::SIG_SETMASK, &old_set, std::ptr::null_mut());
         installed
     }

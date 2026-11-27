@@ -295,6 +295,16 @@ impl<'a> BufferManagerMut<'a> {
     }
 
     #[inline]
+    pub fn set_buffer_last_selected_window(
+        &mut self,
+        id: BufferId,
+        window: Option<crate::emacs_core::display_metrics::WindowId>,
+    ) -> Option<()> {
+        self.manager.get_mut(id)?.set_last_selected_window(window);
+        Some(())
+    }
+
+    #[inline]
     pub fn clear_buffer_mark(&mut self, id: BufferId) -> Option<()> {
         self.manager.clear_buffer_mark(id)
     }

@@ -922,7 +922,7 @@ fn native_resize_withholds_until_a_presentation_of_the_requested_extent() {
         Default::default(),
     );
     render.mark_dirty();
-    render.compositor.cursor_dirty = true;
+    render.compositor.cursor_dirty = crate::render_thread::frame_compositor::CursorDirty::Immediate;
     assert!(render.has_presentable_dirty_content());
     assert!(render.has_presentable_cursor_change());
 
@@ -2509,7 +2509,7 @@ fn content_change_outranks_a_pending_cursor_change() {
         Default::default(),
         Default::default(),
     );
-    render.compositor.cursor_dirty = true;
+    render.compositor.cursor_dirty = crate::render_thread::frame_compositor::CursorDirty::Immediate;
     render.mark_dirty();
 
     assert!(render.has_presentable_dirty_content());
@@ -2816,6 +2816,7 @@ fn cursor_size_tick_does_not_damage_editor_content() {
         Default::default(),
         Default::default(),
     );
+    render.cursor.anim_enabled = false;
     render.cursor.size_transition_enabled = true;
     let target = crate::render_thread::cursor::CursorTarget {
         window_id: 7,
@@ -2838,10 +2839,18 @@ fn cursor_size_tick_does_not_damage_editor_content() {
     assert!(render.tick_cursor_size_animation(now.plus(std::time::Duration::from_millis(16))));
     assert!(!render.has_presentable_dirty_content());
     assert!(render.has_presentable_cursor_change());
+    assert!(
+        !render.has_immediate_cursor_change_at(now.plus(std::time::Duration::from_millis(16))),
+        "intermediate size animation sample stays paced by CursorMotion"
+    );
     // The final sample still owes a cursor frame when continuous demand ends.
     render.begin_presentable_render(crate::render_thread::frame_sched::RenderWork::RebuildScene);
     assert!(render.tick_cursor_size_animation(now.plus(std::time::Duration::from_secs(2))));
     assert!(render.has_presentable_cursor_change());
+    assert!(
+        render.has_immediate_cursor_change_at(now.plus(std::time::Duration::from_secs(2))),
+        "final settled size sample must escalate to Immediate when CursorMotion retracts"
+    );
     assert!(!render.has_presentable_dirty_content());
 }
 
@@ -2999,4 +3008,59 @@ fn composite_frame_preserves_final_child_cursor_scene_damage() {
         !render.has_presentable_dirty_content(),
         "a full repaint satisfies pending scene damage"
     );
+}
+
+#[test]
+fn apply_geometry_hints_deduplicates_unchanged_hints_on_window_state() {
+    let now = neomacs_display_protocol::frame_time::observe_platform_now();
+    let mut state = GuiFrameWindowState {
+        visibility: crate::thread_comm::WindowVisibility::Visible,
+        pending_scale_factor: None,
+        lifecycle: FrameLifecycle::Pending {
+            width: 800,
+            height: 600,
+            scale_factor: 1.0,
+            mouse_hidden_for_typing: false,
+            ime_enabled: false,
+            last_ime_cursor_area: None,
+            chrome: Default::default(),
+            geometry_hints: None,
+            pending_position: None,
+        },
+        render: GuiFrameRenderState::new_without_device(0x42, false, now),
+    };
+    let hints_a = neovm_core::window::GuiFrameGeometryHints {
+        base_width: 42,
+        base_height: 83,
+        min_width: 42,
+        min_height: 83,
+        width_inc: 10,
+        height_inc: 21,
+    };
+    let hints_b = neovm_core::window::GuiFrameGeometryHints {
+        min_height: 104,
+        ..hints_a
+    };
+
+    assert!(state.apply_geometry_hints(hints_a));
+    assert!(
+        !state.apply_geometry_hints(hints_a),
+        "identical geometry hints must short-circuit without re-applying"
+    );
+    assert!(
+        state.apply_geometry_hints(hints_b),
+        "changed geometry hints must apply"
+    );
+    assert!(!state.apply_geometry_hints(hints_b));
+
+    let mut active_slot = Some(hints_a);
+    assert!(!GuiFrameWindowState::update_geometry_hints_cache(
+        &mut active_slot,
+        hints_a
+    ));
+    assert!(GuiFrameWindowState::update_geometry_hints_cache(
+        &mut active_slot,
+        hints_b
+    ));
+    assert_eq!(active_slot, Some(hints_b));
 }

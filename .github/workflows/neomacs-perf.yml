@@ -104,6 +104,7 @@ jobs:
             --cpu "$PERF_CPU" \
             --require-governor "$PERF_GOVERNOR" \
             --hardware-counters \
+            --gate-metric instructions \
             --counter-scope whole-process
           args=(
             standard

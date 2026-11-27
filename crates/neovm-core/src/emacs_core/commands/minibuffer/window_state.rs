@@ -48,7 +48,7 @@ pub(crate) use crate::emacs_core::eval::data::minibuffer::MinibufferSelectedWind
 
 pub(crate) fn activate_minibuffer_window_in_state(
     frames: &mut crate::window::FrameManager,
-    buffers: &mut crate::buffer::BufferManager,
+    buffers: &mut neovm_edit::buffer::BufferManagerMut<'_>,
     minibuffer_selected_window: &mut Option<neovm_edit::emacs_core::display_metrics::WindowId>,
     active_minibuffer_window: &mut Option<neovm_edit::emacs_core::display_metrics::WindowId>,
     minibuf_id: crate::buffer::BufferId,
@@ -128,10 +128,10 @@ pub(crate) fn record_active_minibuffer_selection(
     let _ = eval
         .frame_manager_mut()
         .note_window_selected(active.minibuffer_window_id);
-    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
     crate::emacs_core::window_cmds::record_buffer_in_state(
         frames,
-        buffers,
+        &mut buffers,
         minibuf_id,
         active.minibuffer_frame.0,
     )?;
@@ -156,10 +156,10 @@ fn record_restored_calling_window_selection(
     let _ = eval
         .frame_manager_mut()
         .note_window_selected(active.calling_selected_window);
-    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
     crate::emacs_core::window_cmds::record_buffer_in_state(
         frames,
-        buffers,
+        &mut buffers,
         buffer_id,
         active.calling_frame.0,
     )?;
@@ -177,11 +177,11 @@ pub(crate) fn activate_minibuffer_window(
     if crate::emacs_core::eval::gnu_redisplay_hooks_enabled() {
         return super::redisplay::activate(eval, minibuf_id, entry_level);
     }
-    let (frames, buffers, minibuffer_selected_window, active_minibuffer_window) =
-        eval.frame_manager_buffers_and_minibuffer_selection_mut();
+    let (frames, mut buffers, minibuffer_selected_window, active_minibuffer_window) =
+        eval.frame_manager_buffer_view_and_minibuffer_selection_mut();
     activate_minibuffer_window_in_state(
         frames,
-        buffers,
+        &mut buffers,
         minibuffer_selected_window,
         active_minibuffer_window,
         minibuf_id,
@@ -203,7 +203,7 @@ pub(crate) fn unwind_minibuffer_buffer(
 
 pub(crate) fn restore_minibuffer_window_in_state(
     frames: &mut crate::window::FrameManager,
-    buffers: &mut crate::buffer::BufferManager,
+    buffers: &mut neovm_edit::buffer::BufferManagerMut<'_>,
     minibuffer_selected_window: &mut Option<neovm_edit::emacs_core::display_metrics::WindowId>,
     active_minibuffer_window: &mut Option<neovm_edit::emacs_core::display_metrics::WindowId>,
     saved: ActiveMinibufferWindowState,
@@ -290,11 +290,11 @@ pub(crate) fn teardown_expired_minibuffer_phased(
     erase_expired_minibuffer_buffer_in_state(&mut shared.edit.buffers, minibuf_id);
     let inactive_mode_result = run_minibuffer_mode_if_bound(shared, "minibuffer-inactive-mode");
     let teardown_frame_id = saved.minibuffer_frame.0;
-    let window_restore = shared.with_frame_buffers_and_minibuffer_selection_mut(
-        |frames, buffers, minibuffer_selected_window, active_minibuffer_window| {
+    let window_restore = shared.with_frame_buffer_view_and_minibuffer_selection_mut(
+        |frames, mut buffers, minibuffer_selected_window, active_minibuffer_window| {
             let window_restore = restore_minibuffer_window_in_state(
                 frames,
-                buffers,
+                &mut buffers,
                 minibuffer_selected_window,
                 active_minibuffer_window,
                 saved,

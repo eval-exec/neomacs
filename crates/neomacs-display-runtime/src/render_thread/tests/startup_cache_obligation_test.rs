@@ -15,7 +15,10 @@ fn commands() -> (RenderCommandSender, Receiver<RenderCommand>) {
 
 fn clear() -> RenderCommand {
     // These parking controls submit no CPU image jobs before the clear.
-    RenderCommand::Asset(AssetCommand::ClearImageCache { through: 0 })
+    RenderCommand::Asset(AssetCommand::ClearImageCache {
+        through: 0,
+        cleared_after_presentation: 0,
+    })
 }
 
 fn publish(ack: mpsc::SyncSender<()>) -> RenderCommand {
@@ -60,7 +63,8 @@ fn preparing_queue_parks_clear_and_publish_in_fifo_until_owner_drop() {
     assert!(matches!(
         parked.0.front(),
         Some(RenderCommand::Asset(AssetCommand::ClearImageCache {
-            through: 0
+            through: 0,
+            cleared_after_presentation: 0,
         }))
     ));
     assert!(matches!(

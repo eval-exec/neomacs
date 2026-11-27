@@ -1167,9 +1167,10 @@ impl Context {
         // only the selected window cache from its own buffer; redisplay must
         // not realign `current-buffer` with the selected window here.
         if let Some(frame_id) = self.frames.selected_frame().map(|frame| frame.id) {
+            let mut buffers = neovm_edit::buffer::BufferManagerMut::new(&mut self.edit.buffers);
             super::display_query_hooks::remember_selected_window_point(
                 &mut self.frames,
-                &mut self.edit.buffers,
+                &mut buffers,
                 frame_id,
             );
         }

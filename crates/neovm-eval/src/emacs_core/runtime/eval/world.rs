@@ -1499,6 +1499,33 @@ impl Context {
         self.obarray.lease.0.owner_slabs.borrow_mut().register(heap)
     }
 
+    /// Capture a thread-confined handle to this Context's World allocation and
+    /// heap identity for G5 Step 5 parallel-owner retirement (E5.3b).
+    ///
+    /// Holding [`ParallelRetireWorld`] grants no access by itself; both
+    /// retirement operations require `&LocalSerialOwner` proving exclusive
+    /// serial-turn authority on this OS thread for the matching heap.
+    #[cold]
+    #[inline(never)]
+    pub(in crate::emacs_core::eval) fn parallel_retire_world(&self) -> ParallelRetireWorld {
+        ParallelRetireWorld {
+            world: Arc::clone(&self.obarray.lease.0),
+            heap: self.tagged_heap.heap_identity(),
+            _confined: PhantomData,
+        }
+    }
+
+    /// Detach the World's shared dynamic-module registry from this retiring
+    /// parallel owner's `Context` before drop, matching
+    /// `Context::retire_green_owner` (`green/mod.rs:468-472`) so dropping the
+    /// parallel owner never clears the World's shared modules.
+    #[cold]
+    #[inline(never)]
+    pub(in crate::emacs_core::eval) fn detach_shared_dynamic_module_registry_for_retire(&mut self) {
+        self.dynamic_module_registry =
+            super::data::dynamic_module_registry::DynamicModuleRegistryHandle::new(Vec::new());
+    }
+
     /// Visit every owner slab's values -- each owner's bindings are roots,
     /// whether or not that owner is running -- and the canonical plain word
     /// of every projected variable, which the World's table roots.
@@ -1509,6 +1536,72 @@ impl Context {
         if let Some(runtime) = world.green.borrow().as_ref() {
             runtime.trace_roots(visit);
         }
+    }
+}
+
+/// Thread-confined World handle used exclusively between G5 Step 3a (final
+/// detach + `Context::drop`) and G5 Step 3b (`give_back` of the final serial
+/// ticket) to unlink the retiring parallel owner's native thread registration
+/// and unregister its `OwnerSlab` under exclusive serial-turn authority.
+pub(in crate::emacs_core::eval) struct ParallelRetireWorld {
+    world: Arc<World>,
+    heap: neovm_value::tagged::gc::HeapIdentity,
+    _confined: PhantomData<std::rc::Rc<()>>,
+}
+
+static_assertions::assert_not_impl_any!(ParallelRetireWorld: Send, Sync, Clone);
+
+impl ParallelRetireWorld {
+    /// Unlink the retiring parallel owner from `ThreadManager::threads` after
+    /// its `Context` has detached and dropped, while this OS thread still holds
+    /// the final serial ticket (`local: &LocalSerialOwner`).
+    #[cold]
+    #[inline(never)]
+    pub(in crate::emacs_core::eval) fn retire_thread_completion(
+        &self,
+        local: &super::parallel_entry::serial_ticket::LocalSerialOwner,
+        completion: crate::emacs_core::threads::CompletingThread,
+    ) -> crate::emacs_core::threads::RetiredCompletion {
+        if local.identity().heap != self.heap || completion.heap_identity() != self.heap {
+            // No installed heap remains after final detach; fail-stop on an
+            // impossible authority/World mismatch instead of releasing another
+            // World's registration.
+            std::process::abort();
+        }
+        // SAFETY: `local: &LocalSerialOwner` is `!Send` and proves this OS
+        // thread holds the keeper's active serial ticket for `self.heap`,
+        // excluding every other World access and collector stop. The retiring
+        // `Context` has already detached and dropped, no manager borrow
+        // survives, and `retire_thread_completion` touches only native
+        // `ThreadManager` map storage without reading or mutating any heap word
+        // or carrier TLS.
+        unsafe { (&mut (*self.world.global.get()).threads).retire_thread_completion(completion) }
+    }
+
+    /// Remove and free the retiring parallel owner's `OwnerSlab` from this
+    /// World's `OwnerSlabRegistry` while this OS thread still holds the final
+    /// serial ticket (`local: &LocalSerialOwner`).
+    ///
+    /// # Safety
+    /// Both the retiring `Context` (whose `OwnerSlot` named `slab`) and any
+    /// `OwnerSlabHandle` minted for `slab` must already have been dropped on
+    /// this OS thread before calling this method.
+    #[cold]
+    #[inline(never)]
+    pub(in crate::emacs_core::eval) unsafe fn unregister_owner_slab(
+        &self,
+        local: &super::parallel_entry::serial_ticket::LocalSerialOwner,
+        slab: NonNull<super::owner_bindings::OwnerSlab>,
+    ) -> bool {
+        if local.identity().heap != self.heap {
+            std::process::abort();
+        }
+        // SAFETY: `local: &LocalSerialOwner` proves exclusive serial-turn World
+        // authority on this OS thread for `self.heap`, excluding any concurrent
+        // `OwnerSlabRegistry` borrow or collector root walk; the caller's
+        // `# Safety` precondition guarantees the owning `Context` and any
+        // `OwnerSlabHandle` have already been dropped.
+        unsafe { self.world.owner_slabs.borrow_mut().unregister(slab) }
     }
 }
 

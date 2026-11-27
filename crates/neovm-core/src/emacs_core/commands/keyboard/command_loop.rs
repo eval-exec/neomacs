@@ -1435,10 +1435,16 @@ fn sync_current_buffer_to_selected_window(eval: &mut crate::emacs_core::eval::Co
     let Some(frame_id) = eval.frame_manager().selected_frame().map(|frame| frame.id) else {
         return;
     };
-    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
     crate::emacs_core::window_cmds::remember_selected_window_point_in_state(
-        frames, buffers, frame_id,
+        frames,
+        &mut buffers,
+        frame_id,
     );
-    crate::emacs_core::window_cmds::sync_selected_window_buffer_in_state(frames, buffers, frame_id);
+    crate::emacs_core::window_cmds::sync_selected_window_buffer_in_state(
+        frames,
+        &mut buffers,
+        frame_id,
+    );
     let _ = eval.sync_current_buffer_runtime_state();
 }

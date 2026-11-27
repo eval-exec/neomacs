@@ -2,6 +2,7 @@
 
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use dbus::channel::{BusType, Channel};
 
@@ -10,6 +11,10 @@ use neovm_eval::emacs_core::eval::Context;
 use neovm_value::value::Value;
 
 use super::watch;
+
+/// Set once any D-Bus bus is opened so `dbusbind::drain_events` can return in
+/// one atomic load on sessions that never touch D-Bus.
+static DBUS_MAY_BE_ACTIVE: AtomicBool = AtomicBool::new(false);
 
 thread_local! {
     static BUSES: RefCell<HashMap<BusKey, BusConnection>> = RefCell::new(HashMap::new());
@@ -91,6 +96,7 @@ pub(super) fn init_bus(ctx: &mut Context, args: Vec<Value>) -> Result<Value, Flo
     let refs = BUSES.with(|slot| {
         let mut buses = slot.borrow_mut();
         buses.insert(key, BusConnection { channel });
+        DBUS_MAY_BE_ACTIVE.store(true, Ordering::Release);
         1
     });
     Ok(Value::fixnum(refs))
@@ -125,10 +131,13 @@ pub(super) fn with_channel<T>(
 }
 
 pub(super) fn has_buses() -> bool {
-    BUSES.with(|slot| !slot.borrow().is_empty())
+    DBUS_MAY_BE_ACTIVE.load(Ordering::Acquire) && BUSES.with(|slot| !slot.borrow().is_empty())
 }
 
 pub(super) fn pump_messages() -> Result<Vec<(BusKey, dbus::Message)>, Flow> {
+    if !DBUS_MAY_BE_ACTIVE.load(Ordering::Acquire) {
+        return Ok(Vec::new());
+    }
     BUSES.with(|slot| {
         let buses = slot.borrow();
         let mut out = Vec::new();

@@ -37,9 +37,10 @@ fn window_hscroll(s: &mut TuiSession) -> i64 {
 }
 
 /// Run `setup` (which inserts a long line + sets truncate-lines + goes to BOL),
-/// press C-e on both editors, and return (gnu_hscroll, neo_hscroll, gnu_cursor,
-/// neo_cursor).
-fn ctrl_e_scenario(setup: &str) -> (i64, i64, (u16, u16), (u16, u16)) {
+/// press C-e on both editors, assert exact display parity (cursor, truncation
+/// glyphs, mode line, cell attributes), and return (gnu_hscroll, neo_hscroll,
+/// gnu_cursor, neo_cursor).
+fn ctrl_e_scenario(label: &str, setup: &str) -> (i64, i64, (u16, u16), (u16, u16)) {
     let (mut gnu, mut neo) = boot_pair("");
     resize_both(&mut gnu, &mut neo, 40, 160);
     read_both(&mut gnu, &mut neo, Duration::from_millis(700));
@@ -47,6 +48,7 @@ fn ctrl_e_scenario(setup: &str) -> (i64, i64, (u16, u16), (u16, u16)) {
     read_both(&mut gnu, &mut neo, Duration::from_millis(900));
     send_both(&mut gnu, &mut neo, "C-e");
     read_both(&mut gnu, &mut neo, Duration::from_secs(1));
+    assert_pair_exact_display(label, &gnu, &neo);
     let gc = gnu.screen().cursor_position();
     let nc = neo.screen().cursor_position();
     let gh = window_hscroll(&mut gnu);
@@ -245,6 +247,7 @@ fn issue_140_wide_glyph_crossing_hscroll_with_line_numbers_matches_gnu() {
 fn issue_140_ce_at_eob_no_newline_centers() {
     // 300 x's, NO trailing newline -> point at EOB -> GNU centers (text_cols/2).
     let (gh, nh, gc, nc) = ctrl_e_scenario(
+        "issue_140_ce_at_eob_no_newline_centers",
         "(progn (erase-buffer) (setq truncate-lines t) \
          (insert (make-string 300 ?x)) (goto-char (point-min)) nil)",
     );
@@ -255,6 +258,7 @@ fn issue_140_ce_at_eob_no_newline_centers() {
 fn issue_140_ce_before_newline_targets_eol() {
     // 300 x's + a newline -> point before the newline -> GNU end-of-line (text_cols-4).
     let (gh, nh, gc, nc) = ctrl_e_scenario(
+        "issue_140_ce_before_newline_targets_eol",
         "(progn (erase-buffer) (setq truncate-lines t) \
          (insert (make-string 300 ?x) 10) (goto-char (point-min)) nil)",
     );

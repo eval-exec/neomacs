@@ -731,8 +731,8 @@ pub(crate) fn builtin_other_buffer(
     eval: &mut crate::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
-    other_buffer_impl_in_state(frames, buffers, args)
+    let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
+    other_buffer_impl_in_state(frames, &mut buffers, args)
 }
 
 fn buffer_visible_in_visible_frame(
@@ -776,7 +776,7 @@ fn other_buffer_candidate(
 
 pub(crate) fn other_buffer_impl_in_state(
     frames: &mut crate::window::FrameManager,
-    buffers: &mut crate::buffer::BufferManager,
+    buffers: &mut neovm_edit::buffer::BufferManagerMut<'_>,
     args: Vec<Value>,
 ) -> EvalResult {
     expect_max_args("other-buffer", &args, 3)?;
@@ -830,8 +830,8 @@ fn other_buffer_for_killed_buffer(
     _killed: crate::buffer::BufferId,
     killed_value: Value,
 ) -> Result<Option<crate::buffer::BufferId>, crate::emacs_core::error::Flow> {
-    let (frames, buffers) = ctx.frame_manager_and_buffers_mut();
-    let other = other_buffer_impl_in_state(frames, buffers, vec![killed_value])?;
+    let (frames, mut buffers) = ctx.frame_manager_and_buffer_view_mut();
+    let other = other_buffer_impl_in_state(frames, &mut buffers, vec![killed_value])?;
     Ok(other.as_buffer_id())
 }
 

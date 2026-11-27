@@ -300,6 +300,12 @@ pub enum PerfError {
         threshold: f64,
         loadavg: String,
     },
+    #[error("suite `{suite}` row `{scenario}` has invalid instruction calibration: {reason}")]
+    SuiteCalibrationInvalid {
+        suite: crate::SuiteId,
+        scenario: ScenarioId,
+        reason: String,
+    },
 }
 
 #[derive(Clone, Debug)]

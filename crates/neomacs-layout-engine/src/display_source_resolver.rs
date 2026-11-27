@@ -159,19 +159,21 @@ impl<'a> DisplaySourceResolveParams<'a> {
     }
 }
 
+const MAX_OBSERVED_FACE_LOOKUPS: usize = 256;
+
 #[derive(Default)]
 pub(crate) struct DisplaySourceResolveState {
     face_cache: HashMap<DisplayFaceCacheKey, FaceId>,
-    last_face_lookup: Option<ObservedFaceLookup>,
+    observed_face_lookups: HashMap<(FaceId, usize), ObservedFaceLookup>,
     #[cfg(test)]
     structural_face_lookups: usize,
+    #[cfg(test)]
+    nested_face_captures: usize,
     height_face_cache: HashMap<DisplayHeightFaceKey, FaceId>,
     resolved_faces: HashMap<FaceId, ResolvedFace>,
 }
 
 struct ObservedFaceLookup {
-    base_face_id: FaceId,
-    value_bits: usize,
     face_id: FaceId,
     reads: neovm_core::tagged::collection_reads::CollectionReads,
 }
@@ -198,16 +200,33 @@ impl DisplaySourceResolveState {
     }
 
     fn cached_face(&mut self, base_face_id: FaceId, face_value: &Value) -> Option<RenderFaceRef> {
-        if let Some(last) = &self.last_face_lookup
-            && last.base_face_id == base_face_id
-            && last.value_bits == face_value.bits()
-            && last.reads.unchanged_and_observe()
-        {
-            return Some(RenderFaceRef::FaceId(last.face_id));
+        // Immediate face designators (symbols such as `font-lock-keyword-face`,
+        // `bold`, `org-level-1`, nil, fixnums) cannot be mutated in place and
+        // read zero Lisp collections during `Hash`/`PartialEq` (tag mismatch
+        // short-circuits before dereferencing any heap key). Skip nested
+        // `collection_reads::capture()` so alternating symbol-face spans never
+        // wipe the enclosing capture's recent-read cache.
+        if !face_value.is_heap_object() {
+            return self
+                .face_cache
+                .get(&DisplayFaceCacheKey {
+                    base_face_id,
+                    face_value: *face_value,
+                })
+                .copied()
+                .map(RenderFaceRef::FaceId);
+        }
+        let lookup_key = (base_face_id, face_value.bits());
+        if let Some(cached) = self.observed_face_lookups.get(&lookup_key) {
+            if cached.reads.unchanged_and_observe() {
+                return Some(RenderFaceRef::FaceId(cached.face_id));
+            }
+            self.observed_face_lookups.remove(&lookup_key);
         }
         #[cfg(test)]
         {
             self.structural_face_lookups += 1;
+            self.nested_face_captures += 1;
         }
         let (entry, reads) = neovm_core::tagged::collection_reads::capture(|| {
             self.face_cache
@@ -217,18 +236,22 @@ impl DisplaySourceResolveState {
                 })
                 .map(|(key, id)| (key.face_value.bits(), *id))
         });
-        // Consecutive characters commonly reference the exact same face list.
-        // Keep structural equality for other values and observe every nested
-        // collection on hits so enclosing layout caches retain dependencies.
-        // Only retain identities already held by the structural cache itself.
-        self.last_face_lookup = entry.zip(reads).and_then(|((bits, face_id), reads)| {
-            (bits == face_value.bits()).then_some(ObservedFaceLookup {
-                base_face_id,
-                value_bits: bits,
-                face_id,
-                reads,
-            })
-        });
+        // Alternating face spans across a rich viewport commonly revisit a
+        // bounded working set of face plists. Retain observed pointer hits
+        // (up to `MAX_OBSERVED_FACE_LOOKUPS`) so revisiting another span reuses
+        // its certificate via `unchanged_and_observe()` instead of opening a
+        // nested `capture()` (and wiping the outer recent-read cache) on every
+        // span transition. Keep structural equality for distinct equal values
+        // and only retain identities already held by `face_cache`.
+        if let Some(((bits, face_id), reads)) = entry.zip(reads)
+            && bits == face_value.bits()
+        {
+            if self.observed_face_lookups.len() >= MAX_OBSERVED_FACE_LOOKUPS {
+                self.observed_face_lookups.clear();
+            }
+            self.observed_face_lookups
+                .insert(lookup_key, ObservedFaceLookup { face_id, reads });
+        }
         entry.map(|(_, id)| RenderFaceRef::FaceId(id))
     }
 
@@ -239,14 +262,19 @@ impl DisplaySourceResolveState {
         face_id: FaceId,
         resolved: &ResolvedFace,
     ) {
-        self.last_face_lookup = None;
-        self.face_cache.insert(
-            DisplayFaceCacheKey {
-                base_face_id,
-                face_value,
-            },
-            face_id,
-        );
+        let key = DisplayFaceCacheKey {
+            base_face_id,
+            face_value,
+        };
+        if face_value.is_heap_object() {
+            if let Some((old_key, _)) = self.face_cache.get_key_value(&key) {
+                self.observed_face_lookups
+                    .remove(&(base_face_id, old_key.face_value.bits()));
+            }
+            self.observed_face_lookups
+                .remove(&(base_face_id, face_value.bits()));
+        }
+        self.face_cache.insert(key, face_id);
         self.remember_face(face_id, resolved);
     }
 

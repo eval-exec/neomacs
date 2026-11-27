@@ -11,8 +11,8 @@ use super::backtrace::{
 };
 use super::dispatch::{admits_owner_local, opcode_slot};
 use super::effective::{
-    EraId, OwnerSlots, OwnerSlotsMut, PlainAccess, PlainAdmission, PlainRefusal, ShapeGeneration,
-    restore_taken_binding, take_top_binding,
+    EraId, OwnerSlots, OwnerSlotsMut, PlainAccess, PlainAccessError, PlainAdmission, PlainRefusal,
+    ShapeGeneration, restore_taken_binding, take_top_binding,
 };
 use super::engine::{CoreOutcome, EngineFault, RecordStack, apply_one};
 use super::frames::{
@@ -524,7 +524,7 @@ impl VmEscape for RecordingEscape {
         };
         if matches!(completion, EscapeCompletion::Completed { .. }) {
             for record in taken {
-                restore_taken_binding(plain, record);
+                restore_taken_binding(plain, record).expect("restore taken binding");
             }
         }
         completion
@@ -580,7 +580,7 @@ impl VmEscape for RecordingEscape {
         };
         if matches!(completion, UnwindCompletion::Completed { .. }) {
             for record in taken {
-                restore_taken_binding(plain, record);
+                restore_taken_binding(plain, record).expect("restore taken binding");
             }
         }
         completion
@@ -1094,21 +1094,22 @@ impl PlainAccess for HarnessPlain {
             .unwrap_or_else(|| PlainAdmission::refuse(PlainRefusal::NotPlain))
     }
 
-    fn canonical_read(&self, sym: SymId) -> Value {
+    fn canonical_read(&mut self, sym: SymId) -> Result<Value, PlainAccessError> {
         self.canonical_reads.set(self.canonical_reads.get() + 1);
-        self.canonical.get(&sym).copied().unwrap_or(Value::UNBOUND)
+        Ok(self.canonical.get(&sym).copied().unwrap_or(Value::UNBOUND))
     }
 
-    fn canonical_write(&mut self, sym: SymId, value: Value) {
+    fn canonical_write(&mut self, sym: SymId, value: Value) -> Result<(), PlainAccessError> {
         self.canonical_writes += 1;
         if let Some(log) = &self.log {
             log.push(format!("canonical <- {}", plain_value(&value)));
         }
         self.canonical.insert(sym, value);
+        Ok(())
     }
 
-    fn canonical_bound(&self, sym: SymId) -> bool {
-        self.canonical.contains_key(&sym)
+    fn canonical_bound(&mut self, sym: SymId) -> Result<bool, PlainAccessError> {
+        Ok(self.canonical.contains_key(&sym))
     }
 
     fn unbind_needs_serial(&self, sym: SymId) -> bool {

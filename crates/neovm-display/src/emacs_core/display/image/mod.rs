@@ -1478,12 +1478,23 @@ pub fn builtin_clear_image_cache_in_context(eval: &mut Context, args: Vec<Value>
         require_image_display_host(eval)?;
     }
 
-    let invalidated = eval
+    // GNU `clear_image_cache` (`src/image.c:2405-2417`) clears every cached
+    // image (including chrome/toolbar icons) and marks frames dirty so the next
+    // redisplay reloads them. Always invalidate media on wholesale clear-all
+    // even when `catalog.entries` held no editor images, because the renderer
+    // image cache may still have held toolbar textures.
+    let cleared_after_presentation = eval.last_interaction_presentation();
+    let cleared_catalog = eval
         .display_host
         .as_ref()
         .and_then(|host| host.image_catalog())
-        .is_some_and(|catalog| catalog.invalidate(ImageInvalidation::All).changed());
-    if invalidated {
+        .is_some_and(|catalog| {
+            let _ = catalog.invalidate(ImageInvalidation::All {
+                cleared_after_presentation,
+            });
+            true
+        });
+    if cleared_catalog {
         eval.invalidate_media();
     }
     if let Some(catalog) = eval

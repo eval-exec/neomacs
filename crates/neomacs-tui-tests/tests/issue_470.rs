@@ -12,8 +12,8 @@
 //! every redisplay.
 
 use crate::support::{
-    boot_pair, eval_expression, settle_session, use_backend_only_vc_mode_line,
-    use_deterministic_emacs_version,
+    assert_pair_exact_display, boot_pair, eval_expression, settle_session,
+    use_backend_only_vc_mode_line, use_deterministic_emacs_version,
 };
 use neomacs_tui_tests::TuiSession;
 use std::time::Duration;
@@ -125,10 +125,29 @@ fn mode_line_unicode_dot_stays_a_dot_across_forced_updates() {
         neo_screen.contains('·'),
         "neomacs degraded the dot after forced updates:\n{neo_screen}"
     );
-    // Exact parity: neomacs must match GNU's `A·B·C` -- neither element may
-    // degrade to its octal escape.
+    // Exact parity: neomacs must match GNU's `A·B·C` text and mode-line face
+    // attributes -- neither element may degrade to its octal escape or lose its
+    // mode-line styling.
     assert_eq!(
         gnu_screen, neo_screen,
         "mode lines must render identically after forced updates"
+    );
+    let mode_line_row = gnu
+        .text_grid()
+        .iter()
+        .position(|row| row.trim() == "A·B·C")
+        .expect("GNU mode-line row present") as u16;
+    let gnu_cell = gnu
+        .screen()
+        .cell(mode_line_row, 0)
+        .expect("GNU mode-line cell");
+    assert!(
+        gnu_cell.bgcolor() != vt100::Color::Default || gnu_cell.inverse(),
+        "precondition: GNU mode-line row {mode_line_row} should carry mode-line styling"
+    );
+    assert_pair_exact_display(
+        "mode_line_unicode_dot_stays_a_dot_across_forced_updates",
+        &gnu,
+        &neo,
     );
 }

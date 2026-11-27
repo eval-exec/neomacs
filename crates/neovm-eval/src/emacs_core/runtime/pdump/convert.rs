@@ -2502,11 +2502,11 @@ impl<'a> LoadDecoder<'a> {
                     let restored_obj = restored
                         .as_char_table_obj()
                         .expect("make-char-table returned char-table");
-                    table.set_default(restored_obj.defalt.get());
-                    table.set_parent(restored_obj.parent.get());
-                    table.set_purpose(restored_obj.purpose.get());
-                    table.set_ascii(restored_obj.ascii.get());
-                    table.copy_contents(&restored_obj.contents.each_ref().map(|cell| cell.get()));
+                    table.set_default(restored_obj.defalt());
+                    table.set_parent(restored_obj.parent());
+                    table.set_purpose(restored_obj.purpose());
+                    table.set_ascii(restored_obj.ascii());
+                    table.copy_contents(&restored_obj.contents_values());
                     table.copy_extras(restored_obj.extras.as_slice());
                 });
             }

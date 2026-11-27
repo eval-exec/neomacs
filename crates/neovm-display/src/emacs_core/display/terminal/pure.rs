@@ -907,9 +907,9 @@ pub(crate) fn decode_frame_or_terminal(
     arg: Option<&Value>,
 ) -> FrameOrTerminal {
     let Some(value) = arg.filter(|value| !value.is_nil()) else {
-        let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+        let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
         return FrameOrTerminal::Frame(
-            crate::emacs_core::window_cmds::ensure_selected_frame_id_in_state(frames, buffers),
+            crate::emacs_core::window_cmds::ensure_selected_frame_id_in_state(frames, &mut buffers),
         );
     };
     if let ValueKind::Veclike(VecLikeType::Frame) = value.kind() {

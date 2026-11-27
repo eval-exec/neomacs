@@ -1088,3 +1088,348 @@ fn sigsegv_and_sigbus_replace_the_runtime_stack_overflow_handler() {
         );
     }
 }
+
+/// Read the single-character Linux process state from `/proc/<pid>/stat`
+/// (e.g. `'T'` stopped, `'S'`/`'R'` running/sleeping, `'Z'` zombie).
+#[cfg(target_os = "linux")]
+fn linux_proc_state(pid: i32) -> Option<char> {
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    let after_comm = stat.rsplit_once(") ")?.1;
+    after_comm.chars().next()
+}
+
+/// Regression for #15126 Blocker 1a: when `os_signal::install()` is active
+/// (`CHILD_SIGNAL_HANDLER_INSTALLED == true`), a child `SIGSTOP` observed via
+/// `(process-status C)` leaves `status_notify_pending == true` while
+/// `CHILD_SIGNAL_SEEN` stays `true`. A subsequent `SIGCONT` coalesces into
+/// that already-true latch; a wait whose `JUST-THIS-ONE` targets another
+/// process runs `record_and_notify_status_changes` (clearing `CHILD_SIGNAL_SEEN`
+/// while skipping `C` because `status_notify_pending == true`, then publishing
+/// `stop` without re-arming the latch), leaving `(process-status C)` stuck at
+/// `stop` forever unless `record_child_status_changes` re-arms the latch.
+#[test]
+#[cfg(target_os = "linux")]
+fn coalesced_sigchld_stop_then_cont_delivers_both_transitions_with_sigchld_installed() {
+    let _report = os_signal::install();
+    let mut eval = crate::emacs_core::eval_hook_installers::new_context();
+    let pid_val = eval
+        .eval_str(
+            "(progn
+               (setq neo-stop-cont-events nil)
+               (setq neo-stop-cont-proc
+                     (make-process
+                      :name \"neo-stop-cont\"
+                      :command '(\"sleep\" \"30\")
+                      :connection-type 'pipe
+                      :filter (lambda (_p _s) nil)
+                      :sentinel (lambda (p e)
+                                  (setq neo-stop-cont-events
+                                        (cons (cons (process-status p) e) neo-stop-cont-events)))))
+               (setq neo-stop-cont-peer
+                     (make-process
+                      :name \"neo-stop-cont-peer\"
+                      :command '(\"sleep\" \"30\")
+                      :connection-type 'pipe
+                      :filter (lambda (_p _s) nil)))
+               (process-id neo-stop-cont-proc))",
+        )
+        .expect("spawn child");
+    let child_pid = pid_val.as_int().expect("integer pid") as libc::pid_t;
+
+    // 1. Stop the child and observe `(process-status)` once SIGCHLD #1 arrives,
+    //    staging `status_notify_pending = true` while `CHILD_SIGNAL_SEEN` stays true.
+    // SAFETY: `child_pid` is a live child spawned by this test.
+    assert_eq!(unsafe { libc::kill(child_pid, libc::SIGSTOP) }, 0);
+    let stop_deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        let st = eval
+            .eval_str("(process-status neo-stop-cont-proc)")
+            .expect("process-status stop");
+        if st == neovm_value::value::Value::symbol("stop") {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < stop_deadline,
+            "child never reached observed stop status (got {st:?})"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+
+    // 2. Continue the child BEFORE `status_notify` runs, so SIGCHLD #2
+    //    coalesces into `CHILD_SIGNAL_SEEN == true`. Wait for the kernel to
+    //    leave `'T'` state so SIGCONT has certainly taken effect.
+    // SAFETY: `child_pid` is still our live child.
+    assert_eq!(unsafe { libc::kill(child_pid, libc::SIGCONT) }, 0);
+    let cont_deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while linux_proc_state(child_pid) == Some('T') {
+        assert!(
+            std::time::Instant::now() < cont_deadline,
+            "child stayed in kernel T state after SIGCONT"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+    // Give the kernel a brief window to deliver SIGCHLD #2 to the process.
+    std::thread::sleep(std::time::Duration::from_millis(30));
+
+    // 3. A `JUST-THIS-ONE` wait on a peer runs `record_and_notify_status_changes`
+    //    over all children without initial-polling `neo-stop-cont-proc`.
+    //    `record_child_status_changes` must re-arm `CHILD_SIGNAL_SEEN` after
+    //    skipping a `status_notify_pending` child so iteration 2 reaps SIGCONT
+    //    and publishes BOTH `stop` and `run`.
+    let _ = eval
+        .eval_str("(accept-process-output neo-stop-cont-peer 0.1 nil t)")
+        .expect("accept-process-output peer 1");
+    let _ = eval
+        .eval_str("(accept-process-output neo-stop-cont-peer 0.1 nil t)")
+        .expect("accept-process-output peer 2");
+    let final_status = eval
+        .eval_str("(process-status neo-stop-cont-proc)")
+        .expect("final process-status");
+    let events_printed = eval
+        .eval_str("(prin1-to-string (nreverse neo-stop-cont-events))")
+        .expect("events");
+    let _ = eval.eval_str("(delete-process neo-stop-cont-proc)");
+    let _ = eval.eval_str("(delete-process neo-stop-cont-peer)");
+
+    assert_eq!(
+        final_status,
+        neovm_value::value::Value::symbol("run"),
+        "coalesced SIGCHLD after SIGSTOP must transition back to 'run (events={events_printed:?})"
+    );
+    let events_str = events_printed.as_utf8_str().expect("utf8 events");
+    assert!(
+        events_str.contains("stopped") && events_str.contains("\"run\""),
+        "sentinel must receive both stopped and continue (\"run\") events, got {events_str}"
+    );
+}
+
+/// Regression for #15126 Blocker 1b: coalesced `SIGCHLD` + `pidfd` busy-spin
+/// corollary. Child `C` with a grandchild holding stdout open (so pipe never
+/// EOFs and `has_readable_process_io == true` once `C` is `'run`) transitions
+/// `SIGSTOP` (published) -> `SIGCONT` (observed via `(process-status C)`,
+/// staging `status_notify_pending = true` while `CHILD_SIGNAL_SEEN = true`) ->
+/// `SIGKILL` (coalescing SIGCHLD #2 while `C` becomes zombie). Calling
+/// `(accept-process-output C 0.2)` must deliver `'signal` (killed) and
+/// deactivate `pidfd` instead of clearing `CHILD_SIGNAL_SEEN`, publishing
+/// `'run`, and leaving `(process-status C)` stuck at `'run` while `pidfd`
+/// busy-spins.
+#[test]
+#[cfg(target_os = "linux")]
+fn coalesced_sigchld_stop_then_sigkill_with_grandchild_holding_stdout_delivers_killed() {
+    let _report = os_signal::install();
+    let mut eval = crate::emacs_core::eval_hook_installers::new_context();
+    let path_env = std::env::var("PATH").unwrap_or_default();
+    let escaped_path = path_env.replace('\\', "\\\\").replace('"', "\\\"");
+    let pids = eval
+        .eval_str(&format!(
+            "(let ((process-environment (cons \"PATH={escaped_path}\" process-environment)))
+               (setq neo-kill-events nil
+                     neo-kill-out \"\")
+               (setq neo-kill-proc
+                     (make-process
+                      :name \"neo-stop-kill\"
+                      :command '(\"sh\" \"-c\" \"sleep 30 & echo $!; exec sleep 30\")
+                      :connection-type 'pipe
+                      :filter (lambda (_p s) (setq neo-kill-out (concat neo-kill-out s)))
+                      :sentinel (lambda (p e)
+                                  (setq neo-kill-events
+                                        (cons (cons (process-status p) e) neo-kill-events)))))
+               (let ((deadline (+ (float-time) 5.0)))
+                 (while (and (null (string-match \"\\\\`[0-9]+\\n\" neo-kill-out))
+                             (< (float-time) deadline))
+                   (accept-process-output neo-kill-proc 0.1)))
+               (cons (process-id neo-kill-proc) neo-kill-out))"
+        ))
+        .expect("spawn child + grandchild");
+    let child_pid = pids.cons_car().as_int().expect("child pid") as libc::pid_t;
+    let grandchild_out = pids
+        .cons_cdr()
+        .as_utf8_str()
+        .expect("grandchild pid output")
+        .to_owned();
+    let grandchild_pid: libc::pid_t = grandchild_out
+        .trim()
+        .parse()
+        .unwrap_or_else(|e| panic!("parse grandchild pid from {grandchild_out:?}: {e}"));
+    assert!(
+        grandchild_pid > 0,
+        "expected grandchild pid, got {grandchild_pid}"
+    );
+
+    // Ensure grandchild is cleaned up even if assertions panic.
+    struct GrandchildGuard(libc::pid_t);
+    impl Drop for GrandchildGuard {
+        fn drop(&mut self) {
+            // SAFETY: terminating test-spawned grandchild `sleep 30`.
+            unsafe {
+                libc::kill(self.0, libc::SIGKILL);
+            }
+        }
+    }
+    let _guard = GrandchildGuard(grandchild_pid);
+
+    // 1. Stop child and publish `stop` so `status == 'stop` and
+    //    `status_notify_pending == false`.
+    // SAFETY: `child_pid` is our live child.
+    assert_eq!(unsafe { libc::kill(child_pid, libc::SIGSTOP) }, 0);
+    let stop_deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        let _ = eval
+            .eval_str("(accept-process-output neo-kill-proc 0.05)")
+            .expect("publish stop");
+        let st = eval
+            .eval_str("(process-status neo-kill-proc)")
+            .expect("process-status stop");
+        if st == neovm_value::value::Value::symbol("stop") {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < stop_deadline,
+            "child never reached published stop status (got {st:?})"
+        );
+    }
+
+    // 2. Continue child and observe `(process-status)` once SIGCHLD arrives,
+    //    staging `status_notify_pending = true` with `pending_status = 'run`
+    //    while `CHILD_SIGNAL_SEEN` stays `true`.
+    // SAFETY: `child_pid` is still our live child.
+    assert_eq!(unsafe { libc::kill(child_pid, libc::SIGCONT) }, 0);
+    let cont_deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        let st = eval
+            .eval_str("(process-status neo-kill-proc)")
+            .expect("process-status run");
+        if st == neovm_value::value::Value::symbol("run") {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < cont_deadline,
+            "child never reached observed run status (got {st:?})"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+
+    // 3. Kill child with SIGKILL BEFORE `status_notify` runs, while grandchild
+    //    still holds stdout open (so pipe does NOT EOF and once `'run` is
+    //    published, `has_readable_process_io == true`).
+    // SAFETY: `child_pid` is our live child.
+    assert_eq!(unsafe { libc::kill(child_pid, libc::SIGKILL) }, 0);
+    let kill_deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while linux_proc_state(child_pid) != Some('Z') {
+        assert!(
+            std::time::Instant::now() < kill_deadline,
+            "child did not enter zombie state after SIGKILL"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+    std::thread::sleep(std::time::Duration::from_millis(30));
+
+    // 4. `accept-process-output` must publish `'run`, reap SIGKILL, publish
+    //    `'signal` (killed), and deactivate `pidfd` without busy-spinning.
+    let _ = eval
+        .eval_str("(accept-process-output neo-kill-proc 0.2)")
+        .expect("accept-process-output 1");
+    let _ = eval
+        .eval_str("(accept-process-output neo-kill-proc 0.2)")
+        .expect("accept-process-output 2");
+    let final_status = eval
+        .eval_str("(process-status neo-kill-proc)")
+        .expect("final process-status");
+    let events_printed = eval
+        .eval_str("(prin1-to-string (nreverse neo-kill-events))")
+        .expect("events");
+
+    assert_eq!(
+        final_status,
+        neovm_value::value::Value::symbol("signal"),
+        "coalesced SIGCHLD SIGKILL with grandchild holding stdout open must deliver 'signal (events={events_printed:?})"
+    );
+    let events_str = events_printed.as_utf8_str().expect("utf8 events");
+    assert!(
+        events_str.contains("(signal . ") && events_str.contains("killed"),
+        "sentinel must receive killed event, got {events_str}"
+    );
+}
+
+/// Regression for #15126 Blocker 2b: when `SIGNAL_KEY` (the signal wake pipe)
+/// and `NOTIFY_KEY` (`poller.notify()`) are simultaneously ready during a
+/// zero-timeout `wait_for_events(..., Duration::ZERO, ...)`, falling back from
+/// `poll_zero_timeout_linux` to `poll_events` must NOT lose the `SIGNAL_KEY`
+/// wakeup or leave its wake byte undrained.
+#[test]
+#[cfg(target_os = "linux")]
+fn poll_zero_timeout_linux_preserves_signal_key_on_notify_fallback() {
+    let report = os_signal::install();
+    let read_fd = report
+        .self_pipe_read_fd()
+        .expect("install created GNU's self-pipe");
+
+    // Drain any prior byte from the self-pipe before constructing Context.
+    let mut sink = [0u8; 64];
+    loop {
+        // SAFETY: nonblocking read of the process-owned self-pipe read end.
+        let n = unsafe { libc::read(read_fd, sink.as_mut_ptr().cast(), sink.len()) };
+        if n <= 0 {
+            break;
+        }
+    }
+
+    let eval = crate::emacs_core::eval_hook_installers::new_context();
+
+    // Deliver SIGUSR1 and clear the pending counter while leaving the wake byte
+    // in the self-pipe, modeling a signal arriving between `os_signal_pending()`
+    // and `epoll_wait`.
+    kill_self_and_wait(HandledSignal::Sigusr1);
+    let _ = os_signal::take_pending();
+
+    // Wait until the handler's write to the self-pipe is visible to poll(2).
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        let mut pfd = libc::pollfd {
+            fd: read_fd,
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        // SAFETY: valid single `pollfd` pointer and length 1.
+        let rc = unsafe { libc::poll(&mut pfd, 1, 0) };
+        if rc > 0 && (pfd.revents & libc::POLLIN) != 0 {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "self-pipe never became readable after SIGUSR1"
+        );
+        std::thread::yield_now();
+    }
+
+    // Simultaneously trigger NOTIFY_KEY on the poller so `poll_zero_timeout_linux`
+    // sees both SIGNAL_KEY and NOTIFY_KEY and falls back to `poll_events`.
+    use neovm_system::emacs_core::process::SystemProcessExt;
+    eval.processes()
+        .wait_backend
+        .poller()
+        .expect("poller")
+        .notify()
+        .expect("notify poller");
+
+    let events = eval
+        .processes()
+        .wait_for_backend_events(
+            std::time::Duration::ZERO,
+            neovm_eval::emacs_core::eval::data::process_state::ProcessWaitBackendInterest::NotificationsAndProcesses,
+        )
+        .expect("wait_for_backend_events");
+
+    assert!(
+        events.has_notification_wakeup(),
+        "SIGNAL_KEY wakeup was lost across poll_zero_timeout_linux -> poll_events fallback"
+    );
+
+    // The self-pipe must also have been drained (no stale wake byte left behind).
+    // SAFETY: nonblocking read of the process-owned self-pipe read end.
+    let leftover = unsafe { libc::read(read_fd, sink.as_mut_ptr().cast(), sink.len()) };
+    assert!(
+        leftover < 0 && std::io::Error::last_os_error().kind() == std::io::ErrorKind::WouldBlock,
+        "expected self-pipe to be drained, got leftover={leftover}"
+    );
+}

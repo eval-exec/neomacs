@@ -9,12 +9,13 @@ use crate::{
     ARTIFACT_SCHEMA_VERSION, ComparisonObservation, ComparisonRejection, ComparisonRun,
     ComparisonRunOutcome, ComparisonRunRole, ComparisonSampleCount, ComparisonVerdict,
     CounterScope, EditorCapabilities, EditorKind, EditorProvenance, Frontend, HostProvenance,
-    MachinePolicy, Measurement, MetricName, MetricUnit, PerfError, PerfHarness,
-    PortableDumpProvenance, ResolvedGuardTools, RunArtifact, RunReport, RunVerdict,
-    SUITE_ARTIFACT_SCHEMA_VERSION, ScenarioId, SuiteArtifact, SuiteGateMetric, SuiteId,
+    InstructionCalibration, MachinePolicy, Measurement, MetricName, MetricUnit,
+    NonConvertibleTimingReason, PerfError, PerfHarness, PortableDumpProvenance, ResolvedGuardTools,
+    RunArtifact, RunReport, RunVerdict, SUITE_ARTIFACT_SCHEMA_VERSION, ScenarioId, SuiteArtifact,
+    SuiteDriftSkip, SuiteDriftSkipReason, SuiteEvaluationContext, SuiteGateMetric, SuiteId,
     SuiteRequest, SuiteScenarioResult, SuiteVerdict, VerifiedBaselineManifest,
-    comparison_run_from_child, evaluate_comparison, evaluate_suite, read_history_link,
-    resolve_guard_tools,
+    comparison_run_from_child, evaluate_comparison, evaluate_suite, evaluate_suite_with_context,
+    read_history_link, resolve_guard_tools,
 };
 
 fn result(scenario: ScenarioId, threshold: f64, change: Option<f64>) -> SuiteScenarioResult {
@@ -22,8 +23,12 @@ fn result(scenario: ScenarioId, threshold: f64, change: Option<f64>) -> SuiteSce
         scenario,
         maximum_regression_percent: threshold,
         maximum_drift_percent: None,
-        gate_metric: SuiteGateMetric::ScenarioPrimary,
+        gate_metric: SuiteGateMetric::Instructions,
+        non_convertible_reason: None,
+        iterations: None,
         percent_change: change,
+        gate_summary: None,
+        context_metrics: Vec::new(),
         comparison_artifact: PathBuf::from(format!("{scenario}/comparison.json")),
     }
 }
@@ -81,6 +86,7 @@ fn history_rejects_an_unknown_suite_artifact_schema() {
         baseline_manifest: None,
         guard_tools: None,
         scenarios: Vec::new(),
+        skipped_drifts: Vec::new(),
         verdict: SuiteVerdict::Passed,
     };
     fs::write(
@@ -123,8 +129,12 @@ fn drifting_result(
         scenario,
         maximum_regression_percent: threshold,
         maximum_drift_percent: drift_allowance,
-        gate_metric: SuiteGateMetric::ScenarioPrimary,
+        gate_metric: SuiteGateMetric::Instructions,
+        non_convertible_reason: None,
+        iterations: None,
         percent_change: change,
+        gate_summary: None,
+        context_metrics: Vec::new(),
         comparison_artifact: PathBuf::from(format!("{scenario}/comparison.json")),
     }
 }
@@ -147,6 +157,7 @@ fn suite_history(scenarios: Vec<SuiteScenarioResult>) -> SuiteArtifact {
         baseline_manifest: None,
         guard_tools: None,
         scenarios,
+        skipped_drifts: Vec::new(),
         verdict: SuiteVerdict::Passed,
     }
 }
@@ -436,16 +447,17 @@ fn org_editing_guard_rejects_missing_baseline_manifest_at_suite_request_level() 
         "rejected SuiteRequest must not create suite artifacts"
     );
 
-    // Ruling 4: SuiteId::Standard remains untouched and does not require a
-    // baseline manifest.
+    // SuiteId::Standard requires --hardware-counters (for its 22 instruction-gated
+    // rows) but does NOT require a frozen --baseline-manifest.
     SuiteRequest::new(
         SuiteId::Standard,
         "reference/gnu-emacs",
         "target/release/neomacs",
         ComparisonSampleCount::new(3).expect("valid sample count"),
     )
+    .with_counters(Some(CounterScope::EditLoop))
     .validate()
-    .expect("standard suite must still validate without --baseline-manifest");
+    .expect("standard suite with hardware counters must validate without --baseline-manifest");
 }
 
 /// Ruling 3 (#14682 / #14858 / #14901): exercises the production
@@ -533,7 +545,11 @@ fn org_editing_guard_rejects_missing_instructions_metric_without_wall_time_fallb
             maximum_regression_percent: row.maximum_regression_percent,
             maximum_drift_percent: row.maximum_drift_percent,
             gate_metric: row.gate_metric,
+            non_convertible_reason: row.non_convertible_reason,
+            iterations: Some(input.iterations.get()),
             percent_change: None,
+            gate_summary: None,
+            context_metrics: Vec::new(),
             comparison_artifact: PathBuf::from(format!("{}/comparison.json", row.scenario)),
         });
     }
@@ -702,7 +718,11 @@ fn org_editing_guard_gates_instructions_at_one_percent_and_preserves_standard_su
             maximum_regression_percent: 1.0,
             maximum_drift_percent: None,
             gate_metric: SuiteGateMetric::Instructions,
+            non_convertible_reason: None,
+            iterations: None,
             percent_change: Some(0.49),
+            gate_summary: None,
+            context_metrics: Vec::new(),
             comparison_artifact: PathBuf::from("org-editing/comparison.json"),
         },
         SuiteScenarioResult {
@@ -710,7 +730,11 @@ fn org_editing_guard_gates_instructions_at_one_percent_and_preserves_standard_su
             maximum_regression_percent: 1.0,
             maximum_drift_percent: None,
             gate_metric: SuiteGateMetric::Instructions,
+            non_convertible_reason: None,
+            iterations: None,
             percent_change: Some(-0.53),
+            gate_summary: None,
+            context_metrics: Vec::new(),
             comparison_artifact: PathBuf::from("org-editing-heavy/comparison.json"),
         },
     ];
@@ -730,16 +754,18 @@ fn org_editing_guard_gates_instructions_at_one_percent_and_preserves_standard_su
     assert_eq!(regressions.len(), 1);
     assert_eq!(regressions[0].scenario, ScenarioId::OrgEditingHeavy);
 
-    // Standard suite remains completely unchanged (Ruling 4).
+    // Standard suite shares the same 1.0% instruction calibration floor as
+    // OrgEditingGuard on OrgEditing and OrgEditingHeavy, plus a 0.5% drift
+    // ratchet derived from multi-run clean A/A calibration.
     let standard = SuiteId::Standard.scenarios();
     for expected_id in [ScenarioId::OrgEditing, ScenarioId::OrgEditingHeavy] {
         let row = standard
             .iter()
             .find(|row| row.scenario == expected_id)
             .expect("standard suite retains org row");
-        assert_eq!(row.maximum_regression_percent, 8.0);
-        assert_eq!(row.maximum_drift_percent, Some(2.0));
-        assert_eq!(row.gate_metric, SuiteGateMetric::ScenarioPrimary);
+        assert_eq!(row.maximum_regression_percent, 1.0);
+        assert_eq!(row.maximum_drift_percent, Some(0.5));
+        assert_eq!(row.gate_metric, SuiteGateMetric::Instructions);
     }
 }
 
@@ -1426,16 +1452,37 @@ fn org_editing_guard_binds_counter_scope_to_edit_loop() {
             "expected EditLoop counter scope rejection for {wrong_scope:?}, got {reasons:?}"
         );
 
-        // Ruling 4: SuiteId::Standard still accepts every CounterScope.
-        SuiteRequest::new(
+        // SuiteId::Standard is instruction-gated on edit-loop rows (with
+        // Startup overriding to WholeProcess), so it accepts EditLoop and
+        // EditLoopMainThread while rejecting WholeProcess scopes that would
+        // silently mix startup instructions into edit-loop rows.
+        let standard_req = SuiteRequest::new(
             SuiteId::Standard,
             "reference/gnu-emacs",
             "target/release/neomacs",
             samples,
         )
-        .with_counters(Some(wrong_scope))
-        .validate()
-        .expect("SuiteId::Standard must keep accepting arbitrary counter scopes");
+        .with_counters(Some(wrong_scope));
+        if matches!(wrong_scope, CounterScope::EditLoopMainThread) {
+            standard_req
+                .validate()
+                .expect("SuiteId::Standard must accept EditLoopMainThread");
+        } else {
+            let err = standard_req
+                .validate()
+                .expect_err("SuiteId::Standard must reject WholeProcess counter scopes");
+            assert!(
+                matches!(
+                    err,
+                    PerfError::CounterScopeMismatch {
+                        suite: SuiteId::Standard,
+                        expected: CounterScope::EditLoop,
+                        actual,
+                    } if actual == wrong_scope
+                ),
+                "expected Standard CounterScopeMismatch for {wrong_scope:?}, got {err:?}"
+            );
+        }
     }
 }
 
@@ -1759,6 +1806,672 @@ fn scrolling_long_lines_guard_requires_edit_loop_instructions_and_gates_at_two_p
             run_request.resolved_perf(),
             Some(tools.perf_path.as_path()),
             "ScrollingLongLinesGuard {role:?} arm must use resolved canonical perf"
+        );
+    }
+}
+
+#[test]
+fn standard_suite_instruction_gates_all_convertible_rows_and_argues_every_exception() {
+    let rows = SuiteId::Standard.scenarios();
+    assert_eq!(rows.len(), 23);
+
+    let mut instruction_rows = Vec::new();
+    let mut report_rows = Vec::new();
+    for row in rows {
+        match row.gate_metric {
+            SuiteGateMetric::Instructions => {
+                assert_eq!(
+                    row.non_convertible_reason, None,
+                    "instruction-gated row {} must not carry a non-convertible reason",
+                    row.scenario
+                );
+                let cal = row
+                    .calibration
+                    .expect("every instruction-gated row must carry InstructionCalibration");
+                cal.validate(2)
+                    .unwrap_or_else(|err| panic!("invalid calibration on {}: {err}", row.scenario));
+                assert_eq!(
+                    row.maximum_regression_percent,
+                    cal.budget_percent(),
+                    "{}: budget must come directly from InstructionCalibration::budget_percent()",
+                    row.scenario
+                );
+                assert!(
+                    row.maximum_regression_percent > cal.max_span_percent,
+                    "{}: budget ({}) must strictly exceed observed A/A span ({})",
+                    row.scenario,
+                    row.maximum_regression_percent,
+                    cal.max_span_percent
+                );
+                if let Some(drift) = row.maximum_drift_percent {
+                    assert_eq!(
+                        Some(drift),
+                        cal.drift_budget_percent(),
+                        "{}: drift ratchet must come directly from InstructionCalibration",
+                        row.scenario
+                    );
+                    assert!(
+                        drift > cal.max_aa_drift_percent,
+                        "{}: drift ratchet ({drift}) must exceed observed A/A drift ({})",
+                        row.scenario,
+                        cal.max_aa_drift_percent
+                    );
+                }
+                instruction_rows.push(row.scenario);
+            }
+            SuiteGateMetric::NonGatingReport => {
+                assert!(
+                    row.non_convertible_reason.is_some(),
+                    "non-gating row {} must declare a physical duration NonConvertibleTimingReason",
+                    row.scenario
+                );
+                report_rows.push((row.scenario, row.non_convertible_reason));
+            }
+            SuiteGateMetric::ScenarioPrimary => {
+                panic!(
+                    "STANDARD_SCENARIOS must not retain wall/CPU-gated row {}",
+                    row.scenario
+                );
+            }
+        }
+    }
+    assert_eq!(instruction_rows.len(), 22);
+    assert_eq!(
+        report_rows,
+        vec![(
+            ScenarioId::GuiInputLatency,
+            Some(NonConvertibleTimingReason::InputToRedisplayLatency)
+        )]
+    );
+
+    // SuiteId::Standard without --hardware-counters must reject before launch
+    // naming all 22 instruction-gated rows (zero silent fallback to wall time).
+    let samples = ComparisonSampleCount::new(3).expect("valid sample count");
+    let no_counters = SuiteRequest::new(
+        SuiteId::Standard,
+        "reference/gnu-emacs",
+        "target/release/neomacs",
+        samples,
+    );
+    let err = no_counters
+        .validate()
+        .expect_err("standard suite without --hardware-counters must fail");
+    assert!(
+        matches!(
+            &err,
+            PerfError::HardwareCountersRequired {
+                suite: SuiteId::Standard,
+                scenarios,
+            } if scenarios == &instruction_rows
+        ),
+        "expected HardwareCountersRequired listing all 22 convertible rows, got {err:?}"
+    );
+
+    // Startup overrides EditLoop -> WholeProcess (and preserves main-thread
+    // selection) so the gate counts full process startup, not an empty
+    // post-startup `(redisplay t)`.
+    let startup_row = rows
+        .iter()
+        .find(|row| row.scenario == ScenarioId::Startup)
+        .expect("startup row");
+    assert_eq!(
+        startup_row.counter_scope_override,
+        Some(CounterScope::WholeProcess)
+    );
+    let edit_loop_req = no_counters
+        .clone()
+        .with_counters(Some(CounterScope::EditLoop));
+    let startup_cmp = edit_loop_req
+        .comparison_request_for(startup_row, None, None, None)
+        .build_input();
+    assert_eq!(startup_cmp.counters, Some(CounterScope::WholeProcess));
+    assert_eq!(startup_cmp.primary_metric, MetricName::Instructions);
+
+    let main_thread_req = no_counters.with_counters(Some(CounterScope::EditLoopMainThread));
+    let startup_main_cmp = main_thread_req
+        .comparison_request_for(startup_row, None, None, None)
+        .build_input();
+    assert_eq!(
+        startup_main_cmp.counters,
+        Some(CounterScope::WholeProcessMainThread)
+    );
+}
+
+#[test]
+fn instruction_gate_survives_wall_time_load_inflation_and_trips_on_instruction_regression() {
+    let samples = ComparisonSampleCount::new(3).expect("valid sample count");
+    let suite_request = SuiteRequest::new(
+        SuiteId::Standard,
+        "reference/gnu-emacs",
+        "target/release/neomacs",
+        samples,
+    )
+    .with_counters(Some(CounterScope::EditLoop));
+
+    // One representative row from each converted row group with regressions
+    // sized near the calibrated budget (not oversized wall-clock deltas):
+    // OrgEditing (1.0%), BytecodeCallLoop (1.0%), SustainedEditing (11.0%),
+    // Startup (32.5%).
+    let group_rows = [
+        (
+            ScenarioId::OrgEditing,
+            10_000_000.0,
+            10_020_000.0,
+            10_150_000.0, // +1.5% > 1.0% budget
+        ),
+        (
+            ScenarioId::BytecodeCallLoop,
+            50_000_000.0,
+            50_050_000.0,
+            50_750_000.0, // +1.5% > 1.0% budget
+        ),
+        (
+            ScenarioId::SustainedEditing,
+            20_000_000.0,
+            20_040_000.0,
+            22_400_000.0, // +12.0% > 11.0% budget
+        ),
+        (
+            ScenarioId::Startup,
+            80_000_000.0,
+            80_080_000.0,
+            106_800_000.0, // +33.5% > 32.5% budget
+        ),
+    ];
+
+    let build_observations = |scenario_id: ScenarioId,
+                              iterations: u32,
+                              base_wall: [f64; 3],
+                              cand_wall: [f64; 3],
+                              base_ins: [f64; 3],
+                              cand_ins: [f64; 3],
+                              include_instructions: bool| {
+        let wall_metric = crate::scenario(scenario_id).primary_metric;
+        let wall_unit = wall_metric.canonical_unit();
+        let mut obs = Vec::new();
+        for sample_index in 0..3u32 {
+            for (role, wall, ins) in [
+                (
+                    ComparisonRunRole::Baseline,
+                    base_wall[sample_index as usize],
+                    base_ins[sample_index as usize],
+                ),
+                (
+                    ComparisonRunRole::Candidate,
+                    cand_wall[sample_index as usize],
+                    cand_ins[sample_index as usize],
+                ),
+            ] {
+                let mut measurements = vec![
+                    Measurement {
+                        name: wall_metric,
+                        value: wall,
+                        unit: wall_unit,
+                    },
+                    Measurement {
+                        name: MetricName::CpuCycles,
+                        value: ins * 0.75,
+                        unit: MetricUnit::Count,
+                    },
+                ];
+                if include_instructions {
+                    measurements.push(Measurement {
+                        name: MetricName::Instructions,
+                        value: ins,
+                        unit: MetricUnit::Count,
+                    });
+                }
+                obs.push(ComparisonObservation {
+                    run: ComparisonRun {
+                        role,
+                        sample_index,
+                        run_id: format!("{scenario_id}-{role:?}-{sample_index}"),
+                        artifact_path: PathBuf::from(format!(
+                            "{scenario_id}/{role:?}-{sample_index}/artifact.json"
+                        )),
+                        scenario: scenario_id,
+                        frontend: crate::scenario(scenario_id).default_frontend,
+                        editor: PathBuf::from(match role {
+                            ComparisonRunRole::Baseline => "reference/gnu-emacs",
+                            ComparisonRunRole::Candidate => "target/release/neomacs",
+                        }),
+                        iterations,
+                        editor_provenance: Some(guard_provenance(role)),
+                        execution_environment: Some(Default::default()),
+                        passthrough_environment: None,
+                        native_video_input: None,
+                        native_video_execution: None,
+                        outcome: ComparisonRunOutcome::Valid,
+                    },
+                    verdict: RunVerdict::Valid { measurements },
+                });
+            }
+        }
+        obs
+    };
+
+    // Case 1: Heavy box load inflates wall/CPU time by +45% with large spread,
+    // while retired instructions stay flat (+0.1%..+0.2%). Every group MUST
+    // PASS and report BOTH gate (Instructions) and non-gating wall context.
+    let mut load_results = Vec::new();
+    for (scenario_id, base_ins, flat_cand_ins, _) in group_rows {
+        let row = SuiteId::Standard
+            .scenarios()
+            .iter()
+            .find(|r| r.scenario == scenario_id)
+            .expect("standard row");
+        let input = suite_request
+            .comparison_request_for(row, None, None, None)
+            .build_input();
+        let obs = build_observations(
+            scenario_id,
+            input.iterations.get(),
+            [1000.0, 1020.0, 1040.0],
+            [1350.0, 1480.0, 1620.0],
+            [base_ins - 500.0, base_ins, base_ins + 500.0],
+            [flat_cand_ins - 500.0, flat_cand_ins, flat_cand_ins + 500.0],
+            true,
+        );
+        let ComparisonVerdict::Valid {
+            summary,
+            context_metrics,
+        } = evaluate_comparison(&input, &obs)
+        else {
+            panic!("{scenario_id}: valid run with instructions must pass");
+        };
+        assert_eq!(summary.metric, MetricName::Instructions);
+        let wall_metric = crate::scenario(scenario_id).primary_metric;
+        let wall_context = context_metrics
+            .iter()
+            .find(|m| m.metric == wall_metric)
+            .expect("wall/CPU time must be preserved as non-gating context");
+        assert!(
+            wall_context.percent_change > 40.0,
+            "simulated wall inflation must be preserved in context: {wall_context:?}"
+        );
+        assert!(
+            wall_context.candidate_median_absolute_deviation > 0.0,
+            "wall context must keep MAD spread"
+        );
+        assert!(
+            context_metrics
+                .iter()
+                .any(|m| m.metric == MetricName::CpuCycles),
+            "CpuCycles context must also be preserved"
+        );
+        let row_result = SuiteScenarioResult {
+            scenario: scenario_id,
+            maximum_regression_percent: row.maximum_regression_percent,
+            maximum_drift_percent: row.maximum_drift_percent,
+            gate_metric: row.gate_metric,
+            non_convertible_reason: row.non_convertible_reason,
+            iterations: Some(input.iterations.get()),
+            percent_change: Some(summary.percent_change),
+            gate_summary: Some(summary),
+            context_metrics,
+            comparison_artifact: PathBuf::from(format!("{scenario_id}/comparison.json")),
+        };
+        let rendered = crate::cli::format_suite_row_summary(&row_result);
+        assert!(
+            rendered.contains("GATE [Instructions")
+                && rendered.contains("/op")
+                && rendered.contains("CONTEXT [non-gating]:")
+                && rendered.contains(&format!("{wall_metric:?}")),
+            "row output must clearly separate GATE vs non-gating CONTEXT: {rendered}"
+        );
+        load_results.push(row_result);
+    }
+    assert_eq!(
+        evaluate_suite(&load_results, None),
+        SuiteVerdict::Passed,
+        "wall-time inflation under load must NOT fail instruction-gated rows"
+    );
+
+    // Case 2: Mutation regression in EVERY converted group pushes instructions
+    // past threshold even while wall time improves -10% -> MUST go RED.
+    for (scenario_id, base_ins, _, regressed_cand_ins) in group_rows {
+        let row = SuiteId::Standard
+            .scenarios()
+            .iter()
+            .find(|r| r.scenario == scenario_id)
+            .expect("standard row");
+        let input = suite_request
+            .comparison_request_for(row, None, None, None)
+            .build_input();
+        let obs = build_observations(
+            scenario_id,
+            input.iterations.get(),
+            [1000.0, 1020.0, 1040.0],
+            [900.0, 918.0, 936.0],
+            [base_ins, base_ins, base_ins],
+            [regressed_cand_ins, regressed_cand_ins, regressed_cand_ins],
+            true,
+        );
+        let ComparisonVerdict::Valid {
+            summary,
+            context_metrics,
+        } = evaluate_comparison(&input, &obs)
+        else {
+            panic!("{scenario_id}: valid comparison expected");
+        };
+        let row_result = SuiteScenarioResult {
+            scenario: scenario_id,
+            maximum_regression_percent: row.maximum_regression_percent,
+            maximum_drift_percent: row.maximum_drift_percent,
+            gate_metric: row.gate_metric,
+            non_convertible_reason: row.non_convertible_reason,
+            iterations: Some(input.iterations.get()),
+            percent_change: Some(summary.percent_change),
+            gate_summary: Some(summary),
+            context_metrics,
+            comparison_artifact: PathBuf::from(format!("{scenario_id}/comparison.json")),
+        };
+        assert!(
+            matches!(
+                evaluate_suite(&[row_result], None),
+                SuiteVerdict::Regressed { ref regressions }
+                    if regressions.len() == 1 && regressions[0].scenario == scenario_id
+            ),
+            "{scenario_id} instruction regression must fail gate even when wall time improves"
+        );
+    }
+
+    // Case 3: Missing Instructions on a converted row MUST reject rather than
+    // falling back to wall time.
+    let startup_row = SuiteId::Standard
+        .scenarios()
+        .iter()
+        .find(|r| r.scenario == ScenarioId::Startup)
+        .expect("startup row");
+    let startup_input = suite_request
+        .comparison_request_for(startup_row, None, None, None)
+        .build_input();
+    let missing_obs = build_observations(
+        ScenarioId::Startup,
+        startup_input.iterations.get(),
+        [1000.0, 1000.0, 1000.0],
+        [1000.0, 1000.0, 1000.0],
+        [80_000_000.0; 3],
+        [80_000_000.0; 3],
+        false,
+    );
+    assert!(
+        matches!(
+            evaluate_comparison(&startup_input, &missing_obs),
+            ComparisonVerdict::Rejected { .. }
+        ),
+        "missing Instructions must reject comparison without wall-time fallback"
+    );
+}
+
+#[test]
+fn drift_ratchet_skips_cross_gate_metric_lineage_and_enforces_matching_metric() {
+    // Legacy wall-time (ScenarioPrimary) predecessor at -10% vs new
+    // Instructions run at +0.5% must NOT trigger a spurious +10.5% drift
+    // across incompatible gate metrics.
+    let legacy_previous = suite_history(vec![SuiteScenarioResult {
+        gate_metric: SuiteGateMetric::ScenarioPrimary,
+        ..drifting_result(ScenarioId::OrgEditing, 2.0, Some(1.0), Some(-10.0))
+    }]);
+    let current_instructions = [SuiteScenarioResult {
+        gate_metric: SuiteGateMetric::Instructions,
+        ..drifting_result(ScenarioId::OrgEditing, 2.0, Some(1.0), Some(0.5))
+    }];
+    let (verdict, skips) = evaluate_suite_with_context(
+        &current_instructions,
+        Some(&legacy_previous),
+        Some(SuiteEvaluationContext {
+            suite: SuiteId::Standard,
+            baseline_editor: Path::new("baseline-emacs"),
+            counters: None,
+        }),
+    );
+    assert_eq!(
+        verdict,
+        SuiteVerdict::Passed,
+        "incompatible gate_metric lineage must re-baseline rather than subtract wall % from instruction %"
+    );
+    assert_eq!(
+        skips,
+        vec![SuiteDriftSkip {
+            scenario: ScenarioId::OrgEditing,
+            reason: SuiteDriftSkipReason::GateMetricChanged,
+        }],
+        "skipped drift check must be recorded explicitly, never silently disarmed"
+    );
+
+    // Cross-scope, cross-baseline, cross-suite, and cross-iterations lineage
+    // must ALSO skip with explicit typed reasons instead of comparing apples
+    // and oranges.
+    let matching_previous = suite_history(vec![SuiteScenarioResult {
+        gate_metric: SuiteGateMetric::Instructions,
+        iterations: Some(20),
+        ..drifting_result(ScenarioId::OrgEditing, 2.0, Some(1.0), Some(-0.8))
+    }]);
+    let current_with_iters = [SuiteScenarioResult {
+        gate_metric: SuiteGateMetric::Instructions,
+        iterations: Some(20),
+        ..drifting_result(ScenarioId::OrgEditing, 2.0, Some(1.0), Some(0.5))
+    }];
+
+    let (scope_verdict, scope_skips) = evaluate_suite_with_context(
+        &current_with_iters,
+        Some(&matching_previous),
+        Some(SuiteEvaluationContext {
+            suite: SuiteId::Standard,
+            baseline_editor: Path::new("baseline-emacs"),
+            counters: Some(CounterScope::EditLoopMainThread),
+        }),
+    );
+    assert_eq!(scope_verdict, SuiteVerdict::Passed);
+    assert_eq!(
+        scope_skips,
+        vec![SuiteDriftSkip {
+            scenario: ScenarioId::OrgEditing,
+            reason: SuiteDriftSkipReason::CounterScopeChanged,
+        }]
+    );
+
+    let (base_verdict, base_skips) = evaluate_suite_with_context(
+        &current_with_iters,
+        Some(&matching_previous),
+        Some(SuiteEvaluationContext {
+            suite: SuiteId::Standard,
+            baseline_editor: Path::new("different-baseline"),
+            counters: None,
+        }),
+    );
+    assert_eq!(base_verdict, SuiteVerdict::Passed);
+    assert_eq!(
+        base_skips,
+        vec![SuiteDriftSkip {
+            scenario: ScenarioId::OrgEditing,
+            reason: SuiteDriftSkipReason::BaselineEditorChanged,
+        }]
+    );
+
+    let current_different_iters = [SuiteScenarioResult {
+        iterations: Some(40),
+        ..current_with_iters[0].clone()
+    }];
+    let (iter_verdict, iter_skips) = evaluate_suite_with_context(
+        &current_different_iters,
+        Some(&matching_previous),
+        Some(SuiteEvaluationContext {
+            suite: SuiteId::Standard,
+            baseline_editor: Path::new("baseline-emacs"),
+            counters: None,
+        }),
+    );
+    assert_eq!(iter_verdict, SuiteVerdict::Passed);
+    assert_eq!(
+        iter_skips,
+        vec![SuiteDriftSkip {
+            scenario: ScenarioId::OrgEditing,
+            reason: SuiteDriftSkipReason::IterationsChanged,
+        }]
+    );
+
+    // Once all lineage dimensions match, drift still trips.
+    let (drifted_verdict, drifted_skips) = evaluate_suite_with_context(
+        &current_with_iters,
+        Some(&matching_previous),
+        Some(SuiteEvaluationContext {
+            suite: SuiteId::Standard,
+            baseline_editor: Path::new("baseline-emacs"),
+            counters: None,
+        }),
+    );
+    assert!(drifted_skips.is_empty());
+    let SuiteVerdict::Drifted { drifts } = drifted_verdict else {
+        panic!("matching Instructions lineage exceeding drift ceiling must fail with Drifted");
+    };
+    assert_eq!(drifts.len(), 1);
+    assert_eq!(drifts[0].scenario, ScenarioId::OrgEditing);
+    assert!((drifts[0].drift_percent - 1.3).abs() < 1e-9);
+}
+
+#[test]
+fn evaluate_suite_fails_closed_on_nan_infinite_zero_budgets_and_metric_mismatch() {
+    for bad_budget in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, 0.0, -1.0] {
+        let row = result(ScenarioId::OrgEditing, bad_budget, Some(500.0));
+        assert_eq!(
+            evaluate_suite(&[row], None),
+            SuiteVerdict::Rejected {
+                scenarios: vec![ScenarioId::OrgEditing],
+            },
+            "invalid budget {bad_budget:?} must fail closed as Rejected, never Passed"
+        );
+    }
+
+    for bad_drift in [f64::NAN, f64::INFINITY, 0.0, -0.5] {
+        let row = drifting_result(ScenarioId::OrgEditing, 1.0, Some(bad_drift), Some(0.1));
+        assert_eq!(
+            evaluate_suite(&[row], None),
+            SuiteVerdict::Rejected {
+                scenarios: vec![ScenarioId::OrgEditing],
+            },
+            "invalid drift budget {bad_drift:?} must fail closed as Rejected"
+        );
+    }
+
+    // Non-finite percent_change fails closed.
+    let nan_change = result(ScenarioId::OrgEditing, 1.0, Some(f64::NAN));
+    assert_eq!(
+        evaluate_suite(&[nan_change], None),
+        SuiteVerdict::Rejected {
+            scenarios: vec![ScenarioId::OrgEditing],
+        }
+    );
+
+    // Mismatched gate_summary.metric vs gate_metric fails closed.
+    let wrong_metric = SuiteScenarioResult {
+        gate_summary: Some(crate::ComparisonMetricSummary {
+            metric: MetricName::PerOperationWallTime,
+            unit: MetricUnit::MicrosecondsPerOperation,
+            baseline_samples: vec![100.0, 100.0, 100.0],
+            candidate_samples: vec![100.0, 100.0, 100.0],
+            paired_samples: vec![],
+            baseline_median: 100.0,
+            candidate_median: 100.0,
+            baseline_median_absolute_deviation: 0.0,
+            candidate_median_absolute_deviation: 0.0,
+            candidate_to_baseline_ratio: 1.0,
+            percent_change: 0.0,
+        }),
+        ..result(ScenarioId::OrgEditing, 1.0, Some(0.0))
+    };
+    assert_eq!(
+        evaluate_suite(&[wrong_metric], None),
+        SuiteVerdict::Rejected {
+            scenarios: vec![ScenarioId::OrgEditing],
+        }
+    );
+
+    // InstructionCalibration::validate rejects NaN, < 2 runs, < 5 samples, and
+    // non-positive floors.
+    let bad_cal = InstructionCalibration {
+        runs: 1,
+        samples_per_side: 5,
+        max_rel_mad_percent: 0.01,
+        max_span_percent: 0.05,
+        max_aa_delta_percent: 0.01,
+        max_aa_drift_percent: 0.01,
+        tier_floor_percent: 1.0,
+    };
+    assert!(bad_cal.validate(2).is_err());
+    let nan_cal = InstructionCalibration {
+        runs: 2,
+        max_rel_mad_percent: f64::NAN,
+        ..bad_cal
+    };
+    assert!(nan_cal.budget_percent().is_nan());
+    assert!(nan_cal.validate(2).is_err());
+    let nan_floor = InstructionCalibration {
+        runs: 2,
+        tier_floor_percent: f64::NAN,
+        ..bad_cal
+    };
+    assert!(nan_floor.budget_percent().is_nan());
+    assert!(nan_floor.validate(2).is_err());
+}
+
+#[test]
+fn non_gating_report_row_never_false_reds_on_latency_but_rejects_failures() {
+    let latency_swing = SuiteScenarioResult {
+        scenario: ScenarioId::GuiInputLatency,
+        maximum_regression_percent: 0.0,
+        maximum_drift_percent: None,
+        gate_metric: SuiteGateMetric::NonGatingReport,
+        non_convertible_reason: Some(NonConvertibleTimingReason::InputToRedisplayLatency),
+        iterations: Some(1000),
+        percent_change: Some(25.0),
+        gate_summary: None,
+        context_metrics: Vec::new(),
+        comparison_artifact: PathBuf::from("gui-input-latency/comparison.json"),
+    };
+    assert_eq!(
+        evaluate_suite(&[latency_swing.clone()], None),
+        SuiteVerdict::Passed,
+        "non-gating report row must not fail suite on latency swing"
+    );
+
+    let failed_state = SuiteScenarioResult {
+        percent_change: None,
+        ..latency_swing
+    };
+    assert_eq!(
+        evaluate_suite(&[failed_state], None),
+        SuiteVerdict::Rejected {
+            scenarios: vec![ScenarioId::GuiInputLatency],
+        },
+        "non-gating report row must still reject suite when redisplay/correctness fails"
+    );
+}
+
+#[test]
+fn every_converted_standard_row_trips_just_above_its_calibrated_budget() {
+    for row in SuiteId::Standard.scenarios() {
+        if row.gate_metric != SuiteGateMetric::Instructions {
+            continue;
+        }
+        let budget = row.maximum_regression_percent;
+        let just_below = result(row.scenario, budget, Some(budget - 0.01));
+        assert_eq!(
+            evaluate_suite(&[just_below], None),
+            SuiteVerdict::Passed,
+            "{} must pass just below calibrated budget {budget}%",
+            row.scenario
+        );
+        let just_above = result(row.scenario, budget, Some(budget + 0.01));
+        assert!(
+            matches!(
+                evaluate_suite(&[just_above], None),
+                SuiteVerdict::Regressed { ref regressions }
+                    if regressions.len() == 1 && regressions[0].scenario == row.scenario
+            ),
+            "{} must trip Regressed just above calibrated budget {budget}%",
+            row.scenario
         );
     }
 }

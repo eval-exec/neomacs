@@ -1454,13 +1454,25 @@ jobs:
       # Both scenarios passed there (2026-11-18, i9-14900K, llvmpipe median
       # 2.9-3.3 ms, tier SoftwareVulkanFast). The dispatch-only
       # scroll120-cohort workflow covers the same scenarios' analysis.
+      #
+      # Any `gpu_only_` GUI row is ALSO excluded here: this runner builds
+      # Weston with `-Drenderer-gl=false` (pixman-only, no hardware GPU/EGL),
+      # which forces `QualityMode::SoftwareCompatibility` where dynamic cursor
+      # motion is disabled by policy. Excluding `~gpu_only_` keeps CI's green
+      # pass strictly scoped to what software CI actually verifies (e.g.
+      # Phase 1 geometry-hint dedup + wire receipts) so it cannot be misread
+      # as GPU-only Phase 2 cursor-motion verification. Run GPU-only rows on a
+      # hardware GPU host instead:
+      #
+      #   NEOMACS_GUI_TEST_BINARY=target/release/neomacs \
+      #     cargo nextest run -p neomacs-gui-tests -E 'test(gpu_only_)'
       - name: Run real GUI tests
         if: ${{ !cancelled() }}
         run: |
           cargo nextest run \
             --archive-file neomacs-workspace-tests.tar.zst \
             --extract-to "$TMPDIR/nextest" \
-            -E 'package(neomacs-gui-tests) and not test(~continuous_120hz_)' \
+            -E 'package(neomacs-gui-tests) and not test(~continuous_120hz_) and not test(~gpu_only_)' \
             --workspace-remap "$GITHUB_WORKSPACE" \
             --test-threads 4 \
             --no-fail-fast

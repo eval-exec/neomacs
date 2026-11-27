@@ -28,6 +28,30 @@ const LOWER_CRATES: [&str; 7] = [
     "neovm-system",
 ];
 
+// Crates that are deliberately NOT roots, with the reason each stays out. A
+// crate leaves this list by its own change, because every scanner starts
+// walking the new tree at once.
+//
+// - `neomacs-gui-tests` and `neomacs-tui-tests`: their `src/` is harness code,
+//   not product code, and the capability guards exist to constrain the product.
+//   A harness helper must not be able to satisfy a production rule.
+// - `neomacs-melpa-tests`, `neomacs-melpa-test-support`: external-package
+//   fixtures, same reason.
+// - `xtask`, `neomacs-perf`, `neomacs-diagnostics`: build and measurement
+//   tooling that runs outside the editor.
+// - `neomacs-display-runtime`: KNOWN OMISSION with a prerequisite, not a
+//   judgement that it is test-only. Measured on 2026-11-26 by adding it here:
+//   the family goes 275 tests / 273 passed / 2 FAILED
+//   (`production_transmute_count_can_only_decrease`,
+//   `production_heap_installers_use_the_allocation_root`), because that crate's
+//   `build.rs` generates `application_identity.rs` into ITS OWN OUT_DIR and the
+//   transmute scanner resolves a macro's generated path against the scanning
+//   crate's OUT_DIR and panics on the io error. PREREQUISITE: first make that
+//   scanner report an unresolvable generated path as a named violation
+//   (crate, file, macro) instead of an io panic; then add the crate and
+//   re-measure, since the transmute ceiling may move once its files can
+//   actually be read.
+
 /// The value extraction manifest: pre-split core-relative path -> destination
 /// below `crates/neovm-value/src`. G0 members left `emacs_core/runtime/...` for
 /// the value crate root, so their historical spellings cannot be recovered by

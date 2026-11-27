@@ -214,9 +214,9 @@ impl ChromeChange {
 
         // Inhibition still commits the new line accounting/window tree. No
         // native acknowledgement will do this for an unchanged allocation.
-        let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+        let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
         if let Some(frame) = frames.get_mut(fid) {
-            frame.refresh_geometry_for_changed_font(buffers);
+            frame.refresh_geometry_for_changed_font(&buffers);
         }
         if !needs_request {
             return Ok(previous);

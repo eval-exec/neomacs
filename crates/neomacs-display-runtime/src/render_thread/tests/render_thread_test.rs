@@ -1774,3 +1774,146 @@ fn asynchronous_preparation_stops_with_a_full_result_queue() {
     ));
     drop(incoming);
 }
+
+#[test]
+fn cursor_motion_mid_animation_stays_paced_without_unpaced_cursor_animation() {
+    use super::cursor::CursorTarget;
+    use super::frame_sched::{
+        ClockSource, DemandReason, FrameCoordinator, FrameTick, NativeWindowId, PacingAction,
+        RenderWork, SubmissionResult,
+    };
+    use super::frame_windows::GuiFrameRenderState;
+    use neomacs_display_protocol::frame_time::observe_platform_now;
+    use std::num::NonZeroU16;
+    use std::time::Duration;
+
+    let tick = |at| FrameTick {
+        frame_time: at,
+        target_presentation_time: at,
+        estimated_interval: Duration::from_nanos(16_666_667),
+        source: ClockSource::Synthetic,
+    };
+    let now = observe_platform_now();
+    let id = NativeWindowId(0x42);
+    let rate = NonZeroU16::new(60).unwrap();
+    let mut coordinator = FrameCoordinator::new();
+    let mut render = GuiFrameRenderState::new_without_device(0x42, false, now);
+    render.set_current_frame(
+        Some(FrameGlyphBuffer::with_size(800.0, 600.0)),
+        None,
+        Default::default(),
+        Default::default(),
+    );
+    render.cursor.anim_enabled = true;
+    render.cursor.blink_enabled = true;
+    render.cursor.blink_interval = Duration::from_millis(500);
+    render.cursor.last_blink_toggle = now;
+    let target = CursorTarget {
+        window_id: 7,
+        x: 10.0,
+        y: 20.0,
+        width: 8.0,
+        height: 16.0,
+        style: CursorStyle::FilledBox,
+        frame_id: 0x42,
+    };
+    render.cursor.set_target(target.clone(), now);
+    render
+        .cursor
+        .set_target(CursorTarget { y: 100.0, ..target }, now);
+    assert!(render.cursor.is_animating());
+
+    // Initial paced motion frame at t0.
+    let t0 = now.plus(Duration::from_millis(16));
+    assert!(render.tick_cursor_animation(t0));
+    assert!(render.cursor.is_animating());
+    let motion_0 =
+        RenderApp::reconcile_cursor_motion_demand(&mut coordinator, id, &render, true, rate, t0);
+    let anim_0 = RenderApp::reconcile_cursor_animation_demand(&mut coordinator, id, &render, t0);
+    assert_eq!(motion_0, PacingAction::RequestRedraw);
+    assert_eq!(anim_0, PacingAction::Sleep);
+    let plan0 = coordinator.begin_frame(id, tick(t0));
+    assert!(matches!(plan0.work, RenderWork::CompositeOnly { .. }));
+    assert!(plan0.reasons.contains(DemandReason::CursorMotion));
+    assert!(
+        !plan0.reasons.contains(DemandReason::CursorAnimation),
+        "mid-animation cursor motion must be driven by paced CursorMotion, not unpaced CursorAnimation"
+    );
+    render.begin_presentable_render(plan0.work);
+    coordinator.finish_frame(id, &plan0, SubmissionResult::Submitted, t0);
+
+    // Immediate post-present about_to_wait 2 ms later while still animating:
+    // tick_cursor_animation advances the spring, but MaxRate(60) has not
+    // elapsed yet, so NO redraw may be requested immediately.
+    let t1 = t0.plus(Duration::from_millis(2));
+    assert!(render.tick_cursor_animation(t1));
+    assert!(render.cursor.is_animating());
+    let motion_1 =
+        RenderApp::reconcile_cursor_motion_demand(&mut coordinator, id, &render, true, rate, t1);
+    let anim_1 = RenderApp::reconcile_cursor_animation_demand(&mut coordinator, id, &render, t1);
+    assert!(
+        matches!(motion_1, PacingAction::WakeAt(_)),
+        "MaxRate(60) should schedule a future wake, got {motion_1:?}"
+    );
+    assert_eq!(
+        anim_1,
+        PacingAction::Sleep,
+        "mid-animation interpolation must NOT submit unpaced CursorAnimation(NextPresentation)"
+    );
+
+    // A discrete blink toggle WHILE animating must still request an immediate
+    // CursorAnimation(NextPresentation) frame even if tick_cursor_animation
+    // runs on the same pass.
+    let t_blink = now.plus(Duration::from_millis(500));
+    assert!(render.tick_cursor_blink(t_blink, false, None));
+    render
+        .cursor
+        .set_target(CursorTarget { y: 180.0, ..target }, t_blink);
+    let t_blink_pass = t_blink.plus(Duration::from_millis(2));
+    let _ = render.tick_cursor_animation(t_blink_pass);
+    let anim_blink =
+        RenderApp::reconcile_cursor_animation_demand(&mut coordinator, id, &render, t_blink_pass);
+    assert_eq!(
+        anim_blink,
+        PacingAction::RequestRedraw,
+        "blink toggle must request an immediate NextPresentation frame"
+    );
+    let plan_blink = coordinator.begin_frame(id, tick(t_blink_pass));
+    assert!(plan_blink.reasons.contains(DemandReason::CursorAnimation));
+    render.begin_presentable_render(plan_blink.work);
+    coordinator.finish_frame(id, &plan_blink, SubmissionResult::Submitted, t_blink_pass);
+
+    // Final settling sample (cursor.is_animating() becomes false):
+    // CursorMotion is retracted, so the final sample MUST submit an immediate
+    // CursorAnimation(NextPresentation) so the settled cursor reaches screen.
+    render.cursor.blink_enabled = false;
+    let t_settle = t_blink.plus(Duration::from_secs(3));
+    assert!(render.tick_cursor_animation(t_settle));
+    assert!(!render.cursor.is_animating());
+    let motion_settle = RenderApp::reconcile_cursor_motion_demand(
+        &mut coordinator,
+        id,
+        &render,
+        true,
+        rate,
+        t_settle,
+    );
+    let anim_settle =
+        RenderApp::reconcile_cursor_animation_demand(&mut coordinator, id, &render, t_settle);
+    assert_eq!(motion_settle, PacingAction::Sleep);
+    assert_eq!(
+        anim_settle,
+        PacingAction::RequestRedraw,
+        "final settled sample must still present via NextPresentation when CursorMotion retracts"
+    );
+    // Confirm the coordinator still consumes the Immediate CursorAnimation
+    // demand on begin_frame even after retract(CursorAnimation) ran with
+    // blink_enabled == false.
+    let plan_settle = coordinator.begin_frame(id, tick(t_settle));
+    assert!(matches!(plan_settle.work, RenderWork::CompositeOnly { .. }));
+    assert!(
+        plan_settle.reasons.contains(DemandReason::CursorAnimation),
+        "final settled sample must survive blink-off retract and reach begin_frame"
+    );
+    assert!(!plan_settle.reasons.contains(DemandReason::CursorMotion));
+}

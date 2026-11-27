@@ -825,9 +825,9 @@ fn sync_live_frame_font_state_rooted(
         // resizes the window tree when an implied native resize is inhibited
         // (frame.c:909-930,1076-1082). No native acknowledgement will arrive to
         // do that work for us when the allocated pixels have not changed.
-        let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+        let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
         if let Some(frame) = frames.get_mut(frame_id) {
-            frame.refresh_geometry_for_changed_font(buffers);
+            frame.refresh_geometry_for_changed_font(&buffers);
         }
         return Ok(());
     }
@@ -848,10 +848,10 @@ fn sync_live_frame_font_state_rooted(
             .max(min_inner_height),
         ResizePolicy::PreserveAllocation => super::window_cmds::frame_text_height_pixels(frame),
     };
-    let (frames, buffers, display_host) = eval.frame_manager_buffers_and_display_host_mut();
+    let (frames, mut buffers, display_host) = eval.frame_manager_buffer_view_and_display_host_mut();
     if let Err(err) = super::frame::request_live_gui_frame_resize_and_keep_pending(
         frames,
-        buffers,
+        &buffers,
         display_host,
         frame_id,
         super::window_cmds::FrameResizeRequest::TextPixels { width, height },
@@ -866,7 +866,7 @@ fn sync_live_frame_font_state_rooted(
         // The frame keeps its pixel allocation, but the window tree still
         // has to adopt the new character metrics locally.
         if let Some(frame) = frames.get_mut(frame_id) {
-            frame.refresh_geometry_for_changed_font(buffers);
+            frame.refresh_geometry_for_changed_font(&buffers);
         }
     }
     Ok(())

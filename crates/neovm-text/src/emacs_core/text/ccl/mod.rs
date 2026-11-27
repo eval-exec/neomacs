@@ -165,30 +165,63 @@ struct CclVariableHooks {
     symbol_plist: unsafe fn(*const (), SymId) -> Value,
 }
 
+impl CclVariableHooks {
+    /// Mint a hook record from one view instantiation.
+    ///
+    /// `raw` and both trampolines are derived from the same `V` here and
+    /// nowhere else, so a record whose pointer and function pointers disagree
+    /// about the pointee type cannot be constructed — the type-identity
+    /// obligation the trampolines rely on is discharged by this constructor
+    /// rather than by every call site. Adding a second constructor or a public
+    /// field would reopen the erased-callable-pair hazard that
+    /// `erased_callable_pair_guard_test` records.
+    fn new<'a, V: RawTextVariableView<'a>>(raw: &V::Raw) -> Self {
+        Self {
+            raw: raw as *const V::Raw as *const (),
+            value_by_name: Self::value_by_name::<V>,
+            symbol_plist: Self::symbol_plist::<V>,
+        }
+    }
+
+    /// # Safety
+    /// `raw_ptr` must have been minted by [`Self::new::<V>`] for this `V`, and
+    /// the value it points at must still be live.
+    unsafe fn value_by_name<'a, V: RawTextVariableView<'a>>(
+        raw_ptr: *const (),
+        name: &str,
+    ) -> Option<Value> {
+        // SAFETY: `raw_ptr` was published by this frame from a live `V::Raw`
+        // and `Self::new::<V>` pairs it with this trampoline; the body runs
+        // before the frame and its borrows end.
+        let raw = unsafe { *(raw_ptr as *const V::Raw) };
+        // SAFETY: the raw view is reconstructed from a value this signature's
+        // `'a` keeps live for the duration of the call.
+        let view = unsafe { V::view_from_raw(raw) };
+        view.value_by_name(name)
+    }
+
+    /// # Safety
+    /// As [`Self::value_by_name`]: `raw_ptr` must have been minted by
+    /// [`Self::new::<V>`] for this `V`, and the value must still be live.
+    unsafe fn symbol_plist<'a, V: RawTextVariableView<'a>>(
+        raw_ptr: *const (),
+        symbol: SymId,
+    ) -> Value {
+        // SAFETY: as in `Self::value_by_name`.
+        let raw = unsafe { *(raw_ptr as *const V::Raw) };
+        let view = unsafe { V::view_from_raw(raw) };
+        view.obarray().symbol_plist_id(symbol)
+    }
+}
+
 /// Run `body` while CCL symbol resolution can see these variables' obarray
 /// plists and the translation vectors `define-translation-hash-table` fills.
 #[doc(hidden)]
 pub fn with_ccl_obarray<'a, V: RawTextVariableView<'a>, R>(vars: V, body: impl FnOnce() -> R) -> R {
     let raw = vars.into_raw();
-    // The closures capture nothing; each is monomorphized for this
-    // publication's V and 'a, and `raw` names the local below, which
-    // outlives the body.
-    let hooks = CclVariableHooks {
-        raw: &raw as *const V::Raw as *const (),
-        value_by_name: |raw_ptr, name| {
-            // SAFETY: `raw_ptr` was published by this frame from a live
-            // V::Raw; the body runs before the frame and its borrows end.
-            let raw = unsafe { *(raw_ptr as *const V::Raw) };
-            let view = unsafe { V::view_from_raw(raw) };
-            view.value_by_name(name)
-        },
-        symbol_plist: |raw_ptr, symbol| {
-            // SAFETY: as above.
-            let raw = unsafe { *(raw_ptr as *const V::Raw) };
-            let view = unsafe { V::view_from_raw(raw) };
-            view.obarray().symbol_plist_id(symbol)
-        },
-    };
+    // `raw` names the local below, which outlives the body; the record pairs
+    // it with trampolines monomorphized for the same V.
+    let hooks = CclVariableHooks::new::<V>(&raw);
     CCL_VARIABLES.with(|cell| {
         struct RestoreVariables<'a> {
             cell: &'a Cell<*const ()>,

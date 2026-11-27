@@ -534,7 +534,7 @@ pub(crate) fn update_auto_hscroll_before_redisplay(ctx: &mut Context) {
         // moved since the last pass, un-suspend. Record the new old point
         // unconditionally (GNU's `Fset_marker (w->old_pointm, ...)`).
         let effective_suspend = snap.suspend_auto_hscroll && snap.point_lisp == snap.old_point_lisp;
-        let (frames, buffers) = ctx.frame_manager_and_buffers_mut();
+        let (frames, mut buffers) = ctx.frame_manager_and_buffer_view_mut();
         if (snap.suspend_auto_hscroll != effective_suspend
             || snap.old_point_lisp != snap.point_lisp)
             && let Some(frame) = frames.get_mut(snap.frame_id)
@@ -558,7 +558,7 @@ pub(crate) fn update_auto_hscroll_before_redisplay(ctx: &mut Context) {
                 // between the two and the redisplay signature never matched --
                 // no idle `(redisplay)` could ever skip.
                 crate::window::window_markers::set_window_old_point_with_marker(
-                    buffers,
+                    &mut buffers,
                     window,
                     snap.point_lisp,
                 );

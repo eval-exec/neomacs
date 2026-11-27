@@ -68,21 +68,21 @@ fn gnu_dont_set_miniwindow_restores_geometry_after_sizing_transfer() {
         .expect("live buffer")
         .insert("abcde");
     {
-        let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+        let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
         let window = frames
             .get_mut(frame_id)
             .expect("frame")
             .find_window_mut(mini_id)
             .expect("mini");
         window.set_buffer(live);
-        crate::window::window_markers::attach_window_position_markers(buffers, window);
+        crate::window::window_markers::attach_window_position_markers(&mut buffers, window);
         crate::window::window_markers::set_window_start_with_marker(
-            buffers,
+            &mut buffers,
             window,
             LispCharPos1::new(2),
         );
         crate::window::window_markers::set_window_point_with_marker(
-            buffers,
+            &mut buffers,
             window,
             LispCharPos1::new(4),
         );

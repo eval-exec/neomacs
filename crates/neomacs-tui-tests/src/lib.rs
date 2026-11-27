@@ -42,6 +42,8 @@ use std::path::{Path, PathBuf};
 use std::process::ExitStatus;
 use std::time::{Duration, Instant};
 
+#[cfg(test)]
+mod cell_assertion_guard_test;
 pub mod launch;
 mod observation;
 pub mod oracle;

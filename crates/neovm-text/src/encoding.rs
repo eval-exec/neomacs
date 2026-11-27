@@ -3805,13 +3805,68 @@ fn coding_conversion_hook<H: TextHost>(
     coding: &str,
     encode: bool,
 ) -> Option<(SymId, String)> {
-    let info = ctx.coding_systems().get(coding_system_base(coding))?;
+    let canonical = ctx
+        .coding_systems()
+        .resolve(coding)
+        .map(resolve_sym)
+        .unwrap_or(coding);
+    let info = ctx.coding_systems().get(coding_system_base(canonical))?;
     let hook = if encode {
         info.pre_write_conversion
     } else {
         info.post_read_conversion
     }?;
     Some((hook, resolve_sym(info.coding_type).to_string()))
+}
+
+/// True only when Neomacs's native Rust codec already subsumes the exact
+/// built-in Lisp conversion hook attached to `coding`:
+/// - `utf-7` / `utf-7-imap` and `chinese-hz` reimplement their built-in Lisp
+///   hooks in Rust.
+/// - `compound-text-with-extensions` and `in-is13194-devanagari` are pre-existing
+///   `full_iso` codecs whose built-in Lisp hooks (`ctext-*`, `in-is13194-*`)
+///   were previously bypassed by `!dedicated_codec`.
+///
+/// User-installed hooks via `coding-system-put` (including overrides on `utf-7`,
+/// `chinese-hz`, `compound-text-with-extensions`, and any hook on `iso-latin-1`,
+/// `euc-jp`, `shift_jis`, `iso-2022`, `ccl`, etc.) are NOT subsumed and execute
+/// in Lisp.
+fn codec_subsumes_conversion_hook(codecs: &ResolvedCodecs, hook: SymId, encode: bool) -> bool {
+    let name = resolve_sym(hook);
+    if codecs.utf7.is_some() {
+        return if encode {
+            matches!(
+                name,
+                "utf-7-pre-write-conversion" | "utf-7-imap-pre-write-conversion"
+            )
+        } else {
+            matches!(
+                name,
+                "utf-7-post-read-conversion" | "utf-7-imap-post-read-conversion"
+            )
+        };
+    }
+    if codecs.hz.is_some() {
+        return if encode {
+            name == "pre-write-encode-hz"
+        } else {
+            name == "post-read-decode-hz"
+        };
+    }
+    if codecs.full_iso.is_some() || codecs.euc.is_some() {
+        return if encode {
+            matches!(
+                name,
+                "ctext-pre-write-conversion" | "in-is13194-pre-write-conversion"
+            )
+        } else {
+            matches!(
+                name,
+                "ctext-post-read-conversion" | "in-is13194-post-read-conversion"
+            )
+        };
+    }
+    false
 }
 
 /// True when GNU's `code_convert_string` identity fast path applies: the coding
@@ -5879,25 +5934,27 @@ fn builtin_coding_string_in_context<H: TextHost>(
     // ISO-2022 coding systems (euc-jp/kr/…) through their G0-G3 designations;
     // the legacy family-based paths leave them empty / undecoded.  Other
     // families keep their existing handling.
-    let codecs = ResolvedCodecs::resolve(ctx, &coding, encode, effective_decoder);
+    let mut codecs = ResolvedCodecs::resolve(ctx, &coding, encode, effective_decoder);
     // GNU runs a coding system's :pre-write-conversion before encoding and its
     // :post-read-conversion after decoding (src/coding.c encode_coding_object /
-    // decode_coding_object).  These elisp hooks do the real character
-    // translation for mnemonic codings such as `vietnamese-viqr` (base
-    // :coding-type utf-8).  The dedicated codec branches above (utf-7, hz,
-    // emacs-mule, …) reimplement their conversion entirely in Rust and already
-    // subsume any hook, so only run a hook when none of them claim this coding.
+    // decode_coding_object).  Only the built-in `utf-7` and `chinese-hz` hooks
+    // are reimplemented in Rust; if a caller replaces them via
+    // `coding-system-put`, drop the Rust emulation so the base `:coding-type`
+    // codec (`utf-8`) runs with the caller's hook instead.
+    let active_hook = coding_conversion_hook(ctx, &coding, encode)
+        .filter(|(hook, _)| !codec_subsumes_conversion_hook(&codecs, *hook, encode));
+    if active_hook.is_some() {
+        codecs.utf7 = None;
+        codecs.hz = None;
+    }
     let dedicated_codec = codecs.is_dedicated();
     if encode
         && entry == CodingEntry::ProcessSend(ProcessPreWriteStage::Pending)
-        // These two native codecs already implement their built-in Lisp hook.
-        && codecs.utf7.is_none()
-        && codecs.hz.is_none()
-        && let Some((hook, _)) = coding_conversion_hook(ctx, &coding, true)
+        && let Some((hook, _)) = active_hook.as_ref()
         && let EncodingBoundary::ProcessChunk { process } = encoding_boundary
     {
         let transformed =
-            run_pre_write_conversion(ctx, hook, args[0], PreWriteFailurePolicy::IgnoreSignals)?;
+            run_pre_write_conversion(ctx, *hook, args[0], PreWriteFailurePolicy::IgnoreSignals)?;
         // A hook can send recursively or replace this descriptor's coding.
         // Reacquire both its coding and its continuation after the callback.
         let latest = ctx.process_encoding_coding(process)?;
@@ -5919,22 +5976,36 @@ fn builtin_coding_string_in_context<H: TextHost>(
     if encode
         && entry == CodingEntry::ProcessSend(ProcessPreWriteStage::Prepared)
         && !dedicated_codec
-        && let Some((_, base_type)) = coding_conversion_hook(ctx, &coding, true)
+        && let Some((_, base_type)) = active_hook.as_ref()
     {
         // The hook already supplied text; select its codec without running
         // the same callback a second time.
-        let base = apply_explicit_eol_suffix(&base_type, coding_name_eol(&coding));
+        let base = apply_explicit_eol_suffix(base_type, coding_name_eol(&coding));
         args[1] = coding_symbol_value(&base);
         coding = base;
     }
-    // A coding system whose conversion is implemented by an elisp
-    // :pre-write-conversion / :post-read-conversion hook (e.g. vietnamese-viqr)
-    // is handled entirely here; the generic family encoders below do not know
-    // how to encode it (its family is "unknown") and would drop every
-    // character.
+    // GNU `decode_coding_object` (`src/coding.c:8137, 8155-8156`): for a buffer
+    // destination, `dst_multibyte` comes from the buffer; for a string return
+    // (`Qt`), `dst_multibyte = !CODING_FOR_UNIBYTE(coding)` (`raw-text`,
+    // `no-conversion`, or any `:for-unibyte t` coding uses a unibyte temp buf).
+    let hook_dst_multibyte = match destination {
+        Some(buffer_id) => ctx
+            .buffers()
+            .get(buffer_id)
+            .map(|buf| buf.get_multibyte())
+            .unwrap_or(true),
+        None if entry == CodingEntry::CodeConvertRegion => run.dst_multibyte,
+        None => !ctx.coding_systems().is_for_unibyte(&coding),
+    };
+    // A non-dedicated coding system (or `utf-8-with-signature`) with an active
+    // `:pre-write-conversion` / `:post-read-conversion` hook (e.g.
+    // `vietnamese-viqr`, `raw-text`, `no-conversion`, `utf-8`, or aliases to
+    // them) is handled here. Dedicated codecs (`charset`, `euc`, `sjis`,
+    // `iso-2022`, `ccl`, etc.) run their real native codec below with the
+    // pre-write hook before encoding / post-read hook after decoding.
     if (!dedicated_codec || codecs.utf8_signature)
         && entry != CodingEntry::ProcessSend(ProcessPreWriteStage::Prepared)
-        && let Some((hook, base_type)) = coding_conversion_hook(ctx, &coding, encode)
+        && let Some((hook, base_type)) = active_hook
     {
         // GNU's `code_convert_string` takes an identity fast path for an
         // ASCII-compatible coding when the input is pure ASCII and needs no EOL
@@ -5982,16 +6053,18 @@ fn builtin_coding_string_in_context<H: TextHost>(
             }
         } else {
             let eol = runtime_coding_eol(ctx.coding_systems(), &coding);
+            let hook_base_name = if known_coding_system(&base_type) {
+                base_type.as_str()
+            } else {
+                coding_system_base(&coding)
+            };
             let codec = if effective_decoder == EffectiveDecoder::RetainedUndecided {
                 HookCodec::RetainedUndecided
             } else if codecs.utf8_signature {
                 HookCodec::Utf8Signature
             } else {
-                HookCodec::Base(&base_type)
+                HookCodec::Base(hook_base_name)
             };
-            let hook_dst_multibyte = destination
-                .and_then(|buffer_id| ctx.buffers().get(buffer_id).map(|buf| buf.get_multibyte()))
-                .unwrap_or(run.dst_multibyte);
             let (converted, resolution) = run_coding_with_conversion_hook(
                 ctx,
                 &args,
@@ -6043,6 +6116,30 @@ fn builtin_coding_string_in_context<H: TextHost>(
             .unwrap_or_else(|| result_text.schars() as i64);
         return Ok(Value::fixnum(produced_chars));
     }
+    let dedicated_hook = if entry != CodingEntry::ProcessSend(ProcessPreWriteStage::Prepared) {
+        active_hook.map(|(hook, _)| hook)
+    } else {
+        None
+    };
+    let dedicated_pre_write_roots = if encode && let Some(hook) = dedicated_hook {
+        let transformed =
+            run_pre_write_conversion(ctx, hook, args[0], PreWriteFailurePolicy::Propagate)?;
+        if transformed.as_lisp_string().is_none() {
+            return Err(signal(
+                LispCondition::WrongTypeArgument,
+                vec![Value::symbol("stringp"), transformed],
+            ));
+        }
+        let roots = ctx.save_specpdl_roots();
+        ctx.push_specpdl_root(transformed);
+        args[0] = transformed;
+        if let Some(nocopy) = args.get_mut(2) {
+            *nocopy = Value::NIL;
+        }
+        Some(roots)
+    } else {
+        None
+    };
     // The single EOL pass for the codec chain below, mirroring GNU
     // A bypass descriptor never enters GNU's encoding engine. Eligibility is
     // captured at setup and includes hooks and codec requirements, not just EOL.
@@ -6079,114 +6176,163 @@ fn builtin_coding_string_in_context<H: TextHost>(
             }
         }
     }
-    let result = if encode {
-        let source_string = || {
-            args[0]
-                .as_lisp_string()
-                .expect("string argument validated above")
-        };
-        if let Some(imap) = codecs.utf7 {
-            let bytes = encode_via_utf7(source_string(), imap);
-            Value::heap_string(neovm_value::heap_types::LispString::from_unibyte(bytes))
-        } else if let Some(gb2312) = codecs.hz {
-            let bytes = encode_via_hz(source_string(), gb2312);
-            Value::heap_string(neovm_value::heap_types::LispString::from_unibyte(bytes))
-        } else if codecs.emacs_mule {
-            let bytes = encode_via_emacs_mule(source_string());
-            Value::heap_string(neovm_value::heap_types::LispString::from_unibyte(bytes))
-        } else if codecs.no_conv_multibyte {
-            let bytes = encode_utf8_plain(source_string());
-            Value::heap_string(neovm_value::heap_types::LispString::from_unibyte(bytes))
-        } else if codecs.utf8_signature {
-            let source = source_string();
-            let mut scratch = CodingEncoderState::default();
-            let state = match encoding_boundary {
-                EncodingBoundary::ProcessChunk { process } => ctx.process_encoder_state(process)?,
-                EncodingBoundary::CompleteText | EncodingBoundary::FileRegion => &mut scratch,
+    let result_res: EvalResult = (|| {
+        if encode {
+            let source_string = || {
+                args[0]
+                    .as_lisp_string()
+                    .expect("string argument validated above")
             };
-            let mut bytes = if matches!(state, CodingEncoderState::Utf8SignatureStarted) {
-                Vec::new()
+            if let Some(imap) = codecs.utf7 {
+                let bytes = encode_via_utf7(source_string(), imap);
+                Ok(Value::heap_string(
+                    neovm_value::heap_types::LispString::from_unibyte(bytes),
+                ))
+            } else if let Some(gb2312) = codecs.hz {
+                let bytes = encode_via_hz(source_string(), gb2312);
+                Ok(Value::heap_string(
+                    neovm_value::heap_types::LispString::from_unibyte(bytes),
+                ))
+            } else if codecs.emacs_mule {
+                let bytes = encode_via_emacs_mule(source_string());
+                Ok(Value::heap_string(
+                    neovm_value::heap_types::LispString::from_unibyte(bytes),
+                ))
+            } else if codecs.no_conv_multibyte {
+                let bytes = encode_utf8_plain(source_string());
+                Ok(Value::heap_string(
+                    neovm_value::heap_types::LispString::from_unibyte(bytes),
+                ))
+            } else if codecs.utf8_signature {
+                let source = source_string();
+                let mut scratch = CodingEncoderState::default();
+                let state = match encoding_boundary {
+                    EncodingBoundary::ProcessChunk { process } => {
+                        ctx.process_encoder_state(process)?
+                    }
+                    EncodingBoundary::CompleteText | EncodingBoundary::FileRegion => &mut scratch,
+                };
+                let mut bytes = if matches!(state, CodingEncoderState::Utf8SignatureStarted) {
+                    Vec::new()
+                } else {
+                    vec![0xEF, 0xBB, 0xBF]
+                };
+                *state = CodingEncoderState::Utf8SignatureStarted;
+                bytes.extend(encode_utf8_plain(source));
+                Ok(Value::heap_string(
+                    neovm_value::heap_types::LispString::from_unibyte(bytes),
+                ))
+            } else if let Some(spec) = codecs.ccl {
+                let bytes = encode_via_ccl(
+                    source_string(),
+                    spec,
+                    &coding,
+                    encoding_boundary,
+                    ctx.symbol_mode(),
+                )?;
+                Ok(Value::heap_string(
+                    neovm_value::heap_types::LispString::from_unibyte(bytes),
+                ))
+            } else if let Some((spec, charsets)) = &codecs.full_iso {
+                let source = source_string();
+                let mut scratch = CodingEncoderState::default();
+                // No process borrow spans Lisp callbacks. The conversion hooks ran
+                // above; only this pure codec borrows the latest continuation.
+                let state = match encoding_boundary {
+                    EncodingBoundary::ProcessChunk { process } => {
+                        ctx.process_encoder_state(process)?
+                    }
+                    EncodingBoundary::CompleteText | EncodingBoundary::FileRegion => &mut scratch,
+                };
+                let bytes = encode_via_iso2022(source, spec, charsets, encoding_boundary, state);
+                Ok(Value::heap_string(
+                    neovm_value::heap_types::LispString::from_unibyte(bytes),
+                ))
+            } else if let Some((spec, charsets)) = &codecs.euc {
+                let bytes = encode_via_euc(source_string(), spec, charsets);
+                Ok(Value::heap_string(
+                    neovm_value::heap_types::LispString::from_unibyte(bytes),
+                ))
+            } else if let Some(charsets) = &codecs.sjis {
+                let bytes = encode_via_sjis(source_string(), charsets);
+                Ok(Value::heap_string(
+                    neovm_value::heap_types::LispString::from_unibyte(bytes),
+                ))
+            } else if let Some(charset_list) = &codecs.charset {
+                let bytes = encode_via_charset_list(source_string(), charset_list);
+                Ok(Value::heap_string(
+                    neovm_value::heap_types::LispString::from_unibyte(bytes),
+                ))
             } else {
-                vec![0xEF, 0xBB, 0xBF]
-            };
-            *state = CodingEncoderState::Utf8SignatureStarted;
-            bytes.extend(encode_utf8_plain(source));
-            Value::heap_string(neovm_value::heap_types::LispString::from_unibyte(bytes))
-        } else if let Some(spec) = codecs.ccl {
-            let bytes = encode_via_ccl(
-                source_string(),
-                spec,
-                &coding,
-                encoding_boundary,
-                ctx.symbol_mode(),
-            )?;
-            Value::heap_string(neovm_value::heap_types::LispString::from_unibyte(bytes))
-        } else if let Some((spec, charsets)) = &codecs.full_iso {
-            let source = source_string();
-            let mut scratch = CodingEncoderState::default();
-            // No process borrow spans Lisp callbacks. The conversion hooks ran
-            // above; only this pure codec borrows the latest continuation.
-            let state = match encoding_boundary {
-                EncodingBoundary::ProcessChunk { process } => ctx.process_encoder_state(process)?,
-                EncodingBoundary::CompleteText | EncodingBoundary::FileRegion => &mut scratch,
-            };
-            let bytes = encode_via_iso2022(source, spec, charsets, encoding_boundary, state);
-            Value::heap_string(neovm_value::heap_types::LispString::from_unibyte(bytes))
-        } else if let Some((spec, charsets)) = &codecs.euc {
-            let bytes = encode_via_euc(source_string(), spec, charsets);
-            Value::heap_string(neovm_value::heap_types::LispString::from_unibyte(bytes))
-        } else if let Some(charsets) = &codecs.sjis {
-            let bytes = encode_via_sjis(source_string(), charsets);
-            Value::heap_string(neovm_value::heap_types::LispString::from_unibyte(bytes))
-        } else if let Some(charset_list) = &codecs.charset {
-            let bytes = encode_via_charset_list(source_string(), charset_list);
-            Value::heap_string(neovm_value::heap_types::LispString::from_unibyte(bytes))
-        } else {
-            // GNU `code_convert_string` (src/coding.c:9610) only honors NOCOPY
-            // when `dst_object` is `Qt` (string return). For buffer
-            // destinations, clear NOCOPY so the fallback encoder never returns
-            // `args[0]` with source text properties attached.
-            if destination.is_some()
-                && let Some(nocopy) = args.get_mut(2)
-            {
-                *nocopy = Value::NIL;
+                // GNU `code_convert_string` (src/coding.c:9610) only honors NOCOPY
+                // when `dst_object` is `Qt` (string return). For buffer
+                // destinations, clear NOCOPY so the fallback encoder never returns
+                // `args[0]` with source text properties attached.
+                if destination.is_some()
+                    && let Some(nocopy) = args.get_mut(2)
+                {
+                    *nocopy = Value::NIL;
+                }
+                builtin_encode_coding_string_with_known(
+                    args,
+                    |_| true,
+                    encode_eol_conversion,
+                    coding_symbol_mode,
+                )
             }
-            builtin_encode_coding_string_with_known(
-                args,
-                |_| true,
-                encode_eol_conversion,
-                coding_symbol_mode,
-            )?
+        } else {
+            let source_bytes = lisp_string_coding_source_bytes(
+                args[0]
+                    .as_lisp_string()
+                    .expect("string argument validated above"),
+            );
+            // GNU `code_convert_string` (src/coding.c:9610) gates NOCOPY strictly
+            // on `EQ (dst_object, Qt)` (string return); buffer destinations always
+            // decode fresh text without copying source string text properties.
+            let nocopy_source =
+                (dedicated_hook.is_none() && destination.is_none() && coding_string_nocopy(&args))
+                    .then_some(args[0]);
+            // When `dedicated_hook` is about to run, keep `decoded_value`
+            // multibyte so `run_post_read_conversion` sees true `decoded_chars`
+            // for GNU `LEN = coding->produced_char` and performs its own
+            // unibyte conversion via `coding_result_for_buffer_multibyte`.
+            let core_dst_multibyte = if dedicated_hook.is_some() {
+                true
+            } else {
+                destination
+                    .and_then(|buffer_id| {
+                        ctx.buffers().get(buffer_id).map(|buf| buf.get_multibyte())
+                    })
+                    .unwrap_or(run.dst_multibyte)
+            };
+            let (decoded, updated_reported) = decode_non_hook_bytes_core(
+                ctx,
+                &source_bytes,
+                coding,
+                reported_coding.clone(),
+                effective_decoder,
+                &codecs,
+                entry,
+                core_dst_multibyte,
+                run,
+                nocopy_source,
+            )?;
+            reported_coding = updated_reported;
+            let decoded_value = decoded.into_value();
+            if let Some(hook) = dedicated_hook {
+                let (converted, produced_chars) =
+                    run_post_read_conversion(ctx, hook, decoded_value, hook_dst_multibyte)?;
+                run.record_produced_chars(produced_chars);
+                Ok(converted)
+            } else {
+                Ok(decoded_value)
+            }
         }
-    } else {
-        let source_bytes = lisp_string_coding_source_bytes(
-            args[0]
-                .as_lisp_string()
-                .expect("string argument validated above"),
-        );
-        // GNU `code_convert_string` (src/coding.c:9610) gates NOCOPY strictly
-        // on `EQ (dst_object, Qt)` (string return); buffer destinations always
-        // decode fresh text without copying source string text properties.
-        let nocopy_source =
-            (destination.is_none() && coding_string_nocopy(&args)).then_some(args[0]);
-        let dst_multibyte = destination
-            .and_then(|buffer_id| ctx.buffers().get(buffer_id).map(|buf| buf.get_multibyte()))
-            .unwrap_or(run.dst_multibyte);
-        let (decoded, updated_reported) = decode_non_hook_bytes_core(
-            ctx,
-            &source_bytes,
-            coding,
-            reported_coding,
-            effective_decoder,
-            &codecs,
-            entry,
-            dst_multibyte,
-            run,
-            nocopy_source,
-        )?;
-        reported_coding = updated_reported;
-        decoded.into_value()
-    };
+    })();
+    if let Some(roots) = dedicated_pre_write_roots {
+        ctx.restore_specpdl_roots(roots);
+    }
+    let result = result_res?;
     if result.as_lisp_string().is_none() {
         return Err(signal(
             LispCondition::WrongTypeArgument,
@@ -6560,8 +6706,8 @@ fn decode_raw_bytes_in_context<H: TextHost>(
     );
 
     let codecs = ResolvedCodecs::resolve(ctx, &coding, false, effective_decoder);
-    if (!codecs.is_dedicated() || codecs.utf8_signature)
-        && coding_conversion_hook(ctx, &coding, false).is_some()
+    if let Some((hook, _)) = coding_conversion_hook(ctx, &coding, false)
+        && !codec_subsumes_conversion_hook(&codecs, hook, false)
     {
         let source = Value::heap_string(neovm_value::heap_types::LispString::from_unibyte(
             bytes.to_vec(),
@@ -6778,7 +6924,7 @@ fn builtin_coding_region<H: TextHost>(
         None
     };
     let hook_target_multibyte = match destination {
-        None => true,
+        None => !ctx.coding_systems().is_for_unibyte(&coding),
         Some(None) => ctx
             .buffers()
             .get(current_id)

@@ -807,24 +807,16 @@ impl RenderApp {
 
             // Cursor geometry is compositor state, not editor content. Keep
             // its cadence independent of the blink deadline below (#607).
-            if dynamic_effects_allowed && window_state.render.cursor.is_animating() {
-                let motion_action = self.frame_coordinator.submit_demand(
-                    id,
-                    FrameDemand {
-                        invalidation: Invalidation::CompositeOnly {
-                            layers: LayerMask::CURSOR_EFFECTS,
-                        },
-                        cadence: Cadence::MaxRate(dynamic_animation_rate),
-                        reason: DemandReason::CursorMotion,
-                    },
-                    now,
-                );
-                if motion_action == PacingAction::RequestRedraw {
-                    action = PacingAction::RequestRedraw;
-                }
-            } else {
-                self.frame_coordinator
-                    .retract(id, DemandReason::CursorMotion);
+            let cursor_motion_action = Self::reconcile_cursor_motion_demand(
+                &mut self.frame_coordinator,
+                id,
+                &window_state.render,
+                dynamic_effects_allowed,
+                dynamic_animation_rate,
+                now,
+            );
+            if cursor_motion_action == PacingAction::RequestRedraw {
+                action = PacingAction::RequestRedraw;
             }
 
             // Shader surfaces may cap their animation rate (`:fps`): when they
@@ -912,46 +904,14 @@ impl RenderApp {
                 action = PacingAction::RequestRedraw;
             }
 
-            // A blink toggle that already happened needs its frame now. It
-            // changes only the cursor layer, so it asks for a composite of the
-            // retained scene; a content repaint owed on the same pass has
-            // already submitted the stronger Redisplay demand above and wins
-            // the strongest-invalidation merge.
-            if window_state.has_presentable_cursor_change_at(now) {
-                let cursor_action = self.frame_coordinator.submit_demand(
-                    id,
-                    FrameDemand {
-                        invalidation: Invalidation::CompositeOnly {
-                            layers: LayerMask::CURSOR_EFFECTS,
-                        },
-                        cadence: Cadence::NextPresentation,
-                        reason: DemandReason::CursorAnimation,
-                    },
-                    now,
-                );
-                if cursor_action == PacingAction::RequestRedraw {
-                    action = PacingAction::RequestRedraw;
-                }
-            }
-
-            match window_state.render.cursor.next_blink_deadline() {
-                Some(blink) => {
-                    self.frame_coordinator.submit_demand(
-                        id,
-                        FrameDemand {
-                            invalidation: Invalidation::CompositeOnly {
-                                layers: LayerMask::CURSOR_EFFECTS,
-                            },
-                            cadence: Cadence::At(blink),
-                            reason: DemandReason::CursorAnimation,
-                        },
-                        now,
-                    );
-                }
-                None => {
-                    self.frame_coordinator
-                        .retract(id, DemandReason::CursorAnimation);
-                }
+            let cursor_anim_action = Self::reconcile_cursor_animation_demand(
+                &mut self.frame_coordinator,
+                id,
+                &window_state.render,
+                now,
+            );
+            if cursor_anim_action == PacingAction::RequestRedraw {
+                action = PacingAction::RequestRedraw;
             }
 
             if action == PacingAction::RequestRedraw {
@@ -1070,6 +1030,87 @@ impl RenderApp {
             cadence: Cadence::MaxRate(rate),
             reason: DemandReason::CursorColorCycle,
         })
+    }
+
+    /// Reconcile continuous cursor motion/size interpolation demand at a paced
+    /// display rate, keeping it independent of blink deadlines (#607).
+    pub(super) fn reconcile_cursor_motion_demand(
+        coordinator: &mut super::frame_sched::FrameCoordinator,
+        id: super::frame_sched::NativeWindowId,
+        render: &super::frame_windows::GuiFrameRenderState,
+        dynamic_effects_allowed: bool,
+        dynamic_animation_rate: std::num::NonZeroU16,
+        now: EventTime,
+    ) -> super::frame_sched::PacingAction {
+        use super::frame_sched::{Cadence, DemandReason, FrameDemand, Invalidation, LayerMask};
+
+        if dynamic_effects_allowed && render.cursor.is_animating() {
+            coordinator.submit_demand(
+                id,
+                FrameDemand {
+                    invalidation: Invalidation::CompositeOnly {
+                        layers: LayerMask::CURSOR_EFFECTS,
+                    },
+                    cadence: Cadence::MaxRate(dynamic_animation_rate),
+                    reason: DemandReason::CursorMotion,
+                },
+                now,
+            )
+        } else {
+            coordinator.retract(id, DemandReason::CursorMotion);
+            super::frame_sched::PacingAction::Sleep
+        }
+    }
+
+    /// Reconcile discrete cursor animation demand (blink toggle, forced blink
+    /// on, or final settled cursor sample) plus the next blink deadline.
+    pub(super) fn reconcile_cursor_animation_demand(
+        coordinator: &mut super::frame_sched::FrameCoordinator,
+        id: super::frame_sched::NativeWindowId,
+        render: &super::frame_windows::GuiFrameRenderState,
+        now: EventTime,
+    ) -> super::frame_sched::PacingAction {
+        use super::frame_sched::{
+            Cadence, DemandReason, FrameDemand, Invalidation, LayerMask, PacingAction,
+        };
+
+        let mut action = PacingAction::Sleep;
+        if render.has_immediate_cursor_change_at(now) {
+            let cursor_action = coordinator.submit_demand(
+                id,
+                FrameDemand {
+                    invalidation: Invalidation::CompositeOnly {
+                        layers: LayerMask::CURSOR_EFFECTS,
+                    },
+                    cadence: Cadence::NextPresentation,
+                    reason: DemandReason::CursorAnimation,
+                },
+                now,
+            );
+            if cursor_action == PacingAction::RequestRedraw {
+                action = PacingAction::RequestRedraw;
+            }
+        }
+
+        match render.cursor.next_blink_deadline() {
+            Some(blink) => {
+                coordinator.submit_demand(
+                    id,
+                    FrameDemand {
+                        invalidation: Invalidation::CompositeOnly {
+                            layers: LayerMask::CURSOR_EFFECTS,
+                        },
+                        cadence: Cadence::At(blink),
+                        reason: DemandReason::CursorAnimation,
+                    },
+                    now,
+                );
+            }
+            None => {
+                coordinator.retract(id, DemandReason::CursorAnimation);
+            }
+        }
+        action
     }
 
     /// Atomically reconcile the cursor-cycle producer's standing demand with

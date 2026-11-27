@@ -23,6 +23,7 @@ use std::os::unix::net::{UnixDatagram, UnixListener, UnixStream};
 use std::os::windows::io::{AsRawHandle, OwnedHandle};
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::OnceLock;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::sync::mpsc;
@@ -33,6 +34,7 @@ use neovm_value::value::buffer_vocab::BufferId;
 use neovm_value::value::{Value, ValueKind, equal_value, list_to_vec};
 use num_enum::IntoPrimitive;
 use polling::Poller;
+use rustc_hash::FxHashMap;
 use socket2::Socket;
 use strum::{EnumString, IntoStaticStr};
 
@@ -43,7 +45,7 @@ use crate::host_effect::wake::{
 };
 use neovm_value::error::{EvalResult, Flow, LispCondition, signal};
 use neovm_value::gc_trace::GcTrace;
-use neovm_value::intern::resolve_sym;
+use neovm_value::intern::{SymId, intern, resolve_sym};
 
 /// Whether a live process participates in the exit confirmation query.
 ///
@@ -1192,19 +1194,24 @@ pub struct ProcessManager {
     /// Kept private so safe code outside `neovm-eval` cannot remove, clear, or
     /// overwrite a `Process` record while its `LiveProcessIo` descriptors are
     /// still registered in `wait_backend`'s poller (soundness B5).
-    processes: HashMap<ProcessId, Process>,
-    deleted_processes: HashMap<ProcessId, Process>,
+    ///
+    /// Uses `FxHashMap` rather than SipHash: `ProcessId` is an internal `u64`
+    /// key looked up dozens of times per wait pass. `_reserved_hash_abi_pad`
+    /// keeps `ProcessManager`'s inline `WorldSlot` footprint identical to the
+    /// two `RandomState` hashers it replaced so `Context` offsets and JIT ABI
+    /// do not shift.
+    processes: FxHashMap<ProcessId, Process>,
+    deleted_processes: FxHashMap<ProcessId, Process>,
+    _reserved_hash_abi_pad: [u64; 4],
     // WorldSlot reserves ProcessManager's original size in Context. Keep the
     // new read cursor behind the word formerly occupied by next_id so adding
     // scheduling state does not shift Context's pinned offsets/JIT ABI.
     pub ids: Box<ProcessIdState>,
     /// GNU's file-scope `process_tick` (src/process.c:232-233), *"Number of
-    /// events of change of status of a process"*.  GNU's `update_tick`
-    /// counterpart (:234-235) has no field here on purpose: it is only ever
-    /// read at two lines (:5524, :5845), both of them a performance
-    /// short-circuit deciding whether to bother calling `status_notify`, and
-    /// this port's walk is unconditional.  The invariant lives in the
-    /// per-process [`StatusChangeTicks`].
+    /// events of change of status of a process"*.  Its `update_tick`
+    /// counterpart (:234-235) lives in boxed [`ProcessIdState::update_tick`]
+    /// so `status_notify` skips scanning `processes` when no status changed
+    /// without growing `ProcessManager`.
     pub process_tick: u64,
     pub default_read_config: ProcessReadConfig,
     /// Environment variable overrides (for `setenv`/`getenv`).
@@ -1212,11 +1219,47 @@ pub struct ProcessManager {
     pub wait_backend: ProcessWaitBackend,
 }
 
+// Compile-time layout guards for `_reserved_hash_abi_pad`: `Context` embeds
+// `WorldSlot<ProcessManager>` inline ahead of the JIT-pinned fields.
+// `context_layout_test::every_context_offset_is_mains` pins the full table and
+// `output_fairness::round_robin_cursor_preserves_process_manager_footprint`
+// checks every host; these const assertions fail compilation immediately if a
+// field change shifts `ProcessManager` or the JIT `Context` ABI on x86_64 Linux.
+#[cfg(all(
+    target_arch = "x86_64",
+    target_os = "linux",
+    not(any(test, feature = "test-support"))
+))]
+const _: () = {
+    assert!(core::mem::size_of::<ProcessManager>() == 200);
+};
+#[cfg(all(
+    target_arch = "x86_64",
+    target_os = "linux",
+    any(test, feature = "test-support")
+))]
+const _: () = {
+    assert!(core::mem::size_of::<ProcessManager>() == 264);
+};
+#[cfg(all(
+    target_arch = "x86_64",
+    target_os = "linux",
+    not(debug_assertions),
+    not(any(test, feature = "test-support"))
+))]
+const _: () = {
+    assert!(core::mem::offset_of!(super::super::Context, processes) == 9136);
+    assert!(core::mem::offset_of!(super::super::Context, jit_root_stack_ptr) == 10848);
+};
+
 /// Process allocation and round-robin discovery share one manager lifetime.
 pub struct ProcessIdState {
     pub next_id: ProcessId,
     /// Resume live reads after this source, like GNU's last_read_channel.
     pub last_read_process: ProcessId,
+    /// GNU's file-scope `update_tick` (src/process.c:234-235), *"Last value of
+    /// process_tick for which status_notify has been run"*.
+    pub update_tick: u64,
     /// #776: ids in `deleted_processes` whose fields are armed as ephemerons
     /// for the in-flight collection. They stay in `deleted_processes` so Lisp
     /// running during a concurrent mark can still resolve the process; the
@@ -2863,11 +2906,21 @@ impl ProcessWaitBackend {
         #[cfg(unix)]
         let signal_fd = poller.as_ref().and_then(|poller| {
             let fd = super::super::input_hooks::signal_wake_pipe_read_fd()?;
+            // Register level-triggered so raw `epoll_wait` on the zero-timeout
+            // fast path can never disarm `SIGNAL_KEY` (`EPOLLONESHOT`) before
+            // falling back to `poll_events`, and blocking waits need no
+            // per-call `epoll_ctl(MOD)` rearm.
             // SAFETY: the install report owns the descriptor for the process
             // lifetime, longer than every registration. The reserved event key
             // cannot collide with a real process identifier.
-            unsafe { poller.add(fd, polling::Event::readable(usize::MAX - 1)) }
-                .expect("cannot register evaluator signal wake pipe");
+            unsafe {
+                poller.add_with_mode(
+                    fd,
+                    polling::Event::readable(usize::MAX - 1),
+                    polling::PollMode::Level,
+                )
+            }
+            .expect("cannot register evaluator signal wake pipe");
             Some(fd)
         });
         Self {
@@ -2905,7 +2958,7 @@ impl ProcessWaitBackend {
 
     pub fn wait_for_events(
         &self,
-        processes: &HashMap<ProcessId, Process>,
+        processes: &FxHashMap<ProcessId, Process>,
         timeout: std::time::Duration,
         interest: ProcessWaitBackendInterest,
     ) -> Option<ProcessWaitEvents> {
@@ -2913,20 +2966,17 @@ impl ProcessWaitBackend {
             if super::super::input_hooks::os_signal_pending() {
                 return Some(ProcessWaitEvents::notification_wakeup());
             }
-            #[cfg(unix)]
-            if let Some(fd) = self.signal_fd {
-                // Rearm one-shot interest. A signal between the pending check
-                // and wait leaves a readable byte, so no wake is lost.
-                // SAFETY: install owns fd for the process lifetime.
-                let source = unsafe { std::os::fd::BorrowedFd::borrow_raw(fd) };
-                poller
-                    .modify(source, polling::Event::readable(usize::MAX - 1))
-                    .ok()?;
-            }
             if interest.wants_notifications()
                 && self.notification_pending.swap(false, Ordering::AcqRel)
             {
                 return Some(ProcessWaitEvents::notification_wakeup());
+            }
+
+            #[cfg(target_os = "linux")]
+            if timeout.is_zero()
+                && let Some(events) = self.poll_zero_timeout_linux(poller, processes, interest)
+            {
+                return Some(events);
             }
 
             #[cfg(any(test, feature = "test-support"))]
@@ -2952,19 +3002,125 @@ impl ProcessWaitBackend {
         None
     }
 
+    /// Zero-timeout nonblocking poll on Linux via a single `epoll_wait(..., 0)`
+    /// on `poller`'s underlying epoll descriptor with a stack event buffer.
+    ///
+    /// Avoids `polling::Poller::wait`'s per-call 12 KiB `Events::new()` heap
+    /// allocation, `timerfd_settime`, `eventfd` drain, and 2x `epoll_ctl`
+    /// re-arming when no internal `NOTIFY_KEY` event fired. Falls back to
+    /// [`Self::poll_events`] (`None`) if an internal `polling` key fired or the
+    /// stack batch filled so `polling` rearms its internal descriptors cleanly.
+    #[cfg(target_os = "linux")]
+    fn poll_zero_timeout_linux(
+        &self,
+        poller: &polling::Poller,
+        processes: &FxHashMap<ProcessId, Process>,
+        interest: ProcessWaitBackendInterest,
+    ) -> Option<ProcessWaitEvents> {
+        use std::os::fd::AsRawFd;
+
+        const STACK_CAP: usize = 64;
+        const READ_FLAGS: u32 =
+            (libc::EPOLLIN | libc::EPOLLHUP | libc::EPOLLERR | libc::EPOLLPRI) as u32;
+        const WRITE_FLAGS: u32 = (libc::EPOLLOUT | libc::EPOLLHUP | libc::EPOLLERR) as u32;
+        const NOTIFY_KEY: u64 = usize::MAX as u64;
+        const SIGNAL_KEY: u64 = (usize::MAX - 1) as u64;
+
+        let mut raw_events = [libc::epoll_event { events: 0, u64: 0 }; STACK_CAP];
+        #[cfg(test)]
+        BACKEND_POLL_COUNT.fetch_add(1, Ordering::Relaxed);
+        // Retry `EINTR` like `polling::Poller::wait` (`polling/src/lib.rs:756-758`)
+        // so a signal arriving at syscall entry never drops ready process I/O,
+        // notifications, or async DNS completions on a zero-timeout poll.
+        let count = loop {
+            // SAFETY: `poller.as_raw_fd()` is a live epoll fd owned by `poller` for
+            // the duration of this call; `raw_events` is valid writable storage of
+            // length `STACK_CAP`; timeout `0` never blocks.
+            let rc = unsafe {
+                libc::epoll_wait(
+                    poller.as_raw_fd(),
+                    raw_events.as_mut_ptr(),
+                    STACK_CAP as libc::c_int,
+                    0,
+                )
+            };
+            if rc < 0 {
+                let err = std::io::Error::last_os_error();
+                if err.kind() == std::io::ErrorKind::Interrupted {
+                    continue;
+                }
+                return None;
+            }
+            break rc as usize;
+        };
+        if count >= STACK_CAP || raw_events[..count].iter().any(|ev| ev.u64 == NOTIFY_KEY) {
+            return None;
+        }
+
+        let mut notification_wakeup = interest.wants_notifications()
+            && self.notification_pending.swap(false, Ordering::AcqRel);
+        let mut ready_processes = Vec::new();
+        let mut writable_processes = Vec::new();
+        for ev in &raw_events[..count] {
+            if ev.u64 == SIGNAL_KEY {
+                if let Some(fd) = self.signal_fd {
+                    super::super::input_hooks::drain_signal_wake_pipe(fd);
+                }
+                notification_wakeup = true;
+                continue;
+            }
+            if interest.wants_processes() {
+                let id = ev.u64 as ProcessId;
+                let Some(process) = processes.get(&id) else {
+                    continue;
+                };
+                if (ev.events & READ_FLAGS) != 0
+                    && (process_has_readable_process_io(process)
+                        || process_has_pending_tls_handshake_io(process)
+                        || process_has_observable_child_status(process))
+                {
+                    ready_processes.push(id);
+                }
+                if (ev.events & WRITE_FLAGS) != 0
+                    && (process.live_io.pending_network_connect.is_some()
+                        || process_has_pending_tls_handshake_io(process)
+                        || !process.write_queue.is_nil())
+                {
+                    writable_processes.push(id);
+                }
+            }
+        }
+        if interest.wants_processes() {
+            ready_processes.extend(
+                processes.iter().filter_map(|(id, process)| {
+                    process_has_ready_async_dns(process).then_some(*id)
+                }),
+            );
+        }
+        Some(ProcessWaitEvents::from_sources_with_writable(
+            notification_wakeup,
+            ready_processes,
+            writable_processes,
+        ))
+    }
+
     /// Poll `poller` until a batch carries a result for `interest`, or
     /// `deadline` expires.
     fn poll_events(
         &self,
         poller: &polling::Poller,
-        processes: &HashMap<ProcessId, Process>,
+        processes: &FxHashMap<ProcessId, Process>,
         deadline: ProcessWaitDeadline,
         interest: ProcessWaitBackendInterest,
     ) -> Option<ProcessWaitEvents> {
+        // Keep the full default capacity (1024) on blocking waits and overflow
+        // fallbacks from `poll_zero_timeout_linux` (`STACK_CAP = 64`) so 65+
+        // ready descriptors drain in a single syscall.
+        let mut events = polling::Events::new();
         loop {
             let now = Instant::now();
             let wait_time = deadline.remaining(now);
-            let mut events = polling::Events::new();
+            events.clear();
             #[cfg(test)]
             BACKEND_POLL_COUNT.fetch_add(1, Ordering::Relaxed);
             match poller.wait(&mut events, wait_time) {
@@ -3506,11 +3662,13 @@ impl ProcessManager {
 impl ProcessManager {
     pub fn new() -> Self {
         Self {
-            processes: HashMap::new(),
-            deleted_processes: HashMap::new(),
+            processes: FxHashMap::default(),
+            deleted_processes: FxHashMap::default(),
+            _reserved_hash_abi_pad: [0; 4],
             ids: Box::new(ProcessIdState {
                 next_id: 1,
                 last_read_process: 0,
+                update_tick: 0,
                 armed_retired_processes: std::collections::HashSet::new(),
                 must_force_major: std::collections::HashSet::new(),
                 armed_retired_generation: None,
@@ -3521,6 +3679,19 @@ impl ProcessManager {
             env_overrides: HashMap::new(),
             wait_backend: ProcessWaitBackend::new(),
         }
+    }
+
+    /// GNU's `update_tick != process_tick` guard (src/process.c:5524, :5845).
+    #[inline]
+    pub fn has_unnotified_status_change(&self) -> bool {
+        self.ids.update_tick != self.process_tick
+    }
+
+    /// GNU's `update_tick = process_tick;` at the top of `status_notify`
+    /// (src/process.c:7885).
+    #[inline]
+    pub fn mark_status_notify_walked(&mut self) {
+        self.ids.update_tick = self.process_tick;
     }
 
     /// Record that `id` just retired and still owes its deciding major.
@@ -3850,12 +4021,17 @@ impl ProcessManager {
         }
     }
 
+    /// Return live process ids associated with `buffer_id`, ordered newest-first
+    /// (descending `ProcessId`) to match GNU's `Vprocess_alist` walk order.
     pub fn process_ids_for_buffer(&self, buffer_id: BufferId) -> Vec<ProcessId> {
         let buffer = Value::make_buffer(buffer_id);
-        self.processes
+        let mut ids: Vec<ProcessId> = self
+            .processes
             .iter()
             .filter_map(|(id, proc)| (proc.buffer == buffer).then_some(*id))
-            .collect()
+            .collect();
+        ids.sort_unstable_by(|a, b| b.cmp(a));
+        ids
     }
 
     /// Get process status.
@@ -3925,12 +4101,12 @@ impl ProcessManager {
 
     /// Get a process by id.
     /// Read-only view of the live process table.
-    pub fn process_map(&self) -> &HashMap<ProcessId, Process> {
+    pub fn process_map(&self) -> &FxHashMap<ProcessId, Process> {
         &self.processes
     }
 
     /// Read-only view of the retired process table.
-    pub fn deleted_process_map(&self) -> &HashMap<ProcessId, Process> {
+    pub fn deleted_process_map(&self) -> &FxHashMap<ProcessId, Process> {
         &self.deleted_processes
     }
 
@@ -4130,15 +4306,17 @@ impl ProcessManager {
             .map(|p| p.id)
     }
 
-    /// Find a process associated with BUFFER-ID.
+    /// Find the newest process associated with BUFFER-ID (matching GNU
+    /// `Fget_buffer_process`, which walks `Vprocess_alist` newest-first).
     pub fn find_by_buffer_id(
         &self,
         buffer_id: neovm_value::value::buffer_vocab::BufferId,
     ) -> Option<ProcessId> {
         self.processes
             .values()
-            .find(|p| p.buffer.as_buffer_id() == Some(buffer_id))
+            .filter(|p| p.buffer.as_buffer_id() == Some(buffer_id))
             .map(|p| p.id)
+            .max()
     }
 
     pub fn queue_input(&mut self, id: ProcessId, input: &LispString) -> Result<bool, Flow> {
@@ -4973,17 +5151,82 @@ impl GcTrace for ProcessManager {
 
 // ProcessStatusSymbol impl (A3b-7).
 
+struct ProcessStatusSymIds {
+    run: SymId,
+    stop: SymId,
+    exit: SymId,
+    signal: SymId,
+    open: SymId,
+    listen: SymId,
+    closed: SymId,
+    connect: SymId,
+    failed: SymId,
+}
+
+#[inline]
+fn process_status_sym_ids() -> &'static ProcessStatusSymIds {
+    static IDS: OnceLock<ProcessStatusSymIds> = OnceLock::new();
+    IDS.get_or_init(|| ProcessStatusSymIds {
+        run: intern("run"),
+        stop: intern("stop"),
+        exit: intern("exit"),
+        signal: intern("signal"),
+        open: intern("open"),
+        listen: intern("listen"),
+        closed: intern("closed"),
+        connect: intern("connect"),
+        failed: intern("failed"),
+    })
+}
+
 impl ProcessStatusSymbol {
+    #[inline]
     pub fn from_symbol_value(value: Value) -> Option<Self> {
-        value.as_bare_symbol_name()?.parse().ok()
+        let sym = value.as_bare_symbol_id()?;
+        let ids = process_status_sym_ids();
+        if sym == ids.run {
+            Some(Self::Run)
+        } else if sym == ids.stop {
+            Some(Self::Stop)
+        } else if sym == ids.exit {
+            Some(Self::Exit)
+        } else if sym == ids.signal {
+            Some(Self::Signal)
+        } else if sym == ids.open {
+            Some(Self::Open)
+        } else if sym == ids.listen {
+            Some(Self::Listen)
+        } else if sym == ids.closed {
+            Some(Self::Closed)
+        } else if sym == ids.connect {
+            Some(Self::Connect)
+        } else if sym == ids.failed {
+            Some(Self::Failed)
+        } else {
+            None
+        }
     }
 
+    #[inline]
     pub fn from_status_value(status: Value) -> Option<Self> {
         Self::from_symbol_value(process_status_symbol_value(status))
     }
 
+    #[inline]
     pub fn value(self) -> Value {
-        Value::symbol(self.name())
+        let ids = process_status_sym_ids();
+        let sym = match self {
+            Self::Run => ids.run,
+            Self::Stop => ids.stop,
+            Self::Exit => ids.exit,
+            Self::Signal => ids.signal,
+            Self::Open => ids.open,
+            Self::Listen => ids.listen,
+            Self::Closed => ids.closed,
+            Self::Connect => ids.connect,
+            Self::Failed => ids.failed,
+        };
+        Value::from_sym_id(sym)
     }
 
     pub fn name(self) -> &'static str {
@@ -5008,10 +5251,45 @@ impl ProcessStatusSymbol {
 
 // Status symbol helper (A3b-8).
 
+#[inline]
 pub(crate) fn process_status_symbol_value(status: Value) -> Value {
-    list_to_vec(&status)
-        .and_then(|items| items.first().copied())
-        .unwrap_or(status)
+    if !status.is_cons() {
+        return status;
+    }
+    // Fast path for standard 1- and 2-element status lists (`(exit 0)`,
+    // `(signal 9)`), with Floyd tortoise-and-hare cycle detection for longer
+    // lists so a cyclic cons passed to `ProcessStatusSymbol::from_status_value`
+    // returns `status` (yielding `None`) instead of looping forever.
+    let mut slow = status.cons_cdr();
+    if slow.is_nil() {
+        return status.cons_car();
+    }
+    if !slow.is_cons() {
+        return status;
+    }
+    let mut fast = slow.cons_cdr();
+    if fast.is_nil() {
+        return status.cons_car();
+    }
+    while fast.is_cons() {
+        if fast == slow {
+            return status;
+        }
+        fast = fast.cons_cdr();
+        if !fast.is_cons() {
+            break;
+        }
+        if fast == slow {
+            return status;
+        }
+        fast = fast.cons_cdr();
+        slow = slow.cons_cdr();
+    }
+    if fast.is_nil() {
+        status.cons_car()
+    } else {
+        status
+    }
 }
 
 // Debug impl moved with the type (A3d).

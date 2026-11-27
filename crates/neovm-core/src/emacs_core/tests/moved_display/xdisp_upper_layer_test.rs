@@ -222,9 +222,11 @@ fn commit_line_pixel_height_snapshot(
     wid: crate::window::WindowId,
     buf: neovm_edit::buffer::BufferId,
 ) {
-    let (cl_frames, cl_buffers) = ev.frame_manager_and_buffers_mut();
+    let (cl_frames, mut cl_buffers) = ev.frame_manager_and_buffer_view_mut();
     crate::emacs_core::window_cmds::remember_selected_window_point_in_state(
-        cl_frames, cl_buffers, fid,
+        cl_frames,
+        &mut cl_buffers,
+        fid,
     );
     let freshness = ev.window_display_snapshot_freshness(fid, wid, buf).unwrap();
     let modiff = ev.edit.buffers.get(buf).unwrap().modified_tick();

@@ -122,10 +122,10 @@ pub fn builtin_x_show_tip_eval(ctx: &mut Context, args: Vec<Value>) -> EvalResul
             )
         })?
         .to_owned();
-    let (frames, buffers) = ctx.frame_manager_and_buffers_mut();
+    let (frames, mut buffers) = ctx.frame_manager_and_buffer_view_mut();
     let frame = super::super::window_cmds::resolve_frame_id_in_state(
         frames,
-        buffers,
+        &mut buffers,
         args.get(1),
         crate::emacs_core::window_cmds::FrameDomain::Live,
     )?;

@@ -34,9 +34,11 @@ pub(crate) use bootstrap::GreenBootstrap;
 #[cfg(debug_assertions)]
 pub(crate) use bootstrap::debug_assert_native_tables_open;
 pub(crate) use carried::SourceWorldCarriers;
-#[cfg(test)]
-pub(crate) use scheduler::Control;
-pub(crate) use scheduler::{ConditionId, MutexId, ThreadKey, Wait};
+pub(crate) use host_service::HostRequestKey;
+pub(crate) use scheduler::{
+    ConditionId, Control, MutexId, OwnerWake, ParallelWaitOutcome, SchedulerIndexInconsistency,
+    SignalHint, ThreadKey, Wait,
+};
 pub(crate) use switch::WorldSeatParkedRoots;
 #[doc(hidden)]
 pub use switch::{GreenSeat, SelectTurn};

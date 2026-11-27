@@ -125,6 +125,68 @@ impl super::intern::InitialObarrayMut<'_, '_, '_> {
 }
 
 impl<'era> RunAccess<'_, 'era> {
+    /// Narrow production plain-symbol read on an already-admitted
+    /// [`SymbolHandle`] (E4-P2 Option A). Returns [`Value::UNBOUND`] when the
+    /// canonical cell is void; never panics and never fabricates a value on
+    /// authority failure.
+    pub fn plain_symbol_read(&mut self, symbol: &SymbolHandle) -> Result<Value, RegistrationError> {
+        let lease = self.symbol_ref(symbol)?;
+        let registry = lease.run.owner.registry;
+        let authority = lease.read_token();
+        // SAFETY: `lease` validated identity and holds the counted reader word
+        // (`SymbolReadToken`); World/backing is retained for `'era`.
+        unsafe {
+            registry
+                .symbols
+                .backing
+                .read_plain(lease.key.symbol, &authority)
+        }
+        .ok_or(RegistrationError::Publication)
+    }
+
+    /// Narrow production plain-symbol `boundp` on an already-admitted
+    /// [`SymbolHandle`] (E4-P2 Option A).
+    pub fn plain_symbol_bound(&mut self, symbol: &SymbolHandle) -> Result<bool, RegistrationError> {
+        self.plain_symbol_read(symbol)
+            .map(|value| !value.is_unbound())
+    }
+
+    /// Narrow production plain-symbol write on an already-admitted
+    /// [`SymbolHandle`] (E4-P2 Option A). Keeps `RunAccess::symbol_mut`,
+    /// `sym_set_into`, and `sym_makunbound_into` off the production public API
+    /// so external callers cannot obtain raw `SymbolMut` handles.
+    pub fn plain_symbol_write(
+        &mut self,
+        symbol: &SymbolHandle,
+        value: Value,
+    ) -> Result<(), RegistrationError> {
+        let lease = self.symbol_mut(symbol)?;
+        let registry = lease.run.owner.registry;
+        let local = lease
+            .run
+            .owner
+            .local
+            .as_mut()
+            .ok_or(RegistrationError::StaleRegistration)?;
+        let authority = SymbolWriteToken {
+            _word: &registry.symbols.word,
+            _thread: PhantomData,
+        };
+        // SAFETY: `lease` validated identity and holds WRITER (`SymbolWriteToken`);
+        // the active era excludes every marker and legacy World view.
+        let (result, grown) = unsafe {
+            registry
+                .symbols
+                .backing
+                .write_plain(lease.key.symbol, value, &authority)
+        };
+        local.hot.bytes_since_gc = local.hot.bytes_since_gc.saturating_add(grown);
+        if result == Err(RegistrationError::Poisoned) {
+            registry.symbols.poison();
+        }
+        result
+    }
+
     /// A void error leaves dst unchanged. The loaded value becomes a root
     /// before the counted-reader lease is released, including heap pointers.
     #[cfg_attr(feature = "test-support", visibility::make(pub))]

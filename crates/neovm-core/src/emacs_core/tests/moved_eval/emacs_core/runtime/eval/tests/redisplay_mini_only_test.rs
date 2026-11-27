@@ -48,8 +48,8 @@ fn selected_mini_only_fallback_observes_dynamic_policy_and_precedes_hooks() {
     // enabled. Its preparation producer must not be entered at all.
     {
         let mut ordinary = crate::test_utils::new_context();
-        let (frames, buffers) = ordinary.frame_manager_and_buffers_mut();
-        crate::emacs_core::window_cmds::ensure_selected_frame_id_in_state(frames, buffers);
+        let (frames, mut buffers) = ordinary.frame_manager_and_buffer_view_mut();
+        crate::emacs_core::window_cmds::ensure_selected_frame_id_in_state(frames, &mut buffers);
         ordinary
             .eval_str("(setq resize-mini-frames t)")
             .expect("ordinary policy");

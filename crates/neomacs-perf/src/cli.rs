@@ -47,6 +47,7 @@ pub enum PerfCommand {
         timeout: Duration,
         machine: MachinePolicy,
         counters: Option<CounterScope>,
+        gate_metric: crate::SuiteGateMetric,
         video_file: Option<PathBuf>,
         journal_file: Option<PathBuf>,
         baseline_execution_overrides: crate::ExecutionOverrides,
@@ -159,10 +160,28 @@ struct CompareArgs {
     /// Repetitions per editor; must be at least three.
     #[arg(long, default_value_t = DEFAULT_SAMPLES)]
     samples: ComparisonSampleCount,
+    /// Metric to summarize as the primary gate (`instructions` requires --hardware-counters).
+    #[arg(long, value_enum, default_value_t = CompareGateMetricArg::ScenarioPrimary)]
+    gate_metric: CompareGateMetricArg,
     #[command(flatten)]
     workload: WorkloadArgs,
     #[command(flatten)]
     counters: CounterArgs,
+}
+
+#[derive(Clone, Copy, Debug, ValueEnum)]
+enum CompareGateMetricArg {
+    ScenarioPrimary,
+    Instructions,
+}
+
+impl From<CompareGateMetricArg> for crate::SuiteGateMetric {
+    fn from(value: CompareGateMetricArg) -> Self {
+        match value {
+            CompareGateMetricArg::ScenarioPrimary => Self::ScenarioPrimary,
+            CompareGateMetricArg::Instructions => Self::Instructions,
+        }
+    }
 }
 
 #[derive(Debug, Args)]
@@ -343,14 +362,31 @@ struct CounterArgs {
     /// Collect Linux perf hardware counters around the editor process.
     #[arg(long)]
     hardware_counters: bool,
-    /// Portion of the scenario observed by hardware counters.
-    #[arg(long, value_enum, default_value_t = CounterScopeArg::EditLoop)]
-    counter_scope: CounterScopeArg,
+    /// Portion of the scenario observed by hardware counters (defaults to
+    /// `whole-process` for `startup` and `edit-loop` for all other scenarios).
+    #[arg(long, value_enum)]
+    counter_scope: Option<CounterScopeArg>,
 }
 
 impl CounterArgs {
     fn scope(&self) -> Option<CounterScope> {
-        self.hardware_counters.then(|| self.counter_scope.into())
+        self.hardware_counters.then(|| {
+            self.counter_scope
+                .map(Into::into)
+                .unwrap_or(CounterScope::EditLoop)
+        })
+    }
+
+    fn scope_for_scenario(&self, scenario: ScenarioId) -> Option<CounterScope> {
+        self.hardware_counters.then(|| {
+            self.counter_scope.map(Into::into).unwrap_or_else(|| {
+                if scenario == ScenarioId::Startup {
+                    CounterScope::WholeProcess
+                } else {
+                    CounterScope::EditLoop
+                }
+            })
+        })
     }
 }
 
@@ -492,7 +528,7 @@ impl TryFrom<PerfSubcommand> for PerfCommand {
                     .execution_overrides
                     .try_into()
                     .map_err(|message| PerfCliError::Usage { message })?;
-                let counters = arguments.counters.scope();
+                let counters = arguments.counters.scope_for_scenario(arguments.scenario);
                 let (iterations, frontend, timeout, machine, video_file, journal_file) =
                     arguments.workload.into_semantic(arguments.scenario);
                 Self::Run {
@@ -518,7 +554,14 @@ impl TryFrom<PerfSubcommand> for PerfCommand {
                     .candidate_execution_overrides
                     .try_into()
                     .map_err(|message| PerfCliError::Usage { message })?;
-                let counters = arguments.counters.scope();
+                let counters = arguments.counters.scope_for_scenario(arguments.scenario);
+                let gate_metric: crate::SuiteGateMetric = arguments.gate_metric.into();
+                if gate_metric.requires_hardware_counters() && counters.is_none() {
+                    return Err(PerfCliError::Usage {
+                        message: "--gate-metric instructions requires --hardware-counters"
+                            .to_string(),
+                    });
+                }
                 let (iterations, frontend, timeout, machine, video_file, journal_file) =
                     arguments.workload.into_semantic(arguments.scenario);
                 Self::Compare {
@@ -531,6 +574,7 @@ impl TryFrom<PerfSubcommand> for PerfCommand {
                     timeout,
                     machine,
                     counters,
+                    gate_metric,
                     video_file,
                     journal_file,
                     baseline_execution_overrides,
@@ -661,6 +705,7 @@ pub fn run_cli(
             timeout,
             machine,
             counters,
+            gate_metric,
             video_file,
             journal_file,
             baseline_execution_overrides,
@@ -676,6 +721,7 @@ pub fn run_cli(
             .with_timeout(timeout)
             .with_machine_policy(machine)
             .with_counters(counters)
+            .with_primary_metric(gate_metric.metric_for(scenario))
             .with_video_file(video_file)
             .with_journal_file(journal_file)
             .with_execution_overrides(baseline_execution_overrides, candidate_execution_overrides);
@@ -691,33 +737,17 @@ pub fn run_cli(
                 println!("loadavg    = {loadavg}");
             }
             match &report.artifact.verdict {
-                ComparisonVerdict::Valid { summary } => {
-                    println!("verdict    = valid");
-                    println!(
-                        "baseline   = {:.3} ± {:.3} MAD {:?}",
-                        summary.baseline_median,
-                        summary.baseline_median_absolute_deviation,
-                        summary.unit
-                    );
-                    println!(
-                        "candidate  = {:.3} ± {:.3} MAD {:?}",
-                        summary.candidate_median,
-                        summary.candidate_median_absolute_deviation,
-                        summary.unit
-                    );
-                    println!("change     = {:+.2}%", summary.percent_change);
-                    println!(
-                        "pairs      = {}",
-                        summary
-                            .paired_samples
-                            .iter()
-                            .map(|pair| format!(
-                                "{}:{:+.2}%",
-                                pair.sample_index, pair.percent_change
-                            ))
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    );
+                ComparisonVerdict::Valid {
+                    summary,
+                    context_metrics,
+                } => {
+                    for line in format_comparison_summary_lines(
+                        summary,
+                        context_metrics,
+                        report.artifact.input.iterations.get(),
+                    ) {
+                        println!("{line}");
+                    }
                     Ok(())
                 }
                 ComparisonVerdict::Rejected { reasons } => Err(PerfCliError::ComparisonRejected {
@@ -806,6 +836,15 @@ pub fn run_cli(
             if let Some(loadavg) = &report.artifact.host_loadavg {
                 println!("loadavg = {loadavg}");
             }
+            for row in &report.artifact.scenarios {
+                println!("{}", format_suite_row_summary(row));
+            }
+            for skip in &report.artifact.skipped_drifts {
+                println!(
+                    "warning = drift check skipped for {}: {}",
+                    skip.scenario, skip.reason
+                );
+            }
             match &report.artifact.verdict {
                 SuiteVerdict::Passed => {
                     println!("verdict = passed");
@@ -829,6 +868,172 @@ pub fn run_cli(
             }
         }
     }
+}
+
+fn format_metric_value(value: f64, small_scale: bool) -> String {
+    if small_scale {
+        format!("{value:.6}")
+    } else {
+        format!("{value:.3}")
+    }
+}
+
+fn format_metric_delta(
+    summary: &crate::ComparisonMetricSummary,
+    iterations: Option<u32>,
+) -> String {
+    let small_scale = summary.baseline_median.abs() < 1.0 || summary.candidate_median.abs() < 1.0;
+    let per_op = match (summary.metric, iterations) {
+        (crate::MetricName::Instructions, Some(iters)) if iters > 0 => format!(
+            " ({:.1}/op -> {:.1}/op)",
+            summary.baseline_median / f64::from(iters),
+            summary.candidate_median / f64::from(iters)
+        ),
+        _ => String::new(),
+    };
+    format!(
+        "{:?} baseline={} ± {} MAD candidate={} ± {} MAD {:?}{} ({:+.2}%)",
+        summary.metric,
+        format_metric_value(summary.baseline_median, small_scale),
+        format_metric_value(summary.baseline_median_absolute_deviation, small_scale),
+        format_metric_value(summary.candidate_median, small_scale),
+        format_metric_value(summary.candidate_median_absolute_deviation, small_scale),
+        summary.unit,
+        per_op,
+        summary.percent_change,
+    )
+}
+
+pub(crate) fn format_comparison_summary_lines(
+    summary: &crate::ComparisonMetricSummary,
+    context_metrics: &[crate::ComparisonMetricSummary],
+    iterations: u32,
+) -> Vec<String> {
+    let mut lines = vec![
+        "verdict    = valid".to_string(),
+        format!(
+            "gate       = {}",
+            format_metric_delta(summary, Some(iterations))
+        ),
+        format!(
+            "baseline   = {:.3} ± {:.3} MAD {:?}",
+            summary.baseline_median, summary.baseline_median_absolute_deviation, summary.unit
+        ),
+        format!(
+            "candidate  = {:.3} ± {:.3} MAD {:?}",
+            summary.candidate_median, summary.candidate_median_absolute_deviation, summary.unit
+        ),
+        format!("change     = {:+.2}%", summary.percent_change),
+        format!(
+            "pairs      = {}",
+            summary
+                .paired_samples
+                .iter()
+                .map(|pair| format!("{}:{:+.2}%", pair.sample_index, pair.percent_change))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+    ];
+    for context in context_metrics {
+        lines.push(format!(
+            "context    = [non-gating] {}",
+            format_metric_delta(context, Some(iterations))
+        ));
+    }
+    lines
+}
+
+fn sample_span_percent(summary: &crate::ComparisonMetricSummary) -> Option<f64> {
+    let mut min_val = f64::INFINITY;
+    let mut max_val = f64::NEG_INFINITY;
+    for &v in summary
+        .baseline_samples
+        .iter()
+        .chain(summary.candidate_samples.iter())
+    {
+        if !v.is_finite() || v <= 0.0 {
+            return None;
+        }
+        if v < min_val {
+            min_val = v;
+        }
+        if v > max_val {
+            max_val = v;
+        }
+    }
+    if min_val.is_finite() && max_val.is_finite() && min_val > 0.0 {
+        Some((max_val - min_val) / min_val * 100.0)
+    } else {
+        None
+    }
+}
+
+pub(crate) fn format_suite_row_summary(row: &crate::SuiteScenarioResult) -> String {
+    let non_convertible = row
+        .non_convertible_reason
+        .map(|reason| format!(" [non-convertible: {reason}]"))
+        .unwrap_or_default();
+    let gate_part = if row.gate_metric == crate::SuiteGateMetric::NonGatingReport {
+        let label = row
+            .non_convertible_reason
+            .map(|reason| format!("non-gating: {reason}"))
+            .unwrap_or_else(|| "non-gating".to_string());
+        match (&row.gate_summary, row.percent_change) {
+            (Some(summary), _) => {
+                let span = sample_span_percent(summary)
+                    .map(|s| format!(" span={s:.1}%"))
+                    .unwrap_or_default();
+                format!(
+                    "REPORT [{label}] [{}{span}]",
+                    format_metric_delta(summary, row.iterations)
+                )
+            }
+            (None, Some(change)) => format!(
+                "REPORT [{label}] [{:?} {:+.2}%]",
+                row.gate_metric.metric_for(row.scenario),
+                change
+            ),
+            (None, None) => format!(
+                "REPORT [{label}] [{:?} REJECTED]",
+                row.gate_metric.metric_for(row.scenario)
+            ),
+        }
+    } else {
+        match (&row.gate_summary, row.percent_change) {
+            (Some(summary), _) => format!(
+                "GATE [{}] (budget {:+.2}%){}",
+                format_metric_delta(summary, row.iterations),
+                row.maximum_regression_percent,
+                non_convertible
+            ),
+            (None, Some(change)) => format!(
+                "GATE [{:?} {:+.2}%] (budget {:+.2}%){}",
+                row.gate_metric.metric_for(row.scenario),
+                change,
+                row.maximum_regression_percent,
+                non_convertible
+            ),
+            (None, None) => format!(
+                "GATE [{:?} REJECTED] (budget {:+.2}%){}",
+                row.gate_metric.metric_for(row.scenario),
+                row.maximum_regression_percent,
+                non_convertible
+            ),
+        }
+    };
+    if row.context_metrics.is_empty() {
+        return format!("row {}: {}", row.scenario, gate_part);
+    }
+    let contexts = row
+        .context_metrics
+        .iter()
+        .map(|summary| format_metric_delta(summary, row.iterations))
+        .collect::<Vec<_>>()
+        .join("; ");
+    format!(
+        "row {}: {} | CONTEXT [non-gating]: {}",
+        row.scenario, gate_part, contexts
+    )
 }
 
 #[cfg(test)]

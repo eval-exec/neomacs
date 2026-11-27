@@ -2145,11 +2145,11 @@ fn activate_minibuffer_window_switches_displayed_buffer_and_restores_state() {
     let generation_while_active = ev.menu_bar_rebuild_generation();
 
     let effect = {
-        let (frames, buffers, minibuffer_selected_window, active_minibuffer_window) =
-            ev.frame_manager_buffers_and_minibuffer_selection_mut();
+        let (frames, mut buffers, minibuffer_selected_window, active_minibuffer_window) =
+            ev.frame_manager_buffer_view_and_minibuffer_selection_mut();
         restore_minibuffer_window_in_state(
             frames,
-            buffers,
+            &mut buffers,
             minibuffer_selected_window,
             active_minibuffer_window,
             saved,
@@ -2291,11 +2291,11 @@ fn expired_minibuffer_buffer_is_erased_before_restore() {
 
     erase_expired_minibuffer_buffer_in_state(&mut ev.edit.buffers, active_buffer);
     {
-        let (frames, buffers, minibuffer_selected_window, active_minibuffer_window) =
-            ev.frame_manager_buffers_and_minibuffer_selection_mut();
+        let (frames, mut buffers, minibuffer_selected_window, active_minibuffer_window) =
+            ev.frame_manager_buffer_view_and_minibuffer_selection_mut();
         restore_minibuffer_window_in_state(
             frames,
-            buffers,
+            &mut buffers,
             minibuffer_selected_window,
             active_minibuffer_window,
             saved,
@@ -2354,12 +2354,18 @@ fn active_minibuffer_window_sync_keeps_live_buffer_point() {
         + 1;
     assert_eq!(pre_buffer_point, 14);
 
-    let (frames, buffers) = ev.frame_manager_and_buffers_mut();
+    let (frames, mut buffers) = ev.frame_manager_and_buffer_view_mut();
     crate::emacs_core::window_cmds::remember_selected_window_point_in_state(
-        frames, buffers, frame_id,
+        frames,
+        &mut buffers,
+        frame_id,
     );
-    let (frames, buffers) = ev.frame_manager_read_and_buffers_mut();
-    crate::emacs_core::window_cmds::sync_selected_window_buffer_in_state(frames, buffers, frame_id);
+    let (frames, mut buffers) = ev.frame_manager_read_and_buffer_view_mut();
+    crate::emacs_core::window_cmds::sync_selected_window_buffer_in_state(
+        frames,
+        &mut buffers,
+        frame_id,
+    );
 
     let window_point = ev
         .frame_manager()

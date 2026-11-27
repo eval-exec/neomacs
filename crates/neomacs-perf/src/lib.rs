@@ -68,11 +68,15 @@ pub use profile::{
 };
 #[cfg(test)]
 pub(crate) use profile_gate::ProfileGate;
-#[cfg(test)]
-pub(crate) use suite::{SUITE_ARTIFACT_SCHEMA_VERSION, evaluate_suite, read_history_link};
 pub use suite::{
-    SuiteArtifact, SuiteGateMetric, SuiteHistoryLink, SuiteId, SuiteRegression, SuiteReport,
+    InstructionCalibration, NonConvertibleTimingReason, SuiteArtifact, SuiteDrift, SuiteDriftSkip,
+    SuiteDriftSkipReason, SuiteGateMetric, SuiteHistoryLink, SuiteId, SuiteRegression, SuiteReport,
     SuiteRequest, SuiteScenario, SuiteScenarioResult, SuiteVerdict,
+};
+#[cfg(test)]
+pub(crate) use suite::{
+    SUITE_ARTIFACT_SCHEMA_VERSION, SuiteEvaluationContext, evaluate_suite,
+    evaluate_suite_with_context, read_history_link,
 };
 
 /// The workspace root of the machine running this code: nextest's runtime

@@ -497,6 +497,10 @@ pub(super) enum FrameLifecycle {
         mouse_hidden_for_typing: bool,
         ime_enabled: bool,
         last_ime_cursor_area: Option<ImeCursorArea>,
+        /// Last geometry hints applied to the native window so unchanged
+        /// hints do not re-issue `set_min_surface_size` (which on Wayland
+        /// unconditionally triggers `request_redraw` / `platform_redraw`).
+        applied_geometry_hints: Option<GuiFrameGeometryHints>,
     },
 }
 
@@ -1299,8 +1303,19 @@ impl GuiFrameRenderState {
     }
 
     /// [`Self::has_presentable_cursor_change`] observed at the pass instant.
+    #[cfg(test)]
     pub(super) fn has_presentable_cursor_change_at(&self, now: EventTime) -> bool {
-        self.compositor.cursor_dirty
+        self.compositor.cursor_dirty != super::frame_compositor::CursorDirty::None
+            && self.compositor.current_frame.is_some()
+            && !self.native_resize_withheld_at(now)
+    }
+
+    /// Whether a discrete cursor change (blink toggle, forced blink-on, or
+    /// final settled interpolation sample) owes an immediate
+    /// `Cadence::NextPresentation` frame. Intermediate motion samples stay
+    /// paced by `DemandReason::CursorMotion` (`Cadence::MaxRate`).
+    pub(super) fn has_immediate_cursor_change_at(&self, now: EventTime) -> bool {
+        self.compositor.cursor_dirty == super::frame_compositor::CursorDirty::Immediate
             && self.compositor.current_frame.is_some()
             && !self.native_resize_withheld_at(now)
     }
@@ -1316,7 +1331,7 @@ impl GuiFrameRenderState {
                 self.compositor.dirty = false;
             }
         }
-        self.compositor.cursor_dirty = false;
+        self.compositor.cursor_dirty = super::frame_compositor::CursorDirty::None;
         // The measurement baseline advances here and nowhere else, because this
         // is the first point at which the retained presentation is committed to
         // reaching the screen. Advancing it at install instead would let a
@@ -1359,7 +1374,7 @@ impl GuiFrameRenderState {
         }
         // Starting a frame satisfies the cursor layer too: every render path
         // draws the cursor at its current blink state.
-        self.compositor.cursor_dirty = false;
+        self.compositor.cursor_dirty = super::frame_compositor::CursorDirty::None;
     }
 
     pub(super) fn clear_all_chrome_pressed(&mut self) {
@@ -1910,16 +1925,33 @@ impl GuiFrameWindowState {
         }
     }
 
-    pub(super) fn apply_geometry_hints(&mut self, geometry_hints: GuiFrameGeometryHints) {
+    pub(super) fn update_geometry_hints_cache(
+        slot: &mut Option<GuiFrameGeometryHints>,
+        next: GuiFrameGeometryHints,
+    ) -> bool {
+        if *slot == Some(next) {
+            return false;
+        }
+        *slot = Some(next);
+        true
+    }
+
+    pub(super) fn apply_geometry_hints(&mut self, geometry_hints: GuiFrameGeometryHints) -> bool {
         match &mut self.lifecycle {
-            FrameLifecycle::Active { native, .. } => {
+            FrameLifecycle::Active {
+                native,
+                applied_geometry_hints,
+                ..
+            } => {
+                if !Self::update_geometry_hints_cache(applied_geometry_hints, geometry_hints) {
+                    return false;
+                }
                 apply_window_geometry_hints(native.window.as_ref(), geometry_hints);
+                true
             }
             FrameLifecycle::Pending {
                 geometry_hints: gh, ..
-            } => {
-                *gh = Some(geometry_hints);
-            }
+            } => Self::update_geometry_hints_cache(gh, geometry_hints),
         }
     }
 
@@ -2109,19 +2141,6 @@ impl GuiFrameWindowState {
         self.lifecycle.is_active() && self.render.has_presentable_dirty_content_at(now)
     }
 
-    #[cfg(test)]
-    pub(super) fn has_presentable_cursor_change(&self) -> bool {
-        self.lifecycle.is_active() && self.render.has_presentable_cursor_change()
-    }
-
-    /// [`Self::has_presentable_cursor_change`] observed at the pass instant.
-    pub(super) fn has_presentable_cursor_change_at(
-        &self,
-        now: neomacs_display_protocol::frame_time::EventTime,
-    ) -> bool {
-        self.lifecycle.is_active() && self.render.has_presentable_cursor_change_at(now)
-    }
-
     pub fn window(&self) -> Option<&Arc<dyn Window>> {
         self.lifecycle.window()
     }
@@ -2297,11 +2316,16 @@ impl GuiFrameWindowManager {
         native.refresh_content_geometry();
         let key = self.primary_frame_key();
         if let Some(window_state) = self.windows.get_mut(&key) {
-            let pending_position = match window_state.lifecycle {
+            let (pending_position, pending_geometry_hints) = match window_state.lifecycle {
                 FrameLifecycle::Pending {
-                    pending_position, ..
-                } => pending_position,
-                FrameLifecycle::Active { .. } => None,
+                    pending_position,
+                    geometry_hints,
+                    ..
+                } => (pending_position, geometry_hints),
+                FrameLifecycle::Active {
+                    applied_geometry_hints,
+                    ..
+                } => (None, applied_geometry_hints),
             };
             let winit_id = native.window.id();
             let surface_state = native.surface_state();
@@ -2311,6 +2335,7 @@ impl GuiFrameWindowManager {
                 mouse_hidden_for_typing: window_state.lifecycle.mouse_hidden_for_typing(),
                 ime_enabled: window_state.lifecycle.ime_enabled(),
                 last_ime_cursor_area: window_state.lifecycle.last_ime_cursor_area(),
+                applied_geometry_hints: pending_geometry_hints,
             };
             if let Some((x, y)) = pending_position {
                 window_state.set_outer_position(x, y);
@@ -2662,6 +2687,7 @@ impl GuiFrameWindowManager {
                                 mouse_hidden_for_typing: false,
                                 ime_enabled: false,
                                 last_ime_cursor_area: None,
+                                applied_geometry_hints: Some(req.geometry_hints),
                             },
                             render,
                         },

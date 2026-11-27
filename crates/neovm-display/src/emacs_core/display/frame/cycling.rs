@@ -90,10 +90,10 @@ fn same_input_owner(origin: &Frame, candidate: &Frame) -> bool {
 
 fn cycle(eval: &mut Context, args: Vec<Value>, direction: Direction) -> EvalResult {
     expect_max_args(direction.name(), &args, 2)?;
-    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
     let origin = crate::emacs_core::window_cmds::resolve_frame_id_in_state(
         frames,
-        buffers,
+        &mut buffers,
         args.first(),
         crate::emacs_core::window_cmds::FrameDomain::Live,
     )?;

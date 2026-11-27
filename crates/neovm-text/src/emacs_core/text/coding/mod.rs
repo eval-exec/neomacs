@@ -31,6 +31,7 @@ use neovm_value::intern::{SymId, intern, lookup_interned, resolve_sym};
 use neovm_value::tagged::value::SymbolMode;
 use neovm_value::value::*;
 use num_enum::{IntoPrimitive, TryFromPrimitive};
+use rustc_hash::FxHashMap;
 use std::collections::{HashMap, HashSet};
 use strum::{EnumString, IntoStaticStr};
 
@@ -680,7 +681,7 @@ fn left_single_quote_display(table: Value, mode: SymbolMode) -> LeftSingleQuoteD
     let Some(obj) = table.as_char_table_obj() else {
         return LeftSingleQuoteDisplay::NotAsciiBacktick;
     };
-    let purpose = obj.purpose.get();
+    let purpose = obj.purpose();
     if !eq_value_swp(
         &purpose,
         &Value::symbol("display-table"),
@@ -1348,21 +1349,21 @@ impl CodingSystemInfo {
 /// vector, and so does the uncached path.
 #[derive(Default)]
 struct CodingLookupCache {
-    plist: HashMap<SymId, Value>,
-    base: HashMap<SymId, Value>,
-    eol_type: HashMap<SymId, Value>,
-    coding_type: HashMap<SymId, Value>,
+    plist: FxHashMap<SymId, Value>,
+    base: FxHashMap<SymId, Value>,
+    eol_type: FxHashMap<SymId, Value>,
+    coding_type: FxHashMap<SymId, Value>,
 }
 
 /// Central registry for all coding systems and their aliases.
 pub struct CodingSystemManager {
     /// Registered coding systems, keyed by canonical name.
-    pub systems: HashMap<SymId, CodingSystemInfo>,
+    pub systems: FxHashMap<SymId, CodingSystemInfo>,
     /// Alias -> canonical name mapping.
-    pub aliases: HashMap<SymId, SymId>,
+    pub aliases: FxHashMap<SymId, SymId>,
     /// GNU stores aliases in each coding-system spec and appends new aliases
     /// at the tail.  Keep the same order for `coding-system-aliases`.
-    pub alias_order: HashMap<SymId, Vec<SymId>>,
+    pub alias_order: FxHashMap<SymId, Vec<SymId>>,
     /// Detection priority list (ordered list of system names).
     pub priority: Vec<SymId>,
     /// Current keyboard coding system.
@@ -1378,9 +1379,9 @@ impl CodingSystemManager {
     /// Create a new manager pre-populated with the standard coding systems.
     pub fn new() -> Self {
         let mut mgr = Self {
-            systems: HashMap::new(),
-            aliases: HashMap::new(),
-            alias_order: HashMap::new(),
+            systems: FxHashMap::default(),
+            aliases: FxHashMap::default(),
+            alias_order: FxHashMap::default(),
             priority: Vec::new(),
             // GNU `create_terminal` (terminal.c:309-318) defaults each
             // terminal's keyboard coding to `no-conversion` and its
@@ -1529,30 +1530,16 @@ impl CodingSystemManager {
             'A',
             EolType::Mac,
         ));
-        mgr.register(CodingSystemInfo::new(
-            "raw-text",
-            "raw-text",
-            '=',
-            EolType::Undecided,
-        ));
-        mgr.register(CodingSystemInfo::new(
-            "raw-text-unix",
-            "raw-text",
-            '=',
-            EolType::Unix,
-        ));
-        mgr.register(CodingSystemInfo::new(
-            "raw-text-dos",
-            "raw-text",
-            '=',
-            EolType::Dos,
-        ));
-        mgr.register(CodingSystemInfo::new(
-            "raw-text-mac",
-            "raw-text",
-            '=',
-            EolType::Mac,
-        ));
+        for (name, eol) in [
+            ("raw-text", EolType::Undecided),
+            ("raw-text-unix", EolType::Unix),
+            ("raw-text-dos", EolType::Dos),
+            ("raw-text-mac", EolType::Mac),
+        ] {
+            let mut info = CodingSystemInfo::new(name, "raw-text", '=', eol);
+            info.for_unibyte = true;
+            mgr.register(info);
+        }
         mgr.register(CodingSystemInfo::new(
             "undecided",
             "undecided",
@@ -1601,12 +1588,11 @@ impl CodingSystemManager {
             'U',
             EolType::Mac,
         ));
-        mgr.register(CodingSystemInfo::new(
-            "no-conversion",
-            "raw-text",
-            '=',
-            EolType::Unix,
-        ));
+        {
+            let mut info = CodingSystemInfo::new("no-conversion", "raw-text", '=', EolType::Unix);
+            info.for_unibyte = true;
+            mgr.register(info);
+        }
         for (name, eol) in [
             ("utf-8-auto", EolType::Undecided),
             ("utf-8-auto-unix", EolType::Unix),
@@ -1996,6 +1982,22 @@ impl CodingSystemManager {
         self.keyboard_coding
     }
 
+    /// GNU's `CODING_FOR_UNIBYTE` predicate (`src/coding.c:8137`), resolving
+    /// aliases and EOL subsidiaries to their shared base entry.
+    pub(crate) fn is_for_unibyte(&self, coding: &str) -> bool {
+        let Some(resolved) = resolve_runtime_name(self, coding) else {
+            return false;
+        };
+        if let Some(info) = self.get(&resolved)
+            && info.for_unibyte
+        {
+            return true;
+        }
+        runtime_bucket_name(self, &resolved)
+            .and_then(|bucket| self.get(&bucket))
+            .is_some_and(|info| info.for_unibyte)
+    }
+
     /// GNU's `CODING_FOR_UNIBYTE` decision for a conversion destination.
     /// Keep this lookup on the registry so aliases and Lisp-defined coding
     /// systems cannot be reclassified by string matching at call sites.
@@ -2003,11 +2005,7 @@ impl CodingSystemManager {
         &self,
         coding_system: SymId,
     ) -> crate::code_conversion_workspace::ConversionBufferEncoding {
-        let for_unibyte = self
-            .resolve(resolve_sym(coding_system))
-            .and_then(|canonical| self.systems.get(&canonical))
-            .is_some_and(|info| info.for_unibyte);
-        if for_unibyte {
+        if self.is_for_unibyte(resolve_sym(coding_system)) {
             crate::code_conversion_workspace::ConversionBufferEncoding::Unibyte
         } else {
             crate::code_conversion_workspace::ConversionBufferEncoding::Multibyte
@@ -2053,17 +2051,17 @@ impl CodingSystemManager {
     }
     #[doc(hidden)]
     pub fn from_dump(
-        systems: HashMap<SymId, CodingSystemInfo>,
-        aliases: HashMap<SymId, SymId>,
-        alias_order: HashMap<SymId, Vec<SymId>>,
+        systems: impl IntoIterator<Item = (SymId, CodingSystemInfo)>,
+        aliases: impl IntoIterator<Item = (SymId, SymId)>,
+        alias_order: impl IntoIterator<Item = (SymId, Vec<SymId>)>,
         priority: Vec<SymId>,
         keyboard_coding: SymId,
         terminal_coding: SymId,
     ) -> Self {
         Self {
-            systems,
-            aliases,
-            alias_order,
+            systems: systems.into_iter().collect(),
+            aliases: aliases.into_iter().collect(),
+            alias_order: alias_order.into_iter().collect(),
             priority,
             keyboard_coding,
             terminal_coding,
@@ -3112,14 +3110,23 @@ fn builtin_coding_system_plist_uncached(
     {
         plist_push_key(&mut plist, intern(":mime-charset"), mime_charset);
     }
-    if let Some(post_read_conversion) = info.post_read_conversion {
+    let put_overrides = info
+        .int_properties
+        .get(&PUT_OVERRIDES_KEY)
+        .copied()
+        .unwrap_or(Value::NIL);
+    if let Some(post_read_conversion) = info.post_read_conversion
+        && !plist_has_symbol_key(put_overrides, intern(":post-read-conversion"), mode)
+    {
         plist_push_key(
             &mut plist,
             intern(":post-read-conversion"),
             Value::from_sym_id(post_read_conversion),
         );
     }
-    if let Some(pre_write_conversion) = info.pre_write_conversion {
+    if let Some(pre_write_conversion) = info.pre_write_conversion
+        && !plist_has_symbol_key(put_overrides, intern(":pre-write-conversion"), mode)
+    {
         plist_push_key(
             &mut plist,
             intern(":pre-write-conversion"),
@@ -3165,18 +3172,19 @@ pub fn builtin_coding_system_put(
 
     if let Some(prop_id) = args[1].as_symbol_id(mode) {
         let prop_name = resolve_sym(prop_id);
-        // GNU `Fcoding_system_put` validates the conversion hooks with
-        // CHECK_SYMBOL (src/coding.c:11562, 11567): a non-symbol (e.g. a lambda)
-        // is rejected with `wrong-type-argument (symbolp …)`, just as at
-        // definition time.
-        if matches!(
-            prop_name,
-            ":post-read-conversion"
-                | "post-read-conversion"
-                | ":pre-write-conversion"
-                | "pre-write-conversion"
-        ) {
-            check_symbol_hook_arg(&val, mode)?;
+        // GNU `Fcoding_system_put` validates only the keyword conversion hooks
+        // `:post-read-conversion` and `:pre-write-conversion` with
+        // `CHECK_SYMBOL` and updates the typed attributes on the shared spec
+        // (`src/coding.c:11560-11569`). Bare symbols like `post-read-conversion`
+        // are ordinary plist keys and accept any value.
+        match prop_name {
+            ":post-read-conversion" => {
+                info.post_read_conversion = check_symbol_hook_arg(&val, mode)?;
+            }
+            ":pre-write-conversion" => {
+                info.pre_write_conversion = check_symbol_hook_arg(&val, mode)?;
+            }
+            _ => {}
         }
         if matches!(
             prop_name,
@@ -3243,6 +3251,21 @@ fn record_put_override(info: &mut CodingSystemInfo, prop: Value, val: Value, mod
     ) {
         info.int_properties.insert(PUT_OVERRIDES_KEY, updated);
     }
+}
+
+fn plist_has_symbol_key(mut plist: Value, key: SymId, mode: SymbolMode) -> bool {
+    while plist.is_cons() {
+        let prop = plist.cons_car();
+        let rest = plist.cons_cdr();
+        if !rest.is_cons() {
+            return false;
+        }
+        if prop.as_symbol_id(mode) == Some(key) {
+            return true;
+        }
+        plist = rest.cons_cdr();
+    }
+    false
 }
 
 /// `(coding-system-base CODING-SYSTEM)` -- return the base coding system

@@ -2078,7 +2078,9 @@ fn clear_image_cache_usage_read_stays_post_clear_with_a_full_command_channel() {
         }
     });
 
-    let _ = catalog.invalidate(ImageInvalidation::All);
+    let _ = catalog.invalidate(ImageInvalidation::All {
+        cleared_after_presentation: 0,
+    });
     assert_eq!(
         catalog.cached_size_bytes(),
         0,
@@ -2138,7 +2140,9 @@ fn clear_image_cache_read_waits_out_a_stalled_render_thread() {
         }
     });
 
-    let _ = catalog.invalidate(ImageInvalidation::All);
+    let _ = catalog.invalidate(ImageInvalidation::All {
+        cleared_after_presentation: 0,
+    });
     assert_eq!(
         catalog.cached_size_bytes(),
         0,
@@ -2173,7 +2177,9 @@ fn clear_image_cache_read_before_gpu_startup_does_not_wait_for_the_renderer() {
     let sender_for_catalog = cmd_tx.clone();
     let reader = std::thread::spawn(move || {
         let catalog = test_image_catalog(&sender_for_catalog, state_for_catalog);
-        let _ = catalog.invalidate(ImageInvalidation::All);
+        let _ = catalog.invalidate(ImageInvalidation::All {
+            cleared_after_presentation: 0,
+        });
         let _ = done_tx.send(catalog.cached_size_bytes());
     });
     // Nobody drains `cmd_rx`: before the GPU exists the read must not wait on
@@ -2213,7 +2219,9 @@ fn clear_image_cache_read_stops_when_the_renderer_exits_with_the_ack_queued() {
     let sender_for_catalog = cmd_tx.clone();
     let reader = std::thread::spawn(move || {
         let catalog = test_image_catalog(&sender_for_catalog, state_for_catalog);
-        let _ = catalog.invalidate(ImageInvalidation::All);
+        let _ = catalog.invalidate(ImageInvalidation::All {
+            cleared_after_presentation: 0,
+        });
         let _ = done_tx.send(catalog.cached_size_bytes());
     });
     // Wait until the read has queued the clear and its publish.
@@ -2327,7 +2335,9 @@ fn clear_then_failed_load_then_renderer_exit_is_zero() {
     let sender_for_catalog = cmd_tx.clone();
     let reader = std::thread::spawn(move || {
         let catalog = test_image_catalog(&sender_for_catalog, state_for_catalog);
-        let _ = catalog.invalidate(ImageInvalidation::All);
+        let _ = catalog.invalidate(ImageInvalidation::All {
+            cleared_after_presentation: 0,
+        });
         let request = ImageResolveRequest {
             spec: test_image_spec_identity("after-clear-load"),
             source: ImageResolveSource::Data(ImageDataSource::Isolated(EncodedBytes::new(
@@ -2381,7 +2391,9 @@ fn clear_after_renderer_exit_reports_the_known_post_clear_zero() {
     image_state.mark_renderer_exited();
     drop(cmd_rx);
 
-    let _ = catalog.invalidate(ImageInvalidation::All);
+    let _ = catalog.invalidate(ImageInvalidation::All {
+        cleared_after_presentation: 0,
+    });
     assert_eq!(
         catalog.cached_size_bytes(),
         0,
@@ -2409,7 +2421,9 @@ fn post_clear_ready_load_invalidates_the_known_zero() {
         image_state.mark_renderer_ready();
         image_state.publish_cache_usage(ImageCacheUsage::new(4_096, 0));
         let catalog = test_image_catalog(&cmd_tx, Arc::clone(&image_state));
-        let _ = catalog.invalidate(ImageInvalidation::All);
+        let _ = catalog.invalidate(ImageInvalidation::All {
+            cleared_after_presentation: 0,
+        });
         image_state.mark_renderer_exited();
         drop(cmd_rx);
         assert_eq!(
@@ -2426,7 +2440,9 @@ fn post_clear_ready_load_invalidates_the_known_zero() {
     image_state.publish_cache_usage(ImageCacheUsage::new(4_096, 0));
     let catalog = test_image_catalog(&cmd_tx, Arc::clone(&image_state));
 
-    let _ = catalog.invalidate(ImageInvalidation::All);
+    let _ = catalog.invalidate(ImageInvalidation::All {
+        cleared_after_presentation: 0,
+    });
     let request = ImageResolveRequest {
         spec: test_image_spec_identity("after-clear-ready"),
         source: ImageResolveSource::Data(ImageDataSource::Isolated(EncodedBytes::new(
@@ -3416,6 +3432,7 @@ fn opening_gui_frame_adoption_does_not_push_stale_window_size() {
         primary_frame: PrimaryFrame::Awaiting,
         gui_startup: None,
         last_window_titles: Mutex::new(std::collections::HashMap::new()),
+        last_geometry_hints: Mutex::new(std::collections::HashMap::new()),
         display_identity: None,
         font_metrics: None,
         primary_window_size: shared_primary_window_size(1600, 1800),
@@ -3500,6 +3517,7 @@ fn opening_gui_frame_adoption_applies_fullscreen_mode() {
         primary_frame: PrimaryFrame::Awaiting,
         gui_startup: None,
         last_window_titles: Mutex::new(std::collections::HashMap::new()),
+        last_geometry_hints: Mutex::new(std::collections::HashMap::new()),
         display_identity: None,
         font_metrics: None,
         primary_window_size: shared_primary_window_size(1600, 1800),
@@ -3565,6 +3583,7 @@ fn primary_display_host_destroy_gui_frame_routes_primary_and_secondary_windows()
             (FrameId(0x100000001), LispString::from_utf8("primary")),
             (FrameId(0x100000002), LispString::from_utf8("secondary")),
         ])),
+        last_geometry_hints: Mutex::new(std::collections::HashMap::new()),
         display_identity: None,
         font_metrics: None,
         primary_window_size: shared_primary_window_size(1600, 1800),
@@ -3618,6 +3637,7 @@ fn primary_display_host_popup_menu_routes_primary_and_secondary_frames() {
         primary_frame: PrimaryFrame::Adopted(FrameId(0x100000001)),
         gui_startup: None,
         last_window_titles: Mutex::new(std::collections::HashMap::new()),
+        last_geometry_hints: Mutex::new(std::collections::HashMap::new()),
         display_identity: None,
         font_metrics: None,
         primary_window_size: shared_primary_window_size(1600, 1800),
@@ -3705,6 +3725,7 @@ fn primary_image_catalog_lookup_returns_pending_without_waiting_for_render_threa
         primary_frame: PrimaryFrame::Awaiting,
         gui_startup: None,
         last_window_titles: Mutex::new(std::collections::HashMap::new()),
+        last_geometry_hints: Mutex::new(std::collections::HashMap::new()),
         display_identity: None,
         font_metrics: None,
         primary_window_size: shared_primary_window_size(1600, 1800),
@@ -3935,6 +3956,7 @@ fn primary_image_catalog_does_not_block_on_render_command_backpressure() {
             primary_frame: PrimaryFrame::Awaiting,
             gui_startup: None,
             last_window_titles: Mutex::new(std::collections::HashMap::new()),
+            last_geometry_hints: Mutex::new(std::collections::HashMap::new()),
             display_identity: None,
             font_metrics: None,
             primary_window_size: shared_primary_window_size(1600, 1800),
@@ -4000,6 +4022,7 @@ fn primary_image_catalog_does_not_wait_for_renderer_metadata_lock() {
         primary_frame: PrimaryFrame::Awaiting,
         gui_startup: None,
         last_window_titles: Mutex::new(std::collections::HashMap::new()),
+        last_geometry_hints: Mutex::new(std::collections::HashMap::new()),
         display_identity: None,
         font_metrics: None,
         primary_window_size: shared_primary_window_size(1600, 1800),
@@ -4071,6 +4094,7 @@ fn primary_display_host_expands_tilde_in_image_file_before_render_command() {
         primary_frame: PrimaryFrame::Awaiting,
         gui_startup: None,
         last_window_titles: Mutex::new(std::collections::HashMap::new()),
+        last_geometry_hints: Mutex::new(std::collections::HashMap::new()),
         display_identity: None,
         font_metrics: None,
         primary_window_size: shared_primary_window_size(1600, 1800),
@@ -4178,6 +4202,7 @@ fn primary_display_host_resolve_image_sync_returns_cached_decode_failure_promptl
         primary_frame: PrimaryFrame::Awaiting,
         gui_startup: None,
         last_window_titles: Mutex::new(std::collections::HashMap::new()),
+        last_geometry_hints: Mutex::new(std::collections::HashMap::new()),
         display_identity: None,
         font_metrics: None,
         primary_window_size: shared_primary_window_size(1600, 1800),
@@ -4297,6 +4322,7 @@ fn primary_display_host_request_video_reuses_supported_handle_or_reports_unavail
         primary_frame: PrimaryFrame::Awaiting,
         gui_startup: None,
         last_window_titles: Mutex::new(std::collections::HashMap::new()),
+        last_geometry_hints: Mutex::new(std::collections::HashMap::new()),
         display_identity: None,
         font_metrics: None,
         primary_window_size: shared_primary_window_size(1600, 1800),
@@ -4396,6 +4422,7 @@ fn primary_display_host_request_video_uri_preserves_supported_source_or_reports_
         primary_frame: PrimaryFrame::Awaiting,
         gui_startup: None,
         last_window_titles: Mutex::new(std::collections::HashMap::new()),
+        last_geometry_hints: Mutex::new(std::collections::HashMap::new()),
         display_identity: None,
         font_metrics: None,
         primary_window_size: shared_primary_window_size(1600, 1800),
@@ -4458,6 +4485,7 @@ fn primary_display_host_video_session_lifecycle_respects_compiled_capability() {
         primary_frame: PrimaryFrame::Awaiting,
         gui_startup: None,
         last_window_titles: Mutex::new(std::collections::HashMap::new()),
+        last_geometry_hints: Mutex::new(std::collections::HashMap::new()),
         display_identity: None,
         font_metrics: None,
         primary_window_size: shared_primary_window_size(1600, 1800),
@@ -4553,6 +4581,7 @@ fn primary_display_host_request_webkit_queues_create_and_load_once_with_stable_i
         primary_frame: PrimaryFrame::Awaiting,
         gui_startup: None,
         last_window_titles: Mutex::new(std::collections::HashMap::new()),
+        last_geometry_hints: Mutex::new(std::collections::HashMap::new()),
         display_identity: None,
         font_metrics: None,
         primary_window_size: shared_primary_window_size(1600, 1800),
@@ -4610,6 +4639,7 @@ fn primary_display_host_preserves_file_navigation_as_a_typed_path() {
         primary_frame: PrimaryFrame::Awaiting,
         gui_startup: None,
         last_window_titles: Mutex::new(std::collections::HashMap::new()),
+        last_geometry_hints: Mutex::new(std::collections::HashMap::new()),
         display_identity: None,
         font_metrics: None,
         primary_window_size: shared_primary_window_size(1600, 1800),
@@ -4657,6 +4687,7 @@ fn primary_display_host_xwidget_lifecycle_uses_explicit_xwidget_id() {
         primary_frame: PrimaryFrame::Awaiting,
         gui_startup: None,
         last_window_titles: Mutex::new(std::collections::HashMap::new()),
+        last_geometry_hints: Mutex::new(std::collections::HashMap::new()),
         display_identity: None,
         font_metrics: None,
         primary_window_size: shared_primary_window_size(1600, 1800),
@@ -4734,6 +4765,7 @@ fn bootstrap_gui_frame_adoption_routes_future_resizes_to_primary_window() {
         primary_frame: PrimaryFrame::Awaiting,
         gui_startup: None,
         last_window_titles: Mutex::new(std::collections::HashMap::new()),
+        last_geometry_hints: Mutex::new(std::collections::HashMap::new()),
         display_identity: None,
         font_metrics: None,
         primary_window_size: shared_primary_window_size(843, 489),
@@ -4805,6 +4837,7 @@ fn primary_window_resize_does_not_wait_for_host_acknowledgement() {
         primary_frame: PrimaryFrame::Adopted(FrameId(0x100000001)),
         gui_startup: None,
         last_window_titles: Mutex::new(std::collections::HashMap::new()),
+        last_geometry_hints: Mutex::new(std::collections::HashMap::new()),
         display_identity: None,
         font_metrics: None,
         primary_window_size: Arc::clone(&shared),
@@ -4878,6 +4911,7 @@ fn primary_window_display_host_forwards_visual_config_to_renderer() {
         primary_frame: PrimaryFrame::Adopted(FrameId(0x100000001)),
         gui_startup: None,
         last_window_titles: Mutex::new(std::collections::HashMap::new()),
+        last_geometry_hints: Mutex::new(std::collections::HashMap::new()),
         display_identity: None,
         font_metrics: None,
         primary_window_size: shared_primary_window_size(843, 489),
@@ -4923,6 +4957,7 @@ fn primary_window_display_host_forwards_chrome_controls_to_renderer() {
         primary_frame: PrimaryFrame::Adopted(FrameId(0x100000001)),
         gui_startup: None,
         last_window_titles: Mutex::new(std::collections::HashMap::new()),
+        last_geometry_hints: Mutex::new(std::collections::HashMap::new()),
         display_identity: None,
         font_metrics: None,
         primary_window_size: shared_primary_window_size(843, 489),
@@ -5004,6 +5039,7 @@ fn primary_window_display_host_round_trips_clipboard_requests_through_renderer()
         primary_frame: PrimaryFrame::Adopted(FrameId(0x100000001)),
         gui_startup: None,
         last_window_titles: Mutex::new(std::collections::HashMap::new()),
+        last_geometry_hints: Mutex::new(std::collections::HashMap::new()),
         display_identity: None,
         font_metrics: None,
         primary_window_size: shared_primary_window_size(843, 489),
@@ -5079,6 +5115,7 @@ fn redisplay_title_sync_formats_frame_title_format_for_primary_window() {
         primary_frame: PrimaryFrame::Awaiting,
         gui_startup: None,
         last_window_titles: Mutex::new(std::collections::HashMap::new()),
+        last_geometry_hints: Mutex::new(std::collections::HashMap::new()),
         display_identity: None,
         font_metrics: None,
         primary_window_size: shared_primary_window_size(843, 489),
@@ -5131,6 +5168,7 @@ fn frame_host_title_formats_the_restored_runtime_system_name() {
         primary_frame: PrimaryFrame::Awaiting,
         gui_startup: None,
         last_window_titles: Mutex::new(std::collections::HashMap::new()),
+        last_geometry_hints: Mutex::new(std::collections::HashMap::new()),
         display_identity: None,
         font_metrics: None,
         primary_window_size: shared_primary_window_size(843, 489),
@@ -7948,6 +7986,7 @@ fn gnu_startup_next_line_moves_point_on_live_gui_frame() {
         primary_frame: PrimaryFrame::Adopted(frame_id),
         gui_startup: None,
         last_window_titles: Mutex::new(std::collections::HashMap::new()),
+        last_geometry_hints: Mutex::new(std::collections::HashMap::new()),
         display_identity: None,
         font_metrics: None,
         primary_window_size: shared_primary_window_size(960, 640),
@@ -8579,6 +8618,7 @@ fn primary_display_host_reports_quality_policy_frame_shader_suppression() {
         primary_frame: PrimaryFrame::Awaiting,
         gui_startup: None,
         last_window_titles: Mutex::new(std::collections::HashMap::new()),
+        last_geometry_hints: Mutex::new(std::collections::HashMap::new()),
         display_identity: None,
         font_metrics: None,
         primary_window_size: shared_primary_window_size(1600, 900),
@@ -8663,6 +8703,7 @@ fn primary_display_host_routes_typed_terminal_requests_to_the_renderer() {
         primary_frame: PrimaryFrame::Awaiting,
         gui_startup: None,
         last_window_titles: Mutex::new(std::collections::HashMap::new()),
+        last_geometry_hints: Mutex::new(std::collections::HashMap::new()),
         display_identity: None,
         font_metrics: None,
         primary_window_size: shared_primary_window_size(1600, 900),
@@ -9012,4 +9053,142 @@ fn webview_pre_thread_configuration_is_gated_to_gui_and_daemon_startup() {
         ),
         "bootstrap-neomacs build runs must not export WPE_DRM_*"
     );
+}
+
+#[test]
+fn set_gui_frame_geometry_hints_deduplicates_unchanged_hints_and_clears_on_destroy() {
+    let (cmd_tx, cmd_rx) = neomacs_display_runtime::thread_comm::RenderCommandSender::unbounded();
+    let mut host = PrimaryWindowDisplayHost {
+        frame_opacity: Default::default(),
+        resources: Default::default(),
+        system_fonts: Default::default(),
+        font_entities: Default::default(),
+        tooltip_client: Default::default(),
+        cmd_tx: cmd_tx.clone(),
+        render_waker: None,
+        font_sizing: FontSizing::gnu_x11_fallback(),
+        primary_frame: PrimaryFrame::Awaiting,
+        gui_startup: None,
+        last_window_titles: Mutex::new(std::collections::HashMap::new()),
+        last_geometry_hints: Mutex::new(std::collections::HashMap::new()),
+        display_identity: None,
+        font_metrics: None,
+        primary_window_size: shared_primary_window_size(1600, 1800),
+        image_catalog: test_image_catalog(&cmd_tx, Arc::new(ImageRenderState::default())),
+        #[cfg(feature = "video")]
+        resolved_videos: Mutex::new(super::super::ResolvedVideoRegistry::default()),
+        resolved_webkits: Mutex::new(std::collections::HashMap::new()),
+        resolved_surfaces: Mutex::new(super::super::ResolvedSurfaceMemo::default()),
+        render_capabilities: Arc::new(SharedRenderCapabilities::default()),
+        requested_frame_shader: Mutex::new(None),
+        #[cfg(feature = "neo-term")]
+        terminal_state: super::super::TerminalHostState::new(new_shared_terminals()),
+    };
+    let frame_id = FrameId(0x100000001);
+    let hints_a = GuiFrameGeometryHints {
+        base_width: 42,
+        base_height: 83,
+        min_width: 42,
+        min_height: 83,
+        width_inc: 10,
+        height_inc: 21,
+    };
+    let hints_b = GuiFrameGeometryHints {
+        base_width: 42,
+        base_height: 104,
+        min_width: 42,
+        min_height: 104,
+        width_inc: 10,
+        height_inc: 21,
+    };
+    let hints_c = GuiFrameGeometryHints {
+        base_width: 42,
+        base_height: 120,
+        min_width: 42,
+        min_height: 120,
+        width_inc: 11,
+        height_inc: 22,
+    };
+
+    neovm_core::emacs_core::DisplayHost::realize_gui_frame(
+        &mut host,
+        GuiFrameHostRequest {
+            resize_request_id: None,
+            frame_id,
+            width: 960,
+            height: 640,
+            title: LispString::from_utf8("Neomacs"),
+            visibility: FrameVisibility::Visible,
+            decorated: true,
+            geometry_hints: hints_a,
+            fullscreen: None,
+        },
+    )
+    .expect("realize primary frame");
+    let _ = cmd_rx.try_iter().collect::<Vec<_>>();
+
+    // Repeated redisplays with identical geometry hints must not emit
+    // SetFrameGeometryHints (on Wayland each set_min_surface_size triggers a
+    // platform RedrawRequested and a full stale-frame repaint).
+    for _ in 0..3 {
+        neovm_core::emacs_core::DisplayHost::set_gui_frame_geometry_hints(
+            &mut host, frame_id, hints_a,
+        )
+        .expect("deduplicated geometry hints");
+    }
+    let unchanged: Vec<_> = cmd_rx.try_iter().collect();
+    assert_eq!(
+        unchanged.len(),
+        0,
+        "unchanged geometry hints must emit 0 SetFrameGeometryHints commands, got {unchanged:?}"
+    );
+
+    // A genuine geometry-hint change must still reach the render thread once.
+    neovm_core::emacs_core::DisplayHost::set_gui_frame_geometry_hints(&mut host, frame_id, hints_b)
+        .expect("changed geometry hints");
+    neovm_core::emacs_core::DisplayHost::set_gui_frame_geometry_hints(&mut host, frame_id, hints_b)
+        .expect("second unchanged hints_b");
+    let changed: Vec<_> = cmd_rx.try_iter().collect();
+    assert_eq!(
+        changed.len(),
+        1,
+        "expected exactly 1 SetFrameGeometryHints for hints_b, got {changed:?}"
+    );
+    assert!(matches!(
+        changed[0],
+        RenderCommand::Window(WindowCommand::SetFrameGeometryHints {
+            frame: FrameRef::Primary,
+            geometry_hints,
+        }) if geometry_hints == hints_b
+    ));
+
+    // resize_gui_frame carries geometry hints in ResizeWindow, so a follow-up
+    // redisplay with those same hints must also deduplicate.
+    neovm_core::emacs_core::DisplayHost::resize_gui_frame(
+        &mut host,
+        GuiFrameHostRequest {
+            resize_request_id: None,
+            frame_id,
+            width: 1000,
+            height: 700,
+            title: LispString::from_utf8("Neomacs"),
+            visibility: FrameVisibility::Visible,
+            decorated: true,
+            geometry_hints: hints_c,
+            fullscreen: None,
+        },
+    )
+    .expect("resize frame");
+    let _ = cmd_rx.try_iter().collect::<Vec<_>>();
+    neovm_core::emacs_core::DisplayHost::set_gui_frame_geometry_hints(&mut host, frame_id, hints_c)
+        .expect("post-resize unchanged hints");
+    assert_eq!(cmd_rx.try_iter().count(), 0);
+
+    // Destroying the frame drops its cached hints.
+    neovm_core::emacs_core::DisplayHost::destroy_gui_frame(&mut host, frame_id)
+        .expect("destroy frame");
+    let _ = cmd_rx.try_iter().collect::<Vec<_>>();
+    neovm_core::emacs_core::DisplayHost::set_gui_frame_geometry_hints(&mut host, frame_id, hints_c)
+        .expect("hints after destroy");
+    assert_eq!(cmd_rx.try_iter().count(), 1);
 }

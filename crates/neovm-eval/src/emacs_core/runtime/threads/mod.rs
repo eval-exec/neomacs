@@ -750,6 +750,15 @@ fn finish_sim_thread_registration(
     Ok(())
 }
 
+fn unbridged_parallel_builtin_error(op: &str) -> Flow {
+    signal(
+        LispCondition::Error,
+        vec![Value::string(format!(
+            "neovm internal error: {op} cannot fall through to simulated threading inside a parallel serial turn"
+        ))],
+    )
+}
+
 /// `(thread-join THREAD)` -- wait for thread completion.
 ///
 /// Returns the thread's result, resuming a simulated blocked thread when needed,
@@ -761,6 +770,9 @@ pub fn builtin_thread_join(
 ) -> EvalResult {
     if ctx.green_threads_running() {
         return ctx.green_thread_join(&args);
+    }
+    if ctx.in_active_serial_turn() {
+        return ctx.parallel_thread_join(&args);
     }
     expect_args("thread-join", &args, 1)?;
     let id = expect_thread_id(&ctx.threads, &args[0])?;
@@ -963,6 +975,10 @@ pub fn builtin_thread_yield(
 ) -> EvalResult {
     if ctx.green_threads_running() {
         return ctx.green_thread_yield(&args);
+    }
+    if ctx.in_active_serial_turn() {
+        expect_args("thread-yield", &args, 0)?;
+        return ctx.parallel_thread_yield();
     }
     expect_args("thread-yield", &args, 0)?;
     // GNU `Fthread_yield` (src/thread.c:725-740, `yield_callback`) releases
@@ -1251,6 +1267,9 @@ pub fn builtin_mutex_lock(
     if ctx.green_threads_running() {
         return ctx.green_mutex_lock(id);
     }
+    if ctx.in_active_serial_turn() {
+        return Err(unbridged_parallel_builtin_error("mutex-lock"));
+    }
     match ctx.threads.mutex_lock(id) {
         MutexAcquisition::Acquired => Ok(Value::NIL),
         MutexAcquisition::DepthExhausted => Err(mutex_depth_limit()),
@@ -1459,6 +1478,9 @@ pub fn builtin_condition_wait(
 ) -> EvalResult {
     expect_args("condition-wait", &args, 1)?;
     let id = expect_cv_id(&ctx.threads, &args[0])?;
+    if ctx.in_active_serial_turn() {
+        return Err(unbridged_parallel_builtin_error("condition-wait"));
+    }
     let mutex_id = ctx.threads.condition_variable_mutex(id);
     if !ctx.threads.mutex_owned_by_current_thread(mutex_id) {
         return Err(condition_mutex_not_held());

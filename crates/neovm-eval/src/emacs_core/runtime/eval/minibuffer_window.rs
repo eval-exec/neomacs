@@ -110,10 +110,10 @@ impl Context {
             neovm_value::minibuffer_state::MinibufferEntryLevel::from_depth(depth)
         };
 
-        let frame_id = super::display_query_hooks::ensure_selected_frame_id(
-            &mut self.frames,
-            &mut self.edit.buffers,
-        );
+        let frame_id = {
+            let mut buffers = neovm_edit::buffer::BufferManagerMut::new(&mut self.edit.buffers);
+            super::display_query_hooks::ensure_selected_frame_id(&mut self.frames, &mut buffers)
+        };
         let Some(frame) = self.frames.get(frame_id) else {
             self.edit.buffers.switch_current(minibuf_id);
             return Ok(None);
@@ -133,11 +133,14 @@ impl Context {
             }
         }
 
-        super::display_query_hooks::remember_selected_window_point(
-            &mut self.frames,
-            &mut self.edit.buffers,
-            frame_id,
-        );
+        {
+            let mut buffers = neovm_edit::buffer::BufferManagerMut::new(&mut self.edit.buffers);
+            super::display_query_hooks::remember_selected_window_point(
+                &mut self.frames,
+                &mut buffers,
+                frame_id,
+            );
+        }
         if let Some(frame) = self.frames.get_mut(frame_id) {
             if let Some(window) = frame.find_window_mut(minibuffer_window_id) {
                 window.set_buffer(minibuf_id);
@@ -151,8 +154,9 @@ impl Context {
                     }
                     window.set_suspend_auto_hscroll(false);
                 }
+                let mut buffers = neovm_edit::buffer::BufferManagerMut::new(&mut self.edit.buffers);
                 crate::emacs_core::eval::data::window_markers::attach_window_position_markers(
-                    &mut self.edit.buffers,
+                    &mut buffers,
                     window,
                 );
             }

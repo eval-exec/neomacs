@@ -1751,16 +1751,173 @@ pub(crate) const CHAR_TABLE_TOP_SLOTS: usize = 64;
 ///
 /// Mirrors GNU Emacs's `struct Lisp_Char_Table`: default, parent, purpose,
 /// ASCII cache, 64 top-level contents slots, then extra slots.
+///
+/// All five `AtomicTaggedValue` fields stay unconditionally `pub(crate)` so
+/// out-of-crate code cannot call `AtomicTaggedValue::store_atomic` directly
+/// and bypass `with_char_table_mut`'s SATB pre-barrier during concurrent
+/// marking; external readers use the by-value getters below, and pdump
+/// serialization uses the `CHAR_TABLE_*_OFFSET` byte-offset constants.
 #[repr(C)]
 pub struct CharTableObj {
     pub header: VecLikeHeader,
-    pub defalt: AtomicTaggedValue,
-    pub parent: AtomicTaggedValue,
-    pub purpose: AtomicTaggedValue,
-    pub ascii: AtomicTaggedValue,
-    pub contents: [AtomicTaggedValue; CHAR_TABLE_TOP_SLOTS],
+    pub(crate) defalt: AtomicTaggedValue,
+    pub(crate) parent: AtomicTaggedValue,
+    pub(crate) purpose: AtomicTaggedValue,
+    pub(crate) ascii: AtomicTaggedValue,
+    pub(crate) contents: [AtomicTaggedValue; CHAR_TABLE_TOP_SLOTS],
     pub extras: LispValueVec,
 }
+
+#[doc(hidden)]
+pub const CHAR_TABLE_DEFALT_OFFSET: usize = std::mem::offset_of!(CharTableObj, defalt);
+#[doc(hidden)]
+pub const CHAR_TABLE_PARENT_OFFSET: usize = std::mem::offset_of!(CharTableObj, parent);
+#[doc(hidden)]
+pub const CHAR_TABLE_PURPOSE_OFFSET: usize = std::mem::offset_of!(CharTableObj, purpose);
+#[doc(hidden)]
+pub const CHAR_TABLE_ASCII_OFFSET: usize = std::mem::offset_of!(CharTableObj, ascii);
+#[doc(hidden)]
+pub const CHAR_TABLE_CONTENTS_OFFSET: usize = std::mem::offset_of!(CharTableObj, contents);
+
+impl CharTableObj {
+    /// Read the char-table's default value (plain owner read).
+    #[inline]
+    pub fn defalt(&self) -> TaggedValue {
+        self.defalt.get()
+    }
+
+    /// Read the char-table's parent table (plain owner read).
+    #[inline]
+    pub fn parent(&self) -> TaggedValue {
+        self.parent.get()
+    }
+
+    /// Read the char-table's purpose symbol (plain owner read).
+    #[inline]
+    pub fn purpose(&self) -> TaggedValue {
+        self.purpose.get()
+    }
+
+    /// Read the char-table's ASCII cache slot (plain owner read).
+    #[inline]
+    pub fn ascii(&self) -> TaggedValue {
+        self.ascii.get()
+    }
+
+    /// Read one top-level contents slot by index (`0..CHAR_TABLE_TOP_SLOTS`).
+    #[inline]
+    pub fn content(&self, index: usize) -> Option<TaggedValue> {
+        self.contents.get(index).map(AtomicTaggedValue::get)
+    }
+
+    /// Number of fixed inline top-level contents slots (`CHAR_TABLE_TOP_SLOTS`).
+    #[inline]
+    pub const fn contents_len(&self) -> usize {
+        CHAR_TABLE_TOP_SLOTS
+    }
+
+    /// Copy all `CHAR_TABLE_TOP_SLOTS` top-level contents slots by value.
+    #[inline]
+    pub fn contents_values(&self) -> [TaggedValue; CHAR_TABLE_TOP_SLOTS] {
+        self.contents.each_ref().map(AtomicTaggedValue::get)
+    }
+
+    /// Test-only constructor for synthetic mapped-image fixtures (`chartable_contract_test`).
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn new_for_test(
+        defalt: TaggedValue,
+        parent: TaggedValue,
+        purpose: TaggedValue,
+        ascii: TaggedValue,
+        contents: [TaggedValue; CHAR_TABLE_TOP_SLOTS],
+        extras: LispValueVec,
+    ) -> Self {
+        Self {
+            header: VecLikeHeader::new(VecLikeType::CharTable),
+            defalt: AtomicTaggedValue::new(defalt),
+            parent: AtomicTaggedValue::new(parent),
+            purpose: AtomicTaggedValue::new(purpose),
+            ascii: AtomicTaggedValue::new(ascii),
+            contents: contents.map(AtomicTaggedValue::new),
+            extras,
+        }
+    }
+
+    /// Test-only exclusive pre-registration ASCII slot initializer (`chartable_contract_test`).
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn set_ascii_for_test(&mut self, value: TaggedValue) {
+        self.ascii.store_atomic(value);
+    }
+}
+
+/// Compile-time visibility contracts for `AtomicTaggedValue`, `LispValueVec::mapped`,
+/// `LispBufferLocalValue::where_buf`, and all five `CharTableObj` inline slot fields
+/// (compiled without `test-support`, so production privacy is verified directly).
+///
+/// 1. `AtomicTaggedValue` is crate-private (`E0603`):
+/// ```compile_fail,E0603
+/// let _ = std::mem::size_of::<neovm_value::tagged::header::AtomicTaggedValue>();
+/// ```
+///
+/// 2. `LispValueVec::mapped` is crate-private (`E0624`):
+/// ```compile_fail,E0624
+/// use neovm_value::tagged::header::LispValueVec;
+/// let p: *const u8 = std::ptr::NonNull::dangling().as_ptr();
+/// let _ = unsafe { LispValueVec::mapped(p.cast(), 0) };
+/// ```
+///
+/// 3. `LispBufferLocalValue::where_buf` is crate-private (`E0616`):
+/// ```compile_fail,E0616
+/// use neovm_value::symbol::LispBufferLocalValue;
+/// use neovm_value::value::Value;
+/// fn bypass(blv: &LispBufferLocalValue) {
+///     blv.where_buf.store_atomic(Value::NIL);
+/// }
+/// ```
+///
+/// 4. `CharTableObj::defalt` is crate-private (`E0616`):
+/// ```compile_fail,E0616
+/// use neovm_value::value::Value;
+/// fn bypass(table: Value) {
+///     table.as_char_table_obj().unwrap().defalt.store_atomic(Value::T);
+/// }
+/// ```
+///
+/// 5. `CharTableObj::parent` is crate-private (`E0616`):
+/// ```compile_fail,E0616
+/// use neovm_value::value::Value;
+/// fn bypass(table: Value) {
+///     table.as_char_table_obj().unwrap().parent.store_atomic(Value::T);
+/// }
+/// ```
+///
+/// 6. `CharTableObj::purpose` is crate-private (`E0616`):
+/// ```compile_fail,E0616
+/// use neovm_value::value::Value;
+/// fn bypass(table: Value) {
+///     table.as_char_table_obj().unwrap().purpose.store_atomic(Value::T);
+/// }
+/// ```
+///
+/// 7. `CharTableObj::ascii` is crate-private (`E0616`):
+/// ```compile_fail,E0616
+/// use neovm_value::value::Value;
+/// fn bypass(table: Value) {
+///     table.as_char_table_obj().unwrap().ascii.store_atomic(Value::T);
+/// }
+/// ```
+///
+/// 8. `CharTableObj::contents` is crate-private (`E0616`):
+/// ```compile_fail,E0616
+/// use neovm_value::value::Value;
+/// fn bypass(table: Value) {
+///     table.as_char_table_obj().unwrap().contents[0].store_atomic(Value::T);
+/// }
+/// ```
+#[cfg(doctest)]
+pub(crate) struct AtomicTaggedValueVisibilityCompileContract;
 
 /// Heap-allocated sub character table.
 ///

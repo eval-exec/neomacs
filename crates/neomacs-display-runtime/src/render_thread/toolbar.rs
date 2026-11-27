@@ -7,7 +7,7 @@
 use std::collections::{HashMap, HashSet};
 
 use neomacs_display_protocol::{
-    DeviceScale, FrameChrome, FrameChromeContent, ImageId, ToolBarIconKey,
+    DeviceScale, FrameChrome, FrameChromeContent, ImageId, PresentationId, ToolBarIconKey,
 };
 use neomacs_renderer_wgpu::WgpuRenderer;
 
@@ -27,9 +27,22 @@ impl ToolbarImageStore for WgpuRenderer {
     }
 }
 
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+enum ToolbarRealizationState {
+    #[default]
+    Active,
+    /// Wholesale `clear-image-cache` dropped every toolbar texture after this
+    /// presentation. Hold chrome icons unrealized until a strictly newer
+    /// post-clear presentation is ingested (matching GNU `Fclear_image_cache`,
+    /// where chrome reloads on the next redisplay rather than before a
+    /// following `image-cache-size` read).
+    ClearedUntilAfter(PresentationId),
+}
+
 #[derive(Default)]
 pub(super) struct ToolbarResources {
     textures: HashMap<ToolBarIconKey, ImageId>,
+    realization: ToolbarRealizationState,
 }
 
 impl ToolbarResources {
@@ -37,17 +50,37 @@ impl ToolbarResources {
         &self.textures
     }
 
-    /// Forget every realized icon texture without retiring it, because the
-    /// caller has already dropped the renderer's image cache (a wholesale
-    /// `clear-image-cache`) or the device that owned it.
-    pub(super) fn forget_realized(&mut self) {
+    /// Forget every realized icon texture after a wholesale `clear-image-cache`
+    /// and suppress re-realization until a strictly newer presentation arrives.
+    pub(super) fn clear_after_presentation(&mut self, cleared_after: PresentationId) {
         self.textures.clear();
+        self.realization = match self.realization {
+            ToolbarRealizationState::Active => {
+                ToolbarRealizationState::ClearedUntilAfter(cleared_after)
+            }
+            ToolbarRealizationState::ClearedUntilAfter(existing) => {
+                ToolbarRealizationState::ClearedUntilAfter(PresentationId::new(
+                    existing.get().max(cleared_after.get()),
+                ))
+            }
+        };
+    }
+
+    /// Resume toolbar realization once a post-clear frame presentation arrives.
+    pub(super) fn note_frame_published(&mut self, presentation: PresentationId) {
+        if let ToolbarRealizationState::ClearedUntilAfter(fence) = self.realization
+            && presentation.get() > fence.get()
+        {
+            self.realization = ToolbarRealizationState::Active;
+        }
     }
 
     /// The old GPU already owns/destroyed these resources; do not retire them
-    /// through the replacement device's unrelated image identities.
+    /// through the replacement device's unrelated image identities. Preserves
+    /// `realization` so active frames reload immediately onto the replacement
+    /// GPU while a cache-clear hold stays cleared until the next redisplay.
     pub(super) fn forget_after_device_loss(&mut self) {
-        self.forget_realized();
+        self.textures.clear();
     }
 
     pub(super) fn reconcile(
@@ -55,6 +88,12 @@ impl ToolbarResources {
         required: HashSet<ToolBarIconKey>,
         store: &mut impl ToolbarImageStore,
     ) {
+        if matches!(
+            self.realization,
+            ToolbarRealizationState::ClearedUntilAfter(_)
+        ) {
+            return;
+        }
         self.textures.retain(|key, image| {
             if required.contains(key) {
                 true

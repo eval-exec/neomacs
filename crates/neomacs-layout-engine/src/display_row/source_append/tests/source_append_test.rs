@@ -8700,6 +8700,149 @@ fn terminal_right_border_padding_uses_the_effective_window_default_face() {
 }
 
 #[test]
+fn right_edge_truncation_marker_measures_text_area_only_with_margins() {
+    // Issue #702 / GNU `src/xdisp.c:26608-26650`: truncation glyph installation
+    // operates strictly on `TEXT_AREA`. Margin glyphs in `LeftMargin` and
+    // `RightMargin` live in their own structural areas and must never cause
+    // `install_text_window_right_edge_markers` to trim real text columns.
+    let table = FaceTable::new();
+    let face_resolver = FaceResolver::new(&table, 0x00ffffff, 0x000000, 14.0, None);
+    let mut builder = crate::output::builder::DisplayOutputBuilder::new();
+    builder.begin_window(1, 3, 20, Rect::new(0.0, 0.0, 160.0, 48.0), true);
+
+    // Row 0: 19 ASCII text chars + 10-col right margin (Magit log shape).
+    builder.begin_row(0, GlyphRowRole::Text);
+    for ch in "abcdefghij123456789".chars() {
+        write_char_to_current_row_with_width(&mut builder, ch, FaceId::new(0), 0, 8.0);
+    }
+    builder.end_row();
+
+    // Row 1: 4-col left margin + 19 ASCII text chars + 10-col right margin.
+    builder.begin_row(1, GlyphRowRole::Text);
+    for ch in "0123456789ABCDEFGHI".chars() {
+        write_char_to_current_row_with_width(&mut builder, ch, FaceId::new(0), 0, 8.0);
+    }
+    builder.end_row();
+
+    // Row 2: 18 ASCII chars + 1 double-width CJK char filling cols 18..20 +
+    // 10-col right margin; trimming for `$` at col 19 must pop the wide char
+    // and fill both cut cells with `$$` without touching the right margin.
+    builder.begin_row(2, GlyphRowRole::Text);
+    for ch in "0123456789ABCDEFGH".chars() {
+        write_char_to_current_row_with_width(&mut builder, ch, FaceId::new(0), 0, 8.0);
+    }
+    builder.end_row();
+
+    use neomacs_display_protocol::glyph_matrix::{Glyph, GlyphRow};
+    struct SeedRightMargin;
+    impl crate::output::row_request::DisplayWindowRowMutation for SeedRightMargin {
+        type Output = ();
+        fn apply(self, row: &mut GlyphRow, _matrix_cols: usize) {
+            for ch in "RightMrgin".chars() {
+                row.glyphs[GlyphArea::RightMargin.index()].push(Glyph::char(ch, FaceId::new(1), 0));
+            }
+        }
+    }
+    for row_idx in 0..3 {
+        let _ = builder.apply_current_window_row_mutation(row_idx, SeedRightMargin);
+    }
+
+    struct SeedRow1LeftMargin;
+    impl crate::output::row_request::DisplayWindowRowMutation for SeedRow1LeftMargin {
+        type Output = ();
+        fn apply(self, row: &mut GlyphRow, _matrix_cols: usize) {
+            for ch in "LEFT".chars() {
+                row.glyphs[GlyphArea::LeftMargin.index()].push(Glyph::char(ch, FaceId::new(2), 0));
+            }
+        }
+    }
+    let _ = builder.apply_current_window_row_mutation(1, SeedRow1LeftMargin);
+
+    struct SeedRow2WideEdge;
+    impl crate::output::row_request::DisplayWindowRowMutation for SeedRow2WideEdge {
+        type Output = ();
+        fn apply(self, row: &mut GlyphRow, _matrix_cols: usize) {
+            let mut wide = Glyph::char('日', FaceId::new(0), 0);
+            wide.wide = true;
+            wide.pixel_width = 16.0;
+            let mut pad = Glyph::char(' ', FaceId::new(0), 0);
+            pad.padding = true;
+            pad.pixel_width = 0.0;
+            row.glyphs[GlyphArea::Text.index()].push(wide);
+            row.glyphs[GlyphArea::Text.index()].push(pad);
+        }
+    }
+    let _ = builder.apply_current_window_row_mutation(2, SeedRow2WideEdge);
+
+    let mut row_flags = crate::display_row::geometry::DisplayRowFlags::new(3);
+    for idx in 0..3 {
+        row_flags.mark(
+            idx,
+            crate::display_row::geometry::DisplayRowFlagKind::Truncated,
+        );
+    }
+
+    let mut face_ids = FrameFaceAttempt::for_test_with_next_id(10);
+    builder.set_face_attempt(face_ids.clone());
+    let default_face = face_resolver.default_face();
+    let mut font_metrics = None;
+    crate::display_row::special_glyphs::install_text_window_right_edge_markers(
+        &mut builder,
+        crate::display_status_line::ChromeRowRenderServices::new(
+            &mut font_metrics,
+            &face_resolver,
+            &mut face_ids,
+            StringSourceRootScope::CallbackFree,
+        ),
+        crate::display_row::special_glyphs::TextWindowRightEdgeMarkers {
+            display_text_row_base: 0,
+            output_cols: 20,
+            column: crate::display_row::special_glyphs::TextWindowRightEdgeMarkerColumn::LastColumn,
+            row_flags: &row_flags,
+            face_id: FaceId::new(0),
+            face: default_face,
+            char_width: 8.0,
+        },
+    );
+    builder.end_window();
+
+    let state = builder.finish(20, 3, 8.0, 16.0);
+    let matrix = &state.window_matrices[0].matrix;
+    let area_str = |row: usize, area: GlyphArea| -> String {
+        matrix.rows[row].glyphs[area.index()]
+            .iter()
+            .filter(|g| !g.padding)
+            .map(|g| match g.glyph_type {
+                GlyphType::Char { ch } => ch,
+                _ => '?',
+            })
+            .collect()
+    };
+
+    assert_eq!(
+        area_str(0, GlyphArea::Text),
+        "abcdefghij123456789$",
+        "right margin must not shorten TEXT_AREA before the truncation marker"
+    );
+    assert_eq!(area_str(0, GlyphArea::RightMargin), "RightMrgin");
+
+    assert_eq!(
+        area_str(1, GlyphArea::Text),
+        "0123456789ABCDEFGHI$",
+        "left and right margins must not shorten TEXT_AREA before the truncation marker"
+    );
+    assert_eq!(area_str(1, GlyphArea::LeftMargin), "LEFT");
+    assert_eq!(area_str(1, GlyphArea::RightMargin), "RightMrgin");
+
+    assert_eq!(
+        area_str(2, GlyphArea::Text),
+        "0123456789ABCDEFGH$$",
+        "cutting a double-width char at the edge must fill both cells with $$ while preserving margins"
+    );
+    assert_eq!(area_str(2, GlyphArea::RightMargin), "RightMrgin");
+}
+
+#[test]
 fn buffer_text_window_finish_request_closes_window_and_returns_snapshot_artifacts() {
     let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = eval

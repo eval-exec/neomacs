@@ -4137,9 +4137,9 @@ fn render_mode_line_target<T: mode_line_walk::WalkPolicy>(
         request.target,
     );
     pctx.eval_policy = request.eval_policy;
-    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
     pctx.point
-        .enter_context(frames, buffers, request.point_selection);
+        .enter_context(frames, &buffers, request.point_selection);
     let mut rendered = ModeLineRendered::default();
     let _accumulator_roots = mode_line_gc::ScratchRoots::new();
     mode_line_walk::with_root_scope(eval, |eval| {
@@ -7793,9 +7793,11 @@ fn selected_line_pixel_height(
         .selected_frame()
         .is_some_and(|frame| frame.id == fid)
     {
-        let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+        let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
         crate::emacs_core::window_cmds::remember_selected_window_point_in_state(
-            frames, buffers, fid,
+            frames,
+            &mut buffers,
+            fid,
         );
     }
     let row_height = |snapshot: &WindowDisplaySnapshot| {
@@ -8584,13 +8586,13 @@ pub fn builtin_pos_visible_in_window_p_ctx(
     if let Some(visibility) = live_position_visibility(eval, args.get(1), args.first())? {
         return Ok(visibility.into_lisp(args.get(2).is_some_and(|value| value.is_truthy())));
     }
-    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
-    pos_visible_in_window_p_impl(frames, buffers, args)
+    let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
+    pos_visible_in_window_p_impl(frames, &mut buffers, args)
 }
 
 fn pos_visible_in_window_p_impl(
     frames: &mut crate::window::FrameManager,
-    buffers: &mut neovm_edit::buffer::BufferManager,
+    buffers: &mut neovm_edit::buffer::BufferManagerMut<'_>,
     args: Vec<Value>,
 ) -> EvalResult {
     expect_args_range("pos-visible-in-window-p", &args, 0, 3)?;
@@ -8786,13 +8788,13 @@ pub fn builtin_window_line_height(
             return Ok(Value::NIL);
         }
     }
-    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
-    window_line_height_impl(frames, buffers, noninteractive, args)
+    let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
+    window_line_height_impl(frames, &mut buffers, noninteractive, args)
 }
 
 fn window_line_height_impl(
     frames: &mut crate::window::FrameManager,
-    buffers: &mut neovm_edit::buffer::BufferManager,
+    buffers: &mut neovm_edit::buffer::BufferManagerMut<'_>,
     noninteractive: bool,
     args: &[Value],
 ) -> EvalResult {
@@ -9340,15 +9342,15 @@ pub fn builtin_tool_bar_height_ctx(
     args: Vec<Value>,
 ) -> EvalResult {
     expect_args_range("tool-bar-height", &args, 0, 2)?;
-    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
     let fid = match args.first().filter(|frame| !frame.is_nil()) {
         Some(frame) => super::window_cmds::resolve_frame_id_in_state(
             frames,
-            buffers,
+            &mut buffers,
             Some(frame),
             crate::emacs_core::window_cmds::FrameDomain::Any,
         )?,
-        None => super::window_cmds::ensure_selected_frame_id_in_state(frames, buffers),
+        None => super::window_cmds::ensure_selected_frame_id_in_state(frames, &mut buffers),
     };
     let frame = eval
         .frame_manager()
@@ -9384,15 +9386,15 @@ pub fn builtin_tab_bar_height_ctx(
     args: Vec<Value>,
 ) -> EvalResult {
     expect_args_range("tab-bar-height", &args, 0, 2)?;
-    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
     let fid = match args.first().filter(|frame| !frame.is_nil()) {
         Some(frame) => super::window_cmds::resolve_frame_id_in_state(
             frames,
-            buffers,
+            &mut buffers,
             Some(frame),
             crate::emacs_core::window_cmds::FrameDomain::Any,
         )?,
-        None => super::window_cmds::ensure_selected_frame_id_in_state(frames, buffers),
+        None => super::window_cmds::ensure_selected_frame_id_in_state(frames, &mut buffers),
     };
     let frame = eval
         .frame_manager()
@@ -11973,8 +11975,8 @@ pub fn builtin_posn_at_x_y(
         }
         None => (None, PositionGeometrySource::Presented),
     };
-    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
-    posn_at_x_y_impl(frames, buffers, computed.as_ref(), source, args)
+    let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
+    posn_at_x_y_impl(frames, &mut buffers, computed.as_ref(), source, args)
 }
 
 /// Run the canonical row producer when the live window has no current rows.
@@ -12369,7 +12371,7 @@ fn make_frame_position(frame_id: FrameId, x: i64, y: i64) -> Value {
 
 fn posn_at_x_y_impl(
     frames: &mut crate::window::FrameManager,
-    buffers: &mut neovm_edit::buffer::BufferManager,
+    buffers: &mut neovm_edit::buffer::BufferManagerMut<'_>,
     computed: Option<&WindowDisplaySnapshot>,
     source: PositionGeometrySource,
     args: Vec<Value>,

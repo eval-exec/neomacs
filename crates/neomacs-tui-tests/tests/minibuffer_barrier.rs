@@ -8,7 +8,38 @@
 //! prompt away and then asserts the barrier held.
 
 use crate::support::*;
+use neomacs_tui_tests::{
+    RawTerminalSnapshot, TuiSession, assert_raw_terminal_snapshots_eq, color_diffs_in,
+    format_color_diffs,
+};
 use std::time::Duration;
+
+fn assert_menu_bar_row_matches_gnu_cells(label: &str, gnu: &TuiSession, neo: &TuiSession) {
+    let find_row = |session: &TuiSession| -> u16 {
+        session
+            .text_grid()
+            .iter()
+            .position(|row| row.contains("File Edit Options Buffers"))
+            .unwrap_or_else(|| panic!("{label}: {} has no menu-bar row", session.name))
+            as u16
+    };
+    let gnu_row = find_row(gnu);
+    let neo_row = find_row(neo);
+    assert_eq!(
+        neo_row, gnu_row,
+        "{label}: menu-bar row index differs from GNU"
+    );
+    let (_, cols) = gnu.screen_size();
+    let diffs = color_diffs_in(gnu.screen(), neo.screen(), gnu_row..gnu_row + 1, 0..cols);
+    assert!(
+        diffs.is_empty(),
+        "{label}: menu-bar row {gnu_row} colors diverged from GNU:\n{}",
+        format_color_diffs(&diffs, 16)
+    );
+    let gnu_snap = RawTerminalSnapshot::capture_rows(gnu.screen(), gnu_row..gnu_row + 1);
+    let neo_snap = RawTerminalSnapshot::capture_rows(neo.screen(), neo_row..neo_row + 1);
+    assert_raw_terminal_snapshots_eq(label, &gnu_snap, &neo_snap);
+}
 
 #[test]
 fn eval_expression_waits_out_a_scrolled_minibuffer() {
@@ -61,6 +92,7 @@ fn the_tty_menu_bar_shows_minibuf_only_while_a_minibuffer_is_active() {
             "{label} shows the Minibuf menu item at rest"
         );
     }
+    assert_menu_bar_row_matches_gnu_cells("tty menu bar at rest", &gnu, &neo);
     send_both(&mut gnu, &mut neo, "M-:");
     let prompt_ready = |grid: &[String]| grid.last().is_some_and(|row| row.contains("Eval:"));
     wait_for_both(&mut gnu, &mut neo, Duration::from_secs(8), prompt_ready);
@@ -71,12 +103,15 @@ fn the_tty_menu_bar_shows_minibuf_only_while_a_minibuffer_is_active() {
             "{label} does not show the Minibuf menu item inside M-:"
         );
     }
+    assert_menu_bar_row_matches_gnu_cells("tty menu bar with active minibuffer", &gnu, &neo);
     send_both(&mut gnu, &mut neo, "C-g");
     wait_for_both(&mut gnu, &mut neo, Duration::from_secs(8), minibuf_gone);
+    read_both(&mut gnu, &mut neo, Duration::from_millis(300));
     for (label, session) in [("GNU", &gnu), ("Neomacs", &neo)] {
         assert!(
             minibuf_gone(&session.text_grid()),
             "{label} kept the Minibuf menu item after C-g"
         );
     }
+    assert_menu_bar_row_matches_gnu_cells("tty menu bar after C-g", &gnu, &neo);
 }

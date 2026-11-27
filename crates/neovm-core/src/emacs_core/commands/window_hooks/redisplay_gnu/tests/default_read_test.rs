@@ -5,8 +5,9 @@ use neovm_value::intern::intern;
 fn void_default_signals_after_callback_and_records_on_unwind() {
     crate::test_utils::init_test_tracing();
     let mut eval = crate::test_utils::new_context();
-    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
-    let frame = crate::emacs_core::window_cmds::ensure_selected_frame_id_in_state(frames, buffers);
+    let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
+    let frame =
+        crate::emacs_core::window_cmds::ensure_selected_frame_id_in_state(frames, &mut buffers);
     let selected_window = eval
         .frame_manager()
         .get(frame)

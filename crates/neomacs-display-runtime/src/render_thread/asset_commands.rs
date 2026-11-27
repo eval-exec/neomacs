@@ -204,14 +204,30 @@ impl RenderApp {
                 }
                 self.publish_image_cache_usage();
             }
-            AssetCommand::ClearImageCache { through } => {
+            AssetCommand::ClearImageCache {
+                through,
+                cleared_after_presentation,
+            } => {
                 if let Some(ref mut renderer) = self.renderer {
                     renderer.clear_image_cache(through);
                 }
                 // Toolbar textures live in the same renderer image cache but
-                // are keyed outside the catalog, so their residency map must be
-                // forgotten for the next reconcile to realize them again.
-                self.toolbar.forget_realized();
+                // are keyed outside the catalog. Hold them unrealized until a
+                // frame published strictly after this clear arrives (matching
+                // GNU `Fclear_image_cache`, where chrome icons reload on the
+                // next redisplay rather than before a following
+                // `image-cache-size` read).
+                let mut fence = cleared_after_presentation;
+                self.frame_windows.for_each_top_level_window(|window| {
+                    if let Some(frame) = window.render.compositor.current_frame.as_ref() {
+                        fence = fence.max(frame.presentation_id.get());
+                    }
+                    for child in window.render.compositor.child_frames.frames.values() {
+                        fence = fence.max(child.frame.presentation_id.get());
+                    }
+                });
+                self.toolbar
+                    .clear_after_presentation(neomacs_display_protocol::PresentationId::new(fence));
                 self.publish_image_cache_usage();
             }
             AssetCommand::PublishImageCacheUsage { ack } => {
