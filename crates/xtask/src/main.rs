@@ -745,8 +745,8 @@ impl FreshBuildOptions {
                 return Err(
                     "fresh-build must be used with --release or --profile NAME.\n\n\
                  fresh-build builds the runnable GNU-shaped runtime pipeline \
-                 (cargo build, temacs bootstrap, byte-compilation, pdump) and is an \
-                 optimized-build operation. Re-run with:\n    cargo xtask fresh-build --release\n\
+                 (cargo build, temacs bootstrap, byte-compilation, pdump). \
+                 Re-run with:\n    cargo xtask fresh-build --release\n\
                  or, for a symbol-preserving profiling build that leaves target/release \
                  alone:\n    cargo xtask fresh-build --profile profiling"
                         .to_string()
@@ -755,30 +755,38 @@ impl FreshBuildOptions {
             }
         };
         // The pipeline byte-compiles the whole Lisp tree with the binary it
-        // just built; an unoptimized profile makes that take hours, which is
-        // what the original --release requirement existed to prevent.
-        // `--profile dev` is allowed with `--no-byte-compile` (reusing existing
-        // `.elc` files) for fast debug-assertion iteration. `debug` is not a
-        // valid Cargo profile name (Cargo's built-in profile is `dev`, which
-        // outputs to `target/debug`).
+        // just built, so an unoptimized profile makes that work several times
+        // slower.  Measured on a 32-core host (2026-11-27): the full-tree
+        // compile-main pass took 165 s at opt-level 0 against 19 s at
+        // opt-level 3, and the single-process load scan 191 s against 7 s;
+        // a single-core compile extrapolates to about 30 minutes.
+        //
+        // That is minutes, not hours, on a fast machine, and it is bounded by
+        // hardware the profile name cannot describe, so it is a warning rather
+        // than a refusal: `--profile dev` byte-compiles when asked.  On slower
+        // machines prefer `--no-byte-compile` (reuse existing .elc files) for
+        // debug-assertion iteration, or `--profile release-fast` for an
+        // optimized build.
+        //
+        // `debug` is not a valid Cargo profile name (Cargo's built-in profile
+        // is `dev`, which outputs to `target/debug`).
         if matches!(profile, BuildProfile::Debug | BuildProfile::Test) {
             return Err(format!(
-                "fresh-build cannot use the `{}` profile: use `--profile dev --no-byte-compile` \
-                 for an unoptimized debug build (outputs to target/debug), or \
+                "fresh-build cannot use the `{}` profile: use `--profile dev` for an \
+                 unoptimized debug build (outputs to target/debug), or \
                  `--profile release-fast` for fast incremental optimized builds.",
                 profile.as_name()
             )
             .into());
         }
         if !profile.is_optimized() && !no_byte_compile {
-            return Err(format!(
-                "fresh-build cannot byte-compile the Lisp tree with the unoptimized `{}` profile.\n\n\
-                 Re-run with:\n    cargo xtask fresh-build --profile dev --no-byte-compile\n\
-                 (reuses existing .elc files) or, for fast incremental optimized builds:\n    \
-                 cargo xtask fresh-build --profile release-fast",
+            eprintln!(
+                "warning: byte-compiling the Lisp tree with the unoptimized `{}` profile.\n         \
+                 Measured: ~5-9x slower per file and ~27x slower for the load scan than an\n         \
+                 optimized build. Use --no-byte-compile to reuse existing .elc files, or\n         \
+                 --profile release-fast for an optimized build.",
                 profile.as_name()
-            )
-            .into());
+            );
         }
 
         let bin_dir = bin_dir.unwrap_or_else(|| {
@@ -903,7 +911,8 @@ enum BuildProfile {
     ReleasePgoProfiling,
     /// The instrumented pass that PRODUCES a profile. Never a PGO consumer.
     ReleasePgoGen,
-    /// Unoptimized debug build; allowed with `--no-byte-compile` (outputs to target/debug).
+    /// Unoptimized debug build (outputs to target/debug). Byte-compiling with
+    /// it works but is several times slower than an optimized build.
     Dev,
     Debug,
     Test,
@@ -4926,8 +4935,8 @@ precise, so a Lisp value riding Rust control flow is invisible to trace_roots
 unless it was rooted deliberately, and such a bug is invisible to an ordinary
 green suite (DIVERGENCES.md 161 and 162).
 
---release (or --profile NAME) is required: fresh-build produces the runnable runtime
-binary by byte-compiling the Lisp tree with it, so it needs an optimized profile.
+--release (or --profile NAME) is required: it selects both the Cargo profile and
+the target/<dir> the runnable runtime is built in.
 
 Build the GNU-shaped Neomacs runtime pipeline:
   1. cargo build --verbose -p neomacs with the selected product capabilities
@@ -4973,10 +4982,11 @@ Options:
                                               (strip=none, debug=false;
                                               target/release-pgo-profiling).
                         dev                   Unoptimized debug build (target/debug,
-                                              deps at opt-level=3); requires
-                                              --no-byte-compile to reuse existing .elc.
+                                              deps at opt-level=3). Byte-compiling
+                                              the Lisp tree is several times slower;
+                                              --no-byte-compile reuses existing .elc.
                       Custom optimized Cargo.toml profiles are also accepted.
-                      `debug` and `test` are rejected (use `dev --no-byte-compile`).
+                      `debug` and `test` are rejected (use `dev`).
   --dry-run           Print planned commands without running them
   --low-memory        Bound every Cargo compile to one job; slower, but avoids
                       the release-link OOM reported on 8 GiB WSL/Nix machines
