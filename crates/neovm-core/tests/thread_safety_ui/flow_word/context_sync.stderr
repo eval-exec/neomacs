@@ -34,7 +34,7 @@ error[E0599]: the associated function or constant `transfer` exists for struct `
   ::: $RUST/core/src/ptr/non_null.rs
    |
    |   pub struct NonNull<T: PointeeSized> {
-   |   ----------------------------------- doesn't satisfy 38 bounds
+   |   ----------------------------------- doesn't satisfy 39 bounds
    |
   ::: $WORKSPACE/crates/neovm-eval/src/emacs_core/runtime/eval/font_shape.rs
    |
@@ -475,13 +475,13 @@ error[E0599]: the associated function or constant `transfer` exists for struct `
            which is required by `neovm_core::Context: std::marker::Sync`
            `NonNull<()>: Send`
            which is required by `neovm_core::Context: std::marker::Sync`
+           `(dyn std::any::Any + 'static): Send`
+           which is required by `neovm_core::Context: std::marker::Sync`
            `(dyn std::io::Write + Send + 'static): std::marker::Sync`
            which is required by `neovm_core::Context: std::marker::Sync`
            `std::sync::mpsc::Receiver<Result<Vec<std::net::SocketAddr>, std::string::String>>: std::marker::Sync`
            which is required by `neovm_core::Context: std::marker::Sync`
            `Rc<Vec<AutomaticCompositionSpan>>: Send`
-           which is required by `neovm_core::Context: std::marker::Sync`
-           `(dyn std::any::Any + 'static): Send`
            which is required by `neovm_core::Context: std::marker::Sync`
            `(dyn std::io::Read + Send + 'static): std::marker::Sync`
            which is required by `neovm_core::Context: std::marker::Sync`
@@ -496,6 +496,8 @@ error[E0599]: the associated function or constant `transfer` exists for struct `
            `Rc<OverlayList>: Send`
            which is required by `neovm_core::Context: std::marker::Sync`
            `(dyn for<'a> Fn(&'a LispString) -> Vec<LispString> + 'static): Send`
+           which is required by `neovm_core::Context: std::marker::Sync`
+           `NonNull<collection_reads::store_state::WorldObservations>: Send`
            which is required by `neovm_core::Context: std::marker::Sync`
            `(dyn portable_pty::MasterPty + Send + 'static): std::marker::Sync`
            which is required by `neovm_core::Context: std::marker::Sync`

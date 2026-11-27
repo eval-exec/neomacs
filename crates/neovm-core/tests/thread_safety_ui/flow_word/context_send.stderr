@@ -436,11 +436,11 @@ error[E0599]: the associated function or constant `transfer` exists for struct `
            which is required by `neovm_core::Context: Send`
            `*mut SqliteObj: std::marker::Sync`
            which is required by `neovm_core::Context: Send`
+           `(dyn std::any::Any + 'static): Send`
+           which is required by `neovm_core::Context: Send`
            `Rc<OverlayList>: Send`
            which is required by `neovm_core::Context: Send`
            `Rc<()>: std::marker::Sync`
-           which is required by `neovm_core::Context: Send`
-           `(dyn std::any::Any + 'static): Send`
            which is required by `neovm_core::Context: Send`
            `UnsafeCell<TaggedValue>: std::marker::Sync`
            which is required by `neovm_core::Context: Send`
@@ -449,4 +449,6 @@ error[E0599]: the associated function or constant `transfer` exists for struct `
            `*const TaggedValue: std::marker::Sync`
            which is required by `neovm_core::Context: Send`
            `*const CharTableObj: std::marker::Sync`
+           which is required by `neovm_core::Context: Send`
+           `NonNull<collection_reads::store_state::WorldObservations>: Send`
            which is required by `neovm_core::Context: Send`
