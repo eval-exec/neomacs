@@ -2029,7 +2029,7 @@ impl TabBarDisplayBuildRequest {
         Self { frame_id }
     }
 
-    fn build(self, evaluator: &mut Context, gc_roots: &ScratchGcRootScope) -> Option<BuiltTabBar> {
+    fn build(self, evaluator: &mut Context, gc_roots: &ScratchGcRootScope) -> Option<TabBarBuild> {
         evaluator.setup_thread_locals();
         if !evaluator.obarray().fboundp("tab-bar-make-keymap-1") {
             return None;
@@ -2040,10 +2040,16 @@ impl TabBarDisplayBuildRequest {
                 Self::make_keymap(evaluator)
                     .inspect(|keymap| gc_roots.root(*keymap))
                     .and_then(|keymap| TabBarDisplaySource::from_keymap(evaluator, keymap))
-                    .and_then(|source| source.into_built_tab_bar(evaluator))
+                    .and_then(|source| {
+                        if source.entries.is_empty() {
+                            Some(TabBarBuild::NoItems)
+                        } else {
+                            source.into_built_tab_bar(evaluator).map(TabBarBuild::Items)
+                        }
+                    })
             })
             .flatten();
-        if let Some(tab_bar) = &result {
+        if let Some(TabBarBuild::Items(tab_bar)) = &result {
             gc_roots.root(tab_bar.text);
             for item in &tab_bar.source_items {
                 gc_roots.root(item.caption);
@@ -2098,7 +2104,7 @@ impl TabBarDisplaySource {
                 });
             }
         }
-        (!display_entries.is_empty()).then_some(Self {
+        Some(Self {
             entries: display_entries,
         })
     }
@@ -2778,11 +2784,21 @@ impl Drop for ScratchGcRootScope {
     }
 }
 
+/// The tab-bar keymap of a frame, as redisplay builds it.
+#[derive(Clone)]
+pub(crate) enum TabBarBuild {
+    /// Items to lay out.
+    Items(BuiltTabBar),
+    /// The keymap has no tab-bar items (`tab-bar-format` nil): GNU's
+    /// desired tab-bar string is empty and measures 0 px.
+    NoItems,
+}
+
 pub(crate) fn build_tab_bar_display(
     evaluator: &mut Context,
     frame_id: u64,
     gc_roots: &ScratchGcRootScope,
-) -> Option<BuiltTabBar> {
+) -> Option<TabBarBuild> {
     TabBarDisplayBuildRequest::new(frame_id).build(evaluator, gc_roots)
 }
 

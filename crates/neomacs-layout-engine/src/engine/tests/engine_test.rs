@@ -31842,7 +31842,10 @@ fn build_tab_bar_display_roots_transient_string_across_gc() {
     .expect("eval tab-bar forms");
 
     let gc_roots = ScratchGcRootScope::new();
-    let tab_bar = build_tab_bar_display(&mut eval, frame_id.0, &gc_roots).expect("tab-bar display");
+    let Some(TabBarBuild::Items(tab_bar)) = build_tab_bar_display(&mut eval, frame_id.0, &gc_roots)
+    else {
+        panic!("tab-bar display with items");
+    };
     let before_gc = tab_bar
         .text
         .as_runtime_string_owned()

@@ -49,7 +49,7 @@ use prepared_viewports::PreparedViewports;
 use super::display_status_line::eval_status_line_format;
 use super::display_status_line::{
     BuiltTabBar, ChromeRowRenderServices, FrameTabBarDisplayRowRender,
-    FrameTabBarDisplayRowRequest, ResizeMiniWindowsMode, ScratchGcRootScope,
+    FrameTabBarDisplayRowRequest, ResizeMiniWindowsMode, ScratchGcRootScope, TabBarBuild,
     TabBarPresentedPointerPlan, build_tab_bar_display, gnu_tab_bar_pointer_appearance_style,
     max_mini_window_lines_from_value, tab_bar_effective_mouse_faces, tab_bar_image_relief_styles,
     tab_bar_pointer_slot_plan, tab_bar_presented_pointer_plan,
@@ -1025,7 +1025,7 @@ struct IncrementalWindowPlan {
 /// remains pure positioning and emission.
 struct PreparedGuiChromeSemantics {
     menu_items: Vec<MenuBarItem>,
-    built_tab_bar: Option<BuiltTabBar>,
+    built_tab_bar: Option<TabBarBuild>,
     tool_items: Vec<ToolBarItem>,
 }
 
@@ -3527,8 +3527,9 @@ impl LayoutEngine {
             }
 
             let mut tab_bar_band_emitted = false;
-            if let Some(tab_bar) = built_tab_bar
-                && let Some(actual_tab_bar_height) = self.render_frame_tab_bar_rust(
+            let tab_bar_render = built_tab_bar.and_then(|tab_bar| match tab_bar {
+                TabBarBuild::NoItems => Some(TabBarRender::Empty),
+                TabBarBuild::Items(tab_bar) => self.render_frame_tab_bar_rust(
                     evaluator,
                     &face_resolver,
                     &frame_params,
@@ -3536,9 +3537,27 @@ impl LayoutEngine {
                     presentation_id,
                     tab_bar,
                     &face_attempt,
-                )
-            {
-                tab_bar_band_emitted = true;
+                ),
+            });
+            // GNU `redisplay_tab_bar` (xdisp.c:15020-15069) measures the
+            // desired tab-bar string; an empty one (`tab-bar-format` nil)
+            // measures 0 px, and unless `auto-resize-tab-bars` is `grow-only`
+            // the GUI hook shrinks the bar to it (`x_change_tab_bar_height`,
+            // xfns.c, also stores `tab-bar-lines` 0). A TTY frame keeps its
+            // reserved row; see the empty-band painter below.
+            let measured_tab_bar_height = match tab_bar_render {
+                Some(TabBarRender::Measured(height)) => {
+                    tab_bar_band_emitted = true;
+                    Some(height)
+                }
+                Some(TabBarRender::Empty)
+                    if window_system.is_some() && !auto_resize_tab_bars_grow_only(evaluator) =>
+                {
+                    Some(0.0)
+                }
+                Some(TabBarRender::Empty) | None => None,
+            };
+            if let Some(actual_tab_bar_height) = measured_tab_bar_height {
                 if actual_tab_bar_height != tab_bar_height
                     && attempt_mode == FrameAttemptMode::Converging
                 {
@@ -3558,15 +3577,13 @@ impl LayoutEngine {
                     ) {
                         RelayoutDecision::Retry => {
                             if let Some(frame) = evaluator.frame_manager_mut().get_mut(frame_id) {
-                                frame.tab_bar_height = actual_tab_bar_height.max(1.0) as u32;
-                                frame.sync_window_area_bounds();
+                                apply_measured_tab_bar_height(frame, actual_tab_bar_height);
                             }
                             continue 'frame_layout;
                         }
                         RelayoutDecision::EnterExhaustionSnapshot => {
                             if let Some(frame) = evaluator.frame_manager_mut().get_mut(frame_id) {
-                                frame.tab_bar_height = actual_tab_bar_height.max(1.0) as u32;
-                                frame.sync_window_area_bounds();
+                                apply_measured_tab_bar_height(frame, actual_tab_bar_height);
                             }
                             attempt_mode = FrameAttemptMode::ExhaustionSnapshot;
                             continue 'frame_layout;
@@ -8891,7 +8908,7 @@ impl LayoutEngine {
         presentation_id: u64,
         tab_bar: BuiltTabBar,
         face_attempt: &FrameFaceAttempt,
-    ) -> Option<f32> {
+    ) -> Option<TabBarRender> {
         let width = frame_params.width;
         let mut tab_bar_face =
             face_resolver.default_base_face_for_origin_without_buffer(&DisplayOrigin::TabBar);
@@ -8945,7 +8962,7 @@ impl LayoutEngine {
             )
         }?;
         let FrameTabBarDisplayRowRender::Measured(measured) = rendered_tab_bar else {
-            return None;
+            return Some(TabBarRender::Empty);
         };
         let pointer_slots = tab_bar_pointer_slot_plan(
             evaluator,
@@ -9017,7 +9034,7 @@ impl LayoutEngine {
             .with_hit_regions(hit_regions),
         );
         self.pending_tab_bar_pointer = Some(pointer_plan);
-        Some(actual_tab_bar_height)
+        Some(TabBarRender::Measured(actual_tab_bar_height))
     }
 
     /// Paint a reserved-but-empty TTY tab-bar band in the realized `tab-bar`
@@ -9111,3 +9128,39 @@ mod tests;
 #[cfg(test)]
 #[path = "engine/tests/mode_line_flow_test.rs"]
 mod mode_line_flow_test;
+
+/// What the GUI tab-bar render measured for this attempt.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum TabBarRender {
+    /// The band was laid out; its height in pixels.
+    Measured(f32),
+    /// The desired tab-bar string is empty, so nothing was laid out.
+    Empty,
+}
+
+/// GNU `auto-resize-tab-bars` is `grow-only`: the bar never shrinks.
+fn auto_resize_tab_bars_grow_only(evaluator: &neovm_core::emacs_core::Context) -> bool {
+    crate::neovm_bridge::visible_value_by_name(evaluator, "auto-resize-tab-bars").is_some_and(
+        |value| {
+            value
+                .as_bare_symbol_name()
+                .is_some_and(|name| name == "grow-only")
+        },
+    )
+}
+
+/// Install a measured tab-bar height the way GNU `x_change_tab_bar_height`
+/// (xfns.c) does for a GUI frame: a zero height also stores
+/// `tab-bar-lines` 0, so the frame stops reserving the row.
+fn apply_measured_tab_bar_height(frame: &mut neovm_core::window::Frame, height: f32) {
+    if height <= 0.0 {
+        frame.set_parameter(
+            neovm_core::window::FrameParam::TabBarLines.symbol(),
+            neovm_core::emacs_core::Value::fixnum(0),
+        );
+        frame.tab_bar_height = 0;
+    } else {
+        frame.tab_bar_height = height.max(1.0) as u32;
+    }
+    frame.sync_window_area_bounds();
+}

@@ -158,6 +158,9 @@ mod frame_resize_oracle;
 #[path = "frame_text_height_gui_oracle.rs"]
 mod frame_text_height_gui_oracle;
 
+#[path = "tab_bar_hide_gui_oracle.rs"]
+mod tab_bar_hide_gui_oracle;
+
 #[path = "gif_disposal_oracle.rs"]
 mod gif_disposal_oracle;
 
