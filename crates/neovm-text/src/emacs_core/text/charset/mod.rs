@@ -2745,6 +2745,21 @@ pub(crate) fn charset_iso2022_members() -> Vec<SymId> {
     })
 }
 
+/// Identities currently in `Vemacs_mule_charset_list` (those with an
+/// `emacs-mule-id`), in deterministic ascending `emacs-mule-id` order.
+pub(crate) fn charset_emacs_mule_members() -> Vec<SymId> {
+    CHARSET_REGISTRY.with(|slot| {
+        let reg = slot.borrow();
+        let mut out: Vec<(i64, SymId)> = reg
+            .charsets
+            .iter()
+            .filter_map(|(name, info)| info.emacs_mule_id.map(|id| (id, *name)))
+            .collect();
+        out.sort_by_key(|(id, name)| (*id, resolve_sym(*name)));
+        out.into_iter().map(|(_, name)| name).collect()
+    })
+}
+
 /// [`iso2022_full_charset_candidates`] limited to identities captured when a
 /// full-support coding system was defined.
 pub(crate) fn iso2022_encode_candidates_among(allowed: &[SymId]) -> Vec<SymId> {

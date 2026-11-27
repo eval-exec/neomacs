@@ -5,6 +5,7 @@ mod alias_conversion_hooks;
 mod basic;
 mod detection_state;
 mod eol_decode_matrix;
+mod find_coding_systems;
 mod metadata;
 mod null_detection;
 mod string;

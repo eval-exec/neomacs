@@ -3848,7 +3848,25 @@ struct CodingRepertoire {
 
 impl CodingRepertoire {
     fn for_coding_system(mgr: &CodingSystemManager, name: &str, mode: SymbolMode) -> Option<Self> {
-        let charsets = coding_system_charset_list_syms(mgr, name, mode)?;
+        let mut charsets = coding_system_charset_list_syms(mgr, name, mode)?;
+        // GNU `Fdefine_coding_system_internal` (`src/coding.c:11018-11031`)
+        // expands the symbolic `:charset-list` markers `iso-2022` and
+        // `emacs-mule` into `Viso_2022_charset_list` / `Vemacs_mule_charset_list`.
+        if charsets.len() == 1 {
+            match resolve_sym(charsets[0]) {
+                "iso-2022" => {
+                    charsets = resolve_runtime_name(mgr, name)
+                        .and_then(|resolved| runtime_bucket_name(mgr, &resolved))
+                        .and_then(|bucket| mgr.get(&bucket))
+                        .and_then(|info| stored_iso2022_safe_charsets(info, mode))
+                        .unwrap_or_else(super::charset::charset_iso2022_members);
+                }
+                "emacs-mule" => {
+                    charsets = super::charset::charset_emacs_mule_members();
+                }
+                _ => {}
+            }
+        }
         let ascii_compatible = charsets
             .iter()
             .any(|&charset| super::charset::charset_is_ascii_compatible(charset));
