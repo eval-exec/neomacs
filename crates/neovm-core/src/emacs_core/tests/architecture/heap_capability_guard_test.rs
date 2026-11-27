@@ -4325,3 +4325,8 @@ fn c12_stopped_world_scope_preserves_enclosing_safety_and_flags_nested_closures(
         direct_problems.join("\n")
     );
 }
+
+/// value-gc C12 family: every stopped-world capability type is minted only at
+/// pinned sites (reuses this module's production-scan helpers).
+#[path = "capability_family_guard_test.rs"]
+mod capability_family;

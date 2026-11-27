@@ -8,7 +8,6 @@
 //! 200-character fixture scan never sees this file.
 
 use super::scan_contract::{SingleMutatorWorld, StoppedMutatorsProof};
-use std::marker::PhantomData;
 
 impl SingleMutatorWorld<'_> {
     /// Split the allocator and the canonical cold registry under the same
@@ -37,9 +36,7 @@ impl SingleMutatorWorld<'_> {
             !self.heap.has_unfinished_concurrent_mark(),
             "young capture requires an explicit successful marker join"
         );
-        let proof = StoppedMutatorsProof {
-            _owner: PhantomData,
-        };
+        let proof = StoppedMutatorsProof::from_single_world(self);
         let heap = &mut *self.heap;
         let mut logs =
             super::young_registry::StoppedYoungLogs::new(&mut heap._satb_layout_reserve, &proof)?;
@@ -60,9 +57,7 @@ impl SingleMutatorWorld<'_> {
         id: super::young_registry::YoungRegistrationId,
     ) -> Result<super::young_registry::YoungLogLoan, super::young_registry::YoungRegistryError>
     {
-        let proof = StoppedMutatorsProof {
-            _owner: PhantomData,
-        };
+        let proof = StoppedMutatorsProof::from_single_world(self);
         self.heap._satb_layout_reserve.take_young_loan(id, &proof)
     }
 
@@ -77,9 +72,7 @@ impl SingleMutatorWorld<'_> {
         &mut self,
         loan: super::young_registry::YoungLogLoan,
     ) -> Result<(), super::young_registry::YoungLogReturnError> {
-        let proof = StoppedMutatorsProof {
-            _owner: PhantomData,
-        };
+        let proof = StoppedMutatorsProof::from_single_world(self);
         self.heap
             ._satb_layout_reserve
             .return_young_loan(loan, &proof)

@@ -15,6 +15,7 @@ pub use keeper::EraGraceReceipt;
 pub use keeper::SerialGrant;
 #[doc(hidden)]
 pub use keeper::SymbolTableGraceReclaim;
+pub(in crate::tagged::gc) use keeper::TraceWitness;
 pub use keeper::{StopAttempt, StopPending};
 pub use owner::PollOutcome;
 pub use owner::RootedRetireFailure;

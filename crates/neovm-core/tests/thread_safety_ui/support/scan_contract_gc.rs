@@ -121,6 +121,13 @@ impl MarkWord {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct HeapIdentity(usize);
 
+pub struct TraceWitness<'t>(PhantomData<&'t ()>);
+impl TraceWitness<'_> {
+    pub(crate) fn heap_identity(&self) -> HeapIdentity {
+        unimplemented!()
+    }
+}
+
 pub struct AllStopped<'a>(PhantomData<&'a ()>);
 impl AllStopped<'_> {
     pub(crate) fn stopped_heap_identity(&self) -> HeapIdentity {

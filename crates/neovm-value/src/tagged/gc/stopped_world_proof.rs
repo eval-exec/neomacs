@@ -18,7 +18,9 @@
 //!   side-table, not the bare flag), owner cons reserves and young log loans.
 //! - [`StoppedWorldProof::with_all_stopped`] (parallel) additionally borrows
 //!   `&'stop ParallelStoppedMutatorsProof<'stop>`, the proof `AllStopped::trace`
-//!   hands its callback; the token's `'stop` is that borrow.
+//!   hands its callback; the token's `'stop` is that borrow. The parallel proof
+//!   is minted only from a `TraceWitness`, which only `trace` creates after its
+//!   validation, so the safe parallel mint is reachable only inside `trace`.
 //! - Both refuse inside a `with_*_mut` mutation closure and suspend the TLS
 //!   heap slot for the body (`StoppedWorldEntry`).
 //!

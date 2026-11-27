@@ -141,6 +141,7 @@ pub use native_extent::NativeReturn;
 pub use native_extent::NativeRoots;
 pub use rendezvous::Rendezvous;
 pub use rendezvous::ResumeGcImage;
+pub(in crate::tagged::gc) use rendezvous::TraceWitness;
 pub use rendezvous::{AllStopped, Mode, Phase, PollOutcome, RendezvousError, Request, Snapshot};
 pub use rendezvous::{AllStoppedFailure, ResumeGcImageFailure, RootedRetireFailure, SerialGrant};
 #[doc(hidden)]

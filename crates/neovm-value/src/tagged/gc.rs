@@ -2518,13 +2518,6 @@ pub mod scan_contract;
 /// Production young-log bridge for `scan_contract::SingleMutatorWorld`,
 /// kept out of the fixture-included source (CG-5 mechanism (b)).
 mod scan_contract_bridge;
-/// Test-support constructor for `scan_contract::StoppedMutatorsProof`.
-/// Kept out of scan_contract.rs so that file stays free of `test-support`
-/// cfg tokens beyond its pre-existing visibility attr (CG-5 mechanism (b)):
-/// the compile-fail fixtures `#[path]`-include it from a scratch crate that
-/// does not declare the feature.
-#[cfg(any(test, feature = "test-support"))]
-mod scan_contract_test_support;
 use mapped_veclike_scan::MappedVeclikeScanSnapshot;
 #[cfg(test)]
 #[path = "gc/tests/shutdown_tests.rs"]
@@ -2716,6 +2709,7 @@ pub use mutator_registration::{
 // error identity (E0432 -> E0603) without making the path usable, so it is
 // scoped to this crate's own no-feature test build with the same guard-legal
 // spelling as collection_reads (condition (d)).
+use mutator_registration::TraceWitness;
 #[cfg(all(any(test, feature = "test-support"), not(feature = "test-support")))]
 pub(crate) use mutator_registration::{EraCoreHofExt, RunAccessHofExt, RunAccessUnaryExt};
 

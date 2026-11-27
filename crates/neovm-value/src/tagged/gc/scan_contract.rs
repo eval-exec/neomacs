@@ -136,11 +136,40 @@ impl std::fmt::Debug for ScanStorageLease {
     }
 }
 
-/// Only this module can mint the drain key, after unsafe closed-world
-/// admission. The key cannot be sent to another owner or cloned.
+/// The drain key: proof that every mutator of the heap is stopped. The field
+/// is private to this module, so the key exists only through the constructors
+/// below, each of which borrows its authority. It cannot be sent to another
+/// owner or cloned.
 #[derive(Debug)]
 pub(super) struct StoppedMutatorsProof {
-    pub(super) _owner: PhantomData<Rc<()>>,
+    _owner: PhantomData<Rc<()>>,
+}
+
+impl StoppedMutatorsProof {
+    /// Serial mint: the authority is the borrowed single-mutator admission
+    /// (`SingleMutatorWorld::from_heap`'s unsafe closed-world contract).
+    /// `_world` is deliberately unread: holding the borrow is the whole proof.
+    pub(super) fn from_single_world(_world: &SingleMutatorWorld<'_>) -> Self {
+        Self {
+            _owner: PhantomData,
+        }
+    }
+
+    /// Parallel mint: the authority is the `AllStopped::trace` witness. Only
+    /// `ParallelStoppedMutatorsProof::from_trace` reaches it.
+    fn from_trace(_witness: &super::TraceWitness<'_>) -> Self {
+        Self {
+            _owner: PhantomData,
+        }
+    }
+
+    /// Transport-only tests own every buffer locally and have no heap aliases.
+    #[cfg(any(test, feature = "test-support"))]
+    pub(super) fn for_test() -> Self {
+        Self {
+            _owner: PhantomData,
+        }
+    }
 }
 
 static_assertions::assert_not_impl_any!(StoppedMutatorsProof: Send, Sync, Copy, Clone);
@@ -153,21 +182,23 @@ static_assertions::assert_not_impl_any!(StoppedMutatorsProof: Send, Sync, Copy, 
 /// re-homed fixtures cannot even type-check the call while it is
 /// crate-restricted. Publishing the TYPE NAME in test-support restores the
 /// pre-split call surface; no constructor, field or mint is exposed
-/// (`from_all_stopped`/`legacy` stay `pub(in crate::tagged::gc)`).
+/// (`from_trace`/`legacy` stay `pub(in crate::tagged::gc)`).
 #[derive(Debug)]
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(in crate::tagged::gc) struct ParallelStoppedMutatorsProof<'epoch> {
     heap_identity: super::HeapIdentity,
     legacy: StoppedMutatorsProof,
-    _epoch: PhantomData<&'epoch ()>,
+    /// Invariant: the proof's `'epoch` is exactly its trace callback's.
+    _epoch: PhantomData<fn(&'epoch ()) -> &'epoch ()>,
 }
 impl<'epoch> ParallelStoppedMutatorsProof<'epoch> {
-    pub(in crate::tagged::gc) fn from_all_stopped(stopped: &'epoch super::AllStopped<'_>) -> Self {
+    /// The only mint: consumes the witness that `AllStopped::trace` creates
+    /// after its validation, so a holder of `&AllStopped` outside `trace`
+    /// cannot produce one.
+    pub(in crate::tagged::gc) fn from_trace(witness: super::TraceWitness<'epoch>) -> Self {
         Self {
-            heap_identity: stopped.stopped_heap_identity(),
-            legacy: StoppedMutatorsProof {
-                _owner: PhantomData,
-            },
+            heap_identity: witness.heap_identity(),
+            legacy: StoppedMutatorsProof::from_trace(&witness),
             _epoch: PhantomData,
         }
     }
@@ -183,9 +214,7 @@ impl<'epoch> ParallelStoppedMutatorsProof<'epoch> {
     ) -> Self {
         Self {
             heap_identity,
-            legacy: StoppedMutatorsProof {
-                _owner: PhantomData,
-            },
+            legacy: StoppedMutatorsProof::for_test(),
             _epoch: PhantomData,
         }
     }
@@ -224,9 +253,7 @@ impl SingleMutatorWorld<'_> {
         let counts = self.fold_satb_counts()?;
         // The successful fold checked the marker join; this capability has
         // retained exclusive stopped-world admission without running Lisp.
-        let proof = StoppedMutatorsProof {
-            _owner: PhantomData,
-        };
+        let proof = StoppedMutatorsProof::from_single_world(self);
         self.heap
             .record_termination_partial_words(counts.partial_words, &proof);
         Ok(counts.total_words)
@@ -237,9 +264,7 @@ impl SingleMutatorWorld<'_> {
             !self.heap.has_unfinished_concurrent_mark(),
             "SATB fold requires an explicit successful marker join"
         );
-        let proof = StoppedMutatorsProof {
-            _owner: PhantomData,
-        };
+        let proof = StoppedMutatorsProof::from_single_world(self);
         let batches = self.heap.satb_handoff.take_all()?;
         let mut words = 0;
         for chunk in batches {
@@ -294,9 +319,7 @@ impl SingleMutatorWorld<'_> {
             "SATB begin requires a stopped collector"
         );
         self.ensure_satb_empty()?;
-        let proof = StoppedMutatorsProof {
-            _owner: PhantomData,
-        };
+        let proof = StoppedMutatorsProof::from_single_world(self);
         for mutator in self.heap.mutator_gc_entries_world_stopped(&proof) {
             mutator.satb.begin_cycle(&proof)?;
         }
@@ -310,9 +333,7 @@ impl SingleMutatorWorld<'_> {
             !self.heap.has_unfinished_concurrent_mark(),
             "SATB insertion repair requires an explicit marker join"
         );
-        let proof = StoppedMutatorsProof {
-            _owner: PhantomData,
-        };
+        let proof = StoppedMutatorsProof::from_single_world(self);
         let mut owners = rustc_hash::FxHashSet::default();
         for mutator in self.heap.mutator_gc_entries_world_stopped(&proof) {
             owners.extend(mutator.satb.satb_snapshotted_owners.drain());
@@ -326,9 +347,7 @@ impl SingleMutatorWorld<'_> {
     pub(super) fn ensure_young_logs_stopped(
         &self,
     ) -> Result<(), super::young_registry::YoungRegistryError> {
-        let proof = StoppedMutatorsProof {
-            _owner: PhantomData,
-        };
+        let proof = StoppedMutatorsProof::from_single_world(self);
         self.heap
             ._satb_layout_reserve
             .ensure_young_logs_stopped(&proof)
@@ -346,9 +365,7 @@ impl SingleMutatorWorld<'_> {
             !self.heap.has_unfinished_concurrent_mark(),
             "stopped heap access requires an explicit successful marker join"
         );
-        let proof = StoppedMutatorsProof {
-            _owner: PhantomData,
-        };
+        let proof = StoppedMutatorsProof::from_single_world(self);
         self.heap
             ._satb_layout_reserve
             .ensure_young_logs_stopped(&proof)?;
@@ -377,9 +394,7 @@ mod value_test_bridge {
                     super::super::young_registry::YoungRegistrationId,
                     super::super::young_registry::YoungRegistryError,
                 > {
-                    let proof = StoppedMutatorsProof {
-                        _owner: PhantomData,
-                    };
+                    let proof = StoppedMutatorsProof::from_single_world(self);
                     self.heap
                         ._satb_layout_reserve
                         .registered_young_id(id, &proof)
@@ -394,9 +409,7 @@ mod value_test_bridge {
                     super::super::satb::SatbRetired,
                     super::super::mutator_gc::MutatorRetireError,
                 > {
-                    let proof = StoppedMutatorsProof {
-                        _owner: PhantomData,
-                    };
+                    let proof = StoppedMutatorsProof::from_single_world(self);
                     let handoff = self.heap.satb_handoff.clone();
                     self.heap
                         ._satb_layout_reserve
@@ -406,9 +419,7 @@ mod value_test_bridge {
                 pub(in crate::tagged::gc) fn register_mutator_gc_for_test(
                     &mut self,
                 ) -> super::super::mutator_gc::TestMutatorGcId {
-                    let proof = StoppedMutatorsProof {
-                        _owner: PhantomData,
-                    };
+                    let proof = StoppedMutatorsProof::from_single_world(self);
                     self.heap.register_mutator_gc_for_test(&proof)
                 }
 
@@ -416,9 +427,7 @@ mod value_test_bridge {
                     &mut self,
                     id: super::super::mutator_gc::TestMutatorGcId,
                 ) -> super::super::mutator_gc::StoppedMutatorGc<'_> {
-                    let proof = StoppedMutatorsProof {
-                        _owner: PhantomData,
-                    };
+                    let proof = StoppedMutatorsProof::from_single_world(self);
                     self.heap.registered_mutator_gc_for_test(id, &proof)
                 }
 

@@ -179,6 +179,21 @@ impl AllStopped<'_> {
     }
 }
 
+/// Witness that its holder is inside `AllStopped::trace`, after that call's
+/// `validate` and `!traced` checks. Its fields are private to this module and
+/// `trace` is its only construction site, so a `ParallelStoppedMutatorsProof`
+/// (which consumes one) exists only for a trace callback; `'t` is invariant.
+pub(in crate::tagged::gc) struct TraceWitness<'t> {
+    heap_identity: super::super::HeapIdentity,
+    _trace: PhantomData<fn(&'t ()) -> &'t ()>,
+}
+
+impl TraceWitness<'_> {
+    pub(in crate::tagged::gc) fn heap_identity(&self) -> super::super::HeapIdentity {
+        self.heap_identity
+    }
+}
+
 #[must_use = "recover the stopped guard or retain the poisoned epoch"]
 pub struct AllStoppedFailure<'era> {
     pub reason: RendezvousError,
@@ -613,7 +628,10 @@ impl<'era> AllStopped<'era> {
             finished: false,
         };
         let result = {
-            let proof = ParallelStoppedMutatorsProof::from_all_stopped(self);
+            let proof = ParallelStoppedMutatorsProof::from_trace(TraceWitness {
+                heap_identity: self.stopped_heap_identity(),
+                _trace: PhantomData,
+            });
             body(self, &proof)?
         };
         if self.registry.park.poisoned.load(Ordering::Acquire) {
