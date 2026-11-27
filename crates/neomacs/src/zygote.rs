@@ -43,6 +43,7 @@ mod unix_impl {
     use std::io::{self, Read, Write};
     use std::os::fd::{AsRawFd, RawFd};
     use std::os::unix::ffi::OsStrExt;
+    use std::os::unix::fs::PermissionsExt;
     use std::os::unix::net::{UnixListener, UnixStream};
     use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
@@ -59,6 +60,7 @@ mod unix_impl {
     const WIRE_MAGIC: &[u8; 4] = b"NVZ1";
     const MAX_REQUEST_BYTES: usize = 16 * 1024 * 1024;
     const DEFAULT_IDLE_TIMEOUT_SECS: u64 = 15;
+    const REQUEST_READ_DEADLINE: Duration = Duration::from_secs(5);
     const POLL_TICK_MS: i32 = 250;
 
     const RESP_EXITED: u8 = 0;
@@ -107,6 +109,10 @@ mod unix_impl {
             Self { buf, pos: 0 }
         }
 
+        fn remaining(&self) -> usize {
+            self.buf.len().saturating_sub(self.pos)
+        }
+
         fn read_u32(&mut self) -> Result<u32, String> {
             let end = self
                 .pos
@@ -153,36 +159,42 @@ mod unix_impl {
         }
     }
 
-    fn read_request(stream: &mut UnixStream) -> Result<ZygoteRequest, String> {
-        let mut header = [0u8; 8];
-        stream
-            .read_exact(&mut header)
-            .map_err(|e| format!("failed reading zygote request header: {e}"))?;
-        if &header[0..4] != WIRE_MAGIC {
-            return Err(format!("bad zygote request magic: {:?}", &header[0..4]));
-        }
-        let payload_len = u32::from_le_bytes(header[4..8].try_into().unwrap()) as usize;
-        if payload_len > MAX_REQUEST_BYTES {
-            return Err(format!("zygote request too large: {payload_len} bytes"));
-        }
-        let mut payload = vec![0u8; payload_len];
-        stream
-            .read_exact(&mut payload)
-            .map_err(|e| format!("failed reading zygote request payload: {e}"))?;
+    fn parse_request_payload(payload: &[u8]) -> Result<ZygoteRequest, String> {
+        let mut cur = Cursor::new(payload);
 
-        let mut cur = Cursor::new(&payload);
+        // Each argv element requires at least a 4-byte length prefix; validate
+        // before reserving so a malformed frame cannot trigger huge allocations.
         let argc = cur.read_u32()? as usize;
-        let mut argv = Vec::with_capacity(argc);
+        if argc > cur.remaining() / 4 {
+            return Err(format!(
+                "invalid argc {argc} for remaining payload ({} bytes)",
+                cur.remaining()
+            ));
+        }
+        let mut argv = Vec::new();
+        argv.try_reserve_exact(argc)
+            .map_err(|e| format!("failed to reserve argv ({argc}): {e}"))?;
         for _ in 0..argc {
             argv.push(cur.read_string()?);
         }
+
+        // Each env entry requires at least two 4-byte length prefixes (8 bytes).
         let envc = cur.read_u32()? as usize;
-        let mut env = Vec::with_capacity(envc);
+        if envc > cur.remaining() / 8 {
+            return Err(format!(
+                "invalid envc {envc} for remaining payload ({} bytes)",
+                cur.remaining()
+            ));
+        }
+        let mut env = Vec::new();
+        env.try_reserve_exact(envc)
+            .map_err(|e| format!("failed to reserve env ({envc}): {e}"))?;
         for _ in 0..envc {
             let key = cur.read_os_string()?;
             let val = cur.read_os_string()?;
             env.push((key, val));
         }
+
         let cwd = PathBuf::from(cur.read_os_string()?);
         let stdout_path = PathBuf::from(cur.read_os_string()?);
         let stderr_path = PathBuf::from(cur.read_os_string()?);
@@ -200,11 +212,134 @@ mod unix_impl {
         })
     }
 
+    enum ReadProgress {
+        Incomplete,
+        Complete(ZygoteRequest),
+        Failed(i32),
+    }
+
+    /// Incremental, non-blocking request reader so a stalled or slow client
+    /// never blocks the single-threaded parent's child supervision loop.
+    struct PendingClient {
+        stream: UnixStream,
+        header: [u8; 8],
+        header_read: usize,
+        payload: Vec<u8>,
+        payload_len: usize,
+        payload_read: usize,
+        deadline: Instant,
+    }
+
+    impl PendingClient {
+        fn new(stream: UnixStream) -> Self {
+            Self {
+                stream,
+                header: [0u8; 8],
+                header_read: 0,
+                payload: Vec::new(),
+                payload_len: 0,
+                payload_read: 0,
+                deadline: Instant::now() + REQUEST_READ_DEADLINE,
+            }
+        }
+
+        fn try_advance(&mut self) -> ReadProgress {
+            while self.header_read < self.header.len() {
+                match self.stream.read(&mut self.header[self.header_read..]) {
+                    Ok(0) => return ReadProgress::Failed(libc::EINVAL),
+                    Ok(n) => self.header_read += n,
+                    Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
+                        return ReadProgress::Incomplete;
+                    }
+                    Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
+                    Err(e) => {
+                        return ReadProgress::Failed(e.raw_os_error().unwrap_or(libc::EIO));
+                    }
+                }
+            }
+
+            if self.payload.is_empty() && self.payload_len == 0 {
+                if &self.header[0..4] != WIRE_MAGIC {
+                    return ReadProgress::Failed(libc::EINVAL);
+                }
+                let len = u32::from_le_bytes(self.header[4..8].try_into().unwrap()) as usize;
+                if len == 0 || len > MAX_REQUEST_BYTES {
+                    return ReadProgress::Failed(libc::EINVAL);
+                }
+                if self.payload.try_reserve_exact(len).is_err() {
+                    return ReadProgress::Failed(libc::ENOMEM);
+                }
+                self.payload.resize(len, 0);
+                self.payload_len = len;
+            }
+
+            while self.payload_read < self.payload_len {
+                match self.stream.read(&mut self.payload[self.payload_read..]) {
+                    Ok(0) => return ReadProgress::Failed(libc::EINVAL),
+                    Ok(n) => self.payload_read += n,
+                    Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
+                        return ReadProgress::Incomplete;
+                    }
+                    Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
+                    Err(e) => {
+                        return ReadProgress::Failed(e.raw_os_error().unwrap_or(libc::EIO));
+                    }
+                }
+            }
+
+            match parse_request_payload(&self.payload) {
+                Ok(req) => ReadProgress::Complete(req),
+                Err(_) => ReadProgress::Failed(libc::EINVAL),
+            }
+        }
+    }
+
+    fn verify_peer_same_uid(stream: &UnixStream) -> bool {
+        // SAFETY: `geteuid` has no preconditions.
+        let expected_uid = unsafe { libc::geteuid() };
+        let fd = stream.as_raw_fd();
+        #[cfg(target_os = "linux")]
+        {
+            let mut cred = libc::ucred {
+                pid: 0,
+                uid: u32::MAX,
+                gid: u32::MAX,
+            };
+            let mut len = std::mem::size_of::<libc::ucred>() as libc::socklen_t;
+            // SAFETY: valid connected Unix socket fd and properly sized `ucred`.
+            let rc = unsafe {
+                libc::getsockopt(
+                    fd,
+                    libc::SOL_SOCKET,
+                    libc::SO_PEERCRED,
+                    (&mut cred as *mut libc::ucred).cast::<libc::c_void>(),
+                    &mut len,
+                )
+            };
+            rc == 0 && cred.uid == expected_uid
+        }
+        #[cfg(target_os = "macos")]
+        {
+            let mut euid: libc::uid_t = u32::MAX;
+            let mut egid: libc::gid_t = u32::MAX;
+            // SAFETY: valid connected Unix socket fd and output pointers.
+            let rc = unsafe { libc::getpeereid(fd, &mut euid, &mut egid) };
+            rc == 0 && euid == expected_uid
+        }
+        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+        {
+            let _ = (expected_uid, fd);
+            true
+        }
+    }
+
     fn write_response(stream: &mut UnixStream, kind: u8, code: i32) {
         let mut resp = [0u8; 9];
         resp[0..4].copy_from_slice(WIRE_MAGIC);
         resp[4] = kind;
         resp[5..9].copy_from_slice(&code.to_le_bytes());
+        let _ = stream.set_nonblocking(false);
+        let _ = stream.set_write_timeout(Some(Duration::from_secs(1)));
         let _ = stream.write_all(&resp);
     }
 
@@ -266,10 +401,12 @@ mod unix_impl {
     }
 
     fn reset_child_signals() {
-        // SAFETY: resetting process signals in newly forked single-threaded child.
+        // SAFETY: resetting parent-installed signal handlers in newly forked
+        // single-threaded child. Keep SIGPIPE as SIG_IGN to match Rust's
+        // normal `main()` runtime initialization (`std::sys::pal::unix::init`).
         unsafe {
             libc::signal(libc::SIGCHLD, libc::SIG_DFL);
-            libc::signal(libc::SIGPIPE, libc::SIG_DFL);
+            libc::signal(libc::SIGPIPE, libc::SIG_IGN);
             libc::signal(libc::SIGTERM, libc::SIG_DFL);
             libc::signal(libc::SIGINT, libc::SIG_DFL);
         }
@@ -397,7 +534,13 @@ mod unix_impl {
             unsafe { std::env::set_var(key, value) };
         }
 
-        // Refresh C locale and timezone tables from the child's environment.
+        // Reset C locale back to "C" first so `initialize_system_locale()`'s
+        // `LC_ALL == "C"` fast path starts from the same baseline as a fresh
+        // `execve()` process even when the zygote parent booted in a non-C locale.
+        // SAFETY: single-threaded child process.
+        unsafe {
+            libc::setlocale(libc::LC_ALL, c"C".as_ptr());
+        }
         initialize_system_locale();
         unsafe extern "C" {
             fn tzset();
@@ -508,8 +651,9 @@ mod unix_impl {
             std::process::exit(1);
         }
 
-        // Bind to a temporary sibling path then atomically rename into place
-        // so clients never observe an unbound or half-bound socket.
+        // Bind to a temporary sibling path with owner-only mode 0600, then
+        // atomically rename into place so clients never observe an unbound or
+        // world-accessible socket.
         let tmp_socket = socket_path.with_extension(format!("tmp.{}", std::process::id()));
         let _ = std::fs::remove_file(&tmp_socket);
         let listener = UnixListener::bind(&tmp_socket).unwrap_or_else(|err| {
@@ -519,6 +663,7 @@ mod unix_impl {
             );
             std::process::exit(1);
         });
+        let _ = std::fs::set_permissions(&tmp_socket, std::fs::Permissions::from_mode(0o600));
         if let Err(err) = std::fs::rename(&tmp_socket, socket_path) {
             let _ = std::fs::remove_file(&tmp_socket);
             eprintln!(
@@ -538,15 +683,19 @@ mod unix_impl {
             }
         }
 
+        let mut pending: Vec<PendingClient> = Vec::new();
         let mut children: HashMap<libc::pid_t, UnixStream> = HashMap::new();
         let mut last_activity = Instant::now();
 
         loop {
-            if SHUTDOWN_REQUESTED.load(Ordering::Relaxed) && children.is_empty() {
+            if SHUTDOWN_REQUESTED.load(Ordering::Relaxed)
+                && children.is_empty()
+                && pending.is_empty()
+            {
                 break;
             }
 
-            let mut pollfds = Vec::with_capacity(2 + children.len());
+            let mut pollfds = Vec::with_capacity(2 + pending.len() + children.len());
             pollfds.push(libc::pollfd {
                 fd: listener_fd,
                 events: libc::POLLIN,
@@ -557,6 +706,15 @@ mod unix_impl {
                 events: libc::POLLIN,
                 revents: 0,
             });
+            let pending_start = pollfds.len();
+            for client in &pending {
+                pollfds.push(libc::pollfd {
+                    fd: client.stream.as_raw_fd(),
+                    events: libc::POLLIN,
+                    revents: 0,
+                });
+            }
+            let children_start = pollfds.len();
             let active_pids: Vec<libc::pid_t> = children.keys().copied().collect();
             for &pid in &active_pids {
                 pollfds.push(libc::pollfd {
@@ -607,7 +765,7 @@ mod unix_impl {
 
             // 2. Kill any child whose client disconnected (e.g. nextest timeout).
             for (idx, &pid) in active_pids.iter().enumerate() {
-                let revents = pollfds[2 + idx].revents;
+                let revents = pollfds[children_start + idx].revents;
                 if revents != 0
                     && let Some(stream) = children.get(&pid)
                     && client_disconnected(stream.as_raw_fd())
@@ -617,7 +775,40 @@ mod unix_impl {
                 }
             }
 
-            // 3. Accept all queued new connections.
+            // 3. Advance non-blocking pending request readers without blocking supervision.
+            let now = Instant::now();
+            let mut ready_requests: Vec<(UnixStream, ZygoteRequest)> = Vec::new();
+            let mut idx = 0;
+            while idx < pending.len() {
+                let revents = pollfds[pending_start + idx].revents;
+                if revents != 0 {
+                    match pending[idx].try_advance() {
+                        ReadProgress::Incomplete => {
+                            if now >= pending[idx].deadline {
+                                let mut client = pending.swap_remove(idx);
+                                write_response(&mut client.stream, RESP_ERROR, libc::ETIMEDOUT);
+                                continue;
+                            }
+                            idx += 1;
+                        }
+                        ReadProgress::Complete(req) => {
+                            let client = pending.swap_remove(idx);
+                            ready_requests.push((client.stream, req));
+                        }
+                        ReadProgress::Failed(errno) => {
+                            let mut client = pending.swap_remove(idx);
+                            write_response(&mut client.stream, RESP_ERROR, errno);
+                        }
+                    }
+                } else if now >= pending[idx].deadline {
+                    let mut client = pending.swap_remove(idx);
+                    write_response(&mut client.stream, RESP_ERROR, libc::ETIMEDOUT);
+                } else {
+                    idx += 1;
+                }
+            }
+
+            // 4. Accept newly queued connections (non-blocking) and try an immediate read.
             if (pollfds[0].revents & libc::POLLIN) != 0 {
                 loop {
                     let mut stream = match listener.accept() {
@@ -625,45 +816,53 @@ mod unix_impl {
                         Err(e) if e.kind() == io::ErrorKind::WouldBlock => break,
                         Err(_) => break,
                     };
-                    let _ = stream.set_nonblocking(false);
-                    let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
-                    last_activity = Instant::now();
-                    let req = match read_request(&mut stream) {
-                        Ok(req) => req,
-                        Err(_) => {
-                            write_response(&mut stream, RESP_ERROR, libc::EINVAL);
-                            continue;
-                        }
-                    };
-                    let _ = stream.set_read_timeout(None);
-
-                    assert_single_threaded_before_fork();
-                    // SAFETY: parent is strictly single-threaded; child never returns here.
-                    let pid = unsafe { libc::fork() };
-                    if pid < 0 {
-                        let errno = io::Error::last_os_error()
-                            .raw_os_error()
-                            .unwrap_or(libc::EAGAIN);
-                        write_response(&mut stream, RESP_ERROR, errno);
+                    if !verify_peer_same_uid(&stream) {
+                        write_response(&mut stream, RESP_ERROR, libc::EACCES);
                         continue;
                     }
-                    if pid == 0 {
-                        // Child: close all server/peer FDs before running Lisp.
-                        drop(stream);
-                        drop(children);
-                        drop(listener);
-                        unsafe {
-                            libc::close(sigchld_r);
-                            libc::close(sigchld_w);
+                    let _ = stream.set_nonblocking(true);
+                    last_activity = Instant::now();
+                    let mut client = PendingClient::new(stream);
+                    match client.try_advance() {
+                        ReadProgress::Incomplete => pending.push(client),
+                        ReadProgress::Complete(req) => ready_requests.push((client.stream, req)),
+                        ReadProgress::Failed(errno) => {
+                            write_response(&mut client.stream, RESP_ERROR, errno);
                         }
-                        run_child(evaluator, mode, req);
                     }
-                    children.insert(pid, stream);
                 }
             }
 
-            // 4. Clean idle / watched-parent shutdown when no children are running.
-            if children.is_empty() {
+            // 5. Fork one isolated child per completed request.
+            for (mut stream, req) in ready_requests {
+                last_activity = Instant::now();
+                assert_single_threaded_before_fork();
+                // SAFETY: parent is strictly single-threaded; child never returns here.
+                let pid = unsafe { libc::fork() };
+                if pid < 0 {
+                    let errno = io::Error::last_os_error()
+                        .raw_os_error()
+                        .unwrap_or(libc::EAGAIN);
+                    write_response(&mut stream, RESP_ERROR, errno);
+                    continue;
+                }
+                if pid == 0 {
+                    // Child: close all server/peer FDs before running Lisp.
+                    drop(stream);
+                    drop(pending);
+                    drop(children);
+                    drop(listener);
+                    unsafe {
+                        libc::close(sigchld_r);
+                        libc::close(sigchld_w);
+                    }
+                    run_child(evaluator, mode, req);
+                }
+                children.insert(pid, stream);
+            }
+
+            // 6. Clean idle / watched-parent shutdown when no work is in flight.
+            if children.is_empty() && pending.is_empty() {
                 if let Some(wpid) = watch_pid
                     && !watch_pid_alive(wpid)
                 {
@@ -682,5 +881,26 @@ mod unix_impl {
         let _ = std::fs::remove_file(socket_path);
         std::mem::forget(evaluator);
         unsafe { libc::_exit(0) };
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn parse_request_payload_rejects_oversized_counts() {
+            // Claim argc = u32::MAX in a tiny 16-byte buffer.
+            let mut bad_argc = Vec::new();
+            bad_argc.extend_from_slice(&u32::MAX.to_le_bytes());
+            bad_argc.extend_from_slice(&[0u8; 12]);
+            assert!(parse_request_payload(&bad_argc).is_err());
+
+            // Valid argc = 0, then oversized envc = u32::MAX.
+            let mut bad_envc = Vec::new();
+            bad_envc.extend_from_slice(&0u32.to_le_bytes());
+            bad_envc.extend_from_slice(&u32::MAX.to_le_bytes());
+            bad_envc.extend_from_slice(&[0u8; 16]);
+            assert!(parse_request_payload(&bad_envc).is_err());
+        }
     }
 }

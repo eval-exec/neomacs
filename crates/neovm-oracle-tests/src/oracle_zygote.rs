@@ -8,7 +8,8 @@
 //!
 //! Works on both Linux and macOS (`#[cfg(unix)]`). Falls back transparently to
 //! normal `Command::output()` when disabled (`NEOVM_ORACLE_ZYGOTE=0`), outside
-//! Unix, or for tests with custom pre-boot environment overrides.
+//! Unix, when the binary has no final pdump image (e.g. debug builds), or for
+//! tests with custom pre-boot environment overrides.
 
 use std::process::Output;
 use std::time::Duration;
@@ -47,11 +48,12 @@ mod unix_impl {
     use std::io::{Read, Write};
     use std::os::fd::AsRawFd;
     use std::os::unix::ffi::OsStrExt;
+    use std::os::unix::fs::{DirBuilderExt, MetadataExt};
     use std::os::unix::net::UnixStream;
     use std::os::unix::process::ExitStatusExt;
     use std::path::{Path, PathBuf};
     use std::process::{ExitStatus, Output, Stdio};
-    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
     use std::time::{Duration, Instant};
 
     use neomacs_test_env::{CANONICAL_UMASK, PinnedCommand, bounded_temp_base};
@@ -64,8 +66,15 @@ mod unix_impl {
     const STARTUP_WAIT_TIMEOUT: Duration = Duration::from_secs(10);
 
     static IO_SEQ: AtomicU64 = AtomicU64::new(0);
+    /// Latched when the target binary cannot launch a zygote (e.g. a debug
+    /// build without a final pdump), so subsequent calls in this process fall
+    /// back directly to `Command::output()` without retrying spawn.
+    static ZYGOTE_UNAVAILABLE: AtomicBool = AtomicBool::new(false);
 
     fn zygote_enabled() -> bool {
+        if ZYGOTE_UNAVAILABLE.load(Ordering::Relaxed) {
+            return false;
+        }
         match std::env::var("NEOVM_ORACLE_ZYGOTE").ok().as_deref() {
             Some("0" | "off" | "false" | "no") => return false,
             Some("1" | "on" | "true" | "yes") => return true,
@@ -77,24 +86,77 @@ mod unix_impl {
         std::env::var_os("NEXTEST_RUN_ID").is_some_and(|v| !v.is_empty())
     }
 
-    fn socket_path_for(program: &OsStr) -> PathBuf {
+    /// Create or verify a user-private (`0700`, non-symlink, owned by `geteuid()`)
+    /// directory under `bounded_temp_base()` for zygote sockets and lockfiles.
+    ///
+    /// Keeping endpoints inside a `0700` user-owned directory prevents another
+    /// local user on a shared `/tmp` from pre-binding a predictable socket path
+    /// and capturing environment variables sent in requests.
+    fn ensure_private_socket_dir() -> Result<PathBuf, String> {
+        // SAFETY: `geteuid()` has no preconditions.
+        let euid = unsafe { libc::geteuid() };
+        let dir = bounded_temp_base().join(format!("nvz-{euid}"));
+        if let Err(err) = fs::DirBuilder::new().mode(0o700).create(&dir)
+            && err.kind() != std::io::ErrorKind::AlreadyExists
+        {
+            return Err(format!(
+                "failed to create private zygote dir {}: {err}",
+                dir.display()
+            ));
+        }
+        let meta = fs::symlink_metadata(&dir)
+            .map_err(|err| format!("failed to stat private zygote dir {}: {err}", dir.display()))?;
+        if meta.file_type().is_symlink() || !meta.is_dir() {
+            return Err(format!(
+                "refusing non-directory zygote path {}",
+                dir.display()
+            ));
+        }
+        if meta.uid() != euid || (meta.mode() & 0o077) != 0 {
+            return Err(format!(
+                "refusing insecure zygote dir {} (uid={}, mode={:o})",
+                dir.display(),
+                meta.uid(),
+                meta.mode() & 0o777
+            ));
+        }
+        Ok(dir)
+    }
+
+    fn verify_owned_socket(sock_path: &Path) -> Result<(), String> {
+        // SAFETY: `geteuid()` has no preconditions.
+        let euid = unsafe { libc::geteuid() };
+        let meta = fs::symlink_metadata(sock_path).map_err(|err| {
+            format!(
+                "failed to stat zygote socket {}: {err}",
+                sock_path.display()
+            )
+        })?;
+        if meta.file_type().is_symlink() || meta.uid() != euid {
+            return Err(format!(
+                "refusing untrusted zygote socket {} (uid={})",
+                sock_path.display(),
+                meta.uid()
+            ));
+        }
+        Ok(())
+    }
+
+    fn socket_path_for(program: &OsStr) -> Result<PathBuf, String> {
         if let Some(explicit) = std::env::var_os("NEOVM_ORACLE_ZYGOTE_SOCK")
             && !explicit.is_empty()
         {
-            return PathBuf::from(explicit);
+            return Ok(PathBuf::from(explicit));
         }
+        let dir = ensure_private_socket_dir()?;
         let run_id = std::env::var("NEXTEST_RUN_ID").unwrap_or_else(|_| "manual".to_string());
         let mut hasher = DefaultHasher::new();
         program.as_bytes().hash(&mut hasher);
         run_id.hash(&mut hasher);
-        // Include UID so multi-user /tmp directories never collide.
-        // SAFETY: getuid() has no preconditions.
-        let uid = unsafe { libc::getuid() };
-        uid.hash(&mut hasher);
         let digest = hasher.finish();
-        // Keep socket path short (< 45 bytes) so it fits well inside macOS's
+        // Keep socket path short (< 50 bytes) so it fits well inside macOS's
         // 104-byte `sun_path` limit.
-        bounded_temp_base().join(format!("nvz-{digest:016x}.sock"))
+        Ok(dir.join(format!("{digest:016x}.sock")))
     }
 
     fn lock_path_for(sock_path: &Path) -> PathBuf {
@@ -145,12 +207,18 @@ mod unix_impl {
         }
     }
 
+    fn connect_verified(sock_path: &Path) -> Result<UnixStream, String> {
+        verify_owned_socket(sock_path)?;
+        UnixStream::connect(sock_path)
+            .map_err(|e| format!("failed to connect to {}: {e}", sock_path.display()))
+    }
+
     fn connect_or_spawn_zygote(
         program: &OsStr,
         sock_path: &Path,
         sandbox: &OracleSandbox,
     ) -> Result<UnixStream, String> {
-        if let Ok(stream) = UnixStream::connect(sock_path) {
+        if let Ok(stream) = connect_verified(sock_path) {
             return Ok(stream);
         }
 
@@ -159,12 +227,14 @@ mod unix_impl {
 
         // Another parallel test process may have started the zygote while we
         // waited on the lock.
-        if let Ok(stream) = UnixStream::connect(sock_path) {
+        if let Ok(stream) = connect_verified(sock_path) {
             return Ok(stream);
         }
 
-        // Remove any stale socket file left by an earlier crashed server.
-        let _ = fs::remove_file(sock_path);
+        // Remove any stale socket file owned by us left by an earlier crashed server.
+        if verify_owned_socket(sock_path).is_ok() {
+            let _ = fs::remove_file(sock_path);
+        }
 
         let mut cmd = sandbox.pinned_command(program);
         cmd.arg("--batch-zygote-socket").arg(sock_path);
@@ -197,10 +267,14 @@ mod unix_impl {
 
         let deadline = Instant::now() + STARTUP_WAIT_TIMEOUT;
         while Instant::now() < deadline {
-            if let Ok(stream) = UnixStream::connect(sock_path) {
+            if let Ok(stream) = connect_verified(sock_path) {
                 return Ok(stream);
             }
             if let Ok(Some(status)) = child.try_wait() {
+                // Binary could not start a final-image zygote (e.g. a debug
+                // build without `neomacs.pdump`). Latch unavailability so the
+                // caller falls back transparently to `Command::output()`.
+                ZYGOTE_UNAVAILABLE.store(true, Ordering::Relaxed);
                 return Err(format!(
                     "neomacs zygote exited early with {status} before publishing {}",
                     sock_path.display()
@@ -300,24 +374,63 @@ mod unix_impl {
         decode_exit_status(&resp)
     }
 
+    /// Check whether the calling test process installed `SIG_IGN` on signals
+    /// whose inheritance is observable by child-process tests (e.g.
+    /// `div_core_process_pty_child_signal_dispositions_match_pipe`). A shared
+    /// zygote does not inherit per-test `sigaction` overrides, so those tests
+    /// fall back to direct `Command::output()`.
+    fn caller_has_ignored_inherited_signals() -> bool {
+        for sig in [
+            libc::SIGHUP,
+            libc::SIGINT,
+            libc::SIGQUIT,
+            libc::SIGPROF,
+            libc::SIGTTOU,
+        ] {
+            // SAFETY: querying current signal disposition with null `act`.
+            let mut old: libc::sigaction = unsafe { std::mem::zeroed() };
+            if unsafe { libc::sigaction(sig, std::ptr::null(), &mut old) } == 0
+                && old.sa_sigaction == libc::SIG_IGN
+            {
+                return true;
+            }
+        }
+        false
+    }
+
     pub(crate) fn try_run_neomacs_via_zygote(
         cmd: &PinnedCommand,
         sandbox: &OracleSandbox,
         rlimit_as: Option<u64>,
         timeout: Option<Duration>,
     ) -> Option<Result<Output, String>> {
-        if !zygote_enabled() || !sandbox.extra_env_is_empty() {
+        if !zygote_enabled()
+            || !sandbox.extra_env_is_empty()
+            || caller_has_ignored_inherited_signals()
+        {
             return None;
         }
 
         let program = cmd.get_program();
-        let sock_path = socket_path_for(program);
+        let sock_path = match socket_path_for(program) {
+            Ok(p) => p,
+            Err(_) => return None,
+        };
         let cwd = match cmd.get_current_dir() {
             Some(dir) => dir.to_path_buf(),
             None => match std::env::current_dir() {
                 Ok(dir) => dir,
                 Err(e) => return Some(Err(format!("failed to determine cwd: {e}"))),
             },
+        };
+
+        // Establish connection before creating per-request files. If the
+        // zygote daemon cannot start (e.g. a debug binary without a final
+        // pdump, or untrusted socket dir), return `None` so the caller falls
+        // back transparently to `cmd.output()`.
+        let mut stream = match connect_or_spawn_zygote(program, &sock_path, sandbox) {
+            Ok(s) => s,
+            Err(_) => return None,
         };
 
         let seq = IO_SEQ.fetch_add(1, Ordering::Relaxed);
@@ -330,48 +443,20 @@ mod unix_impl {
             .join(format!("zygote-{pid}-{seq}.stderr"));
         let frame = encode_request(cmd, &cwd, &stdout_path, &stderr_path, rlimit_as);
 
-        // Retry once in case an idle zygote shut down right as we connected.
-        let mut last_err = None;
-        for attempt in 0..2 {
-            let mut stream = match connect_or_spawn_zygote(program, &sock_path, sandbox) {
-                Ok(s) => s,
-                Err(e) => {
-                    last_err = Some(e);
-                    if attempt == 0 {
-                        continue;
-                    }
-                    break;
-                }
-            };
-            match round_trip(&mut stream, &frame, timeout) {
-                Ok(status) => {
-                    let stdout = fs::read(&stdout_path).unwrap_or_default();
-                    let stderr = fs::read(&stderr_path).unwrap_or_default();
-                    let _ = fs::remove_file(&stdout_path);
-                    let _ = fs::remove_file(&stderr_path);
-                    return Some(Ok(Output {
-                        status,
-                        stdout,
-                        stderr,
-                    }));
-                }
-                Err(e) => {
-                    last_err = Some(e);
-                    // Only retry if the server dropped the connection before
-                    // replying (not on explicit caller timeout).
-                    if attempt == 0 && timeout.is_none() {
-                        continue;
-                    }
-                    break;
-                }
+        // Do not retry once the request is dispatched: the server may already
+        // have forked and started side-effecting evaluation.
+        let result = round_trip(&mut stream, &frame, timeout).map(|status| {
+            let stdout = fs::read(&stdout_path).unwrap_or_default();
+            let stderr = fs::read(&stderr_path).unwrap_or_default();
+            Output {
+                status,
+                stdout,
+                stderr,
             }
-        }
-
+        });
         let _ = fs::remove_file(&stdout_path);
         let _ = fs::remove_file(&stderr_path);
-        Some(Err(last_err.unwrap_or_else(|| {
-            "unknown neomacs zygote transport failure".to_string()
-        })))
+        Some(result)
     }
 
     #[cfg(test)]
@@ -597,6 +682,53 @@ mod unix_impl {
 
             let _ = server.kill();
             let _ = server.wait();
+        }
+
+        #[test]
+        fn zygote_stalled_partial_client_does_not_block_other_requests() {
+            let program = PathBuf::from(crate::common::neomacs_binary_path());
+            let dir = neomacs_test_env::bounded_temp_dir("nvz-stl-").expect("tempdir");
+            let sock = dir.path().join("z.sock");
+
+            let mut server = spawn_private_zygote(&program, &sock, dir.path());
+
+            // Open a stalled client that sends only 4 bytes of an 8-byte header
+            // and never finishes.
+            let mut stalled = UnixStream::connect(&sock).expect("connect stalled");
+            stalled.write_all(WIRE_MAGIC).expect("write partial header");
+
+            // Another client must still complete quickly without waiting on the
+            // stalled client's 5-second read deadline.
+            let t0 = Instant::now();
+            let out = run_direct_on_socket(
+                &sock,
+                &program,
+                dir.path(),
+                dir.path(),
+                "fast",
+                &[],
+                "(princ \"FAST-OK\")",
+            );
+            assert!(out.status.success(), "fast req failed: {out:?}");
+            assert_eq!(String::from_utf8_lossy(&out.stdout), "FAST-OK");
+            assert!(
+                t0.elapsed() < Duration::from_secs(3),
+                "fast request was blocked by stalled client: {:?}",
+                t0.elapsed()
+            );
+
+            drop(stalled);
+            let _ = server.kill();
+            let _ = server.wait();
+        }
+
+        #[test]
+        fn private_socket_dir_is_owner_only_0700() {
+            let dir = ensure_private_socket_dir().expect("create private socket dir");
+            let meta = fs::symlink_metadata(&dir).expect("stat dir");
+            assert!(meta.is_dir());
+            assert!(!meta.file_type().is_symlink());
+            assert_eq!(meta.mode() & 0o077, 0);
         }
     }
 }

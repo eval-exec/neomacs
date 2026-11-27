@@ -802,6 +802,12 @@ impl PinnedCommand {
     /// Kept here so a pinned editor can be reaped as a tree by the package
     /// probes without exposing the inner `Command`.
     #[cfg(unix)]
+    pub fn process_group(&mut self, pgroup: i32) -> &mut Self {
+        use std::os::unix::process::CommandExt;
+        self.command.process_group(pgroup);
+        self
+    }
+
     /// Start the child in its own session (`setsid`) so it is detached from
     /// the caller's process group (used for shared per-run test daemons).
     #[cfg(unix)]
@@ -814,12 +820,6 @@ impl PinnedCommand {
                 Ok(())
             });
         }
-        self
-    }
-
-    pub fn process_group(&mut self, pgroup: i32) -> &mut Self {
-        use std::os::unix::process::CommandExt;
-        self.command.process_group(pgroup);
         self
     }
 

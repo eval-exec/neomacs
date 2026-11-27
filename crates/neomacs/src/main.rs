@@ -5575,19 +5575,89 @@ fn parse_batch_zygote_args(
         }
         if let Some(val) = arg.strip_prefix("--batch-zygote-socket=") {
             socket = Some(PathBuf::from(val));
-        } else if arg == "--batch-zygote-socket" {
+            continue;
+        }
+        if arg == "--batch-zygote-socket" {
             if let Some(val) = iter.next() {
                 socket = Some(PathBuf::from(val));
             }
-        } else if let Some(val) = arg.strip_prefix("--dump-file=") {
+            continue;
+        }
+        if let Some(val) = arg.strip_prefix("--dump-file=") {
             dump_file = Some(PathBuf::from(val));
-        } else if arg == "--dump-file" {
+            continue;
+        }
+        if arg == "--dump-file" {
             if let Some(val) = iter.next() {
                 dump_file = Some(PathBuf::from(val));
+            }
+            continue;
+        }
+        // Skip operands belonging to standard options (e.g. `--eval <form>`)
+        // so an operand whose text begins with `--batch-zygote-socket=` is
+        // never misinterpreted as a zygote launch flag.
+        if let Some(matched) = args::classify_standard_arg(&arg) {
+            for _ in 0..matched.operands {
+                let _ = iter.next();
             }
         }
     }
     socket.map(|s| (s, dump_file))
+}
+
+#[cfg(test)]
+mod batch_zygote_arg_tests {
+    use super::parse_batch_zygote_args;
+    use std::path::PathBuf;
+
+    #[test]
+    fn parse_batch_zygote_args_ignores_standard_option_operands() {
+        let args = [
+            "neomacs",
+            "--batch",
+            "--eval",
+            "--batch-zygote-socket=/tmp/should-not-match.sock",
+        ]
+        .into_iter()
+        .map(String::from);
+        assert_eq!(parse_batch_zygote_args(args), None);
+
+        let args_after_dashdash = [
+            "neomacs",
+            "--batch",
+            "--",
+            "--batch-zygote-socket=/tmp/should-not-match.sock",
+        ]
+        .into_iter()
+        .map(String::from);
+        assert_eq!(parse_batch_zygote_args(args_after_dashdash), None);
+    }
+
+    #[test]
+    fn parse_batch_zygote_args_accepts_separate_and_inline_forms() {
+        let inline = [
+            "neomacs",
+            "--batch-zygote-socket=/tmp/z.sock",
+            "--dump-file=/tmp/custom.pdump",
+        ]
+        .into_iter()
+        .map(String::from);
+        assert_eq!(
+            parse_batch_zygote_args(inline),
+            Some((
+                PathBuf::from("/tmp/z.sock"),
+                Some(PathBuf::from("/tmp/custom.pdump"))
+            ))
+        );
+
+        let separate = ["neomacs", "--batch-zygote-socket", "/tmp/z2.sock"]
+            .into_iter()
+            .map(String::from);
+        assert_eq!(
+            parse_batch_zygote_args(separate),
+            Some((PathBuf::from("/tmp/z2.sock"), None))
+        );
+    }
 }
 
 /// Shared TTY/batch execution tail used by forked zygote children.
