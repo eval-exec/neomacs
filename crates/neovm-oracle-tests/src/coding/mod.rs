@@ -8,6 +8,7 @@ mod eol_decode_matrix;
 mod find_coding_systems;
 mod metadata;
 mod null_detection;
+mod sjis_big5_char;
 mod string;
 mod string_advanced;
 mod system_comprehensive;

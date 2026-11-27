@@ -4443,9 +4443,7 @@ crate::emacs_core::subr::define_subrs! {
     )),
     crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "decode-big5-char",
-        NativeFn::ContextVec(|_ctx, args| {
-            neovm_text::emacs_core::charset::builtin_decode_big5_char(args)
-        }),
+        NativeFn::ContextVec(neovm_text::emacs_core::charset::builtin_decode_big5_char_in_state),
         SubrArity::new(1, Some(1)),
     )),
     crate::emacs_core::subr::world_subr!(SubrSpec::new(
@@ -4455,16 +4453,12 @@ crate::emacs_core::subr::define_subrs! {
     )),
     crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "decode-sjis-char",
-        NativeFn::ContextVec(|_ctx, args| {
-            neovm_text::emacs_core::charset::builtin_decode_sjis_char(args)
-        }),
+        NativeFn::ContextVec(neovm_text::emacs_core::charset::builtin_decode_sjis_char_in_state),
         SubrArity::new(1, Some(1)),
     )),
     crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "encode-big5-char",
-        NativeFn::ContextVec(|_ctx, args| {
-            neovm_text::emacs_core::charset::builtin_encode_big5_char(args)
-        }),
+        NativeFn::ContextVec(neovm_text::emacs_core::charset::builtin_encode_big5_char_in_state),
         SubrArity::new(1, Some(1)),
     )),
     crate::emacs_core::subr::world_subr!(SubrSpec::new(
@@ -4474,9 +4468,7 @@ crate::emacs_core::subr::define_subrs! {
     )),
     crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "encode-sjis-char",
-        NativeFn::ContextVec(|_ctx, args| {
-            neovm_text::emacs_core::charset::builtin_encode_sjis_char(args)
-        }),
+        NativeFn::ContextVec(neovm_text::emacs_core::charset::builtin_encode_sjis_char_in_state),
         SubrArity::new(1, Some(1)),
     )),
     crate::emacs_core::subr::world_subr!(SubrSpec::new(

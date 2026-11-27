@@ -3595,3 +3595,56 @@ fn runtime_bucket_name_preserves_fixed_eol_bases_with_eol_suffix() {
         "auto-generated subsidiary of an Undecided base must still share the Undecided base bucket"
     );
 }
+
+#[test]
+fn sjis_and_big5_char_unencodable_and_range_errors() {
+    crate::test_utils::init_test_tracing();
+    // Unencodable non-ASCII chars must signal a Lisp error cleanly (never crash).
+    assert!(
+        crate::emacs_core::charset::builtin_encode_sjis_char(vec![Value::fixnum(0x1f600)]).is_err()
+    );
+    assert!(
+        crate::emacs_core::charset::builtin_encode_big5_char(vec![Value::fixnum(0x1f600)]).is_err()
+    );
+    // Out-of-range SJIS/Big5 codes signal `error`.
+    assert!(
+        crate::emacs_core::charset::builtin_decode_sjis_char(vec![Value::fixnum(0x80)]).is_err()
+    );
+    assert!(
+        crate::emacs_core::charset::builtin_decode_sjis_char(vec![Value::fixnum(0xdf)]).is_err()
+    );
+    assert!(
+        crate::emacs_core::charset::builtin_decode_big5_char(vec![Value::fixnum(0xa4a1)]).is_err()
+    );
+    // Active SJIS/Big5 specs survive `from_dump`.
+    let mut manager = mgr();
+    let mut sjis = CodingSystemInfo::new(
+        "japanese-shift-jis-2004",
+        "shift-jis",
+        'S',
+        EolType::Undecided,
+    );
+    sjis.charset_list = vec![
+        intern("ascii"),
+        intern("katakana-jisx0201"),
+        intern("japanese-jisx0213.2004-1"),
+        intern("japanese-jisx0213-2"),
+    ];
+    manager.register(sjis);
+    let restored = CodingSystemManager::from_dump(
+        manager.systems,
+        manager.aliases,
+        manager.alias_order,
+        manager.priority,
+        manager.keyboard_coding,
+        manager.terminal_coding,
+    );
+    let (_, sjis_cs) = restored
+        .sjis_coding_system_spec(SymbolMode::Bare)
+        .expect("from_dump recovers japanese-shift-jis-2004");
+    assert_eq!(sjis_cs[2], intern("japanese-jisx0213.2004-1"));
+    let (_, big5_cs) = restored
+        .big5_coding_system_spec(SymbolMode::Bare)
+        .expect("from_dump recovers chinese-big5");
+    assert_eq!(big5_cs, vec![intern("ascii"), intern("big5")]);
+}

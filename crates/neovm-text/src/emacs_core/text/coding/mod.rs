@@ -1375,6 +1375,12 @@ pub struct CodingSystemManager {
     keyboard_coding: SymId,
     /// Current terminal coding system.
     terminal_coding: SymId,
+    /// Most recently defined `:coding-type 'shift-jis` coding system
+    /// (mirrors GNU `Vsjis_coding_system`, `src/coding.c:11373`).
+    sjis_coding: Option<SymId>,
+    /// Most recently defined `:coding-type 'big5` coding system
+    /// (mirrors GNU `Vbig5_coding_system`, `src/coding.c:11396`).
+    big5_coding: Option<SymId>,
     /// Memoized accessor answers (see [`CodingLookupCache`]); interior
     /// mutability because the accessors take `&self`.
     lookup_cache: std::cell::RefCell<CodingLookupCache>,
@@ -1401,6 +1407,8 @@ impl CodingSystemManager {
             // UTF-8 locales, exactly as GNU's does.
             keyboard_coding: intern("no-conversion"),
             terminal_coding: intern("undecided"),
+            sjis_coding: None,
+            big5_coding: Some(intern("chinese-big5")),
             lookup_cache: Default::default(),
         };
 
@@ -2092,6 +2100,24 @@ impl CodingSystemManager {
         &self.definition_order
     }
 
+    /// Resolve the active `Vsjis_coding_system` `(ascii_compatible, charset_list)`
+    /// for `decode-sjis-char` / `encode-sjis-char` (`src/coding.c:10546-10606`).
+    pub(crate) fn sjis_coding_system_spec(&self, mode: SymbolMode) -> Option<(bool, Vec<SymId>)> {
+        let name = resolve_sym(self.sjis_coding?);
+        let charsets = coding_system_charset_list_syms(self, name, mode)?;
+        let ascii_compat = self.is_ascii_compatible(name, mode);
+        Some((ascii_compat, charsets))
+    }
+
+    /// Resolve the active `Vbig5_coding_system` `(ascii_compatible, charset_list)`
+    /// for `decode-big5-char` / `encode-big5-char` (`src/coding.c:10627-10677`).
+    pub(crate) fn big5_coding_system_spec(&self, mode: SymbolMode) -> Option<(bool, Vec<SymId>)> {
+        let name = resolve_sym(self.big5_coding?);
+        let charsets = coding_system_charset_list_syms(self, name, mode)?;
+        let ascii_compat = self.is_ascii_compatible(name, mode);
+        Some((ascii_compat, charsets))
+    }
+
     #[doc(hidden)]
     pub fn from_dump(
         systems: impl IntoIterator<Item = (SymId, CodingSystemInfo)>,
@@ -2109,6 +2135,36 @@ impl CodingSystemManager {
             }
             system_map.insert(id, info);
         }
+        // `Vsjis_coding_system` / `Vbig5_coding_system`: GNU restores these from the dump, so reconstruct
+        // them here. The preference list names the answer GNU's loadup leaves for the shipped dump
+        // (`language/japanese.el` defines japanese-shift-jis then japanese-shift-jis-2004;
+        // `language/chinese.el` defines the only `:coding-type 'big5` system, chinese-big5). The
+        // alphabetical fallback is a stable guess for a custom dump and cannot recover "last defined".
+        let find_active = |preferred: &[&str], coding_type: &str| -> Option<SymId> {
+            for &name in preferred {
+                if let Some(id) = lookup_interned(name)
+                    && let Some(info) = system_map.get(&id)
+                    && resolve_sym(info.coding_type) == coding_type
+                {
+                    return Some(id);
+                }
+            }
+            let mut matches: Vec<SymId> = system_map
+                .iter()
+                .filter(|(_, info)| {
+                    resolve_sym(info.coding_type) == coding_type
+                        && EolType::from_suffix(resolve_sym(info.name)).is_none()
+                })
+                .map(|(id, _)| *id)
+                .collect();
+            matches.sort_by(|left, right| resolve_sym(*left).cmp(resolve_sym(*right)));
+            matches.into_iter().next()
+        };
+        let sjis_coding = find_active(
+            &["japanese-shift-jis-2004", "japanese-shift-jis"],
+            "shift-jis",
+        );
+        let big5_coding = find_active(&["chinese-big5"], "big5");
         Self {
             systems: system_map,
             definition_order,
@@ -2117,6 +2173,8 @@ impl CodingSystemManager {
             priority,
             keyboard_coding,
             terminal_coding,
+            sjis_coding,
+            big5_coding,
             lookup_cache: Default::default(),
         }
     }
@@ -4522,7 +4580,16 @@ pub fn builtin_define_coding_system_internal_with_quoting_style(
     }
 
     // Register the base coding system.
+    let base_sym = info.name;
     mgr.register(info);
+
+    // Mirror GNU `src/coding.c:11373,11396`: track the most recently defined
+    // `shift-jis` and `big5` coding systems for `decode/encode-{sjis,big5}-char`.
+    match resolve_sym(coding_type) {
+        "shift-jis" => mgr.sjis_coding = Some(base_sym),
+        "big5" => mgr.big5_coding = Some(base_sym),
+        _ => {}
+    }
 
     // Auto-create EOL variants (-unix, -dos, -mac) unless the eol_type
     // is already specific or the name already has an EOL suffix.

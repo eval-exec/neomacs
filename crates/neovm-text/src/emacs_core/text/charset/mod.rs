@@ -3864,36 +3864,279 @@ pub fn builtin_find_charset_region<H: TextHost>(h: &mut H, args: Vec<Value>) -> 
     ))
 }
 
-/// `(encode-big5-char CH)` -- encode character CH in BIG5 space.
+/// Mirrors GNU `SJIS_TO_JIS` (`src/coding.h:567-580`).
+fn sjis_to_jis_code(code: i64) -> i64 {
+    let s1 = code >> 8;
+    let s2 = code & 0xFF;
+    let (j1, j2) = if s2 >= 0x9F {
+        (s1 * 2 - if s1 >= 0xE0 { 0x160 } else { 0xE0 }, s2 - 0x7E)
+    } else {
+        (
+            s1 * 2 - if s1 >= 0xE0 { 0x161 } else { 0xE1 },
+            s2 - if s2 >= 0x7F { 0x20 } else { 0x1F },
+        )
+    };
+    (j1 << 8) | j2
+}
+
+/// Mirrors GNU `JIS_TO_SJIS` (`src/coding.h:608-620`).
+fn jis_to_sjis_code(code: i64) -> i64 {
+    let j1 = code >> 8;
+    let j2 = code & 0xFF;
+    let (s1, s2) = if (j1 & 1) != 0 {
+        (
+            j1 / 2 + if j1 < 0x5F { 0x71 } else { 0xB1 },
+            j2 + if j2 >= 0x60 { 0x20 } else { 0x1F },
+        )
+    } else {
+        (j1 / 2 + if j1 < 0x5F { 0x70 } else { 0xB0 }, j2 + 0x7E)
+    };
+    (s1 << 8) | s2
+}
+
+fn format_unencodable_char(ch: i64) -> String {
+    char::from_u32(ch as u32)
+        .map(|c| c.to_string())
+        .unwrap_or_else(|| format!("\\x{ch:x}"))
+}
+
+fn decode_sjis_char_with_spec(code: i64, ascii_compat: bool, charsets: &[SymId]) -> EvalResult {
+    if code <= 0x7F && ascii_compat {
+        return Ok(Value::fixnum(code));
+    }
+    if charsets.len() < 3 {
+        return Err(signal(
+            "error",
+            vec![Value::string(format!("Invalid code: {code}"))],
+        ));
+    }
+    let (charset, charset_code) = if code <= 0x7F {
+        (charsets[0], code)
+    } else if (0xA0..0xDF).contains(&code) {
+        (charsets[1], code - 0x80)
+    } else {
+        let c1 = code >> 8;
+        let c2 = code & 0xFF;
+        let valid_lead = (0x81..=0x9F).contains(&c1) || (0xE0..=0xEF).contains(&c1);
+        let valid_trail = (0x40..=0xFC).contains(&c2) && c2 != 0x7F;
+        if !valid_lead || !valid_trail {
+            return Err(signal(
+                "error",
+                vec![Value::string(format!("Invalid code: {code}"))],
+            ));
+        }
+        (charsets[2], sjis_to_jis_code(code))
+    };
+    match charset_decode_char(charset, charset_code) {
+        Some(decoded) => Ok(Value::fixnum(decoded)),
+        None => Err(signal(
+            "error",
+            vec![Value::string(format!("Invalid code: {code}"))],
+        )),
+    }
+}
+
+fn encode_sjis_char_with_spec(ch: i64, ascii_compat: bool, charsets: &[SymId]) -> EvalResult {
+    if ch <= 0x7F && ascii_compat {
+        return Ok(Value::fixnum(ch));
+    }
+    for &charset in charsets {
+        if let Some(code) = charset_encode_char(charset, ch) {
+            return Ok(Value::fixnum(jis_to_sjis_code(code)));
+        }
+    }
+    Err(signal(
+        "error",
+        vec![Value::string(format!(
+            "Can't encode by shift_jis encoding: {}",
+            format_unencodable_char(ch)
+        ))],
+    ))
+}
+
+fn decode_big5_char_with_spec(code: i64, ascii_compat: bool, charsets: &[SymId]) -> EvalResult {
+    if code <= 0x7F && ascii_compat {
+        return Ok(Value::fixnum(code));
+    }
+    if charsets.len() < 2 {
+        return Err(signal(
+            "error",
+            vec![Value::string(format!("Invalid code: {code}"))],
+        ));
+    }
+    let (charset, charset_code) = if code <= 0x7F {
+        (charsets[0], code)
+    } else {
+        let b1 = code >> 8;
+        // Mirrors GNU `src/coding.c:10646`: `int b2 = ch & 0x7F;`.
+        let b2 = code & 0x7F;
+        if !(0xA1..=0xFE).contains(&b1) || !(0x40..=0x7E).contains(&b2) {
+            return Err(signal(
+                "error",
+                vec![Value::string(format!("Invalid code: {code}"))],
+            ));
+        }
+        (charsets[1], code)
+    };
+    match charset_decode_char(charset, charset_code) {
+        Some(decoded) => Ok(Value::fixnum(decoded)),
+        None => Err(signal(
+            "error",
+            vec![Value::string(format!("Invalid code: {code}"))],
+        )),
+    }
+}
+
+fn encode_big5_char_with_spec(ch: i64, ascii_compat: bool, charsets: &[SymId]) -> EvalResult {
+    if ch <= 0x7F && ascii_compat {
+        return Ok(Value::fixnum(ch));
+    }
+    for &charset in charsets {
+        if let Some(code) = charset_encode_char(charset, ch) {
+            return Ok(Value::fixnum(code));
+        }
+    }
+    Err(signal(
+        "error",
+        vec![Value::string(format!(
+            "Can't encode by Big5 encoding: {}",
+            format_unencodable_char(ch)
+        ))],
+    ))
+}
+
+/// `(encode-big5-char CH)` -- encode character CH in BIG5 space using the
+/// active `Vbig5_coding_system` (`src/coding.c:10659-10683`).
+#[doc(hidden)]
+pub fn builtin_encode_big5_char_in_state<H: TextHost>(
+    eval: &mut H,
+    args: Vec<Value>,
+) -> EvalResult {
+    expect_args("encode-big5-char", &args, 1)?;
+    let ch = encode_char_input(&args[0])?;
+    let (ascii_compat, charsets) = eval
+        .coding_systems()
+        .big5_coding_system_spec(eval.symbol_mode())
+        .ok_or_else(|| {
+            signal(
+                LispCondition::WrongTypeArgument,
+                vec![Value::symbol("coding-system-p"), Value::NIL],
+            )
+        })?;
+    encode_big5_char_with_spec(ch, ascii_compat, &charsets)
+}
+
+/// `(decode-big5-char CODE)` -- decode BIG5 code to Emacs character code
+/// using the active `Vbig5_coding_system` (`src/coding.c:10615-10657`).
+#[doc(hidden)]
+pub fn builtin_decode_big5_char_in_state<H: TextHost>(
+    eval: &mut H,
+    args: Vec<Value>,
+) -> EvalResult {
+    expect_args("decode-big5-char", &args, 1)?;
+    let code = expect_wholenump(&args[0])?;
+    let (ascii_compat, charsets) = eval
+        .coding_systems()
+        .big5_coding_system_spec(eval.symbol_mode())
+        .ok_or_else(|| {
+            signal(
+                LispCondition::WrongTypeArgument,
+                vec![Value::symbol("coding-system-p"), Value::NIL],
+            )
+        })?;
+    decode_big5_char_with_spec(code, ascii_compat, &charsets)
+}
+
+/// `(encode-sjis-char CH)` -- encode character CH in Shift-JIS space using
+/// the active `Vsjis_coding_system` (`src/coding.c:10587-10613`).
+#[doc(hidden)]
+pub fn builtin_encode_sjis_char_in_state<H: TextHost>(
+    eval: &mut H,
+    args: Vec<Value>,
+) -> EvalResult {
+    expect_args("encode-sjis-char", &args, 1)?;
+    let ch = encode_char_input(&args[0])?;
+    let (ascii_compat, charsets) = eval
+        .coding_systems()
+        .sjis_coding_system_spec(eval.symbol_mode())
+        .ok_or_else(|| {
+            signal(
+                LispCondition::WrongTypeArgument,
+                vec![Value::symbol("coding-system-p"), Value::NIL],
+            )
+        })?;
+    encode_sjis_char_with_spec(ch, ascii_compat, &charsets)
+}
+
+/// `(decode-sjis-char CODE)` -- decode Shift-JIS code to Emacs character code
+/// using the active `Vsjis_coding_system` (`src/coding.c:10534-10584`).
+#[doc(hidden)]
+pub fn builtin_decode_sjis_char_in_state<H: TextHost>(
+    eval: &mut H,
+    args: Vec<Value>,
+) -> EvalResult {
+    expect_args("decode-sjis-char", &args, 1)?;
+    let code = expect_wholenump(&args[0])?;
+    let (ascii_compat, charsets) = eval
+        .coding_systems()
+        .sjis_coding_system_spec(eval.symbol_mode())
+        .ok_or_else(|| {
+            signal(
+                LispCondition::WrongTypeArgument,
+                vec![Value::symbol("coding-system-p"), Value::NIL],
+            )
+        })?;
+    decode_sjis_char_with_spec(code, ascii_compat, &charsets)
+}
+
+/// `(encode-big5-char CH)` -- standalone helper using default `(ascii big5)`.
 #[doc(hidden)]
 pub fn builtin_encode_big5_char(args: Vec<Value>) -> EvalResult {
     expect_args("encode-big5-char", &args, 1)?;
     let ch = encode_char_input(&args[0])?;
-    Ok(Value::fixnum(ch))
+    encode_big5_char_with_spec(ch, true, &[intern("ascii"), intern("big5")])
 }
 
-/// `(decode-big5-char CODE)` -- decode BIG5 code to Emacs character code.
+/// `(decode-big5-char CODE)` -- standalone helper using default `(ascii big5)`.
 #[doc(hidden)]
 pub fn builtin_decode_big5_char(args: Vec<Value>) -> EvalResult {
     expect_args("decode-big5-char", &args, 1)?;
     let code = expect_wholenump(&args[0])?;
-    Ok(Value::fixnum(code))
+    decode_big5_char_with_spec(code, true, &[intern("ascii"), intern("big5")])
 }
 
-/// `(encode-sjis-char CH)` -- encode character CH in Shift-JIS space.
+/// `(encode-sjis-char CH)` -- standalone helper using default
+/// `(ascii katakana-jisx0201 japanese-jisx0208)`.
 #[doc(hidden)]
 pub fn builtin_encode_sjis_char(args: Vec<Value>) -> EvalResult {
     expect_args("encode-sjis-char", &args, 1)?;
     let ch = encode_char_input(&args[0])?;
-    Ok(Value::fixnum(ch))
+    encode_sjis_char_with_spec(
+        ch,
+        true,
+        &[
+            intern("ascii"),
+            intern("katakana-jisx0201"),
+            intern("japanese-jisx0208"),
+        ],
+    )
 }
 
-/// `(decode-sjis-char CODE)` -- decode Shift-JIS code to Emacs character code.
+/// `(decode-sjis-char CODE)` -- standalone helper using default
+/// `(ascii katakana-jisx0201 japanese-jisx0208)`.
 #[doc(hidden)]
 pub fn builtin_decode_sjis_char(args: Vec<Value>) -> EvalResult {
     expect_args("decode-sjis-char", &args, 1)?;
     let code = expect_wholenump(&args[0])?;
-    Ok(Value::fixnum(code))
+    decode_sjis_char_with_spec(
+        code,
+        true,
+        &[
+            intern("ascii"),
+            intern("katakana-jisx0201"),
+            intern("japanese-jisx0208"),
+        ],
+    )
 }
 
 /// `(get-unused-iso-final-char DIMENSION CHARS)` -- the first private-use
