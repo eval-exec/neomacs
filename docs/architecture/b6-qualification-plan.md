@@ -285,6 +285,15 @@ NEOVM_BINARY_PATH="<worktree>/target/release/neomacs" \
   cargo nextest run -p neovm-oracle-tests -E 'test(oracle_default_threads)' --no-fail-fast
 ```
 
+**Launch the run from the tree the binary was built in.** `ensure_fresh_build_attested`
+(`common.rs:472`) hashes `<NEXTEST_WORKSPACE_ROOT>/lisp` — nextest sets that to the workspace it is
+invoked in — and compares it with the stamp recorded for `$NEOVM_BINARY_PATH`. `NEOMACS_RUNTIME_ROOT`
+is not consulted by that check. A run started from a different worktree fails all rows at harness
+setup (`the Lisp tree … does not match the manifest recorded by the fresh-build stamp`), which is
+neither a b6 red nor a b6 green. For the scratch flip run (§8 Q3) this means the b6 test files are
+copied into the flip tree and nextest is invoked there; `NEOVM_SKIP_FRESH_BUILD_STAMP=1` is never
+used, because it would brand the run unattested.
+
 Requirements on the record:
 - the profile and feature lines from `check-gnu-oracle.sh`;
 - the exact binary provenance (source SHA of the b6 branch tip, `fresh-build --release` stamp);
