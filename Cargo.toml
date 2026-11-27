@@ -419,7 +419,12 @@ strip = "none"
 
 # This test-only crate is a 52 MiB corpus compiled into one test harness.
 # Keep production dependencies in release mode without optimizing test bodies.
+# The test profile inherits opt-level 2 from dev for every workspace crate, so
+# it needs the same exemption there.
 [profile.release.package.neovm-oracle-tests]
+opt-level = 0
+
+[profile.test.package.neovm-oracle-tests]
 opt-level = 0
 
 # Keep workspace crates fast to compile and easy to debug, while building their
@@ -431,7 +436,21 @@ opt-level = 0
 # test binary -- relinked into each of the crate's integration targets.
 # `line-tables-only` keeps file:line in backtraces (the test suites read them)
 # and `unpacked` leaves the remainder beside the binary instead of inside it.
+#
+# opt-level 2 for every workspace member.  The base profile is the only knob
+# that reaches all of them: `[profile.dev.package."*"]` never matches a
+# workspace member and Cargo has no wildcard for members.  The test profile
+# inherits this value, which is what the interpreter-heavy test families need:
+# at opt-level 0 the mapc resumed-chain oracle's falsify body took 24.0 s
+# against 2.58 s (measured on the macmini, test profile), and the macOS CI job
+# crossed nextest's 600 s per-test timeout at 470f484c21.  Carrying the value
+# here instead of in per-crate `[profile.test.package.*]` overrides means that
+# moving a module, or splitting a crate out of neovm-core, cannot silently
+# change its codegen.  Debug assertions and overflow checks stay on for
+# members; the two overrides below turn them off for dependencies and for
+# build scripts only.
 [profile.dev]
+opt-level = 2
 debug = "line-tables-only"
 split-debuginfo = "unpacked"
 
@@ -455,37 +474,6 @@ debug-assertions = false
 overflow-checks = false
 codegen-units = 16
 incremental = false
-
-# Optimize interpreter-heavy tests without changing ordinary editor debug builds.
-[profile.test.package.neovm-core]
-opt-level = 2
-
-# The lower value layer carries the modules core's test profile compiles at
-# opt-level 2 (tagged heap, symbols, values).  Keep its test-profile units at
-# the same setting so moving a module does not silently change its codegen.
-[profile.test.package.neovm-value]
-opt-level = 2
-
-# The split carved the rest of that runtime out of neovm-core; each moved
-# crate must keep the same test-profile codegen it had inside core.  Without
-# these overrides the interpreter-heavy test families run at opt-level 0 in
-# every test build: measured on the macmini (test profile), the mapc
-# resumed-chain oracle's falsify body went 2.58 s -> 24.0 s, and the macOS CI
-# job crossed nextest's 600 s per-test timeout at 470f484c21.
-[profile.test.package.neovm-eval]
-opt-level = 2
-
-[profile.test.package.neovm-text]
-opt-level = 2
-
-[profile.test.package.neovm-edit]
-opt-level = 2
-
-[profile.test.package.neovm-system]
-opt-level = 2
-
-[profile.test.package.neovm-display]
-opt-level = 2
 
 # Optimized build driven by a PGO profile. Same codegen settings as release,
 # but cargo gives it its own target/release-pgo directory, so a PGO build never
