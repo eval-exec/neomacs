@@ -13,14 +13,23 @@ set -euo pipefail
 manifest=""
 env_var="NEOMACS_PERF_V0021_BASELINE_EDITOR"
 
+require_opt_arg() {
+  if [ "$2" -lt 2 ]; then
+    echo "ERROR: option $1 requires a value" >&2
+    exit 2
+  fi
+}
+
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --manifest)
-      manifest="${2:-}"
+      require_opt_arg "$1" "$#"
+      manifest="$2"
       shift 2
       ;;
     --env-var)
-      env_var="${2:-}"
+      require_opt_arg "$1" "$#"
+      env_var="$2"
       shift 2
       ;;
     --)
@@ -103,6 +112,16 @@ check_hex64("release_asset", release_asset_spec.get("sha256"))
 check_hex64("binary", binary_spec.get("sha256"))
 check_hex64("pdump", pdump_spec.get("sha256"))
 
+for opt_field in ("build_profile", "rustc_version", "pgo_profile", "codegen_settings"):
+    if opt_field in data and data[opt_field] is not None:
+        val = data[opt_field]
+        if not isinstance(val, str) or not val.strip():
+            print(
+                f"ERROR: {opt_field} must be a non-empty string when present in {manifest_path}: {val!r}",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+
 rel_pdump = pdump_spec.get("relative_to_binary")
 if not isinstance(rel_pdump, str) or not rel_pdump or os.path.isabs(rel_pdump):
     print(
@@ -144,8 +163,17 @@ if pdump_size != exp_pdump_size or pdump_sha != exp_pdump_sha:
     )
     sys.exit(1)
 
+extra = []
+if data.get("build_profile"):
+    extra.append(f"profile={data['build_profile']}")
+if data.get("pgo_profile"):
+    extra.append(f"pgo={data['pgo_profile']}")
+if data.get("rustc_version"):
+    extra.append(f"rustc={data['rustc_version']!r}")
+extra_str = (" " + " ".join(extra)) if extra else ""
+
 print(
-    f"baseline verified: version={data.get('version')} commit={data.get('git_commit')} "
+    f"baseline verified: version={data.get('version')} commit={data.get('git_commit')}{extra_str} "
     f"binary={bin_sha} ({bin_size} B) pdump={pdump_sha} ({pdump_size} B)"
 )
 PY

@@ -527,6 +527,73 @@ sample. `SuiteId::Standard` uses calibration-derived drift ratchets (`0.5%` on
 tight rows, `4.0%` on `magit-status-heavy`) and leaves environment forwarding
 untouched.
 
+### Re-pinning the `org-editing-guard` baseline and REQUIRED-check contract
+
+The official GitHub Release `v0.0.21` tarball pinned in
+`.github/perf-baselines/v0.0.21.json` was compiled with `--profile release-pgo`,
+whereas `.github/workflows/neomacs-perf.yml` builds candidates with plain
+`cargo xtask fresh-build --release` (non-PGO). Measured on `Matrix`
+(`Intel i9-14900K`, `N = 9`, `CounterScope::EditLoop`, `provenance = local-UNTRUSTED`),
+the pure PGO-vs-non-PGO codegen offset on identical source is `+12.76%`
+(`org-editing`) and `+12.58%` (`org-editing-heavy`) — more than 12× the `+1.0%`
+budget. `org-editing-guard` therefore remains **INFORMATIONAL** until the
+controlled `[self-hosted, linux, x64, neomacs-perf]` runner pins a same-profile
+plain `--release` baseline using `scripts/ci/build-perf-baseline.sh`:
+
+```sh
+scripts/ci/build-perf-baseline.sh \
+  --ref 7b3fa9d698ba41fdbabccd9bd3e547a0afa7164a \
+  --version v0.0.21-release \
+  --out-dir /opt/neomacs-perf/v0.0.21-release \
+  --manifest .github/perf-baselines/v0.0.21.json
+```
+
+The builder clones the pinned commit cleanly (`git clone --shared`), runs
+`cargo xtask fresh-build --release` inside a logged allowlisted build
+environment (`pgo_profile = "none"`, `opt-level = 3`, `lto = true`,
+`codegen-units = 1`, `debug = false`, `strip = "none"`, Linux `features = video`,
+`rustflags = [-Cllvm-args=-align-all-functions=6, -Clink-arg=-Wl,--build-id, -Clink-arg=-Wl,-z,max-page-size=0x200000, -Clink-arg=-Wl,-z,common-page-size=0x200000]`),
+records `build_profile`, `rustc_version`, `pgo_profile`, `codegen_settings`,
+and exact binary/pdump SHA-256 digests in the manifest, verifies them with
+`scripts/ci/verify-perf-baseline.sh`, and installs the manifest atomically
+(`0644`).
+
+**Prerequisites to flip `org-editing-guard` from INFORMATIONAL to REQUIRED:**
+
+1. Provision and register a dedicated idle `[self-hosted, linux, x64, neomacs-perf]`
+   Linux runner with `perf`, `perf_event_paranoid <= 1`, isolated CPU pinned to
+   `performance` governor, and `loadavg_1m < 2.0` (`provenance = calibrated`).
+2. Run `scripts/ci/build-perf-baseline.sh` on that runner to install
+   `/opt/neomacs-perf/v0.0.21-release`, commit the runner-pinned
+   `.github/perf-baselines/v0.0.21.json`, and configure repository variables
+   `NEOMACS_PERF_V0021_BASELINE_EDITOR`, `NEOMACS_PERF_CPU`,
+   `NEOMACS_PERF_GOVERNOR=performance`, and `NEOMACS_PERF_SAMPLES=9`.
+3. Observe at least two consecutive green `provenance = calibrated` runs on
+   `main` confirming positive headroom below `+1.0%` on both rows (never widen
+   `+1.0%` to fit a measurement).
+4. Add `pull_request` trigger coverage for `org-editing-guard` in
+   `.github/workflows/neomacs-perf.yml` and enable the check as required in
+   GitHub branch protection.
+
+**False-positive triage and escape hatch (once REQUIRED):**
+
+1. Re-run the failed job once (`gh run rerun --failed`) and inspect the uploaded
+   `suite.json` and child `comparison.json` artifacts (`Instructions`,
+   `CpuCycles`, `PerOperationWallTime`, baseline median stability, `loadavg`,
+   `provenance`). If `verdict = rejected` (infrastructure/governor/perf fault)
+   or the baseline arm shifted out of band, repair the runner and re-run —
+   never widen `+1.0%`.
+2. If a Rust toolchain upgrade shifts baseline-vs-candidate codegen, re-run
+   `scripts/ci/build-perf-baseline.sh` on the controlled runner with the new
+   `rustc` and commit the updated manifest in the toolchain-bump PR.
+3. For a verified intentional instruction-for-cycle trade-off (fewer cycles and
+   wall time at `> +1.0%` instructions) or an emergency security/correctness
+   hotfix, **only a repository maintainer / release lead** may merge via
+   GitHub branch-protection admin override (`gh pr merge --admin`), recording
+   the `suite.json` artifact URL, cycle/wall-time evidence, and a follow-up
+   re-baseline issue. Never add a workflow skip input, environment-variable
+   bypass, or ad hoc threshold bump.
+
 ## `rust-lsp-typing`
 
 This workload reproduces the heavy Rust edit path that originally exposed

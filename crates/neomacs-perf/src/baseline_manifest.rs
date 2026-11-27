@@ -51,6 +51,18 @@ pub struct BaselineManifest {
     pub version: String,
     pub git_commit: String,
     pub target: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub build_profile: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rustc_version: Option<String>,
+    /// PGO profile path or `"none"` when built with plain `--release` to match
+    /// CI candidate codegen.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pgo_profile: Option<String>,
+    /// Exact build command, profile flags, and target rustflags needed to
+    /// reproduce the baseline binary.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub codegen_settings: Option<String>,
     pub release_asset: BaselineAssetEntry,
     pub binary: BaselineBinaryEntry,
     pub pdump: BaselinePdumpEntry,
@@ -65,6 +77,14 @@ pub struct VerifiedBaselineManifest {
     pub manifest_sha256: String,
     pub version: String,
     pub git_commit: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub build_profile: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rustc_version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pgo_profile: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub codegen_settings: Option<String>,
     pub binary_path: PathBuf,
     pub binary_sha256: String,
     pub binary_size_bytes: u64,
@@ -96,6 +116,14 @@ impl BaselineManifest {
         validate_hex_sha256(path, "release_asset.sha256", &manifest.release_asset.sha256)?;
         validate_hex_sha256(path, "binary.sha256", &manifest.binary.sha256)?;
         validate_hex_sha256(path, "pdump.sha256", &manifest.pdump.sha256)?;
+        validate_optional_non_empty(path, "build_profile", manifest.build_profile.as_deref())?;
+        validate_optional_non_empty(path, "rustc_version", manifest.rustc_version.as_deref())?;
+        validate_optional_non_empty(path, "pgo_profile", manifest.pgo_profile.as_deref())?;
+        validate_optional_non_empty(
+            path,
+            "codegen_settings",
+            manifest.codegen_settings.as_deref(),
+        )?;
         if manifest.pdump.relative_to_binary.as_os_str().is_empty()
             || manifest.pdump.relative_to_binary.is_absolute()
         {
@@ -185,6 +213,10 @@ impl BaselineManifest {
             manifest_sha256,
             version: self.version.clone(),
             git_commit: self.git_commit.clone(),
+            build_profile: self.build_profile.clone(),
+            rustc_version: self.rustc_version.clone(),
+            pgo_profile: self.pgo_profile.clone(),
+            codegen_settings: self.codegen_settings.clone(),
             binary_path,
             binary_sha256,
             binary_size_bytes,
@@ -193,6 +225,22 @@ impl BaselineManifest {
             pdump_size_bytes,
         })
     }
+}
+
+fn validate_optional_non_empty(
+    path: &Path,
+    field: &str,
+    value: Option<&str>,
+) -> Result<(), PerfError> {
+    if let Some(value) = value
+        && value.trim().is_empty()
+    {
+        return Err(PerfError::InvalidBaselineManifest {
+            path: path.to_path_buf(),
+            message: format!("{field} must be a non-empty string when present"),
+        });
+    }
+    Ok(())
 }
 
 fn validate_hex_sha256(path: &Path, field: &str, digest: &str) -> Result<(), PerfError> {
