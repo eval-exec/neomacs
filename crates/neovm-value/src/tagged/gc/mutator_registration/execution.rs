@@ -99,6 +99,13 @@ impl<K: EraKeeper> EraCoreExecutionExt for EraCore<'_, K> {
 }
 
 impl<'era> ParallelExecutionAdmission<'era> {
+    /// The heap identity this execution admission is bound to.
+    #[inline]
+    #[doc(hidden)]
+    pub fn heap_identity(&self) -> super::HeapIdentity {
+        self.registry.heap
+    }
+
     /// Validate exact registry/owner/home identity before entering a bounded
     /// activation. Refusal neither enters the body nor changes its result.
     #[doc(hidden)]

@@ -41,6 +41,14 @@ pub(super) struct NativeCompiledCode {
 }
 
 impl NativeCompiledCode {
+    /// Copy the finalized immutable C-ABI entry pointer for execution inside
+    /// `NmjitCodeRegistry` while `ExecutableMemory` remains owned by the
+    /// registry until stop-bound `EraGraceReceipt` reclamation.
+    #[inline]
+    pub(super) fn raw_entry(&self) -> ParallelEntry {
+        self.entry
+    }
+
     /// Called only by the parent while it borrows the real pre-era witness.
     /// This private child has no World or shared compiler/cache side effect.
     #[doc(hidden)]

@@ -121,7 +121,9 @@ impl<'heap> Gen1Admission<'heap> {
         self.collector.validate_source_observation_export()
     }
 
-    pub(in crate::tagged::gc) fn heap_identity(&self) -> super::HeapIdentity {
+    #[inline]
+    #[doc(hidden)]
+    pub fn heap_identity(&self) -> super::HeapIdentity {
         self.collector.heap_identity()
     }
 

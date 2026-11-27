@@ -106,8 +106,12 @@ type ParallelEntry = unsafe extern "C" fn(
 mod cell;
 mod hof;
 mod identity;
+pub(crate) mod registry;
 use hof::HofInput;
 pub(crate) use hof::ParallelCompiledHofCode;
+pub(crate) use registry::{
+    NmjitCodeRegistry, NmjitGraceReclaim, NmjitLeafId, NmjitRegistryError, NmjitRegistryStats,
+};
 
 #[cfg(feature = "jit")]
 enum EntryPlan {
@@ -126,6 +130,12 @@ pub(crate) struct ParallelCompiledCode {
     unavailable: std::convert::Infallible,
 }
 impl ParallelCompiledCode {
+    #[cfg(feature = "jit")]
+    #[inline]
+    pub(super) fn raw_entry(&self) -> ParallelEntry {
+        self.native.raw_entry()
+    }
+
     #[doc(hidden)]
     pub fn compile(
         _quiescent: &Gen1Admission<'_>,
@@ -174,6 +184,18 @@ pub(crate) struct ParallelCompiledCellCode {
     unavailable: std::convert::Infallible,
 }
 impl ParallelCompiledCellCode {
+    #[cfg(feature = "jit")]
+    #[inline]
+    pub(super) fn raw_entry(&self) -> ParallelEntry {
+        self.native.raw_entry()
+    }
+
+    #[cfg(feature = "jit")]
+    #[inline]
+    pub(super) fn read_kind(&self) -> CellRead {
+        self.read
+    }
+
     #[doc(hidden)]
     pub fn compile(
         _quiescent: &Gen1Admission<'_>,
@@ -327,3 +349,7 @@ mod owner_handoff_tests;
 #[cfg(test)]
 #[path = "parallel/tests/publication_test.rs"]
 mod publication_tests;
+
+#[cfg(test)]
+#[path = "parallel/tests/registry_test.rs"]
+mod registry_tests;

@@ -60,5 +60,8 @@ mod poll_tests;
 #[path = "tests/region_test.rs"]
 mod region_tests;
 #[cfg(test)]
+#[path = "tests/tier1_leaf_test.rs"]
+mod tier1_leaf_tests;
+#[cfg(test)]
 #[path = "tests/vm_test.rs"]
 mod vm_tests;

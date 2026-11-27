@@ -625,6 +625,63 @@ pub(crate) trait VmCode {
         env: &CallEnv,
         arena: &FrameArena,
     ) -> CallClass;
+
+    /// Optional E7-P.1 Tier-1 bounded straight-line leaf `nmjit` entry hook.
+    ///
+    /// Invoked in [`VmExec::step_call`] ONLY after `vm_call` poll succeeded and
+    /// `classify_call` returned `CallClass::OwnerLocal`, so arity,
+    /// `debug-on-next-call`, `compiler_overrides`, `function_epoch`, depth
+    /// limit, and stack budget have already been verified.
+    ///
+    /// Returning `None` (no compiled leaf, backend unavailable, retired entry,
+    /// non-immediate argument, or contention) seamlessly falls back to the
+    /// owner-local bytecode child frame with identical observable semantics.
+    fn try_tier1_leaf(&self, _code: Value, _args: &[Value]) -> Option<Value> {
+        None
+    }
+}
+
+/// Pure classifier for E7-P.1 Tier-1 straight-line scalar leaf bytecode
+/// functions eligible for `NmjitCodeRegistry::compile_scalar`.
+///
+/// Recognizes only closed, side-effect-free, fixed-arity stack-param bytecode
+/// functions with zero calls, zero allocations, zero branches, and zero loops:
+/// - `[Op::Nil, Op::Return]` -> `ScalarProgram::Constant(ImmediateResult::Nil)`
+/// - `[Op::True, Op::Return]` -> `ScalarProgram::Constant(ImmediateResult::True)`
+/// - `[Op::Constant(idx), Op::Return]` with immediate constant -> `ScalarProgram::Constant(imm)`
+/// - 1-arg `[Op::Return]` or `[Op::StackRef(0), Op::Return]` -> `ScalarProgram::Argument`
+pub(crate) fn classify_tier1_scalar_leaf(
+    bc: &ByteCodeFunction,
+) -> Option<crate::emacs_core::jit::parallel::ScalarProgram> {
+    use crate::emacs_core::jit::parallel::ScalarProgram;
+    use neovm_value::tagged::gc::ImmediateResult;
+
+    if bc.env().is_some() {
+        return None;
+    }
+    let shape = bc.params().stack_shape()?;
+    let params_on_stack = match bc.params() {
+        FunctionParams::Stack(_) => true,
+        FunctionParams::Dynamic(_) => false,
+        FunctionParams::Named(_) => bc.lexical() || bc.arglist().is_fixnum(),
+    };
+    if !params_on_stack || shape.rest().is_present() || shape.required() != shape.nonrest() {
+        return None;
+    }
+    let ops = ready_bytecode_ops(bc)?;
+    match ops {
+        [Op::Nil, Op::Return] => Some(ScalarProgram::Constant(ImmediateResult::Nil)),
+        [Op::True, Op::Return] => Some(ScalarProgram::Constant(ImmediateResult::True)),
+        [Op::Constant(idx), Op::Return] => {
+            let val = *bc.constants().get(*idx as usize)?;
+            let imm = ImmediateResult::from_word(val.bits()).ok()?;
+            Some(ScalarProgram::Constant(imm))
+        }
+        [Op::Return] | [Op::StackRef(0), Op::Return] if shape.required() == 1 => {
+            Some(ScalarProgram::Argument)
+        }
+        _ => None,
+    }
 }
 
 /// Read-only instruction slice for an admitted [`ByteCodeFunction`] (V7).
@@ -853,6 +910,9 @@ pub(crate) struct VmExec<'era, E, S, A, V, P> {
     call_escapes: Vec<CallEscape>,
     /// Maximum `FrameArena::depth()` observed during the most recent run (V7).
     max_depth: u32,
+    /// Count of calls served directly by Tier-1 bounded leaf `nmjit` entries
+    /// during the most recent run (E7-P.1).
+    tier1_leaf_hits: u64,
     /// The Plain keys this stepper admitted, one per symbol (V2; N1 picks
     /// the production structure). A key survives runs; its validity is
     /// checked at use against the port's generation.
@@ -921,6 +981,7 @@ where
             call_env,
             call_escapes: Vec::new(),
             max_depth: 0,
+            tier1_leaf_hits: 0,
             keys: Vec::new(),
             era,
         }
@@ -941,6 +1002,10 @@ where
 
     pub(crate) fn max_depth(&self) -> u32 {
         self.max_depth
+    }
+
+    pub(crate) fn tier1_leaf_hits(&self) -> u64 {
+        self.tier1_leaf_hits
     }
 
     pub(crate) fn escape_handler(&self) -> &E {
@@ -1065,6 +1130,7 @@ where
         }
         self.call_escapes.clear();
         self.max_depth = 0;
+        self.tier1_leaf_hits = 0;
         self.arena.reset_bc_position();
         let entry_exit_flags = std::mem::take(&mut self.entry_exit_flags);
         let frame = VmFrame::new(
@@ -1970,6 +2036,19 @@ where
                     );
                 }
             };
+
+        // E7-P.1: after `vm_call` poll and `classify_call` admitted `OwnerLocal`,
+        // try the optional bounded Tier-1 straight-line leaf `nmjit` entry.
+        // Any miss, retirement, non-immediate argument, or backend absence
+        // returns `None` and falls through seamlessly to the child frame.
+        let leaf_result = {
+            let segment = self.arena.operand_segment(operands);
+            code.try_tier1_leaf(callee_code, &segment[func_slot + 1..])
+        };
+        if let Some(result) = leaf_result {
+            self.tier1_leaf_hits = self.tier1_leaf_hits.saturating_add(1);
+            return Self::stop(self.store(frame, branch_pc, func_slot, &[result]));
+        }
 
         let args_src_start = operands.base() + func_slot + 1;
         let child_base = self.arena.operand_len();
