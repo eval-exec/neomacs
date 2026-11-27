@@ -145,9 +145,11 @@ const EXCEPTIONS: &[Exception] = &[
 
 /// A reviewed match that is fixture source text rather than a spawn.
 ///
-/// The extra `line_contains` marker is required so executable code in the same
-/// file cannot ride the exception: the oracle guard's fixture arms are raw
-/// string literals fed to its own detector, never constructed commands.
+/// The extra `line_contains` marker names the fixture arm that owns the match
+/// (its case label plus the raw-string opener).  A bare raw string elsewhere on
+/// the line is not enough: `Command::new("emacs").arg(r#"--batch"#)` is still a
+/// real spawn, while the oracle guard's arms are source samples fed to its own
+/// detector and never constructed commands.
 struct FixtureException {
     path_suffix: &'static str,
     argument: &'static str,
@@ -155,12 +157,23 @@ struct FixtureException {
     reason: &'static str,
 }
 
-const FIXTURE_EXCEPTIONS: &[FixtureException] = &[FixtureException {
-    path_suffix: "neomacs-tui-tests/src/oracle_guard_test.rs",
-    argument: "\"emacs\"",
-    line_contains: "r#\"",
-    reason: "forbidden-shape fixture strings consumed by the oracle guard; no process is spawned",
-}];
+const FIXTURE_EXCEPTIONS: &[FixtureException] = &[
+    FixtureException {
+        path_suffix: "neomacs-tui-tests/src/oracle_guard_test.rs",
+        argument: "\"emacs\"",
+        line_contains: "(\"direct Command::new\", r#\"",
+        reason: "the oracle guard's direct Command::new fixture arm; no process is spawned",
+    },
+    FixtureException {
+        path_suffix: "neomacs-tui-tests/src/oracle_guard_test.rs",
+        argument: "\"emacs\"",
+        // The case label is on the previous line, so the marker is the
+        // fixture source text that follows the raw-string opener on the
+        // match line.
+        line_contains: "r#\"macro_rules! mk {",
+        reason: "the oracle guard's macro_rules fixture arm; no process is spawned",
+    },
+];
 
 fn repo_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -252,11 +265,21 @@ fn bash_that_can_launch_an_editor_stays_a_violation() {
 }
 
 #[test]
-fn fixture_exception_requires_the_raw_string_marker() {
+fn fixture_exception_requires_its_own_fixture_text() {
     let relative = "crates/neomacs-tui-tests/src/oracle_guard_test.rs";
-    let fixture = r##"        ("direct Command::new", r#"let c = Command::new("emacs");"#),"##;
-    assert!(is_fixture_exception(relative, "\"emacs\"", fixture));
+    let direct_fixture =
+        r##"        ("direct Command::new", r#"let c = Command::new("emacs");"#),"##;
+    let macro_fixture =
+        r##"            r#"macro_rules! mk { () => { Command::new("emacs") }; }"#,"##;
+    assert!(is_fixture_exception(relative, "\"emacs\"", direct_fixture));
+    assert!(is_fixture_exception(relative, "\"emacs\"", macro_fixture));
 
+    let executable_with_raw_string =
+        "    let _child = Command::new(\"emacs\").arg(r#\"--batch\"#).spawn();";
+    assert!(
+        !is_fixture_exception(relative, "\"emacs\"", executable_with_raw_string),
+        "a raw string elsewhere on the line must not exempt a real spawn"
+    );
     let executable = "    let command = Command::new(\"emacs\");";
     assert!(
         !is_fixture_exception(relative, "\"emacs\"", executable),
