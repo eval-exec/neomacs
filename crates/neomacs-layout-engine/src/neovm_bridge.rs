@@ -4512,24 +4512,32 @@ fn color_to_pixel(c: &NeoColor) -> u32 {
     c.to_pixel()
 }
 
-/// Check if two colors are perceptually close.
+/// GNU `face-near-same-color-threshold`'s default (src/xfaces.c:7749).
 ///
-/// GNU Emacs uses this for `:distant-foreground`: when the foreground
-/// is too similar to the background, swap to the distant foreground
-/// for readability.  Uses simple RGB distance threshold.
+/// The layout bridge has no evaluator, so it uses GNU's default rather than
+/// reading the variable.
+const FACE_NEAR_SAME_COLOR_THRESHOLD: i64 = 30_000;
+
+/// GNU `color_distance` (src/xfaces.c:4768-4789), Riemersma's metric on the
+/// 16-bit channels of two loaded colors. A packed sRGB channel C loads as
+/// `C * 257` (`#rrggbb` parses to `0xrrrr`).
+fn color_distance(a: u32, b: u32) -> i64 {
+    let channel = |pixel: u32, shift: u32| i64::from((pixel >> shift) & 0xFF) * 257;
+    let (ar, ag, ab) = (channel(a, 16), channel(a, 8), channel(a, 0));
+    let (br, bg, bb) = (channel(b, 16), channel(b, 8), channel(b, 0));
+    let (r, g, bl) = (ar - br, ag - bg, ab - bb);
+    let r_mean = (ar + br) >> 1;
+    ((((2 * 65536 + r_mean) * r * r) >> 16)
+        + 4 * g * g
+        + (((2 * 65536 + 65535 - r_mean) * bl * bl) >> 16))
+        >> 16
+}
+
+/// Whether `:distant-foreground` replaces the foreground: GNU
+/// `load_face_colors` swaps when `color_distance (bg, fg)` is below
+/// `face-near-same-color-threshold` (src/xfaces.c:1417-1419).
 fn colors_close(a: u32, b: u32) -> bool {
-    let ar = (a >> 16) & 0xFF;
-    let ag = (a >> 8) & 0xFF;
-    let ab = a & 0xFF;
-    let br = (b >> 16) & 0xFF;
-    let bg = (b >> 8) & 0xFF;
-    let bb = b & 0xFF;
-    let dr = ar.abs_diff(br);
-    let dg = ag.abs_diff(bg);
-    let db = ab.abs_diff(bb);
-    // Weighted Euclidean distance (human perception weights R more than B)
-    // Threshold ~30 in each channel ≈ 2700 squared distance
-    (dr * dr * 3 + dg * dg * 4 + db * db * 2) < 3000
+    color_distance(a, b) < FACE_NEAR_SAME_COLOR_THRESHOLD
 }
 
 /// Resolve a `:stipple` string — a built-in bitmap name (`gray3`, …) or an XBM

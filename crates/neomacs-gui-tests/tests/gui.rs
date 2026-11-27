@@ -68,6 +68,9 @@ mod chrome_source_acceptance;
 #[path = "config_env_boot.rs"]
 mod config_env_boot;
 
+#[path = "distant_foreground_gui_oracle.rs"]
+mod distant_foreground_gui_oracle;
+
 #[path = "desktop_font_startup.rs"]
 mod desktop_font_startup;
 

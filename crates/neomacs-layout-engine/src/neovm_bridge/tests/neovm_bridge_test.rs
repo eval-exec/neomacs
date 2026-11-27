@@ -4752,3 +4752,45 @@ fn frame_params_capture_owned_minibuffer_sibling_without_height_heuristics() {
     let captured = frame_params_from_neovm(frame, &faces, runtime.variables());
     assert!(!captured.has_minibuffer_sibling);
 }
+
+/// GNU `color_distance` (src/xfaces.c:4768-4789). The expected values are the
+/// pinned 31.1 oracle's `(color-distance A B)` on a GTK frame.
+#[test]
+fn color_distance_matches_gnu() {
+    for (a, b, gnu) in [
+        (0x00F0F0F0, 0x00C6C7C7, 15486),
+        (0x00333333, 0x00333334, 2),
+        (0x00000000, 0x00FFFFFF, 589805),
+        (0x004078F2, 0x00C6C7C7, 75282),
+        (0x00FF0000, 0x0000FF00, 425970),
+        (0x00808080, 0x007F7F7F, 9),
+        (0x00383A42, 0x00FAFAFA, 329119),
+        (0x00B0B0B0, 0x00D8D8D8, 14512),
+    ] {
+        assert_eq!(super::color_distance(a, b), gnu, "{a:06x} vs {b:06x}");
+    }
+}
+
+/// #853: Doom's `lsp-face-highlight-textual` is `#f0f0f0` on `#c6c7c7` with
+/// `:distant-foreground` `#1b2229`. GNU's distance is 15486, under the 30000
+/// threshold, so a GUI frame paints the distant color; the 31.1 oracle's
+/// glyphs are `#1B2229`. A pair at 75282 keeps its own foreground.
+#[test]
+fn face_resolver_applies_distant_foreground_below_gnu_threshold() {
+    let _evaluator = neovm_core::emacs_core::eval_hook_installers::new_context();
+    let mut table = FaceTable::new();
+    let mut near = NeoFace::new("near-distant");
+    near.foreground = Some(NeoColor::rgb(0xF0, 0xF0, 0xF0));
+    near.background = Some(NeoColor::rgb(0xC6, 0xC7, 0xC7));
+    near.distant_foreground = Some(NeoColor::rgb(0x1B, 0x22, 0x29));
+    table.define("near-distant", near);
+    let mut far = NeoFace::new("far-distant");
+    far.foreground = Some(NeoColor::rgb(0x40, 0x78, 0xF2));
+    far.background = Some(NeoColor::rgb(0xC6, 0xC7, 0xC7));
+    far.distant_foreground = Some(NeoColor::rgb(0x1B, 0x22, 0x29));
+    table.define("far-distant", far);
+
+    let resolver = FaceResolver::new(&table, 0x00FFFFFF, 0x00000000, 14.0, Some("neo".into()));
+    assert_eq!(resolver.resolve_named_face("near-distant").fg, 0x001B2229);
+    assert_eq!(resolver.resolve_named_face("far-distant").fg, 0x004078F2);
+}

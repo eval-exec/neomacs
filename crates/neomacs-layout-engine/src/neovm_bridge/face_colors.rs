@@ -157,7 +157,11 @@ impl FaceColorAttributes {
             }
             FaceVideo::Inverse => (self.background, self.foreground, false),
         };
-        if let Some(distant) = self.distant_foreground
+        // `:distant-foreground` is applied by `load_face_colors`, which only
+        // `realize_gui_face` calls (src/xfaces.c:6386); `realize_tty_face`
+        // never reads it.
+        if kind == FaceRealization::Gui
+            && let Some(distant) = self.distant_foreground
             && colors_close(foreground.pixel(), background.pixel())
         {
             match self.video {
