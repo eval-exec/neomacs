@@ -471,6 +471,17 @@ pub(super) enum NativeRelease {
     EraIdle,
 }
 
+/// Outcome of a `NativeReleased` transition (`release_main_wait`,
+/// `release_service`, `release_native_pump`), pairing the Baton disposition
+/// with the earliest sleeping peer select deadline when no peer was
+/// immediately runnable (#877).
+#[derive(Debug)]
+#[must_use]
+pub(super) struct ReleasedNativeWait {
+    pub(super) release: NativeRelease,
+    pub(super) wait_bound: crate::host_effect::wake::native_wait::ReleaseWaitBound,
+}
+
 #[derive(Debug)]
 #[must_use]
 #[allow(
@@ -2494,6 +2505,61 @@ impl Control {
         }
     }
 
+    /// Complete a `NativeReleased` handoff from Main after `state.physical`
+    /// has been set to `OwnerLocation::NativeReleased`.
+    ///
+    /// Invariant (#877): a physical native wait must never outlive the earliest
+    /// peer select deadline it was released with. All three native release
+    /// sites (`release_main_wait`, `release_service`, `release_native_pump`)
+    /// route through this single helper so no site can discard
+    /// `Some((_, Some(deadline)))` from `Self::pick(&mut state)`.
+    fn finish_native_release(
+        &self,
+        mut state: MutexGuard<'_, ControlState>,
+        baton: TurnRight,
+        after_drop: impl FnOnce(),
+    ) -> ReleasedNativeWait {
+        use crate::host_effect::wake::native_wait::ReleaseWaitBound;
+
+        let (next, earliest_sleep) = match Self::pick(&mut state) {
+            Some((key, None)) => (Some(key), None),
+            Some((_, Some(deadline))) => (None, Some(deadline)),
+            None => (None, None),
+        };
+        let end_era_to_idle = next.is_none() && baton.is_era();
+        if end_era_to_idle {
+            state.set_era_turn(GroupTurn::Idle);
+        }
+        drop(state);
+        after_drop();
+        match next {
+            Some(key) => {
+                self.send_wake(key, Wake::Resume(baton));
+                ReleasedNativeWait {
+                    release: NativeRelease::Transferred,
+                    wait_bound: ReleaseWaitBound::CallerDeadline,
+                }
+            }
+            None if end_era_to_idle => {
+                Self::give_back_era_turn(baton);
+                ReleasedNativeWait {
+                    release: NativeRelease::EraIdle,
+                    wait_bound: match earliest_sleep {
+                        Some(deadline) => ReleaseWaitBound::EarlierPeer(deadline),
+                        None => ReleaseWaitBound::CallerDeadline,
+                    },
+                }
+            }
+            None => ReleasedNativeWait {
+                release: NativeRelease::Idle(baton),
+                wait_bound: match earliest_sleep {
+                    Some(deadline) => ReleaseWaitBound::EarlierPeer(deadline),
+                    None => ReleaseWaitBound::CallerDeadline,
+                },
+            },
+        }
+    }
+
     /// The owned native wrapper has reached a genuine GNU release point.
     /// The requester remains parked; only this permit admits ordinary peers.
     pub(crate) fn release_service(
@@ -2501,7 +2567,7 @@ impl Control {
         slice: &ReservedServiceSlice,
         _permit: RealWaitPermit,
         baton: TurnRight,
-    ) -> Result<NativeRelease, ServiceTransferRefusal> {
+    ) -> Result<ReleasedNativeWait, ServiceTransferRefusal> {
         let mut state = self.state();
         let valid = state.main_os_thread == Some(std::thread::current().id())
             && state.physical.get(&ThreadKey::Main) == Some(&OwnerLocation::Serving(slice.key))
@@ -2525,26 +2591,7 @@ impl Control {
         state
             .physical
             .insert(ThreadKey::Main, OwnerLocation::NativeReleased);
-        let next = match Self::pick(&mut state) {
-            Some((key, None)) => Some(key),
-            Some((_, Some(_))) | None => None,
-        };
-        let end_era_to_idle = next.is_none() && baton.is_era();
-        if end_era_to_idle {
-            state.set_era_turn(GroupTurn::Idle);
-        }
-        drop(state);
-        match next {
-            Some(key) => {
-                self.send_wake(key, Wake::Resume(baton));
-                Ok(NativeRelease::Transferred)
-            }
-            None if end_era_to_idle => {
-                Self::give_back_era_turn(baton);
-                Ok(NativeRelease::EraIdle)
-            }
-            None => Ok(NativeRelease::Idle(baton)),
-        }
+        Ok(self.finish_native_release(state, baton, || {}))
     }
 
     /// Called after the native wrapper returns. Main reacquires for native
@@ -2750,7 +2797,7 @@ impl Control {
         &self,
         _permit: RealWaitPermit,
         baton: TurnRight,
-    ) -> Result<NativeRelease, ServiceTransferRefusal> {
+    ) -> Result<ReleasedNativeWait, ServiceTransferRefusal> {
         let mut state = self.state();
         let reason = if state.main_os_thread != Some(std::thread::current().id()) {
             Some(ServiceRefusal::WrongMainThread)
@@ -2782,26 +2829,7 @@ impl Control {
         state
             .physical
             .insert(ThreadKey::Main, OwnerLocation::NativeReleased);
-        let next = match Self::pick(&mut state) {
-            Some((key, None)) => Some(key),
-            Some((_, Some(_))) | None => None,
-        };
-        let end_era_to_idle = next.is_none() && baton.is_era();
-        if end_era_to_idle {
-            state.set_era_turn(GroupTurn::Idle);
-        }
-        drop(state);
-        match next {
-            Some(key) => {
-                self.send_wake(key, Wake::Resume(baton));
-                Ok(NativeRelease::Transferred)
-            }
-            None if end_era_to_idle => {
-                Self::give_back_era_turn(baton);
-                Ok(NativeRelease::EraIdle)
-            }
-            None => Ok(NativeRelease::Idle(baton)),
-        }
+        Ok(self.finish_native_release(state, baton, || {}))
     }
 
     /// Physical completion first reacquires the native driver, not whichever
@@ -3071,7 +3099,7 @@ impl Control {
         _permit: RealWaitPermit,
         baton: TurnRight,
         wait_end: Instant,
-    ) -> NativeRelease {
+    ) -> ReleasedNativeWait {
         let mut state = self.state();
         if state.main_os_thread != Some(std::thread::current().id())
             || state.physical.get(&ThreadKey::Main) != Some(&OwnerLocation::Running)
@@ -3088,28 +3116,10 @@ impl Control {
         state
             .physical
             .insert(ThreadKey::Main, OwnerLocation::NativeReleased);
-        let next = match Self::pick(&mut state) {
-            Some((key, None)) => Some(key),
-            Some((_, Some(_))) | None => None,
-        };
-        let end_era_to_idle = next.is_none() && baton.is_era();
-        if end_era_to_idle {
-            state.set_era_turn(GroupTurn::Idle);
-        }
-        drop(state);
-        #[cfg(any(test, feature = "test-support"))]
-        self.observe_select_park_for_test(ThreadKey::Main, wait_end);
-        match next {
-            Some(key) => {
-                self.send_wake(key, Wake::Resume(baton));
-                NativeRelease::Transferred
-            }
-            None if end_era_to_idle => {
-                Self::give_back_era_turn(baton);
-                NativeRelease::EraIdle
-            }
-            None => NativeRelease::Idle(baton),
-        }
+        self.finish_native_release(state, baton, || {
+            #[cfg(any(test, feature = "test-support"))]
+            self.observe_select_park_for_test(ThreadKey::Main, wait_end);
+        })
     }
 
     /// The physical wait has returned. Publish main's readiness before waking
@@ -7573,5 +7583,270 @@ mod tests {
             !control.wake_one_waiting_for(Wait::Condition(cond)),
             "Blocker 2: condition_waiters index must contain no phantom waiter after closing exit"
         );
+    }
+
+    /// Issue #877: all three native-release entry points (`release_main_wait`,
+    /// `release_service`, `release_native_pump`) must preserve the earliest
+    /// sleeping peer's `Wait::Select` deadline when no peer is immediately
+    /// runnable, so a physical native wait never outlives it.
+    #[test]
+    fn issue_877_all_three_native_release_sites_preserve_earliest_peer_select_deadline() {
+        use crate::host_effect::contracts::ReadDeadline;
+        use crate::host_effect::wake::native_wait::{
+            NativeWaitHandoff, PreparedNativeWait, RealWaitPermit, ReleaseWaitBound,
+        };
+        use crate::host_effect::wake::{ControlWake, NativePollOwner};
+        use std::num::NonZeroU64;
+
+        enum ReleaseSite {
+            MainWait { wait_end: Instant },
+            Service { slice: ReservedServiceSlice },
+            NativePump,
+        }
+
+        struct SiteHandoff<'a> {
+            control: &'a Control,
+            receiver: &'a mpsc::Receiver<Wake>,
+            site: ReleaseSite,
+            baton: Option<TurnRight>,
+            release: Option<NativeRelease>,
+            observed_bound: Option<ReleaseWaitBound>,
+        }
+
+        impl NativeWaitHandoff for SiteHandoff<'_> {
+            fn release(&mut self, permit: RealWaitPermit) -> ReleaseWaitBound {
+                let baton = self.baton.take().expect("baton held before release");
+                let released = match &self.site {
+                    ReleaseSite::MainWait { wait_end } => {
+                        self.control.release_main_wait(permit, baton, *wait_end)
+                    }
+                    ReleaseSite::Service { slice } => self
+                        .control
+                        .release_service(slice, permit, baton)
+                        .expect("release_service succeeds"),
+                    ReleaseSite::NativePump => self
+                        .control
+                        .release_native_pump(permit, baton)
+                        .expect("release_native_pump succeeds"),
+                };
+                self.observed_bound = Some(released.wait_bound);
+                self.release = Some(released.release);
+                released.wait_bound
+            }
+
+            fn reacquire(&mut self) {
+                let release = self.release.take().expect("release held before reacquire");
+                let baton = match &self.site {
+                    ReleaseSite::MainWait { .. } => {
+                        match self.control.reacquire_main_wait(release, self.receiver) {
+                            Wake::Resume(baton) => baton,
+                            other => panic!("unexpected main wake: {other:?}"),
+                        }
+                    }
+                    ReleaseSite::Service { slice } => self
+                        .control
+                        .reacquire_service(slice, release, self.receiver)
+                        .expect("reacquire_service succeeds"),
+                    ReleaseSite::NativePump => {
+                        match self.control.reacquire_native_pump(release, self.receiver) {
+                            Ok(Wake::NativePump { baton }) => baton,
+                            other => panic!("unexpected native pump wake: {other:?}"),
+                        }
+                    }
+                };
+                self.baton = Some(baton);
+            }
+        }
+
+        // 1. `release_main_wait`: sleeping worker at +30ms caps main's 5s wait.
+        {
+            let mut ctx = crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
+            ctx.set_green_threading_mode_at_construction_for_test();
+            let baton: TurnRight = ctx.start_green_runtime().expect("start green").into();
+            let control = Control::default();
+            let main_rx = control.register_main();
+            let sleeper = ThreadKey::Worker(NonZeroU64::new(10).unwrap());
+            let _sleeper_rx = control.register_worker(sleeper);
+            let start = Instant::now();
+            let peer_deadline = start + Duration::from_millis(30);
+            let caller_deadline = start + Duration::from_secs(5);
+            {
+                let mut state = control.state();
+                Control::set_wait(
+                    &mut state,
+                    sleeper,
+                    Wait::Select {
+                        wait_end: peer_deadline,
+                    },
+                );
+            }
+            let (wake, _pub) =
+                ControlWake::paired_native(Arc::new(polling::Poller::new().unwrap())).unwrap();
+            let mut prepared = PreparedNativeWait::new(
+                &wake,
+                NativePollOwner::NativeMain,
+                ReadDeadline::At(caller_deadline),
+            )
+            .unwrap();
+            let mut handoff = SiteHandoff {
+                control: &control,
+                receiver: &main_rx,
+                site: ReleaseSite::MainWait {
+                    wait_end: caller_deadline,
+                },
+                baton: Some(baton),
+                release: None,
+                observed_bound: None,
+            };
+            let _ = prepared.wait_with(&mut handoff).unwrap();
+            let elapsed = start.elapsed();
+            assert_eq!(
+                handoff.observed_bound,
+                Some(ReleaseWaitBound::EarlierPeer(peer_deadline)),
+                "release_main_wait must return EarlierPeer(peer_deadline)"
+            );
+            assert!(
+                elapsed < Duration::from_secs(1),
+                "release_main_wait physical poll must wake at peer_deadline (elapsed={elapsed:?})"
+            );
+            drop(handoff.baton.take());
+        }
+
+        // 2. `release_service`: sleeping worker at +30ms caps service wait.
+        {
+            let mut ctx = crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
+            ctx.set_green_threading_mode_at_construction_for_test();
+            let baton: TurnRight = ctx.start_green_runtime().expect("start green").into();
+            let control = Control::default();
+            let main_rx = control.register_main();
+            let requester = ThreadKey::Worker(NonZeroU64::new(11).unwrap());
+            let _req_rx = control.register_worker(requester);
+            let sleeper = ThreadKey::Worker(NonZeroU64::new(12).unwrap());
+            let _sleeper_rx = control.register_worker(sleeper);
+            let req_key = HostRequestKey::for_test(NonZeroU64::new(1).unwrap());
+            let slice = ReservedServiceSlice {
+                key: req_key,
+                requester,
+                _confined: std::marker::PhantomData,
+            };
+            let start = Instant::now();
+            let peer_deadline = start + Duration::from_millis(30);
+            let caller_deadline = start + Duration::from_secs(5);
+            {
+                let mut state = control.state();
+                Control::set_wait(&mut state, requester, Wait::HostRequest(req_key));
+                Control::set_wait(
+                    &mut state,
+                    sleeper,
+                    Wait::Select {
+                        wait_end: peer_deadline,
+                    },
+                );
+                state.services.insert(
+                    req_key,
+                    ServiceMetadata {
+                        requester,
+                        phase: ServicePhase::Serving,
+                    },
+                );
+                state
+                    .physical
+                    .insert(ThreadKey::Main, OwnerLocation::Serving(req_key));
+            }
+            let (wake, _pub) =
+                ControlWake::paired_native(Arc::new(polling::Poller::new().unwrap())).unwrap();
+            let mut prepared = PreparedNativeWait::new(
+                &wake,
+                NativePollOwner::NativeMain,
+                ReadDeadline::At(caller_deadline),
+            )
+            .unwrap();
+            let mut handoff = SiteHandoff {
+                control: &control,
+                receiver: &main_rx,
+                site: ReleaseSite::Service { slice },
+                baton: Some(baton),
+                release: None,
+                observed_bound: None,
+            };
+            let _ = prepared.wait_with(&mut handoff).unwrap();
+            let elapsed = start.elapsed();
+            assert_eq!(
+                handoff.observed_bound,
+                Some(ReleaseWaitBound::EarlierPeer(peer_deadline)),
+                "release_service must return EarlierPeer(peer_deadline)"
+            );
+            assert!(
+                elapsed < Duration::from_secs(1),
+                "release_service physical poll must wake at peer_deadline (elapsed={elapsed:?})"
+            );
+            drop(handoff.baton.take());
+        }
+
+        // 3. `release_native_pump`: sleeping worker at +30ms caps pump wait.
+        {
+            let mut ctx = crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
+            ctx.set_green_threading_mode_at_construction_for_test();
+            let baton: TurnRight = ctx.start_green_runtime().expect("start green").into();
+            let control = Control::default();
+            let main_rx = control.register_main();
+            let requester = ThreadKey::Worker(NonZeroU64::new(13).unwrap());
+            let _req_rx = control.register_worker(requester);
+            let sleeper = ThreadKey::Worker(NonZeroU64::new(14).unwrap());
+            let _sleeper_rx = control.register_worker(sleeper);
+            let req_key = HostRequestKey::for_test(NonZeroU64::new(2).unwrap());
+            let start = Instant::now();
+            let peer_deadline = start + Duration::from_millis(30);
+            let caller_deadline = start + Duration::from_secs(5);
+            {
+                let mut state = control.state();
+                Control::set_wait(&mut state, requester, Wait::HostRequest(req_key));
+                Control::set_wait(
+                    &mut state,
+                    sleeper,
+                    Wait::Select {
+                        wait_end: peer_deadline,
+                    },
+                );
+                state.services.insert(
+                    req_key,
+                    ServiceMetadata {
+                        requester,
+                        phase: ServicePhase::PendingNative,
+                    },
+                );
+                state
+                    .physical
+                    .insert(ThreadKey::Main, OwnerLocation::NativeDriving);
+            }
+            let (wake, _pub) =
+                ControlWake::paired_native(Arc::new(polling::Poller::new().unwrap())).unwrap();
+            let mut prepared = PreparedNativeWait::new(
+                &wake,
+                NativePollOwner::NativeMain,
+                ReadDeadline::At(caller_deadline),
+            )
+            .unwrap();
+            let mut handoff = SiteHandoff {
+                control: &control,
+                receiver: &main_rx,
+                site: ReleaseSite::NativePump,
+                baton: Some(baton),
+                release: None,
+                observed_bound: None,
+            };
+            let _ = prepared.wait_with(&mut handoff).unwrap();
+            let elapsed = start.elapsed();
+            assert_eq!(
+                handoff.observed_bound,
+                Some(ReleaseWaitBound::EarlierPeer(peer_deadline)),
+                "release_native_pump must return EarlierPeer(peer_deadline)"
+            );
+            assert!(
+                elapsed < Duration::from_secs(1),
+                "release_native_pump physical poll must wake at peer_deadline (elapsed={elapsed:?})"
+            );
+            drop(handoff.baton.take());
+        }
     }
 }

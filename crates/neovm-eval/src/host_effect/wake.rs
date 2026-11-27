@@ -712,13 +712,20 @@ impl WaitRegistration {
                     }
                     #[cfg(test)]
                     self.report_fallback_stage(&metadata, &mut reported_epoch);
-                    native_wait::condition(
+                    let bound_used = native_wait::condition(
                         &self.wake.changed,
                         metadata,
                         ReadDeadline::At(deadline),
                         handoff,
                     );
-                    if handoff.continuation() == NativeWaitContinuation::ReturnToDriver {
+                    if handoff.continuation() == NativeWaitContinuation::ReturnToDriver
+                        || (matches!(
+                            bound_used,
+                            native_wait::PhysicalWaitBound::ClampedToPeer(peer)
+                                if self.wake.now() >= peer
+                        ) && handoff.on_peer_deadline_elapsed()
+                            == native_wait::PeerDeadlineBehavior::ReturnToCaller)
+                    {
                         return ControlWakeOutcome::NativeReady;
                     }
                     metadata = self.wake.lock();
@@ -726,13 +733,20 @@ impl WaitRegistration {
                 ReadDeadline::Unbounded => {
                     #[cfg(test)]
                     self.report_fallback_stage(&metadata, &mut reported_epoch);
-                    native_wait::condition(
+                    let bound_used = native_wait::condition(
                         &self.wake.changed,
                         metadata,
                         ReadDeadline::Unbounded,
                         handoff,
                     );
-                    if handoff.continuation() == NativeWaitContinuation::ReturnToDriver {
+                    if handoff.continuation() == NativeWaitContinuation::ReturnToDriver
+                        || (matches!(
+                            bound_used,
+                            native_wait::PhysicalWaitBound::ClampedToPeer(peer)
+                                if self.wake.now() >= peer
+                        ) && handoff.on_peer_deadline_elapsed()
+                            == native_wait::PeerDeadlineBehavior::ReturnToCaller)
+                    {
                         return ControlWakeOutcome::NativeReady;
                     }
                     metadata = self.wake.lock();
@@ -814,11 +828,14 @@ impl NativePollLease {
                 // into the ordinary process wait. Derive each relative wait
                 // from the same original deadline, after rearm/final recheck;
                 // unrelated wakes never restart the requested duration.
-                let result = native_wait::poll(&native.poller, events, deadline, handoff);
-                if let Err(error) = result {
-                    native.health.fail();
-                    return Err(error);
-                }
+                let bound_used = match native_wait::poll(&native.poller, events, deadline, handoff)
+                {
+                    Ok(bound_used) => bound_used,
+                    Err(error) => {
+                        native.health.fail();
+                        return Err(error);
+                    }
+                };
                 if events.iter().any(|event| event.key == native.event_key.0) {
                     native.drain()?;
                 }
@@ -833,14 +850,24 @@ impl NativePollLease {
                 }
                 // An eventless Poller::notify is ordinary input readiness;
                 // native owners forward it without pretending it is a timeout.
+                // When the physical wait was clamped to an earlier peer select
+                // deadline (#877) and the handoff requests in-wait recheck,
+                // loop immediately so the next release() expires and runs the
+                // peer without ending an unbounded service wait prematurely.
                 if events.is_empty() {
-                    return Ok(
-                        if matches!(deadline, ReadDeadline::At(value) if Instant::now() >= value) {
-                            ControlWakeOutcome::DeadlineElapsed
-                        } else {
-                            ControlWakeOutcome::NativeReady
-                        },
-                    );
+                    if matches!(deadline, ReadDeadline::At(value) if Instant::now() >= value) {
+                        return Ok(ControlWakeOutcome::DeadlineElapsed);
+                    }
+                    if matches!(
+                        bound_used,
+                        native_wait::PhysicalWaitBound::ClampedToPeer(peer)
+                            if Instant::now() >= peer
+                    ) && handoff.on_peer_deadline_elapsed()
+                        == native_wait::PeerDeadlineBehavior::RecheckInWait
+                    {
+                        continue;
+                    }
+                    return Ok(ControlWakeOutcome::NativeReady);
                 }
                 if handoff.continuation() == NativeWaitContinuation::ReturnToDriver {
                     return Ok(ControlWakeOutcome::NativeReady);

@@ -829,6 +829,30 @@ fn e8s_blocking_io_writer_thread_releases_main_sleep_for() {
     );
 }
 
+/// Issue #877: a prior thread exit leaves an unread `IdleScheduler` nudge on
+/// `ControlWake`'s shared native pipe. On the first iteration of main's
+/// `sleep-for`, `poller.wait()` returns immediately on that byte while the
+/// newly spawned writer has just parked in `Wait::Select`, so main loops to a
+/// second physical wait with no runnable peer and must honor the writer's
+/// earlier select deadline instead of sleeping for main's full deadline.
+#[test]
+fn e8s_blocking_io_writer_thread_releases_main_sleep_for_after_prior_thread_join() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+    assert_green_default_threads_oracle(
+        r##"
+(let ((prior (make-thread (lambda () 42) "e8s-prior")))
+  (thread-join prior)
+  (let* ((ran nil)
+         (th (make-thread (lambda () (sleep-for 0.1) (push 'writer-ran ran))
+                          "e8s-sleep-writer-after-join")))
+    (sleep-for 0.5)
+    (let ((during (car ran)))
+      (list during (thread-join th) (car ran)))))
+"##,
+        expect_test::expect![[r#""OK (writer-ran (writer-ran) writer-ran)""#]],
+    );
+}
+
 #[test]
 fn e8s_blocking_io_writer_thread_releases_accept_process_output() {
     return_if_neovm_enable_oracle_proptest_not_set!();

@@ -962,7 +962,10 @@ impl NativeServiceScope<'_> {
         }
     }
 
-    pub(crate) fn begin_native_release(&mut self, permit: RealWaitPermit) {
+    pub(crate) fn begin_native_release(
+        &mut self,
+        permit: RealWaitPermit,
+    ) -> crate::host_effect::wake::native_wait::ReleaseWaitBound {
         let authority = std::mem::replace(&mut self.authority, ServiceAuthority::Transition);
         let (baton, slice) = match authority {
             ServiceAuthority::Held { baton, slice } => (baton, slice),
@@ -970,8 +973,8 @@ impl NativeServiceScope<'_> {
                 unreachable_service()
             }
         };
-        let release = match self.control.release_service(&slice, permit, baton) {
-            Ok(release) => release,
+        let released = match self.control.release_service(&slice, permit, baton) {
+            Ok(released) => released,
             Err(refusal) => {
                 self.authority = ServiceAuthority::Held {
                     baton: refusal.baton,
@@ -980,7 +983,11 @@ impl NativeServiceScope<'_> {
                 unreachable_service()
             }
         };
-        self.authority = ServiceAuthority::Released { release, slice };
+        self.authority = ServiceAuthority::Released {
+            release: released.release,
+            slice,
+        };
+        released.wait_bound
     }
 
     pub(crate) fn finish_native_release(&mut self) {
@@ -1038,12 +1045,21 @@ impl NativeServiceScope<'_> {
 }
 
 impl NativeWaitHandoff for NativeServiceScope<'_> {
-    fn release(&mut self, permit: RealWaitPermit) {
-        self.begin_native_release(permit);
+    fn release(
+        &mut self,
+        permit: RealWaitPermit,
+    ) -> crate::host_effect::wake::native_wait::ReleaseWaitBound {
+        self.begin_native_release(permit)
     }
 
     fn reacquire(&mut self) {
         self.finish_native_release();
+    }
+
+    fn on_peer_deadline_elapsed(
+        &self,
+    ) -> crate::host_effect::wake::native_wait::PeerDeadlineBehavior {
+        crate::host_effect::wake::native_wait::PeerDeadlineBehavior::RecheckInWait
     }
 }
 

@@ -202,17 +202,18 @@ pub struct MainNativeHandoff<'native> {
 }
 
 impl NativeWaitHandoff for MainNativeHandoff<'_> {
-    fn release(&mut self, permit: RealWaitPermit) {
+    fn release(
+        &mut self,
+        permit: RealWaitPermit,
+    ) -> crate::host_effect::wake::native_wait::ReleaseWaitBound {
         let MainWaitAuthority::Held(baton) =
             std::mem::replace(&mut self.authority, MainWaitAuthority::Transition)
         else {
             std::process::abort()
         };
-        self.authority = MainWaitAuthority::Released(self.control.release_main_wait(
-            permit,
-            baton,
-            self.wait_end,
-        ));
+        let released = self.control.release_main_wait(permit, baton, self.wait_end);
+        self.authority = MainWaitAuthority::Released(released.release);
+        released.wait_bound
     }
 
     fn reacquire(&mut self) {

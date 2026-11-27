@@ -935,17 +935,21 @@ struct PumpHandoff<'native> {
 }
 
 impl NativeWaitHandoff for PumpHandoff<'_> {
-    fn release(&mut self, permit: RealWaitPermit) {
+    fn release(
+        &mut self,
+        permit: RealWaitPermit,
+    ) -> crate::host_effect::wake::native_wait::ReleaseWaitBound {
         let PumpAuthority::Held(baton) =
             std::mem::replace(&mut self.authority, PumpAuthority::Transition)
         else {
             fatal_pump()
         };
-        self.authority =
-            PumpAuthority::Released(match self.control.release_native_pump(permit, baton) {
-                Ok(release) => release,
-                Err(_) => fatal_pump(),
-            });
+        let released = match self.control.release_native_pump(permit, baton) {
+            Ok(released) => released,
+            Err(_) => fatal_pump(),
+        };
+        self.authority = PumpAuthority::Released(released.release);
+        released.wait_bound
     }
 
     fn reacquire(&mut self) {
