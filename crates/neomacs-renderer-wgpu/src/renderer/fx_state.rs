@@ -752,3 +752,7 @@ impl RendererFrameEffects {
 #[cfg(test)]
 #[path = "fx_state/tests/effect_category_test.rs"]
 mod effect_category_tests;
+
+#[cfg(test)]
+#[path = "fx_state/tests/disabled_drain_test.rs"]
+mod disabled_drain_tests;
