@@ -1409,6 +1409,31 @@ fn check_keeps_a_fresh_source_when_dependency_bytecode_is_older() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn check_reports_a_dangling_subdirs_symlink() {
+    use std::os::unix::fs::symlink;
+
+    let (root, lisp) = check_fixture("COMPILE_FIRST =\nMAIN_FIRST =\n");
+    write_fresh_elc(&lisp.join("loadup.el"));
+    let pkg = lisp.join("pkg");
+    fs::create_dir_all(&pkg).unwrap();
+    symlink("missing-target", pkg.join("subdirs.el")).unwrap();
+
+    let report = crate::rebuild_check::check(&check_options(&root)).unwrap();
+    assert!(
+        report.subdirs_changed.contains(&pkg),
+        "the updater would remove the dangling link, so it is out of date: {report:?}"
+    );
+
+    update_subdirs_file(&pkg).unwrap();
+    let report = crate::rebuild_check::check(&check_options(&root)).unwrap();
+    assert!(
+        !report.subdirs_changed.contains(&pkg),
+        "the removed link must not be reported again: {report:?}"
+    );
+}
+
 #[test]
 fn check_reports_subdirs_drift_and_round_trips_through_update() {
     let (root, lisp) = check_fixture("COMPILE_FIRST =\nMAIN_FIRST =\n");

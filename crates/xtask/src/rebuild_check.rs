@@ -333,7 +333,15 @@ fn subdirs_would_change(dir: &Path) -> Result<bool> {
     let expression = update_subdirs_expression(dir)?;
     let target = dir.join("subdirs.el");
     if expression.is_empty() {
-        return Ok(target.exists());
+        // The updater removes `subdirs.el` when the directory has no
+        // subdirectories.  Do not use `Path::exists`: it follows symlinks, so
+        // a dangling link would look absent even though `remove_file` would
+        // remove it.  `symlink_metadata` sees the link itself.
+        return match fs::symlink_metadata(&target) {
+            Ok(_) => Ok(true),
+            Err(err) if err.kind() == ErrorKind::NotFound => Ok(false),
+            Err(err) => Err(format!("stat {}: {err}", target.display()).into()),
+        };
     }
     let expected = update_subdirs_contents(&expression);
     match fs::read(&target) {
