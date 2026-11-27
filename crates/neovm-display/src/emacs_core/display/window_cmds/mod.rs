@@ -6434,6 +6434,43 @@ pub(crate) fn frame_text_height_pixels(frame: &crate::window::Frame) -> u32 {
         .max(1)
 }
 
+/// The text size of FRAME once the host has answered its explicit resize
+/// request still in flight, or its current text size when none is.
+///
+/// GNU reads `FRAME_TEXT_WIDTH` and `FRAME_TEXT_HEIGHT` for an implied resize
+/// that keeps the text size (frame.c `adjust_frame_size` with -1 sizes). On a
+/// visible frame those already hold the last `set-frame-size`, because
+/// `xg_frame_set_char_size` waited for its ConfigureNotify (gtkutil.c:1262-1275).
+/// Neomacs sends that request without waiting and keeps the old pixels until
+/// the host reports, so the request's own target is the size GNU would read.
+/// INCLUDE_TOOL_BAR is the tool-bar inclusion the request was sized with.
+pub(crate) fn frame_text_pixels_after_sent_resize(
+    frame: &crate::window::Frame,
+    include_tool_bar: bool,
+) -> (u32, u32) {
+    match frame.pending_gui_resize {
+        Some(crate::window::PendingGuiResize {
+            delivery: crate::window::GuiResizeDelivery::Sent { width, height, .. },
+            ..
+        }) => (
+            width
+                .saturating_sub(frame_non_text_total_width_pixels(frame))
+                .max(1),
+            height
+                .saturating_sub(host_outer_non_text_height_pixels(frame, include_tool_bar))
+                .max(1),
+        ),
+        Some(crate::window::PendingGuiResize {
+            delivery: crate::window::GuiResizeDelivery::Queued,
+            ..
+        })
+        | None => (
+            frame_text_width_pixels(frame),
+            frame_text_height_pixels(frame),
+        ),
+    }
+}
+
 pub(crate) fn parse_frame_size_param(value: Value) -> Option<FrameSizeParam> {
     if let Some(n) = value.as_int().filter(|n| *n >= 0) {
         return Some(FrameSizeParam::Cells(n));

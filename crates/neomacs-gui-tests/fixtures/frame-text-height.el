@@ -9,10 +9,16 @@
 ;;   pixelwise  (set-frame-size nil 640 612 t)
 ;;   chars      (set-frame-size nil 80 30)
 ;;
-;;   FRAME-TEXT-HEIGHT SHAPE CHAR-HEIGHT TEXT-HEIGHT FRAME-HEIGHT ROOT MINI
+;; NEOMACS_FTH_SCENARIO=startup requests (set-frame-size nil 640 612 t)
+;; while this file loads, before the first frame has settled, as an init
+;; file would, and records
+;;   startup-pixelwise
+;;
+;;   FRAME-TEXT-HEIGHT SHAPE CHAR-HEIGHT TEXT-HEIGHT FRAME-HEIGHT ROOT MINI BODY
 ;;
 ;; TEXT-HEIGHT is `frame-text-height', FRAME-HEIGHT is `frame-height' (lines),
-;; ROOT and MINI are the pixel heights of the root and minibuffer windows.
+;; ROOT and MINI are the pixel heights of the root and minibuffer windows,
+;; BODY is `window-body-height' (lines) of the frame's first window.
 ;; GNU's text area holds both windows, so ROOT + MINI = TEXT-HEIGHT there.
 ;;
 ;; Markers go to stderr first, then to NEOMACS_COMMIT_RESULT_FILE, which is
@@ -35,7 +41,8 @@
   "The geometry this probe records, as a list."
   (list (frame-char-height) (frame-text-height) (frame-height)
         (window-pixel-height (frame-root-window))
-        (window-pixel-height (minibuffer-window))))
+        (window-pixel-height (minibuffer-window))
+        (window-body-height (frame-first-window))))
 
 (defvar neo-fth-deadline nil "The `float-time' after which a wait fails.")
 (defvar neo-fth-last nil "The geometry seen at the previous poll.")
@@ -82,5 +89,10 @@
                                   (lambda () (set-frame-size (selected-frame) 640 612 t)))
                             (cons 'chars
                                   (lambda () (set-frame-size (selected-frame) 80 30))))))
+        ("startup"
+         ;; The size is requested while the file loads, before the first
+         ;; frame has settled: the sizing an init file makes.
+         (set-frame-size (selected-frame) 640 612 t)
+         (run-at-time 0.05 nil #'neo-fth-run (list (cons 'startup-pixelwise nil))))
         (other (error "Unknown NEOMACS_FTH_SCENARIO %S" other))))
   (error (neo-fth-fail err)))

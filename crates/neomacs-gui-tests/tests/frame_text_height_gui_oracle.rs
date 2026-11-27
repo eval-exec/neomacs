@@ -11,11 +11,15 @@
 //!   lines times `FRAME_LINE_HEIGHT`, to `adjust_frame_size` as the new text
 //!   height (`Fset_frame_size`, `check_frame_pixels`).
 //!
-//! The row records `frame-char-height`, `frame-text-height`, `frame-height`
-//! and the root and minibuffer window heights after each sizing has held
-//! still for 1 s, and requires Neomacs's to equal GNU's. The sizings are:
-//! none, then a pixelwise and a character `set-frame-size` on the settled
-//! frame.
+//! Each row records `frame-char-height`, `frame-text-height`, `frame-height`,
+//! the root and minibuffer window heights and the first window's
+//! `window-body-height` after each sizing has held still for 1 s, and
+//! requires Neomacs's to equal GNU's. Two shapes, two rows:
+//! - settled: no size requested, then a pixelwise and a character
+//!   `set-frame-size` on the settled frame;
+//! - startup: a pixelwise `set-frame-size` while the `-l` file loads, before
+//!   the first frame has settled (#864). GNU gives the requested text height
+//!   there too.
 #![cfg(target_os = "linux")]
 
 use neomacs_gui_tests::{
@@ -27,8 +31,8 @@ use std::{
     time::Duration,
 };
 
-/// `(SHAPE CHAR-HEIGHT TEXT-HEIGHT FRAME-HEIGHT ROOT MINI)` per sizing.
-fn parse(output: &str) -> Vec<(String, [i64; 5])> {
+/// `(SHAPE CHAR-HEIGHT TEXT-HEIGHT FRAME-HEIGHT ROOT MINI BODY)` per sizing.
+fn parse(output: &str) -> Vec<(String, [i64; 6])> {
     output
         .lines()
         .filter_map(|line| line.strip_prefix("FRAME-TEXT-HEIGHT "))
@@ -42,9 +46,9 @@ fn parse(output: &str) -> Vec<(String, [i64; 5])> {
                         .unwrap_or_else(|_| panic!("{field:?} in {record}"))
                 })
                 .collect();
-            let numbers: [i64; 5] = numbers
+            let numbers: [i64; 6] = numbers
                 .try_into()
-                .unwrap_or_else(|_| panic!("five numbers in {record}"));
+                .unwrap_or_else(|_| panic!("six numbers in {record}"));
             (shape, numbers)
         })
         .collect()
@@ -57,7 +61,7 @@ fn observe(
     binary: &Path,
     session_env: &[(String, String)],
     scenario: &str,
-) -> Vec<(String, [i64; 5])> {
+) -> Vec<(String, [i64; 6])> {
     let fixture = root.join("crates/neomacs-gui-tests/fixtures/frame-text-height.el");
     let _ = fs::remove_dir_all(artifacts);
     fs::create_dir_all(artifacts).unwrap();
@@ -147,7 +151,7 @@ fn frame_text_height_matches_gnu(
         &neo_session.env(),
         scenario,
     );
-    let shapes = |records: &[(String, [i64; 5])]| -> Vec<String> {
+    let shapes = |records: &[(String, [i64; 6])]| -> Vec<String> {
         records.iter().map(|(shape, _)| shape.clone()).collect()
     };
     assert_eq!(
@@ -161,7 +165,7 @@ fn frame_text_height_matches_gnu(
         "Neomacs recorded every sizing"
     );
 
-    for (shape, [_, text, _, root_window, mini]) in &gnu {
+    for (shape, [_, text, _, root_window, mini, _]) in &gnu {
         assert_eq!(
             root_window + mini,
             *text,
@@ -178,7 +182,7 @@ fn frame_text_height_matches_gnu(
         .filter(|(gnu, neo)| gnu != neo)
         .map(|(gnu, neo)| {
             format!(
-                "  {}: gnu [char text lines root mini] {:?}\n  {}: neo {:?}",
+                "  {}: gnu [char text lines root mini body] {:?}\n  {}: neo {:?}",
                 gnu.0, gnu.1, neo.0, neo.1
             )
         })
@@ -203,3 +207,16 @@ fn frame_text_height_matches_gnu_on_wayland() {
 /// No size requested, then a pixelwise and a character `set-frame-size` on
 /// the settled frame.
 const SETTLED: &[&str] = &["default", "pixelwise", "chars"];
+
+#[test]
+fn frame_size_requested_at_startup_matches_gnu_on_x11() {
+    frame_text_height_matches_gnu(GuiBackend::LinuxX11, "startup", STARTUP);
+}
+
+#[test]
+fn frame_size_requested_at_startup_matches_gnu_on_wayland() {
+    frame_text_height_matches_gnu(GuiBackend::LinuxWayland, "startup", STARTUP);
+}
+
+/// A pixelwise `set-frame-size` while the `-l` file loads (#864).
+const STARTUP: &[&str] = &["startup-pixelwise"];

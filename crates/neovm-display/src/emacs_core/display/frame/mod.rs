@@ -27,8 +27,8 @@ use super::window_cmds::{
     ensure_selected_frame_id_in_state, expect_int, flush_pending_live_gui_resize,
     frame_is_top_level_non_window, frame_name_parameter_value, frame_non_text_total_height_pixels,
     frame_non_text_total_width_pixels_in_state, frame_realized_lines, frame_size_param_to_cells,
-    frame_size_param_to_pixels, frame_text_height_pixels, frame_text_width_pixels,
-    frame_text_width_pixels_in_state, frame_total_cols, frame_total_lines,
+    frame_size_param_to_pixels, frame_text_height_pixels, frame_text_pixels_after_sent_resize,
+    frame_text_width_pixels, frame_text_width_pixels_in_state, frame_total_cols, frame_total_lines,
     host_outer_non_text_height_pixels, make_frame_plain_on_terminal,
     note_explicit_tool_bar_omission, other_frames_in_state, parse_frame_size_param,
     remember_selected_window_point_in_state, request_live_gui_frame_resize, resize_live_gui_frame,
@@ -809,7 +809,7 @@ pub fn note_linux_toolkit_tool_bar_allocation(
         if !has_tool_bar_items {
             return;
         }
-        let Some((omitted, text_width, text_height, outer_width, outer_height)) =
+        let Some((omitted, outer_width, outer_height)) =
             eval.frame_manager().get(fid).and_then(|frame| {
                 if frame.effective_window_system().is_none()
                     || matches!(frame.toolkit_tool_bar, ToolkitToolBar::Allocated)
@@ -824,8 +824,6 @@ pub fn note_linux_toolkit_tool_bar_allocation(
                                 explicit_size_omitted: true
                             }
                         ),
-                        frame_text_width_pixels(frame),
-                        frame_text_height_pixels(frame),
                         frame.width,
                         frame.height,
                     ))
@@ -834,6 +832,21 @@ pub fn note_linux_toolkit_tool_bar_allocation(
         else {
             return;
         };
+        // The grow keeps the text size the omitted-bar request asked for. That
+        // request may still be in flight (an init file's `set-frame-size`
+        // before the first redisplay, #864); its target, not the frame's old
+        // pixels, is the text size GNU reads here.
+        let Some((text_width, text_height)) = eval
+            .frame_manager()
+            .get(fid)
+            .map(|frame| frame_text_pixels_after_sent_resize(frame, false))
+        else {
+            return;
+        };
+        tracing::debug!(
+            "tool-bar allocation: fid={fid:?} omitted={omitted} text={text_width}x{text_height} \
+             outer={outer_width}x{outer_height}"
+        );
         let grow = omitted && {
             match tool_bar_lines_policy(eval, fid) {
                 Ok(policy) => policy == implied_resize::ResizePolicy::PreserveTextGrid,

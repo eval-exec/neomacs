@@ -937,6 +937,50 @@ fn first_tool_bar_allocation_grows_only_when_the_explicit_size_omitted_the_bar()
     );
 }
 
+/// #864: an init file's `set-frame-size` is still in flight when the first
+/// redisplay allocates the tool bar. GNU's grow keeps `FRAME_TEXT_HEIGHT`,
+/// which already holds the request because `xg_frame_set_char_size` waited
+/// for it. The grow must keep the requested text size, not the size the frame
+/// had before the request.
+#[cfg(target_os = "linux")]
+#[test]
+fn tool_bar_allocation_during_an_explicit_resize_keeps_the_requested_text_size() {
+    let mut fixture = ChromeResizeFixture::new();
+    clear_tool_bar_allocation(&mut fixture);
+    fixture.requests.borrow_mut().clear();
+    fixture.eval.eval_str("(set-frame-size nil 90 40)").unwrap();
+    let request = fixture.requests.borrow()[0].clone();
+    assert_eq!(
+        (request.width, request.height),
+        (720, 640 + fixture.menu_height)
+    );
+    let toolbar = fixture
+        .eval
+        .frame_manager()
+        .get(fixture.frame_id)
+        .unwrap()
+        .tool_bar_height;
+    assert!(toolbar > 0);
+    fixture.requests.borrow_mut().clear();
+    // No native answer yet: the frame still has its pre-request pixels.
+    crate::emacs_core::frame::note_linux_toolkit_tool_bar_allocation(
+        &mut fixture.eval,
+        fixture.frame_id,
+        true,
+    );
+    assert_eq!(fixture.requests.borrow().len(), 1);
+    let grown = fixture.requests.borrow()[0].clone();
+    assert_eq!(
+        (grown.width, grown.height),
+        (720, 640 + toolbar + fixture.menu_height),
+        "the grow keeps the 90x40 text area the in-flight request asked for"
+    );
+    // The stale answer to the first request, then the grow's own answer.
+    fixture.acknowledge(&request);
+    fixture.acknowledge(&grown);
+    fixture.assert_geometry(90, 40, 640);
+}
+
 #[cfg(target_os = "linux")]
 #[test]
 fn erroring_window_setup_hook_still_allocates_the_tool_bar() {
