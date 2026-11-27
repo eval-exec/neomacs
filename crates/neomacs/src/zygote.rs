@@ -644,6 +644,34 @@ mod unix_impl {
         }
     }
 
+    const MAX_SOCKET_WITHDRAW_RETRIES: u8 = 3;
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum ServerLifecycle {
+        /// Actively polling the listener and accepting new connections.
+        Accepting { withdraw_failures: u8 },
+        /// Published socket path has been removed; draining already-accepted
+        /// clients and exiting once none remain.
+        Draining,
+        /// Unlinking the socket failed persistently after bounded retries;
+        /// stop polling the listener and exit once active work finishes.
+        ExitingWithoutUnlink,
+    }
+
+    impl ServerLifecycle {
+        fn is_accepting(self) -> bool {
+            matches!(self, Self::Accepting { .. })
+        }
+    }
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum IdleShutdownDecision {
+        /// Queued work arrived or socket withdrawal failed transiently; keep looping.
+        Continue,
+        /// Socket withdrawn (or retries exhausted) with no remaining work; exit now.
+        ExitNow,
+    }
+
     fn accept_queued_clients(
         listener: &UnixListener,
         pending: &mut Vec<PendingClient>,
@@ -664,12 +692,89 @@ mod unix_impl {
             *last_activity = Instant::now();
             let mut client = PendingClient::new(stream);
             match client.try_advance() {
-                ReadProgress::Incomplete => pending.push(client),
-                ReadProgress::Complete(req) => ready_requests.push((client.stream, req)),
+                ReadProgress::Incomplete => {
+                    if Instant::now() >= client.deadline {
+                        write_response(&mut client.stream, RESP_ERROR, libc::ETIMEDOUT);
+                    } else {
+                        pending.push(client);
+                    }
+                }
+                ReadProgress::Complete(req) => {
+                    if Instant::now() >= client.deadline {
+                        write_response(&mut client.stream, RESP_ERROR, libc::ETIMEDOUT);
+                    } else {
+                        ready_requests.push((client.stream, req));
+                    }
+                }
                 ReadProgress::Failed(errno) => {
                     write_response(&mut client.stream, RESP_ERROR, errno);
                 }
             }
+        }
+    }
+
+    fn try_withdraw_for_idle_shutdown(
+        socket_path: &Path,
+        listener: &UnixListener,
+        pending: &mut Vec<PendingClient>,
+        ready_requests: &mut Vec<(UnixStream, ZygoteRequest)>,
+        last_activity: &mut Instant,
+        lifecycle: &mut ServerLifecycle,
+    ) -> IdleShutdownDecision {
+        let ServerLifecycle::Accepting { withdraw_failures } = *lifecycle else {
+            return if pending.is_empty() && ready_requests.is_empty() {
+                IdleShutdownDecision::ExitNow
+            } else {
+                IdleShutdownDecision::Continue
+            };
+        };
+
+        // 1. Check for connections queued after `poll` timed out before
+        // deciding to withdraw the socket or exit.
+        accept_queued_clients(listener, pending, ready_requests, last_activity);
+        if !pending.is_empty() || !ready_requests.is_empty() {
+            return IdleShutdownDecision::Continue;
+        }
+
+        // 2. Withdraw the published socket path so no new clients can connect.
+        // Only enter `Draining` if removal succeeded or the path is already
+        // absent; otherwise report the error, keep accepting, and retry with a
+        // bounded policy.
+        match std::fs::remove_file(socket_path) {
+            Ok(()) => {
+                *lifecycle = ServerLifecycle::Draining;
+            }
+            Err(err) if err.kind() == io::ErrorKind::NotFound => {
+                *lifecycle = ServerLifecycle::Draining;
+            }
+            Err(err) => {
+                eprintln!(
+                    "neomacs zygote: failed to unlink {}: {err}",
+                    socket_path.display()
+                );
+                let next_failures = withdraw_failures.saturating_add(1);
+                if next_failures >= MAX_SOCKET_WITHDRAW_RETRIES {
+                    *lifecycle = ServerLifecycle::ExitingWithoutUnlink;
+                    accept_queued_clients(listener, pending, ready_requests, last_activity);
+                    return if pending.is_empty() && ready_requests.is_empty() {
+                        IdleShutdownDecision::ExitNow
+                    } else {
+                        IdleShutdownDecision::Continue
+                    };
+                }
+                *lifecycle = ServerLifecycle::Accepting {
+                    withdraw_failures: next_failures,
+                };
+                return IdleShutdownDecision::Continue;
+            }
+        }
+
+        // 3. Drain any client that connected just before unlink.
+        accept_queued_clients(listener, pending, ready_requests, last_activity);
+        if pending.is_empty() && ready_requests.is_empty() {
+            IdleShutdownDecision::ExitNow
+        } else {
+            IdleShutdownDecision::Continue
         }
     }
 
@@ -723,9 +828,12 @@ mod unix_impl {
         }
 
         // Bind to a temporary sibling path with owner-only mode 0600, then
-        // atomically rename into place so clients never observe an unbound or
-        // world-accessible socket.
-        let tmp_socket = socket_path.with_extension(format!("tmp.{}", std::process::id()));
+        // atomically publish with `hard_link` (which fails with `EEXIST` if
+        // `socket_path` is already occupied instead of replacing an existing
+        // file). Always remove `tmp_socket` afterward.
+        let mut tmp_os = socket_path.as_os_str().to_os_string();
+        tmp_os.push(format!(".t{}", std::process::id()));
+        let tmp_socket = PathBuf::from(tmp_os);
         let _ = std::fs::remove_file(&tmp_socket);
         let listener = UnixListener::bind(&tmp_socket).unwrap_or_else(|err| {
             eprintln!(
@@ -735,8 +843,9 @@ mod unix_impl {
             std::process::exit(1);
         });
         let _ = std::fs::set_permissions(&tmp_socket, std::fs::Permissions::from_mode(0o600));
-        if let Err(err) = std::fs::rename(&tmp_socket, socket_path) {
-            let _ = std::fs::remove_file(&tmp_socket);
+        let publish_res = std::fs::hard_link(&tmp_socket, socket_path);
+        let _ = std::fs::remove_file(&tmp_socket);
+        if let Err(err) = publish_res {
             eprintln!(
                 "neomacs zygote: failed to publish socket {}: {err}",
                 socket_path.display()
@@ -758,21 +867,23 @@ mod unix_impl {
         let mut ready_requests: Vec<(UnixStream, ZygoteRequest)> = Vec::new();
         let mut children: HashMap<libc::pid_t, UnixStream> = HashMap::new();
         let mut last_activity = Instant::now();
-        let mut draining = false;
-        let mut socket_unlinked = false;
+        let mut lifecycle = ServerLifecycle::Accepting {
+            withdraw_failures: 0,
+        };
 
         loop {
             if ready_requests.is_empty()
                 && children.is_empty()
                 && pending.is_empty()
-                && (draining || SHUTDOWN_REQUESTED.load(Ordering::Relaxed))
+                && (!lifecycle.is_accepting() || SHUTDOWN_REQUESTED.load(Ordering::Relaxed))
             {
                 break;
             }
 
             if ready_requests.is_empty() {
+                let accepting = lifecycle.is_accepting();
                 let mut pollfds = Vec::with_capacity(2 + pending.len() + children.len());
-                if !draining {
+                if accepting {
                     pollfds.push(libc::pollfd {
                         fd: listener_fd,
                         events: libc::POLLIN,
@@ -867,7 +978,7 @@ mod unix_impl {
                 );
 
                 // 4. Accept newly queued connections (non-blocking) and try an immediate read.
-                if !draining && (pollfds[0].revents & libc::POLLIN) != 0 {
+                if accepting && (pollfds[0].revents & libc::POLLIN) != 0 {
                     accept_queued_clients(
                         &listener,
                         &mut pending,
@@ -909,35 +1020,20 @@ mod unix_impl {
             }
 
             // 6. Clean idle / watched-parent shutdown when no work is in flight.
-            if !draining && children.is_empty() && pending.is_empty() {
+            if lifecycle.is_accepting() && children.is_empty() && pending.is_empty() {
                 let watch_dead = watch_pid.is_some_and(|wpid| !watch_pid_alive(wpid));
                 let idle_expired = last_activity.elapsed() >= idle_timeout;
-                if watch_dead || idle_expired {
-                    // Check for connections queued after `poll` timed out before
-                    // unlinking or exiting.
-                    accept_queued_clients(
+                if (watch_dead || idle_expired)
+                    && try_withdraw_for_idle_shutdown(
+                        socket_path,
                         &listener,
                         &mut pending,
                         &mut ready_requests,
                         &mut last_activity,
-                    );
-                    if !pending.is_empty() || !ready_requests.is_empty() {
-                        continue;
-                    }
-                    // Unlink first so no new clients can discover this socket,
-                    // then drain any connection that raced in before unlink.
-                    let _ = std::fs::remove_file(socket_path);
-                    socket_unlinked = true;
-                    draining = true;
-                    accept_queued_clients(
-                        &listener,
-                        &mut pending,
-                        &mut ready_requests,
-                        &mut last_activity,
-                    );
-                    if pending.is_empty() && ready_requests.is_empty() {
-                        break;
-                    }
+                        &mut lifecycle,
+                    ) == IdleShutdownDecision::ExitNow
+                {
+                    break;
                 }
             }
         }
@@ -946,7 +1042,7 @@ mod unix_impl {
         for &pid in children.keys() {
             unsafe { libc::kill(pid, libc::SIGKILL) };
         }
-        if !socket_unlinked {
+        if lifecycle.is_accepting() {
             let _ = std::fs::remove_file(socket_path);
         }
         std::mem::forget(evaluator);
@@ -1047,6 +1143,118 @@ mod unix_impl {
                     libc::ETIMEDOUT
                 );
             }
+        }
+
+        #[test]
+        fn idle_shutdown_drains_queued_connection_instead_of_exiting() {
+            let dir = std::env::temp_dir().join(format!("nvz-idle-test-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(&dir).unwrap();
+            let sock = dir.join("z.sock");
+
+            let listener = UnixListener::bind(&sock).expect("bind listener");
+            listener.set_nonblocking(true).unwrap();
+
+            // Queue a client in the kernel listen backlog without calling `poll`.
+            let mut client = UnixStream::connect(&sock).expect("connect queued client");
+            client.write_all(&encode_minimal_frame()).unwrap();
+
+            let mut pending = Vec::new();
+            let mut ready = Vec::new();
+            let mut last_activity = Instant::now() - Duration::from_secs(30);
+            let mut lifecycle = ServerLifecycle::Accepting {
+                withdraw_failures: 0,
+            };
+
+            // Idle shutdown must accept the queued client and stay alive rather
+            // than exiting and dropping the connection.
+            let decision = try_withdraw_for_idle_shutdown(
+                &sock,
+                &listener,
+                &mut pending,
+                &mut ready,
+                &mut last_activity,
+                &mut lifecycle,
+            );
+            assert_eq!(decision, IdleShutdownDecision::Continue);
+            assert_eq!(
+                lifecycle,
+                ServerLifecycle::Accepting {
+                    withdraw_failures: 0
+                }
+            );
+            assert_eq!(ready.len(), 1);
+            assert!(sock.exists(), "socket should stay published while active");
+
+            // Once all queued work is drained and no more clients are pending,
+            // idle shutdown withdraws the socket and transitions to Draining.
+            ready.clear();
+            drop(client);
+            let decision2 = try_withdraw_for_idle_shutdown(
+                &sock,
+                &listener,
+                &mut pending,
+                &mut ready,
+                &mut last_activity,
+                &mut lifecycle,
+            );
+            assert_eq!(decision2, IdleShutdownDecision::ExitNow);
+            assert_eq!(lifecycle, ServerLifecycle::Draining);
+            assert!(!sock.exists(), "socket should be unlinked on idle exit");
+
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+
+        #[test]
+        fn idle_shutdown_keeps_accepting_when_unlink_fails_until_retry_limit() {
+            let dir = std::env::temp_dir().join(format!("nvz-unlk-test-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(&dir).unwrap();
+            let sock = dir.join("z.sock");
+            // Passing a directory path to `remove_file` reliably fails with EISDIR/EPERM.
+            let unremovable = dir.join("occupied-dir");
+            std::fs::create_dir_all(&unremovable).unwrap();
+
+            let listener = UnixListener::bind(&sock).expect("bind listener");
+            listener.set_nonblocking(true).unwrap();
+
+            let mut pending = Vec::new();
+            let mut ready = Vec::new();
+            let mut last_activity = Instant::now() - Duration::from_secs(30);
+            let mut lifecycle = ServerLifecycle::Accepting {
+                withdraw_failures: 0,
+            };
+
+            for expected_failures in 1..MAX_SOCKET_WITHDRAW_RETRIES {
+                let decision = try_withdraw_for_idle_shutdown(
+                    &unremovable,
+                    &listener,
+                    &mut pending,
+                    &mut ready,
+                    &mut last_activity,
+                    &mut lifecycle,
+                );
+                assert_eq!(decision, IdleShutdownDecision::Continue);
+                assert_eq!(
+                    lifecycle,
+                    ServerLifecycle::Accepting {
+                        withdraw_failures: expected_failures,
+                    }
+                );
+            }
+
+            let final_decision = try_withdraw_for_idle_shutdown(
+                &unremovable,
+                &listener,
+                &mut pending,
+                &mut ready,
+                &mut last_activity,
+                &mut lifecycle,
+            );
+            assert_eq!(final_decision, IdleShutdownDecision::ExitNow);
+            assert_eq!(lifecycle, ServerLifecycle::ExitingWithoutUnlink);
+
+            let _ = std::fs::remove_dir_all(&dir);
         }
     }
 }

@@ -142,11 +142,23 @@ mod unix_impl {
         Ok(())
     }
 
-    fn socket_path_for(program: &OsStr) -> Result<PathBuf, String> {
+    struct ZygoteEndpoint {
+        path: PathBuf,
+        /// True when `path` lives inside our user-private `0700` directory
+        /// created by `ensure_private_socket_dir()`, where reclaiming stale
+        /// sockets is safe; false for explicit `NEOVM_ORACLE_ZYGOTE_SOCK`
+        /// paths in caller-chosen directories.
+        managed_dir: bool,
+    }
+
+    fn socket_endpoint_for(program: &OsStr) -> Result<ZygoteEndpoint, String> {
         if let Some(explicit) = std::env::var_os("NEOVM_ORACLE_ZYGOTE_SOCK")
             && !explicit.is_empty()
         {
-            return Ok(PathBuf::from(explicit));
+            return Ok(ZygoteEndpoint {
+                path: PathBuf::from(explicit),
+                managed_dir: false,
+            });
         }
         let dir = ensure_private_socket_dir()?;
         let run_id = std::env::var("NEXTEST_RUN_ID").unwrap_or_else(|_| "manual".to_string());
@@ -156,11 +168,19 @@ mod unix_impl {
         let digest = hasher.finish();
         // Keep socket path short (< 50 bytes) so it fits well inside macOS's
         // 104-byte `sun_path` limit.
-        Ok(dir.join(format!("{digest:016x}.sock")))
+        Ok(ZygoteEndpoint {
+            path: dir.join(format!("{digest:016x}.sock")),
+            managed_dir: true,
+        })
     }
 
     fn lock_path_for(sock_path: &Path) -> PathBuf {
-        sock_path.with_extension("lock")
+        // Append `.lock` rather than replacing the extension so an explicit
+        // socket path already ending in `.lock` never collides with its own
+        // startup lock file.
+        let mut os = sock_path.as_os_str().to_os_string();
+        os.push(".lock");
+        PathBuf::from(os)
     }
 
     /// Identify the owning `cargo-nextest` PID when running under nextest so
@@ -215,9 +235,10 @@ mod unix_impl {
 
     fn connect_or_spawn_zygote(
         program: &OsStr,
-        sock_path: &Path,
+        endpoint: &ZygoteEndpoint,
         sandbox: &OracleSandbox,
     ) -> Result<UnixStream, String> {
+        let sock_path = endpoint.path.as_path();
         if let Ok(stream) = connect_verified(sock_path) {
             return Ok(stream);
         }
@@ -231,11 +252,18 @@ mod unix_impl {
             return Ok(stream);
         }
 
-        // Remove any stale socket file owned by us left by an earlier crashed
-        // server, but refuse to delete or overwrite non-socket targets,
-        // symlinks, or entries owned by another user.
+        // Only automatically reclaim a stale socket inside our private `0700`
+        // managed directory. For explicit `NEOVM_ORACLE_ZYGOTE_SOCK` paths in
+        // caller-chosen directories, leave any existing entry untouched and
+        // report an error so the caller falls back cleanly.
         match fs::symlink_metadata(sock_path) {
             Ok(_) => {
+                if !endpoint.managed_dir {
+                    return Err(format!(
+                        "refusing to reclaim existing explicit zygote path {}",
+                        sock_path.display()
+                    ));
+                }
                 verify_owned_socket(sock_path)?;
                 let _ = fs::remove_file(sock_path);
             }
@@ -424,8 +452,8 @@ mod unix_impl {
         }
 
         let program = cmd.get_program();
-        let sock_path = match socket_path_for(program) {
-            Ok(p) => p,
+        let endpoint = match socket_endpoint_for(program) {
+            Ok(ep) => ep,
             Err(_) => return None,
         };
         let cwd = match cmd.get_current_dir() {
@@ -440,7 +468,7 @@ mod unix_impl {
         // zygote daemon cannot start (e.g. a debug binary without a final
         // pdump, or untrusted socket dir), return `None` so the caller falls
         // back transparently to `cmd.output()`.
-        let mut stream = match connect_or_spawn_zygote(program, &sock_path, sandbox) {
+        let mut stream = match connect_or_spawn_zygote(program, &endpoint, sandbox) {
             Ok(s) => s,
             Err(_) => return None,
         };
@@ -751,12 +779,34 @@ mod unix_impl {
             assert!(verify_owned_socket(&regular).is_err());
 
             // Attempting to connect/spawn at a regular file must fail without
-            // deleting or clobbering the file.
+            // deleting or clobbering the file (for both managed and explicit endpoints).
             let sandbox = OracleSandbox::new("(princ \"ok\")", &[], dir.path()).expect("sandbox");
             let program = PathBuf::from(crate::common::neomacs_binary_path());
-            let err = connect_or_spawn_zygote(program.as_os_str(), &regular, &sandbox);
-            assert!(err.is_err(), "expected non-socket target to be rejected");
-            assert_eq!(fs::read(&regular).unwrap(), b"preserve-me");
+            for managed_dir in [false, true] {
+                let ep = ZygoteEndpoint {
+                    path: regular.clone(),
+                    managed_dir,
+                };
+                let err = connect_or_spawn_zygote(program.as_os_str(), &ep, &sandbox);
+                assert!(err.is_err(), "expected non-socket target to be rejected");
+                assert_eq!(fs::read(&regular).unwrap(), b"preserve-me");
+            }
+        }
+
+        #[test]
+        fn lock_path_for_never_collides_with_socket_path() {
+            assert_eq!(
+                lock_path_for(Path::new("/tmp/nvz/abc.sock")),
+                PathBuf::from("/tmp/nvz/abc.sock.lock")
+            );
+            assert_eq!(
+                lock_path_for(Path::new("/tmp/nvz/oracle.lock")),
+                PathBuf::from("/tmp/nvz/oracle.lock.lock")
+            );
+            assert_eq!(
+                lock_path_for(Path::new("/tmp/nvz/noext")),
+                PathBuf::from("/tmp/nvz/noext.lock")
+            );
         }
     }
 }
