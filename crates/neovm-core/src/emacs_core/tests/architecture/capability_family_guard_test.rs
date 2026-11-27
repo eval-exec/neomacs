@@ -645,10 +645,14 @@ fn cfg_attr_moves_path(attrs: &[syn::Attribute]) -> bool {
     })
 }
 
-/// True if a macro's tokens contain a file-loading `mod <name>;` (the name
-/// may be a `$metavariable`). An inline `mod name { … }` loads no file.
+/// True if a macro's tokens load another file: a `mod <name>;` (the name
+/// may be a `$metavariable`) or an `include!` (any path spelling). An inline
+/// `mod name { … }` loads no file.
 fn tokens_declare_file_mod(tokens: &str) -> bool {
     let words: Vec<&str> = tokens.split_whitespace().collect();
+    if words.windows(2).any(|w| w[0] == "include" && w[1] == "!") {
+        return true;
+    }
     words.iter().enumerate().any(|(i, w)| {
         *w == "mod"
             && words[i + 1..]
@@ -1047,7 +1051,7 @@ impl<'ast> Visit<'ast> for FileItems<'_, '_> {
         if tokens_declare_file_mod(&mac.tokens.to_string()) {
             self.fail(
                 line,
-                "macro body declares a file-loading `mod` (unanalysable, fail closed)",
+                "macro body loads another file (`mod name;` or `include!`) (unanalysable, fail closed)",
             );
         }
         visit::visit_macro(self, mac);
@@ -1280,7 +1284,7 @@ fn c12_production_reach_walk_refuses_every_route_into_a_test_file() {
     // 11. A macro-emitted module.
     has(
         &[("lib.rs", "macro_rules! m { () => { mod tests; }; } m!();")],
-        "macro body declares a file-loading `mod` (unanalysable, fail closed)",
+        "macro body loads another file (`mod name;` or `include!`) (unanalysable, fail closed)",
     );
     // 12. A test-path facade (every item test-gated) may be reached.
     let facade = run(&[
@@ -1330,6 +1334,23 @@ fn c12_production_reach_walk_refuses_every_route_into_a_test_file() {
             "fn f() { cfg_select! { unix => { #[path = \"tests/x.rs\"] mod x; } _ => {} } }",
         )],
         "non-inline `mod x` inside a block (fail closed)",
+    );
+    // 15-18. The remaining fail-closed branches, each with its own row.
+    has(
+        &[("lib.rs", "#[path = concat!(\"tests/x.rs\")] mod x;")],
+        "`mod x` has a non-literal #[path] (fail closed)",
+    );
+    has(
+        &[("lib.rs", "#[path = \"gone.rs\"] mod gone;")],
+        "unreadable module file (fail closed)",
+    );
+    has(&[("lib.rs", "mod bad;"), ("bad.rs", "fn (")], "unparsable");
+    has(
+        &[(
+            "lib.rs",
+            "macro_rules! m { () => { include!(\"tests/x.rs\"); }; }",
+        )],
+        "macro body loads another file (`mod name;` or `include!`) (unanalysable, fail closed)",
     );
 }
 
@@ -1384,8 +1405,14 @@ impl<'ast> Visit<'ast> for RelinkVisitor<'_> {
     fn visit_item_impl(&mut self, item: &'ast syn::ItemImpl) {
         let ex = production_excluded(&item.attrs);
         self.excluded += u32::from(ex);
-        self.impl_stack
-            .push(type_name(&item.self_ty).unwrap_or_default());
+        // Only an inherent `impl TaggedHeap` holds the gated entries; a trait
+        // impl's method that shares an entry's name is not that entry.
+        let self_ty = if item.trait_.is_none() {
+            type_name(&item.self_ty).unwrap_or_default()
+        } else {
+            String::new()
+        };
+        self.impl_stack.push(self_ty);
         visit::visit_item_impl(self, item);
         self.impl_stack.pop();
         self.excluded -= u32::from(ex);
@@ -1435,6 +1462,18 @@ impl<'ast> Visit<'ast> for RelinkVisitor<'_> {
             ));
         }
         visit::visit_item(self, item);
+    }
+
+    fn visit_expr(&mut self, expr: &'ast syn::Expr) {
+        if self.excluded == 0
+            && let syn::Expr::Verbatim(tokens) = expr
+        {
+            self.problems.push(format!(
+                "{}: unparsed expression `{tokens}` (fail closed)",
+                self.file
+            ));
+        }
+        visit::visit_expr(self, expr);
     }
 
     fn visit_expr_method_call(&mut self, call: &'ast syn::ExprMethodCall) {
@@ -1576,6 +1615,20 @@ fn c12_relinking_helper_rule_refuses_ungated_callers() {
         ),
         "{p}"
     );
+    // 5a. A trait impl on `TaggedHeap` is not the inherent gated entry.
+    let p = run(
+        "pub trait Bypass { fn finalize_collection(&mut self); }
+         impl Bypass for TaggedHeap { fn finalize_collection(&mut self) { self.promote_and_blacken(); } }",
+    );
+    assert!(
+        p.contains("`finalize_collection` calls relinking helper `promote_and_blacken` without being a proof-gated entry"),
+        "{p}"
+    );
+    // 5b. Unparsed items and expressions fail closed.
+    let p = run("pub macro relink() {}");
+    assert!(p.contains("unparsed item"), "{p}");
+    let p = run("fn f() { let _ = builtin # offset_of(TaggedHeap, mark_parity); }");
+    assert!(p.contains("unparsed expression"), "{p}");
     // 5. A test-gated caller is out of scope.
     let gated =
         run("impl TaggedHeap { #[cfg(test)] pub fn t(&mut self) { self.promote_and_blacken(); } }");
