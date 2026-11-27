@@ -159,6 +159,22 @@ pub enum CursorStyle {
 }
 
 impl CursorStyle {
+    /// The painted length of a horizontal bar on a cursor slot SLOT_WIDTH
+    /// wide. GNU `x_draw_bar_cursor` fills `w->phys_cursor_width - 1` pixels
+    /// for an HBAR_CURSOR (src/xterm.c, HBAR branch), one less than the
+    /// cursor's own width, which `window-cursor-info` still reports in full.
+    pub fn hbar_paint_width(slot_width: f32) -> f32 {
+        (slot_width - 1.0).max(1.0)
+    }
+
+    /// The painted width of a vertical bar BAR_WIDTH wide on a cursor slot
+    /// SLOT_WIDTH wide. GNU `x_draw_bar_cursor` paints `min
+    /// (cursor_glyph->pixel_width, width)` (src/xterm.c, BAR branch): a bar
+    /// never paints past its glyph.
+    pub fn bar_paint_width(bar_width: f32, slot_width: f32) -> f32 {
+        bar_width.max(1.0).min(slot_width.max(1.0))
+    }
+
     /// Convert a resolved semantic cursor spec into a renderable style.
     pub fn from_spec(spec: CursorSpec) -> Option<Self> {
         Self::from_kind(spec.cursor_kind, spec.bar_width)

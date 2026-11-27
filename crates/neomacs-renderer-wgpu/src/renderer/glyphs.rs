@@ -1203,6 +1203,7 @@ impl WgpuRenderer {
 
         match style {
             CursorStyle::Bar(bar_w) => {
+                let bar_w = CursorStyle::bar_paint_width(bar_w, cw);
                 if wake_active {
                     let (sx, sy, sw, sh) = Self::scale_rect(cx, cy, bar_w, ch, wake);
                     self.add_rect(cursor_vertices, sx, sy, sw, sh, effective_color);
@@ -1211,6 +1212,7 @@ impl WgpuRenderer {
                 }
             }
             CursorStyle::Hbar(hbar_h) => {
+                let cw = CursorStyle::hbar_paint_width(cw);
                 if wake_active {
                     let (sx, sy, sw, sh) = Self::scale_rect(cx, cy + ch - hbar_h, cw, hbar_h, wake);
                     self.add_rect(cursor_vertices, sx, sy, sw, sh, effective_color);

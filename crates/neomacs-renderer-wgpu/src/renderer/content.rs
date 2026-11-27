@@ -600,6 +600,7 @@ impl WgpuRenderer {
                     }
                 }
                 CursorStyle::Bar(bar_w) => {
+                    let bar_w = CursorStyle::bar_paint_width(bar_w, gw);
                     self.add_rect(&mut cursor_vertices, gx, gy, bar_w, gh, &cursor.color);
                 }
                 CursorStyle::Hbar(hbar_h) => {
@@ -607,7 +608,7 @@ impl WgpuRenderer {
                         &mut cursor_vertices,
                         gx,
                         gy + gh - hbar_h,
-                        gw,
+                        CursorStyle::hbar_paint_width(gw),
                         hbar_h,
                         &cursor.color,
                     );

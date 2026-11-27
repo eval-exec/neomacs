@@ -1440,7 +1440,8 @@ pub(crate) fn resolve_cursor_vertical_metrics(
 }
 
 /// GNU caps non-stretching box/hbar cursors at one column, without
-/// enlarging a narrower glyph; vertical bars keep their explicit ink width.
+/// enlarging a narrower glyph; a vertical bar keeps its explicit ink width
+/// up to its glyph's width.
 pub(crate) fn resolve_cursor_width(
     style: CursorStyle,
     slot_width: f32,
@@ -1449,7 +1450,9 @@ pub(crate) fn resolve_cursor_width(
     fallback_char_width: f32,
 ) -> f32 {
     let actual = match style {
-        CursorStyle::Bar(width) => width.max(1.0),
+        // GNU `x_draw_bar_cursor`: `width = min (cursor_glyph->pixel_width,
+        // width)` becomes `w->phys_cursor_width` (src/xterm.c, BAR branch).
+        CursorStyle::Bar(width) => CursorStyle::bar_paint_width(width, slot_width),
         CursorStyle::Hbar(_) | CursorStyle::FilledBox | CursorStyle::Hollow => slot_width.max(1.0),
     };
     if stretch_like && !x_stretch_cursor && !matches!(style, CursorStyle::Bar(_)) {

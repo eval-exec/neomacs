@@ -6,6 +6,11 @@
 ;; cursor as a bar: `set_frame_cursor_types' sets `cursor_type_changed'
 ;; (src/xdisp.c:34597-34621).
 ;;
+;; With NEOMACS_FCT_SHAPE set, the fixture instead sets `cursor-type' to
+;; that form (read as Lisp) on a space, for the shape's exact size:
+;; GNU paints an hbar one pixel shorter than its glyph and clamps a bar to
+;; the glyph's width (`x_draw_bar_cursor', src/xterm.c).
+;;
 ;; GNU writes its frame to NEOMACS_DEBUG_SURFACE_READBACK_PNG with
 ;; `x-export-frames', which includes the cursor; Neomacs's runtime writes its
 ;; surface readback to the same path.  Only the last image counts.
@@ -17,8 +22,8 @@
 (set-face-background 'cursor "#ff0000")
 (switch-to-buffer (get-buffer-create "*frame-cursor-type*"))
 (setq-local mode-line-format nil)
-(insert "MMMM MMMM\n")
-(goto-char 3)
+(insert "MMMM    MMMM\n")
+(goto-char 7)
 
 (defun neo-fct-export ()
   (when (and (eq window-system 'x) (fboundp 'x-export-frames))
@@ -27,7 +32,12 @@
         (set-buffer-multibyte nil)
         (insert (x-export-frames nil 'png))))))
 
-(run-at-time 1.0 nil (lambda () (set-frame-parameter nil 'cursor-type 'bar)))
+(run-at-time 1.0 nil
+             (lambda ()
+               (let ((shape (getenv "NEOMACS_FCT_SHAPE")))
+                 (if shape
+                     (setq cursor-type (car (read-from-string shape)))
+                   (set-frame-parameter nil 'cursor-type 'bar)))))
 (run-at-time 2.0 nil
              (lambda ()
                (condition-case err

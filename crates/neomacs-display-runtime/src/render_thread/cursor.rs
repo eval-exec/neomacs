@@ -405,7 +405,7 @@ impl CursorState {
                 // Bar: thin vertical line
                 let x0 = target.x;
                 let y0 = target.y;
-                let x1 = target.x + bar_w;
+                let x1 = target.x + CursorStyle::bar_paint_width(bar_w, target.width);
                 let y1 = target.y + target.height;
                 [(x0, y0), (x1, y0), (x1, y1), (x0, y1)]
             }
@@ -413,7 +413,7 @@ impl CursorState {
                 // Underline: thin horizontal line at bottom
                 let x0 = target.x;
                 let y0 = target.y + target.height - hbar_h;
-                let x1 = target.x + target.width;
+                let x1 = target.x + CursorStyle::hbar_paint_width(target.width);
                 let y1 = target.y + target.height;
                 [(x0, y0), (x1, y0), (x1, y1), (x0, y1)]
             }

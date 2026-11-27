@@ -456,10 +456,11 @@ fn target_corners_bar_style_1() {
 fn target_corners_underline_style_2() {
     let target = make_target(10.0, 20.0, 100.0, 50.0, CursorStyle::Hbar(2.0));
     let corners = CursorState::target_corners(&target);
-    // Underline is 2px tall at the bottom
+    // Underline is 2px tall at the bottom, one pixel short of the slot
+    // (GNU `x_draw_bar_cursor` HBAR: `w->phys_cursor_width - 1`).
     assert_eq!(corners[0], (10.0, 68.0)); // y + height - 2.0
-    assert_eq!(corners[1], (110.0, 68.0));
-    assert_eq!(corners[2], (110.0, 70.0)); // y + height
+    assert_eq!(corners[1], (109.0, 68.0));
+    assert_eq!(corners[2], (109.0, 70.0)); // y + height
     assert_eq!(corners[3], (10.0, 70.0));
 }
 
@@ -503,12 +504,15 @@ fn target_corners_bar_ignores_width() {
     assert_eq!(corners[1].0, 2.0); // top-right x = 0 + 2
 }
 
+/// GNU `x_draw_bar_cursor` paints an HBAR `w->phys_cursor_width - 1` long
+/// (src/xterm.c, HBAR branch); the pinned 31.1 oracle paints 24 px under a
+/// 25 px glyph (#882).
 #[test]
-fn target_corners_underline_uses_full_width() {
+fn target_corners_underline_is_one_pixel_short_of_the_slot() {
     let target = make_target(0.0, 0.0, 80.0, 20.0, CursorStyle::Hbar(2.0));
     let corners = CursorState::target_corners(&target);
     assert_eq!(corners[0].0, 0.0);
-    assert_eq!(corners[1].0, 80.0); // uses full width
+    assert_eq!(corners[1].0, 79.0);
 }
 
 // ---------------------------------------------------------------

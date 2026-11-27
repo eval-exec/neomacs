@@ -1914,8 +1914,10 @@ fn stretch_cursor_only_replay_matches_fresh_width_policy() {
                 })
                 .unwrap()
                 .pixel_width;
+            // GNU `x_draw_bar_cursor` clamps a bar to its glyph:
+            // `min (cursor_glyph->pixel_width, width)` (src/xterm.c, #882).
             let expected_width = if style == "bar" {
-                2.0
+                2.0_f32.min(glyph_width.max(1.0))
             } else if stretch {
                 glyph_width.max(1.0)
             } else {
