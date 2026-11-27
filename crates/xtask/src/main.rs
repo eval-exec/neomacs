@@ -816,11 +816,13 @@ impl FreshBuildOptions {
             }
         };
         // The pipeline byte-compiles the whole Lisp tree with the binary it
-        // just built, so an unoptimized profile makes that work several times
-        // slower.  Measured on a 32-core host (2026-11-27): the full-tree
-        // compile-main pass took 165 s at opt-level 0 against 19 s at
-        // opt-level 3, and the single-process load scan 191 s against 7 s;
-        // a single-core compile extrapolates to about 30 minutes.
+        // just built, so a profile whose workspace crates compile below
+        // opt-level 3 makes that work slower; dev is opt-level 2, and the
+        // numbers here were measured at opt-level 0.  Measured on a 32-core
+        // host (2026-11-27): the full-tree compile-main pass took 165 s at
+        // opt-level 0 against 19 s at opt-level 3, and the single-process load
+        // scan 191 s against 7 s; a single-core compile extrapolates to about
+        // 30 minutes.
         //
         // That is minutes, not hours, on a fast machine, and it is bounded by
         // hardware the profile name cannot describe, so it is a warning rather
@@ -833,8 +835,8 @@ impl FreshBuildOptions {
         // is `dev`, which outputs to `target/debug`).
         if matches!(profile, BuildProfile::Debug | BuildProfile::Test) {
             return Err(format!(
-                "fresh-build cannot use the `{}` profile: use `--profile dev` for an \
-                 unoptimized debug build (outputs to target/debug), or \
+                "fresh-build cannot use the `{}` profile: use `--profile dev` for a \
+                 debug build (workspace crates at opt-level 2; outputs to target/debug), or \
                  `--profile release-fast` for fast incremental optimized builds.",
                 profile.as_name()
             )
@@ -842,10 +844,11 @@ impl FreshBuildOptions {
         }
         if !check && !profile.is_optimized() && !no_byte_compile {
             eprintln!(
-                "warning: byte-compiling the Lisp tree with the unoptimized `{}` profile.\n         \
-                 Measured: ~5-9x slower per file and ~27x slower for the load scan than an\n         \
-                 optimized build. Use --no-byte-compile to reuse existing .elc files, or\n         \
-                 --profile release-fast for an optimized build.",
+                "warning: byte-compiling the Lisp tree with the `{}` profile, whose workspace\n         \
+                 crates compile below opt-level 3. Measured at opt-level 0: ~5-9x slower per\n         \
+                 file and ~27x slower for the load scan than an optimized build. Use\n         \
+                 --no-byte-compile to reuse existing .elc files, or --profile release-fast\n         \
+                 for an optimized build.",
                 profile.as_name()
             );
         }
@@ -974,8 +977,9 @@ enum BuildProfile {
     ReleasePgoProfiling,
     /// The instrumented pass that PRODUCES a profile. Never a PGO consumer.
     ReleasePgoGen,
-    /// Unoptimized debug build (outputs to target/debug). Byte-compiling with
-    /// it works but is several times slower than an optimized build.
+    /// Debug build (outputs to target/debug): workspace crates at opt-level 2,
+    /// dependencies at 3. Byte-compiling with it works but is slower than an
+    /// optimized build.
     Dev,
     Debug,
     Test,
@@ -1006,7 +1010,9 @@ impl BuildProfile {
         matches!(self, Self::ReleasePgo | Self::ReleasePgoProfiling)
     }
 
-    /// Optimized enough to byte-compile the Lisp tree with.
+    /// Optimized enough to byte-compile the Lisp tree with.  `dev` compiles its
+    /// workspace crates at opt-level 2, below the release profiles, so it does
+    /// not count.
     fn is_optimized(&self) -> bool {
         !matches!(self, Self::Dev | Self::Debug | Self::Test)
     }
@@ -5221,9 +5227,9 @@ Options:
                         release-pgo-profiling Two-pass PGO build with function symbols
                                               (strip=none, debug=false;
                                               target/release-pgo-profiling).
-                        dev                   Unoptimized debug build (target/debug,
-                                              deps at opt-level=3). Byte-compiling
-                                              the Lisp tree is several times slower;
+                        dev                   Debug build (target/debug; workspace crates
+                                              at opt-level=2, deps at opt-level=3).
+                                              Byte-compiling the Lisp tree is slower;
                                               --no-byte-compile reuses existing .elc.
                       Custom optimized Cargo.toml profiles are also accepted.
                       `debug` and `test` are rejected (use `dev`).
