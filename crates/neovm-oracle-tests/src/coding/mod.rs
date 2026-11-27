@@ -3,6 +3,7 @@
 mod advanced;
 mod alias_conversion_hooks;
 mod basic;
+mod ctext_extensions;
 mod decode_multibyte;
 mod default_char;
 mod detection_state;

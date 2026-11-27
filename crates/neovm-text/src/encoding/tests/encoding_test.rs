@@ -2921,6 +2921,48 @@ fn multibyte_decode_segmenter_distinguishes_raw_byte8_from_literal_chars() {
     );
 }
 
+#[test]
+fn iso2022_preserves_ctext_extended_segments_as_raw_bytes() {
+    crate::test_utils::init_test_tracing();
+    let spec = crate::emacs_core::coding::Iso2022Spec {
+        initial: [
+            Some(intern("ascii")),
+            Some(intern("latin-iso8859-1")),
+            None,
+            None,
+        ],
+        reg_usage: (0, 1),
+        request: Vec::new(),
+        flags: enumflags2::BitFlags::empty(),
+        full_support: true,
+        safe_charsets: None,
+    };
+    let mut state = Iso2022DecodeState::default();
+    let input = [0x1b, b'%', b'G', 0xc3, 0xa9, 0x1b, b'%', b'@'];
+    let decoded = decode_via_iso2022(&input, &spec, &[], &mut state, DosEolLookahead::NotRequired);
+    let mut chars = Vec::new();
+    let mut pos = 0usize;
+    while pos < decoded.bytes.len() {
+        let (ch, len) = neovm_value::emacs_char::string_char(&decoded.bytes[pos..]);
+        chars.push(ch.code());
+        pos += len;
+    }
+    assert_eq!(
+        chars,
+        vec![
+            0x1b,
+            u32::from(b'%'),
+            u32::from(b'G'),
+            neovm_value::emacs_char::unibyte_to_char(0xc3),
+            neovm_value::emacs_char::unibyte_to_char(0xa9),
+            0x1b,
+            u32::from(b'%'),
+            u32::from(b'@'),
+        ]
+    );
+    assert!(!state.embedded_utf8);
+}
+
 #[cfg(test)]
 #[path = "gdh_utf8_unibyte.rs"]
 mod gdh_utf8_unibyte;

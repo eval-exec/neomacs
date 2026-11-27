@@ -2367,6 +2367,12 @@ pub(crate) struct Iso2022DecodeState {
     gl: usize,
     /// GNU `CODING_ISO_SINGLE_SHIFTING (coding)`, as the register it selects.
     single_shift: Option<usize>,
+    /// GNU `CODING_ISO_EXTSEGMENT_LEN (coding)` (`src/coding.c:3500-3516, 3827`):
+    /// remaining raw payload bytes of an `ESC % / [0-4] M L` CTEXT extended segment.
+    extsegment_len: usize,
+    /// GNU `CODING_ISO_EMBEDDED_UTF_8 (coding)` (`src/coding.c:3518-3547, 3840`):
+    /// inside an `ESC % G ... ESC % @` CTEXT UTF-8 extended segment.
+    embedded_utf8: bool,
 }
 
 impl Iso2022DecodeState {
@@ -3943,15 +3949,9 @@ fn codec_subsumes_conversion_hook(codecs: &ResolvedCodecs, hook: SymId, encode: 
     }
     if codecs.full_iso.is_some() || codecs.euc.is_some() {
         return if encode {
-            matches!(
-                name,
-                "ctext-pre-write-conversion" | "in-is13194-pre-write-conversion"
-            )
+            name == "in-is13194-pre-write-conversion"
         } else {
-            matches!(
-                name,
-                "ctext-post-read-conversion" | "in-is13194-post-read-conversion"
-            )
+            name == "in-is13194-post-read-conversion"
         };
     }
     false
@@ -5352,6 +5352,41 @@ fn decode_via_iso2022(
     state.designate_initially(spec);
 
     decode_units(bytes, eol, |unit, sink| {
+        // GNU `decode_coding_iso_2022` (`src/coding.c:3500-3547`): inside an
+        // `ESC % / [0-4] M L` or `ESC % G ... ESC % @` CTEXT extended segment,
+        // keep bytes verbatim as ASCII / raw eight-bit characters so
+        // `ctext-post-read-conversion` can decode them.
+        if state.extsegment_len > 0 {
+            let b = unit.byte()?;
+            state.extsegment_len -= 1;
+            if b < 0x80 {
+                sink.push(u32::from(b), None);
+            } else {
+                sink.push_raw(b);
+            }
+            return Ok(());
+        }
+        if state.embedded_utf8 {
+            let b = unit.byte()?;
+            if b == 0x1B {
+                if unit.pos + 1 >= unit.bytes.len() {
+                    return Err(NoMoreSource);
+                }
+                sink.push(0x1B, None);
+                if unit.bytes[unit.pos] == b'%' && unit.bytes[unit.pos + 1] == b'@' {
+                    let _ = unit.byte()?;
+                    let _ = unit.byte()?;
+                    sink.push(u32::from(b'%'), None);
+                    sink.push(u32::from(b'@'), None);
+                    state.embedded_utf8 = false;
+                }
+            } else if b < 0x80 {
+                sink.push(u32::from(b), None);
+            } else {
+                sink.push_raw(b);
+            }
+            return Ok(());
+        }
         let b = unit.byte()?;
         // --- Escape sequences ---------------------------------------------
         if b == 0x1B {
@@ -5360,6 +5395,42 @@ fn decode_via_iso2022(
             // is left whole for the next one.
             let e = unit.byte()?;
             match e {
+                0x25 => {
+                    // GNU `src/coding.c:3798-3844`: CTEXT extended segment
+                    // (`ESC % / [0-4] M L`) or embedded UTF-8 (`ESC % G`).
+                    let c1 = unit.byte()?;
+                    if c1 == b'/' {
+                        let dim = unit.byte()?;
+                        if !(b'0'..=b'4').contains(&dim) {
+                            return iso2022_reject(unit, sink, state, ascii);
+                        }
+                        let m = unit.byte()?;
+                        if m < 128 {
+                            return iso2022_reject(unit, sink, state, ascii);
+                        }
+                        let l = unit.byte()?;
+                        if l < 128 {
+                            return iso2022_reject(unit, sink, state, ascii);
+                        }
+                        let size = (usize::from(m - 128) * 128) + usize::from(l - 128);
+                        sink.push(0x1B, None);
+                        sink.push(u32::from(b'%'), None);
+                        sink.push(u32::from(b'/'), None);
+                        sink.push(u32::from(dim), None);
+                        sink.push_raw(m);
+                        sink.push_raw(l);
+                        state.extsegment_len = size;
+                        return Ok(());
+                    } else if c1 == b'G' {
+                        sink.push(0x1B, None);
+                        sink.push(u32::from(b'%'), None);
+                        sink.push(u32::from(b'G'), None);
+                        state.embedded_utf8 = true;
+                        return Ok(());
+                    } else {
+                        return iso2022_reject(unit, sink, state, ascii);
+                    }
+                }
                 0x4E | 0x4F => {
                     let reg = if e == 0x4E { 2 } else { 3 };
                     return iso2022_shift_charset(
