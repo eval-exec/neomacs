@@ -249,10 +249,19 @@ fn macos_native_backing_compares_bytes_on_hash_collision() {
 /// Graphics (lower row), on dark and light backgrounds. This isolates native
 /// smoothing from WGPU, font selection and layout. No screenshot permissions
 /// or running editor are needed.
+///
+/// Writes to `$NEOMACS_FONT_PROBE_PNG` when set (for manual visual inspection)
+/// and otherwise to a temporary PNG file verified by decode round-trip.
 #[test]
-#[ignore = "manual raster comparison; set NEOMACS_FONT_PROBE_PNG"]
 fn macos_native_visual_probe() {
-    let path = std::env::var("NEOMACS_FONT_PROBE_PNG").expect("output PNG path");
+    let _temp_dir;
+    let path = match std::env::var_os("NEOMACS_FONT_PROBE_PNG").filter(|v| !v.is_empty()) {
+        Some(path) => std::path::PathBuf::from(path),
+        None => {
+            _temp_dir = tempfile::tempdir().expect("tempdir for macos visual probe");
+            _temp_dir.path().join("macos-native-visual-probe.png")
+        }
+    };
     let (font, name) = monaco();
     let mut native = NativeRasterizer::default();
     let mut swash = swash::scale::ScaleContext::new();
@@ -315,9 +324,22 @@ fn macos_native_visual_probe() {
                 .scale(32.0)
                 .advance_width(request.glyph_id);
         }
+        assert!(
+            ink > 0,
+            "row {row} must render non-zero glyph coverage for Monaco"
+        );
         eprintln!("row {row}: total coverage {ink}");
     }
-    sheet.save(path).unwrap();
+    sheet.save(&path).expect("save macos visual probe PNG");
+    let decoded = image::open(&path)
+        .expect("decode saved macos visual probe PNG")
+        .to_rgb8();
+    assert_eq!(decoded.dimensions(), (1120, 240));
+    assert_eq!(
+        decoded.as_raw(),
+        sheet.as_raw(),
+        "saved PNG round-trip must preserve rendered Swash/Core Graphics rows"
+    );
 }
 
 /// GNU draws ordinary text as dark glyphs on a light background with the

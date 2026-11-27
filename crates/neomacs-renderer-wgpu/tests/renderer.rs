@@ -7,6 +7,7 @@
 #[path = "headless_probe.rs"]
 mod headless_probe;
 
+#[cfg(target_os = "linux")]
 #[path = "downlevel_gl.rs"]
 mod downlevel_gl;
 

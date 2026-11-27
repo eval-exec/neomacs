@@ -1,26 +1,82 @@
 //! Real device creation and drawing on the compute-less GL profile from #648.
 //!
-//! Run explicitly with Mesa's software driver (the display CI job does this):
-//! `LIBGL_ALWAYS_SOFTWARE=1 EGL_PLATFORM=surfaceless MESA_GL_VERSION_OVERRIDE=3.3
-//! MESA_GLES_VERSION_OVERRIDE=3.0 MESA_GLSL_VERSION_OVERRIDE=330
-//! MESA_EXTENSION_OVERRIDE=-GL_ARB_compute_shader cargo nextest run
-//! -p neomacs-renderer-wgpu --run-ignored only -E 'test(compute_less_gl)'`.
+//! Runs directly when the caller already configured Mesa's compute-less
+//! software OpenGL 3.3 overrides (`MESA_EXTENSION_OVERRIDE` containing
+//! `-GL_ARB_compute_shader`), and otherwise re-executes this single test binary
+//! in a child process with those Mesa overrides applied so ordinary
+//! `cargo nextest run -p neomacs-renderer-wgpu` runs exercise it without
+//! skipping.
 //!
-//! GLVND hosts with multiple vendors may also need
-//! `__EGL_VENDOR_LIBRARY_FILENAMES` set to their Mesa `50_mesa.json`.
-//! Missing GL or nonzero compute support is an error when this test is run,
-//! rather than a successful test that never exercises the reported failure.
+//! Missing Mesa software OpenGL (`libegl1`, `libegl-mesa0`, `libgl1-mesa-dri`)
+//! or nonzero compute support fails closed with a diagnostic error rather than
+//! silently skipping.
 
 use neomacs_display_protocol::{
     Color, DisplayWindowId, Rect,
     scene::{Scene, WindowScene},
 };
 use neomacs_renderer_wgpu::{WgpuGlyphAtlas, WgpuRenderer, request_renderer_device};
-use std::{sync::Arc, time::Duration};
+use std::{path::Path, process::Command, sync::Arc, time::Duration};
+
+const CHILD_ENV: &str = "NEOMACS_DOWNLEVEL_GL_CHILD";
+const TEST_NAME: &str = "downlevel_gl::compute_less_gl_renderer_draws_and_reads_back_pixels";
+const VERIFIED_MARKER: &str = "COMPUTE_LESS_GL_VERIFIED";
+const MESA_EGL_VENDOR_CANDIDATES: &[&str] = &[
+    "/run/opengl-driver/share/glvnd/egl_vendor.d/50_mesa.json",
+    "/usr/share/glvnd/egl_vendor.d/50_mesa.json",
+    "/etc/glvnd/egl_vendor.d/50_mesa.json",
+];
+
+fn has_compute_less_mesa_env() -> bool {
+    std::env::var_os(CHILD_ENV).is_some()
+        || std::env::var("MESA_EXTENSION_OVERRIDE")
+            .ok()
+            .is_some_and(|v| v.contains("-GL_ARB_compute_shader"))
+}
+
+fn find_mesa_egl_vendor_json() -> Option<&'static str> {
+    MESA_EGL_VENDOR_CANDIDATES
+        .iter()
+        .copied()
+        .find(|path| Path::new(path).is_file())
+}
 
 #[test]
-#[ignore = "requires compute-less GL; display CI runs it with Mesa overrides"]
 fn compute_less_gl_renderer_draws_and_reads_back_pixels() {
+    if !has_compute_less_mesa_env() {
+        let exe = std::env::current_exe().expect("locate current test executable");
+        let mut cmd = Command::new(&exe);
+        cmd.args(["--exact", TEST_NAME, "--nocapture"])
+            .env(CHILD_ENV, "1")
+            .env("LIBGL_ALWAYS_SOFTWARE", "1")
+            .env("EGL_PLATFORM", "surfaceless")
+            .env("MESA_GL_VERSION_OVERRIDE", "3.3")
+            .env("MESA_GLES_VERSION_OVERRIDE", "3.0")
+            .env("MESA_GLSL_VERSION_OVERRIDE", "330")
+            .env("MESA_EXTENSION_OVERRIDE", "-GL_ARB_compute_shader");
+        if std::env::var_os("__EGL_VENDOR_LIBRARY_FILENAMES").is_none()
+            && let Some(mesa_json) = find_mesa_egl_vendor_json()
+        {
+            cmd.env("__EGL_VENDOR_LIBRARY_FILENAMES", mesa_json);
+        }
+        let output = cmd.output().expect("spawn compute-less GL child test");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            output.status.success() && stdout.contains(VERIFIED_MARKER),
+            "compute-less Mesa OpenGL 3.3 test failed in child process ({}).\n\
+             Prerequisite: Mesa software EGL/GL runtime (`libegl1`, `libegl-mesa0`, `libgl1-mesa-dri`; \
+             on multi-vendor GLVND hosts set `__EGL_VENDOR_LIBRARY_FILENAMES` to `50_mesa.json`).\n\
+             stdout:\n{stdout}\nstderr:\n{stderr}",
+            output.status,
+        );
+        return;
+    }
+
+    run_compute_less_gl_draw_and_readback();
+}
+
+fn run_compute_less_gl_draw_and_readback() {
     let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle_from_env();
     descriptor.backends = wgpu::Backends::GL;
     let instance = wgpu::Instance::new(descriptor);
@@ -115,4 +171,5 @@ fn compute_less_gl_renderer_draws_and_reads_back_pixels() {
         &[0, 255, 0, 255],
         "the renderer must draw green over the red clear color"
     );
+    println!("{VERIFIED_MARKER}");
 }
