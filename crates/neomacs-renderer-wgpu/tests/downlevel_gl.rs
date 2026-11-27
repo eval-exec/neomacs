@@ -16,11 +16,19 @@ use neomacs_display_protocol::{
     scene::{Scene, WindowScene},
 };
 use neomacs_renderer_wgpu::{WgpuGlyphAtlas, WgpuRenderer, request_renderer_device};
-use std::{path::Path, process::Command, sync::Arc, time::Duration};
+use std::{
+    io::Read,
+    path::Path,
+    process::{Command, Stdio},
+    sync::Arc,
+    thread,
+    time::{Duration, Instant},
+};
 
 const CHILD_ENV: &str = "NEOMACS_DOWNLEVEL_GL_CHILD";
 const TEST_NAME: &str = "downlevel_gl::compute_less_gl_renderer_draws_and_reads_back_pixels";
 const VERIFIED_MARKER: &str = "COMPUTE_LESS_GL_VERIFIED";
+const CHILD_TIMEOUT: Duration = Duration::from_secs(30);
 const MESA_EGL_VENDOR_CANDIDATES: &[&str] = &[
     "/run/opengl-driver/share/glvnd/egl_vendor.d/50_mesa.json",
     "/usr/share/glvnd/egl_vendor.d/50_mesa.json",
@@ -59,16 +67,55 @@ fn compute_less_gl_renderer_draws_and_reads_back_pixels() {
         {
             cmd.env("__EGL_VENDOR_LIBRARY_FILENAMES", mesa_json);
         }
-        let output = cmd.output().expect("spawn compute-less GL child test");
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let stderr = String::from_utf8_lossy(&output.stderr);
+        let mut child = cmd
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("spawn compute-less GL child test");
+        let mut child_stdout = child.stdout.take().expect("piped child stdout");
+        let mut child_stderr = child.stderr.take().expect("piped child stderr");
+        let stdout_thread = thread::spawn(move || {
+            let mut buf = Vec::new();
+            let _ = child_stdout.read_to_end(&mut buf);
+            buf
+        });
+        let stderr_thread = thread::spawn(move || {
+            let mut buf = Vec::new();
+            let _ = child_stderr.read_to_end(&mut buf);
+            buf
+        });
+
+        let deadline = Instant::now() + CHILD_TIMEOUT;
+        let status = loop {
+            if let Some(status) = child.try_wait().expect("poll compute-less GL child") {
+                break Some(status);
+            }
+            if Instant::now() >= deadline {
+                let _ = child.kill();
+                let _ = child.wait();
+                break None;
+            }
+            thread::sleep(Duration::from_millis(20));
+        };
+        let stdout_bytes = stdout_thread.join().unwrap_or_default();
+        let stderr_bytes = stderr_thread.join().unwrap_or_default();
+        let stdout = String::from_utf8_lossy(&stdout_bytes);
+        let stderr = String::from_utf8_lossy(&stderr_bytes);
+        let Some(status) = status else {
+            panic!(
+                "compute-less Mesa OpenGL 3.3 child process timed out after {CHILD_TIMEOUT:?} and was killed.\n\
+                 Prerequisite: Mesa software EGL/GL runtime (`libegl1`, `libegl-mesa0`, `libgl1-mesa-dri`; \
+                 on multi-vendor GLVND hosts set `__EGL_VENDOR_LIBRARY_FILENAMES` to `50_mesa.json`).\n\
+                 stdout:\n{stdout}\nstderr:\n{stderr}"
+            );
+        };
         assert!(
-            output.status.success() && stdout.contains(VERIFIED_MARKER),
-            "compute-less Mesa OpenGL 3.3 test failed in child process ({}).\n\
+            status.success() && stdout.contains(VERIFIED_MARKER),
+            "compute-less Mesa OpenGL 3.3 test failed in child process ({status}).\n\
              Prerequisite: Mesa software EGL/GL runtime (`libegl1`, `libegl-mesa0`, `libgl1-mesa-dri`; \
              on multi-vendor GLVND hosts set `__EGL_VENDOR_LIBRARY_FILENAMES` to `50_mesa.json`).\n\
              stdout:\n{stdout}\nstderr:\n{stderr}",
-            output.status,
         );
         return;
     }
