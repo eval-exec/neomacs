@@ -1,18 +1,21 @@
-//! Immutable pointer publication with uniquely owned, unreclaimed predecessors.
+//! Immutable pointer publication with uniquely owned, grace-reclaimed predecessors.
 //!
-//! This file is the N3 adapter. The retention owner, its metadata lock, and
-//! the predecessor vector live in the generic publication ledger. This lock
-//! does not replace the symbol authority required by the backing transaction.
-//! No table is reclaimed here: a later stop-bound receipt must establish that
-//! every generated activation has returned first.
+//! This file is the N3/N5 adapter. The retention owner, its metadata lock,
+//! view-depth counter, and predecessor vector live in the generic publication
+//! ledger. This lock does not replace the symbol authority required by the
+//! backing transaction. Predecessors stay owned until either this owner is
+//! dropped or a stop-bound `EraGraceReceipt` invokes
+//! `reclaim_retired_after_grace` while zero generated activations and zero
+//! tracked `TableView` borrows are live.
 use super::sync::{AtomicPtr, Ordering};
 use super::{
     OwnedSymbolTable, PointerTableGeneration, PreparedSymbolTable, PublishedSymbolTable,
     SymbolChunkAddress, SymbolTableShape, TableError,
 };
 use crate::tagged::gc::publication::{
-    Commit, OpenPublication, PublicationError, PublicationLedger, RetainedBytes, RetentionLimit,
-    RetentionLimits, RetiredCount,
+    Commit, OpenPublication, PublicationError, PublicationLedger,
+    PublicationView as LedgerPublicationView, RetainedBytes, RetentionLimit, RetentionLimits,
+    RetiredCount,
 };
 use std::marker::PhantomData;
 use std::mem::size_of;
@@ -259,12 +262,19 @@ pub(crate) struct PublishedSymbolTables {
 
 // SAFETY: the unique raw owners name immutable allocation metadata only. Chunk
 // entries are nonowning addresses and are never dereferenced here. The mutex
-// serializes ownership changes, and none of the allocations is reclaimed while
-// this owner lives. Views borrow this owner and cannot cross threads themselves.
+// serializes ownership changes and predecessor reclamation; predecessors are
+// freed only on drop or via `unsafe fn reclaim_retired_after_grace` under a
+// stop-bound `EraGraceReceipt` (which proves zero live `ExecutionActivation`
+// borrows) and only when `ledger.view_depth == 0` (no live `TableView`).
+// Views borrow this owner and cannot cross threads themselves.
 unsafe impl Send for PublishedSymbolTables {}
 // SAFETY: immutable descriptor reads use Acquire publication; owner changes are
-// mutex-exclusive and retain every predecessor. Shared access cannot mutate a
-// table, dereference chunk contents, or reclaim an allocation behind a view.
+// mutex-exclusive and retain every predecessor until stop-bound grace
+// reclamation. `TableView` tracks `ledger.view_depth` atomically so
+// `reclaim_retired_after_grace` refuses `Busy` behind any live `TableView`, and
+// `PublicationView` is confined to `ExecutionActivation` (`IN_SLICE`) where
+// `AllStopped` excludes concurrent grace reclamation. Shared access cannot
+// mutate a table, dereference chunk contents, or reclaim behind a live view.
 unsafe impl Sync for PublishedSymbolTables {}
 
 impl PublishedSymbolTables {
@@ -281,8 +291,12 @@ impl PublishedSymbolTables {
         Ok(Self { ledger })
     }
 
-    /// Borrow the publication slot while the era retains all predecessors.
-    /// The view cannot be sent away from the bounded activation that owns it.
+    /// Borrow the 1-word ABI publication slot for an `IN_SLICE` activation.
+    ///
+    /// Does not bump `ledger.view_depth` because `PublicationView` is
+    /// `#[repr(transparent)]` over `&AtomicPtr<u8>`; safety relies on the
+    /// enclosing `ExecutionActivation` (`IN_SLICE`), which excludes stop-bound
+    /// `EraGraceReceipt` reclamation until the activation returns.
     pub(crate) fn publication(&self) -> PublicationView<'_> {
         PublicationView {
             slot: self.ledger.slot(),
@@ -290,9 +304,15 @@ impl PublishedSymbolTables {
         }
     }
 
+    /// Borrow the current immutable descriptor while tracking `ledger.view_depth`
+    /// so `reclaim_retired_after_grace` refuses `Busy` while this view is live.
     pub(crate) fn view(&self) -> TableView<'_> {
-        // SAFETY: `self.ledger` retains every published table for the lifetime of `self`.
-        unsafe { published_table(self.ledger.slot().load(Ordering::Acquire)) }
+        let ledger_view = self.ledger.view();
+        // SAFETY: `ledger_view` loaded an initialized `PublishedSymbolTable`
+        // pointer with Acquire ordering and incremented `ledger.view_depth`,
+        // preventing `drain_predecessors_after_grace` from reclaiming any
+        // predecessor until `ledger_view` is dropped with `TableView`.
+        unsafe { published_table_tracked(ledger_view) }
     }
 
     pub(crate) fn stats(&self) -> Result<TableStatistics, TablePublicationError> {
@@ -473,8 +493,9 @@ pub struct PublicationView<'owner> {
 }
 impl PublicationView<'_> {
     pub(crate) fn load(&self) -> TableView<'_> {
-        // SAFETY: `self.slot` holds a published `PublishedSymbolTable` pointer
-        // retained for at least the lifetime `'owner` of `self`.
+        // SAFETY: `self` is confined to an `IN_SLICE` `ExecutionActivation`
+        // during which no stop-bound `EraGraceReceipt` reclamation can run,
+        // so the Acquire-loaded `PublishedSymbolTable` stays alive for `'owner`.
         unsafe { published_table(self.slot.load(Ordering::Acquire)) }
     }
 }
@@ -483,22 +504,45 @@ static_assertions::assert_not_impl_any!(PublicationView<'static>: Send, Sync, Cl
 
 /// # Safety
 /// `pointer` must point to an initialized [`PublishedSymbolTable`] that remains
-/// alive and immutable for at least `'owner`.
+/// alive and immutable for at least `'owner` (guaranteed by an enclosing
+/// `ExecutionActivation` / `IN_SLICE` excluding stop-bound grace reclamation).
 unsafe fn published_table<'owner>(pointer: *mut u8) -> TableView<'owner> {
     // SAFETY: construction publishes a fully initialized owned allocation
     // before returning the owner. Every replacement is retained before its
-    // Release store; predecessors stay owned until that owner is dropped.
-    // The caller ties this borrow to that owner, including while the
-    // metadata lock is poisoned. The loaded word is the descriptor root.
+    // Release store; predecessors stay owned until either owner drop or a
+    // stop-bound grace reclamation when zero activations are live. The caller
+    // ties this borrow to an activation excluded from grace reclamation,
+    // including while the metadata lock is poisoned.
     TableView {
         table: unsafe { &*pointer.cast::<PublishedSymbolTable>() },
+        _ledger_view: None,
+        owner: PhantomData,
+    }
+}
+
+/// # Safety
+/// `ledger_view.published_address()` must point to an initialized
+/// [`PublishedSymbolTable`] owned by `PublishedSymbolTables`.
+unsafe fn published_table_tracked<'owner>(
+    ledger_view: LedgerPublicationView<'owner, SymbolPublication>,
+) -> TableView<'owner> {
+    let pointer = ledger_view.published_address();
+    // SAFETY: `ledger_view` holds a live `view_depth` increment on the owning
+    // `PublicationLedger`, so `drain_predecessors_after_grace` refuses `Busy`
+    // and cannot reclaim the loaded descriptor until `TableView` is dropped.
+    TableView {
+        table: unsafe { &*pointer.cast::<PublishedSymbolTable>() },
+        _ledger_view: Some(ledger_view),
         owner: PhantomData,
     }
 }
 
 /// A view never outlives the owner and never loans chunk ownership.
+/// Views created via `PublishedSymbolTables::view` hold a tracked ledger view
+/// that keeps `ledger.view_depth > 0` until dropped.
 pub(crate) struct TableView<'owner> {
     table: &'owner PublishedSymbolTable,
+    _ledger_view: Option<LedgerPublicationView<'owner, SymbolPublication>>,
     owner: PhantomData<&'owner PublishedSymbolTables>,
 }
 impl TableView<'_> {

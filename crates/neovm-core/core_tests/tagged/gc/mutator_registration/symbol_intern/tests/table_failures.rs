@@ -432,3 +432,160 @@ fn e7p0_grace_receipt_confinement_and_idempotent_empty_stop() {
         },
     );
 }
+
+#[test]
+fn e7p0_grace_receipt_refuses_poisoned_era_and_retains_tables() {
+    with_query_era(
+        PlainSymbolBacking::Unprojected,
+        Query::TableGrowth,
+        |era, ids, target| {
+            assert!(target.is_none());
+            let old_handle = era.admit_plain_symbol(ids[1]).unwrap();
+            let mut stopped = era.stop().unwrap();
+            let inputs = era
+                .with_stopped_heap_for_test(&stopped, |heap| unsafe {
+                    // SAFETY: immediate seeds on the actual matching stopped heap.
+                    [
+                        SharedRoot::new(heap, Value::NIL),
+                        SharedRoot::new(heap, Value::fixnum(23)),
+                    ]
+                })
+                .unwrap();
+            stopped.trace(|_, _| Ok(())).unwrap();
+            stopped.complete().unwrap();
+
+            let mut owner = era
+                .register(1, 4)
+                .unwrap()
+                .activate(era.heap_identity(), 1)
+                .unwrap();
+            {
+                let mut run = owner.run_access().unwrap();
+                let mut name = run.root_slot(&inputs[0]).unwrap();
+                let mut dst = run.root_slot(&inputs[1]).unwrap();
+                run.sym_value_into(&old_handle, &mut name).unwrap();
+                let old = run.symbol_table_census_for_test().unwrap();
+                let old_name =
+                    run.symbol_table_name_at_for_test(old.address(), &old_handle, ids[1]);
+                run.arm_table_commit_fault_for_test(TableCommitFault::AfterDescriptorPublication)
+                    .unwrap();
+                assert_eq!(
+                    intern_once(&mut run, &name, &mut dst),
+                    Err(InitialInternError::Authority(RegistrationError::Poisoned))
+                );
+                let after = run.symbol_table_census_for_test().unwrap();
+                assert_ne!(after.address(), old.address());
+                assert_eq!(after.retired(), old.retired() + 1);
+                assert_eq!(
+                    run.retained_symbol_name_for_test(old.address(), ids[1]),
+                    old_name
+                );
+                drop(name);
+                drop(dst);
+                run.clear_terminal_roots_for_test().unwrap();
+            }
+
+            // On a poisoned era, `era.stop()` refuses `Poisoned`, making
+            // `EraGraceReceipt` unconstructible so retired tables stay retained.
+            assert_eq!(era.stop().err(), Some(RendezvousError::Poisoned));
+            drop(inputs);
+            drop(owner);
+            let finish_err = era.finish().unwrap_err();
+            assert_eq!(finish_err.reason(), RegistrationError::Poisoned);
+            drop(finish_err);
+        },
+    );
+}
+
+#[test]
+fn e7p0_grace_receipt_unblocks_real_era_need_grace_with_live_owner() {
+    with_query_era(
+        PlainSymbolBacking::Unprojected,
+        Query::TableGrowth,
+        |era, ids, target| {
+            assert!(target.is_none());
+            let old_handle = era.admit_plain_symbol(ids[1]).unwrap();
+            let mut stopped = era.stop().unwrap();
+            let inputs = era
+                .with_stopped_heap_for_test(&stopped, |heap| unsafe {
+                    // SAFETY: immediate seeds on the actual matching stopped heap.
+                    [
+                        SharedRoot::new(heap, Value::NIL),
+                        SharedRoot::new(heap, Value::fixnum(23)),
+                    ]
+                })
+                .unwrap();
+            stopped.trace(|_, _| Ok(())).unwrap();
+            stopped.complete().unwrap();
+
+            let heap = era.heap_identity();
+            let permit = era.register(1, 4).unwrap();
+            let (ready_tx, ready_rx) = std::sync::mpsc::sync_channel::<()>(1);
+            let inputs_ref = &inputs;
+
+            let reclaimed = std::thread::scope(|scope| {
+                let worker = scope.spawn(move || {
+                    let mut owner = permit.activate(heap, 1).unwrap();
+                    {
+                        let mut run = owner.run_access().unwrap();
+                        let mut name = run.root_slot(&inputs_ref[0]).unwrap();
+                        let mut dst = run.root_slot(&inputs_ref[1]).unwrap();
+                        run.sym_value_into(&old_handle, &mut name).unwrap();
+                        run.override_symbol_table_limits_for_test(TableLimitProbe::Retirees)
+                            .unwrap();
+                        assert_eq!(
+                            intern_once(&mut run, &name, &mut dst),
+                            Err(InitialInternError::Authority(RegistrationError::Capacity))
+                        );
+                        run.override_symbol_table_limits_for_test(TableLimitProbe::Production)
+                            .unwrap();
+                        intern_once(&mut run, &name, &mut dst).unwrap();
+                        let after_growth = run.symbol_table_census_for_test().unwrap();
+                        assert!(after_growth.retired() >= 1);
+                        drop(name);
+                        drop(dst);
+                        run.clear_root_slots().unwrap();
+                    }
+
+                    ready_tx.send(()).unwrap();
+                    loop {
+                        match owner.poll(|| Ok(Vec::new())).unwrap() {
+                            crate::tagged::gc::PollOutcome::Continue => std::thread::yield_now(),
+                            crate::tagged::gc::PollOutcome::Resumed { .. } => break,
+                        }
+                    }
+
+                    {
+                        let run = loop {
+                            match owner.run_access() {
+                                Ok(run) => break run,
+                                Err(RegistrationError::Busy) => std::thread::yield_now(),
+                                Err(err) => panic!("post-grace run_access: {err:?}"),
+                            }
+                        };
+                        let after_grace = run.symbol_table_census_for_test().unwrap();
+                        assert_eq!(after_grace.retired(), 0);
+                    }
+                    owner.retire_rooted(&[]).unwrap();
+                });
+
+                ready_rx.recv().unwrap();
+                let mut grace_stop = era.stop().unwrap();
+                let mut receipt = grace_stop.mint_grace_receipt().unwrap();
+                let report = receipt.reclaim_symbol_tables().unwrap();
+                drop(receipt);
+                grace_stop.trace(|_, _| Ok(())).unwrap();
+                grace_stop.complete().unwrap();
+                worker.join().unwrap();
+                report
+            });
+
+            assert!(reclaimed.reclaimed >= 1);
+            assert!(reclaimed.freed_bytes > 0);
+            drop(inputs);
+            let (collector, keeper) = era.finish().unwrap();
+            drop(collector);
+            drop(keeper);
+        },
+    );
+}

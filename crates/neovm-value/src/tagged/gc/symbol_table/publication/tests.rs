@@ -398,9 +398,8 @@ fn e7p0_symbol_table_need_grace_reclaim_unblocks_growth_for_both_caps() {
         .unwrap()
         .publish(backing.addresses(2))
         .unwrap();
-    // Tighten to `b2 + b3 - 1`? No, force NeedGrace(RetainedBytes) via `TestLimitProbe::Bytes`
-    // after retiring shape(1), then relax back to a budget that fits shape(2)+shape(3) only
-    // once shape(1) is reclaimed!
+    // Tighten the byte cap to fit shape(2) + shape(3) only once retired shape(1)
+    // is reclaimed, forcing NeedGrace(RetainedBytes) before grace and succeeding after.
     let cap_without_s1 = b2 + b3 + 4 * std::mem::size_of::<OwnedSymbolTable>();
     assert!(b1 + b2 + b3 > cap_without_s1);
     byte_tables
@@ -447,4 +446,50 @@ fn e7p0_symbol_table_reclaim_is_idempotent_when_no_predecessors() {
         tables.retained_bytes().unwrap().get(),
         table_bytes(shape(1)).unwrap()
     );
+}
+
+#[test]
+fn e7p0_symbol_table_reclaim_refuses_busy_while_table_view_or_prepare_is_live() {
+    let backing = Backing::new();
+    let tables = PublishedSymbolTables::new(backing.initial(), TableLimits::default()).unwrap();
+    let old_view = tables.view();
+    let old_ptr = old_view.table() as *const PublishedSymbolTable as usize;
+    tables
+        .try_prepare(shape(2))
+        .result
+        .unwrap()
+        .publish(backing.addresses(2))
+        .unwrap();
+    assert_eq!(tables.stats().unwrap().retired.get(), 1);
+
+    // A live `TableView` obtained via `tables.view()` tracks `view_depth` and
+    // must block grace reclamation with `Busy` while retaining the old descriptor.
+    // SAFETY: testing fail-closed `Busy` refusal while `old_view` is live.
+    assert_eq!(
+        unsafe { tables.reclaim_retired_after_grace() },
+        Err(TablePublicationError::Busy)
+    );
+    assert_eq!(
+        old_view.table() as *const PublishedSymbolTable as usize,
+        old_ptr
+    );
+    assert_eq!(old_view.table().chunk_count().get(), 1);
+    assert_eq!(tables.stats().unwrap().retired.get(), 1);
+    drop(old_view);
+
+    // An open `PreparedTablePublication` holds the metadata mutex and must also
+    // block grace reclamation with `Busy`.
+    let held = tables.try_prepare(shape(3)).result.unwrap();
+    // SAFETY: testing fail-closed `Busy` refusal while metadata mutex is held.
+    assert_eq!(
+        unsafe { tables.reclaim_retired_after_grace() },
+        Err(TablePublicationError::Busy)
+    );
+    drop(held);
+    assert_eq!(tables.stats().unwrap().retired.get(), 1);
+
+    // SAFETY: both `old_view` and `held` are dropped; test owns `tables` exclusively.
+    let report = unsafe { tables.reclaim_retired_after_grace() }.unwrap();
+    assert_eq!(report.reclaimed.get(), 1);
+    assert_eq!(tables.stats().unwrap().retired.get(), 0);
 }

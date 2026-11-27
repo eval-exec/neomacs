@@ -74,7 +74,9 @@ pub mod tagged {
             mod ledger {
                 include!(concat!(env!("OUT_DIR"), "/publication_ledger.inc"));
             }
-            pub(crate) use ledger::{Admission, Commit, OpenPublication, PublicationLedger};
+            pub(crate) use ledger::{
+                Admission, Commit, OpenPublication, PublicationLedger, PublicationView,
+            };
         }
     }
 }

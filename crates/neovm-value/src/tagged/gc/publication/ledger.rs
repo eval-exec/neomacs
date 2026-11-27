@@ -40,9 +40,9 @@ pub(crate) struct PublicationLedger<P: PublicationPayload> {
     /// Live [`PublicationView`]s of this ledger. Reclaim runs only at zero.
     /// `AtomicU32` is `Sync`, so a view's reference does not add a
     /// `Cell<u32>: Sync` note to the confinement fixture.
-    /// Each update is a relaxed load followed by a relaxed store. That pair
-    /// is sound only because this ledger is `!Send`: one thread owns the
-    /// counter.
+    /// Updated atomically with `fetch_add(Acquire)` / `fetch_sub(Release)` so
+    /// typed `Send + Sync` wrappers (such as `PublishedSymbolTables`) can track
+    /// concurrent views safely alongside stop-bound grace reclamation.
     view_depth: AtomicU32,
     // Keeps `Send`/`Sync` off this generic store. The typed publisher, not an
     // arbitrary pointer, is what may add that proof later.
@@ -138,9 +138,8 @@ impl<P: PublicationPayload> PublicationView<'_, P> {
 
 impl<P: PublicationPayload> Drop for PublicationView<'_, P> {
     fn drop(&mut self) {
-        let depth = self.depth.load(Ordering::Relaxed);
-        debug_assert!(depth > 0, "publication view depth underflow");
-        self.depth.store(depth.saturating_sub(1), Ordering::Relaxed);
+        let prev = self.depth.fetch_sub(1, Ordering::Release);
+        debug_assert!(prev > 0, "publication view depth underflow");
     }
 }
 
@@ -208,16 +207,12 @@ impl<P: PublicationPayload> PublicationLedger<P> {
 
     /// One Acquire load. Later publications do not change this view.
     ///
-    /// The view increments [`Self::view_depth`] and its drop decrements it.
-    /// Reclaim does not run while the count is positive. Each of those
-    /// updates is a relaxed load followed by a relaxed store, sound only
-    /// because this ledger is `!Send`.
+    /// The view atomically increments [`Self::view_depth`] (`Acquire`) and its
+    /// drop decrements it (`Release`). Reclaim does not run while the count is
+    /// positive.
     pub(crate) fn view(&self) -> PublicationView<'_, P> {
-        let depth = self.view_depth.load(Ordering::Relaxed);
-        self.view_depth.store(
-            depth.checked_add(1).expect("publication view depth"),
-            Ordering::Relaxed,
-        );
+        let prev = self.view_depth.fetch_add(1, Ordering::Acquire);
+        assert!(prev < u32::MAX, "publication view depth");
         PublicationView {
             address: self.root.load(Ordering::Acquire),
             depth: &self.view_depth,
@@ -261,8 +256,11 @@ impl<P: PublicationPayload> PublicationLedger<P> {
     /// period guarantees no concurrent reader retains a pointer loaded before
     /// `current`.
     ///
-    /// Refuses `Busy` if the metadata mutex is contended or if any local
-    /// [`PublicationView`] is still live (`view_depth > 0`), and `Poisoned` if
+    /// Exclusively for no-hook ledgers (created via [`Self::create`], such as
+    /// `PublishedSymbolTables`). Refuses `Busy` if the metadata mutex is
+    /// contended, if any tracked [`PublicationView`] is still live
+    /// (`view_depth > 0`), or if this is a noting ledger carrying root-bank
+    /// generations (`create_noting` / `finish_noting`). Refuses `Poisoned` if
     /// the metadata mutex is poisoned (retaining all owners).
     ///
     /// # Safety
@@ -273,13 +271,21 @@ impl<P: PublicationPayload> PublicationLedger<P> {
         &self,
     ) -> Result<GraceReclaimReport, PublicationError<P::Error>> {
         let mut metadata = self.lock()?;
-        if self.view_depth.load(Ordering::Relaxed) > 0 {
+        if self.view_depth.load(Ordering::Acquire) > 0 {
+            return Err(PublicationError::Busy);
+        }
+        // Noting consumers manage root-bank generations via
+        // `reclaim_oldest_predecessor`; never drop tracked generations here.
+        if metadata.current_generation.is_some()
+            || metadata.predecessor_generations.iter().any(Option::is_some)
+        {
             return Err(PublicationError::Busy);
         }
         let reclaimed = metadata.predecessors.len();
-        let mut freed_bytes = reserved_capacity_bytes::<P>(&metadata);
+        let before_reserved = reserved_capacity_bytes::<P>(&metadata);
+        let mut payload_bytes = 0usize;
         for owner in &metadata.predecessors {
-            freed_bytes = freed_bytes.saturating_add(owner.retained_bytes().get());
+            payload_bytes = payload_bytes.saturating_add(owner.retained_bytes().get());
         }
         // Never drop `metadata.current` or alter `self.root`.
         metadata.predecessors.clear();
@@ -288,6 +294,9 @@ impl<P: PublicationPayload> PublicationLedger<P> {
         // allocating, restoring `retained_quote` to `current` alone.
         metadata.predecessors.shrink_to_fit();
         metadata.predecessor_generations.shrink_to_fit();
+        let freed_reserved =
+            before_reserved.saturating_sub(reserved_capacity_bytes::<P>(&metadata));
+        let freed_bytes = payload_bytes.saturating_add(freed_reserved);
         Ok(GraceReclaimReport {
             reclaimed: RetiredCount::new(reclaimed),
             freed_bytes: RetainedBytes::new(freed_bytes),
@@ -441,7 +450,7 @@ impl<P: PublicationPayload> Admission<'_, P> {
         extra: usize,
         reclaim: impl FnOnce(PayloadGeneration),
     ) {
-        if self.view_depth.load(Ordering::Relaxed) > 0 {
+        if self.view_depth.load(Ordering::Acquire) > 0 {
             return;
         }
         if self.metadata.predecessors.len() < self.limits.retired.get() {
@@ -670,9 +679,9 @@ fn take_release_order() -> Option<bool> {
 #[cfg(test)]
 mod tests {
     use super::{
-        PayloadPlan, PublicationChange, PublicationError, PublicationLedger, PublicationPayload,
-        PublicationView, RetainedBytes, RetentionLimit, RetentionLimits, RetiredCount,
-        take_release_order,
+        Commit, PayloadGeneration, PayloadPlan, PublicationChange, PublicationError,
+        PublicationLedger, PublicationPayload, PublicationView, RetainedBytes, RetentionLimit,
+        RetentionLimits, RetiredCount, take_release_order,
     };
     use std::cell::Cell;
 
@@ -979,6 +988,48 @@ mod tests {
         // SAFETY: testing fail-closed poison retention.
         let refused = unsafe { store.drain_predecessors_after_grace() };
         assert_eq!(refused, Err(PublicationError::Poisoned));
+        store.with_retained(|current, predecessors| {
+            assert_eq!(*current.value, 2);
+            assert_eq!(predecessors.len(), 1);
+            assert_eq!(*predecessors[0].value, 1);
+        });
+    }
+
+    #[test]
+    fn e7p0_grace_drain_refuses_busy_when_metadata_mutex_contended() {
+        let store = ledger(1, 10, RetentionLimits::production());
+        plan(2);
+        store.prepare().unwrap().publish().unwrap();
+        let held = store.account(|_| Ok(())).result.unwrap();
+        // SAFETY: testing fail-closed refusal while the metadata mutex is contended.
+        let refused = unsafe { store.drain_predecessors_after_grace() };
+        assert_eq!(refused, Err(PublicationError::Busy));
+        drop(held);
+        assert_eq!(store.statistics().unwrap().retired, RetiredCount::new(1));
+        // SAFETY: lock released and zero views are live.
+        let report = unsafe { store.drain_predecessors_after_grace() }.unwrap();
+        assert_eq!(report.reclaimed, RetiredCount::new(1));
+        assert_eq!(store.statistics().unwrap().retired, RetiredCount::new(0));
+    }
+
+    #[test]
+    fn e7p0_grace_drain_refuses_noting_ledger_and_retains_generations() {
+        let store = PublicationLedger::create_noting(
+            Toy::new(1, 10, 0),
+            RetentionLimits::production(),
+            |_| PayloadGeneration::from_raw(1),
+        )
+        .unwrap();
+        let open = store.account(|_| Ok(Toy::new(2, 10, 1))).result.unwrap();
+        open.finish_noting(
+            |next, _| Ok(Commit::Replace(next)),
+            |_| PayloadGeneration::from_raw(2),
+        )
+        .unwrap();
+        // SAFETY: testing fail-closed refusal on a noting ledger.
+        let refused = unsafe { store.drain_predecessors_after_grace() };
+        assert_eq!(refused, Err(PublicationError::Busy));
+        assert_eq!(store.statistics().unwrap().retired, RetiredCount::new(1));
         store.with_retained(|current, predecessors| {
             assert_eq!(*current.value, 2);
             assert_eq!(predecessors.len(), 1);

@@ -126,7 +126,9 @@ pub mod tagged {
             mod ledger {
                 include!(concat!(env!("OUT_DIR"), "/publication_ledger.inc"));
             }
-            pub(crate) use ledger::{Admission, Commit, OpenPublication, PublicationLedger};
+            pub(crate) use ledger::{
+                Admission, Commit, OpenPublication, PublicationLedger, PublicationView,
+            };
         }
     }
 }
@@ -596,5 +598,237 @@ fn positive_initial_publication_over_byte_limit_refuses() {
             result,
             Err(TablePublicationError::NeedGrace(TableLimit::RetainedBytes))
         ));
+    });
+}
+
+/// Real-drain grace model (E7-P.0 hardening): exercises the production
+/// `PublishedSymbolTables::reclaim_retired_after_grace` + `PublicationLedger::drain_predecessors_after_grace`
+/// under Loom after quiescing live activations, proving retired predecessors are
+/// actually drained and `NeedGrace(RetiredTables)` is unblocked without UAF.
+#[test]
+fn positive_real_grace_reclaim_drains_predecessors_and_unblocks_need_grace() {
+    let bits = address_pool_bits();
+    support::check(2, move || {
+        let pool = materialize(&bits);
+        let initial = build_table(PointerTableGeneration::INITIAL, INITIAL_CHUNKS, &pool);
+        let tables = PublishedSymbolTables::new(
+            initial,
+            TableLimits::new(
+                RetainedTableBytes::new(64 * 1024 * 1024),
+                RetiredTableCount::new(1),
+            ),
+        )
+        .expect("bootstrap within limits");
+        // Retire gen 1 so retired == 1 and next growth hits NeedGrace(RetiredTables).
+        let first = tables
+            .try_prepare(shape(GROWN_CHUNKS))
+            .result
+            .expect("first growth within cap")
+            .publish(pool[..GROWN_CHUNKS].iter().copied())
+            .expect("prefix-stable growth");
+        assert!(matches!(first, PublicationChange::Published { .. }));
+        assert!(matches!(
+            tables.try_prepare(shape(GROWN_CHUNKS + 1)).result,
+            Err(TablePublicationError::NeedGrace(TableLimit::RetiredTables))
+        ));
+
+        let world = Arc::new(World {
+            tables,
+            gate: Mutex::new(GateState {
+                stop_in_progress: false,
+                live_views: 0,
+            }),
+            quiesced: Condvar::new(),
+            freed: AtomicBool::new(false),
+            freed_through: AtomicU64::new(0),
+        });
+        let frame_world = Arc::clone(&world);
+        let stop_world = Arc::clone(&world);
+
+        let frame = loom::thread::spawn(move || {
+            let entered = {
+                let mut state = frame_world.gate.lock().expect("loom mutex");
+                if state.stop_in_progress {
+                    false
+                } else {
+                    state.live_views += 1;
+                    true
+                }
+            };
+            if entered {
+                let view = frame_world.tables.view();
+                assert_eq!(view.table().generation().get(), 2);
+                assert_eq!(view.table().chunk_count().get(), GROWN_CHUNKS);
+                drop(view);
+                let mut state = frame_world.gate.lock().expect("loom mutex");
+                state.live_views -= 1;
+                frame_world.quiesced.notify_one();
+            }
+        });
+
+        let stop = loom::thread::spawn(move || {
+            {
+                let mut state = stop_world.gate.lock().expect("loom mutex");
+                state.stop_in_progress = true;
+                while state.live_views > 0 {
+                    state = stop_world.quiesced.wait(state).expect("loom mutex");
+                }
+                assert_eq!(state.live_views, 0);
+            }
+            // SAFETY: stop_in_progress == true and live_views == 0; every frame
+            // activation has dropped its TableView and returned.
+            let report = unsafe { stop_world.tables.reclaim_retired_after_grace() }
+                .expect("quiesced grace drain must succeed");
+            assert_eq!(report.reclaimed.get(), 1);
+            assert!(report.freed_bytes.get() > 0);
+            let mut state = stop_world.gate.lock().expect("loom mutex");
+            state.stop_in_progress = false;
+        });
+
+        support::join(frame);
+        support::join(stop);
+
+        let stats = world.tables.stats().expect("uncontended after join");
+        assert_eq!(stats.retired.get(), 0);
+        assert_eq!(stats.generation.get(), 2);
+
+        // Post-grace growth past the previous cap now succeeds.
+        let unblocked = world
+            .tables
+            .try_prepare(shape(GROWN_CHUNKS + 1))
+            .result
+            .expect("grace drain unblocked RetiredTables cap")
+            .publish(pool[..GROWN_CHUNKS + 1].iter().copied())
+            .expect("prefix-stable growth after grace");
+        assert!(matches!(unblocked, PublicationChange::Published { .. }));
+        assert_eq!(world.tables.view().table().generation().get(), 3);
+    });
+}
+
+/// Real-drain Loom model: a live `TableView` held by another thread keeps
+/// `ledger.view_depth > 0`, forcing `reclaim_retired_after_grace` to refuse
+/// `Busy` and retain the retired descriptor until the view drops.
+#[test]
+fn positive_real_grace_drain_refuses_busy_under_concurrent_table_view() {
+    let bits = address_pool_bits();
+    support::check(2, move || {
+        let pool = materialize(&bits);
+        let initial = build_table(PointerTableGeneration::INITIAL, INITIAL_CHUNKS, &pool);
+        let tables = Arc::new(
+            PublishedSymbolTables::new(initial, TableLimits::default())
+                .expect("bootstrap within limits"),
+        );
+        let sync_state = Arc::new((Mutex::new((false, false)), Condvar::new()));
+
+        let reader_tables = Arc::clone(&tables);
+        let reader_sync = Arc::clone(&sync_state);
+        let reader = loom::thread::spawn(move || {
+            let old_view = reader_tables.view();
+            assert_eq!(old_view.table().generation().get(), 1);
+            {
+                let mut flags = reader_sync.0.lock().expect("loom mutex");
+                flags.0 = true;
+                reader_sync.1.notify_one();
+                while !flags.1 {
+                    flags = reader_sync.1.wait(flags).expect("loom mutex");
+                }
+            }
+            // Old descriptor must remain valid while `old_view` is live.
+            assert_eq!(old_view.table().generation().get(), 1);
+            assert_eq!(old_view.table().chunk_count().get(), INITIAL_CHUNKS);
+            drop(old_view);
+        });
+
+        {
+            let mut flags = sync_state.0.lock().expect("loom mutex");
+            while !flags.0 {
+                flags = sync_state.1.wait(flags).expect("loom mutex");
+            }
+        }
+        // Grow while reader holds `old_view` (retires gen 1).
+        tables
+            .try_prepare(shape(GROWN_CHUNKS))
+            .result
+            .expect("growth while view live")
+            .publish(pool[..GROWN_CHUNKS].iter().copied())
+            .expect("prefix-stable growth");
+        // SAFETY: testing fail-closed Busy refusal while `old_view` holds view_depth > 0.
+        assert_eq!(
+            unsafe { tables.reclaim_retired_after_grace() },
+            Err(TablePublicationError::Busy)
+        );
+        assert_eq!(tables.stats().expect("stats").retired.get(), 1);
+        {
+            let mut flags = sync_state.0.lock().expect("loom mutex");
+            flags.1 = true;
+            sync_state.1.notify_one();
+        }
+        support::join(reader);
+
+        // SAFETY: `reader` joined and dropped `old_view`; zero live views remain.
+        let report = unsafe { tables.reclaim_retired_after_grace() }
+            .expect("reclaim succeeds once TableView drops");
+        assert_eq!(report.reclaimed.get(), 1);
+        assert_eq!(tables.stats().expect("stats").retired.get(), 0);
+    });
+}
+
+/// Real-drain Loom model: concurrent writer holding the metadata mutex via
+/// `try_prepare` and grace drain racing on the same lock must never drop or
+/// corrupt predecessors — every interleaving either succeeds cleanly or refuses
+/// `Busy` while retaining all owners.
+#[test]
+fn positive_real_grace_drain_refuses_busy_under_contended_writer_mutex() {
+    let bits = address_pool_bits();
+    support::check(2, move || {
+        let pool = materialize(&bits);
+        let initial = build_table(PointerTableGeneration::INITIAL, INITIAL_CHUNKS, &pool);
+        let tables = Arc::new(
+            PublishedSymbolTables::new(initial, TableLimits::default())
+                .expect("bootstrap within limits"),
+        );
+        tables
+            .try_prepare(shape(GROWN_CHUNKS))
+            .result
+            .expect("initial growth")
+            .publish(pool[..GROWN_CHUNKS].iter().copied())
+            .expect("prefix-stable growth");
+
+        let writer_tables = Arc::clone(&tables);
+        let writer = loom::thread::spawn(move || {
+            match writer_tables.try_prepare(shape(GROWN_CHUNKS)).result {
+                Ok(open) => {
+                    drop(open);
+                }
+                Err(TablePublicationError::Busy) => {}
+                Err(other) => panic!("unexpected prepare error: {other:?}"),
+            }
+        });
+
+        let drain_tables = Arc::clone(&tables);
+        let drainer = loom::thread::spawn(move || {
+            // SAFETY: no view is live; concurrent writer only contends on the
+            // metadata mutex, where `drain_predecessors_after_grace` fails closed
+            // with `Busy`.
+            unsafe { drain_tables.reclaim_retired_after_grace() }
+        });
+
+        support::join(writer);
+        let outcome = support::join(drainer);
+        match outcome {
+            Ok(report) => {
+                assert_eq!(report.reclaimed.get(), 1);
+                assert_eq!(tables.stats().expect("stats").retired.get(), 0);
+            }
+            Err(TablePublicationError::Busy) => {
+                assert_eq!(tables.stats().expect("stats").retired.get(), 1);
+                // SAFETY: all threads joined and zero views are live.
+                let retry = unsafe { tables.reclaim_retired_after_grace() }
+                    .expect("uncontended retry must drain");
+                assert_eq!(retry.reclaimed.get(), 1);
+                assert_eq!(tables.stats().expect("stats").retired.get(), 0);
+            }
+            Err(other) => panic!("unexpected drain error: {other:?}"),
+        }
     });
 }

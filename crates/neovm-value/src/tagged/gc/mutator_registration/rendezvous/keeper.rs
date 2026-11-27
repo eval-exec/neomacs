@@ -454,6 +454,9 @@ impl<'era> AllStopped<'era> {
             .lock_for_keeper()
             .map_err(registration_error)?;
         self.validate(&gate)?;
+        if gate.rendezvous.ring_head_granted.is_some() {
+            return Err(RendezvousError::Publication);
+        }
         self.registry.symbols.ready()?;
         drop(gate);
         Ok(EraGraceReceipt {

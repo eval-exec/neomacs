@@ -1223,6 +1223,7 @@ fn keeper_grants_the_serial_head_only_inside_its_traced_stop_body<
             let again = stopped
                 .grant_serial_head(|_, _| true)
                 .map(|grant| grant.is_some());
+            let grace_while_granted = stopped.mint_grace_receipt().err();
             // The stop refuses to complete while the grant is out.
             let refused = match stopped.complete() {
                 Ok(()) => panic!("the stop completed with a grant out"),
@@ -1233,10 +1234,13 @@ fn keeper_grants_the_serial_head_only_inside_its_traced_stop_body<
                 }
             };
             let retired = stopped.retire_serial_grant(grant);
+            let grace_after_retire = stopped.mint_grace_receipt().map(|_| ());
             let head_after = super::serial_ring_head_for_test(registry);
             complete(stopped);
             release_tx.send(()).unwrap();
             owner.join().unwrap();
+            assert_eq!(grace_while_granted, Some(RendezvousError::Publication));
+            assert_eq!(grace_after_retire, Ok(()));
             assert_eq!(
                 early,
                 Err(RendezvousError::Publication),
