@@ -184,11 +184,31 @@ pub(in crate::tagged::gc) fn supported(heap: &TaggedHeap) -> Result<(), Collecti
                     // Admission has exclusive serial authority; a stopped job
                     // installs its real AllStopped before reaching this visit.
                     // A weak table is swept by `mark_and_sweep_weak_tables`
-                    // inside the stopped major (E3 slice 1), so it needs no
-                    // test permit. The structural eligibility below still
-                    // refuses a table the stopped sweep cannot own: unhydrated
-                    // storage, an active table authority, or a permanent
-                    // image-resident shell.
+                    // inside the stopped major (E3 slice 1) and stopped minor,
+                    // mutating only the heap-owned hydrated entry index via
+                    // `CollectorTables::edit` -> `KeeperTableMut::edit_storage`
+                    // (the same in-place storage write `pdump/convert.rs`
+                    // `hydrate_parked_weak_tables` performs at load; the
+                    // stopped collector never frees, relocates, or reallocates
+                    // a permanent or mapped shell).
+                    //
+                    // Structural eligibility stays strict: unhydrated storage
+                    // (`pending_entries().is_some()`), an active user-test
+                    // (`depth != 0`), or an active authority word
+                    // (`authority != 0`) are always refused.
+                    //
+                    // Pre- vs post-partition registration proof: once a table
+                    // is permanently black (`header.generation.permanent()`, or
+                    // a mapped table after `promote_and_blacken` set
+                    // `partition_dump && dump_blackened`), the main mark skips
+                    // it, so `mark_and_sweep_weak_tables` reaches it on a
+                    // stopped major iff it is registered in
+                    // `always_swept_weak_tables_set`
+                    // (`mark_sweep.rs:510-523,567-596`). Before partition
+                    // (`!permanently_black`), normal `mark_all()` and
+                    // `seed_all_mapped_children()` trace it into
+                    // `weak_hash_tables`.
+                    //
                     // Depth and the authority word are object metadata. Read
                     // them before inspect: a stopped visit's keeper lease
                     // CASes the word to WRITER, so an in-callback load would
@@ -203,8 +223,13 @@ pub(in crate::tagged::gc) fn supported(heap: &TaggedHeap) -> Result<(), Collecti
                         |ht| (ht.weakness, ht.data.pending_entries().is_none()),
                     );
                     let eligible = pending_clear && depth == 0 && authority == 0;
-                    let admitted =
-                        (*header).flags.boxed() && !(*header).generation.permanent() && eligible;
+                    let permanently_black = (*header).generation.permanent()
+                        || (!(*header).flags.boxed() && heap.partition_dump && heap.dump_blackened);
+                    let registered_if_permanent = !permanently_black
+                        || heap
+                            .always_swept_weak_tables_set
+                            .contains(&object.cast_mut());
+                    let admitted = eligible && registered_if_permanent;
                     if weakness.is_some() && !admitted {
                         #[cfg(any(test, feature = "test-support"))]
                         eprintln!("A5 unsupported weak hash payload: {:?}", weakness);

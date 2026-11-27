@@ -470,13 +470,34 @@ impl TableMut<'_> {
         // serial body's single-editor assumption holds; the table is rooted
         // for the lease's lifetime.
         unsafe {
-            // Parallel owners have no installed heap TLS. Route the ordinary
-            // owned non-cons remembered claim to the lease holder explicitly;
-            // the serial choke's TLS note cannot do this on their behalf.
-            // Admission excludes concurrent marking and mapped hash tables.
-            let header = &(*self.table).header.gc;
-            if !owner_gc.is_null() && header.tenured && header.claim_remembered() {
-                (*owner_gc).remset.push(self.value);
+            // Parallel owners have no installed heap TLS. Route the remembered
+            // barrier to the lease holder's own `MutatorGcState` explicitly,
+            // mirroring `TaggedHeap::remember_owner` (`gc.rs:1706-1742`):
+            // - Mapped (`!header.flags.boxed()`) tables insert into
+            //   `r_mapped_seen` (merged into `heap.mapped_remembered` at stop,
+            //   `collection.rs:955-957`) and push to `remset` so the next
+            //   stopped minor scans them.
+            // - Permanent boxed (`header.flags.boxed() && header.generation.permanent()`)
+            //   tables also record into `r_mapped_seen` so persistent
+            //   remembered membership survives across cycles, plus
+            //   `claim_remembered()` -> `remset`.
+            // - Ordinary tenured boxed tables use `claim_remembered()` -> `remset`.
+            // Admission excludes concurrent major marking (`CollectorQuiescence`),
+            // so `major_mark` is always false here.
+            if !owner_gc.is_null() {
+                let header = &(*self.table).header.gc;
+                if !header.flags.boxed() {
+                    if (*owner_gc).r_mapped_seen.insert(self.value.bits()) {
+                        (*owner_gc).remset.push(self.value);
+                    }
+                } else if header.tenured {
+                    if header.generation.permanent() {
+                        (*owner_gc).r_mapped_seen.insert(self.value.bits());
+                    }
+                    if header.claim_remembered() {
+                        (*owner_gc).remset.push(self.value);
+                    }
+                }
             }
             crate::tagged::mutate::with_hash_table_mut_inactive(self.value, |ht| {
                 let before = ht.data.sealed_storage_bytes();

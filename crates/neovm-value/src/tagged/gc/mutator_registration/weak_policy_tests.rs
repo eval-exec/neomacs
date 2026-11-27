@@ -140,13 +140,29 @@ fn permanent_mapped_and_callback_payloads_body<K: EraKeeper>(
         .cast::<HashTableObj>()
         .cast_mut();
     // SAFETY: rooted owned header, exclusive serial keeper. Restore the
-    // temporary generation marker before any real collection/destruction.
+    // temporary generation marker and registry membership before any real
+    // collection/destruction.
     unsafe {
         let header = &mut (*ptr).header.gc;
         let generation = header.generation;
         let tenured = header.tenured;
         header.make_permanent(&ImageResident::for_test());
         assert!(WeakSweepPermit::mint(heap, keeper, &[table]).is_err());
+        // A permanent weak table NOT registered in `always_swept_weak_tables_set`
+        // would be skipped by the main mark and never swept: `supported` MUST refuse.
+        assert!(supported(heap).is_err());
+        // Once registered in `always_swept_weak_tables_set` (as `promote_and_blacken`
+        // does for real image-resident weak tables), `supported` admits it while
+        // structural eligibility (`pending_clear && depth == 0 && authority == 0`) holds.
+        let inserted = heap.always_swept_weak_tables_set.insert(ptr);
+        assert!(supported(heap).is_ok());
+        // Structural eligibility remains strictly enforced on permanent weak tables.
+        (*ptr).table.set_pending_dump_entries(Vec::new());
+        assert!(supported(heap).is_err());
+        (*ptr).table.hydrate_pending();
+        if inserted {
+            heap.always_swept_weak_tables_set.remove(&ptr);
+        }
         header.generation = generation;
         header.tenured = tenured;
     }
@@ -162,14 +178,43 @@ fn permanent_mapped_and_callback_payloads_body<K: EraKeeper>(
     let mapped_value = unsafe { TaggedValue::from_veclike_ptr(mapped_ptr.cast()) };
     assert!(WeakSweepPermit::mint(heap, keeper, &[mapped_value]).is_err());
     // SAFETY: `mapped` is a live boxed `HashTableObj` kept alive across the
-    // `supported(heap)` check and popped immediately below before drop.
+    // `supported(heap)` checks and popped immediately below before drop.
     heap.mapped_veclike_objects.push(unsafe {
         crate::tagged::gc::arena_pages::MappedVecLikeObject::new(
             mapped_ptr.cast(),
             std::mem::size_of::<HashTableObj>(),
         )
     });
+    // Pre-partition (`!dump_blackened`): a hydrated mapped weak table is
+    // traced by the normal mark and admitted, while an unhydrated one stays
+    // refused fail-closed.
+    assert!(supported(heap).is_ok());
+    unsafe {
+        (*mapped_ptr).table.set_pending_dump_entries(Vec::new());
+        assert!(supported(heap).is_err());
+        (*mapped_ptr).table.hydrate_pending();
+    }
+    // Post-partition (`partition_dump && dump_blackened`): an UNREGISTERED
+    // mapped weak table is skipped by the main mark and MUST be refused
+    // fail-closed; registering it in `always_swept_weak_tables_set` (as
+    // `promote_and_blacken` does) admits it while keeping unhydrated refused.
+    let saved_partition = heap.partition_dump;
+    let saved_blackened = heap.dump_blackened;
+    heap.partition_dump = true;
+    heap.dump_blackened = true;
     assert!(supported(heap).is_err());
+    let mapped_inserted = heap.always_swept_weak_tables_set.insert(mapped_ptr);
+    assert!(supported(heap).is_ok());
+    unsafe {
+        (*mapped_ptr).table.set_pending_dump_entries(Vec::new());
+        assert!(supported(heap).is_err());
+        (*mapped_ptr).table.hydrate_pending();
+    }
+    if mapped_inserted {
+        heap.always_swept_weak_tables_set.remove(&mapped_ptr);
+    }
+    heap.partition_dump = saved_partition;
+    heap.dump_blackened = saved_blackened;
     heap.mapped_veclike_objects.pop();
     unsafe { heap.alloc_user_ptr(std::ptr::null_mut(), None) };
     // E3.2: user-ptr/module-function payloads are admitted; the stopped sweep

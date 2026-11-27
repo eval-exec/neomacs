@@ -79,9 +79,9 @@ impl<'heap> Gen1Admission<'heap> {
     /// keeper thread.
     ///
     /// Running this check before transferring the World baton into a keeper
-    /// thread keeps unsupported heaps (e.g. `Sqlite`, permanent weak hash
-    /// tables, or `gc-memory-telemetry` builds) cleanly rollback-capable
-    /// without poisoning a `PreparedHeapTransfer`.
+    /// thread keeps unsupported heaps (e.g. `Sqlite`, unhydrated/unregistered
+    /// weak hash tables, or `gc-memory-telemetry` builds) cleanly
+    /// rollback-capable without poisoning a `PreparedHeapTransfer`.
     #[cold]
     #[inline(never)]
     #[doc(hidden)]
