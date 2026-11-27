@@ -302,8 +302,82 @@ pub(crate) fn init_for_tests() {
     let _ = init(LogTarget::Test);
 }
 
+/// Every Cranelift crate in `Cargo.lock` (hyphens are module-path underscores).
+///
+/// Cranelift logs its own work at INFO and DEBUG, and `cranelift_jit::backend` is the loud one: at INFO it emits
+/// `defining function <id>: <the entire CLIF body>` -- one log event carrying hundreds of IR lines per compiled
+/// Lisp function (issue #865: ~1 MB per startup for a large config, and the reason our own bug-report template
+/// tells users to type `cranelift_*=off` by hand). These targets default to WARN so a normal launch is quiet.
+///
+/// The list must track `Cargo.lock`; `cranelift_crate_list_covers_cargo_lock` fails when a `cranelift-*` crate is
+/// added without being listed here, so this cannot silently fall behind.
+const CRANELIFT_CRATES: &[&str] = &[
+    "cranelift_assembler_x64",
+    "cranelift_assembler_x64_meta",
+    "cranelift_bforest",
+    "cranelift_bitset",
+    "cranelift_codegen",
+    "cranelift_codegen_meta",
+    "cranelift_codegen_shared",
+    "cranelift_control",
+    "cranelift_entity",
+    "cranelift_frontend",
+    "cranelift_isle",
+    "cranelift_jit",
+    "cranelift_module",
+    "cranelift_native",
+    "cranelift_object",
+    "cranelift_srcgen",
+];
+
+/// Whether `RUST_LOG` names a Cranelift target itself.
+///
+/// When it does, the user's directives are used verbatim and nothing is appended: an explicit
+/// `RUST_LOG=info,cranelift_jit=debug` must still give a JIT developer the IR. Only a specification that says
+/// nothing about Cranelift gets the quiet defaults.
+///
+/// A leading `-` (`RUST_LOG=-cranelift_jit`, the form that silences a target) names Cranelift too, so it counts
+/// as configured and keeps its directive unchanged.
+fn rust_log_configures_cranelift(spec: &str) -> bool {
+    spec.split(',').any(|directive| {
+        let target = directive
+            .split('=')
+            .next()
+            .unwrap_or("")
+            .trim()
+            .trim_start_matches('-')
+            .replace('-', "_");
+        CRANELIFT_CRATES.iter().any(|crate_name| {
+            target == *crate_name || target.starts_with(&format!("{crate_name}::"))
+        })
+    })
+}
+
+/// Build the process env filter.
+///
+/// - No `RUST_LOG`: `warn`, which already leaves every Cranelift crate at WARN.
+/// - `RUST_LOG` that names a Cranelift target: used verbatim (user wins).
+/// - Any other `RUST_LOG`: the user's specification plus `<cranelift crate>=warn` for every crate they did not
+///   name, appended so it cannot override their own directives.
+fn env_filter_spec(rust_log: Option<&str>) -> String {
+    let Some(spec) = rust_log else {
+        return "warn".to_string();
+    };
+    if rust_log_configures_cranelift(spec) {
+        return spec.to_string();
+    }
+    let mut out = spec.to_string();
+    for crate_name in CRANELIFT_CRATES {
+        out.push(',');
+        out.push_str(crate_name);
+        out.push_str("=warn");
+    }
+    out
+}
+
 fn make_env_filter() -> EnvFilter {
-    EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("warn"))
+    let spec = env_filter_spec(std::env::var("RUST_LOG").ok().as_deref());
+    EnvFilter::try_new(&spec).unwrap_or_else(|_| EnvFilter::new("warn"))
 }
 
 /// Resolve the log file path from environment.
@@ -571,5 +645,88 @@ mod cursor_geometry_capture_tests {
             "neomacs::cursor_geometry=trace"
         ));
         assert!(rust_log_enables_cursor_geometry("debug"));
+    }
+}
+
+#[cfg(test)]
+mod env_filter_tests {
+    use super::*;
+
+    /// The reported behaviour: a plain `RUST_LOG=info` makes `cranelift_jit::backend` emit
+    /// `defining function <id>: <CLIF body>` once per compiled Lisp function (#865, ~1 MB per startup with a large
+    /// config). The filter must leave every Cranelift crate at WARN while keeping the user's own level.
+    #[test]
+    fn cranelift_targets_default_to_warn_under_a_plain_rust_log() {
+        let spec = env_filter_spec(Some("info"));
+        assert!(
+            spec.starts_with("info"),
+            "the user's level must be preserved: {spec}"
+        );
+        for crate_name in CRANELIFT_CRATES {
+            assert!(
+                spec.contains(&format!("{crate_name}=warn")),
+                "`{crate_name}` must be pinned to warn in `{spec}`"
+            );
+        }
+    }
+
+    /// No `RUST_LOG` at all already means `warn` for everything, so nothing needs appending.
+    #[test]
+    fn absent_rust_log_is_warn() {
+        assert_eq!(env_filter_spec(None), "warn");
+    }
+
+    /// A user who names a Cranelift target gets their specification verbatim -- including a JIT developer who wants
+    /// the IR back. Nothing is appended, so their directive cannot be overridden by ours.
+    #[test]
+    fn an_explicit_cranelift_directive_is_used_verbatim() {
+        for spec in [
+            "info,cranelift_jit=debug",
+            "cranelift_codegen=trace",
+            "warn,cranelift_jit::backend=info",
+            "info,cranelift-jit=debug",
+            // The negative form silences the target; appending `=warn` would
+            // override a directive the user wrote.
+            "info,-cranelift_jit",
+            "-cranelift_codegen",
+        ] {
+            assert_eq!(
+                env_filter_spec(Some(spec)),
+                spec,
+                "`{spec}` must be respected unchanged"
+            );
+        }
+    }
+
+    /// A directive that merely *contains* the word must not count as configuring Cranelift.
+    #[test]
+    fn unrelated_targets_do_not_disable_the_default() {
+        let spec = env_filter_spec(Some("info,neovm_jit_dump=debug"));
+        assert!(spec.contains("cranelift_jit=warn"), "{spec}");
+        assert!(spec.starts_with("info,neovm_jit_dump=debug"), "{spec}");
+    }
+
+    /// The list must track `Cargo.lock`: a new `cranelift-*` crate that is not pinned here would start logging at
+    /// the user's global level again, which is exactly the bug. This fails closed on the next dependency addition.
+    #[test]
+    fn cranelift_crate_list_covers_cargo_lock() {
+        const LOCK: &str = include_str!("../../../Cargo.lock");
+        let mut missing = Vec::new();
+        for line in LOCK.lines() {
+            let Some(name) = line.strip_prefix("name = \"cranelift-") else {
+                continue;
+            };
+            let Some(name) = name.strip_suffix('"') else {
+                continue;
+            };
+            let module = format!("cranelift_{}", name.replace('-', "_"));
+            if !CRANELIFT_CRATES.contains(&module.as_str()) {
+                missing.push(format!("cranelift-{name} -> {module}"));
+            }
+        }
+        assert!(
+            missing.is_empty(),
+            "Cargo.lock has Cranelift crates missing from CRANELIFT_CRATES: {missing:?}"
+        );
     }
 }
