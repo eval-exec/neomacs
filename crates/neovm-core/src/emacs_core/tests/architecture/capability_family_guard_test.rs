@@ -122,7 +122,7 @@ fn expected_calls() -> BTreeMap<(String, String, String), usize> {
 /// Every production constructor call: `(file, enclosing fn, Type::ctor, count)`.
 #[rustfmt::skip]
 const C12_FAMILY_CALLS: &[(&str, &str, &str, usize)] = &[
-    ("neovm-eval/src/emacs_core/runtime/eval/command_loop.rs", "Context::gc_collect_from_current_roots_body", "StoppedWorldProof::with_stopped_world", 7),
+    ("neovm-eval/src/emacs_core/runtime/eval/command_loop.rs", "Context::gc_collect_from_current_roots_body", "StoppedWorldProof::with_stopped_world", 8),
     ("neovm-eval/src/emacs_core/runtime/eval/command_loop.rs", "Context::start_concurrent_mark", "SingleMutatorWorld::from_heap", 1),
     ("neovm-eval/src/emacs_core/runtime/eval/command_loop.rs", "Context::terminate_concurrent_mark", "StoppedWorldProof::with_stopped_world", 1),
     ("neovm-value/src/tagged/gc/concurrent.rs", "TaggedHeap::finish_concurrent_mark", "SingleMutatorWorld::from_heap", 2),
@@ -130,7 +130,7 @@ const C12_FAMILY_CALLS: &[(&str, &str, &str, usize)] = &[
     ("neovm-value/src/tagged/gc/concurrent.rs", "TaggedHeap::raw_launch_concurrent_mark", "SingleMutatorWorld::from_heap", 3),
     ("neovm-value/src/tagged/gc/facade_mark.rs", "CollectorQuiescence::check", "SingleMutatorWorld::from_heap", 1),
     ("neovm-value/src/tagged/gc/facade_mark.rs", "TaggedHeap::drain_to_quiescent", "SingleMutatorWorld::from_heap", 2),
-    ("neovm-value/src/tagged/gc/facade_mark.rs", "TaggedHeap::drain_to_quiescent", "StoppedWorldProof::with_stopped_world", 2),
+    ("neovm-value/src/tagged/gc/facade_mark.rs", "TaggedHeap::drain_to_quiescent", "StoppedWorldProof::with_stopped_world", 3),
     ("neovm-value/src/tagged/gc/generational.rs", "TaggedHeap::begin_minor_collection", "SingleMutatorWorld::from_heap", 1),
     ("neovm-value/src/tagged/gc/generational.rs", "TaggedHeap::begin_parallel_minor_collection", "SingleMutatorWorld::from_heap", 1),
     ("neovm-value/src/tagged/gc/generational.rs", "TaggedHeap::promote_survivors_world_stopped", "SingleMutatorWorld::from_heap", 2),
@@ -1331,4 +1331,253 @@ fn c12_production_reach_walk_refuses_every_route_into_a_test_file() {
         )],
         "non-inline `mod x` inside a block (fail closed)",
     );
+}
+
+// --- #859 item 3, class closure: relinking helpers are reachable only
+// through a proof-gated entry ---
+//
+// `promote_and_blacken` relinks `all_objects` on the premise that the sweep
+// completed; the other helpers recompute or rebase state that the same
+// premise protects. Rule: every production call of one of them sits in a
+// `C12_PROOF_GATED_ENTRIES` entry (which asserts its `StoppedWorldProof`
+// first) or in another helper of this set, and no helper is used as a value.
+// Since the helpers are only reachable that way, any safe path to one passes
+// through a gated entry. The set itself is hand-kept: a new relinking helper
+// must be added here (tracked on #859).
+
+const RELINKING_HELPERS: [&str; 4] = [
+    "promote_and_blacken",
+    "join_old_boxes_for_partition_world_stopped",
+    "recompute_old_bytes_world_stopped",
+    "refresh_generation_major_baseline_world_stopped",
+];
+
+struct RelinkVisitor<'a> {
+    file: &'a str,
+    excluded: u32,
+    impl_stack: Vec<String>,
+    fn_stack: Vec<String>,
+    calls: &'a mut BTreeMap<String, usize>,
+    problems: &'a mut Vec<String>,
+}
+
+impl RelinkVisitor<'_> {
+    /// Only a method of `impl TaggedHeap` itself counts: a free fn or a
+    /// method on another type that merely shares an entry's name does not.
+    fn caller_allowed(&self) -> bool {
+        self.impl_stack.last().is_some_and(|ty| ty == "TaggedHeap")
+            && self.fn_stack.last().is_some_and(|caller| {
+                super::C12_PROOF_GATED_ENTRIES.contains(&caller.as_str())
+                    || RELINKING_HELPERS.contains(&caller.as_str())
+            })
+    }
+}
+
+impl<'ast> Visit<'ast> for RelinkVisitor<'_> {
+    fn visit_item_mod(&mut self, item: &'ast syn::ItemMod) {
+        let ex = production_excluded(&item.attrs);
+        self.excluded += u32::from(ex);
+        visit::visit_item_mod(self, item);
+        self.excluded -= u32::from(ex);
+    }
+
+    fn visit_item_impl(&mut self, item: &'ast syn::ItemImpl) {
+        let ex = production_excluded(&item.attrs);
+        self.excluded += u32::from(ex);
+        self.impl_stack
+            .push(type_name(&item.self_ty).unwrap_or_default());
+        visit::visit_item_impl(self, item);
+        self.impl_stack.pop();
+        self.excluded -= u32::from(ex);
+    }
+
+    fn visit_item_fn(&mut self, item: &'ast syn::ItemFn) {
+        let ex = production_excluded(&item.attrs);
+        self.excluded += u32::from(ex);
+        let saved = std::mem::take(&mut self.impl_stack);
+        self.fn_stack.push(item.sig.ident.to_string());
+        visit::visit_item_fn(self, item);
+        self.fn_stack.pop();
+        self.impl_stack = saved;
+        self.excluded -= u32::from(ex);
+    }
+
+    fn visit_impl_item_fn(&mut self, item: &'ast syn::ImplItemFn) {
+        let ex = production_excluded(&item.attrs);
+        self.excluded += u32::from(ex);
+        self.fn_stack.push(item.sig.ident.to_string());
+        visit::visit_impl_item_fn(self, item);
+        self.fn_stack.pop();
+        self.excluded -= u32::from(ex);
+    }
+
+    fn visit_macro(&mut self, mac: &'ast syn::Macro) {
+        let tokens = mac.tokens.to_string();
+        if self.excluded == 0
+            && let Some(helper) = RELINKING_HELPERS.iter().find(|h| tokens.contains(*h))
+        {
+            self.problems.push(format!(
+                "{}:{}: macro body names relinking helper `{helper}` (unanalysable, fail closed)",
+                self.file,
+                mac.path.span().start().line
+            ));
+        }
+        visit::visit_macro(self, mac);
+    }
+
+    fn visit_item(&mut self, item: &'ast syn::Item) {
+        if self.excluded == 0
+            && let syn::Item::Verbatim(tokens) = item
+        {
+            self.problems.push(format!(
+                "{}: unparsed item `{tokens}` (fail closed)",
+                self.file
+            ));
+        }
+        visit::visit_item(self, item);
+    }
+
+    fn visit_expr_method_call(&mut self, call: &'ast syn::ExprMethodCall) {
+        let name = call.method.to_string();
+        if self.excluded == 0 && RELINKING_HELPERS.contains(&name.as_str()) {
+            *self.calls.entry(name.clone()).or_default() += 1;
+            if !self.caller_allowed() {
+                let caller = self
+                    .fn_stack
+                    .last()
+                    .cloned()
+                    .unwrap_or_else(|| "<module>".to_owned());
+                self.problems.push(format!(
+                    "{}:{}: `{caller}` calls relinking helper `{name}` without being a proof-gated entry",
+                    self.file,
+                    call.method.span().start().line
+                ));
+            }
+        }
+        visit::visit_expr_method_call(self, call);
+    }
+
+    fn visit_expr_path(&mut self, expr: &'ast syn::ExprPath) {
+        if self.excluded == 0
+            && let Some(last) = expr.path.segments.last()
+            && RELINKING_HELPERS.contains(&last.ident.to_string().as_str())
+        {
+            // Covers `Self::helper(..)` / `TaggedHeap::helper(..)` and a
+            // helper taken as a value; both bypass the method-call check.
+            self.problems.push(format!(
+                "{}:{}: relinking helper `{}` named by path (UFCS call or function value), fail closed",
+                self.file,
+                last.ident.span().start().line,
+                last.ident
+            ));
+        }
+        visit::visit_expr_path(self, expr);
+    }
+}
+
+fn relink_problems_in(
+    file: &str,
+    source: &str,
+    calls: &mut BTreeMap<String, usize>,
+    problems: &mut Vec<String>,
+) {
+    let ast = syn::parse_file(source).unwrap_or_else(|error| panic!("parse {file}: {error}"));
+    if production_excluded(&ast.attrs) {
+        return;
+    }
+    RelinkVisitor {
+        file,
+        excluded: 0,
+        impl_stack: Vec::new(),
+        fn_stack: Vec::new(),
+        calls,
+        problems,
+    }
+    .visit_file(&ast);
+}
+
+#[test]
+fn c12_relinking_helpers_are_reached_only_through_proof_gated_entries() {
+    let mut calls = BTreeMap::new();
+    let mut problems = Vec::new();
+    for file in architecture_production_source_roots::production_source_files() {
+        if file.is_test_path() {
+            continue;
+        }
+        let source = std::fs::read_to_string(&file.path)
+            .unwrap_or_else(|error| panic!("read {}: {error}", file.path.display()));
+        relink_problems_in(&display_path(&file), &source, &mut calls, &mut problems);
+    }
+    // Non-vacuity: every helper still has a production caller under this name.
+    for helper in RELINKING_HELPERS {
+        if !calls.contains_key(helper) {
+            problems.push(format!(
+                "relinking helper `{helper}` has no production call (renamed? update the set)"
+            ));
+        }
+    }
+    assert!(
+        problems.is_empty(),
+        "relinking helpers escaped their gated entries:\n{}",
+        problems.join("\n")
+    );
+}
+
+#[test]
+fn c12_relinking_helper_rule_refuses_ungated_callers() {
+    let run = |source: &str| {
+        let (mut calls, mut problems) = (BTreeMap::new(), Vec::new());
+        relink_problems_in(
+            "neovm-value/src/tagged/gc/synthetic.rs",
+            source,
+            &mut calls,
+            &mut problems,
+        );
+        problems.join("\n")
+    };
+    // 0. Positive control: a gated entry and a helper calling helpers.
+    let ok = run("impl TaggedHeap {
+        pub unsafe fn finish_first_partition_cycle(&mut self, s: &P) { self.promote_and_blacken(); }
+        fn promote_and_blacken(&mut self) { self.join_old_boxes_for_partition_world_stopped(); }
+    }");
+    assert!(ok.is_empty(), "positive control must pass:\n{ok}");
+    // 1. A new safe pub fn reaching a helper directly.
+    let p = run("impl TaggedHeap { pub fn shortcut(&mut self) { self.promote_and_blacken(); } }");
+    assert!(p.contains("`shortcut` calls relinking helper `promote_and_blacken` without being a proof-gated entry"), "{p}");
+    // 2. UFCS and function-value spellings fail closed.
+    let p = run(
+        "impl TaggedHeap { pub fn ufcs(&mut self) { Self::recompute_old_bytes_world_stopped(self); } }",
+    );
+    assert!(
+        p.contains("relinking helper `recompute_old_bytes_world_stopped` named by path"),
+        "{p}"
+    );
+    let p = run("fn f() { let g = TaggedHeap::promote_and_blacken; }");
+    assert!(
+        p.contains("relinking helper `promote_and_blacken` named by path"),
+        "{p}"
+    );
+    // 3. A free fn (or another type's method) that merely shares a gated
+    //    entry's name is not that entry.
+    let p = run("pub fn finalize_collection(h: &mut TaggedHeap) { h.promote_and_blacken(); }");
+    assert!(p.contains("`finalize_collection` calls relinking helper `promote_and_blacken` without being a proof-gated entry"), "{p}");
+    let p = run(
+        "impl Other { pub fn finalize_collection(&mut self, h: &mut TaggedHeap) { h.promote_and_blacken(); } }",
+    );
+    assert!(
+        p.contains("`finalize_collection` calls relinking helper"),
+        "{p}"
+    );
+    // 4. A macro body that names a helper is unanalysable.
+    let p = run("macro_rules! relink { ($h:expr) => { $h.promote_and_blacken() }; }");
+    assert!(
+        p.contains(
+            "macro body names relinking helper `promote_and_blacken` (unanalysable, fail closed)"
+        ),
+        "{p}"
+    );
+    // 5. A test-gated caller is out of scope.
+    let gated =
+        run("impl TaggedHeap { #[cfg(test)] pub fn t(&mut self) { self.promote_and_blacken(); } }");
+    assert!(gated.is_empty(), "{gated}");
 }

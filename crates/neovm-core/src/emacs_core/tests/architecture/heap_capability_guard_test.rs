@@ -49,6 +49,7 @@ const HEAP_METHODS: &[&str] = &[
     "incremental_finish",
     "incremental_sweep_slice",
     "finish_incremental_sweep_now",
+    "finish_first_partition_cycle",
 ];
 
 const INSTALL: &str = "set_tagged_heap_root";
@@ -94,6 +95,7 @@ fn is_sweep_method(name: &str) -> bool {
             | "incremental_finish"
             | "incremental_sweep_slice"
             | "finish_incremental_sweep_now"
+            | "finish_first_partition_cycle"
     )
 }
 
@@ -845,6 +847,7 @@ fn heap_capability_guard_flags_a_safe_collect_call() {
             pub unsafe fn incremental_finish(&mut self, _bytes: usize, _pause: i32) {}
             pub unsafe fn incremental_sweep_slice(&mut self, _budget: usize) -> bool { true }
             pub unsafe fn finish_incremental_sweep_now(&mut self) {}
+            pub unsafe fn finish_first_partition_cycle(&mut self) {}
             #[cfg(any(test, feature = "test-support"))]
             pub fn collect_rooted(&mut self, roots: impl Iterator<Item = i32>) {
                 unsafe { self.collect_exact(roots) }
@@ -881,6 +884,7 @@ fn heap_capability_guard_flags_safe_with_tagged_heap_and_token_minting() {
             pub unsafe fn incremental_finish(&mut self, _bytes: usize, _pause: i32) {}
             pub unsafe fn incremental_sweep_slice(&mut self, _budget: usize) -> bool { true }
             pub unsafe fn finish_incremental_sweep_now(&mut self) {}
+            pub unsafe fn finish_first_partition_cycle(&mut self) {}
         }
         pub unsafe fn set_tagged_heap_root() {}
         pub fn with_tagged_heap<R>(_f: impl FnOnce(&mut TaggedHeap) -> R) -> R { todo!() }
@@ -946,6 +950,7 @@ fn heap_capability_guard_ignores_iterator_collect_and_test_modules() {
             pub unsafe fn incremental_finish(&mut self, _bytes: usize, _pause: i32) {}
             pub unsafe fn incremental_sweep_slice(&mut self, _budget: usize) -> bool { true }
             pub unsafe fn finish_incremental_sweep_now(&mut self) {}
+            pub unsafe fn finish_first_partition_cycle(&mut self) {}
         }
         pub unsafe fn set_tagged_heap_root() {}
         pub unsafe fn with_tagged_heap() {}
@@ -986,6 +991,7 @@ fn sweep_stubs() -> &'static str {
             pub unsafe fn incremental_finish(&mut self, _bytes: usize, _pause: i32) {}
             pub unsafe fn incremental_sweep_slice(&mut self, _budget: usize) -> bool { true }
             pub unsafe fn finish_incremental_sweep_now(&mut self) {}
+            pub unsafe fn finish_first_partition_cycle(&mut self) {}
         }
         pub unsafe fn set_tagged_heap_root() {}
         pub unsafe fn with_tagged_heap() {}
@@ -1055,6 +1061,7 @@ fn heap_capability_guard_flags_a_new_safe_sweep_wrapper() {
             pub unsafe fn incremental_finish(&mut self, _bytes: usize, _pause: i32) {}
             pub unsafe fn incremental_sweep_slice(&mut self, _budget: usize) -> bool { true }
             pub unsafe fn finish_incremental_sweep_now(&mut self) {}
+            pub unsafe fn finish_first_partition_cycle(&mut self) {}
         }
         pub unsafe fn set_tagged_heap_root() {}
         pub unsafe fn with_tagged_heap() {}
@@ -3636,6 +3643,8 @@ const C12_PROOF_GATED_ENTRIES: &[&str] = &[
     "incremental_finish",
     "incremental_sweep_slice",
     "finish_incremental_sweep_now",
+    // #859: the first partition cycle's promotion relinks every survivor.
+    "finish_first_partition_cycle",
     // 6 internal collector-phase helpers:
     "finalize_collection",
     "begin_collection_with",
@@ -4197,6 +4206,7 @@ fn c12_stopped_world_scope_preserves_enclosing_safety_and_flags_nested_closures(
             pub unsafe fn incremental_finish(&mut self, _s: &StoppedWorldProof<'_>) {}
             pub unsafe fn incremental_sweep_slice(&mut self, _s: &StoppedWorldProof<'_>) {}
             pub unsafe fn finish_incremental_sweep_now(&mut self, _s: &StoppedWorldProof<'_>) {}
+            pub unsafe fn finish_first_partition_cycle(&mut self, _s: &StoppedWorldProof<'_>) {}
         }
         pub unsafe fn set_tagged_heap_root() {}
         pub unsafe fn with_tagged_heap() {}
@@ -4234,6 +4244,7 @@ fn c12_stopped_world_scope_preserves_enclosing_safety_and_flags_nested_closures(
             pub unsafe fn incremental_finish(&mut self, _s: &StoppedWorldProof<'_>) {}
             pub unsafe fn incremental_sweep_slice(&mut self, _s: &StoppedWorldProof<'_>) {}
             pub unsafe fn finish_incremental_sweep_now(&mut self, _s: &StoppedWorldProof<'_>) {}
+            pub unsafe fn finish_first_partition_cycle(&mut self, _s: &StoppedWorldProof<'_>) {}
         }
         pub unsafe fn set_tagged_heap_root() {}
         pub unsafe fn with_tagged_heap() {}
@@ -4273,6 +4284,7 @@ fn c12_stopped_world_scope_preserves_enclosing_safety_and_flags_nested_closures(
             pub unsafe fn incremental_finish(&mut self, _s: &StoppedWorldProof<'_>) {}
             pub unsafe fn incremental_sweep_slice(&mut self, _s: &StoppedWorldProof<'_>) {}
             pub unsafe fn finish_incremental_sweep_now(&mut self, _s: &StoppedWorldProof<'_>) {}
+            pub unsafe fn finish_first_partition_cycle(&mut self, _s: &StoppedWorldProof<'_>) {}
         }
         pub unsafe fn set_tagged_heap_root() {}
         pub unsafe fn with_tagged_heap() {}
@@ -4307,6 +4319,7 @@ fn c12_stopped_world_scope_preserves_enclosing_safety_and_flags_nested_closures(
             pub unsafe fn incremental_finish(&mut self, _s: &StoppedWorldProof<'_>) {}
             pub unsafe fn incremental_sweep_slice(&mut self, _s: &StoppedWorldProof<'_>) {}
             pub unsafe fn finish_incremental_sweep_now(&mut self, _s: &StoppedWorldProof<'_>) {}
+            pub unsafe fn finish_first_partition_cycle(&mut self, _s: &StoppedWorldProof<'_>) {}
         }
         pub unsafe fn set_tagged_heap_root() {}
         pub unsafe fn with_tagged_heap() {}

@@ -3386,7 +3386,7 @@ fn concurrent_first_cycle_keeps_weak_entries_keyed_by_live_image_objects() {
             heap.incremental_drain_all();
             heap.incremental_finish_for_test(bytes_before, std::time::Instant::now());
             heap.finish_incremental_sweep_now_for_test();
-            heap.finish_first_partition_cycle();
+            heap.finish_first_partition_cycle_for_test();
         } else {
             // SAFETY: serial fixture heap; the caller holds the only heap view and no
             // collector or compiled leaf runs.

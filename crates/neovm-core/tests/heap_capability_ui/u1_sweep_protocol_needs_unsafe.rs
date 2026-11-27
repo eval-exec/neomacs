@@ -4,6 +4,7 @@ use neovm_value::tagged::gc::{StoppedWorldProof, TaggedHeap};
 fn try_sweep(heap: &mut TaggedHeap, stopped: &StoppedWorldProof<'_>) {
     heap.begin_stw_collection(stopped);
     heap.complete_collection(stopped);
+    heap.finish_first_partition_cycle(stopped);
 }
 
 fn main() {

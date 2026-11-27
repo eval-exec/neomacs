@@ -2109,8 +2109,14 @@ impl Context {
         // drained, promote survivors + blacken the image + build the initial
         // remembered set. No-op for every other cycle (including the STW
         // paths, which promote inside `complete_collection`).
+        // SAFETY: `cycle_completed` means the mark joined and the sweep
+        // drained above; this driver is the heap's only writer and no
+        // callback or safepoint runs inside the closure.
         unsafe {
-            (*heap_ptr).finish_first_partition_cycle();
+            neovm_value::tagged::gc::StoppedWorldProof::with_stopped_world(
+                &mut *heap_ptr,
+                |heap, stopped| heap.finish_first_partition_cycle(stopped),
+            );
         }
         self.gc_pending = false;
         self.gc_count += 1;

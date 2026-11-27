@@ -70,7 +70,7 @@ fn string_gc_pacing_counts_collectible_survivors_not_image_residents() {
                 heap.incremental_drain_all();
                 heap.incremental_finish_for_test(heap.live_bytes(), std::time::Instant::now());
                 heap.finish_incremental_sweep_now_for_test();
-                heap.finish_first_partition_cycle();
+                heap.finish_first_partition_cycle_for_test();
                 heap.publish_gc_object_counts_if_requested(0);
             } else {
                 full(&mut heap, &roots);

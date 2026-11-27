@@ -586,7 +586,14 @@ impl TaggedHeap {
                 });
             }
         }
-        self.finish_first_partition_cycle();
+        // SAFETY: as the two mints above: `finish_concurrent_mark` joined any
+        // marker, the mark and sweep are drained, and the caller holds closed
+        // stopped-world admission for `self`.
+        unsafe {
+            StoppedWorldProof::with_stopped_world(self, |heap, stopped| {
+                heap.finish_first_partition_cycle(stopped)
+            });
+        }
         self.close_alloc_regions();
         if self.has_unfinished_concurrent_mark()
             || self.mark_in_progress

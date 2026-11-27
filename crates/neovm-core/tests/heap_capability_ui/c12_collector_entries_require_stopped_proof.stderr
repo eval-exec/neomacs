@@ -141,3 +141,19 @@ help: provide the argument
    |
 17 |         heap.finish_incremental_sweep_now(/* &neovm_value::tagged::gc::StoppedWorldProof<'_> */);
    |                                           +++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+error[E0061]: this method takes 1 argument but 0 arguments were supplied
+  --> tests/heap_capability_ui/c12_collector_entries_require_stopped_proof.rs:18:14
+   |
+18 |         heap.finish_first_partition_cycle();
+   |              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^-- argument #1 of type `&neovm_value::tagged::gc::StoppedWorldProof<'_>` is missing
+   |
+note: method defined here
+  --> $WORKSPACE/crates/neovm-value/src/tagged/gc/concurrent.rs
+   |
+   |     pub unsafe fn finish_first_partition_cycle(&mut self, stopped: &StoppedWorldProof<'_>) {
+   |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: provide the argument
+   |
+18 |         heap.finish_first_partition_cycle(/* &neovm_value::tagged::gc::StoppedWorldProof<'_> */);
+   |                                           +++++++++++++++++++++++++++++++++++++++++++++++++++++

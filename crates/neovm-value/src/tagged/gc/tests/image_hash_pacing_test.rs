@@ -64,7 +64,7 @@ fn deferred_first(heap: &mut TaggedHeap, roots: &[TaggedValue]) {
     heap.incremental_drain_all();
     heap.incremental_finish_for_test(heap.live_bytes(), std::time::Instant::now());
     heap.finish_incremental_sweep_now_for_test();
-    heap.finish_first_partition_cycle();
+    heap.finish_first_partition_cycle_for_test();
 }
 
 #[test]

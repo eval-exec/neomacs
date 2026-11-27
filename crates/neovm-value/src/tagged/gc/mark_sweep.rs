@@ -189,6 +189,17 @@ impl TaggedHeap {
         }
     }
 
+    /// Test-only. Same serial-harness contract as the sweep wrapper above.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn finish_first_partition_cycle_for_test(&mut self) {
+        // SAFETY: test-only serial harness entry; see `collect_rooted`.
+        unsafe {
+            StoppedWorldProof::with_stopped_world(self, |heap, stopped| {
+                heap.finish_first_partition_cycle(stopped)
+            })
+        }
+    }
+
     /// Test-only helper for `#![deny(unsafe_code)]` unit tests inside `tagged::gc`.
     #[cfg(test)]
     pub(super) fn finalize_collection_for_test(

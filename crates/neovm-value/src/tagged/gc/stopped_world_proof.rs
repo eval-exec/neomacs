@@ -202,7 +202,7 @@ mod tests {
     /// a fresh heap. Each row's message names its own entry, so deleting one
     /// entry's `assert_stopped` changes the message (a delegate's name or
     /// none) and fails that row.
-    fn gated_entries() -> [(&'static str, Entry); 15] {
+    fn gated_entries() -> [(&'static str, Entry); 16] {
         [
             // SAFETY (all `unsafe` calls here): serial fixture; the caller
             // owns the only heap view, with no TLS writer or callback.
@@ -232,6 +232,9 @@ mod tests {
             }),
             ("finish_incremental_sweep_now", |h, s| unsafe {
                 h.finish_incremental_sweep_now(s)
+            }),
+            ("finish_first_partition_cycle", |h, s| unsafe {
+                h.finish_first_partition_cycle(s)
             }),
             ("finish_incremental_sweep", |h, s| {
                 h.finish_incremental_sweep(s)
@@ -395,6 +398,33 @@ mod tests {
                 format!(
                     "StoppedWorldProof used after a concurrent marker launched since its mint ({name})"
                 )
+            );
+        }
+    }
+
+    /// #859: `promote_and_blacken` relinks `all_objects` on the premise that
+    /// the sweep completed, so the entry refuses a pending mark or sweep even
+    /// with a valid proof.
+    #[test]
+    fn finish_first_partition_cycle_refuses_a_pending_mark_or_sweep() {
+        for pending in ["sweep", "mark"] {
+            let mut heap = TaggedHeap::new();
+            // SAFETY: serial fixture; the flags are restored before drop.
+            let message = unsafe {
+                StoppedWorldProof::with_stopped_world(&mut heap, |heap, stopped| {
+                    match pending {
+                        "sweep" => heap.sweep_in_progress = true,
+                        _ => heap.mark_in_progress = true,
+                    }
+                    let message = panic_message(|| heap.finish_first_partition_cycle(stopped));
+                    heap.sweep_in_progress = false;
+                    heap.mark_in_progress = false;
+                    message
+                })
+            };
+            assert_eq!(
+                message, "finish_first_partition_cycle: the cycle's mark or sweep has not drained",
+                "pending {pending}"
             );
         }
     }

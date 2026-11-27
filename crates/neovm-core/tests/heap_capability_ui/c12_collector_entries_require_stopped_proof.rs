@@ -1,4 +1,4 @@
-//! value-gc C12 regression guard: ALL 9 collector-protocol `TaggedHeap` entry
+//! value-gc C12 regression guard: ALL 10 public collector-protocol `TaggedHeap` entry
 //! points require `&StoppedWorldProof<'_>` and fail to compile when called
 //! without a stopped-world proof.
 
@@ -15,6 +15,7 @@ fn call_without_proof(heap: &mut TaggedHeap) {
         heap.incremental_finish(0, std::time::Instant::now());
         let _ = heap.incremental_sweep_slice(1);
         heap.finish_incremental_sweep_now();
+        heap.finish_first_partition_cycle();
     }
 }
 

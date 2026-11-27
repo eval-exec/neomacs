@@ -134,7 +134,20 @@ impl TaggedHeap {
     /// is no trace and sweep behind the call, and promoting then would tenure
     /// every load transient (the stop-the-world first cycle promotes inside
     /// `complete_collection`).
-    pub fn finish_first_partition_cycle(&mut self) {
+    ///
+    /// # Safety
+    /// Same stopped-world contract as the other collector-protocol entries:
+    /// `stopped` vouches that no mutator or marker runs. The entry also
+    /// refuses (in release) a pending mark or sweep, because
+    /// `promote_and_blacken` relinks `all_objects` on the premise that the
+    /// sweep has completed.
+    #[doc(hidden)]
+    pub unsafe fn finish_first_partition_cycle(&mut self, stopped: &StoppedWorldProof<'_>) {
+        stopped.assert_stopped(self, "finish_first_partition_cycle");
+        assert!(
+            !self.mark_in_progress && !self.sweep_in_progress,
+            "finish_first_partition_cycle: the cycle's mark or sweep has not drained"
+        );
         self.assert_no_owner_cons_reserves();
         if !self.partition_dump || self.dump_blackened || !self.first_cycle_concurrent {
             self.first_cycle_concurrent = false;
