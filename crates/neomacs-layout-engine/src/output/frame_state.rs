@@ -43,6 +43,11 @@ pub(crate) struct OutputFrameBuildState {
     cursor_effects_by_window: HashMap<DisplayWindowId, EffectsConfig>,
     window_infos: Vec<WindowInfo>,
     pending_window_geometry: HashSet<DisplayWindowId>,
+    /// Display ranges recorded by a window's body walk before its
+    /// `WindowInfo` exists. The walk runs first and the info is added only
+    /// once the walk has reached its final start, so a range waits here
+    /// until its window's info arrives.
+    pending_window_ranges: HashMap<DisplayWindowId, (i64, i64)>,
     transition_hints: Vec<ContentTransitionHint>,
     background_color: Color,
     font_pixel_size: f32,
@@ -74,6 +79,7 @@ impl OutputFrameBuildState {
             cursor_effects_by_window: HashMap::default(),
             window_infos: Vec::new(),
             pending_window_geometry: HashSet::default(),
+            pending_window_ranges: HashMap::default(),
             transition_hints: Vec::new(),
             background_color: Color {
                 r: 0.0,
@@ -181,6 +187,7 @@ impl OutputFrameBuildState {
         self.cursor_effects_by_window.clear();
         self.window_infos.clear();
         self.pending_window_geometry.clear();
+        self.pending_window_ranges.clear();
         self.transition_hints.clear();
         self.background_color = Color {
             r: 0.0,
@@ -217,11 +224,19 @@ impl OutputFrameBuildState {
     pub(crate) fn install_window_metadata(&mut self, request: OutputWindowMetadataInstallRequest) {
         match request {
             OutputWindowMetadataInstallRequest::TextDisplayRange(range) => {
-                if let Some(info) = self.window_infos.last_mut()
-                    && info.window_id == range.window_id
+                match self
+                    .window_infos
+                    .iter_mut()
+                    .find(|info| info.window_id == range.window_id)
                 {
-                    info.window_start = range.window_start;
-                    info.window_end = range.window_end;
+                    Some(info) => {
+                        info.window_start = range.window_start;
+                        info.window_end = range.window_end;
+                    }
+                    None => {
+                        self.pending_window_ranges
+                            .insert(range.window_id, (range.window_start, range.window_end));
+                    }
                 }
             }
             OutputWindowMetadataInstallRequest::PresentedGeometry(geometry) => {
@@ -300,6 +315,11 @@ impl OutputFrameBuildState {
                     "duplicate output window identity"
                 );
                 self.pending_window_geometry.insert(info.window_id);
+                let mut info = info;
+                if let Some((start, end)) = self.pending_window_ranges.remove(&info.window_id) {
+                    info.window_start = start;
+                    info.window_end = end;
+                }
                 self.window_infos.push(info);
             }
             OutputFrameArtifactInstallRequest::TransitionHint(hint) => {

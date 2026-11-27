@@ -618,7 +618,7 @@ fn text_matrix_row_output_finishes_with_matrix_metrics() {
 }
 
 #[test]
-fn record_text_window_display_range_updates_matching_last_window_info() {
+fn record_text_window_display_range_updates_its_own_window_info() {
     let mut builder = DisplayOutputBuilder::new();
     builder.add_output_window_info(window_info(41));
     builder.install_window_metadata(
@@ -656,6 +656,38 @@ fn record_text_window_display_range_updates_matching_last_window_info() {
     let info = builder.window_infos().last().expect("window info");
     assert_eq!(info.window_start, 7);
     assert_eq!(info.window_end, 19);
+
+    // Window 42's info arrives after its range, as in the engine, where the
+    // info is added only once the body walk has reached its final start.
+    builder.add_output_window_info(window_info(42));
+    let info = builder.window_infos().last().expect("window info");
+    assert_eq!(info.window_id.get(), 42);
+    assert_eq!(info.window_start, 11);
+    assert_eq!(info.window_end, 23);
+    let first = &builder.window_infos()[0];
+    assert_eq!((first.window_start, first.window_end), (7, 19));
+}
+
+/// The engine adds a window's `WindowInfo` after its body walk recorded the
+/// display range, and later windows' infos may already follow. The range
+/// must still reach its own window, whatever its position in the list.
+#[test]
+fn a_display_range_reaches_its_window_info_whatever_the_order() {
+    let mut builder = DisplayOutputBuilder::new();
+    builder.add_output_window_info(window_info(3));
+    builder.add_output_window_info(window_info(4));
+    record_text_window_display_range(
+        TextWindowOutputTarget::from_builder(&mut builder),
+        TextWindowDisplayRange {
+            window_id: 3,
+            window_start: LispCharPos1::new(3678),
+            window_end: LispCharPos1::new(4567),
+        },
+    );
+    let body = &builder.window_infos()[0];
+    assert_eq!((body.window_start, body.window_end), (3678, 4567));
+    let mini = &builder.window_infos()[1];
+    assert_eq!(mini.window_end, 1, "another window's range does not leak");
 }
 
 #[test]

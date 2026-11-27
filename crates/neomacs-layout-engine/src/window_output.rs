@@ -754,6 +754,10 @@ pub(crate) struct TextWindowBodyOutputInstall<'a> {
 pub(crate) struct TextWindowRedisplayPositions {
     window_start: LispCharPos1,
     window_end: TextWindowEndPosition,
+    /// ZV as a Lisp position. `window-end` never reports past it; the
+    /// published Lisp value is clamped the same way (to Z, in
+    /// `WindowEndRecord::from_anchors`).
+    accessible_end: LispCharPos1,
 }
 
 /// The char/byte/matrix-row identity of one row walk's terminal position.
@@ -1083,6 +1087,7 @@ impl TextWindowRedisplayPositions {
                 anchor: TextPositionAnchor::new(end_char, char_to_byte(end_char)),
                 matrix_row: MatrixRow0::new(window_end_row),
             },
+            accessible_end: layout_i64_char_pos_to_lisp_char_pos(accessible_end),
         }
     }
 
@@ -1098,11 +1103,14 @@ impl TextWindowRedisplayPositions {
         self.window_end
     }
 
+    /// The presented range: `window-start` and `window-end` as Lisp sees
+    /// them. A walk that reached the end of the buffer reports an end-of-
+    /// buffer row one position past ZV; `window-end` stops at ZV.
     pub(crate) fn display_range(self, window_id: u64) -> TextWindowDisplayRange {
         TextWindowDisplayRange {
             window_id,
             window_start: self.window_start,
-            window_end: self.window_end_lisp(),
+            window_end: self.window_end_lisp().min(self.accessible_end),
         }
     }
 }

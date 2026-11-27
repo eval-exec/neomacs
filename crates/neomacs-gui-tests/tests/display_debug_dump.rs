@@ -166,3 +166,41 @@ fn wayland_display_debug_dump_self_arms_cursor_geometry_without_rust_log() {
         "{raw}"
     );
 }
+
+/// #855: the bundle's window list must carry each window's real display
+/// range. The reporter's bundle had `window_end` 0 with `window_start` 3678:
+/// a window's body walk recorded its range before the window's info existed,
+/// so the range was dropped.
+#[test]
+fn wayland_display_debug_dump_window_infos_carry_the_display_range() {
+    let (doc, raw, stderr) = run_dump("range", "warn");
+    let frames = doc["frame_snapshot"]["geometry"]["frames"]
+        .as_array()
+        .expect("snapshot frames");
+    let body = frames
+        .iter()
+        .flat_map(|frame| frame["window_infos"].as_array().into_iter().flatten())
+        .find(|info| info["selected"].as_bool() == Some(true))
+        .unwrap_or_else(|| panic!("a selected window info: {raw}"));
+    let start = body["window_start"].as_i64().expect("window_start");
+    let end = body["window_end"].as_i64().expect("window_end");
+    let size = body["buffer_size"].as_i64().expect("buffer_size");
+    assert!(
+        start >= 1 && start < end && end <= size + 1,
+        "1 <= window_start < window_end <= buffer_size + 1: start {start} end {end} size {size}"
+    );
+    // The presented range is what Lisp reports: (window-start) and
+    // (window-end nil t), both GNU-observable.
+    let lisp: Vec<i64> = stderr
+        .lines()
+        .find_map(|line| line.strip_prefix("LISP-WINDOW-RANGE "))
+        .unwrap_or_else(|| panic!("the fixture's Lisp range: {stderr}"))
+        .split_whitespace()
+        .map(|field| field.parse().expect("a Lisp position"))
+        .collect();
+    assert_eq!(
+        (start, end),
+        (lisp[0], lisp[1]),
+        "presented range vs Lisp (window-start) / (window-end nil t)"
+    );
+}

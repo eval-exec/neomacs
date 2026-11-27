@@ -29,6 +29,9 @@
            (sit-for 0.3)
            ;; Exercise the exact interactive/menu path with $NEOMACS_DEBUG_DISPLAY_DUMP
            ;; and verify it does not activate the minibuffer.
+           ;; The Lisp range the dump's window list must equal (#855).
+           (princ (format "LISP-WINDOW-RANGE %d %d\n" (window-start) (window-end nil t))
+                  'external-debugging-output)
            (let ((written (call-interactively #'neomacs-dump-display-state))
                  (msg (current-message)))
              (when (active-minibuffer-window)
