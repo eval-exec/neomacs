@@ -631,6 +631,20 @@ impl RenderApp {
                 }
                 made_progress = true;
 
+                // Bug-report telemetry: layout's cursor rectangle beside the
+                // one the renderer draws (see `cursor_geometry`).
+                {
+                    use neomacs_display_protocol::glyph_matrix::cursor_geometry::{
+                        CursorDrawGeometry, TARGET,
+                    };
+                    if tracing::enabled!(target: TARGET, tracing::Level::DEBUG)
+                        && let Some(geometry) =
+                            CursorDrawGeometry::capture(&display_state.state, &display_state.frame)
+                    {
+                        tracing::debug!(target: TARGET, "frame={} {geometry}", frame_id.get());
+                    }
+                }
+
                 let super::frame_preparation::PreparedFrame {
                     frame,
                     damage: row_damage,

@@ -39,6 +39,8 @@ pub use text_geometry::{TextGeometryUnits, TextRowGeometry, TextSlotColumn, Visu
 
 mod clone_row;
 
+pub mod cursor_geometry;
+
 /// One terminal cell produced by GNU's `compose-gstring-for-terminal`.
 ///
 /// The layout boundary resolves automatic-composition semantics while it has

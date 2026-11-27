@@ -8,6 +8,7 @@ use neovm_core::emacs_core::image::ImageContextExt;
 use neovm_core::emacs_core::neo::scroll::ScrollContextExt;
 use neovm_core::emacs_core::xdisp::XdispContextExt;
 use neovm_core::window::display::WindowDisplayContextExt;
+mod cursor_geometry_log;
 mod diagnostic_knobs;
 mod leaf_cursor_checkpoint;
 mod window_input_ownership;
@@ -5381,6 +5382,12 @@ impl LayoutEngine {
         // CUMULATIVE counters line per accepted frame; aggregation takes the
         // last line per pid.
         crate::buffer_source::row_route::route_stats_append_report();
+        cursor_geometry_log::log_layout_stage(
+            frame_id.0,
+            sealed.state(),
+            || evaluator.input_latency_viewport(frame_id.0),
+            |window| self.layout_stats.window_classes.get(&window).copied(),
+        );
         // Wholesale, and correct because these maps hold exactly this frame's
         // windows -- `load_retained_frame` saw to that. Windows this frame
         // deleted are pruned by the replacement, which is what it is for.

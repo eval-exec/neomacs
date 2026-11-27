@@ -80,6 +80,9 @@ mod wayland_font_raster;
 #[path = "font_xwayland_parity.rs"]
 mod font_xwayland_parity;
 
+#[path = "cursor_geometry_telemetry.rs"]
+mod cursor_geometry_telemetry;
+
 // Only the Linux desktop-font suites (which pin a Linux font package) use
 // this helper; compiling it on other hosts is dead code.
 #[cfg(target_os = "linux")]
