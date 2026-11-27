@@ -3579,11 +3579,13 @@ pub fn builtin_bitmap_spec_p(args: Vec<Value>) -> EvalResult {
 /// realization is what reads the palette -- after `tty-color-define` moves a
 /// colour, GNU repaints it at its new index and a no-op leaves the old one:
 ///
-///     ;; TERM=xterm-256color, `(tty-color-define "red" 200 '(65535 0 0))'
-///     ;; and `(clear-face-cache)' AFTER the first redisplay, then a face with
-///     ;; `:foreground "red"' repainted
-///     ;; GNU     => ESC [ 31 m   then  ESC [ 38;5;200 m
-///     ;; Neomacs => ESC [ 31 m   then  ESC [ 31 m
+/// ```text
+/// ;; TERM=xterm-256color, `(tty-color-define "red" 200 '(65535 0 0))'
+/// ;; and `(clear-face-cache)' AFTER the first redisplay, then a face with
+/// ;; `:foreground "red"' repainted
+/// ;; GNU     => ESC [ 31 m   then  ESC [ 38;5;200 m
+/// ;; Neomacs => ESC [ 31 m   then  ESC [ 31 m
+/// ```
 ///
 /// Neomacs has no separate realized-face cache to free: the render-facing table
 /// IS the realization, rebuilt by `sync_runtime_faces_for_frame`, which is

@@ -78,8 +78,10 @@ pub(crate) fn regex_error_signal(msg: String) -> neovm_value::error::Flow {
 /// GNU `search.c:282, 376, 1168, 2053` — every search path reads
 /// `Vinhibit_changing_match_data` at the top:
 ///
-///     bool modify_match_data = NILP (Vinhibit_changing_match_data)
-///                              && modify_data;
+/// ```text
+/// bool modify_match_data = NILP (Vinhibit_changing_match_data)
+///                          && modify_data;
+/// ```
 ///
 /// When the variable is non-nil, the match data must stay pinned to
 /// its prior state across the search. Returns `true` when the
