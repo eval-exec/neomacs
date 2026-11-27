@@ -93,6 +93,7 @@ mod run_slice;
 mod table_allocation;
 mod table_authority;
 mod weak_policy;
+pub(in crate::tagged::gc) use collection::supported as preflight_era_supported;
 pub use collection::{CollectionError, CollectionReport, MinorCollectionError};
 use gate::RegistryGuard;
 pub use root_slot::OwnerRootSlot;

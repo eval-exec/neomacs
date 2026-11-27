@@ -102,7 +102,13 @@ pub fn builtin_neomacs_make_parallel_thread(eval: &mut Context, args: Vec<Value>
         Ok(_admission) => match eval.spawn_parallel_opt_in_thread(&args) {
             Ok(handle) => Ok(handle),
             Err(SpawnParallelError::Lisp(flow)) => Err(flow),
-            Err(SpawnParallelError::Refused(_)) => builtin_make_thread(eval, args),
+            Err(SpawnParallelError::Refused(reason)) => {
+                tracing::warn!(
+                    ?reason,
+                    "neomacs-make-parallel-thread spawn refused; falling back to make-thread"
+                );
+                builtin_make_thread(eval, args)
+            }
         },
         Err(NMutatorEntryError::Unavailable | NMutatorEntryError::GenerationalDisabled) => {
             builtin_make_thread(eval, args)

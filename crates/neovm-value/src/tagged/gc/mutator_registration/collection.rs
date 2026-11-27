@@ -139,7 +139,7 @@ impl CollectionReport {
     }
 }
 
-fn supported(heap: &TaggedHeap) -> Result<(), CollectionError> {
+pub(in crate::tagged::gc) fn supported(heap: &TaggedHeap) -> Result<(), CollectionError> {
     // E3.3 policy: this optional measurement build takes the DESIGN-allowed
     // explicit serial-only telemetry route. A complete stopped aggregation is
     // the named follow-up; returning partial data is never an option. The

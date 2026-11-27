@@ -73,6 +73,22 @@ impl<'heap> Gen1Admission<'heap> {
         &mut self.collector
     }
 
+    /// Read-only preflight proving the exclusively held, drained GEN1 heap
+    /// satisfies the same stopped-collection payload support check
+    /// (`collection::supported`) that `EraCore::admit_rooted` enforces on the
+    /// keeper thread.
+    ///
+    /// Running this check before transferring the World baton into a keeper
+    /// thread keeps unsupported heaps (e.g. `Sqlite`, permanent weak hash
+    /// tables, or `gc-memory-telemetry` builds) cleanly rollback-capable
+    /// without poisoning a `PreparedHeapTransfer`.
+    #[cold]
+    #[inline(never)]
+    #[doc(hidden)]
+    pub fn preflight_era_supported(&mut self) -> Result<(), super::RendezvousError> {
+        super::mutator_registration::preflight_era_supported(self.collector.registration_heap_mut())
+    }
+
     /// Retract this heap's observation owner. The caller passes the receipt to
     /// `prepare_detached` after its own frames that still need the owner.
     #[doc(hidden)]

@@ -73,6 +73,7 @@ pub(crate) enum LiveEraOpenError {
     Closing,
     SeatPark,
     DrainFailed,
+    HeapUnsupported,
     TransferFailed,
     KeeperStartFailed,
     OpenEraFailed,
@@ -86,6 +87,8 @@ pub(crate) enum LiveEraOpenError {
 pub(crate) enum LiveEraOpenFault {
     FailAfterSurrenderBeforeOpen,
     PanicAfterSurrenderBeforeOpen,
+    FailKeeperSpawn,
+    PanicAfterIdleKeeperSpawn,
     FailAfterOpenBeforeAcquire,
 }
 
@@ -121,12 +124,33 @@ struct PendingOwnerSpawn {
     world_handle: EraWorldHandle,
 }
 
+/// Join handle for the dedicated keeper OS thread.
+///
+/// Returns `Ok(None)` when the keeper was spawned idle and rolled back before
+/// receiving `PreparedEraStart`, `Ok(Some(ReturnedEraEnd))` after a normal era
+/// exit, or `Err(KeeperStartNotice)` if `keeper_serve` refused admission.
+type KeeperJoinHandle = std::thread::JoinHandle<Result<Option<ReturnedEraEnd>, KeeperStartNotice>>;
+
+/// Keeper OS thread already spawned and waiting for its `PreparedEraStart`.
+///
+/// Spawning the OS thread BEFORE transferring `Baton` out of
+/// `LiveEraOpenGuard<SoloSurrendered>` ensures OS thread creation failure
+/// (`EAGAIN` / `ENOMEM` / injected `FailKeeperSpawn`) happens while `Baton` is
+/// still owned non-optionally by the guard and rolls back cleanly.
+struct SpawnedIdleKeeper {
+    start_tx: mpsc::SyncSender<PreparedEraStart>,
+    ready_rx: mpsc::Receiver<Result<(GroupPort, mpsc::Sender<KeeperMsg>), KeeperStartNotice>>,
+    keeper_join: KeeperJoinHandle,
+    driver_drained: Arc<AtomicBool>,
+    pending_spawns: Arc<Mutex<VecDeque<PendingOwnerSpawn>>>,
+}
+
 /// Live parallel era state owned by `GreenRuntime` from the first opt-in
 /// admission until `green_teardown`.
 pub(crate) struct LiveEraRuntime {
     pending_return: Option<PendingHeapReturn>,
     saved_observation_placeholder: Option<Box<dyn std::any::Any>>,
-    keeper_join: Option<std::thread::JoinHandle<Result<ReturnedEraEnd, KeeperStartNotice>>>,
+    keeper_join: Option<KeeperJoinHandle>,
     driver_drained: Arc<AtomicBool>,
     inbox: Option<mpsc::Sender<KeeperMsg>>,
     pending_spawns: Arc<Mutex<VecDeque<PendingOwnerSpawn>>>,
@@ -144,299 +168,695 @@ impl std::fmt::Debug for LiveEraRuntime {
     }
 }
 
-/// Typed rollback/abandon phase for [`LiveEraOpenGuard`] (`E6-P4-I1`).
-enum OpenGuardPhase {
-    /// `Control::surrender_solo_for_era` succeeded; `Baton` is still local on
-    /// Main's OS thread and no keeper thread has started yet.
-    SoloSurrendered {
-        baton: Option<Baton>,
-        observations_pulled_out: bool,
-    },
-    /// The keeper OS thread is running `keeper_serve` + `Driver::run()`.
-    /// `opened_on_control` tracks whether `Control::open_era` already committed
-    /// (requiring `take_era_port_for_exit` + `close_era`) vs not yet committed
-    /// (requiring `group_port.exit()` + `restore_surrendered_solo`).
-    KeeperStarted {
-        pending_return: Option<PendingHeapReturn>,
-        saved_observation_placeholder: Option<Box<dyn std::any::Any>>,
-        keeper_join: Option<std::thread::JoinHandle<Result<ReturnedEraEnd, KeeperStartNotice>>>,
-        driver_drained: Arc<AtomicBool>,
-        inbox: Option<mpsc::Sender<KeeperMsg>>,
-        world_handle: Option<EraWorldHandle>,
-        group_port: Option<GroupPort>,
-        opened_on_control: bool,
-    },
-    /// `acquire_initial_era_turn` succeeded and Main resumed under `TurnRight::Era`.
-    Committed,
+/// Fail-closed RAII guard armed ONLY across irreversible by-value state
+/// transitions (`transfer_to_keeper`, `open_era_on_control`, `commit`) where
+/// ownership is temporarily on the local stack between two typestate guards.
+///
+/// If an unexpected panic unwinds while armed, `Drop` aborts fail-closed
+/// rather than silently returning to Lisp with `Control::SoloSurrendered` or
+/// parked `TAGGED_HEAP` TLS. Disarmed via [`Self::disarm`] as soon as the
+/// target typestate guard is constructed or rollback finishes.
+struct AbortOnUnwind(&'static str);
+
+impl AbortOnUnwind {
+    #[inline]
+    fn arm(step: &'static str) -> Self {
+        Self(step)
+    }
+
+    #[inline]
+    fn disarm(self) {
+        std::mem::forget(self);
+    }
 }
 
-/// Unwind-safe RAII guard enforcing **`E6-P4-I1`** across the live-Green
-/// era-open transition `(a) surrender_solo_for_era -> (b) keeper & open_era ->
-/// (c) acquire_initial_era_turn`.
-///
-/// On any error return or panic unwind before [`Self::commit`], [`Drop`] either
-/// rolls back `TurnRight::Solo(Baton)` onto Main's `GreenSeat` or drives the
-/// keeper's `GroupExit -> Disconnected -> ReturnedEraEnd -> restore -> close_era`
-/// closure so the World is never left half-transferred.
-struct LiveEraOpenGuard<'a> {
+impl Drop for AbortOnUnwind {
+    fn drop(&mut self) {
+        tracing::error!(
+            step = self.0,
+            "E6-P4-I1: panic during non-recoverable era-open transition; aborting fail-closed"
+        );
+        std::process::abort();
+    }
+}
+
+/// Main-thread resources shared across every active typestate phase of
+/// [`LiveEraOpenGuard`]. Plain struct with no `Drop` and zero `Option` fields.
+struct OpenContext<'a> {
     ctx: &'a mut Context,
     control: Arc<Control>,
-    parked: Option<ParkedWorldSeat>,
+    parked: ParkedWorldSeat,
     dead_windows_recovery: super::super::world::SerialRecovery,
-    phase: OpenGuardPhase,
 }
 
-impl<'a> LiveEraOpenGuard<'a> {
-    fn new(
-        ctx: &'a mut Context,
-        control: Arc<Control>,
-        parked: ParkedWorldSeat,
-        baton: Baton,
-        dead_windows_recovery: super::super::world::SerialRecovery,
-    ) -> Self {
-        Self {
-            ctx,
-            control,
-            parked: Some(parked),
-            dead_windows_recovery,
-            phase: OpenGuardPhase::SoloSurrendered {
-                baton: Some(baton),
-                observations_pulled_out: false,
-            },
+impl<'a> OpenContext<'a> {
+    /// Restore `Control::SoloActive` and Main's `TAGGED_HEAP` TLS directly
+    /// from an un-transferred `Baton`.
+    fn restore_from_baton(self, baton: Baton) {
+        let solo_right = self
+            .control
+            .restore_surrendered_solo(baton)
+            .expect("E6-P4-I1 rollback: Control must be in SoloSurrendered");
+        self.parked.resume_with_turn_right(self.ctx, solo_right);
+        if matches!(
+            self.dead_windows_recovery,
+            super::super::world::SerialRecovery::RecreateDeadWindows
+        ) {
+            self.ctx.install_empty_dead_windows_table();
         }
+    }
+
+    /// Unified rollback restore from a joined `ReturnedEraEnd` back to
+    /// `Control::SoloActive` with Main's `TAGGED_HEAP` TLS reinstalled.
+    fn restore_from_returned_end(
+        self,
+        pending_return: PendingHeapReturn,
+        saved_observation_placeholder: Box<dyn std::any::Any>,
+        returned_end: ReturnedEraEnd,
+        close_control_era: bool,
+    ) {
+        self.ctx.with_green_runtime(|rt| {
+            rt.carried.borrow_mut().reset_observations_to_placeholder();
+        });
+        restore_current_thread_observations(saved_observation_placeholder);
+        let restored = match pending_return.restore(returned_end.into_heap_transfer()) {
+            Ok(restored) => restored,
+            Err(failure) => {
+                tracing::error!(
+                    ?failure,
+                    "E6-P4-I1 rollback: PendingHeapReturn::restore failed; aborting fail-closed"
+                );
+                std::process::abort();
+            }
+        };
+        // SAFETY: Main's OS thread is the original transfer source; the keeper
+        // joined and no other World loan exists.
+        let (baton, _roots, transfer_pub) = match unsafe { recover_transferred_source(restored) } {
+            Ok(parts) => parts,
+            Err(failure) => {
+                tracing::error!(
+                    ?failure,
+                    "E6-P4-I1 rollback: recover_transferred_source failed; aborting fail-closed"
+                );
+                std::process::abort();
+            }
+        };
+        // Put the restored canonical ObservationWorld into stowed
+        // `GreenRuntime::carried` so `resume_with_turn_right`'s
+        // `unstow_serial_world_state` installs it cleanly onto Main's TLS.
+        self.ctx
+            .with_green_runtime(|rt| rt.carried.borrow_mut().swap_observations_only());
+        let solo_right = if close_control_era {
+            let (right, era_wh, _unused) = self
+                .control
+                .close_era(baton)
+                .expect("E6-P4-I1 rollback: close_era succeeds with zero owners");
+            drop(era_wh);
+            right
+        } else {
+            self.control
+                .restore_surrendered_solo(baton)
+                .expect("E6-P4-I1 rollback: restore_surrendered_solo succeeds")
+        };
+        self.parked.resume_with_turn_right(self.ctx, solo_right);
+        let _ = super::super::green::retire_transfer_publication_on_main(self.ctx, transfer_pub);
+        if matches!(
+            self.dead_windows_recovery,
+            super::super::world::SerialRecovery::RecreateDeadWindows
+        ) {
+            self.ctx.install_empty_dead_windows_table();
+        }
+    }
+}
+
+/// Marker trait implemented ONLY by active, uncommitted era-open phases.
+///
+/// There is NO `Committed` sentinel variant or no-op rollback state anywhere:
+/// every [`LiveEraOpenGuard`] unconditionally runs its phase's rollback on
+/// `Drop` unless consumed by a typed state transition or [`LiveEraOpenGuard::commit`].
+trait OpenPhaseRollback<'a>: Sized {
+    fn rollback(self, open: OpenContext<'a>);
+}
+
+/// Linear typestate RAII guard enforcing **`E6-P4-I1`** across the live-Green
+/// era-open transition:
+/// `SoloSurrendered -> IdleKeeperSpawned -> KeeperStarting -> KeeperStarted -> EraOpened -> commit()`.
+///
+/// Invalid states (`(SoloSurrendered, baton = None)`, `Committed` sentinel
+/// during transitions, partial `Option` fields) are unrepresentable by
+/// construction.
+struct LiveEraOpenGuard<'a, S: OpenPhaseRollback<'a>> {
+    inner: std::mem::ManuallyDrop<(OpenContext<'a>, S)>,
+}
+
+impl<'a, S: OpenPhaseRollback<'a>> LiveEraOpenGuard<'a, S> {
+    fn new(open: OpenContext<'a>, state: S) -> Self {
+        Self {
+            inner: std::mem::ManuallyDrop::new((open, state)),
+        }
+    }
+
+    fn into_parts(self) -> (OpenContext<'a>, S) {
+        let mut this = std::mem::ManuallyDrop::new(self);
+        // SAFETY: `this` is wrapped in `ManuallyDrop`, suppressing `Drop`, so
+        // `this.inner` is taken out exactly once and never read again.
+        unsafe { std::mem::ManuallyDrop::take(&mut this.inner) }
+    }
+}
+
+impl<'a, S: OpenPhaseRollback<'a>> Drop for LiveEraOpenGuard<'a, S> {
+    fn drop(&mut self) {
+        // SAFETY: `Drop::drop` runs at most once and never runs after
+        // `into_parts()` suppressed drop via `ManuallyDrop`.
+        let (open, state) = unsafe { std::mem::ManuallyDrop::take(&mut self.inner) };
+        state.rollback(open);
+    }
+}
+
+/// Phase 1: `Control::surrender_solo_for_era` succeeded; `Baton` is owned
+/// non-optionally on Main's OS thread and no keeper thread has been spawned yet.
+struct SoloSurrendered {
+    baton: Baton,
+}
+
+impl<'a> OpenPhaseRollback<'a> for SoloSurrendered {
+    fn rollback(self, open: OpenContext<'a>) {
+        open.restore_from_baton(self.baton);
+    }
+}
+
+/// Phase 2: the idle keeper OS thread is spawned and waiting on `start_rx`,
+/// while `Baton` is STILL owned non-optionally on Main's OS thread across all
+/// preflights (`pull_observations_to_tls`, `era_world_handle`,
+/// `parallel_epoch_retention`, `drain_to_quiescent`, `Gen1Admission::check`,
+/// `preflight_era_supported`, `freeze_live_legacy_roots`).
+struct IdleKeeperSpawned {
+    baton: Baton,
+    observations_pulled_out: bool,
+    idle_keeper: SpawnedIdleKeeper,
+}
+
+impl<'a> OpenPhaseRollback<'a> for IdleKeeperSpawned {
+    fn rollback(self, open: OpenContext<'a>) {
+        let Self {
+            baton,
+            observations_pulled_out,
+            idle_keeper,
+        } = self;
+        // Dropping `start_tx` wakes the idle keeper thread to exit cleanly
+        // with `Ok(None)` without ever touching the World.
+        drop(idle_keeper.start_tx);
+        let _ = idle_keeper.keeper_join.join();
+        if observations_pulled_out {
+            open.ctx
+                .with_green_runtime(|rt| rt.carried.borrow_mut().swap_observations_only());
+        }
+        open.restore_from_baton(baton);
+    }
+}
+
+/// Phase 3: `Baton` has been transferred into `PreparedHeapTransfer` and sent
+/// to the already-spawned keeper thread; Main is awaiting `ready_rx.recv()`.
+struct KeeperStarting {
+    pending_return: PendingHeapReturn,
+    saved_observation_placeholder: Box<dyn std::any::Any>,
+    keeper_join: KeeperJoinHandle,
+    driver_drained: Arc<AtomicBool>,
+    world_handle: EraWorldHandle,
+}
+
+impl<'a> OpenPhaseRollback<'a> for KeeperStarting {
+    fn rollback(self, open: OpenContext<'a>) {
+        let Self {
+            pending_return,
+            saved_observation_placeholder,
+            keeper_join,
+            driver_drained: _,
+            world_handle,
+        } = self;
+        drop(world_handle);
+        match keeper_join.join() {
+            Ok(Ok(Some(returned_end))) => {
+                open.restore_from_returned_end(
+                    pending_return,
+                    saved_observation_placeholder,
+                    returned_end,
+                    false,
+                );
+            }
+            Ok(Err(notice)) => {
+                // `ScopedEraFailure` permanently poisons and retains
+                // `WorldLoan` inside `!Send ManuallyDrop<EraScope>`. Never
+                // return to Lisp with `SoloSurrendered` and parked `TAGGED_HEAP`
+                // TLS; fail closed.
+                tracing::error!(
+                    ?notice,
+                    "E6-P4-I1 rollback: unrecoverable keeper admission failure after transfer; aborting fail-closed"
+                );
+                std::process::abort();
+            }
+            Ok(Ok(None)) | Err(_) => {
+                tracing::error!(
+                    "E6-P4-I1 rollback: keeper thread terminated unexpectedly during startup; aborting fail-closed"
+                );
+                std::process::abort();
+            }
+        }
+    }
+}
+
+/// Phase 4: the keeper acknowledged readiness and is running `keeper_serve` +
+/// `Driver::run()`, before `Control::open_era` has committed.
+struct KeeperStarted {
+    pending_return: PendingHeapReturn,
+    saved_observation_placeholder: Box<dyn std::any::Any>,
+    keeper_join: KeeperJoinHandle,
+    driver_drained: Arc<AtomicBool>,
+    inbox: mpsc::Sender<KeeperMsg>,
+    world_handle: EraWorldHandle,
+    group_port: GroupPort,
+}
+
+impl<'a> OpenPhaseRollback<'a> for KeeperStarted {
+    fn rollback(self, open: OpenContext<'a>) {
+        let Self {
+            pending_return,
+            saved_observation_placeholder,
+            keeper_join,
+            driver_drained: _,
+            inbox,
+            world_handle,
+            group_port,
+        } = self;
+        group_port.exit();
+        drop(inbox);
+        drop(world_handle);
+        match keeper_join.join() {
+            Ok(Ok(Some(returned_end))) => {
+                open.restore_from_returned_end(
+                    pending_return,
+                    saved_observation_placeholder,
+                    returned_end,
+                    false,
+                );
+            }
+            Ok(Err(notice)) => {
+                tracing::error!(
+                    ?notice,
+                    "E6-P4-I1 rollback: started keeper exited with error; aborting fail-closed"
+                );
+                std::process::abort();
+            }
+            Ok(Ok(None)) | Err(_) => {
+                tracing::error!(
+                    "E6-P4-I1 rollback: started keeper terminated unexpectedly; aborting fail-closed"
+                );
+                std::process::abort();
+            }
+        }
+    }
+}
+
+/// Phase 5: `Control::open_era` committed; Main is about to acquire its
+/// initial `TurnRight::Era` and commit into [`LiveEraRuntime`].
+struct EraOpened {
+    pending_return: PendingHeapReturn,
+    saved_observation_placeholder: Box<dyn std::any::Any>,
+    keeper_join: KeeperJoinHandle,
+    driver_drained: Arc<AtomicBool>,
+    inbox: mpsc::Sender<KeeperMsg>,
+}
+
+impl<'a> OpenPhaseRollback<'a> for EraOpened {
+    fn rollback(self, open: OpenContext<'a>) {
+        let Self {
+            pending_return,
+            saved_observation_placeholder,
+            keeper_join,
+            driver_drained: _,
+            inbox,
+        } = self;
+        if let Some(gp) = open.control.take_era_port_for_exit() {
+            gp.exit();
+        }
+        drop(inbox);
+        match keeper_join.join() {
+            Ok(Ok(Some(returned_end))) => {
+                open.restore_from_returned_end(
+                    pending_return,
+                    saved_observation_placeholder,
+                    returned_end,
+                    true,
+                );
+            }
+            Ok(Err(notice)) => {
+                tracing::error!(
+                    ?notice,
+                    "E6-P4-I1 rollback: opened-era keeper exited with error; aborting fail-closed"
+                );
+                std::process::abort();
+            }
+            Ok(Ok(None)) | Err(_) => {
+                tracing::error!(
+                    "E6-P4-I1 rollback: opened-era keeper terminated unexpectedly; aborting fail-closed"
+                );
+                std::process::abort();
+            }
+        }
+    }
+}
+
+impl<'a> LiveEraOpenGuard<'a, SoloSurrendered> {
+    /// Spawn the idle keeper OS thread BEFORE moving `Baton` out of
+    /// `SoloSurrendered`. If OS thread creation fails (or `FailKeeperSpawn`
+    /// is injected), `self` drops as `SoloSurrendered` and cleanly restores
+    /// `Control::SoloActive` and Main's `TAGGED_HEAP` TLS.
+    fn spawn_idle_keeper(
+        self,
+    ) -> Result<LiveEraOpenGuard<'a, IdleKeeperSpawned>, LiveEraOpenError> {
+        #[cfg(test)]
+        if take_era_open_fault_matching(LiveEraOpenFault::FailKeeperSpawn) {
+            return Err(LiveEraOpenError::KeeperStartFailed);
+        }
+
+        let pending_spawns: Arc<Mutex<VecDeque<PendingOwnerSpawn>>> =
+            Arc::new(Mutex::new(VecDeque::new()));
+        let keeper_spawns = Arc::clone(&pending_spawns);
+        let driver_drained = Arc::new(AtomicBool::new(false));
+        let keeper_drained = Arc::clone(&driver_drained);
+        let (start_tx, start_rx) = mpsc::sync_channel::<PreparedEraStart>(1);
+        let (ready_tx, ready_rx) = mpsc::sync_channel::<
+            Result<(GroupPort, mpsc::Sender<KeeperMsg>), KeeperStartNotice>,
+        >(1);
+
+        let keeper_join = std::thread::Builder::new()
+            .name("neomacs-keeper".to_string())
+            .spawn(move || {
+                let Ok(prepared) = start_rx.recv() else {
+                    // Main rolled back during preflight before transferring
+                    // the heap; exit cleanly without touching any World state.
+                    return Ok(None);
+                };
+                let outcome = keeper_serve(prepared, |era| {
+                    std::thread::scope(|scope| {
+                        let (inbox_tx, inbox_rx) = mpsc::channel::<KeeperMsg>();
+                        let mut driver = Driver::new(era, inbox_rx);
+                        let group_link = driver.enroll_group();
+                        let group_port = GroupPort::new(inbox_tx.clone(), group_link);
+                        if ready_tx.send(Ok((group_port, inbox_tx))).is_err() {
+                            return;
+                        }
+                        let spawns_ref = &keeper_spawns;
+                        let owner_handles = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+                        let hook_handles = std::rc::Rc::clone(&owner_handles);
+                        driver = driver.with_between_stops_hook(move |drv| {
+                            let mut handles = hook_handles.borrow_mut();
+                            drain_pending_spawns(era, scope, drv, spawns_ref, &mut handles);
+                        });
+                        if driver.run() == DriverEnd::Drained {
+                            keeper_drained.store(true, Ordering::Release);
+                        }
+                        // Explicitly join every scoped owner OS thread (real
+                        // OS join, completing all TLS destructors) before
+                        // `keeper_serve` finishes the era.
+                        for handle in owner_handles.borrow_mut().drain(..) {
+                            let _ = handle.join();
+                        }
+                    });
+                });
+                match outcome {
+                    Ok((end, ())) => Ok(Some(end)),
+                    Err(failure) => {
+                        let notice = failure.notice();
+                        let _ = ready_tx.send(Err(notice));
+                        Err(notice)
+                    }
+                }
+            })
+            .map_err(|_| LiveEraOpenError::KeeperStartFailed)?;
+
+        let idle_keeper = SpawnedIdleKeeper {
+            start_tx,
+            ready_rx,
+            keeper_join,
+            driver_drained,
+            pending_spawns,
+        };
+        let (open, SoloSurrendered { baton }) = self.into_parts();
+        Ok(LiveEraOpenGuard::new(
+            open,
+            IdleKeeperSpawned {
+                baton,
+                observations_pulled_out: false,
+                idle_keeper,
+            },
+        ))
+    }
+}
+
+impl<'a> LiveEraOpenGuard<'a, IdleKeeperSpawned> {
+    fn baton_ref(&self) -> &Baton {
+        &self.inner.1.baton
+    }
+
+    fn heap_ptr(&self) -> *mut neovm_value::tagged::gc::TaggedHeap {
+        self.inner.0.ctx.tagged_heap.heap_root().as_ptr()
     }
 
     fn pull_observations_to_tls(&mut self) {
-        let OpenGuardPhase::SoloSurrendered {
-            observations_pulled_out,
-            ..
-        } = &mut self.phase
-        else {
-            unreachable!("pull_observations_to_tls requires SoloSurrendered phase");
-        };
-        if !*observations_pulled_out {
-            self.ctx
+        if !self.inner.1.observations_pulled_out {
+            self.inner
+                .0
+                .ctx
                 .with_green_runtime(|rt| rt.carried.borrow_mut().swap_observations_only());
-            *observations_pulled_out = true;
+            self.inner.1.observations_pulled_out = true;
         }
     }
 
-    fn take_surrendered_baton(&mut self) -> Baton {
-        match &mut self.phase {
-            OpenGuardPhase::SoloSurrendered { baton, .. } => {
-                baton.take().expect("guard holds surrendered Solo Baton")
-            }
-            _ => unreachable!("take_surrendered_baton called outside SoloSurrendered phase"),
-        }
-    }
-
-    fn restore_surrendered_baton_in_guard(&mut self, returned_baton: Baton) {
-        match &mut self.phase {
-            OpenGuardPhase::SoloSurrendered { baton, .. } => {
-                *baton = Some(returned_baton);
-            }
-            _ => unreachable!("restore_surrendered_baton called outside SoloSurrendered phase"),
-        }
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn transition_to_keeper_started(
-        &mut self,
-        pending_return: PendingHeapReturn,
-        saved_observation_placeholder: Box<dyn std::any::Any>,
-        keeper_join: std::thread::JoinHandle<Result<ReturnedEraEnd, KeeperStartNotice>>,
-        driver_drained: Arc<AtomicBool>,
-        inbox: mpsc::Sender<KeeperMsg>,
+    /// Atomically transfer `Baton` into the already-spawned keeper thread and
+    /// advance to `LiveEraOpenGuard<KeeperStarting>`.
+    ///
+    /// `AbortOnUnwind` protects the narrow by-value transfer window so even an
+    /// unexpected panic inside `prepare_reference_free_transfer` or channel
+    /// send fails closed instead of silently skipping rollback.
+    #[allow(clippy::type_complexity)]
+    fn transfer_to_keeper(
+        self,
+        admission: Gen1Admission<'_>,
+        frozen: neovm_value::tagged::gc::FrozenLegacyRoots,
         world_handle: EraWorldHandle,
-        group_port: GroupPort,
-    ) {
-        self.phase = OpenGuardPhase::KeeperStarted {
+    ) -> Result<
+        (
+            LiveEraOpenGuard<'a, KeeperStarting>,
+            mpsc::Receiver<Result<(GroupPort, mpsc::Sender<KeeperMsg>), KeeperStartNotice>>,
+            Arc<Mutex<VecDeque<PendingOwnerSpawn>>>,
+        ),
+        LiveEraOpenError,
+    > {
+        let abort_guard = AbortOnUnwind::arm("transfer_to_keeper");
+        let (
+            open,
+            IdleKeeperSpawned {
+                baton,
+                observations_pulled_out,
+                idle_keeper,
+            },
+        ) = self.into_parts();
+
+        // SAFETY: `park_seated` uninstalled carrier heap TLS, `drain_to_quiescent`
+        // quiesced the heap, and `baton` is the sole World authority.
+        let (pending_return, transfer) =
+            match unsafe { prepare_reference_free_transfer(admission, baton, frozen) } {
+                Ok(pair) => pair,
+                Err(failure) => {
+                    let (reason, admission, owner, _roots, _obs) = failure.into_parts();
+                    tracing::warn!(?reason, "E6-P.4 prepare_reference_free_transfer refused");
+                    drop(admission);
+                    let baton = Baton::from_world_loan(owner);
+                    let restored_guard = LiveEraOpenGuard::new(
+                        open,
+                        IdleKeeperSpawned {
+                            baton,
+                            observations_pulled_out,
+                            idle_keeper,
+                        },
+                    );
+                    abort_guard.disarm();
+                    drop(restored_guard);
+                    return Err(LiveEraOpenError::TransferFailed);
+                }
+            };
+
+        // Preserve `PendingHeapReturn`'s exact observation placeholder out of
+        // Main's TLS so resuming Main (and any Baton workers) during the live
+        // era cannot displace it before `PendingHeapReturn::restore()`.
+        let saved_observation_placeholder = stash_current_thread_observations();
+
+        let SpawnedIdleKeeper {
+            start_tx,
+            ready_rx,
+            keeper_join,
+            driver_drained,
+            pending_spawns,
+        } = idle_keeper;
+        let prepared = PreparedEraStart::from_heap_transfer(transfer);
+        if let Err(mpsc::SendError(prepared)) = start_tx.send(prepared) {
+            // The idle keeper exited before reading `start_rx`, so `prepared`
+            // never entered `keeper_serve` and returns cleanly to Main.
+            let _ = keeper_join.join();
+            drop(world_handle);
+            let returned_end = ReturnedEraEnd::from_transfer(prepared.into_heap_transfer())
+                .expect("unstarted PreparedHeapTransfer returns cleanly to source");
+            open.restore_from_returned_end(
+                pending_return,
+                saved_observation_placeholder,
+                returned_end,
+                false,
+            );
+            abort_guard.disarm();
+            return Err(LiveEraOpenError::KeeperStartFailed);
+        }
+
+        let next = LiveEraOpenGuard::new(
+            open,
+            KeeperStarting {
+                pending_return,
+                saved_observation_placeholder,
+                keeper_join,
+                driver_drained,
+                world_handle,
+            },
+        );
+        abort_guard.disarm();
+        Ok((next, ready_rx, pending_spawns))
+    }
+}
+
+impl<'a> LiveEraOpenGuard<'a, KeeperStarting> {
+    /// Block on the keeper's readiness handshake while `KeeperStarting` stays
+    /// armed, advancing to `LiveEraOpenGuard<KeeperStarted>` only on success.
+    fn await_ready(
+        self,
+        ready_rx: mpsc::Receiver<Result<(GroupPort, mpsc::Sender<KeeperMsg>), KeeperStartNotice>>,
+    ) -> Result<LiveEraOpenGuard<'a, KeeperStarted>, LiveEraOpenError> {
+        let (group_port, inbox) = match ready_rx.recv() {
+            Ok(Ok(pair)) => pair,
+            Ok(Err(notice)) => {
+                tracing::warn!(?notice, "E6-P.4 keeper thread refused era admission");
+                return Err(LiveEraOpenError::KeeperStartFailed);
+            }
+            Err(_) => {
+                tracing::warn!("E6-P.4 keeper readiness channel closed before startup");
+                return Err(LiveEraOpenError::KeeperStartFailed);
+            }
+        };
+
+        let (
+            open,
+            KeeperStarting {
+                pending_return,
+                saved_observation_placeholder,
+                keeper_join,
+                driver_drained,
+                world_handle,
+            },
+        ) = self.into_parts();
+        Ok(LiveEraOpenGuard::new(
+            open,
+            KeeperStarted {
+                pending_return,
+                saved_observation_placeholder,
+                keeper_join,
+                driver_drained,
+                inbox,
+                world_handle,
+                group_port,
+            },
+        ))
+    }
+}
+
+impl<'a> LiveEraOpenGuard<'a, KeeperStarted> {
+    fn open_era_on_control(self) -> Result<LiveEraOpenGuard<'a, EraOpened>, LiveEraOpenError> {
+        let abort_guard = AbortOnUnwind::arm("open_era_on_control");
+        let (
+            open,
+            KeeperStarted {
+                pending_return,
+                saved_observation_placeholder,
+                keeper_join,
+                driver_drained,
+                inbox,
+                world_handle,
+                group_port,
+            },
+        ) = self.into_parts();
+
+        match open.control.open_era(world_handle, group_port) {
+            Ok(()) => {
+                let next = LiveEraOpenGuard::new(
+                    open,
+                    EraOpened {
+                        pending_return,
+                        saved_observation_placeholder,
+                        keeper_join,
+                        driver_drained,
+                        inbox,
+                    },
+                );
+                abort_guard.disarm();
+                Ok(next)
+            }
+            Err((world_handle, group_port, _err)) => {
+                let rollback_guard = LiveEraOpenGuard::new(
+                    open,
+                    KeeperStarted {
+                        pending_return,
+                        saved_observation_placeholder,
+                        keeper_join,
+                        driver_drained,
+                        inbox,
+                        world_handle,
+                        group_port,
+                    },
+                );
+                abort_guard.disarm();
+                drop(rollback_guard);
+                Err(LiveEraOpenError::OpenEraFailed)
+            }
+        }
+    }
+}
+
+impl<'a> LiveEraOpenGuard<'a, EraOpened> {
+    fn commit(
+        self,
+        era_right: TurnRight,
+        pending_spawns: Arc<Mutex<VecDeque<PendingOwnerSpawn>>>,
+    ) -> LiveEraRuntime {
+        let abort_guard = AbortOnUnwind::arm("commit");
+        let (
+            open,
+            EraOpened {
+                pending_return,
+                saved_observation_placeholder,
+                keeper_join,
+                driver_drained,
+                inbox,
+            },
+        ) = self.into_parts();
+        open.parked.resume_with_turn_right(open.ctx, era_right);
+        abort_guard.disarm();
+        LiveEraRuntime {
             pending_return: Some(pending_return),
             saved_observation_placeholder: Some(saved_observation_placeholder),
             keeper_join: Some(keeper_join),
             driver_drained,
             inbox: Some(inbox),
-            world_handle: Some(world_handle),
-            group_port: Some(group_port),
-            opened_on_control: false,
-        };
-    }
-
-    fn open_era_on_control(&mut self) -> Result<(), LiveEraOpenError> {
-        let OpenGuardPhase::KeeperStarted {
-            world_handle,
-            group_port,
-            opened_on_control,
-            ..
-        } = &mut self.phase
-        else {
-            unreachable!("open_era_on_control requires KeeperStarted phase");
-        };
-        let wh = world_handle.take().expect("guard holds EraWorldHandle");
-        let gp = group_port.take().expect("guard holds GroupPort");
-        match self.control.open_era(wh, gp) {
-            Ok(()) => {
-                *opened_on_control = true;
-                Ok(())
-            }
-            Err((wh, gp, _err)) => {
-                *world_handle = Some(wh);
-                *group_port = Some(gp);
-                Err(LiveEraOpenError::OpenEraFailed)
-            }
-        }
-    }
-
-    fn commit(
-        mut self,
-        era_right: TurnRight,
-        pending_spawns: Arc<Mutex<VecDeque<PendingOwnerSpawn>>>,
-    ) -> LiveEraRuntime {
-        let OpenGuardPhase::KeeperStarted {
-            mut pending_return,
-            mut saved_observation_placeholder,
-            mut keeper_join,
-            driver_drained,
-            mut inbox,
-            opened_on_control: true,
-            ..
-        } = std::mem::replace(&mut self.phase, OpenGuardPhase::Committed)
-        else {
-            unreachable!("commit requires opened KeeperStarted phase");
-        };
-        let parked = self
-            .parked
-            .take()
-            .expect("guard holds Main's ParkedWorldSeat");
-        let recovery = std::mem::replace(
-            &mut self.dead_windows_recovery,
-            super::super::world::SerialRecovery::Unchanged,
-        );
-        parked.resume_with_turn_right(self.ctx, era_right);
-        LiveEraRuntime {
-            pending_return: pending_return.take(),
-            saved_observation_placeholder: saved_observation_placeholder.take(),
-            keeper_join: keeper_join.take(),
-            driver_drained,
-            inbox: inbox.take(),
             pending_spawns,
             next_owner_id: AtomicU64::new(1),
-            dead_windows_recovery: recovery,
+            dead_windows_recovery: open.dead_windows_recovery,
         }
-    }
-
-    fn rollback_now(&mut self) {
-        let phase = std::mem::replace(&mut self.phase, OpenGuardPhase::Committed);
-        match phase {
-            OpenGuardPhase::Committed => {}
-            OpenGuardPhase::SoloSurrendered {
-                mut baton,
-                observations_pulled_out,
-            } => {
-                if observations_pulled_out {
-                    self.ctx
-                        .with_green_runtime(|rt| rt.carried.borrow_mut().swap_observations_only());
-                }
-                if let Some(baton) = baton.take() {
-                    let solo_right = self
-                        .control
-                        .restore_surrendered_solo(baton)
-                        .expect("E6-P4-I1 rollback: Control must be in SoloSurrendered");
-                    if let Some(parked) = self.parked.take() {
-                        parked.resume_with_turn_right(self.ctx, solo_right);
-                    }
-                    if matches!(
-                        self.dead_windows_recovery,
-                        super::super::world::SerialRecovery::RecreateDeadWindows
-                    ) {
-                        self.ctx.install_empty_dead_windows_table();
-                    }
-                }
-            }
-            OpenGuardPhase::KeeperStarted {
-                pending_return,
-                mut saved_observation_placeholder,
-                keeper_join,
-                driver_drained: _,
-                inbox,
-                world_handle,
-                group_port,
-                opened_on_control,
-            } => {
-                // Close out the group port and drop all inbox senders so
-                // Driver::run() observes Disconnected and drains cleanly.
-                if opened_on_control {
-                    if let Some(gp) = self.control.take_era_port_for_exit() {
-                        gp.exit();
-                    }
-                } else if let Some(gp) = group_port {
-                    gp.exit();
-                }
-                drop(inbox);
-                drop(world_handle);
-                let Some(join) = keeper_join else {
-                    return;
-                };
-                let Ok(Ok(returned_end)) = join.join() else {
-                    return;
-                };
-                let Some(pending) = pending_return else {
-                    return;
-                };
-                self.ctx.with_green_runtime(|rt| {
-                    rt.carried.borrow_mut().reset_observations_to_placeholder();
-                });
-                if let Some(placeholder) = saved_observation_placeholder.take() {
-                    restore_current_thread_observations(placeholder);
-                }
-                let Ok(restored) = pending.restore(returned_end.into_heap_transfer()) else {
-                    return;
-                };
-                // SAFETY: Main's OS thread is the original transfer source; the
-                // keeper joined and no other World loan exists.
-                let Ok((baton, _roots, transfer_pub)) =
-                    (unsafe { recover_transferred_source(restored) })
-                else {
-                    return;
-                };
-                // Put the restored canonical ObservationWorld into stowed
-                // `GreenRuntime::carried` so `resume_with_turn_right`'s
-                // `unstow_serial_world_state` installs it cleanly onto Main's TLS.
-                self.ctx
-                    .with_green_runtime(|rt| rt.carried.borrow_mut().swap_observations_only());
-                let solo_right = if opened_on_control {
-                    let (right, era_wh, _unused) = self
-                        .control
-                        .close_era(baton)
-                        .expect("E6-P4-I1 rollback: close_era succeeds with zero owners");
-                    drop(era_wh);
-                    right
-                } else {
-                    self.control
-                        .restore_surrendered_solo(baton)
-                        .expect("E6-P4-I1 rollback: restore_surrendered_solo succeeds")
-                };
-                if let Some(parked) = self.parked.take() {
-                    parked.resume_with_turn_right(self.ctx, solo_right);
-                }
-                let _ = super::super::green::retire_transfer_publication_on_main(
-                    self.ctx,
-                    transfer_pub,
-                );
-                if matches!(
-                    self.dead_windows_recovery,
-                    super::super::world::SerialRecovery::RecreateDeadWindows
-                ) {
-                    self.ctx.install_empty_dead_windows_table();
-                }
-            }
-        }
-    }
-}
-
-impl Drop for LiveEraOpenGuard<'_> {
-    fn drop(&mut self) {
-        self.rollback_now();
     }
 }
 
@@ -855,13 +1275,15 @@ impl Context {
             }
         };
 
-        // Arm E6-P4-I1 unwind-safety guard immediately after surrendering Solo.
-        let mut guard = LiveEraOpenGuard::new(
-            self,
-            Arc::clone(&control),
-            parked,
-            baton,
-            dead_windows_recovery,
+        // Arm E6-P4-I1 linear typestate guard immediately after surrendering Solo.
+        let guard = LiveEraOpenGuard::new(
+            OpenContext {
+                ctx: self,
+                control: Arc::clone(&control),
+                parked,
+                dead_windows_recovery,
+            },
+            SoloSurrendered { baton },
         );
 
         #[cfg(test)]
@@ -874,138 +1296,69 @@ impl Context {
             }
         }
 
+        // Spawn the idle keeper OS thread FIRST while `Baton` is still owned
+        // non-optionally in `LiveEraOpenGuard<SoloSurrendered>`, so OS thread
+        // creation failure rolls back cleanly without moving `Baton`.
+        let mut guard = guard.spawn_idle_keeper()?;
+
         // Move the heap's canonical `ObservationWorld` back into Main's TLS
         // `STATE` so `prepare_reference_free_transfer` -> `detach_source_observations`
         // finds `RefOwners::HeapAndTls` and installs its receipt placeholder.
         guard.pull_observations_to_tls();
 
-        let baton = guard.take_surrendered_baton();
-        let world_handle = match baton.era_world_handle() {
-            Ok(wh) => wh,
-            Err(_) => {
-                guard.restore_surrendered_baton_in_guard(baton);
-                return Err(LiveEraOpenError::TransferFailed);
-            }
-        };
-        let heap_ptr = guard.ctx.tagged_heap.heap_root().as_ptr();
-        // SAFETY: `baton` is held exclusively on this OS thread, Main's roots
-        // and all parked Baton roots are published in `GreenRuntime::parked`,
-        // World carriers are `Stowed`, and carrier heap TLS is uninstalled.
-        let collector = match unsafe { (*heap_ptr).drain_to_quiescent(|_| {}) } {
-            Ok(collector) => collector,
-            Err(_) => {
-                guard.restore_surrendered_baton_in_guard(baton);
-                return Err(LiveEraOpenError::DrainFailed);
-            }
-        };
-        let admission = match Gen1Admission::check(collector) {
+        #[cfg(test)]
+        if take_era_open_fault_matching(LiveEraOpenFault::PanicAfterIdleKeeperSpawn) {
+            panic!("E6-P4-I1 test fault: panic after idle keeper spawn and observation pull");
+        }
+
+        // Run all fallible preflights while `Baton` is still non-optionally
+        // owned by `LiveEraOpenGuard<IdleKeeperSpawned>`, so any refusal or
+        // unwind stops the idle keeper, restores observations, returns
+        // `Control` to `SoloActive`, and reinstalls Main's `TAGGED_HEAP` TLS.
+        let world_handle = guard
+            .baton_ref()
+            .era_world_handle()
+            .map_err(|_| LiveEraOpenError::TransferFailed)?;
+        // Verify epoch retention is valid before transferring `Baton`
+        // (dropping `FacadeEpochRetention` immediately releases the count).
+        let _epoch_check = guard
+            .baton_ref()
+            .parallel_epoch_retention()
+            .map_err(|_| LiveEraOpenError::TransferFailed)?;
+        drop(_epoch_check);
+
+        let heap_ptr = guard.heap_ptr();
+        // SAFETY: `guard` exclusively holds `Baton` on this OS thread, Main's
+        // roots and all parked Baton roots are published in
+        // `GreenRuntime::parked`, World carriers are `Stowed`, and carrier heap
+        // TLS is uninstalled.
+        let collector = unsafe { (*heap_ptr).drain_to_quiescent(|_| {}) }
+            .map_err(|_| LiveEraOpenError::DrainFailed)?;
+        let mut admission = match Gen1Admission::check(collector) {
             Ok(admission) => admission,
             Err(failure) => {
                 let (_err, collector) = failure.into_parts();
                 drop(collector);
-                guard.restore_surrendered_baton_in_guard(baton);
                 return Err(LiveEraOpenError::GenerationalRequired);
             }
         };
-        // SAFETY: `baton` is held exclusively on this OS thread, Main's live
+        if let Err(err) = admission.preflight_era_supported() {
+            tracing::warn!(?err, "E6-P.4 heap stopped-collection preflight refused");
+            drop(admission);
+            return Err(LiveEraOpenError::HeapUnsupported);
+        }
+
+        // SAFETY: `guard` still exclusively holds `Baton` on this OS thread
+        // (so even a panic here rolls back `IdleKeeperSpawned`), Main's live
         // roots stay published in `GreenRuntime::parked` for the whole open
         // era, and `freeze_live_legacy_roots` mints `MayBeActive` inside
         // `eval/world/` (`keeper_world_designator_seam_guard`).
-        let frozen = unsafe { freeze_live_legacy_roots(&baton) };
-        // SAFETY: `park_seated` uninstalled carrier heap TLS, `drain_to_quiescent`
-        // quiesced the heap, and `baton` is the sole World authority.
-        let (pending_return, transfer) =
-            match unsafe { prepare_reference_free_transfer(admission, baton, frozen) } {
-                Ok(pair) => pair,
-                Err(failure) => {
-                    let (reason, admission, owner, _roots, _obs) = failure.into_parts();
-                    tracing::warn!(?reason, "E6-P.4 prepare_reference_free_transfer refused");
-                    drop(admission);
-                    let baton = Baton::from_world_loan(owner);
-                    guard.restore_surrendered_baton_in_guard(baton);
-                    return Err(LiveEraOpenError::TransferFailed);
-                }
-            };
+        let frozen = unsafe { freeze_live_legacy_roots(guard.baton_ref()) };
 
-        // Preserve `PendingHeapReturn`'s exact observation placeholder out of
-        // Main's TLS so resuming Main (and any Baton workers) during the live
-        // era cannot displace it before `PendingHeapReturn::restore()`.
-        let saved_observation_placeholder = stash_current_thread_observations();
-
-        let pending_spawns: Arc<Mutex<VecDeque<PendingOwnerSpawn>>> =
-            Arc::new(Mutex::new(VecDeque::new()));
-        let keeper_spawns = Arc::clone(&pending_spawns);
-        let driver_drained = Arc::new(AtomicBool::new(false));
-        let keeper_drained = Arc::clone(&driver_drained);
-        let (ready_tx, ready_rx) = mpsc::sync_channel::<
-            Result<(GroupPort, mpsc::Sender<KeeperMsg>), KeeperStartNotice>,
-        >(1);
-        let prepared = PreparedEraStart::from_heap_transfer(transfer);
-
-        let keeper_join = match std::thread::Builder::new()
-            .name("neomacs-keeper".to_string())
-            .spawn(move || {
-                let outcome = keeper_serve(prepared, |era| {
-                    std::thread::scope(|scope| {
-                        let (inbox_tx, inbox_rx) = mpsc::channel::<KeeperMsg>();
-                        let mut driver = Driver::new(era, inbox_rx);
-                        let group_link = driver.enroll_group();
-                        let group_port = GroupPort::new(inbox_tx.clone(), group_link);
-                        if ready_tx.send(Ok((group_port, inbox_tx))).is_err() {
-                            return;
-                        }
-                        let spawns_ref = &keeper_spawns;
-                        let owner_handles = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
-                        let hook_handles = std::rc::Rc::clone(&owner_handles);
-                        driver = driver.with_between_stops_hook(move |drv| {
-                            let mut handles = hook_handles.borrow_mut();
-                            drain_pending_spawns(era, scope, drv, spawns_ref, &mut handles);
-                        });
-                        if driver.run() == DriverEnd::Drained {
-                            keeper_drained.store(true, Ordering::Release);
-                        }
-                        // Explicitly join every scoped owner OS thread (real
-                        // OS join, completing all TLS destructors) before
-                        // `keeper_serve` finishes the era.
-                        for handle in owner_handles.borrow_mut().drain(..) {
-                            let _ = handle.join();
-                        }
-                    });
-                });
-                match outcome {
-                    Ok((end, ())) => Ok(end),
-                    Err(failure) => {
-                        let notice = failure.notice();
-                        let _ = ready_tx.send(Err(notice));
-                        Err(notice)
-                    }
-                }
-            }) {
-            Ok(handle) => handle,
-            Err(_) => {
-                // Transfer was never sent into a live thread; drop fails closed.
-                return Err(LiveEraOpenError::KeeperStartFailed);
-            }
-        };
-
-        let (group_port, inbox_tx) = match ready_rx.recv() {
-            Ok(Ok(pair)) => pair,
-            Ok(Err(_)) | Err(_) => {
-                let _ = keeper_join.join();
-                return Err(LiveEraOpenError::KeeperStartFailed);
-            }
-        };
-
-        guard.transition_to_keeper_started(
-            pending_return,
-            saved_observation_placeholder,
-            keeper_join,
-            driver_drained,
-            inbox_tx,
-            world_handle,
-            group_port,
-        );
-        guard.open_era_on_control()?;
+        let (guard, ready_rx, pending_spawns) =
+            guard.transfer_to_keeper(admission, frozen, world_handle)?;
+        let guard = guard.await_ready(ready_rx)?;
+        let guard = guard.open_era_on_control()?;
 
         #[cfg(test)]
         if take_era_open_fault_matching(LiveEraOpenFault::FailAfterOpenBeforeAcquire) {
@@ -1123,7 +1476,8 @@ impl Context {
         let returned_end = join
             .join()
             .expect("keeper thread did not panic")
-            .expect("keeper era finished cleanly");
+            .expect("keeper era finished cleanly")
+            .expect("started keeper returned ReturnedEraEnd");
         debug_assert!(
             live_era.driver_drained.load(Ordering::Acquire),
             "E6-P4-I2(b): Driver must drain cleanly on teardown"

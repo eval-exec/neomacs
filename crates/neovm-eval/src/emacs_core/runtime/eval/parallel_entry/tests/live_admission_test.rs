@@ -1068,3 +1068,181 @@ fn e6p4_row13b_collect_only_scope_refuses_condition_wait_separately_falsifiable(
     let _ = crate::emacs_core::eval::green::retire_transfer_publication_on_main(&mut ctx, pub_);
     ctx.green_teardown();
 }
+
+/// **DEFECT #15497 / #15498 Pin Row 1 (`e6p4_row11a`)**:
+/// When `neomacs-make-parallel-thread` refuses era admission (here via a real
+/// unsupported heap payload `alloc_sqlite`, exercising the exact `supported(heap)`
+/// refusal class hit on pdump permanent weak hash tables), the caller's
+/// `TaggedHeap` TLS MUST stay installed and fallback to `make-thread` MUST
+/// return a live Baton thread with `neomacs-thread-parallel-p` = `nil`,
+/// `(thread-join th)` = `42`, and a subsequent `(thread-join (make-thread (lambda () 42)))` = `42`.
+#[test]
+fn e6p4_row11a_refused_keeper_start_keeps_heap_tls_and_falls_back_cleanly() {
+    with_parallel_admission_enabled_for_test(|| {
+        let mut ctx = green_context(true);
+        // Install a real unsupported payload (`VecLikeType::Sqlite`) rooted in
+        // a Lisp symbol so `supported(heap)` genuinely refuses era admission.
+        let sqlite = ctx.tagged_heap.alloc_sqlite(false, 7);
+        ctx.set_variable("row11a-sqlite-anchor", sqlite);
+
+        let out = eval_printed(
+            &mut ctx,
+            "(let ((th (neomacs-make-parallel-thread (lambda () 42) \"row11a-probe\")))
+               (list (neomacs-thread-parallel-p th)
+                     (thread-join th)
+                     (thread-join (make-thread (lambda () 42)))))",
+        );
+        assert!(
+            neovm_value::tagged::gc::tagged_heap_is_current(&ctx.tagged_heap),
+            "#15497: caller TaggedHeap TLS must remain installed after refused opt-in admission"
+        );
+        assert_eq!(
+            out, "(nil 42 42)",
+            "#15497 pin: refused admission must fall back cleanly and join 42"
+        );
+        ctx.green_teardown();
+    });
+}
+
+/// **DEFECT #15498 Row 2 (`e6p4_row11b`)**:
+/// After a refused keeper start / unsupported heap preflight, `Control` MUST
+/// return to `SoloActive` and MUST NOT remain stuck in `SoloSurrendered`.
+#[test]
+fn e6p4_row11b_refused_keeper_start_does_not_leave_control_solo_surrendered() {
+    with_parallel_admission_enabled_for_test(|| {
+        let mut ctx = green_context(true);
+        // Seat Main first so we can inspect `Control` before and after refusal.
+        assert_eq!(
+            eval_printed(&mut ctx, "(thread-join (make-thread (lambda () 1)))"),
+            "1"
+        );
+        let control = ctx.green_control();
+        assert!(control.era_state_is_solo_active());
+
+        let sqlite = ctx.tagged_heap.alloc_sqlite(false, 9);
+        ctx.set_variable("row11b-sqlite-anchor", sqlite);
+
+        let out = eval_printed(
+            &mut ctx,
+            "(let ((th (neomacs-make-parallel-thread (lambda () 42) \"row11b-probe\")))
+               (list (neomacs-thread-parallel-p th) (thread-join th)))",
+        );
+        assert_eq!(out, "(nil 42)");
+        assert!(
+            neovm_value::tagged::gc::tagged_heap_is_current(&ctx.tagged_heap),
+            "#15497: caller TaggedHeap TLS must stay installed"
+        );
+        assert!(
+            control.era_state_is_solo_active(),
+            "#15498: Control must return to SoloActive (not remain SoloSurrendered) after keeper-start refusal"
+        );
+        assert!(!control.era_is_open());
+        assert_eq!(
+            ctx.ensure_live_parallel_era(),
+            Err(LiveEraOpenError::HeapUnsupported),
+            "#15497: unsupported heap payload must refuse with named HeapUnsupported before transfer"
+        );
+        assert!(control.era_state_is_solo_active());
+        assert!(neovm_value::tagged::gc::tagged_heap_is_current(
+            &ctx.tagged_heap
+        ));
+        ctx.green_teardown();
+    });
+}
+
+/// **DEFECT #15497 / #15498 + Nit 5 (`e6p4_row11c`)**:
+/// An OS keeper-thread spawn failure (`LiveEraOpenFault::FailKeeperSpawn`)
+/// happens while `Baton` is still non-optionally owned by `LiveEraOpenGuard`
+/// (`SoloSurrendered`), so rollback cleanly restores Main's `TaggedHeap` TLS
+/// and `Control::SoloActive`, the refused call falls back to `make-thread` and
+/// joins `42`, AND a subsequent clean `(neomacs-make-parallel-thread ...)`
+/// succeeds with `neomacs-thread-parallel-p` = `t`.
+#[test]
+fn e6p4_row11c_keeper_spawn_failure_restores_tls_and_solo_active_and_allows_retry() {
+    with_parallel_admission_enabled_for_test(|| {
+        let mut ctx = green_context(true);
+        assert_eq!(
+            eval_printed(&mut ctx, "(thread-join (make-thread (lambda () 1)))"),
+            "1"
+        );
+        let control = ctx.green_control();
+        assert!(control.era_state_is_solo_active());
+
+        set_era_open_fault_for_test(Some(LiveEraOpenFault::FailKeeperSpawn));
+        let refused_out = eval_printed(
+            &mut ctx,
+            "(let ((th (neomacs-make-parallel-thread (lambda () 42) \"row11c-refused\")))
+               (list (neomacs-thread-parallel-p th)
+                     (thread-join th)
+                     (thread-join (make-thread (lambda () 42)))))",
+        );
+        assert_eq!(refused_out, "(nil 42 42)");
+        assert!(
+            neovm_value::tagged::gc::tagged_heap_is_current(&ctx.tagged_heap),
+            "#15497/Nit 5: caller TaggedHeap TLS must remain installed after FailKeeperSpawn"
+        );
+        assert!(
+            control.era_state_is_solo_active(),
+            "#15498/Nit 5: Control must return to SoloActive after FailKeeperSpawn"
+        );
+        assert!(!control.era_is_open());
+
+        // Subsequent clean opt-in admission on the same World must succeed.
+        let retry_out = eval_printed(
+            &mut ctx,
+            "(let ((th (neomacs-make-parallel-thread (lambda () (+ 20 22)) \"row11c-retry\")))
+               (list (neomacs-thread-parallel-p th) (thread-join th)))",
+        );
+        assert_eq!(retry_out, "(t 42)");
+        assert!(control.era_is_open());
+        ctx.green_teardown();
+    });
+}
+
+/// **DEFECT #15498 Blocker-3 Unwind Row (`e6p4_row11d`)**:
+/// A panic unwind after `spawn_idle_keeper()` + `pull_observations_to_tls()`
+/// (while `LiveEraOpenGuard<IdleKeeperSpawned>` owns both `Baton` and the idle
+/// keeper thread, with ZERO `Committed` sentinel) MUST cleanly stop and join
+/// the idle keeper thread, restore observations, return `Control` to
+/// `SoloActive`, reinstall Main's `TaggedHeap` TLS, and allow subsequent
+/// `make-thread` and `neomacs-make-parallel-thread` calls to succeed.
+#[test]
+fn e6p4_row11d_panic_after_idle_keeper_spawn_restores_tls_and_solo_active() {
+    with_parallel_admission_enabled_for_test(|| {
+        let mut ctx = green_context(true);
+        assert_eq!(
+            eval_printed(&mut ctx, "(thread-join (make-thread (lambda () 1)))"),
+            "1"
+        );
+        let control = ctx.green_control();
+        assert!(control.era_state_is_solo_active());
+
+        set_era_open_fault_for_test(Some(LiveEraOpenFault::PanicAfterIdleKeeperSpawn));
+        let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = ctx.ensure_live_parallel_era();
+        }));
+        assert!(
+            caught.is_err(),
+            "PanicAfterIdleKeeperSpawn must unwind through LiveEraOpenGuard<IdleKeeperSpawned>"
+        );
+        assert!(
+            neovm_value::tagged::gc::tagged_heap_is_current(&ctx.tagged_heap),
+            "Main TaggedHeap TLS must be reinstalled after IdleKeeperSpawned panic unwind"
+        );
+        assert!(
+            control.era_state_is_solo_active(),
+            "Control must return to SoloActive after IdleKeeperSpawned panic unwind"
+        );
+        assert!(!control.era_is_open());
+
+        let after_out = eval_printed(
+            &mut ctx,
+            "(list (thread-join (make-thread (lambda () 42)))
+                   (let ((th (neomacs-make-parallel-thread (lambda () 42) \"row11d-retry\")))
+                     (list (neomacs-thread-parallel-p th) (thread-join th))))",
+        );
+        assert_eq!(after_out, "(42 (t 42))");
+        assert!(control.era_is_open());
+        ctx.green_teardown();
+    });
+}
