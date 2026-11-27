@@ -240,10 +240,78 @@ mod unix_impl {
         }
     }
 
+    /// Verify via kernel peer credentials (`SO_PEERCRED` on Linux, `getpeereid`
+    /// on macOS) that the connected zygote listener is running as the same
+    /// effective user before sending any environment variables or arguments.
+    fn verify_peer_same_uid(stream: &UnixStream) -> Result<(), String> {
+        // SAFETY: `geteuid()` has no preconditions.
+        let expected_uid = unsafe { libc::geteuid() };
+        let fd = stream.as_raw_fd();
+        #[cfg(target_os = "linux")]
+        {
+            let mut cred = libc::ucred {
+                pid: 0,
+                uid: u32::MAX,
+                gid: u32::MAX,
+            };
+            let mut len = std::mem::size_of::<libc::ucred>() as libc::socklen_t;
+            // SAFETY: valid connected Unix socket fd and properly sized `ucred`.
+            let rc = unsafe {
+                libc::getsockopt(
+                    fd,
+                    libc::SOL_SOCKET,
+                    libc::SO_PEERCRED,
+                    (&mut cred as *mut libc::ucred).cast::<libc::c_void>(),
+                    &mut len,
+                )
+            };
+            if rc != 0 {
+                return Err(format!(
+                    "failed to query SO_PEERCRED on zygote socket: {}",
+                    std::io::Error::last_os_error()
+                ));
+            }
+            if cred.uid != expected_uid {
+                return Err(format!(
+                    "refusing zygote listener owned by uid {} (expected {})",
+                    cred.uid, expected_uid
+                ));
+            }
+            Ok(())
+        }
+        #[cfg(target_os = "macos")]
+        {
+            let mut euid: libc::uid_t = u32::MAX;
+            let mut egid: libc::gid_t = u32::MAX;
+            // SAFETY: valid connected Unix socket fd and valid output pointers.
+            let rc = unsafe { libc::getpeereid(fd, &mut euid, &mut egid) };
+            if rc != 0 {
+                return Err(format!(
+                    "failed to query getpeereid on zygote socket: {}",
+                    std::io::Error::last_os_error()
+                ));
+            }
+            if euid != expected_uid {
+                return Err(format!(
+                    "refusing zygote listener owned by uid {} (expected {})",
+                    euid, expected_uid
+                ));
+            }
+            Ok(())
+        }
+        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+        {
+            let _ = (expected_uid, fd);
+            Err("peer UID verification is unsupported on this Unix platform".to_string())
+        }
+    }
+
     fn connect_verified(sock_path: &Path) -> Result<UnixStream, String> {
         verify_owned_socket(sock_path)?;
-        UnixStream::connect(sock_path)
-            .map_err(|e| format!("failed to connect to {}: {e}", sock_path.display()))
+        let stream = UnixStream::connect(sock_path)
+            .map_err(|e| format!("failed to connect to {}: {e}", sock_path.display()))?;
+        verify_peer_same_uid(&stream)?;
+        Ok(stream)
     }
 
     fn connect_or_spawn_zygote(
@@ -813,6 +881,12 @@ mod unix_impl {
                 lock_path_for(Path::new("/tmp/nvz/noext")),
                 PathBuf::from("/tmp/nvz/noext.lock")
             );
+        }
+
+        #[test]
+        fn verify_peer_same_uid_accepts_same_user_socketpair() {
+            let (a, _b) = UnixStream::pair().expect("socketpair");
+            verify_peer_same_uid(&a).expect("same-user peer should be accepted");
         }
 
         #[test]
