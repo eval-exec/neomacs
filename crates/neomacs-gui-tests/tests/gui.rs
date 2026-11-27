@@ -166,6 +166,9 @@ mod frame_native_title_gui_oracle;
 #[path = "frame_text_height_gui_oracle.rs"]
 mod frame_text_height_gui_oracle;
 
+#[path = "startup_clipboard_quiet.rs"]
+mod startup_clipboard_quiet;
+
 #[path = "tab_bar_hide_gui_oracle.rs"]
 mod tab_bar_hide_gui_oracle;
 

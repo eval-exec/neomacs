@@ -48,6 +48,14 @@ pub(super) enum TextAbsence {
     /// variant exists only on a platform that has one.
     #[cfg(target_os = "linux")]
     TargetUnavailable,
+    /// This client has not been sent the selection, so it cannot see whether
+    /// one exists.  A Wayland compositor sends selection offers only to a
+    /// client with seat focus; before Neomacs's first seat event, or while it
+    /// is unfocused, smithay-clipboard has nothing to read (#889).  That is a
+    /// normal state at startup, not a failed read, and the data-control
+    /// reader, which needs no focus, may still answer.
+    #[cfg(target_os = "linux")]
+    NotObservable,
     /// The backend cannot tell those two apart: it reports one error for both
     /// an empty clipboard and contents in a format it cannot read (arboard's
     /// `ContentNotAvailable`).  Guessing either way would state a fact the
@@ -61,6 +69,8 @@ impl From<TextAbsence> for TextRead {
             TextAbsence::NoSelection => Self::NoSelection,
             #[cfg(target_os = "linux")]
             TextAbsence::TargetUnavailable => Self::TargetUnavailable,
+            #[cfg(target_os = "linux")]
+            TextAbsence::NotObservable => Self::NotObservable,
             TextAbsence::Indeterminate => Self::Indeterminate,
         }
     }
@@ -77,6 +87,10 @@ pub(super) enum TextRead {
     /// `TextAbsence::TargetUnavailable` for why this is Linux-only.
     #[cfg(target_os = "linux")]
     TargetUnavailable,
+    /// The selection was never sent to this client; see
+    /// `TextAbsence::NotObservable`.
+    #[cfg(target_os = "linux")]
+    NotObservable,
     /// The backend cannot tell "no owner" from "unreadable contents"; see
     /// `TextAbsence::Indeterminate`.
     Indeterminate,
@@ -92,7 +106,7 @@ impl TextRead {
             Self::Text(text) => Some(text),
             Self::NoSelection | Self::Indeterminate => None,
             #[cfg(target_os = "linux")]
-            Self::TargetUnavailable => None,
+            Self::TargetUnavailable | Self::NotObservable => None,
         }
     }
 }
@@ -148,8 +162,10 @@ impl TextMime {
 /// because smithay-clipboard 0.7.3 exposes no typed error for them: an unowned
 /// selection is `Error::other("selection is empty")` and an offer without a
 /// readable text type is `Error::new(NotFound, "supported mime-type is not
-/// found")` (`state.rs:149-186`).  Anything else — no keyboard focus, no seat,
-/// a dead worker — is a real failure and returns `None`.
+/// found")` (`state.rs:149-186`).  "no events received on any seat" and
+/// "client doesn't have focus" mean the compositor has not sent this client
+/// the selection (`NotObservable`).  Anything else — a lost seat, a dead
+/// worker — is a real failure and returns `None`.
 #[cfg(target_os = "linux")]
 pub(super) fn classify_smithay(err: &std::io::Error) -> Option<TextAbsence> {
     if err.kind() == std::io::ErrorKind::NotFound
@@ -159,6 +175,9 @@ pub(super) fn classify_smithay(err: &std::io::Error) -> Option<TextAbsence> {
     }
     match err.to_string().as_str() {
         "selection is empty" => Some(TextAbsence::NoSelection),
+        "no events received on any seat" | "client doesn't have focus" => {
+            Some(TextAbsence::NotObservable)
+        }
         _ => None,
     }
 }
@@ -182,8 +201,8 @@ pub(super) fn classify_arboard(err: &arboard::Error) -> Option<TextAbsence> {
 ///
 /// A failed fallback is logged and smithay's answer is kept: absence stays
 /// absence, and the caller must not turn it into an error.  A smithay error
-/// that does not classify (no focus, no seat, dead worker) is a real failure
-/// and is returned without asking the fallback.
+/// that does not classify (a lost seat, a dead worker) is a real failure and
+/// is returned without asking the fallback.
 #[cfg(target_os = "linux")]
 pub(super) fn text_or_fallback(
     result: std::io::Result<String>,

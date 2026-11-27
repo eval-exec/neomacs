@@ -82,14 +82,27 @@ fn smithay_absences_keep_their_two_reasons() {
     );
 }
 
+/// #889: before the first seat event, or while unfocused, the compositor has
+/// not sent this client the selection.  That is a normal startup state, not a
+/// failed read: the read is an absence (logged by nobody) and data-control may
+/// still answer.
+#[test]
+fn unseen_selection_is_an_unobservable_absence() {
+    for message in [
+        "no events received on any seat",
+        "client doesn't have focus",
+    ] {
+        assert_eq!(
+            classify_smithay(&io::Error::other(message)),
+            Some(TextAbsence::NotObservable),
+            "{message} is an absence, not a failure"
+        );
+    }
+}
+
 #[test]
 fn smithay_failures_are_not_absences() {
-    for message in [
-        "client doesn't have focus",
-        "no events received on any seat",
-        "active seat lost",
-        "clipboard is dead.",
-    ] {
+    for message in ["active seat lost", "clipboard is dead."] {
         assert_eq!(
             classify_smithay(&io::Error::other(message)),
             None,
@@ -155,12 +168,28 @@ fn empty_transfer_is_text_not_a_missing_selection() {
     assert_eq!(result, Ok(TextRead::Text(String::new())));
 }
 
+/// An unseen selection asks data-control, which needs no seat focus, and is
+/// still an absence when data-control cannot answer (#889).
 #[test]
-fn seat_and_focus_errors_are_not_masked_by_data_control() {
+fn an_unseen_selection_reads_through_data_control() {
     for message in [
         "client doesn't have focus",
         "no events received on any seat",
     ] {
+        let read = text_or_fallback(Err(io::Error::other(message)), || {
+            Ok(Some(TextRead::Text("from data-control".to_owned())))
+        });
+        assert_eq!(read, Ok(TextRead::Text("from data-control".to_owned())));
+        let absent = text_or_fallback(Err(io::Error::other(message)), || Ok(None));
+        assert_eq!(absent, Ok(TextRead::NotObservable));
+    }
+}
+
+/// A real transport failure is not masked by data-control and stays an error,
+/// which `execute_command` logs at WARN.
+#[test]
+fn transport_failures_are_not_masked_by_data_control() {
+    for message in ["active seat lost", "clipboard is dead."] {
         let result = text_or_fallback(Err(io::Error::other(message)), || {
             panic!("{message} must not consult data-control")
         });
