@@ -36,8 +36,10 @@ body:
            `M-x neomacs-dump-display-state` to write `neomacs-display-debug.json`
            (contains the `neomacs::cursor_geometry` log, frame snapshot, and
            last-presented render state). You can also run `M-x neomacs-dump-display-state`
-           in an already-running session to enable `neomacs::cursor_geometry`
-           capture on the fly.
+           in an already-running session to arm `neomacs::cursor_geometry`
+           capture (64-line ring, stays armed for the session); that first dump
+           has no prior cursor lines unless `RUST_LOG` armed it, so reproduce
+           the bug and run the command a second time.
         3. To collect general runtime logs without Cranelift JIT noise, run:
            ```bash
            NEOMACS_LOG_FILE=neomacs-debug.log \
@@ -45,7 +47,9 @@ body:
              ./target/release/neomacs
            ```
         4. In **Extra context**, upload `neomacs-display-debug.json` and/or
-           `neomacs-debug.log` (or paste key excerpts).
+           `neomacs-debug.log` (or paste key excerpts). **Review the bundle
+           first and remove anything private before attaching** —
+           `frame_snapshot.text` contains the visible text of your open buffers.
 
   - type: textarea
     id: summary

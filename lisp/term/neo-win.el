@@ -755,10 +755,19 @@ Only cursor effects are used when rendering this buffer's cursor.")
 Captures the render thread's last-presented state (presentation id,
 frame sequence, retained-static vs. full-render path, scale/surface
 size, cursor blink/visibility/inverse-video, animation override, and
-input-scroll offset) without forcing a redisplay, enables in-process
+input-scroll offset) without forcing a redisplay, arms in-process
 `neomacs::cursor_geometry' capture, and bundles buffered
 `neomacs::cursor_geometry' lines alongside the frame snapshot into one
 JSON file.
+
+Unless `RUST_LOG' pre-armed `neomacs::cursor_geometry' at startup (for
+example `RUST_LOG=warn,neomacs::cursor_geometry=debug'), the first
+invocation has no prior `cursor_geometry_log' lines; capture then
+remains armed in a bounded 64-line ring for the rest of the session so
+subsequent invocations retain multi-frame history.
+
+The JSON bundle includes visible buffer text in `frame_snapshot.text';
+review and remove any private content before sharing it publicly.
 
 When called interactively without a prefix argument, or via
 `Help -> Dump Display Debug State', writes immediately without opening the
@@ -787,7 +796,9 @@ file in `temporary-file-directory'.  Returns the written file path."
            (t
             (expand-file-name default-name temporary-file-directory)))))
     (neomacs--write-frame-snapshot target nil 'display-debug)
-    (message "Wrote Neomacs display debug state to %s" target)
+    (message
+     "Wrote display debug state to %s (cursor_geometry capture remains armed, 64-line ring; first dump has no prior cursor lines unless RUST_LOG armed it — re-run for history)"
+     target)
     target))
 
 (when (boundp 'menu-bar-help-menu)

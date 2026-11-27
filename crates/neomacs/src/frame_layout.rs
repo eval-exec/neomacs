@@ -326,8 +326,13 @@ fn capture_display_debug_bundle_json(
         ),
     };
 
-    // 2. Turn on in-process `neomacs::cursor_geometry` capture so subsequent
-    //    (and snapshot-pass) cursor-geometry lines are buffered verbatim.
+    // 2. Arm in-process `neomacs::cursor_geometry` capture (bounded 64-line
+    //    ring). Capture intentionally remains armed after this dump because
+    //    successive dumps need multi-frame cursor-geometry history; the
+    //    user-facing command reports this in the echo area. Unless `RUST_LOG`
+    //    pre-armed capture at startup, this first invocation has no prior
+    //    frame events in the ring and only enables capture for subsequent
+    //    frames (plus any snapshot-pass event below).
     neovm_core::logging::set_cursor_geometry_capture(true);
 
     // 3. Reuse the existing `frame-snapshot` layout projection (does not push

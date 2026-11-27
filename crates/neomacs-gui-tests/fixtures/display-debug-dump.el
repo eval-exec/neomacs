@@ -29,11 +29,16 @@
            (sit-for 0.3)
            ;; Exercise the exact interactive/menu path with $NEOMACS_DEBUG_DISPLAY_DUMP
            ;; and verify it does not activate the minibuffer.
-           (let ((written (call-interactively #'neomacs-dump-display-state)))
+           (let ((written (call-interactively #'neomacs-dump-display-state))
+                 (msg (current-message)))
              (when (active-minibuffer-window)
                (error "neomacs-dump-display-state unexpectedly opened minibuffer"))
              (unless (and (stringp written) (file-exists-p written))
-               (error "neomacs-dump-display-state did not create file: %S" written))))
+               (error "neomacs-dump-display-state did not create file: %S" written))
+             (unless (and (stringp msg)
+                          (string-match-p "cursor_geometry capture remains armed" msg)
+                          (string-match-p "first dump has no prior cursor lines" msg))
+               (error "Unexpected echo-area message from neomacs-dump-display-state: %S" msg))))
          (princ "DISPLAY-DEBUG-PASS\n" 'external-debugging-output)
          (kill-emacs 0))
      (error
