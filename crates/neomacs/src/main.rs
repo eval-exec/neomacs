@@ -5566,40 +5566,50 @@ pub unsafe fn run(mode: RuntimeMode) {
 fn parse_batch_zygote_args(
     args: impl IntoIterator<Item = String>,
 ) -> Option<(PathBuf, Option<PathBuf>)> {
+    let argv: Vec<String> = args.into_iter().collect();
     let mut socket: Option<PathBuf> = None;
     let mut dump_file: Option<PathBuf> = None;
-    let mut iter = args.into_iter().skip(1);
-    while let Some(arg) = iter.next() {
+    let mut idx = 0usize;
+    while idx + 1 < argv.len() {
+        let arg = &argv[idx + 1];
         if arg == "--" {
             break;
         }
         if let Some(val) = arg.strip_prefix("--batch-zygote-socket=") {
             socket = Some(PathBuf::from(val));
+            idx += 1;
             continue;
         }
         if arg == "--batch-zygote-socket" {
-            if let Some(val) = iter.next() {
+            if let Some(val) = argv.get(idx + 2) {
                 socket = Some(PathBuf::from(val));
+                idx += 2;
+            } else {
+                idx += 1;
             }
             continue;
         }
-        if let Some(val) = arg.strip_prefix("--dump-file=") {
-            dump_file = Some(PathBuf::from(val));
-            continue;
-        }
-        if arg == "--dump-file" {
-            if let Some(val) = iter.next() {
+        // Reuse the normal startup parser's `-dump-file` / `--dump-file`
+        // matching rules (GNU `emacs.c:942, 991`).
+        match args::argmatch(&argv, &mut idx, "-dump-file", Some("--dump-file"), 6, true) {
+            args::ArgMatch::Value(val) => {
                 dump_file = Some(PathBuf::from(val));
+                continue;
             }
-            continue;
+            args::ArgMatch::MissingValue => {
+                idx += 1;
+                continue;
+            }
+            args::ArgMatch::NoMatch => {}
+            args::ArgMatch::Bare => unreachable!(),
         }
         // Skip operands belonging to standard options (e.g. `--eval <form>`)
         // so an operand whose text begins with `--batch-zygote-socket=` is
         // never misinterpreted as a zygote launch flag.
-        if let Some(matched) = args::classify_standard_arg(&arg) {
-            for _ in 0..matched.operands {
-                let _ = iter.next();
-            }
+        if let Some(matched) = args::classify_standard_arg(arg) {
+            idx = (idx + 1 + matched.operands).min(argv.len().saturating_sub(1));
+        } else {
+            idx += 1;
         }
     }
     socket.map(|s| (s, dump_file))
@@ -5642,13 +5652,32 @@ mod batch_zygote_arg_tests {
         ]
         .into_iter()
         .map(String::from);
-        assert_eq!(
-            parse_batch_zygote_args(inline),
-            Some((
-                PathBuf::from("/tmp/z.sock"),
-                Some(PathBuf::from("/tmp/custom.pdump"))
-            ))
-        );
+        let expected = Some((
+            PathBuf::from("/tmp/z.sock"),
+            Some(PathBuf::from("/tmp/custom.pdump")),
+        ));
+        assert_eq!(parse_batch_zygote_args(inline), expected);
+
+        let short_dump = [
+            "neomacs",
+            "--batch-zygote-socket",
+            "/tmp/z.sock",
+            "-dump-file",
+            "/tmp/custom.pdump",
+        ]
+        .into_iter()
+        .map(String::from);
+        assert_eq!(parse_batch_zygote_args(short_dump), expected);
+
+        let long_separate_dump = [
+            "neomacs",
+            "--batch-zygote-socket=/tmp/z.sock",
+            "--dump-file",
+            "/tmp/custom.pdump",
+        ]
+        .into_iter()
+        .map(String::from);
+        assert_eq!(parse_batch_zygote_args(long_separate_dump), expected);
 
         let separate = ["neomacs", "--batch-zygote-socket", "/tmp/z2.sock"]
             .into_iter()

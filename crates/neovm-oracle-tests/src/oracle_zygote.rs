@@ -48,7 +48,7 @@ mod unix_impl {
     use std::io::{Read, Write};
     use std::os::fd::AsRawFd;
     use std::os::unix::ffi::OsStrExt;
-    use std::os::unix::fs::{DirBuilderExt, MetadataExt};
+    use std::os::unix::fs::{DirBuilderExt, FileTypeExt, MetadataExt};
     use std::os::unix::net::UnixStream;
     use std::os::unix::process::ExitStatusExt;
     use std::path::{Path, PathBuf};
@@ -132,7 +132,7 @@ mod unix_impl {
                 sock_path.display()
             )
         })?;
-        if meta.file_type().is_symlink() || meta.uid() != euid {
+        if meta.file_type().is_symlink() || !meta.file_type().is_socket() || meta.uid() != euid {
             return Err(format!(
                 "refusing untrusted zygote socket {} (uid={})",
                 sock_path.display(),
@@ -231,9 +231,21 @@ mod unix_impl {
             return Ok(stream);
         }
 
-        // Remove any stale socket file owned by us left by an earlier crashed server.
-        if verify_owned_socket(sock_path).is_ok() {
-            let _ = fs::remove_file(sock_path);
+        // Remove any stale socket file owned by us left by an earlier crashed
+        // server, but refuse to delete or overwrite non-socket targets,
+        // symlinks, or entries owned by another user.
+        match fs::symlink_metadata(sock_path) {
+            Ok(_) => {
+                verify_owned_socket(sock_path)?;
+                let _ = fs::remove_file(sock_path);
+            }
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+            Err(err) => {
+                return Err(format!(
+                    "failed to stat zygote socket {}: {err}",
+                    sock_path.display()
+                ));
+            }
         }
 
         let mut cmd = sandbox.pinned_command(program);
@@ -729,6 +741,22 @@ mod unix_impl {
             assert!(meta.is_dir());
             assert!(!meta.file_type().is_symlink());
             assert_eq!(meta.mode() & 0o077, 0);
+        }
+
+        #[test]
+        fn verify_owned_socket_rejects_regular_file_and_preserves_it() {
+            let dir = neomacs_test_env::bounded_temp_dir("nvz-reg-").expect("tempdir");
+            let regular = dir.path().join("not-a-socket.txt");
+            fs::write(&regular, b"preserve-me").unwrap();
+            assert!(verify_owned_socket(&regular).is_err());
+
+            // Attempting to connect/spawn at a regular file must fail without
+            // deleting or clobbering the file.
+            let sandbox = OracleSandbox::new("(princ \"ok\")", &[], dir.path()).expect("sandbox");
+            let program = PathBuf::from(crate::common::neomacs_binary_path());
+            let err = connect_or_spawn_zygote(program.as_os_str(), &regular, &sandbox);
+            assert!(err.is_err(), "expected non-socket target to be rejected");
+            assert_eq!(fs::read(&regular).unwrap(), b"preserve-me");
         }
     }
 }

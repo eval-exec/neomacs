@@ -602,6 +602,77 @@ mod unix_impl {
         }
     }
 
+    fn advance_pending_clients(
+        pending: &mut Vec<PendingClient>,
+        revents: &[libc::c_short],
+        now: Instant,
+        ready_requests: &mut Vec<(UnixStream, ZygoteRequest)>,
+    ) {
+        debug_assert_eq!(pending.len(), revents.len());
+        // Traverse original pending slots in reverse so `swap_remove(idx)`
+        // never shifts lower indices and `pending[0..idx]` stays 1:1 paired
+        // with `revents[0..idx]`.
+        for idx in (0..revents.len()).rev() {
+            if now >= pending[idx].deadline {
+                let mut client = pending.swap_remove(idx);
+                write_response(&mut client.stream, RESP_ERROR, libc::ETIMEDOUT);
+                continue;
+            }
+            if revents[idx] == 0 {
+                continue;
+            }
+            match pending[idx].try_advance() {
+                ReadProgress::Incomplete => {
+                    if Instant::now() >= pending[idx].deadline {
+                        let mut client = pending.swap_remove(idx);
+                        write_response(&mut client.stream, RESP_ERROR, libc::ETIMEDOUT);
+                    }
+                }
+                ReadProgress::Complete(req) => {
+                    let mut client = pending.swap_remove(idx);
+                    if Instant::now() >= client.deadline {
+                        write_response(&mut client.stream, RESP_ERROR, libc::ETIMEDOUT);
+                    } else {
+                        ready_requests.push((client.stream, req));
+                    }
+                }
+                ReadProgress::Failed(errno) => {
+                    let mut client = pending.swap_remove(idx);
+                    write_response(&mut client.stream, RESP_ERROR, errno);
+                }
+            }
+        }
+    }
+
+    fn accept_queued_clients(
+        listener: &UnixListener,
+        pending: &mut Vec<PendingClient>,
+        ready_requests: &mut Vec<(UnixStream, ZygoteRequest)>,
+        last_activity: &mut Instant,
+    ) {
+        loop {
+            let mut stream = match listener.accept() {
+                Ok((s, _)) => s,
+                Err(e) if e.kind() == io::ErrorKind::WouldBlock => break,
+                Err(_) => break,
+            };
+            if !verify_peer_same_uid(&stream) {
+                write_response(&mut stream, RESP_ERROR, libc::EACCES);
+                continue;
+            }
+            let _ = stream.set_nonblocking(true);
+            *last_activity = Instant::now();
+            let mut client = PendingClient::new(stream);
+            match client.try_advance() {
+                ReadProgress::Incomplete => pending.push(client),
+                ReadProgress::Complete(req) => ready_requests.push((client.stream, req)),
+                ReadProgress::Failed(errno) => {
+                    write_response(&mut client.stream, RESP_ERROR, errno);
+                }
+            }
+        }
+    }
+
     pub(crate) fn run_batch_zygote(
         socket_path: &Path,
         mode: RuntimeMode,
@@ -684,157 +755,131 @@ mod unix_impl {
         }
 
         let mut pending: Vec<PendingClient> = Vec::new();
+        let mut ready_requests: Vec<(UnixStream, ZygoteRequest)> = Vec::new();
         let mut children: HashMap<libc::pid_t, UnixStream> = HashMap::new();
         let mut last_activity = Instant::now();
+        let mut draining = false;
+        let mut socket_unlinked = false;
 
         loop {
-            if SHUTDOWN_REQUESTED.load(Ordering::Relaxed)
+            if ready_requests.is_empty()
                 && children.is_empty()
                 && pending.is_empty()
+                && (draining || SHUTDOWN_REQUESTED.load(Ordering::Relaxed))
             {
                 break;
             }
 
-            let mut pollfds = Vec::with_capacity(2 + pending.len() + children.len());
-            pollfds.push(libc::pollfd {
-                fd: listener_fd,
-                events: libc::POLLIN,
-                revents: 0,
-            });
-            pollfds.push(libc::pollfd {
-                fd: sigchld_r,
-                events: libc::POLLIN,
-                revents: 0,
-            });
-            let pending_start = pollfds.len();
-            for client in &pending {
+            if ready_requests.is_empty() {
+                let mut pollfds = Vec::with_capacity(2 + pending.len() + children.len());
+                if !draining {
+                    pollfds.push(libc::pollfd {
+                        fd: listener_fd,
+                        events: libc::POLLIN,
+                        revents: 0,
+                    });
+                }
+                let sigchld_idx = pollfds.len();
                 pollfds.push(libc::pollfd {
-                    fd: client.stream.as_raw_fd(),
+                    fd: sigchld_r,
                     events: libc::POLLIN,
                     revents: 0,
                 });
-            }
-            let children_start = pollfds.len();
-            let active_pids: Vec<libc::pid_t> = children.keys().copied().collect();
-            for &pid in &active_pids {
-                pollfds.push(libc::pollfd {
-                    fd: children[&pid].as_raw_fd(),
-                    events: libc::POLLIN,
-                    revents: 0,
-                });
-            }
-
-            // SAFETY: `pollfds` is a valid contiguous slice of `pollfd`.
-            let rc = unsafe {
-                libc::poll(
-                    pollfds.as_mut_ptr(),
-                    pollfds.len() as libc::nfds_t,
-                    POLL_TICK_MS,
-                )
-            };
-            if rc < 0 {
-                let err = io::Error::last_os_error();
-                if err.kind() == io::ErrorKind::Interrupted {
-                    continue;
+                let pending_start = pollfds.len();
+                for client in &pending {
+                    pollfds.push(libc::pollfd {
+                        fd: client.stream.as_raw_fd(),
+                        events: libc::POLLIN,
+                        revents: 0,
+                    });
                 }
-                break;
-            }
-
-            // 1. Reap exited children.
-            if (pollfds[1].revents & libc::POLLIN) != 0 || rc == 0 {
-                drain_pipe(sigchld_r);
-                loop {
-                    let mut status: libc::c_int = 0;
-                    // SAFETY: non-blocking waitpid for any child.
-                    let pid = unsafe { libc::waitpid(-1, &mut status, libc::WNOHANG) };
-                    if pid <= 0 {
-                        break;
-                    }
-                    last_activity = Instant::now();
-                    if let Some(mut stream) = children.remove(&pid) {
-                        if libc::WIFEXITED(status) {
-                            write_response(&mut stream, RESP_EXITED, libc::WEXITSTATUS(status));
-                        } else if libc::WIFSIGNALED(status) {
-                            write_response(&mut stream, RESP_SIGNALED, libc::WTERMSIG(status));
-                        } else {
-                            write_response(&mut stream, RESP_ERROR, status);
-                        }
-                    }
+                let children_start = pollfds.len();
+                let active_pids: Vec<libc::pid_t> = children.keys().copied().collect();
+                for &pid in &active_pids {
+                    pollfds.push(libc::pollfd {
+                        fd: children[&pid].as_raw_fd(),
+                        events: libc::POLLIN,
+                        revents: 0,
+                    });
                 }
-            }
 
-            // 2. Kill any child whose client disconnected (e.g. nextest timeout).
-            for (idx, &pid) in active_pids.iter().enumerate() {
-                let revents = pollfds[children_start + idx].revents;
-                if revents != 0
-                    && let Some(stream) = children.get(&pid)
-                    && client_disconnected(stream.as_raw_fd())
-                {
-                    // SAFETY: `pid` is our live unreaped child.
-                    unsafe { libc::kill(pid, libc::SIGKILL) };
-                }
-            }
-
-            // 3. Advance non-blocking pending request readers without blocking supervision.
-            let now = Instant::now();
-            let mut ready_requests: Vec<(UnixStream, ZygoteRequest)> = Vec::new();
-            let mut idx = 0;
-            while idx < pending.len() {
-                let revents = pollfds[pending_start + idx].revents;
-                if revents != 0 {
-                    match pending[idx].try_advance() {
-                        ReadProgress::Incomplete => {
-                            if now >= pending[idx].deadline {
-                                let mut client = pending.swap_remove(idx);
-                                write_response(&mut client.stream, RESP_ERROR, libc::ETIMEDOUT);
-                                continue;
-                            }
-                            idx += 1;
-                        }
-                        ReadProgress::Complete(req) => {
-                            let client = pending.swap_remove(idx);
-                            ready_requests.push((client.stream, req));
-                        }
-                        ReadProgress::Failed(errno) => {
-                            let mut client = pending.swap_remove(idx);
-                            write_response(&mut client.stream, RESP_ERROR, errno);
-                        }
-                    }
-                } else if now >= pending[idx].deadline {
-                    let mut client = pending.swap_remove(idx);
-                    write_response(&mut client.stream, RESP_ERROR, libc::ETIMEDOUT);
-                } else {
-                    idx += 1;
-                }
-            }
-
-            // 4. Accept newly queued connections (non-blocking) and try an immediate read.
-            if (pollfds[0].revents & libc::POLLIN) != 0 {
-                loop {
-                    let mut stream = match listener.accept() {
-                        Ok((s, _)) => s,
-                        Err(e) if e.kind() == io::ErrorKind::WouldBlock => break,
-                        Err(_) => break,
-                    };
-                    if !verify_peer_same_uid(&stream) {
-                        write_response(&mut stream, RESP_ERROR, libc::EACCES);
+                // SAFETY: `pollfds` is a valid contiguous slice of `pollfd`.
+                let rc = unsafe {
+                    libc::poll(
+                        pollfds.as_mut_ptr(),
+                        pollfds.len() as libc::nfds_t,
+                        POLL_TICK_MS,
+                    )
+                };
+                if rc < 0 {
+                    let err = io::Error::last_os_error();
+                    if err.kind() == io::ErrorKind::Interrupted {
                         continue;
                     }
-                    let _ = stream.set_nonblocking(true);
-                    last_activity = Instant::now();
-                    let mut client = PendingClient::new(stream);
-                    match client.try_advance() {
-                        ReadProgress::Incomplete => pending.push(client),
-                        ReadProgress::Complete(req) => ready_requests.push((client.stream, req)),
-                        ReadProgress::Failed(errno) => {
-                            write_response(&mut client.stream, RESP_ERROR, errno);
+                    break;
+                }
+
+                // 1. Reap exited children.
+                if (pollfds[sigchld_idx].revents & libc::POLLIN) != 0 || rc == 0 {
+                    drain_pipe(sigchld_r);
+                    loop {
+                        let mut status: libc::c_int = 0;
+                        // SAFETY: non-blocking waitpid for any child.
+                        let pid = unsafe { libc::waitpid(-1, &mut status, libc::WNOHANG) };
+                        if pid <= 0 {
+                            break;
+                        }
+                        last_activity = Instant::now();
+                        if let Some(mut stream) = children.remove(&pid) {
+                            if libc::WIFEXITED(status) {
+                                write_response(&mut stream, RESP_EXITED, libc::WEXITSTATUS(status));
+                            } else if libc::WIFSIGNALED(status) {
+                                write_response(&mut stream, RESP_SIGNALED, libc::WTERMSIG(status));
+                            } else {
+                                write_response(&mut stream, RESP_ERROR, status);
+                            }
                         }
                     }
+                }
+
+                // 2. Kill any child whose client disconnected (e.g. nextest timeout).
+                for (idx, &pid) in active_pids.iter().enumerate() {
+                    let revents = pollfds[children_start + idx].revents;
+                    if revents != 0
+                        && let Some(stream) = children.get(&pid)
+                        && client_disconnected(stream.as_raw_fd())
+                    {
+                        // SAFETY: `pid` is our live unreaped child.
+                        unsafe { libc::kill(pid, libc::SIGKILL) };
+                    }
+                }
+
+                // 3. Advance non-blocking pending request readers without blocking supervision.
+                let pending_revents: Vec<libc::c_short> = pollfds[pending_start..children_start]
+                    .iter()
+                    .map(|pfd| pfd.revents)
+                    .collect();
+                advance_pending_clients(
+                    &mut pending,
+                    &pending_revents,
+                    Instant::now(),
+                    &mut ready_requests,
+                );
+
+                // 4. Accept newly queued connections (non-blocking) and try an immediate read.
+                if !draining && (pollfds[0].revents & libc::POLLIN) != 0 {
+                    accept_queued_clients(
+                        &listener,
+                        &mut pending,
+                        &mut ready_requests,
+                        &mut last_activity,
+                    );
                 }
             }
 
             // 5. Fork one isolated child per completed request.
-            for (mut stream, req) in ready_requests {
+            let mut ready = std::mem::take(&mut ready_requests).into_iter();
+            while let Some((mut stream, req)) = ready.next() {
                 last_activity = Instant::now();
                 assert_single_threaded_before_fork();
                 // SAFETY: parent is strictly single-threaded; child never returns here.
@@ -847,8 +892,10 @@ mod unix_impl {
                     continue;
                 }
                 if pid == 0 {
-                    // Child: close all server/peer FDs before running Lisp.
+                    // Child: close all server/peer FDs (including remaining
+                    // queued requests) before running Lisp.
                     drop(stream);
+                    drop(ready);
                     drop(pending);
                     drop(children);
                     drop(listener);
@@ -862,14 +909,35 @@ mod unix_impl {
             }
 
             // 6. Clean idle / watched-parent shutdown when no work is in flight.
-            if children.is_empty() && pending.is_empty() {
-                if let Some(wpid) = watch_pid
-                    && !watch_pid_alive(wpid)
-                {
-                    break;
-                }
-                if last_activity.elapsed() >= idle_timeout {
-                    break;
+            if !draining && children.is_empty() && pending.is_empty() {
+                let watch_dead = watch_pid.is_some_and(|wpid| !watch_pid_alive(wpid));
+                let idle_expired = last_activity.elapsed() >= idle_timeout;
+                if watch_dead || idle_expired {
+                    // Check for connections queued after `poll` timed out before
+                    // unlinking or exiting.
+                    accept_queued_clients(
+                        &listener,
+                        &mut pending,
+                        &mut ready_requests,
+                        &mut last_activity,
+                    );
+                    if !pending.is_empty() || !ready_requests.is_empty() {
+                        continue;
+                    }
+                    // Unlink first so no new clients can discover this socket,
+                    // then drain any connection that raced in before unlink.
+                    let _ = std::fs::remove_file(socket_path);
+                    socket_unlinked = true;
+                    draining = true;
+                    accept_queued_clients(
+                        &listener,
+                        &mut pending,
+                        &mut ready_requests,
+                        &mut last_activity,
+                    );
+                    if pending.is_empty() && ready_requests.is_empty() {
+                        break;
+                    }
                 }
             }
         }
@@ -878,7 +946,9 @@ mod unix_impl {
         for &pid in children.keys() {
             unsafe { libc::kill(pid, libc::SIGKILL) };
         }
-        let _ = std::fs::remove_file(socket_path);
+        if !socket_unlinked {
+            let _ = std::fs::remove_file(socket_path);
+        }
         std::mem::forget(evaluator);
         unsafe { libc::_exit(0) };
     }
@@ -886,6 +956,34 @@ mod unix_impl {
     #[cfg(test)]
     mod tests {
         use super::*;
+
+        fn encode_minimal_frame() -> Vec<u8> {
+            let mut payload = Vec::new();
+            // argc = 1 ("neomacs")
+            payload.extend_from_slice(&1u32.to_le_bytes());
+            payload.extend_from_slice(&7u32.to_le_bytes());
+            payload.extend_from_slice(b"neomacs");
+            // envc = 0
+            payload.extend_from_slice(&0u32.to_le_bytes());
+            // cwd = "/tmp"
+            payload.extend_from_slice(&4u32.to_le_bytes());
+            payload.extend_from_slice(b"/tmp");
+            // stdout = "/tmp/o"
+            payload.extend_from_slice(&6u32.to_le_bytes());
+            payload.extend_from_slice(b"/tmp/o");
+            // stderr = "/tmp/e"
+            payload.extend_from_slice(&6u32.to_le_bytes());
+            payload.extend_from_slice(b"/tmp/e");
+            // umask + rlimit_as
+            payload.extend_from_slice(&0o022u32.to_le_bytes());
+            payload.extend_from_slice(&0u64.to_le_bytes());
+
+            let mut frame = Vec::with_capacity(8 + payload.len());
+            frame.extend_from_slice(WIRE_MAGIC);
+            frame.extend_from_slice(&(payload.len() as u32).to_le_bytes());
+            frame.extend_from_slice(&payload);
+            frame
+        }
 
         #[test]
         fn parse_request_payload_rejects_oversized_counts() {
@@ -901,6 +999,54 @@ mod unix_impl {
             bad_envc.extend_from_slice(&u32::MAX.to_le_bytes());
             bad_envc.extend_from_slice(&[0u8; 16]);
             assert!(parse_request_payload(&bad_envc).is_err());
+        }
+
+        #[test]
+        fn advance_pending_clients_preserves_revents_pairing_and_rejects_late_frames() {
+            let now = Instant::now();
+            let frame = encode_minimal_frame();
+
+            // Client A: expired and not readable.
+            let (server_a, mut peer_a) = UnixStream::pair().expect("pair a");
+            server_a.set_nonblocking(true).unwrap();
+            let mut client_a = PendingClient::new(server_a);
+            client_a.deadline = now - Duration::from_secs(1);
+
+            // Client B: valid deadline and readable with a complete frame.
+            let (server_b, mut peer_b) = UnixStream::pair().expect("pair b");
+            server_b.set_nonblocking(true).unwrap();
+            peer_b.write_all(&frame).unwrap();
+            let mut client_b = PendingClient::new(server_b);
+            client_b.deadline = now + Duration::from_secs(5);
+
+            // Client C: expired, yet also readable with a complete frame (late completion).
+            let (server_c, mut peer_c) = UnixStream::pair().expect("pair c");
+            server_c.set_nonblocking(true).unwrap();
+            peer_c.write_all(&frame).unwrap();
+            let mut client_c = PendingClient::new(server_c);
+            client_c.deadline = now - Duration::from_millis(1);
+
+            let mut pending = vec![client_a, client_b, client_c];
+            let revents = [0, libc::POLLIN, libc::POLLIN];
+            let mut ready = Vec::new();
+            advance_pending_clients(&mut pending, &revents, now, &mut ready);
+
+            assert!(pending.is_empty(), "all three clients should be resolved");
+            assert_eq!(ready.len(), 1, "only on-time client B should be queued");
+            assert_eq!(ready[0].1.argv, vec!["neomacs".to_string()]);
+
+            // Both expired client A and late-completing client C must receive ETIMEDOUT.
+            for (name, peer) in [("A", &mut peer_a), ("C", &mut peer_c)] {
+                let mut resp = [0u8; 9];
+                peer.read_exact(&mut resp)
+                    .unwrap_or_else(|e| panic!("client {name} missing error response: {e}"));
+                assert_eq!(&resp[0..4], WIRE_MAGIC);
+                assert_eq!(resp[4], RESP_ERROR);
+                assert_eq!(
+                    i32::from_le_bytes(resp[5..9].try_into().unwrap()),
+                    libc::ETIMEDOUT
+                );
+            }
         }
     }
 }
