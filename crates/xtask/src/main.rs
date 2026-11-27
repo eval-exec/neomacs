@@ -8,6 +8,7 @@ mod oracle_preflight_command;
 mod pentry_inventory_command;
 mod pgo;
 mod production_capabilities;
+mod rebuild_check;
 mod upper_snapshots_command;
 mod upper_subrs_command;
 mod window_icon;
@@ -70,6 +71,9 @@ struct FreshBuildOptions {
     production_capabilities: ProductionCapabilities,
     cargo_jobs: CargoJobBudget,
     dry_run: bool,
+    /// Read-only staleness query: report what a bytecode-preserving build
+    /// would recompile, then exit 0 (up to date) or 1 (work needed).
+    check: bool,
     native_comp: bool,
     skip_build: bool,
     no_byte_compile: bool,
@@ -611,6 +615,15 @@ fn run_xtask(repo_root: PathBuf, args: impl IntoIterator<Item = OsString>) -> Re
         );
     }
     let options = FreshBuildOptions::parse(repo_root, args)?;
+    if options.check {
+        let report = rebuild_check::check(&options)?;
+        report.print(&options.repo_root);
+        if report.has_work() {
+            // GNU make -q: 0 when up to date, 1 when work is needed.
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
     run_fresh_build(&options)
 }
 
@@ -666,6 +679,7 @@ impl FreshBuildOptions {
         let mut profile: Option<BuildProfile> = None;
         let mut cargo_jobs = CargoJobBudget::Inherit;
         let mut dry_run = false;
+        let mut check = false;
         let mut native_comp = parse_env.native_comp;
         let mut skip_build = false;
         let mut no_byte_compile = false;
@@ -713,6 +727,7 @@ impl FreshBuildOptions {
                     cargo_jobs = CargoJobBudget::Explicit(CargoJobCount::new(value)?);
                 }
                 "--dry-run" => dry_run = true,
+                "--check" => check = true,
                 "--native-comp" => native_comp = true,
                 "--no-native-comp" => native_comp = false,
                 "--skip-build" => skip_build = true,
@@ -739,8 +754,17 @@ impl FreshBuildOptions {
             }
         }
 
+        if check && dry_run {
+            return Err(
+                "--check is a read-only staleness query; it cannot be combined with --dry-run"
+                    .into(),
+            );
+        }
         let profile = match profile {
             Some(profile) => profile,
+            // --check builds nothing, so a profile (and its target/<dir>) is
+            // irrelevant; release only keeps path resolution uniform.
+            None if check => BuildProfile::Release,
             None => {
                 return Err(
                     "fresh-build must be used with --release or --profile NAME.\n\n\
@@ -779,7 +803,7 @@ impl FreshBuildOptions {
             )
             .into());
         }
-        if !profile.is_optimized() && !no_byte_compile {
+        if !check && !profile.is_optimized() && !no_byte_compile {
             eprintln!(
                 "warning: byte-compiling the Lisp tree with the unoptimized `{}` profile.\n         \
                  Measured: ~5-9x slower per file and ~27x slower for the load scan than an\n         \
@@ -801,6 +825,7 @@ impl FreshBuildOptions {
             production_capabilities,
             cargo_jobs,
             dry_run,
+            check,
             native_comp,
             skip_build,
             no_byte_compile,
@@ -4913,7 +4938,7 @@ fn print_usage() {
 
 fn usage_text() -> &'static str {
     "\
-Usage: cargo xtask [fresh-build] (--release | --profile NAME) [--bin-dir DIR] [--runtime-root DIR] [--dry-run] [--low-memory|--jobs N] [--native-comp|--no-native-comp] [--skip-build] [--no-byte-compile] [--aot-preload|--no-aot-preload]
+Usage: cargo xtask [fresh-build] (--release | --profile NAME | --check) [--bin-dir DIR] [--runtime-root DIR] [--dry-run] [--low-memory|--jobs N] [--native-comp|--no-native-comp] [--skip-build] [--no-byte-compile] [--aot-preload|--no-aot-preload]
        cargo xtask build-info --binary PATH [--runtime-root DIR] [--dry-run]
        cargo xtask check-dependency-coherence
        cargo xtask font-fixtures
@@ -4988,6 +5013,14 @@ Options:
                       Custom optimized Cargo.toml profiles are also accepted.
                       `debug` and `test` are rejected (use `dev`).
   --dry-run           Print planned commands without running them
+  --check             Read-only staleness query (GNU make -q): report which
+                      bytecode and subdirs.el files a byte-preserving build
+                      would rebuild, and build nothing. Needs no profile.
+                      Exit 0 = up to date, 1 = work needed. Covers COMPILE_FIRST,
+                      preloaded, MAIN_FIRST and compile-main (with its dependency
+                      closure) plus subdirs.el; leim, semantic grammars,
+                      loaddefs and custom/finder data are regenerated
+                      unconditionally by fresh-build and are not evaluated.
   --low-memory        Bound every Cargo compile to one job; slower, but avoids
                       the release-link OOM reported on 8 GiB WSL/Nix machines
   --jobs N            Bound every Cargo compile to positive job count N

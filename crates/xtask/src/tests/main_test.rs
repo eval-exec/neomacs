@@ -967,6 +967,27 @@ fn parse_debug_is_rejected_with_dev_hint() {
 }
 
 #[test]
+fn parse_check_needs_no_profile() {
+    let options = parse_options(&["--check"]);
+    assert!(options.check);
+    assert_eq!(options.profile, BuildProfile::Release);
+    assert_eq!(options.bin_dir, PathBuf::from("/repo/target/release"));
+}
+
+#[test]
+fn parse_check_rejects_dry_run() {
+    let err = FreshBuildOptions::parse_with_env(
+        PathBuf::from("/repo"),
+        ["--check", "--dry-run"].into_iter().map(OsString::from),
+        ParseEnv::default(),
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(err.contains("--check"), "{err}");
+    assert!(err.contains("--dry-run"), "{err}");
+}
+
+#[test]
 fn explicit_bin_dir_overrides_release_default() {
     let options = parse_options(&["--release", "--bin-dir", "out/neomacs-bin"]);
     assert_eq!(options.profile, BuildProfile::Release);
@@ -1274,6 +1295,161 @@ fn bytecode_rebuild_with_dependencies_follows_newer_dependency_elc() {
         &source,
         &[dependency]
     ));
+}
+
+#[test]
+fn check_reports_missing_bytecode() {
+    let (root, lisp) = check_fixture("COMPILE_FIRST =\nMAIN_FIRST =\n");
+    write_fresh_elc(&lisp.join("loadup.el"));
+    fs::write(lisp.join("foo.el"), "(provide 'foo)\n").unwrap();
+
+    let report = crate::rebuild_check::check(&check_options(&root)).unwrap();
+
+    assert!(report.has_work());
+    assert_eq!(report.compile_main.files, vec![lisp.join("foo.el")]);
+    assert_eq!(report.compile_main.total, 2, "loadup.el + foo.el");
+}
+
+#[test]
+fn check_fresh_tree_has_no_work() {
+    let (root, lisp) = check_fixture("COMPILE_FIRST =\nMAIN_FIRST =\n");
+    write_fresh_elc(&lisp.join("loadup.el"));
+    fs::write(lisp.join("foo.el"), "(provide 'foo)\n").unwrap();
+    write_fresh_elc(&lisp.join("foo.el"));
+
+    let report = crate::rebuild_check::check(&check_options(&root)).unwrap();
+
+    assert!(!report.has_work());
+    assert!(report.compile_main.files.is_empty());
+    assert!(report.subdirs_changed.is_empty());
+}
+
+#[test]
+fn check_propagates_rebuild_to_transitive_dependents() {
+    let (root, lisp) = check_fixture(
+        "COMPILE_FIRST =\nMAIN_FIRST =\n\
+         $(lisp)/foo.elc: $(lisp)/base.elc\n\
+         $(lisp)/bar.elc: $(lisp)/foo.elc\n",
+    );
+    write_fresh_elc(&lisp.join("loadup.el"));
+    fs::write(lisp.join("base.el"), "(provide 'base)\n").unwrap();
+    fs::write(lisp.join("foo.el"), "(require 'base)\n").unwrap();
+    write_fresh_elc(&lisp.join("foo.el"));
+    fs::write(lisp.join("bar.el"), "(require 'foo)\n").unwrap();
+    write_fresh_elc(&lisp.join("bar.el"));
+
+    let report = crate::rebuild_check::check(&check_options(&root)).unwrap();
+    let files = &report.compile_main.files;
+
+    assert!(files.contains(&lisp.join("base.el")));
+    assert!(
+        files.contains(&lisp.join("foo.el")),
+        "a stale dependency makes foo stale"
+    );
+    assert!(
+        files.contains(&lisp.join("bar.el")),
+        "the rebuild must propagate transitively"
+    );
+}
+
+#[test]
+fn check_compile_main_dependency_rule_selects_a_fresh_compile_first_source() {
+    let (root, lisp) = check_fixture(
+        "COMPILE_FIRST = $(lisp)/emacs-lisp/foo.elc\n\
+         MAIN_FIRST =\n\
+         $(lisp)/emacs-lisp/foo.elc: $(lisp)/base.elc\n",
+    );
+    fs::create_dir_all(lisp.join("emacs-lisp")).unwrap();
+    write_fresh_elc(&lisp.join("loadup.el"));
+    let foo = lisp.join("emacs-lisp/foo.el");
+    fs::write(&foo, "(require 'base)\n").unwrap();
+    let base = lisp.join("base.el");
+    fs::write(&base, "(provide 'base)\n").unwrap();
+    write_fresh_elc(&foo);
+    // base.elc newer than foo.elc: COMPILE_FIRST's mtime check skips foo,
+    // but compile-main's dependency rule selects it.
+    write_elc_newer_than(&base, &foo.with_extension("elc"));
+
+    let report = crate::rebuild_check::check(&check_options(&root)).unwrap();
+
+    assert_eq!(report.compile_first.total, 1);
+    assert!(
+        report.compile_first.files.is_empty(),
+        "COMPILE_FIRST only checks mtime, and foo.elc is current"
+    );
+    assert!(
+        report.compile_main.files.contains(&foo),
+        "compile-main's newer-dependency-bytecode rule must select foo"
+    );
+    assert_eq!(report.compile_main.total, 3, "loadup.el, base.el, foo.el");
+}
+
+#[test]
+fn check_keeps_a_fresh_source_when_dependency_bytecode_is_older() {
+    let (root, lisp) = check_fixture(
+        "COMPILE_FIRST = $(lisp)/emacs-lisp/foo.elc\n\
+         MAIN_FIRST =\n\
+         $(lisp)/emacs-lisp/foo.elc: $(lisp)/base.elc\n",
+    );
+    fs::create_dir_all(lisp.join("emacs-lisp")).unwrap();
+    write_fresh_elc(&lisp.join("loadup.el"));
+    let foo = lisp.join("emacs-lisp/foo.el");
+    fs::write(&foo, "(require 'base)\n").unwrap();
+    let base = lisp.join("base.el");
+    fs::write(&base, "(provide 'base)\n").unwrap();
+    write_fresh_elc(&base);
+    // foo.elc newer than base.elc: nothing is out of date.
+    write_elc_newer_than(&foo, &base.with_extension("elc"));
+
+    let report = crate::rebuild_check::check(&check_options(&root)).unwrap();
+
+    assert!(
+        report.compile_first.files.is_empty() && report.compile_main.files.is_empty(),
+        "{report:?}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn check_reports_a_dangling_subdirs_symlink() {
+    use std::os::unix::fs::symlink;
+
+    let (root, lisp) = check_fixture("COMPILE_FIRST =\nMAIN_FIRST =\n");
+    write_fresh_elc(&lisp.join("loadup.el"));
+    let pkg = lisp.join("pkg");
+    fs::create_dir_all(&pkg).unwrap();
+    symlink("missing-target", pkg.join("subdirs.el")).unwrap();
+
+    let report = crate::rebuild_check::check(&check_options(&root)).unwrap();
+    assert!(
+        report.subdirs_changed.contains(&pkg),
+        "the updater would remove the dangling link, so it is out of date: {report:?}"
+    );
+
+    update_subdirs_file(&pkg).unwrap();
+    let report = crate::rebuild_check::check(&check_options(&root)).unwrap();
+    assert!(
+        !report.subdirs_changed.contains(&pkg),
+        "the removed link must not be reported again: {report:?}"
+    );
+}
+
+#[test]
+fn check_reports_subdirs_drift_and_round_trips_through_update() {
+    let (root, lisp) = check_fixture("COMPILE_FIRST =\nMAIN_FIRST =\n");
+    write_fresh_elc(&lisp.join("loadup.el"));
+    fs::create_dir_all(lisp.join("pkg")).unwrap();
+
+    let report = crate::rebuild_check::check(&check_options(&root)).unwrap();
+    assert_eq!(report.subdirs_changed, vec![lisp.clone()]);
+    assert_eq!(report.subdirs_total, 2, "lisp and lisp/pkg are scanned");
+
+    update_subdirs_file(&lisp).unwrap();
+    let report = crate::rebuild_check::check(&check_options(&root)).unwrap();
+    assert!(
+        report.subdirs_changed.is_empty(),
+        "a freshly generated subdirs.el must be up to date"
+    );
 }
 
 #[test]
@@ -2458,6 +2634,7 @@ fn generated_unidata_source_files_match_gnu_gen_clean_shape() {
         production_capabilities: ProductionCapabilities::for_host().unwrap(),
         cargo_jobs: CargoJobBudget::Inherit,
         dry_run: false,
+        check: false,
         native_comp: false,
         skip_build: false,
         no_byte_compile: false,
@@ -2877,6 +3054,30 @@ fn motion_parity_audit_stamps_the_frame_and_the_window_height() {
     );
 }
 
+/// A minimal Lisp tree for `--check`: `lisp/Makefile.in`, `lisp/loadup.el`,
+/// and whatever sources the test adds under `lisp/`.
+fn check_fixture(makefile: &str) -> (PathBuf, PathBuf) {
+    let root = tempdir();
+    let lisp = root.join("lisp");
+    fs::create_dir_all(&lisp).unwrap();
+    fs::write(lisp.join("Makefile.in"), makefile).unwrap();
+    fs::write(lisp.join("loadup.el"), "").unwrap();
+    (root, lisp)
+}
+
+fn check_options(root: &Path) -> FreshBuildOptions {
+    FreshBuildOptions::parse_with_env(
+        root.to_path_buf(),
+        ["--check"].into_iter().map(OsString::from),
+        ParseEnv::default(),
+    )
+    .unwrap()
+}
+
+fn write_fresh_elc(source: &Path) {
+    write_elc_newer_than(source, source);
+}
+
 fn tempdir() -> PathBuf {
     let dir = repository_root().join("tmp").join(format!(
         "xtask-tests-{}-{}",
@@ -3128,6 +3329,7 @@ fn a_no_byte_compile_run_deletes_no_bytecode_it_will_not_put_back() {
         production_capabilities: ProductionCapabilities::for_host().unwrap(),
         cargo_jobs: CargoJobBudget::Inherit,
         dry_run: false,
+        check: false,
         native_comp: false,
         skip_build: false,
         no_byte_compile: true,
@@ -3189,6 +3391,7 @@ fn a_recompiling_run_clears_primary_but_keeps_secondary_loaddefs_bytecode() {
         production_capabilities: ProductionCapabilities::for_host().unwrap(),
         cargo_jobs: CargoJobBudget::Inherit,
         dry_run: false,
+        check: false,
         native_comp: false,
         skip_build: false,
         no_byte_compile: false,
@@ -3252,6 +3455,7 @@ fn full_loaddefs_regeneration_keeps_secondary_bootstrap_seeds_loadable() {
         production_capabilities: ProductionCapabilities::for_host().unwrap(),
         cargo_jobs: CargoJobBudget::Inherit,
         dry_run: false,
+        check: false,
         native_comp: false,
         skip_build: false,
         no_byte_compile: false,
