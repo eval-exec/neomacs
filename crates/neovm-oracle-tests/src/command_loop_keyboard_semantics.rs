@@ -227,6 +227,63 @@ fn oracle_execute_kbd_macro_select_window_affects_following_key() {
     );
 }
 
+/// GNU collects at an idle key read only when INTERACTIVE, which is false
+/// for the whole of a keyboard macro, its last key included
+/// (`src/commands.h` `INTERACTIVE`, `src/keyboard.c` `read_char`).  With no
+/// allocation-driven collection due, no `post-gc-hook` runs between the
+/// macro's keys or before `execute-kbd-macro` returns.
+#[test]
+fn oracle_execute_kbd_macro_runs_no_collection_between_its_keys() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+
+    let expect = expect_test::expect![[r#""OK (((97 t 0) (98 t 0)) 0 nil)""#]];
+    crate::common::assert_oracle_parity_expect(
+        r#"(progn
+             (setq oracle-macro-gc-runs 0 oracle-macro-keys nil)
+             (fset 'oracle-record-macro-key
+                   (lambda ()
+                     (interactive)
+                     (push (list last-command-event
+                                 (and executing-kbd-macro t)
+                                 oracle-macro-gc-runs)
+                           oracle-macro-keys)))
+             (keymap-set global-map "a" 'oracle-record-macro-key)
+             (keymap-set global-map "b" 'oracle-record-macro-key)
+             (let ((gc-cons-threshold most-positive-fixnum)
+                   (post-gc-hook
+                    (list (lambda ()
+                            (setq oracle-macro-gc-runs (1+ oracle-macro-gc-runs))))))
+               (execute-kbd-macro "ab")
+               (list (reverse oracle-macro-keys)
+                     oracle-macro-gc-runs
+                     executing-kbd-macro)))"#,
+        expect,
+    );
+}
+
+/// The reader takes a key requeued on either input-method list, or on
+/// `unread-command-events`, without waiting, and leaves each list empty
+/// (`src/keyboard.c` `read_char`): checking those lists before an idle
+/// sweep must not consume them.  The keys are compared as a set; the order
+/// in which the reader takes the three lists is not what this pins.
+#[test]
+fn oracle_read_event_takes_both_input_method_queues() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+
+    let expect = expect_test::expect![[r#""OK ((97 98 99) nil nil nil)""#]];
+    crate::common::assert_oracle_parity_expect(
+        r#"(let ((unread-post-input-method-events (list ?a))
+                 (unread-command-events (list ?b))
+                 (unread-input-method-events (list ?c))
+                 (input-method-function nil))
+             (list (sort (list (read-event) (read-event) (read-event)) #'<)
+                   unread-post-input-method-events
+                   unread-command-events
+                   unread-input-method-events))"#,
+        expect,
+    );
+}
+
 #[test]
 fn oracle_execute_kbd_macro_publishes_raw_event_before_menu_filter() {
     return_if_neovm_enable_oracle_proptest_not_set!();
