@@ -855,6 +855,12 @@ pub(crate) fn reset_carrier_tls() {
     STATS.with(|slot| slot.set(CodeMemoryStats::default()));
 }
 
+/// Test-only: whether this thread's `SHARED_JIT` backend is currently installed.
+#[cfg(test)]
+pub(crate) fn shared_jit_is_installed_for_test() -> bool {
+    SHARED_JIT.with(|s| s.borrow().is_some())
+}
+
 /// Debug-only carrier TLS fingerprint for this module's classified records.
 #[cfg(debug_assertions)]
 pub(crate) fn carrier_tls_fingerprint(h: &mut u64) {

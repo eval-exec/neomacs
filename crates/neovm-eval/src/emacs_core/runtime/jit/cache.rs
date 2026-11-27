@@ -1051,6 +1051,11 @@ pub(crate) unsafe fn try_run_osr_probe(
     if ctx.is_null() {
         return OsrProbe::NoTransfer;
     }
+    // SAFETY: `ctx` is non-null and valid for this call per this function's contract.
+    assert!(
+        !unsafe { (*ctx).legacy_jit_withdrawn() },
+        "contract breach: try_run_osr_probe called after legacy serial JIT withdrawal"
+    );
     if sync_cache_to_current_heap().is_err() {
         return OsrProbe::NoTransfer;
     }
@@ -3174,6 +3179,11 @@ pub(crate) unsafe fn try_run_compiled(
     func_value: Value,
     args: &[Value],
 ) -> Result<Option<usize>, Flow> {
+    // SAFETY: `ctx` is null or points to the live dormant owner `Context`.
+    assert!(
+        ctx.is_null() || !unsafe { (*ctx).legacy_jit_withdrawn() },
+        "contract breach: try_run_compiled called after legacy serial JIT withdrawal"
+    );
     let id = func.jit_runtime().compiled_id_or_assign();
     if id > max_compiled_id() {
         return Ok(None);
@@ -3532,6 +3542,11 @@ pub(crate) unsafe fn run_armed_leaf(
     leaf: *const CompiledLeaf,
     args_ptr: *const i64,
 ) -> Result<Option<usize>, Flow> {
+    // SAFETY: `ctx` is null or points to the live dormant owner `Context`.
+    assert!(
+        ctx.is_null() || !unsafe { (*ctx).legacy_jit_withdrawn() },
+        "contract breach: run_armed_leaf called after legacy serial JIT withdrawal"
+    );
     // Outermost armed call: the raw entry publishes no bases. The live tag
     // says native code is on the stack. A nested armed call during a framed
     // tail must not hide that frame's pointer. No snapshot and no extra `Rc`:
@@ -3561,6 +3576,11 @@ pub(crate) unsafe fn run_armed_leaf(
 /// # Safety
 /// `ctx` must be null or point to a live, dormant owner-thread [`Context`].
 pub(crate) unsafe fn arm_leaf_slot(ctx: *mut Context, func: &ByteCodeFunction) {
+    // SAFETY: `ctx` is null or points to the live dormant owner `Context`.
+    assert!(
+        ctx.is_null() || !unsafe { (*ctx).legacy_jit_withdrawn() },
+        "contract breach: arm_leaf_slot called after legacy serial JIT withdrawal"
+    );
     let rt = func.jit_runtime();
     let epoch = leaf_slot_epoch();
     if rt.armed_leaf_word(epoch).is_some() {
@@ -3611,6 +3631,11 @@ pub(crate) unsafe fn resolve_spec_call_leaf(
     ctx: *mut Context,
     func: &ByteCodeFunction,
 ) -> Option<SpecCallLeaf> {
+    // SAFETY: `ctx` is null or points to the live dormant owner `Context`.
+    assert!(
+        ctx.is_null() || !unsafe { (*ctx).legacy_jit_withdrawn() },
+        "contract breach: resolve_spec_call_leaf called after legacy serial JIT withdrawal"
+    );
     let id = func.jit_runtime().compiled_id_or_assign();
     if id > max_compiled_id() {
         return None;
@@ -4590,6 +4615,21 @@ pub(crate) fn native_depth_reset_leak_probe_for_test() -> NativeDepthResetObserv
     })
     .join()
     .unwrap()
+}
+
+/// Test-only: count live plus retired entries in this thread's `COMPILED` cache.
+#[cfg(test)]
+pub(crate) fn compiled_entry_count_for_test() -> usize {
+    COMPILED.with(|c| {
+        let c = c.borrow();
+        c.len() + c.retired.len()
+    })
+}
+
+/// Test-only: count entries in this thread's `OSR_CACHE`.
+#[cfg(test)]
+pub(crate) fn osr_entry_count_for_test() -> usize {
+    OSR_CACHE.with(|c| c.borrow().len())
 }
 
 /// Debug-only carrier TLS fingerprint for this module's classified records.

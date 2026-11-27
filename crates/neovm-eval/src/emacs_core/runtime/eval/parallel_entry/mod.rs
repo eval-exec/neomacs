@@ -33,5 +33,8 @@ mod e54a_mutex_condvar_tests;
 #[path = "../tests/green_era_switch_test.rs"]
 mod green_era_switch_tests;
 #[cfg(test)]
+#[path = "tests/legacy_jit_withdrawal_test.rs"]
+mod legacy_jit_withdrawal_tests;
+#[cfg(test)]
 #[path = "../tests/owner_slab_lease_test.rs"]
 mod owner_slab_lease_tests;

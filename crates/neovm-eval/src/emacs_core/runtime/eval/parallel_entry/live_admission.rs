@@ -37,6 +37,9 @@ use super::owned_source::{
 use super::serial_park::{KeeperPort, LiveSerial, PortRefusal, SerialHome, receive_initial_seat};
 use super::serial_ticket::LocalSerialOwner;
 use super::serial_turn::OwnerSerialState;
+use super::source_jit_backend::{self, SourceJitBackend};
+use super::source_jit_cache::{self, SourceJitCache};
+use super::source_jit_compiler::{self, SourceJitCompiler};
 use super::thread_control::{
     ParallelOwnerControl, RegisteredParallelOwner, complete_parallel_owner_retirement,
     finish_live_turn_for_retire, with_park_scope_on_frame,
@@ -78,6 +81,9 @@ pub(crate) enum LiveEraOpenError {
     KeeperStartFailed,
     OpenEraFailed,
     InitialTurnFailed,
+    NativeActivation,
+    LegacyJitBusy,
+    LegacyJitWithdrawalFailed,
     #[cfg(test)]
     InjectedFault,
 }
@@ -145,6 +151,15 @@ struct SpawnedIdleKeeper {
     pending_spawns: Arc<Mutex<VecDeque<PendingOwnerSpawn>>>,
 }
 
+/// Main-thread-confined receipts proving Main's legacy serial JIT cache,
+/// backend, and compiler scopes were withdrawn for the lifetime of an open
+/// parallel era.
+struct WithdrawnLegacyJit {
+    _cache: SourceJitCache,
+    _backend: SourceJitBackend,
+    _compiler: SourceJitCompiler,
+}
+
 /// Live parallel era state owned by `GreenRuntime` from the first opt-in
 /// admission until `green_teardown`.
 pub(crate) struct LiveEraRuntime {
@@ -156,6 +171,10 @@ pub(crate) struct LiveEraRuntime {
     pending_spawns: Arc<Mutex<VecDeque<PendingOwnerSpawn>>>,
     next_owner_id: AtomicU64,
     dead_windows_recovery: super::super::world::SerialRecovery,
+    /// Type-erased `WithdrawnLegacyJit` receipts retained for the open parallel
+    /// era. Erased to `Box<dyn Any>` (matching `saved_observation_placeholder`)
+    /// so `LiveEraRuntime`'s auto-trait graph stays unchanged.
+    _withdrawn_legacy_jit: Option<Box<dyn std::any::Any>>,
 }
 
 impl std::fmt::Debug for LiveEraRuntime {
@@ -829,12 +848,95 @@ impl<'a> LiveEraOpenGuard<'a, KeeperStarted> {
 }
 
 impl<'a> LiveEraOpenGuard<'a, EraOpened> {
+    /// Commit the already-opened era and withdraw Main's legacy serial JIT at
+    /// the exact commit boundary (after all fallible transfer/open/turn steps
+    /// have already succeeded).
+    ///
+    /// Rollback safety (P1):
+    /// - Any refusal before this function (`transfer_to_keeper`, `await_ready`,
+    ///   `open_era_on_control`, `acquire_initial_era_turn`) never touches the
+    ///   one-way `ManuallyDrop` withdrawal receipts and rolls back cleanly to
+    ///   `SoloActive` with `legacy_jit_withdrawn() == false` and intact JIT.
+    /// - If `source_jit_cache::withdraw` refuses here, zero JIT TLS slots were
+    ///   mutated: `era_right` is returned to `Idle` and `EraOpened::drop` rolls
+    ///   back cleanly to `SoloActive` with `legacy_jit_withdrawn() == false`.
+    /// - Once `source_jit_cache::withdraw` succeeds (the single irreversible
+    ///   point of no return, since `DetachedSourceCache` permanently retains
+    ///   its `ManuallyDrop` payload), `AbortOnUnwind` is armed and any refusal
+    ///   in `source_jit_backend::withdraw` or `source_jit_compiler::close`
+    ///   aborts fail-closed so Lisp can never resume with leaked JIT state and
+    ///   a false withdrawal flag.
+    ///
+    /// Session-lifetime contract (P2):
+    /// - On success, `mark_legacy_jit_withdrawn()` sets `World::legacy_jit_withdrawn`
+    ///   monotonically `false -> true` for the remainder of the session. It is
+    ///   never cleared on `teardown_live_parallel_era()`, matching the one-way
+    ///   `ManuallyDrop` retention of `WithdrawnLegacyJit`.
     fn commit(
-        self,
-        era_right: TurnRight,
+        mut self,
+        mut era_right: TurnRight,
         pending_spawns: Arc<Mutex<VecDeque<PendingOwnerSpawn>>>,
-    ) -> LiveEraRuntime {
+    ) -> Result<LiveEraRuntime, LiveEraOpenError> {
+        // SAFETY: `ParkedWorldSeat::park_seated` uninstalled `TAGGED_HEAP` on
+        // Main, Main holds the exclusive initial `TurnRight::Era` (no parallel
+        // owners are spawned yet), and `native_depth() == 0` is enforced.
+        let cache = match unsafe { source_jit_cache::withdraw(self.inner.0.ctx) } {
+            Ok(cache) => cache,
+            Err(err) => {
+                // `source_jit_cache::withdraw` guarantees zero mutation on
+                // refusal. Return `era_right` to `Idle` so dropping `self`
+                // runs `EraOpened::rollback` cleanly back to `SoloActive`.
+                let proof = prove_stowed_for_era_switch(self.inner.0.ctx);
+                era_right.set_stowed_for_return(proof);
+                self.inner.0.control.release_era_turn_to_idle(era_right);
+                #[cfg(feature = "jit")]
+                {
+                    use crate::emacs_core::jit::cache::source_detachment::SourceCacheError;
+                    return Err(match err {
+                        SourceCacheError::NativeActivation => LiveEraOpenError::NativeActivation,
+                        SourceCacheError::PendingJobs | SourceCacheError::Borrowed(_) => {
+                            LiveEraOpenError::LegacyJitBusy
+                        }
+                        _ => LiveEraOpenError::LegacyJitWithdrawalFailed,
+                    });
+                }
+                #[cfg(not(feature = "jit"))]
+                match err {}
+            }
+        };
+
+        // Point of no return: `DetachedSourceCache` has irreversibly moved
+        // Main's legacy cache into `ManuallyDrop`. Any failure or unwind from
+        // here until `mark_legacy_jit_withdrawn()` completes MUST fail closed.
         let abort_guard = AbortOnUnwind::arm("commit");
+        // SAFETY: `cache` is the actual withdrawn cache receipt for `open.ctx`.
+        let backend = match unsafe { source_jit_backend::withdraw(&cache) } {
+            Ok(backend) => backend,
+            Err(err) => {
+                tracing::error!(
+                    ?err,
+                    "legacy JIT backend withdrawal failed after irreversible cache withdrawal; aborting fail-closed"
+                );
+                std::process::abort();
+            }
+        };
+        // SAFETY: `backend` is the actual preceding withdrawn backend receipt.
+        let compiler = match unsafe { source_jit_compiler::close(&backend) } {
+            Ok(compiler) => compiler,
+            Err(err) => {
+                tracing::error!(
+                    ?err,
+                    "legacy JIT compiler scope closure failed after irreversible cache/backend withdrawal; aborting fail-closed"
+                );
+                std::process::abort();
+            }
+        };
+        let withdrawn_legacy_jit = WithdrawnLegacyJit {
+            _cache: cache,
+            _backend: backend,
+            _compiler: compiler,
+        };
+
         let (
             open,
             EraOpened {
@@ -846,8 +948,9 @@ impl<'a> LiveEraOpenGuard<'a, EraOpened> {
             },
         ) = self.into_parts();
         open.parked.resume_with_turn_right(open.ctx, era_right);
+        open.ctx.mark_legacy_jit_withdrawn();
         abort_guard.disarm();
-        LiveEraRuntime {
+        Ok(LiveEraRuntime {
             pending_return: Some(pending_return),
             saved_observation_placeholder: Some(saved_observation_placeholder),
             keeper_join: Some(keeper_join),
@@ -856,7 +959,8 @@ impl<'a> LiveEraOpenGuard<'a, EraOpened> {
             pending_spawns,
             next_owner_id: AtomicU64::new(1),
             dead_windows_recovery: open.dead_windows_recovery,
-        }
+            _withdrawn_legacy_jit: Some(Box::new(withdrawn_legacy_jit) as Box<dyn std::any::Any>),
+        })
     }
 }
 
@@ -1225,6 +1329,13 @@ impl Context {
         if control.lifecycle() != Lifecycle::Running {
             return Err(LiveEraOpenError::Closing);
         }
+        #[cfg(feature = "jit")]
+        {
+            if crate::emacs_core::jit::cache::native_depth() != 0 {
+                return Err(LiveEraOpenError::NativeActivation);
+            }
+            crate::emacs_core::jit::cache::drain_ready_pending(Some(self));
+        }
 
         // Pre-clean GNU's empty `window-dead-windows-table` so the weak-table
         // fence admits a fresh Context / pdump session cleanly.
@@ -1367,7 +1478,7 @@ impl Context {
         let era_right = control
             .acquire_initial_era_turn()
             .map_err(|_| LiveEraOpenError::InitialTurnFailed)?;
-        let live_era = guard.commit(era_right, pending_spawns);
+        let live_era = guard.commit(era_right, pending_spawns)?;
 
         self.with_green_runtime(|runtime| {
             *runtime.live_era.borrow_mut() = Some(live_era);
@@ -1512,6 +1623,10 @@ impl Context {
         drop(era_world_handle);
 
         parked.resume_with_turn_right(self, solo_right);
+        // Session-lifetime withdrawal contract (P2): `World::legacy_jit_withdrawn`
+        // remains `true` after `teardown_live_parallel_era()` because
+        // `live_era._withdrawn_legacy_jit` drops its one-way `ManuallyDrop`
+        // receipts (retaining their payloads rather than restoring TLS).
         let _ = super::super::green::retire_transfer_publication_on_main(self, transfer_pub);
         if matches!(
             live_era.dead_windows_recovery,

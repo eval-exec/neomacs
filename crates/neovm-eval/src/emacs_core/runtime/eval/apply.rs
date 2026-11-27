@@ -2704,6 +2704,10 @@ impl Context {
     ) -> EvalResult {
         #[cfg(feature = "jit")]
         {
+            if self.legacy_jit_withdrawn() {
+                let mut vm = super::super::bytecode::Vm::from_context(self);
+                return vm.execute_with_func_value(bc_data, args, func_value);
+            }
             use crate::emacs_core::jit::cache;
             // Direct entry, as in `dispatch_bytecode_call_from_stack`: an armed
             // slot means this function already tiered up, so the heat
@@ -2805,6 +2809,10 @@ impl Context {
         args: LispArgVec,
         func_value: Value,
     ) -> EvalResult {
+        if self.legacy_jit_withdrawn() {
+            let mut vm = super::super::bytecode::Vm::from_context(self);
+            return vm.execute_with_func_value(bc_data, args, func_value);
+        }
         use crate::emacs_core::jit::{Plan, cache};
         match bc_data
             .jit_runtime()
@@ -3201,6 +3209,12 @@ impl Context {
         arg0: Value,
         func_value: Value,
     ) -> EvalResult {
+        if self.legacy_jit_withdrawn() {
+            let mut args = LispArgVec::new();
+            args.push(arg0);
+            let mut vm = super::super::bytecode::Vm::from_context(self);
+            return vm.execute_with_func_value(bc_data, args, func_value);
+        }
         use crate::emacs_core::jit::cache;
         if let Some((leaf, nonrest, has_rest)) = cache::armed_leaf_for_stack_call(bc_data, 1) {
             crate::emacs_core::jit::stats::record_dispatch(true);
@@ -3377,6 +3391,10 @@ impl Context {
         args: &[Value; 2],
         function: Value,
     ) -> EvalResult {
+        if self.legacy_jit_withdrawn() {
+            let mut vm = super::super::bytecode::Vm::from_context(self);
+            return vm.execute_with_func_value(bc_data, LispArgVec::from_slice(args), function);
+        }
         use crate::emacs_core::jit::cache;
         if let Some((leaf, nonrest, has_rest)) = cache::armed_leaf_for_stack_call(bc_data, 2) {
             crate::emacs_core::jit::stats::record_dispatch(true);
@@ -3471,6 +3489,9 @@ impl Context {
     ) -> BytecodeStackCallDispatch {
         #[cfg(feature = "jit")]
         {
+            if self.legacy_jit_withdrawn() {
+                return BytecodeStackCallDispatch::Interpret;
+            }
             use crate::emacs_core::jit::{Plan, cache};
             let ctx_ptr = self as *mut Context;
             // Direct entry first (slice C1): an armed slot means this function

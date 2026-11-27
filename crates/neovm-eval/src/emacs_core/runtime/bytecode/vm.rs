@@ -2981,12 +2981,18 @@ impl<'a> Vm<'a> {
             ..knobs
         };
         let sole_owner = ctx.obarray.sole_owner_registration().into_vm();
+        #[cfg(feature = "jit")]
+        let tier_policy = if ctx.legacy_jit_withdrawn() {
+            BytecodeTierPolicy::InterpreterOnly
+        } else {
+            knobs.tier_policy
+        };
         Self {
             ctx,
             sole_owner,
             recent_interpreter_call: RecentInterpreterCall::EMPTY,
             #[cfg(feature = "jit")]
-            bytecode_tier_policy: knobs.tier_policy,
+            bytecode_tier_policy: tier_policy,
             #[cfg(feature = "jit")]
             bcall_tier_skipped: knobs.bcall_tier_skipped,
             #[cfg(feature = "jit")]
@@ -4820,6 +4826,7 @@ impl<'a> Vm<'a> {
         #[cfg(feature = "jit")]
         if self.bytecode_tier_policy == BytecodeTierPolicy::InterpreterOnly
             || self.bcall_tier_skipped
+            || self.ctx.legacy_jit_withdrawn()
         {
             return BytecodeStackCallDispatch::Interpret;
         }
@@ -5656,6 +5663,7 @@ impl<'a> Vm<'a> {
                             // switch, then the heat load.
                             #[cfg(feature = "jit")]
                             if !osr_tried
+                                && !self.ctx.legacy_jit_withdrawn()
                                 && crate::emacs_core::jit::jit_osr_on()
                                 && crate::emacs_core::jit::jit_runtime_enabled()
                                 && func.jit_runtime().is_hot()
@@ -6160,7 +6168,9 @@ impl<'a> Vm<'a> {
                         // identities, never a Value. Off unless
                         // `NEOVM_JIT_FEEDBACK` records (one field compare).
                         #[cfg(feature = "jit")]
-                        if self.bytecode_tier_policy.records_call_feedback() {
+                        if self.bytecode_tier_policy.records_call_feedback()
+                            && !self.ctx.legacy_jit_withdrawn()
+                        {
                             let arg0 = if n > 0 {
                                 stk!()[args_start]
                             } else {
@@ -10362,6 +10372,7 @@ impl<'a> Vm<'a> {
         {
             self.bytecode_tier_policy == BytecodeTierPolicy::InterpreterOnly
                 || self.bcall_cache_forced
+                || self.ctx.legacy_jit_withdrawn()
         }
         #[cfg(not(feature = "jit"))]
         {

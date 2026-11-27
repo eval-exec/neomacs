@@ -23,6 +23,7 @@ use std::num::NonZeroUsize;
 use std::ops::{Deref, DerefMut};
 use std::ptr::NonNull;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 mod era;
 #[cfg(test)]
@@ -130,6 +131,15 @@ struct World {
     /// path. Written and read under the Baton; never cleared (there is no
     /// host detach, and a rolled-back session is still hosted).
     hosted_session: Cell<bool>,
+    /// Monotonic session-lifetime flag set once when Main commits its first
+    /// live parallel keeper era and withdraws legacy serial JIT
+    /// (`live_admission.rs`). Never reset to `false` on `green_teardown()`
+    /// because `DetachedSourceCache`/`DetachedSourceBackend`/`SourceCompilerClosed`
+    /// permanently retain their `ManuallyDrop` payloads for the session. Read
+    /// live by every bytecode call/dispatch/OSR seam and fail-closed
+    /// `jit/cache.rs` guard across Main, Baton workers, and admitted parallel
+    /// owners.
+    legacy_jit_withdrawn: AtomicBool,
 }
 
 impl Drop for World {
@@ -182,6 +192,20 @@ impl WorldLease {
     /// Whether the main owner's cold activation marked this World hosted.
     pub(in crate::emacs_core::eval) fn hosted_session(&self) -> bool {
         self.0.hosted_session.get()
+    }
+
+    /// Permanently mark Main's legacy serial JIT withdrawn for the remainder
+    /// of this World's session (monotonic `false -> true`, never cleared on
+    /// era teardown; matches [`Self::mark_hosted_session`]).
+    #[cold]
+    pub(in crate::emacs_core::eval) fn mark_legacy_jit_withdrawn(&self) {
+        self.0.legacy_jit_withdrawn.store(true, Ordering::Release);
+    }
+
+    /// Whether Main's legacy serial JIT has been withdrawn for this World.
+    #[inline(always)]
+    pub(in crate::emacs_core::eval) fn legacy_jit_withdrawn(&self) -> bool {
+        self.0.legacy_jit_withdrawn.load(Ordering::Acquire)
     }
 }
 
@@ -1392,6 +1416,7 @@ impl WorldStorageBuilder {
                 super::activation::ActivationAuthority::mint()
             })),
             hosted_session: Cell::new(false),
+            legacy_jit_withdrawn: AtomicBool::new(false),
         }));
         // Reinstall the upstream TLS slot from the finalized heap's root
         // before any allocation-capable Context setup resumes. The root (not
@@ -1643,6 +1668,22 @@ impl Context {
     #[cold]
     pub(in crate::emacs_core::eval) fn mark_hosted_session(&self) {
         self.obarray.lease.mark_hosted_session()
+    }
+
+    /// Whether legacy serial JIT has been withdrawn for this World's live
+    /// parallel era. Consulted live at every bytecode call, `Bcall`, and OSR
+    /// seam, and enforced fail-closed at `jit/cache.rs` entry points.
+    #[inline(always)]
+    pub(crate) fn legacy_jit_withdrawn(&self) -> bool {
+        self.obarray.lease.legacy_jit_withdrawn()
+    }
+
+    /// Permanently mark legacy serial JIT withdrawn on this World at era-open
+    /// commit (`live_admission.rs`). Monotonic `false -> true` for the session
+    /// lifetime: never reset on `green_teardown()`.
+    #[cold]
+    pub(in crate::emacs_core::eval) fn mark_legacy_jit_withdrawn(&self) {
+        self.obarray.lease.mark_legacy_jit_withdrawn();
     }
 
     /// Fix the World's threading mode. Only construction calls this, before
