@@ -77,6 +77,83 @@ pub struct SerialGrant {
 
 static_assertions::assert_not_impl_any!(SerialGrant: Send, Sync, Clone, Copy);
 
+/// Summary of retired symbol-table descriptors reclaimed under one grace stop
+/// (E7-P.0 / N5).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[doc(hidden)]
+pub struct SymbolTableGraceReclaim {
+    pub reclaimed: usize,
+    pub freed_bytes: usize,
+}
+
+/// Stop-bound multi-mutator grace receipt (E7-P.0 / N5).
+///
+/// Minted exclusively from `&mut AllStopped<'era>` on the keeper thread during
+/// `Phase::Tracing(epoch)` after verifying that:
+/// - the era is not poisoned,
+/// - every frozen registered mutator is `Stopped` or `NativeStopped`
+///   (`IN_SLICE == 0`, zero live `RunAccess` / `ExecutionActivation`), and
+/// - the symbol sidecar is quiescent and not poisoned.
+///
+/// Cannot be forged, cloned, copied, or sent across threads; borrows the
+/// exclusive `AllStopped` stop guard so no mutator can resume while the
+/// receipt is live.
+#[must_use = "consume the grace receipt during the stop or drop it explicitly"]
+#[doc(hidden)]
+pub struct EraGraceReceipt<'stop, 'era> {
+    registry: &'era Registry,
+    epoch: NonZeroU64,
+    _stop: PhantomData<&'stop mut AllStopped<'era>>,
+    _thread: PhantomData<Rc<()>>,
+}
+
+static_assertions::assert_not_impl_any!(EraGraceReceipt<'static, 'static>: Send, Sync, Clone, Copy);
+
+impl<'stop, 'era> EraGraceReceipt<'stop, 'era> {
+    /// The stop epoch that established quiescence for this receipt.
+    #[inline]
+    #[doc(hidden)]
+    pub fn epoch(&self) -> NonZeroU64 {
+        self.epoch
+    }
+
+    /// The heap identity this grace receipt is bound to.
+    #[inline]
+    #[doc(hidden)]
+    pub fn heap_identity(&self) -> crate::tagged::gc::HeapIdentity {
+        self.registry.heap
+    }
+
+    /// Reclaim all retired symbol-table predecessors (never `current`) for
+    /// this era's `PublishedSymbolTables`.
+    ///
+    /// Refuses `Poisoned` (retaining every published and retired table) or
+    /// `Busy` if the symbol sidecar or ledger metadata is unexpectedly held.
+    #[cold]
+    #[inline(never)]
+    #[doc(hidden)]
+    pub fn reclaim_symbol_tables(&mut self) -> Result<SymbolTableGraceReclaim, RegistrationError> {
+        if self.registry.keeper_thread != std::thread::current().id() {
+            return Err(RegistrationError::WrongThread);
+        }
+        if self.registry.park.poisoned.load(Ordering::Acquire) {
+            return Err(RegistrationError::Poisoned);
+        }
+        self.registry.symbols.ready()?;
+        // SAFETY: `self` was minted from `&mut AllStopped<'era>` on the keeper
+        // thread during `Phase::Tracing(self.epoch)`, proving every frozen
+        // registered mutator is stopped with `IN_SLICE == 0` (zero live
+        // `RunAccess`, `ExecutionActivation`, or `PublicationView`) and no
+        // mutator can resume while `&mut AllStopped` remains borrowed.
+        let report = unsafe { self.registry.symbols.tables.reclaim_retired_after_grace() }
+            .map_err(crate::tagged::gc::symbol_table::publication_error)?;
+        Ok(SymbolTableGraceReclaim {
+            reclaimed: report.reclaimed.get(),
+            freed_bytes: report.freed_bytes.get(),
+        })
+    }
+}
+
 impl SerialGrant {
     /// Whom this grant's turn goes to: an owner's ticket or the Baton
     /// group's World turn (L6.7b b3).
@@ -360,6 +437,31 @@ impl<'era> AllStopped<'era> {
     pub fn symbols(&mut self) -> Result<super::super::KeeperSymbols<'_>, RendezvousError> {
         let registry = self.registry;
         super::super::symbol_authority::KeeperSymbols::mint(self, registry)
+    }
+
+    /// Mint a stop-bound multi-mutator grace receipt (E7-P.0 / N5).
+    ///
+    /// Exclusively borrows `&mut self` so the stopped epoch cannot complete
+    /// while the receipt is live. Refuses on wrong thread, poison, broken stop
+    /// census, or outstanding symbol-authority loan.
+    #[cold]
+    #[inline(never)]
+    #[doc(hidden)]
+    pub fn mint_grace_receipt(&mut self) -> Result<EraGraceReceipt<'_, 'era>, RendezvousError> {
+        keeper(self.registry)?;
+        let gate = self
+            .registry
+            .lock_for_keeper()
+            .map_err(registration_error)?;
+        self.validate(&gate)?;
+        self.registry.symbols.ready()?;
+        drop(gate);
+        Ok(EraGraceReceipt {
+            registry: self.registry,
+            epoch: self.epoch,
+            _stop: PhantomData,
+            _thread: PhantomData,
+        })
     }
     #[doc(hidden)]
     pub fn check_world_roots(

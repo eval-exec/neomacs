@@ -106,6 +106,12 @@ impl PublicationChange {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct TableGraceReclaim {
+    pub(crate) reclaimed: RetiredTableCount,
+    pub(crate) freed_bytes: RetainedTableBytes,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) struct TableStatistics {
     pub(crate) generation: PointerTableGeneration,
@@ -406,6 +412,25 @@ impl PublishedSymbolTables {
             },
             charged: RetainedTableBytes::new(accounted.charged.get()),
         }
+    }
+
+    /// Reclaim all retired predecessor descriptors (never `current`) once a
+    /// stop-bound grace proof guarantees every concurrent activation has exited.
+    ///
+    /// # Safety
+    /// The caller must hold a valid stop-bound grace proof for this era's
+    /// `PublishedSymbolTables` establishing that zero threads retain any
+    /// descriptor pointer loaded prior to the current published root.
+    pub(crate) unsafe fn reclaim_retired_after_grace(
+        &self,
+    ) -> Result<TableGraceReclaim, TablePublicationError> {
+        // SAFETY: caller supplies the stop-bound grace proof above.
+        let report = unsafe { self.ledger.drain_predecessors_after_grace() }
+            .map_err(map_publication_error)?;
+        Ok(TableGraceReclaim {
+            reclaimed: RetiredTableCount::new(report.reclaimed.get()),
+            freed_bytes: RetainedTableBytes::new(report.freed_bytes.get()),
+        })
     }
 }
 

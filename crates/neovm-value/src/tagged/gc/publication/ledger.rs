@@ -10,8 +10,9 @@
 
 use super::sync::{AtomicPtr, AtomicU32, Mutex, MutexGuard, Ordering, TryLockError};
 use super::{
-    PayloadGeneration, PayloadPlan, PublicationChange, PublicationError, PublicationPayload,
-    PublicationStatistics, RetainedBytes, RetentionLimit, RetentionLimits, RetiredCount,
+    GraceReclaimReport, PayloadGeneration, PayloadPlan, PublicationChange, PublicationError,
+    PublicationPayload, PublicationStatistics, RetainedBytes, RetentionLimit, RetentionLimits,
+    RetiredCount,
 };
 use std::marker::PhantomData;
 use std::mem;
@@ -254,6 +255,43 @@ impl<P: PublicationPayload> PublicationLedger<P> {
     /// The live root. Callers atomic-load this cell; they do not own it.
     pub(crate) fn slot(&self) -> &AtomicPtr<u8> {
         &self.root
+    }
+
+    /// Drain all retired predecessors (never `current`) once a stop-bound grace
+    /// period guarantees no concurrent reader retains a pointer loaded before
+    /// `current`.
+    ///
+    /// Refuses `Busy` if the metadata mutex is contended or if any local
+    /// [`PublicationView`] is still live (`view_depth > 0`), and `Poisoned` if
+    /// the metadata mutex is poisoned (retaining all owners).
+    ///
+    /// # Safety
+    /// The caller must hold a valid stop-bound multi-mutator grace proof
+    /// establishing that zero threads retain any descriptor pointer loaded from
+    /// [`Self::slot`] prior to the current published root.
+    pub(crate) unsafe fn drain_predecessors_after_grace(
+        &self,
+    ) -> Result<GraceReclaimReport, PublicationError<P::Error>> {
+        let mut metadata = self.lock()?;
+        if self.view_depth.load(Ordering::Relaxed) > 0 {
+            return Err(PublicationError::Busy);
+        }
+        let reclaimed = metadata.predecessors.len();
+        let mut freed_bytes = reserved_capacity_bytes::<P>(&metadata);
+        for owner in &metadata.predecessors {
+            freed_bytes = freed_bytes.saturating_add(owner.retained_bytes().get());
+        }
+        // Never drop `metadata.current` or alter `self.root`.
+        metadata.predecessors.clear();
+        metadata.predecessor_generations.clear();
+        // Shrinking an empty Vec releases its backing allocation without
+        // allocating, restoring `retained_quote` to `current` alone.
+        metadata.predecessors.shrink_to_fit();
+        metadata.predecessor_generations.shrink_to_fit();
+        Ok(GraceReclaimReport {
+            reclaimed: RetiredCount::new(reclaimed),
+            freed_bytes: RetainedBytes::new(freed_bytes),
+        })
     }
 
     /// Lock, let the caller decide, and reserve when it admits a quote.
@@ -872,5 +910,79 @@ mod tests {
         assert_eq!(statistics.retired, RetiredCount::new(0));
         assert_eq!(statistics.generation, 0);
         assert_eq!(statistics.retained_bytes, RetainedBytes::new(usize::MAX));
+    }
+
+    #[test]
+    fn e7p0_grace_drain_reclaims_retired_preserves_current_and_unblocks_need_grace() {
+        let store = ledger(
+            1,
+            10,
+            RetentionLimits::new(RetainedBytes::new(25), RetiredCount::new(1)),
+        );
+        plan(2);
+        store.prepare().unwrap().publish().unwrap();
+        let current_addr = store.view().published_address();
+        assert_eq!(store.statistics().unwrap().retired, RetiredCount::new(1));
+        plan(3);
+        let Err(refused) = store.prepare() else {
+            panic!("retiree cap kept a prepared transaction");
+        };
+        assert_eq!(
+            refused,
+            PublicationError::NeedGrace(RetentionLimit::Retired)
+        );
+
+        // SAFETY: test owns `store` exclusively and holds no live PublicationView.
+        let report = unsafe { store.drain_predecessors_after_grace() }.unwrap();
+        assert_eq!(report.reclaimed, RetiredCount::new(1));
+        assert!(report.freed_bytes.get() >= 10);
+        let after = store.statistics().unwrap();
+        assert_eq!(after.retired, RetiredCount::new(0));
+        assert_eq!(after.generation, 1);
+        assert_eq!(after.retained_bytes, RetainedBytes::new(10));
+        assert_eq!(store.view().published_address(), current_addr);
+        assert_eq!(read(&store.view()), 2);
+
+        plan(3);
+        store.prepare().unwrap().publish().unwrap();
+        assert_eq!(read(&store.view()), 3);
+        assert_eq!(store.statistics().unwrap().retired, RetiredCount::new(1));
+    }
+
+    #[test]
+    fn e7p0_grace_drain_refuses_busy_while_publication_view_is_live() {
+        let store = ledger(1, 10, RetentionLimits::production());
+        plan(2);
+        store.prepare().unwrap().publish().unwrap();
+        let live_view = store.view();
+        // SAFETY: testing fail-closed refusal while a PublicationView is live.
+        let refused = unsafe { store.drain_predecessors_after_grace() };
+        assert_eq!(refused, Err(PublicationError::Busy));
+        assert_eq!(store.statistics().unwrap().retired, RetiredCount::new(1));
+        assert_eq!(read(&live_view), 2);
+        drop(live_view);
+
+        // SAFETY: `live_view` dropped; test owns `store` exclusively.
+        let report = unsafe { store.drain_predecessors_after_grace() }.unwrap();
+        assert_eq!(report.reclaimed, RetiredCount::new(1));
+        assert_eq!(store.statistics().unwrap().retired, RetiredCount::new(0));
+    }
+
+    #[test]
+    fn e7p0_grace_drain_refuses_poisoned_and_retains_all_owners() {
+        let store = ledger(1, 10, RetentionLimits::production());
+        plan(2);
+        store.prepare().unwrap().publish().unwrap();
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            store.hold_metadata_for_test(|| panic!("poison metadata"));
+        }));
+        // SAFETY: testing fail-closed poison retention.
+        let refused = unsafe { store.drain_predecessors_after_grace() };
+        assert_eq!(refused, Err(PublicationError::Poisoned));
+        store.with_retained(|current, predecessors| {
+            assert_eq!(*current.value, 2);
+            assert_eq!(predecessors.len(), 1);
+            assert_eq!(*predecessors[0].value, 1);
+        });
     }
 }

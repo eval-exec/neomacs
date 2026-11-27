@@ -276,3 +276,159 @@ fn nmjit_n3_actual_post_table_publication_poison_retains_both_descriptors() {
         },
     );
 }
+
+#[test]
+fn e7p0_all_stopped_grace_receipt_reclaims_retired_symbol_tables_with_live_owner() {
+    with_query_era(
+        PlainSymbolBacking::Unprojected,
+        Query::TableGrowth,
+        |era, ids, target| {
+            assert!(target.is_none());
+            let old_handle = era.admit_plain_symbol(ids[1]).unwrap();
+            let mut stopped = era.stop().unwrap();
+            let inputs = era
+                .with_stopped_heap_for_test(&stopped, |heap| unsafe {
+                    // SAFETY: immediate seeds on the actual matching stopped heap.
+                    [
+                        SharedRoot::new(heap, Value::NIL),
+                        SharedRoot::new(heap, Value::fixnum(23)),
+                    ]
+                })
+                .unwrap();
+            stopped.trace(|_, _| Ok(())).unwrap();
+            stopped.complete().unwrap();
+
+            let heap = era.heap_identity();
+            let permit = era.register(1, 4).unwrap();
+            let (ready_tx, ready_rx) = std::sync::mpsc::sync_channel::<()>(1);
+            let (stop_epoch_tx, stop_epoch_rx) =
+                std::sync::mpsc::sync_channel::<std::num::NonZeroU64>(1);
+
+            let inputs_ref = &inputs;
+            let (keeper_report, second_report) = std::thread::scope(|scope| {
+                let worker = scope.spawn(move || {
+                    let mut owner = permit.activate(heap, 1).unwrap();
+                    let (old_name, after_growth) = {
+                        let mut run = owner.run_access().unwrap();
+                        let mut name = run.root_slot(&inputs_ref[0]).unwrap();
+                        let mut dst = run.root_slot(&inputs_ref[1]).unwrap();
+                        run.sym_value_into(&old_handle, &mut name).unwrap();
+                        let before = run.symbol_table_census_for_test().unwrap();
+                        let old_name = run.symbol_table_name_at_for_test(
+                            before.address(),
+                            &old_handle,
+                            ids[1],
+                        );
+                        intern_once(&mut run, &name, &mut dst).unwrap();
+                        let after_growth = run.symbol_table_census_for_test().unwrap();
+                        assert_eq!(after_growth.retired(), before.retired() + 1);
+                        assert_eq!(
+                            after_growth.generation(),
+                            before.generation_successor().unwrap()
+                        );
+                        assert_ne!(after_growth.address(), before.address());
+                        assert!(after_growth.retained_bytes() > before.retained_bytes());
+                        drop(name);
+                        drop(dst);
+                        run.clear_root_slots().unwrap();
+                        (old_name, after_growth)
+                    };
+
+                    // Signal keeper to request stop, then park cooperatively at Mutator::poll.
+                    ready_tx.send(()).unwrap();
+                    let resumed_epoch = loop {
+                        match owner.poll(|| Ok(Vec::new())).unwrap() {
+                            crate::tagged::gc::PollOutcome::Continue => std::thread::yield_now(),
+                            crate::tagged::gc::PollOutcome::Resumed { epoch } => break epoch,
+                        }
+                    };
+                    let expected_epoch = stop_epoch_rx.recv().unwrap();
+                    assert_eq!(resumed_epoch, expected_epoch);
+
+                    // After grace reclamation: retired == 0, retained_bytes shrank,
+                    // current table address & generation preserved and readable.
+                    {
+                        let mut run = loop {
+                            match owner.run_access() {
+                                Ok(run) => break run,
+                                Err(RegistrationError::Busy) => std::thread::yield_now(),
+                                Err(err) => panic!("post-grace run_access: {err:?}"),
+                            }
+                        };
+                        let after_grace = run.symbol_table_census_for_test().unwrap();
+                        assert_eq!(after_grace.retired(), 0);
+                        assert_eq!(after_grace.address(), after_growth.address());
+                        assert_eq!(after_grace.generation(), after_growth.generation());
+                        assert!(after_grace.retained_bytes() < after_growth.retained_bytes());
+                        assert_eq!(
+                            run.symbol_table_name_at_for_test(
+                                after_grace.address(),
+                                &old_handle,
+                                ids[1]
+                            ),
+                            old_name
+                        );
+                    }
+
+                    owner.retire_rooted(&[]).unwrap();
+                });
+
+                ready_rx.recv().unwrap();
+                let mut grace_stop = era.stop().unwrap();
+                let stop_epoch = grace_stop.epoch();
+                let mut receipt = grace_stop.mint_grace_receipt().unwrap();
+                assert_eq!(receipt.epoch(), stop_epoch);
+                assert_eq!(receipt.heap_identity(), heap);
+                let first = receipt.reclaim_symbol_tables().unwrap();
+                let second = receipt.reclaim_symbol_tables().unwrap();
+                drop(receipt);
+                grace_stop.trace(|_, _| Ok(())).unwrap();
+                grace_stop.complete().unwrap();
+                stop_epoch_tx.send(stop_epoch).unwrap();
+
+                worker.join().unwrap();
+                (first, second)
+            });
+
+            assert!(keeper_report.reclaimed >= 1);
+            assert!(keeper_report.freed_bytes > 0);
+            assert_eq!(second_report.reclaimed, 0);
+            assert_eq!(second_report.freed_bytes, 0);
+
+            drop(inputs);
+            let (collector, keeper) = era.finish().unwrap();
+            drop(collector);
+            drop(keeper);
+        },
+    );
+}
+
+#[test]
+fn e7p0_grace_receipt_confinement_and_idempotent_empty_stop() {
+    static_assertions::assert_not_impl_any!(
+        crate::tagged::gc::EraGraceReceipt<'static, 'static>: Send,
+        Sync,
+        Clone,
+        Copy
+    );
+    with_query_era(
+        PlainSymbolBacking::Unprojected,
+        Query::TableGrowth,
+        |era, _ids, _target| {
+            let mut stopped = era.stop().unwrap();
+            let stopped_epoch = stopped.epoch();
+            let mut receipt = stopped.mint_grace_receipt().unwrap();
+            assert_eq!(receipt.epoch(), stopped_epoch);
+            assert_eq!(receipt.heap_identity(), era.heap_identity());
+            let report = receipt.reclaim_symbol_tables().unwrap();
+            assert_eq!(report.reclaimed, 0);
+            assert_eq!(report.freed_bytes, 0);
+            drop(receipt);
+            stopped.trace(|_, _| Ok(())).unwrap();
+            stopped.complete().unwrap();
+            let (collector, keeper) = era.finish().unwrap();
+            drop(collector);
+            drop(keeper);
+        },
+    );
+}

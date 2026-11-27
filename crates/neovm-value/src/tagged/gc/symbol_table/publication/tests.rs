@@ -333,3 +333,118 @@ fn nmjit_n3_publication_live_preparation_refuses_busy_without_waiting() {
     assert_eq!(tables.stats().unwrap().retired.get(), 0);
     assert!(tables.try_prepare(shape(2)).result.is_ok());
 }
+
+#[test]
+fn e7p0_symbol_table_need_grace_reclaim_unblocks_growth_for_both_caps() {
+    // (a) Retiree-count cap (`retired = 1`).
+    let backing = Backing::new();
+    let limits = TableLimits::new(TableLimits::DEFAULT_BYTES, RetiredTableCount::new(1));
+    let tables = PublishedSymbolTables::new(backing.initial(), limits).unwrap();
+    let first = tables
+        .try_prepare(shape(2))
+        .result
+        .unwrap()
+        .publish(backing.addresses(2))
+        .unwrap();
+    assert!(matches!(first, PublicationChange::Published { .. }));
+    assert_eq!(tables.stats().unwrap().retired.get(), 1);
+    let refused = tables.try_prepare(shape(3));
+    assert!(matches!(
+        refused.result,
+        Err(TablePublicationError::NeedGrace(TableLimit::RetiredTables))
+    ));
+    let current_ptr_before = tables.view().table() as *const PublishedSymbolTable as usize;
+    let current_gen_before = tables.stats().unwrap().generation;
+
+    // SAFETY: unit test owns `tables` exclusively and no view is held across the call.
+    let report = unsafe { tables.reclaim_retired_after_grace() }.unwrap();
+    assert_eq!(report.reclaimed.get(), 1);
+    assert!(report.freed_bytes.get() >= table_bytes(shape(1)).unwrap());
+    assert_eq!(tables.stats().unwrap().retired.get(), 0);
+    assert_eq!(
+        tables.retained_bytes().unwrap().get(),
+        table_bytes(shape(2)).unwrap()
+    );
+    assert_eq!(
+        tables.view().table() as *const PublishedSymbolTable as usize,
+        current_ptr_before
+    );
+    assert_eq!(tables.stats().unwrap().generation, current_gen_before);
+    let second = tables
+        .try_prepare(shape(3))
+        .result
+        .unwrap()
+        .publish(backing.addresses(3))
+        .unwrap();
+    assert!(matches!(second, PublicationChange::Published { .. }));
+    assert_eq!(tables.view().table().chunk_count().get(), 3);
+
+    // (b) Retained-bytes cap (`current + one successor + one slot`, tight after first growth).
+    let b1 = table_bytes(shape(1)).unwrap();
+    let b2 = table_bytes(shape(2)).unwrap();
+    let b3 = table_bytes(shape(3)).unwrap();
+    let byte_cap = b2 + b3 + 8 * std::mem::size_of::<OwnedSymbolTable>();
+    let byte_tables = PublishedSymbolTables::new(
+        backing.initial(),
+        TableLimits::new(
+            RetainedTableBytes::new(byte_cap),
+            TableLimits::DEFAULT_RETIRED,
+        ),
+    )
+    .unwrap();
+    byte_tables
+        .try_prepare(shape(2))
+        .result
+        .unwrap()
+        .publish(backing.addresses(2))
+        .unwrap();
+    // Tighten to `b2 + b3 - 1`? No, force NeedGrace(RetainedBytes) via `TestLimitProbe::Bytes`
+    // after retiring shape(1), then relax back to a budget that fits shape(2)+shape(3) only
+    // once shape(1) is reclaimed!
+    let cap_without_s1 = b2 + b3 + 4 * std::mem::size_of::<OwnedSymbolTable>();
+    assert!(b1 + b2 + b3 > cap_without_s1);
+    byte_tables
+        .set_limits_for_test(TestTableLimits::Override(TableLimits::new(
+            RetainedTableBytes::new(cap_without_s1),
+            TableLimits::DEFAULT_RETIRED,
+        )))
+        .unwrap();
+    let refused_bytes = byte_tables.try_prepare(shape(3));
+    assert!(matches!(
+        refused_bytes.result,
+        Err(TablePublicationError::NeedGrace(TableLimit::RetainedBytes))
+    ));
+    // SAFETY: unit test owns `byte_tables` exclusively with zero live views.
+    let byte_report = unsafe { byte_tables.reclaim_retired_after_grace() }.unwrap();
+    assert_eq!(byte_report.reclaimed.get(), 1);
+    assert_eq!(byte_tables.stats().unwrap().retired.get(), 0);
+    assert_eq!(byte_tables.retained_bytes().unwrap().get(), b2);
+    let unblocked = byte_tables
+        .try_prepare(shape(3))
+        .result
+        .unwrap()
+        .publish(backing.addresses(3))
+        .unwrap();
+    assert!(matches!(unblocked, PublicationChange::Published { .. }));
+    assert_eq!(byte_tables.view().table().chunk_count().get(), 3);
+}
+
+#[test]
+fn e7p0_symbol_table_reclaim_is_idempotent_when_no_predecessors() {
+    let backing = Backing::new();
+    let tables = PublishedSymbolTables::new(backing.initial(), TableLimits::default()).unwrap();
+    let ptr_before = tables.view().table() as *const PublishedSymbolTable as usize;
+    // SAFETY: unit test owns `tables` exclusively with zero live views.
+    let report = unsafe { tables.reclaim_retired_after_grace() }.unwrap();
+    assert_eq!(report.reclaimed.get(), 0);
+    assert_eq!(report.freed_bytes.get(), 0);
+    assert_eq!(
+        tables.view().table() as *const PublishedSymbolTable as usize,
+        ptr_before
+    );
+    assert_eq!(tables.stats().unwrap().retired.get(), 0);
+    assert_eq!(
+        tables.retained_bytes().unwrap().get(),
+        table_bytes(shape(1)).unwrap()
+    );
+}

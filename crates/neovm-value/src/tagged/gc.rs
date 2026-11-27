@@ -2695,6 +2695,8 @@ pub use mutator_registration::{
     RegistrationCensus, ResumeGcImageFailure, RingClient, RootedRetireFailure, SerialClient,
     SerialGrant, StopAttempt, StopPending, StoppedSummaries, YoungWorkerLoan,
 };
+#[doc(hidden)]
+pub use mutator_registration::{EraGraceReceipt, SymbolTableGraceReclaim};
 pub use mutator_registration::{
     FunctionStep, GlobalError, InitialInternError, MutatorKey, Rendezvous,
 };

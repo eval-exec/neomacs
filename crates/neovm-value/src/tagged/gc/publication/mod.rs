@@ -138,6 +138,13 @@ pub(crate) struct PublicationStatistics<G> {
     pub(crate) retained_bytes: RetainedBytes,
 }
 
+/// Summary of retired predecessors reclaimed after a stop-bound grace period.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct GraceReclaimReport {
+    pub(crate) reclaimed: RetiredCount,
+    pub(crate) freed_bytes: RetainedBytes,
+}
+
 /// What `prepare` decided. The replacement is already initialized by the
 /// payload under its own backing authority.
 #[derive(Debug)]
