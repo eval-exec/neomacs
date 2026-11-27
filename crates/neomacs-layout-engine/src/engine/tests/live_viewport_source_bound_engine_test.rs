@@ -436,3 +436,355 @@ fn collapsed_newlines_render_full_viewport_and_single_truncated_row() {
         );
     }
 }
+
+/// Issue #702 Round 2 (Budget bound): `WindowTextReadBudget::initial` must stay
+/// strictly `O(rows * visible_cols)`, clamped at 64 KiB (`65_536`), and NEVER
+/// grow with `params.hscroll`.
+#[test]
+fn truncated_budget_pins_exact_o_viewport_cap_and_ignores_hscroll() {
+    use crate::buffer_source::window_render::initial_viewport_read_budget_chars_for_test;
+
+    let make_params =
+        |rows: usize, cols: usize, wrap_mode: crate::types::LineWrapMode, hscroll: i32| {
+            let mut params = test_window_params();
+            params.char_width = 8.0;
+            params.char_height = 16.0;
+            params.text_bounds = neomacs_display_protocol::types::Rect::new(
+                0.0,
+                0.0,
+                (cols as f32) * 8.0,
+                (rows as f32) * 16.0,
+            );
+            params.wrap_mode = wrap_mode;
+            params.hscroll = hscroll;
+            params
+        };
+
+    // 50x170 truncated: (50 + 2) * (170 * 4) + 1 = 35_361; CharHorizon stays 1x (8_841).
+    let p_h0 = make_params(50, 170, crate::types::LineWrapMode::Truncate, 0);
+    let p_h100k = make_params(50, 170, crate::types::LineWrapMode::Truncate, 100_000);
+    assert_eq!(
+        initial_viewport_read_budget_chars_for_test(&p_h0, "rows_within_chars"),
+        35_361
+    );
+    assert_eq!(
+        initial_viewport_read_budget_chars_for_test(&p_h0, "viewport_char_horizon"),
+        35_361
+    );
+    assert_eq!(
+        initial_viewport_read_budget_chars_for_test(&p_h0, "char_horizon"),
+        8_841
+    );
+    // Crucial wall: hscroll = 100,000 must NOT inflate any mode's initial budget.
+    for mode in ["rows_within_chars", "viewport_char_horizon", "char_horizon"] {
+        assert_eq!(
+            initial_viewport_read_budget_chars_for_test(&p_h100k, mode),
+            initial_viewport_read_budget_chars_for_test(&p_h0, mode),
+            "initial budget for {mode} must be independent of hscroll"
+        );
+    }
+
+    // Wide frame 50x1000 truncated: 1x base is 52_001, 4x would be 208_001 -> clamped to 65_536.
+    let p_wide = make_params(50, 1000, crate::types::LineWrapMode::Truncate, 100_000);
+    assert_eq!(
+        initial_viewport_read_budget_chars_for_test(&p_wide, "rows_within_chars"),
+        65_536
+    );
+    assert_eq!(
+        initial_viewport_read_budget_chars_for_test(&p_wide, "viewport_char_horizon"),
+        65_536
+    );
+
+    // Wrap mode stays 1x across all modes regardless of hscroll.
+    let p_wrap = make_params(50, 170, crate::types::LineWrapMode::Wrap, 100_000);
+    for mode in ["rows_within_chars", "viewport_char_horizon", "char_horizon"] {
+        assert_eq!(
+            initial_viewport_read_budget_chars_for_test(&p_wrap, mode),
+            8_841,
+            "wrap mode {mode} must stay at 1x geometry allowance"
+        );
+    }
+}
+
+/// Issue #702 Round 2: truncated long-line viewports and synchronous queries
+/// (TTY `Pixels`/`Rows`/`Viewport` on `RowsWithinChars`, GUI `Rows` on
+/// `RowsWithinChars`, and GUI `Pixels`/`Viewport` on `ViewportCharHorizon`)
+/// complete in a single pass with zero horizon retries and match forced-retry
+/// controls identically across snapshots (including `ViewportCharHorizon`'s
+/// retry path under `AllowanceGuard`).
+#[test]
+fn truncated_long_line_viewport_and_all_query_modes_need_zero_retries_and_match_forced_retry() {
+    use neovm_core::buffer::LispCharPos1;
+    use neovm_core::window::WindowLayoutQueryScope;
+    use std::num::NonZeroUsize;
+
+    let long_line = format!("{}\n", "x".repeat(299)); // 300 bytes/line
+    let text = long_line.repeat(120); // 36,000 bytes (> 1x budget, < 4x budget)
+
+    // --- Arm A: TTY (RowsWithinChars for live + Pixels + Rows + Viewport) ---
+    {
+        let (mut eval, frame_id, _buf_id, window_id) = incr_editing_frame(&text, 1600, 800);
+        eval.frame_manager_mut()
+            .get_mut(frame_id)
+            .expect("frame")
+            .set_window_system(None);
+        eval.eval_str(
+            "(progn \
+               (set (make-local-variable 'truncate-lines) t) \
+               (set (make-local-variable 'word-wrap) nil) \
+               (set (make-local-variable 'mode-line-format) nil))",
+        )
+        .expect("truncate-lines");
+        let mut engine = crate::font::metrics::test_catalog::layout_engine();
+
+        reset_viewport_read_retries_for_test();
+        engine.layout_frame_rust(&mut eval, frame_id);
+        let live_retries = viewport_read_retries_for_test();
+        let live_trace = selected_window_layout_trace(&eval, &engine, frame_id);
+
+        reset_viewport_read_retries_for_test();
+        let px_q = engine
+            .query_window_layout(
+                &mut eval,
+                frame_id,
+                window_id,
+                WindowLayoutQueryScope::Pixels {
+                    start: LispCharPos1::new(1),
+                    height: NonZeroUsize::new(768).unwrap(),
+                },
+            )
+            .expect("tty pixels");
+        let px_retries = viewport_read_retries_for_test();
+
+        reset_viewport_read_retries_for_test();
+        let rows_q = engine
+            .query_window_layout(
+                &mut eval,
+                frame_id,
+                window_id,
+                WindowLayoutQueryScope::Rows {
+                    start: LispCharPos1::new(1),
+                    count: NonZeroUsize::new(48).unwrap(),
+                },
+            )
+            .expect("tty rows");
+        let rows_retries = viewport_read_retries_for_test();
+
+        reset_viewport_read_retries_for_test();
+        let vp_q = engine
+            .query_window_layout(
+                &mut eval,
+                frame_id,
+                window_id,
+                WindowLayoutQueryScope::Viewport,
+            )
+            .expect("tty viewport");
+        let vp_retries = viewport_read_retries_for_test();
+
+        assert_eq!(
+            (live_retries, px_retries, rows_retries, vp_retries),
+            (0, 0, 0, 0),
+            "TTY live + Pixels + Rows + Viewport must complete with zero horizon retries"
+        );
+
+        // Forced-retry control: assert full snapshot equality on ALL 4 paths!
+        let _guard = AllowanceGuard::set(1024);
+        let mut forced = crate::font::metrics::test_catalog::layout_engine();
+        reset_viewport_read_retries_for_test();
+        forced.layout_frame_rust(&mut eval, frame_id);
+        assert!(viewport_read_retries_for_test() > 0);
+        assert_eq!(
+            selected_window_layout_trace(&eval, &forced, frame_id),
+            live_trace,
+            "TTY live layout trace must match forced-retry control"
+        );
+        let forced_px = forced
+            .query_window_layout(
+                &mut eval,
+                frame_id,
+                window_id,
+                WindowLayoutQueryScope::Pixels {
+                    start: LispCharPos1::new(1),
+                    height: NonZeroUsize::new(768).unwrap(),
+                },
+            )
+            .expect("forced tty pixels");
+        let forced_rows = forced
+            .query_window_layout(
+                &mut eval,
+                frame_id,
+                window_id,
+                WindowLayoutQueryScope::Rows {
+                    start: LispCharPos1::new(1),
+                    count: NonZeroUsize::new(48).unwrap(),
+                },
+            )
+            .expect("forced tty rows");
+        let forced_vp = forced
+            .query_window_layout(
+                &mut eval,
+                frame_id,
+                window_id,
+                WindowLayoutQueryScope::Viewport,
+            )
+            .expect("forced tty viewport");
+        assert_eq!(px_q.end(), forced_px.end());
+        assert_eq!(rows_q.end(), forced_rows.end());
+        assert_eq!(vp_q.end(), forced_vp.end());
+    }
+
+    // --- Arm B: GUI (Rows -> RowsWithinChars; Pixels & Viewport -> ViewportCharHorizon) ---
+    {
+        let (mut eval, frame_id, _buf_id, window_id) = incr_editing_frame(&text, 1600, 800);
+        eval.eval_str(
+            "(progn \
+               (set (make-local-variable 'truncate-lines) t) \
+               (set (make-local-variable 'word-wrap) nil) \
+               (set (make-local-variable 'mode-line-format) nil))",
+        )
+        .expect("truncate-lines gui");
+        let mut engine = crate::font::metrics::test_catalog::layout_engine();
+        engine.layout_frame_rust(&mut eval, frame_id);
+
+        reset_viewport_read_retries_for_test();
+        let gui_px = engine
+            .query_window_layout(
+                &mut eval,
+                frame_id,
+                window_id,
+                WindowLayoutQueryScope::Pixels {
+                    start: LispCharPos1::new(1),
+                    height: NonZeroUsize::new(768).unwrap(),
+                },
+            )
+            .expect("gui pixels");
+        let gui_px_retries = viewport_read_retries_for_test();
+
+        reset_viewport_read_retries_for_test();
+        let gui_rows = engine
+            .query_window_layout(
+                &mut eval,
+                frame_id,
+                window_id,
+                WindowLayoutQueryScope::Rows {
+                    start: LispCharPos1::new(1),
+                    count: NonZeroUsize::new(48).unwrap(),
+                },
+            )
+            .expect("gui rows");
+        let gui_rows_retries = viewport_read_retries_for_test();
+
+        reset_viewport_read_retries_for_test();
+        let gui_vp = engine
+            .query_window_layout(
+                &mut eval,
+                frame_id,
+                window_id,
+                WindowLayoutQueryScope::Viewport,
+            )
+            .expect("gui viewport");
+        let gui_vp_retries = viewport_read_retries_for_test();
+
+        assert_eq!(
+            (gui_px_retries, gui_rows_retries, gui_vp_retries),
+            (0, 0, 0),
+            "GUI Pixels (ViewportCharHorizon) + Rows (RowsWithinChars) + Viewport (ViewportCharHorizon) must need 0 retries"
+        );
+
+        // Exercise ViewportCharHorizon's retry path explicitly via AllowanceGuard::set(1024)
+        // and verify identical answers!
+        let _guard = AllowanceGuard::set(1024);
+        let mut forced = crate::font::metrics::test_catalog::layout_engine();
+        reset_viewport_read_retries_for_test();
+        let forced_gui_px = forced
+            .query_window_layout(
+                &mut eval,
+                frame_id,
+                window_id,
+                WindowLayoutQueryScope::Pixels {
+                    start: LispCharPos1::new(1),
+                    height: NonZeroUsize::new(768).unwrap(),
+                },
+            )
+            .expect("forced gui pixels");
+        assert!(
+            viewport_read_retries_for_test() > 0,
+            "ViewportCharHorizon retry path must fire under 1024-char allowance"
+        );
+        reset_viewport_read_retries_for_test();
+        let forced_gui_vp = forced
+            .query_window_layout(
+                &mut eval,
+                frame_id,
+                window_id,
+                WindowLayoutQueryScope::Viewport,
+            )
+            .expect("forced gui viewport");
+        assert!(
+            viewport_read_retries_for_test() > 0,
+            "GUI Viewport ViewportCharHorizon retry path must fire under 1024-char allowance"
+        );
+        let forced_gui_rows = forced
+            .query_window_layout(
+                &mut eval,
+                frame_id,
+                window_id,
+                WindowLayoutQueryScope::Rows {
+                    start: LispCharPos1::new(1),
+                    count: NonZeroUsize::new(48).unwrap(),
+                },
+            )
+            .expect("forced gui rows");
+        assert_eq!(gui_px.end(), forced_gui_px.end());
+        assert_eq!(gui_rows.end(), forced_gui_rows.end());
+        assert_eq!(gui_vp.end(), forced_gui_vp.end());
+    }
+}
+
+/// Issue #702 Round 2 (Wall 2): on short truncated lines with `hscroll = 100,000`,
+/// `RowsWithinChars` stops at the `(body_read_rows + 2)`-th preserved newline
+/// (~2 KB), never blowing up to megabytes with `hscroll`.
+#[test]
+fn short_truncated_lines_at_large_hscroll_stay_newline_bounded() {
+    use neovm_core::buffer::LispCharPos1;
+    use neovm_core::window::WindowLayoutQueryScope;
+    use std::num::NonZeroUsize;
+
+    let short_line = format!("{}\n", "x".repeat(39)); // 40 bytes/line
+    let text = short_line.repeat(2_000); // 80,000 bytes
+    let (mut eval, frame_id, _buf_id, window_id) = incr_editing_frame(&text, 1600, 800);
+    eval.frame_manager_mut()
+        .get_mut(frame_id)
+        .expect("frame")
+        .set_window_system(None);
+    eval.eval_str(
+        "(progn \
+           (set (make-local-variable 'truncate-lines) t) \
+           (set (make-local-variable 'word-wrap) nil) \
+           (set (make-local-variable 'mode-line-format) nil) \
+           (set-window-hscroll (selected-window) 100000))",
+    )
+    .expect("hscroll 100k");
+
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
+    reset_viewport_read_retries_for_test();
+    let _ = engine
+        .query_window_layout(
+            &mut eval,
+            frame_id,
+            window_id,
+            WindowLayoutQueryScope::Pixels {
+                start: LispCharPos1::new(1),
+                // On a TTY frame (`char_height = 1`), `height = 48` is 48 rows
+                // -> `body_read_rows + 2 = 50` lines * 40 B = 2,000 bytes.
+                height: NonZeroUsize::new(48).unwrap(),
+            },
+        )
+        .expect("tty pixels at hscroll 100k");
+    assert_eq!(viewport_read_retries_for_test(), 0);
+    assert_eq!(
+        engine.text_buf.len(),
+        2_000,
+        "40-byte truncated lines at hscroll=100k must stop at the 50th preserved newline (2,000 B), not copy 40 KB or scale with hscroll"
+    );
+}

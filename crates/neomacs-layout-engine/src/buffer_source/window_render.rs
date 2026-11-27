@@ -34,24 +34,55 @@ enum SyncSourceRead {
     UncappedRetry,
 }
 
-/// How a bounded viewport read stops. The two modes differ only in whether
-/// the newline-existence query runs first: a synchronous query copies its
-/// whole geometry allowance outright, while a live viewport walk asks whether
-/// the allowance even holds the rows a viewport can show and copies only
-/// through the last preserved newline when it does.
+/// Multiplier applied to visible columns when sizing the initial character
+/// allowance for full-viewport `LineWrapMode::Truncate` walks and queries.
+///
+/// Unlike `LineWrapMode::Wrap` (where a 300-char line spans multiple visual
+/// rows), a truncated line consumes at most one visual row regardless of line
+/// length, so `(rows + 2) * cols + 1` systematically exhausts mid-viewport on
+/// truncated long-line buffers (`scrolling-long-lines`, Magit `--graph` logs).
+/// Widening the initial cap by 4x (clamped to [`MAX_TRUNCATED_INITIAL_BUDGET_CHARS`])
+/// keeps initial reads strictly `O(rows * visible_cols)` and independent of
+/// `hscroll`, while `RowsWithinChars` still cuts immediately at the
+/// `(body_read_rows + 2)`-th preserved row-breaking newline on short lines.
+const TRUNCATED_LINE_BUDGET_FACTOR: usize = 4;
+
+/// Hard upper ceiling on the widened truncated-line initial character budget
+/// (64 KiB, floored at `base_chars` if a giant viewport's unwrapped `1x` grid
+/// already exceeds 64 KiB). Prevents wide frames or large `hscroll` values from
+/// causing unbounded initial copies.
+const MAX_TRUNCATED_INITIAL_BUDGET_CHARS: usize = 65_536;
+
+/// How a bounded viewport read stops.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ViewportSourceReadMode {
-    /// Copy exactly the geometry character allowance.
+    /// Tight geometry character allowance for single-position synchronous
+    /// queries (`SynchronousQueryPosition`: `pos-visible-in-window-p`,
+    /// `posn-at-point`). (`SynchronousQueryTextExtent` / `window-text-pixel-size`
+    /// uses `WindowSourceExtent::AccessibleEnd` and bypasses bounded viewport
+    /// reads altogether.)
     CharHorizon,
-    /// Stop after the row budget's preserved newlines, never past the
-    /// geometry character allowance. Reaching the allowance is a horizon the
-    /// retry loop extends, never an end of buffer.
+    /// Full-viewport character allowance for GUI pixel-height (`Pixels`) and
+    /// GUI viewport (`Viewport`: `window-end`, `posn-at-x-y`) synchronous
+    /// queries, where shorter faces can fit more display rows than
+    /// `body_read_rows` so the read cannot cut at `body_read_rows + 2`
+    /// newlines.
+    ViewportCharHorizon,
+    /// Stop after the row budget's preserved row-breaking newlines, never past
+    /// the geometry character allowance. Used by plain live viewport walks and
+    /// row-exact `SynchronousQueryEnd` queries (TTY `Pixels`/`Rows`/`Viewport`
+    /// and GUI `Rows`). Reaching the allowance is a retryable `WindowChars`
+    /// horizon, never an end of buffer.
     RowsWithinChars,
 }
 
 /// Acquisition allowance owned by one viewport render attempt. Its numeric
 /// geometry estimate limits copied source, never ZV or visible geometry. Each
 /// mutator grows its own allowance when the canonical walk needs more source.
+///
+/// Invariant: `WindowTextReadBudget::initial` is strictly `O(rows * visible_cols)`
+/// (capped at `MAX_TRUNCATED_INITIAL_BUDGET_CHARS.max(base_chars)` for widened
+/// truncated modes) and NEVER scales with `params.hscroll`.
 #[derive(Clone, Copy)]
 struct WindowTextReadBudget {
     chars: CharLen,
@@ -63,12 +94,24 @@ impl WindowTextReadBudget {
         let cols = (params.text_bounds.width / params.char_width.max(1.0))
             .ceil()
             .max(1.0) as usize;
-        let chars = params
-            .source_interpretation_rows()
-            .saturating_add(2)
+        let rows_with_slack = params.source_interpretation_rows().saturating_add(2);
+        let base_chars = rows_with_slack
             .saturating_mul(cols)
             .saturating_add(1)
             .max(1);
+        let chars = match (params.wrap_mode, mode) {
+            (
+                crate::types::LineWrapMode::Truncate,
+                ViewportSourceReadMode::RowsWithinChars
+                | ViewportSourceReadMode::ViewportCharHorizon,
+            ) => rows_with_slack
+                .saturating_mul(cols.saturating_mul(TRUNCATED_LINE_BUDGET_FACTOR))
+                .saturating_add(1)
+                .min(MAX_TRUNCATED_INITIAL_BUDGET_CHARS.max(base_chars))
+                .max(1),
+            (crate::types::LineWrapMode::Truncate, ViewportSourceReadMode::CharHorizon)
+            | (crate::types::LineWrapMode::Wrap, _) => base_chars,
+        };
         Self {
             chars: CharLen::new(chars),
             mode,
@@ -88,10 +131,26 @@ impl WindowTextReadBudget {
 
     fn apply(self, request: BufferWindowSourceRequest) -> BufferWindowSourceRequest {
         match self.mode {
-            ViewportSourceReadMode::CharHorizon => request.with_window_chars(self.chars),
+            ViewportSourceReadMode::CharHorizon | ViewportSourceReadMode::ViewportCharHorizon => {
+                request.with_window_chars(self.chars)
+            }
             ViewportSourceReadMode::RowsWithinChars => request.with_window_rows_within(self.chars),
         }
     }
+}
+
+#[cfg(test)]
+pub(crate) fn initial_viewport_read_budget_chars_for_test(
+    params: &WindowParams,
+    mode: &str,
+) -> usize {
+    let mode = match mode {
+        "char_horizon" => ViewportSourceReadMode::CharHorizon,
+        "viewport_char_horizon" => ViewportSourceReadMode::ViewportCharHorizon,
+        "rows_within_chars" => ViewportSourceReadMode::RowsWithinChars,
+        other => panic!("unknown viewport read mode {other}"),
+    };
+    WindowTextReadBudget::initial(params, mode).chars.get()
 }
 
 #[cfg(test)]
@@ -379,12 +438,18 @@ where
     /// The bounded source mode for this attempt, when its acquisition may be
     /// limited by the viewport geometry.
     ///
-    /// A synchronous query copies its geometry allowance outright; a plain
-    /// live viewport walk (no edit replay to synchronize) asks the same
-    /// allowance for the rows a viewport can show, so a newline-less tail is
-    /// never walked and copied to ZV; a scroll replay keeps its own sync-stop
-    /// horizon, and an `AccessibleEnd` (mini-window) measurement must observe
-    /// the real ZV.
+    /// - `SynchronousQueryEnd` (TTY `Pixels`/`Rows`/`Viewport`, and GUI `Rows`):
+    ///   `RowsWithinChars`, cutting after `body_read_rows + 2` preserved
+    ///   row-breaking newlines within the bounded character cap.
+    /// - `SynchronousQueryEnd` (GUI `Pixels` and GUI `Viewport`):
+    ///   `ViewportCharHorizon`, using the bounded character cap without a
+    ///   row-count cut because shorter GUI faces can pack more rows.
+    /// - `SynchronousQueryPosition` (`pos-visible-in-window-p`, `posn-at-point`):
+    ///   `CharHorizon` (tight 1x geometry allowance).
+    /// - Plain live viewport walk (no edit replay to synchronize):
+    ///   `RowsWithinChars`.
+    /// - `SynchronousQueryTextExtent` (`window-text-pixel-size`) and
+    ///   mini-window `AccessibleEnd` walks return `None` (unbounded).
     fn viewport_source_read_mode(
         &self,
         plain_viewport_walk: bool,
@@ -397,7 +462,18 @@ where
             return None;
         }
         if self.position_publication.is_synchronous_query() {
-            Some(ViewportSourceReadMode::CharHorizon)
+            match self.position_publication {
+                WindowPositionPublication::SynchronousQueryEnd
+                    if !self.frame_params.window_system
+                        || self.params.measurement_rows.is_some() =>
+                {
+                    Some(ViewportSourceReadMode::RowsWithinChars)
+                }
+                WindowPositionPublication::SynchronousQueryEnd => {
+                    Some(ViewportSourceReadMode::ViewportCharHorizon)
+                }
+                _ => Some(ViewportSourceReadMode::CharHorizon),
+            }
         } else if plain_viewport_walk {
             Some(ViewportSourceReadMode::RowsWithinChars)
         } else {
