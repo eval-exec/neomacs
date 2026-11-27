@@ -136,7 +136,7 @@ pub use neovm_value::display_vocab::{FrameId, GuiResizeRequestId};
 
 pub(crate) use neovm_eval::emacs_core::eval::data::window_state::GuiResizeDelivery;
 pub use neovm_eval::emacs_core::eval::data::window_state::{
-    FrameCreationPhase, GuiBarPresentation, PendingGuiResize,
+    FrameCreationPhase, GuiBarPresentation, PendingGuiResize, TtyDeviceSize,
 };
 
 pub mod frame_alpha;

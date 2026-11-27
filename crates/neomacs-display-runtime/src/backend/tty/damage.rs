@@ -1088,7 +1088,18 @@ impl TtyRif {
                 );
             }
         }
-        for (row, _) in touched.iter().enumerate().filter(|(_, touched)| **touched) {
+        // Match GNU `write_matrix` (`src/dispnew.c:5775-5785`) and `plan_frame`:
+        // plan the bottom row first, then `0..last_row`.
+        let last_row = self.desired.height - 1;
+        if touched.get(last_row).copied().unwrap_or(false) {
+            self.plan_row(last_row, &[], &mut ops);
+        }
+        for (row, _) in touched
+            .iter()
+            .enumerate()
+            .take(last_row)
+            .filter(|(_, touched)| **touched)
+        {
             self.plan_row(row, &[], &mut ops);
         }
         self.damage.touched = touched;

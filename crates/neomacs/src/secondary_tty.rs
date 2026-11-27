@@ -100,17 +100,31 @@ impl SecondaryTtyRegistry {
         {
             // Track the terminal's live size like the primary TTY does; a grid
             // left at the size seen at open clips every cell past it.
+            let root_id = neovm_core::window::FrameId(root.frame_placement.frame().get());
+            let mut pty_resized = false;
             if let Some(size) = query_size(session.device.file.as_raw_fd()) {
-                let (cols, rows) = (size.columns() as usize, size.rows() as usize);
-                if session.rif.width() != cols || session.rif.height() != rows {
-                    session.rif.resize(cols, rows);
+                let pty_size = (size.columns() as usize, size.rows() as usize);
+                if pty_size != session.last_pty_size {
+                    session.last_pty_size = pty_size;
+                    pty_resized = true;
                 }
+            }
+            let (target_cols, target_rows) = if pty_resized {
+                session.last_pty_size
+            } else {
+                eval.frame_manager()
+                    .get(root_id)
+                    .and_then(|frame| frame.tty_device_size)
+                    .map_or(session.last_pty_size, |dev| {
+                        (dev.cols as usize, dev.rows as usize)
+                    })
+            };
+            if session.rif.width() != target_cols || session.rif.height() != target_rows {
+                session.rif.resize(target_cols, target_rows);
             }
             // This terminal's session mutex protects only its native renderer;
             // Lisp redraw obligations stay on the exclusively borrowed Context.
-            let mut full_redraw = eval.gnu_take_tty_frame_redraw(neovm_core::window::FrameId(
-                root.frame_placement.frame().get(),
-            ));
+            let mut full_redraw = eval.gnu_take_tty_frame_redraw(root_id);
             for child in &children {
                 full_redraw |= eval.gnu_take_tty_frame_redraw(neovm_core::window::FrameId(
                     child.frame_placement.frame().get(),
@@ -332,6 +346,8 @@ struct SecondaryTtySession {
     #[cfg(unix)]
     rif: neomacs_display_runtime::backend::tty::rif::TtyRif,
     #[cfg(unix)]
+    last_pty_size: (usize, usize),
+    #[cfg(unix)]
     stop: Arc<AtomicBool>,
     #[cfg(unix)]
     paused: Arc<AtomicBool>,
@@ -535,6 +551,7 @@ impl SecondaryTtySession {
             Self {
                 device,
                 rif,
+                last_pty_size: (size.columns() as usize, size.rows() as usize),
                 stop,
                 paused,
                 reader: Some(reader),

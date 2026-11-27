@@ -1,6 +1,9 @@
 #![cfg(unix)]
 use neomacs_melpa_test_support::{EmacsRuntime, GNU31_TREE_SITTER_GRAMMARS};
-use neomacs_tui_tests::{TuiLaunch, TuiSession, TuiTempDirectory, TuiTerminalConfig};
+use neomacs_tui_tests::{
+    RawTerminalSnapshot, TuiLaunch, TuiSession, TuiTempDirectory, TuiTerminalConfig,
+    assert_raw_terminal_snapshots_eq,
+};
 use std::time::Duration;
 
 #[test]
@@ -14,6 +17,7 @@ fn go_grammar_loads_and_multibyte_mode_line_renders_with_debug_logging() {
         .unwrap();
     let fixture = neomacs_infra::workspace_root()
         .join("crates/neomacs-gui-tests/fixtures/treesit-debug-mode-line.el");
+    let mut snapshots: Vec<(&str, RawTerminalSnapshot)> = Vec::new();
     for (name, program) in [
         ("GNU", gnu.executable),
         ("Neomacs", neomacs_tui_tests::neomacs_binary()),
@@ -50,5 +54,14 @@ fn go_grammar_loads_and_multibyte_mode_line_renders_with_debug_logging() {
                 .any(|row| row.contains(&format!("{}…END", "a".repeat(118)))),
             "{name}: {grid:?}"
         );
+        snapshots.push((
+            name,
+            RawTerminalSnapshot::capture_full_screen(session.screen()),
+        ));
     }
+    assert_raw_terminal_snapshots_eq(
+        "treesit-debug-mode-line (set-frame-size 180x30 on 30x200 TTY)",
+        &snapshots[0].1,
+        &snapshots[1].1,
+    );
 }

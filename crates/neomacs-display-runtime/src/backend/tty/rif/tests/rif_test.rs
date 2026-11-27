@@ -1880,7 +1880,10 @@ fn magic_wrap_normalizes_a_full_width_run_before_the_adjacent_row_like_gnu() {
         synchronized_output: false,
         ..TermCaps::default()
     };
-    let mut rif = TtyRif::new_with_caps(4, 2, caps);
+    // Use 3 rows so rows 0 and 1 are consecutive body rows in GNU's
+    // `write_matrix` order (which emits the bottom row first, then 0..last_row,
+    // `src/dispnew.c:5775-5785`).
+    let mut rif = TtyRif::new_with_caps(4, 3, caps);
     for (column, character) in "ABCD".chars().enumerate() {
         rif.desired
             .set(0, column, character, CellAttrs::default(), false);
@@ -1906,6 +1909,45 @@ fn magic_wrap_normalizes_a_full_width_run_before_the_adjacent_row_like_gnu() {
             .windows(b"\x1b[2;1H".len())
             .any(|bytes| bytes == b"\x1b[2;1H"),
         "an absolute move to the normalized adjacent row would erase GNU's cursor provenance",
+    );
+}
+
+#[test]
+fn write_matrix_plans_bottom_row_first_and_turns_off_face_before_magic_wrap_crlf() {
+    let caps = TermCaps {
+        synchronized_output: false,
+        ..TermCaps::default()
+    };
+    let mut rif = TtyRif::new_with_caps(4, 3, caps);
+    let mode_line_attrs = CellAttrs {
+        inverse: true,
+        ..CellAttrs::default()
+    };
+    for (col, ch) in "MODE".chars().enumerate() {
+        rif.desired.set(1, col, ch, mode_line_attrs, false);
+    }
+    rif.desired.set(2, 0, 'M', CellAttrs::default(), false);
+
+    rif.diff_and_render();
+    let output = rif.take_output();
+    let rendered = String::from_utf8_lossy(&output);
+
+    let mini_pos = rendered
+        .find("\x1b[3;1HM")
+        .expect("bottom row (minibuffer) must be emitted");
+    let mode_pos = rendered
+        .find("MODE")
+        .expect("penultimate row (mode line) must be emitted");
+    assert!(
+        mini_pos < mode_pos,
+        "GNU write_matrix emits the bottom row before 0..last_row: {rendered:?}"
+    );
+    // GNU `tty_write_glyphs` turns off the active face before `cmcheckmagic`
+    // emits `\r\n` (`src/term.c:812-816`), preventing BCE terminals from
+    // smearing the mode-line face onto a scrolled-in row.
+    assert!(
+        rendered.contains("MODE\x1b[0m\r\n"),
+        "face attributes must be turned off before magic-wrap CRLF: {rendered:?}"
     );
 }
 
@@ -1981,6 +2023,11 @@ fn first_diff_erases_wholly_blank_rows_instead_of_writing_spaces() {
     assert_eq!(
         rif.plan_for_test(),
         vec![
+            TermOp::EraseToEol {
+                row: 2,
+                from: 0,
+                bg: None,
+            },
             TermOp::WriteRun {
                 row: 0,
                 start: 0,
@@ -1993,11 +2040,6 @@ fn first_diff_erases_wholly_blank_rows_instead_of_writing_spaces() {
             },
             TermOp::EraseToEol {
                 row: 1,
-                from: 0,
-                bg: None,
-            },
-            TermOp::EraseToEol {
-                row: 2,
                 from: 0,
                 bg: None,
             },
@@ -2163,15 +2205,15 @@ fn relocated_content_keeps_its_unwritten_tail_when_repainted() {
     assert_eq!(
         rif.plan_for_test(),
         vec![
-            TermOp::WriteRun {
-                row: 0,
-                start: 0,
-                end: 5,
-            },
             TermOp::EraseToEol {
                 row: 2,
                 from: 0,
                 bg: None,
+            },
+            TermOp::WriteRun {
+                row: 0,
+                start: 0,
+                end: 5,
             },
         ],
         "relocated rows must retain GNU's unwritten tail instead of writing spaces through it",
@@ -2232,6 +2274,11 @@ fn copied_content_in_two_destinations_uses_the_same_erased_tail_rule() {
     assert_eq!(
         rif.plan_for_test(),
         vec![
+            TermOp::EraseToEol {
+                row: 2,
+                from: 0,
+                bg: None,
+            },
             TermOp::WriteRun {
                 row: 0,
                 start: 0,
@@ -2241,11 +2288,6 @@ fn copied_content_in_two_destinations_uses_the_same_erased_tail_rule() {
                 row: 1,
                 start: 0,
                 end: 4,
-            },
-            TermOp::EraseToEol {
-                row: 2,
-                from: 0,
-                bg: None,
             },
         ],
         "all erased destinations use GNU's same content-only write path",

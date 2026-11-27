@@ -1002,9 +1002,29 @@ pub fn builtin_set_frame_height(
             .get_mut(fid)
             .ok_or_else(|| signal("error", vec![Value::string("Frame not found")]))?;
         set_frame_text_size(frame, cols, text_lines);
+    } else if ctx
+        .frame_manager()
+        .get(fid)
+        .is_some_and(|frame| frame.displays_chrome)
+    {
+        let (cols, text_lines) = {
+            let frame = ctx
+                .frame_manager()
+                .get(fid)
+                .ok_or_else(|| signal("error", vec![Value::string("Frame not found")]))?;
+            let cols = (frame.width as f32 / frame.char_width.max(1.0))
+                .floor()
+                .max(1.0) as i64;
+            let text_lines = (text_height_px as f32 / frame.char_height.max(1.0))
+                .floor()
+                .max(1.0) as i64;
+            (cols, text_lines)
+        };
+        resize_live_top_level_tty_frame(ctx, fid, cols, text_lines, pretend)?;
     } else if neovm_eval::emacs_core::eval::gnu_redisplay_hooks_enabled() {
-        // GNU preserves native terminal size; only the window text layout
-        // changes. The other axis follows the already applied root/mini tree.
+        // Non-displayed (--batch) initial frame: GNU keeps delayed initial
+        // width/height parameters unchanged while laying out windows to the
+        // requested text size.
         let frame = ctx
             .frame_manager_mut()
             .get_mut(fid)
@@ -1116,9 +1136,27 @@ pub fn builtin_set_frame_width(
             .get_mut(fid)
             .ok_or_else(|| signal("error", vec![Value::string("Frame not found")]))?;
         set_frame_text_size(frame, cols, text_lines);
+    } else if ctx
+        .frame_manager()
+        .get(fid)
+        .is_some_and(|frame| frame.displays_chrome)
+    {
+        let (cols, text_lines) = {
+            let frame = ctx
+                .frame_manager()
+                .get(fid)
+                .ok_or_else(|| signal("error", vec![Value::string("Frame not found")]))?;
+            let cols = (text_width_px as f32 / frame.char_width.max(1.0))
+                .floor()
+                .max(1.0) as i64;
+            let text_lines = frame_realized_lines(frame);
+            (cols, text_lines)
+        };
+        resize_live_top_level_tty_frame(ctx, fid, cols, text_lines, pretend)?;
     } else if neovm_eval::emacs_core::eval::gnu_redisplay_hooks_enabled() {
-        // GNU preserves native terminal size; only the window text layout
-        // changes. The other axis follows the already applied root/mini tree.
+        // Non-displayed (--batch) initial frame: GNU keeps delayed initial
+        // width/height parameters unchanged while laying out windows to the
+        // requested text size.
         let frame = ctx
             .frame_manager_mut()
             .get_mut(fid)
@@ -1154,6 +1192,55 @@ pub fn builtin_set_frame_width(
         ctx.invalidate_redisplay();
     }
     Ok(Value::NIL)
+}
+
+/// Resize a live displayed top-level TTY frame (GNU `adjust_frame_size`,
+/// `src/frame.c:1045-1101`).
+///
+/// Updates native frame dimensions (`FRAME_PIXEL_WIDTH`/`HEIGHT`,
+/// `FRAME_TOTAL_COLS`/`LINES`, `FRAME_COLS`/`LINES`) and the window tree.
+/// When `!pretend`, also updates `frame.tty_device_size` (GNU
+/// `FrameCols(tty)`/`FrameRows(tty)`, `src/frame.c:1053,1088`) on the axis
+/// or axes that changed; when `pretend` is true, the TTY output device
+/// dimensions are preserved.
+fn resize_live_top_level_tty_frame(
+    ctx: &mut neovm_eval::emacs_core::eval::Context,
+    fid: FrameId,
+    cols: i64,
+    text_lines: i64,
+    pretend: bool,
+) -> Result<(), Flow> {
+    let (frames, buffers) = ctx.frame_manager_and_buffer_view_mut();
+    let frame = frames
+        .get_mut(fid)
+        .ok_or_else(|| signal("error", vec![Value::string("Frame not found")]))?;
+    let char_w = frame.char_width.max(1.0).round() as u32;
+    let char_h = frame.char_height.max(1.0).round() as u32;
+    let top_margin = frame.frame_top_margin();
+    let new_native_width = (cols.max(1) as u32).saturating_mul(char_w).max(1);
+    let new_native_height = ((text_lines.max(1).saturating_add(top_margin)) as u32)
+        .saturating_mul(char_h)
+        .max(1);
+    let old_width = frame.width;
+    let old_height = frame.height;
+    let prev_tty_device_size = frame.tty_device_size;
+    frame.resize_pixelwise_with_buffer_constraints(&buffers, new_native_width, new_native_height);
+    if pretend {
+        frame.tty_device_size = prev_tty_device_size;
+    } else {
+        let mut device = prev_tty_device_size.unwrap_or(crate::window::TtyDeviceSize {
+            cols: old_width,
+            rows: old_height,
+        });
+        if new_native_width != old_width {
+            device.cols = new_native_width;
+        }
+        if new_native_height != old_height {
+            device.rows = new_native_height;
+        }
+        frame.tty_device_size = Some(device);
+    }
+    Ok(())
 }
 
 /// `(set-frame-size FRAME WIDTH HEIGHT &optional PIXELWISE)` -> nil.
@@ -1265,13 +1352,34 @@ pub fn builtin_set_frame_size(
             text_lines
         );
         set_frame_text_size(frame, cols, text_lines);
+    } else if ctx
+        .frame_manager()
+        .get(fid)
+        .is_some_and(|frame| frame.displays_chrome)
+    {
+        // Live displayed top-level TTY frame (GNU `FRAME_TERMCAP_P`):
+        // `adjust_frame_size` updates `FRAME_COLS`/`FRAME_LINES`/
+        // `FRAME_PIXEL_*`/`FRAME_TOTAL_*`, resizes the window tree, and
+        // updates `FrameCols`/`FrameRows` on the TTY device (`pretend = false`,
+        // `src/frame.c:1051-1101`).
+        let cols = ((text_width_px as f32) / char_width.max(1.0))
+            .floor()
+            .max(1.0) as i64;
+        let text_lines = ((text_height_px as f32) / char_height.max(1.0))
+            .floor()
+            .max(1.0) as i64;
+        tracing::debug!(
+            "set-frame-size: live tty fid={:?} cols={} text_lines={}",
+            fid,
+            cols,
+            text_lines
+        );
+        resize_live_top_level_tty_frame(ctx, fid, cols, text_lines, false)?;
     } else {
-        // A top-level terminal frame.  This used to fall through and do
-        // nothing at all, so `set-frame-size` was a no-op on every TTY frame.
-        // GNU runs `adjust_frame_size` here too: the terminal keeps its size,
-        // and `frame-width`/`frame-height` go on reporting it, but the window
-        // tree is laid out to the requested text size -- unclamped, so asking
-        // an 80x25 batch frame for 100x40 really does give a 100-column root.
+        // Non-displayed (--batch) initial frame: GNU's `make_initial_frame`
+        // queues a delayed `change_frame_size(80, 25)` that never drains
+        // without redisplay, so `frame-width`/`frame-height` keep reporting
+        // 80x25 while windows are laid out to the requested text size.
         let cols = ((text_width_px as f32) / char_width.max(1.0))
             .floor()
             .max(1.0) as i64;
@@ -1283,7 +1391,7 @@ pub fn builtin_set_frame_size(
             .get_mut(fid)
             .ok_or_else(|| signal("error", vec![Value::string("Frame not found")]))?;
         tracing::debug!(
-            "set-frame-size: tty fid={:?} cols={} text_lines={}",
+            "set-frame-size: batch tty fid={:?} cols={} text_lines={}",
             fid,
             cols,
             text_lines

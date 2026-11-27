@@ -1838,7 +1838,14 @@ impl TtyRif {
             })
             .collect::<Vec<_>>();
 
-        for row in 0..self.desired.height {
+        // GNU `write_matrix` (`src/dispnew.c:5775-5785`) updates the bottom
+        // row first (making echo-area messages visible immediately), then
+        // rows `0..last_row` in top-to-bottom order. This order is also
+        // observable when `FrameRows` exceeds the physical terminal height
+        // and the penultimate row's magic-wrap `\r\n` scrolls the screen.
+        let last_row = self.desired.height - 1;
+        self.plan_row(last_row, &model_touched, &mut ops);
+        for row in 0..last_row {
             self.plan_row(row, &model_touched, &mut ops);
         }
 
@@ -2299,12 +2306,25 @@ impl TtyRif {
             write_cell_contents(&mut self.output, &cell);
             self.frame_stats.cells_written += 1;
         }
+        // GNU `tty_write_glyphs` turns off the active face before
+        // `cmcheckmagic` emits `\r\n` (src/term.c:812-816). Leaving a
+        // colored background active across `\r\n` smears it onto the newly
+        // scrolled-in line on BCE terminals when logical FrameRows exceeds
+        // the physical terminal height.
+        let width = u16::try_from(self.desired.width).unwrap_or(u16::MAX);
+        let height = u16::try_from(self.desired.height).unwrap_or(u16::MAX);
+        if end == width
+            && row.checked_add(1).is_some_and(|next| next < height)
+            && self.caps.right_margin == RightMarginBehavior::MagicWrap
+        {
+            write_face_off(&mut self.output, last_attrs);
+        }
         cursor.finish_write(
             &mut self.output,
             row,
             end,
-            u16::try_from(self.desired.width).unwrap_or(u16::MAX),
-            u16::try_from(self.desired.height).unwrap_or(u16::MAX),
+            width,
+            height,
             self.caps.right_margin,
         );
     }

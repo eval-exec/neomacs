@@ -322,6 +322,16 @@ impl AttachedWindowPositionMarkers {
     }
 }
 
+/// Explicit TTY device dimensions (`FrameCols`/`FrameRows` in GNU
+/// `src/frame.c:1053,1088`), decoupled from the kernel PTY size whenever Lisp
+/// calls `set-frame-size` / `set-frame-width` / `set-frame-height` without
+/// `pretend`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TtyDeviceSize {
+    pub cols: u32,
+    pub rows: u32,
+}
+
 /// Frame inputs that can change display-row geometry.
 ///
 /// Redisplay skipping and retained-row freshness both consume this projection,
@@ -3591,6 +3601,11 @@ pub struct Frame {
     /// Logical GUI resize requested via frame parameters but not yet committed
     /// to the live host window.
     pub pending_gui_resize: Option<PendingGuiResize>,
+    /// Explicit TTY device grid size (`FrameCols`/`FrameRows` in GNU
+    /// `src/frame.c:1053,1088`), updated by non-`pretend` `set-frame-size`,
+    /// `set-frame-width`, and `set-frame-height` on a live top-level TTY
+    /// frame and cleared when a physical terminal resize is applied.
+    pub tty_device_size: Option<TtyDeviceSize>,
     /// Monotonic owner-local serial; clearing or rejecting intent never resets it.
     last_gui_resize_request_id: Option<GuiResizeRequestId>,
     /// Authoritative last-redisplay geometry keyed by live leaf window.
@@ -7051,6 +7066,7 @@ impl Frame {
             font_ascent: 16.0,
             device_scale_factor: 1.0,
             pending_gui_resize: None,
+            tty_device_size: None,
             last_gui_resize_request_id: None,
             presentation_state: FramePresentationState::default(),
             redisplay_cache: HashMap::default(),

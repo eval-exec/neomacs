@@ -35,6 +35,16 @@
 //! (`assert_raw_terminal_snapshots_eq`, `.exact_differences(...)`,
 //! `assert_eq!`/`assert_ne!`/`assert_snapshot`/`expect`/`expect_file` with the
 //! snapshot or its `ansi_grid()`).
+//!
+//! # Scanner boundary (cross-crate / `src/` helper blind spot)
+//!
+//! The scanner parses `*.rs` files under `tests/` and resolves helper chains
+//! across those test files, but it does **not** parse library code under
+//! `src/` or external support crates. A snapshot assertion that reaches the
+//! harness through an `src/` or `tests/support/` helper is invisible to this
+//! guard unless the helper's name is listed in [`DIRECT_CELL_CALLEES`] (or
+//! [`DIRECT_CELL_METHODS`]). Treat [`DIRECT_CELL_CALLEES`] as a trust list
+//! rather than a convenience list.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -101,15 +111,19 @@ struct CellAssertionPin {
 /// `total = 1164, text_and_cells = 990 (85.1%), text_and_face = 2, text_only = 172`.
 /// After converting 13 attribute-subject rows across 6 files and rebasing onto
 /// `d6f1de3ca8` (+2 text-only margin-truncation rows in `issue_702_truncated_margin_parity.rs`):
-/// `min_total = 1166, min_text_and_cells = 1003 (86.0%), text_and_face = 2, text_only = 161`.
+/// `min_total = 1166, min_text_and_cells = 1003 (86.0%), text_and_face = 2, text_only = 161, blocked_chrome_divergence = 1`.
+/// After fixing the live TTY `set-frame-size` divergence and upgrading
+/// `treesit_debug_mode_line::go_grammar_loads_and_multibyte_mode_line_renders_with_debug_logging`
+/// to full `RawTerminalSnapshot` cell parity against GNU Emacs 31.1:
+/// `min_total = 1166, min_text_and_cells = 1004 (86.1%), text_and_face = 2, text_only = 160, blocked_chrome_divergence = 0`.
 const CELL_ASSERTION_PINS: &[(&str, CellAssertionPin)] = &[(
     "neomacs-tui-tests",
     CellAssertionPin {
         min_total: 1166,
-        min_text_and_cells: 1003,
+        min_text_and_cells: 1004,
         text_and_face: 2,
-        text_only: 161,
-        blocked_chrome_divergence: 1,
+        text_only: 160,
+        blocked_chrome_divergence: 0,
     },
 )];
 
@@ -987,12 +1001,6 @@ const NON_CELL_ALLOWLIST: &[NonCellAllowance] = &[
         reason: "startup terminal init file loading and oracle program check",
     },
     NonCellAllowance {
-        file: "tests/treesit_debug_mode_line.rs",
-        test: "go_grammar_loads_and_multibyte_mode_line_renders_with_debug_logging",
-        kind: NonCellAssertionKind::BlockedChromeDivergence,
-        reason: "blocked on pre-existing TTY set-frame-size divergence (mode line lands on row 29 vs GNU row 28)",
-    },
-    NonCellAllowance {
         file: "tests/tty_color_index.rs",
         test: "face_colours_reach_the_wire_as_the_index_lisp_computed",
         kind: NonCellAssertionKind::PartialFaceOrSgr,
@@ -1103,6 +1111,12 @@ const NON_CELL_ALLOWLIST: &[NonCellAllowance] = &[
 ];
 
 /// Function identifiers whose invocation directly establishes `TextAndCells`.
+///
+/// Trust list: every name added here widens what the guard classifies as a
+/// full cell-level assertion without inspecting its body (in particular for
+/// `src/` or `tests/support/` helpers outside the `tests/` scanner boundary).
+/// Review additions with the same care as architecture-guard allowlists, and
+/// only list functions that unconditionally assert full cell attributes/colors.
 const DIRECT_CELL_CALLEES: &[&str] = &[
     "assert_pair_exact_display",
     "assert_pair_exact_display_with_path_pair",

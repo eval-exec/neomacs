@@ -1233,6 +1233,7 @@ impl DisplayFrameExt for Frame {
             })
             .flatten();
         self.clear_pending_gui_resize();
+        self.tty_device_size = None;
         self.width = width;
         self.height = height;
         if let (Some(mini), Some(height)) = (self.minibuffer_leaf.as_mut(), resized_mini_height) {
@@ -1275,6 +1276,10 @@ impl DisplayFrameExt for Frame {
             let minibuffer_lines = i64::from(self.minibuffer_leaf.is_some());
             let text_lines = (frame_lines - minibuffer_lines).max(1);
             self.set_parameter(Value::symbol("height"), Value::fixnum(frame_lines));
+            self.set_parameter(
+                Value::symbol("neovm--frame-total-cols"),
+                Value::fixnum(cols),
+            );
             self.set_parameter(
                 Value::symbol("neovm--frame-total-lines"),
                 Value::fixnum(total_terminal_lines),

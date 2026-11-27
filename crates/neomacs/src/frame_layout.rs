@@ -550,9 +550,13 @@ pub fn install_tty_redisplay_callback_with_popup_redraw(
         tty_init::query_terminal_size_cells_with(&terminal_size_query).unwrap_or_else(|| {
             TerminalCellSize::new(TerminalColumns::from(80_u32), TerminalRows::from(25_u32))
         });
-    let mut tty_rif = TtyRif::new_with_caps(
+    let mut last_pty_size = (
         u32::from(size.columns()) as usize,
         u32::from(size.rows()) as usize,
+    );
+    let mut tty_rif = TtyRif::new_with_caps(
+        last_pty_size.0,
+        last_pty_size.1,
         super::tty_init::detect_term_caps(),
     );
     // TTY frames use 1x1 character cell metrics (GNU Emacs
@@ -576,11 +580,15 @@ pub fn install_tty_redisplay_callback_with_popup_redraw(
         if !tty_init::is_primary_tty_active() {
             return;
         }
+        let mut pty_resized = false;
         if let Some(size) = tty_init::query_terminal_size_cells_with(&terminal_size_query) {
-            let cols = u32::from(size.columns()) as usize;
-            let rows = u32::from(size.rows()) as usize;
-            if tty_rif.width() != cols || tty_rif.height() != rows {
-                tty_rif.resize(cols, rows);
+            let pty_size = (
+                u32::from(size.columns()) as usize,
+                u32::from(size.rows()) as usize,
+            );
+            if pty_size != last_pty_size {
+                last_pty_size = pty_size;
+                pty_resized = true;
             }
         }
         if force_full_redraw
@@ -590,11 +598,26 @@ pub fn install_tty_redisplay_callback_with_popup_redraw(
             tty_rif.force_redraw();
         }
         if let Some((root, children)) = run_tty_layout_tree(eval) {
+            let root_id = FrameId(root.frame_placement.frame().get());
+            // Mirror GNU `FrameCols(tty)` / `FrameRows(tty)` (`src/frame.c:1053,1088`):
+            // non-`pretend` `set-frame-size`/`width`/`height` updates the TTY
+            // device grid independently of the kernel PTY size until a real
+            // physical terminal resize arrives.
+            let (target_cols, target_rows) = if pty_resized {
+                last_pty_size
+            } else {
+                eval.frame_manager()
+                    .get(root_id)
+                    .and_then(|frame| frame.tty_device_size)
+                    .map_or(last_pty_size, |dev| (dev.cols as usize, dev.rows as usize))
+            };
+            if tty_rif.width() != target_cols || tty_rif.height() != target_rows {
+                tty_rif.resize(target_cols, target_rows);
+            }
             // Consume only physically prepared frames, after layout and just
             // before repaint. Pending requests for unrendered devices remain
             // Context-owned; no new frontend Lisp cache or TLS is introduced.
-            let mut full_redraw =
-                eval.gnu_take_tty_frame_redraw(FrameId(root.frame_placement.frame().get()));
+            let mut full_redraw = eval.gnu_take_tty_frame_redraw(root_id);
             for child in &children {
                 full_redraw |=
                     eval.gnu_take_tty_frame_redraw(FrameId(child.frame_placement.frame().get()));

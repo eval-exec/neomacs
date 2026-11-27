@@ -5289,6 +5289,97 @@ fn set_frame_size_builtins_leave_top_level_tty_size_unchanged() {
 }
 
 #[test]
+fn set_frame_size_builtins_resize_live_top_level_tty_frame_and_honor_pretend() {
+    crate::test_utils::init_test_tracing();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
+    let buf = ev.edit.buffers.create_buffer("*scratch*");
+    let fid = ev.frame_manager_mut().create_frame("F1", 200, 30, buf);
+    {
+        let frame = ev
+            .frame_manager_mut()
+            .get_mut(fid)
+            .expect("frame should exist");
+        frame.char_width = 1.0;
+        frame.char_height = 1.0;
+        frame.displays_chrome = true;
+        frame.menu_bar_height = 1;
+        frame.set_parameter(Value::symbol("menu-bar-lines"), Value::fixnum(1));
+        frame.resize_pixelwise(200, 30);
+    }
+
+    // GNU `set-frame-size` (`pretend = false`, `src/frame.c:1051-1101`):
+    // updates both frame dimensions (`FRAME_COLS=180`, `FRAME_LINES=30`,
+    // `FRAME_TOTAL_LINES=31`) and TTY device size (`FrameCols=180`,
+    // `FrameRows=31`).
+    let out = ev.eval_str_each("(set-frame-size nil 180 30)");
+    assert!(out[0].is_ok(), "set-frame-size failed: {:?}", out[0]);
+    let frame = ev.frame_manager().get(fid).expect("frame should exist");
+    assert_eq!((frame.width, frame.height), (180, 31));
+    assert_eq!(
+        frame.tty_device_size,
+        Some(crate::window::TtyDeviceSize {
+            cols: 180,
+            rows: 31,
+        })
+    );
+    assert_eq!(frame.parameter("width"), Some(Value::fixnum(180)));
+    assert_eq!(frame.parameter("height"), Some(Value::fixnum(30)));
+    assert_eq!(
+        frame.parameter("neovm--frame-total-cols"),
+        Some(Value::fixnum(180))
+    );
+    assert_eq!(
+        frame.parameter("neovm--frame-total-lines"),
+        Some(Value::fixnum(31))
+    );
+    assert_eq!(
+        *frame.root_window().bounds(),
+        crate::window::Rect::new(0.0, 1.0, 180.0, 29.0)
+    );
+    assert_eq!(
+        *frame.minibuffer_leaf.as_ref().expect("minibuffer").bounds(),
+        crate::window::Rect::new(0.0, 30.0, 180.0, 1.0)
+    );
+
+    // GNU `set-frame-width` / `set-frame-height` with `pretend = t`:
+    // updates frame dimensions and windows, preserves `FrameCols`/`FrameRows`.
+    let out = ev.eval_str_each("(progn (set-frame-width nil 170 t) (set-frame-height nil 28 t))");
+    assert!(out[0].is_ok(), "pretend resize failed: {:?}", out[0]);
+    let frame = ev.frame_manager().get(fid).expect("frame should exist");
+    assert_eq!((frame.width, frame.height), (170, 29));
+    assert_eq!(
+        frame.tty_device_size,
+        Some(crate::window::TtyDeviceSize {
+            cols: 180,
+            rows: 31,
+        })
+    );
+
+    // Non-pretend `set-frame-width` updates only the changed axis on the TTY
+    // device, matching GNU `src/frame.c:1045-1089`.
+    let out = ev.eval_str_each("(set-frame-width nil 160 nil)");
+    assert!(out[0].is_ok(), "set-frame-width failed: {:?}", out[0]);
+    let frame = ev.frame_manager().get(fid).expect("frame should exist");
+    assert_eq!((frame.width, frame.height), (160, 29));
+    assert_eq!(
+        frame.tty_device_size,
+        Some(crate::window::TtyDeviceSize {
+            cols: 160,
+            rows: 31,
+        })
+    );
+
+    // Physical terminal resize clears the explicit TTY device override.
+    ev.frame_manager_mut()
+        .get_mut(fid)
+        .expect("frame should exist")
+        .resize_pixelwise(120, 40);
+    let frame = ev.frame_manager().get(fid).expect("frame should exist");
+    assert_eq!((frame.width, frame.height), (120, 40));
+    assert_eq!(frame.tty_device_size, None);
+}
+
+#[test]
 fn set_frame_size_builtins_resize_live_gui_frames_and_notify_host() {
     crate::test_utils::init_test_tracing();
     let mut ev = Context::new(crate::test_utils::unit_runtime());
