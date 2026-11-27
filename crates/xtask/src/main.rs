@@ -335,6 +335,9 @@ struct LeimGenerationRule {
 #[derive(Debug)]
 struct LeimGenerationJob {
     source: PathBuf,
+    /// Every file this rule rewrites.  A FAILED job's outputs are deleted so a
+    /// partial write cannot mtime-pass as fresh in an incremental run.
+    outputs: Vec<PathBuf>,
     args: Vec<OsString>,
 }
 
@@ -2365,7 +2368,11 @@ fn run_leim_generation(
             .iter()
             .map(|rel| paths.lisp_root.join(rel))
             .collect::<Vec<_>>();
-        if !generated_outputs_need_rebuild(&outputs, std::slice::from_ref(&source)) {
+        // The converter is a real prerequisite even though GNU's leim rules
+        // list only the dictionary: bootstrap-clean used to force these
+        // outputs, and an incremental build must still regenerate them when
+        // the conversion code changes.
+        if !generated_outputs_need_rebuild(&outputs, &[source.clone(), titdic_cnv.clone()]) {
             continue;
         }
 
@@ -2373,7 +2380,11 @@ fn run_leim_generation(
             ensure_output_parent(options, output)?;
         }
         let args = leim_generation_args(rule.kind, &quail_dir, &source, &outputs[0]);
-        generation_jobs.push(LeimGenerationJob { source, args });
+        generation_jobs.push(LeimGenerationJob {
+            source,
+            outputs,
+            args,
+        });
     }
 
     if !generation_jobs.is_empty() {
@@ -2440,7 +2451,14 @@ fn run_leim_generation_jobs(
                     envs,
                 )
                 .err()
-                .map(|err| format!("{} ({err})", job.source.display()))
+                .map(|err| {
+                    // Never leave a failed conversion's partial output with a
+                    // fresh mtime — an incremental retry would skip it.
+                    for output in &job.outputs {
+                        let _ = fs::remove_file(output);
+                    }
+                    format!("{} ({err})", job.source.display())
+                })
             })
             .collect()
     });
@@ -2474,6 +2492,9 @@ fn run_leim_list_generation(
     let output = leim_dir.join("leim-list.el");
     let mut dependencies = leim_generated_output_paths(paths);
     dependencies.push(leim_ext.clone());
+    // The updater that writes the list; bootstrap-clean used to force the
+    // regeneration, so an incremental build must track it explicitly.
+    dependencies.push(paths.lisp_root.join("international/quail.el"));
     if !generated_file_needs_rebuild(&output, &dependencies) {
         return Ok(());
     }
@@ -2487,7 +2508,12 @@ fn run_leim_list_generation(
     let args = leim_list_generation_args(&leim_dir);
     run_captured_step(options, &options.repo_root, &paths.bootstrap, &args, envs)?;
     if !options.dry_run {
-        append_leim_ext(&output, &leim_ext)?;
+        if let Err(err) = append_leim_ext(&output, &leim_ext) {
+            // The list exists without its extension contents.  Delete it so an
+            // incremental retry does not accept the partial file by mtime.
+            let _ = remove_file_if_exists(&output);
+            return Err(err);
+        }
     }
     Ok(())
 }
@@ -2613,7 +2639,15 @@ fn run_semantic_grammar_generation(
         ensure_output_parent(options, &target.output)?;
         make_output_writable(options, &target.output)?;
         let args = semantic_grammar_args(target.kind, &target.output, &target.source);
-        run_captured_step(options, &options.repo_root, &paths.bootstrap, &args, envs)?;
+        if let Err(err) =
+            run_captured_step(options, &options.repo_root, &paths.bootstrap, &args, envs)
+        {
+            // The generator writes the output before its post-processing step;
+            // a failure there must not leave a fresh-mtime output that an
+            // incremental run skips.
+            let _ = remove_file_if_exists(&target.output);
+            return Err(err);
+        }
         generated += 1;
     }
     Ok(())
@@ -3178,10 +3212,27 @@ fn remove_primary_loaddefs_for_regeneration(
     theme_loaddefs_el: &Path,
 ) -> Result<()> {
     if matches!(plan, BytecodePlan::Incremental(_)) {
-        // GNU's plain `autoloads` target: the generator scans and rewrites
-        // only the files whose content changed.  Keeping the existing sources
-        // is what makes that write-if-changed path reachable.
-        print_synthetic_step("incremental loaddefs scan (existing sources kept)");
+        // A partial update keeps the section of every source it does not
+        // find, so a deleted or renamed autoloaded library would keep
+        // autoloads pointing at the old filename.  Delete only the generated
+        // files that record such a source: the generator then takes its
+        // full-regeneration path for those directories.
+        let affected = loaddefs_files_with_missing_sources(paths)?;
+        if affected.is_empty() {
+            // GNU's plain `autoloads` target: the generator scans and
+            // rewrites only the files whose content changed.  Keeping the
+            // existing sources is what makes that path reachable.
+            print_synthetic_step("incremental loaddefs scan (existing sources kept)");
+            return Ok(());
+        }
+        print_synthetic_step("regenerate loaddefs after a recorded source was removed");
+        for file in &affected {
+            if options.dry_run {
+                println!("  would remove: {}", file.display());
+            } else {
+                let _ = remove_file_if_exists(file)?;
+            }
+        }
         return Ok(());
     }
     print_synthetic_step("force full primary loaddefs regeneration");
@@ -3829,6 +3880,45 @@ fn loaddefs_dirs(lisp_root: &Path) -> Result<Vec<PathBuf>> {
         lisp_root,
         |relative| !matches!(relative, rel if rel == Path::new("obsolete") || rel == Path::new("term")),
     )
+}
+
+/// Generated loaddefs files that still record autoloads for a source file
+/// that no longer exists.
+///
+/// GNU's partial update (`loaddefs-generate` with `updating` true) replaces
+/// only the sections of files it finds and keeps every other section, so a
+/// deleted or renamed autoloaded library leaves commands pointing at its old
+/// filename.  Deleting the generated file forces the generator's
+/// full-regeneration path for that directory.
+fn loaddefs_files_with_missing_sources(paths: &PipelinePaths) -> Result<Vec<PathBuf>> {
+    let mut candidates = loaddefs_dirs(&paths.lisp_root)?
+        .into_iter()
+        .map(|dir| dir.join("loaddefs.el"))
+        .collect::<Vec<_>>();
+    candidates.push(paths.lisp_root.join("theme-loaddefs.el"));
+
+    let mut affected = Vec::new();
+    for file in candidates {
+        let Ok(contents) = fs::read_to_string(&file) else {
+            continue;
+        };
+        let base = file.parent().unwrap_or(&paths.lisp_root);
+        if loaddefs_contents_reference_missing_source(&contents, base) {
+            affected.push(file);
+        }
+    }
+    Ok(affected)
+}
+
+fn loaddefs_contents_reference_missing_source(contents: &str, base: &Path) -> bool {
+    const HEADER: &str = ";;; Generated autoloads from ";
+    contents
+        .lines()
+        .filter_map(|line| line.strip_prefix(HEADER))
+        .any(|relative| {
+            let relative = relative.trim();
+            !relative.is_empty() && !base.join(relative).is_file()
+        })
 }
 
 fn lisp_dirs_for_custom_dependencies(lisp_root: &Path) -> Result<Vec<PathBuf>> {

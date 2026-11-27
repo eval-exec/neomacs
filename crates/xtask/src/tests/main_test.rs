@@ -1477,6 +1477,10 @@ fn check_reports_stale_leim_generation_and_its_bytecode() {
     write_fresh_elc(&lisp.join("loadup.el"));
     let source = root.join("leim/CXTERM-DIC/Punct.tit");
     fs::create_dir_all(source.parent().unwrap()).unwrap();
+    // Older than the output, so only the dictionary change is stale.
+    let converter = lisp.join("international/titdic-cnv.el");
+    fs::create_dir_all(converter.parent().unwrap()).unwrap();
+    fs::write(&converter, "").unwrap();
     let output = lisp.join("leim/quail/Punct.el");
     fs::create_dir_all(output.parent().unwrap()).unwrap();
     fs::write(&output, "(provide 'Punct)\n").unwrap();
@@ -1514,6 +1518,12 @@ fn check_reports_a_generated_output_missing_from_the_tree() {
 fn check_reports_leim_list_when_a_dictionary_changes() {
     let (root, lisp) = check_fixture("COMPILE_FIRST =\nMAIN_FIRST =\n");
     write_fresh_elc(&lisp.join("loadup.el"));
+    // Both prerequisites are present and older than the list below, so the
+    // mtime rule is genuinely false before the dictionary changes.
+    let converter = lisp.join("international/titdic-cnv.el");
+    fs::create_dir_all(converter.parent().unwrap()).unwrap();
+    fs::write(&converter, "").unwrap();
+    fs::write(lisp.join("international/quail.el"), "").unwrap();
     for rule in crate::LEIM_GENERATION_RULES {
         for rel in rule.output_rels {
             let output = lisp.join(rel);
@@ -1541,6 +1551,102 @@ fn check_reports_leim_list_when_a_dictionary_changes() {
             .contains(&lisp.join("leim/quail/Punct.el"))
     );
     assert!(report.generated.leim_list, "{report:?}");
+}
+
+#[test]
+fn check_leim_converter_is_a_prerequisite() {
+    let (root, lisp) = check_fixture("COMPILE_FIRST =\nMAIN_FIRST =\n");
+    write_fresh_elc(&lisp.join("loadup.el"));
+    let source = root.join("leim/CXTERM-DIC/Punct.tit");
+    fs::create_dir_all(source.parent().unwrap()).unwrap();
+    fs::write(&source, "tit\n").unwrap();
+    let output = lisp.join("leim/quail/Punct.el");
+    fs::create_dir_all(output.parent().unwrap()).unwrap();
+    fs::write(&output, "(provide 'Punct)\n").unwrap();
+    write_fresh_elc(&output);
+    let converter = lisp.join("international/titdic-cnv.el");
+    fs::create_dir_all(converter.parent().unwrap()).unwrap();
+    write_file_newer_than(&converter, "converter", &output);
+
+    let report = crate::rebuild_check::check(&check_options(&root)).unwrap();
+
+    assert_eq!(report.generated.leim, vec![output.clone()]);
+    assert!(
+        report.compile_main.files.contains(&output),
+        "the regenerated dictionary's bytecode is stale"
+    );
+}
+
+#[test]
+fn check_leim_list_updater_is_a_prerequisite() {
+    let (root, lisp) = check_fixture("COMPILE_FIRST =\nMAIN_FIRST =\n");
+    write_fresh_elc(&lisp.join("loadup.el"));
+    let converter = lisp.join("international/titdic-cnv.el");
+    fs::create_dir_all(converter.parent().unwrap()).unwrap();
+    fs::write(&converter, "").unwrap();
+    for rule in crate::LEIM_GENERATION_RULES {
+        for rel in rule.output_rels {
+            let output = lisp.join(rel);
+            fs::create_dir_all(output.parent().unwrap()).unwrap();
+            fs::write(&output, "").unwrap();
+        }
+    }
+    let ext = root.join("leim/leim-ext.el");
+    fs::create_dir_all(ext.parent().unwrap()).unwrap();
+    fs::write(&ext, "").unwrap();
+    let list = lisp.join("leim/leim-list.el");
+    write_file_newer_than(&list, "list", &ext);
+    let quail = lisp.join("international/quail.el");
+    write_file_newer_than(&quail, "quail", &list);
+
+    let report = crate::rebuild_check::check(&check_options(&root)).unwrap();
+
+    assert!(report.generated.leim.is_empty());
+    assert!(
+        report.generated.leim_list,
+        "a newer list updater must mark the list stale"
+    );
+}
+
+#[test]
+fn loaddefs_contents_find_a_removed_source() {
+    let tempdir = tempdir();
+    fs::write(tempdir.join("present.el"), "").unwrap();
+    assert!(!loaddefs_contents_reference_missing_source(
+        ";;; Generated autoloads from present.el\n",
+        &tempdir
+    ));
+    assert!(loaddefs_contents_reference_missing_source(
+        ";;; Generated autoloads from gone.el\n",
+        &tempdir
+    ));
+    assert!(!loaddefs_contents_reference_missing_source(
+        ";;; unrelated\n",
+        &tempdir
+    ));
+}
+
+#[test]
+fn loaddefs_files_with_missing_sources_find_the_generated_file() {
+    let (root, lisp) = check_fixture("COMPILE_FIRST =\nMAIN_FIRST =\n");
+    write_fresh_elc(&lisp.join("loadup.el"));
+    let pkg = lisp.join("pkg");
+    fs::create_dir_all(&pkg).unwrap();
+    fs::write(pkg.join("gone.el"), "").unwrap();
+    let loaddefs = pkg.join("loaddefs.el");
+    fs::write(&loaddefs, ";;; Generated autoloads from gone.el\n").unwrap();
+
+    let options = check_options(&root);
+    let paths = pipeline_paths(&options);
+    assert!(
+        loaddefs_files_with_missing_sources(&paths)
+            .unwrap()
+            .is_empty()
+    );
+
+    fs::remove_file(pkg.join("gone.el")).unwrap();
+    let affected = loaddefs_files_with_missing_sources(&paths).unwrap();
+    assert!(affected.contains(&loaddefs), "{affected:?}");
 }
 
 #[test]

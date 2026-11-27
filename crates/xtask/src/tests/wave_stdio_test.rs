@@ -170,6 +170,7 @@ fn generated_leim_and_preloaded_waves_do_not_deadlock_on_undrained_pty() {
     let leim_jobs: Vec<LeimGenerationJob> = (0..6)
         .map(|i| LeimGenerationJob {
             source: dir.path().join(format!("dic-{i}.tit")),
+            outputs: Vec::new(),
             args: vec![OsString::from(format!("--leim-{i}"))],
         })
         .collect();
