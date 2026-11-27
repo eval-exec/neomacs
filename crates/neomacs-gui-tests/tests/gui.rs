@@ -83,6 +83,9 @@ mod font_xwayland_parity;
 #[path = "cursor_geometry_telemetry.rs"]
 mod cursor_geometry_telemetry;
 
+#[path = "cursor_row_walk_gui_oracle.rs"]
+mod cursor_row_walk_gui_oracle;
+
 // Only the Linux desktop-font suites (which pin a Linux font package) use
 // this helper; compiling it on other hosts is dead code.
 #[cfg(target_os = "linux")]
