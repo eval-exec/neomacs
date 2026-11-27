@@ -1407,6 +1407,8 @@ impl CodingSystemManager {
             // UTF-8 locales, exactly as GNU's does.
             keyboard_coding: intern("no-conversion"),
             terminal_coding: intern("undecided"),
+            // `new()` pre-populates `chinese-big5` below and has no pre-populated
+            // `shift-jis` coding system (loadup registers `japanese-shift-jis*`).
             sjis_coding: None,
             big5_coding: Some(intern("chinese-big5")),
             lookup_cache: Default::default(),
@@ -2135,11 +2137,11 @@ impl CodingSystemManager {
             }
             system_map.insert(id, info);
         }
-        // `Vsjis_coding_system` / `Vbig5_coding_system`: GNU restores these from the dump, so reconstruct
-        // them here. The preference list names the answer GNU's loadup leaves for the shipped dump
-        // (`language/japanese.el` defines japanese-shift-jis then japanese-shift-jis-2004;
-        // `language/chinese.el` defines the only `:coding-type 'big5` system, chinese-big5). The
-        // alphabetical fallback is a stable guess for a custom dump and cannot recover "last defined".
+        // `systems` arrives as an unordered map, so pdump reload cannot recover
+        // GNU's "last defined" order. The preference list names the standard
+        // loadup answers (`japanese-shift-jis-2004`, `chinese-big5`), and the
+        // alphabetical fallback is a stable deterministic guess that can differ
+        // from GNU for a custom dump defining another system of the same type.
         let find_active = |preferred: &[&str], coding_type: &str| -> Option<SymId> {
             for &name in preferred {
                 if let Some(id) = lookup_interned(name)

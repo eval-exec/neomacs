@@ -3904,6 +3904,9 @@ fn decode_sjis_char_with_spec(code: i64, ascii_compat: bool, charsets: &[SymId])
     if code <= 0x7F && ascii_compat {
         return Ok(Value::fixnum(code));
     }
+    // Deliberate safety guard: GNU `decode-sjis-char` (`src/coding.c`) assumes
+    // the shift-jis coding system's charset list has 3 elements and would
+    // dereference `XCAR(nil)` on a malformed list; Neomacs signals a Lisp error.
     if charsets.len() < 3 {
         return Err(signal(
             "error",
@@ -3945,6 +3948,12 @@ fn encode_sjis_char_with_spec(ch: i64, ascii_compat: bool, charsets: &[SymId]) -
             return Ok(Value::fixnum(jis_to_sjis_code(code)));
         }
     }
+    // Deliberate safety divergence from GNU Emacs 31.1 (`a360712c9d27`): for an
+    // unencodable char, GNU's `char_charset` returns NULL on an explicit charset
+    // list (`src/charset.c:1968-1997`) and `CHARSET_INVALID_CODE(NULL)` segfaults
+    // (rc=139, attested) before reaching `error(...)`. Neomacs signals a Lisp
+    // error instead; the message text is Neomacs's own (pinned by unit tests as a
+    // safety invariant, not a GNU parity expectation).
     Err(signal(
         "error",
         vec![Value::string(format!(
@@ -3958,6 +3967,9 @@ fn decode_big5_char_with_spec(code: i64, ascii_compat: bool, charsets: &[SymId])
     if code <= 0x7F && ascii_compat {
         return Ok(Value::fixnum(code));
     }
+    // Deliberate safety guard: GNU `decode-big5-char` (`src/coding.c`) assumes
+    // the big5 coding system's charset list has 2 elements and would dereference
+    // `XCAR(nil)` on a malformed list; Neomacs signals a Lisp error.
     if charsets.len() < 2 {
         return Err(signal(
             "error",
@@ -3996,6 +4008,12 @@ fn encode_big5_char_with_spec(ch: i64, ascii_compat: bool, charsets: &[SymId]) -
             return Ok(Value::fixnum(code));
         }
     }
+    // Deliberate safety divergence from GNU Emacs 31.1 (`a360712c9d27`): for an
+    // unencodable char, GNU's `char_charset` returns NULL on an explicit charset
+    // list (`src/charset.c:1968-1997`) and `CHARSET_INVALID_CODE(NULL)` segfaults
+    // (rc=139, attested) before reaching `error(...)`. Neomacs signals a Lisp
+    // error instead; the message text is Neomacs's own (pinned by unit tests as a
+    // safety invariant, not a GNU parity expectation).
     Err(signal(
         "error",
         vec![Value::string(format!(
