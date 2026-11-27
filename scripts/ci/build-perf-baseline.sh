@@ -178,7 +178,11 @@ for k in sorted_keys:
     print(f"  {k}={build_env[k]}", flush=True)
 print("=== END BUILD ENVIRONMENT ===", flush=True)
 
-fresh_cmd = ["cargo", "xtask", "fresh-build", "--release", "--bootstrap-clean"]
+# The build runs in a fresh --shared clone under work_tmp, so it has no
+# .elc or generated Lisp to clear; the default incremental build is
+# equivalent here. Do not pass --bootstrap-clean: refs that predate
+# that option (the default baseline ref among them) would reject it.
+fresh_cmd = ["cargo", "xtask", "fresh-build", "--release"]
 if jobs:
     fresh_cmd.extend(["--jobs", jobs])
 
