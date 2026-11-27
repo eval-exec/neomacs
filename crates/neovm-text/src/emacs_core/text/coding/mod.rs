@@ -910,6 +910,14 @@ const ISO2022_KEY_SAFE_CHARSETS: i64 = i64::MIN + 13;
 /// happens to be named `iso-2022` stores nil. Missing on an old dump falls
 /// back to the symbol-name test.
 const ISO2022_KEY_FULL: i64 = i64::MIN + 14;
+/// Reserved `int_properties` keys storing GNU's typed `coding_attr_decode_tbl`
+/// and `coding_attr_encode_tbl` (`src/coding.c:11075,11080,11552,11558`),
+/// independent of the mutable plist.
+const DECODE_TRANSLATION_TABLE_KEY: i64 = i64::MIN + 15;
+const ENCODE_TRANSLATION_TABLE_KEY: i64 = i64::MIN + 16;
+/// Reserved `int_properties` key storing GNU's `coding_attr_utf_16_endian`
+/// (`src/coding.c:11241`: `'big` or `'little`) for custom `:coding-type 'utf-16`.
+const UTF16_ENDIAN_KEY: i64 = i64::MIN + 17;
 
 fn definition_property(info: &CodingSystemInfo, key: SymId) -> Option<Value> {
     let mut plist = *info.int_properties.get(&PLIST_VERBATIM_KEY)?;
@@ -2079,6 +2087,85 @@ impl CodingSystemManager {
     #[doc(hidden)]
     pub fn dump_keyboard_coding_sym(&self) -> SymId {
         self.keyboard_coding
+    }
+
+    /// Return GNU's `CODING_ATTR_ENCODE_TBL` / `CODING_ATTR_DECODE_TBL` for a
+    /// coding system (resolving aliases and EOL subsidiaries to their shared
+    /// attribute bucket).
+    pub(crate) fn translation_table_attr(&self, coding_name: &str, encode: bool) -> Value {
+        let Some(resolved) = resolve_runtime_name(self, coding_name) else {
+            return Value::NIL;
+        };
+        let Some(info) = runtime_bucket_name(self, &resolved)
+            .and_then(|bucket| self.get(&bucket))
+            .or_else(|| self.get(&resolved))
+            .or_else(|| self.get(strip_eol_suffix(&resolved)))
+        else {
+            return Value::NIL;
+        };
+        let int_key = if encode {
+            ENCODE_TRANSLATION_TABLE_KEY
+        } else {
+            DECODE_TRANSLATION_TABLE_KEY
+        };
+        if let Some(&val) = info.int_properties.get(&int_key) {
+            return val;
+        }
+        let prop_key = intern(if encode {
+            ":encode-translation-table"
+        } else {
+            ":decode-translation-table"
+        });
+        info.properties
+            .get(&prop_key)
+            .copied()
+            .unwrap_or(Value::NIL)
+    }
+
+    /// Return the `:coding-type` symbol name for a coding system (resolving
+    /// aliases and EOL subsidiaries).
+    pub(crate) fn coding_type_name(&self, coding_name: &str) -> Option<&'static str> {
+        let resolved = resolve_runtime_name(self, coding_name)?;
+        let info = runtime_bucket_name(self, &resolved)
+            .and_then(|bucket| self.get(&bucket))
+            .or_else(|| self.get(&resolved))
+            .or_else(|| self.get(strip_eol_suffix(&resolved)))?;
+        Some(resolve_sym(info.coding_type))
+    }
+
+    /// Return `(little_endian, has_declared_bom, detect_bom)` for a custom
+    /// `:coding-type 'utf-16` coding system (`src/coding.c:11224-11241`).
+    pub(crate) fn utf16_spec(
+        &self,
+        coding_name: &str,
+        mode: SymbolMode,
+    ) -> Option<(bool, bool, bool)> {
+        let resolved = resolve_runtime_name(self, coding_name)?;
+        let info = runtime_bucket_name(self, &resolved)
+            .and_then(|bucket| self.get(&bucket))
+            .or_else(|| self.get(&resolved))
+            .or_else(|| self.get(strip_eol_suffix(&resolved)))?;
+        if resolve_sym(info.coding_type) != "utf-16" {
+            return None;
+        }
+        let endian_val = info
+            .int_properties
+            .get(&UTF16_ENDIAN_KEY)
+            .copied()
+            .or_else(|| definition_property(info, intern(":endian")))
+            .or_else(|| info.properties.get(&intern(":endian")).copied())
+            .unwrap_or(Value::NIL);
+        let little = endian_val.as_symbol_name(mode) == Some("little");
+        let bom_val = info
+            .int_properties
+            .get(&UTF_BOM_KEY_FIRST)
+            .copied()
+            .or_else(|| definition_property(info, intern(":bom")))
+            .or_else(|| info.properties.get(&intern(":bom")).copied())
+            .unwrap_or(Value::NIL);
+        let detect_bom = bom_val.is_cons();
+        let has_bom = !bom_val.is_nil() && !detect_bom;
+        Some((little, has_bom, detect_bom))
     }
     #[doc(hidden)]
     pub fn dump_terminal_coding_sym(&self) -> SymId {
@@ -3363,6 +3450,13 @@ pub fn builtin_coding_system_put(
         if matches!(prop_name, ":ascii-compatible-p" | "ascii-compatible-p") {
             info.ascii_compatible_p = stored_val.is_truthy();
         }
+        if prop_name == ":decode-translation-table" {
+            info.int_properties
+                .insert(DECODE_TRANSLATION_TABLE_KEY, stored_val);
+        } else if prop_name == ":encode-translation-table" {
+            info.int_properties
+                .insert(ENCODE_TRANSLATION_TABLE_KEY, stored_val);
+        }
         info.properties.insert(prop_id, stored_val);
         record_put_override(info, args[1], stored_val, mode);
         return Ok(stored_val);
@@ -4029,6 +4123,368 @@ impl CodingRepertoire {
     }
 }
 
+/// Resolved GNU `get_translation_table` chain (`src/coding.c:6862-6926`).
+pub(crate) struct ResolvedTranslationTables {
+    tables: Vec<Value>,
+    max_lookup: usize,
+}
+
+enum TranslationMatch {
+    Single(u32, usize),
+    Multiple(Vec<u32>, usize),
+    Incomplete,
+    NoMatch,
+}
+
+impl ResolvedTranslationTables {
+    pub(crate) fn empty() -> Self {
+        Self {
+            tables: Vec::new(),
+            max_lookup: 0,
+        }
+    }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.tables.is_empty()
+    }
+
+    /// Mirror GNU `get_translation_table(attrs, encodep, &max_lookup)`
+    /// (`src/coding.c:6862-6926`).
+    pub(crate) fn resolve<H: TextHost>(ctx: &H, coding_name: &str, encode: bool) -> Self {
+        if ctx
+            .visible_variable_value_or_nil(intern("enable-character-translation"))
+            .is_nil()
+        {
+            return Self::empty();
+        }
+        let mode = ctx.symbol_mode();
+        let coding_tbl = ctx
+            .coding_systems()
+            .translation_table_attr(coding_name, encode);
+        let std_var = if encode {
+            "standard-translation-table-for-encode"
+        } else {
+            "standard-translation-table-for-decode"
+        };
+        let standard = ctx.visible_variable_value_or_nil(intern(std_var));
+
+        fn push_table_or_list(val: Value, out: &mut Vec<Value>) {
+            if val.is_char_table() {
+                out.push(val);
+            } else if val.is_cons() {
+                let mut tail = val;
+                while tail.is_cons() {
+                    let elem = tail.cons_car();
+                    if elem.is_char_table() {
+                        out.push(elem);
+                    }
+                    tail = tail.cons_cdr();
+                }
+            }
+        }
+
+        let mut tables = Vec::new();
+        if coding_tbl.is_nil() {
+            push_table_or_list(standard, &mut tables);
+        } else {
+            let tt_prop = intern("translation-table");
+            if coding_tbl.is_char_table() {
+                tables.push(coding_tbl);
+            } else if let Some(sym) = coding_tbl.as_symbol_id(mode) {
+                let prop = ctx
+                    .variables()
+                    .obarray()
+                    .get_property_id(sym, tt_prop)
+                    .unwrap_or(Value::NIL);
+                push_table_or_list(prop, &mut tables);
+            } else if coding_tbl.is_cons() {
+                let vars = ctx.variables();
+                let obarray = vars.obarray();
+                let mut tail = coding_tbl;
+                while tail.is_cons() {
+                    let elem = tail.cons_car();
+                    if elem.is_char_table() {
+                        tables.push(elem);
+                    } else if let Some(sym) = elem.as_symbol_id(mode)
+                        && let Some(prop) = obarray.get_property_id(sym, tt_prop)
+                        && prop.is_char_table()
+                    {
+                        tables.push(prop);
+                    }
+                    tail = tail.cons_cdr();
+                }
+            }
+            if standard.is_char_table() {
+                tables.push(standard);
+            }
+        }
+
+        if tables.is_empty() {
+            return Self::empty();
+        }
+
+        // GNU `src/coding.c:6901-6924` reads `extras[1]` (the max sequence
+        // length `make-translation-table-from-alist` records), capped by
+        // `MAX_LOOKUP_MAX`.
+        const MAX_LOOKUP_CAP: usize = 1024;
+        let mut max_lookup = 1usize;
+        for &tbl in &tables {
+            if let Some(obj) = tbl.as_char_table_obj()
+                && obj.extras.len() > 1
+                && let Some(n) = obj.extras[1].as_fixnum()
+                && n > 0
+            {
+                max_lookup = max_lookup.max((n as usize).min(MAX_LOOKUP_CAP));
+            }
+        }
+
+        Self { tables, max_lookup }
+    }
+
+    /// GNU `translate_char(table, c)` (`src/character.c:151-167`), used by
+    /// `char_encodable_p`, `unencodable-char-position`,
+    /// `check-coding-systems-region`, and `find-coding-systems-region-internal`.
+    /// Only single-character (`CHARACTERP`) entries replace `c`; vectors and
+    /// multi-char alists leave `c` unchanged.
+    pub(crate) fn translate_char(&self, mut c: u32, mode: SymbolMode) -> u32 {
+        for &tbl in &self.tables {
+            if let Ok((val, _, _)) =
+                super::chartable::char_table_ref_and_range_with_symbols(&tbl, i64::from(c), mode)
+                && let Some(n) = val
+                    .as_fixnum()
+                    .filter(|&n| (0..=neovm_value::emacs_char::MAX_CHAR as i64).contains(&n))
+            {
+                c = n as u32;
+            }
+        }
+        c
+    }
+
+    /// GNU `LOOKUP_TRANSLATION_TABLE(table, c, trans)` (`src/coding.c:6928-6951`).
+    fn lookup_step(&self, mut c: u32, mode: SymbolMode) -> (u32, Value) {
+        for &tbl in &self.tables {
+            if let Ok((val, _, _)) =
+                super::chartable::char_table_ref_and_range_with_symbols(&tbl, i64::from(c), mode)
+            {
+                if let Some(n) = val
+                    .as_fixnum()
+                    .filter(|&n| (0..=neovm_value::emacs_char::MAX_CHAR as i64).contains(&n))
+                {
+                    c = n as u32;
+                } else if !val.is_nil() {
+                    return (c, val);
+                }
+            }
+        }
+        (c, Value::NIL)
+    }
+
+    /// GNU `get_translation(trans, buf, buf_end, &nchars)` (`src/coding.c:6962-6991`).
+    fn match_translation(trans: Value, first: u32, rest: &[u32]) -> TranslationMatch {
+        if let Some(n) = trans
+            .as_fixnum()
+            .filter(|&n| (0..=neovm_value::emacs_char::MAX_CHAR as i64).contains(&n))
+        {
+            return TranslationMatch::Single(n as u32, 1);
+        }
+        if let Some(vec) = trans.as_vector_data() {
+            let chars: Vec<u32> = vec
+                .iter()
+                .filter_map(|v| v.as_fixnum().map(|n| n as u32))
+                .collect();
+            return TranslationMatch::Multiple(chars, 1);
+        }
+        let mut tail = trans;
+        while tail.is_cons() {
+            let pair = tail.cons_car();
+            tail = tail.cons_cdr();
+            if !pair.is_cons() {
+                continue;
+            }
+            let from = pair.cons_car();
+            let to = pair.cons_cdr();
+            let Some(from_vec) = from.as_vector_data() else {
+                continue;
+            };
+            let len = from_vec.len();
+            if len == 0 {
+                continue;
+            }
+            let mut matched = true;
+            for (i, elem) in from_vec.iter().enumerate() {
+                let candidate = if i == 0 {
+                    first
+                } else if let Some(&ch) = rest.get(i - 1) {
+                    ch
+                } else {
+                    return TranslationMatch::Incomplete;
+                };
+                if elem.as_fixnum().map(|n| n as u32) != Some(candidate) {
+                    matched = false;
+                    break;
+                }
+            }
+            if matched {
+                if let Some(n) = to.as_fixnum() {
+                    return TranslationMatch::Single(n as u32, len);
+                }
+                if let Some(to_vec) = to.as_vector_data() {
+                    let chars: Vec<u32> = to_vec
+                        .iter()
+                        .filter_map(|v| v.as_fixnum().map(|n| n as u32))
+                        .collect();
+                    return TranslationMatch::Multiple(chars, len);
+                }
+                return TranslationMatch::NoMatch;
+            }
+        }
+        TranslationMatch::NoMatch
+    }
+
+    /// Translate decoded Emacs multibyte bytes (`produce_chars`,
+    /// `src/coding.c:7017-7075`, with `last_block = true`).
+    pub(crate) fn translate_for_decode(&self, emacs_bytes: &[u8], mode: SymbolMode) -> Vec<u8> {
+        if self.is_empty() || emacs_bytes.is_empty() {
+            return emacs_bytes.to_vec();
+        }
+        let mut chars = Vec::with_capacity(emacs_bytes.len());
+        let mut byte = 0usize;
+        while byte < emacs_bytes.len() {
+            let (ch, len) = neovm_value::emacs_char::string_char(&emacs_bytes[byte..]);
+            chars.push(ch.code());
+            byte += len;
+        }
+        let mut out = Vec::with_capacity(emacs_bytes.len());
+        let mut buf = [0u8; neovm_value::emacs_char::MAX_MULTIBYTE_LENGTH];
+        let mut push_char = |code: u32, out: &mut Vec<u8>| {
+            let n = neovm_value::emacs_char::char_string(code, &mut buf);
+            out.extend_from_slice(&buf[..n]);
+        };
+        let mut idx = 0usize;
+        while idx < chars.len() {
+            let (c, trans) = self.lookup_step(chars[idx], mode);
+            if trans.is_nil() {
+                push_char(c, &mut out);
+                idx += 1;
+            } else {
+                match Self::match_translation(trans, c, &chars[idx + 1..]) {
+                    TranslationMatch::Single(tc, from_n) => {
+                        push_char(tc, &mut out);
+                        idx += from_n;
+                    }
+                    TranslationMatch::Multiple(tcs, from_n) => {
+                        for tc in tcs {
+                            push_char(tc, &mut out);
+                        }
+                        idx += from_n;
+                    }
+                    TranslationMatch::Incomplete | TranslationMatch::NoMatch => {
+                        // GNU `produce_chars` (`src/coding.c:7028-7040`): on
+                        // `last_block`, an unmatched or incomplete sequence
+                        // falls through and emits `c`.
+                        push_char(c, &mut out);
+                        idx += 1;
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    /// Translate source text for encoding while applying GNU `consume_chars`
+    /// EOL expansion (`src/coding.c:7665-7728`).
+    ///
+    /// Note GNU's exact EOL-vs-translation interaction:
+    /// - DOS (`Qdos`): when `c == '\n'`, GNU emits an UNTRANSLATED `'\r'` and
+    ///   then passes `'\n'` through `LOOKUP_TRANSLATION_TABLE`.
+    /// - Mac (`Qmac`): when `c == '\n'`, GNU replaces `c = '\r'` and then
+    ///   passes `'\r'` through `LOOKUP_TRANSLATION_TABLE`.
+    /// - Unmatched/incomplete multi-char alist entry: GNU `consume_chars`
+    ///   (`src/coding.c:7720-7721`) breaks out of the loop after already
+    ///   advancing `src`/`pos`, dropping that prefix character.
+    pub(crate) fn translate_for_encode(
+        &self,
+        source: &LispString,
+        eol: ResolvedEol,
+        mode: SymbolMode,
+    ) -> LispString {
+        let bytes = source.as_bytes();
+        let multibyte = source.is_multibyte();
+        let mut chars = Vec::with_capacity(bytes.len());
+        let mut pos = 0usize;
+        while pos < bytes.len() {
+            let rest = &bytes[pos..];
+            if multibyte || neovm_value::emacs_char::multibyte_length(rest, true).is_some() {
+                let (c, len) = neovm_value::emacs_char::string_char(rest);
+                chars.push(c.code());
+                pos += len;
+            } else {
+                let b = bytes[pos];
+                let code = if b < 0x80 {
+                    u32::from(b)
+                } else {
+                    neovm_value::emacs_char::unibyte_to_char(b)
+                };
+                chars.push(code);
+                pos += 1;
+            }
+        }
+
+        let mut out = Vec::with_capacity(bytes.len());
+        let mut buf = [0u8; neovm_value::emacs_char::MAX_MULTIBYTE_LENGTH];
+        let mut push_char = |code: u32, out: &mut Vec<u8>| {
+            let n = neovm_value::emacs_char::char_string(code, &mut buf);
+            out.extend_from_slice(&buf[..n]);
+        };
+        let mut idx = 0usize;
+        while idx < chars.len() {
+            let mut c = chars[idx];
+            if c == u32::from(b'\n') {
+                match eol {
+                    ResolvedEol::Dos => {
+                        push_char(u32::from(b'\r'), &mut out);
+                    }
+                    ResolvedEol::Mac => {
+                        c = u32::from(b'\r');
+                    }
+                    ResolvedEol::Unix => {}
+                }
+            }
+            let (c, trans) = self.lookup_step(c, mode);
+            if trans.is_nil() {
+                push_char(c, &mut out);
+                idx += 1;
+            } else {
+                let lookahead_end = (idx + self.max_lookup).min(chars.len());
+                let lookahead = if idx + 1 < lookahead_end {
+                    &chars[idx + 1..lookahead_end]
+                } else {
+                    &[]
+                };
+                match Self::match_translation(trans, c, lookahead) {
+                    TranslationMatch::Single(tc, from_n) => {
+                        push_char(tc, &mut out);
+                        idx += from_n;
+                    }
+                    TranslationMatch::Multiple(tcs, from_n) => {
+                        for tc in tcs {
+                            push_char(tc, &mut out);
+                        }
+                        idx += from_n;
+                    }
+                    TranslationMatch::Incomplete | TranslationMatch::NoMatch => {
+                        // GNU `consume_chars` (`src/coding.c:7720-7721`) breaks
+                        // out after `src`/`pos` have already advanced past `c`,
+                        // so `c` is consumed without being emitted.
+                        idx += 1;
+                    }
+                }
+            }
+        }
+        LispString::from_emacs_bytes(out)
+    }
+}
+
 /// Scan the multibyte Emacs bytes of `text` (a region/string already known to be
 /// multibyte) and collect the 1-based positions (offset by `base_pos`) of every
 /// character that `charset_list` cannot encode, mirroring GNU's per-character
@@ -4038,6 +4494,8 @@ impl CodingRepertoire {
 fn scan_unencodable_positions(
     text: &[u8],
     repertoire: &CodingRepertoire,
+    translation: &ResolvedTranslationTables,
+    mode: SymbolMode,
     base_pos: i64,
     limit: usize,
 ) -> Vec<i64> {
@@ -4048,7 +4506,17 @@ fn scan_unencodable_positions(
         let (ch, len) = neovm_value::emacs_char::string_char(&text[byte..]);
         byte += len;
         let is_ascii = ch.code() < 0x80;
-        if !(repertoire.encodes(ch) || is_ascii && repertoire.ascii_compatible) {
+        let encodable = if is_ascii && repertoire.ascii_compatible {
+            true
+        } else {
+            let translated = if translation.is_empty() {
+                ch
+            } else {
+                EmacsChar::from_code(translation.translate_char(ch.code(), mode)).unwrap_or(ch)
+            };
+            repertoire.encodes(translated)
+        };
+        if !encodable {
             positions.push(base_pos + char_index);
             if positions.len() >= limit {
                 break;
@@ -4138,8 +4606,15 @@ pub fn builtin_check_coding_systems_region<H: TextHost>(
         else {
             continue;
         };
-        let positions =
-            scan_unencodable_positions(text.as_bytes(), &repertoire, base_pos, usize::MAX);
+        let translation = ResolvedTranslationTables::resolve(eval, name, true);
+        let positions = scan_unencodable_positions(
+            text.as_bytes(),
+            &repertoire,
+            &translation,
+            eval.symbol_mode(),
+            base_pos,
+            usize::MAX,
+        );
         if !positions.is_empty() {
             let mut entry = vec![coding_system];
             entry.extend(positions.into_iter().map(Value::fixnum));
@@ -4252,7 +4727,15 @@ pub fn builtin_unencodable_char_position<H: TextHost>(
         (string.as_bytes().to_vec(), start)
     };
 
-    let positions = scan_unencodable_positions(&text, &repertoire, base_pos, limit);
+    let translation = ResolvedTranslationTables::resolve(eval, &coding_name, true);
+    let positions = scan_unencodable_positions(
+        &text,
+        &repertoire,
+        &translation,
+        eval.symbol_mode(),
+        base_pos,
+        limit,
+    );
 
     if return_list {
         Ok(Value::list(
@@ -4536,10 +5019,27 @@ pub fn builtin_define_coding_system_internal_with_quoting_style(
     info.default_char = default_char;
     info.for_unibyte = for_unibyte;
     info.properties = properties;
+    info.int_properties
+        .insert(DECODE_TRANSLATION_TABLE_KEY, args[5]);
+    info.int_properties
+        .insert(ENCODE_TRANSLATION_TABLE_KEY, args[6]);
 
     if matches!(resolve_sym(coding_type), "utf-8" | "utf-16") {
         let bom = mode.unwrap(args.get(13).copied().unwrap_or(Value::NIL));
         info.int_properties.insert(UTF_BOM_KEY_FIRST, bom);
+    }
+
+    if resolve_sym(coding_type) == "utf-16" {
+        // GNU `src/coding.c:11219,11235-11241`: UTF-16 is never ASCII-compatible,
+        // and `endian` defaults nil -> 'big.
+        info.ascii_compatible_p = false;
+        let endian = mode.unwrap(args.get(14).copied().unwrap_or(Value::NIL));
+        let stored_endian = if endian.is_nil() {
+            Value::symbol("big")
+        } else {
+            endian
+        };
+        info.int_properties.insert(UTF16_ENDIAN_KEY, stored_endian);
     }
 
     if resolve_sym(coding_type) == "undecided" {
@@ -7212,13 +7712,13 @@ fn raw_coding_candidates(
 
 /// Safely represent the original Emacs characters, without a Unicode display
 /// projection. LispString owns both the bytes and their multibyte interpretation.
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
-fn safe_coding_systems_for_text(
+fn safe_coding_systems_for_text_with_translator(
     mgr: &CodingSystemManager,
     coding_system_list: Option<Value>,
     text: &LispString,
     exclude: Option<Value>,
     mode: SymbolMode,
+    mut translate_for_coding: impl FnMut(&str) -> ResolvedTranslationTables,
 ) -> Result<Value, Flow> {
     if !text.is_multibyte() || text.schars() == text.sbytes() {
         return Ok(Value::T);
@@ -7244,13 +7744,42 @@ fn safe_coding_systems_for_text(
         let Some(repertoire) = CodingRepertoire::for_coding_system(mgr, coding, mode) else {
             continue;
         };
-        if chars.iter().all(|&ch| repertoire.encodes(ch)) {
+        let translation = translate_for_coding(coding);
+        let encodable = if translation.is_empty() {
+            chars.iter().all(|&ch| repertoire.encodes(ch))
+        } else {
+            chars.iter().all(|&ch| {
+                let translated =
+                    EmacsChar::from_code(translation.translate_char(ch.code(), mode)).unwrap_or(ch);
+                repertoire.encodes(translated)
+            })
+        };
+        if encodable {
             safe_codings.push(Value::from_sym_id(sym));
         }
     }
     safe_codings.push(Value::symbol("raw-text"));
     safe_codings.push(Value::symbol("no-conversion"));
     Ok(Value::list(safe_codings))
+}
+
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+fn safe_coding_systems_for_text(
+    mgr: &CodingSystemManager,
+    coding_system_list: Option<Value>,
+    text: &LispString,
+    exclude: Option<Value>,
+    mode: SymbolMode,
+) -> Result<Value, Flow> {
+    safe_coding_systems_for_text_with_translator(
+        mgr,
+        coding_system_list,
+        text,
+        exclude,
+        mode,
+        |_| ResolvedTranslationTables::empty(),
+    )
 }
 
 fn marker_or_integer_position(value: &Value) -> Result<i64, Flow> {
@@ -7276,12 +7805,13 @@ pub fn builtin_find_coding_systems_region_internal<H: TextHost>(
 
     let coding_system_list = eval.visible_variable_value_or_nil(intern("coding-system-list"));
     if let Some(text) = args[0].as_lisp_string() {
-        return safe_coding_systems_for_text(
+        return safe_coding_systems_for_text_with_translator(
             eval.coding_systems(),
             Some(coding_system_list),
             text,
             args.get(2).copied(),
             eval.symbol_mode(),
+            |coding| ResolvedTranslationTables::resolve(eval, coding, true),
         );
     }
 
@@ -7292,26 +7822,28 @@ pub fn builtin_find_coding_systems_region_internal<H: TextHost>(
         .buffers()
         .current_buffer()
         .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
-    safe_coding_systems_for_region(
+    safe_coding_systems_for_region_with_translator(
         eval.coding_systems(),
         Some(coding_system_list),
         buffer,
         (start, end),
         &args,
         eval.symbol_mode(),
+        |coding| ResolvedTranslationTables::resolve(eval, coding, true),
     )
 }
 
 /// The buffer branch of `find-coding-systems-region-internal`: START and END
 /// are the resolved positions of `args[0]` and `args[1]`, which also form the
 /// `args-out-of-range` data.
-fn safe_coding_systems_for_region(
+fn safe_coding_systems_for_region_with_translator(
     mgr: &CodingSystemManager,
     coding_system_list: Option<Value>,
     buffer: &Buffer,
     (start, end): (i64, i64),
     args: &[Value],
     mode: SymbolMode,
+    translate_for_coding: impl FnMut(&str) -> ResolvedTranslationTables,
 ) -> Result<Value, Flow> {
     if !buffer.get_multibyte() {
         return Ok(Value::T);
@@ -7336,7 +7868,34 @@ fn safe_coding_systems_for_region(
         return Ok(Value::T);
     }
     let text = buffer.buffer_substring_lisp_string_range(byte_range);
-    safe_coding_systems_for_text(mgr, coding_system_list, &text, args.get(2).copied(), mode)
+    safe_coding_systems_for_text_with_translator(
+        mgr,
+        coding_system_list,
+        &text,
+        args.get(2).copied(),
+        mode,
+        translate_for_coding,
+    )
+}
+
+#[cfg(any(test, feature = "test-support"))]
+fn safe_coding_systems_for_region(
+    mgr: &CodingSystemManager,
+    coding_system_list: Option<Value>,
+    buffer: &Buffer,
+    (start, end): (i64, i64),
+    args: &[Value],
+    mode: SymbolMode,
+) -> Result<Value, Flow> {
+    safe_coding_systems_for_region_with_translator(
+        mgr,
+        coding_system_list,
+        buffer,
+        (start, end),
+        args,
+        mode,
+        |_| ResolvedTranslationTables::empty(),
+    )
 }
 
 // ===========================================================================

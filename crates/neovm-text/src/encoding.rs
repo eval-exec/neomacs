@@ -4223,6 +4223,7 @@ fn run_coding_with_conversion_hook<H: TextHost>(
     encode: bool,
     eol: EolType,
     dst_multibyte: bool,
+    translation: &crate::emacs_core::coding::ResolvedTranslationTables,
     run: &mut CodingRun<'_>,
 ) -> Result<
     (
@@ -4262,22 +4263,29 @@ fn run_coding_with_conversion_hook<H: TextHost>(
                 vec![Value::symbol("stringp"), transformed],
             )
         })?;
-        let bytes = encode_lisp_string(transformed_str, base_coding, ctx.eol_conversion());
+        let bytes = if !translation.is_empty() {
+            let translated = translation.translate_for_encode(
+                transformed_str,
+                eol.for_encode(ctx.eol_conversion()),
+                ctx.symbol_mode(),
+            );
+            encode_lisp_string(
+                &translated,
+                base_coding,
+                crate::emacs_core::coding::EolConversion::Inhibited,
+            )
+        } else {
+            encode_lisp_string(transformed_str, base_coding, ctx.eol_conversion())
+        };
         Ok((
             Value::heap_string(neovm_value::heap_types::LispString::from_unibyte(bytes)),
             None,
         ))
     } else {
-        // GNU's order is decoder, then `decode_eol` (src/coding.c:7481), then
-        // the `:post-read-conversion` hook (:8180-8194) -- three steps, and the
-        // middle one is what names the coding system the conversion reports.
-        // Spending the EOL leg here rather than inside the base decode is what
-        // makes the resolution available: an UNDECIDED eol type is resolved by
-        // scanning the text the decoder produced, and a decode that had already
-        // converted its own newlines has nothing left to scan.  Measured under
-        // GNU Emacs 31.0.90, the pure-ASCII VIQR source through
-        // `insert-file-contents` reports `vietnamese-viqr-unix', not
-        // `vietnamese-viqr'.
+        // GNU's order is decoder, then `produce_chars` (translation table),
+        // then `decode_eol` (src/coding.c:7481), then `:post-read-conversion`
+        // (:8180-8194) -- and the middle EOL step is what names the coding
+        // system the conversion reports.
         let body = coding_name_with_eol_spent(base_coding).into_owned();
         // GNU decodes through the SAME `struct coding_system` the hook then
         // runs off, so `coding->consumed` is already on it when
@@ -4321,6 +4329,9 @@ fn run_coding_with_conversion_hook<H: TextHost>(
                 HookCodec::Base(_) => unreachable!("the native hook codec was selected above"),
             };
             run.record(decoded.consumed);
+            if !translation.is_empty() && matches!(codec, HookCodec::Utf8Signature) {
+                decoded.bytes = translation.translate_for_decode(&decoded.bytes, ctx.symbol_mode());
+            }
             if run.flushes_last_block() {
                 flush_last_block_into(
                     &mut decoded.bytes,
@@ -4360,12 +4371,25 @@ fn run_coding_with_conversion_hook<H: TextHost>(
                 source_bytes[..consumed.bytes()].to_vec(),
             ))
         };
-        let decoded = builtin_decode_coding_string_with_known(
+        let mut decoded = builtin_decode_coding_string_with_known(
             vec![source_arg, coding_symbol_value(&body)],
             |_| true,
             ctx.eol_conversion(),
             neovm_value::tagged::SymbolMode::Bare,
         )?;
+        if !translation.is_empty() {
+            let decoded_str = ctx.lisp_string(decoded).ok_or_else(|| {
+                signal(
+                    LispCondition::WrongTypeArgument,
+                    vec![Value::symbol("stringp"), decoded],
+                )
+            })?;
+            let translated =
+                translation.translate_for_decode(decoded_str.as_bytes(), ctx.symbol_mode());
+            decoded = Value::heap_string(neovm_value::heap_types::LispString::from_emacs_bytes(
+                translated,
+            ));
+        }
         let decoded_str = ctx.lisp_string(decoded).ok_or_else(|| {
             signal(
                 LispCondition::WrongTypeArgument,
@@ -5557,6 +5581,9 @@ struct ResolvedCodecs {
     emacs_mule: bool,
     no_conv_multibyte: bool,
     utf8_signature: bool,
+    custom_utf8_plain: bool,
+    custom_utf16: Option<(Utf16Endian, Utf16Bom)>,
+    custom_raw_text: bool,
     full_iso: Option<(crate::emacs_core::coding::Iso2022Spec, Vec<SymId>)>,
     ccl: Option<crate::emacs_core::coding::CclCodingSpec>,
     euc: Option<(crate::emacs_core::coding::Iso2022Spec, Vec<SymId>)>,
@@ -5576,6 +5603,39 @@ impl ResolvedCodecs {
             .coding_systems()
             .get(coding_system_base(coding))
             .is_some_and(|info| resolve_sym(info.coding_type) == "big5");
+        let utf8_signature = effective_decoder == EffectiveDecoder::Configured
+            && crate::emacs_core::coding::utf8_uses_signature(ctx.coding_systems(), coding);
+        let coding_type = ctx.coding_systems().coding_type_name(coding);
+        let base_known = known_coding_system(coding_system_base(coding));
+        let custom_utf8_plain = effective_decoder == EffectiveDecoder::Configured
+            && !utf8_signature
+            && !base_known
+            && coding_type == Some("utf-8");
+        let custom_utf16 = if effective_decoder == EffectiveDecoder::Configured
+            && utf16_coding_variant(coding).is_none()
+        {
+            ctx.coding_systems()
+                .utf16_spec(coding, ctx.symbol_mode())
+                .map(|(little, has_bom, detect_bom)| {
+                    let endian = if little {
+                        Utf16Endian::Little
+                    } else {
+                        Utf16Endian::Big
+                    };
+                    let bom = if detect_bom {
+                        Utf16Bom::Detect
+                    } else if has_bom {
+                        Utf16Bom::Declared
+                    } else {
+                        Utf16Bom::Without
+                    };
+                    (endian, bom)
+                })
+        } else {
+            None
+        };
+        let custom_raw_text =
+            !is_byte_preserving_coding_system(coding) && coding_type == Some("raw-text");
         Self {
             utf7: utf7_variant(coding),
             hz: chinese_hz_charset(ctx, coding),
@@ -5583,8 +5643,10 @@ impl ResolvedCodecs {
             no_conv_multibyte: coding_system_base(coding) == "no-conversion-multibyte",
             // utf-8-with-signature and utf-8-auto both write the BOM on encode and
             // strip an optional BOM on decode.
-            utf8_signature: effective_decoder == EffectiveDecoder::Configured
-                && crate::emacs_core::coding::utf8_uses_signature(ctx.coding_systems(), coding),
+            utf8_signature,
+            custom_utf8_plain,
+            custom_utf16,
+            custom_raw_text,
             full_iso: full_iso2022_spec(ctx, coding),
             ccl: runtime_ccl_spec(ctx, coding),
             euc: euc_iso2022_spec(ctx, coding),
@@ -5600,6 +5662,7 @@ impl ResolvedCodecs {
             || self.emacs_mule
             || self.no_conv_multibyte
             || self.utf8_signature
+            || self.custom_utf16.is_some()
             || self.ccl.is_some()
             || self.full_iso.is_some()
             || self.euc.is_some()
@@ -5706,11 +5769,23 @@ fn decode_non_hook_bytes_core<H: TextHost>(
     run: &mut CodingRun<'_>,
     nocopy_source: Option<Value>,
 ) -> Result<(DecodedCoreText, String), neovm_value::error::Flow> {
+    let skips_decode_translation = effective_decoder == EffectiveDecoder::RetainedUndecided
+        || codecs.custom_raw_text
+        || is_byte_preserving_coding_system(&coding)
+        || ctx.coding_systems().coding_type_name(&coding) == Some("raw-text");
+    let decode_translation = if skips_decode_translation {
+        crate::emacs_core::coding::ResolvedTranslationTables::empty()
+    } else {
+        crate::emacs_core::coding::ResolvedTranslationTables::resolve(ctx, &coding, false)
+    };
+
     // GNU `decode_coding_gap` (`src/coding.c:7930-7995`) skips `decode_coding`
     // and `produce_charset` for pure-ASCII files under ASCII-compatible codings,
-    // handling EOL in place with no `(charset ...)` text properties.
+    // handling EOL in place with no `(charset ...)` text properties, ONLY when
+    // `get_translation_table(attrs, 0, NULL)` is nil (`:7934`).
     let file_gap_ascii_opt = entry == CodingEntry::FileGap
         && bytes.is_ascii()
+        && decode_translation.is_empty()
         && ctx
             .coding_systems()
             .is_ascii_compatible(&coding, ctx.symbol_mode());
@@ -5746,58 +5821,63 @@ fn decode_non_hook_bytes_core<H: TextHost>(
     };
 
     let mut scratch = CodingDecoderState::default();
-    let decoded = if effective_decoder == EffectiveDecoder::RetainedUndecided {
-        Some(decode_raw_text_source(bytes, dos_eol))
-    } else if let Some(imap) = codecs.utf7 {
-        // GNU implements utf-7 in Lisp, as a `:post-read-conversion` over
-        // `raw-text` (lisp/international/utf-7.el), so the C decoder under
-        // it consumes every byte and each chunk is converted on its own.
-        // Measured: a child writing `a+MEI` and then `-b` gives GNU the
-        // characters `a U+3042` and then the LITERAL `-b`.
-        Some(DecodedSource::whole(decode_via_utf7(bytes, imap), bytes))
-    } else if let Some(gb2312) = codecs.hz {
-        // The same, through lisp/language/china-util.el.
-        Some(DecodedSource::whole(decode_via_hz(bytes, gb2312), bytes))
-    } else if codecs.emacs_mule {
-        Some(decode_via_emacs_mule(bytes, dos_eol))
-    } else if codecs.no_conv_multibyte {
-        Some(DecodedSource::whole(
-            decode_raw_text_multibyte(bytes),
-            bytes,
-        ))
-    } else if codecs.utf8_signature {
-        Some(decode_utf8_signature_source(
-            bytes,
-            &mut run.decoder_state(&mut scratch).utf8_signature,
-            dos_eol,
-        ))
-    } else if let Some(spec) = &codecs.ccl {
-        // A CCL program decides for itself how many bytes it reads, and
-        // this port drives it to the end of the source; GNU's
-        // `decode_coding_ccl` does report `coding->consumed`
-        // (src/coding.c:5185), so a CCL coding system across a subprocess
-        // read boundary is the one decoder still owed an answer.
-        Some(DecodedSource::whole(
-            decode_via_ccl(bytes, spec.clone(), &coding, ctx.symbol_mode())?,
-            bytes,
-        ))
-    } else if let Some((spec, charsets)) = &codecs.full_iso {
-        Some(decode_via_iso2022(
-            bytes,
-            spec,
-            charsets,
-            run.decoder_state(&mut scratch).iso_2022_mut(),
-            dos_eol,
-        ))
-    } else if let Some((spec, _)) = &codecs.euc {
-        Some(decode_via_euc(bytes, spec, dos_eol))
-    } else if let Some(charsets) = &codecs.sjis {
-        Some(decode_via_sjis(bytes, charsets, dos_eol))
-    } else if let Some(charset_list) = &codecs.charset {
-        Some(decode_via_charset_list(bytes, charset_list, dos_eol))
-    } else {
-        decode_fallthrough_source(bytes, &coding, dos_eol)
-    };
+    let decoded =
+        if effective_decoder == EffectiveDecoder::RetainedUndecided || codecs.custom_raw_text {
+            Some(decode_raw_text_source(bytes, dos_eol))
+        } else if let Some(imap) = codecs.utf7 {
+            // GNU implements utf-7 in Lisp, as a `:post-read-conversion` over
+            // `raw-text` (lisp/international/utf-7.el), so the C decoder under
+            // it consumes every byte and each chunk is converted on its own.
+            // Measured: a child writing `a+MEI` and then `-b` gives GNU the
+            // characters `a U+3042` and then the LITERAL `-b`.
+            Some(DecodedSource::whole(decode_via_utf7(bytes, imap), bytes))
+        } else if let Some(gb2312) = codecs.hz {
+            // The same, through lisp/language/china-util.el.
+            Some(DecodedSource::whole(decode_via_hz(bytes, gb2312), bytes))
+        } else if codecs.emacs_mule {
+            Some(decode_via_emacs_mule(bytes, dos_eol))
+        } else if codecs.no_conv_multibyte {
+            Some(DecodedSource::whole(
+                decode_raw_text_multibyte(bytes),
+                bytes,
+            ))
+        } else if codecs.utf8_signature {
+            Some(decode_utf8_signature_source(
+                bytes,
+                &mut run.decoder_state(&mut scratch).utf8_signature,
+                dos_eol,
+            ))
+        } else if codecs.custom_utf8_plain {
+            Some(decode_via_utf8(bytes, dos_eol))
+        } else if let Some((endian, bom)) = codecs.custom_utf16 {
+            Some(decode_via_utf16(bytes, endian, bom, dos_eol))
+        } else if let Some(spec) = &codecs.ccl {
+            // A CCL program decides for itself how many bytes it reads, and
+            // this port drives it to the end of the source; GNU's
+            // `decode_coding_ccl` does report `coding->consumed`
+            // (src/coding.c:5185), so a CCL coding system across a subprocess
+            // read boundary is the one decoder still owed an answer.
+            Some(DecodedSource::whole(
+                decode_via_ccl(bytes, spec.clone(), &coding, ctx.symbol_mode())?,
+                bytes,
+            ))
+        } else if let Some((spec, charsets)) = &codecs.full_iso {
+            Some(decode_via_iso2022(
+                bytes,
+                spec,
+                charsets,
+                run.decoder_state(&mut scratch).iso_2022_mut(),
+                dos_eol,
+            ))
+        } else if let Some((spec, _)) = &codecs.euc {
+            Some(decode_via_euc(bytes, spec, dos_eol))
+        } else if let Some(charsets) = &codecs.sjis {
+            Some(decode_via_sjis(bytes, charsets, dos_eol))
+        } else if let Some(charset_list) = &codecs.charset {
+            Some(decode_via_charset_list(bytes, charset_list, dos_eol))
+        } else {
+            decode_fallthrough_source(bytes, &coding, dos_eol)
+        };
 
     // The single decode-side EOL pass (GNU `decode_coding`, src/coding.c:7481).
     // `for_decode` resolves a VECTOR eol_type by scanning the decoded text
@@ -5806,12 +5886,24 @@ fn decode_non_hook_bytes_core<H: TextHost>(
     let text = match decoded {
         Some(mut decoded) => {
             run.record(decoded.consumed);
+            if !decode_translation.is_empty() {
+                decoded.bytes =
+                    decode_translation.translate_for_decode(&decoded.bytes, ctx.symbol_mode());
+                let new_chars = neovm_value::emacs_char::chars_in_multibyte(&decoded.bytes);
+                for prop_run in &mut decoded.runs {
+                    prop_run.start = prop_run.start.min(new_chars);
+                    prop_run.end = prop_run.end.min(new_chars);
+                }
+                decoded
+                    .runs
+                    .retain(|prop_run| prop_run.start < prop_run.end);
+            }
             let tail = &bytes[decoded.consumed.bytes()..];
             if run.flushes_last_block() {
                 // GNU `decode_coding`'s `CODING_MODE_LAST_BLOCK` arm
                 // (src/coding.c:7434-7462): what no decoder could consume
                 // is produced as characters, ASCII as itself and anything
-                // else as an eight-bit character.
+                // else as an eight-bit character (with `translation_table = Qnil`).
                 flush_last_block_into(&mut decoded.bytes, tail);
             }
             if file_gap_ascii_opt {
@@ -5834,7 +5926,9 @@ fn decode_non_hook_bytes_core<H: TextHost>(
         // source by construction rather than by default.
         None => {
             run.record(SourceConsumed::all(bytes));
-            if coding_string_trivial_ascii_nocopy(bytes, &coding, false) {
+            if decode_translation.is_empty()
+                && coding_string_trivial_ascii_nocopy(bytes, &coding, false)
+            {
                 let resolution = decoded_eol.resolve_for_decode(bytes, ctx.eol_conversion());
                 reported_coding =
                     adjusted_coding_name(ctx.coding_systems(), &reported_coding, resolution);
@@ -5894,10 +5988,6 @@ fn decode_non_hook_bytes_core<H: TextHost>(
                 DecodedCoreText::Owned(neovm_value::heap_types::LispString::from_unibyte(converted))
             } else {
                 let decoded = decode_bytes(bytes, &coding, ctx.eol_conversion());
-                let resolution =
-                    decoded_eol.resolve_for_decode(decoded.as_bytes(), ctx.eol_conversion());
-                reported_coding =
-                    adjusted_coding_name(ctx.coding_systems(), &reported_coding, resolution);
                 let unannotated_trailing_cr = dos_eol == DosEolLookahead::Required
                     && has_unconsumed_trailing_cr_under_dos(bytes);
                 let annotated_slice = if unannotated_trailing_cr {
@@ -5905,13 +5995,28 @@ fn decode_non_hook_bytes_core<H: TextHost>(
                 } else {
                     &decoded
                 };
-                let runs = if file_gap_ascii_opt {
+                let mut runs = if file_gap_ascii_opt {
                     Vec::new()
                 } else {
                     fallback_charset_property_runs(annotated_slice, &coding)
                 };
+                let mut decoded_bytes = decoded.into_bytes();
+                if !decode_translation.is_empty() {
+                    decoded_bytes =
+                        decode_translation.translate_for_decode(&decoded_bytes, ctx.symbol_mode());
+                    let new_chars = neovm_value::emacs_char::chars_in_multibyte(&decoded_bytes);
+                    for prop_run in &mut runs {
+                        prop_run.start = prop_run.start.min(new_chars);
+                        prop_run.end = prop_run.end.min(new_chars);
+                    }
+                    runs.retain(|prop_run| prop_run.start < prop_run.end);
+                }
+                let resolution =
+                    decoded_eol.resolve_for_decode(&decoded_bytes, ctx.eol_conversion());
+                reported_coding =
+                    adjusted_coding_name(ctx.coding_systems(), &reported_coding, resolution);
                 decoded_core_text_for_destination(
-                    decoded.into_bytes(),
+                    decoded_bytes,
                     runs,
                     resolution.eol(),
                     dst_multibyte,
@@ -6198,6 +6303,16 @@ fn builtin_coding_string_in_context<H: TextHost>(
             } else {
                 HookCodec::Base(hook_base_name)
             };
+            let skips_hook_translation = effective_decoder == EffectiveDecoder::RetainedUndecided
+                || codecs.custom_raw_text
+                || is_byte_preserving_coding_system(&coding)
+                || ctx.coding_systems().coding_type_name(&coding) == Some("raw-text")
+                || (encode && ctx.coding_systems().coding_type_name(&coding) == Some("undecided"));
+            let hook_translation = if skips_hook_translation {
+                crate::emacs_core::coding::ResolvedTranslationTables::empty()
+            } else {
+                crate::emacs_core::coding::ResolvedTranslationTables::resolve(ctx, &coding, encode)
+            };
             let (converted, resolution) = run_coding_with_conversion_hook(
                 ctx,
                 &args,
@@ -6206,6 +6321,7 @@ fn builtin_coding_string_in_context<H: TextHost>(
                 encode,
                 eol,
                 hook_dst_multibyte,
+                &hook_translation,
                 run,
             )?;
             if let Some(resolution) = resolution {
@@ -6284,16 +6400,36 @@ fn builtin_coding_string_in_context<H: TextHost>(
     } else {
         ctx.eol_conversion()
     };
-    // `consume_chars` (src/coding.c:7607, eol block at :7683): the newline is
-    // expanded ONCE into the source that every codec then reads, and the coding
-    // name handed to the codecs has its EOL leg spent.  None of the arms below
-    // performs EOL conversion, and none of them can silently omit it either --
-    // the choice is no longer theirs to make.
+    // `consume_chars` (src/coding.c:7607, eol block at :7683, translation at
+    // :7695): the newline is expanded ONCE (with DOS's `\r` untranslated and
+    // Mac's `\n -> \r` translated) and `:encode-translation-table` /
+    // `standard-translation-table-for-encode` runs into the source every codec
+    // then reads.
+    let mut encode_eol_already_spent = false;
     if encode {
+        let coding_type = ctx.coding_systems().coding_type_name(&coding);
+        let skips_encode_translation = codecs.custom_raw_text
+            || is_byte_preserving_coding_system(&coding)
+            || matches!(coding_type, Some("raw-text" | "undecided"));
+        let encode_translation = if skips_encode_translation {
+            crate::emacs_core::coding::ResolvedTranslationTables::empty()
+        } else {
+            crate::emacs_core::coding::ResolvedTranslationTables::resolve(ctx, &coding, true)
+        };
         let source = args[0]
             .as_lisp_string()
             .expect("string argument validated above");
-        if let Some(expanded) = expand_source_eol(source, &coding, encode_eol_conversion) {
+        if !encode_translation.is_empty() {
+            let resolved_eol =
+                runtime_coding_eol(ctx.coding_systems(), &coding).for_encode(encode_eol_conversion);
+            let translated =
+                encode_translation.translate_for_encode(source, resolved_eol, ctx.symbol_mode());
+            args[0] = Value::heap_string(translated);
+            encode_eol_already_spent = true;
+            if let Some(nocopy) = args.get_mut(2) {
+                *nocopy = Value::NIL;
+            }
+        } else if let Some(expanded) = expand_source_eol(source, &coding, encode_eol_conversion) {
             args[0] = Value::heap_string(expanded);
             coding = coding_name_with_eol_spent(&coding).into_owned();
             // The fall-through arm re-reads `args[1]`, so the name has to be
@@ -6332,8 +6468,23 @@ fn builtin_coding_string_in_context<H: TextHost>(
                 Ok(Value::heap_string(
                     neovm_value::heap_types::LispString::from_unibyte(bytes),
                 ))
-            } else if codecs.no_conv_multibyte {
+            } else if codecs.no_conv_multibyte || codecs.custom_utf8_plain {
                 let bytes = encode_utf8_plain(source_string());
+                Ok(Value::heap_string(
+                    neovm_value::heap_types::LispString::from_unibyte(bytes),
+                ))
+            } else if codecs.custom_raw_text {
+                let bytes = lisp_string_coding_source_bytes(source_string()).into_owned();
+                Ok(Value::heap_string(
+                    neovm_value::heap_types::LispString::from_unibyte(bytes),
+                ))
+            } else if let Some((endian, bom)) = codecs.custom_utf16 {
+                let bytes = encode_utf16_lisp_string(
+                    source_string(),
+                    endian,
+                    matches!(bom, Utf16Bom::Declared),
+                    default_char.unwrap_or(0x20),
+                );
                 Ok(Value::heap_string(
                     neovm_value::heap_types::LispString::from_unibyte(bytes),
                 ))
@@ -6419,10 +6570,15 @@ fn builtin_coding_string_in_context<H: TextHost>(
                 {
                     *nocopy = Value::NIL;
                 }
+                let fallback_eol = if encode_eol_already_spent {
+                    crate::emacs_core::coding::EolConversion::Inhibited
+                } else {
+                    encode_eol_conversion
+                };
                 builtin_encode_coding_string_with_known_and_default(
                     args,
                     |_| true,
-                    encode_eol_conversion,
+                    fallback_eol,
                     coding_symbol_mode,
                     default_char,
                 )

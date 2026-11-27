@@ -3704,3 +3704,102 @@ fn coding_system_put_default_char_coerces_nil_validates_and_shares_bucket() {
         assert!(err.is_err(), "expected characterp error for {bad:?}");
     }
 }
+
+#[test]
+fn translation_table_attrs_survive_nil_plist_and_alias_put() {
+    crate::test_utils::init_test_tracing();
+    let mut manager = CodingSystemManager::new();
+    let dec_sym = Value::symbol("unit-tt-dec");
+    let enc_sym = Value::symbol("unit-tt-enc");
+    let new_dec = Value::symbol("unit-tt-dec-new");
+    builtin_define_coding_system_internal(
+        &mut manager,
+        vec![
+            Value::symbol("unit-tt-base"),
+            Value::fixnum(i64::from(b'T')),
+            Value::symbol("utf-8"),
+            Value::list(vec![Value::symbol("unicode")]),
+            Value::T,
+            dec_sym,
+            enc_sym,
+            Value::NIL,
+            Value::NIL,
+            Value::NIL,
+            Value::NIL,
+            Value::NIL, // nil plist: args[5..7] must still persist in typed attrs
+            Value::NIL,
+            Value::NIL,
+        ],
+        SymbolMode::Bare,
+    )
+    .expect("define-coding-system-internal");
+    builtin_define_coding_system_alias(
+        &mut manager,
+        vec![
+            Value::symbol("unit-tt-alias"),
+            Value::symbol("unit-tt-base"),
+        ],
+        SymbolMode::Bare,
+    )
+    .expect("define alias");
+
+    assert_eq!(
+        manager.translation_table_attr("unit-tt-base", false),
+        dec_sym
+    );
+    assert_eq!(
+        manager.translation_table_attr("unit-tt-base-unix", true),
+        enc_sym
+    );
+    assert_eq!(
+        manager.translation_table_attr("unit-tt-alias", false),
+        dec_sym
+    );
+
+    builtin_coding_system_put(
+        &mut manager,
+        vec![
+            Value::symbol("unit-tt-alias"),
+            Value::symbol(":decode-translation-table"),
+            new_dec,
+        ],
+        SymbolMode::Bare,
+    )
+    .expect("put via alias");
+    assert_eq!(
+        manager.translation_table_attr("unit-tt-base", false),
+        new_dec
+    );
+    assert_eq!(
+        manager.translation_table_attr("unit-tt-base-dos", false),
+        new_dec
+    );
+
+    builtin_define_coding_system_internal(
+        &mut manager,
+        vec![
+            Value::symbol("unit-tt-utf16"),
+            Value::fixnum(i64::from(b'U')),
+            Value::symbol("utf-16"),
+            Value::list(vec![Value::symbol("unicode")]),
+            Value::T,
+            Value::NIL,
+            Value::NIL,
+            Value::NIL,
+            Value::NIL,
+            Value::NIL,
+            Value::NIL,
+            Value::NIL,
+            Value::NIL,
+            Value::NIL,
+            Value::symbol("little"),
+        ],
+        SymbolMode::Bare,
+    )
+    .expect("define custom utf-16");
+    assert!(!manager.is_ascii_compatible("unit-tt-utf16", SymbolMode::Bare));
+    assert_eq!(
+        manager.utf16_spec("unit-tt-utf16", SymbolMode::Bare),
+        Some((true, false, false))
+    );
+}

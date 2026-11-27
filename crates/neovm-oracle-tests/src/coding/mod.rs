@@ -15,6 +15,7 @@ mod string_advanced;
 mod system_comprehensive;
 mod system_put_advanced;
 mod textprop_strict_edge_semantics;
+mod translation_tables;
 mod unibyte_destination;
 mod utf8_test_availability_semantics;
 
