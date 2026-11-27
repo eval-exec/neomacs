@@ -1,6 +1,13 @@
 //! Ratchet unsafe conversions in every production module, in every feature
 //! configuration. Follow module declarations rather than guessing from file
 //! names: a production module named `tests` must still be checked.
+//!
+//! Known blind spot (tracked in follow-up): this `syn`-only walker matches
+//! `include!`, `core::include!`, and `std::include!` by path spelling, so an
+//! include reached by any other name (`use ... as` alias of `include`, or a
+//! `macro_rules!` wrapper expanding to `include!`) is not yet caught. (Aliased
+//! `transmute` / `set_tagged_heap` imports are already rejected by
+//! `check_use_tree`.)
 
 use super::architecture_production_source_roots::production_source_roots;
 use std::collections::BTreeMap;
