@@ -8828,12 +8828,16 @@ fn window_line_height_impl(
     {
         let line_spec = args.first().copied().unwrap_or(Value::NIL);
         let metrics = if line_spec.is_nil() {
+            // GNU reads point's row from the current matrix redisplay just
+            // built (`w->cursor.vpos`, window.c:2090-2097). The caller proved
+            // that matrix current, so the completed redisplay answers; the
+            // renderer's active presentation may still lag it.
             resolve_exact_visible_metrics(
                 frames,
                 buffers,
                 args.get(1),
                 None,
-                PositionGeometrySource::Presented,
+                PositionGeometrySource::Redisplay,
             )?
             .and_then(|(_, metrics)| {
                 snapshot

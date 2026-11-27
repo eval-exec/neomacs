@@ -109,6 +109,10 @@
      (neo-chrome-source-write (prin1-to-string err))
      (neo-chrome-source-finish 1))))
 
+;; The first sample is taken while this file loads, straight after its own
+;; `(redisplay t)': GNU's current matrix is complete then, so no sample may
+;; depend on when later redisplays happen to land.
+(neo-chrome-source-sample)
 (push (run-at-time 0.5 nil #'neo-chrome-source-sample) neo-chrome-source-timers)
 (push (run-at-time 1.0 nil #'neo-chrome-source-sample) neo-chrome-source-timers)
 (push (run-at-time 1.5 nil #'neo-chrome-source-complete) neo-chrome-source-timers)

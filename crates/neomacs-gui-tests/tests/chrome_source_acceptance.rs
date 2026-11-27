@@ -178,7 +178,9 @@ fn run_editor(
     let samples = receipt["samples"]
         .as_array()
         .expect("actual redisplay samples");
-    assert_eq!(samples.len(), 2, "{editor}: {receipt}");
+    // One sample at load time, straight after the fixture's `(redisplay t)`,
+    // then two from timers.
+    assert_eq!(samples.len(), 3, "{editor}: {receipt}");
     let fields = [
         "survived",
         "body_seen",
