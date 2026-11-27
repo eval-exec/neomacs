@@ -1248,6 +1248,10 @@ pub(crate) enum GroupTurn {
 pub(crate) struct EraLink {
     world: EraWorldHandle,
     waiter: Arc<RingWaiter>,
+    /// Monotonically incremented each time `GroupTurn` enters `Idle` so
+    /// `BetweenCommands` resets `baton_burst_since` after every real idle park
+    /// without locking `ControlState` (E7-P §1.7 Q-B).
+    idle_epoch: Arc<std::sync::atomic::AtomicU64>,
     requester: Option<GroupRequestSender>,
     /// Owned by `EraLink` except while one Baton thread is actively blocking
     /// in `GroupPort::await_world()`.
@@ -1315,6 +1319,10 @@ impl ControlState {
             std::process::abort();
         };
         era.turn = turn;
+        if turn == GroupTurn::Idle {
+            era.idle_epoch
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
         self.bump_deadlock_epoch();
     }
 
@@ -1471,6 +1479,15 @@ pub(crate) struct Control {
     after_next_select_park: Mutex<Option<SelectParkGate>>,
     /// An owned I/O handle: the idle scheduler never reads World storage.
     select: OnceLock<Option<crate::emacs_core::eval::process_hooks::SelectHandleToken>>,
+    /// Lock-free mirror of `ControlState::parallel_participant_count()` for
+    /// `BetweenCommands` Q-B fairness checks (0 when no parallel owner is live).
+    parallel_count: Arc<std::sync::atomic::AtomicUsize>,
+    /// Lock-free handle to the open era's `RingWaiter` for the active Q-A
+    /// `BetweenCommands` fast path (zero mutex locks when `count == 0`).
+    /// `era_waiter_reused` falls back to locking `state` only if a test harness
+    /// re-opens a second era on the same `Control`.
+    era_waiter_fast: OnceLock<Arc<RingWaiter>>,
+    era_waiter_reused: std::sync::atomic::AtomicBool,
     /// Counts Acquire loads of the keeper's ring-waiter word at Green switch
     /// points (QB2 condition: stays 0 on a Baton-only World).
     #[cfg(test)]
@@ -3448,6 +3465,37 @@ impl Control {
         receiver
     }
 
+    #[inline]
+    fn sync_parallel_count(&self, state: &ControlState) {
+        self.parallel_count.store(
+            state.parallel_participant_count(),
+            std::sync::atomic::Ordering::Release,
+        );
+    }
+
+    /// Lock-free read of live `Participant::Parallel` count for `BetweenCommands`
+    /// Q-A / Q-B (E7-P.2 B2 / MEDIUM #7).
+    #[inline]
+    pub(crate) fn live_parallel_participant_count_fast(&self) -> usize {
+        self.parallel_count
+            .load(std::sync::atomic::Ordering::Acquire)
+    }
+
+    /// Lock-free `RingWaiter::raised()` probe for active `BetweenCommands` Q-A
+    /// (1 Acquire load, zero mutex locks in the single-era production path).
+    #[inline]
+    pub(crate) fn era_ring_waiter_raised_fast(&self) -> bool {
+        if !self
+            .era_waiter_reused
+            .load(std::sync::atomic::Ordering::Acquire)
+            && let Some(waiter) = self.era_waiter_fast.get()
+        {
+            return waiter.raised();
+        }
+        let state = self.state();
+        self.era_ring_waiter(&state)
+    }
+
     /// Register an opt-in parallel owner with Green `Control` (E5.3 D1, D2).
     /// Starts in `Wait::ParallelActive` (never `Wait::Runnable` and never
     /// pushed into Baton's `ReadyQueue`). Returns its `(OwnerWake, SignalHint)`.
@@ -3461,6 +3509,7 @@ impl Control {
                 .participants
                 .insert(key, Participant::Parallel(participant));
             Self::set_wait(&mut state, key, Wait::ParallelActive);
+            self.sync_parallel_count(&state);
         }
         self.notify_select();
         (wake, hint)
@@ -3472,6 +3521,7 @@ impl Control {
             let mut state = self.state();
             Self::set_wait(&mut state, key, Wait::Exited);
             Self::remove_key(&mut state, key);
+            self.sync_parallel_count(&state);
         }
         self.metadata_changed.notify_all();
         self.notify_select();
@@ -3483,7 +3533,8 @@ impl Control {
     /// completed. Consumes `RetiredCompletion` as the typestate proof of root
     /// retirement, sets `Wait::Exited`, wakes all `join_waiters` (both
     /// `Participant::Baton` and `Participant::Parallel`), removes the retired
-    /// participant record, and notifies idle selectors in one critical section.
+    /// participant record, syncs `Control::parallel_count`, and notifies idle
+    /// selectors in one critical section.
     pub(crate) fn publish_parallel_owner_exit(
         &self,
         expected: ThreadKey,
@@ -3508,6 +3559,7 @@ impl Control {
                 Self::wake_locked(&mut state, key);
             }
             Self::remove_key(&mut state, me);
+            self.sync_parallel_count(&state);
         }
         self.metadata_changed.notify_all();
         self.notify_select();
@@ -4249,14 +4301,39 @@ impl Control {
         }
         let waiter = port.waiter_handle();
         let requester = port.request_sender();
+        if self.era_waiter_fast.set(Arc::clone(&waiter)).is_err() {
+            self.era_waiter_reused
+                .store(true, std::sync::atomic::Ordering::Release);
+        }
         state.era = EraState::EraOpen(EraLink {
             world,
             waiter,
+            idle_epoch: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             requester: Some(requester),
             port: Some(port),
             turn: GroupTurn::Idle,
         });
         Ok(())
+    }
+
+    /// Clone lock-free handles to the open era's `RingWaiter`, `idle_epoch`,
+    /// and live parallel-participant count for `BetweenCommands` (E7-P.2 Q-A/Q-B).
+    pub(crate) fn era_between_commands_handles(
+        &self,
+    ) -> Option<(
+        Arc<RingWaiter>,
+        Arc<std::sync::atomic::AtomicU64>,
+        Arc<std::sync::atomic::AtomicUsize>,
+    )> {
+        let state = self.state();
+        match &state.era {
+            EraState::EraOpen(era) => Some((
+                Arc::clone(&era.waiter),
+                Arc::clone(&era.idle_epoch),
+                Arc::clone(&self.parallel_count),
+            )),
+            EraState::SoloActive | EraState::SoloSurrendered => None,
+        }
     }
 
     /// Acquire the Baton group's initial `WorldTurn` right after [`Self::open_era`].
@@ -5203,6 +5280,122 @@ impl Control {
                 Ok(wake)
             }
             Err(_) => std::process::abort(),
+        }
+    }
+
+    /// Cooperative fairness slice for `BetweenCommands` (E7-P.2 §1.7 Q-B /
+    /// HIGH #4):
+    ///
+    /// Releases `WorldTurn` to `GroupTurn::Idle` (letting the keeper finish
+    /// `AllStopped` -> `Phase::Idle` so pure-compute parallel owners make
+    /// forward progress) and pauses the Baton group for up to `slice` — even
+    /// when a sibling Baton `make-thread` is runnable — waking early only if
+    /// parallel owners finish, raise `RingWaiter`, or shutdown begins. Never
+    /// consults `select_wait_until`, so a saturated queued input stream cannot
+    /// collapse the fairness window. After the slice expires, re-acquires
+    /// `WorldTurn` via `wait_while_era_idle` + `transfer_era` and resumes Main
+    /// (or any runnable sibling Baton thread in normal round-robin order).
+    pub(crate) fn transfer_era_fairness_slice(
+        &self,
+        me: ThreadKey,
+        baton: TurnRight,
+        receiver: &mpsc::Receiver<Wake>,
+        slice: Duration,
+    ) -> Result<Wake, Handoff> {
+        if !baton.is_era() {
+            return self.transfer(me, Wait::Runnable, baton, receiver);
+        }
+        let floor = super::super::parallel_entry::between_commands::MIN_FAIRNESS_SLICE_FLOOR;
+        let effective_slice = slice.max(floor);
+        let deadline = Instant::now() + effective_slice;
+
+        let should_release_to_idle = {
+            let mut state = self.state();
+            Self::note_continuation_release(&mut state, me);
+            Self::set_wait(&mut state, me, Wait::Select { wait_end: deadline });
+            state.physical.insert(me, OwnerLocation::Receiving);
+            if state.closing
+                || state.parallel_participant_count() == 0
+                || self.era_ring_waiter(&state)
+            {
+                // Shutdown, no live parallel owners, or a parallel serial turn
+                // is already queued on the ring (`transfer_era` Case (ii)
+                // yields `WorldTurn` directly to the keeper).
+                Self::set_wait(&mut state, me, Wait::Runnable);
+                Self::enqueue_ready(&mut state, me);
+                false
+            } else {
+                // Release the Baton group to `GroupTurn::Idle` even if a
+                // sibling Baton thread is runnable so `AllStopped::complete()`
+                // opens `Phase::Idle` for pure-compute parallel owners.
+                state.set_era_turn(GroupTurn::Idle);
+                true
+            }
+        };
+
+        if !should_release_to_idle {
+            return self.transfer_era(me, baton, receiver);
+        }
+
+        // Release `WorldTurn` to the keeper so `AllStopped::complete()` opens
+        // `Phase::Idle` for pure-compute parallel owners.
+        Self::give_back_era_turn(baton);
+
+        // Wait up to `deadline` while `GroupTurn::Idle` without consulting
+        // `select_wait_until` or waking on sibling Baton threads, ensuring a
+        // real non-zero `Phase::Idle` window while parallel owners are active
+        // and quiet.
+        let mut waited_once = false;
+        loop {
+            let state = self.state();
+            let idle = matches!(&state.era, EraState::EraOpen(era) if era.turn == GroupTurn::Idle);
+            if !idle
+                || state.closing
+                || state.parallel_participant_count() == 0
+                || self.era_ring_waiter(&state)
+            {
+                break;
+            }
+            let now = Instant::now();
+            if now >= deadline && waited_once {
+                break;
+            }
+            let remaining = if now < deadline {
+                deadline.saturating_duration_since(now)
+            } else {
+                floor
+            };
+            let wait_step = remaining.min(floor);
+            let _ = self
+                .metadata_changed
+                .wait_timeout(state, wait_step)
+                .unwrap_or_else(PoisonError::into_inner);
+            waited_once = true;
+        }
+
+        // Mark `me` runnable again and re-acquire `WorldTurn` via the single
+        // existing `wait_while_era_idle` + `transfer_era` substrate.
+        {
+            let mut state = self.state();
+            if state.waits.get(&me) == Some(&Wait::Select { wait_end: deadline }) {
+                Self::set_wait(&mut state, me, Wait::Runnable);
+                Self::enqueue_ready(&mut state, me);
+            }
+        }
+        match self.wait_while_era_idle(receiver) {
+            EraIdleWait::Acquired(new_baton) => self.transfer_era(me, new_baton, receiver),
+            EraIdleWait::WokenByPeer(wake) => {
+                if matches!(&wake, Wake::Resume(_)) {
+                    self.state().physical.insert(me, OwnerLocation::Running);
+                }
+                Ok(wake)
+            }
+            EraIdleWait::Deadlock { baton, invariant } => {
+                let mut state = self.state();
+                Self::set_wait(&mut state, me, Wait::Runnable);
+                state.physical.insert(me, OwnerLocation::Running);
+                Err(Handoff::NoRunnable { baton, invariant })
+            }
         }
     }
 

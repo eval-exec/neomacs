@@ -36,10 +36,12 @@ use std::fmt::Debug;
 use std::num::NonZeroU64;
 use std::time::Duration;
 
-/// How long one stop attempt waits for its owners before the keeper warns
-/// and serves its inbox, and how long a contended gate is retried before the
-/// call gives up. Neither poisons.
+/// How long a contended gate is retried before the call gives up. Does not poison.
 pub(crate) const CONTENTION_BOUND: Duration = Duration::from_secs(60);
+
+/// Production per-stop overdue warning threshold (E7-P D3): warn once per
+/// standing stop epoch after 5 seconds without poisoning the era.
+pub(crate) const STOP_OVERDUE_BOUND: Duration = Duration::from_secs(5);
 
 /// One bounded stop attempt, as the era reports it.
 pub(crate) enum Attempt<S, P> {
@@ -520,6 +522,9 @@ pub(crate) struct Driver<'o, O: KeeperOps> {
     /// pair with `KeeperMsg::Wake` so a `Wake` consumed between stops cannot
     /// strand `leave_native()` behind a new Baton-group stop).
     publishing_owners: sync::Arc<sync::atomic::AtomicUsize>,
+    /// Test-visible count of `tracing::warn!` stop-overdue emissions (E7-P D3).
+    #[cfg(test)]
+    overdue_warnings: sync::Arc<sync::atomic::AtomicUsize>,
 }
 
 impl<'o, O: KeeperOps> Driver<'o, O> {
@@ -533,13 +538,25 @@ impl<'o, O: KeeperOps> Driver<'o, O> {
             collect_requested: false,
             collect_waiters: Vec::new(),
             head_hold: None,
-            stop_bound: CONTENTION_BOUND,
+            stop_bound: STOP_OVERDUE_BOUND,
             contention_bound: CONTENTION_BOUND,
             pending_observer: None,
             between_stops_hook: None,
             wake_pending: false,
             publishing_owners: sync::Arc::new(sync::atomic::AtomicUsize::new(0)),
+            #[cfg(test)]
+            overdue_warnings: sync::Arc::new(sync::atomic::AtomicUsize::new(0)),
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn stop_bound_for_test(&self) -> Duration {
+        self.stop_bound
+    }
+
+    #[cfg(test)]
+    pub(crate) fn overdue_warnings_counter(&self) -> sync::Arc<sync::atomic::AtomicUsize> {
+        sync::Arc::clone(&self.overdue_warnings)
     }
 
     /// Share the level-triggered `publishing_owners` counter with enrolled
@@ -573,6 +590,14 @@ impl<'o, O: KeeperOps> Driver<'o, O> {
     #[cfg(test)]
     pub(crate) fn contention_bound(mut self, bound: Duration) -> Self {
         self.contention_bound = bound;
+        self
+    }
+
+    /// Shorten each stop attempt to BOUND without installing an observer
+    /// (used in tests for E7-P D3's 100ms test threshold).
+    #[cfg(test)]
+    pub(crate) fn with_stop_bound(mut self, bound: Duration) -> Self {
+        self.stop_bound = bound;
         self
     }
 
@@ -850,12 +875,30 @@ impl<'o, O: KeeperOps> Driver<'o, O> {
     /// a slow owner delays the turn and poisons nothing.
     fn take_stop(&mut self) -> Result<O::Stopped, BreachOf<O>> {
         let mut contended: Option<Backoff> = None;
+        let mut overdue_retries: usize = 0;
         loop {
             match self.ops.stop_within(self.stop_bound) {
                 Ok(Attempt::Stopped(stopped)) => return Ok(stopped),
                 Ok(Attempt::Pending(pending)) => {
                     contended = None;
-                    tracing::warn!(?pending, "keeper stop overdue");
+                    overdue_retries = overdue_retries.saturating_add(1);
+                    if overdue_retries == 1 {
+                        #[cfg(test)]
+                        self.overdue_warnings
+                            .fetch_add(1, sync::atomic::Ordering::Relaxed);
+                        tracing::warn!(
+                            ?pending,
+                            bound = ?self.stop_bound,
+                            "keeper stop overdue"
+                        );
+                    } else {
+                        tracing::debug!(
+                            ?pending,
+                            retries = overdue_retries,
+                            bound = ?self.stop_bound,
+                            "keeper stop still pending"
+                        );
+                    }
                     while let Ok(message) = self.inbox.try_recv() {
                         self.between_stops(message)?;
                     }

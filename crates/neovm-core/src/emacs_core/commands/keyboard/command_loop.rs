@@ -151,16 +151,15 @@ impl CommandLoopHost for Context {
         // caller's dynamic environment, as GNU macros.c does.
         let specpdl_count = self.specpdl().len();
         let result = (|| -> EvalResult {
-            self.try_specbind_or_unwind_to(
-                specpdl_count,
-                CommandLoopSymbol::InhibitRedisplay.id(),
-                Value::NIL,
-            )?;
-            self.try_specbind_or_unwind_to(
-                specpdl_count,
-                UNDO_AUTO_UNDOABLY_CHANGED_BUFFERS.id(),
-                Value::NIL,
-            )?;
+            // E7-P D1 / HIGH #5: atomically bind GNU's two outer
+            // `recursive_edit_1` baseline symbols (`inhibit-redisplay`,
+            // `undo-auto--undoably-changed-buffers`) and, when entering the
+            // outermost interactive command loop on Main, mint the unforgeable
+            // `CommandLoopBaselineGuard` witness. Returns `None` in nested
+            // `recursive-edit`, minibuffers, kbd-macro reentry, non-Main
+            // threads, and noninteractive batch runs.
+            let _parallel_baseline_guard =
+                self.enter_command_loop_baseline_scope(specpdl_count, increment_depth)?;
 
             // GNU `command_loop` installs its `exit` catch only for a recursive
             // command loop or an active minibuffer (`command_loop_level > 0 ||
@@ -571,6 +570,7 @@ impl CommandLoopHost for Context {
             }
 
             self.service_gui_command_boundary()?;
+            self.parallel_between_commands_boundary()?;
 
             // Retained through hooks, point adjustment and finalization. A
             // mid-command redisplay must not acknowledge unfinished input.

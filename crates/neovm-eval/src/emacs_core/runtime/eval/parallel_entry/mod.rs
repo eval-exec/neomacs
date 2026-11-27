@@ -1,4 +1,5 @@
 //! Dormant production-entry types. E1 installs no execution path or authority.
+pub(crate) mod between_commands;
 pub(crate) mod capability;
 pub(crate) mod driver_core;
 pub(crate) mod keeper_custody;

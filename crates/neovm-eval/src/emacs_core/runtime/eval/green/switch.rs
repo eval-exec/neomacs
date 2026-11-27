@@ -121,6 +121,10 @@ enum ParkRequest {
     },
     /// The already-admitted parent's next closed semantic turn.
     HostContinue(HostRequestKey),
+    /// Cooperative `BetweenCommands` fairness release (E7-P.2 §1.7 Q-B).
+    FairnessSlice {
+        slice: Duration,
+    },
 }
 
 /// The consumer runs only on its restored requesting owner. It cannot borrow
@@ -526,6 +530,27 @@ impl Context {
         })
     }
 
+    /// Cooperative `BetweenCommands` fairness release (E7-P.2 §1.7 Q-B):
+    /// stows Main's live seat through the single `green_park_impl` path,
+    /// releases `WorldTurn` to `GroupTurn::Idle` for `slice`, resumes Main, and
+    /// delivers any pending `thread-signal` symmetrically with [`Self::green_wait`]
+    /// (MEDIUM #8).
+    pub(crate) fn green_fairness_slice(&mut self, slice: Duration) -> Result<(), Flow> {
+        let Some(key) = self.green_key() else {
+            return Ok(());
+        };
+        self.green_park_impl(
+            ParkRequest::FairnessSlice { slice },
+            |completion| match completion {
+                ParkCompletion::Ordinary => Ok(()),
+                ParkCompletion::Host { .. }
+                | ParkCompletion::Intermediate(_)
+                | ParkCompletion::MainNative(_) => std::process::abort(),
+            },
+        )?;
+        self.green_raise_pending_signal(key)
+    }
+
     /// Consume unpublished admission before collector preflight. Every registry
     /// borrow ends before Context drains a collector; failure leaves drain-only
     /// roots in the World and cannot expose stale registered records.
@@ -588,7 +613,8 @@ impl Context {
             ParkRequest::Host { call, native: _ } => self.green_abandon_prepared_host_call(call),
             ParkRequest::Ordinary(_)
             | ParkRequest::HostContinue(_)
-            | ParkRequest::MainNative { .. } => Ok(()),
+            | ParkRequest::MainNative { .. }
+            | ParkRequest::FairnessSlice { .. } => Ok(()),
         }
     }
 
@@ -777,7 +803,9 @@ impl Context {
     ) -> Result<R, Flow> {
         let Some(seat) = self.green_seat() else {
             return match request {
-                ParkRequest::Ordinary(_) => consume(ParkCompletion::Ordinary),
+                ParkRequest::Ordinary(_) | ParkRequest::FairnessSlice { .. } => {
+                    consume(ParkCompletion::Ordinary)
+                }
                 ParkRequest::Host { .. }
                 | ParkRequest::HostContinue(_)
                 | ParkRequest::MainNative { .. } => Err(signal(
@@ -927,6 +955,11 @@ impl Context {
                 None,
                 None,
             ),
+            ParkRequest::FairnessSlice { slice } => (
+                control.transfer_era_fairness_slice(key, baton, receiver.as_channel(), slice),
+                None,
+                None,
+            ),
             ParkRequest::MainNative { mut wait, wait_end } => {
                 let mut handoff = MainNativeHandoff {
                     control: &control,
@@ -985,6 +1018,19 @@ impl Context {
             let _era_resume_guard = resumed_era.then_some(EraTransitionAbortOnPanic("era-resume"));
             if resumed_era {
                 baton.clear_stowed_for_return();
+                if !parked_era_tls {
+                    // This Baton worker parked before the parallel era opened
+                    // (Solo mode), so `park_carrier_tls` did not run on the way
+                    // out. Park its stale pre-era carrier TLS now while holding
+                    // the exclusive `TurnRight::Era` before unstowing so
+                    // `reset_carrier_tls_for_resume` observes its parked-TLS
+                    // precondition cleanly (E7-P.2 D2 pre-era Baton survival).
+                    //
+                    // SAFETY: this carrier currently holds the exclusive
+                    // `TurnRight::Era`, World carriers are still stowed, and no
+                    // Lisp/GC/heap loan is live on this OS thread yet.
+                    unsafe { super::carrier_tls::park_carrier_tls() };
+                }
                 let restored = self.reset_carrier_tls_for_resume();
                 debug_assert!(
                     restored,

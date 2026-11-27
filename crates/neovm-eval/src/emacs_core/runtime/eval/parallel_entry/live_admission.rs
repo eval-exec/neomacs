@@ -84,6 +84,8 @@ pub(crate) enum LiveEraOpenError {
     NativeActivation,
     LegacyJitBusy,
     LegacyJitWithdrawalFailed,
+    DeferredToBetweenCommands,
+    ActivationRefused,
     #[cfg(test)]
     InjectedFault,
 }
@@ -159,7 +161,6 @@ struct WithdrawnLegacyJit {
     _backend: SourceJitBackend,
     _compiler: SourceJitCompiler,
 }
-
 /// Live parallel era state owned by `GreenRuntime` from the first opt-in
 /// admission until `green_teardown`.
 pub(crate) struct LiveEraRuntime {
@@ -580,6 +581,12 @@ impl<'a> LiveEraOpenGuard<'a, SoloSurrendered> {
                     std::thread::scope(|scope| {
                         let (inbox_tx, inbox_rx) = mpsc::channel::<KeeperMsg>();
                         let mut driver = Driver::new(era, inbox_rx);
+                        #[cfg(test)]
+                        {
+                            // E7-P D3: test suites use 100ms overdue bound so
+                            // production's 5s threshold stays out of test noise.
+                            driver = driver.with_stop_bound(Duration::from_millis(100));
+                        }
                         let group_link = driver.enroll_group();
                         let group_port = GroupPort::new(inbox_tx.clone(), group_link);
                         if ready_tx.send(Ok((group_port, inbox_tx))).is_err() {
@@ -1313,6 +1320,10 @@ impl Context {
         if self.gc_driver_active || self.gc_inhibit_depth > 0 {
             return Err(LiveEraOpenError::GcBusy);
         }
+        #[cfg(feature = "jit")]
+        if crate::emacs_core::jit::cache::native_depth() != 0 {
+            return Err(LiveEraOpenError::NativeActivation);
+        }
         if !self.tagged_heap.tagged_heap_generational_enabled() {
             return Err(LiveEraOpenError::GenerationalRequired);
         }
@@ -1510,6 +1521,7 @@ impl Context {
             .as_ref()
             .and_then(|rt| rt.live_era.borrow_mut().take())
         else {
+            self.reset_parallel_activation_on_teardown();
             return;
         };
         let control = Arc::clone(
@@ -1627,6 +1639,9 @@ impl Context {
         // remains `true` after `teardown_live_parallel_era()` because
         // `live_era._withdrawn_legacy_jit` drops its one-way `ManuallyDrop`
         // receipts (retaining their payloads rather than restoring TLS).
+        // `reset_parallel_activation_on_teardown()` resets only activation state
+        // and fast flag while leaving `legacy_jit_withdrawn` monotonic.
+        self.reset_parallel_activation_on_teardown();
         let _ = super::super::green::retire_transfer_publication_on_main(self, transfer_pub);
         if matches!(
             live_era.dead_windows_recovery,
@@ -1650,20 +1665,50 @@ impl Context {
         &mut self,
         args: &[Value],
     ) -> Result<Value, SpawnParallelError> {
-        // Ensure Green runtime is started first (if configured Green).
-        if self.green_seat().is_none() && !self.in_active_serial_turn() {
-            if self.start_green_threads().is_err() {
-                return Err(SpawnParallelError::Refused(LiveEraOpenError::NotSeatedMain));
-            }
-        }
-        // Validate args before opening the keeper era so bad arity/type signals
-        // GNU's error without opening an era unnecessarily.
+        // Validate args before opening the keeper era or arming PendingUpgrade
+        // so bad arity/type signals GNU's error without side effects.
         crate::emacs_core::threads::expect_args_range("make-thread", args, 1, 3)
             .map_err(SpawnParallelError::Lisp)?;
         let _ = crate::emacs_core::threads::ThreadName::from_lisp(
             args.get(1).copied().unwrap_or(Value::NIL),
         )
         .map_err(SpawnParallelError::Lisp)?;
+
+        // E7-P D2: inside an interactive command loop (`CommandLoopBaseline`
+        // active), mid-command `neomacs-make-parallel-thread` before the era
+        // has been opened at a quiescent top-level `BetweenCommands` boundary
+        // arms `PendingUpgrade` and falls back to an ordinary Baton thread
+        // (hint nil, never runtime-upgraded). `--batch --eval` without an
+        // interactive baseline keeps E6-P.4 G4 immediate admission.
+        match self.parallel_activation_tag() {
+            super::between_commands::ParallelActivationTag::Refused => {
+                return Err(SpawnParallelError::Refused(
+                    LiveEraOpenError::ActivationRefused,
+                ));
+            }
+            super::between_commands::ParallelActivationTag::PendingUpgrade => {
+                return Err(SpawnParallelError::Refused(
+                    LiveEraOpenError::DeferredToBetweenCommands,
+                ));
+            }
+            super::between_commands::ParallelActivationTag::Inactive
+                if self.command_loop_baseline_active() =>
+            {
+                self.arm_pending_parallel_upgrade();
+                return Err(SpawnParallelError::Refused(
+                    LiveEraOpenError::DeferredToBetweenCommands,
+                ));
+            }
+            super::between_commands::ParallelActivationTag::Inactive
+            | super::between_commands::ParallelActivationTag::Active => {}
+        }
+
+        // Ensure Green runtime is started first (if configured Green).
+        if self.green_seat().is_none() && !self.in_active_serial_turn() {
+            if self.start_green_threads().is_err() {
+                return Err(SpawnParallelError::Refused(LiveEraOpenError::NotSeatedMain));
+            }
+        }
 
         // Open the live era on first opt-in (or reuse an already-open era).
         self.ensure_live_parallel_era()

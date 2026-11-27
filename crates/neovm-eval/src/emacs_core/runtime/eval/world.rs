@@ -140,6 +140,26 @@ struct World {
     /// `jit/cache.rs` guard across Main, Baton workers, and admitted parallel
     /// owners.
     legacy_jit_withdrawn: AtomicBool,
+    /// Fast-path flag for `BetweenCommands` (`false` while `Inactive`/`Refused`;
+    /// `true` while `PendingUpgrade`/`Active`). One predicted-not-taken byte
+    /// load on default and `make-thread`-only sessions (E7-P.2 §0 Q3).
+    parallel_activation_fast: Cell<bool>,
+    /// Lock-free mirror of `ParallelActivationState::tag()` (`AtomicU8` is
+    /// `Send + Sync`, zero auto-trait impact, eliminates mutex locking on the
+    /// active Q-A fast path; E7-P.2 MEDIUM #7).
+    parallel_activation_tag: std::sync::atomic::AtomicU8,
+    /// Active outermost interactive `CommandLoopBaseline` witness installed by
+    /// `run_exit_wrapped_command_loop` (E7-P D1). Stored behind `Mutex` rather
+    /// than `Cell` so cold World slots do not perturb `Context`/`ParallelHeapEra`
+    /// auto-trait bounds (`p1rv_contracts`, `thread_safety_contracts`).
+    command_loop_baseline: std::sync::Mutex<
+        Option<super::parallel_entry::between_commands::CommandLoopBaselineRecord>,
+    >,
+    /// Explicit E7-P.2 `BetweenCommands` activation state machine (E7-P §1.3).
+    /// Gated on the hot path by `parallel_activation_fast: Cell<bool>` so the
+    /// default / no-opt-in path never touches this lock.
+    parallel_activation:
+        std::sync::Mutex<super::parallel_entry::between_commands::ParallelActivationState>,
 }
 
 impl Drop for World {
@@ -193,7 +213,6 @@ impl WorldLease {
     pub(in crate::emacs_core::eval) fn hosted_session(&self) -> bool {
         self.0.hosted_session.get()
     }
-
     /// Permanently mark Main's legacy serial JIT withdrawn for the remainder
     /// of this World's session (monotonic `false -> true`, never cleared on
     /// era teardown; matches [`Self::mark_hosted_session`]).
@@ -206,6 +225,73 @@ impl WorldLease {
     #[inline(always)]
     pub(in crate::emacs_core::eval) fn legacy_jit_withdrawn(&self) -> bool {
         self.0.legacy_jit_withdrawn.load(Ordering::Acquire)
+    }
+
+    #[inline(always)]
+    pub(in crate::emacs_core::eval) fn parallel_activation_fast(&self) -> bool {
+        self.0.parallel_activation_fast.get()
+    }
+
+    #[inline]
+    pub(in crate::emacs_core::eval) fn set_parallel_activation_fast(&self, active: bool) {
+        self.0.parallel_activation_fast.set(active);
+    }
+
+    #[inline(always)]
+    pub(in crate::emacs_core::eval) fn parallel_activation_tag_raw(&self) -> u8 {
+        self.0
+            .parallel_activation_tag
+            .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    #[inline]
+    pub(in crate::emacs_core::eval) fn set_parallel_activation_tag_raw(&self, tag: u8) {
+        self.0
+            .parallel_activation_tag
+            .store(tag, std::sync::atomic::Ordering::Release);
+    }
+
+    #[inline]
+    pub(in crate::emacs_core::eval) fn command_loop_baseline(
+        &self,
+    ) -> Option<super::parallel_entry::between_commands::CommandLoopBaselineRecord> {
+        *self
+            .0
+            .command_loop_baseline
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+    }
+
+    #[inline]
+    pub(in crate::emacs_core::eval) fn set_command_loop_baseline(
+        &self,
+        baseline: Option<super::parallel_entry::between_commands::CommandLoopBaselineRecord>,
+    ) {
+        *self
+            .0
+            .command_loop_baseline
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = baseline;
+    }
+
+    #[inline]
+    pub(in crate::emacs_core::eval) fn lock_parallel_activation(
+        &self,
+    ) -> std::sync::MutexGuard<'_, super::parallel_entry::between_commands::ParallelActivationState>
+    {
+        self.0
+            .parallel_activation
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+    }
+}
+
+impl Context {
+    /// Eval-private access to this Context's `WorldLease` for cold World-level
+    /// coordination slots (`BetweenCommands` activation & baseline witness).
+    #[inline(always)]
+    pub(in crate::emacs_core::eval) fn world_lease(&self) -> &WorldLease {
+        &self.obarray.lease
     }
 }
 
@@ -1417,6 +1503,12 @@ impl WorldStorageBuilder {
             })),
             hosted_session: Cell::new(false),
             legacy_jit_withdrawn: AtomicBool::new(false),
+            parallel_activation_fast: Cell::new(false),
+            parallel_activation_tag: std::sync::atomic::AtomicU8::new(0),
+            command_loop_baseline: std::sync::Mutex::new(None),
+            parallel_activation: std::sync::Mutex::new(
+                super::parallel_entry::between_commands::ParallelActivationState::Inactive,
+            ),
         }));
         // Reinstall the upstream TLS slot from the finalized heap's root
         // before any allocation-capable Context setup resumes. The root (not
