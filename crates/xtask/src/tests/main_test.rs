@@ -1745,6 +1745,46 @@ fn incremental_missing_source_forces_full_regeneration_without_touching_bytecode
     fs::remove_dir_all(&repo).ok();
 }
 
+/// An output that receives no surviving definitions is never rewritten by the
+/// generator (it groups collected definitions by output file), so its section
+/// for the deleted source would survive the full regeneration.  The
+/// post-generation sweep must remove it while keeping healthy outputs.
+#[test]
+fn incremental_cleanup_removes_secondary_outputs_still_recording_a_removed_source() {
+    let (root, lisp) = check_fixture("COMPILE_FIRST =\nMAIN_FIRST =\n");
+    write_fresh_elc(&lisp.join("loadup.el"));
+    let generated = lisp.join("emacs-lisp");
+    fs::create_dir_all(&generated).unwrap();
+    fs::write(generated.join("live.el"), "").unwrap();
+    let healthy = generated.join("cl-loaddefs.el");
+    fs::write(&healthy, ";;; Generated autoloads from live.el\n").unwrap();
+    let orphaned = lisp.join("calc/calc-loaddefs.el");
+    fs::create_dir_all(orphaned.parent().unwrap()).unwrap();
+    fs::write(&orphaned, ";;; Generated autoloads from gone.el\n").unwrap();
+
+    let mut options = check_options(&root);
+    options.check = false;
+    options.incremental = true;
+    let paths = pipeline_paths(&options);
+
+    remove_loaddefs_outputs_still_recording_a_removed_source(
+        BytecodePlan::of(&options),
+        &options,
+        &paths,
+    )
+    .unwrap();
+
+    assert!(
+        !orphaned.exists(),
+        "an output with no surviving definitions keeps its stale section \
+         unless the sweep removes it"
+    );
+    assert!(
+        healthy.is_file(),
+        "an output that still records present sources must stay"
+    );
+}
+
 #[test]
 fn leim_list_generation_prefers_newer_sources_before_loading_quail() {
     let args = leim_list_generation_args(Path::new("lisp/leim"));

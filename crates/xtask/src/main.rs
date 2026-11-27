@@ -1318,6 +1318,7 @@ fn run_fresh_build_pipeline(
         &loaddefs_args,
         &envs,
     )?;
+    remove_loaddefs_outputs_still_recording_a_removed_source(bytecode_plan, options, &paths)?;
 
     // GNU's plain `make` does not rebuild the tracked ldefs-boot.el: its rule
     // depends on autoloads-force, and `all` does not request it.  Only the
@@ -3293,6 +3294,39 @@ fn remove_primary_loaddefs_for_regeneration(
     if let Some(proof) = proof {
         for file in &bytecode {
             let _ = remove_generated_bytecode(proof, file)?;
+        }
+    }
+    Ok(())
+}
+
+/// After the incremental scan has run, remove any generated output that still
+/// records a source that no longer exists.
+///
+/// The generator writes an output only when it received definitions for it
+/// (`loaddefs-gen.el:610-676` groups the collected definitions by output file).
+/// A named secondary file whose only source was deleted therefore receives
+/// nothing and is never rewritten, so its section for the deleted file would
+/// survive the full regeneration.  This sweep runs after the producer has
+/// completed: the file stayed available as a loadable seed throughout the
+/// scrape, and only a file that is still stale afterwards is removed.
+fn remove_loaddefs_outputs_still_recording_a_removed_source(
+    plan: BytecodePlan,
+    options: &FreshBuildOptions,
+    paths: &PipelinePaths,
+) -> Result<()> {
+    if !matches!(plan, BytecodePlan::Incremental(_)) {
+        return Ok(());
+    }
+    let stale = loaddefs_files_with_missing_sources(paths)?;
+    if stale.is_empty() {
+        return Ok(());
+    }
+    print_synthetic_step("remove loaddefs outputs that still record a removed source");
+    for file in &stale {
+        if options.dry_run {
+            println!("  would remove: {}", file.display());
+        } else {
+            let _ = remove_file_if_exists(file)?;
         }
     }
     Ok(())
