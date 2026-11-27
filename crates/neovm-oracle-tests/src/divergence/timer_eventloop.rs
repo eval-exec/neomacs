@@ -211,3 +211,56 @@ fn divergence_timed_read_preserves_idle_callback_epoch() {
         expect,
     );
 }
+
+#[test]
+fn oracle_prop_timer_chain_preserves_entry_current_buffer_across_switch_to_buffer() {
+    // GNU Emacs 31.1 contract (`lisp/emacs-lisp/timer.el:337`, `src/keyboard.c:4874`,
+    // `src/keyboard.c:1366,1430,11312-11327`):
+    // `timer-event-handler` wraps each timer callback in `(save-current-buffer ...)`,
+    // so the restore target is the buffer current at that callback's entry.
+    // When Timer 1 enters with `timer-entry-buf` and calls `(switch-to-buffer
+    // "timer-switched-buf")`, `selected_window->contents` permanently becomes
+    // `timer-switched-buf`, while `save-current-buffer` restores `current-buffer`
+    // back to `timer-entry-buf` on exit. Subsequent chained timers (T2, T3) and
+    // `redisplay` do NOT sync `current-buffer` to `(window-buffer)` while waiting
+    // inside `accept-process-output` / `read_char` (only command-loop input
+    // boundaries reset `current-buffer` from `selected_window`).
+    //
+    // Pins that surprising-but-canonical GNU behavior so a future change cannot
+    // regress parity by eagerly syncing `current-buffer` to `window-buffer`
+    // between timer callbacks. Intentionally has no
+    // `NEOVM_ENABLE_ORACLE_PROPTEST` gate: this pins a compatibility property
+    // that must not be able to skip.
+    let form = r#"(let ((entry (get-buffer-create "timer-entry-buf"))
+      (switched (get-buffer-create "timer-switched-buf"))
+      (log nil))
+  (unwind-protect
+      (progn
+        (switch-to-buffer entry)
+        (catch 'done
+          (run-at-time 0 nil
+            (lambda ()
+              (push (list 't1-before (buffer-name (current-buffer)) (buffer-name (window-buffer))) log)
+              (switch-to-buffer switched)
+              (push (list 't1-after (buffer-name (current-buffer)) (buffer-name (window-buffer))) log)
+              (run-at-time 0 nil
+                (lambda ()
+                  (redisplay t)
+                  (push (list 't2 (buffer-name (current-buffer)) (buffer-name (window-buffer))) log)
+                  (run-at-time 0 nil
+                    (lambda ()
+                      (push (list 't3 (buffer-name (current-buffer)) (buffer-name (window-buffer))) log)
+                      (throw 'done nil)))))))
+          (let ((n 0))
+            (while (< n 100)
+              (setq n (1+ n))
+              (accept-process-output nil 0.02))))
+        (list (list 'after (buffer-name (current-buffer)) (buffer-name (window-buffer)))
+              (nreverse log)))
+    (when (buffer-live-p switched) (kill-buffer switched))
+    (when (buffer-live-p entry) (kill-buffer entry))))"#;
+    let expect = expect_test::expect![[
+        r#""OK ((after \"timer-entry-buf\" \"timer-switched-buf\") ((t1-before \"timer-entry-buf\" \"timer-entry-buf\") (t1-after \"timer-switched-buf\" \"timer-switched-buf\") (t2 \"timer-entry-buf\" \"timer-switched-buf\") (t3 \"timer-entry-buf\" \"timer-switched-buf\")))""#
+    ]];
+    crate::common::assert_oracle_parity_expect(form, expect);
+}
