@@ -53,10 +53,10 @@ mod unix_impl {
     use std::os::unix::process::ExitStatusExt;
     use std::path::{Path, PathBuf};
     use std::process::{ExitStatus, Output, Stdio};
-    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+    use std::sync::atomic::{AtomicBool, Ordering};
     use std::time::{Duration, Instant};
 
-    use neomacs_test_env::{CANONICAL_UMASK, PinnedCommand, bounded_temp_base};
+    use neomacs_test_env::{CANONICAL_UMASK, PinnedCommand, bounded_temp_base, bounded_temp_dir};
 
     use crate::common::oracle_sandbox::OracleSandbox;
 
@@ -65,7 +65,6 @@ mod unix_impl {
     const RESP_SIGNALED: u8 = 1;
     const STARTUP_WAIT_TIMEOUT: Duration = Duration::from_secs(10);
 
-    static IO_SEQ: AtomicU64 = AtomicU64::new(0);
     /// Latched when the target binary cannot launch a zygote (e.g. a debug
     /// build without a final pdump), so subsequent calls in this process fall
     /// back directly to `Command::output()` without retrying spawn.
@@ -420,13 +419,7 @@ mod unix_impl {
     /// zygote does not inherit per-test `sigaction` overrides, so those tests
     /// fall back to direct `Command::output()`.
     fn caller_has_ignored_inherited_signals() -> bool {
-        for sig in [
-            libc::SIGHUP,
-            libc::SIGINT,
-            libc::SIGQUIT,
-            libc::SIGPROF,
-            libc::SIGTTOU,
-        ] {
+        for sig in [libc::SIGHUP, libc::SIGINT, libc::SIGQUIT, libc::SIGPROF] {
             // SAFETY: querying current signal disposition with null `act`.
             let mut old: libc::sigaction = unsafe { std::mem::zeroed() };
             if unsafe { libc::sigaction(sig, std::ptr::null(), &mut old) } == 0
@@ -473,14 +466,16 @@ mod unix_impl {
             Err(_) => return None,
         };
 
-        let seq = IO_SEQ.fetch_add(1, Ordering::Relaxed);
-        let pid = std::process::id();
-        let stdout_path = sandbox
-            .case_root_path()
-            .join(format!("zygote-{pid}-{seq}.stdout"));
-        let stderr_path = sandbox
-            .case_root_path()
-            .join(format!("zygote-{pid}-{seq}.stderr"));
+        // Store stdout/stderr capture files in a separate private `0700` temp
+        // directory outside `sandbox.case_root_path()` so forms whose
+        // `default-directory` is the case root never observe extra capture
+        // files that direct pipe execution would not create.
+        let capture_dir = match bounded_temp_dir("nvz-io-") {
+            Ok(dir) => dir,
+            Err(_) => return None,
+        };
+        let stdout_path = capture_dir.path().join("stdout");
+        let stderr_path = capture_dir.path().join("stderr");
         let frame = encode_request(cmd, &cwd, &stdout_path, &stderr_path, rlimit_as);
 
         // Do not retry once the request is dispatched: the server may already
@@ -494,8 +489,7 @@ mod unix_impl {
                 stderr,
             }
         });
-        let _ = fs::remove_file(&stdout_path);
-        let _ = fs::remove_file(&stderr_path);
+        drop(capture_dir);
         Some(result)
     }
 
@@ -807,6 +801,43 @@ mod unix_impl {
                 lock_path_for(Path::new("/tmp/nvz/noext")),
                 PathBuf::from("/tmp/nvz/noext.lock")
             );
+        }
+
+        #[test]
+        fn zygote_capture_files_do_not_appear_in_case_working_directory() {
+            // Regression test: when a sandbox runs with `cwd == case_root`,
+            // listing `default-directory` under the zygote must not reveal any
+            // capture files (matching direct pipe execution).
+            let dir = bounded_temp_dir("nvz-cwd-").expect("tempdir");
+            let form =
+                r#"(princ (format "%S" (sort (directory-files default-directory) #'string<)))"#;
+            let sandbox = OracleSandbox::new(form, &[], dir.path()).expect("sandbox");
+            let program = PathBuf::from(crate::common::neomacs_binary_path());
+
+            let mut cmd = sandbox.pinned_command(&program);
+            cmd.current_dir(sandbox.case_root_path());
+            cmd.args(["--batch", "-Q", "--eval", form]);
+
+            // Compare direct pipe execution against zygote execution in the
+            // exact same case working directory.
+            let direct = cmd.output().expect("direct output");
+            assert!(direct.status.success(), "direct run failed: {direct:?}");
+
+            if zygote_enabled() {
+                let zygote_out =
+                    try_run_neomacs_via_zygote(&cmd, &sandbox, None, Some(Duration::from_secs(15)))
+                        .expect("expected zygote execution when zygote is enabled")
+                        .expect("zygote run");
+                assert!(
+                    zygote_out.status.success(),
+                    "zygote run failed: {zygote_out:?}"
+                );
+                assert_eq!(
+                    String::from_utf8_lossy(&zygote_out.stdout),
+                    String::from_utf8_lossy(&direct.stdout),
+                    "zygote leaked capture files into case working directory"
+                );
+            }
         }
     }
 }
