@@ -3791,9 +3791,14 @@ impl DisplayHost for PrimaryWindowDisplayHost {
 }
 
 fn frame_host_title(eval: &mut Context, frame_id: FrameId) -> LispString {
-    let Some((selected_window_id, buffer_id, fallback_title, target_cols)) =
+    let Some((selected_window_id, buffer_id, fallback_title, target_cols, fixed_title)) =
         eval.frame_manager().get(frame_id).map(|frame| {
             let fallback_title = frame.host_title_lisp_string();
+            // GNU `x_set_name` (xfns.c:2309-2349): a `title' parameter
+            // overrides the name for the native title, and an explicit
+            // `name' stops `frame-title-format' from renaming the frame
+            // (`x_implicitly_set_name' returns while `explicit_name').
+            let fixed_title = frame.title.as_lisp_string().is_some() || frame.explicit_name;
             let buffer_id = match frame.selected_window() {
                 Some(Window::Leaf { buffer_id, .. }) => Some(*buffer_id),
                 _ => None,
@@ -3810,11 +3815,15 @@ fn frame_host_title(eval: &mut Context, frame_id: FrameId) -> LispString {
                 buffer_id,
                 fallback_title,
                 target_cols.max(1),
+                fixed_title,
             )
         })
     else {
         return LispString::from_utf8("Neomacs");
     };
+    if fixed_title {
+        return fallback_title;
+    }
 
     // GNU `x_consider_frame_title` selects the frame's selected window and
     // its buffer, then reads Vframe_title_format from the C global

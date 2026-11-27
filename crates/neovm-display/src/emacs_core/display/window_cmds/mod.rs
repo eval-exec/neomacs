@@ -8505,8 +8505,13 @@ pub(crate) fn x_create_frame_impl(
         .and_then(|title| title.as_lisp_string().cloned())
         .or_else(|| parsed.name.and_then(|name| name.as_lisp_string().cloned()))
         .unwrap_or_else(|| neovm_value::heap_types::LispString::from_utf8("Neomacs"));
+    // GNU `x-create-frame` (xfns.c:5115-5125): a string `name' parameter is
+    // explicit; with none, the frame takes the display's id name and stays
+    // implicit, so `frame-title-format' may still rename it.
+    let explicit_name = parsed.name.is_some_and(|name| !name.is_nil());
     let name = parsed
         .name
+        .filter(|name| !name.is_nil())
         .unwrap_or_else(|| Value::heap_string(host_title.clone()));
     let current_buffer_id = buffers
         .current_buffer()
@@ -8532,7 +8537,11 @@ pub(crate) fn x_create_frame_impl(
             .get_mut(fid)
             .ok_or_else(|| signal("error", vec![Value::string("Frame not found")]))?;
         frame.creation_phase = crate::window::FrameCreationPhase::BeforeMakeFrame;
-        frame.set_name_value(name);
+        if explicit_name {
+            frame.set_name_value(name);
+        } else {
+            frame.set_generated_name_value(name);
+        }
         if let Some(title) = explicit_title {
             frame.set_title_value(title);
         } else {

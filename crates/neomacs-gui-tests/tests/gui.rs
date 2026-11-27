@@ -160,6 +160,8 @@ mod frame_resize_oracle;
 
 #[path = "frame_cursor_type_gui_oracle.rs"]
 mod frame_cursor_type_gui_oracle;
+#[path = "frame_native_title_gui_oracle.rs"]
+mod frame_native_title_gui_oracle;
 
 #[path = "frame_text_height_gui_oracle.rs"]
 mod frame_text_height_gui_oracle;
