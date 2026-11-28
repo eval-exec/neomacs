@@ -3734,11 +3734,11 @@ pub fn compute_motion<H: EditHost>(host: &mut H, args: Vec<Value>) -> EvalResult
         }
     }
 
-    // One edit phase gathers the buffer text and every pre-scan read: the
-    // accessible region, `tab-width` (slot, buffer-local, then the global
-    // by name), the accessible char bounds and the byte offsets. The owned
-    // text and the Copy positions leave the phase; the scan below is pure.
-    let (text, accessible, point_min, tab_width, from_pos, to_pos) = {
+    // One edit phase makes every pre-scan read (`tab-width` from the slot,
+    // the buffer-local, then the global by name; the accessible char bounds
+    // and the byte offsets) and scans [FROM, TO) in place, as GNU
+    // `compute_motion` (indent.c:1254) does: the buffer is never copied.
+    let (scan, final_charpos) = {
         let (edit, vars) = host.edit_and_vars();
         let Some(buf) = edit.buffers.current_buffer() else {
             return Ok(Value::list(vec![
@@ -3749,8 +3749,6 @@ pub fn compute_motion<H: EditHost>(host: &mut H, args: Vec<Value>) -> EvalResult
                 Value::NIL,
             ]));
         };
-        let text = buf.full_text_string();
-        let accessible = buf.accessible_emacs_byte_region();
         let tab_width = crate::buffer::buffer::lookup_buffer_slot("tab-width")
             .map(|info| buf.slots[info.offset.index()])
             .or_else(|| buf.get_buffer_local("tab-width"))
@@ -3785,87 +3783,192 @@ pub fn compute_motion<H: EditHost>(host: &mut H, args: Vec<Value>) -> EvalResult
             ));
         }
 
-        let from_pos = buf
-            .lisp_pos_to_accessible_emacs_byte_pos(LispCharPos1::new(from))
-            .get();
-        let to_pos = buf
-            .lisp_pos_to_accessible_emacs_byte_pos(LispCharPos1::new(to))
-            .get();
-        (text, accessible, point_min, tab_width, from_pos, to_pos)
-    };
-
-    let mut hpos = from_hpos;
-    let mut vpos = from_vpos;
-    let mut prev_hpos = from_hpos;
-    let mut contin = false;
-    let mut pos = from_pos;
-
-    let bytes = text.as_bytes();
-    let tw = tab_width.max(1) as i64;
-
-    while pos < to_pos {
-        // Check TOPOS stop condition.
-        if vpos > to_vpos || (vpos == to_vpos && hpos >= to_hpos) {
-            break;
-        }
-
-        prev_hpos = hpos;
-        let ch = if pos < bytes.len() {
-            // Decode UTF-8 character.
-            let b = bytes[pos];
-            if b < 0x80 {
-                pos += 1;
-                b as char
-            } else {
-                let s = &text[pos..];
-                let c = s.chars().next().unwrap_or('\u{FFFD}');
-                pos += c.len_utf8();
-                c
-            }
-        } else {
-            break;
+        let from_pos = buf.lisp_pos_to_accessible_emacs_byte_pos(LispCharPos1::new(from));
+        let to_pos = buf.lisp_pos_to_accessible_emacs_byte_pos(LispCharPos1::new(to));
+        let start = MotionScan {
+            pos: from_pos,
+            hpos: from_hpos,
+            vpos: from_vpos,
+            prev_hpos: from_hpos,
+            contin: false,
         };
-
-        match ch {
-            '\n' => {
-                vpos += 1;
-                hpos = 0;
-                contin = false;
-            }
-            '\t' => {
-                hpos += tw - (hpos % tw);
-            }
-            _ => {
-                hpos += neovm_value::emacs_char::char_width(ch) as i64;
-            }
-        }
-
-        // Line continuation (wrapping).
-        if hpos >= width && ch != '\n' {
-            vpos += 1;
-            contin = true;
-            hpos -= width;
-        }
-    }
-
-    // Convert byte pos back to 1-based char position. The scan loop is
-    // pure, so this re-fetched current buffer is the same one read above;
-    // the fallback arm is unreachable.
-    let final_charpos = host
-        .edit_and_vars()
-        .0
-        .buffers
-        .current_buffer()
-        .map(|buf| point_char_pos(buf, EmacsBytePos::new(pos).min(accessible.end())))
-        .unwrap_or(point_min);
+        let limits = MotionLimits {
+            to_hpos,
+            to_vpos,
+            width,
+            tab_width: tab_width.max(1) as i64,
+        };
+        let span = EmacsByteRange::new(from_pos, to_pos.max(from_pos));
+        let scan = scan_compute_motion(buf, span, start, limits);
+        (scan, point_char_pos(buf, scan.pos))
+    };
 
     Ok(Value::list(vec![
         Value::fixnum(final_charpos),
-        Value::fixnum(hpos),
-        Value::fixnum(vpos),
-        Value::fixnum(prev_hpos),
-        if contin { Value::T } else { Value::NIL },
+        Value::fixnum(scan.hpos),
+        Value::fixnum(scan.vpos),
+        Value::fixnum(scan.prev_hpos),
+        if scan.contin { Value::T } else { Value::NIL },
     ]))
+}
+
+/// Where a `compute-motion` scan stands: the byte position reached and the
+/// screen coordinates there, with the column before the last character.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct MotionScan {
+    pos: EmacsBytePos,
+    hpos: i64,
+    vpos: i64,
+    prev_hpos: i64,
+    contin: bool,
+}
+
+/// The TOPOS stop and the geometry a `compute-motion` scan runs under.
+#[derive(Clone, Copy, Debug)]
+struct MotionLimits {
+    to_hpos: i64,
+    to_vpos: i64,
+    width: i64,
+    tab_width: i64,
+}
+
+/// The scan reached TOPOS before the end of its span.
+struct ReachedTopos;
+
+/// What a `compute-motion` scan reads at one buffer position.
+#[derive(Clone, Copy, Debug)]
+enum MotionChar {
+    /// A character with a Unicode scalar, or U+FFFD for an Emacs code above
+    /// U+10FFFF that is not a raw byte.
+    Char(char),
+    /// An eight-bit raw byte of a multibyte buffer.
+    RawByte,
+    /// A byte >= 0x80 of a unibyte buffer.
+    UnibyteByte,
+}
+
+/// What a line continuation does with the character that ran past WIDTH.
+#[derive(Clone, Copy, Debug)]
+enum Overrun {
+    /// The columns past WIDTH start the next line (GNU subtracts WIDTH).
+    Split,
+    /// A multibyte character wider than one column moves whole to the next
+    /// line: GNU sets `wide_column_end_hpos` and subtracts the column the
+    /// character started at (indent.c `compute_motion`).
+    Whole,
+}
+
+/// Columns of a raw byte, which GNU displays as `\NNN`: `CHARACTER_WIDTH`
+/// of an eight-bit character, and `(ctl_arrow && c < 0200) ? 2 : 4` for a
+/// unibyte byte (indent.c `compute_motion`).
+const RAW_BYTE_COLUMNS: i64 = 4;
+
+impl MotionScan {
+    fn reached(&self, limits: &MotionLimits) -> bool {
+        self.vpos > limits.to_vpos || (self.vpos == limits.to_vpos && self.hpos >= limits.to_hpos)
+    }
+
+    /// Advance over CH, LEN bytes long, or stop when TOPOS is already reached.
+    fn step(
+        &mut self,
+        ch: MotionChar,
+        len: usize,
+        limits: &MotionLimits,
+    ) -> Result<(), ReachedTopos> {
+        if self.reached(limits) {
+            return Err(ReachedTopos);
+        }
+        self.prev_hpos = self.hpos;
+        self.pos = self.pos.add_len(EmacsByteLen::new(len));
+        let overrun = match ch {
+            MotionChar::Char('\n') => {
+                self.vpos += 1;
+                self.hpos = 0;
+                self.contin = false;
+                Overrun::Split
+            }
+            MotionChar::Char('\t') => {
+                self.hpos += limits.tab_width - (self.hpos % limits.tab_width);
+                Overrun::Split
+            }
+            MotionChar::Char(ch) => {
+                let width = neovm_value::emacs_char::char_width(ch) as i64;
+                self.hpos += width;
+                if !ch.is_ascii() && width > 1 {
+                    Overrun::Whole
+                } else {
+                    Overrun::Split
+                }
+            }
+            MotionChar::RawByte => {
+                self.hpos += RAW_BYTE_COLUMNS;
+                Overrun::Whole
+            }
+            MotionChar::UnibyteByte => {
+                self.hpos += RAW_BYTE_COLUMNS;
+                Overrun::Split
+            }
+        };
+        // Line continuation (wrapping).
+        if self.hpos >= limits.width && !matches!(ch, MotionChar::Char('\n')) {
+            self.vpos += 1;
+            self.contin = true;
+            self.hpos -= match overrun {
+                Overrun::Whole if self.hpos > limits.width => self.prev_hpos,
+                Overrun::Whole | Overrun::Split => limits.width,
+            };
+        }
+        Ok(())
+    }
+}
+
+/// Scan SPAN of BUF from START, reading the text in place one physical chunk
+/// at a time.  An eight-bit raw byte is a [`MotionChar::RawByte`] and a
+/// byte >= 0x80 of a unibyte buffer a [`MotionChar::UnibyteByte`]; every
+/// character advances by its own byte length.
+fn scan_compute_motion(
+    buf: &Buffer,
+    span: EmacsByteRange,
+    start: MotionScan,
+    limits: MotionLimits,
+) -> MotionScan {
+    let mut scan = start;
+    if !buf.get_multibyte() {
+        let _ = buf.try_for_each_emacs_byte_range_chunk(span, |chunk| {
+            chunk.iter().try_for_each(|&b| {
+                let ch = if b < 0x80 {
+                    MotionChar::Char(b as char)
+                } else {
+                    MotionChar::UnibyteByte
+                };
+                scan.step(ch, 1, &limits)
+            })
+        });
+        return scan;
+    }
+
+    let _: Result<(), ReachedTopos> = buf.try_for_each_emacs_byte_range_chunk(span, |chunk| {
+        let mut i = 0;
+        while i < chunk.len() {
+            // Every backend splits its text only at character boundaries
+            // (the gap, rope leaves, piece edges), so no character straddles
+            // two chunks.
+            debug_assert!(
+                chunk.len() - i >= neovm_value::emacs_char::bytes_by_char_head(chunk[i]),
+                "a buffer chunk ends inside a character"
+            );
+            let (code, len) = neovm_value::emacs_char::string_char(&chunk[i..]);
+            let ch = if code.is_byte8() {
+                MotionChar::RawByte
+            } else {
+                MotionChar::Char(char::from_u32(code.code()).unwrap_or('\u{FFFD}'))
+            };
+            scan.step(ch, len, &limits)?;
+            i += len;
+        }
+        Ok(())
+    });
+    scan
 }
 
 /// (line-number-display-width &optional ON-DISPLAY) -> integer
