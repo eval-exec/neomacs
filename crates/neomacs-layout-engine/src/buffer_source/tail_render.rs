@@ -9,13 +9,16 @@ use crate::display_row::geometry::{
 };
 use crate::display_row::overlay_string::BufferOverlayStringTextRowRenderContext;
 use crate::display_row::source_render::TextRowSourceRenderState;
-use crate::display_row::walk_state::{DisplayRowSourceStart, FaceScanCheckpoint};
+use crate::display_row::walk_state::{
+    DisplayRowSourceStart, FaceScanCheckpoint, TallPointRowScrollContext,
+};
 use crate::display_source_progress::DisplaySourceVisualRowProgress;
 use crate::display_text_window_row_lifecycle::{
-    OrdinaryEobRowAdmission, TextWindowBodyInstallRenderContext, TextWindowBodyInstallRequest,
-    TextWindowCursorPublishStatus, TextWindowFinishRequest, TextWindowFinishState,
-    TextWindowTailFinalizeContext, TextWindowTailFinalizeRequest, TextWindowTailFinalizeState,
-    TextWindowVisibilityRetryOutcome, TextWindowVisibilityRetryRequest, ordinary_eob_row_admission,
+    OrdinaryEobRowAdmission, TallPointRowScrollMode, TextWindowBodyInstallRenderContext,
+    TextWindowBodyInstallRequest, TextWindowCursorPublishStatus, TextWindowFinishRequest,
+    TextWindowFinishState, TextWindowTailFinalizeContext, TextWindowTailFinalizeRequest,
+    TextWindowTailFinalizeState, TextWindowVisibilityRetryOutcome,
+    TextWindowVisibilityRetryRequest, ordinary_eob_row_admission,
 };
 use crate::frame_face_arena::FrameFaceAttempt;
 use crate::neovm_bridge::{LayoutBufferView, ResolvedFace, RustBufferAccess};
@@ -56,6 +59,7 @@ pub(crate) struct BufferSourceTailRequestContext<'a> {
     row_limit: DisplayRowLimit,
     retry_bounds: BufferSourceRetryBounds,
     forward_viewport_measurement: Option<ForwardViewportMeasurement>,
+    tall_point_row_scroll_mode: TallPointRowScrollMode,
     body_install_context: BufferSourceBodyInstallContext,
     reserve_right_special_col: bool,
     reserve_right_border_col: bool,
@@ -173,6 +177,7 @@ impl<'a> BufferSourceTailRequestContext<'a> {
         row_limit: DisplayRowLimit,
         retry_bounds: BufferSourceRetryBounds,
         forward_viewport_measurement: Option<ForwardViewportMeasurement>,
+        tall_point_row_scroll_mode: TallPointRowScrollMode,
         body_install_context: BufferSourceBodyInstallContext,
         reserve_right_special_col: bool,
         reserve_right_border_col: bool,
@@ -196,6 +201,7 @@ impl<'a> BufferSourceTailRequestContext<'a> {
             row_limit,
             retry_bounds,
             forward_viewport_measurement,
+            tall_point_row_scroll_mode,
             body_install_context,
             reserve_right_special_col,
             reserve_right_border_col,
@@ -259,6 +265,14 @@ impl<'a> BufferSourceTailRequestContext<'a> {
             self.forward_viewport_measurement.as_ref(),
             buf_access,
         )
+        .with_tall_point_row_context(TallPointRowScrollContext {
+            default_line_height: self.char_height.round().max(1.0) as i64,
+            is_minibuffer: self.params.is_minibuffer(),
+            has_vscroll: self.params.vscroll != 0,
+            force_start: self.params.force_start,
+            temp_scroll_step: self.tall_point_row_scroll_mode.temp_scroll_step,
+            already_scrolled_this_redisplay: self.tall_point_row_scroll_mode.already_scrolled,
+        })
     }
 
     pub(crate) fn body_install_request<'request>(

@@ -17,8 +17,10 @@ use crate::display_row::special_glyphs::{
     install_text_window_terminal_right_border,
 };
 use crate::display_row::walk_state::{
-    DisplayRowSourceStart, next_window_start_for_partially_visible_point_row,
-    next_window_start_for_point_line_continuation, next_window_start_from_visible_rows,
+    DisplayRowSourceStart, TallPointRowScrollContext,
+    next_window_start_for_partially_visible_point_row,
+    next_window_start_for_point_line_continuation,
+    next_window_start_for_tall_partially_visible_point_row, next_window_start_from_visible_rows,
     scrollable_row_count,
 };
 use crate::display_status_line::ChromeRowRenderServices;
@@ -364,6 +366,18 @@ pub(crate) fn ordinary_eob_row_admission(
     }
 }
 
+/// Per-attempt scrolling mode for a tall partially visible point row.
+///
+/// Mirrors GNU `redisplay_window`'s `temp_scroll_step` flag (set by
+/// `try_cursor_movement` on cursor-only motion, `src/xdisp.c:20116`) and
+/// single-commit termination (once `try_scrolling` or `recenter:` commits a
+/// start, `redisplay_window` jumps to `done:` without re-scrolling).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct TallPointRowScrollMode {
+    pub(crate) temp_scroll_step: bool,
+    pub(crate) already_scrolled: bool,
+}
+
 pub(crate) struct TextWindowVisibilityRetryRequest<'a, 'buf, B: LayoutBufferView> {
     rows: &'a [DisplayRowSnapshot],
     window_start: i64,
@@ -377,6 +391,7 @@ pub(crate) struct TextWindowVisibilityRetryRequest<'a, 'buf, B: LayoutBufferView
     text_area_bottom: i64,
     scroll_policy: ScrollPolicy,
     scroll_margin: ScrollMargin,
+    tall_point_row_context: Option<TallPointRowScrollContext>,
     forward_viewport_measurement: Option<&'a ForwardViewportMeasurement>,
     buf_access: &'a RustBufferAccess<'buf, B>,
 }
@@ -939,6 +954,7 @@ impl<'a, 'buf, B: LayoutBufferView> TextWindowVisibilityRetryRequest<'a, 'buf, B
             text_area_bottom,
             scroll_policy,
             scroll_margin,
+            tall_point_row_context: None,
             forward_viewport_measurement,
             buf_access,
         }
@@ -952,6 +968,15 @@ impl<'a, 'buf, B: LayoutBufferView> TextWindowVisibilityRetryRequest<'a, 'buf, B
         admission: OrdinaryEobRowAdmission,
     ) -> Self {
         self.ordinary_eob_row_admission = admission;
+        self
+    }
+
+    #[inline]
+    pub(crate) fn with_tall_point_row_context(
+        mut self,
+        context: TallPointRowScrollContext,
+    ) -> Self {
+        self.tall_point_row_context = Some(context);
         self
     }
 
@@ -1018,6 +1043,19 @@ impl<'a, 'buf, B: LayoutBufferView> TextWindowVisibilityRetryRequest<'a, 'buf, B
                 .filter(|start| *start > self.window_start)
                 .unwrap_or(fitted),
             }
+        })
+        .or_else(|| {
+            let ctx = self.tall_point_row_context?;
+            next_window_start_for_tall_partially_visible_point_row(
+                self.rows,
+                self.point_charpos,
+                self.text_area_top,
+                self.text_area_bottom,
+                self.window_start,
+                self.scroll_policy,
+                self.scroll_margin,
+                ctx,
+            )
         });
         // GNU cursor_row_fully_visible_p tests the screen row, not the
         // remainder of its physical source line. A wrapped line may continue

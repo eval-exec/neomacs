@@ -303,6 +303,7 @@ fn prepared_face_replay_keeps_the_collector_and_source_namespace_validation() {
             cursor_only: Some(replay.clone()),
             scroll: None,
             is_edit: false,
+            tall_point_row_temp_scroll_step: false,
             retry_admitted_faces: None,
             scroll_continuation_faces: None,
         };
@@ -341,6 +342,7 @@ fn stale_retained_generation_is_rejected_before_any_face_collection() {
         cursor_only: Some(replay),
         scroll: None,
         is_edit: false,
+        tall_point_row_temp_scroll_step: false,
         retry_admitted_faces: None,
         scroll_continuation_faces: None,
     };

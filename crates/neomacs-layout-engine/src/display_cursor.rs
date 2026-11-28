@@ -1705,9 +1705,12 @@ impl<'a> CapturedTextWindowCursorPublishContext<'a> {
             Color::from_pixel(self.params.cursor_color),
             Color::from_pixel(self.params.cursor_foreground),
         );
-        if resolved_cursor.y < self.text_y
-            || resolved_cursor.y + resolved_cursor.height > self.text_y + self.text_height
-        {
+        if is_cursor_vertically_clipped(
+            resolved_cursor.y,
+            resolved_cursor.height,
+            self.text_y,
+            self.text_height,
+        ) {
             return CapturedTextWindowCursorPublishOutcome::Clipped;
         }
 
@@ -1748,6 +1751,23 @@ impl<'a> CapturedTextWindowCursorPublishContext<'a> {
         }
 
         CapturedTextWindowCursorPublishOutcome::Published
+    }
+}
+
+/// Whether a cursor's vertical span falls completely outside the visible text
+/// area. Normal cursors are clipped if any part extends past the bottom; a
+/// cursor on a row taller than `text_height` (e.g. a large scaled face or tall
+/// image) is visible as long as its top lies within `[text_y, text_y + text_height)`.
+#[inline]
+fn is_cursor_vertically_clipped(y: f32, height: f32, text_y: f32, text_height: f32) -> bool {
+    let text_bottom = text_y + text_height;
+    if y < text_y {
+        return true;
+    }
+    if height > text_height {
+        y >= text_bottom
+    } else {
+        y + height > text_bottom
     }
 }
 
@@ -1826,9 +1846,12 @@ impl<'a> VisualTextWindowCursorPublishContext<'a> {
                 Color::from_pixel(spec.color),
                 Color::from_pixel(self.params.cursor_foreground),
             );
-            if resolved_cursor.y < self.text_y
-                || resolved_cursor.y + resolved_cursor.height > self.text_y + self.text_height
-            {
+            if is_cursor_vertically_clipped(
+                resolved_cursor.y,
+                resolved_cursor.height,
+                self.text_y,
+                self.text_height,
+            ) {
                 summary.clipped += 1;
                 continue;
             }

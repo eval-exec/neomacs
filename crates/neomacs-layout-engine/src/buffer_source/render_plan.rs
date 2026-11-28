@@ -27,11 +27,15 @@ use crate::display_row::face_state::{
 use crate::display_row::geometry::{DisplayRowLimit, DisplayRowVisibilityLimit};
 use crate::display_row::metrics::DisplayRowFallbackMetrics;
 use crate::display_row::overlay_string::BufferOverlayStringTextRowRenderContext;
-use crate::display_row::walk_state::{FaceScanCheckpoint, LineNumberFieldLayout};
+use crate::display_row::walk_state::{
+    FaceScanCheckpoint, LineNumberFieldLayout, TallPointRowScrollContext,
+};
 use crate::display_status_line::{
     ChromeRowRenderServices, WindowChromeRowsRenderOutcome, WindowChromeRowsRenderRequest,
 };
-use crate::display_text_window_row_lifecycle::{TextWindowBeginRequest, TextWindowFinishState};
+use crate::display_text_window_row_lifecycle::{
+    TallPointRowScrollMode, TextWindowBeginRequest, TextWindowFinishState,
+};
 use crate::font::metrics::FontMetricsService;
 use crate::frame_face_arena::FrameFaceAttempt;
 use crate::incremental_layout::{
@@ -896,6 +900,7 @@ impl BufferSourceOutputSetup {
         chrome_request: WindowChromeRowsRenderRequest<'_, '_>,
         remaining_visibility_retries: usize,
         forward_viewport_measurement: Option<ForwardViewportMeasurement>,
+        tall_point_row_scroll_mode: TallPointRowScrollMode,
         local_display_policy: BufferWindowLocalDisplayPolicy,
         line_number_field: LineNumberFieldLayout,
         geometry: &BufferWindowGeometry,
@@ -1025,6 +1030,7 @@ impl BufferSourceOutputSetup {
             self.row_limit,
             self.retry_bounds,
             forward_viewport_measurement,
+            tall_point_row_scroll_mode,
             self.body_install_context,
             reserve_right_special_col,
             reserve_right_border_col,
@@ -1676,6 +1682,15 @@ impl BufferSourceOutputSetup {
                                 None,
                                 buf_access,
                             )
+                            .with_tall_point_row_context(TallPointRowScrollContext {
+                                default_line_height: geometry.char_height.round().max(1.0) as i64,
+                                is_minibuffer: params.is_minibuffer(),
+                                has_vscroll: params.vscroll != 0,
+                                force_start: params.force_start,
+                                temp_scroll_step: false,
+                                already_scrolled_this_redisplay: tall_point_row_scroll_mode
+                                    .already_scrolled,
+                            })
                             .decide();
                         let retry_plan = BufferSourceRetryPlan::from_post_loop(
                             params.window_id,
@@ -1700,6 +1715,12 @@ impl BufferSourceOutputSetup {
                                 retry_plan.should_retry(remaining_visibility_retries).map(
                                     |window_start| BufferSourceRenderAttemptOutcome::Retry {
                                         window_start,
+                                        tall_point_row_settled: retry_plan
+                                            .is_tall_point_row_settled(
+                                            crate::scroll_policy::ScrollPolicy::from_window_params(
+                                                params,
+                                            ),
+                                        ),
                                     },
                                 )
                             })
@@ -2074,7 +2095,12 @@ impl BufferSourceOutputSetup {
             } else {
                 retry_plan.log_retry(window_start, remaining_visibility_retries);
                 output.restore_retry_checkpoint(retry_checkpoint);
-                return BufferSourceRenderAttemptOutcome::Retry { window_start };
+                return BufferSourceRenderAttemptOutcome::Retry {
+                    window_start,
+                    tall_point_row_settled: retry_plan.is_tall_point_row_settled(
+                        crate::scroll_policy::ScrollPolicy::from_window_params(params),
+                    ),
+                };
             }
         }
 

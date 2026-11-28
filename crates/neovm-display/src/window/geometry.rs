@@ -833,3 +833,61 @@ impl DisplayGeometryExt for PresentationGeometry {
         query.resolve_presented(self)
     }
 }
+
+/// GNU `move_it_vertically_backward` (`src/xdisp.c:11265-11434`) over laid-out
+/// display row geometry (`y` and `height` in pixels).
+///
+/// Shared by both interactive `(recenter)` (`Frecenter`, `src/window.c:7309`)
+/// and redisplay's `recenter:` fallback (`src/xdisp.c:21128-21245`). Steps
+/// backward `max(1, dy / default_line_height)` rows at a time, steps further
+/// backward only when the remaining shortfall strictly exceeds
+/// `min(body_height, cur_row_height * 2 / 3)` (`src/xdisp.c:11386-11398`),
+/// and steps forward if the jump overshot by at least `cur_row_height`
+/// (`src/xdisp.c:11400-11432`).
+pub fn move_it_vertically_backward_row_index<R>(
+    rows: &[R],
+    anchor: usize,
+    distance_px: i64,
+    body_height: i64,
+    default_line_height: i64,
+) -> usize
+where
+    R: std::borrow::Borrow<super::DisplayRowSnapshot>,
+{
+    let mut dy = distance_px;
+    if dy <= 0 || anchor == 0 {
+        return anchor;
+    }
+    let step_unit = default_line_height.max(1);
+    let mut idx = anchor;
+    loop {
+        let start_y = rows[idx].borrow().y;
+        let nlines = usize::try_from((dy / step_unit).max(1)).unwrap_or(usize::MAX);
+        idx = idx.saturating_sub(nlines);
+        let cur = rows[idx].borrow();
+        let cur_y = cur.y;
+        let moved = start_y.saturating_sub(cur_y);
+        let target_y = cur_y.saturating_add(moved).saturating_sub(dy);
+        let cur_line_height = cur.height.max(1);
+
+        if target_y < cur_y
+            && cur_y.saturating_sub(target_y)
+                > body_height.min(cur_line_height.saturating_mul(2) / 3)
+            && idx > 0
+        {
+            dy = cur_y.saturating_sub(target_y);
+            continue;
+        }
+        if target_y >= cur_y.saturating_add(cur_line_height) && idx < anchor {
+            while idx < anchor && rows[idx].borrow().y < target_y {
+                let last_idx = idx;
+                idx += 1;
+                if rows[idx].borrow().y > target_y {
+                    idx = last_idx;
+                    break;
+                }
+            }
+        }
+        return idx;
+    }
+}

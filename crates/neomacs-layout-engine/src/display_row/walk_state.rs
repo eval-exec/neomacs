@@ -6,10 +6,11 @@ use crate::display_row::geometry::DisplayRowGeometryState;
 use crate::display_row::geometry::{DisplayRowMarker, DisplayRowStartMarker};
 use crate::display_source::{DisplaySourceResumeCursor, DisplaySourceTextPosition};
 use crate::neovm_bridge::{LayoutBufferView, RustBufferAccess};
+use crate::scroll_policy::{SCROLL_CONSERVATIVELY_LIMIT, ScrollPolicy};
 use crate::types::LineWrapMode;
 use neomacs_display_protocol::types::Color;
 use neovm_core::buffer::LispCharPos1;
-use neovm_core::window::DisplayRowSnapshot;
+use neovm_core::window::{DisplayRowSnapshot, ScrollMargin};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub(crate) struct WordWrapBreakCandidate {
@@ -1471,6 +1472,178 @@ pub(crate) fn next_window_start_for_partially_visible_point_row(
     }
 
     None
+}
+
+/// Window-level inputs GNU `cursor_row_fully_visible_p` and `try_scrolling`
+/// consult when point lands on a partially visible bottom row taller than
+/// the window's text area (GNU `src/xdisp.c:19327-19704, 20098-20118,
+/// 21062-21245`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct TallPointRowScrollContext {
+    pub(crate) default_line_height: i64,
+    pub(crate) is_minibuffer: bool,
+    pub(crate) has_vscroll: bool,
+    pub(crate) force_start: bool,
+    pub(crate) temp_scroll_step: bool,
+    pub(crate) already_scrolled_this_redisplay: bool,
+}
+
+/// Choose the next `window-start` when point sits on a partially visible bottom
+/// row taller than the text area (`point_row.height > text_area_height`).
+///
+/// Mirrors GNU Emacs 31.1 (`src/xdisp.c`):
+/// - `cursor_row_fully_visible_p` (`xdisp.c:19329-19336`) suppresses scrolling
+///   for minibuffers, non-zero `vscroll`, forced starts (`force_p == false`),
+///   `vpos == 0`, or after a scroll has already committed in this redisplay.
+/// - `try_scrolling` (`xdisp.c:19430-19704`) runs when `scroll-conservatively`
+///   or `scroll-step` is non-zero, or when cursor-only motion sets
+///   `temp_scroll_step = true` (`xdisp.c:20116, 21094`). It loops with
+///   `extra_scroll_margin_lines` (`0, 1, 2` for cursor-only; `1, 2` when
+///   `last_line_misfit` is set after `try_window`), advancing `window-start`
+///   until `vpos == 0` or `extra > 1` (`force_p = false`).
+/// - When `try_scrolling` is skipped or fails (`dy > scroll_max`), `recenter:`
+///   (`xdisp.c:21169-21237`) steps backward from the tall row by
+///   `text_area_height / 2` (or `text_area_height - line_h * (1 + margin + misfit)`
+///   when `scroll-conservatively > 100`) using GNU `move_it_vertically_backward`'s
+///   `min(text_area_height, row_height * 2 / 3)` threshold (`xdisp.c:11386-11432`).
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn next_window_start_for_tall_partially_visible_point_row(
+    rows: &[DisplayRowSnapshot],
+    point: i64,
+    text_area_top: i64,
+    text_area_bottom: i64,
+    current_start: i64,
+    scroll_policy: ScrollPolicy,
+    scroll_margin: ScrollMargin,
+    ctx: TallPointRowScrollContext,
+) -> Option<i64> {
+    let text_area_height = text_area_bottom.saturating_sub(text_area_top);
+    if text_area_height <= 0 {
+        return None;
+    }
+    let point_row_index = rows.iter().position(|row| {
+        let start = row_start_charpos(row).unwrap_or(i64::MAX);
+        let end = row_end_charpos(row).unwrap_or(i64::MIN);
+        start <= point && point <= end
+    })?;
+    let point_row = &rows[point_row_index];
+    if point_row.height <= text_area_height {
+        return None;
+    }
+
+    let row_bottom = point_row.y.saturating_add(point_row.height);
+    if row_bottom <= text_area_bottom {
+        return None;
+    }
+    if ctx.already_scrolled_this_redisplay
+        || ctx.is_minibuffer
+        || ctx.has_vscroll
+        || ctx.force_start
+        || point_row_index == 0
+    {
+        return None;
+    }
+
+    let line_h = ctx.default_line_height.max(1);
+    let viewport_rows = (text_area_height / line_h).max(1);
+    let margin_lines = scroll_margin.lines(viewport_rows);
+    let margin_px = margin_lines.saturating_mul(line_h);
+
+    let row_candidate = |idx: usize| -> Option<i64> {
+        if idx == 0 {
+            return None;
+        }
+        row_start_charpos(&rows[idx])
+            .or_else(|| row_next_window_start_charpos(&rows[idx - 1]))
+            .filter(|&pos| pos > current_start)
+    };
+
+    let enters_try_scrolling =
+        !matches!(scroll_policy, ScrollPolicy::Recenter) || ctx.temp_scroll_step;
+    if enters_try_scrolling {
+        let (is_conservative, scroll_max_px) = match scroll_policy {
+            ScrollPolicy::Unlimited => (true, SCROLL_CONSERVATIVELY_LIMIT.saturating_mul(line_h)),
+            ScrollPolicy::Conservative { max_lines } => {
+                (true, max_lines.max(1).saturating_mul(line_h))
+            }
+            ScrollPolicy::Step { lines } => (false, lines.max(1).saturating_mul(line_h)),
+            ScrollPolicy::Recenter => (false, line_h),
+        };
+        let prev_row_height = rows[point_row_index - 1].height.max(1);
+        let mut start_idx = 0usize;
+        let mut extra: i64 = if ctx.temp_scroll_step { 0 } else { 1 };
+        let mut succeeded = false;
+
+        loop {
+            let start_y = rows[start_idx].y;
+            let y_before = point_row.y.saturating_sub(start_y);
+            let scroll_margin_y = y_before
+                .saturating_sub(margin_px)
+                .saturating_sub(extra.saturating_mul(line_h));
+            let y0 = if scroll_margin_y <= 0 {
+                rows[start_idx].height.max(1)
+            } else {
+                let mut found = y_before;
+                for row in &rows[start_idx..point_row_index] {
+                    let rel_bottom = row.y.saturating_add(row.height).saturating_sub(start_y);
+                    if rel_bottom >= scroll_margin_y {
+                        found = rel_bottom;
+                        break;
+                    }
+                }
+                found
+            };
+
+            let dy = y_before.saturating_add(prev_row_height).saturating_sub(y0);
+            if dy <= 0 || dy > scroll_max_px {
+                break;
+            }
+
+            let amount_to_scroll = if is_conservative {
+                dy.max(line_h).min(scroll_max_px)
+            } else {
+                scroll_max_px
+            };
+            let mut next_idx = start_idx;
+            let mut lifted = 0i64;
+            while next_idx < point_row_index && lifted < amount_to_scroll {
+                lifted = lifted.saturating_add(rows[next_idx].height.max(1));
+                next_idx += 1;
+            }
+            if next_idx == start_idx && start_idx < point_row_index {
+                next_idx = start_idx + 1;
+            }
+            start_idx = next_idx;
+
+            if start_idx >= point_row_index || extra > 1 {
+                succeeded = true;
+                break;
+            }
+            extra += 1;
+        }
+
+        if succeeded {
+            return row_candidate(start_idx);
+        }
+    }
+
+    let last_line_misfit = i64::from(!ctx.temp_scroll_step);
+    let centering_position = if matches!(scroll_policy, ScrollPolicy::Unlimited) {
+        text_area_height
+            .saturating_sub(line_h.saturating_mul(1 + margin_lines + last_line_misfit))
+            .max(margin_px)
+    } else {
+        text_area_height / 2
+    };
+    let recenter_idx = neovm_core::window::geometry::move_it_vertically_backward_row_index(
+        rows,
+        point_row_index,
+        centering_position,
+        text_area_height,
+        line_h,
+    );
+
+    row_candidate(recenter_idx)
 }
 
 pub(crate) fn next_window_start_for_point_line_continuation<B: LayoutBufferView>(

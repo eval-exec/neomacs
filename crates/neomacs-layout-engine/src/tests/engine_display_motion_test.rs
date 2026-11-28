@@ -3837,3 +3837,129 @@ fn scroll_margin_follows_point_one_line_at_a_time() {
         "maximum-scroll-margin 0.5 must keep point on a higher row ({half_row}) than 0.25 ({quarter_row})"
     );
 }
+
+/// #861: When point moves onto a partially visible bottom row that is taller
+/// than the window's text area, GNU Emacs 31.1 (xdisp.c:19329-19336,
+/// 19380-19704, 20098-20118, 21087-21244) scrolls via `try_scrolling` (with
+/// `temp_scroll_step = true` on cursor-only motion) and falls through to
+/// `recenter:` when `dy > scroll_max`, while still publishing `phys_cursor`.
+#[test]
+fn tall_partially_visible_point_row_follows_gnu_scroll_and_publishes_cursor() {
+    let run_case =
+        |sc: i64, ss: i64, tall_line: usize, vscroll: i32, edit_on_tall: bool| -> (i64, bool) {
+            let mut text = String::new();
+            for ln in 1..=30 {
+                text.push_str(&format!("line {ln:02}\n"));
+            }
+            // Small graphical window (~140 px text body); tall row (:height 10.0)
+            // is ~230 px > body height.
+            let (mut eval, frame, buffer, window) = incr_editing_frame(&text, 640, 160);
+            realize_test_gui_frame(&mut eval, frame);
+            let tall_start = ((tall_line - 1) * 8 + 1) as i64;
+            let tall_end = tall_start + 8;
+            eval.eval_str(&format!(
+                "(progn
+               (make-local-variable 'scroll-conservatively)
+               (set 'scroll-conservatively {sc})
+               (make-local-variable 'scroll-step)
+               (set 'scroll-step {ss})
+               (make-local-variable 'scroll-margin)
+               (set 'scroll-margin 0)
+               (make-local-variable 'truncate-lines)
+               (set 'truncate-lines t)
+               (put-text-property {tall_start} {tall_end} 'face '(:height 10.0))
+               (goto-char (point-min)))"
+            ))
+            .expect("setup tall-row buffer");
+
+            let mut engine = crate::font::metrics::test_catalog::layout_engine();
+            engine.layout_frame_rust(&mut eval, frame);
+            activate_last_engine_presentation(&mut eval, &engine, frame);
+
+            // Move to the row just before the tall row and settle (unless tall_line == 1).
+            if tall_line > 1 {
+                eval.eval_str(&format!(
+                    "(progn (goto-char (point-min)) (forward-line {}))",
+                    tall_line - 2
+                ))
+                .expect("move before tall line");
+                engine.layout_frame_rust(&mut eval, frame);
+                activate_last_engine_presentation(&mut eval, &engine, frame);
+            }
+            if vscroll != 0 {
+                eval.eval_str(&format!("(set-window-vscroll nil {vscroll} t)"))
+                    .expect("set vscroll");
+            }
+
+            // Move onto the tall row (cursor-only unless edit_on_tall).
+            if edit_on_tall {
+                eval.eval_str(&format!(
+                    "(progn (goto-char (point-min)) (forward-line {}) (insert \"Z\"))",
+                    tall_line - 1
+                ))
+                .expect("edit on tall line");
+            } else {
+                eval.eval_str(&format!(
+                    "(progn (goto-char (point-min)) (forward-line {}))",
+                    tall_line - 1
+                ))
+                .expect("move onto tall line");
+            }
+            engine.layout_frame_rust(&mut eval, frame);
+            activate_last_engine_presentation(&mut eval, &engine, frame);
+
+            let start_line = eval
+                .eval_str("(line-number-at-pos (window-start))")
+                .expect("window-start line")
+                .as_fixnum()
+                .expect("fixnum start line");
+            let has_phys_cursor = eval
+                .frame_manager()
+                .get(frame)
+                .and_then(|f| f.redisplay_snapshot(window))
+                .is_some_and(|snap| snap.phys_cursor.is_some());
+            let _ = buffer;
+            (start_line, has_phys_cursor)
+        };
+
+    // Cursor-only onto tall line 2 under default policy (sc=0, ss=0):
+    // GNU `temp_scroll_step = true` scrolls minimally to line 2 and publishes phys_cursor.
+    let (start_l2, cursor_l2) = run_case(0, 0, 2, 0, false);
+    assert_eq!(start_l2, 2, "def-l2 must scroll minimally to line 2");
+    assert!(cursor_l2, "def-l2 must publish phys_cursor on the tall row");
+
+    // Cursor-only onto tall line 3 under default policy: 2-step scroll to line 3.
+    let (start_l3, cursor_l3) = run_case(0, 0, 3, 0, false);
+    assert_eq!(start_l3, 3, "def-l3 must scroll minimally to line 3");
+    assert!(cursor_l3, "def-l3 must publish phys_cursor on the tall row");
+
+    // Buffer edit on tall line 2 under default policy: skips try_cursor_movement
+    // (`temp_scroll_step = false`), recenter keeps start at line 1.
+    let (start_edit_l2, cursor_edit_l2) = run_case(0, 0, 2, 0, true);
+    assert_eq!(
+        start_edit_l2, 1,
+        "edit-l2 skips temp_scroll_step and keeps line 1"
+    );
+    assert!(cursor_edit_l2, "edit-l2 must still publish phys_cursor");
+
+    // Tall line 5 under scroll-conservatively=101: scrolls to line 5.
+    let (start_sc101, cursor_sc101) = run_case(101, 0, 5, 0, false);
+    assert_eq!(start_sc101, 5, "sc101-l5 must scroll to line 5");
+    assert!(cursor_sc101, "sc101-l5 must publish phys_cursor");
+
+    // Tall line 5 under default policy (sc=0, ss=0): try_scrolling fails at
+    // extra=1, falls through to recenter (moves start forward past line 1).
+    let (start_def_l5, cursor_def_l5) = run_case(0, 0, 5, 0, false);
+    assert!(
+        start_def_l5 > 1 && start_def_l5 < 5,
+        "def-l5 must recenter between line 1 and line 5, got {start_def_l5}"
+    );
+    assert!(cursor_def_l5, "def-l5 must publish phys_cursor");
+
+    // Non-zero vscroll: GNU `cursor_row_fully_visible_p` returns true, no scroll.
+    let (start_vscr, _) = run_case(0, 0, 2, 10, false);
+    assert_eq!(
+        start_vscr, 1,
+        "non-zero vscroll must suppress tall-row scroll"
+    );
+}

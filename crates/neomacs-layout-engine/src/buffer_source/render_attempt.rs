@@ -325,6 +325,7 @@ pub(crate) enum BufferSourceRenderAttemptOutcome {
     },
     Retry {
         window_start: i64,
+        tall_point_row_settled: bool,
     },
     /// Resolve a viewport decision that cannot finish inside the row producer:
     /// either measure more display rows from a transient, unpublished probe or
@@ -722,6 +723,20 @@ impl BufferSourceRetryPlan {
             remaining_visibility_retries > 0
                 && *new_window_start > self.retry.semantic_window_start()
         })
+    }
+
+    /// Whether this visibility retry already ran a tall-row scroll or a
+    /// recenter (so the committed pass must accept the tall row without
+    /// scrolling again). When an off-screen point scrolled forward by a
+    /// conservative/step amount (`scroll_down_window_start().is_some()`), the
+    /// tall row has not yet been laid out, so GNU's `extra = 1, 2` continuation
+    /// still runs if it lands partially visible on the next pass.
+    pub(crate) fn is_tall_point_row_settled(
+        &self,
+        scroll_policy: crate::scroll_policy::ScrollPolicy,
+    ) -> bool {
+        self.retry.scroll_down_window_start().is_none()
+            || matches!(scroll_policy, crate::scroll_policy::ScrollPolicy::Recenter)
     }
 
     pub(crate) fn log_retry(&self, new_window_start: i64, remaining_visibility_retries: usize) {

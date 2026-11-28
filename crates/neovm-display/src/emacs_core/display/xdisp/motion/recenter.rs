@@ -209,53 +209,19 @@ fn measure(
 
 /// GNU `move_it_vertically_backward` (`src/xdisp.c:11265-11433`) for center
 /// recenter (`Frecenter`, `src/window.c:7309`).
-///
-/// Steps back `max(1, dy / default_line_height)` rows at a time, then steps
-/// further back only when the remaining shortfall exceeds
-/// `min(body_height, cur_row_height * 2 / 3)` (`src/xdisp.c:11386-11398`), or
-/// forward when it overshot by at least `cur_row_height`
-/// (`src/xdisp.c:11400-11432`).
 fn center_recenter_target_row(
     rows: &[&crate::window::DisplayRowSnapshot],
     anchor: usize,
     body_height: i64,
     default_line_height: i64,
 ) -> usize {
-    let mut dy = body_height / 2;
-    if dy <= 0 || anchor == 0 {
-        return anchor;
-    }
-    let step_unit = default_line_height.max(1);
-    let mut idx = anchor;
-    loop {
-        let start_y = rows[idx].y;
-        let nlines = usize::try_from((dy / step_unit).max(1)).unwrap_or(usize::MAX);
-        idx = idx.saturating_sub(nlines);
-        let cur_y = rows[idx].y;
-        let moved = start_y.saturating_sub(cur_y);
-        let target_y = cur_y.saturating_add(moved).saturating_sub(dy);
-        let cur_line_height = rows[idx].height.max(1);
-
-        if target_y < cur_y
-            && cur_y.saturating_sub(target_y)
-                > body_height.min(cur_line_height.saturating_mul(2) / 3)
-            && idx > 0
-        {
-            dy = cur_y.saturating_sub(target_y);
-            continue;
-        }
-        if target_y >= cur_y.saturating_add(cur_line_height) && idx < anchor {
-            while idx < anchor && rows[idx].y < target_y {
-                let last_idx = idx;
-                idx += 1;
-                if rows[idx].y > target_y {
-                    idx = last_idx;
-                    break;
-                }
-            }
-        }
-        return idx;
-    }
+    crate::window::geometry::move_it_vertically_backward_row_index(
+        rows,
+        anchor,
+        body_height / 2,
+        body_height,
+        default_line_height,
+    )
 }
 
 fn expand(count: usize) -> Result<usize, Flow> {

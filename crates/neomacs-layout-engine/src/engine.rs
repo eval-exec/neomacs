@@ -1003,6 +1003,9 @@ struct IncrementalWindowPlan {
     cursor_only: Option<CursorOnlyReplay>,
     scroll: Option<ScrollReplay>,
     is_edit: bool,
+    /// Whether only point moved since the retained matrix was built (GNU
+    /// `try_cursor_movement` -> `temp_scroll_step`, `src/xdisp.c:20116`).
+    tall_point_row_temp_scroll_step: bool,
     /// Sorted union of edit replay and continuation-row faces admitted in
     /// Phase A, captured for a bounded retry that may reclassify the edit into
     /// a scroll. Retry subset checks rely on this ordering for binary search.
@@ -1211,6 +1214,7 @@ struct WindowLayoutRetry {
     params: WindowParams,
     remaining_visibility_retries: usize,
     viewport_resolution: ViewportResolutionPhase,
+    tall_point_row_settled: bool,
 }
 
 /// Whether this leaf is choosing, measuring, or committing its viewport.
@@ -3241,6 +3245,7 @@ impl LayoutEngine {
                         cursor_only: None,
                         scroll: None,
                         is_edit: false,
+                        tall_point_row_temp_scroll_step: false,
                         retry_admitted_faces: None,
                         scroll_continuation_faces: None,
                     });
@@ -3270,6 +3275,7 @@ impl LayoutEngine {
                         cursor_only,
                         scroll: None,
                         is_edit: false,
+                        tall_point_row_temp_scroll_step: false,
                         retry_admitted_faces: None,
                         scroll_continuation_faces: None,
                     });
@@ -3495,11 +3501,18 @@ impl LayoutEngine {
                             .continuation_candidate_rows(key)
                             .map(|rows| (previous.face_generation, rows))
                     });
+                let tall_point_row_temp_scroll_step = !is_edit
+                    && !params.force_start
+                    && self
+                        .retained_window_matrices
+                        .get(&DisplayWindowId::new(params.window_id))
+                        .is_some_and(|previous| previous.is_cursor_movement_eligible(key));
                 window_plans.push(IncrementalWindowPlan {
                     prepared_faces,
                     cursor_only,
                     scroll,
                     is_edit,
+                    tall_point_row_temp_scroll_step,
                     retry_admitted_faces: None,
                     scroll_continuation_faces,
                 });
@@ -3755,6 +3768,8 @@ impl LayoutEngine {
                 let mut cursor_only_replay = plan.cursor_only.take();
                 let mut scroll_replay = plan.scroll.take();
                 let mut is_edit = plan.is_edit;
+                let mut tall_point_row_temp_scroll_step = plan.tall_point_row_temp_scroll_step;
+                let mut tall_point_row_settled = false;
                 let mut visibility_retry_budget = if query_window.is_some()
                     || layout_walk_purpose == WindowLayoutWalkPurpose::Snapshot
                 {
@@ -3817,6 +3832,8 @@ impl LayoutEngine {
                         cursor_only_replay.take(),
                         scroll_replay.take(),
                         is_edit,
+                        tall_point_row_temp_scroll_step,
+                        tall_point_row_settled,
                         position_publication,
                         position_chrome.is_none()
                             && !chrome_remeasured
@@ -3901,6 +3918,10 @@ impl LayoutEngine {
                                     scroll_replay = Some(replay);
                                 }
                             }
+                            if retry.params.window_start != live_inputs.window.window_start {
+                                tall_point_row_temp_scroll_step = false;
+                            }
+                            tall_point_row_settled |= retry.tall_point_row_settled;
                             live_inputs.window = retry.params;
                             visibility_retry_budget = retry.remaining_visibility_retries;
                             viewport_retry_phase = retry.viewport_resolution;
@@ -6866,6 +6887,8 @@ impl LayoutEngine {
         cursor_only_replay: Option<CursorOnlyReplay>,
         scroll_replay: Option<ScrollReplay>,
         is_edit: bool,
+        tall_point_row_temp_scroll_step: bool,
+        tall_point_row_settled: bool,
         position_publication: WindowPositionPublication,
         // Whether this attempt still needs to evaluate/measure chrome. The
         // retry after `WindowChrome` uses the already measured metrics.
@@ -7563,7 +7586,14 @@ impl LayoutEngine {
         .with_forward_viewport_measurement(match &viewport_resolution {
             ViewportResolutionPhase::Measure(measurement) => Some(measurement.clone()),
             ViewportResolutionPhase::Resolve | ViewportResolutionPhase::Commit(_) => None,
-        });
+        })
+        .with_tall_point_row_scroll_mode(
+            crate::display_text_window_row_lifecycle::TallPointRowScrollMode {
+                temp_scroll_step: tall_point_row_temp_scroll_step && !is_edit,
+                already_scrolled: tall_point_row_settled
+                    || matches!(viewport_resolution, ViewportResolutionPhase::Measure(_)),
+            },
+        );
         // Conditional display/face callbacks above may have changed a source
         // after Phase A admission. Validate again at consumption, not just lookup.
         let sources_current = previous_sources
@@ -8236,6 +8266,7 @@ impl LayoutEngine {
                     params: params.clone(),
                     remaining_visibility_retries,
                     viewport_resolution: ViewportResolutionPhase::Commit(site.window_start()),
+                    tall_point_row_settled: false,
                 }));
             }
             BufferSourceRenderAttemptOutcome::EmptyBodyChromeMeasured { measured, .. }
@@ -8301,6 +8332,7 @@ impl LayoutEngine {
                     params: params.clone(),
                     remaining_visibility_retries,
                     viewport_resolution: viewport_resolution.clone(),
+                    tall_point_row_settled,
                 }));
             }
             BufferSourceRenderAttemptOutcome::ResolveViewport {
@@ -8316,6 +8348,7 @@ impl LayoutEngine {
                     params: measurement_params,
                     remaining_visibility_retries: remaining_visibility_retries.saturating_sub(1),
                     viewport_resolution: ViewportResolutionPhase::Measure(measurement),
+                    tall_point_row_settled: false,
                 }));
             }
             BufferSourceRenderAttemptOutcome::ResolveViewport {
@@ -8396,12 +8429,16 @@ impl LayoutEngine {
                     params: retry_params,
                     remaining_visibility_retries: next_visibility_retries,
                     viewport_resolution: ViewportResolutionPhase::Commit(resolved_start),
+                    tall_point_row_settled: true,
                 }));
             }
             BufferSourceRenderAttemptOutcome::ResolveViewport {
                 decision: ViewportDecision::Keep | ViewportDecision::Commit { .. },
             } => unreachable!("only unresolved viewport decisions leave the row producer"),
-            BufferSourceRenderAttemptOutcome::Retry { window_start } => {
+            BufferSourceRenderAttemptOutcome::Retry {
+                window_start,
+                tall_point_row_settled,
+            } => {
                 if let Some(attempt) = window_end_attempt.take() {
                     evaluator.reject_redisplay_window_end_attempt(attempt);
                 }
@@ -8422,6 +8459,7 @@ impl LayoutEngine {
                     viewport_resolution: ViewportResolutionPhase::Commit(
                         ResolvedWindowStart::from_layout_charpos(window_start),
                     ),
+                    tall_point_row_settled,
                 }));
             }
             BufferSourceRenderAttemptOutcome::RetryPointIntoWindow { point_charpos } => {
@@ -8458,6 +8496,7 @@ impl LayoutEngine {
                     params: retry_params,
                     remaining_visibility_retries: remaining_visibility_retries.saturating_sub(1),
                     viewport_resolution: ViewportResolutionPhase::Commit(resolved_window_start),
+                    tall_point_row_settled: true,
                 }));
             }
             BufferSourceRenderAttemptOutcome::Finished {

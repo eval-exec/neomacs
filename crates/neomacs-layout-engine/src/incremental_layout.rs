@@ -1481,6 +1481,16 @@ impl RetainedWindowMatrix {
         self.cursor_only_replay_with_forced_start(curr, false)
     }
 
+    /// Whether only point changed since this valid retained matrix was built
+    /// (GNU `try_cursor_movement` entry condition, `src/xdisp.c:20098-20118`).
+    /// Used by the full-walk fallback when cursor-only replay declines so tall
+    /// partially visible point rows receive GNU's `temp_scroll_step` flag.
+    pub(crate) fn is_cursor_movement_eligible(&self, curr: &RetainedWindowKey) -> bool {
+        self.validity == MatrixValidity::Valid
+            && self.key.point != curr.point
+            && WindowDelta::between(&self.key, curr).only_point_moved_at_most()
+    }
+
     /// An explicit scroll fixes the viewport start even when point lands on
     /// its boundary. Keep all content/cursor validation; only the ordinary
     /// point-motion recenter guard is unnecessary in that case.
@@ -1626,11 +1636,29 @@ impl RetainedWindowMatrix {
             && cursor_top >= body.y
             && cursor_top + cursor_row.height_px <= body.y + body.height;
         if point_moved && !forced_visible {
-            // The body's boundary rows keep their original, more
-            // conservative treatment: a move onto the last row may expose a
-            // clipped cursor row that a full pass would scroll into view even
-            // with no margin at all.
-            if Some(new_cursor_row_index) == last_body_index && !cursor_row.ends_at_zv {
+            let cursor_row_taller_than_body = cursor_row.height_px > body.height;
+            let cursor_row_overflows_bottom =
+                cursor_top + cursor_row.height_px > body.y + body.height + 0.5;
+            let same_retained_cursor_row = retained_cursor_row_index == Some(new_cursor_row_index);
+
+            // GNU `try_cursor_movement` (src/xdisp.c:20098-20118) declines when
+            // point moves onto a partially visible row taller than the window
+            // (even at ZV), letting `try_scrolling` / `recenter:` pick the new
+            // start. Horizontal motion within the same already-displayed tall
+            // row stays on the fast path (GNU `redisplay_internal` opt 2,
+            // src/xdisp.c:17774-17820) without re-scrolling.
+            if cursor_row_taller_than_body {
+                if !same_retained_cursor_row
+                    && cursor_row_overflows_bottom
+                    && cursor_body_row.is_some_and(|row| row > 0)
+                {
+                    return Err(CursorOnlyDecline::PointMoveMayScrollDown);
+                }
+            } else if Some(new_cursor_row_index) == last_body_index && !cursor_row.ends_at_zv {
+                // The body's boundary rows keep their original, more
+                // conservative treatment: a move onto the last row may expose a
+                // clipped cursor row that a full pass would scroll into view even
+                // with no margin at all.
                 return Err(CursorOnlyDecline::PointMoveMayScrollDown);
             }
             if Some(new_cursor_row_index) == first_body_index && !window_at_buffer_top {

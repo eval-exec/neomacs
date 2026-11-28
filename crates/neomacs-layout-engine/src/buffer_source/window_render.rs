@@ -17,6 +17,7 @@ use crate::display_row::metrics::DisplayRowFallbackMetrics;
 use crate::display_status_line::{
     WindowChromeRowsPlan, max_mini_window_lines, max_mini_window_lines_for_buffer,
 };
+use crate::display_text_window_row_lifecycle::TallPointRowScrollMode;
 use crate::neovm_bridge::{LayoutBufferView, RustBufferAccess};
 use crate::types::{FrameParams, WindowParams};
 use crate::viewport_resolution::ForwardViewportMeasurement;
@@ -200,6 +201,7 @@ where
     remeasure_chrome: bool,
     resolved_window_start: ResolvedWindowStart,
     forward_viewport_measurement: Option<ForwardViewportMeasurement>,
+    tall_point_row_scroll_mode: TallPointRowScrollMode,
 }
 
 impl<'a, B> BufferWindowRenderRequest<'a, B>
@@ -233,6 +235,7 @@ where
             remeasure_chrome: false,
             resolved_window_start,
             forward_viewport_measurement: None,
+            tall_point_row_scroll_mode: TallPointRowScrollMode::default(),
         }
     }
 
@@ -254,6 +257,11 @@ where
         measurement: Option<ForwardViewportMeasurement>,
     ) -> Self {
         self.forward_viewport_measurement = measurement;
+        self
+    }
+
+    pub(crate) fn with_tall_point_row_scroll_mode(mut self, mode: TallPointRowScrollMode) -> Self {
+        self.tall_point_row_scroll_mode = mode;
         self
     }
 
@@ -324,6 +332,7 @@ where
                     remeasure_chrome: self.remeasure_chrome,
                     resolved_window_start: self.resolved_window_start,
                     forward_viewport_measurement: self.forward_viewport_measurement.clone(),
+                    tall_point_row_scroll_mode: self.tall_point_row_scroll_mode,
                 };
                 let outcome = request.render_once(
                     context.reborrow(),
@@ -383,6 +392,7 @@ where
             remeasure_chrome: self.remeasure_chrome,
             resolved_window_start: self.resolved_window_start,
             forward_viewport_measurement: self.forward_viewport_measurement.clone(),
+            tall_point_row_scroll_mode: self.tall_point_row_scroll_mode,
         };
         let checkpoint = context
             .output_mut()
@@ -505,6 +515,7 @@ where
             remeasure_chrome,
             resolved_window_start,
             forward_viewport_measurement,
+            tall_point_row_scroll_mode,
         } = self;
         let mut state = context;
         let buf_access = RustBufferAccess::new(buffer);
@@ -798,6 +809,7 @@ where
             ),
             remaining_visibility_retries,
             forward_viewport_measurement,
+            tall_point_row_scroll_mode,
             local_display_policy,
             line_number_field,
             &geometry,
