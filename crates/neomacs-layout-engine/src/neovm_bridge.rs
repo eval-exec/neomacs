@@ -7989,7 +7989,7 @@ fn apply_box_border(face: &mut ResolvedFace, border: &FaceDecoration<NeoBoxBorde
                         NeoBoxStyle::Flat | NeoBoxStyle::Raised | NeoBoxStyle::Pressed => face.bg,
                     }
                 });
-            face.box_line_width = BoxLineWidth::from_gnu(border.width);
+            face.box_line_width = BoxLineWidth::from_gnu_pair(border.vertical_width, border.width);
         }
     }
 }

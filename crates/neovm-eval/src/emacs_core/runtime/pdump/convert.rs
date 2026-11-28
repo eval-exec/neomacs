@@ -4978,6 +4978,7 @@ fn dump_face(encoder: &mut DumpEncoder, f: &Face) -> DumpFace {
         box_border: f.box_border.enabled().map(|b| DumpBoxBorder {
             color: b.color.map(|c| dump_color(&c)),
             width: b.width,
+            vertical_width: b.vertical_width,
             style: dump_box_style(&b.style),
         }),
         inverse_video: f.inverse_video,
@@ -7535,6 +7536,7 @@ fn load_face(decoder: &mut LoadDecoder, df: &DumpFace) -> Face {
             FaceDecoration::Enabled(BoxBorder {
                 color: b.color.map(|c| load_color(&c)),
                 width: b.width,
+                vertical_width: b.vertical_width,
                 style: match b.style {
                     DumpBoxStyle::Simple => BoxStyle::Simple,
                     DumpBoxStyle::Flat => BoxStyle::Flat,

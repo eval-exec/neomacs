@@ -332,17 +332,19 @@ impl BoxType {
     }
 }
 
-/// GNU Emacs scalar `:box :line-width` semantics.
+/// GNU Emacs `:box :line-width` semantics (`xfaces.c:6405-6451`).
 ///
-/// The magnitude is the painted border thickness in device pixels. A positive
-/// value expands the glyph row vertically; a negative value paints the top and
-/// bottom edges inside the existing row. GNU uses the absolute magnitude for
-/// the left and right edges in both cases
-/// (`struct face::box_{vertical,horizontal}_line_width`).
-#[repr(transparent)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
-#[serde(transparent)]
-pub struct BoxLineWidth(i32);
+/// Carries both `box_horizontal_line_width` (top/bottom edges; signed, where
+/// `> 0` expands the glyph row vertically in `IT_APPLY_FACE_BOX` and `< 0`
+/// paints inside the existing row) and `box_vertical_line_width` (left/right
+/// edges; `XCAR` for a `(VWIDTH . HWIDTH)` pair, `abs(N)` for integer `N`).
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, Default, serde::Serialize, serde::Deserialize,
+)]
+pub struct BoxLineWidth {
+    horizontal: i32,
+    vertical: i32,
+}
 
 /// Logical geometry derived from a GNU `:box :line-width` for one surface.
 ///
@@ -353,6 +355,7 @@ pub struct BoxLineWidth(i32);
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct BoxLineGeometry {
     paint_thickness: LogicalPixels,
+    vertical_paint_thickness: LogicalPixels,
     row_expansion_per_edge: LogicalPixels,
 }
 
@@ -363,6 +366,16 @@ impl BoxLineGeometry {
     }
 
     #[must_use]
+    pub const fn horizontal_paint_thickness(self) -> LogicalPixels {
+        self.paint_thickness
+    }
+
+    #[must_use]
+    pub const fn vertical_paint_thickness(self) -> LogicalPixels {
+        self.vertical_paint_thickness
+    }
+
+    #[must_use]
     pub const fn row_expansion_per_edge(self) -> LogicalPixels {
         self.row_expansion_per_edge
     }
@@ -370,25 +383,44 @@ impl BoxLineGeometry {
 
 impl BoxLineWidth {
     pub const fn from_gnu(value: i32) -> Self {
-        Self(value)
+        Self {
+            horizontal: value,
+            vertical: value.saturating_abs(),
+        }
+    }
+
+    pub const fn from_gnu_pair(vertical: i32, horizontal: i32) -> Self {
+        Self {
+            horizontal,
+            vertical,
+        }
     }
 
     pub const fn gnu_value(self) -> i32 {
-        self.0
+        self.horizontal
+    }
+
+    pub const fn horizontal_gnu_value(self) -> i32 {
+        self.horizontal
+    }
+
+    pub const fn vertical_gnu_value(self) -> i32 {
+        self.vertical
     }
 
     pub const fn is_visible(self) -> bool {
-        self.0 != 0
+        self.horizontal != 0 || self.vertical != 0
     }
 
     pub const fn expands_row_height(self) -> bool {
-        self.0 > 0
+        self.horizontal > 0
     }
 
-    /// Resolve this GNU device-pixel width into logical layout/render geometry.
+    /// Resolve this GNU device-pixel width pair into logical layout/render geometry.
     #[must_use]
     pub fn logical_geometry(self, device_scale: DeviceScale) -> BoxLineGeometry {
-        let paint_thickness = self.0.unsigned_abs() as f32 / device_scale.get();
+        let paint_thickness = self.horizontal.unsigned_abs() as f32 / device_scale.get();
+        let vertical_paint_thickness = self.vertical.unsigned_abs() as f32 / device_scale.get();
         let row_expansion_per_edge = if self.expands_row_height() {
             paint_thickness
         } else {
@@ -397,6 +429,8 @@ impl BoxLineWidth {
         BoxLineGeometry {
             paint_thickness: LogicalPixels::new(paint_thickness)
                 .expect("a finite box width divided by a valid scale stays finite"),
+            vertical_paint_thickness: LogicalPixels::new(vertical_paint_thickness)
+                .expect("a finite vertical box width divided by a valid scale stays finite"),
             row_expansion_per_edge: LogicalPixels::new(row_expansion_per_edge)
                 .expect("box row expansion is finite"),
         }
@@ -1009,7 +1043,11 @@ impl FaceDataFFI {
             attributes: attrs,
             underline_style,
             box_type,
-            box_line_width: BoxLineWidth::from_gnu(self.box_line_width),
+            box_line_width: if self.box_h_line_width != 0 {
+                BoxLineWidth::from_gnu_pair(self.box_line_width, self.box_h_line_width)
+            } else {
+                BoxLineWidth::from_gnu(self.box_line_width)
+            },
             box_corner_radius: self.box_corner_radius,
             // FFI edge: decode the raw C style code; unknown codes fall back
             // to the solid border rather than propagating garbage.

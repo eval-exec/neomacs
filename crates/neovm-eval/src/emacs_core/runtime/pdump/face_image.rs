@@ -17,7 +17,7 @@ pub(crate) use super::types::{
 const FACE_MAGIC: [u8; 16] = *b"NEOFACE\0\0\0\0\0\0\0\0\0";
 // Version 4 separates plain boxes from flat-button in the logical face table.
 // Older sections conflated these styles and cannot recover their color default.
-const FACE_FORMAT_VERSION: u32 = 4;
+const FACE_FORMAT_VERSION: u32 = 5;
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Pod, Zeroable)]
@@ -295,6 +295,7 @@ fn read_box_style(cursor: &mut Cursor<'_>) -> Result<DumpBoxStyle, DumpError> {
 fn write_box_border(out: &mut Vec<u8>, border: &DumpBoxBorder) {
     write_opt_color(out, border.color);
     write_i32(out, border.width);
+    write_i32(out, border.vertical_width);
     write_box_style(out, &border.style);
 }
 
@@ -302,6 +303,7 @@ fn read_box_border(cursor: &mut Cursor<'_>) -> Result<DumpBoxBorder, DumpError> 
     Ok(DumpBoxBorder {
         color: read_opt_color(cursor)?,
         width: read_i32(cursor, "box border width")?,
+        vertical_width: read_i32(cursor, "box border vertical width")?,
         style: read_box_style(cursor)?,
     })
 }

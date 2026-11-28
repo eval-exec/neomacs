@@ -1397,6 +1397,7 @@ pub enum DumpBoxStyle {
 pub struct DumpBoxBorder {
     pub color: Option<DumpColor>,
     pub width: i32,
+    pub vertical_width: i32,
     pub style: DumpBoxStyle,
 }
 

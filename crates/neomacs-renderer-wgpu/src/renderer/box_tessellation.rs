@@ -119,11 +119,9 @@ impl WgpuRenderer {
         offset_y: f32,
     ) -> bool {
         let box_color = *face.box_color.as_ref().unwrap_or(&face.foreground);
-        let border_width = face
-            .box_line_width
-            .logical_geometry(device_scale)
-            .paint_thickness()
-            .get();
+        let geometry = face.box_line_width.logical_geometry(device_scale);
+        let horizontal_border = geometry.horizontal_paint_thickness().get();
+        let vertical_border = geometry.vertical_paint_thickness().get();
         let clip = offset_clip(span.clip, offset_x, offset_y);
         let x = span.x + offset_x;
         let y = span.y + offset_y;
@@ -140,7 +138,7 @@ impl WgpuRenderer {
                 y,
                 span.width,
                 span.height,
-                border_width,
+                horizontal_border.max(vertical_border),
                 radius,
                 &box_color,
                 face.box_border_style.gnu_code(),
@@ -154,27 +152,31 @@ impl WgpuRenderer {
 
         let start = sharp.len();
         let (top_left, bottom_right) = sharp_edge_colors(face, box_color);
-        self.add_rect(sharp, x, y, span.width, border_width, &top_left);
-        self.add_rect(
-            sharp,
-            x,
-            y + span.height - border_width,
-            span.width,
-            border_width,
-            &bottom_right,
-        );
-        if span.box_vertical_edges.owns_left() {
-            self.add_rect(sharp, x, y, border_width, span.height, &top_left);
-        }
-        if span.box_vertical_edges.owns_right() {
+        if horizontal_border > 0.0 {
+            self.add_rect(sharp, x, y, span.width, horizontal_border, &top_left);
             self.add_rect(
                 sharp,
-                x + span.width - border_width,
-                y,
-                border_width,
-                span.height,
+                x,
+                y + span.height - horizontal_border,
+                span.width,
+                horizontal_border,
                 &bottom_right,
             );
+        }
+        if vertical_border > 0.0 {
+            if span.box_vertical_edges.owns_left() {
+                self.add_rect(sharp, x, y, vertical_border, span.height, &top_left);
+            }
+            if span.box_vertical_edges.owns_right() {
+                self.add_rect(
+                    sharp,
+                    x + span.width - vertical_border,
+                    y,
+                    vertical_border,
+                    span.height,
+                    &bottom_right,
+                );
+            }
         }
         super::pointer_override::clip_new_rect_vertices(sharp, start, clip.as_ref());
         false

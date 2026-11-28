@@ -1014,6 +1014,72 @@ fn negative_box_line_width_paints_an_inset_border() {
     );
 }
 
+#[test]
+fn asymmetric_box_line_width_paints_vertical_and_horizontal_edges_independently() {
+    let Some(mut h) = try_harness() else {
+        return;
+    };
+    let mut frame = FrameGlyphBuffer::with_size(W as f32, H as f32);
+    frame.background = Color::BLACK;
+    let face_id = FaceId::new(22);
+    frame.set_face(
+        face_id,
+        Color::WHITE,
+        Some(Color::BLACK),
+        400,
+        false,
+        0,
+        None,
+        0,
+        None,
+        0,
+        None,
+    );
+    let face = frame.faces.get_mut(&face_id).unwrap();
+    face.attributes |= FaceAttributes::BOX;
+    face.box_type = BoxType::Line;
+    face.box_color = Some(Color::GREEN);
+    // GNU `(VWIDTH . HWIDTH)` = `(5 . -1)`: left/right edges are 5 px wide,
+    // top/bottom edges are 1 px tall.
+    face.box_line_width = neomacs_display_protocol::face::BoxLineWidth::from_gnu_pair(5, -1);
+    frame.set_draw_context(DisplayWindowId::new(1), GlyphRowRole::Text, None);
+    frame.add_stretch(20.0, 20.0, 40.0, 20.0, Color::BLACK, face_id, false);
+
+    h.renderer.render_frame_glyphs(
+        &h.view,
+        &frame,
+        &mut h.atlas,
+        mapping_for(&frame, W, H),
+        false,
+        None,
+        None,
+        None,
+        None,
+        None,
+    );
+    let buf = read_back(&h);
+    let is_green = |p: [u8; 4]| p[1] > 180 && p[1] > p[0] + 80 && p[1] > p[2] + 80;
+    let is_black = |p: [u8; 4]| p[0] < 30 && p[1] < 30 && p[2] < 30;
+    // Top horizontal edge is 1 px tall (y=20 green, y=22 black at x=40).
+    assert!(is_green(px(&buf, 40, 20)), "top edge y=20 must be green");
+    assert!(
+        is_black(px(&buf, 40, 22)),
+        "top edge must be 1 px tall, got {:?}",
+        px(&buf, 40, 22)
+    );
+    // Left vertical edge is 5 px wide (x=24 green, x=26 black at y=30).
+    assert!(
+        is_green(px(&buf, 24, 30)),
+        "left edge must be 5 px wide (x=24 green), got {:?}",
+        px(&buf, 24, 30)
+    );
+    assert!(
+        is_black(px(&buf, 26, 30)),
+        "interior past 5 px left edge (x=26) must be black, got {:?}",
+        px(&buf, 26, 30)
+    );
+}
+
 fn boxed_one_cell_frame() -> FrameGlyphBuffer {
     let mut frame = FrameGlyphBuffer::with_size(W as f32, H as f32);
     frame.background = Color::BLACK;

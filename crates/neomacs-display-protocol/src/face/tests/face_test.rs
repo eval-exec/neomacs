@@ -57,7 +57,19 @@ fn box_line_width_preserves_gnu_inside_and_outside_semantics() {
     assert!(outside.expands_row_height());
     let outside_geometry = outside.logical_geometry(scale);
     assert_eq!(outside_geometry.paint_thickness().get(), 1.0);
+    assert_eq!(outside_geometry.vertical_paint_thickness().get(), 1.0);
     assert_eq!(outside_geometry.row_expansion_per_edge().get(), 1.0);
+
+    // Asymmetric `(VWIDTH . HWIDTH)` pair: vertical=4 (left/right), horizontal=-2 (top/bottom).
+    let pair = BoxLineWidth::from_gnu_pair(4, -2);
+    assert!(pair.is_visible());
+    assert!(!pair.expands_row_height());
+    assert_eq!(pair.vertical_gnu_value(), 4);
+    assert_eq!(pair.horizontal_gnu_value(), -2);
+    let pair_geometry = pair.logical_geometry(scale);
+    assert_eq!(pair_geometry.horizontal_paint_thickness().get(), 1.0);
+    assert_eq!(pair_geometry.vertical_paint_thickness().get(), 2.0);
+    assert_eq!(pair_geometry.row_expansion_per_edge().get(), 0.0);
 }
 
 #[test]

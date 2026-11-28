@@ -3283,11 +3283,9 @@ fn face_resolver_box_styles_use_gnu_codes() {
 
     for (name, style, _) in styles {
         let mut face = NeoFace::new(name);
-        face.box_border = neovm_core::face::FaceDecoration::Enabled(neovm_core::face::BoxBorder {
-            color: None,
-            width: 1,
-            style,
-        });
+        face.box_border = neovm_core::face::FaceDecoration::Enabled(
+            neovm_core::face::BoxBorder::uniform(None, 1, style),
+        );
         table.define(name, face);
     }
 

@@ -760,11 +760,11 @@ fn face_merge_underline_and_box() {
         ..Default::default()
     };
     let overlay = Face {
-        box_border: FaceDecoration::Enabled(BoxBorder {
-            color: Some(Color::rgb(255, 0, 0)),
-            width: 2,
-            style: BoxStyle::Flat,
-        }),
+        box_border: FaceDecoration::Enabled(BoxBorder::uniform(
+            Some(Color::rgb(255, 0, 0)),
+            2,
+            BoxStyle::Flat,
+        )),
         overline: Some(true),
         strike_through: Some(true),
         ..Default::default()
@@ -781,11 +781,7 @@ fn face_merge_underline_and_box() {
 #[test]
 fn face_merge_preserves_explicit_box_disable() {
     let base = Face {
-        box_border: FaceDecoration::Enabled(BoxBorder {
-            color: None,
-            width: 1,
-            style: BoxStyle::Flat,
-        }),
+        box_border: FaceDecoration::Enabled(BoxBorder::uniform(None, 1, BoxStyle::Flat)),
         ..Default::default()
     };
     let overlay = Face {
@@ -802,8 +798,8 @@ fn face_merge_preserves_explicit_box_disable() {
 #[test]
 fn parse_box_value_cons_pair_preserves_gnu_horizontal_line_width() {
     crate::test_utils::init_test_tracing();
-    // GNU `xfaces.c:6410-6418, 6444-6446`: `(VWIDTH . HWIDTH)` uses `cdr` for
-    // `box_horizontal_line_width` (top/bottom edges controlling row expansion).
+    // GNU `xfaces.c:6410-6418, 6444-6446`: `(VWIDTH . HWIDTH)` uses `car` for
+    // `box_vertical_line_width` and `cdr` for `box_horizontal_line_width`.
     let help_key_binding = Value::list(vec![
         Value::keyword(":line-width"),
         Value::cons(Value::fixnum(-1), Value::fixnum(-1)),
@@ -811,18 +807,29 @@ fn parse_box_value_cons_pair_preserves_gnu_horizontal_line_width() {
         Value::string("grey80"),
     ]);
     let parsed = parse_box_value(&help_key_binding);
-    assert_eq!(parsed.enabled().expect("enabled box").width, -1);
+    let border = parsed.enabled().expect("enabled box");
+    assert_eq!(border.vertical_width, -1);
+    assert_eq!(border.width, -1);
 
     let asymmetric = Value::list(vec![
         Value::keyword(":line-width"),
-        Value::cons(Value::fixnum(3), Value::fixnum(-1)),
+        Value::cons(Value::fixnum(2), Value::fixnum(3)),
     ]);
     let parsed = parse_box_value(&asymmetric);
-    assert_eq!(parsed.enabled().expect("enabled box").width, -1);
+    let border = parsed.enabled().expect("enabled box");
+    assert_eq!(border.vertical_width, 2);
+    assert_eq!(border.width, 3);
+
+    let neg_int = parse_box_value(&Value::fixnum(-2));
+    let border = neg_int.enabled().expect("enabled box");
+    assert_eq!(border.vertical_width, 2);
+    assert_eq!(border.width, -2);
 
     let direct_pair = Value::cons(Value::fixnum(2), Value::fixnum(-3));
     let parsed = parse_box_value(&direct_pair);
-    assert_eq!(parsed.enabled().expect("enabled box").width, -3);
+    let border = parsed.enabled().expect("enabled box");
+    assert_eq!(border.vertical_width, 2);
+    assert_eq!(border.width, -3);
 }
 
 #[test]

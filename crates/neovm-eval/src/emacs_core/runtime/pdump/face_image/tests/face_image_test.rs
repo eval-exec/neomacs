@@ -38,6 +38,7 @@ fn face_section_round_trips_face_table() {
                 box_border: Some(DumpBoxBorder {
                     color: None,
                     width: -1,
+                    vertical_width: 3,
                     style: DumpBoxStyle::Raised,
                 }),
                 inverse_video: Some(false),

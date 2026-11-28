@@ -298,8 +298,36 @@ pub struct Underline {
 #[derive(Clone, Debug, PartialEq)]
 pub struct BoxBorder {
     pub color: Option<Color>,
+    /// GNU `box_horizontal_line_width` (top/bottom edges; signed, `> 0` expands row height).
     pub width: i32,
+    /// GNU `box_vertical_line_width` (left/right edges; signed for `(V . H)`, `abs(n)` for integer `n`).
+    pub vertical_width: i32,
     pub style: BoxStyle,
+}
+
+impl BoxBorder {
+    pub const fn uniform(color: Option<Color>, width: i32, style: BoxStyle) -> Self {
+        Self {
+            color,
+            width,
+            vertical_width: width.saturating_abs(),
+            style,
+        }
+    }
+
+    pub const fn pair(
+        color: Option<Color>,
+        vertical_width: i32,
+        horizontal_width: i32,
+        style: BoxStyle,
+    ) -> Self {
+        Self {
+            color,
+            width: horizontal_width,
+            vertical_width,
+            style,
+        }
+    }
 }
 
 /// Logical box styles, before choosing the face-relative default color.
@@ -1394,44 +1422,36 @@ pub fn parse_underline_value(
 #[doc(hidden)]
 pub fn parse_box_value(value: &Value) -> FaceDecoration<BoxBorder> {
     match value.kind() {
-        ValueKind::T => FaceDecoration::Enabled(BoxBorder {
-            color: None,
-            width: 1,
-            style: BoxStyle::Simple,
-        }),
+        ValueKind::T => FaceDecoration::Enabled(BoxBorder::uniform(None, 1, BoxStyle::Simple)),
         ValueKind::Nil => FaceDecoration::Disabled,
-        ValueKind::Fixnum(n) => FaceDecoration::Enabled(BoxBorder {
-            color: None,
-            width: n as i32,
-            style: BoxStyle::Simple,
-        }),
+        ValueKind::Fixnum(n) => {
+            FaceDecoration::Enabled(BoxBorder::uniform(None, n as i32, BoxStyle::Simple))
+        }
         _ if value.is_string() => {
             let Some(text) = face_runtime_string(value) else {
                 return FaceDecoration::Unspecified;
             };
-            FaceDecoration::Enabled(BoxBorder {
-                color: Color::parse(&text),
-                width: 1,
-                style: BoxStyle::Simple,
-            })
+            FaceDecoration::Enabled(BoxBorder::uniform(Color::parse(&text), 1, BoxStyle::Simple))
         }
         ValueKind::Cons => {
             // Direct `(VWIDTH . HWIDTH)` pair (xfaces.c:6410-6418):
             // `car` is `box_vertical_line_width`, `cdr` is `box_horizontal_line_width`.
-            if value.cons_car().is_fixnum()
+            if let Some(v) = value.cons_car().as_fixnum()
                 && let Some(h) = value.cons_cdr().as_fixnum()
             {
-                return FaceDecoration::Enabled(BoxBorder {
-                    color: None,
-                    width: h as i32,
-                    style: BoxStyle::Simple,
-                });
+                return FaceDecoration::Enabled(BoxBorder::pair(
+                    None,
+                    v as i32,
+                    h as i32,
+                    BoxStyle::Simple,
+                ));
             }
             let Some(items) = neovm_value::value::list_to_vec(value) else {
                 return FaceDecoration::Unspecified;
             };
             let mut color = None;
             let mut width = 1i32;
+            let mut vertical_width = 1i32;
             let mut style = BoxStyle::Simple;
             let mut i = 0;
             while i + 1 < items.len() {
@@ -1439,15 +1459,20 @@ pub fn parse_box_value(value: &Value) -> FaceDecoration<BoxBorder> {
                 let item = &items[i + 1];
                 match key {
                     Some(DecorationProperty::LineWidth) => match item.kind() {
-                        ValueKind::Fixnum(n) if n != 0 => width = n as i32,
+                        ValueKind::Fixnum(n) if n != 0 => {
+                            let w = n as i32;
+                            width = w;
+                            vertical_width = w.saturating_abs();
+                        }
                         ValueKind::Cons => {
                             let pair_car = item.cons_car();
                             let pair_cdr = item.cons_cdr();
-                            // GNU xfaces.c:6444-6446: `XCAR` is vertical width,
+                            // GNU xfaces.c:6444-6446: `XCAR` is `box_vertical_line_width`,
                             // `XCDR` is `box_horizontal_line_width`.
-                            if pair_car.is_fixnum()
+                            if let Some(v) = pair_car.as_fixnum()
                                 && let Some(h) = pair_cdr.as_fixnum()
                             {
+                                vertical_width = v as i32;
                                 width = h as i32;
                             }
                         }
@@ -1468,11 +1493,7 @@ pub fn parse_box_value(value: &Value) -> FaceDecoration<BoxBorder> {
                 }
                 i += 2;
             }
-            FaceDecoration::Enabled(BoxBorder {
-                color,
-                width,
-                style,
-            })
+            FaceDecoration::Enabled(BoxBorder::pair(color, vertical_width, width, style))
         }
         _ => FaceDecoration::Unspecified,
     }
@@ -1763,11 +1784,8 @@ impl FaceTable {
         mode_line.foreground = Some(Color::rgb(0, 0, 0));
         mode_line.background = Some(Color::rgb(192, 192, 192));
         mode_line.weight = Some(FontWeight::NORMAL);
-        mode_line.box_border = FaceDecoration::Enabled(BoxBorder {
-            color: None,
-            width: 1,
-            style: BoxStyle::Raised,
-        });
+        mode_line.box_border =
+            FaceDecoration::Enabled(BoxBorder::uniform(None, 1, BoxStyle::Raised));
         self.define("mode-line", mode_line);
 
         // mode-line-active
@@ -1784,11 +1802,11 @@ impl FaceTable {
 
         // mode-line-highlight
         let mut mode_line_highlight = Face::new("mode-line-highlight");
-        mode_line_highlight.box_border = FaceDecoration::Enabled(BoxBorder {
-            color: Some(Color::rgb(64, 64, 64)),
-            width: 2,
-            style: BoxStyle::Raised,
-        });
+        mode_line_highlight.box_border = FaceDecoration::Enabled(BoxBorder::uniform(
+            Some(Color::rgb(64, 64, 64)),
+            2,
+            BoxStyle::Raised,
+        ));
         mode_line_highlight.inherit = Some(face_symbol_value("highlight"));
         self.define("mode-line-highlight", mode_line_highlight);
 
@@ -1891,11 +1909,8 @@ impl FaceTable {
         let mut tool_bar = Face::new("tool-bar");
         tool_bar.foreground = Some(Color::rgb(0, 0, 0));
         tool_bar.background = Some(Color::rgb(191, 191, 191));
-        tool_bar.box_border = FaceDecoration::Enabled(BoxBorder {
-            color: None,
-            width: 1,
-            style: BoxStyle::Raised,
-        });
+        tool_bar.box_border =
+            FaceDecoration::Enabled(BoxBorder::uniform(None, 1, BoxStyle::Raised));
         self.define("tool-bar", tool_bar);
 
         // tab-bar

@@ -4708,50 +4708,47 @@ fn lisp_value_to_face_attr_resolved(
                 return Some(FaceAttrValue::Unspecified);
             }
             if value.is_t() {
-                return Some(FaceAttrValue::Box(BoxBorder {
-                    color: None,
-                    width: 1,
-                    style: BoxStyle::Simple,
-                }));
+                return Some(FaceAttrValue::Box(BoxBorder::uniform(
+                    None,
+                    1,
+                    BoxStyle::Simple,
+                )));
             }
             if let Some(n) = value.as_fixnum() {
-                return Some(FaceAttrValue::Box(BoxBorder {
-                    color: None,
-                    width: n as i32,
-                    style: BoxStyle::Simple,
-                }));
+                return Some(FaceAttrValue::Box(BoxBorder::uniform(
+                    None,
+                    n as i32,
+                    BoxStyle::Simple,
+                )));
             }
             // Color string shorthand. Box colors are not tty-mapped in GNU
             // (map_tty_color covers only fg/bg/underline).
             if let Some(s) = value.as_utf8_str() {
                 let color = FaceColorResolver::Standard.realize(&SpecifiedColor::parse(s));
-                return Some(FaceAttrValue::Box(BoxBorder {
+                return Some(FaceAttrValue::Box(BoxBorder::uniform(
                     color,
-                    width: 1,
-                    style: BoxStyle::Simple,
-                }));
+                    1,
+                    BoxStyle::Simple,
+                )));
             }
             // Direct `(VWIDTH . HWIDTH)` pair (xfaces.c:6410-6418):
             // `car` is `box_vertical_line_width` (left/right edges) and
             // `cdr` is `box_horizontal_line_width` (top/bottom edges that
             // drive `IT_APPLY_FACE_BOX` vertical row expansion).
             if value.is_cons()
-                && value.cons_car().is_fixnum()
+                && let Some(v) = value.cons_car().as_fixnum()
                 && let Some(h) = value.cons_cdr().as_fixnum()
             {
-                return Some(FaceAttrValue::Box(BoxBorder {
-                    color: None,
-                    width: h as i32,
-                    style: BoxStyle::Simple,
-                }));
+                return Some(FaceAttrValue::Box(BoxBorder::pair(
+                    None,
+                    v as i32,
+                    h as i32,
+                    BoxStyle::Simple,
+                )));
             }
             // Plist form: (:line-width WIDTH :color COLOR :style STYLE)
             if let Some(plist) = neovm_value::value::list_to_vec(&value) {
-                let mut border = BoxBorder {
-                    color: None,
-                    width: 1,
-                    style: BoxStyle::Simple,
-                };
+                let mut border = BoxBorder::uniform(None, 1, BoxStyle::Simple);
                 let mut i = 0;
                 while i + 1 < plist.len() {
                     let key = plist[i];
@@ -4761,15 +4758,18 @@ fn lisp_value_to_face_attr_resolved(
                     if face_id_eq_bare(key, line_width_kw_id()) {
                         if let Some(n) = val.as_fixnum() {
                             if n != 0 {
-                                border.width = n as i32;
+                                let w = n as i32;
+                                border.width = w;
+                                border.vertical_width = w.saturating_abs();
                             }
                         } else if val.is_cons()
-                            && val.cons_car().is_fixnum()
+                            && let Some(v) = val.cons_car().as_fixnum()
                             && let Some(h) = val.cons_cdr().as_fixnum()
                         {
                             // GNU xfaces.c:6444-6446: `(VWIDTH . HWIDTH)` stores
                             // `XCAR` as `box_vertical_line_width` and `XCDR` as
                             // `box_horizontal_line_width`.
+                            border.vertical_width = v as i32;
                             border.width = h as i32;
                         }
                     } else if face_id_eq_bare(key, color_kw_id()) {
@@ -4792,11 +4792,11 @@ fn lisp_value_to_face_attr_resolved(
                 }
                 return Some(FaceAttrValue::Box(border));
             }
-            Some(FaceAttrValue::Box(BoxBorder {
-                color: None,
-                width: 1,
-                style: BoxStyle::Simple,
-            }))
+            Some(FaceAttrValue::Box(BoxBorder::uniform(
+                None,
+                1,
+                BoxStyle::Simple,
+            )))
         }
         LFaceAttr::InverseVideo | LFaceAttr::Extend => Some(FaceAttrValue::Bool(value.is_truthy())),
         LFaceAttr::Inherit => {

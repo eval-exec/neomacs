@@ -474,13 +474,14 @@ fn box_line_width_cons_pair_preserves_gnu_horizontal_line_width() {
                 border.width, -1,
                 "(-1 . -1) horizontal width must be -1, not defaulted to +1"
             );
+            assert_eq!(border.vertical_width, -1);
             assert!(border.color.is_some());
         }
         other => panic!("expected box for help-key-binding spec, got {other:?}"),
     }
 
     // Asymmetric `(VWIDTH . HWIDTH)` (e.g. `wid-edit.el` `(1 . -1)`, `icons.el` `(3 . -1)`):
-    // `cdr` is `box_horizontal_line_width` (-1 -> paints inside vertically, 0 row expansion).
+    // `car` is `box_vertical_line_width` and `cdr` is `box_horizontal_line_width`.
     let asymmetric_inside = Value::list(vec![
         Value::keyword(":line-width"),
         Value::cons(Value::fixnum(3), Value::fixnum(-1)),
@@ -489,6 +490,7 @@ fn box_line_width_cons_pair_preserves_gnu_horizontal_line_width() {
     ]);
     match lisp_value_to_face_attr_resolved(LFaceAttr::Box, asymmetric_inside, resolver) {
         Some(FaceAttrValue::Box(border)) => {
+            assert_eq!(border.vertical_width, 3);
             assert_eq!(border.width, -1);
             assert_eq!(border.style, BoxStyle::Flat);
         }
@@ -497,17 +499,40 @@ fn box_line_width_cons_pair_preserves_gnu_horizontal_line_width() {
 
     let asymmetric_outside = Value::list(vec![
         Value::keyword(":line-width"),
-        Value::cons(Value::fixnum(-1), Value::fixnum(2)),
+        Value::cons(Value::fixnum(2), Value::fixnum(3)),
     ]);
     match lisp_value_to_face_attr_resolved(LFaceAttr::Box, asymmetric_outside, resolver) {
-        Some(FaceAttrValue::Box(border)) => assert_eq!(border.width, 2),
+        Some(FaceAttrValue::Box(border)) => {
+            assert_eq!(border.vertical_width, 2);
+            assert_eq!(border.width, 3);
+        }
         other => panic!("expected box for asymmetric outside pair, got {other:?}"),
+    }
+
+    // Integer `:line-width N` sets `vertical = abs(N)`, `horizontal = N` (`xfaces.c:6449-6450`).
+    let neg_integer = Value::list(vec![Value::keyword(":line-width"), Value::fixnum(-2)]);
+    match lisp_value_to_face_attr_resolved(LFaceAttr::Box, neg_integer, resolver) {
+        Some(FaceAttrValue::Box(border)) => {
+            assert_eq!(border.vertical_width, 2);
+            assert_eq!(border.width, -2);
+        }
+        other => panic!("expected box for negative integer width, got {other:?}"),
+    }
+
+    let pos_integer = Value::list(vec![Value::keyword(":line-width"), Value::fixnum(2)]);
+    match lisp_value_to_face_attr_resolved(LFaceAttr::Box, pos_integer, resolver) {
+        Some(FaceAttrValue::Box(border)) => {
+            assert_eq!(border.vertical_width, 2);
+            assert_eq!(border.width, 2);
+        }
+        other => panic!("expected box for positive integer width, got {other:?}"),
     }
 
     // Direct `(VWIDTH . HWIDTH)` cons as the `:box` value (`xfaces.c:6410-6418`).
     let direct_pair = Value::cons(Value::fixnum(2), Value::fixnum(-3));
     match lisp_value_to_face_attr_resolved(LFaceAttr::Box, direct_pair, resolver) {
         Some(FaceAttrValue::Box(border)) => {
+            assert_eq!(border.vertical_width, 2);
             assert_eq!(border.width, -3);
             assert_eq!(border.style, BoxStyle::Simple);
             assert!(border.color.is_none());
