@@ -261,11 +261,12 @@ impl HostLoad {
         Self { load_1m, cpus }
     }
 
-    /// More runnable work than half the CPUs: a software-Vulkan presenter
-    /// no longer gets a quiet core.
+    /// More runnable work than CPUs. The measurement itself (editor, sway,
+    /// llvmpipe workers) keeps the 1-minute load near half the CPUs on a
+    /// quiet 4-CPU cohort host (1.62-2.40 over 10 cells, CI run 46141229354),
+    /// so half the CPUs would flag every run.
     fn busy(self) -> bool {
-        self.load_1m
-            .is_some_and(|load| load > self.cpus as f64 / 2.0)
+        self.load_1m.is_some_and(|load| load > self.cpus as f64)
     }
 }
 
@@ -281,9 +282,11 @@ struct Contention {
 }
 
 impl Contention {
-    /// Late sends above this share of the 8.33 ms period mean the test
-    /// process itself was descheduled while it paced input.
-    const LATE_SEND_P95_US: u64 = 1_000;
+    /// Half the 8.33 ms period: at the p95 the test process was descheduled
+    /// for half a slot while it paced input.  Timer wake-up jitter alone puts
+    /// the p95 at 1.57-2.74 ms on a quiet 4-CPU cohort host (10 cells, CI run
+    /// 46141229354), so a tighter bound would call every run contended.
+    const LATE_SEND_P95_US: u64 = 4_166;
 
     fn measure(lateness_ns: &[u64], before: HostLoad, after: HostLoad) -> Self {
         let mut sorted: Vec<u64> = lateness_ns.iter().map(|ns| ns / 1_000).collect();
@@ -319,17 +322,25 @@ mod contention_tests {
     fn punctual_sends_on_a_quiet_host_are_not_contention() {
         let lateness = vec![200_000; 480];
         assert!(!Contention::measure(&lateness, QUIET, QUIET).contended());
+        // The quiet cohort host's own timer jitter and measurement load
+        // (CI run 46141229354: p95 up to 2.74 ms, load up to 2.40 on 4 CPUs).
+        let cohort = HostLoad {
+            load_1m: Some(2.4),
+            cpus: 4,
+        };
+        let jitter = vec![2_742_000; 480];
+        assert!(!Contention::measure(&jitter, cohort, cohort).contended());
     }
 
     #[test]
     fn late_sends_or_a_busy_host_mean_contention() {
-        // 5% of sends 2 ms late puts the p95 over the 1 ms bound.
+        // 5% of sends 5 ms late puts the p95 over the half-period bound.
         let mut lateness = vec![100_000; 456];
-        lateness.extend(vec![2_000_000; 24]);
+        lateness.extend(vec![5_000_000; 24]);
         assert!(Contention::measure(&lateness, QUIET, QUIET).contended());
 
         let busy = HostLoad {
-            load_1m: Some(7.0),
+            load_1m: Some(13.0),
             cpus: 12,
         };
         assert!(Contention::measure(&[0; 480], busy, QUIET).contended());
